@@ -1,0 +1,163 @@
+{
+  "version": 3,
+  "created": 1760000000,
+  "app_version": "0.1.0",
+  "sources": [
+    {
+      "rel_path": "../raws/001.png",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "mtime": null,
+      "w": 128,
+      "h": 128,
+      "mode": "L",
+      "bit_depth": 8
+    }
+  ],
+  "strip": {
+    "mode": "single",
+    "order": [
+      0
+    ],
+    "splits": []
+  },
+  "patches": [
+    {
+      "id": "automatic",
+      "source_idx": 0,
+      "bbox": {
+        "x": 8,
+        "y": 8,
+        "w": 12,
+        "h": 10
+      },
+      "mask_ref": "automatic.mask",
+      "buffer_ref": "automatic.buf",
+      "engine": "fill",
+      "order": 0,
+      "visible": true,
+      "review_state": null,
+      "provenance": {
+        "engine": "fill",
+        "engine_version": "legacy-v3",
+        "model_sha256": null,
+        "execution_provider": "cpu",
+        "params_snapshot": {
+          "strength": 1
+        },
+        "mask_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cloud": null,
+        "created": 1760000000
+      }
+    },
+    {
+      "id": "ai",
+      "source_idx": 0,
+      "bbox": {
+        "x": 24,
+        "y": 8,
+        "w": 12,
+        "h": 10
+      },
+      "mask_ref": "ai.mask",
+      "buffer_ref": "ai.buf",
+      "engine": "flux",
+      "order": 1,
+      "visible": true,
+      "review_state": null,
+      "provenance": {
+        "engine": "flux",
+        "engine_version": "legacy-v3",
+        "model_sha256": null,
+        "execution_provider": "local",
+        "params_snapshot": {
+          "strength": 2
+        },
+        "mask_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cloud": null,
+        "created": 1760000001
+      }
+    },
+    {
+      "id": "paint",
+      "source_idx": 0,
+      "bbox": {
+        "x": 40,
+        "y": 8,
+        "w": 12,
+        "h": 10
+      },
+      "mask_ref": "paint.mask",
+      "buffer_ref": "paint.buf",
+      "engine": "paint",
+      "order": 2,
+      "visible": true,
+      "review_state": null,
+      "provenance": {
+        "engine": "paint",
+        "engine_version": "legacy-v3",
+        "model_sha256": null,
+        "execution_provider": "cpu",
+        "params_snapshot": {
+          "strength": 3
+        },
+        "mask_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cloud": null,
+        "created": 1760000002
+      }
+    },
+    {
+      "id": "clone",
+      "source_idx": 0,
+      "bbox": {
+        "x": 56,
+        "y": 8,
+        "w": 12,
+        "h": 10
+      },
+      "mask_ref": "clone.mask",
+      "buffer_ref": "clone.buf",
+      "engine": "clone",
+      "order": 3,
+      "visible": true,
+      "review_state": null,
+      "provenance": {
+        "engine": "clone",
+        "engine_version": "legacy-v3",
+        "model_sha256": null,
+        "execution_provider": "cpu",
+        "params_snapshot": {
+          "strength": 4
+        },
+        "mask_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cloud": null,
+        "created": 1760000003
+      }
+    }
+  ],
+  "regions_untouched": [],
+  "counters": {
+    "refused": 0,
+    "errored": 0,
+    "param_reject": 0,
+    "residual_reject": 0,
+    "structural_reject": 0,
+    "declined": 0,
+    "gate_dropped": 0
+  },
+  "input_report": {
+    "skipped": [],
+    "junk_skipped": 0,
+    "duplicate_basenames": [],
+    "converted": []
+  },
+  "examined": [
+    0
+  ],
+  "errored": [],
+  "interrupted_at": null,
+  "settings": {}
+}

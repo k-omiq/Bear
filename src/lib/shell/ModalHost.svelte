@@ -10,13 +10,13 @@
    * source folder is refused, the refusal goes on top, and answering it reveals
    * the export dialog again with its destination put right.
    *
-   * The cloud flow is **two pushes, not a replace**. `closeModal` pops the
-   * stack *before* the resolved promise continues, so by the time the
-   * transmission statement's answer reaches the flow there is nothing of its
-   * own left on top to replace - a `replaceModal` there would overwrite
-   * whatever was underneath instead. The cost confirmation is therefore a
-   * second `pushModal`, raised when the adapter comes back asking for it. See
-   * `src/lib/editor/cloudflow.svelte.js`.
+   * The cloud asks **one question per action**: the consent dialog
+   * (`src/lib/dialogs/CloudConsentDialog.svelte`), pushed by
+   * `src/lib/editor/cloudflow.svelte.js#requestCloudConsent` and answered
+   * through `closeModal` like any other. Nothing replaces it: `closeModal`
+   * pops the stack *before* the resolved promise continues, so a flow that
+   * wanted a second dialog after it would push one, since a `replaceModal`
+   * there would overwrite whatever was underneath.
    *
    * A `kind` may claim a dialog of its own by registering a component in
    * `src/lib/dialogs/index.js`. Such a component receives the `spec` and

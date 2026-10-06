@@ -17,7 +17,7 @@ A virtual environment may hold either backend's dependencies or both. The sideca
 Manga Cleaner adopts a multi-rung cleaning ladder. Most text and sound-effect removal operations are handled quickly and deterministically by in-process local models (such as LaMa and Manga-OCR). However, complex artwork reconstruction across intricate textures, screentones, and multi-layered backgrounds benefits from generative reference-guided inpainting.
 
 To satisfy the application's stability and memory boundaries:
-1. **Absence is the normal state**: The core Manga Cleaner application ships zero Python runtime and zero diffusion weights. The sidecar is completely optional and user-installed.
+1. **Optional installation**: The application bundles the helper source and a managed-Python installer, and downloads Python, dependencies and pinned diffusion weights when the user selects **Install FLUX helper and 4B model**. An existing compatible helper can also be selected by folder.
 2. **Out-of-process isolation**: Generative diffusion models consume substantial memory and compute. By running in an independent process over loopback HTTP/1.1 (`127.0.0.1`), a runtime failure or memory spike in Python never crashes the desktop GUI application.
 3. **Memory bounds, and what each one is actually worth** - `mflux`: memory limits (`mx.set_memory_limit`) and buffer cache ceilings (`mx.set_cache_limit`) are applied before model loading and are the two guards this backend echoes at `POST /v1/open`. Two more used to be here and both were withdrawn, each on its own measurement. **Text encoder eviction** (`MemorySaver`) made a *second* render through one opened model fail, because `mflux` cannot rebuild the encoder it nulled - so the callback is not registered, the encoder is kept, and the price is declared instead: **8.92 GB** of peak physical footprint across two renders and **9.77 GB** for the largest untiled shape, against a declaration of 10 GiB, where the evicting path peaked at 6.58 GB. **VAE spatial tiling** (`TilingConfig`) bounds a large crop's decode and seams a small one - `mflux` tiles the encode above 512 px and the decode above a 512 px output - so it is applied per render on the crop's working resolution and echoed at open by nobody. What is left is thinner than four guards sounded: `mx.set_memory_limit` is documented by MLX as *a guideline*, raising only once RAM and swap are both exhausted, and the real backstop is the parent's per-region peak check.
 4. **Memory bounds on `sdnq`**: one setter and one behaviour, both applied at `POST /v1/open` and both echoed. `torch.cuda.set_per_process_memory_fraction` / `torch.mps.set_per_process_memory_fraction` (echoed as `memory_fraction`) caps what the caching allocator may **reserve** - live allocations and its own cache together - so rule 9's "cap the cache, do not only purge it" is met by one knob rather than two, and `empty_cache()` between renders is a sweep on top of a cap rather than instead of one. `diffusers`' `enable_model_cpu_offload` (echoed as `cpu_offload`) keeps one pipeline component on the accelerator at a time; `enable_sequential_cpu_offload` replaces it where the card cannot hold a component, selected automatically or by `MC_SIDECAR_LOW_VRAM=1`. **VAE tiling and text-encoder eviction are deliberately not echoed**: `diffusers` tiles below the 768 px working resolution small crops are upscaled into, which would seam exactly the shape this backend edits, and the encoder's eviction is what the offload hook already performs rather than a second promise. **A machine with no CUDA, XPU or Metal device is refused with `501 unbounded_backend`** rather than served: with no accelerator neither guard can be applied, and a backend that echoes a guard it did not apply is the failure this guards against.
@@ -26,6 +26,23 @@ To satisfy the application's stability and memory boundaries:
 ---
 
 ## 2. Prerequisites and Environment Setup
+
+### Install from the application
+
+Open **Settings → Cleaning → Install FLUX helper and 4B model**, or use the
+same action during onboarding. The installer creates a private environment in
+the application's data directory, downloads its pinned checkpoint, and selects
+the resulting helper folder. A system Python or terminal is not required in a
+packaged release. Interrupted downloads can be retried from the same action.
+
+Automatic selection uses MLX on Apple Silicon, CUDA when NVIDIA's driver is
+available, or Intel XPU when its runtime is detected. The settings also provide
+an explicit GPU-runtime choice. GPU drivers remain a platform prerequisite;
+CPU-only machines can use LaMa Manga locally or provision a cloud FLUX model.
+Local installation currently supplies FLUX.2 Klein 4B. Cloud setup separately
+offers FLUX.2 Klein 4B and 9B.
+
+The following instructions are for a manually managed development environment.
 
 Python 3.10, 3.11 or 3.12. The `mflux` backend additionally requires macOS on Apple Silicon; the `sdnq` backend requires a CUDA, Intel XPU or Metal device (it refuses a CPU-only machine - see §1 point 4).
 

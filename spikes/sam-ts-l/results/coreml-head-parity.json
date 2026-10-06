@@ -1,0 +1,59 @@
+{
+  "changed_canvas_sign": 4,
+  "changed_pixel_coordinates": [
+    {
+      "approx_canvas_xy": [
+        234,
+        204
+      ],
+      "restored_xy": [
+        219,
+        191
+      ]
+    },
+    {
+      "approx_canvas_xy": [
+        337,
+        255
+      ],
+      "restored_xy": [
+        315,
+        238
+      ]
+    },
+    {
+      "approx_canvas_xy": [
+        247,
+        386
+      ],
+      "restored_xy": [
+        231,
+        361
+      ]
+    },
+    {
+      "approx_canvas_xy": [
+        448,
+        406
+      ],
+      "restored_xy": [
+        419,
+        379
+      ]
+    }
+  ],
+  "changed_restored_pixels": 4,
+  "cpu_ort_vs_coreml_same_embedding": {
+    "changed_canvas_sign": 4,
+    "max_abs": 0.02468109130859375,
+    "mean_abs": 0.007090014694206032,
+    "rmse": 0.008011670344124143
+  },
+  "max_abs": 0.024686813354492188,
+  "mean_abs": 0.007093602256486253,
+  "providers": [
+    "CoreMLExecutionProvider",
+    "CPUExecutionProvider"
+  ],
+  "rmse": 0.008014623977349223
+}

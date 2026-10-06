@@ -1,0 +1,20 @@
+{
+  "protocol_version": "1.0.0",
+  "job_id": "job-test-001",
+  "attempt_id": "attempt-test-001",
+  "recipe": {
+    "recipe_id": "test-sdnq-v1",
+    "preprocessing_version": "1.0.0",
+    "model_id": "test-flux-schnell",
+    "model_revision": "0123456789abcdef0123456789abcdef01234567",
+    "native_mask_conditioning": false
+  },
+  "width": 16,
+  "height": 16,
+  "seed": 42,
+  "steps": 4,
+  "guidance_scaled": 350,
+  "image_sha256": "2e0a9a2d5f28563463f634d5b81ec2ef90d91afe472a0c6e2c6ef4082f93ec5f",
+  "hint_sha256": "3552bb8bf493ba63896f7abfb3ee3d899bf7312cd0b3d87691a639344b051238",
+  "request_digest": "42174589391d9064c743c4450b520f403a3b91171382c4eadc9934285f21efc0"
+}

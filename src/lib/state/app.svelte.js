@@ -166,11 +166,7 @@ export function back() {
  * wrap onto three lines at 400.
  */
 const MODAL_WIDTHS = {
-  // 560 since Settings became a tab strip: five labels have to sit on one line
-  // at whatever length a translation gives them, and the Models rows - a name,
-  // a size, a status and up to three buttons - were already the tightest thing
-  // in the app at 520.
-  settings: 560,
+  // No `settings`: Settings is a full-window `Screen`, not a `Modal`.
   export: 460,
   shortcuts: 460,
   newProject: 440,
@@ -246,13 +242,13 @@ export function pushModal(spec) {
  * Swap the top of the stack for another dialog. The replaced dialog does *not*
  * resolve; whatever raised it carries on in the new one.
  *
- * **Not the cloud handoff.** This function was written for it, and it is the
- * wrong shape for it: `closeModal` pops the stack before the resolved promise
- * continues, so by the time the transmission statement's answer reaches
- * `applyWithConfirmations` the statement is already gone and a replace here
- * would overwrite whatever was underneath. The cost confirmation is a second
- * `pushModal` (`src/lib/editor/cloudflow.svelte.js#confirmCloud`). A seamless
- * swap would need `closeModal` to resolve *after* the replacement, which is a
+ * **Not for a flow that waits on an answer.** `closeModal` pops the stack
+ * before the resolved promise continues, so by the time a flow reads one
+ * dialog's answer that dialog is already gone, and a replace would overwrite
+ * whatever was underneath. Such a flow pushes its next dialog instead. The
+ * cloud asks one question per action, the consent dialog, pushed by
+ * `src/lib/editor/cloudflow.svelte.js#requestCloudConsent`. A seamless swap
+ * would need `closeModal` to resolve *after* the replacement, which is a
  * change to this module's semantics that nothing has yet needed.
  *
  * @param {Partial<ModalSpec> & {kind: string}} spec
@@ -284,7 +280,7 @@ export function closeModal(result = null) {
  * The array is detached before anything is resolved, so an `onresolve` that
  * pushes a new dialog keeps it.
  *
- * Called by `setRoute` on every route change, and available to Tasks 7–11 for
+ * Called by `setRoute` on every route change, and available to Tasks 7 to 11 for
  * anything else that invalidates the whole stack.
  */
 export function closeAllModals() {

@@ -17,13 +17,22 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { editor, setToolParam } from '../state/editor.svelte.js'
+vi.mock('./cloudflow.svelte.js', async (importOriginal) => ({
+  // `cloudOutcomeOf` is pure: the real one reads the answers these tests fake.
+  ...(/** @type {object} */ (await importOriginal())),
+  cloudRefused: vi.fn(() => false),
+  requestCloudConsent: vi.fn(),
+  runCloudJob: vi.fn(),
+}))
+import { editor, goToPage, redo, selectedRegion, setToolParam, undo } from '../state/editor.svelte.js'
 import { app } from '../state/app.svelte.js'
 import { setBackend } from '../api/backend.js'
-import { createHistory } from '../model/history.js'
+import { canRedo, canUndo, createHistory, settled } from '../model/history.js'
 import { draft, beginDraft, resetDraftState } from './draft.svelte.js'
 import { commitDraft } from './drawing.svelte.js'
+import { deleteRow } from './maskactions.svelte.js'
 import { applyActiveToolToRegion } from './toolapply.svelte.js'
+import { requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
 
 /** A page holding whatever regions a case needs. */
 function chapterWith(regions) {
@@ -34,15 +43,34 @@ function chapterWith(regions) {
       {
         id: 'c1-p001',
         index: 0,
+        sourceIndex: 0,
+        sourceSha: 'fixture-source',
         number: 1,
         status: 'unclean',
         width: 1600,
         height: 2400,
+        resident: true,
         regionCount: regions.length,
         regions,
       },
     ],
   }
+}
+
+/** Two resident pages side by side, so a result could land on either. */
+function twoPages() {
+  const chapter = chapterWith([])
+  chapter.pages.push({
+    ...chapter.pages[0],
+    id: 'c1-p002',
+    index: 1,
+    sourceIndex: 1,
+    sourceSha: 'fixture-source-2',
+    number: 2,
+    regions: [],
+    regionCount: 0,
+  })
+  return chapter
 }
 
 /** The stroke: a draft that has already been dragged, ready to commit. */
@@ -76,16 +104,170 @@ function backend(overrides = {}) {
   }
 }
 
+const SEED_ID = 'c1-p001-h1'
+const SEED_MASK = 'c1-p001-h1-m1'
+const RENDERED_MASK = 'c1-p001-h1-m2'
+const BYSTANDER_ID = 'c1-p001-r9'
+const BYSTANDER_MASK = 'c1-p001-r9-m1'
+const SEED_BOX = { x: 20, y: 30, w: 12, h: 4 }
+
+/** A region already on the page that no step of a cloud stroke may touch. */
+function bystander() {
+  return {
+    id: BYSTANDER_ID,
+    pageId: 'c1-p001',
+    bbox: { x: 70, y: 70, w: 10, h: 10 },
+    source: 'detected',
+    outcome: 'cleaned',
+    mask: { id: BYSTANDER_MASK, fillMode: 'match-surround', provenance: { engine: 'fill' } },
+  }
+}
+
+/** What a cloud stroke stores before its render: the local seed. */
+function seed() {
+  return {
+    id: SEED_ID,
+    pageId: 'c1-p001',
+    bbox: { ...SEED_BOX },
+    source: 'hand',
+    outcome: 'cleaned',
+    mask: { id: SEED_MASK, fillMode: 'match-surround', provenance: { engine: 'fill' } },
+  }
+}
+
+/** What the render makes of the seed. */
+function rendered() {
+  return { ...seed(), mask: { id: RENDERED_MASK, fillMode: 'reconstruct', provenance: { engine: 'flux' } } }
+}
+
+/**
+ * A cloud stroke whose render waits for `release`, on a page that already
+ * holds a bystander, over an adapter with a real journal behind the history:
+ * `historyPush` writes at the cursor and drops what was ahead of it,
+ * `historyMove` answers the entry it crossed, and `restoreRegion` answers the
+ * side it was handed. So `undo` and `redo` run the editor's own replay, and a
+ * case asserts what that replay leaves on the page rather than what was
+ * pushed.
+ *
+ * `pages` adds pages after the first, so a page turn can take the stroke's
+ * page out of the window.
+ *
+ * @param {{answer?: () => Promise<any>, consent?: () => Promise<any>, pages?: number}} [options]
+ */
+function cloudStroke({
+  answer = async () => ({ status: 'applied', region: rendered(), pageStatus: 'cleaned' }),
+  consent = async () => ({ params: {}, attemptId: 'attempt-journal' }),
+  pages = 1,
+} = {}) {
+  const chapter = chapterWith([bystander()])
+  for (let index = 1; index < pages; index += 1) {
+    chapter.pages.push({
+      ...chapter.pages[0],
+      id: `c1-p00${index + 1}`,
+      index,
+      sourceIndex: index,
+      sourceSha: `fixture-source-${index + 1}`,
+      number: index + 1,
+      regions: [],
+      regionCount: 0,
+    })
+  }
+  editor.chapter = chapter
+  setToolParam('aiMaskBrush', 'engine', 'cloud')
+  /** @type {() => void} */
+  let release = () => {}
+  const gate = new Promise((resolve) => { release = () => resolve(undefined) })
+  /** @type {{entries: any[], cursor: number}} */
+  const journal = { entries: [], cursor: 0 }
+  const view = () => ({
+    cursor: journal.cursor,
+    entries: journal.entries.map((entry, index) => ({ seq: index + 1, label: entry.label })),
+  })
+  const adapter = backend({
+    historyPush: vi.fn(async ({ entry }) => {
+      journal.entries.length = journal.cursor
+      journal.entries.push(structuredClone(entry))
+      journal.cursor = journal.entries.length
+      return view()
+    }),
+    historyMove: vi.fn(async ({ direction }) => {
+      let entry = null
+      if (direction === 'undo' && journal.cursor > 0) entry = journal.entries[--journal.cursor]
+      if (direction === 'redo' && journal.cursor < journal.entries.length) entry = journal.entries[journal.cursor++]
+      return { ...view(), entry }
+    }),
+    restoreRegion: vi.fn(async ({ region }) => (region ? structuredClone(region) : null)),
+    createRegion: vi.fn(async () => ({ region: seed(), pageStatus: 'cleaned' })),
+    applyTool: vi.fn(async () => {
+      await gate
+      return answer()
+    }),
+    deleteMask: vi.fn(async () => ({ pageStatus: 'cleaned' })),
+    loadPages: vi.fn(async () => []),
+  })
+  setBackend(/** @type {any} */ (adapter))
+  vi.mocked(requestCloudConsent).mockImplementation(consent)
+  // As the real one does: a job that throws is a job that stopped, and the
+  // caller hears `null`.
+  vi.mocked(runCloudJob).mockImplementation(async (_grant, _where, call) => {
+    try {
+      return await call({})
+    } catch {
+      return null
+    }
+  })
+  stroke(SEED_BOX)
+  const pending = commitDraft()
+  return { adapter, journal, pending, release }
+}
+
+/** The open page's masks by region id. */
+function masks() {
+  return Object.fromEntries(editor.chapter.pages[0].regions.map((region) => [region.id, region.mask?.id ?? null]))
+}
+
+/** The seed as the open page holds it. */
+function seedOnPage() {
+  return editor.chapter.pages[0].regions.find((region) => region.id === SEED_ID)
+}
+
+/** The undo index's labels, oldest first. */
+function labels() {
+  return editor.history.entries.map((entry) => entry.label)
+}
+
+/** @param {() => void} action - `undo` or `redo` */
+async function step(action) {
+  action()
+  await settled(editor.history)
+}
+
+/**
+ * The bystander is as it was, and nothing was ever sent for it.
+ *
+ * @param {any} adapter
+ */
+function expectBystanderUntouched(adapter) {
+  expect(editor.chapter.pages[0].regions.find((region) => region.id === BYSTANDER_ID)).toEqual(bystander())
+  for (const [spec] of adapter.restoreRegion.mock.calls) expect(spec.regionId).not.toBe(BYSTANDER_ID)
+  for (const [spec] of adapter.deleteMask.mock.calls) expect(spec.maskId).not.toBe(BYSTANDER_MASK)
+  for (const [spec] of adapter.applyTool.mock.calls) expect(spec.regionId).not.toBe(BYSTANDER_ID)
+}
+
 describe('the AI mask brush stroke', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     app.notices.length = 0
     editor.history = createHistory()
     editor.tool = 'aiMaskBrush'
+    setToolParam('aiMaskBrush', 'engine', 'fill')
     editor.pageIndex = 0
+    editor.selectionId = null
     resetDraftState()
   })
 
   afterEach(() => {
+    setToolParam('aiMaskBrush', 'engine', 'fill')
     setBackend(null)
     editor.chapter = null
     editor.tool = 'autoClean'
@@ -107,6 +289,8 @@ describe('the AI mask brush stroke', () => {
     expect(spec.tool).toBe('aiMaskBrush')
     expect(spec.chapterId).toBe('c1')
     expect(spec.pageIndex).toBe(0)
+    expect(spec.sourceIndex).toBe(0)
+    expect(spec.sourceSha).toBe('fixture-source')
     expect(spec.params.engine).toBe('lama')
     // The stroke's own box, unchanged: nothing was there to snap to.
     expect(spec.bbox).toEqual({ x: 20, y: 30, w: 12, h: 4 })
@@ -180,6 +364,457 @@ describe('the AI mask brush stroke', () => {
     expect(entry.regionId).toBe('c1-p001-h1')
     expect(entry.before.region).toBe(null)
     expect(entry.after.region).toMatchObject({ id: 'c1-p001-h1' })
+  })
+
+  it('commits rapid strokes in gesture order, with one history entry each', async () => {
+    editor.chapter = chapterWith([])
+    let releaseFirst
+    const gate = new Promise((resolve) => { releaseFirst = resolve })
+    let calls = 0
+    const adapter = backend({ createRegion: vi.fn(async ({ bbox }) => {
+      const id = `c1-p001-h${++calls}`
+      if (calls === 1) await gate
+      return { region: { id, pageId: 'c1-p001', bbox, source: 'hand', outcome: 'cleaned' }, pageStatus: 'cleaned' }
+    }) })
+    setBackend(/** @type {any} */ (adapter))
+    stroke({ x: 20, y: 30, w: 12, h: 4 })
+    const first = commitDraft()
+    stroke({ x: 22, y: 30, w: 12, h: 4 })
+    const second = commitDraft()
+    await vi.waitFor(() => expect(adapter.createRegion).toHaveBeenCalledTimes(1))
+    releaseFirst()
+    expect(await first).toBe(true)
+    expect(await second).toBe(true)
+    expect(adapter.createRegion.mock.calls.map(([spec]) => spec.bbox.x)).toEqual([20, 22])
+    expect(adapter.historyPush.mock.calls.map(([{ entry }]) => entry.regionId))
+      .toEqual(['c1-p001-h1', 'c1-p001-h2'])
+  })
+
+  it('does not apply a late stroke to a different open chapter', async () => {
+    editor.chapter = chapterWith([])
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    const adapter = backend({ createRegion: vi.fn(async ({ bbox }) => {
+      await gate
+      return { region: { id: 'c1-p001-h1', pageId: 'c1-p001', bbox }, pageStatus: 'cleaned' }
+    }) })
+    setBackend(/** @type {any} */ (adapter))
+    stroke({ x: 20, y: 30, w: 12, h: 4 })
+    const pending = commitDraft()
+    await vi.waitFor(() => expect(adapter.createRegion).toHaveBeenCalledTimes(1))
+    editor.chapter = { ...chapterWith([]), id: 'c2' }
+    release()
+    expect(await pending).toBe(true)
+    expect(editor.chapter.pages[0].regions).toEqual([])
+    expect(editor.selectionId).toBe(null)
+    expect(adapter.historyPush).toHaveBeenCalledTimes(1)
+    expect(adapter.historyPush.mock.calls[0][0].chapterId).toBe('c1')
+  })
+
+  // The selection is what the editor-wide Delete acts on. A stroke that lands
+  // after the reader turned the page is kept on the page it was drawn on, and
+  // is not selected there: a selection on a page nobody is looking at is one
+  // Delete would remove unseen.
+  it('selects a stroke only while its page is still the one in view', async () => {
+    editor.chapter = twoPages()
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    let creates = 0
+    const adapter = backend({
+      createRegion: vi.fn(async ({ bbox }) => {
+        const id = `c1-p001-h${++creates}`
+        if (creates === 1) await gate
+        return { region: { id, pageId: 'c1-p001', bbox, source: 'hand', outcome: 'cleaned' }, pageStatus: 'cleaned' }
+      }),
+      loadPages: vi.fn(async () => []),
+    })
+    setBackend(/** @type {any} */ (adapter))
+
+    stroke({ x: 20, y: 30, w: 12, h: 4 })
+    const pending = commitDraft()
+    await vi.waitFor(() => expect(adapter.createRegion).toHaveBeenCalledTimes(1))
+    goToPage(1)
+    release()
+    expect(await pending).toBe(true)
+
+    expect(editor.chapter.pages[0].regions.map((region) => region.id)).toEqual(['c1-p001-h1'])
+    expect(editor.pageIndex).toBe(1)
+    expect(editor.selectionId).toBe(null)
+    expect(selectedRegion()).toBe(null)
+
+    // Back on its page, the next stroke there is selected as it lands.
+    goToPage(0)
+    stroke({ x: 40, y: 30, w: 12, h: 4 })
+    expect(await commitDraft()).toBe(true)
+    expect(editor.selectionId).toBe('c1-p001-h2')
+  })
+
+  // A page turn, not a chapter switch: the chapter is the same one, both pages
+  // are in hand, and the result must still land on the page the stroke was
+  // drawn on. A stroke queued behind it on the same page follows it there.
+  it('attaches strokes pending across a page switch to the page they were drawn on', async () => {
+    editor.chapter = twoPages()
+    let releaseFirst
+    const gate = new Promise((resolve) => { releaseFirst = resolve })
+    let creates = 0
+    const adapter = backend({
+      createRegion: vi.fn(async ({ bbox }) => {
+        const id = `c1-p001-h${++creates}`
+        if (creates === 1) await gate
+        return { region: { id, pageId: 'c1-p001', bbox, source: 'hand', outcome: 'cleaned' }, pageStatus: 'cleaned' }
+      }),
+      loadPages: vi.fn(async () => []),
+    })
+    setBackend(/** @type {any} */ (adapter))
+
+    stroke({ x: 20, y: 30, w: 12, h: 4 })
+    const first = commitDraft()
+    stroke({ x: 40, y: 30, w: 12, h: 4 })
+    const second = commitDraft()
+    await vi.waitFor(() => expect(adapter.createRegion).toHaveBeenCalledTimes(1))
+
+    goToPage(1)
+    expect(editor.pageIndex).toBe(1)
+    releaseFirst()
+    expect(await first).toBe(true)
+    expect(await second).toBe(true)
+
+    // Both sent for the page they were drawn on, the queued one included.
+    expect(adapter.createRegion.mock.calls.map(([spec]) => spec.pageIndex)).toEqual([0, 0])
+    const [drawnOn, switchedTo] = editor.chapter.pages
+    expect(drawnOn.regions.map((region) => region.id)).toEqual(['c1-p001-h1', 'c1-p001-h2'])
+    expect(switchedTo.regions).toEqual([])
+    expect(switchedTo.status).toBe('unclean')
+    // The reader stays where they turned to, and each stroke is one undo step.
+    expect(editor.pageIndex).toBe(1)
+    expect(adapter.historyPush.mock.calls.map(([{ entry }]) => entry.regionId))
+      .toEqual(['c1-p001-h1', 'c1-p001-h2'])
+  })
+
+  // The cloud render of a stroke is the window a delete can land in: the local
+  // seed is on the page, the render has not answered, and the user removes it.
+  // The late answer must not put it back. Two gestures, two steps, in the
+  // order they happened: the stroke's creation (as the seed it was when it
+  // was deleted), then the delete. Undoing the delete brings the seed back,
+  // and one more undo removes it; with the delete alone on the history the
+  // seed could never be undone.
+  it('does not resurrect a stroke deleted while its render is pending', async () => {
+    editor.chapter = chapterWith([])
+    setToolParam('aiMaskBrush', 'engine', 'cloud')
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    const seed = {
+      id: 'c1-p001-h1',
+      pageId: 'c1-p001',
+      bbox: { x: 20, y: 30, w: 12, h: 4 },
+      source: 'hand',
+      outcome: 'cleaned',
+      mask: { id: 'c1-p001-h1-m1', fillMode: 'match-surround', provenance: { engine: 'fill' } },
+    }
+    const adapter = backend({
+      createRegion: vi.fn(async () => ({ region: seed, pageStatus: 'cleaned' })),
+      applyTool: vi.fn(async () => {
+        await gate
+        return {
+          status: 'applied',
+          region: { ...seed, mask: { id: 'c1-p001-h1-m2', fillMode: 'reconstruct', provenance: { engine: 'flux' } } },
+          pageStatus: 'cleaned',
+        }
+      }),
+      deleteMask: vi.fn(async () => ({ pageStatus: 'unclean' })),
+      loadPages: vi.fn(async () => []),
+    })
+    setBackend(/** @type {any} */ (adapter))
+    vi.mocked(requestCloudConsent).mockResolvedValue({ params: {}, attemptId: 'attempt-3' })
+    vi.mocked(runCloudJob).mockImplementation(async (_grant, _where, call) => call({}))
+
+    stroke({ x: 20, y: 30, w: 12, h: 4 })
+    const pending = commitDraft()
+    await vi.waitFor(() => expect(adapter.applyTool).toHaveBeenCalledTimes(1))
+    const page = editor.chapter.pages[0]
+    expect(page.regions.map((region) => region.id)).toEqual(['c1-p001-h1'])
+
+    expect(await deleteRow(page.regions[0])).toBe(true)
+    expect(adapter.deleteMask).toHaveBeenCalledWith({ maskId: 'c1-p001-h1-m1' })
+    expect(page.regions).toEqual([])
+
+    release()
+    expect(await pending).toBe(false)
+    expect(editor.chapter.pages[0].regions).toEqual([])
+    expect(editor.selectionId).not.toBe('c1-p001-h1')
+    await vi.waitFor(() => expect(adapter.historyPush).toHaveBeenCalledTimes(2))
+    const [creation, removal] = adapter.historyPush.mock.calls.map(([{ entry }]) => entry)
+    expect(creation.label).toBe('canvas.command.drawMask')
+    expect(creation.regionId).toBe('c1-p001-h1')
+    expect(creation.before.region).toBe(null)
+    expect(creation.after.region).toMatchObject({ id: 'c1-p001-h1', mask: { id: 'c1-p001-h1-m1' } })
+    expect(removal.label).toBe('masks.command.deleteMask')
+    expect(removal.before.region).toMatchObject({ id: 'c1-p001-h1', mask: { id: 'c1-p001-h1-m1' } })
+    expect(removal.after.region).toBe(null)
+  })
+
+  // The delete undone before the render answers: the seed is back, and the
+  // render lands on it. That is an edit of the seed now, not a second
+  // creation from nothing, and a new action: the undone delete is no longer
+  // ahead to redo. Undo then walks back to the seed and to nothing, and redo
+  // forward again, through the editor's own replay.
+  it('lands a render on a seed whose delete was undone as an edit of that seed', async () => {
+    const { adapter, pending, release } = cloudStroke()
+    await vi.waitFor(() => expect(adapter.applyTool).toHaveBeenCalledTimes(1))
+    expect(await deleteRow(/** @type {any} */ (seedOnPage()))).toBe(true)
+    await step(undo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
+
+    release()
+    expect(await pending).toBe(true)
+    await settled(editor.history)
+    expect(labels()).toEqual(['canvas.command.drawMask', 'canvas.command.drawMask'])
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: RENDERED_MASK })
+    expect(canRedo(editor.history)).toBe(false)
+    const moves = adapter.historyMove.mock.calls.length
+    await step(redo)
+    expect(adapter.historyMove).toHaveBeenCalledTimes(moves)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: RENDERED_MASK })
+
+    await step(undo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
+    await step(undo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK })
+    expect(canUndo(editor.history)).toBe(false)
+    await step(redo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
+    await step(redo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: RENDERED_MASK })
+    expectBystanderUntouched(adapter)
+  })
+
+  // The case above, driven by the editor's own undo: a delete during the
+  // render is two steps, and the render that lands after it changes nothing.
+  it('undoes a stroke deleted during its render in two steps, and redoes both', async () => {
+    const { adapter, pending, release } = cloudStroke()
+    await vi.waitFor(() => expect(adapter.applyTool).toHaveBeenCalledTimes(1))
+    expect(await deleteRow(/** @type {any} */ (seedOnPage()))).toBe(true)
+    release()
+    expect(await pending).toBe(false)
+    await settled(editor.history)
+    expect(labels()).toEqual(['canvas.command.drawMask', 'masks.command.deleteMask'])
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK })
+
+    await step(undo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
+    await step(undo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK })
+    expect(canUndo(editor.history)).toBe(false)
+    await step(redo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
+    await step(redo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK })
+    expectBystanderUntouched(adapter)
+  })
+
+  // A render that starts and then fails, by answer or by throwing inside the
+  // job, releases the hold: the seed is one local creation, and a later edit
+  // of it is one step of its own rather than a second creation.
+  for (const [how, answer] of [
+    ['answers failed', async () => ({ status: 'failed', errorCode: 'provider_error' })],
+    ['throws', async () => { throw new Error('connection reset') }],
+  ]) {
+    it(`keeps a stroke whose render ${how} after it starts as one creation`, async () => {
+      const { adapter, pending, release } = cloudStroke({ answer })
+      await vi.waitFor(() => expect(adapter.applyTool).toHaveBeenCalledTimes(1))
+      release()
+      expect(await pending).toBe(true)
+      await settled(editor.history)
+      expect(labels()).toEqual(['canvas.command.drawMask'])
+      expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
+
+      expect(await deleteRow(/** @type {any} */ (seedOnPage()))).toBe(true)
+      await settled(editor.history)
+      expect(labels()).toEqual(['canvas.command.drawMask', 'masks.command.deleteMask'])
+      await step(undo)
+      expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
+      await step(undo)
+      expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK })
+      await step(redo)
+      expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
+      expectBystanderUntouched(adapter)
+    })
+  }
+
+  it('adds nothing when a render fails after its seed was deleted', async () => {
+    const { adapter, pending, release } = cloudStroke({
+      answer: async () => ({ status: 'failed', errorCode: 'provider_error' }),
+    })
+    await vi.waitFor(() => expect(adapter.applyTool).toHaveBeenCalledTimes(1))
+    expect(await deleteRow(/** @type {any} */ (seedOnPage()))).toBe(true)
+    release()
+    expect(await pending).toBe(false)
+    await settled(editor.history)
+    expect(labels()).toEqual(['canvas.command.drawMask', 'masks.command.deleteMask'])
+    await step(undo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
+    await step(undo)
+    expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK })
+    expectBystanderUntouched(adapter)
+  })
+
+  // The render outlives a page turn far enough to take the stroke's page out
+  // of the window. Landed or failed, the stroke is one creation on its
+  // chapter's history, and the page in view is left alone.
+  for (const [how, answer, mask] of [
+    ['lands', async () => ({ status: 'applied', region: rendered(), pageStatus: 'cleaned' }), RENDERED_MASK],
+    ['fails', async () => ({ status: 'failed', errorCode: 'provider_error' }), SEED_MASK],
+  ]) {
+    it(`records a stroke whose render ${how} after its page left the window as one creation`, async () => {
+      const { adapter, journal, pending, release } = cloudStroke({ answer, pages: 5 })
+      await vi.waitFor(() => expect(adapter.applyTool).toHaveBeenCalledTimes(1))
+      goToPage(3)
+      const page = editor.chapter.pages[0]
+      expect(page.resident).toBe(false)
+
+      release()
+      expect(await pending).toBe(true)
+      await settled(editor.history)
+      expect(labels()).toEqual(['canvas.command.drawMask'])
+      expect(journal.entries[0].before.region).toBe(null)
+      expect(journal.entries[0].after.region.mask.id).toBe(mask)
+      expect(page.regions).toEqual([])
+      expect(editor.pageIndex).toBe(3)
+      expect(editor.selectionId).toBe(null)
+      expect(editor.chapter.pages[3].regions).toEqual([])
+    })
+  }
+
+  // Something throws before the render could start. The seed is stored all the
+  // same, so it goes on the history, and the error is reported, not swallowed.
+  it('keeps the seed and reports the error when the render cannot start', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { adapter, pending } = cloudStroke({ consent: async () => { throw new Error('dialog gone') } })
+      expect(await pending).toBe(false)
+      expect(adapter.applyTool).not.toHaveBeenCalled()
+      expect(app.notices.at(-1)?.key).toBe('notice.mask.rerunFailed')
+      await settled(editor.history)
+      expect(labels()).toEqual(['canvas.command.drawMask'])
+      expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
+
+      expect(await deleteRow(/** @type {any} */ (seedOnPage()))).toBe(true)
+      await settled(editor.history)
+      expect(labels()).toEqual(['canvas.command.drawMask', 'masks.command.deleteMask'])
+      await step(undo)
+      await step(undo)
+      expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK })
+      expectBystanderUntouched(adapter)
+    } finally { log.mockRestore() }
+  })
+
+  it('persists gesture undo entries in order across a chapter switch', async () => {
+    editor.chapter = chapterWith([])
+    let releaseHistory
+    const historyGate = new Promise((resolve) => { releaseHistory = resolve })
+    let releaseSecond
+    const secondGate = new Promise((resolve) => { releaseSecond = resolve })
+    let creates = 0
+    const adapter = backend({
+      historyPush: vi.fn(async () => {
+        if (adapter.historyPush.mock.calls.length === 1) await historyGate
+        return { cursor: adapter.historyPush.mock.calls.length, entries: [] }
+      }),
+      createRegion: vi.fn(async ({ bbox }) => {
+        const id = `c1-p001-h${++creates}`
+        if (creates === 2) await secondGate
+        return { region: { id, pageId: 'c1-p001', bbox }, pageStatus: 'cleaned' }
+      }),
+    })
+    setBackend(/** @type {any} */ (adapter))
+    stroke({ x: 20, y: 30, w: 12, h: 4 })
+    expect(await commitDraft()).toBe(true)
+    await vi.waitFor(() => expect(adapter.historyPush).toHaveBeenCalledTimes(1))
+    stroke({ x: 22, y: 30, w: 12, h: 4 })
+    const second = commitDraft()
+    await vi.waitFor(() => expect(adapter.createRegion).toHaveBeenCalledTimes(2))
+    editor.chapter = { ...chapterWith([]), id: 'c2' }
+    releaseSecond()
+    await Promise.resolve()
+    expect(adapter.historyPush).toHaveBeenCalledTimes(1)
+    releaseHistory()
+    expect(await second).toBe(true)
+    expect(adapter.historyPush.mock.calls.map(([{ entry }]) => entry.regionId))
+      .toEqual(['c1-p001-h1', 'c1-p001-h2'])
+  })
+
+  it('records a cloud stroke as one creation action after attachment', async () => {
+    editor.chapter = chapterWith([])
+    setToolParam('aiMaskBrush', 'engine', 'cloud')
+    const adapter = backend({ applyTool: vi.fn(async () => ({ status: 'applied',
+      region: { id: 'c1-p001-h1', pageId: 'c1-p001', source: 'hand', outcome: 'cleaned',
+        mask: { id: 'c1-p001-h1-m1', engine: 'flux' } }, pageStatus: 'cleaned' })) })
+    setBackend(/** @type {any} */ (adapter))
+    vi.mocked(requestCloudConsent).mockResolvedValue({ params: {}, attemptId: 'attempt-1' })
+    vi.mocked(runCloudJob).mockImplementation(async (_grant, _where, call) => call({}))
+
+    stroke({ x: 20, y: 30, w: 12, h: 4 })
+    expect(await commitDraft()).toBe(true)
+    expect(adapter.createRegion.mock.calls[0][0].params.engine).toBeUndefined()
+    expect(adapter.applyTool).toHaveBeenCalledTimes(1)
+    expect(adapter.historyPush).toHaveBeenCalledTimes(1)
+    const { entry } = adapter.historyPush.mock.calls[0][0]
+    expect(entry.before.region).toBe(null)
+    expect(entry.after.region.mask.engine).toBe('flux')
+  })
+
+  it('keeps a cancelled cloud stroke as one local creation action', async () => {
+    editor.chapter = chapterWith([])
+    setToolParam('aiMaskBrush', 'engine', 'cloud')
+    const adapter = backend()
+    setBackend(/** @type {any} */ (adapter))
+    vi.mocked(requestCloudConsent).mockResolvedValue(null)
+
+    stroke({ x: 20, y: 30, w: 12, h: 4 })
+    expect(await commitDraft()).toBe(true)
+    expect(adapter.applyTool).not.toHaveBeenCalled()
+    expect(adapter.historyPush).toHaveBeenCalledTimes(1)
+    expect(adapter.historyPush.mock.calls[0][0].entry.before.region).toBe(null)
+  })
+
+  it('records a cloud result on its original chapter after a page switch', async () => {
+    editor.chapter = chapterWith([])
+    setToolParam('aiMaskBrush', 'engine', 'cloud')
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    const adapter = backend({ applyTool: vi.fn(async () => {
+      await gate
+      return { status: 'applied', region: { id: 'c1-p001-h1', pageId: 'c1-p001',
+        mask: { id: 'c1-p001-h1-m1', engine: 'flux' } }, pageStatus: 'cleaned' }
+    }) })
+    setBackend(/** @type {any} */ (adapter))
+    vi.mocked(requestCloudConsent).mockResolvedValue({ params: {}, attemptId: 'attempt-2' })
+    vi.mocked(runCloudJob).mockImplementation(async (_grant, _where, call) => call({}))
+
+    stroke({ x: 20, y: 30, w: 12, h: 4 })
+    const pending = commitDraft()
+    await vi.waitFor(() => expect(adapter.applyTool).toHaveBeenCalledTimes(1))
+    editor.chapter = { ...chapterWith([]), id: 'c2' }
+    release()
+    expect(await pending).toBe(true)
+    expect(editor.chapter.pages[0].regions).toEqual([])
+    expect(adapter.historyPush).toHaveBeenCalledTimes(1)
+    expect(adapter.historyPush.mock.calls[0][0].chapterId).toBe('c1')
+    expect(adapter.historyPush.mock.calls[0][0].entry.after.region.mask.engine).toBe('flux')
+  })
+
+  it('reports an insufficient native input window without creating history', async () => {
+    editor.chapter = chapterWith([])
+    const adapter = backend({ createRegion: vi.fn().mockRejectedValue(
+      new Error('model read footprint exceeds composited window')) })
+    setBackend(/** @type {any} */ (adapter))
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      stroke({ x: 20, y: 30, w: 12, h: 4 })
+      expect(await commitDraft()).toBe(false)
+      expect(adapter.historyPush).not.toHaveBeenCalled()
+      expect(app.notices.at(-1)?.key).toBe('notice.mask.rerunFailed')
+    } finally { log.mockRestore() }
   })
 })
 
@@ -429,7 +1064,7 @@ describe('a drawn shape', () => {
   })
 
   it('names the rung the mode row picked, for every engine on it', async () => {
-    for (const engine of ['fill', 'denoise', 'lama', 'flux']) {
+    for (const engine of ['fill', 'lama', 'flux']) {
       const adapter = backend()
       setBackend(/** @type {any} */ (adapter))
       setToolParam('shapes', 'mode', engine)
@@ -521,6 +1156,36 @@ describe('content-aware fill on region click', () => {
     expect(spec.tool).toBe('contentAwareFill')
     expect(spec.regionId).toBe('r1')
     expect(editor.selectionId).toBe('r1')
+  })
+})
+
+// Text cleanup is not a per-region tool. Sending its parameters for a region
+// named the stored scope and no mode, which the adapter read as a Detect &
+// clean over that whole scope; a run starts from the panel instead, and one
+// detected region is cleaned by `cleanDetected`.
+describe('Text cleanup on an existing region', () => {
+  /** @type {Record<string, unknown>|undefined} */
+  let params
+  afterEach(() => {
+    if (params) editor.toolParams.autoClean = params
+    setBackend(null)
+    editor.chapter = null
+  })
+
+  it('applies nothing and starts no run, whatever the panel holds', async () => {
+    editor.tool = 'autoClean'
+    params = editor.toolParams.autoClean
+    editor.toolParams.autoClean = { ...params, scope: 'project', step: 'detect' }
+    editor.chapter = chapterWith([{ id: 'r1', pageId: 'c1-p001', bbox: { x: 10, y: 10, w: 20, h: 20 },
+      detected: true, outcome: 'unclean' }])
+    const adapter = backend()
+    const runClean = vi.fn()
+    setBackend(/** @type {any} */ ({ ...adapter, runClean }))
+
+    expect(await applyActiveToolToRegion('r1')).toBe(false)
+    expect(adapter.applyTool).not.toHaveBeenCalled()
+    expect(runClean).not.toHaveBeenCalled()
+    expect(editor.run.active).toBe(false)
   })
 })
 
@@ -651,3 +1316,169 @@ describe('paint integration payload contract', () => {
   })
 })
 
+/**
+ * **The selection tool edits the detected masks, and records nothing.** Its
+ * gesture is a brush stroke or a lasso or a rectangle, the same payloads
+ * `createRegion` carries, sent to `editDetectionMask` with the mode the row
+ * picked. It makes no layer and no undo entry - a detection has no pixels to
+ * put back - and reads the page again afterwards, because only the native side
+ * knows which detections grew, appeared or went.
+ */
+describe('the selection tool', () => {
+  const DETECTED_ID = 'c1-p001-d1'
+  const detected = () => ({
+    id: DETECTED_ID,
+    pageId: 'c1-p001',
+    bbox: { x: 10, y: 10, w: 10, h: 10 },
+    source: 'auto',
+    outcome: 'detected',
+    mask: { id: `${DETECTED_ID}-m1`, fillMode: 'match-surround', provenance: { engine: 'fill', mask_sha256: 'aa' } },
+  })
+
+  /**
+   * @param {string} kind
+   * @param {Array<{x: number, y: number}>} points
+   * @param {{x: number, y: number, w: number, h: number}} bbox
+   * @param {'add'|'erase'} [mode]
+   */
+  function selection(kind, points, bbox, mode = 'add') {
+    beginDraft({ tool: 'maskSelect', kind, pageId: 'c1-p001', points, bbox, mode, keyboard: false, moved: true })
+  }
+
+  /** An adapter whose mask edit answers `answer`, and whose page reload answers the page as `regions`. */
+  function maskBackend(answer, regions = [detected()], overrides = {}) {
+    return backend({
+      editDetectionMask: vi.fn(async () => answer),
+      loadPages: vi.fn(async () => [{ ...chapterWith(regions).pages[0], status: answer?.pageStatus ?? 'detected' }]),
+      ...overrides,
+    })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    app.notices.length = 0
+    editor.history = createHistory()
+    editor.tool = 'maskSelect'
+    editor.pageIndex = 0
+    editor.selectionId = null
+    editor.hoverId = null
+    editor.chapter = chapterWith([detected()])
+    setToolParam('maskSelect', 'size', 32)
+    resetDraftState()
+  })
+
+  afterEach(() => {
+    setBackend(null)
+    editor.chapter = null
+    editor.tool = 'autoClean'
+    resetDraftState()
+  })
+
+  it('adds a brush stroke as its path and radius, and records no history', async () => {
+    const adapter = maskBackend({ pageStatus: 'detected', changed: [DETECTED_ID], created: [], removed: [] })
+    setBackend(/** @type {any} */ (adapter))
+
+    selection('stroke', [{ x: 12, y: 12 }, { x: 30, y: 12 }], { x: 11, y: 11, w: 20, h: 2 })
+    expect(await commitDraft()).toBe(true)
+
+    expect(adapter.editDetectionMask).toHaveBeenCalledTimes(1)
+    expect(adapter.editDetectionMask.mock.calls[0][0]).toEqual({
+      chapterId: 'c1',
+      pageIndex: 0,
+      sourceIndex: 0,
+      sourceSha: 'fixture-source',
+      mode: 'add',
+      stroke: { points: [{ x: 12, y: 12 }, { x: 30, y: 12 }], radius: 16 },
+    })
+    // Not a layer, and not an undoable edit.
+    expect(adapter.createRegion).not.toHaveBeenCalled()
+    expect(adapter.historyPush).not.toHaveBeenCalled()
+    expect(editor.history.entries).toHaveLength(0)
+    // The page is read again, which moves the edited mask's URL.
+    expect(adapter.loadPages).toHaveBeenCalledWith({ chapterId: 'c1', indices: [0] })
+  })
+
+  it('removes with a lasso as its own vertices and a rectangle as its corners', async () => {
+    const adapter = maskBackend({ pageStatus: 'detected', changed: [DETECTED_ID], created: [], removed: [] })
+    setBackend(/** @type {any} */ (adapter))
+
+    selection('lasso', LASSO, { x: 20, y: 20, w: 40, h: 40 }, 'erase')
+    expect(await commitDraft()).toBe(true)
+    selection('rect', [{ x: 5, y: 5 }], { x: 5, y: 5, w: 10, h: 20 }, 'erase')
+    expect(await commitDraft()).toBe(true)
+
+    const [lasso, rect] = adapter.editDetectionMask.mock.calls.map(([spec]) => spec)
+    expect(lasso.mode).toBe('remove')
+    expect(lasso.stroke).toBeUndefined()
+    expect(lasso.painted).toEqual({ kind: 'polygon', points: LASSO, feather: 0 })
+    expect(rect.mode).toBe('remove')
+    expect(rect.painted).toEqual({
+      kind: 'rect',
+      points: [{ x: 5, y: 5 }, { x: 15, y: 5 }, { x: 15, y: 25 }, { x: 5, y: 25 }],
+      feather: 0,
+    })
+  })
+
+  it('lets go of a selection the edit deleted', async () => {
+    const adapter = maskBackend({ pageStatus: 'unclean', changed: [], created: [], removed: [DETECTED_ID] }, [])
+    setBackend(/** @type {any} */ (adapter))
+    editor.selectionId = DETECTED_ID
+    editor.hoverId = DETECTED_ID
+
+    selection('stroke', [{ x: 15, y: 15 }], { x: 14, y: 14, w: 2, h: 2 }, 'erase')
+    expect(await commitDraft()).toBe(true)
+
+    expect(editor.selectionId).toBeNull()
+    expect(editor.hoverId).toBeNull()
+    expect(editor.chapter.pages[0].regions).toEqual([])
+    expect(editor.chapter.pages[0].status).toBe('unclean')
+  })
+
+  it('reads nothing again for an edit that changed nothing', async () => {
+    const adapter = maskBackend({ pageStatus: 'detected', changed: [], created: [], removed: [] })
+    setBackend(/** @type {any} */ (adapter))
+
+    selection('stroke', [{ x: 80, y: 80 }], { x: 79, y: 79, w: 2, h: 2 }, 'erase')
+    expect(await commitDraft()).toBe(false)
+    expect(adapter.loadPages).not.toHaveBeenCalled()
+  })
+
+  it('leaves a chapter opened meanwhile alone', async () => {
+    /** @type {(value: any) => void} */
+    let answer = () => {}
+    const adapter = maskBackend(null, [detected()], {
+      editDetectionMask: vi.fn(() => new Promise((resolve) => { answer = resolve })),
+    })
+    setBackend(/** @type {any} */ (adapter))
+
+    selection('stroke', [{ x: 15, y: 15 }], { x: 14, y: 14, w: 2, h: 2 }, 'erase')
+    const pending = commitDraft()
+    await vi.waitFor(() => expect(adapter.editDetectionMask).toHaveBeenCalledTimes(1))
+    const other = { ...chapterWith([{ ...detected() }]), id: 'c2' }
+    editor.chapter = other
+    editor.selectionId = DETECTED_ID
+    answer({ pageStatus: 'unclean', changed: [], created: [], removed: [DETECTED_ID] })
+    await pending
+
+    expect(adapter.loadPages).not.toHaveBeenCalled()
+    expect(editor.chapter).toBe(other)
+    expect(editor.selectionId).toBe(DETECTED_ID)
+  })
+
+  it('says a refused edit in one sentence and changes nothing', async () => {
+    const adapter = maskBackend(null, [detected()], {
+      editDetectionMask: vi.fn(async () => { throw new Error('mask_edit_mode_invalid') }),
+    })
+    setBackend(/** @type {any} */ (adapter))
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      selection('stroke', [{ x: 15, y: 15 }], { x: 14, y: 14, w: 2, h: 2 })
+      expect(await commitDraft()).toBe(false)
+    } finally {
+      error.mockRestore()
+    }
+    expect(app.notices.map((notice) => notice.key)).toContain('notice.mask.selectionFailed')
+    expect(adapter.loadPages).not.toHaveBeenCalled()
+    expect(editor.chapter.pages[0].regions).toEqual([detected()])
+  })
+})

@@ -1,0 +1,229 @@
+{
+  "method": "Manual visual review of the original chapter JPEGs and their SAM-TS-L mask overlays for the 25 pages with nonempty SAM masks and zero small-INT8 RT-DETR text boxes. Pages were viewed in contact sheets and individually for unclear cases. Locations are approximate visual descriptions, not coordinates.",
+  "scope": {
+    "chapter": "Korean color webtoon chapter 109",
+    "pages_reviewed": 25,
+    "page_ids": [
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "14",
+      "15",
+      "16",
+      "17",
+      "19",
+      "20",
+      "21",
+      "22",
+      "24",
+      "25",
+      "26",
+      "35",
+      "38",
+      "39",
+      "40",
+      "43",
+      "44"
+    ],
+    "selection": "SAM positive pixels > 0 and RT-DETR text_box_count == 0; some pages still have RT bubble boxes"
+  },
+  "summary": {
+    "visible_sfx_pages": 23,
+    "no_obvious_text_pages": [
+      "25",
+      "35"
+    ],
+    "obvious_sam_false_positive_pages": [
+      "25",
+      "35"
+    ],
+    "dialogue_title_caption_observed": "No clear ordinary dialogue, title, or caption was identified in this selected-page review; apparent visible text is predominantly stylized SFX."
+  },
+  "limitations": [
+    "Subjective visual audit only; no text polygons, pixel ground truth, precision/recall, or cleanability judgment.",
+    "A SAM mask overlapping visible lettering does not establish that the mask contains only lettering or is safe to inpaint.",
+    "Small/ambiguous marks need crop-level review; this chapter cannot establish COO transfer to other Korean webtoons."
+  ],
+  "pages": [
+    {
+      "page": "02",
+      "visible_text": "sfx",
+      "location": "upper-right of upper panel; lower-left action panel",
+      "sam_visual": "mask overlaps both apparent glyph groups",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "03",
+      "visible_text": "sfx",
+      "location": "large marks at upper-right and in the central/lower action panel",
+      "sam_visual": "mask aligns with large stylized marks",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "04",
+      "visible_text": "sfx",
+      "location": "left-center of the action panel",
+      "sam_visual": "mask overlaps stylized lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "05",
+      "visible_text": "sfx",
+      "location": "upper-center above the character; possible smaller mark at lower-left",
+      "sam_visual": "main mask overlaps lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "06",
+      "visible_text": "sfx",
+      "location": "left-center and near center over the action scene",
+      "sam_visual": "mask overlaps lettering; page also has bright impact effects that could attract spill",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "07",
+      "visible_text": "sfx",
+      "location": "center white gutter between action panels",
+      "sam_visual": "mask overlaps the gutter lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "08",
+      "visible_text": "sfx",
+      "location": "large mark across the upper-middle action panel",
+      "sam_visual": "mask aligns with stylized lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "09",
+      "visible_text": "sfx",
+      "location": "several marks on the right side and lower-right action panels",
+      "sam_visual": "mask overlaps visible marks",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "14",
+      "visible_text": "sfx",
+      "location": "large marks in the left-center explosion/action panel",
+      "sam_visual": "mask overlaps lettering; glow and debris make exact mask boundary uncertain",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "15",
+      "visible_text": "sfx",
+      "location": "upper-right action panel, with a smaller mark near the lower-left of the character panel",
+      "sam_visual": "mask aligns with visible lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "16",
+      "visible_text": "sfx",
+      "location": "large pale stylized glyph clipped at the bottom, approximately x75–320, y1400–1600",
+      "sam_visual": "mask corresponds to the glyph; upper electrical glow is separate art",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "17",
+      "visible_text": "sfx",
+      "location": "large lettering near the top of the action panel",
+      "sam_visual": "mask overlaps apparent lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "19",
+      "visible_text": "sfx",
+      "location": "very large stylized mark across the central white/action area",
+      "sam_visual": "mask overlaps apparent lettering; shapes are irregular and need crop-level confirmation",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "20",
+      "visible_text": "sfx",
+      "location": "right side of the upper/middle panel",
+      "sam_visual": "mask overlaps visible mark; RT produced a bubble box but no text box",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "21",
+      "visible_text": "sfx",
+      "location": "multiple marks across upper and middle action panels",
+      "sam_visual": "mask overlaps several apparent marks",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "22",
+      "visible_text": "sfx",
+      "location": "upper-right panel and lower-left/center action area",
+      "sam_visual": "mask overlaps apparent lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "24",
+      "visible_text": "sfx",
+      "location": "very large lettering at upper-left and in the central/lower white area",
+      "sam_visual": "mask overlaps apparent lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "25",
+      "visible_text": "none_obvious",
+      "location": null,
+      "sam_visual": "small positives appear on flying debris/rock shapes; no lettering apparent",
+      "obvious_sam_false_positive": true
+    },
+    {
+      "page": "26",
+      "visible_text": "sfx",
+      "location": "small mark in the lower-left/center action panel",
+      "sam_visual": "mask appears to overlap the mark; RT produced a bubble box but no text box",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "35",
+      "visible_text": "none_obvious",
+      "location": null,
+      "sam_visual": "tiny positives appear on face/rock detail; no lettering apparent",
+      "obvious_sam_false_positive": true
+    },
+    {
+      "page": "38",
+      "visible_text": "sfx",
+      "location": "left side of the lower white/action panel",
+      "sam_visual": "mask overlaps apparent lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "39",
+      "visible_text": "sfx",
+      "location": "upper-left against the white sky above the action",
+      "sam_visual": "mask overlaps apparent lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "40",
+      "visible_text": "sfx",
+      "location": "left side of the horizontal action/beam panel",
+      "sam_visual": "mask overlaps apparent lettering",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "43",
+      "visible_text": "sfx",
+      "location": "right side of the small upper panel on white background",
+      "sam_visual": "mask overlaps apparent marks",
+      "obvious_sam_false_positive": false
+    },
+    {
+      "page": "44",
+      "visible_text": "sfx",
+      "location": "several marks along the right side and lower action panel",
+      "sam_visual": "mask overlaps apparent lettering",
+      "obvious_sam_false_positive": false
+    }
+  ]
+}

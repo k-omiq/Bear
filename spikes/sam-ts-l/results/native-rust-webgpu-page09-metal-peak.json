@@ -1,0 +1,97 @@
+{
+  "cold_definition": "fresh process first session, OS file cache uncontrolled",
+  "device_names": [
+    {
+      "ep": "WebGpuExecutionProvider",
+      "hardware_id": 0,
+      "vendor": "Microsoft"
+    }
+  ],
+  "graph_dir": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof",
+  "graph_manifest_revision": "5dd97423e0fbf2404264979136d47e8101144046",
+  "input_source": {
+    "file": "/Users/caved/Downloads/apocalypse/109/09.jpg",
+    "original_wh": [
+      690,
+      1600
+    ],
+    "resized_wh": [
+      442,
+      1024
+    ],
+    "sha256": "cdb3f781e7b07599da89bc5fae75713332b1f9d5490290d68426583c77c52a8a"
+  },
+  "memory": {
+    "metal_current_allocated_bytes_after_inference": 2538766336,
+    "metal_current_allocated_bytes_after_session_load": 1371635712,
+    "metal_current_allocated_bytes_at_preflight": 65536,
+    "metal_sample_interval_ms": 20,
+    "note": "ru_maxrss is process high-water. MTLDevice currentAllocatedSize sampled every 20 ms from a separate thread may miss transient peak and may not include ORT plugin resources if a different Metal device instance is used. Unified-memory allocations overlap process RSS.",
+    "post_inference_peak_process_rss_bytes": 2529116160,
+    "post_session_peak_process_rss_bytes": 2497527808,
+    "preflight_peak_process_rss_bytes": 42713088,
+    "sampled_peak_metal_current_allocated_bytes": 5948735488
+  },
+  "ort_info": "ORT Build Info: git-branch=HEAD, git-commit-id=45de2a8b06, fp8-kv-cache=1, build type=Release",
+  "page": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/apocalypse-109/page-09",
+  "parity": {
+    "changed_canvas_signs": 0,
+    "changed_restored_pixels": 0,
+    "exact_restored_mask_parity": true,
+    "logits": {
+      "changed_elements": 946325,
+      "max_abs": 0.000240325927734375,
+      "mean_abs": 9.067347506469536e-06,
+      "rmse": 1.4270645328318525e-05,
+      "shape": [
+        1,
+        1,
+        1024,
+        1024
+      ]
+    },
+    "output_mask_pixels": 29479,
+    "reference_mask_pixels": 29479,
+    "restoration": "crop, threshold >0, Pillow nearest resize; same as saved reference"
+  },
+  "plugin": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/ort-webgpu-venv/lib/python3.12/site-packages/onnxruntime_ep_webgpu/libonnxruntime_providers_webgpu.dylib",
+  "profile_assignments": null,
+  "profile_files_removed_after_counting": false,
+  "profiling_enabled": false,
+  "raw_logits_f32le": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/results/native-rust-webgpu-page09-metal-peak.logits.f32le",
+  "requested_provider_has_nodes_in_every_graph": null,
+  "runtime": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/ort-webgpu-venv/lib/python3.12/site-packages/onnxruntime/capi/libonnxruntime.1.28.0.dylib",
+  "timing_ms": {
+    "cold_encoder_session_load": 1419.32475,
+    "cold_head_session_load": 156.257792,
+    "inference": [
+      {
+        "chain_ms": 7261.987208,
+        "encoder_ort_run_ms": 6921.984458999999,
+        "head_input_tensor_ms": 1.254666000000725,
+        "head_ort_run_ms": 330.0203339999989,
+        "input_tensor_ms": 8.027790999999999,
+        "output_extract_ms": 0.6999580000001515,
+        "run": 0
+      },
+      {
+        "chain_ms": 7240.423500000001,
+        "encoder_ort_run_ms": 6948.962125000001,
+        "head_input_tensor_ms": 0.6119169999992664,
+        "head_ort_run_ms": 285.3092080000006,
+        "input_tensor_ms": 1.947125,
+        "output_extract_ms": 3.5931250000003274,
+        "run": 1
+      },
+      {
+        "chain_ms": 7157.605708,
+        "encoder_ort_run_ms": 6842.402,
+        "head_input_tensor_ms": 0.7004170000000158,
+        "head_ort_run_ms": 311.53520800000024,
+        "input_tensor_ms": 2.207083,
+        "output_extract_ms": 0.7609999999995125,
+        "run": 2
+      }
+    ]
+  }
+}

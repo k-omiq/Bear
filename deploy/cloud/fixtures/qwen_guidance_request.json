@@ -1,0 +1,24 @@
+{
+  "protocol_version": "1.0.0",
+  "job_id": "job-test-001",
+  "attempt_id": "attempt-test-001",
+  "recipe": {
+    "recipe_id": "mc-qwen-image-edit-2511-v4",
+    "preprocessing_version": "2.0.0",
+    "model_id": "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32",
+    "model_revision": "a285fceef1439d72d60533e83cb6d8921748a666",
+    "native_mask_conditioning": false,
+    "qwen_edit": {
+      "target": "sound_effect",
+      "description": "Big black letters beside the hand. 大きな文字。"
+    }
+  },
+  "width": 16,
+  "height": 16,
+  "seed": 1,
+  "steps": 8,
+  "guidance_scaled": 100,
+  "image_sha256": "2e0a9a2d5f28563463f634d5b81ec2ef90d91afe472a0c6e2c6ef4082f93ec5f",
+  "hint_sha256": "3552bb8bf493ba63896f7abfb3ee3d899bf7312cd0b3d87691a639344b051238",
+  "request_digest": "991bf4c4649172289b43fb60f5b61b46c184333523bf18d39913721bcad4ad17"
+}

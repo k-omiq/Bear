@@ -19,11 +19,18 @@
    * Widths, per the metrics table: settings 520, export 460, about 460, new
    * project 440, everything else 400.
    *
+   * `fill` lays the dialog over the whole window instead, `width` ignored,
+   * and hands its body the height that is left, as a column, so a child can
+   * grow into it (the denoise compare view's full window). It is a layout
+   * rather than the Fullscreen API, which WKWebView, the engine the app
+   * ships on, grants only behind a prefix and a user gesture.
+   *
    * @type {{
    *   title: string,
    *   meta?: string,
    *   width?: number,
    *   blocking?: boolean,
+   *   fill?: boolean,
    *   onclose?: () => void,
    *   children?: import('svelte').Snippet,
    *   footnote?: import('svelte').Snippet,
@@ -35,6 +42,7 @@
     meta,
     width = 400,
     blocking = false,
+    fill = false,
     onclose,
     children,
     footnote,
@@ -108,11 +116,12 @@
   <div
     bind:this={dialog}
     class="dialog"
+    class:fill
     role="dialog"
     aria-modal="true"
     aria-labelledby={titleId}
     tabindex="-1"
-    style:width="{width}px"
+    style:width={fill ? undefined : `${width}px`}
   >
     <div class="head">
       <h2 class="title" id={titleId}>{title}</h2>
@@ -156,6 +165,19 @@
     background: var(--surface);
     box-shadow: var(--modal-lift);
     animation: mcIn var(--dur) var(--ease);
+  }
+
+  .dialog.fill {
+    width: 100vw;
+    height: 100vh;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+  }
+  .dialog.fill .body-inner {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
   }
 
   .head {

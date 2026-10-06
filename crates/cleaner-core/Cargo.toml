@@ -23,8 +23,11 @@ serde_json.workspace = true
 # Pure Rust image I/O. libvips was reversed because `spngload.c` destroys
 # the palette at load, which is the exact fidelity the choice was made for.
 png = "0.18"
+# Indexed GIF import keeps palette indices and transparency.
+gif = "0.14"
+image-webp = "0.2"
 tiff = "0.11"
-# The formats a page *arrives* in and never leaves in - see `image::foreign`.
+# Additional source decoders, including native JPEG - see `image::foreign`.
 # Four codecs and nothing else: `default-features = false` keeps out the
 # encoders, the format guessing and the whole `imageops` surface, none of which
 # this crate wants, and keeps the build pure Rust, which is what was settled
@@ -33,6 +36,9 @@ tiff = "0.11"
 image = { version = "0.25", default-features = false, features = [
   "jpeg", "webp", "gif", "bmp",
 ] }
+# Raw four-component JPEG decoding; the image wrapper converts CMYK to RGB.
+zune-jpeg = "0.5"
+zune-core = "0.5"
 # `static` so no extra dylib ships. Used for the managed colour conversions, and
 # to build the test fixtures' profiles.
 lcms2 = { version = "6", features = ["static"] }
@@ -55,4 +61,13 @@ getrandom = "0.3"
 # plugin's own libraries are found through. Target-gated, so nothing but a
 # Windows build compiles it. Already in the lockfile at this major.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation", "Win32_System_LibraryLoader"] }
+windows-sys = { version = "0.61", features = [
+  "Win32_System_SystemInformation", "Win32_System_LibraryLoader",
+  # `LockFile`, for the job lock across processes (`project::lock`).
+  "Win32_Foundation", "Win32_Storage_FileSystem",
+] }
+
+# `flock`, for the job lock across processes (`project::lock`). Already in the
+# lockfile, and what the cloud attempt journal locks its files with.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

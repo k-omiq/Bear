@@ -33,7 +33,8 @@ export const OVERSCAN = 6
  * @property {string} number - the position, zero-padded: `01`
  * @property {import('../model/status.js').PageMark} mark
  * @property {number} cleaned - regions with a mask that needs no review
- * @property {number} total - regions found on the page
+ * @property {number} total - regions of work found on the page (candidates apart)
+ * @property {number} candidates - held candidates awaiting a choice
  * @property {number} percent - how full the track is, 0..100
  * @property {'warn'|'review'|'normal'} tone - the track's tone; never the only carrier of meaning
  * @property {string|null} skipReasonKey - i18n key, set only on a skipped page
@@ -56,7 +57,7 @@ export const OVERSCAN = 6
  * @returns {PageRow}
  */
 export function pageRow(page, options) {
-  const { total, done: cleaned, review: flagged } = pageCounts(page)
+  const { total, done: cleaned, review: flagged, candidates } = pageCounts(page)
   const percent = total > 0 ? Math.round((cleaned / total) * 100) : page.status === 'cleaned' ? 100 : 0
 
   return {
@@ -67,6 +68,7 @@ export function pageRow(page, options) {
     mark: pageMark(page),
     cleaned,
     total,
+    candidates,
     percent,
     tone: page.status === 'skipped' ? 'warn' : flagged > 0 ? 'review' : 'normal',
     skipReasonKey: page.status === 'skipped' ? (page.skipReason ?? null) : null,

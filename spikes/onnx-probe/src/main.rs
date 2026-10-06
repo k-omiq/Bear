@@ -89,6 +89,7 @@ fn main() -> Result<()> {
         // is the only setting under which forcing a provider measures that
         // provider.
         measured_peak_rss: &[],
+        partitioned_on: &[],
     };
     let load_started = Instant::now();
     let (mut session, selection) = cleaner_core::accel::open_session(

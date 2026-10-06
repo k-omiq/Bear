@@ -71,12 +71,15 @@ pub fn header(bytes: &[u8]) -> Result<Header, ImageError> {
     decoder.set_transformations(Transformations::IDENTITY);
     let reader = decoder.read_info()?;
     let info = reader.info();
-    Ok(Header {
+    Ok(Header { palette: info.palette.as_ref().map(|p| p.to_vec()),
         width: info.width,
         height: info.height,
         mode: mode_of(info.color_type).ok_or(ImageError::Png("unsupported colour type".into()))?,
         depth: depth_of(info.bit_depth),
         icc: info.icc_profile.as_ref().map(|p| p.to_vec()),
+        color: super::ColorDescription::from_png(bytes)?,
+        srgb_intent: info.srgb.map(|intent| intent as u8),
+        trns: info.trns.as_ref().map(|t| trns_as_stored(mode_of(info.color_type).expect("validated PNG color type"), t)),
     })
 }
 
@@ -101,13 +104,40 @@ pub fn decode(bytes: &[u8]) -> Result<Raster, ImageError> {
         depth: depth_of(info.bit_depth),
         icc: info.icc_profile.as_ref().map(|p| p.to_vec()),
         palette: info.palette.as_ref().map(|p| p.to_vec()),
-        trns: info.trns.as_ref().map(|t| t.to_vec()),
+        trns: info.trns.as_ref().map(|t| trns_as_stored(mode, t)),
         srgb_intent: info.srgb.map(|intent| intent as u8),
+        color: super::ColorDescription::from_png(bytes)?,
         data,
     })
 }
 
+/// `tRNS` in the chunk's own layout, which is what [`Raster::trns`] holds and
+/// [`encode`] writes back. Below 16 bits the decoder hands a Gray or RGB key
+/// over as one byte a channel, the low byte of each sample; the chunk stores
+/// two, big-endian, whose high byte is then 0. Written back in the decoder's
+/// form the chunk was too short to read, and the next decode dropped the key.
+/// A palette's `tRNS`, one byte an entry, is the same in both.
+fn trns_as_stored(mode: ColorMode, decoded: &[u8]) -> Vec<u8> {
+    let channels = match mode {
+        ColorMode::Gray => 1,
+        ColorMode::Rgb => 3,
+        _ => return decoded.to_vec(),
+    };
+    if decoded.len() == channels {
+        decoded.iter().flat_map(|&low| [0, low]).collect()
+    } else {
+        decoded.to_vec()
+    }
+}
+
 pub fn encode(raster: &Raster) -> Result<Vec<u8>, ImageError> {
+    encode_with(raster, None)
+}
+
+/// [`encode`] at another DEFLATE effort. Every setting is lossless; only the
+/// time spent and the size of the file differ. `None` leaves the encoder's own
+/// defaults, which is what [`encode`] has always written.
+pub fn encode_with(raster: &Raster, compression: Option<png::Compression>) -> Result<Vec<u8>, ImageError> {
     let color_type = color_type_of(raster.mode).ok_or(ImageError::Unrepresentable {
         format: Format::Png,
         mode: raster.mode,
@@ -121,20 +151,14 @@ pub fn encode(raster: &Raster) -> Result<Vec<u8>, ImageError> {
     info.trns = raster.trns.clone().map(Into::into);
     info.icc_profile = raster.icc.clone().map(Into::into);
 
-    // Deliberately **not** set on the Info: the encoder writes `iCCP` only in
-    // the `else` branch of `if info.srgb.is_some()`, so setting both here drops
-    // the profile without a word. The chunk is written by hand below instead,
-    // which keeps a source that carried both.
-    let srgb_intent = raster.srgb_intent;
-
     let mut out = Vec::new();
     {
-        let encoder = Encoder::with_info(&mut out, info)?;
+        let sink = super::metadata::PngSink::new(&mut out, &raster.color, raster.icc.as_deref(), raster.srgb_intent, raster.mode, raster.depth)?;
+        let mut encoder = Encoder::with_info(sink, info)?;
+        if let Some(compression) = compression { encoder.set_compression(compression); }
         let mut writer = encoder.write_header()?;
-        if let Some(intent) = srgb_intent {
-            writer.write_chunk(png::chunk::sRGB, &[intent])?;
-        }
         writer.write_image_data(&raster.data)?;
+        super::metadata::write_png_trailing(&mut writer, &raster.color)?;
         writer.finish()?;
     }
     Ok(out)

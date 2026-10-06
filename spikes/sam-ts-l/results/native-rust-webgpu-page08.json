@@ -1,0 +1,96 @@
+{
+  "cold_definition": "fresh process first session, OS file cache uncontrolled",
+  "device_names": [
+    {
+      "ep": "WebGpuExecutionProvider",
+      "hardware_id": 0,
+      "vendor": "Microsoft"
+    }
+  ],
+  "graph_dir": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof",
+  "graph_manifest_revision": "5dd97423e0fbf2404264979136d47e8101144046",
+  "input_source": {
+    "file": "/Users/caved/Downloads/apocalypse/109/08.jpg",
+    "original_wh": [
+      690,
+      1600
+    ],
+    "resized_wh": [
+      442,
+      1024
+    ],
+    "sha256": "f4b8fcb13fa434f03a29d18797338898c414c66a402cdac67a068633e8a091b2"
+  },
+  "memory": {
+    "note": "ru_maxrss process high-water; Metal allocation not exposed by this probe",
+    "peak_metal_bytes": null,
+    "post_inference_peak_process_rss_bytes": 2472738816,
+    "post_session_peak_process_rss_bytes": 2466250752,
+    "preflight_peak_process_rss_bytes": 38567936
+  },
+  "ort_info": "ORT Build Info: git-branch=HEAD, git-commit-id=45de2a8b06, fp8-kv-cache=1, build type=Release",
+  "page": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/apocalypse-109/page-08",
+  "parity": {
+    "changed_canvas_signs": 0,
+    "changed_restored_pixels": 0,
+    "exact_restored_mask_parity": true,
+    "logits": {
+      "changed_elements": 1042032,
+      "max_abs": 0.00023555755615234375,
+      "mean_abs": 2.331686280510059e-05,
+      "rmse": 2.6968433094626405e-05,
+      "shape": [
+        1,
+        1,
+        1024,
+        1024
+      ]
+    },
+    "output_mask_pixels": 40438,
+    "reference_mask_pixels": 40438,
+    "restoration": "crop, threshold >0, Pillow nearest resize; same as saved reference"
+  },
+  "plugin": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/ort-webgpu-venv/lib/python3.12/site-packages/onnxruntime_ep_webgpu/libonnxruntime_providers_webgpu.dylib",
+  "profile_assignments": {
+    "encoder": {
+      "node_events_by_provider": {
+        "WebGpuExecutionProvider": 5454
+      },
+      "node_events_without_provider": 0
+    },
+    "text_head": {
+      "node_events_by_provider": {
+        "WebGpuExecutionProvider": 1158
+      },
+      "node_events_without_provider": 0
+    }
+  },
+  "profile_files_removed_after_counting": true,
+  "raw_logits_f32le": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/results/native-rust-webgpu-page08.logits.f32le",
+  "requested_provider_has_nodes_in_every_graph": true,
+  "runtime": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/ort-webgpu-venv/lib/python3.12/site-packages/onnxruntime/capi/libonnxruntime.1.28.0.dylib",
+  "timing_ms": {
+    "cold_encoder_session_load": 5617.851584,
+    "cold_head_session_load": 416.16999999999996,
+    "inference": [
+      {
+        "chain_ms": 8173.298958,
+        "encoder_ms": 7726.142916,
+        "head_ms": 447.1560420000005,
+        "run": 0
+      },
+      {
+        "chain_ms": 7786.1525409999995,
+        "encoder_ms": 7463.237833,
+        "head_ms": 322.91470799999934,
+        "run": 1
+      },
+      {
+        "chain_ms": 7665.981083000001,
+        "encoder_ms": 7323.777333,
+        "head_ms": 342.2037500000006,
+        "run": 2
+      }
+    ]
+  }
+}

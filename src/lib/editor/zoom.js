@@ -141,6 +141,10 @@ export const WHEEL_MAX_STEP = 0.25
  * and make the page bigger - the opposite of the gesture. (The bottom pill's
  * `−` is disabled in the same situation, for the same reason.)
  *
+ * **Unrounded.** The canvas accumulates a gesture across events and frames,
+ * and `setZoom` rounds what it keeps. Rounding each step here instead turned
+ * every small step of a slow pinch back into the zoom it started from.
+ *
  * @param {{deltaY: number, zoom: number, min: number, max: number}} spec
  * @returns {number|null}
  */
@@ -152,8 +156,8 @@ export function wheelZoom(spec) {
     1 + WHEEL_MAX_STEP,
     Math.max(1 - WHEEL_MAX_STEP, Math.exp(-deltaY * WHEEL_SENSITIVITY)),
   )
-  const next = clampZoom(zoom * factor, spec.min, spec.max)
-  return next === round2(zoom) ? null : next
+  const next = Math.min(spec.max, Math.max(spec.min, zoom * factor))
+  return next === zoom ? null : next
 }
 
 /**

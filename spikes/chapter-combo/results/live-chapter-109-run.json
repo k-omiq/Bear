@@ -1,0 +1,204 @@
+{
+  "description": "One-command three-model chapter inference and source-coordinate fusion",
+  "status": "complete",
+  "source_dir": "/Users/caved/Downloads/apocalypse/109",
+  "input_dir": "/Users/caved/Downloads/apocalypse/109",
+  "pages": {
+    "01.jpg": "2fa475573c46b9eabf51cd3f37233de6d42e3de6a7bc192405b856625e1b283e",
+    "02.jpg": "611873f8515be914f10a33e437c209b792404a3b710f85e68142565b51dad4e7",
+    "03.jpg": "2a59cc83b184c8d8e675c9191e1081e374028824cb57ae2c42e17547ffed97c8",
+    "04.jpg": "90489b16d0b5e331a97586d0e07d4de1d61c3a1ad188cf3856fdc83bf946b965",
+    "05.jpg": "568fbd0a6b10a27add5bf4b4f846644655463d4b849496e4d60782d8220e9745",
+    "06.jpg": "42f1080cab4b2fe3c3c65c57a5321aa8a643f85eabebe7bda7ae5da4976f5d87",
+    "07.jpg": "a42a7e77ad9b5015f35221accdb785d8b5bc508270d1ef091b2025f5d463e6b9",
+    "08.jpg": "f4b8fcb13fa434f03a29d18797338898c414c66a402cdac67a068633e8a091b2",
+    "09.jpg": "cdb3f781e7b07599da89bc5fae75713332b1f9d5490290d68426583c77c52a8a",
+    "10.jpg": "1ac5863e557e5e0465c56216edbf3c21cea7216efc624316287f49ff37f430a1",
+    "11.jpg": "ebd4ed96092b5644ff20c6a9133e8c7ae5511577a00777fe37d3be557e9df383",
+    "12.jpg": "8a435f87b4bd63c783894247d816de1e404e8a18acc15f28b883747c29dec336",
+    "13.jpg": "a5d9f5407b9a9ae6416388121101f9ba3ef927cdc20ee1c61bf6878964fdc10a",
+    "14.jpg": "e0591440ef3681cb4137031a38a18bcc33aedec94976b4dbc4898045fde7ec84",
+    "15.jpg": "b001886cb94b15ad3f46911ec5cb0a7ca0668059ab2ef557d126d7749ca54027",
+    "16.jpg": "c3321ded352b1975fe310b54f7cf3ebccb7f32f61494eb40bc057a039a0f3522",
+    "17.jpg": "104f61ef8d6b88568891694796bbd268f68b08c483bfb2679b23c87942dcc747",
+    "18.jpg": "fb59b59d6ce0b6d58c6b9854ab930a8a034f44f5d320f0d99010c2703041de15",
+    "19.jpg": "12ec0e6043cdba3bd144987b4178d7888c885944ffbbb6374a07ce95b241c6c2",
+    "20.jpg": "40665c6ca0151598c4d9fe47aefda6712302a95dc6f3862dc28cbfe806713995",
+    "21.jpg": "1d4dc7aa3ce20790f2872ddafc77834b9bc3a5c0ef99ffd431d5640538259efb",
+    "22.jpg": "63c11a1c0f9ddb2c0f4eff58cd9796f2a572b5456daedd74e9f662c08a3d9e6c",
+    "23.jpg": "e0ce70d3b07145d9e782f9d622fbecb6293b9e96f443bc0c11b9196424d7fa7c",
+    "24.jpg": "1aea0a33d2c593169446c30e18918301de8c7be23434b5362c1fd1b9ea30dabe",
+    "25.jpg": "4c6f1d47b3f829b2fc5015958ff385eb979f5be6013a04c7bdb71beb14ee78d1",
+    "26.jpg": "082e4825650d517d379834d47fc978b00de5cf9d34853b7dc7f8e04ffa4bbbe1",
+    "27.jpg": "e1dbaff715b608354af71aa96c369b124ed4ab0d393b3542efe62cd8a49d2400",
+    "28.jpg": "8624c84fe1946be732ab5a7c238c7a0aedfeec4089d45cfd27a4c8d55be101e0",
+    "29.jpg": "9cdee6f0263a52a5da5d514204e42cfc2c8dda07f0b14aa7d9249d088a688076",
+    "30.jpg": "cfc515875c7d2ef6f52e75ed745862519e9a9d8185ee172258a552e2e221aab4",
+    "31.jpg": "1da07bcd1be842c0472a6fae4726f283a1b60383973e773aca2bd6599a523a3d",
+    "32.jpg": "b8edae8156ac2c45178fc909ca6960bff952bb296a762d62c733db468b54bf43",
+    "33.jpg": "1f15c16060251b33b5d349b9197b7d8883d26c8241e66f2e54e6baba36e239e2",
+    "34.jpg": "e4687dab1c5110b8140e9f8d4f1ed2195958af17bdf488552898a756061578f4",
+    "35.jpg": "443d9db2a7d14f0402cbc1fe6225aaae08df933b1ef0f7a3c9cf9fa52f17c377",
+    "36.jpg": "ae08ebc9f17018c00d0682c6ad2c54d2a22a3a4dfc565a8fe85550e88e4f56e6",
+    "37.jpg": "eac02e6e1a42d24b32b6226b3c5eabff69a2610bce8d7a4d795b1d59f4dc7151",
+    "38.jpg": "b2ffdfb0d6b9c6fc8d2aa7c32029db2bf313f0d56ec1dec048d867a06beae5be",
+    "39.jpg": "d4d754ca1a953def98baa47f32592d5714f4ec84d33fecbc17d0522f23936b9d",
+    "40.jpg": "e12406ebc6e6596bb53324c9a099540a68c0383b5e836f01fa700e81ce518aee",
+    "41.jpg": "4e75189e8ddf22b85eee88d7be9b6af7da8c68f84b5505fbda38874811240c20",
+    "42.jpg": "2b132754bb297f82d611e6d906a95a786001261ce50790034c62a82ab481aa43",
+    "43.jpg": "78e255ec6ae9ef341b0930f68a10ef6354ebf3412a315b30f1b8b99d53276b76",
+    "44.jpg": "c6052fe65f996b2b261ce650f23ab48513c9ee7bb8ddd3bec896e2984b619659",
+    "45.jpg": "4d812d6aed38138dbdfdf5884a2fe8b582b7bf21d6853560ccdb9ecbf56fa25a"
+  },
+  "model_sha256": {
+    "rt": "065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195",
+    "coo": "49a448ec19e4e3894b726553fe6f47916827b10d642109aa5f41b96aeeb88e30",
+    "sam": "bcd9525291677f467f0603509a0ca3df35711b4e3417cefce8da6bfc97164f45"
+  },
+  "execution": "RT CPU and SAM run concurrently; COO MPS follows",
+  "groups": [
+    {
+      "group_wall_seconds": 154.118,
+      "peak_sampled_aggregate_child_rss_bytes": 2212020224,
+      "rss_sample_interval_seconds": 0.1,
+      "rss_scope": "sum of currently running stage process RSS; excludes GPU driver allocation, parent and ps sampler",
+      "stages": {
+        "rt": {
+          "command": [
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/venv/bin/python",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-rtdetr/compare_variants.py",
+            "--source",
+            "/Users/caved/Downloads/apocalypse/109",
+            "--model",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-rtdetr/artifacts/models/detector.onnx",
+            "--model-id",
+            "detector-fp32",
+            "--layout",
+            "halves",
+            "--output",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/rt.json",
+            "--threads",
+            "4"
+          ],
+          "wall_seconds": 44.915,
+          "peak_sampled_process_rss_bytes": 632586240,
+          "log": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/rt.log",
+          "exit_code": 0
+        },
+        "sam": {
+          "command": [
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/venv/bin/python",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/run_chapter_torch.py",
+            "--source-dir",
+            "/Users/caved/Downloads/apocalypse/109",
+            "--output-dir",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/sam",
+            "--device",
+            "mps"
+          ],
+          "wall_seconds": 154.116,
+          "peak_sampled_process_rss_bytes": 1582120960,
+          "log": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/sam.log",
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "group_wall_seconds": 69.841,
+      "peak_sampled_aggregate_child_rss_bytes": 923648000,
+      "rss_sample_interval_seconds": 0.1,
+      "rss_scope": "sum of currently running stage process RSS; excludes GPU driver allocation, parent and ps sampler",
+      "stages": {
+        "coo": {
+          "command": [
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/coo-mtsv3/artifacts/venv/bin/python",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/coo-mtsv3/probe.py",
+            "--source-dir",
+            "/Users/caved/Downloads/apocalypse/109",
+            "--output-dir",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/coo",
+            "--device",
+            "mps",
+            "--preprocess",
+            "eval_pil"
+          ],
+          "wall_seconds": 69.841,
+          "peak_sampled_process_rss_bytes": 923648000,
+          "log": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/coo.log",
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "group_wall_seconds": 0.981,
+      "peak_sampled_aggregate_child_rss_bytes": 92176384,
+      "rss_sample_interval_seconds": 0.1,
+      "rss_scope": "sum of currently running stage process RSS; excludes GPU driver allocation, parent and ps sampler",
+      "stages": {
+        "fusion": {
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/fuse.py",
+            "--rt-json",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/rt.json",
+            "--coo-dir",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/coo",
+            "--sam-dir",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/sam",
+            "--output-dir",
+            "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/fusion",
+            "--coo-min-score",
+            "0.4",
+            "--write-labels"
+          ],
+          "wall_seconds": 0.981,
+          "peak_sampled_process_rss_bytes": 92176384,
+          "log": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-combo/.cache/live-chapter-109/fusion.log",
+          "exit_code": 0
+        }
+      }
+    }
+  ],
+  "artifact_sha256": {
+    "rt": "f1c17964f736692e14d339ff5d81027e7cd0ddc1e1f867c1f11b42dc7598e1a1",
+    "coo_summary": "2210853fac7964efd74d92c161d7bb8e7dad29c7b38a46a7d1ecc8a56f320cd2",
+    "coo_manifest": "1fb67f22d1a4bb6533dfd62ee2f4c4bcd04917eea45afe6a6956720c113df7d3",
+    "sam_summary": "433f52762c08c9e4a29990397df12768ec7c2c305ba986cc89a3bfc79a25cc80",
+    "fusion_summary": "1d302a2c1615fc8278f4b1d94076a3e6a9edda697a64243f3f0d5b3333addc7a"
+  },
+  "sam_peak_process_rss_bytes": 2936422400,
+  "sam_mps_sampled_max_bytes": {
+    "current_allocated_memory_bytes": 2584071424,
+    "driver_allocated_memory_bytes": 5548982272,
+    "recommended_max_memory_bytes": 26800603136
+  },
+  "coo_peak_process_rss_bytes": 922484736,
+  "coo_mps_sampled_max_bytes": {
+    "current_allocated_bytes": 1736343296,
+    "driver_allocated_bytes": 3805118464
+  },
+  "fusion_totals": {
+    "associations": 1408,
+    "candidates": 926,
+    "coo_detector_only_polygons": 1,
+    "coo_polygons": 58,
+    "detector_only_coo_candidates": 1,
+    "detector_only_rt_text_candidates": 3,
+    "grouping_suggestions": 51,
+    "pages": 45,
+    "rt_boxes": 110,
+    "rt_bubble_boxes": 39,
+    "rt_detector_only_boxes": 5,
+    "rt_source_images_hash_verified": 45,
+    "rt_text_boxes": 71,
+    "sam_bubble_context_only_components": 0,
+    "sam_candidates": 922,
+    "sam_components": 922,
+    "sam_only_components": 209,
+    "sam_with_bubble_context_components": 415,
+    "sam_with_coo_components": 174,
+    "sam_with_rt_text_components": 576,
+    "source_images_hash_verified": 45
+  },
+  "whole_run_seconds": 224.945
+}

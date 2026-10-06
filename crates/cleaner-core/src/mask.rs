@@ -61,6 +61,12 @@ impl Rect {
 /// every consumer either dilates it, sums it or feeds it to a model as `u8`,
 /// and the pages are small enough that packing buys nothing worth the
 /// arithmetic.
+///
+/// A patch mask may also hold **partial coverage** between the two: a painted
+/// shape's anti-aliased rim, and the resampled edge of a moved or turned
+/// layer. Membership is still "not zero", so every binary reader is unchanged;
+/// the compositor and the PSD layer mask are the two that read the byte as a
+/// weight ([`Mask::coverage`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mask {
     pub bounds: Rect,
@@ -92,6 +98,22 @@ impl Mask {
         }
         let local = ((y - self.bounds.y) as usize) * self.bounds.w as usize + (x - self.bounds.x) as usize;
         self.bits[local] = if on { 255 } else { 0 };
+    }
+
+    /// How much of the pixel the mask covers, 0 to 255. Outside the bbox is 0.
+    pub fn coverage(&self, x: i64, y: i64) -> u8 {
+        if !self.bounds.contains(x, y) {
+            return 0;
+        }
+        self.bits[((y - self.bounds.y) as usize) * self.bounds.w as usize + (x - self.bounds.x) as usize]
+    }
+
+    pub fn set_coverage(&mut self, x: i64, y: i64, coverage: u8) {
+        if !self.bounds.contains(x, y) {
+            return;
+        }
+        let local = ((y - self.bounds.y) as usize) * self.bounds.w as usize + (x - self.bounds.x) as usize;
+        self.bits[local] = coverage;
     }
 
     pub fn count(&self) -> usize {

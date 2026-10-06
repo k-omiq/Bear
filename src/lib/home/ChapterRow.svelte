@@ -1,8 +1,10 @@
 <script>
   import { t } from '../i18n/index.js'
-  import { IconButton, Menu } from '../ui/index.js'
+  import { ContextMenu, IconButton, Menu } from '../ui/index.js'
+  import { menuPoint } from '../editor/gesture.js'
   import { chapterMenuItems, runChapterAction } from './actions.js'
   import StatusMark from './StatusMark.svelte'
+  import { runningJobFor } from '../state/jobs.svelte.js'
 
   /**
    * One chapter. Everything a scanlator needs before deciding to open it:
@@ -13,6 +15,13 @@
    * `ProjectCard`'s does, because a button inside a button is not a control the
    * keyboard or a screen reader can reach. It is tabbable only while this row
    * is the list's active item, so a chapter list costs one Tab to leave.
+   *
+   * A chapter that was denoised says so in its sub-line, a fact like the
+   * others, and its history is Denoise history in that menu.
+   *
+   * A chapter with a job running on it (`state/jobs.svelte.js`) leads its
+   * sub-line with what the job is doing and how far it is, with the blinking
+   * mark `RunIndicator` uses for "working now".
    *
    * @type {{
    *   chapter: import('../api/backend.js').ApiChapter,
@@ -28,7 +37,70 @@
 
   const menuLabel = $derived(t('home.action.chapterMenu', { name: chapter.name }))
 
+  /**
+   * The same items on the secondary press, at the pointer: `chapterMenuItems`
+   * cut into sections at its separators, which is the shape `ContextMenu`
+   * draws. `{x, y}` in client pixels while open, else null.
+   *
+   * @type {{x: number, y: number}|null}
+   */
+  let context = $state(null)
+
+  const sections = $derived.by(() => {
+    /** @type {Array<{id: string, items: Array<any>}>} */
+    const list = [{ id: 'section-0', items: [] }]
+    for (const item of chapterMenuItems(chapter)) {
+      if (item.separator) list.push({ id: `section-${list.length}`, items: [] })
+      else list[list.length - 1].items.push(item)
+    }
+    return list.filter((section) => section.items.length > 0)
+  })
+
+  /**
+   * A right-click anywhere on the row. The native menu is replaced, not
+   * joined: WebKit's own offers Reload, which here would throw the library
+   * away.
+   *
+   * @param {MouseEvent & {currentTarget: HTMLElement}} event
+   */
+  function oncontextmenu(event) {
+    event.preventDefault()
+    context = menuPoint(event, event.currentTarget.getBoundingClientRect())
+  }
+
+  /**
+   * Shift+F10 and the context-menu key, handled as keys rather than left to
+   * the browser: WebKit on macOS raises no `contextmenu` event for either.
+   * The menu then opens over the middle of the row, as a keyboard-raised
+   * menu does anywhere else in the app (`menuPoint`).
+   *
+   * @param {KeyboardEvent & {currentTarget: HTMLElement}} event
+   */
+  function onkeydown(event) {
+    const shiftF10 = event.key === 'F10' && event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey
+    if (!shiftF10 && event.key !== 'ContextMenu') return
+    event.preventDefault()
+    event.stopPropagation()
+    context = menuPoint({}, event.currentTarget.getBoundingClientRect())
+  }
+
   const skipped = $derived(chapter.pages.filter((page) => page.status === 'skipped').length)
+
+  const ACTIVE_KEYS = {
+    detect: 'jobs.active.detect',
+    clean: 'jobs.active.clean',
+    cloudClean: 'jobs.active.cloudClean',
+    denoise: 'jobs.active.denoise',
+    cloudDenoise: 'jobs.active.cloudDenoise',
+  }
+  const job = $derived(runningJobFor(chapter.id))
+  const jobLine = $derived.by(() => {
+    if (!job) return ''
+    const kindKey = ACTIVE_KEYS[job.kind]
+    return job.total > 0
+      ? t('jobs.row.progress', { kindKey, page: Math.min(job.total, job.done + 1), total: job.total })
+      : t('jobs.row.starting', { kindKey })
+  })
 
   /** The sub-line, as independent facts - never one concatenated sentence. */
   const facts = $derived.by(() => {
@@ -44,17 +116,22 @@
     if (interruptedAt !== null) {
       list.push(t('home.chapter.interrupted', { page: interruptedAt + 1 }))
     }
+    if (chapter.denoiseHistory) {
+      list.push(t(chapter.denoiseHistory.taken ? 'home.chapter.denoisedTaken' : 'home.chapter.denoised'))
+    }
     return list
   })
 </script>
 
-<li class="row">
+<li class="row" {oncontextmenu}>
   <button
     type="button"
     class="hit"
     data-roving-item
     tabindex={active ? 0 : -1}
+    aria-keyshortcuts="Shift+F10"
     onclick={() => onopen(chapter)}
+    {onkeydown}
   >
     <StatusMark status={progress.status} statusKey={progress.statusKey} variant="inline" />
 
@@ -63,6 +140,7 @@
     <span class="main">
       <span class="title" title={chapter.name}>{chapter.name}</span>
       <span class="facts">
+        {#if job}<span class="job" data-running={job.kind}><span class="dot" aria-hidden="true">●</span>{jobLine}</span>{/if}
         {#each facts as fact (fact)}<span>{fact}</span>{/each}
       </span>
     </span>
@@ -82,7 +160,7 @@
 
   <div class="more">
     <Menu
-      items={chapterMenuItems()}
+      items={chapterMenuItems(chapter)}
       onselect={(id) => runChapterAction(id, project, chapter)}
       label={menuLabel}
       align="end"
@@ -99,6 +177,17 @@
       {/snippet}
     </Menu>
   </div>
+
+  {#if context}
+    <ContextMenu
+      x={context.x}
+      y={context.y}
+      label={menuLabel}
+      {sections}
+      onselect={(id) => runChapterAction(id, project, chapter)}
+      onclose={() => (context = null)}
+    />
+  {/if}
 </li>
 
 <style>
@@ -160,6 +249,12 @@
     color: var(--t3);
   }
   .facts span + span::before { content: '·'; margin: 0 5px }
+  .job { color: var(--t2) }
+  .dot {
+    margin-right: 4px;
+    font-size: 8px;
+    animation: mcBlink 1.4s ease-in-out infinite;
+  }
 
   .status,
   .cleaned,

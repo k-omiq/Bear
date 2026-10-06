@@ -68,6 +68,7 @@ pub struct Canvas {
     pub palette: Option<Vec<u8>>,
     pub trns: Option<Vec<u8>>,
     pub srgb_intent: Option<u8>,
+    pub color: crate::image::ColorDescription,
 }
 
 impl Canvas {
@@ -83,6 +84,7 @@ impl Canvas {
             palette: raster.palette.clone(),
             trns: raster.trns.clone(),
             srgb_intent: raster.srgb_intent,
+            color: raster.color.clone(),
         }
     }
 
@@ -113,6 +115,7 @@ impl Canvas {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data: vec![0; self.stride()],
         }
     }
@@ -139,6 +142,12 @@ pub fn write_rows<W: Write + Seek>(
     match format {
         Format::Png => write_png_rows(sink, canvas, row),
         Format::Tiff => write_tiff_rows(sink, canvas, row),
+        Format::Jpeg => Err(ImageError::Unrepresentable {
+            format,
+            mode: canvas.mode,
+            depth: canvas.depth,
+        }
+        .into()),
     }
 }
 
@@ -181,15 +190,9 @@ fn write_png_rows<W: Write + Seek>(
     info.trns = canvas.trns.clone().map(Into::into);
     info.icc_profile = canvas.icc.clone().map(Into::into);
 
+    let sink = crate::image::metadata::PngSink::new(sink, &canvas.color, canvas.icc.as_deref(), canvas.srgb_intent, canvas.mode, canvas.depth)?;
     let encoder = Encoder::with_info(sink, info).map_err(ImageError::from)?;
     let mut writer = encoder.write_header().map_err(ImageError::from)?;
-    // Written by hand rather than set on the `Info`, because the encoder writes
-    // `iCCP` only in the `else` branch of `if info.srgb.is_some()` - setting
-    // both there drops the profile without a word.
-    // `image::png_io::encode` carries the same comment for the same reason.
-    if let Some(intent) = canvas.srgb_intent {
-        writer.write_chunk(png::chunk::sRGB, &[intent]).map_err(ImageError::from)?;
-    }
 
     {
         let mut stream = writer.stream_writer().map_err(ImageError::from)?;
@@ -200,6 +203,7 @@ fn write_png_rows<W: Write + Seek>(
         }
         stream.finish().map_err(ImageError::from)?;
     }
+    crate::image::metadata::write_png_trailing(&mut writer, &canvas.color)?;
     writer.finish().map_err(ImageError::from)?;
     Ok(())
 }
@@ -209,10 +213,16 @@ fn write_tiff_rows<W: Write + Seek>(
     canvas: &Canvas,
     row: RowFn<'_>,
 ) -> Result<(), ExportError> {
+    let mut canvas = canvas.clone();
+    canvas.icc = crate::image::metadata::equivalent_icc(&canvas.color, canvas.icc.as_deref(), canvas.srgb_intent, canvas.mode)?;
+    if canvas.trns.is_some() { return Err(ImageError::Color("TIFF cannot retain PNG color-key transparency; export PNG".into()).into()); }
+    let canvas = &canvas;
     let mut encoder = TiffEncoder::new(sink).map_err(ImageError::from)?;
     match (canvas.mode, canvas.depth) {
         (ColorMode::Gray, BitDepth::Eight) => strips::<W, colortype::Gray8>(&mut encoder, canvas, row),
         (ColorMode::Gray, BitDepth::Sixteen) => strips::<W, colortype::Gray16>(&mut encoder, canvas, row),
+        (ColorMode::GrayAlpha, BitDepth::Eight) => strips::<W, colortype::Gray8>(&mut encoder, canvas, row),
+        (ColorMode::GrayAlpha, BitDepth::Sixteen) => strips::<W, colortype::Gray16>(&mut encoder, canvas, row),
         (ColorMode::Rgb, BitDepth::Eight) => strips::<W, colortype::RGB8>(&mut encoder, canvas, row),
         (ColorMode::Rgb, BitDepth::Sixteen) => strips::<W, colortype::RGB16>(&mut encoder, canvas, row),
         (ColorMode::Rgba, BitDepth::Eight) => strips::<W, colortype::RGBA8>(&mut encoder, canvas, row),
@@ -242,6 +252,11 @@ where
     let mut image = encoder
         .new_image::<C>(canvas.width, canvas.height)
         .map_err(ImageError::from)?;
+    if canvas.mode == ColorMode::GrayAlpha {
+        image.extra_samples(&[if canvas.color.associated_alpha { tiff::tags::ExtraSamples::AssociatedAlpha } else { tiff::tags::ExtraSamples::UnassociatedAlpha }]).map_err(ImageError::from)?;
+    } else if canvas.mode == ColorMode::Rgba {
+        image.encoder().write_tag(Tag::ExtraSamples, &[if canvas.color.associated_alpha {1u16} else {2u16}][..]).map_err(ImageError::from)?;
+    }
     image.rows_per_strip(TIFF_STRIP_ROWS).map_err(ImageError::from)?;
     if let Some(icc) = &canvas.icc {
         image.encoder().write_tag(TAG_ICC_PROFILE, icc.as_slice()).map_err(ImageError::from)?;
@@ -326,7 +341,7 @@ mod tests {
     /// The `iCCP`/`sRGB` trap, on the streaming path too. `image::png_io` has
     /// this test; a second encoder is a second place to lose the profile.
     #[test]
-    fn a_streamed_png_keeps_both_srgb_and_icc() {
+    fn a_streamed_png_uses_authoritative_icc() {
         let mut raster = fixtures::by_name("rgb8-icc").raster;
         raster.srgb_intent = Some(0);
 
@@ -340,7 +355,7 @@ mod tests {
 
         let back = decode(&out.into_inner()).unwrap();
         assert_eq!(back.icc, raster.icc, "the profile was dropped");
-        assert_eq!(back.srgb_intent, Some(0), "the sRGB chunk was dropped");
+        assert_eq!(back.srgb_intent, None, "conflicting sRGB must be removed");
     }
 
     /// An image taller than one strip writes every strip, including a last one

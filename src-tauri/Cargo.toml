@@ -17,10 +17,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+serde_json.workspace = true
+sha2 = "0.10"
 
 [dependencies]
 cleaner-core = { path = "../crates/cleaner-core" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
@@ -38,6 +40,8 @@ ort = { workspace = true, features = ["std", "load-dynamic", "api-22"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
 # The pinned digests, verified from the bytes as they are written.
 sha2 = "0.10"
+base64 = "0.22"
+png = "0.18"
 # Unpacking the ONNX Runtime archive: a `.tgz` on macOS and Linux, a `.nupkg`
 # (which is a zip) on Windows. Both are already in the lockfile - the updater
 # plugin unpacks its own artefacts with them.
@@ -47,6 +51,13 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-opener = "2"
+# Cryptographic nonce generation for inference authorization grants
+getrandom = "0.3"
+# Compiler-barrier memory zeroization for sensitive cloud credentials
+zeroize = { version = "1", features = ["derive"] }
+url = "2"
 
 # The Hugging Face token, in the operating system's own credential store rather
 # than in `settings.json`. `keyring` 3 compiles no platform
@@ -56,8 +67,23 @@ tauri-plugin-process = "2"
 # decides.
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+# The same Security.framework binding `keyring` already uses, named so the cloud
+# credential summary can ask whether an item exists without reading its data.
+# Reading the data is what the keychain's per-build access list guards, so an
+# existence check that reads it prompts after every unsigned update.
+security-framework = "3"
+# Data passed to Security.framework when replacing a password without reading it.
+core-foundation = "0.10"
+# `NSColorSampler`, the system's own screen eyedropper, for the colour picker:
+# `WKWebView` has no `EyeDropper`. All three crates are already in the graph
+# through `tauri`, at these versions; naming them adds features, not a tree.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-core-foundation", "NSColor", "NSColorSampler", "NSColorSpace"] }
+block2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# Match the WebView2 types used by Tauri/Wry for native reload protection.
+webview2-com = "0.38"
+windows-core = "0.61"
 keyring = { version = "3", features = ["windows-native"] }
 # Two Windows facts this crate cannot get from `std`, both of which were being
 # guessed at or skipped before.

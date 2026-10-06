@@ -58,7 +58,7 @@
   import { Button, Field, Modal, Segmented } from '../ui/index.js'
   import SourceFolderField from '../home/dialogs/SourceFolderField.svelte'
   import { closeModal, modalWidth, pushModal } from '../state/app.svelte.js'
-  import { editor, pageCount, pages, reviewEntries } from '../state/editor.svelte.js'
+  import { editor, pageCount, pages, reportJobConflict, reviewEntries } from '../state/editor.svelte.js'
   import { getBackend } from '../api/backend.js'
   import { t } from '../i18n/index.js'
 
@@ -75,6 +75,10 @@
   if (draft.path === undefined) draft.path = ''
 
   let busy = $state(false)
+  let plan = $state(null)
+  let planning = $state(false)
+  let planError = $state('')
+  let refresh = $state(0)
 
   const formats = [
     { value: 'PNG', label: t('export.format.png') },
@@ -132,28 +136,58 @@
   )
   const ready = $derived(draft.destination !== 'custom' || destination !== '')
 
-  async function run() {
-    if (busy || !ready || !editor.chapter) return
-    busy = true
-    const result = await getBackend().exportChapter({
-      chapterId: editor.chapter.id,
-      format: draft.format,
-      destination,
-      masks,
-      layout,
+  $effect(() => {
+    const chapterId = editor.chapter?.id
+    const options = { chapterId, format: draft.format, destination, masks, layout }
+    void refresh
+    let cancelled = false
+    plan = null
+    planError = ''
+    if (!chapterId || !ready) return
+    planning = true
+    getBackend().planExportChapter(options).then((value) => {
+      if (!cancelled) { plan = value; planning = false }
+    }).catch((error) => {
+      if (!cancelled) { planError = String(error); planning = false }
     })
+    return () => { cancelled = true }
+  })
+
+  async function run() {
+    if (busy || !ready || planning || plan?.status !== 'planned' || !editor.chapter) return
+    busy = true
+    let result
+    try {
+      result = await getBackend().exportChapter({
+        chapterId: editor.chapter.id,
+        format: draft.format,
+        destination,
+        masks,
+        layout,
+        planRevision: plan.revision,
+      })
+    } catch (error) {
+      busy = false
+      // Another Manga Cleaner process using the chapter is said as that.
+      if (reportJobConflict(error)) return
+      planError = String(error)
+      return
+    }
     busy = false
+    if (!result) return
 
     if (result?.status === 'refused') {
       // One refusal leads somewhere; the rest were announced with a sentence
       // saying what to change, and this dialog is where it gets changed.
       if (result.reasonKey === 'notice.export.refusedOverwrite') refuse()
+      if (result.reasonKey === 'notice.export.stalePlan') refresh += 1
       return
     }
     // The adapter announces the export itself (`notice.export.finished`, or
     // `notice.export.stitched` with the gutter count on it), so there is
     // nothing left for the dialog to say.
-    closeModal('export')
+    if (result?.status === 'exported') closeModal('export')
+    else planError = result?.detail ?? t(result?.reasonKey ?? 'notice.export.partial')
   }
 
   function refuse() {
@@ -261,9 +295,23 @@
     {/if}
   </p>
 
+  <div aria-live="polite" class="note">
+    {#if planning}<p>{t('export.state.planning')}</p>{/if}
+    {#if planError}<p role="alert">{planError}</p>{/if}
+    {#if plan?.status === 'refused'}
+      <p role="alert">{t(plan.reasonKey, { format: draft.format, path: plan.path ?? '' })} {plan.detail ?? ''}</p>
+    {/if}
+    {#if plan?.status === 'planned'}
+      <p>{t('export.note.actualFormats', { formats: plan.actualFormats.join(' / ') })}</p>
+      {#each plan.declared as declaration}
+        <p>{t(declaration.key, declaration.params)}</p>
+      {/each}
+    {/if}
+  </div>
+
   {#snippet buttons()}
     <Button disabled={busy} onclick={() => closeModal(null)}>{t('shell.action.cancel')}</Button>
-    <Button variant="primary" disabled={busy || !ready} onclick={run}>
+    <Button variant="primary" disabled={busy || !ready || planning || plan?.status !== 'planned'} onclick={run}>
       {busy ? t('export.state.exporting') : t('export.action.export', { format: draft.format })}
     </Button>
   {/snippet}

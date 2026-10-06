@@ -292,6 +292,13 @@ export const icons = {
     'M11.05 11.9H6.39a3.85 3.85 0 1 1 3.66-4.99h1a2.5 2.5 0 1 1 0 4.99Z',
   ],
 
+  // The language picker's mark, on the Welcome screen and in Settings.
+  'globe': [
+    'M13.6 8A5.6 5.6 0 1 1 2.4 8a5.6 5.6 0 0 1 11.2 0Z',
+    'M2.4 8h11.2',
+    'M8 2.4c-1.6 1.5-2.4 3.4-2.4 5.6s.8 4.1 2.4 5.6c1.6-1.5 2.4-3.4 2.4-5.6S9.6 3.9 8 2.4Z',
+  ],
+
   'cpu': [
     'M4.4 5.6a1.2 1.2 0 0 1 1.2-1.2h4.8a1.2 1.2 0 0 1 1.2 1.2v4.8a1.2 1.2 0 0 1-1.2 1.2H5.6a1.2 1.2 0 0 1-1.2-1.2Z',
     'M6.6 6.6h2.8v2.8H6.6Z',
@@ -322,6 +329,39 @@ export const icons = {
   'shape-polygon': [
     'M8 2.5 13.5 5.5 11.5 13.5 3.5 12.5 2.5 7.5Z',
     'M8 2.5h.01M13.5 5.5h.01M11.5 13.5h.01M3.5 12.5h.01M2.5 7.5h.01',
+  ],
+
+  'shape-line': ['M2.5 12.5 13.5 3.5'],
+
+  // Selection: a marquee, the square drawn as rounded corners and dashes, the
+  // mark every editor uses for "the area that is picked".
+  'selection': [
+    'M2.5 4.5v-1a1 1 0 0 1 1-1h1',
+    'M7 2.5h2',
+    'M11.5 2.5h1a1 1 0 0 1 1 1v1',
+    'M13.5 7v2',
+    'M13.5 11.5v1a1 1 0 0 1-1 1h-1',
+    'M9 13.5H7',
+    'M4.5 13.5h-1a1 1 0 0 1-1-1v-1',
+    'M2.5 9V7',
+  ],
+
+  // Add to the selection: the marquee's corners with a plus inside.
+  'mask-add': [
+    'M2.5 4.5v-1a1 1 0 0 1 1-1h1',
+    'M11.5 2.5h1a1 1 0 0 1 1 1v1',
+    'M13.5 11.5v1a1 1 0 0 1-1 1h-1',
+    'M4.5 13.5h-1a1 1 0 0 1-1-1v-1',
+    'M8 5.3v5.4M5.3 8h5.4',
+  ],
+
+  // Remove from the selection: the same corners with a minus.
+  'mask-remove': [
+    'M2.5 4.5v-1a1 1 0 0 1 1-1h1',
+    'M11.5 2.5h1a1 1 0 0 1 1 1v1',
+    'M13.5 11.5v1a1 1 0 0 1-1 1h-1',
+    'M4.5 13.5h-1a1 1 0 0 1-1-1v-1',
+    'M5.3 8h5.4',
   ],
 
   // Open book seen from the front.
@@ -368,6 +408,27 @@ export const icons = {
   // Question mark.
   'help': [
     'M5.8 5.6a2.2 2.2 0 0 1 4.4 0c0 1.5-2.2 2-2.2 3.4M8 12.5h.01',
+  ],
+
+  // Five-point star, outline. A rating's empty mark.
+  'star': [
+    'M8 2.55 9.5 6.39l4.11.24-3.18 2.61 1.04 3.98L8 11l-3.47 2.22 1.04-3.98-3.18-2.61 4.11-.24Z',
+  ],
+
+  // The same star, solid. A rating's full mark.
+  'star-filled': {
+    paths: ['M8 2.55 9.5 6.39l4.11.24-3.18 2.61 1.04 3.98L8 11l-3.47 2.22 1.04-3.98-3.18-2.61 4.11-.24Z'],
+    filled: ['M8 2.55 9.5 6.39l4.11.24-3.18 2.61 1.04 3.98L8 11l-3.47 2.22 1.04-3.98-3.18-2.61 4.11-.24Z'],
+  },
+
+  // Pause: two upright bars.
+  'pause': [
+    'M5.5 3.5v9M10.5 3.5v9',
+  ],
+
+  // Download: an arrow down onto a tray line.
+  'download': [
+    'M8 2.5v7.5M4.8 6.8 8 10l3.2-3.2M3 13.5h10',
   ],
 }
 

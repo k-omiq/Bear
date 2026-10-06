@@ -1,0 +1,1176 @@
+{
+  "method": "Visually reviewed every MTSv3 proposal with score >= 0.4 (58 candidates), using original chapter JPEGs with proposal polygons overlaid in tight crops and larger page context for uncertain cases. Compared proposal bounding boxes against full FP32 RT-DETR vertical-halves outputs. RT coverage is intersection area divided by the COO proposal bbox area; >= 0.50 counts as materially covered by an RT text_free/text_bubble box. Bubble-only boxes are reported separately and do not count as text coverage.",
+  "source_files": {
+    "coo_summary": "spikes/coo-mtsv3/artifacts/chapter-109/summary.json",
+    "rtdetr": "spikes/chapter-rtdetr/artifacts/chapter-109-fp32-halves.json",
+    "source_pages": "/Users/caved/Downloads/apocalypse/109"
+  },
+  "limitations": [
+    "Visual labels are a manual screen, not ground truth or an accuracy estimate.",
+    "Bounding-box overlap is a pragmatic correspondence check; it does not prove matching instances, correct polygons, or safe masks.",
+    "A clear text candidate is not necessarily cleanable: no inpainting safety or SAM-mask boundary was scored.",
+    "Near-duplicate proposals on one sound effect can inflate candidate counts; page 37 has an overlapping pair."
+  ],
+  "summary": {
+    "proposals_reviewed": 58,
+    "clear_sfx_or_text": 54,
+    "clear_art_false_positive": 1,
+    "ambiguous": 3,
+    "unique_useful": 43,
+    "rt_text_covered": 11,
+    "unique_useful_count_is_proposal_count_not_deduplicated_instance_count": true
+  },
+  "pages": [
+    {
+      "id": 1,
+      "page": "01",
+      "detection_index": 0,
+      "score": 0.68,
+      "bbox_xyxy": [
+        119.8,
+        1108.4,
+        305.7,
+        1323.5
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 2,
+      "page": "02",
+      "detection_index": 7,
+      "score": 0.449,
+      "bbox_xyxy": [
+        24.4,
+        817.5,
+        449.5,
+        1222.4
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 3,
+      "page": "02",
+      "detection_index": 10,
+      "score": 0.608,
+      "bbox_xyxy": [
+        266.4,
+        113.6,
+        444.2,
+        346.0
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 4,
+      "page": "03",
+      "detection_index": 4,
+      "score": 0.553,
+      "bbox_xyxy": [
+        247.7,
+        1312.5,
+        546.2,
+        1599.0
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 5,
+      "page": "03",
+      "detection_index": 5,
+      "score": 0.649,
+      "bbox_xyxy": [
+        76.2,
+        1198.0,
+        422.6,
+        1526.7
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 6,
+      "page": "03",
+      "detection_index": 7,
+      "score": 0.415,
+      "bbox_xyxy": [
+        449.9,
+        77.1,
+        624.8,
+        266.9
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 7,
+      "page": "04",
+      "detection_index": 0,
+      "score": 0.651,
+      "bbox_xyxy": [
+        121.2,
+        933.5,
+        275.5,
+        1119.4
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 1.0,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.619,
+          "proposal_bbox_coverage": 1.0
+        }
+      ],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 8,
+      "page": "04",
+      "detection_index": 3,
+      "score": 0.403,
+      "bbox_xyxy": [
+        251.1,
+        461.5,
+        289.9,
+        509.4
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 9,
+      "page": "05",
+      "detection_index": 1,
+      "score": 0.694,
+      "bbox_xyxy": [
+        246.8,
+        1484.0,
+        392.4,
+        1584.2
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 0.98,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.427,
+          "proposal_bbox_coverage": 0.98
+        }
+      ],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 10,
+      "page": "05",
+      "detection_index": 2,
+      "score": 0.498,
+      "bbox_xyxy": [
+        359.4,
+        995.3,
+        470.1,
+        1106.9
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 11,
+      "page": "05",
+      "detection_index": 7,
+      "score": 0.525,
+      "bbox_xyxy": [
+        7.7,
+        217.1,
+        411.6,
+        593.2
+      ],
+      "visual_class": "ambiguous",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": null,
+      "review_note": "Broad slash-like, high-contrast shape on speed lines; may be a stylized effect glyph or motion art."
+    },
+    {
+      "id": 12,
+      "page": "06",
+      "detection_index": 0,
+      "score": 0.761,
+      "bbox_xyxy": [
+        329.2,
+        479.2,
+        442.8,
+        601.9
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 0.906,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.425,
+          "proposal_bbox_coverage": 0.906
+        }
+      ],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 13,
+      "page": "06",
+      "detection_index": 1,
+      "score": 0.693,
+      "bbox_xyxy": [
+        12.5,
+        286.6,
+        167.7,
+        457.1
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 14,
+      "page": "07",
+      "detection_index": 0,
+      "score": 0.476,
+      "bbox_xyxy": [
+        196.0,
+        1465.8,
+        315.8,
+        1590.4
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 15,
+      "page": "08",
+      "detection_index": 21,
+      "score": 0.406,
+      "bbox_xyxy": [
+        70.4,
+        400.1,
+        393.4,
+        737.9
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 16,
+      "page": "08",
+      "detection_index": 22,
+      "score": 0.401,
+      "bbox_xyxy": [
+        351.7,
+        438.9,
+        431.7,
+        511.8
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 17,
+      "page": "09",
+      "detection_index": 0,
+      "score": 0.45,
+      "bbox_xyxy": [
+        358.9,
+        1024.5,
+        485.9,
+        1136.6
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 18,
+      "page": "11",
+      "detection_index": 2,
+      "score": 0.611,
+      "bbox_xyxy": [
+        365.6,
+        0.0,
+        690.0,
+        368.5
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 19,
+      "page": "12",
+      "detection_index": 0,
+      "score": 0.607,
+      "bbox_xyxy": [
+        194.5,
+        1224.3,
+        367.5,
+        1331.2
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 20,
+      "page": "14",
+      "detection_index": 0,
+      "score": 0.619,
+      "bbox_xyxy": [
+        363.2,
+        1154.8,
+        488.8,
+        1305.3
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 21,
+      "page": "14",
+      "detection_index": 7,
+      "score": 0.53,
+      "bbox_xyxy": [
+        56.1,
+        174.4,
+        434.6,
+        565.0
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 0.75,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.489,
+          "proposal_bbox_coverage": 0.75
+        }
+      ],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 22,
+      "page": "15",
+      "detection_index": 2,
+      "score": 0.468,
+      "bbox_xyxy": [
+        11.0,
+        1283.3,
+        494.0,
+        1600.0
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 23,
+      "page": "15",
+      "detection_index": 3,
+      "score": 0.59,
+      "bbox_xyxy": [
+        415.0,
+        495.5,
+        590.8,
+        668.5
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 24,
+      "page": "17",
+      "detection_index": 6,
+      "score": 0.424,
+      "bbox_xyxy": [
+        283.7,
+        838.1,
+        482.5,
+        1016.8
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 1.0,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.453,
+          "proposal_bbox_coverage": 1.0
+        },
+        {
+          "class": "text_free",
+          "score": 0.417,
+          "proposal_bbox_coverage": 0.898
+        }
+      ],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 25,
+      "page": "17",
+      "detection_index": 10,
+      "score": 0.415,
+      "bbox_xyxy": [
+        146.6,
+        92.5,
+        194.5,
+        130.3
+      ],
+      "visual_class": "ambiguous",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": null,
+      "review_note": "Small isolated mark on dark armor/action detail; no confident Hangul or text reading from this crop."
+    },
+    {
+      "id": 26,
+      "page": "18",
+      "detection_index": 0,
+      "score": 0.405,
+      "bbox_xyxy": [
+        283.2,
+        961.2,
+        507.9,
+        1183.1
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 27,
+      "page": "18",
+      "detection_index": 1,
+      "score": 0.488,
+      "bbox_xyxy": [
+        406.8,
+        495.5,
+        677.5,
+        859.2
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 28,
+      "page": "18",
+      "detection_index": 7,
+      "score": 0.427,
+      "bbox_xyxy": [
+        443.7,
+        136.1,
+        597.0,
+        302.4
+      ],
+      "visual_class": "ambiguous",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": null,
+      "review_note": "Isolated brush strokes on action lines; could be a single stylized glyph fragment, but text status is unclear."
+    },
+    {
+      "id": 29,
+      "page": "19",
+      "detection_index": 0,
+      "score": 0.479,
+      "bbox_xyxy": [
+        139.9,
+        1316.3,
+        433.2,
+        1565.5
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 0.683,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.398,
+          "proposal_bbox_coverage": 0.683
+        }
+      ],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 30,
+      "page": "20",
+      "detection_index": 0,
+      "score": 0.72,
+      "bbox_xyxy": [
+        417.8,
+        1349.4,
+        622.4,
+        1582.7
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 0.963,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.365,
+          "proposal_bbox_coverage": 0.963
+        },
+        {
+          "class": "text_bubble",
+          "score": 0.402,
+          "proposal_bbox_coverage": 0.865
+        }
+      ],
+      "fp32_bubble_matches": [
+        {
+          "class": "bubble",
+          "score": 0.381,
+          "proposal_bbox_coverage": 0.877
+        }
+      ],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 31,
+      "page": "20",
+      "detection_index": 3,
+      "score": 0.661,
+      "bbox_xyxy": [
+        67.6,
+        1333.1,
+        273.6,
+        1521.4
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 0.841,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.365,
+          "proposal_bbox_coverage": 0.841
+        }
+      ],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 32,
+      "page": "20",
+      "detection_index": 5,
+      "score": 0.464,
+      "bbox_xyxy": [
+        65.2,
+        986.2,
+        311.5,
+        1233.9
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true,
+      "possible_duplicate_group": "page20-nearby-glyphs-review-separately"
+    },
+    {
+      "id": 33,
+      "page": "20",
+      "detection_index": 6,
+      "score": 0.554,
+      "bbox_xyxy": [
+        57.0,
+        944.5,
+        212.8,
+        1075.3
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true,
+      "possible_duplicate_group": "page20-nearby-glyphs-review-separately"
+    },
+    {
+      "id": 34,
+      "page": "20",
+      "detection_index": 8,
+      "score": 0.484,
+      "bbox_xyxy": [
+        375.7,
+        392.9,
+        633.0,
+        612.4
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 35,
+      "page": "21",
+      "detection_index": 0,
+      "score": 0.737,
+      "bbox_xyxy": [
+        52.7,
+        1161.1,
+        201.2,
+        1301.5
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 1.0,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.427,
+          "proposal_bbox_coverage": 1.0
+        },
+        {
+          "class": "text_free",
+          "score": 0.401,
+          "proposal_bbox_coverage": 1.0
+        }
+      ],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 36,
+      "page": "21",
+      "detection_index": 3,
+      "score": 0.598,
+      "bbox_xyxy": [
+        26.8,
+        258.8,
+        191.7,
+        399.2
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 37,
+      "page": "22",
+      "detection_index": 6,
+      "score": 0.514,
+      "bbox_xyxy": [
+        304.3,
+        0.0,
+        686.6,
+        286.1
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [
+        {
+          "class": "bubble",
+          "score": 0.507,
+          "proposal_bbox_coverage": 0.73
+        }
+      ],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 38,
+      "page": "23",
+      "detection_index": 0,
+      "score": 0.565,
+      "bbox_xyxy": [
+        188.3,
+        0.0,
+        449.5,
+        170.1
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 39,
+      "page": "24",
+      "detection_index": 0,
+      "score": 0.415,
+      "bbox_xyxy": [
+        188.8,
+        1446.2,
+        280.3,
+        1552.1
+      ],
+      "visual_class": "clear_art_false_positive",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false,
+      "review_note": "Polygon encloses rock/debris shapes at page 24 x189–280 y1446–1552; no visible lettering and zero SAM overlap."
+    },
+    {
+      "id": 40,
+      "page": "24",
+      "detection_index": 6,
+      "score": 0.471,
+      "bbox_xyxy": [
+        326.8,
+        158.1,
+        437.5,
+        267.4
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 41,
+      "page": "26",
+      "detection_index": 3,
+      "score": 0.549,
+      "bbox_xyxy": [
+        180.2,
+        1028.3,
+        294.2,
+        1118.9
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 42,
+      "page": "27",
+      "detection_index": 0,
+      "score": 0.65,
+      "bbox_xyxy": [
+        158.6,
+        645.5,
+        285.1,
+        741.3
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 43,
+      "page": "27",
+      "detection_index": 2,
+      "score": 0.661,
+      "bbox_xyxy": [
+        501.7,
+        82.4,
+        650.2,
+        214.7
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 44,
+      "page": "28",
+      "detection_index": 0,
+      "score": 0.677,
+      "bbox_xyxy": [
+        421.2,
+        1416.5,
+        511.3,
+        1537.7
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 45,
+      "page": "37",
+      "detection_index": 2,
+      "score": 0.49,
+      "bbox_xyxy": [
+        423.1,
+        1283.3,
+        486.8,
+        1349.4
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [
+        {
+          "class": "bubble",
+          "score": 0.982,
+          "proposal_bbox_coverage": 0.098
+        }
+      ],
+      "unique_useful_vs_fp32_halves": true,
+      "possible_duplicate_group": "page37-overlapping-effects"
+    },
+    {
+      "id": 46,
+      "page": "37",
+      "detection_index": 3,
+      "score": 0.563,
+      "bbox_xyxy": [
+        467.7,
+        1246.8,
+        592.7,
+        1372.4
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true,
+      "possible_duplicate_group": "page37-overlapping-effects"
+    },
+    {
+      "id": 47,
+      "page": "37",
+      "detection_index": 5,
+      "score": 0.521,
+      "bbox_xyxy": [
+        65.2,
+        523.3,
+        266.4,
+        661.3
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 48,
+      "page": "37",
+      "detection_index": 6,
+      "score": 0.7,
+      "bbox_xyxy": [
+        280.3,
+        27.3,
+        390.5,
+        143.8
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 49,
+      "page": "38",
+      "detection_index": 1,
+      "score": 0.493,
+      "bbox_xyxy": [
+        8.1,
+        1365.2,
+        290.4,
+        1600.0
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 50,
+      "page": "40",
+      "detection_index": 1,
+      "score": 0.522,
+      "bbox_xyxy": [
+        106.4,
+        580.8,
+        211.3,
+        726.9
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 1.0,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.372,
+          "proposal_bbox_coverage": 1.0
+        }
+      ],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 51,
+      "page": "41",
+      "detection_index": 1,
+      "score": 0.605,
+      "bbox_xyxy": [
+        9.6,
+        787.3,
+        225.7,
+        965.6
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 52,
+      "page": "42",
+      "detection_index": 0,
+      "score": 0.5,
+      "bbox_xyxy": [
+        464.3,
+        762.4,
+        622.0,
+        920.0
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 53,
+      "page": "43",
+      "detection_index": 0,
+      "score": 0.581,
+      "bbox_xyxy": [
+        558.7,
+        1045.1,
+        644.0,
+        1133.3
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 54,
+      "page": "43",
+      "detection_index": 1,
+      "score": 0.702,
+      "bbox_xyxy": [
+        164.8,
+        837.6,
+        259.2,
+        938.7
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 55,
+      "page": "43",
+      "detection_index": 2,
+      "score": 0.626,
+      "bbox_xyxy": [
+        103.5,
+        699.1,
+        205.6,
+        801.7
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "covered",
+      "best_fp32_text_box_coverage": 0.946,
+      "fp32_text_matches": [
+        {
+          "class": "text_free",
+          "score": 0.623,
+          "proposal_bbox_coverage": 0.946
+        }
+      ],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": false
+    },
+    {
+      "id": 56,
+      "page": "43",
+      "detection_index": 3,
+      "score": 0.637,
+      "bbox_xyxy": [
+        523.7,
+        84.8,
+        662.2,
+        228.1
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 57,
+      "page": "43",
+      "detection_index": 4,
+      "score": 0.664,
+      "bbox_xyxy": [
+        411.6,
+        0.0,
+        548.6,
+        132.3
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    },
+    {
+      "id": 58,
+      "page": "44",
+      "detection_index": 6,
+      "score": 0.476,
+      "bbox_xyxy": [
+        268.8,
+        24.0,
+        373.3,
+        124.6
+      ],
+      "visual_class": "clear_sfx_or_text",
+      "fp32_halves_text_relation": "no_material_text_box_overlap",
+      "best_fp32_text_box_coverage": 0.0,
+      "fp32_text_matches": [],
+      "fp32_bubble_matches": [],
+      "unique_useful_vs_fp32_halves": true
+    }
+  ]
+}

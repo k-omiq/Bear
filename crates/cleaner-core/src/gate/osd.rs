@@ -78,10 +78,11 @@ impl Osd {
                 .map_err(|e| OsdError::Model(e.to_string()))?;
         let raw = std::fs::read_to_string(labels_json).map_err(|e| OsdError::Model(e.to_string()))?;
         let labels = parse_labels(&raw);
-        let lease = crate::registry::register(
+        let lease = crate::registry::register_named(
             crate::registry::Kind::ScriptGate,
             crate::registry::Footprint::weights(model),
             crate::registry::Device::accelerator(selection.accelerator),
+            Some("Image Script Identification OSD LSTM".into()),
         );
         Ok(Osd { session, labels, selection, lease })
     }

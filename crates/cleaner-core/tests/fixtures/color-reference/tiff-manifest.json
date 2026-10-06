@@ -1,0 +1,24 @@
+{
+  "license": "CC0-1.0 synthetic fixtures",
+  "tifffile": "2024.8.30",
+  "numpy": "2.0.2",
+  "sha256": {
+    "associated-graya16.native": "369b8ea122b077de9b41937c86a5545f80a6682060c8d3de5d135ba239f555ef",
+    "associated-graya16.tif": "da897ca90d6c4b2035545b552fc52ead7af83ab93a464f4074aa5a166ba2482f",
+    "associated-graya8.native": "8495064764b177834449ba59eaf9b7f4bed1e9943d186766f20455e313360feb",
+    "associated-graya8.tif": "b0a73c51c515a43be98f50e421b0a1932084d16ce990355911dee10fd2f1136f",
+    "associated-rgba16.native": "b70d7c6b8c46983086b1ab618bce4ea6f261f0c1635eda6ec4295e372e3a56e4",
+    "associated-rgba16.tif": "e7dcd477c2d52e74fd528a59cc8cbfefde7b378a341ad6bcf343891c93a312e4",
+    "associated-rgba8.native": "2840a58b5f04ec1134a42022ccb02004ee0d4165ad7f532a3de7fe2cfc408afa",
+    "associated-rgba8.rgba": "4f9d96a71803d83c93b4e4c6f7b6374966c2f390fc4fd303cc1693b5c5ccb728",
+    "associated-rgba8.tif": "605c6baa79afc1bb8f8f5efa477e01317eb8cdd84bc8b51fa1d4e6afc9350540",
+    "legacy-color-301.tif": "503d2ef341110d39773dc5f449aff5feecc95c09528c40da7d62c6d2e67279d9",
+    "legacy-color-318.tif": "029ebb1c9ec00f336e0a72666cb55f54cc8984f2e5bf74b19904613301d9e2b0",
+    "legacy-color-319.tif": "14a413a6b09037a1ec06d4832a6aa8aa13d641de4cfc09f1dd9ca01b274def23",
+    "straight-rgba16.native": "d833ea46c3ad37c65bd199e82f897fdc510f90c0187fedd757a5cb41d31e997b",
+    "straight-rgba16.tif": "b965a651445b277e975a73fe893c4107f7d2e42dd1f15a1a9cb5fa7a3f073a26",
+    "straight-rgba8.native": "e802bd56492982304857d658d3bcb829d328371627c25091bfcb94de50dbc894",
+    "straight-rgba8.rgba": "e802bd56492982304857d658d3bcb829d328371627c25091bfcb94de50dbc894",
+    "straight-rgba8.tif": "743e97e0380d1b851e683e9f17e75d353a0dd0f760c91dd9f1cb647a0a2c9ca9"
+  }
+}

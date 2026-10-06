@@ -6,23 +6,25 @@
 //!
 //! For every region the detector emits: the balloon detector's answer and the
 //! boxes it rests on, the paper reading (`balloon::interior_of`) around the
-//! lettering, and the gate's verdict. The point is to read a region that landed
-//! in review under *"text outside a speech bubble"* back to whichever of the
-//! two opinions put it there.
+//! lettering, the combined answer the run uses (`balloon::in_bubble`: the
+//! detector, or solid paper where the detector said outside), and the gate's
+//! verdict. The point is to read a region that landed in review under *"text
+//! outside a speech bubble"* back to whichever of the two opinions put it
+//! there.
 //!
-//! The region list is the run's list, so it holds both sources of boxes: the
-//! text detector's, and the balloon detector's text boxes that nothing else
-//! covered (`balloon::adopt_uncovered_text`). An `ADOPTED` line marks each one
-//! of the second kind and reports how much segmentation lies under it, which is
-//! the measurement that decides whether `fit::seed_mask` has anything to work
-//! from there.
+//! The region list is the run's list for the default models (CTD with the
+//! small Ogkalu detector): the text groups `text_groups::group` makes of CTD's
+//! segmentation and both detectors' boxes. An `ADOPTED` line marks each group
+//! with no segmentation under it and reports its bounded ink estimate, the
+//! seed the run cleans it from.
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
 use cleaner_core::accel::Preference;
 use cleaner_core::balloon::{self, BalloonDetector};
-use cleaner_core::detect::{Detector, build_regions_separated};
+use cleaner_core::detect::{Detector, MASK_THRESHOLD, Region};
+use cleaner_core::text_groups::{self, EvidenceModel, Execution, ModelUse, SpatialInput};
 use cleaner_core::gate::{OutsideText, ScriptGate, Verdict};
 use cleaner_core::image::decode;
 
@@ -64,16 +66,28 @@ fn main() -> Result<()> {
         let page = decode(&bytes).map_err(|e| anyhow!("{e}"))?;
         let mut detection = detector.detect(&page)?;
         let boxes = balloons.detect(&page)?;
-        let mut regions = build_regions_separated(detection.boxes.clone(), page.width, page.height, |a, b| {
-            balloon::merge_crosses_a_balloon(&page, &detection.segmentation, a, b)
-        });
+        // The text groups, exactly as `run.rs` makes them for these models.
+        let pixels: Vec<u8> = detection.segmentation.levels.iter()
+            .map(|&v| if v >= MASK_THRESHOLD { 255 } else { 0 })
+            .collect();
+        let mut inputs = text_groups::Inputs::new(page.width, page.height, Some(&pixels));
+        inputs.pixel_model = EvidenceModel::Ctd;
+        inputs.page = Some(&page);
+        inputs.rt = &boxes;
+        inputs.ctd = &detection.boxes;
+        inputs.models = vec![
+            ModelUse::new(EvidenceModel::OgkaluSmall, Execution::Local, SpatialInput::Whole),
+            ModelUse::new(EvidenceModel::Ctd, Execution::Local, SpatialInput::Whole),
+        ];
+        let grouping = text_groups::group(&inputs).map_err(|e| anyhow!("{e}"))?;
+        let median = grouping.block_median_area();
+        let mut regions: Vec<Region> = grouping.cleaning().map(|group| grouping.region(group, median)).collect();
         let detected_count = regions.len();
-        // The second source of boxes, exactly as `run.rs` takes it.
-        let median = cleaner_core::detect::median_box_area(&detection.boxes);
-        let adopted = balloon::adopt_uncovered_text(&regions, &boxes, page.width, page.height, median);
+        let adopted: Vec<Region> =
+            grouping.detector_only().map(|group| grouping.detector_only_region(group, median)).collect();
         let marks: Vec<(cleaner_core::mask::Rect, f32)> =
             adopted.iter().map(|r| (r.masking, r.members[0].confidence)).collect();
-        balloon::seed_adopted_text(&page, &mut detection.segmentation, &adopted);
+        grouping.paint_estimates(&mut detection.segmentation);
         regions.extend(adopted);
         cleaner_core::detect::sort_regions(&mut regions);
         println!(
@@ -93,9 +107,8 @@ fn main() -> Result<()> {
             println!("RAW {:?} {},{},{}x{} @{:.2}", b.language, b.rect.x, b.rect.y, b.rect.w, b.rect.h, b.confidence);
         }
         // The adopted regions, by their index in the sorted list - which is the
-        // index a run would name them by - and how much segmentation the text
-        // detector left under each. An empty count is the seed fallback's
-        // whole reason for existing.
+        // index a run would name them by - and the ink estimate each seeds
+        // from. An empty seed is listed by the run, never cleaned.
         for (i, region) in regions.iter().enumerate() {
             let Some((_, score)) = marks.iter().find(|(rect, _)| *rect == region.masking) else {
                 continue;
@@ -109,19 +122,14 @@ fn main() -> Result<()> {
                 .map(|b| format!("{:?}@{:.2}", b.class, b.score))
                 .next()
                 .unwrap_or_else(|| format!("?@{score:.2}"));
-            let seed = cleaner_core::fit::seed_mask(
-                &detection.segmentation,
-                region,
-                page.width,
-                page.height,
-            );
+            let seed = region.group.as_ref().map_or(0, |held| held.lettering.count());
             println!(
-                "ADOPTED {i} box={},{},{}x{} from={from} seg_pixels={} large={}",
+                "ADOPTED {i} box={},{},{}x{} from={from} seed_pixels={} large={}",
                 m.x,
                 m.y,
                 m.w,
                 m.h,
-                seed.count(),
+                seed,
                 region.flagged_large
             );
         }
@@ -138,13 +146,14 @@ fn main() -> Result<()> {
             let inside = detected.inside();
             let text = region.text_bounds();
             let interior = balloon::interior_of(&page, &detection.segmentation, text);
-            let verdict = gate.judge(&page, &detection.segmentation, region, detected, outside)?;
+            let combined = balloon::in_bubble(&page, &detection.segmentation, text, m, &boxes);
+            let verdict = gate.judge(&page, &detection.segmentation, region, detected, combined, outside)?;
             let verdict = match &verdict {
                 Verdict::Clean { script } => format!("Clean({script})"),
                 other => format!("{other:?}"),
             };
             println!(
-                "REGION {i} box={},{},{}x{} text={},{},{}x{} detector={inside} over=[{}] paper={interior:?} verdict={verdict}",
+                "REGION {i} box={},{},{}x{} text={},{},{}x{} detector={inside} over=[{}] paper={interior:?} inside={combined} verdict={verdict}",
                 m.x, m.y, m.w, m.h, text.x, text.y, text.w, text.h, over.join(" ")
             );
         }
@@ -183,7 +192,8 @@ fn lama_holes(
     let isolation = cleaner_core::constants::ISOLATION_RADIUS;
 
     for (i, region) in regions.iter().enumerate() {
-        let seed = fit::seed_mask(&detection.segmentation, region, page.width, page.height);
+        // A group seeds from its own lettering, as the run's regions do.
+        let Some(seed) = region.group.as_ref().map(|held| held.lettering.clone()) else { continue };
         if seed.is_empty() {
             continue;
         }

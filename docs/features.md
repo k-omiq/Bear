@@ -1,10 +1,11 @@
 # Manga Cleaner: what the app does
 
-Manga Cleaner is a desktop app that removes Japanese text from manga and webtoon pages. It runs entirely on your
-machine: no account, no upload, no Python. It finds speech bubbles and free text, keeps only the Japanese, fits a mask
-at the page's own resolution, and cleans each region with the lightest engine that can do the job. Pixels outside an
-edited region are unchanged, and colour mode, bit depth, embedded colour profile and metadata are carried through to
-export.
+Manga Cleaner is a desktop app that removes Japanese text from manga and webtoon pages. By default it runs entirely on
+your machine: no account, no upload, no Python. An optional cloud GPU is off by default, runs on your own Modal or Beam
+account, and a confirmed render uploads only a crop around one region. It finds speech bubbles and free text, keeps only
+the Japanese, fits a mask at the page's own resolution, and cleans each region with the lightest engine that can do the
+job. Pixels outside an edited region are unchanged in supported lossless exports. Native mode, depth and compatible
+colour descriptions are preserved; the export dialog reports necessary format or metadata changes.
 
 ## Home and projects
 
@@ -18,13 +19,17 @@ already uses. Leave the folder empty and the chapter reads a subfolder named aft
 Only one chapter may read the project's own folder; a second attempt is refused, and the refusal names the chapter
 that already has it.
 
-Creating a chapter **copies its pages into the library**. A PNG or TIFF is copied byte for byte, and a JPEG, WebP,
-GIF or BMP is decoded once and written as a lossless PNG, and that file is the page from then on. The scan folder is
+Creating a chapter **copies its pages into the library**. PNG, TIFF and JPEG originals are copied byte for byte
+into the chapter’s `pages/` directory. WebP, GIF and BMP become lossless working PNGs there, and their exact original
+bytes are archived beside it in `originals/`. Relative paths, original/working hashes, frame selection and conversion
+version are recorded. Animated sources use the first visible canvas and report the frame count; a static full-canvas
+GIF retains palette indices and transparency. Available compatible ICC and WebP EXIF metadata reach the working PNG. The scan folder is
 read at that moment and never written to or read again, so you may move or delete it and the chapter still opens,
 cleans, resumes and exports. The New chapter dialog says so, because a folder you were not told you could delete is
-one you will keep. The cost is a second copy on disk, on the order of a gigabyte for a 200-page colour chapter, and
-nothing checks the free space first: a page whose copy cannot be written is listed with the other skipped files
-rather than failing the chapter.
+one you will keep. The cost is a second copy on disk, on the order of a gigabyte for a 200-page colour chapter. Before
+anything is written, the app estimates the space the copies need, errs on the high side, and refuses the chapter with
+the numbers when the disk has less free; a page whose copy still cannot be written is listed with the other skipped
+files rather than failing the chapter.
 
 Also on the library screen: **Open project** (with a filter field), **Rename** (the library's label only, the folder
 on disk keeps its name), **Remove** (out of the library, pages on disk untouched), **Delete chapter**, **Copy source
@@ -40,7 +45,7 @@ cleaned out of the total, regions needing review, files skipped, and where a run
 chapter is read. A file whose header will not parse, that does not decode completely, that is not an image this build
 reads, or whose colour mode has no policy here is **skipped and listed** with its reason, never cleaned halfway.
 Dotfiles, `__MACOSX`, `Thumbs.db` and `desktop.ini` are skipped as junk. Files with identical contents are
-deduplicated, on the converted file, so the same JPEG twice is one page; `001.jpg` beside `001.png` produces a warning
+deduplicated by the stored native or converted file hash, so the same JPEG twice is one page; `001.jpg` beside `001.png` produces a warning
 rather than a guess, and two sources that would convert onto one name get a stepped name and the warning still fires.
 The chapter reports how many files were converted. AVIF, HEIC and JPEG XL need decoders this build does not ship and
 are refused with the rest. Archives (CBZ, CBR, ZIP, PDF) are not accepted; point a chapter at a folder of images.
@@ -67,7 +72,7 @@ is still yours to choose. Pressing a control in a floating window never moves th
 editor and the windows clip rather than scroll, and a row is brought into view by moving the one box that genuinely
 scrolls, so Retry, Delete and the engine picker leave a zoomed canvas exactly where you put it.
 
-## Pages and auto clean
+## Pages and Text cleanup
 
 The **Pages** window is a text list, not thumbnails, and it doubles as the progress indicator: during a run the marks
 tick over page by page, so there is no separate progress bar. Each row shows the page number (or the position, in
@@ -81,15 +86,26 @@ longstrip), its status, and how many of its regions are done.
 | `✓ 2` | Cleaned, 2 regions need review |
 | `!` | Skipped, with the reason on hover |
 
-**Auto clean** is the whole automatic job in one button: it finds text, keeps what the script gate reads as Japanese,
-fits masks, picks an engine per region, cleans, and composites. Its options are **Scope** (Page, the default, or
-Project), **Speech bubble text** (the engine a region inside a balloon starts on, Fill by default), **Text outside
-bubbles** (the engine an out-of-balloon region starts on, LaMa by default) and **Outside bubbles** (Hold for review,
-the default, or Clean anyway). Both engine rows offer the three local engines; FLUX and the cloud are per region only.
-They are a **starting point, not a ceiling**: if the quality check rejects what an engine produced, the run climbs to
-the next engine and tries again. An automatic run never goes past LaMa, and it never sends anything to the cloud; the
-heavier engines are reachable per region, where you choose them and wait for them. A region LaMa declines is left
-exactly as it was and listed for review, which is what the top of the ladder means.
+**Text cleanup** is the automatic job. Its **Mode** is Detect and clean by default: find text, keep what the script
+gate reads as Japanese, fit masks, pick an engine per region, clean, and composite, all in one run. Mode can also run
+just one half: **Detect** finds and stores every region it sees, all text and outside bubbles too, without cleaning
+any, so the review decides what stays; **Clean** cleans regions already stored, each one starting from the engine it was
+detected with. **Text** and **Outside bubbles** are Detect and clean's choices and appear only in that mode. Its other options are **Scope** (Page, the default,
+Chapter, or Project, offered only while nothing in the run goes to the cloud), **Detect on** and **Clean on** (This
+computer or Cloud GPU, set independently, each disabled with the reason when the cloud cannot take it), **Text**
+(Chosen languages or All text), **Speech bubble text** and **Text outside bubbles** (the engine each kind of text
+starts a local clean on: Fill and LaMa by default, or Solid colour) and **Outside bubbles** (Hold for
+review, the default, or Clean anyway; hidden under All text, which cleans outside bubbles regardless). **Mask padding**
+(0 to 32 px, 0 by default) grows every mask a run fits by that many page pixels, so more of the area around the
+letters is cleaned. Its **Apply** button re-pads the masks already detected on the page (or, for Chapter and Project,
+the open chapter) to the slider's value. Each one is grown from its unpadded mask, so going back to 0 gives the
+detected mask back exactly; a mask edit made over a padded mask is kept through later paddings. Cleaned layers never
+change. FLUX and the
+cloud engine are chosen per region only, after detection. The engine picks are a **starting point, not a ceiling**: if
+the quality check rejects what an engine produced, the run climbs to the next engine and tries again. A clean done on
+this computer never goes past LaMa; the heavier engines are reachable per region, where you choose them and wait for
+them. A region LaMa declines is left exactly as it was and listed for review, which is what the top of the ladder
+means.
 
 Text **outside** a speech bubble is left alone unless **Outside bubbles** is set to clean it. Held for review, the
 default, sound effects and lettering over artwork are listed with a **Clean anyway** button, which is where the "Text
@@ -98,32 +114,71 @@ goes to the ladder on that engine's rung with **no script read at all**: sound e
 localiser added, are painted over with everything else. That is the row's stated meaning, it is why it is off by
 default, and a resumed run goes back to holding them rather than carrying the choice.
 
+With **Clean on** set to Cloud GPU, the run detects as usual, then asks the cloud clean consent once for the whole
+plan (the region count, the pages, the batches and the cost) and, once you confirm, cleans every region on your cloud
+GPU: none are cleaned here unless you tick **Clean flat colours on this computer first**, which tries each flat-colour
+region on this computer just before its batch is sent and only sends the rest. Declining the consent leaves the
+regions detected; nothing is lost. Detecting on the cloud GPU asks its own consent first, since detection and cleaning
+are sent, and confirmed, separately.
+
 A run is cancelled from the same place it was started, and the pages already cleaned are kept. When it finishes you
 get a count of pages and regions; a chapter with no Japanese text reports "No text found across N pages" rather than
-looking like a failure. If the weights are not on the machine, Auto clean is disabled with a sentence naming Settings,
-Models. If the machine runs short of memory mid-run, it says what it will do instead: the FLUX helper stops, then the
-redraw model is unloaded and the regions that needed it are listed for review, then it works one page region at a
-time.
+looking like a failure. If the weights are not on the machine, Text cleanup is disabled with a sentence naming
+Settings, Models. If the machine runs short of memory mid-run, it says what it will do instead: the FLUX helper stops,
+then the redraw model is unloaded and the regions that needed it are listed for review, then it works one page region
+at a time.
+
+**Source languages** (Settings, Detection) decide what a run cleans. Each of Japanese, Chinese and Korean is on or
+set to Skip, and the choice is captured when a run starts, so a resumed run keeps it. A region whose script belongs to
+a skipped language is held for review rather than cleaned, and a run with every language skipped says so and cleans
+nothing. The script checker cannot tell Japanese kanji from Chinese Han, so Han text stays eligible while either of the
+two is on. Japanese can turn on the optional OCR rescue; it is off unless you choose it, and a run where the reader
+will not open says so and goes on without it. With Outside bubbles set to clean and only some languages on, regions
+outside a balloon are held, because nothing checks their language.
+
+### Detection model combinations and page review
+
+Settings and first-launch setup let you select Comic Text Detector (CTD), one RT-DETR v2 profile (small or full),
+SAM-TS-L, or any combination of these. The selected models drive Text cleanup. Under **All text**, a run cleans found
+text across the page without the script checker or Japanese OCR reader; under **Legacy script filtering**, the source
+language Clean/Skip choices still apply. RT-only detection can produce broad region masks, so inspect results before
+export. The full RT-DETR graph is a managed download. SAM-TS-L setup downloads its pinned checkpoint and source,
+exports the two ONNX graphs locally, and verifies their hashes before installation. A local graph import remains
+available if automatic setup fails. COO SFX detection is not part of this version.
+
+The editor also offers **Text-shaped review** for the current page. The analysis finds regions and draws the lettering
+pixels, and the review lists every component, including ones no region claimed, so nothing is dropped silently. The
+tinted area is the exact set of pixels a clean may change; the box around it only helps you find it. Padding (0 px by
+default, up to 64 px) grows that area evenly around the lettering, and add and remove brushes correct it; both are
+recomputed from the original model output each time, so going from 2 to 5 and back to 2 gives the first result again.
+Apply asks the backend to prepare the write, shows it, and writes only if nothing changed in between; reconstruction
+may read more of the page, but only the tinted pixels change. Text outside balloons is held unless you allow it for the
+review, a switch separate from Text cleanup's.
+
+Writing is qualified for PNG pages on an Apple M5 with the app's ONNX Runtime on WebGPU only. On any other page type or
+machine (JPEG, CPU, Windows, Linux), the review shows the analysis and prepares nothing. Long-strip chapters are not
+analyzed yet; the review needs a paginated chapter. Every change is one
+undo step and is saved with the mask it used, so it reopens and exports the same. Turning the option off leaves saved
+edits viewable and legacy cleaning unchanged.
 
 ## The engine ladder
 
-Every clean is done by one of five engines, and the app uses the lightest one that does the job: a heavier model on a
+Every clean is done by one of four engines, and the app uses the lightest one that does the job: a heavier model on a
 flat balloon is slower and often worse, because it can invent marks where there was only paper.
 
 | Engine | Good for | Notes |
 |---|---|---|
-| **Fill** | Text on flat or gently graded paper, the common case | Samples the paper around the mask and lays down the tone it measured. No model needed, always available. |
-| **Denoise fill** | Tight masks on noisy or JPEG scans | Smooths the fill together with the grain around it, so no seam is left. |
+| **Fill** | Text on flat paper, the common case | Paints one flat colour exactly on the masked area: the median of a thin ring of paper (4 px) just outside the mask. No gradient, no model, always available. |
 | **LaMa** | Screentone, halftone, line art behind the text | The default redraw engine, and the top of an automatic run. About 0.6 s a region on a GPU, 1.5 s on the CPU. |
 | **FLUX** | The rare region nothing else reconstructs | Optional helper app you install yourself. Gigabytes of memory, around 20 s a region. Per region only. |
-| **Cloud** | Complex art on a weak machine | Off by default, opt in, your own paid Google key. Per region only. |
+| **Cloud** | Complex art on a weak machine | Off by default, opt in, your own Modal or Beam account, confirmed per render. Per region only. |
 
 Only the engines actually installed appear in a picker. A missing one is left out rather than shown greyed, and the
 way to add it is Settings, Models. When no engine's output passes the quality check, the region is **declined**: the
 original text is left exactly as it was, a marker stays on the page, and the region is listed for review with the
 reason. Some sources restrict the ladder, because a redraw engine's output cannot be represented in them. An
-indexed-colour page gets Fill alone. A CMYK page gets Fill and Denoise fill, which copy measured source values and so
-cannot change the ink separations. A one-bit page cannot hold an inpainted result at all.
+indexed-colour or CMYK page gets Fill alone, which copies one measured source value and so cannot leave the palette
+or change the ink separations. A one-bit page cannot hold an inpainted result at all.
 
 ## Manual tools
 
@@ -134,10 +189,10 @@ identical in kind: same row, same actions, same provenance, same export treatmen
 what is cleaned. The ring of paper around it is still sampled, so a fill matches the local paper rather than
 defaulting to white.
 
-### Auto Clean
+### Text cleanup
 
-Options: scope, speech bubble engine, outside-bubble engine, and the run button, all described above. It acts on the
-page rather than on a stroke, so there is nothing to draw.
+Options: mode, scope, detect on, clean on, text, speech bubble engine, outside-bubble engine, outside bubbles, mask
+padding with its Apply, and the run button, all described above. It acts on the page rather than on a stroke, so there is nothing to draw.
 
 ### Brush
 
@@ -161,16 +216,17 @@ it.
 ### AI Mask Brush
 
 Options: Clean with (the engine, Fill by default), and size. Paint over the text, and the engine you named cleans
-exactly the shape you painted. It differs from the Brush in one way: the Brush commits a planar fill, and this runs
+exactly the shape you painted. It differs from the Brush in one way: the Brush commits a Fill, and this runs
 whichever engine the row names. The engine is named outright rather than as a starting point, so a hand that picks
 LaMa gets LaMa. The list is the same four engines a Layers row offers, under the same names.
 
 ### Content-Aware Fill
 
 Options: fill mode (Match surround, Reconstruct or Solid), and engine (Local or Cloud). This one fills a mask that
-already exists, so it is a click on a region rather than a stroke. Match surround is the planar fill from the ring of
-paper, exact on flat and gently graded paper; Reconstruct is the redraw engine, for screentone and art crossing the
-mask. This is the one tool that can reach the cloud, and it carries the whole confirmation flow for it.
+already exists, so it is a click on a region rather than a stroke. Match surround is Fill, one flat colour measured
+from the ring of paper, exact on flat paper; Reconstruct is the redraw engine, for screentone and art crossing the
+mask. A Layers row and the region menu can also send a region to the cloud, and every cloud render asks first in one
+dialog.
 
 ### Clone / Heal
 
@@ -186,27 +242,28 @@ set tells you so.
 The **Layers** window lists every region on the current page, newest first. Collapsed, a row names the engine that
 produced it and carries a delete control. Expanded, it shows provenance: engine, model version, fill mode, elapsed
 time, whether it was made by hand or automatically, whether the automatic pass detected it, and for a cloud region the
-cost and request id.
+provider, endpoint, job and attempt, recipe and model revision, and cost only when reported.
 
-Each row can be re-run: **Try again** with the same setting, **Clean with** a different engine, or reopened in the
-tool that made it with the mask intact. **Delete** removes the mask, brings the original text back, and takes the row
-off the list, leaving no empty placeholder. **Dismiss** takes a flagged region off the list and leaves the page as it
-is, and **Show on page** scrolls to a region and selects it. Everything here is undoable, and a cloud region is the
-one thing a row cannot re-run. Clicking a region on the page selects it under every tool, lights its outline and
-scrolls the matching row into view. A right click, or Shift+F10 from the keyboard, selects the region and offers the
-same three things the row does.
+Each row can be re-run: **Try again** with the same setting, **Clean with** a different engine, or reopened in the tool
+that made it with the mask intact. **Delete** removes the mask, brings the original text back, and takes the row off the
+list, leaving no empty placeholder. **Dismiss** takes a flagged region off the list and leaves the page as it is, and
+**Show on page** scrolls to a region and selects it. Everything here is undoable. Clean with offers Cloud when a cloud
+GPU is ready, and Try again on a cloud region asks for confirmation again, as every cloud render does. Clicking a region
+on the page selects it under every tool, lights its outline and scrolls the matching row into view. A right click, or
+Shift+F10 from the keyboard, selects the region and offers the same three things the row does. On a region that is
+detected and not yet cleaned, the menu also offers **Text type**: Speech bubble text or Text outside bubbles, with the
+current one checked. Changing it sets which engine pick a later Clean starts the region on and the color its mask is
+drawn in. It is not undoable; pick the other type to change it back.
 
 **Needs review** is a filter at the top of the panel with a count, and it is the review surface. A region is flagged
 when fitting failed and a model reconstructed the area; when the region is unusually large for the page; when every
 engine failed the quality check, so the text was left alone; when the script gate skipped it, because it read as not
 Japanese or because the gate was not confident enough (with the optional Japanese text reader installed, a balloon the
-gate could not read is read once more before it lands here); when the text is outside a speech bubble; when a cloud
-request was rejected, for any of five separate causes; or when a cloud request was **accepted**, unconditionally,
-because a remote model can return something plausible and wrong. Gate-skipped regions carry a **Clean anyway** action.
-Declined regions carry a marker on the page itself, since they are the one case where nothing visibly happened. The
-bottom bar's up and down arrows step through the filtered set without entering the panel. Undo and redo are global
-across every tool and are **written to the project folder**, capped at 500 entries, so a chapter reopened tomorrow can
-still take back what was done today. Their tooltips name the edit they will reverse.
+gate could not read is read once more before it lands here); or when the text is outside a speech bubble. Gate-skipped
+regions carry a **Clean anyway** action. Declined regions carry a marker on the page itself, since they are the one
+case where nothing visibly happened. The bottom bar's up and down arrows step through the filtered set without entering
+the panel. Undo and redo are global across every tool and are **written to the project folder**, capped at 500 entries,
+so a chapter reopened tomorrow can still take back what was done today. Their tooltips name the edit they will reverse.
 
 ## Long-strip mode
 
@@ -230,13 +287,12 @@ A project created in longstrip mode treats a chapter as one continuous strip rat
 Export is on the Settings menu in the top bar, and on **E**.
 
 **Formats.** PNG (the default), TIFF (also the right choice for a stitched longstrip, and the only one that carries
-CMYK), **PSD**, and CBZ, which is a zip of the per-page files stored rather than deflated. JPEG and WebP are refused
+CMYK among raster choices), **PSD**, and CBZ, which is a zip of the per-page files stored rather than deflated. JPEG and WebP are refused
 rather than approximated, and the refusal says what would work instead. PSB is not written.
 
 **Layout.** One file per page, or one file for the chapter. Stitching a paginated project is refused, as is stitching
-into a CBZ or into a PSD, and so is a stitched export whose pages disagree about colour mode, bit depth or colour
-profile, or that uses indexed colour: one file has one of each of those. Each refusal is decided before a byte is
-written.
+into a CBZ or into a PSD. Stitched pages must agree on mode, depth, profile, gamma/chromaticities, cICP and
+transparency; indexed stitching is refused. Validation occurs before outputs are published.
 
 **Masks.** Flattened is the image alone. Asked for separately, a PNG or TIFF export writes **a mask file beside each
 page**, `001.png` and `001_mask.png`, an 8-bit grayscale PNG that is white where the lettering the page's edits
@@ -257,28 +313,54 @@ is made; the refusal names PNG, which carries them as they are.
 The source folder is never written to: choosing it gets you a refusal, and the dialog says so under the row rather
 than letting you find out by pressing Export.
 
-**Before you press Export** the dialog states two things: how many regions are still flagged for review (they export
-as they are), and, for a stitched layout, how many pixels of paper white will be written beside the narrower pages,
-since no source file has a pixel there. The finished notice reports what was actually written.
+**Before you press Export** the dialog validates every page, displays actual output formats and explains format
+fallbacks and metadata changes. It also reports flagged regions and any stitched gutter pixels. The plan is tied to
+source/patch/manifest state; a changed chapter requires a fresh plan. Outputs are staged before publication. A runtime
+publication failure reports completed files and the failing path. The finished notice uses the actual formats.
 
-**What is preserved.** Outside the union of the applied masks grown by a small margin, the exported file's decoded
-pixels are identical to the source's, and the colour mode, bit depth and embedded colour profile are unchanged. Colour
-mode is never upgraded: an 8-bit grayscale source exports as 8-bit grayscale, whatever engine ran. Alpha is copied
-through untouched, and 8 and 16-bit, Grayscale, RGB, CMYK and Indexed all survive. A page with no edits on it is
-copied byte for byte and verified against the checksum taken when it was read, inside a CBZ too. Where a chosen format
-cannot carry the source's colour mode, the app says exactly what will change before it runs, and never downgrades
-silently.
+**What is preserved.** Supported lossless exports retain native decoded samples outside the applied masks, including
+16-bit low bytes, palette indices and alpha. Orientation moves samples without changing their values. A compatible,
+untouched same-format export is an exact byte copy; CBZ retains untouched JPEG bytes. Edited RGB/gray JPEGs use PNG,
+and edited CMYK/YCCK JPEGs use TIFF. JPEG recompression is not offered.
+
+PNG writers share one metadata policy: exact gAMA/cHRM/sBIT/cICP/mDCV/cLLI declarations and safe ancillary chunks
+are retained where valid. Edits remove stale significant-bit/content-light summaries; precedence conflicts are
+normalized and disclosed. TIFF/PSD use equivalent supported ICC descriptions where possible and otherwise refuse.
+General EXIF thumbnails and geometry are omitted on re-encode; imported originals retain them. Invalid profiles and
+unsupported HDR preview/paint transforms fail explicitly. These guarantees do not claim every ancillary field survives.
+
+Previews transform supported Gray/RGB/CMYK profiles and SDR declarations to tagged sRGB. Untagged RGB and grayscale
+use documented sRGB display assumptions; untagged CMYK uses a multiplicative-ink assumption, without changing stored
+metadata. Colour keys are compared at native precision. Downsampling uses linear light and premultiplied alpha.
+Brush, selected fill and model boundaries use the same interpretation. Brush modes remain 8-bit Gray/GrayAlpha/RGB/
+RGBA; native clone copies remain exact. Live brush/clone/heal previews come from the backend’s commit renderer.
+
+TIFF alpha association is explicit: native premultiplied values remain unchanged and previews unassociate only the
+display derivative. Associated-alpha pages export as TIFF; PNG requests fall back and PSD refuses. Editing those
+pages currently refuses. Non-ICC TIFF transfer/white-point/primary descriptions also refuse managed processing until
+a tested equivalent interpretation exists; their native imports and unchanged TIFF exports remain available.
+
+EXIF orientations 1–8 are applied to display and re-encoded output. Existing native-coordinate edits are intersected
+before orientation; new oriented seam edits keep one history identity with native parts for each participating page.
+Older chapters, including previously converted JPEG pages without an archived original, remain readable.
 
 ## Settings
 
-Settings is on **,** from anywhere. Changes apply at once and are remembered between sessions. It is five tabs,
-General, Models, Acceleration, Shortcuts and About, and it opens on General, so the preference rows are the first
-thing on screen with nothing to press. Every tab is one fixed-height scroller, so the dialog is the same size and the
-Done button sits in the same place whichever tab you are on. General rows: **Theme**
-(light, dark or system), **Reading direction** (the default for new projects; an open project keeps the direction it
-was made with), **Cloud engines** (below), **Original view** (whether O shows the original only while held or toggles
-it on), and **Language** (English is the only catalogue that ships today, though every string in the app, errors
-included, is in it).
+Settings is on **,** from anywhere. Changes apply at once and are remembered between sessions. It is six tabs,
+General, Models, Acceleration, Cloud, Shortcuts and About, and it opens on General (or on the Cloud tab when opened
+from a cloud link), so the preference rows are the first thing on screen with nothing to press. Every tab is one
+fixed-height scroller, so the dialog is the same size and the Done button sits in the same place whichever tab you are
+on. General rows, in order: **Theme** (light, dark or system), **Selection color, speech bubble text** and
+**Selection color, text outside bubbles** (the two colors detected masks are drawn in on the page, blue and burnt
+orange by default, so the two kinds of text are told apart at a glance; a mask whose place is unknown uses the speech
+bubble color, and a color picked when there was only one is kept as that one),
+**Selection opacity** (how strong both fills are), **Keep running when closed** (close to tray: the window
+hides while downloads continue, and the tray icon reopens or quits; off, the close button quits; shown only when a tray
+icon exists), **Reading direction** (the default for new projects; an open project keeps the direction it was made
+with), **Cloud GPU** (says whether it is on, plus **Open Cloud settings**), **Original view** (whether O shows the
+original only while held or toggles it on), **Language** (English is the only catalogue that ships today, though every
+string in the app, errors included, is in it), and **Setup** with **Run setup again** (walks through downloads,
+defaults, the cloud GPU and app behavior again).
 
 ### Models
 
@@ -289,22 +371,29 @@ behind, **Discard partial**. A row with a remainder says how much is already her
 from there. Downloads are verified against a published checksum, and Check re-reads a file you suspect.
 
 One row is optional in the strongest sense. The **Japanese text reader** (manga-ocr, three files, about 460 MB) is
-offered here and nowhere else: nothing depends on it, it is not in the first-launch offer, and a machine without it
-reads scripts exactly as this app did before the reader existed. Installed, it re-reads a balloon the language checker
-could not name a script for, and a reading that is at least two characters and at least 60 per cent Japanese lets the
-region clean instead of going to review.
+offered here and, unticked, in the first-launch setup: nothing depends on it, and a machine without it reads scripts
+exactly as this app did before the reader existed. Installed, it re-reads a balloon the language checker could not name
+a script for, and a reading that is at least two characters and at least 60 per cent Japanese lets the region clean
+instead of going to review.
 
-On a first launch, if anything Auto clean needs is missing, the app offers the whole set in one dialog: the required
-group (the text finder, the speech bubble finder, the language checker and its labels, plus the runtime) with no
-ticks, and the redraw engine, manga-LaMa, as a tick that starts on. One press downloads what is ticked, runtime
-first, one at a time. Where the redraw engine is already installed the choice section is not drawn at all, since there
-would be nothing in it. The offer is made once; Settings, Models is the way back for anything declined. A weight the app
-did not download (found beside the executable, in the bundle, or in a folder you set) reads as installed elsewhere and
-has no Delete button. For an offline install, put the verified files in one of those folders by hand and the rows read
-Installed. On Windows and on Linux x64, where more than one runtime build is published, the runtime row carries a
-picker: the default works with every graphics card, and the CUDA builds need CUDA and cuDNN installed by you. Changing
-the picker downloads nothing on its own, and the row says which build is actually installed when that differs from
-the one chosen.
+On a first launch, the app walks through a six-step setup with one choice per step, each skippable with Skip setup, and
+Run setup again in Settings, General replays it. Step 1 is Welcome. Step 2 downloads the models: the required set (the
+engine runtime and the models that find text and speech bubbles) as one locked row, the redraw engine, manga-LaMa, as a
+tick that starts on, and the Japanese text reader as a tick that starts off, with one Download button, pause, resume and
+retry, and you can continue while it runs. Step 3 chooses the defaults: accelerator (Automatic recommended), and when
+the AI redraw helper is installed, its folder, model and engine. Step 4 is Cloud GPU (optional): Not now leaves cloud
+off; Set up now opens the setup in place and turns the cloud permission on when setup succeeds and the new endpoint
+answers its first health check (if the check fails, the endpoint is still saved and selected, the permission stays off,
+and it can be tested later from Settings, Cloud); while the setup helper is at work (checking the account, planning, or
+creating or removing resources in it), the first-launch setup cannot be closed (Escape and Skip do nothing). Step 5 sets
+app behavior: keep running when closed (close to tray), and the default reading direction for new projects. Step 6 is
+Done: a summary read back from the settings in force, and New project. The setup is shown once; Settings, Models is the
+way back for anything declined. A weight the app did not download (found beside the executable, in the bundle, or in a
+folder you set) reads as installed elsewhere and has no Delete button. For an offline install, put the verified files in
+one of those folders by hand and the rows read Installed. On Windows and on Linux x64, where more than one runtime build
+is published, the runtime row carries a picker: the default works with every graphics card, and the CUDA builds need
+CUDA and cuDNN installed by you. Changing the picker downloads nothing on its own, and the row says which build is
+actually installed when that differs from the one chosen.
 
 An optional **Hugging Face token** field sits at the bottom, because some downloads come from huggingface.co, which
 limits anonymous transfers. It is kept in the operating system's credential store, sent to huggingface.co and no other
@@ -343,17 +432,53 @@ from the defaults are stored, so a binding survives a build that renames a defau
 
 ### Cloud
 
-Cloud engines are **blocked by default**. While blocked, nothing is sent to a provider: the request is refused before
-it is made, and the notice says so outright. Allowing it makes the cloud engine available to Content-aware fill, the
-only tool that can reach it; an automatic run stays local whatever this is set to.
+The cloud GPU is **off by default**. The main switch, **Use a cloud GPU**, is on the Settings Cloud tab, and the
+General tab has a **Cloud GPU** row that reports its state and links to the Cloud tab. While off, nothing leaves your
+computer, and any cloud action is refused before anything is sent. Text cleanup's clean reaches the cloud only when
+Clean on is set to Cloud GPU, and only after the cloud clean consent for that exact plan; the local FLUX helper
+remains its own separate engine choice.
 
-Before the first send of a session the app states what is transmitted: a bounded crop of the page, including the image
-content around the text and not just the masked region, goes to Google, is processed there, and comes back. Nothing
-else about the page or the project is sent. You bring your own key, stored in the operating system's keychain, never
-in project files and never logged; a free-tier key is refused with the reason stated, because the unpaid tier trains
-on submissions. The estimated cost is shown and confirmed before the first spend of a session unconditionally, and the
-**Confirm before spending** setting governs the spends after that. A rejected request is not billed and falls back to
-the local redraw engine.
+Setting up a cloud GPU uses your own Modal or Beam account, which bills you directly. You can start from **Set up with
+Modal or Beam** on the Cloud tab, or from step 4 of the first-launch setup. After you paste a Modal token or Beam API
+key, choose FLUX.2 Klein 4B or 9B or Qwen-Image-Edit-2511 (L40S only) and optional SAM-TS-L/RT-DETR analysis models. The app presents a plan for approval
+showing the GPU type, idle timeout, cost notes, and selected weight downloads. Nothing is created until you approve it.
+A bundled helper then creates, in your account, a volume for model weights (seeded on a CPU), job storage, an on-demand
+FLUX worker, a separate on-demand analysis worker when selected, and a gateway that the provider opens only to calls carrying the endpoint's
+credential; it checks the new endpoint, and the app saves it and selects it as your cloud GPU. For Modal, setup also
+creates an access token that can only call that endpoint. Your Modal token is kept only when **Remember this Modal
+token** is ticked (the default), so updating the setup later does not ask for it again. Beam has no separate access
+token, so the endpoint is called with your own Beam API key. Either one is kept in the operating system's credential
+store, never in a settings or project file. On Beam, setup also stores your key as a secret in your Beam account,
+because the gateway uses it to start the GPU jobs. Setup shows each step as it runs and can be stopped. What finished is
+kept, an unfinished setup is listed under **Needs attention** with Resume and Forget, and Resume continues from where it
+stopped without redoing what is done. Removing an endpoint takes it off this computer only, unless you also choose to
+delete its cloud resources: then the app lists what will be deleted, including the model weights, and deletes only what
+this app created. You can also connect an existing public HTTPS endpoint by hand under **Connect an existing endpoint**.
+Several endpoints can be kept, including setups in different Modal accounts: run setup again with the other account's
+key. Each row names its Modal account and can be renamed. Each keeps its own access token, so choosing another default
+switches accounts without entering a key again.
+
+GPU workers scale to zero after the chosen idle timeout. Analysis capabilities appear only after the selected graphs
+pass size and SHA-256 verification. CTD remains local.
+
+The app does not report cloud spending. Modal offers no way to read the credits left on an account, so check usage
+and credits on the provider's billing page. A remembered Modal token is used only to set up, update or clean up that
+setup, and removing the endpoint deletes it.
+
+When enabled and an endpoint is ready, its FLUX model appears alongside local models, with a leading cloud icon, in the AI mask brush and Layers/region **Clean with** menus. **Try again** on a cloud region uses its cloud endpoint. Every cloud render asks first, every
+time, in a dialog ("Send this region to your cloud GPU?"): it states what is sent (a crop of a given size around the
+region and its mask, while the rest of the page and project stay local), the destination endpoint, and the cost billed
+by your provider. A confirmation allows that one render and nothing else, and nothing is sent without one.
+
+A running cloud render displays a status card in the bottom corner with elapsed time, current phase, a Cancel button,
+and a note that the first render can take 1 to 3 minutes while the GPU starts. Cancelling stops the render at the next
+safe point and asks the gateway to cancel the job; a render that finished before the cancel reached it is still applied,
+because it has already run and been billed. A failed cloud render does not fall back to a local engine: the region is
+left unchanged and a notice explains why. When it is not known whether the endpoint received a render, it is never sent
+again on its own. At the next start (or, when the cloud GPU is off then, the first time it is turned on) the app applies
+results that finished while it was closed and lists anything that needs attention on the Cloud tab; nothing is ever
+resubmitted. Completed regions store cloud provenance (provider, profile, job and attempt identifiers, recipe, model
+revision, and cost only when reported) and can be re-run after asking for consent again.
 
 ### The optional redraw helper
 
@@ -380,12 +505,12 @@ chapter is open.
 
 | Key | Does |
 |---|---|
-| `1` | Auto clean |
+| `1` | Text cleanup |
 | `2` | Brush |
 | `3` | Shapes |
 | `4` | AI mask brush |
-| `5` | Content-aware fill |
-| `6` | Clone / heal |
+| `5` | Clone / heal |
+| `6` | Selection: add to or remove from the detected masks |
 | `O` (held) | Show the original while held |
 | `Shift`+`O` | Pin the original on |
 | `M` | Mask overlay |

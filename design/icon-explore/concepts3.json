@@ -1,0 +1,9 @@
+{
+ "base": "App icon for \"Manga Cleaner\", a desktop app that removes Japanese text from manga speech balloons and leaves clean, empty balloons ready for translation. macOS app icon format: one rounded-square (squircle) tile centered on the canvas, the tile fills about 82% of the canvas, fully transparent background outside the tile, clean alpha edges, no backdrop, no drop shadow outside the tile. Flat front view, no perspective tilt. Clean vector-like shapes, strong silhouette, balanced negative space, one clear focal symbol that still reads at 16 px. Brand palette: warm paper off-white #F6F5F2 and deep ink black #141514, with at most one accent color. No words, no letters, no logos, no watermark, unless the concept below says otherwise.",
+ "concepts": [
+  [
+   "F-peel-final",
+   "Concept: a deep ink-black #141514 tile with a very faint, fine manga screentone dot texture. Centered with generous margin (the balloon spans about 68% of the tile width, never touching the tile edges) is one plump, smooth off-white #F6F5F2 manga speech balloon with a short curved tail at the lower left. A semi-translucent rose #A63B5F film covers the upper-left part of the balloon; two short vertical columns of soft, slightly blurred darker-rose Japanese-style text sit beneath the film. The film peels back from its lower-right edge in a single elegant curl, its underside a lighter pink with a gentle highlight, revealing the spotless off-white balloon beneath. Subtle soft shading only, crisp clean edges, no outlines, few large shapes, feels like a premium macOS app icon."
+  ]
+ ]
+}

@@ -239,8 +239,7 @@ pub fn declines(page: &Raster, fitted: &Fitted) -> Option<Decline> {
 /// The mask a model rung writes through: [`Fitted::ink`] grown by the isolation
 /// radius, in **one** dilation.
 ///
-/// One dilation and not a composition: rung 1
-/// learned the hard way that
+/// One dilation and not a composition:
 /// `disc(3) ⊕ disc(2)` reaches further at the diagonals than `disc(5)` does,
 /// and a margin is only a bound if the construction matches the arithmetic.
 ///
@@ -256,10 +255,17 @@ pub fn applied_mask(fitted: &Fitted, page_w: u32, page_h: u32) -> Mask {
     fitted.ink.dilated(ISOLATION_RADIUS, page_w, page_h)
 }
 
+/// The bounds of [`applied_mask`] for lettering bounded by `ink`, without the
+/// mask: grown by [`ISOLATION_RADIUS`] and clipped to the page, as
+/// [`Mask::dilated`] bounds it. What an estimate reads when it has the stored
+/// hole and the page's size but not the page.
+pub fn applied_bounds(ink: Rect, page_w: u32, page_h: u32) -> Rect {
+    ink.grown(ISOLATION_RADIUS, page_w, page_h)
+}
+
 /// How far from [`Fitted::ink`] a model rung may write, which is what
-/// `EDIT_MARGIN` is derived to cover. Slack rather than equality here - the
-/// isolation radius is 5 and the margin is 6, because rung 1 reaches further
-/// than the model rungs do.
+/// `EDIT_MARGIN` is derived to cover. The margin is the isolation radius, so
+/// this is the applied mask's own extent: no rung writes wider.
 pub fn write_bound(fitted: &Fitted, page_w: u32, page_h: u32) -> Mask {
     fitted.ink.dilated(EDIT_MARGIN, page_w, page_h)
 }
@@ -307,8 +313,7 @@ pub fn plan(bounds: Rect) -> Vec<Rect> {
 /// `params_snapshot` wants.
 #[derive(Debug, Clone)]
 pub struct Rendered {
-    /// The **applied** mask - post-growth, pre-isolation is rung 1's phrase;
-    /// here it is the fitted mask plus the isolation margin, which is the set
+    /// The **applied** mask: the fitted mask plus the isolation margin, which is the set
     /// the compositor is allowed to write through and the set recorded as
     /// `mask_sha256`.
     pub mask: Mask,
@@ -321,6 +326,9 @@ pub struct Rendered {
     /// How many model runs this region cost. One for a region inside 512²; up
     /// to 25 at the decline threshold.
     pub tiles: u32,
+    /// What a [`crate::engines::render::Preprocessing::V2`] composite aligned
+    /// the answer's tone by. `None` for an answer blended as it came back.
+    pub tone: Option<crate::engines::render::ToneReport>,
 }
 
 /// One model run's geometry: what it reads, and what it is allowed to keep.
@@ -378,6 +386,7 @@ pub fn tiles(bounds: Rect) -> Vec<Tile> {
 /// the edge as a box. Around `ink` the same offset fades out over two pixels
 /// along the outline of the glyphs themselves, which is a shape the eye reads as
 /// nothing at all.
+#[derive(Debug, Clone)]
 pub struct AlphaRamp {
     core: Mask,
     rings: Vec<Mask>,
@@ -401,8 +410,7 @@ impl AlphaRamp {
         for (step, ring) in self.rings.iter().enumerate() {
             if ring.contains(x, y) {
                 // A linear ramp sampled at its midpoints: one ring gives 1/2,
-                // two give 2/3 and 1/3. Rung 1's `FEATHER_ALPHA` is this same
-                // expression at n = 1.
+                // two give 2/3 and 1/3.
                 return (self.rings.len() - step) as f64 / (self.rings.len() + 1) as f64;
             }
         }
@@ -410,15 +418,51 @@ impl AlphaRamp {
     }
 }
 
-/// Which of the page's channels feeds model channel `c`.
+/// Model replies are encoded sRGB. Blend only covered pixels in linear light,
+/// then convert back at native precision; alpha and uncovered samples stay exact.
+pub fn commit_srgb(
+    managed: &crate::image::color::ManagedColor, patch: &mut Raster,
+    x: u32, y: u32, rgb: [f32; 3], coverage: f64, dither: f64,
+) -> Result<(), Error> {
+    use crate::image::color::{alpha, linear, encoded};
+    crate::image::color::validate_editing(patch).map_err(|e|Error::Run(e.to_string()))?;
+    if coverage <= 0.0 || alpha(patch, x, y) == 0.0 { return Ok(()); }
+    let original = managed.pixel(patch, x, y);
+    let a = coverage as f32;
+    let blended = std::array::from_fn(|c| encoded(linear(rgb[c].clamp(0.0, 1.0)) * a + linear(original[c]) * (1.0 - a)));
+    let native = managed.from_srgb(blended, patch.mode).map_err(|e| Error::Run(e.to_string()))?;
+    let ceiling = ceiling_for(patch.depth);
+    for (channel, sample) in native.iter().enumerate().take(patch.mode.samples()) {
+        if patch.mode.alpha_channel() == Some(channel) { continue; }
+        patch.set_sample(x, y, channel, (f64::from(*sample) * ceiling + dither).round().clamp(0.0, ceiling) as u16);
+    }
+    crate::image::color::avoid_transparent_key(patch, x, y);
+    Ok(())
+}
+
+pub fn editable_color(page: &Raster) -> Result<std::rc::Rc<crate::image::color::ManagedColor>, Error> {
+    crate::image::color::validate_editing(page).map_err(|e|Error::Run(e.to_string()))?;
+    crate::image::color::ManagedColor::for_raster(page).map_err(|e|Error::Run(e.to_string()))
+}
+
+/// Native gray samples repeat over three model channels.
+pub fn source_channel(mode: ColorMode, channel: usize) -> usize {
+    if matches!(mode, ColorMode::Gray | ColorMode::GrayAlpha) { 0 } else { channel }
+}
+
+/// The mode a model's three-channel answer is read back in: grey for a grey
+/// page, including one stored as RGB or RGBA ([`Raster::is_neutral`]).
 ///
-/// A grayscale page is replicated across all three: neither model has a
-/// one-channel input, and the alternative - feeding grey into R and zeros into
-/// G and B - is a colour image as far as the network is concerned.
-pub fn source_channel(mode: ColorMode, c: usize) -> usize {
-    match mode {
-        ColorMode::Gray | ColorMode::GrayAlpha => 0,
-        _ => c,
+/// Both model rungs are colour models and neither returns exact grey. On an
+/// RGBA grey scan (Deli Health chapter 11) the 54 LaMa patches read per
+/// channel carried a median 11 and at most 18 levels of chroma, which the
+/// cleaned page and its export kept, and which sent the whole page down the
+/// colour path of a later page denoise. Read as grey, every channel of the
+/// patch takes the mean of the model's three, as on a page stored grey.
+pub fn answer_mode(page: &Raster) -> ColorMode {
+    match page.mode {
+        ColorMode::Rgb | ColorMode::Rgba if page.is_neutral() => ColorMode::Gray,
+        mode => mode,
     }
 }
 
@@ -450,10 +494,11 @@ pub fn page_crop(page: &Raster, bounds: Rect) -> Raster {
         height: bounds.h,
         mode: page.mode,
         depth: page.depth,
-        icc: None,
+        icc: page.icc.clone(),
         palette: page.palette.clone(),
         trns: page.trns.clone(),
-        srgb_intent: None,
+        srgb_intent: page.srgb_intent,
+        color: page.color.clone(),
         data: vec![0; {
             let bits = bounds.w as usize * samples * page.depth.bits() as usize;
             bits.div_ceil(8) * bounds.h as usize
@@ -480,6 +525,79 @@ pub fn ceiling_for(depth: BitDepth) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_grey_page_stored_as_rgb_reads_its_answer_as_grey() {
+        let rgba = |tint: u8| Raster {
+            width: 3, height: 2, mode: ColorMode::Rgba, depth: BitDepth::Eight, icc: None, palette: None,
+            trns: None, srgb_intent: None, color: Default::default(), data: [120 + tint, 120, 120, 255].repeat(6),
+        };
+        assert_eq!(answer_mode(&rgba(0)), ColorMode::Gray);
+        assert_eq!(answer_mode(&rgba(1)), ColorMode::Gray, "one level apart is still grey");
+        assert_eq!(answer_mode(&rgba(2)), ColorMode::Rgba);
+        let mut sixteen = rgba(0);
+        sixteen.depth = BitDepth::Sixteen;
+        sixteen.data = [30_000u16, 30_000, 30_400, 65_535].repeat(6).iter().flat_map(|v| v.to_be_bytes()).collect();
+        assert_eq!(answer_mode(&sixteen), ColorMode::Rgba, "400 of 65535 is past 1.5 of 255");
+        let gray = Raster { mode: ColorMode::GrayAlpha, data: vec![9; 12], ..rgba(0) };
+        assert_eq!(answer_mode(&gray), ColorMode::GrayAlpha);
+    }
+
+    #[test]
+    fn managed_model_boundary_preserves_native_precision_alpha_and_uncovered_samples() {
+        use crate::image::{decode, color::ManagedColor};
+        let source = decode(include_bytes!("../../tests/fixtures/color-reference/gamma-chrm.png")).unwrap();
+        let managed = ManagedColor::for_raster(&source).unwrap();
+        let mut patch = page_crop(&source, Rect::new(0, 0, source.width, source.height));
+        assert_eq!(patch.color, source.color);
+        assert_eq!(patch.icc, source.icc);
+        let before = patch.data.clone();
+        commit_srgb(&managed, &mut patch, 0, 0, [1.0; 3], 0.0, 0.0).unwrap();
+        assert_eq!(patch.data, before);
+        commit_srgb(&managed, &mut patch, 0, 0, [0.5; 3], 1.0, 0.0).unwrap();
+        // Independent IEC sRGB inverse: encoded 0.5 is linear 0.214041.
+        for c in 0..3 { assert!((patch.sample(0,0,c) as i32 - 55).abs() <= 1); }
+        assert_eq!(&patch.data[3..], &before[3..]);
+
+        let mut gray = crate::image::fixtures::by_name("l16").raster;
+        gray.color.gamma = Some(100000);
+        gray.set_sample(0,0,0, 12345);
+        let managed = ManagedColor::for_raster(&gray).unwrap();
+        commit_srgb(&managed, &mut gray, 0, 0, [0.5;3], 1.0, 0.0).unwrap();
+        assert!((gray.sample(0,0,0) as i32 - 14027).abs() <= 3);
+
+        let mut rgba = crate::image::fixtures::by_name("rgba8").raster;
+        rgba.set_sample(0,0,3,0);
+        let before = rgba.data.clone();
+        let managed = ManagedColor::for_raster(&rgba).unwrap();
+        commit_srgb(&managed, &mut rgba, 0, 0, [1.0;3], 1.0, 0.0).unwrap();
+        assert_eq!(rgba.data, before);
+        rgba.set_sample(0,0,3,99);
+        commit_srgb(&managed, &mut rgba, 0, 0, [1.0;3], 0.5, 0.0).unwrap();
+        assert_eq!(rgba.sample(0,0,3),99);
+    }
+
+    #[test]
+    fn model_output_cannot_turn_opaque_color_key_samples_transparent() {
+        let mut page = crate::image::fixtures::by_name("rgb8").raster;
+        page.trns=Some(vec![0;6]);
+        for c in 0..3 { page.set_sample(0,0,c,100); }
+        let managed=crate::image::color::ManagedColor::for_raster(&page).unwrap();
+        commit_srgb(&managed,&mut page,0,0,[0.0;3],1.0,0.0).unwrap();
+        assert_eq!([page.sample(0,0,0),page.sample(0,0,1),page.sample(0,0,2)],[0,0,1]);
+        assert_eq!(crate::image::color::alpha(&page,0,0),1.0);
+        assert_eq!(page.trns,Some(vec![0;6]));
+    }
+
+    #[test]
+    fn model_boundary_blends_in_linear_light() {
+        let mut page = crate::image::fixtures::by_name("rgb8").raster;
+        for c in 0..3 { page.set_sample(0,0,c,0); }
+        let managed = crate::image::color::ManagedColor::for_raster(&page).unwrap();
+        commit_srgb(&managed, &mut page, 0, 0, [1.0;3], 0.5, 0.0).unwrap();
+        // IEC sRGB encoding of 0.5 linear light is 187.516/255.
+        for c in 0..3 { assert_eq!(page.sample(0,0,c),188); }
+    }
 
     #[test]
     fn every_decline_names_a_key_and_no_two_name_the_same_one() {

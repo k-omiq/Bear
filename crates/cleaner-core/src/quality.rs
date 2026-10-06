@@ -8,8 +8,8 @@
 //!
 //! and then says the thing that makes this a module rather than a branch inside
 //! an engine: it is the "**same measurement as §5.2 step 7, applied to every
-//! rung, not only cloud**". Rung 0's fill, rung 1's denoise and every model
-//! above them are scored by one function, so that a review row saying
+//! rung, not only cloud**". Rung 0's fill and every model above it are scored
+//! by one function, so that a review row saying
 //! *declined* means the same thing whichever rung produced the pixels. §6 also
 //! records why it did not exist until now - revision 2 introduced the `decline`
 //! outcome without defining the metric it depends on, "which made it
@@ -118,14 +118,10 @@
 //! - **A bitonal source.** Levels are 0 and 65535 and nothing else. A flat fill
 //!   has an interior edge energy of zero, and any surround holding one ink
 //!   pixel has a `p5..p95` covering the whole scale - so both tests pass by
-//!   construction, on any output whatsoever.
-//!   [`crate::engines::denoise::applies`] refuses bitonal for the neighbouring
-//!   reason, that a source whose samples are not levels has nothing to average;
-//!   this is the same sentence about measuring. Indexed and CMYK are **not**
+//!   construction, on any output whatsoever. Indexed and CMYK are **not**
 //!   excluded: [`crate::image::Raster::luma16_at`] resolves both to real luma
 //!   through the palette or the ink model, and a luma measurement over them
-//!   means what it says. It is the *averaging* of palette indices that is
-//!   meaningless, which is rung 1's problem and not this one.
+//!   means what it says.
 //! - **No surround.** A mask whose bounding box is the page leaves the band
 //!   empty, and [`crate::fit::RingStats`] already refuses to report a statistic
 //!   over nothing for the same reason.
@@ -178,10 +174,8 @@ const SOBEL_NOISE_GAIN: f32 = 4.34;
 /// The floor under the page's noise floor, in 16-bit luma: half an 8-bit level.
 ///
 /// A synthetic page measures a noise sigma of exactly zero, and so does a real
-/// page that is genuinely flat where it was sampled.
-/// [`crate::engines::denoise`] floors its range σ at the same half level for
-/// the same reason, and the consequence is the same here: on such a page the
-/// test becomes very nearly "is the interior flat too", which is the honest
+/// page that is genuinely flat where it was sampled. On such a page the test
+/// becomes very nearly "is the interior flat too", which is the honest
 /// question to ask of flat paper.
 const QUIET_FLOOR: f32 = 0.5 * 257.0;
 
@@ -321,15 +315,12 @@ pub fn applies(page: &Raster) -> bool {
 
 /// Score one rung's output against the paper around it.
 ///
-/// `mask` is the **applied** mask - the one the patch will composite through,
-/// which for rung 1 is [`crate::engines::denoise::applied_mask`] rather than
-/// the fitted mask - because the surround has to begin outside everything the
-/// edit wrote. `patch` covers `mask.bounds` in the page's own mode and depth,
+/// `mask` is the **applied** mask - the one the patch will composite through -
+/// because the surround has to begin outside everything the edit wrote. `patch` covers `mask.bounds` in the page's own mode and depth,
 /// which is the shape every engine in [`crate::engines`] returns. `noise_sigma`
 /// is the page's floor from [`crate::fit::page_noise_sigma`], passed in rather
-/// than measured here for the same reason
-/// [`crate::engines::denoise::render`] takes it: it is a per-page measurement
-/// and this runs per region.
+/// than measured here because it is a per-page measurement and this runs per
+/// region.
 pub fn assess(page: &Raster, mask: &Mask, patch: &Raster, noise_sigma: f32) -> Assessment {
     if !applies(page) {
         return Assessment::unmeasured(Unmeasured::Bitonal);
@@ -464,7 +455,7 @@ fn percentile(values: &mut [f32], p: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::{denoise, fill};
+    use crate::engines::fill;
     use crate::fit::{self, EdgeMap};
     use crate::image::{ColorMode, fixtures};
     use crate::mask::Rect;
@@ -490,6 +481,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }
@@ -510,6 +502,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }
@@ -537,6 +530,7 @@ mod tests {
             palette: Some(palette),
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }
@@ -556,6 +550,7 @@ mod tests {
             palette: page.palette.clone(),
             trns: page.trns.clone(),
             srgb_intent: None,
+            color: Default::default(),
             data: vec![0; bounds.w as usize * bounds.h as usize * samples],
         };
         for y in 0..bounds.h {
@@ -600,29 +595,14 @@ mod tests {
     }
 
     #[test]
-    fn a_fill_that_follows_a_gradient_is_accepted() {
-        // The plane's interior values are bounded by the surround that encloses
-        // it, so a correct fill is inside the range by construction. A test
+    fn a_flat_fill_on_a_gentle_gradient_is_accepted() {
+        // The fill is the ring's median, which lies inside the surround range
+        // by construction, and a flat interior has no edge energy. A test
         // failing here would be one no rung 0 output could pass.
         let page = gray_page(|x, _| (150 + x / 4) as u8);
         let fitted = fitted_over(&page, REGION);
         let patch = fill::render(&page, &fitted);
         let verdict = scored(&page, &fitted.mask, &patch);
-        assert_eq!(verdict.outcome, Outcome::Accepted, "{verdict:?}");
-    }
-
-    #[test]
-    fn a_denoised_patch_on_a_grainy_page_is_accepted() {
-        // Deterministic grain of about six levels: the population rung 1 exists
-        // for, and the one a fixed threshold would decline everywhere.
-        let page = gray_page(|x, y| {
-            let n = ((x * 7919 + y * 104729) % 13) as i32 - 6;
-            (238 + n).clamp(0, 255) as u8
-        });
-        let sigma = fit::page_noise_sigma(&page);
-        let fitted = fitted_over(&page, REGION);
-        let (applied, patch) = denoise::render(&page, &fitted, sigma);
-        let verdict = assess(&page, &applied, &patch, sigma);
         assert_eq!(verdict.outcome, Outcome::Accepted, "{verdict:?}");
     }
 
@@ -780,6 +760,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data: vec![0; 2 * 10],
         };
         let verdict = assess(&page, &mask, &patch, 0.0);

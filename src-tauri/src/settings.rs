@@ -39,11 +39,13 @@
 //! the second one can leave a secret behind, and the user has to hear about it.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use serde_json::{Map, Value};
 
 /// Where the file lives, under the app's config directory.
 const FILE: &str = "settings.json";
+static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
@@ -55,7 +57,11 @@ pub fn path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 pub fn read(app: &tauri::AppHandle) -> Result<Value, String> {
     let path = path(app)?;
-    match std::fs::read(&path) {
+    read_file(&path)
+}
+
+fn read_file(path: &std::path::Path) -> Result<Value, String> {
+    match std::fs::read(path) {
         // No file yet is not an error: it is a first launch, and the interface's
         // own defaults are the right answer.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Value::Object(Map::new())),
@@ -84,8 +90,92 @@ fn token_of(value: &Value) -> Result<&str, String> {
     })
 }
 
+/// Recursively verify that a patch contains no cloud secrets, tokens, or inference configurations.
+///
+/// Cloud configuration and secrets must be persisted exclusively in `inference.json` and the
+/// OS keyring via [`crate::inference`], never in `settings.json`.
+fn check_no_cloud_secrets(key_path: &str, value: &Value) -> Result<(), String> {
+    match value {
+        Value::Object(map) => {
+            for (k, v) in map {
+                let next_path = if key_path.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{key_path}.{k}")
+                };
+                let lower_k = k.to_ascii_lowercase();
+                // HuggingFace token is handled separately by weights::store_token and is exempt.
+                let reserved = lower_k.contains("token")
+                    || lower_k.contains("secret")
+                    || lower_k.contains("apikey")
+                    || lower_k.contains("api_key")
+                    || matches!(lower_k.as_str(), "inference" | "inferencesettings" | "beamprofiles" | "modalprofiles");
+                if reserved && !(key_path.is_empty() && k == crate::weights::TOKEN_SETTING) {
+                    return Err("cloud credentials and inference profiles require dedicated storage".to_string());
+                }
+                check_no_cloud_secrets(&next_path, v)?;
+            }
+        }
+        Value::Array(arr) => {
+            for (i, v) in arr.iter().enumerate() {
+                let next_path = format!("{key_path}[{i}]");
+                check_no_cloud_secrets(&next_path, v)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The few keys whose shape this module does check, because a malformed value
+/// would decide where a page is sent. `analysisTargets` routes detection
+/// stages to the cloud, `cleanTarget` the cleaning and `denoiseTarget` the
+/// denoise, so each is refused whole rather than half-read later.
+fn check_known_shapes(patch: &Value) -> Result<(), String> {
+    use crate::inference::cloud_clean::{CleanTarget, CLEAN_TARGET_KEY};
+    use crate::inference::cloud_denoise::{DenoiseTarget, DENOISE_TARGET_KEY};
+    use crate::inference::run_analysis::{AnalysisTargets, ANALYSIS_TARGETS_KEY};
+    if let Some(targets) = patch.get(ANALYSIS_TARGETS_KEY) {
+        AnalysisTargets::from_value(Some(targets))?;
+    }
+    if let Some(target) = patch.get(CLEAN_TARGET_KEY) {
+        CleanTarget::from_value(Some(target))?;
+    }
+    if let Some(target) = patch.get(DENOISE_TARGET_KEY) {
+        DenoiseTarget::from_value(Some(target))?;
+    }
+    check_denoise_defaults(patch)
+}
+
+/// `denoisePreset` names one of the shipped presets, and
+/// `denoiseLocalSecondsPerPage` is what `benchmark_denoise_local` measured: a
+/// positive finite number. Null clears either.
+fn check_denoise_defaults(patch: &Value) -> Result<(), String> {
+    match patch.get(DENOISE_PRESET_KEY) {
+        None | Some(Value::Null) => {}
+        Some(Value::String(id)) if cleaner_core::cloud_denoise_wire::preset(id).is_some() => {}
+        Some(_) => return Err(format!("{DENOISE_PRESET_KEY} must name a denoise preset")),
+    }
+    match patch.get(DENOISE_SECONDS_KEY) {
+        None | Some(Value::Null) => Ok(()),
+        Some(value) if value.as_f64().is_some_and(|seconds| seconds.is_finite() && seconds > 0.0) => Ok(()),
+        Some(_) => Err(format!("{DENOISE_SECONDS_KEY} must be a positive number of seconds")),
+    }
+}
+
+pub const DENOISE_PRESET_KEY: &str = "denoisePreset";
+pub const DENOISE_SECONDS_KEY: &str = "denoiseLocalSecondsPerPage";
+
 /// Merge a patch and return the whole snapshot.
-pub fn write(app: &tauri::AppHandle, mut patch: Value) -> Result<Value, String> {
+pub fn write(app: &tauri::AppHandle, patch: Value) -> Result<Value, String> {
+    write_patch(&path(app)?, patch)
+}
+
+fn write_patch(path: &std::path::Path, mut patch: Value) -> Result<Value, String> {
+    // Reject any cloud secrets or cloud configuration attempting to be stored in settings.json
+    check_no_cloud_secrets("", &patch)?;
+    check_known_shapes(&patch)?;
+
     // Taken out of the patch before the merge so that no path through this
     // function can write it into the file by accident. See the module docs.
     let token = match &mut patch {
@@ -93,12 +183,14 @@ pub fn write(app: &tauri::AppHandle, mut patch: Value) -> Result<Value, String> 
         _ => None,
     };
 
-    let mut current = match read(app)? {
+    let _guard = SETTINGS_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
+    let mut current = match read_file(path)? {
         Value::Object(map) => map,
         // A settings file that is not an object is not repairable by merging
         // into it; start again rather than lose the patch.
         _ => Map::new(),
     };
+    let prior_backend = (current.get("accelerator").cloned(), current.get("modelAccelerators").cloned());
     if let Value::Object(patch) = patch {
         for (key, value) in patch {
             current.insert(key, value);
@@ -140,7 +232,15 @@ pub fn write(app: &tauri::AppHandle, mut patch: Value) -> Result<Value, String> 
     }
 
     let merged = Value::Object(current);
-    write_file(&path(app)?, &merged)?;
+    write_file(path, &merged)?;
+    if let Value::Object(map) = &merged {
+        if prior_backend != (map.get("accelerator").cloned(), map.get("modelAccelerators").cloned()) {
+            use cleaner_core::registry::Kind;
+            for kind in [Kind::TextDetector, Kind::BalloonDetector, Kind::ScriptGate, Kind::Ocr, Kind::Inpainter] {
+                cleaner_core::residency::evict(kind);
+            }
+        }
+    }
     match refusal {
         Some(err) => Err(format!("the credential store kept the token: {err}")),
         None => Ok(merged),
@@ -327,11 +427,13 @@ fn restrict(path: &std::path::Path) -> Result<(), String> {
 /// file that already has it, needs a way in that is not a patch. Nothing is
 /// written when the key was not there.
 pub fn forget(app: &tauri::AppHandle, key: &str) -> Result<(), String> {
-    let Value::Object(mut current) = read(app)? else { return Ok(()) };
+    let _guard = SETTINGS_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
+    let path = path(app)?;
+    let Value::Object(mut current) = read_file(&path)? else { return Ok(()) };
     if current.remove(key).is_none() {
         return Ok(());
     }
-    write_file(&path(app)?, &Value::Object(current))
+    write_file(&path, &Value::Object(current))
 }
 
 /// The snapshot the interface is allowed to see.
@@ -357,12 +459,81 @@ pub fn read_settings(app: tauri::AppHandle) -> Result<Value, String> {
 pub fn write_settings(app: tauri::AppHandle, patch: Value) -> Result<Value, String> {
     // The answer is a whole snapshot and travels the same direction a read
     // does, so it is filtered by the same rule.
-    write(&app, patch).map(without_token)
+    let turns_cloud = patch.get(crate::inference::CLOUD_ENGINES_KEY).is_some();
+    let snapshot = write(&app, patch)?;
+    // Turning cloud engines off withdraws every project's standing consent,
+    // so turning them back on asks again in each project.
+    if turns_cloud && !cloud_engines_allowed(&snapshot) {
+        match crate::library::Library::for_app(&app).map(|library| library.clear_cloud_consents(None)) {
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => eprintln!("cloud consents not cleared after turning cloud off: {err}"),
+            Err(err) => eprintln!("cloud consents not cleared after turning cloud off: {err}"),
+        }
+    }
+    Ok(without_token(snapshot))
+}
+
+/// Whether a settings snapshot has cloud engines on.
+fn cloud_engines_allowed(snapshot: &Value) -> bool {
+    snapshot.get(crate::inference::CLOUD_ENGINES_KEY).and_then(Value::as_str) == Some("allowed")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn only_an_explicit_allowed_keeps_cloud_engines_on() {
+        assert!(cloud_engines_allowed(&serde_json::json!({ "cloudEngines": "allowed" })));
+        assert!(!cloud_engines_allowed(&serde_json::json!({ "cloudEngines": "off" })));
+        assert!(!cloud_engines_allowed(&serde_json::json!({ "cloudEngines": null })));
+        assert!(!cloud_engines_allowed(&serde_json::json!({})));
+    }
+
+    #[test]
+    fn concurrent_patches_keep_both_fields() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc-settings-race-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("settings.json");
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for field in ["theme", "accelerator"] {
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                for n in 0..80 {
+                    barrier.wait();
+                    let patch = Value::Object(Map::from_iter([(field.to_owned(), Value::from(n))]));
+                    write_patch(&path, patch).unwrap();
+                    barrier.wait();
+                }
+            }));
+        }
+        let mut first_missing = None;
+        for n in 0..80 {
+            barrier.wait();
+            barrier.wait();
+            let snapshot = read_file(&path).unwrap();
+            if (snapshot.get("theme"), snapshot.get("accelerator"))
+                != (Some(&serde_json::json!(n)), Some(&serde_json::json!(n)))
+                && first_missing.is_none()
+            {
+                first_missing = Some((n, snapshot));
+            }
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(first_missing.is_none(), "concurrent writes lost a field: {first_missing:?}");
+    }
 
     /// The seam's rule about the token, enforced at
     /// the boundary rather than assumed: on a machine with no credential store
@@ -438,5 +609,131 @@ mod tests {
         assert_eq!(mode, 0o600);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn analysis_targets_are_validated_before_they_are_stored() {
+        let dir = std::env::temp_dir().join(format!("mc-settings-targets-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let stored = write_patch(&path, serde_json::json!({"analysisTargets": {"rtFull": "cloud", "samTs": "cloud"}}))
+            .unwrap();
+        assert_eq!(stored["analysisTargets"]["rtFull"], "cloud");
+        for bad in [serde_json::json!({"analysisTargets": {"samTs": "remote"}}),
+            serde_json::json!({"analysisTargets": {"ctd": "cloud"}}),
+            serde_json::json!({"analysisTargets": ["cloud"]}),
+            // Detection runs in one place: a split is refused, not stored.
+            serde_json::json!({"analysisTargets": {"rtFull": "local", "samTs": "cloud"}})] {
+            assert!(write_patch(&path, bad).is_err());
+        }
+        assert_eq!(read_file(&path).unwrap()["analysisTargets"]["rtFull"], "cloud", "a refused patch writes nothing");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clean_target_is_strict_and_defaults_local() {
+        use crate::inference::cloud_clean::CleanTarget;
+        assert_eq!(CleanTarget::from_value(None).unwrap(), CleanTarget::Local);
+        assert_eq!(CleanTarget::from_value(Some(&Value::Null)).unwrap(), CleanTarget::Local);
+        assert_eq!(CleanTarget::from_value(Some(&serde_json::json!("local"))).unwrap(), CleanTarget::Local);
+        assert_eq!(CleanTarget::from_value(Some(&serde_json::json!("cloud"))).unwrap(), CleanTarget::Cloud);
+        for bad in [serde_json::json!("Cloud"), serde_json::json!("gpu"), serde_json::json!(true),
+            serde_json::json!({"target": "cloud"})] {
+            assert!(CleanTarget::from_value(Some(&bad)).is_err(), "{bad}");
+        }
+
+        let dir = std::env::temp_dir().join(format!("mc-settings-clean-target-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        assert_eq!(write_patch(&path, serde_json::json!({"cleanTarget": "cloud"})).unwrap()["cleanTarget"], "cloud");
+        assert!(write_patch(&path, serde_json::json!({"cleanTarget": "remote"})).is_err());
+        assert_eq!(read_file(&path).unwrap()["cleanTarget"], "cloud", "a refused patch writes nothing");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn denoise_target_is_validated_on_write() {
+        let dir = std::env::temp_dir().join(format!("mc-settings-denoise-target-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        for value in ["local", "cloud", "off"] {
+            assert_eq!(write_patch(&path, serde_json::json!({"denoiseTarget": value})).unwrap()["denoiseTarget"], value);
+        }
+        for bad in [serde_json::json!("remote"), serde_json::json!("Cloud"), serde_json::json!(1)] {
+            assert!(write_patch(&path, serde_json::json!({"denoiseTarget": bad})).is_err());
+        }
+        assert_eq!(read_file(&path).unwrap()["denoiseTarget"], "off", "a refused patch writes nothing");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn denoise_preset_and_local_speed_are_validated_on_write() {
+        let dir = std::env::temp_dir().join(format!("mc-settings-denoise-preset-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        for preset in cleaner_core::cloud_denoise_wire::PRESETS {
+            assert_eq!(write_patch(&path, serde_json::json!({"denoisePreset": preset.id})).unwrap()["denoisePreset"], preset.id);
+        }
+        for bad in [serde_json::json!("custom"), serde_json::json!("Mangajanai-2x"), serde_json::json!(2)] {
+            assert!(write_patch(&path, serde_json::json!({"denoisePreset": bad})).is_err(), "{bad}");
+        }
+        assert_eq!(read_file(&path).unwrap()["denoisePreset"], "mangajanai-4x", "a refused patch writes nothing");
+        assert!(write_patch(&path, serde_json::json!({"denoisePreset": null})).is_ok());
+
+        assert_eq!(write_patch(&path, serde_json::json!({"denoiseLocalSecondsPerPage": 32.5})).unwrap()
+            ["denoiseLocalSecondsPerPage"], 32.5);
+        for bad in [serde_json::json!(0), serde_json::json!(-1.0), serde_json::json!("30"), serde_json::json!(true)] {
+            assert!(write_patch(&path, serde_json::json!({"denoiseLocalSecondsPerPage": bad})).is_err(), "{bad}");
+        }
+        assert!(write_patch(&path, serde_json::json!({"denoiseLocalSecondsPerPage": null})).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cloud_secret_keys_are_rejected_recursively() {
+        // Top-level cloud tokens rejected
+        assert!(check_no_cloud_secrets("", &serde_json::json!({ "beamToken": "secret-1" })).is_err());
+        assert!(check_no_cloud_secrets("", &serde_json::json!({ "modalToken": "secret-2" })).is_err());
+        assert!(check_no_cloud_secrets("", &serde_json::json!({ "apiKey": "secret-3" })).is_err());
+        assert!(check_no_cloud_secrets("", &serde_json::json!({ "cloudSecret": "secret-4" })).is_err());
+
+        // Nested cloud tokens rejected
+        assert!(check_no_cloud_secrets("", &serde_json::json!({
+            "cloud": {
+                "apiKey": "nested-secret"
+            }
+        })).is_err());
+
+        assert!(check_no_cloud_secrets("", &serde_json::json!({
+            "inference": {
+                "runtimeToken": "nested-token"
+            }
+        })).is_err());
+
+        assert!(check_no_cloud_secrets("", &serde_json::json!({
+            "nested": {
+                "deep": {
+                    "modal_token": "deep-secret"
+                }
+            }
+        })).is_err());
+
+        // Array-nested secrets rejected
+        assert!(check_no_cloud_secrets("", &serde_json::json!({
+            "items": [
+                { "cloudToken": "array-secret" }
+            ]
+        })).is_err());
+
+        // Only the exact top-level legacy key is intercepted by weights::store_token.
+        assert!(check_no_cloud_secrets("", &serde_json::json!({"nested": {"hfToken": "secret"}})).is_err());
+        assert!(check_no_cloud_secrets("", &serde_json::json!({"HFTOKEN": "secret"})).is_err());
+
+        // Valid settings accepted
+        assert!(check_no_cloud_secrets("", &serde_json::json!({
+            "theme": "dark",
+            "accelerator": "auto",
+            "runtimeFlavour": "cuda12",
+            "cloud": {
+                "allowed": true
+            },
+            "hfToken": "hf_legitimate_token"
+        })).is_ok());
     }
 }

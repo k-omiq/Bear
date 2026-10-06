@@ -32,7 +32,7 @@
 //! | `growth` | the seed mask, which is inside the box | `26k` |
 //! | the ring [`crate::fit::ring`] samples | the grown mask | `26k + 4` |
 //! | `isolation` ([`ISOLATION_RADIUS`]) | the grown mask | `26k + 5` |
-//! | rung 1's applied mask ([`EDIT_MARGIN`]) | the grown mask | `26k + 6` |
+//! | the edit margin ([`EDIT_MARGIN`]) | the grown mask | `26k + 5` |
 //! | `inpaint_radius` | the grown mask | `26k + 20` |
 //!
 //! So the halo this module computes is `max(20, 26k + 20)`, and the union
@@ -301,7 +301,7 @@ mod tests {
             // Each of the four, from the far side of the grown mask.
             assert!(halo(k) >= growth(k) + ANNULUS_WIDTH, "the ring the fit samples");
             assert!(halo(k) >= growth(k) + ISOLATION_RADIUS, "the isolation cut");
-            assert!(halo(k) >= growth(k) + EDIT_MARGIN, "rung 1's applied mask");
+            assert!(halo(k) >= growth(k) + EDIT_MARGIN, "the edit margin");
             assert!(halo(k) >= growth(k) + INPAINT_RADIUS_MAX, "the inpaint radius");
         }
         // And the reference padding is what governs where there is no growth at
@@ -385,7 +385,7 @@ mod tests {
         let small = Rect::new(2000, 2000, 30, 20);
 
         let none = decode_window(&strip, &joins, small, 1.0, EngineContext::None);
-        assert_eq!(none.rect.w, 30 + 2 * 46, "rungs 0 and 1 read the halo and no more");
+        assert_eq!(none.rect.w, 30 + 2 * 46, "rung 0 reads the halo and no more");
 
         let local = decode_window(&strip, &joins, small, 1.0, EngineContext::Local);
         assert_eq!((local.rect.w, local.rect.h), (ENGINE_INPUT, ENGINE_INPUT));

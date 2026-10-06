@@ -1,0 +1,130 @@
+{
+  "platform": "darwin",
+  "backends": [
+    {
+      "id": "torch-cpu",
+      "engine": "torch",
+      "device": "cpu",
+      "platforms": [
+        "darwin",
+        "linux",
+        "win32"
+      ],
+      "applicable_here": true,
+      "runtime_installed_here": true,
+      "device_available_here": true,
+      "reason": null,
+      "qualification": "Mac M5 page-07\u201309 parity measured"
+    },
+    {
+      "id": "torch-mps",
+      "engine": "torch",
+      "device": "mps",
+      "platforms": [
+        "darwin"
+      ],
+      "applicable_here": true,
+      "runtime_installed_here": true,
+      "device_available_here": true,
+      "reason": null,
+      "qualification": "Mac M5 page-07\u201309 parity measured"
+    },
+    {
+      "id": "torch-cuda",
+      "engine": "torch",
+      "device": "cuda",
+      "platforms": [
+        "linux",
+        "win32"
+      ],
+      "applicable_here": false,
+      "runtime_installed_here": false,
+      "device_available_here": false,
+      "reason": "unsupported on darwin",
+      "qualification": "not qualified for this mask graph"
+    },
+    {
+      "id": "ort-cpu",
+      "engine": "ort",
+      "device": "cpu",
+      "platforms": [
+        "darwin",
+        "linux",
+        "win32"
+      ],
+      "applicable_here": true,
+      "runtime_installed_here": true,
+      "device_available_here": true,
+      "reason": null,
+      "qualification": "Mac M5 page-07\u201309 parity measured"
+    },
+    {
+      "id": "ort-coreml",
+      "engine": "ort",
+      "device": "coreml",
+      "platforms": [
+        "darwin"
+      ],
+      "applicable_here": true,
+      "runtime_installed_here": true,
+      "device_available_here": null,
+      "reason": "EP is installed; device and graph execution are unverified",
+      "qualification": "not qualified for this mask graph"
+    },
+    {
+      "id": "ort-cuda",
+      "engine": "ort",
+      "device": "cuda",
+      "platforms": [
+        "linux",
+        "win32"
+      ],
+      "applicable_here": false,
+      "runtime_installed_here": false,
+      "device_available_here": false,
+      "reason": "unsupported on darwin",
+      "qualification": "not qualified for this mask graph"
+    },
+    {
+      "id": "ort-directml",
+      "engine": "ort",
+      "device": "directml",
+      "platforms": [
+        "win32"
+      ],
+      "applicable_here": false,
+      "runtime_installed_here": false,
+      "device_available_here": false,
+      "reason": "unsupported on darwin",
+      "qualification": "not qualified for this mask graph"
+    },
+    {
+      "id": "ort-webgpu",
+      "engine": "ort",
+      "device": "webgpu",
+      "platforms": [
+        "darwin",
+        "linux",
+        "win32"
+      ],
+      "applicable_here": true,
+      "runtime_installed_here": true,
+      "device_available_here": true,
+      "reason": null,
+      "qualification": "Mac M5 page-07\u201309 parity measured"
+    },
+    {
+      "id": "ort-migraphx",
+      "engine": "ort",
+      "device": "migraphx",
+      "platforms": [
+        "linux"
+      ],
+      "applicable_here": false,
+      "runtime_installed_here": false,
+      "device_available_here": false,
+      "reason": "unsupported on darwin",
+      "qualification": "not qualified for this mask graph"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "canonical_json": "[\"MC-REQ-V1\",\"1.0.0\",\"job-test-001\",\"attempt-test-001\",\"test-sdnq-v1\",\"1.0.0\",\"test-flux-schnell\",\"0123456789abcdef0123456789abcdef01234567\",false,16,16,42,4,350,\"2e0a9a2d5f28563463f634d5b81ec2ef90d91afe472a0c6e2c6ef4082f93ec5f\",\"3552bb8bf493ba63896f7abfb3ee3d899bf7312cd0b3d87691a639344b051238\"]",
+  "expected_sha256": "42174589391d9064c743c4450b520f403a3b91171382c4eadc9934285f21efc0",
+  "collision_case_a": {
+    "canonical_json": "[\"MC-REQ-V1\",\"1.0.0\",\"a|b\",\"c\",\"test-sdnq-v1\",\"1.0.0\",\"test-flux-schnell\",\"0123456789abcdef0123456789abcdef01234567\",false,16,16,42,4,350,\"2e0a9a2d5f28563463f634d5b81ec2ef90d91afe472a0c6e2c6ef4082f93ec5f\",\"3552bb8bf493ba63896f7abfb3ee3d899bf7312cd0b3d87691a639344b051238\"]",
+    "expected_sha256": "88647a2f2f1351530c85b444cedde98d01ca9e9548242bc1aa4ac84f5e74dd2c"
+  },
+  "collision_case_b": {
+    "canonical_json": "[\"MC-REQ-V1\",\"1.0.0\",\"a\",\"b|c\",\"test-sdnq-v1\",\"1.0.0\",\"test-flux-schnell\",\"0123456789abcdef0123456789abcdef01234567\",false,16,16,42,4,350,\"2e0a9a2d5f28563463f634d5b81ec2ef90d91afe472a0c6e2c6ef4082f93ec5f\",\"3552bb8bf493ba63896f7abfb3ee3d899bf7312cd0b3d87691a639344b051238\"]",
+    "expected_sha256": "6298eeb660626079ffba0d848451d9184ee0f416691e52a7972dc9b9bc9c007c"
+  }
+}

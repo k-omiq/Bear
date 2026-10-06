@@ -1,12 +1,15 @@
 name: Release
 
-# Builds installers for mac (apple silicon) and windows, then publishes them
+# Builds installers for macOS (Apple Silicon), Windows x64, and Linux x64,
+# then publishes them
 # plus latest.json to the R2 bucket behind https://cleaner.komiq.cc via
 # the publish worker at https://cleaner-publish.komiq.cc.
 # Installed apps poll that URL and offer the update in-app.
 #
 # Trigger: push a tag like v0.1.0 (tag message becomes the release notes),
-# or run manually with workflow_dispatch and type the notes. Prerelease tags
+# or run manually with workflow_dispatch and type the notes. Manual runs can
+# set validate_only to build and inspect artifacts without publishing them.
+# Prerelease tags
 # such as v1.0.0-beta.1 are ordinary tags here; scripts/ship.sh knows how to
 # order them.
 #
@@ -23,6 +26,19 @@ name: Release
 #   WINDOWS_CERTIFICATE          - the .pfx, base64 encoded:
 #                                  certutil -encode certificate.pfx cert.txt
 #   WINDOWS_CERTIFICATE_PASSWORD - the .pfx export password
+#
+# Optional repo secrets, for a stable macOS code signature. Set all THREE or
+# NONE. While they are unset the app is ad-hoc signed, which names each build
+# by its own code hash: the login keychain then treats every update as a
+# stranger to the cloud token the previous build saved, and macOS asks for the
+# login password the first time the updated app uses it. Any certificate that
+# stays the same from release to release fixes that, including a self-signed
+# "Code Signing" certificate made in Keychain Access; a Developer ID
+# certificate also clears Gatekeeper. Tauri reads these three names itself.
+#   APPLE_CERTIFICATE            - the .p12, base64 encoded: base64 -i cert.p12
+#   APPLE_CERTIFICATE_PASSWORD   - the .p12 export password
+#   APPLE_SIGNING_IDENTITY       - the certificate's common name, e.g.
+#                                  "Developer ID Application: Name (TEAMID)"
 #
 # Optional repo *variable* (Settings > Secrets and variables > Actions >
 # Variables), not a secret, because a timestamp server URL is public:
@@ -92,6 +108,11 @@ on:
         description: "Release notes shown in the in-app update dialog"
         required: false
         default: ""
+      validate_only:
+        description: "Build and inspect installers without publishing to R2"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -112,6 +133,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: windows-x86_64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -119,6 +143,14 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Linux desktop build dependencies
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev build-essential curl wget file patchelf
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -129,6 +161,27 @@ jobs:
           workspaces: src-tauri
           key: ${{ matrix.target }}
       - run: npm ci
+
+      # Both provider SDKs and PyInstaller, every package pinned and hash-checked.
+      - name: Install pinned cloud helper build dependencies
+        shell: bash
+        run: python -m pip install --require-hashes -r provisioner/requirements.lock
+
+      # Freezes the helper, smoke tests it offline (self check, missing and
+      # unreachable credentials) and adds it to bundle.externalBin. The helper
+      # carries the Modal SDK, so a new computer needs no Python or Modal of its
+      # own. A validation run also signs in to the real Modal API with an
+      # unknown token (--online) on each OS; a tagged release does not, so a
+      # Modal outage cannot block it.
+      - name: Freeze and smoke-test cloud setup helper
+        shell: bash
+        run: python .github/scripts/build-cloud-provisioner.py '${{ matrix.target }}' ${{ inputs.validate_only == true && '--online' || '' }}
+
+      - name: Bundle managed Python installer for FLUX
+        shell: bash
+        run: |
+          python -m pip install uv==0.12.19
+          python .github/scripts/stage-flux-python.py '${{ matrix.target }}'
 
       # The ONNX Runtime the application downloads on first launch imports
       # MSVCP140.dll, MSVCP140_1.dll, VCRUNTIME140.dll and VCRUNTIME140_1.dll
@@ -203,11 +256,187 @@ jobs:
           $config | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $configPath -Encoding utf8
           Write-Host "Signing with certificate $($cert.Thumbprint), timestamped by $timestampUrl"
 
+      # The macOS certificate is handed to this step only, under names Tauri
+      # does not read, and exported under the names it does read only when it
+      # is present: Tauri treats a set-but-empty APPLE_CERTIFICATE as a
+      # certificate to import and fails the build.
       - name: Build app
-        run: npx tauri build --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            if [ -z "$MC_APPLE_CERTIFICATE" ] && [ -z "$MC_APPLE_CERTIFICATE_PASSWORD" ] && [ -z "$MC_APPLE_SIGNING_IDENTITY" ]; then
+              echo '::warning::No APPLE_CERTIFICATE secret. The macOS app will be ad-hoc signed, so after each update macOS asks for the login password before the app can use its saved cloud token. Set APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY to keep one signature across releases.'
+            elif [ -z "$MC_APPLE_CERTIFICATE" ] || [ -z "$MC_APPLE_CERTIFICATE_PASSWORD" ] || [ -z "$MC_APPLE_SIGNING_IDENTITY" ]; then
+              echo 'Set APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY together, or leave all three unset.' >&2
+              exit 1
+            else
+              export APPLE_CERTIFICATE="$MC_APPLE_CERTIFICATE"
+              export APPLE_CERTIFICATE_PASSWORD="$MC_APPLE_CERTIFICATE_PASSWORD"
+              export APPLE_SIGNING_IDENTITY="$MC_APPLE_SIGNING_IDENTITY"
+              echo "Signing with identity: $APPLE_SIGNING_IDENTITY"
+            fi
+          fi
+          npx tauri build --target ${{ matrix.target }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          MC_APPLE_CERTIFICATE: ${{ startsWith(matrix.platform, 'darwin-') && secrets.APPLE_CERTIFICATE || '' }}
+          MC_APPLE_CERTIFICATE_PASSWORD: ${{ startsWith(matrix.platform, 'darwin-') && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          MC_APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'darwin-') && secrets.APPLE_SIGNING_IDENTITY || '' }}
+      - name: Verify cloud helper inside macOS app
+        if: startsWith(matrix.platform, 'darwin-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          HELPER="target/${{ matrix.target }}/release/bundle/macos/Manga Cleaner.app/Contents/MacOS/manga-cleaner-provisioner"
+          test -x "$HELPER"
+          "$HELPER" --self-check | python3 -c 'import json,sys; assert json.load(sys.stdin)["ok"] is True'
+          test -x "target/${{ matrix.target }}/release/bundle/macos/Manga Cleaner.app/Contents/MacOS/manga-cleaner-uv"
+      - name: Verify cloud helper inside Windows installer
+        if: startsWith(matrix.platform, 'windows-')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem "target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer was not produced' }
+          $sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue).Source
+          if (-not $sevenZip) { $sevenZip = Join-Path $env:ProgramFiles '7-Zip/7z.exe' }
+          if (-not (Test-Path $sevenZip)) { throw '7-Zip is required to inspect the NSIS installer' }
+          $listing = & $sevenZip l -slt $installer.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the NSIS installer' }
+          foreach ($name in @('manga-cleaner-provisioner.exe', 'manga-cleaner-uv.exe', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'bootstrap.py', 'export_mask.py', 'environment.txt')) {
+            if (-not ($listing | Select-String -SimpleMatch -Quiet $name)) {
+              throw "The Windows installer is missing $name"
+            }
+          }
+          if (-not (Test-Path "$($installer.FullName).sig")) { throw 'NSIS updater signature is missing' }
+      - name: Smoke-test Windows install and reinstall
+        if: startsWith(matrix.platform, 'windows-') && inputs.validate_only == true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem "target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw 'The NSIS installer is missing' }
+          $destination = Join-Path $env:RUNNER_TEMP 'Manga Café smoke'
+          function Invoke-Nsis([string] $filePath, [string] $arguments) {
+            $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $filePath
+            $startInfo.Arguments = $arguments
+            $startInfo.UseShellExecute = $false
+            $process = [System.Diagnostics.Process]::Start($startInfo)
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) { throw "NSIS exited $($process.ExitCode): $filePath" }
+          }
+          function Install-App {
+            Invoke-Nsis $installer.FullName "/S /D=$destination"
+            $app = Get-ChildItem $destination -File -Filter '*.exe' | Where-Object { $_.Name -notmatch 'provisioner|uv|uninstall' } | Select-Object -First 1
+            if (-not $app) { throw 'The installed app executable is missing' }
+            foreach ($name in @('manga-cleaner-provisioner.exe', 'manga-cleaner-uv.exe')) {
+              if (-not (Test-Path (Join-Path $destination $name))) { throw "The installed app is missing $name" }
+            }
+            return $app.FullName
+          }
+          function Uninstall-App([string] $app) {
+            $uninstaller = Get-ChildItem $destination -File -Filter '*uninstall*.exe' | Select-Object -First 1
+            if (-not $uninstaller) { throw 'The NSIS uninstaller is missing' }
+            Invoke-Nsis $uninstaller.FullName '/S'
+            for ($attempt = 0; $attempt -lt 30 -and (Test-Path $app); $attempt++) { Start-Sleep -Seconds 1 }
+            if (Test-Path $app) { throw 'The app executable remains after uninstall' }
+          }
+          $app = Install-App
+          $oldPath = $env:PATH
+          try {
+            $env:PATH = "$env:WINDIR\System32;$env:WINDIR"
+            $selfCheck = & (Join-Path $destination 'manga-cleaner-provisioner.exe') '--self-check' | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or -not $selfCheck.ok) { throw 'Installed provisioner self-check failed without developer tools on PATH' }
+            & (Join-Path $destination 'manga-cleaner-uv.exe') '--version'
+            if ($LASTEXITCODE -ne 0) { throw 'Installed managed Python helper did not run' }
+          } finally { $env:PATH = $oldPath }
+          Uninstall-App $app
+          $app = Install-App
+          Uninstall-App $app
+      # The only step that opens the window on Windows. The app checks itself
+      # (src-tauri/src/smoke.rs): the page mounts, a command answers, the tile
+      # scheme answers a fetch, and the ONNX Runtime downloads and loads. It
+      # writes a report and exits non-zero if any of that failed. Runs on every
+      # build, tagged releases included. The install path is not ASCII on
+      # purpose.
+      - name: Launch smoke (Windows)
+        if: startsWith(matrix.platform, 'windows-')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem "target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw 'The NSIS installer is missing' }
+          $destination = Join-Path $env:RUNNER_TEMP '漫画 launch'
+          $out = Join-Path $env:RUNNER_TEMP 'launch-smoke'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $setup = [System.Diagnostics.Process]::Start([System.Diagnostics.ProcessStartInfo]@{
+            FileName = $installer.FullName; Arguments = "/S /D=$destination"; UseShellExecute = $false })
+          $setup.WaitForExit()
+          if ($setup.ExitCode -ne 0) { throw "NSIS exited $($setup.ExitCode)" }
+          $exe = Get-ChildItem $destination -File -Filter '*.exe' | Where-Object { $_.Name -notmatch 'provisioner|uv|uninstall' } | Select-Object -First 1
+          if (-not $exe) { throw 'The installed app executable is missing' }
+          $report = Join-Path $out 'report.json'
+          $env:MANGA_CLEANER_SMOKE_REPORT = $report
+          $env:MANGA_CLEANER_SMOKE_RUNTIME = '1'
+          $app = [System.Diagnostics.Process]::Start([System.Diagnostics.ProcessStartInfo]@{
+            FileName = $exe.FullName; UseShellExecute = $false })
+          # The app holds its window for five seconds after writing the report.
+          $deadline = (Get-Date).AddMinutes(20)
+          while (-not (Test-Path $report) -and -not $app.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+          if (Test-Path $report) {
+            try {
+              Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+              $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bitmap = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
+              [System.Drawing.Graphics]::FromImage($bitmap).CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+              $bitmap.Save((Join-Path $out 'screenshot.png'))
+            } catch { Write-Warning "screenshot failed: $_" }
+          }
+          if (-not $app.WaitForExit(120000)) { $app.Kill(); throw 'The app did not exit after its check' }
+          Write-Host "app exit code: $($app.ExitCode)"
+          if (-not (Test-Path $report)) { throw 'The app wrote no report' }
+          Get-Content $report
+          if ($app.ExitCode -ne 0) { throw "The launch check failed with exit code $($app.ExitCode)" }
+      - uses: actions/upload-artifact@v4
+        if: always() && startsWith(matrix.platform, 'windows-')
+        with:
+          name: launch-smoke-windows
+          path: ${{ runner.temp }}/launch-smoke
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Verify Linux packages and bundled setup helpers
+        if: startsWith(matrix.platform, 'linux-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          HELPER="src-tauri/binaries/manga-cleaner-provisioner-${{ matrix.target }}"
+          test -x "$HELPER"
+          "$HELPER" --self-check | python3 -c 'import json,sys; assert json.load(sys.stdin)["ok"] is True'
+          DEB=$(find "target/${{ matrix.target }}/release/bundle/deb" -maxdepth 1 -name '*.deb' -print -quit)
+          test -n "$DEB"
+          APPIMAGE=$(find "target/${{ matrix.target }}/release/bundle/appimage" -maxdepth 1 -name '*.AppImage' -print -quit)
+          test -n "$APPIMAGE"
+          test -s "$APPIMAGE.sig"
+          APPIMAGE=$(realpath "$APPIMAGE")
+          VERIFY_DIR=$(mktemp -d)
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+          dpkg-deb -x "$DEB" "$VERIFY_DIR/deb"
+          (cd "$VERIFY_DIR" && "$APPIMAGE" --appimage-extract >/dev/null)
+          for package in "$VERIFY_DIR/deb" "$VERIFY_DIR/squashfs-root"; do
+            for helper in manga-cleaner-provisioner manga-cleaner-uv; do
+              test -n "$(find "$package" -type f -name "$helper" -perm /111 -print -quit)" || {
+                echo "$package: $helper missing or not executable" >&2; exit 1;
+              }
+            done
+            for resource in 'sidecar/bootstrap.py' 'sidecar/pyproject.toml' 'sam-bootstrap/bootstrap.py' 'sam-bootstrap/export_mask.py' 'sam-bootstrap/environment.txt'; do
+              test -n "$(find "$package" -type f -path "*/$resource" -print -quit)" || {
+                echo "$package: $resource missing" >&2; exit 1;
+              }
+            done
+          done
+          dpkg-deb --field "$DEB" Depends
       - name: Collect updater artifacts
         shell: bash
         # Renamed to MangaCleaner_<version>_<platform>.<ext>: the platform tag keeps
@@ -243,6 +472,13 @@ jobs:
               cp "$SRC" "$OUT/$PREFIX-setup.exe"
               cp "$SRC.sig" "$OUT/$PREFIX-setup.exe.sig"
               ;;
+            linux-*)
+              SRC=$(ls "$BUNDLE"/appimage/*.AppImage)
+              cp "$SRC" "$OUT/$PREFIX.AppImage"
+              cp "$SRC.sig" "$OUT/$PREFIX.AppImage.sig"
+              DEB=$(ls "$BUNDLE"/deb/*.deb)
+              cp "$DEB" "$OUT/$PREFIX.deb"
+              ;;
           esac
           ls -la "$OUT"
       - uses: actions/upload-artifact@v4
@@ -252,9 +488,79 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # Opens the built Linux packages on clean distribution images, which is the
+  # closest CI gets to a new computer: the .deb must pull its own dependencies,
+  # and the AppImage must run with what a desktop already has. The app checks
+  # itself (src-tauri/src/smoke.rs) and exits non-zero on a failure. The .deb
+  # legs gate publishing. The AppImage legs report without gating until they
+  # have passed once, because a bare container lacks libraries a desktop has
+  # and the list is not settled. They run through APPIMAGE_EXTRACT_AND_RUN,
+  # because Ubuntu 24.04 and Arch ship no libfuse2 (docs/windows-linux-audit-2026-09-29.md).
+  smoke-linux:
+    name: Launch smoke (${{ matrix.id }})
+    needs: build
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    timeout-minutes: 30
+    continue-on-error: ${{ matrix.package == 'appimage' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: ubuntu-22.04-deb
+            image: ubuntu:22.04
+            package: deb
+            setup: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb dbus imagemagick ca-certificates fonts-dejavu-core ./pkg/*.deb
+          - id: ubuntu-24.04-deb
+            image: ubuntu:24.04
+            package: deb
+            setup: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb dbus imagemagick ca-certificates fonts-dejavu-core ./pkg/*.deb
+          - id: ubuntu-24.04-appimage
+            image: ubuntu:24.04
+            package: appimage
+            setup: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb dbus imagemagick ca-certificates fonts-dejavu-core libegl1 libgl1 libgbm1
+          - id: fedora-40-appimage
+            image: fedora:40
+            package: appimage
+            setup: dnf -y install xorg-x11-server-Xvfb dbus-daemon ImageMagick ca-certificates dejavu-sans-fonts mesa-libEGL mesa-libGL mesa-libgbm findutils
+          - id: arch-appimage
+            image: archlinux:latest
+            package: appimage
+            setup: pacman -Syu --noconfirm --needed xorg-server-xvfb dbus imagemagick ca-certificates ttf-dejavu mesa
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64
+          path: pkg
+      - name: Install the package and a virtual display
+        shell: bash
+        run: ${{ matrix.setup }}
+      - name: Launch smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.package }}" = deb ]; then
+            app=(manga-cleaner)
+          else
+            image=$(realpath "$(find pkg -maxdepth 1 -name '*.AppImage' -print -quit)")
+            chmod +x "$image"
+            export APPIMAGE_EXTRACT_AND_RUN=1
+            app=("$image")
+          fi
+          bash .github/scripts/launch-smoke-linux.sh launch-smoke "${app[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: launch-smoke-${{ matrix.id }}
+          path: launch-smoke
+          if-no-files-found: warn
+          retention-days: 7
+
   publish:
     name: Publish to R2
-    needs: build
+    needs: [build, smoke-linux]
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -316,8 +622,9 @@ jobs:
                   "url": f"{base}/{remote}",
               }
               uploads.append((artifact, remote))
-              for extra in glob.glob(pdir + "/*.dmg"):
-                  uploads.append((extra, f"releases/v{version}/{os.path.basename(extra)}"))
+              for extension in ("dmg", "deb"):
+                  for extra in glob.glob(pdir + f"/*.{extension}"):
+                      uploads.append((extra, f"releases/v{version}/{os.path.basename(extra)}"))
           out = {
               "version": version,
               "notes": os.environ.get("RELEASE_NOTES", "").strip(),

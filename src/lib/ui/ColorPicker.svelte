@@ -14,6 +14,7 @@
   } from './color.js'
   import Icon from '../icons/Icon.svelte'
   import { t } from '../i18n/index.js'
+  import { screenColorPicker } from '../api/screencolor.js'
 
   /**
    * Custom Svelte Color Picker.
@@ -23,7 +24,7 @@
    * - Popover panel:
    *   - Large saturation/brightness square with draggable target and keyboard support.
    *   - Narrow vertical rainbow hue rail with draggable thumb and keyboard support.
-   *   - Preview swatch and optional Eyedropper button.
+   *   - Preview swatch and, where the platform can sample the screen, an Eyedropper button.
    *   - Numeric H / S / B inputs.
    *   - Numeric R / G / B inputs.
    *   - Editable HEX input with validation and normalization to lowercase #rrggbb.
@@ -32,6 +33,7 @@
    *   value?: string,
    *   label?: string,
    *   align?: 'start' | 'end',
+   *   unclipped?: boolean,
    *   onchange: (hex: string) => void,
    * }}
    */
@@ -39,6 +41,7 @@
     value = '#ffffff',
     label = t('tools.param.color'),
     align = 'start',
+    unclipped = false,
     onchange,
   } = $props()
 
@@ -47,10 +50,27 @@
   /** @type {HTMLElement | undefined} */
   let panel = $state()
   let flippedY = $state(false)
+  let floating = $state({ x: 0, y: 0 })
 
   const panelId = $props.id()
-  const overlay = anchoredOverlay(() => root)
+  const overlay = anchoredOverlay(() => root, () => unclipped ? panel : undefined)
   const open = $derived(overlay.open)
+
+  /** @param {HTMLElement} node @param {boolean} floating */
+  function portal(node, floating) {
+    const home = document.createComment('picker home')
+    node.before(home)
+    /** @param {boolean} detached */
+    const move = (detached) => {
+      if (detached) document.body.appendChild(node)
+      else home.after(node)
+    }
+    move(floating)
+    return {
+      update: move,
+      destroy: () => { node.remove(); home.remove() },
+    }
+  }
 
   // Internal state for HSB and RGB
   let h = $state(0)
@@ -75,6 +95,30 @@
       }
       s = hsb.s
       b = hsb.b
+    }
+  })
+
+  $effect(() => {
+    if (!open || !unclipped || !root || !panel) return
+    const position = () => {
+      const trigger = root.getBoundingClientRect()
+      const width = panel.offsetWidth || 260
+      const height = panel.offsetHeight || 360
+      const vw = globalThis.innerWidth || width + 16
+      const vh = globalThis.innerHeight || height + 16
+      const below = trigger.bottom + 8
+      const above = trigger.top - height - 8
+      floating = {
+        x: Math.max(8, Math.min(vw - width - 8, align === 'end' ? trigger.right - width : trigger.left)),
+        y: below + height <= vh - 8 ? below : above >= 8 ? above : Math.max(8, vh - height - 8),
+      }
+    }
+    position()
+    globalThis.addEventListener?.('resize', position)
+    globalThis.addEventListener?.('scroll', position, true)
+    return () => {
+      globalThis.removeEventListener?.('resize', position)
+      globalThis.removeEventListener?.('scroll', position, true)
     }
   })
 
@@ -310,48 +354,36 @@
     }
   }
 
-  const hasEyeDropper = typeof (/** @type {any} */ (globalThis).EyeDropper) === 'function'
+  const pickScreenColor = screenColorPicker()
 
   async function pickFromScreen() {
     try {
-      const picked = await new (/** @type {any} */ (globalThis).EyeDropper)().open()
-      const hex = hexOnCommit(String(picked?.sRGBHex ?? ''))
+      const hex = await pickScreenColor?.()
       if (hex) {
         commitHexValue(hex)
       }
     } catch {
-      /* user pressed Escape */
+      /* the sampler failed to open; the value is unchanged */
     }
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-  class="anchor"
-  bind:this={root}
-  onkeydown={(e) => overlay.dismissKey(e)}
-  onfocusout={(e) => overlay.focusOut(e)}
->
-  <button
-    type="button"
-    class="swatch-trigger"
-    style:background-color={currentHex}
-    aria-label={label}
-    aria-haspopup="dialog"
-    aria-expanded={open}
-    aria-controls={open ? panelId : undefined}
-    onclick={overlay.toggle}
-  ></button>
-
-  {#if open}
+{#snippet pickerPanel()}
     <div
       bind:this={panel}
+      use:portal={unclipped}
       id={panelId}
       class="picker-panel"
       class:end={align === 'end'}
       class:flipped-y={flippedY}
+      class:unclipped
       role="dialog"
+      tabindex="-1"
       aria-label={label}
+      style:left={unclipped ? `${floating.x}px` : undefined}
+      style:top={unclipped ? `${floating.y}px` : undefined}
+      onkeydown={(event) => { if (unclipped) overlay.dismissKey(event) }}
+      onfocusout={(event) => { if (unclipped) overlay.focusOut(event) }}
     >
       <!-- Visual Picker Area: SB Square + Hue Rail -->
       <div class="visual-row">
@@ -404,7 +436,7 @@
       <!-- Preview + Eyedropper + HEX Row -->
       <div class="preview-hex-row">
         <div class="preview-swatch" style:background-color={currentHex}></div>
-        {#if hasEyeDropper}
+        {#if pickScreenColor}
           <button
             type="button"
             class="eyedropper-btn"
@@ -516,7 +548,27 @@
         </div>
       </div>
     </div>
-  {/if}
+{/snippet}
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="anchor"
+  bind:this={root}
+  onkeydown={(e) => overlay.dismissKey(e)}
+  onfocusout={(e) => overlay.focusOut(e)}
+>
+  <button
+    type="button"
+    class="swatch-trigger"
+    style:background-color={currentHex}
+    aria-label={label}
+    aria-haspopup="dialog"
+    aria-expanded={open}
+    aria-controls={open ? panelId : undefined}
+    onclick={overlay.toggle}
+  ></button>
+
+  {#if open}{@render pickerPanel()}{/if}
 </div>
 
 <style>
@@ -573,6 +625,13 @@
   .picker-panel.flipped-y {
     top: auto;
     bottom: calc(100% + var(--s-2));
+  }
+  .picker-panel.unclipped {
+    position: fixed;
+    right: auto;
+    bottom: auto;
+    max-height: calc(100vh - 16px);
+    overflow: auto;
   }
 
   .visual-row {

@@ -1,4 +1,4 @@
-"""SDNQ / torch + diffusers backend for FLUX.2 Klein edit inpainting.
+"""SDNQ / torch + diffusers backend for FLUX.2 Klein inpainting.
 
 **Why this file exists.** `backend/mflux.py` is MLX, and MLX is Apple Silicon.
 Rung 3a reopened for the machine with a discrete GPU, and that machine cannot
@@ -62,7 +62,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..memory import get_peak_phys_footprint_bytes, get_peak_rss_bytes
 from ..protocol import Basis, ErrorKind, ImageBuffer, ModelMetadata, SidecarError
-from .base import BackendBase
+from .base import BackendBase, hole_for
 
 #: The weights root a model id is resolved inside when nothing points elsewhere.
 #:
@@ -458,7 +458,7 @@ class SdnqBackend(BackendBase):
             # quantization loader, so it must happen before `from_pretrained`
             # reads a `quantization_config.json` naming it.
             import sdnq  # noqa: F401
-            from diffusers import DiffusionPipeline
+            from diffusers import Flux2KleinInpaintPipeline
         except ImportError as exc:
             raise SidecarError(
                 500,
@@ -516,7 +516,9 @@ class SdnqBackend(BackendBase):
             )
 
         try:
-            pipeline = DiffusionPipeline.from_pretrained(
+            # The snapshot names Flux2KleinPipeline; the inpaint pipeline takes the
+            # same modules and reads is_distilled from the same model_index.json.
+            pipeline = Flux2KleinInpaintPipeline.from_pretrained(
                 self.weights_dir,
                 torch_dtype=dtype,
                 local_files_only=True,
@@ -626,12 +628,12 @@ class SdnqBackend(BackendBase):
         guidance: float,
         deadline_ms: int,
     ) -> Tuple[ImageBuffer, int]:
-        """Edit one crop and return it at exactly the geometry that was asked.
+        """Inpaint the hint's lettering in one crop, at exactly the geometry asked.
 
-        `hint` is advisory and is not used: rung 3a's models take no mask channel,
-        and the composite is the parent's
-        ([`cleaner_core::engines::flux`]) - a sidecar that composited against
-        the hint would return the page under the text and defeat the rung.
+        The hole is :func:`hole_for`: the latents outside it are held to the
+        crop's own at every step, so the model redraws only the lettering. The
+        model takes no mask channel, and the composite is still the parent's
+        ([`cleaner_core::engines::flux`]).
         """
         if self.pipeline is None:
             raise SidecarError(412, ErrorKind.NOT_OPEN, "Model has not been opened.")
@@ -647,6 +649,7 @@ class SdnqBackend(BackendBase):
             if (work_w, work_h) == (pil_crop.width, pil_crop.height)
             else pil_crop.resize((work_w, work_h), PILImage.Resampling.BICUBIC)
         )
+        hole = hole_for(hint, image.width, image.height, work_w, work_h)
 
         # The generator is always on the host. `randn_tensor` accepts a CPU
         # generator for a non-CPU device and seeds identically either way, so
@@ -666,6 +669,10 @@ class SdnqBackend(BackendBase):
                 "max_area": work_w * work_h,
             }
         )
+        # Never filtered: a pipeline without them would redraw the whole crop. The
+        # crop is also the reference image, so the model sees the page around the
+        # hole (deploy/cloud/common/flux.py makes the same call).
+        kwargs.update(mask_image=hole, image_reference=work_crop, strength=1.0)
 
         start_time = time.time()
         try:

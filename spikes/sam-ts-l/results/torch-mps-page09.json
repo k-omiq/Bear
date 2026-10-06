@@ -1,0 +1,102 @@
+{
+  "description": "Pinned full-checkpoint PyTorch forward on saved real comic input",
+  "environment": {
+    "device_requested": "mps",
+    "machine": "arm64",
+    "mps_available": true,
+    "mps_fallback_enabled": false,
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]",
+    "torch": "2.13.0",
+    "torch_threads": 4
+  },
+  "input": {
+    "original_wh": [
+      690,
+      1600
+    ],
+    "page_dir": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/apocalypse-109/page-09",
+    "prepared_sha256": "c16041cb1c602185e75b9aec64dad1266505c9531a88cef6ab2296b7b0bfc9a2",
+    "reference_logits_sha256": "7b9b732eb5d9bc9b379940420db98b782e32b6aa9ddb4e9631e26a3d1bbbf50b",
+    "resized_wh": [
+      442,
+      1024
+    ],
+    "source": {
+      "file": "/Users/caved/Downloads/apocalypse/109/09.jpg",
+      "original_wh": [
+        690,
+        1600
+      ],
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "sha256": "cdb3f781e7b07599da89bc5fae75713332b1f9d5490290d68426583c77c52a8a"
+    }
+  },
+  "memory": {
+    "mps_after_cpu_model_load": {
+      "current_allocated_memory_bytes": 0,
+      "driver_allocated_memory_bytes": 458752,
+      "recommended_max_memory_bytes": 26800603136
+    },
+    "mps_after_device_transfer": {
+      "current_allocated_memory_bytes": 1368329472,
+      "driver_allocated_memory_bytes": 2298953728,
+      "recommended_max_memory_bytes": 26800603136
+    },
+    "mps_after_inference": {
+      "current_allocated_memory_bytes": 1368329472,
+      "driver_allocated_memory_bytes": 5534302208,
+      "recommended_max_memory_bytes": 26800603136
+    },
+    "mps_sampled_max_bytes": {
+      "current_allocated_memory_bytes": 2568490240,
+      "driver_allocated_memory_bytes": 5534334976,
+      "recommended_max_memory_bytes": 26800603136
+    },
+    "mps_samples": 331,
+    "notes": "RSS is process high-water; MPS current/driver values are samples, including a 20 ms poll during execution, not guaranteed exact peaks. On Apple silicon, GPU allocation draws from unified memory and is not additive to RSS.",
+    "peak_process_rss_bytes": 2956558336,
+    "process_rss_high_water_after_device_transfer_bytes": 2956558336
+  },
+  "model": {
+    "checkpoint_sha256": "bcd9525291677f467f0603509a0ca3df35711b4e3417cefce8da6bfc97164f45",
+    "source": {
+      "commit": "69009434d4dba5541f228d8f5acb0754c333d417",
+      "root": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/Hi-SAM",
+      "tracked_tree_clean": true
+    }
+  },
+  "parity": {
+    "changed_canvas_signs": 0,
+    "changed_restored_pixels": 0,
+    "logits": {
+      "changed_elements": 1034477,
+      "max_abs": 0.00018978118896484375,
+      "mean_abs": 1.5125195370335742e-05,
+      "rmse": 1.8855530857349346e-05,
+      "shape": [
+        1,
+        1,
+        1024,
+        1024
+      ]
+    },
+    "output_mask_pixels": 29479,
+    "reference_mask_pixels": 29479
+  },
+  "timing_ms": {
+    "model_and_input_transfer_to_device": 231.61424999125302,
+    "model_construct_and_checkpoint_load_on_cpu": 967.3956669867039,
+    "timed_inference": [
+      2586.9377919880208,
+      2649.3414170108736
+    ],
+    "timed_inference_median": 2618.139604499447,
+    "warmup_inference": [
+      2878.20358297904
+    ]
+  }
+}

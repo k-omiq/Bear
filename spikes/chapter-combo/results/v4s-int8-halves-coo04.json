@@ -1,0 +1,1349 @@
+{
+  "meaning": "candidate-region agreement with SAM pixel mask; none of the three is human ground truth",
+  "rt_model_id": "detector-v4-s-int8",
+  "rt_model_sha256": "5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79",
+  "rt_layout": "halves",
+  "coo_checkpoint_sha256": "49a448ec19e4e3894b726553fe6f47916827b10d642109aa5f41b96aeeb88e30",
+  "coo_min_score": 0.4,
+  "rt_result_sha256": "06b398b3d1ed5f634e8db1b35b1b65fe3d2229315b1d099790092adc3fddf42f",
+  "coo_result_sha256": "d15f266718c8fb3f9a91bd8c857ccdd96b6b194c7bb977ab5095ae0246f38aa1",
+  "totals": {
+    "rt_text_boxes": 46,
+    "coo_proposals": 58,
+    "sam_pixels": 1124691,
+    "sam_pixels_in_rt_text_boxes": 216458,
+    "sam_pixels_in_coo_polygons": 405403,
+    "sam_pixels_in_either_candidate": 621861,
+    "coo_added_sam_pixels_outside_rt": 405403,
+    "coo_proposals_with_any_sam_pixel": 57,
+    "pages": 45,
+    "pages_with_coo_added_sam_pixels": 31
+  },
+  "pages": [
+    {
+      "page": "01",
+      "rt_text_boxes": 3,
+      "coo_proposals": 1,
+      "sam_pixels": 56791,
+      "sam_pixels_in_rt_text_boxes": 51230,
+      "sam_pixels_in_coo_polygons": 5500,
+      "sam_pixels_in_either_candidate": 56730,
+      "coo_added_sam_pixels_outside_rt": 5500,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.6795574175793714,
+          "bounding_box": [
+            119.79166412353516,
+            1108.355712890625,
+            305.70831298828125,
+            1323.510009765625
+          ],
+          "sam_pixels_in_polygon": 5500,
+          "sam_pixels_in_polygon_outside_rt_text": 5500,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "02",
+      "rt_text_boxes": 0,
+      "coo_proposals": 2,
+      "sam_pixels": 35136,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 33370,
+      "sam_pixels_in_either_candidate": 33370,
+      "coo_added_sam_pixels_outside_rt": 33370,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 7,
+          "score": 0.4491903416825139,
+          "bounding_box": [
+            24.4375,
+            817.490234375,
+            449.45831298828125,
+            1222.40185546875
+          ],
+          "sam_pixels_in_polygon": 24866,
+          "sam_pixels_in_polygon_outside_rt_text": 24866,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 10,
+          "score": 0.607611873345757,
+          "bounding_box": [
+            266.4166564941406,
+            113.56693267822266,
+            444.1875,
+            345.9718322753906
+          ],
+          "sam_pixels_in_polygon": 8504,
+          "sam_pixels_in_polygon_outside_rt_text": 8504,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "03",
+      "rt_text_boxes": 0,
+      "coo_proposals": 3,
+      "sam_pixels": 72832,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 36608,
+      "sam_pixels_in_either_candidate": 36608,
+      "coo_added_sam_pixels_outside_rt": 36608,
+      "coo_proposals_with_any_sam_pixel": 3,
+      "proposals": [
+        {
+          "index": 4,
+          "score": 0.5531565640604513,
+          "bounding_box": [
+            247.72915649414062,
+            1312.48876953125,
+            546.25,
+            1599.0416259765625
+          ],
+          "sam_pixels_in_polygon": 16691,
+          "sam_pixels_in_polygon_outside_rt_text": 16691,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.6494331666241521,
+          "bounding_box": [
+            76.1875,
+            1197.96337890625,
+            422.625,
+            1526.6845703125
+          ],
+          "sam_pixels_in_polygon": 17602,
+          "sam_pixels_in_polygon_outside_rt_text": 17602,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.4150730886685319,
+          "bounding_box": [
+            449.9375,
+            77.14884185791016,
+            624.8333129882812,
+            266.90625
+          ],
+          "sam_pixels_in_polygon": 7960,
+          "sam_pixels_in_polygon_outside_rt_text": 7960,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "04",
+      "rt_text_boxes": 0,
+      "coo_proposals": 2,
+      "sam_pixels": 36253,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 8459,
+      "sam_pixels_in_either_candidate": 8459,
+      "coo_added_sam_pixels_outside_rt": 8459,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.651326178010447,
+          "bounding_box": [
+            121.22916412353516,
+            933.453125,
+            275.52081298828125,
+            1119.3770751953125
+          ],
+          "sam_pixels_in_polygon": 7309,
+          "sam_pixels_in_polygon_outside_rt_text": 7309,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.4033597357863263,
+          "bounding_box": [
+            251.0833282470703,
+            461.45550537109375,
+            289.89581298828125,
+            509.3740539550781
+          ],
+          "sam_pixels_in_polygon": 1150,
+          "sam_pixels_in_polygon_outside_rt_text": 1150,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "05",
+      "rt_text_boxes": 0,
+      "coo_proposals": 3,
+      "sam_pixels": 34349,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 24147,
+      "sam_pixels_in_either_candidate": 24147,
+      "coo_added_sam_pixels_outside_rt": 24147,
+      "coo_proposals_with_any_sam_pixel": 3,
+      "proposals": [
+        {
+          "index": 1,
+          "score": 0.6936688453573664,
+          "bounding_box": [
+            246.7708282470703,
+            1484.037109375,
+            392.4375,
+            1584.1868896484375
+          ],
+          "sam_pixels_in_polygon": 6656,
+          "sam_pixels_in_polygon_outside_rt_text": 6656,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.4980491933870891,
+          "bounding_box": [
+            359.375,
+            995.2680053710938,
+            470.0625,
+            1106.918212890625
+          ],
+          "sam_pixels_in_polygon": 5420,
+          "sam_pixels_in_polygon_outside_rt_text": 5420,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.5249213244139552,
+          "bounding_box": [
+            7.666666507720947,
+            217.0709686279297,
+            411.6041564941406,
+            593.2315063476562
+          ],
+          "sam_pixels_in_polygon": 12071,
+          "sam_pixels_in_polygon_outside_rt_text": 12071,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "06",
+      "rt_text_boxes": 0,
+      "coo_proposals": 2,
+      "sam_pixels": 17989,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 7260,
+      "sam_pixels_in_either_candidate": 7260,
+      "coo_added_sam_pixels_outside_rt": 7260,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.7608610739022861,
+          "bounding_box": [
+            329.1875,
+            479.18536376953125,
+            442.75,
+            601.8568115234375
+          ],
+          "sam_pixels_in_polygon": 2381,
+          "sam_pixels_in_polygon_outside_rt_text": 2381,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.6932527225461568,
+          "bounding_box": [
+            12.458333015441895,
+            286.5528564453125,
+            167.7083282470703,
+            457.1428527832031
+          ],
+          "sam_pixels_in_polygon": 4879,
+          "sam_pixels_in_polygon_outside_rt_text": 4879,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "07",
+      "rt_text_boxes": 0,
+      "coo_proposals": 1,
+      "sam_pixels": 24322,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 4456,
+      "sam_pixels_in_either_candidate": 4456,
+      "coo_added_sam_pixels_outside_rt": 4456,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.47616182383928674,
+          "bounding_box": [
+            195.97915649414062,
+            1465.8280029296875,
+            315.77081298828125,
+            1590.416259765625
+          ],
+          "sam_pixels_in_polygon": 4456,
+          "sam_pixels_in_polygon_outside_rt_text": 4456,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "08",
+      "rt_text_boxes": 0,
+      "coo_proposals": 2,
+      "sam_pixels": 40438,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 26924,
+      "sam_pixels_in_either_candidate": 26924,
+      "coo_added_sam_pixels_outside_rt": 26924,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 21,
+          "score": 0.40645414700246113,
+          "bounding_box": [
+            70.4375,
+            400.1197814941406,
+            393.39581298828125,
+            737.9454956054688
+          ],
+          "sam_pixels_in_polygon": 24192,
+          "sam_pixels_in_polygon_outside_rt_text": 24192,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 22,
+          "score": 0.4009552050915083,
+          "bounding_box": [
+            351.70831298828125,
+            438.9338073730469,
+            431.7291564941406,
+            511.7699890136719
+          ],
+          "sam_pixels_in_polygon": 3474,
+          "sam_pixels_in_polygon_outside_rt_text": 3474,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "09",
+      "rt_text_boxes": 0,
+      "coo_proposals": 1,
+      "sam_pixels": 29479,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 2082,
+      "sam_pixels_in_either_candidate": 2082,
+      "coo_added_sam_pixels_outside_rt": 2082,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.4502081763989308,
+          "bounding_box": [
+            358.89581298828125,
+            1024.498291015625,
+            485.875,
+            1136.627685546875
+          ],
+          "sam_pixels_in_polygon": 2082,
+          "sam_pixels_in_polygon_outside_rt_text": 2082,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "10",
+      "rt_text_boxes": 1,
+      "coo_proposals": 0,
+      "sam_pixels": 63024,
+      "sam_pixels_in_rt_text_boxes": 2662,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 2662,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "11",
+      "rt_text_boxes": 1,
+      "coo_proposals": 1,
+      "sam_pixels": 17072,
+      "sam_pixels_in_rt_text_boxes": 4784,
+      "sam_pixels_in_coo_polygons": 12202,
+      "sam_pixels_in_either_candidate": 16986,
+      "coo_added_sam_pixels_outside_rt": 12202,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 2,
+          "score": 0.6105908606671087,
+          "bounding_box": [
+            365.6041564941406,
+            0.0,
+            690.0,
+            368.4935607910156
+          ],
+          "sam_pixels_in_polygon": 12202,
+          "sam_pixels_in_polygon_outside_rt_text": 12202,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "12",
+      "rt_text_boxes": 2,
+      "coo_proposals": 1,
+      "sam_pixels": 17647,
+      "sam_pixels_in_rt_text_boxes": 13938,
+      "sam_pixels_in_coo_polygons": 3686,
+      "sam_pixels_in_either_candidate": 17624,
+      "coo_added_sam_pixels_outside_rt": 3686,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.6066834749946297,
+          "bounding_box": [
+            194.54165649414062,
+            1224.318603515625,
+            367.52081298828125,
+            1331.177001953125
+          ],
+          "sam_pixels_in_polygon": 3686,
+          "sam_pixels_in_polygon_outside_rt_text": 3686,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "13",
+      "rt_text_boxes": 5,
+      "coo_proposals": 0,
+      "sam_pixels": 17307,
+      "sam_pixels_in_rt_text_boxes": 17182,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 17182,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "14",
+      "rt_text_boxes": 0,
+      "coo_proposals": 2,
+      "sam_pixels": 40005,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 17611,
+      "sam_pixels_in_either_candidate": 17611,
+      "coo_added_sam_pixels_outside_rt": 17611,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.6194458986005394,
+          "bounding_box": [
+            363.20831298828125,
+            1154.8367919921875,
+            488.75,
+            1305.3009033203125
+          ],
+          "sam_pixels_in_polygon": 4772,
+          "sam_pixels_in_polygon_outside_rt_text": 4772,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.5301456109699765,
+          "bounding_box": [
+            56.0625,
+            174.42347717285156,
+            434.6041564941406,
+            564.9595336914062
+          ],
+          "sam_pixels_in_polygon": 12839,
+          "sam_pixels_in_polygon_outside_rt_text": 12839,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "15",
+      "rt_text_boxes": 0,
+      "coo_proposals": 2,
+      "sam_pixels": 30170,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 20929,
+      "sam_pixels_in_either_candidate": 20929,
+      "coo_added_sam_pixels_outside_rt": 20929,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 2,
+          "score": 0.468443800192776,
+          "bounding_box": [
+            11.020833015441895,
+            1283.2584228515625,
+            494.02081298828125,
+            1600.0
+          ],
+          "sam_pixels_in_polygon": 12602,
+          "sam_pixels_in_polygon_outside_rt_text": 12602,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.5904488838298811,
+          "bounding_box": [
+            414.95831298828125,
+            495.4776611328125,
+            590.8125,
+            668.463623046875
+          ],
+          "sam_pixels_in_polygon": 8327,
+          "sam_pixels_in_polygon_outside_rt_text": 8327,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "16",
+      "rt_text_boxes": 0,
+      "coo_proposals": 0,
+      "sam_pixels": 15593,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 0,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "17",
+      "rt_text_boxes": 0,
+      "coo_proposals": 2,
+      "sam_pixels": 45891,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 12014,
+      "sam_pixels_in_either_candidate": 12014,
+      "coo_added_sam_pixels_outside_rt": 12014,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 6,
+          "score": 0.42364422748907815,
+          "bounding_box": [
+            283.6666564941406,
+            838.09521484375,
+            482.52081298828125,
+            1016.8313598632812
+          ],
+          "sam_pixels_in_polygon": 10576,
+          "sam_pixels_in_polygon_outside_rt_text": 10576,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 10,
+          "score": 0.4150847238242975,
+          "bounding_box": [
+            146.625,
+            92.48278045654297,
+            194.54165649414062,
+            130.3384246826172
+          ],
+          "sam_pixels_in_polygon": 1438,
+          "sam_pixels_in_polygon_outside_rt_text": 1438,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "18",
+      "rt_text_boxes": 0,
+      "coo_proposals": 3,
+      "sam_pixels": 51422,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 29222,
+      "sam_pixels_in_either_candidate": 29222,
+      "coo_added_sam_pixels_outside_rt": 29222,
+      "coo_proposals_with_any_sam_pixel": 3,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.40460561769266395,
+          "bounding_box": [
+            283.1875,
+            961.245849609375,
+            507.9166564941406,
+            1183.108642578125
+          ],
+          "sam_pixels_in_polygon": 9585,
+          "sam_pixels_in_polygon_outside_rt_text": 9585,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.48830677006633,
+          "bounding_box": [
+            406.8125,
+            495.4776611328125,
+            677.5416259765625,
+            859.1793823242188
+          ],
+          "sam_pixels_in_polygon": 12445,
+          "sam_pixels_in_polygon_outside_rt_text": 12445,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.4267129595229858,
+          "bounding_box": [
+            443.70831298828125,
+            136.08863830566406,
+            597.0416259765625,
+            302.365966796875
+          ],
+          "sam_pixels_in_polygon": 7192,
+          "sam_pixels_in_polygon_outside_rt_text": 7192,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "19",
+      "rt_text_boxes": 0,
+      "coo_proposals": 1,
+      "sam_pixels": 52526,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 10398,
+      "sam_pixels_in_either_candidate": 10398,
+      "coo_added_sam_pixels_outside_rt": 10398,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.47874090634923705,
+          "bounding_box": [
+            139.91665649414062,
+            1316.322265625,
+            433.1666564941406,
+            1565.4986572265625
+          ],
+          "sam_pixels_in_polygon": 10398,
+          "sam_pixels_in_polygon_outside_rt_text": 10398,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "20",
+      "rt_text_boxes": 0,
+      "coo_proposals": 5,
+      "sam_pixels": 37707,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 36506,
+      "sam_pixels_in_either_candidate": 36506,
+      "coo_added_sam_pixels_outside_rt": 36506,
+      "coo_proposals_with_any_sam_pixel": 5,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.7202543102320463,
+          "bounding_box": [
+            417.83331298828125,
+            1349.385986328125,
+            622.4375,
+            1582.749267578125
+          ],
+          "sam_pixels_in_polygon": 8032,
+          "sam_pixels_in_polygon_outside_rt_text": 8032,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.6607275848155152,
+          "bounding_box": [
+            67.5625,
+            1333.09375,
+            273.6041564941406,
+            1521.41357421875
+          ],
+          "sam_pixels_in_polygon": 8041,
+          "sam_pixels_in_polygon_outside_rt_text": 8041,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.46387620160740023,
+          "bounding_box": [
+            65.16666412353516,
+            986.1635131835938,
+            311.45831298828125,
+            1233.90234375
+          ],
+          "sam_pixels_in_polygon": 6435,
+          "sam_pixels_in_polygon_outside_rt_text": 6435,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.5540231012788278,
+          "bounding_box": [
+            57.02083206176758,
+            944.474365234375,
+            212.75,
+            1075.2919921875
+          ],
+          "sam_pixels_in_polygon": 7158,
+          "sam_pixels_in_polygon_outside_rt_text": 7158,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 8,
+          "score": 0.4836796855550218,
+          "bounding_box": [
+            375.6666564941406,
+            392.9320068359375,
+            632.9791259765625,
+            612.39892578125
+          ],
+          "sam_pixels_in_polygon": 8490,
+          "sam_pixels_in_polygon_outside_rt_text": 8490,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "21",
+      "rt_text_boxes": 0,
+      "coo_proposals": 2,
+      "sam_pixels": 39465,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 12629,
+      "sam_pixels_in_either_candidate": 12629,
+      "coo_added_sam_pixels_outside_rt": 12629,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.7373763465810433,
+          "bounding_box": [
+            52.70833206176758,
+            1161.066162109375,
+            201.25,
+            1301.467529296875
+          ],
+          "sam_pixels_in_polygon": 5443,
+          "sam_pixels_in_polygon_outside_rt_text": 5443,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.5979631321447245,
+          "bounding_box": [
+            26.833332061767578,
+            258.7601013183594,
+            191.66665649414062,
+            399.1614074707031
+          ],
+          "sam_pixels_in_polygon": 7186,
+          "sam_pixels_in_polygon_outside_rt_text": 7186,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "22",
+      "rt_text_boxes": 0,
+      "coo_proposals": 1,
+      "sam_pixels": 26475,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 14639,
+      "sam_pixels_in_either_candidate": 14639,
+      "coo_added_sam_pixels_outside_rt": 14639,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 6,
+          "score": 0.5144289897526861,
+          "bounding_box": [
+            304.27081298828125,
+            0.0,
+            686.6458129882812,
+            286.07366943359375
+          ],
+          "sam_pixels_in_polygon": 14639,
+          "sam_pixels_in_polygon_outside_rt_text": 14639,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "23",
+      "rt_text_boxes": 1,
+      "coo_proposals": 1,
+      "sam_pixels": 12675,
+      "sam_pixels_in_rt_text_boxes": 4527,
+      "sam_pixels_in_coo_polygons": 7833,
+      "sam_pixels_in_either_candidate": 12360,
+      "coo_added_sam_pixels_outside_rt": 7833,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.5650299398169177,
+          "bounding_box": [
+            188.3125,
+            0.0,
+            449.45831298828125,
+            170.11080932617188
+          ],
+          "sam_pixels_in_polygon": 7833,
+          "sam_pixels_in_polygon_outside_rt_text": 7833,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "24",
+      "rt_text_boxes": 0,
+      "coo_proposals": 2,
+      "sam_pixels": 62116,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 4704,
+      "sam_pixels_in_either_candidate": 4704,
+      "coo_added_sam_pixels_outside_rt": 4704,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.4152514204254871,
+          "bounding_box": [
+            188.79165649414062,
+            1446.181396484375,
+            280.3125,
+            1552.0814208984375
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.4706195836104598,
+          "bounding_box": [
+            326.7916564941406,
+            158.1311798095703,
+            437.4791564941406,
+            267.38543701171875
+          ],
+          "sam_pixels_in_polygon": 4704,
+          "sam_pixels_in_polygon_outside_rt_text": 4704,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "25",
+      "rt_text_boxes": 0,
+      "coo_proposals": 0,
+      "sam_pixels": 1676,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 0,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "26",
+      "rt_text_boxes": 1,
+      "coo_proposals": 1,
+      "sam_pixels": 9440,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 5402,
+      "sam_pixels_in_either_candidate": 5402,
+      "coo_added_sam_pixels_outside_rt": 5402,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 3,
+          "score": 0.5490299441122176,
+          "bounding_box": [
+            180.16665649414062,
+            1028.331787109375,
+            294.20831298828125,
+            1118.8978271484375
+          ],
+          "sam_pixels_in_polygon": 5402,
+          "sam_pixels_in_polygon_outside_rt_text": 5402,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "27",
+      "rt_text_boxes": 3,
+      "coo_proposals": 2,
+      "sam_pixels": 30971,
+      "sam_pixels_in_rt_text_boxes": 10955,
+      "sam_pixels_in_coo_polygons": 12435,
+      "sam_pixels_in_either_candidate": 23390,
+      "coo_added_sam_pixels_outside_rt": 12435,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.6499066346354727,
+          "bounding_box": [
+            158.60415649414062,
+            645.4627075195312,
+            285.1041564941406,
+            741.2997436523438
+          ],
+          "sam_pixels_in_polygon": 4380,
+          "sam_pixels_in_polygon_outside_rt_text": 4380,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.6608018955610271,
+          "bounding_box": [
+            501.6875,
+            82.41988372802734,
+            650.2291259765625,
+            214.675048828125
+          ],
+          "sam_pixels_in_polygon": 8055,
+          "sam_pixels_in_polygon_outside_rt_text": 8055,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "28",
+      "rt_text_boxes": 1,
+      "coo_proposals": 1,
+      "sam_pixels": 4799,
+      "sam_pixels_in_rt_text_boxes": 2725,
+      "sam_pixels_in_coo_polygons": 1266,
+      "sam_pixels_in_either_candidate": 3991,
+      "coo_added_sam_pixels_outside_rt": 1266,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.6768639040134183,
+          "bounding_box": [
+            421.1875,
+            1416.471923828125,
+            511.27081298828125,
+            1537.705810546875
+          ],
+          "sam_pixels_in_polygon": 1266,
+          "sam_pixels_in_polygon_outside_rt_text": 1266,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "29",
+      "rt_text_boxes": 1,
+      "coo_proposals": 0,
+      "sam_pixels": 6742,
+      "sam_pixels_in_rt_text_boxes": 2667,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 2667,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "30",
+      "rt_text_boxes": 0,
+      "coo_proposals": 0,
+      "sam_pixels": 0,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 0,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "31",
+      "rt_text_boxes": 3,
+      "coo_proposals": 0,
+      "sam_pixels": 16328,
+      "sam_pixels_in_rt_text_boxes": 16328,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 16328,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "32",
+      "rt_text_boxes": 6,
+      "coo_proposals": 0,
+      "sam_pixels": 23507,
+      "sam_pixels_in_rt_text_boxes": 23507,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 23507,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "33",
+      "rt_text_boxes": 3,
+      "coo_proposals": 0,
+      "sam_pixels": 7909,
+      "sam_pixels_in_rt_text_boxes": 7909,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 7909,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "34",
+      "rt_text_boxes": 1,
+      "coo_proposals": 0,
+      "sam_pixels": 5348,
+      "sam_pixels_in_rt_text_boxes": 5348,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 5348,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "35",
+      "rt_text_boxes": 0,
+      "coo_proposals": 0,
+      "sam_pixels": 609,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 0,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "36",
+      "rt_text_boxes": 3,
+      "coo_proposals": 0,
+      "sam_pixels": 20273,
+      "sam_pixels_in_rt_text_boxes": 10981,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 10981,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "37",
+      "rt_text_boxes": 3,
+      "coo_proposals": 4,
+      "sam_pixels": 27076,
+      "sam_pixels_in_rt_text_boxes": 8547,
+      "sam_pixels_in_coo_polygons": 17076,
+      "sam_pixels_in_either_candidate": 25623,
+      "coo_added_sam_pixels_outside_rt": 17076,
+      "coo_proposals_with_any_sam_pixel": 4,
+      "proposals": [
+        {
+          "index": 2,
+          "score": 0.49008424368489456,
+          "bounding_box": [
+            423.1041564941406,
+            1283.2584228515625,
+            486.83331298828125,
+            1349.385986328125
+          ],
+          "sam_pixels_in_polygon": 2065,
+          "sam_pixels_in_polygon_outside_rt_text": 2065,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.5634965129627744,
+          "bounding_box": [
+            467.6666564941406,
+            1246.84033203125,
+            592.7291259765625,
+            1372.386962890625
+          ],
+          "sam_pixels_in_polygon": 5012,
+          "sam_pixels_in_polygon_outside_rt_text": 5012,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.5207701689371975,
+          "bounding_box": [
+            65.16666412353516,
+            523.2704467773438,
+            266.4166564941406,
+            661.2758178710938
+          ],
+          "sam_pixels_in_polygon": 7320,
+          "sam_pixels_in_polygon_outside_rt_text": 7320,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.7002614977476017,
+          "bounding_box": [
+            280.3125,
+            27.313566207885742,
+            390.52081298828125,
+            143.755615234375
+          ],
+          "sam_pixels_in_polygon": 2996,
+          "sam_pixels_in_polygon_outside_rt_text": 2996,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "38",
+      "rt_text_boxes": 0,
+      "coo_proposals": 1,
+      "sam_pixels": 9352,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 9231,
+      "sam_pixels_in_either_candidate": 9231,
+      "coo_added_sam_pixels_outside_rt": 9231,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 1,
+          "score": 0.4928386546060877,
+          "bounding_box": [
+            8.145833015441895,
+            1365.1990966796875,
+            290.375,
+            1600.0
+          ],
+          "sam_pixels_in_polygon": 9231,
+          "sam_pixels_in_polygon_outside_rt_text": 9231,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "39",
+      "rt_text_boxes": 0,
+      "coo_proposals": 0,
+      "sam_pixels": 3875,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 0,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "40",
+      "rt_text_boxes": 0,
+      "coo_proposals": 1,
+      "sam_pixels": 14602,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 4452,
+      "sam_pixels_in_either_candidate": 4452,
+      "coo_added_sam_pixels_outside_rt": 4452,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 1,
+          "score": 0.5218286559910005,
+          "bounding_box": [
+            106.375,
+            580.7726440429688,
+            211.3125,
+            726.9241943359375
+          ],
+          "sam_pixels_in_polygon": 4452,
+          "sam_pixels_in_polygon_outside_rt_text": 4452,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "41",
+      "rt_text_boxes": 1,
+      "coo_proposals": 1,
+      "sam_pixels": 9210,
+      "sam_pixels_in_rt_text_boxes": 2675,
+      "sam_pixels_in_coo_polygons": 5761,
+      "sam_pixels_in_either_candidate": 8436,
+      "coo_added_sam_pixels_outside_rt": 5761,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 1,
+          "score": 0.6049503865078131,
+          "bounding_box": [
+            9.583333015441895,
+            787.3015747070312,
+            225.6875,
+            965.5585327148438
+          ],
+          "sam_pixels_in_polygon": 5761,
+          "sam_pixels_in_polygon_outside_rt_text": 5761,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "42",
+      "rt_text_boxes": 3,
+      "coo_proposals": 1,
+      "sam_pixels": 16018,
+      "sam_pixels_in_rt_text_boxes": 11665,
+      "sam_pixels_in_coo_polygons": 4029,
+      "sam_pixels_in_either_candidate": 15694,
+      "coo_added_sam_pixels_outside_rt": 4029,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.500124411235781,
+          "bounding_box": [
+            464.3125,
+            762.3839111328125,
+            621.9583129882812,
+            920.035888671875
+          ],
+          "sam_pixels_in_polygon": 4029,
+          "sam_pixels_in_polygon_outside_rt_text": 4029,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "43",
+      "rt_text_boxes": 0,
+      "coo_proposals": 5,
+      "sam_pixels": 10443,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 10371,
+      "sam_pixels_in_either_candidate": 10371,
+      "coo_added_sam_pixels_outside_rt": 10371,
+      "coo_proposals_with_any_sam_pixel": 5,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.5805198153152618,
+          "bounding_box": [
+            558.7083129882812,
+            1045.103271484375,
+            644.0,
+            1133.2734375
+          ],
+          "sam_pixels_in_polygon": 1633,
+          "sam_pixels_in_polygon_outside_rt_text": 1633,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.7017210223439221,
+          "bounding_box": [
+            164.8333282470703,
+            837.6160278320312,
+            259.2291564941406,
+            938.72412109375
+          ],
+          "sam_pixels_in_polygon": 2064,
+          "sam_pixels_in_polygon_outside_rt_text": 2064,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.6258659526253195,
+          "bounding_box": [
+            103.5,
+            699.1314697265625,
+            205.5625,
+            801.6771240234375
+          ],
+          "sam_pixels_in_polygon": 2193,
+          "sam_pixels_in_polygon_outside_rt_text": 2193,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.6369672994808973,
+          "bounding_box": [
+            523.7291259765625,
+            84.81581115722656,
+            662.2083129882812,
+            228.0922393798828
+          ],
+          "sam_pixels_in_polygon": 1839,
+          "sam_pixels_in_polygon_outside_rt_text": 1839,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.6643420963593699,
+          "bounding_box": [
+            411.6041564941406,
+            0.0,
+            548.6458129882812,
+            132.25515747070312
+          ],
+          "sam_pixels_in_polygon": 2642,
+          "sam_pixels_in_polygon_outside_rt_text": 2642,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "44",
+      "rt_text_boxes": 0,
+      "coo_proposals": 1,
+      "sam_pixels": 9831,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 4201,
+      "sam_pixels_in_either_candidate": 4201,
+      "coo_added_sam_pixels_outside_rt": 4201,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 6,
+          "score": 0.47611502458623056,
+          "bounding_box": [
+            268.8125,
+            23.95926856994629,
+            373.27081298828125,
+            124.58819580078125
+          ],
+          "sam_pixels_in_polygon": 4201,
+          "sam_pixels_in_polygon_outside_rt_text": 4201,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "45",
+      "rt_text_boxes": 4,
+      "coo_proposals": 0,
+      "sam_pixels": 19998,
+      "sam_pixels_in_rt_text_boxes": 18828,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 18828,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    }
+  ]
+}

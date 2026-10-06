@@ -9,7 +9,9 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { capabilities, featuresFrom, loadCapabilities } from './capabilities.svelte.js'
+import {
+  capabilities, featuresFrom, loadCapabilities, selectedWorkflowAvailable, selectedWorkflowMissing,
+} from './capabilities.svelte.js'
 
 /** @param {Partial<import('../api/backend.js').Backend>} answers */
 function backendThat(answers) {
@@ -53,16 +55,58 @@ describe('featuresFrom', () => {
     expect(featuresFrom(without(['textDetector'])).lama).toBe(true)
   })
 
-  it('names no feature no row asks for - fill and denoise need nothing', () => {
+  it('names no feature no row asks for - fill needs nothing', () => {
     const features = featuresFrom(CATALOGUE)
     expect(features).not.toHaveProperty('fill')
-    expect(features).not.toHaveProperty('denoise')
     expect(features).not.toHaveProperty('flux')
   })
 
   it('answers an empty catalogue with an empty map rather than throwing', () => {
     expect(featuresFrom([])).toEqual({})
     expect(featuresFrom(undefined)).toEqual({})
+  })
+})
+
+describe('selected workflow readiness', () => {
+  const rows = [
+    ...CATALOGUE,
+    { id: 'fullRt', installed: false, requiredBy: ['review'] },
+  ]
+  const choices = (detectorModels, textPolicy = 'legacy_gate') => ({
+    detectorModels, textPolicy,
+    detection: { ja: 'ctd-rtdetr', zh: null, ko: null }, ocrRescue: false,
+  })
+
+  it('does not require unselected full RT, CTD, small RT, or gate files', () => {
+    expect(selectedWorkflowAvailable(rows, { fullRtInstalled: false }, choices(['ctd', 'rtSmall']))).toBe(true)
+    expect(selectedWorkflowAvailable(without(['textDetector', 'balloonDetector', 'scriptGate', 'scriptGateLabels']),
+      { fullRtInstalled: true }, choices(['rtFull'], 'all_text'))).toBe(true)
+    expect(selectedWorkflowAvailable(without(['textDetector', 'balloonDetector']),
+      { samInstalled: true }, choices(['samTs'], 'all_text'))).toBe(true)
+  })
+
+  it('requires every selected graph and the legacy gate only under legacy policy', () => {
+    expect(selectedWorkflowAvailable(rows, { fullRtInstalled: false }, choices(['rtFull'], 'all_text'))).toBe(false)
+    expect(selectedWorkflowAvailable(rows, { samInstalled: false }, choices(['samTs'], 'all_text'))).toBe(false)
+    expect(selectedWorkflowAvailable(without(['scriptGate']), null, choices(['ctd']))).toBe(false)
+    expect(selectedWorkflowAvailable(without(['scriptGate']), null, choices(['ctd'], 'all_text'))).toBe(true)
+  })
+
+  // The panel names what is missing, so a run blocked on SAM-TS-L never
+  // reads as one blocked on the LaMa a clean uses.
+  it('names each missing model, and none that runs on the cloud GPU', () => {
+    const both = { ...choices(['rtFull', 'samTs'], 'all_text') }
+    const caps = { fullRtInstalled: false, samInstalled: false }
+    expect(selectedWorkflowMissing(rows, caps, both)).toEqual(['rtFull', 'samTs'])
+    // A cloud run needs only CTD and the text reader here, whatever this
+    // computer selected; the reader is not installed in this catalogue.
+    const cloud = { analysisTargets: { rtFull: 'cloud', samTs: 'cloud' } }
+    expect(selectedWorkflowMissing(rows, caps, { ...both, ...cloud })).toEqual(['hayaiOcr'])
+    expect(selectedWorkflowMissing(without(['textDetector']), caps, { ...choices(['rtSmall'], 'all_text'), ...cloud }))
+      .toEqual(['ctd', 'hayaiOcr'])
+    // A split record settles on this computer.
+    expect(selectedWorkflowMissing(rows, caps,
+      { ...both, analysisTargets: { rtFull: 'local', samTs: 'cloud' } })).toEqual(['rtFull', 'samTs'])
   })
 })
 
@@ -78,7 +122,6 @@ describe('loadCapabilities', () => {
     )
     expect(capabilities.engines).toEqual({
       fill: true,
-      denoise: true,
       lama: false,
       flux: false,
     })
@@ -124,7 +167,6 @@ describe('loadCapabilities', () => {
     )
     expect(capabilities.engines).toEqual({
       fill: true,
-      denoise: true,
       lama: true,
       flux: false,
     })

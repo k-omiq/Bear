@@ -5,8 +5,8 @@
 //! spike-clean-page <page.png> --compare-engines [--out-dir DIR]
 //! ```
 //!
-//! Three rungs produce pixels today - rung 0 [`fill`], rung 1 [`denoise`], rung 2
-//! [`lama`]; MI-GAN's rung 3 is gone from the ladder - and there is no image anywhere in this
+//! Two rungs produce pixels today - rung 0 [`fill`] and rung 2 [`lama`];
+//! Denoise fill's rung 1 and MI-GAN's rung 3 are gone from the ladder - and there is no image anywhere in this
 //! repository that shows what they do to the same region. This makes one: a
 //! contact sheet whose rows are regions and whose columns are the page, then
 //! each rung in order, every crop labelled with the rung, its latency and its
@@ -70,7 +70,7 @@
 //! **Pixels more than 64 levels below the region's own paper**, counted over
 //! `mask ⊕ ISOLATION_RADIUS` - the set both model rungs are permitted to write
 //! through ([`engines::model::applied_mask`]), so the same set is counted for
-//! all five columns including the untouched page.
+//! all three columns including the untouched page.
 //!
 //! It is not summed darkness: "16-30% retained ink" was
 //! measured that way and the quantity is dominated by rung 2's fill sitting
@@ -85,7 +85,7 @@ use anyhow::{Result, anyhow};
 use cleaner_core::accel::Preference;
 use cleaner_core::composite::composite;
 use cleaner_core::detect::Detector;
-use cleaner_core::engines::{denoise, fill, lama, model};
+use cleaner_core::engines::{fill, lama, model};
 use cleaner_core::fit::{self, EdgeMap};
 use cleaner_core::gate::ScriptGate;
 use cleaner_core::image::{Format, Raster, encode};
@@ -132,8 +132,8 @@ impl Shot {
     }
 }
 
-/// The five columns, in the order they are shown.
-const COLUMNS: [&str; 5] = ["ORIGINAL", "R0 FILL", "R1 DENOISE", "R2 LAMA", "R3 MIGAN"];
+/// The three columns, in the order they are shown.
+const COLUMNS: [&str; 3] = ["ORIGINAL", "R0 FILL", "R2 LAMA"];
 
 /* ------------------------------------------------------------------ */
 /* The run                                                             */
@@ -159,19 +159,16 @@ pub fn run(models: &Path, page: &Raster, out_dir: &Path, stem: &str) -> Result<(
     println!("\n--- phase B: one engine at a time ---");
     let rung0 = with_fill(page, &fits);
     sample(&mut rss, "rung 0 done (no session)");
-    let rung1 = with_denoise(page, &fits, noise);
-    sample(&mut rss, "rung 1 done (no session)");
     let rung2 = with_lama(models, page, &fits, &mut rss)?;
 
     println!("\n--- phase C: the images, with no session alive ---");
     let engines = [
         (Engine::Fill, &rung0),
-        (Engine::Denoise, &rung1),
         (Engine::Lama, &rung2),
     ];
 
     // The view each row is cropped to, and the magnification it is shown at.
-    // Both are per region and shared by all five columns, so a row is five
+    // Both are per region and shared by all three columns, so a row is three
     // pictures of the same rectangle at the same scale and a difference between
     // two of them is a difference in the pixels.
     let views: Vec<(Rect, u32)> = fits
@@ -298,11 +295,19 @@ fn detect(models: &Path, page: &Raster, rss: &mut Vec<(String, u64)>) -> Result<
     let mut skipped = 0u32;
     for region in regions.iter() {
         let detected = cleaner_core::balloon::detected(region.masking, &balloons);
+        let inside = cleaner_core::balloon::in_bubble(
+            page,
+            &detection.segmentation,
+            region.text_bounds(),
+            region.masking,
+            &balloons,
+        );
         let verdict = gate.judge(
             page,
             &detection.segmentation,
             region,
             detected,
+            inside,
             cleaner_core::gate::OutsideText::Review,
         )?;
         if !verdict.cleans() {
@@ -339,18 +344,6 @@ fn with_fill(page: &Raster, fits: &[Fit]) -> Vec<Option<Shot>> {
             let started = Instant::now();
             let pixels = fill::render(page, &fit.fitted);
             Some(Shot::made(fit.fitted.mask.clone(), pixels, started.elapsed(), None))
-        })
-        .collect()
-}
-
-/// Rung 1, which is rung 0 and then a filter - one patch, as
-/// [`denoise::render`]'s own documentation insists.
-fn with_denoise(page: &Raster, fits: &[Fit], noise: f32) -> Vec<Option<Shot>> {
-    fits.iter()
-        .map(|fit| {
-            let started = Instant::now();
-            let (mask, pixels) = denoise::render(page, &fit.fitted, noise);
-            Some(Shot::made(mask, pixels, started.elapsed(), None))
         })
         .collect()
 }
@@ -578,7 +571,6 @@ fn extent(fitted: &fit::Fitted) -> String {
 fn route_word(route: fit::Route) -> &'static str {
     match route {
         fit::Route::Fill => "FILL",
-        fit::Route::FillAndDenoise => "DENOISE",
         fit::Route::Inpaint => "INPAINT",
     }
 }
@@ -586,7 +578,6 @@ fn route_word(route: fit::Route) -> &'static str {
 fn rung_word(engine: Engine) -> &'static str {
     match engine {
         Engine::Fill => "0 fill",
-        Engine::Denoise => "1 denoise",
         Engine::Lama => "2 lama",
         other => match other {
             Engine::Flux => "3a flux",

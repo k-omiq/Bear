@@ -14,6 +14,7 @@ import {
   clampBbox,
   clientCentre,
   cloneOffset,
+  detectAreaAround,
   draftKeyIntent,
   menuPoint,
   moveBbox,
@@ -381,6 +382,25 @@ describe('menuPoint', () => {
 
   it('is the origin when there is nothing to measure', () => {
     expect(menuPoint({ clientX: 0, clientY: 0 }, null)).toEqual({ x: 0, y: 0 })
+  })
+})
+
+describe('detectAreaAround', () => {
+  it('is a box around the point, square in page pixels', () => {
+    // 16% of 1600 px is 256 px, which is 10.67% of 2400 px.
+    const area = detectAreaAround({ x: 50, y: 50 }, 1600, 2400)
+    expect(area.x).toBeCloseTo(42)
+    expect(area.w).toBeCloseTo(16)
+    expect(area.h).toBeCloseTo(10.6667, 3)
+    expect(area.y).toBeCloseTo(50 - area.h / 2)
+  })
+
+  it('moves back inside the page near an edge', () => {
+    expect(detectAreaAround({ x: 1, y: 99 }, 1000, 1000)).toEqual({ x: 0, y: 84, w: 16, h: 16 })
+  })
+
+  it('is never taller than the page', () => {
+    expect(detectAreaAround({ x: 50, y: 50 }, 4000, 400)).toEqual({ x: 42, y: 0, w: 16, h: 100 })
   })
 })
 

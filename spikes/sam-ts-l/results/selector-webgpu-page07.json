@@ -1,0 +1,139 @@
+{
+  "environment": {
+    "onnxruntime": "1.28.0",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]",
+    "threads": 4
+  },
+  "graphs": {
+    "directory": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof",
+    "manifest_verification": {
+      "file": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof/manifest.json",
+      "graph_packages_verified": true,
+      "sha256": "d8e734c2ff67fd535f8652cab22df96207fd2718bf08a27c44a460945a967f86"
+    },
+    "packages": {
+      "encoder": {
+        "files": [
+          {
+            "bytes": 1335305985,
+            "file": "koharu_samts_encoder.onnx",
+            "sha256": "9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe"
+          }
+        ],
+        "total_bytes": 1335305985
+      },
+      "head": {
+        "files": [
+          {
+            "bytes": 22704641,
+            "file": "koharu_samts_text_head.onnx",
+            "sha256": "a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281"
+          }
+        ],
+        "total_bytes": 22704641
+      }
+    }
+  },
+  "image": {
+    "embedding_bytes": 4194304,
+    "logits_bytes": 4194304,
+    "mask_pixels": 24322,
+    "original_wh": [
+      690,
+      1600
+    ],
+    "prepared_bytes": 12582912,
+    "resized_wh": [
+      442,
+      1024
+    ]
+  },
+  "measurement": {
+    "cpu_fallback": "node events assigned to CPU in separate profile runs",
+    "inference": "single timed run per graph; separate profiling runs excluded",
+    "peak_process_rss": "process peak resident/working set, excludes GPU/device memory",
+    "session_load": "first InferenceSession in this process; OS file cache uncontrolled"
+  },
+  "output_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/selector-webgpu-page07/mask.png",
+  "peak_process_rss_bytes": 2786459648,
+  "peak_process_rss_bytes_after_profile": 3991420928,
+  "provider": {
+    "active_by_graph": {
+      "encoder": [
+        "WebGpuExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "head": [
+        "WebGpuExecutionProvider",
+        "CPUExecutionProvider"
+      ]
+    },
+    "available": [
+      "CoreMLExecutionProvider",
+      "AzureExecutionProvider",
+      "CPUExecutionProvider",
+      "WebGpuExecutionProvider"
+    ],
+    "cpu_fallback_node_events": 0,
+    "options": {},
+    "profile_assignments": {
+      "encoder": {
+        "node_events_by_provider": {
+          "WebGpuExecutionProvider": 1818
+        },
+        "node_events_without_provider": 0
+      },
+      "head": {
+        "node_events_by_provider": {
+          "WebGpuExecutionProvider": 386
+        },
+        "node_events_without_provider": 0
+      }
+    },
+    "requested": "WebGpuExecutionProvider",
+    "requested_node_events": 2204,
+    "requested_node_events_by_graph": {
+      "encoder": 1818,
+      "head": 386
+    },
+    "selected": "webgpu",
+    "webgpu_plugin_device_count": 1,
+    "webgpu_registration_mode": "plugin"
+  },
+  "reference_parity": {
+    "changed_canvas_signs": 0,
+    "changed_restored_pixels": 0,
+    "directory": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/apocalypse-109/page-07",
+    "exact_restored_mask_parity": true,
+    "logits": {
+      "changed_elements": 981794,
+      "max_abs": 0.00023555755615234375,
+      "mean_abs": 1.1603214806255036e-05,
+      "rmse": 1.774905033102106e-05,
+      "shape": [
+        1,
+        1,
+        1024,
+        1024
+      ]
+    },
+    "prepared_input_exact": true
+  },
+  "source": "/Users/caved/Downloads/apocalypse/109/07.jpg",
+  "source_sha256": "a42a7e77ad9b5015f35221accdb785d8b5bc508270d1ef091b2025f5d463e6b9",
+  "status": "ok",
+  "timing_ms": {
+    "encoder_run": 2543.275750009343,
+    "end_to_end_before_write": 7198.771708004642,
+    "graph_hash_preflight": 681.9271669955924,
+    "head_run": 128.5172079806216,
+    "prepare": 11.03816702379845,
+    "profile": 3373.8825409964193,
+    "restore": 0.5456669896375388,
+    "session_load": {
+      "encoder": 374.95158301317133,
+      "head": 23.91241700388491
+    }
+  }
+}

@@ -30,6 +30,13 @@
 //! provider's, and that the one candidate which *does* take a mask is the one
 //! whose licence we cannot recommend.
 //!
+//! Since 2026-10-01 the sidecar also holds the hint: after every denoising
+//! step it puts the latents outside the lettering, grown by `HOLE_GROWTH`
+//! (`backend/base.py`), back to the crop's own. The model still takes no mask
+//! channel and our composite is still the boundary; the hold only stops the
+//! model redrawing the page around the hole, which on black-and-white manga
+//! is where it went wrong (docs/research/manga-inpaint-models.md).
+//!
 //! ## One crop, never a tiling
 //!
 //! Rungs 2 and 3 tile at 512² with 128 px of overlap because their graphs have
@@ -68,17 +75,12 @@
 //! job. Everything else about the page's mode, depth, palette and profile
 //! never leaves this process.
 
-use crate::engines::model::{
-    self, AlphaRamp, Decline, Error, MAX_BOX, Rendered, applied_mask, ceiling_for,
-    dither_at, page_crop, source_channel,
-};
+use crate::engines::model::{Decline, Error, Rendered};
 use crate::fit::Fitted;
-use crate::image::{BitDepth, ColorMode, Raster};
-use crate::mask::Rect;
+use crate::image::Raster;
 use crate::sidecar::hardware::{self, Budget, Demand, Verdict};
 use crate::sidecar::wire::{Encoding, Image, RenderRequest};
 use crate::sidecar::{Backend, Client, Floor, Install, Sidecar};
-use crate::strip::window::EdgePad;
 
 pub use crate::engines::model::write_bound;
 
@@ -96,7 +98,7 @@ pub use crate::engines::model::write_bound;
 ///   excess variance** - a visible dark blotch - where this instruction landed
 ///   within **2 levels of mean and 1 of variance**.
 /// * On the balloon, the content prompt was clean **at `SEED` 1 and at no other
-///   seed tried**: seeds 2–5 came back 35 to 94 levels dark with invented
+///   seed tried**: seeds 2 to 5 came back 35 to 94 levels dark with invented
 ///   texture. This instruction held within ±6 levels at every one of the five.
 ///   A prompt whose only good result is the seed we happen to have frozen is a
 ///   prompt that has not worked.
@@ -106,13 +108,21 @@ pub use crate::engines::model::write_bound;
 /// instruction carrying no such vocabulary has nothing to drift. No colour
 /// page was ever run under *either* scheme.
 ///
+/// **Replaced 2026-10-01, with the hole.** Once the sidecar holds the page
+/// outside the lettering, "Remove all text." left the most lettering of the
+/// prompts tried on black-and-white manga, and MangaTranslator's Klein wording
+/// (github.com/meangrinch/MangaTranslator) the least, on Klein 4B and 9B alike
+/// (docs/research/manga-inpaint-models.md). It names screentone and Japanese
+/// sound effects; the drift that vocabulary was feared to cause on colour pages
+/// was never measured, and is still not.
+///
 /// Held here rather than in the sidecar so that changing it is a change to this
 /// repository, reviewable in a diff, and not an edit to a file the user
 /// installed.
-pub const PROMPT: &str = "Remove all text.";
+pub const PROMPT: &str = "Remove all text, including hand-drawn Japanese sound effects and onomatopoeia. Preserve character line art, screentones, panel borders, and background details exactly as they appear. Maintain the original contrast and shading, leaving every area where text or a sound effect was completely blank.";
 
 /// Denoising steps. Four, which is the distilled Klein models' own range
-/// (1–12) at the fast end of it - this rung already costs ten to sixty seconds
+/// (1 to 12) at the fast end of it - this rung already costs ten to sixty seconds
 /// a region and it is reached one region at a time by hand.
 ///
 /// **Swept**: eight was tried against four at the winning prompt and
@@ -142,98 +152,40 @@ pub const SEED: u64 = 1;
 /// fixes guidance at 1.0 as well.
 pub const GUIDANCE: f32 = 1.0;
 
+/// The sampling knobs as the cloud wire carries them.
+///
+/// The cloud rung runs the same model under the same recipe as the local one,
+/// so a job request must carry these constants rather than numbers of its own:
+/// a remote patch rendered at a different seed or guidance is a patch whose
+/// provenance cannot be reproduced locally. The wire has no float field, so
+/// guidance travels scaled by 100 and the gateway divides it back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireSampling {
+    pub seed: u64,
+    pub steps: u32,
+    pub guidance_scaled: u32,
+}
+
+/// [`SEED`], [`STEPS`] and [`GUIDANCE`] in wire form. Every job request and
+/// journal intent is built from this, so the recipe has one source.
+pub fn wire_sampling() -> WireSampling {
+    WireSampling {
+        seed: SEED,
+        steps: STEPS,
+        guidance_scaled: (GUIDANCE * 100.0).round() as u32,
+    }
+}
+
 /// The crop's dimensions are snapped up to a multiple of this.
 ///
 /// Sixteen, because a latent-space model works in a multiple of its patch and
 /// VAE downsampling factor, and a crop that is not one gets silently resized by
 /// something - which is the resample §5.2 step 4 permits only as a last resort
 /// with a named filter. Snapping here means the resize never happens.
-pub const LATENT_STRIDE: u32 = 16;
-
-/// How much real page the crop carries around the region, per side: half the
-/// region's long side, clamped between [`CONTEXT_MIN`] and [`CONTEXT_MAX`].
-///
-/// **The context is proportional to the region, and it is tight.** An absolute
-/// 64 px floored at a 512² crop - which is what this rung shipped - puts a line
-/// of dialogue forty pixels wide in the middle of half a megapixel of
-/// screentone, and a FLUX.2 edit at that framing does not remove the text, it
-/// paints the surround *over* it: measured on `fixtures/pages/page-sfx.png`, a
-/// 40×140 balloon region came back as a halftone smudge in the middle of a white
-/// balloon. The same region at this contract came back clean. Half the long side
-/// is the reference implementation's own figure, and the clamp is its clamp.
-pub fn context_for(bounds: Rect) -> u32 {
-    (bounds.w.max(bounds.h) / 2).clamp(CONTEXT_MIN, CONTEXT_MAX)
-}
-
-/// The least context a crop carries, per side.
-///
-/// Twenty-four. §5.2's tone fit and §6's surround annulus are sampled from the
-/// **page** and not from this crop, so what this number has to buy is only the
-/// model's own sense of what surrounds the hole - and for a region small enough
-/// to hit this floor, twenty-four pixels is most of the region again.
-pub const CONTEXT_MIN: u32 = 24;
-
-/// The most context a crop carries, per side.
-///
-/// Eighty. Past here the surround stops telling the model anything new about
-/// the hole and starts costing it resolution, because the crop is upscaled to a
-/// fixed working long side before the edit and every pixel of context is a pixel
-/// the glyphs do not get.
-pub const CONTEXT_MAX: u32 = 80;
-
-/// Whether this rung can run on this page at all.
-///
-/// Rung 3's answer, for rung 3's reason one protocol over: the wire is eight
-/// bits per sample, so a 16-bit source has no path through here.
-pub fn applies(page: &Raster) -> bool {
-    model::applies(page) && page.depth != BitDepth::Sixteen
-}
-
-/// Every reason this region would be declined, before a process is spawned.
-pub fn declines(page: &Raster, fitted: &Fitted) -> Option<Decline> {
-    if let Some(decline) = model::declines(page, fitted) {
-        return Some(decline);
-    }
-    (page.depth == BitDepth::Sixteen).then_some(Decline::DepthBeyondEngine(page.depth))
-}
-
-/// The crop the model is shown, in page coordinates.
-///
-/// The region's own bounds, grown by [`context_for`] on every side and snapped
-/// up to [`LATENT_STRIDE`]. **No floor at [`crate::engines::model::MODEL_INPUT`]
-/// and none anywhere else**: a crop this rung sends is sized to the *region*,
-/// and the sidecar upscales a small one to its own working resolution before
-/// the edit rather than this side padding it out with page the model then has
-/// to spend its resolution on.
-///
-/// That floor used to be here, and the argument for it was rule 4's: the
-/// decode window is sized against an `engine_context` of 512², so 512² of page around a region is
-/// what the window guarantees is there to read. It is still guaranteed and this
-/// rung now reads less of it, which the window permits - what it does not
-/// permit is reading *more*, and nothing here does. Rungs 2 and 3 still take the
-/// whole 512², because their graphs have a fixed spatial input and no working
-/// resolution to upscale to.
-///
-/// The rectangle may extend past the page. That is the caller's problem to
-/// handle by edge-replication (§5.2 step 2: "edge-replicate where the crop
-/// abuts the true page edge. Never reflect, never upsample"), and it is handled
-/// in [`Inpainter::render`] rather than by clamping here, because a clamped
-/// crop would put the region off-centre and hand the model a lopsided context.
-pub fn crop_for(bounds: Rect) -> Rect {
-    let context = context_for(bounds);
-    let side = |extent: u32| snap(extent.saturating_add(2 * context));
-    let (w, h) = (side(bounds.w), side(bounds.h));
-    Rect::new(
-        bounds.x + bounds.w as i64 / 2 - w as i64 / 2,
-        bounds.y + bounds.h as i64 / 2 - h as i64 / 2,
-        w,
-        h,
-    )
-}
-
-fn snap(extent: u32) -> u32 {
-    extent.div_ceil(LATENT_STRIDE) * LATENT_STRIDE
-}
+pub use crate::engines::render::{
+    applies, context_for, crop_for, declines, GeneratedCrop, PreparedRender, Preprocessing,
+    CONTEXT_MAX, CONTEXT_MIN, CONTEXT_WIDE, LATENT_STRIDE, MAX_REGION,
+};
 
 /// A held sidecar, and the model it was opened with.
 ///
@@ -289,7 +241,10 @@ impl Inpainter {
         // The open's reply carries the child's memory block, so this is the
         // first moment the loaded-models row can say what rung 3a costs.
         sidecar.note_memory();
-        Ok(Inpainter { sidecar, model: model.to_owned() })
+        Ok(Inpainter {
+            sidecar,
+            model: model.to_owned(),
+        })
     }
 
     /// An inpainter over a sidecar somebody else is running.
@@ -298,7 +253,10 @@ impl Inpainter {
     /// how a whole region goes through this protocol and this composite on a
     /// machine with no Python installed.
     pub fn attach(sidecar: Sidecar, model: &str) -> Inpainter {
-        Inpainter { sidecar, model: model.to_owned() }
+        Inpainter {
+            sidecar,
+            model: model.to_owned(),
+        }
     }
 
     /// What the sidecar's memory has done across the regions so far.
@@ -333,40 +291,34 @@ impl Inpainter {
     /// it asks of the process at the other end is
     /// [`crate::sidecar::Floor`]'s to record.
     pub fn render(&mut self, page: &Raster, fitted: &Fitted) -> Result<Rendered, Error> {
-        if let Some(decline) = declines(page, fitted) {
-            return Err(decline.into());
-        }
-        // **A second region needs neither a fresh process nor a fresh model.**
-        // This rung used to
-        // release and reopen the model here, because the text-encoder eviction
-        // guard nulled an encoder `mflux` cannot rebuild and the second render
-        // through one `open` failed with a `NoneType` where the encoder was.
-        // That choice is now taken the other way: the encoder is kept, the
-        // guard is gone from the `mflux` contract, and the standing footprint is
-        // declared rather than evicted away. So a held child is a held *model*,
-        // and every region after the first pays only the render.
-        let applied = applied_mask(fitted, page.width, page.height);
-        let bounds = applied.bounds;
-        let crop = crop_for(bounds);
-        let ceiling = ceiling_for(page.depth);
-        let (pad, image) = crop_samples(page, crop, ceiling);
-        let hint = hint_samples(fitted, crop);
+        let prepared = PreparedRender::prepare(page, fitted)?;
 
         let request = RenderRequest {
-            region: format!("{}x{}+{}+{}", bounds.w, bounds.h, bounds.x, bounds.y),
-            image: Image::new(crop.w, crop.h, Encoding::Rgb8, &image),
-            hint: Image::new(crop.w, crop.h, Encoding::Gray8, &hint),
+            region: format!(
+                "{}x{}+{}+{}",
+                prepared.bounds().w,
+                prepared.bounds().h,
+                prepared.bounds().x,
+                prepared.bounds().y
+            ),
+            image: Image::new(
+                prepared.crop().w,
+                prepared.crop().h,
+                Encoding::Rgb8,
+                prepared.image_rgb8(),
+            ),
+            hint: Image::new(
+                prepared.crop().w,
+                prepared.crop().h,
+                Encoding::Gray8,
+                prepared.hint_gray8(),
+            ),
             prompt: PROMPT.to_owned(),
             steps: STEPS,
             seed: SEED,
             guidance: GUIDANCE,
             deadline_ms: crate::sidecar::client::RENDER_TIMEOUT.as_millis() as u64,
         };
-        // The request's own copy of the crop goes before the reply's arrives.
-        // One region's pixels are in flight at a time, on this side as well as
-        // on the other.
-        drop(image);
-        drop(hint);
 
         let reply = self.sidecar.client().render(&request)?;
         self.sidecar.note_memory();
@@ -376,134 +328,26 @@ impl Inpainter {
             .ok_or_else(|| Error::Run("the sidecar's reply does not decode".to_owned()))?;
         drop(request);
 
-        let mut patch = page_crop(page, bounds);
-        let ramp = AlphaRamp::new(fitted, page.width, page.height);
-        let samples = page.mode.samples();
-        let alpha_channel = page.mode.alpha_channel();
-
-        for y in bounds.y..bounds.bottom() {
-            for x in bounds.x..bounds.right() {
-                if !applied.contains(x, y) {
-                    continue;
-                }
-                let alpha = ramp.at(x, y);
-                if alpha == 0.0 {
-                    continue;
-                }
-                let at = ((y - crop.y) * crop.w as i64 + (x - crop.x)) as usize * 3;
-                let (lx, ly) = ((x - bounds.x) as u32, (y - bounds.y) as u32);
-                let dither = dither_at(page.depth, alpha, x, y, ceiling);
-                for channel in 0..samples {
-                    // Alpha is copied, never produced.
-                    if alpha_channel == Some(channel) {
-                        continue;
-                    }
-                    let model = returned_sample(&edited, page.mode, channel, at);
-                    let original = patch.sample(lx, ly, channel) as f64 / ceiling;
-                    let blended = alpha * model + (1.0 - alpha) * original;
-                    let value = (blended * ceiling + dither).round().clamp(0.0, ceiling) as u16;
-                    patch.set_sample(lx, ly, channel, value);
-                }
-            }
-        }
-
-        // `pad` is [`crop_samples`]'s answer and nothing else's: it is set when
-        // the crop read past the page, which is rule 4's question and the same
-        // one rung 2 answers per tile. The crop is now sized to the region
-        // rather than floored at 512², so this fires for a region genuinely
-        // near the page edge instead of for every small region on a small page
-        // - and a patch made partly against replicated pixels is still a patch
-        // a reviewer should be able to see was.
-        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: 1 })
+        let generated = GeneratedCrop::new(reply.image.width, reply.image.height, &edited);
+        prepared.composite(&generated)
     }
 }
-
-/// The crop, as `rgb8`, edge-replicated where it runs off the page.
-///
-/// Edge-replicate and **never reflect**: §3 is absolute about it and
-/// [`EdgePad`] has no `Reflect` variant to select. Never upsample either - the
-/// crop is at the page's native resolution and stays there, which is §5.2 step
-/// 2's other half.
-fn crop_samples(page: &Raster, crop: Rect, ceiling: f64) -> (EdgePad, Vec<u8>) {
-    let mut pad = EdgePad::None;
-    let mut out = vec![0u8; (crop.w as usize) * (crop.h as usize) * 3];
-    for y in 0..crop.h as i64 {
-        for x in 0..crop.w as i64 {
-            let (px, py) = (crop.x + x, crop.y + y);
-            let cx = px.clamp(0, page.width as i64 - 1);
-            let cy = py.clamp(0, page.height as i64 - 1);
-            if (cx, cy) != (px, py) {
-                pad = EdgePad::Replicate;
-            }
-            let at = (y * crop.w as i64 + x) as usize * 3;
-            for c in 0..3 {
-                let channel = source_channel(page.mode, c);
-                let sample = page.sample(cx as u32, cy as u32, channel) as f64;
-                // Scaled by the page's own ceiling rather than shifted, so a
-                // depth below eight bits arrives as the full range the model
-                // expects instead of as a dark image.
-                out[at + c] = (sample / ceiling * 255.0).round().clamp(0.0, 255.0) as u8;
-            }
-        }
-    }
-    (pad, out)
-}
-
-/// The hint: 255 where the text is, 0 elsewhere.
-///
-/// It is the **ink** mask - the lettering and its ring - and not the grown
-/// fitted mask: the
-/// write set was narrowed to `Fitted::ink` on every model rung, and a hint
-/// pointing at the whole grown mask would zero real context the model is now
-/// allowed to keep, and `model_hole`'s table says a wider hole invents more.
-/// The hint reaches no mask channel at all; it matters only because a sidecar
-/// may use it to place its own attention, and pointing at the isolation ring
-/// would point at paper.
-fn hint_samples(fitted: &Fitted, crop: Rect) -> Vec<u8> {
-    let mut out = vec![0u8; (crop.w as usize) * (crop.h as usize)];
-    for y in 0..crop.h as i64 {
-        for x in 0..crop.w as i64 {
-            if fitted.ink.contains(crop.x + x, crop.y + y) {
-                out[(y * crop.w as i64 + x) as usize] = 255;
-            }
-        }
-    }
-    out
-}
-
-/// One returned sample, reduced back to the page's own channel.
-///
-/// A grayscale page takes the mean of the three, for
-/// [`crate::engines::lama`]'s measured reason: a model is free to return
-/// something slightly non-neutral, and picking one channel keeps a third more
-/// of that noise than averaging does.
-fn returned_sample(edited: &[u8], mode: ColorMode, channel: usize, at: usize) -> f64 {
-    match mode {
-        ColorMode::Gray | ColorMode::GrayAlpha => {
-            (edited[at] as f64 + edited[at + 1] as f64 + edited[at + 2] as f64) / 3.0 / 255.0
-        }
-        _ => edited[at + channel.min(2)] as f64 / 255.0,
-    }
-}
-
-/// The largest region this rung accepts, restated so a reader of this file does
-/// not have to open [`crate::engines::model`] to find out that it is the same
-/// number as every other model rung's.
-pub const MAX_REGION: u32 = MAX_BOX;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::model::MODEL_INPUT;
+    use crate::engines::model::{Decline, MODEL_INPUT};
+    use crate::engines::render::snap;
     use crate::fit;
-    use crate::image::BitDepth;
-    use crate::mask::Mask;
+    use crate::image::{BitDepth, ColorMode};
+    use crate::mask::{Mask, Rect};
+    use crate::memory::GIB;
     use crate::sidecar::hardware::RESIDENT_CLEANER;
     use crate::sidecar::wire::{
         Basis, Encoding, ErrorBody, ErrorDetail, ErrorKind, Health, Image, MemoryReport, OpenReply,
         RenderReply, State,
     };
-    use crate::memory::GIB;
+    use crate::strip::window::EdgePad;
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener};
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -560,7 +404,13 @@ mod tests {
                     serve(stream, behaviour, &opened, &said);
                 }
             });
-            Fake { addr, token: "0".repeat(48), requests, opens, prompts }
+            Fake {
+                addr,
+                token: "0".repeat(48),
+                requests,
+                opens,
+                prompts,
+            }
         }
 
         fn inpainter(&self, budget: Budget) -> Inpainter {
@@ -591,7 +441,9 @@ mod tests {
                 Ok(n) => n,
             };
             raw.extend_from_slice(&buffer[..read]);
-            let Some(split) = raw.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+            let Some(split) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
             let head = String::from_utf8_lossy(&raw[..split]).to_string();
             let length: usize = head
                 .split("\r\n")
@@ -628,20 +480,22 @@ mod tests {
         match path {
             "/v1/health" => (
                 200,
-                json(&serde_json::to_value(Health {
-                    protocol: crate::sidecar::wire::PROTOCOL,
-                    sidecar_version: "test".into(),
-                    state: State::Idle,
-                    backend: Some("mflux".into()),
-                    model: None,
-                    weights_bytes: Some(4600 * 1024 * 1024),
-                    working_set_bytes: Some(4600 * 1024 * 1024),
-                    basis: Some(Basis::Declared),
-                    applied: Vec::new(),
-                    backends: vec!["mflux".into(), "sdnq".into()],
-                    memory: None,
-                })
-                .unwrap()),
+                json(
+                    &serde_json::to_value(Health {
+                        protocol: crate::sidecar::wire::PROTOCOL,
+                        sidecar_version: "test".into(),
+                        state: State::Idle,
+                        backend: Some("mflux".into()),
+                        model: None,
+                        weights_bytes: Some(4600 * 1024 * 1024),
+                        working_set_bytes: Some(4600 * 1024 * 1024),
+                        basis: Some(Basis::Declared),
+                        applied: Vec::new(),
+                        backends: vec!["mflux".into(), "sdnq".into()],
+                        memory: None,
+                    })
+                    .unwrap(),
+                ),
             ),
             "/v1/open" => {
                 opens.fetch_add(1, Ordering::Relaxed);
@@ -656,27 +510,31 @@ mod tests {
                 }
                 (
                     200,
-                    json(&serde_json::to_value(OpenReply {
-                        applied,
-                        weights_bytes: Some(4600 * 1024 * 1024),
-                        working_set_bytes: Some(4600 * 1024 * 1024),
-                        basis: Some(Basis::Declared),
-                        memory: None,
-                    })
-                    .unwrap()),
+                    json(
+                        &serde_json::to_value(OpenReply {
+                            applied,
+                            weights_bytes: Some(4600 * 1024 * 1024),
+                            working_set_bytes: Some(4600 * 1024 * 1024),
+                            basis: Some(Basis::Declared),
+                            memory: None,
+                        })
+                        .unwrap(),
+                    ),
                 )
             }
             "/v1/render" => {
                 if let Behaviour::OutOfMemory = behaviour {
                     return (
                         507,
-                        json(&serde_json::to_value(ErrorBody {
-                            error: ErrorDetail {
-                                kind: ErrorKind::OutOfMemory,
-                                detail: Some("the cap fired".into()),
-                            },
-                        })
-                        .unwrap()),
+                        json(
+                            &serde_json::to_value(ErrorBody {
+                                error: ErrorDetail {
+                                    kind: ErrorKind::OutOfMemory,
+                                    detail: Some("the cap fired".into()),
+                                },
+                            })
+                            .unwrap(),
+                        ),
                     );
                 }
                 let request: crate::sidecar::wire::RenderRequest =
@@ -693,17 +551,19 @@ mod tests {
                 };
                 (
                     200,
-                    json(&serde_json::to_value(RenderReply {
-                        image: Image::new(w, h, Encoding::Rgb8, &pixels),
-                        elapsed_ms: 1,
-                        memory: MemoryReport {
-                            rss_bytes: Some(peak),
-                            peak_rss_bytes: peak,
-                            cache_bytes: Some(0),
-                            ..Default::default()
-                        },
-                    })
-                    .unwrap()),
+                    json(
+                        &serde_json::to_value(RenderReply {
+                            image: Image::new(w, h, Encoding::Rgb8, &pixels),
+                            elapsed_ms: 1,
+                            memory: MemoryReport {
+                                rss_bytes: Some(peak),
+                                peak_rss_bytes: peak,
+                                cache_bytes: Some(0),
+                                ..Default::default()
+                            },
+                        })
+                        .unwrap(),
+                    ),
                 )
             }
             _ => (202, b"{}".to_vec()),
@@ -721,14 +581,21 @@ mod tests {
             icc: None,
             palette: None,
             trns: None,
-            srgb_intent: None,
+            srgb_intent: None, color: Default::default(),
             data: vec![level; (w * h) as usize],
         }
     }
 
     fn fitted_over(page: &Raster, rect: Rect) -> Fitted {
         let seed = Mask::filled(rect);
-        fit::fit(page, &seed, 1.0, 0.0, &fit::EdgeMap::none(page.width, page.height), true)
+        fit::fit(
+            page,
+            &seed,
+            1.0,
+            0.0,
+            &fit::EdgeMap::none(page.width, page.height),
+            true,
+        )
     }
 
     fn generous() -> Budget {
@@ -746,32 +613,72 @@ mod tests {
     /// and is **sized to the region** - proportional context, clamped at both
     /// ends, and no floor at the engine context.
     #[test]
+    fn the_wire_sampling_is_the_local_recipe() {
+        // The cloud gateway divides guidance_scaled by 100, so this is the
+        // local 1.0 arriving as 1.0 and not the 3.5 the wire once carried.
+        let wire = wire_sampling();
+        assert_eq!(wire.seed, SEED);
+        assert_eq!(wire.steps, STEPS);
+        assert_eq!(wire.guidance_scaled, 100);
+        assert_eq!(
+            wire,
+            WireSampling {
+                seed: 1,
+                steps: 4,
+                guidance_scaled: 100
+            }
+        );
+    }
+
+    #[test]
     fn a_crop_is_centred_snapped_and_tight_around_the_region() {
-        // A line of dialogue. Half of 40 is 20, under the floor, so the context
-        // is `CONTEXT_MIN` - and the crop is nowhere near 512², which is the
-        // whole of the smudge this rung used to produce.
-        let small = crop_for(Rect::new(300, 400, 40, 24));
-        assert_eq!((small.w, small.h), (snap(40 + 2 * CONTEXT_MIN), snap(24 + 2 * CONTEXT_MIN)));
+        let v1 = Preprocessing::V1;
+        // A line of dialogue. Half of 40 is 20, under the floor, so the V1
+        // context is `CONTEXT_MIN` - and the crop is nowhere near 512², which
+        // is the whole of the smudge this rung used to produce.
+        let small = v1.crop_for(Rect::new(300, 400, 40, 24)).unwrap();
+        assert_eq!(
+            (small.w, small.h),
+            (snap(40 + 2 * CONTEXT_MIN), snap(24 + 2 * CONTEXT_MIN))
+        );
         assert!(small.w < MODEL_INPUT && small.h < MODEL_INPUT);
         assert_eq!(small.x + small.w as i64 / 2, 300 + 20);
         assert_eq!(small.y + small.h as i64 / 2, 400 + 12);
 
         // A sound effect: half the long side is past `CONTEXT_MAX`, so the
         // context is capped rather than growing with the region.
-        let sfx = crop_for(Rect::new(100, 100, 117, 434));
-        assert_eq!(context_for(Rect::new(100, 100, 117, 434)), CONTEXT_MAX);
-        assert_eq!((sfx.w, sfx.h), (snap(117 + 2 * CONTEXT_MAX), snap(434 + 2 * CONTEXT_MAX)));
+        let sfx = v1.crop_for(Rect::new(100, 100, 117, 434)).unwrap();
+        assert_eq!(v1.context_for(Rect::new(100, 100, 117, 434)), CONTEXT_MAX);
+        assert_eq!(
+            (sfx.w, sfx.h),
+            (snap(117 + 2 * CONTEXT_MAX), snap(434 + 2 * CONTEXT_MAX))
+        );
 
-        let large = crop_for(Rect::new(0, 0, 900, 1000));
-        assert_eq!(large.w % LATENT_STRIDE, 0);
-        assert_eq!(large.h % LATENT_STRIDE, 0);
-        assert!(large.w >= 900 + 2 * CONTEXT_MAX);
-        assert!(large.h >= 1000 + 2 * CONTEXT_MAX);
+        // V2 carries the same wide context around every region, centred and
+        // snapped the same way.
+        for bounds in [Rect::new(300, 400, 40, 24), Rect::new(100, 100, 117, 434)] {
+            let crop = crop_for(bounds).unwrap();
+            assert_eq!(context_for(bounds), CONTEXT_WIDE);
+            assert_eq!(
+                (crop.w, crop.h),
+                (snap(bounds.w + 2 * CONTEXT_WIDE), snap(bounds.h + 2 * CONTEXT_WIDE))
+            );
+            assert_eq!(crop.x + crop.w as i64 / 2, bounds.x + bounds.w as i64 / 2);
+        }
 
-        // Every region this rung accepts produces a bounded crop, because
-        // `MAX_BOX` is what bounds the region.
-        let biggest = crop_for(Rect::new(0, 0, MAX_REGION, MAX_REGION));
-        assert!(biggest.w <= MAX_REGION + 2 * CONTEXT_MAX + LATENT_STRIDE);
+        for version in [Preprocessing::V1, Preprocessing::V2] {
+            let large = version.crop_for(Rect::new(0, 0, 900, 1000)).unwrap();
+            let context = version.context_for(Rect::new(0, 0, 900, 1000));
+            assert_eq!(large.w % LATENT_STRIDE, 0);
+            assert_eq!(large.h % LATENT_STRIDE, 0);
+            assert!(large.w >= 900 + 2 * context);
+            assert!(large.h >= 1000 + 2 * context);
+
+            // Every region this rung accepts produces a bounded crop, because
+            // `MAX_BOX` is what bounds the region.
+            let biggest = version.crop_for(Rect::new(0, 0, MAX_REGION, MAX_REGION)).unwrap();
+            assert!(biggest.w <= MAX_REGION + 2 * CONTEXT_WIDE + LATENT_STRIDE);
+        }
     }
 
     /* -- the composite ------------------------------------------------- */
@@ -787,9 +694,15 @@ mod tests {
         let fitted = fitted_over(&page, Rect::new(240, 300, 60, 40));
         let mut inpainter = fake.inpainter(generous());
 
-        let rendered = inpainter.render(&page, &fitted).expect("the fake sidecar declined");
+        let rendered = inpainter
+            .render(&page, &fitted)
+            .expect("the fake sidecar declined");
         let bounds = rendered.mask.bounds;
         assert_eq!(rendered.tiles, 1, "one crop, never a tiling");
+        // This rung composites as a cloud render of the current version
+        // does, tone alignment included, and reports it for the provenance.
+        let tone = rendered.tone.as_ref().expect("a current-version composite reports its tone");
+        assert_eq!(tone.provenance()["preprocessing_version"], Preprocessing::CURRENT.version());
 
         let mut inside_changed = 0usize;
         for y in 0..rendered.pixels.height {
@@ -801,7 +714,10 @@ mod tests {
                         inside_changed += 1;
                     }
                 } else {
-                    assert_eq!(value, 200, "the page changed at {px},{py}, outside the mask");
+                    assert_eq!(
+                        value, 200,
+                        "the page changed at {px},{py}, outside the mask"
+                    );
                 }
             }
         }
@@ -827,7 +743,10 @@ mod tests {
                     continue;
                 }
                 let (px, py) = (bounds.x + x as i64, bounds.y + y as i64);
-                assert!(permitted.contains(px, py), "wrote outside the bound at {px},{py}");
+                assert!(
+                    permitted.contains(px, py),
+                    "wrote outside the bound at {px},{py}"
+                );
             }
         }
     }
@@ -908,12 +827,8 @@ mod tests {
     #[test]
     fn an_open_that_skipped_a_guard_fails_and_says_which_one() {
         let fake = Fake::start(Behaviour::ShortEcho);
-        let mut sidecar = Sidecar::attach(
-            fake.addr,
-            fake.token.clone(),
-            Backend::Mflux,
-            generous(),
-        );
+        let mut sidecar =
+            Sidecar::attach(fake.addr, fake.token.clone(), Backend::Mflux, generous());
         match sidecar.client().open("flux2-klein-4b") {
             Err(Error::Run(detail)) => {
                 assert!(detail.contains("mx.set_cache_limit"), "{detail}");
@@ -946,20 +861,32 @@ mod tests {
         let key = crate::residency::Key::new(crate::registry::Kind::Sidecar, "test-child");
 
         let mut first = fake.inpainter(generous());
-        first.render(&page, &fitted).expect("the first edit declined");
-        assert_eq!(fake.opens.load(Ordering::Relaxed), 0, "the first render reopened the model");
+        first
+            .render(&page, &fitted)
+            .expect("the first edit declined");
+        assert_eq!(
+            fake.opens.load(Ordering::Relaxed),
+            0,
+            "the first render reopened the model"
+        );
         // The click ends: the child is parked, not killed.
         crate::residency::checkin(key.clone(), first);
 
         let mut second: Inpainter =
             crate::residency::checkout(&key).expect("the child was killed with the click");
-        second.render(&page, &fitted).expect("the second edit declined");
+        second
+            .render(&page, &fitted)
+            .expect("the second edit declined");
         assert_eq!(
             fake.opens.load(Ordering::Relaxed),
             0,
             "the second region reopened a model that was still loaded"
         );
-        assert_eq!(second.floor().regions, 2, "two regions, one child, one open");
+        assert_eq!(
+            second.floor().regions,
+            2,
+            "two regions, one child, one open"
+        );
         crate::residency::clear();
     }
 
@@ -1001,13 +928,16 @@ mod tests {
     fn a_region_past_the_shared_ceiling_is_declined_before_a_process_is_spawned() {
         let page = gray_page(4000, 4000, 200);
         let fitted = fitted_over(&page, Rect::new(0, 0, MAX_REGION + 1, 10));
-        assert!(matches!(declines(&page, &fitted), Some(Decline::TooLarge { .. })));
+        assert!(matches!(
+            declines(&page, &fitted),
+            Some(Decline::TooLarge { .. })
+        ));
     }
 
     /* -- the prompt ---------------------------------------------------- */
 
     /// **The same instruction reaches the model whatever the page's colourspace
-    /// is**, and it carries no vocabulary that could depend on one.
+    /// is.**
     ///
     /// This is the invariant [`PROMPT`]'s sweep bought, and it is worth a test
     /// because the thing it replaced was a *pair* of prompts selected by
@@ -1017,15 +947,6 @@ mod tests {
     /// compared, which is the only place the branch could reappear.
     #[test]
     fn one_prompt_reaches_the_model_whatever_the_page_mode_is() {
-        // No screentone, no monochrome, no colour vocabulary - the premise
-        // for splitting the prompt was that such words drift a colour page.
-        for word in ["screentone", "black and white", "colored", "manga"] {
-            assert!(
-                !PROMPT.to_lowercase().contains(word),
-                "the prompt carries colourspace vocabulary: {word:?}"
-            );
-        }
-
         let fake = Fake::start(Behaviour::Blacken);
         let mut sent = Vec::new();
         for mode in [ColorMode::Gray, ColorMode::Rgb] {
@@ -1038,10 +959,15 @@ mod tests {
             }
             let fitted = fitted_over(&page, Rect::new(240, 300, 60, 40));
             let mut inpainter = fake.inpainter(generous());
-            inpainter.render(&page, &fitted).expect("the fake sidecar declined");
+            inpainter
+                .render(&page, &fitted)
+                .expect("the fake sidecar declined");
             sent.push(fake.prompt());
         }
         assert_eq!(sent[0].as_deref(), Some(PROMPT));
-        assert_eq!(sent[0], sent[1], "the prompt still depends on the page's mode");
+        assert_eq!(
+            sent[0], sent[1],
+            "the prompt still depends on the page's mode"
+        );
     }
 }

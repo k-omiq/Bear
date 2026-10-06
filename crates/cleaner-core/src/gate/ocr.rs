@@ -127,10 +127,11 @@ impl Ocr {
         if vocab.is_empty() {
             return Err(OcrError::Model("the vocabulary is empty".into()));
         }
-        let lease = crate::registry::register(
+        let lease = crate::registry::register_named(
             crate::registry::Kind::Ocr,
             crate::registry::Footprint::weights_of(&[encoder, decoder]),
             crate::registry::Device::accelerator(selection.accelerator),
+            Some("Manga OCR Base".into()),
         );
         Ok(Ocr {
             encoder: encoder_session,
@@ -345,7 +346,7 @@ pub fn cjk_share(text: &str) -> f32 {
 /// A character that belongs to no script: whitespace, General Punctuation
 /// (e.g. ellipsis, dashes), and the ASCII digits and punctuation any language
 /// sets in the same glyphs. See [`cjk_share`].
-fn is_neutral(ch: char) -> bool {
+pub(crate) fn is_neutral(ch: char) -> bool {
     ch.is_whitespace()
         || ch.is_ascii_digit()
         || ch.is_ascii_punctuation()
@@ -416,6 +417,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }

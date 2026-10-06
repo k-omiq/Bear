@@ -12,8 +12,8 @@
 //!
 //! This set was once called "the nine colour-mode fixtures", then listed at
 //! eleven. Eleven is right, and there are twelve here: bitonal is added
-//! because rung 1 has a "skipped for bitonal sources" rule that nothing
-//! else would exercise.
+//! because the model rungs and the quality metric have bitonal rules that
+//! nothing else would exercise.
 
 use std::sync::OnceLock;
 
@@ -61,6 +61,20 @@ pub fn gray_profile() -> Vec<u8> {
                 .expect("lcms2 can serialise it")
         })
         .clone()
+}
+
+/// Synthetic, bidirectional CMYK output profile generated independently with LCMS.
+/// Its declared ink model is RGB=(1-CMY)*(1-K); it is a test/reference assumption,
+/// not a scanner calibration. Fixture sources and license are checked in.
+pub fn cmyk_profile() -> Vec<u8> {
+    include_bytes!("../../tests/fixtures/color-reference/synthetic-cmyk.icc").to_vec()
+}
+
+/// The historic invalid RGB-profile/CMYK-samples fixture, for negative tests.
+pub fn mismatched_cmyk() -> Raster {
+    let mut raster = by_name("cmyk8").raster;
+    raster.icc = Some(srgb_profile());
+    raster
 }
 
 /// `value` at (x, y) for a single channel, in 0..=255.
@@ -111,7 +125,7 @@ fn sixteen_bit(mode: ColorMode) -> Vec<u8> {
 }
 
 fn base(mode: ColorMode, depth: BitDepth, data: Vec<u8>) -> Raster {
-    Raster { width: W, height: H, mode, depth, icc: None, palette: None, trns: None, srgb_intent: None, data }
+    Raster { width: W, height: H, mode, depth, icc: None, palette: None, trns: None, srgb_intent: None, color: Default::default(), data }
 }
 
 /// Indexed, with **a free palette slot**. §4 requires it: the fill's median
@@ -142,6 +156,7 @@ fn indexed() -> Raster {
         palette: Some(palette),
         trns: None,
         srgb_intent: None,
+        color: Default::default(),
         data,
     }
 }
@@ -167,6 +182,7 @@ fn bitonal() -> Raster {
         palette: None,
         trns: None,
         srgb_intent: None,
+        color: Default::default(),
         data,
     }
 }
@@ -201,7 +217,7 @@ pub fn all() -> Vec<Fixture> {
         Fixture { name: "bitonal", raster: bitonal() },
         Fixture {
             name: "cmyk8",
-            raster: with_icc(base(ColorMode::Cmyk, BitDepth::Eight, eight_bit(ColorMode::Cmyk)), srgb_profile()),
+            raster: with_icc(base(ColorMode::Cmyk, BitDepth::Eight, eight_bit(ColorMode::Cmyk)), cmyk_profile()),
         },
     ]
 }
@@ -244,7 +260,7 @@ mod tests {
 
     #[test]
     fn the_fixture_profiles_are_profiles_a_reader_can_parse() {
-        for bytes in [srgb_profile(), gray_profile()] {
+        for bytes in [srgb_profile(), gray_profile(), cmyk_profile()] {
             assert!(lcms2::Profile::new_icc(&bytes).is_ok(), "lcms2 could not read back its own profile");
         }
     }

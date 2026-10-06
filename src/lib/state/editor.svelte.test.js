@@ -1,16 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   applyRegionState,
+  adoptRun,
+  consumeResume,
+  cycleMaskSelectShape,
+  requestResume,
+  replaceRegion,
+  closeEditorChapter,
   editor,
+  jobConflictKey,
+  LOCAL_CEILING,
   openEditorChapter,
+  redo,
   recordRegionEdit,
+  reportJobConflict,
   select,
   selectedRegion,
+  setToolBySlot,
+  startRun,
+  runFinished,
+  TOOLS,
+  toggleMaskSelectMode,
   undo,
 } from './editor.svelte.js'
 import { app } from './app.svelte.js'
 import { setBackend } from '../api/backend.js'
 import { createHistory, push } from '../model/history.js'
+import { session } from './session.svelte.js'
+import { jobById, resetJobs } from './jobs.svelte.js'
 
 describe('editor history persistence failures', () => {
   beforeEach(() => {
@@ -398,6 +415,24 @@ describe('a run over pages the window is not holding', () => {
     expect(editor.chapter.review.map((entry) => entry.id)).toEqual(['c'])
   })
 
+  it('reloads a page left cleaning when a run ends before page-done', async () => {
+    const loadPages = vi.fn(async () => [{ ...header(2), status: 'unclean', resident: false }])
+    setBackend(/** @type {any} */ ({ loadPages }))
+    editor.run.runId = 'r1'
+    emit({ type: 'page-started', chapterId: 'ch1', pageIndex: 2 })
+    expect(editor.chapter.pages[2].status).toBe('cleaning')
+    emit({ type: 'run-finished', chapterId: 'ch1', runId: 'r1', reason: 'cancelled', nextPageIndex: 2 })
+    await vi.waitFor(() => expect(editor.chapter.pages[2].status).toBe('unclean'))
+    expect(loadPages).toHaveBeenCalledWith({ chapterId: 'ch1', indices: [2] })
+  })
+
+  it('settles a detection waiter when the editor closes', async () => {
+    editor.run.runId = 'run-before-home'
+    const waiting = runFinished('run-before-home')
+    closeEditorChapter()
+    await expect(waiting).resolves.toMatchObject({ runId: 'run-before-home', reason: 'editor-closed' })
+  })
+
   it('keeps brush and shape choices when another chapter opens in this app session', async () => {
     const previous = structuredClone(editor.toolParams)
     try {
@@ -440,10 +475,14 @@ describe('tool parameters defaults', () => {
     })
   })
 
+  it('initializes the selection tool to add, with a round brush', () => {
+    expect(editor.toolParams.maskSelect).toEqual({ mode: 'add', shape: 'brush', size: 32 })
+  })
+
   it('initializes shapes with white color and feather 0', () => {
     expect(editor.toolParams.shapes).toMatchObject({
       shape: 'rect',
-      mode: 'fill',
+      mode: 'solid',
       color: '#ffffff',
       feather: 0,
     })
@@ -643,5 +682,462 @@ describe('selectedRegion', () => {
     expect(selectedRegion()).toBe(null)
     select('ch1-p001-r0')
     expect(selectedRegion()).toBe(null)
+  })
+})
+
+describe('startRun local engine ceiling boundary', () => {
+  const initialToolParams = structuredClone(editor.toolParams)
+
+  beforeEach(() => {
+    editor.chapter = { id: 'ch-test-1', pages: [{ id: 'p0', index: 0, regions: [], status: 'unclean' }] }
+    editor.pageIndex = 0
+    editor.run = {
+      active: false,
+      runId: null,
+      scope: null,
+      queued: 0,
+      pagesDone: 0,
+      currentPageIndex: null,
+      nextPageIndex: null,
+    }
+  })
+
+  afterEach(() => {
+    setBackend(null)
+    editor.chapter = null
+    editor.run = {
+      active: false,
+      runId: null,
+      scope: null,
+      queued: 0,
+      pagesDone: 0,
+      currentPageIndex: null,
+      nextPageIndex: null,
+    }
+    editor.toolParams = structuredClone(initialToolParams)
+  })
+
+  it.each([
+    { inputScope: undefined, expectedScope: 'page', paramCeiling: undefined },
+    { inputScope: 'page', expectedScope: 'page', paramCeiling: 'cloud' },
+    { inputScope: 'chapter', expectedScope: 'chapter', paramCeiling: 'flux' },
+    { inputScope: 'project', expectedScope: 'project', paramCeiling: 'cloud' },
+  ])(
+    'always passes LOCAL_CEILING ("lama") to runClean for scope $inputScope (effective: $expectedScope)',
+    async ({ inputScope, expectedScope, paramCeiling }) => {
+      if (paramCeiling) {
+        editor.toolParams.autoClean = {
+          ...editor.toolParams.autoClean,
+          engineCeiling: paramCeiling,
+        }
+      }
+
+      const runClean = vi.fn().mockResolvedValue({
+        runId: 'mock-run-id',
+        pages: [{ id: 'p0' }],
+      })
+      setBackend(/** @type {any} */ ({ runClean }))
+
+      const runId = await startRun(inputScope)
+
+      expect(runId).toBe('mock-run-id')
+      expect(runClean).toHaveBeenCalledTimes(1)
+      expect(runClean).toHaveBeenCalledWith({
+        scope: expectedScope,
+        mode: 'auto',
+        chapterId: 'ch-test-1',
+        pageIndex: 0,
+        engineCeiling: 'lama',
+        bubbleEngine: 'fill',
+        outsideEngine: 'lama',
+        outsideBubbles: 'review',
+        bubbleColor: '#ffffff',
+        maskPaddingPx: 0,
+        detection: { ...session.detection },
+        detectorModels: [...session.detectorModels],
+        geometryPolicy: 'legacy',
+        textPolicy: 'legacy_gate',
+        ocrRescue: session.ocrRescue,
+        analysisTargets: { ...session.analysisTargets },
+      })
+      expect(runClean.mock.calls[0][0].engineCeiling).toBe(LOCAL_CEILING)
+      expect(editor.run).toMatchObject({
+        active: true,
+        runId: 'mock-run-id',
+        scope: expectedScope,
+        queued: 1,
+      })
+    },
+  )
+
+  it('runs all-text automatic cleaning with the selected detection models', async () => {
+    const previousPolicy = session.textPolicy
+    session.textPolicy = 'all_text'
+    const runClean = vi.fn().mockResolvedValue({ runId: 'all-text-run', pages: [{ id: 'p0' }] })
+    setBackend(/** @type {any} */ ({ runClean }))
+    app.modals.length = 0
+    try {
+      expect(await startRun()).toBe('all-text-run')
+      expect(runClean).toHaveBeenCalledWith(expect.objectContaining({
+        textPolicy: 'all_text', detectorModels: [...session.detectorModels],
+      }))
+    } finally {
+      session.textPolicy = previousPolicy
+      app.modals.length = 0
+    }
+  })
+
+  // The status line beside Cancel names the step, and a Detect run changes
+  // no pixel: the run keeps the mode it was started with.
+  it('keeps the step a run was started with', async () => {
+    const runClean = vi.fn().mockResolvedValue({ runId: 'detect-run', pages: [{ id: 'p0' }] })
+    setBackend(/** @type {any} */ ({ runClean }))
+    expect(await startRun('chapter', { mode: 'detect' })).toBe('detect-run')
+    expect(editor.run).toMatchObject({ active: true, runId: 'detect-run', mode: 'detect' })
+    editor.run.active = false
+    expect(adoptRun({ runId: 'render-run', pages: [] }, 'page', 'clean')).toBe('render-run')
+    expect(editor.run.mode).toBe('clean')
+    editor.run.active = false
+    expect(adoptRun({ runId: 'plain-run', pages: [] }, 'page')).toBe('plain-run')
+    expect(editor.run.mode).toBe('auto')
+  })
+
+  // Detect on its own finds all text for the review; the detection half of a
+  // Detect & clean (a Detect run whose clean follows on the cloud) keeps the
+  // panel's choices.
+  it('finds all text on a Detect run and keeps the choices for Detect & clean', async () => {
+    const runClean = vi.fn().mockResolvedValue({ runId: 'r', pages: [{ id: 'p0' }] })
+    setBackend(/** @type {any} */ ({ runClean }))
+    const previous = editor.toolParams.autoClean
+    try {
+      for (const [step, expected] of [
+        ['detect', { textPolicy: 'all_text', outsideBubbles: 'clean' }],
+        ['auto', { textPolicy: session.textPolicy, outsideBubbles: 'review' }],
+      ]) {
+        editor.run.active = false
+        runClean.mockClear()
+        editor.toolParams.autoClean = { ...(previous ?? {}), step, outsideBubbles: 'review' }
+        await startRun('page', { mode: 'detect' })
+        expect(runClean.mock.calls[0][0], step).toMatchObject(expected)
+      }
+    } finally {
+      editor.toolParams.autoClean = previous
+      editor.run.active = false
+    }
+  })
+
+  // A resumed run is the step it was taking when it stopped, and says so.
+  it('resumes a run in the mode the native side resumed it in', async () => {
+    for (const [answered, expected] of [['detect', 'detect'], ['clean', 'clean'], [undefined, 'auto']]) {
+      editor.run.active = false
+      const resumeJob = vi.fn(async () => ({ runId: `resume-${expected}`, pages: [{ id: 'p0' }], resumedFrom: 0,
+        ...(answered ? { mode: answered } : {}) }))
+      setBackend(/** @type {any} */ ({ resumeJob }))
+      requestResume('project-1', 'ch-test-1')
+      expect(await consumeResume()).toBe(`resume-${expected}`)
+      expect(editor.run).toMatchObject({ active: true, scope: 'chapter', mode: expected })
+    }
+  })
+
+  it('does not adopt another chapter\'s already-running handle', async () => {
+    const runClean = vi.fn(async () => ({ runId: 'chapter-a-run', alreadyRunning: true, pages: [] }))
+    setBackend(/** @type {any} */ ({ runClean }))
+    app.notices.length = 0
+    expect(await startRun()).toBeNull()
+    expect(editor.run.active).toBe(false)
+    expect(adoptRun({ runId: 'chapter-a-run', alreadyRunning: true }, 'page')).toBeNull()
+    expect(app.notices.at(-1)?.key).toBe('notice.run.busy')
+  })
+
+  it('rejects a second local start while the first handle is pending', async () => {
+    let answer
+    const runClean = vi.fn(() => new Promise((resolve) => { answer = resolve }))
+    setBackend(/** @type {any} */ ({ runClean }))
+    const first = startRun()
+    expect(await startRun()).toBeNull()
+    expect(runClean).toHaveBeenCalledTimes(1)
+    answer({ runId: 'first', pages: [] })
+    expect(await first).toBe('first')
+  })
+})
+
+describe('text-shaped revision history', () => {
+  afterEach(() => {
+    setBackend(null)
+    editor.chapter = null
+    editor.history = createHistory()
+  })
+
+  it('undoes and redoes successive immutable patch revisions by exact identity', async () => {
+    const regionAt = (revision) => ({ id: 'p1-hreview-sam-1', pageId: 'p1', outcome: 'cleaned',
+      mask: { id: `mask-${revision}`, textShapePatchRevision: `patch-revision-${revision}` } })
+    const first = regionAt(1)
+    const second = regionAt(2)
+    const journal = []
+    let cursor = 0
+    let currentRegion = second
+    const restoreRegion = vi.fn(async ({ region }) => {
+      currentRegion = region
+      return region
+    })
+    setBackend(/** @type {any} */ ({
+      historyPush: async ({ entry }) => {
+        journal.push(entry)
+        cursor = journal.length
+        return { cursor, entries: journal.map((item, index) => ({ seq: index + 1, label: item.label })) }
+      },
+      historyMove: async ({ direction }) => {
+        if (direction === 'undo') cursor = Math.max(0, cursor - 1)
+        else cursor = Math.min(journal.length, cursor + 1)
+        const entry = direction === 'undo' ? journal[cursor] : journal[cursor - 1]
+        return { cursor, entry }
+      },
+      restoreRegion,
+      loadPages: async () => [],
+    }))
+    editor.chapter = { id: 'revision-chapter', pages: [{ id: 'p1', index: 0, resident: true,
+      status: 'cleaned', regions: [second], regionCount: 1, doneCount: 1, reviewCount: 0 }], review: [] }
+    editor.history = createHistory()
+
+    recordRegionEdit('canvas.command.applyTool', second.id, { region: null, pageStatus: 'unclean' },
+      { region: first, pageStatus: 'cleaned' })
+    await editor.history.running
+    recordRegionEdit('canvas.command.applyTool', second.id, { region: first, pageStatus: 'cleaned' },
+      { region: second, pageStatus: 'cleaned' })
+    await editor.history.running
+
+    undo()
+    await editor.history.running
+    expect(currentRegion.mask.textShapePatchRevision).toBe('patch-revision-1')
+    undo()
+    await editor.history.running
+    expect(currentRegion).toBeNull()
+    redo()
+    await editor.history.running
+    expect(currentRegion.mask.textShapePatchRevision).toBe('patch-revision-1')
+    redo()
+    await editor.history.running
+    expect(currentRegion.mask.textShapePatchRevision).toBe('patch-revision-2')
+    expect(restoreRegion.mock.calls.map(([call]) => call.region?.mask?.textShapePatchRevision ?? null)).toEqual([
+      'patch-revision-1', null, 'patch-revision-1', 'patch-revision-2',
+    ])
+  })
+
+  it('carries legacy patch revisions through undo and redo', async () => {
+    const regionAt = (revision) => ({
+      id: 'p1-r1', pageId: 'p1', outcome: 'cleaned',
+      mask: { id: 'p1-r1-m1', legacyPatchRevision: revision },
+    })
+    const first = regionAt('old-pixels')
+    const second = regionAt('new-pixels')
+    const entries = []
+    let cursor = 0
+    const restoreRegion = vi.fn(async ({ region }) => region)
+    setBackend(/** @type {any} */ ({
+      historyPush: async ({ entry }) => {
+        entries.push(entry)
+        cursor = entries.length
+        return { cursor, entries: entries.map((item, index) => ({ seq: index + 1, label: item.label })) }
+      },
+      historyMove: async ({ direction }) => {
+        cursor += direction === 'undo' ? -1 : 1
+        return { cursor, entry: direction === 'undo' ? entries[cursor] : entries[cursor - 1] }
+      },
+      restoreRegion,
+      loadPages: async () => [],
+    }))
+    editor.chapter = { id: 'legacy-chapter', pages: [{ id: 'p1', index: 0, resident: true,
+      status: 'cleaned', regions: [second], regionCount: 1, doneCount: 1, reviewCount: 0 }], review: [] }
+    editor.history = createHistory()
+
+    recordRegionEdit('canvas.command.applyTool', first.id,
+      { region: first, pageStatus: 'cleaned' }, { region: second, pageStatus: 'cleaned' })
+    await editor.history.running
+    undo()
+    await editor.history.running
+    redo()
+    await editor.history.running
+    expect(restoreRegion.mock.calls.map(([call]) => call.region.mask.legacyPatchRevision))
+      .toEqual(['old-pixels', 'new-pixels'])
+  })
+})
+
+/**
+ * A longstrip page learns of a layer edit on a neighbour without a reload:
+ * `page.liveAppearance` chains the changed layer's digest onto every page its
+ * old and new boxes reach. It moves only when a tile would change, and when
+ * the old box is not known it reaches every page.
+ */
+// Last, because opening a chapter subscribes to the backend once per module,
+// and the tests above count on being the ones that do.
+describe('a chapter write refused for another writer', () => {
+  afterEach(() => {
+    setBackend(null)
+    editor.chapter = null
+    editor.project = null
+    app.notices.length = 0
+  })
+
+  it('finds the code wherever a wrapping layer left it', () => {
+    expect(jobConflictKey(new Error('job_busy: another Manga Cleaner process is using /l/c1.mtclean'))).toBe(
+      'notice.job.busy',
+    )
+    expect(jobConflictKey('/l/p1/c1.mtclean: job_stale: /l/p1/c1.mtclean changed on disk')).toBe(
+      'notice.job.stale',
+    )
+    expect(jobConflictKey(new Error('disk write failed'))).toBeNull()
+    expect(jobConflictKey(new Error('not_job_busy_at_all'))).toBeNull()
+  })
+
+  it('says a stale chapter in its own words and reads it again', async () => {
+    const openChapter = vi.fn(async () => ({
+      project: { id: 'pr1', mode: 'single', readingDirection: 'rtl' },
+      chapter: { id: 'ch1', projectId: 'pr1', pages: [], review: [] },
+      pendingConversion: null,
+    }))
+    setBackend(
+      /** @type {any} */ ({
+        subscribe: () => () => {},
+        openChapter,
+        loadPages: async () => [],
+        historyLoad: async () => ({ cursor: 0, entries: [] }),
+      }),
+    )
+    await openEditorChapter('pr1', 'ch1')
+    expect(openChapter).toHaveBeenCalledTimes(1)
+    app.notices.length = 0
+
+    expect(reportJobConflict(new Error('/x.mtclean: job_stale: /x.mtclean changed on disk'))).toBe(true)
+    await vi.waitFor(() => expect(openChapter).toHaveBeenCalledTimes(2))
+    expect(openChapter).toHaveBeenLastCalledWith({ projectId: 'pr1', chapterId: 'ch1', convert: false })
+    expect(app.notices.map((notice) => notice.key)).toEqual(['notice.job.stale'])
+
+    expect(reportJobConflict(new Error('disk write failed'))).toBe(false)
+  })
+
+  it('says a busy chapter instead of an undo history failure', async () => {
+    vi.useFakeTimers()
+    try {
+      editor.chapter = { id: 'test-chapter' }
+      editor.history = createHistory()
+      const busy = new Error('job_busy: another Manga Cleaner process is using /l/c1.mtclean')
+      setBackend(/** @type {any} */ ({ historyPush: vi.fn().mockRejectedValue(busy) }))
+      recordRegionEdit('canvas.command.applyTool', 'r1', { region: null, pageStatus: 'unclean' }, {
+        region: { id: 'r1', pageId: 'p1' },
+        pageStatus: 'cleaned',
+      })
+      await vi.advanceTimersByTimeAsync(60)
+      expect(app.notices.map((notice) => notice.key)).toEqual(['notice.job.busy'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('the tool slots', () => {
+  afterEach(() => {
+    editor.tool = 'autoClean'
+  })
+
+  it('numbers the six tools in rail order, the selection tool last', () => {
+    expect([...TOOLS]).toEqual(['autoClean', 'brush', 'shapes', 'aiMaskBrush', 'cloneHeal', 'maskSelect'])
+  })
+
+  it('arms the selection tool from slot 6, and nothing from a slot past it', () => {
+    setToolBySlot(6)
+    expect(editor.tool).toBe('maskSelect')
+    setToolBySlot(7)
+    expect(editor.tool).toBe('maskSelect')
+  })
+
+  it('arms the selection tool on S or X first, then steps its shape and swaps its mode', () => {
+    editor.toolParams.maskSelect = { mode: 'add', shape: 'brush', size: 32 }
+    cycleMaskSelectShape()
+    expect(editor.tool).toBe('maskSelect')
+    expect(editor.toolParams.maskSelect.shape).toBe('brush')
+    cycleMaskSelectShape()
+    cycleMaskSelectShape()
+    expect(editor.toolParams.maskSelect.shape).toBe('rect')
+    cycleMaskSelectShape()
+    expect(editor.toolParams.maskSelect.shape).toBe('brush')
+
+    editor.tool = 'brush'
+    toggleMaskSelectMode()
+    expect(editor.tool).toBe('maskSelect')
+    expect(editor.toolParams.maskSelect.mode).toBe('add')
+    toggleMaskSelectMode()
+    expect(editor.toolParams.maskSelect.mode).toBe('remove')
+    toggleMaskSelectMode()
+    expect(editor.toolParams.maskSelect.mode).toBe('add')
+  })
+})
+
+/**
+ * A run belongs to the backend, not to the editor: leaving the chapter does
+ * not end it, the jobs list follows it, and opening the chapter again picks
+ * it up from what the backend lists.
+ */
+describe('a run that outlives the editor', () => {
+  const page = (index) => ({ id: `bg${index}`, chapterId: 'ch-bg', index, number: index + 1, status: 'unclean',
+    skipReason: null, regions: [], regionCount: 0, doneCount: 0, reviewCount: 0, resident: false })
+
+  /** @param {any[]} listed */
+  function backendListing(listed, extra = {}) {
+    return /** @type {any} */ ({
+      subscribe: () => () => {},
+      openChapter: async () => ({
+        project: { id: 'pr-bg', name: 'Background', mode: 'single', readingDirection: 'rtl' },
+        chapter: { id: 'ch-bg', projectId: 'pr-bg', name: 'Night Shift', number: 9, pages: [page(0), page(1)], review: [] },
+        pendingConversion: null,
+      }),
+      loadPages: async () => [],
+      historyLoad: async () => ({ cursor: 0, entries: [] }),
+      listJobs: vi.fn(async () => listed),
+      listProjects: async () => [],
+      ...extra,
+    })
+  }
+
+  beforeEach(() => {
+    resetJobs()
+    closeEditorChapter()
+    app.notices.length = 0
+  })
+
+  afterEach(() => {
+    closeEditorChapter()
+    resetJobs()
+    setBackend(null)
+  })
+
+  it('adopts the run the chapter already has when it opens', async () => {
+    setBackend(backendListing([{ runId: 'bg-run', kind: 'detect', chapterId: 'ch-bg', done: 1, total: 2 }]))
+    await openEditorChapter('pr-bg', 'ch-bg')
+    expect(editor.run).toMatchObject({ active: true, runId: 'bg-run', mode: 'detect', queued: 2, pagesDone: 1 })
+    expect(jobById('bg-run')).toMatchObject({ kind: 'detect', status: 'running', projectName: 'Background', chapterName: 'Night Shift' })
+  })
+
+  it('adopts nothing the backend does not list, even when the jobs list still shows it', async () => {
+    setBackend(backendListing([]))
+    await openEditorChapter('pr-bg', 'ch-bg')
+    expect(editor.run.active).toBe(false)
+  })
+
+  it('puts a started run on the jobs list, and says when the backend is at its limit', async () => {
+    const runClean = vi.fn(async () => ({ runId: 'fresh', pages: [{ pageIndex: 0 }, { pageIndex: 1 }] }))
+    setBackend(backendListing([], { runClean }))
+    await openEditorChapter('pr-bg', 'ch-bg')
+    expect(await startRun('chapter', { mode: 'detect' })).toBe('fresh')
+    expect(jobById('fresh')).toMatchObject({ kind: 'detect', chapterId: 'ch-bg', total: 2, projectId: 'pr-bg', chapterNumber: 9 })
+
+    // Leaving the editor ends nothing on the jobs list.
+    closeEditorChapter()
+    expect(jobById('fresh')?.status).toBe('running')
+
+    setBackend(backendListing([], { runClean: async () => ({ runId: null, pages: [], alreadyRunning: true, atCapacity: true }) }))
+    await openEditorChapter('pr-bg', 'ch-bg')
+    expect(await startRun('chapter')).toBeNull()
+    expect(app.notices.at(-1)?.key).toBe('notice.run.atCapacity')
+    expect(editor.run.active).toBe(false)
   })
 })

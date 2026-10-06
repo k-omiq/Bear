@@ -1,5 +1,6 @@
 <script>
-  import { proxyPlan, tileUrl } from '../api/tile.js'
+  import ManagedTile from './ManagedTile.svelte'
+  import { proxyPlan, pageVersion, tileUrl } from '../api/tile.js'
 
   /**
    * ==========================================================================
@@ -35,11 +36,14 @@
    * `<img>` of about 64 MB decoded, held for as long as the page is mounted and
    * multiplied by every page the strip's virtual window keeps. So the page
    * arrives as `proxyPlan`'s tiles - the short edge capped at 1024, the long
-   * axis cut - each absolutely positioned over its own share of the sheet and
-   * `loading="lazy"`, so the browser fetches, decodes and evicts them by what
-   * is actually on screen. The virtual window in `strip.js` does the same job
-   * one level up, between pages; this is the same rule *inside* a page, which
-   * is where a longstrip segment needs it.
+   * axis cut - each absolutely positioned over its own share of the sheet.
+   * Only the tiles inside `from`..`to` are mounted: the strip passes the share
+   * of the page that lies within its preload margin, so a tile is fetched a
+   * screen before it is read and dropped a screen after. The virtual window in
+   * `strip.js` does the same job one level up, between pages; this is the same
+   * rule *inside* a page, which is where a longstrip segment needs it. It is
+   * not `loading="lazy"`: WebKit starts a lazy image only once it is inside the
+   * scroller's visible box, which drew every tile in late.
    *
    * The tiles overlap by a pixel, except the last. Each `<img>` is stretched to
    * a box whose height is a percentage, and percentages land on fractional
@@ -70,17 +74,38 @@
    * differs - `tile.rs` composites the page's visible patches for `cleaned`
    * and nothing at all for `source` - and it is what makes the wipe a clip over
    * two layers rather than a per-region predicate.
+   *
+   * Native patches are composed before color conversion and resampling. The
+   * cleaned tiles therefore also preserve native layer opacity and transforms.
    */
 
   /**
    * @type {{
    *   page: import('../api/backend.js').ApiPage,
    *   variant: 'original'|'cleaned',
+   *   from?: number,
+   *   to?: number,
+   *   hidden?: boolean,
+   *   ready?: string|null,
    * }}
    */
-  let { page, variant } = $props()
+  let { page, variant, from = 0, to = 100, hidden = false, ready = $bindable(null) } = $props()
+
 
   const plan = $derived(proxyPlan(page))
+
+  // The tiles to mount, as indices along the page's height. Whole numbers, so
+  // a scroll that moves `from`/`to` without crossing a tile edge changes
+  // nothing below. A page tiled across its width is shown whole: the strip
+  // only scrolls down.
+  const first = $derived.by(() => {
+    if (!plan.vertical) return 0
+    const at = plan.tiles.findIndex((tile) => tile.offset + tile.extent > from)
+    return at < 0 ? plan.tiles.length : at
+  })
+  const last = $derived(
+    plan.vertical ? plan.tiles.findLastIndex((tile) => tile.offset < to) : plan.tiles.length - 1,
+  )
 
   /**
    * One `<img>` per proxy tile, each carrying the CSS that puts it over its own
@@ -89,12 +114,15 @@
    */
   const tiles = $derived(
     plan.tiles
-      .map((tile, at) => {
-        const overlap = at + 1 < plan.tiles.length ? ' + 1px' : ''
+      .slice(first, last + 1)
+      .map((tile) => {
+        const overlap = tile.index + 1 < plan.tiles.length ? ' + 1px' : ''
         const extent = `calc(${tile.extent}%${overlap})`
         return {
           index: tile.index,
+          paintKey: `${page.id}:${tile.index}`,
           src: tileUrl(page, variant === 'original' ? 'source' : 'cleaned', tile.index),
+          version: pageVersion(page, variant === 'original' ? 'source' : 'cleaned'),
           top: plan.vertical ? `${tile.offset}%` : '0',
           left: plan.vertical ? '0' : `${tile.offset}%`,
           width: plan.vertical ? '100%' : extent,
@@ -103,6 +131,15 @@
       })
       .filter((tile) => tile.src !== null),
   )
+
+  let artwork = $state()
+  const pageId = $derived(page.id)
+  $effect(() => { pageId; ready = null })
+  function warm() {
+    const images = [...(artwork?.querySelectorAll('img[data-version]') ?? [])]
+    if (images.length && images.every(tile => tile.dataset.loadedVersion === tile.dataset.version)) ready = page.id
+    document.dispatchEvent(new CustomEvent('paint-tile-loaded', { detail: { pageId: page.id } }))
+  }
 
   const panels = $derived(page.panels ?? [])
 
@@ -114,7 +151,8 @@
       bubble: region.kind === 'bubble',
       sfx: region.kind === 'sfx',
       text: region.text ?? '',
-      inked: variant === 'original' || !region.mask,
+      // A detection's mask is what the cleaner will use; the text is still there.
+      inked: variant === 'original' || !region.mask || region.outcome === 'detected',
     })),
   )
 </script>
@@ -123,25 +161,20 @@
      samples these very tiles for clone / heal's live preview and has to be able
      to find the `cleaned` stack inside this page's sheet without depending on
      Svelte's scoped class names. -->
-<div class="artwork" data-artwork={variant === 'original' ? 'source' : 'cleaned'} aria-hidden="true">
+<div
+  class="artwork"
+  bind:this={artwork}
+  data-artwork={variant === 'original' ? 'source' : 'cleaned'}
+  aria-hidden="true"
+  style:visibility={hidden ? 'hidden' : null}
+>
   {#if tiles.length > 0}
     <!-- The page, in proxy tiles, decoded by the browser rather than by us.
          `alt` is empty and the container is already `aria-hidden`: the scan
          carries no information the interface can name, and every mark that does
          is a control in `RegionLayer`. -->
-    {#each tiles as tile (tile.index)}
-      <img
-        class="scan"
-        src={tile.src}
-        alt=""
-        decoding="async"
-        loading="lazy"
-        draggable="false"
-        style:top={tile.top}
-        style:left={tile.left}
-        style:width={tile.width}
-        style:height={tile.height}
-      />
+    {#each tiles as tile (`${page.id}:${tile.index}`)}
+      <ManagedTile {tile} onloaded={warm} />
     {/each}
   {:else}
     {#each panels as panel, index (index)}
@@ -179,17 +212,7 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
-  }
-
-  /* The sheet already carries the page's own aspect ratio (`PageSheet` takes it
-     from `page.width`/`page.height`), and each tile is given its own share of
-     it inline, so a tile fills its box exactly and `object-fit` never has
-     anything to decide. `draggable="false"` above keeps a drag over the page
-     belonging to the editor's gestures rather than starting a native image
-     drag. */
-  .scan {
-    position: absolute;
-    display: block;
+    background: var(--paper);
   }
 
   .panel {

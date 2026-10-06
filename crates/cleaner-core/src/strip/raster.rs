@@ -48,14 +48,14 @@ pub fn read_window_borrowing<'a>(
         if let Some(target) = out.as_ref() {
             if target.mode != page.mode || target.depth != page.depth
                 || target.icc != page.icc || target.palette != page.palette
-                || target.trns != page.trns || target.srgb_intent != page.srgb_intent {
+                || target.trns != page.trns || target.srgb_intent != page.srgb_intent || !target.color.same_interpretation(&page.color) {
                 return Err(format!("strip source {position} has an incompatible pixel format"));
             }
         } else {
             let stride = (rect.w as usize * page.mode.samples() * page.depth.bits() as usize).div_ceil(8);
             out = Some(Raster { width: rect.w, height: rect.h, mode: page.mode, depth: page.depth,
                 icc: page.icc.clone(), palette: page.palette.clone(), trns: page.trns.clone(),
-                srgb_intent: page.srgb_intent, data: vec![0; stride * rect.h as usize] });
+                srgb_intent: page.srgb_intent, color: page.color.clone(), data: vec![0; stride * rect.h as usize] });
         }
         let target = out.as_mut().expect("created above");
         let sx = (part.x - placed.x_offset) as u32;
@@ -86,7 +86,7 @@ mod tests {
     use crate::strip::{DecodeWindow, EdgePad};
     fn gray(w: u32, h: u32, value: u8) -> Raster { Raster { width: w, height: h,
         mode: ColorMode::Gray, depth: BitDepth::Eight, icc: None, palette: None, trns: None,
-        srgb_intent: None, data: vec![value; (w * h) as usize] } }
+        srgb_intent: None, color: Default::default(), data: vec![value; (w * h) as usize] } }
     #[test]
     fn reads_only_a_bounded_window_across_a_join() {
         let strip = Strip::of_sizes(&[(4, 3), (4, 3)]);

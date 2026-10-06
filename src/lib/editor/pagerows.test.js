@@ -113,12 +113,12 @@ describe('pageRow', () => {
 
   it('carries a skipped page reason and tone', () => {
     const row = pageRow(
-      page({ status: 'skipped', skipReason: 'input.skipReason.truncatedJpeg' }),
+      page({ status: 'skipped', skipReason: 'input.skipReason.partialDecode' }),
       { index: 8 },
     )
     expect(row.mark.glyph).toBe('!')
     expect(row.tone).toBe('warn')
-    expect(row.skipReasonKey).toBe('input.skipReason.truncatedJpeg')
+    expect(row.skipReasonKey).toBe('input.skipReason.partialDecode')
   })
 
   it('reports the review count on a cleaned page through the mark', () => {

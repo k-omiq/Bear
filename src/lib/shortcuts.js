@@ -52,6 +52,8 @@ import { pageNavControls } from './model/paging.js'
  *
  * @typedef {Object} ShortcutCommands
  * @property {(slot: number) => void} selectToolSlot - 1..6
+ * @property {() => void} cycleMaskSelectShape
+ * @property {() => void} toggleMaskSelectMode
  * @property {(held: boolean) => void} holdOriginal
  * @property {() => void} togglePinOriginal
  * @property {() => void} toggleMaskOverlay
@@ -127,7 +129,7 @@ export const HOLD_ORIGINAL_ID = 'view.holdOriginal'
 
 /** @type {Shortcut[]} */
 export const SHORTCUTS = [
-  /* ---- tools: 1–6, in tool-rail order --------------------------------- */
+  /* ---- tools: 1–6, in tool-rail order, then the selection tool's own -- */
   {
     id: 'tool.autoClean',
     group: 'tools',
@@ -165,22 +167,44 @@ export const SHORTCUTS = [
     run: (c) => c.selectToolSlot(4),
   },
   {
-    id: 'tool.contentAwareFill',
+    id: 'tool.cloneHeal',
     group: 'tools',
-    labelKey: 'tools.name.contentAwareFill',
+    labelKey: 'tools.name.cloneHeal',
     keys: ['5'],
     chord: ['5'],
     scope: 'editor',
     run: (c) => c.selectToolSlot(5),
   },
   {
-    id: 'tool.cloneHeal',
+    id: 'tool.maskSelect',
     group: 'tools',
-    labelKey: 'tools.name.cloneHeal',
+    labelKey: 'tools.name.maskSelect',
     keys: ['6'],
     chord: ['6'],
     scope: 'editor',
     run: (c) => c.selectToolSlot(6),
+  },
+  {
+    // The selection tool's own two keys. Each arms the tool first; once it is
+    // armed, `S` steps its shape (brush, lasso, rectangle) and `X` swaps add
+    // for remove (`cycleMaskSelectShape` in the editor state). Not Photoshop's
+    // `L` and `M`: those are the Layers panel and the mask overlay here.
+    id: 'tool.maskSelect.shape',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.maskSelectShape',
+    keys: ['s'],
+    chord: ['S'],
+    scope: 'editor',
+    run: (c) => c.cycleMaskSelectShape(),
+  },
+  {
+    id: 'tool.maskSelect.mode',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.maskSelectMode',
+    keys: ['x'],
+    chord: ['X'],
+    scope: 'editor',
+    run: (c) => c.toggleMaskSelectMode(),
   },
 
   /* ---- view ------------------------------------------------------------ */

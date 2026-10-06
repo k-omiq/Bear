@@ -20,27 +20,29 @@
  * press in Settings, so the tool that needs it names Settings rather than
  * showing a control that would fail.
  *
- * **The engine map is derived from the catalogue's own `requiredBy`, not from
- * a list written here.** `src-tauri/src/weights.rs` says which engines each
+ * **The local engine map is derived from the catalogue's own `requiredBy`.**
+ * `src-tauri/src/weights.rs` says which engines each
  * file is a precondition of; this walks the rows and intersects them. An engine
- * no row names - `fill` and `denoise`, which need no weights at all - is
+ * no row names - `fill`, which needs no weights at all - is
  * available by falling out of the rule rather than by being written down a
  * second time, and a seventh weight added to the catalogue tomorrow gates
- * whatever it says it gates with no change here.
+ * whatever it says it gates with no change here. Auto clean is checked against
+ * the detector combination selected in the session, since its models vary.
  */
 
 import { getBackend } from '../api/backend.js'
+import { model, workflowNeeds } from '../model/pipelines.js'
+import { session } from './session.svelte.js'
 
 /**
  * The engines a mask row, the Shapes row and the AI mask brush can offer, plus
  * the one feature that is not an engine.
  *
  * `flux` is the sidecar's and is answered by `sidecarAvailable`; the other
- * three and `autoClean` come from the catalogue.
+ * two and `autoClean` come from the catalogue.
  */
 const ALWAYS_AVAILABLE = Object.freeze({
   fill: true,
-  denoise: true,
   lama: true,
   flux: false,
 })
@@ -62,8 +64,11 @@ export const capabilities = $state({
    * @type {Record<string, boolean>}
    */
   engines: { ...ALWAYS_AVAILABLE },
-  /** Whether the detector, the balloon detector and the script gate are all here. */
+  /** Last answer for the currently selected automatic workflow. */
   autoClean: true,
+  /** Last catalogue and verified review graphs, used against the current detector selection. */
+  modelRows: null,
+  workflowCaps: null,
   /** Whether an ONNX Runtime was found. Nothing runs without one. */
   runtime: true,
 })
@@ -92,6 +97,53 @@ export function featuresFrom(rows) {
 }
 
 /**
+ * The logical models (`pipelines.js#MODELS`) the selected detector
+ * combination needs on this computer and does not have, in need order. A
+ * stage routed to the cloud GPU is not a need here (`workflowNeeds`).
+ */
+export function selectedWorkflowMissing(rows, workflowCaps, choices) {
+  const byId = new Map((rows ?? []).map((row) => [row.id, row]))
+  return workflowNeeds(choices).filter((id) => {
+    if (id === 'samTs') return workflowCaps?.samInstalled !== true
+    if (id === 'rtFull' && workflowCaps?.fullRtInstalled !== undefined) return !workflowCaps.fullRtInstalled
+    return (model(id)?.files ?? []).some((file) => {
+      const row = byId.get(file)
+      return row ? row.installed !== true : (rows ?? []).length > 0
+    })
+  })
+}
+
+/** A run needs exactly the files in its selected detector combination. */
+export function selectedWorkflowAvailable(rows, workflowCaps, choices) {
+  return selectedWorkflowMissing(rows, workflowCaps, choices).length === 0
+}
+
+/**
+ * What the current selection is missing on this computer. `null` before the
+ * catalogue has been read and the last answer was that something is
+ * missing: which one is not known then.
+ *
+ * `overrides` asks the same question of other choices, such as Detect on set
+ * the other way (`{analysisTargets}`), without changing the session.
+ *
+ * @param {{analysisTargets?: Record<string, string>}} [overrides]
+ * @returns {string[]|null}
+ */
+export function currentWorkflowMissing(overrides = {}) {
+  if (!capabilities.modelRows) return capabilities.autoClean ? [] : null
+  return selectedWorkflowMissing(capabilities.modelRows, capabilities.workflowCaps, {
+    textPolicy: session.textPolicy, detection: session.detection,
+    ocrRescue: session.ocrRescue, detectorModels: session.detectorModels,
+    analysisTargets: session.analysisTargets,
+    ...overrides,
+  })
+}
+
+export function currentWorkflowAvailable() {
+  return currentWorkflowMissing()?.length === 0
+}
+
+/**
  * Ask the backend once. A backend that cannot answer leaves the defaults -
  * which offer nothing for the sidecar, the safe direction there, and everything
  * for the weights, the safe direction here: a machine whose catalogue cannot be
@@ -115,15 +167,24 @@ export async function loadCapabilities(backend = getBackend()) {
   try {
     const view = await backend.listModels()
     const features = featuresFrom(view?.models ?? [])
+    const selected = session.detectorModels
+    let workflowCaps = null
+    if (selected.includes('samTs') || selected.includes('rtFull')) {
+      try { workflowCaps = await backend.listWorkflowCapabilities() } catch { /* no verified graph answer */ }
+    }
+    capabilities.modelRows = view?.models ?? []
+    capabilities.workflowCaps = workflowCaps
     capabilities.engines = {
       ...ALWAYS_AVAILABLE,
       lama: features.lama !== false,
       flux: capabilities.sidecar,
     }
-    capabilities.autoClean = features.autoClean !== false
+    capabilities.autoClean = currentWorkflowAvailable()
     capabilities.runtime = view?.runtime?.installed !== false
   } catch {
     capabilities.engines = { ...ALWAYS_AVAILABLE, flux: capabilities.sidecar }
+    capabilities.modelRows = null
+    capabilities.workflowCaps = null
     capabilities.autoClean = true
     capabilities.runtime = true
   }

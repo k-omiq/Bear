@@ -33,6 +33,7 @@ describe('finding keys in source', () => {
    */
   it('a file name that looks like a key is listed rather than pattern-matched', () => {
     expect(keysIn(`const FILE: &str = "settings.json";`).size).toBe(0)
+    expect(keysIn(`saved.join("input.png")`).size).toBe(0)
     expect([...keysIn(`t('export.format.png')`)]).toEqual(['export.format.png'])
     expect([...keysIn(`t('settings.models.status.installed')`)]).toEqual([
       'settings.models.status.installed',

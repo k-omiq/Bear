@@ -3,6 +3,12 @@
 Implements MLX allocator bounding, a working resolution for small crops, and
 verified MLX inference hooks for Apple Silicon.
 
+**The hole.** mflux 0.18.1's Klein edit has no mask, so :func:`_generate_masked`
+is its denoising loop with one step added: after every step the latents outside
+the hint's grown lettering (:func:`hole_for`) are put back to the crop's own,
+noised to the next sigma. diffusers' `Flux2KleinInpaintPipeline`, which the sdnq
+backend and the cloud worker run, does the same.
+
 **Why no `MemorySaver`.** `mflux`'s `MemorySaver` is the callback that applies
 two of the four guards this backend used to echo, and one of them - nulling the
 text encoder before the denoising loop whenever `num_seeds <= 1` - makes the
@@ -36,7 +42,7 @@ from ..memory import (
     get_peak_rss_bytes,
 )
 from ..protocol import Basis, ErrorKind, ImageBuffer, ModelMetadata, SidecarError
-from .base import BackendBase
+from .base import BackendBase, hole_for
 
 DEFAULT_WEIGHTS_DIR = "/Users/caved/dev/manga-cleaner/.sidecar-venv/weights/flux2-klein-4b-mflux-q4"
 
@@ -108,6 +114,103 @@ def _snap_stride(value: int) -> int:
     value = int(value)
     return max(LATENT_STRIDE, value - (value % LATENT_STRIDE))
 
+
+
+def _generate_masked(
+    model: Any,
+    *,
+    seed: int,
+    prompt: str,
+    steps: int,
+    width: int,
+    height: int,
+    guidance: float,
+    image_path: str,
+    hole: Any,
+) -> Any:
+    """`Flux2KleinEdit.generate_image` (mflux 0.18.1), holding the latents outside `hole`.
+
+    The reference image is the crop itself, encoded the way the edit encodes it,
+    so its packed latents are the crop's own on the generation grid. The edit's
+    KV cache stays off, as it is for Klein 4B in `generate_image` (only the
+    9B KV model supports it).
+    """
+    import mlx.core as mx
+    import numpy as np
+    from mflux.models.common.config.config import Config
+    from mflux.models.flux2.variants.edit.flux2_klein_edit_helpers import _Flux2KleinEditHelpers as helpers
+    from mflux.utils.image_util import ImageUtil
+
+    config = Config(
+        model_config=model.model_config,
+        num_inference_steps=steps,
+        height=height,
+        width=width,
+        guidance=guidance,
+        image_path=image_path,
+        image_strength=None,
+        scheduler="flow_match_euler_discrete",
+    )
+    prompt_embeds, text_ids, negative_embeds, negative_ids = model._encode_prompt_pair(
+        prompt=prompt, negative_prompt=" ", guidance=guidance
+    )
+    latents, latent_ids, latent_h, latent_w = helpers.prepare_generation_latents(
+        seed=seed, height=config.height, width=config.width
+    )
+    noise = latents
+    image_latents, image_latent_ids = helpers.prepare_reference_image_conditioning(
+        vae=model.vae,
+        tiling_config=model.tiling_config,
+        image_paths=[image_path],
+        height=config.height,
+        width=config.width,
+        batch_size=latents.shape[0],
+    )
+    if image_latents.shape != latents.shape:
+        raise RuntimeError(f"reference latents {image_latents.shape} are not the generation grid {latents.shape}")
+    # One packed token per 16 by 16 pixel block, row by row, weighted as diffusers
+    # weights it: the binarized hole resized bilinearly (no antialias) to the token
+    # grid samples each block at its centre, the mean of its middle 2 by 2 pixels.
+    hole01 = (np.asarray(hole, dtype=np.uint8)[: latent_h * 16, : latent_w * 16] > 127).astype(np.float32)
+    centre = hole01.reshape(latent_h, 16, latent_w, 16)[:, 7:9, :, 7:9].mean(axis=(1, 3))
+    keep = mx.array((1.0 - centre).reshape(1, -1, 1)).astype(latents.dtype)
+
+    predict = model._predict(model.transformer)
+    sigmas = config.scheduler.sigmas
+    for t in config.time_steps:
+        predicted = predict(
+            latents=latents,
+            image_latents=image_latents,
+            latent_ids=latent_ids,
+            image_latent_ids=image_latent_ids,
+            prompt_embeds=prompt_embeds,
+            text_ids=text_ids,
+            negative_prompt_embeds=negative_embeds,
+            negative_text_ids=negative_ids,
+            guidance=guidance,
+            timestep=config.scheduler.timesteps[t],
+        )
+        latents = config.scheduler.step(noise=predicted, timestep=t, latents=latents, sigmas=sigmas)
+        # The crop as it is at the next step's noise level; the last sigma is 0.
+        sigma = sigmas[t + 1]
+        # The sigmas are float32: cast back, or every later step runs the
+        # transformer in float32 (twice the time, half again the memory).
+        latents = (keep * (sigma * noise + (1 - sigma) * image_latents) + (1 - keep) * latents).astype(latents.dtype)
+        mx.eval(latents)
+
+    packed = latents.reshape(latents.shape[0], latent_h, latent_w, latents.shape[-1]).transpose(0, 3, 1, 2)
+    decoded = model.vae.decode_packed_latents(packed)
+    return ImageUtil.to_image(
+        decoded_latents=decoded,
+        config=config,
+        seed=seed,
+        prompt=prompt,
+        negative_prompt=None,
+        quantization=model.bits,
+        image_paths=[image_path],
+        image_path=config.image_path,
+        generation_time=0,
+    )
 
 class MfluxBackend(BackendBase):
     """mflux backend managing FLUX.2 Klein 4B with rigorous memory bounds."""
@@ -357,14 +460,16 @@ class MfluxBackend(BackendBase):
         try:
             work_crop.save(tmp_path, format="PNG")
 
-            out = self.model.generate_image(
+            out = _generate_masked(
+                self.model,
                 seed=int(seed),
                 prompt=str(prompt),
-                num_inference_steps=int(steps),
+                steps=int(steps),
                 height=work_h,
                 width=work_w,
                 guidance=float(guidance),
-                image_paths=[tmp_path],
+                image_path=tmp_path,
+                hole=hole_for(hint, image.width, image.height, work_w, work_h),
             )
             result_pil = out.image
             if result_pil.size != (image.width, image.height):

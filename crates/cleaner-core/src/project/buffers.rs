@@ -22,7 +22,47 @@ use super::StoreError;
 
 const MASK_MAGIC: &[u8; 8] = b"MTCLEANM";
 const PATCH_MAGIC: &[u8; 8] = b"MTCLEANP";
+const TEXT_SHAPE_MASK_MAGIC: &[u8; 8] = b"MTCLEANX";
 const FORMAT: u8 = 1;
+/// A text-shape mask artifact is a bounded tile, not a page stack serialized
+/// into the manifest. Refuse a corrupt or oversized header before allocating
+/// its pixel vector. Sixteen Mi one-byte samples is the largest single
+/// prepared artifact this format will accept.
+pub const MAX_TEXT_SHAPE_MASK_PIXELS: usize = 16 * 1024 * 1024;
+
+/// The semantic role is encoded in each versioned text-shape mask file as
+/// well as named by its manifest reference. That prevents accidentally loading
+/// a base mask as an approved write support after a reference mix-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TextShapeMaskKind {
+    Base = 1,
+    Additions = 2,
+    Removals = 3,
+    CorrectedBase = 4,
+    Support = 5,
+    ModelHole = 6,
+    BlendAlpha = 7,
+}
+
+impl TextShapeMaskKind {
+    fn from_code(code: u8) -> Result<Self, StoreError> {
+        Ok(match code {
+            1 => Self::Base,
+            2 => Self::Additions,
+            3 => Self::Removals,
+            4 => Self::CorrectedBase,
+            5 => Self::Support,
+            6 => Self::ModelHole,
+            7 => Self::BlendAlpha,
+            other => {
+                return Err(StoreError::Malformed(format!(
+                    "unknown text-shape mask kind {other}"
+                )))
+            }
+        })
+    }
+}
 
 /// Encode a mask: its rectangle, then one byte per pixel.
 ///
@@ -49,7 +89,149 @@ pub fn decode_mask(bytes: &[u8]) -> Result<Mask, StoreError> {
     let w = reader.u32()?;
     let h = reader.u32()?;
     let bits = reader.take(w as usize * h as usize)?.to_vec();
-    Ok(Mask { bounds: Rect { x, y, w, h }, bits })
+    Ok(Mask {
+        bounds: Rect { x, y, w, h },
+        bits,
+    })
+}
+
+/// Encode one bounded, versioned mask-plan artifact. These artifacts use the
+/// same page-coordinate rectangle and 0/255 byte layout as [`Mask`], but a
+/// separate magic and role tag keep them distinct from legacy patch masks.
+pub fn encode_text_shape_mask(mask: &Mask, kind: TextShapeMaskKind) -> Result<Vec<u8>, StoreError> {
+    encode_text_shape_mask_parts(mask.bounds, &mask.bits, kind)
+}
+
+/// Borrowed form used by persisted [`crate::text_shape::MaskRaster`] values,
+/// avoiding a second full raster allocation while encoding large bounded
+/// regions.
+pub fn encode_text_shape_mask_parts(
+    bounds: Rect,
+    bits: &[u8],
+    kind: TextShapeMaskKind,
+) -> Result<Vec<u8>, StoreError> {
+    let pixels = checked_mask_pixels(bounds.w, bounds.h)?;
+    if pixels != bits.len() {
+        return Err(StoreError::Malformed(format!(
+            "text-shape mask has {} samples but its {}×{} bounds require {pixels}",
+            bits.len(),
+            bounds.w,
+            bounds.h
+        )));
+    }
+    if kind != TextShapeMaskKind::BlendAlpha
+        && bits.iter().any(|value| *value != 0 && *value != 255)
+    {
+        return Err(StoreError::Malformed(
+            "text-shape masks must contain only 0 or 255 samples".into(),
+        ));
+    }
+    let mut out = Vec::with_capacity(pixels + 34);
+    out.extend_from_slice(TEXT_SHAPE_MASK_MAGIC);
+    out.push(FORMAT);
+    out.push(kind as u8);
+    out.extend_from_slice(&bounds.x.to_le_bytes());
+    out.extend_from_slice(&bounds.y.to_le_bytes());
+    out.extend_from_slice(&bounds.w.to_le_bytes());
+    out.extend_from_slice(&bounds.h.to_le_bytes());
+    out.extend_from_slice(bits);
+    Ok(out)
+}
+
+/// Read a mask-plan artifact only when its header, role and dimensions match
+/// the reference that requested it.
+pub fn decode_text_shape_mask(
+    bytes: &[u8],
+    expected: TextShapeMaskKind,
+) -> Result<Mask, StoreError> {
+    if bytes.len() < 10 || &bytes[..8] != TEXT_SHAPE_MASK_MAGIC {
+        return Err(StoreError::Malformed(
+            "not a text-shape mask artifact".into(),
+        ));
+    }
+    let version = bytes[8];
+    if version != FORMAT {
+        return Err(StoreError::Malformed(format!(
+            "text-shape mask format {version}, and this build reads {FORMAT}"
+        )));
+    }
+    let kind = TextShapeMaskKind::from_code(bytes[9])?;
+    if kind != expected {
+        return Err(StoreError::Malformed(format!(
+            "text-shape artifact is {kind:?}, but the manifest reference expects {expected:?}"
+        )));
+    }
+    let mut reader = SliceReader { bytes, at: 10 };
+    let x = reader.i64()?;
+    let y = reader.i64()?;
+    let w = reader.u32()?;
+    let h = reader.u32()?;
+    let pixels = checked_mask_pixels(w, h)?;
+    let bits = reader.take(pixels)?.to_vec();
+    if reader.at != bytes.len() {
+        return Err(StoreError::Malformed(
+            "trailing bytes in text-shape mask artifact".into(),
+        ));
+    }
+    if kind != TextShapeMaskKind::BlendAlpha
+        && bits.iter().any(|value| *value != 0 && *value != 255)
+    {
+        return Err(StoreError::Malformed(
+            "text-shape masks must contain only 0 or 255 samples".into(),
+        ));
+    }
+    Ok(Mask {
+        bounds: Rect { x, y, w, h },
+        bits,
+    })
+}
+
+fn checked_mask_pixels(w: u32, h: u32) -> Result<usize, StoreError> {
+    let pixels = (w as usize)
+        .checked_mul(h as usize)
+        .ok_or_else(|| StoreError::Malformed("text-shape mask dimensions overflow".into()))?;
+    if pixels > MAX_TEXT_SHAPE_MASK_PIXELS {
+        return Err(StoreError::Malformed(format!(
+            "text-shape mask has {pixels} pixels; the artifact limit is {MAX_TEXT_SHAPE_MASK_PIXELS}"
+        )));
+    }
+    Ok(pixels)
+}
+
+/// A small reader for the text-shape artifact header, which has its role byte
+/// between the common format version and rectangle.
+struct SliceReader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl<'a> SliceReader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], StoreError> {
+        let end = self
+            .at
+            .checked_add(n)
+            .ok_or_else(|| StoreError::Malformed("length overflow".into()))?;
+        if end > self.bytes.len() {
+            return Err(StoreError::Malformed(
+                "truncated text-shape mask artifact".into(),
+            ));
+        }
+        let slice = &self.bytes[self.at..end];
+        self.at = end;
+        Ok(slice)
+    }
+
+    fn u32(&mut self) -> Result<u32, StoreError> {
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().expect("4 bytes"),
+        ))
+    }
+
+    fn i64(&mut self) -> Result<i64, StoreError> {
+        Ok(i64::from_le_bytes(
+            self.take(8)?.try_into().expect("8 bytes"),
+        ))
+    }
 }
 
 /// Encode a patch's pixels, with everything the compositor and the exporter
@@ -107,6 +289,7 @@ pub fn decode_patch(bytes: &[u8]) -> Result<Raster, StoreError> {
         palette: (flags & 1 != 0).then_some(palette),
         trns: (flags & 2 != 0).then_some(trns),
         srgb_intent: None,
+        color: Default::default(),
         data,
     };
     // The one invariant worth checking on the way in: a buffer whose length
@@ -129,15 +312,73 @@ pub fn decode_patch(bytes: &[u8]) -> Result<Raster, StoreError> {
 /// half-written buffer is exactly the crash the temp-and-rename exists to
 /// survive.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+    stage(path, bytes)?.publish()
+}
+
+/// The first half of [`write_atomic`]: `bytes` written and synced under a
+/// temporary name beside `path`, which nothing reads yet. What a writer does
+/// between this and [`Staged::publish`] is the last look it gets before the
+/// file changes, which is where [`super::Job::flush`] checks the manifest has
+/// not moved.
+pub fn stage(path: &Path, bytes: &[u8]) -> Result<Staged, StoreError> {
     use std::io::Write;
 
-    let temp = temp_path(path);
-    {
-        let mut file = std::fs::File::create(&temp).map_err(|e| StoreError::io(&temp, e))?;
-        file.write_all(bytes).map_err(|e| StoreError::io(&temp, e))?;
-        file.sync_all().map_err(|e| StoreError::io(&temp, e))?;
+    let staged = Staged { temp: temp_path(path), path: path.to_path_buf(), published: false };
+    let mut file = std::fs::File::create(&staged.temp).map_err(|e| StoreError::io(&staged.temp, e))?;
+    file.write_all(bytes)
+        .map_err(|e| StoreError::io(&staged.temp, e))?;
+    file.sync_all().map_err(|e| StoreError::io(&staged.temp, e))?;
+    Ok(staged)
+}
+
+/// A file written under its temporary name, published by renaming it over the
+/// real one. Dropped without that, the temporary file is removed.
+pub struct Staged {
+    temp: std::path::PathBuf,
+    path: std::path::PathBuf,
+    published: bool,
+}
+
+impl Staged {
+    pub fn publish(mut self) -> Result<(), StoreError> {
+        rename_replacing(&self.temp, &self.path).map_err(|e| StoreError::io(&self.path, e))?;
+        self.published = true;
+        Ok(())
     }
-    std::fs::rename(&temp, path).map_err(|e| StoreError::io(path, e))
+}
+
+/// `rename` over an existing file.
+///
+/// On Windows a virus scanner, the search indexer or a sync client that has
+/// the file open for a moment makes the replace fail with access denied or a
+/// sharing violation, though nothing is wrong with the write. It is tried
+/// again for a little over a second before the error stands. Elsewhere the
+/// rename is tried once: there a refusal does not go away by waiting.
+fn rename_replacing(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+        const TRANSIENT: [i32; 3] = [5, 32, 33];
+        let mut wait = std::time::Duration::from_millis(10);
+        for _ in 0..7 {
+            match std::fs::rename(from, to) {
+                Err(error) if error.raw_os_error().is_some_and(|code| TRANSIENT.contains(&code)) => {
+                    std::thread::sleep(wait);
+                    wait *= 2;
+                }
+                other => return other,
+            }
+        }
+    }
+    std::fs::rename(from, to)
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = std::fs::remove_file(&self.temp);
+        }
+    }
 }
 
 /// `<name>.<pid>-<n>.tmp`, in the same directory - `rename` is only atomic
@@ -152,9 +393,8 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
 /// so each writer has a temp file nobody else is holding and `rename` decides
 /// which whole file wins.
 ///
-/// This is not the single-instance job lock. Two instances writing the same
-/// manifest still race, and the loser's completed regions are still lost -
-/// that lock belongs to Phase 6.
+/// This is not the job lock. Keeping two writers of one manifest from racing,
+/// in one process or two, is [`super::lock`]'s and [`super::Job::flush`]'s.
 /// What this rules out is the third outcome, where neither writer's bytes are
 /// what ends up on disk.
 fn temp_path(path: &Path) -> std::path::PathBuf {
@@ -188,7 +428,11 @@ fn mode_of(code: u8) -> Result<ColorMode, StoreError> {
         3 => ColorMode::Rgba,
         4 => ColorMode::Indexed,
         5 => ColorMode::Cmyk,
-        other => return Err(StoreError::Malformed(format!("unknown colour mode {other}"))),
+        other => {
+            return Err(StoreError::Malformed(format!(
+                "unknown colour mode {other}"
+            )))
+        }
     })
 }
 
@@ -214,7 +458,10 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], StoreError> {
-        let end = self.at.checked_add(n).ok_or_else(|| StoreError::Malformed("length overflow".into()))?;
+        let end = self
+            .at
+            .checked_add(n)
+            .ok_or_else(|| StoreError::Malformed("length overflow".into()))?;
         if end > self.bytes.len() {
             return Err(StoreError::Malformed("truncated buffer".into()));
         }
@@ -228,15 +475,21 @@ impl<'a> Reader<'a> {
     }
 
     fn u32(&mut self) -> Result<u32, StoreError> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().expect("4 bytes")))
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().expect("4 bytes"),
+        ))
     }
 
     fn u64(&mut self) -> Result<u64, StoreError> {
-        Ok(u64::from_le_bytes(self.take(8)?.try_into().expect("8 bytes")))
+        Ok(u64::from_le_bytes(
+            self.take(8)?.try_into().expect("8 bytes"),
+        ))
     }
 
     fn i64(&mut self) -> Result<i64, StoreError> {
-        Ok(i64::from_le_bytes(self.take(8)?.try_into().expect("8 bytes")))
+        Ok(i64::from_le_bytes(
+            self.take(8)?.try_into().expect("8 bytes"),
+        ))
     }
 }
 
@@ -250,12 +503,24 @@ mod tests {
         for fixture in fixtures::all() {
             let decoded = decode_patch(&encode_patch(&fixture.raster)).expect(fixture.name);
             assert_eq!(decoded.mode, fixture.raster.mode, "{}: mode", fixture.name);
-            assert_eq!(decoded.depth, fixture.raster.depth, "{}: depth", fixture.name);
+            assert_eq!(
+                decoded.depth, fixture.raster.depth,
+                "{}: depth",
+                fixture.name
+            );
             assert_eq!(decoded.width, fixture.raster.width, "{}", fixture.name);
             assert_eq!(decoded.height, fixture.raster.height, "{}", fixture.name);
-            assert_eq!(decoded.palette, fixture.raster.palette, "{}: palette", fixture.name);
+            assert_eq!(
+                decoded.palette, fixture.raster.palette,
+                "{}: palette",
+                fixture.name
+            );
             assert_eq!(decoded.trns, fixture.raster.trns, "{}: trns", fixture.name);
-            assert_eq!(decoded.data, fixture.raster.data, "{}: samples", fixture.name);
+            assert_eq!(
+                decoded.data, fixture.raster.data,
+                "{}: samples",
+                fixture.name
+            );
         }
     }
 
@@ -268,10 +533,59 @@ mod tests {
     }
 
     #[test]
+    fn text_shape_masks_round_trip_with_version_and_artifact_role() {
+        let mut mask = Mask::empty(Rect::new(2, 3, 4, 5));
+        mask.set(2, 3, true);
+        mask.set(5, 7, true);
+        let encoded = encode_text_shape_mask(&mask, TextShapeMaskKind::Support).unwrap();
+        assert_eq!(
+            decode_text_shape_mask(&encoded, TextShapeMaskKind::Support).unwrap(),
+            mask
+        );
+        assert!(decode_text_shape_mask(&encoded, TextShapeMaskKind::Base).is_err());
+        assert!(
+            decode_mask(&encoded).is_err(),
+            "plan artifacts must not decode as legacy patch masks"
+        );
+
+        let alpha = Mask {
+            bounds: Rect::new(1, 1, 2, 1),
+            bits: vec![64, 192],
+        };
+        let encoded = encode_text_shape_mask(&alpha, TextShapeMaskKind::BlendAlpha).unwrap();
+        assert_eq!(
+            decode_text_shape_mask(&encoded, TextShapeMaskKind::BlendAlpha).unwrap(),
+            alpha
+        );
+    }
+
+    #[test]
+    fn text_shape_artifact_rejects_oversized_dimensions_before_allocating() {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(TEXT_SHAPE_MASK_MAGIC);
+        encoded.push(FORMAT);
+        encoded.push(TextShapeMaskKind::Support as u8);
+        encoded.extend_from_slice(&0i64.to_le_bytes());
+        encoded.extend_from_slice(&0i64.to_le_bytes());
+        encoded.extend_from_slice(&4097u32.to_le_bytes());
+        encoded.extend_from_slice(&4097u32.to_le_bytes());
+        assert!(matches!(
+            decode_text_shape_mask(&encoded, TextShapeMaskKind::Support),
+            Err(StoreError::Malformed(_))
+        ));
+    }
+
+    #[test]
     fn a_truncated_buffer_is_an_error_rather_than_a_panic() {
         let whole = encode_patch(&fixtures::by_name("rgb16").raster);
-        assert!(matches!(decode_patch(&whole[..whole.len() / 2]), Err(StoreError::Malformed(_))));
-        assert!(matches!(decode_patch(b"nothing"), Err(StoreError::Malformed(_))));
+        assert!(matches!(
+            decode_patch(&whole[..whole.len() / 2]),
+            Err(StoreError::Malformed(_))
+        ));
+        assert!(matches!(
+            decode_patch(b"nothing"),
+            Err(StoreError::Malformed(_))
+        ));
     }
 
     /// The sub-byte case, singled out because it is the one where "the data is
@@ -298,7 +612,12 @@ mod tests {
         // only within one filesystem.
         assert_eq!(first.parent(), path.parent());
         assert!(first.to_string_lossy().ends_with(".tmp"), "{first:?}");
-        assert!(first.to_string_lossy().starts_with("/tmp/library/index.json."), "{first:?}");
+        assert!(
+            first
+                .to_string_lossy()
+                .starts_with("/tmp/library/index.json."),
+            "{first:?}"
+        );
     }
 
     /// The property the unique name buys, end to end: whatever lands on disk is
@@ -312,7 +631,9 @@ mod tests {
 
         // Different lengths as well as different bytes, so an interleaving is
         // detectable however the two writes land on each other.
-        let payloads: Vec<Vec<u8>> = (0..8u8).map(|n| vec![n; 64 * 1024 * (n as usize + 1)]).collect();
+        let payloads: Vec<Vec<u8>> = (0..8u8)
+            .map(|n| vec![n; 64 * 1024 * (n as usize + 1)])
+            .collect();
         std::thread::scope(|scope| {
             for payload in &payloads {
                 let path = path.clone();
@@ -321,14 +642,20 @@ mod tests {
         });
 
         let written = std::fs::read(&path).unwrap();
-        assert!(payloads.contains(&written), "the published file is not any one writer's bytes");
+        assert!(
+            payloads.contains(&written),
+            "the published file is not any one writer's bytes"
+        );
         let leftovers: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .flatten()
             .map(|entry| entry.file_name())
             .filter(|name| name.to_string_lossy().ends_with(".tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "temp files were left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "temp files were left behind: {leftovers:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -26,8 +26,9 @@ import { captureFocus } from './focus.js'
 /**
  * @param {() => HTMLElement|undefined} root - the anchor, trigger included:
  *   a pointerdown inside it is not an outside press
+ * @param {() => HTMLElement|undefined} [portal] - an optional panel rendered outside the anchor
  */
-export function anchoredOverlay(root) {
+export function anchoredOverlay(root, portal = () => undefined) {
   let open = $state(false)
   /** @type {(() => void) | null} */
   let restore = null
@@ -117,7 +118,7 @@ export function anchoredOverlay(root) {
   function focusOut(event) {
     if (!open) return false
     const next = /** @type {Node|null} */ (event.relatedTarget)
-    if (!next || next === document.body || next === document.documentElement || root()?.contains(next)) {
+    if (!next || next === document.body || next === document.documentElement || root()?.contains(next) || portal()?.contains(next)) {
       return false
     }
     close({ refocus: false })
@@ -129,7 +130,8 @@ export function anchoredOverlay(root) {
     /** @param {PointerEvent} event */
     const outside = (event) => {
       const node = root()
-      if (node && !node.contains(/** @type {Node} */ (event.target))) {
+      const detached = portal()
+      if (node && !node.contains(/** @type {Node} */ (event.target)) && !detached?.contains(/** @type {Node} */ (event.target))) {
         close({ refocus: false })
       } else if (node?.contains(/** @type {Node} */ (event.target))) {
         openedAtPointerDown = open

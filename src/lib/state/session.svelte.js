@@ -35,7 +35,7 @@ import {
   shortcutOverrides,
   unbindShortcut,
 } from '../shortcuts.js'
-import { provideContextParam } from '../i18n/index.js'
+import { CATALOGUES, matchLocale, provideContextParam, provideLocale } from '../i18n/index.js'
 import {
   WINDOW_IDS,
   defaultGeometry,
@@ -47,12 +47,82 @@ import {
   MAX_WIDTH,
   MIN_HEIGHT,
 } from '../model/windows.js'
+import { hexOnCommit } from '../ui/color.js'
+
+import { localSeconds, normalizeDenoiseTarget } from '../model/denoise.js'
+import { ANALYSIS_TARGETS, CLOUD_STAGES, DEFAULT_DETECTOR, DEFAULT_DETECTOR_MODELS, DETECTOR_MODEL_IDS, LANGUAGES, defaultAnalysisTargets, migrateDetectorChoice, normalizeAnalysisTargets, normalizeDetectorModels, unifyAnalysisTargets } from '../model/pipelines.js'
 
 const STORAGE_KEY = 'session.v1'
 
-export const THEMES = /** @type {const} */ (['light', 'dark', 'system'])
+/**
+ * `system` follows the OS between `light` and `dark`; the rest are fixed.
+ * Every fixed name is a token block in `app.css`, keyed off `data-theme`.
+ */
+export const THEMES = /** @type {const} */ (['system', 'light', 'dark', 'sakura', 'jade', 'ocean'])
+/** @typedef {(typeof THEMES)[number]} Theme */
+/** Each theme's name, by value. @type {Record<Theme, string>} */
+export const THEME_LABEL_KEYS = Object.freeze({
+  system: 'settings.theme.system',
+  light: 'settings.theme.light',
+  dark: 'settings.theme.dark',
+  sakura: 'settings.theme.sakura',
+  jade: 'settings.theme.jade',
+  ocean: 'settings.theme.ocean',
+})
 export const READING_DIRECTIONS = /** @type {const} */ (['rtl', 'ltr'])
 export const ORIGINAL_VIEW_MODES = /** @type {const} */ (['hold', 'pinned'])
+export const TEXT_POLICIES = /** @type {const} */ (['legacy_gate', 'all_text'])
+
+/**
+ * The colour a detected region's mask is drawn in until somebody picks
+ * another: `--page-mark`, the sky blue every mark on the sheet uses, because
+ * it survives black ink and white paper alike.
+ */
+export const DEFAULT_MASK_COLOR = '#0284c7'
+
+/**
+ * The colour a mask over text **outside** a speech bubble is drawn in until
+ * somebody picks another. `maskColor` above is the speech bubble one, and
+ * every region whose place is unknown.
+ *
+ * A burnt orange: the far side of the wheel from the blue, so the two are
+ * told apart by hue (blue against orange is the pair most colour-blind
+ * readers still separate), and dark enough to survive black ink and white
+ * paper as the blue does. Its outline clears 4:1 against both (5.2 on white,
+ * 4.1 on black; the blue is 4.1 and 5.1).
+ */
+export const DEFAULT_OUTSIDE_MASK_COLOR = '#c2410c'
+
+/**
+ * How strong the mask's fill is, in percent. Enough to see which pixels Clean
+ * will take, light enough to read the lettering under it; the outline is
+ * always drawn at full strength.
+ */
+export const DEFAULT_MASK_OPACITY = 35
+
+/**
+ * A stored mask colour as `#rrggbb`, or `fallback`. Only a string is read: a
+ * stored number such as `123456` is not a colour somebody picked.
+ *
+ * @param {unknown} value
+ * @param {string} fallback
+ * @returns {string}
+ */
+export function maskColorOr(value, fallback) {
+  return (typeof value === 'string' && hexOnCommit(value)) || fallback
+}
+
+/**
+ * A stored mask opacity as a whole percent, clamped into range like every
+ * other stored number, or `fallback` when it is not a number at all.
+ *
+ * @param {unknown} value
+ * @param {number} fallback
+ * @returns {number}
+ */
+export function maskOpacityOr(value, fallback) {
+  return Math.round(numberIn(value, { min: 0, max: 100, fallback }))
+}
 
 /**
  * The values the AI redraw engine row offers.
@@ -64,6 +134,19 @@ export const ORIGINAL_VIEW_MODES = /** @type {const} */ (['hold', 'pinned'])
  * every open and a control that fails is worse than a control that is absent.
  */
 export const FLUX_BACKENDS = /** @type {const} */ (['auto', 'mflux', 'sdnq'])
+export const MODEL_ACCELERATOR_IDS = Object.freeze([...DETECTOR_MODEL_IDS, 'inpainter'])
+
+/** Preserve only known model overrides. A provider id is validated by the backend at use time. */
+export function sanitizeModelAccelerators(raw) {
+  const stored = plainObject(raw)
+  /** @type {Record<string, string>} */
+  const result = {}
+  for (const id of MODEL_ACCELERATOR_IDS) {
+    const value = stored[id]
+    if (typeof value === 'string' && /^[a-z][a-z0-9]{0,31}$/.test(value)) result[id] = value
+  }
+  return result
+}
 
 export { WINDOW_IDS }
 
@@ -93,7 +176,8 @@ function viewport() {
 
 /**
  * @typedef {Object} PersistedSession
- * @property {'light'|'dark'|'system'} theme
+ * @property {Theme} theme
+ * @property {string} language - the interface language, a `CATALOGUES` tag; see `setLanguage`
  * @property {'rtl'|'ltr'} readingDirection - the default for new projects; a project overrides it
  * @property {boolean} cloudAllowed
  * @property {'hold'|'pinned'} originalView
@@ -101,9 +185,24 @@ function viewport() {
  * @property {string} fluxModel
  * @property {'auto'|'mflux'|'sdnq'} fluxBackend
  * @property {string} accelerator - `auto`, `cpu`, or an execution provider id; see `setAccelerator`
+ * @property {Record<string, string>} modelAccelerators - local per-model overrides; absent models inherit `accelerator`
  * @property {'alt'|'meta'|'control'|'shift'} cloneSourceModifier - held while clicking to set Clone / heal's source; see `setCloneSourceModifier`
  * @property {boolean} firstLaunchOffered - whether the first-launch download offer has been made on this machine
+ * @property {boolean} closeToTray - close control hides the window and keeps downloads running
+ * @property {Record<string, string|null>} detection - the detector each source language uses, by language id; null skips the language
+ * @property {string[]} detectorModels - the detection models selected, by stored id: `ctd`, one Ogkalu profile (`rtFull` or `rtSmall`), `samTs`
+ * @property {{rtFull: 'local'|'cloud', samTs: 'local'|'cloud'}} analysisTargets - where the two cloud-capable detection stages run; `cloud` needs consent per run
+ * @property {'local'|'cloud'} cleanTarget - where Auto clean cleans stored detections; `cloud` needs consent per batch (docs/detect-clean.md)
+ * @property {boolean} cleanLocalFirst - whether cloud clean tries saved flat-colour picks here first
+ * @property {'local'|'cloud'|'off'} denoiseTarget - where page denoise runs; `cloud` still asks for consent per chapter
+ * @property {string} denoisePreset - the preset id last chosen; `model/denoise.js#validPreset` resolves it against the target
+ * @property {number|null} denoiseLocalSecondsPerPage - what `benchmark_denoise_local` measured on this computer, or null before it has run
+ * @property {'legacy_gate'|'all_text'} textPolicy - whether to use the legacy script gate or open no-recognition text-shaped review
+ * @property {boolean} ocrRescue - whether the optional Japanese OCR rescue may run after an uncertain script decision
  * @property {Record<string, import('../shortcuts.js').Chord|null>} shortcuts - rebindings, by shortcut id; only the differences from the defaults
+ * @property {string} maskColor - the colour the canvas draws a mask over speech bubble text in, `#rrggbb`; also every region whose place is unknown. The key the single mask colour was stored under, so a saved pick carries over as this one
+ * @property {string} outsideMaskColor - the colour the canvas draws a mask over text outside speech bubbles in, `#rrggbb`
+ * @property {number} maskOpacity - how strong either mask's fill is, a whole percent from 0 to 100
  * @property {Record<string, WindowState>} windows
  */
 
@@ -116,6 +215,7 @@ function defaults() {
   for (const id of WINDOW_IDS) windows[id] = { ...geometry[id], open: true, fold: false }
   return {
     theme: 'system',
+    language: matchLocale(globalThis.navigator?.languages),
     readingDirection: 'rtl',
     cloudAllowed: false,
     originalView: 'hold',
@@ -123,9 +223,24 @@ function defaults() {
     fluxModel: '',
     fluxBackend: 'auto',
     accelerator: 'auto',
+    modelAccelerators: {},
     cloneSourceModifier: DEFAULT_POINTER_MODIFIER,
     firstLaunchOffered: false,
+    closeToTray: false,
+    detection: defaultDetection(),
+    detectorModels: [...DEFAULT_DETECTOR_MODELS],
+    analysisTargets: defaultAnalysisTargets(),
+    cleanTarget: 'local',
+    cleanLocalFirst: false,
+    denoiseTarget: 'off',
+    denoisePreset: '',
+    denoiseLocalSecondsPerPage: null,
+    textPolicy: 'legacy_gate',
+    ocrRescue: false,
     shortcuts: {},
+    maskColor: DEFAULT_MASK_COLOR,
+    outsideMaskColor: DEFAULT_OUTSIDE_MASK_COLOR,
+    maskOpacity: DEFAULT_MASK_OPACITY,
     windows,
   }
 }
@@ -189,7 +304,8 @@ export function sanitizeSession(raw) {
   }
 
   return {
-    theme: /** @type {'light'|'dark'|'system'} */ (oneOf(record.theme, THEMES, base.theme)),
+    theme: /** @type {Theme} */ (oneOf(record.theme, THEMES, base.theme)),
+    language: oneOf(record.language, Object.keys(CATALOGUES), base.language),
     readingDirection: /** @type {'rtl'|'ltr'} */ (
       oneOf(record.readingDirection, READING_DIRECTIONS, base.readingDirection)
     ),
@@ -208,6 +324,7 @@ export function sanitizeSession(raw) {
     // unusable one with a reason rather than silently substituting. A closed
     // list here would drop a provider a newer runtime added.
     accelerator: typeof record.accelerator === 'string' ? record.accelerator : base.accelerator,
+    modelAccelerators: sanitizeModelAccelerators(record.modelAccelerators),
     // The shortcut module owns this vocabulary, the same way it owns the chord
     // one: anything that is not one of the four modifiers a pointer event can
     // carry falls back to the modifier this gesture has always used.
@@ -217,11 +334,39 @@ export function sanitizeSession(raw) {
     // the offer, and a machine that has already been asked carries a `true` it
     // wrote itself.
     firstLaunchOffered: boolOr(record.firstLaunchOffered, base.firstLaunchOffered),
+    closeToTray: boolOr(record.closeToTray, base.closeToTray),
+    detection: sanitizeDetection(record.detection),
+    detectorModels: normalizeDetectorModels(record.detectorModels),
+    // Anything unreadable is local: a damaged record may only keep pages here.
+    // Two stages stored apart settle on this computer too: Detect on is one
+    // place, and a migration never sends a model the user kept here.
+    analysisTargets: unifyAnalysisTargets(record.analysisTargets),
+    // As strict as the native setting: anything but `cloud` keeps the work here.
+    cleanTarget: record.cleanTarget === 'cloud' ? 'cloud' : 'local',
+    cleanLocalFirst: boolOr(record.cleanLocalFirst, base.cleanLocalFirst),
+    // As strict as the native setting: anything unreadable is off, so a
+    // damaged record never sends a page anywhere.
+    denoiseTarget: normalizeDenoiseTarget(record.denoiseTarget),
+    denoisePreset: typeof record.denoisePreset === 'string' ? record.denoisePreset : base.denoisePreset,
+    denoiseLocalSecondsPerPage: localSeconds(record.denoiseLocalSecondsPerPage),
+    textPolicy: /** @type {'legacy_gate'|'all_text'} */ (
+      oneOf(record.textPolicy, TEXT_POLICIES, base.textPolicy)
+    ),
+    // A retired `ctd-rtdetr-ocr` row meant "rescue Japanese with OCR". It
+    // reads back as the plain detector (above) with the rescue on, so the
+    // intent survives the row. The first save then stores the migrated pair.
+    ocrRescue: storedRetiredRescue(record.detection) || boolOr(record.ocrRescue, base.ocrRescue),
     // The shortcut table owns this vocabulary and validates it: an id the
     // table no longer has, a chord that will not parse, or a chord that is
     // only the default written out is dropped here rather than kept as a
     // binding nothing can run.
     shortcuts: sanitizeShortcutOverrides(record.shortcuts),
+    // One colour used to cover every mask, under `maskColor`. It stays the
+    // speech bubble colour, so a record saved before the split keeps its pick
+    // there, and the outside colour starts at its default.
+    maskColor: maskColorOr(record.maskColor, base.maskColor),
+    outsideMaskColor: maskColorOr(record.outsideMaskColor, base.outsideMaskColor),
+    maskOpacity: maskOpacityOr(record.maskOpacity, base.maskOpacity),
     windows,
   }
 }
@@ -277,6 +422,7 @@ function persistable() {
   }
   return {
     theme: session.theme,
+    language: session.language,
     readingDirection: session.readingDirection,
     cloudAllowed: session.cloudAllowed,
     originalView: session.originalView,
@@ -284,9 +430,24 @@ function persistable() {
     fluxModel: session.fluxModel,
     fluxBackend: session.fluxBackend,
     accelerator: session.accelerator,
+    modelAccelerators: { ...session.modelAccelerators },
     cloneSourceModifier: session.cloneSourceModifier,
     firstLaunchOffered: session.firstLaunchOffered,
+    closeToTray: session.closeToTray,
+    detection: { ...session.detection },
+    detectorModels: [...session.detectorModels],
+    analysisTargets: { ...session.analysisTargets },
+    cleanTarget: session.cleanTarget,
+    cleanLocalFirst: session.cleanLocalFirst,
+    denoiseTarget: session.denoiseTarget,
+    denoisePreset: session.denoisePreset,
+    denoiseLocalSecondsPerPage: session.denoiseLocalSecondsPerPage,
+    textPolicy: session.textPolicy,
+    ocrRescue: session.ocrRescue,
     shortcuts: shortcutOverrides(),
+    maskColor: session.maskColor,
+    outsideMaskColor: session.outsideMaskColor,
+    maskOpacity: session.maskOpacity,
     windows,
   }
 }
@@ -303,7 +464,7 @@ function save() {
  * The theme actually in force: `system` resolves against the OS.
  * Call it inside a template or an effect and it tracks both inputs.
  *
- * @returns {'light'|'dark'}
+ * @returns {Exclude<Theme, 'system'>}
  */
 export function resolvedTheme() {
   if (session.theme === 'system') return session.systemDark ? 'dark' : 'light'
@@ -337,7 +498,36 @@ export function installThemeSync() {
   return () => query.removeEventListener('change', onChange)
 }
 
-/** @param {'light'|'dark'|'system'} theme */
+/* ------------------------------------------------------------------ */
+/* Language                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The interface language. A first run starts in the OS language when the app
+ * speaks it, English otherwise, and the Welcome screen offers the choice
+ * before anything else is read.
+ *
+ * **Not a backend setting**, like `cloneSourceModifier`: the core reports
+ * keys, never sentences, so nothing outside this interface reads it.
+ *
+ * @param {string} tag - a `CATALOGUES` tag
+ */
+export function setLanguage(tag) {
+  session.language = oneOf(tag, Object.keys(CATALOGUES), session.language)
+  save()
+}
+
+/** `<html lang>`, for screen readers, line breaking and CJK font choice. Reactive: call it from an `$effect`. */
+export function applyLanguage() {
+  const root = globalThis.document?.documentElement
+  if (root) root.lang = session.language
+}
+
+// Pushed into `i18n` rather than read by it, so the catalogue stays a
+// catalogue. Reading `session` here is what redraws every string on a change.
+provideLocale(() => session.language)
+
+/** @param {Theme} theme */
 export function setTheme(theme) {
   session.theme = oneOf(theme, THEMES, session.theme)
   save()
@@ -346,6 +536,175 @@ export function setTheme(theme) {
 /* ------------------------------------------------------------------ */
 /* Everything else                                                     */
 /* ------------------------------------------------------------------ */
+
+/** @param {boolean} enabled */
+export function setCloseToTray(enabled) {
+  session.closeToTray = boolOr(enabled, session.closeToTray)
+  save()
+}
+
+/**
+ * The colour masks over speech bubble text are drawn in, and masks whose
+ * place is unknown (Settings › General). A value that is not a colour leaves
+ * the one in force.
+ *
+ * @param {string} color
+ */
+export function setMaskColor(color) {
+  session.maskColor = maskColorOr(color, session.maskColor)
+  save()
+}
+
+/**
+ * The colour masks over text outside speech bubbles are drawn in (Settings ›
+ * General). A value that is not a colour leaves the one in force.
+ *
+ * @param {string} color
+ */
+export function setOutsideMaskColor(color) {
+  session.outsideMaskColor = maskColorOr(color, session.outsideMaskColor)
+  save()
+}
+
+/**
+ * How strong a detected region's mask fill is, in whole percent.
+ *
+ * @param {number} opacity
+ */
+export function setMaskOpacity(opacity) {
+  session.maskOpacity = maskOpacityOr(opacity, session.maskOpacity)
+  save()
+}
+
+/**
+ * Choose the detector for one source language, or `null` to skip it.
+ *
+ * Only a ready detector that serves the language is accepted; anything else
+ * leaves the choice as it was.
+ *
+ * @param {string} language
+ * @param {string|null} detectorId
+ */
+export function setDetection(language, detectorId) {
+  if (!LANGUAGES.some((entry) => entry.id === language)) return
+  // A retired id (`ctd-rtdetr-ocr`) is accepted as what it meant: the plain
+  // detector, with the OCR rescue switched on.
+  const { detector, ocrRescue } = migrateDetectorChoice(language, detectorId)
+  if (detector === undefined) return
+  session.detection = { ...session.detection, [language]: detector }
+  if (ocrRescue) session.ocrRescue = true
+  save()
+}
+
+/** @param {string[]} models */
+export function setDetectorModels(models) {
+  session.detectorModels = normalizeDetectorModels(models)
+  save()
+}
+
+/**
+ * Where one cloud-capable detection stage runs. Choosing `cloud` sends nothing
+ * by itself: every run that would use it asks for consent first
+ * (`editor/cloudrun.svelte.js`).
+ *
+ * @param {string} stage - `rtFull` or `samTs`
+ * @param {string} target - `local` or `cloud`
+ */
+export function setAnalysisTarget(stage, target) {
+  if (!CLOUD_STAGES.some((entry) => entry.id === stage) || !ANALYSIS_TARGETS.includes(/** @type {any} */ (target))) return
+  session.analysisTargets = normalizeAnalysisTargets({ ...session.analysisTargets, [stage]: target })
+  save()
+}
+
+/**
+ * Where Auto clean cleans the regions it detected. Choosing `cloud` sends
+ * nothing by itself: every batch asks for consent with the exact region count
+ * and cost first (`editor/cloudrun.js`).
+ *
+ * @param {string} target - `local` or `cloud`
+ */
+export function setCleanTarget(target) {
+  if (target !== 'local' && target !== 'cloud') return
+  session.cleanTarget = target
+  save()
+}
+
+/** @param {boolean} enabled */
+export function setCleanLocalFirst(enabled) {
+  if (typeof enabled !== 'boolean') return
+  session.cleanLocalFirst = enabled
+  save()
+}
+
+/**
+ * Where page denoise runs. Choosing `cloud` sends nothing by itself: a
+ * chapter's cloud denoise asks for consent with its page count and cost
+ * first (`dialogs/DenoiseDialog.svelte`).
+ *
+ * @param {string} target - `local`, `cloud` or `off`
+ */
+export function setDenoiseTarget(target) {
+  if (target !== 'local' && target !== 'cloud' && target !== 'off') return
+  session.denoiseTarget = target
+  save()
+}
+
+/** @param {string} id - a preset id; validity for the target is `model/denoise.js#validPreset`'s */
+export function setDenoisePreset(id) {
+  if (typeof id !== 'string') return
+  session.denoisePreset = id
+  save()
+}
+
+/** @param {unknown} seconds - seconds per page measured on this computer; anything else clears it */
+export function setDenoiseLocalSeconds(seconds) {
+  session.denoiseLocalSecondsPerPage = localSeconds(seconds)
+  save()
+}
+
+/** @param {'legacy_gate'|'all_text'} policy */
+export function setTextPolicy(policy) {
+  session.textPolicy = /** @type {'legacy_gate'|'all_text'} */ (
+    oneOf(policy, TEXT_POLICIES, session.textPolicy)
+  )
+  save()
+}
+
+/** @param {boolean} enabled */
+export function setOcrRescue(enabled) {
+  session.ocrRescue = boolOr(enabled, session.ocrRescue)
+  save()
+}
+
+/** @returns {Record<string, string|null>} */
+function defaultDetection() {
+  return Object.fromEntries(LANGUAGES.map((language) => [language.id, DEFAULT_DETECTOR]))
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {Record<string, string|null>}
+ */
+function sanitizeDetection(raw) {
+  const record = plainObject(raw)
+  const detection = defaultDetection()
+  for (const language of LANGUAGES) {
+    const { detector } = migrateDetectorChoice(language.id, record[language.id])
+    if (detector !== undefined) detection[language.id] = detector
+  }
+  return detection
+}
+
+/**
+ * Whether a stored detection map still holds a retired row that meant the OCR
+ * rescue was wanted.
+ *
+ * @param {unknown} raw
+ */
+function storedRetiredRescue(raw) {
+  const record = plainObject(raw)
+  return LANGUAGES.some((language) => migrateDetectorChoice(language.id, record[language.id]).ocrRescue)
+}
 
 /** @param {'rtl'|'ltr'} direction */
 export function setReadingDirection(direction) {
@@ -435,6 +794,17 @@ export function setAccelerator(id) {
   save()
 }
 
+/** An absent override follows the global choice; `inherit` clears it. */
+export function setModelAccelerator(modelId, id) {
+  if (!MODEL_ACCELERATOR_IDS.includes(modelId)) return
+  const next = { ...session.modelAccelerators }
+  if (id === 'inherit') delete next[modelId]
+  else if (typeof id === 'string' && /^[a-z][a-z0-9]{0,31}$/.test(id)) next[modelId] = id
+  else return
+  session.modelAccelerators = next
+  save()
+}
+
 /**
  * Which modifier is held while clicking the page to set where Clone / heal
  * reads from.
@@ -492,7 +862,7 @@ export function setWindowBox(id, patch) {
     id,
   )
   const position = clampPosition(
-    { x: patch.x ?? win.x, y: patch.y ?? win.y, w: size.w },
+    { x: patch.x ?? win.x, y: patch.y ?? win.y, w: size.w, h: size.h },
     vw,
     vh,
     id,
@@ -599,7 +969,7 @@ export function clampWindowsToViewport(vw, vh) {
     const win = session.windows[id]
     if (!win) continue
     const box = clampSize({ w: win.w, h: win.h }, height, id)
-    const position = clampPosition({ x: win.x, y: win.y, w: box.w }, width, height, id)
+    const position = clampPosition({ x: win.x, y: win.y, w: box.w, h: box.h }, width, height, id)
     win.x = position.x
     win.y = position.y
     win.w = box.w
@@ -694,6 +1064,7 @@ export function resetAllShortcutBindings() {
  */
 export function adoptBackendSettings(settings) {
   const record = plainObject(settings)
+  if (record.closeToTray !== undefined) setCloseToTray(record.closeToTray === true)
   if (record.theme !== undefined) setTheme(/** @type {any} */ (record.theme))
   if (record.readingDirection !== undefined) {
     setReadingDirection(/** @type {any} */ (record.readingDirection))
@@ -718,6 +1089,18 @@ export function adoptBackendSettings(settings) {
   if (record.accelerator !== undefined) {
     setAccelerator(typeof record.accelerator === 'string' ? record.accelerator : 'auto')
   }
+  if (record.modelAccelerators !== undefined) {
+    session.modelAccelerators = sanitizeModelAccelerators(record.modelAccelerators)
+    save()
+  }
+  if (record.analysisTargets !== undefined) {
+    session.analysisTargets = unifyAnalysisTargets(record.analysisTargets)
+    save()
+  }
+  if (record.cleanTarget !== undefined) setCleanTarget(record.cleanTarget === 'cloud' ? 'cloud' : 'local')
+  if (record.denoiseTarget !== undefined) setDenoiseTarget(normalizeDenoiseTarget(record.denoiseTarget))
+  if (typeof record.denoisePreset === 'string') setDenoisePreset(record.denoisePreset)
+  if (localSeconds(record.denoiseLocalSecondsPerPage) !== null) setDenoiseLocalSeconds(record.denoiseLocalSecondsPerPage)
   if (record.shortcuts !== undefined) {
     setShortcutOverrides(record.shortcuts)
     syncShortcuts()
@@ -734,10 +1117,14 @@ export function adoptBackendSettings(settings) {
  * object) where a flattened `shortcuts.tool.brush` family would leave stale
  * entries behind forever.
  *
- * @returns {{theme: string, readingDirection: string, cloudEngines: 'allowed'|'blocked', originalView: string, sidecarPath: string, fluxModel: string, fluxBackend: string, accelerator: string, shortcuts: Record<string, import('../shortcuts.js').Chord|null>}}
+ * `analysisTargets` is read by `run_clean` when a caller does not name the
+ * targets itself, so the saved choice is never silently ignored.
+ *
+ * @returns {{theme: string, readingDirection: string, cloudEngines: 'allowed'|'blocked', originalView: string, sidecarPath: string, fluxModel: string, fluxBackend: string, accelerator: string, modelAccelerators: Record<string,string>, analysisTargets: {rtFull: string, samTs: string}, cleanTarget: 'local'|'cloud', shortcuts: Record<string, import('../shortcuts.js').Chord|null>}}
  */
 export function backendSettingsPatch() {
   return {
+    closeToTray: session.closeToTray,
     theme: session.theme,
     readingDirection: session.readingDirection,
     cloudEngines: session.cloudAllowed ? 'allowed' : 'blocked',
@@ -746,6 +1133,14 @@ export function backendSettingsPatch() {
     fluxModel: session.fluxModel,
     fluxBackend: session.fluxBackend,
     accelerator: session.accelerator,
+    modelAccelerators: { ...session.modelAccelerators },
+    analysisTargets: { ...session.analysisTargets },
+    cleanTarget: session.cleanTarget,
+    denoiseTarget: session.denoiseTarget,
+    ...(session.denoisePreset ? { denoisePreset: session.denoisePreset } : {}),
+    // Left out until measured: absent is "not measured", and a null would
+    // be a value the backend has to decide about.
+    ...(session.denoiseLocalSecondsPerPage !== null ? { denoiseLocalSecondsPerPage: session.denoiseLocalSecondsPerPage } : {}),
     shortcuts: shortcutOverrides(),
   }
 }

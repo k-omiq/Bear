@@ -1,0 +1,16 @@
+[package]
+name = "spike-cloud-crops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Export the exact crop, hint and write weights a cloud render is sent for every
+# region the gate would clean on a page, and composite model answers back the
+# way the app does. For comparing cloud render models offline on real scans.
+[dependencies]
+cleaner-core = { path = "../../crates/cleaner-core" }
+manga-cleaner = { path = "../../src-tauri" }
+anyhow.workspace = true
+serde_json.workspace = true

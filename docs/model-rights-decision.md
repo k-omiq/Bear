@@ -1,0 +1,15 @@
+# Model rights decision for the desktop candidate workflow
+
+Status: 2026-09-25. This is a release scope decision based on published terms, not a grant of rights or legal clearance.
+
+Implementation update, 2026-09-26: the requested detection combination work adds a direct full RT-DETR download and a local SAM-TS-L checkpoint download/export during setup. These are code paths, not a new rights determination. The release decision below has not been re-reviewed for these new acquisition paths; their availability must not be described as redistribution or commercial clearance.
+
+| Component | Published evidence | Desktop decision |
+| --- | --- | --- |
+| RT-DETR-v2 `ogkalu/comic-text-and-bubble-detector` | The [publisher's model card](https://huggingface.co/ogkalu/comic-text-and-bubble-detector) labels the model Apache-2.0. | Keep local, hash-pinned user import available. Preserve the model license and attribution if the app later distributes weights or a converted graph. Confirm the training-data and derivative-weight chain before app-hosted distribution. |
+| Koharu SAM-TS-L | The [publisher's model card](https://huggingface.co/mayocream/koharu-text-sam-ts-l) labels the full merged checkpoint Apache-2.0, identifies its Hi-SAM/SAM origins and CC BY 4.0 training masks, and says Manga109 images are not distributed. | Keep local, hash-pinned user import available. Do not bundle or host the checkpoint or converted ONNX graphs until the merged-weight and Manga109 training-use chain is reviewed. Preserve notices and attribution in any approved distribution. See [provenance](../spikes/sam-ts-l/PROVENANCE.md). |
+| COO MTSv3 | The [converted checkpoint card](https://huggingface.co/mayocream/coo-comic-onomatopoeia-safetensors) says upstream pretrained weights have no single explicit license, identifies MTSv3 code as CC BY-NC 4.0, and explicitly grants no additional rights. The [upstream MTSv3 README](https://github.com/ku21fan/COO-Comic-Onomatopoeia/blob/d8028f015b8ce99a4dd798427342f97087529357/MTSv3/README.md) publishes the noncommercial code terms. | **Exclude COO from the desktop product path**: no importer, executable provider, automatic download, bundle, or dependency for RT + SAM detection. The local research spike remains evidence only. A future COO path requires documented permission covering the exact weights, code, commercial use if applicable, and redistribution, or a replacement with suitable terms. |
+
+COO is optional for the candidate workflow: SAM creates mask pixels, RT supplies region context, and COO only suggested SFX grouping in the Apocalypse 109 experiment. Excluding COO resolves the product dependency without claiming its rights are cleared. Do not use public download access or a Safetensors conversion as evidence of permission.
+
+The decision does not authorize publication of RT or SAM weights. It allows continued local proof work with user-provided artifacts; any shipped model download or embedded graph needs a separate documented rights review.

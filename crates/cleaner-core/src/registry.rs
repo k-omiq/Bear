@@ -202,6 +202,7 @@ impl Device {
 pub struct Loaded {
     pub id: u64,
     pub kind: Kind,
+    pub model_name: Option<String>,
     pub bytes: u64,
     pub basis: Basis,
     pub device: Device,
@@ -215,6 +216,7 @@ pub struct Loaded {
 struct Entry {
     id: u64,
     kind: Kind,
+    model_name: Option<String>,
     bytes: u64,
     basis: Basis,
     device: Device,
@@ -248,10 +250,16 @@ pub struct Lease {
 /// Put a row up. The returned [`Lease`] must be stored beside the session it
 /// describes - dropping it takes the row down.
 pub fn register(kind: Kind, footprint: Footprint, device: Device) -> Lease {
+    register_named(kind, footprint, device, None)
+}
+
+/// Register the exact checkpoint when a kind can run several models.
+pub fn register_named(kind: Kind, footprint: Footprint, device: Device, model_name: Option<String>) -> Lease {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     table().push(Entry {
         id,
         kind,
+        model_name,
         bytes: footprint.bytes,
         basis: footprint.basis,
         device,
@@ -368,6 +376,7 @@ pub fn loaded() -> Vec<Loaded> {
         .map(|entry| Loaded {
             id: entry.id,
             kind: entry.kind,
+            model_name: entry.model_name.clone(),
             bytes: entry.bytes,
             basis: entry.basis,
             device: entry.device,

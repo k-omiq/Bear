@@ -1,0 +1,240 @@
+{
+  "description": "Real-page mask-only ONNX Runtime CPU inference and parity",
+  "environment": {
+    "active_providers_by_graph": {
+      "encoder": [
+        "CPUExecutionProvider"
+      ],
+      "head": [
+        "CPUExecutionProvider"
+      ]
+    },
+    "available_providers": [
+      "CoreMLExecutionProvider",
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "inter_op_num_threads": 0,
+    "intra_op_num_threads": 4,
+    "onnxruntime": "1.23.2",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]"
+  },
+  "export_manifest": {
+    "file": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof/manifest.json",
+    "graph_packages_verified": true,
+    "sha256": "d8e734c2ff67fd535f8652cab22df96207fd2718bf08a27c44a460945a967f86"
+  },
+  "graph_package_total_bytes": 1358010626,
+  "graph_packages": {
+    "encoder": {
+      "files": [
+        {
+          "bytes": 1335305985,
+          "file": "koharu_samts_encoder.onnx",
+          "sha256": "9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe"
+        }
+      ],
+      "total_bytes": 1335305985
+    },
+    "head": {
+      "files": [
+        {
+          "bytes": 22704641,
+          "file": "koharu_samts_text_head.onnx",
+          "sha256": "a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281"
+        }
+      ],
+      "total_bytes": 22704641
+    }
+  },
+  "measurement": {
+    "cold_definition": "first InferenceSession in this process; OS file cache uncontrolled",
+    "end_to_end_definition": "main() entry through all page processing, before aggregate JSON write and stdout",
+    "page_total_definition": "source open through parity and inference artifact writes for one page; excludes performance JSON write",
+    "peak_rss_definition": "process ru_maxrss high-water mark, including Python and ORT; macOS bytes, Linux KiB converted to bytes; not system or unified-memory usage"
+  },
+  "pages": {
+    "07": {
+      "parity": {
+        "changed_canvas_signs": 0,
+        "changed_restored_pixels": 0,
+        "logits": {
+          "changed_elements": 1033756,
+          "max_abs": 0.00019359588623046875,
+          "mean_abs": 0.000016759613333514056,
+          "rmse": 0.00002173921404076411,
+          "shape": [
+            1,
+            1,
+            1024,
+            1024
+          ]
+        },
+        "onnx_mask_pixels": 24322,
+        "original_wh": [
+          690,
+          1600
+        ],
+        "prepared_input_changed_values": 0,
+        "reference_mask_pixels": 24322,
+        "resized_wh": [
+          442,
+          1024
+        ],
+        "source": "/Users/caved/Downloads/apocalypse/109/07.jpg",
+        "source_sha256": "a42a7e77ad9b5015f35221accdb785d8b5bc508270d1ef091b2025f5d463e6b9"
+      },
+      "performance": {
+        "input_sizes_bytes": {
+          "encoder_embedding_f32": 4194304,
+          "head_logits_f32": 4194304,
+          "prepared_rgb_f32": 12582912,
+          "restored_mask_u8": 1104000,
+          "source_jpeg": 274830
+        },
+        "page": "07",
+        "peak_process_rss_bytes": 6529515520,
+        "source": "/Users/caved/Downloads/apocalypse/109/07.jpg",
+        "timing_ms": {
+          "encoder_run": 9369.345749990316,
+          "head_run": 204.14300000993535,
+          "page_total": 9597.887000010815,
+          "prepare": 12.69991698791273,
+          "restore": 0.9005420142784715
+        }
+      }
+    },
+    "08": {
+      "parity": {
+        "changed_canvas_signs": 0,
+        "changed_restored_pixels": 0,
+        "logits": {
+          "changed_elements": 1044293,
+          "max_abs": 0.00033473968505859375,
+          "mean_abs": 0.00002641003051910562,
+          "rmse": 0.000031380939403999144,
+          "shape": [
+            1,
+            1,
+            1024,
+            1024
+          ]
+        },
+        "onnx_mask_pixels": 40438,
+        "original_wh": [
+          690,
+          1600
+        ],
+        "prepared_input_changed_values": 0,
+        "reference_mask_pixels": 40438,
+        "resized_wh": [
+          442,
+          1024
+        ],
+        "source": "/Users/caved/Downloads/apocalypse/109/08.jpg",
+        "source_sha256": "f4b8fcb13fa434f03a29d18797338898c414c66a402cdac67a068633e8a091b2"
+      },
+      "performance": {
+        "input_sizes_bytes": {
+          "encoder_embedding_f32": 4194304,
+          "head_logits_f32": 4194304,
+          "prepared_rgb_f32": 12582912,
+          "restored_mask_u8": 1104000,
+          "source_jpeg": 302511
+        },
+        "page": "08",
+        "peak_process_rss_bytes": 11140415488,
+        "source": "/Users/caved/Downloads/apocalypse/109/08.jpg",
+        "timing_ms": {
+          "encoder_run": 10043.051290995209,
+          "head_run": 210.37816599709913,
+          "page_total": 10274.042000004556,
+          "prepare": 9.639124997192994,
+          "restore": 0.7839160098228604
+        }
+      }
+    },
+    "09": {
+      "parity": {
+        "changed_canvas_signs": 0,
+        "changed_restored_pixels": 0,
+        "logits": {
+          "changed_elements": 959287,
+          "max_abs": 0.0001983642578125,
+          "mean_abs": 0.000010923037383564482,
+          "rmse": 0.000016815387369746215,
+          "shape": [
+            1,
+            1,
+            1024,
+            1024
+          ]
+        },
+        "onnx_mask_pixels": 29479,
+        "original_wh": [
+          690,
+          1600
+        ],
+        "prepared_input_changed_values": 0,
+        "reference_mask_pixels": 29479,
+        "resized_wh": [
+          442,
+          1024
+        ],
+        "source": "/Users/caved/Downloads/apocalypse/109/09.jpg",
+        "source_sha256": "cdb3f781e7b07599da89bc5fae75713332b1f9d5490290d68426583c77c52a8a"
+      },
+      "performance": {
+        "input_sizes_bytes": {
+          "encoder_embedding_f32": 4194304,
+          "head_logits_f32": 4194304,
+          "prepared_rgb_f32": 12582912,
+          "restored_mask_u8": 1104000,
+          "source_jpeg": 187051
+        },
+        "page": "09",
+        "peak_process_rss_bytes": 11141414912,
+        "source": "/Users/caved/Downloads/apocalypse/109/09.jpg",
+        "timing_ms": {
+          "encoder_run": 10367.491125012748,
+          "head_run": 214.3084999988787,
+          "page_total": 10600.67708400311,
+          "prepare": 8.247250021668151,
+          "restore": 0.8382909873034805
+        }
+      }
+    }
+  },
+  "peak_process_rss_bytes": 11141431296,
+  "timing_ms": {
+    "cold_encoder_session_load": 466.85500000603497,
+    "cold_head_session_load": 21.552042016992345,
+    "end_to_end": 31645.620499999495,
+    "manifest_and_graph_hash_preflight": 665.1552919938695
+  },
+  "host": {
+    "model": "Mac17,3",
+    "logical_cpu_count": 10,
+    "unified_memory_bytes": 34359738368
+  },
+  "external_time_onnx_three_pages": {
+    "command": "/usr/bin/time -l ... run_real_pages.py --source-dir /Users/caved/Downloads/apocalypse/109 --pages 07 08 09",
+    "wall_seconds": 32.21,
+    "user_cpu_seconds": 120.71,
+    "system_cpu_seconds": 1.69,
+    "maximum_resident_set_bytes": 11141447680,
+    "peak_memory_footprint_bytes": 11082310704,
+    "log": "artifacts/examples-onnx-timed.log"
+  },
+  "pytorch_reference_page_07": {
+    "command": "/usr/bin/time -l ... export_mask.py --input /Users/caved/Downloads/apocalypse/109/07.jpg --phase reference --output-dir artifacts/examples/apocalypse-109/page-07",
+    "wall_seconds": 10.37,
+    "user_cpu_seconds": 23.20,
+    "system_cpu_seconds": 0.88,
+    "maximum_resident_set_bytes": 5716623360,
+    "peak_memory_footprint_bytes": 5658645280,
+    "log": "artifacts/examples-pytorch-reference-timed.log",
+    "note": "Independent full-checkpoint reference and mask-only PyTorch path, one page; separate process, not part of ONNX three-page wall time"
+  }
+}

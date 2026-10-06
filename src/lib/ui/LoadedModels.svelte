@@ -14,32 +14,51 @@
    * translated, the same contract `Notice.svelte` keeps - which is what lets
    * the whole panel be rendered in a test with three rows and no Tauri window.
    *
+   * A row can also be a cloud GPU (`state/cloudgpu.svelte.js`), which spends
+   * money rather than memory: its `size` is a list price, its `detail` a second
+   * line saying what the GPU is doing, and its close button stops it in the
+   * cloud. The panel does not know the difference beyond drawing that line; the
+   * caller decides what each row's button means. `unloadingLabel` on a row
+   * replaces the panel's own for that row ("Stopping…" rather than "Freeing…").
+   *
+   * @typedef {{
+   *   id: number|string, name: string, size: string, device: string,
+   *   unloading: boolean, unloadLabel: string,
+   *   detail?: string, unloadingLabel?: string,
+   * }} Row
+   *
    * @type {{
-   *   models: Array<{ id: number, name: string, size: string, device: string, unloading: boolean, unloadLabel: string }>,
+   *   models: Row[],
    *   title: string,
-   *   hint: string,
+   *   hint?: string,
+   *   icon?: string,
    *   unloadingLabel: string,
-   *   onunload: (id: number) => void,
+   *   onunload: (id: any) => void,
    * }}
    */
-  let { models, title, hint, unloadingLabel, onunload } = $props()
+  let { models, title, hint = '', icon = 'cpu', unloadingLabel, onunload } = $props()
 </script>
 
 {#if models.length > 0}
   <section class="tab" aria-label={title}>
     <header class="head">
-      <span class="mark"><Icon name="cpu" size={12} /></span>
+      <span class="mark"><Icon name={icon} size={12} /></span>
       <h2 class="title">{title}</h2>
     </header>
     <ul class="rows">
       {#each models as model (model.id)}
         <li class="row">
-          <span class="name" title={model.device}>{model.name}</span>
+          <span class="label">
+            <span class="name" title={model.device}>{model.name}</span>
+            {#if model.detail}
+              <span class="detail">{model.detail}</span>
+            {/if}
+          </span>
           {#if model.unloading}
             <!-- The request is in flight: the run drops the session at its
                  next region boundary, so the row stays and says so rather
                  than vanishing and claiming memory that is still held. -->
-            <span class="state">{unloadingLabel}</span>
+            <span class="state">{model.unloadingLabel ?? unloadingLabel}</span>
           {:else}
             <span class="size">{model.size}</span>
             <button
@@ -95,13 +114,30 @@
     min-height: 20px;
   }
 
-  .name {
+  .label {
+    display: flex;
     flex: 1;
+    flex-direction: column;
     min-width: 0;
+  }
+
+  .name {
     overflow: hidden;
     font-size: 11px;
     line-height: 1.45;
     color: var(--t2);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* A cloud GPU's second line: what it is doing, and its scale-down
+     countdown in tabular figures so the seconds do not shift the line. */
+  .detail {
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.4;
+    font-variant-numeric: tabular-nums;
+    color: var(--t3);
     text-overflow: ellipsis;
     white-space: nowrap;
   }

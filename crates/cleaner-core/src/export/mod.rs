@@ -88,12 +88,16 @@ pub enum Declaration {
     /// mode is exactly what did *not* change - that is the point of falling
     /// back instead of converting.
     FormatChanged { requested: Format, used: Format, mode: ColorMode },
+    MetadataNormalized { field: String, reason: String },
+    AssumedInterpretation { interpretation: String },
 }
 
 impl Declaration {
     pub fn reason_key(&self) -> &'static str {
         match self {
             Declaration::FormatChanged { .. } => "export.declared.formatChanged",
+            Declaration::MetadataNormalized { .. } => "export.declared.metadataNormalized",
+            Declaration::AssumedInterpretation { .. } => "export.declared.assumedInterpretation",
         }
     }
 }
@@ -183,29 +187,23 @@ pub fn export_page_to<W: Write + Seek>(
     target: Target,
     sink: &mut W,
 ) -> Result<ExportSummary, ExportError> {
-    let source_format = Format::sniff(source_bytes).ok_or(ImageError::UnknownFormat)?;
-    let applied: Vec<&Patch> = patches.iter().filter(|p| p.visible && !p.mask.is_empty()).collect();
-
-    let wanted = match target {
-        Target::SameAsSource => source_format,
-        Target::Explicit(format) => format,
-    };
-
-    if applied.is_empty() && wanted == source_format {
+    let plan = plan_page(source_bytes, patches, target)?;
+    if plan.passthrough {
         sink.write_all(source_bytes)?;
         return Ok(ExportSummary {
-            format: source_format,
+            format: plan.format,
             passthrough: true,
-            declared: Vec::new(),
+            declared: plan.declared,
             written: source_bytes.len() as u64,
         });
     }
 
     let page = decode(source_bytes)?;
     let composited = composite(&page, patches)?;
+    let composited = crate::image::orientation::from_bytes(source_bytes).raster(&composited);
     drop(page);
 
-    let (format, declared) = decide(wanted, composited.mode, composited.depth);
+    let PagePlan { format, declared, .. } = plan;
 
     let start = sink.stream_position()?;
     let canvas = Canvas::of(&composited);
@@ -243,7 +241,11 @@ pub fn export_page_psd_to<W: Write>(
     layered: bool,
     sink: &mut W,
 ) -> Result<u64, ExportError> {
-    let page = decode(source_bytes)?;
+    let native = decode(source_bytes)?;
+    let orientation = crate::image::orientation::from_bytes(source_bytes);
+    let oriented_patches: Vec<Patch> = patches.iter().map(|p| orientation.patch(p, native.width, native.height)).collect();
+    let patches = oriented_patches.as_slice();
+    let page = orientation.raster(&native);
     if let Some(refusal) = psd::refusal(page.width, page.height, page.mode, page.depth) {
         return Err(refusal.into());
     }
@@ -281,6 +283,7 @@ pub fn export_mask_to<W: Write + Seek>(
         palette: None,
         trns: None,
         srgb_intent: None,
+        color: Default::default(),
     };
     let start = sink.stream_position()?;
     rows::write_rows(sink, &canvas, Format::Png, &mut |y, row| {
@@ -313,17 +316,106 @@ pub fn export_mask_to<W: Write + Seek>(
 /// [`export_page_to`] makes, reached from a header read rather than from a
 /// decode. `export::tests::the_predicted_format_is_the_one_the_export_produces`
 /// pins that on every fixture.
-pub fn planned_format(source_bytes: &[u8], target: Target) -> Result<Format, ExportError> {
+pub fn planned_format(
+    source_bytes: &[u8],
+    patches: &[Patch],
+    target: Target,
+) -> Result<Format, ExportError> {
+    Ok(plan_page(source_bytes, patches, target)?.format)
+}
+
+/// The shared, read-only decision consumed by both naming and execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PagePlan {
+    pub format: Format,
+    pub passthrough: bool,
+    pub declared: Vec<Declaration>,
+}
+
+pub fn plan_page(source_bytes: &[u8], patches: &[Patch], target: Target) -> Result<PagePlan, ExportError> {
     let source_format = Format::sniff(source_bytes).ok_or(ImageError::UnknownFormat)?;
-    let header = match source_format {
-        Format::Png => crate::image::png_header(source_bytes)?,
-        Format::Tiff => crate::image::tiff_header(source_bytes)?,
-    };
+    let applied = patches.iter().any(|p| p.visible && !p.mask.is_empty());
     let wanted = match target {
         Target::SameAsSource => source_format,
         Target::Explicit(format) => format,
     };
-    Ok(decide(wanted, header.mode, header.depth).0)
+    if !applied && wanted == source_format {
+        return Ok(PagePlan { format: source_format, passthrough: true, declared: Vec::new() });
+    }
+    let header = crate::image::header(source_bytes)?;
+    crate::image::metadata::validate_profile(header.icc.as_deref(), header.mode)?;
+    let (format, mut declared) = if header.color.associated_alpha && wanted != Format::Tiff {
+        (Format::Tiff, vec![Declaration::FormatChanged { requested: wanted, used: Format::Tiff, mode: header.mode }])
+    } else { decide(wanted, header.mode, header.depth) };
+    declared.extend(metadata_declarations(&header, applied, format == Format::Tiff));
+    if crate::image::foreign::assumes_unmarked_cmyk(source_bytes) {
+        declared.push(Declaration::AssumedInterpretation { interpretation: "four-channel JPEG without Adobe marker interpreted as non-inverted CMYK; markerless YCCK cannot be identified reliably".into() });
+    }
+    if crate::image::exif::payload(source_bytes).is_some() && (Format::sniff(source_bytes)!=Some(Format::Tiff) || crate::image::exif::payload(source_bytes).and_then(crate::image::exif::portable).is_some() || crate::image::orientation::from_bytes(source_bytes).0!=1) {
+        declared.push(Declaration::MetadataNormalized { field: "EXIF".into(), reason: "portable descriptive fields retained in PNG; orientation, geometry, thumbnails and opaque EXIF fields omitted; complete metadata remains in original".into() });
+    }
+    if crate::image::orientation::from_bytes(source_bytes).0 != 1 {
+        declared.push(Declaration::MetadataNormalized { field: "EXIF orientation".into(), reason: "samples oriented for output; stale EXIF geometry and thumbnails omitted".into() });
+    }
+    Ok(PagePlan { format, passthrough: false, declared })
+}
+
+/// Metadata decisions for PSD, whose format is fixed but color declarations still matter.
+pub fn psd_declarations(source_bytes: &[u8], patches: &[Patch]) -> Result<Vec<Declaration>, ExportError> {
+    let header = crate::image::header(source_bytes)?;
+    crate::image::metadata::validate_profile(header.icc.as_deref(), header.mode)?;
+    let mut declared = metadata_declarations(&header, patches.iter().any(|p| p.visible && !p.mask.is_empty()), true);
+    if crate::image::foreign::assumes_unmarked_cmyk(source_bytes) {
+        declared.push(Declaration::AssumedInterpretation { interpretation: "four-channel JPEG without Adobe marker interpreted as non-inverted CMYK; markerless YCCK cannot be identified reliably".into() });
+    }
+    if crate::image::exif::payload(source_bytes).is_some() && (Format::sniff(source_bytes)!=Some(Format::Tiff) || crate::image::exif::payload(source_bytes).and_then(crate::image::exif::portable).is_some() || crate::image::orientation::from_bytes(source_bytes).0!=1) {
+        declared.push(Declaration::MetadataNormalized { field: "EXIF".into(), reason: "portable descriptive fields retained in PNG; orientation, geometry, thumbnails and opaque EXIF fields omitted; complete metadata remains in original".into() });
+    }
+    if crate::image::orientation::from_bytes(source_bytes).0 != 1 {
+        declared.push(Declaration::MetadataNormalized { field: "EXIF orientation".into(), reason: "samples and layers oriented; stale EXIF geometry and thumbnails omitted".into() });
+    }
+    Ok(declared)
+}
+
+pub(crate) fn metadata_declarations(header: &crate::image::Header, applied: bool, equivalent_icc: bool) -> Vec<Declaration> {
+    let mut declared = Vec::new();
+    if header.icc.is_some() && header.srgb_intent.is_some() {
+        declared.push(Declaration::MetadataNormalized { field: "sRGB".into(), reason: "the higher-priority color description is authoritative".into() });
+    }
+    if header.icc.is_none() && header.color.cicp.is_none() && header.srgb_intent.is_some() {
+        if header.color.gamma.is_some_and(|gamma| gamma != 45455) {
+            declared.push(Declaration::MetadataNormalized { field: "gAMA".into(), reason: "normalized to the authoritative sRGB transfer".into() });
+        }
+        if header.color.chromaticities.is_some_and(|chrm| chrm != [31270,32900,64000,33000,30000,60000,15000,6000]) {
+            declared.push(Declaration::MetadataNormalized { field: "cHRM".into(), reason: "normalized to the authoritative sRGB primaries".into() });
+        }
+    }
+    if applied {
+        for (present, field) in [(header.color.significant_bits.is_some(), "sBIT"), (header.color.content_light.is_some(), "cLLI")] {
+            if present { declared.push(Declaration::MetadataNormalized { field: field.into(), reason: "editing or stitching invalidates the original summary".into() }); }
+        }
+    }
+    if header.icc.is_none() && header.srgb_intent.is_none() && header.color.gamma.is_none() && header.color.cicp.is_none() {
+        declared.push(Declaration::AssumedInterpretation { interpretation: match header.mode {
+            ColorMode::Cmyk => "multiplicative-ink CMYK preview approximation; native numbers retained",
+            ColorMode::Gray | ColorMode::GrayAlpha => "sRGB gray transfer for display",
+            _ => "sRGB for display",
+        }.into() });
+    }
+    if equivalent_icc {
+        let mut omitted = Vec::new();
+        if header.color.mastering_display.is_some() { omitted.push("mDCV".to_owned()); }
+        if !applied && header.color.content_light.is_some() { omitted.push("cLLI".to_owned()); }
+        if !applied && header.color.significant_bits.is_some() { omitted.push("sBIT".to_owned()); }
+        omitted.extend(header.color.safe_ancillary.iter().map(|chunk| String::from_utf8_lossy(&chunk.name).into_owned()));
+        for field in omitted {
+            declared.push(Declaration::MetadataNormalized { field, reason: "this PNG ancillary field has no representation in the selected output; retained in original".into() });
+        }
+    }
+    if equivalent_icc && (header.color.cicp.is_some() || (header.icc.is_none() && (header.color.gamma.is_some() || header.color.chromaticities.is_some() || header.srgb_intent.is_some()))) {
+        declared.push(Declaration::MetadataNormalized { field: "ICC".into(), reason: "equivalent profile carries PNG color description in the output".into() });
+    }
+    declared
 }
 
 /// The format an export uses, and what it has to declare for using it.
@@ -352,8 +444,9 @@ fn fallback_format(mode: ColorMode) -> Format {
 fn can_carry(format: Format, mode: ColorMode, depth: BitDepth) -> bool {
     match format {
         Format::Png => mode != ColorMode::Cmyk,
+        Format::Jpeg => false,
         Format::Tiff => {
-            !matches!(mode, ColorMode::Indexed | ColorMode::GrayAlpha) && depth >= BitDepth::Eight
+            mode != ColorMode::Indexed && depth >= BitDepth::Eight
         }
     }
 }
@@ -363,6 +456,41 @@ mod tests {
     use super::*;
     use crate::composite::{changed_pixels, permitted_region};
     use crate::image::{Raster, encode, fixtures, lossless_format_for};
+
+    #[test]
+    fn jpeg_passthrough_and_edited_lossless_output_preserve_color() {
+        use image::ImageEncoder;
+        let original = fixtures::by_name("rgb8-icc").raster;
+        let mut source = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut source, 95);
+        encoder.set_icc_profile(original.icc.clone().unwrap()).unwrap();
+        encoder
+            .encode(&original.data, original.width, original.height, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let page = decode(&source).unwrap();
+        let patches = vec![patch_over(&page, Rect::new(8, 8, 24, 20))];
+        for target in [Target::SameAsSource, Target::Explicit(Format::Png), Target::Explicit(Format::Tiff)] {
+            for edits in [&[][..], patches.as_slice()] {
+                let output = export_page(&source, edits, target).unwrap();
+                assert_eq!(planned_format(&source, edits, target).unwrap(), output.format);
+                if target == Target::SameAsSource && edits.is_empty() {
+                    assert_eq!(output.bytes, source);
+                    assert_eq!(output.format, Format::Jpeg);
+                }
+                let decoded = decode(&output.bytes).unwrap();
+                assert_eq!(decoded.icc, page.icc);
+                assert_eq!(decoded.mode, page.mode);
+                assert_eq!(decoded.depth, page.depth);
+                let allowed = permitted_region(edits, page.width, page.height);
+                for (x, y) in changed_pixels(&page, &decoded) {
+                    assert!(
+                        allowed.contains(x as i64, y as i64),
+                        "a JPEG sample outside edits changed at {x},{y}"
+                    );
+                }
+            }
+        }
+    }
     use crate::mask::{Mask, Rect};
     use crate::patch::{Engine, Provenance};
 
@@ -392,6 +520,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data: vec![0; {
                 let bits = bounds.w as usize * page.mode.samples() * page.depth.bits() as usize;
                 bits.div_ceil(8) * bounds.h as usize
@@ -517,8 +646,8 @@ mod tests {
             for target in
                 [Target::SameAsSource, Target::Explicit(Format::Png), Target::Explicit(Format::Tiff)]
             {
-                let predicted = planned_format(&source_bytes, target).unwrap();
                 for patches in [Vec::new(), vec![patch_over(page, Rect::new(8, 8, 24, 20))]] {
+                    let predicted = planned_format(&source_bytes, &patches, target).unwrap();
                     // A format neither the source nor the fallback can carry -
                     // gray+alpha into TIFF - is refused by the encoder rather
                     // than mispredicted, and `export_page` reports it.

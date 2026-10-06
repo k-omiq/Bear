@@ -49,6 +49,7 @@
    *   fit?: boolean,
    *   label?: string,
    *   labelledBy?: string,
+   *   describedBy?: string,
    *   id?: string,
    *   title?: string,
    *   disabled?: boolean,
@@ -62,6 +63,7 @@
     fit = false,
     label,
     labelledBy,
+    describedBy,
     id,
     title,
     disabled = false,
@@ -83,6 +85,7 @@
     class="select"
     aria-label={labelledBy ? undefined : label}
     aria-labelledby={labelledBy}
+    aria-describedby={describedBy}
     onchange={pick}
   >
     {#each options as option (option.value)}

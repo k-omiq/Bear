@@ -18,11 +18,10 @@
  * the emptiest true thing - no models, no accelerators, no sidecar - and the
  * catalogue says a token is saved, because that is what makes Clear pressable.
  *
- * The token lives in the **Models** tab, so every test here opens that tab
- * first - through the tab strip, the way a user does. `open()` asserts the
- * panel is shown afterwards rather than trusting the press: the panels are all
- * mounted and merely `hidden`, so a query that found the field without the
- * press would still have found it, and a test that cannot fail is not one.
+ * The token lives in **Models**, under Download access, so `open()` opens
+ * the screen there and asserts that tab is selected and its panel shown: the
+ * panels are all mounted and merely `hidden`, so a query would find the field
+ * in a hidden panel too, and a test that cannot fail is not one.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -30,6 +29,7 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte'
 
 import { setBackend } from '../api/backend.js'
 import { t } from '../i18n/index.js'
+import { session, setCloseToTray } from '../state/session.svelte.js'
 import SettingsDialog from './SettingsDialog.svelte'
 
 /** The spec `pushModal({kind: 'settings'})` would have handed the dialog. */
@@ -96,16 +96,14 @@ afterEach(() => {
 })
 
 /**
- * Mount the dialog, open the Models tab, and wait for the catalogue - which is
- * what enables Clear: the button is disabled until the backend has said there
- * is a token to clear.
+ * Mount the screen on Models, check it is the section on show, and wait for the
+ * catalogue - which is what enables Clear: the button is disabled until the
+ * backend has said there is a token to clear.
  */
 async function open() {
-  const view = render(SettingsDialog, { props: { spec: SPEC } })
+  const view = render(SettingsDialog, { props: { spec: { ...SPEC, props: { tab: 'models', anchor: 'access' } } } })
 
   const tab = view.getByRole('tab', { name: t('settings.section.models') })
-  expect(tab.getAttribute('aria-selected')).toBe('false')
-  await fireEvent.click(tab)
   expect(tab.getAttribute('aria-selected')).toBe('true')
 
   const panel = /** @type {HTMLElement} */ (
@@ -202,5 +200,32 @@ describe('a Clear the credential store refuses', () => {
     )
     expect(field.value).toBe('')
     expect(writeSettings).toHaveBeenLastCalledWith({ hfToken: 'hf_typed' })
+  })
+})
+
+describe('keep running in background', () => {
+  afterEach(() => setCloseToTray(false))
+
+  it('keeps the old value, and says so, when the write is refused', async () => {
+    writeSettings.mockRejectedValue(new Error('failed to write settings.json: disk full'))
+    const view = render(SettingsDialog, { props: { spec: SPEC } })
+    const box = /** @type {HTMLInputElement} */ (view.getByLabelText(t('settings.background.label')))
+    expect(session.closeToTray).toBe(false)
+
+    await fireEvent.click(box)
+    await waitFor(() => expect(view.getByText(t('settings.background.saveFailed'))).toBeTruthy())
+    expect(session.closeToTray).toBe(false)
+    expect(box.checked).toBe(false)
+    expect(writeSettings).toHaveBeenCalledWith({ closeToTray: true })
+  })
+
+  it('takes the new value when the write lands', async () => {
+    const view = render(SettingsDialog, { props: { spec: SPEC } })
+    const box = /** @type {HTMLInputElement} */ (view.getByLabelText(t('settings.background.label')))
+
+    await fireEvent.click(box)
+    await waitFor(() => expect(session.closeToTray).toBe(true))
+    expect(writeSettings).toHaveBeenCalledWith({ closeToTray: true })
+    expect(view.queryByText(t('settings.background.saveFailed'))).toBe(null)
   })
 })

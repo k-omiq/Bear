@@ -15,10 +15,12 @@
    *   tone?: 'info' | 'warn',
    *   icon?: string,
    *   duration?: number,
+   *   actionLabel?: string,
+   *   onaction?: () => void,
    *   onclose: () => void,
    * }}
    */
-  let { text, dismissLabel, tone = 'info', icon, duration = 6500, onclose } = $props()
+  let { text, dismissLabel, tone = 'info', icon, duration = 6500, actionLabel, onaction, onclose } = $props()
 
   let paused = $state(false)
   /** Milliseconds the notice has already been on screen unpaused. */
@@ -63,6 +65,9 @@
     <span class="mark"><Icon name={icon ?? 'warning-triangle'} size={13} /></span>
   {/if}
   <div class="text">{text}</div>
+  {#if actionLabel && onaction}
+    <button type="button" class="action" onclick={onaction}>{actionLabel}</button>
+  {/if}
   <button type="button" class="close" onclick={onclose} title={dismissLabel} aria-label={dismissLabel}>
     <Icon name="close" size={12} />
   </button>
@@ -90,6 +95,19 @@
     line-height: 1.45;
     color: var(--t2);
   }
+
+  .action {
+    flex: none;
+    padding: 2px 4px;
+    border: none;
+    border-radius: var(--r-xs);
+    background: transparent;
+    color: var(--accent);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .action:hover { text-decoration: underline }
+  .action:focus-visible { outline: 2px solid var(--accent) }
 
   .close {
     display: flex;

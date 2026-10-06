@@ -1,0 +1,27 @@
+{
+  "protocol_version": "1.1.0",
+  "capability": "text_mask_sam_ts@1",
+  "request_digest": "6b05d6efca8c347fe3ebb2ac8021c1c0584c13c1fab60559590e12045311d393",
+  "tile_id": "tile_01",
+  "tile_rect": {
+    "x": 0,
+    "y": 0,
+    "width": 16,
+    "height": 16
+  },
+  "graph_sha256s": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  ],
+  "model_revision": "cccccccccccccccccccccccccccccccccccccccc",
+  "mask_png_b64": "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAADklEQVR4nGNgGAUMSAAAARAAAVrp4sUAAAAASUVORK5CYII=",
+  "components": [],
+  "boxes": [],
+  "timings": {
+    "load_ms": 0,
+    "preprocess_ms": 0,
+    "inference_ms": 0,
+    "postprocess_ms": 0
+  },
+  "reported_cost_usd": null
+}

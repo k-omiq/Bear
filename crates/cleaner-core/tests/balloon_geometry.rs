@@ -8,7 +8,7 @@
 //! defects that came back from real pages, held as fixtures: a balloon full of
 //! lettering read as *outside a balloon*, and two balloons read as one region.
 
-use cleaner_core::balloon::{Interior, interior_of, merge_crosses_a_balloon};
+use cleaner_core::balloon::{BalloonBox, BalloonClass, Interior, in_bubble, interior_of, merge_crosses_a_balloon};
 use cleaner_core::detect::{
     DetBox, DetectedLanguage, Letterbox, Segmentation, build_regions, build_regions_separated,
 };
@@ -34,6 +34,7 @@ fn gray_page(f: impl Fn(u32, u32) -> u8) -> Raster {
         palette: None,
         trns: None,
         srgb_intent: None,
+        color: Default::default(),
         data,
     }
 }
@@ -123,8 +124,8 @@ fn an_elliptical_balloon_full_of_lettering_reads_as_a_balloon_interior() {
                 if !matches!(read, Interior::Solid { .. }) {
                     failures.push(format!("rx {rx} ry {ry} fill {fill} offset ({ox},{oy}) → {read:?}"));
                 }
-                // And the reading must never be the one that overrules a
-                // detector which was right.
+                // And the reading must never be picture about an ordinary
+                // balloon: that is a detector miss the page fails to rescue.
                 assert_ne!(
                     read,
                     Interior::Textured,
@@ -156,7 +157,12 @@ fn text_over_open_screentone_is_still_not_a_balloon_interior() {
         let seg = segmentation(|x, y| letters(text, x, y));
         let read = interior_of(&page, &seg, masking_of(text));
         assert_eq!(read, Interior::Textured, "{w}×{h} of text on open tone read as {read:?}");
-        assert!(!read.settles(cleaner_core::balloon::Detected::Bubble), "picture must still overrule a bubble box");
+        // Was "picture must still overrule a bubble box"; the page may no
+        // longer veto, so picture rescues nothing and a bubble box still wins.
+        let masking = masking_of(text);
+        assert!(!in_bubble(&page, &seg, masking, masking, &[]), "{w}×{h}: tone rescued text over art");
+        let bubble = BalloonBox { rect: masking.grown(20, W, H), class: BalloonClass::Bubble, score: 0.9 };
+        assert!(in_bubble(&page, &seg, masking, masking, &[bubble]), "{w}×{h}: the detector's inside was vetoed");
     }
 }
 

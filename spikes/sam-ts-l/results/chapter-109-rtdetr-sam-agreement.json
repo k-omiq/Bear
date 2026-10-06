@@ -1,0 +1,440 @@
+{
+  "metric_meaning": "SAM\u2013RT-DETR model agreement only; no human truth or accuracy estimate",
+  "rtdetr_box_file_sha256": "31efcfd0e97899f76226779be812c09b8692e4c13cac1ba359614555172ed9c7",
+  "mask_directory": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks",
+  "counts": {
+    "sam_positive_pixels": 1124691,
+    "text_boxes": 44,
+    "bubble_boxes": 33,
+    "text_boxes_with_any_sam_pixel": 43,
+    "pages": 45,
+    "sam_nonempty_pages": 44,
+    "sam_empty_pages": 1,
+    "rtdetr_text_empty_pages": 26,
+    "rtdetr_all_empty_pages": 24,
+    "sam_nonempty_rtdetr_text_empty_pages": 25,
+    "sam_empty_rtdetr_text_nonempty_pages": 0
+  },
+  "agreement_by_box_padding_pixels": {
+    "0": {
+      "text": {
+        "sam_pixels_inside_boxes": 216644,
+        "sam_pixels_outside_boxes": 908047,
+        "sam_pixel_share_inside_boxes": 0.19262535220785088
+      },
+      "bubble": {
+        "sam_pixels_inside_boxes": 130352,
+        "sam_pixels_outside_boxes": 994339,
+        "sam_pixel_share_inside_boxes": 0.1159002783875749
+      },
+      "all": {
+        "sam_pixels_inside_boxes": 216937,
+        "sam_pixels_outside_boxes": 907754,
+        "sam_pixel_share_inside_boxes": 0.1928858682073565
+      }
+    },
+    "2": {
+      "text": {
+        "sam_pixels_inside_boxes": 216644,
+        "sam_pixels_outside_boxes": 908047,
+        "sam_pixel_share_inside_boxes": 0.19262535220785088
+      },
+      "bubble": {
+        "sam_pixels_inside_boxes": 130416,
+        "sam_pixels_outside_boxes": 994275,
+        "sam_pixel_share_inside_boxes": 0.11595718290623824
+      },
+      "all": {
+        "sam_pixels_inside_boxes": 216967,
+        "sam_pixels_outside_boxes": 907724,
+        "sam_pixel_share_inside_boxes": 0.19291254220047996
+      }
+    },
+    "5": {
+      "text": {
+        "sam_pixels_inside_boxes": 216644,
+        "sam_pixels_outside_boxes": 908047,
+        "sam_pixel_share_inside_boxes": 0.19262535220785088
+      },
+      "bubble": {
+        "sam_pixels_inside_boxes": 130486,
+        "sam_pixels_outside_boxes": 994205,
+        "sam_pixel_share_inside_boxes": 0.11601942222352628
+      },
+      "all": {
+        "sam_pixels_inside_boxes": 217037,
+        "sam_pixels_outside_boxes": 907654,
+        "sam_pixel_share_inside_boxes": 0.19297478151776798
+      }
+    }
+  },
+  "rtdetr_performance": {
+    "model_open_ms": 83.588333,
+    "decode_ms_total": 4906.891542,
+    "detect_ms_total": 4148.364667,
+    "detect_ms_median": 90.57433300000001,
+    "provider": "Selection { accelerator: Cpu, declined: None, note: None }"
+  },
+  "pages": [
+    {
+      "page": "01",
+      "sam_positive_pixels": 56791,
+      "text_box_count": 3,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 3,
+      "sam_pixels_in_text_boxes": 51291
+    },
+    {
+      "page": "02",
+      "sam_positive_pixels": 35136,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "03",
+      "sam_positive_pixels": 72832,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "04",
+      "sam_positive_pixels": 36253,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "05",
+      "sam_positive_pixels": 34349,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "06",
+      "sam_positive_pixels": 17989,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "07",
+      "sam_positive_pixels": 24322,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "08",
+      "sam_positive_pixels": 40438,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "09",
+      "sam_positive_pixels": 29479,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "10",
+      "sam_positive_pixels": 63024,
+      "text_box_count": 1,
+      "bubble_box_count": 1,
+      "text_boxes_with_any_sam_pixel": 1,
+      "sam_pixels_in_text_boxes": 2662
+    },
+    {
+      "page": "11",
+      "sam_positive_pixels": 17072,
+      "text_box_count": 1,
+      "bubble_box_count": 1,
+      "text_boxes_with_any_sam_pixel": 1,
+      "sam_pixels_in_text_boxes": 4784
+    },
+    {
+      "page": "12",
+      "sam_positive_pixels": 17647,
+      "text_box_count": 2,
+      "bubble_box_count": 2,
+      "text_boxes_with_any_sam_pixel": 2,
+      "sam_pixels_in_text_boxes": 13938
+    },
+    {
+      "page": "13",
+      "sam_positive_pixels": 17307,
+      "text_box_count": 5,
+      "bubble_box_count": 3,
+      "text_boxes_with_any_sam_pixel": 5,
+      "sam_pixels_in_text_boxes": 17307
+    },
+    {
+      "page": "14",
+      "sam_positive_pixels": 40005,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "15",
+      "sam_positive_pixels": 30170,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "16",
+      "sam_positive_pixels": 15593,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "17",
+      "sam_positive_pixels": 45891,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "18",
+      "sam_positive_pixels": 51422,
+      "text_box_count": 1,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "19",
+      "sam_positive_pixels": 52526,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "20",
+      "sam_positive_pixels": 37707,
+      "text_box_count": 0,
+      "bubble_box_count": 1,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "21",
+      "sam_positive_pixels": 39465,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "22",
+      "sam_positive_pixels": 26475,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "23",
+      "sam_positive_pixels": 12675,
+      "text_box_count": 1,
+      "bubble_box_count": 1,
+      "text_boxes_with_any_sam_pixel": 1,
+      "sam_pixels_in_text_boxes": 4527
+    },
+    {
+      "page": "24",
+      "sam_positive_pixels": 62116,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "25",
+      "sam_positive_pixels": 1676,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "26",
+      "sam_positive_pixels": 9440,
+      "text_box_count": 0,
+      "bubble_box_count": 1,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "27",
+      "sam_positive_pixels": 30971,
+      "text_box_count": 3,
+      "bubble_box_count": 3,
+      "text_boxes_with_any_sam_pixel": 3,
+      "sam_pixels_in_text_boxes": 10955
+    },
+    {
+      "page": "28",
+      "sam_positive_pixels": 4799,
+      "text_box_count": 1,
+      "bubble_box_count": 1,
+      "text_boxes_with_any_sam_pixel": 1,
+      "sam_pixels_in_text_boxes": 2725
+    },
+    {
+      "page": "29",
+      "sam_positive_pixels": 6742,
+      "text_box_count": 1,
+      "bubble_box_count": 1,
+      "text_boxes_with_any_sam_pixel": 1,
+      "sam_pixels_in_text_boxes": 2667
+    },
+    {
+      "page": "30",
+      "sam_positive_pixels": 0,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "31",
+      "sam_positive_pixels": 16328,
+      "text_box_count": 2,
+      "bubble_box_count": 2,
+      "text_boxes_with_any_sam_pixel": 2,
+      "sam_pixels_in_text_boxes": 16328
+    },
+    {
+      "page": "32",
+      "sam_positive_pixels": 23507,
+      "text_box_count": 5,
+      "bubble_box_count": 2,
+      "text_boxes_with_any_sam_pixel": 5,
+      "sam_pixels_in_text_boxes": 23507
+    },
+    {
+      "page": "33",
+      "sam_positive_pixels": 7909,
+      "text_box_count": 2,
+      "bubble_box_count": 2,
+      "text_boxes_with_any_sam_pixel": 2,
+      "sam_pixels_in_text_boxes": 7909
+    },
+    {
+      "page": "34",
+      "sam_positive_pixels": 5348,
+      "text_box_count": 1,
+      "bubble_box_count": 1,
+      "text_boxes_with_any_sam_pixel": 1,
+      "sam_pixels_in_text_boxes": 5348
+    },
+    {
+      "page": "35",
+      "sam_positive_pixels": 609,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "36",
+      "sam_positive_pixels": 20273,
+      "text_box_count": 3,
+      "bubble_box_count": 4,
+      "text_boxes_with_any_sam_pixel": 3,
+      "sam_pixels_in_text_boxes": 10981
+    },
+    {
+      "page": "37",
+      "sam_positive_pixels": 27076,
+      "text_box_count": 3,
+      "bubble_box_count": 3,
+      "text_boxes_with_any_sam_pixel": 3,
+      "sam_pixels_in_text_boxes": 8547
+    },
+    {
+      "page": "38",
+      "sam_positive_pixels": 9352,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "39",
+      "sam_positive_pixels": 3875,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "40",
+      "sam_positive_pixels": 14602,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "41",
+      "sam_positive_pixels": 9210,
+      "text_box_count": 1,
+      "bubble_box_count": 1,
+      "text_boxes_with_any_sam_pixel": 1,
+      "sam_pixels_in_text_boxes": 2675
+    },
+    {
+      "page": "42",
+      "sam_positive_pixels": 16018,
+      "text_box_count": 3,
+      "bubble_box_count": 3,
+      "text_boxes_with_any_sam_pixel": 3,
+      "sam_pixels_in_text_boxes": 11665
+    },
+    {
+      "page": "43",
+      "sam_positive_pixels": 10443,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "44",
+      "sam_positive_pixels": 9831,
+      "text_box_count": 0,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 0,
+      "sam_pixels_in_text_boxes": 0
+    },
+    {
+      "page": "45",
+      "sam_positive_pixels": 19998,
+      "text_box_count": 5,
+      "bubble_box_count": 0,
+      "text_boxes_with_any_sam_pixel": 5,
+      "sam_pixels_in_text_boxes": 18828
+    }
+  ]
+}

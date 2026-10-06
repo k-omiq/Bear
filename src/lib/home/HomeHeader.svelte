@@ -5,6 +5,7 @@
   import { pushModal } from '../state/app.svelte.js'
   import { checkForUpdate } from '../updater.js'
   import UpdateDialog from './UpdateDialog.svelte'
+  import JobsIndicator from '../shell/JobsIndicator.svelte'
 
   /**
    * Home's header, and the whole of it: the wordmark, update badge if available,
@@ -17,6 +18,9 @@
    * and announced exactly as it was; only the pixels changed. It sits after the
    * update badge, which is the one thing on this bar that comes and goes, so
    * the button that is always there does not move when the badge appears.
+   *
+   * Jobs comes first of the three: like the badge it comes and goes, and it is
+   * the one a user started, so it sits furthest from the fixed button.
    */
 
   let update = $state(/** @type {import('@tauri-apps/plugin-updater').Update | null} */ (null))
@@ -37,6 +41,8 @@
   <h1 class="wordmark">{t('app.name.mangaCleaner')}</h1>
 
   <div class="spacer"></div>
+
+  <JobsIndicator variant="home" />
 
   {#if update}
     <Button

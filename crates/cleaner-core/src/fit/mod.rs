@@ -38,12 +38,17 @@ pub use noise::{EdgeMap, page_noise_sigma, sobel_magnitude};
 pub use ring::{Plane, RingStats};
 
 /// Where §5's routing table sends a region.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serialisable because a stored detection ([`crate::project::DetectedRegion`])
+/// keeps the route its fit settled on: a later clean starts from the stored
+/// mask and must not re-derive the route from a fit it no longer runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Route {
     /// Rung 0. Text on flat or planar background - the common case.
+    /// `fill_and_denoise` is a stored route from before rung 1 was removed.
+    #[serde(alias = "fill_and_denoise")]
     Fill,
-    /// Rung 0 then rung 1.
-    FillAndDenoise,
     /// The inpaint ladder: the fit failed, or the ring is multimodal, or the
     /// annulus is periodic.
     Inpaint,
@@ -68,7 +73,7 @@ pub struct Fitted {
     /// Usually a subset of `mask`, and on most paths a much smaller one; on a
     /// noisy page whose series stopped at the first step it may reach a few
     /// pixels past it. It exists because the two things `mask` is used for stopped being
-    /// the same thing. For rung 0 and rung 1 the mask is the region whose
+    /// the same thing. For rung 0 the mask is the region whose
     /// **own paper statistics** are painted back over it, so a mask that ran
     /// wide across flat paper wrote flat paper onto flat paper and cost
     /// nothing. For rungs 2 and up it is the region a **model invents**, and
@@ -166,6 +171,19 @@ fn candidates(seed: &Mask, scale: f32, bounds: Rect) -> Vec<(u32, Mask)> {
     series
 }
 
+/// A zero-padding mask can end exactly on the glyph's strong Sobel edge,
+/// leaving no adjacent pixel from which the paper flood can start. Move only
+/// the sampling ring one source pixel out in that case; keep the write mask
+/// authoritative. Stored-mask cleaning uses the same sampling rule.
+fn authoritative_paper(page: &Raster, mask: &Mask, edges: &noise::EdgeMap) -> Mask {
+    let paper = ring::paper_annulus(page, mask, 0, edges);
+    if paper.is_empty() {
+        ring::paper_annulus(page, mask, 1, edges)
+    } else {
+        paper
+    }
+}
+
 /// Fit one region.
 ///
 /// `manual` skips the candidate search entirely: §4's last subsection makes a
@@ -207,7 +225,7 @@ pub fn fit_within(
     manual: bool,
     bounds: Rect,
 ) -> Fitted {
-    // Whether rungs 1 and 2 exist for this source at all. Asked here rather
+    // Whether rung 2 exists for this source at all. Asked here rather
     // than at the engines, so a bitonal or indexed region is routed to the rung
     // that will actually run it: a route naming a rung the source cannot carry
     // would reach the review row and the provenance record as a claim that
@@ -215,9 +233,9 @@ pub fn fit_within(
     let rungs = Available::of(page);
 
     if manual {
-        let paper = ring::paper_annulus(page, seed, 0, edges);
+        let paper = authoritative_paper(page, seed, edges);
         let ring = ring::sample_over(page, &paper);
-        let route = route_for(&ring, noise_sigma, false, 0, rungs);
+        let route = route_for(&ring, false, 0, rungs);
         let best_deviation = ring.deviation;
         return Fitted {
             mask: seed.clone(),
@@ -233,6 +251,7 @@ pub fn fit_within(
         };
     }
 
+    let seed = &with_stray_lettering(page, seed, scale, noise_sigma, bounds);
     let series = candidates(seed, scale, bounds);
     let threshold = deviation_threshold(noise_sigma);
     // §8's constants are 8-bit levels and every deviation here is 16-bit luma.
@@ -293,7 +312,7 @@ pub fn fit_within(
     match chosen {
         Some((thickness, mask, paper, ring)) => {
             let failed = best_deviation > threshold;
-            let route = route_for(&ring, noise_sigma, failed, thickness, rungs);
+            let route = route_for(&ring, failed, thickness, rungs);
             let ink = ink_for(seed, scale, bounds, edges);
             Fitted { mask, ink, paper, ring, route, thickness, best_deviation }
         }
@@ -320,30 +339,29 @@ pub fn fit_within(
     }
 }
 
-/// The fallback mask for a region no candidate fitted: the largest growth at or
-/// below the first step whose border does not sit on a strong edge.
-///
-/// **This is the answer to an incoherent earlier fallback.** That fallback
-/// was incoherent on its own terms: it returned
-/// `seed.dilated_within(first_step, bounds)` - the very mask whose strong-edge
-/// crossing had refused every candidate - and routed it to a model, which then
-/// wrote into the outline the refusal existed to protect. Seven of the eighteen
-/// gated regions on `page-crowded` take this path.
-///
-/// There were two ways out, decline the region or route with the last
-/// admissible mask, and "the second keeps the region and the first
-/// keeps the rule". Both are kept by searching **downward** instead of
-/// sideways. The candidate series only ever grows, so when its first step is
-/// already refused there is no admissible member of it - but there are nine
-/// smaller radii below that step, and the rule the series enforces applies to
-/// them one at a time. The largest that clears the edge map is the answer.
-///
-/// At radius 0 the mask is the seed: the segmentation's own text pixels. That
-/// cannot paint over an outline unless the glyph itself overruns one, which is
-/// exactly the fixture defect seen on seven `page-crowded` regions - and
-/// there the crossing is the art's and no smaller mask exists, so the seed is
-/// taken regardless. **A region is never dropped for want of an admissible
-/// mask**; the smallest honest answer is the glyphs themselves.
+/// Fit the background and route, but let an explicit padding own the mask
+/// boundary. Both output masks grow directly from the segmentation seed, not
+/// from the candidate search's mask or its separately padded model ink.
+/// Zero therefore preserves the seed exactly. Re-sample the paper around the
+/// actual output so Fill measures the same surround as a later stored clean.
+pub fn fit_with_padding(
+    page: &Raster,
+    seed: &Mask,
+    scale: f32,
+    noise_sigma: f32,
+    edges: &noise::EdgeMap,
+    bounds: Rect,
+    padding: u32,
+) -> Fitted {
+    let mut fitted = fit_within(page, seed, scale, noise_sigma, edges, false, bounds);
+    fitted.mask = seed.dilated_within(padding, bounds);
+    fitted.ink = fitted.mask.clone();
+    fitted.paper = authoritative_paper(page, &fitted.mask, edges);
+    fitted.ring = ring::sample_over(page, &fitted.paper);
+    fitted.thickness = padding;
+    fitted
+}
+
 /// The set a model rung writes through, for a region whose candidate series
 /// settled: the seed grown by the first step and then by up to
 /// [`crate::constants::MODEL_HOLE_MARGIN`] more, taking the largest of those
@@ -369,14 +387,231 @@ fn ink_for(seed: &Mask, scale: f32, bounds: Rect, edges: &noise::EdgeMap) -> Mas
     seed.dilated_within(first, bounds)
 }
 
+/// How far from the lettering an ink island may sit and still be taken for
+/// lettering the segmentation missed, in multiples of the first step.
+const STRAY_REACH_STEPS: u32 = 2;
+
+/// The share of the paper around the lettering that must sit at one tone for
+/// [`with_stray_lettering`] to run at all.
+const STRAY_FLAT_SHARE: f32 = 0.9;
+
+/// The seed plus the lettering the segmentation left out of it, on flat paper.
+///
+/// A lettering mask misses small pieces of the text it marks: furigana beside
+/// the kanji, the dots of a dakuten, a stroke's thin tip. Left out, each piece
+/// is a strong edge a few pixels from the seed, so the first candidate's border
+/// lands on it, the series stops before it starts, and the fit falls back to
+/// [`admissible`]'s one-pixel growth. The fill then paints paper over the
+/// glyphs and leaves the pieces and the whole anti-aliasing fringe standing,
+/// and [`crate::quality::assess`] never sees them: it scores the mask's
+/// interior and the paper outside its bounding box, and the pieces are between
+/// the two. Measured on a real chapter, 7 of the 16 regions whose fit fell back
+/// that way kept visible specks, against 3 of the 296 regions whose fit grew.
+///
+/// An island joins the seed when all of these hold:
+///
+/// - it lies within [`STRAY_REACH_STEPS`] first steps of the lettering;
+/// - it does not reach the edge of that search box, so a balloon outline or a
+///   panel border that runs past the lettering is never taken;
+/// - its box does not span the lettering's box in both directions, so a small
+///   balloon's whole outline, which fits inside the search box, is not either.
+///
+/// And only on flat paper: at least [`STRAY_FLAT_SHARE`] of the pixels around
+/// the lettering, past its anti-aliasing, must sit at the paper's tone. A
+/// screentone or a drawn background fails that, and is left to the fit as it
+/// was. Where it holds, painting a wrongly taken island is painting the paper's
+/// own tone over it, which is the cheap mistake.
+fn with_stray_lettering(page: &Raster, seed: &Mask, scale: f32, noise_sigma: f32, bounds: Rect) -> Mask {
+    let Some(letters) = set_bounds(seed) else { return seed.clone() };
+    let reach = STRAY_REACH_STEPS * first_step(scale);
+    let grown = letters.grown(reach, u32::MAX, u32::MAX);
+    let x0 = grown.x.max(bounds.x).max(0);
+    let y0 = grown.y.max(bounds.y).max(0);
+    let x1 = grown.right().min(bounds.right()).min(page.width as i64);
+    let y1 = grown.bottom().min(bounds.bottom()).min(page.height as i64);
+    if x1 <= x0 || y1 <= y0 {
+        return seed.clone();
+    }
+    let search = Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
+    let luma = |x: i64, y: i64| page.luma16_at(x as u32, y as u32) as i32;
+
+    // The paper, read past the lettering's anti-aliasing ramp.
+    let fringe = seed.dilated_within(antialias_pad(scale) + 1, search);
+    let mut paper_levels: Vec<i32> = Vec::new();
+    for y in search.y..search.bottom() {
+        for x in search.x..search.right() {
+            if !fringe.contains(x, y) {
+                paper_levels.push(luma(x, y));
+            }
+        }
+    }
+    if paper_levels.is_empty() {
+        return seed.clone();
+    }
+    paper_levels.sort_unstable();
+    let paper = paper_levels[paper_levels.len() / 2];
+    let tolerance = (2.0 * deviation_threshold(noise_sigma)) as i32;
+    let at_paper = paper_levels.iter().filter(|&&v| (v - paper).abs() <= tolerance).count();
+    if (at_paper as f32) < STRAY_FLAT_SHARE * paper_levels.len() as f32 {
+        return seed.clone();
+    }
+
+    let is_ink = |x: i64, y: i64| !seed.contains(x, y) && (luma(x, y) - paper).abs() > tolerance;
+    let r = reach as i64;
+    let near_lettering = |x: i64, y: i64| {
+        (-r..=r).any(|dy| (-r..=r).any(|dx| seed.contains(x + dx, y + dy)))
+    };
+
+    let mut strays = Mask::empty(search);
+    let mut seen = Mask::empty(search);
+    let mut island = Vec::new();
+    for sy in search.y..search.bottom() {
+        for sx in search.x..search.right() {
+            if seen.contains(sx, sy) || !is_ink(sx, sy) {
+                continue;
+            }
+            // One 8-connected island, flooded from here.
+            island.clear();
+            seen.set(sx, sy, true);
+            let mut stack = vec![(sx, sy)];
+            let mut edge = false;
+            let (mut ix0, mut iy0, mut ix1, mut iy1) = (sx, sy, sx, sy);
+            while let Some((x, y)) = stack.pop() {
+                island.push((x, y));
+                edge |= x == search.x || y == search.y || x == search.right() - 1 || y == search.bottom() - 1;
+                (ix0, iy0, ix1, iy1) = (ix0.min(x), iy0.min(y), ix1.max(x), iy1.max(y));
+                for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if search.contains(nx, ny) && !seen.contains(nx, ny) && is_ink(nx, ny) {
+                        seen.set(nx, ny, true);
+                        stack.push((nx, ny));
+                    }
+                }
+            }
+            let spans = ix1 - ix0 + 1 >= letters.w as i64 && iy1 - iy0 + 1 >= letters.h as i64;
+            if edge || spans || !island.iter().any(|&(x, y)| near_lettering(x, y)) {
+                continue;
+            }
+            for &(x, y) in &island {
+                strays.set(x, y, true);
+            }
+        }
+    }
+    if strays.is_empty() {
+        return seed.clone();
+    }
+    Mask::union(&[seed, &strays], page.width, page.height)
+}
+
+/// The box of a mask's set pixels, which can be much smaller than its bounds.
+fn set_bounds(mask: &Mask) -> Option<Rect> {
+    let b = mask.bounds;
+    let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+    for y in b.y..b.bottom() {
+        for x in b.x..b.right() {
+            if mask.contains(x, y) {
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            }
+        }
+    }
+    (x0 <= x1).then(|| Rect::new(x0, y0, (x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32))
+}
+
+/// The fallback mask for a region no candidate fitted: the largest growth at or
+/// below the first step whose border does not sit on a strong edge.
+///
+/// **This is the answer to an incoherent earlier fallback.** That fallback
+/// was incoherent on its own terms: it returned
+/// `seed.dilated_within(first_step, bounds)` - the very mask whose strong-edge
+/// crossing had refused every candidate - and routed it to a model, which then
+/// wrote into the outline the refusal existed to protect. Seven of the eighteen
+/// gated regions on `page-crowded` take this path.
+///
+/// There were two ways out, decline the region or route with the last
+/// admissible mask, and "the second keeps the region and the first
+/// keeps the rule". Both are kept by searching **downward** instead of
+/// sideways. The candidate series only ever grows, so when its first step is
+/// already refused there is no admissible member of it - but there are nine
+/// smaller radii below that step, and the rule the series enforces applies to
+/// them one at a time. The largest that clears the edge map is the answer.
+///
+/// **The walk stops at the lettering's anti-aliasing, not at the seed.** A
+/// segmentation mask ends inside the ramp from glyph to paper, and the ramp is
+/// lettering: measured on the demo chapter's own SAM masks at scale 1.56, a
+/// quarter of the first pixel shell outside the mask is still glyph ink and
+/// the second is at the background rate. The walk used to go on down to the
+/// seed itself, and did on 107 of the chapter's 227 cloud regions - every
+/// radius up to the first step crossed an edge, mostly the strokes of glyphs
+/// the old seed had cut - which left that ramp outside the hole for a model to
+/// read as picture and for a fill to leave standing as a glyph-shaped ghost.
+/// [`antialias_pad`] is the ramp at this page's scale, and it is taken even
+/// where its border meets an edge: that close to the lettering, the edge is
+/// the lettering's own, or art the glyph already overruns - the fixture
+/// defect seen on seven `page-crowded` regions, where no smaller honest mask
+/// exists either. **A region is never dropped for want of an admissible
+/// mask.**
 fn admissible(seed: &Mask, scale: f32, bounds: Rect, edges: &noise::EdgeMap) -> (u32, Mask) {
-    for radius in (1..=first_step(scale)).rev() {
+    let floor = antialias_pad(scale).min(first_step(scale));
+    for radius in (floor + 1..=first_step(scale)).rev() {
         let candidate = seed.dilated_within(radius, bounds);
         if !edges.crosses(&candidate) {
             return (radius, candidate);
         }
     }
-    (0, seed.clone())
+    (floor, seed.dilated_within(floor, bounds))
+}
+
+/// How far a glyph's anti-aliasing reaches past its segmentation mask, in
+/// native pixels: one proxy pixel at this page's scale.
+fn antialias_pad(scale: f32) -> u32 {
+    (ANTIALIAS_PAD as f32 * scale).round().max(1.0) as u32
+}
+
+/// [`antialias_pad`] in proxy pixels, the unit of §4's other constants.
+const ANTIALIAS_PAD: u32 = 1;
+
+/// The most [`outlined`] grows lettering, in proxy pixels.
+const OUTLINE_MAX: u32 = 2 * MIN_MASK_THICKNESS;
+
+/// Lettering outside a balloon, grown by half its own stroke width (at most
+/// [`OUTLINE_MAX`] proxy pixels), so the outline an effect draws around its
+/// letters is part of what is cleaned.
+///
+/// A lettering mask marks the letters and not that outline, and outside a
+/// balloon the art beside it is full of strong edges, so every growth of the
+/// seed crosses one and the fit keeps a hole a pixel or two past the letters.
+/// The outline is left standing around the hole, and a model rung reads it as
+/// the letters' surround and paints their shape back in its colour. Measured
+/// on chapter 109 with the whole run (SAM-TS-L, Ogkalu small, LaMa): effects
+/// drawn black with a white outline came back as white letters. Their outlines
+/// end 4 to 5 px past the mask, and their strokes are 10 to 25 px wide, so half
+/// a stroke reaches past the outline on every one of them and grows small
+/// lettering by little. A balloon's lettering sits on paper, where the fit
+/// grows freely, and is not grown here.
+pub fn outlined(seed: &Mask, scale: f32, bounds: Rect) -> Mask {
+    let half = stroke_width(seed) / 2.0;
+    let radius = half.min(OUTLINE_MAX as f32 * scale).round() as u32;
+    if radius == 0 { seed.clone() } else { seed.dilated_within(radius, bounds) }
+}
+
+/// Twice a mask's area over its border pixels: the width of a stroke much
+/// longer than it is wide. Zero for an empty mask.
+fn stroke_width(mask: &Mask) -> f32 {
+    let bounds = mask.bounds;
+    let (mut area, mut border) = (0u32, 0u32);
+    for y in bounds.y..bounds.bottom() {
+        for x in bounds.x..bounds.right() {
+            if !mask.contains(x, y) {
+                continue;
+            }
+            area += 1;
+            if !mask.contains(x - 1, y) || !mask.contains(x + 1, y)
+                || !mask.contains(x, y - 1) || !mask.contains(x, y + 1) {
+                border += 1;
+            }
+        }
+    }
+    if border == 0 { 0.0 } else { 2.0 * area as f32 / border as f32 }
 }
 
 /// `max(8.0, 2.5 × page_noise_sigma)`, in 16-bit luma.
@@ -400,16 +635,12 @@ pub fn deviation_threshold(noise_sigma: f32) -> f32 {
 /// it instead of keeping a second copy that drifts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Available {
-    denoise: bool,
     inpaint: bool,
 }
 
 impl Available {
     fn of(page: &Raster) -> Available {
-        Available {
-            denoise: crate::engines::denoise::applies(page),
-            inpaint: crate::engines::lama::applies(page),
-        }
+        Available { inpaint: crate::engines::lama::applies(page) }
     }
 
     /// Where a region the fit could not settle belongs.
@@ -422,7 +653,7 @@ impl Available {
     /// ([`crate::engines::lama::Decline::Depth`]), and the page cleans nothing
     /// at all. The engine is right to refuse - a continuous-tone answer written
     /// into one bit per sample is per-pixel nearest-entry snapping, which is
-    /// refused - and the router was wrong to send it there. Rung 0's planar
+    /// refused - and the router was wrong to send it there. Rung 0's flat
     /// fill serves a bitonal source and always has.
     ///
     /// The same holds one mode over, for indexed and CMYK, where rungs 2-4
@@ -436,7 +667,6 @@ impl Available {
 /// §5's routing table.
 fn route_for(
     ring: &RingStats,
-    noise_sigma: f32,
     failed: bool,
     thickness: u32,
     rungs: Available,
@@ -449,12 +679,7 @@ fn route_for(
     if ring.deviation > INPAINT_MIN_STD * 257.0 && thickness <= MIN_INPAINTING_RADIUS {
         return rungs.ladder();
     }
-    // Relative, for the same reason the fail threshold is: a fixed 0.25 never
-    // holds on a JPEG raw, so every region on every JPEG source would denoise.
-    if ring.deviation <= 0.3 * noise_sigma {
-        return Route::Fill;
-    }
-    if rungs.denoise { Route::FillAndDenoise } else { Route::Fill }
+    Route::Fill
 }
 
 /// The rectangle a region's engine context is cut from: the reference box,
@@ -495,6 +720,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }
@@ -520,6 +746,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }
@@ -556,13 +783,7 @@ mod tests {
         let sigma = page_noise_sigma(&bitonal);
         let failed = fitted.best_deviation > deviation_threshold(sigma);
         assert_eq!(
-            route_for(
-                &fitted.ring,
-                sigma,
-                failed,
-                fitted.thickness,
-                Available { denoise: true, inpaint: true },
-            ),
+            route_for(&fitted.ring, failed, fitted.thickness, Available { inpaint: true }),
             Route::Inpaint,
         );
     }
@@ -602,6 +823,13 @@ mod tests {
         assert_eq!(fitted.route, Route::Inpaint, "a flat fill would land in dotted tone");
     }
 
+    #[test]
+    fn a_stored_fill_and_denoise_route_reads_as_the_fill() {
+        let route: Route = serde_json::from_str("\"fill_and_denoise\"").unwrap();
+        assert_eq!(route, Route::Fill);
+        assert_eq!(serde_json::to_value(Route::Fill).unwrap(), serde_json::json!("fill"));
+    }
+
     /// The invariant behind that one, over every colour mode and depth the
     /// application reads: a route names a rung that will actually run.
     #[test]
@@ -617,14 +845,61 @@ mod tests {
                     fixture.name
                 );
             }
-            if route == Route::FillAndDenoise {
-                assert!(
-                    crate::engines::denoise::applies(&page),
-                    "{} was routed to a rung that cannot average its samples",
-                    fixture.name
-                );
-            }
         }
+    }
+
+    /* -- lettering the segmentation missed ------------------------------ */
+
+    /// A glyph on white paper, marked by the seed, with a 2×2 dot two pixels
+    /// right of it that the seed left out: a dakuten the segmentation missed.
+    fn glyph_with_missed_dot() -> (Raster, Mask, (i64, i64)) {
+        let dot = (REGION.right() + 2, REGION.y + 3);
+        let page = gray_page(|x, y| {
+            let (x, y) = (x as i64, y as i64);
+            let on_dot = (dot.0..dot.0 + 2).contains(&x) && (dot.1..dot.1 + 2).contains(&y);
+            if REGION.contains(x, y) || on_dot { 0 } else { 250 }
+        });
+        (page, Mask::filled(REGION), dot)
+    }
+
+    /// The missed dot is lettering. Without it in the seed, the first
+    /// candidate's border lands on the dot's edge, the series never starts, and
+    /// the fill leaves the dot and the fringe standing. With it, the mask grows
+    /// as it does for any balloon and the dot is painted over.
+    #[test]
+    fn a_missed_dot_beside_the_lettering_joins_the_mask_and_the_mask_grows() {
+        let (page, seed, dot) = glyph_with_missed_dot();
+        let edges = EdgeMap::sobel(&page);
+        assert!(edges.crosses(&seed.dilated(4, PAGE, PAGE)), "the premise is gone: the dot no longer stops the series");
+
+        let fitted = fit(&page, &seed, 1.0, page_noise_sigma(&page), &edges, false);
+        assert!(fitted.mask.contains(dot.0, dot.1) && fitted.mask.contains(dot.0 + 1, dot.1 + 1));
+        assert!(fitted.thickness >= 4, "the series still fell back, at {}", fitted.thickness);
+        assert_eq!(fitted.route, Route::Fill);
+    }
+
+    /// A balloon outline close around the lettering fits inside the search box
+    /// whole, and is still not lettering: its box spans the lettering's.
+    #[test]
+    fn a_small_balloon_outline_is_never_taken_for_missed_lettering() {
+        let outline = REGION.grown(5, PAGE, PAGE);
+        let inner = REGION.grown(4, PAGE, PAGE);
+        let page = gray_page(|x, y| {
+            let (x, y) = (x as i64, y as i64);
+            if REGION.contains(x, y) || (outline.contains(x, y) && !inner.contains(x, y)) { 0 } else { 250 }
+        });
+        let seed = Mask::filled(REGION);
+        let taken = with_stray_lettering(&page, &seed, 1.0, page_noise_sigma(&page), Rect::new(0, 0, PAGE, PAGE));
+        assert_eq!(taken.count(), seed.count(), "the outline joined the lettering");
+    }
+
+    /// Screentone around the lettering is not paper, and no dot of it is taken.
+    #[test]
+    fn no_island_is_taken_from_screentone() {
+        let page = gray_page(|x, y| if REGION.contains(x as i64, y as i64) || tone(x, y) { 40 } else { 250 });
+        let seed = Mask::filled(REGION);
+        let taken = with_stray_lettering(&page, &seed, 1.0, page_noise_sigma(&page), Rect::new(0, 0, PAGE, PAGE));
+        assert_eq!(taken.count(), seed.count(), "screentone dots joined the lettering");
     }
 
     /* -- what a model rung is allowed to write through ------------------- */
@@ -695,6 +970,72 @@ mod tests {
         assert!(fitted.ink.count() < 5 * box_area);
     }
 
+    #[test]
+    fn explicit_padding_replaces_automatic_mask_and_ink_growth() {
+        let page = gray_page(|_, _| 250);
+        let seed = Mask::filled(REGION);
+        let edges = EdgeMap::none(PAGE, PAGE);
+        let bounds = Rect::new(0, 0, PAGE, PAGE);
+        let automatic = fit(&page, &seed, 1.0, 0.0, &edges, false);
+        assert!(automatic.thickness > 4, "fixture must exercise automatic growth");
+        for padding in [0, 4, 2, 0] {
+            let fitted = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, bounds, padding);
+            let expected = seed.dilated(padding, PAGE, PAGE);
+            assert_eq!(fitted.mask, expected);
+            assert_eq!(fitted.ink, expected);
+            assert_eq!(fitted.thickness, padding);
+            assert_eq!(fitted.route, automatic.route);
+            assert_eq!(fitted.paper, ring::paper_annulus(&page, &expected, 0, &edges));
+        }
+        let clipped = Rect::new(REGION.x, REGION.y, REGION.w + 1, REGION.h + 1);
+        let fitted = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, clipped, 4);
+        assert_eq!(fitted.mask, seed.dilated_within(4, clipped));
+    }
+
+    #[test]
+    fn zero_padding_samples_paper_past_the_glyph_edge_without_growing_the_mask() {
+        let seed = Mask::filled(REGION);
+        let page = gray_page(|x, y| if seed.contains(x as i64, y as i64) { 30 } else { 250 });
+        let edges = EdgeMap::sobel(&page);
+        let bounds = Rect::new(0, 0, PAGE, PAGE);
+        assert!(ring::paper_annulus(&page, &seed, 0, &edges).is_empty());
+        let fitted = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, bounds, 0);
+        let stored = fit_within(&page, &seed, 1.0, 0.0, &edges, true, bounds);
+        assert_eq!(fitted.mask, seed);
+        assert_eq!(fitted.ink, seed);
+        assert_eq!(fitted.paper, stored.paper);
+        assert_eq!(fitted.ring.median, 250 * 257);
+        assert!(fitted.ring.count > 0);
+    }
+
+    #[test]
+    fn zero_padding_paper_sampling_does_not_cross_a_nearby_outline() {
+        let seed = Mask::filled(REGION);
+        let outline = REGION.grown(4, PAGE, PAGE);
+        let page = gray_page(|x, y| {
+            let (x, y) = (x as i64, y as i64);
+            if seed.contains(x, y) || ((x == outline.x || x == outline.right() - 1)
+                && y >= outline.y && y < outline.bottom())
+                || ((y == outline.y || y == outline.bottom() - 1)
+                    && x >= outline.x && x < outline.right()) { 30 }
+            else if x > outline.x && x < outline.right() - 1
+                && y > outline.y && y < outline.bottom() - 1 { 250 }
+            else { 150 }
+        });
+        let edges = EdgeMap::sobel(&page);
+        assert!(ring::paper_annulus(&page, &seed, 0, &edges).is_empty());
+        let paper = authoritative_paper(&page, &seed, &edges);
+        assert!(!paper.is_empty());
+        for y in 0..PAGE as i64 {
+            for x in 0..PAGE as i64 {
+                if paper.contains(x, y) {
+                    assert!(x > outline.x && x < outline.right() - 1
+                        && y > outline.y && y < outline.bottom() - 1, "sample ({x},{y}) crossed the outline");
+                }
+            }
+        }
+    }
+
     /// A hand-drawn mask is authoritative on both readings: no search runs, and
     /// nothing is held back from the model either.
     #[test]
@@ -736,6 +1077,25 @@ mod tests {
         assert!(fitted.route.needs_a_model(), "the fallback still routes to the ladder");
     }
 
+    /// **The walk stops at the anti-aliasing, not at the seed.** Two-pixel
+    /// stripes put a strong edge under every border the seed could grow to, so
+    /// every radius is refused - and what comes back is still the seed grown
+    /// by one proxy pixel at the page's scale, never the bare seed that left a
+    /// glyph's ramp outside the hole.
+    #[test]
+    fn the_fallback_never_stops_inside_the_lettering_antialiasing() {
+        let page = gray_page(|x, _| if x % 4 < 2 { 0 } else { 250 });
+        let edges = EdgeMap::sobel(&page);
+        let seed = Mask::filled(Rect::new(50, 44, 4, 12));
+        for (scale, pad) in [(1.0, 1), (1.5635, 2), (2.0, 2), (3.2, 3)] {
+            assert!(edges.crosses(&seed.dilated(1, PAGE, PAGE)), "the premise moved");
+            let fitted = fit(&page, &seed, scale, page_noise_sigma(&page), &edges, false);
+            assert_eq!(fitted.thickness, pad, "scale {scale}");
+            assert_eq!(fitted.mask, seed.dilated(pad, PAGE, PAGE), "scale {scale}");
+            assert_eq!(fitted.ink, fitted.mask, "scale {scale}");
+        }
+    }
+
     /// The invariant, over every fixture and both paths: what a model writes
     /// through is never larger than what was fitted.
     #[test]
@@ -758,5 +1118,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An effect on busy art: a black stroke 12 px wide with a white outline
+    /// 4 px wide, on stripes whose every border is a strong edge. The fit alone
+    /// keeps a hole inside the outline; grown by half its stroke first, the
+    /// whole outline is inside the set a model writes through.
+    #[test]
+    fn an_outlined_effect_on_art_is_cleaned_out_to_its_outline() {
+        let stroke = Rect::new(40, 30, 12, 40);
+        let outline = Rect::new(36, 26, 20, 48);
+        let page = gray_page(|x, y| {
+            let (x, y) = (x as i64, y as i64);
+            if stroke.contains(x, y) { 0 } else if outline.contains(x, y) { 250 } else if x % 4 < 2 { 0 } else { 250 }
+        });
+        let edges = EdgeMap::sobel(&page);
+        let seed = Mask::filled(stroke);
+        let in_outline = |mask: &Mask| (outline.y..outline.bottom())
+            .all(|y| (outline.x..outline.right()).all(|x| mask.contains(x, y)));
+        let bare = fit(&page, &seed, 1.0, page_noise_sigma(&page), &edges, false);
+        assert!(!in_outline(&bare.ink), "the premise moved: the fit alone reaches the outline's edge");
+
+        let grown = outlined(&seed, 1.0, Rect::new(0, 0, PAGE, PAGE));
+        assert_eq!(grown, seed.dilated(5, PAGE, PAGE), "half of a 9.6 px stroke, rounded");
+        let fitted = fit(&page, &grown, 1.0, page_noise_sigma(&page), &edges, false);
+        assert!(in_outline(&fitted.ink), "part of the outline is left standing");
+        assert!(fitted.route.needs_a_model(), "an effect on art is a model rung's");
+    }
+
+    /// Half the stroke, never more than [`OUTLINE_MAX`] proxy pixels at the
+    /// page's scale, and nothing for nothing.
+    #[test]
+    fn outline_growth_is_half_the_stroke_up_to_a_bound() {
+        let bounds = Rect::new(0, 0, PAGE, PAGE);
+        let thin = Mask::filled(Rect::new(40, 10, 4, 80));
+        assert_eq!(outlined(&thin, 1.0, bounds), thin.dilated(2, PAGE, PAGE));
+        let wide = Mask::filled(Rect::new(20, 20, 60, 60));
+        assert_eq!(outlined(&wide, 1.0, bounds), wide.dilated(OUTLINE_MAX, PAGE, PAGE));
+        assert_eq!(outlined(&wide, 1.5, bounds), wide.dilated(12, PAGE, PAGE));
+        let empty = Mask::empty(Rect::new(10, 10, 5, 5));
+        assert_eq!(outlined(&empty, 1.0, bounds), empty);
     }
 }

@@ -16,7 +16,13 @@ use crate::patch::Patch;
 #[derive(Debug, thiserror::Error)]
 pub enum CompositeError {
     #[error("patch {id} is {pw}×{ph} but its mask bounds are {mw}×{mh}")]
-    Malformed { id: String, pw: u32, ph: u32, mw: u32, mh: u32 },
+    Malformed {
+        id: String,
+        pw: u32,
+        ph: u32,
+        mw: u32,
+        mh: u32,
+    },
     #[error("patch {id} is {patch:?}/{patch_depth:?} but the page is {page:?}/{page_depth:?}")]
     ModeMismatch {
         id: String,
@@ -39,6 +45,7 @@ pub fn composite(page: &Raster, patches: &[Patch]) -> Result<Raster, CompositeEr
     let whole = Rect::new(0, 0, page.width, page.height);
     for patch in ordered_visible(patches, None) {
         stamp(&mut out, page, patch, whole)?;
+        out.color = out.color.after_edit();
     }
     Ok(out)
 }
@@ -72,6 +79,7 @@ pub fn composite_region(
     let mut out = crop(page, window);
     for patch in ordered_visible(patches, below) {
         stamp(&mut out, page, patch, window)?;
+        out.color = out.color.after_edit();
     }
     Ok(out)
 }
@@ -117,6 +125,7 @@ fn crop(page: &Raster, rect: Rect) -> Raster {
         palette: page.palette.clone(),
         trns: page.trns.clone(),
         srgb_intent: page.srgb_intent,
+        color: page.color.clone(),
         data: vec![0; blank_len(rect.w, rect.h, page)],
     };
     let samples = page.mode.samples();
@@ -166,22 +175,85 @@ fn stamp(
 
     let bounds = patch.mask.bounds;
     let samples = page.mode.samples();
+    let opacity = f64::from(patch.layer_style().opacity) / 100.0;
+    if opacity <= 0.0 { return Ok(()); }
+    let mut palette_blends = std::collections::HashMap::new();
+    let top = (1u32 << page.depth.bits().min(16)) as f64 - 1.0;
     for y in bounds.y.max(window.y)..bounds.bottom().min(window.bottom()) {
         for x in bounds.x.max(window.x)..bounds.right().min(window.right()) {
-            if !patch.mask.contains(x, y) {
+            // Partial coverage (an anti-aliased rim) is a per-pixel opacity,
+            // multiplied into the layer's own.
+            let coverage = patch.mask.coverage(x, y);
+            if coverage == 0 {
                 continue;
             }
             if x < 0 || y < 0 || x >= page.width as i64 || y >= page.height as i64 {
                 continue;
             }
+            let opacity = opacity * f64::from(coverage) / 255.0;
             let (lx, ly) = ((x - bounds.x) as u32, (y - bounds.y) as u32);
             let (ox, oy) = ((x - window.x) as u32, (y - window.y) as u32);
+            if page.mode == ColorMode::Indexed && opacity < 1.0 {
+                let below = out.sample(ox, oy, 0);
+                let above = patch.pixels.sample(lx, ly, 0);
+                let value = *palette_blends.entry((below, above, coverage)).or_insert_with(|| {
+                    blend_palette_index(page, &patch.pixels, below, above, opacity)
+                });
+                out.set_sample(ox, oy, 0, value);
+                continue;
+            }
+            let alpha = page.mode.alpha_channel();
+            let (lower_alpha, upper_alpha) = alpha.map_or((top, top), |channel| (
+                out.sample(ox, oy, channel) as f64,
+                patch.pixels.sample(lx, ly, channel) as f64,
+            ));
+            let mixed_alpha = lower_alpha * (1.0 - opacity) + upper_alpha * opacity;
             for channel in 0..samples {
-                out.set_sample(ox, oy, channel, patch.pixels.sample(lx, ly, channel));
+                let value = patch.pixels.sample(lx, ly, channel);
+                if opacity >= 1.0 {
+                    out.set_sample(ox, oy, channel, value);
+                } else {
+                    let below = out.sample(ox, oy, channel) as f64;
+                    let mixed = if alpha.is_some() && alpha != Some(channel) && mixed_alpha > 0.0 {
+                        (below * lower_alpha * (1.0 - opacity) + value as f64 * upper_alpha * opacity) / mixed_alpha
+                    } else {
+                        below * (1.0 - opacity) + value as f64 * opacity
+                    };
+                    out.set_sample(ox, oy, channel, mixed.round().clamp(0.0, top) as u16);
+                }
             }
         }
     }
     Ok(())
+}
+
+/// Palette positions have no numerical relationship to color. Blend the
+/// colors, then quantize to the existing palette so untouched pixels and the
+/// source's indexed format remain unchanged.
+fn blend_palette_index(page: &Raster, patch: &Raster, below: u16, above: u16, opacity: f64) -> u16 {
+    let Some(palette) = page.palette.as_deref() else { return below; };
+    let upper_palette = patch.palette.as_deref().unwrap_or(palette);
+    let color = |palette: &[u8], trns: Option<&[u8]>, index: u16| -> Option<[f64; 4]> {
+        let rgb = palette.get(index as usize * 3..index as usize * 3 + 3)?;
+        Some([rgb[0] as f64, rgb[1] as f64, rgb[2] as f64,
+            trns.and_then(|alpha| alpha.get(index as usize)).copied().unwrap_or(255) as f64])
+    };
+    let Some(lower) = color(palette, page.trns.as_deref(), below) else { return below; };
+    let Some(upper) = color(upper_palette, patch.trns.as_deref().or(page.trns.as_deref()), above) else { return below; };
+    let mixed_alpha = lower[3] * (1.0 - opacity) + upper[3] * opacity;
+    let target: [f64; 4] = std::array::from_fn(|i| {
+        if i < 3 && mixed_alpha > 0.0 {
+            (lower[i] * lower[3] * (1.0 - opacity) + upper[i] * upper[3] * opacity) / mixed_alpha
+        } else { lower[i] * (1.0 - opacity) + upper[i] * opacity }
+    });
+    (0..(palette.len() / 3).min(1usize << page.depth.bits()))
+        .map(|index| {
+            let candidate = color(palette, page.trns.as_deref(), index as u16).unwrap();
+            let distance: f64 = candidate.iter().zip(target).map(|(a, b)| (a - b).powi(2)).sum();
+            (index as u16, distance)
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map_or(below, |(index, _)| index)
 }
 
 /// Every pixel where two rasters of the same geometry differ.
@@ -193,7 +265,9 @@ pub fn changed_pixels(before: &Raster, after: &Raster) -> Vec<(u32, u32)> {
     if !before.same_geometry(after) {
         // A geometry change is a total change; reporting it as "every pixel"
         // keeps the caller's assertion honest rather than silently empty.
-        return (0..after.height).flat_map(|y| (0..after.width).map(move |x| (x, y))).collect();
+        return (0..after.height)
+            .flat_map(|y| (0..after.width).map(move |x| (x, y)))
+            .collect();
     }
     let samples = before.mode.samples();
     let mut changed = Vec::new();
@@ -210,7 +284,11 @@ pub fn changed_pixels(before: &Raster, after: &Raster) -> Vec<(u32, u32)> {
 /// `dilate(union(applied masks), edit_margin)` - the right-hand side of the
 /// contract. Built here so the test and the exporter agree on what it means.
 pub fn permitted_region(patches: &[Patch], page_w: u32, page_h: u32) -> Mask {
-    let masks: Vec<&Mask> = patches.iter().filter(|p| p.visible).map(|p| &p.mask).collect();
+    let masks: Vec<&Mask> = patches
+        .iter()
+        .filter(|p| p.visible)
+        .map(|p| &p.mask)
+        .collect();
     if masks.is_empty() {
         return Mask::empty(Rect::new(0, 0, 0, 0));
     }
@@ -220,7 +298,7 @@ pub fn permitted_region(patches: &[Patch], page_w: u32, page_h: u32) -> Mask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::{BitDepth, fixtures};
+    use crate::image::{fixtures, BitDepth};
     use crate::patch::{Engine, Provenance};
 
     fn provenance() -> Provenance {
@@ -251,10 +329,14 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
-            data: vec![0; {
-                let bits = bounds.w as usize * page.mode.samples() * page.depth.bits() as usize;
-                bits.div_ceil(8) * bounds.h as usize
-            }],
+            color: Default::default(),
+            data: vec![
+                0;
+                {
+                    let bits = bounds.w as usize * page.mode.samples() * page.depth.bits() as usize;
+                    bits.div_ceil(8) * bounds.h as usize
+                }
+            ],
         };
         let ceiling = match page.depth {
             BitDepth::Sixteen => u16::MAX,
@@ -285,14 +367,190 @@ mod tests {
             }
         }
 
-        Patch { id: "p1".into(), ink: mask.clone(), mask, pixels, order: 0, visible: true, provenance: provenance() }
+        Patch {
+            id: "p1".into(),
+            ink: mask.clone(),
+            mask,
+            pixels,
+            order: 0,
+            visible: true,
+            provenance: provenance(),
+        }
+    }
+
+    #[test]
+    fn translucent_layer_does_not_darken_over_transparent_pixels() {
+        let page = Raster {
+            width: 4, height: 4, mode: ColorMode::GrayAlpha, depth: BitDepth::Eight,
+            icc: None, trns: None, srgb_intent: None, palette: None,
+            color: Default::default(),
+            data: vec![0; 32],
+        };
+        let mut patch = synthetic_patch(&page, Rect::new(0, 0, 4, 4));
+        patch.provenance.params_snapshot = serde_json::json!({"layer": {"opacity": 50}});
+        let result = composite(&page, &[patch]).unwrap();
+        assert_eq!(result.sample(1, 1, 0), 255);
+        assert_eq!(result.sample(1, 1, 1), 128);
+        assert_eq!(result.sample(0, 0, 1), 0);
+    }
+
+    /// 0, 50 and 100 percent, on every pixel of the mask and none outside
+    /// it: nothing, the rounded half-way blend, and the patch itself.
+    #[test]
+    fn zero_half_and_full_opacity_write_the_expected_pixels() {
+        let page = fixtures::by_name("l8").raster;
+        let bounds = Rect::new(8, 8, 12, 10);
+        for (opacity, expect) in [
+            (0u8, (|below: u16| below) as fn(u16) -> u16),
+            (50, |below: u16| ((below as f64 + 200.0) / 2.0).round() as u16),
+            (100, |_below: u16| 200),
+        ] {
+            let mut patch = synthetic_patch(&page, bounds);
+            patch.pixels.data.fill(200);
+            patch.provenance.params_snapshot = serde_json::json!({"layer": {"opacity": opacity}});
+            let out = composite(&page, std::slice::from_ref(&patch)).unwrap();
+            for y in 0..page.height {
+                for x in 0..page.width {
+                    let below = page.sample(x, y, 0);
+                    let wanted = if patch.mask.contains(x as i64, y as i64) { expect(below) } else { below };
+                    assert_eq!(out.sample(x, y, 0), wanted, "{opacity}% at ({x}, {y})");
+                }
+            }
+            let window = composite_region(&page, std::slice::from_ref(&patch), bounds, None).unwrap();
+            assert_eq!(window.sample(2, 2, 0), out.sample(10, 10, 0), "{opacity}% window");
+        }
+    }
+
+    #[test]
+    fn partial_opacity_blends_colors_instead_of_palette_positions() {
+        let page = Raster {
+            width: 4, height: 4, mode: ColorMode::Indexed, depth: BitDepth::Eight,
+            icc: None, trns: None, srgb_intent: None,
+            color: Default::default(),
+            // A deliberately non-monotonic palette: index arithmetic would
+            // blend black (0) + white (2) into bright red (1), not gray (3).
+            palette: Some(vec![0, 0, 0, 255, 0, 0, 255, 255, 255, 128, 128, 128]),
+            data: vec![0; 16],
+        };
+        let mut patch = synthetic_patch(&page, Rect::new(0, 0, 4, 4));
+        patch.pixels.data.fill(2);
+        patch.provenance.params_snapshot = serde_json::json!({"layer": {"opacity": 50}});
+        let result = composite(&page, std::slice::from_ref(&patch)).unwrap();
+        assert_eq!(result.sample(1, 1, 0), 3);
+        assert_eq!(result.sample(0, 0, 0), 0);
+        assert_eq!(result.palette, page.palette);
+        let crop = composite_region(&page, &[patch], Rect::new(1, 1, 1, 1), None).unwrap();
+        assert_eq!(crop.sample(0, 0, 0), 3);
+    }
+
+    #[test]
+    fn saved_layer_transform_and_opacity_match_flattened_export() {
+        use crate::export::{export_page, Target};
+        use crate::image::{decode, encode, Format};
+        let page = fixtures::by_name("l8").raster;
+        let mut patch = synthetic_patch(&page, Rect::new(8, 8, 8, 6));
+        patch.provenance.params_snapshot = serde_json::json!({"layer": {
+            "opacity": 50, "offsetX": 20, "offsetY": 12,
+            "rotation": 90.0, "locked": true
+        }});
+        let presented = patch.presented();
+        assert_eq!(presented.layer_style().opacity, 50);
+        assert!(presented.layer_style().locked);
+        assert_ne!(presented.mask.bounds, Rect::new(8, 8, 8, 6));
+
+        let composed = composite(&page, std::slice::from_ref(&presented)).unwrap();
+        assert_eq!(composed.sample(10, 10, 0), page.sample(10, 10, 0));
+        let (x, y) = (presented.mask.bounds.x..presented.mask.bounds.right())
+            .flat_map(|x| (presented.mask.bounds.y..presented.mask.bounds.bottom()).map(move |y| (x, y)))
+            .find(|&(x, y)| presented.mask.contains(x, y)).unwrap();
+        let local = ((x - presented.mask.bounds.x) as u32, (y - presented.mask.bounds.y) as u32);
+        let expected = (page.sample(x as u32, y as u32, 0) as f64 * 0.5
+            + presented.pixels.sample(local.0, local.1, 0) as f64 * 0.5).round() as u16;
+        assert_eq!(composed.sample(x as u32, y as u32, 0), expected);
+
+        let source = encode(&page, Format::Png).unwrap();
+        let exported = export_page(&source, &[presented], Target::SameAsSource).unwrap();
+        let flattened = decode(&exported.bytes).unwrap();
+        assert_eq!(flattened.data, composed.data);
+    }
+
+    #[test]
+    fn a_turned_layer_is_resampled_smoothly_and_a_moved_one_exactly() {
+        let page = fixtures::by_name("l8").raster;
+        let bounds = Rect::new(8, 8, 20, 20);
+        let mut patch = synthetic_patch(&page, bounds);
+        patch.mask = Mask::filled(bounds);
+        patch.pixels.data.iter_mut().for_each(|value| *value = 200);
+
+        patch.provenance.params_snapshot = serde_json::json!({"layer": {"offsetX": 5, "offsetY": 3}});
+        let moved = patch.clone().presented();
+        assert_eq!(moved.mask, Mask { bounds: Rect::new(13, 11, 20, 20), bits: vec![255; 400] });
+        assert!(moved.pixels.data.iter().all(|&value| value == 200));
+
+        patch.provenance.params_snapshot = serde_json::json!({"layer": {"rotation": 30.0}});
+        let turned = patch.presented();
+        let partial = turned.mask.bits.iter().filter(|&&c| c > 0 && c < 255).count();
+        assert!(partial > 40, "a turned edge is anti-aliased, not stair-stepped ({partial} partial pixels)");
+        assert_eq!(turned.mask.coverage(18, 18), 255, "the middle stays solid");
+        // Pixels outside the source mask never bleed in: every covered pixel is
+        // the layer's own colour.
+        for (index, &coverage) in turned.mask.bits.iter().enumerate() {
+            if coverage > 0 {
+                assert_eq!(turned.pixels.data[index], 200);
+            }
+        }
+    }
+
+    #[test]
+    fn shrinking_a_text_shaped_layer_reveals_its_exact_lower_composite() {
+        use crate::text_shape::{round_source_dilate, MaskRaster};
+        for name in ["l8", "rgba8", "l16"] {
+            let page = fixtures::by_name(name).raster;
+            let mut base = Mask::empty(Rect::new(20, 20, 1, 1));
+            base.set(20, 20, true);
+            let base = MaskRaster::from(base);
+            let small = round_source_dilate(&base, 2, page.width, page.height).unwrap().to_mask();
+            let large = round_source_dilate(&base, 5, page.width, page.height).unwrap().to_mask();
+            let mut lower_patch = synthetic_patch(&page, Rect::new(8, 8, 32, 30));
+            lower_patch.id = "lower".into();
+            let lower = composite(&page, &[lower_patch.clone()]).unwrap();
+            let mut top_large = synthetic_patch(&page, large.bounds);
+            top_large.id = "text".into();
+            top_large.order = 1;
+            top_large.mask = large.clone();
+            let (x, y) = (25, 20);
+            let changed = if lower.sample(x, y, 0) == 0 { 255 } else { 0 };
+            top_large.pixels.set_sample((x as i64 - large.bounds.x) as u32,
+                                        (y as i64 - large.bounds.y) as u32, 0, changed);
+            let wide = composite(&page, &[lower_patch.clone(), top_large.clone()]).unwrap();
+            assert_ne!(wide.sample(x, y, 0), lower.sample(x, y, 0), "{name}");
+
+            let mut top_small = synthetic_patch(&page, small.bounds);
+            top_small.id = "text".into();
+            top_small.order = 1;
+            top_small.mask = small.clone();
+            let shrunk = composite(&page, &[lower_patch, top_small]).unwrap();
+            for py in 0..page.height {
+                for px in 0..page.width {
+                    if small.contains(px as i64, py as i64) { continue; }
+                    for channel in 0..page.mode.samples() {
+                        assert_eq!(shrunk.sample(px, py, channel), lower.sample(px, py, channel),
+                                   "{name} failed to restore lower sample at {px},{py}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
     fn nothing_changes_under_an_empty_patch_set() {
         for fixture in fixtures::all() {
             let out = composite(&fixture.raster, &[]).unwrap();
-            assert!(changed_pixels(&fixture.raster, &out).is_empty(), "{}", fixture.name);
+            assert!(
+                changed_pixels(&fixture.raster, &out).is_empty(),
+                "{}",
+                fixture.name
+            );
         }
     }
 
@@ -308,7 +566,11 @@ mod tests {
             let out = composite(page, std::slice::from_ref(&patch)).unwrap();
 
             let changed = changed_pixels(page, &out);
-            assert!(!changed.is_empty(), "{}: the patch changed nothing", fixture.name);
+            assert!(
+                !changed.is_empty(),
+                "{}: the patch changed nothing",
+                fixture.name
+            );
 
             let permitted = permitted_region(std::slice::from_ref(&patch), page.width, page.height);
             for (x, y) in &changed {
@@ -359,8 +621,15 @@ mod tests {
 
         let forwards = composite(&page, &[first.clone(), second.clone()]).unwrap();
         let backwards = composite(&page, &[second, first]).unwrap();
-        assert_eq!(forwards.data, backwards.data, "argument order changed the result");
-        assert_eq!(forwards.sample(10, 10, 0), 200, "the later id did not win the tie");
+        assert_eq!(
+            forwards.data, backwards.data,
+            "argument order changed the result"
+        );
+        assert_eq!(
+            forwards.sample(10, 10, 0),
+            200,
+            "the later id did not win the tie"
+        );
     }
 
     /* -- the windowed composite ---------------------------------------- */
@@ -389,7 +658,12 @@ mod tests {
                 Rect::new(0, 0, page.width, page.height),
             ] {
                 let window = composite_region(page, patches, rect, None).unwrap();
-                assert_eq!((window.width, window.height), (rect.w, rect.h), "{}", fixture.name);
+                assert_eq!(
+                    (window.width, window.height),
+                    (rect.w, rect.h),
+                    "{}",
+                    fixture.name
+                );
                 assert_eq!(window.mode, page.mode, "{}", fixture.name);
                 assert_eq!(window.depth, page.depth, "{}", fixture.name);
                 for y in 0..rect.h {
@@ -448,10 +722,57 @@ mod tests {
         assert_eq!(all.sample(1, 1, 0), 200);
 
         let below = composite_region(&page, &patches, rect, Some(1)).unwrap();
-        assert_eq!(below.sample(1, 1, 0), 30, "the ceiling let the patch at its own order in");
+        assert_eq!(
+            below.sample(1, 1, 0),
+            30,
+            "the ceiling let the patch at its own order in"
+        );
 
         let none = composite_region(&page, &patches, rect, Some(0)).unwrap();
-        assert_eq!(none.sample(1, 1, 0), page.sample(10, 10, 0), "a zero ceiling is the raw page");
+        assert_eq!(
+            none.sample(1, 1, 0),
+            page.sample(10, 10, 0),
+            "a zero ceiling is the raw page"
+        );
+    }
+
+    #[test]
+    fn each_layer_preserves_its_immediate_underlay_outside_the_mask_and_export_matches_preview() {
+        use crate::export::{export_page, Target};
+        use crate::image::{decode, encode, lossless_format_for};
+        for fixture in fixtures::all() {
+            let page = &fixture.raster;
+            let mut a = synthetic_patch(page, Rect::new(8, 8, 24, 20));
+            a.id = "a".into();
+            let mut b = synthetic_patch(page, Rect::new(16, 12, 24, 20));
+            b.id = "b".into();
+            b.order = 1;
+            let underlay = composite(page, std::slice::from_ref(&a)).unwrap();
+            let preview = composite(page, &[a.clone(), b.clone()]).unwrap();
+            for y in 0..page.height {
+                for x in 0..page.width {
+                    if b.mask.contains(x as i64, y as i64) {
+                        continue;
+                    }
+                    for channel in 0..page.mode.samples() {
+                        assert_eq!(
+                            preview.sample(x, y, channel),
+                            underlay.sample(x, y, channel),
+                            "{} at ({x},{y}) channel {channel}",
+                            fixture.name
+                        );
+                    }
+                }
+            }
+            let source = encode(page, lossless_format_for(page)).unwrap();
+            let exported = export_page(&source, &[a, b], Target::SameAsSource).unwrap();
+            let decoded = decode(&exported.bytes).unwrap();
+            assert_eq!(
+                decoded.data, preview.data,
+                "{} preview/export pixel mismatch",
+                fixture.name
+            );
+        }
     }
 
     #[test]

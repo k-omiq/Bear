@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "helpers": "bash scripts/update-helpers.sh",
+    "helpers:install": "bash scripts/update-helpers.sh --install"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",

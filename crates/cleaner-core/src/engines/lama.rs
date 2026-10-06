@@ -1,8 +1,8 @@
 //! Rung 2 - manga-finetuned LaMa, the default inpainter.
 //!
 //! The rung that exists for
-//! what rungs 0 and 1 cannot reconstruct: screentone, halftone and line art
-//! behind the text, where a plane is a hole and a bilateral filter is a smear.
+//! what rung 0 cannot reconstruct: screentone, halftone and line art behind
+//! the text, where a flat fill is a hole.
 //!
 //! ## What the model actually is, and what it wanted
 //!
@@ -105,14 +105,12 @@
 //!
 //! Rungs 2-4
 //! are disabled
-//! for indexed and CMYK sources, and [`ColorMode::allows_model_engines`] is
+//! for indexed and CMYK sources, and [`crate::image::ColorMode::allows_model_engines`] is
 //! that rule. Bitonal is this module's own addition: a 1-bit sample is not
 //! a level, so continuous-tone output
 //! written into one is a per-pixel threshold - the nearest-entry snapping
-//! that is refused, in two colours. Rung 1 was
-//! generalised from "skipped for bitonal sources" to the same shape, and
-//! declining is
-//! the conservative half of an undecided question.
+//! that is refused, in two colours. Declining is the conservative half of an
+//! undecided question.
 //!
 //! ## Where the geometry went
 //!
@@ -138,15 +136,14 @@ pub use crate::engines::model::{
     Decline, Error, ISOLATION_FEATHER, MAX_BOX, MODEL_INPUT, Rendered, TILE_HANDOFF, TILE_OVERLAP,
     TILE_STRIDE, applied_mask, plan, tile_origins, write_bound,
 };
-use crate::engines::model::{AlphaRamp, ceiling_for, dither_at, page_crop, source_channel, tiles};
+use crate::engines::model::{AlphaRamp, answer_mode, ceiling_for, dither_at, page_crop, commit_srgb, tiles};
 use crate::strip::window::EdgePad;
 
 /// Whether this rung can run on this page at all.
 ///
 /// Asked separately from [`Inpainter::render`] so a router can route around the
-/// rung rather than reach it and be refused - the same reason
-/// [`crate::engines::denoise::applies`] is a free function and
-/// [`crate::fit::fit_within`] consults it before it names a route.
+/// rung rather than reach it and be refused: [`crate::fit::fit_within`]
+/// consults it before it names a route.
 ///
 /// Rung 2 adds nothing to [`crate::engines::model::applies`]: its tensors are
 /// float32, so unlike rung 3 it has no quarrel with a 16-bit source.
@@ -258,10 +255,11 @@ impl Inpainter {
     pub fn open(model: &Path, preference: Preference) -> Result<Inpainter, SessionError> {
         let (session, selection) =
             accel::open_session(model, &accel::LAMA, preference, Some(LAMA_INTRA_THREADS))?;
-        let lease = crate::registry::register(
+        let lease = crate::registry::register_named(
             crate::registry::Kind::Inpainter,
             crate::registry::Footprint::measured(RESIDENT_BYTES),
             crate::registry::Device::accelerator(selection.accelerator),
+            Some("LaMa Manga".into()),
         );
         Ok(Inpainter { session, selection, lease })
     }
@@ -321,9 +319,9 @@ impl Inpainter {
 
         let applied = applied_mask(fitted, page.width, page.height);
         let bounds = applied.bounds;
-        let samples = page.mode.samples();
-        let alpha_channel = page.mode.alpha_channel();
+        let managed = crate::engines::model::editable_color(page)?;
         let ceiling = ceiling_for(page.depth);
+        let reading = answer_mode(page);
 
         // The running composite. It starts as the page over the patch's bounds,
         // so a tile that reads it before anything has been written reads the
@@ -399,16 +397,10 @@ impl Inpainter {
                     if model_mask[at] != 0.0 {
                         continue;
                     }
-                    for c in 0..3 {
-                        let channel = source_channel(page.mode, c);
-                        let sample = if bounds.contains(cx, cy) {
-                            patch.sample((cx - bounds.x) as u32, (cy - bounds.y) as u32, channel)
-                        } else {
-                            page.sample(cx as u32, cy as u32, channel)
-                        };
-                        // u16 → f32 directly, never via u8.
-                        image[c * plane + at] = sample as f32 / ceiling as f32;
-                    }
+                    let rgb = if bounds.contains(cx, cy) {
+                        managed.pixel(&patch, (cx - bounds.x) as u32, (cy - bounds.y) as u32)
+                    } else { managed.pixel(page, cx as u32, cy as u32) };
+                    for c in 0..3 { image[c * plane + at] = rgb[c]; }
                 }
             }
 
@@ -428,17 +420,9 @@ impl Inpainter {
                     let (lx, ly) = ((px - bounds.x) as u32, (py - bounds.y) as u32);
                     let at = (y * MODEL_INPUT as i64 + x) as usize;
                     let dither = dither_at(page.depth, alpha, px, py, ceiling);
-                    for channel in 0..samples {
-                        // Alpha is copied, never produced.
-                        if alpha_channel == Some(channel) {
-                            continue;
-                        }
-                        let model = model_sample(&out, plane, page.mode, channel, at);
-                        let original = patch.sample(lx, ly, channel) as f64 / ceiling;
-                        let blended = alpha * model + (1.0 - alpha) * original;
-                        let value = (blended * ceiling + dither).round().clamp(0.0, ceiling) as u16;
-                        patch.set_sample(lx, ly, channel, value);
-                    }
+                    let mut rgb = [out[at], out[plane + at], out[2 * plane + at]];
+                    if matches!(reading, ColorMode::Gray | ColorMode::GrayAlpha) { rgb = [rgb.iter().sum::<f32>() / 3.0; 3]; }
+                    commit_srgb(&managed, &mut patch, lx, ly, rgb, alpha, dither)?;
                     done.set(px, py, true);
                 }
             }
@@ -448,7 +432,7 @@ impl Inpainter {
             drop(out);
         }
 
-        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran })
+        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran, tone: None })
     }
 
     fn run(&mut self, image: Vec<f32>, mask: Vec<f32>) -> Result<Vec<f32>, Error> {
@@ -465,27 +449,10 @@ impl Inpainter {
     }
 }
 
-/// One model sample, reduced back to the page's own channel.
-///
-/// A grayscale page takes the mean of the three returned channels rather than
-/// one of them. The model is free to return something slightly non-neutral -
-/// measured at a mean channel spread of 1.24 8-bit levels inside the hole, with
-/// a worst sample at 19.8 - and picking channel 0 would keep a third of that
-/// noise where averaging keeps a third less of it. Discarding two thirds of the
-/// answer to avoid an average would be the worse trade.
-fn model_sample(out: &[f32], plane: usize, mode: ColorMode, channel: usize, at: usize) -> f64 {
-    match mode {
-        ColorMode::Gray | ColorMode::GrayAlpha => {
-            let sum = out[at] as f64 + out[plane + at] as f64 + out[2 * plane + at] as f64;
-            (sum / 3.0).clamp(0.0, 1.0)
-        }
-        _ => (out[channel * plane + at] as f64).clamp(0.0, 1.0),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image::ColorMode;
     use crate::composite::{changed_pixels, composite, permitted_region};
     use crate::constants::{EDIT_MARGIN, ISOLATION_RADIUS};
     use crate::image::BitDepth;
@@ -512,6 +479,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }
@@ -634,9 +602,8 @@ mod tests {
                 }
             }
         }
-        // And it is the isolation cut rather than the margin: rung 2 reaches 5
-        // px where rung 1 reaches 6, and the difference is real.
-        assert_ne!(applied, bound);
+        // And the margin is exactly the isolation cut: no rung writes wider.
+        assert_eq!(applied, bound);
     }
 
     /// **Every part of this rung's geometry is measured from the lettering.**
@@ -754,6 +721,35 @@ mod tests {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/pages/page-screentone.png");
         let bytes = std::fs::read(path).ok()?;
         crate::image::decode(&bytes).ok()
+    }
+
+    #[test]
+    fn a_grey_page_stored_as_rgba_gets_a_grey_patch() {
+        let Some(held) = inpainter() else { return };
+        let Some(grey) = screentone_page() else { return };
+        let mut held = held.lock().unwrap();
+        // The same page as a scanner that writes RGBA stores it.
+        let data = (0..grey.height)
+            .flat_map(|y| (0..grey.width).map(move |x| (x, y)))
+            .flat_map(|(x, y)| { let v = grey.sample8(x, y, 0); [v, v, v, 255] })
+            .collect();
+        let page = Raster { mode: ColorMode::Rgba, depth: BitDepth::Eight, icc: None, data, ..grey };
+
+        let fitted = fitted_over(&page, Rect::new(600, 800, 160, 90));
+        let rendered = held.render(&page, &fitted).expect("the region rendered");
+        assert_eq!(rendered.pixels.mode, ColorMode::Rgba);
+        // Exactly grey, not only within the neutral tolerance: on this page
+        // the model's own answer is 2 levels apart at worst, and 13 on a real
+        // RGBA scan (Deli Health chapter 11 page 5).
+        let pixels = &rendered.pixels;
+        let parted = (0..pixels.height)
+            .flat_map(|y| (0..pixels.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let [r, g, b] = [0, 1, 2].map(|c| pixels.sample(x, y, c));
+                r != g || g != b
+            })
+            .count();
+        assert_eq!(parted, 0, "the colour model's chroma reached a grey page");
     }
 
     #[test]

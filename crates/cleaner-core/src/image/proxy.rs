@@ -37,6 +37,7 @@
 //! be stored under `a = 0`.
 
 use super::{BitDepth, ColorMode, Raster};
+use crate::mask::Mask;
 
 /// The short edge's ceiling, from rule 7. The rule's number,
 /// not a measurement: it is the resolution the interface draws at, and the
@@ -105,11 +106,21 @@ impl ProxyPlan {
         };
 
         let vertical = page_h >= page_w;
-        let (proxy_w, proxy_h) =
-            if vertical { (proxy_short, proxy_long) } else { (proxy_long, proxy_short) };
+        let (proxy_w, proxy_h) = if vertical {
+            (proxy_short, proxy_long)
+        } else {
+            (proxy_long, proxy_short)
+        };
         let tiles = (proxy_long.div_ceil(PROXY_TILE_LONG_EDGE) as usize).max(1);
 
-        ProxyPlan { page_w, page_h, proxy_w, proxy_h, vertical, tiles }
+        ProxyPlan {
+            page_w,
+            page_h,
+            proxy_w,
+            proxy_h,
+            vertical,
+            tiles,
+        }
     }
 
     /// The plan for this raster.
@@ -163,104 +174,131 @@ impl ProxyPlan {
 /// neither PNG nor TIFF can express one - but this takes any `&Raster`, and a
 /// caller that builds one is entitled to an answer rather than a panic.
 pub fn proxy_tile(page: &Raster, index: usize) -> Option<Raster> {
+    managed_proxy_tile(page, index).ok().flatten()
+}
+
+/// Fallible entry point used by the UI: unsupported profiles are actionable
+/// errors, never silently replaced by uncalibrated colors.
+pub fn managed_proxy_tile(
+    page: &Raster,
+    index: usize,
+) -> Result<Option<Raster>, super::ImageError> {
     if page.width == 0 || page.height == 0 {
-        return None;
+        return Ok(None);
     }
     let plan = ProxyPlan::of(page);
-    let rect = plan.tile(index)?;
-    let mode = proxy_mode(page);
-    let samples = mode.samples();
-    let has_alpha = mode.alpha_channel().is_some();
+    let Some(rect) = plan.tile(index) else {
+        return Ok(None);
+    };
+    display_window(page, rect, plan.proxy_w, plan.proxy_h).map(Some)
+}
 
+/// Whole-page and tiled previews share this same transform and sampling path.
+pub fn display(page: &Raster) -> Result<Raster, super::ImageError> {
+    display_window(
+        page,
+        TileRect {
+            x: 0,
+            y: 0,
+            w: page.width,
+            h: page.height,
+        },
+        page.width,
+        page.height,
+    )
+}
+
+fn display_window(
+    page: &Raster,
+    rect: TileRect,
+    width: u32,
+    height: u32,
+) -> Result<Raster, super::ImageError> {
+    use super::color::{alpha, ManagedColor};
+    let transform = ManagedColor::for_raster(page)?;
+    // RGB output permits an unambiguous sRGB declaration even for Gray ICCs.
+    let has_alpha = page.mode.alpha_channel().is_some() || page.trns.is_some();
+    Ok(reduce_managed(rect, width, height, page.width, page.height, has_alpha, |x, y| {
+        (transform.pixel(page, x, y), alpha(page, x, y))
+    }))
+}
+
+fn reduce_managed(rect: TileRect, width: u32, height: u32, page_width: u32, page_height: u32, has_alpha: bool, sample: impl Fn(u32, u32) -> ([f32; 3], f32)) -> Raster {
+    use super::color::{byte, encoded, linear};
+    let mode = if has_alpha {
+        ColorMode::Rgba
+    } else {
+        ColorMode::Rgb
+    };
     let mut out = Raster {
         width: rect.w,
         height: rect.h,
         mode,
         depth: BitDepth::Eight,
-        // A profile describes the samples, and the samples are still the
-        // page's colours - only their resolution changed. CMYK is the one mode
-        // whose samples do not survive, so its profile does not either.
-        icc: if page.mode == ColorMode::Cmyk { None } else { page.icc.clone() },
+        icc: None,
         palette: None,
         trns: None,
-        srgb_intent: if page.mode == ColorMode::Cmyk { None } else { page.srgb_intent },
-        data: vec![0; rect.w as usize * rect.h as usize * samples],
+        srgb_intent: Some(1),
+        color: Default::default(),
+        data: vec![0; rect.w as usize * rect.h as usize * mode.samples()],
     };
-
     for ty in 0..rect.h {
-        let (y0, y1) = span(rect.y + ty, plan.proxy_h, plan.page_h);
+        let (y0, y1) = span(rect.y + ty, height, page_height);
         for tx in 0..rect.w {
-            let (x0, x1) = span(rect.x + tx, plan.proxy_w, plan.page_w);
-
-            // Premultiplied accumulation: colour weighted by coverage, and the
-            // coverage kept so it can be divided back out.
-            let mut colour = [0u64; 3];
-            let mut alpha = 0u64;
-            let mut count = 0u64;
+            let (x0, x1) = span(rect.x + tx, width, page_width);
+            let mut sum = [0.0f64; 3];
+            let mut coverage = 0.0f64;
             for sy in y0..y1 {
                 for sx in x0..x1 {
-                    let rgb = page.rgb8_pixel(sx, sy);
-                    let a = alpha8(page, sx, sy) as u64;
-                    for (slot, value) in colour.iter_mut().zip(rgb) {
-                        *slot += value as u64 * a;
+                    let (rgb, a) = sample(sx, sy);
+                    let a = a as f64;
+                    for c in 0..3 {
+                        sum[c] += linear(rgb[c]) as f64 * a;
                     }
-                    alpha += a;
-                    count += 1;
+                    coverage += a;
                 }
             }
-
-            // Fully transparent covers nothing, so there is no colour to
-            // recover and black is as good an answer as any other.
-            let value =
-                |channel: usize| -> u16 { colour[channel].checked_div(alpha).unwrap_or(0) as u16 };
-            match mode {
-                ColorMode::Gray => out.set_sample(tx, ty, 0, value(0)),
-                ColorMode::GrayAlpha => {
-                    out.set_sample(tx, ty, 0, value(0));
-                    out.set_sample(tx, ty, 1, (alpha / count) as u16);
-                }
-                _ => {
-                    for channel in 0..3 {
-                        out.set_sample(tx, ty, channel, value(channel));
-                    }
-                    if has_alpha {
-                        out.set_sample(tx, ty, 3, (alpha / count) as u16);
-                    }
-                }
+            for (c, total) in sum.iter().enumerate() {
+                let value = if coverage > 0.0 {
+                    encoded((total / coverage) as f32)
+                } else {
+                    0.0
+                };
+                out.set_sample(tx, ty, c, byte(value) as u16);
+            }
+            if has_alpha {
+                out.set_sample(
+                    tx,
+                    ty,
+                    3,
+                    byte((coverage / ((x1 - x0) * (y1 - y0)) as f64) as f32) as u16,
+                );
             }
         }
     }
-    Some(out)
+    out
 }
 
-/// What a page of this mode is drawn as. Gray stays gray - a manga page tripled
-/// into RGB is three times the bytes over the protocol whose throughput is
-/// the whole constraint - and everything else that a browser cannot draw
-/// directly becomes RGB.
-fn proxy_mode(page: &Raster) -> ColorMode {
-    match page.mode {
-        ColorMode::Gray => ColorMode::Gray,
-        ColorMode::GrayAlpha => ColorMode::GrayAlpha,
-        ColorMode::Rgba => ColorMode::Rgba,
-        // A palette with a `tRNS` chunk carries transparency that would
-        // silently become opaque in RGB.
-        ColorMode::Indexed if page.trns.is_some() => ColorMode::Rgba,
-        ColorMode::Rgb | ColorMode::Indexed | ColorMode::Cmyk => ColorMode::Rgb,
-    }
-}
-
-/// One pixel's alpha as 0..=255. Opaque is the answer for every mode that
-/// carries none, which is what makes the averaging one code path.
-fn alpha8(page: &Raster, x: u32, y: u32) -> u8 {
-    match page.mode {
-        ColorMode::GrayAlpha => page.sample8(x, y, 1),
-        ColorMode::Rgba => page.sample8(x, y, 3),
-        ColorMode::Indexed => match &page.trns {
-            Some(trns) => trns.get(page.sample(x, y, 0) as usize).copied().unwrap_or(255),
-            None => 255,
-        },
-        _ => 255,
-    }
+/// A patch's managed sRGB layer on the same grid as the page's tiles.
+/// Metadata must describe the native patch samples, including palette and tRNS.
+pub fn managed_proxy_layer(pixels: &Raster, mask: &Mask, plan: &ProxyPlan) -> Result<Option<(TileRect, Raster)>, super::ImageError> {
+    use super::color::{alpha, ManagedColor};
+    let bounds = mask.bounds;
+    let (x0, y0) = (bounds.x.max(0), bounds.y.max(0));
+    let (x1, y1) = (bounds.right().min(i64::from(plan.page_w)), bounds.bottom().min(i64::from(plan.page_h)));
+    if x0 >= x1 || y0 >= y1 || pixels.width != bounds.w || pixels.height != bounds.h { return Ok(None); }
+    let first = |at: i64, proxy: u32, page: u32| (at as u64 * u64::from(proxy) / u64::from(page)) as u32;
+    let past = |at: i64, proxy: u32, page: u32| ((at as u64 * u64::from(proxy)).div_ceil(u64::from(page)) as u32).min(proxy);
+    let (px, py) = (first(x0, plan.proxy_w, plan.page_w), first(y0, plan.proxy_h, plan.page_h));
+    let rect = TileRect { x: px, y: py, w: past(x1, plan.proxy_w, plan.page_w)-px, h: past(y1, plan.proxy_h, plan.page_h)-py };
+    let transform = ManagedColor::for_raster(pixels)?;
+    let layer = reduce_managed(rect, plan.proxy_w, plan.proxy_h, plan.page_w, plan.page_h, true, |x,y| {
+        let coverage = mask.coverage(i64::from(x), i64::from(y));
+        if coverage == 0 { return ([0.0;3], 0.0); }
+        let (lx,ly) = ((i64::from(x)-bounds.x) as u32, (i64::from(y)-bounds.y) as u32);
+        (transform.pixel(pixels,lx,ly), alpha(pixels,lx,ly) * f32::from(coverage)/255.0)
+    });
+    Ok(Some((rect,layer)))
 }
 
 /// The source pixels one proxy pixel covers along one axis. Never empty: a
@@ -275,6 +313,7 @@ fn span(at: u32, proxy: u32, page: u32) -> (u32, u32) {
 mod tests {
     use super::*;
     use crate::image::fixtures;
+    use crate::mask::Rect;
 
     /// A page of a stated size, mid-gray with a black block, so an average has
     /// something to be wrong about.
@@ -288,6 +327,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data: vec![128; (width * height) as usize],
         };
         for y in 0..height.min(64) {
@@ -304,7 +344,10 @@ mod tests {
     fn a_webtoon_segment_keeps_its_width_and_is_not_reduced_to_a_sliver() {
         let plan = ProxyPlan::for_page(800, 20_000);
         assert_eq!((plan.proxy_w, plan.proxy_h), (800, 20_000));
-        assert_ne!(plan.proxy_w, 40, "the long edge was capped instead of the short one");
+        assert_ne!(
+            plan.proxy_w, 40,
+            "the long edge was capped instead of the short one"
+        );
     }
 
     #[test]
@@ -323,8 +366,24 @@ mod tests {
         assert_eq!(plan.proxy_h, PROXY_SHORT_EDGE);
         assert_eq!(plan.proxy_w, 5120);
         assert_eq!(plan.tiles, 3);
-        assert_eq!(plan.tile(0).unwrap(), TileRect { x: 0, y: 0, w: 2048, h: 1024 });
-        assert_eq!(plan.tile(2).unwrap(), TileRect { x: 4096, y: 0, w: 1024, h: 1024 });
+        assert_eq!(
+            plan.tile(0).unwrap(),
+            TileRect {
+                x: 0,
+                y: 0,
+                w: 2048,
+                h: 1024
+            }
+        );
+        assert_eq!(
+            plan.tile(2).unwrap(),
+            TileRect {
+                x: 4096,
+                y: 0,
+                w: 1024,
+                h: 1024
+            }
+        );
     }
 
     /// Unlike the detector's letterbox, which scales up because the model's
@@ -404,7 +463,11 @@ mod tests {
         let tile = proxy_tile(&page, 0).unwrap();
         // Every proxy pixel covers one black row and one 200 row.
         for y in [0, 1, 500, 1023] {
-            assert_eq!(tile.sample(7, y, 0), 100, "row {y} dropped a source row");
+            assert_eq!(
+                tile.sample(7, y, 0),
+                146,
+                "row {y} is not a linear-light mean"
+            );
         }
     }
 
@@ -425,21 +488,26 @@ mod tests {
                 "{name} became {:?}",
                 tile.mode
             );
-            assert_eq!((tile.width, tile.height), (fixture.raster.width, fixture.raster.height));
+            assert_eq!(
+                (tile.width, tile.height),
+                (fixture.raster.width, fixture.raster.height)
+            );
         }
     }
 
     /// A gray page stays gray. Tripling it into RGB is three times the bytes
     /// over the one path whose throughput is the open question.
     #[test]
-    fn a_gray_page_is_not_promoted_to_colour() {
+    fn gray_preview_has_explicit_srgb_rgb_channels() {
         for name in ["l8", "l16", "bitonal"] {
             let page = fixtures::by_name(name).raster;
-            assert_eq!(proxy_tile(&page, 0).unwrap().mode, ColorMode::Gray, "{name}");
+            assert_eq!(proxy_tile(&page, 0).unwrap().mode, ColorMode::Rgb, "{name}");
         }
         assert_eq!(
-            proxy_tile(&fixtures::by_name("la8").raster, 0).unwrap().mode,
-            ColorMode::GrayAlpha
+            proxy_tile(&fixtures::by_name("la8").raster, 0)
+                .unwrap()
+                .mode,
+            ColorMode::Rgba
         );
     }
 
@@ -449,7 +517,7 @@ mod tests {
     #[test]
     fn a_cmyk_profile_does_not_follow_rgb_samples() {
         let mut page = fixtures::by_name("cmyk8").raster;
-        page.icc = Some(vec![1, 2, 3]);
+        page.icc = Some(fixtures::cmyk_profile());
         let tile = proxy_tile(&page, 0).unwrap();
         assert_eq!(tile.mode, ColorMode::Rgb);
         assert_eq!(tile.icc, None);
@@ -461,7 +529,8 @@ mod tests {
     fn a_profile_survives_a_mode_that_keeps_its_samples() {
         let page = fixtures::by_name("rgb8-icc").raster;
         assert!(page.icc.is_some());
-        assert_eq!(proxy_tile(&page, 0).unwrap().icc, page.icc);
+        assert_eq!(proxy_tile(&page, 0).unwrap().srgb_intent, Some(1));
+        assert_eq!(proxy_tile(&page, 0).unwrap().icc, None);
     }
 
     /// An indexed page with `tRNS` has transparency the palette carries; RGB
@@ -490,6 +559,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data: vec![0; 2048 * 2048 * 4],
         };
         for y in 0..2048 {
@@ -503,8 +573,91 @@ mod tests {
         }
 
         let tile = proxy_tile(&page, 0).unwrap();
-        assert_eq!(tile.sample(5, 5, 0), 240, "the transparent half bled into the colour");
-        assert_eq!(tile.sample(5, 5, 3), 127, "coverage was not averaged");
+        assert_eq!(
+            tile.sample(5, 5, 0),
+            240,
+            "the transparent half bled into the colour"
+        );
+        assert_eq!(tile.sample(5, 5, 3), 128, "coverage was not averaged");
+    }
+
+    /// Source-over of an 8-bit layer onto an 8-bit grey tile, as a browser
+    /// draws it.
+    fn over(below: u16, colour: u16, alpha: u16) -> u16 {
+        ((u32::from(colour) * u32::from(alpha) + u32::from(below) * (255 - u32::from(alpha)) + 127) / 255) as u16
+    }
+
+    /// Opaque layer interiors agree with the managed flattened page. Fractional
+    /// edge coverage exposes why the editor must draw authoritative cleaned
+    /// tiles: browser source-over in encoded sRGB cannot reproduce linear-light
+    /// downsampling, independently of the mask/profile metadata on each layer.
+    #[test]
+    fn managed_layer_interiors_match_but_browser_blended_edges_require_flattened_tiles() {
+        let mut page = a_page(2400, 3000);
+        for y in 0..3000 {
+            for x in 0..2400 {
+                page.set_sample(x, y, 0, ((x / 7 + y / 11) % 256) as u16);
+            }
+        }
+        let bounds = Rect::new(301, 457, 533, 211);
+        let mut pixels = a_page(bounds.w, bounds.h);
+        for y in 0..bounds.h {
+            for x in 0..bounds.w {
+                pixels.set_sample(x, y, 0, (255 - (x * 3 + y) % 200) as u16);
+            }
+        }
+        let mut stamped = page.clone();
+        for y in 0..bounds.h {
+            for x in 0..bounds.w {
+                stamped.set_sample(bounds.x as u32 + x, bounds.y as u32 + y, 0, pixels.sample(x, y, 0));
+            }
+        }
+
+        let plan = ProxyPlan::of(&page);
+        let (rect, layer) =
+            managed_proxy_layer(&pixels, &Mask::filled(bounds), &plan).unwrap().expect("the patch is on the page");
+        assert_eq!(layer.mode, ColorMode::Rgba);
+        let (source, cleaned) = (proxy_tile(&page, 0).unwrap(), proxy_tile(&stamped, 0).unwrap());
+        let mut worst_edge = 0;
+        for ty in 0..rect.h {
+            for tx in 0..rect.w {
+                let (x, y) = (rect.x + tx, rect.y + ty);
+                let drawn = over(source.sample(x, y, 0), layer.sample(tx, ty, 0), layer.sample(tx, ty, 3));
+                let wanted = cleaned.sample(x, y, 0);
+                if layer.sample(tx, ty, 3) == 255 {
+                    assert_eq!(drawn, wanted, "interior at {x},{y}");
+                } else {
+                    worst_edge = worst_edge.max(drawn.abs_diff(wanted));
+                }
+            }
+        }
+        assert!(worst_edge > 2, "this fixture must expose encoded-browser versus linear-reduction edge blending; page artwork must use authoritative flattened tiles");
+        // One proxy pixel past the rectangle, the page is the source's.
+        assert_eq!(source.sample(rect.x - 1, rect.y + 5, 0), cleaned.sample(rect.x - 1, rect.y + 5, 0));
+    }
+
+    #[test]
+    fn managed_layer_uses_native_gamma_and_color_key_before_downsampling() {
+        let pixels = Raster {
+            width: 2, height: 1, mode: ColorMode::Rgb, depth: BitDepth::Eight,
+            icc: None, palette: None, trns: Some(vec![0,64,0,128,0,192]), srgb_intent: None,
+            color: super::super::ColorDescription { gamma: Some(100_000), ..Default::default() },
+            data: vec![64,128,192,128,128,128],
+        };
+        let plan = ProxyPlan { page_w:2, page_h:1, proxy_w:1, proxy_h:1, vertical:false, tiles:1 };
+        let (_, layer) = managed_proxy_layer(&pixels, &Mask::filled(Rect::new(0,0,2,1)), &plan).unwrap().unwrap();
+        // IEC sRGB encoding of linear 128/255 is 187.845; the keyed pixel
+        // contributes no color. This expectation does not use our transform.
+        assert_eq!(layer.data, vec![188,188,188,128]);
+        assert_eq!(layer.srgb_intent, Some(1));
+        assert_eq!(layer.icc, None);
+    }
+
+    #[test]
+    fn a_patch_off_the_page_has_no_layer() {
+        let plan = ProxyPlan::for_page(400, 600);
+        let bounds = Rect::new(-50, 10, 40, 40);
+        assert!(managed_proxy_layer(&a_page(40, 40), &Mask::filled(bounds), &plan).unwrap().is_none());
     }
 
     /// A raster with no pixels in it. The plan clamps a zero dimension to 1 so
@@ -523,6 +676,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data: Vec::new(),
         };
         assert!(proxy_tile(&empty(0, 400), 0).is_none());

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Applied patch reconstruction review",
+  "type": "object",
+  "required": ["page_id", "reviews"],
+  "additionalProperties": false,
+  "properties": {
+    "page_id": {"type": "string"},
+    "reviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["patch_id", "decision"],
+        "additionalProperties": false,
+        "properties": {
+          "patch_id": {"type": "string"},
+          "decision": {"enum": ["acceptable", "visible_seam", "damaged_art", "left_lettering"]},
+          "note": {"type": "string"}
+        }
+      }
+    }
+  }
+}

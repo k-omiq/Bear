@@ -10,16 +10,20 @@
    * The facts come from `backend.about()` as `{labelKey, value}`: the *label*
    * is translated, the *value* never is. Licence identifiers, URLs, provider
    * and model names and version strings are proper nouns, and a translated
-   * `GPL-3.0-or-later` would be a licensing claim rather than a translation.
+   * `GPL-3.0-only` is a licensing claim, not a translation.
    *
    * Rendered as a `<dl>` on the design file's provenance-row metrics - a
    * fixed-width key column in `--t3`, values in `--t2`.
+   *
+   * It ends in the community invitation, which is the one place Settings
+   * offers it.
    */
   import { getBackend } from '../api/backend.js'
   import { Button } from '../ui/index.js'
   import { t } from '../i18n/index.js'
   import { checkForUpdate } from '../updater.js'
   import UpdateDialog from '../home/UpdateDialog.svelte'
+  import DiscordInvite from './DiscordInvite.svelte'
 
   /** @type {{appVersion: string, facts: Array<{labelKey: string, value: string}>}|null} */
   let about = $state(null)
@@ -87,6 +91,8 @@
 
   <UpdateDialog bind:open={updateDialogOpen} update={updateFound} />
 {/if}
+
+<DiscordInvite compact />
 
 <style>
   .facts {

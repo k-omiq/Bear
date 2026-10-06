@@ -98,6 +98,11 @@
     // them for the scrollbar.
     editor.chapter
     if (editor.project?.mode !== 'longstrip') editor.pageIndex
+    // Not while the chapter is still loading: the canvas shows a placeholder
+    // then, too short to scroll to a saved position, and a restore made
+    // against it lands wherever the placeholder ends. The restore waits for
+    // the pages, and `onscroll` records nothing until they are there.
+    if (editor.loading) return
     const target = untrack(() => editor.scroll)
     adoptScroll(target.top, target.left)
   })
@@ -122,20 +127,28 @@
    * pass is what stops that being a matter of luck: it costs one `tick()` and
    * nothing at all when the first pass was already right.
    *
-   * @param {number} top
+   * **The scroll room is read on each pass**, not once: a saved `top` is
+   * measured from the page's place at rest, and the canvas reports the room
+   * above it (`editor.scrollRoom`) from the same measurement. A second pass
+   * aimed at the first pass's room would undo the canvas's own correction.
+   *
+   * @param {number} top from the page's place at rest
    * @param {number} left
    */
   async function adoptScroll(top, left) {
     const box = viewport
     if (!box) return
-    box.scrollTo({ top, left })
+    box.scrollTo({ top: top + editor.scrollRoom, left })
     await tick()
-    if (box.scrollTop !== top || box.scrollLeft !== left) box.scrollTo({ top, left })
+    const target = top + editor.scrollRoom
+    if (box.scrollTop !== target || box.scrollLeft !== left) box.scrollTo({ top: target, left })
   }
 
   /** @param {Event & {currentTarget: HTMLElement}} event */
   function onscroll(event) {
-    setScroll(event.currentTarget.scrollTop, event.currentTarget.scrollLeft)
+    // A placeholder's scroll position is not the reader's place in the chapter.
+    if (editor.loading) return
+    setScroll(event.currentTarget.scrollTop - editor.scrollRoom, event.currentTarget.scrollLeft)
   }
 </script>
 
@@ -198,7 +211,16 @@
        `safe` falls back to start alignment exactly when the sheet overflows. */
     justify-content: safe center;
     overflow: auto;
+    /* The canvas owns navigation and zoom offsets; virtual sheets must not
+       invite a second scroll correction from the browser. */
+    overflow-anchor: none;
     /* Clear of the clusters at the top and the pills at the bottom. */
     padding: 70px 104px 66px;
+    /* A press beside the sheet lands here, not on the draw surface, and a
+       drag from it onto the page started a native selection over the scans,
+       which WebKit paints as the page itself selected. Nothing on the canvas
+       is text to copy. */
+    -webkit-user-select: none;
+    user-select: none;
   }
 </style>

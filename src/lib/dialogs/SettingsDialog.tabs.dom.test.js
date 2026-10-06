@@ -1,14 +1,14 @@
 /**
- * The Settings dialog's tab strip, and the one binding in it that is not a key.
+ * The Settings screen's sidebar, and the one binding in it that is not a key.
  *
- * The strip replaced a single scrolling body, and the argument that body was
- * built on is written out at the top of `SettingsDialog.svelte`: five
- * preference rows must not move further from the hand, the dialog must not
- * change height as panels swap, the strip must be a real WAI-ARIA tab list
- * rather than five buttons that look like one, and the heading outline must
- * survive. Three of those four are assertable here and are asserted here; the
- * height is a fixed CSS box (`.panel`) that jsdom does not lay out, so it is
- * checked in a browser instead.
+ * Settings is a full-window `Screen` with a vertical tab list down the left.
+ * What is asserted here is what makes that list a real WAI-ARIA tab list
+ * rather than seven buttons that look like one: one tab stop, Up / Down /
+ * Home / End, selection that follows focus, every tab wired to a mounted
+ * panel, and a heading outline that survives (h1 screen, h2 section, h3
+ * below). Also here: the ids older callers still open it with, the anchor a
+ * deep link lands on, the one place the community invitation lives, and the
+ * theme picker on General.
  *
  * The second half of the file is the pointer modifier - `session
  * .cloneSourceModifier`, the setting that exists because *Alt* is not a key on
@@ -18,20 +18,27 @@
  * pointer event satisfies - is pure and lives in `shortcuts.test.js`.
  *
  * The seam is stubbed the way the two files beside this one stub it: the
- * dialog opens six calls on mount and none of them is what this file is about,
- * so each answers the emptiest true thing.
+ * screen opens several calls on mount and none of them is what this file is
+ * about, so each answers the emptiest true thing.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte'
 
 import { setBackend } from '../api/backend.js'
+import { editor, pageByArrow, readingDirection } from '../state/editor.svelte.js'
 import { t } from '../i18n/index.js'
 import { DEFAULT_POINTER_MODIFIER, isApplePlatform, modifierCap } from '../shortcuts.js'
-import { session, setCloneSourceModifier } from '../state/session.svelte.js'
+import { session, setCloneSourceModifier, setTheme } from '../state/session.svelte.js'
+import { closeModal } from '../state/app.svelte.js'
 import SettingsDialog from './SettingsDialog.svelte'
 
-/** The spec `pushModal({kind: 'settings'})` would have handed the dialog. */
+vi.mock('../state/app.svelte.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  closeModal: vi.fn(),
+}))
+
+/** The spec `pushModal({kind: 'settings'})` would have handed the screen. */
 const SPEC = {
   id: 'modal-1',
   kind: 'settings',
@@ -43,16 +50,34 @@ const SPEC = {
   onresolve: null,
 }
 
-/** The tabs, in the order the strip offers them. */
-const TABS = ['general', 'models', 'acceleration', 'shortcuts', 'about']
+/** The tabs, in the order the list offers them, with the key each is named by. */
+const LABELS = {
+  general: 'settings.section.general',
+  models: 'settings.section.models',
+  cloud: 'settings.section.cloud',
+  denoise: 'settings.section.denoise',
+  performance: 'settings.section.performance',
+  shortcuts: 'settings.section.shortcuts',
+  about: 'settings.section.about',
+}
+const TABS = Object.keys(LABELS)
 
-/** The two panels whose tail holds nothing focusable, so the scroller is the stop. */
-const FOCUSABLE_SCROLLERS = new Set(['acceleration', 'about'])
+/**
+ * The panels whose tail holds nothing focusable, so the scroller is the stop.
+ * Performance is the one here because this file lists no per-model backends,
+ * so the panel ends in prose. Models ends in the token's buttons and About in
+ * the community invitation's link.
+ */
+const FOCUSABLE_SCROLLERS = new Set(['performance'])
 
 /** @param {string} id */
-const tabName = (id) => t(`settings.section.${id}`)
+const tabName = (id) => t(LABELS[id])
+
+/** @type {ReturnType<typeof vi.fn>} */
+let writeSettings
 
 beforeEach(() => {
+  writeSettings = vi.fn(async () => ({}))
   setBackend(
     /** @type {any} */ ({
       listModels: vi.fn(async () => null),
@@ -61,22 +86,27 @@ beforeEach(() => {
       sidecarAvailable: vi.fn(async () => ({ available: false, reasonKey: null })),
       about: vi.fn(async () => ({ appVersion: '0.0.0-test', facts: [] })),
       subscribe: vi.fn(() => () => {}),
-      writeSettings: vi.fn(async () => ({})),
+      writeSettings: (/** @type {any} */ patch) => writeSettings(patch),
+      readInferenceConfig: vi.fn(async () => ({ schemaVersion: 1, selectedTarget: { type: 'local' }, beamProfiles: {}, modalProfiles: {} })),
     }),
   )
 })
 
 afterEach(() => {
   cleanup()
+  editor.project = null
+  editor.chapter = null
+  session.readingDirection = 'rtl'
   setBackend(null)
-  // The session is a module singleton, so a modifier this file chose would
-  // otherwise be the modifier the next file mounts with.
+  // The session is a module singleton, so a value this file chose would
+  // otherwise be the value the next file mounts with.
   setCloneSourceModifier(DEFAULT_POINTER_MODIFIER)
   vi.clearAllMocks()
 })
 
-function open() {
-  const rendered = render(SettingsDialog, { props: { spec: SPEC } })
+/** @param {Record<string, unknown>} [props] */
+function open(props = {}) {
+  const rendered = render(SettingsDialog, { props: { spec: { ...SPEC, props } } })
   /** @param {string} id */
   const tab = (id) => rendered.getByRole('tab', { name: tabName(id) })
   /** @param {string} id */
@@ -84,17 +114,35 @@ function open() {
     /** @type {HTMLElement} */ (
       rendered.container.querySelector(`#${tab(id).getAttribute('aria-controls')}`)
     )
-  return { rendered, tab, panel }
+  const selected = () => TABS.find((id) => tab(id).getAttribute('aria-selected') === 'true')
+  return { rendered, tab, panel, selected }
 }
 
-describe('the tab strip', () => {
-  it('opens on General, so the five preference rows did not move', () => {
+describe('the tab list', () => {
+  it('changes existing RTL projects to LTR through Settings and saves the preference', async () => {
+    editor.project = { id: 'p1', mode: 'single', readingDirection: 'rtl' }
+    editor.chapter = { id: 'c1', review: [], pages: [
+      { id: 'page1', index: 0, regions: [], resident: true },
+      { id: 'page2', index: 1, regions: [], resident: true },
+    ] }
+    editor.pageIndex = 0
+    session.readingDirection = 'rtl'
+    const { rendered } = open()
+    await fireEvent.click(rendered.getByRole('radio', { name: t('settings.direction.ltr') }))
+    expect(readingDirection()).toBe('ltr')
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledWith(expect.objectContaining({ readingDirection: 'ltr' })))
+    pageByArrow('right')
+    expect(editor.pageIndex).toBe(1)
+    await fireEvent.click(rendered.getByRole('radio', { name: t('settings.direction.rtl') }))
+    expect(readingDirection()).toBe('rtl')
+    pageByArrow('right')
+    expect(editor.pageIndex).toBe(0)
+  })
+  it('opens on General', () => {
     const { rendered, tab, panel } = open()
 
     expect(tab('general').getAttribute('aria-selected')).toBe('true')
     expect(panel('general').hasAttribute('hidden')).toBe(false)
-    // The rows themselves, on screen with no press at all - which is the whole
-    // of the answer to "a tab strip puts them one click further away".
     expect(panel('general').textContent).toContain(t('settings.theme.label'))
     expect(panel('general').textContent).toContain(t('settings.language.label'))
 
@@ -102,9 +150,22 @@ describe('the tab strip', () => {
       expect(tab(id).getAttribute('aria-selected')).toBe('false')
       expect(panel(id).hasAttribute('hidden')).toBe(true)
     }
-    expect(rendered.getByRole('tablist').getAttribute('aria-label')).toBe(
-      t('settings.tabs.label'),
-    )
+    const list = rendered.getByRole('tablist')
+    expect(list.getAttribute('aria-label')).toBe(t('settings.tabs.label'))
+    expect(list.getAttribute('aria-orientation')).toBe('vertical')
+  })
+
+  it('offers the sections in order, each with its label on screen', () => {
+    const { rendered } = open()
+    const names = rendered.getAllByRole('tab').map((tab) => tab.textContent?.trim())
+    expect(names).toEqual(TABS.map(tabName))
+  })
+
+  it('is a full-window screen, not a modal', () => {
+    const { rendered } = open()
+    const screen = rendered.getByRole('dialog')
+    expect(screen.classList.contains('screen')).toBe(true)
+    expect(screen.getAttribute('aria-label')).toBe(t('modal.title.settings'))
   })
 
   it('wires every tab to a panel that exists and names it back', () => {
@@ -129,21 +190,32 @@ describe('the tab strip', () => {
     expect(stops()).toEqual(['shortcuts'])
   })
 
-  it('moves and selects on the arrows, wrapping at both ends', async () => {
-    const { tab } = open()
-    const selected = () => TABS.find((id) => tab(id).getAttribute('aria-selected') === 'true')
+  it('moves and selects on Up and Down, wrapping at both ends', async () => {
+    const { tab, panel, selected } = open()
 
-    await fireEvent.keyDown(tab('general'), { key: 'ArrowRight' })
+    await fireEvent.keyDown(tab('general'), { key: 'ArrowDown' })
     expect(selected()).toBe('models')
     expect(document.activeElement).toBe(tab('models'))
+    expect(panel('models').hasAttribute('hidden')).toBe(false)
+    expect(panel('general').hasAttribute('hidden')).toBe(true)
 
-    await fireEvent.keyDown(tab('models'), { key: 'ArrowLeft' })
+    await fireEvent.keyDown(tab('models'), { key: 'ArrowUp' })
     expect(selected()).toBe('general')
 
-    // Left from the first is the last, and right from the last is the first.
-    await fireEvent.keyDown(tab('general'), { key: 'ArrowLeft' })
+    // Up from the first is the last, and down from the last is the first.
+    await fireEvent.keyDown(tab('general'), { key: 'ArrowUp' })
     expect(selected()).toBe('about')
-    await fireEvent.keyDown(tab('about'), { key: 'ArrowRight' })
+    await fireEvent.keyDown(tab('about'), { key: 'ArrowDown' })
+    expect(selected()).toBe('general')
+  })
+
+  it('leaves Left and Right alone: the list is vertical', async () => {
+    const { tab, selected } = open()
+    for (const key of ['ArrowLeft', 'ArrowRight']) {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+      tab('general').dispatchEvent(event)
+      expect(event.defaultPrevented).toBe(false)
+    }
     expect(selected()).toBe('general')
   })
 
@@ -158,9 +230,21 @@ describe('the tab strip', () => {
     await fireEvent.keyDown(tab('about'), { key: 'Home' })
     expect(tab('general').getAttribute('aria-selected')).toBe('true')
     expect(panel('about').hasAttribute('hidden')).toBe(true)
+    expect(document.activeElement).toBe(tab('general'))
   })
 
-  it('leaves a key it does not answer to whatever is under the dialog', async () => {
+  it('stops the keys it answers, so the editor underneath does not page', async () => {
+    const { tab } = open()
+    const event = new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })
+    const underneath = vi.fn()
+    window.addEventListener('keydown', underneath)
+    tab('general').dispatchEvent(event)
+    window.removeEventListener('keydown', underneath)
+    expect(event.defaultPrevented).toBe(true)
+    expect(underneath).not.toHaveBeenCalled()
+  })
+
+  it('leaves a key it does not answer to whatever is under the screen', async () => {
     const { tab } = open()
     const event = new KeyboardEvent('keydown', { key: 'k', bubbles: true, cancelable: true })
     tab('general').dispatchEvent(event)
@@ -168,17 +252,46 @@ describe('the tab strip', () => {
     expect(tab('general').getAttribute('aria-selected')).toBe('true')
   })
 
-  it('keeps a real heading outline: h2 title, h3 panel, h4 shortcut groups', () => {
+  it('keeps a real heading outline: h1 title, h2 section, h3 below', () => {
     const { rendered, panel } = open()
 
-    expect(rendered.container.querySelectorAll('h2')).toHaveLength(1)
+    const titles = rendered.container.querySelectorAll('h1')
+    expect(titles).toHaveLength(1)
+    expect(titles[0].textContent?.trim()).toBe(t('modal.title.settings'))
     for (const id of TABS) {
-      const heading = panel(id).querySelector('h3')
-      expect(heading?.textContent?.trim()).toBe(tabName(id))
+      const headings = panel(id).querySelectorAll('h2')
+      expect(headings).toHaveLength(1)
+      expect(headings[0].textContent?.trim()).toBe(tabName(id))
     }
-    // The sheet's own group headings fall one level below the panel's.
-    expect(panel('shortcuts').querySelectorAll('h4').length).toBeGreaterThan(0)
-    expect(panel('shortcuts').querySelectorAll('h3')).toHaveLength(1)
+    // The sheet's own group headings fall one level below the section's.
+    expect(panel('shortcuts').querySelectorAll('h3').length).toBeGreaterThan(0)
+  })
+
+  it('closes on the back control, which is named Done', async () => {
+    const { rendered } = open()
+    const back = rendered.getByRole('button', { name: t('shell.action.done') })
+    await fireEvent.click(back)
+    expect(closeModal).toHaveBeenCalledWith('done')
+  })
+
+  it('closes on Escape', async () => {
+    open()
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(closeModal).toHaveBeenCalledWith(null)
+  })
+
+  it('has no cloud pointer in General: Cloud is a section of its own', () => {
+    const { panel } = open()
+    expect(panel('general').querySelector('button')?.textContent ?? '').not.toContain(t('settings.section.cloud'))
+    expect(panel('general').textContent).not.toContain(t('settings.inference.permission.label'))
+  })
+
+  it('offers the community invitation in About, and nowhere else', () => {
+    const { rendered, panel } = open()
+    // Every panel is mounted, so the hidden ones count too.
+    const invites = rendered.getAllByRole('link', { name: t('onboarding.community.join'), hidden: true })
+    expect(invites).toHaveLength(1)
+    expect(panel('about').contains(invites[0])).toBe(true)
   })
 
   it('makes a panel focusable when, and only when, its tail is not', () => {
@@ -189,6 +302,81 @@ describe('the tab strip', () => {
         FOCUSABLE_SCROLLERS.has(id) ? '0' : null,
       ])
     }
+  })
+})
+
+describe('the section a caller asks for', () => {
+  it.each([
+    ['models', 'models'],
+    ['cloud', 'cloud'],
+    ['performance', 'performance'],
+    // The ids from before the restructure still land where their rows went.
+    ['detection', 'models'],
+    ['cleaning', 'models'],
+    ['inference', 'cloud'],
+    ['acceleration', 'performance'],
+    // Anything else is General.
+    ['billing', 'general'],
+    [undefined, 'general'],
+  ])('opens %s on %s', (requested, expected) => {
+    const { selected, panel } = open(requested === undefined ? {} : { tab: requested })
+    expect(selected()).toBe(expected)
+    expect(panel(expected).hasAttribute('hidden')).toBe(false)
+  })
+
+  it.each([
+    ['detection', 'pipelines.detection'],
+    ['cleaning', 'pipelines.cleaning'],
+  ])('lands on the %s group inside Models, with focus on its heading', async (requested, heading) => {
+    const { rendered, panel } = open({ tab: requested })
+    const target = rendered.getByRole('heading', { name: t(heading) })
+    expect(panel('models').contains(target)).toBe(true)
+    await waitFor(() => expect(document.activeElement).toBe(target))
+  })
+
+  it('lands on the download token from its anchor', async () => {
+    const { rendered } = open({ tab: 'models', anchor: 'access' })
+    await waitFor(() =>
+      expect(document.activeElement).toBe(rendered.getByRole('heading', { name: t('settings.models.access.heading') })),
+    )
+  })
+
+  it('opens the collapsed language filtering when a link asks for one of its models', async () => {
+    const { rendered } = open({ tab: 'models', anchor: 'scriptGate' })
+    const summary = rendered.getByRole('button', { name: new RegExp(t('settings.detection.capability.japanese')) })
+    await waitFor(() => expect(summary.getAttribute('aria-expanded')).toBe('true'))
+  })
+
+  it('drops an anchor the section does not hold, and still opens the section', () => {
+    const { selected } = open({ tab: 'cloud', anchor: 'samTs' })
+    expect(selected()).toBe('cloud')
+  })
+})
+
+describe('the theme picker', () => {
+  afterEach(() => setTheme('system'))
+
+  it('offers every theme, and marks the one in force', () => {
+    const { rendered } = open()
+    const group = rendered.getByRole('radiogroup', { name: t('settings.theme.label') })
+    const names = [...group.querySelectorAll('[role="radio"]')].map((radio) => radio.textContent?.trim())
+    expect(names).toEqual(['system', 'light', 'dark', 'sakura', 'jade', 'ocean'].map((id) => t(`settings.theme.${id}`)))
+    expect(rendered.getByRole('radio', { name: t('settings.theme.system') }).getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('writes the theme to the session and the backend on a press', async () => {
+    const { rendered } = open()
+    await fireEvent.click(rendered.getByRole('radio', { name: t('settings.theme.sakura') }))
+
+    expect(session.theme).toBe('sakura')
+    expect(rendered.getByRole('radio', { name: t('settings.theme.sakura') }).getAttribute('aria-checked')).toBe('true')
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledWith(expect.objectContaining({ theme: 'sakura' })))
+  })
+
+  it('moves and selects on the arrows', async () => {
+    const { rendered } = open()
+    await fireEvent.keyDown(rendered.getByRole('radio', { name: t('settings.theme.system') }), { key: 'ArrowRight' })
+    expect(session.theme).toBe('light')
   })
 })
 

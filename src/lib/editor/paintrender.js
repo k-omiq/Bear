@@ -203,14 +203,16 @@ export function dabPath(Path, dabs, style) {
  * offset. That sign is the whole of this function's arithmetic and the one
  * thing worth reading twice.
  *
- * Each tile is an `<img>` already in the document, positioned over its own
- * share of the sheet in percent (`PageArtwork.svelte`), so its destination
- * rectangle is that share of the canvas. `drawImage` needs no readback, so a
- * `tile://` image tainting the canvas is irrelevant.
+ * Each tile is an `<img>` or a patch layer's canvas already in the document,
+ * positioned over its own share of the sheet in percent (`PageArtwork.svelte`),
+ * so its destination rectangle is that share of the canvas. They are drawn in
+ * order, each at its own `alpha` - a layer's CSS opacity, which `drawImage`
+ * does not see. `drawImage` needs no readback, so a `tile://` image tainting
+ * the canvas is irrelevant.
  *
  * @param {CanvasRenderingContext2D} ctx
- * @param {Array<{image: CanvasImageSource, left: number, top: number, width: number, height: number}>} tiles
- *   `left`/`top`/`width`/`height` in **fractions of the canvas**, `0..1`
+ * @param {Array<{image: CanvasImageSource, left: number, top: number, width: number, height: number, alpha?: number}>} tiles
+ *   `left`/`top`/`width`/`height` in **fractions of the canvas**, `0..1`; `alpha` `0..1`, opaque by default
  * @param {{width: number, height: number, dx: number, dy: number}} placement
  *   canvas size in px, and the *translate* in canvas px (already negated)
  * @returns {number} how many tiles were drawn
@@ -220,11 +222,14 @@ export function renderCloneTiles(ctx, tiles, placement) {
   const height = Number(placement?.height) || 0
   if (width <= 0 || height <= 0) return 0
   let drawn = 0
+  const base = ctx.globalAlpha
   for (const tile of tiles ?? []) {
     if (!tile?.image) continue
     const w = tile.width * width
     const h = tile.height * height
     if (!(w > 0) || !(h > 0)) continue
+    const alpha = Number(tile.alpha ?? 1)
+    ctx.globalAlpha = base * (Number.isFinite(alpha) ? Math.min(Math.max(alpha, 0), 1) : 1)
     ctx.drawImage(
       tile.image,
       tile.left * width + placement.dx,
@@ -234,6 +239,7 @@ export function renderCloneTiles(ctx, tiles, placement) {
     )
     drawn += 1
   }
+  ctx.globalAlpha = base
   return drawn
 }
 

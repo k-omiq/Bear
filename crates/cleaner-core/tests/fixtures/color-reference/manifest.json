@@ -1,0 +1,61 @@
+{
+  "license": "CC0-1.0; synthetic test material, no third-party image content",
+  "generators": {
+    "Pillow": "11.3.0",
+    "libjpeg": "6.2",
+    "lcms": "2.17"
+  },
+  "dimensions": {
+    "cmyk-jpeg": [
+      16,
+      8
+    ],
+    "png": [
+      4,
+      1
+    ]
+  },
+  "cmyk_component_tolerance": 2,
+  "srgb_transform_tolerance": 3,
+  "sha256": {
+    "animated.gif": "d8e0525b9636d095307c855118dbcf7828671e7b6f6144d43003db336b36b539",
+    "animated.webp": "fc8e9bd791fcc8a3dcf2652167f2fce6a2d2dcfa3181074111a4cff65a21c417",
+    "cmyk-adobe-icc.jpg": "8ede4ae5159fbba6c4ec1c0a72714ee4ee50719cd8c147cdc3b567f67e5d6597",
+    "cmyk-adobe.jpg": "7848571123818cb5d2dc86f7da59fe028f9c49419b5536c8e2ffed2b6c24e646",
+    "cmyk-adobe.jpg.cmyk": "1a83de0069ccc267dd1f1275002c2a54624340243043e0db136d7c9269cdfa0f",
+    "cmyk-adobe.srgb": "1b5256ee846a11f5855d7dc9bbf65298e75592b5d6d576256c42b18299eb1624",
+    "cmyk-plain-icc.jpg": "88aa497bd00eb16292bffbd4b3960d308f8fc0890c8113f55078b486ed7609d2",
+    "cmyk-plain.jpg": "042e68a2390f5e0046691642a9e1115b8b33d8793315240c90a169d2a0bace10",
+    "cmyk-plain.jpg.cmyk": "a87d1e49519684286a78741db0761e9542aa739cb6deb3b0d72b7b93565fdf21",
+    "cmyk-plain.srgb": "86d8451c5828853b6892eb4bf166da7b8d382d5e878b37f58a9fe6dbd5b2cee5",
+    "conflicting-profile.png": "5f73c5bfd293e6fbce711cdfba6144adc75126bc6431baa9ad42c8d0bc930cb0",
+    "gamma-chrm.png": "4cef4af3a743c98a43c735bec077873eff89581a796f8462c216342e20e3cc78",
+    "gray16-key.png": "93a3826d71f1a838c3d82c85566016ff8a374b77216323eb5f007603cfb926ea",
+    "indexed-alpha.png": "e7c48b25cce98ebd8d4a99be0ee582a615705b9b3a16c9cf76f043c083c18926",
+    "malformed-profile.png": "65420d41c660849242c15bd6cd5826ecb06da6cdcfb26967a037f68f0661f484",
+    "modern-color.png": "a39315be2cd57aac4469cf5a9f08e856ffa5f695004628bf6bb1563920ae1fa9",
+    "orientation-1.jpg": "fc02098b1ea8c2bd10fdf7eb20a4f38019b8577bd9d8c06c37d1dc7d57b64ce2",
+    "orientation-2.jpg": "09968b32ecc71e7f7a4522d0a865ac4fed2c7d1adcf1f39e14b8da51598cd0a9",
+    "orientation-3.jpg": "9006a4e25c96e7facad9a0336ea5efcfead55f48efd857509b1b3491075a9187",
+    "orientation-4.jpg": "452bdc23fb3f11c5fcdd0bf44b0434e14f8261223399672b5aa43212c8d371d5",
+    "orientation-5.jpg": "edecca35225e0bac2b5f5480d9c266c8cb05df121261346bc235e6705b21ec42",
+    "orientation-6.jpg": "18a083300149a0c94b6bcd4e978aba147b2bff106f5d5faf0a80989fcf9ae021",
+    "orientation-7.jpg": "146000d68e1a8ce00114b81ecc1466a7375d862fc99aaac05ae2d81143d06c3e",
+    "orientation-8.jpg": "9f3c1e8181902387003b1508e5e68af1bb586e86b9a0c42411dc660d05d0c985",
+    "rgb16-key.png": "c55e6b83a80aa1722d1836a947ae7641dccd7879146c0d3b89bee4b135b9e8e7",
+    "selected-srgb.cmyk": "5f818e5c68f72a06060771cf5bf13413805025daf4e8a512ad8d41dd2dc1e00e",
+    "synthetic-cmyk.icc": "ec04e61139c4072023b0b2aaac194c305a8eb6cbae7e0c47dc693569c0777c21",
+    "ycck-adobe-icc.jpg": "a582d7817e3bfc90bff2c5768415dc0bd8c10d8626e831aaf7cb2bffcdf46e13",
+    "ycck-adobe.jpg": "05f0e9b0b12264e8c6123a6e7ed95f13e6e5637665bca5f632435058619b3380",
+    "ycck-adobe.jpg.cmyk": "beb436adeabe8e8f24839c4138d96f95d41cd38ac90c7c314852d2e8ae3607f6",
+    "ycck-adobe.srgb": "6116523c4e094871a2184a389d409dae6ca2fba7d0e5f9d11f87ffd1c7bd4fc0",
+    "ycck-markerless-icc.jpg": "b5da4792247e7cf4539eae63aeac1993c6c2f0548d15c9b48c3bb74803feefdf",
+    "ycck-markerless.jpg": "506cc384c85c9196c3a73b5852c654777cf9be07016e042099a70710ad93df1d",
+    "ycck-markerless.jpg.cmyk": "abc1974c583e352a25c8888a9516e3ddf021daed4a7920c256a31384be78b4cb",
+    "ycck-markerless.srgb": "74ba5e65b31d255d0bd7bb96d65f3da3c40a6ddc99d26ac303f769689af245af",
+    "ycck-subsampled-icc.jpg": "d32d2e4f21827fc69915f2118cae968a6867363a08eebde10f295df31d969a63",
+    "ycck-subsampled.jpg": "fa12de19a8ea235db5dee1e3851af54b48383979f67733c79de0852d199692ac",
+    "ycck-subsampled.jpg.cmyk": "9ffec69286d249e4e2198b8d4b2eab983bd401fd0d18f6f1e07401bd80179e9c",
+    "ycck-subsampled.srgb": "6275a194f287af0b3b2095b7c9a02473e58dfb0f10ae4e3c93ec14245d5aa56d"
+  }
+}

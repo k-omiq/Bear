@@ -330,7 +330,7 @@ pub fn room() -> Option<u64> {
 ///
 /// The steps are ordered largest-and-most-optional first and each one is
 /// *recoverable*: dropping rung 2's session costs the run the rung - regions
-/// route down to rungs 0 and 1 and are listed in review - and it does not cost
+/// route down to rung 0 and are listed in review - and it does not cost
 /// the run.
 ///
 /// **The first step is rung 3a's, and it is only a step where there is a

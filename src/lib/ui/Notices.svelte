@@ -10,7 +10,7 @@
    * bottom bar; the default 14/14 is the metrics-table anchor.
    *
    * @type {{
-   *   notices: Array<{ id: string, text: string, tone?: 'info' | 'warn', icon?: string, duration?: number }>,
+   *   notices: Array<{ id: string, text: string, tone?: 'info' | 'warn', icon?: string, duration?: number, actionLabel?: string, onaction?: () => void }>,
    *   onclose: (id: string) => void,
    *   dismissLabel: string,
    *   left?: number,
@@ -33,6 +33,8 @@
       tone={n.tone}
       icon={n.icon}
       duration={n.duration}
+      actionLabel={n.actionLabel}
+      onaction={n.onaction}
       {dismissLabel}
       onclose={() => onclose(n.id)}
     />

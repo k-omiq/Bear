@@ -1,0 +1,21 @@
+{
+ "base": "App icon for \"Manga Cleaner\", a desktop app that removes Japanese text from manga speech balloons and leaves clean, empty balloons ready for translation. macOS app icon format: one rounded-square (squircle) tile centered on the canvas, the tile fills about 82% of the canvas, fully transparent background outside the tile, clean alpha edges, no backdrop, no drop shadow outside the tile. Flat front view, no perspective tilt. Clean vector-like shapes, strong silhouette, balanced negative space, one clear focal symbol that still reads at 16 px. Brand palette: warm paper off-white #F6F5F2 and deep ink black #141514, with at most one accent color. No words, no letters, no logos, no watermark, unless the concept below says otherwise.",
+ "concepts": [
+  [
+   "R1-peel-reveal",
+   "Concept: one large off-white manga speech balloon with a short tail, centered on a deep ink-black tile that carries a very faint manga screentone dot texture. A translucent rose (#A63B5F) mask film covers the upper-left half of the balloon, with two soft blurred vertical columns of dark Japanese-style text visible beneath it; the film's lower-right corner is peeling back in one clean curl, revealing pure spotless off-white balloon underneath. Few, large shapes. Crisp, confident, premium."
+  ],
+  [
+   "R2-halftone-wipe",
+   "Concept: the whole tile is black manga halftone screentone, dots growing larger toward the bottom-right. A large speech balloon is cut out of the dots as pure off-white negative space. Inside the balloon, the left third still shows two faint grey vertical columns of Japanese-style brush text that fade out along a single soft diagonal wipe, leaving the rest of the balloon spotless. No outlines on the balloon."
+  ],
+  [
+   "R3-peel-halftone",
+   "Concept: a warm off-white tile whose lower half is covered in fine black manga halftone dots fading upward. Centered is a large pure-white speech balloon with a thin ink outline. The balloon's text has been lifted off as a rose (#A63B5F) sticker-like layer that is peeling away from the balloon's upper-right edge in one smooth curl, showing faint blurred text on its underside. The balloon itself is perfectly empty."
+  ],
+  [
+   "R4-eraser-bold",
+   "Concept: a big bold white speech balloon with a thick ink outline, centered on a deep ink-black tile. The left half of the balloon holds two short vertical columns of chunky black Japanese-style brush marks; a rose (#A63B5F) eraser sits diagonally across the middle of the balloon, and everything to its right is perfectly clean, with a few tiny eraser crumbs. Large simple shapes, readable at small size."
+  ]
+ ]
+}

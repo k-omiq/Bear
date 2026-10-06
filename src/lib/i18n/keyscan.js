@@ -32,21 +32,27 @@ export const NAMESPACES = Object.freeze([
   'accel',
   'app',
   'canvas',
+  'cloud',
   'decline',
+  'denoise',
   'diagnostics',
   'editor',
   'export',
   'home',
   'input',
+  'jobs',
   'ladder',
   'masks',
   'modal',
   'models',
   'notice',
+  'onboarding',
+  'pipelines',
   'pages',
   'paging',
   'progress',
   'project',
+  'qwen',
   'review',
   'settings',
   'shell',
@@ -54,6 +60,7 @@ export const NAMESPACES = Object.freeze([
   'time',
   'tools',
   'update',
+  'workflow',
 ])
 
 const NAMESPACE_SET = new Set(NAMESPACES)
@@ -129,7 +136,16 @@ const KEY = /(['"`])([a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)\1/g
  * enumerates its runtime keys rather than allowing a prefix: the failure this
  * scanner must never have is a vanished use, and a pattern is how one vanishes.
  */
-const NOT_KEYS = new Set(['settings.json'])
+const NOT_KEYS = new Set([
+  'settings.json',
+  'input.png',
+  // The gateway's operation names (`src-tauri/src/inference/http.rs`). They begin
+  // with `jobs`, the Jobs list's namespace, and are not keys.
+  'jobs.submit',
+  'jobs.status',
+  'jobs.result',
+  'jobs.cancel',
+])
 
 /**
  * Every literal i18n key in one file's source.

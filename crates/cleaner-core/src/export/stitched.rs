@@ -86,6 +86,8 @@ pub enum StitchRefusal {
     MixedDepth { position: usize, first: u8, found: u8 },
     #[error("page {position} carries a different ICC profile from page 0")]
     MixedProfile { position: usize },
+    #[error("page {position} has a different color or transparency description; use per-page export")]
+    MixedDescription { position: usize },
     /// Not a limitation of the encoder - PNG carries indexed perfectly well.
     /// One file has one palette, and reconciling several is
     /// the nearest-entry snapping that is refused.
@@ -110,6 +112,7 @@ impl StitchRefusal {
             StitchRefusal::MixedMode { .. } => "notice.export.stitchRefused.mixedMode",
             StitchRefusal::MixedDepth { .. } => "notice.export.stitchRefused.mixedDepth",
             StitchRefusal::MixedProfile { .. } => "notice.export.stitchRefused.mixedProfile",
+            StitchRefusal::MixedDescription { .. } => "notice.export.stitchRefused.mixedProfile",
             StitchRefusal::Indexed => "notice.export.stitchRefused.indexed",
         }
     }
@@ -168,11 +171,16 @@ pub fn export_stitched<W: Write + Seek>(
             }
             .into());
         }
+        if !header.color.same_interpretation(&first.color) || header.srgb_intent != first.srgb_intent || header.trns != first.trns {
+            return Err(StitchRefusal::MixedDescription { position }.into());
+        }
+        crate::image::metadata::validate_profile(header.icc.as_deref(), header.mode)?;
         if header.icc != first.icc {
             return Err(StitchRefusal::MixedProfile { position }.into());
         }
     }
 
+    crate::image::metadata::validate_profile(first.icc.as_deref(), first.mode)?;
     // Page 0 is decoded before the header is written, for the one piece of
     // metadata a header read does not carry: the `sRGB` rendering intent. It is
     // also the page the first rows need, so nothing is decoded twice.
@@ -185,11 +193,13 @@ pub fn export_stitched<W: Write + Seek>(
         depth: first.depth,
         icc: first.icc.clone(),
         palette: None,
-        trns: None,
+        trns: first.trns.clone(),
         srgb_intent: resident.page.srgb_intent,
+        color: if global.is_empty() && strip.pages().len() == 1 { first.color.clone() } else { first.color.after_edit() },
     };
 
-    let (format, declared) = decide_stitched(&first, target);
+    let (format, mut declared) = decide_stitched(&first, target);
+    declared.extend(super::metadata_declarations(&first, !global.is_empty() || strip.pages().len() > 1, format == Format::Tiff));
 
     let blank = blank_row(&canvas);
     let mut gutter_pixels = 0u64;
@@ -236,7 +246,9 @@ fn decide_stitched(first: &Header, target: Target) -> (Format, Vec<Declaration>)
         Target::SameAsSource => super::fallback_format(first.mode),
         Target::Explicit(format) => format,
     };
-    super::decide(wanted, first.mode, first.depth)
+    if first.color.associated_alpha && wanted != Format::Tiff {
+        (Format::Tiff, vec![Declaration::FormatChanged { requested: wanted, used: Format::Tiff, mode: first.mode }])
+    } else { super::decide(wanted, first.mode, first.depth) }
 }
 
 /// The one page the writer holds, already composited with its parts of the
@@ -329,6 +341,10 @@ mod tests {
                 mode: page.mode,
                 depth: page.depth,
                 icc: page.icc.clone(),
+                color: page.color.clone(),
+                srgb_intent: page.srgb_intent,
+                trns: page.trns.clone(),
+                palette: page.palette.clone(),
             })
         }
 
@@ -356,6 +372,27 @@ mod tests {
                 page
             })
             .collect()
+    }
+
+    #[test]
+    fn unedited_stitch_drops_page_local_precision_and_luminance_summaries() {
+        let mut pages = three_pages("l8");
+        pages[0].color.significant_bits = Some(vec![4]);
+        pages[0].color.content_light = Some(vec![0; 8]);
+        pages[1].color.significant_bits = Some(vec![8]);
+        let strip = strip_of(&pages);
+        let mut source = InMemory::new(pages);
+        let mut out = std::io::Cursor::new(Vec::new());
+        let result = export_stitched(&strip, &[], &mut source, Target::SameAsSource, &mut out).unwrap();
+        for expected in ["sBIT", "cLLI"] {
+            assert!(result.declared.iter().any(|value| matches!(value, Declaration::MetadataNormalized { field, .. } if field == expected)));
+        }
+        let encoded = out.into_inner();
+        let mut at = 8;
+        while at + 12 <= encoded.len() {
+            assert!(!matches!(&encoded[at + 4..at + 8], b"sBIT" | b"cLLI"));
+            at += 12 + u32::from_be_bytes(encoded[at..at + 4].try_into().unwrap()) as usize;
+        }
     }
 
     /// Every source row lands at its strip offset, once, in order.

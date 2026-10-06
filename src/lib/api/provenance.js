@@ -9,12 +9,12 @@
  * pipeline.
  */
 
-import { RUNGS } from '../model/ladder.js'
+import { RUNGS, currentRung } from '../model/ladder.js'
 
 /**
  * @typedef {Object} EngineInfo
  * @property {string} version - `Provenance.engine_version`
- * @property {string|null} modelSha - `Provenance.model_sha256`; null for the two model-free rungs
+ * @property {string|null} modelSha - `Provenance.model_sha256`; null for the model-free ones
  * @property {string} provider - `Provenance.execution_provider`
  * @property {[number, number]} elapsed - inclusive millisecond range for the simulated run
  * @property {'match-surround'|'reconstruct'|'solid'} fillMode - the mode this rung produces by default
@@ -23,17 +23,10 @@ import { RUNGS } from '../model/ladder.js'
 /** @type {Readonly<Record<string, EngineInfo>>} */
 export const ENGINE_INFO = Object.freeze({
   fill: {
-    version: 'planar-fill 3',
+    version: 'flat-fill 4',
     modelSha: null,
     provider: 'cpu',
     elapsed: [2, 14],
-    fillMode: 'match-surround',
-  },
-  denoise: {
-    version: 'denoise 3',
-    modelSha: null,
-    provider: 'cpu',
-    elapsed: [18, 90],
     fillMode: 'match-surround',
   },
   lama: {
@@ -54,8 +47,14 @@ export const ENGINE_INFO = Object.freeze({
     elapsed: [10000, 60000],
     fillMode: 'reconstruct',
   },
+  // FLUX.2 Klein on the user's own Modal or Beam endpoint: rung 3a's recipe
+  // (IC-6), run on a GPU in their account, one consent per request. A render
+  // committed today is recorded as `flux` with a `provenance.cloud` record
+  // that names the provider, the endpoint and the model
+  // (`mock.js#cloudRecordFor`), the way the native side records it; this
+  // entry describes a mask whose engine is `cloud` itself.
   cloud: {
-    version: 'gemini-3.1-flash-image',
+    version: 'flux2-klein-4b sdnq-4bit',
     modelSha: null,
     provider: 'cloud',
     elapsed: [3000, 15000],
@@ -77,27 +76,12 @@ export const ENGINE_INFO = Object.freeze({
   },
 })
 
-/** The five cloud rejection causes, in doc order. */
-export const CLOUD_REJECTION_CAUSES = Object.freeze([
-  'safety-filter',
-  'transport-error',
-  'parameter-test',
-  'residual-test',
-  'structural',
-])
-
-/** Cloud tier and price (NB2 @1K). */
-export const CLOUD_TIER = '1K'
-export const CLOUD_COST = 0.067
-export const CLOUD_PROVIDER = 'google'
-
 /** Constants the pipeline actually ran with. */
 const PARAMS_SNAPSHOT = Object.freeze({
   min_mask_thickness: 4,
   mask_growth_step: 2,
   annulus_offset: [1, 5],
   mask_deviation_max: 8,
-  denoise_trigger: 0.3,
   isolation_radius: 5,
   edit_margin: 6,
 })
@@ -107,38 +91,46 @@ const PARAMS_SNAPSHOT = Object.freeze({
  * id, so the same region always comes back on the same rung - a re-run is a
  * re-run, not a dice roll.
  *
+ * Automatic routing never escalates to FLUX or cloud: the automatic ceiling
+ * is pinned at LaMa ('lama'). A ceiling saved as the retired `denoise` rung
+ * is a fill ceiling (`ladder.js#currentRung`).
+ *
  * @param {number} hash - `hashString(regionId)`
- * @param {string} ceiling - highest rung permitted, a member of `RUNGS`
+ * @param {string} ceiling - highest rung permitted, a member of `RUNGS` or legacy 'cloud'
  * @returns {string} rung id
  */
 export function routeRung(hash, ceiling) {
-  const ceilingIndex = Math.max(0, RUNGS.indexOf(ceiling))
+  const lama = RUNGS.indexOf('lama')
+  const resolvedCeiling = ceiling === 'cloud' || ceiling === 'flux' ? 'lama' : currentRung(ceiling)
+  const ceilingIndex = Math.min(lama, Math.max(0, RUNGS.indexOf(resolvedCeiling)))
   // Most regions are flat paper and belong on rung 0.
   // Only a few reach the inpainter, because every one of those is a review
   // entry and the flag rate is capped at 5% of boxes.
-  const bucket = hash % 32
-  let index = 0
-  if (bucket === 31 && ceilingIndex >= 4) index = 4
-  else if (bucket >= 29) index = 2
-  else if (bucket >= 22) index = 1
+  const index = hash % 32 >= 29 ? lama : 0
   return RUNGS[Math.min(index, ceilingIndex)]
 }
 
 /**
  * Caps a requested rung at a ceiling. Never raises it: a ceiling is an upper
- * bound on what a run may reach, not an instruction to reach it.
+ * bound on what a run may reach, not an instruction to reach it. Either one
+ * given as the retired `denoise` rung is read as `fill`.
  *
- * @param {string} requested
- * @param {string} ceiling
+ * @param {string} rawRequested
+ * @param {string} rawCeiling
  * @returns {string} rung id, the lower of the two
  */
-export function capRung(requested, ceiling) {
-  const top = RUNGS.length - 1
+export function capRung(rawRequested, rawCeiling) {
+  const requested = currentRung(rawRequested)
+  const ceiling = currentRung(rawCeiling)
+  if (requested === ceiling) return requested
+  if (requested === 'cloud') return ceiling === 'cloud' ? 'cloud' : capRung('lama', ceiling)
+  if (ceiling === 'cloud') return requested
   const requestedIndex = RUNGS.indexOf(requested)
   const ceilingIndex = RUNGS.indexOf(ceiling)
-  return RUNGS[
-    Math.min(requestedIndex === -1 ? top : requestedIndex, ceilingIndex === -1 ? top : ceilingIndex)
-  ]
+  if (requestedIndex === -1 && ceilingIndex === -1) return 'fill'
+  if (requestedIndex === -1) return ceiling
+  if (ceilingIndex === -1) return requested
+  return RUNGS[Math.min(requestedIndex, ceilingIndex)]
 }
 
 /**
@@ -152,8 +144,6 @@ export function capRung(requested, ceiling) {
  * @property {'match-surround'|'reconstruct'|'solid'} [fillMode]
  * @property {number} [elapsedMs] - overrides the engine's simulated range
  * @property {boolean} [fittingReconstructed]
- * @property {import('../model/types.js').CloudOutcome|null} [cloudOutcome]
- * @property {boolean} [cloudBilled] - record a `Provenance.cloud` block (an accepted request)
  */
 
 /**
@@ -163,7 +153,8 @@ export function capRung(requested, ceiling) {
  * @returns {import('../model/types.js').Mask}
  */
 export function buildMask(spec) {
-  const info = ENGINE_INFO[spec.engine] ?? ENGINE_INFO.fill
+  const engine = currentRung(spec.engine)
+  const info = ENGINE_INFO[engine] ?? ENGINE_INFO.fill
   const elapsedMs = spec.elapsedMs ?? spec.rng.int(info.elapsed[0], info.elapsed[1])
   const params_snapshot = { ...PARAMS_SNAPSHOT }
   if (spec.tool) {
@@ -182,24 +173,20 @@ export function buildMask(spec) {
     fillMode: spec.fillMode ?? info.fillMode,
     elapsedMs,
     fittingReconstructed: spec.fittingReconstructed ?? false,
-    cloudOutcome: spec.cloudOutcome ?? null,
+    // Always null, as on every mask the native side makes today: it carries
+    // an outcome only for a job saved with a legacy cloud review state
+    // (`src-tauri/src/library.rs#review_flags`).
+    cloudOutcome: null,
     provenance: {
-      engine: spec.engine,
+      engine,
       engine_version: info.version,
       model_sha256: info.modelSha ? spec.rng.sha256() : null,
       execution_provider: info.provider,
       params_snapshot,
       mask_sha256: spec.rng.sha256(),
       source_sha256: spec.sourceSha,
-      cloud: spec.cloudBilled
-        ? {
-            provider: CLOUD_PROVIDER,
-            model: ENGINE_INFO.cloud.version,
-            request_id: `req-${spec.rng.sha256().slice(0, 16)}`,
-            tier: CLOUD_TIER,
-            cost: CLOUD_COST,
-          }
-        : null,
+      // A cloud render records its own (`mock.js#commitCloudResult`).
+      cloud: null,
       created: spec.created,
     },
   }

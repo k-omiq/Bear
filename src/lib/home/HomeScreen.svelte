@@ -17,6 +17,7 @@
   import HomeHeader from './HomeHeader.svelte'
   import LibraryView from './LibraryView.svelte'
   import ChaptersView from './ChaptersView.svelte'
+  import { onJobSettled } from '../state/jobs.svelte.js'
 
   // Mount-time load. Home remounts whenever the editor is left, so the numbers
   // are refetched after a cleaning run without watching anything.
@@ -25,6 +26,10 @@
   })
 
   $effect(subscribeHomeNotices)
+
+  // A job that ends while Home is up changed what its chapter row says: the
+  // pages a run cleaned, the files a denoise wrote.
+  $effect(() => onJobSettled(() => loadLibrary()))
 
   const project = $derived(projectById(app.route.projectId))
   const inChapters = $derived(app.route.name === 'chapters')

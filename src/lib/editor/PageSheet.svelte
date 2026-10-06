@@ -1,7 +1,9 @@
 <script>
+  import { tileOrigin } from '../api/tile.js'
   import { editor } from '../state/editor.svelte.js'
   import { pageRatio } from './zoom.js'
   import { isDrawingTool } from './tools.js'
+  import DetectionMasks from './DetectionMasks.svelte'
   import DrawLayer from './DrawLayer.svelte'
   import PageArtwork from './PageArtwork.svelte'
   import RegionLayer from './RegionLayer.svelte'
@@ -15,13 +17,14 @@
    * The stack, bottom to top:
    *
    *   PageArtwork variant="original"   the source page
-   *   PageArtwork variant="cleaned"    clipped by the wipe
+   *   PageArtwork variant="cleaned"    native composite, clipped by the wipe
+   *   DetectionMasks                   what Clean will erase, per detection
    *   RegionLayer                      region outlines, markers, hit targets
    *   the wipe divider
    *
    * **The wipe is a clip, not a predicate.** Two images, one of them cut off
    * at `editor.wipe`, is how the real thing will work once `PageArtwork` is an
-   * `<img>` - and it is why a region is not asked whether it is left or right
+   * an image element - and it is why a region is not asked whether it is left or right
    * of the wipe. The prototype's `(r.x + r.w/2) <= wipe` test is a prototype
    * shortcut. Holding or pinning the original (`editor.originalVisible`) clips
    * the cleaned layer away entirely and suppresses the divider: the source is
@@ -37,9 +40,15 @@
    *   tabbable?: boolean,
    *   stripMinY?: number,
    *   stripMaxY?: number,
+   *   loadFrom?: number,
+   *   loadTo?: number,
    * }}
    */
-  let { page, width, current = true, strip = false, tabbable = true, stripMinY = 0, stripMaxY = 100 } = $props()
+  let {
+    page, width, current = true, strip = false, tabbable = true, stripMinY = 0, stripMaxY = 100,
+    // The share of the page, in percent of its height, whose pixels to load.
+    loadFrom = 0, loadTo = 100,
+  } = $props()
 
   const ratio = $derived(pageRatio(page))
   const wipe = $derived(editor.wipe)
@@ -57,6 +66,27 @@
   // the surface routes a tap straight back to the region under it, so the
   // region-click seam survives underneath.
   const drawing = $derived(isDrawingTool(editor.tool))
+
+  // Inside the app a page is shown once its cleaned tiles have decoded, so it
+  // never opens on its lettering and cleans itself a moment later. Shown once,
+  // it stays shown: later edits retain the old tiles while replacements decode.
+  // This includes neighbours mounted ahead of navigation. A tile that never
+  // answers does not hold the page back past `SHOW_AFTER_MS`. The mock has no
+  // tiles and nothing to wait for.
+  const SHOW_AFTER_MS = 2000
+  const layered = tileOrigin() !== null
+  let layersReady = $state(/** @type {string|null} */ (null))
+  let shownFor = $state(/** @type {string|null} */ (null))
+  const shown = $derived(!layered || shownFor === page.id)
+  $effect(() => {
+    if (layersReady !== null && layersReady === page.id) shownFor = page.id
+  })
+  $effect(() => {
+    const id = page.id
+    if (shown) return
+    const timer = setTimeout(() => (shownFor = id), SHOW_AFTER_MS)
+    return () => clearTimeout(timer)
+  })
 </script>
 
 <div
@@ -65,15 +95,21 @@
   style:width="{width}px"
   style:aspect-ratio="1 / {ratio}"
 >
-  <PageArtwork {page} variant="original" />
+  <PageArtwork {page} variant="original" from={loadFrom} to={loadTo} hidden={!shown} />
   <div class="cleaned" style:clip-path={clip}>
-    <PageArtwork {page} variant="cleaned" />
+    <PageArtwork {page} variant="cleaned" from={loadFrom} to={loadTo} hidden={!shown} bind:ready={layersReady} />
   </div>
 
-  <RegionLayer {page} {tabbable} interactive={!drawing} />
+  <!-- Not clipped by the wipe, for the reason the region outlines are not:
+       a detection has no cleaned pixels yet, and its mask is the plan. -->
+  {#if current || strip}
+    <DetectionMasks {page} />
 
-  {#if drawing}
-    <DrawLayer {page} {tabbable} {strip} {stripMinY} {stripMaxY} />
+    <RegionLayer {page} {tabbable} interactive={!drawing} {stripMinY} {stripMaxY} />
+
+    {#if drawing}
+      <DrawLayer {page} {tabbable} {strip} {stripMinY} {stripMaxY} />
+    {/if}
   {/if}
 
   {#if divider}
@@ -89,7 +125,7 @@
     box-shadow: var(--page-shadow);
     /* Lets everything drawn on the page size itself from the page's own width
        (`cqw`) instead of taking the zoom as a prop - which is what keeps
-       `PageArtwork` swappable for an <img>. */
+       `PageArtwork` swappable for an image element. */
     container-type: inline-size;
   }
 
@@ -97,6 +133,13 @@
      image: shadows and focus outlines would draw artificial seams. */
   .sheet.strip {
     box-shadow: none;
+  }
+
+  /* A native preview may extend across a longstrip join. Container queries
+     make sheets stacking contexts, so lift its anchor above the next sheet
+     until the affected committed tiles have replaced the preview. */
+  .sheet:has(:global(.paint)) {
+    z-index: 1;
   }
 
   .cleaned {

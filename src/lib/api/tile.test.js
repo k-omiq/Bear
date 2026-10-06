@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  detectionMaskUrl,
   fold,
+  layerUrl,
+  pageTileUrls,
   pageVersion,
   proxyPlan,
   tileOrigin,
@@ -9,6 +12,7 @@ import {
   PROXY_SHORT_EDGE,
   PROXY_TILE_LONG_EDGE,
   TILE_SCHEME,
+  COLOR_PIPELINE_VERSION,
 } from './tile.js'
 
 /**
@@ -106,9 +110,27 @@ describe('a tile URL', () => {
   it('is the shape the protocol parses', () => {
     inside('macos')
     const url = tileUrl(aPage({ id: 'ch-1', index: 7 }), 'cleaned')
-    // The path `src-tauri/src/tile.rs#parse` splits into three, and the query
-    // it deliberately does not read.
+    // The path `src-tauri/src/tile.rs#parse` splits into three, and the
+    // cache-busting query it does not read.
     expect(url).toMatch(/^tile:\/\/localhost\/ch-1\/7\/cleaned\?v=[0-9a-f]{16}$/)
+  })
+
+  /**
+   * `a` is the native appearance this copy of the page was listed with, which
+   * `tile.rs#serve_request` checks against the manifest it draws from before
+   * a response may be kept. A source tile is its file alone and needs none.
+   */
+  it('carries the listed appearance on a cleaned tile, for the protocol to check', () => {
+    inside('macos')
+    const page = { ...aPage({ id: 'ch-1', index: 7 }), appearance: '0123456789abcdef' }
+    expect(tileUrl(page, 'cleaned', 0)).toMatch(
+      /^tile:\/\/localhost\/ch-1\/7\/cleaned\/0\?v=[0-9a-f]{16}&a=0123456789abcdef$/,
+    )
+    expect(tileUrl(page, 'source', 0)).not.toContain('&a=')
+    // A newer listing names the newer state, in both parts of the query.
+    const newer = tileUrl({ ...page, appearance: 'fedcba9876543210' }, 'cleaned', 0)
+    expect(newer).toContain('&a=fedcba9876543210')
+    expect(newer?.split('&')[0]).not.toBe(tileUrl(page, 'cleaned', 0)?.split('&')[0])
   })
 
   it('carries the same path under the Windows origin', () => {
@@ -156,11 +178,126 @@ describe('a tile URL', () => {
 })
 
 /**
+ * One detection's mask, which `src-tauri/src/tile.rs#parse` reads as the
+ * `detection` form: the region id as the fourth segment and the mask's own
+ * digest and edit sequence as the version.
+ */
+describe('a detection mask URL', () => {
+  const detection = (id = 'c1-p0-r3', sha = 'ab12') => ({
+    id,
+    outcome: 'detected',
+    mask: { id: `${id}-m1`, provenance: { mask_sha256: sha } },
+  })
+
+  it('names the page, the region and the mask digest', () => {
+    inside('macos')
+    expect(detectionMaskUrl(aPage({ id: 'ch-1', index: 4 }), detection())).toBe(
+      'tile://localhost/ch-1/4/detection/c1-p0-r3?v=ab12.1',
+    )
+  })
+
+  it('carries the same path under the Windows origin', () => {
+    inside('windows')
+    expect(detectionMaskUrl(aPage({ id: 'ch-1', index: 4 }), detection())).toBe(
+      'http://tile.localhost/ch-1/4/detection/c1-p0-r3?v=ab12.1',
+    )
+  })
+
+  /** The Rust side percent-decodes every segment, the region id included. */
+  it('escapes a chapter or region id that is not a bare path segment', () => {
+    inside('macos')
+    const url = detectionMaskUrl(aPage({ id: 'ch 1/2', index: 0 }), detection('r 1/2#x'))
+    expect(url).toBe('tile://localhost/ch%201%2F2/0/detection/r%201%2F2%23x?v=ab12.1')
+  })
+
+  it('moves when the mask digest does', () => {
+    inside('macos')
+    const page = aPage()
+    expect(detectionMaskUrl(page, detection('r1', 'aa'))).not.toBe(detectionMaskUrl(page, detection('r1', 'bb')))
+  })
+
+  /** An edit can change the lettering and leave the mask file's digest alone. */
+  it('moves when the edit sequence does, with the digest unchanged', () => {
+    inside('macos')
+    const page = aPage()
+    const edited = { ...detection('r1', 'aa'), mask: { id: 'r1-m1', sequence: 3, provenance: { mask_sha256: 'aa' } } }
+    expect(detectionMaskUrl(page, edited)).toBe('tile://localhost/ch-1/0/detection/r1?v=aa.3')
+    expect(detectionMaskUrl(page, detection('r1', 'aa'))).toBe('tile://localhost/ch-1/0/detection/r1?v=aa.1')
+  })
+
+  it('is null outside a Tauri window, where the mock has no pixels', () => {
+    inside(null)
+    expect(detectionMaskUrl(aPage(), detection())).toBeNull()
+  })
+
+  it('is null for a page or region it cannot name, and for a region with no mask', () => {
+    inside('macos')
+    expect(detectionMaskUrl(null, detection())).toBeNull()
+    expect(detectionMaskUrl({ ...aPage(), chapterId: '' }, detection())).toBeNull()
+    expect(detectionMaskUrl({ ...aPage(), index: undefined }, detection())).toBeNull()
+    expect(detectionMaskUrl(aPage(), null)).toBeNull()
+    expect(detectionMaskUrl(aPage(), { ...detection(), id: '' })).toBeNull()
+    expect(detectionMaskUrl(aPage(), { ...detection(), mask: null })).toBeNull()
+  })
+})
+
+/**
  * These numbers are also asserted, in the same words, by
  * `cleaner_core::image::proxy`'s own tests - the two implementations are
  * separate on purpose (see the module header) and this is what pins them
  * together.
  */
+describe('a layer URL', () => {
+  const layer = (id = 'c1-p0-r3', key = 'k1') => ({ id, outcome: 'cleaned', mask: { id: `${id}-m1`, layerKey: key } })
+
+  it('names the page it is drawn on and the region, versioned by the layer key and the source', () => {
+    inside('macos')
+    const page = aPage({ id: 'ch-1', index: 4 })
+    expect(layerUrl(page, layer())).toBe(`tile://localhost/ch-1/4/layer/c1-p0-r3?v=${fold(`${COLOR_PIPELINE_VERSION}:k1|aa11`)}`)
+  })
+
+  it('moves with the layer key and not with the opacity, which the canvas draws', () => {
+    inside('macos')
+    const page = aPage()
+    const faded = { ...layer(), mask: { ...layer().mask, layer: { opacity: 40 } } }
+    expect(layerUrl(page, faded)).toBe(layerUrl(page, layer()))
+    expect(layerUrl(page, layer('c1-p0-r3', 'k2'))).not.toBe(layerUrl(page, layer()))
+  })
+
+  it('names a neighbour\'s patch by the page it is drawn on, and moves with where the two sit', () => {
+    inside('macos')
+    const page = aPage({ index: 1, sha: 'bb22' })
+    const anchor = aPage({ index: 0, sha: 'aa11' })
+    const across = layerUrl(page, layer(), anchor)
+    expect(across).toMatch(/^tile:\/\/localhost\/ch-1\/1\/layer\/c1-p0-r3\?v=/)
+    expect(across).not.toBe(layerUrl(page, layer()))
+    expect(layerUrl(page, layer(), aPage({ index: 0, sha: 'cc33' }))).not.toBe(across)
+  })
+
+  it('escapes a chapter or region id that is not a bare path segment', () => {
+    inside('macos')
+    expect(layerUrl(aPage({ id: 'ch 1' }), layer('a/b'))).toMatch(/\/ch%201\/0\/layer\/a%2Fb\?v=/)
+  })
+
+  it('is null outside a Tauri window, and for a region with no layer key', () => {
+    expect(layerUrl(aPage(), layer())).toBeNull()
+    inside('macos')
+    expect(layerUrl(aPage(), { id: 'r', outcome: 'detected', mask: { id: 'r-m1', layerKey: null } })).toBeNull()
+    expect(layerUrl(aPage(), { id: 'r', mask: null })).toBeNull()
+    expect(layerUrl(null, layer())).toBeNull()
+  })
+})
+
+describe('the tiles a page warms', () => {
+  it('are its source tiles alone: its patches are layers, warmed apart', () => {
+    inside('macos')
+    const page = { ...aPage(), width: 800, height: 5000 }
+    expect(pageTileUrls(page).map((url) => new URL(url).pathname)).toEqual([
+      '/ch-1/0/source/0', '/ch-1/0/source/1', '/ch-1/0/source/2',
+    ])
+  })
+})
+
 describe('the proxy plan', () => {
   it('caps the short edge and leaves the long one to the tiles', () => {
     const plan = proxyPlan({ width: 2400, height: 3600 })
@@ -281,7 +418,7 @@ describe('the version token', () => {
       masks: [{ id: 'r0-m1', sequence: 1, sha: 'ff', created: '2026-01-01T00:01:00Z', engine: 'lama' }],
     })
     const diffEngine = aPage({
-      masks: [{ id: 'r0-m1', sequence: 1, sha: 'ff', created: '2026-01-01T00:00:00Z', engine: 'denoise' }],
+      masks: [{ id: 'r0-m1', sequence: 1, sha: 'ff', created: '2026-01-01T00:00:00Z', engine: 'fill' }],
     })
     expect(pageVersion(first, 'cleaned')).not.toBe(pageVersion(rerun, 'cleaned'))
     expect(pageVersion(first, 'cleaned')).not.toBe(pageVersion(diffEngine, 'cleaned'))
@@ -324,15 +461,65 @@ describe('the version token', () => {
   it('covers the tile geometry as well as the content', () => {
     const page = aPage()
     const token = pageVersion(page, 'source')
-    expect(token).toBe(fold(`${PROXY_SHORT_EDGE}x${PROXY_TILE_LONG_EDGE}|${page.sourceSha}|0`))
+    expect(token).toBe(fold(`${COLOR_PIPELINE_VERSION}:${PROXY_SHORT_EDGE}x${PROXY_TILE_LONG_EDGE}|${page.sourceSha}|0`))
     expect(token).not.toBe(fold(`|${page.sourceSha}`))
   })
 
-  it('changes when a cross-page edit invalidates a page without changing its own region list', () => {
-    const page = aPage()
-    const before = pageVersion(page, 'cleaned')
-    page.tileRevision = 1
-    expect(pageVersion(page, 'cleaned')).not.toBe(before)
+  /**
+   * The defect this token was rebuilt for: opacity and geometry were not in
+   * it, and the counter that stood in for them was lost when a reload
+   * replaced the page - so the old URL, and its old picture, came back.
+   */
+  describe('from the native appearance digests', () => {
+    /** @param {{page?: string, layer?: string, locked?: boolean, opacity?: number}} spec */
+    const native = ({ page = 'p0000000000000a', layer = 'l000000000000a', locked = false, opacity = 100 } = {}) => {
+      const built = /** @type {any} */ (aPage({ masks: [{ id: 'm1', sequence: 1, sha: 'ff' }] }))
+      built.appearance = page
+      built.regions[0].mask.appearance = layer
+      built.regions[0].mask.layer = { opacity, offsetX: 0, offsetY: 0, rotation: 0, locked }
+      return built
+    }
+
+    it('moves when the page or a layer digest moves', () => {
+      const base = pageVersion(native(), 'cleaned')
+      expect(pageVersion(native({ page: 'p000000000000b' }), 'cleaned')).not.toBe(base)
+      expect(pageVersion(native({ layer: 'l000000000000b' }), 'cleaned')).not.toBe(base)
+    })
+
+    it('is the same string after a reload that answers the same saved state', () => {
+      const before = native()
+      const edited = pageVersion(before, 'cleaned')
+      // What `loadPages` hands back: a fresh object, no interface-side fields.
+      const reloaded = structuredClone(native())
+      expect(pageVersion(reloaded, 'cleaned')).toBe(edited)
+    })
+
+    it('reads the digest and not the style, so a lock alone leaves the URL alone', () => {
+      expect(pageVersion(native({ locked: true }), 'cleaned')).toBe(pageVersion(native(), 'cleaned'))
+    })
+
+    it('leaves detections out: they draw nothing', () => {
+      const page = native()
+      const withDetection = structuredClone(page)
+      withDetection.regions.push({ id: 'd1', outcome: 'detected', mask: { id: 'd1-m1', appearance: null } })
+      expect(pageVersion(withDetection, 'cleaned')).toBe(pageVersion(page, 'cleaned'))
+    })
+  })
+
+  it('folds a digest-less mask from its style, so the mock still moves on opacity and placement', () => {
+    const page = /** @type {any} */ (aPage({ masks: [{ id: 'm1', sequence: 1, sha: 'ff' }] }))
+    const versions = new Set()
+    for (const layer of [
+      undefined,
+      { opacity: 50 },
+      { opacity: 50, offsetX: 4 },
+      { opacity: 50, offsetX: 4, offsetY: 2 },
+      { opacity: 50, offsetX: 4, offsetY: 2, rotation: 15 },
+    ]) {
+      page.regions[0].mask.layer = layer
+      versions.add(pageVersion(page, 'cleaned'))
+    }
+    expect(versions.size).toBe(5)
   })
 
   it('is sixteen hex characters, so it is a URL-safe cache key', () => {

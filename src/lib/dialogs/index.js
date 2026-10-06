@@ -21,12 +21,18 @@
  */
 
 import * as homeDialogs from '../home/dialogs/index.js'
+import QwenPromptDialog from './QwenPromptDialog.svelte'
+import QwenReviewDialog from './QwenReviewDialog.svelte'
 import SettingsDialog from './SettingsDialog.svelte'
 import ShortcutsDialog from './ShortcutsDialog.svelte'
 import ExportDialog from './ExportDialog.svelte'
 import FormatConversionDialog from './FormatConversionDialog.svelte'
-import CloudTransmissionDialog from './CloudTransmissionDialog.svelte'
-import CloudCostDialog from './CloudCostDialog.svelte'
+import CloudConsentDialog from './CloudConsentDialog.svelte'
+import CloudRunConsentDialog from './CloudRunConsentDialog.svelte'
+import CloudCleanConsentDialog from './CloudCleanConsentDialog.svelte'
+import WorkflowReviewDialog from './WorkflowReviewDialog.svelte'
+import DenoiseDialog from './DenoiseDialog.svelte'
+import DenoiseCompareDialog from './DenoiseCompareDialog.svelte'
 
 /**
  * Null-prototype on purpose. `kind` is a plain string that reaches this table
@@ -34,12 +40,18 @@ import CloudCostDialog from './CloudCostDialog.svelte'
  * or `'toString'` with something that is not a component.
  */
 const DIALOGS = Object.assign(Object.create(null), homeDialogs, {
+  qwenPrompt: QwenPromptDialog,
+  qwenReview: QwenReviewDialog,
   settings: SettingsDialog,
   shortcuts: ShortcutsDialog,
   export: ExportDialog,
   formatConversion: FormatConversionDialog,
-  cloudTransmission: CloudTransmissionDialog,
-  cloudCost: CloudCostDialog,
+  cloudConsent: CloudConsentDialog,
+  cloudRunConsent: CloudRunConsentDialog,
+  cloudCleanConsent: CloudCleanConsentDialog,
+  workflowReview: WorkflowReviewDialog,
+  denoise: DenoiseDialog,
+  denoiseCompare: DenoiseCompareDialog,
 })
 
 /**

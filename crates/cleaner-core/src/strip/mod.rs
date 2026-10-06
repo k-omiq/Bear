@@ -401,6 +401,7 @@ mod tests {
     #[test]
     fn the_order_decides_the_stacking_and_the_source_index_survives_it() {
         let source = |width, height| SourceRef {
+            orientation: Default::default(),
             path: std::path::PathBuf::from("p.png"),
             width,
             height,
@@ -409,6 +410,7 @@ mod tests {
             icc_bytes: None,
             sha256: String::new(),
             converted_from: None,
+            conversion: None,
         };
         let sources = [source(800, 1000), source(700, 500), source(800, 200)];
         let strip = Strip::of(&sources, &[2, 0]);

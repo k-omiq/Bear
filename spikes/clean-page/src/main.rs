@@ -147,7 +147,7 @@ fn main() -> Result<()> {
     let elapsed = whole.elapsed();
 
     let mut patches: Vec<Patch> = Vec::new();
-    let mut per_rung = [0u32; 3];
+    let mut per_rung = [0u32; 2];
     let mut untouched = 0u32;
     for region in &outcome.regions {
         println!("  {}", one_line(region));
@@ -155,20 +155,19 @@ fn main() -> Result<()> {
             RegionOutcome::Cleaned(patch, _) => {
                 match patch.provenance.engine {
                     Engine::Fill => per_rung[0] += 1,
-                    Engine::Denoise => per_rung[1] += 1,
-                    _ => per_rung[2] += 1,
+                    _ => per_rung[1] += 1,
                 }
                 patches.push((**patch).clone());
             }
-            RegionOutcome::Untouched { .. } => untouched += 1,
+            RegionOutcome::Untouched { .. } | RegionOutcome::Candidate { .. } | RegionOutcome::Declined { .. } => untouched += 1,
+            RegionOutcome::Detected(_) => return Err(anyhow!("auto clean returned a detect-only region")),
         }
     }
     println!(
-        "\n{} regions: {} at rung 0, {} at rung 1, {} at rung 2, {} left alone - {:.2} s",
+        "\n{} regions: {} at rung 0, {} at rung 2, {} left alone - {:.2} s",
         outcome.regions.len(),
         per_rung[0],
         per_rung[1],
-        per_rung[2],
         untouched,
         elapsed.as_secs_f64()
     );
@@ -258,8 +257,15 @@ fn one_line(region: &RegionOutcome) -> String {
                 review.as_deref().map(|r| format!(" - {r}")).unwrap_or_default(),
             )
         }
-        RegionOutcome::Untouched { bbox, reason } => {
+        RegionOutcome::Untouched { bbox, reason } | RegionOutcome::Declined { bbox, reason, .. } => {
             format!("({}, {}) {}×{}: untouched - {reason}", bbox.x, bbox.y, bbox.w, bbox.h)
+        }
+        RegionOutcome::Candidate { bbox, reason, inside_bubble, .. } => {
+            format!("({}, {}) {}×{}: candidate - {reason}, in a balloon: {inside_bubble}", bbox.x, bbox.y, bbox.w, bbox.h)
+        }
+        RegionOutcome::Detected(found) => {
+            let bbox = found.record.bbox;
+            format!("({}, {}) {}×{}: detected", bbox.x, bbox.y, bbox.w, bbox.h)
         }
     }
 }
@@ -268,7 +274,6 @@ fn one_line(region: &RegionOutcome) -> String {
 /// cleaned it.
 fn rung_overlay(cleaned: &Raster, outcome: &PageOutcome) -> Raster {
     const RUNG0: [u16; 3] = [40, 90, 230];
-    const RUNG1: [u16; 3] = [30, 165, 70];
     const RUNG2: [u16; 3] = [225, 45, 45];
     const LEFT_ALONE: [u16; 3] = [140, 140, 140];
 
@@ -279,11 +284,11 @@ fn rung_overlay(cleaned: &Raster, outcome: &PageOutcome) -> Raster {
                 patch.mask.bounds,
                 match patch.provenance.engine {
                     Engine::Fill => RUNG0,
-                    Engine::Denoise => RUNG1,
                     _ => RUNG2,
                 },
             ),
-            RegionOutcome::Untouched { bbox, .. } => (*bbox, LEFT_ALONE),
+            RegionOutcome::Untouched { bbox, .. } | RegionOutcome::Candidate { bbox, .. } | RegionOutcome::Declined { bbox, .. } => (*bbox, LEFT_ALONE),
+            RegionOutcome::Detected(found) => (found.record.bbox, LEFT_ALONE),
         };
         outline(&mut canvas, rect, colour);
     }

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mask component review",
+  "type": "object",
+  "required": ["page_id", "reviews"],
+  "additionalProperties": false,
+  "properties": {
+    "page_id": {"type": "string"},
+    "reviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["component_id", "decision"],
+        "additionalProperties": false,
+        "properties": {
+          "component_id": {"type": "string"},
+          "decision": {"enum": ["accept", "reject", "needs_correction"]},
+          "note": {"type": "string"}
+        }
+      }
+    }
+  }
+}

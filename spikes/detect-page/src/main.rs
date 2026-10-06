@@ -106,13 +106,20 @@ fn main() -> Result<()> {
     println!("\nregions: {}", regions.len());
     for r in &regions {
         let detected = cleaner_core::balloon::detected(r.masking, &balloons);
-        let inside = detected.inside();
+        let inside = cleaner_core::balloon::in_bubble(
+            &page,
+            &detection.segmentation,
+            r.text_bounds(),
+            r.masking,
+            &balloons,
+        );
         let verdict = match gate.as_mut() {
             Some(g) => Some(g.judge(
                 &page,
                 &detection.segmentation,
                 r,
                 detected,
+                inside,
                 cleaner_core::gate::OutsideText::Review,
             )?),
             None => None,
@@ -160,6 +167,7 @@ fn draw_overlay(
         palette: None,
         trns: None,
         srgb_intent: None,
+        color: Default::default(),
         data: vec![0; (page.width as usize) * (page.height as usize) * 3],
     };
 

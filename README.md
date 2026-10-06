@@ -15,7 +15,7 @@ Remove Japanese text from manga and webtoon pages, locally.
 [![Rust](https://img.shields.io/badge/Rust-core-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![ONNX Runtime](https://img.shields.io/badge/ONNX%20Runtime-1.28-005ce6?style=flat-square&logo=onnx&logoColor=white)](https://onnxruntime.ai/)
 
-Manga Cleaner is a standalone desktop app that detects speech bubbles and free text, keeps only the Japanese ones, fits masks at native resolution, and cleans each region with the lightest engine that can do the job. Everything runs on your machine: no account, no upload, no Python. Pixels outside an edited region stay bit-identical to the source, and colour mode, bit depth, embedded ICC profile, and metadata are carried through to export.
+Manga Cleaner is a standalone desktop app that detects speech bubbles and free text, keeps only the Japanese ones, fits masks at native resolution, and cleans each region with the lightest engine that can do the job. Everything runs on your machine by default: no account, no upload, no Python. An optional cloud GPU on your own Modal or Beam account stays off until you set it up. Pixels outside an edited region stay bit-identical to the source, and colour mode, bit depth, embedded ICC profile, and metadata are carried through to export.
 
 ## Demo: pick the right engine
 
@@ -23,22 +23,24 @@ Manga Cleaner is a standalone desktop app that detects speech bubbles and free t
 
 [Full quality video](infra/site/public/media/engine-choice.mp4)
 
-The rule is simple: use the lightest engine that does the job. Planar fill handles text on flat paper, denoise fill handles tight masks on noisy or JPEG scans, and manga-LaMa (the default) takes over when there is screentone, halftone, or line art behind the text. The optional FLUX.2 Klein sidecar is reserved for the rare region nothing else can reconstruct, since it needs its own process and several gigabytes of memory. A heavier model on a simple balloon is slower and often worse, because it can hallucinate marks where there was only paper. The video shows a FLUX layer being re-run with manga-LaMa from the layer context menu ("Clean with"), and the Shapes tool with its Mode set per region.
+The rule is simple: use the lightest engine that does the job. Fill handles text on flat paper: it paints one flat colour, measured from a thin ring of paper just outside the mask, exactly on the masked area. Manga-LaMa (the default) takes over when there is screentone, halftone, or line art behind the text. The optional FLUX.2 Klein sidecar is reserved for the rare region nothing else can reconstruct, since it needs its own process and several gigabytes of memory. A heavier model on a simple balloon is slower and often worse, because it can hallucinate marks where there was only paper. The video shows a FLUX layer being re-run with manga-LaMa from the layer context menu ("Clean with"), and the Shapes tool with its Mode set per region.
 
 ## Install
 
-Download the installer from [cleaner.komiq.cc](https://cleaner.komiq.cc): a `.dmg` for macOS on Apple Silicon, a `-setup.exe` for Windows x64. Both are built by the release workflow, and the app updates itself from cryptographically signed manifests. The Windows installer is not yet Authenticode-signed, so SmartScreen warns the first time it is run; the release workflow signs it automatically as soon as a certificate is configured.
+Download the installer from [cleaner.komiq.cc](https://cleaner.komiq.cc): a `.dmg` for macOS on Apple Silicon, a `-setup.exe` for Windows x64, or an `.AppImage` or `.deb` for Linux x64. All are built by the release workflow, and the app updates itself from cryptographically signed manifests. The Windows installer is not yet Authenticode-signed, so SmartScreen warns the first time it is run; the release workflow signs it automatically as soon as a certificate is configured.
 
 Windows needs 10 version 1803 x64 or later, which is what WebView2, the Visual C++ 2015-2022 runtime and ONNX Runtime 1.28 each require on their own. The Visual C++ runtime is not something to install: the four libraries the ONNX Runtime imports outright ship beside the executable, where the loader finds them first.
 
-Model weights and the runtime are not bundled, which keeps the installer small and respects weight provenance. On first launch the app offers to download the ONNX Runtime (about 32 MB on macOS, about 200 MB on Windows) plus the five required model weights (about 317 MB in total). Anything declined or missed can be fetched later from **Settings › Models**. An optional Japanese text reader (about 460 MB, three files) can be added from the same panel: it recovers roughly 5% of speech balloons that the script gate cannot read and would otherwise go to review uncleaned, and nothing else depends on it. For offline setups, place the verified files in the application's `models/` directory instead.
+Model weights and the runtime are not bundled, which keeps the installer small and respects weight provenance. The first-launch setup walks through the downloads (the ONNX Runtime, about 32 MB on macOS, about 200 MB on Windows, plus the five required model weights, about 317 MB in total), the defaults, an optional cloud GPU and app behavior. Anything declined or missed can be fetched later from **Settings › Models**. An optional Japanese text reader (about 460 MB, three files) can be added from the same panel and selected for a legacy run's OCR rescue; merely installing it does not switch the run. For offline setups, place the verified files in the application's `models/` directory instead.
 
-Intel Macs (`x86_64`) are unsupported: ONNX Runtime 1.28.0 publishes no `osx-x86_64` archive. Linux `x86_64` has a GPU path (the WebGPU plugin, with CUDA flavours for NVIDIA) that has not been executed on real hardware; Linux `aarch64` is best effort and CPU only. Neither is part of the release workflow.
+The optional **Text-shaped review** analyzes a selected chapter page with RT-DETR and the exact Koharu SAM-TS-L model. Its all-text policy does not need script recognition or OCR. You review lettering components, source-pixel padding and corrections against the tinted write-support preview before applying any patch. Supervised writes are currently restricted to PNG pages on the measured Apple M5/WebGPU configuration; other sources and providers stay in review. The legacy workflow remains the default. See [local release evidence and known failures](docs/local-text-shape-release.md) for current limits and rollback behavior, and the [model workflow decisions and benchmarks](docs/model-workflow-benchmarks.md) for the earlier CPU, GPU and chapter measurements.
+
+Intel Macs (`x86_64`) are unsupported: ONNX Runtime 1.28.0 publishes no `osx-x86_64` archive. Linux `x86_64` has a release package and a GPU path (the WebGPU plugin, with CUDA flavours for NVIDIA) that has not been executed on real hardware; Linux `aarch64` is best effort and CPU only and is not part of the release workflow.
 
 ## Features
 
 - Automatic pipeline: detect, gate to Japanese script, fit masks, route to an engine, clean, composite.
-- Six manual tools: Auto Clean, Brush, Shapes, AI Mask Brush, Content-Aware Fill, and Clone / Heal.
+- Six manual tools: Text cleanup, Brush, Shapes, AI Mask Brush, Content-Aware Fill, and Clone / Heal.
 - Every cleaned region is a layer with its engine, parameters, and timing recorded, re-runnable or deletable with full undo and redo.
 - Long-strip webtoon mode with virtual stitching, content-minimum splitting, and bounded-memory streaming across joins.
 - Strict export contract: untouched pixels stay bit-identical; 8 and 16-bit, Grayscale, RGB, CMYK, and Indexed all survive.
@@ -47,12 +49,14 @@ Intel Macs (`x86_64`) are unsupported: ONNX Runtime 1.28.0 publishes no `osx-x86
 - Hardware acceleration chosen per model, overridable in **Settings › Acceleration**.
 - Optional Japanese text reader (manga-ocr) that rescues balloons the script gate cannot classify.
 - Keyboard shortcuts for every tool and panel, rebindable in Settings.
+- Optional cloud GPU on your own Modal or Beam account: paste a token and the app sets up the GPU endpoint for you. Off by default, every render is confirmed, and only a crop around the region is sent.
+- Skippable first-launch setup that walks through model downloads, defaults, an optional cloud GPU and app behavior.
 
 ## Built with
 
-[Tauri 2](https://v2.tauri.app/) for the shell, [Svelte 5](https://svelte.dev/) for the interface, a pure [Rust](https://www.rust-lang.org/) core for the pipeline, [ONNX Runtime](https://onnxruntime.ai/) for inference, and pure-Rust image I/O throughout. No Python is bundled or required.
+[Tauri 2](https://v2.tauri.app/) for the shell, [Svelte 5](https://svelte.dev/) for the interface, a pure [Rust](https://www.rust-lang.org/) core for the pipeline, [ONNX Runtime](https://onnxruntime.ai/) for inference, and pure-Rust image I/O throughout. The pipeline needs no Python. The one Python program the installer ships, the cloud setup helper, is frozen into its own executable and runs only while you set up, resume or remove a cloud GPU.
 
-Weights live outside this repository and are fetched at setup under their own licences:
+Model weights live outside this repository. These models can be downloaded separately for the workflows that use them, under their own licences:
 
 | Model | Upstream | Licence |
 |---|---|---|
@@ -98,11 +102,18 @@ cargo test --workspace --exclude spike-strip-memory -- --test-threads=1
 # 5. Run the application in development mode
 npx tauri dev
 
-# 6. Build the release bundle
-npx tauri build
+# 6. Freeze and smoke test the cloud setup helper for this machine's release target
+# On Windows, use x86_64-pc-windows-msvc instead.
+RELEASE_TARGET=aarch64-apple-darwin
+python -m pip install --require-hashes -r provisioner/requirements.lock
+python .github/scripts/build-cloud-provisioner.py "$RELEASE_TARGET"
+
+# 7. Build the release bundle (aarch64-apple-darwin or x86_64-pc-windows-msvc)
+npx tauri build --target "$RELEASE_TARGET"
 ```
 
 `--test-threads=1` is required because concurrent WebGPU session initialisation on macOS can abort the test binary.
+Release builds fail if the target's cloud helper is missing from `bundle.externalBin`. The release workflow builds and checks the macOS app and Windows installer separately.
 
 ## Documentation
 
@@ -112,10 +123,10 @@ npx tauri build
 
 ## Status
 
-The frontend is complete and tested (904 frontend tests, 822 Rust tests), and the Rust backend runs a page end to end: detection, bubble classification, script gating, mask fitting, fill, denoise, and LaMa inpainting, compositing, and export with asserted colour fidelity. Virtual stitching and streaming memory boundaries for long-strip webtoons are implemented, though cross-join detection overlap and real-world memory bounds are not yet measured against a large corpus. Windows and Linux runtime and GPU figures remain unmeasured on physical hardware. Known issues in the ladder: manga-LaMa can leave phantom text marks inside bubbles, quality metrics need tuning for outline-dominated regions, and the escalation path wants testing on more screentone fixtures. The optional FLUX.2 Klein sidecar runs over loopback HTTP and is measured on Apple Silicon, but is not yet validated across general manga styles.
+The frontend is complete and tested (1,094 frontend tests, 1,037 Rust tests, and 314 Python tests for the cloud setup helper and gateways), and the Rust backend runs a page end to end: detection, bubble classification, script gating, mask fitting, fill and LaMa inpainting, compositing, and export with asserted colour fidelity. Virtual stitching and streaming memory boundaries for long-strip webtoons are implemented, though cross-join detection overlap and real-world memory bounds are not yet measured against a large corpus. Windows and Linux runtime and GPU figures remain unmeasured on physical hardware. Known issues in the ladder: manga-LaMa can leave phantom text marks inside bubbles, quality metrics need tuning for outline-dominated regions, and the escalation path wants testing on more screentone fixtures. The optional FLUX.2 Klein sidecar runs over loopback HTTP and is measured on Apple Silicon, but is not yet validated across general manga styles. The optional cloud GPU path (automatic Modal or Beam setup, a confirmation per render, cancel and recovery) is built and tested offline against fakes, and has not yet run against a real Modal or Beam account.
 
 ## Licence
 
-Manga Cleaner is released under the [GNU General Public License v3.0 only](LICENSE). The licence follows from `comic_text_detector` (from `dmMaze/comic-text-detector` and `manga-image-translator`), which is GPL-3.0 and supplies the per-pixel text segmentation masks that native mask fitting depends on. Complete corresponding source is available at [github.com/k-omiq/manga-cleaner](https://github.com/k-omiq/manga-cleaner) pursuant to GPL-3.0 §6.
+Manga Cleaner is currently released under the [GNU General Public License v3.0 only](LICENSE). This is the licence for the application; separately downloaded model weights retain their own licences. Complete corresponding source is available at [github.com/k-omiq/manga-cleaner](https://github.com/k-omiq/manga-cleaner) pursuant to GPL-3.0 §6.
 
 With thanks to `comic_text_detector` and `manga-image-translator` (text segmentation), `lama-manga`, `advimman/lama` and `dreMaz` (manga inpainting), `ogkalu` (script identification and bubble detection), `kha-white` and `mayocream` (Japanese text recognition), and to [ONNX Runtime](https://onnxruntime.ai/), [Tauri](https://tauri.app/), and [Svelte](https://svelte.dev/).

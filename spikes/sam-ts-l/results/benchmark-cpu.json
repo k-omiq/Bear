@@ -1,0 +1,173 @@
+{
+  "description": "Static batch-one 1024px FP32 ONNX Runtime mask-only inference",
+  "environment": {
+    "available_providers": [
+      "CoreMLExecutionProvider",
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "onnxruntime": "1.23.2",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]",
+    "threads": 4
+  },
+  "graph_packages": {
+    "encoder": {
+      "files": [
+        {
+          "bytes": 1335305985,
+          "file": "koharu_samts_encoder.onnx"
+        }
+      ],
+      "total_bytes": 1335305985
+    },
+    "head": {
+      "files": [
+        {
+          "bytes": 22704641,
+          "file": "koharu_samts_text_head.onnx"
+        }
+      ],
+      "total_bytes": 22704641
+    }
+  },
+  "measurement": {
+    "cold_definition": "first InferenceSession in a fresh worker process; OS file cache uncontrolled",
+    "peak_rss_definition": "worker process ru_maxrss, including Python and ORT; macOS bytes, Linux KiB converted to bytes",
+    "repeats": 2,
+    "warmups": 1
+  },
+  "parity_evidence": {
+    "confirmed_by_invoker": true,
+    "cpu_comparison": {
+      "encoder_embedding": {
+        "changed_elements": 1027716,
+        "max_abs": 3.781169652938843e-05,
+        "mean_abs": 1.0402262737158052e-06,
+        "rmse": 1.5304831924935399e-06,
+        "shape": [
+          1,
+          256,
+          64,
+          64
+        ]
+      },
+      "source_vs_onnx_logits": {
+        "changed_elements": 1042293,
+        "max_abs": 0.00045013427734375,
+        "mean_abs": 2.2161516427615657e-05,
+        "rmse": 2.733163874871168e-05,
+        "shape": [
+          1,
+          1,
+          1024,
+          1024
+        ]
+      },
+      "source_vs_onnx_restored_mask_pixels": 0,
+      "text_head_same_embedding_logits": {
+        "changed_elements": 977773,
+        "max_abs": 4.482269287109375e-05,
+        "mean_abs": 4.850947801476879e-06,
+        "rmse": 6.8252931719407084e-06,
+        "shape": [
+          1,
+          1,
+          1024,
+          1024
+        ]
+      }
+    },
+    "file": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof/parity.json"
+  },
+  "runs": [
+    {
+      "cold_session_load_ms_by_graph": {
+        "encoder": 516.9860000023618
+      },
+      "peak_process_rss_bytes": 10411180032,
+      "profile_assignments": {
+        "encoder": {
+          "node_events_by_provider": {
+            "CPUExecutionProvider": 1481
+          },
+          "node_events_without_provider": 0
+        }
+      },
+      "provider_requested": "CPUExecutionProvider",
+      "providers_active_by_graph": {
+        "encoder": [
+          "CPUExecutionProvider"
+        ]
+      },
+      "stage": "encoder",
+      "warm_latency_median_ms": 11159.23954200116,
+      "warm_latency_ms": [
+        10928.40529201203,
+        11390.07379199029
+      ]
+    },
+    {
+      "cold_session_load_ms_by_graph": {
+        "head": 26.84716702788137
+      },
+      "peak_process_rss_bytes": 507117568,
+      "profile_assignments": {
+        "head": {
+          "node_events_by_provider": {
+            "CPUExecutionProvider": 312
+          },
+          "node_events_without_provider": 0
+        }
+      },
+      "provider_requested": "CPUExecutionProvider",
+      "providers_active_by_graph": {
+        "head": [
+          "CPUExecutionProvider"
+        ]
+      },
+      "stage": "head",
+      "warm_latency_median_ms": 227.4843335035257,
+      "warm_latency_ms": [
+        225.56029201950878,
+        229.40837498754263
+      ]
+    },
+    {
+      "cold_session_load_ms_by_graph": {
+        "encoder": 545.9032910002861,
+        "head": 23.149708984419703
+      },
+      "peak_process_rss_bytes": 10850304000,
+      "profile_assignments": {
+        "encoder": {
+          "node_events_by_provider": {
+            "CPUExecutionProvider": 1481
+          },
+          "node_events_without_provider": 0
+        },
+        "head": {
+          "node_events_by_provider": {
+            "CPUExecutionProvider": 312
+          },
+          "node_events_without_provider": 0
+        }
+      },
+      "provider_requested": "CPUExecutionProvider",
+      "providers_active_by_graph": {
+        "encoder": [
+          "CPUExecutionProvider"
+        ],
+        "head": [
+          "CPUExecutionProvider"
+        ]
+      },
+      "stage": "chain",
+      "warm_latency_median_ms": 13813.275583495852,
+      "warm_latency_ms": [
+        13306.736917002127,
+        14319.814249989577
+      ]
+    }
+  ]
+}

@@ -193,6 +193,29 @@ describe('renderCloneTiles', () => {
     ])
   })
 
+  it('draws each layer at its own opacity over the tiles, and leaves the context as it found it', () => {
+    const ctx = fakeContext()
+    /** @type {number[]} */
+    const alphas = []
+    ctx.drawImage = (...args) => {
+      alphas.push(ctx.globalAlpha)
+      ctx.calls.push({ call: 'drawImage', args })
+    }
+    const tile = { nodeName: 'IMG' }
+    const layer = { nodeName: 'CANVAS' }
+    renderCloneTiles(
+      ctx,
+      [
+        { image: tile, left: 0, top: 0, width: 1, height: 1 },
+        { image: layer, left: 0.25, top: 0.5, width: 0.1, height: 0.05, alpha: 0.4 },
+      ],
+      { width: 400, height: 800, dx: 0, dy: 0 },
+    )
+    expect(alphas).toEqual([1, 0.4])
+    expect(ctx.calls.map((entry) => entry.args[0])).toEqual([tile, layer])
+    expect(ctx.globalAlpha).toBe(1)
+  })
+
   it('draws nothing where the page has no proxy tiles in the document', () => {
     const ctx = fakeContext()
     expect(renderCloneTiles(ctx, [], { width: 400, height: 800, dx: 0, dy: 0 })).toBe(0)

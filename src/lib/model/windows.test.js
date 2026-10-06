@@ -94,6 +94,26 @@ describe('clampPosition', () => {
     expect(clampPosition({ x: 500, y: 62, w: 700 }, 1000, 900, 'pages').x).toBe(500)
   })
 
+  // The Text cleanup panel is a few hundred pixels tall, so the bottom bound
+  // a header needs is not enough for it: a shell dragged, or grown, near the
+  // bottom edge would leave its run button below the window. Held whole above
+  // the edge while it fits; taller than the viewport, its top stays reachable.
+  it('holds a measured content-sized height above the bottom edge', () => {
+    // The minimum supported window, `src-tauri/tauri.conf.json`.
+    expect(clampPosition({ x: 16, y: 600, w: 384, h: 480 }, 1000, 640, 'tool').y).toBe(640 - 480 - 62)
+    expect(clampPosition({ x: 16, y: 62, w: 384, h: 480 }, 1000, 640, 'tool').y).toBe(62)
+    expect(clampPosition({ x: 16, y: -30, w: 384, h: 480 }, 1000, 640, 'tool').y).toBe(MIN_TOP)
+    // The pill is held whole too, not merely by its header.
+    expect(clampPosition({ x: 16, y: 9999, w: 300, h: 44 }, 1000, 640, 'tool').y).toBe(640 - 44 - MIN_TOP)
+    // Taller than the viewport: the top, and the grip on it, stays on screen.
+    expect(clampPosition({ x: 16, y: 300, w: 384, h: 900 }, 1000, 640, 'tool').y).toBe(MIN_TOP)
+    // Not measured yet: the general bounds.
+    expect(clampPosition({ x: 16, y: 9999, w: 384, h: null }, 1000, 640, 'tool').y).toBe(640 - BOTTOM_INSET)
+    expect(clampPosition({ x: 16, y: 9999, w: 384 }, 1000, 640, 'tool').y).toBe(640 - BOTTOM_INSET)
+    // A resizable window's height is its own business and moves nothing.
+    expect(clampPosition({ x: 16, y: 500, w: 248, h: 400 }, 1000, 640, 'pages').y).toBe(500)
+  })
+
   it('does not shove a window narrower than the grabbable strip', () => {
     for (const w of [0, 1, KEEP_ON_SCREEN - 1]) {
       expect(clampPosition({ x: 200, y: 300, w }, 1440, 900).x, `w ${w}`).toBe(200)
@@ -164,15 +184,21 @@ describe('clampSize', () => {
     expect(clampSize({ w: 306, h: null }, 900).h).toBeNull()
   })
 
-  // The tool bar is 44px because of what it holds, so a height for it is not a
-  // preference either. A geometry stored while it was still the tool window
-  // carries one, and it comes back null rather than clamped.
-  it('answers null height for a content-sized id, whatever it was given', () => {
-    expect(clampSize({ w: 306, h: 420 }, 900, 'tool').h).toBeNull()
-    expect(clampSize({ w: 306, h: 10 }, 900, 'tool').h).toBeNull()
+  // The tool shell is 44px as a pill and as tall as its rows as the Text
+  // cleanup panel: a measurement, like its width, kept so the position clamp
+  // can hold the whole of it on screen. Not clamped, since squeezing it would
+  // only put the store at odds with the element; not a number means "not
+  // measured yet".
+  it('passes a content-sized height through as the measurement it is', () => {
+    expect(clampSize({ w: 384, h: 420 }, 900, 'tool').h).toBe(420)
+    expect(clampSize({ w: 306, h: 44.4 }, 900, 'tool').h).toBe(44)
+    expect(clampSize({ w: 384, h: 2000 }, 640, 'tool').h).toBe(2000)
     expect(clampSize({ w: 306, h: null }, 900, 'tool').h).toBeNull()
-    // Every other window still keeps the number it was given.
+    expect(clampSize({ w: 306, h: 0 }, 900, 'tool').h).toBeNull()
+    expect(clampSize({ w: 306, h: -5 }, 900, 'tool').h).toBeNull()
+    // Every other window still keeps the number it was given, clamped.
     expect(clampSize({ w: 306, h: 420 }, 900, 'pages').h).toBe(420)
+    expect(clampSize({ w: 306, h: 10 }, 900, 'pages').h).toBe(MIN_HEIGHT)
   })
 })
 

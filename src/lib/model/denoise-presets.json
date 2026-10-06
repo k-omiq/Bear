@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "measuredOn": {
+    "date": "2026-09-28",
+    "gpu": "L4",
+    "pageWidth": 1284,
+    "pageHeight": 1809,
+    "note": "Cloud seconds are medians of five pages after the model was loaded (spikes/denoise/modal_compare.py --warm). Time grows with page area, so scale by megapixels."
+  },
+  "presets": [
+    {
+      "id": "mangajanai-2x",
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "mangajanai", "scale": 2 }] },
+      "cloudSecondsPerPage": 4.0,
+      "cloudSecondsPerMegapixel": 1.73,
+      "credit": { "name": "MangaJaNai", "author": "the-database", "license": "CC BY-NC 4.0" }
+    },
+    {
+      "id": "mangajanai-4x",
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "mangajanai", "scale": 4 }] },
+      "cloudSecondsPerPage": 15.8,
+      "cloudSecondsPerMegapixel": 6.81,
+      "credit": { "name": "MangaJaNai", "author": "the-database", "license": "CC BY-NC 4.0" }
+    },
+    {
+      "id": "waifu2x-scan-4x-n2",
+      "targets": ["cloud", "local"],
+      "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "waifu2x-art-scan", "scale": 4, "level": 2 }] },
+      "cloudSecondsPerPage": 9.8,
+      "cloudSecondsPerMegapixel": 4.23,
+      "credit": { "name": "waifu2x (nunif)", "author": "nagadomi", "license": "MIT" }
+    },
+    {
+      "id": "realcugan-2x-conservative",
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "realcugan", "scale": 2 }] },
+      "cloudSecondsPerPage": 2.1,
+      "cloudSecondsPerMegapixel": 0.88,
+      "credit": { "name": "Real-CUGAN", "author": "bilibili", "license": "MIT" }
+    },
+    {
+      "id": "realcugan-3x-conservative",
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "realcugan", "scale": 3 }] },
+      "cloudSecondsPerPage": 3.7,
+      "cloudSecondsPerMegapixel": 1.6,
+      "credit": { "name": "Real-CUGAN", "author": "bilibili", "license": "MIT" }
+    },
+    {
+      "id": "realcugan-3x-denoise3",
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "realcugan", "scale": 3, "level": 3 }] },
+      "cloudSecondsPerPage": 3.7,
+      "cloudSecondsPerMegapixel": 1.61,
+      "credit": { "name": "Real-CUGAN", "author": "bilibili", "license": "MIT" }
+    }
+  ]
+}

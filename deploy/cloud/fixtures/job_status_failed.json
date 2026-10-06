@@ -1,0 +1,19 @@
+{
+  "handle": "handle-test-modal-999",
+  "job_id": "job-test-001",
+  "attempt_id": "attempt-test-001",
+  "request_digest": "42174589391d9064c743c4450b520f403a3b91171382c4eadc9934285f21efc0",
+  "recipe_id": "test-sdnq-v1",
+  "preprocessing_version": "1.0.0",
+  "model_id": "test-flux-schnell",
+  "model_revision": "0123456789abcdef0123456789abcdef01234567",
+  "native_mask_conditioning": false,
+  "status": "failed",
+  "reported_cost_usd": null,
+  "error": {
+    "error_code": "execution_failed",
+    "message": "CUDA out of memory during inference"
+  },
+  "result_digest": null,
+  "result_bytes": null
+}

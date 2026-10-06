@@ -30,48 +30,64 @@
 //! the test [`interior`] actually makes.
 //!
 //! That test is one sentence: **the paper immediately outside the text is a
-//! balloon's interior when it is a uniform fill**, walked outward ring by ring
-//! from the text's own box, with the text's strokes excluded and a thin ink
-//! line tolerated where it is the outline the interior ends at. Uniform, not
-//! white - a black balloon under white lettering is as uniform as a white one,
-//! which is the *"white text over black"* half of §3's objection answered by
-//! measuring spread rather than level. What the test refuses is picture:
-//! screentone, hatching and art all break the uniformity in the same way, by
-//! putting many separate runs of off-tone pixels on one ring.
+//! balloon's interior when it is a uniform fill that an outline closes**,
+//! walked outward ring by ring from the text's own box, with the text's
+//! strokes excluded. Uniform, not white - a black balloon under white lettering
+//! is as uniform as a white one, which is the *"white text over black"* half of
+//! §3's objection answered by measuring spread rather than level. What the test
+//! refuses is picture: screentone, hatching and art all break the uniformity in
+//! the same way, by putting many separate runs of off-tone pixels on one ring.
 //!
-//! [`Interior::settles`] is where the two opinions meet, and it is deliberately
-//! asymmetric about which of them may be overruled. Solid paper carries a
-//! region into the gate whatever the detector said, because that is the
-//! false positive this exists to remove; picture carries it out unless the
-//! detector answered the balloon question itself and confidently
-//! ([`Detected::TextInBubble`]), because a heuristic that fails on noisy scans
-//! must not veto a model that does not; and anything the page cannot answer  - 
-//! a region at the page edge, a box that abuts ink at once - leaves the
-//! detector's answer standing rather than replacing it with a guess.
+//! ## One answer, and the page may only add to it
+//!
+//! [`in_bubble`] is where the two opinions meet, and it is the only in/out
+//! answer a run uses: the engine pick, the gate, the stored detection and a
+//! held candidate's row all read it. Text is in a bubble when the detector says
+//! so ([`Detected::inside`]) **or** the paper walk reads [`Interior::Solid`]
+//! around the lettering. The page rescues text the detector left outside - chat
+//! boxes, signs, square and diamond boxes, interface text on flat white, which
+//! the detector labels `text_free` or emits no box for - and it never takes an
+//! *inside* away. Measured over 1,098 text groups on three real chapters, the
+//! page overruling a detector *inside* happened in 3 groups, which is too rare
+//! to be worth a heuristic vetoing a model on the scans the heuristic is worst
+//! at.
+//!
+//! The walk is strict about what counts as a band, because the page's own
+//! false positive is a sound effect drawn with a white outline over art: that
+//! outline is 3 to 8 pixels of white around the strokes, which is fill as far
+//! as one ring can tell. So a band counts only when a thin outline closes it
+//! ([`RingRead::is_outline`], at least [`MIN_FILL_DEPTH`] behind it) or when
+//! nothing ends it across the whole walk. A band that runs into picture counts
+//! for nothing however deep it was, and the paper between the strokes is not
+//! read at all: the reading that used to do that took the white outline
+//! between an effect's strokes for paper. On the same 1,098 groups this kept
+//! 121 rescues (the chat boxes, signs and boxed text) and dropped the outlined
+//! sound effects the looser walk had let in.
 //!
 //! ## Enclosure is the model answering the question too
 //!
-//! That asymmetry was written as though `text_bubble` were the only confident
-//! answer the model gives, and on real pages it is not. A balloon with a jagged
-//! or wobbly outline whose lettering nearly fills it comes back as `bubble` at
-//! 0.86–0.96 with **no** `text_bubble` box at or above [`SURE_SCORE`]: the
-//! outline is close enough to the text that the paper walk hits it on its first
-//! ring and reads [`Interior::Textured`], and picture was allowed to veto a
+//! A balloon with a jagged or wobbly outline whose lettering nearly fills it
+//! comes back as `bubble` at 0.86 to 0.96 with **no** `text_bubble` box at or
+//! above [`SURE_SCORE`]. Before [`in_bubble`], the paper walk hit that outline on
+//! its first ring, read [`Interior::Textured`], and was allowed to veto a
 //! [`Detected::Bubble`]. Six regions across eighteen probe pages went to review
 //! as *"text outside a speech bubble"* that way - 02.png 414,115 177×430 over
 //! `Bubble@0.92`; 03.png 126,105 295×254 over `Bubble@0.92 Bubble@0.91` and
 //! 779,982 197×402 over `Bubble@0.92 Bubble@0.86`; 04.png 786,923 101×378 over
 //! `Bubble@0.69 TextInBubble@0.48`; 10.png 483,1018 262×365 over two
 //! `Bubble@0.96`; and 15.png 819,559 157×383 over `Bubble@0.94 Bubble@0.95`.
-//! Every one is ordinary dialogue in a white balloon.
+//! Every one is ordinary dialogue in a white balloon. No veto exists any more,
+//! so none of them can go outside that way; what the grade still decides is
+//! whether the gate's reader may rescue a failed script verdict, which asks for
+//! [`Detected::TextInBubble`] and nothing weaker.
 //!
 //! So [`detected`] grades sure `bubble` boxes that **cover** the region as
 //! [`Detected::TextInBubble`]. Coverage rather than centre-containment is what
 //! keeps this narrow: a large `bubble` box reaching across a sound effect holds
 //! that effect's centre and not its extent, and `text_free` still wins outright
 //! wherever the model drew it. What is left is the model saying *this text is
-//! enclosed by a balloon*, which is the balloon question answered, and picture
-//! may not veto it.
+//! enclosed by a balloon*, which is the balloon question answered as
+//! confidently as a `text_bubble` box answers it.
 //!
 //! Coverage is taken over the **union of the boxes**, and that is not a detail.
 //! The detector emits one `bubble` box per lobe, and every one of the six cases
@@ -87,7 +103,7 @@
 
 use std::path::Path;
 
-use crate::detect::{DetectedLanguage, Region, Segmentation, overlaps_enough};
+use crate::detect::Segmentation;
 use crate::image::Raster;
 use crate::mask::{Mask, Rect};
 
@@ -108,7 +124,7 @@ pub enum BalloonClass {
 }
 
 impl BalloonClass {
-    fn from_label(label: i64) -> Option<BalloonClass> {
+    pub(crate) fn from_label(label: i64) -> Option<BalloonClass> {
         match label {
             0 => Some(BalloonClass::Bubble),
             1 => Some(BalloonClass::TextInBubble),
@@ -153,10 +169,11 @@ impl BalloonDetector {
         let (session, selection) =
             crate::accel::open_session(model, &crate::accel::BALLOON, preference, None)
                 .map_err(|e| BalloonError::Model(e.to_string()))?;
-        let lease = crate::registry::register(
+        let lease = crate::registry::register_named(
             crate::registry::Kind::BalloonDetector,
             crate::registry::Footprint::weights(model),
             crate::registry::Device::accelerator(selection.accelerator),
+            Some("Ogkalu comic text & bubble detector (Small)".into()),
         );
         Ok(BalloonDetector { session, selection, lease })
     }
@@ -262,12 +279,13 @@ impl BalloonDetector {
 }
 
 /// A `text_bubble` box at or above this score is the model answering the
-/// balloon question about *this text*, confidently, and [`Interior::settles`]
-/// lets that answer stand against a paper reading of *picture*. Above
-/// [`SCORE_THRESHOLD`] rather than equal to it: a box that only just cleared
-/// emission is evidence, not a verdict. Measured on real scans: every
-/// `text_bubble` box the paper reading wrongly vetoed scored 0.88–0.94, and the
-/// one it rightly left alone scored 0.38 beside a `text_free` at 0.74.
+/// balloon question about *this text*, confidently: [`Detected::TextInBubble`],
+/// the grade the gate's reader asks for before it may rescue a failed script
+/// verdict. Above [`SCORE_THRESHOLD`] rather than equal to it: a box that only
+/// just cleared emission is evidence, not a verdict. Measured on real scans,
+/// when the paper reading could still veto the detector: every `text_bubble`
+/// box it wrongly vetoed scored 0.88 to 0.94, and the one it rightly left alone
+/// scored 0.38 beside a `text_free` at 0.74.
 const SURE_SCORE: f32 = 0.5;
 
 /// What the balloon detector said about one region, graded by how much of the
@@ -294,9 +312,11 @@ pub enum Detected {
     /// A `bubble` shape contains the centre but does not cover the region, or is
     /// too weak to be sure of; or a `text_bubble` box too weak to be sure of
     /// contains the centre. A statement about a shape near the text rather than
-    /// about the text, and the one the paper reading may overrule either way.
+    /// about the text: still *inside* for [`in_bubble`], and not confident enough
+    /// for the gate's reader.
     Bubble,
-    /// A `text_free` box contains the centre, or nothing does.
+    /// A `text_free` box contains the centre, or nothing does. The one grade
+    /// the paper reading may overrule, and only towards *inside*.
     Outside,
 }
 
@@ -442,166 +462,74 @@ fn covered_percent(region: Rect, rects: &[Rect]) -> i64 {
     covered * 100 / area
 }
 
-/// Whether a text region sits inside a balloon, by the detector alone.
-/// [`detected`] with the grade dropped.
-pub fn in_balloon(region: Rect, balloons: &[BalloonBox]) -> bool {
-    detected(region, balloons).inside()
-}
-
-/// The balloon detector's text boxes that the text detector missed, as regions.
+/// Whether text sits in a bubble: the one in/out answer a run uses, for the
+/// engine pick, the gate, the stored detection and a held candidate alike.
 ///
-/// **A second source of boxes**, and it exists because the first source has a
-/// blind spot with a shape. Over the 28 real scans the text detector emits a
-/// box for every `text_bubble` box the balloon detector sees, so inside a
-/// balloon the two agree completely; outside one they do not. Seven boxes the
-/// balloon detector scored 0.53 to 0.88 had no region at all - not a region
-/// sent to review, where a wrong call can be undone, but no region: 19.png
-/// 152,81 238×146 @0.85, 25.png 293,963 311×174 @0.88 and 629,936 176×122
-/// @0.80, and 18.png 751,859 147×108 @0.76 are rectangular narration boxes of
-/// horizontal Japanese on white; 28.png 113,1447 757×53 @0.71 is a caption
-/// line; 24.png 823,1393 171×60 @0.53 is a stylised sound effect; and 01.png
-/// 1007,77 63×1132 and 563,1469 422×45 are the chapter title strip and the
-/// credits line. All of it is text a cleaner should at least list.
+/// The detector's answer **or** the page's: [`detected`] at `masking` saying
+/// anything but [`Detected::Outside`], or [`interior_of`] reading
+/// [`Interior::Solid`] around `text_bounds`. Paper can only rescue; it never
+/// vetoes the detector's *inside* (see the module note for the measurement),
+/// so the walk runs only when the detector said *outside*.
 ///
-/// Only boxes nothing already covers are adopted, on two tests taken together:
-/// the box's **centre** must fall in no region's masking rect - the same
-/// containment question [`detected`] asks of a region, from the other side  - 
-/// and its overlap with every region must stay at or under
-/// [`crate::detect::MERGE_OVERLAP_SHARE`], which is the share the extended tier
-/// merges on ([`crate::detect::overlaps_enough`] is that test).
-/// Centre-containment alone would adopt a wide caption whose middle lands in a
-/// gap between two boxes of the same caption; overlap alone would adopt a small
-/// box sitting in the corner of a large region.
-///
-/// *Already covers* includes the boxes this function has itself accepted, and
-/// candidates are taken strongest first so that pairing is decided by the
-/// model's own confidence rather than by the order the detector returned them
-/// in. Without the chain a duplicate pair becomes two regions over one piece of
-/// text - see the loop.
-///
-/// The result is unsorted and holds only the new regions. A caller appends them
-/// and then calls [`crate::detect::sort_regions`]: region ids are list indices.
-pub fn adopt_uncovered_text(
-    regions: &[Region],
+/// `text_bounds` is the lettering's own box, which the walk reads around, and
+/// `masking` the box the detector's answer is read at - the two a
+/// [`crate::detect::Region`] carries as `text_bounds()` and `masking`, and
+/// [`crate::detect::Region::text_bounds`] says why the walk must not start from
+/// the wider one. `page` and `seg` share `text_bounds`'
+/// coordinates; `balloons` share `masking`'s.
+pub fn in_bubble(
+    page: &Raster,
+    seg: &Segmentation,
+    text_bounds: Rect,
+    masking: Rect,
     balloons: &[BalloonBox],
-    page_w: u32,
-    page_h: u32,
-    median_area: i64,
-) -> Vec<Region> {
-    let mut candidates: Vec<&BalloonBox> = balloons
-        .iter()
-        .filter(|b| matches!(b.class, BalloonClass::TextInBubble | BalloonClass::TextFree))
-        .filter(|b| b.score >= SURE_SCORE)
-        .collect();
-    // **Strongest first, and then each is asked about the ones already taken.**
-    // The detector emits overlapping boxes for one piece of text - on 01.png
-    // nine `text_bubble` boxes stand over six regions - and a pass that asked
-    // only about the text detector's regions would adopt every one of a
-    // duplicate pair as its own region, leaving two masks over one caption
-    // where the extended tier would have merged two detector boxes into one.
-    // Descending score is what decides which of a pair survives: the box the
-    // model believes most is the box to keep, and the other is then covered by
-    // it under the same two tests the regions are asked.
-    //
-    // The tie-break is positional and total, so a page with two equal scores
-    // adopts the same one on every run.
-    candidates.sort_by(|a, b| {
-        b.score
-            .total_cmp(&a.score)
-            .then(a.rect.y.cmp(&b.rect.y))
-            .then(a.rect.x.cmp(&b.rect.x))
-            .then(a.rect.h.cmp(&b.rect.h))
-            .then(a.rect.w.cmp(&b.rect.w))
-    });
-
-    let mut adopted: Vec<Region> = Vec::new();
-    for balloon in candidates {
-        let cx = balloon.rect.x + balloon.rect.w as i64 / 2;
-        let cy = balloon.rect.y + balloon.rect.h as i64 / 2;
-        let covered = regions.iter().chain(adopted.iter()).any(|region| {
-            region.masking.contains(cx, cy) || overlaps_enough(&balloon.rect, &region.masking)
-        });
-        if covered {
-            continue;
-        }
-        adopted.push(Region::from_box(
-            balloon.rect,
-            balloon.score,
-            // The text detector's two classes are languages and upstream
-            // annotates them "cls could give wrong result"; the balloon
-            // detector does not guess a language at all. Japanese is the
-            // weakest thing that can be said here, and nothing routes on it  - 
-            // [`crate::gate`] reads the script from the pixels.
-            DetectedLanguage::Japanese,
-            page_w,
-            page_h,
-            median_area,
-        ));
-    }
-    adopted
+) -> bool {
+    detected(masking, balloons).inside()
+        || matches!(interior_of(page, seg, text_bounds), Interior::Solid { .. })
 }
 
-/// Supply an ink mask for text boxes recovered by the multilingual detector.
+/// The smaller luma population inside `bounds` by Otsu's threshold, or `None`
+/// when there is no visible ink population: too little contrast, too few
+/// pixels, or a population too even to be text. The broad bounds admit dense
+/// Hangul and Han while refusing one-pixel noise and near-even texture.
 ///
-/// The primary detector couples boxes to a segmentation head, but it was
-/// trained on manga/comic data and can miss Korean and Chinese lettering. The
-/// companion detector was trained across manga, webtoon and manhua and finds
-/// those text boxes, but has no mask output. An adopted box with an empty mask
-/// therefore used to fail twice: the script gate could not split it into lines,
-/// then `fit::seed_mask` discarded it.
-///
-/// This fallback performs Otsu binarisation inside only an adopted region's
-/// text bounds and marks the smaller luma population as ink. Existing mask
-/// evidence wins wholesale. A minimum contrast and population floor keep flat
-/// paper and isolated scan noise empty. Script identification still decides
-/// whether an in-balloon region is cleaned, so Latin protection remains in the
-/// gate; outside-balloon text retains the run's explicit policy.
-pub fn seed_adopted_text(page: &Raster, segmentation: &mut Segmentation, regions: &[Region]) {
-    for region in regions {
-        let bounds = region.text_bounds().grown(0, page.width, page.height);
-        if bounds.w == 0 || bounds.h == 0 {
-            continue;
+/// The bounded ink estimate [`crate::text_groups`] gives a text box no mask
+/// pixel covers. The companion detector finds Korean and Chinese lettering the
+/// primary one can miss, but has no mask output; without this such a box has
+/// nothing for the gate to split into lines or for the fit to seed from.
+pub(crate) fn otsu_ink(page: &Raster, bounds: Rect) -> Option<Mask> {
+    if bounds.w == 0 || bounds.h == 0 {
+        return None;
+    }
+    let mut histogram = [0u32; 256];
+    for y in bounds.y..bounds.bottom() {
+        for x in bounds.x..bounds.right() {
+            let level = (page.luma16_at(x as u32, y as u32) >> 8) as usize;
+            histogram[level] += 1;
         }
-        let existing = (bounds.y..bounds.bottom())
-            .flat_map(|y| (bounds.x..bounds.right()).map(move |x| (x, y)))
-            .filter(|&(x, y)| {
-                x >= 0 && y >= 0 && segmentation.is_text(x as u32, y as u32)
-            })
-            .count();
-        let meaningful_existing = ((bounds.w as usize * bounds.h as usize) / 100).max(4);
-        if existing >= meaningful_existing {
-            continue;
-        }
-
-        let mut histogram = [0u32; 256];
-        for y in bounds.y..bounds.bottom() {
-            for x in bounds.x..bounds.right() {
-                let level = (page.luma16_at(x as u32, y as u32) >> 8) as usize;
-                histogram[level] += 1;
-            }
-        }
-        let Some(threshold) = otsu_threshold(&histogram) else { continue };
-        let low: u32 = histogram[..=threshold].iter().sum();
-        let high: u32 = histogram[threshold + 1..].iter().sum();
-        let ink_is_low = low <= high;
-        let ink = low.min(high);
-        let total = low + high;
-        // Text must be a visible population, but cannot occupy most of its own
-        // detector box. These broad bounds admit dense Hangul and Han while
-        // refusing one-pixel noise and near-even texture.
-        if ink < 4 || ink * 100 < total || ink * 100 > total * 45 {
-            continue;
-        }
-        for y in bounds.y..bounds.bottom() {
-            for x in bounds.x..bounds.right() {
-                let level = (page.luma16_at(x as u32, y as u32) >> 8) as usize;
-                let is_ink = if ink_is_low { level <= threshold } else { level > threshold };
-                if is_ink && x < segmentation.width as i64 && y < segmentation.height as i64 {
-                    segmentation.levels[y as usize * segmentation.width as usize + x as usize] = 255;
-                }
+    }
+    let threshold = otsu_threshold(&histogram)?;
+    let low: u32 = histogram[..=threshold].iter().sum();
+    let high: u32 = histogram[threshold + 1..].iter().sum();
+    let ink_is_low = low <= high;
+    let ink = low.min(high);
+    let total = low + high;
+    // Text must be a visible population, but cannot occupy most of its own
+    // detector box.
+    if ink < 4 || ink * 100 < total || ink * 100 > total * 45 {
+        return None;
+    }
+    let mut mask = Mask::empty(bounds);
+    for y in bounds.y..bounds.bottom() {
+        for x in bounds.x..bounds.right() {
+            let level = (page.luma16_at(x as u32, y as u32) >> 8) as usize;
+            let is_ink = if ink_is_low { level <= threshold } else { level > threshold };
+            if is_ink {
+                mask.set(x, y, true);
             }
         }
     }
+    Some(mask)
 }
 
 fn otsu_threshold(histogram: &[u32; 256]) -> Option<usize> {
@@ -694,21 +622,6 @@ const MIN_RING_SAMPLES: usize = 16;
 /// short ring honestly.
 const MIN_RING_COVERAGE_PERCENT: usize = 50;
 
-/// And below this share of the box's own on-page pixels, in percent, the paper
-/// *between* the strokes is not a sample of the box.
-///
-/// The inside's counterpart to [`MIN_RING_COVERAGE_PERCENT`], and a fifth
-/// rather than that constant's half, because the two are shaped differently. A
-/// ring is drawn where the letterer left clearance, so half of it surviving the
-/// text mask is a modest ask; the inside of a text box is mostly lettering by
-/// construction, and after [`TEXT_HALO`] a dense block leaves much less. Over
-/// the 28 reference scans the narration boxes this reading exists for keep 50%
-/// to 62% of their pixels, and the least any of the 254 regions keeps is 15%.
-/// So this is a floor against a box that is *all* stroke and not a threshold
-/// anything real is near: under it, what is left is the gaps inside the glyphs,
-/// and a reading from those is the lettering's own antialiasing.
-const MIN_INNER_PAPER_PERCENT: usize = 20;
-
 /// A ring's off-fill pixels may form at most this many separate runs and still
 /// be read as an outline. A rim crossing one of [`ring_sides`]' four segments
 /// enters and leaves it, so a balloon whose rim dips inside the walk on every
@@ -726,28 +639,6 @@ const FILL_SHARE_PERCENT: usize = 92;
 /// it - all darker, or all lighter - for the ring to read as an outline rather
 /// than as picture. Ink is one-sided; art is not.
 const ONE_SIDED_PERCENT: usize = 95;
-
-/// How much of a box's **inside** may sit off its own fill and the box still be
-/// read as paper with lettering on it, in percent of the readable pixels.
-///
-/// A ring gets [`FILL_SHARE_PERCENT`], which leaves it an eighth of itself.
-/// That is the right budget for a ring - a one-pixel line of clearance where
-/// anything off the fill is a defect in it - and the wrong one for the inside
-/// of a text box, which contains ink by construction: the frame a narration box
-/// is drawn with, furigana, a stroke thinner than the segmentation caught, an
-/// antialiased edge [`TEXT_HALO`] did not reach. Twice a ring's allowance, and
-/// the measurement is what makes that a number rather than a gesture. Over the
-/// 28 reference scans, of the regions whose off-fill pixels are one-sided the
-/// four narration boxes this reading exists for sit at 6%, 10%, 10% and 14%,
-/// and the nearest thing that must **not** read as paper - a sound effect over
-/// art, a caption over tone - is at 19%. The gap runs from 15 to 17 and twice
-/// the ring's eighth lands in it.
-///
-/// It is only ever reached by a one-sided population. Art strays both ways and
-/// is refused by [`RingRead::is_one_sided`] before this is asked; what this
-/// bounds is how much *ink* a box may hold, and a screentone is ink that covers
-/// far more of its box than any lettering does.
-const INNER_OFF_PERCENT: usize = 2 * (100 - FILL_SHARE_PERCENT);
 
 /// Each of [`ring_sides`]' segments is its side less one of these fractions off
 /// each end - a quarter each way, so the middle half. Four rather than three or
@@ -768,48 +659,22 @@ const MAX_FILL_DEPTH: u32 = 8;
 /// How the paper immediately outside a text box reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interior {
-    /// A band of uniform fill, deep enough to be a balloon's interior. `level`
-    /// is that fill in 16-bit luma - the *page's* tone, never snapped to white,
-    /// for the same reason [`crate::fit::ring`] refuses to snap one - and
-    /// `depth` is how many native pixels of it were walked.
-    ///
-    /// **`depth: 0` means the fill was read *inside* the box and not walked
-    /// outside it** ([`inner_paper`]). There is no band around the lettering to
-    /// report a depth for - the answer came from the paper between the strokes -
-    /// and zero is the honest number for it rather than a walk that found
-    /// nothing. A caller reading `depth` as *how much clearance this text has*
-    /// should treat 0 as unknown, not as none.
+    /// A band of uniform fill that is a balloon's interior: closed by a thin
+    /// outline at least [`MIN_FILL_DEPTH`] out, or running unbroken across the
+    /// whole walk. `level` is that fill in 16-bit luma - the *page's* tone,
+    /// never snapped to white, for the same reason [`crate::fit::ring`] refuses
+    /// to snap one - and `depth` is how many native pixels of it were walked:
+    /// up to the outline, or to [`scan_depth`] when nothing ended it.
     Solid { level: u16, depth: u32 },
-    /// Picture: screentone, hatching, or art. Not a balloon's interior.
+    /// Picture: screentone, hatching, or art, less than [`MIN_FILL_DEPTH`] out.
+    /// Not a balloon's interior.
     Textured,
-    /// Not enough paper to say. A region at a page edge, a box that abuts ink
-    /// at once, or a band that ran out before it was deep enough to mean
-    /// anything.
+    /// Not enough paper to say, or a band the walk will not count. A region at
+    /// a page edge, a box that abuts ink at once, a band that ran out before it
+    /// was deep enough to mean anything, or one that ended in picture rather
+    /// than at an outline - which is what a sound effect's own white outline
+    /// over art looks like.
     Unreadable,
-}
-
-impl Interior {
-    /// The page's reading and the detector's, combined.
-    ///
-    /// Asymmetric on purpose - see the module note. Uniform fill overrules an
-    /// *outside*, picture overrules a *bubble*, and [`Interior::Unreadable`]
-    /// leaves the detector's answer exactly as it arrived.
-    ///
-    /// Picture does **not** overrule [`Detected::TextInBubble`]. That grade is
-    /// the model answering this exact question about this exact text with a
-    /// score at or above [`SURE_SCORE`], and the paper reading is a heuristic
-    /// whose own note admits the scans it fails on. Measured on six real pages
-    /// of a noisy scan: nine regions the detector placed in a balloon at
-    /// 0.88–0.94 were vetoed as picture, every one of them ordinary dialogue in
-    /// an ordinary white balloon, and every one of them went to review under
-    /// *"text outside a speech bubble"*.
-    pub fn settles(self, detector: Detected) -> bool {
-        match self {
-            Interior::Solid { .. } => true,
-            Interior::Textured => detector == Detected::TextInBubble,
-            Interior::Unreadable => detector.inside(),
-        }
-    }
 }
 
 /// How deep a band of fill this box needs before it counts, in native pixels.
@@ -845,8 +710,8 @@ fn scan_depth(bbox: Rect) -> u32 {
 /// anywhere else: a text block filling two thirds of an ellipse has tens of
 /// pixels of clearance on the axes and none at all on the diagonal, so ring 1
 /// already reads the art beyond the rim, that art is two-sided screentone, and
-/// the walk calls picture at depth 0 - [`Interior::Textured`], which overrules a
-/// detector that was right.
+/// the walk calls picture at depth 0 - [`Interior::Textured`], about the very
+/// balloon a detector miss needed the page to find.
 ///
 /// Every balloon shape this application meets is convex or nearly so, and on a
 /// convex shape the clearance from a box's side is largest at that side's
@@ -984,19 +849,6 @@ fn fill_band(page: &Raster, text: &Mask, bbox: Rect) -> Option<(u16, u16)> {
             values.push(page.luma16_at(x as u32, y as u32));
         }
     }
-    band_of(values)
-}
-
-/// The level and tolerance of a set of paper samples, however they were
-/// gathered.
-///
-/// Lifted out of [`fill_band`] so that the reading *inside* a box
-/// ([`inner_paper`]) is measured by the same machinery as the rings around it:
-/// the median as the fill, and the [`TOLERANCE_PERCENTILE`] of the samples'
-/// own deviations from it - given [`TOLERANCE_MARGIN`] and held between
-/// [`FILL_TOLERANCE`] and [`MAX_FILL_TOLERANCE`] - as how far from it a pixel
-/// may sit and still be that fill.
-fn band_of(mut values: Vec<u16>) -> Option<(u16, u16)> {
     if values.len() < MIN_RING_SAMPLES {
         return None;
     }
@@ -1044,95 +896,6 @@ fn text_halo(seg: &Segmentation, area: Rect) -> Mask {
     mask
 }
 
-/// The paper **between** the strokes, if it is one uniform fill.
-///
-/// The ring walk asks what is around a text box. That question has an answer
-/// only where there is room for one, and a rectangular narration box is drawn
-/// with none: its frame sits tight against the lettering, so ring 1 is already
-/// on the frame, the frame is not deep enough to be a band, and the walk
-/// returns [`Interior::Textured`] - picture - about a white box with black
-/// text in it. Four of them across the reference scans, every one of them real
-/// narration going to review under *"text outside a speech bubble"* while the
-/// page's balloons cleaned.
-///
-/// So this reads the other side of the same paper. Every on-page pixel of the
-/// box that the (already grown) text mask does not claim is a sample; the
-/// samples must number at least [`MIN_RING_SAMPLES`], make up at least
-/// [`MIN_INNER_PAPER_PERCENT`] of the box, and leave *something* to the text
-/// mask; and they are then measured by the
-/// machinery the rings are measured by - [`band_of`] for the level and the
-/// tolerance, [`ONE_SIDED_PERCENT`] for what falls off it, and
-/// [`INNER_OFF_PERCENT`] for how much may.
-///
-/// **The two thresholds do different jobs and both are needed.** One-sidedness
-/// refuses art, which strays both ways, while admitting the thing this exists
-/// for: a frame line clipped into the box, or an antialiased edge the halo did
-/// not reach, is ink, and ink is darker than the paper and nothing else.
-/// [`INNER_OFF_PERCENT`] then refuses screentone, which is one-sided too - a
-/// tone's dots are far off the fill, the tolerance is capped at
-/// [`MAX_FILL_TOLERANCE`] so it cannot widen to swallow them, and any visible
-/// density covers more of its box than lettering and its frame do.
-///
-/// Returns the fill level. `None` is *not flat* and *not enough to say* alike  - 
-/// the caller has the ring walk's answer for both.
-fn inner_paper(page: &Raster, text: &Mask, bbox: Rect) -> Option<u16> {
-    let (level, read) = inner_read(page, text, bbox)?;
-    // `runs` is left at zero and `is_outline` is never asked: a run is a fact
-    // about walking a line, and this is a set of scattered pixels with no line
-    // to walk. The one-sidedness is asked directly instead, and the share it is
-    // asked alongside is the inside's own.
-    let within = read.off * 100 <= read.samples * INNER_OFF_PERCENT;
-    (within && read.is_one_sided()).then_some(level)
-}
-
-/// The counts [`inner_paper`] decides on: the fill level of the paper between
-/// the strokes and how the rest of it sits against that fill. Separate so a
-/// test can say *which* count refused a page rather than only that one did.
-fn inner_read(page: &Raster, text: &Mask, bbox: Rect) -> Option<(u16, RingRead)> {
-    let mut on_page = 0usize;
-    let mut values: Vec<u16> = Vec::new();
-    for y in bbox.y..bbox.bottom() {
-        for x in bbox.x..bbox.right() {
-            if x < 0 || y < 0 || x >= page.width as i64 || y >= page.height as i64 {
-                continue;
-            }
-            on_page += 1;
-            if text.contains(x, y) {
-                continue;
-            }
-            values.push(page.luma16_at(x as u32, y as u32));
-        }
-    }
-    if values.len() < MIN_RING_SAMPLES
-        || values.len() * 100 < on_page * MIN_INNER_PAPER_PERCENT
-        // The paper *between the strokes* presupposes strokes. A rectangle the
-        // text mask claims nothing in is not a text box being read from the
-        // inside, it is a patch of the page - and a blank patch of any picture
-        // is uniform. The walk outside is the only opinion worth having about
-        // one, so this hands it back rather than answering *balloon* about
-        // every flat rectangle on the page.
-        || values.len() == on_page
-    {
-        return None;
-    }
-    let (level, tolerance) = band_of(values.clone())?;
-
-    let mut read =
-        RingRead { on_page, samples: values.len(), off: 0, darker: 0, lighter: 0, runs: 0 };
-    for luma in values {
-        if luma.abs_diff(level) <= tolerance {
-            continue;
-        }
-        read.off += 1;
-        if luma < level {
-            read.darker += 1;
-        } else {
-            read.lighter += 1;
-        }
-    }
-    Some((level, read))
-}
-
 /// [`interior`], with the text mask taken from the detector's segmentation.
 pub fn interior_of(page: &Raster, seg: &Segmentation, bbox: Rect) -> Interior {
     let reach = scan_depth(bbox) + TEXT_HALO + 1;
@@ -1147,8 +910,8 @@ pub fn interior_of(page: &Raster, seg: &Segmentation, bbox: Rect) -> Interior {
 /// band. [`interior_of`] builds it from a [`Segmentation`]; a caller with a
 /// mask of its own passes that.
 ///
-/// The walk takes one ring per native pixel of offset and stops at the first
-/// one that is not the fill:
+/// The walk takes one ring per native pixel of offset, out to [`scan_depth`],
+/// and stops at the first one that is not the fill:
 ///
 /// - **Fill** - [`FILL_SHARE_PERCENT`] of the ring within [`FILL_TOLERANCE`] of
 ///   the level the innermost rings set. Deepens the band.
@@ -1157,34 +920,21 @@ pub fn interior_of(page: &Raster, seg: &Segmentation, bbox: Rect) -> Interior {
 ///   with uniform fill behind it is what a balloon's edge is. Nothing beyond it
 ///   is read at all, which is the point - beyond a balloon's outline is not the
 ///   balloon.
-/// - **Picture** - anything else. Stops the walk, and with no band behind it
-///   the region is out of a balloon.
+/// - **Picture** - anything else. Stops the walk.
 ///
-/// **The walk is the first opinion, not the only one.** Where it finds a band
-/// it is answered and nothing else is asked; where it does not - picture at
-/// depth 0, or too little paper to say - the paper *between* the strokes is
-/// read instead ([`inner_paper`]), and a box whose inside is one uniform fill
-/// is [`Interior::Solid`] at `depth: 0`. The order matters in one direction
-/// only: a walk that found a real band has measured a real balloon, and the
-/// inside can add nothing to that. The reverse is not true, which is the whole
-/// reason for the second reading - a narration box has no band to find and is
-/// still white paper with black text on it.
+/// **A band counts only when it is closed or never ends.** Closed: an outline
+/// stopped the walk at least [`MIN_FILL_DEPTH`] out. Never ends: the walk ran
+/// its whole depth without meeting picture, and the band is at least
+/// [`required_depth`] deep. A band that ends in picture is not counted however
+/// deep it was, and that is the whole of what separates a chat box from a
+/// sound effect: an effect drawn with a white outline over art has 3 to 8
+/// pixels of white around its strokes and then art, which the walk used to
+/// accept as soon as the white was deep enough. The walk does not stop early
+/// to accept it now; it reads on until the band is closed or broken.
 pub fn interior(page: &Raster, text: &Mask, bbox: Rect) -> Interior {
     if bbox.w == 0 || bbox.h == 0 {
         return Interior::Unreadable;
     }
-    let walked = ring_walk(page, text, bbox);
-    if matches!(walked, Interior::Solid { .. }) {
-        return walked;
-    }
-    match inner_paper(page, text, bbox) {
-        Some(level) => Interior::Solid { level, depth: 0 },
-        None => walked,
-    }
-}
-
-/// The walk itself: [`interior`] less its second opinion.
-fn ring_walk(page: &Raster, text: &Mask, bbox: Rect) -> Interior {
     let Some((level, tolerance)) = fill_band(page, text, bbox) else {
         return Interior::Unreadable;
     };
@@ -1203,9 +953,6 @@ fn ring_walk(page: &Raster, text: &Mask, bbox: Rect) -> Interior {
         }
         if read.is_fill() {
             depth += 1;
-            if depth >= wanted {
-                return Interior::Solid { level, depth };
-            }
             continue;
         }
         stopped_on_outline = read.is_outline();
@@ -1213,14 +960,14 @@ fn ring_walk(page: &Raster, text: &Mask, bbox: Rect) -> Interior {
         break;
     }
 
-    if depth >= wanted || (stopped_on_outline && depth >= MIN_FILL_DEPTH) {
+    if (stopped_on_outline && depth >= MIN_FILL_DEPTH) || (!stopped_on_picture && depth >= wanted) {
         return Interior::Solid { level, depth };
     }
     if stopped_on_picture && depth < MIN_FILL_DEPTH {
         return Interior::Textured;
     }
-    // A band that was going the right way and ran out. Not a verdict: the
-    // detector's answer is better than this one.
+    // A band that ran into picture, or ran out before it was deep enough. Not a
+    // verdict either way: the detector's answer stands.
     Interior::Unreadable
 }
 
@@ -1409,269 +1156,33 @@ pub fn merge_crosses_a_balloon(page: &Raster, seg: &Segmentation, a: Rect, b: Re
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "manual local ONNX runtime and small RT-DETR graph required"]
+    fn native_cpu_small_graph_runs_synthetic_page() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        let graph = std::env::var("RT_GRAPH").expect("RT_GRAPH");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        let mut model = BalloonDetector::open(Path::new(&graph), crate::accel::Preference::CpuOnly).unwrap();
+        assert_eq!(model.selection().accelerator, crate::accel::Accelerator::Cpu);
+        let page = crate::image::fixtures::by_name("l8").raster;
+        let _boxes = model.detect(&page).unwrap();
+    }
+
     fn balloon(x: i64, y: i64, w: u32, h: u32, class: BalloonClass) -> BalloonBox {
         BalloonBox { rect: Rect::new(x, y, w, h), class, score: 0.9 }
-    }
-
-    /* ---- adopt_uncovered_text ---- */
-
-    use crate::detect::{DetBox, build_regions};
-
-    fn text_region(x: i64, y: i64, w: u32, h: u32) -> Vec<Region> {
-        build_regions(
-            vec![DetBox {
-                rect: Rect::new(x, y, w, h),
-                confidence: 0.9,
-                language: DetectedLanguage::Japanese,
-            }],
-            1000,
-            1000,
-        )
-    }
-
-    fn gray_raster(width: u32, height: u32, data: Vec<u8>) -> Raster {
-        Raster {
-            width,
-            height,
-            mode: ColorMode::Gray,
-            depth: BitDepth::Eight,
-            icc: None,
-            palette: None,
-            trns: None,
-            srgb_intent: None,
-            data,
-        }
-    }
-
-    fn empty_segmentation(width: u32, height: u32) -> Segmentation {
-        Segmentation {
-            width,
-            height,
-            levels: vec![0; width as usize * height as usize],
-            fit: Letterbox::fit(width, height),
-        }
-    }
-
-    #[test]
-    fn an_adopted_box_gets_a_local_ink_seed_when_the_primary_mask_missed_it() {
-        let mut data = vec![245; 80 * 60];
-        // Several disconnected, high-contrast strokes, shaped like the dense
-        // block glyphs this path was added for rather than one solid rectangle.
-        for &(x, y, w, h) in &[(25, 20, 4, 20), (34, 20, 4, 20), (25, 27, 13, 4)] {
-            for py in y..y + h {
-                for px in x..x + w {
-                    data[py * 80 + px] = 20;
-                }
-            }
-        }
-        let page = gray_raster(80, 60, data);
-        let region = Region::from_box(
-            Rect::new(20, 15, 24, 30),
-            0.9,
-            DetectedLanguage::Japanese,
-            80,
-            60,
-            0,
-        );
-        let mut segmentation = empty_segmentation(80, 60);
-        // One unrelated primary-mask pixel must not suppress recovery of the
-        // whole missed block.
-        segmentation.levels[18 * 80 + 22] = 255;
-
-        seed_adopted_text(&page, &mut segmentation, std::slice::from_ref(&region));
-
-        assert!(segmentation.is_text(26, 22), "dark glyph stroke was not seeded");
-        assert!(!segmentation.is_text(22, 17), "the light paper became ink");
-        assert!(!segmentation.is_text(2, 2), "the fallback escaped its recovered box");
-        let seed = crate::fit::seed_mask(&segmentation, &region, page.width, page.height);
-        assert!(!seed.is_empty(), "the normal cleaning pipeline still received an empty seed");
-        let edges = crate::fit::EdgeMap::sobel(&page);
-        let fitted = crate::fit::fit(
-            &page,
-            &seed,
-            segmentation.proxy_scale(),
-            crate::fit::page_noise_sigma(&page),
-            &edges,
-            false,
-        );
-        let rendered = crate::engines::fill::render(&page, &fitted);
-        let local_x = 26 - fitted.mask.bounds.x as u32;
-        let local_y = 22 - fitted.mask.bounds.y as u32;
-        assert!(fitted.mask.contains(26, 22), "fitting lost the recovered glyph");
-        assert!(
-            rendered.sample(local_x, local_y, 0) > 200,
-            "the normal fill path left the recovered dark ink in place"
-        );
-    }
-
-    #[test]
-    fn flat_paper_does_not_turn_an_adopted_box_into_a_cleaning_mask() {
-        let page = gray_raster(40, 40, vec![240; 40 * 40]);
-        let region = Region::from_box(
-            Rect::new(10, 10, 20, 20),
-            0.9,
-            DetectedLanguage::Japanese,
-            40,
-            40,
-            0,
-        );
-        let mut segmentation = empty_segmentation(40, 40);
-        seed_adopted_text(&page, &mut segmentation, &[region]);
-        assert!(segmentation.levels.iter().all(|&level| level == 0));
-    }
-
-    #[test]
-    fn a_text_box_no_region_covers_is_adopted() {
-        let regions = text_region(0, 0, 60, 60);
-        let balloons = [balloon(400, 400, 120, 80, BalloonClass::TextFree)];
-        let adopted = adopt_uncovered_text(&regions, &balloons, 1000, 1000, 3_600);
-        assert_eq!(adopted.len(), 1);
-        // Grown exactly as a detector box is: +2 all sides and +3 right for the
-        // tight tier, +5 more all round for the extended tier, which is the
-        // masking box, and +20 for the reference.
-        let region = &adopted[0];
-        assert_eq!(region.members[0].tight, Rect::new(398, 398, 125, 84));
-        assert_eq!(region.masking, Rect::new(393, 393, 135, 94));
-        assert_eq!(region.reference, region.masking.grown(20, 1000, 1000));
-        assert_eq!(region.members[0].confidence, 0.9);
-        assert!(!region.flagged_large);
-    }
-
-    #[test]
-    fn a_text_box_whose_centre_a_region_holds_is_not_adopted() {
-        let regions = text_region(400, 400, 120, 80);
-        let balloons = [balloon(440, 420, 30, 30, BalloonClass::TextFree)];
-        assert!(adopt_uncovered_text(&regions, &balloons, 1000, 1000, 3_600).is_empty());
-    }
-
-    /// The centre alone is not enough: a box reaching well into a region from
-    /// outside is the same text seen twice, and the merge's own threshold is
-    /// what says so.
-    #[test]
-    fn a_text_box_overlapping_a_region_is_not_adopted() {
-        let regions = text_region(400, 400, 200, 200);
-        // Centre at (700, 500), outside the region, but half of this box lies
-        // inside it.
-        let balloons = [balloon(500, 450, 400, 100, BalloonClass::TextFree)];
-        assert!(adopt_uncovered_text(&regions, &balloons, 1000, 1000, 3_600).is_empty());
-    }
-
-    #[test]
-    fn a_bubble_shape_is_not_text_and_is_never_adopted() {
-        let regions = text_region(0, 0, 60, 60);
-        let balloons = [balloon(400, 400, 120, 80, BalloonClass::Bubble)];
-        assert!(adopt_uncovered_text(&regions, &balloons, 1000, 1000, 3_600).is_empty());
-    }
-
-    #[test]
-    fn a_text_box_the_detector_is_unsure_of_is_not_adopted() {
-        let regions = text_region(0, 0, 60, 60);
-        let weak = BalloonBox {
-            rect: Rect::new(400, 400, 120, 80),
-            class: BalloonClass::TextFree,
-            score: SURE_SCORE - 0.01,
-        };
-        assert!(adopt_uncovered_text(&regions, &[weak], 1000, 1000, 3_600).is_empty());
-    }
-
-    /// A `text_bubble` box is adopted on the same terms. It almost never
-    /// happens - over the 28 real scans the text detector emitted a box for
-    /// every one of them - but a balloon whose lettering the text detector
-    /// missed is the same miss as a narration box's.
-    #[test]
-    fn a_text_in_bubble_box_no_region_covers_is_adopted_too() {
-        let regions = text_region(0, 0, 60, 60);
-        let balloons = [balloon(400, 400, 120, 80, BalloonClass::TextInBubble)];
-        assert_eq!(adopt_uncovered_text(&regions, &balloons, 1000, 1000, 3_600).len(), 1);
-    }
-
-    /// 01.png's chapter title strip: 78×1146 down the side of a 1536-row page,
-    /// which is taller than a quarter of it. Flagged for review, not dropped
-    /// and not silently cleaned.
-    #[test]
-    fn an_enormous_adopted_box_is_flagged_large() {
-        let regions = text_region(0, 0, 60, 60);
-        let balloons = [balloon(1000, 70, 78, 1146, BalloonClass::TextFree)];
-        let adopted = adopt_uncovered_text(&regions, &balloons, 1080, 1536, 3_600);
-        assert!(adopted[0].flagged_large);
-    }
-
-    /// And the other half of the size rules stays off. A small adopted box
-    /// exists *because* the text detector emitted nothing there, so measuring
-    /// it against the median of what the text detector did emit and dropping
-    /// it would throw away the only evidence the page has.
-    #[test]
-    fn a_small_adopted_box_is_never_dropped() {
-        let regions = text_region(0, 0, 200, 200);
-        let balloons = [BalloonBox {
-            rect: Rect::new(600, 600, 20, 20),
-            class: BalloonClass::TextFree,
-            score: 0.55,
-        }];
-        // 400 px² against a 40 000 px² median is far under the 0.15 floor, and
-        // 0.55 is under `SIZE_DROP_MAX_CONFIDENCE`, so the detector's own rule
-        // would drop this box.
-        assert_eq!(adopt_uncovered_text(&regions, &balloons, 1000, 1000, 40_000).len(), 1);
-    }
-
-    /// The balloon detector emits more than one box for one piece of text - on
-    /// 01.png nine `text_bubble` boxes stand over six regions - and two of a
-    /// duplicate pair are not two regions. The stronger one is taken and the
-    /// weaker is then covered by it, on exactly the tests a text-detector
-    /// region would have covered it with.
-    #[test]
-    fn two_boxes_over_one_piece_of_text_become_one_region() {
-        let regions = text_region(0, 0, 60, 60);
-        let weaker =
-            BalloonBox { rect: Rect::new(400, 400, 120, 80), class: BalloonClass::TextFree, score: 0.6 };
-        let stronger =
-            BalloonBox { rect: Rect::new(410, 405, 120, 80), class: BalloonClass::TextFree, score: 0.9 };
-        let adopted = adopt_uncovered_text(&regions, &[weaker.clone(), stronger.clone()], 1000, 1000, 3_600);
-        assert_eq!(adopted.len(), 1, "a duplicate pair became two regions");
-        assert_eq!(adopted[0].members[0].confidence, 0.9, "the model's own best answer is the one kept");
-        assert_eq!(adopted[0].members[0].tight, Rect::new(408, 403, 125, 84));
-
-        // And the order the detector returned them in does not decide it.
-        let reversed = adopt_uncovered_text(&regions, &[stronger, weaker], 1000, 1000, 3_600);
-        assert_eq!(reversed, adopted);
-    }
-
-    /// Two boxes far enough apart are two pieces of text, and the chain must
-    /// not swallow the second.
-    #[test]
-    fn two_boxes_over_different_text_stay_two_regions() {
-        let regions = text_region(0, 0, 60, 60);
-        let balloons = [
-            balloon(400, 400, 120, 80, BalloonClass::TextFree),
-            balloon(700, 700, 120, 80, BalloonClass::TextFree),
-        ];
-        assert_eq!(adopt_uncovered_text(&regions, &balloons, 1000, 1000, 3_600).len(), 2);
-    }
-
-    /// The ids a run hands out are list indices, so the two sources have to end
-    /// up in one reading order rather than appended.
-    #[test]
-    fn the_adopted_regions_sort_into_reading_order_with_the_rest() {
-        let mut regions = text_region(400, 400, 60, 60);
-        let balloons = [balloon(100, 100, 80, 60, BalloonClass::TextFree)];
-        let adopted = adopt_uncovered_text(&regions, &balloons, 1000, 1000, 3_600);
-        regions.extend(adopted);
-        crate::detect::sort_regions(&mut regions);
-        assert_eq!(regions[0].masking.y, 93, "the adopted box is higher up the page");
-        assert_eq!(regions[1].masking.y, 393);
     }
 
     #[test]
     fn a_region_inside_a_bubble_is_in_a_balloon() {
         let balloons = [balloon(0, 0, 200, 200, BalloonClass::Bubble)];
-        assert!(in_balloon(Rect::new(50, 50, 40, 40), &balloons));
+        assert!(detected(Rect::new(50, 50, 40, 40), &balloons).inside());
     }
 
     #[test]
     fn a_region_with_no_balloon_over_it_is_not() {
         let balloons = [balloon(500, 500, 200, 200, BalloonClass::Bubble)];
-        assert!(!in_balloon(Rect::new(50, 50, 40, 40), &balloons));
-        assert!(!in_balloon(Rect::new(50, 50, 40, 40), &[]));
+        assert!(!detected(Rect::new(50, 50, 40, 40), &balloons).inside());
+        assert!(!detected(Rect::new(50, 50, 40, 40), &[]).inside());
     }
 
     #[test]
@@ -1681,14 +1192,14 @@ mod tests {
             balloon(0, 0, 1000, 1000, BalloonClass::Bubble),
             balloon(400, 400, 200, 200, BalloonClass::TextFree),
         ];
-        assert!(!in_balloon(Rect::new(450, 450, 100, 100), &balloons));
+        assert!(!detected(Rect::new(450, 450, 100, 100), &balloons).inside());
     }
 
     #[test]
     fn containment_is_of_the_centre_rather_than_of_any_corner() {
         // A tall sound effect whose top corner clips a balloon.
         let balloons = [balloon(0, 0, 200, 200, BalloonClass::Bubble)];
-        assert!(!in_balloon(Rect::new(150, 150, 400, 400), &balloons));
+        assert!(!detected(Rect::new(150, 150, 400, 400), &balloons).inside());
     }
 
     /// The jagged balloon the paper walk reads as picture. A sure `bubble` box
@@ -1699,10 +1210,8 @@ mod tests {
         let balloons = [balloon(400, 100, 220, 480, BalloonClass::Bubble)];
         let region = Rect::new(414, 115, 177, 430);
         assert_eq!(detected(region, &balloons), Detected::TextInBubble);
-        assert!(
-            Interior::Textured.settles(detected(region, &balloons)),
-            "a spiky outline read as picture must not veto an enclosing balloon"
-        );
+        // Was a `settles` veto check; paper can no longer veto, so the grade
+        // matters for the gate's reader, which asks for exactly this one.
     }
 
     /// 02.png's own geometry: one two-lobed balloon, two `bubble` boxes that
@@ -1750,7 +1259,9 @@ mod tests {
         let balloons = [balloon(0, 0, 400, 400, BalloonClass::Bubble)];
         let region = Rect::new(100, 100, 500, 500);
         assert_eq!(detected(region, &balloons), Detected::Bubble);
-        assert!(!Interior::Textured.settles(detected(region, &balloons)));
+        // Was "picture overrules a Bubble"; under `in_bubble` a Bubble is inside
+        // whatever the paper says, and only the reader's grade stays lower.
+        assert!(detected(region, &balloons).inside());
     }
 
     /// A `bubble` box that only just cleared emission is not the model being
@@ -1805,7 +1316,7 @@ mod tests {
         ];
         let region = Rect::new(450, 450, 100, 100);
         assert_eq!(detected(region, &balloons), Detected::Outside);
-        assert!(!Interior::Textured.settles(detected(region, &balloons)));
+        assert!(!detected(region, &balloons).inside());
     }
 
     // The paper reading. Every page below is 8-bit grey, because §4 makes the
@@ -1830,6 +1341,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }
@@ -1883,8 +1395,11 @@ mod tests {
         let page = gray_page(240, 240, |x, y| if glyphs(x, y) { 20 } else { 246 });
         let seg = segmentation(240, 240, glyphs);
         let read = interior_of(&page, &seg, BOX);
-        assert_eq!(read, Interior::Solid { level: 246 * 257, depth: 6 });
-        assert!(read.settles(Detected::Outside), "a detector miss is what this exists to overrule");
+        // Depth was 6 (the early return at `required_depth`); the strict walk
+        // reads on to `scan_depth` when nothing ends the band.
+        assert!(matches!(read, Interior::Solid { level, .. } if level == 246 * 257), "{read:?}");
+        assert!(depth_of(read) > required_depth(BOX), "the walk stopped early: {read:?}");
+        assert!(in_bubble(&page, &seg, BOX, BOX, &[]), "a detector miss is what this exists to overrule");
     }
 
     /// The other half of the objection to reading balloons off the page:
@@ -1901,7 +1416,10 @@ mod tests {
             }
         });
         let seg = segmentation(240, 240, glyphs);
-        assert_eq!(interior_of(&page, &seg, BOX), Interior::Solid { level: 18 * 257, depth: 6 });
+        // Depth was 6: no early return, and the black fill runs past the walk.
+        let read = interior_of(&page, &seg, BOX);
+        assert!(matches!(read, Interior::Solid { level, .. } if level == 18 * 257), "{read:?}");
+        assert!(depth_of(read) > required_depth(BOX), "the walk stopped early: {read:?}");
     }
 
     #[test]
@@ -1918,11 +1436,38 @@ mod tests {
         let seg = segmentation(240, 240, glyphs);
         let read = interior_of(&page, &seg, BOX);
         assert_eq!(read, Interior::Textured);
-        assert!(!read.settles(Detected::Bubble), "picture outside the text overrules a bubble box");
-        assert!(
-            read.settles(Detected::TextInBubble),
-            "but not the model's own confident answer to the balloon question"
-        );
+        // Was "picture overrules a Bubble but not a TextInBubble"; paper can
+        // no longer veto, so picture only means the page rescues nothing.
+        assert!(!in_bubble(&page, &seg, BOX, BOX, &[]), "picture rescues nothing");
+    }
+
+    /// The detector's *inside* wins even where the paper reads picture: the
+    /// page only ever adds an answer, and every grade but `Outside` is one.
+    #[test]
+    fn the_detector_s_inside_wins_even_when_the_paper_reads_picture() {
+        let page = gray_page(240, 240, |x, y| {
+            if glyphs(x, y) {
+                20
+            } else if hatched(x, y) {
+                40
+            } else {
+                250
+            }
+        });
+        let seg = segmentation(240, 240, glyphs);
+        assert_eq!(interior_of(&page, &seg, BOX), Interior::Textured);
+        let masking = BOX.grown(5, 240, 240);
+        let sure = balloon(60, 60, 120, 120, BalloonClass::TextInBubble);
+        let weak = BalloonBox { score: 0.4, ..sure.clone() };
+        let shape = balloon(110, 110, 120, 120, BalloonClass::Bubble);
+        for boxes in [vec![sure.clone()], vec![weak], vec![shape]] {
+            assert!(detected(masking, &boxes).inside());
+            assert!(in_bubble(&page, &seg, BOX, masking, &boxes), "{boxes:?}");
+        }
+        // And `text_free` over the centre is the detector saying *outside*,
+        // which picture does not rescue.
+        let free = balloon(60, 60, 120, 120, BalloonClass::TextFree);
+        assert!(!in_bubble(&page, &seg, BOX, masking, &[sure, free]));
     }
 
     /// The scan this module was measured against after it shipped: white paper
@@ -1949,7 +1494,7 @@ mod tests {
         let seg = segmentation(240, 240, glyphs);
         let read = interior_of(&page, &seg, BOX);
         assert!(matches!(read, Interior::Solid { .. }), "noisy paper read as {read:?}");
-        assert!(read.settles(Detected::Outside), "a caption box the detector called text_free");
+        assert!(in_bubble(&page, &seg, BOX, BOX, &[]), "a caption box the detector missed");
     }
 
     /// The cap: a light grey tone whose dots sit thirty levels under the paper
@@ -2001,16 +1546,14 @@ mod tests {
         assert_eq!(interior_of(&page, &seg, BOX), Interior::Textured);
     }
 
-    /// The case the ring walk exists to get right, and the one a plain variance
-    /// test gets wrong: four pixels of fill, then the balloon's own outline,
-    /// then art that is none of this region's business. The walk stops **at**
-    /// the outline, so what is beyond it is never read.
-    #[test]
-    fn a_thin_outline_ends_the_band_and_is_itself_the_evidence() {
-        let page = gray_page(240, 240, |x, y| {
+    /// Lettering on `fill` paper that runs `band` pixels out from the box, then
+    /// a three-pixel ink outline, then art that is none of this region's
+    /// business.
+    fn boxed(band: i64) -> Raster {
+        gray_page(240, 240, |x, y| {
             let (x, y) = (x as i64, y as i64);
-            let outline = BOX.grown(7, 240, 240);
-            let inside_outline = BOX.grown(4, 240, 240);
+            let outline = BOX.grown(band as u32 + 3, 240, 240);
+            let inside_outline = BOX.grown(band as u32, 240, 240);
             if glyphs(x as u32, y as u32) {
                 20
             } else if !outline.contains(x, y) {
@@ -2021,7 +1564,16 @@ mod tests {
             } else {
                 246
             }
-        });
+        })
+    }
+
+    /// The case the ring walk exists to get right, and the one a plain variance
+    /// test gets wrong: four pixels of fill, then the balloon's own outline,
+    /// then art. The walk stops **at** the outline, so what is beyond it is
+    /// never read.
+    #[test]
+    fn a_thin_outline_ends_the_band_and_is_itself_the_evidence() {
+        let page = boxed(4);
         let seg = segmentation(240, 240, glyphs);
         let read = interior_of(&page, &seg, BOX);
         let depth = depth_of(read);
@@ -2030,10 +1582,25 @@ mod tests {
             "the band was {depth} deep: shallower than this box asks for, which is the case \
              the outline has to carry"
         );
-        assert!(read.settles(Detected::Outside));
+        assert!(in_bubble(&page, &seg, BOX, BOX, &[]), "boxed text the detector missed is inside");
     }
 
-    /// The control for the test above. Same geometry, no outline: art starts
+    /// Boxed text with room to spare: a band deeper than the box asks for,
+    /// closed by the frame. The walk no longer stops once the band is deep
+    /// enough; it reads on to the frame, and the frame is what makes it count.
+    #[test]
+    fn boxed_text_whose_band_ends_at_a_thin_line_is_inside() {
+        let page = boxed(9);
+        let seg = segmentation(240, 240, glyphs);
+        let read = interior_of(&page, &seg, BOX);
+        assert!(matches!(read, Interior::Solid { level, .. } if level == 246 * 257), "{read:?}");
+        // Ring 1 is lettering halo and is skipped, so nine pixels of paper walk
+        // as eight rings: past `required_depth`, where the walk used to stop.
+        assert!(depth_of(read) >= required_depth(BOX), "{read:?}");
+        assert!(in_bubble(&page, &seg, BOX, BOX, &[]));
+    }
+
+    /// The control for the tests above. Same geometry, no outline: art starts
     /// where the fill stops. Four pixels of fill is not six, and there is no
     /// outline behind it to say the fill was a balloon's - so the page declines
     /// to answer rather than inventing one, and the detector keeps its verdict.
@@ -2052,8 +1619,34 @@ mod tests {
         let seg = segmentation(240, 240, glyphs);
         let read = interior_of(&page, &seg, BOX);
         assert_eq!(read, Interior::Unreadable);
-        assert!(read.settles(Detected::Bubble), "an unreadable band changes nothing");
-        assert!(!read.settles(Detected::Outside));
+        // Was a pair of `settles` checks; the same two answers through `in_bubble`.
+        let shape = balloon(60, 60, 120, 120, BalloonClass::Bubble);
+        assert!(in_bubble(&page, &seg, BOX, BOX, &[shape]), "an unreadable band changes nothing");
+        assert!(!in_bubble(&page, &seg, BOX, BOX, &[]));
+    }
+
+    /// A sound effect drawn with a white outline over art: seven pixels of
+    /// white around the strokes, as deep as this box asks for, and then
+    /// picture. The walk used to accept the band the moment it was six deep;
+    /// it now reads on, meets the art, and does not count a band picture ended.
+    #[test]
+    fn white_outlined_lettering_over_picture_is_not_inside() {
+        let page = gray_page(240, 240, |x, y| {
+            let (ix, iy) = (x as i64, y as i64);
+            if glyphs(x, y) {
+                20
+            } else if !BOX.grown(7, 240, 240).contains(ix, iy) {
+                if (ix * 3 + iy * 5) % 11 < 5 { 30 } else { 240 }
+            } else {
+                246 // the effect's own outline
+            }
+        });
+        let seg = segmentation(240, 240, glyphs);
+        assert!(7 > required_depth(BOX), "the premise: the white is deep enough to have passed");
+        assert_eq!(interior_of(&page, &seg, BOX), Interior::Unreadable);
+        assert!(!in_bubble(&page, &seg, BOX, BOX, &[]));
+        let free = balloon(60, 60, 120, 120, BalloonClass::TextFree);
+        assert!(!in_bubble(&page, &seg, BOX, BOX.grown(5, 240, 240), &[free]));
     }
 
     /// A glyph that spills past the masking box is a glyph, not a wall. Without
@@ -2064,72 +1657,44 @@ mod tests {
         let page = gray_page(240, 240, |x, y| if spill(x, y) { 20 } else { 246 });
         let seg = segmentation(240, 240, spill);
 
+        // Was an exact `depth: 6` in both; the strict walk reads past it.
         let blind = interior(&page, &Mask::empty(BOX.grown(30, 240, 240)), BOX);
-        assert_ne!(blind, Interior::Solid { level: 246 * 257, depth: 6 }, "the spill was read as ink");
+        assert!(!matches!(blind, Interior::Solid { .. }), "the spill was read as ink: {blind:?}");
 
         let seeing = interior_of(&page, &seg, BOX);
-        assert_eq!(seeing, Interior::Solid { level: 246 * 257, depth: 6 });
+        assert!(matches!(seeing, Interior::Solid { level, .. } if level == 246 * 257), "{seeing:?}");
+        assert!(depth_of(seeing) > required_depth(BOX));
     }
 
-    /* ---- the reading inside the box ---- */
-
-    /// The shape this exists for: a rectangular narration box whose frame sits
-    /// tight against the lettering, over art. The ring walk meets the art at
-    /// offset 1 - the frame is inside the box, not outside it, because the box
-    /// is the detector's and the detector drew it around the whole plate - so
-    /// the walk says `Textured` about white paper with black text on it. The
-    /// inside says otherwise: the frame is one-sided ink and a tenth of the
-    /// box, and everything else between the strokes is one fill.
+    /// Text on wide flat paper: the band runs the whole walk and nothing ends
+    /// it, which is a chat box, a sign or interface text on flat white. The
+    /// page rescues it even where the detector drew `text_free` over it.
     #[test]
-    fn a_narration_box_with_no_room_around_it_is_read_from_the_inside() {
-        // Sparser than `glyphs`, because that pattern is a lattice and this is
-        // meant to be lettering: after `TEXT_HALO` it leaves about the 50–62%
-        // of paper the real narration boxes leave.
-        let plate = Rect::new(BOX.x + 1, BOX.y + 1, BOX.w - 2, BOX.h - 2);
-        let letters = |x: u32, y: u32| {
-            plate.contains(x as i64, y as i64) && (x % 12 < 3) && (y % 14 < 5)
-        };
-        let page = gray_page(240, 240, |x, y| {
-            let (ix, iy) = (x as i64, y as i64);
-            if letters(x, y) {
-                20
-            } else if plate.contains(ix, iy) {
-                246
-            } else if BOX.contains(ix, iy) {
-                20 // the frame, one pixel wide, inside the box
-            } else if hatched(x, y) {
-                40 // and art everywhere outside it
-            } else {
-                250
-            }
-        });
-        let seg = segmentation(240, 240, letters);
-        let read = interior_of(&page, &seg, BOX);
-        assert_eq!(read, Interior::Solid { level: 246 * 257, depth: 0 }, "read inside, not walked");
-        assert!(read.settles(Detected::Outside), "which is what puts the narration back in the run");
-    }
-
-    /// And the walk keeps the first word wherever it has one. A balloon with
-    /// room around it answers with the depth it actually walked, never `0`.
-    #[test]
-    fn a_walk_that_finds_a_band_is_not_second_guessed_by_the_inside() {
+    fn text_on_wide_flat_paper_is_inside() {
         let page = gray_page(240, 240, |x, y| if glyphs(x, y) { 20 } else { 246 });
         let seg = segmentation(240, 240, glyphs);
-        assert_eq!(interior_of(&page, &seg, BOX), Interior::Solid { level: 246 * 257, depth: 6 });
+        // Was `depth: 6` under the early return; now the whole walk.
+        let read = interior_of(&page, &seg, BOX);
+        assert!(matches!(read, Interior::Solid { level, .. } if level == 246 * 257), "{read:?}");
+        assert!(depth_of(read) > required_depth(BOX), "the walk stopped early: {read:?}");
+        let masking = BOX.grown(5, 240, 240);
+        assert!(in_bubble(&page, &seg, BOX, masking, &[]));
+        let free = balloon(60, 60, 120, 120, BalloonClass::TextFree);
+        assert!(in_bubble(&page, &seg, BOX, masking, &[free]), "text_free is the detector's miss here");
     }
 
-    /// Lettering sparse enough to leave the paper this reading needs. `glyphs`
-    /// is a lattice covering well over half the box, which after `TEXT_HALO`
-    /// leaves under a tenth of it - less than `MIN_INNER_PAPER_PERCENT`, so a
-    /// fixture built on it never reaches the branches below. This leaves about
-    /// the 50–62% the real narration boxes leave.
+    /* ---- nothing is read between the strokes ---- */
+
+    /// Lettering sparse enough to leave paper between its strokes: after
+    /// `TEXT_HALO` about the 50 to 62% the real narration boxes leave, where
+    /// `glyphs` is a lattice that leaves under a tenth.
     fn letters(x: u32, y: u32) -> bool {
         BOX.contains(x as i64, y as i64) && (x % 12 < 3) && (y % 14 < 5)
     }
 
     /// A page whose box is lettering on `fill`, with `inside` painting whatever
-    /// else is between the strokes, and art everywhere outside the box so that
-    /// the ring walk answers `Textured` and the inside is what decides.
+    /// else is between the strokes, and art everywhere outside the box, so the
+    /// walk meets picture at offset 1.
     fn plate(fill: u8, inside: impl Fn(u32, u32) -> Option<u8>) -> Raster {
         gray_page(240, 240, |x, y| {
             if letters(x, y) {
@@ -2144,103 +1709,42 @@ mod tests {
         })
     }
 
-    /// [`inner_read`] on a plate lettered with [`letters`], as the counts the
-    /// two tests below reason about: `(on_page, samples, off, darker, lighter)`.
-    fn inner_counts(page: &Raster, bbox: Rect) -> (usize, usize, usize, usize, usize) {
-        let seg = segmentation(240, 240, letters);
-        let reach = scan_depth(bbox) + TEXT_HALO + 1;
-        let area = bbox.grown(reach, page.width, page.height);
-        let (_, read) = inner_read(page, &text_halo(&seg, area), bbox)
-            .expect("the plate leaves enough paper between the strokes to be read");
-        (read.on_page, read.samples, read.off, read.darker, read.lighter)
-    }
-
-    /// The control the two tests below are read against: the same plate with
-    /// nothing between the strokes but paper. The walk cannot answer it - there
-    /// is art at offset 1 - so a `Solid` here is the inside's, and every
-    /// difference from it is caused by what the test adds inside the box.
+    /// These fixtures pinned a second reading, of the paper *between* the
+    /// strokes, that rescued a narration box framed tight against its
+    /// lettering over art. It is gone: on real pages it read the white outline
+    /// between a sound effect's strokes as paper (`Solid` at depth 0), which
+    /// put outlined effects inside. Every plate below is now the walk's answer
+    /// alone - picture at offset 1 - including the three that used to read as
+    /// paper (the framed narration box, the plain plate and the one-sided
+    /// speckle); a tight narration box is left to the detector.
     #[test]
-    fn a_plate_of_lettering_on_paper_is_read_from_the_inside() {
-        let read = interior_of(&plate(250, |_, _| None), &segmentation(240, 240, letters), BOX);
-        assert_eq!(read, Interior::Solid { level: 250 * 257, depth: 0 });
-    }
-
-    /// Screentone between the strokes is not paper, and it is the case
-    /// one-sidedness alone would let through: a halftone's dots are all darker
-    /// than the paper they sit on, exactly as ink is. What refuses it is
-    /// [`INNER_OFF_PERCENT`] - the dots cover far more of the box than a frame
-    /// and a few antialiased edges do.
-    ///
-    /// The tone is confined to the **inside** of the box, and the control above
-    /// is the same page without it, so the share is demonstrably what decides:
-    /// nothing else about the two pages differs.
-    #[test]
-    fn screentone_between_the_strokes_is_not_paper() {
-        let page = plate(250, |x, y| halftone(x, y).then_some(60));
-        let read = interior_of(&page, &segmentation(240, 240, letters), BOX);
-        assert!(!matches!(read, Interior::Solid { .. }), "tone between the strokes read as {read:?}");
-        // And it is the share that refused it, not the sidedness: every dot is
-        // darker than the paper, so `is_one_sided` would have passed it.
-        let (_, samples, off, darker, _) = inner_counts(&page, BOX);
-        assert!(darker == off, "the fixture's tone is not one-sided");
-        assert!(
-            off * 100 > samples * INNER_OFF_PERCENT,
-            "the tone covers {}% of the samples, which INNER_OFF_PERCENT would have allowed",
-            off * 100 / samples
-        );
-    }
-
-    /// Art between the strokes is refused one step earlier, by one-sidedness: a
-    /// picture strays both lighter and darker than its own median, and ink only
-    /// ever strays one way.
-    ///
-    /// The pair is what isolates that. Both pages put the **same** speckle
-    /// pattern over the same share of the box; the first paints half of it
-    /// lighter than the paper and the second paints all of it darker. The share
-    /// is under [`INNER_OFF_PERCENT`] on both, so sidedness is the only thing
-    /// that can be deciding.
-    #[test]
-    fn art_between_the_strokes_is_refused_by_its_two_sidedness() {
+    fn nothing_between_the_strokes_is_read_as_paper() {
         let dark = |x: u32, y: u32| (x as i64 * 3 + y as i64 * 5) % 37 < 2;
         let light = |x: u32, y: u32| (x as i64 * 7 + y as i64 * 2) % 41 < 2;
-        let seg = segmentation(240, 240, letters);
 
-        let two_sided = plate(200, |x, y| {
-            if dark(x, y) {
-                Some(40)
+        // The narration box: a one-pixel frame inside the box, tight against
+        // sparse lettering, and art everywhere outside it.
+        let framed = Rect::new(BOX.x + 1, BOX.y + 1, BOX.w - 2, BOX.h - 2);
+        let framed_letters =
+            move |x: u32, y: u32| framed.contains(x as i64, y as i64) && (x % 12 < 3) && (y % 14 < 5);
+        let narration = gray_page(240, 240, |x, y| {
+            let (ix, iy) = (x as i64, y as i64);
+            if framed_letters(x, y) {
+                20
+            } else if framed.contains(ix, iy) {
+                246
+            } else if BOX.contains(ix, iy) {
+                20
+            } else if hatched(x, y) {
+                40
             } else {
-                light(x, y).then_some(255)
+                250
             }
         });
-        let read = interior_of(&two_sided, &seg, BOX);
-        assert!(!matches!(read, Interior::Solid { .. }), "art between the strokes read as {read:?}");
-
-        // The same speckle, all of it on one side of the paper: ink, and the
-        // reading admits it.
-        let one_sided = plate(200, |x, y| (dark(x, y) || light(x, y)).then_some(40));
-        assert_eq!(interior_of(&one_sided, &seg, BOX), Interior::Solid { level: 200 * 257, depth: 0 });
-
-        // And both are inside the share, so sidedness is what told them apart.
-        for (name, page) in [("two-sided", &two_sided), ("one-sided", &one_sided)] {
-            let (_, samples, off, _, _) = inner_counts(page, BOX);
-            assert!(
-                off * 100 <= samples * INNER_OFF_PERCENT,
-                "{name}: {}% off the fill is over INNER_OFF_PERCENT, so the share decided",
-                off * 100 / samples
-            );
-        }
-    }
-
-    /// Too little paper left between the strokes to be a sample of anything.
-    /// The box is nearly all lettering, so what survives the halo is the gaps
-    /// inside the glyphs, and a reading from those is the glyphs' own
-    /// antialiasing. The walk's answer stands.
-    #[test]
-    fn a_box_that_is_almost_all_lettering_is_not_read_from_the_inside() {
-        // 96% of the box is text, well under `MIN_INNER_PAPER_PERCENT` of paper.
+        // A box that is almost all lettering.
         let dense =
             |x: u32, y: u32| BOX.contains(x as i64, y as i64) && !(x.is_multiple_of(5) && y.is_multiple_of(5));
-        let page = gray_page(240, 240, |x, y| {
+        let crowded = gray_page(240, 240, |x, y| {
             if dense(x, y) {
                 20
             } else if BOX.contains(x as i64, y as i64) {
@@ -2251,8 +1755,34 @@ mod tests {
                 250
             }
         });
-        let seg = segmentation(240, 240, dense);
-        assert_eq!(interior_of(&page, &seg, BOX), Interior::Textured);
+
+        let lettered = segmentation(240, 240, letters);
+        let cases = [
+            ("narration box, framed tight", narration, segmentation(240, 240, framed_letters)),
+            ("plain paper between the strokes", plate(250, |_, _| None), lettered.clone()),
+            ("screentone between the strokes", plate(250, |x, y| halftone(x, y).then_some(60)), lettered.clone()),
+            ("finer lighter tone", plate(250, |x, y| ((x * 7 + y * 11) % 17 < 4).then_some(205)), lettered.clone()),
+            (
+                "mostly frame",
+                plate(250, |x, y| {
+                    let (x, y) = (x as i64, y as i64);
+                    (x < BOX.x + 5 || x >= BOX.right() - 5 || y < BOX.y + 5 || y >= BOX.bottom() - 5)
+                        .then_some(20)
+                }),
+                lettered.clone(),
+            ),
+            (
+                "two-sided speckle",
+                plate(200, |x, y| if dark(x, y) { Some(40) } else { light(x, y).then_some(255) }),
+                lettered.clone(),
+            ),
+            ("one-sided speckle", plate(200, |x, y| (dark(x, y) || light(x, y)).then_some(40)), lettered),
+            ("almost all lettering", crowded, segmentation(240, 240, dense)),
+        ];
+        for (name, page, seg) in cases {
+            assert_eq!(interior_of(&page, &seg, BOX), Interior::Textured, "{name}");
+            assert!(!in_bubble(&page, &seg, BOX, BOX, &[]), "{name}");
+        }
     }
 
     /// And too few pixels outright. A box smaller than
@@ -2281,10 +1811,12 @@ mod tests {
     fn a_box_with_no_readable_paper_around_it_is_not_a_verdict() {
         let page = gray_page(8, 8, |_, _| 200);
         let seg = segmentation(8, 8, |_, _| false);
-        let read = interior_of(&page, &seg, Rect::new(0, 0, 4, 4));
+        let bbox = Rect::new(0, 0, 4, 4);
+        let read = interior_of(&page, &seg, bbox);
         assert_eq!(read, Interior::Unreadable);
-        assert!(read.settles(Detected::Bubble));
-        assert!(!read.settles(Detected::Outside));
+        // Was a pair of `settles` checks: unreadable paper leaves the detector's answer.
+        assert!(in_bubble(&page, &seg, bbox, bbox, &[balloon(0, 0, 8, 8, BalloonClass::Bubble)]));
+        assert!(!in_bubble(&page, &seg, bbox, bbox, &[]));
         // And a box with no area at all is not a question.
         assert_eq!(interior_of(&page, &seg, Rect::new(0, 0, 0, 0)), Interior::Unreadable);
     }
@@ -2467,6 +1999,6 @@ mod tests {
             matches!(read, Interior::Solid { .. }),
             "an ordinary balloon read as {read:?}, which sends its dialogue to review",
         );
-        assert!(read.settles(Detected::Bubble));
+        assert!(in_bubble(&page, &seg, masking, masking, &[]), "and the page alone carries it");
     }
 }

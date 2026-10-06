@@ -5,8 +5,8 @@
 //! ```
 //!
 //! Runs the whole front end a page goes through - the text detector, the
-//! balloon detector, the region build including
-//! `balloon::adopt_uncovered_text` - and then judges every region **twice**:
+//! balloon detector, the region build (`text_groups::group`, as a run with
+//! the default models makes it) - and then judges every region **twice**:
 //! once with a bare [`ScriptGate`] and once with one the reader is attached to.
 //! A region whose two verdicts differ prints as `RESCUED`, with the reading and
 //! its `cjk_share` beside it, so the change is arguable from the text rather
@@ -23,9 +23,10 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use cleaner_core::accel::Preference;
 use cleaner_core::balloon::{self, BalloonDetector, Detected};
-use cleaner_core::detect::{Detector, build_regions_separated};
+use cleaner_core::detect::Detector;
 use cleaner_core::gate::{Ocr, OutsideText, ScriptGate, Verdict, cjk_share};
 use cleaner_core::image::decode;
+use cleaner_core::text_groups::{self, EvidenceModel, Execution, ModelUse, SpatialInput};
 
 const DETECTOR: &str = "comictextdetector.onnx";
 const BALLOONS: &str = "comic-text-and-bubble-detector-detector-v4-s_int8.onnx";
@@ -96,22 +97,33 @@ fn main() -> Result<()> {
     for path in pages {
         let bytes = std::fs::read(&path)?;
         let page = decode(&bytes).map_err(|e| anyhow!("{e}"))?;
-        let detection = detector.detect(&page)?;
+        let mut detection = detector.detect(&page)?;
         let boxes = balloons.detect(&page)?;
-        let mut regions = build_regions_separated(
-            detection.boxes.clone(),
-            page.width,
-            page.height,
-            |a, b| balloon::merge_crosses_a_balloon(&page, &detection.segmentation, a, b),
-        );
-        let median = cleaner_core::detect::median_box_area(&detection.boxes);
-        regions.extend(balloon::adopt_uncovered_text(
-            &regions,
-            &boxes,
-            page.width,
-            page.height,
-            median,
-        ));
+        // The run's regions for these models: text groups of CTD's
+        // segmentation and both detectors' boxes.
+        let pixels: Vec<u8> = detection
+            .segmentation
+            .levels
+            .iter()
+            .map(|&v| if v >= cleaner_core::detect::MASK_THRESHOLD { 255 } else { 0 })
+            .collect();
+        let mut inputs = text_groups::Inputs::new(page.width, page.height, Some(&pixels));
+        inputs.pixel_model = EvidenceModel::Ctd;
+        inputs.page = Some(&page);
+        inputs.rt = &boxes;
+        inputs.ctd = &detection.boxes;
+        inputs.models = vec![
+            ModelUse::new(EvidenceModel::OgkaluSmall, Execution::Local, SpatialInput::Whole),
+            ModelUse::new(EvidenceModel::Ctd, Execution::Local, SpatialInput::Whole),
+        ];
+        let grouping = text_groups::group(&inputs).map_err(|e| anyhow!("{e}"))?;
+        let median = grouping.block_median_area();
+        let mut regions: Vec<_> = grouping
+            .cleaning()
+            .map(|group| grouping.region(group, median))
+            .chain(grouping.detector_only().map(|group| grouping.detector_only_region(group, median)))
+            .collect();
+        grouping.paint_estimates(&mut detection.segmentation);
         cleaner_core::detect::sort_regions(&mut regions);
 
         let mut rescued = 0usize;
@@ -120,11 +132,19 @@ fn main() -> Result<()> {
 
         for (i, region) in regions.iter().enumerate() {
             let detected = balloon::detected(region.masking, &boxes);
+            let inside = balloon::in_bubble(
+                &page,
+                &detection.segmentation,
+                region.text_bounds(),
+                region.masking,
+                &boxes,
+            );
             let before = bare.judge(
                 &page,
                 &detection.segmentation,
                 region,
                 detected,
+                inside,
                 OutsideText::Review,
             )?;
             let after = rescuing.judge(
@@ -132,6 +152,7 @@ fn main() -> Result<()> {
                 &detection.segmentation,
                 region,
                 detected,
+                inside,
                 OutsideText::Review,
             )?;
 

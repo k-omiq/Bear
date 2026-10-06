@@ -242,6 +242,34 @@ export function menuPoint(event, rect) {
 }
 
 /**
+ * How wide "here" is for a Detect of one area, in percent of the page's width:
+ * 256 px on a 1600 px page, about one line of lettering either side of the
+ * pointer. The native side reads a wider window around it for context
+ * (`run.rs#DetectArea`); this is only what a found region has to touch.
+ */
+export const DETECT_AREA_SPAN = 16
+
+/**
+ * The area a Detect of one spot is held to: a box around `point`, square in
+ * page pixels, moved back inside the page where the point is near an edge.
+ *
+ * @param {{x: number, y: number}} point - page percent
+ * @param {number} pageWidth - page pixels
+ * @param {number} pageHeight - page pixels
+ * @returns {Bbox}
+ */
+export function detectAreaAround(point, pageWidth, pageHeight) {
+  const w = DETECT_AREA_SPAN
+  const h = Math.min(PAGE_SPAN, (w * pageWidth) / pageHeight)
+  return {
+    x: clamp(point.x - w / 2, 0, PAGE_SPAN - w),
+    y: clamp(point.y - h / 2, 0, PAGE_SPAN - h),
+    w,
+    h,
+  }
+}
+
+/**
  * The centre of a region's box in client pixels - `pointIn` run backwards,
  * through the same measured sheet rectangle.
  *

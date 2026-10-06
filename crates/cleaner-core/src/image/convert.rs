@@ -116,6 +116,28 @@ impl Raster {
         }
     }
 
+    /// Whether the page is grey: a grey mode, or RGB whose three channels
+    /// agree within 1.5 of 255 levels at every pixel. Many grey scans arrive
+    /// as RGB or RGBA, and a model answer drawn on one must stay grey. The
+    /// tolerance is the one both page denoise engines use
+    /// (`crate::page_denoise`, `deploy/cloud/common/denoise.py`).
+    pub fn is_neutral(&self) -> bool {
+        match self.mode {
+            ColorMode::Gray | ColorMode::GrayAlpha => true,
+            ColorMode::Rgb | ColorMode::Rgba => {
+                let top = ((1u32 << self.depth.bits()) - 1) as f32;
+                let tolerance = 1.5 / 255.0;
+                (0..self.height).all(|y| {
+                    (0..self.width).all(|x| {
+                        let [r, g, b] = [0, 1, 2].map(|c| self.sample(x, y, c) as f32 / top);
+                        (r - g).abs() < tolerance && (g - b).abs() < tolerance
+                    })
+                })
+            }
+            ColorMode::Indexed | ColorMode::Cmyk => false,
+        }
+    }
+
     /// The whole page as luma, for the statistics that scan it.
     pub fn to_luma16(&self) -> Vec<u16> {
         let mut out = Vec::with_capacity((self.width * self.height) as usize);

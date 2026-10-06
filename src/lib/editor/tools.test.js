@@ -8,9 +8,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   DRAWING_TOOLS,
+  PANEL_WIDTH,
   SOLID,
   TOOL_SPECS,
   activeParams,
+  draftShape,
   effectiveChoice,
   hexInvalid,
   hexOnCommit,
@@ -19,16 +21,19 @@ import {
   isSolidFill,
   paramGroups,
   segmentedTabStop,
+  toolShell,
   toolSpec,
   toolSpendsCloud,
 } from './tools.js'
 import { ROW_ENGINES } from '../model/masks.js'
+import { t } from '../i18n/index.js'
+import tauriConf from '../../../src-tauri/tauri.conf.json'
 import { iconNames } from '../icons/paths.js'
 import { hexToRgb, hsbToHex, hsbToRgb, rgbToHex, rgbToHsb } from '../ui/color.js'
 
 describe('isDrawingTool', () => {
-  it('is the four tools whose gesture is a drag', () => {
-    expect([...DRAWING_TOOLS]).toEqual(['brush', 'shapes', 'aiMaskBrush', 'cloneHeal'])
+  it('is the five tools whose gesture is a drag', () => {
+    expect([...DRAWING_TOOLS]).toEqual(['brush', 'shapes', 'aiMaskBrush', 'cloneHeal', 'maskSelect'])
   })
 
   it('excludes the two that act on a region that already exists', () => {
@@ -48,12 +53,12 @@ describe('toolSpendsCloud', () => {
     expect(toolSpendsCloud('contentAwareFill', { engine: 'local' })).toBe(false)
   })
 
-  // Auto clean used to carry an engine ceiling whose upper rung was the cloud,
-  // and a run at that ceiling spent without the transmission statement or the
-  // cost confirmation, because `needs-confirmation` lives on `applyTool` and
-  // `runClean` has no equivalent. The rung is gone and a run is local-only;
-  // this is the assertion that says so, whatever it is passed.
-  it('is false for Auto clean, which can no longer reach the cloud rung', () => {
+  // Text cleanup used to carry an engine ceiling whose upper rung was the
+  // cloud, and a run at that ceiling sent pages to it without the consent each cloud
+  // render asks for first, because `needs-confirmation` lives on `applyTool`
+  // and `runClean` has no equivalent. The rung is gone and a run is
+  // local-only; this is the assertion that says so, whatever it is passed.
+  it('is false for Text cleanup, which can no longer reach the cloud rung', () => {
     expect(toolSpendsCloud('autoClean', { engineCeiling: 'cloud' })).toBe(false)
     expect(toolSpendsCloud('autoClean', { engineCeiling: 'lama' })).toBe(false)
     expect(toolSpendsCloud('autoClean', { scope: 'project' })).toBe(false)
@@ -87,8 +92,18 @@ describe('toolSpendsCloud', () => {
 })
 
 describe('toolSpec', () => {
-  it('falls back to Auto clean rather than to nothing', () => {
+  it('falls back to Text cleanup rather than to nothing', () => {
     expect(toolSpec('nonesuch').id).toBe('autoClean')
+  })
+
+  // Renamed on screen only: saved sessions, the `1` shortcut, the tool
+  // parameters and the native run all key on the id.
+  it('calls the `autoClean` tool Text cleanup, under its old id and slot', () => {
+    const spec = toolSpec('autoClean')
+    expect(spec.slot).toBe(1)
+    expect(spec.nameKey).toBe('tools.name.autoClean')
+    expect(t(spec.nameKey)).toBe('Text cleanup')
+    expect(TOOL_SPECS.map((entry) => t(entry.nameKey)).join(' ')).not.toMatch(/auto ?clean/i)
   })
 
   it('gives the brush its paint parameters unconditionally, and no mode row', () => {
@@ -137,40 +152,43 @@ describe('toolSpec', () => {
 })
 
 /**
- * **Shapes has a mode, and the mode is one list of six.** A drawn shape is
+ * **Shapes has a mode, and the mode is one list of three.** A drawn shape is
  * either paint - a colour the user picked, laid down flat - or a clean by one
- * of the five rungs, and it is never both. The two are alternatives rather
+ * of the two available redraw models, and it is never both. The alternatives
  * than settings of one another, which is why they share a row.
  *
- * The trap the naming has to stay clear of is that one of the five rungs is
- * itself called *Fill*: rung 0, the planar fill, which samples the paper and
- * lays down the tone it found. The solid option is `solid` and reads "Solid
- * colour", and nothing in the tool spells the two the same.
+ * Fill does not appear in this mode list; the solid option is `solid` and
+ * reads "Solid colour".
  */
 describe('the Shapes tool', () => {
   const shapes = toolSpec('shapes')
   /** @param {string} key */
   const param = (key) => shapes.params.find((candidate) => candidate.key === key)
 
-  it('still offers the four shapes', () => {
+  it('offers the four area shapes and a line', () => {
     expect(param('shape')?.options.map((option) => option.value)).toEqual([
       'rect',
       'ellipse',
       'lasso',
       'polygon',
+      'line',
     ])
   })
 
-  it('offers a solid colour and the same five engines a Layers row does', () => {
+  it('offers a solid colour and the two redraw models', () => {
     const mode = param('mode')
     expect(mode?.kind).toBe('choice')
-    expect(mode?.options.map((option) => option.value)).toEqual([SOLID, ...ROW_ENGINES])
-    // The AI mask brush's list, unchanged and under the same words - a user
-    // who learns "MI-GAN" on one canvas tool has learned it on the other.
+    expect(mode?.options.map((option) => option.value)).toEqual([SOLID, 'lama', 'flux'])
+    // The AI mask brush has the stronger two local models only.
     const brushEngines = toolSpec('aiMaskBrush').params.find((p) => p.key === 'engine')
     for (const rung of ROW_ENGINES) {
       const here = mode?.options.find((option) => option.value === rung)
       const there = brushEngines?.options.find((option) => option.value === rung)
+      if (rung === 'fill') {
+        expect(here).toBeUndefined()
+        expect(there).toBeUndefined()
+        continue
+      }
       expect(here?.labelKey).toBe(there?.labelKey)
       // Including rung 3a's gate, so the tool bar drops it on a machine
       // with no sidecar exactly as it does there.
@@ -204,12 +222,12 @@ describe('the Shapes tool', () => {
     }
   })
 
-  it('names the solid option something other than the fill engine', () => {
+  it('names the solid option and omits the fill engine', () => {
     const mode = param('mode')
     const solid = mode?.options.find((option) => option.value === SOLID)
     const fill = mode?.options.find((option) => option.value === 'fill')
     expect(solid?.labelKey).toBe('tools.option.modeSolid')
-    expect(solid?.labelKey).not.toBe(fill?.labelKey)
+    expect(fill).toBeUndefined()
   })
 
   it('carries a colour and an opacity, live only while the mode is solid', () => {
@@ -224,7 +242,7 @@ describe('the Shapes tool', () => {
 
   it('shows the colour only in solid mode, and the rest of the rows always', () => {
     const solid = activeParams(shapes, { mode: SOLID }).map((p) => p.key)
-    expect(solid).toEqual(['shape', 'mode', 'color', 'opacity', 'feather'])
+    expect(solid).toEqual(['shape', 'mode', 'color', 'opacity', 'outlineColor', 'outlineWidth', 'feather'])
 
     const engine = activeParams(shapes, { mode: 'lama' }).map((p) => p.key)
     expect(engine).toEqual(['shape', 'mode', 'feather'])
@@ -242,21 +260,99 @@ describe('the Shapes tool', () => {
   })
 
   // A parameter with no predicate is live for every value, including none -
-  // the filter must not drop the rows that never had a condition.
+  // the filter must not drop the rows that never had a condition. Text
+  // cleanup's fill colour is one: a clean paints a *saved* Solid pick with it
+  // too, so whether the rows read Solid now is not the question
+  // (`ToolBar.svelte` decides where a clean reads it).
   it('leaves an unconditional row alone', () => {
-    expect(activeParams(toolSpec('autoClean'), { bubbleEngine: 'fill' }).map((p) => p.key)).toEqual([
-      'scope',
-      'bubbleEngine',
-      'bubbleColor',
-      'outsideEngine',
-      'outsideBubbles',
-    ])
-    expect(activeParams(toolSpec('autoClean'), { bubbleEngine: 'lama' }).map((p) => p.key)).toEqual([
-      'scope',
-      'bubbleEngine',
-      'outsideEngine',
-      'outsideBubbles',
-    ])
+    const all = ['step', 'scope', 'outsideBubbles', 'maskPadding', 'bubbleEngine', 'outsideEngine', 'bubbleColor']
+    expect(activeParams(toolSpec('autoClean'), { bubbleEngine: SOLID }).map((p) => p.key)).toEqual(all)
+    expect(activeParams(toolSpec('autoClean'), { bubbleEngine: 'lama' }).map((p) => p.key)).toEqual(all)
+    expect(activeParams(toolSpec('autoClean'), {}).map((p) => p.key)).toEqual(all)
+    expect(toolSpec('autoClean').params.find((p) => p.key === 'outsideEngine')?.options.map((o) => o.value))
+      .toContain(SOLID)
+  })
+
+  // Denoise fill is gone: pages are denoised whole now, so each kind of text
+  // starts on Fill, LaMa or a solid colour.
+  it('offers Fill, LaMa and Solid colour for each kind of text', () => {
+    for (const key of ['bubbleEngine', 'outsideEngine']) {
+      expect(toolSpec('autoClean').params.find((p) => p.key === key)?.options.map((o) => o.value))
+        .toEqual(['fill', 'lama', SOLID])
+    }
+  })
+})
+
+/**
+ * **The selection tool edits the detected masks, and nothing else.** Slot 6,
+ * a pill like every drawing tool, no run button and no engine: what happens to
+ * the area is Clean's decision, later. Its brush has a size; its lasso and
+ * rectangle do not, so the row is there only for the brush.
+ */
+describe('the selection tool', () => {
+  const spec = toolSpec('maskSelect')
+  /** @param {string} key */
+  const param = (key) => spec.params.find((candidate) => candidate.key === key)
+
+  it('is the sixth tool, a pill with no run action', () => {
+    expect(spec.id).toBe('maskSelect')
+    expect(spec.slot).toBe(6)
+    expect(spec.shell).toBe('pill')
+    expect(spec.runnable).toBe(false)
+    expect(spec.nameKey).toBe('tools.name.maskSelect')
+    expect(t(spec.hintKey)).not.toBe('')
+    expect(TOOL_SPECS.map((entry) => entry.slot)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(isDrawingTool('maskSelect')).toBe(true)
+  })
+
+  it('adds or removes, and draws with a brush, a lasso or a rectangle', () => {
+    expect(param('mode')?.options.map((option) => option.value)).toEqual(['add', 'remove'])
+    expect(param('shape')?.options.map((option) => option.value)).toEqual(['brush', 'lasso', 'rect'])
+    for (const option of [...(param('mode')?.options ?? []), ...(param('shape')?.options ?? [])]) {
+      expect(iconNames, option.value).toContain(option.icon)
+      expect(t(option.labelKey), option.value).not.toBe('')
+    }
+  })
+
+  it('shows the size for the brush alone', () => {
+    expect(activeParams(spec, { mode: 'add', shape: 'brush' }).map((p) => p.key)).toEqual(['mode', 'shape', 'size'])
+    expect(activeParams(spec, { mode: 'add', shape: 'lasso' }).map((p) => p.key)).toEqual(['mode', 'shape'])
+    expect(activeParams(spec, { mode: 'remove', shape: 'rect' }).map((p) => p.key)).toEqual(['mode', 'shape'])
+    // A fresh record with no shape yet is a brush, as the defaults say.
+    expect(activeParams(spec, {}).map((p) => p.key)).toContain('size')
+  })
+
+  it('never reaches the cloud, whatever it is passed', () => {
+    expect(toolSpendsCloud('maskSelect', { mode: 'add', engine: 'cloud' })).toBe(false)
+    for (const choice of spec.params.filter((p) => p.kind === 'choice')) {
+      expect(choice.options.some((option) => option.cloud)).toBe(false)
+    }
+  })
+})
+
+/**
+ * Which drag a tool draws: an area of some shape, or a round stroke. Shapes
+ * is always an area; the selection tool is one only when its row says lasso
+ * or rectangle; every other drawing tool strokes.
+ */
+describe('draftShape', () => {
+  it('is the Shapes row, a rectangle when it says nothing', () => {
+    expect(draftShape('shapes', { shape: 'ellipse' })).toBe('ellipse')
+    expect(draftShape('shapes', { shape: 'polygon' })).toBe('polygon')
+    expect(draftShape('shapes', {})).toBe('rect')
+  })
+
+  it('is the selection tool’s lasso or rectangle, and a stroke for its brush', () => {
+    expect(draftShape('maskSelect', { shape: 'lasso' })).toBe('lasso')
+    expect(draftShape('maskSelect', { shape: 'rect' })).toBe('rect')
+    expect(draftShape('maskSelect', { shape: 'brush' })).toBeNull()
+    expect(draftShape('maskSelect', {})).toBeNull()
+    // Shapes' other shapes are not the selection tool's.
+    expect(draftShape('maskSelect', { shape: 'polygon' })).toBeNull()
+  })
+
+  it('is a stroke for every brush tool', () => {
+    for (const tool of ['brush', 'aiMaskBrush', 'cloneHeal']) expect(draftShape(tool, { shape: 'rect' })).toBeNull()
   })
 })
 
@@ -266,6 +362,35 @@ describe('the Shapes tool', () => {
  * same decision - so they live on the spec rather than in the component, and
  * the component draws whatever it is handed.
  */
+/**
+ * The shape of the tool shell per tool: Text cleanup is a compact panel of
+ * rows, and every drawing tool keeps the one-row pill.
+ */
+describe('toolShell', () => {
+  it('is the panel for Text cleanup and the pill for every drawing tool', () => {
+    expect(toolShell('autoClean')).toBe('panel')
+    for (const id of DRAWING_TOOLS) expect(toolShell(id), id).toBe('pill')
+    expect(TOOL_SPECS.filter((spec) => spec.shell === 'panel').map((spec) => spec.id)).toEqual(['autoClean'])
+  })
+
+  it('is the pill for a tool it does not know, which cannot outgrow a small window', () => {
+    expect(toolShell('nonesuch')).toBe('pill')
+    expect(toolShell(undefined)).toBe('pill')
+  })
+
+  it('draws the panel at the plan’s width, inside the smallest window the app allows', () => {
+    expect(PANEL_WIDTH).toBeGreaterThanOrEqual(360)
+    expect(PANEL_WIDTH).toBeLessThanOrEqual(400)
+    expect(PANEL_WIDTH).toBeLessThan(Number(tauriConf.app.windows[0].minWidth))
+  })
+
+  it('names the three modes the panel offers, and keeps both halves the default', () => {
+    const step = toolSpec('autoClean').params.find((p) => p.key === 'step')
+    expect(step?.options.map((option) => t(option.labelKey)).sort()).toEqual(['Clean', 'Detect', 'Detect & clean'])
+    expect(step?.options[0].value).toBe('auto')
+  })
+})
+
 describe('paramGroups', () => {
   // A plain name and not an i18n key: the bar draws a hairline between groups
   // and no heading, so there is nothing to translate.
@@ -284,17 +409,16 @@ describe('paramGroups', () => {
     }
   })
 
-  it('reads Auto clean as a scope, then models and the outside-bubble opt-in', () => {
-    expect(paramGroups(toolSpec('autoClean'), { bubbleEngine: 'fill' }).map((group) => [group.key, group.params.length]))
-      .toEqual([
-        ['scope', 1],
-        ['engines', 4],
-      ])
-    expect(paramGroups(toolSpec('autoClean'), { bubbleEngine: 'lama' }).map((group) => [group.key, group.params.length]))
-      .toEqual([
-        ['scope', 1],
-        ['engines', 3],
-      ])
+  it('reads Text cleanup as the run, the text it takes, the mask padding, then the engines', () => {
+    for (const bubbleEngine of [SOLID, 'lama']) {
+      expect(paramGroups(toolSpec('autoClean'), { bubbleEngine }).map((group) => [group.key, group.params.length]))
+        .toEqual([
+          ['run', 2],
+          ['text', 1],
+          ['mask', 1],
+          ['engines', 3],
+        ])
+    }
   })
 
   // A parameter hidden by its `when` predicate takes no group with it: Shapes
@@ -306,7 +430,7 @@ describe('paramGroups', () => {
     expect(engine[1].params.map((p) => p.key)).toEqual(['mode', 'feather'])
 
     const solid = paramGroups(toolSpec('shapes'), { mode: SOLID })
-    expect(solid[1].params.map((p) => p.key)).toEqual(['mode', 'color', 'opacity', 'feather'])
+    expect(solid[1].params.map((p) => p.key)).toEqual(['mode', 'color', 'opacity', 'outlineColor', 'outlineWidth', 'feather'])
   })
 })
 
@@ -523,16 +647,17 @@ describe('the icons and the short labels the bar draws a choice with', () => {
     }
   })
 
-  it('draws the five pictured choices as icons and the ladders as dropdowns', () => {
+  // Text cleanup's scope is words now: its panel has room for them.
+  it('draws the three pictured choices as icons and the ladders as dropdowns', () => {
     const pictured = choices
       .filter(({ param }) => param.options.every((option) => option.icon))
       .map(({ id, param }) => `${id}.${param.key}`)
     expect(pictured).toEqual([
-      'autoClean.scope',
       'shapes.shape',
-      'contentAwareFill.engine',
       'cloneHeal.alignment',
       'cloneHeal.mode',
+      'maskSelect.mode',
+      'maskSelect.shape',
     ])
   })
 
@@ -543,12 +668,10 @@ describe('the icons and the short labels the bar draws a choice with', () => {
     const short = choices
       .filter(({ param }) => param.shortKey)
       .map(({ id, param }) => [`${id}.${param.key}`, param.shortKey])
+    // Text cleanup's panel labels its rows in full, and needs none.
     expect(short).toEqual([
-      ['autoClean.bubbleEngine', 'tools.short.bubbleText'],
-      ['autoClean.outsideEngine', 'tools.short.outsideText'],
       ['shapes.mode', 'tools.short.mode'],
       ['aiMaskBrush.engine', 'tools.short.cleanWith'],
-      ['contentAwareFill.fillMode', 'tools.short.fillMode'],
     ])
     // Never on a choice the bar draws as icons: there is no trigger to put it on.
     for (const { id, param } of choices) {

@@ -1,0 +1,682 @@
+{
+  "title": "Visual audit of full FP32 split text boxes unmatched by small INT8 whole-page boxes",
+  "source_dir": "/Users/caved/Downloads/apocalypse/109",
+  "compared_runs": {
+    "candidate": "../artifacts/chapter-109-fp32-halves.json",
+    "baseline": "../artifacts/chapter-109-v4s-int8-whole.json"
+  },
+  "candidate_definition": "Every full FP32 halves text_bubble/text_free box whose maximum class-agnostic IoU with any small INT8 whole-page text_bubble/text_free box on the same page is <0.50. No one-to-one assignment; a box may be geometrically unmatched yet depict text already boxed by the baseline.",
+  "visual_method": "Inspected all 29 candidate rectangles on their original JPEG pages, using a full-page thumbnail and enlarged contextual crop. The red rectangle marks the box. Also inspected page 26/27 boundary for N19.",
+  "limitations": [
+    "This is a targeted audit of unmatched text-class boxes, not a census of all 71 full-split text boxes or all baseline boxes.",
+    "Visual categories are one reviewer\u2019s judgments, not annotated ground truth or precision/recall estimates.",
+    "Checkpoints differ in architecture/export and page layout; observed differences cannot be attributed only to quantization or tiling.",
+    "Plausibly new story text is a conservative semantic label: some broad boxes contain multiple effects and some boxes overlap a baseline box below the IoU threshold."
+  ],
+  "summary": {
+    "candidate_count": 29,
+    "visual_classes": {
+      "clear_text_or_sfx": 25,
+      "clear_art_false_positive": 4
+    },
+    "plausibly_new_story_text_boxes": 12,
+    "plausibly_new_story_text_pages": [
+      "04.jpg",
+      "05.jpg",
+      "06.jpg",
+      "07.jpg",
+      "14.jpg",
+      "17.jpg",
+      "19.jpg",
+      "20.jpg",
+      "21.jpg",
+      "40.jpg",
+      "43.jpg"
+    ],
+    "page_count_with_plausibly_new_story_text": 11,
+    "art_false_positive_ids": [
+      "N19",
+      "N21",
+      "N24",
+      "N25"
+    ],
+    "seam_truncation_ids": [
+      "N02",
+      "N08",
+      "N20"
+    ]
+  },
+  "candidates": [
+    {
+      "id": "N00",
+      "file": "01.jpg",
+      "text_index": 1,
+      "box": {
+        "class": "text_free",
+        "score": 0.4435924291610718,
+        "x": 310,
+        "y": 562,
+        "width": 360,
+        "height": 71
+      },
+      "best_small_text_iou": 0.09174252322618369,
+      "classification": "clear_text_or_sfx",
+      "subtype": "chapter_title",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "already_boxed_by_small",
+        "overlaps_N01"
+      ],
+      "visual_observation": "Lower title lettering; old small title box already covers it.",
+      "contact_sheet": "../artifacts/novel-audit/contact-01.jpg"
+    },
+    {
+      "id": "N01",
+      "file": "01.jpg",
+      "text_index": 2,
+      "box": {
+        "class": "text_free",
+        "score": 0.508151650428772,
+        "x": 375,
+        "y": 567,
+        "width": 218,
+        "height": 65
+      },
+      "best_small_text_iou": 0.051170752141443614,
+      "classification": "clear_text_or_sfx",
+      "subtype": "chapter_title",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "already_boxed_by_small",
+        "duplicate_of_N00"
+      ],
+      "visual_observation": "Same lower title lettering as N00, tighter overlapping box.",
+      "contact_sheet": "../artifacts/novel-audit/contact-01.jpg"
+    },
+    {
+      "id": "N02",
+      "file": "01.jpg",
+      "text_index": 3,
+      "box": {
+        "class": "text_free",
+        "score": 0.5230184197425842,
+        "x": 268,
+        "y": 776,
+        "width": 188,
+        "height": 24
+      },
+      "best_small_text_iou": 0.25504453735684424,
+      "classification": "clear_text_or_sfx",
+      "subtype": "chapter_label",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "already_boxed_by_small",
+        "tile_seam_truncation"
+      ],
+      "visual_observation": "Only top 24 pixels of chapter label; adjoining full-split box starts at y=800; old small box covers label.",
+      "contact_sheet": "../artifacts/novel-audit/contact-01.jpg"
+    },
+    {
+      "id": "N03",
+      "file": "04.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.6187677383422852,
+        "x": 119,
+        "y": 925,
+        "width": 288,
+        "height": 226
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [],
+      "visual_observation": "Large Korean impact sound lettering on white strip.",
+      "contact_sheet": "../artifacts/novel-audit/contact-01.jpg"
+    },
+    {
+      "id": "N04",
+      "file": "05.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.426813006401062,
+        "x": 208,
+        "y": 1486,
+        "width": 208,
+        "height": 114
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [
+        "page_bottom_truncation"
+      ],
+      "visual_observation": "Large outlined sound lettering continues to lower page edge.",
+      "contact_sheet": "../artifacts/novel-audit/contact-02.jpg"
+    },
+    {
+      "id": "N05",
+      "file": "06.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.424824982881546,
+        "x": 332,
+        "y": 487,
+        "width": 114,
+        "height": 114
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [],
+      "visual_observation": "Small Korean sound effect over debris.",
+      "contact_sheet": "../artifacts/novel-audit/contact-02.jpg"
+    },
+    {
+      "id": "N06",
+      "file": "07.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.6074780821800232,
+        "x": 180,
+        "y": 621,
+        "width": 308,
+        "height": 179
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [
+        "overlaps_N07"
+      ],
+      "visual_observation": "Main Korean sound effect on page 07.",
+      "contact_sheet": "../artifacts/novel-audit/contact-02.jpg"
+    },
+    {
+      "id": "N07",
+      "file": "07.jpg",
+      "text_index": 1,
+      "box": {
+        "class": "text_free",
+        "score": 0.35909008979797363,
+        "x": 3,
+        "y": 667,
+        "width": 484,
+        "height": 131
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "duplicate_of_N06"
+      ],
+      "visual_observation": "Partial overlapping box on the same page-07 lettering.",
+      "contact_sheet": "../artifacts/novel-audit/contact-02.jpg"
+    },
+    {
+      "id": "N08",
+      "file": "13.jpg",
+      "text_index": 2,
+      "box": {
+        "class": "text_free",
+        "score": 0.42135918140411377,
+        "x": 464,
+        "y": 781,
+        "width": 185,
+        "height": 19
+      },
+      "best_small_text_iou": 0.21086139937607437,
+      "classification": "clear_text_or_sfx",
+      "subtype": "dialogue",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "already_boxed_by_small",
+        "tile_seam_truncation"
+      ],
+      "visual_observation": "Top 19 pixels of lower dialogue line, clipped at y=800; existing small box covers the full line.",
+      "contact_sheet": "../artifacts/novel-audit/contact-03.jpg"
+    },
+    {
+      "id": "N09",
+      "file": "14.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.4890086352825165,
+        "x": 115,
+        "y": 218,
+        "width": 494,
+        "height": 453
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [],
+      "visual_observation": "Large Korean sound effect beside raised hand.",
+      "contact_sheet": "../artifacts/novel-audit/contact-03.jpg"
+    },
+    {
+      "id": "N10",
+      "file": "17.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.41748204827308655,
+        "x": 304,
+        "y": 801,
+        "width": 264,
+        "height": 296
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [
+        "overlaps_N11"
+      ],
+      "visual_observation": "Large gray outlined sound-effect lettering.",
+      "contact_sheet": "../artifacts/novel-audit/contact-03.jpg"
+    },
+    {
+      "id": "N11",
+      "file": "17.jpg",
+      "text_index": 1,
+      "box": {
+        "class": "text_free",
+        "score": 0.4532056152820587,
+        "x": 273,
+        "y": 802,
+        "width": 399,
+        "height": 298
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "duplicate_of_N10"
+      ],
+      "visual_observation": "Same large sound effect, wider overlapping box.",
+      "contact_sheet": "../artifacts/novel-audit/contact-03.jpg"
+    },
+    {
+      "id": "N12",
+      "file": "19.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.3975236713886261,
+        "x": 155,
+        "y": 1339,
+        "width": 264,
+        "height": 189
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [],
+      "visual_observation": "Large Korean sound effect on white field.",
+      "contact_sheet": "../artifacts/novel-audit/contact-04.jpg"
+    },
+    {
+      "id": "N13",
+      "file": "20.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.3651406168937683,
+        "x": 74,
+        "y": 1358,
+        "width": 560,
+        "height": 241
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [
+        "broad_multi_effect_box",
+        "overlaps_N14"
+      ],
+      "visual_observation": "Two sound-effect groups and intervening character art enclosed together.",
+      "contact_sheet": "../artifacts/novel-audit/contact-04.jpg"
+    },
+    {
+      "id": "N14",
+      "file": "20.jpg",
+      "text_index": 1,
+      "box": {
+        "class": "text_bubble",
+        "score": 0.40197136998176575,
+        "x": 416,
+        "y": 1381,
+        "width": 207,
+        "height": 218
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "duplicate_part_of_N13",
+        "class_text_bubble_for_free_sfx"
+      ],
+      "visual_observation": "Right-hand sound effect already included in N13; class says text_bubble despite free lettering.",
+      "contact_sheet": "../artifacts/novel-audit/contact-04.jpg"
+    },
+    {
+      "id": "N15",
+      "file": "21.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.4071766138076782,
+        "x": 322,
+        "y": 372,
+        "width": 198,
+        "height": 207
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [],
+      "visual_observation": "Outlined impact sound on character body.",
+      "contact_sheet": "../artifacts/novel-audit/contact-04.jpg"
+    },
+    {
+      "id": "N16",
+      "file": "21.jpg",
+      "text_index": 1,
+      "box": {
+        "class": "text_free",
+        "score": 0.42705681920051575,
+        "x": 36,
+        "y": 1157,
+        "width": 283,
+        "height": 442
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [
+        "broad_multi_effect_box",
+        "overlaps_N17_N18"
+      ],
+      "visual_observation": "Two separate sound-effect groups and intervening art enclosed together.",
+      "contact_sheet": "../artifacts/novel-audit/contact-05.jpg"
+    },
+    {
+      "id": "N17",
+      "file": "21.jpg",
+      "text_index": 2,
+      "box": {
+        "class": "text_free",
+        "score": 0.4014042019844055,
+        "x": 42,
+        "y": 1161,
+        "width": 169,
+        "height": 153
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "duplicate_part_of_N16"
+      ],
+      "visual_observation": "Upper sound effect already included in broad N16 box.",
+      "contact_sheet": "../artifacts/novel-audit/contact-05.jpg"
+    },
+    {
+      "id": "N18",
+      "file": "21.jpg",
+      "text_index": 3,
+      "box": {
+        "class": "text_free",
+        "score": 0.46387895941734314,
+        "x": 88,
+        "y": 1451,
+        "width": 224,
+        "height": 144
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "duplicate_part_of_N16"
+      ],
+      "visual_observation": "Lower sound effect already included in broad N16 box.",
+      "contact_sheet": "../artifacts/novel-audit/contact-05.jpg"
+    },
+    {
+      "id": "N19",
+      "file": "26.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_bubble",
+        "score": 0.44184809923171997,
+        "x": 159,
+        "y": 1585,
+        "width": 169,
+        "height": 15
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_art_false_positive",
+      "subtype": "bubble_border",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "page_bottom_truncation"
+      ],
+      "visual_observation": "Bottom 15 pixels capture a white balloon border before page cut; no lettering inside.",
+      "contact_sheet": "../artifacts/novel-audit/contact-05.jpg"
+    },
+    {
+      "id": "N20",
+      "file": "32.jpg",
+      "text_index": 4,
+      "box": {
+        "class": "text_bubble",
+        "score": 0.3950350284576416,
+        "x": 134,
+        "y": 800,
+        "width": 260,
+        "height": 29
+      },
+      "best_small_text_iou": 0.28821313240043056,
+      "classification": "clear_text_or_sfx",
+      "subtype": "dialogue",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "already_boxed_by_small",
+        "tile_seam_truncation"
+      ],
+      "visual_observation": "Bottom 29 pixels of speech text after y=800 split; small whole box covers same line.",
+      "contact_sheet": "../artifacts/novel-audit/contact-06.jpg"
+    },
+    {
+      "id": "N21",
+      "file": "39.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_bubble",
+        "score": 0.539563000202179,
+        "x": 586,
+        "y": 0,
+        "width": 103,
+        "height": 77
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_art_false_positive",
+      "subtype": "debris",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [],
+      "visual_observation": "Small floating rock and ink marks, not lettering.",
+      "contact_sheet": "../artifacts/novel-audit/contact-06.jpg"
+    },
+    {
+      "id": "N22",
+      "file": "40.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.37194931507110596,
+        "x": 85,
+        "y": 565,
+        "width": 245,
+        "height": 185
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [],
+      "visual_observation": "Large Korean sound effect on white strip.",
+      "contact_sheet": "../artifacts/novel-audit/contact-06.jpg"
+    },
+    {
+      "id": "N23",
+      "file": "43.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.6233691573143005,
+        "x": 87,
+        "y": 701,
+        "width": 137,
+        "height": 97
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_text_or_sfx",
+      "subtype": "sound_effect",
+      "plausibly_new_story_text_vs_small_whole": true,
+      "geometry_flags": [],
+      "visual_observation": "Small Korean sound effect over panel boundary.",
+      "contact_sheet": "../artifacts/novel-audit/contact-06.jpg"
+    },
+    {
+      "id": "N24",
+      "file": "44.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.41573566198349,
+        "x": 51,
+        "y": 1272,
+        "width": 98,
+        "height": 54
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_art_false_positive",
+      "subtype": "debris",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [],
+      "visual_observation": "Two small floating rocks on dark ground, not lettering.",
+      "contact_sheet": "../artifacts/novel-audit/contact-07.jpg"
+    },
+    {
+      "id": "N25",
+      "file": "45.jpg",
+      "text_index": 0,
+      "box": {
+        "class": "text_free",
+        "score": 0.3733220100402832,
+        "x": 2,
+        "y": 39,
+        "width": 54,
+        "height": 34
+      },
+      "best_small_text_iou": 0,
+      "classification": "clear_art_false_positive",
+      "subtype": "hatching",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [],
+      "visual_observation": "Short facial hatch marks beside character eye, not lettering.",
+      "contact_sheet": "../artifacts/novel-audit/contact-07.jpg"
+    },
+    {
+      "id": "N26",
+      "file": "45.jpg",
+      "text_index": 1,
+      "box": {
+        "class": "text_free",
+        "score": 0.5311999917030334,
+        "x": 413,
+        "y": 804,
+        "width": 276,
+        "height": 796
+      },
+      "best_small_text_iou": 0.1679047410967883,
+      "classification": "clear_text_or_sfx",
+      "subtype": "end_card_credits",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "already_boxed_by_small",
+        "broad_merge",
+        "overlaps_N27_N28"
+      ],
+      "visual_observation": "Broad box merges end-card continued label, social handle, and credits; old small boxes cover these text groups.",
+      "contact_sheet": "../artifacts/novel-audit/contact-07.jpg"
+    },
+    {
+      "id": "N27",
+      "file": "45.jpg",
+      "text_index": 3,
+      "box": {
+        "class": "text_free",
+        "score": 0.4798163175582886,
+        "x": 427,
+        "y": 1120,
+        "width": 257,
+        "height": 480
+      },
+      "best_small_text_iou": 0.26394293125810636,
+      "classification": "clear_text_or_sfx",
+      "subtype": "end_card_credits",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "already_boxed_by_small",
+        "duplicate_part_of_N26",
+        "overlaps_N28"
+      ],
+      "visual_observation": "End-card handle and credits; old small boxes cover this content.",
+      "contact_sheet": "../artifacts/novel-audit/contact-07.jpg"
+    },
+    {
+      "id": "N28",
+      "file": "45.jpg",
+      "text_index": 5,
+      "box": {
+        "class": "text_free",
+        "score": 0.3988898694515228,
+        "x": 428,
+        "y": 1296,
+        "width": 246,
+        "height": 303
+      },
+      "best_small_text_iou": 0.43682417022190023,
+      "classification": "clear_text_or_sfx",
+      "subtype": "end_card_credits",
+      "plausibly_new_story_text_vs_small_whole": false,
+      "geometry_flags": [
+        "already_boxed_by_small",
+        "duplicate_part_of_N26_N27"
+      ],
+      "visual_observation": "Credits nested inside N26 and N27; old small boxes cover this content.",
+      "contact_sheet": "../artifacts/novel-audit/contact-08.jpg"
+    }
+  ]
+}

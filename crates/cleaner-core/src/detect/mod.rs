@@ -1,8 +1,8 @@
 //! Detection: text boxes and a per-pixel mask.
 //!
-//! `comic_text_detector` returns three tensors and we use two of them - the
-//! YOLO head and the segmentation mask. The mask is why this model is worth
-//! its GPL-3.0 obligation and why it is **retained** past the auto pass.
+//! When selected, `comic_text_detector` returns three tensors and we use two
+//! of them - the YOLO head and the segmentation mask. The mask is retained
+//! past the auto pass for later review and mask fitting.
 //!
 //! Two rules from Phase 0 spike 6:
 //!
@@ -24,9 +24,10 @@ mod letterbox;
 mod nms;
 
 pub use boxes::{
-    MERGE_OVERLAP_SHARE, Region, SizeVerdict, TightBox, build as build_regions,
-    build_separated as build_regions_separated, median_box_area, overlaps_enough, size_verdict,
-    sort_regions,
+    BLOCK_LARGE_FACTOR, BLOCK_LARGE_HEIGHT_SHARE, BLOCK_LARGE_WIDTH_SHARE, MERGE_OVERLAP_SHARE,
+    Region, SizeVerdict, TightBox, block_size_verdict, build as build_regions,
+    build_separated as build_regions_separated, median_box_area, median_rect_area,
+    overlaps_enough, size_verdict, sort_regions, tight_rect,
 };
 pub use letterbox::Letterbox;
 
@@ -108,6 +109,13 @@ impl Segmentation {
         self.at(x, y) >= MASK_THRESHOLD
     }
 
+    /// The segmentation as a binary lettering mask, 255 at or above
+    /// [`MASK_THRESHOLD`]: the pixel evidence grouping reads where SAM-TS-L
+    /// did not run.
+    pub fn lettering_mask(&self) -> Vec<u8> {
+        self.levels.iter().map(|&level| if level >= MASK_THRESHOLD { 255 } else { 0 }).collect()
+    }
+
     /// How many native pixels one **proxy** pixel covers - `k` in §4's terms.
     /// A constant given in proxy pixels is multiplied by this.
     pub fn proxy_scale(&self) -> f32 {
@@ -151,10 +159,11 @@ impl Detector {
         let (session, selection) =
             crate::accel::open_session(model, &crate::accel::DETECTOR, preference, None)
                 .map_err(|e| DetectError::Model(e.to_string()))?;
-        let lease = crate::registry::register(
+        let lease = crate::registry::register_named(
             crate::registry::Kind::TextDetector,
             crate::registry::Footprint::weights(model),
             crate::registry::Device::accelerator(selection.accelerator),
+            Some("Comic Text Detector (CTD)".into()),
         );
         Ok(Detector { session, selection, lease })
     }
@@ -350,6 +359,19 @@ pub fn forget() {
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "manual real CTD graph and ONNX runtime required"]
+    fn native_webgpu_detector_runs_without_cpu_nodes() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        let graph = std::env::var("RT_GRAPH").expect("RT_GRAPH");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        let mut model = Detector::open(Path::new(&graph), crate::accel::Preference::Force(crate::accel::Accelerator::WebGpu)).unwrap();
+        assert_eq!(model.selection().accelerator, crate::accel::Accelerator::WebGpu);
+        let page = crate::image::fixtures::by_name("l8").raster;
+        let result = model.detect(&page).unwrap();
+        assert_eq!(result.segmentation.levels.len(), page.width as usize * page.height as usize);
+    }
+
     /// The padding must not be sampled. A wide page leaves a black band down
     /// the right of the model's output, and a resize that includes it drags a
     /// dark edge into the mask - which then reads as text and gets cleaned.
@@ -396,4 +418,3 @@ mod tests {
         assert!(!seg.is_text(0, 100));
     }
 }
-

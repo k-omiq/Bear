@@ -1,0 +1,119 @@
+{
+  "description": "Pinned ONNX Runtime CPU encoder + text head on saved real comic input",
+  "environment": {
+    "active_providers": {
+      "encoder": [
+        "CPUExecutionProvider"
+      ],
+      "text_head": [
+        "CPUExecutionProvider"
+      ]
+    },
+    "available_providers": [
+      "CoreMLExecutionProvider",
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "inter_op_num_threads": 1,
+    "intra_op_num_threads": 4,
+    "machine": "arm64",
+    "onnxruntime": "1.23.2",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]"
+  },
+  "graphs": {
+    "manifest": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof/manifest.json",
+    "manifest_sha256": "d8e734c2ff67fd535f8652cab22df96207fd2718bf08a27c44a460945a967f86",
+    "packages": {
+      "encoder": [
+        {
+          "bytes": 1335305985,
+          "file": "koharu_samts_encoder.onnx",
+          "sha256": "9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe"
+        }
+      ],
+      "text_head": [
+        {
+          "bytes": 22704641,
+          "file": "koharu_samts_text_head.onnx",
+          "sha256": "a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281"
+        }
+      ]
+    }
+  },
+  "input": {
+    "original_wh": [
+      690,
+      1600
+    ],
+    "page_dir": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/apocalypse-109/page-07",
+    "prepared_sha256": "55ed1002e3af6815631e9fcc29f75ef8dac07cf6b300bca32af8893ac154ca32",
+    "reference_logits_sha256": "5a38269b9d203f4fbf686d2996fc205a02443594d047005bf38caea6dc6d8367",
+    "resized_wh": [
+      442,
+      1024
+    ],
+    "source": {
+      "file": "/Users/caved/Downloads/apocalypse/109/07.jpg",
+      "original_wh": [
+        690,
+        1600
+      ],
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "sha256": "a42a7e77ad9b5015f35221accdb785d8b5bc508270d1ef091b2025f5d463e6b9"
+    }
+  },
+  "memory": {
+    "notes": "Process high-water RSS includes Python, ONNX Runtime, both sessions, and prior runs. On macOS ru_maxrss is bytes; on Linux KiB is converted to bytes.",
+    "peak_process_rss_bytes": 10869391360,
+    "process_rss_high_water_after_session_load_bytes": 1648361472
+  },
+  "parity": {
+    "changed_canvas_signs": 0,
+    "changed_restored_pixels": 0,
+    "logits": {
+      "changed_elements": 1033756,
+      "max_abs": 0.00019359588623046875,
+      "mean_abs": 1.6759613333514056e-05,
+      "rmse": 2.173921404076411e-05,
+      "shape": [
+        1,
+        1,
+        1024,
+        1024
+      ]
+    },
+    "output_mask_pixels": 24322,
+    "reference_mask_pixels": 24322
+  },
+  "timing_ms": {
+    "cold_encoder_session_load": 483.19987501599826,
+    "cold_head_session_load": 21.721959026763216,
+    "page_and_graph_hash_preflight": 477.3681670194492,
+    "timed_inference": [
+      {
+        "chain": 11145.083124982193,
+        "encoder": 10928.704124991782,
+        "head": 216.3789999904111
+      },
+      {
+        "chain": 11207.265749981161,
+        "encoder": 10993.549707985949,
+        "head": 213.71604199521244
+      }
+    ],
+    "timed_median_chain": 11176.174437481677,
+    "timed_median_encoder": 10961.126916488865,
+    "timed_median_head": 215.04752099281177,
+    "warmup_inference": [
+      {
+        "chain": 10142.836209008237,
+        "encoder": 9926.4649169927,
+        "head": 216.37129201553762
+      }
+    ]
+  }
+}

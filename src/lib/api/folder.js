@@ -63,3 +63,27 @@ export async function chooseFolder({ title, defaultPath } = {}) {
   })
   return typeof chosen === 'string' && chosen !== '' ? chosen : null
 }
+
+/** Choose one source page for read-only local model analysis. */
+export async function chooseImage({ title } = {}) {
+  if (!isTauri()) return null
+  const invoke = globalThis.__TAURI__?.core?.invoke ?? globalThis.__TAURI_INTERNALS__?.invoke
+  if (typeof invoke !== 'function') return null
+  const chosen = await invoke('plugin:dialog|open', {
+    options: { title, directory: false, multiple: false,
+      filters: [{ name: 'Comic pages', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }] },
+  })
+  return typeof chosen === 'string' && chosen !== '' ? chosen : null
+}
+
+/** Choose a locally obtained ONNX graph for a verified, explicit import. */
+export async function chooseOnnx({ title } = {}) {
+  if (!isTauri()) return null
+  const invoke = globalThis.__TAURI__?.core?.invoke ?? globalThis.__TAURI_INTERNALS__?.invoke
+  if (typeof invoke !== 'function') return null
+  const chosen = await invoke('plugin:dialog|open', {
+    options: { title, directory: false, multiple: false,
+      filters: [{ name: 'ONNX graph', extensions: ['onnx'] }] },
+  })
+  return typeof chosen === 'string' && chosen !== '' ? chosen : null
+}

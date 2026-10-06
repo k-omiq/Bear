@@ -78,6 +78,31 @@ describe('matchShortcut', () => {
     expect(matchShortcut(press('1'), home)).toBe(null)
   })
 
+  it('selects the six tools with 1 to 6, in rail order', () => {
+    const ids = ['autoClean', 'brush', 'shapes', 'aiMaskBrush', 'cloneHeal', 'maskSelect']
+    for (const [index, id] of ids.entries()) {
+      const shortcut = matchShortcut(press(String(index + 1)), editor)
+      expect(shortcut?.id).toBe(`tool.${id}`)
+      expect(shortcut?.labelKey).toBe(`tools.name.${id}`)
+      const slots = []
+      shortcut?.run(/** @type {any} */ ({ selectToolSlot: (slot) => slots.push(slot) }))
+      expect(slots).toEqual([index + 1])
+    }
+    expect(matchShortcut(press('6'), home)).toBe(null)
+  })
+
+  it('gives the selection tool S for its shape and X for add or remove', () => {
+    const calls = []
+    const commands = /** @type {any} */ ({
+      cycleMaskSelectShape: () => calls.push('shape'),
+      toggleMaskSelectMode: () => calls.push('mode'),
+    })
+    matchShortcut(press('s'), editor)?.run(commands)
+    matchShortcut(press('x'), editor)?.run(commands)
+    expect(calls).toEqual(['shape', 'mode'])
+    expect(matchShortcut(press('s'), home)).toBe(null)
+  })
+
   it('separates N by scope - new project at home, next issue in the editor', () => {
     expect(matchShortcut(press('n'), home)?.id).toBe('app.newProject')
     expect(matchShortcut(press('n'), editor)?.id).toBe('review.next')
@@ -299,7 +324,8 @@ describe('handlesKeyNatively', () => {
   it('lets 1-6 through a focused picker and keeps the keys the picker answers', () => {
     const select = { tagName: 'SELECT' }
     expect(matchShortcut(press('1', { target: select }), editor)?.id).toBe('tool.autoClean')
-    expect(matchShortcut(press('6', { target: select }), editor)?.id).toBe('tool.cloneHeal')
+    expect(matchShortcut(press('5', { target: select }), editor)?.id).toBe('tool.cloneHeal')
+    expect(matchShortcut(press('6', { target: select }), editor)?.id).toBe('tool.maskSelect')
     expect(matchShortcut(press('ArrowLeft', { target: select }), editor)).toBeNull()
     expect(matchShortcut(press('m', { target: select }), editor)).toBeNull()
   })

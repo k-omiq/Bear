@@ -33,6 +33,7 @@ pub fn blank(width: u32, height: u32) -> Raster {
         palette: None,
         trns: None,
         srgb_intent: None,
+        color: Default::default(),
         data: vec![255; (width as usize * height as usize) * 3],
     }
 }

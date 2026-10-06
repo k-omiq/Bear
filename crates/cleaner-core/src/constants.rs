@@ -2,9 +2,9 @@
 //!
 //! They are gathered here rather than left at their use sites for one
 //! reason: several of them are *related* - `edit_margin` is defined in terms of
-//! `isolation_radius` and the denoise dilation, and revision 1 got the
-//! relationship wrong and every rung-1 region violated the contract by one
-//! pixel. A derived constant should be derived where its inputs are visible.
+//! `isolation_radius`, and revision 1 got a relationship like that wrong and
+//! violated the contract by one pixel. A derived constant should be derived
+//! where its inputs are visible.
 
 /// First growth step of the mask candidate series, in proxy pixels.
 pub const MIN_MASK_THICKNESS: u32 = 4;
@@ -48,23 +48,16 @@ pub const ISOLATION_RADIUS: u32 = 5;
 /// model reads a hole with a glyph's silhouette and draws a glyph into it.
 pub const MODEL_HOLE_MARGIN: u32 = ISOLATION_RADIUS;
 
-/// Rung 1 dilates the mask by this before compositing the denoised crop through
-/// the whole dilated mask.
-pub const DENOISE_DILATION: u32 = 5;
+/// The fidelity contract's margin: how far past an applied mask any rung may
+/// write. The isolation radius, because the model rungs' post-engine cut is the
+/// widest write left: a fill writes through the mask and nowhere else.
+pub const EDIT_MARGIN: u32 = ISOLATION_RADIUS;
 
-/// A hard radius-truncated feather, never a Gaussian: a σ=1 Gaussian spreads
-/// non-zero alpha 2–3 px and would put rung 1 outside `EDIT_MARGIN`.
-pub const DENOISE_FEATHER: u32 = 1;
-
-/// The fidelity contract's margin:
-/// `max(isolation_radius, denoise_dilation + feather)`. Derived, not written
-/// down as 6, because revision 1 wrote down the isolation radius alone and
-/// every rung-1 region then violated the contract by one pixel.
-pub const EDIT_MARGIN: u32 = if ISOLATION_RADIUS > DENOISE_DILATION + DENOISE_FEATHER {
-    ISOLATION_RADIUS
-} else {
-    DENOISE_DILATION + DENOISE_FEATHER
-};
+/// The widest Mask padding the tool window offers, in page pixels: how far a
+/// detection's mask and lettering may be grown past the fit's
+/// (`DetectedRegion::padding_px`). A bound on the work as much as on the
+/// slider, because every step of it is a dilation of the region's masks.
+pub const MAX_MASK_PADDING: u32 = 32;
 
 /// The detector's fixed input, and therefore what "proxy resolution" means:
 /// the page is letterboxed into this square.
@@ -80,8 +73,7 @@ mod tests {
 
     #[test]
     fn the_edit_margin_covers_the_widest_write_any_rung_makes() {
-        assert_eq!(EDIT_MARGIN, 6);
+        assert_eq!(EDIT_MARGIN, 5);
         const { assert!(EDIT_MARGIN >= ISOLATION_RADIUS) };
-        const { assert!(EDIT_MARGIN >= DENOISE_DILATION + DENOISE_FEATHER) };
     }
 }

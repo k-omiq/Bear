@@ -39,6 +39,21 @@ jobs:
       - run: npm test
       - run: npx vite build
 
+  python:
+    name: Python (unittest + compileall)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run deploy/cloud unit tests
+        run: python3 -m unittest discover -v -s deploy/cloud/tests
+      - name: Run provisioner unit tests
+        run: python3 -m unittest discover -v -s provisioner
+      - name: Byte-compile deploy/cloud and provisioner
+        run: python3 -m compileall deploy/cloud provisioner
+
   rust:
     name: Rust (check + clippy + test, linux)
     runs-on: ubuntu-22.04

@@ -32,18 +32,24 @@ pub struct About {
 /// The source address the written offer points at.
 const SOURCE_URL: &str = "https://github.com/k-omiq/manga-cleaner";
 
+/// The detection models, by the names every screen uses, each with the
+/// upstream it comes from and that upstream's licence. None ships with the
+/// app: each is downloaded or imported after install.
+const DETECTOR_FACT: &str = "Available separately: Comic Text Detector (CTD), comic_text_detector (GPL-3.0) · \
+    Ogkalu comic text & bubble detector (Small and Full), ogkalu/comic-text-and-bubble-detector (Apache-2.0) · \
+    SAM-TS-L lettering mask, mayocream/koharu-text-sam-ts-l (Apache-2.0 per its model card; setup downloads and exports it on this computer or on your own cloud GPU) · \
+    image-script-identification osd_lstm (Apache-2.0)";
+
 #[tauri::command]
 pub fn about(app: tauri::AppHandle) -> About {
     About {
         app_version: env!("CARGO_PKG_VERSION"),
         facts: vec![
-            Fact { label_key: "about.fact.licence", value: "GPL-3.0-or-later".into() },
+            Fact { label_key: "about.fact.licence", value: "GPL-3.0-only".into() },
             Fact { label_key: "about.fact.source", value: SOURCE_URL.into() },
             Fact {
                 label_key: "about.fact.detector",
-                value: "comic_text_detector (GPL-3.0) · comic-text-and-bubble-detector v4-s int8 \
-                        (Apache-2.0) · image-script-identification osd_lstm (Apache-2.0)"
-                    .into(),
+                value: DETECTOR_FACT.into(),
             },
             Fact {
                 label_key: "about.fact.engines",
@@ -51,7 +57,7 @@ pub fn about(app: tauri::AppHandle) -> About {
             },
             Fact {
                 label_key: "about.fact.cloud",
-                value: "Google, paid tier only, opt-in per request".into(),
+                value: "Modal or Beam, your own account, off by default, confirmed per request".into(),
             },
             Fact { label_key: "about.fact.runtime", value: runtime_fact(&app) },
         ],
@@ -96,5 +102,29 @@ mod tests {
         assert!(json.contains("\"appVersion\""), "{json}");
         assert!(json.contains("\"labelKey\""), "{json}");
         assert!(!json.contains("app_version") && !json.contains("label_key"), "{json}");
+    }
+
+    /// Attribution names each detection model the way Settings does, beside
+    /// its upstream and licence.
+    #[test]
+    fn the_detector_attribution_uses_the_visible_model_names() {
+        for name in [crate::models::CTD_NAME, crate::models::SAM_TS_NAME] {
+            assert!(DETECTOR_FACT.contains(name), "{name}");
+        }
+        assert!(DETECTOR_FACT.contains("Ogkalu comic text & bubble detector (Small and Full)"));
+        assert!(DETECTOR_FACT.contains("ogkalu/comic-text-and-bubble-detector (Apache-2.0)"));
+        assert!(!DETECTOR_FACT.contains("RT-DETR") && !DETECTOR_FACT.contains("  "), "{DETECTOR_FACT}");
+    }
+
+    /// SAM-TS-L is not import-only: `install_sam_ts` fetches the pinned
+    /// checkpoint and exports its graphs here, and cloud setup seeds the same
+    /// graphs on the user's own GPU (`deploy/cloud/common/analysis_seed.py`).
+    #[test]
+    fn the_sam_attribution_says_how_it_arrives() {
+        assert!(!DETECTOR_FACT.contains("import only"), "{DETECTOR_FACT}");
+        assert!(
+            DETECTOR_FACT.contains("setup downloads and exports it on this computer or on your own cloud GPU"),
+            "{DETECTOR_FACT}"
+        );
     }
 }

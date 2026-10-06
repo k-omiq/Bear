@@ -135,6 +135,9 @@ pub struct NewDelta {
 #[serde(rename_all = "camelCase")]
 pub struct Journal {
     pub version: u32,
+    /// Zero is the legacy native-page payload; one is oriented display geometry.
+    #[serde(default)]
+    pub coordinate_version: u8,
     /// How many of `entries` are in the **past**. Everything at or after this
     /// index is the redo stack, youngest last. A cursor rather than two vectors
     /// because the two vectors have to be written and read as one document
@@ -148,7 +151,13 @@ pub struct Journal {
 
 impl Default for Journal {
     fn default() -> Journal {
-        Journal { version: JOURNAL_VERSION, cursor: 0, next_seq: 1, entries: Vec::new() }
+        Journal {
+            version: JOURNAL_VERSION,
+            coordinate_version: 1,
+            cursor: 0,
+            next_seq: 1,
+            entries: Vec::new(),
+        }
     }
 }
 
@@ -203,7 +212,10 @@ impl Journal {
             entries: self
                 .entries
                 .iter()
-                .map(|entry| HistoryLabel { seq: entry.seq, label: entry.label.clone() })
+                .map(|entry| HistoryLabel {
+                    seq: entry.seq,
+                    label: entry.label.clone(),
+                })
                 .collect(),
         }
     }
@@ -246,8 +258,82 @@ pub fn journal_path(job: &Path) -> PathBuf {
 /// journal is only the record of how to take it back.
 pub fn load(job: &Path) -> Journal {
     let path = journal_path(job);
-    let Ok(bytes) = std::fs::read(&path) else { return Journal::default() };
-    serde_json::from_slice::<Journal>(&bytes).unwrap_or_default()
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Journal::default();
+    };
+    let mut journal = serde_json::from_slice::<Journal>(&bytes).unwrap_or_default();
+    if journal.coordinate_version == 0 {
+        if let Ok(opened) = cleaner_core::project::Job::open(job) {
+            for entry in &mut journal.entries {
+                let record = opened
+                    .project
+                    .patches
+                    .iter()
+                    .find(|p| p.id == entry.region_id);
+                let source_idx = record.map(|p| p.source_idx).or_else(|| {
+                    let suffix = entry.region_id.rsplit_once("-p")?.1;
+                    let position = suffix
+                        .split('-')
+                        .next()?
+                        .parse::<usize>()
+                        .ok()?
+                        .checked_sub(1)?;
+                    opened.project.strip.order.get(position).copied()
+                });
+                let Some(source) = source_idx.and_then(|i| opened.project.sources.get(i)) else {
+                    continue;
+                };
+                if source.orientation.0 == 1
+                    && opened.project.sources.iter().all(|s| s.orientation.0 == 1)
+                {
+                    continue;
+                }
+                for side in [&mut entry.before, &mut entry.after] {
+                    let Some(region) = side.region.as_mut() else {
+                        continue;
+                    };
+                    let Some(bbox) = region.get("bbox") else {
+                        continue;
+                    };
+                    let Some([x, y, w, h]) = ["x", "y", "w", "h"]
+                        .map(|key| bbox.get(key).and_then(|n| n.as_f64()))
+                        .into_iter()
+                        .collect::<Option<Vec<_>>>()
+                        .and_then(|v| <[f64; 4]>::try_from(v).ok())
+                    else {
+                        continue;
+                    };
+                    let native = cleaner_core::mask::Rect::new(
+                        (x * source.w as f64 / 100.0).round() as i64,
+                        (y * source.h as f64 / 100.0).round() as i64,
+                        (w * source.w as f64 / 100.0).round().max(0.0) as u32,
+                        (h * source.h as f64 / 100.0).round().max(0.0) as u32,
+                    );
+                    let display = if let Some(record) = record {
+                        let mut historical = record.clone();
+                        historical.native_parts.clear();
+                        historical.bbox = native;
+                        if let Some(params)=historical.provenance.params_snapshot.as_object_mut() { params.remove("layer"); }
+                        cleaner_core::project::orientation::display_bbox(
+                            &opened.project,
+                            &historical,
+                        )
+                    } else {
+                        source.orientation.rect(native, source.w, source.h)
+                    };
+                    if let Some(layer)=region.get_mut("mask").and_then(|mask|mask.get_mut("layer")) {
+                        if let Ok(style)=serde_json::from_value::<cleaner_core::patch::LayerStyle>(layer.clone()) {
+                            *layer=serde_json::to_value(cleaner_core::project::orientation::orient_layer_style(style,source.orientation)).unwrap_or_default();
+                        }
+                    }
+                    let (width, height) = source.orientation.size(source.w, source.h);
+                    region["bbox"] = serde_json::json!({"x":display.x as f64/width as f64*100.0,"y":display.y as f64/height as f64*100.0,"w":display.w as f64/width as f64*100.0,"h":display.h as f64/height as f64*100.0});
+                }
+            }
+            journal.coordinate_version = 1;
+        }
+    }
+    journal
 }
 
 /// Write a chapter's journal, temp-fsync-rename like everything else in the
@@ -276,7 +362,7 @@ fn with_journal<T>(
     work: impl FnOnce(&mut Journal) -> T,
 ) -> Result<T, String> {
     let job = crate::library::resolve_chapter(app, chapter_id)?;
-    let _lock = crate::run::lock_job(&job);
+    let _lock = crate::run::lock_job(&job)?;
     let mut journal = load(&job);
     let answer = work(&mut journal);
     save(&job, &journal)?;
@@ -329,7 +415,10 @@ pub async fn history_move(
                 "redo" => journal.redo(),
                 _ => None,
             };
-            HistoryStep { cursor: journal.cursor, entry }
+            HistoryStep {
+                cursor: journal.cursor,
+                entry,
+            }
         })
     })
     .await
@@ -344,8 +433,16 @@ mod tests {
             label: label.to_owned(),
             op: "region-state".to_owned(),
             region_id: region.to_owned(),
-            before: Side { present: true, page_status: Some("cleaned".into()), region: None },
-            after: Side { present: false, page_status: Some("unclean".into()), region: None },
+            before: Side {
+                present: true,
+                page_status: Some("cleaned".into()),
+                region: None,
+            },
+            after: Side {
+                present: false,
+                page_status: Some("unclean".into()),
+                region: None,
+            },
         }
     }
 
@@ -367,7 +464,13 @@ mod tests {
         let mut journal = Journal::default();
         journal.push(delta("masks.command.deleteMask", "r1"));
         let view = journal.view();
-        assert_eq!(view.entries[0], HistoryLabel { seq: 1, label: "masks.command.deleteMask".into() });
+        assert_eq!(
+            view.entries[0],
+            HistoryLabel {
+                seq: 1,
+                label: "masks.command.deleteMask".into()
+            }
+        );
     }
 
     #[test]
@@ -380,7 +483,10 @@ mod tests {
         assert_eq!(journal.cursor, 1);
         assert_eq!(journal.undo().unwrap().label, "a");
         assert_eq!(journal.cursor, 0);
-        assert!(journal.undo().is_none(), "the bottom of the past is not a step");
+        assert!(
+            journal.undo().is_none(),
+            "the bottom of the past is not a step"
+        );
 
         assert_eq!(journal.redo().unwrap().label, "a");
         assert_eq!(journal.redo().unwrap().label, "b");
@@ -397,7 +503,12 @@ mod tests {
         journal.undo();
         journal.push(delta("c", "r3"));
 
-        let labels: Vec<_> = journal.view().entries.iter().map(|e| e.label.clone()).collect();
+        let labels: Vec<_> = journal
+            .view()
+            .entries
+            .iter()
+            .map(|e| e.label.clone())
+            .collect();
         assert_eq!(labels, vec!["a", "c"]);
         assert_eq!(journal.cursor, 2);
         assert!(journal.redo().is_none());
@@ -430,7 +541,10 @@ mod tests {
         let read = load(&job);
         assert_eq!(read.cursor, 1);
         assert_eq!(read.entries[0].region_id, "r1");
-        assert_eq!(read.entries[0].before.page_status.as_deref(), Some("cleaned"));
+        assert_eq!(
+            read.entries[0].before.page_status.as_deref(),
+            Some("cleaned")
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

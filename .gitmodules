@@ -1,0 +1,3 @@
+[submodule "external/koharu"]
+	path = external/koharu
+	url = https://github.com/koharu-rs/koharu.git

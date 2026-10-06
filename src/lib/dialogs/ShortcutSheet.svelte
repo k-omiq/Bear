@@ -46,6 +46,7 @@
     shortcutChord,
     shortcutLabelKey,
   } from '../shortcuts.js'
+  import { writeSettingsSerialized } from '../state/settingswrite.js'
   import { getBackend } from '../api/backend.js'
   import { readingDirection } from '../state/editor.svelte.js'
   import {
@@ -137,8 +138,7 @@
     // A settings store that will not take the write is not a reason to refuse
     // the rebinding: the session already has it, and the next successful write
     // carries it down.
-    getBackend()
-      .writeSettings(backendSettingsPatch())
+    writeSettingsSerialized(getBackend(), () => backendSettingsPatch())
       .catch(() => {})
   }
 

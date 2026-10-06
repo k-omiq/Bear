@@ -2,11 +2,10 @@
  * The open chapter: everything the editor screen, its panels, its canvas and
  * its tools read and write.
  *
- * This module is the *only* subscriber to the backend event channel
+ * This module owns editor state from the backend event channel
  * (`backend.subscribe`). Events become page marks, region updates and run
- * counters here; `notice` events are forwarded to `app.notify`. Nothing else
- * in the app subscribes - a second subscriber would mean two half-truths about
- * the same run.
+ * counters here; `notice` events are forwarded to `app.notify`. The cloud GPU
+ * tracker listens separately only for run endings, since it outlives the editor.
  *
  * Autosave restores page, scroll position, zoom and the
  * user's position in the review set when a chapter is reopened. The review set
@@ -16,6 +15,7 @@
  */
 
 import { getBackend } from '../api/backend.js'
+import { presentNotice } from '../model/cloudnotices.js'
 import {
   adopt as adoptHistory,
   createHistory,
@@ -28,7 +28,10 @@ import {
   redoLabel,
 } from '../model/history.js'
 import { reviewList, reviewReason, stepIssue } from '../model/review.js'
+import { runDetection, unifyAnalysisTargets } from '../model/pipelines.js'
 import { recountPage } from '../model/status.js'
+import { toolSpec } from '../editor/tools.js'
+import { MAX_MASK_PADDING } from '../model/masks.js'
 import { evictRegions, slideWindow, windowIndices } from './pagewindow.svelte.js'
 import { pageNavControls, defaultReadingDirection } from '../model/paging.js'
 import { clearCloneSource, clearDraft, resetDraftState } from '../editor/draft.svelte.js'
@@ -36,19 +39,21 @@ import { notify, pushModal } from './app.svelte.js'
 import { session, openWindow } from './session.svelte.js'
 import { loadAutosave, storeAutosave } from './autosave.js'
 import { numberIn } from './persist.js'
+import { settleCreation } from './heldcreations.js'
+import { RUN_KINDS, jobById, refreshJobs, registerJob } from './jobs.svelte.js'
 
 const AUTOSAVE_DEBOUNCE_MS = 250
 const HISTORY_RETRY_MS = 50
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Tool ids, in the order the `1`–`6` shortcuts and the tool rail use. */
+/** Tool ids, in the order the `1` to `6` shortcuts and the tool rail use. */
 export const TOOLS = /** @type {const} */ ([
   'autoClean',
   'brush',
   'shapes',
   'aiMaskBrush',
-  'contentAwareFill',
   'cloneHeal',
+  'maskSelect',
 ])
 
 /**
@@ -57,14 +62,15 @@ export const TOOLS = /** @type {const} */ ([
  *
  * This is the enforcement of the ruling in `src/lib/editor/tools.js` - a batch
  * run is local-only - and it lives here, at the one call site that sends, so
- * that it holds however the settings are configured. The run protocol has no
- * `needs-confirmation` step, so a run that could reach the cloud rung would
- * spend without the transmission statement or the
- * cost confirmation. Cloud stays reachable per region through
- * Content-aware fill, which carries the whole flow.
+ * that it holds however the settings are configured. Every cloud render asks
+ * for consent first, one request at a time
+ * (`src/lib/editor/cloudflow.svelte.js`), and the run protocol has no step
+ * that could ask, so a run that could reach the cloud would send pages
+ * without it. The cloud stays reachable per region, from the AI mask brush
+ * and from a Layers row, each of which asks.
  *
- * If `runClean` ever grows the confirmation protocol, this constant is what
- * gives way - not the gate in `src/lib/editor/cloudflow.svelte.js`.
+ * If `runClean` ever grows a consent step, this constant is what gives way -
+ * not the gate in `src/lib/editor/cloudflow.svelte.js`.
  */
 export const LOCAL_CEILING = 'lama'
 
@@ -92,11 +98,17 @@ export const ZOOM_STEP = 0.15
 function defaultToolParams() {
   return {
     autoClean: {
+      // The step (docs/detect-clean.md): find and store the regions, clean
+      // the stored ones, or both, which is what Auto clean always did.
+      step: 'auto',
       scope: 'page',
       bubbleEngine: 'fill',
       bubbleColor: '#ffffff',
       outsideEngine: 'lama',
       outsideBubbles: 'review',
+      // Page pixels every detected mask is grown by: Detect stores masks this
+      // much wider, and Apply re-pads the ones already stored.
+      maskPadding: 0,
     },
     // `mode` is pinned to `paint` and has no control: the brush lays down a
     // colour and nothing else (`tools.js`). It stays in the record because it
@@ -111,23 +123,10 @@ function defaultToolParams() {
       opacity: 100,
       flow: 100,
     },
-    // `mode` starts on the `fill` **engine** and not on `solid`, which is what
-    // Shapes did before it had the row: a drawn shape cleaned what was under
-    // it with rung 0. It is also the cheapest of the six - arithmetic over the
-    // page's own samples, no weights to have downloaded - so the tool cannot
-    // refuse the first shape somebody draws with it. `color` and `opacity` are
-    // kept beside it for the moment the user switches to `solid`, even though
-    // the tool window does not show them until then.
-    shapes: { shape: 'rect', mode: 'fill', color: '#ffffff', opacity: 100, feather: 0 },
-    // The AI mask brush's `engine` is a **rung named outright** and not a pick
-    // (`src/lib/editor/tools.js#MASK_ENGINES`), so it starts on the one rung
-    // that needs no weights at all: rung 0 is arithmetic over the page's own
-    // samples, it is instant, and it cannot be refused for a model this
-    // machine has not downloaded. The stroke's mask is the stroke itself, so a
-    // fill is the right answer for most of what this tool is reached for;
-    // anything the paper does not cover is one chip away, and the Layers row
-    // offers the same list again.
-    aiMaskBrush: { engine: 'fill', size: 36 },
+    // A new shape paints with a solid colour. Its outline is optional.
+    shapes: { shape: 'rect', mode: 'solid', color: '#ffffff', opacity: 100, outlineColor: '#000000', outlineWidth: 0, feather: 0 },
+    // The AI mask brush defaults to the local LaMa Manga model.
+    aiMaskBrush: { engine: 'lama', size: 36 },
     contentAwareFill: { fillMode: 'match-surround', engine: 'local' },
     cloneHeal: {
       size: 32,
@@ -137,6 +136,9 @@ function defaultToolParams() {
       alignment: 'aligned',
       mode: 'heal',
     },
+    // The selection tool edits the detected masks Clean erases: it adds by
+    // default, with a round brush.
+    maskSelect: { mode: 'add', shape: 'brush', size: 32 },
   }
 }
 
@@ -145,6 +147,7 @@ function defaultToolParams() {
  * @property {boolean} active
  * @property {string|null} runId
  * @property {'page'|'chapter'|'project'|null} scope
+ * @property {import('../api/backend.js').RunMode} mode - the step the run takes, which the status line names
  * @property {number} queued
  * @property {number} pagesDone
  * @property {number|null} currentPageIndex - the page showing the `●` mark
@@ -160,7 +163,20 @@ export const editor = $state({
 
   /* view */
   pageIndex: 0,
+  /**
+   * Where the canvas is scrolled to. `top` is measured from the position
+   * where the page's top sits at its place under the top bar, not from the
+   * scroller's own zero: the canvas keeps `scrollRoom` of empty space above
+   * the page, and a position that counted it would move with the window's
+   * height. Negative while the page is pulled down into that space.
+   */
   scroll: { top: 0, left: 0 },
+  /**
+   * The empty space the canvas keeps above and below the page, in CSS pixels
+   * (`CanvasStage.svelte`, "Scroll room"). The canvas reports it; the
+   * scroller's `scrollTop` is `scroll.top` plus this. Never saved.
+   */
+  scrollRoom: 0,
   /**
    * The zoom the user chose: the fraction of the page's own pixels the sheet
    * is drawn at, so `1` is 1:1. **Always inside `[MIN_ZOOM, MAX_ZOOM]`** -
@@ -187,6 +203,14 @@ export const editor = $state({
   /* longstrip - see "The strip handshake" below */
   /** @type {number[]} the positions the strip currently has on screen */
   stripScope: [],
+  stripFocus: -1,
+  /**
+   * @type {number[]} the positions the column has mounted - on screen, the
+   * screen fetched ahead and the overscan - which the window keeps resident
+   * with one neighbour either side, so a sheet has its patch layers before it
+   * scrolls into view (`editor/PatchLayers.svelte`)
+   */
+  stripMounted: [],
   /** @type {{index: number, token: number}|null} */
   stripScrollRequest: null,
 
@@ -228,6 +252,7 @@ export const editor = $state({
     active: false,
     runId: null,
     scope: null,
+    mode: 'auto',
     queued: 0,
     pagesDone: 0,
     currentPageIndex: null,
@@ -276,12 +301,12 @@ export function pageCount() {
 }
 
 /**
- * The project's reading direction, falling back to the session default and
- * then to the model's RTL default.
+ * The reading direction chosen in Settings applies immediately, including to
+ * existing projects. A project's recorded import default is only a fallback.
  * @returns {'rtl'|'ltr'}
  */
 export function readingDirection() {
-  return editor.project?.readingDirection ?? session.readingDirection ?? defaultReadingDirection()
+  return session.readingDirection ?? editor.project?.readingDirection ?? defaultReadingDirection()
 }
 
 /**
@@ -350,13 +375,21 @@ export function scopedRegions() {
  * back without its page's status is how a full track ends up under a "not
  * cleaned" mark. Omit it only for an edit that cannot move the page.
  *
+ * **A page the window has evicted still takes the answer.** An edit can be
+ * answered after the reader has turned far enough for its page to be reduced
+ * to a header - a cloud render takes minutes - and the native side has
+ * already written the result by then. The regions are not in hand, so only
+ * the header moves (its status, and the review index entry), and the answer
+ * counts as landed so the caller records its undo entry. A region missing from
+ * a page that **is** in hand is different: it was deleted meanwhile, and that
+ * answer is refused.
+ *
  * @param {import('../api/backend.js').ApiRegion|null} region
  * @param {string} [pageStatus]
- * @returns {boolean} whether the region was found and replaced
+ * @returns {boolean} whether the region was found and replaced, or its page is out of the window
  */
 export function replaceRegion(region, pageStatus) {
   if (!region) return false
-  for (const page of pages()) page.tileRevision = (page.tileRevision ?? 0) + 1
   for (const page of pages()) {
     const index = page.regions.findIndex((candidate) => candidate.id === region.id)
     if (index >= 0) {
@@ -370,7 +403,13 @@ export function replaceRegion(region, pageStatus) {
       return true
     }
   }
-  return false
+  const page = pages().find((candidate) => candidate.id === region.pageId) ?? pageHolding(region.id)
+  // `resident: false` is what an eviction writes; a page without the flag at
+  // all is one the window never reduced, so it is treated as in hand.
+  if (!page || page.resident !== false) return false
+  if (pageStatus) page.status = pageStatus
+  syncReviewEntry(page, region)
+  return true
 }
 
 /**
@@ -396,6 +435,21 @@ function pageHolding(regionId) {
     if (!best || page.id.length > best.id.length) best = page
   }
   return best
+}
+
+/**
+ * Whether the open chapter still has a region: on a page whose regions are in
+ * hand, or on a page the window has reduced to a header - whose regions are
+ * not in hand, so nothing there says it is gone. A region missing from a page
+ * that **is** in hand was deleted, the rule `replaceRegion` refuses a late
+ * answer by.
+ *
+ * @param {string} regionId
+ * @returns {boolean}
+ */
+export function holdsRegion(regionId) {
+  if (pages().some((page) => page.regions.some((candidate) => candidate.id === regionId))) return true
+  return pageHolding(regionId)?.resident === false
 }
 
 /**
@@ -435,11 +489,6 @@ function forgetRegion(regionId) {
  * @returns {boolean} whether the chapter changed
  */
 export function applyRegionState(regionId, region, pageStatus) {
-  // A longstrip patch may intersect pages other than the id's anchor page.
-  // Bump the lightweight URL token on every page header; only the bounded DOM
-  // window requests tiles, while undo/redo and edits refresh both sides of a
-  // visible join without loading chapter raster data.
-  for (const page of pages()) page.tileRevision = (page.tileRevision ?? 0) + 1
   for (const page of pages()) {
     const index = page.regions.findIndex((candidate) => candidate.id === regionId)
     if (index < 0) continue
@@ -524,15 +573,20 @@ export function pageStatusOf(regionId) {
 /**
  * The page indices whose regions should be in RAM right now: previous,
  * current, next, and - in a longstrip chapter - whatever the column has on
- * screen, because those are the pages the Layers panel is listing.
+ * screen, because those are the pages the Layers panel is listing, and
+ * whatever it has mounted with a neighbour either side, because a sheet draws
+ * its patches from its own regions and from the ones reaching across its
+ * joins.
  *
  * @returns {number[]}
  */
 export function residentIndices() {
+  const mounted = editor.stripMounted
+  const reach = mounted.length > 0 ? [Math.min(...mounted) - 1, ...mounted, Math.max(...mounted) + 1] : []
   return windowIndices({
     pageIndex: editor.pageIndex,
     pageCount: pageCount(),
-    stripScope: editor.stripScope,
+    stripScope: [...editor.stripScope, editor.stripFocus, ...reach],
     longstrip: editor.project?.mode === 'longstrip',
   })
 }
@@ -587,6 +641,19 @@ export async function syncPageWindow() {
     applyPage: applyLoadedPage,
     evictPage,
   })
+}
+
+/** Refresh one resident page after a native edit changes later-layer review state. */
+const reloadVersions = new Map()
+export async function reloadPage(index) {
+  const chapter = editor.chapter
+  if (!chapter || !Number.isInteger(index)) return
+  const key = `${chapter.id}:${index}`
+  const version = (reloadVersions.get(key) ?? 0) + 1
+  reloadVersions.set(key, version)
+  const loaded = await getBackend().loadPages({ chapterId: chapter.id, indices: [index] })
+  if (editor.chapter?.id !== chapter.id || reloadVersions.get(key) !== version) return
+  for (const page of loaded ?? []) applyLoadedPage(page)
 }
 
 /**
@@ -737,9 +804,15 @@ function pageAt(index) {
 /** @param {import('../api/backend.js').BackendEvent} event */
 function onBackendEvent(event) {
   if (event.type === 'notice') {
-    notify({ key: event.key, params: event.params, tone: event.tone })
+    // A cloud clean's notice carries a machine code; this says it in words,
+    // or leaves it out (`model/cloudnotices.js`).
+    const { key, params } = presentNotice(event.key, event.params ?? {})
+    notify({ key, params, tone: event.tone })
     return
   }
+  // Before the chapter check: a flow waiting on its run (`runFinished`) must
+  // hear the end of it even when the reader has opened another chapter since.
+  if (event.type === 'run-finished') settleRun(event)
   if (!editor.chapter || event.chapterId !== editor.chapter.id) return
 
   switch (event.type) {
@@ -766,7 +839,9 @@ function onBackendEvent(event) {
         // whole page and sets them outright.
         page.regionCount = (page.regionCount ?? 0) + 1
         const flagged = reviewReason(event.region) !== null
-        if (!flagged && event.region.mask) page.doneCount = (page.doneCount ?? 0) + 1
+        // A detection carries its fitted mask and is not finished: it counts
+        // as found, never as done.
+        if (!flagged && event.region.mask && event.region.outcome !== 'detected') page.doneCount = (page.doneCount ?? 0) + 1
         // The review count is not incremented - it is read back off the index,
         // which is keyed by region id and so cannot double-count a region the
         // run has replaced.
@@ -795,13 +870,17 @@ function onBackendEvent(event) {
         editor.chapter.pages[index] = wanted ? event.page : evictRegions(event.page)
       }
       editor.run.pagesDone += 1
+      if (editor.run.currentPageIndex === event.page.index) editor.run.currentPageIndex = null
       break
     }
     case 'run-finished': {
+      if (editor.run.runId !== event.runId) break
+      const unfinishedPage = editor.run.currentPageIndex
       editor.run.active = false
       editor.run.runId = null
       editor.run.currentPageIndex = null
       editor.run.nextPageIndex = event.nextPageIndex
+      if (unfinishedPage !== null) void reloadPage(unfinishedPage).catch(() => {})
       scheduleAutosave()
       break
     }
@@ -828,17 +907,29 @@ function subscribeOnce() {
  * them, and the page window and the undo journal's index are read again from
  * scratch.
  *
+ * `reload` reads the open chapter again rather than answering that it is
+ * open already.
+ *
  * @param {string} projectId
  * @param {string} chapterId
- * @param {{convert?: boolean}} [options]
+ * @param {{convert?: boolean, reload?: boolean}} [options]
  * @returns {Promise<boolean>} whether the chapter opened
  */
 export async function openEditorChapter(projectId, chapterId, options = {}) {
   const convert = options.convert === true
-  if (!convert && editor.chapter?.id === chapterId && editor.project?.id === projectId) return true
+  const reload = options.reload === true
+  if (!convert && !reload && editor.chapter?.id === chapterId && editor.project?.id === projectId) return true
   subscribeOnce()
   editor.loading = true
-  const result = await getBackend().openChapter({ projectId, chapterId, convert })
+  let result
+  try {
+    result = await getBackend().openChapter({ projectId, chapterId, convert })
+  } catch (error) {
+    editor.loading = false
+    // Another process holding the library for longer than a command waits.
+    if (reportJobConflict(error)) return false
+    throw error
+  }
   if (!result) {
     editor.loading = false
     return false
@@ -853,7 +944,10 @@ export async function openEditorChapter(projectId, chapterId, options = {}) {
   // so the Layers panel is never momentarily empty for a page full of masks.
   // The journal comes back at the same time - undo survives a restart, and this
   // is where it is picked up again.
-  await Promise.all([syncPageWindow(), loadHistory(chapterId)])
+  // A run this chapter already has - started before the editor was left, or
+  // before the window reloaded - is picked up here, so the Pages list and the
+  // tool's Cancel follow it again (`adoptChapterJob`).
+  await Promise.all([syncPageWindow(), loadHistory(chapterId), adoptChapterJob()])
   editor.loading = false
 
   if (result.pendingConversion) {
@@ -881,6 +975,8 @@ function resetSessionState() {
   editor.wipe = 100
   editor.maskOverlay = false
   editor.stripScope = []
+  editor.stripFocus = -1
+  editor.stripMounted = []
   editor.stripScrollRequest = null
   // A gesture in progress, and the clone source it may have sampled, belong to
   // the page they were drawn on.
@@ -889,6 +985,7 @@ function resetSessionState() {
     active: false,
     runId: null,
     scope: null,
+    mode: 'auto',
     queued: 0,
     pagesDone: 0,
     currentPageIndex: null,
@@ -910,6 +1007,15 @@ export function closeEditorChapter() {
   // A resume that was asked for and never consumed dies with the screen it was
   // meant for; it must not fire the next time that chapter is opened by hand.
   pendingResume = null
+  pendingRunStart = null
+  // The editor owns the event subscription. A flow waiting for its first run
+  // cannot hear the native end after this subscription is removed. The run
+  // itself goes on: the jobs list follows it (`state/jobs.svelte.js`), and
+  // reopening the chapter adopts it again (`adoptChapterJob`).
+  const chapterId = editor.chapter?.id
+  for (const runId of new Set([editor.run.runId, ...runWaiters.keys()].filter(Boolean))) {
+    settleRun({ type: 'run-finished', runId, chapterId, reason: 'editor-closed' })
+  }
   if (autosaveTimer) {
     clearTimeout(autosaveTimer)
     autosaveTimer = null
@@ -971,14 +1077,22 @@ export function goToPage(index) {
  * navigating.
  *
  * @param {number} index
+ * @param {number[]} [indices] visible pages, updated with the centre before loading
+ * @param {number} [focus] a focused sheet kept resident outside the visible band
+ * @param {number[]} [mounted] the positions the column has mounted (`editor.stripMounted`)
  */
-export function setStripPosition(index) {
+export function setStripPosition(index, indices = editor.stripScope, focus = editor.stripFocus, mounted = editor.stripMounted) {
   const last = Math.max(0, pageCount() - 1)
   const next = Math.min(last, Math.max(0, Math.trunc(index)))
-  if (next === editor.pageIndex) return
+  const moved = next !== editor.pageIndex
+  const scopeChanged = updateStripScope(indices)
+  const focusChanged = focus !== editor.stripFocus
+  const mountedChanged = updateStripMounted(mounted)
+  if (!moved && !scopeChanged && !focusChanged && !mountedChanged) return
   editor.pageIndex = next
+  editor.stripFocus = focus
   void syncPageWindow()
-  scheduleAutosave()
+  if (moved) scheduleAutosave()
 }
 
 /**
@@ -988,17 +1102,29 @@ export function setStripPosition(index) {
  * @param {number[]} indices
  */
 export function setStripScope(indices) {
+  if (updateStripScope(indices)) void syncPageWindow()
+}
+
+/** @param {number[]} indices */
+function updateStripMounted(indices) {
+  const next = Array.isArray(indices) ? indices : []
+  const same =
+    next.length === editor.stripMounted.length &&
+    next.every((value, i) => value === editor.stripMounted[i])
+  if (!same) editor.stripMounted = next
+  return !same
+}
+
+/** @param {number[]} indices */
+function updateStripScope(indices) {
   const next = Array.isArray(indices) ? indices : []
   const same =
     next.length === editor.stripScope.length &&
     next.every((value, i) => value === editor.stripScope[i])
   if (!same) {
     editor.stripScope = next
-    // The scope *is* the window in a longstrip chapter: these are the pages the
-    // Layers panel lists, so they are the pages whose regions have to be in
-    // hand.
-    void syncPageWindow()
   }
+  return !same
 }
 
 let stripScrollToken = 0
@@ -1038,12 +1164,23 @@ export function pageByArrow(side) {
 }
 
 /**
- * @param {number} top
+ * @param {number} top from the page's place at rest, `editor.scrollRoom` taken off
  * @param {number} left
  */
 export function setScroll(top, left) {
   editor.scroll = { top, left }
   scheduleAutosave()
+}
+
+/**
+ * The canvas reporting the space it keeps above the page, so that the shell
+ * can turn a saved position into a `scrollTop` and back.
+ *
+ * @param {number} room CSS pixels
+ */
+export function reportScrollRoom(room) {
+  const next = Math.max(0, Math.round(Number(room) || 0))
+  if (next !== editor.scrollRoom) editor.scrollRoom = next
 }
 
 /* ------------------------------------------------------------------ */
@@ -1122,12 +1259,13 @@ export function reportFitScale(scale) {
 /**
  * Choose a tool. Selecting one also opens and raises the tool window - a tool
  * whose parameters are hidden behind a second action is a tool the user has to
- * pick twice. Both routes in (the rail and the `1`–`6` keys) come through
+ * pick twice. Both routes in (the rail and the `1` to `6` keys) come through
  * here, so neither has to remember.
  *
  * @param {string} tool
  */
 export function setTool(tool) {
+  if (tool === 'contentAwareFill') tool = 'aiMaskBrush'
   if (!TOOLS.includes(/** @type {any} */ (tool))) return
   editor.tool = tool
   openWindow('tool')
@@ -1147,6 +1285,30 @@ export function setToolBySlot(slot) {
 export function setToolParam(tool, key, value) {
   if (!editor.toolParams[tool]) editor.toolParams[tool] = {}
   editor.toolParams[tool][key] = value
+}
+
+/**
+ * The selection tool's keys, `S` and `X`. Pressed while another tool is
+ * active, either one arms the selection tool as it was left and changes
+ * nothing else: a key that switched tool *and* changed a setting the user
+ * cannot see yet would land them in a state they did not choose. Pressed with
+ * the selection tool already active, `S` steps to the next shape in the tool
+ * bar's order and `X` swaps add for remove, the way a mask painter swaps its
+ * two colours.
+ */
+export function cycleMaskSelectShape() {
+  if (editor.tool !== 'maskSelect') return setTool('maskSelect')
+  const shapes = toolSpec('maskSelect').params.find((param) => param.key === 'shape')
+  const values = shapes?.kind === 'choice' ? shapes.options.map((option) => option.value) : []
+  if (values.length === 0) return
+  const at = values.indexOf(String(editor.toolParams.maskSelect?.shape ?? values[0]))
+  setToolParam('maskSelect', 'shape', values[(at + 1) % values.length])
+}
+
+/** @see cycleMaskSelectShape */
+export function toggleMaskSelectMode() {
+  if (editor.tool !== 'maskSelect') return setTool('maskSelect')
+  setToolParam('maskSelect', 'mode', editor.toolParams.maskSelect?.mode === 'remove' ? 'add' : 'remove')
 }
 
 /*
@@ -1300,59 +1462,277 @@ export function stepReview(direction) {
 /* Runs                                                                */
 /* ------------------------------------------------------------------ */
 
+let pendingRunStart = null
+
+/** Claim the interval before a run handle exists, including any consent. */
+export function claimRunStart(token = null) {
+  if (token && pendingRunStart === token && !editor.run.active) return token
+  if (pendingRunStart || editor.run.active) {
+    notify({ key: 'notice.run.busy', tone: 'warn' })
+    return null
+  }
+  pendingRunStart = {}
+  return pendingRunStart
+}
+
+/** Release only the caller's claim, so an older exit cannot unlock a newer flow. */
+export function releaseRunStart(token) {
+  if (pendingRunStart === token) pendingRunStart = null
+}
+
 /**
- * Start an auto clean. Does not await the result - `runClean` resolves with
- * the queue; the result arrives on the event channel.
+ * Start an auto clean. `runClean` resolves with the queue; the result arrives
+ * on the event channel. Cloud detection carries its single-use grant from the
+ * consent in `editor/cloudrun.js`, and `mode` names the tool's step.
+ *
+ * `area` holds a page Detect to one area of `pageIndex` (page percent): what
+ * it finds there is added to the page's detections and nothing is replaced.
  *
  * @param {'page'|'chapter'|'project'} [scope]
+ * @param {{cloudGrant?: string|null, mode?: import('../api/backend.js').RunMode, pendingToken?: object|null, area?: {x: number, y: number, w: number, h: number}|null, pageIndex?: number}} [options]
  * @returns {Promise<string|null>} the run id, or null when nothing was queued
  */
-export async function startRun(scope = 'page') {
-  if (!editor.chapter || editor.run.active) return null
-  const params = editor.toolParams.autoClean ?? {}
-  const handle = await getBackend().runClean({
-    scope,
-    chapterId: editor.chapter.id,
-    pageIndex: editor.pageIndex,
-    engineCeiling: LOCAL_CEILING,
-    // The tool window's two rows, on the wire. The backend applies them per
-    // region by whether the region is inside a speech balloon, and treats an
-    // absent or unrecognised value as its own default rather than as "no
-    // preference" - the seam's names are the ladder's own rung names
-    // (`fill`, `denoise`, `lama`).
-    bubbleEngine: String(params.bubbleEngine ?? 'fill'),
-    outsideEngine: String(params.outsideEngine ?? 'lama'),
-    // The opt-in for text outside bubbles. Anything but `clean`
-    // is the default on the other side of the seam too, so an old stored
-    // record with no such key reviews that text as it always did.
-    outsideBubbles: String(params.outsideBubbles ?? 'review'),
-    bubbleColor: String(params.bubbleColor ?? '#ffffff'),
-  })
-  return adoptRun(handle, scope)
+export async function startRun(scope = 'page', { cloudGrant = null, mode = 'auto', pendingToken = null, area = null, pageIndex = editor.pageIndex } = {}) {
+  if (!editor.chapter) return null
+  const token = claimRunStart(pendingToken)
+  if (!token) return null
+  try {
+    const chapter = editor.chapter
+    const params = editor.toolParams.autoClean ?? {}
+    // Detect on its own finds all text, outside bubbles too, for the review to
+    // keep or drop: which text is cleaned is Detect & clean's choice. The
+    // detection half of a Detect & clean whose clean runs on the cloud is a
+    // Detect run too, and keeps the panel's choices.
+    // So does a Detect of one area: the user pointed at the text.
+    const findAll = mode === 'detect' && (params.step === 'detect' || !!area)
+    // The models and reader this run uses: the user's own on this computer,
+    // the fixed best combination on the cloud GPU (`pipelines.js#runDetection`).
+    const run = runDetection(session)
+    const handle = await getBackend().runClean({
+      scope,
+      mode,
+      chapterId: chapter.id,
+      pageIndex,
+      engineCeiling: LOCAL_CEILING,
+      // The tool window's two rows, on the wire. The backend applies them per
+      // region by whether the region is inside a speech balloon, and treats an
+      // absent or unrecognised value as its own default rather than as "no
+      // preference" - the seam's names are the ladder's own rung names
+      // (`fill`, `lama`).
+      bubbleEngine: String(params.bubbleEngine ?? 'fill'),
+      outsideEngine: String(params.outsideEngine ?? 'lama'),
+      // The opt-in for text outside bubbles. Anything but `clean`
+      // is the default on the other side of the seam too, so an old stored
+      // record with no such key reviews that text as it always did.
+      outsideBubbles: findAll ? 'clean' : String(params.outsideBubbles ?? 'review'),
+      bubbleColor: String(params.bubbleColor ?? '#ffffff'),
+      maskPaddingPx: paddingOf(params),
+      detection: { ...session.detection },
+      detectorModels: run.detectorModels,
+      geometryPolicy: 'legacy',
+      textPolicy: findAll ? 'all_text' : session.textPolicy,
+      ocrRescue: run.ocrRescue,
+      analysisTargets: unifyAnalysisTargets(session.analysisTargets),
+      ...(cloudGrant ? { cloudGrant } : {}),
+      ...(area ? { area } : {}),
+    })
+    if (editor.chapter !== chapter) return null
+    return adoptRun(handle, scope, mode)
+  } finally {
+    if (!pendingToken) releaseRunStart(token)
+  }
+}
+
+/**
+ * The Mask padding on the wire: a whole number of page pixels the native side
+ * takes, whatever the record holds.
+ *
+ * @param {Record<string, unknown>} params
+ */
+function paddingOf(params) {
+  return Math.round(numberIn(Number(params.maskPadding ?? 0), { min: 0, max: MAX_MASK_PADDING, fallback: 0 }))
+}
+
+/**
+ * Re-pad the masks already detected, over the page or the whole chapter: the
+ * Text cleanup panel's Apply beside Mask padding. Each one is grown from its
+ * unpadded mask (`region.rs#set_detection_padding`), so 0 gives those back.
+ * Masks a padding runs together become one, and stay one at a smaller padding.
+ * The resident pages it changed are read again, which moves each changed
+ * detection's mask URL; a page outside the window is read when it comes in.
+ *
+ * @param {'page'|'chapter'} scope
+ * @returns {Promise<boolean>} whether any mask changed
+ */
+export async function applyDetectionPadding(scope) {
+  const chapter = editor.chapter
+  if (!chapter || editor.run.active) return false
+  const paddingPx = paddingOf(editor.toolParams.autoClean ?? {})
+  let result
+  try {
+    result = await getBackend().setDetectionPadding({
+      chapterId: chapter.id,
+      ...(scope === 'page' ? { pageIndex: editor.pageIndex } : {}),
+      paddingPx,
+    })
+  } catch (error) {
+    console.error('the mask padding was refused', error)
+    if (!reportJobConflict(error)) notify({ key: 'notice.mask.paddingFailed', tone: 'warn' })
+    return false
+  }
+  if (!result || editor.chapter !== chapter) return false
+  if (result.changed.length === 0) {
+    notify({ key: 'notice.mask.paddingNothing' })
+    return false
+  }
+  notify({ key: 'notice.mask.paddingApplied', params: { px: paddingPx, count: result.changed.length } })
+  if (result.removed?.length) notify({ key: 'notice.mask.paddingMerged', params: { count: result.removed.length } })
+  const resident = new Set(residentIndices())
+  await Promise.all(result.pages.filter((index) => resident.has(index)).map((index) =>
+    reloadPage(index).catch((error) => console.error('the page could not be read again after a padding change', error))))
+  return true
 }
 
 /**
  * Take over a queue the adapter has just started. Every route that can start a
- * run comes through here - `startRun`, and the canvas's Auto clean click,
- * which reaches `applyTool` and gets a `run-started` back
- * (`src/lib/editor/toolapply.svelte.js`).
+ * run comes through here - `startRun`, and the cloud clean's render run
+ * (`src/lib/editor/cloudrun.js`). A click on a region starts none: Text
+ * cleanup is not a per-region tool (`toolapply.svelte.js`).
  *
- * @param {{runId: string|null, pages?: Array<Object>}} handle
+ * @param {{runId: string|null, pages?: Array<Object>, alreadyRunning?: boolean, atCapacity?: boolean}} handle
  * @param {'page'|'chapter'|'project'} scope
+ * @param {import('../api/backend.js').RunMode} [mode] - the step it takes
+ * @param {import('./jobs.svelte.js').JobKind|null} [kind] - the job it is on the jobs list; the step's own kind when null
  * @returns {string|null} the run id, or null when nothing was queued
  */
-export function adoptRun(handle, scope) {
+export function adoptRun(handle, scope, mode = 'auto', kind = null) {
+  // The backend runs a few chapters at once and says when that many are going.
+  if (handle?.atCapacity) {
+    notify({ key: 'notice.run.atCapacity', tone: 'warn' })
+    return null
+  }
+  if (handle?.alreadyRunning) {
+    notify({ key: 'notice.run.busy', tone: 'warn' })
+    // The run it names is this chapter's (one run per chapter). If the jobs
+    // list knows it, the editor follows it instead of showing nothing.
+    const job = jobById(handle.runId)
+    if (job?.status === 'running' && job.chapterId === editor.chapter?.id && !editor.run.active) void adoptChapterJob()
+    return null
+  }
   if (!handle?.runId) return null
   editor.run = {
     active: true,
     runId: handle.runId,
     scope,
+    mode,
     queued: handle.pages?.length ?? 0,
     pagesDone: 0,
     currentPageIndex: null,
     nextPageIndex: null,
   }
+  registerEditorJob(handle.runId, kind ?? kindOfMode(mode), editor.run.queued)
   return handle.runId
+}
+
+/** The job kind a run of this step is. @param {import('../api/backend.js').RunMode} mode */
+function kindOfMode(mode) {
+  return mode === 'detect' ? 'detect' : 'clean'
+}
+
+/**
+ * Put the open chapter's run on the jobs list, named, so it can be followed
+ * from Home once the editor is left.
+ *
+ * @param {string} runId
+ * @param {import('./jobs.svelte.js').JobKind} kind
+ * @param {number} total
+ */
+function registerEditorJob(runId, kind, total) {
+  if (!editor.chapter) return
+  registerJob({
+    runId,
+    kind,
+    chapterId: editor.chapter.id,
+    projectId: editor.project?.id ?? null,
+    projectName: editor.project?.name ?? null,
+    chapterName: editor.chapter.name ?? null,
+    chapterNumber: editor.chapter.number ?? null,
+    total,
+  })
+}
+
+/**
+ * Take over the run the open chapter already has, as the backend lists it
+ * (`listJobs`): the run keeps going when the editor is left, and this is what
+ * the editor finds when it comes back. Only a listed run is adopted, so a job
+ * the store still shows but the backend has finished is never shown running.
+ *
+ * @returns {Promise<string|null>} the adopted run's id
+ */
+export async function adoptChapterJob() {
+  const chapter = editor.chapter
+  if (!chapter || editor.run.active) return null
+  const listed = await refreshJobs()
+  if (editor.chapter !== chapter || editor.run.active) return null
+  const entry = listed.find((job) => job?.chapterId === chapter.id && RUN_KINDS.includes(job.kind))
+  if (!entry) return null
+  const job = jobById(entry.runId)
+  if (job?.status !== 'running') return null
+  editor.run = {
+    active: true,
+    runId: job.runId,
+    scope: 'chapter',
+    mode: job.kind === 'detect' ? 'detect' : 'clean',
+    queued: job.total,
+    pagesDone: Math.min(job.done, job.total || job.done),
+    currentPageIndex: null,
+    nextPageIndex: null,
+  }
+  registerEditorJob(job.runId, job.kind, job.total)
+  return job.runId
+}
+
+/**
+ * The runs somebody is waiting on, by id, and the ends that arrived before
+ * anyone asked. The second map is kept short: it exists for the moment
+ * between `runClean` answering and the caller asking, not as a history.
+ *
+ * @type {Map<string, Array<(event: import('../api/backend.js').RunFinishedEvent) => void>>}
+ */
+const runWaiters = new Map()
+/** @type {Map<string, import('../api/backend.js').RunFinishedEvent>} */
+const finishedRuns = new Map()
+
+/** @param {import('../api/backend.js').RunFinishedEvent} event */
+function settleRun(event) {
+  const waiting = runWaiters.get(event.runId)
+  runWaiters.delete(event.runId)
+  if (waiting) for (const resolve of waiting) resolve(event)
+  else {
+    finishedRuns.set(event.runId, event)
+    if (finishedRuns.size > 8) finishedRuns.delete(finishedRuns.keys().next().value)
+  }
+}
+
+/**
+ * The end of one run, as its `run-finished` event says it ended - completed or
+ * cancelled. What a flow that has a second half waits on: a cloud clean
+ * detects here, then prepares its batch once the detection run has ended.
+ *
+ * @param {string} runId
+ * @returns {Promise<import('../api/backend.js').RunFinishedEvent>}
+ */
+export function runFinished(runId) {
+  const done = finishedRuns.get(runId)
+  if (done) {
+    finishedRuns.delete(runId)
+    return Promise.resolve(done)
+  }
+  return new Promise((resolve) => {
+    const waiting = runWaiters.get(runId) ?? []
+    waiting.push(resolve)
+    runWaiters.set(runId, waiting)
+  })
 }
 
 /** @returns {Promise<string|null>} the cancelled run's id */
@@ -1413,11 +1793,15 @@ export async function consumeResume() {
     active: true,
     runId: result.runId,
     scope: 'chapter',
+    // The step the interrupted run was taking, which the native side resumes;
+    // an older adapter that does not say is the one-pass run.
+    mode: result.mode === 'detect' || result.mode === 'clean' ? result.mode : 'auto',
     queued: result.pages.length,
     pagesDone: 0,
     currentPageIndex: null,
     nextPageIndex: null,
   }
+  registerEditorJob(result.runId, kindOfMode(editor.run.mode), editor.run.queued)
   goToPage(result.resumedFrom)
   return result.runId
 }
@@ -1483,10 +1867,13 @@ export async function renameOpenProject(name) {
  * @returns {import('../model/journal.js').DeltaSide}
  */
 function sideOf(state) {
+  const region = state?.region ? /** @type {any} */ ($state.snapshot(state.region)) : null
+  const revisionId = state?.region?.mask?.legacyPatchRevision
+  if (region?.mask && revisionId) region.mask.legacyPatchRevision = revisionId
   return {
     present: !!state?.region,
     pageStatus: state?.pageStatus ?? null,
-    region: state?.region ? /** @type {any} */ ($state.snapshot(state.region)) : null,
+    region,
   }
 }
 
@@ -1497,23 +1884,32 @@ function sideOf(state) {
  * The one applier for every op there is, which is what makes undo and redo the
  * same code path in opposite directions.
  *
+ * `chapterId` is the chapter the delta belongs to, read before anything was
+ * awaited. The backend applies it to that chapter's files whatever happens;
+ * the interface's copy is only touched while that chapter is still the open
+ * one, so an answer that arrives after a switch changes nothing on screen.
+ *
  * @param {string} regionId
  * @param {import('../model/journal.js').DeltaSide} side
+ * @param {string|null} [chapterId]
  * @returns {Promise<void>}
  */
-export async function applyRegionDelta(regionId, side) {
+export async function applyRegionDelta(regionId, side, chapterId = editor.chapter?.id ?? null) {
   const pageStatus = side?.pageStatus ?? undefined
   const result = await getBackend().restoreRegion({
     regionId,
     region: side?.region ?? null,
     pageStatus,
   })
+  if (!chapterId || editor.chapter?.id !== chapterId) return
   // A null answer to a *present* side is a failure - the page the region
   // belongs to is no longer open - and not an instruction to remove anything.
   // Passing it through would make a failed redo silently delete the region it
   // was meant to bring back, so the interface is left as it stands.
   if (side?.present && !result) return
   applyRegionState(regionId, side?.present ? result : null, pageStatus)
+  const page = pageHolding(regionId)
+  if (page) await reloadPage(page.index).catch(() => {})
 }
 
 /**
@@ -1603,14 +1999,30 @@ function enqueueHistoryTask(history, task) {
  * losing an undo step is recoverable, and blocking the editor on a disk write
  * after every brush stroke is not.
  *
+ * **`chapterId` is the chapter the edit was made in**, read by the caller
+ * before it awaited anything. An edit answered after that chapter stopped
+ * being the open one goes on that chapter's journal
+ * (`recordBackgroundRegionEdit`), never on the open one's: recorded here it
+ * would be an undo step in the wrong chapter that replays against a region
+ * this chapter does not have. Omitted, it is the open chapter, which is right
+ * for an edit that awaited nothing.
+ *
  * @param {string} label - i18n key for the undo/redo tooltip
  * @param {string} regionId
  * @param {RegionState} before
  * @param {RegionState} after
+ * @param {string|null} [chapterId]
  */
-export function recordRegionEdit(label, regionId, before, after) {
+export function recordRegionEdit(label, regionId, before, after, chapterId = editor.chapter?.id ?? null) {
+  if (!chapterId) return
+  // A cloud stroke's creation still waiting on its render goes on first, so
+  // an edit to its seed is never the only step behind it (`heldcreations.js`).
+  settleCreation(regionId, before)
   const chapter = editor.chapter
-  if (!chapter) return
+  if (chapter?.id !== chapterId) {
+    void recordBackgroundRegionEdit(chapterId, label, regionId, before, after)
+    return
+  }
   const entry = {
     label,
     op: 'region-state',
@@ -1627,19 +2039,52 @@ export function recordRegionEdit(label, regionId, before, after) {
   const expectedCursor = history.cursor
   enqueueHistoryTask(history, async () => {
     try {
-      const view = await getBackend().historyPush({ chapterId: chapter.id, entry })
+      const view = await pushHistoryInChapterOrder(chapter.id, entry)
       applyPushView(history, view, expectedCursor)
-    } catch (_firstError) {
-      await delay(HISTORY_RETRY_MS)
-      try {
-        const view = await getBackend().historyPush({ chapterId: chapter.id, entry })
-        applyPushView(history, view, expectedCursor)
-      } catch (error) {
-        if (editor.history === history) history.error = error
-        notify({ key: 'notice.history.saveFailed', tone: 'warn' })
-      }
+    } catch (error) {
+      if (editor.history === history) history.error = error
+      if (!reportJobConflict(error)) notify({ key: 'notice.history.saveFailed', tone: 'warn' })
     }
   })
+}
+
+const chapterHistoryWrites = new Map()
+function pushHistoryInChapterOrder(chapterId, entry) {
+  const previous = chapterHistoryWrites.get(chapterId)
+  const perform = async () => {
+    try {
+      return await getBackend().historyPush({ chapterId, entry })
+    } catch (_firstError) {
+      await delay(HISTORY_RETRY_MS)
+      return getBackend().historyPush({ chapterId, entry })
+    }
+  }
+  const next = previous ? previous.catch(() => {}).then(perform) : perform()
+  chapterHistoryWrites.set(chapterId, next)
+  void next.then(
+    () => { if (chapterHistoryWrites.get(chapterId) === next) chapterHistoryWrites.delete(chapterId) },
+    () => { if (chapterHistoryWrites.get(chapterId) === next) chapterHistoryWrites.delete(chapterId) },
+  )
+  return next
+}
+
+/** Persist an edit that finished after its chapter stopped being the open one. */
+export async function recordBackgroundRegionEdit(chapterId, label, regionId, before, after) {
+  const entry = {
+    label,
+    op: 'region-state',
+    regionId,
+    before: sideOf(before),
+    after: sideOf(after),
+  }
+  try {
+    await pushHistoryInChapterOrder(chapterId, entry)
+    return true
+  } catch (error) {
+    console.error('a background region edit could not be saved to undo history', error)
+    notify({ key: 'notice.history.saveFailed', tone: 'warn' })
+    return false
+  }
 }
 
 /**
@@ -1668,7 +2113,7 @@ async function replayHistory(direction) {
         step = await getBackend().historyMove({ chapterId: chapter.id, direction })
       } catch (error) {
         if (editor.history === history) history.error = error
-        notify({ key: 'notice.history.saveFailed', tone: 'warn' })
+        if (!reportJobConflict(error)) notify({ key: 'notice.history.saveFailed', tone: 'warn' })
         return
       }
     }
@@ -1676,7 +2121,7 @@ async function replayHistory(direction) {
     if (!entry) return
     if (entry.op !== 'region-state') return
     const side = direction === 'undo' ? entry.before : entry.after
-    await applyRegionDelta(entry.regionId, side)
+    await applyRegionDelta(entry.regionId, side, chapter.id)
   } finally {
     history._busy = false
   }
@@ -1684,6 +2129,44 @@ async function replayHistory(direction) {
 
 export function undo() {
   undoHistory(editor.history, replayHistory)
+}
+
+/**
+ * The key for a chapter write the backend refused because the chapter was not
+ * this window's to write: another Manga Cleaner process holds it (`job_busy`),
+ * or saved it after this window read it (`job_stale`). The code leads the
+ * backend's message, and is looked for anywhere in it because a layer that
+ * wraps the message puts a path in front.
+ *
+ * @param {unknown} error
+ * @returns {'notice.job.busy'|'notice.job.stale'|null}
+ */
+export function jobConflictKey(error) {
+  const text = error instanceof Error ? error.message : String(error ?? '')
+  if (/\bjob_stale\b/.test(text)) return 'notice.job.stale'
+  if (/\bjob_busy\b/.test(text)) return 'notice.job.busy'
+  return null
+}
+
+/**
+ * Say a refused chapter write in its own words, and read a chapter that moved
+ * under this window again so the next edit starts from what is on disk.
+ * Answers whether it was one, so the caller skips its own notice.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function reportJobConflict(error) {
+  const key = jobConflictKey(error)
+  if (!key) return false
+  notify({ key, tone: 'warn' })
+  const { project, chapter } = editor
+  if (key === 'notice.job.stale' && project && chapter) {
+    void openEditorChapter(project.id, chapter.id, { reload: true }).catch((reloadError) => {
+      console.error('the chapter could not be read again', reloadError)
+    })
+  }
+  return true
 }
 
 export function redo() {

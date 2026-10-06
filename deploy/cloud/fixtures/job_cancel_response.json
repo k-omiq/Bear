@@ -1,0 +1,8 @@
+{
+  "handle": "handle-test-modal-999",
+  "job_id": "job-test-001",
+  "attempt_id": "attempt-test-001",
+  "request_digest": "42174589391d9064c743c4450b520f403a3b91171382c4eadc9934285f21efc0",
+  "status": "cancel_requested",
+  "acknowledged": true
+}

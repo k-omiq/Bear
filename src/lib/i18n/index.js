@@ -38,12 +38,49 @@
  */
 
 import { en } from './en.js'
+import { ko } from './ko.js'
+import { ja } from './ja.js'
+import { es } from './es.js'
+import { pt } from './pt.js'
+import { fr } from './fr.js'
 
-/** The active locale. One catalogue ships today; see `settings.language.description`. */
-export const LOCALE = 'en'
+/**
+ * The languages the app speaks, in the order the pickers list them.
+ *
+ * `name` is the language's own name for itself, the same in every catalogue:
+ * someone who cannot read the current language must still find theirs. So it
+ * is data here rather than a catalogue entry. `intl` is the tag handed to
+ * `Intl` for plurals and number formats where it differs from `tag`.
+ */
+export const LOCALES = Object.freeze([
+  { tag: 'en', name: 'English', intl: 'en' },
+  { tag: 'ko', name: '한국어', intl: 'ko' },
+  { tag: 'ja', name: '日本語', intl: 'ja' },
+  { tag: 'es', name: 'Español', intl: 'es' },
+  { tag: 'pt', name: 'Português', intl: 'pt-BR' },
+  { tag: 'fr', name: 'Français', intl: 'fr' },
+])
 
-/** Every catalogue that exists, by locale tag. The Settings dialog's Language row reads this. */
-export const CATALOGUES = Object.freeze({ en })
+/** The source language, and the fallback for any key a translation lacks. */
+export const SOURCE_LOCALE = 'en'
+
+/** Every catalogue that exists, by locale tag. English is the source the others mirror. */
+export const CATALOGUES = Object.freeze({ en, ko, ja, es, pt, fr })
+
+/**
+ * The supported locale a list of BCP 47 tags asks for first, by primary
+ * language: `pt-PT` and `pt-BR` both get `pt`. English when none matches.
+ *
+ * @param {readonly string[]|undefined} wanted - typically `navigator.languages`
+ * @returns {string}
+ */
+export function matchLocale(wanted) {
+  for (const tag of wanted ?? []) {
+    const primary = String(tag).toLowerCase().split('-')[0]
+    if (Object.hasOwn(CATALOGUES, primary)) return primary
+  }
+  return SOURCE_LOCALE
+}
 
 /* ------------------------------------------------------------------ */
 /* Flattening                                                          */
@@ -77,8 +114,70 @@ function isPluralForms(value) {
   return PLURAL_CATEGORIES.some((category) => typeof value[category] === 'string')
 }
 
-/** The live catalogue, flattened once at module load. */
+/** The source catalogue, flattened once at module load. */
 const CATALOGUE = flatten(en)
+
+/** Translations, flattened the first time each is read. */
+const FLAT = new Map([[SOURCE_LOCALE, CATALOGUE]])
+
+/** @param {string} tag */
+function catalogueFor(tag) {
+  let flat = FLAT.get(tag)
+  if (!flat) {
+    flat = flatten(CATALOGUES[tag])
+    FLAT.set(tag, flat)
+  }
+  return flat
+}
+
+/* ------------------------------------------------------------------ */
+/* The active locale                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Where the active locale comes from. Pushed in by the module that owns the
+ * preference (`src/lib/state/session.svelte.js`), the same way context params
+ * are, so `i18n` still imports nothing. The getter reads a rune there, which
+ * makes every `t()` in a template or effect redraw when the language changes.
+ *
+ * @type {() => unknown}
+ */
+let localeSource = () => SOURCE_LOCALE
+
+/** @param {() => unknown} get */
+export function provideLocale(get) {
+  localeSource = get
+}
+
+/** @returns {string} the active locale's tag; English for anything unsupported */
+export function locale() {
+  const tag = localeSource()
+  return typeof tag === 'string' && Object.hasOwn(CATALOGUES, tag) ? tag : SOURCE_LOCALE
+}
+
+/** @param {string} tag */
+function intlTag(tag) {
+  return LOCALES.find((entry) => entry.tag === tag)?.intl ?? tag
+}
+
+/**
+ * One `Intl` object per locale and kind, built on first use: they are costly
+ * to construct and `t()` runs on every render.
+ *
+ * @template T
+ * @param {Map<string, T>} cache
+ * @param {(intl: string) => T} make
+ * @returns {T}
+ */
+function perLocale(cache, make) {
+  const tag = locale()
+  let value = cache.get(tag)
+  if (!value) {
+    value = make(intlTag(tag))
+    cache.set(tag, value)
+  }
+  return value
+}
 
 /** @returns {string[]} every key in the catalogue, sorted. For the completeness test. */
 export function catalogueKeys() {
@@ -94,7 +193,8 @@ export function hasKey(key) {
 /* Plurals                                                             */
 /* ------------------------------------------------------------------ */
 
-const pluralRules = new Intl.PluralRules(LOCALE)
+/** @type {Map<string, Intl.PluralRules>} */
+const pluralRules = new Map()
 
 /**
  * Choose a plural form.
@@ -120,22 +220,30 @@ export function selectForm(forms, params) {
   const count = params?.[name]
   if (typeof count !== 'number' || !Number.isFinite(count)) return forms.other ?? ''
   if (count === 0 && typeof forms.zero === 'string') return forms.zero
-  return forms[pluralRules.select(count)] ?? forms.other ?? ''
+  const rules = perLocale(pluralRules, (intl) => new Intl.PluralRules(intl))
+  return forms[rules.select(count)] ?? forms.other ?? ''
 }
 
 /* ------------------------------------------------------------------ */
 /* Formats                                                             */
 /* ------------------------------------------------------------------ */
 
-const currency = new Intl.NumberFormat(LOCALE, {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-  // Cloud pricing is quoted per request in thousandths
-  // (NB2 @1K is $0.067). Rounding it to cents would print $0.07 and
-  // overstate every estimate the cost dialog shows.
-  maximumFractionDigits: 3,
-})
+/** @type {Map<string, Intl.NumberFormat>} */
+const currencyFormats = new Map()
+
+/** @param {number} value */
+function currency(value) {
+  const format = perLocale(currencyFormats, (intl) => new Intl.NumberFormat(intl, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    // Cloud pricing is quoted per request in thousandths
+    // (NB2 @1K is $0.067). Rounding it to cents would print $0.07 and
+    // overstate every estimate the cost dialog shows.
+    maximumFractionDigits: 3,
+  }))
+  return format.format(value)
+}
 
 /**
  * Bytes, as a person reads them: `{bytes:memory}`.
@@ -159,7 +267,7 @@ function memory(value) {
   const gb = mb / 1024
   const [amount, unit] = gb >= 1 ? [gb, 'GB'] : [mb, 'MB']
   const digits = amount < 10 ? 1 : 0
-  const number = new Intl.NumberFormat(LOCALE, {
+  const number = new Intl.NumberFormat(intlTag(locale()), {
     minimumFractionDigits: 0,
     maximumFractionDigits: digits,
   }).format(amount)
@@ -168,7 +276,7 @@ function memory(value) {
 
 const FORMATS = {
   /** @param {unknown} value */
-  currency: (value) => (typeof value === 'number' ? currency.format(value) : String(value ?? '')),
+  currency: (value) => (typeof value === 'number' ? currency(value) : String(value ?? '')),
   memory,
 }
 
@@ -300,7 +408,9 @@ function missing(key) {
  */
 export function t(key, params) {
   if (typeof key !== 'string' || key === '') return ''
-  const entry = CATALOGUE[key]
+  // A key the active translation lacks falls back to English, so a string
+  // added to `en.js` ahead of its translations still reads as words.
+  const entry = catalogueFor(locale())[key] ?? CATALOGUE[key]
   if (entry === undefined) return missing(key)
 
   const template = typeof entry === 'string' ? entry : selectForm(entry, params ?? {})

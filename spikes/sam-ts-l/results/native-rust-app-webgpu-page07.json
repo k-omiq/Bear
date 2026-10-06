@@ -1,0 +1,111 @@
+{
+  "cold_definition": "fresh process first session, OS file cache uncontrolled",
+  "device_names": [
+    {
+      "ep": "WebGpuExecutionProvider",
+      "hardware_id": 0,
+      "vendor": "Microsoft"
+    }
+  ],
+  "graph_dir": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof",
+  "graph_manifest_revision": "5dd97423e0fbf2404264979136d47e8101144046",
+  "input_source": {
+    "file": "/Users/caved/Downloads/apocalypse/109/07.jpg",
+    "original_wh": [
+      690,
+      1600
+    ],
+    "resized_wh": [
+      442,
+      1024
+    ],
+    "sha256": "a42a7e77ad9b5015f35221accdb785d8b5bc508270d1ef091b2025f5d463e6b9"
+  },
+  "memory": {
+    "metal_current_allocated_bytes_after_inference": 2538913792,
+    "metal_current_allocated_bytes_after_session_load": 1371766784,
+    "metal_current_allocated_bytes_at_preflight": 65536,
+    "metal_sample_interval_ms": 20,
+    "note": "ru_maxrss is process high-water. MTLDevice currentAllocatedSize sampled every 20 ms from a separate thread may miss transient peak and may not include ORT plugin resources if a different Metal device instance is used. Unified-memory allocations overlap process RSS.",
+    "post_inference_peak_process_rss_bytes": 2554478592,
+    "post_session_peak_process_rss_bytes": 2492497920,
+    "preflight_peak_process_rss_bytes": 42713088,
+    "sampled_peak_metal_current_allocated_bytes": 5948882944
+  },
+  "ort_info": "ORT Build Info: git-branch=HEAD, git-commit-id=da9b5e364c, fp8-kv-cache=1, build type=Release",
+  "page": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/apocalypse-109/page-07",
+  "parity": {
+    "changed_canvas_signs": 0,
+    "changed_restored_pixels": 0,
+    "exact_restored_mask_parity": true,
+    "logits": {
+      "changed_elements": 957911,
+      "max_abs": 0.0002498626708984375,
+      "mean_abs": 1.1339281153932568e-05,
+      "rmse": 1.8194693272717075e-05,
+      "shape": [
+        1,
+        1,
+        1024,
+        1024
+      ]
+    },
+    "output_mask_pixels": 24322,
+    "reference_mask_pixels": 24322,
+    "restoration": "crop, threshold >0, Pillow nearest resize; same as saved reference"
+  },
+  "plugin": null,
+  "profile_assignments": {
+    "encoder": {
+      "node_events_by_provider": {
+        "WebGpuExecutionProvider": 5454
+      },
+      "node_events_without_provider": 0
+    },
+    "text_head": {
+      "node_events_by_provider": {
+        "WebGpuExecutionProvider": 1158
+      },
+      "node_events_without_provider": 0
+    }
+  },
+  "profile_files_removed_after_counting": true,
+  "profiling_enabled": true,
+  "provider_library_unregistered_before_exit": false,
+  "raw_logits_f32le": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/results/native-rust-app-webgpu-page07.logits.f32le",
+  "requested_provider_has_nodes_in_every_graph": true,
+  "runtime": "/Users/caved/dev/manga-cleaner/runtimes/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.dylib",
+  "timing_ms": {
+    "cold_encoder_session_load": 840.040917,
+    "cold_head_session_load": 37.009791,
+    "inference": [
+      {
+        "chain_ms": 8149.312292,
+        "encoder_ort_run_ms": 7074.638625,
+        "head_input_tensor_ms": 0.5013750000007349,
+        "head_ort_run_ms": 1073.7245839999996,
+        "input_tensor_ms": 0.31975,
+        "output_extract_ms": 0.1279580000000351,
+        "run": 0
+      },
+      {
+        "chain_ms": 6714.465999999999,
+        "encoder_ort_run_ms": 6462.079583,
+        "head_input_tensor_ms": 0.7400829999996859,
+        "head_ort_run_ms": 250.79733400000077,
+        "input_tensor_ms": 0.393667,
+        "output_extract_ms": 0.4553329999989728,
+        "run": 1
+      },
+      {
+        "chain_ms": 6667.830666000001,
+        "encoder_ort_run_ms": 6415.114291999999,
+        "head_input_tensor_ms": 1.1616250000006403,
+        "head_ort_run_ms": 250.2621250000002,
+        "input_tensor_ms": 0.987333,
+        "output_extract_ms": 0.3052910000005795,
+        "run": 2
+      }
+    ]
+  }
+}

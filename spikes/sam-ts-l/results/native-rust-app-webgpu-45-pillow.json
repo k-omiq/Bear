@@ -1,0 +1,1383 @@
+{
+  "description": "One-session native Rust ORT WebGPU 45-page Pillow-prepared SAM-TS-L corpus probe",
+  "device_count": 1,
+  "graph_dir": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof",
+  "mask_parity": {
+    "changed_pixels_total": 0,
+    "exact_pages": 45,
+    "pages": 45,
+    "reference": "Saved PyTorch MPS masks, Pillow-prepared original JPEGs; distinct from app-decoded JPEG canonical path"
+  },
+  "memory": {
+    "note": "Metal sampled high water can miss transients; unified memory overlaps RSS",
+    "peak_process_rss_bytes": 2475360256,
+    "sample_interval_ms": 20,
+    "sampled_peak_metal_current_allocated_bytes": 5948866560
+  },
+  "pages": [
+    {
+      "chain_and_write_ms": 6572.170375,
+      "encoder_ms": 6299.974958,
+      "head_and_write_ms": 272.1954169999999,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/01.png",
+        "reference_positive_pixels": 56791,
+        "webgpu_positive_pixels": 56791
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "01",
+      "prepared": "/tmp/samts-webgpu-45-prepared/01.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6595.0963329999995,
+      "encoder_ms": 6329.839083,
+      "head_and_write_ms": 265.25724999999966,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/02.png",
+        "reference_positive_pixels": 35136,
+        "webgpu_positive_pixels": 35136
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "02",
+      "prepared": "/tmp/samts-webgpu-45-prepared/02.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6619.489166,
+      "encoder_ms": 6338.269958,
+      "head_and_write_ms": 281.21920800000044,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/03.png",
+        "reference_positive_pixels": 72832,
+        "webgpu_positive_pixels": 72832
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "03",
+      "prepared": "/tmp/samts-webgpu-45-prepared/03.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6725.884083000001,
+      "encoder_ms": 6445.19925,
+      "head_and_write_ms": 280.68483300000116,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/04.png",
+        "reference_positive_pixels": 36253,
+        "webgpu_positive_pixels": 36253
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "04",
+      "prepared": "/tmp/samts-webgpu-45-prepared/04.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6638.0545,
+      "encoder_ms": 6394.247792,
+      "head_and_write_ms": 243.80670800000007,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/05.png",
+        "reference_positive_pixels": 34349,
+        "webgpu_positive_pixels": 34349
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "05",
+      "prepared": "/tmp/samts-webgpu-45-prepared/05.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6617.533791,
+      "encoder_ms": 6372.392208,
+      "head_and_write_ms": 245.14158299999963,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/06.png",
+        "reference_positive_pixels": 17989,
+        "webgpu_positive_pixels": 17989
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "06",
+      "prepared": "/tmp/samts-webgpu-45-prepared/06.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6673.368375,
+      "encoder_ms": 6386.227334,
+      "head_and_write_ms": 287.14104099999986,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/07.png",
+        "reference_positive_pixels": 24322,
+        "webgpu_positive_pixels": 24322
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "07",
+      "prepared": "/tmp/samts-webgpu-45-prepared/07.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6593.128625,
+      "encoder_ms": 6356.113834000001,
+      "head_and_write_ms": 237.0147909999996,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/08.png",
+        "reference_positive_pixels": 40438,
+        "webgpu_positive_pixels": 40438
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "08",
+      "prepared": "/tmp/samts-webgpu-45-prepared/08.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6765.251,
+      "encoder_ms": 6462.799458,
+      "head_and_write_ms": 302.4515419999998,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/09.png",
+        "reference_positive_pixels": 29479,
+        "webgpu_positive_pixels": 29479
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "09",
+      "prepared": "/tmp/samts-webgpu-45-prepared/09.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6721.86175,
+      "encoder_ms": 6451.222,
+      "head_and_write_ms": 270.6397500000003,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/10.png",
+        "reference_positive_pixels": 63024,
+        "webgpu_positive_pixels": 63024
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "10",
+      "prepared": "/tmp/samts-webgpu-45-prepared/10.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6590.123708,
+      "encoder_ms": 6322.030917,
+      "head_and_write_ms": 268.09279100000003,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/11.png",
+        "reference_positive_pixels": 17072,
+        "webgpu_positive_pixels": 17072
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "11",
+      "prepared": "/tmp/samts-webgpu-45-prepared/11.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6671.618542,
+      "encoder_ms": 6407.72125,
+      "head_and_write_ms": 263.89729200000056,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/12.png",
+        "reference_positive_pixels": 17647,
+        "webgpu_positive_pixels": 17647
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "12",
+      "prepared": "/tmp/samts-webgpu-45-prepared/12.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6948.970208000001,
+      "encoder_ms": 6660.172792,
+      "head_and_write_ms": 288.79741600000034,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/13.png",
+        "reference_positive_pixels": 17307,
+        "webgpu_positive_pixels": 17307
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "13",
+      "prepared": "/tmp/samts-webgpu-45-prepared/13.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6630.608875,
+      "encoder_ms": 6385.337625,
+      "head_and_write_ms": 245.27124999999978,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/14.png",
+        "reference_positive_pixels": 40005,
+        "webgpu_positive_pixels": 40005
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "14",
+      "prepared": "/tmp/samts-webgpu-45-prepared/14.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6533.040167,
+      "encoder_ms": 6266.110167,
+      "head_and_write_ms": 266.9300000000003,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/15.png",
+        "reference_positive_pixels": 30170,
+        "webgpu_positive_pixels": 30170
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "15",
+      "prepared": "/tmp/samts-webgpu-45-prepared/15.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6638.019625,
+      "encoder_ms": 6400.237708,
+      "head_and_write_ms": 237.78191700000025,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/16.png",
+        "reference_positive_pixels": 15593,
+        "webgpu_positive_pixels": 15593
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "16",
+      "prepared": "/tmp/samts-webgpu-45-prepared/16.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6707.926459,
+      "encoder_ms": 6379.120584,
+      "head_and_write_ms": 328.805875,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/17.png",
+        "reference_positive_pixels": 45891,
+        "webgpu_positive_pixels": 45891
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "17",
+      "prepared": "/tmp/samts-webgpu-45-prepared/17.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6596.427125,
+      "encoder_ms": 6327.382041,
+      "head_and_write_ms": 269.0450840000003,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/18.png",
+        "reference_positive_pixels": 51422,
+        "webgpu_positive_pixels": 51422
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "18",
+      "prepared": "/tmp/samts-webgpu-45-prepared/18.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6613.120916,
+      "encoder_ms": 6366.825125,
+      "head_and_write_ms": 246.29579099999955,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/19.png",
+        "reference_positive_pixels": 52526,
+        "webgpu_positive_pixels": 52526
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "19",
+      "prepared": "/tmp/samts-webgpu-45-prepared/19.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6613.835583,
+      "encoder_ms": 6347.259291,
+      "head_and_write_ms": 266.57629199999974,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/20.png",
+        "reference_positive_pixels": 37707,
+        "webgpu_positive_pixels": 37707
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "20",
+      "prepared": "/tmp/samts-webgpu-45-prepared/20.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 5919.343208,
+      "encoder_ms": 5695.036958000001,
+      "head_and_write_ms": 224.30624999999964,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/21.png",
+        "reference_positive_pixels": 39465,
+        "webgpu_positive_pixels": 39465
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "21",
+      "prepared": "/tmp/samts-webgpu-45-prepared/21.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6163.676083,
+      "encoder_ms": 5905.073332999999,
+      "head_and_write_ms": 258.6027500000009,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/22.png",
+        "reference_positive_pixels": 26475,
+        "webgpu_positive_pixels": 26475
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "22",
+      "prepared": "/tmp/samts-webgpu-45-prepared/22.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6056.191958,
+      "encoder_ms": 5818.906249999999,
+      "head_and_write_ms": 237.28570800000125,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/23.png",
+        "reference_positive_pixels": 12675,
+        "webgpu_positive_pixels": 12675
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "23",
+      "prepared": "/tmp/samts-webgpu-45-prepared/23.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 5967.819875,
+      "encoder_ms": 5740.130875,
+      "head_and_write_ms": 227.6890000000003,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/24.png",
+        "reference_positive_pixels": 62116,
+        "webgpu_positive_pixels": 62116
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "24",
+      "prepared": "/tmp/samts-webgpu-45-prepared/24.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 5958.769542,
+      "encoder_ms": 5723.005292,
+      "head_and_write_ms": 235.76425000000017,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/25.png",
+        "reference_positive_pixels": 1676,
+        "webgpu_positive_pixels": 1676
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "25",
+      "prepared": "/tmp/samts-webgpu-45-prepared/25.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6072.263417,
+      "encoder_ms": 5840.931667,
+      "head_and_write_ms": 231.33175000000028,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/26.png",
+        "reference_positive_pixels": 9440,
+        "webgpu_positive_pixels": 9440
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "26",
+      "prepared": "/tmp/samts-webgpu-45-prepared/26.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6461.992167,
+      "encoder_ms": 6190.3005,
+      "head_and_write_ms": 271.69166700000005,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/27.png",
+        "reference_positive_pixels": 30971,
+        "webgpu_positive_pixels": 30971
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "27",
+      "page27_canvas_logit_162_463": 3.5351795304450206e-06,
+      "page27_restored_pixels_253_723_724": [
+        255,
+        255
+      ],
+      "prepared": "/tmp/samts-webgpu-45-prepared/27.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6799.449958,
+      "encoder_ms": 6554.670625,
+      "head_and_write_ms": 244.7793330000004,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/28.png",
+        "reference_positive_pixels": 4799,
+        "webgpu_positive_pixels": 4799
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "28",
+      "prepared": "/tmp/samts-webgpu-45-prepared/28.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6303.034667000001,
+      "encoder_ms": 6053.515292,
+      "head_and_write_ms": 249.51937500000076,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/29.png",
+        "reference_positive_pixels": 6742,
+        "webgpu_positive_pixels": 6742
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "29",
+      "prepared": "/tmp/samts-webgpu-45-prepared/29.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6000.36825,
+      "encoder_ms": 5760.040166999999,
+      "head_and_write_ms": 240.32808300000124,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/30.png",
+        "reference_positive_pixels": 0,
+        "webgpu_positive_pixels": 0
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "30",
+      "prepared": "/tmp/samts-webgpu-45-prepared/30.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6004.530292,
+      "encoder_ms": 5767.249833,
+      "head_and_write_ms": 237.28045900000052,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/31.png",
+        "reference_positive_pixels": 16328,
+        "webgpu_positive_pixels": 16328
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "31",
+      "prepared": "/tmp/samts-webgpu-45-prepared/31.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 5993.905625,
+      "encoder_ms": 5756.706542,
+      "head_and_write_ms": 237.19908300000043,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/32.png",
+        "reference_positive_pixels": 23507,
+        "webgpu_positive_pixels": 23507
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "32",
+      "prepared": "/tmp/samts-webgpu-45-prepared/32.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6067.807625,
+      "encoder_ms": 5825.9275,
+      "head_and_write_ms": 241.8801250000006,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/33.png",
+        "reference_positive_pixels": 7909,
+        "webgpu_positive_pixels": 7909
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "33",
+      "prepared": "/tmp/samts-webgpu-45-prepared/33.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6003.666499999999,
+      "encoder_ms": 5756.766875,
+      "head_and_write_ms": 246.8996249999991,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/34.png",
+        "reference_positive_pixels": 5348,
+        "webgpu_positive_pixels": 5348
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "34",
+      "prepared": "/tmp/samts-webgpu-45-prepared/34.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 5993.118667,
+      "encoder_ms": 5725.112167,
+      "head_and_write_ms": 268.0064999999995,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/35.png",
+        "reference_positive_pixels": 609,
+        "webgpu_positive_pixels": 609
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "35",
+      "prepared": "/tmp/samts-webgpu-45-prepared/35.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6020.08975,
+      "encoder_ms": 5748.551917000001,
+      "head_and_write_ms": 271.5378329999994,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/36.png",
+        "reference_positive_pixels": 20273,
+        "webgpu_positive_pixels": 20273
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "36",
+      "prepared": "/tmp/samts-webgpu-45-prepared/36.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6095.276958,
+      "encoder_ms": 5804.4598750000005,
+      "head_and_write_ms": 290.8170829999999,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/37.png",
+        "reference_positive_pixels": 27076,
+        "webgpu_positive_pixels": 27076
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "37",
+      "prepared": "/tmp/samts-webgpu-45-prepared/37.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6199.268125,
+      "encoder_ms": 5959.248875,
+      "head_and_write_ms": 240.01924999999937,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/38.png",
+        "reference_positive_pixels": 9352,
+        "webgpu_positive_pixels": 9352
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "38",
+      "prepared": "/tmp/samts-webgpu-45-prepared/38.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6224.910083,
+      "encoder_ms": 5997.981167,
+      "head_and_write_ms": 226.92891599999984,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/39.png",
+        "reference_positive_pixels": 3875,
+        "webgpu_positive_pixels": 3875
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "39",
+      "prepared": "/tmp/samts-webgpu-45-prepared/39.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6139.901958,
+      "encoder_ms": 5866.0467499999995,
+      "head_and_write_ms": 273.85520800000086,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/40.png",
+        "reference_positive_pixels": 14602,
+        "webgpu_positive_pixels": 14602
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "40",
+      "prepared": "/tmp/samts-webgpu-45-prepared/40.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6017.882458,
+      "encoder_ms": 5777.3946670000005,
+      "head_and_write_ms": 240.48779099999956,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/41.png",
+        "reference_positive_pixels": 9210,
+        "webgpu_positive_pixels": 9210
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "41",
+      "prepared": "/tmp/samts-webgpu-45-prepared/41.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6004.993665999999,
+      "encoder_ms": 5775.390041,
+      "head_and_write_ms": 229.60362499999974,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/42.png",
+        "reference_positive_pixels": 16018,
+        "webgpu_positive_pixels": 16018
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "42",
+      "prepared": "/tmp/samts-webgpu-45-prepared/42.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6086.894542,
+      "encoder_ms": 5854.635,
+      "head_and_write_ms": 232.25954199999978,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/43.png",
+        "reference_positive_pixels": 10443,
+        "webgpu_positive_pixels": 10443
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "43",
+      "prepared": "/tmp/samts-webgpu-45-prepared/43.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6009.132417,
+      "encoder_ms": 5771.554083,
+      "head_and_write_ms": 237.5783339999998,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/44.png",
+        "reference_positive_pixels": 9831,
+        "webgpu_positive_pixels": 9831
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "44",
+      "prepared": "/tmp/samts-webgpu-45-prepared/44.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    },
+    {
+      "chain_and_write_ms": 6110.280959,
+      "encoder_ms": 5853.393875,
+      "head_and_write_ms": 256.88708399999996,
+      "mask_parity": {
+        "changed_pixels": 0,
+        "exact": true,
+        "reference_mask": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/45.png",
+        "reference_positive_pixels": 19998,
+        "webgpu_positive_pixels": 19998
+      },
+      "metal_current_allocated_bytes": 2538897408,
+      "page": "45",
+      "prepared": "/tmp/samts-webgpu-45-prepared/45.npy",
+      "process_peak_rss_bytes": 2475360256,
+      "raw_logits_removed_after_verification": true
+    }
+  ],
+  "plugin": null,
+  "prepared_inputs": {
+    "01": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "01",
+      "prepared": "/tmp/samts-webgpu-45-prepared/01.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "2fa475573c46b9eabf51cd3f37233de6d42e3de6a7bc192405b856625e1b283e"
+    },
+    "02": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "02",
+      "prepared": "/tmp/samts-webgpu-45-prepared/02.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "611873f8515be914f10a33e437c209b792404a3b710f85e68142565b51dad4e7"
+    },
+    "03": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "03",
+      "prepared": "/tmp/samts-webgpu-45-prepared/03.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "2a59cc83b184c8d8e675c9191e1081e374028824cb57ae2c42e17547ffed97c8"
+    },
+    "04": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "04",
+      "prepared": "/tmp/samts-webgpu-45-prepared/04.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "90489b16d0b5e331a97586d0e07d4de1d61c3a1ad188cf3856fdc83bf946b965"
+    },
+    "05": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "05",
+      "prepared": "/tmp/samts-webgpu-45-prepared/05.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "568fbd0a6b10a27add5bf4b4f846644655463d4b849496e4d60782d8220e9745"
+    },
+    "06": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "06",
+      "prepared": "/tmp/samts-webgpu-45-prepared/06.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "42f1080cab4b2fe3c3c65c57a5321aa8a643f85eabebe7bda7ae5da4976f5d87"
+    },
+    "07": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "07",
+      "prepared": "/tmp/samts-webgpu-45-prepared/07.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "a42a7e77ad9b5015f35221accdb785d8b5bc508270d1ef091b2025f5d463e6b9"
+    },
+    "08": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "08",
+      "prepared": "/tmp/samts-webgpu-45-prepared/08.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "f4b8fcb13fa434f03a29d18797338898c414c66a402cdac67a068633e8a091b2"
+    },
+    "09": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "09",
+      "prepared": "/tmp/samts-webgpu-45-prepared/09.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "cdb3f781e7b07599da89bc5fae75713332b1f9d5490290d68426583c77c52a8a"
+    },
+    "10": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "10",
+      "prepared": "/tmp/samts-webgpu-45-prepared/10.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "1ac5863e557e5e0465c56216edbf3c21cea7216efc624316287f49ff37f430a1"
+    },
+    "11": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "11",
+      "prepared": "/tmp/samts-webgpu-45-prepared/11.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "ebd4ed96092b5644ff20c6a9133e8c7ae5511577a00777fe37d3be557e9df383"
+    },
+    "12": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "12",
+      "prepared": "/tmp/samts-webgpu-45-prepared/12.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "8a435f87b4bd63c783894247d816de1e404e8a18acc15f28b883747c29dec336"
+    },
+    "13": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "13",
+      "prepared": "/tmp/samts-webgpu-45-prepared/13.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "a5d9f5407b9a9ae6416388121101f9ba3ef927cdc20ee1c61bf6878964fdc10a"
+    },
+    "14": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "14",
+      "prepared": "/tmp/samts-webgpu-45-prepared/14.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "e0591440ef3681cb4137031a38a18bcc33aedec94976b4dbc4898045fde7ec84"
+    },
+    "15": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "15",
+      "prepared": "/tmp/samts-webgpu-45-prepared/15.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "b001886cb94b15ad3f46911ec5cb0a7ca0668059ab2ef557d126d7749ca54027"
+    },
+    "16": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "16",
+      "prepared": "/tmp/samts-webgpu-45-prepared/16.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "c3321ded352b1975fe310b54f7cf3ebccb7f32f61494eb40bc057a039a0f3522"
+    },
+    "17": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "17",
+      "prepared": "/tmp/samts-webgpu-45-prepared/17.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "104f61ef8d6b88568891694796bbd268f68b08c483bfb2679b23c87942dcc747"
+    },
+    "18": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "18",
+      "prepared": "/tmp/samts-webgpu-45-prepared/18.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "fb59b59d6ce0b6d58c6b9854ab930a8a034f44f5d320f0d99010c2703041de15"
+    },
+    "19": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "19",
+      "prepared": "/tmp/samts-webgpu-45-prepared/19.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "12ec0e6043cdba3bd144987b4178d7888c885944ffbbb6374a07ce95b241c6c2"
+    },
+    "20": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "20",
+      "prepared": "/tmp/samts-webgpu-45-prepared/20.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "40665c6ca0151598c4d9fe47aefda6712302a95dc6f3862dc28cbfe806713995"
+    },
+    "21": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "21",
+      "prepared": "/tmp/samts-webgpu-45-prepared/21.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "1d4dc7aa3ce20790f2872ddafc77834b9bc3a5c0ef99ffd431d5640538259efb"
+    },
+    "22": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "22",
+      "prepared": "/tmp/samts-webgpu-45-prepared/22.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "63c11a1c0f9ddb2c0f4eff58cd9796f2a572b5456daedd74e9f662c08a3d9e6c"
+    },
+    "23": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "23",
+      "prepared": "/tmp/samts-webgpu-45-prepared/23.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "e0ce70d3b07145d9e782f9d622fbecb6293b9e96f443bc0c11b9196424d7fa7c"
+    },
+    "24": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "24",
+      "prepared": "/tmp/samts-webgpu-45-prepared/24.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "1aea0a33d2c593169446c30e18918301de8c7be23434b5362c1fd1b9ea30dabe"
+    },
+    "25": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "25",
+      "prepared": "/tmp/samts-webgpu-45-prepared/25.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "4c6f1d47b3f829b2fc5015958ff385eb979f5be6013a04c7bdb71beb14ee78d1"
+    },
+    "26": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "26",
+      "prepared": "/tmp/samts-webgpu-45-prepared/26.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "082e4825650d517d379834d47fc978b00de5cf9d34853b7dc7f8e04ffa4bbbe1"
+    },
+    "27": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "27",
+      "prepared": "/tmp/samts-webgpu-45-prepared/27.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "e1dbaff715b608354af71aa96c369b124ed4ab0d393b3542efe62cd8a49d2400"
+    },
+    "28": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "28",
+      "prepared": "/tmp/samts-webgpu-45-prepared/28.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "8624c84fe1946be732ab5a7c238c7a0aedfeec4089d45cfd27a4c8d55be101e0"
+    },
+    "29": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "29",
+      "prepared": "/tmp/samts-webgpu-45-prepared/29.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "9cdee6f0263a52a5da5d514204e42cfc2c8dda07f0b14aa7d9249d088a688076"
+    },
+    "30": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "30",
+      "prepared": "/tmp/samts-webgpu-45-prepared/30.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "cfc515875c7d2ef6f52e75ed745862519e9a9d8185ee172258a552e2e221aab4"
+    },
+    "31": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "31",
+      "prepared": "/tmp/samts-webgpu-45-prepared/31.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "1da07bcd1be842c0472a6fae4726f283a1b60383973e773aca2bd6599a523a3d"
+    },
+    "32": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "32",
+      "prepared": "/tmp/samts-webgpu-45-prepared/32.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "b8edae8156ac2c45178fc909ca6960bff952bb296a762d62c733db468b54bf43"
+    },
+    "33": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "33",
+      "prepared": "/tmp/samts-webgpu-45-prepared/33.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "1f15c16060251b33b5d349b9197b7d8883d26c8241e66f2e54e6baba36e239e2"
+    },
+    "34": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "34",
+      "prepared": "/tmp/samts-webgpu-45-prepared/34.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "e4687dab1c5110b8140e9f8d4f1ed2195958af17bdf488552898a756061578f4"
+    },
+    "35": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "35",
+      "prepared": "/tmp/samts-webgpu-45-prepared/35.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "443d9db2a7d14f0402cbc1fe6225aaae08df933b1ef0f7a3c9cf9fa52f17c377"
+    },
+    "36": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "36",
+      "prepared": "/tmp/samts-webgpu-45-prepared/36.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "ae08ebc9f17018c00d0682c6ad2c54d2a22a3a4dfc565a8fe85550e88e4f56e6"
+    },
+    "37": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "37",
+      "prepared": "/tmp/samts-webgpu-45-prepared/37.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "eac02e6e1a42d24b32b6226b3c5eabff69a2610bce8d7a4d795b1d59f4dc7151"
+    },
+    "38": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "38",
+      "prepared": "/tmp/samts-webgpu-45-prepared/38.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "b2ffdfb0d6b9c6fc8d2aa7c32029db2bf313f0d56ec1dec048d867a06beae5be"
+    },
+    "39": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "39",
+      "prepared": "/tmp/samts-webgpu-45-prepared/39.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "d4d754ca1a953def98baa47f32592d5714f4ec84d33fecbc17d0522f23936b9d"
+    },
+    "40": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "40",
+      "prepared": "/tmp/samts-webgpu-45-prepared/40.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "e12406ebc6e6596bb53324c9a099540a68c0383b5e836f01fa700e81ce518aee"
+    },
+    "41": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "41",
+      "prepared": "/tmp/samts-webgpu-45-prepared/41.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "4e75189e8ddf22b85eee88d7be9b6af7da8c68f84b5505fbda38874811240c20"
+    },
+    "42": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "42",
+      "prepared": "/tmp/samts-webgpu-45-prepared/42.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "2b132754bb297f82d611e6d906a95a786001261ce50790034c62a82ab481aa43"
+    },
+    "43": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "43",
+      "prepared": "/tmp/samts-webgpu-45-prepared/43.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "78e255ec6ae9ef341b0930f68a10ef6354ebf3412a315b30f1b8b99d53276b76"
+    },
+    "44": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "44",
+      "prepared": "/tmp/samts-webgpu-45-prepared/44.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "c6052fe65f996b2b261ce650f23ab48513c9ee7bb8ddd3bec896e2984b619659"
+    },
+    "45": {
+      "original_wh": [
+        690,
+        1600
+      ],
+      "page": "45",
+      "prepared": "/tmp/samts-webgpu-45-prepared/45.npy",
+      "resized_wh": [
+        442,
+        1024
+      ],
+      "source_sha256": "4d812d6aed38138dbdfdf5884a2fe8b582b7bf21d6853560ccdb9ecbf56fa25a"
+    }
+  },
+  "provider_library_unregistered_before_exit": false,
+  "runtime": "/Users/caved/dev/manga-cleaner/runtimes/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.dylib",
+  "session_load_ms": {
+    "encoder": 689.0521659999999,
+    "text_head": 36.54025
+  }
+}

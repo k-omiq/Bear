@@ -81,7 +81,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use cleaner_core::accel::{Accelerator, Preference};
 use cleaner_core::detect::{Detector, build_regions};
-use cleaner_core::engines::{denoise, fill, lama};
+use cleaner_core::engines::{fill, lama};
 use cleaner_core::fit::{self, EdgeMap};
 use cleaner_core::gate::ScriptGate;
 use cleaner_core::image::{BitDepth, ColorMode, Format, Raster, decode, encode};
@@ -306,11 +306,20 @@ fn main() -> Result<()> {
                     region.masking.h,
                 );
                 let detected = cleaner_core::balloon::detected(on_page, &balloon_boxes);
+                // The paper is read in the crop, the balloon boxes on the page.
+                let inside = cleaner_core::balloon::in_bubble(
+                    crop,
+                    &detection.segmentation,
+                    region.text_bounds(),
+                    on_page,
+                    &balloon_boxes,
+                );
                 let verdict = gate.judge(
                     crop,
                     &detection.segmentation,
                     region,
                     detected,
+                    inside,
                     cleaner_core::gate::OutsideText::Review,
                 )?;
                 if !options.clean_all && !verdict.cleans() {
@@ -346,15 +355,13 @@ fn main() -> Result<()> {
                 let engine = if fitted.route.needs_a_model() {
                     match options.rung {
                         2 => Engine::Lama,
-                        // Rungs 0 and 1 only, which is what was measured: a
-                        // region that needs a model is counted and left.
+                        // Rung 0 only, which is what was measured: a region
+                        // that needs a model is counted and left.
                         _ => {
                             without_a_rung += 1;
                             continue;
                         }
                     }
-                } else if fitted.route == fit::Route::FillAndDenoise && options.rung >= 1 {
-                    Engine::Denoise
                 } else {
                     Engine::Fill
                 };
@@ -381,7 +388,6 @@ fn main() -> Result<()> {
                             Err(lama::Error::Run(fault)) => return Err(anyhow!(fault)),
                         }
                     }
-                    Engine::Denoise => Some(denoise::render(crop, &fitted, noise)),
                     _ => Some((fitted.mask.clone(), fill::render(crop, &fitted))),
                 };
                 if first_of_its_rung {
@@ -516,7 +522,7 @@ fn per_rung(samples: &[Sample], rung: u8) {
         println!("  no regions were cleaned, so there is nothing to report - not a pass");
         return;
     }
-    for engine in [Engine::Fill, Engine::Denoise, Engine::Lama] {
+    for engine in [Engine::Fill, Engine::Lama] {
         let series: Vec<&Sample> = samples.iter().filter(|s| s.engine == engine).collect();
         if series.is_empty() {
             continue;

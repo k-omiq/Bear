@@ -125,6 +125,7 @@ fn fill(id: &str, bounds: Rect, tone: u16) -> StripPatch {
         palette: None,
         trns: None,
         srgb_intent: None,
+        color: Default::default(),
         data: vec![tone as u8; (bounds.w * bounds.h) as usize],
     };
     // Belt and braces: written through `set_sample` so the buffer is right even

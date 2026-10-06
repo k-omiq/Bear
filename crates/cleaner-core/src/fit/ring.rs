@@ -8,9 +8,10 @@
 //!
 //! - **The ring is the native annulus between `dilate(k)` and `dilate(k+4)`**,
 //!   not the mask's own contour.
-//! - **A plane, not a constant.** A mild gradient gives a standard deviation of
-//!   4–8 and passes, and then a flat fill reads as a Mach band. The deviation
-//!   is measured *about the fitted plane*.
+//! - **A plane, not a constant.** The deviation is measured *about the fitted
+//!   plane*, so a mild gradient in the paper is not read as noise. The fill
+//!   itself is flat ([`crate::engines::fill`]); the plane is a measurement
+//!   only.
 //! - **Multimodal rings are refused.** Paper at 255 abutting 245 gives σ ≈ 5,
 //!   passing, while the median exists on neither side.
 //! - **No near-white snap.** Rounding a median above 240 to pure white paints
@@ -477,58 +478,15 @@ fn autocorrelation(field: &AnnulusField, dx: usize, dy: usize) -> f64 {
     (sum / count as f64) / (std * std)
 }
 
-/// The fill, in the page's **own** channels.
+/// The fill colour, in the page's **own** channels: the per-channel median of
+/// `ring`.
 ///
-/// The "two statistics" note:
-/// the grayscale path is canonical and colour sources convert to L for
+/// The grayscale path is canonical and colour sources convert to L for
 /// *measurement* only, never for output. So the routing decision above is made
-/// on luma, and what actually gets painted is fitted here, per channel, in the
-/// sample space the file uses - which for an indexed source is palette indices
-/// and for a 16-bit source is 16-bit.
-///
-/// One plane per channel, over the ring the route was decided from -
-/// [`crate::fit::Fitted::paper`], which is [`paper_annulus`]. A least-squares
-/// plane is no more robust than the deviation beside it, so a ring holding a few
-/// percent of bubble stroke does not merely read as noisy, it tilts the fill;
-/// measuring both over the same pixels is what stops the two disagreeing.
-/// `alpha` is copied rather than fitted: §2's third clarification says alpha
-/// never enters a ring statistic.
-pub fn fill_planes(page: &Raster, ring: &Mask) -> Vec<Plane> {
-    let samples = page.mode.samples();
-    let bounds = ring.bounds;
-
-    let mut xs: Vec<i64> = Vec::new();
-    let mut ys: Vec<i64> = Vec::new();
-    let mut channels: Vec<Vec<f64>> = vec![Vec::new(); samples];
-    for y in bounds.y..bounds.bottom() {
-        for x in bounds.x..bounds.right() {
-            if ring.contains(x, y) {
-                xs.push(x);
-                ys.push(y);
-                for (c, values) in channels.iter_mut().enumerate() {
-                    values.push(page.sample(x as u32, y as u32, c) as f64);
-                }
-            }
-        }
-    }
-
-    channels
-        .into_iter()
-        .map(|values| {
-            if values.is_empty() {
-                Plane::flat(0.0)
-            } else {
-                fit_plane(&xs, &ys, &values)
-            }
-        })
-        .collect()
-}
-
-/// The same, but flat: the per-channel **median** rather than a fitted plane.
-///
-/// Used when the plane is not worth having - an indexed source, where a
-/// gradient cannot be represented in palette indices at all, and any ring whose
-/// fit came back flat.
+/// on luma, and what actually gets painted is measured here, per channel, in
+/// the sample space the file uses - which for an indexed source is palette
+/// indices and for a 16-bit source is 16-bit. A median rather than a mean, so a
+/// few pixels of stroke that reached the ring do not tint the fill.
 pub fn fill_medians(page: &Raster, ring: &Mask) -> Vec<u16> {
     let samples = page.mode.samples();
     let bounds = ring.bounds;
@@ -578,6 +536,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }

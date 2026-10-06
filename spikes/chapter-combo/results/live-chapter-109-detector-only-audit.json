@@ -1,0 +1,51 @@
+{
+  "method": "Visual inspection of original chapter JPEGs and enlarged contextual crops for every detector-only text/SFX candidate emitted by the three-model fusion at RT score >=0.35 and COO score >=0.4.",
+  "scope": "Four detector-only candidates over 45 pages; subjective visual judgments, not a labeled corpus or a pixel-accuracy estimate.",
+  "summary": {
+    "candidates_reviewed": 4,
+    "visible_text_or_sfx": 0,
+    "clear_art_false_positives": 4,
+    "ambiguous": 0
+  },
+  "candidates": [
+    {
+      "page": "24",
+      "id": "candidate-coo-0000",
+      "model": "COO MTSv3",
+      "score": 0.4152514204254871,
+      "bbox_xywh": [188.79165649414062, 1446.181396484375, 91.52084350585938, 105.9000244140625],
+      "visual_label": "clear_art_false_positive",
+      "evidence": "Rocks and debris at the bottom of the page; no visible lettering."
+    },
+    {
+      "page": "26",
+      "id": "candidate-rt-0001",
+      "model": "RT-DETR-v2 full FP32 halves",
+      "class": "text_bubble",
+      "score": 0.44184809923171997,
+      "bbox_xywh": [159, 1585, 169, 15],
+      "visual_label": "clear_art_false_positive",
+      "evidence": "Thin bottom-edge sliver of a blank white speech-balloon border."
+    },
+    {
+      "page": "39",
+      "id": "candidate-rt-0001",
+      "model": "RT-DETR-v2 full FP32 halves",
+      "class": "text_bubble",
+      "score": 0.539563000202179,
+      "bbox_xywh": [586, 0, 103, 77],
+      "visual_label": "clear_art_false_positive",
+      "evidence": "Floating debris and short action/ink marks over white space, no glyph."
+    },
+    {
+      "page": "44",
+      "id": "candidate-rt-0000",
+      "model": "RT-DETR-v2 full FP32 halves",
+      "class": "text_free",
+      "score": 0.41573566198349,
+      "bbox_xywh": [51, 1272, 98, 54],
+      "visual_label": "clear_art_false_positive",
+      "evidence": "Two light rock/debris shapes over dark ground, no writing."
+    }
+  ]
+}

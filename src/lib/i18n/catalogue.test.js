@@ -89,8 +89,8 @@ const GROUP_KEYS = SHORTCUT_GROUPS.map((group) => `shortcuts.group.${group}`)
 /**
  * `src/lib/editor/maskrows.js#actionHint` - `masks.hint.${actionId}` over the
  * action ids `src/lib/model/masks.js` emits. Only an unmasked review entry
- * carries actions now; a mask's controls live on the row itself and name their
- * own keys as literals.
+ * carries actions built this way; a detected region's actions and a mask's
+ * controls name their own keys as literals.
  */
 const HINT_KEYS = reviewEntryActions({ outcome: 'gate-skipped' }).map(
   (action) => `masks.hint.${action.id}`,
@@ -101,7 +101,7 @@ const HINT_KEYS = reviewEntryActions({ outcome: 'gate-skipped' }).map(
  * Over every rung, not only `ROW_ENGINES`: a mask that ran on a rung the picker
  * does not offer still names its own entry, which is the `cloud` case.
  */
-const ENGINE_CHOICE_KEYS = [...new Set([...RUNGS, ...ROW_ENGINES])].map(engineChoiceLabel)
+const ENGINE_CHOICE_KEYS = [...new Set([...RUNGS, ...ROW_ENGINES, 'cloud'])].map(engineChoiceLabel)
 
 const RUNTIME_KEYS = [...DYNAMIC_KEYS, ...GROUP_KEYS, ...HINT_KEYS, ...ENGINE_CHOICE_KEYS]
 
@@ -131,7 +131,10 @@ const FILES = [SRC, ...RUST_ROOTS]
   .map((path) => ({ path: relative(SRC, path), source: readFileSync(path, 'utf8') }))
 
 const USES = keyUses(FILES)
-const USED = new Set([...USES.keys(), ...RUNTIME_KEYS])
+// `cloud_job_wire::JobKind::capability` names an HTTP capability, not UI copy.
+// Its namespace overlaps the denoise catalogue; exclude this exact wire identifier.
+const WIRE_IDENTIFIERS = new Set(['denoise.jobs'])
+const USED = new Set([...USES.keys(), ...RUNTIME_KEYS].filter((key) => !WIRE_IDENTIFIERS.has(key)))
 const CATALOGUE = new Set(catalogueKeys())
 
 describe('the catalogue is complete', () => {

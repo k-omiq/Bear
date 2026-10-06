@@ -123,6 +123,12 @@ describe('capEntries', () => {
 })
 
 describe('sanitizeSession', () => {
+  it('retains an explicit mixed cloud clean choice', async () => {
+    const { sanitizeSession } = await import('./session.svelte.js')
+    expect(sanitizeSession({ cleanLocalFirst: true }).cleanLocalFirst).toBe(true)
+    expect(sanitizeSession({}).cleanLocalFirst).toBe(false)
+    expect(sanitizeSession({ cleanLocalFirst: 'true' }).cleanLocalFirst).toBe(false)
+  })
   it('preserves sidecarPath from stored session', async () => {
     const { sanitizeSession } = await import('./session.svelte.js')
     const session = sanitizeSession({ sidecarPath: '/path/to/flux' })
@@ -182,6 +188,100 @@ describe('sanitizeSession', () => {
     // Every other window keeps both.
     expect(stored.windows.pages.h).toBe(380)
     expect(stored.windows.pages.fold).toBe(true)
+  })
+
+  // The selection colour and opacity (Settings › General): the sky blue and
+  // 35% until somebody picks otherwise, and only a colour or a number reads
+  // back. A number where the colour should be is not one somebody picked.
+  it('reads the selection colour and opacity, and defaults to sky blue at 35%', async () => {
+    const { DEFAULT_MASK_COLOR, DEFAULT_MASK_OPACITY, sanitizeSession } = await import('./session.svelte.js')
+    expect(DEFAULT_MASK_COLOR).toBe('#0284c7')
+    expect(DEFAULT_MASK_OPACITY).toBe(35)
+    expect(sanitizeSession({})).toMatchObject({ maskColor: '#0284c7', maskOpacity: 35 })
+    expect(sanitizeSession({ maskColor: '#FF00AA', maskOpacity: 60 })).toMatchObject({ maskColor: '#ff00aa', maskOpacity: 60 })
+    expect(sanitizeSession({ maskColor: 'abc' }).maskColor).toBe('#aabbcc')
+    for (const junk of ['red', '#12345', 123456, null, {}]) {
+      expect(sanitizeSession({ maskColor: junk }).maskColor, String(junk)).toBe('#0284c7')
+    }
+    // Clamped into range and rounded like every stored number; not a number is the default.
+    expect(sanitizeSession({ maskOpacity: 140 }).maskOpacity).toBe(100)
+    expect(sanitizeSession({ maskOpacity: -5 }).maskOpacity).toBe(0)
+    expect(sanitizeSession({ maskOpacity: 42.6 }).maskOpacity).toBe(43)
+    expect(sanitizeSession({ maskOpacity: '50' }).maskOpacity).toBe(35)
+  })
+
+  it('sets the selection colour and opacity, keeping the old value for junk', async () => {
+    const { session, setMaskColor, setMaskOpacity } = await import('./session.svelte.js')
+    const before = { color: session.maskColor, opacity: session.maskOpacity }
+    try {
+      setMaskColor('#22AA44')
+      expect(session.maskColor).toBe('#22aa44')
+      setMaskColor('not a colour')
+      expect(session.maskColor).toBe('#22aa44')
+      setMaskOpacity(55)
+      expect(session.maskOpacity).toBe(55)
+      setMaskOpacity(/** @type {any} */ (Number.NaN))
+      expect(session.maskOpacity).toBe(55)
+    } finally {
+      setMaskColor(before.color)
+      setMaskOpacity(before.opacity)
+    }
+  })
+
+  // Two colours since the split: speech bubble text keeps `maskColor`, the
+  // key the single colour was saved under, and text outside bubbles gets
+  // `outsideMaskColor`, burnt orange until somebody picks otherwise.
+  it('reads the outside colour, and carries a saved single colour over as the speech bubble one', async () => {
+    const { DEFAULT_OUTSIDE_MASK_COLOR, sanitizeSession } = await import('./session.svelte.js')
+    expect(DEFAULT_OUTSIDE_MASK_COLOR).toBe('#c2410c')
+    // A record from before the split, and one with neither key.
+    expect(sanitizeSession({ maskColor: '#22AA44', maskOpacity: 60 })).toMatchObject({
+      maskColor: '#22aa44',
+      outsideMaskColor: '#c2410c',
+      maskOpacity: 60,
+    })
+    expect(sanitizeSession({})).toMatchObject({ maskColor: '#0284c7', outsideMaskColor: '#c2410c' })
+    expect(sanitizeSession({ maskColor: '#112233', outsideMaskColor: '#FFaa00' })).toMatchObject({
+      maskColor: '#112233',
+      outsideMaskColor: '#ffaa00',
+    })
+    for (const junk of ['orange', '#12345', 123456, null, {}]) {
+      expect(sanitizeSession({ outsideMaskColor: junk }).outsideMaskColor, String(junk)).toBe('#c2410c')
+    }
+  })
+
+  it('sets the outside colour on its own, keeping the old value for junk', async () => {
+    const { session, setOutsideMaskColor } = await import('./session.svelte.js')
+    const before = { inside: session.maskColor, outside: session.outsideMaskColor }
+    try {
+      setOutsideMaskColor('#AA2244')
+      expect(session.outsideMaskColor).toBe('#aa2244')
+      expect(session.maskColor).toBe(before.inside)
+      setOutsideMaskColor('not a colour')
+      expect(session.outsideMaskColor).toBe('#aa2244')
+    } finally {
+      setOutsideMaskColor(before.outside)
+    }
+  })
+
+  // Both defaults survive black ink and white paper: 4:1 or better against
+  // each, as the outline has to be seen over either.
+  it('keeps both default colours legible on white paper and black ink', async () => {
+    const { DEFAULT_MASK_COLOR, DEFAULT_OUTSIDE_MASK_COLOR } = await import('./session.svelte.js')
+    const luminance = (/** @type {string} */ hex) => {
+      const [r, g, b] = [1, 3, 5]
+        .map((at) => parseInt(hex.slice(at, at + 2), 16) / 255)
+        .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    const contrast = (/** @type {string} */ a, /** @type {string} */ b) => {
+      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+      return (hi + 0.05) / (lo + 0.05)
+    }
+    for (const color of [DEFAULT_MASK_COLOR, DEFAULT_OUTSIDE_MASK_COLOR]) {
+      expect(contrast(color, '#ffffff'), `${color} on white`).toBeGreaterThanOrEqual(4)
+      expect(contrast(color, '#000000'), `${color} on black`).toBeGreaterThanOrEqual(4)
+    }
   })
 
   it('carries fluxBackend down to the backend settings patch', async () => {

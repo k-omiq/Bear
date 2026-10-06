@@ -147,6 +147,7 @@ impl StripPatch {
             palette: source.pixels.palette.clone(),
             trns: source.pixels.trns.clone(),
             srgb_intent: None,
+            color: Default::default(),
             data: vec![0; {
                 let bits = part.w as usize * samples * source.pixels.depth.bits() as usize;
                 bits.div_ceil(8) * part.h as usize
@@ -158,7 +159,7 @@ impl StripPatch {
                 // Page coordinates out, strip coordinates in. The two differ in
                 // x as well as y whenever this page is narrower than the strip.
                 let Some((sx, sy)) = strip.to_strip(position, x, y) else { continue };
-                mask.set(x, y, source.mask.contains(sx, sy));
+                mask.set_coverage(x, y, source.mask.coverage(sx, sy));
                 let (from_x, from_y) = ((sx - strip_bounds.x) as u32, (sy - strip_bounds.y) as u32);
                 let (to_x, to_y) = ((x - part.x) as u32, (y - part.y) as u32);
                 for channel in 0..samples {
@@ -184,7 +185,7 @@ impl StripPatch {
                 for y in ink_part.y..ink_part.bottom() {
                     for x in ink_part.x..ink_part.right() {
                         let Some((sx, sy)) = strip.to_strip(position, x, y) else { continue };
-                        ink.set(x, y, source.ink.contains(sx, sy));
+                        ink.bits[(y-ink_part.y) as usize*ink_part.w as usize+(x-ink_part.x) as usize] = source.ink.bits[(sy-source.ink.bounds.y) as usize*source.ink.bounds.w as usize+(sx-source.ink.bounds.x) as usize];
                     }
                 }
                 ink
@@ -257,6 +258,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data: vec![0; {
                 let bits = bounds.w as usize * samples * depth.bits() as usize;
                 bits.div_ceil(8) * bounds.h as usize

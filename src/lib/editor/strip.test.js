@@ -87,7 +87,7 @@ describe('stripMetrics', () => {
 describe('stripWindow', () => {
   it('renders a short chapter whole', () => {
     const band = stripWindow({ metrics: uniform(6), columnTop: 0, viewportHeight: 764 })
-    expect(band).toEqual({ virtual: false, start: 0, end: 6, padTop: 0, padBottom: 0 })
+    expect(band).toEqual({ virtual: false, start: 0, end: 6, padTop: 0, padBottom: 0, extra: null })
   })
 
   it('windows a long one', () => {
@@ -138,6 +138,15 @@ describe('stripWindow', () => {
     expect(below.padBottom).toBe(0)
   })
 
+  it('mounts the pages within the preload margin before they scroll in', () => {
+    const metrics = uniform(60)
+    const spec = { metrics, columnTop: -UNIT * 10 - 100, viewportHeight: 764, overscan: 0 }
+    const near = stripWindow(spec)
+    expect([near.start, near.end]).toEqual([10, 11])
+    const ahead = stripWindow({ ...spec, margin: UNIT })
+    expect([ahead.start, ahead.end]).toEqual([9, 12])
+  })
+
   it('keeps the included page mounted', () => {
     const band = stripWindow({
       metrics: uniform(60),
@@ -145,8 +154,9 @@ describe('stripWindow', () => {
       viewportHeight: 900,
       include: 3,
     })
-    expect(band.start).toBeLessThanOrEqual(3)
-    expect(band.end).toBeGreaterThan(3)
+    expect(band.extra).toBe(3)
+    expect(band.start).toBe(39)
+    expect(band.end).toBe(42)
   })
 
   it('ignores an include outside the chapter', () => {
@@ -171,6 +181,7 @@ describe('stripWindow', () => {
       end: 0,
       padTop: 0,
       padBottom: 0,
+      extra: null,
     })
     expect(stripWindow({})).toEqual({
       virtual: false,
@@ -178,6 +189,7 @@ describe('stripWindow', () => {
       end: 0,
       padTop: 0,
       padBottom: 0,
+      extra: null,
     })
   })
 

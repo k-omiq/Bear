@@ -1,6 +1,6 @@
 //! The engine ladder.
 //!
-//! Rungs 0, 1 and 2 are here; the rungs above them arrive with the phases that
+//! Rungs 0 and 2 are here; the rungs above them arrive with the phases that
 //! build them. What they share is this shape - given a page and a
 //! [`crate::fit::Fitted`], produce the pixels for one patch covering the mask's
 //! bounds, in the page's own mode and depth, with everything outside the mask
@@ -30,7 +30,6 @@
 //! rather than about how many engines look through it, and rung 3a
 //! ([`flux`]) reads the same module.
 
-pub mod denoise;
 pub mod fill;
 /// Rung 3a, the out-of-process one. It is here because it is a rung and it
 /// keeps the rungs' shape - [`flux::applies`], [`flux::declines`],
@@ -41,3 +40,6 @@ pub mod fill;
 pub mod flux;
 pub mod lama;
 pub mod model;
+pub mod render;
+
+pub use render::{CloudProvider, ExecutionTarget, GeneratedCrop, PreparedRender, RenderRecipe};

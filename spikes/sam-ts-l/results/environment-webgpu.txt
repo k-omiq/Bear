@@ -1,0 +1,10 @@
+flatbuffers==25.12.19
+ml-dtypes==0.6.0
+numpy==2.3.3
+onnx==1.19.0
+onnxruntime==1.28.0
+onnxruntime-ep-webgpu==0.4.0
+packaging==26.3
+pillow==11.3.0
+protobuf==7.36.2
+typing-extensions==4.16.0

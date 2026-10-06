@@ -42,12 +42,16 @@ export function cycleTab(e, root) {
   const last = items[items.length - 1]
   const active = /** @type {HTMLElement | null} */ (document.activeElement)
 
-  if (e.shiftKey && (active === first || !root.contains(active))) {
+  // Focus on something inside that is not itself a stop - a heading a screen
+  // moved focus to - still wraps: Shift+Tab from it would otherwise leave.
+  if (e.shiftKey && (active === first || !root.contains(active) || !items.includes(/** @type {HTMLElement} */ (active)) && first.compareDocumentPosition(/** @type {Node} */ (active)) & Node.DOCUMENT_POSITION_PRECEDING)) {
     e.preventDefault()
     last.focus()
     return true
   }
-  if (!e.shiftKey && (active === last || !root.contains(active))) {
+  // The same the other way: a non-stop after the last stop (an alert under
+  // the last control, say) wraps forward instead of leaving.
+  if (!e.shiftKey && (active === last || !root.contains(active) || !items.includes(/** @type {HTMLElement} */ (active)) && last.compareDocumentPosition(/** @type {Node} */ (active)) & Node.DOCUMENT_POSITION_FOLLOWING)) {
     e.preventDefault()
     first.focus()
     return true

@@ -1,0 +1,2589 @@
+{
+  "metric_meaning": "box/mask geometric agreement only; neither model is human ground truth",
+  "chapter": "Apocalypse 109",
+  "source_pages": 45,
+  "huggingface_revision": "16e8a622f91fabc6b5b65c96d32d1183f8843546",
+  "score_threshold": 0.35,
+  "runs": {
+    "small_whole": {
+      "model": "/Users/caved/dev/manga-cleaner/models/comic-text-and-bubble-detector-detector-v4-s_int8.onnx",
+      "model_sha256": "5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79",
+      "layout": "whole",
+      "preprocessing": "PIL bilinear 640x640 RGB float32 /255; no normalization or padding",
+      "class_totals": {
+        "bubble": 30,
+        "text_bubble": 30,
+        "text_free": 10
+      },
+      "empty_pages": 26,
+      "text_empty_pages": 27,
+      "all_empty_sam_nonempty_pages": 25,
+      "text_empty_sam_nonempty_pages": 26,
+      "sam_pixels_in_text_boxes": 216644,
+      "sam_pixels": 1124691,
+      "sam_pixel_share_in_text_boxes": 0.19262535220785088,
+      "inference_ms_total": 3219.386751035927,
+      "pages": [
+        {
+          "file": "01.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 2
+          },
+          "sam_pixels": 56791,
+          "sam_pixels_in_text_boxes": 51291,
+          "inference_ms": 63.813624990871176
+        },
+        {
+          "file": "02.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 35136,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 64.0419160190504
+        },
+        {
+          "file": "03.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 72832,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 77.00037499307655
+        },
+        {
+          "file": "04.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 36253,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 74.64575002086349
+        },
+        {
+          "file": "05.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 34349,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 69.8302089876961
+        },
+        {
+          "file": "06.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 17989,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 65.42924998211674
+        },
+        {
+          "file": "07.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 24322,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 62.57866701344028
+        },
+        {
+          "file": "08.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 40438,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 59.86941698938608
+        },
+        {
+          "file": "09.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 29479,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 60.87300000945106
+        },
+        {
+          "file": "10.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 63024,
+          "sam_pixels_in_text_boxes": 2662,
+          "inference_ms": 61.98324999422766
+        },
+        {
+          "file": "11.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 17072,
+          "sam_pixels_in_text_boxes": 4784,
+          "inference_ms": 66.08229200355709
+        },
+        {
+          "file": "12.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 17647,
+          "sam_pixels_in_text_boxes": 13938,
+          "inference_ms": 70.68120798794553
+        },
+        {
+          "file": "13.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 2,
+            "text_free": 3
+          },
+          "sam_pixels": 17307,
+          "sam_pixels_in_text_boxes": 17307,
+          "inference_ms": 75.47499999054708
+        },
+        {
+          "file": "14.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 40005,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 72.65508300042711
+        },
+        {
+          "file": "15.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 30170,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 69.48983299662359
+        },
+        {
+          "file": "16.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 15593,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 72.8717079909984
+        },
+        {
+          "file": "17.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 45891,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 72.32666702475399
+        },
+        {
+          "file": "18.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 51422,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 74.11033299285918
+        },
+        {
+          "file": "19.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 52526,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 68.58570899930783
+        },
+        {
+          "file": "20.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 37707,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 68.14145800308324
+        },
+        {
+          "file": "21.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 39465,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 63.344666006742045
+        },
+        {
+          "file": "22.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 26475,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 66.39112500124611
+        },
+        {
+          "file": "23.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 12675,
+          "sam_pixels_in_text_boxes": 4527,
+          "inference_ms": 69.00291598867625
+        },
+        {
+          "file": "24.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 62116,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 69.50024998513982
+        },
+        {
+          "file": "25.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 1676,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 66.90908301970921
+        },
+        {
+          "file": "26.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 9440,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 66.56204198952764
+        },
+        {
+          "file": "27.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 30971,
+          "sam_pixels_in_text_boxes": 10955,
+          "inference_ms": 67.4367499887012
+        },
+        {
+          "file": "28.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 4799,
+          "sam_pixels_in_text_boxes": 2725,
+          "inference_ms": 68.00691699027084
+        },
+        {
+          "file": "29.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 6742,
+          "sam_pixels_in_text_boxes": 2667,
+          "inference_ms": 68.84670801809989
+        },
+        {
+          "file": "30.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 0,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 70.2202920219861
+        },
+        {
+          "file": "31.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 16328,
+          "sam_pixels_in_text_boxes": 16328,
+          "inference_ms": 68.96762500400655
+        },
+        {
+          "file": "32.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 1
+          },
+          "sam_pixels": 23507,
+          "sam_pixels_in_text_boxes": 23507,
+          "inference_ms": 69.82200001948513
+        },
+        {
+          "file": "33.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 7909,
+          "sam_pixels_in_text_boxes": 7909,
+          "inference_ms": 70.07408401113935
+        },
+        {
+          "file": "34.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 5348,
+          "sam_pixels_in_text_boxes": 5348,
+          "inference_ms": 67.20145800500177
+        },
+        {
+          "file": "35.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 609,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 69.33441699948162
+        },
+        {
+          "file": "36.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 20273,
+          "sam_pixels_in_text_boxes": 10981,
+          "inference_ms": 68.85129201691598
+        },
+        {
+          "file": "37.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 27076,
+          "sam_pixels_in_text_boxes": 8547,
+          "inference_ms": 75.56262498837896
+        },
+        {
+          "file": "38.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 9352,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 75.77408300130628
+        },
+        {
+          "file": "39.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 3875,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 76.06779201887548
+        },
+        {
+          "file": "40.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 14602,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 77.76133398874663
+        },
+        {
+          "file": "41.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 9210,
+          "sam_pixels_in_text_boxes": 2675,
+          "inference_ms": 75.8123749983497
+        },
+        {
+          "file": "42.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 16018,
+          "sam_pixels_in_text_boxes": 11665,
+          "inference_ms": 77.0176249789074
+        },
+        {
+          "file": "43.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 10443,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 74.27075001760386
+        },
+        {
+          "file": "44.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 9831,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 160.45887500513345
+        },
+        {
+          "file": "45.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 4
+          },
+          "sam_pixels": 19998,
+          "sam_pixels_in_text_boxes": 18828,
+          "inference_ms": 65.70491698221304
+        }
+      ]
+    },
+    "small_halves": {
+      "model": "/Users/caved/dev/manga-cleaner/models/comic-text-and-bubble-detector-detector-v4-s_int8.onnx",
+      "model_sha256": "5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79",
+      "layout": "halves",
+      "preprocessing": "PIL bilinear 640x640 RGB float32 /255; no normalization or padding",
+      "class_totals": {
+        "bubble": 34,
+        "text_bubble": 32,
+        "text_free": 14
+      },
+      "empty_pages": 24,
+      "text_empty_pages": 26,
+      "all_empty_sam_nonempty_pages": 23,
+      "text_empty_sam_nonempty_pages": 25,
+      "sam_pixels_in_text_boxes": 216458,
+      "sam_pixels": 1124691,
+      "sam_pixel_share_in_text_boxes": 0.19245997345048552,
+      "inference_ms_total": 6497.736917983275,
+      "pages": [
+        {
+          "file": "01.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 3
+          },
+          "sam_pixels": 56791,
+          "sam_pixels_in_text_boxes": 51230,
+          "inference_ms": 127.29579201550223
+        },
+        {
+          "file": "02.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 35136,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 127.96404198161326
+        },
+        {
+          "file": "03.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 72832,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 126.10404202132486
+        },
+        {
+          "file": "04.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 36253,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 130.66499997512437
+        },
+        {
+          "file": "05.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 34349,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 125.66920899553224
+        },
+        {
+          "file": "06.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 17989,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 127.74362601339817
+        },
+        {
+          "file": "07.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 24322,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 148.3867500210181
+        },
+        {
+          "file": "08.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 40438,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 148.45095900818706
+        },
+        {
+          "file": "09.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 29479,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 150.99595801439136
+        },
+        {
+          "file": "10.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 63024,
+          "sam_pixels_in_text_boxes": 2662,
+          "inference_ms": 147.3416249791626
+        },
+        {
+          "file": "11.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 17072,
+          "sam_pixels_in_text_boxes": 4784,
+          "inference_ms": 147.1952089923434
+        },
+        {
+          "file": "12.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 17647,
+          "sam_pixels_in_text_boxes": 13938,
+          "inference_ms": 137.9965409869328
+        },
+        {
+          "file": "13.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 2,
+            "text_free": 3
+          },
+          "sam_pixels": 17307,
+          "sam_pixels_in_text_boxes": 17182,
+          "inference_ms": 145.5349580210168
+        },
+        {
+          "file": "14.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 40005,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 144.88854201044887
+        },
+        {
+          "file": "15.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 30170,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 152.7067910064943
+        },
+        {
+          "file": "16.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 15593,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 153.86341599514708
+        },
+        {
+          "file": "17.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 45891,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 161.97291703429073
+        },
+        {
+          "file": "18.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 51422,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 154.92208299110644
+        },
+        {
+          "file": "19.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 52526,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 154.308500001207
+        },
+        {
+          "file": "20.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 37707,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 160.4565829911735
+        },
+        {
+          "file": "21.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 39465,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 156.3726660097018
+        },
+        {
+          "file": "22.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 26475,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 153.88658302254044
+        },
+        {
+          "file": "23.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 12675,
+          "sam_pixels_in_text_boxes": 4527,
+          "inference_ms": 157.1106250048615
+        },
+        {
+          "file": "24.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 62116,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 136.75408301060088
+        },
+        {
+          "file": "25.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 1676,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 137.5727490230929
+        },
+        {
+          "file": "26.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 9440,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 140.56591701228172
+        },
+        {
+          "file": "27.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 30971,
+          "sam_pixels_in_text_boxes": 10955,
+          "inference_ms": 141.53412502491847
+        },
+        {
+          "file": "28.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 4799,
+          "sam_pixels_in_text_boxes": 2725,
+          "inference_ms": 140.93849997152574
+        },
+        {
+          "file": "29.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 6742,
+          "sam_pixels_in_text_boxes": 2667,
+          "inference_ms": 138.729041966144
+        },
+        {
+          "file": "30.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 0,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 139.9684990174137
+        },
+        {
+          "file": "31.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 1
+          },
+          "sam_pixels": 16328,
+          "sam_pixels_in_text_boxes": 16328,
+          "inference_ms": 139.72387599642389
+        },
+        {
+          "file": "32.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 4,
+            "text_free": 2
+          },
+          "sam_pixels": 23507,
+          "sam_pixels_in_text_boxes": 23507,
+          "inference_ms": 139.51358397025615
+        },
+        {
+          "file": "33.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 1
+          },
+          "sam_pixels": 7909,
+          "sam_pixels_in_text_boxes": 7909,
+          "inference_ms": 148.58837399515323
+        },
+        {
+          "file": "34.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 5348,
+          "sam_pixels_in_text_boxes": 5348,
+          "inference_ms": 154.163500003051
+        },
+        {
+          "file": "35.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 609,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 149.96604196494445
+        },
+        {
+          "file": "36.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 20273,
+          "sam_pixels_in_text_boxes": 10981,
+          "inference_ms": 154.73124998970889
+        },
+        {
+          "file": "37.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 27076,
+          "sam_pixels_in_text_boxes": 8547,
+          "inference_ms": 151.31604199996218
+        },
+        {
+          "file": "38.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 9352,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 138.04125000024214
+        },
+        {
+          "file": "39.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 3875,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 149.02529199025594
+        },
+        {
+          "file": "40.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 14602,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 145.38199998787604
+        },
+        {
+          "file": "41.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 9210,
+          "sam_pixels_in_text_boxes": 2675,
+          "inference_ms": 140.90674900216982
+        },
+        {
+          "file": "42.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 16018,
+          "sam_pixels_in_text_boxes": 11665,
+          "inference_ms": 140.27404200169258
+        },
+        {
+          "file": "43.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 10443,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 143.34958395920694
+        },
+        {
+          "file": "44.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 9831,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 143.7293339986354
+        },
+        {
+          "file": "45.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 4
+          },
+          "sam_pixels": 19998,
+          "sam_pixels_in_text_boxes": 18828,
+          "inference_ms": 141.13066700519994
+        }
+      ]
+    },
+    "full_whole": {
+      "model": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-rtdetr/artifacts/models/detector.onnx",
+      "model_sha256": "065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195",
+      "layout": "whole",
+      "preprocessing": "PIL bilinear 640x640 RGB float32 /255; no normalization or padding",
+      "class_totals": {
+        "bubble": 34,
+        "text_bubble": 31,
+        "text_free": 18
+      },
+      "empty_pages": 21,
+      "text_empty_pages": 22,
+      "all_empty_sam_nonempty_pages": 20,
+      "text_empty_sam_nonempty_pages": 21,
+      "sam_pixels_in_text_boxes": 222087,
+      "sam_pixels": 1124691,
+      "sam_pixel_share_in_text_boxes": 0.19746490369354783,
+      "inference_ms_total": 23945.22374588996,
+      "pages": [
+        {
+          "file": "01.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 4
+          },
+          "sam_pixels": 56791,
+          "sam_pixels_in_text_boxes": 51291,
+          "inference_ms": 454.999665991636
+        },
+        {
+          "file": "02.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 35136,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 548.3300829946529
+        },
+        {
+          "file": "03.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 72832,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 478.7899579969235
+        },
+        {
+          "file": "04.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 36253,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 490.449582983274
+        },
+        {
+          "file": "05.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 34349,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 528.7284999794792
+        },
+        {
+          "file": "06.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 17989,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 534.1502500232309
+        },
+        {
+          "file": "07.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 24322,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 495.006832992658
+        },
+        {
+          "file": "08.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 40438,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 507.8694579715375
+        },
+        {
+          "file": "09.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 29479,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 545.1304170128424
+        },
+        {
+          "file": "10.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 63024,
+          "sam_pixels_in_text_boxes": 2662,
+          "inference_ms": 518.5399169859011
+        },
+        {
+          "file": "11.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 17072,
+          "sam_pixels_in_text_boxes": 4784,
+          "inference_ms": 505.1570830109995
+        },
+        {
+          "file": "12.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 17647,
+          "sam_pixels_in_text_boxes": 13938,
+          "inference_ms": 513.712541986024
+        },
+        {
+          "file": "13.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 1,
+            "text_free": 3
+          },
+          "sam_pixels": 17307,
+          "sam_pixels_in_text_boxes": 17307,
+          "inference_ms": 561.752332985634
+        },
+        {
+          "file": "14.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 40005,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 517.0647090126295
+        },
+        {
+          "file": "15.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 30170,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 512.0983750093728
+        },
+        {
+          "file": "16.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 15593,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 525.0244160124566
+        },
+        {
+          "file": "17.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 45891,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 572.7532079908997
+        },
+        {
+          "file": "18.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 51422,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 506.0482080152724
+        },
+        {
+          "file": "19.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 52526,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 524.7865409764927
+        },
+        {
+          "file": "20.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 37707,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 550.371167017147
+        },
+        {
+          "file": "21.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 39465,
+          "sam_pixels_in_text_boxes": 5443,
+          "inference_ms": 565.2176250005141
+        },
+        {
+          "file": "22.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 26475,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 517.1964580076747
+        },
+        {
+          "file": "23.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 12675,
+          "sam_pixels_in_text_boxes": 4527,
+          "inference_ms": 523.7287500058301
+        },
+        {
+          "file": "24.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 62116,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 540.2147909917403
+        },
+        {
+          "file": "25.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 1676,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 555.3279579908121
+        },
+        {
+          "file": "26.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 9440,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 518.2768329977989
+        },
+        {
+          "file": "27.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 30971,
+          "sam_pixels_in_text_boxes": 10955,
+          "inference_ms": 522.7272909833118
+        },
+        {
+          "file": "28.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 4799,
+          "sam_pixels_in_text_boxes": 2725,
+          "inference_ms": 567.3303750227205
+        },
+        {
+          "file": "29.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 6742,
+          "sam_pixels_in_text_boxes": 2667,
+          "inference_ms": 531.7544580029789
+        },
+        {
+          "file": "30.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 0,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 523.2618340232875
+        },
+        {
+          "file": "31.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 1
+          },
+          "sam_pixels": 16328,
+          "sam_pixels_in_text_boxes": 16328,
+          "inference_ms": 531.9525419909041
+        },
+        {
+          "file": "32.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 1
+          },
+          "sam_pixels": 23507,
+          "sam_pixels_in_text_boxes": 23507,
+          "inference_ms": 584.8752919991966
+        },
+        {
+          "file": "33.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 7909,
+          "sam_pixels_in_text_boxes": 7909,
+          "inference_ms": 530.6301669916138
+        },
+        {
+          "file": "34.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 5348,
+          "sam_pixels_in_text_boxes": 5348,
+          "inference_ms": 536.7877089884132
+        },
+        {
+          "file": "35.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 609,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 541.729624994332
+        },
+        {
+          "file": "36.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 20273,
+          "sam_pixels_in_text_boxes": 10981,
+          "inference_ms": 570.4964159813244
+        },
+        {
+          "file": "37.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 27076,
+          "sam_pixels_in_text_boxes": 8547,
+          "inference_ms": 521.260124980472
+        },
+        {
+          "file": "38.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 9352,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 529.5845000073314
+        },
+        {
+          "file": "39.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 3875,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 553.3932090038434
+        },
+        {
+          "file": "40.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 14602,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 563.0991660000291
+        },
+        {
+          "file": "41.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 9210,
+          "sam_pixels_in_text_boxes": 2675,
+          "inference_ms": 527.5873749924358
+        },
+        {
+          "file": "42.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 16018,
+          "sam_pixels_in_text_boxes": 11665,
+          "inference_ms": 547.838958009379
+        },
+        {
+          "file": "43.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 10443,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 564.5702499896288
+        },
+        {
+          "file": "44.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 9831,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 554.6216669899877
+        },
+        {
+          "file": "45.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 6
+          },
+          "sam_pixels": 19998,
+          "sam_pixels_in_text_boxes": 18828,
+          "inference_ms": 530.9971249953378
+        }
+      ]
+    },
+    "full_halves": {
+      "model": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/chapter-rtdetr/artifacts/models/detector.onnx",
+      "model_sha256": "065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195",
+      "layout": "halves",
+      "preprocessing": "PIL bilinear 640x640 RGB float32 /255; no normalization or padding",
+      "class_totals": {
+        "bubble": 39,
+        "text_bubble": 33,
+        "text_free": 38
+      },
+      "empty_pages": 12,
+      "text_empty_pages": 13,
+      "all_empty_sam_nonempty_pages": 11,
+      "text_empty_sam_nonempty_pages": 12,
+      "sam_pixels_in_text_boxes": 360917,
+      "sam_pixels": 1124691,
+      "sam_pixel_share_in_text_boxes": 0.32090325253780816,
+      "inference_ms_total": 43338.88921295875,
+      "pages": [
+        {
+          "file": "01.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 5
+          },
+          "sam_pixels": 56791,
+          "sam_pixels_in_text_boxes": 51291,
+          "inference_ms": 775.5066259996966
+        },
+        {
+          "file": "02.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 35136,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 784.6685409895144
+        },
+        {
+          "file": "03.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 72832,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 777.4324170022737
+        },
+        {
+          "file": "04.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 36253,
+          "sam_pixels_in_text_boxes": 11821,
+          "inference_ms": 777.8645420039538
+        },
+        {
+          "file": "05.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 34349,
+          "sam_pixels_in_text_boxes": 6913,
+          "inference_ms": 771.2715000379831
+        },
+        {
+          "file": "06.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 17989,
+          "sam_pixels_in_text_boxes": 2381,
+          "inference_ms": 772.3781249660533
+        },
+        {
+          "file": "07.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 2
+          },
+          "sam_pixels": 24322,
+          "sam_pixels_in_text_boxes": 14433,
+          "inference_ms": 811.6492079861928
+        },
+        {
+          "file": "08.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 40438,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 975.1265420054551
+        },
+        {
+          "file": "09.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 29479,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 969.0677910111845
+        },
+        {
+          "file": "10.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 63024,
+          "sam_pixels_in_text_boxes": 2662,
+          "inference_ms": 802.2662920120638
+        },
+        {
+          "file": "11.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 17072,
+          "sam_pixels_in_text_boxes": 4784,
+          "inference_ms": 804.3233339849394
+        },
+        {
+          "file": "12.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 17647,
+          "sam_pixels_in_text_boxes": 13938,
+          "inference_ms": 811.5267920074984
+        },
+        {
+          "file": "13.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 4
+          },
+          "sam_pixels": 17307,
+          "sam_pixels_in_text_boxes": 17307,
+          "inference_ms": 815.7828749972396
+        },
+        {
+          "file": "14.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 40005,
+          "sam_pixels_in_text_boxes": 29933,
+          "inference_ms": 873.4024580044206
+        },
+        {
+          "file": "15.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 30170,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 1044.6860829833895
+        },
+        {
+          "file": "16.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 15593,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 935.4008339869324
+        },
+        {
+          "file": "17.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 2
+          },
+          "sam_pixels": 45891,
+          "sam_pixels_in_text_boxes": 22111,
+          "inference_ms": 1002.34954195912
+        },
+        {
+          "file": "18.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 51422,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 930.5922079656739
+        },
+        {
+          "file": "19.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 52526,
+          "sam_pixels_in_text_boxes": 10221,
+          "inference_ms": 1031.0295409872197
+        },
+        {
+          "file": "20.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 1
+          },
+          "sam_pixels": 37707,
+          "sam_pixels_in_text_boxes": 16073,
+          "inference_ms": 966.0107509989757
+        },
+        {
+          "file": "21.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 4
+          },
+          "sam_pixels": 39465,
+          "sam_pixels_in_text_boxes": 19558,
+          "inference_ms": 1025.8194170019124
+        },
+        {
+          "file": "22.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 26475,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 962.4077910266351
+        },
+        {
+          "file": "23.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 12675,
+          "sam_pixels_in_text_boxes": 4527,
+          "inference_ms": 1013.6947079736274
+        },
+        {
+          "file": "24.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 62116,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 978.3535420137923
+        },
+        {
+          "file": "25.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 1676,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 1026.475416001631
+        },
+        {
+          "file": "26.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 9440,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 1023.9099580212496
+        },
+        {
+          "file": "27.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 30971,
+          "sam_pixels_in_text_boxes": 10955,
+          "inference_ms": 1007.6047930051573
+        },
+        {
+          "file": "28.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 4799,
+          "sam_pixels_in_text_boxes": 2725,
+          "inference_ms": 1030.9925409965217
+        },
+        {
+          "file": "29.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 6742,
+          "sam_pixels_in_text_boxes": 2667,
+          "inference_ms": 996.4071250287816
+        },
+        {
+          "file": "30.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 0,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 1067.4121660122182
+        },
+        {
+          "file": "31.jpg",
+          "classes": {
+            "bubble": 5,
+            "text_bubble": 2,
+            "text_free": 1
+          },
+          "sam_pixels": 16328,
+          "sam_pixels_in_text_boxes": 16328,
+          "inference_ms": 986.5859580168035
+        },
+        {
+          "file": "32.jpg",
+          "classes": {
+            "bubble": 5,
+            "text_bubble": 4,
+            "text_free": 3
+          },
+          "sam_pixels": 23507,
+          "sam_pixels_in_text_boxes": 23507,
+          "inference_ms": 1067.1079590101726
+        },
+        {
+          "file": "33.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 7909,
+          "sam_pixels_in_text_boxes": 7909,
+          "inference_ms": 1011.5546679589897
+        },
+        {
+          "file": "34.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 5348,
+          "sam_pixels_in_text_boxes": 5348,
+          "inference_ms": 1093.4265840041917
+        },
+        {
+          "file": "35.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 609,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 1026.268459012499
+        },
+        {
+          "file": "36.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 20273,
+          "sam_pixels_in_text_boxes": 10981,
+          "inference_ms": 1086.9047080050223
+        },
+        {
+          "file": "37.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 27076,
+          "sam_pixels_in_text_boxes": 8547,
+          "inference_ms": 1013.8309999892954
+        },
+        {
+          "file": "38.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 9352,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 1062.7122930018231
+        },
+        {
+          "file": "39.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 3875,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 1020.9013739950024
+        },
+        {
+          "file": "40.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 14602,
+          "sam_pixels_in_text_boxes": 8684,
+          "inference_ms": 1060.5087919684593
+        },
+        {
+          "file": "41.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 9210,
+          "sam_pixels_in_text_boxes": 2675,
+          "inference_ms": 1103.5187510133255
+        },
+        {
+          "file": "42.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 16018,
+          "sam_pixels_in_text_boxes": 11665,
+          "inference_ms": 1062.2368750046007
+        },
+        {
+          "file": "43.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 10443,
+          "sam_pixels_in_text_boxes": 2084,
+          "inference_ms": 1048.5927909903694
+        },
+        {
+          "file": "44.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 9831,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 1049.806416995125
+        },
+        {
+          "file": "45.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 8
+          },
+          "sam_pixels": 19998,
+          "sam_pixels_in_text_boxes": 18889,
+          "inference_ms": 1079.5191250217613
+        }
+      ]
+    },
+    "app_small_whole_nearest": {
+      "model": "/Users/caved/dev/manga-cleaner/models/comic-text-and-bubble-detector-detector-v4-s_int8.onnx",
+      "model_sha256": null,
+      "layout": "whole",
+      "preprocessing": "app nearest-neighbor RGB float32 /255",
+      "class_totals": {
+        "bubble": 33,
+        "text_bubble": 30,
+        "text_free": 14
+      },
+      "empty_pages": 24,
+      "text_empty_pages": 26,
+      "all_empty_sam_nonempty_pages": 23,
+      "text_empty_sam_nonempty_pages": 25,
+      "sam_pixels_in_text_boxes": 216644,
+      "sam_pixels": 1124691,
+      "sam_pixel_share_in_text_boxes": 0.19262535220785088,
+      "inference_ms_total": 4148.364667,
+      "pages": [
+        {
+          "file": "01.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 3
+          },
+          "sam_pixels": 56791,
+          "sam_pixels_in_text_boxes": 51291,
+          "inference_ms": 96.935167
+        },
+        {
+          "file": "02.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 35136,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 90.00295799999999
+        },
+        {
+          "file": "03.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 72832,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 85.974333
+        },
+        {
+          "file": "04.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 36253,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 90.476792
+        },
+        {
+          "file": "05.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 34349,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 90.57433300000001
+        },
+        {
+          "file": "06.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 17989,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 90.037917
+        },
+        {
+          "file": "07.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 24322,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 87.303125
+        },
+        {
+          "file": "08.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 40438,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 88.27770799999999
+        },
+        {
+          "file": "09.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 29479,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 92.027125
+        },
+        {
+          "file": "10.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 63024,
+          "sam_pixels_in_text_boxes": 2662,
+          "inference_ms": 91.66637499999999
+        },
+        {
+          "file": "11.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 17072,
+          "sam_pixels_in_text_boxes": 4784,
+          "inference_ms": 88.34758400000001
+        },
+        {
+          "file": "12.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 17647,
+          "sam_pixels_in_text_boxes": 13938,
+          "inference_ms": 87.21424999999999
+        },
+        {
+          "file": "13.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 2,
+            "text_free": 3
+          },
+          "sam_pixels": 17307,
+          "sam_pixels_in_text_boxes": 17307,
+          "inference_ms": 87.02558400000001
+        },
+        {
+          "file": "14.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 40005,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 93.07041600000001
+        },
+        {
+          "file": "15.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 30170,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 87.53333400000001
+        },
+        {
+          "file": "16.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 15593,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 91.114792
+        },
+        {
+          "file": "17.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 45891,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 111.713875
+        },
+        {
+          "file": "18.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 1
+          },
+          "sam_pixels": 51422,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 89.919375
+        },
+        {
+          "file": "19.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 52526,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 97.691958
+        },
+        {
+          "file": "20.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 37707,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 89.055958
+        },
+        {
+          "file": "21.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 39465,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 95.440458
+        },
+        {
+          "file": "22.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 26475,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 96.93241599999999
+        },
+        {
+          "file": "23.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 12675,
+          "sam_pixels_in_text_boxes": 4527,
+          "inference_ms": 87.511375
+        },
+        {
+          "file": "24.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 62116,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 93.577334
+        },
+        {
+          "file": "25.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 1676,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 86.921833
+        },
+        {
+          "file": "26.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 9440,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 90.045625
+        },
+        {
+          "file": "27.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 30971,
+          "sam_pixels_in_text_boxes": 10955,
+          "inference_ms": 89.958417
+        },
+        {
+          "file": "28.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 4799,
+          "sam_pixels_in_text_boxes": 2725,
+          "inference_ms": 93.66275
+        },
+        {
+          "file": "29.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 6742,
+          "sam_pixels_in_text_boxes": 2667,
+          "inference_ms": 91.259583
+        },
+        {
+          "file": "30.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 0,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 99.175417
+        },
+        {
+          "file": "31.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 16328,
+          "sam_pixels_in_text_boxes": 16328,
+          "inference_ms": 92.602667
+        },
+        {
+          "file": "32.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 3,
+            "text_free": 2
+          },
+          "sam_pixels": 23507,
+          "sam_pixels_in_text_boxes": 23507,
+          "inference_ms": 89.12837499999999
+        },
+        {
+          "file": "33.jpg",
+          "classes": {
+            "bubble": 2,
+            "text_bubble": 2,
+            "text_free": 0
+          },
+          "sam_pixels": 7909,
+          "sam_pixels_in_text_boxes": 7909,
+          "inference_ms": 92.86125000000001
+        },
+        {
+          "file": "34.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 5348,
+          "sam_pixels_in_text_boxes": 5348,
+          "inference_ms": 89.596959
+        },
+        {
+          "file": "35.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 609,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 98.718583
+        },
+        {
+          "file": "36.jpg",
+          "classes": {
+            "bubble": 4,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 20273,
+          "sam_pixels_in_text_boxes": 10981,
+          "inference_ms": 93.53479200000001
+        },
+        {
+          "file": "37.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 27076,
+          "sam_pixels_in_text_boxes": 8547,
+          "inference_ms": 99.236541
+        },
+        {
+          "file": "38.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 9352,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 92.35849999999999
+        },
+        {
+          "file": "39.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 3875,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 96.195625
+        },
+        {
+          "file": "40.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 14602,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 90.256834
+        },
+        {
+          "file": "41.jpg",
+          "classes": {
+            "bubble": 1,
+            "text_bubble": 1,
+            "text_free": 0
+          },
+          "sam_pixels": 9210,
+          "sam_pixels_in_text_boxes": 2675,
+          "inference_ms": 97.846292
+        },
+        {
+          "file": "42.jpg",
+          "classes": {
+            "bubble": 3,
+            "text_bubble": 3,
+            "text_free": 0
+          },
+          "sam_pixels": 16018,
+          "sam_pixels_in_text_boxes": 11665,
+          "inference_ms": 89.39375
+        },
+        {
+          "file": "43.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 10443,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 90.349166
+        },
+        {
+          "file": "44.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 0
+          },
+          "sam_pixels": 9831,
+          "sam_pixels_in_text_boxes": 0,
+          "inference_ms": 96.67629099999999
+        },
+        {
+          "file": "45.jpg",
+          "classes": {
+            "bubble": 0,
+            "text_bubble": 0,
+            "text_free": 5
+          },
+          "sam_pixels": 19998,
+          "sam_pixels_in_text_boxes": 18828,
+          "inference_ms": 89.160875
+        }
+      ]
+    }
+  }
+}

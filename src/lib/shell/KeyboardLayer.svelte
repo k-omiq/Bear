@@ -19,6 +19,8 @@
   /** @type {import('../shortcuts.js').ShortcutCommands} */
   const commands = {
     selectToolSlot: (slot) => editorState.setToolBySlot(slot),
+    cycleMaskSelectShape: () => editorState.cycleMaskSelectShape(),
+    toggleMaskSelectMode: () => editorState.toggleMaskSelectMode(),
     holdOriginal: (held) => editorState.holdOriginal(held),
     togglePinOriginal: () => editorState.togglePinOriginal(),
     toggleMaskOverlay: () => editorState.toggleMaskOverlay(),

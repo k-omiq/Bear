@@ -1,6 +1,6 @@
 <script>
   /**
-   * The tool rail: six tools down the right edge, `1`–`6`.
+   * The tool rail: five tools down the right edge, `1`–`5`.
    *
    * It is a radio group - exactly one tool is chosen, and the arrow keys move
    * between them rather than Tab, so the rail is a single stop in the focus

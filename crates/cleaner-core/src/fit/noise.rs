@@ -4,7 +4,7 @@
 //! once and handed down.
 
 use crate::image::Raster;
-use crate::mask::Mask;
+use crate::mask::{Mask, Rect};
 
 /// The size of the tiles the noise floor is measured over.
 const TILE: u32 = 32;
@@ -122,6 +122,39 @@ impl EdgeMap {
         }
     }
 
+    /// [`EdgeMap::sobel`] measured over `within` only: the gradient and its
+    /// peak are taken inside that rectangle (each reading one pixel past it),
+    /// and nothing outside it is a strong edge.
+    ///
+    /// For a fit, which only ever asks about pixels near its seed: with the
+    /// peak taken over a whole bounded window, a strong edge drawn or erased
+    /// anywhere in it moved the threshold and could change this region's
+    /// mask, so the region depended on page it never looks at.
+    pub fn sobel_within(page: &Raster, within: Rect) -> EdgeMap {
+        let (w, h) = (page.width, page.height);
+        let mut strong = vec![false; (w * h) as usize];
+        let x0 = within.x.max(1) as u32;
+        let y0 = within.y.max(1) as u32;
+        let x1 = (within.right().max(0) as u32).min(w.saturating_sub(1));
+        let y1 = (within.bottom().max(0) as u32).min(h.saturating_sub(1));
+        let mut magnitude = Vec::new();
+        let mut peak = 0f32;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let m = sobel_magnitude(|dx, dy| {
+                    page.luma16_at((x as i32 + dx) as u32, (y as i32 + dy) as u32) as f32
+                });
+                magnitude.push((y * w + x, m));
+                peak = peak.max(m);
+            }
+        }
+        let threshold = peak * EDGE_FRACTION;
+        for (at, m) in magnitude {
+            strong[at as usize] = m >= threshold && m > 0.0;
+        }
+        EdgeMap { width: w, height: h, strong }
+    }
+
     /// An edge map that never fires, for a caller with no page - tests, and the
     /// manual path, where §4 says the search does not run at all.
     pub fn none(width: u32, height: u32) -> EdgeMap {
@@ -164,7 +197,6 @@ impl EdgeMap {
 mod tests {
     use super::*;
     use crate::image::{BitDepth, ColorMode};
-    use crate::mask::Rect;
 
     fn gray_page(w: u32, h: u32, f: impl Fn(u32, u32) -> u8) -> Raster {
         let mut data = Vec::with_capacity((w * h) as usize);
@@ -182,6 +214,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }
@@ -227,5 +260,27 @@ mod tests {
         let edges = EdgeMap::sobel(&page);
         let over_the_text = Mask::filled(Rect::new(20, 20, 24, 24));
         assert!(!edges.crosses(&over_the_text), "the interior was tested");
+    }
+
+    /// Over the whole page it is the page's edge map; over part of it, a
+    /// stronger edge outside the part moves nothing inside it.
+    #[test]
+    fn edges_within_a_rectangle_ignore_the_page_outside_it() {
+        // A faint stroke on the left, a much stronger one far to the right.
+        let page = gray_page(96, 32, |x, _| match x { 10 => 150, 80 => 0, _ => 200 });
+        let whole = Rect::new(0, 0, 96, 32);
+        let all = EdgeMap::sobel(&page);
+        let same = EdgeMap::sobel_within(&page, whole);
+        for y in 0..32 {
+            for x in 0..96 {
+                assert_eq!(all.is_strong(x, y), same.is_strong(x, y), "({x}, {y})");
+            }
+        }
+        // A one-pixel stroke's gradient peaks beside it, not on it.
+        assert!(all.is_strong(79, 16), "the strong stroke is an edge on the whole page");
+        assert!(!all.is_strong(9, 16), "on the whole page the faint stroke is under the peak's half");
+        let near = EdgeMap::sobel_within(&page, Rect::new(0, 0, 40, 32));
+        assert!(near.is_strong(9, 16), "near its seed the faint stroke is the strongest edge there is");
+        assert!(!near.is_strong(79, 16), "outside the rectangle nothing is strong");
     }
 }

@@ -9,7 +9,8 @@
  * only decides which of those facts go into a one-sentence accessible name.
  */
 
-import { maskRow } from './maskrows.js'
+import { isDetected } from '../model/masks.js'
+import { REVIEW_GLYPH, maskRow } from './maskrows.js'
 
 /**
  * Rows are banded in tenths of the page's height before being ordered across.
@@ -23,7 +24,7 @@ export const BAND = 10
  * @typedef {Object} RegionMarker
  * @property {string} id
  * @property {{x: number, y: number, w: number, h: number}} bbox - percentages of the page
- * @property {'applied'|'review'|'declined'|'unexamined'} status
+ * @property {'applied'|'review'|'declined'|'unexamined'|'detected'|'candidate'} status
  * @property {boolean} masked - whether a mask is applied, i.e. whether the tint has anything to tint
  * @property {string|null} badge - the persistent glyph, or null when the region carries no marker
  * @property {string} nameKey
@@ -37,6 +38,8 @@ export const BAND = 10
  * nothing visibly happened and the user would otherwise never find it.
  * A flagged region's badge is conditional, because the
  * page would otherwise be covered in triangles the moment a chapter finishes.
+ * A candidate carries no badge: its dotted outline is always drawn instead
+ * (`RegionLayer`), which is enough to find it without adding to the marks.
  *
  * @param {import('../api/backend.js').ApiRegion} region
  * @param {{ marksVisible?: boolean }} [options] - whether the mask overlay or the review filter is on
@@ -45,14 +48,19 @@ export const BAND = 10
 export function regionMarker(region, options = {}) {
   const row = maskRow(region, false)
   const declined = row.status === 'declined'
-  const flagged = row.status === 'review'
+  // A detection flagged for repair keeps its detected status, mask and
+  // name, so its flag is read from the reason it carries.
+  const detection = isDetected(region)
+  const flagged = row.status === 'review' || (detection && !!row.reasonKey)
 
   return {
     id: region.id,
     bbox: region.bbox,
     status: row.status,
-    masked: !!region.mask,
-    badge: declined || (flagged && options.marksVisible) ? row.glyph : null,
+    // A detection's mask is the cleaner's input, not a cleaned layer, flagged
+    // or not.
+    masked: !!region.mask && !detection,
+    badge: declined ? row.glyph : flagged && options.marksVisible ? REVIEW_GLYPH : null,
     nameKey: row.reasonKey ? 'canvas.region.nameFlagged' : 'canvas.region.name',
     nameParams: row.reasonKey
       ? { statusKey: row.statusKey, titleKey: row.titleKey, reasonKey: row.reasonKey }

@@ -10,7 +10,7 @@
 //!   region-0002     ...
 //! ```
 //!
-//! and the merged image every PSD carries beside its layers is the composite  - 
+//! and the merged image every PSD carries beside its layers is the composite  -
 //! the same page the flattened export writes - so a reader that ignores layers
 //! sees the cleaned page and a reader that honours them finds the original
 //! *present*, not merely recoverable.
@@ -34,8 +34,8 @@
 //! - **Raw channel data everywhere** (compression 0). RLE would shrink 8-bit
 //!   files and is the one thing `ag-psd` got wrong in a way that hid; raw has
 //!   nothing to get wrong, and every length in the file is arithmetic on the
-//!   dimensions, so nothing is buffered to be measured. The 2 GB ceiling is not
-//!   checked here: a per-page manga PSD is tens of megabytes.
+//!   dimensions, so nothing is buffered to be measured. The 2 GB ceiling is
+//!   checked before any bytes are written.
 //! - **16-bit layers under `Lr16`.** Photoshop stores a 16-bit document's layer
 //!   records in the `Lr16` additional-info block and leaves the standard layer
 //!   info empty; an 8-bit document uses the standard block. Both are written
@@ -66,6 +66,8 @@ use super::ExportError;
 
 /// The `.psd` limit. `.psb` goes to 300 000 and is not written.
 pub const PSD_MAX_DIMENSION: u32 = 30_000;
+/// PSD's file size ceiling, as a signed 32-bit byte count.
+pub const PSD_MAX_FILE_BYTES: u64 = i32::MAX as u64;
 
 const SIGNATURE: &[u8; 4] = b"8BPS";
 const VERSION_PSD: u16 = 1;
@@ -93,6 +95,10 @@ pub enum PsdRefusal {
     Unrepresentable { mode: ColorMode, bits: u8 },
     #[error("{width}×{height} is over PSD's {PSD_MAX_DIMENSION} px limit")]
     TooLarge { width: u32, height: u32 },
+    #[error("PSD would be {bytes} bytes, over its {PSD_MAX_FILE_BYTES} byte limit")]
+    FileTooLarge { bytes: u64 },
+    #[error("PSD cannot carry {count} layers")]
+    TooManyLayers { count: usize },
 }
 
 impl PsdRefusal {
@@ -100,6 +106,8 @@ impl PsdRefusal {
         match self {
             PsdRefusal::Unrepresentable { .. } => "notice.export.refusedLayeredMode",
             PsdRefusal::TooLarge { .. } => "notice.export.refusedLayeredSize",
+            PsdRefusal::FileTooLarge { .. } => "notice.export.refusedLayeredFileSize",
+            PsdRefusal::TooManyLayers { .. } => "notice.export.refusedLayeredCount",
         }
     }
 }
@@ -107,10 +115,21 @@ impl PsdRefusal {
 /// Whether a page of this shape can be a PSD at all.
 pub fn refusal(width: u32, height: u32, mode: ColorMode, depth: BitDepth) -> Option<PsdRefusal> {
     if mode_code(mode).is_none() || !matches!(depth, BitDepth::Eight | BitDepth::Sixteen) {
-        return Some(PsdRefusal::Unrepresentable { mode, bits: depth.bits() });
+        return Some(PsdRefusal::Unrepresentable {
+            mode,
+            bits: depth.bits(),
+        });
     }
     if width > PSD_MAX_DIMENSION || height > PSD_MAX_DIMENSION {
         return Some(PsdRefusal::TooLarge { width, height });
+    }
+    let minimum_bytes = u64::from(width)
+        * u64::from(height)
+        * mode.samples() as u64
+        * u64::from(depth.bits() / 8)
+        * 2;
+    if minimum_bytes > PSD_MAX_FILE_BYTES {
+        return Some(PsdRefusal::FileTooLarge { bytes: minimum_bytes });
     }
     None
 }
@@ -126,6 +145,22 @@ pub struct Document<'a> {
     pub regions: &'a [&'a Patch],
     /// The merged image - what a reader that ignores layers sees.
     pub merged: &'a Raster,
+}
+
+/// Check the complete PSD layout without writing any channel data.
+pub fn preflight_document(doc: &Document) -> Result<(), ExportError> {
+    let page = doc.merged;
+    if let Some(refusal) = refusal(page.width, page.height, page.mode, page.depth) {
+        return Err(refusal.into());
+    }
+    let layers = layers_of(doc);
+    let records: Vec<Vec<u8>> = layers
+        .iter()
+        .map(|layer| record(layer, page.depth))
+        .collect::<Result<_, _>>()?;
+    let profile = resolved_profile(page)?;
+    check_layout(page, &layers, &records, profile.as_deref())?;
+    Ok(())
 }
 
 /// Write the document. Returns the bytes written.
@@ -157,12 +192,27 @@ pub fn write_psd<W: Write>(sink: &mut W, doc: &Document) -> Result<u64, ExportEr
             )));
         }
         if !region.is_well_formed() {
-            return Err(ExportError::Sink(format!("region {} does not cover its mask", region.id)));
+            return Err(ExportError::Sink(format!(
+                "region {} does not cover its mask",
+                region.id
+            )));
         }
     }
 
+    let profile = resolved_profile(page)?;
     let layers = layers_of(doc);
     let depth = page.depth;
+    let records: Vec<Vec<u8>> = layers
+        .iter()
+        .map(|layer| record(layer, depth))
+        .collect::<Result<_, _>>()?;
+    let (file_bytes, count, resources_len, body_len, body_padded, section_len) =
+        check_layout(page, &layers, &records, profile.as_deref())?;
+    let sixteen = depth == BitDepth::Sixteen;
+    let resources_len_field = psd_u32(resources_len)?;
+    let section_len_field = psd_u32(section_len)?;
+    let body_len_field = psd_u32(body_padded)?;
+    let resources = image_resources(profile.as_deref())?;
     let mut out = Counted { sink, written: 0 };
 
     /* Header --------------------------------------------------------- */
@@ -179,40 +229,27 @@ pub fn write_psd<W: Write>(sink: &mut W, doc: &Document) -> Result<u64, ExportEr
     out.be32(0)?;
 
     /* Image resources ------------------------------------------------- */
-    let resources = image_resources(page.icc.as_deref());
-    out.be32(resources.len() as u32)?;
+    out.be32(resources_len_field)?;
     out.bytes(&resources)?;
 
     /* Layer and mask information -------------------------------------- */
-    let records: Vec<Vec<u8>> = layers.iter().map(|layer| record(layer, depth)).collect();
-    let channel_bytes: u64 = layers
-        .iter()
-        .flat_map(|layer| layer.channels.iter())
-        .map(|channel| channel.data_len(depth))
-        .sum();
-    let body_len = 2 + records.iter().map(|r| r.len() as u64).sum::<u64>() + channel_bytes;
-    let count = layers.len() as i16;
     // Negative: "the first alpha channel contains the transparency data for
     // the merged result".
-    let signed_count = if page.mode.alpha_channel().is_some() { -count } else { count };
-
-    let sixteen = depth == BitDepth::Sixteen;
-    let body_padded = pad_to(body_len, if sixteen { 4 } else { 2 });
-    let section_len = if sixteen {
-        // Empty layer info, empty global mask, then `8BIM` `Lr16` length body.
-        4 + 4 + 12 + body_padded
+    let signed_count = if page.mode.alpha_channel().is_some() {
+        -count
     } else {
-        4 + body_padded + 4
+        count
     };
-    out.be32(section_len as u32)?;
+
+    out.be32(section_len_field)?;
 
     if sixteen {
         out.be32(0)?;
         out.be32(0)?;
         out.bytes(b"8BIMLr16")?;
-        out.be32(body_padded as u32)?;
+        out.be32(body_len_field)?;
     } else {
-        out.be32(body_padded as u32)?;
+        out.be32(body_len_field)?;
     }
     out.be16(signed_count as u16)?;
     for bytes in &records {
@@ -221,7 +258,9 @@ pub fn write_psd<W: Write>(sink: &mut W, doc: &Document) -> Result<u64, ExportEr
     for layer in &layers {
         for channel in &layer.channels {
             out.be16(COMPRESSION_RAW)?;
-            channel.plane.write(&mut out, depth, page.mode == ColorMode::Cmyk)?;
+            channel
+                .plane
+                .write(&mut out, depth, page.mode == ColorMode::Cmyk)?;
         }
     }
     out.zeros(body_padded - body_len)?;
@@ -232,11 +271,64 @@ pub fn write_psd<W: Write>(sink: &mut W, doc: &Document) -> Result<u64, ExportEr
     /* Merged image data ------------------------------------------------ */
     out.be16(COMPRESSION_RAW)?;
     for channel in 0..page.mode.samples() {
-        Plane::Pixels { raster: page, channel }.write(&mut out, depth, page.mode == ColorMode::Cmyk)?;
+        Plane::Pixels {
+            raster: page,
+            channel,
+        }
+        .write(&mut out, depth, page.mode == ColorMode::Cmyk)?;
     }
 
     out.sink.flush()?;
+    debug_assert_eq!(out.written, file_bytes);
     Ok(out.written)
+}
+
+fn resolved_profile(page: &Raster) -> Result<Option<Vec<u8>>, ExportError> {
+    if page.color.associated_alpha { return Err(crate::image::ImageError::Color("PSD cannot preserve associated-alpha native samples; export TIFF".into()).into()); }
+    let profile = crate::image::metadata::equivalent_icc(&page.color, page.icc.as_deref(), page.srgb_intent, page.mode)?;
+    if page.trns.is_some() { return Err(crate::image::ImageError::Color("PSD cannot retain PNG color-key transparency; export PNG".into()).into()); }
+    Ok(profile)
+}
+
+fn check_layout(
+    page: &Raster,
+    layers: &[Layer<'_>],
+    records: &[Vec<u8>],
+    profile: Option<&[u8]>,
+) -> Result<(u64, i16, u64, u64, u64, u64), ExportError> {
+    let depth = page.depth;
+    let resources_len = profile.map_or(0, |profile| {
+        12 + profile.len() as u64 + (profile.len() % 2) as u64
+    });
+    let channel_bytes: u64 = layers
+        .iter()
+        .flat_map(|layer| layer.channels.iter())
+        .map(|channel| channel.data_len(depth))
+        .sum();
+    let body_len = 2 + records.iter().map(|r| r.len() as u64).sum::<u64>() + channel_bytes;
+    let sixteen = depth == BitDepth::Sixteen;
+    let body_padded = pad_to(body_len, if sixteen { 4 } else { 2 });
+    let section_len = if sixteen {
+        // Empty layer info, empty global mask, then `8BIM` `Lr16` length body.
+        4 + 4 + 12 + body_padded
+    } else {
+        4 + body_padded + 4
+    };
+    let merged_bytes = u64::from(page.width)
+        * u64::from(page.height)
+        * page.mode.samples() as u64
+        * u64::from(depth.bits() / 8);
+    let file_bytes = 26 + 4 + 4 + resources_len + 4 + section_len + 2 + merged_bytes;
+    if file_bytes > PSD_MAX_FILE_BYTES {
+        return Err(PsdRefusal::FileTooLarge { bytes: file_bytes }.into());
+    }
+    let count = i16::try_from(layers.len())
+        .map_err(|_| ExportError::from(PsdRefusal::TooManyLayers { count: layers.len() }))?;
+    psd_u32(resources_len)?;
+    psd_u32(section_len)?;
+    psd_u32(body_padded)?;
+    image_resources(profile)?;
+    Ok((file_bytes, count, resources_len, body_len, body_padded, section_len))
 }
 
 fn mode_code(mode: ColorMode) -> Option<u16> {
@@ -252,21 +344,25 @@ fn pad_to(len: u64, multiple: u64) -> u64 {
     len.div_ceil(multiple) * multiple
 }
 
+fn psd_u32(len: u64) -> Result<u32, ExportError> {
+    u32::try_from(len).map_err(|_| PsdRefusal::FileTooLarge { bytes: len }.into())
+}
+
 /// The `8BIM` blocks of the image resources section.
-fn image_resources(icc: Option<&[u8]>) -> Vec<u8> {
+fn image_resources(icc: Option<&[u8]>) -> Result<Vec<u8>, ExportError> {
     let mut out = Vec::new();
     if let Some(profile) = icc {
         out.extend_from_slice(b"8BIM");
         out.extend_from_slice(&RESOURCE_ICC_PROFILE.to_be_bytes());
         // An empty Pascal name: length byte, then padding to an even size.
         out.extend_from_slice(&[0, 0]);
-        out.extend_from_slice(&(profile.len() as u32).to_be_bytes());
+        out.extend_from_slice(&psd_u32(profile.len() as u64)?.to_be_bytes());
         out.extend_from_slice(profile);
         if profile.len() % 2 == 1 {
             out.push(0);
         }
     }
-    out
+    Ok(out)
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,7 +372,10 @@ fn image_resources(icc: Option<&[u8]>) -> Vec<u8> {
 /// Where a channel's samples come from.
 #[derive(Debug, Clone, Copy)]
 enum Plane<'a> {
-    Pixels { raster: &'a Raster, channel: usize },
+    Pixels {
+        raster: &'a Raster,
+        channel: usize,
+    },
     Mask(&'a Mask),
     /// A group or divider layer: the channel exists, with no samples.
     Empty,
@@ -294,7 +393,12 @@ impl Plane<'_> {
     /// One plane, in row-major order, big-endian at 16 bits. Built one plane
     /// at a time and dropped, which bounds what this module holds to one
     /// channel of one layer.
-    fn write<W: Write>(&self, out: &mut Counted<W>, depth: BitDepth, invert: bool) -> Result<(), ExportError> {
+    fn write<W: Write>(
+        &self,
+        out: &mut Counted<W>,
+        depth: BitDepth,
+        invert: bool,
+    ) -> Result<(), ExportError> {
         let bytes = match self {
             Plane::Pixels { raster, channel } => plane_of(raster, *channel, invert),
             Plane::Mask(mask) => match depth {
@@ -343,6 +447,7 @@ struct Layer<'a> {
     channels: Vec<Channel<'a>>,
     mask: Option<&'a Mask>,
     hidden: bool,
+    opacity: u8,
     /// `lsct` kind, for a group or a divider.
     section: Option<u32>,
 }
@@ -357,11 +462,16 @@ fn layers_of<'a>(doc: &Document<'a>) -> Vec<Layer<'a>> {
         Rect::new(0, 0, page.width, page.height),
         None,
         false,
+        255,
     )];
     if doc.regions.is_empty() {
         return layers;
     }
-    layers.push(empty_layer(DIVIDER_LAYER.to_owned(), page.mode, SECTION_DIVIDER));
+    layers.push(empty_layer(
+        DIVIDER_LAYER.to_owned(),
+        page.mode,
+        SECTION_DIVIDER,
+    ));
     for (n, region) in doc.regions.iter().enumerate() {
         layers.push(pixel_layer(
             format!("region-{:04}", n + 1),
@@ -369,9 +479,14 @@ fn layers_of<'a>(doc: &Document<'a>) -> Vec<Layer<'a>> {
             region.mask.bounds,
             Some(&region.mask),
             !region.visible,
+            ((u16::from(region.layer_style().opacity) * 255 + 50) / 100) as u8,
         ));
     }
-    layers.push(empty_layer(CLEANED_GROUP.to_owned(), page.mode, SECTION_OPEN_FOLDER));
+    layers.push(empty_layer(
+        CLEANED_GROUP.to_owned(),
+        page.mode,
+        SECTION_OPEN_FOLDER,
+    ));
     layers
 }
 
@@ -379,7 +494,13 @@ fn layers_of<'a>(doc: &Document<'a>) -> Vec<Layer<'a>> {
 /// one.
 fn channel_ids(mode: ColorMode) -> Vec<i16> {
     (0..mode.samples())
-        .map(|sample| if mode.alpha_channel() == Some(sample) { CHANNEL_ALPHA } else { sample as i16 })
+        .map(|sample| {
+            if mode.alpha_channel() == Some(sample) {
+                CHANNEL_ALPHA
+            } else {
+                sample as i16
+            }
+        })
         .collect()
 }
 
@@ -389,16 +510,31 @@ fn pixel_layer<'a>(
     rect: Rect,
     mask: Option<&'a Mask>,
     hidden: bool,
+    opacity: u8,
 ) -> Layer<'a> {
     let mut channels: Vec<Channel<'a>> = channel_ids(raster.mode)
         .into_iter()
         .enumerate()
-        .map(|(channel, id)| Channel { id, plane: Plane::Pixels { raster, channel } })
+        .map(|(channel, id)| Channel {
+            id,
+            plane: Plane::Pixels { raster, channel },
+        })
         .collect();
     if let Some(mask) = mask {
-        channels.push(Channel { id: CHANNEL_USER_MASK, plane: Plane::Mask(mask) });
+        channels.push(Channel {
+            id: CHANNEL_USER_MASK,
+            plane: Plane::Mask(mask),
+        });
     }
-    Layer { name, rect, channels, mask, hidden, section: None }
+    Layer {
+        name,
+        rect,
+        channels,
+        mask,
+        hidden,
+        opacity,
+        section: None,
+    }
 }
 
 /// A group or divider: no pixels, every channel present and empty, which is
@@ -411,25 +547,36 @@ fn empty_layer<'a>(name: String, mode: ColorMode, section: u32) -> Layer<'a> {
     Layer {
         name,
         rect: Rect::new(0, 0, 0, 0),
-        channels: ids.into_iter().map(|id| Channel { id, plane: Plane::Empty }).collect(),
+        channels: ids
+            .into_iter()
+            .map(|id| Channel {
+                id,
+                plane: Plane::Empty,
+            })
+            .collect(),
         mask: None,
         hidden: false,
+        opacity: 255,
         section: Some(section),
     }
 }
 
 /// One layer record, whole. Small - a few dozen bytes plus the name.
-fn record(layer: &Layer, depth: BitDepth) -> Vec<u8> {
+fn record(layer: &Layer, depth: BitDepth) -> Result<Vec<u8>, ExportError> {
     let mut r = Vec::new();
     push_rect(&mut r, layer.rect);
     r.extend_from_slice(&(layer.channels.len() as u16).to_be_bytes());
     for channel in &layer.channels {
         r.extend_from_slice(&channel.id.to_be_bytes());
-        r.extend_from_slice(&(channel.data_len(depth) as u32).to_be_bytes());
+        r.extend_from_slice(&psd_u32(channel.data_len(depth))?.to_be_bytes());
     }
     r.extend_from_slice(b"8BIM");
-    r.extend_from_slice(if layer.section.is_some() { b"pass" } else { b"norm" });
-    r.push(255); // opacity
+    r.extend_from_slice(if layer.section.is_some() {
+        b"pass"
+    } else {
+        b"norm"
+    });
+    r.push(layer.opacity);
     r.push(0); // clipping: base
     let mut flags = FLAG_HAS_BIT4;
     if layer.hidden {
@@ -454,16 +601,16 @@ fn record(layer: &Layer, depth: BitDepth) -> Vec<u8> {
     }
     extra.extend_from_slice(&0u32.to_be_bytes()); // blending ranges
     extra.extend_from_slice(&pascal_name(&layer.name));
-    extra.extend_from_slice(&unicode_name(&layer.name));
+    extra.extend_from_slice(&unicode_name(&layer.name)?);
     if let Some(kind) = layer.section {
         extra.extend_from_slice(b"8BIMlsct");
         extra.extend_from_slice(&12u32.to_be_bytes());
         extra.extend_from_slice(&kind.to_be_bytes());
         extra.extend_from_slice(b"8BIMpass");
     }
-    r.extend_from_slice(&(extra.len() as u32).to_be_bytes());
+    r.extend_from_slice(&psd_u32(extra.len() as u64)?.to_be_bytes());
     r.extend_from_slice(&extra);
-    r
+    Ok(r)
 }
 
 /// `top, left, bottom, right`, which is the order every rectangle in the
@@ -489,10 +636,10 @@ fn pascal_name(name: &str) -> Vec<u8> {
 }
 
 /// `8BIM` `luni`: the name as UTF-16BE, which is the one Photoshop shows.
-fn unicode_name(name: &str) -> Vec<u8> {
+fn unicode_name(name: &str) -> Result<Vec<u8>, ExportError> {
     let units: Vec<u16> = name.encode_utf16().collect();
     let mut data = Vec::with_capacity(4 + units.len() * 2);
-    data.extend_from_slice(&(units.len() as u32).to_be_bytes());
+    data.extend_from_slice(&psd_u32(units.len() as u64)?.to_be_bytes());
     for unit in units {
         data.extend_from_slice(&unit.to_be_bytes());
     }
@@ -501,9 +648,9 @@ fn unicode_name(name: &str) -> Vec<u8> {
     }
     let mut out = Vec::with_capacity(12 + data.len());
     out.extend_from_slice(b"8BIMluni");
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(&psd_u32(data.len() as u64)?.to_be_bytes());
     out.extend_from_slice(&data);
-    out
+    Ok(out)
 }
 
 /* ------------------------------------------------------------------ */
@@ -544,6 +691,7 @@ pub(crate) mod tests {
     use crate::composite::composite;
     use crate::image::fixtures;
     use crate::patch::{Engine, Provenance};
+    use sha2::{Digest, Sha256};
 
     /* A reader written from the specification, not from the writer. ---- */
 
@@ -604,7 +752,12 @@ pub(crate) mod tests {
             let left = self.i32();
             let bottom = self.i32();
             let right = self.i32();
-            Rect::new(left as i64, top as i64, (right - left) as u32, (bottom - top) as u32)
+            Rect::new(
+                left as i64,
+                top as i64,
+                (right - left) as u32,
+                (bottom - top) as u32,
+            )
         }
     }
 
@@ -706,12 +859,23 @@ pub(crate) mod tests {
                                 .collect();
                             unicode_name = Some(String::from_utf16(&units).unwrap());
                         }
-                        b"lsct" => section = Some(u32::from_be_bytes(data[..4].try_into().unwrap())),
+                        b"lsct" => {
+                            section = Some(u32::from_be_bytes(data[..4].try_into().unwrap()))
+                        }
                         _ => {}
                     }
                 }
                 assert_eq!(c.at, extra_end, "layer extra data overran");
-                records.push((rect, ids, blend, flags, mask_rect, name, unicode_name, section));
+                records.push((
+                    rect,
+                    ids,
+                    blend,
+                    flags,
+                    mask_rect,
+                    name,
+                    unicode_name,
+                    section,
+                ));
             }
             for (rect, ids, blend, flags, mask_rect, name, unicode_name, section) in records {
                 let mut channels = Vec::new();
@@ -737,7 +901,10 @@ pub(crate) mod tests {
                 c.take(global_len);
             }
         }
-        assert_eq!(c.at, section_end, "layer and mask section overran its length");
+        assert_eq!(
+            c.at, section_end,
+            "layer and mask section overran its length"
+        );
 
         assert_eq!(c.u16(), 0, "merged compression");
         let per_sample = depth as usize / 8;
@@ -745,7 +912,17 @@ pub(crate) mod tests {
         let merged = (0..channels).map(|_| c.take(plane).to_vec()).collect();
         assert_eq!(c.at, bytes.len(), "trailing bytes");
 
-        Parsed { channels, width, height, depth, mode, icc, signed_layer_count, layers, merged }
+        Parsed {
+            channels,
+            width,
+            height,
+            depth,
+            mode,
+            icc,
+            signed_layer_count,
+            layers,
+            merged,
+        }
     }
 
     /* Fixtures --------------------------------------------------------- */
@@ -777,9 +954,18 @@ pub(crate) mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
-            data: vec![0; bounds.w as usize * page.mode.samples() * page.depth.bits() as usize / 8 * bounds.h as usize],
+            color: Default::default(),
+            data: vec![
+                0;
+                bounds.w as usize * page.mode.samples() * page.depth.bits() as usize / 8
+                    * bounds.h as usize
+            ],
         };
-        let ceiling = if page.depth == BitDepth::Sixteen { u16::MAX } else { 255 };
+        let ceiling = if page.depth == BitDepth::Sixteen {
+            u16::MAX
+        } else {
+            255
+        };
         for y in 0..bounds.h {
             for x in 0..bounds.w {
                 for channel in 0..page.mode.samples() {
@@ -794,14 +980,30 @@ pub(crate) mod tests {
                 mask.set(x, y, true);
             }
         }
-        Patch { id: id.into(), ink: mask.clone(), mask, pixels, order, visible: true, provenance: provenance() }
+        Patch {
+            id: id.into(),
+            ink: mask.clone(),
+            mask,
+            pixels,
+            order,
+            visible: true,
+            provenance: provenance(),
+        }
     }
 
     fn layered(page: &Raster, regions: &[&Patch]) -> Vec<u8> {
         let owned: Vec<Patch> = regions.iter().map(|p| (*p).clone()).collect();
         let merged = composite(page, &owned).unwrap();
         let mut out = Vec::new();
-        let written = write_psd(&mut out, &Document { background: page, regions, merged: &merged }).unwrap();
+        let written = write_psd(
+            &mut out,
+            &Document {
+                background: page,
+                regions,
+                merged: &merged,
+            },
+        )
+        .unwrap();
         assert_eq!(written, out.len() as u64, "the count is the file");
         out
     }
@@ -813,7 +1015,7 @@ pub(crate) mod tests {
     /* The claims ------------------------------------------------------- */
 
     /// Every fixture PSD can carry, written layered, reads back with the
-    /// structure the layered shape draws: background, divider, regions, group  - 
+    /// structure the layered shape draws: background, divider, regions, group  -
     /// and the background's channels are the source's own samples.
     #[test]
     fn every_carriable_fixture_round_trips_its_structure() {
@@ -837,7 +1039,13 @@ pub(crate) mod tests {
             let names: Vec<&str> = psd.layers.iter().map(|l| l.name.as_str()).collect();
             assert_eq!(
                 names,
-                [BACKGROUND_LAYER, DIVIDER_LAYER, "region-0001", "region-0002", CLEANED_GROUP],
+                [
+                    BACKGROUND_LAYER,
+                    DIVIDER_LAYER,
+                    "region-0001",
+                    "region-0002",
+                    CLEANED_GROUP
+                ],
                 "{}",
                 fixture.name
             );
@@ -845,7 +1053,10 @@ pub(crate) mod tests {
             assert_eq!(psd.layers[4].section, Some(SECTION_OPEN_FOLDER));
             assert_eq!(psd.layers[4].blend, "pass");
             assert_eq!(psd.layers[0].blend, "norm");
-            assert_eq!(psd.layers[0].unicode_name.as_deref(), Some(BACKGROUND_LAYER));
+            assert_eq!(
+                psd.layers[0].unicode_name.as_deref(),
+                Some(BACKGROUND_LAYER)
+            );
 
             let background = &psd.layers[0];
             assert_eq!(background.rect, Rect::new(0, 0, page.width, page.height));
@@ -853,7 +1064,12 @@ pub(crate) mod tests {
             for (sample, id) in channel_ids(page.mode).into_iter().enumerate() {
                 let (found, data) = &background.channels[sample];
                 assert_eq!(*found, id, "{}: channel order", fixture.name);
-                assert_eq!(data, &plane_expected(page, sample), "{}: background channel {id}", fixture.name);
+                assert_eq!(
+                    data,
+                    &plane_expected(page, sample),
+                    "{}: background channel {id}",
+                    fixture.name
+                );
             }
 
             let region = &psd.layers[2];
@@ -867,15 +1083,62 @@ pub(crate) mod tests {
                 _ => a.mask.bits.clone(),
             };
             assert_eq!(mask_data, &expected_mask, "{}: layer mask", fixture.name);
-            assert_eq!(region.channels[0].1, plane_expected(&a.pixels, 0), "{}: region pixels", fixture.name);
+            assert_eq!(
+                region.channels[0].1,
+                plane_expected(&a.pixels, 0),
+                "{}: region pixels",
+                fixture.name
+            );
 
             let merged = composite(page, &[a.clone(), b.clone()]).unwrap();
             for channel in 0..page.mode.samples() {
-                assert_eq!(psd.merged[channel], plane_expected(&merged, channel), "{}: merged {channel}", fixture.name);
+                assert_eq!(
+                    psd.merged[channel],
+                    plane_expected(&merged, channel),
+                    "{}: merged {channel}",
+                    fixture.name
+                );
             }
             let has_alpha = page.mode.alpha_channel().is_some();
-            assert_eq!(psd.signed_layer_count < 0, has_alpha, "{}: transparency flag", fixture.name);
+            assert_eq!(
+                psd.signed_layer_count < 0,
+                has_alpha,
+                "{}: transparency flag",
+                fixture.name
+            );
         }
+    }
+
+    #[test]
+    fn generated_color_profile_participates_in_layout_preflight_and_output() {
+        let mut page = fixtures::by_name("rgb8").raster;
+        page.color.gamma = Some(100000);
+        let doc = Document { background: &page, regions: &[], merged: &page };
+        preflight_document(&doc).unwrap();
+        let mut bytes = Vec::new();
+        let written = write_psd(&mut bytes, &doc).unwrap();
+        assert_eq!(written as usize, bytes.len());
+        page.icc = Some(parse(&bytes).icc.expect("generated profile resource"));
+        page.color = Default::default();
+        let managed = crate::image::color::ManagedColor::for_raster(&page).unwrap();
+        let half_linear = managed.to_srgb([0.5; 4]);
+        assert!(half_linear.iter().all(|value| (*value - 0.735357).abs() < 0.003));
+    }
+
+    #[test]
+    fn layered_text_shape_uses_sparse_write_support_as_its_mask() {
+        let page = fixtures::by_name("rgb8-icc").raster;
+        let mut patch = patch_over(&page, Rect::new(4, 4, 12, 10), "shape", 0);
+        patch.ink = Mask::filled(patch.mask.bounds);
+        patch.mask = Mask::empty(patch.mask.bounds);
+        patch.mask.set(5, 5, true);
+        patch.mask.set(14, 12, true);
+        patch.provenance.params_snapshot = serde_json::json!({"geometry_policy": "text_shape"});
+        let parsed = parse(&layered(&page, &[&patch]));
+        let layer = &parsed.layers[2];
+        assert_eq!(layer.mask_rect, Some(patch.mask.bounds));
+        assert_eq!(layer.channels.last().unwrap().1, patch.mask.bits);
+        assert_eq!(parsed.icc, page.icc);
     }
 
     /// A flattened document is one Background layer holding the composite,
@@ -886,12 +1149,24 @@ pub(crate) mod tests {
         let a = patch_over(&page, Rect::new(4, 4, 12, 10), "a", 0);
         let merged = composite(&page, std::slice::from_ref(&a)).unwrap();
         let mut out = Vec::new();
-        write_psd(&mut out, &Document { background: &merged, regions: &[], merged: &merged }).unwrap();
+        write_psd(
+            &mut out,
+            &Document {
+                background: &merged,
+                regions: &[],
+                merged: &merged,
+            },
+        )
+        .unwrap();
         let psd = parse(&out);
         assert_eq!(psd.layers.len(), 1);
         assert_eq!(psd.layers[0].name, BACKGROUND_LAYER);
         assert_eq!(psd.layers[0].channels[1].1, plane_expected(&merged, 1));
-        assert_ne!(psd.layers[0].channels[1].1, plane_expected(&page, 1), "the patch changed nothing");
+        assert_ne!(
+            psd.layers[0].channels[1].1,
+            plane_expected(&page, 1),
+            "the patch changed nothing"
+        );
     }
 
     /// A hidden region is a hidden layer, and still in the file: the point of
@@ -905,7 +1180,11 @@ pub(crate) mod tests {
         let psd = parse(&bytes);
         assert!(psd.layers[2].hidden);
         assert!(!psd.layers[0].hidden);
-        assert_eq!(psd.merged[0], plane_expected(&page, 0), "a hidden region reached the merged image");
+        assert_eq!(
+            psd.merged[0],
+            plane_expected(&page, 0),
+            "a hidden region reached the merged image"
+        );
     }
 
     /// PSD stores CMYK as `255 − value`, so a TIFF's "no ink" and a PSD's agree
@@ -931,23 +1210,125 @@ pub(crate) mod tests {
         assert_eq!(refusal(10, 10, Cmyk, BitDepth::Sixteen), None);
         assert_eq!(
             refusal(10, 10, Indexed, BitDepth::Eight),
-            Some(PsdRefusal::Unrepresentable { mode: Indexed, bits: 8 })
+            Some(PsdRefusal::Unrepresentable {
+                mode: Indexed,
+                bits: 8
+            })
         );
         assert_eq!(
             refusal(10, 10, Gray, BitDepth::One),
-            Some(PsdRefusal::Unrepresentable { mode: Gray, bits: 1 })
+            Some(PsdRefusal::Unrepresentable {
+                mode: Gray,
+                bits: 1
+            })
         );
         assert_eq!(
             refusal(PSD_MAX_DIMENSION + 1, 10, Rgb, BitDepth::Eight),
-            Some(PsdRefusal::TooLarge { width: PSD_MAX_DIMENSION + 1, height: 10 })
+            Some(PsdRefusal::TooLarge {
+                width: PSD_MAX_DIMENSION + 1,
+                height: 10
+            })
         );
-        assert_eq!(refusal(PSD_MAX_DIMENSION, PSD_MAX_DIMENSION, Rgb, BitDepth::Eight), None);
+        assert_eq!(
+            refusal(PSD_MAX_DIMENSION, PSD_MAX_DIMENSION, Gray, BitDepth::Eight),
+            None
+        );
 
         let page = fixtures::by_name("indexed-p").raster;
         let mut out = Vec::new();
-        let err = write_psd(&mut out, &Document { background: &page, regions: &[], merged: &page }).unwrap_err();
-        assert!(matches!(err, ExportError::NotLayerable(PsdRefusal::Unrepresentable { .. })));
+        let err = write_psd(
+            &mut out,
+            &Document {
+                background: &page,
+                regions: &[],
+                merged: &page,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ExportError::NotLayerable(PsdRefusal::Unrepresentable { .. })
+        ));
         assert!(out.is_empty(), "a refusal wrote bytes");
+    }
+
+    #[test]
+    fn oversized_psd_is_refused_from_a_header() {
+        assert!(matches!(
+            refusal(14_000, 14_000, ColorMode::Rgb, BitDepth::Sixteen),
+            Some(PsdRefusal::FileTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn too_many_psd_layers_are_refused_before_writing() {
+        let page = fixtures::by_name("rgb8").raster;
+        let patch = patch_over(&page, Rect::new(1, 1, 1, 1), "region", 0);
+        let regions = vec![&patch; i16::MAX as usize - 2];
+        let document = Document { background: &page, regions: &regions, merged: &page };
+        assert!(matches!(
+            preflight_document(&document),
+            Err(ExportError::NotLayerable(PsdRefusal::TooManyLayers { .. }))
+        ));
+    }
+
+    #[test]
+    fn a_large_sixteen_bit_layered_page_is_refused_before_writing() {
+        let mut page = fixtures::by_name("rgb16").raster;
+        page.width = PSD_MAX_DIMENSION;
+        page.height = PSD_MAX_DIMENSION;
+        page.mode = ColorMode::Rgba;
+        page.data.clear();
+        let bounds = Rect::new(0, 0, 1, 1);
+        let mask = Mask::empty(bounds);
+        let patch = Patch {
+            id: "region".into(),
+            ink: mask.clone(),
+            mask,
+            pixels: Raster {
+                width: 1,
+                height: 1,
+                mode: ColorMode::Rgba,
+                depth: BitDepth::Sixteen,
+                icc: None,
+                palette: None,
+                trns: None,
+                srgb_intent: None,
+                color: Default::default(),
+                data: vec![0; 8],
+            },
+            order: 0,
+            visible: true,
+            provenance: provenance(),
+        };
+        let mut out = Vec::new();
+        let err = write_psd(
+            &mut out,
+            &Document {
+                background: &page,
+                regions: &[&patch],
+                merged: &page,
+            },
+        )
+        .unwrap_err();
+        let ExportError::NotLayerable(PsdRefusal::FileTooLarge { bytes }) = err else {
+            panic!("expected a typed PSD size refusal: {err:?}");
+        };
+        assert!(bytes > PSD_MAX_FILE_BYTES);
+        assert!(out.is_empty(), "a refusal wrote bytes");
+    }
+
+    #[test]
+    fn ordinary_layered_fixture_keeps_its_bytes() {
+        let page = fixtures::by_name("rgb8").raster;
+        let a = patch_over(&page, Rect::new(4, 4, 12, 10), "a", 0);
+        let b = patch_over(&page, Rect::new(30, 20, 20, 16), "b", 1);
+        let bytes = layered(&page, &[&a, &b]);
+        assert_eq!(bytes.len(), 20_938);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&bytes)),
+            "ce1662a0dd10f3eef5e033607dc187e429c6b4c341c1127192579b9d6bff4a5c"
+        );
     }
 
     /// **The external oracle.** Our reader agreeing with our writer proves the
@@ -974,11 +1355,22 @@ pub(crate) mod tests {
             }
             let a = patch_over(page, Rect::new(4, 4, 12, 10), "a", 0);
             let b = patch_over(page, Rect::new(30, 20, 20, 16), "b", 1);
-            std::fs::write(dir.join(format!("{}-layered.psd", fixture.name)), layered(page, &[&a, &b]))
-                .unwrap();
+            std::fs::write(
+                dir.join(format!("{}-layered.psd", fixture.name)),
+                layered(page, &[&a, &b]),
+            )
+            .unwrap();
             let merged = composite(page, &[a.clone(), b.clone()]).unwrap();
             let mut flat = Vec::new();
-            write_psd(&mut flat, &Document { background: &merged, regions: &[], merged: &merged }).unwrap();
+            write_psd(
+                &mut flat,
+                &Document {
+                    background: &merged,
+                    regions: &[],
+                    merged: &merged,
+                },
+            )
+            .unwrap();
             std::fs::write(dir.join(format!("{}-flat.psd", fixture.name)), flat).unwrap();
             // What the oracle should see: the merged image and the mask, as
             // raw planes, so the check is against numbers rather than against
@@ -998,7 +1390,7 @@ pub(crate) mod tests {
         assert_eq!(pascal_name("abc"), [3, b'a', b'b', b'c']);
         assert_eq!(pascal_name("abcd"), [4, b'a', b'b', b'c', b'd', 0, 0, 0]);
         assert_eq!(pascal_name(""), [0, 0, 0, 0]);
-        let luni = unicode_name("ab");
+        let luni = unicode_name("ab").unwrap();
         assert_eq!(&luni[..8], b"8BIMluni");
         assert_eq!(u32::from_be_bytes(luni[8..12].try_into().unwrap()), 8);
         assert_eq!(&luni[12..], [0, 0, 0, 2, 0, b'a', 0, b'b']);

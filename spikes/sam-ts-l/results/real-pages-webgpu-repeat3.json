@@ -1,0 +1,265 @@
+{
+  "description": "Real-page mask-only ONNX Runtime webgpu inference and parity",
+  "environment": {
+    "active_providers_by_graph": {
+      "encoder": [
+        "WebGpuExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "head": [
+        "WebGpuExecutionProvider",
+        "CPUExecutionProvider"
+      ]
+    },
+    "available_providers": [
+      "CoreMLExecutionProvider",
+      "AzureExecutionProvider",
+      "CPUExecutionProvider",
+      "WebGpuExecutionProvider"
+    ],
+    "inter_op_num_threads": 1,
+    "intra_op_num_threads": 4,
+    "onnxruntime": "1.28.0",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]"
+  },
+  "export_manifest": {
+    "file": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof/manifest.json",
+    "graph_packages_verified": true,
+    "sha256": "d8e734c2ff67fd535f8652cab22df96207fd2718bf08a27c44a460945a967f86"
+  },
+  "graph_package_total_bytes": 1358010626,
+  "graph_packages": {
+    "encoder": {
+      "files": [
+        {
+          "bytes": 1335305985,
+          "file": "koharu_samts_encoder.onnx",
+          "sha256": "9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe"
+        }
+      ],
+      "total_bytes": 1335305985
+    },
+    "head": {
+      "files": [
+        {
+          "bytes": 22704641,
+          "file": "koharu_samts_text_head.onnx",
+          "sha256": "a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281"
+        }
+      ],
+      "total_bytes": 22704641
+    }
+  },
+  "measurement": {
+    "cold_definition": "first InferenceSession in this process; OS file cache uncontrolled",
+    "end_to_end_definition": "main() entry through all page processing, before separate profiling, aggregate JSON write, and stdout",
+    "page_total_definition": "source open through parity and inference artifact writes for one page; excludes performance JSON write",
+    "peak_rss_definition": "process peak resident/working set, including Python and ORT; excludes GPU/device memory; per-page values are cumulative and measured before any separate profiling run"
+  },
+  "output_dir": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/apocalypse-109-webgpu",
+  "pages": {
+    "07": {
+      "parity": {
+        "changed_canvas_signs": 0,
+        "changed_restored_pixels": 0,
+        "exact_restored_mask_parity": true,
+        "logits": {
+          "changed_elements": 981794,
+          "max_abs": 0.00023555755615234375,
+          "mean_abs": 0.000011603214806255036,
+          "rmse": 0.00001774905033102106,
+          "shape": [
+            1,
+            1,
+            1024,
+            1024
+          ]
+        },
+        "onnx_mask_pixels": 24322,
+        "original_wh": [
+          690,
+          1600
+        ],
+        "prepared_input_changed_values": 0,
+        "reference_mask_pixels": 24322,
+        "resized_wh": [
+          442,
+          1024
+        ],
+        "source": "/Users/caved/Downloads/apocalypse/109/07.jpg",
+        "source_sha256": "a42a7e77ad9b5015f35221accdb785d8b5bc508270d1ef091b2025f5d463e6b9"
+      },
+      "performance": {
+        "input_sizes_bytes": {
+          "encoder_embedding_f32": 4194304,
+          "head_logits_f32": 4194304,
+          "prepared_rgb_f32": 12582912,
+          "restored_mask_u8": 1104000,
+          "source_jpeg": 274830
+        },
+        "page": "07",
+        "peak_process_rss_bytes": 2786312192,
+        "provider_requested": "WebGpuExecutionProvider",
+        "source": "/Users/caved/Downloads/apocalypse/109/07.jpg",
+        "timing_ms": {
+          "encoder_run": 2735.907499998575,
+          "head_run": 130.71045800461434,
+          "page_total": 2891.9000839814544,
+          "prepare": 15.291875024558976,
+          "restore": 0.6961250037420541
+        }
+      }
+    },
+    "08": {
+      "parity": {
+        "changed_canvas_signs": 0,
+        "changed_restored_pixels": 0,
+        "exact_restored_mask_parity": true,
+        "logits": {
+          "changed_elements": 1042032,
+          "max_abs": 0.00023555755615234375,
+          "mean_abs": 0.00002331686280510059,
+          "rmse": 0.000026968433094626405,
+          "shape": [
+            1,
+            1,
+            1024,
+            1024
+          ]
+        },
+        "onnx_mask_pixels": 40438,
+        "original_wh": [
+          690,
+          1600
+        ],
+        "prepared_input_changed_values": 0,
+        "reference_mask_pixels": 40438,
+        "resized_wh": [
+          442,
+          1024
+        ],
+        "source": "/Users/caved/Downloads/apocalypse/109/08.jpg",
+        "source_sha256": "f4b8fcb13fa434f03a29d18797338898c414c66a402cdac67a068633e8a091b2"
+      },
+      "performance": {
+        "input_sizes_bytes": {
+          "encoder_embedding_f32": 4194304,
+          "head_logits_f32": 4194304,
+          "prepared_rgb_f32": 12582912,
+          "restored_mask_u8": 1104000,
+          "source_jpeg": 302511
+        },
+        "page": "08",
+        "peak_process_rss_bytes": 2786312192,
+        "provider_requested": "WebGpuExecutionProvider",
+        "source": "/Users/caved/Downloads/apocalypse/109/08.jpg",
+        "timing_ms": {
+          "encoder_run": 2957.4917089776136,
+          "head_run": 132.91124999523163,
+          "page_total": 3107.8122910112143,
+          "prepare": 8.444208011496812,
+          "restore": 0.593916978687048
+        }
+      }
+    },
+    "09": {
+      "parity": {
+        "changed_canvas_signs": 0,
+        "changed_restored_pixels": 0,
+        "exact_restored_mask_parity": true,
+        "logits": {
+          "changed_elements": 946325,
+          "max_abs": 0.000240325927734375,
+          "mean_abs": 0.000009067347506469536,
+          "rmse": 0.000014270645328318525,
+          "shape": [
+            1,
+            1,
+            1024,
+            1024
+          ]
+        },
+        "onnx_mask_pixels": 29479,
+        "original_wh": [
+          690,
+          1600
+        ],
+        "prepared_input_changed_values": 0,
+        "reference_mask_pixels": 29479,
+        "resized_wh": [
+          442,
+          1024
+        ],
+        "source": "/Users/caved/Downloads/apocalypse/109/09.jpg",
+        "source_sha256": "cdb3f781e7b07599da89bc5fae75713332b1f9d5490290d68426583c77c52a8a"
+      },
+      "performance": {
+        "input_sizes_bytes": {
+          "encoder_embedding_f32": 4194304,
+          "head_logits_f32": 4194304,
+          "prepared_rgb_f32": 12582912,
+          "restored_mask_u8": 1104000,
+          "source_jpeg": 187051
+        },
+        "page": "09",
+        "peak_process_rss_bytes": 2786312192,
+        "provider_requested": "WebGpuExecutionProvider",
+        "source": "/Users/caved/Downloads/apocalypse/109/09.jpg",
+        "timing_ms": {
+          "encoder_run": 3048.110000003362,
+          "head_run": 134.6057920018211,
+          "page_total": 3199.394333001692,
+          "prepare": 7.673792017158121,
+          "restore": 0.5905420111957937
+        }
+      }
+    }
+  },
+  "peak_process_rss_bytes": 2786312192,
+  "peak_process_rss_bytes_after_profile": 2786312192,
+  "profile_assignments": {
+    "encoder": {
+      "node_events_by_provider": {
+        "WebGpuExecutionProvider": 1818
+      },
+      "node_events_without_provider": 0
+    },
+    "head": {
+      "node_events_by_provider": {
+        "WebGpuExecutionProvider": 386
+      },
+      "node_events_without_provider": 0
+    }
+  },
+  "profile_timing_ms": 3887.6508329994977,
+  "provider": {
+    "plugin_device_count": 1,
+    "plugin_provider_options": {},
+    "provider_options": {},
+    "registration_mode": "plugin",
+    "requested": "WebGpuExecutionProvider",
+    "session_execution_mode": "ExecutionMode.ORT_SEQUENTIAL",
+    "session_memory_pattern_enabled": true,
+    "session_provider_specification": null
+  },
+  "reference_dir": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/examples/apocalypse-109",
+  "requested_provider_has_profiled_nodes_by_graph": {
+    "encoder": true,
+    "head": true
+  },
+  "timing_ms": {
+    "cold_encoder_session_load": 364.2633749986999,
+    "cold_head_session_load": 23.296708008274436,
+    "end_to_end": 10277.637582999887,
+    "manifest_and_graph_hash_preflight": 671.2797920044977
+  },
+  "run_label": "webgpu_real_pages_repeat_3_after_six_provider_runner",
+  "external_time_webgpu_three_pages_and_profile": {
+    "wall_seconds": 14.38,
+    "maximum_resident_set_bytes": 2786312192,
+    "peak_memory_footprint_bytes": 7186680952,
+    "note": "Includes separate provider profiling; in-process end_to_end excludes it",
+    "log": "artifacts/examples-webgpu-repeat3.log"
+  }
+}

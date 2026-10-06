@@ -1,0 +1,36 @@
+{
+  "original_wh": [
+    701,
+    957
+  ],
+  "pinned_resized_wh": [
+    750,
+    1024
+  ],
+  "prepared_rgb": {
+    "changed_elements": 0,
+    "max_abs": 0.0,
+    "mean_abs": 0.0,
+    "rmse": 0.0,
+    "shape": [
+      3,
+      1024,
+      1024
+    ]
+  },
+  "reference_model_normalized_vs_saved": {
+    "changed_elements": 0,
+    "max_abs": 0.0,
+    "mean_abs": 0.0,
+    "rmse": 0.0,
+    "shape": [
+      3,
+      1024,
+      1024
+    ]
+  },
+  "resized_wh": [
+    750,
+    1024
+  ]
+}

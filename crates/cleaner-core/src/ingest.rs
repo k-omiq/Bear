@@ -9,23 +9,13 @@
 //! is **skipped and listed** rather than repaired. The listing is the product:
 //! a job that silently drops files is worse than one that cleans nothing.
 //!
-//! **One thing is repaired, and it is a format rather than a file.** A scan
-//! folder mostly does not hold PNGs, and refusing every JPEG in it as "not an
-//! image this reads" was a true sentence about a folder the user plainly meant
-//! to open. [`ingest_paths_importing`] decodes those formats
-//! ([`crate::image::foreign`]) and writes a lossless PNG that becomes the page;
-//! the original is never opened again and never modified. Everything after the
-//! conversion is the same policy over the converted bytes, so there is one
-//! sieve and not two.
+//! PNG, TIFF and JPEG are imported byte for byte. WebP, GIF and BMP are
+//! decoded and written as PNG into the chapter's own page directory. The
+//! user's originals are never modified, and a copied source retains its hash.
 //!
-//! **Every accepted page is taken into the job's own directory, whatever its
-//! format was.** A PNG is copied byte for byte and a JPEG is converted, and
-//! both come out the far side as a file the library owns with
-//! [`SourceRef::converted_from`] naming the user's file. That is what makes a
-//! chapter survive its scan folder being deleted, and it is one road rather
-//! than two: the import is the last step of accepting a page, so the duplicate
-//! check, the stem warning and the manifest row all see the file the rest of
-//! the pipeline will open.
+//! Every accepted page lives in the job's own directory, with
+//! [`SourceRef::converted_from`] recording its origin for both copies and
+//! conversions. This lets the chapter survive deletion of the scan folder.
 //!
 //! The user's folder is still the *origin*, and the two questions that turn on
 //! it - where an export's `<input>_cleaned/` sibling goes, and which files
@@ -42,6 +32,7 @@ use crate::image::{BitDepth, ColorMode, Format, Raster};
 /// What a source file is, from its header.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceRef {
+    pub orientation: crate::image::orientation::Orientation,
     pub path: PathBuf,
     pub width: u32,
     pub height: u32,
@@ -49,10 +40,8 @@ pub struct SourceRef {
     pub bit_depth: BitDepth,
     pub icc_bytes: Option<Vec<u8>>,
     pub sha256: String,
-    /// The file this one was made from, when it is a PNG this application
-    /// wrote at ingest out of a format it cannot write - see
-    /// [`crate::image::foreign`]. `None` for a file the user's folder actually
-    /// holds, which is every PNG and TIFF.
+    /// The original file before copying or converting it into the chapter.
+    /// `None` when ingest reads a native source in place.
     ///
     /// Kept because the original is still the user's input, and two rules turn
     /// on that: "output never overwrites input" has to refuse the JPEG as well
@@ -60,6 +49,22 @@ pub struct SourceRef {
     /// must be a sibling of the *scan folder* rather than of a directory
     /// inside the library.
     pub converted_from: Option<PathBuf>,
+    pub conversion: Option<ConversionProvenance>,
+}
+
+/// Chapter-owned original and an explicit account of the working conversion.
+/// Paths become manifest-relative in Project::new; older manifests default to None.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ConversionProvenance {
+    pub archived_original: PathBuf,
+    pub original_sha256: String,
+    pub working_sha256: String,
+    pub detected_format: String,
+    pub chosen_frame: u32,
+    pub frame_count: u32,
+    pub conversion_version: String,
+    pub retained: Vec<String>,
+    pub lost: Vec<String>,
 }
 
 /// Why a file did not make it in. Each carries the i18n key the seam reports
@@ -247,14 +252,12 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// cheap enough that a 200-page folder is listed in a blink, which is what
 /// makes a header-only `SourceRef` worth having.
 pub fn source_ref(path: &Path, bytes: &[u8]) -> Result<SourceRef, SkipReason> {
-    let format = Format::sniff(bytes).ok_or(SkipReason::NotAnImage)?;
-    let header = match format {
-        Format::Png => crate::image::png_header(bytes),
-        Format::Tiff => crate::image::tiff_header(bytes),
-    }
+    Format::sniff(bytes).ok_or(SkipReason::NotAnImage)?;
+    let header = crate::image::header(bytes)
     .map_err(|e| SkipReason::HeaderUnreadable(e.to_string()))?;
 
     Ok(SourceRef {
+        orientation: crate::image::orientation::from_bytes(bytes),
         path: path.to_path_buf(),
         width: header.width,
         height: header.height,
@@ -263,6 +266,7 @@ pub fn source_ref(path: &Path, bytes: &[u8]) -> Result<SourceRef, SkipReason> {
         icc_bytes: header.icc,
         sha256: sha256_hex(bytes),
         converted_from: None,
+        conversion: None,
     })
 }
 
@@ -292,8 +296,8 @@ struct Sieve {
     by_hash: Vec<(String, PathBuf)>,
     by_stem: Vec<(String, PathBuf)>,
     /// The job's own page directory: where an accepted file is copied to, and
-    /// where a PNG made from a JPEG, WebP, GIF or BMP is written. `None` reads
-    /// the user's folder in place and refuses the formats it cannot write.
+    /// where a PNG made from WebP, GIF or BMP is written. `None` reads
+    /// the user's folder in place and refuses formats that need conversion.
     ///
     /// An option rather than a required argument because the two callers want
     /// genuinely different things: a chapter being created has a sidecar
@@ -314,9 +318,8 @@ impl Sieve {
     /// disk can answer it from the name alone and must not read the file to
     /// find out.
     ///
-    /// A file whose magic is none of the two this application writes gets one
-    /// more question asked of it - whether it is one of the four
-    /// [`crate::image::foreign`] reads - and becomes a PNG if it is and there
+    /// A non-native source is checked against the supported conversion codecs
+    /// in [`crate::image::foreign`] and becomes a PNG if there
     /// is somewhere to put it. Everything after that point is the same policy
     /// over the same bytes, because what is offered from there on **is** a PNG:
     /// the duplicate check, the stem warning and the manifest row all see the
@@ -350,12 +353,17 @@ impl Sieve {
             let extension = match format {
                 Format::Png => "png",
                 Format::Tiff => "tiff",
+                Format::Jpeg => {
+                    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("jpeg")) {
+                        "jpeg"
+                    } else {
+                        "jpg"
+                    }
+                },
             };
             let written = free_path(&dir, path, extension);
-            if let Err(error) =
-                std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&written, bytes))
-            {
-                return self.skip(path, SkipReason::ImportFailed(error.to_string()));
+            if let Err(error) = write_import(&dir, &written, bytes) {
+                return self.skip(path, SkipReason::ImportFailed(error));
             }
             // A verbatim copy, so the hash the header read is still the file's
             // hash and nothing has to be read back to know it.
@@ -384,6 +392,10 @@ impl Sieve {
     ///
     /// [`offer`]: Sieve::offer
     fn convert(&mut self, path: &Path, bytes: &[u8], format: SourceFormat, dir: &Path) {
+        let frames = match crate::image::import_info::frame_count(bytes) {
+            Ok(frames) => frames,
+            Err(error) => return self.skip(path, SkipReason::PartialDecode(error.to_string())),
+        };
         let raster = match foreign::decode(bytes) {
             Ok(raster) => raster,
             // The pixels did not come out, which is the same fact
@@ -391,15 +403,15 @@ impl Sieve {
             // way to a user looking at a half-downloaded scan.
             Err(error) => return self.skip(path, SkipReason::PartialDecode(error.to_string())),
         };
-        // PNG for everything PNG can hold, TIFF for CMYK - the decision
-        // `lossless_format_for` already owns. A JPEG really can be CMYK, and
-        // taking one to PNG would mean a colour conversion, which is the thing
-        // this application refuses to do silently.
+        // Use a lossless encoder compatible with the decoded raster.
         let target = crate::image::lossless_format_for(&raster);
         let encoded = match crate::image::encode(&raster, target) {
             Ok(encoded) => encoded,
             Err(error) => return self.skip(path, SkipReason::ConversionFailed(error.to_string())),
         };
+        let indexed = raster.mode == ColorMode::Indexed;
+        let profiled = raster.icc.is_some();
+        let exif = raster.color.safe_ancillary.iter().any(|chunk| chunk.name == *b"eXIf");
         drop(raster);
 
         let sha256 = sha256_hex(&encoded);
@@ -410,18 +422,36 @@ impl Sieve {
         let extension = match target {
             Format::Png => "png",
             Format::Tiff => "tiff",
+            Format::Jpeg => unreachable!("conversion always selects a lossless format"),
         };
         let written = free_path(dir, path, extension);
-        if let Err(error) =
-            std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&written, &encoded))
-        {
-            return self.skip(path, SkipReason::ConversionFailed(error.to_string()));
-        }
-
+        // Validate before publishing either asset; pair cleanup handles a second
+        // write failure without ever adding half an import to the report.
         let mut source = match source_ref(&written, &encoded) {
             Ok(source) => source,
             Err(reason) => return self.skip(path, reason),
         };
+        let originals = dir.parent().unwrap_or(dir).join("originals");
+        let original_extension = match format { SourceFormat::Jpeg => "jpg", SourceFormat::Webp => "webp", SourceFormat::Gif => "gif", SourceFormat::Bmp => "bmp" };
+        let archived = free_path(&originals, &written, original_extension);
+        if let Err(error) = write_import(&originals, &archived, bytes) {
+            return self.skip(path, SkipReason::ConversionFailed(error));
+        }
+        if let Err(error) = write_import(dir, &written, &encoded) {
+            let _ = std::fs::remove_file(&archived);
+            return self.skip(path, SkipReason::ConversionFailed(error));
+        }
+        let mut retained = vec!["visible first-frame samples".into(), "complete original archive".into()];
+        if indexed { retained.push("palette, indices and transparency".into()); }
+        if profiled { retained.push("ICC profile".into()); }
+        if exif { retained.push("EXIF metadata and native orientation".into()); }
+        let mut lost = vec!["source container and nonrepresentable ancillary fields (retained in archive)".into()];
+        if frames > 1 { lost.push("animation timing and subsequent frames (retained in archive)".into()); }
+        source.conversion = Some(ConversionProvenance {
+            archived_original: archived, original_sha256: sha256_hex(bytes), working_sha256: sha256,
+            detected_format: format.label().into(), chosen_frame: 0, frame_count: frames,
+            conversion_version: "native-first-frame-v1".into(), retained, lost,
+        });
         source.converted_from = Some(path.to_path_buf());
         self.report.converted.push(Converted {
             original: path.to_path_buf(),
@@ -484,6 +514,12 @@ fn free_path(dir: &Path, original: &Path, extension: &str) -> PathBuf {
         n += 1;
     }
     candidate
+}
+
+/// A chapter must never publish a partially written page after a failed import.
+fn write_import(dir: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    crate::project::buffers::write_atomic(path, bytes).map_err(|e| e.to_string())
 }
 
 fn in_natural_order<T>(mut items: Vec<T>, name: impl Fn(&T) -> String) -> Vec<T> {
@@ -650,14 +686,13 @@ mod tests {
         let whole = png("rgb8");
         let truncated = &whole[..whole.len() / 2];
         let path = Path::new("003.png");
-        // The header still parses - that is exactly the danger.
-        assert!(source_ref(path, truncated).is_ok());
-        // The full decode does not, and that is what decides.
+        // Strict metadata scanning may reject the truncated chunk before pixels.
+        // Both boundaries must refuse the partial file.
         assert!(matches!(decode_whole(truncated), Err(SkipReason::PartialDecode(_))));
 
         let report = ingest([(path, truncated)]);
         assert!(report.sources.is_empty());
-        assert!(matches!(report.skipped[0].reason, SkipReason::PartialDecode(_)));
+        assert!(matches!(report.skipped[0].reason, SkipReason::PartialDecode(_) | SkipReason::HeaderUnreadable(_)));
     }
 
     #[test]
@@ -857,13 +892,12 @@ mod tests {
         path
     }
 
-    /// The whole point of the conversion pass: a folder of JPEGs opens as a
-    /// chapter instead of being refused file by file.
+    /// A non-native format becomes a PNG inside the chapter's page directory.
     #[test]
     fn a_foreign_page_becomes_a_png_the_pipeline_can_read() {
         let scratch = Scratch::new("convert");
-        let original = write(&scratch, "001.jpg", &jpeg("rgb8"));
-        let into = scratch.join("converted");
+        let original = write(&scratch, "001.bmp", &bmp_unlike("rgb8"));
+        let into = scratch.join("chapter/pages");
 
         let report = ingest_paths_importing([original.clone()], &into);
 
@@ -881,7 +915,7 @@ mod tests {
         assert_eq!(decode_whole(&written).unwrap().width, source.width);
 
         assert_eq!(report.converted.len(), 1);
-        assert_eq!(report.converted[0].from, "JPEG");
+        assert_eq!(report.converted[0].from, "BMP");
         assert_eq!(report.converted[0].original, original);
     }
 
@@ -910,6 +944,124 @@ mod tests {
         // saying "1 file converted" about a PNG would be a lie.
         assert_eq!(std::fs::read(&original).unwrap(), bytes);
         assert_eq!(report.converted, vec![]);
+    }
+
+    #[test]
+    fn jpeg_import_keeps_original_bytes_extension_and_hash() {
+        let scratch = Scratch::new("jpeg-native");
+        let bytes = jpeg("rgb8");
+        let original = write(&scratch, "001.jpeg", &bytes);
+        let into = scratch.join("chapter/pages");
+        let report = ingest_paths_importing([original.clone()], &into);
+        assert!(report.skipped.is_empty());
+        assert!(report.converted.is_empty());
+        let source = &report.sources[0];
+        assert_eq!(source.path, into.join("001.jpeg"));
+        assert_eq!(std::fs::read(&source.path).unwrap(), bytes);
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        assert_eq!(source.sha256, sha256_hex(&bytes));
+        assert_eq!(source.converted_from, Some(original));
+    }
+
+    #[test]
+    fn converted_formats_keep_decoded_samples_inside_the_chapter() {
+        for (extension, format) in [
+            ("webp", image::ImageFormat::WebP),
+            ("gif", image::ImageFormat::Gif),
+            ("bmp", image::ImageFormat::Bmp),
+        ] {
+            let scratch = Scratch::new(extension);
+            let raster = fixtures::by_name("rgb8").raster;
+            let buffer = image::RgbImage::from_raw(raster.width, raster.height, raster.data).unwrap();
+            let mut bytes = Vec::new();
+            image::DynamicImage::ImageRgb8(buffer).write_to(&mut std::io::Cursor::new(&mut bytes), format).unwrap();
+            let expected = foreign::decode(&bytes).unwrap();
+            let original = write(&scratch, &format!("001.{extension}"), &bytes);
+            let into = scratch.join("chapter/pages");
+            let report = ingest_paths_importing([original.clone()], &into);
+            assert!(report.skipped.is_empty(), "{extension}: {:?}", report.skipped);
+            assert_eq!(report.converted.len(), 1);
+            assert_eq!(report.sources[0].path, into.join("001.png"));
+            let saved = decode_whole(&std::fs::read(&report.sources[0].path).unwrap()).unwrap();
+            assert_eq!(saved.data, expected.data, "{extension}: decoded colors changed");
+            assert_eq!(saved.mode, expected.mode);
+            assert_eq!(saved.depth, expected.depth);
+            assert_eq!(saved.icc, expected.icc);
+            assert_eq!(std::fs::read(original).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn converted_originals_survive_scan_deletion_with_verified_provenance() {
+        let scratch = Scratch::new("archived-animation");
+        let bytes = include_bytes!("../tests/fixtures/color-reference/animated.gif");
+        let original = write(&scratch, "animated.gif", bytes);
+        let dir = scratch.join("chapter/pages");
+        let report = ingest_paths_importing([original.clone()], &dir);
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        let source = &report.sources[0];
+        let provenance = source.conversion.as_ref().unwrap();
+        assert_eq!(provenance.frame_count, 2);
+        assert_eq!(provenance.chosen_frame, 0);
+        assert!(provenance.archived_original.starts_with(scratch.join("chapter/originals")));
+        assert_eq!(std::fs::read(&provenance.archived_original).unwrap(), bytes);
+        assert_eq!(provenance.original_sha256, sha256_hex(bytes));
+        assert_eq!(provenance.working_sha256, source.sha256);
+        std::fs::remove_file(original).unwrap();
+        assert!(decode_whole(&std::fs::read(&source.path).unwrap()).is_ok());
+        let project = crate::project::Project::new(&scratch.join("chapter"), "test", crate::project::StripMode::Single, &report.sources);
+        assert!(!project.sources[0].conversion.as_ref().unwrap().archived_original.is_absolute());
+        let reopened: crate::project::Project = serde_json::from_slice(&serde_json::to_vec(&project).unwrap()).unwrap();
+        assert_eq!(reopened.sources[0].conversion, project.sources[0].conversion);
+    }
+
+    #[test]
+    fn invalid_tagged_native_jpeg_is_retained_but_reencoding_refuses_it() {
+        use image::ImageEncoder;
+        let scratch = Scratch::new("invalid-native-icc");
+        let mut bytes = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut bytes);
+        encoder.set_icc_profile(b"invalid ICC preserved with original".to_vec()).unwrap();
+        encoder.encode(&[10, 20, 30], 1, 1, image::ExtendedColorType::Rgb8).unwrap();
+        let path = write(&scratch, "native.jpg", &bytes);
+        let report = ingest_paths_importing([path], &scratch.join("chapter/pages"));
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        assert_eq!(std::fs::read(&report.sources[0].path).unwrap(), bytes);
+        let copy = crate::export::export_page(&bytes, &[], crate::export::Target::SameAsSource).unwrap();
+        assert_eq!(copy.bytes, bytes);
+        assert!(crate::export::export_page(&bytes, &[], crate::export::Target::Explicit(Format::Png)).is_err());
+    }
+
+    #[test]
+    fn webp_conversion_preserves_exif_orientation_and_owns_the_archive() {
+        use image::ImageEncoder;
+        let scratch = Scratch::new("webp-exif");
+        let mut exif = b"II\x2a\0\x08\0\0\0\x01\0".to_vec();
+        exif.extend_from_slice(&[0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0]);
+        let mut bytes = Vec::new();
+        let mut encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut bytes);
+        encoder.set_exif_metadata(exif).unwrap();
+        encoder.encode(&[255, 0, 0, 0, 0, 255], 2, 1, image::ExtendedColorType::Rgb8).unwrap();
+        let original = write(&scratch, "001.webp", &bytes);
+        let report = ingest_paths_importing([original], &scratch.join("chapter/pages"));
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        let source = &report.sources[0];
+        let working = std::fs::read(&source.path).unwrap();
+        assert_eq!(crate::image::orientation::from_bytes(&working).0, 6);
+        assert_eq!(std::fs::read(&source.conversion.as_ref().unwrap().archived_original).unwrap(), bytes);
+        assert!(source.conversion.as_ref().unwrap().retained.iter().any(|value| value.contains("EXIF")));
+    }
+
+    #[test]
+    fn failed_working_page_write_removes_new_archive() {
+        let scratch = Scratch::new("archive-cleanup");
+        let original = write(&scratch, "001.bmp", &bmp_unlike("rgb8"));
+        let dir = scratch.join("chapter/pages");
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        std::fs::write(&dir, b"not a directory").unwrap();
+        let report = ingest_paths_importing([original], &dir);
+        assert!(report.sources.is_empty());
+        assert!(std::fs::read_dir(scratch.join("chapter/originals")).unwrap().next().is_none());
     }
 
     /// The import is the *last* step of accepting a page, so everything §2
@@ -952,12 +1104,13 @@ mod tests {
         assert_eq!(report.skipped[0].reason.reason_key(), "input.skipReason.importFailed");
     }
 
-    /// Without somewhere to write, the old answer stands: a format this
-    /// application cannot write is not one it pretends to have read, and a
-    /// page that needs no conversion is read where it lies.
+    /// JPEG is native even without an import directory. BMP still needs one.
     #[test]
     fn a_foreign_page_is_still_refused_when_nothing_asked_for_a_conversion() {
         let report = ingest([(Path::new("001.jpg"), jpeg("rgb8").as_slice())]);
+        assert_eq!(report.sources[0].path, PathBuf::from("001.jpg"));
+        assert!(report.converted.is_empty());
+        let report = ingest([(Path::new("001.bmp"), bmp_unlike("rgb8").as_slice())]);
         assert!(report.sources.is_empty());
         assert_eq!(report.skipped[0].reason, SkipReason::NotAnImage);
 
@@ -969,7 +1122,7 @@ mod tests {
     /// The duplicate check happens **before** the write, so the second copy
     /// leaves no file behind.
     #[test]
-    fn the_same_page_twice_converts_once() {
+    fn the_same_jpeg_twice_imports_once_without_conversion() {
         let scratch = Scratch::new("duplicate");
         let bytes = jpeg("rgb8");
         let first = write(&scratch, "001.jpg", &bytes);
@@ -979,18 +1132,19 @@ mod tests {
         let report = ingest_paths_importing(read_dir(&scratch), &into);
 
         assert_eq!(report.sources.len(), 1);
-        assert_eq!(report.converted.len(), 1);
+        assert!(report.converted.is_empty());
+        assert_eq!(std::fs::read(&report.sources[0].path).unwrap(), bytes);
         assert!(matches!(report.skipped[0].reason, SkipReason::Duplicate { ref of } if *of == first));
         assert_eq!(std::fs::read_dir(&into).unwrap().count(), 1, "a stray PNG was left behind");
     }
 
-    /// `001.jpg` and `001.webp` both want to be `001.png`. Both pages survive,
+    /// `001.bmp` and `001.png` both want to be `001.png`. Both pages survive,
     /// and §2's stem warning still fires - the rename hides nothing.
     #[test]
     fn two_sources_with_one_stem_get_two_files() {
         let scratch = Scratch::new("stem");
         // Two different images, so neither is refused as a duplicate.
-        write(&scratch, "001.jpg", &jpeg("rgb8"));
+        write(&scratch, "001.png", &png("rgb8"));
         write(&scratch, "001.bmp", &bmp_unlike("rgb8"));
         let into = scratch.join("converted");
 
@@ -1015,7 +1169,8 @@ mod tests {
         let report = ingest_paths_importing(read_dir(&scratch), &into);
 
         assert!(report.sources.is_empty());
-        assert!(matches!(report.skipped[0].reason, SkipReason::PartialDecode(_)));
+        assert!(matches!(report.skipped[0].reason,
+            SkipReason::HeaderUnreadable(_) | SkipReason::PartialDecode(_)));
         assert!(!into.exists(), "nothing to convert, so no directory");
     }
 

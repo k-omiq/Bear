@@ -1,0 +1,3435 @@
+{
+  "ambiguous_initializers": {},
+  "checkpoint_sha256": "bcd9525291677f467f0603509a0ca3df35711b4e3417cefce8da6bfc97164f45",
+  "consumed_keys_equal_manifest": true,
+  "consumed_keys_from_graph": [
+    "image_encoder.blocks.0.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.0.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.0.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.0.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.0.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.0.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.0.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.0.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.0.attn.proj.bias",
+    "image_encoder.blocks.0.attn.proj.weight",
+    "image_encoder.blocks.0.attn.qkv.bias",
+    "image_encoder.blocks.0.attn.qkv.weight",
+    "image_encoder.blocks.0.attn.rel_pos_h",
+    "image_encoder.blocks.0.attn.rel_pos_w",
+    "image_encoder.blocks.0.mlp.lin1.bias",
+    "image_encoder.blocks.0.mlp.lin1.weight",
+    "image_encoder.blocks.0.mlp.lin2.bias",
+    "image_encoder.blocks.0.mlp.lin2.weight",
+    "image_encoder.blocks.0.norm1.bias",
+    "image_encoder.blocks.0.norm1.weight",
+    "image_encoder.blocks.0.norm2.bias",
+    "image_encoder.blocks.0.norm2.weight",
+    "image_encoder.blocks.1.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.1.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.1.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.1.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.1.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.1.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.1.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.1.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.1.attn.proj.bias",
+    "image_encoder.blocks.1.attn.proj.weight",
+    "image_encoder.blocks.1.attn.qkv.bias",
+    "image_encoder.blocks.1.attn.qkv.weight",
+    "image_encoder.blocks.1.attn.rel_pos_h",
+    "image_encoder.blocks.1.attn.rel_pos_w",
+    "image_encoder.blocks.1.mlp.lin1.bias",
+    "image_encoder.blocks.1.mlp.lin1.weight",
+    "image_encoder.blocks.1.mlp.lin2.bias",
+    "image_encoder.blocks.1.mlp.lin2.weight",
+    "image_encoder.blocks.1.norm1.bias",
+    "image_encoder.blocks.1.norm1.weight",
+    "image_encoder.blocks.1.norm2.bias",
+    "image_encoder.blocks.1.norm2.weight",
+    "image_encoder.blocks.10.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.10.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.10.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.10.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.10.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.10.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.10.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.10.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.10.attn.proj.bias",
+    "image_encoder.blocks.10.attn.proj.weight",
+    "image_encoder.blocks.10.attn.qkv.bias",
+    "image_encoder.blocks.10.attn.qkv.weight",
+    "image_encoder.blocks.10.attn.rel_pos_h",
+    "image_encoder.blocks.10.attn.rel_pos_w",
+    "image_encoder.blocks.10.mlp.lin1.bias",
+    "image_encoder.blocks.10.mlp.lin1.weight",
+    "image_encoder.blocks.10.mlp.lin2.bias",
+    "image_encoder.blocks.10.mlp.lin2.weight",
+    "image_encoder.blocks.10.norm1.bias",
+    "image_encoder.blocks.10.norm1.weight",
+    "image_encoder.blocks.10.norm2.bias",
+    "image_encoder.blocks.10.norm2.weight",
+    "image_encoder.blocks.11.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.11.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.11.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.11.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.11.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.11.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.11.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.11.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.11.attn.proj.bias",
+    "image_encoder.blocks.11.attn.proj.weight",
+    "image_encoder.blocks.11.attn.qkv.bias",
+    "image_encoder.blocks.11.attn.qkv.weight",
+    "image_encoder.blocks.11.attn.rel_pos_h",
+    "image_encoder.blocks.11.attn.rel_pos_w",
+    "image_encoder.blocks.11.mlp.lin1.bias",
+    "image_encoder.blocks.11.mlp.lin1.weight",
+    "image_encoder.blocks.11.mlp.lin2.bias",
+    "image_encoder.blocks.11.mlp.lin2.weight",
+    "image_encoder.blocks.11.norm1.bias",
+    "image_encoder.blocks.11.norm1.weight",
+    "image_encoder.blocks.11.norm2.bias",
+    "image_encoder.blocks.11.norm2.weight",
+    "image_encoder.blocks.12.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.12.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.12.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.12.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.12.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.12.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.12.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.12.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.12.attn.proj.bias",
+    "image_encoder.blocks.12.attn.proj.weight",
+    "image_encoder.blocks.12.attn.qkv.bias",
+    "image_encoder.blocks.12.attn.qkv.weight",
+    "image_encoder.blocks.12.attn.rel_pos_h",
+    "image_encoder.blocks.12.attn.rel_pos_w",
+    "image_encoder.blocks.12.mlp.lin1.bias",
+    "image_encoder.blocks.12.mlp.lin1.weight",
+    "image_encoder.blocks.12.mlp.lin2.bias",
+    "image_encoder.blocks.12.mlp.lin2.weight",
+    "image_encoder.blocks.12.norm1.bias",
+    "image_encoder.blocks.12.norm1.weight",
+    "image_encoder.blocks.12.norm2.bias",
+    "image_encoder.blocks.12.norm2.weight",
+    "image_encoder.blocks.13.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.13.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.13.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.13.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.13.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.13.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.13.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.13.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.13.attn.proj.bias",
+    "image_encoder.blocks.13.attn.proj.weight",
+    "image_encoder.blocks.13.attn.qkv.bias",
+    "image_encoder.blocks.13.attn.qkv.weight",
+    "image_encoder.blocks.13.attn.rel_pos_h",
+    "image_encoder.blocks.13.attn.rel_pos_w",
+    "image_encoder.blocks.13.mlp.lin1.bias",
+    "image_encoder.blocks.13.mlp.lin1.weight",
+    "image_encoder.blocks.13.mlp.lin2.bias",
+    "image_encoder.blocks.13.mlp.lin2.weight",
+    "image_encoder.blocks.13.norm1.bias",
+    "image_encoder.blocks.13.norm1.weight",
+    "image_encoder.blocks.13.norm2.bias",
+    "image_encoder.blocks.13.norm2.weight",
+    "image_encoder.blocks.14.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.14.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.14.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.14.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.14.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.14.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.14.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.14.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.14.attn.proj.bias",
+    "image_encoder.blocks.14.attn.proj.weight",
+    "image_encoder.blocks.14.attn.qkv.bias",
+    "image_encoder.blocks.14.attn.qkv.weight",
+    "image_encoder.blocks.14.attn.rel_pos_h",
+    "image_encoder.blocks.14.attn.rel_pos_w",
+    "image_encoder.blocks.14.mlp.lin1.bias",
+    "image_encoder.blocks.14.mlp.lin1.weight",
+    "image_encoder.blocks.14.mlp.lin2.bias",
+    "image_encoder.blocks.14.mlp.lin2.weight",
+    "image_encoder.blocks.14.norm1.bias",
+    "image_encoder.blocks.14.norm1.weight",
+    "image_encoder.blocks.14.norm2.bias",
+    "image_encoder.blocks.14.norm2.weight",
+    "image_encoder.blocks.15.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.15.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.15.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.15.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.15.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.15.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.15.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.15.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.15.attn.proj.bias",
+    "image_encoder.blocks.15.attn.proj.weight",
+    "image_encoder.blocks.15.attn.qkv.bias",
+    "image_encoder.blocks.15.attn.qkv.weight",
+    "image_encoder.blocks.15.attn.rel_pos_h",
+    "image_encoder.blocks.15.attn.rel_pos_w",
+    "image_encoder.blocks.15.mlp.lin1.bias",
+    "image_encoder.blocks.15.mlp.lin1.weight",
+    "image_encoder.blocks.15.mlp.lin2.bias",
+    "image_encoder.blocks.15.mlp.lin2.weight",
+    "image_encoder.blocks.15.norm1.bias",
+    "image_encoder.blocks.15.norm1.weight",
+    "image_encoder.blocks.15.norm2.bias",
+    "image_encoder.blocks.15.norm2.weight",
+    "image_encoder.blocks.16.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.16.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.16.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.16.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.16.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.16.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.16.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.16.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.16.attn.proj.bias",
+    "image_encoder.blocks.16.attn.proj.weight",
+    "image_encoder.blocks.16.attn.qkv.bias",
+    "image_encoder.blocks.16.attn.qkv.weight",
+    "image_encoder.blocks.16.attn.rel_pos_h",
+    "image_encoder.blocks.16.attn.rel_pos_w",
+    "image_encoder.blocks.16.mlp.lin1.bias",
+    "image_encoder.blocks.16.mlp.lin1.weight",
+    "image_encoder.blocks.16.mlp.lin2.bias",
+    "image_encoder.blocks.16.mlp.lin2.weight",
+    "image_encoder.blocks.16.norm1.bias",
+    "image_encoder.blocks.16.norm1.weight",
+    "image_encoder.blocks.16.norm2.bias",
+    "image_encoder.blocks.16.norm2.weight",
+    "image_encoder.blocks.17.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.17.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.17.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.17.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.17.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.17.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.17.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.17.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.17.attn.proj.bias",
+    "image_encoder.blocks.17.attn.proj.weight",
+    "image_encoder.blocks.17.attn.qkv.bias",
+    "image_encoder.blocks.17.attn.qkv.weight",
+    "image_encoder.blocks.17.attn.rel_pos_h",
+    "image_encoder.blocks.17.attn.rel_pos_w",
+    "image_encoder.blocks.17.mlp.lin1.bias",
+    "image_encoder.blocks.17.mlp.lin1.weight",
+    "image_encoder.blocks.17.mlp.lin2.bias",
+    "image_encoder.blocks.17.mlp.lin2.weight",
+    "image_encoder.blocks.17.norm1.bias",
+    "image_encoder.blocks.17.norm1.weight",
+    "image_encoder.blocks.17.norm2.bias",
+    "image_encoder.blocks.17.norm2.weight",
+    "image_encoder.blocks.18.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.18.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.18.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.18.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.18.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.18.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.18.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.18.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.18.attn.proj.bias",
+    "image_encoder.blocks.18.attn.proj.weight",
+    "image_encoder.blocks.18.attn.qkv.bias",
+    "image_encoder.blocks.18.attn.qkv.weight",
+    "image_encoder.blocks.18.attn.rel_pos_h",
+    "image_encoder.blocks.18.attn.rel_pos_w",
+    "image_encoder.blocks.18.mlp.lin1.bias",
+    "image_encoder.blocks.18.mlp.lin1.weight",
+    "image_encoder.blocks.18.mlp.lin2.bias",
+    "image_encoder.blocks.18.mlp.lin2.weight",
+    "image_encoder.blocks.18.norm1.bias",
+    "image_encoder.blocks.18.norm1.weight",
+    "image_encoder.blocks.18.norm2.bias",
+    "image_encoder.blocks.18.norm2.weight",
+    "image_encoder.blocks.19.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.19.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.19.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.19.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.19.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.19.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.19.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.19.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.19.attn.proj.bias",
+    "image_encoder.blocks.19.attn.proj.weight",
+    "image_encoder.blocks.19.attn.qkv.bias",
+    "image_encoder.blocks.19.attn.qkv.weight",
+    "image_encoder.blocks.19.attn.rel_pos_h",
+    "image_encoder.blocks.19.attn.rel_pos_w",
+    "image_encoder.blocks.19.mlp.lin1.bias",
+    "image_encoder.blocks.19.mlp.lin1.weight",
+    "image_encoder.blocks.19.mlp.lin2.bias",
+    "image_encoder.blocks.19.mlp.lin2.weight",
+    "image_encoder.blocks.19.norm1.bias",
+    "image_encoder.blocks.19.norm1.weight",
+    "image_encoder.blocks.19.norm2.bias",
+    "image_encoder.blocks.19.norm2.weight",
+    "image_encoder.blocks.2.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.2.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.2.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.2.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.2.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.2.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.2.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.2.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.2.attn.proj.bias",
+    "image_encoder.blocks.2.attn.proj.weight",
+    "image_encoder.blocks.2.attn.qkv.bias",
+    "image_encoder.blocks.2.attn.qkv.weight",
+    "image_encoder.blocks.2.attn.rel_pos_h",
+    "image_encoder.blocks.2.attn.rel_pos_w",
+    "image_encoder.blocks.2.mlp.lin1.bias",
+    "image_encoder.blocks.2.mlp.lin1.weight",
+    "image_encoder.blocks.2.mlp.lin2.bias",
+    "image_encoder.blocks.2.mlp.lin2.weight",
+    "image_encoder.blocks.2.norm1.bias",
+    "image_encoder.blocks.2.norm1.weight",
+    "image_encoder.blocks.2.norm2.bias",
+    "image_encoder.blocks.2.norm2.weight",
+    "image_encoder.blocks.20.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.20.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.20.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.20.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.20.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.20.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.20.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.20.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.20.attn.proj.bias",
+    "image_encoder.blocks.20.attn.proj.weight",
+    "image_encoder.blocks.20.attn.qkv.bias",
+    "image_encoder.blocks.20.attn.qkv.weight",
+    "image_encoder.blocks.20.attn.rel_pos_h",
+    "image_encoder.blocks.20.attn.rel_pos_w",
+    "image_encoder.blocks.20.mlp.lin1.bias",
+    "image_encoder.blocks.20.mlp.lin1.weight",
+    "image_encoder.blocks.20.mlp.lin2.bias",
+    "image_encoder.blocks.20.mlp.lin2.weight",
+    "image_encoder.blocks.20.norm1.bias",
+    "image_encoder.blocks.20.norm1.weight",
+    "image_encoder.blocks.20.norm2.bias",
+    "image_encoder.blocks.20.norm2.weight",
+    "image_encoder.blocks.21.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.21.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.21.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.21.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.21.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.21.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.21.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.21.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.21.attn.proj.bias",
+    "image_encoder.blocks.21.attn.proj.weight",
+    "image_encoder.blocks.21.attn.qkv.bias",
+    "image_encoder.blocks.21.attn.qkv.weight",
+    "image_encoder.blocks.21.attn.rel_pos_h",
+    "image_encoder.blocks.21.attn.rel_pos_w",
+    "image_encoder.blocks.21.mlp.lin1.bias",
+    "image_encoder.blocks.21.mlp.lin1.weight",
+    "image_encoder.blocks.21.mlp.lin2.bias",
+    "image_encoder.blocks.21.mlp.lin2.weight",
+    "image_encoder.blocks.21.norm1.bias",
+    "image_encoder.blocks.21.norm1.weight",
+    "image_encoder.blocks.21.norm2.bias",
+    "image_encoder.blocks.21.norm2.weight",
+    "image_encoder.blocks.22.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.22.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.22.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.22.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.22.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.22.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.22.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.22.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.22.attn.proj.bias",
+    "image_encoder.blocks.22.attn.proj.weight",
+    "image_encoder.blocks.22.attn.qkv.bias",
+    "image_encoder.blocks.22.attn.qkv.weight",
+    "image_encoder.blocks.22.attn.rel_pos_h",
+    "image_encoder.blocks.22.attn.rel_pos_w",
+    "image_encoder.blocks.22.mlp.lin1.bias",
+    "image_encoder.blocks.22.mlp.lin1.weight",
+    "image_encoder.blocks.22.mlp.lin2.bias",
+    "image_encoder.blocks.22.mlp.lin2.weight",
+    "image_encoder.blocks.22.norm1.bias",
+    "image_encoder.blocks.22.norm1.weight",
+    "image_encoder.blocks.22.norm2.bias",
+    "image_encoder.blocks.22.norm2.weight",
+    "image_encoder.blocks.23.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.23.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.23.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.23.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.23.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.23.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.23.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.23.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.23.attn.proj.bias",
+    "image_encoder.blocks.23.attn.proj.weight",
+    "image_encoder.blocks.23.attn.qkv.bias",
+    "image_encoder.blocks.23.attn.qkv.weight",
+    "image_encoder.blocks.23.attn.rel_pos_h",
+    "image_encoder.blocks.23.attn.rel_pos_w",
+    "image_encoder.blocks.23.mlp.lin1.bias",
+    "image_encoder.blocks.23.mlp.lin1.weight",
+    "image_encoder.blocks.23.mlp.lin2.bias",
+    "image_encoder.blocks.23.mlp.lin2.weight",
+    "image_encoder.blocks.23.norm1.bias",
+    "image_encoder.blocks.23.norm1.weight",
+    "image_encoder.blocks.23.norm2.bias",
+    "image_encoder.blocks.23.norm2.weight",
+    "image_encoder.blocks.3.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.3.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.3.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.3.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.3.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.3.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.3.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.3.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.3.attn.proj.bias",
+    "image_encoder.blocks.3.attn.proj.weight",
+    "image_encoder.blocks.3.attn.qkv.bias",
+    "image_encoder.blocks.3.attn.qkv.weight",
+    "image_encoder.blocks.3.attn.rel_pos_h",
+    "image_encoder.blocks.3.attn.rel_pos_w",
+    "image_encoder.blocks.3.mlp.lin1.bias",
+    "image_encoder.blocks.3.mlp.lin1.weight",
+    "image_encoder.blocks.3.mlp.lin2.bias",
+    "image_encoder.blocks.3.mlp.lin2.weight",
+    "image_encoder.blocks.3.norm1.bias",
+    "image_encoder.blocks.3.norm1.weight",
+    "image_encoder.blocks.3.norm2.bias",
+    "image_encoder.blocks.3.norm2.weight",
+    "image_encoder.blocks.4.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.4.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.4.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.4.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.4.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.4.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.4.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.4.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.4.attn.proj.bias",
+    "image_encoder.blocks.4.attn.proj.weight",
+    "image_encoder.blocks.4.attn.qkv.bias",
+    "image_encoder.blocks.4.attn.qkv.weight",
+    "image_encoder.blocks.4.attn.rel_pos_h",
+    "image_encoder.blocks.4.attn.rel_pos_w",
+    "image_encoder.blocks.4.mlp.lin1.bias",
+    "image_encoder.blocks.4.mlp.lin1.weight",
+    "image_encoder.blocks.4.mlp.lin2.bias",
+    "image_encoder.blocks.4.mlp.lin2.weight",
+    "image_encoder.blocks.4.norm1.bias",
+    "image_encoder.blocks.4.norm1.weight",
+    "image_encoder.blocks.4.norm2.bias",
+    "image_encoder.blocks.4.norm2.weight",
+    "image_encoder.blocks.5.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.5.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.5.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.5.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.5.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.5.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.5.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.5.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.5.attn.proj.bias",
+    "image_encoder.blocks.5.attn.proj.weight",
+    "image_encoder.blocks.5.attn.qkv.bias",
+    "image_encoder.blocks.5.attn.qkv.weight",
+    "image_encoder.blocks.5.attn.rel_pos_h",
+    "image_encoder.blocks.5.attn.rel_pos_w",
+    "image_encoder.blocks.5.mlp.lin1.bias",
+    "image_encoder.blocks.5.mlp.lin1.weight",
+    "image_encoder.blocks.5.mlp.lin2.bias",
+    "image_encoder.blocks.5.mlp.lin2.weight",
+    "image_encoder.blocks.5.norm1.bias",
+    "image_encoder.blocks.5.norm1.weight",
+    "image_encoder.blocks.5.norm2.bias",
+    "image_encoder.blocks.5.norm2.weight",
+    "image_encoder.blocks.6.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.6.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.6.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.6.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.6.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.6.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.6.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.6.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.6.attn.proj.bias",
+    "image_encoder.blocks.6.attn.proj.weight",
+    "image_encoder.blocks.6.attn.qkv.bias",
+    "image_encoder.blocks.6.attn.qkv.weight",
+    "image_encoder.blocks.6.attn.rel_pos_h",
+    "image_encoder.blocks.6.attn.rel_pos_w",
+    "image_encoder.blocks.6.mlp.lin1.bias",
+    "image_encoder.blocks.6.mlp.lin1.weight",
+    "image_encoder.blocks.6.mlp.lin2.bias",
+    "image_encoder.blocks.6.mlp.lin2.weight",
+    "image_encoder.blocks.6.norm1.bias",
+    "image_encoder.blocks.6.norm1.weight",
+    "image_encoder.blocks.6.norm2.bias",
+    "image_encoder.blocks.6.norm2.weight",
+    "image_encoder.blocks.7.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.7.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.7.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.7.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.7.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.7.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.7.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.7.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.7.attn.proj.bias",
+    "image_encoder.blocks.7.attn.proj.weight",
+    "image_encoder.blocks.7.attn.qkv.bias",
+    "image_encoder.blocks.7.attn.qkv.weight",
+    "image_encoder.blocks.7.attn.rel_pos_h",
+    "image_encoder.blocks.7.attn.rel_pos_w",
+    "image_encoder.blocks.7.mlp.lin1.bias",
+    "image_encoder.blocks.7.mlp.lin1.weight",
+    "image_encoder.blocks.7.mlp.lin2.bias",
+    "image_encoder.blocks.7.mlp.lin2.weight",
+    "image_encoder.blocks.7.norm1.bias",
+    "image_encoder.blocks.7.norm1.weight",
+    "image_encoder.blocks.7.norm2.bias",
+    "image_encoder.blocks.7.norm2.weight",
+    "image_encoder.blocks.8.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.8.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.8.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.8.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.8.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.8.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.8.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.8.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.8.attn.proj.bias",
+    "image_encoder.blocks.8.attn.proj.weight",
+    "image_encoder.blocks.8.attn.qkv.bias",
+    "image_encoder.blocks.8.attn.qkv.weight",
+    "image_encoder.blocks.8.attn.rel_pos_h",
+    "image_encoder.blocks.8.attn.rel_pos_w",
+    "image_encoder.blocks.8.mlp.lin1.bias",
+    "image_encoder.blocks.8.mlp.lin1.weight",
+    "image_encoder.blocks.8.mlp.lin2.bias",
+    "image_encoder.blocks.8.mlp.lin2.weight",
+    "image_encoder.blocks.8.norm1.bias",
+    "image_encoder.blocks.8.norm1.weight",
+    "image_encoder.blocks.8.norm2.bias",
+    "image_encoder.blocks.8.norm2.weight",
+    "image_encoder.blocks.9.MLP_Adapter.D_fc1.bias",
+    "image_encoder.blocks.9.MLP_Adapter.D_fc1.weight",
+    "image_encoder.blocks.9.MLP_Adapter.D_fc2.bias",
+    "image_encoder.blocks.9.MLP_Adapter.D_fc2.weight",
+    "image_encoder.blocks.9.Space_Adapter.D_fc1.bias",
+    "image_encoder.blocks.9.Space_Adapter.D_fc1.weight",
+    "image_encoder.blocks.9.Space_Adapter.D_fc2.bias",
+    "image_encoder.blocks.9.Space_Adapter.D_fc2.weight",
+    "image_encoder.blocks.9.attn.proj.bias",
+    "image_encoder.blocks.9.attn.proj.weight",
+    "image_encoder.blocks.9.attn.qkv.bias",
+    "image_encoder.blocks.9.attn.qkv.weight",
+    "image_encoder.blocks.9.attn.rel_pos_h",
+    "image_encoder.blocks.9.attn.rel_pos_w",
+    "image_encoder.blocks.9.mlp.lin1.bias",
+    "image_encoder.blocks.9.mlp.lin1.weight",
+    "image_encoder.blocks.9.mlp.lin2.bias",
+    "image_encoder.blocks.9.mlp.lin2.weight",
+    "image_encoder.blocks.9.norm1.bias",
+    "image_encoder.blocks.9.norm1.weight",
+    "image_encoder.blocks.9.norm2.bias",
+    "image_encoder.blocks.9.norm2.weight",
+    "image_encoder.neck.0.weight",
+    "image_encoder.neck.1.bias",
+    "image_encoder.neck.1.weight",
+    "image_encoder.neck.2.weight",
+    "image_encoder.neck.3.bias",
+    "image_encoder.neck.3.weight",
+    "image_encoder.patch_embed.proj.bias",
+    "image_encoder.patch_embed.proj.weight",
+    "image_encoder.pos_embed",
+    "mask_decoder.iou_token.weight",
+    "mask_decoder.mask_tokens.weight",
+    "mask_decoder.output_hypernetworks_mlps_hr.layers.0.bias",
+    "mask_decoder.output_hypernetworks_mlps_hr.layers.0.weight",
+    "mask_decoder.output_hypernetworks_mlps_hr.layers.1.bias",
+    "mask_decoder.output_hypernetworks_mlps_hr.layers.1.weight",
+    "mask_decoder.output_hypernetworks_mlps_hr.layers.2.bias",
+    "mask_decoder.output_hypernetworks_mlps_hr.layers.2.weight",
+    "mask_decoder.output_upscaling.0.bias",
+    "mask_decoder.output_upscaling.0.weight",
+    "mask_decoder.output_upscaling.1.bias",
+    "mask_decoder.output_upscaling.1.weight",
+    "mask_decoder.output_upscaling.3.bias",
+    "mask_decoder.output_upscaling.3.weight",
+    "mask_decoder.output_upscaling_hr.0.bias",
+    "mask_decoder.output_upscaling_hr.0.weight",
+    "mask_decoder.output_upscaling_hr.1.bias",
+    "mask_decoder.output_upscaling_hr.1.weight",
+    "mask_decoder.output_upscaling_hr.10.bias",
+    "mask_decoder.output_upscaling_hr.10.weight",
+    "mask_decoder.output_upscaling_hr.12.bias",
+    "mask_decoder.output_upscaling_hr.12.weight",
+    "mask_decoder.output_upscaling_hr.13.bias",
+    "mask_decoder.output_upscaling_hr.13.weight",
+    "mask_decoder.output_upscaling_hr.15.bias",
+    "mask_decoder.output_upscaling_hr.15.weight",
+    "mask_decoder.output_upscaling_hr.3.bias",
+    "mask_decoder.output_upscaling_hr.3.weight",
+    "mask_decoder.output_upscaling_hr.4.bias",
+    "mask_decoder.output_upscaling_hr.4.weight",
+    "mask_decoder.output_upscaling_hr.6.bias",
+    "mask_decoder.output_upscaling_hr.6.weight",
+    "mask_decoder.output_upscaling_hr.7.bias",
+    "mask_decoder.output_upscaling_hr.7.weight",
+    "mask_decoder.output_upscaling_hr.9.bias",
+    "mask_decoder.output_upscaling_hr.9.weight",
+    "mask_decoder.transformer.final_attn_token_to_image.k_proj.bias",
+    "mask_decoder.transformer.final_attn_token_to_image.k_proj.weight",
+    "mask_decoder.transformer.final_attn_token_to_image.out_proj.bias",
+    "mask_decoder.transformer.final_attn_token_to_image.out_proj.weight",
+    "mask_decoder.transformer.final_attn_token_to_image.q_proj.bias",
+    "mask_decoder.transformer.final_attn_token_to_image.q_proj.weight",
+    "mask_decoder.transformer.final_attn_token_to_image.v_proj.bias",
+    "mask_decoder.transformer.final_attn_token_to_image.v_proj.weight",
+    "mask_decoder.transformer.layers.0.cross_attn_image_to_token.k_proj.bias",
+    "mask_decoder.transformer.layers.0.cross_attn_image_to_token.k_proj.weight",
+    "mask_decoder.transformer.layers.0.cross_attn_image_to_token.out_proj.bias",
+    "mask_decoder.transformer.layers.0.cross_attn_image_to_token.out_proj.weight",
+    "mask_decoder.transformer.layers.0.cross_attn_image_to_token.q_proj.bias",
+    "mask_decoder.transformer.layers.0.cross_attn_image_to_token.q_proj.weight",
+    "mask_decoder.transformer.layers.0.cross_attn_image_to_token.v_proj.bias",
+    "mask_decoder.transformer.layers.0.cross_attn_image_to_token.v_proj.weight",
+    "mask_decoder.transformer.layers.0.cross_attn_token_to_image.k_proj.bias",
+    "mask_decoder.transformer.layers.0.cross_attn_token_to_image.k_proj.weight",
+    "mask_decoder.transformer.layers.0.cross_attn_token_to_image.out_proj.bias",
+    "mask_decoder.transformer.layers.0.cross_attn_token_to_image.out_proj.weight",
+    "mask_decoder.transformer.layers.0.cross_attn_token_to_image.q_proj.bias",
+    "mask_decoder.transformer.layers.0.cross_attn_token_to_image.q_proj.weight",
+    "mask_decoder.transformer.layers.0.cross_attn_token_to_image.v_proj.bias",
+    "mask_decoder.transformer.layers.0.cross_attn_token_to_image.v_proj.weight",
+    "mask_decoder.transformer.layers.0.mlp.lin1.bias",
+    "mask_decoder.transformer.layers.0.mlp.lin1.weight",
+    "mask_decoder.transformer.layers.0.mlp.lin2.bias",
+    "mask_decoder.transformer.layers.0.mlp.lin2.weight",
+    "mask_decoder.transformer.layers.0.norm1.bias",
+    "mask_decoder.transformer.layers.0.norm1.weight",
+    "mask_decoder.transformer.layers.0.norm2.bias",
+    "mask_decoder.transformer.layers.0.norm2.weight",
+    "mask_decoder.transformer.layers.0.norm3.bias",
+    "mask_decoder.transformer.layers.0.norm3.weight",
+    "mask_decoder.transformer.layers.0.norm4.bias",
+    "mask_decoder.transformer.layers.0.norm4.weight",
+    "mask_decoder.transformer.layers.0.self_attn.k_proj.bias",
+    "mask_decoder.transformer.layers.0.self_attn.k_proj.weight",
+    "mask_decoder.transformer.layers.0.self_attn.out_proj.bias",
+    "mask_decoder.transformer.layers.0.self_attn.out_proj.weight",
+    "mask_decoder.transformer.layers.0.self_attn.q_proj.bias",
+    "mask_decoder.transformer.layers.0.self_attn.q_proj.weight",
+    "mask_decoder.transformer.layers.0.self_attn.v_proj.bias",
+    "mask_decoder.transformer.layers.0.self_attn.v_proj.weight",
+    "mask_decoder.transformer.layers.1.cross_attn_image_to_token.k_proj.bias",
+    "mask_decoder.transformer.layers.1.cross_attn_image_to_token.k_proj.weight",
+    "mask_decoder.transformer.layers.1.cross_attn_image_to_token.out_proj.bias",
+    "mask_decoder.transformer.layers.1.cross_attn_image_to_token.out_proj.weight",
+    "mask_decoder.transformer.layers.1.cross_attn_image_to_token.q_proj.bias",
+    "mask_decoder.transformer.layers.1.cross_attn_image_to_token.q_proj.weight",
+    "mask_decoder.transformer.layers.1.cross_attn_image_to_token.v_proj.bias",
+    "mask_decoder.transformer.layers.1.cross_attn_image_to_token.v_proj.weight",
+    "mask_decoder.transformer.layers.1.cross_attn_token_to_image.k_proj.bias",
+    "mask_decoder.transformer.layers.1.cross_attn_token_to_image.k_proj.weight",
+    "mask_decoder.transformer.layers.1.cross_attn_token_to_image.out_proj.bias",
+    "mask_decoder.transformer.layers.1.cross_attn_token_to_image.out_proj.weight",
+    "mask_decoder.transformer.layers.1.cross_attn_token_to_image.q_proj.bias",
+    "mask_decoder.transformer.layers.1.cross_attn_token_to_image.q_proj.weight",
+    "mask_decoder.transformer.layers.1.cross_attn_token_to_image.v_proj.bias",
+    "mask_decoder.transformer.layers.1.cross_attn_token_to_image.v_proj.weight",
+    "mask_decoder.transformer.layers.1.mlp.lin1.bias",
+    "mask_decoder.transformer.layers.1.mlp.lin1.weight",
+    "mask_decoder.transformer.layers.1.mlp.lin2.bias",
+    "mask_decoder.transformer.layers.1.mlp.lin2.weight",
+    "mask_decoder.transformer.layers.1.norm1.bias",
+    "mask_decoder.transformer.layers.1.norm1.weight",
+    "mask_decoder.transformer.layers.1.norm2.bias",
+    "mask_decoder.transformer.layers.1.norm2.weight",
+    "mask_decoder.transformer.layers.1.norm3.bias",
+    "mask_decoder.transformer.layers.1.norm3.weight",
+    "mask_decoder.transformer.layers.1.norm4.bias",
+    "mask_decoder.transformer.layers.1.norm4.weight",
+    "mask_decoder.transformer.layers.1.self_attn.k_proj.bias",
+    "mask_decoder.transformer.layers.1.self_attn.k_proj.weight",
+    "mask_decoder.transformer.layers.1.self_attn.out_proj.bias",
+    "mask_decoder.transformer.layers.1.self_attn.out_proj.weight",
+    "mask_decoder.transformer.layers.1.self_attn.q_proj.bias",
+    "mask_decoder.transformer.layers.1.self_attn.q_proj.weight",
+    "mask_decoder.transformer.layers.1.self_attn.v_proj.bias",
+    "mask_decoder.transformer.layers.1.self_attn.v_proj.weight",
+    "mask_decoder.transformer.norm_final_attn.bias",
+    "mask_decoder.transformer.norm_final_attn.weight",
+    "modal_aligner.conv.0.weight",
+    "modal_aligner.conv.2.weight",
+    "modal_aligner.conv.4.weight",
+    "modal_aligner.conv.6.weight",
+    "modal_aligner.transformer_layers.0.cross_attn.in_proj_bias",
+    "modal_aligner.transformer_layers.0.cross_attn.in_proj_weight",
+    "modal_aligner.transformer_layers.0.cross_attn.out_proj.bias",
+    "modal_aligner.transformer_layers.0.cross_attn.out_proj.weight",
+    "modal_aligner.transformer_layers.0.ffn.0.bias",
+    "modal_aligner.transformer_layers.0.ffn.0.weight",
+    "modal_aligner.transformer_layers.0.ffn.2.bias",
+    "modal_aligner.transformer_layers.0.ffn.2.weight",
+    "modal_aligner.transformer_layers.0.norm1.bias",
+    "modal_aligner.transformer_layers.0.norm1.weight",
+    "modal_aligner.transformer_layers.0.norm2.bias",
+    "modal_aligner.transformer_layers.0.norm2.weight",
+    "modal_aligner.transformer_layers.0.self_attn.in_proj_bias",
+    "modal_aligner.transformer_layers.0.self_attn.in_proj_weight",
+    "modal_aligner.transformer_layers.0.self_attn.out_proj.bias",
+    "modal_aligner.transformer_layers.0.self_attn.out_proj.weight",
+    "prompt_encoder.pe_layer.positional_encoding_gaussian_matrix"
+  ],
+  "direct_or_transpose_initializers": 655,
+  "graph_sha256": {
+    "encoder": "9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe",
+    "text_head": "a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281"
+  },
+  "initializer_to_checkpoint_key": {
+    "encoder:image_encoder.blocks.0.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.0.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.0.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.0.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.0.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.0.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.0.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.0.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.0.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.0.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.0.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.0.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.0.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.0.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.0.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.0.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.1.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.1.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.1.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.1.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.1.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.1.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.1.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.1.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.1.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.1.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.1.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.1.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.1.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.1.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.1.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.10.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.10.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.10.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.10.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.10.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.10.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.10.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.10.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.10.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.10.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.10.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.10.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.10.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.10.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.10.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.11.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.11.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.11.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.11.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.11.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.11.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.11.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.11.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.11.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.11.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.11.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.11.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.11.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.11.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.11.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.12.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.12.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.12.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.12.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.12.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.12.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.12.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.12.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.12.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.12.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.12.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.12.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.12.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.12.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.12.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.13.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.13.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.13.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.13.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.13.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.13.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.13.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.13.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.13.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.13.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.13.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.13.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.13.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.13.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.13.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.14.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.14.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.14.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.14.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.14.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.14.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.14.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.14.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.14.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.14.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.14.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.14.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.14.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.14.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.14.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.15.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.15.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.15.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.15.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.15.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.15.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.15.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.15.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.15.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.15.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.15.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.15.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.15.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.15.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.15.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.16.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.16.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.16.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.16.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.16.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.16.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.16.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.16.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.16.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.16.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.16.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.16.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.16.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.16.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.16.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.17.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.17.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.17.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.17.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.17.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.17.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.17.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.17.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.17.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.17.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.17.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.17.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.17.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.17.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.17.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.18.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.18.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.18.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.18.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.18.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.18.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.18.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.18.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.18.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.18.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.18.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.18.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.18.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.18.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.18.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.19.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.19.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.19.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.19.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.19.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.19.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.19.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.19.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.19.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.19.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.19.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.19.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.19.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.19.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.19.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.2.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.2.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.2.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.2.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.2.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.2.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.2.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.2.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.2.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.2.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.2.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.2.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.2.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.2.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.2.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.20.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.20.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.20.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.20.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.20.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.20.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.20.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.20.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.20.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.20.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.20.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.20.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.20.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.20.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.20.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.21.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.21.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.21.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.21.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.21.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.21.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.21.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.21.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.21.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.21.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.21.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.21.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.21.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.21.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.21.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.22.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.22.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.22.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.22.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.22.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.22.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.22.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.22.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.22.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.22.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.22.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.22.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.22.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.22.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.22.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.23.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.23.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.23.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.23.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.23.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.23.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.23.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.23.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.23.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.23.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.23.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.23.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.23.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.23.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.23.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.3.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.3.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.3.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.3.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.3.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.3.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.3.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.3.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.3.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.3.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.3.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.3.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.3.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.3.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.3.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.4.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.4.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.4.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.4.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.4.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.4.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.4.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.4.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.4.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.4.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.4.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.4.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.4.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.4.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.4.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.5.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.5.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.5.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.5.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.5.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.5.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.5.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.5.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.5.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.5.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.5.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.5.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.5.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.5.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.5.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.6.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.6.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.6.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.6.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.6.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.6.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.6.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.6.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.6.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.6.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.6.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.6.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.6.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.6.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.6.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.7.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.7.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.7.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.7.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.7.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.7.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.7.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.7.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.7.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.7.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.7.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.7.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.7.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.7.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.7.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.8.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.8.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.8.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.8.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.8.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.8.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.8.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.8.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.8.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.8.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.8.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.8.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.8.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.8.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.8.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.MLP_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.9.MLP_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.MLP_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.9.MLP_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.Space_Adapter.D_fc1.bias": {
+      "checkpoint_key": "image_encoder.blocks.9.Space_Adapter.D_fc1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.Space_Adapter.D_fc2.bias": {
+      "checkpoint_key": "image_encoder.blocks.9.Space_Adapter.D_fc2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.attn.proj.bias": {
+      "checkpoint_key": "image_encoder.blocks.9.attn.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.attn.qkv.bias": {
+      "checkpoint_key": "image_encoder.blocks.9.attn.qkv.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.attn.rel_pos_h": {
+      "checkpoint_key": "image_encoder.blocks.9.attn.rel_pos_h",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.attn.rel_pos_w": {
+      "checkpoint_key": "image_encoder.blocks.9.attn.rel_pos_w",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.mlp.lin1.bias": {
+      "checkpoint_key": "image_encoder.blocks.9.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.mlp.lin2.bias": {
+      "checkpoint_key": "image_encoder.blocks.9.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.norm1.bias": {
+      "checkpoint_key": "image_encoder.blocks.9.norm1.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.norm1.weight": {
+      "checkpoint_key": "image_encoder.blocks.9.norm1.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.norm2.bias": {
+      "checkpoint_key": "image_encoder.blocks.9.norm2.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.blocks.9.norm2.weight": {
+      "checkpoint_key": "image_encoder.blocks.9.norm2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.neck.0.weight": {
+      "checkpoint_key": "image_encoder.neck.0.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.neck.2.weight": {
+      "checkpoint_key": "image_encoder.neck.2.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.patch_embed.proj.bias": {
+      "checkpoint_key": "image_encoder.patch_embed.proj.bias",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.patch_embed.proj.weight": {
+      "checkpoint_key": "image_encoder.patch_embed.proj.weight",
+      "transform": "direct"
+    },
+    "encoder:image_encoder.pos_embed": {
+      "checkpoint_key": "image_encoder.pos_embed",
+      "transform": "direct"
+    },
+    "encoder:onnx::Add_10043": {
+      "checkpoint_key": "image_encoder.neck.1.bias",
+      "transform": "broadcast_reshape"
+    },
+    "encoder:onnx::Add_10047": {
+      "checkpoint_key": "image_encoder.neck.3.bias",
+      "transform": "broadcast_reshape"
+    },
+    "encoder:onnx::MatMul_10007": {
+      "checkpoint_key": "image_encoder.blocks.22.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10008": {
+      "checkpoint_key": "image_encoder.blocks.22.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10009": {
+      "checkpoint_key": "image_encoder.blocks.22.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10020": {
+      "checkpoint_key": "image_encoder.blocks.22.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10021": {
+      "checkpoint_key": "image_encoder.blocks.22.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10022": {
+      "checkpoint_key": "image_encoder.blocks.22.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10023": {
+      "checkpoint_key": "image_encoder.blocks.22.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10024": {
+      "checkpoint_key": "image_encoder.blocks.23.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10033": {
+      "checkpoint_key": "image_encoder.blocks.23.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10034": {
+      "checkpoint_key": "image_encoder.blocks.23.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10035": {
+      "checkpoint_key": "image_encoder.blocks.23.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10036": {
+      "checkpoint_key": "image_encoder.blocks.23.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10037": {
+      "checkpoint_key": "image_encoder.blocks.23.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10038": {
+      "checkpoint_key": "image_encoder.blocks.23.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_10039": {
+      "checkpoint_key": "image_encoder.blocks.23.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9188": {
+      "checkpoint_key": "image_encoder.blocks.0.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9197": {
+      "checkpoint_key": "image_encoder.blocks.0.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9198": {
+      "checkpoint_key": "image_encoder.blocks.0.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9199": {
+      "checkpoint_key": "image_encoder.blocks.0.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9212": {
+      "checkpoint_key": "image_encoder.blocks.0.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9213": {
+      "checkpoint_key": "image_encoder.blocks.0.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9214": {
+      "checkpoint_key": "image_encoder.blocks.0.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9215": {
+      "checkpoint_key": "image_encoder.blocks.0.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9230": {
+      "checkpoint_key": "image_encoder.blocks.1.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9239": {
+      "checkpoint_key": "image_encoder.blocks.1.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9240": {
+      "checkpoint_key": "image_encoder.blocks.1.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9241": {
+      "checkpoint_key": "image_encoder.blocks.1.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9252": {
+      "checkpoint_key": "image_encoder.blocks.1.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9253": {
+      "checkpoint_key": "image_encoder.blocks.1.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9254": {
+      "checkpoint_key": "image_encoder.blocks.1.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9255": {
+      "checkpoint_key": "image_encoder.blocks.1.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9270": {
+      "checkpoint_key": "image_encoder.blocks.2.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9279": {
+      "checkpoint_key": "image_encoder.blocks.2.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9280": {
+      "checkpoint_key": "image_encoder.blocks.2.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9281": {
+      "checkpoint_key": "image_encoder.blocks.2.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9292": {
+      "checkpoint_key": "image_encoder.blocks.2.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9293": {
+      "checkpoint_key": "image_encoder.blocks.2.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9294": {
+      "checkpoint_key": "image_encoder.blocks.2.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9295": {
+      "checkpoint_key": "image_encoder.blocks.2.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9310": {
+      "checkpoint_key": "image_encoder.blocks.3.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9319": {
+      "checkpoint_key": "image_encoder.blocks.3.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9320": {
+      "checkpoint_key": "image_encoder.blocks.3.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9321": {
+      "checkpoint_key": "image_encoder.blocks.3.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9332": {
+      "checkpoint_key": "image_encoder.blocks.3.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9333": {
+      "checkpoint_key": "image_encoder.blocks.3.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9334": {
+      "checkpoint_key": "image_encoder.blocks.3.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9335": {
+      "checkpoint_key": "image_encoder.blocks.3.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9350": {
+      "checkpoint_key": "image_encoder.blocks.4.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9359": {
+      "checkpoint_key": "image_encoder.blocks.4.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9360": {
+      "checkpoint_key": "image_encoder.blocks.4.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9361": {
+      "checkpoint_key": "image_encoder.blocks.4.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9372": {
+      "checkpoint_key": "image_encoder.blocks.4.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9373": {
+      "checkpoint_key": "image_encoder.blocks.4.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9374": {
+      "checkpoint_key": "image_encoder.blocks.4.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9375": {
+      "checkpoint_key": "image_encoder.blocks.4.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9376": {
+      "checkpoint_key": "image_encoder.blocks.5.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9385": {
+      "checkpoint_key": "image_encoder.blocks.5.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9386": {
+      "checkpoint_key": "image_encoder.blocks.5.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9387": {
+      "checkpoint_key": "image_encoder.blocks.5.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9388": {
+      "checkpoint_key": "image_encoder.blocks.5.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9389": {
+      "checkpoint_key": "image_encoder.blocks.5.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9390": {
+      "checkpoint_key": "image_encoder.blocks.5.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9391": {
+      "checkpoint_key": "image_encoder.blocks.5.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9406": {
+      "checkpoint_key": "image_encoder.blocks.6.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9415": {
+      "checkpoint_key": "image_encoder.blocks.6.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9416": {
+      "checkpoint_key": "image_encoder.blocks.6.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9417": {
+      "checkpoint_key": "image_encoder.blocks.6.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9428": {
+      "checkpoint_key": "image_encoder.blocks.6.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9429": {
+      "checkpoint_key": "image_encoder.blocks.6.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9430": {
+      "checkpoint_key": "image_encoder.blocks.6.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9431": {
+      "checkpoint_key": "image_encoder.blocks.6.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9446": {
+      "checkpoint_key": "image_encoder.blocks.7.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9455": {
+      "checkpoint_key": "image_encoder.blocks.7.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9456": {
+      "checkpoint_key": "image_encoder.blocks.7.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9457": {
+      "checkpoint_key": "image_encoder.blocks.7.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9468": {
+      "checkpoint_key": "image_encoder.blocks.7.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9469": {
+      "checkpoint_key": "image_encoder.blocks.7.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9470": {
+      "checkpoint_key": "image_encoder.blocks.7.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9471": {
+      "checkpoint_key": "image_encoder.blocks.7.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9486": {
+      "checkpoint_key": "image_encoder.blocks.8.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9495": {
+      "checkpoint_key": "image_encoder.blocks.8.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9496": {
+      "checkpoint_key": "image_encoder.blocks.8.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9497": {
+      "checkpoint_key": "image_encoder.blocks.8.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9508": {
+      "checkpoint_key": "image_encoder.blocks.8.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9509": {
+      "checkpoint_key": "image_encoder.blocks.8.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9510": {
+      "checkpoint_key": "image_encoder.blocks.8.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9511": {
+      "checkpoint_key": "image_encoder.blocks.8.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9526": {
+      "checkpoint_key": "image_encoder.blocks.9.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9535": {
+      "checkpoint_key": "image_encoder.blocks.9.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9536": {
+      "checkpoint_key": "image_encoder.blocks.9.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9537": {
+      "checkpoint_key": "image_encoder.blocks.9.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9548": {
+      "checkpoint_key": "image_encoder.blocks.9.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9549": {
+      "checkpoint_key": "image_encoder.blocks.9.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9550": {
+      "checkpoint_key": "image_encoder.blocks.9.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9551": {
+      "checkpoint_key": "image_encoder.blocks.9.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9566": {
+      "checkpoint_key": "image_encoder.blocks.10.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9575": {
+      "checkpoint_key": "image_encoder.blocks.10.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9576": {
+      "checkpoint_key": "image_encoder.blocks.10.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9577": {
+      "checkpoint_key": "image_encoder.blocks.10.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9588": {
+      "checkpoint_key": "image_encoder.blocks.10.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9589": {
+      "checkpoint_key": "image_encoder.blocks.10.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9590": {
+      "checkpoint_key": "image_encoder.blocks.10.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9591": {
+      "checkpoint_key": "image_encoder.blocks.10.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9592": {
+      "checkpoint_key": "image_encoder.blocks.11.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9601": {
+      "checkpoint_key": "image_encoder.blocks.11.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9602": {
+      "checkpoint_key": "image_encoder.blocks.11.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9603": {
+      "checkpoint_key": "image_encoder.blocks.11.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9604": {
+      "checkpoint_key": "image_encoder.blocks.11.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9605": {
+      "checkpoint_key": "image_encoder.blocks.11.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9606": {
+      "checkpoint_key": "image_encoder.blocks.11.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9607": {
+      "checkpoint_key": "image_encoder.blocks.11.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9622": {
+      "checkpoint_key": "image_encoder.blocks.12.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9631": {
+      "checkpoint_key": "image_encoder.blocks.12.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9632": {
+      "checkpoint_key": "image_encoder.blocks.12.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9633": {
+      "checkpoint_key": "image_encoder.blocks.12.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9644": {
+      "checkpoint_key": "image_encoder.blocks.12.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9645": {
+      "checkpoint_key": "image_encoder.blocks.12.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9646": {
+      "checkpoint_key": "image_encoder.blocks.12.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9647": {
+      "checkpoint_key": "image_encoder.blocks.12.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9662": {
+      "checkpoint_key": "image_encoder.blocks.13.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9671": {
+      "checkpoint_key": "image_encoder.blocks.13.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9672": {
+      "checkpoint_key": "image_encoder.blocks.13.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9673": {
+      "checkpoint_key": "image_encoder.blocks.13.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9684": {
+      "checkpoint_key": "image_encoder.blocks.13.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9685": {
+      "checkpoint_key": "image_encoder.blocks.13.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9686": {
+      "checkpoint_key": "image_encoder.blocks.13.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9687": {
+      "checkpoint_key": "image_encoder.blocks.13.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9702": {
+      "checkpoint_key": "image_encoder.blocks.14.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9711": {
+      "checkpoint_key": "image_encoder.blocks.14.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9712": {
+      "checkpoint_key": "image_encoder.blocks.14.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9713": {
+      "checkpoint_key": "image_encoder.blocks.14.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9724": {
+      "checkpoint_key": "image_encoder.blocks.14.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9725": {
+      "checkpoint_key": "image_encoder.blocks.14.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9726": {
+      "checkpoint_key": "image_encoder.blocks.14.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9727": {
+      "checkpoint_key": "image_encoder.blocks.14.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9742": {
+      "checkpoint_key": "image_encoder.blocks.15.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9751": {
+      "checkpoint_key": "image_encoder.blocks.15.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9752": {
+      "checkpoint_key": "image_encoder.blocks.15.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9753": {
+      "checkpoint_key": "image_encoder.blocks.15.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9764": {
+      "checkpoint_key": "image_encoder.blocks.15.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9765": {
+      "checkpoint_key": "image_encoder.blocks.15.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9766": {
+      "checkpoint_key": "image_encoder.blocks.15.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9767": {
+      "checkpoint_key": "image_encoder.blocks.15.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9782": {
+      "checkpoint_key": "image_encoder.blocks.16.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9791": {
+      "checkpoint_key": "image_encoder.blocks.16.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9792": {
+      "checkpoint_key": "image_encoder.blocks.16.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9793": {
+      "checkpoint_key": "image_encoder.blocks.16.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9804": {
+      "checkpoint_key": "image_encoder.blocks.16.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9805": {
+      "checkpoint_key": "image_encoder.blocks.16.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9806": {
+      "checkpoint_key": "image_encoder.blocks.16.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9807": {
+      "checkpoint_key": "image_encoder.blocks.16.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9808": {
+      "checkpoint_key": "image_encoder.blocks.17.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9817": {
+      "checkpoint_key": "image_encoder.blocks.17.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9818": {
+      "checkpoint_key": "image_encoder.blocks.17.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9819": {
+      "checkpoint_key": "image_encoder.blocks.17.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9820": {
+      "checkpoint_key": "image_encoder.blocks.17.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9821": {
+      "checkpoint_key": "image_encoder.blocks.17.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9822": {
+      "checkpoint_key": "image_encoder.blocks.17.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9823": {
+      "checkpoint_key": "image_encoder.blocks.17.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9838": {
+      "checkpoint_key": "image_encoder.blocks.18.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9847": {
+      "checkpoint_key": "image_encoder.blocks.18.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9848": {
+      "checkpoint_key": "image_encoder.blocks.18.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9849": {
+      "checkpoint_key": "image_encoder.blocks.18.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9860": {
+      "checkpoint_key": "image_encoder.blocks.18.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9861": {
+      "checkpoint_key": "image_encoder.blocks.18.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9862": {
+      "checkpoint_key": "image_encoder.blocks.18.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9863": {
+      "checkpoint_key": "image_encoder.blocks.18.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9878": {
+      "checkpoint_key": "image_encoder.blocks.19.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9887": {
+      "checkpoint_key": "image_encoder.blocks.19.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9888": {
+      "checkpoint_key": "image_encoder.blocks.19.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9889": {
+      "checkpoint_key": "image_encoder.blocks.19.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9900": {
+      "checkpoint_key": "image_encoder.blocks.19.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9901": {
+      "checkpoint_key": "image_encoder.blocks.19.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9902": {
+      "checkpoint_key": "image_encoder.blocks.19.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9903": {
+      "checkpoint_key": "image_encoder.blocks.19.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9918": {
+      "checkpoint_key": "image_encoder.blocks.20.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9927": {
+      "checkpoint_key": "image_encoder.blocks.20.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9928": {
+      "checkpoint_key": "image_encoder.blocks.20.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9929": {
+      "checkpoint_key": "image_encoder.blocks.20.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9940": {
+      "checkpoint_key": "image_encoder.blocks.20.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9941": {
+      "checkpoint_key": "image_encoder.blocks.20.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9942": {
+      "checkpoint_key": "image_encoder.blocks.20.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9943": {
+      "checkpoint_key": "image_encoder.blocks.20.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9958": {
+      "checkpoint_key": "image_encoder.blocks.21.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9967": {
+      "checkpoint_key": "image_encoder.blocks.21.attn.proj.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9968": {
+      "checkpoint_key": "image_encoder.blocks.21.Space_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9969": {
+      "checkpoint_key": "image_encoder.blocks.21.Space_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9980": {
+      "checkpoint_key": "image_encoder.blocks.21.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9981": {
+      "checkpoint_key": "image_encoder.blocks.21.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9982": {
+      "checkpoint_key": "image_encoder.blocks.21.MLP_Adapter.D_fc1.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9983": {
+      "checkpoint_key": "image_encoder.blocks.21.MLP_Adapter.D_fc2.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::MatMul_9998": {
+      "checkpoint_key": "image_encoder.blocks.22.attn.qkv.weight",
+      "transform": "transpose"
+    },
+    "encoder:onnx::Mul_10041": {
+      "checkpoint_key": "image_encoder.neck.1.weight",
+      "transform": "broadcast_reshape"
+    },
+    "encoder:onnx::Mul_10045": {
+      "checkpoint_key": "image_encoder.neck.3.weight",
+      "transform": "broadcast_reshape"
+    },
+    "encoder:pixel_mean": {
+      "checkpoint_keys": [],
+      "transform": "fixed_normalization_constant"
+    },
+    "encoder:pixel_std": {
+      "checkpoint_keys": [],
+      "transform": "fixed_normalization_constant"
+    },
+    "text_head:modal_aligner.conv.0.weight": {
+      "checkpoint_key": "modal_aligner.conv.0.weight",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.conv.2.weight": {
+      "checkpoint_key": "modal_aligner.conv.2.weight",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.conv.4.weight": {
+      "checkpoint_key": "modal_aligner.conv.4.weight",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.conv.6.weight": {
+      "checkpoint_key": "modal_aligner.conv.6.weight",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.cross_attn.out_proj.bias": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.cross_attn.out_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.cross_attn.out_proj.weight": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.cross_attn.out_proj.weight",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.ffn.0.bias": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.ffn.0.bias",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.ffn.2.bias": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.ffn.2.bias",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.norm1.bias": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.norm1.bias",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.norm1.weight": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.norm1.weight",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.norm2.bias": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.norm2.bias",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.norm2.weight": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.norm2.weight",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.self_attn.in_proj_bias": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.self_attn.in_proj_bias",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.self_attn.out_proj.bias": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.self_attn.out_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:modal_aligner.transformer_layers.0.self_attn.out_proj.weight": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.self_attn.out_proj.weight",
+      "transform": "direct"
+    },
+    "text_head:onnx::Add_1295": {
+      "checkpoint_keys": [
+        "modal_aligner.transformer_layers.0.cross_attn.in_proj_bias"
+      ],
+      "transform": "qkv_split"
+    },
+    "text_head:onnx::Add_1297": {
+      "checkpoint_keys": [
+        "modal_aligner.transformer_layers.0.cross_attn.in_proj_bias"
+      ],
+      "transform": "qkv_split"
+    },
+    "text_head:onnx::Add_1299": {
+      "checkpoint_keys": [
+        "modal_aligner.transformer_layers.0.cross_attn.in_proj_bias"
+      ],
+      "transform": "qkv_split"
+    },
+    "text_head:onnx::Add_1336": {
+      "checkpoint_key": "prompt_encoder.pe_layer.positional_encoding_gaussian_matrix",
+      "transform": "derived_dense_pe"
+    },
+    "text_head:onnx::Add_1510": {
+      "checkpoint_key": "mask_decoder.output_upscaling.1.bias",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Add_1514": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.1.bias",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Add_1518": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.4.bias",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Add_1522": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.7.bias",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Add_1526": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.10.bias",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Add_1530": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.13.bias",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Expand_1325": {
+      "checkpoint_keys": [
+        "mask_decoder.iou_token.weight",
+        "mask_decoder.mask_tokens.weight"
+      ],
+      "transform": "concatenate_and_expand"
+    },
+    "text_head:onnx::MatMul_1248": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.self_attn.in_proj_weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1300": {
+      "checkpoint_keys": [
+        "modal_aligner.transformer_layers.0.cross_attn.in_proj_weight"
+      ],
+      "transform": "qkv_split_transpose"
+    },
+    "text_head:onnx::MatMul_1301": {
+      "checkpoint_keys": [
+        "modal_aligner.transformer_layers.0.cross_attn.in_proj_weight"
+      ],
+      "transform": "qkv_split_transpose"
+    },
+    "text_head:onnx::MatMul_1302": {
+      "checkpoint_keys": [
+        "modal_aligner.transformer_layers.0.cross_attn.in_proj_weight"
+      ],
+      "transform": "qkv_split_transpose"
+    },
+    "text_head:onnx::MatMul_1322": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.ffn.0.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1323": {
+      "checkpoint_key": "modal_aligner.transformer_layers.0.ffn.2.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1337": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.self_attn.q_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1338": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.self_attn.k_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1339": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.self_attn.v_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1359": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.self_attn.out_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1360": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_token_to_image.q_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1361": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_token_to_image.k_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1362": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_token_to_image.v_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1382": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_token_to_image.out_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1383": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1384": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1385": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_image_to_token.q_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1386": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_image_to_token.k_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1387": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_image_to_token.v_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1407": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_image_to_token.out_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1408": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.self_attn.q_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1409": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.self_attn.k_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1410": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.self_attn.v_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1430": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.self_attn.out_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1431": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_token_to_image.q_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1432": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_token_to_image.k_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1433": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_token_to_image.v_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1453": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_token_to_image.out_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1454": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.mlp.lin1.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1455": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.mlp.lin2.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1456": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_image_to_token.q_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1457": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_image_to_token.k_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1458": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_image_to_token.v_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1478": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_image_to_token.out_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1479": {
+      "checkpoint_key": "mask_decoder.transformer.final_attn_token_to_image.q_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1480": {
+      "checkpoint_key": "mask_decoder.transformer.final_attn_token_to_image.k_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1481": {
+      "checkpoint_key": "mask_decoder.transformer.final_attn_token_to_image.v_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::MatMul_1501": {
+      "checkpoint_key": "mask_decoder.transformer.final_attn_token_to_image.out_proj.weight",
+      "transform": "transpose"
+    },
+    "text_head:onnx::Mul_1508": {
+      "checkpoint_key": "mask_decoder.output_upscaling.1.weight",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Mul_1512": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.1.weight",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Mul_1516": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.4.weight",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Mul_1520": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.7.weight",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Mul_1524": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.10.weight",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:onnx::Mul_1528": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.13.weight",
+      "transform": "broadcast_reshape"
+    },
+    "text_head:output_hypernetworks_mlps_hr.layers.0.bias": {
+      "checkpoint_key": "mask_decoder.output_hypernetworks_mlps_hr.layers.0.bias",
+      "transform": "direct"
+    },
+    "text_head:output_hypernetworks_mlps_hr.layers.0.weight": {
+      "checkpoint_key": "mask_decoder.output_hypernetworks_mlps_hr.layers.0.weight",
+      "transform": "direct"
+    },
+    "text_head:output_hypernetworks_mlps_hr.layers.1.bias": {
+      "checkpoint_key": "mask_decoder.output_hypernetworks_mlps_hr.layers.1.bias",
+      "transform": "direct"
+    },
+    "text_head:output_hypernetworks_mlps_hr.layers.1.weight": {
+      "checkpoint_key": "mask_decoder.output_hypernetworks_mlps_hr.layers.1.weight",
+      "transform": "direct"
+    },
+    "text_head:output_hypernetworks_mlps_hr.layers.2.bias": {
+      "checkpoint_key": "mask_decoder.output_hypernetworks_mlps_hr.layers.2.bias",
+      "transform": "direct"
+    },
+    "text_head:output_hypernetworks_mlps_hr.layers.2.weight": {
+      "checkpoint_key": "mask_decoder.output_hypernetworks_mlps_hr.layers.2.weight",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling.0.bias": {
+      "checkpoint_key": "mask_decoder.output_upscaling.0.bias",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling.0.weight": {
+      "checkpoint_key": "mask_decoder.output_upscaling.0.weight",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling.3.bias": {
+      "checkpoint_key": "mask_decoder.output_upscaling.3.bias",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling.3.weight": {
+      "checkpoint_key": "mask_decoder.output_upscaling.3.weight",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.0.bias": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.0.bias",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.0.weight": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.0.weight",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.12.bias": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.12.bias",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.12.weight": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.12.weight",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.15.bias": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.15.bias",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.15.weight": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.15.weight",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.3.bias": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.3.bias",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.3.weight": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.3.weight",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.6.bias": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.6.bias",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.6.weight": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.6.weight",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.9.bias": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.9.bias",
+      "transform": "direct"
+    },
+    "text_head:output_upscaling_hr.9.weight": {
+      "checkpoint_key": "mask_decoder.output_upscaling_hr.9.weight",
+      "transform": "direct"
+    },
+    "text_head:transformer.final_attn_token_to_image.k_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.final_attn_token_to_image.k_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.final_attn_token_to_image.out_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.final_attn_token_to_image.out_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.final_attn_token_to_image.q_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.final_attn_token_to_image.q_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.final_attn_token_to_image.v_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.final_attn_token_to_image.v_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.cross_attn_image_to_token.k_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_image_to_token.k_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.cross_attn_image_to_token.out_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_image_to_token.out_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.cross_attn_image_to_token.q_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_image_to_token.q_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.cross_attn_image_to_token.v_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_image_to_token.v_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.cross_attn_token_to_image.k_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_token_to_image.k_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.cross_attn_token_to_image.out_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_token_to_image.out_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.cross_attn_token_to_image.q_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_token_to_image.q_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.cross_attn_token_to_image.v_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.cross_attn_token_to_image.v_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.mlp.lin1.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.mlp.lin2.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.norm1.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.norm1.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.norm1.weight": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.norm1.weight",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.norm2.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.norm2.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.norm2.weight": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.norm2.weight",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.norm3.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.norm3.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.norm3.weight": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.norm3.weight",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.norm4.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.norm4.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.norm4.weight": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.norm4.weight",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.self_attn.k_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.self_attn.k_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.self_attn.out_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.self_attn.out_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.self_attn.q_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.self_attn.q_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.0.self_attn.v_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.0.self_attn.v_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.cross_attn_image_to_token.k_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_image_to_token.k_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.cross_attn_image_to_token.out_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_image_to_token.out_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.cross_attn_image_to_token.q_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_image_to_token.q_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.cross_attn_image_to_token.v_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_image_to_token.v_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.cross_attn_token_to_image.k_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_token_to_image.k_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.cross_attn_token_to_image.out_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_token_to_image.out_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.cross_attn_token_to_image.q_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_token_to_image.q_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.cross_attn_token_to_image.v_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.cross_attn_token_to_image.v_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.mlp.lin1.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.mlp.lin1.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.mlp.lin2.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.mlp.lin2.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.norm1.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.norm1.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.norm1.weight": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.norm1.weight",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.norm2.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.norm2.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.norm2.weight": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.norm2.weight",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.norm3.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.norm3.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.norm3.weight": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.norm3.weight",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.norm4.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.norm4.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.norm4.weight": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.norm4.weight",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.self_attn.k_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.self_attn.k_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.self_attn.out_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.self_attn.out_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.self_attn.q_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.self_attn.q_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.layers.1.self_attn.v_proj.bias": {
+      "checkpoint_key": "mask_decoder.transformer.layers.1.self_attn.v_proj.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.norm_final_attn.bias": {
+      "checkpoint_key": "mask_decoder.transformer.norm_final_attn.bias",
+      "transform": "direct"
+    },
+    "text_head:transformer.norm_final_attn.weight": {
+      "checkpoint_key": "mask_decoder.transformer.norm_final_attn.weight",
+      "transform": "direct"
+    }
+  },
+  "non_checkpoint_initializers": [
+    "encoder:pixel_mean",
+    "encoder:pixel_std"
+  ],
+  "unmatched_initializers": [],
+  "unmatched_manifest_keys": []
+}

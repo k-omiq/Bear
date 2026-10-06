@@ -1,0 +1,45 @@
+{
+  "description": "External /usr/bin/time -l readings for separate same-prepared-page-07 probe processes",
+  "host": {
+    "model": "Mac17,3",
+    "chip": "Apple M5",
+    "unified_memory_bytes": 34359738368,
+    "platform": "macOS 27.0 arm64"
+  },
+  "measurement": {
+    "process_wall_includes": "startup, input/graph verification, model or session load, one warmup, two timed inference passes, parity, output write, and WebGPU separate profiling where applicable",
+    "maximum_resident_set_bytes": "macOS /usr/bin/time -l maximum resident set size; process high-water, not device-memory total",
+    "peak_memory_footprint_bytes": "macOS /usr/bin/time -l peak memory footprint; not a standalone GPU allocation measure",
+    "timed_warm_inference_is_recorded_in": "the corresponding probe result JSON, not this external process wall timer"
+  },
+  "runs": {
+    "torch_cpu": {
+      "result": "torch-cpu-page07.json",
+      "log": "artifacts/torch-cpu-probe.log",
+      "wall_seconds": 15.04,
+      "maximum_resident_set_bytes": 5679906816,
+      "peak_memory_footprint_bytes": 5622354672
+    },
+    "torch_mps": {
+      "result": "torch-mps-page07.json",
+      "log": "artifacts/torch-mps-probe.log",
+      "wall_seconds": 10.46,
+      "maximum_resident_set_bytes": 2955837440,
+      "peak_memory_footprint_bytes": 6784649040
+    },
+    "ort_cpu": {
+      "result": "ort-cpu-page07.json",
+      "log": "artifacts/ort-cpu-page07-probe.log",
+      "wall_seconds": 33.72,
+      "maximum_resident_set_bytes": 10903158784,
+      "peak_memory_footprint_bytes": 10882622176
+    },
+    "ort_webgpu": {
+      "result": "ort-webgpu-page07.json",
+      "log": "artifacts/ort-webgpu-page07-probe.log",
+      "wall_seconds": 13.18,
+      "maximum_resident_set_bytes": 2580545536,
+      "peak_memory_footprint_bytes": 7129336928
+    }
+  }
+}

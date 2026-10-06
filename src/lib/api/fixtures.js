@@ -43,18 +43,14 @@ const WEEKS_AGO_3 = { key: 'time.relative.weeksAgo', params: { count: 3 } }
 /** @typedef {import('./pagebuilder.js').BuildContext} BuildContext */
 
 /**
- * Every cause `review.js` can report, one region each - eleven of them, on
- * Wandering Moon Ch. 12. Nothing that is not a review cause belongs in here.
+ * Every cause a region can be flagged for today, one region each - five of
+ * them, on Wandering Moon Ch. 12. Nothing that is not a review cause belongs
+ * in here. `review.js`'s legacy cloud causes are not: nothing makes them any
+ * more (see `pagebuilder.js#flagCause`).
  */
 const EVERY_REVIEW_CAUSE = Object.freeze([
   [2, 0, 'fitting'],
   [2, 1, 'large'],
-  [2, 2, 'cloud-accepted'],
-  [3, 0, 'cloud-rejected:safety-filter'],
-  [3, 1, 'cloud-rejected:transport-error'],
-  [3, 2, 'cloud-rejected:parameter-test'],
-  [4, 0, 'cloud-rejected:residual-test'],
-  [4, 1, 'cloud-rejected:structural'],
   [5, 0, 'gate-low'],
   [6, 0, 'declined'],
   [6, 1, 'gate-outside'],
@@ -73,8 +69,6 @@ function decorateWanderingMoon(project, ctx) {
   // Text the auto pass never found - the AI mask brush's fallback case, not a
   // review cause and not queueable. See `markUndetected`.
   markUndetected(chapter.pages[4], 2, ctx)
-  chapter.pages[8].status = 'skipped'
-  chapter.pages[8].skipReason = 'input.skipReason.truncatedJpeg'
   project.interruptedJob = { chapterId: chapter.id, pageIndex: 7 }
 }
 
@@ -86,8 +80,6 @@ function decorateNineSkies(project, ctx) {
   const chapter = project.chapters[0]
   flagCause(chapter.pages[0], 0, 'fitting', ctx)
   flagCause(chapter.pages[3], 0, 'large', ctx)
-  flagCause(chapter.pages[6], 0, 'cloud-accepted', ctx)
-  flagCause(chapter.pages[9], 1, 'cloud-rejected:safety-filter', ctx)
 }
 
 /** @type {ReadonlyArray<Object>} */
@@ -108,10 +100,6 @@ const PROJECT_SPECS = Object.freeze([
         prefix: 'wm',
         fill: 'none',
         lastOpened: HOURS_AGO_2,
-        inputReports: [
-          { key: 'notice.input.junkSkipped', params: { count: 2 }, tone: 'info' },
-          { key: 'notice.input.duplicateBasename', params: { file: 'wm014' }, tone: 'warn' },
-        ],
       },
       { number: 11, name: 'Grey Tide', pages: 22, prefix: 'wm', fill: 'all', lastOpened: DAYS_AGO_3 },
       { number: 10, name: 'Nightfall', pages: 20, prefix: 'wm', fill: 'all', lastOpened: LAST_WEEK },
@@ -334,11 +322,11 @@ export function aboutInfo() {
   return {
     appVersion: APP_VERSION,
     facts: [
-      { labelKey: 'about.fact.licence', value: 'GPL-3.0-or-later' },
+      { labelKey: 'about.fact.licence', value: 'GPL-3.0-only' },
       { labelKey: 'about.fact.source', value: 'https://example.invalid/manga-cleaner' },
       {
         labelKey: 'about.fact.detector',
-        value: 'comic_text_detector (GPL-3.0) · osd_lstm 3.72 MB (Apache-2.0)',
+        value: 'Available separately: Comic Text Detector (CTD), comic_text_detector (GPL-3.0) · Ogkalu comic text & bubble detector (Small and Full), ogkalu/comic-text-and-bubble-detector (Apache-2.0) · SAM-TS-L lettering mask, mayocream/koharu-text-sam-ts-l (Apache-2.0 per its model card; setup downloads and exports it on this computer or on your own cloud GPU) · image-script-identification osd_lstm (Apache-2.0)',
       },
       {
         labelKey: 'about.fact.engines',
@@ -346,7 +334,7 @@ export function aboutInfo() {
       },
       {
         labelKey: 'about.fact.cloud',
-        value: 'Google gemini-3.1-flash-image, paid tier only, opt-in per request',
+        value: 'Modal or Beam, your own account, off by default, confirmed per request',
       },
       { labelKey: 'about.fact.runtime', value: 'ONNX Runtime, CPU execution provider' },
     ],

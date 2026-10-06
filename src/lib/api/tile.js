@@ -61,8 +61,9 @@
  *
  * A hash decides staleness, an mtime only explains it. The token
  * is folded from the page's own content hashes - the source `sha256` and, for
- * `cleaned`, the `mask_sha256` and revision of every mask on the page - so the
- * URL changes exactly when the bytes behind it change, and never otherwise. The
+ * `cleaned`, the native appearance digests of the page and of every layer on
+ * it (see `pageVersion`) - so the URL changes exactly when the bytes behind it
+ * change, and never otherwise. The
  * protocol handler can then answer `Cache-Control: immutable`, which is the
  * whole reason the token exists: without it the webview would either re-fetch
  * every page on every render or show a stale one after an edit.
@@ -96,6 +97,7 @@ export const PROXY_SHORT_EDGE = 1024
  * immutable cache.
  */
 export const PROXY_TILE_LONG_EDGE = 2048
+export const COLOR_PIPELINE_VERSION = 1
 
 /**
  * The two variants the protocol serves. `original` is `PageArtwork`'s word for
@@ -200,6 +202,14 @@ export function proxyPlan(page) {
  * it out asks for the page at its own resolution, which is reserved
  * for the viewport past 100% zoom.
  *
+ * A `cleaned` URL also carries `a`, the native appearance this copy of the
+ * page was listed with. The protocol draws from the manifest as it is now,
+ * and this copy can be older - a page listing read before a layer write
+ * landed and installed after it - so it lets a response be cached only when
+ * `a` names the state the pixels came from, and answers any other with
+ * `no-store` (`tile.rs#serve_request`). A page with no native digest (the
+ * mock, a run's stub header) sends none and is never cached.
+ *
  * @param {import('./backend.js').ApiPage|null|undefined} page
  * @param {TileVariant} variant
  * @param {number} [tile]
@@ -211,45 +221,127 @@ export function tileUrl(page, variant, tile) {
   if (tile !== undefined && !(Number.isInteger(tile) && tile >= 0)) return null
   const chapter = encodeURIComponent(page.chapterId)
   const path = tile === undefined ? '' : `/${tile}`
-  return `${origin}${chapter}/${page.index}/${variant}${path}?v=${pageVersion(page, variant)}`
+  const appearance = variant === 'cleaned' && page.appearance ? `&a=${encodeURIComponent(page.appearance)}` : ''
+  return `${origin}${chapter}/${page.index}/${variant}${path}?v=${pageVersion(page, variant)}${appearance}`
+}
+
+/**
+ * The URL of one detected region's mask image, or `null` when there is no
+ * protocol to serve it (the mock, the tests) or nothing to name.
+ *
+ *     tile://localhost/<chapterId>/<pageIndex>/detection/<regionId>?v=<maskSha256>.<sequence>
+ *
+ * The response is a PNG cropped to the mask's tight bounds: opaque white
+ * where Clean may erase (the mask with its padding, and the lettering),
+ * transparent elsewhere. Where it sits on the page is not in the URL but in
+ * the `x-mask-bounds` header, in page pixels, so it is read with `fetch`
+ * rather than an `<img>` (`editor/detectionmasks.svelte.js`).
+ *
+ * `v` is the mask's own digest and its `sequence`, which is one more than the
+ * hand edits it has had, so the URL moves whenever the drawn pixels do: an
+ * edit can change the lettering and leave the mask file's digest as it was,
+ * and the sequence moves then too. The interface caches by URL alone; the
+ * protocol answers `no-store` because it keeps no copy of its own.
+ * A region with no mask has nothing to fetch and gets `null` too.
+ *
+ * @param {import('./backend.js').ApiPage|null|undefined} page
+ * @param {import('./backend.js').ApiRegion|null|undefined} region
+ * @returns {string|null}
+ */
+export function detectionMaskUrl(page, region) {
+  const origin = tileOrigin()
+  if (!origin || !page || !page.chapterId || !Number.isInteger(page.index)) return null
+  if (!region || typeof region.id !== 'string' || !region.id || !region.mask) return null
+  const sha = region.mask.provenance?.mask_sha256
+  const sequence = Number.isInteger(region.mask.sequence) ? region.mask.sequence : 1
+  const version = `${typeof sha === 'string' ? sha : ''}.${sequence}`
+  return `${origin}${encodeURIComponent(page.chapterId)}/${page.index}/detection/` +
+    `${encodeURIComponent(region.id)}?v=${encodeURIComponent(version)}`
+}
+
+/**
+ * The URL of one patch's layer as page `page` draws it, or `null` when there
+ * is no protocol to serve it (the mock, the tests) or no layer to name.
+ *
+ *     tile://localhost/<chapterId>/<pageIndex>/layer/<regionId>?v=<version>
+ *
+ * The editor draws a page as its `source` tiles with one of these over them
+ * per patch (`editor/PatchLayers.svelte`), so a clean changes one image and
+ * never the page. The response is the part of the patch that lands on `page`
+ * - in a longstrip, `region` may belong to the page `anchor` and reach across
+ * a join - as a see-through PNG on the page's proxy grid, with where it sits
+ * in the `x-layer-bounds` header, in proxy pixels. A patch with nothing on
+ * the page answers `204`.
+ *
+ * `v` folds `mask.layerKey` (`tile::layer_appearance`), which moves with the
+ * patch's pixels and geometry and never with its opacity, which the canvas
+ * draws; and the two pages' sources and their distance apart, which decide
+ * where a part lands when the strip is reordered.
+ *
+ * @param {import('./backend.js').ApiPage|null|undefined} page
+ * @param {import('./backend.js').ApiRegion|null|undefined} region
+ * @param {import('./backend.js').ApiPage|null|undefined} [anchor] - the page `region` belongs to; `page` by default
+ * @returns {string|null}
+ */
+export function layerUrl(page, region, anchor = page) {
+  const origin = tileOrigin()
+  if (!origin || !page || !page.chapterId || !Number.isInteger(page.index)) return null
+  const key = region?.mask?.layerKey
+  if (!region || typeof region.id !== 'string' || !region.id || typeof key !== 'string' || !key) return null
+  const reach = anchor && anchor !== page ? `|${anchor.sourceSha ?? ''}|${Number(anchor.index) - page.index}` : ''
+  const version = fold(`${COLOR_PIPELINE_VERSION}:${key}|${page.sourceSha ?? ''}${reach}`)
+  return `${origin}${encodeURIComponent(page.chapterId)}/${page.index}/layer/` +
+    `${encodeURIComponent(region.id)}?v=${version}`
+}
+
+/**
+ * Every `source` proxy tile URL of one page - exactly what
+ * `PageArtwork.svelte` asks for when the page is drawn, so fetching these ahead
+ * warms the same responses. The page's patches are drawn as layers over them
+ * and warmed apart (`editor/patchlayers.svelte.js#warmLayers`). Empty outside
+ * a Tauri window.
+ *
+ * @param {import('./backend.js').ApiPage|null|undefined} page
+ * @returns {string[]}
+ */
+export function pageTileUrls(page) {
+  const urls = []
+  for (const tile of proxyPlan(page).tiles) {
+    const url = tileUrl(page, 'source', tile.index)
+    if (url) urls.push(url)
+  }
+  return urls
 }
 
 /**
  * The cache-busting token for one page and variant.
  *
- * `source` depends on the source file alone. `cleaned` depends on the source
- * *and* on every mask composited over it, which is the page's patch set - so a
- * re-run, a deleted mask or a hand-drawn one all move the token, and nothing
- * else does. Masks are folded in id order rather than array order, because the
+ * `source` depends on the source file alone. `cleaned` depends on everything
+ * that decides what its tiles draw: patch content and order, visibility,
+ * opacity and geometry. **That identity is native.** `page.appearance` is
+ * `tile::page_appearance`, read out of the manifest with the same selection
+ * `tile::render` composites - in a longstrip that includes a neighbour's patch
+ * that reaches across a join - so it is the same string for the same saved
+ * state after a reload, an undo or a reopen, and a different one for any
+ * saved change to what the page shows. A position lock is not an appearance
+ * and does not move it.
+ *
+ * Every in-hand layer's own `mask.appearance` (`tile::record_appearance`)
+ * sits beside it, because the page header is only as fresh as the last
+ * `loadPages`: it arrives with the edit that changed it, so the URL moves the
+ * moment the answer lands rather than one reload later. Detections draw
+ * nothing and are left out. A mask with no digest (the mock) is folded from
+ * its content fields and its style instead.
+ *
+ * The editor no longer draws `cleaned` tiles - it draws `source` tiles and a
+ * layer per patch (`layerUrl`) - so this token names the flattened page for
+ * what still wants it: the home screen's cover, and the mock's paint hold.
+ *
+ * Masks are folded in sorted order rather than array order, because the
  * backend is free to return regions in a different order without the page
- * having changed.
- *
- * **The tile geometry is folded in too**, because it decides what a tile index
- * *means*. `Cache-Control: immutable` pins a response for a year; if
- * `PROXY_TILE_LONG_EDGE` ever moves, tile 3 becomes a different band of the
- * page under the same URL, and the webview would keep drawing the old one. One
- * provisional constant in the token is what makes changing it safe -
- * **but the token folds in this file's own copy of that constant, not
- * Rust's.** `cleaner_core::image::proxy` has the number it actually cuts
- * tiles with; this is a second, independent declaration of the same value
- * (see `PROXY_TILE_LONG_EDGE` above). Moving Rust's alone changes what tile 3
- * *is* without changing this token, so the immutable cache keeps serving the
- * old band under a URL that never invalidated - the exact failure this
- * paragraph exists to prevent, reopened from the one side the token cannot
- * see. What actually prevents it today is discipline - moving both constants
- * in the same change - not machinery; a shared constant across the language
- * boundary would make it machinery, and that is a seam-level design change,
- * not something to patch here.
- *
- * **Visibility is not folded in, and that is a real gap, not a design
- * choice.** Neither `Mask` (`src/lib/model/types.js`) nor `ApiMask` carries
- * whether a patch is shown, so there is nothing here to fold; this token is
- * built only from `id`, `sequence` and `mask_sha256`. `src-tauri/src/tile.rs`
- * does honour `record.visible` when it composites, so toggling a patch off
- * changes the bytes the protocol serves without changing the URL that names
- * them - and `Cache-Control: immutable` (above) then pins the stale tile.
- * Putting visibility on the seam is a seam change, not something to decide
- * here.
+ * having changed. The proxy geometry is folded in because it decides what a
+ * tile index *means*; the native digest folds Rust's copy of it too, so a
+ * change to either constant moves every URL.
  *
  * @param {import('./backend.js').ApiPage} page
  * @param {TileVariant} variant
@@ -257,22 +349,36 @@ export function tileUrl(page, variant, tile) {
  */
 export function pageVersion(page, variant) {
   const parts = [
-    `${PROXY_SHORT_EDGE}x${PROXY_TILE_LONG_EDGE}`,
+    `${COLOR_PIPELINE_VERSION}:${PROXY_SHORT_EDGE}x${PROXY_TILE_LONG_EDGE}`,
     page.sourceSha ?? '',
     String(page.tileRevision ?? 0),
   ]
   if (variant === 'cleaned') {
+    parts.push(page.appearance ?? '')
     const masks = (page.regions ?? [])
-      .map((region) => region.mask)
-      .filter((mask) => mask != null)
-      .map(
-        (mask) =>
-          `${mask.id}:${mask.sequence}:${mask.provenance?.mask_sha256 ?? ''}:${mask.provenance?.created ?? ''}:${mask.provenance?.engine ?? ''}`,
-      )
+      .filter((region) => region.mask != null && region.outcome !== 'detected')
+      .map((region) => maskAppearance(region.mask))
       .sort()
     parts.push(...masks)
   }
   return fold(parts.join('|'))
+}
+
+/**
+ * One layer's appearance: its native digest, or - for a mask that has none -
+ * its content fields and every style field that changes a pixel.
+ *
+ * @param {any} mask
+ * @returns {string}
+ */
+export function maskAppearance(mask) {
+  if (typeof mask?.appearance === 'string' && mask.appearance) return mask.appearance
+  const layer = mask?.layer ?? {}
+  return [
+    mask?.id, mask?.sequence, mask?.provenance?.mask_sha256 ?? '', mask?.provenance?.created ?? '',
+    mask?.provenance?.engine ?? '', layer.opacity ?? 100, layer.offsetX ?? 0, layer.offsetY ?? 0,
+    layer.rotation ?? 0,
+  ].join(':')
 }
 
 /**

@@ -27,7 +27,7 @@
         "default-src": "'self'",
         "img-src": "'self' data: blob: tile: http://tile.localhost",
         "style-src": "'self' 'unsafe-inline'",
-        "connect-src": "'self' ipc: http://ipc.localhost"
+        "connect-src": "'self' ipc: http://ipc.localhost tile: http://tile.localhost"
       }
     }
   },
@@ -49,7 +49,12 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "vendor/windows-crt/*": ""
+      "vendor/windows-crt/*": "",
+      "../sidecar": "sidecar",
+      "../sam-bootstrap/bootstrap.py": "sam-bootstrap/bootstrap.py",
+      "../spikes/sam-ts-l/export_mask.py": "sam-bootstrap/export_mask.py",
+      "../spikes/sam-ts-l/environment.txt": "sam-bootstrap/environment.txt",
+      "../spikes/sam-ts-l/fixtures/synthetic_page.png": "sam-bootstrap/synthetic_page.png"
     },
     "macOS": {
       "entitlements": "entitlements.plist",

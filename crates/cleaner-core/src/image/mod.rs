@@ -17,11 +17,17 @@
 use std::io::Cursor;
 
 mod convert;
+pub mod color;
+pub mod exif;
 mod png_io;
 mod tiff_io;
 
+pub mod metadata;
+pub use metadata::ColorDescription;
 pub mod fixtures;
 pub mod foreign;
+pub mod orientation;
+pub mod import_info;
 pub mod proxy;
 
 /// How samples are laid out. Not a superset of anything: these are the
@@ -59,7 +65,7 @@ impl ColorMode {
         }
     }
 
-    /// Whether an engine above rung 1 may write into this mode at all.
+    /// Whether an engine above rung 0 may write into this mode at all.
     /// Indexed cannot represent continuous tone, and CMYK→RGB→CMYK is not
     /// invertible.
     pub fn allows_model_engines(self) -> bool {
@@ -83,7 +89,7 @@ impl ColorMode {
 }
 
 /// Bits per sample. Sub-byte depths exist for indexed and bitonal sources, and
-/// bitonal is why rung 1 has a "skipped for bitonal sources" rule at all.
+/// bitonal is why the model rungs decline a 1-bit source.
 ///
 /// Serialised as the number of bits rather than as a variant name: `bit_depth`
 /// in a `.mtclean` manifest is a quantity, and `16` is what a reader expects
@@ -152,18 +158,36 @@ pub struct Raster {
     pub icc: Option<Vec<u8>>,
     /// `PLTE`, three bytes per entry. Present only for [`ColorMode::Indexed`].
     pub palette: Option<Vec<u8>>,
-    /// `tRNS`, one byte per palette entry.
+    /// `tRNS` as the file stores it: one byte per palette entry for
+    /// [`ColorMode::Indexed`], and for [`ColorMode::Gray`] and
+    /// [`ColorMode::Rgb`] the colour key, one big-endian 16-bit sample per
+    /// channel ([`Raster::colour_key`]) at every depth.
     pub trns: Option<Vec<u8>>,
     /// The `sRGB` rendering intent, if the source declared one. Carried
     /// separately because the `png` encoder writes `iCCP` **only** when this is
     /// absent, so a source with both chunks would silently lose its profile.
     pub srgb_intent: Option<u8>,
+    pub color: ColorDescription,
     /// Samples in the decoder's own layout: row-major, packed for sub-byte
     /// depths, big-endian for 16-bit.
     pub data: Vec<u8>,
 }
 
 impl Raster {
+    /// The colour a Gray or RGB image's `tRNS` chunk makes fully transparent,
+    /// one sample per channel at the raster's own depth: every pixel of
+    /// exactly this colour is see-through though the mode has no alpha
+    /// channel. `None` for any other mode, or without the chunk.
+    pub fn colour_key(&self) -> Option<Vec<u16>> {
+        let channels = match self.mode {
+            ColorMode::Gray => 1,
+            ColorMode::Rgb => 3,
+            _ => return None,
+        };
+        let trns = self.trns.as_ref().filter(|trns| trns.len() == 2 * channels)?;
+        Some(trns.chunks_exact(2).map(|pair| u16::from_be_bytes([pair[0], pair[1]])).collect())
+    }
+
     /// Bytes per row, including sub-byte padding to a byte boundary.
     pub fn stride(&self) -> usize {
         let bits = self.width as usize * self.mode.samples() * self.depth.bits() as usize;
@@ -238,6 +262,7 @@ impl Raster {
             palette: self.palette.clone(),
             trns: self.trns.clone(),
             srgb_intent: self.srgb_intent,
+            color: self.color.clone(),
             data: self.data[y0 as usize * stride..y1 as usize * stride].to_vec(),
         }
     }
@@ -256,6 +281,8 @@ impl Raster {
 pub enum Format {
     Png,
     Tiff,
+    /// Accepted verbatim at import. Edited pixels are written losslessly.
+    Jpeg,
 }
 
 impl Format {
@@ -266,6 +293,8 @@ impl Format {
             Some(Format::Png)
         } else if bytes.starts_with(b"II\x2a\x00") || bytes.starts_with(b"MM\x00\x2a") {
             Some(Format::Tiff)
+        } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+            Some(Format::Jpeg)
         } else {
             None
         }
@@ -280,6 +309,8 @@ pub enum ImageError {
     Unrepresentable { format: Format, mode: ColorMode, depth: BitDepth },
     #[error("png: {0}")]
     Png(String),
+    #[error("color metadata: {0}")]
+    Color(String),
     #[error("{0}")]
     Foreign(String),
     #[error("tiff: {0}")]
@@ -290,11 +321,15 @@ pub enum ImageError {
 /// 200-page folder never decodes a pixel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
+    pub palette: Option<Vec<u8>>,
     pub width: u32,
     pub height: u32,
     pub mode: ColorMode,
     pub depth: BitDepth,
     pub icc: Option<Vec<u8>>,
+    pub color: ColorDescription,
+    pub srgb_intent: Option<u8>,
+    pub trns: Option<Vec<u8>>,
 }
 
 pub fn png_header(bytes: &[u8]) -> Result<Header, ImageError> {
@@ -305,10 +340,19 @@ pub fn tiff_header(bytes: &[u8]) -> Result<Header, ImageError> {
     tiff_io::header(Cursor::new(bytes))
 }
 
+pub fn header(bytes: &[u8]) -> Result<Header, ImageError> {
+    match Format::sniff(bytes).ok_or(ImageError::UnknownFormat)? {
+        Format::Png => png_header(bytes),
+        Format::Tiff => tiff_header(bytes),
+        Format::Jpeg => foreign::jpeg_header(bytes),
+    }
+}
+
 pub fn decode(bytes: &[u8]) -> Result<Raster, ImageError> {
     match Format::sniff(bytes).ok_or(ImageError::UnknownFormat)? {
         Format::Png => png_io::decode(bytes),
         Format::Tiff => tiff_io::decode(Cursor::new(bytes)),
+        Format::Jpeg => foreign::decode(bytes),
     }
 }
 
@@ -316,13 +360,27 @@ pub fn encode(raster: &Raster, format: Format) -> Result<Vec<u8>, ImageError> {
     match format {
         Format::Png => png_io::encode(raster),
         Format::Tiff => tiff_io::encode(raster),
+        Format::Jpeg => Err(ImageError::Unrepresentable {
+            format,
+            mode: raster.mode,
+            depth: raster.depth,
+        }),
     }
+}
+
+/// PNG at the encoder's fast setting, for pixels that are drawn once and never
+/// kept - the `tile://` previews. Still lossless: the samples are exactly what
+/// [`encode`] writes, in a somewhat larger file that takes a fraction of the
+/// time to produce.
+pub fn encode_png_preview(raster: &Raster) -> Result<Vec<u8>, ImageError> {
+    png_io::encode_with(raster, Some(png::Compression::Fast))
 }
 
 /// The format that can carry this raster with nothing declared away. PNG for
 /// everything it can represent; TIFF for CMYK, which PNG has no colour type
 /// for.
 pub fn lossless_format_for(raster: &Raster) -> Format {
+    if raster.color.associated_alpha {return Format::Tiff;}
     match raster.mode {
         ColorMode::Cmyk => Format::Tiff,
         _ => Format::Png,
@@ -359,17 +417,54 @@ mod tests {
         }
     }
 
+    /// **A colour key survives being written again.** A Gray or RGB page's
+    /// `tRNS` key is kept in the chunk's own layout, two bytes a channel, so
+    /// the page decoded, encoded and decoded again still names the same
+    /// transparent colour at 8 and 16 bits. The decoder's own form keeps one
+    /// byte a channel below 16 bits; written back as it came, that was a
+    /// chunk too short to read, and the second decode dropped it. A palette's
+    /// `tRNS`, one byte an entry, is unaffected.
+    #[test]
+    fn a_colour_key_survives_a_second_round_trip() {
+        let keys: [(&str, Vec<u8>, Vec<u16>); 4] = [
+            ("l8", vec![0, 130], vec![130]),
+            ("l16", vec![0x12, 0x34], vec![0x1234]),
+            ("rgb8", vec![0, 1, 0, 2, 0, 3], vec![1, 2, 3]),
+            ("rgb16", vec![0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc], vec![0x1234, 0x5678, 0x9abc]),
+        ];
+        for (name, key, colour) in keys {
+            let mut source = fixtures::by_name(name).raster;
+            source.trns = Some(key.clone());
+            let once = decode(&encode(&source, Format::Png).unwrap()).unwrap();
+            let twice = decode(&encode(&once, Format::Png).unwrap()).unwrap();
+            for (pass, decoded) in [("once", &once), ("twice", &twice)] {
+                assert_eq!(decoded.trns.as_deref(), Some(&key[..]), "{name} {pass}: the key as the file stores it");
+                assert_eq!(decoded.colour_key(), Some(colour.clone()), "{name} {pass}");
+                assert_eq!(decoded.data, source.data, "{name} {pass}: samples");
+            }
+        }
+
+        let mut indexed = fixtures::by_name("indexed-p").raster;
+        let entries = indexed.palette.as_ref().unwrap().len() / 3;
+        indexed.trns = Some((0..entries).map(|entry| (entry * 37 % 256) as u8).collect());
+        let once = decode(&encode(&indexed, Format::Png).unwrap()).unwrap();
+        let twice = decode(&encode(&once, Format::Png).unwrap()).unwrap();
+        assert_eq!(once.trns, indexed.trns, "palette alpha, once");
+        assert_eq!(twice.trns, indexed.trns, "palette alpha, twice");
+        assert_eq!(twice.colour_key(), None, "a palette has no colour key");
+    }
+
     /// The trap: the `png` encoder writes `iCCP` only
     /// when `sRGB` is absent, so a source carrying both chunks loses its profile
     /// on re-encode unless the encoder puts the `sRGB` chunk back by hand.
     #[test]
-    fn a_source_with_both_srgb_and_icc_keeps_both() {
+    fn a_source_with_both_srgb_and_icc_uses_authoritative_icc() {
         let mut raster = fixtures::by_name("rgb8-icc").raster;
         raster.srgb_intent = Some(0);
 
         let round_tripped = decode(&encode(&raster, Format::Png).unwrap()).unwrap();
         assert_eq!(round_tripped.icc, raster.icc, "the profile was dropped");
-        assert_eq!(round_tripped.srgb_intent, Some(0), "the sRGB chunk was dropped");
+        assert_eq!(round_tripped.srgb_intent, None, "conflicting sRGB must be removed");
     }
 
     #[test]

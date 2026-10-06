@@ -396,6 +396,12 @@ impl Sidecar {
         let addr: SocketAddr = ([127, 0, 0, 1], port).into();
 
         let mut command = Command::new(&install.python);
+        let weights_dir = std::env::var_os("MC_SIDECAR_WEIGHTS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| match backend {
+                Backend::Mflux => install.root.join("weights").join("flux2-klein-4b-mflux-q4"),
+                _ => install.root.join("weights"),
+            });
         command
             .arg("-m")
             .arg(super::MODULE)
@@ -406,6 +412,7 @@ impl Sidecar {
             .env("MC_SIDECAR_PARENT_PID", std::process::id().to_string())
             .env("MC_SIDECAR_BACKEND", backend.id())
             .env("MC_SIDECAR_MODEL", model)
+            .env("MC_SIDECAR_WEIGHTS_DIR", weights_dir)
             .env("MC_SIDECAR_TOTAL_BYTES", budget.total.to_string())
             .env("MC_SIDECAR_CACHE_BYTES", budget.cache.to_string())
             // Piped rather than inherited: a windowed release build has no
@@ -426,10 +433,11 @@ impl Sidecar {
         // appeared once the child was ready would be blank for exactly the
         // thirty seconds it matters. The size starts at zero - nothing has
         // reported one - and [`Sidecar::note_memory`] fills it in.
-        let lease = crate::registry::register(
+        let lease = crate::registry::register_named(
             crate::registry::Kind::Sidecar,
             crate::registry::Footprint::reported(0),
             crate::registry::Device::sidecar(),
+            Some(model.to_owned()),
         );
         let mut sidecar = Sidecar { client, child: Some(child), lease: Some(lease) };
         sidecar.wait_for_health()?;

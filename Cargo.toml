@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/*", "spikes/*", "src-tauri"]
+# Python-only experiments in spikes/ are not Cargo packages.
+exclude = ["spikes/sam-ts-l", "spikes/chapter-combo", "spikes/coo-mtsv3", "spikes/holdout-metrics", "spikes/denoise", "spikes/hayai-ocr"]
 
 [workspace.package]
 version = "1.0.0-beta.2"

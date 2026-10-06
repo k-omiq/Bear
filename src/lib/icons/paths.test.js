@@ -20,9 +20,15 @@ const REQUIRED = [
   'eyedropper',
   // The tool bar's glyphs: shape and mode choices drawn as icons, and the
   // bar's own controls.
-  'shape-rect', 'shape-ellipse', 'shape-lasso', 'shape-polygon',
+  'shape-rect', 'shape-ellipse', 'shape-line', 'shape-lasso', 'shape-polygon',
   'book', 'sliders', 'play', 'stop', 'link',
   'link-off', 'bandage',
+  // Onboarding and Settings: ratings, and a download's pause.
+  'star', 'star-filled', 'pause', 'download',
+  // The selection tool on the rail, and its add and remove modes.
+  'selection', 'mask-add', 'mask-remove',
+  // The language picker.
+  'globe',
 ]
 
 describe('icon set', () => {
@@ -58,7 +64,7 @@ describe('icon set', () => {
   it('exposes filled sub-paths only where a solid form is wanted', () => {
     const withFill = Object.keys(icons).filter((n) => glyph(n).filled.length > 0)
     expect(withFill.sort()).toEqual(
-      ['dot', 'eye', 'eye-off', 'mask-overlay', 'more-horizontal'].sort()
+      ['dot', 'eye', 'eye-off', 'mask-overlay', 'more-horizontal', 'star-filled'].sort()
     )
   })
 })

@@ -17,11 +17,13 @@ use crate::balloon::Detected;
 use crate::detect::{Region, Segmentation};
 use crate::image::Raster;
 
+pub mod hayai;
 pub mod lines;
 pub mod ocr;
 mod osd;
 
 pub use lines::{Orientation, TextLine};
+pub use hayai::{Hayai, HayaiError};
 pub use ocr::{Ocr, OcrError, Reading, cjk_share};
 pub use osd::{LineScript, Osd, OsdError};
 
@@ -77,6 +79,10 @@ pub enum Verdict {
     /// is that opt-in. No script was read - the gate does not decide out of a
     /// balloon whichever way the run leans - so the verdict carries none.
     OptedIn,
+    /// The text reader read the region and found no lettering: art the
+    /// detector or the mask took for text. Held back, because cleaning art
+    /// is the unrecoverable direction ([`text_checked`]).
+    NotText,
 }
 
 impl Verdict {
@@ -94,6 +100,7 @@ impl Verdict {
             Verdict::NotJapanese { .. } => Some("review.reason.gateSkippedNotJapanese"),
             Verdict::Uncertain => Some("review.reason.gateSkippedLowConfidence"),
             Verdict::OutOfBalloon => Some("review.reason.gateSkippedOutsideBubble"),
+            Verdict::NotText => Some("review.reason.gateSkippedNotText"),
         }
     }
 
@@ -110,6 +117,7 @@ impl Verdict {
             Verdict::NotJapanese { .. } => Some("not-japanese"),
             Verdict::Uncertain => Some("low-confidence"),
             Verdict::OutOfBalloon => Some("outside-bubble"),
+            Verdict::NotText => Some("not-text"),
         }
     }
 }
@@ -292,23 +300,21 @@ impl ScriptGate {
 
     /// Decide one region.
     ///
-    /// `detected` comes from outside: §3 scopes the gate by whether the text
-    /// sits in a balloon, and `11-phase0-spikes.md` §6 found that the text
-    /// detector does not answer that question - so whatever does answer it
-    /// ([`crate::balloon::detected`]) hands the answer in here rather than this
-    /// module guessing.
+    /// Both balloon answers come from outside: §3 scopes the gate by whether
+    /// the text sits in a balloon, and `11-phase0-spikes.md` §6 found that the
+    /// text detector does not answer that question - so the module that does,
+    /// [`crate::balloon`], hands its answers in here rather than this module
+    /// guessing.
     ///
-    /// **It is still not this module's guess when the page disagrees with it.**
-    /// The balloon detector's misses are one-sided: a bubble it emitted no box
-    /// for arrives here as *outside* and leaves as `OutOfBalloon`, which puts
-    /// ordinary dialogue in review under *"text outside a speech bubble"*. So
-    /// the handed-in answer is put to [`crate::balloon::interior`] - the same
-    /// module, measuring the paper around the text rather than asking the model
-    /// again - and it is that function, not this one, that decides what a
-    /// uniform fill and a bubble stroke mean, and how far a confident detector
-    /// may be overruled. Everything this method needs for it is already in its
-    /// hands: the crop, the segmentation that says which pixels are strokes,
-    /// and the region's own box.
+    /// - `inside` is [`crate::balloon::in_bubble`]: the balloon detector, or
+    ///   the paper around the lettering where the detector said *outside*. The
+    ///   caller computes it once per region and uses the same answer for the
+    ///   engine pick and the stored detection, so the gate cannot hold back as
+    ///   *outside* a region the rest of the run treats as inside, or the
+    ///   reverse.
+    /// - `detected` is the balloon detector's own grade
+    ///   ([`crate::balloon::detected`]), which decides nothing here but whether
+    ///   the reader may rescue a failed verdict ([`rescue_applies`]).
     ///
     /// `outside` is the run's answer to §3's *"cleaned only if the user opts
     /// in"*. It changes nothing for a region the balloon question puts inside
@@ -319,14 +325,9 @@ impl ScriptGate {
         seg: &Segmentation,
         region: &Region,
         detected: Detected,
+        inside: bool,
         outside: OutsideText,
     ) -> Result<Verdict, OsdError> {
-        // The lettering's own box, not the masking box: see
-        // [`Region::text_bounds`]. The five pixels of edit margin between them
-        // are five pixels of a tight balloon's fill, and spending them here is
-        // spending the evidence.
-        let inside =
-            crate::balloon::interior_of(page, seg, region.text_bounds()).settles(detected);
         if !inside {
             return Ok(match outside {
                 OutsideText::Review => Verdict::OutOfBalloon,
@@ -422,14 +423,107 @@ impl ScriptGate {
 ///
 /// `Clean`, `OutOfBalloon` and `OptedIn` are not rescuable: the first needs no
 /// help and the last two are not script verdicts.
-fn rescue_applies(verdict: &Verdict, detected: Detected) -> bool {
+pub fn rescue_applies(verdict: &Verdict, detected: Detected) -> bool {
     if detected != Detected::TextInBubble {
         return false;
     }
     match verdict {
         Verdict::Uncertain => true,
         Verdict::NotJapanese { script } => !is_trusted(script),
-        Verdict::Clean { .. } | Verdict::OutOfBalloon | Verdict::OptedIn => false,
+        Verdict::Clean { .. } | Verdict::OutOfBalloon | Verdict::OptedIn | Verdict::NotText => false,
+    }
+}
+
+/// Whether a Hayai reading may rescue a failed verdict in a balloon only weaker
+/// evidence found: [`Detected::Bubble`], a balloon shape near the text, or
+/// [`Detected::Outside`] that the paper reading turned *inside* (a region the
+/// run judged outside never reaches a script verdict; it is `OutOfBalloon`).
+/// Not a confident *text in balloon*, which [`rescue_applies`] covers. It keeps
+/// manga-ocr out of it, because a reader with a Japanese vocabulary reads
+/// something into anything. Hayai says how sure it is, so it may look, and
+/// [`shape_rescued_by`] asks for a sure reading (on a public-domain Taiwanese
+/// comic, a Chinese balloon the detector graded outside read at 0.85).
+pub fn shape_rescue_applies(verdict: &Verdict, detected: Detected) -> bool {
+    detected != Detected::TextInBubble && rescue_applies(verdict, Detected::TextInBubble)
+}
+
+/// [`rescued_by`], for a reading at [`OVERRULE_CONFIDENCE`] or more.
+pub fn shape_rescued_by(verdict: Verdict, reading: Option<&hayai::Reading>) -> Verdict {
+    match reading {
+        Some(reading) if reading.confidence >= OVERRULE_CONFIDENCE => rescued_by(verdict, Some(reading)),
+        _ => verdict,
+    }
+}
+
+/// Whether a Hayai reading may overrule a *confident* non-CJK verdict on
+/// this region: [`rescue_applies`]' first condition, and a `NotJapanese` from a
+/// script [`TRUSTED_SCRIPTS`] names. The identifier reads hand-drawn kana as
+/// `Latin` with confidence (Black Jack ch. 1 p. 10, ちゅるるっ in a balloon), and
+/// [`rescue_applies`] never lets the reader near a trusted verdict. What
+/// [`overruled_by`] asks of the reading is stricter than a rescue for that reason.
+pub fn overrule_applies(verdict: &Verdict, detected: Detected) -> bool {
+    detected == Detected::TextInBubble && matches!(verdict, Verdict::NotJapanese { script } if is_trusted(script))
+}
+
+/// How sure a reading has to be to overrule a trusted script verdict, and how
+/// much of it has to be kana or Hangul. Han alone never overrules: it is what a
+/// reader trained on CJK falls back to over unfamiliar strokes, and a Latin
+/// balloon read as Han would be cleaned under a language the user may not have
+/// chosen. 0.75 sits under ちゅるるっ's 0.80 mean as the run crops it (text
+/// bounds plus the reader's margin) and over bare art, which read at 0.66 or
+/// less in the spike (spikes/hayai-ocr/README.md); one chapter, not a sweep.
+const OVERRULE_CONFIDENCE: f32 = 0.75;
+const OVERRULE_SHARE: f32 = 0.8;
+
+/// What a Hayai reading does to a verdict [`overrule_applies`] let it look at:
+/// a confident reading that is mostly kana or Hangul cleans under the script it
+/// read; anything else leaves the identifier's verdict standing.
+pub fn overruled_by(verdict: Verdict, reading: Option<&hayai::Reading>) -> Verdict {
+    let Some(reading) = reading else { return verdict };
+    if !reading.is_text() || reading.confidence < OVERRULE_CONFIDENCE {
+        return verdict;
+    }
+    match reading.cjk_script(OVERRULE_SHARE) {
+        Some(hayai::CjkScript::Japanese) => Verdict::Clean { script: RESCUED_SCRIPT.to_owned() },
+        Some(hayai::CjkScript::Hangul) => Verdict::Clean { script: RESCUED_HANGUL.to_owned() },
+        Some(hayai::CjkScript::Han) | None => verdict,
+    }
+}
+
+/// The `script` of a verdict [`hayai`] rescued, by the script it read. Not
+/// the identifier's labels, for the reason [`RESCUED_SCRIPT`] gives.
+pub const RESCUED_HANGUL: &str = "Hangul_ocr";
+pub const RESCUED_HAN: &str = "Han_ocr";
+
+/// What a Hayai reading does to a verdict [`rescue_applies`] let it look at:
+/// lettering in a CJK script cleans, under the script it read; anything else
+/// leaves the identifier's verdict standing, as [`rescued`] does.
+pub fn rescued_by(verdict: Verdict, reading: Option<&hayai::Reading>) -> Verdict {
+    let Some(reading) = reading else { return verdict };
+    if !reading.is_text() {
+        return verdict;
+    }
+    match reading.cjk_script(MIN_CJK_SHARE) {
+        Some(hayai::CjkScript::Japanese) => Verdict::Clean { script: RESCUED_SCRIPT.to_owned() },
+        Some(hayai::CjkScript::Hangul) => Verdict::Clean { script: RESCUED_HANGUL.to_owned() },
+        Some(hayai::CjkScript::Han) => Verdict::Clean { script: RESCUED_HAN.to_owned() },
+        None => verdict,
+    }
+}
+
+/// The text check on a region about to be cleaned. A reading that is not
+/// lettering holds it back as [`Verdict::NotText`]; a reader that failed or
+/// was not there changes nothing. It only ever holds back: no verdict that
+/// holds a region becomes one that cleans it.
+///
+/// The caller decides which regions are checked: those cleaned without a
+/// script reading ([`Verdict::OptedIn`], the outside-bubble opt-in and every
+/// region under the All text policy) and those no text box claimed, whose
+/// only evidence is the mask.
+pub fn text_checked(verdict: Verdict, reading: Option<&hayai::Reading>) -> Verdict {
+    match reading {
+        Some(reading) if verdict.cleans() && !reading.is_lettering() => Verdict::NotText,
+        _ => verdict,
     }
 }
 
@@ -612,6 +706,18 @@ mod tests {
         assert_eq!(rescued(not_japanese, Some(&reading("セリフだ"))), clean);
     }
 
+    #[test]
+    fn punctuation_changes_the_one_kana_rescue_floor() {
+        let held = Verdict::Uncertain;
+        for text in ["あ!", "あ."] {
+            assert_eq!(rescued(held.clone(), Some(&reading(text))), held, "{text}");
+        }
+        for text in ["あ。", "あ、"] {
+            assert_eq!(rescued(held.clone(), Some(&reading(text))),
+                Verdict::Clean { script: RESCUED_SCRIPT.to_owned() }, "{text}");
+        }
+    }
+
     /// A rescued region says in its own verdict that a reader put it there.
     /// The string reaches provenance and the probe, and a rescue that called
     /// itself `Japanese` would be indistinguishable from an identification.
@@ -635,5 +741,92 @@ mod tests {
         assert_eq!(MIN_CJK_SHARE, 0.6);
         assert_eq!(MIN_RESCUE_CHARS, 2);
         assert_eq!(ocr::MAX_TOKENS, 64);
+    }
+
+    fn hayai(text: &str, confidence: f32) -> hayai::Reading {
+        hayai::Reading { text: text.to_owned(), confidence, floor: confidence }
+    }
+
+    /// A Hayai rescue names the script it read, so a Korean or Chinese balloon
+    /// is held to that language's selection rather than passed as Japanese.
+    #[test]
+    fn a_hayai_rescue_names_the_script_it_read() {
+        let cases = [
+            ("オレもさ", Some(RESCUED_SCRIPT)),
+            ("이게무슨일이야", Some(RESCUED_HANGUL)),
+            ("這就是我的力量", Some(RESCUED_HAN)),
+            ("WHAT", None),
+        ];
+        for (text, script) in cases {
+            let verdict = rescued_by(Verdict::Uncertain, Some(&hayai(text, 0.95)));
+            match script {
+                Some(script) => assert_eq!(verdict, Verdict::Clean { script: script.to_owned() }, "{text}"),
+                None => assert_eq!(verdict, Verdict::Uncertain, "{text}"),
+            }
+        }
+        // Art never rescues, and no reading leaves the verdict alone.
+        assert_eq!(rescued_by(Verdict::Uncertain, Some(&hayai("ド", 0.6))), Verdict::Uncertain);
+        assert_eq!(rescued_by(Verdict::Uncertain, None), Verdict::Uncertain);
+    }
+
+    /// A trusted Latin verdict yields only to a confident kana or Hangul
+    /// reading, and only in a balloon.
+    #[test]
+    fn a_confident_kana_reading_overrules_a_trusted_latin() {
+        let latin = Verdict::NotJapanese { script: "Latin".into() };
+        assert!(overrule_applies(&latin, Detected::TextInBubble));
+        assert!(!overrule_applies(&latin, Detected::Bubble));
+        assert!(!overrule_applies(&Verdict::NotJapanese { script: "Han".into() }, Detected::TextInBubble));
+        assert!(!overrule_applies(&Verdict::Uncertain, Detected::TextInBubble));
+
+        let kana = Verdict::Clean { script: RESCUED_SCRIPT.to_owned() };
+        assert_eq!(overruled_by(latin.clone(), Some(&hayai("ちゅるるっ", 0.80))), kana);
+        assert_eq!(overruled_by(latin.clone(), Some(&hayai("안녕하세요", 0.9))),
+            Verdict::Clean { script: RESCUED_HANGUL.to_owned() });
+        // Not sure enough, Han only, Latin read as Latin, or no reading at all.
+        assert_eq!(overruled_by(latin.clone(), Some(&hayai("ちゅるるっ", 0.7))), latin);
+        assert_eq!(overruled_by(latin.clone(), Some(&hayai("這就是我的力量", 0.95))), latin);
+        assert_eq!(overruled_by(latin.clone(), Some(&hayai("WHAT", 0.99))), latin);
+        assert_eq!(overruled_by(latin.clone(), Some(&hayai("OK ちゅ", 0.95))), latin);
+        assert_eq!(overruled_by(latin.clone(), None), latin);
+    }
+
+    /// In a balloon only the weaker grade found, the reader rescues when it is sure.
+    #[test]
+    fn a_sure_reading_rescues_in_a_weak_balloon() {
+        assert!(shape_rescue_applies(&Verdict::Uncertain, Detected::Bubble));
+        assert!(!shape_rescue_applies(&Verdict::Uncertain, Detected::TextInBubble));
+        assert!(shape_rescue_applies(&Verdict::Uncertain, Detected::Outside));
+        assert!(!shape_rescue_applies(&Verdict::OutOfBalloon, Detected::Outside));
+        assert!(!shape_rescue_applies(&Verdict::NotJapanese { script: "Latin".into() }, Detected::Bubble));
+        let line = "哥哥啊! 我們不要分家了?";
+        assert_eq!(shape_rescued_by(Verdict::Uncertain, Some(&hayai(line, 0.85))),
+            Verdict::Clean { script: RESCUED_HAN.to_owned() });
+        assert_eq!(shape_rescued_by(Verdict::Uncertain, Some(&hayai(line, 0.6))), Verdict::Uncertain);
+        assert_eq!(shape_rescued_by(Verdict::Uncertain, None), Verdict::Uncertain);
+    }
+
+    /// The text check only ever holds back, and only a region that would clean.
+    #[test]
+    fn the_text_check_holds_art_and_nothing_else() {
+        let art = hayai("ド", 0.6);
+        let text = hayai("シャコーン", 0.9);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&art)), Verdict::NotText);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&text)), Verdict::OptedIn);
+        assert_eq!(text_checked(Verdict::OptedIn, None), Verdict::OptedIn);
+        let clean = Verdict::Clean { script: "Japanese".into() };
+        assert_eq!(text_checked(clean.clone(), Some(&art)), Verdict::NotText);
+        assert_eq!(text_checked(clean.clone(), Some(&text)), clean);
+        assert_eq!(text_checked(Verdict::Uncertain, Some(&art)), Verdict::Uncertain);
+        assert_eq!(text_checked(Verdict::OutOfBalloon, Some(&text)), Verdict::OutOfBalloon);
+        // A low Hangul reading is a stylised sound effect, not art.
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("컹", 0.44))), Verdict::OptedIn);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("우", 0.2))), Verdict::NotText);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("ア", 0.5))), Verdict::NotText);
+        // A long low reading is dense lettering; a long reading under the floor is not.
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("現不早了, 我天再来!", 0.45))), Verdict::OptedIn);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("ゼラミコ", 0.18))), Verdict::NotText);
+        assert!(!Verdict::NotText.cleans());
+        assert_eq!(Verdict::NotText.skip_cause(), Some("not-text"));
     }
 }

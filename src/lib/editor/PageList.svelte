@@ -89,11 +89,14 @@
     if (!scroller) return
     const read = () => {
       scrollTop = scroller.scrollTop
-      viewportHeight = scroller.clientHeight
     }
-    read()
+    const measure = () => {
+      viewportHeight = scroller.clientHeight
+      read()
+    }
+    measure()
     scroller.addEventListener('scroll', read, { passive: true })
-    const observer = globalThis.ResizeObserver ? new ResizeObserver(read) : null
+    const observer = globalThis.ResizeObserver ? new ResizeObserver(measure) : null
     observer?.observe(scroller)
     return () => {
       scroller.removeEventListener('scroll', read)

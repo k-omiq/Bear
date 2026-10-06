@@ -156,12 +156,13 @@ struct Encoding {
     palette: Option<Vec<u8>>,
     trns: Option<Vec<u8>>,
     srgb_intent: Option<u8>,
+    color: crate::image::ColorDescription,
 }
 
 impl Encoding {
     fn of(raster: &Raster) -> Self {
         Self { mode: raster.mode, depth: raster.depth, icc: raster.icc.clone(),
-            palette: raster.palette.clone(), trns: raster.trns.clone(), srgb_intent: raster.srgb_intent }
+            palette: raster.palette.clone(), trns: raster.trns.clone(), srgb_intent: raster.srgb_intent, color: raster.color.clone() }
     }
 }
 
@@ -213,6 +214,7 @@ mod tests {
             palette: None,
             trns: None,
             srgb_intent: None,
+            color: Default::default(),
             data,
         }
     }

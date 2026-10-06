@@ -178,10 +178,10 @@ want = sys.argv[1]
 assert m.get("version") == want, f"manifest has {m.get('version')}, expected {want}"
 plats = sorted(m.get("platforms", {}).keys())
 print(f"published v{want} with platforms: {', '.join(plats)}")
-# The two platforms release.yml builds. windows-aarch64 is deliberately not
+# The platforms release.yml builds. windows-aarch64 is deliberately not
 # here: runtime::package carries the win-arm64 row, nothing builds it, and an
 # arm64 entry in the manifest would offer an installer that does not exist.
-missing = {"darwin-aarch64", "windows-x86_64"} - set(plats)
+missing = {"darwin-aarch64", "windows-x86_64", "linux-x86_64"} - set(plats)
 if missing:
     print(f"WARNING: missing platforms: {', '.join(sorted(missing))}", file=sys.stderr)
 PY

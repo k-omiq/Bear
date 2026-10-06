@@ -40,6 +40,11 @@ pub struct Region {
     /// drop - but it goes to the inpaint ladder with wider context and it is
     /// surfaced in review.
     pub flagged_large: bool,
+    /// The text group this region is, when it came from
+    /// [`crate::text_groups`]. Its exact lettering seeds the fit instead of
+    /// the segmentation under `masking`, so a neighbouring group's glyphs never
+    /// leak into this region's mask.
+    pub group: Option<std::sync::Arc<crate::text_groups::RegionGroup>>,
 }
 
 impl Region {
@@ -49,10 +54,11 @@ impl Region {
     /// grown by five more pixels on every side, and that growth belongs to the
     /// edit - it is the margin the mask is allowed to reach into. A caller
     /// asking what the *paper around the text* looks like
-    /// ([`crate::balloon::interior_of`]) must not spend that margin before it
-    /// starts looking: in a balloon whose lettering nearly fills it, five pixels
-    /// on each side is most of what is left, and the walk then reads the rim
-    /// where it should have read the fill.
+    /// ([`crate::balloon::in_bubble`], through [`crate::balloon::interior_of`])
+    /// must not spend that margin before it starts looking: in a balloon whose
+    /// lettering nearly fills it, five pixels on each side is most of what is
+    /// left, and the walk then reads the rim where it should have read the
+    /// fill.
     pub fn text_bounds(&self) -> Rect {
         self.members
             .iter()
@@ -76,8 +82,10 @@ impl Region {
     /// detector box, for a caller holding a box the text detector never
     /// emitted.
     ///
-    /// [`crate::balloon::adopt_uncovered_text`] is that caller: the balloon
-    /// detector's `text_free` and `text_bubble` boxes are a second opinion
+    /// [`crate::text_groups::Grouping::region`] and
+    /// [`crate::text_groups::Grouping::detector_only_region`] are that caller:
+    /// a text group's bounds and the balloon detector's `text_free` and
+    /// `text_bubble` boxes are a second opinion
     /// about where text is, and a page's narration boxes and sound effects are
     /// sometimes the only opinion there is. The growth is `build_separated`'s
     /// growth to the pixel - `grown` here, not a fresh set of numbers - so an
@@ -99,7 +107,7 @@ impl Region {
         page_h: u32,
         median_area: i64,
     ) -> Region {
-        let tight = grown(rect, 2, 1, page_w, page_h);
+        let tight = tight_rect(rect, page_w, page_h);
         let extended = grown(tight, 5, 0, page_w, page_h);
         let flagged_large =
             size_verdict(area(&rect), median_area, rect.h, page_h, confidence)
@@ -109,8 +117,14 @@ impl Region {
             reference: extended.grown(20, page_w, page_h),
             members: vec![TightBox { tight, extended, language, confidence }],
             flagged_large,
+            group: None,
         }
     }
+}
+
+/// A detector box's tight tier: the box grown by 2, and 1 more on the right.
+pub fn tight_rect(rect: Rect, page_w: u32, page_h: u32) -> Rect {
+    grown(rect, 2, 1, page_w, page_h)
 }
 
 /// Grow on every side, and by a little more on the right.
@@ -169,8 +183,8 @@ pub fn overlaps_enough(a: &Rect, b: &Rect) -> bool {
 ///
 /// Reproducible order again, and this time for the ids rather than the merge:
 /// a run names each region by its index in this list, so a list assembled from
-/// two sources - the detector's regions and
-/// [`crate::balloon::adopt_uncovered_text`]'s - has to be put back in reading
+/// two sources - a grouping's cleaning groups and its detector-only
+/// groups - has to be put back in reading
 /// order before anything counts it.
 pub fn sort_regions(regions: &mut [Region]) {
     in_reading_order(regions, |r| r.masking);
@@ -328,13 +342,52 @@ pub fn size_verdict(
 
 /// The median box area on a page, computed **after detection and before
 /// filtering**, so the statistic is not skewed by the filtering it feeds.
+///
+/// Meaningful only over boxes of one kind. CTD's boxes are text blocks; a
+/// list of per-glyph mask components is not, and a median over it is a glyph's
+/// area, against which every real block is "40x the median". Grouped text
+/// uses [`median_rect_area`] over its blocks and [`block_size_verdict`].
 pub fn median_box_area(boxes: &[DetBox]) -> i64 {
-    if boxes.is_empty() {
+    median_rect_area(&boxes.iter().map(|b| b.rect).collect::<Vec<_>>())
+}
+
+/// The median area of `rects`; 0 for none.
+pub fn median_rect_area(rects: &[Rect]) -> i64 {
+    if rects.is_empty() {
         return 0;
     }
-    let mut areas: Vec<i64> = boxes.iter().map(|b| area(&b.rect)).collect();
+    let mut areas: Vec<i64> = rects.iter().map(area).collect();
     areas.sort_unstable();
     areas[areas.len() / 2]
+}
+
+/// A text block is unusually large above this multiple of the page's median
+/// block area. Calibrated on grouped blocks (see [`block_size_verdict`]).
+pub const BLOCK_LARGE_FACTOR: f64 = 12.0;
+/// ...or taller than this share of the page or segment.
+pub const BLOCK_LARGE_HEIGHT_SHARE: f64 = 0.5;
+/// ...or wider than this share of it.
+pub const BLOCK_LARGE_WIDTH_SHARE: f64 = 0.75;
+
+/// The unusually-large flag for a **grouped text block**.
+///
+/// [`size_verdict`]'s 40x-the-median rule was calibrated on CTD's block boxes;
+/// fed per-glyph SAM components its median is one glyph, which is why a demo
+/// chapter flagged 90 of 1,353 records. A block's reference is the median of
+/// the page's other blocks, and a block legitimately spans a quarter of a page
+/// far more often than a glyph box does, so the height rule moves to half the
+/// page. There is no small-block drop: a grouped block has lettering pixels
+/// under it by construction.
+pub fn block_size_verdict(rect: &Rect, median_block_area: i64, page_w: u32, page_h: u32) -> SizeVerdict {
+    if median_block_area > 0 && area(rect) as f64 > BLOCK_LARGE_FACTOR * median_block_area as f64 {
+        return SizeVerdict::FlagLarge;
+    }
+    if rect.h as f64 > BLOCK_LARGE_HEIGHT_SHARE * page_h as f64
+        || rect.w as f64 > BLOCK_LARGE_WIDTH_SHARE * page_w as f64
+    {
+        return SizeVerdict::FlagLarge;
+    }
+    SizeVerdict::Keep
 }
 
 /// Build the tiers. `page_w`/`page_h` clamp every growth.
@@ -435,6 +488,7 @@ pub fn build_separated(
             reference: masking.grown(20, page_w, page_h),
             members,
             flagged_large: flagged,
+            group: None,
         });
     }
 

@@ -1,0 +1,96 @@
+{
+  "encoder_embedding": {
+    "changed_elements": 1027716,
+    "max_abs": 3.781169652938843e-05,
+    "mean_abs": 1.0402262737158052e-06,
+    "rmse": 1.5304831924935399e-06,
+    "shape": [
+      1,
+      256,
+      64,
+      64
+    ]
+  },
+  "end_to_end_logits": {
+    "changed_elements": 1042293,
+    "max_abs": 0.00045013427734375,
+    "mean_abs": 2.2161516427615657e-05,
+    "rmse": 2.733163874871168e-05,
+    "shape": [
+      1,
+      1,
+      1024,
+      1024
+    ]
+  },
+  "mha_fastpath_vs_decomposed_head_logits": {
+    "changed_elements": 819778,
+    "max_abs": 1.1444091796875e-05,
+    "mean_abs": 1.348359501732177e-06,
+    "rmse": 1.74602176426792e-06,
+    "shape": [
+      1,
+      1,
+      1024,
+      1024
+    ]
+  },
+  "onnxruntime_version": "1.23.2",
+  "prepared_input_identity": {
+    "changed_elements": 0,
+    "max_abs": 0.0,
+    "mean_abs": 0.0,
+    "rmse": 0.0,
+    "shape": [
+      1,
+      3,
+      1024,
+      1024
+    ]
+  },
+  "previous_graph_inventory_missing": true,
+  "previous_source_pin_missing": true,
+  "providers": [
+    "CoreMLExecutionProvider",
+    "AzureExecutionProvider",
+    "CPUExecutionProvider"
+  ],
+  "source_vs_mask_only_head_logits": {
+    "changed_elements": 0,
+    "max_abs": 0.0,
+    "mean_abs": 0.0,
+    "rmse": 0.0,
+    "shape": [
+      1,
+      1,
+      1024,
+      1024
+    ]
+  },
+  "source_vs_mask_only_head_restored_mask_pixels": 0,
+  "source_vs_onnx_logits": {
+    "changed_elements": 1042293,
+    "max_abs": 0.00045013427734375,
+    "mean_abs": 2.2161516427615657e-05,
+    "rmse": 2.733163874871168e-05,
+    "shape": [
+      1,
+      1,
+      1024,
+      1024
+    ]
+  },
+  "source_vs_onnx_restored_mask_pixels": 0,
+  "text_head_same_embedding_logits": {
+    "changed_elements": 977773,
+    "max_abs": 4.482269287109375e-05,
+    "mean_abs": 4.850947801476879e-06,
+    "rmse": 6.8252931719407084e-06,
+    "shape": [
+      1,
+      1,
+      1024,
+      1024
+    ]
+  }
+}

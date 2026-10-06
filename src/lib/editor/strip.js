@@ -25,31 +25,14 @@
  *     units[i]     page i's drawn height plus the gap under it
  *     offsets[i]   the top of page i, offsets[count] being the whole column
  *
- * **Geometry.** Every page occupies one `unit` - its own height plus the gap
- * below it - and the column carries no CSS `gap` at all: each slot owns its
- * bottom margin. That is what makes conservation exact and obvious,
+ * **Geometry.** CanvasStage gives the column its full width and height and
+ * positions each mounted sheet at `offsets[index]`. Virtualisation cannot
+ * change its size, and fractional sheet heights cannot accumulate spacer
+ * rounding. A focused sheet outside the band uses its own offset too.
  *
- *     padTop + sum(units[start..end]) + padBottom === total
- *
- * with no "…except the first and last gap" clause to get wrong. The one cost
- * is 12px of dead space under the final page, which the viewport's own 66px of
- * bottom padding swallows.
- *
- * That identity is true *by construction* here - `padTop` is `offsets[start]`
- * and `padBottom` is `total - offsets[end]` - so the test that asserts it
- * cannot fail. What it does not cover, and what would actually break the
- * column, is the other half of the model: that the rendered band really
- * occupies those pixels. That half lives in `CanvasStage.svelte`'s CSS -
- * `.slot { margin-bottom: var(--strip-gap) }` and **no `gap` on `.stage`** -
- * in `units` being derived from the same `STRIP_GAP` the slot is drawn with,
- * and in each `PageSheet` being handed `widths[i]` rather than a width of its
- * own. Add a CSS `gap`, or a border on a slot, and every assertion in
- * `strip.test.js` still passes while the column drifts a gap per page.
- *
- * **Position.** `columnTop` is the column's top edge measured from the top of
- * the viewport - negative once the reader has scrolled into it. Taking it from
- * the rendered box rather than from `scrollTop` keeps the viewport's padding
- * out of the arithmetic entirely.
+ * **Position.** `columnTop` is the column's top edge relative to the viewport.
+ * The canvas measures its origin on resize, then subtracts `scrollTop` during
+ * scrolling, keeping viewport padding out of the window arithmetic.
  */
 
 import { naturalWidth, pageRatio, sheetWidth } from './zoom.js'
@@ -60,8 +43,19 @@ export const STRIP_GAP = 0
 /** Below this many pages the column renders whole. */
 export const VIRTUAL_THRESHOLD = 12
 
-/** Pages kept mounted above and below the visible band. */
+/** Pages kept mounted above and below the preloaded band. */
 export const OVERSCAN = 1
+
+/**
+ * How far past the viewport, in viewport heights, pages and their tiles are
+ * mounted - and therefore fetched - before they scroll into view.
+ *
+ * The canvas does this itself rather than leaving it to `loading="lazy"`:
+ * WebKit, which is the shipped webview on macOS, starts a lazy image only when
+ * it enters the *scroller's* visible box, so in this nested scroller every
+ * page arrived blank and drew in as it was read.
+ */
+export const PRELOAD_SCREENS = 1
 
 /**
  * One page's share of the column: its height plus the gap under it.
@@ -150,21 +144,26 @@ function indexAt(metrics, y) {
  * @property {number} end - one past the last mounted index
  * @property {number} padTop - px of spacer above
  * @property {number} padBottom - px of spacer below
+ * @property {number|null} extra - focused page outside the band, positioned at its own offset
  */
 
 /**
  * Which pages to mount for a viewport `viewportHeight` px tall whose top edge
  * sits `-columnTop` px into the column `metrics` describes.
  *
+ * `margin` extends the viewport by that many px at both ends before the band
+ * is taken, so the pages about to scroll in are already mounted; `overscan`
+ * then adds whole pages beyond it.
+ *
  * `include` is the page that must stay mounted whatever the scroll position -
  * the one holding focus. Unmounting the focused element drops focus to the
- * document, and a strip that loses the keyboard the moment it scrolls is worse
- * than one that is not virtualised at all.
+ * document. It is returned separately so a distant focus never widens the band.
  *
  * @param {{
  *   metrics?: StripMetrics,
  *   columnTop?: number,
  *   viewportHeight?: number,
+ *   margin?: number,
  *   include?: number,
  *   overscan?: number,
  *   threshold?: number,
@@ -175,21 +174,19 @@ export function stripWindow(spec) {
   const metrics = spec.metrics ?? EMPTY
   const count = metrics.count
   const threshold = finite(spec.threshold, VIRTUAL_THRESHOLD)
-  if (count <= threshold) return { virtual: false, start: 0, end: count, padTop: 0, padBottom: 0 }
+  if (count <= threshold) return { virtual: false, start: 0, end: count, padTop: 0, padBottom: 0, extra: null }
 
   const overscan = Math.max(0, Math.trunc(finite(spec.overscan, OVERSCAN)))
-  const top = clamp(-finite(spec.columnTop, 0), 0, metrics.total)
-  const height = clamp(finite(spec.viewportHeight, 0), 0, metrics.total)
+  const margin = Math.max(0, finite(spec.margin, 0))
+  const top = clamp(-finite(spec.columnTop, 0) - margin, 0, metrics.total)
+  const bottom = clamp(-finite(spec.columnTop, 0) + finite(spec.viewportHeight, 0) + margin, top, metrics.total)
 
-  let start = Math.max(0, indexAt(metrics, top) - overscan)
-  let end = Math.min(count, indexAt(metrics, top + height) + 1 + overscan)
+  const start = Math.max(0, indexAt(metrics, top) - overscan)
+  const end = Math.min(count, indexAt(metrics, bottom) + 1 + overscan)
 
   const include = spec.include
-  if (Number.isFinite(include) && include >= 0 && include < count) {
-    start = Math.min(start, /** @type {number} */ (include))
-    end = Math.max(end, /** @type {number} */ (include) + 1)
-  }
-  if (end <= start) end = Math.min(count, start + 1)
+  const extra = Number.isInteger(include) && include >= 0 && include < count &&
+    (include < start || include >= end) ? include : null
 
   return {
     virtual: true,
@@ -197,6 +194,7 @@ export function stripWindow(spec) {
     end,
     padTop: metrics.offsets[start],
     padBottom: metrics.total - metrics.offsets[end],
+    extra,
   }
 }
 

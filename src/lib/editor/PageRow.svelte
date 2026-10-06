@@ -45,6 +45,12 @@
           total: row.total,
         }),
   )
+  // Held candidates are counted apart from the ratio (`model/status.js`): they
+  // are not work left undone and not a problem, but a page carrying them has
+  // something to choose, and the row says so in words as well as in a mark.
+  const candidates = $derived(row.candidates ?? 0)
+  const heldLabel = $derived(candidates > 0 ? t('review.page.candidates', { count: candidates }) : '')
+  const fullName = $derived(heldLabel ? `${name}. ${heldLabel}` : name)
 </script>
 
 <button
@@ -53,8 +59,8 @@
   class:selected
   role="option"
   aria-selected={selected}
-  aria-label={name}
-  title={name}
+  aria-label={fullName}
+  title={fullName}
   data-index={row.index}
   aria-setsize={total}
   aria-posinset={row.index + 1}
@@ -71,6 +77,8 @@
   <span class="track" aria-hidden="true">
     <span class="fill {row.tone}" style:--fill="{row.percent / 100}"></span>
   </span>
+
+  {#if candidates > 0}<span class="held" aria-hidden="true">◌{candidates}</span>{/if}
 
   <span
     class="ratio"
@@ -120,6 +128,9 @@
   .muted { color: var(--t3) }
   .normal { color: var(--text) }
   .warn { color: var(--warn) }
+  /* Text found and waiting to be cleaned: the accent, still, because nothing
+     is happening to it until the user asks. */
+  .detected { color: var(--accent) }
   /* "Cleaning now" - the prototype's own idiom, on top of a glyph that
      already differs from every other mark. Stopped by reduced motion. */
   .active {
@@ -170,6 +181,15 @@
   }
   .fill.review { background: var(--tint) }
   .fill.warn { background: var(--warn) }
+
+  /* Held candidates: the Layers row's own dotted mark, quiet, beside the
+     ratio it is not part of. */
+  .held {
+    flex: none;
+    font-size: 10px;
+    color: var(--accent);
+    white-space: nowrap;
+  }
 
   .ratio {
     flex: none;

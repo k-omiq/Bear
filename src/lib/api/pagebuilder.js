@@ -172,7 +172,7 @@ export function cleanRegion(region, engine, ctx, extra = {}) {
  */
 export function cleanPage(page, ctx) {
   for (const region of page.regions) {
-    cleanRegion(region, ctx.rng.next() < 0.82 ? 'fill' : 'denoise', ctx)
+    cleanRegion(region, 'fill', ctx)
   }
   page.status = 'cleaned'
 }
@@ -211,8 +211,10 @@ export function makeChapter(spec, projectId, order, ctx) {
 
 /**
  * Puts one region of a named review cause on a page, growing the page's
- * region list if it is short. Every branch of `review.js`'s cause list is
+ * region list if it is short. Every cause a region can get today is
  * represented, which is what Wandering Moon Ch. 12 exists to exercise.
+ * `review.js`'s two cloud causes are not: only a job saved with one of those
+ * legacy review states carries them, and nothing makes one any more.
  *
  * @param {import('../model/types.js').Page} page
  * @param {number} index - which region on the page
@@ -242,17 +244,6 @@ export function flagCause(page, index, cause, ctx) {
     region.kind = 'outside'
     region.outcome = 'gate-skipped'
     region.gateSkipCause = 'outside-bubble'
-  } else if (cause === 'cloud-accepted') {
-    cleanRegion(region, 'cloud', ctx, {
-      cloudBilled: true,
-      cloudOutcome: { accepted: true, rejectionCause: null },
-    })
-  } else if (cause.startsWith('cloud-rejected:')) {
-    // A rejected cloud attempt falls back to rung 2, so the mask's provenance
-    // records lama and the rejection lives in `cloudOutcome`.
-    cleanRegion(region, 'lama', ctx, {
-      cloudOutcome: { accepted: false, rejectionCause: cause.slice('cloud-rejected:'.length) },
-    })
   }
   if (page.status === 'unclean' && region.outcome === 'cleaned') page.status = 'cleaned'
 }

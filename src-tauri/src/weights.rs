@@ -168,8 +168,8 @@ use sha2::{Digest, Sha256};
 
 use crate::events;
 use crate::run::{
-    model_search_paths, BALLOONS, DETECTOR, GATE_LABELS, GATE_MODEL, INPAINTER, OCR_DECODER,
-    OCR_ENCODER, OCR_VOCAB,
+    model_search_paths, BALLOONS, DETECTOR, GATE_LABELS, GATE_MODEL, HAYAI_DECODER, HAYAI_TOKENIZER,
+    HAYAI_VISION, INPAINTER, OCR_DECODER, OCR_ENCODER, OCR_VOCAB,
 };
 
 /* ------------------------------------------------------------------ */
@@ -202,9 +202,9 @@ pub struct ModelPackage {
     pub required_by: &'static [&'static str],
 }
 
-/// The eight artefacts, in `scripts/fetch-models.sh`'s own order.
+/// The artefacts, in `scripts/fetch-models.sh`'s own order.
 pub const MODELS: &[ModelPackage] = &[
-    // The detector. GPL-3.0, and the reason the application is.
+    // Optional local text detector, downloaded separately from upstream.
     ModelPackage {
         id: "textDetector",
         file_name: DETECTOR,
@@ -265,6 +265,15 @@ pub const MODELS: &[ModelPackage] = &[
         kind_key: "models.kind.balloonDetector",
         required_by: &["autoClean"],
     },
+    ModelPackage {
+        id: "fullRt",
+        file_name: "detector.onnx",
+        url: "https://huggingface.co/ogkalu/comic-text-and-bubble-detector/resolve/16e8a622f91fabc6b5b65c96d32d1183f8843546/detector.onnx",
+        sha256: "065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195",
+        bytes: 168_481_531,
+        kind_key: "models.kind.fullRt",
+        required_by: &["review"],
+    },
     /* The gate's rescue reader: `manga-ocr`, Apache-2.0, exported
      * to ONNX by the same author as `lama-manga.onnx`.
      *
@@ -316,7 +325,85 @@ pub const MODELS: &[ModelPackage] = &[
         kind_key: "models.kind.ocrVocab",
         required_by: &[],
     },
+    /* The multi-script text reader (`cleaner_core::gate::hayai`): Hayai OCR
+     * v2.5 Nova, Apache-2.0, exported to ONNX in `spikes/hayai-ocr` and hosted
+     * at `bixii/hayai-ocr-v2.5-nova-onnx`, pinned to the upload's commit.
+     * Optional like manga-ocr, and preferred over it when both are present:
+     * a run that finds all three files reads regions with it (the text check
+     * and the rescue, `run.rs#read_check`). */
+    ModelPackage {
+        id: "hayaiVision",
+        file_name: HAYAI_VISION,
+        url: concat!(
+            "https://huggingface.co/bixii/hayai-ocr-v2.5-nova-onnx",
+            "/resolve/23653e3c09c6e07b9172668cf7fa238f6411ab14/hayai-ocr-vision.onnx"
+        ),
+        sha256: "379ec20e7d5b134e6bd0e7c5cf0a4e705318129bfb710e25e69c6ca027b84021",
+        bytes: 343_538_300,
+        kind_key: "models.kind.hayaiVision",
+        required_by: &[],
+    },
+    ModelPackage {
+        id: "hayaiDecoder",
+        file_name: HAYAI_DECODER,
+        url: concat!(
+            "https://huggingface.co/bixii/hayai-ocr-v2.5-nova-onnx",
+            "/resolve/23653e3c09c6e07b9172668cf7fa238f6411ab14/hayai-ocr-decoder.onnx"
+        ),
+        sha256: "23342ad16efee65486347b7ac15c98d5f78412eb4c4bee3236d03d8478cb0e20",
+        bytes: 255_717_567,
+        kind_key: "models.kind.hayaiDecoder",
+        required_by: &[],
+    },
+    ModelPackage {
+        id: "hayaiTokenizer",
+        file_name: HAYAI_TOKENIZER,
+        url: concat!(
+            "https://huggingface.co/bixii/hayai-ocr-v2.5-nova-onnx",
+            "/resolve/23653e3c09c6e07b9172668cf7fa238f6411ab14/hayai-ocr-tokenizer.json"
+        ),
+        sha256: "f8a0a909c628a684fe463094614e236a8b1d3609e7770f77e7beafaf1056bf13",
+        bytes: 1_247_253,
+        kind_key: "models.kind.hayaiTokenizer",
+        required_by: &[],
+    },
+    /* Local page denoise (`cleaner_core::page_denoise`): waifu2x swin_unet
+     * `art_scan` `noise2_scale4x` and nunif's seam blending helper, MIT, from
+     * the `deepghs/waifu2x_onnx` mirror pinned to a revision. The same files
+     * and digests as `deploy/cloud/common/denoise.py`, so local and cloud run
+     * the same graph. Optional: nothing downloads them unless the user picks
+     * local denoise, and the two are one group (`pageDenoise`). */
+    ModelPackage {
+        id: "pageDenoiseModel",
+        file_name: cleaner_core::page_denoise::MODEL_FILE,
+        url: concat!(
+            "https://huggingface.co/deepghs/waifu2x_onnx/resolve/333b95cc88a6a9f39abb6426ab580f0d673f1185",
+            "/20250502/onnx_models/swin_unet/art_scan/noise2_scale4x.onnx"
+        ),
+        sha256: "532424408a1fd293c6fbfd54b44cd9077b7a4da8452218fd4d8040c7c9c78747",
+        bytes: 18_905_524,
+        kind_key: "models.kind.pageDenoise",
+        required_by: &["pageDenoise"],
+    },
+    ModelPackage {
+        id: "pageDenoiseSeams",
+        file_name: cleaner_core::page_denoise::SEAM_FILTER_FILE,
+        url: concat!(
+            "https://huggingface.co/deepghs/waifu2x_onnx/resolve/333b95cc88a6a9f39abb6426ab580f0d673f1185",
+            "/20250502/onnx_models/utils/create_seam_blending_filter.onnx"
+        ),
+        sha256: "7d825bc0bbba65493cd3e1809a1cd6db4999243d516154b7974522dce6826ad5",
+        bytes: 26_530,
+        kind_key: "models.kind.pageDenoiseSeams",
+        required_by: &["pageDenoise"],
+    },
 ];
+
+/// The group a local page denoise needs whole: its model and its seam helper.
+pub const PAGE_DENOISE_GROUP: &str = "pageDenoise";
+
+/// The Hayai reader's three files, downloaded and deleted together.
+pub const HAYAI_GROUP: &str = "hayaiOcr";
 
 /// The progress id the ONNX Runtime's own download reports under. Not a
 /// [`MODELS`] row - the runtime is an archive, not a weight - but the same
@@ -326,6 +413,59 @@ pub const RUNTIME_ID: &str = "runtime";
 
 pub fn package(id: &str) -> Option<&'static ModelPackage> {
     MODELS.iter().find(|model| model.id == id)
+}
+
+/// Logical multi-file capabilities. No group includes the shared RT-DETR
+/// detector, so removing Japanese filtering cannot remove discovery weights.
+fn model_group(id: &str) -> Option<Vec<&'static ModelPackage>> {
+    let ids: &[&str] = match id {
+        "scriptGate" => &["scriptGate", "scriptGateLabels"],
+        "mangaOcr" => &["ocrEncoder", "ocrDecoder", "ocrVocab"],
+        HAYAI_GROUP => &["hayaiVision", "hayaiDecoder", "hayaiTokenizer"],
+        PAGE_DENOISE_GROUP => &["pageDenoiseModel", "pageDenoiseSeams"],
+        _ => return None,
+    };
+    ids.iter().map(|id| package(id)).collect()
+}
+
+fn group_for_member(id: &str) -> Option<&'static str> {
+    match id {
+        "scriptGate" | "scriptGateLabels" => Some("scriptGate"),
+        "ocrEncoder" | "ocrDecoder" | "ocrVocab" => Some("mangaOcr"),
+        "hayaiVision" | "hayaiDecoder" | "hayaiTokenizer" => Some(HAYAI_GROUP),
+        "pageDenoiseModel" | "pageDenoiseSeams" => Some(PAGE_DENOISE_GROUP),
+        _ => None,
+    }
+}
+
+/// Every file of a group, found on disk and matching its pinned digest, for
+/// a command about to open them. A digest this module remembers for the
+/// exact file answers without re-reading it; any other file is hashed once
+/// and the answer kept, as [`verify_model`] keeps it.
+pub(crate) fn verified_group(app_data: Option<&Path>, group: &str) -> Result<Vec<PathBuf>, String> {
+    let models = model_group(group).ok_or_else(|| format!("no such model group: {group}"))?;
+    let writable = app_data.map(|dir| dir.join("models"));
+    let cache = writable.as_deref().map(read_cache).unwrap_or_default();
+    models.iter().map(|model| {
+        let (path, _) = locate(model, app_data, writable.as_deref())
+            .ok_or_else(|| format!("{} is not installed", model.id))?;
+        let shown = path.display().to_string();
+        let remembered = match (cache.get(model.id), stamp(&path)) {
+            (Some(entry), Some(stamp)) => cache_hit(entry, &shown, stamp),
+            _ => None,
+        };
+        let ok = match remembered {
+            Some(ok) => ok,
+            None => {
+                let ok = digest_file(&path)? == model.sha256;
+                record_verified(model.id, ok);
+                remember(writable.as_deref(), model.id, &path, ok);
+                ok
+            }
+        };
+        if !ok { return Err(format!("{} failed its pinned SHA-256", model.id)); }
+        Ok(path)
+    }).collect()
 }
 
 /* ------------------------------------------------------------------ */
@@ -430,7 +570,7 @@ fn no_space(needed: u64, free: u64) -> String {
 /// The path need not exist. `<app_data>/runtimes` is created by the first
 /// download, and the question is about the volume rather than the directory, so
 /// the nearest ancestor that does exist is what is asked about.
-fn free_space(path: &Path) -> Option<u64> {
+pub(crate) fn free_space(path: &Path) -> Option<u64> {
     let mut candidate = path;
     loop {
         if candidate.exists() {
@@ -561,6 +701,20 @@ fn unpacked_bytes(archive: &Path, library_dir: &str) -> Option<u64> {
 /// truncated by a full disk, is not an installed model, and the size is the
 /// only check cheap enough to make every time the dialog opens.
 fn locate(model: &ModelPackage, app_data: Option<&Path>, writable: Option<&Path>) -> Option<(PathBuf, bool)> {
+    // The verified full RT import and managed download share this owned layout.
+    // Check it before generic search roots so Settings sees the same graph the
+    // workflow and automatic run use.
+    if model.id == "fullRt" {
+        if let Some(root) = app_data {
+            let dir = root.join("models/rtdetr-v2-full");
+            let path = dir.join(model.file_name);
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if meta.is_file() && meta.len() == model.bytes {
+                    return Some((path, is_read_only(dir.as_path(), writable, &meta)));
+                }
+            }
+        }
+    }
     for dir in model_search_paths(app_data) {
         let path = dir.join(model.file_name);
         let Ok(meta) = std::fs::metadata(&path) else { continue };
@@ -746,6 +900,27 @@ fn claim(id: &str) -> Option<Arc<AtomicBool>> {
     Some(flag)
 }
 
+/// Reserve every file of one logical model in a single registry operation.
+/// File-level buttons cannot race a multi-file install or removal halfway
+/// through its dependency set.
+fn claim_group(group: &str, models: &[&ModelPackage]) -> Option<Arc<AtomicBool>> {
+    let mut map = inflight().lock().ok()?;
+    if map.contains_key(group) || models.iter().any(|model| map.contains_key(model.id)) {
+        return None;
+    }
+    let flag = Arc::new(AtomicBool::new(false));
+    map.insert(group.to_owned(), Arc::clone(&flag));
+    for model in models { map.insert(model.id.to_owned(), Arc::clone(&flag)); }
+    Some(flag)
+}
+
+fn release_group(group: &str, models: &[&ModelPackage]) {
+    if let Ok(mut map) = inflight().lock() {
+        map.remove(group);
+        for model in models { map.remove(model.id); }
+    }
+}
+
 fn release(id: &str) {
     if let Ok(mut map) = inflight().lock() {
         map.remove(id);
@@ -788,6 +963,8 @@ pub struct ModelRow {
     pub id: &'static str,
     pub file_name: &'static str,
     pub bytes: u64,
+    /// Immutable file identity even when the upstream URL points at main.
+    pub sha256: &'static str,
     pub kind_key: &'static str,
     pub required_by: &'static [&'static str],
     pub installed: bool,
@@ -855,6 +1032,11 @@ pub struct RuntimeRow {
     /// Whether ONNX Runtime publishes anything for this platform at all.
     /// False on Intel macOS, which is the one platform with no row.
     pub available: bool,
+    /// This machine: `macos-arm64`, `macos-x64`, `windows-x64`,
+    /// `windows-arm64`, `linux-x64` or `linux-arm64`. Data, not copy. Setup
+    /// names the platform its dependency list was checked on, and a web view's
+    /// user agent cannot tell Apple silicon from Intel.
+    pub platform: Option<&'static str>,
     /// The flavour of the build **that is actually here**, from the stamp a
     /// successful install writes ([`InstalledRuntime`]).
     ///
@@ -919,6 +1101,7 @@ pub fn list_models(app: tauri::AppHandle, retry_store: Option<bool>) -> ModelsVi
     let writable = data.as_ref().map(|dir| dir.join("models"));
     if retry_store == Some(true) {
         forget_migration(migration_outcome());
+        forget_token_refusal(token_memo());
     }
     // A `.part` stamped with a digest this catalogue no longer names is a
     // prefix of an artefact nothing will ask for again: no press can resume it
@@ -940,6 +1123,7 @@ pub fn list_models(app: tauri::AppHandle, retry_store: Option<bool>) -> ModelsVi
                 id: model.id,
                 file_name: model.file_name,
                 bytes: model.bytes,
+                sha256: model.sha256,
                 kind_key: model.kind_key,
                 required_by: model.required_by,
                 installed: found.is_some(),
@@ -1016,9 +1200,23 @@ fn runtime_row(app: &tauri::AppHandle, data: Option<&Path>) -> RuntimeRow {
             })
             .collect(),
         available: host.is_some(),
+        platform: package::Platform::host().map(platform_id),
         installed_flavour: stamped.as_ref().map(|stamp| stamp.flavour.clone()),
         installed_version: stamped.as_ref().map(|stamp| stamp.version.clone()),
         partial_bytes: writable.as_deref().and_then(runtime_partial_bytes),
+    }
+}
+
+/// [`RuntimeRow::platform`]'s id for a platform.
+fn platform_id(platform: cleaner_core::runtime::package::Platform) -> &'static str {
+    use cleaner_core::runtime::package::{Arch, Os};
+    match (platform.os, platform.arch) {
+        (Os::MacOs, Arch::Aarch64) => "macos-arm64",
+        (Os::MacOs, Arch::X86_64) => "macos-x64",
+        (Os::Windows, Arch::Aarch64) => "windows-arm64",
+        (Os::Windows, Arch::X86_64) => "windows-x64",
+        (Os::Linux, Arch::Aarch64) => "linux-arm64",
+        (Os::Linux, Arch::X86_64) => "linux-x64",
     }
 }
 
@@ -1148,6 +1346,9 @@ fn plan_delete(found: Option<(PathBuf, bool)>) -> Result<PathBuf, DeleteOutcome>
 /// not a session, it is the library every session is built through, and
 /// deleting it evicts nothing - the sessions already loaded go on running
 /// against a library that is still mapped into the process.
+/// The full RT-DETR graph is also `None`: its session is owned only by the
+/// active pipeline and is never parked in `residency`. Evicting the small RT
+/// kind for its separate weight would free an unrelated model.
 fn resident_kind(id: &str) -> Option<registry::Kind> {
     Some(match id {
         "textDetector" => registry::Kind::TextDetector,
@@ -1164,6 +1365,9 @@ fn resident_kind(id: &str) -> Option<registry::Kind> {
         // drops the reader with it, and the reader's own registry row goes
         // when its leases do.
         "ocrEncoder" | "ocrDecoder" | "ocrVocab" => registry::Kind::ScriptGate,
+        // Hayai is its own parked session (`run.rs`'s `reader`), not part of
+        // the gate.
+        "hayaiVision" | "hayaiDecoder" | "hayaiTokenizer" => registry::Kind::Ocr,
         _ => return None,
     })
 }
@@ -1194,6 +1398,9 @@ fn evict_sessions_of(id: &str) -> usize {
 /// The answer says *why* when it does not start one. See [`DownloadStart`].
 #[tauri::command]
 pub fn download_model(app: tauri::AppHandle, id: String) -> Result<DownloadStart, String> {
+    if let Some(group) = group_for_member(&id) {
+        return download_model_group(app, group.to_owned());
+    }
     let model = package(&id).copied().ok_or_else(|| format!("no such model: {id}"))?;
     let dir = writable_models_dir(&app)?;
     let data = app_data(&app);
@@ -1225,6 +1432,142 @@ pub fn download_model(app: tauri::AppHandle, id: String) -> Result<DownloadStart
     Ok(DownloadStart::Started)
 }
 
+/// Install a multi-file model as one capability. Missing members are fetched
+/// into a private staging directory and checked before any final file appears.
+/// A failed transfer leaves installed members intact and resumable staging
+/// files; a failed final rename rolls back newly moved members.
+#[tauri::command]
+pub fn download_model_group(app: tauri::AppHandle, id: String) -> Result<DownloadStart, String> {
+    let models = model_group(&id).ok_or_else(|| format!("no such model group: {id}"))?;
+    let dir = writable_models_dir(&app)?;
+    let data = app_data(&app);
+    let auth = token(&app);
+    let Some(cancel) = claim_group(&id, &models) else { return Ok(DownloadStart::AlreadyRunning) };
+    std::thread::spawn(move || {
+        let staged = dir.join(".model-groups").join(&id);
+        let result = (|| -> Result<(), String> {
+            std::fs::create_dir_all(&staged).map_err(|e| e.to_string())?;
+            let mut missing = Vec::new();
+            for model in &models {
+                if let Some((path, _)) = locate(model, data.as_deref(), Some(dir.as_path())) {
+                    if digest_file(&path)? != model.sha256 {
+                        return Err(format!(
+                            "{} failed its pinned SHA-256; remove the damaged group before reinstalling",
+                            path.display()
+                        ));
+                    }
+                } else {
+                    let path = staged.join(model.file_name);
+                    if !std::fs::metadata(&path).is_ok_and(|meta| meta.len() == model.bytes)
+                        || !digest_file(&path).is_ok_and(|sha| sha == model.sha256)
+                    {
+                        // This is private staging, never a user-installed
+                        // model. Windows cannot rename a verified `.part`
+                        // over a corrupt prior staging file.
+                        if path.exists() { std::fs::remove_file(&path).map_err(|e| e.to_string())?; }
+                        fetch_verified(model.url, model.sha256, &path, model.id, &auth, &cancel, Portion::ALONE)?;
+                    }
+                    if !std::fs::metadata(&path).is_ok_and(|meta| meta.len() == model.bytes)
+                        || digest_file(&path)? != model.sha256
+                    {
+                        return Err(format!("{} failed group verification", model.file_name));
+                    }
+                    missing.push((*model, path));
+                }
+            }
+            if cancel.load(Ordering::Relaxed) { return Err("cancelled".into()); }
+            let mut moved: Vec<(&ModelPackage, PathBuf)> = Vec::new();
+            for (model, staged_path) in &missing {
+                let final_path = dir.join(model.file_name);
+                if final_path.exists() {
+                    for (prior, _) in moved.iter().rev() {
+                        let _ = std::fs::rename(dir.join(prior.file_name), staged.join(prior.file_name));
+                    }
+                    return Err(format!("{} exists but is not a verified model; remove it before installing the group", final_path.display()));
+                }
+                if let Err(error) = std::fs::rename(staged_path, &final_path) {
+                    for (prior, _) in moved.iter().rev() {
+                        let _ = std::fs::rename(dir.join(prior.file_name), staged.join(prior.file_name));
+                    }
+                    return Err(format!("{}: {error}", final_path.display()));
+                }
+                moved.push((model, final_path));
+            }
+            for model in &models {
+                let path = dir.join(model.file_name);
+                record_verified(model.id, true);
+                remember(Some(dir.as_path()), model.id, &path, true);
+                emit(model.id, model.bytes, Some(model.bytes), true, None);
+            }
+            Ok(())
+        })();
+        release_group(&id, &models);
+        emit(&id, 0, None, true, result.err());
+    });
+    Ok(DownloadStart::Started)
+}
+
+/// Verify all dependency files, with one result for the logical model.
+#[tauri::command]
+pub async fn verify_model_group(app: tauri::AppHandle, id: String) -> Result<bool, String> {
+    crate::library::blocking(move || {
+        let models = model_group(&id).ok_or_else(|| format!("no such model group: {id}"))?;
+        let data = app_data(&app);
+        let writable = data.as_ref().map(|dir| dir.join("models"));
+        let mut all_valid = true;
+        for model in models {
+            let valid = locate(model, data.as_deref(), writable.as_deref())
+                .is_some_and(|(path, _)| digest_file(&path).is_ok_and(|sha| sha == model.sha256));
+            record_verified(model.id, valid);
+            all_valid &= valid;
+        }
+        Ok(all_valid)
+    }).await
+}
+
+/// Remove a logical model as one unit. All files are preflighted and moved
+/// aside first, so a refused member does not strand a newly partial install.
+#[tauri::command]
+pub fn delete_model_group(app: tauri::AppHandle, id: String) -> Result<DeleteOutcome, String> {
+    let models = model_group(&id).ok_or_else(|| format!("no such model group: {id}"))?;
+    let dir = writable_models_dir(&app)?;
+    let data = app_data(&app);
+    let Some(_claim) = claim_group(&id, &models) else { return Ok(DeleteOutcome::Busy) };
+    let result = (|| -> Result<DeleteOutcome, String> {
+        let mut paths = Vec::new();
+        for model in &models {
+            match plan_delete(locate(model, data.as_deref(), Some(dir.as_path()))) {
+                Ok(path) => paths.push((*model, path)),
+                Err(DeleteOutcome::NotFound) => {},
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+        if paths.is_empty() { return Ok(DeleteOutcome::NotFound); }
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?.as_nanos();
+        let mut aside = Vec::new();
+        for (model, path) in &paths {
+            let backup = dir.join(format!(".group-delete-{id}-{stamp}-{}", model.file_name));
+            if let Err(error) = std::fs::rename(path, &backup) {
+                for (original, saved) in aside.iter().rev() {
+                    let _ = std::fs::rename(saved, original);
+                }
+                return Err(format!("{}: {error}", path.display()));
+            }
+            aside.push((path.clone(), backup));
+        }
+        for (_, backup) in aside { let _ = std::fs::remove_file(backup); }
+        for model in models.iter() {
+            forget_verified(model.id);
+            forget_remembered(Some(dir.as_path()), model.id);
+            evict_sessions_of(model.id);
+        }
+        Ok(DeleteOutcome::Deleted)
+    })();
+    release_group(&id, &models);
+    result
+}
+
 /// Ask a download to stop. It stops at its next block, deletes its `.part`, and
 /// reports `done` with a cancellation error - so the row goes back to "not
 /// installed" through the same path a failure takes.
@@ -1248,7 +1591,7 @@ pub fn cancel_download(id: String) -> bool {
 /// decision this module already made. Which of the three things happened is
 /// [`DeleteOutcome`], because "no" was two facts under one boolean.
 ///
-/// **The session goes with the file.** A model already loaded was built from
+/// **A parked session goes with its file.** A model already loaded was built from
 /// bytes that are in memory and would go on working after its weights were
 /// deleted - a run started before the press finishing on an engine Settings
 /// says is not installed. So a successful delete evicts the kind the
@@ -1258,6 +1601,9 @@ pub fn cancel_download(id: String) -> bool {
 /// the capability store on the press it made.
 #[tauri::command]
 pub fn delete_model(app: tauri::AppHandle, id: String) -> Result<DeleteOutcome, String> {
+    if let Some(group) = group_for_member(&id) {
+        return delete_model_group(app, group.to_owned());
+    }
     let model = package(&id).ok_or_else(|| format!("no such model: {id}"))?;
     let dir = writable_models_dir(&app)?;
     let data = app_data(&app);
@@ -1618,10 +1964,16 @@ impl TokenStore for OsKeyring {
     }
 
     fn set(&self, token: &str) -> Result<(), StoreError> {
+        #[cfg(target_os = "macos")]
+        return crate::macos_keychain::set_password(KEYRING_SERVICE, KEYRING_USER, token).map_err(store_error);
+        #[cfg(not(target_os = "macos"))]
         Self::entry()?.set_password(token).map_err(store_error)
     }
 
     fn delete(&self) -> Result<(), StoreError> {
+        #[cfg(target_os = "macos")]
+        return crate::macos_keychain::delete_password(KEYRING_SERVICE, KEYRING_USER).map_err(store_error);
+        #[cfg(not(target_os = "macos"))]
         match Self::entry()?.delete_credential() {
             // Clearing a token that was never stored is what the Clear button
             // does on a fresh install; it is not something to report.
@@ -1635,6 +1987,76 @@ impl TokenStore for OsKeyring {
     /// token at exit - so those builds are told to keep it in the file instead.
     fn available(&self) -> bool {
         cfg!(any(target_os = "macos", target_os = "windows", target_os = "linux"))
+    }
+}
+
+/// What a read of the store answered, kept for the rest of the process.
+/// `None` is "not asked yet". The token is zeroized when it is forgotten.
+type TokenMemo = Mutex<Option<Result<Option<zeroize::Zeroizing<String>>, StoreError>>>;
+
+/// A store that asks the one behind it **once per process**, not once per read.
+///
+/// On macOS every data read of an item another build wrote puts a password
+/// prompt in front of the user, and `list_models` and every download press read
+/// the token, so an uncached store prompts per poll for an answer that has not
+/// changed. A refusal is kept as well as a token: asking again is the prompt.
+///
+/// The lock is held across the read, so concurrent readers wait for the one
+/// read in flight rather than each raising their own prompt. A write goes to
+/// the store under the same lock, then remembers the successfully written
+/// value (or absence after deletion). A failed mutation forgets the old answer.
+struct CachedStore<'a> {
+    inner: &'a dyn TokenStore,
+    memo: &'a TokenMemo,
+}
+
+impl TokenStore for CachedStore<'_> {
+    fn get(&self) -> Result<Option<String>, StoreError> {
+        let mut memo = self.memo.lock().unwrap_or_else(|p| p.into_inner());
+        match memo.get_or_insert_with(|| self.inner.get().map(|found| found.map(zeroize::Zeroizing::new))) {
+            Ok(found) => Ok(found.as_deref().cloned()),
+            Err(err) => Err(err.clone()),
+        }
+    }
+
+    fn set(&self, token: &str) -> Result<(), StoreError> {
+        let mut memo = self.memo.lock().unwrap_or_else(|p| p.into_inner());
+        let written = self.inner.set(token);
+        *memo = written.as_ref().ok().map(|()| Ok(Some(zeroize::Zeroizing::new(token.to_owned()))));
+        written
+    }
+
+    fn delete(&self) -> Result<(), StoreError> {
+        let mut memo = self.memo.lock().unwrap_or_else(|p| p.into_inner());
+        let deleted = self.inner.delete();
+        *memo = deleted.as_ref().ok().map(|()| Ok(None));
+        deleted
+    }
+
+    fn available(&self) -> bool {
+        self.inner.available()
+    }
+}
+
+/// The process's one memo of the real store's answer.
+fn token_memo() -> &'static TokenMemo {
+    static MEMO: OnceLock<TokenMemo> = OnceLock::new();
+    MEMO.get_or_init(|| Mutex::new(None))
+}
+
+/// The real store, read through [`token_memo`]. Every read and write of the
+/// token goes through this, so no write can leave the memo stale.
+fn keychain() -> CachedStore<'static> {
+    CachedStore { inner: &OsKeyring, memo: token_memo() }
+}
+
+/// Forget a remembered refusal, never a remembered token, so the next read
+/// asks the store again. For the same moment as [`forget_migration`]: an open
+/// of Settings › Models, where a keychain unlocked mid-session is noticed.
+fn forget_token_refusal(memo: &TokenMemo) {
+    let mut memo = memo.lock().unwrap_or_else(|p| p.into_inner());
+    if matches!(*memo, Some(Err(_))) {
+        *memo = None;
     }
 }
 
@@ -1826,7 +2248,7 @@ pub fn write_token(store: &dyn TokenStore, token: &str) -> TokenWrite {
 /// [`crate::settings`] uses, so that the credential store has exactly one
 /// caller outside this module.
 pub fn store_token(token: &str) -> TokenWrite {
-    let outcome = write_token(&OsKeyring, token);
+    let outcome = write_token(&keychain(), token);
     // A fresh write earns a fresh migration attempt: whatever made the store
     // refuse last time may be over, and the next read should find out.
     forget_migration(migration_outcome());
@@ -1900,7 +2322,7 @@ fn token_and_store(app: &tauri::AppHandle) -> (String, TokenLocation) {
         .get(TOKEN_SETTING)
         .and_then(|value| value.as_str())
         .unwrap_or_default();
-    let read = read_token_once(&OsKeyring, migration_outcome(), in_file);
+    let read = read_token_once(&keychain(), migration_outcome(), in_file);
     if read.migrate {
         // Best effort on purpose: a settings file that will not be written is
         // already a problem the user will hear about elsewhere, and the token
@@ -1916,8 +2338,9 @@ fn token_and_store(app: &tauri::AppHandle) -> (String, TokenLocation) {
 
 /// The stored Hugging Face token, or the empty string.
 ///
-/// Read from the store on every download rather than cached, so a token pasted
-/// into Settings takes effect on the next press rather than on the next launch.
+/// Read through [`keychain`], so the store is asked once per process, and a
+/// token pasted into Settings still takes effect on the next press rather than
+/// on the next launch: [`store_token`] replaces what was read.
 fn token(app: &tauri::AppHandle) -> String {
     token_and_store(app).0
 }
@@ -2847,6 +3270,26 @@ fn unpack_zip(archive: &Path, library_dir: &str, dest: &Path) -> Result<(), Stri
 mod tests {
     use super::*;
 
+    #[test]
+    fn logical_model_groups_contain_every_dependency_but_no_shared_detector() {
+        let gate: Vec<_> = model_group("scriptGate").unwrap().iter().map(|m| m.id).collect();
+        assert_eq!(gate, ["scriptGate", "scriptGateLabels"]);
+        let reader: Vec<_> = model_group("mangaOcr").unwrap().iter().map(|m| m.id).collect();
+        assert_eq!(reader, ["ocrEncoder", "ocrDecoder", "ocrVocab"]);
+        assert!(model_group("balloonDetector").is_none());
+        assert_eq!(group_for_member("scriptGateLabels"), Some("scriptGate"));
+        assert_eq!(group_for_member("ocrDecoder"), Some("mangaOcr"));
+        let hayai: Vec<_> = model_group(HAYAI_GROUP).unwrap().iter().map(|m| m.id).collect();
+        assert_eq!(hayai, ["hayaiVision", "hayaiDecoder", "hayaiTokenizer"]);
+        assert_eq!(group_for_member("hayaiTokenizer"), Some(HAYAI_GROUP));
+        assert!(model_group(HAYAI_GROUP).unwrap().iter().all(|m| m.required_by.is_empty()));
+        assert_eq!(group_for_member("balloonDetector"), None);
+        let denoise: Vec<_> = model_group(PAGE_DENOISE_GROUP).unwrap().iter().map(|m| m.id).collect();
+        assert_eq!(denoise, ["pageDenoiseModel", "pageDenoiseSeams"]);
+        assert_eq!(group_for_member("pageDenoiseSeams"), Some(PAGE_DENOISE_GROUP));
+        assert!(model_group(PAGE_DENOISE_GROUP).unwrap().iter().all(|m| m.required_by == ["pageDenoise"]));
+    }
+
     /// The script and the table are two copies of eight digests, and a copy that
     /// can drift is a download verified against the wrong number. Parsed rather
     /// than eyeballed, for the same reason `runtime::package`'s own test parses
@@ -3006,6 +3449,20 @@ mod tests {
         assert!(read_only, "a copy outside the app-data directory is not ours to delete");
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn imported_full_rt_is_visible_to_the_catalogue() {
+        let root = std::env::temp_dir().join(format!("mc-full-rt-locate-{}", std::process::id()));
+        let dir = root.join("models/rtdetr-v2-full");
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = MODELS.iter().find(|entry| entry.id == "fullRt").unwrap();
+        let path = dir.join(model.file_name);
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(model.bytes).unwrap();
+        let found = locate(model, Some(&root), Some(&root.join("models"))).unwrap();
+        assert_eq!(found.0, path);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A `.part` whose digest does not match is deleted rather than published,
@@ -3183,12 +3640,14 @@ mod tests {
         assert!(!residency::parked(kept));
     }
 
-    /// Every catalogue row is the bytes of exactly one loaded session, and the
-    /// runtime is the bytes of none - it is the library every session is built
-    /// *through*, and deleting it evicts nothing that is already mapped in.
+    /// Every parked catalogue session has a weight mapping. Full RT has only
+    /// a run-local session, so it has no parked kind to evict; the runtime is
+    /// also not a session.
     #[test]
     fn every_weight_names_the_session_it_would_evict() {
         for model in MODELS {
+            // Page denoise sessions live for one command and are never parked.
+            if ["fullRt", "pageDenoiseModel", "pageDenoiseSeams"].contains(&model.id) { continue; }
             assert!(
                 resident_kind(model.id).is_some(),
                 "{}: nothing would be evicted when it is deleted",
@@ -3196,6 +3655,7 @@ mod tests {
             );
         }
         assert_eq!(resident_kind(RUNTIME_ID), None);
+        assert_eq!(resident_kind("fullRt"), None);
         assert_eq!(resident_kind("no-such-model"), None);
 
         // The two halves of the script gate are one session, and so are the
@@ -3207,15 +3667,18 @@ mod tests {
         for id in ["ocrEncoder", "ocrDecoder", "ocrVocab"] {
             assert_eq!(resident_kind(id), Some(registry::Kind::ScriptGate), "{id}");
         }
+        for id in ["hayaiVision", "hayaiDecoder", "hayaiTokenizer"] {
+            assert_eq!(resident_kind(id), Some(registry::Kind::Ocr), "{id}");
+        }
 
-        // And no two *unrelated* weights share a kind by accident: eight
-        // artefacts, four parked sessions (the reader is parked inside the
-        // gate), and the two groupings above account for every file that is
-        // not alone on its row.
+        // And no two *unrelated* parked weights share a kind by accident: eleven
+        // artefacts, five parked sessions (manga-ocr is parked inside the
+        // gate, Hayai on its own), and the three groupings above account for
+        // every file that is not alone on its row.
         let kinds: std::collections::HashSet<_> =
             MODELS.iter().filter_map(|m| resident_kind(m.id)).collect();
-        assert_eq!(kinds.len(), 4, "eight weights, four parked sessions, two shared");
-        assert_eq!(MODELS.len(), 8);
+        assert_eq!(kinds.len(), 5, "eleven weights, five parked sessions, three shared");
+        assert_eq!(MODELS.len(), 14);
     }
 
     /* -------------------------------------------------------------- */
@@ -3608,6 +4071,114 @@ mod tests {
         assert_eq!(store.attempts.load(Ordering::Relaxed), 2, "the open asks again");
         read_token_once(&store, &remembered, "hf_in_the_file");
         assert_eq!(store.attempts.load(Ordering::Relaxed), 2, "and the next list does not");
+    }
+
+    /// A working store that counts its reads, standing in for a keychain whose
+    /// every read may prompt.
+    #[derive(Default)]
+    struct ReadCountingStore {
+        store: MemoryStore,
+        reads: std::sync::atomic::AtomicUsize,
+        refuse: AtomicBool,
+        refuse_writes: AtomicBool,
+    }
+
+    impl TokenStore for ReadCountingStore {
+        fn get(&self) -> Result<Option<String>, StoreError> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            if self.refuse.load(Ordering::Relaxed) {
+                return Err(locked("the prompt was cancelled"));
+            }
+            self.store.get()
+        }
+        fn set(&self, token: &str) -> Result<(), StoreError> {
+            if self.refuse_writes.load(Ordering::Relaxed) {
+                return Err(locked("write refused"));
+            }
+            self.store.set(token)
+        }
+        fn delete(&self) -> Result<(), StoreError> {
+            if self.refuse_writes.load(Ordering::Relaxed) {
+                return Err(locked("delete refused"));
+            }
+            self.store.delete()
+        }
+        fn available(&self) -> bool {
+            true
+        }
+    }
+
+    /// The token is read once per process; a save/clear replaces the cached
+    /// answer without another read. Model lists and downloads must not add
+    /// password prompts after the user has just saved their token.
+    #[test]
+    fn the_token_is_read_from_the_store_once() {
+        let store = ReadCountingStore::default();
+        store.set("hf_stored").unwrap();
+        let memo = TokenMemo::default();
+        let cached = CachedStore { inner: &store, memo: &memo };
+        let reads = || store.reads.load(Ordering::Relaxed);
+
+        for _ in 0..3 {
+            assert_eq!(read_token(&cached, "").token, "hf_stored");
+        }
+        assert_eq!(reads(), 1, "one prompt, not three");
+
+        // A save replaces what was remembered.
+        assert_eq!(write_token(&cached, "hf_new"), TokenWrite::Stored);
+        assert_eq!(read_token(&cached, "").token, "hf_new");
+        assert_eq!(read_token(&cached, "").token, "hf_new");
+        assert_eq!(reads(), 1, "a save already knows the new value");
+
+        // And a clear forgets it.
+        assert_eq!(write_token(&cached, ""), TokenWrite::Stored);
+        assert_eq!(read_token(&cached, "").token, "");
+        assert_eq!(reads(), 1, "a successful clear already knows the token is absent");
+    }
+
+    /// A refused read is remembered like a token, and forgotten by the open
+    /// of Settings › Models; a remembered token is not.
+    #[test]
+    fn a_refused_token_read_is_asked_again_only_on_the_retry_flag() {
+        let store = ReadCountingStore::default();
+        store.set("hf_stored").unwrap();
+        store.refuse.store(true, Ordering::Relaxed);
+        let memo = TokenMemo::default();
+        let cached = CachedStore { inner: &store, memo: &memo };
+        let reads = || store.reads.load(Ordering::Relaxed);
+
+        for _ in 0..3 {
+            let read = read_token(&cached, "");
+            assert_eq!(read.location, TokenLocation::FileStoreUnavailable { reason: StoreReason::Locked });
+        }
+        assert_eq!(reads(), 1);
+
+        store.refuse.store(false, Ordering::Relaxed);
+        forget_token_refusal(&memo);
+        assert_eq!(read_token(&cached, "").token, "hf_stored");
+        forget_token_refusal(&memo);
+        assert_eq!(read_token(&cached, "").token, "hf_stored");
+        assert_eq!(reads(), 2, "a remembered token survives the retry flag");
+    }
+
+    #[test]
+    fn a_new_hf_save_needs_no_readback_and_failed_mutations_do_not_seed_the_cache() {
+        let store = ReadCountingStore::default();
+        let memo = TokenMemo::default();
+        let cached = CachedStore { inner: &store, memo: &memo };
+
+        cached.set("hf_saved").unwrap();
+        assert_eq!(cached.get().unwrap().as_deref(), Some("hf_saved"));
+        assert_eq!(store.reads.load(Ordering::Relaxed), 0);
+
+        store.refuse_writes.store(true, Ordering::Relaxed);
+        assert!(cached.set("hf_unsaved").is_err());
+        assert!(memo.lock().unwrap().is_none());
+        assert_eq!(cached.get().unwrap().as_deref(), Some("hf_saved"));
+        assert!(cached.delete().is_err());
+        assert!(memo.lock().unwrap().is_none());
+        assert_eq!(cached.get().unwrap().as_deref(), Some("hf_saved"));
+        assert_eq!(store.reads.load(Ordering::Relaxed), 2);
     }
 
     /// `tokenStore` is data and the interface reads it as data: three ids, no

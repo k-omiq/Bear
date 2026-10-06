@@ -1,0 +1,3237 @@
+{
+  "meaning": "candidate-region agreement with SAM pixel mask; none of the three is human ground truth",
+  "rt_model_id": "detector-fp32",
+  "rt_model_sha256": "065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195",
+  "rt_layout": "halves",
+  "coo_checkpoint_sha256": "49a448ec19e4e3894b726553fe6f47916827b10d642109aa5f41b96aeeb88e30",
+  "coo_min_score": 0.1,
+  "rt_result_sha256": "f46e72056317a3e277628f59b3f0a1b7b56d53ead8da5bb32a00f2c22071ea9c",
+  "coo_result_sha256": "d15f266718c8fb3f9a91bd8c857ccdd96b6b194c7bb977ab5095ae0246f38aa1",
+  "totals": {
+    "rt_text_boxes": 71,
+    "coo_proposals": 203,
+    "sam_pixels": 1124691,
+    "sam_pixels_in_rt_text_boxes": 360917,
+    "sam_pixels_in_coo_polygons": 443295,
+    "sam_pixels_in_either_candidate": 723181,
+    "coo_added_sam_pixels_outside_rt": 362264,
+    "coo_proposals_with_any_sam_pixel": 153,
+    "pages": 45,
+    "pages_with_coo_added_sam_pixels": 32
+  },
+  "pages": [
+    {
+      "page": "01",
+      "rt_text_boxes": 5,
+      "coo_proposals": 2,
+      "sam_pixels": 56791,
+      "sam_pixels_in_rt_text_boxes": 51291,
+      "sam_pixels_in_coo_polygons": 5743,
+      "sam_pixels_in_either_candidate": 56791,
+      "coo_added_sam_pixels_outside_rt": 5500,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.6795574175793714,
+          "bounding_box": [
+            119.79166412353516,
+            1108.355712890625,
+            305.70831298828125,
+            1323.510009765625
+          ],
+          "sam_pixels_in_polygon": 5500,
+          "sam_pixels_in_polygon_outside_rt_text": 5500,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.28885020456639016,
+          "bounding_box": [
+            210.8333282470703,
+            316.2623596191406,
+            233.35415649414062,
+            355.5555419921875
+          ],
+          "sam_pixels_in_polygon": 243,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0037185365271172454
+        }
+      ]
+    },
+    {
+      "page": "02",
+      "rt_text_boxes": 0,
+      "coo_proposals": 11,
+      "sam_pixels": 35136,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 33692,
+      "sam_pixels_in_either_candidate": 33692,
+      "coo_added_sam_pixels_outside_rt": 33692,
+      "coo_proposals_with_any_sam_pixel": 10,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.17222334339036738,
+          "bounding_box": [
+            225.2083282470703,
+            1020.1856689453125,
+            243.8958282470703,
+            1040.3114013671875
+          ],
+          "sam_pixels_in_polygon": 158,
+          "sam_pixels_in_polygon_outside_rt_text": 158,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.16111443754009624,
+          "bounding_box": [
+            227.125,
+            1019.227294921875,
+            235.2708282470703,
+            1025.9359130859375
+          ],
+          "sam_pixels_in_polygon": 45,
+          "sam_pixels_in_polygon_outside_rt_text": 45,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.18182434161038447,
+          "bounding_box": [
+            267.375,
+            1013.47705078125,
+            272.64581298828125,
+            1017.7897338867188
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.1696470168729623,
+          "bounding_box": [
+            210.35415649414062,
+            1000.5390625,
+            215.625,
+            1004.8517456054688
+          ],
+          "sam_pixels_in_polygon": 30,
+          "sam_pixels_in_polygon_outside_rt_text": 30,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.21005843849852682,
+          "bounding_box": [
+            200.7708282470703,
+            997.6639404296875,
+            211.3125,
+            1005.8101196289062
+          ],
+          "sam_pixels_in_polygon": 1,
+          "sam_pixels_in_polygon_outside_rt_text": 1,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.10512125265917607,
+          "bounding_box": [
+            283.1875,
+            997.1847534179688,
+            287.9791564941406,
+            1002.455810546875
+          ],
+          "sam_pixels_in_polygon": 21,
+          "sam_pixels_in_polygon_outside_rt_text": 21,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.276670376493019,
+          "bounding_box": [
+            104.45832824707031,
+            970.3504028320312,
+            146.1458282470703,
+            996.70556640625
+          ],
+          "sam_pixels_in_polygon": 12,
+          "sam_pixels_in_polygon_outside_rt_text": 12,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.4491903416825139,
+          "bounding_box": [
+            24.4375,
+            817.490234375,
+            449.45831298828125,
+            1222.40185546875
+          ],
+          "sam_pixels_in_polygon": 24866,
+          "sam_pixels_in_polygon_outside_rt_text": 24866,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 8,
+          "score": 0.16670033538658585,
+          "bounding_box": [
+            365.125,
+            895.5974731445312,
+            386.20831298828125,
+            928.6612548828125
+          ],
+          "sam_pixels_in_polygon": 579,
+          "sam_pixels_in_polygon_outside_rt_text": 579,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 9,
+          "score": 0.24010224157309074,
+          "bounding_box": [
+            261.14581298828125,
+            861.0961303710938,
+            376.14581298828125,
+            978.4965209960938
+          ],
+          "sam_pixels_in_polygon": 619,
+          "sam_pixels_in_polygon_outside_rt_text": 619,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 10,
+          "score": 0.607611873345757,
+          "bounding_box": [
+            266.4166564941406,
+            113.56693267822266,
+            444.1875,
+            345.9718322753906
+          ],
+          "sam_pixels_in_polygon": 8504,
+          "sam_pixels_in_polygon_outside_rt_text": 8504,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "03",
+      "rt_text_boxes": 0,
+      "coo_proposals": 8,
+      "sam_pixels": 72832,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 39828,
+      "sam_pixels_in_either_candidate": 39828,
+      "coo_added_sam_pixels_outside_rt": 39828,
+      "coo_proposals_with_any_sam_pixel": 7,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.12860492710024118,
+          "bounding_box": [
+            447.5416564941406,
+            1517.100830078125,
+            451.8541564941406,
+            1522.3719482421875
+          ],
+          "sam_pixels_in_polygon": 14,
+          "sam_pixels_in_polygon_outside_rt_text": 14,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.12451592343624193,
+          "bounding_box": [
+            462.875,
+            1462.9530029296875,
+            470.5416564941406,
+            1469.6614990234375
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.2405023260973394,
+          "bounding_box": [
+            361.2916564941406,
+            1439.9520263671875,
+            367.52081298828125,
+            1447.1397705078125
+          ],
+          "sam_pixels_in_polygon": 30,
+          "sam_pixels_in_polygon_outside_rt_text": 30,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.19595694448798895,
+          "bounding_box": [
+            362.7291564941406,
+            1433.72265625,
+            367.0416564941406,
+            1438.99365234375
+          ],
+          "sam_pixels_in_polygon": 3,
+          "sam_pixels_in_polygon_outside_rt_text": 3,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.5531565640604513,
+          "bounding_box": [
+            247.72915649414062,
+            1312.48876953125,
+            546.25,
+            1599.0416259765625
+          ],
+          "sam_pixels_in_polygon": 16691,
+          "sam_pixels_in_polygon_outside_rt_text": 16691,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.6494331666241521,
+          "bounding_box": [
+            76.1875,
+            1197.96337890625,
+            422.625,
+            1526.6845703125
+          ],
+          "sam_pixels_in_polygon": 17602,
+          "sam_pixels_in_polygon_outside_rt_text": 17602,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.2790676900652172,
+          "bounding_box": [
+            248.2083282470703,
+            569.272216796875,
+            407.2916564941406,
+            699.6106567382812
+          ],
+          "sam_pixels_in_polygon": 3220,
+          "sam_pixels_in_polygon_outside_rt_text": 3220,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.4150730886685319,
+          "bounding_box": [
+            449.9375,
+            77.14884185791016,
+            624.8333129882812,
+            266.90625
+          ],
+          "sam_pixels_in_polygon": 7960,
+          "sam_pixels_in_polygon_outside_rt_text": 7960,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "04",
+      "rt_text_boxes": 1,
+      "coo_proposals": 4,
+      "sam_pixels": 36253,
+      "sam_pixels_in_rt_text_boxes": 11821,
+      "sam_pixels_in_coo_polygons": 8599,
+      "sam_pixels_in_either_candidate": 13111,
+      "coo_added_sam_pixels_outside_rt": 1290,
+      "coo_proposals_with_any_sam_pixel": 4,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.651326178010447,
+          "bounding_box": [
+            121.22916412353516,
+            933.453125,
+            275.52081298828125,
+            1119.3770751953125
+          ],
+          "sam_pixels_in_polygon": 7309,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.44073428034479006
+        },
+        {
+          "index": 1,
+          "score": 0.1787991308628989,
+          "bounding_box": [
+            296.125,
+            536.2084350585938,
+            309.0625,
+            549.1464233398438
+          ],
+          "sam_pixels_in_polygon": 118,
+          "sam_pixels_in_polygon_outside_rt_text": 118,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.14529278808290005,
+          "bounding_box": [
+            186.3958282470703,
+            484.4564208984375,
+            200.29165649414062,
+            503.62384033203125
+          ],
+          "sam_pixels_in_polygon": 22,
+          "sam_pixels_in_polygon_outside_rt_text": 22,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.4033597357863263,
+          "bounding_box": [
+            251.0833282470703,
+            461.45550537109375,
+            289.89581298828125,
+            509.3740539550781
+          ],
+          "sam_pixels_in_polygon": 1150,
+          "sam_pixels_in_polygon_outside_rt_text": 1150,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "05",
+      "rt_text_boxes": 1,
+      "coo_proposals": 10,
+      "sam_pixels": 34349,
+      "sam_pixels_in_rt_text_boxes": 6913,
+      "sam_pixels_in_coo_polygons": 24181,
+      "sam_pixels_in_either_candidate": 24438,
+      "coo_added_sam_pixels_outside_rt": 17525,
+      "coo_proposals_with_any_sam_pixel": 6,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.11988597887533682,
+          "bounding_box": [
+            261.625,
+            1543.935302734375,
+            265.9375,
+            1549.685546875
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.001045796552650359
+        },
+        {
+          "index": 1,
+          "score": 0.6936688453573664,
+          "bounding_box": [
+            246.7708282470703,
+            1484.037109375,
+            392.4375,
+            1584.1868896484375
+          ],
+          "sam_pixels_in_polygon": 6656,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.5959913529709745
+        },
+        {
+          "index": 2,
+          "score": 0.4980491933870891,
+          "bounding_box": [
+            359.375,
+            995.2680053710938,
+            470.0625,
+            1106.918212890625
+          ],
+          "sam_pixels_in_polygon": 5420,
+          "sam_pixels_in_polygon_outside_rt_text": 5420,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.12917419705384722,
+          "bounding_box": [
+            275.52081298828125,
+            458.5804138183594,
+            285.58331298828125,
+            472.4767761230469
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.13775092394401628,
+          "bounding_box": [
+            161.47915649414062,
+            366.0976257324219,
+            167.7083282470703,
+            372.80621337890625
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.22665127666874063,
+          "bounding_box": [
+            146.1458282470703,
+            360.347412109375,
+            150.4583282470703,
+            364.6600646972656
+          ],
+          "sam_pixels_in_polygon": 15,
+          "sam_pixels_in_polygon_outside_rt_text": 15,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.16884954542749456,
+          "bounding_box": [
+            276.4791564941406,
+            350.7637023925781,
+            280.7916564941406,
+            355.07635498046875
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.5249213244139552,
+          "bounding_box": [
+            7.666666507720947,
+            217.0709686279297,
+            411.6041564941406,
+            593.2315063476562
+          ],
+          "sam_pixels_in_polygon": 12071,
+          "sam_pixels_in_polygon_outside_rt_text": 12071,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 8,
+          "score": 0.26329444150906056,
+          "bounding_box": [
+            229.5208282470703,
+            319.61663818359375,
+            241.5,
+            329.6795349121094
+          ],
+          "sam_pixels_in_polygon": 232,
+          "sam_pixels_in_polygon_outside_rt_text": 232,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 9,
+          "score": 0.23950661439055862,
+          "bounding_box": [
+            191.1875,
+            252.05149841308594,
+            242.9375,
+            303.3243408203125
+          ],
+          "sam_pixels_in_polygon": 882,
+          "sam_pixels_in_polygon_outside_rt_text": 882,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "06",
+      "rt_text_boxes": 1,
+      "coo_proposals": 2,
+      "sam_pixels": 17989,
+      "sam_pixels_in_rt_text_boxes": 2381,
+      "sam_pixels_in_coo_polygons": 7260,
+      "sam_pixels_in_either_candidate": 7260,
+      "coo_added_sam_pixels_outside_rt": 4879,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.7608610739022861,
+          "bounding_box": [
+            329.1875,
+            479.18536376953125,
+            442.75,
+            601.8568115234375
+          ],
+          "sam_pixels_in_polygon": 2381,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.8828171322751698
+        },
+        {
+          "index": 1,
+          "score": 0.6932527225461568,
+          "bounding_box": [
+            12.458333015441895,
+            286.5528564453125,
+            167.7083282470703,
+            457.1428527832031
+          ],
+          "sam_pixels_in_polygon": 4879,
+          "sam_pixels_in_polygon_outside_rt_text": 4879,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "07",
+      "rt_text_boxes": 2,
+      "coo_proposals": 5,
+      "sam_pixels": 24322,
+      "sam_pixels_in_rt_text_boxes": 14433,
+      "sam_pixels_in_coo_polygons": 7163,
+      "sam_pixels_in_either_candidate": 18889,
+      "coo_added_sam_pixels_outside_rt": 4456,
+      "coo_proposals_with_any_sam_pixel": 4,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.47616182383928674,
+          "bounding_box": [
+            195.97915649414062,
+            1465.8280029296875,
+            315.77081298828125,
+            1590.416259765625
+          ],
+          "sam_pixels_in_polygon": 4456,
+          "sam_pixels_in_polygon_outside_rt_text": 4456,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.11216019775019959,
+          "bounding_box": [
+            417.3541564941406,
+            730.7576904296875,
+            429.33331298828125,
+            741.7789306640625
+          ],
+          "sam_pixels_in_polygon": 46,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.002394710177883937
+        },
+        {
+          "index": 2,
+          "score": 0.13000882513976345,
+          "bounding_box": [
+            327.75,
+            731.2368774414062,
+            336.8541564941406,
+            740.3414306640625
+          ],
+          "sam_pixels_in_polygon": 53,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0015034694433050653
+        },
+        {
+          "index": 3,
+          "score": 0.34072173861477595,
+          "bounding_box": [
+            333.9791564941406,
+            707.277587890625,
+            434.6041564941406,
+            781.0721435546875
+          ],
+          "sam_pixels_in_polygon": 2658,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.13468724449859046
+        },
+        {
+          "index": 4,
+          "score": 0.11940757500512214,
+          "bounding_box": [
+            352.1875,
+            704.4025268554688,
+            362.25,
+            716.3821411132812
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.00218647733565331
+        }
+      ]
+    },
+    {
+      "page": "08",
+      "rt_text_boxes": 0,
+      "coo_proposals": 23,
+      "sam_pixels": 40438,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 27668,
+      "sam_pixels_in_either_candidate": 27668,
+      "coo_added_sam_pixels_outside_rt": 27668,
+      "coo_proposals_with_any_sam_pixel": 9,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.11492997697658008,
+          "bounding_box": [
+            85.29166412353516,
+            824.6780395507812,
+            89.60416412353516,
+            828.99072265625
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.12140921149402857,
+          "bounding_box": [
+            307.625,
+            793.531005859375,
+            322.4791564941406,
+            805.9898071289062
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.10310079007373228,
+          "bounding_box": [
+            317.20831298828125,
+            792.0934448242188,
+            326.7916564941406,
+            801.1979370117188
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.15255821986054932,
+          "bounding_box": [
+            92.95832824707031,
+            786.8223876953125,
+            98.70832824707031,
+            791.1350708007812
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.10146639079464256,
+          "bounding_box": [
+            320.5625,
+            779.6345825195312,
+            342.6041564941406,
+            802.635498046875
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.11370336041519684,
+          "bounding_box": [
+            92.47916412353516,
+            774.8427734375,
+            98.70832824707031,
+            783.947265625
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.1954925804884018,
+          "bounding_box": [
+            295.64581298828125,
+            750.8834838867188,
+            332.5416564941406,
+            802.635498046875
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.1125255778988267,
+          "bounding_box": [
+            312.4166564941406,
+            742.2581176757812,
+            322.0,
+            759.9879760742188
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 8,
+          "score": 0.1588453344690303,
+          "bounding_box": [
+            167.22915649414062,
+            625.3369140625,
+            172.5,
+            629.6495971679688
+          ],
+          "sam_pixels_in_polygon": 41,
+          "sam_pixels_in_polygon_outside_rt_text": 41,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 9,
+          "score": 0.11601573525338756,
+          "bounding_box": [
+            162.91665649414062,
+            609.5238037109375,
+            172.0208282470703,
+            615.2740478515625
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 10,
+          "score": 0.10856479370877856,
+          "bounding_box": [
+            159.5625,
+            610.0029907226562,
+            164.35415649414062,
+            614.315673828125
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 11,
+          "score": 0.10673996705848438,
+          "bounding_box": [
+            206.5208282470703,
+            607.6070556640625,
+            214.66665649414062,
+            617.1907348632812
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 12,
+          "score": 0.11897746161557735,
+          "bounding_box": [
+            368.4791564941406,
+            606.1694946289062,
+            375.6666564941406,
+            612.39892578125
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 13,
+          "score": 0.15224524780642243,
+          "bounding_box": [
+            365.125,
+            578.3767700195312,
+            385.7291564941406,
+            604.2527465820312
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 14,
+          "score": 0.21424175557651512,
+          "bounding_box": [
+            192.625,
+            574.0640869140625,
+            222.8125,
+            602.3359985351562
+          ],
+          "sam_pixels_in_polygon": 287,
+          "sam_pixels_in_polygon_outside_rt_text": 287,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 15,
+          "score": 0.2590417698430385,
+          "bounding_box": [
+            152.375,
+            561.1260986328125,
+            163.3958282470703,
+            579.3351440429688
+          ],
+          "sam_pixels_in_polygon": 225,
+          "sam_pixels_in_polygon_outside_rt_text": 225,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 16,
+          "score": 0.2337897221866418,
+          "bounding_box": [
+            358.89581298828125,
+            524.2288208007812,
+            411.125,
+            574.0640869140625
+          ],
+          "sam_pixels_in_polygon": 710,
+          "sam_pixels_in_polygon_outside_rt_text": 710,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 17,
+          "score": 0.1474993388983421,
+          "bounding_box": [
+            367.0416564941406,
+            532.3749389648438,
+            379.9791564941406,
+            547.2296752929688
+          ],
+          "sam_pixels_in_polygon": 156,
+          "sam_pixels_in_polygon_outside_rt_text": 156,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 18,
+          "score": 0.27699084397960627,
+          "bounding_box": [
+            330.625,
+            528.062255859375,
+            360.33331298828125,
+            568.7930297851562
+          ],
+          "sam_pixels_in_polygon": 712,
+          "sam_pixels_in_polygon_outside_rt_text": 712,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 19,
+          "score": 0.21021094346152883,
+          "bounding_box": [
+            258.75,
+            531.4165649414062,
+            264.02081298828125,
+            540.5211181640625
+          ],
+          "sam_pixels_in_polygon": 47,
+          "sam_pixels_in_polygon_outside_rt_text": 47,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 20,
+          "score": 0.16630832002530888,
+          "bounding_box": [
+            335.4166564941406,
+            484.4564208984375,
+            354.1041564941406,
+            500.26953125
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 21,
+          "score": 0.40645414700246113,
+          "bounding_box": [
+            70.4375,
+            400.1197814941406,
+            393.39581298828125,
+            737.9454956054688
+          ],
+          "sam_pixels_in_polygon": 24192,
+          "sam_pixels_in_polygon_outside_rt_text": 24192,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 22,
+          "score": 0.4009552050915083,
+          "bounding_box": [
+            351.70831298828125,
+            438.9338073730469,
+            431.7291564941406,
+            511.7699890136719
+          ],
+          "sam_pixels_in_polygon": 3474,
+          "sam_pixels_in_polygon_outside_rt_text": 3474,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "09",
+      "rt_text_boxes": 0,
+      "coo_proposals": 11,
+      "sam_pixels": 29479,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 11904,
+      "sam_pixels_in_either_candidate": 11904,
+      "coo_added_sam_pixels_outside_rt": 11904,
+      "coo_proposals_with_any_sam_pixel": 9,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.4502081763989308,
+          "bounding_box": [
+            358.89581298828125,
+            1024.498291015625,
+            485.875,
+            1136.627685546875
+          ],
+          "sam_pixels_in_polygon": 2082,
+          "sam_pixels_in_polygon_outside_rt_text": 2082,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.1570295632023234,
+          "bounding_box": [
+            245.3333282470703,
+            942.5576171875,
+            264.9791564941406,
+            967.4752807617188
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.1538600005845928,
+          "bounding_box": [
+            262.58331298828125,
+            888.8888549804688,
+            315.77081298828125,
+            921.95263671875
+          ],
+          "sam_pixels_in_polygon": 475,
+          "sam_pixels_in_polygon_outside_rt_text": 475,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.1290558329931209,
+          "bounding_box": [
+            271.20831298828125,
+            870.2006225585938,
+            298.0416564941406,
+            896.5558471679688
+          ],
+          "sam_pixels_in_polygon": 102,
+          "sam_pixels_in_polygon_outside_rt_text": 102,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.30095473144744755,
+          "bounding_box": [
+            85.29166412353516,
+            792.5726318359375,
+            421.1875,
+            1122.252197265625
+          ],
+          "sam_pixels_in_polygon": 8853,
+          "sam_pixels_in_polygon_outside_rt_text": 8853,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.11408549538084671,
+          "bounding_box": [
+            499.77081298828125,
+            817.0110473632812,
+            517.9791259765625,
+            833.7825317382812
+          ],
+          "sam_pixels_in_polygon": 18,
+          "sam_pixels_in_polygon_outside_rt_text": 18,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.12604368990056786,
+          "bounding_box": [
+            505.0416564941406,
+            786.3432006835938,
+            540.5,
+            832.8241577148438
+          ],
+          "sam_pixels_in_polygon": 368,
+          "sam_pixels_in_polygon_outside_rt_text": 368,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.15986837129042084,
+          "bounding_box": [
+            337.33331298828125,
+            320.0958251953125,
+            354.1041564941406,
+            327.2835998535156
+          ],
+          "sam_pixels_in_polygon": 188,
+          "sam_pixels_in_polygon_outside_rt_text": 188,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 8,
+          "score": 0.10005303914103589,
+          "bounding_box": [
+            315.77081298828125,
+            313.8664245605469,
+            335.89581298828125,
+            337.82568359375
+          ],
+          "sam_pixels_in_polygon": 254,
+          "sam_pixels_in_polygon_outside_rt_text": 254,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 9,
+          "score": 0.111645775531689,
+          "bounding_box": [
+            314.33331298828125,
+            305.72027587890625,
+            327.27081298828125,
+            318.65826416015625
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 10,
+          "score": 0.1478523722481103,
+          "bounding_box": [
+            354.1041564941406,
+            279.8442687988281,
+            390.52081298828125,
+            318.65826416015625
+          ],
+          "sam_pixels_in_polygon": 153,
+          "sam_pixels_in_polygon_outside_rt_text": 153,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "10",
+      "rt_text_boxes": 1,
+      "coo_proposals": 4,
+      "sam_pixels": 63024,
+      "sam_pixels_in_rt_text_boxes": 2662,
+      "sam_pixels_in_coo_polygons": 10981,
+      "sam_pixels_in_either_candidate": 13643,
+      "coo_added_sam_pixels_outside_rt": 10981,
+      "coo_proposals_with_any_sam_pixel": 4,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.16906538782641292,
+          "bounding_box": [
+            521.3333129882812,
+            104.46240997314453,
+            528.0416259765625,
+            114.52530670166016
+          ],
+          "sam_pixels_in_polygon": 56,
+          "sam_pixels_in_polygon_outside_rt_text": 56,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.18399417371486476,
+          "bounding_box": [
+            406.33331298828125,
+            80.50314331054688,
+            438.4375,
+            123.15064239501953
+          ],
+          "sam_pixels_in_polygon": 1065,
+          "sam_pixels_in_polygon_outside_rt_text": 1065,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.11161527077131199,
+          "bounding_box": [
+            423.58331298828125,
+            79.54476928710938,
+            428.375,
+            86.73255157470703
+          ],
+          "sam_pixels_in_polygon": 22,
+          "sam_pixels_in_polygon_outside_rt_text": 22,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.37266160873328213,
+          "bounding_box": [
+            388.125,
+            0.0,
+            661.25,
+            209.88319396972656
+          ],
+          "sam_pixels_in_polygon": 10958,
+          "sam_pixels_in_polygon_outside_rt_text": 10958,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "11",
+      "rt_text_boxes": 1,
+      "coo_proposals": 3,
+      "sam_pixels": 17072,
+      "sam_pixels_in_rt_text_boxes": 4784,
+      "sam_pixels_in_coo_polygons": 12202,
+      "sam_pixels_in_either_candidate": 16986,
+      "coo_added_sam_pixels_outside_rt": 12202,
+      "coo_proposals_with_any_sam_pixel": 3,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.1461818787961816,
+          "bounding_box": [
+            643.0416259765625,
+            258.2809143066406,
+            653.5833129882812,
+            269.30218505859375
+          ],
+          "sam_pixels_in_polygon": 102,
+          "sam_pixels_in_polygon_outside_rt_text": 102,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.2498326323616008,
+          "bounding_box": [
+            606.1458129882812,
+            223.30038452148438,
+            612.375,
+            227.61305236816406
+          ],
+          "sam_pixels_in_polygon": 4,
+          "sam_pixels_in_polygon_outside_rt_text": 4,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.6105908606671087,
+          "bounding_box": [
+            365.6041564941406,
+            0.0,
+            690.0,
+            368.4935607910156
+          ],
+          "sam_pixels_in_polygon": 12202,
+          "sam_pixels_in_polygon_outside_rt_text": 12202,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "12",
+      "rt_text_boxes": 2,
+      "coo_proposals": 1,
+      "sam_pixels": 17647,
+      "sam_pixels_in_rt_text_boxes": 13938,
+      "sam_pixels_in_coo_polygons": 3686,
+      "sam_pixels_in_either_candidate": 17624,
+      "coo_added_sam_pixels_outside_rt": 3686,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.6066834749946297,
+          "bounding_box": [
+            194.54165649414062,
+            1224.318603515625,
+            367.52081298828125,
+            1331.177001953125
+          ],
+          "sam_pixels_in_polygon": 3686,
+          "sam_pixels_in_polygon_outside_rt_text": 3686,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "13",
+      "rt_text_boxes": 5,
+      "coo_proposals": 7,
+      "sam_pixels": 17307,
+      "sam_pixels_in_rt_text_boxes": 17307,
+      "sam_pixels_in_coo_polygons": 47,
+      "sam_pixels_in_either_candidate": 17307,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.10722155556406664,
+          "bounding_box": [
+            231.91665649414062,
+            1446.66064453125,
+            247.25,
+            1455.76513671875
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.1199529165930954,
+          "bounding_box": [
+            227.125,
+            1446.181396484375,
+            233.8333282470703,
+            1452.8900146484375
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.13634774066507815,
+          "bounding_box": [
+            214.1875,
+            1443.306396484375,
+            223.29165649414062,
+            1457.2027587890625
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.1169639858151121,
+          "bounding_box": [
+            260.6666564941406,
+            1396.8253173828125,
+            276.95831298828125,
+            1412.1593017578125
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.35963433775094544,
+          "bounding_box": [
+            137.04165649414062,
+            1292.8421630859375,
+            448.9791564941406,
+            1586.582763671875
+          ],
+          "sam_pixels_in_polygon": 47,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.07206690296186136
+        },
+        {
+          "index": 5,
+          "score": 0.17953764353505586,
+          "bounding_box": [
+            511.75,
+            1312.9678955078125,
+            544.3333129882812,
+            1358.9697265625
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.24862404346231162,
+          "bounding_box": [
+            577.3958129882812,
+            1290.4461669921875,
+            604.2291259765625,
+            1333.09375
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "14",
+      "rt_text_boxes": 1,
+      "coo_proposals": 8,
+      "sam_pixels": 40005,
+      "sam_pixels_in_rt_text_boxes": 29933,
+      "sam_pixels_in_coo_polygons": 19554,
+      "sam_pixels_in_either_candidate": 36648,
+      "coo_added_sam_pixels_outside_rt": 6715,
+      "coo_proposals_with_any_sam_pixel": 7,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.6194458986005394,
+          "bounding_box": [
+            363.20831298828125,
+            1154.8367919921875,
+            488.75,
+            1305.3009033203125
+          ],
+          "sam_pixels_in_polygon": 4772,
+          "sam_pixels_in_polygon_outside_rt_text": 4772,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.10739313538942952,
+          "bounding_box": [
+            281.75,
+            1156.2742919921875,
+            288.9375,
+            1167.2955322265625
+          ],
+          "sam_pixels_in_polygon": 1,
+          "sam_pixels_in_polygon_outside_rt_text": 1,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.38857400973259576,
+          "bounding_box": [
+            203.6458282470703,
+            1113.1475830078125,
+            310.9791564941406,
+            1221.4434814453125
+          ],
+          "sam_pixels_in_polygon": 1943,
+          "sam_pixels_in_polygon_outside_rt_text": 1943,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.1412640603820116,
+          "bounding_box": [
+            253.9583282470703,
+            1132.794189453125,
+            273.6041564941406,
+            1143.3363037109375
+          ],
+          "sam_pixels_in_polygon": 124,
+          "sam_pixels_in_polygon_outside_rt_text": 124,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.1616120742900031,
+          "bounding_box": [
+            260.6666564941406,
+            1125.6064453125,
+            270.7291564941406,
+            1134.7109375
+          ],
+          "sam_pixels_in_polygon": 32,
+          "sam_pixels_in_polygon_outside_rt_text": 32,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.31083674172128667,
+          "bounding_box": [
+            319.125,
+            358.4306640625,
+            343.5625,
+            379.5148010253906
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.002302435392617099
+        },
+        {
+          "index": 6,
+          "score": 0.2564728685771572,
+          "bounding_box": [
+            284.625,
+            321.05419921875,
+            316.7291564941406,
+            372.3270263671875
+          ],
+          "sam_pixels_in_polygon": 396,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0073556893167031285
+        },
+        {
+          "index": 7,
+          "score": 0.5301456109699765,
+          "bounding_box": [
+            56.0625,
+            174.42347717285156,
+            434.6041564941406,
+            564.9595336914062
+          ],
+          "sam_pixels_in_polygon": 12839,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.42531053628736054
+        }
+      ]
+    },
+    {
+      "page": "15",
+      "rt_text_boxes": 0,
+      "coo_proposals": 4,
+      "sam_pixels": 30170,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 20929,
+      "sam_pixels_in_either_candidate": 20929,
+      "coo_added_sam_pixels_outside_rt": 20929,
+      "coo_proposals_with_any_sam_pixel": 4,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.14209407783831313,
+          "bounding_box": [
+            419.27081298828125,
+            1473.9742431640625,
+            429.33331298828125,
+            1485.474609375
+          ],
+          "sam_pixels_in_polygon": 35,
+          "sam_pixels_in_polygon_outside_rt_text": 35,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.1292622409854577,
+          "bounding_box": [
+            230.9583282470703,
+            1461.0362548828125,
+            247.25,
+            1475.8909912109375
+          ],
+          "sam_pixels_in_polygon": 72,
+          "sam_pixels_in_polygon_outside_rt_text": 72,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.468443800192776,
+          "bounding_box": [
+            11.020833015441895,
+            1283.2584228515625,
+            494.02081298828125,
+            1600.0
+          ],
+          "sam_pixels_in_polygon": 12602,
+          "sam_pixels_in_polygon_outside_rt_text": 12602,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.5904488838298811,
+          "bounding_box": [
+            414.95831298828125,
+            495.4776611328125,
+            590.8125,
+            668.463623046875
+          ],
+          "sam_pixels_in_polygon": 8327,
+          "sam_pixels_in_polygon_outside_rt_text": 8327,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "16",
+      "rt_text_boxes": 0,
+      "coo_proposals": 0,
+      "sam_pixels": 15593,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 0,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "17",
+      "rt_text_boxes": 2,
+      "coo_proposals": 11,
+      "sam_pixels": 45891,
+      "sam_pixels_in_rt_text_boxes": 22111,
+      "sam_pixels_in_coo_polygons": 12061,
+      "sam_pixels_in_either_candidate": 23596,
+      "coo_added_sam_pixels_outside_rt": 1485,
+      "coo_proposals_with_any_sam_pixel": 8,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.11163453240361478,
+          "bounding_box": [
+            425.5,
+            1002.455810546875,
+            432.20831298828125,
+            1008.6851806640625
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0005347635706636466
+        },
+        {
+          "index": 1,
+          "score": 0.10945739986168014,
+          "bounding_box": [
+            426.9375,
+            991.9136962890625,
+            438.4375,
+            1001.9766235351562
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0014809027350798287
+        },
+        {
+          "index": 2,
+          "score": 0.10157448908356123,
+          "bounding_box": [
+            407.77081298828125,
+            986.6427001953125,
+            422.14581298828125,
+            998.622314453125
+          ],
+          "sam_pixels_in_polygon": 8,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.002203713080416343
+        },
+        {
+          "index": 3,
+          "score": 0.11716168968485645,
+          "bounding_box": [
+            379.02081298828125,
+            978.017333984375,
+            420.70831298828125,
+            1014.4354248046875
+          ],
+          "sam_pixels_in_polygon": 305,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.019427968379808782
+        },
+        {
+          "index": 4,
+          "score": 0.2129189956188202,
+          "bounding_box": [
+            417.83331298828125,
+            959.8082885742188,
+            425.02081298828125,
+            966.99609375
+          ],
+          "sam_pixels_in_polygon": 25,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0006611172924463521
+        },
+        {
+          "index": 5,
+          "score": 0.12536330753937364,
+          "bounding_box": [
+            437.95831298828125,
+            904.7019653320312,
+            443.2291564941406,
+            909.0146484375
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.00029089217008713915
+        },
+        {
+          "index": 6,
+          "score": 0.42364422748907815,
+          "bounding_box": [
+            283.6666564941406,
+            838.09521484375,
+            482.52081298828125,
+            1016.8313598632812
+          ],
+          "sam_pixels_in_polygon": 10576,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.39017833067651936
+        },
+        {
+          "index": 7,
+          "score": 0.1215852682168285,
+          "bounding_box": [
+            152.375,
+            206.52890014648438,
+            156.6875,
+            211.79994201660156
+          ],
+          "sam_pixels_in_polygon": 18,
+          "sam_pixels_in_polygon_outside_rt_text": 18,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 8,
+          "score": 0.12125457204612237,
+          "bounding_box": [
+            152.375,
+            202.69541931152344,
+            171.0625,
+            213.7166748046875
+          ],
+          "sam_pixels_in_polygon": 42,
+          "sam_pixels_in_polygon_outside_rt_text": 42,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 9,
+          "score": 0.11116489178190628,
+          "bounding_box": [
+            158.125,
+            204.61215209960938,
+            162.4375,
+            208.92481994628906
+          ],
+          "sam_pixels_in_polygon": 7,
+          "sam_pixels_in_polygon_outside_rt_text": 7,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 10,
+          "score": 0.4150847238242975,
+          "bounding_box": [
+            146.625,
+            92.48278045654297,
+            194.54165649414062,
+            130.3384246826172
+          ],
+          "sam_pixels_in_polygon": 1438,
+          "sam_pixels_in_polygon_outside_rt_text": 1438,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "18",
+      "rt_text_boxes": 0,
+      "coo_proposals": 8,
+      "sam_pixels": 51422,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 29222,
+      "sam_pixels_in_either_candidate": 29222,
+      "coo_added_sam_pixels_outside_rt": 29222,
+      "coo_proposals_with_any_sam_pixel": 7,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.40460561769266395,
+          "bounding_box": [
+            283.1875,
+            961.245849609375,
+            507.9166564941406,
+            1183.108642578125
+          ],
+          "sam_pixels_in_polygon": 9585,
+          "sam_pixels_in_polygon_outside_rt_text": 9585,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.48830677006633,
+          "bounding_box": [
+            406.8125,
+            495.4776611328125,
+            677.5416259765625,
+            859.1793823242188
+          ],
+          "sam_pixels_in_polygon": 12445,
+          "sam_pixels_in_polygon_outside_rt_text": 12445,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.14551673866808415,
+          "bounding_box": [
+            531.3958129882812,
+            244.38453674316406,
+            537.625,
+            248.69720458984375
+          ],
+          "sam_pixels_in_polygon": 20,
+          "sam_pixels_in_polygon_outside_rt_text": 20,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.10431578439293486,
+          "bounding_box": [
+            478.20831298828125,
+            225.69630432128906,
+            485.39581298828125,
+            230.4881591796875
+          ],
+          "sam_pixels_in_polygon": 21,
+          "sam_pixels_in_polygon_outside_rt_text": 21,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.17292787115543315,
+          "bounding_box": [
+            536.6666259765625,
+            217.55015563964844,
+            541.9375,
+            226.1754913330078
+          ],
+          "sam_pixels_in_polygon": 27,
+          "sam_pixels_in_polygon_outside_rt_text": 27,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.11401454483469327,
+          "bounding_box": [
+            475.8125,
+            210.3623809814453,
+            487.3125,
+            221.86282348632812
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.13122450454781454,
+          "bounding_box": [
+            534.75,
+            207.96644592285156,
+            549.6041259765625,
+            226.1754913330078
+          ],
+          "sam_pixels_in_polygon": 59,
+          "sam_pixels_in_polygon_outside_rt_text": 59,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.4267129595229858,
+          "bounding_box": [
+            443.70831298828125,
+            136.08863830566406,
+            597.0416259765625,
+            302.365966796875
+          ],
+          "sam_pixels_in_polygon": 7192,
+          "sam_pixels_in_polygon_outside_rt_text": 7192,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "19",
+      "rt_text_boxes": 1,
+      "coo_proposals": 10,
+      "sam_pixels": 52526,
+      "sam_pixels_in_rt_text_boxes": 10221,
+      "sam_pixels_in_coo_polygons": 11712,
+      "sam_pixels_in_either_candidate": 11712,
+      "coo_added_sam_pixels_outside_rt": 1491,
+      "coo_proposals_with_any_sam_pixel": 5,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.47874090634923705,
+          "bounding_box": [
+            139.91665649414062,
+            1316.322265625,
+            433.1666564941406,
+            1565.4986572265625
+          ],
+          "sam_pixels_in_polygon": 10398,
+          "sam_pixels_in_polygon_outside_rt_text": 177,
+          "max_rt_text_box_iou": 0.6828429310750199
+        },
+        {
+          "index": 1,
+          "score": 0.1378235734378298,
+          "bounding_box": [
+            523.7291259765625,
+            770.0509033203125,
+            533.7916259765625,
+            776.7594604492188
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.11050647017545999,
+          "bounding_box": [
+            509.83331298828125,
+            769.5717163085938,
+            522.7708129882812,
+            776.7594604492188
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.10754217820552488,
+          "bounding_box": [
+            503.6041564941406,
+            755.6753540039062,
+            523.25,
+            775.3219604492188
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.11859059829213138,
+          "bounding_box": [
+            505.0416564941406,
+            715.4237670898438,
+            516.0625,
+            731.716064453125
+          ],
+          "sam_pixels_in_polygon": 119,
+          "sam_pixels_in_polygon_outside_rt_text": 119,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.27091425590383833,
+          "bounding_box": [
+            306.6666564941406,
+            707.277587890625,
+            342.125,
+            737.9454956054688
+          ],
+          "sam_pixels_in_polygon": 607,
+          "sam_pixels_in_polygon_outside_rt_text": 607,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.18625142619324225,
+          "bounding_box": [
+            154.29165649414062,
+            639.2332763671875,
+            158.60415649414062,
+            644.5043334960938
+          ],
+          "sam_pixels_in_polygon": 31,
+          "sam_pixels_in_polygon_outside_rt_text": 31,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.39568014131387946,
+          "bounding_box": [
+            144.7083282470703,
+            630.1287841796875,
+            178.25,
+            676.1305541992188
+          ],
+          "sam_pixels_in_polygon": 588,
+          "sam_pixels_in_polygon_outside_rt_text": 588,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 8,
+          "score": 0.38617366038169626,
+          "bounding_box": [
+            230.0,
+            99.6705551147461,
+            356.9791564941406,
+            180.1737060546875
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 9,
+          "score": 0.14643981122773966,
+          "bounding_box": [
+            258.75,
+            60.85654067993164,
+            267.8541564941406,
+            69.96106719970703
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "20",
+      "rt_text_boxes": 2,
+      "coo_proposals": 9,
+      "sam_pixels": 37707,
+      "sam_pixels_in_rt_text_boxes": 16073,
+      "sam_pixels_in_coo_polygons": 36506,
+      "sam_pixels_in_either_candidate": 36506,
+      "coo_added_sam_pixels_outside_rt": 20433,
+      "coo_proposals_with_any_sam_pixel": 7,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.7202543102320463,
+          "bounding_box": [
+            417.83331298828125,
+            1349.385986328125,
+            622.4375,
+            1582.749267578125
+          ],
+          "sam_pixels_in_polygon": 8032,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.8000631313316092
+        },
+        {
+          "index": 1,
+          "score": 0.2328813101332157,
+          "bounding_box": [
+            115.95832824707031,
+            1378.6163330078125,
+            129.85415649414062,
+            1392.5126953125
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0014308051559350895
+        },
+        {
+          "index": 2,
+          "score": 0.11732675579213656,
+          "bounding_box": [
+            214.1875,
+            1371.90771484375,
+            243.41665649414062,
+            1401.1380615234375
+          ],
+          "sam_pixels_in_polygon": 227,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.006330604456717322
+        },
+        {
+          "index": 3,
+          "score": 0.6607275848155152,
+          "bounding_box": [
+            67.5625,
+            1333.09375,
+            273.6041564941406,
+            1521.41357421875
+          ],
+          "sam_pixels_in_polygon": 8041,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.23109801334948024
+        },
+        {
+          "index": 4,
+          "score": 0.12990211397870777,
+          "bounding_box": [
+            177.29165649414062,
+            1073.375244140625,
+            207.47915649414062,
+            1101.647216796875
+          ],
+          "sam_pixels_in_polygon": 330,
+          "sam_pixels_in_polygon_outside_rt_text": 330,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.46387620160740023,
+          "bounding_box": [
+            65.16666412353516,
+            986.1635131835938,
+            311.45831298828125,
+            1233.90234375
+          ],
+          "sam_pixels_in_polygon": 6435,
+          "sam_pixels_in_polygon_outside_rt_text": 6435,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.5540231012788278,
+          "bounding_box": [
+            57.02083206176758,
+            944.474365234375,
+            212.75,
+            1075.2919921875
+          ],
+          "sam_pixels_in_polygon": 7158,
+          "sam_pixels_in_polygon_outside_rt_text": 7158,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.12226303139080603,
+          "bounding_box": [
+            519.8958129882812,
+            552.9799194335938,
+            537.625,
+            566.8762817382812
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 8,
+          "score": 0.4836796855550218,
+          "bounding_box": [
+            375.6666564941406,
+            392.9320068359375,
+            632.9791259765625,
+            612.39892578125
+          ],
+          "sam_pixels_in_polygon": 8490,
+          "sam_pixels_in_polygon_outside_rt_text": 8490,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "21",
+      "rt_text_boxes": 4,
+      "coo_proposals": 4,
+      "sam_pixels": 39465,
+      "sam_pixels_in_rt_text_boxes": 19558,
+      "sam_pixels_in_coo_polygons": 12629,
+      "sam_pixels_in_either_candidate": 26744,
+      "coo_added_sam_pixels_outside_rt": 7186,
+      "coo_proposals_with_any_sam_pixel": 3,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.7373763465810433,
+          "bounding_box": [
+            52.70833206176758,
+            1161.066162109375,
+            201.25,
+            1301.467529296875
+          ],
+          "sam_pixels_in_polygon": 5443,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.8065689470100733
+        },
+        {
+          "index": 1,
+          "score": 0.23412098420667463,
+          "bounding_box": [
+            96.3125,
+            381.4315490722656,
+            112.125,
+            397.2446594238281
+          ],
+          "sam_pixels_in_polygon": 222,
+          "sam_pixels_in_polygon_outside_rt_text": 222,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.14397828597301507,
+          "bounding_box": [
+            95.35416412353516,
+            369.4519348144531,
+            106.85416412353516,
+            376.63970947265625
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.5979631321447245,
+          "bounding_box": [
+            26.833332061767578,
+            258.7601013183594,
+            191.66665649414062,
+            399.1614074707031
+          ],
+          "sam_pixels_in_polygon": 7186,
+          "sam_pixels_in_polygon_outside_rt_text": 7186,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "22",
+      "rt_text_boxes": 0,
+      "coo_proposals": 7,
+      "sam_pixels": 26475,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 14639,
+      "sam_pixels_in_either_candidate": 14639,
+      "coo_added_sam_pixels_outside_rt": 14639,
+      "coo_proposals_with_any_sam_pixel": 5,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.21146548603212942,
+          "bounding_box": [
+            537.625,
+            120.75471496582031,
+            547.6875,
+            133.69271850585938
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.11212515718974433,
+          "bounding_box": [
+            461.4375,
+            113.0877456665039,
+            471.02081298828125,
+            121.23390197753906
+          ],
+          "sam_pixels_in_polygon": 60,
+          "sam_pixels_in_polygon_outside_rt_text": 60,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.11824391977279447,
+          "bounding_box": [
+            401.0625,
+            111.17100524902344,
+            407.2916564941406,
+            116.92123413085938
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.16668331673712408,
+          "bounding_box": [
+            452.8125,
+            78.10721588134766,
+            481.08331298828125,
+            106.379150390625
+          ],
+          "sam_pixels_in_polygon": 293,
+          "sam_pixels_in_polygon_outside_rt_text": 293,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.1202198128874709,
+          "bounding_box": [
+            465.75,
+            78.5864028930664,
+            473.4166564941406,
+            86.25336456298828
+          ],
+          "sam_pixels_in_polygon": 31,
+          "sam_pixels_in_polygon_outside_rt_text": 31,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.16571250407680593,
+          "bounding_box": [
+            461.4375,
+            60.377357482910156,
+            477.25,
+            81.9406967163086
+          ],
+          "sam_pixels_in_polygon": 168,
+          "sam_pixels_in_polygon_outside_rt_text": 168,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.5144289897526861,
+          "bounding_box": [
+            304.27081298828125,
+            0.0,
+            686.6458129882812,
+            286.07366943359375
+          ],
+          "sam_pixels_in_polygon": 14639,
+          "sam_pixels_in_polygon_outside_rt_text": 14639,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "23",
+      "rt_text_boxes": 1,
+      "coo_proposals": 1,
+      "sam_pixels": 12675,
+      "sam_pixels_in_rt_text_boxes": 4527,
+      "sam_pixels_in_coo_polygons": 7833,
+      "sam_pixels_in_either_candidate": 12360,
+      "coo_added_sam_pixels_outside_rt": 7833,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.5650299398169177,
+          "bounding_box": [
+            188.3125,
+            0.0,
+            449.45831298828125,
+            170.11080932617188
+          ],
+          "sam_pixels_in_polygon": 7833,
+          "sam_pixels_in_polygon_outside_rt_text": 7833,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "24",
+      "rt_text_boxes": 0,
+      "coo_proposals": 8,
+      "sam_pixels": 62116,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 4734,
+      "sam_pixels_in_either_candidate": 4734,
+      "coo_added_sam_pixels_outside_rt": 4734,
+      "coo_proposals_with_any_sam_pixel": 3,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.4152514204254871,
+          "bounding_box": [
+            188.79165649414062,
+            1446.181396484375,
+            280.3125,
+            1552.0814208984375
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.1026939040475554,
+          "bounding_box": [
+            380.45831298828125,
+            983.767578125,
+            401.0625,
+            1008.2059936523438
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.12766260555391754,
+          "bounding_box": [
+            388.6041564941406,
+            962.2042236328125,
+            398.1875,
+            970.82958984375
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.10817461088299751,
+          "bounding_box": [
+            379.02081298828125,
+            275.0523986816406,
+            383.8125,
+            280.3234558105469
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.16225847870939306,
+          "bounding_box": [
+            378.0625,
+            223.30038452148438,
+            394.3541564941406,
+            243.42616271972656
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.1636162086006473,
+          "bounding_box": [
+            356.9791564941406,
+            216.11260986328125,
+            377.58331298828125,
+            240.55105590820312
+          ],
+          "sam_pixels_in_polygon": 122,
+          "sam_pixels_in_polygon_outside_rt_text": 122,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.4706195836104598,
+          "bounding_box": [
+            326.7916564941406,
+            158.1311798095703,
+            437.4791564941406,
+            267.38543701171875
+          ],
+          "sam_pixels_in_polygon": 4704,
+          "sam_pixels_in_polygon_outside_rt_text": 4704,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 7,
+          "score": 0.3438993052395315,
+          "bounding_box": [
+            404.4166564941406,
+            81.9406967163086,
+            441.3125,
+            116.44204711914062
+          ],
+          "sam_pixels_in_polygon": 30,
+          "sam_pixels_in_polygon_outside_rt_text": 30,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "25",
+      "rt_text_boxes": 0,
+      "coo_proposals": 0,
+      "sam_pixels": 1676,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 0,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "26",
+      "rt_text_boxes": 1,
+      "coo_proposals": 6,
+      "sam_pixels": 9440,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 6316,
+      "sam_pixels_in_either_candidate": 6316,
+      "coo_added_sam_pixels_outside_rt": 6316,
+      "coo_proposals_with_any_sam_pixel": 6,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.12561262709399063,
+          "bounding_box": [
+            274.5625,
+            1083.4381103515625,
+            278.875,
+            1088.7091064453125
+          ],
+          "sam_pixels_in_polygon": 5,
+          "sam_pixels_in_polygon_outside_rt_text": 5,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.18029423280619086,
+          "bounding_box": [
+            269.2916564941406,
+            1079.6046142578125,
+            289.4166564941406,
+            1099.251220703125
+          ],
+          "sam_pixels_in_polygon": 176,
+          "sam_pixels_in_polygon_outside_rt_text": 176,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.14936968438029574,
+          "bounding_box": [
+            174.41665649414062,
+            1046.5408935546875,
+            208.91665649414062,
+            1079.12548828125
+          ],
+          "sam_pixels_in_polygon": 44,
+          "sam_pixels_in_polygon_outside_rt_text": 44,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.5490299441122176,
+          "bounding_box": [
+            180.16665649414062,
+            1028.331787109375,
+            294.20831298828125,
+            1118.8978271484375
+          ],
+          "sam_pixels_in_polygon": 5402,
+          "sam_pixels_in_polygon_outside_rt_text": 5402,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.3966479795697628,
+          "bounding_box": [
+            133.2083282470703,
+            1031.2069091796875,
+            197.8958282470703,
+            1089.66748046875
+          ],
+          "sam_pixels_in_polygon": 1357,
+          "sam_pixels_in_polygon_outside_rt_text": 1357,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.12849498677865737,
+          "bounding_box": [
+            167.22915649414062,
+            1042.7073974609375,
+            186.875,
+            1056.12451171875
+          ],
+          "sam_pixels_in_polygon": 89,
+          "sam_pixels_in_polygon_outside_rt_text": 89,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "27",
+      "rt_text_boxes": 3,
+      "coo_proposals": 4,
+      "sam_pixels": 30971,
+      "sam_pixels_in_rt_text_boxes": 10955,
+      "sam_pixels_in_coo_polygons": 14003,
+      "sam_pixels_in_either_candidate": 24958,
+      "coo_added_sam_pixels_outside_rt": 14003,
+      "coo_proposals_with_any_sam_pixel": 4,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.6499066346354727,
+          "bounding_box": [
+            158.60415649414062,
+            645.4627075195312,
+            285.1041564941406,
+            741.2997436523438
+          ],
+          "sam_pixels_in_polygon": 4380,
+          "sam_pixels_in_polygon_outside_rt_text": 4380,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.1142114255653352,
+          "bounding_box": [
+            515.1041259765625,
+            114.0461196899414,
+            519.8958129882812,
+            118.3587875366211
+          ],
+          "sam_pixels_in_polygon": 17,
+          "sam_pixels_in_polygon_outside_rt_text": 17,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.6608018955610271,
+          "bounding_box": [
+            501.6875,
+            82.41988372802734,
+            650.2291259765625,
+            214.675048828125
+          ],
+          "sam_pixels_in_polygon": 8055,
+          "sam_pixels_in_polygon_outside_rt_text": 8055,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.3990126064754661,
+          "bounding_box": [
+            455.20831298828125,
+            91.52440643310547,
+            537.1458129882812,
+            179.69451904296875
+          ],
+          "sam_pixels_in_polygon": 3390,
+          "sam_pixels_in_polygon_outside_rt_text": 3390,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "28",
+      "rt_text_boxes": 1,
+      "coo_proposals": 1,
+      "sam_pixels": 4799,
+      "sam_pixels_in_rt_text_boxes": 2725,
+      "sam_pixels_in_coo_polygons": 1266,
+      "sam_pixels_in_either_candidate": 3991,
+      "coo_added_sam_pixels_outside_rt": 1266,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.6768639040134183,
+          "bounding_box": [
+            421.1875,
+            1416.471923828125,
+            511.27081298828125,
+            1537.705810546875
+          ],
+          "sam_pixels_in_polygon": 1266,
+          "sam_pixels_in_polygon_outside_rt_text": 1266,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "29",
+      "rt_text_boxes": 1,
+      "coo_proposals": 0,
+      "sam_pixels": 6742,
+      "sam_pixels_in_rt_text_boxes": 2667,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 2667,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "30",
+      "rt_text_boxes": 0,
+      "coo_proposals": 0,
+      "sam_pixels": 0,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 0,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "31",
+      "rt_text_boxes": 3,
+      "coo_proposals": 0,
+      "sam_pixels": 16328,
+      "sam_pixels_in_rt_text_boxes": 16328,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 16328,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "32",
+      "rt_text_boxes": 7,
+      "coo_proposals": 0,
+      "sam_pixels": 23507,
+      "sam_pixels_in_rt_text_boxes": 23507,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 23507,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "33",
+      "rt_text_boxes": 2,
+      "coo_proposals": 0,
+      "sam_pixels": 7909,
+      "sam_pixels_in_rt_text_boxes": 7909,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 7909,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "34",
+      "rt_text_boxes": 1,
+      "coo_proposals": 0,
+      "sam_pixels": 5348,
+      "sam_pixels_in_rt_text_boxes": 5348,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 5348,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "35",
+      "rt_text_boxes": 0,
+      "coo_proposals": 0,
+      "sam_pixels": 609,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 0,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "36",
+      "rt_text_boxes": 3,
+      "coo_proposals": 5,
+      "sam_pixels": 20273,
+      "sam_pixels_in_rt_text_boxes": 10981,
+      "sam_pixels_in_coo_polygons": 3061,
+      "sam_pixels_in_either_candidate": 14042,
+      "coo_added_sam_pixels_outside_rt": 3061,
+      "coo_proposals_with_any_sam_pixel": 5,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.11301571911630723,
+          "bounding_box": [
+            372.3125,
+            276.9691467285156,
+            383.8125,
+            291.8238830566406
+          ],
+          "sam_pixels_in_polygon": 110,
+          "sam_pixels_in_polygon_outside_rt_text": 110,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.1535591483504201,
+          "bounding_box": [
+            368.95831298828125,
+            272.1772766113281,
+            374.2291564941406,
+            276.4899597167969
+          ],
+          "sam_pixels_in_polygon": 15,
+          "sam_pixels_in_polygon_outside_rt_text": 15,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.306240336646604,
+          "bounding_box": [
+            368.0,
+            253.96824645996094,
+            390.0416564941406,
+            280.8026428222656
+          ],
+          "sam_pixels_in_polygon": 438,
+          "sam_pixels_in_polygon_outside_rt_text": 438,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.1109728623698983,
+          "bounding_box": [
+            384.77081298828125,
+            253.00987243652344,
+            398.1875,
+            269.7813720703125
+          ],
+          "sam_pixels_in_polygon": 22,
+          "sam_pixels_in_polygon_outside_rt_text": 22,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.3971380842535354,
+          "bounding_box": [
+            370.39581298828125,
+            215.15423583984375,
+            468.14581298828125,
+            309.5537414550781
+          ],
+          "sam_pixels_in_polygon": 2941,
+          "sam_pixels_in_polygon_outside_rt_text": 2941,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "37",
+      "rt_text_boxes": 3,
+      "coo_proposals": 7,
+      "sam_pixels": 27076,
+      "sam_pixels_in_rt_text_boxes": 8547,
+      "sam_pixels_in_coo_polygons": 17076,
+      "sam_pixels_in_either_candidate": 25623,
+      "coo_added_sam_pixels_outside_rt": 17076,
+      "coo_proposals_with_any_sam_pixel": 6,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.11271275510080159,
+          "bounding_box": [
+            468.14581298828125,
+            1324.4683837890625,
+            474.375,
+            1331.177001953125
+          ],
+          "sam_pixels_in_polygon": 0,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.38246680213057477,
+          "bounding_box": [
+            550.0833129882812,
+            1304.82177734375,
+            557.75,
+            1312.48876953125
+          ],
+          "sam_pixels_in_polygon": 17,
+          "sam_pixels_in_polygon_outside_rt_text": 17,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.49008424368489456,
+          "bounding_box": [
+            423.1041564941406,
+            1283.2584228515625,
+            486.83331298828125,
+            1349.385986328125
+          ],
+          "sam_pixels_in_polygon": 2065,
+          "sam_pixels_in_polygon_outside_rt_text": 2065,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.5634965129627744,
+          "bounding_box": [
+            467.6666564941406,
+            1246.84033203125,
+            592.7291259765625,
+            1372.386962890625
+          ],
+          "sam_pixels_in_polygon": 5012,
+          "sam_pixels_in_polygon_outside_rt_text": 5012,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.12162370040702322,
+          "bounding_box": [
+            218.0208282470703,
+            583.1685791015625,
+            227.125,
+            592.2731323242188
+          ],
+          "sam_pixels_in_polygon": 52,
+          "sam_pixels_in_polygon_outside_rt_text": 52,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.5207701689371975,
+          "bounding_box": [
+            65.16666412353516,
+            523.2704467773438,
+            266.4166564941406,
+            661.2758178710938
+          ],
+          "sam_pixels_in_polygon": 7320,
+          "sam_pixels_in_polygon_outside_rt_text": 7320,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.7002614977476017,
+          "bounding_box": [
+            280.3125,
+            27.313566207885742,
+            390.52081298828125,
+            143.755615234375
+          ],
+          "sam_pixels_in_polygon": 2996,
+          "sam_pixels_in_polygon_outside_rt_text": 2996,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "38",
+      "rt_text_boxes": 0,
+      "coo_proposals": 2,
+      "sam_pixels": 9352,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 9231,
+      "sam_pixels_in_either_candidate": 9231,
+      "coo_added_sam_pixels_outside_rt": 9231,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.15294270888747025,
+          "bounding_box": [
+            120.75,
+            1492.1832275390625,
+            128.8958282470703,
+            1498.4127197265625
+          ],
+          "sam_pixels_in_polygon": 27,
+          "sam_pixels_in_polygon_outside_rt_text": 27,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.4928386546060877,
+          "bounding_box": [
+            8.145833015441895,
+            1365.1990966796875,
+            290.375,
+            1600.0
+          ],
+          "sam_pixels_in_polygon": 9231,
+          "sam_pixels_in_polygon_outside_rt_text": 9231,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "39",
+      "rt_text_boxes": 1,
+      "coo_proposals": 0,
+      "sam_pixels": 3875,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 0,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    },
+    {
+      "page": "40",
+      "rt_text_boxes": 1,
+      "coo_proposals": 2,
+      "sam_pixels": 14602,
+      "sam_pixels_in_rt_text_boxes": 8684,
+      "sam_pixels_in_coo_polygons": 4452,
+      "sam_pixels_in_either_candidate": 8684,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.1628759926185012,
+          "bounding_box": [
+            144.22915649414062,
+            693.8604125976562,
+            150.4583282470703,
+            698.173095703125
+          ],
+          "sam_pixels_in_polygon": 37,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.0005927069780457369
+        },
+        {
+          "index": 1,
+          "score": 0.5218286559910005,
+          "bounding_box": [
+            106.375,
+            580.7726440429688,
+            211.3125,
+            726.9241943359375
+          ],
+          "sam_pixels_in_polygon": 4452,
+          "sam_pixels_in_polygon_outside_rt_text": 0,
+          "max_rt_text_box_iou": 0.33837348723372107
+        }
+      ]
+    },
+    {
+      "page": "41",
+      "rt_text_boxes": 1,
+      "coo_proposals": 2,
+      "sam_pixels": 9210,
+      "sam_pixels_in_rt_text_boxes": 2675,
+      "sam_pixels_in_coo_polygons": 5761,
+      "sam_pixels_in_either_candidate": 8436,
+      "coo_added_sam_pixels_outside_rt": 5761,
+      "coo_proposals_with_any_sam_pixel": 2,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.2354566503602725,
+          "bounding_box": [
+            103.02082824707031,
+            860.616943359375,
+            112.60416412353516,
+            868.2838745117188
+          ],
+          "sam_pixels_in_polygon": 61,
+          "sam_pixels_in_polygon_outside_rt_text": 61,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.6049503865078131,
+          "bounding_box": [
+            9.583333015441895,
+            787.3015747070312,
+            225.6875,
+            965.5585327148438
+          ],
+          "sam_pixels_in_polygon": 5761,
+          "sam_pixels_in_polygon_outside_rt_text": 5761,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "42",
+      "rt_text_boxes": 3,
+      "coo_proposals": 1,
+      "sam_pixels": 16018,
+      "sam_pixels_in_rt_text_boxes": 11665,
+      "sam_pixels_in_coo_polygons": 4029,
+      "sam_pixels_in_either_candidate": 15694,
+      "coo_added_sam_pixels_outside_rt": 4029,
+      "coo_proposals_with_any_sam_pixel": 1,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.500124411235781,
+          "bounding_box": [
+            464.3125,
+            762.3839111328125,
+            621.9583129882812,
+            920.035888671875
+          ],
+          "sam_pixels_in_polygon": 4029,
+          "sam_pixels_in_polygon_outside_rt_text": 4029,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "43",
+      "rt_text_boxes": 1,
+      "coo_proposals": 5,
+      "sam_pixels": 10443,
+      "sam_pixels_in_rt_text_boxes": 2084,
+      "sam_pixels_in_coo_polygons": 10371,
+      "sam_pixels_in_either_candidate": 10371,
+      "coo_added_sam_pixels_outside_rt": 8287,
+      "coo_proposals_with_any_sam_pixel": 5,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.5805198153152618,
+          "bounding_box": [
+            558.7083129882812,
+            1045.103271484375,
+            644.0,
+            1133.2734375
+          ],
+          "sam_pixels_in_polygon": 1633,
+          "sam_pixels_in_polygon_outside_rt_text": 1633,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.7017210223439221,
+          "bounding_box": [
+            164.8333282470703,
+            837.6160278320312,
+            259.2291564941406,
+            938.72412109375
+          ],
+          "sam_pixels_in_polygon": 2064,
+          "sam_pixels_in_polygon_outside_rt_text": 2064,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.6258659526253195,
+          "bounding_box": [
+            103.5,
+            699.1314697265625,
+            205.5625,
+            801.6771240234375
+          ],
+          "sam_pixels_in_polygon": 2193,
+          "sam_pixels_in_polygon_outside_rt_text": 109,
+          "max_rt_text_box_iou": 0.7145478247718179
+        },
+        {
+          "index": 3,
+          "score": 0.6369672994808973,
+          "bounding_box": [
+            523.7291259765625,
+            84.81581115722656,
+            662.2083129882812,
+            228.0922393798828
+          ],
+          "sam_pixels_in_polygon": 1839,
+          "sam_pixels_in_polygon_outside_rt_text": 1839,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.6643420963593699,
+          "bounding_box": [
+            411.6041564941406,
+            0.0,
+            548.6458129882812,
+            132.25515747070312
+          ],
+          "sam_pixels_in_polygon": 2642,
+          "sam_pixels_in_polygon_outside_rt_text": 2642,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "44",
+      "rt_text_boxes": 1,
+      "coo_proposals": 7,
+      "sam_pixels": 9831,
+      "sam_pixels_in_rt_text_boxes": 0,
+      "sam_pixels_in_coo_polygons": 4956,
+      "sam_pixels_in_either_candidate": 4956,
+      "coo_added_sam_pixels_outside_rt": 4956,
+      "coo_proposals_with_any_sam_pixel": 7,
+      "proposals": [
+        {
+          "index": 0,
+          "score": 0.33640583054397155,
+          "bounding_box": [
+            343.5625,
+            389.0985107421875,
+            390.0416564941406,
+            427.433349609375
+          ],
+          "sam_pixels_in_polygon": 755,
+          "sam_pixels_in_polygon_outside_rt_text": 755,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 1,
+          "score": 0.11829508694947935,
+          "bounding_box": [
+            314.33331298828125,
+            93.44114685058594,
+            322.0,
+            101.58729553222656
+          ],
+          "sam_pixels_in_polygon": 41,
+          "sam_pixels_in_polygon_outside_rt_text": 41,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 2,
+          "score": 0.10959710634003082,
+          "bounding_box": [
+            307.625,
+            94.39952087402344,
+            311.9375,
+            100.6289291381836
+          ],
+          "sam_pixels_in_polygon": 21,
+          "sam_pixels_in_polygon_outside_rt_text": 21,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 3,
+          "score": 0.14474953551377567,
+          "bounding_box": [
+            322.0,
+            91.52440643310547,
+            328.70831298828125,
+            97.27462768554688
+          ],
+          "sam_pixels_in_polygon": 49,
+          "sam_pixels_in_polygon_outside_rt_text": 49,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 4,
+          "score": 0.1383969629338632,
+          "bounding_box": [
+            313.375,
+            91.52440643310547,
+            321.52081298828125,
+            97.75381469726562
+          ],
+          "sam_pixels_in_polygon": 59,
+          "sam_pixels_in_polygon_outside_rt_text": 59,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 5,
+          "score": 0.13414045843473146,
+          "bounding_box": [
+            319.6041564941406,
+            46.960166931152344,
+            340.20831298828125,
+            62.773284912109375
+          ],
+          "sam_pixels_in_polygon": 47,
+          "sam_pixels_in_polygon_outside_rt_text": 47,
+          "max_rt_text_box_iou": 0.0
+        },
+        {
+          "index": 6,
+          "score": 0.47611502458623056,
+          "bounding_box": [
+            268.8125,
+            23.95926856994629,
+            373.27081298828125,
+            124.58819580078125
+          ],
+          "sam_pixels_in_polygon": 4201,
+          "sam_pixels_in_polygon_outside_rt_text": 4201,
+          "max_rt_text_box_iou": 0.0
+        }
+      ]
+    },
+    {
+      "page": "45",
+      "rt_text_boxes": 8,
+      "coo_proposals": 0,
+      "sam_pixels": 19998,
+      "sam_pixels_in_rt_text_boxes": 18889,
+      "sam_pixels_in_coo_polygons": 0,
+      "sam_pixels_in_either_candidate": 18889,
+      "coo_added_sam_pixels_outside_rt": 0,
+      "coo_proposals_with_any_sam_pixel": 0,
+      "proposals": []
+    }
+  ]
+}

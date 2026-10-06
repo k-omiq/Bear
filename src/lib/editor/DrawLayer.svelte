@@ -20,6 +20,7 @@
     brushRadius,
     centredBbox,
     clientCentre,
+    detectAreaAround,
     draftKeyIntent,
     menuPoint,
     moveBbox,
@@ -32,18 +33,28 @@
     shouldStamp,
   } from './gesture.js'
   import { commitDraft } from './drawing.svelte.js'
+  import { detectArea } from './cloudrun.js'
+  import { draftShape } from './tools.js'
   import { t } from '../i18n/index.js'
   import DraftPreview from './DraftPreview.svelte'
   import PaintLayer from './PaintLayer.svelte'
+  import { flushPaintPreview } from './paintpreview.js'
   import RegionMenu from './RegionMenu.svelte'
+  import { ContextMenu } from '../ui/index.js'
 
   /**
    * The drawing surface: one element over the sheet that is both the pointer
    * target for every drag tool and the keyboard route to the same result.
    *
-   * It is mounted only for the four tools whose gesture is a drag
+   * It is mounted only for the tools whose gesture is a drag
    * (`DRAWING_TOOLS`); Auto clean and Content-aware fill act on a region that
    * already exists, and the surface would only take their click away.
+   *
+   * **The selection tool draws with the others' gestures.** Its brush is the
+   * round stroke every brush tool paints, and its lasso and rectangle are
+   * Shapes' own drags (`tools.js#draftShape`); what differs is the commit
+   * (`drawing.svelte.js#editMask`) and the preview, where remove reads as a
+   * cut rather than as more mask.
    *
    * **A tap is not a drag.** Below `TAP_SLOP` of movement the gesture is
    * treated as a click on whatever region is under it, which is exactly what
@@ -108,14 +119,22 @@
    * @type {{x: number, y: number, region: import('../api/backend.js').ApiRegion} | null}
    */
   let menu = $state(null)
+  /**
+   * The selection tool's menu over bare paper: where it opened, and the area
+   * a Detect from it is held to (page percent).
+   *
+   * @type {{x: number, y: number, area: import('./gesture.js').Bbox} | null}
+   */
+  let detectMenu = $state(null)
 
   const tool = $derived(editor.tool)
   const params = $derived(editor.toolParams[tool] ?? {})
-  const shape = $derived(tool === 'shapes' ? String(params.shape ?? 'rect') : null)
+  /** The area a drag draws, or null where the drag is a round brush stroke. */
+  const shape = $derived(draftShape(tool, params))
   const polygonal = $derived(shape === 'polygon')
   const active = $derived(draft.active?.pageId === page.id ? draft.active : null)
-  /** The tools that paint with a round brush rather than dragging a shape. */
-  const round = $derived(tool !== 'shapes')
+  /** The tools, and the selection tool's brush, that paint a round stroke rather than drag a shape. */
+  const round = $derived(shape === null)
 
   /**
    * The two tools whose preview is pixels rather than an outline
@@ -138,24 +157,47 @@
   let committing = $state(false)
 
   /** Commit, and let the paint preview know its pixels are coming. */
-  function commit() {
+  async function commit() {
+    const pendingDraft = draft.active
     committing = true
-    commitDraft()
+    await flushPaintPreview(page.id)
+    if (draft.active !== pendingDraft) { committing = false; return }
+    const applied = await commitDraft()
+    if (!applied) committing = false
   }
 
-  /** The stroke half-width in page percent, per axis. */
+  /**
+   * The stroke half-width in page percent, per axis. Zero for a drag that
+   * draws an area: the selection tool keeps its brush `size` while its lasso
+   * or rectangle is armed, and that size must neither space the lasso's
+   * vertices (a 160 px brush put them tens of pixels apart) nor pad its box
+   * nor draw a footprint.
+   */
   const radius = $derived(
-    brushRadius(
-      Number(params.size ?? (tool === 'aiMaskBrush' ? AI_STROKE_PX : 0)),
-      page.width ?? 1600,
-      page.height ?? 2400,
-    ),
+    round
+      ? brushRadius(
+          Number(params.size ?? (tool === 'aiMaskBrush' ? AI_STROKE_PX : 0)),
+          page.width ?? 1600,
+          page.height ?? 2400,
+        )
+      : { rx: 0, ry: 0 },
   )
 
-  /** @returns {'rect'|'ellipse'|'lasso'|'polygon'|'stroke'} */
+  /** @returns {'rect'|'ellipse'|'lasso'|'polygon'|'line'|'stroke'} */
   function draftKind() {
-    if (tool === 'shapes') return /** @type {any} */ (shape)
-    return 'stroke'
+    return shape ?? 'stroke'
+  }
+
+  /**
+   * What the draft does: the Brush paints, the selection tool's remove mode
+   * erases from the detected masks, and everything else adds.
+   *
+   * @returns {'add'|'erase'|'paint'}
+   */
+  function draftMode() {
+    if (tool === 'brush') return 'paint'
+    if (tool === 'maskSelect' && params.mode === 'remove') return 'erase'
+    return 'add'
   }
 
   /** @returns {DOMRect|null} the sheet's own box - the drawn scale, measured */
@@ -170,7 +212,11 @@
   function at(event) {
     const rect = sheetRect()
     if (!rect) return null
-    const point = pointIn(event.clientX, event.clientY, rect, event.pressure, !strip)
+    // Mouse pressure is fixed at 0.5 while pressed, which otherwise halves
+    // pressure-sensitive brush size. Mouse and touch use the full footprint;
+    // a pen keeps its measured pressure.
+    const pressure = event.pointerType === 'pen' ? event.pressure : 1
+    const point = pointIn(event.clientX, event.clientY, rect, pressure, !strip)
     if (strip) point.y = Math.min(stripMaxY, Math.max(stripMinY, point.y))
     return point
   }
@@ -215,7 +261,7 @@
       pageId: page.id,
       points: [point],
       bbox: null,
-      mode: tool === 'brush' ? 'paint' : 'add',
+      mode: draftMode(),
       keyboard: false,
       moved: false,
     })
@@ -240,7 +286,7 @@
       markMoved()
     }
 
-    if (active.kind === 'rect' || active.kind === 'ellipse') {
+    if (active.kind === 'rect' || active.kind === 'ellipse' || active.kind === 'line') {
       // Shift is the constraint every drawing application binds it to: a
       // square, and therefore a circle. Held rather than latched, so it can be
       // pressed and released mid-drag and the box follows.
@@ -249,6 +295,7 @@
           ? squareBetween(active.points[0], point)
           : strip ? stripRectBetween(active.points[0], point) : rectBetween(active.points[0], point),
       )
+      if (active.kind === 'line') active.points = [active.points[0], point]
       return
     }
     if (shouldStamp(active.points.at(-1) ?? null, point, radius, Number(params.spacing ?? 12))) {
@@ -260,8 +307,12 @@
   /** @param {PointerEvent} event */
   function onpointerup(event) {
     if (pointerId === null) return
-    releasePointer()
     const point = at(event)
+    if (point && active?.kind === 'line') {
+      active.points = [active.points[0], point]
+      setDraftBbox(strip ? stripRectBetween(active.points[0], point) : rectBetween(active.points[0], point))
+    }
+    releasePointer()
     const moved = active?.moved === true
     if (!moved) {
       clearDraft()
@@ -304,6 +355,13 @@
    * can only be the selected one, and the menu opens over that region's own
    * middle rather than the middle of the sheet.
    *
+   * **Over bare paper the selection tool offers Detect text here.** The tool
+   * edits detected masks, and the one edit a brush cannot make is the mask
+   * that is not there: text Detect missed, or a mask deleted by mistake. The
+   * detector looks again around the pointer and adds what it finds
+   * (`cloudrun.js#detectArea`). It needs a pointer, because the keyboard's
+   * event names no spot on the page.
+   *
    * @param {MouseEvent} event
    */
   function oncontextmenu(event) {
@@ -313,7 +371,16 @@
     const region = keyboard
       ? ((page.regions ?? []).find((candidate) => candidate.id === editor.selectionId) ?? null)
       : regionAt(pointIn(event.clientX, event.clientY, rect), page.regions)
-    if (!region) return
+    if (!region) {
+      if (tool !== 'maskSelect' || keyboard) return
+      event.preventDefault()
+      const point = pointIn(event.clientX, event.clientY, rect)
+      detectMenu = {
+        ...menuPoint(event, rect),
+        area: detectAreaAround(point, page.width ?? 1600, page.height ?? 2400),
+      }
+      return
+    }
     event.preventDefault()
     select(region.id)
     const anchor = keyboard ? clientCentre(region.bbox, rect) : menuPoint(event, rect)
@@ -402,7 +469,7 @@
         pageId: page.id,
         points: [point],
         bbox: null,
-        mode: 'add',
+        mode: draftMode(),
         keyboard: false,
         moved: true,
       })
@@ -461,11 +528,11 @@
     committing = false
     beginDraft({
       tool,
-      kind: tool === 'shapes' && shape === 'ellipse' ? 'ellipse' : 'rect',
+      kind: tool === 'shapes' && (shape === 'ellipse' || shape === 'line') ? shape : 'rect',
       pageId: page.id,
       points: [],
       bbox: centredBbox(Math.max(KEY_DRAFT.w, MIN_SPAN), Math.max(KEY_DRAFT.h, MIN_SPAN)),
-      mode: tool === 'brush' ? 'paint' : 'add',
+      mode: draftMode(),
       keyboard: true,
       moved: true,
     })
@@ -495,6 +562,24 @@
 
 <RegionMenu at={menu} onclose={() => (menu = null)} />
 
+{#if detectMenu}
+  <ContextMenu
+    x={detectMenu.x}
+    y={detectMenu.y}
+    label={t('masks.menu.page')}
+    sections={[{
+      id: 'detect',
+      items: [{ id: 'detectHere', label: t('masks.menu.detectHere'), icon: 'sparkle', disabled: editor.run.active }],
+    }]}
+    onselect={() => {
+      // Read the area off the open menu before closing clears it.
+      const area = detectMenu?.area
+      if (area) void detectArea(page.index, area)
+    }}
+    onclose={() => (detectMenu = null)}
+  />
+{/if}
+
 <!-- The live pixels, under the cursor ring and over the artwork. Mounted only
      for the two tools it can preview, so no other tool pays for a canvas it
      never draws into. -->
@@ -518,7 +603,7 @@
   </svg>
 {/if}
 
-<DraftPreview pageId={page.id} pageWidth={page.width ?? 1600} pageHeight={page.height ?? 2400} />
+<DraftPreview pageId={page.id} pageWidth={page.width ?? 1600} pageHeight={page.height ?? 2400} regions={page.regions ?? []} />
 
 <style>
   .surface {
@@ -527,9 +612,10 @@
     padding: 0;
     border: 0;
     background: transparent;
-    /* The design file's armed-tool cursor: a tool is always armed here, and
-       this surface is only mounted when that tool draws. */
-    cursor: crosshair;
+    /* A tool that drags an area (a shape, the selection's lasso or rectangle)
+       keeps the ordinary pointer, before and during the drag: the outline it
+       draws is the feedback, and a changed pointer only hides where it is. */
+    cursor: default;
     /* A drag must not be turned into a pan or a page zoom by the browser. */
     touch-action: none;
   }
@@ -545,12 +631,9 @@
      *is* the pointer: the platform's own glyph inside it added a second,
      differently-shaped mark at the same place, which read as a pen nib sitting
      on the paper and hid the pixels the stroke is being aimed at. The ring
-     alone is the cursor for those tools; Shapes keeps the crosshair, because a
-     drag between two corners has no footprint to show. */
-  .surface.ringed,
-  .surface.ringed.drawing { cursor: none }
-
-  .surface.drawing { cursor: cell }
+     alone is the cursor for those tools; an area tool keeps the pointer,
+     because a drag between two corners has no footprint to show. */
+  .surface.ringed { cursor: none }
 
   .cursor {
     position: absolute;

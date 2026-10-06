@@ -1,0 +1,101 @@
+{
+  "description": "Static batch-one 1024px FP32 ONNX Runtime mask-only inference",
+  "environment": {
+    "available_providers": [
+      "CoreMLExecutionProvider",
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "onnxruntime": "1.23.2",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]",
+    "threads": 4
+  },
+  "export_manifest": {
+    "file": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof/manifest.json",
+    "graph_packages_verified": true,
+    "sha256": "d8e734c2ff67fd535f8652cab22df96207fd2718bf08a27c44a460945a967f86"
+  },
+  "graph_packages": {
+    "encoder": {
+      "files": [
+        {
+          "bytes": 1335305985,
+          "file": "koharu_samts_encoder.onnx",
+          "sha256": "9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe"
+        }
+      ],
+      "total_bytes": 1335305985
+    },
+    "head": {
+      "files": [
+        {
+          "bytes": 22704641,
+          "file": "koharu_samts_text_head.onnx",
+          "sha256": "a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281"
+        }
+      ],
+      "total_bytes": 22704641
+    }
+  },
+  "measurement": {
+    "cold_definition": "first InferenceSession in a fresh worker process; OS file cache uncontrolled",
+    "peak_rss_definition": "worker process peak resident set/working set, including Python and ORT; excludes GPU/device memory; sampled before parity/profiling",
+    "repeats": 1,
+    "timeout_seconds_per_stage": 120,
+    "warmups": 0
+  },
+  "parity_evidence": {
+    "confirmed_by_invoker": true,
+    "cpu_comparison": {
+      "encoder_embedding": {
+        "changed_elements": 1027716,
+        "max_abs": 3.781169652938843e-05,
+        "mean_abs": 1.0402262737158052e-06,
+        "rmse": 1.5304831924935399e-06,
+        "shape": [
+          1,
+          256,
+          64,
+          64
+        ]
+      },
+      "source_vs_onnx_logits": {
+        "changed_elements": 1042293,
+        "max_abs": 0.00045013427734375,
+        "mean_abs": 2.2161516427615657e-05,
+        "rmse": 2.733163874871168e-05,
+        "shape": [
+          1,
+          1,
+          1024,
+          1024
+        ]
+      },
+      "source_vs_onnx_restored_mask_pixels": 0,
+      "text_head_same_embedding_logits": {
+        "changed_elements": 977773,
+        "max_abs": 4.482269287109375e-05,
+        "mean_abs": 4.850947801476879e-06,
+        "rmse": 6.8252931719407084e-06,
+        "shape": [
+          1,
+          1,
+          1024,
+          1024
+        ]
+      }
+    },
+    "file": "/Users/caved/.codex/worktrees/cloud-integration/manga-cleaner/spikes/sam-ts-l/artifacts/proof/parity.json"
+  },
+  "runs": [
+    {
+      "error": "worker exceeded 120 seconds",
+      "provider_requested": "CoreMLExecutionProvider",
+      "stage": "encoder",
+      "status": "error",
+      "stderr_tail": "2026-09-25 02:39:28.694 python[29103:5969272] 2026-09-25 02:39:28.694523 [W:onnxruntime:, coreml_execution_provider.cc:113 GetCapability] CoreMLExecutionProvider::GetCapability, number of partitions supported by CoreML: 65 number of nodes in the graph: 1818 number of nodes supported by CoreML: 1630\n",
+      "timeout_seconds": 120
+    }
+  ]
+}

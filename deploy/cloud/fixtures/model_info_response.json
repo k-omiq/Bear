@@ -1,0 +1,17 @@
+{
+  "protocol_version": "1.0.0",
+  "provider": "modal",
+  "model_id": "test-flux-schnell",
+  "model_revision": "0123456789abcdef0123456789abcdef01234567",
+  "recipe_id": "test-sdnq-v1",
+  "preprocessing_version": "1.0.0",
+  "native_mask_conditioning": false,
+  "limits": {
+    "max_width": 2048,
+    "max_height": 2048,
+    "max_pixels": 4194304,
+    "max_png_bytes": 16777216,
+    "max_multipart_bytes": 33554432,
+    "worker_timeout_seconds": 120
+  }
+}

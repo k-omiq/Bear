@@ -1,6 +1,8 @@
 /**
- * What the tool bar shows for each tool: its name, the hint it carries as a
- * tooltip, and the parameters themselves.
+ * What the tool shell shows for each tool: its name, the hint it carries as a
+ * tooltip, the parameters themselves, and which shape the shell takes for it -
+ * the one-row pill every drawing tool uses, or the compact panel Text cleanup
+ * uses (`shell`).
  *
  * **No prose.** The bar carries controls and nothing that explains them: the
  * tools are for translators rather than for retouchers, and a paragraph over
@@ -11,12 +13,17 @@
  * this module is user-visible text - labels are i18n keys, and the values are
  * the ids `src/lib/state/editor.svelte.js` stores in `editor.toolParams`.
  *
- * The tool ids and their `1`–`6` order come from `TOOLS` in the state module;
+ * The tool ids and their `1` to `6` order come from `TOOLS` in the state module;
  * this file must stay in step with it, which `toolSpec()` asserts by returning
- * the Auto clean spec for anything it does not recognise.
+ * the Text cleanup spec for anything it does not recognise.
+ *
+ * **Text cleanup is `autoClean` inside.** The tool was called Auto clean on
+ * screen; only the words changed. The id is what saved sessions, the `1`
+ * shortcut, `editor.toolParams`, `applyTool` and the native run all key on, so
+ * it stays.
  */
 
-import { ROW_ENGINES, engineChoiceLabel } from '../model/masks.js'
+import { MAX_MASK_PADDING, ROW_ENGINES, engineChoiceLabel } from '../model/masks.js'
 
 /**
  * @typedef {Object} RangeParam
@@ -75,6 +82,8 @@ import { ROW_ENGINES, engineChoiceLabel } from '../model/masks.js'
  * @property {string} hintKey - the bar's tooltip on the tool's own name
  * @property {Array<RangeParam|ChoiceParam|ColorParam>} params
  * @property {boolean} runnable - carries the run / cancel action button
+ * @property {'pill'|'panel'} shell - the shape the tool shell takes for it:
+ *   one row of controls, or a compact panel of labelled rows
  */
 
 /**
@@ -236,7 +245,8 @@ const ENGINES = ROW_ENGINES.filter((rung) => rung !== 'flux').map((rung) => ({
 }))
 
 /**
- * The engines the AI mask brush may be pointed at, weakest first.
+ * The shared engine options, weakest first. Drawing tools select the redraw
+ * models from this list, while Layers can still offer all of them.
  *
  * **The Layers row's own list and the Layers row's own words** - `ROW_ENGINES`
  * and `engineChoiceLabel` from `src/lib/model/masks.js`, not a second list
@@ -246,10 +256,10 @@ const ENGINES = ROW_ENGINES.filter((rung) => rung !== 'flux').map((rung) => ({
  *
  * Unlike `ENGINES` above these are **rungs named outright, not picks**: what
  * `src-tauri/src/region.rs#named_rung` reads from `params.engine`, and it runs
- * that rung rather than starting there. This row offers all four rungs; Auto
- * clean's two offer the three local ones, because `ENGINES` above drops `flux`
+ * that rung rather than starting there. Text cleanup's two choices offer the
+ * two local ones, because `ENGINES` above drops `flux`
  * from a run nobody is watching. The difference between naming a rung and
- * picking one is what a run does after the first patch - Auto clean escalates
+ * picking one is what a run does after the first patch - Text cleanup escalates
  * past a declined rung, a named one is committed as it came out.
  *
  * **A rung is offered only where it can run.** `flux` needs the sidecar and
@@ -275,10 +285,10 @@ const MASK_ENGINES = ROW_ENGINES.map((rung) => ({
  * clean what is under it.
  *
  * It is not called `fill`, and the distance between the two words is the whole
- * reason it has a name at all: `fill` is rung 0, the *planar fill* engine,
- * which samples the paper around the mask and lays down the tone it found -
- * and it is one of the four engine options beside this one. `solid` covers the shape
- * in the colour the user picked, which is a different act with a different
+ * reason it has a name at all: `fill` is rung 0, the engine that measures the
+ * paper just outside the mask and paints that one colour on it - and is
+ * deliberately absent from the shape picker. `solid` covers the shape in the
+ * colour the user picked, which is a different act with a different
  * outcome. The label says "Solid colour" for the same reason.
  */
 export const SOLID = 'solid'
@@ -296,12 +306,12 @@ export function isSolidFill(values) {
  *
  * One row rather than two, because the two are alternatives rather than
  * settings of one another - a shape is either paint or a clean, never both -
- * and a second row would be a control that is dead half the time. The engines
- * are `MASK_ENGINES` unchanged, so Shapes, the AI mask brush and a Layers
- * row's picker all offer the same four rungs under the same four words, and
- * `ToolBar.svelte` gates rung 3a here exactly as it does there.
+ * and a second row would be a control that is dead half the time. Shapes
+ * offer LaMa Manga and available FLUX alongside Solid; Fill is not a useful
+ * mode for a drawn shape.
  */
-const SHAPE_MODES = [{ value: SOLID, labelKey: 'tools.option.modeSolid' }, ...MASK_ENGINES]
+const BRUSH_ENGINES = MASK_ENGINES.filter((option) => option.value !== 'fill')
+const SHAPE_MODES = [{ value: SOLID, labelKey: 'tools.option.modeSolid' }, ...BRUSH_ENGINES]
 
 /** @type {ToolSpec[]} */
 export const TOOL_SPECS = [
@@ -311,12 +321,51 @@ export const TOOL_SPECS = [
     nameKey: 'tools.name.autoClean',
     hintKey: 'tools.hint.autoClean',
     params: [
-      ...section('scope', [
+      // What the run does, then over what. The mode names the run button
+      // too ("Detect chapter", "Clean page"): Detect finds and stores the
+      // regions and changes no pixel, Clean cleans the stored ones and finds
+      // nothing new, and Detect & clean is both, which is what the tool always
+      // did (docs/detect-clean.md). Where each half runs is not a parameter of
+      // the tool but a setting, so `ToolBar.svelte` draws those two choices
+      // beside these from `state/cloudtargets.svelte.js`.
+      //
+      // The panel has room for words, so the scope is three words rather than
+      // three glyphs. Project is offered only while it can run: a cloud half
+      // cannot cover chapters nobody looked at (`cloudrun.js#cloudScopeRefusal`),
+      // and the panel drops the option rather than offering a run it refuses.
+      ...section('run', [
+        choice('step', 'tools.param.step', [
+          { value: 'auto', labelKey: 'tools.option.stepAuto' },
+          { value: 'detect', labelKey: 'tools.option.stepDetect' },
+          { value: 'clean', labelKey: 'tools.option.stepClean' },
+        ]),
         choice('scope', 'tools.param.scope', [
-          { value: 'page', labelKey: 'tools.option.scopePage', icon: 'file' },
-          { value: 'project', labelKey: 'tools.option.scopeProject', icon: 'book' },
+          { value: 'page', labelKey: 'tools.option.scopePage' },
+          { value: 'chapter', labelKey: 'tools.option.scopeChapter' },
+          { value: 'project', labelKey: 'tools.option.scopeProject' },
         ]),
       ]),
+      // The pipeline's own rule: text outside a balloon is "cleaned only if
+      // the user opts in". This is the opt-in. Off, the run
+      // holds that text for review under "text outside a speech bubble" and
+      // the engine row below only bites through *Clean anyway*; on, every such
+      // region goes to the ladder starting on that row's rung. No
+      // script is read for it either way - sound effects are conceded, not
+      // classified - so the person turning this on is the one deciding the
+      // chapter's free text is all safe to clean. The all-text policy cleans
+      // it regardless (`run.rs`), so the panel draws it only under the
+      // script-filtered one.
+      ...section('text', [
+        choice('outsideBubbles', 'tools.param.outsideBubbles', [
+          { value: 'review', labelKey: 'tools.option.outsideReview' },
+          { value: 'clean', labelKey: 'tools.option.outsideClean' },
+        ]),
+      ]),
+      // How far every detected mask is grown past the fit, in page pixels.
+      // Detect and Detect & clean grow the masks they fit by it; the panel's
+      // Apply beside it re-pads masks already detected, from their unpadded
+      // shape (`region.rs#set_detection_padding`).
+      ...section('mask', [range('maskPadding', 'tools.param.maskPadding', 0, MAX_MASK_PADDING, 1, 'px')]),
       // Two rows rather than one, because the two kinds of text want opposite
       // engines and always did: a speech balloon is flat white or flat black
       // and the fill family covers it for nothing, where text over art has to
@@ -326,42 +375,52 @@ export const TOOL_SPECS = [
       // would have matched exactly. `bubbleEngine` and `outsideEngine` travel
       // to `runClean` and are applied per region by whether the region is
       // inside a balloon.
+      //
+      // **The clean is where a pick is decided**, not detection. Every
+      // clean a run makes - Clean, and Detect & clean, on regions found now
+      // or detected earlier - starts each region from these rows, and a cloud
+      // clean saves them onto its regions before it plans them, so a LaMa
+      // pick is cleaned on this computer (`cloud_clean.rs#PrepareRequest`).
+      // Detect still saves a pick with each region (`run.rs#stored_pick`),
+      // which a Layers row's own clean starts from. So the panel draws the
+      // two rows for Clean and for Detect & clean, and never for Detect,
+      // where they would decide nothing.
+      //
+      // The fill colour is the other way round: a clean reads it, detection
+      // does not, and it paints a saved Solid pick that holds no balloon tone
+      // of its own as well as a fresh one. So it is drawn wherever this
+      // computer cleans, whatever the rows say now, rather than only while one
+      // of them reads Solid.
       ...section('engines', [
-        choice('bubbleEngine', 'tools.param.bubbleText', ENGINES, 'tools.short.bubbleText'),
-        onlyWhen(
-          color('bubbleColor', 'tools.param.bubbleColor', '#ffffff'),
-          (values) => (values?.bubbleEngine ?? 'fill') === 'fill',
-        ),
-        choice('outsideEngine', 'tools.param.outsideText', ENGINES, 'tools.short.outsideText'),
-        // The pipeline's own rule: text outside a balloon is "cleaned only if
-        // the user opts in". This is the opt-in. Off, the run
-        // holds that text for review under "text outside a speech bubble" and
-        // the row above only bites through *Clean anyway*; on, every such
-        // region goes to the ladder starting on the row above's rung. No
-        // script is read for it either way - sound effects are conceded, not
-        // classified - so the person turning this on is the one deciding the
-        // chapter's free text is all safe to clean.
-        choice('outsideBubbles', 'tools.param.outsideBubbles', [
-          { value: 'review', labelKey: 'tools.option.outsideReview' },
-          { value: 'clean', labelKey: 'tools.option.outsideClean' },
+        choice('bubbleEngine', 'tools.param.bubbleText', [
+          ...ENGINES,
+          { value: SOLID, labelKey: 'tools.option.modeSolid' },
         ]),
+        choice('outsideEngine', 'tools.param.outsideText', [
+          ...ENGINES,
+          { value: SOLID, labelKey: 'tools.option.modeSolid' },
+        ]),
+        color('bubbleColor', 'tools.param.bubbleColor', '#ffffff'),
       ]),
       // There is deliberately no engine-ceiling row. It offered two rungs of
       // src/lib/model/ladder.js - the highest local engine, or the whole ladder
-      // including cloud - and the cloud rung was a way to spend money that
-      // never met the disclosure: `needs-confirmation` lives on `applyTool`,
-      // and `runClean` has no equivalent, so a run at that ceiling sent pages
-      // off the machine with neither the transmission statement nor the cost
-      // confirmation. Rather than grow the run protocol, the user ruled that
-      // a batch run is local-only:
-      // an unbounded batch spend is the hardest kind to confirm meaningfully,
-      // and cloud stays reachable per-region through Content-aware fill, which
-      // carries the whole flow. `startRun` pins the ceiling to LOCAL_CEILING,
-      // so this is enforced where the sending happens, not merely unoffered
-      // here. With the cloud rung gone the row held one option, and a
-      // radiogroup of one is worse than no row at all.
+      // including cloud - and the cloud rung sent pages off the machine
+      // without the consent every cloud render asks for first:
+      // `needs-confirmation` lives on `applyTool`, and `runClean` has no
+      // equivalent. So a local run stays local: `startRun` pins the ceiling
+      // to LOCAL_CEILING, which is enforced where the sending happens, not
+      // merely unoffered here.
+      //
+      // The cloud came back as a *place*, not a rung, and with its consent.
+      // The panel's Clean on choice (`cleanTarget`) routes the Clean half to
+      // the cloud GPU, and that never goes through `runClean`: the run detects
+      // here, then `prepare_cloud_clean` states the exact regions and cost,
+      // the cloud clean consent asks, and only its grant starts the renders
+      // (`editor/cloudrun.js`). The batch is bounded by what was detected and
+      // shown, which is what the old ceiling could not offer.
     ],
     runnable: true,
+    shell: 'panel',
   },
   {
     id: 'brush',
@@ -391,6 +450,7 @@ export const TOOL_SPECS = [
       ]),
     ],
     runnable: false,
+    shell: 'pill',
   },
   {
     id: 'shapes',
@@ -404,6 +464,7 @@ export const TOOL_SPECS = [
           { value: 'ellipse', labelKey: 'tools.option.ellipse', icon: 'shape-ellipse' },
           { value: 'lasso', labelKey: 'tools.option.lasso', icon: 'shape-lasso' },
           { value: 'polygon', labelKey: 'tools.option.polygon', icon: 'shape-polygon' },
+          { value: 'line', labelKey: 'tools.option.line', icon: 'shape-line' },
         ]),
       ]),
       // What the shape *does*. Shapes used to have no such row and always
@@ -419,10 +480,13 @@ export const TOOL_SPECS = [
         // a wash as well as a cover. Meaningless for the engine modes, which
         // replace what is under them outright.
         onlyWhen(range('opacity', 'tools.param.opacity', 0, 100, 5, '%'), isSolidFill),
+        onlyWhen(color('outlineColor', 'tools.param.outlineColor', '#000000'), isSolidFill),
+        onlyWhen(range('outlineWidth', 'tools.param.outlineWidth', 0, 30, 1, 'px'), isSolidFill),
         range('feather', 'tools.param.feather', 0, 20, 1, 'px'),
       ]),
     ],
     runnable: false,
+    shell: 'pill',
   },
   {
     id: 'aiMaskBrush',
@@ -440,40 +504,19 @@ export const TOOL_SPECS = [
       // to, no confidence to show and nothing to fall back from. A control
       // that cannot change what happens is worse than no control.
       ...section('engines', [
-        choice('engine', 'tools.param.cleanWith', MASK_ENGINES, 'tools.short.cleanWith'),
+        choice('engine', 'tools.param.cleanWith', [
+          ...BRUSH_ENGINES,
+          { value: 'cloud', labelKey: 'tools.option.engineCloud', cloud: true },
+        ], 'tools.short.cleanWith'),
       ]),
       ...section('brush', [range('size', 'tools.param.size', 8, 160, 4, 'px')]),
     ],
     runnable: false,
-  },
-  {
-    id: 'contentAwareFill',
-    slot: 5,
-    nameKey: 'tools.name.contentAwareFill',
-    hintKey: 'tools.hint.contentAwareFill',
-    params: [
-      ...section('fill', [
-        choice(
-          'fillMode',
-          'tools.param.fillMode',
-          [
-            { value: 'match-surround', labelKey: 'masks.fillMode.matchSurround' },
-            { value: 'reconstruct', labelKey: 'masks.fillMode.reconstruct' },
-            { value: 'solid', labelKey: 'masks.fillMode.solid' },
-          ],
-          'tools.short.fillMode',
-        ),
-        choice('engine', 'tools.param.engine', [
-          { value: 'local', labelKey: 'tools.option.engineLocal', icon: 'cpu' },
-          { value: 'cloud', labelKey: 'tools.option.engineCloud', cloud: true, icon: 'cloud' },
-        ]),
-      ]),
-    ],
-    runnable: false,
+    shell: 'pill',
   },
   {
     id: 'cloneHeal',
-    slot: 6,
+    slot: 5,
     nameKey: 'tools.name.cloneHeal',
     hintKey: 'tools.hint.cloneHeal',
     params: [
@@ -495,6 +538,40 @@ export const TOOL_SPECS = [
       ]),
     ],
     runnable: false,
+    shell: 'pill',
+  },
+  {
+    // The selection tool: it edits the detected masks that Clean erases,
+    // after a Detect and before a Clean, and changes no pixel of the page.
+    // Add merges the gesture into the detection it overlaps most, or makes a
+    // new one; remove takes it out of every detection it touches
+    // (`api/backend.js#editDetectionMask`). No engine and no cloud option:
+    // what happens to the area is Clean's decision, later.
+    id: 'maskSelect',
+    slot: 6,
+    nameKey: 'tools.name.maskSelect',
+    hintKey: 'tools.hint.maskSelect',
+    params: [
+      ...section('mode', [
+        choice('mode', 'tools.param.mode', [
+          { value: 'add', labelKey: 'tools.option.maskAdd', icon: 'mask-add' },
+          { value: 'remove', labelKey: 'tools.option.maskRemove', icon: 'mask-remove' },
+        ]),
+      ]),
+      // A round brush for the edge of a balloon's text, a lasso for an
+      // irregular area, a rectangle for a caption box. Size means something
+      // for the brush alone, so it is there only then.
+      ...section('shape', [
+        choice('shape', 'tools.param.shape', [
+          { value: 'brush', labelKey: 'tools.option.brush', icon: 'brush' },
+          { value: 'lasso', labelKey: 'tools.option.lasso', icon: 'shape-lasso' },
+          { value: 'rect', labelKey: 'tools.option.rect', icon: 'shape-rect' },
+        ]),
+        onlyWhen(range('size', 'tools.param.size', 4, 160, 2, 'px'), (values) => (values.shape ?? 'brush') === 'brush'),
+      ]),
+    ],
+    runnable: false,
+    shell: 'pill',
   },
 ]
 
@@ -504,13 +581,13 @@ export const TOOL_ICONS = /** @type {Record<string, string>} */ ({
   brush: 'brush',
   shapes: 'shapes',
   aiMaskBrush: 'wand',
-  contentAwareFill: 'droplet',
   cloneHeal: 'stamp',
+  maskSelect: 'selection',
 })
 
 /**
  * @param {string} id
- * @returns {ToolSpec} the Auto clean spec for an unknown id - the tool bar
+ * @returns {ToolSpec} the Text cleanup spec for an unknown id - the tool shell
  *   always has something to show, and the mismatch is visible rather than blank
  */
 export function toolSpec(id) {
@@ -518,20 +595,62 @@ export function toolSpec(id) {
 }
 
 /**
+ * The width of the Text cleanup panel, in CSS pixels.
+ *
+ * A number here rather than only in the stylesheet because two things have to
+ * agree on it: `ToolBar.svelte` draws the panel at it (capped by the viewport),
+ * and the tests hold it inside the plan's 360 to 400 and inside the smallest
+ * window `src-tauri/tauri.conf.json` allows. Wide enough for a three-word
+ * segmented row whose longest cell is "Detect & clean" at the chip's 11px.
+ */
+export const PANEL_WIDTH = 384
+
+/**
+ * The shell a tool is drawn in. `pill` for anything this module does not
+ * know, which is the shape that cannot outgrow a small window.
+ *
+ * @param {string} id
+ * @returns {'pill'|'panel'}
+ */
+export function toolShell(id) {
+  return TOOL_SPECS.find((spec) => spec.id === id)?.shell ?? 'pill'
+}
+
+/**
  * The tools whose gesture on the page is a **drag**, and which therefore need
  * a drawing surface over the sheet.
  *
- * Auto clean and Content-aware fill are not here on purpose: Auto clean runs a
- * queue and Content-aware fill fills an *existing* mask, so both act on a
- * region that is already there and both are a click on it. The
- * drawing surface would only take that click away from them.
+ * Text cleanup is not here: it runs a queue rather than drawing a gesture.
  */
 export const DRAWING_TOOLS = /** @type {const} */ ([
   'brush',
   'shapes',
   'aiMaskBrush',
   'cloneHeal',
+  'maskSelect',
 ])
+
+/**
+ * The area a drag draws with this tool and these parameters, or `null` where
+ * the drag is a round brush stroke.
+ *
+ * Shapes is always an area, of whichever shape its row names. The selection
+ * tool is a brush or an area by its own `shape` row: `brush` strokes, and
+ * `lasso` and `rect` draw what Shapes draws under the same names, through the
+ * same gestures. Every other drawing tool strokes.
+ *
+ * @param {string} tool
+ * @param {Record<string, unknown>} [params]
+ * @returns {'rect'|'ellipse'|'lasso'|'polygon'|'line'|null}
+ */
+export function draftShape(tool, params = {}) {
+  if (tool === 'shapes') return /** @type {any} */ (String(params?.shape ?? 'rect'))
+  if (tool === 'maskSelect') {
+    const shape = params?.shape
+    return shape === 'lasso' || shape === 'rect' ? shape : null
+  }
+  return null
+}
 
 /**
  * @param {string} id
@@ -554,6 +673,8 @@ export function isDrawingTool(id) {
  * @returns {boolean}
  */
 export function toolSpendsCloud(id, params = {}) {
+  // Retained only for replaying existing cloud operation intents.
+  if (id === 'contentAwareFill') return params.engine === 'cloud'
   const spec = TOOL_SPECS.find((candidate) => candidate.id === id)
   if (!spec) return false
   return spec.params.some(

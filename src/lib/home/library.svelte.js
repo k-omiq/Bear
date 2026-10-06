@@ -225,6 +225,46 @@ export async function removeChapter(spec) {
 }
 
 /**
+ * Take a chapter's denoised files as its pages, then say what changed. The
+ * list is read again either way, since the offer may be gone.
+ *
+ * @param {{chapter: import('../api/backend.js').ApiChapter}} spec
+ * @returns {Promise<boolean>} whether pages were replaced
+ */
+export async function replaceWithDenoised({ chapter }) {
+  if (library.busy) return false
+  library.busy = true
+  const number = chapter.number
+  try {
+    const report = await getBackend().replaceWithDenoised({ chapterId: chapter.id })
+    if (report.failed.length) {
+      notify({ key: 'denoise.notice.replaceFailed', params: { number, page: report.failed[0].pageIndex + 1 }, tone: 'warn' })
+      return false
+    }
+    const count = report.replaced.length
+    // Pages kept because they changed and pages with no denoised file to take
+    // are one figure here: the confirmation already said which was which.
+    const kept = report.kept.length + (report.missing?.length ?? 0)
+    notify(kept
+      ? { key: 'denoise.notice.replacedKept', params: { number, count, kept } }
+      : { key: 'denoise.notice.replaced', params: { number, count } })
+    return true
+  } catch (error) {
+    const code = String(error instanceof Error ? error.message : error ?? '')
+    notify({
+      key: code.includes('job_busy') ? 'notice.job.busy'
+        : 'notice.library.changeFailed',
+      params: { number },
+      tone: 'warn',
+    })
+    return false
+  } finally {
+    await loadLibrary()
+    library.busy = false
+  }
+}
+
+/**
  * Continue an interrupted job. Home does not start the run: it records the
  * request and routes to the editor, which starts it once the chapter is open
  * (`state/editor.svelte.js#consumeResume`). Starting it here would put a run's

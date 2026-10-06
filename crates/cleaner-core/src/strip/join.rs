@@ -18,6 +18,12 @@
 //! not free: an unverified join is treated as a page edge, so a bubble split
 //! across it stops being read as one region - which is the defect rule 1 exists
 //! to prevent, produced by the check meant to protect it.
+//!
+//! A clean cut is the common case, so a repeat or a shift has to explain the
+//! join clearly better than continuity does before it is an anomaly, and
+//! continuity is judged by how alike neighbouring rows are inside each page
+//! near the join. Smooth, streaky and slanted art all look like a repeat or a
+//! shift to a test that only asks whether the rows match.
 
 use crate::image::Raster;
 
@@ -49,6 +55,21 @@ const SHIFT_MARGIN: f32 = 2.0;
 /// A shifted match must itself be this good, in levels, or the two pages simply
 /// do not continue into each other and there is nothing to misregister.
 const SHIFT_MATCH: f32 = 4.0;
+
+/// A repeat or a shift counts only when it explains the join this many times
+/// better than continuity does, and continuity is judged by how alike
+/// neighbouring rows are inside each page near the join.
+///
+/// Chosen from measured false anomalies rather than tuned to a boundary. On a
+/// 59-page webtoon chapter (720 px PNGs) and a 45-page one (JPEG), every join
+/// the check used to call duplicated or misregistered was a clean cut, and in
+/// each the candidate matched no better than continuity: the shifts matched the
+/// join 1.0 to 1.5 times *worse* than the same shift matched the rows inside the
+/// pages (slanted art), and the repeats matched worse than the straight join
+/// did. A real repeat or mis-cut of textured rows matches at encoder noise,
+/// about one level, against neighbours tens of levels apart. Two sits far from
+/// both.
+const CONTINUITY_MARGIN: f32 = 2.0;
 
 /// How far a row's mean may sit from its neighbourhood before it is a seam.
 const SEAM_DEVIATION: f32 = 12.0;
@@ -236,9 +257,9 @@ impl Joins {
 /// §2's anomaly check, over one boundary.
 ///
 /// The order of the tests is the order of their certainty. A width mismatch is
-/// a fact about the headers; a duplicate is a fact about the pixels; a
-/// misregistration and a seam are inferences, and each abstains where it cannot
-/// tell.
+/// a fact about the headers; a duplicate is a fact about the pixels once it
+/// beats continuity; a misregistration and a seam are inferences, and each
+/// abstains where it cannot tell.
 pub fn check_join(above: &EdgeRows, below: &EdgeRows) -> JoinState {
     if above.width != below.width {
         return JoinState::Anomalous(JoinAnomaly::WidthMismatch {
@@ -266,12 +287,26 @@ pub fn check_join(above: &EdgeRows, below: &EdgeRows) -> JoinState {
 ///
 /// Longest rather than shortest because a two-row overlap is also a one-row
 /// overlap, and the number is reported.
+///
+/// **One row is never a repeat.** The last row above matching the first row
+/// below is exactly what a clean cut through anything smooth looks like, so it
+/// is no evidence either way. From two rows on, a clean cut through art that
+/// barely changes down the page passes the row test too: the rows it compares
+/// are a few rows apart, and a few rows of smooth or streaky art match within
+/// [`ROW_TOLERANCE`]. So a block counts only when it matches
+/// [`CONTINUITY_MARGIN`] times better than the straight join does and than its
+/// own rows match their neighbours. Where those neighbours are themselves within
+/// the tolerance, the art is vertically constant as far as the tolerance can
+/// see, and a repeat cannot be told from a continuation.
 fn duplicated_rows(above: &EdgeRows, below: &EdgeRows) -> Option<u32> {
     let limit = above.rows.len().min(below.rows.len());
-    for n in (1..=limit).rev() {
+    let straight = row_difference(above.rows.last()?, below.rows.first()?, 0);
+    for n in (2..=limit).rev() {
         let tail = &above.rows[above.rows.len() - n..];
         let head = &below.rows[..n];
-        if tail.iter().zip(head).any(|(a, b)| row_difference(a, b, 0) > ROW_TOLERANCE) {
+        let repeats: Vec<f32> =
+            tail.iter().zip(head).map(|(a, b)| row_difference(a, b, 0)).collect();
+        if repeats.iter().any(|d| *d > ROW_TOLERANCE) {
             continue;
         }
         // Blank paper repeats trivially. Only a block that carries content is
@@ -280,7 +315,15 @@ fn duplicated_rows(above: &EdgeRows, below: &EdgeRows) -> Option<u32> {
         if content < CONTENT_FLOOR {
             continue;
         }
-        return Some(n as u32);
+        let neighbours: Vec<f32> = tail
+            .windows(2)
+            .chain(head.windows(2))
+            .map(|p| row_difference(&p[0], &p[1], 0))
+            .collect();
+        let continuity = straight.min(mean(&neighbours));
+        if continuity > (mean(&repeats) * CONTINUITY_MARGIN).max(ROW_TOLERANCE) {
+            return Some(n as u32);
+        }
     }
     None
 }
@@ -292,9 +335,17 @@ fn duplicated_rows(above: &EdgeRows, below: &EdgeRows) -> Option<u32> {
 /// abstains. It fires only where a shifted match is both good in absolute terms
 /// and clearly better than the unshifted one, which is what a mis-cut slice
 /// looks like and what an unrelated page pair cannot produce.
+///
+/// **Slanted art shifts on its own.** Hatching or speed lines at an angle make
+/// every row the row above it moved sideways, so a clean cut through them
+/// matches best at a shift too. The test tells the two apart by asking the rows
+/// inside each page next to the join: where they line up at the same shift
+/// about as well, the shift is the art's, and the test abstains. A mis-cut moves
+/// only the join, so the shift must match it [`CONTINUITY_MARGIN`] times better
+/// than it matches either page's own neighbouring rows.
 fn misregistration(above: &EdgeRows, below: &EdgeRows) -> Option<i64> {
-    let last = above.rows.last()?;
-    let first = below.rows.first()?;
+    let [.., above_inner, last] = above.rows.as_slice() else { return None };
+    let [first, below_inner, ..] = below.rows.as_slice() else { return None };
     if spatial_std(last) < CONTENT_FLOOR || spatial_std(first) < CONTENT_FLOOR {
         return None;
     }
@@ -308,11 +359,11 @@ fn misregistration(above: &EdgeRows, below: &EdgeRows) -> Option<i64> {
         }
     }
     let (dx, matched) = best;
-    if dx != 0 && matched < SHIFT_MATCH && matched * SHIFT_MARGIN < straight {
-        Some(dx)
-    } else {
-        None
+    if dx == 0 || matched >= SHIFT_MATCH || matched * SHIFT_MARGIN >= straight {
+        return None;
     }
+    let inside = row_difference(above_inner, last, dx).min(row_difference(first, below_inner, dx));
+    (matched * CONTINUITY_MARGIN < inside).then_some(dx)
 }
 
 /// §2's "1-px seam": rows at the boundary that belong to neither side.
@@ -413,6 +464,127 @@ mod tests {
         let above = EdgeRows { width: 40, rows: flat(246.0, 8, 40) };
         let below = EdgeRows { width: 40, rows: flat(246.0, 8, 40) };
         assert_eq!(check_join(&above, &below), JoinState::Verified);
+    }
+
+    /// A deterministic offset in `-amplitude..amplitude`, standing in for the
+    /// noise a lossy encoder leaves on each page independently.
+    fn noise(x: usize, y: usize, seed: u32, amplitude: f32) -> f32 {
+        let mut h =
+            (x as u32).wrapping_mul(0x27D4_EB2F) ^ (y as u32 + seed).wrapping_mul(0x1656_67B1);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2545_F491);
+        h ^= h >> 13;
+        ((h % 2001) as f32 / 1000.0 - 1.0) * amplitude
+    }
+
+    /// Strip rows `from..to` of one picture cut from a single canvas, so the
+    /// join between two ranges of it is a clean cut by construction.
+    fn canvas(from: usize, to: usize, row: impl Fn(usize) -> Vec<f32>) -> Vec<Vec<f32>> {
+        (from..to).map(row).collect()
+    }
+
+    /// Art that barely changes from one row to the next: neighbouring rows
+    /// match within the row tolerance, so the rows either side of a clean cut
+    /// also match a few rows apart. That is continuity, not a repeat.
+    #[test]
+    fn a_clean_cut_through_smooth_art_verifies() {
+        let base = &textured(3, 1, 120)[0];
+        let row = |y: usize| base.iter().map(|v| v + 0.3 * y as f32).collect();
+        let above = EdgeRows { width: 120, rows: canvas(0, 16, row) };
+        let below = EdgeRows { width: 120, rows: canvas(16, 32, row) };
+        assert_eq!(check_join(&above, &below), JoinState::Verified);
+    }
+
+    /// Speed lines: dark vertical streaks that run straight through the cut.
+    /// Every row equals its neighbour, so any number of rows "repeat".
+    #[test]
+    fn a_clean_cut_through_vertical_streaks_verifies() {
+        let row = |y: usize| -> Vec<f32> {
+            (0..240)
+                .map(|x| {
+                    let streak = x % 17 == 3 || x % 29 == 11;
+                    let paper = if streak { 30.0 } else { 235.0 };
+                    paper + noise(x, y, 5, 0.4)
+                })
+                .collect()
+        };
+        let above = EdgeRows { width: 240, rows: canvas(0, 16, row) };
+        let below = EdgeRows { width: 240, rows: canvas(16, 32, row) };
+        assert_eq!(check_join(&above, &below), JoinState::Verified);
+    }
+
+    /// Hatching that slants: each row is the row above it moved sideways, so
+    /// the rows either side of a clean cut match best at a shift. The rows
+    /// inside each page match at that same shift, which is what makes it the
+    /// art and not a mis-cut.
+    #[test]
+    fn a_clean_cut_through_slanted_hatching_verifies() {
+        let wide = &textured(9, 1, 200)[0];
+        let row = |y: usize| wide[y * 2..y * 2 + 120].to_vec();
+        let above = EdgeRows { width: 120, rows: canvas(0, 16, row) };
+        let below = EdgeRows { width: 120, rows: canvas(16, 32, row) };
+        assert_eq!(check_join(&above, &below), JoinState::Verified);
+    }
+
+    /// White paper with the tips of two strokes higher up in each page. A mean
+    /// over a wide row hides the few pixels that differ, so sixteen rows each
+    /// "match", and the tips carry the block over the content floor.
+    #[test]
+    fn near_blank_rows_with_sparse_detail_verify() {
+        let with_stroke = |at: usize, rows: std::ops::Range<usize>| {
+            move |y: usize| -> Vec<f32> {
+                (0..720)
+                    .map(|x| {
+                        let tip = rows.contains(&y) && (x == at || x == at + 1);
+                        if tip { 40.0 } else { 246.0 }
+                    })
+                    .collect()
+            }
+        };
+        let above = EdgeRows { width: 720, rows: canvas(0, 16, with_stroke(100, 0..7)) };
+        let below = EdgeRows { width: 720, rows: canvas(0, 16, with_stroke(300, 9..16)) };
+        assert_eq!(check_join(&above, &below), JoinState::Verified);
+    }
+
+    /// One row equal across the join is what a clean cut through anything
+    /// smooth looks like, so it is never called a repeat.
+    #[test]
+    fn a_single_repeated_row_verifies() {
+        let mut above_rows = textured(0, 8, 40);
+        let mut below_rows = textured(500, 8, 40);
+        let shared = textured(77, 1, 40).remove(0);
+        *above_rows.last_mut().unwrap() = shared.clone();
+        below_rows[0] = shared;
+        let above = EdgeRows { width: 40, rows: above_rows };
+        let below = EdgeRows { width: 40, rows: below_rows };
+        assert_eq!(check_join(&above, &below), JoinState::Verified);
+    }
+
+    /// A real overlap still reads as one after each page has been through a
+    /// lossy encoder on its own: the repeated rows differ by noise, and the
+    /// rows around them differ by content.
+    #[test]
+    fn a_noisy_three_row_duplicate_of_textured_rows_is_still_found() {
+        let shared = textured(11, 3, 120);
+        let noisy = |rows: &[Vec<f32>], seed: u32| -> Vec<Vec<f32>> {
+            rows.iter()
+                .enumerate()
+                .map(|(y, r)| {
+                    r.iter().enumerate().map(|(x, v)| v + noise(x, y, seed, 1.0)).collect()
+                })
+                .collect()
+        };
+        let mut above_rows = textured(0, 13, 120);
+        above_rows.extend(noisy(&shared, 1));
+        let mut below_rows = noisy(&shared, 2);
+        below_rows.extend(textured(90, 13, 120));
+
+        let above = EdgeRows { width: 120, rows: above_rows };
+        let below = EdgeRows { width: 120, rows: below_rows };
+        assert_eq!(
+            check_join(&above, &below),
+            JoinState::Anomalous(JoinAnomaly::DuplicatedRows { rows: 3 })
+        );
     }
 
     #[test]

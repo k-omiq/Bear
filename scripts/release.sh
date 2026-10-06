@@ -4,10 +4,8 @@
 # Run on mac -> publishes darwin entry. Run on windows (git-bash) -> publishes windows entry.
 # latest.json is merged, so platforms built on other machines are preserved.
 #
-# node, not python3, for every bit of JSON below: the windows runner's and a
-# developer's git-bash both have node (npm builds the frontend) and neither has
-# a reliable python3. The header used to claim windows support while calling
-# python3 twice, which meant the windows half of this script had never run.
+# Node handles the manifest below. Python 3.11+ is still needed to freeze the
+# bundled cloud helper, and is checked explicitly before the build.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -41,14 +39,14 @@ OS=$(uname -s); ARCH=$(uname -m)
 case "$OS" in
   Darwin)
     case "$ARCH" in
-      arm64)  PLATFORM="darwin-aarch64" ;;
-      x86_64) PLATFORM="darwin-x86_64" ;;
+      arm64)  PLATFORM="darwin-aarch64"; TARGET="aarch64-apple-darwin" ;;
+      x86_64) PLATFORM="darwin-x86_64"; TARGET="x86_64-apple-darwin" ;;
       *) echo "unsupported platform $OS-$ARCH"; exit 1 ;;
     esac
     ;;
   MINGW* | MSYS* | CYGWIN*)
     case "$ARCH" in
-      x86_64) PLATFORM="windows-x86_64" ;;
+      x86_64) PLATFORM="windows-x86_64"; TARGET="x86_64-pc-windows-msvc" ;;
       # runtime::package carries a win-arm64 row and nothing builds it: no
       # arm64 windows machine has run this application and none of the
       # acceleration figures were measured on one. Publishing from here would
@@ -60,6 +58,22 @@ case "$OS" in
     ;;
   *) echo "unsupported platform $OS-$ARCH"; exit 1 ;;
 esac
+
+# A local release must stage the same two executables as the tagged release
+# workflow. Otherwise the installer may build while cloud setup and managed
+# Python installation fail on a clean machine.
+PYTHON=""
+for candidate in python3 python; do
+  if command -v "$candidate" >/dev/null && "$candidate" -c 'import sys; assert sys.version_info >= (3, 11)' >/dev/null 2>&1; then
+    PYTHON="$candidate"
+    break
+  fi
+done
+[ -n "$PYTHON" ] || { echo "Python 3.11+ is required to build the bundled helpers"; exit 1; }
+"$PYTHON" -m pip install --require-hashes -r provisioner/requirements.lock
+"$PYTHON" .github/scripts/build-cloud-provisioner.py "$TARGET"
+"$PYTHON" -m pip install uv==0.12.19
+"$PYTHON" .github/scripts/stage-flux-python.py "$TARGET"
 
 # The Visual C++ runtime the downloaded ONNX Runtime imports, copied beside the
 # executable. The release workflow does this in its own step; a build started
@@ -74,9 +88,10 @@ fi
 
 VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
 echo "== building v$VERSION =="
-npm run tauri build
+npm ci
+npx tauri build --target "$TARGET"
 
-BUNDLE_DIR="src-tauri/target/release/bundle"
+BUNDLE_DIR="target/$TARGET/release/bundle"
 case "$PLATFORM" in
   darwin-*)
     ARTIFACT=$(ls "$BUNDLE_DIR"/macos/*.app.tar.gz | head -1)

@@ -211,6 +211,23 @@ pub fn evict(kind: Kind) -> usize {
     count
 }
 
+/// Give SAM analysis room by dropping parked CTD, LaMa, and sidecar sessions.
+/// Checked-out sessions remain with their owner until its next safe point.
+pub fn evict_for_sam() -> usize {
+    [Kind::TextDetector, Kind::Inpainter, Kind::Sidecar]
+        .into_iter()
+        .map(evict)
+        .sum()
+}
+
+/// Whether [`evict_for_sam`] would drop anything right now. Read-only: a
+/// status query can say room may be made without making it.
+pub fn reclaimable_for_sam() -> bool {
+    [Kind::TextDetector, Kind::Inpainter, Kind::Sidecar]
+        .into_iter()
+        .any(parked)
+}
+
 /// Whether anything of this kind is parked here right now.
 pub fn parked(kind: Kind) -> bool {
     table().iter().any(|slot| slot.key.kind == kind)
@@ -244,6 +261,7 @@ resident!(
     crate::detect::Detector,
     crate::balloon::BalloonDetector,
     crate::gate::ScriptGate,
+    crate::gate::Hayai,
     crate::engines::lama::Inpainter,
     crate::engines::flux::Inpainter,
 );
@@ -446,6 +464,23 @@ mod tests {
         assert_eq!(evict(Kind::Sidecar), 1);
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
         assert!(!parked(Kind::Sidecar));
+    }
+
+    #[test]
+    fn sam_admission_releases_only_parked_competing_sessions() {
+        let _guard = test_lock();
+        clear();
+        let dropped = Arc::new(AtomicU32::new(0));
+        for kind in [Kind::TextDetector, Kind::Inpainter, Kind::Sidecar, Kind::ScriptGate] {
+            checkin(Key::new(kind, format!("sam-{kind:?}")), Fake::open(kind, &dropped));
+        }
+        assert_eq!(evict_for_sam(), 3);
+        assert_eq!(dropped.load(Ordering::Relaxed), 3);
+        assert!(parked(Kind::ScriptGate));
+        assert!(!parked(Kind::TextDetector));
+        assert!(!parked(Kind::Inpainter));
+        assert!(!parked(Kind::Sidecar));
+        clear();
     }
 
     /// Two model directories are two sessions. A key that ignored the
