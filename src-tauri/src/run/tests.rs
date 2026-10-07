@@ -2011,7 +2011,7 @@ fn job_lock_child_process() {
         "writer" => {
             assert!(wait_for_signal(&signals, "go", Duration::from_secs(20)));
             for n in 0..SIMULTANEOUS_COMMITS {
-                let _lock = lock_job(&path).unwrap();
+                let _lock = lock_writer(&path);
                 let mut job = Job::open(&path).unwrap();
                 job.complete_region(0, &a_patch(&format!("{prefix}-{n}"), n, Engine::Fill), None).unwrap();
             }
@@ -2125,6 +2125,19 @@ fn a_cancel_ends_a_runs_wait_for_a_chapter_another_process_holds() {
 
 const SIMULTANEOUS_COMMITS: u32 = 15;
 
+/// How long a writer of the simultaneous test waits for the job. The lock
+/// polls and keeps no queue, so two threads of one process can hand it back
+/// and forth while another process waits. On a slow Windows runner, where a
+/// commit took over half a second, that outlasted a command's five seconds and
+/// both child writers gave up with `Busy`. The test is about no commit being
+/// lost, not about how long a writer waits, so this covers every other
+/// writer's commits several times over.
+const WRITER_PATIENCE: Duration = Duration::from_secs(120);
+
+fn lock_writer(path: &Path) -> JobLock {
+    cleaner_core::project::lock::lock_until(path, WRITER_PATIENCE, &|| false).unwrap()
+}
+
 fn patch_ids(path: &Path) -> Vec<String> {
     Job::open(path).unwrap().project.patches.iter().map(|record| record.id.clone()).collect()
 }
@@ -2199,7 +2212,7 @@ fn simultaneous_writers_in_two_processes_keep_every_commit() {
         let prefix = prefix.to_string();
         std::thread::spawn(move || {
             for n in 0..SIMULTANEOUS_COMMITS {
-                let _lock = lock_job(&path).unwrap();
+                let _lock = lock_writer(&path);
                 let mut job = Job::open(&path).unwrap();
                 job.complete_region(0, &a_patch(&format!("{prefix}-{n}"), n, Engine::Fill), None).unwrap();
             }
