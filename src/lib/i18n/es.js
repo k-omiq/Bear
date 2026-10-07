@@ -598,7 +598,7 @@ export const es = {
       saved: '{id} (guardado)',
     },
     cloneSource: {
-      label: 'Origen de clonar / reparar',
+      label: 'Origen de clonado',
       name: {
         alt: 'Option o Alt',
         meta: 'Command o la tecla Windows',
@@ -1246,6 +1246,7 @@ export const es = {
       histogram: 'ningún motor igualó el tono del papel de alrededor',
       tooLarge: 'la región es más grande de lo que el inpainter puede cubrir',
       unrepresentableMode: 'el modo de color de este archivo no admite un resultado de inpainting',
+      cloneSourceOutside: "el origen de clonado queda fuera de la página",
       paintUnsupportedColor: "la descripción de color de este archivo no permite pintar con gestión de color",
       paintUnsupportedMode: 'el modo de color de este archivo no admite un resultado pintado o clonado',
       unrepresentableDepth: 'este archivo tiene un bit por muestra, que un resultado de inpainting no admite',
@@ -1894,6 +1895,7 @@ export const es = {
       cleanAnyway: 'Limpiar de todos modos',
       cleanDetected: 'Limpiar',
       cleanDetectedCloud: 'Limpiar en la GPU en la nube',
+      approveMask: 'Aprobar máscara',
       approve: 'Aprobar y limpiar',
       opacity: 'Opacidad de la capa',
       locked: 'Bloquear posición',
@@ -1950,7 +1952,7 @@ export const es = {
       shapes: 'Formas',
       aiMaskBrush: 'Pincel de máscara con IA',
       contentAwareFill: 'Relleno según el contenido',
-      cloneHeal: 'Clonar / reparar',
+      cloneStamp: 'Tampón de clonar',
       maskSelect: 'Selección',
     },
     hint: {
@@ -1958,7 +1960,7 @@ export const es = {
       brush: 'arrastra para pintar',
       shapes: 'arrastra sobre la página',
       aiMaskBrush: 'pasa el trazo sobre el texto',
-      cloneHeal: '{cloneSourceModifier}+clic en un origen',
+      cloneStamp: '{cloneSourceModifier}+clic en un origen',
       maskSelect: 'añade o quita del área que borra Limpiar',
     },
     label: {
@@ -2054,8 +2056,6 @@ export const es = {
       engineCloudSettings: 'Abrir ajustes de la nube',
       aligned: 'Alineado',
       nonAligned: 'No alineado',
-      clone: 'Clonar',
-      heal: 'Reparar',
       maskAdd: 'Añadir a la selección',
       maskRemove: 'Quitar de la selección',
       brush: 'Pincel',
@@ -2352,10 +2352,11 @@ export const es = {
       paddingFailed: 'No se pudo cambiar el margen de máscara. Las máscaras están como estaban.',
       paddingRefreshFailed: 'Se guardó el margen de la máscara, pero no se pudo actualizar la página. Vuelve a abrir el capítulo para ver la máscara actualizada.',
       typeFailed: 'No se pudo cambiar el tipo de texto. La región está como estaba.',
+      approveFailed: 'No se pudo aprobar la máscara. La región está como estaba.',
     },
     tool: {
       cloneSourceSet: 'Origen de clonado tomado. Pinta para copiar desde él.',
-      cloneNeedsSource: 'Primero haz Alt+clic en un origen. Clonar y reparar copian desde algún sitio.',
+      cloneNeedsSource: 'Primero haz {cloneSourceModifier}+clic en un origen. El tampón copia desde ahí.',
     },
     gate: {
       cleanedAnyway: 'Limpiado a pesar del filtro de escritura.',

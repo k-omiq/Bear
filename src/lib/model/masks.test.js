@@ -205,15 +205,25 @@ describe('regionMenuSections', () => {
 
   it('offers a region the quality metric declined its models, and no Approve that would repeat the decline', () => {
     const region = { id: 'c1-p001-r1', outcome: 'declined', declineReason: 'decline.reason.histogram', mask: null }
+    // Nor Approve mask: nothing held it, an engine failed on it.
     expect(ids(regionMenuSections(region, { engines: { flux: false }, cloud: true }))).toEqual([
       'approve:fill', 'approve:lama', 'delete',
     ])
   })
 
-  it('offers approval and available local models for a gated review item', () => {
+  it('offers both approvals and available local models for a gated review item', () => {
     const region = { id: 'c1-p001-r1', outcome: 'gate-skipped', mask: null }
     expect(ids(regionMenuSections(region, { engines: { flux: false }, cloud: true }))).toEqual([
-      'approve', 'approve:fill', 'approve:lama', 'delete',
+      'approveMask', 'approve', 'approve:fill', 'approve:lama', 'delete',
+    ])
+  })
+
+  it('offers Approve mask to a held candidate as to a gated region, leading the menu', () => {
+    const region = { id: 'c1-p001-u1-2-3-4', outcome: 'candidate', candidateInsideBubble: false, mask: null }
+    const [first] = regionMenuSections(region, { engines: { flux: false } })
+    expect(first.items).toEqual([
+      { id: 'approveMask', labelKey: 'masks.action.approveMask' },
+      { id: 'approve', labelKey: 'masks.action.approve' },
     ])
   })
 

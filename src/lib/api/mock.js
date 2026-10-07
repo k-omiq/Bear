@@ -3540,6 +3540,23 @@ export function createMockBackend(options = {}) {
     },
 
     /**
+     * A held region stored as a detection, as `region.rs#approve_held_mask`
+     * stores it: nothing is cleaned, and the mask a clean would use waits on
+     * the page. The mock keeps the region's id, where the native side mints
+     * a detection's; a caller reads the id from the answer either way.
+     */
+    async approveHeldMask({ regionId, paddingPx = 0 } = {}) {
+      await delay(timing.method)
+      if (!validPadding(paddingPx)) throw new Error('mask_padding_invalid')
+      if (runner.isRunning()) throw new Error('run_in_progress')
+      const found = findRegion(regionId)
+      if (!found || !['gate-skipped', 'candidate'].includes(found.region.outcome)) return null
+      detectRegion(found.region, found.page, {}, 'local', paddingPx)
+      found.page.status = settledStatus(found.page)
+      return { regionId: found.region.id, pageStatus: found.page.status }
+    },
+
+    /**
      * The refusals `src-tauri/src/exporting.rs` decides, decided here in the
      * same order and answered in the same shape. A mock that only ever said
      * yes would leave every refusal path in the interface unexercised outside a

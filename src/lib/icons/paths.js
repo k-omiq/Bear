@@ -138,7 +138,7 @@ export const icons = {
     'M8 2.9c1.4 2.6 4.3 4.6 4.3 6.2a4.3 4.3 0 0 1-8.6 0c0-1.6 2.9-3.6 4.3-6.2Z',
   ],
 
-  // Clone / heal: a rubber stamp on its pad.
+  // The clone stamp: a rubber stamp on its pad.
   'stamp': [
     'M6.2 2.7h3.6a1 1 0 0 1 1 1v1.5a1 1 0 0 1-1 1H6.2a1 1 0 0 1-1-1V3.7a1 1 0 0 1 1-1Z',
     'M6.6 6.2 5.4 9.4M9.4 6.2l1.2 3.2',
@@ -397,12 +397,6 @@ export const icons = {
     'M6.7 8.7a3.3 3.3 0 0 0 5 .4l2-2a3.3 3.3 0 0 0-4.7-4.7l-1.1 1.1',
     'M9.3 7.3a3.3 3.3 0 0 0-5-.4l-2 2a3.3 3.3 0 0 0 4.7 4.7l1.1-1.1',
     'M2.9 2.9 13.1 13.1',
-  ],
-
-  // Adhesive bandage at 45 degrees with center pad perforations.
-  'bandage': [
-    'M3 10.2L10.2 3a2 2 0 0 1 2.8 2.8L5.8 13a2 2 0 0 1-2.8-2.8Z',
-    'M7 7h.01M9 7h.01M7 9h.01M9 9h.01',
   ],
 
   // Question mark.

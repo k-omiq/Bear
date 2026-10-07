@@ -28,9 +28,7 @@
 //! back to native channels. Alpha and every uncovered native sample are copied.
 
 pub mod brush;
-pub mod clone_heal;
 pub mod plan;
-pub mod primitives;
 
 use crate::composite::{composite_region, CompositeError};
 use crate::image::{BitDepth, ColorMode, Raster};
@@ -38,7 +36,6 @@ use crate::mask::{Mask, Rect};
 use crate::patch::Patch;
 
 use brush::{AccumulationView, RasterizableDab, StampOptions, TipShape};
-pub use clone_heal::HealMode;
 pub use plan::{BrushSpec, StrokePoint};
 
 /// The angle every Phase 1 dab is stamped at: none.
@@ -65,6 +62,9 @@ pub enum PaintError {
     /// the caller declines rather than committing an empty patch.
     #[error("the stroke covered nothing")]
     Empty,
+    /// A clone whose whole source lies off the page: there is nothing to copy.
+    #[error("the clone source is outside the page")]
+    SourceOutside,
     #[error(transparent)]
     Color(#[from] crate::image::ImageError),
     #[error(transparent)]
@@ -192,30 +192,38 @@ pub fn render_brush(
 }
 
 /* ------------------------------------------------------------------ */
-/* Clone and heal                                                      */
+/* The clone stamp                                                     */
 /* ------------------------------------------------------------------ */
 
-/// What the clone tool was asked to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CloneMode {
-    /// Copy the source pixels straight.
-    Clone,
-    /// Blend the source's texture into the target's tone.
-    Heal(HealMode),
-}
+/// Coverage at or above this is a straight copy of the source's own samples.
+/// A hard dab at full flow and opacity lands exactly 1.0; the slack is for a
+/// low flow that has built up to within rounding of it.
+const OPAQUE: f32 = 0.9999;
 
-/// Clone or heal one stroke.
+/// Clone one stroke: copy the page from `offset` away, through the brush.
 ///
-/// `offset` is `target − source` in **native page pixels**, so a dab centred at
-/// `t` reads from `t − offset`. **The seam spells the same displacement the
-/// other way round** - `gesture.js#cloneOffset` sends `source − strokeStart` and
+/// `offset` is `target − source` in **native page pixels**, so a pixel at `t`
+/// reads from `t − offset`. **The seam spells the same displacement the other
+/// way round** - `gesture.js#cloneOffset` sends `source − strokeStart` and
 /// rebuilds the source as `strokeStart + offset` - and the negation happens once,
 /// at the parse site (`region::clone_offset`). This function only ever sees the
 /// internal direction, so the sign question has exactly one place to be wrong in.
+/// It is rounded to whole pixels here, once: a clone is a copy, and a copy that
+/// lands between pixels is a blur.
 ///
-/// The window is the union of the target's box and the source's, so the kernel
-/// sees both without a second composite: it takes `image` and `source_image` as
-/// one buffer.
+/// **The source is the page as it stood before the stroke.** Every dab reads
+/// the same frozen surface, so a stroke that runs over its own source copies
+/// what was there and never its own fresh paint.
+///
+/// **Coverage first, then one blend.** One stroke holds one offset, so each
+/// target pixel has exactly one source pixel and the dabs only decide how much
+/// of it lands. They are stamped with the Brush's own tip, so size, hardness,
+/// spacing and pen pressure mean here what they mean there. `flow` builds:
+/// overlapping dabs add up towards `opacity`, which is the ceiling for the
+/// whole stroke however often it crosses itself.
+///
+/// Where the source falls off the page there is nothing to copy, and the
+/// target is left alone and out of the mask.
 pub fn render_clone(
     page: &Raster,
     patches: &[Patch],
@@ -223,7 +231,6 @@ pub fn render_clone(
     points: &[StrokePoint],
     spec: &BrushSpec,
     offset: (f64, f64),
-    mode: CloneMode,
 ) -> Result<Painted, PaintError> {
     require_supported(page)?;
 
@@ -231,93 +238,94 @@ pub fn render_clone(
     let Some(target) = window_of(&dabs, page) else {
         return Err(PaintError::Empty);
     };
-    // The source's box is the target's, moved. Unioned rather than composited
-    // twice, because the kernel indexes one buffer for both.
-    let source = Rect::new(
-        target.x - offset.0.round() as i64,
-        target.y - offset.1.round() as i64,
-        target.w,
-        target.h,
+    let (dx, dy) = (offset.0.round() as i64, offset.1.round() as i64);
+    let reads = clamp_to_page(
+        Rect::new(target.x - dx, target.y - dy, target.w, target.h),
+        page,
     );
-    let window = union_clamped(target, source, page);
-    if window.w == 0 || window.h == 0 {
-        return Err(PaintError::Empty);
+    if reads.w == 0 || reads.h == 0 {
+        return Err(PaintError::SourceOutside);
     }
 
-    let surface = composite_region(page, patches, window, below)?;
-    let (w, h) = (window.w as usize, window.h as usize);
+    let surface = composite_region(page, patches, target, below)?;
+    let source = composite_region(page, patches, reads, below)?;
+    let (w, h) = (target.w as usize, target.h as usize);
     let managed = crate::image::color::ManagedColor::for_raster(page)?;
-    let mut out = surface.clone();
-    let mut coverage = vec![0.0f32; w * h];
-    let strength = (spec.opacity / 100.0).clamp(0.0, 1.0) * (spec.flow / 100.0).clamp(0.0, 1.0);
+
+    // The colour half of the buffer is the kernel's and goes unread: what a
+    // clone lays down is not one colour, so only the coverage is kept.
+    let mut unused = vec![0f32; w * h * 4];
+    let mut coverage = vec![0f32; w * h];
+    let mut view = AccumulationView {
+        color: &mut unused,
+        stroke_mask: &mut coverage,
+        width: w,
+        height: h,
+    };
+    let options = StampOptions {
+        opacity: (spec.opacity / 100.0).clamp(0.0, 1.0),
+        hardness: (spec.hardness / 100.0).clamp(0.0, 1.0),
+        build_up: true,
+        seed: spec.seed,
+        ..StampOptions::default()
+    };
     for dab in &dabs {
-        let tx = dab.x - window.x as f64;
-        let ty = dab.y - window.y as f64;
-        let sx = tx - offset.0;
-        let sy = ty - offset.1;
-        let visits = primitives::collect_brush_pixels(w, h, tx, ty, spec.size.max(1.0));
-        // A heal stamp reads a stable target, as the original kernel did.
-        // Its neighborhood averages and source mix are evaluated in linear light.
-        let before = matches!(mode, CloneMode::Heal(_)).then(|| out.clone());
-        for v in visits {
-            let x = v.x;
-            let y = v.y;
-            let px = sx.round() as i64 + x as i64 - tx.round() as i64;
-            let py = sy.round() as i64 + y as i64 - ty.round() as i64;
-            if strength > 0.0 && v.weight > 0.0 && crate::image::color::alpha(&surface, x, y) > 0.0
-            {
-                coverage[y as usize * w + x as usize] = 1.0;
-            }
-            if px < 0 || py < 0 || px >= w as i64 || py >= h as i64 {
-                continue;
-            }
-            if crate::image::color::alpha(&surface, x, y) == 0.0
-                || crate::image::color::alpha(&surface, px as u32, py as u32) == 0.0
-            {
-                continue;
-            }
-            let a = (strength * v.weight).clamp(0.0, 1.0) as f32;
+        let local = RasterizableDab {
+            x: dab.x - target.x as f64,
+            y: dab.y - target.y as f64,
+            ..*dab
+        };
+        brush::stamp_dab_subpixel(
+            &mut view,
+            &local,
+            TipShape::Analytic,
+            [0.0; 3],
+            &options,
+            COS_ZERO,
+            SIN_ZERO,
+        );
+    }
+
+    let mut out = surface.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let a = coverage[i].clamp(0.0, 1.0);
             if a <= 0.0 {
                 continue;
             }
-            coverage[y as usize * w + x as usize] = 1.0;
-            if a == 1.0 && mode == CloneMode::Clone {
+            let (sx, sy) = (target.x + x as i64 - dx, target.y + y as i64 - dy);
+            let (x, y) = (x as u32, y as u32);
+            if !reads.contains(sx, sy) || crate::image::color::alpha(&surface, x, y) == 0.0 {
+                coverage[i] = 0.0;
+                continue;
+            }
+            let (sx, sy) = ((sx - reads.x) as u32, (sy - reads.y) as u32);
+            if crate::image::color::alpha(&source, sx, sy) == 0.0 {
+                coverage[i] = 0.0;
+                continue;
+            }
+            if a >= OPAQUE {
                 for c in 0..page.mode.samples() {
                     if page.mode.alpha_channel() != Some(c) {
-                        out.set_sample(x, y, c, surface.sample(px as u32, py as u32, c));
+                        out.set_sample(x, y, c, source.sample(sx, sy, c));
                     }
                 }
-            } else {
-                let mut src = managed
-                    .pixel(&surface, px as u32, py as u32)
-                    .map(crate::image::color::linear);
-                let target = before.as_ref().unwrap_or(&out);
-                let dst = managed.pixel(target, x, y).map(crate::image::color::linear);
-                if let CloneMode::Heal(heal) = mode {
-                    let mix = match heal {
-                        HealMode::Soft => 0.42,
-                        HealMode::Object => 0.88,
-                        HealMode::Spot => 0.6,
-                    };
-                    if heal == HealMode::Soft {
-                        src = average_linear(&managed, &surface, px as u32, py as u32);
-                    }
-                    let tone = if heal == HealMode::Object {
-                        average_linear(&managed, target, x, y)
-                    } else {
-                        dst
-                    };
-                    src = std::array::from_fn(|c| src[c] * mix + tone[c] * (1.0 - mix));
-                }
-                let rgb = std::array::from_fn(|c| {
-                    crate::image::color::encoded(src[c] * a + dst[c] * (1.0 - a))
-                });
-                write_managed(&mut out, x, y, managed.from_srgb(rgb, page.mode)?);
+                continue;
             }
+            let from = managed.pixel(&source, sx, sy).map(crate::image::color::linear);
+            let onto = managed.pixel(&surface, x, y).map(crate::image::color::linear);
+            let rgb = std::array::from_fn(|c| {
+                crate::image::color::encoded(from[c] * a + onto[c] * (1.0 - a))
+            });
+            write_managed(&mut out, x, y, managed.from_srgb(rgb, page.mode)?);
         }
     }
 
-    finish(page, window, &out, &coverage, dabs.len())
+    let mut painted = finish(page, target, &out, &coverage, dabs.len())?;
+    // Everything the stroke depended on: where it landed and where it read.
+    painted.read_window = bounding(target, reads);
+    Ok(painted)
 }
 
 /* ------------------------------------------------------------------ */
@@ -334,11 +342,17 @@ fn window_of(dabs: &[RasterizableDab], page: &Raster) -> Option<Rect> {
     (x1 > x0 && y1 > y0).then(|| Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
 }
 
-fn union_clamped(a: Rect, b: Rect, page: &Raster) -> Rect {
-    let x0 = a.x.min(b.x).clamp(0, page.width as i64);
-    let y0 = a.y.min(b.y).clamp(0, page.height as i64);
-    let x1 = a.right().max(b.right()).clamp(x0, page.width as i64);
-    let y1 = a.bottom().max(b.bottom()).clamp(y0, page.height as i64);
+fn clamp_to_page(rect: Rect, page: &Raster) -> Rect {
+    let x0 = rect.x.clamp(0, page.width as i64);
+    let y0 = rect.y.clamp(0, page.height as i64);
+    let x1 = rect.right().clamp(x0, page.width as i64);
+    let y1 = rect.bottom().clamp(y0, page.height as i64);
+    Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
+}
+
+fn bounding(a: Rect, b: Rect) -> Rect {
+    let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+    let (x1, y1) = (a.right().max(b.right()), a.bottom().max(b.bottom()));
     Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
 }
 
@@ -402,36 +416,6 @@ fn finish(
     Ok(Painted { mask, pixels, read_window: window, dabs })
 }
 
-fn average_linear(
-    managed: &crate::image::color::ManagedColor,
-    raster: &Raster,
-    x: u32,
-    y: u32,
-) -> [f32; 3] {
-    let mut sum = [0.0; 3];
-    let mut count = 0.0;
-    for py in y.saturating_sub(1)..=(y + 1).min(raster.height - 1) {
-        for px in x.saturating_sub(1)..=(x + 1).min(raster.width - 1) {
-            let alpha = crate::image::color::alpha(raster, px, py);
-            if alpha == 0.0 {
-                continue;
-            }
-            let rgb = managed
-                .pixel(raster, px, py)
-                .map(crate::image::color::linear);
-            for c in 0..3 {
-                sum[c] += rgb[c] * alpha;
-            }
-            count += alpha;
-        }
-    }
-    if count > 0.0 {
-        sum.map(|v| v / count)
-    } else {
-        [0.0; 3]
-    }
-}
-
 fn write_managed(pixels: &mut Raster, x: u32, y: u32, values: [f32; 4]) {
     for (c, value) in values.iter().enumerate().take(pixels.mode.samples()) {
         if pixels.mode.alpha_channel() != Some(c) {
@@ -467,58 +451,6 @@ mod tests {
             pressure_size: false,
             pressure_opacity: false,
             seed: 7,
-        }
-    }
-
-    #[test]
-    fn heal_averages_linear_color_with_alpha_weight_and_ignores_hidden_rgb() {
-        let mut sample = fixtures::by_name("rgba8").raster;
-        sample.width = 3;
-        sample.height = 1;
-        sample.data = vec![255, 0, 0, 128, 0, 0, 0, 255, 0, 0, 255, 0];
-        let managed = crate::image::color::ManagedColor::for_raster(&sample).unwrap();
-        let value = average_linear(&managed, &sample, 1, 0);
-        assert!((value[0] - 128.0 / 383.0).abs() < 0.00001);
-        assert_eq!([value[1], value[2]], [0.0, 0.0]);
-        for x in 0..3 {
-            sample.set_sample(x, 0, 3, 0);
-        }
-        assert_eq!(average_linear(&managed, &sample, 1, 0), [0.0; 3]);
-
-        let mut first = fixtures::by_name("rgba8").raster;
-        for pixel in first.data.chunks_exact_mut(4) {
-            pixel.copy_from_slice(&[64, 64, 64, 255]);
-        }
-        first.set_sample(5, 10, 3, 0);
-        first.set_sample(5, 10, 0, 255);
-        let mut second = first.clone();
-        second.set_sample(5, 10, 0, 0);
-        second.set_sample(5, 10, 2, 255);
-        for mode in [HealMode::Soft, HealMode::Object] {
-            let a = render_clone(
-                &first,
-                &[],
-                None,
-                &stroke(&[(12.0, 10.0)]),
-                &hard_brush(7.0),
-                (6.0, 0.0),
-                CloneMode::Heal(mode),
-            )
-            .unwrap();
-            let b = render_clone(
-                &second,
-                &[],
-                None,
-                &stroke(&[(12.0, 10.0)]),
-                &hard_brush(7.0),
-                (6.0, 0.0),
-                CloneMode::Heal(mode),
-            )
-            .unwrap();
-            assert_eq!(
-                a.pixels.data, b.pixels.data,
-                "hidden source RGB affected heal"
-            );
         }
     }
 
@@ -584,7 +516,6 @@ mod tests {
             &stroke(&[(12.0, 10.0)]),
             &hard_brush(7.0),
             (6.0, 0.0),
-            CloneMode::Clone,
         )
         .unwrap();
         let x = (12 - painted.mask.bounds.x) as u32;
@@ -785,58 +716,226 @@ mod tests {
         ));
     }
 
-    /// Clone copies real pixels from the offset source, and the mask is the
-    /// stamp's own footprint rather than the pixels that happened to move - a
-    /// clone onto identical tone must still leave the patch the user drew.
+    /// A gray page that is black on the left half and white on the right, so
+    /// a clone across the middle has a source and a target that differ.
+    fn split_page() -> Raster {
+        let mut page = fixtures::by_name("l8").raster;
+        for y in 0..page.height {
+            for x in 0..page.width {
+                page.set_sample(x, y, 0, if x < 32 { 0 } else { 255 });
+            }
+        }
+        page
+    }
+
+    /// Every pixel a clone landed is the source's own sample, moved by `offset`.
+    fn assert_copied(page: &Raster, painted: &Painted, offset: (i64, i64)) {
+        let bounds = painted.mask.bounds;
+        let mut copied = 0;
+        for y in 0..bounds.h {
+            for x in 0..bounds.w {
+                let (px, py) = (bounds.x + x as i64, bounds.y + y as i64);
+                if !painted.mask.contains(px, py) {
+                    continue;
+                }
+                copied += 1;
+                for c in 0..page.mode.samples() {
+                    assert_eq!(
+                        painted.pixels.sample(x, y, c),
+                        page.sample((px - offset.0) as u32, (py - offset.1) as u32, c),
+                        "({px},{py}) channel {c}"
+                    );
+                }
+            }
+        }
+        assert!(copied > 0);
+    }
+
+    /// **A clone is a copy.** At full hardness, flow and opacity every pixel
+    /// under the brush is the source's own sample - the whole disc, not a soft
+    /// cone of which only the centre survives.
     #[test]
-    fn clone_reads_the_offset_source_and_masks_the_stamps_footprint() {
+    fn a_hard_clone_copies_the_source_under_the_whole_brush() {
         let page = fixtures::by_name("rgb8").raster;
         let painted = render_clone(
             &page,
             &[],
             None,
-            &stroke(&[(10.0, 10.0), (13.0, 10.0)]),
-            &hard_brush(5.0),
-            (6.0, 0.0),
-            CloneMode::Clone,
+            &stroke(&[(30.0, 20.0), (36.0, 20.0)]),
+            &hard_brush(9.0),
+            (12.0, -5.0),
         )
         .unwrap();
-        assert!(!painted.mask.is_empty());
-        assert_eq!(painted.pixels.width, painted.mask.bounds.w);
+        assert_copied(&page, &painted, (12, -5));
+        for x in 27..=39 {
+            assert!(painted.mask.contains(x, 20), "column {x} is under the brush");
+        }
         assert_eq!(painted.pixels.mode, page.mode);
+        assert_eq!(painted.pixels.width, painted.mask.bounds.w);
+    }
 
-        // A source outside the page is skipped by the kernel rather than read
-        // out of bounds, so the whole stroke is still a patch.
-        let far = render_clone(
+    /// The offset is a whole number of pixels for the whole stroke. A
+    /// fractional one used to be rounded dab by dab, which moved the source a
+    /// pixel back and forth along the stroke.
+    #[test]
+    fn a_fractional_offset_is_one_whole_pixel_offset_for_the_stroke() {
+        let page = fixtures::by_name("rgb8").raster;
+        let painted = render_clone(
             &page,
             &[],
             None,
-            &stroke(&[(2.0, 2.0)]),
-            &hard_brush(5.0),
-            (40.0, 40.0),
-            CloneMode::Clone,
+            &stroke(&[(30.2, 20.7), (41.9, 23.4)]),
+            &hard_brush(7.0),
+            (10.4, 6.6),
         )
         .unwrap();
-        assert!(!far.mask.is_empty());
+        assert_copied(&page, &painted, (10, 7));
     }
 
-    /// Heal takes the soft mode the seam's `heal` word maps to, and answers a
-    /// patch in the page's mode like every other rung.
+    /// **The source is frozen when the stroke starts.** A stroke that runs
+    /// over the place it reads from copies what was there before it, never
+    /// the paint it has just laid down.
     #[test]
-    fn heal_runs_in_soft_mode_and_answers_the_pages_own_samples() {
+    fn a_stroke_over_its_own_source_copies_the_page_as_it_was() {
+        let page = fixtures::by_name("rgb8").raster;
+        let painted = render_clone(
+            &page,
+            &[],
+            None,
+            &stroke(&[(20.0, 24.0), (44.0, 24.0)]),
+            &hard_brush(7.0),
+            (4.0, 0.0),
+        )
+        .unwrap();
+        assert_copied(&page, &painted, (4, 0));
+    }
+
+    /// **Opacity is the ceiling of the stroke.** Dabs a tenth of a diameter
+    /// apart overlap ten deep, and a 50% clone is still half source and half
+    /// page at the end. It used to multiply into each dab and build to a full
+    /// copy.
+    #[test]
+    fn opacity_caps_the_stroke_however_many_dabs_overlap() {
+        let page = split_page();
+        let spec = BrushSpec {
+            opacity: 50.0,
+            ..hard_brush(9.0)
+        };
+        let painted = render_clone(
+            &page,
+            &[],
+            None,
+            &stroke(&[(40.0, 24.0), (56.0, 24.0)]),
+            &spec,
+            (30.0, 0.0),
+        )
+        .unwrap();
+        let bounds = painted.mask.bounds;
+        // Half black over white, mixed in linear light: 188, the number the
+        // Brush's own half-coverage test finds.
+        for x in 40..=56 {
+            let value = painted
+                .pixels
+                .sample((x - bounds.x) as u32, (24 - bounds.y) as u32, 0);
+            assert_eq!(value, 188, "column {x}");
+        }
+    }
+
+    /// **Flow builds, towards the opacity.** One dab at 20% flow is a fifth of
+    /// a copy; a stroke of overlapping dabs is more, and never the whole.
+    #[test]
+    fn flow_builds_up_where_dabs_overlap() {
+        let page = split_page();
+        let spec = BrushSpec {
+            flow: 20.0,
+            ..hard_brush(9.0)
+        };
+        let read = |points: &[(f64, f64)]| {
+            let painted =
+                render_clone(&page, &[], None, &stroke(points), &spec, (30.0, 0.0)).unwrap();
+            let bounds = painted.mask.bounds;
+            painted
+                .pixels
+                .sample((48 - bounds.x) as u32, (24 - bounds.y) as u32, 0)
+        };
+        // White paper going towards a black source: darker is more copy.
+        let tap = read(&[(48.0, 24.0)]);
+        let drag = read(&[(46.0, 24.0), (50.0, 24.0)]);
+        assert!(tap < 255, "{tap}");
+        assert!(drag < tap, "{tap} then {drag}");
+        assert!(drag > 0, "{drag}");
+    }
+
+    /// **Hardness is the Brush's hardness.** A soft tip fades to its rim and a
+    /// hard one does not; the old clone ignored the setting.
+    #[test]
+    fn a_soft_clone_fades_towards_its_rim() {
+        let page = split_page();
+        let spec = BrushSpec {
+            hardness: 0.0,
+            ..hard_brush(15.0)
+        };
+        let painted =
+            render_clone(&page, &[], None, &stroke(&[(48.0, 24.0)]), &spec, (30.0, 0.0)).unwrap();
+        let bounds = painted.mask.bounds;
+        let at = |x: i64| {
+            painted
+                .pixels
+                .sample((x - bounds.x) as u32, (24 - bounds.y) as u32, 0)
+        };
+        assert_eq!(at(48), 0, "the centre is a full copy");
+        assert!(at(51) > at(48) && at(54) > at(51), "{} {} {}", at(48), at(51), at(54));
+    }
+
+    /// Where the source runs off the page there is nothing to copy: those
+    /// pixels stay as they were and out of the mask, and a stroke whose whole
+    /// source is outside is refused by name rather than committed as a patch
+    /// that changes nothing.
+    #[test]
+    fn a_source_off_the_page_copies_nothing() {
+        let page = fixtures::by_name("rgb8").raster;
+        let partly = render_clone(
+            &page,
+            &[],
+            None,
+            &stroke(&[(10.0, 10.0)]),
+            &hard_brush(9.0),
+            (12.0, 0.0),
+        )
+        .unwrap();
+        assert_copied(&page, &partly, (12, 0));
+        assert!(!partly.mask.contains(8, 10), "its source is at x = -4");
+        assert!(partly.mask.contains(13, 10));
+
+        assert!(matches!(
+            render_clone(
+                &page,
+                &[],
+                None,
+                &stroke(&[(2.0, 2.0)]),
+                &hard_brush(5.0),
+                (40.0, 40.0),
+            ),
+            Err(PaintError::SourceOutside)
+        ));
+    }
+
+    /// What the stroke depended on is where it landed and where it read, as
+    /// one rectangle: the provenance digest is taken over it.
+    #[test]
+    fn the_read_window_spans_the_target_and_the_source() {
         let page = fixtures::by_name("l8").raster;
         let painted = render_clone(
             &page,
             &[],
             None,
-            &stroke(&[(9.0, 9.0), (12.0, 12.0)]),
-            &hard_brush(4.0),
-            (-5.0, -5.0),
-            CloneMode::Heal(HealMode::Soft),
+            &stroke(&[(40.0, 30.0)]),
+            &hard_brush(5.0),
+            (25.0, 10.0),
         )
         .unwrap();
+        let window = painted.read_window;
+        assert!(window.contains(40, 30) && window.contains(15, 20));
         assert_eq!(painted.pixels.mode, ColorMode::Gray);
-        assert_eq!(painted.pixels.depth, BitDepth::Eight);
-        assert!(!painted.mask.is_empty());
     }
 }

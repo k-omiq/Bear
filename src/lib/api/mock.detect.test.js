@@ -294,6 +294,57 @@ describe('padding the detected masks', () => {
 })
 
 /**
+ * The region menu's Approve mask in the mock, as `region.rs#approve_held_mask`
+ * stores it natively: a held region becomes a detection with the mask a clean
+ * would use, nothing is cleaned, and only a held region can be approved.
+ */
+describe('approving a held mask', () => {
+  const HELD = 'wandering-moon-ch12'
+  const heldOn = async (mock, cause) => {
+    const pages = await mock.loadPages({ chapterId: HELD, indices: [0, 1, 2, 3, 4, 5, 6] })
+    for (const page of pages) {
+      const region = page.regions.find((candidate) => candidate.gateSkipCause === cause)
+      if (region) return { page, region }
+    }
+    throw new Error(`no ${cause} region in the fixture`)
+  }
+  const reread = async (mock, page, regionId) =>
+    (await mock.loadPages({ chapterId: HELD, indices: [page.index] }))[0].regions.find((region) => region.id === regionId)
+
+  it('stores the region as a detection with its mask, and cleans nothing', async () => {
+    const mock = makeMock()
+    const { page, region } = await heldOn(mock, 'outside-bubble')
+    expect(region).toMatchObject({ outcome: 'gate-skipped', mask: null })
+
+    const answer = await mock.approveHeldMask({ regionId: region.id })
+    expect(answer).toEqual({ regionId: region.id, pageStatus: 'detected' })
+    const stored = await reread(mock, page, answer.regionId)
+    expect(stored).toMatchObject({ outcome: 'detected', gateSkipCause: null, insideBubble: false, pick: 'lama' })
+    expect(stored.mask).toBeTruthy()
+    expect(maskRow(stored, false)).toMatchObject({ status: 'detected', reasonKey: null })
+    // Approved once: a detection is not a held region.
+    expect(await mock.approveHeldMask({ regionId: region.id })).toBeNull()
+  })
+
+  it('grows the mask by the padding asked for, and refuses one past the widest', async () => {
+    const mock = makeMock()
+    const { page, region } = await heldOn(mock, 'low-confidence')
+    await expect(mock.approveHeldMask({ regionId: region.id, paddingPx: 64 })).rejects.toThrow('mask_padding_invalid')
+    await mock.approveHeldMask({ regionId: region.id, paddingPx: 8 })
+    const stored = await reread(mock, page, region.id)
+    expect(stored).toMatchObject({ outcome: 'detected', paddingPx: 8 })
+    expect(stored.bbox.w).toBeGreaterThan(region.bbox.w)
+  })
+
+  it('answers null for a region nothing held', async () => {
+    const mock = makeMock()
+    const cleaned = (await firstPage(mock)).regions[0]
+    expect(await mock.approveHeldMask({ regionId: cleaned.id })).toBeNull()
+    expect(await mock.approveHeldMask({ regionId: 'no-such-region' })).toBeNull()
+  })
+})
+
+/**
  * The region menu's Text type in the mock, as `library.rs#retype_detection`
  * sets it natively: the balloon answer flips, a Fill pick moved outside a
  * balloon becomes LaMa and a LaMa pick moved inside stays, and only a stored

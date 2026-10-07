@@ -1,5 +1,5 @@
 /**
- * Construction of `params.paint` for brush (paint mode), cloneHeal, and a
+ * Construction of `params.paint` for brush (paint mode), the clone stamp, and a
  * Shapes gesture filled with a solid colour.
  *
  * Shared between drawing gestures (`drawing.svelte.js`) and tool applications
@@ -80,7 +80,7 @@ export function computeSeed(points) {
 }
 
 /**
- * Builds `params.paint` for brush (paint mode), cloneHeal, and a Shapes
+ * Builds `params.paint` for brush (paint mode), the clone stamp, and a Shapes
  * gesture set to a solid colour. Returns null for all other tools/modes.
  *
  * @param {string} tool
@@ -129,7 +129,7 @@ export function paintParamsOf(tool, params = {}, points = []) {
     }
   }
 
-  if (tool === 'cloneHeal') {
+  if (tool === 'cloneStamp') {
     return {
       points: pts,
       seed: computeSeed(points),

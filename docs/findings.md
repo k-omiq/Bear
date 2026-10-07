@@ -670,6 +670,82 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Reading-order test and held candidates (2026-10-07).**
+`the_regions_a_page_reports_are_in_reading_order` failed on a machine with the real models and
+passed in CI, where it returns early for want of weights. The run was right and the test was stale:
+a page lists its held candidates after its last region (`list_candidates` in `src-tauri/src/run.rs`),
+and the test walked the whole list as one. It now walks the regions and the candidates apart, and
+asserts no region comes after a candidate.
+
+Measured: the one test, real models, `fixtures/pages/page-crowded.png`: 33 regions in reading order,
+then 3 candidates down the page.
+
+Not measured, or known to be incomplete:
+
+- Candidates stay after every region in the outcome and in the stored rows. They take no region id,
+  so no id moves, but a list drawn in stored order shows them last and not in reading order.
+- Candidate order is asserted on a one-segment page only. Across segments `list_candidates` takes
+  views in its own fixed order, and no real-model test walks that.
+- Whether the test still fails without `sort_regions` was not tried after the change.
+- The other real-model tests were not run. CI skips all of them, so another may be stale unseen.
+
+**Approve mask on a held region (2026-10-07).** A region the script gate held back, or a held
+candidate, can be stored as a detected region from its right-click menu, with nothing cleaned
+(docs/detect-clean.md, "Approving a held region's mask"). A run now keeps the lettering the gate
+judged beside the row, and approving stores that lettering as the detection's mask.
+
+Measured: unit tests only, with stand-in models. A Detect and a one-pass run each store the
+lettering of three gate-held groups and read it back in page pixels; approving stores it as the
+mask with the padding asked for, and the row leaves with its count.
+
+Not measured, or known to be incomplete:
+
+- Not run with real models on real scans. The lettering kept is the seed a detection of the same
+  region would have been fitted from, so the mask should match, but no page was compared.
+- The approved detection is a hand mask's record: no fit, no group, no measured balloon colour, and
+  an order after everything on the page instead of its reading order.
+- Inside or outside a balloon is read from the reason the row was held under, the rule a clean of
+  the row starts on. A row held as not text, or with its language unverified, outside a balloon is
+  stored as speech bubble text. The region menu's Text type corrects it; nothing does automatically.
+- A row stored before this change kept no lettering. It is approved from what the Comic Text
+  Detector finds under its box, or from the box itself. Detecting the page again stores the
+  lettering. The low-confidence rows a long strip adopts across a cut keep none either.
+- No undo. Deleting the detection is the way back, and the held row does not return with it.
+- The menu is the only way in: the Layers row has no button for it. A region the quality metric
+  declined is not offered it.
+- The mock backend keeps the region's id where the native side mints a detection's.
+
+**Clone stamp, rebuilt (2026-10-07).** The tool that was Clone / Heal is now a clone stamp with a
+raster editor's rules (docs/features.md, "Clone stamp"). Heal is gone, with the two vendored kernels
+it used (`paint/clone_heal.rs`, `paint/primitives.rs`). The renderer is `paint/mod.rs#render_clone`:
+one whole-pixel offset for the stroke, a source frozen when the stroke starts, the Brush's own dab
+(hardness, spacing, pressure), flow that builds towards the opacity, and an exact copy of the native
+values where the brush is opaque.
+
+Measured: unit tests only. The paint suite covers the copy, the offset, a stroke over its own
+source, opacity and flow, hardness, a source off the page and a non-sRGB page. The mounted drawing
+surface is tested for sampling, one click as one dab, both alignments, the `Shift` line and axis
+lock, quick taps, and the keyboard route.
+
+Not measured, or deferred:
+
+- No run on a real scan in the built app. The source shown inside the cursor is drawn from the
+  sheet's tiles with `drawImage`, and that was not seen in the shipped WKWebView or on a long strip.
+  The mock backend has no tiles and no preview pixels, so the browser check covers the controls only.
+- The source inside the cursor is the tiles at screen resolution, drawn at full strength. It does
+  not show the brush's hardness, opacity or flow.
+- The stamp reads the cleaned page under the new layer, always. There is no choice of the original
+  scan, of one layer, or of another page as the source.
+- No rotate, scale or flip of the source, no saved sources, and no blend modes.
+- The digit keys pick tools, so they do not set the opacity. `[` and `]` turn pages everywhere but
+  on the focused page surface, so they step the brush only there.
+- Holding the brush still adds nothing (no airbrush build-up), and the dab is always round.
+- The live preview is refused for a stroke whose two windows, the target and the source, are over
+  the preview limit. The commit is not limited. How often a real stroke meets the limit was not
+  counted.
+- A layer made with Heal in an older project keeps its pixels. Try again on it reopens the clone
+  stamp; it does not heal again.
+
 **Detect text here, a Detect of one area (2026-10-04).** The Selection tool's right-click over bare
 paper starts a Detect held to a box around the pointer (docs/detect-clean.md, "`run_clean` on one
 area"). The models read a 1024 px window at the page's own resolution, and what they find is added
@@ -1548,7 +1624,7 @@ to the earlier prompt.
   only the outline and frame move; the pixels change when each write lands, for a move or turn on
   release. A live preview would need a layer-only tile variant. A key press while a gesture's write
   is in flight is ignored.
-- **Some layer rules are judgement calls.** Clone and heal layers count as fixed redraws, which the
+- **Some layer rules are judgement calls.** Clone stamp layers count as fixed redraws, which the
   plan does not decide. A moved paint stroke carries soft edges blended with the page where it was
   drawn. A cloud re-render already carries the layer style; the follow-up added an explicit
   40% opacity preservation regression and corrected the earlier contrary claim.

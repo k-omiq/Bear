@@ -257,7 +257,7 @@ fn one_line(region: &RegionOutcome) -> String {
                 review.as_deref().map(|r| format!(" - {r}")).unwrap_or_default(),
             )
         }
-        RegionOutcome::Untouched { bbox, reason } | RegionOutcome::Declined { bbox, reason, .. } => {
+        RegionOutcome::Untouched { bbox, reason, .. } | RegionOutcome::Declined { bbox, reason, .. } => {
             format!("({}, {}) {}×{}: untouched - {reason}", bbox.x, bbox.y, bbox.w, bbox.h)
         }
         RegionOutcome::Candidate { bbox, reason, inside_bubble, .. } => {

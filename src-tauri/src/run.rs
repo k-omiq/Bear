@@ -471,7 +471,7 @@ impl Repick {
     }
 }
 
-fn pick_name(pick: EnginePick) -> &'static str {
+pub(crate) fn pick_name(pick: EnginePick) -> &'static str {
     match pick {
         EnginePick::Fill => "fill",
         EnginePick::Solid => "solid",
@@ -732,8 +732,12 @@ pub enum RegionOutcome {
     /// A patch, and the `review.reason.*` key it is flagged under, if any.
     Cleaned(Box<Patch>, Option<String>),
     /// Deliberately left alone: gate-skipped, or declined. `reason` is an i18n
-    /// key - no English is written to disk either.
-    Untouched { bbox: Rect, reason: String },
+    /// key - no English is written to disk either. `lettering` is the glyphs
+    /// the gate judged, in page pixels at their proxy scale, stored beside the
+    /// row as a candidate's are: approving the mask stores exactly them as a
+    /// detection, and a clean the user asks for writes through them and not
+    /// the box (`None` for a row no lettering was read under).
+    Untouched { bbox: Rect, reason: String, lettering: Option<(Mask, f32)> },
     /// Lettering grouping held for the user's choice rather than cleaned
     /// (`reason` is its grouping key), with whether it sits inside a balloon.
     /// Stored as an untouched row, and counted as neither a decline nor a
@@ -3214,6 +3218,7 @@ impl Pipeline {
                     at.outcome.regions.push(RegionOutcome::Untouched {
                         bbox: Rect::new(whole.x - page_x, whole.y - page_y, whole.w, whole.h),
                         reason: "review.reason.gateSkippedLowConfidence".into(),
+                        lettering: None,
                     });
                 }
             }
@@ -3277,6 +3282,7 @@ impl Pipeline {
                             at.outcome.regions.push(RegionOutcome::Untouched {
                                 bbox: Rect::new(whole.x - page_x, whole.y - page_y, whole.w, whole.h),
                                 reason: "review.reason.gateSkippedLowConfidence".into(),
+                                lettering: None,
                             });
                             if prior_index.is_none() { at.index += 1; }
                         }
@@ -3310,6 +3316,7 @@ impl Pipeline {
                         bbox: Rect::new(strip_rect.x - page_x, strip_rect.y - page_y,
                             strip_rect.w, strip_rect.h),
                         reason: "review.reason.gateSkippedLowConfidence".into(),
+                        lettering: None,
                     });
                     at.index += 1;
                     if let Some(position) = clipped_position {
@@ -3353,6 +3360,7 @@ impl Pipeline {
                 at.outcome.regions.push(RegionOutcome::Untouched {
                     bbox: Rect::new(whole.x - page_x, whole.y - page_y, whole.w, whole.h),
                     reason: "review.reason.gateSkippedLowConfidence".into(),
+                    lettering: None,
                 });
             }
         }
@@ -3434,9 +3442,16 @@ impl Pipeline {
                 Verdict::OptedIn => "review.reason.outsideLanguageUnverified",
                 _ => "review.reason.languageSkipped",
             });
+            // The glyphs the gate judged stay with the row, so the user can
+            // approve the mask Detect found rather than the box around it.
+            let lettering = region.group.as_ref()
+                .map(|held| held.lettering.clone())
+                .filter(|seed| !seed.is_empty())
+                .map(|seed| (translated(seed, crop_x - page_x, crop_y - page_y), scale));
             at.outcome.regions.push(RegionOutcome::Untouched {
                 bbox: on_page,
                 reason: reason.to_owned(),
+                lettering,
             });
             return Ok(true);
         }
@@ -3453,6 +3468,7 @@ impl Pipeline {
                 reason: held.group.reasons.iter().min()
                     .map_or(text_groups::ReviewReason::MaskMissingUnderTextBox.key(), |r| r.key())
                     .to_owned(),
+                lettering: None,
             });
             return Ok(true);
         }
@@ -3709,6 +3725,7 @@ impl Pipeline {
                 outcome.regions.push((record.id.clone(), RegionOutcome::Untouched {
                     bbox: record.bbox,
                     reason: "decline.reason.rungUnavailable".into(),
+                    lettering: None,
                 }));
                 continue;
             }
@@ -3765,6 +3782,7 @@ impl Pipeline {
                     outcome.regions.push((record.id.clone(), RegionOutcome::Untouched {
                         bbox: record.bbox,
                         reason: reason.to_owned(),
+                        lettering: None,
                     }));
                     continue;
                 }
@@ -3777,6 +3795,7 @@ impl Pipeline {
                     outcome.regions.push((record.id.clone(), RegionOutcome::Untouched {
                         bbox: record.bbox,
                         reason: reason.to_owned(),
+                        lettering: None,
                     }));
                     continue;
                 }
@@ -5285,11 +5304,14 @@ fn walk(
                 RegionOutcome::Candidate { bbox, reason, inside_bubble, lettering } => {
                     pending_untouched.push(held_candidate_row(entry.source_idx, bbox, reason, inside_bubble, lettering));
                 }
-                RegionOutcome::Untouched { bbox, reason } => {
+                RegionOutcome::Untouched { bbox, reason, lettering } => {
                     if work == PageWork::Detect {
-                        pending_untouched.push(RegionUntouched {
-                            source_idx: entry.source_idx, bbox, reason, inside_bubble: None, lettering: None,
-                        }.into());
+                        pending_untouched.push(PendingUntouched {
+                            row: RegionUntouched {
+                                source_idx: entry.source_idx, bbox, reason, inside_bubble: None, lettering: None,
+                            },
+                            lettering,
+                        });
                         continue;
                     }
                     if is_gate_skip(&reason) {
@@ -5301,9 +5323,12 @@ fn walk(
                     // other untouched rows are written together below, not
                     // one manifest flush each.
                     let Some(id) = replaces.as_deref() else {
-                        pending_untouched.push(RegionUntouched {
-                            source_idx: entry.source_idx, bbox, reason, inside_bubble: None, lettering: None,
-                        }.into());
+                        pending_untouched.push(PendingUntouched {
+                            row: RegionUntouched {
+                                source_idx: entry.source_idx, bbox, reason, inside_bubble: None, lettering: None,
+                            },
+                            lettering,
+                        });
                         continue;
                     };
                     if job.decline_detection(id, &reason).is_err() {

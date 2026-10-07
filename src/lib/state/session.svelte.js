@@ -186,7 +186,7 @@ function viewport() {
  * @property {'auto'|'mflux'|'sdnq'} fluxBackend
  * @property {string} accelerator - `auto`, `cpu`, or an execution provider id; see `setAccelerator`
  * @property {Record<string, string>} modelAccelerators - local per-model overrides; absent models inherit `accelerator`
- * @property {'alt'|'meta'|'control'|'shift'} cloneSourceModifier - held while clicking to set Clone / heal's source; see `setCloneSourceModifier`
+ * @property {'alt'|'meta'|'control'|'shift'} cloneSourceModifier - held while clicking to set the clone stamp's source; see `setCloneSourceModifier`
  * @property {boolean} firstLaunchOffered - whether the first-launch download offer has been made on this machine
  * @property {boolean} closeToTray - close control hides the window and keeps downloads running
  * @property {Record<string, string|null>} detection - the detector each source language uses, by language id; null skips the language
@@ -806,7 +806,7 @@ export function setModelAccelerator(modelId, id) {
 }
 
 /**
- * Which modifier is held while clicking the page to set where Clone / heal
+ * Which modifier is held while clicking the page to set where the clone stamp
  * reads from.
  *
  * It was `Alt` and nothing else, written into `DrawLayer`'s `onpointerdown` as
@@ -828,7 +828,7 @@ export function setCloneSourceModifier(modifier) {
 
 /**
  * And the same value as a keycap, for the one string whose call site cannot
- * pass it: `tools.hint.cloneHeal` is rendered by the tool bar as
+ * pass it: `tools.hint.cloneStamp` is rendered by the tool bar as
  * `t(spec.hintKey)`, over a key the tool table chose.
  *
  * Registered here because this module owns the value. `i18n` imports nothing

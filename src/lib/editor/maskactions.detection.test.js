@@ -6,13 +6,16 @@
  * colour its mask is drawn in; picking the kind it has sends nothing; a
  * region that is not a detection is never sent; a refusal is said, and the
  * region is left as it was.
+ *
+ * And its Approve mask on a held region: the region becomes a detection with
+ * Text cleanup's padding, nothing is cleaned, and the selection follows it.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setBackend } from '../api/backend.js'
 import { createMockBackend } from '../api/mock.js'
 import { maskColorFor } from '../model/masks.js'
 import { app, clearNotices } from '../state/app.svelte.js'
-import { editor } from '../state/editor.svelte.js'
+import { editor, select } from '../state/editor.svelte.js'
 import { session } from '../state/session.svelte.js'
 import { runRegionMenuItem, setDetectedMaskPadding } from './maskactions.svelte.js'
 
@@ -193,4 +196,76 @@ it('keeps a saved padding when the page refresh fails, and reports the refresh s
   expect(await setDetectedMaskPadding(target, 5)).toBe(true)
   expect(current(target.id).paddingPx).toBe(5)
   expect(app.notices.at(-1)).toMatchObject({ key: 'notice.mask.paddingRefreshFailed', tone: 'warn' })
+})
+
+describe('Approve mask on a held region', () => {
+  const HELD = 'wandering-moon-ch12'
+
+  /** The fixture chapter with a region the gate held outside a bubble, open in the editor. */
+  async function held() {
+    const backend = createMockBackend({ timing: ZERO })
+    setBackend(backend)
+    const pages = await backend.loadPages({ chapterId: HELD, indices: [0, 1, 2, 3, 4, 5, 6] })
+    editor.chapter = /** @type {any} */ ({ id: HELD, review: [], pages })
+    const region = editor.chapter.pages.flatMap((/** @type {any} */ page) => page.regions)
+      .find((/** @type {any} */ candidate) => candidate.gateSkipCause === 'outside-bubble')
+    expect(region, 'a region the gate held outside a bubble').toBeTruthy()
+    return { backend, region }
+  }
+
+  afterEach(() => {
+    editor.toolParams.autoClean.maskPadding = 0
+    select(null)
+  })
+
+  it('stores the held region as a detection with Text cleanup\'s padding, and cleans nothing', async () => {
+    const { backend, region } = await held()
+    editor.toolParams.autoClean.maskPadding = 6
+    select(region.id)
+    const approve = vi.spyOn(backend, 'approveHeldMask')
+    const clean = vi.spyOn(backend, 'cleanAnyway')
+
+    expect(await runRegionMenuItem('approveMask', region)).toBe(true)
+    expect(approve).toHaveBeenCalledWith({ regionId: region.id, paddingPx: 6 })
+    expect(clean).not.toHaveBeenCalled()
+    const stored = current(region.id)
+    expect(stored).toMatchObject({ outcome: 'detected', insideBubble: false, paddingPx: 6 })
+    expect(stored.mask).toBeTruthy()
+    expect(maskColorFor(stored, session)).toBe(session.outsideMaskColor)
+    expect(editor.selectionId).toBe(region.id)
+    expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
+  })
+
+  it('lets go of a selection whose mask is not on the page it read again', async () => {
+    const { backend, region } = await held()
+    select(region.id)
+    // The native answer names a new id; one a padding merged away is on no page.
+    vi.spyOn(backend, 'approveHeldMask').mockResolvedValue({ regionId: 'gone-p001-d9', pageStatus: 'detected' })
+    expect(await runRegionMenuItem('approveMask', region)).toBe(true)
+    expect(editor.selectionId).toBeNull()
+  })
+
+  it('never sends a region nothing held', async () => {
+    const approveHeldMask = vi.fn()
+    setBackend(/** @type {any} */ ({ approveHeldMask }))
+    const detection = { id: 'c1-p001-d1', outcome: 'detected', insideBubble: true }
+    const cleaned = { id: 'c1-p001-r1', outcome: 'cleaned', mask: { id: 'c1-p001-r1-m1', provenance: { engine: 'fill' } } }
+    const declined = { id: 'c1-p001-u1-2-3-4', outcome: 'declined', mask: null }
+    for (const region of [detection, cleaned, declined]) {
+      expect(await runRegionMenuItem('approveMask', /** @type {any} */ (region))).toBe(false)
+    }
+    expect(approveHeldMask).not.toHaveBeenCalled()
+  })
+
+  it('says a refusal, and a chapter a run holds in its own words', async () => {
+    const { backend, region } = await held()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const approve = vi.spyOn(backend, 'approveHeldMask').mockRejectedValueOnce(new Error('disk full'))
+    expect(await runRegionMenuItem('approveMask', region)).toBe(false)
+    expect(app.notices.at(-1)).toMatchObject({ key: 'notice.mask.approveFailed', tone: 'warn' })
+    approve.mockRejectedValueOnce(new Error('job_busy: another Manga Cleaner process is using ch.mtclean'))
+    expect(await runRegionMenuItem('approveMask', region)).toBe(false)
+    expect(app.notices.at(-1)?.key).toBe('notice.job.busy')
+    expect(current(region.id)).toMatchObject({ outcome: 'gate-skipped', mask: null })
+  })
 })

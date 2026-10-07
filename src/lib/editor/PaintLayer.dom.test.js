@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/svelte'
 import { tick } from 'svelte'
 import PaintLayer from './PaintLayer.svelte'
-import { draft, resetDraftState } from './draft.svelte.js'
+import { clearDraft, draft, markCommitted, resetDraftState } from './draft.svelte.js'
 import { editor } from '../state/editor.svelte.js'
 import { setBackend } from '../api/backend.js'
 import { pageVersion } from '../api/tile.js'
@@ -47,10 +47,10 @@ describe('mounted authoritative preview lifecycle', () => {
     const stack = document.createElement('div'); stack.dataset.artwork = 'cleaned'; host.append(stack)
     const tile = document.createElement('img'); stack.append(tile)
     draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
-    await rerender({ page: page(), committing: true }); draft.active = null; await tick()
+    markCommitted(); clearDraft(); await tick()
     const committed = { ...page(), tileRevision: 1 }
     tile.dataset.version = pageVersion(committed, 'cleaned')
-    await rerender({ page: committed, committing: true })
+    await rerender({ page: committed })
     expect(host.querySelector('.paint')).not.toBeNull()
     tile.dataset.loadedVersion = pageVersion(page(), 'cleaned')
     document.dispatchEvent(new CustomEvent('paint-tile-loaded', { detail: { pageId: 'page-0' } })); await tick()
@@ -69,10 +69,10 @@ describe('mounted authoritative preview lifecycle', () => {
     first.dataset.version = first.dataset.loadedVersion = pageVersion(page(), 'cleaned')
     neighbor.dataset.version = neighbor.dataset.loadedVersion = 'neighbor-old'
     draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
-    await rerender({ page: page(), committing: true }); draft.active = null; await tick()
+    markCommitted(); clearDraft(); await tick()
     const committed = { ...page(), tileRevision: 1 }
     first.dataset.version = first.dataset.loadedVersion = pageVersion(committed, 'cleaned')
-    await rerender({ page: committed, committing: true })
+    await rerender({ page: committed })
     expect(host.querySelector('.paint')).not.toBeNull()
     // The neighbor has not received its commit token yet: old loaded pixels do not qualify.
     neighbor.dataset.version = 'neighbor-committed'
@@ -85,8 +85,63 @@ describe('mounted authoritative preview lifecycle', () => {
   it('clears a held overlay when commit fails', async () => {
     const { host, rerender } = await setup(vi.fn(async s => result(s)))
     draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
-    await rerender({ page: page(), committing: true }); draft.active = null; await tick()
-    await rerender({ page: page(), committing: false })
+    markCommitted(); clearDraft(); await tick()
+    expect(host.querySelector('.paint')).not.toBeNull()
+    await rerender({ page: page(), dropped: 1 })
+    expect(host.querySelector('.paint')).toBeNull()
+  })
+  it('drops the frame of a stroke that was abandoned, not committed', async () => {
+    const { host } = await setup(vi.fn(async s => result(s)))
+    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    clearDraft(); await tick()
+    expect(host.querySelector('.paint')).toBeNull()
+  })
+  // The stamp is used in quick taps. Each tap is a commit of its own, and the
+  // next one starts before the tiles of the last have caught up.
+  it('keeps a held frame while the next stroke is drawn and committed', async () => {
+    let made = 0
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => `blob:${made += 1}`), revokeObjectURL: vi.fn() })
+    setBackend({ previewPaint: vi.fn(async s => result(s)) })
+    editor.chapter = { id: 'c' }
+    editor.toolParams.brush = { mode: 'paint', size: 10, color: '#123456' }
+    const host = document.createElement('div'); host.className = 'sheet'; document.body.append(host)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, right: 100, bottom: 100 })
+    const stack = document.createElement('div'); stack.dataset.artwork = 'cleaned'; host.append(stack)
+    const tile = document.createElement('img'); stack.append(tile)
+    tile.dataset.version = tile.dataset.loadedVersion = pageVersion(page(), 'cleaned')
+    const { rerender } = render(PaintLayer, { target: host, props: { page: page(), busy: 0 } })
+
+    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    await rerender({ page: page(), busy: 1 }); markCommitted(); clearDraft(); await tick()
+    expect(host.querySelectorAll('.paint')).toHaveLength(1)
+
+    // The second tap starts at once. The first frame stays under it.
+    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    expect(host.querySelectorAll('.paint')).toHaveLength(2)
+    await rerender({ page: page(), busy: 2 }); markCommitted(); clearDraft(); await tick()
+    expect(host.querySelectorAll('.paint')).toHaveLength(2)
+
+    // The first commit lands and its tiles load. The second is still in
+    // flight, so nothing is let go: the tiles do not show it yet.
+    const first = { ...page(), tileRevision: 1 }
+    tile.dataset.version = tile.dataset.loadedVersion = pageVersion(first, 'cleaned')
+    await rerender({ page: first, busy: 1 })
+    document.dispatchEvent(new CustomEvent('paint-tile-loaded')); await tick()
+    expect(host.querySelectorAll('.paint')).toHaveLength(2)
+
+    const second = { ...page(), tileRevision: 2 }
+    tile.dataset.version = tile.dataset.loadedVersion = pageVersion(second, 'cleaned')
+    await rerender({ page: second, busy: 0 })
+    document.dispatchEvent(new CustomEvent('paint-tile-loaded')); await tick()
+    expect(host.querySelectorAll('.paint')).toHaveLength(0)
+  })
+  it('keeps the frames when one commit changes nothing while another is in flight', async () => {
+    const { host, rerender } = await setup(vi.fn(async s => result(s)))
+    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    await rerender({ page: page(), busy: 2 }); markCommitted(); clearDraft(); await tick()
+    await rerender({ page: page(), busy: 1, dropped: 1 })
+    expect(host.querySelector('.paint')).not.toBeNull()
+    await rerender({ page: page(), busy: 0, dropped: 2 })
     expect(host.querySelector('.paint')).toBeNull()
   })
 })

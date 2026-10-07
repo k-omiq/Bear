@@ -598,7 +598,7 @@ export const fr = {
       saved: '{id} (enregistré)',
     },
     cloneSource: {
-      label: 'Source de clonage / correction',
+      label: 'Source de clonage',
       name: {
         alt: 'Option, ou Alt',
         meta: 'Commande, ou la touche Windows',
@@ -1246,6 +1246,7 @@ export const fr = {
       histogram: 'aucun moteur n’a reproduit le ton du papier autour',
       tooLarge: 'la zone est plus grande que ce que l’inpainter peut couvrir',
       unrepresentableMode: 'le mode colorimétrique de ce fichier ne peut pas contenir un résultat d’inpainting',
+      cloneSourceOutside: "la source de clonage est en dehors de la page",
       paintUnsupportedColor: "la description de couleur de ce fichier ne permet pas de peindre avec gestion des couleurs",
       paintUnsupportedMode: 'le mode colorimétrique de ce fichier ne peut pas contenir un résultat peint ou cloné',
       unrepresentableDepth: 'ce fichier a un bit par échantillon, ce qu’un résultat d’inpainting ne peut pas contenir',
@@ -1894,6 +1895,7 @@ export const fr = {
       cleanAnyway: 'Nettoyer quand même',
       cleanDetected: 'Nettoyer',
       cleanDetectedCloud: 'Nettoyer sur le GPU cloud',
+      approveMask: 'Approuver le masque',
       approve: 'Approuver et nettoyer',
       opacity: 'Opacité du calque',
       locked: 'Verrouiller la position',
@@ -1950,7 +1952,7 @@ export const fr = {
       shapes: 'Formes',
       aiMaskBrush: 'Pinceau de masque IA',
       contentAwareFill: 'Remplissage d’après le contenu',
-      cloneHeal: 'Clonage / correction',
+      cloneStamp: 'Tampon de duplication',
       maskSelect: 'Sélection',
     },
     hint: {
@@ -1958,7 +1960,7 @@ export const fr = {
       brush: 'glisser pour peindre',
       shapes: 'glisser sur la page',
       aiMaskBrush: 'tracer sur le texte',
-      cloneHeal: '{cloneSourceModifier}-clic sur une source',
+      cloneStamp: '{cloneSourceModifier}-clic sur une source',
       maskSelect: 'ajouter à la zone que Nettoyer efface, ou en retirer',
     },
     label: {
@@ -2054,8 +2056,6 @@ export const fr = {
       engineCloudSettings: 'Ouvrir les réglages Cloud',
       aligned: 'Aligné',
       nonAligned: 'Non aligné',
-      clone: 'Cloner',
-      heal: 'Corriger',
       maskAdd: 'Ajouter à la sélection',
       maskRemove: 'Retirer de la sélection',
       brush: 'Pinceau',
@@ -2352,10 +2352,11 @@ export const fr = {
       paddingFailed: 'Impossible de modifier la marge du masque. Les masques sont inchangés.',
       paddingRefreshFailed: 'La marge du masque a été enregistrée, mais la page n’a pas pu être actualisée. Rouvrez le chapitre pour voir le masque mis à jour.',
       typeFailed: 'Impossible de modifier le type de texte. La zone est inchangée.',
+      approveFailed: 'Impossible d’approuver le masque. La zone est inchangée.',
     },
     tool: {
       cloneSourceSet: 'Source de clonage prélevée. Peignez pour copier à partir d’elle.',
-      cloneNeedsSource: 'Faites d’abord Alt-clic sur une source. Le clonage et la correction copient depuis un autre endroit.',
+      cloneNeedsSource: 'Faites d’abord {cloneSourceModifier}-clic sur une source. Le tampon copie depuis cet endroit.',
     },
     gate: {
       cleanedAnyway: 'Nettoyé malgré le filtre d’écriture.',

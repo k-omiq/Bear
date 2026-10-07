@@ -169,7 +169,7 @@ describe('brushFromParams', () => {
     expect(brush.opacity).toBe(100)
   })
 
-  it('takes clone / heal size from the tool that has no paint defaults', () => {
+  it('takes the clone stamp size from the tool that has no paint defaults', () => {
     expect(brushFromParams({ size: 32, opacity: 90, flow: 75, hardness: 60 }).size).toBe(32)
   })
 })

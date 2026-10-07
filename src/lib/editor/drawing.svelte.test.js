@@ -1275,37 +1275,37 @@ describe('paint integration payload contract', () => {
     expect(params.paint).toBeUndefined()
   })
 
-  it('builds params.paint with seed and points for cloneHeal', async () => {
-    editor.tool = 'cloneHeal'
-    editor.toolParams.cloneHeal = {
+  it('builds params.paint with seed and points for cloneStamp', async () => {
+    editor.tool = 'cloneStamp'
+    editor.toolParams.cloneStamp = {
       size: 32,
       hardness: 60,
+      spacing: 12,
       alignment: 'aligned',
-      mode: 'heal',
       opacity: 75,
       flow: 80,
     }
     const adapter = backend()
     setBackend(/** @type {any} */ (adapter))
 
-    // Set clone source
-    draft.cloneSource = { pageId: 'c1-p001', x: 50, y: 50 }
-
     const strokePoints = [
       { x: 10, y: 10, p: 0.7 },
       { x: 15, y: 15, p: 0.9 },
     ]
-    painted('cloneHeal', strokePoints, 32)
+    painted('cloneStamp', strokePoints, 32)
+    // The surface fixes where the stroke reads from when the stroke starts.
+    draft.active.clone = { source: { x: 50, y: 50 }, offset: { x: 40, y: 40 } }
     expect(await commitDraft()).toBe(true)
 
     const { params, tool } = adapter.createRegion.mock.calls[0][0]
-    expect(tool).toBe('cloneHeal')
+    expect(tool).toBe('cloneStamp')
     expect(params.opacity).toBe(75)
     expect(params.flow).toBe(80)
-    expect(params.mode).toBe('heal')
+    expect(params.mode).toBeUndefined()
     expect(params.alignment).toBe('aligned')
     expect(params.stroke).toBeDefined()
     expect(params.cloneSource).toEqual({ x: 50, y: 50 })
+    expect(params.cloneOffset).toEqual({ x: 40, y: 40 })
     expect(params.paint).toMatchObject({
       points: [
         { x: 10, y: 10, p: 0.7 },
@@ -1313,6 +1313,30 @@ describe('paint integration payload contract', () => {
       ],
     })
     expect(typeof params.paint.seed).toBe('number')
+  })
+
+  // A sampled source is not enough: the stroke carries its own, so a source
+  // moved mid-gesture cannot change what an open stroke copies.
+  it('records nothing for a clone stroke that has no source of its own', async () => {
+    editor.tool = 'cloneStamp'
+    const adapter = backend()
+    setBackend(/** @type {any} */ (adapter))
+    draft.cloneSource = { pageId: 'c1-p001', x: 50, y: 50 }
+
+    painted('cloneStamp', [{ x: 10, y: 10 }, { x: 15, y: 15 }], 32)
+    expect(await commitDraft()).toBe(false)
+    expect(adapter.createRegion).not.toHaveBeenCalled()
+  })
+
+  it('marks the draft committed before it drops it, so its last frame is held', async () => {
+    editor.tool = 'cloneStamp'
+    setBackend(/** @type {any} */ (backend()))
+    painted('cloneStamp', [{ x: 10, y: 10 }], 32)
+    const stroke = draft.active
+    stroke.clone = { source: { x: 50, y: 50 }, offset: { x: 40, y: 40 } }
+    expect(await commitDraft()).toBe(true)
+    expect(stroke.committed).toBe(true)
+    expect(draft.active).toBeNull()
   })
 })
 

@@ -284,6 +284,7 @@ impl Stub {
             regions.push(RegionOutcome::Untouched {
                 bbox: Rect::new(20 + index as i64, 20, 4, 4),
                 reason: "review.reason.gateSkippedNotJapanese".into(),
+                lettering: None,
             });
         }
         for index in 0..self.declined {
@@ -3069,7 +3070,7 @@ fn a_box_taller_than_the_strip_overlap_is_held_at_its_full_extent() {
 
     let outcome = pipeline.clean_page("c1-p001", &bytes, Engine::Fill, &context).unwrap();
     assert_eq!(outcome.regions.len(), 1);
-    assert!(matches!(&outcome.regions[0], RegionOutcome::Untouched { bbox, reason }
+    assert!(matches!(&outcome.regions[0], RegionOutcome::Untouched { bbox, reason, .. }
         if *bbox == Rect::new(73, 1_493, 135, 1_714)
             && reason == "review.reason.gateSkippedLowConfidence"),
         "{}", one_line(&outcome.regions[0]));
@@ -3247,7 +3248,7 @@ fn a_join_keeps_the_provisional_index_for_later_patch_ids() {
 
     let outcome = pipeline.clean_page("c1-p001", &bytes, Engine::Fill, &context).unwrap();
     assert_eq!(outcome.regions.len(), 2);
-    assert!(matches!(&outcome.regions[0], RegionOutcome::Untouched { bbox, reason }
+    assert!(matches!(&outcome.regions[0], RegionOutcome::Untouched { bbox, reason, .. }
         if *bbox == Rect::new(73, 1_493, 135, 1_714)
             && reason == "review.reason.gateSkippedLowConfidence"));
     let RegionOutcome::Cleaned(patch, _) = &outcome.regions[1] else {
@@ -3335,7 +3336,7 @@ fn an_unowned_clipped_fragment_cannot_withdraw_an_unrelated_patch() {
     }).expect("the unrelated box survives the join");
     assert_eq!(patch.id, "c1-p001-r0");
     assert_eq!(patch.order, 0);
-    assert!(matches!(&outcome.regions[1], RegionOutcome::Untouched { bbox, reason }
+    assert!(matches!(&outcome.regions[1], RegionOutcome::Untouched { bbox, reason, .. }
         if *bbox == Rect::new(73, 2_013, 135, 1_194)
             && reason == "review.reason.gateSkippedLowConfidence"));
 }
@@ -3450,7 +3451,7 @@ fn an_edge_box_without_a_continuation_follows_the_normal_adoption_path() {
 
     let outcome = pipeline.clean_page("c1-p001", &bytes, Engine::Fill, &context).unwrap();
     assert_eq!(outcome.regions.len(), 1);
-    assert!(matches!(&outcome.regions[0], RegionOutcome::Untouched { bbox, reason }
+    assert!(matches!(&outcome.regions[0], RegionOutcome::Untouched { bbox, reason, .. }
         if *bbox == Rect::new(73, 1_493, 135, 1_407)
             && reason == "review.reason.languageSkipped"),
         "an unmatched edge box lost its normal gate result: {}", one_line(&outcome.regions[0]));
@@ -3855,7 +3856,7 @@ fn one_line(region: &RegionOutcome) -> String {
                 review.as_deref().map(|r| format!(" - {r}")).unwrap_or_default(),
             )
         }
-        RegionOutcome::Untouched { bbox, reason } | RegionOutcome::Declined { bbox, reason, .. } => {
+        RegionOutcome::Untouched { bbox, reason, .. } | RegionOutcome::Declined { bbox, reason, .. } => {
             format!("({}, {}) {}×{}: untouched - {reason}", bbox.x, bbox.y, bbox.w, bbox.h)
         }
         RegionOutcome::Candidate { bbox, reason, inside_bubble, .. } => {
@@ -3907,6 +3908,11 @@ fn the_pipeline_cleans_a_page_when_the_weights_and_the_runtime_are_present() {
 /// subsequence of that list - a region can be skipped for an empty seed or for
 /// belonging to another segment - so the property survives into the outcome,
 /// and this is where a lost `sort_regions` would show up.
+///
+/// Held candidates are not in that list and take no id. A page lists them
+/// after its last region, once every region has claimed its lettering
+/// (`list_candidates`), so they are walked on their own: after the regions,
+/// and down the page among themselves.
 #[test]
 fn the_regions_a_page_reports_are_in_reading_order() {
     let _serial = one_gpu_at_a_time();
@@ -3914,29 +3920,43 @@ fn the_regions_a_page_reports_are_in_reading_order() {
     let Some(outcome) = clean_fixture(&mut pipeline, "page-crowded.png", HIGHEST_LOCAL) else {
         return;
     };
-    let boxes: Vec<Rect> = outcome
+    for region in &outcome.regions {
+        eprintln!("  {}", one_line(region));
+    }
+    let first_candidate = outcome
         .regions
         .iter()
-        .map(|region| match region {
-            RegionOutcome::Cleaned(patch, _) => patch.mask.bounds,
-            RegionOutcome::Untouched { bbox, .. } | RegionOutcome::Candidate { bbox, .. }
-            | RegionOutcome::Declined { bbox, .. } => *bbox,
-            RegionOutcome::Detected(found) => found.record.bbox,
-        })
-        .collect();
-    assert!(boxes.len() > 1, "a crowded page reported {} regions", boxes.len());
-    for pair in boxes.windows(2) {
-        // The mask a rung wrote is grown inside the masking box, so the
-        // comparison is on the row and not on the exact origin: what must hold
-        // is that the page is walked downwards.
-        assert!(
-            pair[0].y <= pair[1].bottom(),
-            "region at ({}, {}) came out after one at ({}, {})",
-            pair[1].x,
-            pair[1].y,
-            pair[0].x,
-            pair[0].y
-        );
+        .position(|region| matches!(region, RegionOutcome::Candidate { .. }))
+        .unwrap_or(outcome.regions.len());
+    let (regions, candidates) = outcome.regions.split_at(first_candidate);
+    assert!(regions.len() > 1, "a crowded page reported {} regions", regions.len());
+    assert!(
+        candidates.iter().all(|row| matches!(row, RegionOutcome::Candidate { .. })),
+        "a region came out after a held candidate"
+    );
+    for rows in [regions, candidates] {
+        let boxes: Vec<Rect> = rows
+            .iter()
+            .map(|region| match region {
+                RegionOutcome::Cleaned(patch, _) => patch.mask.bounds,
+                RegionOutcome::Untouched { bbox, .. } | RegionOutcome::Candidate { bbox, .. }
+                | RegionOutcome::Declined { bbox, .. } => *bbox,
+                RegionOutcome::Detected(found) => found.record.bbox,
+            })
+            .collect();
+        for pair in boxes.windows(2) {
+            // The mask a rung wrote is grown inside the masking box, so the
+            // comparison is on the row and not on the exact origin: what must
+            // hold is that the page is walked downwards.
+            assert!(
+                pair[0].y <= pair[1].bottom(),
+                "region at ({}, {}) came out after one at ({}, {})",
+                pair[1].x,
+                pair[1].y,
+                pair[0].x,
+                pair[0].y
+            );
+        }
     }
 }
 
@@ -6355,6 +6375,39 @@ mod grouped {
         assert!(rebuilt.contains(101, 306), "the evidence rebuilds the group on its own page");
     }
 
+    /// A region the gate holds keeps the glyphs it judged, in page pixels, so
+    /// approving its mask stores what Detect found and not the box around it.
+    #[test]
+    fn a_gate_held_region_keeps_its_lettering() {
+        fn refuse(_: &Region) -> Verdict {
+            Verdict::NotJapanese { script: "Latin".into() }
+        }
+        let scratch = Scratch::new("grouped-held-lettering");
+        let mut pipeline = pipeline(&scratch);
+        pipeline.test_vision = Some(TestVision { detect, balloons, judge: refuse });
+        let page = grouped_page();
+        let bytes = encode(&page, Format::Png).unwrap();
+        let strip = Strip::of_sizes(&[(page.width, page.height)]);
+        let survey = cleaner_core::strip::survey(&strip, |_| None);
+        let context = single_page_context(&strip, &survey);
+
+        let outcome = pipeline.detect_page("c1-p001", &bytes, Engine::Fill, &context).unwrap();
+        let lines = outcome.regions.iter().map(one_line).collect::<Vec<_>>();
+        let held: Vec<&Mask> = outcome.regions.iter().filter_map(|region| match region {
+            RegionOutcome::Untouched { bbox, reason, lettering }
+                if reason == "review.reason.gateSkippedNotJapanese" => {
+                let (mask, scale) = lettering.as_ref().expect("a held group keeps its glyphs");
+                assert!(*scale > 0.0 && !mask.is_empty(), "{lines:?}");
+                assert!(mask.bounds.x >= bbox.x - 1 && mask.bounds.right() <= bbox.right() + 1, "{lines:?}");
+                Some(mask)
+            }
+            _ => None,
+        }).collect();
+        assert_eq!(held.len(), outcome.regions.len(), "{lines:?}");
+        // The column's first glyph is a ring from (100, 40): its rim is held, its paper centre is not.
+        assert!(held.iter().any(|mask| mask.contains(101, 41) && !mask.contains(109, 49)), "{lines:?}");
+    }
+
     /// The clipped view of a region the previous segment owns is not listed
     /// again as a candidate by the next.
     #[test]
@@ -6418,6 +6471,41 @@ mod grouped {
             let rebuilt = file.lettering(group).unwrap();
             assert_eq!(sha256_hex(&buffers::encode_mask(&rebuilt)), group.lettering_sha256);
             assert!(row.id.contains("-d"), "region ids keep their format: {}", row.id);
+        }
+    }
+
+    /// A run stores a gate-held region's glyphs beside its row, on Detect and on
+    /// a one-pass run alike, and they read back in page pixels: what approving
+    /// the mask stores, and what a clean the user asks for writes through.
+    #[test]
+    fn a_run_stores_a_gate_held_regions_lettering_with_its_row() {
+        fn refuse(_: &Region) -> Verdict {
+            Verdict::NotJapanese { script: "Latin".into() }
+        }
+        let _exclusive = exclusively();
+        for mode in [RunMode::Detect, RunMode::Auto] {
+            let scratch = Scratch::new(&format!("grouped-held-persist-{mode:?}"));
+            let library = Library::at(scratch.join("library"));
+            let raws = scratch.join("raws");
+            std::fs::create_dir_all(&raws).unwrap();
+            std::fs::write(raws.join("001.png"), encode(&grouped_page(), Format::Png).unwrap()).unwrap();
+            let project = library.create_project("Groups", StripMode::Single, Some(raws), None).unwrap();
+            let chapter = library.create_chapter(&project.id, "Ch. 1", None, None).unwrap().created().unwrap();
+            let entries = plan_for(&library, "chapter", &chapter.id, None, mode).unwrap();
+            let recorder = Recorder::new();
+            let mut pipeline = pipeline(&scratch);
+            pipeline.test_vision = Some(TestVision { detect, balloons, judge: refuse });
+            let summary = execute_as(mode, "run-1", &chapter.id, &entries, &mut pipeline,
+                Engine::Fill, &recorder.cancel, &recorder.sink());
+            assert_eq!(summary.errored, 0, "{mode:?}");
+            let job = Job::open(&entries[0].job_path).unwrap();
+            assert!(job.project.detections.is_empty() && job.project.patches.is_empty(), "{mode:?}");
+            let held: Vec<Mask> = job.project.regions_untouched.iter()
+                .map(|row| job.load_held_lettering(row).unwrap().expect("a held row keeps its glyphs").0)
+                .collect();
+            assert_eq!(held.len(), 3, "{mode:?}");
+            // The column's first glyph is a ring from (100, 40).
+            assert!(held.iter().any(|mask| mask.contains(101, 41) && !mask.contains(109, 49)), "{mode:?}");
         }
     }
 

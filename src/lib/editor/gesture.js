@@ -330,20 +330,26 @@ export function centredBbox(w, h) {
  *
  * The keyboard route to a mask, as one table rather than as a branch tree in
  * the component: activate to open a draft or to commit the one that is open,
- * arrows to move it and Shift-arrows to resize it, `S` to sample the clone
- * source. `Escape` is deliberately absent - abandoning a gesture is the
- * editor's own `cancelInteraction`, and routing it here would give it two
- * owners.
+ * arrows to move it and Shift-arrows to resize it. `Escape` is deliberately
+ * absent - abandoning a gesture is the editor's own `cancelInteraction`, and
+ * routing it here would give it two owners.
+ *
+ * The clone stamp has four keys of its own: `S` samples the source, `[` and
+ * `]` step the brush's size, and with Shift they step its hardness.
  *
  * @param {{key: string, shiftKey?: boolean, metaKey?: boolean, ctrlKey?: boolean}} event
  * @param {{hasDraft: boolean, cloneCapable?: boolean, step?: number}} context
- * @returns {{kind: 'open'|'commit'|'sample'}|{kind: 'move'|'resize', dx: number, dy: number}|null}
+ * @returns {{kind: 'open'|'commit'|'sample'}|{kind: 'size'|'hardness', direction: number}|{kind: 'move'|'resize', dx: number, dy: number}|null}
  */
 export function draftKeyIntent(event, context) {
   if (!event || event.metaKey || event.ctrlKey) return null
   const key = event.key
   if (key === 'Enter' || key === ' ') return { kind: context.hasDraft ? 'commit' : 'open' }
-  if ((key === 's' || key === 'S') && context.cloneCapable) return { kind: 'sample' }
+  if (context.cloneCapable) {
+    if (key === 's' || key === 'S') return { kind: 'sample' }
+    if (key === '[' || key === ']') return { kind: 'size', direction: key === '[' ? -1 : 1 }
+    if (key === '{' || key === '}') return { kind: 'hardness', direction: key === '{' ? -1 : 1 }
+  }
   if (!context.hasDraft) return null
 
   const step = context.step ?? 1
@@ -361,7 +367,25 @@ const ARROWS = {
 }
 
 /**
- * Clone / heal: where the sampled pixels come from for this stroke.
+ * The brush size one press of `[` or `]` away. The step grows with the brush,
+ * as it does in every raster editor: a small brush moves by 2 px and a large
+ * one by 20, so the same key is useful at both ends of the range.
+ *
+ * @param {number} size - a diameter in page pixels
+ * @param {number} direction - below zero for smaller, anything else for larger
+ * @param {number} min
+ * @param {number} max
+ * @returns {number}
+ */
+export function steppedSize(size, direction, min, max) {
+  const down = direction < 0
+  // Going down, the boundary belongs to the finer band: 20 steps to 18.
+  const step = (down ? size <= 20 : size < 20) ? 2 : (down ? size <= 100 : size < 100) ? 10 : 20
+  return clamp(size + (down ? -step : step), min, max)
+}
+
+/**
+ * The clone stamp: where the copied pixels come from for this stroke.
  *
  * `aligned` keeps the offset between source and stroke **fixed** once it has
  * been established, so successive strokes read on from one another;

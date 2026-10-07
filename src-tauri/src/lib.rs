@@ -248,6 +248,7 @@ pub fn run() {
             region::preview_paint,
             region::rerun_mask,
             region::clean_anyway,
+            region::approve_held_mask,
             region::sidecar_available,
             region::list_sidecar_models,
             screen_color::pick_screen_color,

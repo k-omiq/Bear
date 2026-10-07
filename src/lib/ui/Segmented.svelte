@@ -13,8 +13,8 @@
    *
    * An option with an `icon` draws that glyph in a square cell and no text at
    * all; its `label` becomes the cell's accessible name and its tooltip. This
-   * is the tool bar's shape - four shapes, page against project, clone against
-   * heal - where the alternatives are things with pictures and the bar has no
+   * is the tool bar's shape - four shapes, page against project, aligned
+   * against non-aligned - where the alternatives are things with pictures and the bar has no
    * room for their words. Mixing the two in one group is not offered: a row of
    * cells where some are square glyphs and some are words has no rhythm.
    *

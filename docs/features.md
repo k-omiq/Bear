@@ -65,7 +65,7 @@ about skipped files, cloud rejections and memory pressure stack in the bottom-le
 editor autosaves, and reopening a chapter restores the page, scroll position, zoom and the pending review set.
 
 Everything the app draws **on** the page is sky blue: region outlines, the region and canvas focus rings, the brush
-cursor's footprint, the clone source ring, and a shape or an AI brush trail while you draw it. Manga is mostly black
+cursor's footprint, the clone source cross, and a shape or an AI brush trail while you draw it. Manga is mostly black
 ink, so a near-black mark disappears exactly where the work is. The declined and needs-review outlines keep their own
 colours, because those say which state a region is in rather than merely where it is, and the paint brush's own colour
 is still yours to choose. Pressing a control in a floating window never moves the page underneath it either: the
@@ -109,7 +109,10 @@ means.
 
 Text **outside** a speech bubble is left alone unless **Outside bubbles** is set to clean it. Held for review, the
 default, sound effects and lettering over artwork are listed with a **Clean anyway** button, which is where the "Text
-outside bubbles" engine takes effect one region at a time. Set the other way, every out-of-balloon region on the run
+outside bubbles" engine takes effect one region at a time. Right-click a held region, on the page or on its Layers
+row, and **Approve mask** turns it into a detected region instead: nothing is cleaned, its mask shows on the page
+where you can edit and pad it, and the next Clean takes it with the rest, on this computer or on the cloud GPU.
+**Approve and clean** in the same menu cleans it at once. Set the other way, every out-of-balloon region on the run
 goes to the ladder on that engine's rung with **no script read at all**: sound effects, and Latin lettering a
 localiser added, are painted over with everything else. That is the row's stated meaning, it is why it is off by
 default, and a resumed run goes back to holding them rather than carrying the choice.
@@ -228,14 +231,33 @@ from the ring of paper, exact on flat paper; Reconstruct is the redraw engine, f
 mask. A Layers row and the region menu can also send a region to the cloud, and every cloud render asks first in one
 dialog.
 
-### Clone / Heal
+### Clone stamp
 
-Options: size, hardness, opacity, flow, alignment (Aligned or Non-aligned) and mode (Clone or Heal). It starts on
-Heal, aligned. Hold the source modifier and click somewhere on the page to set the copy source, then paint. The
-modifier is Option by default and is a setting, in Settings, Shortcuts, because Alt is not a key every keyboard
-prints. Clone copies the sampled pixels;
-Heal blends the sampled texture into the destination's own tone. Escape clears the source. Painting before a source is
-set tells you so.
+The clone stamp copies one part of the page onto another, the way the stamp in a raster editor does. Options: size,
+hardness, spacing, opacity, flow, and alignment (Aligned or Non-aligned). It starts as an exact copy: opacity and flow
+at 100, aligned.
+
+- **Sample.** Hold the source modifier and click the page to set where the stamp reads from. The modifier is Option
+  by default and is a setting, in Settings, Shortcuts, because Alt is not a key every keyboard prints. While the
+  modifier is down the cursor is a target. Stamping before a source is set tells you so.
+- **Paint.** A click is one dab and a drag is a stroke. The round cursor is filled with the pixels the next dab will
+  lay down, and a cross marks the place they come from and moves with the brush.
+- **Alignment.** Aligned keeps the distance between the source and the brush from one stroke to the next, so strokes
+  read on from each other. Non-aligned starts every stroke at the sampled point. Sampling again starts a new distance.
+- **Brush.** Opacity is the most one stroke can cover, however many times it crosses itself. Flow is how much each
+  dab adds, so a low flow builds up where dabs overlap. Hardness is the edge of the dab, and a pen's pressure sets
+  its size. At full opacity and flow the middle of the brush is the source's own values, unchanged.
+- **What it reads.** The page as it stood when the stroke started, with every layer under the new one. A stroke that
+  crosses its own source does not copy itself. A source that is off the page copies nothing there, and a stroke with
+  nothing to copy is declined.
+- **Straight lines.** `Shift`-click draws a line from where the last stroke ended. `Shift` held during a drag keeps
+  the stroke horizontal or vertical.
+- **Keys, with the page focused.** `[` and `]` make the brush smaller and larger, and `Shift`+`[` and `Shift`+`]`
+  step the hardness by 25. `S` samples under the pointer. `Enter` opens one dab, the arrows move it (five steps with
+  `Shift`), and `Enter` stamps it. `Escape` drops an open stroke, and pressed again it clears the source.
+
+Each stroke is one layer and one undo step. A project saved when the tool was Clone / Heal keeps its layers, and they
+are named Clone stamp.
 
 ## Layers and history
 
@@ -333,7 +355,7 @@ Previews transform supported Gray/RGB/CMYK profiles and SDR declarations to tagg
 use documented sRGB display assumptions; untagged CMYK uses a multiplicative-ink assumption, without changing stored
 metadata. Colour keys are compared at native precision. Downsampling uses linear light and premultiplied alpha.
 Brush, selected fill and model boundaries use the same interpretation. Brush modes remain 8-bit Gray/GrayAlpha/RGB/
-RGBA; native clone copies remain exact. Live brush/clone/heal previews come from the backend’s commit renderer.
+RGBA; native clone copies remain exact. Live brush and clone stamp previews come from the backend’s commit renderer.
 
 TIFF alpha association is explicit: native premultiplied values remain unchanged and previews unassociate only the
 display derivative. Associated-alpha pages export as TIFF; PNG requests fall back and PSD refuses. Editing those
@@ -425,7 +447,7 @@ click one and the row listens, the next combination you press becomes the bindin
 Delete clears it (the row then reads Unbound and the command keeps whatever pointer route it has). A combination
 another shortcut already answers is refused, not swapped, and the refusal names the shortcut holding it. Alt
 combinations belong to the operating system and are not intercepted. A rebound row grows a Reset control, and the foot
-of the sheet carries Reset all to defaults. The sheet also carries a **Pointer** group, which holds Clone / heal's
+of the sheet carries Reset all to defaults. The sheet also carries a **Pointer** group, which holds the clone stamp's
 source modifier: Option, Command, Control or Shift, drawn as the keycaps of the machine you are on, because Alt is not
 a key every keyboard prints. Escape is the one binding that cannot be changed. Only your differences
 from the defaults are stored, so a binding survives a build that renames a default chord.
@@ -509,7 +531,7 @@ chapter is open.
 | `2` | Brush |
 | `3` | Shapes |
 | `4` | AI mask brush |
-| `5` | Clone / heal |
+| `5` | Clone stamp |
 | `6` | Selection: add to or remove from the detected masks |
 | `O` (held) | Show the original while held |
 | `Shift`+`O` | Pin the original on |

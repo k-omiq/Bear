@@ -167,9 +167,9 @@ export const SHORTCUTS = [
     run: (c) => c.selectToolSlot(4),
   },
   {
-    id: 'tool.cloneHeal',
+    id: 'tool.cloneStamp',
     group: 'tools',
-    labelKey: 'tools.name.cloneHeal',
+    labelKey: 'tools.name.cloneStamp',
     keys: ['5'],
     chord: ['5'],
     scope: 'editor',
@@ -825,7 +825,7 @@ export function isApplePlatform() {
  */
 export const POINTER_MODIFIERS = /** @type {const} */ (['alt', 'meta', 'control', 'shift'])
 
-/** The modifier Clone / heal's source pick has always used, and still starts on. */
+/** The modifier the clone stamp's source pick has always used, and still starts on. */
 export const DEFAULT_POINTER_MODIFIER = 'alt'
 
 /**
@@ -963,6 +963,14 @@ let effective = SHORTCUTS
 let revision = 0
 
 /**
+ * Ids a stored record may still use, and what the table calls them now. A
+ * rename must not undo a key somebody chose.
+ *
+ * @type {Record<string, string>}
+ */
+const RENAMED_IDS = { 'tool.cloneHeal': 'tool.cloneStamp' }
+
+/**
  * Drop everything that is not a binding this build can honour: an id the table
  * no longer has, a chord that will not parse, an entry whose chord is not the
  * user's to change, and a chord that is only the default written out.
@@ -974,7 +982,10 @@ export function sanitizeShortcutOverrides(raw) {
   /** @type {Record<string, Chord|null>} */
   const kept = {}
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return kept
-  for (const [id, value] of Object.entries(/** @type {Record<string, unknown>} */ (raw))) {
+  for (const [stored, value] of Object.entries(/** @type {Record<string, unknown>} */ (raw))) {
+    const id = RENAMED_IDS[stored] ?? stored
+    // A record written by this build wins over the old name beside it.
+    if (id !== stored && id in /** @type {object} */ (raw)) continue
     const entry = DEFAULTS_BY_ID.get(id)
     if (!entry || entry.fixed) continue
     if (value === null) {

@@ -10,9 +10,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte'
 import { setBackend } from '../api/backend.js'
 import { createHistory } from '../model/history.js'
+import { app, clearNotices } from '../state/app.svelte.js'
 import { editor, undo } from '../state/editor.svelte.js'
 import { session, setMaskColor, setOutsideMaskColor } from '../state/session.svelte.js'
-import { resetDraftState } from './draft.svelte.js'
+import { draft, resetDraftState } from './draft.svelte.js'
 import { pageLayers } from './patchlayers.svelte.js'
 import DrawLayer from './DrawLayer.svelte'
 import { radiusAt } from './paintplan.js'
@@ -39,6 +40,7 @@ afterEach(() => {
   editor.project = null
   editor.tool = 'autoClean'
   resetDraftState()
+  clearNotices()
   vi.clearAllMocks()
 })
 
@@ -89,6 +91,286 @@ describe('brush pressure on a mounted surface', () => {
       cleanup()
       canvas.mockRestore()
     }
+  })
+})
+
+/**
+ * **The clone stamp, driven the way a raster editor's is.** The sheet here is
+ * 100 by 100 client pixels, so a client coordinate is a page percent.
+ */
+describe('the clone stamp on a mounted surface', () => {
+  /**
+   * @param {Record<string, unknown>} [params]
+   * @param {(spec: any) => Promise<any>} [previewPaint]
+   */
+  function mount(params = {}, previewPaint = async () => null) {
+    const only = page('c1-p001', 0)
+    editor.chapter = { id: 'c1', review: [], pages: [only] }
+    editor.project = /** @type {any} */ ({ mode: 'single' })
+    editor.history = createHistory()
+    editor.pageIndex = 0
+    editor.tool = 'cloneStamp'
+    editor.toolParams = {
+      cloneStamp: { size: 80, hardness: 50, spacing: 12, opacity: 100, flow: 100, alignment: 'aligned', ...params },
+    }
+    resetDraftState()
+    let made = 0
+    const createRegion = vi.fn(async ({ bbox }) => {
+      made += 1
+      return {
+        region: { id: `c1-p001-h${made}`, pageId: only.id, bbox, source: 'hand', outcome: 'cleaned' },
+        pageStatus: 'cleaned',
+      }
+    })
+    setBackend(/** @type {any} */ ({
+      createRegion,
+      previewPaint,
+      historyPush: vi.fn().mockResolvedValue({ cursor: 1, entries: [] }),
+    }))
+    // These tests check what is sent; the pixels need a real canvas.
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    const view = render(DrawLayer, { props: { page: only } })
+    const surface = view.getByRole('button')
+    surface.getBoundingClientRect = () => /** @type {DOMRect} */ ({
+      x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, toJSON() {},
+    })
+    surface.setPointerCapture = vi.fn()
+    surface.releasePointerCapture = vi.fn()
+    /** A press and a release in one place. */
+    const click = async (x, y, keys = {}) => {
+      await fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: x, clientY: y, ...keys })
+      await fireEvent.pointerUp(surface, { pointerId: 1, button: 0, clientX: x, clientY: y, ...keys })
+    }
+    const sent = (index) => createRegion.mock.calls[index][0]
+    return { view, surface, createRegion, click, sent }
+  }
+
+  afterEach(() => vi.restoreAllMocks())
+
+  it('asks for a source before it paints anything', async () => {
+    const { click, createRegion } = mount()
+    await click(20, 30)
+    expect(app.notices.map((notice) => notice.key)).toEqual(['notice.tool.cloneNeedsSource'])
+    expect(draft.active).toBeNull()
+    expect(createRegion).not.toHaveBeenCalled()
+  })
+
+  it('samples on the modifier-click, and then one click is one dab', async () => {
+    const { click, createRegion, sent } = mount()
+    await click(50, 50, { altKey: true })
+    expect(draft.cloneSource).toEqual({ pageId: 'c1-p001', x: 50, y: 50 })
+    expect(createRegion).not.toHaveBeenCalled()
+
+    await click(20, 30)
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(1))
+    expect(sent(0).tool).toBe('cloneStamp')
+    expect(sent(0).params.cloneSource).toEqual({ x: 50, y: 50 })
+    expect(sent(0).params.cloneOffset).toEqual({ x: 30, y: 20 })
+    expect(sent(0).params.paint.points).toEqual([{ x: 20, y: 30, p: 1 }])
+    // The dab's own box: an 80 px brush on an 800 by 1000 page.
+    expect(sent(0).bbox).toEqual({ x: 15, y: 26, w: 10, h: 8 })
+    await editor.history.running
+  })
+
+  it('samples with the modifier the user chose, and paints on the old one', async () => {
+    const before = session.cloneSourceModifier
+    session.cloneSourceModifier = 'meta'
+    try {
+      const { click, createRegion } = mount()
+      await click(50, 50, { altKey: true })
+      expect(draft.cloneSource).toBeNull()
+      await click(50, 50, { metaKey: true })
+      expect(draft.cloneSource).toEqual({ pageId: 'c1-p001', x: 50, y: 50 })
+      expect(createRegion).not.toHaveBeenCalled()
+    } finally {
+      session.cloneSourceModifier = before
+    }
+  })
+
+  it('aligned reads on from the last stroke: the offset stays', async () => {
+    const { click, createRegion, sent } = mount({ alignment: 'aligned' })
+    await click(50, 50, { altKey: true })
+    await click(20, 30)
+    await click(60, 60)
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(2))
+    expect(sent(1).params.cloneOffset).toEqual({ x: 30, y: 20 })
+    expect(sent(1).params.cloneSource).toEqual({ x: 90, y: 80 })
+    await editor.history.running
+  })
+
+  it('non-aligned starts every stroke from the sampled point', async () => {
+    const { click, createRegion, sent } = mount({ alignment: 'nonAligned' })
+    await click(50, 50, { altKey: true })
+    await click(20, 30)
+    await click(60, 60)
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(2))
+    expect(sent(1).params.cloneSource).toEqual({ x: 50, y: 50 })
+    expect(sent(1).params.cloneOffset).toEqual({ x: -10, y: -10 })
+    await editor.history.running
+  })
+
+  it('sampling again starts a new offset, aligned or not', async () => {
+    const { click, createRegion, sent } = mount({ alignment: 'aligned' })
+    await click(50, 50, { altKey: true })
+    await click(20, 30)
+    await click(70, 10, { altKey: true })
+    await click(60, 60)
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(2))
+    expect(sent(1).params.cloneSource).toEqual({ x: 70, y: 10 })
+    expect(sent(1).params.cloneOffset).toEqual({ x: 10, y: -50 })
+    await editor.history.running
+  })
+
+  it('fixes the source when the stroke starts, whatever is sampled after', async () => {
+    const { surface, createRegion, sent } = mount()
+    await fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 50, clientY: 50, altKey: true })
+    await fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 20, clientY: 30 })
+    await fireEvent.pointerMove(surface, { pointerId: 1, buttons: 1, clientX: 40, clientY: 30 })
+    expect(draft.active?.clone).toEqual({ source: { x: 50, y: 50 }, offset: { x: 30, y: 20 } })
+    // The cross rides with the brush: where the pointer is, plus the offset.
+    const cross = /** @type {HTMLElement} */ (document.querySelector('[data-clone-source]'))
+    expect(cross.style.left).toBe('70%')
+    expect(cross.style.top).toBe('50%')
+    await fireEvent.pointerUp(surface, { pointerId: 1, button: 0, clientX: 40, clientY: 30 })
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(1))
+    expect(sent(0).params.paint.points.map((point) => point.x)).toEqual([20, 40])
+    expect(sent(0).params.cloneOffset).toEqual({ x: 30, y: 20 })
+    await editor.history.running
+  })
+
+  it('draws a straight line to a Shift-click from where the last stroke ended', async () => {
+    const { click, createRegion, sent } = mount()
+    await click(50, 50, { altKey: true })
+    await click(20, 30)
+    await click(40, 70, { shiftKey: true })
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(2))
+    expect(sent(1).params.paint.points.map(({ x, y }) => ({ x, y }))).toEqual([{ x: 20, y: 30 }, { x: 40, y: 70 }])
+    expect(sent(1).bbox).toEqual({ x: 15, y: 26, w: 30, h: 48 })
+    await editor.history.running
+  })
+
+  it('holds a drag to one axis while Shift is down', async () => {
+    const { surface, createRegion, sent } = mount()
+    await fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 50, clientY: 50, altKey: true })
+    await fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 20, clientY: 20 })
+    await fireEvent.pointerMove(surface, { pointerId: 1, buttons: 1, clientX: 30, clientY: 23, shiftKey: true })
+    await fireEvent.pointerMove(surface, { pointerId: 1, buttons: 1, clientX: 45, clientY: 29, shiftKey: true })
+    await fireEvent.pointerUp(surface, { pointerId: 1, button: 0, clientX: 45, clientY: 29 })
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(1))
+    expect(sent(0).params.paint.points.map(({ x, y }) => ({ x, y }))).toEqual([
+      { x: 20, y: 20 }, { x: 30, y: 20 }, { x: 45, y: 20 },
+    ])
+    await editor.history.running
+  })
+
+  // A stamp is used in quick taps. The first tap is still waiting on its last
+  // preview frame when the second lands, and it used to be thrown away.
+  it('sends a tap that the next tap overtakes', async () => {
+    /** @type {Array<() => void>} */
+    const waiting = []
+    let open = false
+    const previewPaint = () => new Promise((resolve) => {
+      if (open) resolve(null)
+      else waiting.push(() => resolve(null))
+    })
+    const { click, createRegion, sent } = mount({}, previewPaint)
+    await click(50, 50, { altKey: true })
+    await click(20, 30)
+    expect(createRegion).not.toHaveBeenCalled()
+    // The second press sends the first, frame or no frame.
+    await click(60, 60)
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(1))
+    open = true
+    waiting.forEach((release) => release())
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(2))
+    expect(sent(0).params.paint.points[0]).toMatchObject({ x: 20, y: 30 })
+    expect(sent(1).params.paint.points[0]).toMatchObject({ x: 60, y: 60 })
+    await editor.history.running
+  })
+
+  it('shows a target while the sample modifier is down, in place of the brush', async () => {
+    const { view, surface } = mount()
+    await fireEvent.pointerMove(surface, { clientX: 40, clientY: 40 })
+    expect(view.container.querySelector('svg.cursor')).not.toBeNull()
+    expect(view.container.querySelector('.target')).toBeNull()
+
+    await fireEvent.keyDown(window, { key: 'Alt', altKey: true })
+    expect(view.container.querySelector('svg.cursor')).toBeNull()
+    expect(view.container.querySelector('.target')).not.toBeNull()
+
+    await fireEvent.keyUp(window, { key: 'Alt', altKey: false })
+    expect(view.container.querySelector('svg.cursor')).not.toBeNull()
+    expect(view.container.querySelector('.target')).toBeNull()
+  })
+
+  it('marks the source it will read from before the stroke starts', async () => {
+    const { view, surface, click } = mount()
+    expect(view.container.querySelector('[data-clone-source]')).toBeNull()
+    await click(50, 50, { altKey: true })
+    // The pointer is where it sampled, so the brush would read from there.
+    await fireEvent.pointerMove(surface, { clientX: 50, clientY: 50 })
+    const cross = /** @type {HTMLElement} */ (view.container.querySelector('[data-clone-source]'))
+    expect(cross.style.left).toBe('50%')
+    // The brush fills with what it would copy: a round overlay on the ring.
+    await fireEvent.pointerMove(surface, { clientX: 20, clientY: 30 })
+    const overlay = /** @type {HTMLElement} */ (view.container.querySelector('canvas.overlay'))
+    expect(overlay.style.left).toBe('15%')
+    expect(overlay.style.top).toBe('26%')
+    expect(overlay.style.width).toBe('10%')
+    expect(overlay.style.height).toBe('8%')
+  })
+
+  it('steps the brush on the bracket keys and keeps the keys from paging', async () => {
+    const { surface } = mount({ size: 20, hardness: 50 })
+    const paged = vi.fn()
+    window.addEventListener('keydown', paged)
+    try {
+      await fireEvent.keyDown(surface, { key: ']' })
+      expect(editor.toolParams.cloneStamp.size).toBe(30)
+      await fireEvent.keyDown(surface, { key: '[' })
+      await fireEvent.keyDown(surface, { key: '[' })
+      expect(editor.toolParams.cloneStamp.size).toBe(18)
+      await fireEvent.keyDown(surface, { key: '}', shiftKey: true })
+      expect(editor.toolParams.cloneStamp.hardness).toBe(75)
+      await fireEvent.keyDown(surface, { key: '}', shiftKey: true })
+      await fireEvent.keyDown(surface, { key: '}', shiftKey: true })
+      expect(editor.toolParams.cloneStamp.hardness).toBe(100)
+      await fireEvent.keyDown(surface, { key: '{', shiftKey: true })
+      expect(editor.toolParams.cloneStamp.hardness).toBe(75)
+      expect(paged).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', paged)
+    }
+  })
+
+  it('stamps from the keyboard: S samples, Enter opens a dab, arrows move it, Enter stamps', async () => {
+    const { surface, createRegion, sent } = mount()
+    await fireEvent.keyDown(surface, { key: 's' })
+    expect(draft.cloneSource).toEqual({ pageId: 'c1-p001', x: 50, y: 50 })
+
+    await fireEvent.keyDown(surface, { key: 'Enter' })
+    expect(draft.active).toMatchObject({ tool: 'cloneStamp', kind: 'stroke', keyboard: true })
+    for (let press = 0; press < 3; press += 1) await fireEvent.keyDown(surface, { key: 'ArrowLeft' })
+    await fireEvent.keyDown(surface, { key: 'ArrowUp', shiftKey: true })
+    expect(draft.active?.points).toEqual([{ x: 47, y: 45, p: 1 }])
+
+    await fireEvent.keyDown(surface, { key: 'Enter' })
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(1))
+    expect(sent(0).tool).toBe('cloneStamp')
+    expect(sent(0).params.cloneSource).toEqual({ x: 50, y: 50 })
+    expect(sent(0).params.cloneOffset).toEqual({ x: 3, y: 5 })
+    expect(sent(0).params.paint.points).toEqual([{ x: 47, y: 45, p: 1 }])
+    await editor.history.running
+  })
+
+  it('does not stamp from the keyboard before a source is sampled', async () => {
+    const { surface, createRegion } = mount()
+    await fireEvent.keyDown(surface, { key: 'Enter' })
+    await fireEvent.keyDown(surface, { key: 'Enter' })
+    expect(app.notices.map((notice) => notice.key)).toEqual(['notice.tool.cloneNeedsSource'])
+    expect(createRegion).not.toHaveBeenCalled()
+    // The dab stays open: S there samples, and it can then be moved and stamped.
+    expect(draft.active?.keyboard).toBe(true)
   })
 })
 

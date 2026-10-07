@@ -175,7 +175,7 @@ fn run_page(pipeline: &mut Pipeline, input: &Path, output: &Path, rows: &mut Vec
                 None, patch.mask.bounds, "cleaned".to_owned(), review.clone().unwrap_or_default(),
                 format!("{:?}", patch.provenance.engine), Some(patch.as_ref()),
             ),
-            RegionOutcome::Untouched { bbox, reason } | RegionOutcome::Candidate { bbox, reason, .. } | RegionOutcome::Declined { bbox, reason, .. } => (
+            RegionOutcome::Untouched { bbox, reason, .. } | RegionOutcome::Candidate { bbox, reason, .. } | RegionOutcome::Declined { bbox, reason, .. } => (
                 Some(*bbox), *bbox, outcome_kind(reason), reason.clone(), String::new(), None,
             ),
             RegionOutcome::Detected(_) => bail!("auto clean returned a detect-only region on {name}"),

@@ -40,7 +40,7 @@ Intel Macs (`x86_64`) are unsupported: ONNX Runtime 1.28.0 publishes no `osx-x86
 ## Features
 
 - Automatic pipeline: detect, gate to Japanese script, fit masks, route to an engine, clean, composite.
-- Six manual tools: Text cleanup, Brush, Shapes, AI Mask Brush, Content-Aware Fill, and Clone / Heal.
+- Six manual tools: Text cleanup, Brush, Shapes, AI Mask Brush, Content-Aware Fill, and Clone Stamp.
 - Every cleaned region is a layer with its engine, parameters, and timing recorded, re-runnable or deletable with full undo and redo.
 - Long-strip webtoon mode with virtual stitching, content-minimum splitting, and bounded-memory streaming across joins.
 - Strict export contract: untouched pixels stay bit-identical; 8 and 16-bit, Grayscale, RGB, CMYK, and Indexed all survive.

@@ -16,6 +16,7 @@ import {
   cloneOffset,
   detectAreaAround,
   draftKeyIntent,
+  steppedSize,
   menuPoint,
   moveBbox,
   paintedStroke,
@@ -266,6 +267,18 @@ describe('draftKeyIntent', () => {
     expect(draftKeyIntent({ key: 's' }, drafting)).toBeNull()
   })
 
+  // The bracket keys page the chapter everywhere else, so only the stamp's
+  // own surface reads them as the brush.
+  it('steps the brush on the bracket keys, for the clone stamp only', () => {
+    const stamp = { hasDraft: false, cloneCapable: true }
+    expect(draftKeyIntent({ key: '[' }, stamp)).toEqual({ kind: 'size', direction: -1 })
+    expect(draftKeyIntent({ key: ']' }, stamp)).toEqual({ kind: 'size', direction: 1 })
+    expect(draftKeyIntent({ key: '{', shiftKey: true }, stamp)).toEqual({ kind: 'hardness', direction: -1 })
+    expect(draftKeyIntent({ key: '}', shiftKey: true }, stamp)).toEqual({ kind: 'hardness', direction: 1 })
+    expect(draftKeyIntent({ key: '[' }, open)).toBeNull()
+    expect(draftKeyIntent({ key: ']' }, drafting)).toBeNull()
+  })
+
   it('leaves every platform chord alone', () => {
     expect(draftKeyIntent({ key: 'Enter', metaKey: true }, open)).toBeNull()
     expect(draftKeyIntent({ key: 'ArrowLeft', ctrlKey: true }, drafting)).toBeNull()
@@ -275,6 +288,31 @@ describe('draftKeyIntent', () => {
     expect(draftKeyIntent({ key: 'Escape' }, drafting)).toBeNull()
     expect(draftKeyIntent({ key: 'x' }, drafting)).toBeNull()
     expect(draftKeyIntent(null, drafting)).toBeNull()
+  })
+})
+
+describe('steppedSize', () => {
+  it('moves a small brush finely and a large one coarsely', () => {
+    expect(steppedSize(10, 1, 4, 300)).toBe(12)
+    expect(steppedSize(40, 1, 4, 300)).toBe(50)
+    expect(steppedSize(140, 1, 4, 300)).toBe(160)
+    expect(steppedSize(10, -1, 4, 300)).toBe(8)
+    expect(steppedSize(40, -1, 4, 300)).toBe(30)
+    expect(steppedSize(140, -1, 4, 300)).toBe(120)
+  })
+
+  it('comes back down the way it went up', () => {
+    expect(steppedSize(steppedSize(20, 1, 4, 300), -1, 4, 300)).toBe(20)
+    expect(steppedSize(20, -1, 4, 300)).toBe(18)
+    expect(steppedSize(steppedSize(100, 1, 4, 300), -1, 4, 300)).toBe(100)
+    expect(steppedSize(100, -1, 4, 300)).toBe(90)
+  })
+
+  it('stays inside the range the tool allows', () => {
+    expect(steppedSize(4, -1, 4, 300)).toBe(4)
+    expect(steppedSize(5, -1, 4, 300)).toBe(4)
+    expect(steppedSize(300, 1, 4, 300)).toBe(300)
+    expect(steppedSize(290, 1, 4, 300)).toBe(300)
   })
 })
 

@@ -40,7 +40,7 @@ export const TOOLS = Object.freeze({
     engine: 'fill',
     fillMode: 'match-surround',
   },
-  cloneHeal: { labelKey: 'tools.name.cloneHeal', engine: 'clone', fillMode: 'match-surround' },
+  cloneStamp: { labelKey: 'tools.name.cloneStamp', engine: 'clone', fillMode: 'match-surround' },
 })
 
 /**
@@ -152,7 +152,7 @@ export function applyToolToRegion(region, page, ctx, options) {
   const solidShape = options.tool === 'shapes' && params.mode === 'solid'
   const isPaint =
     (options.tool === 'brush' && params.mode === 'paint') ||
-    options.tool === 'cloneHeal' ||
+    options.tool === 'cloneStamp' ||
     solidShape
   if (isPaint && page.colorMode && !['Gray8', 'GrayAlpha8', 'RGB8', 'RGBA8'].includes(page.colorMode)) {
     region.outcome = 'declined'
@@ -173,7 +173,7 @@ export function applyToolToRegion(region, page, ctx, options) {
   let engine = reconstructing ? 'lama' : (tool.engine ?? 'fill')
   if ((options.tool === 'brush' && params.mode === 'paint') || solidShape) {
     engine = 'paint'
-  } else if (options.tool === 'cloneHeal') {
+  } else if (options.tool === 'cloneStamp') {
     engine = 'clone'
   } else if (
     (options.tool === 'aiMaskBrush' || options.tool === 'shapes') &&

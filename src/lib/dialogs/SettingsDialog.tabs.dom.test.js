@@ -380,7 +380,7 @@ describe('the theme picker', () => {
   })
 })
 
-describe('the modifier that picks Clone / heal’s source', () => {
+describe('the modifier that picks the clone stamp’s source', () => {
   /**
    * The four chips, found by the spelt-out names rather than by their keycaps
    * - `⌥` is not a word, and a role query resolves the name the same way a
@@ -411,15 +411,15 @@ describe('the modifier that picks Clone / heal’s source', () => {
     // modifier through a context param, because `ToolWindow` calls
     // `t(spec.hintKey)` and has no preference to pass.
     const apple = isApplePlatform()
-    expect(t('tools.hint.cloneHeal')).toContain(modifierCap('alt', { apple }))
+    expect(t('tools.hint.cloneStamp')).toContain(modifierCap('alt', { apple }))
 
     await fireEvent.click(chip(rendered, 'meta'))
 
     expect(session.cloneSourceModifier).toBe('meta')
     expect(chip(rendered, 'meta').getAttribute('aria-checked')).toBe('true')
     expect(chip(rendered, 'alt').getAttribute('aria-checked')).toBe('false')
-    expect(t('tools.hint.cloneHeal')).toContain(modifierCap('meta', { apple }))
-    expect(t('tools.hint.cloneHeal')).not.toContain(modifierCap('alt', { apple }))
+    expect(t('tools.hint.cloneStamp')).toContain(modifierCap('meta', { apple }))
+    expect(t('tools.hint.cloneStamp')).not.toContain(modifierCap('alt', { apple }))
   })
 
   it('offers all four, each with a name a screen reader can say', async () => {

@@ -2554,7 +2554,7 @@ fn paint_patch(
     order: u32,
     strip_context: Option<StripPaintContext<'_>>,
 ) -> Result<(run::Made, usize, Rect), &'static str> {
-    use cleaner_core::paint::{self, CloneMode, HealMode, PaintError, StrokePoint};
+    use cleaner_core::paint::{self, PaintError, StrokePoint};
 
     if !paint::supports(page) {
         return Err("decline.reason.paintUnsupportedMode");
@@ -2610,19 +2610,9 @@ fn paint_patch(
         PaintKind::Brush { color } | PaintKind::Shape { color, .. } => {
             paint::render_brush(page, &under, Some(order), &points, &paint.spec, color)
         }
-        PaintKind::Clone { heal, .. } => paint::render_clone(
-            page,
-            &under,
-            Some(order),
-            &points,
-            &paint.spec,
-            offset,
-            if heal {
-                CloneMode::Heal(HealMode::Soft)
-            } else {
-                CloneMode::Clone
-            },
-        ),
+        PaintKind::Clone { .. } => {
+            paint::render_clone(page, &under, Some(order), &points, &paint.spec, offset)
+        }
     };
 
     let painted = match painted {
@@ -2634,6 +2624,7 @@ fn paint_patch(
         // are both "there is no patch to make here", which is the sentence
         // `rungUnavailable` already carries for an empty seed a few lines up.
         Err(PaintError::Color(_)) => return Err("decline.reason.paintUnsupportedColor"),
+        Err(PaintError::SourceOutside) => return Err("decline.reason.cloneSourceOutside"),
         Err(PaintError::Empty) | Err(PaintError::Composite(_)) => {
             return Err("decline.reason.rungUnavailable")
         }
@@ -3129,18 +3120,17 @@ fn patches_under(
     if x0 > x1 {
         return Ok(Vec::new());
     }
-    // Clone reads from the source as well as writing to the target, and the
-    // surface it is handed is one buffer covering both.
-    let box_of = Rect::new(
-        x0.min(x0 - offset.0).floor() as i64,
-        y0.min(y0 - offset.1).floor() as i64,
-        (x1.max(x1 - offset.0) - x0.min(x0 - offset.0))
-            .ceil()
-            .max(1.0) as u32,
-        (y1.max(y1 - offset.1) - y0.min(y0 - offset.1))
-            .ceil()
-            .max(1.0) as u32,
-    );
+    // A clone reads from its source as well as writing to its target, and the
+    // two are composited apart: a patch lying between them is under neither.
+    let box_at = |dx: f64, dy: f64| {
+        Rect::new(
+            (x0 - dx).floor() as i64,
+            (y0 - dy).floor() as i64,
+            (x1 - x0).ceil().max(1.0) as u32 + 1,
+            (y1 - y0).ceil().max(1.0) as u32 + 1,
+        )
+    };
+    let (target, source) = (box_at(0.0, 0.0), box_at(offset.0.round(), offset.1.round()));
 
     let mut patches = Vec::new();
     for record in &job.project.patches {
@@ -3153,7 +3143,7 @@ fn patches_under(
         let Some(record_box) = record_box_in_paint_space(job, record, strip_context) else {
             continue;
         };
-        if !overlaps(record_box, box_of) {
+        if !overlaps(record_box, target) && !overlaps(record_box, source) {
             continue;
         }
         if let Some(patch) = patch_in_paint_space(job, record, strip_context)? {
@@ -3236,8 +3226,8 @@ fn paint_snapshot(
             snapshot["feather"] = serde_json::json!(shape.feather.clamp(0.0, MAX_FEATHER_PX));
             snapshot["vertices"] = serde_json::json!(shape.points.len());
         }
-        PaintKind::Clone { heal, offset } => {
-            snapshot["mode"] = serde_json::json!(if heal { "heal" } else { "clone" });
+        PaintKind::Clone { offset } => {
+            snapshot["mode"] = serde_json::json!("clone");
             snapshot["alignment"] = serde_json::json!(paint.alignment);
             // `target − source`, in page percent: the internal direction, which
             // is the negation of the seam's `cloneOffset` (see `clone_offset`).
@@ -3284,9 +3274,10 @@ fn clear_untouched(job: &mut Job, source_idx: usize, region_id: &str) {
         {
             return true;
         }
-        // A held candidate (it records its balloon) was counted as neither.
+        // A held candidate (it records its balloon) was counted as neither,
+        // and a language skip as the gate's ([`run::is_gate_skip`]).
         if record.inside_bubble.is_some() {
-        } else if record.reason.contains("gateSkipped") {
+        } else if run::is_gate_skip(&record.reason) {
             gate_dropped += 1;
         } else {
             declined += 1;
@@ -3608,10 +3599,10 @@ fn half() -> f64 {
 enum PaintKind {
     /// A colour brush. The colour is straight sRGB bytes, from `#rrggbb`.
     Brush { color: [u8; 3] },
-    /// Clone or heal. `offset` is `target − source` in **page percent**, as the
+    /// The clone stamp. `offset` is `target − source` in **page percent**, as the
     /// seam already sends it; `edit` scales it to native pixels, because it is
     /// the only side that knows the page's real size.
-    Clone { heal: bool, offset: (f64, f64) },
+    Clone { offset: (f64, f64) },
     /// A drawn shape filled flat with a chosen colour - Shapes' `solid` mode.
     ///
     /// It is a paint and not a clean, which is why it is here rather than on
@@ -3689,7 +3680,7 @@ fn colour_of(text: Option<&str>) -> [u8; 3] {
     }
 }
 
-/// The stroke's points, from `params.paint.points` or - for `cloneHeal`, whose
+/// The stroke's points, from `params.paint.points` or - for `cloneStamp`, whose
 /// `paint` block is optional - from the `stroke` every drawing tool already
 /// sends, at the default pressure.
 fn paint_points(params: &serde_json::Value, paint: Option<&serde_json::Value>) -> Vec<PaintPoint> {
@@ -3736,17 +3727,11 @@ fn paint_plan(tool: &str, params: &serde_json::Value) -> Option<PaintPlan> {
                     .and_then(|v| v.as_str()),
             ),
         },
-        // **Always real from now on.** The tool has read `cloneSource` and
-        // `cloneOffset` off the seam and thrown them away since it existed;
-        // there is no `mode` gate here because there is no legacy behaviour
-        // worth keeping.
-        "cloneHeal" => {
-            let offset = clone_offset(params)?;
-            PaintKind::Clone {
-                heal: mode != Some("clone"),
-                offset,
-            }
-        }
+        // The stamp copies, and that is all it does: it has no `mode`. A call
+        // that names no source is not a clone and takes the ordinary path.
+        "cloneStamp" => PaintKind::Clone {
+            offset: clone_offset(params)?,
+        },
         // A shape filled with a colour. `solid` is Shapes' own word for it and
         // is deliberately not `fill`, which on that same row names rung 0 -
         // the planar fill, which samples the paper and lays down the tone it
@@ -4433,12 +4418,19 @@ fn untouched_reason(located: &Located, region_id: &str) -> Result<Option<(String
 /// artwork, or a row from before the balloon was recorded), start on the
 /// outside pick; everything else on the in-bubble pick.
 fn untouched_fallback_pick(reason: Option<&str>, inside_bubble: Option<bool>) -> EnginePick {
-    let outside = match reason {
+    if untouched_outside(reason, inside_bubble) { Picks::default().outside } else { Picks::default().bubble }
+}
+
+/// Whether a held-back row is text outside a bubble, by the rule
+/// [`untouched_fallback_pick`] states: it is also the kind a row is approved
+/// as ([`approve_held_mask`]), so the mask shown and the engine a clean
+/// starts on never disagree.
+fn untouched_outside(reason: Option<&str>, inside_bubble: Option<bool>) -> bool {
+    match reason {
         Some(r) if crate::library::is_candidate_reason(r) => inside_bubble != Some(true),
         Some(r) => r.contains("OutsideBubble") || r.contains("outside-bubble"),
         None => false,
-    };
-    if outside { Picks::default().outside } else { Picks::default().bubble }
+    }
 }
 
 /// `createRegion` - a region drawn where the detector found nothing.
@@ -4726,21 +4718,7 @@ fn edit_detection_mask_at(
             };
             updated.push(cleaner_core::project::LoadedDetection { record, mask, ink, evidence: None, base });
         }
-        let order = job
-            .project
-            .detections
-            .iter()
-            .filter(|record| record.source_idx == source_idx)
-            .map(|record| record.order)
-            .chain(
-                job.project
-                    .patches
-                    .iter()
-                    .filter(|record| record.source_idx == source_idx)
-                    .map(|record| record.order),
-            )
-            .max()
-            .map_or(0, |order| order.saturating_add(1));
+        let order = order_after_page(&job, source_idx);
         let created = plan
             .created
             .map(|mask| cleaner_core::project::LoadedDetection {
@@ -4761,6 +4739,140 @@ fn edit_detection_mask_at(
         .map(|page| page.status.to_owned())
         .unwrap_or_default();
     Ok(Some(edit))
+}
+
+/// The order a detection added to a page takes: after every detection and
+/// patch the page holds.
+fn order_after_page(job: &Job, source_idx: usize) -> u32 {
+    job.project
+        .detections
+        .iter()
+        .filter(|record| record.source_idx == source_idx)
+        .map(|record| record.order)
+        .chain(
+            job.project
+                .patches
+                .iter()
+                .filter(|record| record.source_idx == source_idx)
+                .map(|record| record.order),
+        )
+        .max()
+        .map_or(0, |order| order.saturating_add(1))
+}
+
+/// `approveHeldMask`'s answer: the detection the held row became, and the
+/// page's status with it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovedMask {
+    pub region_id: String,
+    pub page_status: String,
+}
+
+/// `approveHeldMask`: store a region the run held back (the script gate's, or
+/// a held candidate) as a detected region, on the user's say-so. **Nothing is
+/// cleaned**: the row becomes a detection in one write, so its mask shows on
+/// the page, can be edited and padded, and a later Clean, here or on the
+/// cloud GPU, takes it with the rest. `cleanAnyway` is the other answer to
+/// the same row, and cleans it at once.
+///
+/// The mask is the lettering the run held with the row, grown by
+/// `padding_px` as Detect grows a seed ([`set_detection_padding`], merges
+/// included). A row stored before rows kept lettering looks under its box
+/// with the detector, and takes the box itself where that finds nothing, as
+/// [`existing_geometry`] does for a clean. Nothing was fitted, so the record
+/// is a hand mask's ([`hand_detection`]) with the row's own kind
+/// ([`untouched_outside`]) and the pick a clean of it would have started on.
+///
+/// `null` for a region that is not a held row on this page. No undo: deleting
+/// the detection is the way back, as for every detection.
+#[tauri::command]
+pub async fn approve_held_mask(
+    app: tauri::AppHandle,
+    region_id: String,
+    padding_px: Option<u32>,
+) -> Result<Option<ApprovedMask>, String> {
+    crate::library::blocking(move || {
+        let library = Library::for_app(&app)?;
+        let Some(located) = locate_region(&library, &region_id)? else {
+            return Ok(None);
+        };
+        // The bench opens only for a row with no lettering of its own.
+        approve_held_mask_at(&located, &region_id, padding_px.unwrap_or(0),
+            |page, rect, source| Bench::open(&app).text_under(page, rect, source))
+    })
+    .await
+}
+
+/// The command's body, from a region already located. `text_under` is the
+/// detector's answer under a box ([`Bench::text_under`]), asked only when the
+/// row kept no lettering.
+fn approve_held_mask_at(
+    located: &Located,
+    region_id: &str,
+    padding: u32,
+    text_under: impl FnOnce(&Raster, Rect, &str) -> Option<(Mask, f32)>,
+) -> Result<Option<ApprovedMask>, String> {
+    if padding > cleaner_core::constants::MAX_MASK_PADDING {
+        return Err("mask_padding_invalid".to_owned());
+    }
+    let created = {
+        let _lock = run::lock_job(&located.job_path)?;
+        let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+        let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else {
+            return Ok(None);
+        };
+        let page_id = job_page_id(region_id);
+        let Some(row) = job.project.regions_untouched.iter()
+            .find(|record| record.source_idx == source_idx && untouched_id(page_id, record.bbox) == region_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let lettering = match job.load_held_lettering(&row).map_err(|e| e.to_string())? {
+            Some((lettering, _)) => lettering,
+            None => {
+                let Some(path) = job.source_path(source_idx) else {
+                    return Ok(None);
+                };
+                let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let page = job.display_page(source_idx, &bytes).map_err(|e| e.to_string())?;
+                let source = &job.project.sources[source_idx];
+                let rect = source.orientation.rect(row.bbox, source.w, source.h);
+                text_under(&page, rect, &sha256_hex(&bytes))
+                    .map_or_else(|| Mask::filled(clamped(rect, &page)), |(seed, _)| seed)
+            }
+        };
+        // Stored cropped to its tight bounds, as every detection's mask is.
+        let Some(mask) = tight(&lettering) else {
+            return Ok(None);
+        };
+        let outside = untouched_outside(Some(&row.reason), row.inside_bubble);
+        let record = cleaner_core::project::DetectedRegion {
+            inside: !outside,
+            pick: run::pick_name(untouched_fallback_pick(Some(&row.reason), row.inside_bubble)).to_owned(),
+            ..hand_detection(source_idx, mask.bounds, order_after_page(&job, source_idx))
+        };
+        // The row leaves in the write that names the detection, or the page
+        // would list the warning beside the mask that answered it.
+        clear_untouched(&mut job, source_idx, region_id);
+        let page_id = crate::library::page_id(&located.chapter_id, located.page_index);
+        job.rewrite_page_detections(source_idx, &page_id, Vec::new(), vec![cleaner_core::project::LoadedDetection {
+            record, ink: mask.clone(), mask, evidence: None, base: None,
+        }], &[]).map_err(|e| e.to_string())?.into_iter().next()
+    };
+    let Some(created) = created else {
+        return Ok(None);
+    };
+    if padding > 0 {
+        set_detection_padding_scoped_at(located, Some(located.page_index), padding, Some(&created))?;
+    }
+    let _lock = run::lock_job(&located.job_path)?;
+    let job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+    let page_status = crate::library::page_of(&located.chapter_id, &job.project, located.page_index)
+        .map(|page| page.status.to_owned())
+        .unwrap_or_default();
+    Ok(Some(ApprovedMask { region_id: created, page_status }))
 }
 
 /// `setDetectionPadding`: grow every stored detection on a page, or on every
@@ -5614,7 +5726,8 @@ fn rerun_mask_at(
                 "brush" => "brush",
                 "shapes" => "shapes",
                 "aiMaskBrush" => "aiMaskBrush",
-                "cloneHeal" => "cloneHeal",
+                // A project saved before the stamp lost its heal mode.
+                "cloneStamp" | "cloneHeal" => "cloneStamp",
                 _ => "aiMaskBrush",
             }),
             page_status,
@@ -5747,7 +5860,9 @@ fn tool_label_key(tool: &str) -> &'static str {
         "brush" => "tools.name.brush",
         "shapes" => "tools.name.shapes",
         "aiMaskBrush" => "tools.name.aiMaskBrush",
-        "cloneHeal" => "tools.name.cloneHeal",
+        // `cloneHeal` is what the stamp was called in projects saved before it
+        // lost its heal mode; their strokes are still clone strokes.
+        "cloneStamp" | "cloneHeal" => "tools.name.cloneStamp",
         _ => "tools.name.aiMaskBrush",
     }
 }
@@ -5816,23 +5931,24 @@ fn current_region(
 }
 
 /// Cap the native working window and dab count before allocating the preview.
-/// Clone/heal composites the union of target and source, not just the stroke.
+/// A clone composites its stroke's box twice, once where it lands and once
+/// where it reads, however far apart the two are.
 fn paint_preview_fits(paint: &PaintPlan, width: u32, height: u32) -> bool {
     if paint.points.is_empty() || paint.points.len() > 8192 { return false; }
     let points: Vec<(f64,f64)> = paint.points.iter().map(|p|
         (p.x * width as f64 / 100.0, p.y * height as f64 / 100.0)).collect();
     if points.iter().any(|(x,y)| !x.is_finite() || !y.is_finite()) { return false; }
     let radius = paint.spec.size * 2.0;
-    let (offset_x, offset_y) = match paint.kind {
-        PaintKind::Clone { offset, .. } => (offset.0.abs() * width as f64 / 100.0, offset.1.abs() * height as f64 / 100.0),
+    let windows = match paint.kind {
+        PaintKind::Clone { .. } => 2.0,
         PaintKind::Shape { .. } => return false,
-        _ => (0.0,0.0),
+        PaintKind::Brush { .. } => 1.0,
     };
     let extent = |axis: usize| {
         let values = points.iter().map(|p| if axis == 0 {p.0} else {p.1});
         values.clone().fold(f64::NEG_INFINITY, f64::max) - values.fold(f64::INFINITY, f64::min) + radius
     };
-    let area = (extent(0) + offset_x).min(width as f64) * (extent(1) + offset_y).min(height as f64);
+    let area = extent(0).min(width as f64) * extent(1).min(height as f64) * windows;
     let length: f64 = points.windows(2).map(|p| (p[1].0-p[0].0).hypot(p[1].1-p[0].1)).sum();
     let step = (paint.spec.size * paint.spec.spacing.clamp(1.0,50.0)/100.0).max(0.01);
     let dabs = 1.0 + length / step;
@@ -6532,6 +6648,105 @@ mod tests {
             Geometry::Detected(rect) if rect == bounds));
     }
 
+    /// A held row on a blank 128 px page, with the lettering a run would have
+    /// kept beside it (`None` for a row stored before rows kept any).
+    fn held_row_fixture(name: &str, bbox: Rect, reason: &str, lettering: Option<&Mask>) -> (Located, String) {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128;
+        raw.height = 128;
+        raw.data = vec![200; 128 * 128];
+        let (_root, _library, located) = command_fixture(name, &raw);
+        let mut job = Job::open(&located.job_path).unwrap();
+        job.project.counters.gate_dropped = 1;
+        job.leave_untouched_rows(vec![cleaner_core::project::PendingUntouched {
+            row: cleaner_core::project::RegionUntouched {
+                source_idx: 0, bbox, reason: reason.to_owned(), inside_bubble: None, lettering: None,
+            },
+            lettering: lettering.map(|mask| (mask.clone(), 0.5)),
+        }]).unwrap();
+        let region_id = untouched_id(&format!("{}-p001", located.chapter_id), bbox);
+        (located, region_id)
+    }
+
+    /// Two glyph blobs at the ends of their box, whose middle is paper.
+    fn two_glyphs() -> Mask {
+        let mut lettering = Mask::empty(Rect::new(20, 20, 40, 10));
+        for x0 in [20, 54] {
+            for y in 20..30 {
+                for x in x0..x0 + 6 {
+                    lettering.set(x, y, true);
+                }
+            }
+        }
+        lettering
+    }
+
+    /// Approving a held mask stores the lettering the run kept as a detection,
+    /// with no detector and nothing cleaned: the row leaves with its count,
+    /// and the detection is typed and picked as a clean of the row would start.
+    #[test]
+    fn approving_a_held_mask_stores_its_lettering_as_a_detection() {
+        let lettering = two_glyphs();
+        let (located, region_id) = held_row_fixture("approve-held-mask", Rect::new(16, 16, 48, 18),
+            "review.reason.gateSkippedOutsideBubble", Some(&lettering));
+        let approved = approve_held_mask_at(&located, &region_id, 0,
+            |_, _, _| panic!("a row with lettering asks no detector")).unwrap().expect("approved");
+
+        let job = Job::open(&located.job_path).unwrap();
+        assert!(job.project.regions_untouched.is_empty());
+        assert_eq!(job.project.counters.gate_dropped, 0);
+        assert!(job.project.patches.is_empty(), "nothing is cleaned");
+        let found = job.load_detection(&approved.region_id).unwrap().expect("stored");
+        assert_eq!((&found.mask, &found.ink), (&lettering, &lettering), "the glyphs, not the box");
+        assert_eq!((found.record.bbox, found.record.inside, found.record.pick.as_str(), found.record.padding_px),
+            (lettering.bounds, false, "lama", 0));
+        assert_eq!(approved.page_status, "detected");
+        // The row is gone, so a second press finds nothing to approve.
+        assert!(approve_held_mask_at(&located, &region_id, 0, |_, _, _| None).unwrap().is_none());
+    }
+
+    /// The padding asked for grows the approved mask from its lettering, as
+    /// Detect grows a seed, and a row the gate held inside a balloon is stored
+    /// as speech bubble text on the bubble pick.
+    #[test]
+    fn an_approved_mask_takes_the_padding_and_the_rows_own_kind() {
+        let lettering = two_glyphs();
+        let (located, region_id) = held_row_fixture("approve-held-padded", Rect::new(16, 16, 48, 18),
+            "review.reason.gateSkippedNotJapanese", Some(&lettering));
+        assert_eq!(approve_held_mask_at(&located, &region_id, cleaner_core::constants::MAX_MASK_PADDING + 1,
+            |_, _, _| None).unwrap_err(), "mask_padding_invalid");
+        let approved = approve_held_mask_at(&located, &region_id, 3, |_, _, _| None).unwrap().expect("approved");
+
+        let job = Job::open(&located.job_path).unwrap();
+        let found = job.load_detection(&approved.region_id).unwrap().expect("stored");
+        assert_eq!(found.mask, lettering.dilated(3, 128, 128));
+        assert_eq!((found.record.inside, found.record.pick.as_str(), found.record.padding_px), (true, "fill", 3));
+        let (base, _) = job.load_detection_base(&approved.region_id).unwrap().expect("ungrown pair");
+        assert_eq!(base, lettering, "a later padding grows from the glyphs again");
+    }
+
+    /// A row stored before rows kept lettering looks under its box with the
+    /// detector, and takes the box itself where that finds nothing.
+    #[test]
+    fn a_held_row_without_lettering_is_approved_from_under_its_box() {
+        let bounds = Rect::new(20, 20, 12, 8);
+        for (name, seed) in [("seed", Some(Mask::filled(Rect::new(22, 22, 4, 4)))), ("box", None)] {
+            let (located, region_id) = held_row_fixture(&format!("approve-held-old-{name}"), bounds,
+                "review.reason.languageSkipped", None);
+            let mut asked = None;
+            let approved = approve_held_mask_at(&located, &region_id, 0, |page, rect, _| {
+                asked = Some((page.width, rect));
+                seed.clone().map(|mask| (mask, 1.0))
+            }).unwrap().expect("approved");
+            assert_eq!(asked, Some((128, bounds)), "{name}");
+            let job = Job::open(&located.job_path).unwrap();
+            let found = job.load_detection(&approved.region_id).unwrap().expect("stored");
+            assert_eq!(found.mask, seed.unwrap_or_else(|| Mask::filled(bounds)), "{name}");
+            // A language skip was counted as the gate's, and leaves that count.
+            assert_eq!((job.project.counters.gate_dropped, job.project.counters.declined), (0, 0), "{name}");
+        }
+    }
+
     #[test]
     fn gated_review_solid_choice_keeps_the_selected_color() {
         let raw = cleaner_core::image::fixtures::by_name("l8").raster;
@@ -6596,9 +6811,9 @@ mod tests {
         }
         let target = Rect::new(64, 34, 16, 16);
         let mut plan = fixture_plan("b", Geometry::Given(target), Engine::Clone, target);
-        plan.tool = Some("cloneHeal".into());
+        plan.tool = Some("cloneStamp".into());
         plan.paint = Some(PaintPlan {
-            kind: PaintKind::Clone { heal: false, offset: (40.0 / 128.0 * 100.0, 0.0) },
+            kind: PaintKind::Clone { offset: (40.0 / 128.0 * 100.0, 0.0) },
             points: vec![PaintPoint { x: 72.0 / 128.0 * 100.0,
                 y: 42.0 / 128.0 * 100.0, p: 1.0 }],
             spec: cleaner_core::paint::BrushSpec {
@@ -7397,16 +7612,24 @@ mod tests {
     }
 
     #[test]
-    fn paint_preview_limits_include_clone_source_window_and_dab_work() {
+    fn paint_preview_limits_count_both_clone_windows_and_dab_work() {
         let mut paint = PaintPlan {
             kind: PaintKind::Brush { color: [128; 3] },
             points: vec![PaintPoint { x: 50.0, y: 50.0, p: 1.0 }],
             spec: cleaner_core::paint::BrushSpec::default(), alignment: "aligned",
         };
         assert!(paint_preview_fits(&paint, 10000, 10000));
-        paint.kind = PaintKind::Clone { heal: true, offset: (80.0,80.0) };
+        // A source across the page costs no more than one beside the stroke:
+        // the two windows are composited apart, not as the box around both.
+        paint.kind = PaintKind::Clone { offset: (80.0,80.0) };
+        assert!(paint_preview_fits(&paint, 10000, 10000));
+        // But there are two of them, so a stroke that just fits as paint is
+        // too much as a clone.
+        paint.points.push(PaintPoint { x: 65.0, y: 68.0, p: 1.0 });
         assert!(!paint_preview_fits(&paint, 10000, 10000));
         paint.kind = PaintKind::Brush { color: [128;3] };
+        assert!(paint_preview_fits(&paint, 10000, 10000));
+        paint.points.pop();
         paint.spec.size = 1.0;
         paint.spec.spacing = 1.0;
         paint.points.push(PaintPoint { x: 60.0,y: 50.0,p: 1.0 });
@@ -7418,7 +7641,7 @@ mod tests {
         let strip = cleaner_core::strip::Strip::of_sizes(&[(100,100),(100,100)]);
         let anchor = strip.pages()[0];
         let mut paint = PaintPlan {
-            kind: PaintKind::Clone { heal: true, offset: (0.0,-30.0) },
+            kind: PaintKind::Clone { offset: (0.0,-30.0) },
             points: vec![PaintPoint { x:50.0,y:95.0,p:1.0 }],
             spec: cleaner_core::paint::BrushSpec::default(), alignment: "aligned",
         };
@@ -8257,40 +8480,32 @@ mod tests {
         assert_eq!(paint_plan("brush", &params).unwrap().spec.size, 18.0);
     }
 
-    /// The `paint` block is optional for `cloneHeal`, and the fallback is the
+    /// The `paint` block is optional for `cloneStamp`, and the fallback is the
     /// stroke every drawing tool already sends, at the default pressure - which
     /// is `0.5` and not `1.0`, because a device that says nothing about pressure
     /// is not a device pressing hardest.
     #[test]
-    fn clone_heal_falls_back_to_the_stroke_at_the_default_pressure() {
+    fn the_clone_stamp_falls_back_to_the_stroke_at_the_default_pressure() {
         let params = serde_json::json!({
             "stroke": { "points": [{ "x": 10.0, "y": 20.0 }, { "x": 12.0, "y": 22.0 }], "radius": 6.0 },
             "cloneOffset": { "x": -4.0, "y": 3.0 },
         });
-        let plan = paint_plan("cloneHeal", &params).unwrap();
+        let plan = paint_plan("cloneStamp", &params).unwrap();
         assert_eq!(plan.points.len(), 2);
         assert!(plan.points.iter().all(|p| p.p == 0.5));
-        // No `mode` word means heal, which is the tool's own default. The offset
-        // is the seam's, negated - see the sign test below.
+        // The offset is the seam's, negated - see the sign test below.
         assert_eq!(
             plan.kind,
-            PaintKind::Clone {
-                heal: true,
-                offset: (4.0, -3.0)
-            }
+            PaintKind::Clone { offset: (4.0, -3.0) }
         );
 
         let cloning = serde_json::json!({
-            "mode": "clone",
             "stroke": { "points": [{ "x": 10.0, "y": 20.0 }], "radius": 6.0 },
             "cloneOffset": { "x": 1.5, "y": -2.5 },
         });
         assert_eq!(
-            paint_plan("cloneHeal", &cloning).unwrap().kind,
-            PaintKind::Clone {
-                heal: false,
-                offset: (-1.5, 2.5)
-            }
+            paint_plan("cloneStamp", &cloning).unwrap().kind,
+            PaintKind::Clone { offset: (-1.5, 2.5) }
         );
     }
 
@@ -8313,12 +8528,11 @@ mod tests {
         assert_eq!(seam, (-20.0, -25.0));
 
         let params = serde_json::json!({
-            "mode": "clone",
             "stroke": { "points": [{ "x": stroke_start.0, "y": stroke_start.1 }], "radius": 6.0 },
             "cloneOffset": { "x": seam.0, "y": seam.1 },
         });
-        let PaintKind::Clone { offset, .. } = paint_plan("cloneHeal", &params).unwrap().kind else {
-            panic!("a cloneHeal call is a clone plan");
+        let PaintKind::Clone { offset, .. } = paint_plan("cloneStamp", &params).unwrap().kind else {
+            panic!("a cloneStamp call is a clone plan");
         };
         assert_eq!(offset, (20.0, 25.0), "the seam's sign was not turned round");
 
@@ -8334,16 +8548,12 @@ mod tests {
         // And the `cloneSource` fallback lands on the same internal value, so
         // the two routes into `clone_offset` cannot disagree about direction.
         let by_source = serde_json::json!({
-            "mode": "clone",
             "stroke": { "points": [{ "x": stroke_start.0, "y": stroke_start.1 }], "radius": 6.0 },
             "cloneSource": { "x": alt_click.0, "y": alt_click.1 },
         });
         assert_eq!(
-            paint_plan("cloneHeal", &by_source).unwrap().kind,
-            PaintKind::Clone {
-                heal: false,
-                offset: (20.0, 25.0)
-            }
+            paint_plan("cloneStamp", &by_source).unwrap().kind,
+            PaintKind::Clone { offset: (20.0, 25.0) }
         );
     }
 
@@ -8357,21 +8567,18 @@ mod tests {
             "stroke": { "points": [{ "x": 30.0, "y": 40.0 }], "radius": 6.0 },
             "cloneSource": { "x": 10.0, "y": 15.0 },
         });
-        let plan = paint_plan("cloneHeal", &params).unwrap();
+        let plan = paint_plan("cloneStamp", &params).unwrap();
         // `strokeStart − cloneSource` is already the internal `target − source`,
         // so this route is *not* negated a second time.
         assert_eq!(
             plan.kind,
-            PaintKind::Clone {
-                heal: true,
-                offset: (20.0, 25.0)
-            }
+            PaintKind::Clone { offset: (20.0, 25.0) }
         );
 
         let bare = serde_json::json!({
             "stroke": { "points": [{ "x": 30.0, "y": 40.0 }], "radius": 6.0 },
         });
-        assert_eq!(paint_plan("cloneHeal", &bare), None);
+        assert_eq!(paint_plan("cloneStamp", &bare), None);
     }
 
     /// A stroke with no points is not a plan. Nothing downstream has an answer
@@ -8436,10 +8643,7 @@ mod tests {
         let anchor = strip.pages()[0];
         let target = Rect::new(20, 80, 30, 10);
         let paint = PaintPlan {
-            kind: PaintKind::Clone {
-                heal: false,
-                offset: (0.0, -30.0),
-            },
+            kind: PaintKind::Clone { offset: (0.0, -30.0) },
             points: Vec::new(),
             spec: cleaner_core::paint::BrushSpec::default(),
             alignment: "aligned",
@@ -8548,13 +8752,12 @@ mod tests {
         }
 
         let clone_params = serde_json::json!({
-            "mode": "clone",
             "alignment": "nonAligned",
             "stroke": { "points": [{ "x": 3.0, "y": 4.0 }], "radius": 5.0 },
             "cloneOffset": { "x": 2.0, "y": -1.0 },
         });
-        let paint = paint_plan("cloneHeal", &clone_params).unwrap();
-        let plan = plan_of(paint.clone(), "cloneHeal");
+        let paint = paint_plan("cloneStamp", &clone_params).unwrap();
+        let plan = plan_of(paint.clone(), "cloneStamp");
         let snapshot = paint_snapshot(
             &plan,
             &paint,
@@ -9337,7 +9540,7 @@ mod tests {
             assert_eq!((page.width,page.height),(visible.width,visible.height));
             let shown=decode(&crate::tile::render(job.path(),0,crate::tile::Variant::Source,None).unwrap()).unwrap();
             assert_eq!(shown.data,cleaner_core::image::proxy::display(&visible).unwrap().data);
-            let paint=PaintPlan {kind:PaintKind::Clone{heal:false,offset:(10.0,0.0)},points:vec![PaintPoint{x:50.0,y:50.0,p:1.0}],spec:cleaner_core::paint::BrushSpec{size:8.0,hardness:100.0,opacity:100.0,..Default::default()},alignment:"aligned"};
+            let paint=PaintPlan {kind:PaintKind::Clone{offset:(10.0,0.0)},points:vec![PaintPoint{x:50.0,y:50.0,p:1.0}],spec:cleaner_core::paint::BrushSpec{size:8.0,hardness:100.0,opacity:100.0,..Default::default()},alignment:"aligned"};
             let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(Rect::new(1,1,2,2)),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("clone".into()),fill_mode:None,clears_untouched:false,paint:Some(paint),requested:None,stroke:None,drawn:None};
             let outcome=edit_with_bench(&mut test_bench(&root),Engine::Fill,&located,plan).unwrap();
             assert!(matches!(outcome,Outcome::Cleaned(_)),"orientation {value}");

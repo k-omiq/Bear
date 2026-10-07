@@ -111,6 +111,16 @@ describe('the Tauri adapter', () => {
     })
   })
 
+  it('sends a mask approval by region id, with the padding or null', async () => {
+    const answer = { regionId: 'c1-p001-d4', pageStatus: 'detected' }
+    const invoke = vi.fn().mockResolvedValue(answer)
+    const backend = createTauriBackend({ fallback: recordingFallback(), invoke })
+    expect(await backend.approveHeldMask({ regionId: 'c1-p001-u1-2-3-4', paddingPx: 6 })).toEqual(answer)
+    expect(invoke).toHaveBeenCalledWith('approve_held_mask', { regionId: 'c1-p001-u1-2-3-4', paddingPx: 6 })
+    await backend.approveHeldMask({ regionId: 'c1-p001-u1-2-3-4' })
+    expect(invoke).toHaveBeenLastCalledWith('approve_held_mask', { regionId: 'c1-p001-u1-2-3-4', paddingPx: null })
+  })
+
   it('sends a text type change by region id and the one flag', async () => {
     const answer = { id: 'c1-p001-d1', outcome: 'detected', insideBubble: false }
     const invoke = vi.fn().mockResolvedValue(answer)

@@ -464,14 +464,15 @@ describe('tool parameters defaults', () => {
     })
   })
 
-  it('initializes cloneHeal with opacity and flow', () => {
-    expect(editor.toolParams.cloneHeal).toMatchObject({
+  // A stamp that copies exactly is the default: full opacity and flow, aligned.
+  it('initializes the clone stamp as a plain aligned copy', () => {
+    expect(editor.toolParams.cloneStamp).toEqual({
       size: 32,
-      hardness: 60,
+      hardness: 50,
+      spacing: 12,
       opacity: 100,
       flow: 100,
       alignment: 'aligned',
-      mode: 'heal',
     })
   })
 
@@ -1040,7 +1041,7 @@ describe('the tool slots', () => {
   })
 
   it('numbers the six tools in rail order, the selection tool last', () => {
-    expect([...TOOLS]).toEqual(['autoClean', 'brush', 'shapes', 'aiMaskBrush', 'cloneHeal', 'maskSelect'])
+    expect([...TOOLS]).toEqual(['autoClean', 'brush', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect'])
   })
 
   it('arms the selection tool from slot 6, and nothing from a slot past it', () => {

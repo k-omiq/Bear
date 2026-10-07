@@ -52,7 +52,7 @@ export const TOOLS = /** @type {const} */ ([
   'brush',
   'shapes',
   'aiMaskBrush',
-  'cloneHeal',
+  'cloneStamp',
   'maskSelect',
 ])
 
@@ -128,13 +128,13 @@ function defaultToolParams() {
     // The AI mask brush defaults to the local LaMa Manga model.
     aiMaskBrush: { engine: 'lama', size: 36 },
     contentAwareFill: { fillMode: 'match-surround', engine: 'local' },
-    cloneHeal: {
+    cloneStamp: {
       size: 32,
-      hardness: 60,
+      hardness: 50,
+      spacing: 12,
       opacity: 100,
       flow: 100,
       alignment: 'aligned',
-      mode: 'heal',
     },
     // The selection tool edits the detected masks Clean erases: it adds by
     // default, with a round brush.
@@ -1549,7 +1549,7 @@ export async function startRun(scope = 'page', { cloudGrant = null, mode = 'auto
  *
  * @param {Record<string, unknown>} params
  */
-function paddingOf(params) {
+export function paddingOf(params) {
   return Math.round(numberIn(Number(params.maskPadding ?? 0), { min: 0, max: MAX_MASK_PADDING, fallback: 0 }))
 }
 
@@ -2207,7 +2207,7 @@ export function cancelInteraction() {
   // tool: nothing else could clear it, and for every other tool Escape has to
   // go on meaning "drop what is selected". The source marker vanishing from
   // the page is the confirmation.
-  if (editor.tool === 'cloneHeal' && clearCloneSource()) return true
+  if (editor.tool === 'cloneStamp' && clearCloneSource()) return true
   let cancelled = false
   if (editor.originalPinned || editor.originalVisible) {
     editor.originalPinned = false

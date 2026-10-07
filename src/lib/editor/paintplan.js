@@ -269,9 +269,8 @@ export function nativePoints(points, pageWidth, pageHeight) {
  * The `BrushSpec` a tool's parameter object describes.
  *
  * The defaults are `src/lib/editor/paint.js#paintParamsOf`'s, so the preview
- * plans the stroke the seam will carry rather than a similar one. Clone / heal
- * carries no `spacing` or `hardness` of its own beyond the two its tool spec
- * declares, and `pressureSize` / `pressureOpacity` are hardcoded on both sides
+ * plans the stroke the seam will carry rather than a similar one. The clone
+ * stamp carries the same rows, and `pressureSize` / `pressureOpacity` are hardcoded on both sides
  * in Phase 1.
  *
  * @param {Record<string, unknown>} params

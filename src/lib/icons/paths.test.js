@@ -22,7 +22,7 @@ const REQUIRED = [
   // bar's own controls.
   'shape-rect', 'shape-ellipse', 'shape-line', 'shape-lasso', 'shape-polygon',
   'book', 'sliders', 'play', 'stop', 'link',
-  'link-off', 'bandage',
+  'link-off',
   // Onboarding and Settings: ratings, and a download's pause.
   'star', 'star-filled', 'pause', 'download',
   // The selection tool on the rail, and its add and remove modes.

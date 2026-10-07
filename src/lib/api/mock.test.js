@@ -984,7 +984,7 @@ describe('paint and clone engine integration in mock backend', () => {
     expect(result.region.mask?.provenance.engine).toBe('paint')
   })
 
-  it('creates a region with engine clone for cloneHeal tool', async () => {
+  it('creates a region with engine clone for cloneStamp tool', async () => {
     const { backend } = makeBackend()
     const opened = await settle(
       backend.openChapter({ projectId: 'tsuki-to-hane', chapterId: CHAPTER }),
@@ -994,9 +994,8 @@ describe('paint and clone engine integration in mock backend', () => {
         chapterId: opened.chapter.id,
         pageIndex: 0,
         bbox: { x: 10, y: 10, w: 20, h: 20 },
-        tool: 'cloneHeal',
+        tool: 'cloneStamp',
         params: {
-          mode: 'heal',
           alignment: 'aligned',
           opacity: 90,
           flow: 80,
@@ -1011,7 +1010,7 @@ describe('paint and clone engine integration in mock backend', () => {
       }),
     )
     expect(result).not.toBeNull()
-    expect(result.region.tool).toBe('cloneHeal')
+    expect(result.region.tool).toBe('cloneStamp')
     expect(result.region.mask?.provenance.engine).toBe('clone')
   })
 })
@@ -1056,8 +1055,8 @@ describe('layer style in the mock backend', () => {
 
   it('keeps a clone blend where it was made, and still fades it', async () => {
     const { backend } = makeBackend()
-    const { region } = await stroke(backend, 'cloneHeal', {
-      mode: 'heal', alignment: 'aligned', opacity: 90, flow: 80, cloneSource: { x: 50, y: 50 }, cloneOffset: { x: 40, y: 40 },
+    const { region } = await stroke(backend, 'cloneStamp', {
+      alignment: 'aligned', opacity: 90, flow: 80, cloneSource: { x: 50, y: 50 }, cloneOffset: { x: 40, y: 40 },
     })
     await expect(settle(backend.setLayerStyle({ regionId: region.id, layer: { offsetX: 5 } })))
       .rejects.toThrow('masks.refused.fixed')

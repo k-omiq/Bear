@@ -590,7 +590,7 @@ export const ko = {
       saved: '{id} (저장됨)',
     },
     cloneSource: {
-      label: '복제 / 복구 소스',
+      label: '복제 소스',
       name: {
         alt: 'Option 또는 Alt',
         meta: 'Command 또는 Windows 키',
@@ -1215,6 +1215,7 @@ export const ko = {
       histogram: '주변 종이의 톤과 맞는 엔진이 없음',
       tooLarge: '영역이 인페인터가 처리할 수 있는 크기보다 큼',
       unrepresentableMode: '이 파일의 색상 모드로는 인페인팅 결과를 담을 수 없음',
+      cloneSourceOutside: "복제 소스가 페이지 밖에 있습니다",
       paintUnsupportedColor: "이 파일의 색상 정보로는 색상 관리 페인팅을 사용할 수 없습니다",
       paintUnsupportedMode: '이 파일의 색상 모드로는 페인팅이나 복제 결과를 담을 수 없음',
       unrepresentableDepth: '이 파일은 샘플당 1비트라 인페인팅 결과를 담을 수 없음',
@@ -1849,6 +1850,7 @@ export const ko = {
       cleanAnyway: '그래도 클린',
       cleanDetected: '클린',
       cleanDetectedCloud: '클라우드 GPU에서 클린',
+      approveMask: '마스크 승인',
       approve: '승인 후 클린',
       opacity: '레이어 불투명도',
       locked: '위치 잠금',
@@ -1905,7 +1907,7 @@ export const ko = {
       shapes: '도형',
       aiMaskBrush: 'AI 마스크 브러시',
       contentAwareFill: '내용 인식 채우기',
-      cloneHeal: '복제 / 복구',
+      cloneStamp: '복제 도장',
       maskSelect: '선택',
     },
     hint: {
@@ -1913,7 +1915,7 @@ export const ko = {
       brush: '드래그해 칠하기',
       shapes: '페이지에서 드래그',
       aiMaskBrush: '텍스트 위로 긋기',
-      cloneHeal: '{cloneSourceModifier}+클릭으로 소스 지정',
+      cloneStamp: '{cloneSourceModifier}+클릭으로 소스 지정',
       maskSelect: '클린이 지울 영역에 추가 또는 제거',
     },
     label: {
@@ -2009,8 +2011,6 @@ export const ko = {
       engineCloudSettings: '클라우드 설정 열기',
       aligned: '정렬됨',
       nonAligned: '정렬 안 됨',
-      clone: '복제',
-      heal: '복구',
       maskAdd: '선택 영역에 추가',
       maskRemove: '선택 영역에서 제거',
       brush: '브러시',
@@ -2296,10 +2296,11 @@ export const ko = {
       paddingFailed: '마스크 여백을 바꾸지 못했습니다. 마스크는 그대로입니다.',
       paddingRefreshFailed: '마스크 여백은 저장되었지만 페이지를 새로 고치지 못했습니다. 챕터를 다시 열어 변경된 마스크를 확인하세요.',
       typeFailed: '텍스트 유형을 바꾸지 못했습니다. 영역은 그대로입니다.',
+      approveFailed: '마스크를 승인하지 못했습니다. 영역은 그대로입니다.',
     },
     tool: {
       cloneSourceSet: '복제 소스를 샘플링했습니다. 칠하면 그곳에서 복사합니다.',
-      cloneNeedsSource: '먼저 Alt+클릭으로 소스를 지정하세요. 복제와 복구는 다른 곳에서 복사해 옵니다.',
+      cloneNeedsSource: '먼저 {cloneSourceModifier}+클릭으로 소스를 지정하세요. 도장은 그곳에서 복사합니다.',
     },
     gate: {
       cleanedAnyway: '문자 판별기와 관계없이 클린했습니다.',

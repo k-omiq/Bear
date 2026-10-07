@@ -44,6 +44,8 @@ import {
   claimRunStart,
   editor,
   holdsRegion,
+  hover,
+  paddingOf,
   recordRegionEdit,
   replaceRegion,
   pageStatusOf,
@@ -393,6 +395,54 @@ export async function cleanAnyway(region, chosenEngine) {
     pageStatus: result.pageStatus,
   }, chapterId)
   if (open) refreshPage(pageIndexOf(region.id))
+  return true
+}
+
+/**
+ * Approve a held region's mask: store the region the script gate held back,
+ * or a held candidate, as a detected region (docs/detect-clean.md §3,
+ * `approve_held_mask`). **Nothing is cleaned.** Its mask shows on the page
+ * like every detection's, the Selection tool edits it, and a later Clean,
+ * here or on the cloud GPU, takes it with the rest. `cleanAnyway` is the
+ * other answer to the same row, and cleans it at once on this computer.
+ *
+ * The mask is grown by Text cleanup's Mask padding, as a Detect run grows
+ * the masks beside it. The detection is a new region with its own id, so the
+ * page is read again and the selection follows the mask. Like every edit of
+ * a detection it is not undoable; deleting the detection is the way back.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @returns {Promise<boolean>} whether the region became a detection
+ */
+export async function approveHeldMask(region) {
+  if (region?.outcome !== 'gate-skipped' && region?.outcome !== 'candidate') return false
+  const chapterId = editor.chapter?.id ?? null
+  const pageIndex = pageIndexOf(region.id)
+  if (!chapterId || pageIndex === null) return false
+  /** @type {Awaited<ReturnType<import('../api/backend.js').Backend['approveHeldMask']>>} */
+  let result
+  try {
+    result = await getBackend().approveHeldMask({
+      regionId: region.id,
+      paddingPx: paddingOf(/** @type {any} */ (editor.toolParams.autoClean ?? {})),
+    })
+  } catch (error) {
+    console.error('a mask approval was rejected', error)
+    if (!reportJobConflict(error)) notify({ key: 'notice.mask.approveFailed', tone: 'warn' })
+    return false
+  }
+  if (!result) return false
+  if (!stillOpen(chapterId)) return true
+  try {
+    await reloadPage(pageIndex)
+  } catch (error) {
+    console.error('the page could not be read again after a mask approval', error)
+  }
+  // The held row is gone and the detection has its own id: the selection
+  // follows the mask, or is let go where a padding merged it into another.
+  if (!stillOpen(chapterId)) return true
+  if (editor.selectionId === region.id) select(holdsRegion(result.regionId) ? result.regionId : null)
+  if (editor.hoverId === region.id) hover(null)
   return true
 }
 
@@ -865,7 +915,8 @@ export function showOnPage(region) {
  * Clean with on a detected region cleans it for the first time, with the
  * model picked: a local one here, Cloud on the cloud GPU. On a cleaned one it
  * replaces the layer, as the row's picker does. Text type is a detected
- * region's alone, and the one entry with no row control: `setDetectionType`.
+ * region's alone, and Approve mask a held region's, the two entries with no
+ * row control: `setDetectionType` and `approveHeldMask`.
  *
  * @param {string} id
  * @param {import('../api/backend.js').ApiRegion} region
@@ -876,6 +927,7 @@ export async function runRegionMenuItem(id, region) {
   if (id === 'retry') return rerunMask(region, 'retry')
   if (id === 'retryWider') return rerunMask(region, 'retryWider')
   if (id === 'delete') return deleteRow(region)
+  if (id === 'approveMask') return approveHeldMask(region)
   if (id === 'approve') return cleanAnyway(region)
   if (id.startsWith('approve:')) return cleanAnyway(region, id.slice('approve:'.length))
   if (id.startsWith('engine:')) {

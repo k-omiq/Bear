@@ -79,7 +79,7 @@ describe('matchShortcut', () => {
   })
 
   it('selects the six tools with 1 to 6, in rail order', () => {
-    const ids = ['autoClean', 'brush', 'shapes', 'aiMaskBrush', 'cloneHeal', 'maskSelect']
+    const ids = ['autoClean', 'brush', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect']
     for (const [index, id] of ids.entries()) {
       const shortcut = matchShortcut(press(String(index + 1)), editor)
       expect(shortcut?.id).toBe(`tool.${id}`)
@@ -324,7 +324,7 @@ describe('handlesKeyNatively', () => {
   it('lets 1-6 through a focused picker and keeps the keys the picker answers', () => {
     const select = { tagName: 'SELECT' }
     expect(matchShortcut(press('1', { target: select }), editor)?.id).toBe('tool.autoClean')
-    expect(matchShortcut(press('5', { target: select }), editor)?.id).toBe('tool.cloneHeal')
+    expect(matchShortcut(press('5', { target: select }), editor)?.id).toBe('tool.cloneStamp')
     expect(matchShortcut(press('6', { target: select }), editor)?.id).toBe('tool.maskSelect')
     expect(matchShortcut(press('ArrowLeft', { target: select }), editor)).toBeNull()
     expect(matchShortcut(press('m', { target: select }), editor)).toBeNull()
@@ -506,6 +506,18 @@ describe('rebinding', () => {
 
     it('drops an id this build no longer has', () => {
       expect(sanitizeShortcutOverrides({ 'tool.retouch': { key: 'k' } })).toEqual({})
+    })
+
+    // The stamp was `tool.cloneHeal` when it could heal. A key chosen for it
+    // then is still the key for it now.
+    it('carries a rebinding across the clone stamp’s rename', () => {
+      expect(sanitizeShortcutOverrides({ 'tool.cloneHeal': { key: 'k' } })).toEqual({
+        'tool.cloneStamp': { key: 'k', shift: false, accel: false },
+      })
+      expect(sanitizeShortcutOverrides({ 'tool.cloneHeal': null })).toEqual({ 'tool.cloneStamp': null })
+      expect(
+        sanitizeShortcutOverrides({ 'tool.cloneHeal': { key: 'k' }, 'tool.cloneStamp': { key: 'j' } }),
+      ).toEqual({ 'tool.cloneStamp': { key: 'j', shift: false, accel: false } })
     })
 
     it('drops a malformed chord rather than the whole record', () => {

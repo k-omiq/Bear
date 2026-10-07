@@ -157,8 +157,8 @@
   )
 </script>
 
-<!-- `data-artwork` is a stable hook rather than a styling class: `PaintLayer`
-     samples these very tiles for clone / heal's live preview and has to be able
+<!-- `data-artwork` is a stable hook rather than a styling class: `CloneSource`
+     draws these very tiles into the clone stamp's cursor and has to be able
      to find the `cleaned` stack inside this page's sheet without depending on
      Svelte's scoped class names. -->
 <div

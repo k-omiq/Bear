@@ -30,7 +30,7 @@
    *
    * **Everything that can be a picture is one, on the pill.** A choice whose
    * options all carry an icon is a group of icon cells - four shapes, aligned
-   * against non-aligned, clone against heal - and a choice whose options are
+   * against non-aligned - and a choice whose options are
    * names is a dropdown showing the current one. What is left is Size, which is
    * inline because it is the control a hand reaches for constantly, the
    * colour's swatch, and *Adjustments*: every other slider and the colour's hex

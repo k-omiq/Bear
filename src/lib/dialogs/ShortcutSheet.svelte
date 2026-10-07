@@ -69,7 +69,7 @@
 
   /**
    * The one binding that is not a key: which modifier is held while clicking
-   * the page to set where Clone / heal reads from.
+   * the page to set where the clone stamp reads from.
    *
    * It sits in this sheet rather than in a preference row because it is a
    * *binding* - the same kind of thing every row above it is, changed for the

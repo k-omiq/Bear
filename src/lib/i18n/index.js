@@ -300,7 +300,7 @@ function isKeyParam(name) {
  * A param a string needs that its **call site has no way to supply**.
  *
  * There is exactly one today and it is the reason this exists.
- * `tools.hint.cloneHeal` names the modifier held to pick Clone / heal's
+ * `tools.hint.cloneStamp` names the modifier held to pick the clone stamp's
  * source, and that modifier is now a setting - but the string is rendered by
  * `ToolWindow.svelte` as `t(spec.hintKey)`, over a key `src/lib/editor/
  * tools.js` chose, and neither of those two knows or should know about a

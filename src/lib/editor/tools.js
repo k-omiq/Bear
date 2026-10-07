@@ -515,25 +515,29 @@ export const TOOL_SPECS = [
     shell: 'pill',
   },
   {
-    id: 'cloneHeal',
+    // The clone stamp: it copies the page from a sampled source, through a
+    // brush, and that is all it does. It is a brush, so it carries the
+    // Brush's rows and they mean the same thing (`paint/mod.rs#render_clone`
+    // stamps with the Brush's own tip): flow builds where dabs overlap, and
+    // opacity is the ceiling of the whole stroke. Its one row of its own is
+    // the alignment - whether each stroke reads on from the last or starts
+    // again at the sampled point.
+    id: 'cloneStamp',
     slot: 5,
-    nameKey: 'tools.name.cloneHeal',
-    hintKey: 'tools.hint.cloneHeal',
+    nameKey: 'tools.name.cloneStamp',
+    hintKey: 'tools.hint.cloneStamp',
     params: [
       ...section('brush', [
-        range('size', 'tools.param.size', 4, 120, 2, 'px'),
+        range('size', 'tools.param.size', 4, 300, 2, 'px'),
         range('hardness', 'tools.param.hardness', 0, 100, 5, '%'),
+        range('spacing', 'tools.param.spacing', 1, 50, 1, '%'),
         range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
         range('flow', 'tools.param.flow', 0, 100, 5, '%'),
       ]),
-      ...section('mode', [
+      ...section('source', [
         choice('alignment', 'tools.param.alignment', [
           { value: 'aligned', labelKey: 'tools.option.aligned', icon: 'link' },
           { value: 'nonAligned', labelKey: 'tools.option.nonAligned', icon: 'link-off' },
-        ]),
-        choice('mode', 'tools.param.mode', [
-          { value: 'clone', labelKey: 'tools.option.clone', icon: 'stamp' },
-          { value: 'heal', labelKey: 'tools.option.heal', icon: 'bandage' },
         ]),
       ]),
     ],
@@ -581,7 +585,7 @@ export const TOOL_ICONS = /** @type {Record<string, string>} */ ({
   brush: 'brush',
   shapes: 'shapes',
   aiMaskBrush: 'wand',
-  cloneHeal: 'stamp',
+  cloneStamp: 'stamp',
   maskSelect: 'selection',
 })
 
@@ -626,7 +630,7 @@ export const DRAWING_TOOLS = /** @type {const} */ ([
   'brush',
   'shapes',
   'aiMaskBrush',
-  'cloneHeal',
+  'cloneStamp',
   'maskSelect',
 ])
 

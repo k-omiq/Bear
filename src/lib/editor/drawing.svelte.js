@@ -4,10 +4,10 @@
  * The geometry arrives already in the region's normalised coordinate space
  * (`gesture.js`), so everything here is about *which* seam call a gesture is:
  *
- * - **Brush, Shapes, Clone / heal** draw a mask where there was none, so they
- *   create a region - `createRegion`, the one method the seam grew for this
- *   task. The Brush paints a colour into it; the other two hand the area to an
- *   engine.
+ * - **Brush, Shapes, the clone stamp** draw a mask where there was none, so
+ *   they create a region - `createRegion`, the one method the seam grew for
+ *   this task. The Brush paints a colour into it, the stamp copies the page
+ *   into it, and a shape hands the area to an engine.
  * - **The AI mask brush** creates a region too, and for the same reason: the
  *   stroke *is* the mask. It used to ask a snapping helper which existing
  *   region the stroke was "about" and edit that one instead, which is how a
@@ -44,8 +44,8 @@ import {
 } from '../state/editor.svelte.js'
 import { holdCreation, releaseCreation } from '../state/heldcreations.js'
 import { cloudRefused } from './cloudflow.svelte.js'
-import { draft, clearDraft, setCloneOffset } from './draft.svelte.js'
-import { AI_STROKE_PX, cloneOffset, paintedStroke } from './gesture.js'
+import { draft, clearDraft, markCommitted } from './draft.svelte.js'
+import { AI_STROKE_PX, paintedStroke } from './gesture.js'
 import { paintParamsOf } from './paint.js'
 import { renderRegionInCloud } from './toolapply.svelte.js'
 import { reportRegionEditFailure } from './maskactions.svelte.js'
@@ -88,9 +88,9 @@ export async function commitDraft() {
     sourceIndex: pageOf(active.pageId)?.sourceIndex ?? null,
     sourceSha: pageOf(active.pageId)?.sourceSha ?? null,
     params: paramsOf(active.tool),
-    cloneSource: draft.cloneSource ? { ...draft.cloneSource } : null,
-    cloneOffset: draft.cloneOffset ? { ...draft.cloneOffset } : null,
+    clone: active.clone ? { source: { ...active.clone.source }, offset: { ...active.clone.offset } } : null,
   }
+  markCommitted()
   clearDraft()
   if (!spec.chapterId || spec.pageIndex === null) return false
   const key = `${spec.chapterId}:${spec.pageId}`
@@ -99,7 +99,7 @@ export async function commitDraft() {
     switch (spec.tool) {
     case 'brush':
       return createMask(spec)
-    case 'cloneHeal':
+    case 'cloneStamp':
       return cloneInto(spec)
     case 'shapes':
       return createMask(spec, shapeEngine(spec))
@@ -149,8 +149,7 @@ function shapeEngine(spec) {
  * @property {number|null} sourceIndex
  * @property {string|null} sourceSha
  * @property {Record<string, unknown>} params
- * @property {any} cloneSource
- * @property {any} cloneOffset
+ * @property {{source: {x: number, y: number}, offset: {x: number, y: number}}|null} clone
  */
 
 /**
@@ -503,40 +502,25 @@ function withoutCloud(tool, params) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Clone / heal                                                        */
+/* The clone stamp                                                     */
 /* ------------------------------------------------------------------ */
 
 /**
- * Paint with the stamp. The source must have been sampled first - alt-click on
- * the page, or `S` on the focused drawing surface, which is the sticky
- * equivalent the modifier needs.
+ * Paint with the stamp.
  *
- * `aligned` holds the offset between source and stroke once a stroke has
- * established it, so successive strokes read on from one another; `nonAligned`
- * re-anchors to the sampled point on every stroke. The
- * arithmetic is `gesture.js#cloneOffset`; what is recorded on the mask is
- * which of the two was in force and where it read from.
+ * Where the stroke reads from was fixed when it started - the drawing surface
+ * resolves it from the sampled source and the alignment (`gesture.js#cloneOffset`)
+ * and carries it on the draft - so the pixels the preview showed and the
+ * pixels this commits come from one place. A draft with no source is not a
+ * clone stroke, and the surface has already said why.
  *
  * @param {CommitSpec} spec
  * @returns {Promise<boolean>}
  */
 async function cloneInto(spec) {
-  const params = spec.params
-  const source = spec.cloneSource?.pageId === spec.pageId ? spec.cloneSource : null
-  if (!source) {
-    notify({ key: 'notice.tool.cloneNeedsSource', tone: 'warn' })
-    return false
-  }
-  const resolved = cloneOffset({
-    source: { x: source.x, y: source.y },
-    strokeStart: spec.start,
-    alignment: String(params.alignment ?? 'aligned'),
-    offset: spec.cloneOffset,
-  })
-  if (!resolved) return false
-  setCloneOffset(resolved.offset)
+  if (!spec.clone) return false
   return createMask(spec, {
-    cloneSource: resolved.source,
-    cloneOffset: resolved.offset,
+    cloneSource: spec.clone.source,
+    cloneOffset: spec.clone.offset,
   })
 }

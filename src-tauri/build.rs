@@ -214,6 +214,7 @@ fn main() {
             "set_detection_padding",
             "rerun_mask",
             "clean_anyway",
+            "approve_held_mask",
             "sidecar_available",
             "list_sidecar_models",
             "pick_screen_color",

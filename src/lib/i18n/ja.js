@@ -593,7 +593,7 @@ export const ja = {
       saved: '{id}（保存済み）',
     },
     cloneSource: {
-      label: 'コピー元（クローン／修復）',
+      label: 'コピースタンプのコピー元',
       name: {
         alt: 'Option または Alt',
         meta: 'Command または Windows キー',
@@ -1218,6 +1218,7 @@ export const ja = {
       histogram: '周囲の紙の色調に合うエンジンがありませんでした',
       tooLarge: '領域がインペインターで扱える大きさを超えています',
       unrepresentableMode: 'このファイルのカラーモードではインペイント結果を保持できません',
+      cloneSourceOutside: "コピー元がページの外にあります",
       paintUnsupportedColor: "このファイルの色情報ではカラーマネジメントを使った描画ができません",
       paintUnsupportedMode: 'このファイルのカラーモードではペイントやクローンの結果を保持できません',
       unrepresentableDepth: 'このファイルは 1 サンプルあたり 1 ビットのため、インペイント結果を保持できません',
@@ -1852,6 +1853,7 @@ export const ja = {
       cleanAnyway: 'それでもクリーン',
       cleanDetected: 'クリーン',
       cleanDetectedCloud: 'クラウド GPU でクリーン',
+      approveMask: 'マスクを承認',
       approve: '承認してクリーン',
       opacity: 'レイヤーの不透明度',
       locked: '位置をロック',
@@ -1908,7 +1910,7 @@ export const ja = {
       shapes: '図形',
       aiMaskBrush: 'AI マスクブラシ',
       contentAwareFill: 'コンテンツに応じた塗りつぶし',
-      cloneHeal: 'クローン／修復',
+      cloneStamp: 'コピースタンプ',
       maskSelect: '選択範囲',
     },
     hint: {
@@ -1916,7 +1918,7 @@ export const ja = {
       brush: 'ドラッグで描画',
       shapes: 'ページ上でドラッグ',
       aiMaskBrush: '文字の上をなぞる',
-      cloneHeal: '{cloneSourceModifier}+クリックでコピー元を指定',
+      cloneStamp: '{cloneSourceModifier}+クリックでコピー元を指定',
       maskSelect: 'クリーンで消す範囲に追加・削除',
     },
     label: {
@@ -2012,8 +2014,6 @@ export const ja = {
       engineCloudSettings: 'クラウド設定を開く',
       aligned: '整列',
       nonAligned: '非整列',
-      clone: 'クローン',
-      heal: '修復',
       maskAdd: '選択範囲に追加',
       maskRemove: '選択範囲から削除',
       brush: 'ブラシ',
@@ -2300,10 +2300,11 @@ export const ja = {
       paddingFailed: 'マスクの余白を変更できませんでした。マスクは元のままです。',
       paddingRefreshFailed: 'マスクの余白は保存されましたが、ページを更新できませんでした。チャプターを開き直して更新後のマスクを表示してください。',
       typeFailed: '文字の種類を変更できませんでした。領域は元のままです。',
+      approveFailed: 'マスクを承認できませんでした。領域は元のままです。',
     },
     tool: {
       cloneSourceSet: 'コピー元を取得しました。ペイントするとそこからコピーします。',
-      cloneNeedsSource: '先に Alt+クリックでコピー元を指定してください。クローンと修復はどこかからコピーします。',
+      cloneNeedsSource: '先に {cloneSourceModifier}+クリックでコピー元を指定してください。スタンプはそこからコピーします。',
     },
     gate: {
       cleanedAnyway: '文字種判定の結果にかかわらずクリーンしました。',

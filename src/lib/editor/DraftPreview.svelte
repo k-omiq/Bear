@@ -8,8 +8,8 @@
 
   /**
    * What a gesture looks like while it is still a gesture: the mask it is
-   * about to make, the path that described it, and - for Clone / heal - where
-   * the stamp is reading from.
+   * about to make and the path that described it. The clone stamp's own marks
+   * - its source, and the pixels it is about to copy - are `CloneSource.svelte`'s.
    *
    * **A stroke previews as the stroke.** It used to preview as its bounding
    * box, on the reasoning that a region *is* a bbox and showing an outline the
@@ -39,16 +39,13 @@
 
   const active = $derived(draft.active?.pageId === pageId ? draft.active : null)
   const bbox = $derived(active?.bbox ?? null)
-  const source = $derived(
-    editor.tool === 'cloneHeal' && draft.cloneSource?.pageId === pageId ? draft.cloneSource : null,
-  )
   /**
-   * Paint and clone / heal preview as **pixels** now (`PaintLayer.svelte`), so
+   * Paint and the clone stamp preview as **pixels** now (`PaintLayer.svelte`), so
    * the tinted capsule that stood in for them would only sit on top of the real
    * thing and mute it. The dashed cursor ring is `DrawLayer`'s and stays: it
    * says where the next stamp lands, which the painted pixels behind it cannot.
    */
-  const livePixels = $derived(active?.tool === 'cloneHeal' || active?.tool === 'brush')
+  const livePixels = $derived(active?.tool === 'cloneStamp' || active?.tool === 'brush')
 
   /**
    * The **path the pointer took**, drawn as a hairline over the shape it
@@ -78,7 +75,7 @@
    *
    * **Only the AI mask brush reaches this now.** It is the one stroke tool
    * whose commit is a *region* rather than pixels, so a tinted capsule is the
-   * honest preview of it. The Brush and Clone / heal are `livePixels` and draw
+   * honest preview of it. The Brush and the clone stamp are `livePixels` and draw
    * their real colours in `PaintLayer.svelte`; the colour and opacity this
    * block used to paint the capsule with were left over from the Brush's mask
    * modes and could not be reached once the Brush became paint-only.
@@ -222,16 +219,6 @@
 {/snippet}
 
 <svg class="preview" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" style:--mask-color={maskColor}>
-  {#if source}
-    <g class="source">
-      <circle cx={source.x} cy={source.y} r="1.2" vector-effect="non-scaling-stroke" />
-      <line x1={source.x - 2.4} y1={source.y} x2={source.x + 2.4} y2={source.y}
-            vector-effect="non-scaling-stroke" />
-      <line x1={source.x} y1={source.y - 2.4} x2={source.x} y2={source.y + 2.4}
-            vector-effect="non-scaling-stroke" />
-    </g>
-  {/if}
-
   {#if swept}
     <g transform="scale({100 / pageWidth} {100 / pageHeight})">
       {#if cutting}
@@ -438,12 +425,6 @@
     stroke-width: 1.5;
     stroke-dasharray: 4 3;
     opacity: 1;
-  }
-
-  .source {
-    fill: none;
-    stroke: var(--page-mark);
-    stroke-width: 1.25;
   }
 
   .readout {

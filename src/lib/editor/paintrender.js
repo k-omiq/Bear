@@ -166,7 +166,7 @@ export function renderDabs(ctx, dabs, style) {
 /**
  * The union of a stroke's dab discs, as a path to clip with.
  *
- * Clone / heal's preview is not a colour: it is the page itself, read from
+ * The clone stamp's preview is not a colour: it is the page itself, read from
  * somewhere else and shown through the shape the brush has swept. That shape
  * is this path. `Path2D` is a browser global, so the caller passes the
  * constructor in - which is also what makes this testable.

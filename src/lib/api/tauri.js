@@ -119,6 +119,7 @@ const IMPLEMENTED = Object.freeze({
   previewPaint: 'preview_paint',
   rerunMask: 'rerun_mask',
   cleanAnyway: 'clean_anyway',
+  approveHeldMask: 'approve_held_mask',
   sidecarAvailable: 'sidecar_available',
   listSidecarModels: 'list_sidecar_models',
   installFluxHelper: 'install_flux_helper',
@@ -186,6 +187,7 @@ export const SEAM_METHODS = Object.freeze([
   'setDetectionType',
   'rerunMask',
   'cleanAnyway',
+  'approveHeldMask',
   'exportChapter',
   'planExportChapter',
   'sidecarAvailable',
@@ -586,6 +588,8 @@ export function createTauriBackend({ fallback, invoke, listen }) {
         engine: engine ?? null,
         ...(params ? { params } : {}),
       }),
+    approveHeldMask: ({ regionId, paddingPx }) =>
+      call(IMPLEMENTED.approveHeldMask, { regionId, paddingPx: paddingPx ?? null }),
     sidecarAvailable: () => call(IMPLEMENTED.sidecarAvailable),
     listSidecarModels: () => call(IMPLEMENTED.listSidecarModels),
     installFluxHelper: ({ backend, accelerator }) =>

@@ -33,7 +33,7 @@ import { hexToRgb, hsbToHex, hsbToRgb, rgbToHex, rgbToHsb } from '../ui/color.js
 
 describe('isDrawingTool', () => {
   it('is the five tools whose gesture is a drag', () => {
-    expect([...DRAWING_TOOLS]).toEqual(['brush', 'shapes', 'aiMaskBrush', 'cloneHeal', 'maskSelect'])
+    expect([...DRAWING_TOOLS]).toEqual(['brush', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect'])
   })
 
   it('excludes the two that act on a region that already exists', () => {
@@ -66,7 +66,7 @@ describe('toolSpendsCloud', () => {
 
   it('is false for a tool with no cloud option at all, whatever it is passed', () => {
     expect(toolSpendsCloud('brush', { engine: 'cloud', mode: 'paint' })).toBe(false)
-    expect(toolSpendsCloud('cloneHeal', { engine: 'cloud' })).toBe(false)
+    expect(toolSpendsCloud('cloneStamp', { engine: 'cloud' })).toBe(false)
   })
 
   it('is false with no parameters, and for an unknown tool', () => {
@@ -141,12 +141,21 @@ describe('toolSpec', () => {
     expect(keys).toEqual(['engine', 'size'])
   })
 
-  it('declares opacity and flow for cloneHeal', () => {
-    const cloneHeal = toolSpec('cloneHeal')
-    const opacityParam = cloneHeal.params.find((p) => p.key === 'opacity')
+  // The stamp is a brush that copies: it has the Brush's own tip rows, and the
+  // one choice that is the stamp's alone. It has no second mode.
+  it('gives the clone stamp a brush tip and an alignment, and nothing else', () => {
+    const keys = toolSpec('cloneStamp').params.filter((param) => param.kind !== 'section').map((param) => param.key)
+    expect(keys).toEqual(['size', 'hardness', 'spacing', 'opacity', 'flow', 'alignment'])
+    const alignment = toolSpec('cloneStamp').params.find((param) => param.key === 'alignment')
+    expect(alignment.options.map((option) => option.value)).toEqual(['aligned', 'nonAligned'])
+  })
+
+  it('declares opacity and flow for cloneStamp', () => {
+    const cloneStamp = toolSpec('cloneStamp')
+    const opacityParam = cloneStamp.params.find((p) => p.key === 'opacity')
     expect(opacityParam).toMatchObject({ kind: 'range', key: 'opacity', min: 0, max: 100, step: 5, unit: '%' })
 
-    const flowParam = cloneHeal.params.find((p) => p.key === 'flow')
+    const flowParam = cloneStamp.params.find((p) => p.key === 'flow')
     expect(flowParam).toMatchObject({ kind: 'range', key: 'flow', min: 0, max: 100, step: 5, unit: '%' })
   })
 })
@@ -203,7 +212,7 @@ describe('the Shapes tool', () => {
   /**
    * Every option a tool bar can draw for an engine names the rung it is, so
    * a machine that has not downloaded that rung's weights can be told to hide
-   * it. An option with no `engine` - Solid colour, Clone / heal's modes  - 
+   * it. An option with no `engine` - Solid colour, the clone stamp's alignment -
    * is never gated, which is what makes the check safe to apply everywhere.
    */
   it('names the rung on every engine option and on no other option', () => {
@@ -352,7 +361,7 @@ describe('draftShape', () => {
   })
 
   it('is a stroke for every brush tool', () => {
-    for (const tool of ['brush', 'aiMaskBrush', 'cloneHeal']) expect(draftShape(tool, { shape: 'rect' })).toBeNull()
+    for (const tool of ['brush', 'aiMaskBrush', 'cloneStamp']) expect(draftShape(tool, { shape: 'rect' })).toBeNull()
   })
 })
 
@@ -648,14 +657,13 @@ describe('the icons and the short labels the bar draws a choice with', () => {
   })
 
   // Text cleanup's scope is words now: its panel has room for them.
-  it('draws the three pictured choices as icons and the ladders as dropdowns', () => {
+  it('draws the pictured choices as icons and the ladders as dropdowns', () => {
     const pictured = choices
       .filter(({ param }) => param.options.every((option) => option.icon))
       .map(({ id, param }) => `${id}.${param.key}`)
     expect(pictured).toEqual([
       'shapes.shape',
-      'cloneHeal.alignment',
-      'cloneHeal.mode',
+      'cloneStamp.alignment',
       'maskSelect.mode',
       'maskSelect.shape',
     ])

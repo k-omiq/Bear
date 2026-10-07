@@ -777,14 +777,14 @@ export const en = {
       // has been read. The id is data, so it is not translated.
       saved: '{id} (saved)',
     },
-    // Which modifier is held while clicking the page to set where Clone / heal
+    // Which modifier is held while clicking the page to set where the clone stamp
     // reads from. The *caps* are not here: `⌥` and `Alt` are the keys' own
     // names, printed on the hardware, and `src/lib/shortcuts.js` supplies them
     // per platform the way it supplies every other keycap. What is here is the
     // spelt-out name, which is what a screen reader says and what the tooltip
     // shows - and it names both keyboards, because one row is read on both.
     cloneSource: {
-      label: 'Clone / heal source',
+      label: 'Clone source',
       name: {
         alt: 'Option, or Alt',
         meta: 'Command, or the Windows key',
@@ -1604,6 +1604,7 @@ export const en = {
       // Indexed and CMYK sources
       // cannot carry a model rung's output at all.
       unrepresentableMode: 'this file’s colour mode cannot hold an inpainted result',
+      cloneSourceOutside: 'the clone source is outside the page',
       paintUnsupportedColor: 'this file’s color description cannot be used for managed painting',
       paintUnsupportedMode: 'this file’s colour mode cannot hold a painted or cloned result',
       unrepresentableDepth: 'this file has one bit per sample, which an inpainted result cannot hold',
@@ -2507,6 +2508,9 @@ export const en = {
       // the cloud GPU after the cost is shown and confirmed.
       cleanDetected: 'Clean',
       cleanDetectedCloud: 'Clean on cloud GPU',
+      // A held region stored as a detected region: its mask shows on the
+      // page and a later Clean takes it. Nothing is cleaned by this.
+      approveMask: 'Approve mask',
       approve: 'Approve and clean',
       opacity: 'Layer opacity',
       locked: 'Lock position',
@@ -2581,7 +2585,7 @@ export const en = {
       shapes: 'Shapes',
       aiMaskBrush: 'AI mask brush',
       contentAwareFill: 'Content-aware fill',
-      cloneHeal: 'Clone / heal',
+      cloneStamp: 'Clone stamp',
       // Edits the detected area Clean will erase, after a Detect.
       maskSelect: 'Selection',
     },
@@ -2598,7 +2602,7 @@ export const en = {
       // `{cloneSourceModifier}` is a context param, not one this call site
       // passes: the tool bar renders `t(spec.hintKey)` over a key the tool
       // table chose, and the modifier is a preference. See `provideContextParam`.
-      cloneHeal: '{cloneSourceModifier}-click a source',
+      cloneStamp: '{cloneSourceModifier}-click a source',
       maskSelect: 'add to or remove from the area Clean erases',
     },
     // There is no `note` family. Every tool used to carry a sentence or two
@@ -2764,8 +2768,6 @@ export const en = {
       // read `masks.engineChoice.*` now, which is the Layers row's own list.
       aligned: 'Aligned',
       nonAligned: 'Non-aligned',
-      clone: 'Clone',
-      heal: 'Heal',
       // The selection tool's two modes and its round brush, drawn as icons;
       // these are their accessible names and tooltips.
       maskAdd: 'Add to selection',
@@ -3182,10 +3184,13 @@ export const en = {
       // The region menu's Text type was refused: the region was cleaned or
       // removed meanwhile, or could not be saved. Nothing changed.
       typeFailed: 'Could not change the text type. The region is as it was.',
+      // The region menu's Approve mask was refused: the held region was
+      // cleaned or removed meanwhile, or could not be saved. Nothing changed.
+      approveFailed: 'Could not approve the mask. The region is as it was.',
     },
     tool: {
       cloneSourceSet: 'Clone source sampled. Paint to copy from it.',
-      cloneNeedsSource: 'Alt-click a source first. Clone and heal copy from somewhere.',
+      cloneNeedsSource: '{cloneSourceModifier}-click a source first. The stamp copies from there.',
     },
     gate: {
       cleanedAnyway: 'Cleaned despite the script gate.',

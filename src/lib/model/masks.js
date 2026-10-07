@@ -346,8 +346,9 @@ export function detectedActions(options = {}) {
 
 /**
  * @typedef {Object} RegionMenuItem
- * @property {string} id - `retry`, `retryWider`, `delete`, `engine:<rung>`, or
- *   `type:inside` / `type:outside` (a detected region's text type)
+ * @property {string} id - `retry`, `retryWider`, `delete`, `engine:<rung>`,
+ *   `type:inside` / `type:outside` (a detected region's text type), or, on a
+ *   held region, `approveMask`, `approve` and `approve:<rung>`
  * @property {string} labelKey
  * @property {string} [icon]
  * @property {boolean} [selected] - present only on the engine and text type choices
@@ -377,6 +378,12 @@ export function detectedActions(options = {}) {
  * where it can be cleaned (held, or declined by the metric); a greyed
  * row saying so would be an explanation nobody asked for on a menu the
  * pointer opened by accident as often as on purpose.
+ *
+ * A held region (the script gate's, or a candidate) leads with its two
+ * answers. **Approve mask** stores it as a detected region and cleans
+ * nothing: its mask shows on the page, and a later Clean, here or on the
+ * cloud GPU, takes it with the rest (`maskactions.svelte.js#approveHeldMask`).
+ * **Approve and clean** cleans it at once on this computer.
  *
  * **Clean with** lists the local rungs this machine can run and, when
  * `options.cloud` is true, Cloud after them (`rowEngines`). The engine in use
@@ -435,7 +442,10 @@ export function regionMenuSections(region, options = {}) {
   if (!mask && (held || region?.outcome === 'declined')) {
     if (held) {
       sections.push({ id: 'approve', labelKey: null,
-        items: [{ id: 'approve', labelKey: 'masks.action.approve' }] })
+        items: [
+          { id: 'approveMask', labelKey: 'masks.action.approveMask' },
+          { id: 'approve', labelKey: 'masks.action.approve' },
+        ] })
     }
     sections.push({ id: 'engine', labelKey: 'masks.action.engine',
       items: rowEngines(options.engines, { cloud: false })

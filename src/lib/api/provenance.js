@@ -68,7 +68,7 @@ export const ENGINE_INFO = Object.freeze({
     fillMode: 'solid',
   },
   clone: {
-    version: 'clone-heal 1',
+    version: 'clone-stamp 1',
     modelSha: null,
     provider: 'cpu',
     elapsed: [5, 20],
