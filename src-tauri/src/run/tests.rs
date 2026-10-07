@@ -1364,12 +1364,11 @@ fn a_ladder_region_under_a_low_ceiling_declines_without_asking_any_engine() {
     let page = gray_page(|x, y| if tone(x, y) { 40 } else { 250 });
     let fitted = fitted_over(&page, Rect::new(88, 90, 24, 20));
     let mut rung2 = no_rung_two();
-    for ceiling in [Engine::Fill] {
-        match attempt(&mut rung2, &page, &fitted, ceiling) {
-            Attempt::Declined(reason) => assert_eq!(reason, "decline.reason.rungUnavailable"),
-            Attempt::Cleaned(made, _) => {
-                panic!("{:?} filled a screentone region at ceiling {ceiling:?}", made.engine)
-            }
+    let ceiling = Engine::Fill;
+    match attempt(&mut rung2, &page, &fitted, ceiling) {
+        Attempt::Declined(reason) => assert_eq!(reason, "decline.reason.rungUnavailable"),
+        Attempt::Cleaned(made, _) => {
+            panic!("{:?} filled a screentone region at ceiling {ceiling:?}", made.engine)
         }
     }
     assert!(matches!(rung2.state, Session::Unopened), "a capped run reached for the session");

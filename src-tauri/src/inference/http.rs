@@ -2184,6 +2184,11 @@ mod tests {
 
         thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
+                // Read the request before answering: closing with it unread
+                // resets the connection on Windows and the client never sees
+                // the response this test is about.
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
                 let response = "HTTP/1.1 302 Found\r\nLocation: https://evil.com/leak\r\nContent-Length: 0\r\n\r\n";
                 let _ = stream.write_all(response.as_bytes());
             }
@@ -2262,6 +2267,9 @@ mod tests {
 
         thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
+                // Read the request first, as above, or Windows resets the connection.
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
                 // Return invalid MIME extension like application/json-evil or text/html
                 let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json-evil; charset=utf-8\r\nContent-Length: 2\r\n\r\n{}";
                 let _ = stream.write_all(response.as_bytes());

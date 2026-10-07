@@ -84,6 +84,7 @@ fn clipped(rect: Rect, page: &Raster) -> Rect {
     Rect::new(x, y, (right - x) as u32, (bottom - y) as u32)
 }
 
+#[cfg(unix)]
 fn peak_rss_bytes() -> u64 {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
     let status = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
@@ -91,6 +92,10 @@ fn peak_rss_bytes() -> u64 {
     let value = unsafe { usage.assume_init().ru_maxrss.max(0) as u64 };
     if cfg!(target_os = "linux") { value * 1024 } else { value }
 }
+
+// `libc` is a unix-only dependency; the figure is informational.
+#[cfg(not(unix))]
+fn peak_rss_bytes() -> u64 { 0 }
 
 fn outcome_kind(reason: &str) -> String {
     match reason {

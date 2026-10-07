@@ -3582,7 +3582,10 @@ mod tests {
             encode_modal_runtime_secret("ak-genuine-token-id", "as-genuine-token-secret")
                 .expect("encode modal runtime secret");
 
-        let summary = SecretManager::global()
+        // Nothing here reads the process-wide manager, so the test keeps its
+        // own and never asks the host's credential store for anything.
+        let secrets = SecretManager::new_in_memory();
+        let summary = secrets
             .store_secret(&key, compound, true)
             .expect("store secret in session");
 
@@ -3592,7 +3595,7 @@ mod tests {
         assert!(!summary_json.contains("as-genuine-token-secret"));
 
         // Verify roundtrip decode into RuntimeCredential
-        let retrieved = SecretManager::global()
+        let retrieved = secrets
             .get_secret(&key)
             .expect("get secret")
             .expect("secret exists");
@@ -3615,9 +3618,7 @@ mod tests {
         let bound = BoundRuntimeCredential::new(&target, runtime_cred);
         assert!(bound.is_ok());
 
-        SecretManager::global()
-            .delete_secret(&key)
-            .expect("cleanup secret");
+        secrets.delete_secret(&key).expect("cleanup secret");
     }
 
     #[test]
@@ -3686,9 +3687,10 @@ mod tests {
         assert!(msg.contains("invalid or incomplete"));
         assert!(!msg.contains("raw-unversioned-legacy-token"));
 
-        SecretManager::global()
-            .delete_secret(&key)
-            .expect("cleanup legacy secret");
+        // The session copy goes first, so nothing is left behind either way.
+        // The OS half of the answer belongs to the host: a headless Linux
+        // runner has no credential store to confirm a deletion with.
+        let _ = SecretManager::global().delete_secret(&key);
     }
 
     #[test]

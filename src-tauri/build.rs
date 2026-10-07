@@ -125,8 +125,23 @@ fn main() {
     // `crate::provision` looks for the development sidecar under the name the
     // release script gives it, which ends in the target triple.
     println!("cargo:rustc-env=MC_TARGET_TRIPLE={target}");
-    let attributes =
-        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+    // The manifest that asks Windows for Common Controls v6. tauri-build embeds
+    // it as a resource, and cargo links a resource into binaries only, so the
+    // unit-test executable started without it and died before `main` with
+    // STATUS_ENTRYPOINT_NOT_FOUND. The linker embeds the same manifest instead,
+    // into everything this package links: the app, the tests, the examples.
+    let windows = if target.contains("windows-msvc") {
+        let app_manifest = manifest.join("windows-app-manifest.xml");
+        println!("cargo:rerun-if-changed={}", app_manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", app_manifest.display());
+        tauri_build::WindowsAttributes::new_without_app_manifest()
+    } else {
+        tauri_build::WindowsAttributes::new()
+    };
+    let attributes = tauri_build::Attributes::new()
+        .windows_attributes(windows)
+        .app_manifest(tauri_build::AppManifest::new().commands(&[
             "diagnostics",
             "about",
             "read_settings",

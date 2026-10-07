@@ -1,0 +1,6 @@
+# Every text file is LF in every checkout. The repository hashes its own
+# files: the cloud code digest that src-tauri/build.rs bakes in, the frozen
+# helper's staleness stamp, and fixtures that tests compare byte for byte. A
+# Windows checkout otherwise converts them to CRLF (core.autocrlf) and reaches
+# different answers from the same commit.
+* text=auto eol=lf
