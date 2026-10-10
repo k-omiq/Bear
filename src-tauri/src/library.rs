@@ -2258,6 +2258,76 @@ impl Library {
 
     /* ---------- region-level edits ---------- */
 
+    /// Copy frozen regional pixels and their original mask, without sampling
+    /// the page again or baking the presentation settings into the pixels.
+    pub fn duplicate_region(&self, region_id: &str) -> Result<Option<(ApiRegion, String)>, LibraryError> {
+        let index = self.index()?;
+        let Some(chapter_id) = chapter_holding(&index, region_id) else { return Ok(None) };
+        let path = self.resolve_chapter(&chapter_id)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
+        let failure = |detail: String| LibraryError::Manifest { path: path.clone(), detail };
+        let mut job = Job::open(&path).map_err(|error| failure(error.to_string()))?;
+        let Some(original) = job.project.patches.iter().find(|record| {
+            record.id == region_id && record.visible && record.provenance.engine == Engine::Paint
+                && record.provenance.params_snapshot["mode"] == "region-copy"
+        }).cloned() else { return Ok(None) };
+        let source_idx = original.source_idx;
+        let Some(page_index) = job.project.strip.order.iter().position(|index| *index == source_idx) else { return Ok(None) };
+        let page_id = page_id(&chapter_id, page_index);
+        let id = crate::region::mint_hand_id(&job, &page_id);
+        let mut copied = original.clone();
+        copied.id = id.clone();
+        copied.order = job.project.patches.iter().map(|record| record.order).max().unwrap_or(0).saturating_add(1);
+        copied.mask_ref = format!("{id}.mask");
+        copied.buffer_ref = format!("{id}.buf");
+
+        // A small step makes the new layer easy to grab. At the page edge,
+        // step inward instead; placement is in the visible orientation.
+        let bounds = cleaner_core::project::orientation::display_bbox(&job.project, &original);
+        let source = &job.project.sources[source_idx];
+        let (width, height) = source.orientation.size(source.w, source.h);
+        let mut style = cleaner_core::project::orientation::display_layer_style(&job.project, &original);
+        let step = |center: f64, extent: u32| {
+            let delta = if center + 16.0 > extent as f64 { -16.0 } else { 16.0 };
+            ((center + delta).clamp(0.0, extent as f64) - center).round() as i32
+        };
+        style.offset_x += step(bounds.x as f64 + bounds.w as f64 / 2.0, width);
+        style.offset_y += step(bounds.y as f64 + bounds.h as f64 / 2.0, height);
+        let style = cleaner_core::project::orientation::stored_layer_style(&job.project, &copied, style);
+        copied.provenance.params_snapshot["layer"] = serde_json::to_value(style).unwrap_or_default();
+
+        // Each copy owns its files, so deleting or replacing either region
+        // cannot invalidate the other's pixels, including strip intersections.
+        let original_ink = original.ink_ref();
+        let ink = if job.sidecar().join(&original_ink).exists() { original_ink } else { original.mask_ref.clone() };
+        let mut files = vec![
+            (original.mask_ref.clone(), copied.mask_ref.clone()),
+            (original.buffer_ref.clone(), copied.buffer_ref.clone()),
+            (ink, copied.ink_ref()),
+        ];
+        for (i, part) in copied.native_parts.iter_mut().enumerate() {
+            for (reference, extension) in [(&mut part.mask_ref, "mask"), (&mut part.ink_ref, "ink"), (&mut part.buffer_ref, "buf")] {
+                let new_ref = format!("{id}.part{i}.{extension}");
+                files.push((reference.clone(), new_ref.clone()));
+                *reference = new_ref;
+            }
+        }
+        for (from, to) in &files {
+            let result = std::fs::read(job.sidecar().join(from))
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| cleaner_core::project::buffers::write_atomic(&job.sidecar().join(to), &bytes)
+                    .map_err(|error| error.to_string()));
+            if let Err(detail) = result {
+                for (_, name) in &files { let _ = std::fs::remove_file(job.sidecar().join(name)); }
+                return Err(failure(detail));
+            }
+        }
+        job.project.patches.push(copied);
+        job.flush().map_err(|error| failure(error.to_string()))?;
+        invalidate_manifest_cache(&path);
+        Ok(region_and_status(&chapter_id, &job.project, source_idx, &id))
+    }
+
     /// Persist presentation settings without altering the immutable render
     /// artifacts.
     ///
@@ -3951,6 +4021,15 @@ pub async fn delete_mask(
     }))
 }
 
+#[tauri::command]
+pub async fn duplicate_region(
+    app: tauri::AppHandle,
+    region_id: String,
+) -> Result<Option<crate::region::CreatedRegion>, String> {
+    let copied = blocking(move || Ok(Library::for_app(&app)?.duplicate_region(&region_id)?)).await?;
+    Ok(copied.map(|(region, page_status)| crate::region::CreatedRegion { region, page_status }))
+}
+
 /// Put a region back as the caller last saw it - the undo half of every
 /// region-level edit.
 ///
@@ -4228,6 +4307,124 @@ mod tests {
             visible: true,
             provenance: provenance(engine),
         }
+    }
+
+    #[test]
+    fn duplicate_region_keeps_frozen_artifacts_and_independent_history() {
+        for orientation in [1, 6] {
+            for display in [false, true] {
+                let scratch = Scratch::new(&format!("duplicate-region-{orientation}-{display}"));
+                let library = library(&scratch);
+                let project = a_project(&library, &scratch, 1);
+                let chapter = library.create_chapter(&project.id, "Ch 1", None, None).unwrap().created().unwrap();
+                let path = library.resolve_chapter(&chapter.id).unwrap();
+                let id = format!("{}-h1", page_id(&chapter.id, 0));
+                let mut job = Job::open(&path).unwrap();
+                job.project.sources[0].orientation = cleaner_core::image::orientation::Orientation(orientation);
+                let mut patch = a_patch(&id, Rect::new(8, 8, 12, 8), Engine::Paint);
+                patch.mask.bits[0] = 0;
+                patch.mask.bits[1] = 97;
+                patch.provenance.params_snapshot = serde_json::json!({
+                    "mode": "region-copy", "layer": {
+                        "opacity": 68, "feather": 3, "edgeOpacity": 57, "rotation": 25,
+                        "offsetX": 0, "offsetY": 0, "locked": false
+                    }
+                });
+                if display { job.complete_display_region(0, &patch, None).unwrap(); }
+                else { job.complete_region(0, &patch, None).unwrap(); }
+                let original = job.project.patches[0].clone();
+                let (copy, status) = library.duplicate_region(&id).unwrap().unwrap();
+                assert_eq!(status, "cleaned");
+                assert_ne!(copy.id, id);
+                let reopened = Job::open(&path).unwrap();
+                assert_eq!(reopened.project.patches[0], original);
+                let copied = reopened.project.patches.iter().find(|record| record.id == copy.id).unwrap();
+                assert!(copied.order > original.order);
+                for (from, to) in [(&original.mask_ref, &copied.mask_ref), (&original.buffer_ref, &copied.buffer_ref)] {
+                    assert_ne!(from, to);
+                    assert_eq!(std::fs::read(reopened.sidecar().join(from)).unwrap(), std::fs::read(reopened.sidecar().join(to)).unwrap());
+                }
+                let style = cleaner_core::project::orientation::display_layer_style(&reopened.project, &original);
+                let copy_style = copy.mask.as_ref().unwrap().layer;
+                assert_eq!(copy_style.rotation, style.rotation);
+                assert_eq!(copy_style.opacity, style.opacity);
+                assert_eq!(copy_style.feather, style.feather);
+                assert_eq!(copy_style.edge_opacity, style.edge_opacity);
+                assert_ne!((copy_style.offset_x, copy_style.offset_y), (style.offset_x, style.offset_y));
+                let mut unplaced = copied.clone();
+                unplaced.provenance.params_snapshot["layer"] = original.provenance.params_snapshot["layer"].clone();
+                let before = reopened.load_patch(&original).unwrap();
+                let after = reopened.load_patch(&unplaced).unwrap();
+                assert_eq!(before.mask.bits, after.mask.bits, "feather must not be baked twice");
+                assert_eq!(cleaner_core::project::buffers::encode_patch(&before.pixels), cleaner_core::project::buffers::encode_patch(&after.pixels));
+                for (from, to) in original.native_parts.iter().zip(&copied.native_parts) {
+                    assert_ne!(from.buffer_ref, to.buffer_ref);
+                    assert_eq!(std::fs::read(reopened.sidecar().join(&from.buffer_ref)).unwrap(), std::fs::read(reopened.sidecar().join(&to.buffer_ref)).unwrap());
+                }
+                library.set_mask_visible(&copy.id, false).unwrap();
+                assert!(Job::open(&path).unwrap().project.patches[0].visible);
+                library.set_mask_visible(&copy.id, true).unwrap();
+                library.remove_region(&id).unwrap();
+                let remaining = Job::open(&path).unwrap();
+                let copied = remaining.project.patches.iter().find(|record| record.id == copy.id).unwrap();
+                assert_eq!(cleaner_core::project::buffers::encode_patch(&remaining.load_patch(copied).unwrap().pixels), cleaner_core::project::buffers::encode_patch(&after.pixels));
+                let second = library.duplicate_region(&copy.id).unwrap().unwrap().0;
+                assert_ne!(second.id, copy.id);
+                assert!(library.duplicate_region(&id).unwrap().is_none());
+                library.set_mask_visible(&copy.id, false).unwrap();
+                assert!(library.duplicate_region(&copy.id).unwrap().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_region_keeps_each_longstrip_intersection() {
+        let scratch = Scratch::new("duplicate-region-strip");
+        let library = library(&scratch);
+        let project = a_project(&library, &scratch, 2);
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, None).unwrap().created().unwrap();
+        let path = library.resolve_chapter(&chapter.id).unwrap();
+        let id = format!("{}-h1", page_id(&chapter.id, 0));
+        let mut job = Job::open(&path).unwrap();
+        job.project.strip.mode = StripMode::Longstrip;
+        for source in &mut job.project.sources {
+            source.orientation = cleaner_core::image::orientation::Orientation(3);
+        }
+        let mut patch = a_patch(&id, Rect::new(8, job.project.sources[0].h as i64 - 4, 12, 8), Engine::Paint);
+        patch.provenance.params_snapshot = serde_json::json!({"mode":"region-copy"});
+        job.complete_display_region(0, &patch, None).unwrap();
+        let original = job.project.patches[0].clone();
+        assert_eq!(original.native_parts.len(), 2);
+        let copy = library.duplicate_region(&id).unwrap().unwrap().0;
+        let reopened = Job::open(&path).unwrap();
+        let copied = reopened.project.patches.iter().find(|record| record.id == copy.id).unwrap();
+        assert_eq!(copied.native_parts.len(), 2);
+        for (from, to) in original.native_parts.iter().zip(&copied.native_parts) {
+            assert_eq!(from.source_idx, to.source_idx);
+            assert_eq!(from.bbox, to.bbox);
+            for (from, to) in [(&from.mask_ref, &to.mask_ref), (&from.ink_ref, &to.ink_ref), (&from.buffer_ref, &to.buffer_ref)] {
+                assert_ne!(from, to);
+                assert_eq!(std::fs::read(reopened.sidecar().join(from)).unwrap(), std::fs::read(reopened.sidecar().join(to)).unwrap());
+            }
+        }
+        library.remove_region(&id).unwrap();
+        let remaining = Job::open(&path).unwrap();
+        assert!(remaining.display_patches_on_page(0).is_ok());
+        assert!(remaining.display_patches_on_page(1).is_ok());
+    }
+
+    #[test]
+    fn duplicate_region_refuses_other_layer_types() {
+        let scratch = Scratch::new("duplicate-region-other");
+        let library = library(&scratch);
+        let project = a_project(&library, &scratch, 1);
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, None).unwrap().created().unwrap();
+        let path = library.resolve_chapter(&chapter.id).unwrap();
+        let id = format!("{}-h1", page_id(&chapter.id, 0));
+        let mut job = Job::open(&path).unwrap();
+        job.complete_region(0, &a_patch(&id, Rect::new(8, 8, 12, 8), Engine::Fill), None).unwrap();
+        assert!(library.duplicate_region(&id).unwrap().is_none());
+        assert_eq!(Job::open(&path).unwrap().project.patches.len(), 1);
     }
 
     #[test]

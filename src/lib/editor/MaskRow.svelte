@@ -137,7 +137,7 @@
   function onOpacityInput(event) {
     const value = Number(event.currentTarget.value)
     opacityDraft = value
-    opacityEdit ??= openLayerEdit(region, 'masks.command.layerOpacity')
+    if (!opacityEdit || opacityEdit.closed) opacityEdit = openLayerEdit(region, 'masks.command.layerOpacity')
     opacityEdit.preview({ opacity: value })
     if (opacityTimer) {
       // A key press that is still arriving keeps its burst open.

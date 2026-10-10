@@ -5,6 +5,8 @@
 
 export const es = {
   regionCopy: {
+    "duplicate": "Duplicar",
+    "duplicateUndo": "Duplicar región",
     "mode": "Modo de clonado",
     "stamp": "Tampón de clonar",
     "name": "Copiar región",
@@ -2126,6 +2128,7 @@ export const es = {
     edit: {
       undo: 'Deshacer',
       redo: 'Rehacer',
+      duplicateRegion: "Duplicar región seleccionada",
       deleteLayer: 'Eliminar la capa seleccionada',
     },
     zoom: {

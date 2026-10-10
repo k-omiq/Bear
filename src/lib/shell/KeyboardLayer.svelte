@@ -14,7 +14,7 @@
   import { app, goLibrary, pushModal, isModalOpen } from '../state/app.svelte.js'
   import { togglePanel } from '../state/session.svelte.js'
   import * as editorState from '../state/editor.svelte.js'
-  import { deleteRow } from '../editor/maskactions.svelte.js'
+  import { deleteRow, duplicateRegion } from '../editor/maskactions.svelte.js'
 
   /** @type {import('../shortcuts.js').ShortcutCommands} */
   const commands = {
@@ -28,6 +28,10 @@
     undo: () => editorState.undo(),
     redo: () => editorState.redo(),
     deleteSelectedLayer,
+    duplicateSelectedRegion: () => {
+      const region = editorState.selectedRegion()
+      if (region) void duplicateRegion(region)
+    },
     zoomFit: () => editorState.zoomFit(),
     zoomIn: () => editorState.zoomIn(),
     zoomOut: () => editorState.zoomOut(),

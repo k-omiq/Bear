@@ -31,6 +31,8 @@
   import { t } from '../i18n/index.js'
   import RegionMenu from './RegionMenu.svelte'
   import { layerPreviews } from './layerpreview.svelte.js'
+  import { matchShortcut } from '../shortcuts.js'
+  import { isModalOpen } from '../state/app.svelte.js'
 
   /**
    * Everything the *application* draws on a page: the region outlines, the two
@@ -233,6 +235,10 @@
 
   /** @param {KeyboardEvent} event */
   function onEscape(event) {
+    if (!event.defaultPrevented && !event.repeat && transform?.id === editor.selectionId
+      && matchShortcut(event, { scope: 'editor', modalOpen: isModalOpen() })?.id === 'layers.duplicateSelected') {
+      void commitTransform()
+    }
     if (event.key !== 'Escape' || !transform || transform.committing) return
     // Capture phase, ahead of the editor's own Escape: this one cancels the
     // gesture and must not also clear the selection it was acting on.
@@ -666,6 +672,7 @@
     const region = (page.regions ?? []).find((candidate) => candidate.id === regionId)
     if (!region) return
     event.preventDefault()
+    settleKeys()
     select(regionId)
     const target = /** @type {HTMLElement} */ (event.currentTarget)
     menu = { ...menuPoint(event, target.getBoundingClientRect()), region }

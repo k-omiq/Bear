@@ -237,6 +237,7 @@ pub fn run() {
             library::delete_project,
             library::delete_chapter,
             library::delete_mask,
+            library::duplicate_region,
             library::restore_region,
             library::set_layer_style,
             library::keep_dependency_result,

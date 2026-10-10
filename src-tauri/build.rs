@@ -203,6 +203,7 @@ fn main() {
             "delete_project",
             "delete_chapter",
             "delete_mask",
+            "duplicate_region",
             "restore_region",
             "set_layer_style",
             "keep_dependency_result",

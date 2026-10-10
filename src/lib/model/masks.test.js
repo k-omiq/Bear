@@ -138,6 +138,13 @@ describe('cloud masks', () => {
 })
 
 describe('regionMenuSections', () => {
+  it('offers Duplicate for regional copies only', () => {
+    const region = masked('paint')
+    region.mask.provenance.params_snapshot = { mode: 'region-copy' }
+    expect(ids(regionMenuSections(region))).toEqual(['duplicate', 'delete'])
+    expect(ids(regionMenuSections(masked('paint')))).toEqual(['delete'])
+    expect(ids(regionMenuSections(masked('clone')))).toEqual(['delete'])
+  })
   it('offers a detection the model list a cleaned region has, none checked, and no Clean shortcuts', () => {
     const region = { id: 'c1-p001-d0', outcome: 'detected', pick: 'lama', mask: masked('lama').mask }
     expect(ids(regionMenuSections(region, { engines: { flux: true }, cloud: true }))).toEqual([

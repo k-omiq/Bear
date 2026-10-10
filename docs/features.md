@@ -286,6 +286,8 @@ are named Clone stamp.
 
 The Clone tool also has a **Region copy** mode for moving a clipped piece of artwork:
 
+Right-click a copied region on the canvas or its Layers row and choose **Duplicate**, or select it and press **⌘D** (macOS) / **Ctrl+D**. The copy preserves the selection, rotation, and blending, appears slightly offset and selected, and can be moved or edited independently. Duplication is undoable.
+
 - Choose Brush, Rectangle, Ellipse, Lasso, Polygon, or Magnetic lasso and select the artwork to copy. The original
   stays in place. Polygon and Magnetic lasso finish by clicking the first anchor, double-clicking, or pressing Enter;
   Backspace removes the last anchor and Escape cancels. Magnetic lasso bends the path between anchors along visible

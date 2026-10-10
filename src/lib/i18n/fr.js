@@ -5,6 +5,8 @@
 
 export const fr = {
   regionCopy: {
+    "duplicate": "Dupliquer",
+    "duplicateUndo": "Dupliquer la région",
     "mode": "Mode de clonage",
     "stamp": "Tampon de duplication",
     "name": "Copie de région",
@@ -2126,6 +2128,7 @@ export const fr = {
     edit: {
       undo: 'Annuler',
       redo: 'Rétablir',
+      duplicateRegion: "Dupliquer la région sélectionnée",
       deleteLayer: 'Supprimer le calque sélectionné',
     },
     zoom: {

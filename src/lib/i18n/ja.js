@@ -5,6 +5,8 @@
 
 export const ja = {
   regionCopy: {
+    "duplicate": "複製",
+    "duplicateUndo": "領域を複製",
     "mode": "クローンモード",
     "stamp": "クローンスタンプ",
     "name": "領域コピー",
@@ -2084,6 +2086,7 @@ export const ja = {
     edit: {
       undo: '取り消し',
       redo: 'やり直し',
+      duplicateRegion: "選択した領域を複製",
       deleteLayer: '選択中のレイヤーを削除',
     },
     zoom: {

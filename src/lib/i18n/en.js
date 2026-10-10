@@ -29,6 +29,8 @@
 
 export const en = {
   regionCopy: {
+    "duplicate": "Duplicate",
+    "duplicateUndo": "Duplicate region",
     "mode": "Clone mode",
     "stamp": "Clone stamp",
     "name": "Region copy",
@@ -2854,6 +2856,7 @@ export const en = {
     edit: {
       undo: 'Undo',
       redo: 'Redo',
+      duplicateRegion: "Duplicate selected region",
       deleteLayer: 'Delete the selected layer',
     },
     zoom: {

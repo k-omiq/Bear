@@ -61,6 +61,7 @@ import { pageNavControls } from './model/paging.js'
  * @property {() => void} undo
  * @property {() => void} redo
  * @property {() => void} deleteSelectedLayer
+ * @property {() => void} duplicateSelectedRegion
  * @property {() => void} zoomFit
  * @property {() => void} zoomIn
  * @property {() => void} zoomOut
@@ -297,6 +298,20 @@ export const SHORTCUTS = [
     chordFor: ({ apple }) => (apple ? ['⌘', '⌫'] : ['Ctrl', '⌫']),
     scope: 'editor',
     run: (c) => c.deleteSelectedLayer(),
+  },
+
+  {
+    id: 'layers.duplicateSelected',
+    group: 'edit',
+    labelKey: 'shortcuts.edit.duplicateRegion',
+    keys: ['d'],
+    shift: false,
+    accel: true,
+    skipInTextEntry: true,
+    chord: ['Cmd', 'D'],
+    chordFor: ({ apple }) => (apple ? ['⌘', 'D'] : ['Ctrl', 'D']),
+    scope: 'editor',
+    run: (c) => c.duplicateSelectedRegion(),
   },
 
   /* ---- zoom ------------------------------------------------------------ */

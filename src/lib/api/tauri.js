@@ -108,6 +108,7 @@ const IMPLEMENTED = Object.freeze({
   exportChapter: 'export_chapter',
   planExportChapter: 'plan_export_chapter',
   deleteMask: 'delete_mask',
+  duplicateRegion: 'duplicate_region',
   restoreRegion: 'restore_region',
   setLayerStyle: 'set_layer_style',
   keepDependencyResult: 'keep_dependency_result',
@@ -181,6 +182,7 @@ export const SEAM_METHODS = Object.freeze([
   'setDetectionPadding',
   'previewPaint',
   'deleteMask',
+  'duplicateRegion',
   'restoreRegion',
   'setLayerStyle',
   'keepDependencyResult',
@@ -520,6 +522,7 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // `restoreRegion`'s `pageStatus` is the *caller's* snapshot, and the
     // manifest's own record is the better copy of it.
     deleteMask: ({ maskId }) => call(IMPLEMENTED.deleteMask, { maskId }),
+    duplicateRegion: ({ regionId }) => call(IMPLEMENTED.duplicateRegion, { regionId }),
     restoreRegion: ({ regionId, region }) =>
       call(IMPLEMENTED.restoreRegion, { regionId, region: region ?? null }),
     // A deliberate layer change, judged by the layer's capabilities; history

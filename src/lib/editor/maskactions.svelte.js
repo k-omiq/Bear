@@ -34,7 +34,7 @@
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
 import { CLOUD_ENGINE, MAX_MASK_PADDING, isCloudMask, isDetected, reRunnable, retryWidens } from '../model/masks.js'
-import { layerOf, sameLayer, sanitizeLayer } from '../model/layers.js'
+import { isRegionCopy, layerOf, sameLayer, sanitizeLayer } from '../model/layers.js'
 import { heldStartsOutside } from '../model/review.js'
 import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
 import { notify } from '../state/app.svelte.js'
@@ -233,6 +233,40 @@ export async function deleteRegion(region) {
  */
 export async function deleteRow(region) {
   return region.mask ? deleteMask(region) : deleteRegion(region)
+}
+
+const duplicating = new Set()
+
+/** Copy one regional layer as one undoable creation, then select the copy. */
+export async function duplicateRegion(region) {
+  if (!isRegionCopy(region)) return false
+  const chapterId = editor.chapter?.id ?? null
+  const pageIndex = pageIndexOf(region.id)
+  if (!chapterId || pageIndex === null || !claimPageEdit(pageIndex)) return false
+  const key = JSON.stringify([chapterId, region.id])
+  if (duplicating.has(key)) return false
+  duplicating.add(key)
+  const before = { region: null, pageStatus: pageStatusOf(region.id) }
+  try {
+    // Settle the source's edit first so Undo removes the copy before undoing
+    // the adjustment that preceded it.
+    for (const edit of [...(layerEdits.get(key) ?? [])]) await edit.commit()
+    await (layerTails.get(key) ?? Promise.resolve())
+    const result = await getBackend().duplicateRegion({ regionId: region.id })
+    if (!result?.region) return false
+    const copied = result.region
+    if (stillOpen(chapterId)) {
+      applyRegionState(copied.id, copied, result.pageStatus)
+      select(copied.id)
+    }
+    recordEdit('regionCopy.duplicateUndo', copied.id, before, result, chapterId)
+    if (stillOpen(chapterId)) refreshPage(pageIndex)
+    return true
+  } catch (error) {
+    return reportRegionEditFailure(error)
+  } finally {
+    duplicating.delete(key)
+  }
 }
 
 /**
@@ -664,9 +698,12 @@ export function reportLayerRefusal(error) {
  * @type {Map<string, Promise<unknown>>}
  */
 const layerTails = new Map()
+/** Active appearance gestures, settled before a layer is duplicated. */
+const layerEdits = new Map()
 
 /**
  * @typedef {Object} LayerEdit
+ * @property {boolean} closed - a settled edit cannot take another preview
  * @property {(changes: Partial<import('../model/layers.js').LayerStyle>) => void} preview - write now, coalesced; no history
  * @property {(changes?: Partial<import('../model/layers.js').LayerStyle>) => Promise<boolean>} commit - the last write, then exactly one undo entry
  * @property {() => Promise<void>} cancel - put the layer back as the edit found it; no history
@@ -782,32 +819,53 @@ export function openLayerEdit(region, labelKey = 'masks.command.layerStyle', cha
     if (more) changes = { ...(changes ?? {}), ...more }
   }
 
-  return {
+  let closed = false
+  let ending = null
+  const forget = () => {
+    layerEdits.get(key)?.delete(edit)
+    if (layerEdits.get(key)?.size === 0) layerEdits.delete(key)
+  }
+  const edit = {
+    get closed() { return closed },
     preview(more) {
+      if (closed) return
       want(more)
       void flush()
     },
-    async commit(more) {
+    commit(more) {
+      if (ending) return ending
+      if (closed) return Promise.resolve(false)
+      closed = true
       want(more)
-      // A value that arrived while a write was in flight is sent by the
-      // running pump; one that arrived after it finished needs a pass of its
-      // own. Two passes at most, and the second is usually a no-op.
-      await flush()
-      await flush()
-      if (!landed || !before || !start || sameLayer(sanitizeLayer(layerOf(landed)), start)) return false
-      if (deleted()) return false
-      recordEdit(labelKey, regionId, before, { region: landed, pageStatus: before.pageStatus }, chapterId)
-      if (stillOpen(chapterId)) refreshPage(pageIndexOf(regionId))
-      return true
+      ending = (async () => {
+        // A value that arrived while a write was in flight is sent by the
+        // running pump; one that arrived after it finished needs a pass of its
+        // own. Two passes at most, and the second is usually a no-op.
+        await flush()
+        await flush()
+        if (!landed || !before || !start || sameLayer(sanitizeLayer(layerOf(landed)), start)) return false
+        if (deleted()) return false
+        recordEdit(labelKey, regionId, before, { region: landed, pageStatus: before.pageStatus }, chapterId)
+        if (stillOpen(chapterId)) refreshPage(pageIndexOf(regionId))
+        return true
+      })().finally(forget)
+      return ending
     },
     async cancel() {
-      await flush()
-      if (!landed || !start) return
-      changes = { ...start }
-      refused = false
-      await flush()
+      if (closed) return
+      closed = true
+      try {
+        await flush()
+        if (!landed || !start) return
+        changes = { ...start }
+        refused = false
+        await flush()
+      } finally { forget() }
     },
   }
+  if (!layerEdits.has(key)) layerEdits.set(key, new Set())
+  layerEdits.get(key).add(edit)
+  return edit
 }
 
 /**
@@ -942,6 +1000,7 @@ export async function runRegionMenuItem(id, region) {
   if (id === 'retry') return rerunMask(region, 'retry')
   if (id === 'retryWider') return rerunMask(region, 'retryWider')
   if (id === 'delete') return deleteRow(region)
+  if (id === 'duplicate') return duplicateRegion(region)
   if (id === 'approveMask') return approveHeldMask(region)
   if (id === 'approve') return cleanAnyway(region)
   if (id.startsWith('approve:')) return cleanAnyway(region, id.slice('approve:'.length))

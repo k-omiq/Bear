@@ -7,6 +7,7 @@
  */
 
 import { currentRung } from './ladder.js'
+import { isRegionCopy } from './layers.js'
 
 /**
  * The widest Mask padding offered, in page pixels: how far a detection's mask
@@ -432,6 +433,11 @@ export function regionMenuSections(region, options = {}) {
   const mask = region?.mask ?? null
   /** @type {RegionMenuSection[]} */
   const sections = []
+
+  if (isRegionCopy(region)) {
+    sections.push({ id: 'copy', labelKey: null,
+      items: [{ id: 'duplicate', labelKey: 'regionCopy.duplicate', icon: 'pages' }] })
+  }
 
   // A held region the user may clean on their say-so: one the script gate held
   // back, or a text-group candidate grouping held for a choice. And one the

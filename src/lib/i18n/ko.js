@@ -5,6 +5,8 @@
 
 export const ko = {
   regionCopy: {
+    "duplicate": "복제",
+    "duplicateUndo": "영역 복제",
     "mode": "복제 모드",
     "stamp": "복제 도장",
     "name": "영역 복사",
@@ -2081,6 +2083,7 @@ export const ko = {
     edit: {
       undo: '실행 취소',
       redo: '다시 실행',
+      duplicateRegion: "선택한 영역 복제",
       deleteLayer: '선택한 레이어 삭제',
     },
     zoom: {

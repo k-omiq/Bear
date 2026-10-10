@@ -73,6 +73,19 @@ describe('the table', () => {
 })
 
 describe('matchShortcut', () => {
+  it('duplicates with Cmd/Ctrl+D only in the editor, outside text fields and dialogs', () => {
+    for (const modifier of ['metaKey', 'ctrlKey']) {
+      const shortcut = matchShortcut(press('d', { [modifier]: true }), editor)
+      expect(shortcut?.id).toBe('layers.duplicateSelected')
+      let calls = 0
+      shortcut.run({ duplicateSelectedRegion: () => calls++ })
+      expect(calls).toBe(1)
+      expect(matchShortcut(press('d', { [modifier]: true }), home)).toBeNull()
+      expect(matchShortcut(press('d', { [modifier]: true, target: { tagName: 'INPUT', type: 'text' } }), editor)).toBeNull()
+      expect(matchShortcut(press('d', { [modifier]: true }), { ...editor, modalOpen: true })).toBeNull()
+      expect(matchShortcut(press('d', { [modifier]: true, shiftKey: true }), editor)).toBeNull()
+    }
+  })
   it('matches editor keys only in the editor', () => {
     expect(matchShortcut(press('1'), editor)?.id).toBe('tool.autoClean')
     expect(matchShortcut(press('1'), home)).toBe(null)

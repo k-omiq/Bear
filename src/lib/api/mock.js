@@ -15,7 +15,7 @@
  */
 
 import { createJournal, pushEntry, redoEntry, undoEntry, viewOf } from '../model/journal.js'
-import { displayBbox, editedLayer, layerCapabilities, layerOf } from '../model/layers.js'
+import { displayBbox, editedLayer, isRegionCopy, layerCapabilities, layerOf, sanitizeLayer } from '../model/layers.js'
 import { regionState, reviewReason } from '../model/review.js'
 import { aboutInfo, buildChapter, buildFixtures, buildProject, defaultSettings } from './fixtures.js'
 import { cloudAttemptId, sha256Hex } from './attempt.js'
@@ -2910,6 +2910,30 @@ export function createMockBackend(options = {}) {
      * replaced only the region would show a full track under a "not cleaned"
      * mark, or the reverse.
      */
+    async duplicateRegion({ regionId }) {
+      await delay(timing.method)
+      const found = findRegion(regionId)
+      if (!found || !isRegionCopy(found.region)) return null
+      refuseBusyPage(found.chapter.id, found.page.index)
+      const copied = snapshot(found.region)
+      handCounter += 1
+      copied.id = `${found.page.id}-h${handCounter}`
+      copied.mask.id = `${copied.id}-m1`
+      copied.mask.regionId = copied.id
+      copied.mask.order = Math.max(0, ...found.page.regions.map((region) => region.mask?.order ?? 0)) + 1
+      const layer = layerOf(copied)
+      const centerX = ((copied.bbox.x + copied.bbox.w / 2) / 100) * found.page.width
+      const centerY = ((copied.bbox.y + copied.bbox.h / 2) / 100) * found.page.height
+      const step = (center, extent) => Math.round(Math.max(0, Math.min(extent, center + (center + 16 > extent ? -16 : 16))) - center)
+      copied.mask.layer = sanitizeLayer({ ...layer,
+        offsetX: layer.offsetX + step(centerX, found.page.width),
+        offsetY: layer.offsetY + step(centerY, found.page.height),
+      })
+      copied.bbox = displayBbox(copied.mask.sourceBbox ?? found.region.bbox, copied.mask.layer, found.page)
+      found.page.regions.push(copied)
+      return { region: snapshot(copied), pageStatus: found.page.status }
+    },
+
     async deleteMask({ maskId }) {
       await delay(timing.method)
       const found = findMask(maskId)

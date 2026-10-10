@@ -5,6 +5,8 @@
 
 export const pt = {
   regionCopy: {
+    "duplicate": "Duplicar",
+    "duplicateUndo": "Duplicar região",
     "mode": "Modo de clonagem",
     "stamp": "Carimbo de clonagem",
     "name": "Cópia de região",
@@ -2126,6 +2128,7 @@ export const pt = {
     edit: {
       undo: 'Desfazer',
       redo: 'Refazer',
+      duplicateRegion: "Duplicar região selecionada",
       deleteLayer: 'Excluir a camada selecionada',
     },
     zoom: {

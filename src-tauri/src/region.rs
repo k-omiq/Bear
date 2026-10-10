@@ -4604,7 +4604,7 @@ pub async fn create_region(
 /// The manifest is the counter. A session-local one - which is what the mock
 /// uses - would hand the same id out again after a restart and the second
 /// region would replace the first.
-fn mint_hand_id(job: &Job, page_id: &str) -> String {
+pub(crate) fn mint_hand_id(job: &Job, page_id: &str) -> String {
     let prefix = format!("{page_id}-h");
     let next = job
         .project

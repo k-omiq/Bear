@@ -29,6 +29,14 @@ it('pins denoising capability reads to the named cloud profile', async () => {
 })
 import { createMockBackend } from './mock.js'
 
+it('duplicates a native region through the registered command', async () => {
+  const answer = { region: { id: 'c-p001-h2' }, pageStatus: 'cleaned' }
+  const invoke = vi.fn().mockResolvedValue(answer)
+  const backend = createTauriBackend({ invoke, fallback: {} })
+  expect(await backend.duplicateRegion({ regionId: 'c-p001-h1' })).toEqual(answer)
+  expect(invoke).toHaveBeenCalledWith('duplicate_region', { regionId: 'c-p001-h1' })
+})
+
 /** The seam methods that are commands, as opposed to event listeners. */
 const COMMAND_METHODS = SEAM_METHODS.filter((method) => !EVENT_METHODS.includes(method))
 

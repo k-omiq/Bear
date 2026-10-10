@@ -691,7 +691,7 @@
    */
   function set(key, value) {
     if (selectedCopy && ['feather', 'edgeOpacity', 'opacity', 'rotation'].includes(key)) {
-      if (!blendEdit) blendEdit = openLayerEdit(selectedCopy)
+      if (!blendEdit || blendEdit.closed) blendEdit = openLayerEdit(selectedCopy)
       blendDraft = { id: selectedCopy.id, changes: { ...(blendDraft?.id === selectedCopy.id ? blendDraft.changes : {}), [key]: value } }
       layerPreviews.set(selectedCopy.id, { ...layerOf(selectedCopy), ...blendDraft.changes })
       blendEdit.preview({ [key]: value })
