@@ -1362,7 +1362,7 @@
               aria-valuenow={progress ? progress.done : undefined}
               aria-valuetext={progress ? t('editor.run.progress', { done: progress.done, total: progress.total }) : undefined}
             >
-              <span class="progress-fill" class:unknown={!progress} style:width={progress ? `${progress.percent}%` : undefined}></span>
+              <span class="progress-fill" class:unknown={!progress} style:transform="scaleX({(progress?.percent ?? 12) / 100})"></span>
             </div>
           {/if}
           <!-- The blocked note describes the button it blocks. A disabled
@@ -1794,14 +1794,19 @@
   }
   .progress-fill {
     position: absolute;
-    inset: 0 auto 0 0;
+    inset: 0;
     border-radius: inherit;
     background: var(--accent);
-    transition: width var(--dur) var(--ease);
+    transform-origin: left;
+    transition: transform var(--dur) var(--ease);
   }
   /* Before the queue is known: a still, partial bar rather than a moving one,
      so there is nothing for reduced motion to stop. */
-  .progress-fill.unknown { width: 12%; opacity: .5 }
+  .progress-fill.unknown { opacity: .5 }
+
+  @media (prefers-reduced-motion: reduce) {
+    .progress-fill { transition: none }
+  }
 
   /* The run's own line, and it takes no room at all while there is nothing to
      say - an empty live region that still reserved a gap would put a hole in
