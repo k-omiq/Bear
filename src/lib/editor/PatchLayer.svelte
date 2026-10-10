@@ -1,6 +1,7 @@
 <script>
   import { untrack } from 'svelte'
   import { cachedLayer, loadLayer, noteLayerDrawn } from './patchlayers.svelte.js'
+  import { layerPreviews } from './layerpreview.svelte.js'
 
   /**
    * One patch's layer: a canvas placed over its bounds on the page's proxy
@@ -9,7 +10,7 @@
    * **The old picture stays until the new one is drawn.** When the URL moves,
    * the canvas is left alone while the new image is fetched and decoded; then
    * its size, its place and its pixels change together, in one task, before
-   * the next paint. An `<img>` given a new `src` would blank in WebKit until
+   * the next paint. An image element given a new URL would blank in WebKit until
    * the new bytes decoded, and the page's lettering would show through.
    *
    * Placed and sized by writing the canvas's own style in the same step as
@@ -27,6 +28,9 @@
 
   /** @type {HTMLCanvasElement|undefined} */
   let canvasEl = $state()
+  let drawnStyle = $state({ offsetX: 0, offsetY: 0, rotation: 0 })
+  const placement = $derived(layerPreviews.get(layer.id) ?? layer.style ?? drawnStyle)
+  const movement = $derived(`translate(${((placement.offsetX - drawnStyle.offsetX) / (layer.pageWidth || 1)) * 100}cqw, ${((placement.offsetY - drawnStyle.offsetY) / (layer.pageWidth || 1)) * 100}cqw) rotate(${placement.rotation - drawnStyle.rotation}deg)`)
 
   /**
    * Put a decoded layer on the canvas, or clear it for a `204`.
@@ -36,6 +40,7 @@
   function draw(entry) {
     const node = canvasEl
     if (!node) return
+    drawnStyle = { offsetX: 0, offsetY: 0, rotation: 0, ...(layer.style ?? {}) }
     const image = entry.image
     const bounds = entry.bounds
     if (!image || !bounds || !(plan.width > 0) || !(plan.height > 0)) {
@@ -88,7 +93,8 @@
   data-layer={layer.id}
   width="0"
   height="0"
-  style:opacity={layer.opacity}
+  style:opacity={placement.opacity === undefined ? layer.opacity : placement.opacity / 100}
+  style:transform={movement}
 ></canvas>
 
 <style>

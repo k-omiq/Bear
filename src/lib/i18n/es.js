@@ -4,6 +4,17 @@
  */
 
 export const es = {
+  regionCopy: {
+    "mode": "Modo de clonado",
+    "stamp": "Tampón de clonar",
+    "name": "Copiar región",
+    "magnetic": "Lazo magnético",
+    "edgeOpacity": "Opacidad del borde",
+    "rotation": "Rotación",
+    "newRegion": "Nueva selección",
+    "drawingHelp": "Dibuja un área. Intro cierra el polígono; Retroceso elimina un punto.",
+    "placingHelp": "Arrastra para mover. Usa el control superior para girar."
+},
   qwen: {
     "prompt": {
         "title": "Describe qué borrar",

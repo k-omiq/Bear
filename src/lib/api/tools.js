@@ -149,12 +149,13 @@ export function applyToolToRegion(region, page, ctx, options) {
   // mode is: it lays down a colour somebody chose rather than asking an engine
   // what belongs there, so it takes the same branch here and the same branch
   // in `region.rs#paint_plan`, and it is refused on the same colour modes.
+  const regionalCopy = options.tool === 'cloneStamp' && params.mode === 'region'
   const solidShape = options.tool === 'shapes' && params.mode === 'solid'
   const isPaint =
     (options.tool === 'brush' && params.mode === 'paint') ||
     options.tool === 'cloneStamp' ||
     solidShape
-  if (isPaint && page.colorMode && !['Gray8', 'GrayAlpha8', 'RGB8', 'RGBA8'].includes(page.colorMode)) {
+  if (isPaint && !regionalCopy && page.colorMode && !['Gray8', 'GrayAlpha8', 'RGB8', 'RGBA8'].includes(page.colorMode)) {
     region.outcome = 'declined'
     region.declineReason = 'decline.reason.paintUnsupportedMode'
     region.mask = null
@@ -171,7 +172,7 @@ export function applyToolToRegion(region, page, ctx, options) {
   }
 
   let engine = reconstructing ? 'lama' : (tool.engine ?? 'fill')
-  if ((options.tool === 'brush' && params.mode === 'paint') || solidShape) {
+  if ((options.tool === 'brush' && params.mode === 'paint') || solidShape || regionalCopy) {
     engine = 'paint'
   } else if (options.tool === 'cloneStamp') {
     engine = 'clone'
@@ -201,6 +202,10 @@ export function applyToolToRegion(region, page, ctx, options) {
   // region the auto pass missed becomes queueable again if its mask is later
   // deleted (`isQueueable`), which is right: the exclusion is for text nothing
   // has ever found. Pinned by a test in `mock.test.js`.
+  if (regionalCopy) {
+    mask.provenance.params_snapshot.mode = 'region-copy'
+    mask.layer = { opacity: Number(params.opacity ?? 100), offsetX: 0, offsetY: 0, rotation: 0, locked: false, feather: Number(params.feather ?? 0), edgeOpacity: Number(params.edgeOpacity ?? 100) }
+  }
   region.detected = true
   region.tool = options.tool
   if (page.status === 'unclean') page.status = 'cleaned'

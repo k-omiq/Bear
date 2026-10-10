@@ -28,6 +28,17 @@
  */
 
 export const en = {
+  regionCopy: {
+    "mode": "Clone mode",
+    "stamp": "Clone stamp",
+    "name": "Region copy",
+    "magnetic": "Magnetic lasso",
+    "edgeOpacity": "Edge opacity",
+    "rotation": "Rotation",
+    "newRegion": "New selection",
+    "drawingHelp": "Draw an area. Enter closes a polygon; Backspace removes an anchor.",
+    "placingHelp": "Drag to move. Use the top handle to rotate."
+},
   qwen: {
     "prompt": {
         "title": "Describe what to erase",

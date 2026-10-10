@@ -129,6 +129,11 @@ function defaultToolParams() {
     aiMaskBrush: { engine: 'lama', size: 36 },
     contentAwareFill: { fillMode: 'match-surround', engine: 'local' },
     cloneStamp: {
+      mode: 'stamp',
+      shape: 'rect',
+      feather: 4,
+      edgeOpacity: 100,
+      rotation: 0,
       size: 32,
       hardness: 50,
       spacing: 12,

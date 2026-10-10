@@ -22,7 +22,7 @@
    * it only on things that are *image* data: the paper of a speech bubble and
    * the ink of the text in it. Everything else on the sheet is a token.
    *
-   * **The real page has arrived, and it is a stack of `<img>` over `tile://`.**
+   * **The real page has arrived, and it is a stack of image elements over `tile://`.**
    * `tileUrl` (src/lib/api/tile.js) answers with a URL inside a Tauri window
    * and with `null` everywhere else - in a plain browser, and in every one of
    * the frontend's tests, where there is no protocol to serve pixels and the
@@ -33,7 +33,7 @@
    *
    * **A stack and not one image**: the UI holds
    * proxies, never the strip. A webtoon segment is 800×20000, which is one
-   * `<img>` of about 64 MB decoded, held for as long as the page is mounted and
+   * image elements of about 64 MB decoded, held for as long as the page is mounted and
    * multiplied by every page the strip's virtual window keeps. So the page
    * arrives as `proxyPlan`'s tiles - the short edge capped at 1024, the long
    * axis cut - each absolutely positioned over its own share of the sheet.
@@ -45,7 +45,7 @@
    * not `loading="lazy"`: WebKit starts a lazy image only once it is inside the
    * scroller's visible box, which drew every tile in late.
    *
-   * The tiles overlap by a pixel, except the last. Each `<img>` is stretched to
+   * The tiles overlap by a pixel, except the last. Each image elements is stretched to
    * a box whose height is a percentage, and percentages land on fractional
    * device pixels: without the overlap a hairline of the sheet's `--paper`
    * shows through at every join. The tile below is painted after the tile above
@@ -59,7 +59,7 @@
    * markers, no masks, no selection and no page tag - those are the app's, and
    * they live in `RegionLayer` and `PageSheet` - and it scales its type from
    * the sheet's own width (`cqw`) rather than taking the zoom as a prop, which
-   * the `<img>` has no use for.
+   * the image elements has no use for.
    *
    * `original` is this component's word and `source` is the protocol's; the
    * mapping happens once, below, so the URL has one spelling
@@ -87,9 +87,14 @@
    *   to?: number,
    *   hidden?: boolean,
    *   ready?: string|null,
+   *   readyVersion?: string|null,
+   *   composite?: boolean,
    * }}
    */
-  let { page, variant, from = 0, to = 100, hidden = false, ready = $bindable(null) } = $props()
+  let { page, variant, from = 0, to = 100, hidden = false, composite = true,
+    ready = $bindable(null), readyVersion = $bindable(null) } = $props()
+
+  const nativeVariant = $derived(variant === 'original' || !composite ? 'source' : 'cleaned')
 
 
   const plan = $derived(proxyPlan(page))
@@ -108,7 +113,7 @@
   )
 
   /**
-   * One `<img>` per proxy tile, each carrying the CSS that puts it over its own
+   * One image elements per proxy tile, each carrying the CSS that puts it over its own
    * share of the sheet. Empty outside a Tauri window, which is what selects the
    * stand-in below.
    */
@@ -121,8 +126,8 @@
         return {
           index: tile.index,
           paintKey: `${page.id}:${tile.index}`,
-          src: tileUrl(page, variant === 'original' ? 'source' : 'cleaned', tile.index),
-          version: pageVersion(page, variant === 'original' ? 'source' : 'cleaned'),
+          src: tileUrl(page, nativeVariant, tile.index),
+          version: pageVersion(page, nativeVariant),
           top: plan.vertical ? `${tile.offset}%` : '0',
           left: plan.vertical ? '0' : `${tile.offset}%`,
           width: plan.vertical ? '100%' : extent,
@@ -134,10 +139,13 @@
 
   let artwork = $state()
   const pageId = $derived(page.id)
-  $effect(() => { pageId; ready = null })
+  $effect(() => { pageId; ready = null; readyVersion = null })
   function warm() {
     const images = [...(artwork?.querySelectorAll('img[data-version]') ?? [])]
-    if (images.length && images.every(tile => tile.dataset.loadedVersion === tile.dataset.version)) ready = page.id
+    if (images.length && images.every(tile => tile.dataset.loadedVersion === tile.dataset.version)) {
+      ready = page.id
+      readyVersion = pageVersion(page, nativeVariant)
+    }
     document.dispatchEvent(new CustomEvent('paint-tile-loaded', { detail: { pageId: page.id } }))
   }
 

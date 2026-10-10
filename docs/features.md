@@ -284,6 +284,18 @@ at 100, aligned.
 Each stroke is one layer and one undo step. A project saved when the tool was Clone / Heal keeps its layers, and they
 are named Clone stamp.
 
+The Clone tool also has a **Region copy** mode for moving a clipped piece of artwork:
+
+- Choose Brush, Rectangle, Ellipse, Lasso, Polygon, or Magnetic lasso and select the artwork to copy. The original
+  stays in place. Polygon and Magnetic lasso finish by clicking the first anchor, double-clicking, or pressing Enter;
+  Backspace removes the last anchor and Escape cancels. Magnetic lasso bends the path between anchors along visible
+  contrast edges. Use closer anchors to follow detailed contours.
+- The new copy is selected automatically. Drag its artwork to move it and drag the circular handle above it to rotate.
+  Adjustments offers Feather in image pixels, Edge opacity, overall Opacity, and Rotation. Edge controls soften the
+  original selection at its destination, preserving the captured pixels and the opaque interior.
+- **New selection** starts another copy. Copies, placement, rotation, and adjustment bursts use the normal layer
+  history and persist with the project. Export uses the same native masks and transforms as the committed canvas.
+
 ## Layers and history
 
 The **Layers** window lists every region on the current page, newest first. Collapsed, a row names the engine that

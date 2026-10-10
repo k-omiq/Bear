@@ -1225,7 +1225,7 @@ fn edit_with_bench_render(
                     (point.x, point.y) = map(point.x, point.y);
                 }
                 match &mut paint.kind {
-                    PaintKind::Shape { shape, .. } => {
+                    PaintKind::Shape { shape, .. } | PaintKind::RegionCopy { shape: Some(shape), .. } => {
                         for point in &mut shape.points {
                             (point.x, point.y) = map(point.x, point.y);
                         }
@@ -1234,7 +1234,7 @@ fn edit_with_bench_render(
                         offset.0 = offset.0 * anchor.width as f64 / read.raster.width as f64;
                         offset.1 = offset.1 * anchor.height as f64 / read.raster.height as f64;
                     }
-                    PaintKind::Brush { .. } => {}
+                    PaintKind::Brush { .. } | PaintKind::RegionCopy { shape: None, .. } => {}
                 }
             }
             if plan.paint.is_none() {
@@ -1639,7 +1639,7 @@ fn remap_paint(paint: &mut PaintPlan, anchor: cleaner_core::strip::Placement, or
         (point.x, point.y) = map(point.x, point.y);
     }
     match &mut paint.kind {
-        PaintKind::Shape { shape, .. } => {
+        PaintKind::Shape { shape, .. } | PaintKind::RegionCopy { shape: Some(shape), .. } => {
             for point in &mut shape.points {
                 (point.x, point.y) = map(point.x, point.y);
             }
@@ -1648,7 +1648,7 @@ fn remap_paint(paint: &mut PaintPlan, anchor: cleaner_core::strip::Placement, or
             offset.0 = offset.0 * anchor.width as f64 / width as f64;
             offset.1 = offset.1 * anchor.height as f64 / height as f64;
         }
-        PaintKind::Brush { .. } => {}
+        PaintKind::Brush { .. } | PaintKind::RegionCopy { shape: None, .. } => {}
     }
 }
 
@@ -2558,6 +2558,29 @@ fn paint_patch(
 ) -> Result<(run::Made, usize, Rect), &'static str> {
     use cleaner_core::paint::{self, PaintError, StrokePoint};
 
+    if let PaintKind::RegionCopy { shape, .. } = &paint.kind {
+        let mask = if let Some(shape) = shape {
+            let mut shape = shape.clone();
+            shape.feather = 0.0;
+            shape_coverage(&shape, 0.0, page.width, page.height).map(|(mask, _)| mask)
+        } else {
+            stroke_mask(&PaintedStroke {
+                points: paint.points.iter().map(|point| self::StrokePoint { x: point.x, y: point.y }).collect(),
+                radius: paint.spec.size / 2.0,
+            }, page.width, page.height)
+        }.filter(|mask| !mask.is_empty()).ok_or("decline.reason.rungUnavailable")?;
+        let bounds = mask.bounds;
+        let under = patches_over(job, source_idx, order, bounds, strip_context)
+            .map_err(|_| "decline.reason.rungUnavailable")?;
+        let pixels = cleaner_core::composite::composite_region(page, &under, bounds, Some(order))
+            .map_err(|_| "decline.reason.rungUnavailable")?;
+        if pixels.width != bounds.w || pixels.height != bounds.h { return Err("decline.reason.rungUnavailable"); }
+        return Ok((run::Made {
+            engine: Engine::Paint, ink: mask.clone(), mask, pixels,
+            provider: None, model_sha256: None, pad: cleaner_core::strip::EdgePad::None, tiles: None,
+        }, 0, bounds));
+    }
+
     if !paint::supports(page) {
         return Err("decline.reason.paintUnsupportedMode");
     }
@@ -2593,7 +2616,7 @@ fn paint_patch(
         // written for the two kinds that are still here. It is spelled out
         // rather than caught by a wildcard so that a fourth kind of paint
         // cannot be added without this function being read.
-        PaintKind::Brush { .. } | PaintKind::Shape { .. } => (0.0, 0.0),
+        PaintKind::Brush { .. } | PaintKind::Shape { .. } | PaintKind::RegionCopy { .. } => (0.0, 0.0),
         PaintKind::Clone { offset, .. } => (offset.0 / 100.0 * width, offset.1 / 100.0 * height),
     };
 
@@ -2615,6 +2638,7 @@ fn paint_patch(
         PaintKind::Clone { .. } => {
             paint::render_clone(page, &under, Some(order), &points, &paint.spec, offset)
         }
+        PaintKind::RegionCopy { .. } => unreachable!("regional copy returned above"),
     };
 
     let painted = match painted {
@@ -2635,7 +2659,7 @@ fn paint_patch(
     Ok((
         run::Made {
             engine: match paint.kind {
-                PaintKind::Brush { .. } | PaintKind::Shape { .. } => Engine::Paint,
+                PaintKind::Brush { .. } | PaintKind::Shape { .. } | PaintKind::RegionCopy { .. } => Engine::Paint,
                 PaintKind::Clone { .. } => Engine::Clone,
             },
             // A stroke is its own lettering: the user said where the paint
@@ -3203,6 +3227,17 @@ fn paint_snapshot(
         snapshot["tool"] = serde_json::json!(tool);
     }
     match paint.kind {
+        PaintKind::RegionCopy { ref shape, feather, edge_opacity } => {
+            snapshot["mode"] = serde_json::json!("region-copy");
+            snapshot["rung"] = serde_json::json!("ladder.rung.clone");
+            snapshot["shape"] = serde_json::json!(shape.as_ref().map_or("brush", |shape| match shape.kind {
+                ShapeKind::Rect => "rect", ShapeKind::Ellipse => "ellipse", ShapeKind::Polygon => "polygon", ShapeKind::Line => "line",
+            }));
+            snapshot["layer"] = serde_json::json!({
+                "opacity": spec.opacity.round().clamp(0.0, 100.0) as u8,
+                "feather": feather, "edgeOpacity": edge_opacity,
+            });
+        }
         PaintKind::Brush { color } => {
             snapshot["mode"] = serde_json::json!("paint");
             snapshot["color"] =
@@ -3599,6 +3634,8 @@ fn half() -> f64 {
 /// What the paint branch was asked to do.
 #[derive(Debug, Clone, PartialEq)]
 enum PaintKind {
+    /// Frozen artwork through an independent selection, blended where placed.
+    RegionCopy { shape: Option<PaintedShape>, feather: f64, edge_opacity: u8 },
     /// A colour brush. The colour is straight sRGB bytes, from `#rrggbb`.
     Brush { color: [u8; 3] },
     /// The clone stamp. `offset` is `target − source` in **page percent**, as the
@@ -3721,6 +3758,11 @@ fn paint_plan(tool: &str, params: &serde_json::Value) -> Option<PaintPlan> {
     let paint = params.get("paint").filter(|v| v.is_object());
 
     let kind = match tool {
+        "cloneStamp" if mode == Some("region") => PaintKind::RegionCopy {
+            shape: params.get("painted").map(|value| serde_json::from_value::<PaintedShape>(value.clone())).transpose().ok()?,
+            feather: number(params, "feather").unwrap_or(0.0).clamp(0.0, 64.0),
+            edge_opacity: number(params, "edgeOpacity").unwrap_or(100.0).clamp(0.0, 100.0).round() as u8,
+        },
         "brush" if mode == Some("paint") => PaintKind::Brush {
             color: colour_of(
                 paint
@@ -3765,7 +3807,7 @@ fn paint_plan(tool: &str, params: &serde_json::Value) -> Option<PaintPlan> {
     // drag delivers one pointer sample and the keyboard route delivers none,
     // and both describe an area perfectly well. Every other kind is its
     // points, and no points is no stroke.
-    if points.is_empty() && !matches!(kind, PaintKind::Shape { .. }) {
+    if points.is_empty() && !matches!(kind, PaintKind::Shape { .. } | PaintKind::RegionCopy { shape: Some(_), .. }) {
         return None;
     }
 
@@ -5966,7 +6008,7 @@ fn paint_preview_fits(paint: &PaintPlan, width: u32, height: u32) -> bool {
     let radius = paint.spec.size * 2.0;
     let windows = match paint.kind {
         PaintKind::Clone { .. } => 2.0,
-        PaintKind::Shape { .. } => return false,
+        PaintKind::Shape { .. } | PaintKind::RegionCopy { .. } => return false,
         PaintKind::Brush { .. } => 1.0,
     };
     let extent = |axis: usize| {
@@ -6834,6 +6876,82 @@ mod tests {
                 Ok(Outcome::NotFound)
             }).unwrap();
             assert!(called);
+        }
+    }
+
+    #[test]
+    fn regional_copy_keeps_frozen_artwork_and_blends_at_its_new_destination() {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128; raw.height = 128; raw.data = vec![0; 128 * 128];
+        let (root, located) = edit_fixture("regional-copy", &raw);
+        let bounds = Rect::new(24, 24, 32, 32);
+        white_predecessor(&located, &raw, bounds);
+        let params = serde_json::json!({"mode":"region", "opacity":100, "feather":6, "edgeOpacity":100,
+            "painted":{"kind":"rect","points":[{"x":18.75,"y":18.75},{"x":43.75,"y":18.75},{"x":43.75,"y":43.75},{"x":18.75,"y":43.75}],"feather":6}});
+        let paint = paint_plan("cloneStamp", &params).unwrap();
+        let mut plan = fixture_plan("copy", Geometry::Given(bounds), Engine::Paint, bounds);
+        plan.tool = Some("cloneStamp".into()); plan.paint = Some(paint);
+        assert!(matches!(edit_with_bench(&mut test_bench(&root), Engine::Fill, &located, plan).unwrap(), Outcome::Cleaned(_)));
+        let mut job = Job::open(&located.job_path).unwrap();
+        let record = job.project.patches.iter().find(|r|r.id=="copy").unwrap();
+        assert_eq!(record.provenance.params_snapshot["mode"], "region-copy");
+        assert_eq!(record.provenance.engine.layer_capabilities().transform, cleaner_core::patch::LayerPlacement::Movable);
+        let original = cleaner_core::composite::composite(&raw, &[job.load_patch(&job.project.patches[0]).unwrap()]).unwrap();
+        let unchanged = cleaner_core::composite::composite(&raw, &job.project.patches.iter().filter(|record| record.visible).map(|record| job.load_patch(record).unwrap()).collect::<Vec<_>>()).unwrap();
+        assert_eq!(unchanged.data, original.data, "copying leaves the source artwork untouched");
+        let record = job.project.patches.iter_mut().find(|r|r.id=="copy").unwrap();
+        record.provenance.params_snapshot["layer"]["offsetX"] = serde_json::json!(60);
+        record.provenance.params_snapshot["layer"]["rotation"] = serde_json::json!(90.0);
+        job.flush().unwrap();
+        drop(job);
+        let job = Job::open(&located.job_path).unwrap();
+        let copied = job.load_patch(job.project.patches.iter().find(|r|r.id=="copy").unwrap()).unwrap();
+        assert!(copied.mask.bits.iter().zip(&copied.pixels.data).all(|(&coverage, &pixel)| coverage == 0 || pixel == 255), "edge pixels retain source artwork, not its background");
+        let moved = cleaner_core::composite::composite(&raw, &job.project.patches.iter().filter(|record| record.visible).map(|record| job.load_patch(record).unwrap()).collect::<Vec<_>>()).unwrap();
+        assert_eq!(moved.sample(40,40,0), 255, "original remains");
+        assert_eq!(moved.sample(100,40,0), 255, "copied interior stays opaque");
+        let edge = moved.sample(84,40,0);
+        assert!(edge > 0 && edge < 100, "edge fades against new black background: {edge}");
+        assert_eq!(moved.sample(10,10,0), 0, "outside artwork is preserved");
+    }
+
+    #[test]
+    fn regional_shapes_and_brush_preserve_native_samples_and_color_metadata() {
+        for name in ["l16-icc", "rgb16-icc", "indexed-p"] {
+            for shape in ["rect", "ellipse", "polygon", "brush"] {
+                let raw = cleaner_core::image::fixtures::by_name(name).raster;
+                let (root, located) = edit_fixture(&format!("copy-{name}-{shape}"), &raw);
+                let mut params = serde_json::json!({"mode":"region", "feather":0, "size":12,
+                    "paint":{"points":[{"x":25,"y":25,"p":1},{"x":55,"y":55,"p":1}]}});
+                if shape != "brush" {
+                    params["painted"] = serde_json::json!({"kind":shape, "feather":0,
+                        "points":[{"x":25,"y":25},{"x":60,"y":25},{"x":60,"y":60},{"x":25,"y":60}]});
+                }
+                let bounds = Rect::new(0, 0, raw.width, raw.height);
+                let mut plan = fixture_plan("copy", Geometry::Given(bounds), Engine::Paint, bounds);
+                plan.tool = Some("cloneStamp".into());
+                plan.paint = Some(paint_plan("cloneStamp", &params).unwrap());
+                let outcome = edit_with_bench(&mut test_bench(&root), Engine::Fill, &located, plan).unwrap();
+                assert!(matches!(outcome, Outcome::Cleaned(_)), "{name}/{shape} must create a copy");
+                let job = Job::open(&located.job_path).unwrap();
+                let copied = job.load_patch(&job.project.patches[0]).unwrap();
+                assert_eq!((copied.pixels.mode, copied.pixels.depth), (raw.mode, raw.depth));
+                // Stored buffers contain samples; the composited page carries
+                // the source profile and palette into native export.
+                let composited = cleaner_core::composite::composite(&raw, &[copied.clone()]).unwrap();
+                assert_eq!(composited.icc, raw.icc);
+                assert_eq!(composited.palette, raw.palette);
+                for y in 0..copied.pixels.height {
+                    for x in 0..copied.pixels.width {
+                        if copied.mask.coverage(copied.mask.bounds.x + x as i64, copied.mask.bounds.y + y as i64) == 0 { continue; }
+                        for channel in 0..raw.mode.samples() {
+                            assert_eq!(copied.pixels.sample(x, y, channel), raw.sample(
+                                (copied.mask.bounds.x + x as i64) as u32,
+                                (copied.mask.bounds.y + y as i64) as u32, channel), "{name}/{shape}");
+                        }
+                    }
+                }
+            }
         }
     }
 

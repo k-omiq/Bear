@@ -74,6 +74,52 @@ pub struct Mask {
 }
 
 impl Mask {
+    /// Fade inwards from the selection boundary, including holes. A two-pass
+    /// distance field is linear in the crop size; changing a feather never
+    /// destroys the saved selection or carries its old background along.
+    pub fn blended_edges(&self, feather: f64, edge_opacity: u8) -> Self {
+        let feather = if feather.is_finite() { feather.clamp(0.0, 64.0) } else { 0.0 };
+        let edge = f32::from(edge_opacity.min(100)) / 100.0;
+        if feather == 0.0 && edge == 1.0 { return self.clone(); }
+        let (w, h) = (self.bounds.w as usize, self.bounds.h as usize);
+        if w == 0 || h == 0 { return self.clone(); }
+        let mut distance = vec![f32::INFINITY; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * w + x;
+                if self.bits[i] == 0 { distance[i] = 0.0; continue; }
+                if x == 0 || y == 0 || x + 1 == w || y + 1 == h { distance[i] = 0.5; }
+                if x > 0 { distance[i] = distance[i].min(distance[i - 1] + 1.0); }
+                if y > 0 {
+                    distance[i] = distance[i].min(distance[i - w] + 1.0);
+                    if x > 0 { distance[i] = distance[i].min(distance[i - w - 1] + std::f32::consts::SQRT_2); }
+                    if x + 1 < w { distance[i] = distance[i].min(distance[i - w + 1] + std::f32::consts::SQRT_2); }
+                }
+            }
+        }
+        for y in (0..h).rev() {
+            for x in (0..w).rev() {
+                let i = y * w + x;
+                if x + 1 < w { distance[i] = distance[i].min(distance[i + 1] + 1.0); }
+                if y + 1 < h {
+                    distance[i] = distance[i].min(distance[i + w] + 1.0);
+                    if x > 0 { distance[i] = distance[i].min(distance[i + w - 1] + std::f32::consts::SQRT_2); }
+                    if x + 1 < w { distance[i] = distance[i].min(distance[i + w + 1] + std::f32::consts::SQRT_2); }
+                }
+            }
+        }
+        let smooth = |value: f32| { let t = value.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) };
+        let mut out = self.clone();
+        for (i, value) in out.bits.iter_mut().enumerate() {
+            if *value == 0 { continue; }
+            let d = distance[i].max(0.5);
+            let fade = if feather > 0.0 { smooth(d / feather as f32) } else { 1.0 };
+            let rim = edge + (1.0 - edge) * smooth(d / (feather as f32).max(8.0));
+            *value = (f32::from(*value) * fade * rim).round() as u8;
+        }
+        out
+    }
+
     pub fn empty(bounds: Rect) -> Self {
         Mask { bits: vec![0; (bounds.w as usize) * (bounds.h as usize)], bounds }
     }
@@ -318,6 +364,22 @@ impl Mask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regional_edges_fade_without_destroying_the_selection() {
+        let mut selection = Mask::filled(Rect::new(10, 10, 40, 40));
+        selection.set(30, 30, false);
+        let softened = selection.blended_edges(6.0, 100);
+        assert!(softened.coverage(10, 20) < 20);
+        assert_eq!(softened.coverage(20, 20), 255);
+        assert_eq!(softened.coverage(30, 30), 0);
+        assert!(softened.coverage(31, 30) < 50, "holes feather too");
+        assert_eq!(selection.coverage(10, 20), 255);
+        assert_eq!(selection.blended_edges(0.0, 100), selection);
+        let dimmed = selection.blended_edges(0.0, 20);
+        assert!(dimmed.coverage(10, 20) < 60);
+        assert_eq!(dimmed.coverage(20, 20), 255, "edge opacity preserves the interior");
+    }
 
     #[test]
     fn a_mask_answers_outside_its_own_bbox() {

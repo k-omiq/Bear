@@ -202,7 +202,8 @@ function strokeOf(spec) {
  * @returns {{kind: 'rect'|'ellipse'|'polygon', points: Array<{x: number, y: number}>, feather: number}|null}
  */
 export function paintedShape(spec) {
-  if (spec.tool !== 'shapes' && spec.tool !== 'maskSelect') return null
+  if (spec.tool !== 'shapes' && spec.tool !== 'maskSelect' && !(spec.tool === 'cloneStamp' && spec.params?.mode === 'region')) return null
+  if (spec.kind === 'stroke') return null
   const box = spec.bbox
   if (!box) return null
   const feather = Math.max(0, Number((spec.params ?? paramsOf(spec.tool)).feather ?? 0) || 0)
@@ -546,6 +547,7 @@ function withoutCloud(tool, params) {
  * @returns {Promise<boolean>}
  */
 async function cloneInto(spec) {
+  if (spec.params.mode === 'region') return createMask(spec)
   if (!spec.clone) return false
   return createMask(spec, {
     cloneSource: spec.clone.source,

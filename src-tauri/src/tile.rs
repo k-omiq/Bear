@@ -519,7 +519,7 @@ fn short_digest(text: &str) -> String {
 pub fn record_appearance(record: &PatchRecord) -> String {
     let style = cleaner_core::patch::LayerStyle::from_snapshot(&record.provenance.params_snapshot);
     short_digest(&format!(
-        "{APPEARANCE_VERSION}|{}|{}|{},{},{}x{}|{}|{}|{:?}|{}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}",
+        "{APPEARANCE_VERSION}|{}|{}|{},{},{}x{}|{}|{}|{:?}|{}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
         record.id,
         record.source_idx,
         record.bbox.x,
@@ -539,6 +539,8 @@ pub fn record_appearance(record: &PatchRecord) -> String {
         style.offset_x,
         style.offset_y,
         style.rotation,
+        style.feather,
+        style.edge_opacity,
     ))
 }
 
@@ -549,7 +551,7 @@ pub fn record_appearance(record: &PatchRecord) -> String {
 pub fn layer_appearance(record: &PatchRecord) -> String {
     let style = cleaner_core::patch::LayerStyle::from_snapshot(&record.provenance.params_snapshot);
     short_digest(&format!(
-        "{APPEARANCE_VERSION}|layer|{}|{}|{},{},{}x{}|{:?}|{}|{}|{:?}|{}|{}|{}|{}|{}|{}",
+        "{APPEARANCE_VERSION}|layer|{}|{}|{},{},{}x{}|{:?}|{}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}",
         record.id,
         record.source_idx,
         record.bbox.x,
@@ -566,6 +568,8 @@ pub fn layer_appearance(record: &PatchRecord) -> String {
         style.offset_x,
         style.offset_y,
         style.rotation,
+        style.feather,
+        style.edge_opacity,
     ))
 }
 
@@ -2314,6 +2318,8 @@ mod tests {
         assert_eq!(layer_appearance(&raised), key);
         assert_ne!(layer_appearance(&with(serde_json::json!({"offsetX": 1}))), key);
         assert_ne!(layer_appearance(&with(serde_json::json!({"rotation": 5.0}))), key);
+        assert_ne!(layer_appearance(&with(serde_json::json!({"feather": 8.0}))), key);
+        assert_ne!(layer_appearance(&with(serde_json::json!({"edgeOpacity": 40}))), key);
     }
 
     fn store_detection(job: &mut Job, source_idx: usize, mask: &Mask, ink: &Mask) -> String {

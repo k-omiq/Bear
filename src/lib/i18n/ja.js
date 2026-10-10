@@ -4,6 +4,17 @@
  */
 
 export const ja = {
+  regionCopy: {
+    "mode": "クローンモード",
+    "stamp": "クローンスタンプ",
+    "name": "領域コピー",
+    "magnetic": "マグネット選択",
+    "edgeOpacity": "境界の不透明度",
+    "rotation": "回転",
+    "newRegion": "新しい選択",
+    "drawingHelp": "領域を描きます。Enterで多角形を閉じ、Backspaceで点を削除します。",
+    "placingHelp": "ドラッグで移動。上のハンドルで回転します。"
+},
   qwen: {
     "prompt": {
         "title": "消す文字を説明",

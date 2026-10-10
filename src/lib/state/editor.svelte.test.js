@@ -543,6 +543,7 @@ describe('tool parameters defaults', () => {
   // A stamp that copies exactly is the default: full opacity and flow, aligned.
   it('initializes the clone stamp as a plain aligned copy', () => {
     expect(editor.toolParams.cloneStamp).toEqual({
+      mode: 'stamp', shape: 'rect', feather: 4, edgeOpacity: 100, rotation: 0,
       size: 32,
       hardness: 50,
       spacing: 12,

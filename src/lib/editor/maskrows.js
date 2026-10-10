@@ -269,6 +269,7 @@ function candidateRow(region) {
  * @returns {string}
  */
 function titleKeyFor(region, mask) {
+  if (mask?.provenance?.params_snapshot?.mode === 'region-copy') return 'regionCopy.name'
   if (mask) return rungLabel(maskEngine(mask) ?? '')
   if (region.outcome === 'declined') return 'masks.title.declined'
   if (region.outcome === 'gate-skipped') return 'masks.title.gateSkipped'

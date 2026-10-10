@@ -4,6 +4,17 @@
  */
 
 export const ko = {
+  regionCopy: {
+    "mode": "복제 모드",
+    "stamp": "복제 도장",
+    "name": "영역 복사",
+    "magnetic": "자석 올가미",
+    "edgeOpacity": "가장자리 불투명도",
+    "rotation": "회전",
+    "newRegion": "새 선택",
+    "drawingHelp": "영역을 그리세요. Enter로 다각형을 닫고 Backspace로 점을 삭제합니다.",
+    "placingHelp": "드래그하여 이동하고 위쪽 핸들로 회전하세요."
+},
   qwen: {
     "prompt": {
         "title": "지울 글자 설명",

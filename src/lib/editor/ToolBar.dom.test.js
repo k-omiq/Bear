@@ -50,7 +50,7 @@ const MIN_WINDOW = {
  * that switch tool under a mounted bar need the switch to re-render it, and a
  * plain object would change without the bar noticing.
  */
-const { editor, pageBusy, solidOnlyOf } = await vi.importActual('../state/editor.svelte.js')
+const { editor, pageBusy, solidOnlyOf, select } = await vi.importActual('../state/editor.svelte.js')
 
 const stores = vi.hoisted(() => ({
   session: {
@@ -101,6 +101,7 @@ stores.editor = editor
 
 vi.mock('../state/editor.svelte.js', () => ({
   editor,
+  select,
   setToolParam: stores.setToolParam,
   startRun: stores.startRun,
   claimRunStart: () => ({}),

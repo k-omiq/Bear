@@ -33,7 +33,7 @@ import { MAX_MASK_PADDING, ROW_ENGINES, engineChoiceLabel } from '../model/masks
  * @property {number} min
  * @property {number} max
  * @property {number} step
- * @property {'px'|'%'} [unit]
+ * @property {'px'|'%'|'°'} [unit]
  * @property {string} [group] - the group this parameter belongs to
  * @property {(values: Record<string, unknown>) => boolean} [when] - live only while this holds
  */
@@ -180,7 +180,7 @@ export function paramGroups(spec, values = {}) {
  * @param {number} min
  * @param {number} max
  * @param {number} step
- * @param {'px'|'%'} [unit]
+ * @param {'px'|'%'|'°'} [unit]
  * @returns {RangeParam}
  */
 function range(key, labelKey, min, max, step, unit) {
@@ -526,30 +526,40 @@ export const TOOL_SPECS = [
     shell: 'pill',
   },
   {
-    // The clone stamp: it copies the page from a sampled source, through a
-    // brush, and that is all it does. It is a brush, so it carries the
-    // Brush's rows and they mean the same thing (`paint/mod.rs#render_clone`
-    // stamps with the Brush's own tip): flow builds where dabs overlap, and
-    // opacity is the ceiling of the whole stroke. Its one row of its own is
-    // the alignment - whether each stroke reads on from the last or starts
-    // again at the sampled point.
+    // Stamp paints from a sampled source. Region copies the selected artwork
+    // into an independent movable layer, with blending at its destination.
     id: 'cloneStamp',
     slot: 5,
     nameKey: 'tools.name.cloneStamp',
     hintKey: 'tools.hint.cloneStamp',
     params: [
+      ...section('selection', [choice('mode', 'regionCopy.mode', [
+        { value: 'stamp', labelKey: 'regionCopy.stamp' },
+        { value: 'region', labelKey: 'regionCopy.name' },
+      ]),
+      onlyWhen(choice('shape', 'tools.param.shape', [
+        { value: 'brush', labelKey: 'tools.option.brush' },
+        { value: 'rect', labelKey: 'tools.option.rect' },
+        { value: 'ellipse', labelKey: 'tools.option.ellipse' },
+        { value: 'lasso', labelKey: 'tools.option.lasso' },
+        { value: 'polygon', labelKey: 'tools.option.polygon' },
+        { value: 'magnetic', labelKey: 'regionCopy.magnetic' },
+      ]), (values) => values.mode === 'region')]),
       ...section('brush', [
-        range('size', 'tools.param.size', 4, 300, 2, 'px'),
-        range('hardness', 'tools.param.hardness', 0, 100, 5, '%'),
-        range('spacing', 'tools.param.spacing', 1, 50, 1, '%'),
+        onlyWhen(range('size', 'tools.param.size', 4, 300, 2, 'px'), (values) => values.mode !== 'region' || values.shape === 'brush'),
+        onlyWhen(range('hardness', 'tools.param.hardness', 0, 100, 5, '%'), (values) => values.mode !== 'region'),
+        onlyWhen(range('spacing', 'tools.param.spacing', 1, 50, 1, '%'), (values) => values.mode !== 'region'),
         range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
-        range('flow', 'tools.param.flow', 0, 100, 5, '%'),
+        onlyWhen(range('flow', 'tools.param.flow', 0, 100, 5, '%'), (values) => values.mode !== 'region'),
+        onlyWhen(range('feather', 'tools.param.feather', 0, 64, 1, 'px'), (values) => values.mode === 'region'),
+        onlyWhen(range('edgeOpacity', 'regionCopy.edgeOpacity', 0, 100, 1, '%'), (values) => values.mode === 'region'),
+        onlyWhen(range('rotation', 'regionCopy.rotation', -180, 180, 1, '°'), (values) => values.mode === 'region' && values.placing && !values.locked),
       ]),
       ...section('source', [
-        choice('alignment', 'tools.param.alignment', [
+        onlyWhen(choice('alignment', 'tools.param.alignment', [
           { value: 'aligned', labelKey: 'tools.option.aligned', icon: 'link' },
           { value: 'nonAligned', labelKey: 'tools.option.nonAligned', icon: 'link-off' },
-        ]),
+        ]), (values) => values.mode !== 'region'),
       ]),
     ],
     runnable: false,
@@ -668,6 +678,10 @@ export const DRAWING_TOOLS = /** @type {const} */ ([
  * @returns {'rect'|'ellipse'|'lasso'|'polygon'|'line'|null}
  */
 export function draftShape(tool, params = {}) {
+  if (tool === 'cloneStamp' && params.mode === 'region') {
+    const shape = String(params.shape ?? 'rect')
+    return shape === 'brush' ? null : shape === 'magnetic' ? 'polygon' : /** @type {any} */ (shape)
+  }
   if (tool === 'shapes') return /** @type {any} */ (String(params?.shape ?? 'rect'))
   if (tool === 'maskSelect') {
     if (params?.mode === 'detect') return 'rect'

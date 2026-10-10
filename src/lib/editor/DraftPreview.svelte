@@ -45,7 +45,7 @@
    * thing and mute it. The dashed cursor ring is `DrawLayer`'s and stays: it
    * says where the next stamp lands, which the painted pixels behind it cannot.
    */
-  const livePixels = $derived(active?.tool === 'cloneStamp' || active?.tool === 'brush')
+  const livePixels = $derived((active?.tool === 'cloneStamp' && editor.toolParams.cloneStamp?.mode !== 'region') || active?.tool === 'brush')
 
   /**
    * The **path the pointer took**, drawn as a hairline over the shape it

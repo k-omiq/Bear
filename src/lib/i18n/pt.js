@@ -4,6 +4,17 @@
  */
 
 export const pt = {
+  regionCopy: {
+    "mode": "Modo de clonagem",
+    "stamp": "Carimbo de clonagem",
+    "name": "Cópia de região",
+    "magnetic": "Laço magnético",
+    "edgeOpacity": "Opacidade da borda",
+    "rotation": "Rotação",
+    "newRegion": "Nova seleção",
+    "drawingHelp": "Desenhe uma área. Enter fecha o polígono; Backspace remove um ponto.",
+    "placingHelp": "Arraste para mover. Use a alça superior para girar."
+},
   qwen: {
     "prompt": {
         "title": "Descreva o que apagar",

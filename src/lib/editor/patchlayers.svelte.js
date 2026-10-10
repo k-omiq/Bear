@@ -99,6 +99,8 @@ export function loadLayer(url, options = {}) {
  * @property {string} id - the region's id
  * @property {string} url
  * @property {number} order
+ * @property {{offsetX: number, offsetY: number, rotation: number, opacity?: number}} style
+ * @property {number} pageWidth
  * @property {number} opacity - `0..1`, drawn by the canvas
  * @property {boolean} own - whether the patch belongs to this page, rather than reaching it across a join
  * @property {{x: number, y: number, w: number, h: number}} bbox - page percent of the page it belongs to
@@ -142,6 +144,8 @@ export function pageLayers(page, list) {
         opacity: Math.min(Math.max(Number(region.mask.layer?.opacity ?? 100), 0), 100) / 100,
         own,
         bbox: region.bbox,
+        style: { offsetX: 0, offsetY: 0, rotation: 0, ...(region.mask.layer ?? {}) },
+        pageWidth: Number(page.width) || 1,
       })
     }
   })

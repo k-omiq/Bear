@@ -9,6 +9,7 @@ import { cleanup, render, waitFor } from '@testing-library/svelte'
 import { editor } from '../state/editor.svelte.js'
 import PatchLayers from './PatchLayers.svelte'
 import { LAYER_BOUNDS_HEADER, forgetLayerImages, layerDraws } from './patchlayers.svelte.js'
+import { layerPreviews } from './layerpreview.svelte.js'
 
 /**
  * @param {string} id
@@ -73,6 +74,7 @@ afterEach(() => {
   delete globalThis.__TAURI_INTERNALS__
   editor.project = null
   forgetLayerImages()
+  layerPreviews.clear()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -81,6 +83,28 @@ afterEach(() => {
 const canvases = (container) => /** @type {HTMLCanvasElement[]} */ ([...container.querySelectorAll('canvas[data-layer]')])
 
 describe('a patch layer', () => {
+  it('moves and turns its actual pixels immediately, and holds that placement while committed pixels decode', async () => {
+    const { fetcher, answer } = deferredFetch()
+    vi.stubGlobal('fetch', fetcher)
+    const view = render(PatchLayers, { page: aPage([region('r1', { key: 'one' })]) })
+    await answer('/layer/r1?', '80,100,160,100')
+    const [canvas] = canvases(view.container)
+    await waitFor(() => expect(canvas.width).toBe(160))
+    layerPreviews.set('r1', { offsetX: 80, offsetY: 40, rotation: 30, opacity: 60 })
+    await waitFor(() => expect(canvas.style.transform).toBe('translate(10cqw, 5cqw) rotate(30deg)'))
+    expect(canvas.style.opacity).toBe('0.6')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    const moved = region('r1', { key: 'two', opacity: 60 })
+    Object.assign(moved.mask.layer, { offsetX: 80, offsetY: 40, rotation: 30 })
+    await view.rerender({ page: aPage([moved]) })
+    layerPreviews.delete('r1')
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
+    expect(canvas.style.transform).toBe('translate(10cqw, 5cqw) rotate(30deg)')
+    await answer('/layer/r1?', '150,140,180,140')
+    await waitFor(() => expect(canvas.style.transform).toBe('translate(0cqw, 0cqw) rotate(0deg)'))
+    expect(canvas.style.left).toBe('18.75%')
+  })
+
   it('keeps what it drew until the new picture is decoded, then changes place and pixels together', async () => {
     const { fetcher, answer } = deferredFetch()
     vi.stubGlobal('fetch', fetcher)

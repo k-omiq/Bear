@@ -43,6 +43,7 @@
   import PaintLayer from './PaintLayer.svelte'
   import { flushPaintPreview } from './paintpreview.js'
   import RegionMenu from './RegionMenu.svelte'
+  import { artworkEdges, magneticPath } from './magneticlasso.js'
 
   /**
    * The drawing surface: one element over the sheet that is both the pointer
@@ -146,8 +147,26 @@
    * somewhere else; for both of them a tinted capsule says nothing about what
    * the commit will actually look like.
    */
-  const livePixels = $derived(tool === 'cloneStamp' || tool === 'brush')
-  const stamping = $derived(tool === 'cloneStamp')
+  const regional = $derived(tool === 'cloneStamp' && params.mode === 'region')
+  const magnetic = $derived(regional && params.shape === 'magnetic')
+  let magnetMap = null
+  let fixedPoints = []
+  let magneticAnchors = []
+  let magneticFrame = 0
+  let magneticAt = null
+  function traceMagnetic(point) {
+    magneticAt = point
+    if (magneticFrame) return
+    magneticFrame = requestAnimationFrame(() => {
+      magneticFrame = 0
+      if (!active || active.keyboard || !fixedPoints.length || !magneticAt) return
+      active.points = [...fixedPoints, ...magneticPath(magnetMap, fixedPoints.at(-1), magneticAt)]
+      setDraftBbox(strokeBounds(active.points))
+    })
+  }
+  $effect(() => () => cancelAnimationFrame(magneticFrame))
+  const livePixels = $derived((tool === 'cloneStamp' && !regional) || tool === 'brush')
+  const stamping = $derived(tool === 'cloneStamp' && !regional)
   const detecting = $derived(tool === 'maskSelect' && params.mode === 'detect')
 
   /** Detection submits another area; other gestures edit the held page. */
@@ -174,6 +193,10 @@
 
   /** Commit the draft, once the preview has caught up with where it ended. */
   async function commit() {
+    if (magnetic && active && !active.keyboard && fixedPoints.length) {
+      active.points = [...fixedPoints, ...magneticPath(magnetMap, fixedPoints.at(-1), fixedPoints[0])]
+      setDraftBbox(strokeBounds(active.points))
+    }
     const pending = draft.active
     if (!pending) return
     if (pending.clone && pending.points.length > 0) {
@@ -377,7 +400,7 @@
       ...(clone ? { clone } : {}),
     })
     // A press of the stamp is already a mark: one dab, where it is.
-    if (stamping) setDraftBbox(strokeBounds(points))
+    if (stamping || (regional && round)) setDraftBbox(strokeBounds(points))
     event.preventDefault()
   }
 
@@ -432,6 +455,10 @@
     if (stamping) sampling = modifierHeld(event, session.cloneSourceModifier)
 
     if (pointerId === null) {
+      if (magnetic && active && !active.keyboard && fixedPoints.length) {
+        traceMagnetic(point)
+        return
+      }
       // Not drawing: still light whatever is under the pointer, so the Layers
       // panel keeps answering the canvas even with the surface over it.
       hover(regionAt(point, page.regions)?.id ?? null)
@@ -466,15 +493,19 @@
   function onpointerup(event) {
     if (pointerId === null) return
     const point = at(event)
+    if (point && regional && active && ['rect', 'ellipse', 'line'].includes(active.kind)) {
+      setDraftBbox(event.shiftKey ? squareBetween(active.points[0], point)
+        : strip ? stripRectBetween(active.points[0], point) : rectBetween(active.points[0], point))
+    }
     if (point && active?.kind === 'line') {
       active.points = [active.points[0], point]
-      setDraftBbox(strip ? stripRectBetween(active.points[0], point) : rectBetween(active.points[0], point))
+      if (!regional) setDraftBbox(strip ? stripRectBetween(active.points[0], point) : rectBetween(active.points[0], point))
     }
     releasePointer()
     const moved = active?.moved === true
     // A click of the stamp is one dab. A click of any other tool is a click
     // on whatever is under it.
-    if (!moved && !stamping) {
+    if (!moved && !stamping && !(regional && round)) {
       clearDraft()
       if (point) tap(point)
       return
@@ -606,6 +637,7 @@
    */
   function committable() {
     if (!active?.bbox) return false
+    if (magnetic && !active.keyboard) return magneticAnchors.length >= 3
     return polygonal ? (active.points?.length ?? 0) >= 3 : true
   }
 
@@ -619,6 +651,12 @@
    */
   function addVertex(point) {
     if (!active) {
+      if (magnetic) {
+        magnetMap = null
+        magneticAt = null
+        fixedPoints = [point]
+        magneticAnchors = [1]
+      }
       beginDraft({
         tool,
         kind: 'polygon',
@@ -629,13 +667,31 @@
         keyboard: false,
         moved: true,
       })
+      if (magnetic) {
+        const started = draft.active
+        void artworkEdges(surfaceEl?.closest('.sheet')).then(map => {
+          if (draft.active !== started) return
+          magnetMap = map
+          if (magneticAt) traceMagnetic(magneticAt)
+        })
+      }
     } else {
       const first = active.points[0]
-      if (active.points.length >= 3 && Math.hypot(point.x - first.x, point.y - first.y) <= CLOSE_WITHIN) {
+      const rect = sheetRect()
+      const closing = regional && rect
+        ? Math.hypot((point.x - first.x) * rect.width / 100, (point.y - first.y) * rect.height / 100) <= 10
+        : Math.hypot(point.x - first.x, point.y - first.y) <= CLOSE_WITHIN
+      if (committable() && closing) {
         commit()
         return
       }
-      addPoint(point)
+      if (magnetic) {
+        const last = fixedPoints.at(-1)
+        if (last && Math.hypot(last.x - point.x, last.y - point.y) < .05) return
+        fixedPoints = [...fixedPoints, ...magneticPath(magnetMap, last, point)]
+        magneticAnchors.push(fixedPoints.length)
+        active.points = [...fixedPoints]
+      } else addPoint(point)
     }
     setDraftBbox(
       strip
@@ -650,6 +706,18 @@
 
   /** @param {KeyboardEvent} event */
   function onkeydown(event) {
+    if (polygonal && active && !active.keyboard && event.key === 'Backspace') {
+      if (magnetic) {
+        magneticAnchors.pop()
+        fixedPoints = fixedPoints.slice(0, magneticAnchors.at(-1) ?? 0)
+        active.points = [...fixedPoints]
+      } else active.points = active.points.slice(0, -1)
+      if (!active.points.length) clearDraft()
+      else setDraftBbox(strokeBounds(active.points))
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
     const intent = draftKeyIntent(event, {
       hasDraft: !!active?.bbox,
       cloneCapable: stamping,
@@ -759,7 +827,7 @@
     }
     beginDraft({
       tool,
-      kind: tool === 'shapes' && (shape === 'ellipse' || shape === 'line') ? shape : 'rect',
+      kind: (tool === 'shapes' || regional) && (shape === 'ellipse' || shape === 'line') ? shape : 'rect',
       pageId: page.id,
       points: [],
       bbox: centredBbox(Math.max(KEY_DRAFT.w, MIN_SPAN), Math.max(KEY_DRAFT.h, MIN_SPAN)),

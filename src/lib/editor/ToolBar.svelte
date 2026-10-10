@@ -91,6 +91,7 @@
   import {
     applyDetectionPadding,
     editor,
+    select,
     setToolParam,
     cancelRun,
     currentPage,
@@ -125,9 +126,38 @@
   import { cloudProfileLabel, currentCloudModelId, engineModelLabel } from '../model/model-names.js'
   import { model as pipelineModel } from '../model/pipelines.js'
   import { openSettings } from '../dialogs/settingslinks.js'
+  import { isRegionCopy, layerOf } from '../model/layers.js'
+  import { openLayerEdit } from './maskactions.svelte.js'
+  import { layerPreviews } from './layerpreview.svelte.js'
 
   const spec = $derived(toolSpec(editor.tool))
-  const values = $derived(editor.toolParams[spec.id] ?? {})
+  const selectedCopy = $derived(spec.id === 'cloneStamp' && editor.toolParams.cloneStamp?.mode === 'region'
+    ? (editor.chapter?.pages ?? []).flatMap((page) => page.regions ?? []).find((region) => region.id === editor.selectionId && isRegionCopy(region)) ?? null
+    : null)
+  let blendDraft = $state(null)
+  const selectedCopyId = $derived(selectedCopy?.id ?? null)
+  const values = $derived({ ...(editor.toolParams[spec.id] ?? {}), ...(selectedCopy ? {
+    ...layerOf(selectedCopy), feather: layerOf(selectedCopy).feather ?? 0, edgeOpacity: layerOf(selectedCopy).edgeOpacity ?? 100,
+    placing: true, ...(blendDraft?.id === selectedCopy.id ? blendDraft.changes : {}),
+  } : {}) })
+  let blendEdit = null
+  let blendTimer = null
+  function settleBlend() {
+    if (blendTimer) clearTimeout(blendTimer)
+    blendTimer = null
+    const pending = blendEdit
+    const ended = blendDraft
+    const id = ended?.id
+    blendEdit = null
+    if (pending) void pending.commit().finally(() => {
+      if (id && !blendEdit) layerPreviews.delete(id)
+      if (blendDraft === ended) blendDraft = null
+    })
+  }
+  $effect(() => {
+    selectedCopyId
+    return () => { settleBlend(); blendDraft = null }
+  })
   const win = $derived(session.windows.tool)
   const rank = $derived(session.stacking.tool ?? 1)
   const isPanel = $derived(spec.shell === 'panel')
@@ -660,6 +690,18 @@
    * @param {unknown} value
    */
   function set(key, value) {
+    if (selectedCopy && ['feather', 'edgeOpacity', 'opacity', 'rotation'].includes(key)) {
+      if (!blendEdit) blendEdit = openLayerEdit(selectedCopy)
+      blendDraft = { id: selectedCopy.id, changes: { ...(blendDraft?.id === selectedCopy.id ? blendDraft.changes : {}), [key]: value } }
+      layerPreviews.set(selectedCopy.id, { ...layerOf(selectedCopy), ...blendDraft.changes })
+      blendEdit.preview({ [key]: value })
+      if (blendTimer) clearTimeout(blendTimer)
+      blendTimer = setTimeout(settleBlend, 400)
+    }
+    if (spec.id === 'cloneStamp' && (key === 'mode' || key === 'shape')) {
+      settleBlend()
+      select(null)
+    }
     if (spec.id === 'autoClean' && key === 'localFirst') setCleanLocalFirst(value === true)
     if (spec.id === 'autoClean' && key === 'solidOnly') setCleanSolidOnly(value === true)
     // Another cloud profile's model: switch the default, then store `cloud`.
@@ -1432,6 +1474,16 @@
           </div>
         {/each}
 
+        {#if spec.id === 'cloneStamp' && values.mode === 'region'}
+          <span class="rule" role="separator" aria-orientation="vertical"></span>
+          {#if selectedCopy}
+            <Button size="sm" variant="soft" onclick={() => { settleBlend(); select(null) }}>
+              {t('regionCopy.newRegion')}
+            </Button>
+          {/if}
+          <span class="region-help" aria-live="polite">{t(selectedCopy ? 'regionCopy.placingHelp' : 'regionCopy.drawingHelp')}</span>
+        {/if}
+
         {#if adjustable}
           <span class="rule" role="separator" aria-orientation="vertical"></span>
           <Popover label={t('tools.action.adjustments')} align="end">
@@ -1470,6 +1522,7 @@
 </section>
 
 <style>
+  .region-help { max-width: 185px; white-space: normal; font-size: 10px; line-height: 1.3; color: var(--t2) }
   /* The shell. As a pill: one row, as long as its contents and no longer - no
      width is stored and none is set here, and the radius is the tool rail's,
      the other floating strip of controls on this screen. As a panel: a fixed

@@ -6185,7 +6185,7 @@ mod tests {
 
         let moved = cleaner_core::patch::LayerStyle {
             opacity: 42, offset_x: 20, offset_y: 12,
-            rotation: 90.0, locked: true,
+            rotation: 90.0, locked: true, ..Default::default()
         };
         let edited = library.set_layer_style(&region_id, moved, LayerEdit::Edit).unwrap().unwrap().0;
         assert_eq!(edited.mask.as_ref().unwrap().layer, moved);
@@ -6224,7 +6224,7 @@ mod tests {
             let (library,chapter,path,id)=a_layer(&scratch,Engine::Paint);
             let mut job=Job::open(&path).unwrap();job.project.sources[0].orientation=cleaner_core::image::orientation::Orientation(value);job.flush().unwrap();
             let source=job.project.sources[0].clone();let original=job.project.patches[0].bbox;
-            let desired=cleaner_core::patch::LayerStyle { offset_x:3,offset_y:4,rotation:90.0,opacity:60,locked:false };
+            let desired=cleaner_core::patch::LayerStyle { offset_x:3,offset_y:4,rotation:90.0,opacity:60,locked:false, ..Default::default() };
             let (region,_)=library.set_layer_style(&id,desired,LayerEdit::Edit).unwrap().unwrap();
             assert_eq!(region.mask.unwrap().layer,desired,"orientation {value}");
             let opened=Job::open(&path).unwrap();let record=&opened.project.patches[0];
@@ -6238,7 +6238,7 @@ mod tests {
     }
 
     fn styled(opacity: u8, offset_x: i32, rotation: f64, locked: bool) -> cleaner_core::patch::LayerStyle {
-        cleaner_core::patch::LayerStyle { opacity, offset_x, offset_y: 0, rotation, locked }
+        cleaner_core::patch::LayerStyle { opacity, offset_x, offset_y: 0, rotation, locked, ..Default::default() }
     }
 
     /// The capabilities cross the seam with the layer, and the command refuses
@@ -6300,7 +6300,7 @@ mod tests {
 
         let faded = library.set_layer_style(
             &region_id,
-            cleaner_core::patch::LayerStyle { opacity: 40, offset_x: 20, offset_y: 12, rotation: 90.0, locked: true },
+            cleaner_core::patch::LayerStyle { opacity: 40, offset_x: 20, offset_y: 12, rotation: 90.0, locked: true, ..Default::default() },
             LayerEdit::Edit,
         ).unwrap().unwrap().0;
         assert_eq!(faded.bbox, before.regions[0].bbox, "the frozen geometry moved");

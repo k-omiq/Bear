@@ -30,6 +30,7 @@
   } from './layertransform.js'
   import { t } from '../i18n/index.js'
   import RegionMenu from './RegionMenu.svelte'
+  import { layerPreviews } from './layerpreview.svelte.js'
 
   /**
    * Everything the *application* draws on a page: the region outlines, the two
@@ -193,12 +194,19 @@
    * @param {import('../api/backend.js').ApiRegion} region
    */
   function liveLayer(region) {
-    const layer = layerOf(region)
+    const layer = { ...layerOf(region), ...(layerPreviews.get(region.id) ?? {}) }
     if (transform?.id !== region.id) return layer
     return { ...layer, offsetX: transform.offsetX, offsetY: transform.offsetY, rotation: transform.rotation }
   }
 
   const frame = $derived(frameRegion ? layerFrame(sourceBboxOf(frameRegion), liveLayer(frameRegion), page) : null)
+
+  $effect(() => {
+    const current = transform
+    if (!current) return
+    layerPreviews.set(current.id, { offsetX: current.offsetX, offsetY: current.offsetY, rotation: current.rotation })
+    return () => layerPreviews.delete(current.id)
+  })
 
   /**
    * How far the outline of a region under a move preview is shifted, in page

@@ -4,6 +4,17 @@
  */
 
 export const fr = {
+  regionCopy: {
+    "mode": "Mode de clonage",
+    "stamp": "Tampon de duplication",
+    "name": "Copie de région",
+    "magnetic": "Lasso magnétique",
+    "edgeOpacity": "Opacité du bord",
+    "rotation": "Rotation",
+    "newRegion": "Nouvelle sélection",
+    "drawingHelp": "Dessinez une zone. Entrée ferme le polygone ; Retour arrière retire un point.",
+    "placingHelp": "Faites glisser pour déplacer. La poignée du haut permet de tourner."
+},
   qwen: {
     "prompt": {
         "title": "Décrire ce qui doit être effacé",

@@ -248,7 +248,7 @@
  * @property {string|null} [maskQualityState] - a saved text-shaped result that still needs mask correction
  * @property {string|number|null} [textShapePatchRevision] - immutable text-shaped patch revision restored by history
  * @property {CloudOutcome|null} cloudOutcome - legacy; null on every mask made today
- * @property {{opacity: number, offsetX: number, offsetY: number, rotation: number, locked: boolean}} [layer] - saved presentation settings; defaults to opaque, untransformed, unlocked
+ * @property {{opacity: number, offsetX: number, offsetY: number, rotation: number, locked: boolean, feather?: number, edgeOpacity?: number}} [layer] - saved presentation settings; defaults to opaque, untransformed, unlocked
  * @property {{transform: 'movable'|'fixed'|'none', lock: boolean, opacity: boolean}} [capabilities] - what the layer may do, derived natively from what produced it (`model/layers.js`)
  * @property {{x: number, y: number, w: number, h: number}} [sourceBbox] - the untransformed patch box in page percent; the region's `bbox` is the box it is drawn in
  * @property {string|null} [appearance] - native digest of everything this layer draws; null for a detection

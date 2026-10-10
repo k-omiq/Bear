@@ -143,9 +143,13 @@ describe('toolSpec', () => {
 
   // The stamp is a brush that copies: it has the Brush's own tip rows, and the
   // one choice that is the stamp's alone. It has no second mode.
-  it('gives the clone stamp a brush tip and an alignment, and nothing else', () => {
-    const keys = toolSpec('cloneStamp').params.filter((param) => param.kind !== 'section').map((param) => param.key)
-    expect(keys).toEqual(['size', 'hardness', 'spacing', 'opacity', 'flow', 'alignment'])
+  it('keeps stamp controls and offers independent regional selection and blending', () => {
+    const spec = toolSpec('cloneStamp')
+    expect(activeParams(spec, { mode: 'stamp' }).map((param) => param.key)).toEqual(['mode', 'size', 'hardness', 'spacing', 'opacity', 'flow', 'alignment'])
+    expect(activeParams(spec, { mode: 'region', shape: 'rect' }).map((param) => param.key)).toEqual(['mode', 'shape', 'opacity', 'feather', 'edgeOpacity'])
+    expect(activeParams(spec, { mode: 'region', shape: 'brush', placing: true }).map((param) => param.key)).toEqual(['mode', 'shape', 'size', 'opacity', 'feather', 'edgeOpacity', 'rotation'])
+    expect(draftShape('cloneStamp', { mode: 'region', shape: 'magnetic' })).toBe('polygon')
+    expect(draftShape('cloneStamp', { mode: 'region', shape: 'brush' })).toBeNull()
     const alignment = toolSpec('cloneStamp').params.find((param) => param.key === 'alignment')
     expect(alignment.options.map((option) => option.value)).toEqual(['aligned', 'nonAligned'])
   })

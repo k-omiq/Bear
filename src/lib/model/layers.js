@@ -16,7 +16,7 @@
 import { currentRung } from './ladder.js'
 
 /**
- * @typedef {{opacity: number, offsetX: number, offsetY: number, rotation: number, locked: boolean}} LayerStyle
+ * @typedef {{opacity: number, offsetX: number, offsetY: number, rotation: number, locked: boolean, feather?: number, edgeOpacity?: number}} LayerStyle
  * @typedef {'movable'|'fixed'|'none'} LayerPlacement
  * @typedef {{transform: LayerPlacement, lock: boolean, opacity: boolean}} LayerCapabilities
  * @typedef {{x: number, y: number, w: number, h: number}} Bbox
@@ -66,6 +66,11 @@ export function layerOf(region) {
   return { ...DEFAULT_LAYER, ...(region?.mask?.layer ?? {}) }
 }
 
+/** Independent regional copies are paint layers whose pixels came from artwork. */
+export function isRegionCopy(region) {
+  return region?.mask?.provenance?.params_snapshot?.mode === 'region-copy'
+}
+
 /**
  * Whether a drag or a turn may start on this layer now.
  *
@@ -97,6 +102,7 @@ export function normalizeAngle(degrees) {
  */
 export function sanitizeLayer(layer) {
   const full = { ...DEFAULT_LAYER, ...layer }
+  const feather = Number(layer.feather)
   const offset = (/** @type {number} */ value) =>
     Math.max(-MAX_OFFSET, Math.min(MAX_OFFSET, Math.round(Number(value) || 0)))
   return {
@@ -105,6 +111,8 @@ export function sanitizeLayer(layer) {
     offsetY: offset(full.offsetY),
     rotation: normalizeAngle(Number(full.rotation) || 0),
     locked: !!full.locked,
+    ...('feather' in layer ? { feather: Number.isFinite(feather) ? Math.max(0, Math.min(64, feather)) : 0 } : {}),
+    ...('edgeOpacity' in layer ? { edgeOpacity: Math.max(0, Math.min(100, Math.round(Number(layer.edgeOpacity) || 0))) } : {}),
   }
 }
 
@@ -122,6 +130,7 @@ export function samePlacement(a, b) {
  */
 export function sameLayer(a, b) {
   return samePlacement(a, b) && a.opacity === b.opacity && a.locked === b.locked
+    && (a.feather ?? 0) === (b.feather ?? 0) && (a.edgeOpacity ?? 100) === (b.edgeOpacity ?? 100)
 }
 
 /**

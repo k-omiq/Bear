@@ -53,6 +53,7 @@ export const NAMESPACES = Object.freeze([
   'progress',
   'project',
   'qwen',
+  'regionCopy',
   'review',
   'settings',
   'shell',
@@ -145,6 +146,8 @@ const NOT_KEYS = new Set([
   'jobs.status',
   'jobs.result',
   'jobs.cancel',
+  // Batched denoise protocol operation, not a user-facing string.
+  'denoise.results',
 ])
 
 /**

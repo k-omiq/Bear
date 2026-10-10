@@ -109,6 +109,35 @@ const SEED_MASK = 'c1-p001-h1-m1'
 const RENDERED_MASK = 'c1-p001-h1-m2'
 const BYSTANDER_ID = 'c1-p001-r9'
 const BYSTANDER_MASK = 'c1-p001-r9-m1'
+
+describe('regional copies', () => {
+  it.each(['rect', 'ellipse', 'lasso', 'polygon', 'stroke'])('copies the %s selection without sampling a clone source', async (kind) => {
+    const previous = { ...editor.toolParams.cloneStamp }
+    editor.chapter = chapterWith([])
+    editor.project = { mode: 'single' }
+    editor.pageIndex = 0
+    editor.history = createHistory()
+    editor.toolParams.cloneStamp = { ...previous, mode: 'region', feather: 12, edgeOpacity: 65, size: 40 }
+    const api = backend({ historyPush: vi.fn(async ({ entry }) => ({ cursor: 1, entries: [{ seq: 1, label: entry.label }] })) })
+    setBackend(api)
+    beginDraft({ tool: 'cloneStamp', kind, pageId: 'c1-p001', points: [{ x: 10, y: 10 }, { x: 40, y: 10 }, { x: 30, y: 40 }], bbox: { x: 10, y: 10, w: 30, h: 30 }, mode: 'add', keyboard: false, moved: true })
+    try {
+      expect(await commitDraft()).toBe(true)
+      const request = api.createRegion.mock.calls[0][0]
+      expect(request.params).toMatchObject({ mode: 'region', feather: 12, edgeOpacity: 65 })
+      expect(request.params.cloneSource).toBeUndefined()
+      if (kind === 'stroke') {
+        expect(request.params.stroke.radius).toBe(20)
+        expect(request.params.painted).toBeUndefined()
+      } else {
+        expect(request.params.painted.kind).toBe(['lasso', 'polygon'].includes(kind) ? 'polygon' : kind)
+        expect(request.params.stroke).toBeUndefined()
+      }
+      await settled(editor.history)
+      expect(canUndo(editor.history)).toBe(true)
+    } finally { editor.toolParams.cloneStamp = previous }
+  })
+})
 const SEED_BOX = { x: 20, y: 30, w: 12, h: 4 }
 
 /** A region already on the page that no step of a cloud stroke may touch. */

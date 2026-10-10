@@ -247,6 +247,9 @@ impl Patch {
     /// of `Job::load_patch`: tiles, underlays, flattened and layered exports.
     pub fn presented(mut self) -> Self {
         let style = self.layer_style();
+        if self.provenance.params_snapshot.get("mode").and_then(|v| v.as_str()) == Some("region-copy") {
+            self.mask = self.mask.blended_edges(style.feather, style.edge_opacity);
+        }
         if style.offset_x == 0 && style.offset_y == 0 && style.rotation == 0.0 {
             return self;
         }
@@ -339,11 +342,20 @@ pub struct LayerStyle {
     pub offset_y: i32,
     pub rotation: f64,
     pub locked: bool,
+    /// Regional copies retain their original mask and blend at the destination.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub feather: f64,
+    #[serde(default = "full_edge_opacity", skip_serializing_if = "is_full_edge_opacity")]
+    pub edge_opacity: u8,
 }
+
+fn is_zero(value: &f64) -> bool { *value == 0.0 }
+fn full_edge_opacity() -> u8 { 100 }
+fn is_full_edge_opacity(value: &u8) -> bool { *value == 100 }
 
 impl Default for LayerStyle {
     fn default() -> Self {
-        Self { opacity: 100, offset_x: 0, offset_y: 0, rotation: 0.0, locked: false }
+        Self { opacity: 100, offset_x: 0, offset_y: 0, rotation: 0.0, locked: false, feather: 0.0, edge_opacity: 100 }
     }
 }
 
@@ -356,6 +368,8 @@ impl LayerStyle {
 
     pub fn sanitized(mut self) -> Self {
         self.opacity = self.opacity.min(100);
+        self.feather = if self.feather.is_finite() { self.feather.clamp(0.0, 64.0) } else { 0.0 };
+        self.edge_opacity = self.edge_opacity.min(100);
         self.offset_x = self.offset_x.clamp(-10_000, 10_000);
         self.offset_y = self.offset_y.clamp(-10_000, 10_000);
         // A turn past half way is the same turn the other way round, so a
@@ -471,7 +485,7 @@ mod tests {
     use super::*;
 
     fn style(opacity: u8, offset_x: i32, offset_y: i32, rotation: f64, locked: bool) -> LayerStyle {
-        LayerStyle { opacity, offset_x, offset_y, rotation, locked }
+        LayerStyle { opacity, offset_x, offset_y, rotation, locked, ..Default::default() }
     }
 
     #[test]

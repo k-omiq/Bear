@@ -1,12 +1,15 @@
 <script>
-  import { tileOrigin } from '../api/tile.js'
+  import { tileOrigin, pageVersion } from '../api/tile.js'
   import { editor } from '../state/editor.svelte.js'
   import { pageRatio } from './zoom.js'
   import { isDrawingTool } from './tools.js'
+  import { isRegionCopy } from '../model/layers.js'
   import DetectionMasks from './DetectionMasks.svelte'
   import DrawLayer from './DrawLayer.svelte'
   import PageArtwork from './PageArtwork.svelte'
+  import PatchLayers from './PatchLayers.svelte'
   import RegionLayer from './RegionLayer.svelte'
+  import { layerPreviews } from './layerpreview.svelte.js'
 
   /**
    * One page: the `--paper` sheet, its shadow, its aspect ratio, and the stack
@@ -76,7 +79,12 @@
   // over one deliberately. The buttons keep their tab stops either way, and
   // the surface routes a tap straight back to the region under it, so the
   // region-click seam survives underneath.
-  const drawing = $derived(isDrawingTool(editor.tool))
+  const copySelected = $derived((editor.chapter?.pages ?? []).some((candidate) =>
+    candidate.regions?.some((region) => region.id === editor.selectionId && isRegionCopy(region))))
+  const placingCopy = $derived(editor.tool === 'cloneStamp' && editor.toolParams.cloneStamp?.mode === 'region' && copySelected)
+  const movingCopy = $derived((current || strip) && (editor.chapter?.pages ?? []).some((candidate) =>
+    candidate.regions?.some(region => isRegionCopy(region) && layerPreviews.has(region.id))))
+  const drawing = $derived(isDrawingTool(editor.tool) && !placingCopy)
 
   const layered = tileOrigin() !== null
 
@@ -110,6 +118,24 @@
   let sourceReady = $state(/** @type {string|null} */ (null))
   let layersReady = $state(/** @type {string|null} */ (null))
   let shownFor = $state(/** @type {string|null} */ (null))
+  let cleanedVersion = $state(/** @type {string|null} */ (null))
+  let previewPage = $state(/** @type {string|null} */ (null))
+  let previewShownFor = $state(/** @type {string|null} */ (null))
+  let previewSourceReady = $state(/** @type {string|null} */ (null))
+  let previewLayersReady = $state(/** @type {string|null} */ (null))
+  const previewing = $derived(layered && previewPage === page.id)
+  const previewReady = $derived(previewSourceReady === page.id && previewLayersReady === page.id)
+  // Prepare independent canvases when a copy is selected. Show them during
+  // manipulation and until the committed composite has decoded. At rest the
+  // native composite preserves color-managed edge blending exactly.
+  $effect(() => {
+    if (copySelected && (current || strip)) previewPage = page.id
+    else if (!movingCopy && cleanedVersion === pageVersion(page, 'cleaned')) previewPage = null
+  })
+  $effect(() => {
+    if (movingCopy) previewShownFor = page.id
+    else if (cleanedVersion === pageVersion(page, 'cleaned')) previewShownFor = null
+  })
   const shown = $derived(!layered || shownFor === page.id)
   $effect(() => {
     const ready = covered === 'cleaned' ? sourceReady : layersReady
@@ -137,7 +163,13 @@
   {/if}
   <div class="cleaned" style:clip-path={clip}>
     {#if asked && (both || covered !== 'cleaned')}
-      <PageArtwork {page} variant="cleaned" from={loadFrom} to={loadTo} hidden={!shown} bind:ready={layersReady} />
+      <PageArtwork {page} variant="cleaned" from={loadFrom} to={loadTo} hidden={!shown} bind:ready={layersReady} bind:readyVersion={cleanedVersion} />
+      {#if previewing}
+        <div class="regional-artwork" style:visibility={shown && previewReady && previewShownFor === page.id ? null : 'hidden'}>
+          <PageArtwork {page} variant="cleaned" composite={false} from={loadFrom} to={loadTo} bind:ready={previewSourceReady} />
+          <PatchLayers {page} from={loadFrom} to={loadTo} bind:ready={previewLayersReady} />
+        </div>
+      {/if}
     {/if}
   </div>
 
@@ -186,6 +218,12 @@
   .cleaned {
     position: absolute;
     inset: 0;
+  }
+
+  .regional-artwork {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
   }
 
   .divider {
