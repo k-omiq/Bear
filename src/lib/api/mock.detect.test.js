@@ -103,6 +103,54 @@ describe('Detect and Clean', () => {
     expect((await firstPage(mock)).status).toBe('cleaned')
   })
 
+  // Solid bubbles only (`run.rs`): a speech bubble is painted flat, and every
+  // other region is left, or stored, as a detection for a later clean. Text
+  // outside a bubble is stored too, where the run would have held it.
+  it('cleans the speech bubbles and leaves the rest detected under Solid bubbles only', async () => {
+    // The second page holds a sound effect beside its two bubbles.
+    const on = (mode) => ({ ...runOn(mode), pageIndex: 1 })
+    /** @param {any} mock */
+    const page = async (mock) => (await mock.loadPages({ chapterId: CHAPTER, indices: [1] }))[0]
+    for (const mode of ['auto', 'clean']) {
+      const mock = makeMock()
+      if (mode === 'clean') await ranToEnd(mock, () => mock.runClean({ ...on('detect'), outsideBubbles: 'clean' }))
+      const before = await page(mock)
+      const bubbles = before.regions.filter((region) => region.kind === 'bubble').map((region) => region.id)
+      const others = before.regions.filter((region) => region.kind !== 'bubble').map((region) => region.id)
+      expect(bubbles.length, mode).toBeGreaterThan(0)
+      expect(others.length, mode).toBeGreaterThan(0)
+
+      const run = await ranToEnd(mock, () => mock.runClean({ ...on(mode), solidBubblesOnly: true }))
+      expect(run.events).toContainEqual(expect.objectContaining({ type: 'notice', key: 'notice.run.solidOnly',
+        params: { cleaned: bubbles.length, kept: others.length } }))
+      const after = await page(mock)
+      // Detections wait on the page, so it is not finished.
+      expect(after.status, mode).toBe('detected')
+      for (const region of after.regions) {
+        if (bubbles.includes(region.id)) {
+          expect(region.outcome, `${mode} ${region.id}`).toBe('cleaned')
+          expect(['fill', 'solid']).toContain(region.mask.provenance.engine)
+        } else {
+          expect(region, `${mode} ${region.id}`).toMatchObject({ outcome: 'detected', detected: true })
+          expect(region.mask).toBeTruthy()
+        }
+      }
+
+      // The box off, a later Clean takes what was left.
+      await ranToEnd(mock, () => mock.runClean(on('clean')))
+      const finished = await page(mock)
+      expect(finished.status, mode).toBe('cleaned')
+      expect(finished.regions.every((region) => region.outcome === 'cleaned'), mode).toBe(true)
+    }
+  })
+
+  it('leaves a run without Solid bubbles only as it was, and a Detect too', async () => {
+    const mock = makeMock()
+    const detect = await ranToEnd(mock, () => mock.runClean({ ...runOn('detect'), solidBubblesOnly: true }))
+    expect(detect.events.some((event) => event.type === 'notice' && event.key === 'notice.run.solidOnly')).toBe(false)
+    expect(detect.events).toContainEqual(expect.objectContaining({ type: 'notice', key: 'notice.run.detected' }))
+  })
+
   it('says there is nothing detected when Clean has nothing to clean, and starts nothing', async () => {
     const mock = makeMock()
     const { handle, events } = await ranToEnd(mock, () => mock.runClean(runOn('clean')))

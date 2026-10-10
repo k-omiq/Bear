@@ -212,6 +212,12 @@ pub enum LibraryError {
     /// Another process held the chapter, or the index, for longer than a
     /// command waits ([`crate::run::lock_job`]). Nothing was changed.
     Busy { path: PathBuf },
+    /// A run is working on the page the edit is of
+    /// ([`crate::run::lock_page`]). Nothing was changed.
+    PageBusy { page_index: usize },
+    /// The chapter has a run, and the write is to all of it
+    /// ([`crate::run::lock_chapter`]). Nothing was changed.
+    RunInProgress,
 }
 
 impl From<crate::run::LockError> for LibraryError {
@@ -220,6 +226,16 @@ impl From<crate::run::LockError> for LibraryError {
             crate::run::LockError::Busy { path } | crate::run::LockError::Stopped { path } => {
                 LibraryError::Busy { path }
             }
+        }
+    }
+}
+
+impl From<crate::run::WriteRefused> for LibraryError {
+    fn from(refused: crate::run::WriteRefused) -> LibraryError {
+        match refused {
+            crate::run::WriteRefused::Lock(error) => error.into(),
+            crate::run::WriteRefused::PageBusy { page_index } => LibraryError::PageBusy { page_index },
+            crate::run::WriteRefused::RunInProgress => LibraryError::RunInProgress,
         }
     }
 }
@@ -256,6 +272,8 @@ impl LibraryError {
             LibraryError::FreeSpaceUnavailable { .. } => "notice.library.ingestSpaceUnknown",
             LibraryError::LayerRefused(refusal) => refusal.reason_key(),
             LibraryError::Busy { .. } => "notice.job.busy",
+            LibraryError::PageBusy { .. } => "notice.run.pageBusy",
+            LibraryError::RunInProgress => "notice.run.busy",
         }
     }
 }
@@ -277,6 +295,11 @@ impl std::fmt::Display for LibraryError {
             LibraryError::Busy { path } => {
                 write!(f, "job_busy: another Manga Cleaner process is using {}", path.display())
             }
+            // In `WriteRefused`'s own words, code first for the same reason.
+            LibraryError::PageBusy { page_index } => {
+                write!(f, "{}", crate::run::WriteRefused::PageBusy { page_index: *page_index })
+            }
+            LibraryError::RunInProgress => write!(f, "{}", crate::run::WriteRefused::RunInProgress),
         }
     }
 }
@@ -2192,8 +2215,13 @@ impl Library {
         // manifest and write nothing. Without it a writer between its checks
         // and its buffers put the sidecar back after the delete. Refused, when
         // another process is using the chapter, before the row is touched.
+        //
+        // A run is not waited for: it lets go of the job between its pages
+        // and while its models work, so a delete that only waited would land
+        // in the middle of one. It is refused for as long as the chapter has
+        // a run (`run_in_progress`), again before the row is touched.
         let manifest = self.job_path(project_id, chapter_id);
-        let _job = crate::run::lock_job(&manifest)?;
+        let _job = crate::run::lock_chapter(&manifest)?;
 
         index.projects[position].chapters.remove(at);
         self.save(&mut index)?;
@@ -2251,7 +2279,7 @@ impl Library {
         let index = self.index()?;
         let Some(chapter_id) = chapter_holding(&index, region_id) else { return Ok(None) };
         let path = self.resolve_chapter(&chapter_id)?;
-        let _lock = crate::run::lock_job(&path)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
         let mut job = Job::open(&path).map_err(|e| LibraryError::Manifest {
             path: path.clone(), detail: e.to_string(),
         })?;
@@ -2323,7 +2351,8 @@ impl Library {
         // Under the job's own lock, like every other write to a manifest in
         // this crate: a run flushes the whole file after every region, and a
         // read-modify-write that interleaves with one loses it entirely.
-        let _lock = crate::run::lock_job(&path)?;
+        // Refused on the page a run is working on, as every region edit is.
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
         let mut job = Job::open(&path).map_err(|e| LibraryError::Manifest {
             path: path.clone(),
             detail: e.to_string(),
@@ -2376,7 +2405,7 @@ impl Library {
         let index = self.index()?;
         let Some(chapter_id) = chapter_holding(&index, region_id) else { return Ok(None) };
         let path = self.resolve_chapter(&chapter_id)?;
-        let _lock = crate::run::lock_job(&path)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
         let mut job = Job::open(&path).map_err(|e| LibraryError::Manifest {
             path: path.clone(), detail: e.to_string(),
         })?;
@@ -2406,7 +2435,7 @@ impl Library {
         let index = self.index()?;
         let Some(chapter_id) = chapter_holding(&index, region_id) else { return Ok(None) };
         let path = self.resolve_chapter(&chapter_id)?;
-        let _lock = crate::run::lock_job(&path)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
         let mut job = Job::open(&path).map_err(|error| LibraryError::Manifest {
             path: path.clone(), detail: error.to_string(),
         })?;
@@ -2439,7 +2468,7 @@ impl Library {
             return Ok(None);
         };
         let path = self.resolve_chapter(&chapter_id)?;
-        let _lock = crate::run::lock_job(&path)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
         let mut job = Job::open(&path).map_err(|e| LibraryError::Manifest {
             path: path.clone(),
             detail: e.to_string(),
@@ -2492,7 +2521,7 @@ impl Library {
             return Ok(None);
         };
         let path = self.resolve_chapter(&chapter_id)?;
-        let _lock = crate::run::lock_job(&path)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
         let mut job = Job::open(&path).map_err(|e| LibraryError::Manifest {
             path: path.clone(),
             detail: e.to_string(),
@@ -2523,7 +2552,7 @@ impl Library {
     /// manifest now holds it.
     ///
     /// The same lock and the same manifest write as every other edit of a
-    /// detection, so a run holding the chapter refuses it (`job_busy`) and a
+    /// detection, so a run working on its page refuses it (`page_busy`) and a
     /// manifest that moved under this job refuses the save (`job_stale`).
     /// Nothing is written when the region already has the type asked for.
     ///
@@ -2539,7 +2568,7 @@ impl Library {
             return Ok(None);
         };
         let path = self.resolve_chapter(&chapter_id)?;
-        let _lock = crate::run::lock_job(&path)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
         let mut job = Job::open(&path).map_err(|e| LibraryError::Manifest {
             path: path.clone(),
             detail: e.to_string(),
@@ -2573,7 +2602,7 @@ impl Library {
         };
         let path = self.resolve_chapter(&chapter_id)?;
 
-        let _lock = crate::run::lock_job(&path)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
         let mut job = Job::open(&path).map_err(|e| LibraryError::Manifest {
             path: path.clone(),
             detail: e.to_string(),
@@ -3368,6 +3397,19 @@ pub(crate) fn chapter_holding(index: &Index, region_id: &str) -> Option<String> 
     best.map(str::to_owned)
 }
 
+/// A chapter's job, for an edit of the region `region_id`.
+///
+/// An edit of a region is an edit of its page, and the id names the page
+/// ([`crate::region::page_index_in`]), so this is [`crate::run::lock_page`]:
+/// refused with `page_busy` while a run is working on that page, and taken as
+/// any writer takes it otherwise.
+fn lock_region(path: &Path, chapter_id: &str, region_id: &str) -> Result<crate::run::JobLock, LibraryError> {
+    Ok(match crate::region::page_index_in(chapter_id, region_id) {
+        Some(page_index) => crate::run::lock_page(path, chapter_id, page_index)?,
+        None => crate::run::lock_job(path)?,
+    })
+}
+
 /// One region as the manifest now holds it, with its page's status.
 ///
 /// The pair every region-level edit answers with: some edits move the page -
@@ -3833,7 +3875,7 @@ impl Library {
         let index = self.index().map_err(|e| e.to_string())?;
         let chapter_id = chapter_holding(&index, region_id).ok_or("mask_changed")?;
         let path = self.resolve_chapter(&chapter_id).map_err(|e| e.to_string())?;
-        let _lock = crate::run::lock_job(&path)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
         let mut job = Job::open(&path).map_err(|e| e.to_string())?;
         match observed {
             ObservedMask::Detection(before) => {

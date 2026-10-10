@@ -207,6 +207,9 @@ export const es = {
           workspace: 'Espacio de trabajo',
           model: 'Modelo en la nube',
           modelNote: 'Elige el modelo en la nube, la GPU y el tiempo de inactividad antes de aprobar la configuración. Cambiar el modelo descarga un checkpoint aparte.',
+          noCleanModel: 'Sin modelo de limpieza',
+          noCleanNote: 'No se instala ningún modelo de limpieza, así que la limpieza no se ejecuta en esta GPU en la nube. La configuración descarga solo los modelos de análisis y la reducción de ruido de páginas que selecciones.',
+          nothingChosen: 'Selecciona un modelo de limpieza, un modelo de análisis en la nube o la reducción de ruido de páginas. Una configuración necesita al menos uno.',
           modelLicense: 'Licencia del modelo: {license}. Revisa sus términos antes de usarlo en tu trabajo.',
           analysisModels: 'Modelos de análisis en la nube',
           analysisNote: 'Selecciona Ogkalu comic text & bubble detector (Full), la máscara de rotulación SAM-TS-L o ambos para la detección en la nube. CTD y el detector Small solo se ejecutan en este equipo. La configuración instala los grafos seleccionados; el análisis en GPU solo empieza cuando se solicita.',
@@ -450,6 +453,16 @@ export const es = {
         chooserTitle: 'El detector.onnx fijado de Ogkalu comic text & bubble detector (Full)',
       },
       setupReview: 'Los modelos seleccionados también pueden revisar una página a la vez desde la revisión del editor, antes de borrar nada.',
+      localFull: {
+        note: "Ejecuta CTD, Ogkalu Full y SAM-TS-L en este equipo. SAM necesita unos 10 GB de memoria libre. Se admite CPU; los motores GPU disponibles se muestran en Rendimiento.",
+        use: "Usar el pipeline completo localmente",
+        install: "Instalar modelos locales faltantes",
+        backends: "Elegir CPU o GPU",
+        saveFailed: "No se pudo guardar la detección local. Se mantuvo tu configuración de detección.",
+        installFailed: "No se pudieron instalar algunos modelos locales. Revisa los errores de abajo y vuelve a intentarlo.",
+        ready: "La detección completa está lista en este equipo.",
+        pending: "Instala o verifica los modelos de abajo antes de ejecutar la detección completa en este equipo.",
+      },
       modelsLegend: 'Modelos de detección',
       runOn: {
         off: 'La GPU en la nube necesita los motores en la nube activados en Ajustes > Nube.',
@@ -1082,7 +1095,8 @@ export const es = {
       cancelRun: 'Cancelar ejecución',
     },
     readout: {
-      page: 'Página {index} de {total}',
+      pageJump: 'Página {index} de {total} · clic para saltar',
+      pageJumpField: 'Ir a la página, 1 a {total}',
       review: 'Región {index} de {total}',
       reviewPending: {
         select: 'total',
@@ -1924,8 +1938,6 @@ export const es = {
     },
     menu: {
       label: 'Acciones de la capa',
-      page: 'Acciones de la página',
-      detectHere: 'Detectar texto aquí',
     },
     hint: {
       showOnPage: 'Desplazarse a esta región y seleccionarla',
@@ -1961,7 +1973,7 @@ export const es = {
       shapes: 'arrastra sobre la página',
       aiMaskBrush: 'pasa el trazo sobre el texto',
       cloneStamp: '{cloneSourceModifier}+clic en un origen',
-      maskSelect: 'añade o quita del área que borra Limpiar',
+      maskSelect: 'añade o quita del área que borra Limpiar, o detecta texto en un área que dibujes',
     },
     label: {
       choice: '{labelKey}: {value}',
@@ -1975,6 +1987,8 @@ export const es = {
       chooseModels: 'Elegir modelos',
       useCloud: 'Detectar en la GPU en la nube',
       mixedHint: 'Las regiones configuradas con Relleno o Color sólido se intentan primero aquí; las que no pasan el control de calidad van a la GPU en la nube. Desactivado, todas las regiones van a la GPU en la nube.',
+      solidOnly: 'Solo globos lisos',
+      solidOnlyHint: 'Limpia solo los globos de diálogo sobre papel liso, con un relleno plano. Las demás regiones quedan detectadas, para limpiarlas después aquí o en la GPU en la nube.',
     },
     padding: {
       hint: 'Agranda cada máscara detectada estos píxeles. Detectar lo usa; Aplicar cambia las máscaras ya detectadas.',
@@ -1983,6 +1997,7 @@ export const es = {
       local: 'Todas las regiones se limpian partiendo de estas opciones, incluidas las regiones detectadas antes.',
       cloud: 'Todas las regiones van a la GPU en la nube.',
       mixed: 'Relleno y Color sólido se intentan primero en este equipo. El resto va a la GPU en la nube.',
+      solidOnly: 'Solo se limpian los globos de diálogo sobre papel liso, a partir de esta elección. El resto queda detectado.',
     },
     short: {
       cleanWith: 'Limpiar con',
@@ -2058,6 +2073,7 @@ export const es = {
       nonAligned: 'No alineado',
       maskAdd: 'Añadir a la selección',
       maskRemove: 'Quitar de la selección',
+      maskDetect: 'Detectar texto en un área',
       brush: 'Pincel',
     },
   },
@@ -2180,6 +2196,7 @@ export const es = {
     run: {
       busy: 'Otra ejecución está empezando o ya está en curso. Espera a que termine.',
       atCapacity: 'Ya está en curso el máximo de ejecuciones simultáneas. Espera a que termine una y luego inicia esta.',
+      pageBusy: 'Una ejecución está trabajando en esta página. No se cambió nada; inténtalo de nuevo cuando pase a la siguiente.',
       finished: {
         select: 'pages',
         zero: 'Limpieza de texto terminada: ninguna página necesitaba limpieza.',
@@ -2196,6 +2213,7 @@ export const es = {
         other: 'Detección terminada: se encontraron {regions} regiones. Todavía no se limpió nada.',
       },
       allLanguagesSkipped: 'Todos los idiomas de origen se omiten. Selecciona un idioma para limpiar.',
+      solidOnly: 'Globos lisos limpiados: {cleaned}. Regiones que quedan detectadas: {kept}.',
       ocrRescueUnavailable: 'El lector de texto está desactivado en esta ejecución: {reason}',
       accelFallback: '{model} cambió de {requested} a {effective}: {reason}',
       modelsMissing: 'Los modelos no están instalados. Descárgalos en Ajustes › Modelos.',
@@ -2755,6 +2773,7 @@ export const es = {
       denoiseChanged: 'La configuración de reducción de ruido o el acceso a este despliegue necesita atención. Se actualizó la configuración cloud guardada. Revisa Ajustes > Cloud y vuelve a probar la conexión.',
       cleanChanged: 'La configuración de limpieza o el acceso a este despliegue necesita atención. Se actualizó la configuración cloud guardada. Revisa Ajustes > Cloud y vuelve a probar la conexión.',
       cleanMissing: 'La configuración de limpieza o el acceso a este despliegue necesita atención. Revisa Ajustes > Cloud y vuelve a probar la conexión.',
+      cleanNotInstalled: 'Este despliegue se configuró sin modelo de limpieza. Para limpiar en la nube, actualízalo en Ajustes > Cloud y elige un modelo de limpieza.',
     },
     profile: {
       selectFailed: 'No se pudo cambiar el modelo en la nube. Se sigue usando el anterior.',
@@ -3011,7 +3030,12 @@ export const es = {
         idle: 'Inactiva',
         idleStops: 'Inactiva, se detiene en ~{time}',
         stopping: 'Deteniendo…',
+        waiting: 'Esperando una GPU',
         unknown: 'Estado no disponible, reintentando…',
+      },
+      waiting: {
+        name: 'GPU en la nube (análisis)',
+        note: 'El proveedor aún no ha iniciado una GPU para este análisis. Puede que no tenga ninguna libre de este tipo. El análisis sigue cuando se inicie una.',
       },
       price: '~{price:currency}/h',
       priceNote: 'Estimación según el precio de lista: unos {price:currency} por hora mientras esta GPU esté encendida. El proveedor cobra el tiempo realmente usado.',

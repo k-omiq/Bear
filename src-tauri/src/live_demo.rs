@@ -345,6 +345,7 @@ async fn detect(
         Some(grant.grant_id),
         Some("detect".into()),
         None,
+        None,
     )
     .await?;
     wait_run(&run, observed)?;

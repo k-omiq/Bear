@@ -203,6 +203,13 @@ describe('how a render ends', () => {
     expect(cloudNotices()).toEqual([['notice.cloud.failed', { reasonKey: 'notice.cloud.error.generic' }]])
   })
 
+  it('says a render refused on a page a run is on in the edit\'s own words', () => {
+    mockBackend()
+    trackCloudJob({ attemptId: A, ...where })
+    settleCloudJob(A, { phase: 'failed', errorCode: 'page_busy' })
+    expect(cloudNotices()).toEqual([['notice.cloud.failed', { reasonKey: 'notice.run.pageBusy' }]])
+  })
+
   it('treats attempt_busy as a render already running, not as a failure', () => {
     mockBackend()
     trackCloudJob({ attemptId: A, ...where })

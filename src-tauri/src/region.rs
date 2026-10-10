@@ -462,7 +462,7 @@ pub(crate) struct Located {
 /// gate's `-u{x}-{y}-{w}-{h}` and a hand region's `-h{n}` all share that stem.
 /// So the page is readable without opening a manifest, which is what lets the
 /// job be opened **once**, under its lock, with everything already known.
-fn page_index_in(chapter_id: &str, region_id: &str) -> Option<usize> {
+pub(crate) fn page_index_in(chapter_id: &str, region_id: &str) -> Option<usize> {
     let rest = region_id.strip_prefix(&format!("{chapter_id}-p"))?;
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     digits.parse::<usize>().ok()?.checked_sub(1)
@@ -913,7 +913,9 @@ fn overlap(a: Rect, b: Rect) -> u64 {
 /// Under the job's own lock for the whole of it, like every other
 /// read-modify-write of a manifest in this crate: the file is rewritten whole,
 /// and an edit that interleaved with a run's flush would lose one of them
-/// entirely.
+/// entirely. Refused at once, with `page_busy`, on the page a run is working
+/// on ([`run::lock_page`]): the run would write its own results over the
+/// edit. Every other page of that chapter is edited as if there were no run.
 ///
 /// Everything here renders on this machine. The cloud is reached only through
 /// a grant, before a plan is made, so `Engine::Cloud` is refused, and
@@ -957,7 +959,7 @@ fn edit_with_bench_render(
     mut plan: Plan,
     mut test_renderer: Option<TestRenderer<'_>>,
 ) -> Result<Outcome, String> {
-    let _lock = run::lock_job(&located.job_path)?;
+    let _lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
     // Read-only from here: the manifest is mutated in `commit`, which takes the
     // job by value and is the only writer either path reaches.
     let job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
@@ -4047,6 +4049,12 @@ fn render_in_cloud(
         CloudRender::Stopped("failed", code)
     };
 
+    // Before the grant is spent: a run is working on the page, and the result
+    // would be refused when it came back (`attach_patch_to_project`).
+    if run::page_run(&located.job_path, &located.chapter_id, located.page_index).is_some() {
+        return refuse_with("page_busy");
+    }
+
     let field = |key: &str| params.get(key).cloned();
     let (Some(target), Some(recipe), Some(intent)) = (
         field("executionTarget").and_then(|v| serde_json::from_value::<ExecutionTarget>(v).ok()),
@@ -4640,9 +4648,9 @@ fn edit_detection_mask_at(
     stroke: Option<&serde_json::Value>,
     painted: Option<&serde_json::Value>,
 ) -> Result<Option<MaskEdit>, String> {
-    // The same lock every other edit takes, so a run holding the chapter
-    // refuses this one the same way.
-    let _lock = run::lock_job(&located.job_path)?;
+    // The same lock every other edit of a page takes, so a run working on
+    // this page refuses this one the same way (`page_busy`).
+    let _lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
     let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
     let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else {
         return Ok(None);
@@ -4816,59 +4824,58 @@ fn approve_held_mask_at(
     if padding > cleaner_core::constants::MAX_MASK_PADDING {
         return Err("mask_padding_invalid".to_owned());
     }
-    let created = {
-        let _lock = run::lock_job(&located.job_path)?;
-        let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
-        let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else {
-            return Ok(None);
-        };
-        let page_id = job_page_id(region_id);
-        let Some(row) = job.project.regions_untouched.iter()
-            .find(|record| record.source_idx == source_idx && untouched_id(page_id, record.bbox) == region_id)
-            .cloned()
-        else {
-            return Ok(None);
-        };
-        let lettering = match job.load_held_lettering(&row).map_err(|e| e.to_string())? {
-            Some((lettering, _)) => lettering,
-            None => {
-                let Some(path) = job.source_path(source_idx) else {
-                    return Ok(None);
-                };
-                let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-                let page = job.display_page(source_idx, &bytes).map_err(|e| e.to_string())?;
-                let source = &job.project.sources[source_idx];
-                let rect = source.orientation.rect(row.bbox, source.w, source.h);
-                text_under(&page, rect, &sha256_hex(&bytes))
-                    .map_or_else(|| Mask::filled(clamped(rect, &page)), |(seed, _)| seed)
-            }
-        };
-        // Stored cropped to its tight bounds, as every detection's mask is.
-        let Some(mask) = tight(&lettering) else {
-            return Ok(None);
-        };
-        let outside = untouched_outside(Some(&row.reason), row.inside_bubble);
-        let record = cleaner_core::project::DetectedRegion {
-            inside: !outside,
-            pick: run::pick_name(untouched_fallback_pick(Some(&row.reason), row.inside_bubble)).to_owned(),
-            ..hand_detection(source_idx, mask.bounds, order_after_page(&job, source_idx))
-        };
-        // The row leaves in the write that names the detection, or the page
-        // would list the warning beside the mask that answered it.
-        clear_untouched(&mut job, source_idx, region_id);
-        let page_id = crate::library::page_id(&located.chapter_id, located.page_index);
-        job.rewrite_page_detections(source_idx, &page_id, Vec::new(), vec![cleaner_core::project::LoadedDetection {
-            record, ink: mask.clone(), mask, evidence: None, base: None,
-        }], &[]).map_err(|e| e.to_string())?.into_iter().next()
+    // One hold for the detection, its padding and the answer: the page is
+    // asked for once, so a run cannot take it between the detection and its
+    // padding and leave the one without the other.
+    let _lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
+    let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+    let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else {
+        return Ok(None);
     };
+    let page_id = job_page_id(region_id);
+    let Some(row) = job.project.regions_untouched.iter()
+        .find(|record| record.source_idx == source_idx && untouched_id(page_id, record.bbox) == region_id)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let lettering = match job.load_held_lettering(&row).map_err(|e| e.to_string())? {
+        Some((lettering, _)) => lettering,
+        None => {
+            let Some(path) = job.source_path(source_idx) else {
+                return Ok(None);
+            };
+            let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let page = job.display_page(source_idx, &bytes).map_err(|e| e.to_string())?;
+            let source = &job.project.sources[source_idx];
+            let rect = source.orientation.rect(row.bbox, source.w, source.h);
+            text_under(&page, rect, &sha256_hex(&bytes))
+                .map_or_else(|| Mask::filled(clamped(rect, &page)), |(seed, _)| seed)
+        }
+    };
+    // Stored cropped to its tight bounds, as every detection's mask is.
+    let Some(mask) = tight(&lettering) else {
+        return Ok(None);
+    };
+    let outside = untouched_outside(Some(&row.reason), row.inside_bubble);
+    let record = cleaner_core::project::DetectedRegion {
+        inside: !outside,
+        pick: run::pick_name(untouched_fallback_pick(Some(&row.reason), row.inside_bubble)).to_owned(),
+        ..hand_detection(source_idx, mask.bounds, order_after_page(&job, source_idx))
+    };
+    // The row leaves in the write that names the detection, or the page
+    // would list the warning beside the mask that answered it.
+    clear_untouched(&mut job, source_idx, region_id);
+    let page_id = crate::library::page_id(&located.chapter_id, located.page_index);
+    let created = job.rewrite_page_detections(source_idx, &page_id, Vec::new(), vec![cleaner_core::project::LoadedDetection {
+        record, ink: mask.clone(), mask, evidence: None, base: None,
+    }], &[]).map_err(|e| e.to_string())?.into_iter().next();
     let Some(created) = created else {
         return Ok(None);
     };
     if padding > 0 {
-        set_detection_padding_scoped_at(located, Some(located.page_index), padding, Some(&created))?;
+        pad_detections(&mut job, &located.chapter_id, Some(located.page_index), padding, Some(&created))?;
     }
-    let _lock = run::lock_job(&located.job_path)?;
-    let job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
     let page_status = crate::library::page_of(&located.chapter_id, &job.project, located.page_index)
         .map(|page| page.status.to_owned())
         .unwrap_or_default();
@@ -4893,8 +4900,9 @@ fn approve_held_mask_at(
 ///
 /// Answers the detections that changed, the ones another took in, and the
 /// pages they are on, or `null` for a chapter that is not there. Refuses
-/// `mask_padding_invalid` past the widest padding offered, and the
-/// chapter-busy code a run holds.
+/// `mask_padding_invalid` past the widest padding offered; `page_busy` for a
+/// page a run is working on; and `run_in_progress` for a whole chapter that
+/// has a run.
 #[tauri::command]
 pub async fn set_detection_padding(
     app: tauri::AppHandle,
@@ -4955,7 +4963,7 @@ fn set_detection_padding_at(located: &Located, page_index: Option<usize>, paddin
     set_detection_padding_scoped_at(located, page_index, padding, None)
 }
 
-fn set_detection_padding_scoped_at(
+pub(crate) fn set_detection_padding_scoped_at(
     located: &Located,
     page_index: Option<usize>,
     padding: u32,
@@ -4964,8 +4972,25 @@ fn set_detection_padding_scoped_at(
     if padding > cleaner_core::constants::MAX_MASK_PADDING {
         return Err("mask_padding_invalid".to_owned());
     }
-    let _lock = run::lock_job(&located.job_path)?;
+    // One page is an edit of that page, refused while a run is working on it
+    // (`page_busy`). Every page is a write to the chapter, refused for as long
+    // as the chapter has a run at all (`run_in_progress`).
+    let _lock = match page_index {
+        Some(index) => run::lock_page(&located.job_path, &located.chapter_id, index),
+        None => run::lock_chapter(&located.job_path),
+    }?;
     let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+    pad_detections(&mut job, &located.chapter_id, page_index, padding, region_id)
+}
+
+/// [`set_detection_padding_scoped_at`]'s work, on a job the caller holds.
+fn pad_detections(
+    job: &mut Job,
+    chapter_id: &str,
+    page_index: Option<usize>,
+    padding: u32,
+    region_id: Option<&str>,
+) -> Result<PaddingEdit, String> {
     let indices: Vec<usize> = match page_index {
         Some(index) => vec![index],
         None => (0..job.project.strip.order.len()).collect(),
@@ -4998,7 +5023,7 @@ fn set_detection_padding_scoped_at(
             let Some(found) = job.load_detection(id).map_err(|e| e.to_string())? else {
                 continue;
             };
-            let seed = legacy_padding_seed(&job, &found.record);
+            let seed = legacy_padding_seed(job, &found.record);
             if found.record.padding_px == padding && seed.is_none() {
                 continue;
             }
@@ -5066,7 +5091,7 @@ fn set_detection_padding_scoped_at(
             continue;
         }
         let changed: Vec<String> = updated.iter().map(|found| found.record.id.clone()).collect();
-        let page_id = crate::library::page_id(&located.chapter_id, index);
+        let page_id = crate::library::page_id(chapter_id, index);
         job.rewrite_page_detections(source_idx, &page_id, updated, Vec::new(), &removed)
             .map_err(|e| e.to_string())?;
         edit.changed.extend(changed);
@@ -5958,6 +5983,15 @@ fn paint_preview_fits(paint: &PaintPlan, width: u32, height: u32) -> bool {
 
 /// Read-only authoritative paint preview. Pixels come from the same native
 /// renderer as commit, then cross the managed display boundary exactly once.
+///
+/// **Only the paint, on the page's own proxy grid.** `png` is see-through
+/// everywhere the stroke is not, and where the stroke is it holds the pixels
+/// the page's tiles will hold once it is committed
+/// (`proxy::managed_proxy_overlay`). So the interface lays it over those tiles
+/// and the artwork around the stroke is never redrawn. It used to be the
+/// stroke's whole box at the page's own resolution, opaque: the browser then
+/// scaled the box and the tiles under it apart, and the page inside the box
+/// shifted for as long as the stroke lasted.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaintPreview {
@@ -6029,17 +6063,28 @@ pub async fn preview_paint(
         translate_made(&mut made,shift);
         let bounds = made.mask.bounds;
         if u64::from(bounds.w) * u64::from(bounds.h) > 4_194_304 { return Ok(None); }
-        let display = cleaner_core::image::proxy::display(&made.pixels).map_err(|e|e.to_string())?;
-        let png = cleaner_core::image::encode(&display, cleaner_core::image::Format::Png).map_err(|e|e.to_string())?;
-        Ok(Some(PaintPreview {
-            request_id, revision, chapter_id, page_index,
-            bounds: Bbox { x: bounds.x as f64 / page.width as f64 * 100.0,
-                y: bounds.y as f64 / page.height as f64 * 100.0,
-                w: bounds.w as f64 / page.width as f64 * 100.0,
-                h: bounds.h as f64 / page.height as f64 * 100.0 },
-            png,
-        }))
+        let Some((bounds, layer)) = preview_layer(&made.pixels, &made.mask, page.width, page.height)? else { return Ok(None) };
+        let png = cleaner_core::image::encode(&layer, cleaner_core::image::Format::Png).map_err(|e|e.to_string())?;
+        Ok(Some(PaintPreview { request_id, revision, chapter_id, page_index, bounds, png }))
     }).await
+}
+
+/// A previewed stroke as the interface draws it: where it sits, in percent of
+/// the page, and its see-through pixels on that page's proxy grid.
+///
+/// The mask may run past the page - a longstrip stroke over a join does - so
+/// the percentages may start below 0 or end above 100.
+fn preview_layer(pixels: &Raster, mask: &Mask, page_w: u32, page_h: u32) -> Result<Option<(Bbox, Raster)>, String> {
+    use cleaner_core::image::proxy::{managed_proxy_overlay, ProxyPlan};
+    let plan = ProxyPlan::for_page(page_w, page_h);
+    let Some((rect, layer)) = managed_proxy_overlay(pixels, mask, &plan).map_err(|e| e.to_string())? else { return Ok(None) };
+    let percent = |value: f64, total: u32| value * 100.0 / f64::from(total);
+    Ok(Some((Bbox {
+        x: percent(rect.x as f64, plan.proxy_w),
+        y: percent(rect.y as f64, plan.proxy_h),
+        w: percent(f64::from(rect.w), plan.proxy_w),
+        h: percent(f64::from(rect.h), plan.proxy_h),
+    }, layer)))
 }
 
 /// `cleanAnyway` - clean a region the script gate held back, on the user's
@@ -7634,6 +7679,49 @@ mod tests {
         paint.spec.spacing = 1.0;
         paint.points.push(PaintPoint { x: 60.0,y: 50.0,p: 1.0 });
         assert!(!paint_preview_fits(&paint,10000,10000));
+    }
+
+    /// What the interface lays over the page's tiles while a stroke is drawn
+    /// is the stroke and nothing else: clear in the corners of its own box,
+    /// solid along its path, and placed on the page's proxy grid - which is
+    /// what keeps the artwork around a stroke from moving under it.
+    #[test]
+    fn a_previewed_stroke_is_only_its_own_paint_on_the_proxy_grid() {
+        use cleaner_core::image::proxy::ProxyPlan;
+        use cleaner_core::image::{BitDepth, ColorMode};
+        use cleaner_core::paint::{render_brush, BrushSpec, StrokePoint};
+        let page = Raster {
+            width: 2400, height: 3000, mode: ColorMode::Gray, depth: BitDepth::Eight,
+            icc: None, palette: None, trns: None, srgb_intent: None, color: Default::default(),
+            data: vec![200; 2400 * 3000],
+        };
+        let spec = BrushSpec { size: 40.0, hardness: 100.0, pressure_size: false, ..BrushSpec::default() };
+        let points = [StrokePoint { x: 600.0, y: 900.0, p: 1.0 }, StrokePoint { x: 1100.0, y: 1300.0, p: 1.0 }];
+        let painted = render_brush(&page, &[], None, &points, &spec, [0, 0, 0]).unwrap();
+
+        let plan = ProxyPlan::for_page(page.width, page.height);
+        let (bounds, layer) = preview_layer(&painted.pixels, &painted.mask, page.width, page.height).unwrap().unwrap();
+        assert_eq!(layer.mode, ColorMode::Rgba);
+        // Whole proxy pixels, so the layer lines up with the tiles under it.
+        let on_grid = |percent: f64, proxy: u32| percent / 100.0 * f64::from(proxy);
+        assert_eq!(on_grid(bounds.w, plan.proxy_w).round() as u32, layer.width);
+        assert_eq!(on_grid(bounds.h, plan.proxy_h).round() as u32, layer.height);
+        assert!((on_grid(bounds.x, plan.proxy_w) - on_grid(bounds.x, plan.proxy_w).round()).abs() < 1e-9);
+        assert!(layer.width < painted.mask.bounds.w, "the layer is still at the page's own resolution");
+
+        // The stroke runs corner to corner of its box, so the other two
+        // corners are page the stroke never touched.
+        assert_eq!(layer.sample(layer.width - 2, 1, 3), 0, "the box's corner was redrawn");
+        assert_eq!(layer.sample(1, layer.height - 2, 3), 0, "the box's corner was redrawn");
+        let middle = (layer.width / 2, layer.height / 2);
+        assert_eq!(layer.sample(middle.0, middle.1, 3), 255);
+        assert_eq!(layer.sample(middle.0, middle.1, 0), 0, "the paint is not the colour that was asked for");
+
+        // A stroke that ran onto the next page of a strip is still shown there.
+        let mut below = painted.mask.clone();
+        below.bounds.y += 2000;
+        let (bounds, _) = preview_layer(&painted.pixels, &below, page.width, page.height).unwrap().unwrap();
+        assert!(bounds.y < 100.0 && bounds.y + bounds.h > 100.0, "{bounds:?}");
     }
 
     #[test]

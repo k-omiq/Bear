@@ -7,7 +7,7 @@
   import { cloudProfileLabel, currentCloudModelId, engineModelLabel } from '../model/model-names.js'
   import { actionHint } from './maskrows.js'
   import { menuPoint } from './gesture.js'
-  import { cleanDetected, deleteRow, keepDependencyResult, openLayerEdit, rerunMask, runMaskAction, setDetectedMaskPadding, updateLayer } from './maskactions.svelte.js'
+  import { cleanDetected, deleteRow, keepDependencyResult, openLayerEdit, regionPageBusy, rerunMask, runMaskAction, setDetectedMaskPadding, updateLayer } from './maskactions.svelte.js'
   import { layerCapabilities, layerOf } from '../model/layers.js'
   import { Button, Disclosure, IconButton, Select } from '../ui/index.js'
   import { t } from '../i18n/index.js'
@@ -73,10 +73,12 @@
   let paddingDraft = $state(null)
   let savingPadding = $state(false)
   const maskPadding = $derived(paddingDraft ?? region.paddingPx ?? 0)
+  // The slider waits only while a run is on this row's own page.
+  const pageHeld = $derived(regionPageBusy(region))
 
   /** @param {Event & {currentTarget: HTMLInputElement}} event */
   async function changePadding(event) {
-    if (savingPadding || editor.run.active) {
+    if (savingPadding || pageHeld) {
       paddingDraft = null
       return
     }
@@ -364,7 +366,7 @@
           <input type="range" min="0" max={MAX_MASK_PADDING} step="1" value={maskPadding}
             aria-label={t('tools.param.maskPadding')}
             aria-valuetext={`${maskPadding} px`}
-            disabled={savingPadding || editor.run.active}
+            disabled={savingPadding || pageHeld}
             oninput={(event) => (paddingDraft = Number(event.currentTarget.value))}
             onchange={changePadding} />
         </label>

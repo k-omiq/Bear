@@ -164,6 +164,9 @@ export const DEFAULT_DETECTOR = 'ctd-rtdetr'
 export const DETECTOR_MODEL_IDS = Object.freeze(['ctd', 'rtSmall', 'rtFull', 'samTs'])
 export const DEFAULT_DETECTOR_MODELS = Object.freeze(['ctd', 'rtSmall'])
 
+/** The complete detector combination available on this computer. The text reader remains optional. */
+export const FULL_LOCAL_DETECTOR_MODELS = Object.freeze(['ctd', 'rtFull', 'samTs'])
+
 /** The detection choices as Settings and setup list them: CTD, Full, Small, SAM-TS-L. */
 export const DETECTOR_CHOICES = Object.freeze(['ctd', 'rtFull', 'rtSmall', 'samTs'])
 

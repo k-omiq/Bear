@@ -129,6 +129,12 @@ describe('sanitizeSession', () => {
     expect(sanitizeSession({}).cleanLocalFirst).toBe(false)
     expect(sanitizeSession({ cleanLocalFirst: 'true' }).cleanLocalFirst).toBe(false)
   })
+  it('retains Solid bubbles only, off for anything that is not a boolean', async () => {
+    const { sanitizeSession } = await import('./session.svelte.js')
+    expect(sanitizeSession({ cleanSolidOnly: true }).cleanSolidOnly).toBe(true)
+    expect(sanitizeSession({}).cleanSolidOnly).toBe(false)
+    expect(sanitizeSession({ cleanSolidOnly: 'true' }).cleanSolidOnly).toBe(false)
+  })
   it('preserves sidecarPath from stored session', async () => {
     const { sanitizeSession } = await import('./session.svelte.js')
     const session = sanitizeSession({ sidecarPath: '/path/to/flux' })

@@ -28,7 +28,9 @@ A response is `{"protocol_version", "request_id", "success": true, "data"}` or `
 | `probe_compatibility` | `endpoint_url`, `runtime_credential` | 50 s | Checks `/health` and `/model-info` through the edge. |
 | `forget_credential` | `installation_id` | 50 s | Records that the desktop dropped the setup key. |
 
-Budgets stay under the desktop's kill timers (60 s and 30 min). `options` accepts `gpu`, from the provider allowlist, `idle_seconds`, 60 to 600 (default 120), `model_id` (one of `PRODUCTION_MODELS` in deploy/cloud/common/manifest.py: FLUX.2 Klein 4B, the default; Klein 9B; Qwen-Image-Edit-2511), `analysis_models`, `denoise` and, on Modal, `routing_region` (`us-east`, the default, `us-west`, `eu-west` or `ap-south`: where Modal's proxy for the gateway sits). A model with a required GPU (`required_gpu` in its spec: L40S on Modal and RTX5090 on Beam for Klein 9B and for Qwen) gets it by default and refuses any other. Modal credentials are an API token (`ak-`/`as-`); a proxy token (`wk-`/`ws-`) is refused. Beam credentials are `{"token": ...}`.
+Budgets stay under the desktop's kill timers (60 s and 30 min). `options` accepts `gpu`, from the provider allowlist, `idle_seconds`, 60 to 600 (default 120), `model_id` (one of `PRODUCTION_MODELS` in deploy/cloud/common/manifest.py: FLUX.2 Klein 4B, the default; Klein 9B; Qwen-Image-Edit-2511; or `none`, see below), `analysis_models`, `denoise` and, on Modal, `routing_region` (`us-east`, the default, `us-west`, `eu-west` or `ap-south`: where Modal's proxy for the gateway sits). A model with a required GPU (`required_gpu` in its spec: L40S on Modal and RTX5090 on Beam for Klein 9B and for Qwen) gets it by default and refuses any other. Modal credentials are an API token (`ak-`/`as-`); a proxy token (`wk-`/`ws-`) is refused. Beam credentials are `{"token": ...}`.
+
+`model_id: "none"` (`MODEL_NONE` in manifest.py) sets up an installation without a cleaning model: it serves the analysis graphs and page denoise only. It is Modal only (`NO_MODEL_PROVIDERS` in `provisioner/driver_base.py`); Beam refuses it, because its gateway and seed are built around the render queue. It needs at least one analysis model or page denoise, else `plan` answers `ERR_VALIDATION_ERROR`. The plan lists it in `model_options` with `weights_bytes` 0, and `model_weights_bytes`, `model_revision` and `model_license` are 0 and empty.
 
 Every failure is typed: `ERR_VALIDATION_ERROR` (bad params, missing credentials, a stage that forbids the op), `ERR_UNAPPROVED_PLAN` (hash mismatch, plan drift, another account), `ERR_ACTIONABLE_MISSING_PERMISSION` (the provider refused the key), `ERR_PROVIDER_UNAVAILABLE` (SDK missing, or the provider unreachable before any change), `ERR_EXECUTION_FAILED` (a step failed; Resume continues), `ERR_EXECUTION_TIMEOUT` (the budget ran out; Resume continues), `ERR_SECURITY_VIOLATION` (symlinked journal, unsafe URL), and the envelope codes `ERR_INVALID_REQUEST_PAYLOAD`, `ERR_PAYLOAD_TOO_LARGE`, `ERR_INVALID_PROTOCOL_VERSION`, `ERR_UNSUPPORTED_OPERATION` and `ERR_UNSUPPORTED_PROVIDER`. No platform refusal remains: both providers run on macOS and Windows.
 
@@ -46,7 +48,7 @@ A successful `apply` or `resume` returns:
  "setup_credential_forgotten": true}
 ```
 
-Beam returns `{"kind": "beam_bearer", "token": "<the user's key>"}` as `runtime_credential`. The response is redacted like any other, then `runtime_credential` and `endpoint_url` are merged back verbatim (`HelperResponse.verbatim` in `protocol.py`). This carve-out exists only in this response; the desktop moves the credential into the OS keyring and adds `profile`, `health` and `selected`.
+`model` is `null` for an installation set up without a cleaning model. Beam returns `{"kind": "beam_bearer", "token": "<the user's key>"}` as `runtime_credential`. The response is redacted like any other, then `runtime_credential` and `endpoint_url` are merged back verbatim (`HelperResponse.verbatim` in `protocol.py`). This carve-out exists only in this response; the desktop moves the credential into the OS keyring and adds `profile`, `health` and `selected`.
 
 The Modal setup key (`ak-`/`as-`) can stay on the computer too, because every update redeploys and needs it again. The webview sends two fields the helper never sees (`take_setup_key` in `provision.rs`): `remember_setup_credential: true` keeps the pasted key after a successful `apply` or `resume`, in the keyring under the profile's setup role; `saved_setup_credential: "<profile id>"` asks the desktop to put that saved key into `credentials` for `inspect`, `plan`, `resume` or `cleanup_apply`. A missing or unreadable saved key is `ERR_VALIDATION_ERROR` before the helper starts. The desktop sets `forget_setup_credential` to match, so the journal records whether the key was kept. A run with a pasted key and no `remember_setup_credential` deletes any saved key; removing the endpoint deletes it with the runtime token. `CloudProvisioner` ticks "Remember" by default, uses the saved key on Resume, Update and Clean up of that setup without showing the key fields, and shows them again when the saved key is refused. Beam is paused, and its runtime credential already is the user's key.
 
@@ -120,6 +122,7 @@ Every name starts with the installation prefix, a short `mc-` slug of the instal
 - Job state: one document per handle in the Dict, so a restarted gateway still answers for every job and health never starts a GPU.
 - Weights: `seed_weights` (2 CPU, 4 GiB, timeout 3600 s) downloads the pinned snapshot (5,475,930,180 bytes) into the volume and publishes progress under `seed:state` in the Dict. Apply spawns it and polls every 5 s, keeping 240 s for the later steps; past that it returns `ERR_EXECUTION_TIMEOUT`. With no seed of the journal's in flight, apply first lists the volume's ready markers and skips the job when they cover the chosen model and analysis graphs (section 4.1).
 - Steps: volume and state create by name, image is `App.deploy` (builds the images and deploys), deploy looks up the three objects, endpoint is the gateway's `get_web_url()` plus `/mc/v1`. Sign-in is bounded at 40 s.
+- Without a cleaning model (`model_id: "none"`, `ModalSettings.render` false): the app declares no `Worker` class, so no render image is built and deploy looks up the gateway and `seed_weights` only. `seed_weights` downloads no snapshot and still fetches the chosen analysis graphs; the ready-marker check asks for no model marker. The gateway has no render backend and says so (docs/cloud-api.md, "Deployment compatibility"). The health step passes when `/model-info` answers 503 `capability_unavailable`; a 200 there is the gateway from before the update, and the step asks again until its budget ends. `probe_compatibility` names no model, so it takes either answer. An update can drop the model or add it back: the redeploy removes or creates the `Worker`, and the snapshot already on the volume is left in place.
 
 **Beam** (`provisioner/beam_driver.py`, `deploy/cloud/beam/`)
 
@@ -153,8 +156,8 @@ The Rust release build checks that `bundle.externalBin` names the helper and tha
 ## 8. Tests
 
 ```sh
-python3 -m unittest discover -v -s deploy/cloud/tests   # 180 tests
-target/cloud-build-venv/bin/python -m unittest discover -s provisioner -p 'test_*.py' -t .   # 156 tests with the SDKs
+python3 -m unittest discover -v -s deploy/cloud/tests   # 408 tests, 25 skipped without numpy and the SDKs
+target/cloud-build-venv/bin/python -m unittest discover -s provisioner -p 'test_*.py' -t .   # 188 tests with the SDKs
 python3 -m compileall deploy/cloud provisioner
 ```
 

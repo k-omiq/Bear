@@ -71,12 +71,11 @@
    * and 1,056 px for Cleaning before: one stop instead of two, and shorter
    * than either half used to be.
    *
-   * **Where a run goes is not here.** Detect on, Clean on, the run's scope and
-   * its engine are the editor's Text cleanup panel's, beside the button that
-   * starts the run. Models says only what each detection model can do: which
-   * ones have a cloud version, and, while Text cleanup detects on the cloud
-   * GPU, the fixed combination that run uses and where each part of it runs
-   * (`pipelines.js#runDetection`, `#detectionPlacement`).
+   * Detect on, Clean on, the run's scope and engine are in the editor's Text
+   * cleanup panel. Models also offers a complete local detection preset,
+   * switching Detect on to this computer and installing its missing models.
+   * While detection uses the cloud GPU, its fixed combination and placement
+   * stay visible (`pipelines.js#runDetection`, `#detectionPlacement`).
    *
    * **Older ids still open the right place** (`settingslinks.js`): Detection
    * and Cleaning land on their group in Models, `inference` on Cloud. A
@@ -131,6 +130,7 @@
     setCloseToTray,
     setDetection,
     setDetectorModels,
+    setAnalysisTarget,
     setFluxBackend,
     setFluxModel,
     setOriginalView,
@@ -154,6 +154,7 @@
     ALL_TEXT_POLICY,
     CAPABILITIES,
     CLEANERS,
+    FULL_LOCAL_DETECTOR_MODELS,
     LANGUAGES,
     detectionPlacement,
     groupOfModel,
@@ -467,6 +468,8 @@
         // A download changes which engines can run, which is the point of the
         // whole section.
         loadCapabilities()
+        refreshWorkflowCaps()
+        if (accelerators) refreshAccelerators()
         return
       }
       failures = Object.fromEntries(Object.entries(failures).filter(([id]) => id !== event.id))
@@ -836,6 +839,96 @@
   /** The logical models the selected workflow needs. */
   const needs = $derived(workflowNeeds(choices))
 
+  let localSetupBusy = $state(false)
+  let localSetupFailed = $state(false)
+  let localInstallFailed = $state(false)
+  const fullLocalSelected = $derived(runSelection.target === 'local' &&
+    session.detectorModels.join() === FULL_LOCAL_DETECTOR_MODELS.join())
+
+  /** Switch routing only after the backend saves it; model and reader choices are session preferences. */
+  async function useFullLocalDetection() {
+    if (localSetupBusy) return
+    localSetupBusy = true
+    localSetupFailed = false
+    try {
+      await writeSettingsSerialized(getBackend(), { analysisTargets: { rtFull: 'local', samTs: 'local' } })
+      setAnalysisTarget('rtFull', 'local')
+      setAnalysisTarget('samTs', 'local')
+      setDetectorModels([...FULL_LOCAL_DETECTOR_MODELS])
+      await loadCapabilities()
+      await refreshWorkflowCaps()
+    } catch {
+      localSetupFailed = true
+    } finally {
+      localSetupBusy = false
+    }
+  }
+
+  /** Installation follows the exact local combination and preserves optional reader/filtering preferences. */
+  const fullLocalInstall = $derived.by(() => {
+    if (!catalogue || !workflowCaps || !fullLocalSelected) return null
+    const fullNeeds = [...new Set([...FULL_LOCAL_DETECTOR_MODELS, ...needs])]
+    const missing = fullNeeds.filter((id) => {
+      const entry = pipelineModel(id)
+      if (!entry) return false
+      const view = viewOf(entry)
+      return view.known && !view.installed && !view.downloading
+    })
+    return {
+      missing,
+      runtime: catalogue.runtime.available && !catalogue.runtime.installed && !catalogue.runtime.downloading,
+    }
+  })
+
+  const fullLocalReady = $derived(Boolean(fullLocalSelected && catalogue?.runtime.installed &&
+    runtimeLoad.state === 'loaded' && workflowCaps?.fullRtInstalled && workflowCaps?.samInstalled &&
+    workflowCaps?.samMemoryReady && workflowCaps?.localDetectionReady !== false && samVerified !== false &&
+    accelerators && !accelFailure && FULL_LOCAL_DETECTOR_MODELS.every((id) => {
+      const entry = pipelineModel(id)
+      const view = entry ? viewOf(entry) : null
+      return view?.known && view.installed && view.files?.every((file) => file.sha256Ok !== false)
+    }) && readiness?.complete))
+
+  async function installFullLocalDetection() {
+    if (localSetupBusy || !fullLocalInstall) return
+    const plan = fullLocalInstall
+    localSetupBusy = true
+    localInstallFailed = false
+    try {
+      if (plan.runtime) {
+        await download(RUNTIME_ID)
+        if (failures[RUNTIME_ID]) {
+          localInstallFailed = true
+          return
+        }
+      }
+      for (const id of plan.missing) {
+        const entry = pipelineModel(id)
+        if (!entry) continue
+        if (id === 'samTs') {
+          await installSamTs()
+        } else if (entry.group) {
+          const group = groupById(entry.group)
+          if (group) await downloadGroup(group)
+        } else {
+          for (const file of filesOf(entry)) if (!file.installed) await download(file.id)
+        }
+        // Row helpers keep their concrete error beside the failed model. The
+        // combined setup stops and stays incomplete until that model is retried.
+        if (importFailures[id] || (entry.group && groupFailures[entry.group]) ||
+          filesOf(entry).some((file) => failures[file.id])) {
+          localInstallFailed = true
+          return
+        }
+      }
+    } finally {
+      localSetupBusy = false
+      await refreshCatalogue()
+      await refreshWorkflowCaps()
+      await loadCapabilities()
+    }
+  }
+
   /**
    * Whether a missing model is one the selected workflow needs now. The
    * review's small profile is not needed while the full graph is imported.
@@ -894,7 +987,8 @@
     const toDownload = []
     let bytes = 0
     let fetching = false
-    let samHeld = false
+    const samHere = (allText || needs.includes('samTs')) && workflowCaps?.samInstalled === true
+    let samHeld = samHere && (samVerified === false || workflowCaps?.samMemoryReady === false)
     let importMissing = false
     for (const id of needs) {
       // On this computer the text reader is an extra: cleaning runs without
@@ -923,14 +1017,12 @@
       // a computer without the free memory for it (`readinessKeyOf`), so the
       // row does too. Graphs not checked yet do not hold it back: the review
       // checks them itself when it opens.
-      const samHere = workflowCaps?.samInstalled === true
-      samHeld = samHere && (samVerified === false || workflowCaps.samMemoryReady === false)
       if (importMissing) lines.push(t('settings.detection.ready.allTextImport'))
       if (bytes > 0) lines.push(t('settings.detection.ready.allTextMissing', { bytes }))
-      if (samHere && samVerified === false) lines.push(t('settings.detection.ready.allTextSamMismatch'))
-      if (samHere && workflowCaps.samMemoryReady === false) lines.push(t('settings.detection.ready.allTextMemory'))
       if (!importMissing && bytes === 0 && workflowCaps && !samHeld) lines.push(t('settings.detection.ready.allText'))
     }
+    if (samHere && samVerified === false) lines.push(t('settings.detection.ready.allTextSamMismatch'))
+    if (samHere && workflowCaps?.samMemoryReady === false) lines.push(t('settings.detection.ready.allTextMemory'))
     // A live progress event is a download the catalogue snapshot may not know
     // about yet; it is still not a runtime that is here.
     const row = catalogue.runtime
@@ -957,7 +1049,8 @@
       }))
     }
     const missing = toDownload.reduce((sum, entry) => sum + (viewOf(entry).missingBytes ?? 0), 0)
-    const complete = bytes === 0 && !importMissing && !samHeld && !backendBlocked && (!allText || Boolean(workflowCaps)) && runtimeReady
+    const fullModelsReady = !needs.includes('rtFull') || !needs.includes('samTs') || workflowCaps?.localDetectionReady !== false
+    const complete = bytes === 0 && !importMissing && !samHeld && !backendBlocked && fullModelsReady && (!allText || Boolean(workflowCaps)) && runtimeReady
     return { lines, toDownload, missing, fetching, complete, runtime }
   })
 
@@ -1182,8 +1275,7 @@
 
   /**
    * The selection a run uses (`pipelines.js#runDetection`) and where each of
-   * its models runs, as the editor's Detect on routes it. Only said here,
-   * never chosen. On the cloud GPU the combination is fixed to the best one,
+   * its models runs, as Detect on routes it. On the cloud GPU the combination is fixed to the best one,
    * so the boxes show it checked and cannot be changed; the user's own
    * combination and reader switch wait in the session for This computer.
    */
@@ -2729,6 +2821,29 @@
              and the language filtering, both collapsed. -->
         <section class="group" aria-labelledby="{uid}-group-detection" data-settings-anchor="detection">
           <h3 class="sub" id="{uid}-group-detection" tabindex="-1" data-anchor-focus>{t('pipelines.detection')}</h3>
+          <div class="local-detection">
+            <p class="line">{t('settings.detection.localFull.note')}</p>
+            <div class="inline">
+              <Button size="sm" disabled={localSetupBusy || fullLocalSelected} onclick={useFullLocalDetection}>
+                {t('settings.detection.localFull.use')}
+              </Button>
+              {#if fullLocalInstall && (fullLocalInstall.missing.length > 0 || fullLocalInstall.runtime)}
+                <Button size="sm" disabled={localSetupBusy} onclick={installFullLocalDetection}>
+                  {t('settings.detection.localFull.install')}
+                </Button>
+              {/if}
+              <Button size="sm" variant="soft" onclick={() => select('performance', { focus: true })}>
+                {t('settings.detection.localFull.backends')}
+              </Button>
+            </div>
+            {#if localSetupFailed}<p class="line failed" role="alert">{t('settings.detection.localFull.saveFailed')}</p>{/if}
+            {#if localInstallFailed}<p class="line failed" role="alert">{t('settings.detection.localFull.installFailed')}</p>{/if}
+            {#if fullLocalSelected}
+              <p class="line" role="status" data-local-detection-status>
+                {t(fullLocalReady ? 'settings.detection.localFull.ready' : 'settings.detection.localFull.pending')}
+              </p>
+            {/if}
+          </div>
           <fieldset class="choices" aria-describedby={cloudFixed ? `${uid}-cloud-combo ${uid}-choices-note` : `${uid}-choices-note`}>
             <legend class="sr">{t('settings.detection.modelsLegend')}</legend>
             <ul class="rows">
@@ -3178,6 +3293,9 @@
      download access, each under its own heading and hairline. */
   .group { margin-top: var(--s-8) }
   .group > .sub { margin-top: 0 }
+  .local-detection { margin-bottom: var(--s-4) }
+  .local-detection .inline { flex-wrap: wrap }
+  .local-detection .inline :global(> *:first-child) { flex: initial; min-width: initial }
 
   .sr {
     position: absolute;

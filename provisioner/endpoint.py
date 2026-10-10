@@ -32,7 +32,7 @@ from deploy.cloud.common.contract import (
     validate_health_response,
     validate_model_info_response,
 )
-from deploy.cloud.common.manifest import PRODUCTION_MODELS
+from deploy.cloud.common.manifest import MODEL_NONE, PRODUCTION_MODELS
 
 API_PATH = "/mc/v1"
 MAX_BODY_BYTES = 64 * 1024
@@ -162,6 +162,15 @@ def _json(body: bytes) -> Any:
     return json.loads(body.decode("utf-8"))
 
 
+def _render_not_configured(body: bytes) -> bool:
+    """Whether a 503 from /model-info is the gateway saying it has no cleaning model."""
+    try:
+        answer = _json(body)
+    except ValueError:
+        return False
+    return isinstance(answer, dict) and answer.get("error_code") == "capability_unavailable"
+
+
 def check_endpoint(
     endpoint_url: str,
     credential: Dict[str, str],
@@ -178,7 +187,9 @@ def check_endpoint(
 
     `model_id` is the model the installation was set up with, which the endpoint
     must serve. Without one (a probe of an endpoint whose choices are not known)
-    any production model passes.
+    any production model passes, and so does an endpoint with no cleaning model.
+    MODEL_NONE is an installation set up without a cleaning model: its /model-info
+    must say that render is not configured.
 
     Returns the health summary the desktop shows. Raises ERR_EXECUTION_TIMEOUT when
     the endpoint never answered, ERR_EXECUTION_FAILED when it answered but refused the
@@ -187,7 +198,8 @@ def check_endpoint(
     get = http or urllib_get
     base = validate_endpoint_url(endpoint_url)
     headers = auth_headers(credential)
-    allowed = [production_model(model_id)] if model_id else [production_model(known) for known in PRODUCTION_MODELS]
+    no_model = model_id == MODEL_NONE
+    allowed = [] if no_model else [production_model(model_id)] if model_id else [production_model(known) for known in PRODUCTION_MODELS]
     refused_since: Optional[float] = None
     last = "no answer yet"
     while True:
@@ -203,7 +215,17 @@ def check_endpoint(
             except (ContractValidationError, ValueError) as exc:
                 raise ProtocolError(ERR_EXECUTION_FAILED, f"The endpoint answered /health with an unexpected body: {exc}") from None
             info_status, info_body = get(base + "/model-info", headers, max(1.0, min(REQUEST_TIMEOUT_SECONDS, deadline.remaining())))
-            if info_status == 200:
+            summary = {
+                "ok": True,
+                "status": "compatible",
+                "http_status": 200,
+                "latency_ms": latency_ms,
+                "provider": health.provider,
+                "protocol_version": health.protocol_version,
+            }
+            if info_status == 503 and model_id in (None, MODEL_NONE) and _render_not_configured(info_body):
+                return {**summary, "model": None}
+            if info_status == 200 and not no_model:
                 try:
                     info = ModelInfoResponse.from_dict(_json(info_body))
                     validate_model_info_response(info)
@@ -216,16 +238,11 @@ def check_endpoint(
                         f"The endpoint serves a different model or recipe: {served}",
                         actionable_guidance="Clean up this installation and set it up again.",
                     )
-                return {
-                    "ok": True,
-                    "status": "compatible",
-                    "http_status": 200,
-                    "latency_ms": latency_ms,
-                    "provider": health.provider,
-                    "protocol_version": health.protocol_version,
-                    "model": served,
-                }
-            last = f"/model-info answered HTTP {info_status}" if info_status else "/model-info did not answer"
+                return {**summary, "model": served}
+            # With no cleaning model, a 200 is the gateway deployed before an update that
+            # dropped the model: it can answer a little longer, so this is asked again.
+            last = ("the endpoint still serves a cleaning model" if no_model and info_status == 200
+                    else f"/model-info answered HTTP {info_status}" if info_status else "/model-info did not answer")
         elif status in (401, 403):
             refused_since = started if refused_since is None else refused_since
             last = f"HTTP {status} from the provider edge"

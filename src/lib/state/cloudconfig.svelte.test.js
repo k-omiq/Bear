@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { setBackend } from '../api/backend.js'
 import { app } from './app.svelte.js'
-import { cloud, cloudCleanAvailable, onAttemptEvent, trackCloudJob, stopCloud } from './cloud.svelte.js'
+import { cloud, cloudCleanAvailable, cloudCleanMissingKey, onAttemptEvent, trackCloudJob, stopCloud } from './cloud.svelte.js'
 import { checkCloudDenoise, cloudOffered, offeredPresets, resetDenoiseState } from './denoise.svelte.js'
 import { setCloudAllowed } from './session.svelte.js'
-import { checkConfiguration, configurationFailed, configurationKey, loadCloudConfiguration,
+import { checkCleanConfiguration, checkConfiguration, configurationFailed, configurationKey, loadCloudConfiguration,
   rememberedConfiguration, rememberConfiguration, resetCloudConfiguration } from './cloudconfig.svelte.js'
 
 const readiness = (id = 'first', revision = 1) => ({
@@ -62,6 +62,31 @@ it('updates and notifies for setup failures only, on the original deployment and
   expect(cloudCleanAvailable()).toBe(false)
   expect(rememberedConfiguration(second).denoise.state).toBe('ready')
   expect(api.settings.cloudConfigurationMemory[second].clean.state).toBe('missing')
+})
+
+it('a deployment set up without a cleaning model is remembered as that, with no warning', async () => {
+  const api = backend(), key = configurationKey(readiness())
+  const target = { provider: 'modal', profileId: 'first' }
+  cloud.readiness = readiness()
+  api.getCloudModelInfo = vi.fn().mockRejectedValue('capability_unavailable: gateway render is not configured')
+  expect(await checkCleanConfiguration(api, key, target)).toEqual({ state: 'none', modelId: null, presets: [] })
+  expect(app.notices).toEqual([])
+  expect(cloudCleanAvailable()).toBe(false)
+  expect(cloudCleanMissingKey()).toBe('cloud.configuration.cleanNotInstalled')
+  // Survives a restart, and is not asked again until a connection test asks.
+  resetCloudConfiguration()
+  expect(await checkCleanConfiguration(api, key, target)).toMatchObject({ state: 'none' })
+  expect(api.getCloudModelInfo).toHaveBeenCalledOnce()
+  // An update that adds a model: the connection test finds it.
+  api.getCloudModelInfo = vi.fn().mockResolvedValue({ pinnedModelId: 'owner/model' })
+  expect(await checkCleanConfiguration(api, key, target, true)).toMatchObject({ state: 'ready', modelId: 'owner/model' })
+  expect(cloudCleanAvailable()).toBe(true)
+  // A setup that needs repair is another thing, said in its own words.
+  await configurationFailed(api, key, 'clean', 'weights_unavailable')
+  expect(cloudCleanMissingKey()).toBe('cloud.configuration.cleanMissing')
+  // Any other failed read is still a failure, and changes nothing.
+  api.getCloudModelInfo = vi.fn().mockRejectedValue(new Error('gateway_unreachable'))
+  expect(await checkCleanConfiguration(api, key, target, true)).toMatchObject({ state: 'missing' })
 })
 
 it('a delayed successful probe cannot overwrite a newer configuration failure', async () => {

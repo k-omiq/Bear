@@ -144,9 +144,11 @@ def _check_options(options: Any) -> Dict[str, Any]:
         raise ProtocolError(ERR_VALIDATION, "Invalid 'options.idle_seconds' in journal")
     model_id = options.get("model_id")
     if model_id is not None:
-        from deploy.cloud.common.manifest import PRODUCTION_MODELS
-        if not isinstance(model_id, str) or model_id not in PRODUCTION_MODELS:
-            raise ProtocolError(ERR_VALIDATION, "Invalid 'options.model_id' in journal")
+        from deploy.cloud.common.manifest import deployable_model_id
+        try:
+            deployable_model_id(model_id)
+        except ValueError:
+            raise ProtocolError(ERR_VALIDATION, "Invalid 'options.model_id' in journal") from None
     analysis_models = options.get("analysis_models")
     if analysis_models is not None:
         from deploy.cloud.common.analysis_seed import normalize_analysis_models

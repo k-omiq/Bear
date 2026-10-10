@@ -35,10 +35,11 @@ cold start exits after the release instead of loading weights. The next real
 submission for that role clears its marker (`GpuControl.before_dispatch`).
 
 An **idle-only** stop (`GpuControl.stop(role, idle_only=True)`) is the app's own
-end-of-batch call: an Auto clean run that sends its pages' detection to the analysis
-GPU asks for it once its last page has been analyzed, so the GPU does not bill its
-idle window while the computer cleans, and a batch cloud clean asks for the render
-GPU's once its last region is back. It cancels nothing, writes no release marker (so
+end-of-batch call for cloud cleaning: a batch asks for the render GPU's once its
+last region is back. Detection and denoise leave the analysis GPU's configured
+idle window intact, so subsequent jobs can reuse loaded models. The endpoint
+still accepts an idle-only analysis release for older clients. An idle-only stop
+cancels nothing, writes no release marker (so
 no refusal window for the next tile and no skipped model load), and sends a role's
 `release` only when that role's heartbeat says idle and no work of that role is
 tracked in flight: for analysis no tile, for render no job pending or running in the
@@ -275,6 +276,46 @@ class GpuControl:
         self.list_prices = dict(list_prices or {})
         self.clock = clock
         self._admission_lock = threading.RLock()
+        # Submissions may upload/spawn concurrently. A stop closes admission for
+        # its roles and waits for already admitted calls to be recorded, so none
+        # can appear after cancellation has enumerated the in-flight calls.
+        self._admission_cond = threading.Condition()
+        self._dispatches = {role: 0 for role in GPU_ROLES}
+        self._stopping = set()
+
+    @contextmanager
+    def _dispatch_admission(self, role: str):
+        with self._admission_cond:
+            while role in self._stopping:
+                self._admission_cond.wait()
+            self._dispatches[role] += 1
+        try:
+            yield
+        finally:
+            with self._admission_cond:
+                self._dispatches[role] -= 1
+                self._admission_cond.notify_all()
+
+    @contextmanager
+    def _stop_admission(self, roles: tuple):
+        with self._admission_cond:
+            while any(role in self._stopping for role in roles):
+                self._admission_cond.wait()
+            self._stopping.update(roles)
+            self._admission_cond.notify_all()
+            try:
+                while any(self._dispatches[role] for role in roles):
+                    self._admission_cond.wait()
+            except BaseException:
+                self._stopping.difference_update(roles)
+                self._admission_cond.notify_all()
+                raise
+        try:
+            yield
+        finally:
+            with self._admission_cond:
+                self._stopping.difference_update(roles)
+                self._admission_cond.notify_all()
 
     def _prices(self) -> Dict[str, float]:
         price = self.list_prices.get(self.gpu)
@@ -304,7 +345,10 @@ class GpuControl:
         `idle_only` releases only what is idle and touches nothing else; see the
         module docs.
         """
-        with self._admission_lock:
+        if role is not None and role not in GPU_ROLES:
+            raise ValueError(f"unknown GPU role '{role}'")
+        roles = GPU_ROLES if role is None else (role,)
+        with self._stop_admission(roles):
             return self._stop_locked(role, idle_only)
 
     def _stop_locked(self, role: Optional[str], idle_only: bool) -> Dict[str, Any]:
@@ -316,8 +360,9 @@ class GpuControl:
         now = self.clock()
         from deploy.cloud.common.jobs import StopUncertainError
         try:
-            for each in roles:
-                self.store.put(release_key(each), {"at": now})
+            with self._admission_lock:
+                for each in roles:
+                    self.store.put(release_key(each), {"at": now})
         except Exception as error:
             raise StopUncertainError("GPU stop marker could not be recorded") from error
 
@@ -438,7 +483,7 @@ class GpuControl:
     def submit_render(self, backend: Any, meta: Any, image_png: bytes, hint_png: bytes) -> Any:
         """Keep render admission and its durable claim together against a stop."""
         from deploy.cloud.common.jobs import PreEnqueueError
-        with self._admission_lock:
+        with self._dispatch_admission("render"):
             if not self.before_dispatch("render"):
                 raise PreEnqueueError("service_unavailable_pre_queue", "The GPU was just stopped")
             return backend.submit(meta, image_png, hint_png)
@@ -447,7 +492,7 @@ class GpuControl:
     def analysis_admission(self):
         """Hold stop until an analysis call has spawned and recorded its ID."""
         from deploy.cloud.common.analysis_seed import AnalysisUnavailable
-        with self._admission_lock:
+        with self._dispatch_admission("analysis"):
             if not self.before_dispatch("analysis"):
                 raise AnalysisUnavailable("The GPU was just stopped")
             yield

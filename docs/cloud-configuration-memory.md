@@ -19,6 +19,15 @@ profiles. Network failures, GPU availability failures and unsupported page forma
 do not erase capabilities. No failed operation is automatically sent somewhere
 else.
 
+A cleaning record has one of three states. `ready` names the model. `missing` is
+a setup that needs repair, and it warns. `none` is a deployment set up without a
+cleaning model: the metadata read stores it with no warning
+(`checkCleanConfiguration` in `src/lib/state/cloudconfig.svelte.js`), cloud
+cleaning is not offered on it, and a clean pointed at it explains that the
+deployment has no cleaning model and how to add one
+(`cloud.configuration.cleanNotInstalled`). Denoising and cloud detection on that
+deployment are not affected.
+
 After repairing setup or access, use the endpoint's connection test in Settings >
 Cloud. A successful connection test rechecks cleaning metadata and denoising
 presets and updates memory. A save failure is reported; the updated observation

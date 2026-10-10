@@ -50,7 +50,7 @@ const MIN_WINDOW = {
  * that switch tool under a mounted bar need the switch to re-render it, and a
  * plain object would change without the bar noticing.
  */
-const { editor } = await vi.importActual('../state/editor.svelte.js')
+const { editor, pageBusy, solidOnlyOf } = await vi.importActual('../state/editor.svelte.js')
 
 const stores = vi.hoisted(() => ({
   session: {
@@ -58,6 +58,7 @@ const stores = vi.hoisted(() => ({
     /** @type {'local'|'cloud'} */
     cleanTarget: 'local',
     cleanLocalFirst: false,
+    cleanSolidOnly: false,
     analysisTargets: { rtFull: 'local', samTs: 'local' },
     /** @type {string[]} */
     detectorModels: ['ctd', 'rtSmall'],
@@ -93,6 +94,7 @@ const stores = vi.hoisted(() => ({
   commitWindows: vi.fn(),
   setTextPolicy: vi.fn(),
   setCleanLocalFirst: vi.fn(),
+  setCleanSolidOnly: vi.fn(),
 }))
 
 stores.editor = editor
@@ -106,6 +108,8 @@ vi.mock('../state/editor.svelte.js', () => ({
   cancelRun: stores.cancelRun,
   currentPage: () => ({ id: 'p1', number: 1 }),
   runningPage: () => null,
+  pageBusy,
+  solidOnlyOf,
 }))
 
 vi.mock('../state/session.svelte.js', () => ({
@@ -120,6 +124,7 @@ vi.mock('../state/session.svelte.js', () => ({
   setCleanTarget: (target) => { stores.session.cleanTarget = target },
   setTextPolicy: stores.setTextPolicy,
   setCleanLocalFirst: stores.setCleanLocalFirst,
+  setCleanSolidOnly: stores.setCleanSolidOnly,
 }))
 
 vi.mock('../state/capabilities.svelte.js', () => ({
@@ -963,6 +968,90 @@ describe('the Text cleanup panel', () => {
     expect(stores.setCleanLocalFirst).toHaveBeenCalledWith(false)
   })
 
+  /** @param {import('@testing-library/svelte').RenderResult} view */
+  const solidBox = (view) => /** @type {HTMLInputElement|null} */ (
+    view.container.querySelector('[data-run-row="solidOnly"] input[type="checkbox"]'))
+
+  // Solid bubbles only is the local clean's choice (`editor.svelte.js#solidOnlyOf`):
+  // offered where this computer cleans, off unless ticked, and never beside
+  // the mixed choice, which is the cloud clean's.
+  it('offers Solid bubbles only where this computer cleans, off by default', async () => {
+    for (const [cleanTarget, step] of /** @type {const} */ ([['local', 'detect'], ['cloud', 'auto'], ['cloud', 'clean']])) {
+      stores.session.cleanTarget = cleanTarget
+      const { view } = mountTool(textCleanup, { step })
+      expect(solidBox(view), `${cleanTarget}/${step}`).toBeNull()
+      cleanup()
+    }
+
+    stores.session.cleanTarget = 'local'
+    for (const step of ['auto', 'clean']) {
+      const { view } = mountTool(textCleanup, { step })
+      const checkbox = /** @type {HTMLInputElement} */ (solidBox(view))
+      expect(checkbox.checked, step).toBe(false)
+      expect(view.getByLabelText(t('tools.target.solidOnly'))).toBe(checkbox)
+      expect(document.getElementById(String(checkbox.getAttribute('aria-describedby')))?.textContent)
+        .toBe(t('tools.target.solidOnlyHint'))
+      expect(view.container.querySelector('[data-run-row="localFirst"]')).toBeNull()
+      await fireEvent.click(checkbox)
+      expect(stores.setToolParam).toHaveBeenCalledWith('autoClean', 'solidOnly', true)
+      expect(stores.setCleanSolidOnly).toHaveBeenCalledWith(true)
+      cleanup()
+      stores.setToolParam.mockClear()
+    }
+
+    // The choice the last window left is the one a new window opens on.
+    stores.session.cleanSolidOnly = true
+    try {
+      const { view: kept } = mountTool(textCleanup)
+      expect(/** @type {HTMLInputElement} */ (solidBox(kept)).checked).toBe(true)
+      await fireEvent.click(/** @type {HTMLInputElement} */ (solidBox(kept)))
+      expect(stores.setToolParam).toHaveBeenCalledWith('autoClean', 'solidOnly', false)
+      expect(stores.setCleanSolidOnly).toHaveBeenCalledWith(false)
+    } finally {
+      stores.session.cleanSolidOnly = false
+    }
+  })
+
+  // Ticked, the run cleans nothing outside a bubble and never redraws
+  // (`run.rs`), so the rows that would decide those are away, and a stored
+  // LaMa pick reads as the Fill the run makes of it.
+  it('draws only the picks a Solid bubbles only run reads', async () => {
+    const { view } = mountTool(textCleanup, { step: 'auto', solidOnly: true, bubbleEngine: 'lama', outsideEngine: 'lama' })
+    expect(view.queryByRole('radiogroup', { name: t('tools.param.textPolicy') })).not.toBeNull()
+    expect(view.queryByRole('radiogroup', { name: t('tools.param.outsideBubbles') })).toBeNull()
+    const more = view.getByRole('button', { name: new RegExp(t('tools.action.advanced')) })
+    expect(more.textContent).not.toContain('LaMa')
+    await fireEvent.click(more)
+    const bubble = /** @type {HTMLSelectElement} */ (view.getByLabelText(t('tools.param.bubbleText')))
+    expect([...bubble.options].map((option) => option.value)).toEqual(['fill', 'solid'])
+    expect(bubble.value).toBe('fill')
+    expect(view.queryByLabelText(t('tools.param.outsideText'))).toBeNull()
+    expect(view.getAllByLabelText(t('tools.param.bubbleColor'))).toHaveLength(1)
+    expect(picksNote(view)?.textContent).toBe(t('tools.picks.solidOnly'))
+    cleanup()
+
+    // Unticked, every row is back, with the pick that was stored.
+    const { view: all } = mountTool(textCleanup, { step: 'auto', solidOnly: false, bubbleEngine: 'lama' })
+    expect(all.queryByRole('radiogroup', { name: t('tools.param.outsideBubbles') })).not.toBeNull()
+    await openAdvanced(all)
+    expect(/** @type {HTMLSelectElement} */ (all.getByLabelText(t('tools.param.bubbleText'))).value).toBe('lama')
+    expect(all.getByLabelText(t('tools.param.outsideText')).tagName).toBe('SELECT')
+    expect(picksNote(all)?.textContent).toBe(t('tools.picks.local'))
+  })
+
+  // Detect & clean is the one-press run and asks nothing about the padding;
+  // Detect and Clean keep the slider and its Apply (`tools.js`).
+  it('draws Mask padding for Detect and for Clean, never for Detect & clean', () => {
+    /** @param {import('@testing-library/svelte').RenderResult} view */
+    const padding = (view) => view.container.querySelector('[data-run-row="maskPadding"]')
+    for (const [step, shown] of /** @type {const} */ ([['auto', false], ['detect', true], ['clean', true]])) {
+      const { view } = mountTool(textCleanup, { step })
+      expect(padding(view) !== null, step).toBe(shown)
+      expect(view.queryByRole('slider', { name: t('tools.param.maskPadding') }) !== null, step).toBe(shown)
+      cleanup()
+    }
+  })
+
   it('offers Project only while the whole run stays on this computer', async () => {
     stores.session.cleanTarget = 'cloud'
     const { view } = mountTool(textCleanup, { scope: 'project' })
@@ -1165,10 +1254,11 @@ describe('the Text cleanup panel from the keyboard', () => {
     // One stop per radio group (roving tabindex), then the selects, in rows.
     const kinds = stops.slice(2).map((node) => node.getAttribute('role') ?? node.tagName.toLowerCase())
     // Mode, Scope, Detect on and the Cloud settings press under its reason
-    // (the endpoint's offer is still being read here), Clean on, Text,
-    // Outside bubbles, Mask padding and its Apply, the models toggle, the two
-    // engines, the fill colour's swatch, then the action.
-    expect(kinds).toEqual(['radio', 'radio', 'select', 'button', 'select', 'radio', 'radio', 'input', 'button', 'button', 'select', 'select', 'button', 'button'])
+    // (the endpoint's offer is still being read here), Clean on, Solid
+    // bubbles only, Text, Outside bubbles, the models toggle, the two
+    // engines, the fill colour's swatch, then the action. Detect & clean
+    // draws no Mask padding.
+    expect(kinds).toEqual(['radio', 'radio', 'select', 'button', 'select', 'input', 'radio', 'radio', 'button', 'select', 'select', 'button', 'button'])
     expect(stops.at(-1)).toBe(runAction(view))
     // The name takes focus from script, never from Tab.
     expect(view.getByRole('heading', { name: 'Text cleanup' }).getAttribute('tabindex')).toBe('-1')

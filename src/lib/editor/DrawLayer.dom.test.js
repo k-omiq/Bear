@@ -39,6 +39,7 @@ afterEach(() => {
   editor.chapter = null
   editor.project = null
   editor.tool = 'autoClean'
+  editor.areaRuns = []
   resetDraftState()
   clearNotices()
   vi.clearAllMocks()
@@ -90,6 +91,121 @@ describe('brush pressure on a mounted surface', () => {
     } finally {
       cleanup()
       canvas.mockRestore()
+    }
+  })
+})
+
+// A run holds the page it is on and no other (`editor.svelte.js#pageBusy`): a
+// gesture on that page is not begun, and says why; the same gesture on any
+// other page of the chapter is drawn and sent while the run goes on.
+describe('a stroke while a run is going', () => {
+  it('accepts additional detection rectangles by pointer and keyboard while the same page is detecting', async () => {
+    const only = page('c1-p001', 0)
+    editor.chapter = { id: 'c1', review: [], pages: [only] }
+    editor.project = /** @type {any} */ ({ mode: 'single' })
+    editor.pageIndex = 0
+    editor.run.active = false
+    editor.tool = 'maskSelect'
+    editor.toolParams = { maskSelect: { mode: 'detect', shape: 'rect' } }
+    const previousTargets = session.analysisTargets
+    session.analysisTargets = { rtFull: 'local', samTs: 'local' }
+    let count = 0
+    const runClean = vi.fn(async () => ({ runId: `area-${++count}`, pages: [{ pageIndex: 0 }] }))
+    setBackend(/** @type {any} */ ({ runClean }))
+    try {
+      const view = render(DrawLayer, { props: { page: only } })
+      const surface = view.getByRole('button')
+      surface.getBoundingClientRect = () => /** @type {DOMRect} */ ({
+        x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, toJSON() {},
+      })
+      surface.setPointerCapture = vi.fn()
+      surface.releasePointerCapture = vi.fn()
+      for (const x of [10, 50]) {
+        await fireEvent.pointerDown(surface, { pointerId: 1, pointerType: 'mouse', button: 0, clientX: x, clientY: 10 })
+        await fireEvent.pointerMove(surface, { pointerId: 1, pointerType: 'mouse', buttons: 1, clientX: x + 20, clientY: 30 })
+        await fireEvent.pointerUp(surface, { pointerId: 1, pointerType: 'mouse', button: 0, clientX: x + 20, clientY: 30 })
+        await waitFor(() => expect(runClean).toHaveBeenCalledTimes(x === 10 ? 1 : 2))
+      }
+      expect(editor.areaRuns).toHaveLength(2)
+      await fireEvent.keyDown(surface, { key: 'Enter' })
+      expect(draft.active?.mode).toBe('detect')
+      await fireEvent.keyDown(surface, { key: 'Enter' })
+      await waitFor(() => expect(runClean).toHaveBeenCalledTimes(3))
+      expect(app.notices).toEqual([])
+      expect(editor.areaRuns).toHaveLength(3)
+    } finally {
+      session.analysisTargets = previousTargets
+    }
+  })
+
+  it('is refused on the page the run is on, and drawn on another', async () => {
+    const busy = page('c1-p001', 0)
+    const free = page('c1-p002', 1)
+    editor.chapter = { id: 'c1', review: [], pages: [busy, free] }
+    editor.project = /** @type {any} */ ({ mode: 'single' })
+    editor.history = createHistory()
+    editor.tool = 'brush'
+    editor.toolParams = { brush: { mode: 'paint', size: 80 } }
+    editor.run.active = true
+    editor.run.busyPages = [0]
+    const createRegion = vi.fn(async ({ bbox, pageIndex }) => ({
+      region: { id: `c1-p00${pageIndex + 1}-h1`, pageId: pageIndex ? free.id : busy.id, bbox, source: 'hand', outcome: 'cleaned' },
+      pageStatus: 'cleaned',
+    }))
+    setBackend(/** @type {any} */ ({
+      createRegion,
+      historyPush: vi.fn().mockResolvedValue({ cursor: 1, entries: [] }),
+    }))
+    const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    /** @param {any} on */
+    const stroke = async (on) => {
+      const view = render(DrawLayer, { props: { page: on } })
+      const surface = view.getByRole('button')
+      surface.getBoundingClientRect = () => /** @type {DOMRect} */ ({
+        x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, toJSON() {},
+      })
+      surface.setPointerCapture = vi.fn()
+      surface.releasePointerCapture = vi.fn()
+      await fireEvent.pointerDown(surface, { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 20, clientY: 20 })
+      await fireEvent.pointerMove(surface, { pointerId: 1, pointerType: 'mouse', buttons: 1, clientX: 60, clientY: 20 })
+      await fireEvent.pointerUp(surface, { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 60, clientY: 20 })
+      return view
+    }
+    try {
+      editor.pageIndex = 0
+      await stroke(busy)
+      expect(draft.active).toBeFalsy()
+      expect(app.notices.at(-1)?.key).toBe('notice.run.pageBusy')
+      expect(createRegion).not.toHaveBeenCalled()
+      cleanup()
+
+      // The keyboard's gesture asks the same question: no draft opens.
+      const said = app.notices.length
+      const keyed = render(DrawLayer, { props: { page: busy } })
+      await fireEvent.keyDown(keyed.getByRole('button'), { key: 'Enter' })
+      expect(draft.active).toBeFalsy()
+      expect(app.notices).toHaveLength(said + 1)
+      expect(app.notices.at(-1)?.key).toBe('notice.run.pageBusy')
+      cleanup()
+
+      editor.pageIndex = 1
+      // And on a page the run is not on, the same key opens one.
+      const open = render(DrawLayer, { props: { page: free } })
+      await fireEvent.keyDown(open.getByRole('button'), { key: 'Enter' })
+      expect(draft.active).toBeTruthy()
+      expect(app.notices).toHaveLength(said + 1)
+      cleanup()
+      resetDraftState()
+
+      await stroke(free)
+      await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(1))
+      expect(createRegion.mock.calls[0][0].pageIndex).toBe(1)
+      await editor.history.running
+    } finally {
+      cleanup()
+      canvas.mockRestore()
+      editor.run.active = false
+      editor.run.busyPages = []
     }
   })
 })
@@ -541,41 +657,49 @@ describe('the selection tool on a mounted surface', () => {
     }
   })
 
-  it('offers Detect text here over bare paper and holds the run to that spot', async () => {
-    const { view, surface } = mount('rect')
+  it('detects in the rectangle that is drawn while the mode is Detect', async () => {
+    const { view, surface, editDetectionMask } = mount('lasso')
+    // The shape row is away in this mode, and the lasso it still holds is not drawn.
+    editor.toolParams = { maskSelect: { mode: 'detect', shape: 'lasso', size: 160 } }
     const runClean = vi.fn(async () => ({ runId: null, pages: [] }))
-    setBackend(/** @type {any} */ ({ runClean }))
-    await fireEvent.contextMenu(surface, { clientX: 50, clientY: 50 })
-    await fireEvent.click(view.getByRole('menuitem', { name: 'Detect text here' }))
+    setBackend(/** @type {any} */ ({ runClean, editDetectionMask }))
+    await fireEvent.pointerMove(surface, { clientX: 50, clientY: 50 })
+    expect(view.container.querySelector('svg.cursor')).toBeNull()
+
+    await fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 20, clientY: 30 })
+    await fireEvent.pointerMove(surface, { pointerId: 1, buttons: 1, clientX: 45, clientY: 40 })
+    await fireEvent.pointerMove(surface, { pointerId: 1, buttons: 1, clientX: 60, clientY: 70 })
+    // The plain mark of an area a model will look at, not a mask being added.
+    const drawn = view.container.querySelector('svg.preview rect.shape')
+    expect(drawn?.getAttribute('width')).toBe('40')
+    expect(drawn?.getAttribute('style')).toBeNull()
+    await fireEvent.pointerUp(surface, { pointerId: 1, button: 0, clientX: 60, clientY: 70 })
 
     await waitFor(() => expect(runClean).toHaveBeenCalledTimes(1))
     const spec = runClean.mock.calls[0][0]
     expect(spec).toMatchObject({ scope: 'page', mode: 'detect', chapterId: 'c1', pageIndex: 0 })
-    // 16% of an 800 px page is 128 px, which is 12.8% of its 1000 px height.
-    expect(spec.area.x).toBeCloseTo(42)
-    expect(spec.area.y).toBeCloseTo(43.6)
-    expect(spec.area.w).toBeCloseTo(16)
-    expect(spec.area.h).toBeCloseTo(12.8)
+    expect(spec.area).toEqual({ x: 20, y: 30, w: 40, h: 40 })
     // The user pointed at the text: nothing there is held back for review.
     expect(spec).toMatchObject({ textPolicy: 'all_text', outsideBubbles: 'clean' })
-    expect(view.queryByRole('menu')).toBeNull()
+    // The drag asked the detector; it is not a mask of its own.
+    expect(editDetectionMask).not.toHaveBeenCalled()
+    expect(view.container.querySelector('svg.preview rect.shape')).toBeNull()
   })
 
-  it('keeps the region menu over a region, and offers nothing over bare paper for another tool', async () => {
+  it('keeps the region menu over a region, and offers nothing over bare paper', async () => {
     const detection = {
       id: 'd1', pageId: 'c1-p001', outcome: 'detected', source: 'auto', insideBubble: true,
       bbox: { x: 10, y: 10, w: 20, h: 20 }, mask: null,
     }
-    const { view, surface } = mount('rect', [detection])
+    const { surface } = mount('rect', [detection])
     await fireEvent.contextMenu(surface, { clientX: 20, clientY: 20 })
-    expect(view.queryByRole('menuitem', { name: 'Detect text here' })).toBeNull()
     expect(editor.selectionId).toBe('d1')
 
+    // An area for the detector is drawn in the Detect mode, not asked for here.
     cleanup()
-    const other = mount('rect')
-    editor.tool = 'shapes'
-    await fireEvent.contextMenu(other.surface, { clientX: 50, clientY: 50 })
-    expect(other.view.queryByRole('menu')).toBeNull()
+    const bare = mount('rect')
+    await fireEvent.contextMenu(bare.surface, { clientX: 50, clientY: 50 })
+    expect(bare.view.queryByRole('menu')).toBeNull()
   })
 
   it('draws the brush footprint at the brush size on the page', async () => {

@@ -62,9 +62,9 @@ import { getBackend } from '../api/backend.js'
 import { outcomeCopy, outcomeOf } from '../dialogs/workflowoutcome.js'
 import { cloudCapabilitiesFor } from '../model/pipelines.js'
 import { notify, pushModal } from '../state/app.svelte.js'
-import { cloudUsable, cloudCleanAvailable, refreshCloudReadiness } from '../state/cloud.svelte.js'
+import { cloudCleanAvailable, cloudCleanMissingKey, refreshCloudReadiness } from '../state/cloud.svelte.js'
 import { configurationKey, configurationFailed } from '../state/cloudconfig.svelte.js'
-import { adoptRun, claimRunStart, editor, releaseRunStart, runFinished, startRun } from '../state/editor.svelte.js'
+import { adoptRun, claimAreaRunStart, claimRunStart, editor, releaseAreaRunStart, releaseRunStart, runFinished, startRun } from '../state/editor.svelte.js'
 import { finishCloudRun, trackCloudRun } from '../state/cloudgpu.svelte.js'
 import { session } from '../state/session.svelte.js'
 
@@ -293,9 +293,18 @@ function endpointHost(readiness) {
  *
  * @param {import('../api/backend.js').Backend} backend
  */
+const readinessReads = new WeakMap()
 async function usableReadiness(backend) {
-  const readiness = await refreshCloudReadiness(backend)
-  return cloudUsable() && readiness.ready && readiness.target ? readiness : null
+  // A burst of selection gestures shares the same in-flight settings read.
+  // The next burst still reads fresh, without waiting for earlier GPU jobs.
+  const reading = readinessReads.get(backend) ?? refreshCloudReadiness(backend)
+  readinessReads.set(backend, reading)
+  try {
+    const readiness = await reading
+    return session.cloudAllowed && readiness.configured && readiness.ready && readiness.target ? readiness : null
+  } finally {
+    if (readinessReads.get(backend) === reading) readinessReads.delete(backend)
+  }
 }
 
 /**
@@ -373,8 +382,9 @@ export async function startCleanRun(scope = 'page', backend = getBackend()) {
 }
 
 /**
- * Detect one area of a page again: the selection tool's "Detect text here",
- * for text the page's Detect missed or whose mask was deleted. What is found
+ * Detect one area of a page again: the selection tool's Detect mode, whose
+ * area is the rectangle the user drew (`drawing.svelte.js#detectDrawn`). For
+ * text the page's Detect missed or whose mask was deleted. What is found
  * there is added to the page's detections; nothing the page holds is replaced
  * (`run.rs#DetectArea`).
  *
@@ -387,11 +397,11 @@ export async function startCleanRun(scope = 'page', backend = getBackend()) {
  * @returns {Promise<string|null>} the run id, or null when nothing started
  */
 export async function detectArea(pageIndex, area, backend = getBackend()) {
-  const token = claimRunStart()
+  const token = claimAreaRunStart()
   if (!token) return null
   try {
     const chapter = editor.chapter
-    if (!chapter || editor.run.active) return null
+    if (!chapter) return null
     const onCloud = cloudRunCapabilities().length > 0
     /** @type {any} */
     let readiness = null
@@ -404,7 +414,7 @@ export async function detectArea(pageIndex, area, backend = getBackend()) {
         return null
       }
       if (editor.chapter !== chapter) return null
-      cloudGrant = await detectionGrant('page', chapter, pageIndex, readiness, backend, false)
+      cloudGrant = await detectionGrant('page', chapter, pageIndex, readiness, backend, false, { followPage: false })
       if (!cloudGrant) return null
     }
     /** @type {string|null} */
@@ -419,7 +429,7 @@ export async function detectArea(pageIndex, area, backend = getBackend()) {
     if (runId && onCloud) trackCloudRun(runId, 'analysis', backend, { provider: readiness.target.type, profileId: readiness.target.profile_id })
     return runId
   } finally {
-    releaseRunStart(token)
+    releaseAreaRunStart(token)
   }
 }
 
@@ -434,9 +444,10 @@ export async function detectArea(pageIndex, area, backend = getBackend()) {
  * @param {any} readiness
  * @param {import('../api/backend.js').Backend} backend
  * @param {boolean} cleanFollows
+ * @param {{followPage?: boolean}} [options] - selections keep their captured page after navigation
  * @returns {Promise<string|null>}
  */
-async function detectionGrant(scope, chapter, pageIndex, readiness, backend, cleanFollows) {
+async function detectionGrant(scope, chapter, pageIndex, readiness, backend, cleanFollows, { followPage = true } = {}) {
   const chapterId = chapter.id
   /** @type {any} */
   let proposal
@@ -455,7 +466,7 @@ async function detectionGrant(scope, chapter, pageIndex, readiness, backend, cle
     notify({ key: cloudRunErrorKey(cause), tone: 'warn' })
     return null
   }
-  if (editor.chapter !== chapter || (scope === 'page' && editor.pageIndex !== pageIndex)) {
+  if (editor.chapter !== chapter || (followPage && scope === 'page' && editor.pageIndex !== pageIndex)) {
     await backend.cancelRunAnalysis({ proposalId: proposal.proposalId }).catch(() => {})
     notify({ key: 'cloud.analysis.run.consentLost', tone: 'warn' })
     return null
@@ -488,7 +499,7 @@ async function detectionGrant(scope, chapter, pageIndex, readiness, backend, cle
   // The chapter, or for a page run the page, may have changed while the
   // dialog was open. The grant names what it was given for, and the native
   // side refuses anything else.
-  if (editor.chapter !== chapter || (scope === 'page' && editor.pageIndex !== pageIndex)) {
+  if (editor.chapter !== chapter || (followPage && scope === 'page' && editor.pageIndex !== pageIndex)) {
     notify({ key: 'cloud.analysis.run.consentLost', tone: 'warn' })
     return null
   }
@@ -552,7 +563,7 @@ async function cleanOnCloud(where, backend) {
     return null
   }
   if (!cloudCleanAvailable()) {
-    notify({ key: 'cloud.configuration.cleanMissing', tone: 'warn' })
+    notify({ key: cloudCleanMissingKey(), tone: 'warn' })
     return null
   }
   const configKey = configurationKey(readiness)

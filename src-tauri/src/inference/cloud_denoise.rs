@@ -27,12 +27,19 @@
 //! one consent bound is skipped, never sent. A page that goes mints and spends
 //! its own [`GrantService`] grant against the consent's epoch, is journalled
 //! as an analysis-role attempt (the denoise worker is the analysis GPU), and
-//! is sent once. A page that fails is reported and the run goes on; it is not
-//! retried and not denoised locally instead.
+//! is submitted with one idempotent attempt. A failed page is reported and the
+//! run goes on; it is not denoised locally instead. Gateways advertising
+//! `denoise.results` use separate upload, metadata polling and download stages,
+//! so an earlier download does not hold a later page's upload slot. Accepted
+//! handles and partial results are journalled for recovery on an approved rerun.
 //!
 //! The upload is always an 8-bit grey or RGB PNG without alpha ([`upload_png`]),
 //! so the answer is too, and it is checked to be exactly that at the page's
 //! size ([`denoise_page`]).
+//!
+//! Completion keeps the shared analysis GPU warm for the deployment's idle
+//! window. A subsequent detection or denoise can reuse its loaded models;
+//! an explicit GPU Stop still releases it immediately.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -55,7 +62,7 @@ use serde::Serialize;
 use crate::inference::analysis;
 use crate::inference::cloud_clean::{CostRange, COLD_START_SECONDS, IDLE_WINDOW_SECONDS};
 use crate::inference::commands::{build_client_for_profile, BuildClientError};
-use crate::inference::gpu::{self, GpuRole, GpuStatusWire};
+use crate::inference::gpu::{self, GpuStatusWire};
 use crate::inference::http::{CloudHttpClient, HttpTransportError};
 use crate::inference::journal::{
     AnalysisAttemptRecord, AnalysisJournal, AnalysisPhase, ANALYSIS_JOURNAL_SCHEMA_VERSION,
@@ -64,6 +71,11 @@ use crate::inference::policy::{GrantError, GrantScope, GrantService};
 use crate::inference::run_analysis::stops_run;
 use crate::inference::InferenceConfig;
 use crate::library::Library;
+
+mod queue;
+use crate::inference::http::DenoiseJob;
+use crate::inference::gpu_jobs::Polled;
+use cleaner_core::cloud_denoise_wire::DenoiseResultMetadata;
 
 /// How long a confirmed consent may wait for its run. It bounds the start only.
 pub const DENOISE_GRANT_TTL: Duration = Duration::from_secs(120);
@@ -125,8 +137,8 @@ impl DenoiseTarget {
 /* The gateway                                                         */
 /* ------------------------------------------------------------------ */
 
-/// What this module asks the deployment. Only [`DenoiseGateway::denoise`]
-/// carries page data.
+/// What this module asks the deployment. [`DenoiseGateway::denoise`] and
+/// [`DenoiseGateway::submit_job`] carry page data.
 pub(crate) trait DenoiseGateway {
     fn capabilities(&self) -> Result<DenoiseCapabilities, String>;
     /// Send one page. `Err` is a stable code ([`rejection_code`]).
@@ -143,8 +155,15 @@ pub(crate) trait DenoiseGateway {
     fn gpu_price(&self) -> Option<(String, f64)> {
         None
     }
-    /// Release the analysis GPU if it is idle. Best effort.
-    fn release_idle(&self) {}
+
+    fn queued_results(&self) -> Result<bool, String> { Ok(false) }
+    fn new_job(&self, _metadata: DenoiseMetadata) -> Result<DenoiseJob, String> { Err("capability_unavailable".into()) }
+    fn submit_job(&self, _job: &DenoiseJob, _png: &[u8], _cancel: &AtomicBool) -> Result<(), String> { Err("capability_unavailable".into()) }
+    fn poll_job(&self, _job: &DenoiseJob) -> Result<Polled<DenoiseResultMetadata>, String> { Err("capability_unavailable".into()) }
+    fn download_job(&self, _job: &DenoiseJob, _meta: &DenoiseResultMetadata, _checkpoint: &Path, _cancel: &AtomicBool)
+        -> Result<Vec<u8>, String> { Err("capability_unavailable".into()) }
+    fn cancel_job(&self, _job: &DenoiseJob) -> Result<(), String> { Err("cloud_denoise_cancel_unconfirmed".into()) }
+    fn release_result(&self, _job: &DenoiseJob) {}
 }
 
 /// A deployment prices the one GPU it runs; more than one entry states no price.
@@ -159,6 +178,7 @@ fn only_price(status: GpuStatusWire) -> Option<(String, f64)> {
 /// rejections keep their meaning; everything else is [`gpu::transport_code`].
 fn rejection_code(error: &HttpTransportError) -> String {
     match error {
+        HttpTransportError::DenoiseStorage => "journal_unavailable".into(),
         HttpTransportError::UnexpectedStatus { status: 400 } => "cloud_denoise_invalid_request".into(),
         HttpTransportError::UnexpectedStatus { status: 413 } => "cloud_denoise_page_too_large".into(),
         HttpTransportError::UnexpectedStatus { status: 422 } => "cloud_denoise_unsupported_page".into(),
@@ -182,6 +202,22 @@ fn rejection_code(error: &HttpTransportError) -> String {
 const CANCELLED: &str = "cloud_denoise_cancelled";
 
 impl DenoiseGateway for CloudHttpClient {
+    fn queued_results(&self) -> Result<bool, String> { self.serves_denoise_results().map_err(|e| rejection_code(&e)) }
+    fn new_job(&self, metadata: DenoiseMetadata) -> Result<DenoiseJob, String> {
+        self.new_denoise_job(metadata).map_err(|e| rejection_code(&e))
+    }
+    fn submit_job(&self, job: &DenoiseJob, png: &[u8], cancel: &AtomicBool) -> Result<(), String> {
+        self.submit_denoise_job(job, png, cancel).map_err(|e| rejection_code(&e))
+    }
+    fn poll_job(&self, job: &DenoiseJob) -> Result<Polled<DenoiseResultMetadata>, String> {
+        self.denoise_job_status(job).map_err(|e| rejection_code(&e))
+    }
+    fn download_job(&self, job: &DenoiseJob, meta: &DenoiseResultMetadata, checkpoint: &Path, cancel: &AtomicBool)
+        -> Result<Vec<u8>, String> { self.download_denoise_job(job,meta,checkpoint,cancel).map_err(|e| rejection_code(&e)) }
+    fn cancel_job(&self, job: &DenoiseJob) -> Result<(), String> {
+        self.cancel_denoise_job(job).map_err(|e| rejection_code(&e))
+    }
+    fn release_result(&self, job: &DenoiseJob) { self.release_denoise_result(job); }
     fn capabilities(&self) -> Result<DenoiseCapabilities, String> {
         self.get_denoise_capabilities().map_err(|e| match e {
             HttpTransportError::WireValidation | HttpTransportError::JsonDeserialization =>
@@ -205,11 +241,6 @@ impl DenoiseGateway for CloudHttpClient {
         self.get_gpu_status().ok().flatten().and_then(only_price)
     }
 
-    fn release_idle(&self) {
-        if let Err(detail) = gpu::release_idle(self, GpuRole::Analysis) {
-            eprintln!("manga-cleaner: denoise GPU idle release skipped: {detail}");
-        }
-    }
 }
 
 /// What the deployment can denoise now. Sends no page data.
@@ -422,8 +453,8 @@ pub(crate) fn prepare<G: DenoiseGateway + ?Sized>(
     let profile_epoch = GrantService::global().get_profile_epoch(destination.provider, &destination.profile_id);
     let (mut pages, mut too_large) = (Vec::new(), Vec::new());
     {
-        // A read, so without the lock: a run walking this chapter holds it
-        // for the whole run (see `crate::run::lock_job`).
+        // A read, so without the job's lock (see `crate::run::lock_job`): a
+        // writer holding the chapter does not hold this up.
         let job = Job::open(job_path).map_err(|e| e.to_string())?;
         let count = job.project.strip.order.len() as u32;
         let mut positions = page_indices.unwrap_or_else(|| (0..count).collect());
@@ -687,13 +718,13 @@ fn page_scope(plan: &DenoisePlan, page: &PlannedPage, png: &[u8], request_digest
     })
 }
 
-/// Pages a cloud run keeps in flight at once. The analysis GPU serves more
-/// than one request at a time, and a page spends much of its round trip in
-/// upload and download rather than on the GPU.
+/// Full round trips kept in flight on legacy gateways. Updated gateways use
+/// the separate upload, remote-job and download bounds in `queue`.
 pub(crate) const PAGES_IN_FLIGHT: usize = 2;
 
-/// Denoise every page of a spent plan, [`PAGES_IN_FLIGHT`] at a time, taken in
-/// plan order, and report each in plan order.
+/// Denoise every page of a spent plan and report each in plan order. Updated
+/// gateways release upload slots on acceptance and remote slots on completed
+/// metadata, allowing later submissions while downloads remain blocked.
 ///
 /// Once `cancel` is set no new page is taken, and the pages in flight stop
 /// waiting: the gateway is asked to cancel each ([`DenoiseGateway::denoise_cancellable`]),
@@ -701,13 +732,19 @@ pub(crate) const PAGES_IN_FLIGHT: usize = 2;
 /// cancelled. A gateway that cannot cancel (an older one, answering each page
 /// synchronously) lets them finish and be written. Pages never taken are in
 /// neither list, and the report is marked `cancelled`. `progress(done, total)`
-/// hears each page end. The idle release comes after every page in flight has
-/// come back, so it never races a page of this run.
+/// hears each page end. The shared analysis GPU retains its configured idle
+/// window after all pages in flight finish.
 pub(crate) fn run_plan(
     batch: &Batch<'_>,
     cancel: &AtomicBool,
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> CloudDenoiseReport {
+    match batch.gateway.queued_results() {
+        Ok(true) => return queue::run(batch,cancel,progress),
+        Err(code) => return CloudDenoiseReport {failed:batch.plan.pages.iter()
+            .map(|page|PageFailure {page_index:page.page_index,code:code.clone()}).collect(),..Default::default()},
+        Ok(false) => {}
+    }
     let pages = &batch.plan.pages;
     let total = pages.len();
     // Which page owns each output name, fixed before any page goes, so a
@@ -758,10 +795,7 @@ pub(crate) fn run_plan(
     }
     // Pages given up while out end the run as cancelled too, even with none left.
     report.cancelled |= report.failed.iter().any(|failure| failure.code == CANCELLED);
-    // Only a run that still speaks for the endpoint asks it anything more.
-    if batch.authority().is_ok() && !report.written.is_empty() {
-        batch.gateway.release_idle();
-    }
+    // Keep the analysis role's idle window intact: it also serves detection.
     report
 }
 
@@ -914,7 +948,7 @@ fn cleaned_page(job_path: &Path, chapter_id: &str, page: &PlannedPage) -> Result
 }
 
 /// Each planned page's output stem: its source file's, as the exporter names pages.
-/// A read, so without the lock a run on the chapter holds.
+/// A read, so without the job's lock.
 pub(crate) fn output_names(job_path: &Path, pages: &[PlannedPage]) -> Result<HashMap<u32, String>, String> {
     let job = Job::open(job_path).map_err(|e| e.to_string())?;
     Ok(pages.iter().filter_map(|page| {
@@ -953,10 +987,15 @@ pub(crate) fn record_written(
 pub const RECORDED_EVENT: &str = "denoise://recorded";
 
 /// [`record_written`] at once when the chapter is free, and otherwise on a
-/// thread of its own that waits for it, so the run answers now. A run walking
-/// the chapter holds it until its last page (`crate::run::lock_job`), and the
-/// pages are already written; only their offer and history wait for it.
-/// [`RECORDED_EVENT`] says when a put-off record is in.
+/// thread of its own that waits for it, so the run answers now. Whoever has
+/// the chapter may have it for a while (an edit holds it across its model,
+/// `crate::run::lock_job`), and the pages are already written; only their
+/// offer and history wait for it. [`RECORDED_EVENT`] says when a put-off
+/// record is in.
+///
+/// A Detect or Clean run on the chapter does not refuse these rows, as it
+/// refuses a write to its pages: they are the denoise's own history, and no
+/// page's regions, masks or source change with them.
 pub(crate) fn record_written_soon(
     app: &tauri::AppHandle,
     run_id: &str,
@@ -1254,12 +1293,11 @@ mod tests {
     struct FakeGateway {
         answer: Box<Answer>,
         sent: Counter,
-        released: Counter,
     }
 
     impl FakeGateway {
         fn new(answer: impl Fn(&DenoiseMetadata, &[u8]) -> Result<DenoiseResult, String> + Send + Sync + 'static) -> Self {
-            Self { answer: Box::new(answer), sent: Counter(AtomicUsize::new(0)), released: Counter(AtomicUsize::new(0)) }
+            Self { answer: Box::new(answer), sent: Counter(AtomicUsize::new(0)) }
         }
     }
 
@@ -1276,7 +1314,6 @@ mod tests {
             (self.answer)(metadata, page_png)
         }
 
-        fn release_idle(&self) { self.released.bump(); }
     }
 
     #[test]
@@ -1505,7 +1542,6 @@ mod tests {
         assert_eq!(codes, [(1, "cloud_denoise_page_changed"), (2, "cloud_denoise_unsupported_page"),
             (3, "cloud_denoise_duplicate_output")]);
         assert_eq!(gateway.sent.get(), 2, "a changed page and a duplicate name are never sent");
-        assert_eq!(gateway.released.get(), 1);
         let records: Vec<AnalysisAttemptRecord> = std::fs::read_dir(dir.join("journal").join("analysis")).unwrap()
             .map(|entry| serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()).collect();
         assert_eq!(records.len(), 2);
@@ -1543,7 +1579,6 @@ mod tests {
         assert_eq!(reported, [0, 1, 2]);
         assert!(!report.cancelled);
         assert_eq!(gateway.sent.get(), 1);
-        assert_eq!(gateway.released.get(), 0, "a run without authority asks the endpoint nothing");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1598,13 +1633,12 @@ mod tests {
             self.inner.denoise(metadata, page_png)
         }
 
-        fn release_idle(&self) { self.inner.release_idle(); }
     }
 
     /// Two pages go at once, never more; a cancel while they are out sends no
     /// new page, the two in flight still finish and are written (a gateway that
     /// cannot give a page up, as an older synchronous one), and the report says
-    /// it was cancelled. The idle release waits for both.
+    /// it was cancelled. The provider's idle window is left intact.
     #[test]
     fn a_cancelled_run_finishes_the_pages_in_flight_and_sends_no_more() {
         let dir = scratch("cancel");
@@ -1631,7 +1665,6 @@ mod tests {
         assert_eq!(report.written.iter().map(|output| output.page_index).collect::<Vec<_>>(), [0, 1]);
         assert!(report.failed.is_empty());
         assert_eq!(*heard.lock().unwrap(), [(1, 5), (2, 5)]);
-        assert_eq!(gateway.inner.released.get(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1661,12 +1694,11 @@ mod tests {
             Err(rejection_code(&HttpTransportError::JobCancelled))
         }
 
-        fn release_idle(&self) { self.inner.release_idle(); }
     }
 
     /// A cancel reaches the pages in flight: they stop waiting, are reported
     /// cancelled and journalled cancelled (not unknown), nothing more is sent,
-    /// and no idle release is sent for a run that wrote nothing.
+    /// and the shared GPU remains available for other work.
     #[test]
     fn a_cancel_gives_up_the_pages_in_flight_on_a_polling_gateway() {
         let dir = scratch("cancel-polled");
@@ -1697,7 +1729,6 @@ mod tests {
         assert_eq!(report.failed.iter().map(|failure| (failure.page_index, failure.code.as_str())).collect::<Vec<_>>(),
             [(0, "cloud_denoise_cancelled"), (1, "cloud_denoise_cancelled")]);
         assert_eq!(gateway.inner.sent.get(), 2, "a page was sent after the cancel");
-        assert_eq!(gateway.inner.released.get(), 0);
         let records: Vec<AnalysisAttemptRecord> = std::fs::read_dir(dir.join("journal").join("analysis")).unwrap()
             .map(|entry| serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()).collect();
         assert_eq!(records.len(), 2);
@@ -1722,6 +1753,153 @@ mod tests {
             assert_eq!(code, "gateway_unreachable");
             assert!(!answered(&code), "{unknown:?} must stay unknown in the journal");
         }
+    }
+
+    struct QueuedGateway {
+        profile: String,
+        pngs: Mutex<HashMap<String,Vec<u8>>>,
+        accepted: AtomicUsize,
+        new_jobs: AtomicUsize,
+        ready: AtomicBool,
+        downloads_open: AtomicBool,
+        downloading: AtomicUsize,
+        most_downloads: AtomicUsize,
+        fail_download: AtomicBool,
+        poll_errors: AtomicUsize,
+        cancelled: Mutex<Vec<String>>,
+    }
+    impl QueuedGateway {
+        fn new(profile:&str) -> Self { Self { profile:profile.into(),pngs:Mutex::new(HashMap::new()),
+            accepted:AtomicUsize::new(0),new_jobs:AtomicUsize::new(0),ready:AtomicBool::new(true),
+            downloads_open:AtomicBool::new(false),downloading:AtomicUsize::new(0),most_downloads:AtomicUsize::new(0),
+            fail_download:AtomicBool::new(false),poll_errors:AtomicUsize::new(0),cancelled:Mutex::new(Vec::new()) } }
+    }
+    impl DenoiseGateway for QueuedGateway {
+        fn capabilities(&self)->Result<DenoiseCapabilities,String> {unreachable!()}
+        fn denoise(&self,_:&DenoiseMetadata,_:&[u8])->Result<DenoiseResult,String> {panic!("queued gateway used inline denoise")}
+        fn queued_results(&self)->Result<bool,String> {Ok(true)}
+        fn new_job(&self,metadata:DenoiseMetadata)->Result<DenoiseJob,String> {
+            self.new_jobs.fetch_add(1,Ordering::SeqCst);
+            let attempt_id=analysis::random_id()?;
+            Ok(DenoiseJob {handle:cleaner_core::cloud_job_wire::job_handle(cleaner_core::cloud_job_wire::JobKind::Denoise,
+                &metadata.request_digest,&attempt_id),metadata,attempt_id,profile_id:self.profile.clone(),origin_fingerprint:"e".repeat(64)})
+        }
+        fn submit_job(&self,job:&DenoiseJob,png:&[u8],cancel:&AtomicBool)->Result<(),String> {
+            if cancel.load(Ordering::SeqCst) {return Err(CANCELLED.into());}
+            let mut pngs=self.pngs.lock().unwrap();
+            if !pngs.contains_key(&job.handle) {pngs.insert(job.handle.clone(),png.to_vec());self.accepted.fetch_add(1,Ordering::SeqCst);}
+            Ok(())
+        }
+        fn poll_job(&self,job:&DenoiseJob)->Result<Polled<DenoiseResultMetadata>,String> {
+            if self.poll_errors.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|n|n.checked_sub(1)).is_ok() {
+                return Err("gateway_error".into());
+            }
+            if !self.ready.load(Ordering::SeqCst) {return Ok(Polled::Waiting);}
+            let png=self.pngs.lock().unwrap()[&job.handle].clone();
+            let result=good_answer(&job.metadata,&png);
+            Ok(Polled::Completed(DenoiseResultMetadata {protocol_version:VERSION.into(),
+                request_digest:job.metadata.request_digest.clone(),png_sha256:sha256_hex(&png),png_bytes:png.len(),info:result.info}))
+        }
+        fn download_job(&self,job:&DenoiseJob,_:&DenoiseResultMetadata,checkpoint:&Path,cancel:&AtomicBool)->Result<Vec<u8>,String> {
+            let now=self.downloading.fetch_add(1,Ordering::SeqCst)+1;self.most_downloads.fetch_max(now,Ordering::SeqCst);
+            while !self.downloads_open.load(Ordering::SeqCst) && !cancel.load(Ordering::SeqCst) {std::thread::sleep(Duration::from_millis(1));}
+            self.downloading.fetch_sub(1,Ordering::SeqCst);
+            if cancel.load(Ordering::SeqCst) {return Err(CANCELLED.into());}
+            let png=self.pngs.lock().unwrap()[&job.handle].clone();
+            if self.fail_download.swap(false,Ordering::SeqCst) {
+                std::fs::write(checkpoint,&png[..png.len()/2]).unwrap();return Err("gateway_unreachable".into());
+            }
+            if checkpoint.exists() {assert_eq!(std::fs::read(checkpoint).unwrap(),png[..png.len()/2]);}
+            std::fs::write(checkpoint,&png).unwrap();Ok(png)
+        }
+        fn cancel_job(&self,job:&DenoiseJob)->Result<(),String> {self.cancelled.lock().unwrap().push(job.handle.clone());Ok(())}
+    }
+    fn wait_for(check:impl Fn()->bool)->bool {
+        let deadline=std::time::Instant::now()+Duration::from_secs(5);
+        while !check() {if std::time::Instant::now()>deadline {return false;}std::thread::sleep(Duration::from_millis(1));}true
+    }
+
+    #[test]
+    fn all_24_pages_submit_while_both_downloads_are_blocked() {
+        let dir=scratch("queued-24");let indices:Vec<u32>=(0..24).collect();let plan=plan("queued-24",&indices);
+        let names:HashMap<u32,String>=indices.iter().map(|&i|(i,format!("p{i}"))).collect();
+        let gateway=QueuedGateway::new("queued-24");let cancel=AtomicBool::new(false);let journal=AnalysisJournal::new(dir.join("journal"));
+        let active=AtomicUsize::new(0);let peak=AtomicUsize::new(0);
+        let read=|_:&PlannedPage| {let n=active.fetch_add(1,Ordering::SeqCst)+1;peak.fetch_max(n,Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(5));let bytes=rgb(16,16);active.fetch_sub(1,Ordering::SeqCst);Ok(bytes)};
+        let (report,all_sent)=std::thread::scope(|scope| {
+            let run=scope.spawn(||run_plan(&Batch {plan:&plan,out_dir:&dir,names:&names,gateway:&gateway,
+                grants:GrantService::global(),journal:Some(&journal),allowed:&||Ok(()),read:&read},&cancel,&|_,_|{}));
+            let all=wait_for(||gateway.accepted.load(Ordering::SeqCst)==24 && gateway.downloading.load(Ordering::SeqCst)==2);
+            gateway.downloads_open.store(true,Ordering::SeqCst);(run.join().unwrap(),all)
+        });
+        assert!(all_sent,"later uploads waited for earlier downloads");
+        assert_eq!(report.written.len(),24,"{:?}",report.failed);
+        assert!(report.failed.is_empty());assert_eq!(gateway.most_downloads.load(Ordering::SeqCst),2);
+        assert!(peak.load(Ordering::SeqCst)<=2);
+        assert_eq!(report.written.iter().map(|p|p.page_index).collect::<Vec<_>>(),indices);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn remote_queue_is_bounded_and_cancellation_reaches_every_accepted_page() {
+        let dir=scratch("queued-cancel");let indices:Vec<u32>=(0..40).collect();let plan=plan("queued-cancel",&indices);
+        let names:HashMap<u32,String>=indices.iter().map(|&i|(i,format!("p{i}"))).collect();
+        let gateway=QueuedGateway::new("queued-cancel");gateway.ready.store(false,Ordering::SeqCst);
+        let cancel=AtomicBool::new(false);let read=|_:&PlannedPage|Ok(rgb(16,16));
+        let (report,bounded)=std::thread::scope(|scope| {
+            let run=scope.spawn(||run_plan(&Batch {plan:&plan,out_dir:&dir,names:&names,gateway:&gateway,
+                grants:GrantService::global(),journal:None,allowed:&||Ok(()),read:&read},&cancel,&|_,_|{}));
+            let full=wait_for(||gateway.accepted.load(Ordering::SeqCst)==16);
+            std::thread::sleep(Duration::from_millis(50));let bounded=full&&gateway.accepted.load(Ordering::SeqCst)==16;
+            cancel.store(true,Ordering::SeqCst);(run.join().unwrap(),bounded)
+        });
+        assert!(bounded);assert!(report.cancelled);assert!(report.written.is_empty());
+        assert_eq!(gateway.cancelled.lock().unwrap().len(),16);std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rerun_recovers_completed_transfer_without_another_gpu_submission() {
+        let dir=scratch("queued-recover");let plan=plan("queued-recover",&[0]);let names=HashMap::from([(0,"p0".into())]);
+        let gateway=QueuedGateway::new("queued-recover");gateway.downloads_open.store(true,Ordering::SeqCst);
+        gateway.fail_download.store(true,Ordering::SeqCst);let read=|_:&PlannedPage|Ok(rgb(16,16));
+        let journal=AnalysisJournal::new(dir.join("journal"));let cancel=AtomicBool::new(false);
+        let run=||run_plan(&Batch {plan:&plan,out_dir:&dir,names:&names,gateway:&gateway,
+            grants:GrantService::global(),journal:Some(&journal),allowed:&||Ok(()),read:&read},&cancel,&|_,_|{});
+        let first=run();assert_eq!(first.failed[0].code,"gateway_unreachable");assert!(!dir.join("p0.png").exists());
+        let recovered=run();assert_eq!(recovered.written.len(),1,"{:?}",recovered.failed);
+        assert_eq!(gateway.accepted.load(Ordering::SeqCst),1);assert_eq!(gateway.new_jobs.load(Ordering::SeqCst),1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unanswered_status_retains_the_accepted_handle_for_an_approved_rerun() {
+        let dir=scratch("queued-unknown");let plan=plan("queued-unknown",&[0]);let names=HashMap::from([(0,"p0".into())]);
+        let gateway=QueuedGateway::new("queued-unknown");gateway.downloads_open.store(true,Ordering::SeqCst);
+        gateway.poll_errors.store(5,Ordering::SeqCst);let read=|_:&PlannedPage|Ok(rgb(16,16));
+        let journal=AnalysisJournal::new(dir.join("journal"));let cancel=AtomicBool::new(false);
+        let run=||run_plan(&Batch {plan:&plan,out_dir:&dir,names:&names,gateway:&gateway,
+            grants:GrantService::global(),journal:Some(&journal),allowed:&||Ok(()),read:&read},&cancel,&|_,_|{});
+        assert_eq!(run().failed[0].code,"gateway_error");assert!(!dir.join("p0.png").exists());
+        assert_eq!(run().written.len(),1);
+        assert_eq!(gateway.accepted.load(Ordering::SeqCst),1);assert_eq!(gateway.new_jobs.load(Ordering::SeqCst),1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn queued_output_does_not_attach_after_the_page_appearance_changes() {
+        let dir=scratch("queued-edited");let plan=plan("queued-edited",&[0]);let names=HashMap::from([(0,"p0".into())]);
+        let gateway=QueuedGateway::new("queued-edited");let changed=AtomicBool::new(false);let cancel=AtomicBool::new(false);
+        let read=|_:&PlannedPage|if changed.load(Ordering::SeqCst) {Err("cloud_denoise_page_changed".into())} else {Ok(rgb(16,16))};
+        let report=std::thread::scope(|scope| {
+            let run=scope.spawn(||run_plan(&Batch {plan:&plan,out_dir:&dir,names:&names,gateway:&gateway,
+                grants:GrantService::global(),journal:None,allowed:&||Ok(()),read:&read},&cancel,&|_,_|{}));
+            let started=wait_for(||gateway.downloading.load(Ordering::SeqCst)==1);
+            changed.store(true,Ordering::SeqCst);gateway.downloads_open.store(true,Ordering::SeqCst);
+            let report=run.join().unwrap();assert!(started);report
+        });
+        assert_eq!(report.failed[0].code,"cloud_denoise_page_changed");assert!(!dir.join("p0.png").exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A run with nothing cancelled reports every page in plan order and

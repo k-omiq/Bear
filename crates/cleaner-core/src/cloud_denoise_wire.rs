@@ -455,6 +455,36 @@ pub struct DenoiseResult {
     pub info: DenoiseInfo,
 }
 
+/// Small completed-job response; image bytes are fetched separately in bounded chunks.
+pub const RESULT_CHUNK_BYTES: usize = 32 * 1024;
+pub const RESULT_OPERATION: &str = "denoise.results";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DenoiseResultMetadata {
+    pub protocol_version: String,
+    pub request_digest: String,
+    pub png_sha256: String,
+    pub png_bytes: usize,
+    pub info: DenoiseInfo,
+}
+
+impl DenoiseResultMetadata {
+    pub fn validate(&self, request: &DenoiseMetadata) -> Result<(), String> {
+        let models = request.recipe.resolve()?;
+        if self.protocol_version != VERSION || self.request_digest != request.request_digest
+            || self.png_bytes == 0 || self.png_bytes > MAX_PNG_BYTES
+            || self.png_sha256.len() != 64
+            || !self.png_sha256.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            || self.info.width == 0 || self.info.height == 0
+            || self.info.steps.len() != models.len()
+            || self.info.steps.iter().zip(&models).any(|(timing, step)| !ran_as(&timing.model_id, &step.model_id))
+        { return Err("denoise result metadata mismatch".into()); }
+        request.recipe.fits(self.info.width, self.info.height)?;
+        Ok(())
+    }
+}
+
 impl DenoiseResult {
     /// The answer is bound to the request (version, digest echo, the recipe's
     /// models in order) and its PNG is the uploaded page's size. The upload is
@@ -823,5 +853,20 @@ mod tests {
         assert!(!ran_as("mangajanai.2x.auto", "mangajanai.2x.auto"), "the gateway names what ran");
         assert!(ran_as("realcugan.up2x-latest-conservative", "realcugan.up2x-latest-conservative"));
         assert!(!ran_as("realcugan.up2x-latest-denoise1x", "realcugan.up2x-latest-conservative"));
+    }
+
+    #[test]
+    fn completed_metadata_is_bound_and_limits_the_download_before_any_bytes_are_requested() {
+        let request=DenoiseMetadata::new(preset("realcugan-2x-conservative").unwrap().recipe(),TINY_PNG).unwrap();
+        let meta=DenoiseResultMetadata {protocol_version:VERSION.into(),request_digest:request.request_digest.clone(),
+            png_sha256:"a".repeat(64),png_bytes:TINY_PNG.len(),info:DenoiseInfo {width:16,height:16,gray:false,
+                steps:request.recipe.resolve().unwrap().iter().map(|s|DenoiseStepTiming {model_id:s.model_id.clone(),ms:1}).collect()}};
+        meta.validate(&request).unwrap();
+        let mut bad=meta.clone();bad.png_bytes=MAX_PNG_BYTES+1;assert!(bad.validate(&request).is_err());
+        bad=meta.clone();bad.png_sha256="A".repeat(64);assert!(bad.validate(&request).is_err());
+        bad=meta.clone();bad.request_digest="b".repeat(64);assert!(bad.validate(&request).is_err());
+        bad=meta.clone();bad.info.steps[0].model_id="another model".into();assert!(bad.validate(&request).is_err());
+        bad=meta.clone();bad.info.width=u32::MAX;assert!(bad.validate(&request).is_err());
+        bad=meta;bad.info.height=0;assert!(bad.validate(&request).is_err());
     }
 }

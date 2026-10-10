@@ -1,0 +1,315 @@
+--- a/src/lib/api/fixtures.js
++++ b/src/lib/api/fixtures.js
+@@ -340,3 +340,86 @@
+     ],
+   }
+ }
++
++/* ---------- FIXTURE KNOB: `?promo=1` ---------- */
++
++import { PROMO_PAGES } from './promo-data.js'
++import { createRng } from './rng.js'
++
++/**
++ * The promo library: real scans of "Give My Regards to Black Jack" vol. 2
++ * (Shuho Sato, free to reuse). The regions are the real pipeline's own
++ * detections (promo/cleaned/regions.json); the pixels are served by the
++ * Vite promo stand-in for `tile://`. Pages without recorded results carry no
++ * regions.
++ */
++function promoChapter(projectId, number, name, files, mode, lastOpened) {
++  const id = `${projectId}-ch${number}`
++  const rng = createRng(id)
++  return {
++    id,
++    projectId,
++    name,
++    number,
++    order: 0,
++    lastOpened,
++    sourcePath: `~/scans/black-jack/${name}`,
++    sourceFormat: 'PNG',
++    noTextDetected: false,
++    inputReports: [],
++    pages: files.map((n, index) => {
++      const data = PROMO_PAGES[n]
++      const pageId = `${id}-p${String(index + 1).padStart(3, '0')}`
++      const sourceSha = rng.sha256()
++      return {
++        id: pageId,
++        chapterId: id,
++        index,
++        number: index + 1,
++        file: `page-${n}.png`,
++        sourceSha,
++        width: data.width,
++        height: data.height,
++        layout: 0,
++        panels: [],
++        status: 'unclean',
++        skipReason: null,
++        regions: [],
++        // No recorded pipeline result for this page: runs leave it alone
++        // rather than show it cleaned with nothing found.
++        promoNoData: data.regions.length === 0,
++        // Held back until a run reaches the page: the real app has no regions
++        // on a page nothing has detected yet (mock.js#promoReveal).
++        promoRegions: data.regions.map((r) => ({
++          id: `${pageId}-r${r.k}`,
++          pageId,
++          sourceSha,
++          bbox: { x: r.bbox[0], y: r.bbox[1], w: r.bbox[2], h: r.bbox[3] },
++          kind: r.kind,
++          text: '',
++          detected: true,
++          source: 'auto',
++          outcome: 'pending',
++          gateSkipCause: null,
++          declineReason: null,
++          unusuallyLarge: false,
++          mask: null,
++          promoEngine: r.engine ?? undefined,
++          promoDecline: r.status === 'declined' ? { reason: r.reason, stage: r.stage ?? 'clean' } : undefined,
++        })),
++      }
++    }),
++  }
++}
++
++export function buildPromoFixtures() {
++  const project = (id, name, mode, sourcePath, lastOpened, starred) => ({
++    id, name, mode, readingDirection: 'rtl', created: isoMinutesAgo(60 * 24 * 3), appVersion: APP_VERSION,
++    sourcePath, lastOpened, starred, interruptedJob: null, conversion: null, chapters: [],
++  })
++  const bj = project('bj-regards', 'Give My Regards to Black Jack', 'single', '~/scans/black-jack', HOURS_AGO_2, true)
++  bj.chapters = [promoChapter(bj.id, 2, 'Volume 2', ['010', '025', '047', '048', '049', '050', '100'], 'single', HOURS_AGO_2)]
++  const strip = project('bj-strip', 'Black Jack (long strip)', 'longstrip', '~/scans/black-jack-strip', YESTERDAY, false)
++  strip.chapters = [promoChapter(strip.id, 1, 'Chapter 1', ['010', '025', '100'], 'longstrip', YESTERDAY)]
++  return { projects: [bj, strip], sequence: 100 }
++}
+--- a/src/lib/api/mock.js
++++ b/src/lib/api/mock.js
+@@ -17,7 +17,7 @@
+ import { createJournal, pushEntry, redoEntry, undoEntry, viewOf } from '../model/journal.js'
+ import { displayBbox, editedLayer, layerCapabilities, layerOf } from '../model/layers.js'
+ import { regionState, reviewReason } from '../model/review.js'
+-import { aboutInfo, buildChapter, buildFixtures, buildProject, defaultSettings } from './fixtures.js'
++import { aboutInfo, buildChapter, buildFixtures, buildPromoFixtures, buildProject, defaultSettings } from './fixtures.js'
+ import { cloudAttemptId, sha256Hex } from './attempt.js'
+ import { buildReviewPage, supportOf } from './mockreview.js'
+ import { commitMask, ENGINE_INFO } from './provenance.js'
+@@ -221,7 +221,11 @@
+ export function createMockBackend(options = {}) {
+   const speed = options.speed ?? 1
+   const timers = options.timers ?? DEFAULT_TIMERS
+-  const base = { ...DEFAULT_TIMING, ...(options.timing ?? {}) }
++  // FIXTURE KNOB: `?promo=1` swaps the library for real scans with the real
++  // pipeline's regions and results (fixtures.js#buildPromoFixtures), with
++  // timings slow enough for progress to read on video.
++  const promo = new URLSearchParams(globalThis.location?.search ?? '').has('promo')
++  const base = { ...DEFAULT_TIMING, ...(promo ? { region: 80, pageTail: 420 } : {}), ...(options.timing ?? {}) }
+   const timing = Object.fromEntries(
+     Object.entries(base).map(([key, ms]) => [key, Math.max(0, Math.round(ms / speed))]),
+   )
+@@ -458,7 +462,7 @@
+       pendingAnalyses.set(id, { reject, timer })
+     })
+   }
+-  const fixtures = buildFixtures()
++  const fixtures = promo ? buildPromoFixtures() : buildFixtures()
+   const state = {
+     projects: fixtures.projects,
+     settings: defaultSettings(),
+@@ -522,6 +526,10 @@
+      */
+     partials: new Map(),
+   }
++  if (promo) {
++    state.settings.theme = 'light'
++    state.missingModels.delete('inpainter')
++  }
+   const sequence = { value: fixtures.sequence }
+   const rng = createRng(options.seed ?? 'session')
+ 
+@@ -849,6 +857,7 @@
+    * back, which leaves exactly the stored mask and the rung.
+    */
+   const detectRegion = (region, page, ctx, detector) => {
++    if (region.promoDecline?.stage === 'detect') return promoDeclined(region)
+     const mask = cleanRegionAutomatically(region, page, toolContext, ctx)
+     region.outcome = 'detected'
+     region.detected = true
+@@ -868,12 +877,31 @@
+    * Fill.
+    */
+   const cleanDetection = (region, page, ctx = {}) => {
++    if (region.promoDecline) return promoDeclined(region)
+     const pick = currentRung(ctx.engine ?? region.pick ?? 'fill')
+     cleanRegionAutomatically(region, page, toolContext, { ...ctx, bubbleEngine: pick, outsideEngine: pick })
+     delete region.pick
+     delete region.detector
+     delete region.insideBubble
+     return true
++  }
++
++  /** Promo fixture: a run reached the page, so what the real detector found is now on it. */
++  const promoReveal = (page) => {
++    if (!page.promoRegions) return
++    page.regions.push(...page.promoRegions)
++    delete page.promoRegions
++  }
++
++  /** Promo fixture: the real pipeline declined this region, with its own reason. */
++  const promoDeclined = (region) => {
++    region.outcome = 'declined'
++    region.declineReason = region.promoDecline.reason
++    region.mask = null
++    delete region.pick
++    delete region.detector
++    delete region.insideBubble
++    return false
+   }
+ 
+   // Several runs at once, one per chapter and three in all, as `run.rs`
+@@ -938,6 +966,7 @@
+           ? chapter.pages.filter((page) => page.index === pageIndex)
+           : chapter.pages
+       for (const page of pages) {
++        if (page.promoNoData) continue
+         if (inStep(page, outsideBubbles, mode)) {
+           entries.push({ projectId: found.project.id, chapterId: chapter.id, page })
+         }
+@@ -1010,11 +1039,18 @@
+       auto: {
+         pick: (page) => (hasDetections(page) ? detectionsOf(page) : fresh(page)),
+         apply: (region, page, ctx) =>
+-          isDetection(region) ? cleanDetection(region, page, ctx) : (cleanRegionAutomatically(region, page, toolContext, ctx), true),
++          isDetection(region) ? cleanDetection(region, page, ctx)
++            : region.promoDecline ? promoDeclined(region)
++            : (cleanRegionAutomatically(region, page, toolContext, ctx), true),
+       },
+     }
++    const step = steps[mode] ?? steps.auto
+     return runner.start(queue, {
+-      ...(steps[mode] ?? steps.auto),
++      ...step,
++      pick: (page) => {
++        promoReveal(page)
++        return step.pick(page)
++      },
+       chapterId,
+       mode,
+       kind: mode === 'detect' ? 'detect' : 'clean',
+@@ -2010,8 +2046,8 @@
+     roles: new Map(),
+   }
+   if (cloudGpuKnob) {
+-    const profileId = 'mc-mock-gpu'
+-    const endpointUrl = `https://mock-workspace--mc-${profileId}-gateway.modal.run/mc/v1`
++    const profileId = promo ? 'my-gpu' : 'mc-mock-gpu'
++    const endpointUrl = `https://${promo ? 'your-workspace' : 'mock-workspace'}--mc-${profileId}-gateway.modal.run/mc/v1`
+     const origin = new URL(endpointUrl).origin
+     state.settings.cloudEngines = 'allowed'
+     replaceInferenceConfig({
+--- a/src/lib/api/tools.js
++++ b/src/lib/api/tools.js
+@@ -100,7 +100,8 @@
+   // words are still read, because a stored preference from before the change
+   // is not a typo: `redraw` starts on LaMa, and `denoise`, the removed rung,
+   // on Fill.
+-  const pick = currentRung(
++  // Promo fixture: the engine the real pipeline used on this region.
++  const pick = region.promoEngine ? currentRung(region.promoEngine) : currentRung(
+     region.kind === 'bubble'
+       ? (options.bubbleEngine ?? 'fill')
+       : (options.outsideEngine ?? 'lama'),
+--- a/src/lib/api/tile.js
++++ b/src/lib/api/tile.js
+@@ -119,7 +119,11 @@
+  */
+ export function tileOrigin() {
+   const convert = /** @type {any} */ (globalThis).__TAURI_INTERNALS__?.convertFileSrc
+-  if (typeof convert !== 'function') return null
++  if (typeof convert !== 'function') {
++    // FIXTURE KNOB: `?promo=1` serves real pages from the Vite promo stand-in.
++    const search = globalThis.location?.search ?? ''
++    return new URLSearchParams(search).has('promo') ? `${globalThis.location.origin}/__promo_tile/` : null
++  }
+   const origin = convert('', TILE_SCHEME)
+   return typeof origin === 'string' && origin.endsWith('/') ? origin : null
+ }
+--- a/src/lib/api/provenance.js
++++ b/src/lib/api/provenance.js
+@@ -168,6 +168,8 @@
+   }
+   return {
+     id: `${spec.regionId}-m${spec.sequence}`,
++    // The promo stand-in for `tile://` names a layer by this key.
++    layerKey: `${spec.regionId}-m${spec.sequence}`,
+     regionId: spec.regionId,
+     sequence: spec.sequence,
+     fillMode: spec.fillMode ?? info.fillMode,
+--- a/vite.config.js
++++ b/vite.config.js
+@@ -1,7 +1,52 @@
+ import { configDefaults, defineConfig } from 'vitest/config'
+ import { svelte } from '@sveltejs/vite-plugin-svelte'
++import { readFileSync, existsSync } from 'node:fs'
++import { join } from 'node:path'
+ 
+ /**
++ * PROMO ONLY (scratch copy): stands in for the `tile://` protocol so the
++ * `?promo=1` mock draws real pages, real detection masks and real cleaned
++ * layers produced by the pipeline (see promo/app/prepare_assets.py).
++ */
++function promoTiles() {
++  const root = join(process.cwd(), 'public/promo')
++  return {
++    name: 'promo-tiles',
++    configureServer(server) {
++      server.middlewares.use('/__promo_tile/', (req, res, next) => {
++        const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'))
++        const path = decodeURIComponent((req.url ?? '').split('?')[0]).replace(/^\/+/, '')
++        const [chapterId, pageIndex, variant, rest] = path.split('/')
++        const page = manifest.chapters[chapterId]?.[Number(pageIndex)]
++        const entry = page && manifest.pages[page]
++        res.setHeader('Access-Control-Allow-Origin', '*')
++        res.setHeader('Access-Control-Expose-Headers', 'x-layer-bounds, x-mask-bounds')
++        res.setHeader('Cache-Control', 'no-store')
++        if (!entry) { res.statusCode = 404; return res.end() }
++        let file = null
++        if (variant === 'source' || variant === 'cleaned') file = join(root, 'src', `page-${page}.png`)
++        const k = /-r(\d+)$/.exec(rest ?? '')?.[1]
++        if (variant === 'layer') {
++          const b = k !== undefined ? entry.layers[k] : null
++          if (!b) { res.statusCode = 204; return res.end() }
++          res.setHeader('x-layer-bounds', b.join(','))
++          file = join(root, 'layer', `page-${page}-r${k}.png`)
++        }
++        if (variant === 'detection') {
++          const b = k !== undefined ? entry.dets[k] : null
++          if (!b) { res.statusCode = 404; return res.end() }
++          res.setHeader('x-mask-bounds', b.join(','))
++          file = join(root, 'det', `page-${page}-r${k}.png`)
++        }
++        if (!file || !existsSync(file)) { res.statusCode = 404; return res.end() }
++        res.setHeader('Content-Type', 'image/png')
++        res.end(readFileSync(file))
++      })
++    },
++  }
++}
++
++/**
+  * How a test asks for a browser: **name it `*.dom.test.js`**.
+  *
+  * The suite is two vitest projects rather than one. Almost every test in
+@@ -22,7 +67,7 @@
+ const DOM_SUFFIX = 'src/**/*.dom.test.js'
+ 
+ export default defineConfig({
+-  plugins: [svelte()],
++  plugins: [svelte(), promoTiles()],
+   test: {
+     // Two projects, one command: `npm test` runs both and reports one total.
+     projects: [

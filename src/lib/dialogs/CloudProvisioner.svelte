@@ -46,6 +46,7 @@
     forgetUnfinished,
     healthKey,
     newInstallationId,
+    NO_CLEAN_MODEL,
     planCleanup,
     removeEndpoint,
     resourceKey,
@@ -753,11 +754,14 @@
   )
   const gpu = $derived(typeof allocation.gpu === 'string' && GPU_NAME.test(allocation.gpu) ? allocation.gpu : null)
   const model = $derived(typeof allocation.model_id === 'string' ? allocation.model_id.slice(0, 120) : '')
+  /** The plan installs no cleaning model: detection and page denoise only. */
+  const noCleanModel = $derived(model === NO_CLEAN_MODEL)
   const modelOptions = $derived(
     (Array.isArray(allocation.model_options) ? allocation.model_options : [])
       .filter((/** @type {any} */ item) => item && typeof item.model_id === 'string' &&
         typeof item.label === 'string' && item.model_id.length <= 120 && item.label.length <= 80)
-      .map((/** @type {any} */ item) => ({ value: item.model_id, label: item.label,
+      .map((/** @type {any} */ item) => ({ value: item.model_id,
+        label: item.model_id === NO_CLEAN_MODEL ? t('settings.cloud.setup.review.noCleanModel') : item.label,
         requiredGpu: typeof item.required_gpu === 'string' && GPU_NAME.test(item.required_gpu) ? item.required_gpu : null })),
   )
   const analysisModels = $derived(
@@ -830,6 +834,8 @@
     if (!reusing) return null
     if (!reusing.weightsChecked) return 'unknown'
     if (reuseDownloadsNothing(reusing, { model_id: model, analysis_models: analysisModels, denoise: denoiseOn })) return 'nothing'
+    // With no cleaning model the Review step's own line says what downloads.
+    if (noCleanModel) return null
     if (!reusing.modelsReady.includes(model)) return 'model'
     return denoiseOn && reusing.options?.denoise !== true ? 'denoise' : 'analysis'
   })
@@ -842,8 +848,12 @@
   /** @param {import('./provisioning.svelte.js').ExistingInstallation} entry */
   function foundModels(entry) {
     if (!entry.weightsChecked) return t('settings.cloud.setup.found.unchecked')
-    if (entry.modelsReady.length === 0) return t('settings.cloud.setup.found.noModels')
     const names = [...entry.modelsReady.map(modelName), ...entry.analysisReady.map((item) => analysisCapabilityName(item) ?? item)]
+    // A setup made without a cleaning model has only its detection models to list,
+    // and one that chose page denoise alone has none: nothing is unfinished there.
+    const wantsModel = entry.options?.model_id !== NO_CLEAN_MODEL
+    if (!wantsModel && !entry.options?.analysis_models?.length) return t('settings.cloud.setup.review.noCleanModel')
+    if (names.length === 0 || (wantsModel && entry.modelsReady.length === 0)) return t('settings.cloud.setup.found.noModels')
     return t('settings.cloud.setup.found.models', { models: names.join(', ') })
   }
 
@@ -998,7 +1008,13 @@
     planCode = null
     pending = cleanOptions(options)
     try {
-      await makePlan(provider, pending)
+      if (installsNothing(pending)) {
+        // Shown as chosen for one frame, so the control goes back with the plan.
+        await tick()
+        planError = 'settings.cloud.setup.review.nothingChosen'
+      } else {
+        await makePlan(provider, pending)
+      }
     } catch {
       if (alive) planFailed('ERR_EXECUTION_FAILED')
     } finally {
@@ -1011,8 +1027,21 @@
   }
 
   /**
+   * Whether these choices would install nothing at all: no cleaning model, no
+   * detection model and no page denoise. The helper refuses such a plan.
+   *
+   * @param {import('./provisioning.svelte.js').SetupOptions} options
+   */
+  function installsNothing(options) {
+    return (options.model_id ?? model) === NO_CLEAN_MODEL &&
+      (options.analysis_models ?? analysisModels).length === 0 && !(options.denoise ?? denoiseOn)
+  }
+
+  /**
    * A model that requires a GPU gets it. Any other model gets the person's own
-   * choice back, or the provider's default when they made none.
+   * choice back, or the provider's default when they made none. No cleaning
+   * model, chosen with nothing else selected, selects the detection models:
+   * cloud detection is what such a setup is for.
    *
    * @param {string} value
    */
@@ -1020,7 +1049,10 @@
     const required = modelOptions.find((item) => item.value === value)?.requiredGpu
     const { gpu: _gpu, ...rest } = planOptions
     const next = required ?? chosenGpu
-    replan({ ...rest, model_id: value, ...(next ? { gpu: next } : {}) })
+    const options = { ...rest, model_id: value, ...(next ? { gpu: next } : {}) }
+    replan(installsNothing(options)
+      ? { ...options, analysis_models: analysisOptions.map((/** @type {any} */ item) => item.capability) }
+      : options)
   }
 
   /** @param {string} value */
@@ -1702,7 +1734,7 @@
     {:else if model}
       <div class="fixed">
         <span class="fixed-label">{t('settings.cloud.setup.review.model')}</span>
-        <span class="mono">{model}</span>
+        <span class="mono">{noCleanModel ? t('settings.cloud.setup.review.noCleanModel') : model}</span>
       </div>
     {/if}
     {#if model}<p class="note">{t('settings.cloud.setup.review.modelNote')}</p>{/if}
@@ -1803,6 +1835,8 @@
         <li>{t('settings.cloud.setup.review.denoiseBeside')}</li>
       {:else if reuseDownload === 'unknown'}
         <li>{t('settings.cloud.setup.review.weightsUnknown')}</li>
+      {:else if noCleanModel}
+        <li>{t('settings.cloud.setup.review.noCleanNote')}</li>
       {:else}
         <li>{t('settings.cloud.setup.review.weights', { size: weightsGb })}</li>
       {/if}
@@ -1886,7 +1920,8 @@
           <span class="latency">{t('settings.inference.health.latency', { latency: health.latency })}</span>
         {/if}
       </p>
-      <p class="note">{t('settings.cloud.setup.done.tryIt')}</p>
+      <!-- `model: null` is a setup with no cleaning model: it has no cloud render to try. -->
+      <p class="note">{t(run?.data?.model === null ? 'cloud.configuration.cleanNotInstalled' : 'settings.cloud.setup.done.tryIt')}</p>
     {:else if saved}
       <!-- Saved and selected, but its first check did not pass: never
            "ready". No check at all reads as one that could not be made. -->

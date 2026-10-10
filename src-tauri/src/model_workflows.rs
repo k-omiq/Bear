@@ -54,7 +54,7 @@ const FULL_RT_SHA256: &str = "065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc3
 const FULL_RT_REVISION: &str = cleaner_core::text_groups::OGKALU_FULL_REVISION;
 // Measured native CPU chapter peak RSS was 8,547,975,168 bytes on Apple M5. Leave room
 // for the editor and decoded page; an unknown reading fails closed.
-const SAM_MIN_ROOM_BYTES: u64 = 10_000_000_000;
+const SAM_MIN_ROOM_BYTES: u64 = sam_ts::MIN_ROOM_BYTES;
 static SAM_FILES: Mutex<()> = Mutex::new(());
 static SAM_INSTALL: Mutex<()> = Mutex::new(());
 
@@ -304,11 +304,12 @@ pub(crate) fn graph_dir(app_data: &Path) -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let path = app_data.join("models/sam-ts-l");
-    GRAPHS
-        .iter()
-        .all(|graph| path.join(graph.name).is_file())
-        .then_some(path)
+    graph_dir_in(crate::run::model_search_paths(Some(app_data)))
+}
+
+fn graph_dir_in(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    paths.into_iter().map(|path| path.join("sam-ts-l"))
+        .find(|path| GRAPHS.iter().all(|graph| path.join(graph.name).is_file()))
 }
 
 fn rt_path_with(
@@ -354,6 +355,7 @@ pub(crate) fn full_rt_path(app_data: &Path) -> Option<PathBuf> {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowCapabilities {
     runtime_installed: bool,
+    runtime_ready: bool,
     ctd_installed: bool,
     rt_installed: bool,
     full_rt_installed: bool,
@@ -362,6 +364,8 @@ pub struct WorkflowCapabilities {
     full_rt_file: ManifestFile,
     sam_installed: bool,
     sam_memory_ready: bool,
+    local_detection_ready: bool,
+    local_detection_note: &'static str,
     sam_managed: bool,
     sam_revision: &'static str,
     sam_files: Vec<ManifestFile>,
@@ -403,14 +407,14 @@ fn sam_backends(
         qualified: false,
         available: runtime_installed && memory_ready,
         selectable: runtime_installed && memory_ready,
-        note: "Native ONNX CPU analysis. Saved parity evidence is from macOS; other platforms remain review-only.",
+        note: "Local detection on CPU, including chapter and selection runs. Automatic uses CPU. Saved parity measurements are from macOS; other platforms are not measured. Requires 10 GB of memory room; one SAM pipeline loads at a time.",
     }];
     if cfg!(target_os = "macos") {
         rows.extend([
             Backend { id: "ort-webgpu", platform: "macOS", qualified: webgpu_qualified,
                 available: runtime_installed && memory_ready && webgpu_ready,
                 selectable: runtime_installed && memory_ready && webgpu_ready,
-                note: "45/45 exact saved Pillow-input masks on the measured Mac17,3 M5 with pinned ORT 1.28.0. Explicit WebGPU PNG component writes require that host/runtime, full graph assignment, and approval. Other Macs are review-only; CPU remains the default." },
+                note: "Local detection on Apple WebGPU with strict graph placement and no CPU fallback. Saved parity measurements are from Mac17,3 M5 with pinned ORT 1.28.0; other Macs are not measured. CPU remains the default. Preview component writes have separate qualification requirements." },
             Backend { id: "ort-coreml", platform: "macOS", qualified: false, available: false, selectable: false, note: "Head was tested in a spike; full native path is unqualified." },
             Backend { id: "torch-mps", platform: "macOS", qualified: false, available: false, selectable: false, note: "PyTorch spike measured on Apple M5; no shipped PyTorch runtime." },
             Backend { id: "torch-cpu", platform: "macOS", qualified: false, available: false, selectable: false, note: "PyTorch reference only; no shipped PyTorch runtime." },
@@ -583,11 +587,10 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
     let webgpu_ready = cfg!(target_os = "macos")
         && runtime_ready
         && sam_ts::built_in_webgpu_available();
-    // Parked CTD, LaMa and sidecar sessions count as room: analysis evicts
-    // them before SAM and checks the room again, refusing by name if it is
-    // still short. The status itself never evicts.
-    let sam_memory_ready = room.is_some_and(|bytes| bytes >= SAM_MIN_ROOM_BYTES)
-        || cleaner_core::residency::reclaimable_for_sam();
+    // Readiness requires measured room; an idle session's mere presence
+    // cannot promise enough memory. Loading evicts idle models and checks
+    // again. Reading status never evicts anything.
+    let sam_memory_ready = sam_ts::ensure_memory_room(room).is_ok();
     let webgpu_qualified = webgpu_ready
         && sam_ts::measured_m5_host()
         && runtime.as_ref().is_some_and(|path| {
@@ -596,17 +599,20 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
                 std::fs::metadata(path).map_or(0, |meta| meta.len()),
                 SAM_WEBGPU_RUNTIME_SHA256)
         });
+    let full_rt_installed = full_rt_path_with(app_data, |path, bytes, sha| {
+        cache.verified(path, bytes, sha)
+    }).is_some();
+    let local_detection_ready = runtime_ready && full_rt_installed && sam_installed && sam_memory_ready;
     WorkflowCapabilities {
         runtime_installed,
+        runtime_ready,
         ctd_installed: crate::run::model_search_paths(Some(app_data)).into_iter()
             .any(|dir| dir.join(crate::run::DETECTOR).is_file()),
         rt_installed: rt_path_with(app_data, |path, bytes, sha| {
             cache.verified(path, bytes, sha)
         }).is_some(),
         sam_installed,
-        full_rt_installed: full_rt_path_with(app_data, |path, bytes, sha| {
-            cache.verified(path, bytes, sha)
-        }).is_some(),
+        full_rt_installed,
         full_rt_managed: app_data
             .join("models/rtdetr-v2-full")
             .join(FULL_RT_NAME)
@@ -618,6 +624,11 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
             sha256: FULL_RT_SHA256,
         },
         sam_memory_ready,
+        local_detection_ready,
+        local_detection_note: if !runtime_ready { "Install or repair the local ONNX Runtime." }
+            else if !full_rt_installed || !sam_installed { "Install the SAM-TS-L and Ogkalu Full models for the local detection pipeline." }
+            else if !sam_memory_ready { "SAM-TS-L needs 10 GB of memory room after releasing idle model sessions." }
+            else { "SAM-TS-L and Ogkalu Full are ready for local detection. Additional selected models have their own installation checks." },
         sam_managed: sam
             .as_ref()
             .is_some_and(|dir| *dir == app_data.join("models/sam-ts-l")),
@@ -1596,11 +1607,14 @@ fn apply_component_at(
     let path = library
         .resolve_chapter(&plan.chapter_id)
         .map_err(|e| e.to_string())?;
+    let (chapter_id, page_index) = (plan.chapter_id.clone(), plan.page_index);
     // Let go for the chapter's lock and taken back, as in
     // `load_component_correction_at`. A new analysis clears the prepared
     // write, so the same plan id is the same plan over the same analysis.
+    // The write is an edit of the plan's page, so a run working on that page
+    // refuses it (`page_busy`).
     drop(store);
-    let _job_lock = crate::run::lock_job(&path)?;
+    let _job_lock = crate::run::lock_page(&path, &chapter_id, page_index)?;
     let mut store = review_store().lock().map_err(|e| e.to_string())?;
     let plan = store.prepared.as_ref().filter(|plan| plan.id == plan_id)
         .ok_or("Prepared write expired; preview the component again")?;
@@ -2146,6 +2160,29 @@ pub async fn analyze_chapter_page(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn local_cpu_detection_is_available_without_preview_write_qualification() {
+        let rows = super::sam_backends(true, true, false, false);
+        let cpu = rows.iter().find(|row| row.id == "ort-cpu").unwrap();
+        assert!(cpu.available && cpu.selectable);
+        assert!(!cpu.qualified);
+        assert!(!super::sam_backends(true, false, false, false)[0].available);
+        assert!(!super::sam_backends(false, true, false, false)[0].available);
+    }
+
+    #[test]
+    fn sam_models_use_the_same_search_locations_as_the_other_local_models() {
+        let root = std::env::temp_dir().join(format!("mc-sam-search-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let incomplete = root.join("first/sam-ts-l");
+        let complete = root.join("second/sam-ts-l");
+        std::fs::create_dir_all(&incomplete).unwrap();
+        std::fs::create_dir_all(&complete).unwrap();
+        std::fs::write(incomplete.join(cleaner_core::sam_ts::ENCODER), b"encoder").unwrap();
+        for graph in super::GRAPHS { std::fs::write(complete.join(graph.name), b"graph").unwrap(); }
+        assert_eq!(super::graph_dir_in([root.join("first"), root.join("second")]), Some(complete));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn review_source_preview_is_managed_srgb_and_oriented_once() {
         use base64::Engine as _;
         let fixture=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/cleaner-core/tests/fixtures/color-reference");
@@ -2263,8 +2300,9 @@ mod tests {
         ));
         residency::checkin(key.clone(), Parked);
         let status = workflow_capabilities_with_room(&std::env::temp_dir(), Some(0));
-        // Short on room, but the parked session is room analysis can make.
-        assert!(status.sam_memory_ready);
+        // A parked session might free too little memory. Presence cannot
+        // claim readiness, and status does not evict it to find out.
+        assert!(!status.sam_memory_ready);
         assert!(residency::checkout::<Parked>(&key).is_some());
     }
 

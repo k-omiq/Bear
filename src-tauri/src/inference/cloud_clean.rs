@@ -70,16 +70,18 @@
 //! ([`stops_run`], a changed profile epoch, cloud switched off, another profile
 //! selected) stops the run, and the renders in flight are cancelled.
 //!
-//! ## Three in flight, never two that read each other
+//! ## Queue ahead, never two that read each other
 //!
-//! Up to [`MAX_IN_FLIGHT`] renders run at once, so the GPU is not left waiting
-//! on the network between jobs. Two regions of one page are not always
+//! Up to [`MAX_IN_FLIGHT`] renders may wait on the cloud at once, while only
+//! [`MAX_PREPARING`] crops are prepared or uploaded at once. Acceptance frees
+//! a preparation slot immediately, so the next independent job is submitted
+//! while earlier jobs wait on the GPU. Two regions of one page are not always
 //! independent, though: a render's input is the page composited with every
 //! patch below it within [`crate::underlay::READ_MARGIN`], and the attach
 //! refuses a result whose underlay changed while it rendered. A region
 //! therefore waits while a region below it on the same page and within reach
 //! is still to be committed ([`next_ready`]). In practice regions of one page
-//! go one after another and the three slots are spent on different pages.
+//! go one after another and the queue is filled from different pages.
 //! A long strip is one page for this purpose: a render there reads across a
 //! join ([`crate::underlay::prepare_cloud_seed`]), so the regions are placed
 //! in strip pixels and a region waits for one below it on either side of a
@@ -139,8 +141,13 @@ pub const CHUNK_REGIONS: usize = 256;
 const _: () = assert!(CHUNK_REGIONS > 0 && CHUNK_REGIONS <= MAX_CLEAN_REGIONS);
 /// The most regions one plan covers, checked before a region is read.
 pub const MAX_PLAN_REGIONS: usize = 16 * MAX_CLEAN_REGIONS;
-/// Renders in flight at once.
-pub const MAX_IN_FLIGHT: usize = 3;
+/// Renders accepted by, or being sent to, the cloud at once. This budget is
+/// independent of GPU execution capacity: the gateway queues accepted jobs.
+pub const MAX_IN_FLIGHT: usize = 16;
+/// Large crops prepared or uploaded concurrently. GPU waits release this
+/// budget as soon as the remote handle is recorded durably.
+const MAX_PREPARING: usize = 3;
+const _: () = assert!(MAX_PREPARING > 0 && MAX_PREPARING <= MAX_IN_FLIGHT);
 /// Each region's own grant lives only from its mint to its dispatch.
 const REGION_GRANT_TTL: Duration = Duration::from_secs(60);
 const MAX_OPEN_PROPOSALS: usize = 16;
@@ -947,9 +954,11 @@ pub(crate) fn consume_grant(grant_id: &str, request: &CleanGrantRequest<'_>) -> 
 
 /// The render behind the run, so the run can be driven without a gateway.
 pub(crate) trait RegionRenderer: Sync {
-    /// Render one region with the region grant `nonce` and commit it. `Err` is
-    /// the stable code it failed with ([`InferenceServiceError::code`]).
-    fn render(&self, nonce: &str, page_index: u32, region_id: &str, recipe: &RenderRecipe) -> Result<ApiRegion, String>;
+    /// Render one region with the region grant `nonce` and commit it. Call
+    /// `submitted` once its accepted handle is durable, before polling. `Err`
+    /// is the stable code it failed with ([`InferenceServiceError::code`]).
+    fn render(&self, nonce: &str, page_index: u32, region_id: &str, recipe: &RenderRecipe,
+        submitted: &dyn Fn()) -> Result<ApiRegion, String>;
 
     /// The deployment as it is now: its recipe, and its GPU and list price
     /// read exactly as [`prepare`] reads them ([`CleanGateway::gpu_price`]: a
@@ -1051,6 +1060,8 @@ enum Slot {
 
 struct Schedule {
     slots: Vec<Slot>,
+    /// Preparations or uploads not yet accepted by the gateway.
+    preparing: usize,
     /// No region is started after this.
     stop: bool,
     /// The attempt each region in flight renders under.
@@ -1081,6 +1092,26 @@ impl Shared {
             renderer.cancel(&attempt);
         }
     }
+}
+
+/// Returned on acceptance, or when preparation/submission fails. The remote
+/// wait keeps its ordinary region slot until commit, preserving dependencies.
+struct Preparing<'a> {
+    shared: &'a Shared,
+    released: AtomicBool,
+}
+
+impl Preparing<'_> {
+    fn release(&self) {
+        if !self.released.swap(true, Ordering::SeqCst) {
+            self.shared.lock().preparing -= 1;
+            self.shared.changed.notify_all();
+        }
+    }
+}
+
+impl Drop for Preparing<'_> {
+    fn drop(&mut self) { self.release(); }
 }
 
 /// The first queued region nothing still to be committed reads under: no
@@ -1386,7 +1417,8 @@ fn run_chunk(
         slots[position] = Slot::Queued;
     }
     let shared = Shared {
-        schedule: Mutex::new(Schedule { slots: std::mem::take(slots), stop: false, attempts: HashMap::new() }),
+        schedule: Mutex::new(Schedule { slots: std::mem::take(slots), preparing: 0,
+            stop: false, attempts: HashMap::new() }),
         changed: Condvar::new(),
     };
     let mut halting = progress.stopped;
@@ -1441,16 +1473,19 @@ fn work(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared, cance
             let mut schedule = shared.lock();
             loop {
                 if schedule.stop || cancel.load(Ordering::SeqCst) { return; }
-                if let Some(index) = next_ready(&schedule.slots, &batch.scope.regions) {
+                if let Some(index) = (schedule.preparing < MAX_PREPARING)
+                    .then(|| next_ready(&schedule.slots, &batch.scope.regions)).flatten() {
                     schedule.slots[index] = Slot::InFlight;
+                    schedule.preparing += 1;
                     break index;
                 }
                 if !schedule.slots.contains(&Slot::Queued) { return; }
                 schedule = shared.changed.wait(schedule).unwrap_or_else(|poisoned| poisoned.into_inner());
             }
         };
+        let preparing = Preparing { shared, released: AtomicBool::new(false) };
         let _ = tx.send(Message::Started(index));
-        let (outcome, reached) = attempt(batch, renderer, shared, cancel, index);
+        let (outcome, reached) = attempt(batch, renderer, shared, cancel, index, &|| preparing.release());
         let stops = matches!(&outcome, Outcome::Failed(code) if stops_run(code) || batch.lost_authority());
         {
             // Stopped here, under the lock the next pick takes, and not when
@@ -1462,6 +1497,7 @@ fn work(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared, cance
             schedule.stop |= stops;
         }
         shared.changed.notify_all();
+        drop(preparing);
         let _ = tx.send(Message::Finished { index, outcome, reached, stops });
     }
 }
@@ -1469,7 +1505,7 @@ fn work(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared, cance
 /// One region: re-check it against the grant, mint and spend its own grant,
 /// render. Answers whether it reached the renderer.
 fn attempt(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared,
-    cancel: &AtomicBool, index: usize) -> (Outcome, bool) {
+    cancel: &AtomicBool, index: usize, submitted: &dyn Fn()) -> (Outcome, bool) {
     let scope = batch.scope;
     let region = &scope.regions[index];
     if let Err(code) = (batch.allowed)() {
@@ -1490,6 +1526,9 @@ fn attempt(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared,
     };
     let grant_scope = input.scope(scope.provider, &scope.profile_id, &scope.endpoint_fingerprint, digest,
         &scope.recipe, &region.id);
+    // The renderer rereads and validates the grant at dispatch. Holding this
+    // first read's image payloads through the GPU wait multiplies crop memory.
+    drop(input);
     let grant = match batch.grants.issue_grant_with_epoch(grant_scope, scope.profile_epoch, REGION_GRANT_TTL, 1) {
         Ok(grant) => grant,
         Err(GrantError::ProfileMutated | GrantError::Revoked) =>
@@ -1511,7 +1550,7 @@ fn attempt(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared,
         let _ = batch.grants.revoke_grant(&grant.nonce);
         return (Outcome::Left, false);
     }
-    let outcome = match renderer.render(&grant.nonce, region.page_index, &region.id, &scope.recipe) {
+    let outcome = match renderer.render(&grant.nonce, region.page_index, &region.id, &scope.recipe, submitted) {
         Ok(api) => Outcome::Cleaned(Box::new(api)),
         Err(code) => match code.as_str() {
             "cancelled" | "remote_cancelled" => Outcome::Left,
@@ -1536,10 +1575,11 @@ struct ServiceRenderer {
 }
 
 impl RegionRenderer for ServiceRenderer {
-    fn render(&self, nonce: &str, page_index: u32, region_id: &str, recipe: &RenderRecipe) -> Result<ApiRegion, String> {
-        self.service.execute_cloud_render(nonce, &self.job_path, page_index, region_id, &self.target,
+    fn render(&self, nonce: &str, page_index: u32, region_id: &str, recipe: &RenderRecipe,
+        submitted: &dyn Fn()) -> Result<ApiRegion, String> {
+        self.service.execute_cloud_render_queued(nonce, &self.job_path, page_index, region_id, &self.target,
             recipe, &OperationIntent::CloudClean, &self.config, crate::inference::cloud_allowed(&self.app),
-            &PollOptions::interactive())
+            &PollOptions::interactive(), submitted)
             .map_err(|e| e.code().to_owned())
     }
 
@@ -1734,6 +1774,10 @@ fn start(app: &tauri::AppHandle, grant_id: &str) -> Result<RunHandle, String> {
         Ok(reservation) => reservation,
         Err(busy) => return Ok(busy),
     };
+    // Said before anything slow: from here the chapter is the batch's against
+    // a write to all of it, and each page it starts against an edit.
+    let library = Library::for_app(app).map_err(|e| e.to_string())?;
+    reservation.set_jobs([&library.resolve_chapter(&chapter).map_err(|e| e.to_string())?]);
     // The profile the grant was given for, not the one selected now.
     let (provider, profile_id) = grant_profile(grant_id).ok_or("cloud_clean_grant_missing")?;
     let selected = configured(app, provider, profile_id)?;
@@ -1747,8 +1791,7 @@ fn start(app: &tauri::AppHandle, grant_id: &str) -> Result<RunHandle, String> {
         profile_epoch: GrantService::global().get_profile_epoch(selected.provider, &selected.profile_id),
         recipe: &recipe,
     })?;
-    let job_path = Library::for_app(app).map_err(|e| e.to_string())?
-        .resolve_chapter(&scope.chapter_id).map_err(|e| e.to_string())?;
+    let job_path = library.resolve_chapter(&scope.chapter_id).map_err(|e| e.to_string())?;
     let pages: Vec<QueuedPage> = scope.regions.iter().map(|region| region.page_index)
         .collect::<BTreeSet<_>>().into_iter()
         .map(|page_index| QueuedPage {
@@ -1756,7 +1799,9 @@ fn start(app: &tauri::AppHandle, grant_id: &str) -> Result<RunHandle, String> {
             page_id: library::page_id(&scope.chapter_id, page_index as usize),
             page_index,
         }).collect();
-    let service = app_inference_service(app)?.with_review_retry(false);
+    // One profile-bound client retains its HTTP pool throughout the batch.
+    // Every dispatch still checks permission, profile epoch, and its grant.
+    let service = app_inference_service(app)?.with_review_retry(false).with_custom_client(client.clone());
     let unresolved = journal_unresolved(service.journal().clone(), &job_path);
     let renderer = ServiceRenderer {
         app: app.clone(),

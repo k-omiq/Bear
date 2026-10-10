@@ -21,7 +21,7 @@
  * @property {string} pageId - the page it is being drawn on; a draft belongs to one page
  * @property {Array<{x: number, y: number, p?: number}>} points - in page percent
  * @property {import('./gesture.js').Bbox|null} bbox
- * @property {'add'|'erase'|'paint'} mode
+ * @property {'add'|'erase'|'paint'|'detect'} mode - `detect` is the selection tool's Detect of a drawn area
  * @property {boolean} keyboard - opened with the keyboard, so it is adjustable and waits for Enter
  * @property {boolean} moved - the pointer travelled far enough to be a drag rather than a tap
  * @property {{source: {x: number, y: number}, offset: {x: number, y: number}}} [clone]

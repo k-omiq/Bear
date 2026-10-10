@@ -61,9 +61,9 @@
  *
  * A hash decides staleness, an mtime only explains it. The token
  * is folded from the page's own content hashes - the source `sha256` and, for
- * `cleaned`, the native appearance digests of the page and of every layer on
- * it (see `pageVersion`) - so the URL changes exactly when the bytes behind it
- * change, and never otherwise. The
+ * `cleaned`, the native appearance digest of the page, with those of its
+ * layers while an edit's answer is ahead of it (see `pageVersion`) - so the
+ * URL changes exactly when the bytes behind it change, and never otherwise. The
  * protocol handler can then answer `Cache-Control: immutable`, which is the
  * whole reason the token exists: without it the webview would either re-fetch
  * every page on every render or show a stale one after an edit.
@@ -326,12 +326,25 @@ export function pageTileUrls(page) {
  * saved change to what the page shows. A position lock is not an appearance
  * and does not move it.
  *
- * Every in-hand layer's own `mask.appearance` (`tile::record_appearance`)
- * sits beside it, because the page header is only as fresh as the last
- * `loadPages`: it arrives with the edit that changed it, so the URL moves the
- * moment the answer lands rather than one reload later. Detections draw
- * nothing and are left out. A mask with no digest (the mock) is folded from
- * its content fields and its style instead.
+ * So a page the native side listed is versioned by that digest alone, and the
+ * token is the same whether the window holds the page's regions or has
+ * reduced it to a header (`state/pagewindow.svelte.js`). Folding the in-hand
+ * layers in as well gave one saved page two URLs, one as a header and one
+ * once its regions arrived, and a jump to a page outside the window fetched
+ * every cleaned tile twice.
+ *
+ * The layers still count while they are ahead of the digest. The page header
+ * is only as fresh as the last `loadPages`, and an edit's answer changes a
+ * region before the page is read again; a layer preview changes it many times
+ * and reads the page once, at its commit. Each layer's own `mask.appearance`
+ * (`tile::record_appearance`) arrives with that answer. The layers a page
+ * object is first seen holding are the ones its digest names (`listed`), and
+ * while the ones in hand differ from them they are folded in beside it: the
+ * URL moves the moment the answer lands rather than one reload later, and
+ * moves again when the reload brings the digest that names the edit.
+ * Detections draw nothing and are left out. A page with no digest (the mock,
+ * a run's stub header) is folded from its layers every time, and a mask with
+ * no digest from its content fields and its style instead.
  *
  * The editor no longer draws `cleaned` tiles - it draws `source` tiles and a
  * layer per patch (`layerUrl`) - so this token names the flattened page for
@@ -359,9 +372,60 @@ export function pageVersion(page, variant) {
       .filter((region) => region.mask != null && region.outcome !== 'detected')
       .map((region) => maskAppearance(region.mask))
       .sort()
-    parts.push(...masks)
+    if (!page.appearance) parts.push(...masks)
+    else {
+      const lead = ahead(page, masks)
+      // Marked, so that deleting the last layer moves the token too.
+      if (lead) parts.push('ahead', ...lead)
+    }
   }
   return fold(parts.join('|'))
+}
+
+/**
+ * The layers each page object was first seen holding, as `pageVersion` folds
+ * them. Keyed by the object and not by the page: a reload puts a new object
+ * in the chapter, with the digest that names what it holds, and an edit's
+ * answer changes the regions of the one already there.
+ *
+ * @type {WeakMap<object, string>}
+ */
+const listed = new WeakMap()
+
+/**
+ * The layers a page object was last seen ahead of its digest with, kept for
+ * the time the window holds it as a header.
+ *
+ * @type {WeakMap<object, string[]>}
+ */
+const led = new WeakMap()
+
+/**
+ * The layers in hand when they are ahead of the page's digest, and null when
+ * they are not: an edit's answer has changed, added or removed one since the
+ * page was listed, and the page has not been read again.
+ *
+ * A header has no layers to compare, by eviction and not by an edit
+ * (`pagewindow.svelte.js#evictRegions`). It answers as it last did with them
+ * in hand: a page edited and then dropped from the window before its reload
+ * would otherwise go back to the URL of the picture before the edit, which
+ * the browser still holds.
+ *
+ * @param {import('./backend.js').ApiPage} page
+ * @param {string[]} masks - the layers' appearances, sorted
+ * @returns {string[] | null}
+ */
+function ahead(page, masks) {
+  if (page.resident === false) return led.get(page) ?? null
+  const now = masks.join('|')
+  const then = listed.get(page)
+  if (then === undefined) listed.set(page, now)
+  if (then === undefined || then === now) {
+    led.delete(page)
+    return null
+  }
+  led.set(page, masks)
+  return masks
 }
 
 /**

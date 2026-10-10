@@ -670,6 +670,143 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**A cloud GPU with no cleaning model (2026-10-08).** Setup always installed one cleaning model,
+so a user who wanted the cloud GPU for detection or page denoise alone paid for a 5.5 GB download
+and a render worker. `model_id: "none"` now sets up a Modal installation with no cleaning model:
+no `Worker` class, no snapshot download, and a gateway that says `render: false`
+(`docs/cloud-provisioning.md` section 6, `docs/cloud-api.md`). The app remembers such a deployment
+as `none`, which is quiet, and not as `missing`, which asks for a repair.
+
+Not measured, or known to be incomplete:
+
+- Not run against a Modal account. The helper is under its fake SDKs and the gateway under unit
+  tests. Not seen live: a deploy of the app with no `Worker` class, that no render image is built,
+  an update that removes the `Worker` and one that creates it again, and how long the old gateway
+  keeps answering `/model-info` after such an update (the health step waits for it, up to its budget).
+- Not tried in the running app. The interface is under jsdom tests and the mock, the desktop side
+  under unit tests with a stub HTTP server.
+- Beam refuses the choice (`NO_MODEL_PROVIDERS`). Its gateway and seed job were not changed.
+- An update that drops the cleaning model leaves its snapshot on the weights volume. Nothing
+  deletes it, so the provider still bills its storage, and a later update that adds the same model
+  back downloads nothing.
+- A gateway deployed before this change has no `render` field. An installation updated to no
+  cleaning model with an old frozen helper is not possible, because the helper carries the deploy
+  code, but a desktop older than this change reads the 503 from `/model-info` as a failed
+  connection check.
+- A project region cleaned earlier on a cloud model, opened against a deployment that now has no
+  cleaning model: **Try again** is refused with the "set up without a cleaning model" message.
+  That path is covered by the state tests only, not by a test that starts from a saved region.
+- The first-launch setup mounts the same setup screen, so it offers the choice. Its own tests use
+  a stand-in for that screen and were not extended.
+- The Review step's fixed notes still speak of a render ("Modal bills your account for GPU time
+  while a render runs", "Stay on after a render") when no cleaning model is chosen. The billing
+  they describe is the same for analysis and denoise; the words were not changed.
+- Tried in the Vite mock in a browser: the choice, the two detection models selected with it, the
+  refusal of an empty setup, a finished setup and its connection test. The mock offers one
+  cleaning model beside the choice; the helper's plan offers three.
+
+**Edits while a run works (2026-10-07).** A run held its chapter's job lock from the first page to
+the last, so every edit of the chapter waited for the run to end. It now holds the lock twice per
+page and never while a model works, a page is the run's from `page-started` to `page-done`, and
+an edit of that page is refused at once (`page_busy`). The rule is in `docs/detect-clean.md` §3.
+
+Not measured, or known to be incomplete:
+
+- Not tried in the running app. The Rust side is under unit tests with a stub cleaner that waits
+  inside its models; the interface side is under jsdom tests and the mock.
+- A hand edit that runs a model during a run opens a second session of that model. What that costs
+  in memory beside a run, and how often it trips the pressure ladder, was not measured.
+- A cloud clean run raises a page without the job lock and lowers it just after the lock drops.
+  The attach's own revision check covers the data; the two short windows are not under test.
+- Planning an export (`plan_export_chapter`) is a read and is not refused during a run; the
+  export itself is. A plan made during a run can be out of date by the time it is used.
+- A page whose source changed between a run's two holds is counted as failed and left for a later
+  run. Nothing in the app moves a source under a run, so this path is reached only in its test.
+- Cloud detection reads pages ahead of the run (`Prefetch` in `inference/run_analysis.rs`), from
+  the page as it is shown then. A page ahead of the run takes edits now, and the answer for it is
+  checked against the source's hash only. A layer hidden, shown or added on such a page between
+  the read and the run's arrival leaves detections found on the earlier picture. No digest of the
+  analyzed picture is carried with the answer.
+- An undo or redo is two calls: `history_move` moves the cursor, then the step is replayed. A run
+  that reaches the step's page between the two refuses the replay, and the journal is then one
+  step ahead of the page. Redo and undo again put it right, because a step re-applied to a state
+  already in it changes nothing. The two calls were not made one.
+- `list_jobs` names a run under the chapter it was started on. A project run that has moved on to
+  another chapter lists no pages for that chapter, so an editor opened on it learns the run's
+  page from the next `page-started` and from the refusal, not from the list.
+- During a cloud clean run, a cloud render of one region started by hand is let through on the
+  run's pages, as the run's own attaches are (`attach_patch_to_project`): the attach does not ask
+  whose attempt it is. Its revision check stands, as before this change.
+
+**Page jumps, and solid bubbles only (2026-10-07).** A jump to a far page was slow for five
+reasons, found by reading the code and one release timing: every tile request opened the job for
+writing (`Job::open`: a manifest parse, the sweeps and the global lock), the `cleaned` tile's URL
+changed when the page's regions arrived so a cold jump fetched it twice, the page waited for every
+variant before it showed, the two neighbours asked for their tiles at the same time as the page,
+and the proxy reduction called `powf` for every channel of every pixel.
+
+What changed: the tile handler reads the job through the stamped cache (`read_job` in
+`src-tauri/src/tile.rs`) and concurrent misses parse once; `pageVersion` in `src/lib/api/tile.js`
+uses the page's `appearance` stamp alone unless the page holds a layer the stamp has not seen;
+the page shows when the stacks its view needs are in (`PageSheet.svelte`); neighbours mount their
+artwork after the page shows (`CanvasStage.svelte`); the proxy reduction reads 8-bit codes from a
+table and reuses the first channel on a gray pixel (`linear_sample` in `color.rs`, `reduce_managed`
+in `proxy.rs`).
+
+Measured: `reduce_managed` on one gray page (1136x1601, release build), 123 ms before and 71 ms
+after, with the same bytes out. Nothing else was timed.
+
+Not measured, or known to be incomplete:
+
+- No jump was timed in the running app, before or after, and nothing was run in the shipped
+  WKWebView. The frontend changes are covered by jsdom tests only.
+- The tile renderer has no priority and no cancel: a render for a page the user has left still
+  runs to its end, three at a time (`RENDERS`). A queue that drops or demotes them was not built.
+- Within one page, the order its tile requests are answered in is the browser's.
+- `ahead()` in `tile.js` takes the layers a page object is first seen holding as its baseline. A
+  page object first seen with a layer its `appearance` stamp does not cover would keep a stale
+  URL until the next reload. No path that builds such an object was found; none was ruled out.
+- Solid bubbles only (`docs/detect-clean.md` §3) was tested on fixtures and in the mock. It was
+  not run on a real chapter. How often rung 0 passes the metric on a screentone or gradient
+  balloon, and how many regions the gate calls `inside` that a reader would not call a speech
+  bubble, are not known; `spikes/gate-probe` on real pages is the measure.
+- Under solid bubbles only, the forced `outsideBubbles: clean` is exercised with a stub cleaner,
+  not through the real gate, and `resume_job` passing the option on is not under test (it needs an
+  `AppHandle`).
+- Under solid bubbles only with Chosen languages and a language off, text outside a balloon is
+  held for review and not stored, so a later Clean does not take it until each one is approved.
+  The panel's hint says the rest "stays detected" and does not say this. Whether that is what a
+  user expects was not asked.
+- A solid-bubbles run that finds no region at all ends with `notice.run.solidOnly` saying 0 and 0,
+  not with the "no text" notice.
+- Mask padding is hidden in Detect and clean, and the run still pads by the stored value. A user
+  who set a large value in Detect, then switched to Detect and clean, gets that padding with no
+  row to see it by.
+
+**Live brush and clone stamp preview (2026-10-07).** While a stroke was drawn, the page inside the
+stroke's box changed: the preview was the whole box at the page's own resolution, opaque, laid over
+proxy tiles the browser scaled separately. It is now a see-through layer on the tiles' own grid
+that holds only the stroke (`managed_proxy_overlay` in `proxy.rs`, `preview_paint` in `region.rs`),
+drawn on a canvas (`PaintLayer.svelte`). The plan and the numbers are in
+`docs/brush-preview-fix-plan.md`.
+
+Measured, on one real page (1136x1601, proxy 1024x1443): before, 8.5 to 8.9% of the untouched
+pixels in the box were more than 16 levels off the tile under them; after, none of 221721 changed,
+and of 29253 stroke pixels 1 to 3 differ from the committed tile, by 1 level.
+
+Not measured, or known to be incomplete:
+
+- Not seen in the running app, before or after, and nothing was run in the shipped WKWebView. That
+  the canvas never blanks there is the `PatchLayer.svelte` pattern, not an observation.
+- The cost of one preview frame was not timed. Each frame still reads and decodes the whole page,
+  opens the job and renders the stroke from its first point. A frame the queue drops for a newer
+  one is now decoded before it is dropped.
+- On a page with partly see-through pixels, paint over such a pixel is drawn over the tile and not
+  in place of it until the tiles reload. No such page was tested.
+- A stroke that crosses a longstrip join is placed on the anchor page's grid continued; the
+  neighbour's grid can be out of phase by under one proxy pixel. Covered by a unit test for the
+  placement, not looked at on a real strip.
+
 **Reading-order test and held candidates (2026-10-07).**
 `the_regions_a_page_reports_are_in_reading_order` failed on a machine with the real models and
 passed in CI, where it returns early for want of weights. The run was right and the test was stale:
@@ -746,10 +883,12 @@ Not measured, or deferred:
 - A layer made with Heal in an older project keeps its pixels. Try again on it reopens the clone
   stamp; it does not heal again.
 
-**Detect text here, a Detect of one area (2026-10-04).** The Selection tool's right-click over bare
-paper starts a Detect held to a box around the pointer (docs/detect-clean.md, "`run_clean` on one
-area"). The models read a 1024 px window at the page's own resolution, and what they find is added
-to the page's detections.
+**A Detect of one area (2026-10-04, drawn since 2026-10-07).** A Detect can be held to one area of
+a page (docs/detect-clean.md, "`run_clean` on one area"). The models read a 1024 px window at the
+page's own resolution, and what they find is added to the page's detections. The area was first a
+fixed box around a right-click of the Selection tool, 16% of the page's width, which is what the
+numbers below were taken with. On 2026-10-07 that menu was removed, and the Selection tool's
+Detect mode takes the area from a rectangle the user draws (docs/detect-clean.md §5).
 
 Measured: on scan 19 of the 28 reference scans (1080x1536; CTD, Ogkalu Small and SAM-TS-L on this
 computer, all text, padding 0) the page Detect stored 18 regions. Each was deleted in turn and
@@ -769,7 +908,14 @@ Not measured, or known to be incomplete:
   cost of the page. Not run against a deployment.
 - A long strip and a page with a rotated source were not run with real models; the unit tests
   cover one 1600x2400 page.
-- The area is a fixed box, 16% of the page's width. There is no way to drag the area.
+- For the drawn rectangle only the interface changed: the native run took any area already. Its
+  tests are the component's, with a stand-in backend. A drawn area was not run with real models,
+  on this computer or on the cloud.
+- A drawn rectangle wider or taller than 1024 px is read as one window of its own size, which the
+  detectors scale down as they do a page. Whether a large rectangle still finds the small lettering
+  a small one finds was not measured.
+- A lasso or a brush stroke cannot name the area. The run takes a rectangle, so Detect mode draws
+  one.
 - The mock backend detects the whole page when asked for an area.
 
 **Modal routing region and result download resume (2026-10-04).** The gateway can be deployed behind
@@ -874,14 +1020,19 @@ within 4 px) are stored as one, at Detect and in `set_detection_padding` (`regio
   and cleans as a hand mask, and two balloons merged across their wall start on LaMa.
 - A merge cannot be undone except by Detect on the page again; no split was built.
 
-**Canvas scroll room (2026-10-05).** A zoomed page and a long strip keep half a viewport of empty
-canvas above and below (`CanvasStage.svelte`, "Scroll room"), a saved scroll is measured from the
-page at rest (`editor.scrollRoom`), and the saved scroll is restored once the pages have loaded
-instead of against the loading placeholder, which lost it for a zoomed single page. Unit tested,
-and checked in the Vite mock in Chromium. Not yet done or run:
-- Not seen in the shipped WKWebView. The room below the page is a bottom margin on a flex item;
-  an engine that leaves that out of the scroll area gives the room above only.
-- No room at the sides: the page still stops 104 px from the left and right edges.
+**Canvas scroll room (2026-10-05, sides 2026-10-07).** A zoomed page and a long strip keep half a
+viewport of empty canvas on every side (`CanvasStage.svelte`, "Scroll room"), a saved scroll is
+measured from the page at rest (`editor.scrollRoom`, `editor.scrollRoomSide`), and the saved scroll
+is restored once the pages have loaded instead of against the loading placeholder, which lost it
+for a zoomed single page. The canvas draws no scroll bars. Unit tested, and checked in the Vite
+mock in Chromium. Not yet done or run:
+- Not seen in the shipped WKWebView. The room below and to the right of the page is a margin on a
+  flex item; an engine that leaves that out of the scroll area gives the room above and to the
+  left only.
+- A page turn in a single-page chapter puts the page back at rest, as it always has: a page moved
+  aside to clear a floating window has to be moved again on the next page.
+- Nothing drags the canvas: it moves by wheel, Shift and wheel, or trackpad. No hand tool, no
+  Space and drag.
 - The user also reports that scrolling up sometimes stops or jumps back before the page top. It
   was not reproduced (single page, 115% and 240%, Chromium mock) and no cause was found. A wheel
   over a floating window does not scroll the canvas, which is by design and may be part of it.
@@ -2101,9 +2252,9 @@ to the earlier prompt.
 - **Beam reports no GPU status.** Its gateway answers `supported: false` (and 501 on stop), so
   the app shows no cloud row for Beam. beta9's `ListContainers`/`StopContainer` were not wired:
   the Beam task queues have no exit hook for a heartbeat and the calls were never tried live.
-- **The cloud GPU row follows `cloud://analysis` only.** Analyses started through other flows
-  (the run analysis commands being added alongside) do not keep the GPU poll
-  up by themselves; a container they start still shows once the poll next reads it.
+- **The cloud GPU row follows `cloud://analysis` only.** A review analysis tells it its records,
+  and since 2026-10-08 so does each page a run sends for detection (`RemoteDetection::on_record`).
+  A cloud denoise and a cloud render do not; they keep the GPU poll up as a tracked run or job.
 - **How long a released GPU container takes to leave is not measured.** After a stop the gateway
   keeps an idle container's heartbeat until the container removes it, and the row says "Stopping"
   for up to 2 minutes (`STOP_SETTLE_MS`) before it shows the container's own state again. The
@@ -2332,3 +2483,33 @@ Left open by the saved Modal setup token (2026-09-30):
 - **A saved token revoked in Modal is only noticed on use.** The fields come back after the refusal;
   nothing checks the token ahead of time.
 - **Each ad hoc rebuild adds a third keychain prompt** (the setup token) beside the two runtime ones.
+
+Left open by a Modal GPU shortage (2026-10-08):
+
+A cloud Detect on `mc-i6pfhp` (L40S) sat for 5 min 40 s with no GPU status and no page done. The app
+had sent the batch 5 s after the run began and the gateway answered 202; Modal then started no
+`AnalysisGPU` container at all (no log line from it, the call still pending). A throwaway Modal app
+on two workspaces showed the cause: T4, L4 and A10 containers started in 3 to 4 s, an L40S did not
+start in 100 s on either, and a `release` call to the deployed class stayed pending 207 s. Modal had
+no L40S free. Nothing in the app or the deployed code was at fault.
+
+- **A call queued for a GPU looks the same as one running, to the gateway.** `ModalGpuJobs.submit`
+  stores `running` at the spawn, and the heartbeat is written only once a container starts. The app
+  now says so by itself: a "Waiting for a GPU" row in the corner card once an analysis has been out
+  30 s (`GPU_WAIT_MS` in `state/cloudgpu.svelte.js`) and a GPU status read finds no analysis
+  container. It needs no cloud update. What it leaves:
+  - Seen only in the Vite mock (`?cloudGpu=waiting`) and under unit tests, not in the running app
+    against a provider with no GPU free.
+  - Analysis only. A cloud denoise page and a cloud render waiting on a GPU show no such row.
+  - The record that starts the 30 s is written before the upload, so a first upload slower than
+    30 s reads as waiting for a GPU while nothing has reached the provider yet.
+  - The row goes after 10 min without a record (`ANALYSIS_SILENCE_MS`), 5 min before the request's
+    own 900 s deadline gives up.
+  - A run now tells about ten records a page, and each new page asks the GPU status once more, so a
+    warm run reads `GET /mc/v1/gpu` about once a page instead of once in 15 s. Not measured.
+- **One GPU type per installation, no fallback.** `SETTINGS.gpu` is a single name for both classes.
+  Modal takes a list of types to fall back through; not tried, and the render worker's copies and
+  memory are sized from the one name (`deploy/cloud/common/capacity.py`).
+- **The wait before the first cloud request was not traced.** In this run the first request reached
+  the gateway 46 s before the batch was sent; how much of that is the consent dialog and how much is
+  work on this computer is not known.

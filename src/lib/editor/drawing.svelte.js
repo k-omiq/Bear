@@ -19,7 +19,9 @@
  * - **The selection tool** creates no layer. It adds its gesture to the
  *   page's detected masks or takes it away from them - `editDetectionMask` -
  *   and those masks are what Clean erases later. A detection has no pixels to
- *   put back, so, like deleting one, the edit records no undo entry.
+ *   put back, so, like deleting one, the edit records no undo entry. In its
+ *   Detect mode the gesture is an area for the detector: a Detect of the page
+ *   held to the drawn rectangle (`cloudrun.js#detectArea`).
  *
  * **Undo.** Every command is a pair of region snapshots and one
  * `recordRegionEdit` in each direction - `maskactions.svelte.js`'s
@@ -44,8 +46,9 @@ import {
 } from '../state/editor.svelte.js'
 import { holdCreation, releaseCreation } from '../state/heldcreations.js'
 import { cloudRefused } from './cloudflow.svelte.js'
+import { detectArea } from './cloudrun.js'
 import { draft, clearDraft, markCommitted } from './draft.svelte.js'
-import { AI_STROKE_PX, paintedStroke } from './gesture.js'
+import { AI_STROKE_PX, detectAreaIn, paintedStroke } from './gesture.js'
 import { paintParamsOf } from './paint.js'
 import { renderRegionInCloud } from './toolapply.svelte.js'
 import { reportRegionEditFailure } from './maskactions.svelte.js'
@@ -94,7 +97,6 @@ export async function commitDraft() {
   clearDraft()
   if (!spec.chapterId || spec.pageIndex === null) return false
   const key = `${spec.chapterId}:${spec.pageId}`
-  const previous = gestureTails.get(key) ?? Promise.resolve()
   const run = () => {
     switch (spec.tool) {
     case 'brush':
@@ -104,11 +106,15 @@ export async function commitDraft() {
     case 'shapes':
       return createMask(spec, shapeEngine(spec))
     case 'maskSelect':
-      return editMask(spec)
+      return spec.mode === 'detect' ? detectDrawn(spec) : editMask(spec)
     default:
       return createMask(spec)
     }
   }
+  // Detect submits a background job; it does not edit the page in gesture
+  // order. Waiting for another gesture's render here delays its submission.
+  if (spec.tool === 'maskSelect' && spec.mode === 'detect') return run().catch(reportRegionEditFailure)
+  const previous = gestureTails.get(key) ?? Promise.resolve()
   const next = previous.catch(() => false).then(run).catch(reportRegionEditFailure)
   gestureTails.set(key, next)
   void next.then(
@@ -141,7 +147,7 @@ function shapeEngine(spec) {
  * @property {string} kind - the draft's shape: `stroke` is the only one that carries a path
  * @property {string} pageId
  * @property {import('./gesture.js').Bbox} bbox
- * @property {'add'|'erase'|'paint'} mode - `erase` is the selection tool's remove
+ * @property {'add'|'erase'|'paint'|'detect'} mode - `erase` is the selection tool's remove, `detect` its Detect
  * @property {Array<{x: number, y: number}>} points
  * @property {{x: number, y: number}} start
  * @property {string|null} chapterId
@@ -466,6 +472,28 @@ async function editMask(spec) {
     console.error('the page could not be read again after a mask edit', error)
   }
   return true
+}
+
+/**
+ * The selection tool's Detect: the detector looks again inside the drawn
+ * rectangle and adds what it finds to the page's detections
+ * (`cloudrun.js#detectArea`). It is for text the page's Detect missed and for
+ * a mask that was deleted, and the rectangle is how the user says where.
+ *
+ * Held to the part of the rectangle that is on its page. A run that is
+ * declined cloud consent and a refused start are said there. Each gesture
+ * submits its own detection job, even while earlier areas are being detected.
+ *
+ * @param {CommitSpec} spec
+ * @returns {Promise<boolean>} whether a run started
+ */
+async function detectDrawn(spec) {
+  const chapter = editor.chapter
+  const page = pageOf(spec.pageId)
+  if (!chapter || !page || chapter.id !== spec.chapterId || page.index !== spec.pageIndex) return false
+  const area = detectAreaIn(spec.bbox)
+  if (!area) return false
+  return (await detectArea(page.index, area)) !== null
 }
 
 /**

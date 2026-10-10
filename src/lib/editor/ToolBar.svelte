@@ -64,13 +64,20 @@
    * and a Cloud GPU entry that cannot be chosen is disabled with its reason.
    * A row that cannot change what the chosen mode does is absent, not
    * disabled: Detect cleans nothing, Clean detects nothing, the all-text
-   * policy cleans outside bubbles regardless, and a cloud clean reads no local
-   * engine pick.
+   * policy cleans outside bubbles regardless, a cloud clean reads no local
+   * engine pick, and Solid bubbles only cleans nothing outside a bubble.
    */
   import { untrack } from 'svelte'
-  import { session, raiseWindow, setWindowBox, setTextPolicy, setCleanLocalFirst } from '../state/session.svelte.js'
+  import {
+    session,
+    raiseWindow,
+    setWindowBox,
+    setTextPolicy,
+    setCleanLocalFirst,
+    setCleanSolidOnly,
+  } from '../state/session.svelte.js'
   import { capabilities, currentWorkflowMissing } from '../state/capabilities.svelte.js'
-  import { cloud, cloudEntries, cloudUsable, cloudCleanAvailable, openCloudSettings, pickCloudChoice } from '../state/cloud.svelte.js'
+  import { cloud, cloudEntries, cloudUsable, cloudCleanAvailable, cloudCleanMissingKey, openCloudSettings, pickCloudChoice } from '../state/cloud.svelte.js'
   import {
     chooseCleanTarget,
     chooseDetectTarget,
@@ -87,10 +94,13 @@
     setToolParam,
     cancelRun,
     currentPage,
+    pageBusy,
     runningPage,
+    solidOnlyOf,
   } from '../state/editor.svelte.js'
   import {
     PANEL_WIDTH,
+    SOLID,
     TOOL_ICONS,
     activeParams,
     effectiveChoice,
@@ -226,7 +236,7 @@
    */
   function cloudNote() {
     if (!session.cloudAllowed) return t('editor.state.cloudBlocked')
-    if (!cloudCleanAvailable()) return t('cloud.configuration.cleanMissing')
+    if (!cloudCleanAvailable()) return t(cloudCleanMissingKey())
     if (cloudUsable() || !cloud.checked) return null
     return t('tools.option.engineCloudNotReady')
   }
@@ -497,12 +507,39 @@
   const mixedHintId = `${uid}-mixed-hint`
 
   /**
+   * Solid bubbles only (`editor.svelte.js#solidOnlyOf`): a clean on this
+   * computer takes the speech bubbles on flat paper and leaves every other
+   * region detected, for a later Clean here or on the cloud GPU. It is the
+   * local clean's choice, so it sits where the mixed choice sits for a cloud
+   * clean, under Clean on, and a cloud clean never reads it.
+   */
+  const solidOnlyOffered = $derived(spec.runnable && step !== 'detect' && cleanOn === 'local')
+  const solidOnly = $derived(solidOnlyOffered && solidOnlyOf(values))
+  const solidHintId = `${uid}-solid-hint`
+
+  /**
+   * A pick's options as this run reads them. Solid bubbles only paints flat
+   * and never redraws, so LaMa is not among the options then, and a stored
+   * LaMa pick reads as Fill, which is what the run makes of it (`run.rs`).
+   *
+   * @param {import('./tools.js').ChoiceParam} entry
+   */
+  function pickOptions(entry) {
+    const opts = optionsFor(entry)
+    return solidOnly ? opts.filter((option) => option.value === 'fill' || option.value === SOLID) : opts
+  }
+
+  /** The picks this run reads: the outside pick cleans nothing under Solid bubbles only. */
+  const pickKeys = $derived(solidOnly ? ['bubbleEngine'] : ['bubbleEngine', 'outsideEngine'])
+
+  /**
    * Where the picks send each region. Here, every region starts from them.
    * With the cloud GPU cleaning, LaMa picks stay here and the rest are sent,
    * Fill and Solid colour tried here first under the mixed choice.
    */
   const picksNoteKey = $derived(
-    cleanOn === 'local' ? 'tools.picks.local' : localFirst ? 'tools.picks.mixed' : 'tools.picks.cloud',
+    solidOnly ? 'tools.picks.solidOnly' :
+      cleanOn === 'local' ? 'tools.picks.local' : localFirst ? 'tools.picks.mixed' : 'tools.picks.cloud',
   )
   const picksNoteId = `${uid}-picks-note`
 
@@ -513,10 +550,10 @@
   const enginePicks = $derived.by(() => {
     /** @type {string[]} */
     const picks = []
-    for (const key of ['bubbleEngine', 'outsideEngine']) {
+    for (const key of pickKeys) {
       const entry = param[key]
       if (!entry) continue
-      const opts = optionsFor(entry)
+      const opts = pickOptions(entry)
       const value = effectiveChoice(entry, opts, values[key])
       picks.push(opts.find((option) => option.value === value)?.label ?? value)
     }
@@ -602,12 +639,14 @@
   /**
    * Mask padding's Apply: the masks already detected, over the page or, for
    * Chapter and Project, the open chapter, re-padded to the slider's value.
-   * Held off while a run or another apply is going, so two never race.
+   * Held off while another apply is going, so two never race, and while a run
+   * holds what it would write: this page for a page, the chapter for more.
    */
   let applyingPadding = $state(false)
   const paddingHintId = `${uid}-padding-hint`
+  const paddingHeld = $derived(scope === 'page' ? pageBusy(editor.pageIndex) : running)
   async function applyPadding() {
-    if (applyingPadding || running) return
+    if (applyingPadding || paddingHeld) return
     applyingPadding = true
     try {
       await applyDetectionPadding(scope === 'page' ? 'page' : 'chapter')
@@ -622,6 +661,7 @@
    */
   function set(key, value) {
     if (spec.id === 'autoClean' && key === 'localFirst') setCleanLocalFirst(value === true)
+    if (spec.id === 'autoClean' && key === 'solidOnly') setCleanSolidOnly(value === true)
     // Another cloud profile's model: switch the default, then store `cloud`.
     // A switch that fails leaves the pick where it was, with its notice.
     if (typeof value === 'string' && value.startsWith('cloud@')) {
@@ -1058,7 +1098,7 @@
 <!-- One per-run engine pick, as a native select: the panel's rows are its own
      column, and a native popup cannot be clipped by it. -->
 {#snippet engineRow(entry)}
-  {@const opts = optionsFor(entry)}
+  {@const opts = pickOptions(entry)}
   {@const value = effectiveChoice(entry, opts, values[entry.key])}
   {@const note = gateNote(entry)}
   {@const noteId = `${uid}-engine-${entry.key}-note`}
@@ -1179,12 +1219,30 @@
                 </Button>
               </div>
             {/if}
+            <!-- Solid bubbles only: the local clean's own narrowing, in the
+                 place the mixed choice takes under a cloud clean. After the
+                 note on the two places, which is about them and not this. -->
+            {#if solidOnlyOffered}
+              <div class="row-control mixed" data-run-row="solidOnly">
+                <label class="check-row">
+                  <input
+                    type="checkbox"
+                    class="check"
+                    checked={solidOnly}
+                    aria-describedby={solidHintId}
+                    onchange={(event) => set('solidOnly', event.currentTarget.checked)}
+                  />
+                  <span>{t('tools.target.solidOnly')}</span>
+                </label>
+              </div>
+              <div class="row-note"><p class="gate" id={solidHintId}>{t('tools.target.solidOnlyHint')}</p></div>
+            {/if}
             <!-- Which text is cleaned: a choice about cleaning, so only Detect &
                  clean asks it. Detect alone finds all text for review, and Clean
                  cleans what the review kept. -->
             {#if step === 'auto'}
               {@render chipRow('textPolicy', 'tools.param.textPolicy', policyOptions, allText ? 'all_text' : 'legacy_gate', choosePolicy)}
-              {#if !allText && param.outsideBubbles}
+              {#if !allText && !solidOnly && param.outsideBubbles}
                 {@const opts = optionsFor(param.outsideBubbles)}
                 {@render chipRow(
                   'outsideBubbles',
@@ -1214,7 +1272,7 @@
               <Button
                 size="sm"
                 variant="soft"
-                disabled={running || applyingPadding}
+                disabled={paddingHeld || applyingPadding}
                 aria-describedby={paddingHintId}
                 onclick={applyPadding}
               >
@@ -1239,7 +1297,7 @@
               {#if advancedOpen}
                 <div class="grid" id="{uid}-advanced">
                   {#if param.bubbleEngine}{@render engineRow(param.bubbleEngine)}{/if}
-                  {#if param.outsideEngine}{@render engineRow(param.outsideEngine)}{/if}
+                  {#if param.outsideEngine && !solidOnly}{@render engineRow(param.outsideEngine)}{/if}
                   {#if colorRead}{@render colorRow()}{/if}
                   {@render picksNote()}
                 </div>

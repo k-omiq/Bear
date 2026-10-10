@@ -145,6 +145,12 @@ pub enum InferenceServiceError {
     #[error("stale project attachment: {0}")]
     StaleAttachment(String),
 
+    /// A run on this computer is working on the page the result is for
+    /// ([`run::page_run`]). The result stays cached, as after any attachment
+    /// that did not happen.
+    #[error("a run is working on the page this result is for")]
+    PageBusy,
+
     #[error("job manifest error: {0}")]
     JobManifest(String),
 
@@ -186,6 +192,7 @@ impl InferenceServiceError {
             Self::Cancelled => "cancelled",
             Self::PollingTimeout(_) => "poll_timeout",
             Self::StaleAttachment(_) => "region_changed",
+            Self::PageBusy => "page_busy",
             Self::JobManifest(_) | Self::Io(_) => "project_error",
         }
     }
@@ -241,8 +248,10 @@ fn journal_code(err: &JournalError) -> &'static str {
 
 fn http_code(err: &HttpTransportError) -> &'static str {
     match err {
+        HttpTransportError::DenoiseStorage => "journal_unavailable",
         HttpTransportError::NotEnqueued { reason, .. } => http_code(reason),
-        HttpTransportError::RenderWeightsUnavailable => "weights_unavailable",
+        // No cleaning model on the deployment reads as its weights not being there.
+        HttpTransportError::RenderWeightsUnavailable | HttpTransportError::RenderNotConfigured => "weights_unavailable",
         HttpTransportError::ProviderPaused => "provider_paused",
         HttpTransportError::UnexpectedStatus { status: 401 | 403 } => "gateway_unauthorized",
         HttpTransportError::UnexpectedStatus { .. } => "gateway_error",
@@ -788,7 +797,9 @@ impl InferenceService {
         }
     }
 
-    /// Attach a custom/mock HTTP transport client for unit testing.
+    /// Reuse an authenticated client for one profile-bound batch, or inject
+    /// a test transport. Its clones share their HTTP pool. Permission, grant
+    /// scope, and live profile/epoch checks still run before every dispatch.
     pub fn with_custom_client(mut self, client: CloudHttpClient) -> Self {
         self.custom_client = Some(client);
         self
@@ -895,6 +906,9 @@ impl InferenceService {
         config: &InferenceConfig,
     ) -> Result<CloudHttpClient, InferenceServiceError> {
         if let Some(ref client) = self.custom_client {
+            if client.target().provider() != provider || client.target().profile_id() != profile_id {
+                return Err(InferenceServiceError::ProfileChanged);
+            }
             return Ok(client.clone());
         }
 
@@ -960,6 +974,28 @@ impl InferenceService {
         cloud_allowed: bool,
         poll_opts: &PollOptions,
     ) -> Result<ApiRegion, InferenceServiceError> {
+        self.execute_cloud_render_queued(grant_nonce, job_path, page_index, region_id, target,
+            recipe, intent, config, cloud_allowed, poll_opts, &|| {})
+    }
+
+    /// The batch scheduler releases its preparation slot once acceptance is
+    /// durable. Polling keeps the remote job in flight without holding the
+    /// preparation budget or its encoded image payloads.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_cloud_render_queued(
+        &self,
+        grant_nonce: &str,
+        job_path: &Path,
+        page_index: u32,
+        region_id: &str,
+        target: &ExecutionTarget,
+        recipe: &RenderRecipe,
+        intent: &OperationIntent,
+        config: &InferenceConfig,
+        cloud_allowed: bool,
+        poll_opts: &PollOptions,
+        submitted: &dyn Fn(),
+    ) -> Result<ApiRegion, InferenceServiceError> {
         let attempt_id = attempt_id_for_nonce(grant_nonce);
         // Checked before a single event goes out: the render already running
         // under this id is the one the interface is watching, and a `failed`
@@ -993,6 +1029,7 @@ impl InferenceService {
             config,
             cloud_allowed,
             poll_opts,
+            submitted,
         );
         reporter.settle(&outcome);
         outcome
@@ -1014,6 +1051,7 @@ impl InferenceService {
         config: &InferenceConfig,
         cloud_allowed: bool,
         poll_opts: &PollOptions,
+        submitted: &dyn Fn(),
     ) -> Result<ApiRegion, InferenceServiceError> {
         if !cloud_allowed {
             return Err(InferenceServiceError::CloudDisabled);
@@ -1197,8 +1235,14 @@ impl InferenceService {
                 }
             };
 
+        // Upload payloads are no longer needed after durable acceptance. A
+        // batch can prepare the next job while this one waits on the GPU.
+        drop(crop_png);
+        drop(hint_png);
+        drop(scope);
         // 8. Poll status until completion (executed without holding attempt lock - Property 6)
         reporter.enter(RenderPhase::Queued);
+        submitted();
         let status = self.poll_to_completion(
             live,
             reporter,
@@ -1704,6 +1748,24 @@ impl InferenceService {
                     "page mapping changed".into(),
                 ));
             }
+        }
+        // A page a Detect or Clean run is working on is that run's until its
+        // `page-done`: it read the page before this result came back, and
+        // would write its own results over this one. Asked under the job's
+        // lock, as every edit of a page asks it ([`run::lock_page`]). A cloud
+        // clean's own results land on the pages it is on, and what they may
+        // replace is settled by the revision and input checks below.
+        let chapter_id = chapter_id_of(job_path);
+        let page = page_index
+            .map(|page| page as usize)
+            .or_else(|| crate::region::page_index_in(&chapter_id, region_id));
+        if page.is_some_and(|page| {
+            matches!(
+                run::page_run(job_path, &chapter_id, page),
+                Some(run::RunKind::Detect | run::RunKind::Clean)
+            )
+        }) {
+            return Err(InferenceServiceError::PageBusy);
         }
 
         // Re-verify snapshot on disk before mutating project
@@ -5644,6 +5706,65 @@ mod tests {
             fixture.phase_on_disk(&service),
             AttemptPhase::Committed { .. }
         ));
+    }
+
+    #[test]
+    fn batch_submission_callback_follows_durable_acceptance_before_polling() {
+        for (name, script, accepted) in [
+            ("queued-callback", JobScript::Completes, true),
+            ("rejected-callback", JobScript::NotEnqueued(503), false),
+            ("unknown-callback", JobScript::DropsSubmission, false),
+        ] {
+            let fixture = RenderFixture::new(name);
+            let gateway = FakeGateway::start(script);
+            let service = fixture.service(&gateway);
+            let callbacks = AtomicUsize::new(0);
+            let outcome = service.execute_cloud_render_queued(&fixture.nonce, &fixture.manifest, 0, "reg-1",
+                &fixture.target, &fixture.recipe, &fixture.intent, &fixture.config, true, &fast_polls(), &|| {
+                    callbacks.fetch_add(1, Ordering::SeqCst);
+                    assert!(matches!(fixture.phase_on_disk(&service), AttemptPhase::Accepted { .. }));
+                    assert_eq!(FakeGateway::count(&gateway.seen.polls), 0);
+                    assert_eq!(FakeGateway::count(&gateway.seen.results), 0);
+                    assert_eq!(fixture.last_event().phase, RenderPhase::Queued);
+                });
+            assert_eq!(callbacks.load(Ordering::SeqCst), usize::from(accepted), "{name}");
+            assert_eq!(outcome.is_ok(), accepted, "{name}");
+        }
+    }
+
+    #[test]
+    fn reused_batch_client_still_enforces_permission_target_and_profile_epoch() {
+        let gateway = FakeGateway::start(JobScript::Completes);
+        let client = gateway.client();
+        // Two regions use clones of the same authenticated batch client.
+        for name in ["batch-client-first", "batch-client-second"] {
+            let fixture = RenderFixture::new(name);
+            let service = fixture.service(&gateway).with_custom_client(client.clone());
+            assert!(fixture.render(&service, &fast_polls()).is_ok());
+        }
+        assert_eq!(FakeGateway::count(&gateway.seen.submits), 2);
+
+        for refusal in ["permission", "profile", "epoch", "client-target"] {
+            let fixture = RenderFixture::new(refusal);
+            let mut service = fixture.service(&gateway).with_custom_client(client.clone());
+            if refusal == "profile" {
+                service = service.with_dispatch_guard(Box::new(|_, _| false));
+            }
+            if refusal == "epoch" {
+                fixture.grants.invalidate_profile(CloudProvider::Modal, "modal-prof-1");
+            }
+            if refusal == "client-target" {
+                assert!(matches!(service.build_http_client(CloudProvider::Beam, "other-profile", &fixture.config),
+                    Err(InferenceServiceError::ProfileChanged)));
+                continue;
+            }
+            let outcome = service.execute_cloud_render(&fixture.nonce, &fixture.manifest, 0, "reg-1",
+                &fixture.target, &fixture.recipe, &fixture.intent, &fixture.config,
+                refusal != "permission", &fast_polls());
+            assert!(outcome.is_err(), "{refusal}");
+            assert_eq!(FakeGateway::count(&gateway.seen.submits), 2, "{refusal} still submitted");
+            assert_eq!(Job::open(&fixture.manifest).unwrap().project.patches.len(), 1);
+        }
     }
 
     /// A text group as grouping records it on a detection.

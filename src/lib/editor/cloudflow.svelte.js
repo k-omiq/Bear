@@ -22,7 +22,7 @@ import { getBackend } from '../api/backend.js'
 import { cloudAttemptId } from '../api/attempt.js'
 import { notify, pushModal } from '../state/app.svelte.js'
 import { session } from '../state/session.svelte.js'
-import { cloud, cloudCleanAvailable, refreshCloudReadiness, settleCloudJob, trackCloudJob } from '../state/cloud.svelte.js'
+import { cloud, cloudCleanAvailable, cloudCleanMissingKey, refreshCloudReadiness, settleCloudJob, trackCloudJob } from '../state/cloud.svelte.js'
 import { configurationKey, configurationFailed } from '../state/cloudconfig.svelte.js'
 import { toolSpendsCloud } from './tools.js'
 
@@ -152,7 +152,7 @@ export async function requestCloudConsent(request, backend = getBackend()) {
   }
   const target = readiness.target
   if (!cloudCleanAvailable()) {
-    notify({ key: 'cloud.configuration.cleanMissing', tone: 'warn' })
+    notify({ key: cloudCleanMissingKey(), tone: 'warn' })
     return null
   }
   const configKey = configurationKey(readiness)

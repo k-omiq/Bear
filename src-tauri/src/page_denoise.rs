@@ -140,6 +140,9 @@ pub(crate) fn jobs() -> Vec<crate::jobs::JobView> {
         crate::jobs::JobView {
             run_id: run_id.clone(), kind: run.kind.as_str(), chapter_id: run.chapter_id.clone(),
             done: clamp(run.done.load(Ordering::Relaxed).min(total)), total: clamp(total),
+            pages: Vec::new(),
+            area: false,
+            area_page_index: None,
         }
     }).collect();
     jobs.sort_by(|a, b| a.run_id.cmp(&b.run_id));
@@ -192,7 +195,8 @@ fn open_engine(app: &tauri::AppHandle, step: &LocalStep) -> Result<Waifu2x, Stri
 }
 
 /// The pages to denoise, every page when `page_indices` is absent, in order.
-/// A read, so without the lock a run on the chapter holds.
+/// A read, so without the job's lock: a writer holding the chapter does not
+/// hold this up.
 fn plan_pages(job_path: &Path, page_indices: Option<Vec<u32>>) -> Result<Vec<PlannedPage>, String> {
     let job = Job::open(job_path).map_err(|e| e.to_string())?;
     let count = job.project.strip.order.len() as u32;
@@ -402,8 +406,13 @@ fn replace_code(error: &ReplaceError) -> &'static str {
 /// Take every ready page's denoised file as its source, under the job's lock,
 /// in one save. Pages with no file to take stay raw and are listed as
 /// missing; a file that is there but cannot be used fails the whole replace.
+///
+/// Refused with `run_in_progress` while the chapter has a run: the run reads
+/// a page's source, works on it with the job free and writes its results for
+/// that source, and a source replaced in between would leave them on a page
+/// they were not made from.
 fn replace_pages(job_path: &Path) -> Result<ReplaceReport, String> {
-    let _lock = crate::run::lock_job(job_path).map_err(String::from)?;
+    let _lock = crate::run::lock_chapter(job_path)?;
     let mut job = Job::open(job_path).map_err(|e| e.to_string())?;
     let mut report = ReplaceReport::default();
     for (page_index, source_idx, standing) in standings(&job.project) {
@@ -702,10 +711,10 @@ mod tests {
         manifest
     }
 
-    /// A run walking a chapter holds its lock until its last page. Planning a
-    /// denoise of it only reads, so it does not wait for that run.
+    /// A writer holds a chapter's lock for as long as its write takes. Planning
+    /// a denoise of it only reads, so it does not wait for that writer.
     #[test]
-    fn planning_does_not_wait_for_a_run_holding_the_chapter() {
+    fn planning_does_not_wait_for_a_writer_holding_the_chapter() {
         let dir = std::env::temp_dir().join(format!("mc-denoise-held-{}", std::process::id()));
         let manifest = a_denoised_chapter(&dir);
         let (held, release) = (std::sync::mpsc::channel(), std::sync::mpsc::channel::<()>());

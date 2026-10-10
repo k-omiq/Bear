@@ -112,6 +112,8 @@ const MAX_ANALYSIS_REQUESTS: usize = cleaner_core::cloud_tiles::MAX_TILES * 2;
 impl AnalysisJournal {
     pub fn new(root: PathBuf) -> Self { Self { root: root.join("analysis") } }
 
+    pub(crate) fn denoise_root(&self) -> PathBuf { self.root.with_file_name("denoise") }
+
     fn path(&self, proposal_id: &str) -> Result<PathBuf, JournalError> {
         validate_safe_id(proposal_id, "proposal_id")?;
         Ok(self.root.join(format!("{proposal_id}.json")))

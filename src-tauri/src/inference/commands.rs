@@ -274,8 +274,10 @@ fn sanitize_build_client_error(err: &BuildClientError) -> String {
 /// Guarantees zero raw endpoint URLs, server response bodies, tokens, or query internals are returned.
 fn sanitize_http_transport_error(err: &HttpTransportError) -> String {
     match err {
+        HttpTransportError::DenoiseStorage => err.to_string(),
         HttpTransportError::NotEnqueued { reason, .. } => sanitize_http_transport_error(reason),
         HttpTransportError::RenderWeightsUnavailable => "cloud render weights need repair".to_string(),
+        HttpTransportError::RenderNotConfigured => err.to_string(),
         HttpTransportError::ProviderPaused => "provider_paused: this provider is paused in this version".to_string(),
         HttpTransportError::UnexpectedStatus { status } if *status == 401 || *status == 403 => {
             format!("gateway authorization failure (status {status})")
@@ -809,8 +811,11 @@ pub fn forget_cloud_secret_denials() {
 /// connection check and [`verify_cloud_profile`] so both speak one vocabulary.
 fn connection_failure(err: &HttpTransportError) -> (&'static str, String) {
     match *err {
+        HttpTransportError::DenoiseStorage => ("storage_error", err.to_string()),
         HttpTransportError::NotEnqueued { ref reason, .. } => connection_failure(reason),
         HttpTransportError::RenderWeightsUnavailable => ("weights_unavailable", "cloud render weights need repair".to_string()),
+        // Only the model-info read answers this, and `verify_cloud_profile` passes it.
+        HttpTransportError::RenderNotConfigured => ("http_error", "this deployment has no cleaning model".to_string()),
         HttpTransportError::ProviderPaused => (
             "provider_paused",
             "this provider is paused in this version".to_string(),
@@ -865,6 +870,8 @@ fn connection_failure(err: &HttpTransportError) -> (&'static str, String) {
 /// info. A gateway can answer `/health` before its model volume is usable, and
 /// the model-info call is the cheapest request that proves the runtime
 /// credential and the pinned model both work. Neither call starts GPU work.
+/// A deployment set up without a cleaning model has no model info to give, and
+/// passes on its health.
 pub(crate) fn verify_cloud_profile(
     config: &InferenceConfig,
     provider: CloudProvider,
@@ -878,7 +885,7 @@ pub(crate) fn verify_cloud_profile(
         .map_err(|_| None)
         .and_then(|client| client.get_model_info().map_err(Some));
     match model_info {
-        Ok(_) => health,
+        Ok(_) | Err(Some(HttpTransportError::RenderNotConfigured)) => health,
         Err(err) => {
             let (status, message) = match err {
                 Some(err) => connection_failure(&err),

@@ -3,6 +3,7 @@
   import { draft } from './draft.svelte.js'
   import { editor } from '../state/editor.svelte.js'
   import { getBackend } from '../api/backend.js'
+  import { decodeImage } from '../api/boundedimage.js'
   import { pageVersion } from '../api/tile.js'
   import { paintParamsOf } from './paint.js'
   import { previewQueue, registerPaintPreview } from './paintpreview.js'
@@ -11,11 +12,21 @@
    * The pixels a paint or clone stroke is laying down, before the page's own
    * tiles show them.
    *
-   * **Two kinds of image.** `live` is the stroke being drawn, rendered by the
+   * **Only the paint, on a canvas.** A frame is a see-through picture of the
+   * painted pixels and nothing else, at the tiles' own pixel density. So
+   * nothing in this layer has a background, and the art around the stroke is
+   * never drawn a second time. A frame is decoded before its canvas is
+   * touched; then the canvas's size, its place and its pixels change together,
+   * in one task, as `PatchLayer.svelte` does it. An `<img>` given a new `src`
+   * would blank in WebKit until the new bytes decoded, on every frame of the
+   * stroke.
+   *
+   * **Two kinds of frame.** `live` is the stroke being drawn, rendered by the
    * native commit renderer and replaced as the pointer moves. When that stroke
    * is committed its last frame is **held**: kept on screen until the tiles
    * under it have loaded a version that includes it, so the paint never blinks
-   * out between the gesture ending and the page catching up.
+   * out between the gesture ending and the page catching up. A stroke has one
+   * canvas from its first frame until it is let go, live or held.
    *
    * **Held frames outlive the next stroke.** A clone stamp is used in quick
    * taps, and each tap is a commit of its own. So a new stroke starting does
@@ -36,13 +47,36 @@
    */
   let { page, busy = 0, dropped = 0 } = $props()
 
-  /** @typedef {{url: string, x: number, y: number, w: number, h: number, revision: string}} Frame */
+  /**
+   * `id` is the stroke's, and so its canvas's: every frame of one stroke
+   * carries the same one. The box is in page percent.
+   *
+   * @typedef {{id: number, image: CanvasImageSource, x: number, y: number, w: number, h: number, revision: string}} Frame
+   */
 
   let root = $state()
   /** @type {Frame|null} */
-  let live = $state(null)
+  let live = $state.raw(null)
   /** @type {Array<Frame & {initial: Map<string|undefined, string|undefined>}>} */
   let held = $state.raw([])
+  /** One list, the live frame on top, so a frame keeps its canvas when it is held. */
+  const frames = $derived(live ? [...held, live] : held)
+  let strokes = 0
+  /**
+   * The picture of an answer the queue has been handed and has not presented.
+   * The queue asks for one frame at a time, and it presents an answer in the
+   * turn it gets it or drops it without a word (`paintpreview.js`). So a
+   * picture still here when the next frame is asked for was dropped as stale.
+   *
+   * @type {CanvasImageSource|null}
+   */
+  let offered = null
+  /**
+   * How many times the frames on their way have been given up (`cancel`). A
+   * picture that finishes decoding after that is one the queue will not
+   * present, and nothing else is left to free it.
+   */
+  let cancels = 0
   let previousDraft = null
   let lastKey = ''
   let seenDropped = 0
@@ -53,17 +87,35 @@
   const drawing = $derived(active?.kind === 'stroke' && (active.tool === 'cloneStamp' ||
     (active.tool === 'brush' && editor.toolParams.brush?.mode === 'paint')))
 
+  /**
+   * Give a decoded picture back. A bitmap keeps its pixels until it is closed;
+   * the `Image` an older WebKit decodes into has nothing to close.
+   *
+   * @param {any} image
+   */
+  function free(image) {
+    image?.close?.()
+  }
+
+  /** Give up every frame still on its way. */
+  function cancel() {
+    cancels += 1
+    queue.cancel()
+  }
+
   /** Forget the stroke being drawn, and any frame of it still on its way. */
   function dropLive() {
-    queue.cancel()
-    if (live) URL.revokeObjectURL(live.url)
+    cancel()
+    free(offered)
+    offered = null
+    free(live?.image)
     live = null
     lastKey = ''
   }
 
   /** The stroke was committed: keep its last frame until the tiles show it. */
   function hold() {
-    queue.cancel()
+    cancel()
     lastKey = ''
     if (!live) return
     const initial = new Map()
@@ -73,19 +125,67 @@
   }
 
   function dropHeld() {
-    for (const frame of held) URL.revokeObjectURL(frame.url)
+    for (const frame of held) free(frame.image)
     held = []
   }
 
-  const queue = previewQueue(spec => getBackend().previewPaint(spec), result => {
-    if (result.revision !== version || result.chapterId !== editor.chapter?.id || result.pageIndex !== page.index) return
-    if (live) URL.revokeObjectURL(live.url)
-    live = {
-      url: URL.createObjectURL(new Blob([new Uint8Array(result.png)], { type: 'image/png' })),
-      ...result.bounds,
-      revision: result.revision,
-    }
+  /**
+   * One frame from the native renderer, decoded. The decode is part of the
+   * request so that it is the queue that waits on it: an answer that went
+   * stale while it decoded is dropped by the queue's own checks, and a flush
+   * does not return until the final frame is in `live`, where `hold` finds it.
+   *
+   * @param {Record<string, any>} spec
+   */
+  async function request(spec) {
+    free(offered)
+    offered = null
+    const asked = cancels
+    const result = await getBackend().previewPaint(spec)
+    if (!result) return result
+    const image = await decodeImage(new Blob([new Uint8Array(result.png)], { type: 'image/png' }))
+    if (asked !== cancels) return free(image)
+    offered = image
+    return { ...result, image }
+  }
+
+  const queue = previewQueue(request, result => {
+    offered = null
+    if (result.revision !== version || result.chapterId !== editor.chapter?.id || result.pageIndex !== page.index) return free(result.image)
+    free(live?.image)
+    live = { id: live?.id ?? (strokes += 1), image: result.image, ...result.bounds, revision: result.revision }
   }, dropLive)
+
+  /**
+   * Put a frame on its canvas, and the stroke's next frame on the same canvas.
+   * Size, place and pixels are written in one step, the place on the canvas's
+   * own style rather than through reactive bindings, so a frame never shows
+   * its new pixels at its old place.
+   *
+   * @param {HTMLCanvasElement} node
+   * @param {Frame} frame
+   */
+  function draw(node, frame) {
+    /** @type {CanvasImageSource|null} */
+    let shown = null
+    /** @param {Frame} next */
+    const put = (next) => {
+      // A frame that has just been held is the picture already here, and
+      // setting a canvas's size clears it: it is left alone.
+      if (next.image === shown) return
+      shown = next.image
+      const image = /** @type {ImageBitmap|HTMLImageElement} */ (next.image)
+      node.width = image.width
+      node.height = image.height
+      node.style.left = `${next.x}%`
+      node.style.top = `${next.y}%`
+      node.style.width = `${next.w}%`
+      node.style.height = `${next.h}%`
+      node.getContext('2d')?.drawImage(image, 0, 0)
+    }
+    put(frame)
+    return { update: put }
+  }
 
   function submit() {
     if (!drawing || !active || !editor.chapter) return
@@ -184,7 +284,7 @@
       const landed = tilesUnder(frame).every(tile =>
         tile.dataset.loadedVersion === tile.dataset.version &&
         frame.initial.get(tile.dataset.paintKey) !== tile.dataset.version)
-      if (landed) URL.revokeObjectURL(frame.url)
+      if (landed) free(frame.image)
       return !landed
     })
     if (kept.length !== held.length) held = kept
@@ -193,14 +293,9 @@
 </script>
 
 <div class="paints" bind:this={root} aria-hidden="true">
-  {#each held as frame (frame.url)}
-    <img class="paint" src={frame.url} alt=""
-      style:left="{frame.x}%" style:top="{frame.y}%" style:width="{frame.w}%" style:height="{frame.h}%" />
+  {#each frames as frame (frame.id)}
+    <canvas class="paint" width="0" height="0" use:draw={frame}></canvas>
   {/each}
-  {#if live}
-    <img class="paint" src={live.url} alt=""
-      style:left="{live.x}%" style:top="{live.y}%" style:width="{live.w}%" style:height="{live.h}%" />
-  {/if}
 </div>
 
 <style>
@@ -212,7 +307,5 @@
 
   .paint {
     position: absolute;
-    /* The authoritative crop replaces these pixels, including transparency. */
-    background: var(--paper);
   }
 </style>

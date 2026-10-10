@@ -203,6 +203,9 @@ export const ko = {
           workspace: '워크스페이스',
           model: '클라우드 모델',
           modelNote: '구성을 승인하기 전에 클라우드 모델, GPU, 대기 시간을 선택하세요. 모델을 바꾸면 별도의 체크포인트를 다운로드합니다.',
+          noCleanModel: '클리닝 모델 없음',
+          noCleanNote: '클리닝 모델을 설치하지 않으므로 이 클라우드 GPU에서는 클리닝을 실행하지 않습니다. 구성 과정에서 선택한 분석 모델과 페이지 노이즈 제거만 다운로드합니다.',
+          nothingChosen: '클리닝 모델, 클라우드 분석 모델, 페이지 노이즈 제거 중 하나를 선택하세요. 구성에는 하나 이상이 필요합니다.',
           modelLicense: '모델 라이선스: {license}. 작업에 사용하기 전에 약관을 확인하세요.',
           analysisModels: '클라우드 분석 모델',
           analysisNote: '클라우드 감지에 사용할 Ogkalu comic text & bubble detector (Full), SAM-TS-L 레터링 마스크 중 하나 또는 둘 다를 선택하세요. CTD와 Small 감지기는 이 컴퓨터에서만 실행됩니다. 구성 과정에서 선택한 그래프를 설치하며, GPU 분석은 요청할 때만 시작됩니다.',
@@ -444,6 +447,16 @@ export const ko = {
         chooserTitle: '고정된 Ogkalu comic text & bubble detector (Full)의 detector.onnx',
       },
       setupReview: '선택한 모델은 무엇이든 지우기 전에 편집기의 검토에서 한 번에 한 페이지씩 확인할 수도 있습니다.',
+      localFull: {
+        note: "이 컴퓨터에서 CTD, Ogkalu Full, SAM-TS-L을 실행합니다. SAM에는 약 10 GB의 여유 메모리가 필요합니다. CPU를 지원하며 사용 가능한 GPU 백엔드는 성능에 표시됩니다.",
+        use: "전체 파이프라인을 로컬에서 사용",
+        install: "누락된 로컬 모델 설치",
+        backends: "CPU 또는 GPU 선택",
+        saveFailed: "로컬 감지를 저장하지 못했습니다. 감지 설정은 유지되었습니다.",
+        installFailed: "일부 로컬 모델을 설치하지 못했습니다. 아래 모델 오류를 확인하고 다시 시도하세요.",
+        ready: "이 컴퓨터에서 전체 감지를 실행할 준비가 되었습니다.",
+        pending: "이 컴퓨터에서 전체 감지를 실행하기 전에 아래 모델을 설치하거나 확인하세요.",
+      },
       modelsLegend: '감지 모델',
       runOn: {
         off: '클라우드 GPU를 쓰려면 설정 > 클라우드에서 클라우드 엔진을 켜야 합니다.',
@@ -1055,7 +1068,8 @@ export const ko = {
       cancelRun: '실행 취소',
     },
     readout: {
-      page: '{total}페이지 중 {index}페이지',
+      pageJump: '{total}페이지 중 {index}페이지 · 클릭하여 이동',
+      pageJumpField: '이동할 페이지 (1~{total})',
       review: '영역 {total}개 중 {index}번째',
       reviewPending: {
         select: 'total',
@@ -1879,8 +1893,6 @@ export const ko = {
     },
     menu: {
       label: '레이어 작업',
-      page: '페이지 작업',
-      detectHere: '여기서 텍스트 감지',
     },
     hint: {
       showOnPage: '이 영역으로 스크롤해 선택합니다',
@@ -1916,7 +1928,7 @@ export const ko = {
       shapes: '페이지에서 드래그',
       aiMaskBrush: '텍스트 위로 긋기',
       cloneStamp: '{cloneSourceModifier}+클릭으로 소스 지정',
-      maskSelect: '클린이 지울 영역에 추가 또는 제거',
+      maskSelect: '클린이 지울 영역에 추가 또는 제거, 또는 그린 영역에서 텍스트 감지',
     },
     label: {
       choice: '{labelKey}: {value}',
@@ -1930,6 +1942,8 @@ export const ko = {
       chooseModels: '모델 선택',
       useCloud: '클라우드 GPU에서 감지',
       mixedHint: '채우기나 단색으로 설정된 영역은 먼저 여기서 시도하고, 품질 검사에 실패한 영역은 클라우드 GPU로 보냅니다. 끄면 모든 영역을 클라우드 GPU로 보냅니다.',
+      solidOnly: '단색 말풍선만',
+      solidOnlyHint: '무지 배경의 말풍선만 단색 채우기로 클린합니다. 나머지 영역은 감지된 상태로 남아, 나중에 여기나 클라우드 GPU에서 클린할 수 있습니다.',
     },
     padding: {
       hint: '감지된 각 마스크를 이만큼 픽셀 넓힙니다. 감지에 쓰이고, 적용은 이미 감지된 마스크를 바꿉니다.',
@@ -1938,6 +1952,7 @@ export const ko = {
       local: '이전에 감지된 영역을 포함해 모든 영역을 이 선택부터 시작해 클린합니다.',
       cloud: '모든 영역을 클라우드 GPU로 보냅니다.',
       mixed: '채우기와 단색은 먼저 이 컴퓨터에서 시도합니다. 나머지는 클라우드 GPU로 보냅니다.',
+      solidOnly: '무지 배경의 말풍선만 이 선택에서 시작해 클린합니다. 나머지는 감지된 상태로 남습니다.',
     },
     short: {
       cleanWith: '클린 엔진',
@@ -2013,6 +2028,7 @@ export const ko = {
       nonAligned: '정렬 안 됨',
       maskAdd: '선택 영역에 추가',
       maskRemove: '선택 영역에서 제거',
+      maskDetect: '영역에서 텍스트 감지',
       brush: '브러시',
     },
   },
@@ -2132,6 +2148,7 @@ export const ko = {
     run: {
       busy: '다른 실행이 시작 중이거나 이미 실행 중입니다. 끝날 때까지 기다리세요.',
       atCapacity: '동시에 실행할 수 있는 최대 개수가 이미 실행 중입니다. 하나가 끝나면 이 실행을 시작하세요.',
+      pageBusy: '실행이 이 페이지를 처리하는 중입니다. 아무것도 변경하지 않았습니다. 다음 페이지로 넘어간 뒤 다시 시도하세요.',
       finished: {
         select: 'pages',
         zero: '텍스트 클린 완료: 클린이 필요한 페이지가 없었습니다.',
@@ -2146,6 +2163,7 @@ export const ko = {
         other: '감지 완료: 영역 {regions}개를 찾았습니다. 아직 아무것도 클린하지 않았습니다.',
       },
       allLanguagesSkipped: '모든 원문 언어를 건너뛰도록 설정되어 있습니다. 클린할 언어를 선택하세요.',
+      solidOnly: '클린한 단색 말풍선: {cleaned}개. 감지된 상태로 남긴 영역: {kept}개.',
       ocrRescueUnavailable: '이번 실행에서는 텍스트 판독기가 꺼져 있습니다: {reason}',
       accelFallback: '{model}이(가) {requested}에서 {effective}(으)로 전환되었습니다: {reason}',
       modelsMissing: '모델이 설치되지 않았습니다. 설정 › 모델에서 다운로드하세요.',
@@ -2692,6 +2710,7 @@ export const ko = {
       denoiseChanged: '이 배포의 노이즈 제거 설정 또는 접근 설정을 확인해야 합니다. 저장된 클라우드 설정을 업데이트했습니다. 설정 > Cloud에서 확인한 후 연결을 다시 테스트하세요.',
       cleanChanged: '이 배포의 클리닝 설정 또는 접근 설정을 확인해야 합니다. 저장된 클라우드 설정을 업데이트했습니다. 설정 > Cloud에서 확인한 후 연결을 다시 테스트하세요.',
       cleanMissing: '이 배포의 클리닝 설정 또는 접근 설정을 확인해야 합니다. 설정 > Cloud에서 확인한 후 연결을 다시 테스트하세요.',
+      cleanNotInstalled: '이 배포는 클리닝 모델 없이 구성되었습니다. 클라우드에서 클리닝하려면 설정 > Cloud에서 업데이트하고 클리닝 모델을 선택하세요.',
     },
     profile: {
       selectFailed: '클라우드 모델을 전환하지 못했습니다. 이전 모델을 계속 사용합니다.',
@@ -2939,7 +2958,12 @@ export const ko = {
         idle: '대기 중',
         idleStops: '대기 중, 약 {time} 후 중지',
         stopping: '중지 중…',
+        waiting: 'GPU를 기다리는 중',
         unknown: '상태를 알 수 없음, 다시 시도 중…',
+      },
+      waiting: {
+        name: '클라우드 GPU (분석)',
+        note: '제공업체가 이 분석에 쓸 GPU를 아직 시작하지 않았습니다. 이 종류의 GPU에 여유가 없을 수 있습니다. GPU가 시작되면 분석이 이어집니다.',
       },
       price: '~{price:currency}/시간',
       priceNote: '정가 기준 추정: 이 GPU가 켜져 있는 동안 시간당 약 {price:currency}. 제공업체는 실제 사용 시간을 청구합니다.',

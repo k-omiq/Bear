@@ -4,7 +4,7 @@
 use super::{ColorMode, ImageError, Raster};
 use lcms2::{Intent, PixelFormat, Profile, Transform};
 use sha2::{Digest, Sha256};
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc, sync::LazyLock};
 
 pub const PIPELINE_VERSION: u8 = 1;
 const CACHE_LIMIT: usize = 16;
@@ -48,6 +48,24 @@ pub fn encoded(v: f32) -> f32 {
 }
 pub fn byte(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// [`linear`] of each 8-bit code. Almost every page is 8-bit, and a proxy
+/// reads every sample of the page once per channel.
+static LINEAR_CODES: LazyLock<[f32; 256]> =
+    LazyLock::new(|| std::array::from_fn(|code| linear(code as f32 / 255.0)));
+
+/// [`linear`], read from a table when `v` is exactly an 8-bit code. The table
+/// holds `linear` of the same bits, so the answer is the same either way.
+pub fn linear_sample(v: f32) -> f32 {
+    // The cast saturates, so a negative or a NaN reads as code 0 and then
+    // fails the comparison, as does negative zero.
+    let code = (v * 255.0).round() as usize;
+    if code < 256 && (code as f32 / 255.0).to_bits() == v.to_bits() {
+        LINEAR_CODES[code]
+    } else {
+        linear(v)
+    }
 }
 
 /// Native fitted edits currently operate on straight samples. Associated TIFF
@@ -334,6 +352,22 @@ mod tests {
     );
     fn fixture(name: &str) -> Raster {
         decode(&std::fs::read(format!("{ROOT}{name}")).unwrap()).unwrap()
+    }
+    /// The table is the transfer function, not an estimate of it: every 8-bit
+    /// and 16-bit code linearises to the same bits either way.
+    #[test]
+    fn the_proxy_table_answers_as_the_transfer_function_does() {
+        for code in 0..=255u32 {
+            let v = code as f32 / 255.0;
+            assert_eq!(linear_sample(v).to_bits(), linear(v).to_bits(), "8-bit code {code}");
+        }
+        for code in 0..=65535u32 {
+            let v = code as f32 / 65535.0;
+            assert_eq!(linear_sample(v).to_bits(), linear(v).to_bits(), "16-bit code {code}");
+        }
+        for odd in [f32::NAN, -1.0, -0.0, 0.0, 1.0, 1.5, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(linear_sample(odd).to_bits(), linear(odd).to_bits(), "{odd}");
+        }
     }
     #[test]
     fn associated_tiff_preview_unassociates_without_mutating_native_samples() {

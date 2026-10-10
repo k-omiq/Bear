@@ -267,6 +267,9 @@ export const en = {
           workspace: 'Workspace',
           model: 'Cloud model',
           modelNote: 'Choose the cloud model, GPU and idle time before you approve setup. Changing the model downloads a separate checkpoint.',
+          noCleanModel: 'No cleaning model',
+          noCleanNote: 'No cleaning model is installed, so cleaning does not run on this cloud GPU. Setup downloads only the analysis models and page denoise you select.',
+          nothingChosen: 'Select a cleaning model, a cloud analysis model or page denoise. A setup needs at least one.',
           modelLicense: 'Model license: {license}. Check its terms before using it for your work.',
           analysisModels: 'Cloud analysis models',
           analysisNote: 'Select Ogkalu comic text & bubble detector (Full), SAM-TS-L lettering mask, or both for cloud detection. CTD and the Small detector run on this computer only. Setup installs the selected graphs; GPU analysis starts only when requested.',
@@ -540,6 +543,16 @@ export const en = {
       },
       // Setup's detection step.
       setupReview: 'The selected models can also check one page at a time from the editor’s review, before anything is erased.',
+      localFull: {
+        note: "Run CTD, Ogkalu Full and SAM-TS-L on this computer. SAM needs about 10 GB of free memory. CPU is supported; available GPU backends are listed in Performance.",
+        use: "Use full pipeline locally",
+        install: "Install missing local models",
+        backends: "Choose CPU or GPU",
+        saveFailed: "Could not save local detection. Your detection settings were kept.",
+        installFailed: "Some local models could not be installed. Check the model errors below and retry.",
+        ready: "Full detection is ready on this computer.",
+        pending: "Install or check the models below before running full detection on this computer.",
+      },
       modelsLegend: 'Detection models',
       // Why Text cleanup's Detect on cannot be Cloud GPU, and what a cloud
       // choice means for a model's backend. Detect on itself is the Text
@@ -1350,7 +1363,8 @@ export const en = {
       cancelRun: 'Cancel run',
     },
     readout: {
-      page: 'Page {index} of {total}',
+      pageJump: 'Page {index} of {total} · click to jump',
+      pageJumpField: 'Go to page, 1 to {total}',
       review: 'Region {index} of {total}',
       reviewPending: {
         select: 'total',
@@ -2549,10 +2563,6 @@ export const en = {
       // "Layer" rather than "region" or "mask": the panel is called LAYERS and
       // the menu is raised on a row of it, or on the box the row stands for.
       label: 'Layer actions',
-      // The selection tool's right-click over bare paper: look again at this
-      // spot for text Detect missed, or whose mask was deleted.
-      page: 'Page actions',
-      detectHere: 'Detect text here',
     },
     hint: {
       showOnPage: 'Scroll to this region and select it',
@@ -2603,7 +2613,7 @@ export const en = {
       // passes: the tool bar renders `t(spec.hintKey)` over a key the tool
       // table chose, and the modifier is a preference. See `provideContextParam`.
       cloneStamp: '{cloneSourceModifier}-click a source',
-      maskSelect: 'add to or remove from the area Clean erases',
+      maskSelect: 'add to or remove from the area Clean erases, or detect text in an area you draw',
     },
     // There is no `note` family. Every tool used to carry a sentence or two
     // above its parameters explaining itself; the bar shows labels and controls
@@ -2639,6 +2649,10 @@ export const en = {
       // Under the mixed-execution checkbox (`cloud.clean.mixed.label`), shown
       // while Clean on is Cloud GPU. Off by default: the cloud cleans it all.
       mixedHint: 'Regions set to Fill or Solid colour are tried here first; any that fail the quality check go to the cloud GPU. Off, every region goes to the cloud GPU.',
+      // The checkbox under Clean on while it is This computer, and its hint
+      // (`run.rs`, the solid-bubbles-only run).
+      solidOnly: 'Solid bubbles only',
+      solidOnlyHint: 'Cleans only speech bubbles on plain paper, with a flat fill. Every other region stays detected, for a later Clean here or on the cloud GPU.',
     },
     // Where the panel's engine picks send each region (`run.rs`). They are
     // the clean's: drawn for Clean and Detect & clean, and read for every
@@ -2653,6 +2667,7 @@ export const en = {
       // mixed box is ticked (`cloud_clean.rs#CleanExecution`).
       cloud: 'Every region goes to the cloud GPU.',
       mixed: 'Fill and Solid colour are tried on this computer first. The rest go to the cloud GPU.',
+      solidOnly: 'Only speech bubbles on plain paper are cleaned, starting from this pick. The rest stay detected.',
     },
     // What a dropdown's trigger calls its parameter, where the full label is
     // too long to sit on a bar in front of its own value: *Speech bubble text*
@@ -2772,6 +2787,7 @@ export const en = {
       // these are their accessible names and tooltips.
       maskAdd: 'Add to selection',
       maskRemove: 'Remove from selection',
+      maskDetect: 'Detect text in an area',
       brush: 'Brush',
     },
   },
@@ -2921,6 +2937,9 @@ export const en = {
       busy: 'Another run is starting or already running. Wait for it to finish.',
       // The backend runs a few chapters at once (`run.rs`, MAX_RUNS).
       atCapacity: 'The most runs that can go at once are already going. Wait for one to finish, then start this one.',
+      // An edit of the one page a run is on right now (`page_busy`). Every
+      // other page of the chapter can be edited while the run goes on.
+      pageBusy: 'A run is working on this page. Nothing was changed; try again when it moves on.',
       finished: {
         select: 'pages',
         zero: 'Text cleanup finished: no pages needed cleaning.',
@@ -2931,7 +2950,7 @@ export const en = {
       nothingInScope: 'Nothing to clean in this scope.',
       // Clean on its own cleans only what Detect stored.
       nothingDetected: 'Nothing detected to clean here. Run Detect first.',
-      // A Detect of one spot that stored nothing: no text there, or the page
+      // A Detect of one drawn area that stored nothing: no text there, or the page
       // holds its mask already.
       nothingNewHere: 'No new text found here.',
       // Detect stores what it finds; nothing is cleaned until Clean runs. A
@@ -2942,6 +2961,9 @@ export const en = {
         other: 'Detect finished: {regions} regions found. Nothing is cleaned yet.',
       },
       allLanguagesSkipped: 'All source languages are skipped. Select a language to clean.',
+      // How a Solid bubbles only run ends: what it cleaned, and what it left
+      // detected for a later clean.
+      solidOnly: 'Solid bubbles cleaned: {cleaned}. Regions left detected: {kept}.',
       ocrRescueUnavailable: 'The text reader is off for this run: {reason}',
       accelFallback: '{model} switched from {requested} to {effective}: {reason}',
       // The run could not start because the weights are not on this machine.
@@ -3607,6 +3629,7 @@ export const en = {
       denoiseChanged: 'This deployment’s denoising setup or access needs attention. Its saved cloud configuration has been updated. Check Settings > Cloud, then test the connection again.',
       cleanChanged: 'This deployment’s cleaning setup or access needs attention. Its saved cloud configuration has been updated. Check Settings > Cloud, then test the connection again.',
       cleanMissing: 'This deployment’s cleaning setup or access needs attention. Check Settings > Cloud, then test the connection again.',
+      cleanNotInstalled: 'This deployment was set up without a cleaning model. To clean in the cloud, update it in Settings > Cloud and choose a cleaning model.',
     },
     profile: {
       selectFailed: 'The cloud model could not be switched. The one before it is still in use.',
@@ -3864,8 +3887,17 @@ export const en = {
         // estimate from the last activity, not a promise.
         idleStops: 'Idle, stops in ~{time}',
         stopping: 'Stopping…',
+        // A request has been out about half a minute and the provider has
+        // started no GPU for it (`state/cloudgpu.svelte.js#GPU_WAIT_MS`).
+        waiting: 'Waiting for a GPU',
         // The last status read failed; the row is what the read before it said.
         unknown: 'Status unavailable, retrying…',
+      },
+      // The row of a role that is waiting: no container is up, so there is
+      // no GPU name or price. `note` is the row's tooltip.
+      waiting: {
+        name: 'Cloud GPU (analysis)',
+        note: 'The provider has not started a GPU for this analysis yet. It may have none of this type free. The analysis goes on when one starts.',
       },
       // The list price, beside the row where a local model shows its memory.
       price: '~{price:currency}/h',

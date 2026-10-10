@@ -97,7 +97,9 @@ computer or Cloud GPU, set independently, each disabled with the reason when the
 starts a local clean on: Fill and LaMa by default, or Solid colour) and **Outside bubbles** (Hold for
 review, the default, or Clean anyway; hidden under All text, which cleans outside bubbles regardless). **Mask padding**
 (0 to 32 px, 0 by default) grows every mask a run fits by that many page pixels, so more of the area around the
-letters is cleaned. Its **Apply** button re-pads the masks already detected on the page (or, for Chapter and Project,
+letters is cleaned. The slider is shown for Detect and for Clean. Detect and clean is the one-press run and shows no
+padding control; it still grows its masks by the value the slider holds, so the two steps and the one pass leave the
+same masks. Its **Apply** button re-pads the masks already detected on the page (or, for Chapter and Project,
 the open chapter) to the slider's value. Each one is grown from its unpadded mask, so going back to 0 gives the
 detected mask back exactly; a mask edit made over a padded mask is kept through later paddings. Cleaned layers never
 change. FLUX and the
@@ -117,6 +119,18 @@ goes to the ladder on that engine's rung with **no script read at all**: sound e
 localiser added, are painted over with everything else. That is the row's stated meaning, it is why it is off by
 default, and a resumed run goes back to holding them rather than carrying the choice.
 
+With **Clean on** set to This computer, Clean and Detect and clean offer **Solid bubbles only**, off by default. Ticked,
+the run cleans only text inside a speech bubble on plain paper, with a flat fill (Fill, or Solid colour when that is the
+bubble pick), and only where the quality check accepts the fill. Nothing is redrawn and nothing is sent anywhere. Every
+other region stays a detected region with its mask on the page: a bubble over tone or a gradient the fill does not
+match, text over artwork, text outside bubbles, sound effects. The clean declines none of them and holds none for
+review, so a later Clean with the box off, a Layers row, or a Clean on the cloud GPU takes them. One case is held as in
+every run: with a language switched off under Chosen languages, text outside a bubble cannot be told from that
+language's, and it waits for its mask to be approved. While it is ticked the panel hides the
+rows that would decide nothing: Outside bubbles, the Text outside bubbles engine, and LaMa among the bubble engines.
+The run ends by saying how many bubbles it cleaned and how many regions it left detected. The cloud's own version of
+this choice is **Clean flat colours on this computer first**, below, which sends the rest to the cloud GPU.
+
 With **Clean on** set to Cloud GPU, the run detects as usual, then asks the cloud clean consent once for the whole
 plan (the region count, the pages, the batches and the cost) and, once you confirm, cleans every region on your cloud
 GPU: none are cleaned here unless you tick **Clean flat colours on this computer first**, which tries each flat-colour
@@ -130,6 +144,13 @@ looking like a failure. If the weights are not on the machine, Text cleanup is d
 Settings, Models. If the machine runs short of memory mid-run, it says what it will do instead: the FLUX helper stops,
 then the redraw model is unloaded and the regions that needed it are listed for review, then it works one page region
 at a time.
+
+**You can go on editing while a run works.** A run holds one page at a time, the one it is on. Every other page of
+the chapter takes brush strokes, shapes, mask edits, padding, layer changes, deletes and undo as usual, and a cloud
+clean leaves the same pages free. An edit of the page the run is on is refused at once, with a notice, and nothing is
+changed; it works again when the run moves on. A change to the whole chapter (an export, a delete, padding applied to
+every page, replacing pages with denoised ones) waits for the run to end and says so. In a long strip the pages are
+cleaned across their joins, so there the run holds the whole chapter.
 
 **Source languages** (Settings, Detection) decide what a run cleans. Each of Japanese, Chinese and Korean is on or
 set to Skip, and the choice is captured when a run starts, so a resumed run keeps it. A region whose script belongs to
@@ -194,15 +215,19 @@ defaulting to white.
 
 ### Text cleanup
 
-Options: mode, scope, detect on, clean on, text, speech bubble engine, outside-bubble engine, outside bubbles, mask
-padding with its Apply, and the run button, all described above. It acts on the page rather than on a stroke, so there is nothing to draw.
+Options: mode, scope, detect on, clean on, solid bubbles only, text, speech bubble engine, outside-bubble engine,
+outside bubbles, mask padding with its Apply (Detect and Clean only), and the run button, all described above. It acts on the page rather than on a stroke, so there is nothing to draw.
 
 ### Brush
 
-Options: size, hardness, spacing, and a mode of Add, Erase or Paint. In Paint mode a colour, opacity and flow appear;
-in Add and Erase they do not. A stroke is the union of the round discs the brush sweeps along your path, and that
-shape is what is cleaned, not the rectangle around it. Add and Erase shape a mask that an engine then fills; Paint
-lays down flat colour. Erasing where there is no mask says so rather than doing nothing silently.
+Options: size, hardness, spacing, colour, opacity and flow. The brush paints flat colour and does nothing else. To
+shape a mask that an engine then cleans, use the AI Mask Brush; to remove a mask, use its Layers row or the region
+menu.
+
+A stroke is the union of the round dabs the brush sweeps along your path, and only that shape is painted, not the
+rectangle around it. Opacity is the most one stroke can cover, however many times it crosses itself. Flow is how
+strong each dab is. Hardness is the edge of the dab, and a pen's pressure sets its size; a mouse paints at the full
+size. While you draw, the stroke is shown as a see-through layer over the page, so the art around it does not change.
 
 ### Shapes
 
@@ -355,7 +380,8 @@ Previews transform supported Gray/RGB/CMYK profiles and SDR declarations to tagg
 use documented sRGB display assumptions; untagged CMYK uses a multiplicative-ink assumption, without changing stored
 metadata. Colour keys are compared at native precision. Downsampling uses linear light and premultiplied alpha.
 Brush, selected fill and model boundaries use the same interpretation. Brush modes remain 8-bit Gray/GrayAlpha/RGB/
-RGBA; native clone copies remain exact. Live brush and clone stamp previews come from the backend’s commit renderer.
+RGBA; native clone copies remain exact. Live brush and clone stamp previews come from the backend’s commit renderer,
+as a see-through layer on the page's proxy grid that holds only the painted pixels.
 
 TIFF alpha association is explicit: native premultiplied values remain unchanged and previews unassociate only the
 display derivative. Associated-alpha pages export as TIFF; PNG requests fall back and PSD refuses. Editing those
@@ -462,7 +488,7 @@ remains its own separate engine choice.
 
 Setting up a cloud GPU uses your own Modal or Beam account, which bills you directly. You can start from **Set up with
 Modal or Beam** on the Cloud tab, or from step 4 of the first-launch setup. After you paste a Modal token or Beam API
-key, choose FLUX.2 Klein 4B or 9B or Qwen-Image-Edit-2511 (L40S only) and optional SAM-TS-L/RT-DETR analysis models. The app presents a plan for approval
+key, choose FLUX.2 Klein 4B or 9B or Qwen-Image-Edit-2511 (L40S only) and optional SAM-TS-L/RT-DETR analysis models. On Modal you can also choose **No cleaning model**: setup then installs only the analysis models and page denoise you select, downloads no cleaning weights, and creates no FLUX worker. Such a setup needs at least one analysis model or page denoise; choosing it with nothing else selected selects both analysis models. Cloud cleaning is not offered on it until you update it and choose a cleaning model. The app presents a plan for approval
 showing the GPU type, idle timeout, cost notes, and selected weight downloads. Nothing is created until you approve it.
 A bundled helper then creates, in your account, a volume for model weights (seeded on a CPU), job storage, an on-demand
 FLUX worker, a separate on-demand analysis worker when selected, and a gateway that the provider opens only to calls carrying the endpoint's
@@ -491,6 +517,11 @@ When enabled and an endpoint is ready, its FLUX model appears alongside local mo
 time, in a dialog ("Send this region to your cloud GPU?"): it states what is sent (a crop of a given size around the
 region and its mask, while the rest of the page and project stay local), the destination endpoint, and the cost billed
 by your provider. A confirmation allows that one render and nothing else, and nothing is sent without one.
+
+When cloud detection has had a request out for about 30 seconds and the provider has started no GPU for it, the corner
+card shows a **Waiting for a GPU** row for that setup. The provider most often has no GPU of that type free; the
+detection goes on by itself when one starts. The row's button stops the waiting work, and the row becomes the GPU's own
+once one is up. A cloud render and a cloud denoise do not show this row.
 
 A running cloud render displays a status card in the bottom corner with elapsed time, current phase, a Cancel button,
 and a note that the first render can take 1 to 3 minutes while the GPU starts. Cancelling stops the render at the next
@@ -532,7 +563,7 @@ chapter is open.
 | `3` | Shapes |
 | `4` | AI mask brush |
 | `5` | Clone stamp |
-| `6` | Selection: add to or remove from the detected masks |
+| `6` | Selection: add to or remove from the detected masks, or detect text in a drawn rectangle |
 | `O` (held) | Show the original while held |
 | `Shift`+`O` | Pin the original on |
 | `M` | Mask overlay |

@@ -129,9 +129,6 @@ impl AnalysisGateway for CaptureGateway {
         Ok(result)
     }
 
-    fn release_idle(&self) -> Result<(), String> {
-        AnalysisGateway::release_idle(&self.client)
-    }
 }
 
 pub fn main() -> Result<(), String> {

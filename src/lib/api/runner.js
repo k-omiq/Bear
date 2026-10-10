@@ -211,8 +211,9 @@ export function createRunner(deps) {
 }
 
 /**
- * Several runs at once, as the native side keeps them (`run.rs`): one run per
- * chapter, at most `max` in all. Each run is its own `createRunner`, so each
+ * Several runs at once, as the native side keeps them (`run.rs`): one batch
+ * per chapter, with independent selected areas and a separate cloud area
+ * limit. Each run is its own `createRunner`, so each
  * walks its own queue on its own timers and the events of two runs
  * interleave, which is exactly what a consumer has to cope with.
  *
@@ -235,12 +236,28 @@ export function createRunnerPool(deps, { max = 3 } = {}) {
      * @param {Object & {chapterId: string, kind?: string, mode?: string}} options - `createRunner#start`'s, plus the run's kind and mode
      */
     start(queue, options) {
-      const run = { runner: /** @type {any} */ (null), chapterId: options.chapterId, kind: options.kind ?? 'clean', total: queue.length, done: 0 }
+      // `pages` is the pages the run is on right now, as `chapterId:pageIndex`:
+      // the ones an edit waits for (`onPage`), as `run.rs` keeps them.
+      const run = {
+        runner: /** @type {any} */ (null),
+        chapterId: options.chapterId,
+        kind: options.kind ?? 'clean',
+        area: !!options.area,
+        cloudArea: !!options.area && options.detector === 'cloud',
+        areaPageIndex: options.area ? queue[0]?.page.index : null,
+        total: queue.length,
+        done: 0,
+        pages: /** @type {Set<string>} */ (new Set()),
+      }
       const runner = createRunner({
         ...deps,
         nextRunId: () => `run-${(counter += 1)}`,
         emit: (event) => {
-          if (event.type === 'page-done') run.done += 1
+          if (event.type === 'page-started') run.pages.add(`${event.chapterId}:${event.pageIndex}`)
+          if (event.type === 'page-done') {
+            run.done += 1
+            run.pages.delete(`${event.chapterId}:${event.pageIndex}`)
+          }
           deps.emit(event)
         },
         onFinished: (summary) => {
@@ -255,12 +272,26 @@ export function createRunnerPool(deps, { max = 3 } = {}) {
     },
 
     /** The run on this chapter, if one is going. @param {string} chapterId */
-    runFor(chapterId) {
-      for (const [runId, run] of runs) if (run.chapterId === chapterId) return runId
+    runFor(chapterId, { allowAreas = false } = {}) {
+      for (const [runId, run] of runs) if (run.chapterId === chapterId && !(allowAreas && run.area)) return runId
       return null
     },
 
-    atCapacity: () => runs.size >= max,
+    /**
+     * Whether a run is working on this page right now. A run holds the page
+     * it is on and no other, so this is what an edit asks.
+     *
+     * @param {string} chapterId
+     * @param {number} pageIndex
+     */
+    onPage(chapterId, pageIndex) {
+      for (const run of runs.values()) {
+        if (run.pages.has(`${chapterId}:${pageIndex}`) || (run.area && run.chapterId === chapterId && run.areaPageIndex === pageIndex)) return true
+      }
+      return false
+    },
+
+    atCapacity: ({ cloudArea = false } = {}) => [...runs.values()].filter((run) => run.cloudArea === cloudArea).length >= (cloudArea ? 16 : max),
 
     /**
      * Stop one run. With no id, only when exactly one is going: an older
@@ -276,7 +307,17 @@ export function createRunnerPool(deps, { max = 3 } = {}) {
 
     isRunning: () => runs.size > 0,
 
-    /** @returns {Array<{runId: string, kind: string, chapterId: string, done: number, total: number}>} */
-    list: () => [...runs].map(([runId, run]) => ({ runId, kind: run.kind, chapterId: run.chapterId, done: run.done, total: run.total })),
+    /** @returns {Array<{runId: string, kind: string, chapterId: string, done: number, total: number, pages: number[]}>} `pages` is the run's own chapter's pages it is on now */
+    list: () => [...runs].map(([runId, run]) => ({
+      runId,
+      kind: run.kind,
+      chapterId: run.chapterId,
+      done: run.done,
+      total: run.total,
+      ...(run.area ? { area: true, areaPageIndex: run.areaPageIndex } : {}),
+      pages: [...run.pages]
+        .filter((key) => key.startsWith(`${run.chapterId}:`))
+        .map((key) => Number(key.slice(run.chapterId.length + 1))),
+    })),
   }
 }

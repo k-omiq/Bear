@@ -160,10 +160,14 @@ class CloudGateway:
         gpu_control: Optional[Any] = None,
         denoise_worker: Optional[Any] = None,
         code_digest: Optional[str] = None,
+        render: bool = True,
     ):
         if isinstance(provider, str):
             provider = CloudProvider(provider.lower())
         self.provider = provider
+        # False: the installation was set up without a cleaning model. It has no model
+        # info and no job backend; `/capabilities` says so and the render routes refuse.
+        self.render = render
         self.analysis_worker = analysis_worker
         # Page denoise (common/denoise.py). None: this deployment has no denoise models.
         self.denoise_worker = denoise_worker
@@ -173,11 +177,11 @@ class CloudGateway:
         # GET /gpu answers supported=false rather than guessing from CPU health.
         self.gpu_control = gpu_control
         self.limits = limits or provisional_fixture_limits()
-        self.model_info = model_info or get_default_model_info(self.provider.value, limits=self.limits)
+        self.model_info = (model_info or get_default_model_info(self.provider.value, limits=self.limits)) if render else None
         self.handle_registry = handle_registry or InMemoryHandleRegistry()
         # The in-process fake worker only exists for the local backend; a deployed
         # gateway dispatches to the provider and must never render a stand-in result.
-        if worker is None and backend is None:
+        if worker is None and backend is None and render:
             worker = FluxWorker(provider=self.provider.value, limits=self.limits)
         self.worker = worker
         self.auth_validator = auth_validator
@@ -189,13 +193,13 @@ class CloudGateway:
         # authorized endpoints): requests without valid credentials never reach this
         # code, and the gateway holds no copy of those credentials to compare against.
         self.trust_edge_auth = trust_edge_auth
-        self.backend = backend or LocalJobBackend(
+        self.backend = (backend or LocalJobBackend(
             provider=self.provider.value,
             registry=self.handle_registry,
             worker=self.worker,
             limits=self.limits,
             auto_execute=auto_execute,
-        )
+        )) if render else None
 
     def check_auth(self, headers: Dict[str, str]) -> bool:
         """Authenticate incoming request according to provider configuration.
@@ -313,6 +317,9 @@ class CloudGateway:
                 return self._route_gpu_job_submit("denoise", headers, body)
 
             if path.startswith("/mc/denoise/v1/jobs/"):
+                rest = path[len("/mc/denoise/v1/jobs/"):]
+                if rest.endswith("/metadata") or "/result/" in rest:
+                    return self._route_denoise_result(method, rest, headers)
                 return self._route_gpu_job("denoise", method, path[len("/mc/denoise/v1/jobs/"):])
 
             if method == "GET" and norm_path == "/health":
@@ -328,6 +335,8 @@ class CloudGateway:
                                      ("denoise", self.denoise_worker)):
                     if self._serves_gpu_jobs(worker, kind):
                         operations.append(GPU_JOB_OPERATIONS[kind])
+                if self._serves_denoise_results():
+                    operations.append("denoise.results")
                 advertised: Dict[str, Any] = {
                     "protocol_version": PROTOCOL_VERSION,
                     "provider": self.provider.value,
@@ -335,7 +344,14 @@ class CloudGateway:
                 }
                 if self.code_digest:
                     advertised["code_digest"] = self.code_digest
+                # Only said when false: a gateway that does not say has a cleaning model.
+                if not self.render:
+                    advertised["render"] = False
                 return 200, {"Content-Type": "application/json"}, json.dumps(advertised).encode("utf-8")
+
+            if not self.render and (norm_path in ("/model-info", "/jobs", "/warmup") or norm_path.startswith("/jobs/")):
+                unavailable = TypedError(error_code="capability_unavailable", message="Render is not configured")
+                return 503, {"Content-Type": "application/json"}, json.dumps(unavailable.to_dict()).encode("utf-8")
 
             if method == "GET" and norm_path == "/model-info":
                 return self._route_model_info()
@@ -696,6 +712,53 @@ class CloudGateway:
                       "error": {"error_code": "inference_failed", "message": "Result exceeded the response limit"}}
             return self._gpu_job_answer(200, version, failed)
         return self._gpu_job_answer(200, version, view, result_json)
+
+    def _serves_denoise_results(self) -> bool:
+        return self._serves_gpu_jobs(self.denoise_worker, "denoise") and all(
+            callable(getattr(self.denoise_worker, name, None))
+            for name in ("job_metadata", "result_chunk", "release_result"))
+
+    def _route_denoise_result(self, method: str, rest: str, headers: Dict[str, str]) -> Tuple[int, Dict[str, str], bytes]:
+        from deploy.cloud.common.denoise import DENOISE_VERSION
+        parts = rest.split("/")
+        error = self._denoise_error
+        if not parts or not valid_gpu_job_handle("denoise", parts[0]):
+            return error(404, "invalid_request", "No such result route")
+        if not self._serves_denoise_results():
+            return error(503, "capability_unavailable", "Denoise result downloads are not configured")
+        worker, handle = self.denoise_worker, parts[0]
+        if method == "GET" and parts[1:] == ["metadata"]:
+            view = worker.job_metadata(handle)
+            if view is None:
+                return error(404, "invalid_request", "No such job")
+            result = view.get("result")
+            raw = json.dumps(result, separators=(",", ":")).encode() if result is not None else None
+            if raw is not None and len(raw) > 16384:
+                return error(500, "inference_failed", "Result metadata exceeded the response limit")
+            return self._gpu_job_answer(200, DENOISE_VERSION, view, raw)
+        if method == "POST" and parts[1:] == ["result", "release"]:
+            worker.release_result(handle)
+            return 200, {"Content-Type": "application/json"}, b'{}'
+        if method != "GET" or len(parts) != 3 or parts[1] != "result" or not parts[2].isascii() or not parts[2].isdigit() or len(parts[2]) > 4:
+            return error(404, "invalid_request", "No such result route")
+        chunk = worker.result_chunk(handle, int(parts[2]))
+        if chunk is None:
+            return error(404, "invalid_request", "No such result chunk")
+        if not isinstance(chunk, bytes) or not 0 < len(chunk) <= 32768:
+            return error(500, "inference_failed", "Invalid result chunk")
+        range_header = next((v for k, v in headers.items() if k.lower() == "range"), None)
+        start = 0
+        if range_header is not None:
+            import re
+            match = re.fullmatch(r"bytes=(\d+)-", range_header)
+            if match is None or len(match[1]) > 5 or int(match[1]) >= len(chunk):
+                return 416, {"Content-Range": f"bytes */{len(chunk)}"}, b""
+            start = int(match[1])
+        response_headers = {"Content-Type": "application/octet-stream", "Content-Length": str(len(chunk) - start),
+                            "Accept-Ranges": "bytes", "Cache-Control": "no-store"}
+        if range_header is not None:
+            response_headers["Content-Range"] = f"bytes {start}-{len(chunk) - 1}/{len(chunk)}"
+        return (206 if range_header is not None else 200), response_headers, chunk[start:]
 
     def _route_health(self) -> Tuple[int, Dict[str, str], bytes]:
         """GET /health - Authenticated control reachability."""

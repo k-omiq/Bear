@@ -1,4 +1,4 @@
-//! Auto clean's cloud detection: RT-DETR v2 full boxes and the SAM-TS-L mask
+//! Cloud detection: RT-DETR v2 full boxes and the SAM-TS-L mask
 //! from the user's own Modal or Beam endpoint, for exactly the pages a person
 //! consented to.
 //!
@@ -48,9 +48,9 @@
 //! [`Prefetch`]: one producer thread that walks the run's pages in the run's own
 //! order, reads each source as the run does, and analyzes it, while the run
 //! takes each page's answer when it reaches that page. The GPU's work is done in
-//! one burst at the start of the run, and when the producer has sent its last
-//! page it asks the gateway to release the GPU if it is idle
-//! ([`RemoteDetection::release_idle`]), so the idle window is not billed either.
+//! one burst at the start of the run. After its last page the GPU stays warm
+//! for the deployment's configured idle window, so the next selection or page
+//! can reuse its loaded models. Only an explicit GPU Stop ends that window early.
 //!
 //! Nothing about consent moves. Every page still mints and spends its own grant
 //! at upload time, against the consent's epoch, and is refused outside the
@@ -503,6 +503,9 @@ pub struct RemotePage {
     pub boxes: Vec<BalloonBox>,
 }
 
+/// Hears each record a run writes to its journal.
+type RecordListener = Box<dyn Fn(&AnalysisAttemptRecord) + Send>;
+
 /// What a run holds for its cloud stages: the client, the spent grant's scope,
 /// and the run's cancel flag.
 pub struct RemoteDetection {
@@ -512,8 +515,13 @@ pub struct RemoteDetection {
     job_path: Option<PathBuf>,
     journal: Option<AnalysisJournal>,
     cancel: Arc<AtomicBool>,
+    area: Option<crate::run::DetectArea>,
     /// Whether the selected endpoint is still active, asked before each tile.
     allowed: Box<dyn Fn() -> Result<(), &'static str> + Send>,
+    /// Told each record this run writes to its journal, as a review analysis
+    /// tells `cloud://analysis`: the interface knows from it that a request is
+    /// out, which is how it can say that no GPU has started for one.
+    on_record: Option<RecordListener>,
 }
 
 impl RemoteDetection {
@@ -528,13 +536,26 @@ impl RemoteDetection {
             } else { Vec::new() }
         });
         Self { client, scope, page_sources, job_path: None, journal: None, cancel: Arc::new(AtomicBool::new(false)),
-            allowed: Box::new(|| Ok(())) }
+            allowed: Box::new(|| Ok(())), on_record: None, area: None }
     }
 
     pub(crate) fn set_cancel(&mut self, cancel: Arc<AtomicBool>) { self.cancel = cancel; }
 
+    pub(crate) fn set_area(&mut self, area: Option<crate::run::DetectArea>) { self.area = area; }
+
     pub(crate) fn set_allowed(&mut self, allowed: Box<dyn Fn() -> Result<(), &'static str> + Send>) {
         self.allowed = allowed;
+    }
+
+    pub(crate) fn set_on_record(&mut self, on_record: RecordListener) {
+        self.on_record = Some(on_record);
+    }
+
+    /// Write a record to the journal, then tell [`Self::on_record`] of it.
+    fn write_record(&self, journal: &AnalysisJournal, record: &AnalysisAttemptRecord) -> Result<(), &'static str> {
+        journal.write(record).map_err(|_| "analysis journal unavailable")?;
+        if let Some(tell) = &self.on_record { tell(record); }
+        Ok(())
     }
 
     fn tile_authority(&self) -> Result<(), String> {
@@ -579,7 +600,8 @@ impl RemoteDetection {
         if self.cancel.load(Ordering::SeqCst) { return Err("analysis_cancelled".into()); }
         let available = self.client.capabilities()?;
         analysis::current_models(&available, &self.scope.models)?;
-        let extent = cloud_tiles::plan(page.width, page.height, &[])?;
+        let regions: Vec<_> = self.area.iter().map(|area| area.cloud_window(page.width, page.height)).collect();
+        let extent = cloud_tiles::plan(page.width, page.height, &regions)?;
         let mut encoded = Vec::with_capacity(extent.tiles.len());
         for rect in &extent.tiles {
             let (sha, png) = analysis::encode_tile(page, *rect)?;
@@ -598,9 +620,10 @@ impl RemoteDetection {
             return Err("cloud_run_source_changed".into());
         }
         if let Some(job_path) = &self.job_path {
-            // The page walker holds this job's write lock for the whole chapter
-            // while waiting for Prefetch::take. A producer waiting for that same
-            // lock here deadlocks the first page. The manifest is replaced by
+            // Without the job's lock. The walk takes it to read a page and to
+            // write one, and an edit holds it across a model; a producer that
+            // waited on either would hold up the page the walk is waiting on
+            // in Prefetch::take. The manifest is replaced by
             // atomic rename, so a read-only snapshot is sufficient to verify
             // that the page still names the consented source index; Job::open
             // is unsuitable because it also sweeps detection sidecars.
@@ -643,7 +666,7 @@ impl RemoteDetection {
                 reported_cost_usd: None, tile_submission_started: Some(false),
                 cancel_requested: false, phase: AnalysisPhase::Confirmed,
             };
-            journal.write(&record).map_err(|_| "analysis journal unavailable")?;
+            self.write_record(journal, &record)?;
             Some(record)
         } else { None };
         let record = std::cell::RefCell::new(record);
@@ -657,7 +680,7 @@ impl RemoteDetection {
                 if let (Some(journal), Some(rec)) = (&self.journal, record.borrow_mut().as_mut()) {
                     rec.phase = AnalysisPhase::SubmittedTile { index };
                     rec.tile_submission_started = Some(true);
-                    if journal.write(rec).is_err() {
+                    if self.write_record(journal, rec).is_err() {
                         rec.phase = AnalysisPhase::Failed { code: "journal_unavailable".into() };
                         rec.tile_submission_started = Some(rec.completed_tiles > 0);
                         return Err(analysis::AnalysisFlowError::Other("analysis journal unavailable".into()));
@@ -675,7 +698,7 @@ impl RemoteDetection {
                     rec.completed_tiles = index + 1;
                     rec.reported_cost_usd = all_costs_known.get().then_some(cost.get());
                     rec.phase = AnalysisPhase::ResultCachedTile { index };
-                    journal.write(rec).map_err(|_| "analysis journal unavailable")?;
+                    self.write_record(journal, rec)?;
                 }
                 if cancel.load(Ordering::SeqCst) {
                     return Err(analysis::AnalysisFlowError::Cancelled);
@@ -699,28 +722,12 @@ impl RemoteDetection {
                     };
                 }
             }
-            journal.write(rec).map_err(|_| "analysis journal unavailable")?;
+            self.write_record(journal, rec)?;
         }
         let Stitched { mask, boxes } = sent.map_err(|e| e.to_string())?;
         Ok(RemotePage { width: page.width, height: page.height, mask, boxes })
     }
 
-    /// Ask the gateway to release the analysis GPU if it is idle, once this run
-    /// has nothing more to send. Best effort and never the run's business: any
-    /// failure (a gateway without `idle_only` answers 400, Beam has no route, the
-    /// network is down) is logged and the GPU scales down on its idle timer, as it
-    /// did before. Not sent at all once cloud engines are off or the profile has
-    /// changed, because the run no longer speaks for that endpoint.
-    pub(crate) fn release_idle(&self) {
-        if (self.allowed)().is_err()
-            || GrantService::global().get_profile_epoch(self.scope.provider, &self.scope.profile_id)
-                != self.scope.profile_epoch {
-            return;
-        }
-        if let Err(detail) = self.client.release_idle() {
-            eprintln!("manga-cleaner: analysis GPU idle release skipped: {detail}");
-        }
-    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -812,7 +819,7 @@ impl Drop for Finish<'_> {
 /// Owns the producer thread. Dropping it, which happens when the run's pipeline
 /// goes at the end of the run however it ended, closes the queue and joins the
 /// producer: it is then between pages, or finishing one tile the run's cancel
-/// flag will stop, or sending its idle release, all bounded by the client's
+/// flag will stop, all bounded by the client's
 /// timeouts. The run has already emitted `run-finished` and handed its slot back
 /// by then, so the wait delays nobody.
 pub struct Prefetch {
@@ -919,10 +926,9 @@ pub(crate) fn page_input(job: &Job, page_index: usize, source: &[u8]) -> Result<
 }
 
 /// The producer: every page in order until the last, a cancel, a failure that
-/// stops the run, or the run's end. Then, if it sent anything, the idle release,
-/// after the queue is marked done so the run never waits on that call.
+/// stops the run, or the run's end. Completion leaves the GPU's provider-managed
+/// idle window intact so a subsequent detection can reuse the loaded models.
 fn produce(remote: &RemoteDetection, pages: Vec<PrefetchPage>, shared: &Shared) {
-    let mut sent = false;
     {
         let _finish = Finish(shared);
         for page in pages {
@@ -936,10 +942,7 @@ fn produce(remote: &RemoteDetection, pages: Vec<PrefetchPage>, shared: &Shared) 
                             .and_then(|job| page_input(&job, page.page_index, &bytes)),
                         None => decode(&bytes).map(|raw| cleaner_core::image::orientation::from_bytes(&bytes).raster(&raw)).map_err(|e| e.to_string()),
                     };
-                    let answer = input.and_then(|raster| {
-                        sent = true;
-                        remote.analyze_page(page.page_index, &bytes, &raster)
-                    });
+                    let answer = input.and_then(|raster| remote.analyze_page(page.page_index, &bytes, &raster));
                     (sha256_hex(&bytes), answer)
                 }
                 Err(detail) => (String::new(), Err(detail)),
@@ -953,7 +956,6 @@ fn produce(remote: &RemoteDetection, pages: Vec<PrefetchPage>, shared: &Shared) 
             }
         }
     }
-    if sent { remote.release_idle(); }
 }
 
 /// The endpoint refused the key, or there is no usable key, in the stable
@@ -1028,6 +1030,11 @@ pub(crate) fn open_for_run(
     detection.journal = Some(analysis::journal_for(app)?);
     detection.job_path = Some(Library::for_app(app).map_err(|_| "cloud_run_source_changed")?
         .resolve_chapter(chapter_id).map_err(|_| "cloud_run_source_changed")?);
+    let teller = app.clone();
+    detection.set_on_record(Box::new(move |record| {
+        use tauri::Emitter;
+        let _ = teller.emit("cloud://analysis", record);
+    }));
     let app = app.clone();
     detection.set_allowed(Box::new(move || {
         crate::inference::profile_in_service(&app, provider, &profile_id).map_err(|lost| match lost {
@@ -1119,8 +1126,6 @@ pub(crate) mod fake {
         pub uploads: Arc<Mutex<Vec<Vec<u8>>>>,
         /// Source pages whose tiles fail, with the transport's words for it.
         pub fail: Arc<Mutex<HashMap<String, String>>>,
-        /// Idle releases asked for.
-        pub releases: Arc<AtomicUsize>,
         /// While set, a tile waits here until its source page is let through.
         pub hold: Option<Arc<(Mutex<HashSet<String>>, Condvar)>>,
     }
@@ -1128,7 +1133,7 @@ pub(crate) mod fake {
     pub(crate) fn gateway() -> Gateway {
         Gateway {
             sent: Arc::new(AtomicUsize::new(0)), revision: "c".repeat(40),
-            seen: Arc::default(), uploads: Arc::default(), fail: Arc::default(), releases: Arc::default(), hold: None,
+            seen: Arc::default(), uploads: Arc::default(), fail: Arc::default(), hold: None,
         }
     }
 
@@ -1200,10 +1205,6 @@ pub(crate) mod fake {
             Ok(result)
         }
 
-        fn release_idle(&self) -> Result<(), String> {
-            self.releases.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
     }
 
     /// The models a run grant pins, as this gateway advertises them.
@@ -1528,6 +1529,55 @@ mod tests {
         assert_eq!(record.model_identity_sha256.as_ref().map(String::len), Some(64));
     }
 
+    /// The phases a page's records were told in, by name.
+    fn told_phases(remote: &mut RemoteDetection) -> Arc<Mutex<Vec<String>>> {
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&told);
+        remote.set_on_record(Box::new(move |record| {
+            let phase = serde_json::to_value(&record.phase).unwrap();
+            sink.lock().unwrap().push(phase["phase"].as_str().unwrap().to_owned());
+        }));
+        told
+    }
+
+    #[test]
+    fn cloud_run_page_tells_each_record_it_journals() {
+        let path = chapter("usage-told", 1, StripMode::Single);
+        let root = path.parent().unwrap().parent().unwrap().join("usage-journal");
+        let gateway = gateway();
+        let granted = confirm_run(&proposal(&path, vec![0], vec![SAM], &gateway).proposal_id,
+            true, true).unwrap();
+        let capabilities = vec![SAM.to_string()];
+        let scope = consume_grant(&granted.grant_id, &request(&[0], &capabilities)).unwrap();
+        let mut remote = RemoteDetection::new(Box::new(gateway), scope);
+        remote.journal = Some(AnalysisJournal::new(root));
+        let told = told_phases(&mut remote);
+        let (raster, source) = page_raster();
+        remote.analyze_page(0, &source, &raster).unwrap();
+        // Out before its answer, and over at the end: what the interface reads
+        // to know a request is waiting on a GPU.
+        assert_eq!(*told.lock().unwrap(),
+            ["confirmed", "submitted_tile", "result_cached_tile", "run_page_complete"]);
+    }
+
+    #[test]
+    fn cloud_run_page_tells_a_request_that_got_no_answer_as_over() {
+        let path = chapter("usage-told-lost", 1, StripMode::Single);
+        let root = path.parent().unwrap().parent().unwrap().join("usage-journal");
+        let gateway = gateway();
+        let (raster, source) = page_raster();
+        gateway.fail.lock().unwrap().insert(hex(&source), "transport_lost".into());
+        let granted = confirm_run(&proposal(&path, vec![0], vec![SAM], &gateway).proposal_id,
+            true, true).unwrap();
+        let capabilities = vec![SAM.to_string()];
+        let scope = consume_grant(&granted.grant_id, &request(&[0], &capabilities)).unwrap();
+        let mut remote = RemoteDetection::new(Box::new(gateway), scope);
+        remote.journal = Some(AnalysisJournal::new(root));
+        let told = told_phases(&mut remote);
+        assert!(remote.analyze_page(0, &source, &raster).is_err());
+        assert_eq!(*told.lock().unwrap(), ["confirmed", "submitted_tile", "unknown_remote_state"]);
+    }
+
     #[test]
     fn cloud_run_preflight_failure_writes_no_billable_analysis_attempt() {
         let path = chapter("usage-preflight", 1, StripMode::Single);
@@ -1849,6 +1899,33 @@ mod tests {
         (raster, source)
     }
 
+    #[test]
+    fn selection_analysis_sends_only_tiles_around_its_context_window() {
+        let gateway = gateway();
+        let sent = Arc::clone(&gateway.sent);
+        let mut remote = RemoteDetection::new(Box::new(gateway),
+            fake::scope("modal-prof-selection-window", &[0], &[SAM]));
+        let mut raster = fixtures::by_name("l8").raster;
+        raster.width = 512;
+        raster.height = 4096;
+        raster.data = vec![200; 512 * 4096];
+        let source = cleaner_core::image::encode(&raster, Format::Png).unwrap();
+        let area = crate::run::DetectArea::from_arg(Some(&serde_json::json!({
+            "x": 5, "y": 2, "w": 10, "h": 2,
+        }))).unwrap().unwrap();
+        remote.set_area(Some(area));
+        let answer = remote.analyze_page(0, &source, &raster).unwrap();
+        let planned = cloud_tiles::plan(raster.width, raster.height,
+            &[area.cloud_window(raster.width, raster.height)]).unwrap();
+        let whole = cloud_tiles::plan(raster.width, raster.height, &[]).unwrap();
+        assert_eq!(sent.load(Ordering::SeqCst), planned.tiles.len());
+        assert!(planned.tiles.len() < whole.tiles.len());
+        assert_eq!((answer.width, answer.height), (512, 4096));
+        let mask = answer.mask.unwrap();
+        assert_eq!(mask[100 * 512 + 100], 255);
+        assert_eq!(mask[4000 * 512 + 100], 0, "unrequested tiles produced evidence");
+    }
+
     /// A chapter run: one consent for its pages, spent once to start, then
     /// held by the run for as long as it takes, whatever the grant's clock.
     #[test]
@@ -1981,16 +2058,15 @@ mod tests {
     }
 
     /// The producer walks the run's pages in the run's order, not sorted, and is
-    /// done with all of them before the run has taken one. It releases the GPU
-    /// once, after the last page.
+    /// done with all of them before the run has taken one. Completion does not
+    /// stop the GPU before its configured idle window.
     #[test]
-    fn prefetch_analyzes_in_run_order_ahead_of_the_run_and_releases_once() {
+    fn prefetch_analyzes_in_run_order_ahead_of_the_run_and_keeps_gpu_warm() {
         let (paths, shas) = pages_on_disk("order", 3);
         let gateway = gateway();
         let (prefetch, _) = start(&gateway, "modal-prof-prefetch-order", &paths, &[1, 0, 2], PREFETCH_BUDGET_BYTES);
         eventually("every page analyzed", || gateway.sent.load(Ordering::SeqCst) == 3);
         assert_eq!(*gateway.seen.lock().unwrap(), vec![shas[1].clone(), shas[0].clone(), shas[2].clone()]);
-        eventually("the release", || gateway.releases.load(Ordering::SeqCst) == 1);
 
         let page = prefetch.take(1, &shas[1]).unwrap();
         assert_eq!((page.width, page.height), (64, 48));
@@ -2001,7 +2077,6 @@ mod tests {
         assert!(prefetch.take(2, &"0".repeat(64)).unwrap_err().starts_with("cloud_run_source_changed"));
         assert_eq!(prefetch.shared.lock().bytes, 0);
         drop(prefetch);
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 1);
         assert_eq!(gateway.sent.load(Ordering::SeqCst), 3, "nothing is sent twice");
     }
 
@@ -2041,7 +2116,6 @@ mod tests {
         assert!(prefetch.take(3, &shas[3]).is_ok());
         assert_eq!(gateway.seen.lock().unwrap().len(), 4);
         drop(prefetch);
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 1);
     }
 
     /// A failure that withdraws the run's authority stops the producer at that
@@ -2059,11 +2133,10 @@ mod tests {
         assert_eq!(prefetch.take(2, &shas[2]).unwrap_err(), "cloud_run_page_missing");
         assert_eq!(*gateway.seen.lock().unwrap(), vec![shas[0].clone(), shas[1].clone()]);
         drop(prefetch);
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 1);
     }
 
     /// The run's cancel stops the producer before its next page. The run's end
-    /// joins it, and it still releases the GPU it used.
+    /// joins it without stopping the GPU that another selection may be using.
     #[test]
     fn cancel_stops_the_producer_before_its_next_page() {
         let (paths, shas) = pages_on_disk("cancel", 4);
@@ -2081,7 +2154,6 @@ mod tests {
         drop(prefetch);
         let seen = gateway.seen.lock().unwrap().clone();
         assert!(!seen.contains(&shas[2]) && !seen.contains(&shas[3]), "sent after the cancel");
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 1);
     }
 
     /// The producer waits when the buffer is full, and never holds more than the
@@ -2104,7 +2176,6 @@ mod tests {
         // The run ends here, with the producer waiting for room again.
         drop(prefetch);
         assert_eq!(gateway.sent.load(Ordering::SeqCst), 4);
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 1);
 
         // A single page larger than the budget still goes through, alone.
         let gateway = fake::gateway();
@@ -2113,25 +2184,34 @@ mod tests {
         assert!(prefetch.take(1, &shas[1]).is_ok());
     }
 
-    /// Nothing sent, nothing released; and no release once cloud engines are off
-    /// or the profile changed, since the run no longer speaks for the endpoint.
+    /// An empty run never starts or stops a GPU.
     #[test]
-    fn the_release_is_only_asked_for_by_a_run_that_sent_and_still_may() {
+    fn an_empty_prefetch_does_not_start_or_stop_a_gpu() {
         let gateway = gateway();
         let (prefetch, cancel) = start(&gateway, "modal-prof-prefetch-none", &[], &[], PREFETCH_BUDGET_BYTES);
         drop(prefetch);
         drop(cancel);
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 0);
 
-        let mut remote = RemoteDetection::new(Box::new(gateway.clone()),
-            fake::scope("modal-prof-prefetch-off", &[0], &[SAM]));
-        remote.set_allowed(Box::new(|| Err("cloud_disabled")));
-        remote.release_idle();
-        let remote = RemoteDetection::new(Box::new(gateway.clone()),
-            fake::scope("modal-prof-prefetch-edited", &[0], &[SAM]));
-        GrantService::global().invalidate_profile(CloudProvider::Modal, "modal-prof-prefetch-edited");
-        remote.release_idle();
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 0);
+        assert_eq!(gateway.sent.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn successive_selection_detections_do_not_release_the_shared_analysis_gpu() {
+        let (paths, shas) = pages_on_disk("selection-warm", 1);
+        let gateway = gateway();
+        for x in [0.0, 50.0] {
+            let mut remote = RemoteDetection::new(Box::new(gateway.clone()),
+                fake::scope("modal-prof-selection-warm", &[0], &[SAM]));
+            remote.set_area(crate::run::DetectArea::from_arg(Some(&serde_json::json!({
+                "x": x, "y": 0, "w": 25, "h": 25,
+            }))).unwrap());
+            let prefetch = Prefetch::start(remote, vec![PrefetchPage {
+                page_index: 0, source: Some(paths[0].clone()), job_path: None,
+            }]);
+            assert!(prefetch.take(0, &shas[0]).is_ok());
+            drop(prefetch);
+        }
+        assert_eq!(gateway.sent.load(Ordering::SeqCst), 2);
     }
 
     #[test]

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 from deploy.cloud.common.api import CloudGateway
@@ -243,7 +245,6 @@ class GpuControlTest(unittest.TestCase):
         self.assertIsNotNone(self.store.get(release_key("analysis")))
 
     def test_analysis_admission_holds_stop_until_call_is_recorded(self) -> None:
-        import threading
         entered = threading.Event()
         finished = threading.Event()
 
@@ -259,6 +260,109 @@ class GpuControlTest(unittest.TestCase):
             self.assertFalse(finished.wait(0.02))
         self.assertTrue(finished.wait(1))
         thread.join()
+
+    def test_render_submissions_spawn_concurrently_and_stop_drains_both(self) -> None:
+        release_dispatch = threading.Event()
+        both_dispatching = threading.Event()
+        entered = []
+        entered_lock = threading.Lock()
+        original_dispatch = self.dispatcher.dispatch
+
+        def dispatch(*args):
+            with entered_lock:
+                entered.append(args[0])
+                if len(entered) == 2:
+                    both_dispatching.set()
+            if not release_dispatch.wait(2):
+                raise TimeoutError("test did not release dispatch")
+            with entered_lock:
+                return original_dispatch(*args)
+
+        self.dispatcher.dispatch = dispatch
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            submits = [pool.submit(self.control.submit_render, self.backend,
+                                   *make_job(job_id=f"job-{index}", attempt_id=f"attempt-{index}"))
+                       for index in range(2)]
+            stop = None
+            try:
+                self.assertTrue(both_dispatching.wait(1), "a submit waited for another submit to finish")
+                stop = pool.submit(self.control.stop, "render")
+                with self.control._admission_cond:
+                    self.assertTrue(self.control._admission_cond.wait_for(
+                        lambda: "render" in self.control._stopping, timeout=1))
+                self.assertFalse(stop.done(), "stop enumerated calls before their IDs were recorded")
+            finally:
+                release_dispatch.set()
+            for submit in submits:
+                submit.result(timeout=1)
+            self.assertEqual(stop.result(timeout=1)["cancelled_jobs"], 2)
+        self.assertEqual(self.backend.active_count(), 0)
+        self.assertEqual(set(self.dispatcher.terminated), {"native-1", "native-2"})
+
+    def test_analysis_submissions_overlap_and_stop_closes_new_admission(self) -> None:
+        release_dispatch = threading.Event()
+        both_admitted = threading.Event()
+        admitted = []
+        admitted_lock = threading.Lock()
+
+        def submit(index):
+            with self.control.analysis_admission():
+                with admitted_lock:
+                    admitted.append(index)
+                    if len(admitted) == 2:
+                        both_admitted.set()
+                if not release_dispatch.wait(2):
+                    raise TimeoutError("test did not release dispatch")
+                with admitted_lock:
+                    self.analysis_in_flight += 1
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            submits = [pool.submit(submit, index) for index in range(2)]
+            stop = late = None
+            try:
+                self.assertTrue(both_admitted.wait(1), "analysis submissions were serialized")
+                stop = pool.submit(self.control.stop, "analysis")
+                with self.control._admission_cond:
+                    self.assertTrue(self.control._admission_cond.wait_for(
+                        lambda: "analysis" in self.control._stopping, timeout=1))
+                late = pool.submit(submit, 2)
+                self.assertFalse(stop.done())
+                self.assertFalse(late.done())
+            finally:
+                release_dispatch.set()
+            for submit_job in submits:
+                submit_job.result(timeout=1)
+            stop.result(timeout=1)
+            from deploy.cloud.common.analysis_seed import AnalysisUnavailable
+            with self.assertRaises(AnalysisUnavailable):
+                late.result(timeout=1)
+        self.assertEqual(sorted(admitted), [0, 1])
+        self.assertEqual(self.analysis_in_flight, 2)
+        self.assertEqual(self.analysis_cancels, 1)
+
+    def test_stopping_render_does_not_block_analysis_dispatch(self) -> None:
+        stop_entered = threading.Event()
+        release_stop = threading.Event()
+
+        def stop_active():
+            stop_entered.set()
+            if not release_stop.wait(2):
+                raise TimeoutError("test did not release stop")
+            return 0
+
+        def analysis_submit():
+            with self.control.analysis_admission():
+                return True
+
+        self.backend.stop_active = stop_active
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            stop = pool.submit(self.control.stop, "render")
+            try:
+                self.assertTrue(stop_entered.wait(1))
+                self.assertTrue(pool.submit(analysis_submit).result(timeout=1))
+            finally:
+                release_stop.set()
+            stop.result(timeout=1)
 
     def test_stop_with_nothing_up_is_an_idempotent_no_op(self) -> None:
         for _ in range(2):

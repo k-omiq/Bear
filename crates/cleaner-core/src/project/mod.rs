@@ -2093,7 +2093,7 @@ impl Job {
     /// rewritten); the lock is what orders the write against the open-time
     /// sweep of unnamed evidence ([`Job::open`]). That sweep runs only while
     /// the job's lock is free, so the caller holds the job from this write to
-    /// the flush that names the file, as a run does for its whole chapter.
+    /// the flush that names the file, as a run does for each page it writes.
     pub fn write_evidence(&self, evidence: &crate::text_groups::EvidenceBlob) -> Result<(), StoreError> {
         let _write = self.begin_write()?;
         write_evidence(&self.dir, evidence)

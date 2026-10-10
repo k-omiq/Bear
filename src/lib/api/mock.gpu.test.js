@@ -66,3 +66,17 @@ it('can inspect and stop a configured profile after selecting Local', async () =
   expect((await mock.getCloudGpuStatus(target)).containers).toHaveLength(1)
   expect((await mock.stopCloudGpu(target)).stopped).toEqual(['render'])
 })
+
+it('has an analysis out and no GPU up in the waiting scenario, until the analysis GPU is stopped', async () => {
+  const mock = createMockBackend({ timing, cloudGpuScenario: 'waiting' })
+  await readCloudReadiness(mock)
+  const heard = []
+  await mock.onRemoteAnalysis((record) => heard.push(record.phase.phase))
+  expect(heard).toEqual(['submitted_tile'])
+  expect(await mock.getCloudGpuStatus(target)).toEqual({ supported: true, unsupported: null, containers: [] })
+
+  await mock.stopCloudGpu({ ...target, role: 'render' })
+  expect(heard).toEqual(['submitted_tile'])
+  expect(await mock.stopCloudGpu({ ...target, role: 'analysis' })).toEqual({ supported: true, stopped: [], cancelledJobs: 0 })
+  expect(heard).toEqual(['submitted_tile', 'cancelled'])
+})

@@ -188,6 +188,16 @@ impl Journal {
         entry
     }
 
+    /// The entry a step in `direction` would answer with, the cursor left
+    /// where it is.
+    pub fn next(&self, direction: &str) -> Option<&Delta> {
+        match direction {
+            "undo" => self.cursor.checked_sub(1).and_then(|at| self.entries.get(at)),
+            "redo" => self.entries.get(self.cursor),
+            _ => None,
+        }
+    }
+
     /// Step the cursor back one and answer with the entry to reverse.
     pub fn undo(&mut self) -> Option<Delta> {
         if self.cursor == 0 {
@@ -402,6 +412,11 @@ pub async fn history_push(
 /// may not have happened, and re-applying a delta to a manifest already in that
 /// state is a no-op by construction (`set_mask_visible` answers "it is as you
 /// asked" rather than refusing).
+///
+/// **Refused before the cursor moves** when the entry it would replay is of a
+/// page a run is working on (`page_busy`). The replay is an edit of that page
+/// and would be refused itself ([`crate::run::lock_page`]), and a cursor that
+/// had moved on would say an edit was taken back that was not.
 #[tauri::command]
 pub async fn history_move(
     app: tauri::AppHandle,
@@ -409,19 +424,33 @@ pub async fn history_move(
     direction: String,
 ) -> Result<HistoryStep, String> {
     crate::library::blocking(move || {
-        with_journal(&app, &chapter_id, |journal| {
-            let entry = match direction.as_str() {
-                "undo" => journal.undo(),
-                "redo" => journal.redo(),
-                _ => None,
-            };
-            HistoryStep {
-                cursor: journal.cursor,
-                entry,
-            }
-        })
+        let job = crate::library::resolve_chapter(&app, &chapter_id)?;
+        move_at(&job, &chapter_id, &direction)
     })
     .await
+}
+
+/// The command's body, on a chapter already resolved to its job.
+pub(crate) fn move_at(job: &Path, chapter_id: &str, direction: &str) -> Result<HistoryStep, String> {
+    let _lock = crate::run::lock_job(job)?;
+    let mut journal = load(job);
+    let page_index = journal.next(direction)
+        .and_then(|entry| crate::region::page_index_in(chapter_id, &entry.region_id));
+    if let Some(page_index) = page_index {
+        if crate::run::page_run(job, chapter_id, page_index).is_some() {
+            return Err(crate::run::WriteRefused::PageBusy { page_index }.into());
+        }
+    }
+    let entry = match direction {
+        "undo" => journal.undo(),
+        "redo" => journal.redo(),
+        _ => None,
+    };
+    save(job, &journal)?;
+    Ok(HistoryStep {
+        cursor: journal.cursor,
+        entry,
+    })
 }
 
 #[cfg(test)]

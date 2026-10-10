@@ -30,7 +30,7 @@ import { backendSettingsPatch, session, setCloudAllowed } from './session.svelte
 import { writeSettingsSerialized } from './settingswrite.js'
 import { currentCloudModelId } from '../model/model-names.js'
 import { providerPaused } from '../model/providers.js'
-import { checkConfiguration, configurationKey, configurationFailed, loadCloudConfiguration, rememberedConfiguration, resetCloudConfiguration } from './cloudconfig.svelte.js'
+import { checkCleanConfiguration, checkConfiguration, configurationKey, configurationFailed, loadCloudConfiguration, rememberedConfiguration, resetCloudConfiguration } from './cloudconfig.svelte.js'
 
 /**
  * A render the status element shows.
@@ -110,6 +110,8 @@ const ERROR_KEYS = new Map([
   ['region_unsupported', 'notice.cloud.error.regionUnsupported'],
   ['attempt_busy', 'notice.cloud.error.busy'],
   ['attempt_exists', 'notice.cloud.error.busy'],
+  // A run is on the region's page (`run::lock_page`): the edit's own words.
+  ['page_busy', 'notice.run.pageBusy'],
   ['journal_error', 'notice.cloud.error.local'],
   ['project_error', 'notice.cloud.error.local'],
   ['config_unreadable', 'notice.cloud.error.local'],
@@ -213,11 +215,8 @@ function refreshCloudModel(readiness, backend) {
   const epoch = modelEpoch
   const promise = Promise.resolve()
     .then(async () => {
-      const configKey = configurationKey(readiness)
-      const known = await checkConfiguration(backend, configKey, 'clean', async () => {
-        const info = await backend.getCloudModelInfo({ provider: target.type, profileId: target.profile_id })
-        return { state: 'ready', modelId: info.pinnedModelId, presets: [] }
-      })
+      const known = await checkCleanConfiguration(backend, configurationKey(readiness),
+        { provider: target.type, profileId: target.profile_id })
       return { pinnedModelId: known?.modelId }
     })
     .then((info) => {
@@ -312,10 +311,8 @@ function refreshProfileModels(readiness, backend) {
         /** @type {string|null} */
         let id = null
         try {
-          const known = await checkConfiguration(backend, configurationKey(readiness, { provider: endpoint.provider, profileId: endpoint.id }), 'clean', async () => {
-            const info = await backend.getCloudModelInfo({ provider: endpoint.provider, profileId: endpoint.id })
-            return { state: 'ready', modelId: info.pinnedModelId, presets: [] }
-          })
+          const profile = { provider: endpoint.provider, profileId: endpoint.id }
+          const known = await checkCleanConfiguration(backend, configurationKey(readiness, profile), profile)
           id = typeof known?.modelId === 'string' && known.modelId ? known.modelId : null
         } catch {
           // Listed by name; asked again later.
@@ -450,17 +447,26 @@ export function cloudUsable() {
 
 /** Cleaning availability is independent of page denoise on the same profile. */
 export function cloudCleanAvailable(target = null) {
-  return rememberedConfiguration(configurationKey(cloud.readiness, target))?.clean?.state !== 'missing'
+  return !['missing', 'none'].includes(rememberedConfiguration(configurationKey(cloud.readiness, target))?.clean?.state)
+}
+
+/**
+ * Why cleaning is not offered on a profile: it was set up without a cleaning
+ * model, or its setup needs repair.
+ *
+ * @returns {string} an i18n key
+ */
+export function cloudCleanMissingKey(target = null) {
+  return rememberedConfiguration(configurationKey(cloud.readiness, target))?.clean?.state === 'none'
+    ? 'cloud.configuration.cleanNotInstalled'
+    : 'cloud.configuration.cleanMissing'
 }
 
 /** A connection test explicitly rechecks both operations after setup is repaired. */
 export async function recheckCloudConfiguration(target, backend = getBackend()) {
   const key = configurationKey(cloud.readiness, target)
   if (!session.cloudAllowed || !key) return
-  await checkConfiguration(backend, key, 'clean', async () => {
-    const info = await backend.getCloudModelInfo(target)
-    return { state: 'ready', modelId: info.pinnedModelId, presets: [] }
-  }, true)
+  await checkCleanConfiguration(backend, key, target, true)
   await checkConfiguration(backend, key, 'denoise', async () => ({ state: 'ready', modelId: null,
     presets: await backend.cloudDenoisePresets(target) }), true)
 }

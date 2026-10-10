@@ -11,8 +11,11 @@ import {
   jobConflictKey,
   LOCAL_CEILING,
   openEditorChapter,
+  pageBusy,
+  claimPageEdit,
   redo,
   recordRegionEdit,
+  reloadPage,
   reportJobConflict,
   select,
   selectedRegion,
@@ -27,7 +30,7 @@ import { app } from './app.svelte.js'
 import { setBackend } from '../api/backend.js'
 import { createHistory, push } from '../model/history.js'
 import { session } from './session.svelte.js'
-import { jobById, resetJobs } from './jobs.svelte.js'
+import { jobById, resetJobs, startJobs } from './jobs.svelte.js'
 
 describe('editor history persistence failures', () => {
   beforeEach(() => {
@@ -115,6 +118,34 @@ describe('editor history persistence failures', () => {
       tone: 'warn',
     })
     expect(editor.history.error).toBeInstanceOf(Error)
+  })
+
+  // A run on the entry's page refuses the step before the journal moves
+  // (`history.rs`), so nothing was undone and the cursor says so.
+  it('puts the cursor back when a run is on the page an undo would change', async () => {
+    const moveMock = vi.fn().mockRejectedValue(new Error('page_busy'))
+    setBackend(/** @type {any} */ ({ historyMove: moveMock }))
+
+    push(editor.history, { seq: 1, label: 'canvas.command.applyTool' })
+    undo()
+    expect(editor.history.cursor).toBe(0)
+    await vi.advanceTimersByTimeAsync(60)
+
+    expect(moveMock).toHaveBeenCalledTimes(2)
+    expect(editor.history.cursor).toBe(1)
+    expect(editor.history.error ?? null).toBeNull()
+    expect(app.notices).toHaveLength(1)
+    expect(app.notices[0]).toMatchObject({ key: 'notice.run.pageBusy', tone: 'warn' })
+
+    // And a redo the same way.
+    undo()
+    moveMock.mockResolvedValueOnce({ entry: null })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(editor.history.cursor).toBe(0)
+    redo()
+    await vi.advanceTimersByTimeAsync(60)
+    expect(editor.history.cursor).toBe(0)
+    expect(app.notices.at(-1)).toMatchObject({ key: 'notice.run.pageBusy' })
   })
 
   it('historyMove rejecting once then succeeding during undo yields no notice', async () => {
@@ -419,11 +450,56 @@ describe('a run over pages the window is not holding', () => {
     const loadPages = vi.fn(async () => [{ ...header(2), status: 'unclean', resident: false }])
     setBackend(/** @type {any} */ ({ loadPages }))
     editor.run.runId = 'r1'
-    emit({ type: 'page-started', chapterId: 'ch1', pageIndex: 2 })
+    emit({ type: 'page-started', chapterId: 'ch1', runId: 'r1', pageIndex: 2 })
     expect(editor.chapter.pages[2].status).toBe('cleaning')
     emit({ type: 'run-finished', chapterId: 'ch1', runId: 'r1', reason: 'cancelled', nextPageIndex: 2 })
     await vi.waitFor(() => expect(editor.chapter.pages[2].status).toBe('unclean'))
     expect(loadPages).toHaveBeenCalledWith({ chapterId: 'ch1', indices: [2] })
+  })
+
+  // A run holds the page it is on and no other: `page-started` takes the
+  // page, `page-done` gives it back, and the end of the run gives back
+  // whatever it still held, read again from disk. A cloud clean has a few
+  // pages started at once.
+  it('holds only the pages a run is on, and lets them go as the run does', async () => {
+    const loadPages = vi.fn(async ({ indices }) => indices.map((index) => ({ ...header(index), status: 'unclean', resident: false })))
+    setBackend(/** @type {any} */ ({ loadPages }))
+    app.notices.length = 0
+    adoptRun({ runId: 'r-busy', pages: [{}, {}, {}] }, 'chapter', 'clean')
+    expect([0, 1, 2, 3].map(pageBusy)).toEqual([false, false, false, false])
+
+    emit({ type: 'page-started', chapterId: 'ch1', runId: 'r-busy', pageIndex: 1 })
+    emit({ type: 'page-started', chapterId: 'ch1', runId: 'r-busy', pageIndex: 3 })
+    expect([0, 1, 2, 3].map(pageBusy)).toEqual([false, true, false, true])
+    // An edit of a free page is the caller's, and says nothing.
+    expect(claimPageEdit(0)).toBe(true)
+    expect(app.notices).toEqual([])
+    expect(claimPageEdit(1)).toBe(false)
+    expect(app.notices.at(-1)?.key).toBe('notice.run.pageBusy')
+
+    emit({ type: 'page-done', chapterId: 'ch1', runId: 'r-busy', page: { ...header(1), status: 'cleaned' } })
+    expect([0, 1, 2, 3].map(pageBusy)).toEqual([false, false, false, true])
+
+    emit({ type: 'run-finished', chapterId: 'ch1', runId: 'r-busy', reason: 'cancelled', nextPageIndex: 3 })
+    expect([0, 1, 2, 3].map(pageBusy)).toEqual([false, false, false, false])
+    expect(editor.run.busyPages).toEqual([])
+    await vi.waitFor(() => expect(loadPages).toHaveBeenCalledWith({ chapterId: 'ch1', indices: [3] }))
+  })
+
+  // A longstrip is one surface: a patch crosses a join and the run reads its
+  // neighbours, so the whole chapter is held while a run is on it.
+  it('holds every page of a longstrip while a run is going', () => {
+    adoptRun({ runId: 'r-strip', pages: [{}] }, 'chapter', 'clean')
+    editor.project.mode = 'longstrip'
+    try {
+      expect([0, 4].map(pageBusy)).toEqual([true, true])
+      editor.run.active = false
+      expect([0, 4].map(pageBusy)).toEqual([false, false])
+    } finally {
+      editor.project.mode = 'single'
+      editor.run.active = false
+      editor.run.runId = null
+    }
   })
 
   it('settles a detection waiter when the editor closes', async () => {
@@ -771,6 +847,38 @@ describe('startRun local engine ceiling boundary', () => {
     },
   )
 
+  // Solid bubbles only is the clean's choice: the flag rides a Clean and a
+  // Detect & clean, never a Detect, and is absent while the box is off so the
+  // run is the one it always was.
+  it('sends Solid bubbles only with a clean, and never with a Detect', async () => {
+    const previous = session.cleanSolidOnly
+    const runClean = vi.fn().mockResolvedValue({ runId: 'solid-run', pages: [{ id: 'p0' }] })
+    setBackend(/** @type {any} */ ({ runClean }))
+    try {
+      editor.toolParams.autoClean = { ...editor.toolParams.autoClean, solidOnly: true }
+      for (const [mode, sent] of /** @type {const} */ ([['auto', true], ['clean', true], ['detect', false]])) {
+        runClean.mockClear()
+        editor.run.active = false
+        await startRun('page', { mode })
+        expect('solidBubblesOnly' in runClean.mock.calls[0][0], mode).toBe(sent)
+        if (sent) expect(runClean.mock.calls[0][0].solidBubblesOnly).toBe(true)
+      }
+
+      // Until the box is pressed in this window, the stored choice decides.
+      const { solidOnly, ...unset } = editor.toolParams.autoClean
+      editor.toolParams.autoClean = unset
+      for (const stored of [true, false]) {
+        session.cleanSolidOnly = stored
+        runClean.mockClear()
+        editor.run.active = false
+        await startRun('page')
+        expect(runClean.mock.calls[0][0].solidBubblesOnly, String(stored)).toBe(stored ? true : undefined)
+      }
+    } finally {
+      session.cleanSolidOnly = previous
+    }
+  })
+
   it('runs all-text automatic cleaning with the selected detection models', async () => {
     const previousPolicy = session.textPolicy
     session.textPolicy = 'all_text'
@@ -988,6 +1096,10 @@ describe('a chapter write refused for another writer', () => {
     )
     expect(jobConflictKey(new Error('disk write failed'))).toBeNull()
     expect(jobConflictKey(new Error('not_job_busy_at_all'))).toBeNull()
+    // A run of this window's own: the page it is on, and a chapter-wide write.
+    expect(jobConflictKey(new Error('page_busy'))).toBe('notice.run.pageBusy')
+    expect(jobConflictKey('apply_tool: page_busy: a run is on page 4')).toBe('notice.run.pageBusy')
+    expect(jobConflictKey(new Error('run_in_progress'))).toBe('notice.run.busy')
   })
 
   it('says a stale chapter in its own words and reads it again', async () => {
@@ -1116,6 +1228,100 @@ describe('a run that outlives the editor', () => {
     await openEditorChapter('pr-bg', 'ch-bg')
     expect(editor.run).toMatchObject({ active: true, runId: 'bg-run', mode: 'detect', queued: 2, pagesDone: 1 })
     expect(jobById('bg-run')).toMatchObject({ kind: 'detect', status: 'running', projectName: 'Background', chapterName: 'Night Shift' })
+  })
+
+  it('recovers every selection detection separately, including jobs not yet processing', async () => {
+    setBackend(backendListing([
+      { runId: 'area-a', kind: 'detect', chapterId: 'ch-bg', done: 0, total: 1, area: true, areaPageIndex: 0, pages: [] },
+      { runId: 'area-b', kind: 'detect', chapterId: 'ch-bg', done: 0, total: 1, area: true, areaPageIndex: 1, pages: [1] },
+    ]))
+    await openEditorChapter('pr-bg', 'ch-bg')
+    expect(editor.run.active).toBe(false)
+    expect(editor.areaRuns).toEqual([{ runId: 'area-a', pageIndex: 0 }, { runId: 'area-b', pageIndex: 1 }])
+    expect(pageBusy(0)).toBe(true)
+    expect(pageBusy(1)).toBe(true)
+  })
+
+  it('submits multiple areas before earlier handles arrive and completes each independently', async () => {
+    const subscribers = new Set()
+    const emit = (event) => { for (const handler of subscribers) handler(event) }
+    const releases = []
+    const runClean = vi.fn(() => new Promise((resolve) => releases.push(resolve)))
+    const loadPages = vi.fn(async () => [])
+    setBackend(backendListing([], { runClean, loadPages, subscribe: (handler) => {
+      subscribers.add(handler)
+      return () => subscribers.delete(handler)
+    } }))
+    await openEditorChapter('pr-bg', 'ch-bg')
+    const area = { x: 10, y: 20, w: 30, h: 40 }
+    const first = startRun('page', { mode: 'detect', area, pageIndex: 0 })
+    const second = startRun('page', { mode: 'detect', area, pageIndex: 0 })
+    expect(runClean).toHaveBeenCalledTimes(2)
+    expect(await startRun('chapter')).toBeNull()
+    releases[1]({ runId: 'area-new-b', pages: [{ pageIndex: 0 }] })
+    releases[0]({ runId: 'area-new-a', pages: [{ pageIndex: 0 }] })
+    expect(await first).toBe('area-new-a')
+    expect(await second).toBe('area-new-b')
+    expect(editor.run.active).toBe(false)
+    expect(editor.areaRuns).toHaveLength(2)
+    expect(jobById('area-new-a')).toMatchObject({ kind: 'detect', status: 'running' })
+    expect(jobById('area-new-b')).toMatchObject({ kind: 'detect', status: 'running' })
+    expect(pageBusy(0)).toBe(true)
+
+    const latest = { ...page(0), resident: true, regions: [{ id: 'new', pageId: 'bg0', outcome: 'detected', mask: { id: 'new-mask' } }] }
+    editor.chapter.pages[0] = latest
+    loadPages.mockImplementation(async () => [{ ...latest, status: 'unclean' }])
+    emit({ type: 'page-done', runId: 'area-new-a', chapterId: 'ch-bg', page: { ...page(0), regions: [] } })
+    expect(editor.chapter.pages[0].regions).toHaveLength(1)
+    emit({ type: 'run-finished', runId: 'area-new-a', chapterId: 'ch-bg', reason: 'cancelled' })
+    expect(editor.areaRuns).toEqual([{ runId: 'area-new-b', pageIndex: 0 }])
+    expect(jobById('area-new-a')?.status).toBe('cancelled')
+    expect(jobById('area-new-b')?.status).toBe('running')
+    expect(pageBusy(0)).toBe(true)
+    await vi.waitFor(() => expect(editor.chapter.pages[0].status).toBe('cleaning'))
+    emit({ type: 'run-finished', runId: 'area-new-b', chapterId: 'ch-bg', reason: 'completed' })
+    expect(editor.areaRuns).toEqual([])
+    expect(pageBusy(0)).toBe(false)
+    await vi.waitFor(() => expect(editor.chapter.pages[0].status).toBe('unclean'))
+    expect(editor.run.pagesDone).toBe(0)
+  })
+
+  it('does not leave an already-finished area busy when its handle arrives late', async () => {
+    const subscribers = new Set()
+    const emit = (event) => { for (const handler of subscribers) handler(event) }
+    const api = backendListing([], {
+      subscribe: (handler) => {
+        subscribers.add(handler)
+        return () => subscribers.delete(handler)
+      },
+      runClean: async () => {
+        emit({ type: 'run-finished', runId: 'area-early', chapterId: 'ch-bg', reason: 'completed' })
+        return { runId: 'area-early', pages: [{ pageIndex: 0 }] }
+      },
+    })
+    setBackend(api)
+    startJobs(api)
+    await openEditorChapter('pr-bg', 'ch-bg')
+    expect(await startRun('page', { mode: 'detect', area: { x: 5, y: 5, w: 10, h: 10 } })).toBe('area-early')
+    expect(editor.areaRuns).toEqual([])
+    expect(pageBusy(0)).toBe(false)
+    expect(jobById('area-early')?.status).toBe('completed')
+  })
+
+  it('drops a late area page reload when the same chapter has been reopened', async () => {
+    let release
+    const loadPages = vi.fn(async () => [])
+    setBackend(backendListing([], { loadPages }))
+    await openEditorChapter('pr-bg', 'ch-bg')
+    loadPages.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+    const pending = reloadPage(0)
+    closeEditorChapter()
+    setBackend(backendListing([]))
+    await openEditorChapter('pr-bg', 'ch-bg')
+    release([{ ...page(0), resident: true, regions: [{ id: 'obsolete', pageId: 'bg0', outcome: 'detected' }] }])
+    await pending
+    expect(editor.chapter.pages[0].regions).toEqual([])
+    expect(editor.chapter.pages[0].resident).toBe(false)
   })
 
   it('adopts nothing the backend does not list, even when the jobs list still shows it', async () => {

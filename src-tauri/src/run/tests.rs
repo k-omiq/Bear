@@ -83,6 +83,84 @@ fn runs_on_different_chapters_go_side_by_side_up_to_the_cap() {
     assert!(active().lock().unwrap().is_empty());
 }
 
+#[test]
+fn selection_detections_queue_independently_and_keep_batch_exclusion() {
+    let _exclusive = exclusively();
+    let areas: Vec<_> = (0..MAX_CLOUD_AREA_RUNS).map(|_| {
+        reserve_scoped_run("chapter-areas", &[], RunKind::Detect, RunAdmission::CloudArea)
+            .unwrap().unwrap()
+    }).collect();
+    assert_eq!(jobs().len(), MAX_CLOUD_AREA_RUNS);
+    assert!(jobs().iter().all(|job| job.area && job.kind == "detect"));
+    let full = reserve_scoped_run("chapter-areas", &[], RunKind::Detect, RunAdmission::CloudArea)
+        .unwrap().err().unwrap();
+    assert_eq!(full.at_capacity, Some(true));
+    assert!(full.run_id.is_none());
+    // A whole-page/chapter run could replace these results, so it stays
+    // exclusive. Cloud area uploads consume none of the local-run slots.
+    assert_eq!(reserve_run("chapter-areas", &[], RunKind::Clean).unwrap().err().unwrap().run_id,
+        Some(areas[0].run_id.clone()));
+    let local = reserve_run("chapter-other", &[], RunKind::Clean).unwrap().unwrap();
+    assert_eq!(reserve_scoped_run("chapter-other", &[], RunKind::Detect, RunAdmission::CloudArea)
+        .unwrap().err().unwrap().run_id, Some(local.run_id.clone()));
+    assert_eq!(cancel_all(), MAX_CLOUD_AREA_RUNS + 1);
+    assert!(areas.iter().all(|area| area.cancel.load(Ordering::SeqCst)));
+    drop((local, areas));
+    assert!(active().lock().unwrap().is_empty());
+}
+
+#[test]
+fn every_concurrent_selection_keeps_its_page_busy_until_it_finishes() {
+    let _exclusive = exclusively();
+    let path = PathBuf::from("/nonexistent/concurrent-area-job");
+    let first = reserve_scoped_run("chapter-areas", &[], RunKind::Detect, RunAdmission::CloudArea)
+        .unwrap().unwrap();
+    let second = reserve_scoped_run("chapter-areas", &[], RunKind::Detect, RunAdmission::CloudArea)
+        .unwrap().unwrap();
+    first.set_jobs([&path]);
+    second.set_jobs([&path]);
+    {
+        let mut slots = active().lock().unwrap();
+        slots.iter_mut().find(|slot| slot.run_id == second.run_id).unwrap().area_page_index = Some(1);
+    }
+    assert_eq!(page_run(&path, "chapter-areas", 1), Some(RunKind::Detect), "queued areas hold their input page");
+    let job = jobs().into_iter().find(|job| job.run_id == second.run_id).unwrap();
+    assert_eq!(job.area_page_index, Some(1));
+    assert!(job.pages.is_empty(), "queued selection had not emitted page-started");
+    first.progress.observe(&page_started_event(&first.run_id, "chapter-areas", 0));
+    second.progress.observe(&page_started_event(&second.run_id, "chapter-areas", 1));
+    assert_eq!(page_run(&path, "chapter-areas", 0), Some(RunKind::Detect));
+    assert_eq!(page_run(&path, "chapter-areas", 1), Some(RunKind::Detect));
+    first.progress.observe(&page_done_after_clean(&first.run_id, "chapter-areas", &path, 0));
+    assert_eq!(page_run(&path, "chapter-areas", 0), None);
+    assert_eq!(page_run(&path, "chapter-areas", 1), Some(RunKind::Detect));
+    second.progress.observe(&page_started_event(&second.run_id, "chapter-areas", 0));
+    assert_eq!(page_run(&path, "chapter-areas", 0), Some(RunKind::Detect));
+    drop(first);
+    assert_eq!(page_run(&path, "chapter-areas", 0), Some(RunKind::Detect));
+    drop(second);
+    assert_eq!(page_run(&path, "chapter-areas", 0), None);
+}
+
+#[test]
+fn cloud_selection_postprocessing_is_bounded_and_cancellable_while_waiting() {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut permits: Vec<_> = (0..MAX_RUNS).map(|_| RunProcessing::acquire(&cancel).unwrap()).collect();
+    let (entered, ready) = std::sync::mpsc::channel();
+    let waiting = Arc::clone(&cancel);
+    let worker = std::thread::spawn(move || {
+        let permit = RunProcessing::acquire(&waiting);
+        entered.send(permit.is_some()).unwrap();
+    });
+    assert!(ready.recv_timeout(Duration::from_millis(100)).is_err(), "a fourth area opened local models");
+    cancel.store(true, Ordering::SeqCst);
+    assert!(!ready.recv_timeout(Duration::from_secs(1)).unwrap(), "queued processing ignored cancellation");
+    worker.join().unwrap();
+    cancel.store(false, Ordering::SeqCst);
+    permits.pop();
+    assert!(RunProcessing::acquire(&cancel).is_some(), "a released slot stayed occupied");
+}
+
 /// `list_jobs` shows every run in flight with its kind, chapter and progress,
 /// and the denoise runs beside them; a finished run leaves it.
 #[test]
@@ -111,9 +189,13 @@ fn list_jobs_shows_runs_and_denoise_runs_in_flight() {
     ]);
     assert_eq!(crate::jobs::list_jobs()[0].run_id, detect.run_id);
     let wire = serde_json::to_value(&crate::jobs::list_jobs()[0]).unwrap();
+    // Page 0 is done and page 1 is started: the page the run is on.
     assert_eq!(wire, serde_json::json!({
-        "runId": detect.run_id, "kind": "detect", "chapterId": "chapter-j1", "done": 1, "total": 3,
+        "runId": detect.run_id, "kind": "detect", "chapterId": "chapter-j1", "done": 1, "total": 3, "pages": [1],
     }));
+    let pages: Vec<Vec<u32>> = crate::jobs::snapshot().into_iter()
+        .filter(|job| job.chapter_id.starts_with("chapter-j")).map(|job| job.pages).collect();
+    assert_eq!(pages, [vec![1], vec![], vec![], vec![]], "a run or a denoise that is on no page named one");
     drop((detect, clean, cloud, denoise));
     assert!(crate::jobs::snapshot().iter().all(|job| !job.chapter_id.starts_with("chapter-j")));
 }
@@ -126,6 +208,8 @@ fn cancel_all_raises_every_runs_flag() {
     let b = reserve_run("chapter-q2", &[], RunKind::Detect).unwrap().unwrap();
     assert_eq!(cancel_all(), 2);
     assert!(a.cancel.load(Ordering::SeqCst) && b.cancel.load(Ordering::SeqCst));
+    assert!(a.analysis_cancel.check().is_err() && b.analysis_cancel.check().is_err(),
+        "shutdown did not cancel native SAM/RT inference and queued model admission");
     drop((a, b));
 }
 
@@ -396,8 +480,11 @@ fn a_worker(chapter_id: &str, recorder: &Recorder) -> Worker {
         chapter_id: chapter_id.to_owned(),
         chapters: vec![chapter_id.to_owned()],
         kind: RunKind::Clean,
+        admission: RunAdmission::Ordinary,
+        area_page_index: None,
         progress: Arc::new(RunProgress::default()),
         cancel: Arc::clone(&worker.cancel),
+        analysis_cancel: Arc::new(sam_ts::Cancellation::default()),
         finished: Arc::clone(&worker.finished),
         outcome: Arc::clone(&worker.outcome),
     });
@@ -1739,37 +1826,544 @@ fn a_panic_on_the_way_out_still_hands_the_scheduler_back() {
 /* One writer per job                                                  */
 /* ------------------------------------------------------------------ */
 
-/// The run holds the job it is writing for as long as it has it open, so no
-/// other command in the window can read it, mutate it and flush over what the
-/// run has since written. The exposure is what made this worth closing: one
-/// `Job` is held for a **whole chapter** and the manifest is rewritten after
-/// every region.
+/// A cleaner that gives each page one cleaned region, and hands the test the
+/// span in which a run's models are working: `meanwhile` is called from inside
+/// each page's clean, with the page's id. What the scheduler holds over that
+/// span, and what it lets through, is what the tests below are about.
+struct Meanwhile<F: FnMut(&str) + Send> {
+    meanwhile: F,
+}
+
+impl<F: FnMut(&str) + Send> Cleaner for Meanwhile<F> {
+    fn clean_page(
+        &mut self,
+        page_id: &str,
+        _bytes: &[u8],
+        _ceiling: Engine,
+        _context: &PageContext,
+    ) -> Result<PageOutcome, String> {
+        (self.meanwhile)(page_id);
+        let mut outcome = PageOutcome::default();
+        outcome.regions.push(RegionOutcome::Cleaned(
+            Box::new(a_patch(&region_id(page_id, 0), 0, Engine::Fill)),
+            None,
+        ));
+        Ok(outcome)
+    }
+}
+
+/// Walk `entries` as a run holding a slot walks them: the run has said which
+/// jobs it walks, and its progress follows its events as the worker's sink
+/// feeds it. `meanwhile` is [`Meanwhile`]'s, and `sink` sees each event after
+/// the run's progress has. The slot is handed back before this answers.
+fn a_run_with_a_slot(
+    chapter_id: &str,
+    entries: &[PlanEntry],
+    cancel: &AtomicBool,
+    meanwhile: impl FnMut(&str) + Send,
+    sink: impl Fn(&Event),
+) -> Summary {
+    let reservation = reserve_run(chapter_id, &[], RunKind::Clean).unwrap().unwrap();
+    reservation.set_jobs(entries.iter().map(|entry| &entry.job_path));
+    execute(&reservation.run_id, chapter_id, entries, &mut Meanwhile { meanwhile }, Engine::Flux, cancel, &|event| {
+        reservation.progress.observe(&event);
+        sink(&event);
+    })
+}
+
+/// A hand-made patch on a page, clear of the region a run's pass cleans there,
+/// and its id.
+fn a_hand_patch(job_path: &Path, chapter_id: &str, entry: &PlanEntry) -> String {
+    let id = format!("{}-h1", library::page_id(chapter_id, entry.page_index));
+    let mut patch = a_patch(&id, 9, Engine::Fill);
+    patch.mask = Mask::filled(Rect::new(20, 20, 4, 4));
+    patch.ink = patch.mask.clone();
+    let _lock = lock_job(job_path).unwrap();
+    Job::open(job_path).unwrap().complete_region(entry.source_idx, &patch, None).unwrap();
+    id
+}
+
+/// Whether the manifest shows a patch, read off disk.
+fn visible_on_disk(job_path: &Path, id: &str) -> Option<bool> {
+    Job::open(job_path).unwrap().project.patches.iter().find(|row| row.id == id).map(|row| row.visible)
+}
+
+/// The run holds its job to read a page and to write one, and not in between:
+/// a model can take minutes, and every hand edit in the chapter used to wait
+/// behind it. Each event of a page goes out with the job held, which is what
+/// lets an edit ask, under that same lock, whether the page is the run's.
 #[test]
-fn the_run_holds_its_job_for_as_long_as_it_is_open() {
+fn the_run_holds_its_job_to_write_a_page_and_not_while_its_models_work() {
+    let _exclusive = exclusively();
     let scratch = Scratch::new("job-held");
     let (library, _, chapter_id) = a_chapter(&scratch, 2);
     let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
     let job_path = entries[0].job_path.clone();
     assert!(job_is_free(&job_path), "the job was held before the run started");
 
-    let free_during = Arc::new(Mutex::new(Vec::new()));
-    let seen = Arc::clone(&free_during);
+    let working = Mutex::new(Vec::new());
+    let writing = Mutex::new(Vec::new());
     let cancel = AtomicBool::new(false);
-    execute(
-        "backend-run-1",
+    let summary = a_run_with_a_slot(
         &chapter_id,
         &entries,
-        &mut Stub::new(1, 0),
-        Engine::Flux,
         &cancel,
-        &|event| {
-            if kind_of(&event) == "region-done" {
-                seen.lock().unwrap().push(job_is_free(&job_path));
+        |_| working.lock().unwrap().push(job_is_free(&job_path)),
+        |event| {
+            if matches!(kind_of(event), "page-started" | "region-done" | "page-done") {
+                writing.lock().unwrap().push((kind_of(event), job_is_free(&job_path)));
             }
         },
     );
-    assert_eq!(*free_during.lock().unwrap(), vec![false, false], "the run left its job writable");
+    assert_eq!(summary.pages_cleaned, 2);
+    assert_eq!(*working.lock().unwrap(), vec![true, true], "the run kept its job while its models worked");
+    let page = [("page-started", false), ("region-done", false), ("page-done", false)];
+    assert_eq!(*writing.lock().unwrap(), [page, page].concat(), "a page's event went out with the job free");
     assert!(job_is_free(&job_path), "the run kept the job after it had finished with it");
+}
+
+/// What the old rule cost: an edit of a page the run is not on. It is made
+/// while the run's models work on another page, it does not wait, and the
+/// run's write of its own page then leaves it as the edit left it.
+#[test]
+fn an_edit_of_another_page_lands_while_a_run_works_and_outlives_the_runs_write() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("edit-other-page");
+    let (library, _, chapter_id) = a_chapter(&scratch, 2);
+    let mut entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let job_path = entries[0].job_path.clone();
+    let other = a_hand_patch(&job_path, &chapter_id, &entries[1]);
+    // The run walks page 0 alone, so nothing but the edit touches page 1.
+    entries.truncate(1);
+
+    let edited = Mutex::new(Vec::new());
+    let cancel = AtomicBool::new(false);
+    let summary = a_run_with_a_slot(
+        &chapter_id,
+        &entries,
+        &cancel,
+        |_| {
+            // On the run's own thread: a job the walk still held would panic
+            // here rather than wait, so this is also the job being free.
+            let hidden = library.set_mask_visible(&other, false).map(|region| region.is_some());
+            edited.lock().unwrap().push((hidden.map_err(|e| e.to_string()), visible_on_disk(&job_path, &other)));
+        },
+        |_| {},
+    );
+
+    assert_eq!(*edited.lock().unwrap(), [(Ok(true), Some(false))], "the edit of another page did not go through");
+    assert_eq!(summary.pages_cleaned, 1);
+    let job = Job::open(&job_path).unwrap();
+    let cleaned = region_id(&library::page_id(&chapter_id, 0), 0);
+    assert!(job.project.patches.iter().any(|row| row.id == cleaned), "the run's page was not written");
+    assert_eq!(visible_on_disk(&job_path, &other), Some(false), "the run's write rolled the edit back");
+    assert!(job.project.examined.contains(&entries[0].source_idx));
+}
+
+/// An edit of the page the run is on is refused, at once and by name, and
+/// changes nothing: the run read the page before the edit and would write
+/// its results over it. The same page takes the edit once the run has left.
+#[test]
+fn an_edit_of_the_page_a_run_is_on_is_refused_at_once_and_changes_nothing() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("edit-busy-page");
+    let (library, _, chapter_id) = a_chapter(&scratch, 2);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let job_path = entries[0].job_path.clone();
+    let hands: Vec<String> = entries.iter().map(|entry| a_hand_patch(&job_path, &chapter_id, entry)).collect();
+    let before = std::fs::read(&job_path).unwrap();
+
+    let refused = Mutex::new(Vec::new());
+    let cancel = AtomicBool::new(false);
+    a_run_with_a_slot(
+        &chapter_id,
+        &entries,
+        &cancel,
+        |page_id| {
+            if page_id != library::page_id(&chapter_id, 0) {
+                return;
+            }
+            let started = Instant::now();
+            let answer = library.set_mask_visible(&hands[0], false).unwrap_err();
+            refused.lock().unwrap().push((
+                matches!(answer, LibraryError::PageBusy { page_index: 0 }),
+                answer.to_string(),
+                answer.reason_key(),
+                started.elapsed() < Duration::from_secs(1),
+                std::fs::read(&job_path).unwrap() == before,
+                lock_page(&job_path, &chapter_id, 0).err(),
+                lock_page(&job_path, &chapter_id, 1).is_ok(),
+            ));
+        },
+        |_| {},
+    );
+
+    let refused = refused.lock().unwrap();
+    let (by_name, message, key, at_once, unchanged, lock, other_page) = &refused[0];
+    assert!(*by_name && message.starts_with("page_busy: "), "{message}");
+    assert_eq!(*key, "notice.run.pageBusy");
+    assert!(*at_once, "the refusal waited");
+    assert!(*unchanged, "a refused edit wrote to the manifest");
+    assert_eq!(*lock, Some(WriteRefused::PageBusy { page_index: 0 }));
+    assert!(*other_page, "the run held a page it was not on");
+    assert_eq!(visible_on_disk(&job_path, &hands[0]), Some(true));
+    // The run is over and its slot handed back: the page is anyone's again.
+    assert!(library.set_mask_visible(&hands[0], false).unwrap().is_some());
+    assert_eq!(visible_on_disk(&job_path, &hands[0]), Some(false));
+}
+
+/// A write to the whole chapter is refused for as long as the chapter has a
+/// run, whichever page the run is on: the run lets go of the job between its
+/// pages, so a delete or a chapter-wide padding that only waited for the job
+/// would land in the middle of one.
+#[test]
+fn a_write_to_the_whole_chapter_is_refused_while_the_chapter_has_a_run() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("chapter-write");
+    let (library, project_id, chapter_id) = a_chapter(&scratch, 2);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let job_path = entries[0].job_path.clone();
+    let located = crate::region::locate_page(&library, &chapter_id, 1).unwrap().unwrap();
+
+    let refused = Mutex::new(Vec::new());
+    let cancel = AtomicBool::new(false);
+    a_run_with_a_slot(
+        &chapter_id,
+        &entries,
+        &cancel,
+        |_| {
+            let deleted = library.delete_chapter(&project_id, &chapter_id, false).unwrap_err();
+            refused.lock().unwrap().push((
+                matches!(deleted, LibraryError::RunInProgress),
+                deleted.to_string(),
+                deleted.reason_key(),
+                crate::region::set_detection_padding_scoped_at(&located, None, 4, None).unwrap_err(),
+                lock_chapter(&job_path).err(),
+            ));
+        },
+        |_| {},
+    );
+
+    let refused = refused.lock().unwrap();
+    assert_eq!(refused.len(), 2, "the chapter was not held on every page of the run");
+    for (by_name, message, key, padding, lock) in refused.iter() {
+        assert!(*by_name && message.starts_with("run_in_progress: "), "{message}");
+        assert_eq!(*key, "notice.run.busy");
+        assert!(padding.starts_with("run_in_progress: "), "{padding}");
+        assert_eq!(*lock, Some(WriteRefused::RunInProgress));
+    }
+    assert!(job_path.exists() && library.resolve_chapter(&chapter_id).is_ok(), "a refused delete deleted");
+    // And once the run is over, the same write goes through.
+    assert!(crate::region::set_detection_padding_scoped_at(&located, None, 4, None).is_ok());
+    assert!(matches!(
+        library.delete_chapter(&project_id, &chapter_id, false).unwrap(),
+        library::ChapterDeleted::Deleted { .. }
+    ));
+}
+
+/// Undo and redo replay an edit, so a step onto the run's page is an edit of
+/// it. It is refused before the journal's cursor moves: a cursor that had
+/// moved would say the edit was taken back when the replay was refused. A
+/// step onto any other page goes through.
+#[test]
+fn a_history_step_onto_the_runs_page_is_refused_and_leaves_the_cursor() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("history-busy-page");
+    let (library, _, chapter_id) = a_chapter(&scratch, 2);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let job_path = entries[0].job_path.clone();
+    let side = |present| crate::history::Side { present, page_status: None, region: None };
+    let mut journal = crate::history::load(&job_path);
+    for page in [1, 0] {
+        journal.push(crate::history::NewDelta {
+            label: "masks.command.deleteMask".into(),
+            op: "region-state".into(),
+            region_id: format!("{}-h1", library::page_id(&chapter_id, page)),
+            before: side(true),
+            after: side(false),
+        });
+    }
+    // Page 1's edit is the past and page 0's the future: undo steps onto
+    // page 1, redo onto page 0.
+    journal.undo();
+    crate::history::save(&job_path, &journal).unwrap();
+
+    let steps = Mutex::new(Vec::new());
+    let cancel = AtomicBool::new(false);
+    a_run_with_a_slot(
+        &chapter_id,
+        &entries,
+        &cancel,
+        |page_id| {
+            if page_id != library::page_id(&chapter_id, 0) {
+                return;
+            }
+            let redo = crate::history::move_at(&job_path, &chapter_id, "redo").unwrap_err();
+            let after_redo = crate::history::load(&job_path).cursor;
+            let undo = crate::history::move_at(&job_path, &chapter_id, "undo").map(|step| step.cursor);
+            steps.lock().unwrap().push((redo, after_redo, undo));
+        },
+        |_| {},
+    );
+
+    let steps = steps.lock().unwrap();
+    let (redo, after_redo, undo) = &steps[0];
+    assert!(redo.starts_with("page_busy: "), "{redo}");
+    assert_eq!(*after_redo, 1, "the refused step moved the cursor");
+    assert_eq!(*undo, Ok(0), "a step onto a page the run was not on was refused");
+    // The run has left page 0: the step that was refused is taken.
+    assert_eq!(crate::history::move_at(&job_path, &chapter_id, "redo").unwrap().cursor, 1);
+    assert_eq!(crate::history::move_at(&job_path, &chapter_id, "redo").unwrap().cursor, 2);
+}
+
+/// `list_jobs` names the page a run is on from its `page-started` to its
+/// `page-done`, which is what a window opened on the chapter mid-run holds
+/// edits back by.
+#[test]
+fn list_jobs_names_a_page_from_its_start_to_its_end() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("jobs-pages");
+    let (library, _, chapter_id) = a_chapter(&scratch, 2);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let job_path = entries[0].job_path.clone();
+    let on = || -> Vec<Vec<u32>> {
+        crate::jobs::snapshot().into_iter().filter(|job| job.chapter_id == chapter_id).map(|job| job.pages).collect()
+    };
+
+    let seen = Mutex::new(Vec::new());
+    let cancel = AtomicBool::new(false);
+    a_run_with_a_slot(
+        &chapter_id,
+        &entries,
+        &cancel,
+        |_| seen.lock().unwrap().push(("working", on(), page_run(&job_path, &chapter_id, 0).is_some())),
+        |event| {
+            if matches!(kind_of(event), "page-started" | "page-done") {
+                seen.lock().unwrap().push((kind_of(event), on(), page_run(&job_path, &chapter_id, 0).is_some()));
+            }
+        },
+    );
+
+    assert_eq!(*seen.lock().unwrap(), [
+        ("page-started", vec![vec![0]], true),
+        ("working", vec![vec![0]], true),
+        ("page-done", vec![vec![]], false),
+        ("page-started", vec![vec![1]], false),
+        ("working", vec![vec![1]], false),
+        ("page-done", vec![vec![]], false),
+    ]);
+    assert!(on().is_empty(), "a finished run was still listed");
+}
+
+/// A longstrip page is read and cleaned across its joins, so a run on a
+/// longstrip chapter holds every page of it, on whichever page it is and
+/// before it has started one. A chapter of single pages with a run that is on
+/// no page holds none.
+#[test]
+fn a_run_on_a_longstrip_chapter_holds_every_page_of_it() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("longstrip-held");
+    let library = Library::at(scratch.join("library"));
+    let strip = library
+        .create_project("Webtoon", StripMode::Longstrip, Some(scans(&scratch.join("strip-raws"), 3)), None)
+        .unwrap();
+    let chapter = library.create_chapter(&strip.id, "Ch. 1", None, None).unwrap().created().unwrap();
+    let job_path = library.resolve_chapter(&chapter.id).unwrap();
+    let entries = plan(&library, "chapter", &chapter.id, None).unwrap();
+    let hand = a_hand_patch(&job_path, &chapter.id, &entries[2]);
+    let pages = |job: &Path, chapter_id: &str| -> Vec<bool> {
+        (0..3).map(|page| page_run(job, chapter_id, page).is_some()).collect()
+    };
+    assert_eq!(pages(&job_path, &chapter.id), [false; 3], "a chapter with no run was held");
+
+    let reservation = reserve_run(&chapter.id, &[], RunKind::Detect).unwrap().unwrap();
+    reservation.set_jobs([&job_path]);
+    assert_eq!(pages(&job_path, &chapter.id), [true; 3]);
+    assert_eq!(lock_page(&job_path, &chapter.id, 2).err(), Some(WriteRefused::PageBusy { page_index: 2 }));
+    assert!(matches!(library.set_mask_visible(&hand, false), Err(LibraryError::PageBusy { page_index: 2 })));
+    drop(reservation);
+    assert_eq!(pages(&job_path, &chapter.id), [false; 3], "a run that had ended still held the chapter");
+
+    // Single pages: the run holds what it has started and nothing else.
+    let single = Scratch::new("single-held");
+    let (single_library, _, single_id) = a_chapter(&single, 3);
+    let single_job = single_library.resolve_chapter(&single_id).unwrap();
+    let reservation = reserve_run(&single_id, &[], RunKind::Detect).unwrap().unwrap();
+    reservation.set_jobs([&single_job]);
+    assert_eq!(pages(&single_job, &single_id), [false; 3]);
+    reservation.progress.observe(&page_started_event(&reservation.run_id, &single_id, 1));
+    assert_eq!(pages(&single_job, &single_id), [false, true, false]);
+    // A chapter of another library with the same id is not this run's.
+    assert_eq!(pages(&job_path, &single_id), [false; 3]);
+}
+
+/// A cancel heard while a page's models work writes nothing of that page:
+/// the run stops between its two holds on the job, the page keeps no half of
+/// a result, and it is where a resume picks up. It is nobody's once the run
+/// has said it is finished.
+#[test]
+fn a_cancel_between_a_pages_two_holds_leaves_the_page_for_a_resume() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("cancel-between");
+    let (library, _, chapter_id) = a_chapter(&scratch, 3);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let job_path = entries[0].job_path.clone();
+    let second = library::page_id(&chapter_id, 1);
+
+    let seen = Mutex::new(Vec::new());
+    let held_at_the_end = Mutex::new(None);
+    let cancel = AtomicBool::new(false);
+    let summary = a_run_with_a_slot(
+        &chapter_id,
+        &entries,
+        &cancel,
+        |page_id| {
+            if page_id == second {
+                cancel.store(true, Ordering::SeqCst);
+            }
+        },
+        |event| {
+            seen.lock().unwrap().push((kind_of(event), page_index_of(event)));
+            if kind_of(event) == "run-finished" {
+                *held_at_the_end.lock().unwrap() = Some(page_run(&job_path, &chapter_id, 1).is_some());
+            }
+        },
+    );
+
+    assert_eq!((summary.reason, summary.next_page_index, summary.pages_cleaned), ("cancelled", Some(1), 1));
+    let seen = seen.lock().unwrap();
+    assert!(seen.contains(&("page-started", Some(1))) && !seen.contains(&("page-done", Some(1))),
+        "a page the cancel stopped inside was finished: {seen:?}");
+    assert_eq!(*held_at_the_end.lock().unwrap(), Some(false), "a finished run still held the page it stopped on");
+    let job = Job::open(&job_path).unwrap();
+    assert!(!job.project.patches.iter().any(|row| row.id.starts_with(&second)), "half a page was written");
+    assert!(!job.project.examined.contains(&entries[1].source_idx));
+    assert_eq!(job.project.interrupted_at, Some(1));
+    let left: Vec<usize> = plan(&library, "chapter", &chapter_id, None).unwrap().iter().map(|entry| entry.page_index).collect();
+    assert_eq!(left, [1, 2], "the page the cancel stopped on was not left in the queue");
+}
+
+/// The same cancel on a page whose models found nothing. With no region to
+/// stop at, the page was written as finished, and on a Detect that is the
+/// page's stored detections replaced with none. It is the resume point, as a
+/// page with a region is.
+#[test]
+fn a_cancel_while_a_pages_models_find_nothing_leaves_the_page_unfinished() {
+    struct FindsNothing<'a> {
+        cancel: &'a AtomicBool,
+        at: String,
+    }
+    impl Cleaner for FindsNothing<'_> {
+        fn clean_page(
+            &mut self,
+            page_id: &str,
+            _bytes: &[u8],
+            _ceiling: Engine,
+            _context: &PageContext,
+        ) -> Result<PageOutcome, String> {
+            if page_id == self.at {
+                self.cancel.store(true, Ordering::SeqCst);
+            }
+            Ok(PageOutcome::default())
+        }
+    }
+
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("cancel-nothing");
+    let (library, _, chapter_id) = a_chapter(&scratch, 3);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let job_path = entries[0].job_path.clone();
+    let cancel = AtomicBool::new(false);
+    let mut cleaner = FindsNothing { cancel: &cancel, at: library::page_id(&chapter_id, 1) };
+    let seen = Mutex::new(Vec::new());
+    let summary = execute("backend-run-1", &chapter_id, &entries, &mut cleaner, Engine::Flux, &cancel, &|event| {
+        seen.lock().unwrap().push((kind_of(&event), page_index_of(&event)));
+    });
+
+    assert_eq!((summary.reason, summary.next_page_index, summary.pages_cleaned), ("cancelled", Some(1), 1));
+    let seen = seen.lock().unwrap();
+    assert!(!seen.contains(&("page-done", Some(1))), "a page the cancel stopped inside was finished: {seen:?}");
+    let job = Job::open(&job_path).unwrap();
+    assert!(job.project.examined.contains(&entries[0].source_idx));
+    assert!(!job.project.examined.contains(&entries[1].source_idx), "a page the cancel stopped inside was marked examined");
+    assert_eq!(job.project.interrupted_at, Some(1));
+}
+
+/// The same cancel, heard while the page waits for the job an edit of another
+/// page is holding: the wait ends with the cancel rather than with the edit,
+/// and the page is still the resume point.
+#[test]
+fn a_cancel_ends_a_pages_wait_for_the_job_it_would_write_to() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("cancel-waiting");
+    let (library, _, chapter_id) = a_chapter(&scratch, 2);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let job_path = entries[0].job_path.clone();
+
+    let editor = Mutex::new(None);
+    let cancel = AtomicBool::new(false);
+    let summary = a_run_with_a_slot(
+        &chapter_id,
+        &entries,
+        &cancel,
+        |_| {
+            // An edit of the other page, holding the job across a slow model.
+            let (held, is_held) = std::sync::mpsc::channel();
+            let job_path = job_path.clone();
+            *editor.lock().unwrap() = Some(std::thread::spawn(move || {
+                let _lock = lock_job(&job_path).unwrap();
+                held.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(300));
+            }));
+            is_held.recv().unwrap();
+            cancel.store(true, Ordering::SeqCst);
+        },
+        |_| {},
+    );
+    editor.lock().unwrap().take().unwrap().join().unwrap();
+
+    assert_eq!((summary.reason, summary.next_page_index, summary.pages_cleaned), ("cancelled", Some(0), 0));
+    let job = Job::open(&job_path).unwrap();
+    assert!(job.project.patches.is_empty(), "a cancelled page was written after its wait");
+    assert_eq!(job.project.interrupted_at, Some(0));
+}
+
+/// The results are for the source the models read. A manifest that names
+/// another source for the page by the time they are written, which only a
+/// writer that skips the lock can bring about, gets none of them: the page
+/// fails, as a page that could not be read fails, and the run goes on.
+#[test]
+fn a_page_whose_source_moved_under_its_models_is_failed_and_not_written() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("source-moved");
+    let (library, _, chapter_id) = a_chapter(&scratch, 2);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let job_path = entries[0].job_path.clone();
+    let first = library::page_id(&chapter_id, 0);
+
+    let seen = Mutex::new(Vec::new());
+    let cancel = AtomicBool::new(false);
+    let summary = a_run_with_a_slot(
+        &chapter_id,
+        &entries,
+        &cancel,
+        |page_id| {
+            if page_id == first {
+                // Raw bytes, no lock: the outside writer.
+                let mut raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&job_path).unwrap()).unwrap();
+                raw["sources"][entries[0].source_idx]["sha256"] = serde_json::json!("another-source");
+                std::fs::write(&job_path, serde_json::to_vec_pretty(&raw).unwrap()).unwrap();
+            }
+        },
+        |event| seen.lock().unwrap().push((kind_of(event), page_index_of(event))),
+    );
+
+    assert_eq!((summary.reason, summary.errored, summary.pages_cleaned), ("completed", 1, 1));
+    assert!(seen.lock().unwrap().contains(&("page-done", Some(0))), "a failed page was left marked as cleaning");
+    let job = Job::open(&job_path).unwrap();
+    assert!(!job.project.patches.iter().any(|row| row.id.starts_with(&first)), "results were written to a moved page");
+    assert!(!job.project.examined.contains(&entries[0].source_idx));
+    assert!(job.project.examined.contains(&entries[1].source_idx), "the run did not go on to the next page");
 }
 
 /// And a second writer waits rather than interleaving. Within one process;
@@ -2028,8 +2622,8 @@ fn job_lock_child_process() {
             signal(&signals, "written");
             wait_for_signal(&signals, "parent-read", Duration::from_secs(20));
         }
-        // A process holding the job and doing nothing else with it, as a
-        // headless run holds its chapter from the first page to the last.
+        // A process holding the job and doing nothing else with it, as an
+        // edit holds its chapter across a slow model.
         "holder" => {
             let _lock = lock_job(&path).unwrap();
             signal(&signals, "held");
@@ -2551,8 +3145,11 @@ fn a_slot(run_id: &str, chapter_id: &str, reason: Option<&'static str>) -> Activ
         chapter_id: chapter_id.to_owned(),
         chapters: vec![chapter_id.to_owned()],
         kind: RunKind::Clean,
+        admission: RunAdmission::Ordinary,
+        area_page_index: None,
         progress: Arc::new(RunProgress::default()),
         cancel: Arc::new(AtomicBool::new(false)),
+        analysis_cancel: Arc::new(sam_ts::Cancellation::default()),
         finished: Arc::new((Mutex::new(true), Condvar::new())),
         outcome: Arc::new(Mutex::new(reason)),
     }
@@ -2567,6 +3164,7 @@ fn a_cancel_reaches_only_the_run_it_names() {
     let first = a_slot("backend-run-71", "chapter-a", None);
     let second = a_slot("backend-run-72", "chapter-b", None);
     let (first_flag, second_flag) = (Arc::clone(&first.cancel), Arc::clone(&second.cancel));
+    let (first_analysis, second_analysis) = (first.analysis_cancel.clone(), second.analysis_cancel.clone());
     *active().lock().unwrap() = vec![first, second];
 
     assert_eq!(request_cancel(None).unwrap(), None, "a cancel without an id picked one of two runs");
@@ -2574,6 +3172,8 @@ fn a_cancel_reaches_only_the_run_it_names() {
 
     assert_eq!(request_cancel(Some("backend-run-72".into())).unwrap(), Some("backend-run-72".to_owned()));
     assert!(second_flag.load(Ordering::SeqCst));
+    assert!(second_analysis.check().is_err(), "native SAM/RT inference was not cancelled");
+    first_analysis.check().unwrap();
     assert!(!first_flag.load(Ordering::SeqCst), "the other run was cancelled too");
     assert!(is_running("backend-run-71"));
     active().lock().unwrap().clear();
@@ -2601,7 +3201,7 @@ fn a_run_id_cannot_collide_with_the_mocks() {
 #[test]
 fn every_command_is_async_and_so_never_runs_on_the_invoke_handlers_thread() {
     #[allow(clippy::type_complexity)]
-    fn check<A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, R: std::future::Future>(_: fn(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T) -> R) {}
+    fn check<A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, R: std::future::Future>(_: fn(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U) -> R) {}
     fn check1<A, R: std::future::Future>(_: fn(A) -> R) {}
     fn check3<A, B, C, R: std::future::Future>(_: fn(A, B, C) -> R) {}
     check(run_clean);
@@ -4954,7 +5554,7 @@ mod cloud_stages {
     }
 
     /// Detect with its detection in the cloud stores the regions as the
-    /// cloud's, sends every page once and releases the GPU once; a Clean after
+    /// cloud's and sends every page once; a Clean after
     /// it sends nothing, and an Auto over the same pages would send none.
     #[test]
     fn a_cloud_detect_run_stores_cloud_detections_and_the_clean_sends_nothing() {
@@ -4981,7 +5581,6 @@ mod cloud_stages {
         drop(pipeline);
         assert_eq!((summary.regions_detected, summary.errored), (4, 0));
         assert_eq!(*gateway.seen.lock().unwrap(), shas, "each page once, in the run's order");
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 1);
         let job = Job::open(&entries[0].job_path).unwrap();
         assert!(job.project.detections.iter().all(|row| row.detector == "cloud"));
         assert!(job.project.examined.is_empty());
@@ -4998,7 +5597,6 @@ mod cloud_stages {
             &recorder.cancel, &recorder.sink());
         assert_eq!((summary.regions_cleaned, summary.errored), (2, 0));
         assert_eq!(gateway.seen.lock().unwrap().len(), sent, "a clean sent nothing");
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 1);
     }
 
     /// A cloud Detect or Auto over a long strip: each page is sent once, in
@@ -5083,7 +5681,7 @@ mod cloud_stages {
 
     /// Detection runs ahead, and a page it failed on is reported at that page,
     /// after the pages before it were cleaned, and the run goes on past it.
-    /// Every page is sent once, and the GPU is released once, at the end.
+    /// Every page is sent once; completion keeps the analysis idle window.
     #[test]
     fn a_prefetched_failure_is_reported_at_its_page_and_the_run_goes_on() {
         let _exclusive = exclusively();
@@ -5093,7 +5691,6 @@ mod cloud_stages {
             serde_json::json!({ "page": 3, "code": "cloud_analysis_failed" }))]);
         assert_eq!((summary.pages_cleaned, summary.errored, summary.reason), (3, 1, "completed"));
         assert_eq!(*gateway.seen.lock().unwrap(), shas, "each page once, in the run's order");
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 1);
     }
 
     /// A failure that withdraws the run's authority ends the run at its page
@@ -5110,7 +5707,6 @@ mod cloud_stages {
         ]);
         assert_eq!((summary.pages_cleaned, summary.errored), (1, 1));
         assert_eq!(*gateway.seen.lock().unwrap(), shas[..2].to_vec());
-        assert_eq!(gateway.releases.load(Ordering::SeqCst), 1);
     }
 }
 
@@ -5576,6 +6172,68 @@ fn an_area_detect_adds_what_it_finds_there_and_keeps_the_rest() {
     assert!(job.sidecar().join(&first[0].mask_ref).exists());
 }
 
+#[test]
+fn overlapping_selection_runs_merge_results_from_fresh_manifests() {
+    struct FindsArea {
+        bbox: Rect,
+        entered: std::sync::mpsc::Sender<()>,
+        resume: std::sync::mpsc::Receiver<()>,
+    }
+    impl Cleaner for FindsArea {
+        fn clean_page(&mut self, _: &str, _: &[u8], _: Engine, _: &PageContext) -> Result<PageOutcome, String> {
+            unreachable!()
+        }
+        fn area_only(&self) -> bool { true }
+        fn detect_page(&mut self, _: &str, _: &[u8], _: Engine, _: &PageContext) -> Result<PageOutcome, String> {
+            self.entered.send(()).unwrap();
+            self.resume.recv_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
+            Ok(PageOutcome { regions: vec![RegionOutcome::Detected(Box::new(LoadedDetection {
+                record: cleaner_core::project::DetectedRegion {
+                    id: String::new(), source_idx: 0, bbox: self.bbox, mask_ref: String::new(), inside: false,
+                    balloon_color: None, script: None, pick: "fill".into(), detector: "cloud".into(),
+                    created: 0, mask_sha256: String::new(), order: 0, review_state: None, fit: None, group: None,
+                    padding_from_seed: false, padding_px: 0,
+                }, mask: Mask::filled(self.bbox), ink: Mask::filled(self.bbox), evidence: None, base: None,
+            }))], ..PageOutcome::default() })
+        }
+    }
+    let scratch = Scratch::new("concurrent-selection-merge");
+    let (library, _, chapter_id) = a_chapter(&scratch, 1);
+    let entries = plan_cloud_detection(&library, "page", &chapter_id, Some(0)).unwrap();
+    let boxes = [Rect::new(20, 20, 4, 4), Rect::new(40, 40, 4, 4)];
+    let (entered, ready) = std::sync::mpsc::channel();
+    let (resume_a, continue_a) = std::sync::mpsc::channel();
+    let (resume_b, continue_b) = std::sync::mpsc::channel();
+    std::thread::scope(|threads| {
+        let spawn = |id: &'static str, bbox, resume| {
+            let entered = entered.clone();
+            let entries = &entries;
+            let chapter_id = &chapter_id;
+            threads.spawn(move || {
+                let recorder = Recorder::new();
+                let summary = execute_as(RunMode::Detect, id, chapter_id, entries,
+                    &mut FindsArea { bbox, entered, resume }, Engine::Fill, &recorder.cancel, &recorder.sink());
+                summary
+            })
+        };
+        let a = spawn("selection-a", boxes[0], continue_a);
+        let b = spawn("selection-b", boxes[1], continue_b);
+        // Both have read the same starting manifest and reached inference
+        // before either may commit. The later commit must keep the first.
+        for _ in 0..2 { ready.recv_timeout(Duration::from_secs(3)).unwrap(); }
+        resume_b.send(()).unwrap();
+        assert_eq!(b.join().unwrap().regions_detected, 1);
+        resume_a.send(()).unwrap();
+        assert_eq!(a.join().unwrap().regions_detected, 1);
+    });
+    let job = only_job(&library, &chapter_id);
+    assert_eq!(job.project.detections.len(), 2);
+    for bbox in boxes {
+        let record = job.project.detections.iter().find(|record| record.bbox == bbox).unwrap();
+        assert!(job.load_detection(&record.id).unwrap().is_some());
+    }
+}
+
 /// An area is the seam's `{x, y, w, h}` in percent of the page, refused when
 /// it is not on the page, and a run held to one is resumed held to it: as a
 /// page Detect it would replace every detection the page holds.
@@ -5611,6 +6269,39 @@ fn an_area_is_validated_and_captured_for_resume() {
         &serde_json::json!({}), None, &pipeline, None, "page", Some(0), RunMode::Detect,
     );
     assert_eq!(captured_run_policy(&snapshot).unwrap().area, None);
+}
+
+#[test]
+fn concurrent_area_checkpoint_keeps_its_own_policy_and_survives_other_completions() {
+    struct AreaPolicy(serde_json::Value);
+    impl Cleaner for AreaPolicy {
+        fn clean_page(&mut self, _: &str, _: &[u8], _: Engine, _: &PageContext) -> Result<PageOutcome, String> {
+            unreachable!()
+        }
+        fn area_only(&self) -> bool { true }
+        fn area_resume_settings(&self) -> Option<&serde_json::Value> { Some(&self.0) }
+    }
+    let scratch = Scratch::new("concurrent-area-checkpoint");
+    let (library, _, chapter_id) = a_chapter(&scratch, 2);
+    let path = library.resolve_chapter(&chapter_id).unwrap();
+    let a = AreaPolicy(serde_json::json!({
+        "runMode": "detect", "runScope": "page", "runPageIndex": 0,
+        "runArea": { "x": 10, "y": 10, "w": 5, "h": 5 }, "runMaskPadding": 2,
+    }));
+    let b = AreaPolicy(serde_json::json!({
+        "runMode": "detect", "runScope": "page", "runPageIndex": 1,
+        "runArea": { "x": 50, "y": 50, "w": 5, "h": 5 }, "runMaskPadding": 8,
+    }));
+    close_for(&path, Some(0), &a);
+    close_for(&path, None, &b);
+    let job = Job::open(&path).unwrap();
+    assert_eq!(job.project.settings, a.0);
+    assert_eq!(job.project.interrupted_at, Some(0));
+    close_for(&path, Some(1), &b);
+    close_for(&path, None, &a);
+    let job = Job::open(&path).unwrap();
+    assert_eq!(job.project.settings, b.0);
+    assert_eq!(job.project.interrupted_at, Some(1));
 }
 
 #[test]
@@ -5866,6 +6557,424 @@ fn an_auto_pass_leaves_regions_inside_the_pages_existing_patches_alone() {
     assert!(ids.contains(&format!("{first_page}-d0").as_str()));
     assert!(!ids.contains(&format!("{first_page}-r0").as_str()), "cleaned twice: {ids:?}");
     assert!(ids.contains(&format!("{}-r0", library::page_id(&chapter_id, 1)).as_str()));
+}
+
+/* ------------------------------------------------------------------ */
+/* Clean solid bubbles only                                            */
+/* ------------------------------------------------------------------ */
+
+/// The run's notices a closing word is one of, in order, with their params.
+fn run_notices(recorder: &Recorder) -> Vec<(String, serde_json::Value)> {
+    recorder.events().into_iter().filter_map(|event| match event {
+        Event::Notice { key, params, .. } if key.starts_with("notice.run.") || key.starts_with("notice.chapter.") =>
+            Some((key, params)),
+        _ => None,
+    }).collect()
+}
+
+/// What a run left on a job that two runs over two libraries can be compared
+/// by: every detection, patch and untouched row without its page's id or the
+/// time it was made, and the lists and counters a page's state is read from.
+fn left_on(job: &Job) -> serde_json::Value {
+    let numbered = |id: &str| id.rsplit('-').next().unwrap_or_default().to_owned();
+    let project = &job.project;
+    serde_json::json!({
+        "detections": project.detections.iter().map(|row| serde_json::json!({
+            "id": numbered(&row.id), "source": row.source_idx, "bbox": [row.bbox.x, row.bbox.y, row.bbox.w, row.bbox.h],
+            "inside": row.inside, "balloon": row.balloon_color, "script": row.script, "pick": row.pick,
+            "detector": row.detector, "mask": row.mask_sha256, "order": row.order, "review": row.review_state,
+            "fit": row.fit, "padding": row.padding_px, "fromSeed": row.padding_from_seed,
+        })).collect::<Vec<_>>(),
+        "patches": project.patches.iter().map(|record| {
+            let mut params = record.provenance.params_snapshot.clone();
+            params.as_object_mut().unwrap().remove("elapsed_ms");
+            serde_json::json!({
+                "id": numbered(&record.id), "source": record.source_idx,
+                "bbox": [record.bbox.x, record.bbox.y, record.bbox.w, record.bbox.h],
+                "engine": record.engine.rung_key(), "order": record.order, "review": record.review_state,
+                "mask": record.provenance.mask_sha256, "provider": record.provenance.execution_provider,
+                "params": params,
+            })
+        }).collect::<Vec<_>>(),
+        "untouched": project.regions_untouched.iter()
+            .map(|row| serde_json::json!([row.source_idx, [row.bbox.x, row.bbox.y, row.bbox.w, row.bbox.h], row.reason]))
+            .collect::<Vec<_>>(),
+        "examined": project.examined,
+        "detected": project.detected,
+        "declined": project.counters.declined,
+        "gateDropped": project.counters.gate_dropped,
+    })
+}
+
+/// With the option on, a Clean cleans the bubble's text and leaves the text
+/// outside it stored exactly as it was: the same record and the same mask, no
+/// untouched row and no decline counted, and no model asked for. The page
+/// still has work on it, so it is not examined and reads as detected, and a
+/// Clean without the option takes what was left.
+#[test]
+fn solid_bubbles_only_cleans_the_bubble_and_leaves_the_rest_detected() {
+    let scratch = Scratch::new("solid-stored");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 1);
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Detect).unwrap();
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(&scratch);
+    execute_as(RunMode::Detect, "run-1", &chapter_id, &entries, &mut detector, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    let before = only_job(&library, &chapter_id);
+    let inside = before.project.detections.iter().find(|row| row.inside).unwrap().clone();
+    let outside = before.project.detections.iter().find(|row| !row.inside).unwrap().clone();
+    let stored = before.load_detection(&outside.id).unwrap().unwrap();
+
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Clean).unwrap();
+    let recorder = Recorder::new();
+    let mut cleaner = cleaning_only_pipeline(&scratch).with_solid_bubbles_only(true);
+    let summary = execute_as(RunMode::Clean, "run-2", &chapter_id, &entries, &mut cleaner, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.errored), ("completed", 1, 0));
+    assert!(matches!(cleaner.rung2.state, Session::Unopened), "the option asked for the inpainter");
+
+    let job = only_job(&library, &chapter_id);
+    assert_eq!(job.project.patches.len(), 1);
+    assert_eq!((job.project.patches[0].id.as_str(), job.project.patches[0].engine), (inside.id.as_str(), Engine::Fill));
+    assert_eq!(job.project.detections, vec![outside.clone()], "the text outside the bubble is not as it was stored");
+    let kept = job.load_detection(&outside.id).unwrap().unwrap();
+    assert_eq!((kept.mask, kept.ink), (stored.mask, stored.ink));
+    assert!(job.project.regions_untouched.is_empty(), "{:?}", job.project.regions_untouched);
+    assert_eq!(job.project.counters.declined, before.project.counters.declined);
+    assert_eq!(job.project.counters.gate_dropped, before.project.counters.gate_dropped);
+    assert!(job.project.examined.is_empty(), "a page with a detection left is not finished");
+    let status = recorder.events().into_iter().rev().find_map(|event| match event {
+        Event::PageDone { page, .. } => Some(page.status),
+        _ => None,
+    });
+    assert_eq!(status, Some("detected"));
+
+    // What was left is still a clean's work. Without the option this machine,
+    // which has no inpainter, declines it, as it declines it in every test
+    // above.
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Clean).unwrap();
+    assert_eq!(entries.len(), 1);
+    let recorder = Recorder::new();
+    let mut cleaner = cleaning_only_pipeline(&scratch);
+    execute_as(RunMode::Clean, "run-3", &chapter_id, &entries, &mut cleaner, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    let job = only_job(&library, &chapter_id);
+    assert!(job.project.detections.is_empty());
+    assert_eq!((job.project.regions_untouched.len(), job.project.counters.declined), (1, 1));
+    assert_eq!(job.project.examined, vec![0]);
+}
+
+/// Detect & clean with the option on leaves the manifest that Detect and then
+/// Clean with it leave, id for id: the page is detected and stored first and
+/// cleaned from what was stored, so there is one rule and not two. Each page
+/// is announced once and finished once, with its cleaned region between.
+#[test]
+fn solid_bubbles_only_in_one_run_leaves_what_detect_then_clean_leaves() {
+    let one = Scratch::new("solid-one-run");
+    let (one_library, one_chapter) = a_lettered_chapter(&one, 2);
+    let entries = plan(&one_library, "chapter", &one_chapter, None).unwrap();
+    let recorder = Recorder::new();
+    let mut pipeline = lettered_pipeline(&one).with_mask_padding(4).with_solid_bubbles_only(true);
+    let auto = execute_as(RunMode::Auto, "run-1", &one_chapter, &entries, &mut pipeline, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!((auto.reason, auto.regions_cleaned, auto.regions_detected, auto.pages_cleaned, auto.errored),
+        ("completed", 2, 0, 2, 0));
+    let kinds: Vec<&str> = recorder.kinds().into_iter().filter(|kind| *kind != "notice").collect();
+    assert_eq!(kinds, ["page-started", "region-done", "page-done", "page-started", "region-done", "page-done",
+        "run-finished"]);
+    assert!(matches!(pipeline.rung2.state, Session::Unopened), "the option asked for the inpainter");
+
+    let two = Scratch::new("solid-two-step");
+    let (two_library, two_chapter) = a_lettered_chapter(&two, 2);
+    let entries = plan_for(&two_library, "chapter", &two_chapter, None, RunMode::Detect).unwrap();
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(&two).with_mask_padding(4);
+    execute_as(RunMode::Detect, "run-2", &two_chapter, &entries, &mut detector, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    let entries = plan_for(&two_library, "chapter", &two_chapter, None, RunMode::Clean).unwrap();
+    let recorder = Recorder::new();
+    let mut cleaner = cleaning_only_pipeline(&two).with_solid_bubbles_only(true);
+    let cleaned = execute_as(RunMode::Clean, "run-3", &two_chapter, &entries, &mut cleaner, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!((cleaned.regions_cleaned, cleaned.errored), (2, 0));
+
+    let one_job = only_job(&one_library, &one_chapter);
+    let two_job = only_job(&two_library, &two_chapter);
+    assert_eq!(left_on(&one_job), left_on(&two_job));
+    // And what that is: each page's bubble cleaned, each page's outside text
+    // a detection, nothing held or declined, no page finished.
+    assert_eq!((one_job.project.patches.len(), one_job.project.detections.len()), (2, 2));
+    assert!(one_job.project.detections.iter().all(|row| !row.inside));
+    assert!(one_job.project.patches.iter().all(|record| record.id.contains("-d") && record.engine == Engine::Fill));
+    assert!(one_job.project.regions_untouched.is_empty());
+    assert!(one_job.project.examined.is_empty());
+    assert_eq!(one_job.project.detected, vec![0, 1]);
+    // A page with a detection left is still Clean's work, and Auto's, and
+    // Auto would send it to no detector.
+    let again = plan(&one_library, "chapter", &one_chapter, None).unwrap();
+    assert_eq!(again.len(), 2);
+    assert!(pages_to_detect(&again, RunMode::Auto).is_empty());
+}
+
+/// What rung 0 does not settle is left stored and nothing above it is asked:
+/// a fill the quality metric refuses, a solid colour that is not the bubble's
+/// paper, and text outside a balloon on paper a fill would pass on. Without
+/// the option the first is escalated, the second painted and the third
+/// filled. A bubble on flat paper is cleaned either way, its route measured
+/// from the stored mask where no fit was stored.
+#[test]
+fn solid_bubbles_only_keeps_what_rung_zero_does_not_settle_and_asks_no_model() {
+    // Lettering in a dark frame three pixels wide: the fill is measured from
+    // the frame, and the paper beyond the frame says it is not paper.
+    let mut page = gray_test_page(320, 140);
+    for y in 57..79usize {
+        for x in 37..59usize {
+            page.data[y * 320 + x] = 30;
+        }
+    }
+    let bytes = encode(&page, Format::Png).unwrap();
+    let strip = Strip::of_sizes(&[(page.width, page.height)]);
+    let survey = cleaner_core::strip::survey(&strip, |_| None);
+    let context = PageContext {
+        strip: &strip, joins: &survey.joins, segments: &survey.segments, placement: 0, sources: &[],
+    };
+    let filled = Some(DetectionFit { route: Route::Fill, thickness: 0, best_deviation: 0.0, scale: 1.0 });
+    let stored = |id: &str, x: i64, inside: bool, pick: &str, balloon_color: Option<[u8; 3]>, fit: Option<DetectionFit>| {
+        let bbox = Rect::new(x, 60, 16, 16);
+        LoadedDetection {
+            record: DetectedRegion {
+                id: id.into(), source_idx: 0, bbox, mask_ref: String::new(), inside, balloon_color, script: None,
+                pick: pick.into(), detector: "local".into(), created: 0, mask_sha256: String::new(), order: 0,
+                review_state: None, fit, group: None, padding_from_seed: false, padding_px: 0,
+            },
+            mask: Mask::filled(bbox),
+            ink: Mask::filled(bbox),
+            evidence: None,
+            base: None,
+        }
+    };
+    let detections = [
+        stored("framed", 40, true, "fill", Some([245; 3]), filled),
+        stored("black", 110, true, "solid", Some([0; 3]), filled),
+        stored("outside", 180, false, "fill", None, filled),
+        stored("flat", 250, true, "lama", Some([245; 3]), None),
+    ];
+    let answered = |outcome: &DetectionsOutcome| outcome.regions.iter().map(|(id, region)| (id.clone(), match region {
+        RegionOutcome::Cleaned(patch, _) => patch.provenance.engine.rung_key().to_owned(),
+        RegionOutcome::Untouched { reason, .. } => reason.clone(),
+        other => one_line(other),
+    })).collect::<Vec<_>>();
+    let pipeline = || Pipeline::open_for_cleaning(Path::new("no-weights-live-here"), Preference::CpuOnly, None);
+
+    // Without the option, under the fill alone: the metric is what refuses
+    // the framed fill.
+    let mut plain = pipeline();
+    let outcome = plain.clean_detections("c1-p001", &bytes, Engine::Fill, &context, &detections).unwrap();
+    assert_eq!(answered(&outcome), [
+        ("framed".to_owned(), "decline.reason.histogram".to_owned()),
+        ("black".to_owned(), Engine::Fill.rung_key().to_owned()),
+        ("outside".to_owned(), Engine::Fill.rung_key().to_owned()),
+        ("flat".to_owned(), Engine::Fill.rung_key().to_owned()),
+    ]);
+    // Without it under the run's own ceiling the refused fill goes up the
+    // ladder, which here has nothing on it.
+    let mut plain = pipeline();
+    plain.clean_detections("c1-p001", &bytes, Engine::Lama, &context, &detections[..1]).unwrap();
+    assert!(matches!(plain.rung2.state, Session::Unavailable), "the refused fill was not escalated");
+
+    let mut only = pipeline().with_solid_bubbles_only(true);
+    let outcome = only.clean_detections("c1-p001", &bytes, Engine::Lama, &context, &detections).unwrap();
+    assert_eq!(answered(&outcome), [("flat".to_owned(), Engine::Fill.rung_key().to_owned())]);
+    assert!(matches!(only.rung2.state, Session::Unopened), "the option asked for the inpainter");
+}
+
+/// A solid colour that is not the bubble's paper, through the walk: with the
+/// option on the detection stays, with its id, and nothing is declined.
+#[test]
+fn solid_bubbles_only_does_not_paint_a_solid_colour_the_metric_refuses() {
+    let scratch = Scratch::new("solid-colour");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 1);
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Detect).unwrap();
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(&scratch);
+    execute_as(RunMode::Detect, "run-1", &chapter_id, &entries, &mut detector, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    let mut job = only_job(&library, &chapter_id);
+    // The balloon's measured colour is what a solid pick paints with.
+    job.project.detections.iter_mut().find(|row| row.inside).unwrap().balloon_color = Some([0; 3]);
+    job.flush().unwrap();
+    let before = job.project.detections.clone();
+    drop(job);
+
+    let solid = Picks { bubble: EnginePick::Solid, outside: EnginePick::Lama };
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Clean).unwrap();
+    let recorder = Recorder::new();
+    let mut cleaner = cleaning_only_pipeline(&scratch).with_picks(solid).with_solid_bubbles_only(true);
+    let summary = execute_as(RunMode::Clean, "run-2", &chapter_id, &entries, &mut cleaner, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.errored), ("completed", 0, 0));
+    let job = only_job(&library, &chapter_id);
+    assert_eq!(job.project.detections, before);
+    assert!(job.project.patches.is_empty() && job.project.regions_untouched.is_empty());
+    assert_eq!(job.project.counters.declined, 0);
+    assert!(job.project.examined.is_empty());
+
+    // Without the option the colour is the user's and it is painted.
+    let recorder = Recorder::new();
+    let mut cleaner = cleaning_only_pipeline(&scratch).with_picks(solid);
+    let summary = execute_as(RunMode::Clean, "run-3", &chapter_id, &entries, &mut cleaner, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!(summary.regions_cleaned, 1);
+}
+
+/// The All text policy cleans text outside a balloon and the option does not:
+/// both on, and both kinds of text on the fill, the outside text is stored
+/// and left.
+#[test]
+fn solid_bubbles_only_under_all_text_leaves_outside_text_detected() {
+    let scratch = Scratch::new("solid-all-text");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 1);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let recorder = Recorder::new();
+    // As `start_with_models` builds an All text run.
+    let mut pipeline = lettered_pipeline(&scratch)
+        .with_picks(Picks { bubble: EnginePick::Fill, outside: EnginePick::Fill })
+        .with_outside(OutsideText::Clean)
+        .with_selection(RunSelection::all_text(None))
+        .with_solid_bubbles_only(true);
+    pipeline.all_text = true;
+    let summary = execute_as(RunMode::Auto, "run-1", &chapter_id, &entries, &mut pipeline, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.errored), ("completed", 1, 0));
+    let job = only_job(&library, &chapter_id);
+    assert_eq!((job.project.patches.len(), job.project.detections.len()), (1, 1));
+    assert!(!job.project.detections[0].inside);
+    assert!(job.project.regions_untouched.is_empty(), "{:?}", job.project.regions_untouched);
+    assert!(job.project.examined.is_empty());
+}
+
+/// A cancel during a solid-bubbles run keeps what was cleaned, leaves the
+/// page it finished with its detection, and leaves the pages it did not
+/// reach unlooked at. The next run with the option finishes the chapter and
+/// ends where an uninterrupted one does.
+#[test]
+fn a_cancelled_solid_bubbles_run_leaves_the_rest_for_the_next_one() {
+    let scratch = Scratch::new("solid-cancel");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 2);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let recorder = Recorder::tripping_on("region-done");
+    let mut pipeline = lettered_pipeline(&scratch).with_solid_bubbles_only(true);
+    let summary = execute_as(RunMode::Auto, "run-1", &chapter_id, &entries, &mut pipeline, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.next_page_index), ("cancelled", 1, Some(1)));
+    let job = only_job(&library, &chapter_id);
+    assert_eq!((job.project.patches.len(), job.project.detections.len()), (1, 1));
+    assert!(job.project.regions_untouched.is_empty() && job.project.examined.is_empty());
+    assert_eq!((job.project.detected.clone(), job.project.interrupted_at), (vec![0], Some(1)));
+
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    assert_eq!(entries.len(), 2, "the page with a detection left, and the page not reached");
+    let recorder = Recorder::new();
+    let mut pipeline = lettered_pipeline(&scratch).with_solid_bubbles_only(true);
+    let summary = execute_as(RunMode::Auto, "run-2", &chapter_id, &entries, &mut pipeline, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.errored), ("completed", 1, 0));
+    let resumed = only_job(&library, &chapter_id);
+
+    let straight = Scratch::new("solid-uninterrupted");
+    let (straight_library, straight_chapter) = a_lettered_chapter(&straight, 2);
+    let entries = plan(&straight_library, "chapter", &straight_chapter, None).unwrap();
+    let recorder = Recorder::new();
+    let mut pipeline = lettered_pipeline(&straight).with_solid_bubbles_only(true);
+    execute_as(RunMode::Auto, "run-3", &straight_chapter, &entries, &mut pipeline, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!(left_on(&resumed), left_on(&only_job(&straight_library, &straight_chapter)));
+
+    // A cancel inside the page's detection stores nothing, as a cancelled
+    // Detect stores nothing.
+    let early = Scratch::new("solid-cancel-early");
+    let (early_library, early_chapter) = a_lettered_chapter(&early, 1);
+    let entries = plan(&early_library, "chapter", &early_chapter, None).unwrap();
+    let recorder = Recorder::tripping_on("page-started");
+    let mut pipeline = lettered_pipeline(&early).with_solid_bubbles_only(true);
+    let summary = execute_as(RunMode::Auto, "run-4", &early_chapter, &entries, &mut pipeline, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!((summary.reason, summary.next_page_index), ("cancelled", Some(0)));
+    let job = only_job(&early_library, &early_chapter);
+    assert!(job.project.detections.is_empty() && job.project.patches.is_empty() && job.project.detected.is_empty());
+}
+
+/// The option is a property of the run: captured with it, absent from a
+/// snapshot written before it, and never inherited from the settings a
+/// snapshot is laid over.
+#[test]
+fn solid_bubbles_only_is_captured_with_the_run_and_resumed() {
+    let (_scratch, pipeline) = snapshot_pipeline("solid-snapshot");
+    let off = run_settings_snapshot(
+        &serde_json::json!({ "runSolidBubblesOnly": true }), None, &pipeline, None, "chapter", None, RunMode::Auto,
+    );
+    assert_eq!(off["runSolidBubblesOnly"], false, "an older run's option outlived it");
+    assert!(!captured_run_policy(&off).unwrap().solid_bubbles_only);
+
+    let pipeline = pipeline.with_solid_bubbles_only(true);
+    let on = run_settings_snapshot(
+        &serde_json::json!({}), None, &pipeline, None, "chapter", None, RunMode::Clean,
+    );
+    assert_eq!(on["runSolidBubblesOnly"], true);
+    let resumed = captured_run_policy(&on).unwrap();
+    assert!(resumed.solid_bubbles_only);
+    assert_eq!(resumed.mode, RunMode::Clean);
+
+    assert!(!captured_run_policy(&serde_json::json!({})).unwrap().solid_bubbles_only);
+    assert!(!captured_run_policy(&serde_json::json!({ "runSolidBubblesOnly": "yes" })).unwrap().solid_bubbles_only);
+}
+
+/// A run with the option on ends on what it cleaned and what it left, never
+/// on "no text found": a run that cleaned nothing left text on purpose.
+/// Without the option the closing word is the one it always was.
+#[test]
+fn a_solid_bubbles_run_ends_on_what_it_cleaned_and_what_it_kept() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("solid-notice");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 2);
+    let closing = |pipeline: &mut Pipeline| {
+        let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+        let recorder = Recorder::new();
+        a_worker(&chapter_id, &recorder).run(&entries, pipeline, Engine::Lama, &recorder.sink());
+        run_notices(&recorder)
+    };
+    let solid_only = |cleaned: u32, kept: u32| vec![
+        ("notice.run.solidOnly".to_owned(), serde_json::json!({ "cleaned": cleaned, "kept": kept })),
+    ];
+    assert_eq!(closing(&mut lettered_pipeline(&scratch).with_solid_bubbles_only(true)), solid_only(2, 2));
+    // The same chapter again: nothing left for the option to clean.
+    assert_eq!(closing(&mut cleaning_only_pipeline(&scratch).with_solid_bubbles_only(true)), solid_only(0, 2));
+    // Without the option, on a machine with no inpainter: both declined.
+    assert_eq!(closing(&mut cleaning_only_pipeline(&scratch)), vec![
+        ("notice.chapter.emptyResult".to_owned(), serde_json::json!({ "regions": 0, "pages": 2 })),
+    ]);
+}
+
+/// The option changes the success notice and no other: a cancelled run says
+/// cancelled, failed pages are still named last, and a run where every page
+/// failed says only that.
+#[test]
+fn the_solid_bubbles_notice_stands_in_for_the_success_notice_alone() {
+    let summary = |reason: &'static str, regions_cleaned: u32, errored: u32| Summary {
+        reason, pages_queued: 3, pages_cleaned: 3 - errored, regions_cleaned, next_page_index: None, errored,
+        regions_detected: 0,
+    };
+    let keys = |summary: &Summary, kept: Option<u32>| {
+        let recorder = Recorder::new();
+        report(summary, kept, &recorder.sink());
+        run_notices(&recorder).into_iter().map(|(key, _)| key).collect::<Vec<_>>()
+    };
+    assert_eq!(keys(&summary("cancelled", 2, 0), Some(4)), ["notice.run.cancelled"]);
+    assert_eq!(keys(&summary("completed", 0, 0), Some(0)), ["notice.run.solidOnly"]);
+    assert_eq!(keys(&summary("completed", 0, 1), Some(4)), ["notice.run.solidOnly", "notice.run.pagesFailed"]);
+    assert_eq!(keys(&summary("completed", 0, 3), Some(0)), ["notice.run.pagesFailed"]);
+    assert_eq!(keys(&summary("completed", 2, 0), None), ["notice.run.finished"]);
+    assert_eq!(keys(&summary("completed", 0, 0), None), ["notice.chapter.emptyResult"]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -6815,5 +7924,81 @@ fn native_fill_refuses_associated_alpha_and_unsupported_tiff_before_rendering() 
             Err(error)=>error,Ok(_)=>panic!("unsafe source-derived fill reached rendering")
         };
         assert!(error.contains(if associated {"associated-alpha"} else {"TIFF"}),"{error}");
+    }
+}
+
+#[test]
+#[ignore = "loads installed CTD, Ogkalu Full and 1.3 GB SAM graphs; set SAM_TS_RUNTIME and MANGA_CLEANER_MODELS"]
+fn installed_local_detection_pipeline_runs_full_page_and_selection() {
+    let runtime = std::env::var("SAM_TS_RUNTIME").expect("SAM_TS_RUNTIME is required");
+    cleaner_core::runtime::load(Path::new(&runtime)).unwrap();
+    let models = PathBuf::from(std::env::var("MANGA_CLEANER_MODELS").expect("MANGA_CLEANER_MODELS is required"));
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../spikes/sam-ts-l/fixtures/synthetic_page.png");
+    let bytes = std::fs::read(source).unwrap();
+    let page = cleaner_core::image::decode(&bytes).unwrap();
+    let strip = Strip::of_sizes(&[(page.width, page.height)]);
+    let survey = cleaner_core::strip::survey(&strip, |_| None);
+    let context = PageContext { strip: &strip, joins: &survey.joins, segments: &survey.segments, placement: 0, sources: &[] };
+    let chosen = DetectorModels { ctd: true, rt_small: false, rt_full: true, sam: true };
+    let settings = serde_json::json!({"modelAccelerators": {
+        "ctd": "cpu", "rtFull": "cpu", "samTs": std::env::var("SAM_TS_BACKEND").unwrap_or("cpu".into()), "hayai": "cpu"
+    }});
+    let mut pipeline = Pipeline::open_selected(&models, Preference::CpuOnly, chosen, true,
+        Some(std::env::temp_dir().join("mc-local-detection-smoke"))).unwrap()
+        .with_model_preferences(&settings).unwrap()
+        .with_selection(RunSelection::all_text(Some(false)));
+    let started = std::time::Instant::now();
+    let whole = pipeline.detect_page("local-smoke-page", &bytes, Engine::Fill, &context).unwrap();
+    assert!(!whole.regions.is_empty(), "the fixture yielded no regions");
+    assert!(pipeline.full_rt.is_some() && pipeline.sam.is_some());
+    assert!(pipeline.model_uses().iter().all(|use_| use_.execution == cleaner_core::text_groups::Execution::Local));
+    eprintln!("local CTD + Ogkalu Full + SAM {:?}: full page {} regions in {:?}",
+        pipeline.sam.as_ref().unwrap().backend(), whole.regions.len(), started.elapsed());
+    pipeline = pipeline.with_area(Some(DetectArea { x: 0.0, y: 0.0, w: 75.0, h: 75.0 }));
+    let started = std::time::Instant::now();
+    let selected = pipeline.detect_page("local-smoke-page", &bytes, Engine::Fill, &context).unwrap();
+    assert!(!selected.regions.is_empty(), "selection yielded no regions");
+    assert!(pipeline.area_only());
+    assert!(selected.regions.iter().all(|row| !matches!(row, RegionOutcome::Cleaned(..))));
+    eprintln!("local selection: {} regions in {:?}", selected.regions.len(), started.elapsed());
+
+    let scratch = Scratch::new("installed-local-detection-smoke");
+    let raws = scratch.join("raws");
+    std::fs::create_dir_all(&raws).unwrap();
+    std::fs::write(raws.join("001.png"), &bytes).unwrap();
+    let library = Library::at(scratch.join("library"));
+    let project = library.create_project("Local detection smoke", StripMode::Single, Some(raws), None).unwrap();
+    let chapter = library.create_chapter(&project.id, "Synthetic", None, None).unwrap().created().unwrap();
+    let entries = plan_for(&library, "chapter", &chapter.id, None, RunMode::Detect).unwrap();
+    for (index, outcome) in [whole, selected].into_iter().enumerate() {
+        let detections: Vec<_> = outcome.regions.into_iter().filter_map(|row| match row {
+            RegionOutcome::Detected(found) => Some(*found), _ => None,
+        }).collect();
+        assert!(!detections.is_empty(), "fixture produced no stored detection masks");
+        for found in &detections {
+            assert!(found.mask.count() > 0 && found.ink.count() > 0);
+            let group = found.record.group.as_ref().expect("grouped detector provenance");
+            let evidence = found.evidence.as_ref().expect("reproducible native model evidence");
+            let file = cleaner_core::text_groups::EvidenceFile::decode(&evidence.bytes).unwrap();
+            assert_eq!(group.evidence_sha256.as_deref(), Some(evidence.sha256.as_str()));
+            assert_eq!(file.lettering(group).unwrap().count() as u32, group.lettering_pixels);
+            assert!(file.grouping.models.iter().all(|use_| use_.execution == cleaner_core::text_groups::Execution::Local));
+        }
+        let expected: Vec<_> = detections.iter().map(|found| (found.mask.clone(), found.ink.clone())).collect();
+        let _lock = lock_job(&entries[0].job_path).unwrap();
+        let mut job = Job::open(&entries[0].job_path).unwrap();
+        assert_eq!(job.add_area_detection_results(0, "local-smoke-page", detections,
+            Vec::<cleaner_core::project::PendingUntouched>::new()).unwrap(), expected.len());
+        let reopened = Job::open(&entries[0].job_path).unwrap();
+        for (record, (mask, ink)) in reopened.project.detections.iter().rev().take(expected.len()).rev().zip(expected) {
+            let loaded = reopened.load_detection(&record.id).unwrap().unwrap();
+            assert_eq!((loaded.mask, loaded.ink), (mask, ink));
+            let group = loaded.record.group.as_ref().unwrap();
+            let reference = group.evidence_ref.as_ref().expect("stored model evidence reference");
+            let evidence = std::fs::read(cleaner_core::project::sidecar_dir(&entries[0].job_path).join(reference)).unwrap();
+            assert!(cleaner_core::text_groups::EvidenceFile::decode(&evidence).is_ok());
+        }
+        eprintln!("local {} persistence: {} detections with matching masks, ink and local model evidence",
+            if index == 0 { "full page" } else { "selection" }, reopened.project.detections.len());
     }
 }

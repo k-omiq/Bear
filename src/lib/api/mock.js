@@ -727,7 +727,7 @@ export function createMockBackend(options = {}) {
       throw new Error(`SAM backend ${samBackend} is unavailable for this analysis path`)
     }
     if (state.missingModels.has(MOCK_RUNTIME_ID)) throw new Error('ONNX Runtime is not installed')
-    if (rt && rtProfile === 'full-halves' && !review.models.fullRt) throw new Error('The Ogkalu comic text & bubble detector (Full) graph is not installed or failed SHA-256')
+    if (rt && rtProfile === 'full-halves' && state.missingModels.has('fullRt')) throw new Error('The Ogkalu comic text & bubble detector (Full) graph is not installed or failed SHA-256')
     if (rt && rtProfile === 'small-whole' && state.missingModels.has('balloonDetector')) {
       throw new Error('The Ogkalu comic text & bubble detector (Small) graph is not installed or failed SHA-256')
     }
@@ -915,6 +915,28 @@ export function createMockBackend(options = {}) {
 
   // Several runs at once, one per chapter and three in all, as `run.rs`
   // keeps them. Each run's step rides with it, for the notice it finishes with.
+  /** A Solid bubbles only run's count of regions it left detected, by run id. */
+  const solidKept = new Map()
+  /**
+   * The chapters whose cancelled run was a Solid bubbles only one, so a resume
+   * cleans under the same rule (`run.rs` keeps it in the run's snapshot).
+   *
+   * @type {Set<string>}
+   */
+  const solidInterrupted = new Set()
+
+  /**
+   * Refuse an edit of the page a run is on right now, as the native side does
+   * (`page_busy`). Every other page of the chapter takes edits while the run
+   * goes on.
+   *
+   * @param {string} chapterId
+   * @param {number} pageIndex
+   */
+  const refuseBusyPage = (chapterId, pageIndex) => {
+    if (runner.onPage(chapterId, pageIndex)) throw new Error('page_busy')
+  }
+
   const runner = createRunnerPool({
     emit,
     timers,
@@ -922,18 +944,27 @@ export function createMockBackend(options = {}) {
     cleanRegion: (region, page, ctx) => cleanRegionAutomatically(region, page, toolContext, ctx),
     onFinished: (summary) => {
       const found = findChapter(summary.chapterId)
+      const kept = solidKept.get(summary.runId)
+      solidKept.delete(summary.runId)
       if (summary.reason === 'cancelled') {
         if (found) {
           found.project.interruptedJob = {
             chapterId: summary.chapterId,
             pageIndex: summary.nextPageIndex,
           }
+          if (kept) solidInterrupted.add(summary.chapterId)
+          else solidInterrupted.delete(summary.chapterId)
         }
         notify('notice.run.cancelled', {}, 'warn')
         return
       }
       if (found) found.project.interruptedJob = null
-      if (summary.mode === 'detect' && summary.regionsCleaned > 0) {
+      solidInterrupted.delete(summary.chapterId)
+      if (kept) {
+        // Solid bubbles only says both counts, as `run.rs` does: a run that
+        // cleaned nothing still found the regions it left.
+        notify('notice.run.solidOnly', { cleaned: summary.regionsCleaned, kept: kept() })
+      } else if (summary.mode === 'detect' && summary.regionsCleaned > 0) {
         // Detect's own closing word, as `run.rs` sends it: `finished` would
         // say regions were cleaned.
         notify('notice.run.detected', { regions: summary.regionsCleaned, pages: summary.pagesCleaned })
@@ -1023,13 +1054,19 @@ export function createMockBackend(options = {}) {
     ocrRescue,
     mode = 'auto',
     detector = 'local',
+    solidBubblesOnly = false,
+    area = null,
   }) => {
     // One run per chapter, and a cap on all of them, as `run.rs` answers: the
     // chapter's own run back, or no run at all when the cap is reached.
-    const own = runner.runFor(chapterId)
+    const own = runner.runFor(chapterId, { allowAreas: !!area })
     if (own) return { runId: own, pages: [], alreadyRunning: true }
-    if (runner.atCapacity()) return { runId: null, pages: [], alreadyRunning: true, atCapacity: true }
+    if (runner.atCapacity({ cloudArea: !!area && detector === 'cloud' })) return { runId: null, pages: [], alreadyRunning: true, atCapacity: true }
     unloadedModels.clear()
+    // Solid bubbles only is the clean's choice, and it stores text outside a
+    // bubble as a detection where the run would have held it (`run.rs`).
+    const solidOnly = solidBubblesOnly === true && mode !== 'detect'
+    if (solidOnly) outsideBubbles = 'clean'
     const queue = queueFor({ scope, chapterId, pageIndex, outsideBubbles, mode })
     if (queue.length === 0) {
       notify(mode === 'clean' ? 'notice.run.nothingDetected' : 'notice.run.nothingInScope', {}, 'warn')
@@ -1064,11 +1101,33 @@ export function createMockBackend(options = {}) {
           isDetection(region) ? cleanDetection(region, page, ctx) : (cleanRegionAutomatically(region, page, toolContext, ctx), true),
       },
     }
-    return runner.start(queue, {
+    // Solid bubbles only, as `run.rs` runs it: a speech bubble is painted flat
+    // and every other region is left, or stored, as a detection for a later
+    // clean. The mock has no paper to measure, so a bubble is the stand-in's
+    // kind, as `detectRegion` reads it.
+    let kept = 0
+    if (solidOnly) {
+      const solid = {
+        apply: (region, page, ctx) => {
+          if (!isDetection(region)) detectRegion(region, page, ctx, detector, maskPaddingPx)
+          if (!(region.insideBubble ?? region.kind === 'bubble')) {
+            kept += 1
+            return false
+          }
+          return cleanDetection(region, page, { ...ctx, engine: ctx.bubbleEngine === 'solid' ? 'solid' : 'fill' })
+        },
+        pageStatus: settledStatus,
+      }
+      steps.clean = { ...steps.clean, ...solid }
+      steps.auto = { ...steps.auto, ...solid }
+    }
+    const handle = runner.start(queue, {
       ...(steps[mode] ?? steps.auto),
       chapterId,
       mode,
       kind: mode === 'detect' ? 'detect' : 'clean',
+      area,
+      detector,
       engineCeiling: engineCeiling ?? state.settings.engineCeiling,
       bubbleEngine,
       outsideEngine,
@@ -1080,6 +1139,8 @@ export function createMockBackend(options = {}) {
       textPolicy,
       ocrRescue,
     })
+    if (solidOnly && handle.runId) solidKept.set(handle.runId, () => kept)
+    return handle
   }
 
   const snapshot = (value) => structuredClone(value)
@@ -1763,6 +1824,15 @@ export function createMockBackend(options = {}) {
     if (!Number.isInteger(idleSeconds) || idleSeconds < 60 || idleSeconds > 600) {
       return { error: ['ERR_VALIDATION_ERROR', 'idle_seconds must be an integer from 60 to 600'] }
     }
+    // `none`: a Modal setup with no cleaning model, as the helper plans it.
+    const modelId = options.model_id ?? PINNED_CLOUD_MODEL_ID
+    const noModel = modelId === 'none'
+    if (noModel ? provider !== 'modal' : modelId !== PINNED_CLOUD_MODEL_ID) {
+      return { error: ['ERR_VALIDATION_ERROR', 'model_id is not a supported cloud render model'] }
+    }
+    if (noModel && analysisModels.length === 0 && !denoise) {
+      return { error: ['ERR_VALIDATION_ERROR', 'choose a cleaning model, a detection model or page denoise'] }
+    }
     const resources =
       provider === 'modal'
         ? [
@@ -1788,8 +1858,12 @@ export function createMockBackend(options = {}) {
         gpu_options: [...gpus.options],
         idle_seconds: idleSeconds,
         max_containers: 1,
-        model_weights_bytes: MODEL_WEIGHTS_BYTES,
-        model_id: PINNED_CLOUD_MODEL_ID,
+        model_weights_bytes: noModel ? 0 : MODEL_WEIGHTS_BYTES,
+        model_id: modelId,
+        model_options: [
+          { model_id: PINNED_CLOUD_MODEL_ID, label: 'FLUX.2 Klein 4B (4-bit)', weights_bytes: MODEL_WEIGHTS_BYTES, license: 'Apache-2.0', required_gpu: null },
+          ...(provider === 'modal' ? [{ model_id: 'none', label: 'No cleaning model', weights_bytes: 0, license: '', required_gpu: null }] : []),
+        ],
         analysis_models: [...analysisModels],
         analysis_graph_bytes: analysisModels.reduce((total, item) => total +
           (item === 'text_mask_sam_ts@1' ? 1_358_010_626 : 168_481_531), 0),
@@ -1865,7 +1939,7 @@ export function createMockBackend(options = {}) {
         created_at: null,
         deployed_at: null,
         weights_checked: true,
-        models_ready: [PINNED_CLOUD_MODEL_ID],
+        models_ready: chosen.model_id === 'none' ? [] : [PINNED_CLOUD_MODEL_ID],
         analysis_ready: [...chosen.analysis_models],
         options: {
           gpu: chosen.gpu, idle_seconds: chosen.idle_seconds, model_id: chosen.model_id,
@@ -1979,7 +2053,7 @@ export function createMockBackend(options = {}) {
       idle_seconds: installation.plan.resource_allocation.idle_seconds,
       analysis_models: installation.plan.resource_allocation.analysis_models,
       denoise: installation.plan.resource_allocation.denoise,
-      model: {
+      model: installation.plan.resource_allocation.model_id === 'none' ? null : {
         model_id: PINNED_CLOUD_MODEL_ID,
         model_revision: PINNED_CLOUD_MODEL_REVISION,
         recipe_id: PINNED_CLOUD_RECIPE_ID,
@@ -2063,7 +2137,9 @@ export function createMockBackend(options = {}) {
   // cloud, selects a ready Modal profile and reports its render GPU in that
   // state, so the resource panel's cloud row can be seen and stopped in a
   // browser. `unsupported` and `outdated` answer the way a Beam deployment and
-  // one set up before the GPU routes do.
+  // one set up before the GPU routes do. `waiting` has no GPU up and one
+  // analysis out that never ends until the analysis GPU is stopped, as when
+  // the provider has no GPU free: the panel's "Waiting for a GPU" row.
   const cloudGpuKnob =
     options.cloudGpuScenario ?? new URLSearchParams(globalThis.location?.search ?? '').get('cloudGpu')
   const cloudGpu = {
@@ -2071,6 +2147,10 @@ export function createMockBackend(options = {}) {
     /** @type {Map<string, {state: string, since: number, lastActive: number}>} */
     roles: new Map(),
   }
+  /** The `waiting` scenario's analysis, as `cloud://analysis` tells one. */
+  const waitingAnalysis = (phase) => ({
+    proposal_id: 'mock-waiting-analysis', provider: 'modal', profile_id: 'mc-mock-gpu', phase,
+  })
   if (cloudGpuKnob) {
     const profileId = 'mc-mock-gpu'
     const endpointUrl = `https://mock-workspace--mc-${profileId}-gateway.modal.run/mc/v1`
@@ -2190,7 +2270,9 @@ export function createMockBackend(options = {}) {
     },
 
     onRemoteAnalysis(handler) {
-      return listenOn(remoteAnalysisListeners, handler)
+      const off = listenOn(remoteAnalysisListeners, handler)
+      if (cloudGpu.scenario === 'waiting') handler(waitingAnalysis({ phase: 'submitted_tile', index: 0 }))
+      return off
     },
 
     onDenoiseProgress(handler) {
@@ -2416,6 +2498,15 @@ export function createMockBackend(options = {}) {
     async historyMove({ chapterId, direction }) {
       await delay(timing.method)
       const journal = journalFor(chapterId)
+      // A step onto the page a run is on is refused before the cursor moves,
+      // as `history.rs#history_move` refuses it: the caller replays nothing
+      // and puts its own cursor back.
+      const next = journal.entries[direction === 'redo' ? journal.cursor : journal.cursor - 1]
+      if (next?.op === 'region-state') {
+        const page =
+          findRegion(next.regionId)?.page ?? findPage(next.before?.pageId ?? next.after?.pageId)
+        if (page) refuseBusyPage(chapterId, page.index)
+      }
       const entry = direction === 'redo' ? redoEntry(journal) : undoEntry(journal)
       return snapshot({ cursor: journal.cursor, entry: entry ?? null })
     },
@@ -2474,7 +2565,11 @@ export function createMockBackend(options = {}) {
       const targetChapter = chapterId ?? job.chapterId
       const found = findChapter(targetChapter)
       if (!found) return null
-      const run = startRun({ scope: 'chapter', chapterId: targetChapter })
+      const run = startRun({
+        scope: 'chapter',
+        chapterId: targetChapter,
+        solidBubblesOnly: solidInterrupted.has(job.chapterId),
+      })
       notify('notice.job.resumed', { page: job.pageIndex + 1 })
       return {
         project: snapshot(projectHeaders(project)),
@@ -2505,6 +2600,7 @@ export function createMockBackend(options = {}) {
       cloudGrant,
       mode = 'auto',
       area = null,
+      solidBubblesOnly = false,
     }) {
       await delay(timing.method)
       if (!['auto', 'detect', 'clean'].includes(mode)) throw new Error('invalid_request: mode')
@@ -2514,7 +2610,7 @@ export function createMockBackend(options = {}) {
       if (area) {
         const sides = [area.x, area.y, area.w, area.h]
         if (!sides.every(Number.isFinite) || area.x < 0 || area.y < 0 || area.w <= 0 || area.h <= 0
-          || area.x + area.w > 100 || area.y + area.h > 100) throw new Error('detect_area_invalid')
+          || area.x + area.w > 100 + 1e-6 || area.y + area.h > 100 + 1e-6) throw new Error('detect_area_invalid')
         if (mode !== 'detect' || scope !== 'page') throw new Error('detect_area_scope_unsupported')
       }
       if (!validPadding(maskPaddingPx)) throw new Error('mask_padding_invalid')
@@ -2566,6 +2662,8 @@ export function createMockBackend(options = {}) {
         ocrRescue,
         mode,
         detector: capabilities.length ? 'cloud' : 'local',
+        area,
+        solidBubblesOnly,
       })
     },
 
@@ -2581,7 +2679,7 @@ export function createMockBackend(options = {}) {
         // unless the cloud was chosen for it, which the grant path below renders.
         const detection = regionId ? findRegion(regionId) : null
         if (detection && isDetection(detection.region) && typeof params.grantNonce !== 'string' && !wantsCloud(params)) {
-          if (runner.isRunning()) throw new Error('run_in_progress')
+          refuseBusyPage(detection.chapter.id, detection.page.index)
           cleanDetection(detection.region, detection.page, params)
           detection.page.status = settledStatus(detection.page)
           return {
@@ -2647,6 +2745,7 @@ export function createMockBackend(options = {}) {
     async previewPaint() { return null },
     async createRegion({ chapterId, pageIndex, sourceIndex, sourceSha, bbox, tool, params = {} }) {
       await delay(timing.method)
+      refuseBusyPage(chapterId, pageIndex)
       // Always local, as the native command is: a cloud engine is refused while
       // cloud is off, and otherwise dropped for the fill mode's local default.
       // The interface asks for consent and applies the cloud to the new region.
@@ -2692,7 +2791,7 @@ export function createMockBackend(options = {}) {
       if (!page) return null
       if (sourceIndex !== undefined && page.sourceIndex !== sourceIndex) return null
       if (sourceSha !== undefined && page.sourceSha !== sourceSha) return null
-      if (runner.isRunning()) throw new Error('run_in_progress')
+      refuseBusyPage(chapterId, pageIndex)
       const box = gestureBox(page, stroke, painted)
       if (!box) return null
 
@@ -2772,7 +2871,13 @@ export function createMockBackend(options = {}) {
       if (!validPadding(paddingPx)) throw new Error('mask_padding_invalid')
       const found = findChapter(chapterId)
       if (!found) return null
-      if (runner.isRunning()) throw new Error('run_in_progress')
+      // One page waits for the run to leave it. The whole chapter waits for
+      // the run to leave the chapter.
+      if (pageIndex == null) {
+        if (runner.runFor(chapterId)) throw new Error('run_in_progress')
+      } else {
+        refuseBusyPage(chapterId, pageIndex)
+      }
       const pages = found.chapter.pages.filter((page) => pageIndex == null || page.index === pageIndex)
       if (regionId != null && !pages.some((page) => detectionsOf(page).some((region) => region.id === regionId))) {
         throw new Error('mask_padding_target_invalid')
@@ -2809,6 +2914,7 @@ export function createMockBackend(options = {}) {
       await delay(timing.method)
       const found = findMask(maskId)
       if (!found) return null
+      refuseBusyPage(found.chapter.id, found.page.index)
       // A detection has no pixels to put back: it and its mask simply go.
       const detection = isDetection(found.region)
       const { notices } = deleteRegionMask(found.region)
@@ -2858,6 +2964,7 @@ export function createMockBackend(options = {}) {
 
       if (!region) {
         if (!found) return null
+        refuseBusyPage(found.chapter.id, found.page.index)
         const index = found.page.regions.findIndex((r) => r.id === regionId)
         found.page.regions.splice(index, 1)
         if (pageStatus) found.page.status = pageStatus
@@ -2866,6 +2973,10 @@ export function createMockBackend(options = {}) {
 
       const page = found?.page ?? findPage(region.pageId)
       if (!page) return null
+      const chapter =
+        found?.chapter ??
+        state.projects.flatMap((project) => project.chapters).find((c) => c.pages.includes(page))
+      if (chapter) refuseBusyPage(chapter.id, page.index)
       const index = page.regions.findIndex((r) => r.id === regionId)
       if (index >= 0) page.regions[index] = structuredClone(region)
       else page.regions.push(structuredClone(region))
@@ -2885,6 +2996,7 @@ export function createMockBackend(options = {}) {
       await delay(timing.method)
       const found = findRegion(regionId)
       if (!found) return null
+      refuseBusyPage(found.chapter.id, found.page.index)
       const { region, page } = found
       if (!region.mask) throw new Error('masks.refused.noOutput')
       const next = editedLayer(layerOf(region), layer ?? {}, layerCapabilities(region))
@@ -2909,13 +3021,13 @@ export function createMockBackend(options = {}) {
      * becomes LaMa, with the rung the row's mask shows following it. The mock
      * stores no balloon colour, so there is none to clear. Refused, as
      * natively, for an id that is not a stored detection, and while a run is
-     * going, as a mask edit is.
+     * on its page, as a mask edit is.
      */
     async setDetectionType({ regionId, inside }) {
       await delay(timing.method)
-      if (runner.isRunning()) throw new Error('run_in_progress')
       const found = findRegion(regionId)
       if (!found || !isDetection(found.region)) throw new Error(`not_a_detection: ${regionId} is not a stored detection`)
+      refuseBusyPage(found.chapter.id, found.page.index)
       const { region } = found
       if (region.insideBubble !== inside) {
         region.insideBubble = inside
@@ -2934,6 +3046,7 @@ export function createMockBackend(options = {}) {
       await delay(timing.method)
       const found = findMask(maskId)
       if (!found) return null
+      refuseBusyPage(found.chapter.id, found.page.index)
       // With a grant the region renders in the cloud; one that does not commit
       // answers null, its code on the `cloud://attempt` event.
       if (typeof params?.grantNonce === 'string') {
@@ -3315,10 +3428,14 @@ export function createMockBackend(options = {}) {
     async listWorkflowCapabilities() {
       await delay(timing.method)
       const runtimeInstalled = !state.missingModels.has(MOCK_RUNTIME_ID)
-      const { fullRt, sam } = review.models
+      const { sam } = review.models
+      const fullRt = !state.missingModels.has('fullRt')
       const backend = (id, note) => ({ id, platform: 'macOS', qualified: true, available: runtimeInstalled,
         selectable: runtimeInstalled, note })
-      return { runtimeInstalled, ctdInstalled: !state.missingModels.has('textDetector'), rtInstalled: !state.missingModels.has('balloonDetector'), fullRtInstalled: fullRt,
+      return { runtimeInstalled, runtimeReady: runtimeInstalled,
+        localDetectionReady: runtimeInstalled && fullRt && sam,
+        localDetectionNote: 'Mock: the full pipeline is drawn locally; no model runs in this browser.',
+        ctdInstalled: !state.missingModels.has('textDetector'), rtInstalled: !state.missingModels.has('balloonDetector'), fullRtInstalled: fullRt,
         fullRtManaged: fullRt, fullRtRevision: '16e8a622f91fabc6b5b65c96d32d1183f8843546',
         fullRtFile: { name: 'detector.onnx', bytes: 168481531, sha256: '065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195' },
         samInstalled: sam, samMemoryReady: true, samManaged: sam,
@@ -3339,12 +3456,14 @@ export function createMockBackend(options = {}) {
         throw new Error('The Ogkalu comic text & bubble detector (Full) graph size or SHA-256 does not match the pinned manifest')
       }
       review.models.fullRt = true
+      state.missingModels.delete('fullRt')
       return true
     },
     async removeFullRt() {
       await delay(timing.method)
-      const had = review.models.fullRt
+      const had = !state.missingModels.has('fullRt')
       review.models.fullRt = false
+      state.missingModels.add('fullRt')
       return had
     },
     async importSamTs({ sourceDir } = {}) {
@@ -3524,6 +3643,7 @@ export function createMockBackend(options = {}) {
       await delay(timing.method)
       const found = findRegion(regionId)
       if (!found) return null
+      refuseBusyPage(found.chapter.id, found.page.index)
       if (typeof params?.grantNonce === 'string') {
         if (cloudBlocked()) return null
         const ended = await renderWithGrant(params, found, (cloud) => commitCloudResult(found, cloud))
@@ -3548,9 +3668,9 @@ export function createMockBackend(options = {}) {
     async approveHeldMask({ regionId, paddingPx = 0 } = {}) {
       await delay(timing.method)
       if (!validPadding(paddingPx)) throw new Error('mask_padding_invalid')
-      if (runner.isRunning()) throw new Error('run_in_progress')
       const found = findRegion(regionId)
       if (!found || !['gate-skipped', 'candidate'].includes(found.region.outcome)) return null
+      refuseBusyPage(found.chapter.id, found.page.index)
       detectRegion(found.region, found.page, {}, 'local', paddingPx)
       found.page.status = settledStatus(found.page)
       return { regionId: found.region.id, pageStatus: found.page.status }
@@ -3789,6 +3909,11 @@ export function createMockBackend(options = {}) {
       const roles = provider === 'modal' && profileId === 'mc-mock-gpu' ? cloudGpu.roles : new Map()
       const stopped = [...roles.keys()].filter((up) => role === undefined || up === role)
       for (const up of stopped) roles.delete(up)
+      // A stop cancels the analysis that is out, GPU or no GPU.
+      if (cloudGpu.scenario === 'waiting' && role !== 'render') {
+        cloudGpu.scenario = 'stopped'
+        emitTo(remoteAnalysisListeners, waitingAnalysis({ phase: 'cancelled' }))
+      }
       return { supported: true, stopped, cancelledJobs: 0 }
     },
 
@@ -3814,6 +3939,10 @@ export function createMockBackend(options = {}) {
         : state.inferenceConfig.modalProfiles?.[profileId]
       if (!profile) {
         throw new Error(`${provider} profile '${profileId}' does not exist in inference configuration`)
+      }
+      // A setup made with no cleaning model answers as the native side does.
+      if (state.installations.get(installationKey(provider, profileId))?.plan.resource_allocation.model_id === 'none') {
+        throw new Error('capability_unavailable: gateway render is not configured')
       }
       return {
         supportedProtocolVersion: '1.0.0',

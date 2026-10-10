@@ -17,6 +17,8 @@ imports this module again rebuilds exactly the app that was deployed.
   `release` method a user's stop uses to send a warm container away.
 - `seed_weights` downloads the pinned snapshot into the weights volume on a CPU
   container. GPU containers never download.
+- An installation set up without a cleaning model (settings.render is false) has no
+  `Worker`: its gateway serves analysis and page denoise and refuses renders.
 - `Worker` loads and warms the pipeline in `@modal.enter(snap=True)` and refuses to
   finish that phase without a loaded pipeline (WorkerNotReady). Its memory snapshot is
   off: live, Modal built a new GPU snapshot on every cold start instead of restoring
@@ -75,7 +77,7 @@ from deploy.cloud.modal.settings import GPU_LIST_PRICE_USD_PER_HOUR, WEIGHTS_MOU
 
 SETTINGS = ModalSettings.from_env()
 # Pipeline copies one render container holds, and so the renders it runs at once.
-RENDER_COPIES = render_copies(production_model(SETTINGS.model_id), SETTINGS.gpu)
+RENDER_COPIES = render_copies(production_model(SETTINGS.model_id), SETTINGS.gpu) if SETTINGS.render else 0
 
 PYTHON_VERSION = "3.12"
 TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu129"
@@ -336,6 +338,15 @@ class ModalDenoiseProxy:
     def job_status(self, handle: str) -> Dict[str, Any] | None:
         return self._jobs.status("denoise", handle, denoise_failure)
 
+    def job_metadata(self, handle: str) -> Dict[str, Any] | None:
+        return self._jobs.denoise_metadata(handle)
+
+    def result_chunk(self, handle: str, index: int) -> bytes | None:
+        return self._jobs.denoise_chunk(handle, index)
+
+    def release_result(self, handle: str) -> None:
+        self._jobs.release_denoise_result(handle)
+
     def cancel_job(self, handle: str) -> Dict[str, Any] | None:
         return self._jobs.cancel("denoise", handle)
 
@@ -384,56 +395,59 @@ class ModalAnalysisProxy:
         return self._jobs.cancel(_analysis_job_kind(handle), handle)
 
 
-@app.cls(
-    image=gpu_image,
-    gpu=SETTINGS.gpu,
-    volumes={WEIGHTS_MOUNT: weights_volume},
-    cpu=2.0,
-    memory=render_worker_memory_gib(production_model(SETTINGS.model_id), SETTINGS.gpu, "modal") * 1024,
-    timeout=JOB_TIMEOUT_SECONDS,
-    startup_timeout=WORKER_STARTUP_TIMEOUT_SECONDS,
-    scaledown_window=SETTINGS.idle_seconds,
-    max_containers=1,
-    **WORKER_SNAPSHOT,
-)
-@modal.concurrent(max_inputs=RENDER_COPIES)
-class Worker:
-    # Modal refuses snap=True on a class without memory snapshots, so the phase follows
-    # WORKER_SNAPSHOT. With both enters snap=False, Modal runs them in definition order.
-    @modal.enter(snap=WORKER_SNAPSHOT["enable_memory_snapshot"])
-    def load(self) -> None:
-        # Runs on every start while WORKER_SNAPSHOT is off (with it on: once per
-        # snapshot, never after a restore). Loads and warms the pipeline on the GPU or
-        # raises WorkerNotReady (weights not seeded, load failed, started by a stop's
-        # release), so a container never serves without a loaded pipeline and no
-        # snapshot could hold an unloaded one (see prepare_render_container).
-        self.runtime = prepare_render_container(
-            ModalDictStore(jobs_dict),
-            lambda: _heartbeat("render", WORKER_STARTUP_TIMEOUT_SECONDS, JOB_TIMEOUT_SECONDS),
-            lambda: WorkerRuntime(WEIGHTS_MOUNT, reload=weights_volume.reload, marker_attempts=2,
-                                  model_id=SETTINGS.model_id, copies=RENDER_COPIES),
-        )
+# Only an installation with a cleaning model has a render worker; without the class
+# Modal builds no render image and starts no render GPU.
+if SETTINGS.render:
+    @app.cls(
+        image=gpu_image,
+        gpu=SETTINGS.gpu,
+        volumes={WEIGHTS_MOUNT: weights_volume},
+        cpu=2.0,
+        memory=render_worker_memory_gib(production_model(SETTINGS.model_id), SETTINGS.gpu, "modal") * 1024,
+        timeout=JOB_TIMEOUT_SECONDS,
+        startup_timeout=WORKER_STARTUP_TIMEOUT_SECONDS,
+        scaledown_window=SETTINGS.idle_seconds,
+        max_containers=1,
+        **WORKER_SNAPSHOT,
+    )
+    @modal.concurrent(max_inputs=RENDER_COPIES)
+    class Worker:
+        # Modal refuses snap=True on a class without memory snapshots, so the phase follows
+        # WORKER_SNAPSHOT. With both enters snap=False, Modal runs them in definition order.
+        @modal.enter(snap=WORKER_SNAPSHOT["enable_memory_snapshot"])
+        def load(self) -> None:
+            # Runs on every start while WORKER_SNAPSHOT is off (with it on: once per
+            # snapshot, never after a restore). Loads and warms the pipeline on the GPU or
+            # raises WorkerNotReady (weights not seeded, load failed, started by a stop's
+            # release), so a container never serves without a loaded pipeline and no
+            # snapshot could hold an unloaded one (see prepare_render_container).
+            self.runtime = prepare_render_container(
+                ModalDictStore(jobs_dict),
+                lambda: _heartbeat("render", WORKER_STARTUP_TIMEOUT_SECONDS, JOB_TIMEOUT_SECONDS),
+                lambda: WorkerRuntime(WEIGHTS_MOUNT, reload=weights_volume.reload, marker_attempts=2,
+                                      model_id=SETTINGS.model_id, copies=RENDER_COPIES),
+            )
 
-    @modal.enter(snap=False)
-    def start(self) -> None:
-        # Every start, restores included: a fresh heartbeat (container id, started_at)
-        # and the release marker. The pipeline is already loaded here.
-        self.heartbeat = _heartbeat("render", WORKER_STARTUP_TIMEOUT_SECONDS, JOB_TIMEOUT_SECONDS)
-        start_gpu_container(self.heartbeat, self.runtime)
+        @modal.enter(snap=False)
+        def start(self) -> None:
+            # Every start, restores included: a fresh heartbeat (container id, started_at)
+            # and the release marker. The pipeline is already loaded here.
+            self.heartbeat = _heartbeat("render", WORKER_STARTUP_TIMEOUT_SECONDS, JOB_TIMEOUT_SECONDS)
+            start_gpu_container(self.heartbeat, self.runtime)
 
-    @modal.method()
-    def render(self, handle: str, metadata_json: str, image_png: bytes, hint_png: bytes) -> Dict[str, Any]:
-        # Up to RENDER_COPIES renders run at once, each on a pipeline copy of its own.
-        with self.heartbeat.serving():
-            return worker_render(self.runtime, ModalDictStore(jobs_dict), handle, metadata_json, image_png, hint_png)
+        @modal.method()
+        def render(self, handle: str, metadata_json: str, image_png: bytes, hint_png: bytes) -> Dict[str, Any]:
+            # Up to RENDER_COPIES renders run at once, each on a pipeline copy of its own.
+            with self.heartbeat.serving():
+                return worker_render(self.runtime, ModalDictStore(jobs_dict), handle, metadata_json, image_png, hint_png)
 
-    @modal.method()
-    def release(self) -> Dict[str, Any]:
-        return release_container(self.heartbeat, modal.experimental.stop_fetching_inputs)
+        @modal.method()
+        def release(self) -> Dict[str, Any]:
+            return release_container(self.heartbeat, modal.experimental.stop_fetching_inputs)
 
-    @modal.exit()
-    def unload(self) -> None:
-        self.heartbeat.clear()
+        @modal.exit()
+        def unload(self) -> None:
+            self.heartbeat.clear()
 
 
 # The default region is deployed without either argument, exactly as before the
@@ -467,19 +481,23 @@ def gateway():
 
     limits = production_limits()
     store = ModalDictStore(jobs_dict)
-    dispatcher = ModalWorkerDispatcher(
-        spawn=Worker().render.spawn,
-        function_call_from_id=modal.FunctionCall.from_id,
-        exceptions=modal.exception,
-        store=store,
-    )
-    backend = DispatchJobBackend("modal", store, dispatcher, limits, clock=time.time, preflight=require_render_weights)
+    release = {"analysis": lambda: AnalysisGPU().release.spawn()}
+    backend = None
+    if SETTINGS.render:
+        dispatcher = ModalWorkerDispatcher(
+            spawn=Worker().render.spawn,
+            function_call_from_id=modal.FunctionCall.from_id,
+            exceptions=modal.exception,
+            store=store,
+        )
+        backend = DispatchJobBackend("modal", store, dispatcher, limits, clock=time.time, preflight=require_render_weights)
+        release["render"] = lambda: Worker().release.spawn()
     gpu_control = GpuControl(
         provider="modal",
         store=store,
         gpu=SETTINGS.gpu,
         backend=backend,
-        release={"render": lambda: Worker().release.spawn(), "analysis": lambda: AnalysisGPU().release.spawn()},
+        release=release,
         cancel_analysis=lambda: cancel_tracked_analysis(store, modal.FunctionCall.from_id),
         analysis_in_flight=lambda: count_tracked_analysis(store),
         list_prices=GPU_LIST_PRICE_USD_PER_HOUR,
@@ -488,9 +506,10 @@ def gateway():
     gpu_jobs = ModalGpuJobs(store, modal.FunctionCall.from_id, modal.exception, clock=time.time)
     gateway_app = CloudGateway(
         provider="modal",
-        model_info=get_production_model_info("modal", SETTINGS.model_id),
+        model_info=get_production_model_info("modal", SETTINGS.model_id) if SETTINGS.render else None,
         limits=limits,
         backend=backend,
+        render=SETTINGS.render,
         analysis_worker=ModalAnalysisProxy(gpu_control, gpu_jobs),
         trust_edge_auth=True,
         gpu_control=gpu_control,

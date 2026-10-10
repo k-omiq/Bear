@@ -3,6 +3,18 @@ import { notify } from './app.svelte.js'
 import { writeSettingsSerialized } from './settingswrite.js'
 
 export const cloudConfig = $state({ entries: {} })
+
+/**
+ * What a cleaning read answers from a deployment set up without a cleaning
+ * model (`HttpTransportError::RenderNotConfigured`). Remembered as `none`:
+ * that is the deployment's answer, where `missing` is a setup that needs repair.
+ */
+const RENDER_NOT_CONFIGURED = 'capability_unavailable: gateway render is not configured'
+
+/** @param {unknown} error */
+function failureCode(error) {
+  return String(error instanceof Error ? error.message : error ?? '').replace(/^Error:\s*/, '')
+}
 let owner = null
 let loading = null
 let generation = 0
@@ -47,7 +59,7 @@ export function loadCloudConfiguration(backend) {
         const value = {}
         for (const feature of ['clean', 'denoise']) {
           const known = entry?.[feature]
-          if (!known || !['ready', 'missing'].includes(known.state)) continue
+          if (!known || !['ready', 'missing', 'none'].includes(known.state)) continue
           value[feature] = { state: known.state,
             presets: Array.isArray(known.presets) ? known.presets.filter((id) => typeof id === 'string') : [],
             modelId: typeof known.modelId === 'string' ? known.modelId : null }
@@ -115,10 +127,29 @@ export async function checkConfiguration(backend, key, feature, read, force = fa
   finally { if (reads.get(readKey) === task) reads.delete(readKey) }
 }
 
+/**
+ * Read a deployment's cleaning metadata: its model, or `none` when it was set
+ * up without one. No page is sent and no GPU starts.
+ *
+ * @param {{provider: string, profileId: string}} target
+ */
+export function checkCleanConfiguration(backend, key, target, force = false) {
+  return checkConfiguration(backend, key, 'clean', async () => {
+    try {
+      const info = await backend.getCloudModelInfo(target)
+      return { state: 'ready', modelId: info.pinnedModelId, presets: [] }
+    } catch (error) {
+      if (failureCode(error).startsWith(RENDER_NOT_CONFIGURED)) return { state: 'none', modelId: null, presets: [] }
+      throw error
+    }
+  }, force)
+}
+
 /** Definitive setup failures change only the failed operation on its original deployment. */
 export async function configurationFailed(backend, key, feature, error) {
-  const code = String(error instanceof Error ? error.message : error ?? '').replace(/^Error:\s*/, '')
+  const code = failureCode(error)
   const stable = code.split(':')[0].trim()
+  const notInstalled = feature !== 'denoise' && code.startsWith(RENDER_NOT_CONFIGURED)
   const accessFailure = ['gateway_unauthorized', 'credential_missing', 'endpoint_invalid'].includes(stable)
     || code.startsWith('gateway authorization failure (status ')
     || code === 'runtime credential missing or invalid for profile'
@@ -127,14 +158,15 @@ export async function configurationFailed(backend, key, feature, error) {
     ? code.startsWith('capability_unavailable: gateway denoise is not configured')
       || code.startsWith('capability_unavailable: the deployment has no models')
     : stable === 'weights_unavailable' || code.startsWith('cloud render weights need repair')
-      || code.startsWith('capability_unavailable: gateway render is not configured'))
+      || notInstalled)
   if (!key || !misconfigured) return false
   await loadCloudConfiguration(backend)
   if (owner !== backend) return false
-  const changed = rememberedConfiguration(key)?.[feature]?.state !== 'missing'
+  const state = notInstalled ? 'none' : 'missing'
+  const changed = rememberedConfiguration(key)?.[feature]?.state !== state
   if (!changed) return true
-  await rememberConfiguration(backend, key, feature, { state: 'missing', presets: [],
-    modelId: rememberedConfiguration(key)?.[feature]?.modelId ?? null })
+  await rememberConfiguration(backend, key, feature, { state, presets: [],
+    modelId: notInstalled ? null : rememberedConfiguration(key)?.[feature]?.modelId ?? null })
   if (changed) notify({ key: feature === 'denoise' ? 'cloud.configuration.denoiseChanged' : 'cloud.configuration.cleanChanged', tone: 'warn' })
   return true
 }

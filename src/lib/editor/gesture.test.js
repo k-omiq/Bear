@@ -14,7 +14,7 @@ import {
   clampBbox,
   clientCentre,
   cloneOffset,
-  detectAreaAround,
+  detectAreaIn,
   draftKeyIntent,
   steppedSize,
   menuPoint,
@@ -423,22 +423,20 @@ describe('menuPoint', () => {
   })
 })
 
-describe('detectAreaAround', () => {
-  it('is a box around the point, square in page pixels', () => {
-    // 16% of 1600 px is 256 px, which is 10.67% of 2400 px.
-    const area = detectAreaAround({ x: 50, y: 50 }, 1600, 2400)
-    expect(area.x).toBeCloseTo(42)
-    expect(area.w).toBeCloseTo(16)
-    expect(area.h).toBeCloseTo(10.6667, 3)
-    expect(area.y).toBeCloseTo(50 - area.h / 2)
+describe('detectAreaIn', () => {
+  it('is the drawn box itself while the box is on the page', () => {
+    expect(detectAreaIn({ x: 10, y: 20, w: 30, h: 40 })).toEqual({ x: 10, y: 20, w: 30, h: 40 })
+    expect(detectAreaIn({ x: 0, y: 0, w: 100, h: 100 })).toEqual({ x: 0, y: 0, w: 100, h: 100 })
   })
 
-  it('moves back inside the page near an edge', () => {
-    expect(detectAreaAround({ x: 1, y: 99 }, 1000, 1000)).toEqual({ x: 0, y: 84, w: 16, h: 16 })
+  it('keeps only the part on the page of a box drawn past the page on a long strip', () => {
+    expect(detectAreaIn({ x: 10, y: 80, w: 30, h: 50 })).toEqual({ x: 10, y: 80, w: 30, h: 20 })
+    expect(detectAreaIn({ x: 10, y: -25, w: 30, h: 40 })).toEqual({ x: 10, y: 0, w: 30, h: 15 })
   })
 
-  it('is never taller than the page', () => {
-    expect(detectAreaAround({ x: 50, y: 50 }, 4000, 400)).toEqual({ x: 42, y: 0, w: 16, h: 100 })
+  it('is nothing for a box that is not on the page at all', () => {
+    expect(detectAreaIn({ x: 10, y: 100, w: 30, h: 20 })).toBeNull()
+    expect(detectAreaIn({ x: 10, y: -30, w: 30, h: 20 })).toBeNull()
   })
 })
 

@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from deploy.cloud.common.manifest import (
     ADAPTER_DIR,
+    MODEL_NONE,
     MODEL_PROD_FLUX,
     REVISION_PROD_FLUX,
     production_model,
@@ -96,7 +97,12 @@ def check_snapshot_files(directory: PathLike, model_id: str = MODEL_PROD_FLUX) -
 
 
 def snapshot_fingerprint(model_id: str = MODEL_PROD_FLUX) -> str:
-    """Identify the pinned file set, including same-size adapter replacements."""
+    """Identify the pinned file set, including same-size adapter replacements.
+
+    Empty for MODEL_NONE, which pins no files.
+    """
+    if model_id == MODEL_NONE:
+        return ""
     model = production_model(model_id)
     identity = {
         "model_id": model.model_id,
@@ -258,13 +264,15 @@ def seed_state(
     updated_at is the heartbeat. A running job rewrites the document every
     PROGRESS_INTERVAL_SECONDS, pausing only SEED_RETRY_DELAY_SECONDS between attempts,
     so the provisioner can tell a live job from one that stopped without a result.
+    An installation without a cleaning model (MODEL_NONE) has no snapshot: no bytes,
+    an empty revision and an empty fingerprint.
     """
-    model = production_model(model_id)
+    model = None if model_id == MODEL_NONE else production_model(model_id)
     return {
         "state": state,
         "bytes_done": int(bytes_done),
-        "bytes_total": model.total_bytes,
-        "model_revision": model.revision,
+        "bytes_total": model.total_bytes if model else 0,
+        "model_revision": model.revision if model else "",
         "snapshot_fingerprint": snapshot_fingerprint(model_id),
         "error_code": error_code,
         "message": message,
@@ -299,6 +307,12 @@ def run_seed(
 
     def on_progress(done: int, _total: int) -> None:
         publish(seed_state("running", done, model_id=model_id))
+
+    if model_id == MODEL_NONE:
+        # No cleaning model was chosen: what the job seeded before this call (analysis
+        # graphs, page denoise models) is everything the installation needs.
+        publish(seed_state("done", model_id=model_id))
+        return {"status": "present"}
 
     last_error: Optional[BaseException] = None
     for attempt in range(max(1, attempts)):

@@ -270,6 +270,7 @@ pub(crate) fn transport_code(error: &HttpTransportError) -> String {
         | HttpTransportError::JobDeadline => "gateway_unreachable",
         HttpTransportError::JobFailed { .. } => "gateway_error",
         HttpTransportError::JobCancelled => "cancelled",
+        HttpTransportError::RenderNotConfigured => "capability_unavailable: gateway render is not configured",
         HttpTransportError::InvalidCredential | HttpTransportError::CredentialProviderMismatch => "credential_missing",
         HttpTransportError::InvalidTarget
         | HttpTransportError::EndpointValidationFailed

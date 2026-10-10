@@ -9,9 +9,9 @@ import { setBackend } from '../api/backend.js'
 import { app, closeModal } from '../state/app.svelte.js'
 import { stopCloud } from '../state/cloud.svelte.js'
 import { stopCloudGpuWatch } from '../state/cloudgpu.svelte.js'
-import { editor } from '../state/editor.svelte.js'
+import { closeEditorChapter, editor } from '../state/editor.svelte.js'
 import { setAnalysisTarget, setCloudAllowed, setDetectorModels } from '../state/session.svelte.js'
-import { cloudRunErrorKey, cloudScopeRefusal, startCleanRun } from './cloudrun.js'
+import { cloudRunErrorKey, cloudScopeRefusal, detectArea, startCleanRun } from './cloudrun.js'
 import { applyActiveToolToRegion } from './toolapply.svelte.js'
 import { cleanDetected } from './maskactions.svelte.js'
 
@@ -57,6 +57,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  closeEditorChapter()
   app.modals = []
   app.notices = []
   editor.run = { ...editor.run, active: false, runId: null }
@@ -69,6 +70,40 @@ afterEach(() => {
   stopCloud()
   stopCloudGpuWatch()
   setBackend(null)
+})
+
+it('submits each selected area while previous detections are still running', async () => {
+  const api = backend()
+  const readConfig = vi.spyOn(api, 'readInferenceConfig')
+  api.proposeRunAnalysis.mockResolvedValue({ ...PROPOSAL, standing: true })
+  api.runClean.mockResolvedValueOnce({ runId: 'area-a', pages: [{ index: 0 }] })
+    .mockResolvedValueOnce({ runId: 'area-b', pages: [{ index: 0 }] })
+  const firstArea = { x: 5, y: 10, w: 15, h: 20 }
+  const secondArea = { x: 50, y: 60, w: 10, h: 10 }
+  const started = await Promise.all([
+    detectArea(0, firstArea, /** @type {any} */ (api)),
+    detectArea(0, secondArea, /** @type {any} */ (api)),
+  ])
+  expect(started).toEqual(['area-a', 'area-b'])
+  expect(api.runClean.mock.calls.map(([spec]) => spec.area)).toEqual([firstArea, secondArea])
+  expect(readConfig).toHaveBeenCalledTimes(1)
+  expect(editor.areaRuns.map((run) => run.runId)).toEqual(['area-a', 'area-b'])
+  expect(editor.run.active).toBe(false)
+  expect(app.notices).toEqual([])
+})
+
+it('keeps a selection detection on its drawn page after navigation during preparation', async () => {
+  const api = backend()
+  let answer
+  api.proposeRunAnalysis.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+  const area = { x: 5, y: 10, w: 15, h: 20 }
+  const started = detectArea(0, area, /** @type {any} */ (api))
+  await vi.waitFor(() => expect(api.proposeRunAnalysis).toHaveBeenCalledTimes(1))
+  editor.pageIndex = 1
+  answer({ ...PROPOSAL, standing: true })
+  expect(await started).toBe('run-1')
+  expect(api.runClean).toHaveBeenCalledWith(expect.objectContaining({ pageIndex: 0, area }))
+  expect(api.cancelRunAnalysis).not.toHaveBeenCalled()
 })
 
 it('proposes this page, asks, and starts the run with the grant the answer minted', async () => {
@@ -219,7 +254,11 @@ it('keeps one detection proposal open for repeated Run input', async () => {
   expect(await first).toBeNull()
 })
 
-it('blocks canvas and Layers clean actions while a run proposal is pending', async () => {
+// A click on a region starts no clean (`toolapply.svelte.js`). A Layers row's
+// own Clean is an edit of its page and not a run: a proposal that has started
+// nothing holds no page, so the edit goes to the backend, which is where a
+// run and an edit of one page are told apart (`page_busy`).
+it('holds a canvas click back while a run proposal is pending, and lets a Layers clean through', async () => {
   const api = backend()
   api.applyTool = vi.fn(async () => ({ status: 'applied' }))
   const region = { id: 'r1', pageId: 'p0', detected: true, outcome: 'detected', mask: null }
@@ -228,10 +267,33 @@ it('blocks canvas and Layers clean actions while a run proposal is pending', asy
   const first = startCleanRun('page', /** @type {any} */ (api))
   await consent()
   expect(await applyActiveToolToRegion('r1')).toBe(false)
-  expect(await cleanDetected(region)).toBe(false)
   expect(api.applyTool).not.toHaveBeenCalled()
+  await cleanDetected(region)
+  expect(api.applyTool).toHaveBeenCalledTimes(1)
   closeModal('cancel')
   expect(await first).toBeNull()
+})
+
+it('holds a Layers clean back only on the page the run is on', async () => {
+  const api = backend()
+  api.applyTool = vi.fn(async () => ({ status: 'applied' }))
+  const region = { id: 'r1', pageId: 'p0', detected: true, outcome: 'detected', mask: null }
+  editor.chapter.pages[0].regions = [region]
+  editor.run.active = true
+  try {
+    editor.run.busyPages = [editor.chapter.pages[0].index]
+    expect(await cleanDetected(region)).toBe(false)
+    expect(api.applyTool).not.toHaveBeenCalled()
+    expect(app.notices.at(-1)?.key).toBe('notice.run.pageBusy')
+
+    // The run has moved on: the same press is an edit again.
+    editor.run.busyPages = [editor.chapter.pages[0].index + 1]
+    await cleanDetected(region)
+    expect(api.applyTool).toHaveBeenCalledTimes(1)
+  } finally {
+    editor.run.active = false
+    editor.run.busyPages = []
+  }
 })
 
 it('cancels a proposal that answers after the reader changes page', async () => {

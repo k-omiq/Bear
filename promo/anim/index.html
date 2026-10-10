@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manga Cleaner Promo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@600;700;800&display=block" rel="stylesheet">
+<style>
+  :root { --paper: #fdfbff; --ink: #23202b; --muted: #6f6a7d; --pink: #ff5c8a; --pink-soft: #ffe1ea; }
+  html, body { margin: 0; height: 100%; background: #16141b; color: var(--paper); font-family: Nunito, system-ui, sans-serif; }
+  body { display: grid; place-items: center; overflow: hidden; }
+  canvas { display: block; background: var(--paper); }
+  body.preview canvas { width: min(100vw, calc((100vh - 56px) * 16 / 9)); height: auto; }
+  video { display: none; }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; height: 56px; display: flex; gap: 12px; align-items: center;
+         padding: 0 16px; background: #1f1c26; box-sizing: border-box; }
+  #bar button { background: var(--pink); color: #fff; border: 0; border-radius: 999px; padding: 8px 18px; font: 800 15px Nunito, sans-serif; cursor: pointer; }
+  #bar button:active { transform: scale(0.97); }
+  #bar input[type=range] { flex: 1; accent-color: var(--pink); }
+  #bar span { font-variant-numeric: tabular-nums; color: #b9b3c7; min-width: 130px; text-align: right; }
+  body.render #bar { display: none; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<div id="bar">
+  <button id="play">Play</button>
+  <input id="seek" type="range" min="0" max="120" step="0.01" value="0">
+  <span id="clock">0.00</span>
+</div>
+<script src="promo.js"></script>
+</body>
+</html>

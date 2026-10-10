@@ -380,6 +380,10 @@ fn plan_open_job(job: &Job, format: &str, destination: &str, masks: &str, layout
 /// interface draws a busy spinner over: run inline on the invoke handler's
 /// thread, it would hold the webview for the whole export and the spinner would
 /// never paint.
+///
+/// Refused with `run_in_progress` while the chapter has a run: the run lets
+/// go of the job between its pages, and an export taken then would publish a
+/// chapter half of whose pages are cleaned.
 #[tauri::command]
 pub async fn export_chapter(
     app: tauri::AppHandle,
@@ -393,7 +397,7 @@ pub async fn export_chapter(
     let declared = format.clone().unwrap_or_else(|| "PNG".into());
     let result = library::blocking(move || {
         let job_path = library::resolve_chapter(&app, &chapter_id).map_err(|e| e.to_string())?;
-        let _lock = crate::run::lock_job(&job_path)?;
+        let _lock = crate::run::lock_chapter(&job_path)?;
         let job = Job::open(&job_path).map_err(|e| e.to_string())?;
         export_reviewed_job(
             &job,

@@ -59,12 +59,12 @@
    *   `goToPage` leaves for it.
    * - **Preloading.** A longstrip mounts the pages and tiles a screen past
    *   either end of the viewport; a paginated chapter fetches the pages either
-   *   side of the one on screen.
-   * - **Scroll room.** Half a viewport of empty canvas above and below the
-   *   page, so its top and bottom can be pulled to the middle of the screen,
-   *   clear of the top bar and of a floating window. A margin on the stage,
-   *   not padding on the viewport, whose padding is what "fit" measures. A
-   *   fitted single page has none: it is all on screen and should not move.
+   *   side of the one on screen, once that one is shown.
+   * - **Scroll room.** Half a viewport of empty canvas on every side of the
+   *   page, so each edge can be pulled to the middle of the screen, clear of
+   *   the top bar and of a floating window. A margin on the stage, not padding
+   *   on the viewport, whose padding is what "fit" measures. A fitted single
+   *   page has none: it is all on screen and should not move.
    *   The room is reported (`reportScrollRoom`) so that a saved position is
    *   measured from the page's place at rest, and when the room changes the
    *   scroller moves by the same amount, so the page stays where it is.
@@ -81,6 +81,7 @@
      padding box, so the viewport's own padding never enters the arithmetic
      twice. `columnTop` goes negative as the reader scrolls into the column. */
   let columnTop = $state(0)
+  let viewportWidth = $state(0)
   let viewportHeight = $state(0)
   let columnOrigin = 0
   let focusedIndex = $state(-1)
@@ -151,6 +152,14 @@
   const paginated = $derived(longstrip ? [] : list.slice(
     Math.max(0, editor.pageIndex - 1), editor.pageIndex + 2,
   ))
+  // The page on screen comes first. `settled` is that page once its sheet has
+  // said it is shown, and until then its neighbours ask for no tiles
+  // (`PageSheet`'s `waiting`). A jump to a cold page otherwise asks for three
+  // pages in two variants at once, the previous page's ahead of the one being
+  // looked at, and a page passed on the way leaves its neighbours drawing.
+  // A neighbour that is already loaded keeps its tiles, so a turn to it is
+  // still instant, and it settles at once, which starts the page after it.
+  let settled = $state(/** @type {string|null} */ (null))
 
   $effect(() => {
     editor.chapter?.id
@@ -201,6 +210,7 @@
     const origin = stageEl.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop
     contentWidth = width
     contentHeight = height - px(style?.paddingTop) - px(style?.paddingBottom)
+    viewportWidth = box.clientWidth
     viewportHeight = height
     columnOrigin = origin
     readScroll()
@@ -229,7 +239,15 @@
   })
 
   const room = $derived(editor.fit && !longstrip ? 0 : Math.round(viewportHeight / 2))
+  // The same at the sides, once there are pages: a placeholder has no sheet
+  // width to centre by.
+  const sideRoom = $derived(room && !editor.loading && list.length ? Math.round(viewportWidth / 2) : 0)
+  // A stage with room at its sides is always wider than the viewport, which
+  // then no longer centres a narrow sheet. The margin does it instead, so at
+  // `scrollLeft === sideRoom` the page is where it sits with no room at all.
+  const sideMargin = $derived(sideRoom ? sideRoom + Math.max(0, (contentWidth - width) / 2) : 0)
   let roomApplied = 0
+  let sideRoomApplied = 0
 
   // The margin and the scroll that makes up for it are written together,
   // here and not in the markup: an effect can run before the markup has caught
@@ -238,13 +256,21 @@
   // for it: the column's origin is measured again here.
   $effect(() => {
     const next = room
+    const side = sideRoom
+    const margin = sideMargin
     untrack(() => {
       const box = scroller()
-      if (!box || !stageEl || next === roomApplied) return
+      if (!box || !stageEl) return
+      // A zoom changes the side margin and not the room: the sheet stays
+      // centred on the same place and the scroller does not move.
+      stageEl.style.marginLeft = stageEl.style.marginRight = margin ? `${margin}px` : ''
+      if (next === roomApplied && side === sideRoomApplied) return
       stageEl.style.marginTop = stageEl.style.marginBottom = next ? `${next}px` : ''
       box.scrollTop += next - roomApplied
+      box.scrollLeft += side - sideRoomApplied
       roomApplied = next
-      reportScrollRoom(next)
+      sideRoomApplied = side
+      reportScrollRoom(next, side)
       measureViewport()
     })
   })
@@ -431,7 +457,14 @@
   {:else if model}
     {#each paginated as page (page.id)}
       <div class="paginated" hidden={page.id !== model.id} data-page-id={page.id}>
-        <PageSheet {page} {width} current={page.id === model.id} tabbable={page.id === model.id} />
+        <PageSheet
+          {page}
+          {width}
+          current={page.id === model.id}
+          tabbable={page.id === model.id}
+          waiting={page.id !== model.id && settled !== model.id}
+          onshown={(shown) => (settled = shown ? page.id : null)}
+        />
       </div>
     {/each}
   {/if}

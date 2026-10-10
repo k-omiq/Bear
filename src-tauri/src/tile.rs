@@ -779,7 +779,11 @@ pub fn serve_request(
     request: &TileRequest,
     expected: Option<&str>,
 ) -> Result<(Vec<u8>, Freshness), TileError> {
-    let job = Job::open(job_path)?;
+    // Read only, and shared while the file is unchanged ([`read_job`]). A page
+    // turn asks for a page's tiles in both variants for three pages at once,
+    // and each request used to take the job, parse the manifest and sweep its
+    // sidecar before it could look in the tile cache.
+    let job = read_job(job_path)?;
     let current = match request.variant {
         Variant::Source => None,
         Variant::Cleaned => Some(page_appearance(&job.project, request.page_index)),
@@ -832,9 +836,10 @@ pub struct DetectionMask {
 /// The detection has to be on the page the path names. An id that is a patch,
 /// an untouched row or another page's detection is a `404`, as is a detection
 /// with nothing to draw. The job is opened to read only: drawing never takes
-/// the lock or sweeps a file.
+/// the lock or sweeps a file. A page's masks are asked for together, so the
+/// read is shared ([`read_job`]).
 pub fn serve_detection(job_path: &Path, request: &DetectionRequest) -> Result<DetectionMask, TileError> {
-    let job = Job::open_read_only(job_path)?;
+    let job = read_job(job_path)?;
     let source_idx = library::Library::resolve_page(&job.project, request.page_index).ok_or_else(|| {
         TileError::NoSuchPage { job: job_path.display().to_string(), page_index: request.page_index }
     })?;
@@ -938,8 +943,19 @@ fn read_job(job_path: &Path) -> Result<Arc<Job>, TileError> {
     #[cfg(not(unix))]
     let inode = 0;
     let stamp: Stamp = (meta.len(), meta.modified().ok(), inode);
-    if let Some((_, _, job)) = lock(&JOBS).iter().find(|(path, seen, _)| path == job_path && *seen == stamp) {
-        return Ok(Arc::clone(job));
+    let kept = || {
+        lock(&JOBS).iter().find(|(path, seen, _)| path == job_path && *seen == stamp).map(|(_, _, job)| Arc::clone(job))
+    };
+    if let Some(job) = kept() {
+        return Ok(job);
+    }
+    // One parse per saved state. A page's requests arrive together, so after a
+    // save they all miss at once: the first parses and the rest wait here,
+    // then find its read.
+    static PARSING: Mutex<()> = Mutex::new(());
+    let _parsing = lock(&PARSING);
+    if let Some(job) = kept() {
+        return Ok(job);
     }
     let job = Arc::new(Job::open_read_only(job_path)?);
     let mut jobs = lock(&JOBS);

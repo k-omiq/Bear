@@ -90,14 +90,6 @@ pub(crate) trait AnalysisGateway {
         self.analyze(request, png)
     }
 
-    /// Release the analysis GPU now if the gateway sees it idle with no tile in
-    /// flight (`POST /mc/v1/gpu/stop` with `idle_only`). A gateway that cannot says
-    /// so with an `Err`, and the caller only logs it: the GPU then scales down on its
-    /// own idle timer.
-    fn release_idle(&self) -> Result<(), String> {
-        Err("gpu_release_unsupported".into())
-    }
-
     /// Whether [`Self::analyze_batch`] is served. Not by default (an older
     /// gateway, Beam): [`run_tiles`] then sends the requests one by one.
     fn serves_batches(&self) -> Result<bool, String> {
@@ -130,10 +122,6 @@ impl AnalysisGateway for CloudHttpClient {
     fn analyze_cancellable(&self, request: &AnalysisRequest, png: &[u8], cancel: &AtomicBool)
         -> Result<AnalysisResult, String> {
         self.analyze_tile(request, png, cancel).map_err(|e| e.to_string())
-    }
-
-    fn release_idle(&self) -> Result<(), String> {
-        crate::inference::gpu::release_idle(self, crate::inference::gpu::GpuRole::Analysis).map(|_| ())
     }
 
     fn serves_batches(&self) -> Result<bool, String> {

@@ -136,7 +136,7 @@ class RecoveryContractTest(unittest.TestCase):
 
     def test_modal_deployment_wires_both_release_methods_and_persistent_store(self):
         source = (ROOT / "deploy/cloud/modal/app.py").read_text()
-        self.assertIn('"render": lambda: Worker().release.spawn()', source)
+        self.assertIn('release["render"] = lambda: Worker().release.spawn()', source)
         self.assertIn('"analysis": lambda: AnalysisGPU().release.spawn()', source)
         self.assertEqual(source.count("def release(self)"), 2)
         self.assertIn("DispatchJobBackend(", source)

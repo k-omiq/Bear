@@ -65,6 +65,9 @@ use reqwest::{StatusCode, Url};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
+mod denoise;
+pub(crate) use denoise::DenoiseJob;
+
 use crate::inference::config::{
     compute_canonical_endpoint_fingerprint, validate_https_endpoint, validate_profile_id,
 };
@@ -105,10 +108,15 @@ const DNS_WORKER_COUNT: usize = 4;
 /// Errors arising from the hardened cloud HTTP transport.
 #[derive(Debug, Error, PartialEq)]
 pub enum HttpTransportError {
+    #[error("denoise result checkpoint could not be stored")]
+    DenoiseStorage,
     #[error("submission was not enqueued: {reason}")]
     NotEnqueued { reason: Box<HttpTransportError>, retryable: bool },
     #[error("cloud render weights need repair")]
     RenderWeightsUnavailable,
+    /// The deployment was set up without a cleaning model.
+    #[error("capability_unavailable: gateway render is not configured")]
+    RenderNotConfigured,
     #[error("invalid target URL configuration")]
     InvalidTarget,
 
@@ -1002,9 +1010,7 @@ impl CloudHttpClient {
         let operations = match self.operations.get() {
             Some(operations) => operations,
             None => {
-                let mut url = self.target.base_url.clone();
-                url.set_path(&format!("{}/capabilities", url.path().trim_end_matches('/')));
-                let listed = match self.send_get_json::<serde_json::Value>(url, MAX_CONTROL_JSON_BYTES) {
+                let listed = match self.send_get_json::<serde_json::Value>(self.capabilities_url(), MAX_CONTROL_JSON_BYTES) {
                     Ok(response) => response["operations"].as_array().map(|ops| ops.iter()
                         .filter_map(|op| op.as_str().map(str::to_owned)).collect()).unwrap_or_default(),
                     Err(HttpTransportError::UnexpectedStatus { status: 404 | 501 }) => Vec::new(),
@@ -1336,10 +1342,34 @@ impl CloudHttpClient {
         Ok(resp)
     }
 
+    /// `GET /mc/v1/capabilities`, the gateway's advertisement.
+    fn capabilities_url(&self) -> Url {
+        let mut url = self.target.base_url.clone();
+        url.set_path(&format!("{}/capabilities", url.path().trim_end_matches('/')));
+        url
+    }
+
+    /// Whether `/capabilities` says `"render": false`: a deployment set up
+    /// without a cleaning model. A gateway that does not say has one.
+    fn render_not_configured(&self) -> bool {
+        self.send_get_json::<serde_json::Value>(self.capabilities_url(), MAX_CONTROL_JSON_BYTES)
+            .is_ok_and(|response| response["render"] == false)
+    }
+
     /// Authenticated model-info runtime capability check (`GET /mc/v1/model-info`).
+    /// [`HttpTransportError::RenderNotConfigured`] from a deployment set up
+    /// without a cleaning model.
     pub fn get_model_info(&self) -> Result<ModelInfoResponse, HttpTransportError> {
         let url = self.target.build_fixed_route(FixedControlRoute::ModelInfo)?;
-        let resp: ModelInfoResponse = self.send_get_json(url, MAX_CONTROL_JSON_BYTES)?;
+        let resp: ModelInfoResponse = match self.send_get_json(url, MAX_CONTROL_JSON_BYTES) {
+            Ok(resp) => resp,
+            // Such a deployment refuses the route and says why in `/capabilities`;
+            // any other 503 is the gateway's own trouble.
+            Err(HttpTransportError::UnexpectedStatus { status: 503 }) if self.render_not_configured() => {
+                return Err(HttpTransportError::RenderNotConfigured);
+            }
+            Err(error) => return Err(error),
+        };
 
         validate_model_info_response(&resp).map_err(|_| HttpTransportError::WireValidation)?;
 
@@ -1428,9 +1458,7 @@ impl CloudHttpClient {
 
     /// CPU-only deployment handshake. Missing capabilities require a redeploy.
     pub fn gateway_is_current(&self) -> Result<bool, HttpTransportError> {
-        let mut url = self.target.base_url.clone();
-        url.set_path(&format!("{}/capabilities", url.path().trim_end_matches('/')));
-        let response: serde_json::Value = match self.send_get_json(url, MAX_CONTROL_JSON_BYTES) {
+        let response: serde_json::Value = match self.send_get_json(self.capabilities_url(), MAX_CONTROL_JSON_BYTES) {
             Ok(response) => response,
             Err(HttpTransportError::UnexpectedStatus { status: 404 | 501 }) => return Ok(false),
             Err(error) => return Err(error),
@@ -1447,9 +1475,7 @@ impl CloudHttpClient {
     /// Which cloud code the deployment runs, from `code_digest` in `/capabilities`
     /// (`deploy/cloud/common/release.py`). `None`: a gateway too old to say.
     pub fn gateway_code_digest(&self) -> Result<Option<String>, HttpTransportError> {
-        let mut url = self.target.base_url.clone();
-        url.set_path(&format!("{}/capabilities", url.path().trim_end_matches('/')));
-        let response: serde_json::Value = match self.send_get_json(url, MAX_CONTROL_JSON_BYTES) {
+        let response: serde_json::Value = match self.send_get_json(self.capabilities_url(), MAX_CONTROL_JSON_BYTES) {
             Ok(response) => response,
             Err(HttpTransportError::UnexpectedStatus { status: 404 | 501 }) => return Ok(None),
             Err(error) => return Err(error),
@@ -1955,6 +1981,45 @@ mod tests {
             }).unwrap();
             let client = CloudHttpClient::new_test_client(target, credential, reqwest::blocking::Client::new());
             assert_eq!(client.gateway_code_digest().unwrap(), expected, "{case}");
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn model_info_from_a_deployment_without_a_cleaning_model_is_render_not_configured() {
+        // `/model-info` refuses with 503 in every case; `/capabilities` tells a
+        // deployment set up without a cleaning model from a gateway in trouble.
+        for (case, expected) in [
+            ("no_model", HttpTransportError::RenderNotConfigured),
+            ("has_model", HttpTransportError::UnexpectedStatus { status: 503 }),
+            ("old_gateway", HttpTransportError::UnexpectedStatus { status: 503 }),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                for route in ["get /mc/v1/model-info ", "get /mc/v1/capabilities "] {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut request = [0; 4096];
+                    let size = stream.read(&mut request).unwrap();
+                    assert!(String::from_utf8_lossy(&request[..size]).to_lowercase().starts_with(route), "{case}");
+                    let mut body = serde_json::json!({"protocol_version": "1.0.0", "provider": "modal", "operations": []});
+                    if case == "no_model" { body["render"] = false.into(); }
+                    let (status, body) = match (route.contains("model-info"), case) {
+                        (true, _) => ("503 Service Unavailable", serde_json::json!({
+                            "error_code": "capability_unavailable", "message": "Render is not configured"}).to_string()),
+                        (false, "old_gateway") => ("404 Not Found", "{}".to_string()),
+                        (false, _) => ("200 OK", body.to_string()),
+                    };
+                    write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                }
+            });
+            let target = CloudEndpointTarget::new_test_target(CloudProvider::Modal, "modal-1",
+                &format!("http://{address}/mc/v1")).unwrap();
+            let credential = BoundRuntimeCredential::new(&target, RuntimeCredential::ModalProxy {
+                token_id: "tid".into(), token_secret: SecretValue::new("tsec"),
+            }).unwrap();
+            let client = CloudHttpClient::new_test_client(target, credential, reqwest::blocking::Client::new());
+            assert_eq!(client.get_model_info().unwrap_err(), expected, "{case}");
             server.join().unwrap();
         }
     }

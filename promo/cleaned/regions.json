@@ -1,0 +1,935 @@
+{
+ "imageSize": [
+  1414,
+  2000
+ ],
+ "bboxFormat": "[x, y, w, h] in page pixels",
+ "pages": [
+  {
+   "page": "page-010",
+   "input": "promo/pages/page-010.png",
+   "cleaned": "promo/cleaned/page-010-clean.png",
+   "mask": "promo/cleaned/page-010-mask.png",
+   "detectMs": 26001,
+   "cleanMs": 26544,
+   "counts": {
+    "found": 31,
+    "cleaned": 29,
+    "declined": 2,
+    "fill": 21,
+    "lama": 8,
+    "inBubble": 21,
+    "outside": 10
+   },
+   "regions": [
+    {
+     "id": "c2-p001-d0",
+     "bbox": [
+      794,
+      71,
+      192,
+      260
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      761,
+      38,
+      257,
+      326
+     ]
+    },
+    {
+     "id": "c2-p001-d1",
+     "bbox": [
+      598,
+      114,
+      105,
+      200
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      573,
+      89,
+      154,
+      250
+     ]
+    },
+    {
+     "id": "c2-p001-d2",
+     "bbox": [
+      1182,
+      139,
+      195,
+      192
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      1137,
+      94,
+      277,
+      282
+     ]
+    },
+    {
+     "id": "c2-p001-d3",
+     "bbox": [
+      222,
+      171,
+      124,
+      180
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      205,
+      154,
+      157,
+      214
+     ]
+    },
+    {
+     "id": "c2-p001-d6",
+     "bbox": [
+      550,
+      245,
+      20,
+      30
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      555,
+      250,
+      9,
+      20
+     ]
+    },
+    {
+     "id": "c2-p001-d5",
+     "bbox": [
+      522,
+      245,
+      37,
+      35
+     ],
+     "kind": "outside",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      520,
+      243,
+      40,
+      39
+     ]
+    },
+    {
+     "id": "c2-p001-d4",
+     "bbox": [
+      384,
+      245,
+      26,
+      33
+     ],
+     "kind": "outside",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      382,
+      243,
+      29,
+      37
+     ]
+    },
+    {
+     "id": "c2-p001-d7",
+     "bbox": [
+      409,
+      247,
+      21,
+      24
+     ],
+     "kind": "outside",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      408,
+      246,
+      22,
+      26
+     ]
+    },
+    {
+     "id": "c2-p001-d8",
+     "bbox": [
+      1169,
+      616,
+      112,
+      161
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      1132,
+      579,
+      185,
+      235
+     ]
+    },
+    {
+     "id": "c2-p001-d9",
+     "bbox": [
+      251,
+      618,
+      75,
+      221
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      218,
+      585,
+      140,
+      287
+     ]
+    },
+    {
+     "id": "c2-p001-d10",
+     "bbox": [
+      552,
+      638,
+      38,
+      80
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      499,
+      585,
+      143,
+      186
+     ]
+    },
+    {
+     "id": "c2-p001-d11",
+     "bbox": [
+      731,
+      661,
+      33,
+      80
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      670,
+      600,
+      154,
+      202
+     ]
+    },
+    {
+     "id": "c2-p001-d12",
+     "bbox": [
+      653,
+      708,
+      41,
+      84
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      592,
+      647,
+      162,
+      206
+     ]
+    },
+    {
+     "id": "c2-p001-d13",
+     "bbox": [
+      505,
+      764,
+      40,
+      75
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      456,
+      715,
+      137,
+      173
+     ]
+    },
+    {
+     "id": "c2-p001-d14",
+     "bbox": [
+      807,
+      782,
+      33,
+      75
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      774,
+      749,
+      98,
+      141
+     ]
+    },
+    {
+     "id": "c2-p001-d15",
+     "bbox": [
+      1186,
+      1323,
+      115,
+      194
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      1165,
+      1302,
+      156,
+      236
+     ]
+    },
+    {
+     "id": "c2-p001-d16",
+     "bbox": [
+      925,
+      1350,
+      42,
+      132
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      896,
+      1321,
+      99,
+      190
+     ]
+    },
+    {
+     "id": "c2-p001-d17",
+     "bbox": [
+      368,
+      1360,
+      77,
+      98
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      327,
+      1319,
+      158,
+      180
+     ]
+    },
+    {
+     "id": "c2-p001-d18",
+     "bbox": [
+      745,
+      1370,
+      122,
+      250
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      728,
+      1353,
+      155,
+      284
+     ]
+    },
+    {
+     "id": "c2-p001-d19",
+     "bbox": [
+      1016,
+      1434,
+      60,
+      57
+     ],
+     "kind": "outside",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      1007,
+      1425,
+      77,
+      75
+     ]
+    },
+    {
+     "id": "c2-p001-d20",
+     "bbox": [
+      1063,
+      1518,
+      78,
+      163
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      1034,
+      1489,
+      135,
+      221
+     ]
+    },
+    {
+     "id": "c2-p001-d21",
+     "bbox": [
+      1200,
+      1630,
+      54,
+      47
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      1175,
+      1605,
+      103,
+      97
+     ]
+    },
+    {
+     "id": "c2-p001-d22",
+     "bbox": [
+      1298,
+      1645,
+      34,
+      46
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      1281,
+      1628,
+      67,
+      80
+     ]
+    },
+    {
+     "id": "c2-p001-d23",
+     "bbox": [
+      243,
+      1671,
+      77,
+      191
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      214,
+      1642,
+      134,
+      249
+     ]
+    },
+    {
+     "id": "c2-p001-d24",
+     "bbox": [
+      1016,
+      1727,
+      49,
+      46
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      999,
+      1710,
+      82,
+      80
+     ]
+    },
+    {
+     "id": "c2-p001-d25",
+     "bbox": [
+      595,
+      1743,
+      63,
+      98
+     ],
+     "kind": "outside",
+     "status": "declined",
+     "engine": null,
+     "reason": "decline.reason.edgeEnergy"
+    },
+    {
+     "id": "c2-p001-d26",
+     "bbox": [
+      604,
+      1835,
+      47,
+      53
+     ],
+     "kind": "outside",
+     "status": "declined",
+     "engine": null,
+     "reason": "decline.reason.edgeEnergy"
+    },
+    {
+     "id": "c2-p001-d27",
+     "bbox": [
+      839,
+      1858,
+      38,
+      90
+     ],
+     "kind": "outside",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      837,
+      1856,
+      41,
+      94
+     ]
+    },
+    {
+     "id": "c2-p001-d28",
+     "bbox": [
+      1239,
+      1880,
+      25,
+      23
+     ],
+     "kind": "outside",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      1237,
+      1878,
+      28,
+      27
+     ]
+    },
+    {
+     "id": "c2-p001-d29",
+     "bbox": [
+      1221,
+      1897,
+      21,
+      18
+     ],
+     "kind": "outside",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      1220,
+      1896,
+      22,
+      20
+     ]
+    },
+    {
+     "id": "c2-p001-d30",
+     "bbox": [
+      845,
+      1958,
+      20,
+      20
+     ],
+     "kind": "outside",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      844,
+      1957,
+      21,
+      22
+     ]
+    }
+   ]
+  },
+  {
+   "page": "page-025",
+   "input": "promo/pages/page-025.png",
+   "cleaned": "promo/cleaned/page-025-clean.png",
+   "mask": "promo/cleaned/page-025-mask.png",
+   "detectMs": 19594,
+   "cleanMs": 3853,
+   "counts": {
+    "found": 7,
+    "cleaned": 7,
+    "declined": 0,
+    "fill": 6,
+    "lama": 1,
+    "inBubble": 7,
+    "outside": 0
+   },
+   "regions": [
+    {
+     "id": "c2-p002-d31",
+     "bbox": [
+      1114,
+      153,
+      38,
+      98
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      1087,
+      126,
+      91,
+      152
+     ]
+    },
+    {
+     "id": "c2-p002-d32",
+     "bbox": [
+      290,
+      319,
+      114,
+      284
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      257,
+      286,
+      179,
+      350
+     ]
+    },
+    {
+     "id": "c2-p002-d33",
+     "bbox": [
+      1007,
+      677,
+      188,
+      250
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      982,
+      652,
+      237,
+      300
+     ]
+    },
+    {
+     "id": "c2-p002-d34",
+     "bbox": [
+      225,
+      778,
+      76,
+      163
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      172,
+      725,
+      181,
+      269
+     ]
+    },
+    {
+     "id": "c2-p002-d35",
+     "bbox": [
+      1137,
+      1032,
+      39,
+      192
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      1108,
+      1003,
+      96,
+      250
+     ]
+    },
+    {
+     "id": "c2-p002-d36",
+     "bbox": [
+      1112,
+      1370,
+      80,
+      219
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      1096,
+      1354,
+      111,
+      251
+     ]
+    },
+    {
+     "id": "c2-p002-d37",
+     "bbox": [
+      487,
+      1380,
+      189,
+      258
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      458,
+      1351,
+      246,
+      316
+     ]
+    }
+   ]
+  },
+  {
+   "page": "page-048",
+   "input": "promo/pages/page-048.png",
+   "cleaned": "promo/cleaned/page-048-clean.png",
+   "mask": "promo/cleaned/page-048-mask.png",
+   "detectMs": 18071,
+   "cleanMs": 2320,
+   "counts": {
+    "found": 3,
+    "cleaned": 3,
+    "declined": 0,
+    "fill": 2,
+    "lama": 1,
+    "inBubble": 2,
+    "outside": 1
+   },
+   "regions": [
+    {
+     "id": "c2-p003-d38",
+     "bbox": [
+      120,
+      54,
+      368,
+      170
+     ],
+     "kind": "outside",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      115,
+      49,
+      377,
+      180
+     ]
+    },
+    {
+     "id": "c2-p003-d39",
+     "bbox": [
+      1024,
+      210,
+      89,
+      336
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      967,
+      153,
+      202,
+      450
+     ]
+    },
+    {
+     "id": "c2-p003-d40",
+     "bbox": [
+      249,
+      1405,
+      310,
+      405
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      216,
+      1372,
+      375,
+      471
+     ]
+    }
+   ]
+  },
+  {
+   "page": "page-100",
+   "input": "promo/pages/page-100.png",
+   "cleaned": "promo/cleaned/page-100-clean.png",
+   "mask": "promo/cleaned/page-100-mask.png",
+   "detectMs": 19749,
+   "cleanMs": 2479,
+   "counts": {
+    "found": 7,
+    "cleaned": 6,
+    "declined": 1,
+    "fill": 5,
+    "lama": 1,
+    "inBubble": 5,
+    "outside": 2
+   },
+   "regions": [
+    {
+     "id": "c2-p004-d41",
+     "bbox": [
+      1063,
+      141,
+      181,
+      335
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      1022,
+      100,
+      262,
+      417
+     ]
+    },
+    {
+     "id": "c2-p004-d42",
+     "bbox": [
+      259,
+      485,
+      132,
+      299
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      210,
+      436,
+      229,
+      397
+     ]
+    },
+    {
+     "id": "c2-p004-d43",
+     "bbox": [
+      593,
+      878,
+      151,
+      219
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      552,
+      837,
+      232,
+      301
+     ]
+    },
+    {
+     "id": "c2-p004-d44",
+     "bbox": [
+      1145,
+      927,
+      140,
+      191
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      1104,
+      886,
+      221,
+      273
+     ]
+    },
+    {
+     "id": "c2-p004-d45",
+     "bbox": [
+      565,
+      1444,
+      58,
+      252
+     ],
+     "kind": "in-bubble",
+     "status": "cleaned",
+     "engine": "fill",
+     "patchBbox": [
+      528,
+      1407,
+      131,
+      326
+     ]
+    },
+    {
+     "id": "c2-p004-d46",
+     "bbox": [
+      944,
+      1749,
+      29,
+      37
+     ],
+     "kind": "outside",
+     "status": "cleaned",
+     "engine": "lama",
+     "patchBbox": [
+      942,
+      1747,
+      32,
+      41
+     ]
+    },
+    {
+     "id": null,
+     "bbox": [
+      725,
+      1833,
+      22,
+      50
+     ],
+     "kind": "outside",
+     "status": "declined",
+     "engine": null,
+     "reason": "review.reason.maskMissingUnderBox",
+     "stage": "detect"
+    }
+   ]
+  }
+ ]
+}

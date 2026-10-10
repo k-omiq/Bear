@@ -274,7 +274,7 @@ describe('the Shapes tool', () => {
   // too, so whether the rows read Solid now is not the question
   // (`ToolBar.svelte` decides where a clean reads it).
   it('leaves an unconditional row alone', () => {
-    const all = ['step', 'scope', 'outsideBubbles', 'maskPadding', 'bubbleEngine', 'outsideEngine', 'bubbleColor']
+    const all = ['step', 'scope', 'outsideBubbles', 'bubbleEngine', 'outsideEngine', 'bubbleColor']
     expect(activeParams(toolSpec('autoClean'), { bubbleEngine: SOLID }).map((p) => p.key)).toEqual(all)
     expect(activeParams(toolSpec('autoClean'), { bubbleEngine: 'lama' }).map((p) => p.key)).toEqual(all)
     expect(activeParams(toolSpec('autoClean'), {}).map((p) => p.key)).toEqual(all)
@@ -296,7 +296,8 @@ describe('the Shapes tool', () => {
  * **The selection tool edits the detected masks, and nothing else.** Slot 6,
  * a pill like every drawing tool, no run button and no engine: what happens to
  * the area is Clean's decision, later. Its brush has a size; its lasso and
- * rectangle do not, so the row is there only for the brush.
+ * rectangle do not, so the row is there only for the brush. Its Detect mode
+ * is a rectangle for the detector, with no shape and no size to choose.
  */
 describe('the selection tool', () => {
   const spec = toolSpec('maskSelect')
@@ -314,8 +315,8 @@ describe('the selection tool', () => {
     expect(isDrawingTool('maskSelect')).toBe(true)
   })
 
-  it('adds or removes, and draws with a brush, a lasso or a rectangle', () => {
-    expect(param('mode')?.options.map((option) => option.value)).toEqual(['add', 'remove'])
+  it('adds, removes or detects, and draws with a brush, a lasso or a rectangle', () => {
+    expect(param('mode')?.options.map((option) => option.value)).toEqual(['add', 'remove', 'detect'])
     expect(param('shape')?.options.map((option) => option.value)).toEqual(['brush', 'lasso', 'rect'])
     for (const option of [...(param('mode')?.options ?? []), ...(param('shape')?.options ?? [])]) {
       expect(iconNames, option.value).toContain(option.icon)
@@ -329,6 +330,12 @@ describe('the selection tool', () => {
     expect(activeParams(spec, { mode: 'remove', shape: 'rect' }).map((p) => p.key)).toEqual(['mode', 'shape'])
     // A fresh record with no shape yet is a brush, as the defaults say.
     expect(activeParams(spec, {}).map((p) => p.key)).toContain('size')
+  })
+
+  it('shows the mode alone for a Detect, whatever shape was last picked', () => {
+    for (const shape of ['brush', 'lasso', 'rect']) {
+      expect(activeParams(spec, { mode: 'detect', shape }).map((p) => p.key), shape).toEqual(['mode'])
+    }
   })
 
   it('never reaches the cloud, whatever it is passed', () => {
@@ -358,6 +365,12 @@ describe('draftShape', () => {
     expect(draftShape('maskSelect', {})).toBeNull()
     // Shapes' other shapes are not the selection tool's.
     expect(draftShape('maskSelect', { shape: 'polygon' })).toBeNull()
+  })
+
+  it('is a rectangle for the selection tool’s Detect, whatever its shape row holds', () => {
+    for (const shape of ['brush', 'lasso', 'rect', undefined]) {
+      expect(draftShape('maskSelect', { mode: 'detect', shape }), String(shape)).toBe('rect')
+    }
   })
 
   it('is a stroke for every brush tool', () => {
@@ -420,13 +433,28 @@ describe('paramGroups', () => {
 
   it('reads Text cleanup as the run, the text it takes, the mask padding, then the engines', () => {
     for (const bubbleEngine of [SOLID, 'lama']) {
-      expect(paramGroups(toolSpec('autoClean'), { bubbleEngine }).map((group) => [group.key, group.params.length]))
-        .toEqual([
-          ['run', 2],
-          ['text', 1],
-          ['mask', 1],
-          ['engines', 3],
-        ])
+      for (const step of ['detect', 'clean']) {
+        expect(paramGroups(toolSpec('autoClean'), { step, bubbleEngine }).map((group) => [group.key, group.params.length]))
+          .toEqual([
+            ['run', 2],
+            ['text', 1],
+            ['mask', 1],
+            ['engines', 3],
+          ])
+      }
+    }
+  })
+
+  // Detect & clean is the one-press run: the padding row is away, and its
+  // group goes with it. The value stays in the record and the run still sends
+  // it (`editor.svelte.js#startRun`).
+  it('drops the mask padding from Detect & clean, and from a record with no step', () => {
+    for (const values of [{ step: 'auto' }, {}]) {
+      expect(paramGroups(toolSpec('autoClean'), values).map((group) => group.key)).toEqual(['run', 'text', 'engines'])
+      expect(activeParams(toolSpec('autoClean'), values).map((p) => p.key)).not.toContain('maskPadding')
+    }
+    for (const step of ['detect', 'clean']) {
+      expect(activeParams(toolSpec('autoClean'), { step }).map((p) => p.key)).toContain('maskPadding')
     }
   })
 

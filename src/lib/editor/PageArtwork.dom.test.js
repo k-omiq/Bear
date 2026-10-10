@@ -27,6 +27,20 @@ it('draws native-composited clean tiles and retains the prior pixels until the r
   expect(view.container.querySelector('.held')).toBeNull()
 })
 
+it('keeps the tile it is waiting for when a header\'s regions arrive', async () => {
+  const view = render(PageArtwork, { page: { ...page(), resident: false }, variant: 'cleaned' })
+  const pending = view.container.querySelector('img[data-version]')
+  const asked = pending.src
+  // `loadPages` answers for the same saved state: a new object, same digest.
+  const regions = [{ id: 'r1', mask: { id: 'm1', appearance: 'layer-one' } }]
+  await view.rerender({ page: { ...page(), resident: true, regions }, variant: 'cleaned' })
+  expect(view.container.querySelectorAll('img')).toHaveLength(1)
+  expect(view.container.querySelector('img[data-version]')).toBe(pending)
+  expect(pending.src).toBe(asked)
+  await fireEvent.load(pending)
+  expect(pending.dataset.loadedVersion).toBe(pending.dataset.version)
+})
+
 it('never carries a loaded tile from another page into the new page', async () => {
   const view = render(PageArtwork, { page: page(), variant: 'cleaned' })
   await fireEvent.load(view.container.querySelector('img'))

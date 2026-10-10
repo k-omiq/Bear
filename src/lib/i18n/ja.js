@@ -205,6 +205,9 @@ export const ja = {
           workspace: 'ワークスペース',
           model: 'クラウドモデル',
           modelNote: 'セットアップを承認する前に、クラウドモデル、GPU、アイドル時間を選んでください。モデルを変更すると別のチェックポイントをダウンロードします。',
+          noCleanModel: 'クリーニングモデルなし',
+          noCleanNote: 'クリーニングモデルはインストールされないため、このクラウド GPU ではクリーニングを実行しません。セットアップでは、選択した解析モデルとページのノイズ除去だけをダウンロードします。',
+          nothingChosen: 'クリーニングモデル、クラウド解析モデル、ページのノイズ除去のいずれかを選んでください。セットアップには少なくとも 1 つ必要です。',
           modelLicense: 'モデルのライセンス：{license}。作品に使う前に利用条件を確認してください。',
           analysisModels: 'クラウド解析モデル',
           analysisNote: 'クラウドでの検出には、Ogkalu comic text & bubble detector (Full)、SAM-TS-L 文字マスク、またはその両方を選択します。CTD と Small 検出器はこのコンピューターでのみ動作します。セットアップでは選択したグラフをインストールし、GPU 解析は要求したときにだけ開始します。',
@@ -447,6 +450,16 @@ export const ja = {
         chooserTitle: '固定版 Ogkalu comic text & bubble detector (Full) の detector.onnx',
       },
       setupReview: '選択したモデルは、何かを消す前に、エディターの確認機能から 1 ページずつチェックすることもできます。',
+      localFull: {
+        note: "このコンピューターで CTD、Ogkalu Full、SAM-TS-L を実行します。SAM には約 10 GB の空きメモリが必要です。CPU に対応し、使用できる GPU バックエンドは「パフォーマンス」に表示されます。",
+        use: "完全なパイプラインをローカルで使う",
+        install: "不足しているローカルモデルをインストール",
+        backends: "CPU または GPU を選択",
+        saveFailed: "ローカル検出を保存できませんでした。検出設定は保持されています。",
+        installFailed: "一部のローカルモデルをインストールできませんでした。以下のエラーを確認して再試行してください。",
+        ready: "このコンピューターで完全な検出を実行できます。",
+        pending: "このコンピューターで完全な検出を実行する前に、以下のモデルをインストールまたは確認してください。",
+      },
       modelsLegend: '検出モデル',
       runOn: {
         off: 'クラウド GPU を使うには、設定 > クラウドでクラウドエンジンをオンにしてください。',
@@ -1058,7 +1071,8 @@ export const ja = {
       cancelRun: '実行をキャンセル',
     },
     readout: {
-      page: '{total} ページ中 {index} ページ目',
+      pageJump: '{total} ページ中 {index} ページ目 · クリックでページ移動',
+      pageJumpField: '移動先のページ (1～{total})',
       review: '{total} 領域中 {index} 番目',
       reviewPending: {
         select: 'total',
@@ -1882,8 +1896,6 @@ export const ja = {
     },
     menu: {
       label: 'レイヤーの操作',
-      page: 'ページの操作',
-      detectHere: 'ここの文字を検出',
     },
     hint: {
       showOnPage: 'この領域までスクロールして選択',
@@ -1919,7 +1931,7 @@ export const ja = {
       shapes: 'ページ上でドラッグ',
       aiMaskBrush: '文字の上をなぞる',
       cloneStamp: '{cloneSourceModifier}+クリックでコピー元を指定',
-      maskSelect: 'クリーンで消す範囲に追加・削除',
+      maskSelect: 'クリーンで消す範囲に追加・削除、または描いた範囲の文字を検出',
     },
     label: {
       choice: '{labelKey}：{value}',
@@ -1933,6 +1945,8 @@ export const ja = {
       chooseModels: 'モデルを選択',
       useCloud: 'クラウド GPU で検出',
       mixedHint: '「塗りつぶし」または「単色」に設定した領域はまずここで試し、品質チェックに通らなかったものをクラウド GPU に送ります。オフにすると、すべての領域をクラウド GPU に送ります。',
+      solidOnly: '単色の吹き出しのみ',
+      solidOnlyHint: '無地の紙の上の吹き出しだけを、単色の塗りつぶしでクリーンします。それ以外の領域は検出済みのまま残り、あとでここかクラウド GPU でクリーンできます。',
     },
     padding: {
       hint: '検出した各マスクをこのピクセル数だけ広げます。検出で使われ、適用で検出済みのマスクを変えます。',
@@ -1941,6 +1955,7 @@ export const ja = {
       local: '以前に検出した領域も含め、すべての領域をこれらの選択から順にクリーンします。',
       cloud: 'すべての領域をクラウド GPU に送ります。',
       mixed: '「塗りつぶし」と「単色」はまずこのコンピューターで試します。残りはクラウド GPU に送ります。',
+      solidOnly: '無地の紙の上の吹き出しだけを、この設定からクリーンします。残りは検出済みのままです。',
     },
     short: {
       cleanWith: 'エンジン',
@@ -2016,6 +2031,7 @@ export const ja = {
       nonAligned: '非整列',
       maskAdd: '選択範囲に追加',
       maskRemove: '選択範囲から削除',
+      maskDetect: '範囲内の文字を検出',
       brush: 'ブラシ',
     },
   },
@@ -2135,6 +2151,7 @@ export const ja = {
     run: {
       busy: '別の実行が開始中または実行中です。完了するまでお待ちください。',
       atCapacity: '同時に実行できる上限に達しています。どれかが完了してから開始してください。',
+      pageBusy: '実行がこのページを処理中です。何も変更していません。次のページに進んでからもう一度お試しください。',
       finished: {
         select: 'pages',
         zero: 'テキスト除去が完了しました：クリーンが必要なページはありませんでした。',
@@ -2149,6 +2166,7 @@ export const ja = {
         other: '検出が完了しました：{regions} 領域が見つかりました。まだ何もクリーンしていません。',
       },
       allLanguagesSkipped: '原文のすべての言語がスキップされています。クリーンする言語を選んでください。',
+      solidOnly: '単色の吹き出しをクリーン：{cleaned}。検出済みのまま残した領域：{kept}。',
       ocrRescueUnavailable: 'この実行ではテキスト読み取りはオフです：{reason}',
       accelFallback: '{model} は {requested} から {effective} に切り替わりました：{reason}',
       modelsMissing: 'モデルがインストールされていません。設定 › モデルからダウンロードしてください。',
@@ -2696,6 +2714,7 @@ export const ja = {
       denoiseChanged: 'このデプロイのノイズ除去設定またはアクセス設定を確認してください。保存済みのクラウド設定を更新しました。設定 > Cloud で確認し、接続をもう一度テストしてください。',
       cleanChanged: 'このデプロイのクリーニング設定またはアクセス設定を確認してください。保存済みのクラウド設定を更新しました。設定 > Cloud で確認し、接続をもう一度テストしてください。',
       cleanMissing: 'このデプロイのクリーニング設定またはアクセス設定を確認してください。設定 > Cloud で確認し、接続をもう一度テストしてください。',
+      cleanNotInstalled: 'このデプロイはクリーニングモデルなしでセットアップされています。クラウドでクリーニングするには、設定 > Cloud で更新し、クリーニングモデルを選んでください。',
     },
     profile: {
       selectFailed: 'クラウドモデルを切り替えられませんでした。以前のモデルを引き続き使用します。',
@@ -2944,7 +2963,12 @@ export const ja = {
         idle: 'アイドル',
         idleStops: 'アイドル、約 {time} 後に停止',
         stopping: '停止中…',
+        waiting: 'GPU の空きを待っています',
         unknown: '状態を取得できません。再試行中…',
+      },
+      waiting: {
+        name: 'クラウド GPU（解析）',
+        note: 'プロバイダーはこの解析用の GPU をまだ起動していません。この種類の GPU に空きがない可能性があります。GPU が起動すると解析が続きます。',
       },
       price: '約 {price:currency}/時',
       priceNote: '定価に基づく推定：この GPU の起動中は 1 時間あたり約 {price:currency}。実際に使用した時間がプロバイダーから請求されます。',

@@ -191,6 +191,10 @@
   // up, keyed apart from the local rows, whose ids are numbers. Its close button
   // stops that container in the cloud (`state/cloudgpu.svelte.js#stopCloudGpu`).
   // When the last read failed the rows stay, saying their state is unknown.
+  // A role whose work is out with no container up yet (`gpuDeployments`'s
+  // `waiting`) has a row too, under the id its container will take, so the row
+  // becomes that container's when one starts. It has no GPU name or price to
+  // show, and its button stops the work that is waiting.
   const GPU_NAME_KEYS = { render: 'cloud.gpu.name.render', analysis: 'cloud.gpu.name.analysis' }
   const GPU_STOP_KEYS = { render: 'cloud.gpu.action.stop', analysis: 'cloud.gpu.action.stopAnalysis' }
   const GPU_STATE_KEYS = { starting: 'cloud.gpu.state.starting', busy: 'cloud.gpu.state.busy', idle: 'cloud.gpu.state.idle' }
@@ -200,23 +204,36 @@
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
   }
   const cloudRows = $derived(
-    gpuDeployments().flatMap((deployment) => deployment.containers.map((container) => {
-      const price = container.listPriceUsdPerHour
-      const left = scaledownLeftMs(container, deployment.target)
-      return {
-        id: `cloud-${deployment.target.provider}:${deployment.target.profileId}:${container.role}`,
-        target: deployment.target, role: container.role,
-        name: `${t(GPU_NAME_KEYS[container.role], { gpu: container.gpu })} · ${deployment.name}`,
-        size: typeof price === 'number' ? t('cloud.gpu.price', { price }) : '',
-        device: typeof price === 'number' ? t('cloud.gpu.priceNote', { price }) : t('cloud.gpu.noPrice'),
-        detail: deployment.stale
-          ? t('cloud.gpu.state.unknown')
-          : left !== null ? t('cloud.gpu.state.idleStops', { time: clock(left) }) : t(GPU_STATE_KEYS[container.state]),
-        unloading: isStopping(container.role, deployment.target),
+    gpuDeployments().flatMap((deployment) => [
+      ...deployment.containers.map((container) => {
+        const price = container.listPriceUsdPerHour
+        const left = scaledownLeftMs(container, deployment.target)
+        return {
+          id: `cloud-${deployment.target.provider}:${deployment.target.profileId}:${container.role}`,
+          target: deployment.target, role: container.role,
+          name: `${t(GPU_NAME_KEYS[container.role], { gpu: container.gpu })} · ${deployment.name}`,
+          size: typeof price === 'number' ? t('cloud.gpu.price', { price }) : '',
+          device: typeof price === 'number' ? t('cloud.gpu.priceNote', { price }) : t('cloud.gpu.noPrice'),
+          detail: deployment.stale
+            ? t('cloud.gpu.state.unknown')
+            : left !== null ? t('cloud.gpu.state.idleStops', { time: clock(left) }) : t(GPU_STATE_KEYS[container.state]),
+          unloading: isStopping(container.role, deployment.target),
+          unloadingLabel: t('cloud.gpu.state.stopping'),
+          unloadLabel: t(GPU_STOP_KEYS[container.role]),
+        }
+      }),
+      ...deployment.waiting.map((role) => ({
+        id: `cloud-${deployment.target.provider}:${deployment.target.profileId}:${role}`,
+        target: deployment.target, role,
+        name: `${t('cloud.gpu.waiting.name')} · ${deployment.name}`,
+        size: '',
+        device: t('cloud.gpu.waiting.note'),
+        detail: t('cloud.gpu.state.waiting'),
+        unloading: isStopping(role, deployment.target),
         unloadingLabel: t('cloud.gpu.state.stopping'),
-        unloadLabel: t(GPU_STOP_KEYS[container.role]),
-      }
-    }))
+        unloadLabel: t(GPU_STOP_KEYS[role]),
+      })),
+    ])
   )
   const panelTitle = $derived(
     cloudRows.length === 0 ? t('models.title') : loaded.length === 0 ? t('cloud.gpu.title') : t('cloud.gpu.titleMixed')

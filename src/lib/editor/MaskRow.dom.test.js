@@ -711,19 +711,44 @@ describe('padding on an individual detected mask', () => {
     expect(save).toHaveBeenLastCalledWith(detected, 0)
   })
 
-  it('discards a slider draft if a run starts before it can be saved', async () => {
+  it('discards a slider draft if a run reaches the page before it can be saved', async () => {
     const { region } = await opened({ allowed: false })
     const save = vi.mocked(setDetectedMaskPadding).mockResolvedValue(false)
     show({ ...region, outcome: 'detected', detected: true, paddingPx: 2 })
     const slider = /** @type {HTMLInputElement} */ (screen.getByRole('slider', { name: t('tools.param.maskPadding') }))
+    const pageIndex = editor.chapter.pages.find((page) => page.regions.some((entry) => entry.id === region.id)).index
     await fireEvent.input(slider, { target: { value: '6' } })
     editor.run.active = true
+    editor.run.busyPages = [pageIndex]
     try {
       await fireEvent.change(slider, { target: { value: '6' } })
       expect(save).not.toHaveBeenCalled()
       expect(slider.value).toBe('2')
+      expect(slider.disabled).toBe(true)
     } finally {
       editor.run.active = false
+      editor.run.busyPages = []
+    }
+  })
+
+  // A run holds the page it is on and no other (`editor.svelte.js#pageBusy`):
+  // the row of a page the run has left, or not reached, keeps its slider.
+  it('keeps the slider while a run is on another page', async () => {
+    const { region } = await opened({ allowed: false })
+    const save = vi.mocked(setDetectedMaskPadding).mockResolvedValue(true)
+    show({ ...region, outcome: 'detected', detected: true, paddingPx: 2 })
+    const slider = /** @type {HTMLInputElement} */ (screen.getByRole('slider', { name: t('tools.param.maskPadding') }))
+    const pageIndex = editor.chapter.pages.find((page) => page.regions.some((entry) => entry.id === region.id)).index
+    editor.run.active = true
+    editor.run.busyPages = [pageIndex + 1]
+    try {
+      await fireEvent.input(slider, { target: { value: '6' } })
+      expect(slider.disabled).toBe(false)
+      await fireEvent.change(slider, { target: { value: '6' } })
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: region.id }), 6)
+    } finally {
+      editor.run.active = false
+      editor.run.busyPages = []
     }
   })
 

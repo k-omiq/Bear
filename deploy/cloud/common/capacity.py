@@ -53,11 +53,11 @@ MAX_RENDER_COPIES = 2
 # grow with the working size, and two 4 MP crops at once have never been measured.
 EXCLUSIVE_WORK_PIXELS = 1024 * 1024
 
-# Analysis GPU (Modal AnalysisGPU, Beam analysis queue). The desktop keeps two denoise
-# pages in flight and sends detection tiles one after another, so three inputs lets
-# both pages and a tile run without queueing. More would only contend for the
-# container's 2 CPU cores, which run the denoise tiling, blending, Lanczos and PNG
-# steps, and would multiply the host memory of large 4x pages.
+# Analysis GPU (Modal AnalysisGPU, Beam analysis queue). Detection requests and
+# denoise pages may queue beyond this bound; it limits simultaneous execution only.
+# Three active inputs share the container's 2 CPU cores, which run denoise tiling,
+# blending, Lanczos and PNG steps. More would multiply the host memory of large 4x
+# pages and increase CPU contention.
 ANALYSIS_MAX_INPUTS = 3
 # Beam runs analysis workers as processes, each loading its own sessions.
 BEAM_ANALYSIS_WORKERS = 2

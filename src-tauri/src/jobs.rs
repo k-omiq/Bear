@@ -39,7 +39,21 @@ pub struct JobView {
     pub chapter_id: String,
     pub done: u32,
     pub total: u32,
+    /// The pages of `chapter_id` a run is working on right now, by index: the
+    /// ones whose `page-started` has gone out and whose `page-done` has not,
+    /// which are the pages an edit is refused on (`page_busy`). Empty for a
+    /// denoise, which holds no page.
+    pub pages: Vec<u32>,
+    /// Selection detections are independent jobs, rather than the chapter's
+    /// single batch run. Omitted for ordinary jobs for wire compatibility.
+    #[serde(skip_serializing_if = "is_false")]
+    pub area: bool,
+    /// The submitted page, even before a queued selection emits page-started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area_page_index: Option<u32>,
 }
+
+fn is_false(value: &bool) -> bool { !value }
 
 /// Every job in flight: the runs in the order they started, then the denoise
 /// runs.

@@ -124,6 +124,9 @@ class FakeModalDict:
     def pop(self, key: str, default: Any = None) -> Any:
         return self.data.pop(key, default)
 
+    def update(self, values: Dict[str, Any]) -> None:
+        self.data.update(values)
+
 
 class ModalErrors:
     """The modal.exception names ModalWorkerDispatcher looks up, same hierarchy shape."""

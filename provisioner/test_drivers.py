@@ -37,6 +37,7 @@ from provisioner.protocol import HELPER_PROTOCOL_VERSION, ProtocolError
 
 from deploy.cloud.common.contract import PROTOCOL_VERSION, HealthResponse
 from deploy.cloud.common.manifest import (
+    MODEL_NONE,
     MODEL_PROD_FLUX,
     MODEL_PROD_FLUX_9B,
     MODEL_PROD_QWEN,
@@ -84,6 +85,45 @@ class SeedStateModelTest(unittest.TestCase):
         self.assertEqual(read_seed_state(older, MODEL_PROD_QWEN)[0], "unknown")
 
 
+class NoCleaningModelTest(unittest.TestCase):
+    """MODEL_NONE: an installation without a cleaning model names no snapshot."""
+
+    def test_its_seed_document_carries_no_snapshot_and_reads_back(self) -> None:
+        done = seed_state("done", now=6.0, model_id=MODEL_NONE)
+        self.assertEqual((done["bytes_total"], done["model_revision"], done["snapshot_fingerprint"]), (0, "", ""))
+        self.assertEqual(read_seed_state(done, MODEL_NONE), ("done", 100, ""))
+        self.assertEqual(read_seed_state(seed_state("running", now=5.0, model_id=MODEL_NONE), MODEL_NONE), ("running", None, ""))
+        # A model's document is not this installation's, and the other way round.
+        self.assertEqual(read_seed_state(done)[0], "unknown")
+        self.assertEqual(read_seed_state(seed_state("done", PROD_SNAPSHOT_TOTAL_BYTES, now=6.0), MODEL_NONE)[0], "unknown")
+
+    def test_its_seed_job_downloads_nothing_and_reports_done(self) -> None:
+        from deploy.cloud.common.weights import SEED_STATE_KEY, run_seed
+
+        class Store(dict):
+            put = dict.__setitem__
+
+        store = Store()
+
+        def never(**_: Any) -> Any:
+            raise AssertionError("no snapshot download without a cleaning model")
+
+        self.assertEqual(run_seed("/nowhere", store, snapshot_download=never, model_id=MODEL_NONE), {"status": "present"})
+        self.assertEqual(read_seed_state(store[SEED_STATE_KEY], MODEL_NONE)[0], "done")
+
+    def test_options_need_something_to_install_and_a_provider_that_can(self) -> None:
+        from provisioner.driver_base import normalize_options
+
+        chosen = normalize_options({"model_id": MODEL_NONE, "analysis_models": ["text_regions_rt@1"]}, ("L4",), "L4", "modal")
+        self.assertEqual((chosen["model_id"], chosen["gpu"]), (MODEL_NONE, "L4"))
+        self.assertEqual(normalize_options({"model_id": MODEL_NONE, "denoise": True}, ("L4",), "L4", "modal")["denoise"], True)
+        for options, provider in (({"model_id": MODEL_NONE}, "modal"),
+                                  ({"model_id": MODEL_NONE, "analysis_models": ["text_regions_rt@1"]}, "beam")):
+            with self.assertRaises(ProtocolError) as caught:
+                normalize_options(options, ("L4",), "L4", provider)
+            self.assertEqual(caught.exception.code, "ERR_VALIDATION_ERROR")
+
+
 class EndpointModelCheckTest(unittest.TestCase):
     """/model-info must name the model the installation chose; a probe accepts any production one."""
 
@@ -112,6 +152,38 @@ class EndpointModelCheckTest(unittest.TestCase):
     def test_a_probe_accepts_any_production_model(self) -> None:
         for model in (MODEL_PROD_FLUX, MODEL_PROD_FLUX_9B):
             self.assertTrue(self.check(model, None)["ok"])
+
+    def check_without_model(self, answers: List[Tuple[int, bytes]], seconds: float = 30,
+                            model_id: Optional[str] = MODEL_NONE) -> Dict[str, Any]:
+        clock = FakeClock()
+
+        def get(url: str, headers: Dict[str, str], timeout: float) -> Tuple[Optional[int], bytes]:
+            if url.endswith("/health"):
+                return 200, json.dumps(HealthResponse(status="ok", provider="modal", protocol_version=PROTOCOL_VERSION).to_dict()).encode()
+            return answers.pop(0) if len(answers) > 1 else answers[0]
+
+        return check_endpoint(self.URL, self.CREDENTIAL, provider="modal", deadline=Deadline(seconds, clock), http=get,
+                              sleep=clock.sleep, clock=clock, model_id=model_id)
+
+    def test_an_installation_without_a_cleaning_model_passes_when_the_gateway_says_so(self) -> None:
+        refusal = (503, b'{"error_code": "capability_unavailable", "message": "Render is not configured"}')
+        result = self.check_without_model([refusal])
+        self.assertEqual((result["ok"], result["model"]), (True, None))
+        # The gateway deployed before an update that dropped the model answers a little longer.
+        old_gateway = (200, json.dumps(get_production_model_info("modal", MODEL_PROD_FLUX).to_dict()).encode())
+        self.assertIsNone(self.check_without_model([old_gateway, old_gateway, refusal])["model"])
+        # A probe (no model named) takes the same answer; an installation that chose a model waits it out.
+        self.assertEqual(self.check_without_model([refusal], model_id=None)["model"], None)
+        with self.assertRaises(ProtocolError) as caught:
+            self.check_without_model([refusal], model_id=MODEL_PROD_FLUX)
+        self.assertEqual(caught.exception.code, "ERR_EXECUTION_TIMEOUT")
+
+    def test_without_a_cleaning_model_any_other_answer_is_waited_out(self) -> None:
+        for answer in ((503, b"upstream unavailable"), (503, b'{"error_code": "internal_error", "message": "x"}'),
+                       (200, json.dumps(get_production_model_info("modal", MODEL_PROD_FLUX).to_dict()).encode())):
+            with self.assertRaises(ProtocolError) as caught:
+                self.check_without_model([answer])
+            self.assertEqual(caught.exception.code, "ERR_EXECUTION_TIMEOUT", answer)
 
 
 IC1_KEYS = {
@@ -786,6 +858,72 @@ class ProviderCases:
 class ModalDriverTest(ProviderCases, unittest.TestCase):
     provider = "modal"
     default_gpu = "L4"
+
+    # ---------- no cleaning model ----------
+
+    NO_MODEL = {"model_id": MODEL_NONE, "analysis_models": ["text_regions_rt@1"]}
+
+    def test_a_plan_without_a_cleaning_model_has_no_render_worker_and_no_weights(self) -> None:
+        plan = self.h.plan(options=self.NO_MODEL)
+        allocation = plan["resource_allocation"]
+        self.assertEqual((allocation["model_id"], allocation["model_weights_bytes"], allocation["model_revision"]), (MODEL_NONE, 0, ""))
+        self.assertEqual((allocation["worker_cpu"], allocation["worker_memory_gib"]), (0.0, 0))
+        self.assertEqual(allocation["model_options"][-1]["model_id"], MODEL_NONE)
+        app = next(item for item in plan["resources_to_create"] if item["type"] == "app")
+        self.assertNotIn("after the last render", app["description"])
+        self.assertIn("No cleaning model is installed", app["description"])
+        volume = next(item for item in plan["resources_to_create"] if item["type"] == "volume")
+        self.assertEqual(volume["description"], "Modal Volume holding selected analysis graphs.")
+        # The one GPU worker is the analysis worker: 12 GiB without SAM or page denoise.
+        self.assertIn("12 GiB", plan["estimated_monthly_cost"])
+        self.assertNotIn("during each render", plan["estimated_monthly_cost"])
+        self.assertNotEqual(plan["plan_hash"], self.h.plan(options={"analysis_models": ["text_regions_rt@1"]})["plan_hash"])
+        refused, _ = self.h.request("plan", {"credentials": self.h.credentials, "installation_id": "mc-ab12cd",
+                                             "options": {"model_id": MODEL_NONE}})
+        self.assertEqual(refused["error"]["code"], "ERR_VALIDATION_ERROR")
+
+    def test_apply_without_a_cleaning_model_deploys_no_worker_and_passes_health(self) -> None:
+        self.h.cloud.seed_script = [seed_state("done", now=2.0, model_id=MODEL_NONE)]
+        response = self.h.apply(options=self.NO_MODEL)
+        self.assertTrue(response["success"], response)
+        data = response["data"]
+        self.assertEqual(set(data), IC1_KEYS)
+        self.assertIsNone(data["model"])
+        self.assertEqual((data["compatibility_status"], data["analysis_models"]), ("compatible", ["text_regions_rt@1"]))
+        self.assertNotIn("Worker", self.h.cloud.apps["mc-ab12cd"]["functions"])
+        hydrated = [entry[1].get("name") for entry in self.h.cloud.calls if entry[0] == "Function.hydrate"]
+        self.assertNotIn("Worker", hydrated)
+        # The graphs are on the volume and no model marker is: a second computer reuses it without a seed.
+        files = self.h.cloud.volume_files["mc-ab12cd-weights"]
+        self.assertEqual({path for path in files if path.endswith("ready.json")}, {"analysis/rtdetr-v2-full/ready.json"})
+        self.assertEqual(self.h.cloud.dicts["mc-ab12cd-jobs"]["install:options"]["model_id"], MODEL_NONE)
+        again = self.h.resume()
+        self.assertTrue(again["success"], again)
+        self.assertIsNone(again["data"]["model"])
+        self.assertEqual(self.h.cloud.seed_started, 1)
+        # A probe knows no choices: an endpoint with no cleaning model is healthy to it too.
+        probe, _ = self.h.request("probe_compatibility", {"endpoint_url": again["data"]["endpoint_url"],
+                                                          "runtime_credential": again["data"]["runtime_credential"]})
+        self.assertTrue(probe["success"], probe)
+        self.assertEqual((probe["data"]["healthy"], probe["data"]["model_recipe"]), (True, ""))
+
+    def test_an_update_can_drop_the_cleaning_model_and_add_it_back(self) -> None:
+        self.assertTrue(self.h.apply()["success"])
+        self.assertIn("Worker", self.h.cloud.apps["mc-ab12cd"]["functions"])
+        self.h.cloud.next_seed_scripts = [[seed_state("done", now=9.0, model_id=MODEL_NONE)]]
+        dropped = self.h.resume(options=self.NO_MODEL, approved_plan_hash=self.h.plan(options=self.NO_MODEL)["plan_hash"])
+        self.assertTrue(dropped["success"], dropped)
+        self.assertIsNone(dropped["data"]["model"])
+        self.assertNotIn("Worker", self.h.cloud.apps["mc-ab12cd"]["functions"])
+        # The model is still on the volume, so adding it back downloads nothing.
+        seeds = self.h.cloud.seed_started
+        back = {"analysis_models": ["text_regions_rt@1"]}
+        restored = self.h.resume(options=back, approved_plan_hash=self.h.plan(options=back)["plan_hash"])
+        self.assertTrue(restored["success"], restored)
+        self.assertEqual(restored["data"]["model"]["model_id"], MODEL_PROD_FLUX)
+        self.assertIn("Worker", self.h.cloud.apps["mc-ab12cd"]["functions"])
+        self.assertEqual(self.h.cloud.seed_started, seeds)
+
     gpu_options = ("L4", "A10", "L40S")
     expected_resource_types = ["volume", "dict", "app", "proxy_token"]
     provider_skips = ["secret"]
@@ -1068,6 +1206,13 @@ class ModalDriverTest(ProviderCases, unittest.TestCase):
 class BeamDriverTest(ProviderCases, unittest.TestCase):
     provider = "beam"
     default_gpu = "RTX4090"
+
+    def test_beam_needs_a_cleaning_model(self) -> None:
+        # Its app always deploys a render worker, so the choice is not offered and not taken.
+        self.assertNotIn(MODEL_NONE, [o["model_id"] for o in self.h.plan()["resource_allocation"]["model_options"]])
+        refused, _ = self.h.request("plan", {"credentials": self.h.credentials, "installation_id": "mc-ab12cd",
+                                             "options": {"model_id": MODEL_NONE, "analysis_models": ["text_regions_rt@1"]}})
+        self.assertEqual(refused["error"]["code"], "ERR_VALIDATION_ERROR")
     gpu_options = ("RTX4090", "A10G", "RTX5090")
     expected_resource_types = ["volume", "dict", "secret", "worker", "worker", "gateway"]
     provider_skips = ["token"]

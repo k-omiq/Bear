@@ -477,6 +477,7 @@ class ProvisioningController:
 
         if req.params.get("forget_setup_credential", False) is True:
             journal.forget_setup_credential()
+        # None for an installation set up without a cleaning model.
         model = production_model(ctx.options["model_id"])
         data = {
             "installation_id": rec.installation_id,
@@ -650,7 +651,8 @@ class ProvisioningController:
         if credential["kind"] != expected_kind:
             raise ProtocolError(ERR_VALIDATION, f"A {req.provider} endpoint needs a '{expected_kind}' runtime credential")
         report = self._run(progress, "health", lambda: driver.probe(endpoint_url, credential, deadline))
-        model = report.get("model", {})
+        # None is an endpoint set up without a cleaning model.
+        model = report.get("model") or {}
         result = CompatibilityValidationResult(
             endpoint_url=endpoint_url,
             status=report.get("status", "compatible"),

@@ -289,6 +289,20 @@ def production_model(model_id: str = MODEL_PROD_FLUX) -> ProductionModel:
         raise ValueError(f"Unsupported cloud model: {model_id}") from None
 
 
+# The `model_id` of an installation set up without a cleaning model: it serves the
+# analysis graphs and page denoise only, and deploys no render worker.
+MODEL_NONE: str = "none"
+
+
+def deployable_model_id(model_id: Any) -> str:
+    """A production model's id or MODEL_NONE; anything else is a ValueError."""
+    if model_id == MODEL_NONE:
+        return MODEL_NONE
+    if not isinstance(model_id, str):
+        raise ValueError("model_id is not a supported cloud render model")
+    return production_model(model_id).model_id
+
+
 @dataclass(frozen=True)
 class ManifestFileRecord:
     relative_path: str

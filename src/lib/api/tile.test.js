@@ -14,6 +14,7 @@ import {
   TILE_SCHEME,
   COLOR_PIPELINE_VERSION,
 } from './tile.js'
+import { evictRegions } from '../state/pagewindow.svelte.js'
 
 /**
  * Tauri's own `convertFileSrc`, verbatim from `tauri/scripts/core.js`, with the
@@ -480,10 +481,98 @@ describe('the version token', () => {
       return built
     }
 
-    it('moves when the page or a layer digest moves', () => {
+    /** What an edit's answer does to the page in hand: `replaceRegion`. */
+    const answer = (page, layer) => {
+      page.regions[0] = { ...page.regions[0], mask: { ...page.regions[0].mask, appearance: layer } }
+    }
+
+    it('moves when the page digest moves', () => {
       const base = pageVersion(native(), 'cleaned')
       expect(pageVersion(native({ page: 'p000000000000b' }), 'cleaned')).not.toBe(base)
-      expect(pageVersion(native({ layer: 'l000000000000b' }), 'cleaned')).not.toBe(base)
+    })
+
+    /**
+     * The defect: the window drops a page's regions and loads them back, and
+     * the token used to follow them. A jump to a page outside the window
+     * mounted its tiles from the header, then asked for every one of them
+     * again under another URL once `loadPages` answered.
+     */
+    it('is the same string for one saved state, as a header and with its regions in hand', () => {
+      const resident = native()
+      const version = pageVersion(resident, 'cleaned')
+      // A header the page list arrives with: the digest and no regions.
+      const header = { ...native(), regions: [], resident: false }
+      expect(pageVersion(header, 'cleaned')).toBe(version)
+      // The header's regions arriving, as `loadPages` hands the page back.
+      expect(pageVersion({ ...structuredClone(native()), resident: true }, 'cleaned')).toBe(version)
+      // And the same object on its way out of the window.
+      expect(pageVersion(evictRegions(resident), 'cleaned')).toBe(version)
+    })
+
+    it('does not move for a layer the page digest does not name', () => {
+      // A page listed with another layer digest under the same page digest is
+      // the same picture: the native side folds every layer it draws.
+      expect(pageVersion(native({ layer: 'l000000000000b' }), 'cleaned')).toBe(pageVersion(native(), 'cleaned'))
+    })
+
+    /**
+     * The other half. The header is only as fresh as the last `loadPages`,
+     * so the answer's own layer digest has to move the URL before the reload.
+     */
+    it('moves the moment an edit answer lands, and again when the reload names it', () => {
+      const page = native()
+      const before = pageVersion(page, 'cleaned')
+      answer(page, 'l000000000000b')
+      const answered = pageVersion(page, 'cleaned')
+      expect(answered).not.toBe(before)
+      // A second answer on the same stale header: a slider's next preview.
+      answer(page, 'l000000000000c')
+      expect(new Set([before, answered, pageVersion(page, 'cleaned')]).size).toBe(3)
+
+      // The reload: a new object carrying the digest that names the edit.
+      const reloaded = native({ page: 'p000000000000c', layer: 'l000000000000c' })
+      const settled = pageVersion(reloaded, 'cleaned')
+      expect([before, answered]).not.toContain(settled)
+      expect(pageVersion(evictRegions(reloaded), 'cleaned')).toBe(settled)
+
+      // A preview put back where it began is the listed page again.
+      answer(page, 'l000000000000a')
+      expect(pageVersion(page, 'cleaned')).toBe(before)
+    })
+
+    /**
+     * An edited page can leave the window before its reload. As a header it
+     * has no layers to compare, and the URL used to go back to the one the
+     * browser holds the picture before the edit under.
+     */
+    it('keeps an edit answer through eviction, until the reload names it', () => {
+      const page = native()
+      const before = pageVersion(page, 'cleaned')
+      answer(page, 'l000000000000b')
+      const answered = pageVersion(page, 'cleaned')
+      expect(pageVersion(evictRegions(page), 'cleaned')).toBe(answered)
+      expect(answered).not.toBe(before)
+
+      // Deleting the last layer, then leaving the window.
+      const emptied = native()
+      expect(pageVersion(emptied, 'cleaned')).toBe(before)
+      emptied.regions.splice(0, 1)
+      const gone = pageVersion(emptied, 'cleaned')
+      expect(gone).not.toBe(before)
+      expect(pageVersion(evictRegions(emptied), 'cleaned')).toBe(gone)
+
+      // A page with nothing ahead is still its digest alone as a header.
+      expect(pageVersion(evictRegions(native()), 'cleaned')).toBe(before)
+    })
+
+    it('moves when an answer adds a layer or takes the last one away', () => {
+      const page = native()
+      const before = pageVersion(page, 'cleaned')
+      const [only] = page.regions.splice(0, 1)
+      const emptied = pageVersion(page, 'cleaned')
+      expect(emptied).not.toBe(before)
+      page.regions.push(only, { id: 'r1', mask: { id: 'm2', appearance: 'l000000000000b' } })
+      expect([before, emptied]).not.toContain(pageVersion(page, 'cleaned'))
     })
 
     it('is the same string after a reload that answers the same saved state', () => {

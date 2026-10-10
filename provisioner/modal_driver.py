@@ -504,11 +504,14 @@ class ModalDriver(BaseProviderDriver):
     def plan(self, inspection: AccountInspectionResult, installation_id: str, options: Dict[str, Any]) -> DeploymentPlan:
         s = self.settings_for(installation_id, inspection.environment_name, options)
         gpu, idle = s.gpu, s.idle_seconds
-        model = production_model(s.model_id)
+        # None: set up without a cleaning model, so no render worker and no snapshot.
+        model = production_model(s.model_id) if s.render else None
         # The deployed worker's own sizing (common/capacity.py), so the quote is what bills.
-        worker_memory = render_worker_memory_gib(model, gpu, "modal")
-        copies = render_copies(model, gpu)
+        worker_memory = render_worker_memory_gib(model, gpu, "modal") if model else 0
+        copies = render_copies(model, gpu) if model else 0
         copies_note = f", {copies} renders at once" if copies > 1 else ""
+        # AnalysisGPU's own memory (deploy/cloud/modal/app.py).
+        analysis_memory = 24 if ANALYSIS_SAM in s.analysis_models or s.denoise else 12
         seed_memory = 24 if ANALYSIS_SAM in s.analysis_models else 4
         seed_timeout = SEED_TIMEOUT_SECONDS * (2 if ANALYSIS_SAM in s.analysis_models else 1)
         seed_hour = 2 * CPU_CORE_HOUR + seed_memory * MEMORY_GIB_HOUR
@@ -521,18 +524,23 @@ class ModalDriver(BaseProviderDriver):
                 f" Page denoise runs on {'the same' if s.analysis_models else f'a separate {gpu} GPU'} analysis worker "
                 f"(at most 1 container, stops {idle} s after a page), one page per request."
             )
+        stored = ([f"the pinned {model.label} weights ({model.total_bytes / 1e9:.1f} GB)"] if model else []) + (
+            ["selected analysis graphs"] if s.analysis_models else []) + (
+            ["the page denoise models (about 0.5 GB)"] if s.denoise else [])
+        render_worker = (
+            f"a {gpu} GPU worker (2 CPU, {worker_memory} GiB, at most 1 container{copies_note}, "
+            f"stops {idle} s after the last render, 600 s per job) "
+        ) if model else ""
         resources = [
-            PlanResource("volume", s.volume_name, f"Modal Volume holding the pinned {model.label} weights ({model.total_bytes / 1e9:.1f} GB)"
-                         + (" and selected analysis graphs" if s.analysis_models else "")
-                         + (" and the page denoise models (about 0.5 GB)" if s.denoise else "") + "."),
+            PlanResource("volume", s.volume_name, f"Modal Volume holding {' and '.join(stored)}."),
             PlanResource("dict", s.dict_name, "Modal Dict with job state, so status checks never start a GPU."),
             PlanResource(
                 "app",
                 s.app_name,
-                f"Modal App: a CPU gateway (0.25 CPU, 0.5 GiB) behind Modal proxy auth, reached through Modal's {s.routing_region} servers, a {gpu} GPU worker "
-                f"(2 CPU, {worker_memory} GiB, at most 1 container{copies_note}, stops {idle} s after the last render, 600 s per job) "
-                f"and a seed function (2 CPU, {seed_memory} GiB, up to {seed_timeout // 3600} h per attempt) that downloads the weights. "
-                "Each GPU worker start loads the model from the volume, about a minute." + analysis_note,
+                f"Modal App: a CPU gateway (0.25 CPU, 0.5 GiB) behind Modal proxy auth, reached through Modal's {s.routing_region} servers, {render_worker}"
+                f"and a seed function (2 CPU, {seed_memory} GiB, up to {seed_timeout // 3600} h per attempt) that downloads the weights."
+                + (" Each GPU worker start loads the model from the volume, about a minute." if model else " No cleaning model is installed, so cleaning does not run on this GPU.")
+                + analysis_note,
             ),
             PlanResource(
                 "proxy_token",
@@ -541,12 +549,14 @@ class ModalDriver(BaseProviderDriver):
             ),
         ]
         price = GPU_PRICE_PER_HOUR[gpu]
-        worker_hour = price + 2 * CPU_CORE_HOUR + worker_memory * MEMORY_GIB_HOUR
+        # Without a cleaning model the one GPU worker is the analysis worker.
+        billed_memory = worker_memory if model else analysis_memory
+        worker_hour = price + 2 * CPU_CORE_HOUR + billed_memory * MEMORY_GIB_HOUR
         cost = (
             f"Billed by Modal per second of use. A {gpu} worker costs about ${worker_hour:.2f} per hour while it runs "
-            f"({gpu} ${price:.2f}/h, 2 CPU cores at ${CPU_CORE_HOUR}/h each, {worker_memory} GiB at ${MEMORY_GIB_HOUR}/GiB/h), "
-            f"during each render and for {idle} s after it."
-            + (f" Selected analysis or page denoise also starts a separate {gpu} GPU worker on demand and keeps it warm {idle} s; it is billed at the same GPU rate." if s.analysis_models or s.denoise else "")
+            f"({gpu} ${price:.2f}/h, 2 CPU cores at ${CPU_CORE_HOUR}/h each, {billed_memory} GiB at ${MEMORY_GIB_HOUR}/GiB/h), "
+            + (f"during each render and for {idle} s after it." if model else f"during each analysis or page denoise request and for {idle} s after it.")
+            + (f" Selected analysis or page denoise also starts a separate {gpu} GPU worker on demand and keeps it warm {idle} s; it is billed at the same GPU rate." if model and (s.analysis_models or s.denoise) else "")
             + " The gateway runs only while it answers requests "
             f"(0.25 CPU, 0.5 GiB). Initial seeding and any retries use 2 CPU and {seed_memory} GiB "
             f"for up to {seed_timeout // 3600} h per attempt, about ${seed_hour:.2f}/h while active. "
@@ -561,7 +571,7 @@ class ModalDriver(BaseProviderDriver):
             options=options,
             gpu_allowlist=GPU_ALLOWLIST,
             allocation={
-                "worker_cpu": 2.0,
+                "worker_cpu": 2.0 if model else 0.0,
                 "worker_memory_gib": worker_memory,
                 "gateway_cpu": 0.25,
                 "gateway_memory_gib": 0.5,
@@ -584,8 +594,7 @@ class ModalDriver(BaseProviderDriver):
             cost=cost,
             notes=[
                 f"The weights download on a seed container (2 CPU, {seed_memory} GiB, up to {seed_timeout // 3600} h per attempt); setup waits for it. Failed attempts can incur additional cost.",
-                "A render starts the GPU worker; a cold start loads 5.5 GB of weights first.",
-            ],
+            ] + (["A render starts the GPU worker; a cold start loads 5.5 GB of weights first."] if model else []),
             cleanup_summary=[
                 "Delete the proxy auth token",
                 f"Stop the Modal app {s.app_name}",
@@ -643,7 +652,8 @@ class ModalDriver(BaseProviderDriver):
     def _step_deploy(self, session: ModalSession, ctx: StepContext, s: ModalSettings) -> None:
         for name in (s.gateway_function, SEED_FUNCTION):
             self._lookup(session, s, name)
-        self._lookup(session, s, WORKER_CLASS, cls=True)
+        if s.render:
+            self._lookup(session, s, WORKER_CLASS, cls=True)
 
     def _start_seed(self, session: ModalSession, ctx: StepContext, s: ModalSettings, store: Any) -> Any:
         seed = self._lookup(session, s, SEED_FUNCTION)
@@ -678,7 +688,7 @@ class ModalDriver(BaseProviderDriver):
             store.put(INSTALL_OPTIONS_KEY, doc)
 
     def _already_seeded(self, session: ModalSession, s: ModalSettings) -> bool:
-        """Whether the volume holds this model and every selected analysis graph.
+        """Whether the volume holds this model (when one was chosen) and every selected analysis graph.
 
         A listing that fails counts as no: the seed then runs, and it skips what is
         already verified on the volume, so the worst case is a short CPU job. Page
@@ -692,7 +702,7 @@ class ModalDriver(BaseProviderDriver):
             models, analysis = self._ready_on_volume(volume)
         except Exception:
             return False
-        return s.model_id in models and set(s.analysis_models) <= set(analysis)
+        return (not s.render or s.model_id in models) and set(s.analysis_models) <= set(analysis)
 
     def _wait_for_weights(self, session: ModalSession, ctx: StepContext, s: ModalSettings, store: Any) -> None:
         errors = session.sdk.exception

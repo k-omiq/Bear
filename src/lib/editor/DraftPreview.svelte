@@ -129,8 +129,10 @@
    * (`DetectionMasks.svelte`), so what is being added looks like what it will
    * join. Remove is the opposite act and must not look like more mask: an
    * area is a dashed outline with no fill, and a brush stroke is hatched.
+   * A Detect adds no mask of its own, so its rectangle is the plain mark a
+   * Shapes clean draws: the area a model will look at.
    */
-  const maskDraft = $derived(active?.tool === 'maskSelect')
+  const maskDraft = $derived(active?.tool === 'maskSelect' && active?.mode !== 'detect')
   const cutting = $derived(maskDraft && active?.mode === 'erase')
   const maskFill = $derived(Math.max(0, Math.min(100, Number(session.maskOpacity ?? 35))) / 100)
   /**

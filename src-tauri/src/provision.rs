@@ -1357,6 +1357,10 @@ fn is_gpu_name(value: &str) -> bool {
         && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// The `model_id` of a setup made without a cleaning model
+/// (`MODEL_NONE` in `deploy/cloud/common/manifest.py`).
+const NO_CLEANING_MODEL: &str = "none";
+
 /// `owner/name`, as the model manifest spells a Hugging Face repository.
 fn is_model_id(value: &str) -> bool {
     let ok = |part: &str, max: usize| {
@@ -1402,7 +1406,10 @@ fn clean_install_options(value: Option<&Value>) -> Value {
         .get("idle_seconds")
         .and_then(Value::as_u64)
         .filter(|v| (60..=600).contains(v));
-    let model = fields.get("model_id").and_then(Value::as_str).filter(|v| is_model_id(v));
+    let model = fields
+        .get("model_id")
+        .and_then(Value::as_str)
+        .filter(|v| *v == NO_CLEANING_MODEL || is_model_id(v));
     let analysis = fields.get("analysis_models");
     let analysis_ok = analysis.and_then(Value::as_array).is_some_and(|items| {
         items.len() <= ANALYSIS_CAPABILITIES.len()
@@ -2544,6 +2551,22 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
         assert_eq!(list[1]["options"]["denoise"], false, "an older helper recorded no denoise");
         assert_eq!(list[1]["options"]["gpu"], "A10");
         assert_eq!(list[2]["options"], Value::Null);
+    }
+
+    #[test]
+    fn listed_installation_without_a_cleaning_model_keeps_its_choices() {
+        let mut none = listed("mc-nomod1");
+        none["options"]["model_id"] = json!("none");
+        let mut bad = listed("mc-badmod");
+        bad["options"]["model_id"] = json!("nothing");
+        let mut response = inspected(json!([none, bad]));
+
+        sanitize_existing_installations(&mut response);
+
+        let list = response["data"]["existing_installations"].as_array().unwrap();
+        assert_eq!(list[0]["options"]["model_id"], "none");
+        assert_eq!(list[0]["options"]["gpu"], "A10");
+        assert_eq!(list[1]["options"], Value::Null, "only `none` or an owner/name id");
     }
 
     #[test]

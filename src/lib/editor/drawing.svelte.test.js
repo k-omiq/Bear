@@ -1363,7 +1363,7 @@ describe('the selection tool', () => {
    * @param {string} kind
    * @param {Array<{x: number, y: number}>} points
    * @param {{x: number, y: number, w: number, h: number}} bbox
-   * @param {'add'|'erase'} [mode]
+   * @param {'add'|'erase'|'detect'} [mode]
    */
   function selection(kind, points, bbox, mode = 'add') {
     beginDraft({ tool: 'maskSelect', kind, pageId: 'c1-p001', points, bbox, mode, keyboard: false, moved: true })
@@ -1395,7 +1395,29 @@ describe('the selection tool', () => {
     setBackend(null)
     editor.chapter = null
     editor.tool = 'autoClean'
+    editor.areaRuns = []
     resetDraftState()
+  })
+
+  it('submits each detection gesture before an earlier submission has answered', async () => {
+    const releases = []
+    const runClean = vi.fn(() => new Promise((resolve) => releases.push(resolve)))
+    setBackend(/** @type {any} */ (maskBackend(null, [], { runClean })))
+    editor.run.active = false
+    const firstArea = { x: 10, y: 10, w: 15, h: 20 }
+    const secondArea = { x: 50, y: 40, w: 20, h: 10 }
+    selection('rect', [{ x: 10, y: 10 }], firstArea, 'detect')
+    const first = commitDraft()
+    selection('rect', [{ x: 50, y: 40 }], secondArea, 'detect')
+    const second = commitDraft()
+    expect(runClean).toHaveBeenCalledTimes(2)
+    expect(runClean.mock.calls.map(([spec]) => spec.area)).toEqual([firstArea, secondArea])
+    releases[0]({ runId: 'area-a', pages: [{ pageIndex: 0 }] })
+    releases[1]({ runId: 'area-b', pages: [{ pageIndex: 0 }] })
+    expect(await first).toBe(true)
+    expect(await second).toBe(true)
+    expect(editor.areaRuns).toHaveLength(2)
+    expect(editor.history.entries).toEqual([])
   })
 
   it('adds a brush stroke as its path and radius, and records no history', async () => {

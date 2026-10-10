@@ -242,31 +242,22 @@ export function menuPoint(event, rect) {
 }
 
 /**
- * How wide "here" is for a Detect of one area, in percent of the page's width:
- * 256 px on a 1600 px page, about one line of lettering either side of the
- * pointer. The native side reads a wider window around it for context
- * (`run.rs#DetectArea`); this is only what a found region has to touch.
- */
-export const DETECT_AREA_SPAN = 16
-
-/**
- * The area a Detect of one spot is held to: a box around `point`, square in
- * page pixels, moved back inside the page where the point is near an edge.
+ * The area a Detect of a drawn box is held to: the part of the box that is on
+ * the page, or null when none of it is. A box drawn on a long strip can run
+ * past the page it started on, and the native side refuses an area that
+ * leaves the page (`detect_area_invalid`). The native side reads a wider
+ * window around a small area for context (`run.rs#DetectArea`); the area is
+ * only what a found region has to touch.
  *
- * @param {{x: number, y: number}} point - page percent
- * @param {number} pageWidth - page pixels
- * @param {number} pageHeight - page pixels
- * @returns {Bbox}
+ * @param {Bbox} bbox - page percent
+ * @returns {Bbox|null}
  */
-export function detectAreaAround(point, pageWidth, pageHeight) {
-  const w = DETECT_AREA_SPAN
-  const h = Math.min(PAGE_SPAN, (w * pageWidth) / pageHeight)
-  return {
-    x: clamp(point.x - w / 2, 0, PAGE_SPAN - w),
-    y: clamp(point.y - h / 2, 0, PAGE_SPAN - h),
-    w,
-    h,
-  }
+export function detectAreaIn(bbox) {
+  const x = clamp(bbox.x, 0, PAGE_SPAN)
+  const y = clamp(bbox.y, 0, PAGE_SPAN)
+  const w = clamp(bbox.x + bbox.w, 0, PAGE_SPAN) - x
+  const h = clamp(bbox.y + bbox.h, 0, PAGE_SPAN) - y
+  return w > 0 && h > 0 ? { x, y, w, h } : null
 }
 
 /**

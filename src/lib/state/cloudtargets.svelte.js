@@ -27,7 +27,7 @@
 import { untrack } from 'svelte'
 import { getBackend } from '../api/backend.js'
 import { CLOUD_STAGES, detectsOnCloud } from '../model/pipelines.js'
-import { cloud, cloudCleanAvailable, cloudUsable, refreshCloudReadiness } from './cloud.svelte.js'
+import { cloud, cloudCleanAvailable, cloudCleanMissingKey, cloudUsable, refreshCloudReadiness } from './cloud.svelte.js'
 import { session, setAnalysisTarget, setCleanTarget } from './session.svelte.js'
 import { savedSetting, writeSettingsSerialized } from './settingswrite.js'
 
@@ -127,7 +127,7 @@ export function detectReasonKey() {
  */
 export function cleanReasonKey() {
   if (!session.cloudAllowed) return 'settings.detection.runOn.off'
-  if (!cloudCleanAvailable()) return 'cloud.configuration.cleanMissing'
+  if (!cloudCleanAvailable()) return cloudCleanMissingKey()
   if (!cloud.checked || cloudUsable()) return null
   return 'settings.detection.runOn.notReady'
 }

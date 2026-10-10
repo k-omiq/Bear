@@ -8,6 +8,8 @@ import { session } from './session.svelte.js'
 export const GPU_POLL_MS = 15_000
 export const ANALYSIS_SILENCE_MS = 10 * 60 * 1000
 export const STOP_SETTLE_MS = 2 * 60 * 1000
+/** How long a request may be out with no GPU up before the panel says it is waiting for one. */
+export const GPU_WAIT_MS = 30_000
 const ROLES = ['render', 'analysis']
 const ANALYSIS_RUNNING = ['confirmed', 'submitted_tile', 'result_cached_tile']
 /** @typedef {{provider: 'beam'|'modal', profileId: string}} Target */
@@ -19,7 +21,7 @@ export const cloudGpu = $state({
   ...empty(), now: 0,
   /** @type {Record<string, Deployment>} */
   deployments: {},
-  /** @type {Record<string, {heard: number, target: Target|null}>} */
+  /** @type {Record<string, {heard: number, since: number, target: Target|null}>} `since` is when the analysis was first heard of */
   analyses: {},
   /** @type {Record<string, {role: string, target: Target|null}>} */
   runs: {},
@@ -56,12 +58,29 @@ function viewFor(target) {
   // Keep the projection usable for callers and fixtures that set it directly.
   return sameTarget(target, selectedGpuTarget()) ? cloudGpu : cloudGpu.deployments[targetKey(target)]
 }
-/** All observed GPUs stay visible until their own endpoint reports them gone. */
+/**
+ * The roles a deployment's work is waiting on a GPU for: an analysis has been
+ * out for `GPU_WAIT_MS`, and a status read made that long after it went out
+ * found no analysis container, not even one starting. The provider has not
+ * started a GPU, most often because it has none of that type free. Decided by
+ * the read's own time, so it changes only when a read comes back, and a read
+ * that fails leaves what the last one said.
+ *
+ * @param {Deployment} view
+ * @returns {string[]}
+ */
+function waitingRoles(view) {
+  if (view.supported !== true || view.containers.some((c) => c.role === 'analysis')) return []
+  const cutoff = Date.now() - ANALYSIS_SILENCE_MS
+  const out = Object.values(cloudGpu.analyses).filter((a) => a.heard >= cutoff && sameTarget(a.target, view.target))
+  return out.some((a) => view.receivedAt - a.since >= GPU_WAIT_MS) ? ['analysis'] : []
+}
+/** All observed GPUs stay visible until their own endpoint reports them gone. `waiting` is `waitingRoles`. */
 export function gpuDeployments() {
   if (!enabled()) return []
   return Object.values(cloudGpu.deployments).filter((view) => view.identity === signature(view.target)).map((view) => {
     const endpoint = cloud.readiness.endpoints?.find((e) => e.provider === view.target.provider && e.id === view.target.profileId)
-    return { ...view, name: endpoint?.name || view.target.profileId }
+    return { ...view, name: endpoint?.name || view.target.profileId, waiting: waitingRoles(view) }
   })
 }
 export function runningAnalyses(target = null) {
@@ -180,7 +199,7 @@ export function onAnalysisRecord(record) {
   const target = (provider === 'beam' || provider === 'modal') && typeof profileId === 'string'
     ? { provider, profileId } : cloudGpu.analyses[id]?.target || selectedGpuTarget()
   const next = { ...cloudGpu.analyses }
-  if (ANALYSIS_RUNNING.includes(name)) { next[id] = { heard: Date.now(), target }; if (target) ensure(target) }
+  if (ANALYSIS_RUNNING.includes(name)) { next[id] = { heard: Date.now(), since: next[id]?.since ?? Date.now(), target }; if (target) ensure(target) }
   else delete next[id]
   cloudGpu.analyses = next
 }

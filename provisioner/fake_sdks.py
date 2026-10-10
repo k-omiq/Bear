@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from deploy.cloud.common.contract import PROTOCOL_VERSION, HealthResponse
-from deploy.cloud.common.manifest import MODEL_PROD_FLUX, PROD_SNAPSHOT_TOTAL_BYTES, get_production_model_info
+from deploy.cloud.common.manifest import MODEL_NONE, MODEL_PROD_FLUX, PROD_SNAPSHOT_TOTAL_BYTES, get_production_model_info
 from deploy.cloud.common.analysis_seed import DIRECTORIES as ANALYSIS_DIRECTORIES
 from deploy.cloud.common.weights import SEED_STATE_KEY, expected_marker, seed_state, snapshot_name
 
@@ -86,7 +86,8 @@ def edge_http(cloud: "FakeCloudBase", provider: str, host: Callable[[], Optional
               served_model: Callable[[], str] = lambda: MODEL_PROD_FLUX):
     """The provider edge in front of the gateway: auth, then the two CPU-only routes.
 
-    /model-info names the model the gateway was deployed with, as the real one does.
+    /model-info names the model the gateway was deployed with, as the real one does,
+    and refuses when it was deployed without a cleaning model.
     """
 
     def get(url: str, headers: Dict[str, str], timeout: float) -> Tuple[Optional[int], bytes]:
@@ -100,6 +101,8 @@ def edge_http(cloud: "FakeCloudBase", provider: str, host: Callable[[], Optional
         if route == "/mc/v1/health":
             body = HealthResponse(status="ok", provider=provider, protocol_version=PROTOCOL_VERSION).to_dict()
         elif route == "/mc/v1/model-info":
+            if served_model() == MODEL_NONE:
+                return 503, b'{"error_code": "capability_unavailable", "message": "Render is not configured"}'
             body = get_production_model_info(provider, served_model()).to_dict()
         else:
             return 404, b"{}"
@@ -180,9 +183,10 @@ class FakeModalCloud(FakeCloudBase):
     def mark_seeded(self, volume: str, model_id: str, analysis: Any = ()) -> None:
         """Leave the ready markers a finished seed writes last."""
         files = self.volume_files.setdefault(volume, set())
-        marker = f"{snapshot_name(model_id)}.ready.json"
-        files.add(marker)
-        self.volume_contents.setdefault(volume, {})[marker] = json.dumps(expected_marker(model_id)).encode()
+        if model_id != MODEL_NONE:
+            marker = f"{snapshot_name(model_id)}.ready.json"
+            files.add(marker)
+            self.volume_contents.setdefault(volume, {})[marker] = json.dumps(expected_marker(model_id)).encode()
         for capability in analysis:
             files.add(f"analysis/{ANALYSIS_DIRECTORIES[capability]}/ready.json")
 
@@ -562,7 +566,9 @@ class FakeModalApp:
         self.cloud.record("App.deploy", name=name, environment_name=environment_name)
         if self.settings.volume_name not in self.cloud.volumes or self.settings.dict_name not in self.cloud.dicts:
             raise _ModalErrors.NotFoundError("the app references a volume or dict that does not exist")
-        self.cloud.apps[name] = {"functions": {self.settings.gateway_function, "seed_weights", "Worker", "AnalysisGPU"}, "gpu": self.settings.gpu,
+        # The real app defines Worker only for an installation with a cleaning model.
+        functions = {self.settings.gateway_function, "seed_weights", "AnalysisGPU"} | ({"Worker"} if self.settings.render else set())
+        self.cloud.apps[name] = {"functions": functions, "gpu": self.settings.gpu,
                                  "app_id": f"ap-{name}", "settings": self.settings}
         self.cloud.done("App.deploy")
         return SimpleNamespace(app_id="ap-fake")

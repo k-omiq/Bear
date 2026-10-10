@@ -834,7 +834,8 @@ impl Renderer {
 }
 
 impl RegionRenderer for Renderer {
-    fn render(&self, nonce: &str, page_index: u32, region_id: &str, recipe: &RenderRecipe) -> Result<ApiRegion, String> {
+    fn render(&self, nonce: &str, page_index: u32, region_id: &str, recipe: &RenderRecipe,
+        submitted: &dyn Fn()) -> Result<ApiRegion, String> {
         // Minted for this one region, against the run's own grant service.
         let grant = self.grants.get_grant(nonce).expect("a region grant");
         assert_eq!(grant.scope.region_ids, vec![region_id.to_owned()]);
@@ -848,6 +849,9 @@ impl RegionRenderer for Renderer {
             self.grants.validate_and_consume(nonce, &requested_scope).expect("render must match the full grant scope");
         }
         self.rendered.lock().unwrap().push(region_id.to_owned());
+        // Accepted remote jobs release the crop/upload slot before waiting.
+        // Pre-enqueue failures retain it until the failed attempt returns.
+        if !self.fail.contains_key(region_id) { submitted(); }
         (self.on_render)(region_id);
         if let Some(code) = self.fail.get(region_id) { return Err(code.clone()); }
         if !self.commit {
@@ -1018,36 +1022,37 @@ fn batch_renders_keep_qwen_guidance_bound_to_their_region_grants() {
     }
 }
 
-/// Two regions on each of four pages: three renders at once, never two of one
-/// page, every region committed and the GPU released once at the end.
+/// Two regions on each of four pages: every independent first region is
+/// accepted before any finishes, never two overlapping regions of one page.
 #[test]
-fn three_renders_in_flight_on_different_pages_and_one_release() {
-    let path = chapter("run-bound", 4, StripMode::Single);
-    let ids: Vec<String> = (0..4).flat_map(|page| [
+fn accepted_jobs_queue_ahead_on_different_pages_and_one_release() {
+    const PAGES: usize = MAX_PREPARING + 1;
+    let path = chapter("run-bound", PAGES, StripMode::Single);
+    let ids: Vec<String> = (0..PAGES).flat_map(|page| [
         detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0),
         detect(&path, page, Rect::new(150, 150, 30, 20), REMOTE_PICK, 1),
     ]).collect();
     let grants = Arc::new(GrantService::new());
     let mut renderer = Renderer::new(&path, &grants);
-    // Make the first three wait for one another at dispatch. A wall clock
-    // delay is not enough under the load of the full parallel test suite.
-    let first_three = Arc::new((Mutex::new(0usize), Condvar::new()));
+    // More jobs than the preparation budget must be accepted while the GPU
+    // has completed none. A render-completion-bound budget deadlocks here.
+    let first_page_jobs = Arc::new((Mutex::new(0usize), Condvar::new()));
     renderer.on_render = Box::new(move |_| {
-        let (count, changed) = &*first_three;
+        let (count, changed) = &*first_page_jobs;
         let mut count = count.lock().unwrap();
         *count += 1;
-        if *count >= MAX_IN_FLIGHT {
+        if *count >= PAGES {
             changed.notify_all();
         } else {
             let (seen, _) = changed.wait_timeout_while(count, Duration::from_secs(10),
-                |seen| *seen < MAX_IN_FLIGHT).unwrap();
-            assert!(*seen >= MAX_IN_FLIGHT, "three workers did not reach the renderer");
+                |seen| *seen < PAGES).unwrap();
+            assert!(*seen >= PAGES, "jobs waited for a GPU completion before submission");
         }
     });
     renderer.delay = Duration::from_millis(150);
     let (summary, events) = run_with(&path, &ids, &grants, &renderer, &AtomicBool::new(false));
 
-    assert_eq!(renderer.most_in_flight.load(Ordering::SeqCst), MAX_IN_FLIGHT);
+    assert_eq!(renderer.most_in_flight.load(Ordering::SeqCst), PAGES);
     assert!(!renderer.same_page_at_once.load(Ordering::SeqCst), "two regions of one page read each other");
     assert_eq!((summary.reason, summary.regions_cleaned, summary.pages_cleaned, summary.pages_queued),
         ("completed", 8, 4, 4));
@@ -1055,6 +1060,48 @@ fn three_renders_in_flight_on_different_pages_and_one_release() {
         (4, 8, 4));
     assert!(detection_ids(&path).is_empty());
     assert_eq!(renderer.releases.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn queued_jobs_do_not_expand_the_crop_preparation_budget() {
+    let path = chapter("run-prepare-bound", MAX_PREPARING + 2, StripMode::Single);
+    let ids: Vec<String> = (0..MAX_PREPARING + 2)
+        .map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
+    let grants = Arc::new(GrantService::new());
+    let scope = scope_for(&path, &ids, &grants);
+    let renderer = Renderer::new(&path, &grants);
+    let (started, starts) = mpsc::channel();
+    let resume = (Mutex::new(false), Condvar::new());
+    let reading = AtomicUsize::new(0);
+    let most_reading = AtomicUsize::new(0);
+    let reread = |path: &Path, page: u32, id: &str, recipe: &RenderRecipe| {
+        let count = reading.fetch_add(1, Ordering::SeqCst) + 1;
+        most_reading.fetch_max(count, Ordering::SeqCst);
+        let _ = started.send(());
+        let (ready, changed) = &resume;
+        let ready = ready.lock().unwrap();
+        drop(changed.wait_while(ready, |ready| !*ready).unwrap());
+        let input = read_render_input(path, page, id, recipe);
+        reading.fetch_sub(1, Ordering::SeqCst);
+        input
+    };
+    let (summary, _) = std::thread::scope(|threads| {
+        let resume = &resume;
+        threads.spawn(move || {
+            for _ in 0..MAX_PREPARING {
+                starts.recv_timeout(Duration::from_secs(10)).expect("the preparation budget fills");
+            }
+            let extra = starts.recv_timeout(Duration::from_millis(100));
+            // Release even on failure so the scoped workers can finish.
+            *resume.0.lock().unwrap() = true;
+            resume.1.notify_all();
+            assert!(matches!(extra, Err(mpsc::RecvTimeoutError::Timeout)),
+                "a fourth crop started while all preparation slots were occupied");
+        });
+        run_scope(&scope, &path, &grants, &renderer, &AtomicBool::new(false), &Harness { read: &reread, ..OPEN })
+    });
+    assert_eq!(most_reading.load(Ordering::SeqCst), MAX_PREPARING);
+    assert_eq!(summary.regions_cleaned as usize, ids.len());
 }
 
 /// A failed region stays detected with a notice and the run goes on; a region
@@ -1086,7 +1133,7 @@ fn a_failure_leaves_its_detection_and_changed_or_deleted_regions_are_skipped() {
         (Some(ids[1].as_str()), Some(2), Some("remote_failed")));
     let mut skipped: Vec<(&str, &str)> = notices(&events, "notice.cloudClean.regionSkipped").iter()
         .map(|params| (params["regionId"].as_str().unwrap(), params["reason"].as_str().unwrap())).collect();
-    // Three workers: the notices come in the order the regions finish.
+    // Parallel workers: notices come in the order the regions finish.
     skipped.sort();
     assert_eq!(skipped, vec![(ids[2].as_str(), "changed"), (ids[3].as_str(), "gone")]);
     assert_eq!(detection_ids(&path), vec![ids[1].clone(), ids[2].clone()]);
@@ -1113,7 +1160,6 @@ fn a_refused_key_stops_the_run_and_cancels_what_is_in_flight() {
     assert!(notices(&events, "notice.cloudClean.regionFailed").is_empty());
     let rendered = renderer.rendered();
     assert!(rendered.len() <= MAX_IN_FLIGHT, "started after the stop: {rendered:?}");
-    assert!(!rendered.contains(&ids[3]) && !rendered.contains(&ids[4]));
     assert_eq!(renderer.cancelled.lock().unwrap().len(), rendered.len() - 1, "the others in flight were cancelled");
     assert_eq!(detection_ids(&path), ids, "nothing was committed");
     assert_eq!((summary.reason, summary.regions_cleaned), ("completed", 0));
@@ -1149,8 +1195,9 @@ fn a_changed_profile_epoch_stops_the_next_region_before_it_is_sent() {
 /// Every region is left detected, and the GPU the run used is released.
 #[test]
 fn cancel_stops_the_renders_in_flight_and_leaves_every_region_detected() {
-    let path = chapter("run-cancel", 5, StripMode::Single);
-    let ids: Vec<String> = (0..5).map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
+    let path = chapter("run-cancel", MAX_IN_FLIGHT + 2, StripMode::Single);
+    let ids: Vec<String> = (0..MAX_IN_FLIGHT + 2)
+        .map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
     let grants = Arc::new(GrantService::new());
     let mut renderer = Renderer::new(&path, &grants);
     renderer.hold = true;

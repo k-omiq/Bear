@@ -274,15 +274,19 @@ pub fn list_accelerators(app: tauri::AppHandle) -> Accelerators {
         }
     }
     for model in &mut view.models {
+        let memory_ready = model.id != "samTs"
+            || cleaner_core::sam_ts::ensure_memory_room(cleaner_core::memory::room()).is_ok();
         for status in &mut model.backend_status {
             let accelerator = accel::KNOWN.into_iter().find(|a| accelerator_id(*a) == status.id).unwrap();
             status.installed = runtime_loaded && (accelerator == Accelerator::Cpu || accelerator.is_installed());
             status.verified &= verified_runtime;
-            status.available = status.supported && runtime_loaded && accelerator.is_available()
+            status.available = status.supported && runtime_loaded && memory_ready && accelerator.is_available()
                 && (model.id != "samTs" || accelerator != Accelerator::WebGpu
                     || cleaner_core::sam_ts::built_in_webgpu_available());
             if status.supported && !status.available {
-                status.reason_key = if runtime_loaded {
+                status.reason_key = if runtime_loaded && !memory_ready {
+                    Some("accel.declined.memory")
+                } else if runtime_loaded {
                     accelerator.availability().err().map(accel::Unavailable::reason_key)
                         .or(Some("accel.declined.noDevice"))
                 } else { Some("accel.declined.unavailable") };
@@ -369,11 +373,18 @@ fn accelerators_configured(
     let measured_here = host.map(|platform| platform.os) == Some(accel::MEASURED_ON);
     let verified_here = measured_here && cfg!(target_os = "macos")
         && cleaner_core::sam_ts::measured_m5_host();
+    // SAM's automatic route deliberately uses CPU. Its model category and
+    // memory requirement differ from the much smaller RT-DETR graph.
+    const SAM_PROFILE: accel::ModelProfile = accel::ModelProfile {
+        name: "sam-ts-l", label_key: "models.kind.textDetector", uses_dft: false,
+        measured_better: &[], unmeasured_candidates: &[],
+        measured_peak_rss: &[(Accelerator::Cpu, 8_547_975_168)], partitioned_on: &[],
+    };
     let specs: [(&str, &str, &accel::ModelProfile); 6] = [
         ("ctd", CTD_NAME, &accel::DETECTOR),
         ("rtSmall", RT_SMALL_NAME, &accel::BALLOON),
         ("rtFull", RT_FULL_NAME, &accel::FULL_RT),
-        ("samTs", SAM_TS_NAME, &accel::FULL_RT),
+        ("samTs", SAM_TS_NAME, &SAM_PROFILE),
         ("inpainter", "LaMa Manga", &accel::LAMA),
         ("hayai", HAYAI_NAME, &accel::HAYAI),
     ];
@@ -393,15 +404,25 @@ fn accelerators_configured(
                 });
                 chosen.note = None;
             }
+            let sam_memory_ready = id != &"samTs"
+                || cleaner_core::sam_ts::ensure_memory_room(room).is_ok();
+            if !sam_memory_ready {
+                chosen.declined = Some(accel::Declined {
+                    wanted: chosen.accelerator, reason_key: "accel.declined.memory",
+                    needed_bytes: Some(cleaner_core::sam_ts::MIN_ROOM_BYTES), room_bytes: room,
+                });
+            }
             let declined = chosen.declined;
             let backend_status = accel::KNOWN.into_iter().map(|accelerator| {
                 let supported = supports_model(id, accelerator, host);
                 let installed = accelerator == Accelerator::Cpu || available.contains(&accelerator);
-                let available = supported && installed;
+                let available = supported && installed && sam_memory_ready;
                 ModelBackendStatus {
                     id: accelerator_id(accelerator), supported, installed, available,
                     verified: verified_model(id, accelerator, verified_here),
-                    reason_key: (supported && !available).then_some("accel.declined.unavailable"),
+                    reason_key: (supported && !available).then_some(if !sam_memory_ready {
+                        "accel.declined.memory"
+                    } else { "accel.declined.unavailable" }),
                 }
             }).collect::<Vec<_>>();
             (
@@ -635,7 +656,8 @@ mod tests {
     #[test]
     fn cpu_only_puts_every_model_on_the_cpu_in_the_panel() {
         let mac = [Accelerator::CoreMl, Accelerator::WebGpu];
-        let view = accelerators(accel::Preference::CpuOnly, &mac, None, Some(MAC));
+        let view = accelerators(accel::Preference::CpuOnly, &mac,
+            Some(cleaner_core::sam_ts::MIN_ROOM_BYTES), Some(MAC));
         assert_eq!(view.preference, "cpu");
         for row in &view.models {
             assert_eq!(row.accelerator_id, "cpu", "{}", row.model_key);
@@ -665,6 +687,24 @@ mod tests {
         assert_eq!(small.accelerator_id, "cpu");
         assert_eq!(small.declined_id, Some("coreml"));
         assert!(!small.backend_status.iter().find(|row| row.id == "coreml").unwrap().supported);
+    }
+
+    #[test]
+    fn sam_auto_reports_cpu_and_its_memory_budget_without_claiming_host_qualification() {
+        let view = accelerators(accel::Preference::Automatic, &[Accelerator::WebGpu],
+            Some(cleaner_core::sam_ts::MIN_ROOM_BYTES), Some(WINDOWS));
+        let sam = view.models.iter().find(|row| row.id == "samTs").unwrap();
+        assert_eq!(sam.accelerator_id, "cpu");
+        assert_eq!(sam.model_key, "models.kind.textDetector");
+        let cpu = sam.backend_status.iter().find(|row| row.id == "cpu").unwrap();
+        assert!(cpu.available && cpu.supported);
+        assert!(!cpu.verified);
+
+        let short = accelerators(accel::Preference::Automatic, &[Accelerator::WebGpu], Some(1), Some(MAC));
+        let sam = short.models.iter().find(|row| row.id == "samTs").unwrap();
+        assert!(sam.backend_status.iter().all(|row| !row.available));
+        assert_eq!(sam.declined_key, Some("accel.declined.memory"));
+        assert_eq!(sam.needed_bytes, Some(cleaner_core::sam_ts::MIN_ROOM_BYTES));
     }
 
     /// LaMa is offered every GPU provider the platform has but CoreML, because

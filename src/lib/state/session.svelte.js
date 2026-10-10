@@ -194,6 +194,7 @@ function viewport() {
  * @property {{rtFull: 'local'|'cloud', samTs: 'local'|'cloud'}} analysisTargets - where the two cloud-capable detection stages run; `cloud` needs consent per run
  * @property {'local'|'cloud'} cleanTarget - where Auto clean cleans stored detections; `cloud` needs consent per batch (docs/detect-clean.md)
  * @property {boolean} cleanLocalFirst - whether cloud clean tries saved flat-colour picks here first
+ * @property {boolean} cleanSolidOnly - whether a clean on this computer takes only speech bubbles on flat paper and leaves the rest detected
  * @property {'local'|'cloud'|'off'} denoiseTarget - where page denoise runs; `cloud` still asks for consent per chapter
  * @property {string} denoisePreset - the preset id last chosen; `model/denoise.js#validPreset` resolves it against the target
  * @property {number|null} denoiseLocalSecondsPerPage - what `benchmark_denoise_local` measured on this computer, or null before it has run
@@ -232,6 +233,7 @@ function defaults() {
     analysisTargets: defaultAnalysisTargets(),
     cleanTarget: 'local',
     cleanLocalFirst: false,
+    cleanSolidOnly: false,
     denoiseTarget: 'off',
     denoisePreset: '',
     denoiseLocalSecondsPerPage: null,
@@ -344,6 +346,7 @@ export function sanitizeSession(raw) {
     // As strict as the native setting: anything but `cloud` keeps the work here.
     cleanTarget: record.cleanTarget === 'cloud' ? 'cloud' : 'local',
     cleanLocalFirst: boolOr(record.cleanLocalFirst, base.cleanLocalFirst),
+    cleanSolidOnly: boolOr(record.cleanSolidOnly, base.cleanSolidOnly),
     // As strict as the native setting: anything unreadable is off, so a
     // damaged record never sends a page anywhere.
     denoiseTarget: normalizeDenoiseTarget(record.denoiseTarget),
@@ -439,6 +442,7 @@ function persistable() {
     analysisTargets: { ...session.analysisTargets },
     cleanTarget: session.cleanTarget,
     cleanLocalFirst: session.cleanLocalFirst,
+    cleanSolidOnly: session.cleanSolidOnly,
     denoiseTarget: session.denoiseTarget,
     denoisePreset: session.denoisePreset,
     denoiseLocalSecondsPerPage: session.denoiseLocalSecondsPerPage,
@@ -633,6 +637,13 @@ export function setCleanTarget(target) {
 export function setCleanLocalFirst(enabled) {
   if (typeof enabled !== 'boolean') return
   session.cleanLocalFirst = enabled
+  save()
+}
+
+/** @param {boolean} enabled */
+export function setCleanSolidOnly(enabled) {
+  if (typeof enabled !== 'boolean') return
+  session.cleanSolidOnly = enabled
   save()
 }
 

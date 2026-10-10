@@ -36,7 +36,7 @@ it('updates canvas, layers and page readout together when returning to a legacy 
   for (const key of ['ArrowLeft','ArrowLeft','ArrowLeft','ArrowRight','ArrowRight','ArrowRight']) {
     await fireEvent.keyDown(window, { key }); await Promise.resolve(); await tick()
     const current = editor.pageIndex
-    expect(container.querySelector(`[title="Page ${current+1} of 5"]`)).not.toBeNull()
+    expect(container.querySelector(`[title^="Page ${current+1} of 5"]`)).not.toBeNull()
     expect(container.querySelector('.paginated:not([hidden]) [data-artwork="source"] img').src).toContain(`/c/${current}/source/`)
   }
   expect(editor.pageIndex).toBe(0)
@@ -65,12 +65,15 @@ it('measures a saved scroll from the page at rest, and restores it only once the
   expect(editor.scroll).toEqual({ top: 250, left: 40 })
 
   editor.scrollRoom = 300
+  editor.scrollRoomSide = 500
   editor.loading = false
   await tick()
-  expect(scrollTo).toHaveBeenCalledWith({ top: 550, left: 40 })
+  expect(scrollTo).toHaveBeenCalledWith({ top: 550, left: 540 })
 
-  // Pulled down into the room above the page: above rest is negative.
+  // Pulled down and to the right, into the room above and beside the page:
+  // before rest is negative.
   viewport.scrollTop = 100
+  viewport.scrollLeft = 380
   await fireEvent.scroll(viewport)
-  expect(editor.scroll.top).toBe(-200)
+  expect(editor.scroll).toEqual({ top: -200, left: -120 })
 })

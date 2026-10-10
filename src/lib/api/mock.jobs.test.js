@@ -41,6 +41,28 @@ function ended(mock, runId) {
 }
 
 describe('several runs at once', () => {
+  it('queues multiple selected areas on one page and stops each independently', async () => {
+    const mock = makeMock()
+    const area = { x: 10, y: 20, w: 15, h: 25 }
+    const spec = { scope: 'page', chapterId: CHAPTER, pageIndex: 0, mode: 'detect', area }
+    const first = await mock.runClean(spec)
+    const second = await mock.runClean(spec)
+    expect(first.runId).toBeTruthy()
+    expect(second.runId).toBeTruthy()
+    expect(second.runId).not.toBe(first.runId)
+    expect(await mock.listJobs()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: first.runId, area: true, areaPageIndex: 0 }),
+      expect.objectContaining({ runId: second.runId, area: true, areaPageIndex: 0 }),
+    ]))
+    const firstEnd = ended(mock, first.runId)
+    expect(await mock.cancelRun({ runId: first.runId })).toBe(first.runId)
+    expect(await firstEnd).toMatchObject({ reason: 'cancelled' })
+    expect((await mock.listJobs()).map((job) => job.runId)).toEqual([second.runId])
+    const blocked = await mock.runClean({ scope: 'chapter', chapterId: CHAPTER })
+    expect(blocked.alreadyRunning).toBe(true)
+    await mock.cancelRun({ runId: second.runId })
+  })
+
   it('runs two chapters side by side and lists both', async () => {
     const mock = makeMock()
     const first = await mock.runClean({ scope: 'chapter', chapterId: CHAPTER, mode: 'detect' })
@@ -62,6 +84,108 @@ describe('several runs at once', () => {
     expect((await mock.listJobs()).map((job) => job.runId)).toEqual([second.runId])
     await mock.cancelRun({ runId: second.runId })
     expect(await mock.listJobs()).toEqual([])
+  })
+
+  // A run holds the page it is on and no other (`run.rs`): an edit of that
+  // page is refused with `page_busy`, an edit of any other page lands, and a
+  // write over the whole chapter waits for the run to leave the chapter.
+  it('refuses an edit of the page a run is on, and takes one on another page', async () => {
+    const mock = makeMock()
+    const started = new Promise((resolve) => {
+      const stop = mock.subscribe((event) => {
+        if (event.type === 'page-started') {
+          stop()
+          resolve(event.pageIndex)
+        }
+      })
+    })
+    const run = await mock.runClean({ scope: 'chapter', chapterId: CHAPTER, mode: 'detect' })
+    const busy = await started
+    const free = busy + 1
+    expect((await mock.listJobs()).find((job) => job.runId === run.runId)?.pages).toEqual([busy])
+
+    await expect(mock.setDetectionPadding({ chapterId: CHAPTER, pageIndex: busy, paddingPx: 4 })).rejects.toThrow('page_busy')
+    await expect(mock.createRegion({ chapterId: CHAPTER, pageIndex: busy, bbox: { x: 10, y: 10, w: 10, h: 10 }, tool: 'shapes', params: { mode: 'solid' } }))
+      .rejects.toThrow('page_busy')
+    await expect(mock.setDetectionPadding({ chapterId: CHAPTER, paddingPx: 4 })).rejects.toThrow('run_in_progress')
+    // Another page of the same chapter is the reader's to edit.
+    await expect(mock.setDetectionPadding({ chapterId: CHAPTER, pageIndex: free, paddingPx: 4 })).resolves.toBeTruthy()
+    const made = await mock.createRegion({ chapterId: CHAPTER, pageIndex: free, bbox: { x: 10, y: 10, w: 10, h: 10 }, tool: 'shapes', params: { mode: 'solid' } })
+    expect(made?.region ?? made).toBeTruthy()
+
+    const end = ended(mock, run.runId)
+    await mock.cancelRun({ runId: run.runId })
+    await end
+    // The run gone, the page it was on is free again.
+    await expect(mock.setDetectionPadding({ chapterId: CHAPTER, pageIndex: busy, paddingPx: 4 })).resolves.toBeTruthy()
+    expect(await mock.listJobs()).toEqual([])
+  })
+
+  // The journal is the chapter's, and a step of it writes one page. A step
+  // onto the page a run is on is refused before the cursor moves
+  // (`history.rs#history_move`), and so is the restore it would have sent.
+  it('refuses an undo onto the page a run is on, and leaves the cursor', async () => {
+    const mock = makeMock()
+    const made = await mock.createRegion({ chapterId: CHAPTER, pageIndex: 0, bbox: { x: 10, y: 10, w: 10, h: 10 }, tool: 'shapes', params: { mode: 'solid' } })
+    const region = made?.region ?? made
+    await mock.historyPush({
+      chapterId: CHAPTER,
+      entry: { op: 'region-state', label: 'history.label.shape', regionId: region.id, before: null, after: region },
+    })
+    const started = new Promise((resolve) => {
+      const stop = mock.subscribe((event) => {
+        if (event.type === 'page-started') {
+          stop()
+          resolve(event.pageIndex)
+        }
+      })
+    })
+    const run = await mock.runClean({ scope: 'chapter', chapterId: CHAPTER, mode: 'detect' })
+    expect(await started).toBe(0)
+
+    await expect(mock.historyMove({ chapterId: CHAPTER, direction: 'undo' })).rejects.toThrow('page_busy')
+    expect((await mock.historyLoad({ chapterId: CHAPTER })).cursor).toBe(1)
+    await expect(mock.restoreRegion({ regionId: region.id, region: null })).rejects.toThrow('page_busy')
+    const held = (await mock.loadPages({ chapterId: CHAPTER, indices: [0] }))[0]
+    expect(held.regions.some((candidate) => candidate.id === region.id)).toBe(true)
+
+    const end = ended(mock, run.runId)
+    await mock.cancelRun({ runId: run.runId })
+    await end
+    expect((await mock.historyMove({ chapterId: CHAPTER, direction: 'undo' })).cursor).toBe(0)
+  })
+
+  // A resumed run cleans under the rule the cancelled one had (`run.rs` keeps
+  // `runSolidBubblesOnly` in its snapshot).
+  it('resumes a cancelled Solid bubbles only run as one', async () => {
+    const mock = makeMock()
+    const started = new Promise((resolve) => {
+      const stop = mock.subscribe((event) => {
+        if (event.type === 'page-started') {
+          stop()
+          resolve(event.pageIndex)
+        }
+      })
+    })
+    const run = await mock.runClean({ scope: 'chapter', chapterId: CHAPTER, mode: 'auto', solidBubblesOnly: true })
+    await started
+    const end = ended(mock, run.runId)
+    await mock.cancelRun({ runId: run.runId })
+    await end
+
+    /** @type {any[]} */
+    const notices = []
+    const stop = mock.subscribe((event) => {
+      if (event.type === 'notice') notices.push(event.key)
+    })
+    const resumed = await mock.resumeJob({ projectId: 'tsuki-to-hane', chapterId: CHAPTER })
+    expect(resumed?.runId).toBeTruthy()
+    await ended(mock, resumed.runId)
+    stop()
+    expect(notices).toContain('notice.run.solidOnly')
+    const pages = await mock.loadPages({ chapterId: CHAPTER, indices: [1] })
+    // The sound effect on the second page is still a detection.
+    expect(pages[0].regions.some((region) => region.kind !== 'bubble' && region.outcome === 'detected')).toBe(true)
   })
 
   it('answers a chapter that already has a run with that run, and a full house with atCapacity', async () => {

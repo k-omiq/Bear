@@ -151,6 +151,7 @@ function defaultToolParams() {
  * @property {number} queued
  * @property {number} pagesDone
  * @property {number|null} currentPageIndex - the page showing the `●` mark
+ * @property {number[]} busyPages - the pages the run is working on right now, by index: the ones an edit has to wait for (`pageBusy`)
  * @property {number|null} nextPageIndex - where a resume picks up, set on cancel
  */
 
@@ -168,7 +169,8 @@ export const editor = $state({
    * where the page's top sits at its place under the top bar, not from the
    * scroller's own zero: the canvas keeps `scrollRoom` of empty space above
    * the page, and a position that counted it would move with the window's
-   * height. Negative while the page is pulled down into that space.
+   * height. Negative while the page is pulled down into that space. `left`
+   * is measured the same way, from the page's place between the sides.
    */
   scroll: { top: 0, left: 0 },
   /**
@@ -177,6 +179,8 @@ export const editor = $state({
    * scroller's `scrollTop` is `scroll.top` plus this. Never saved.
    */
   scrollRoom: 0,
+  /** The same to the left and right: `scrollLeft` is `scroll.left` plus this. */
+  scrollRoomSide: 0,
   /**
    * The zoom the user chose: the fraction of the page's own pixels the sheet
    * is drawn at, so `1` is 1:1. **Always inside `[MIN_ZOOM, MAX_ZOOM]`** -
@@ -256,8 +260,11 @@ export const editor = $state({
     queued: 0,
     pagesDone: 0,
     currentPageIndex: null,
+    busyPages: [],
     nextPageIndex: null,
   },
+  /** Selection detections are independent jobs, each with its own Stop action. @type {Array<{runId: string, pageIndex: number}>} */
+  areaRuns: [],
 
   /**
    * The undo journal's **index** - a cursor and one `{seq, label}` per entry.
@@ -293,6 +300,37 @@ export function currentPage() {
 export function runningPage() {
   const index = editor.run.currentPageIndex
   return index == null ? null : (pages()[index] ?? null)
+}
+
+/**
+ * Whether a run holds this page. Batch runs hold the page currently being
+ * processed; independently queued selection detections hold their submitted
+ * pages until each finishes. Every other page remains editable.
+ *
+ * A longstrip is one surface. A patch reaches across a join and the run
+ * reads its neighbours, so there the whole chapter is held while a run is on
+ * it, as the native side holds it.
+ *
+ * @param {number|null|undefined} pageIndex
+ * @returns {boolean}
+ */
+export function pageBusy(pageIndex) {
+  if (pageIndex == null) return false
+  if (editor.project?.mode === 'longstrip') return editor.run.active || editor.areaRuns.length > 0
+  return (editor.run.active && editor.run.busyPages.includes(pageIndex)) || editor.areaRuns.some((run) => run.pageIndex === pageIndex)
+}
+
+/**
+ * Ask to edit a page. A page the run is on answers false and says why, so the
+ * caller does nothing; any other page is the caller's.
+ *
+ * @param {number|null|undefined} pageIndex
+ * @returns {boolean}
+ */
+export function claimPageEdit(pageIndex) {
+  if (!pageBusy(pageIndex)) return true
+  notify({ key: 'notice.run.pageBusy', tone: 'warn' })
+  return false
 }
 
 /** @returns {number} */
@@ -652,7 +690,7 @@ export async function reloadPage(index) {
   const version = (reloadVersions.get(key) ?? 0) + 1
   reloadVersions.set(key, version)
   const loaded = await getBackend().loadPages({ chapterId: chapter.id, indices: [index] })
-  if (editor.chapter?.id !== chapter.id || reloadVersions.get(key) !== version) return
+  if (editor.chapter !== chapter || reloadVersions.get(key) !== version) return
   for (const page of loaded ?? []) applyLoadedPage(page)
 }
 
@@ -814,12 +852,18 @@ function onBackendEvent(event) {
   // hear the end of it even when the reader has opened another chapter since.
   if (event.type === 'run-finished') settleRun(event)
   if (!editor.chapter || event.chapterId !== editor.chapter.id) return
+  const areaRun = editor.areaRuns.find((run) => run.runId === event.runId)
+  const currentRun = editor.run.runId === event.runId
 
   switch (event.type) {
     case 'page-started': {
       const page = pageAt(event.pageIndex)
       if (page) page.status = 'cleaning'
+      if (!currentRun) break
       editor.run.currentPageIndex = event.pageIndex
+      // A cloud clean has a few pages started at once, so this is a list and
+      // not `currentPageIndex` again.
+      if (!editor.run.busyPages.includes(event.pageIndex)) editor.run.busyPages.push(event.pageIndex)
       break
     }
     case 'region-done': {
@@ -856,6 +900,10 @@ function onBackendEvent(event) {
       break
     }
     case 'page-done': {
+      // Concurrent areas may finish their manifest writes and deliver their
+      // snapshots in a different order. Read the latest page when the job
+      // ends instead of replacing newer regions with an older snapshot.
+      if (areaRun) break
       const index = pages().findIndex((page) => page.id === event.page.id)
       if (index >= 0) {
         // The event carries a whole page, regions and all. It is kept only if
@@ -869,18 +917,31 @@ function onBackendEvent(event) {
         const wanted = residentIndices().includes(index)
         editor.chapter.pages[index] = wanted ? event.page : evictRegions(event.page)
       }
-      editor.run.pagesDone += 1
-      if (editor.run.currentPageIndex === event.page.index) editor.run.currentPageIndex = null
+      if (currentRun) {
+        editor.run.pagesDone += 1
+        if (editor.run.currentPageIndex === event.page.index) editor.run.currentPageIndex = null
+        editor.run.busyPages = editor.run.busyPages.filter((index) => index !== event.page.index)
+      }
       break
     }
     case 'run-finished': {
+      if (areaRun) {
+        editor.areaRuns = editor.areaRuns.filter((run) => run.runId !== event.runId)
+        void reloadAreaPage(areaRun.pageIndex).catch(() => {})
+        scheduleAutosave()
+        break
+      }
       if (editor.run.runId !== event.runId) break
-      const unfinishedPage = editor.run.currentPageIndex
+      // Every page the run had started and not finished, which is more than
+      // one for a cloud clean that was stopped.
+      const unfinished = new Set(editor.run.busyPages)
+      if (editor.run.currentPageIndex !== null) unfinished.add(editor.run.currentPageIndex)
       editor.run.active = false
       editor.run.runId = null
       editor.run.currentPageIndex = null
+      editor.run.busyPages = []
       editor.run.nextPageIndex = event.nextPageIndex
-      if (unfinishedPage !== null) void reloadPage(unfinishedPage).catch(() => {})
+      for (const index of unfinished) void reloadPage(index).catch(() => {})
       scheduleAutosave()
       break
     }
@@ -989,8 +1050,11 @@ function resetSessionState() {
     queued: 0,
     pagesDone: 0,
     currentPageIndex: null,
+    busyPages: [],
     nextPageIndex: null,
   }
+  editor.areaRuns = []
+  pendingAreaStarts.clear()
   editor.history = createHistory()
 }
 
@@ -1013,7 +1077,7 @@ export function closeEditorChapter() {
   // itself goes on: the jobs list follows it (`state/jobs.svelte.js`), and
   // reopening the chapter adopts it again (`adoptChapterJob`).
   const chapterId = editor.chapter?.id
-  for (const runId of new Set([editor.run.runId, ...runWaiters.keys()].filter(Boolean))) {
+  for (const runId of new Set([editor.run.runId, ...editor.areaRuns.map((run) => run.runId), ...runWaiters.keys()].filter(Boolean))) {
     settleRun({ type: 'run-finished', runId, chapterId, reason: 'editor-closed' })
   }
   if (autosaveTimer) {
@@ -1165,7 +1229,7 @@ export function pageByArrow(side) {
 
 /**
  * @param {number} top from the page's place at rest, `editor.scrollRoom` taken off
- * @param {number} left
+ * @param {number} left from the page's place at rest, `editor.scrollRoomSide` taken off
  */
 export function setScroll(top, left) {
   editor.scroll = { top, left }
@@ -1173,14 +1237,17 @@ export function setScroll(top, left) {
 }
 
 /**
- * The canvas reporting the space it keeps above the page, so that the shell
- * can turn a saved position into a `scrollTop` and back.
+ * The canvas reporting the space it keeps above and beside the page, so that
+ * the shell can turn a saved position into a scroll offset and back.
  *
- * @param {number} room CSS pixels
+ * @param {number} room CSS pixels above the page
+ * @param {number} [side] CSS pixels to its left
  */
-export function reportScrollRoom(room) {
+export function reportScrollRoom(room, side = 0) {
   const next = Math.max(0, Math.round(Number(room) || 0))
+  const nextSide = Math.max(0, Math.round(Number(side) || 0))
   if (next !== editor.scrollRoom) editor.scrollRoom = next
+  if (nextSide !== editor.scrollRoomSide) editor.scrollRoomSide = nextSide
 }
 
 /* ------------------------------------------------------------------ */
@@ -1463,11 +1530,30 @@ export function stepReview(direction) {
 /* ------------------------------------------------------------------ */
 
 let pendingRunStart = null
+/** Claims made before individual area jobs receive handles. */
+const pendingAreaStarts = new Set()
+
+/** Allow independent selection detections while keeping batch runs exclusive. */
+export function claimAreaRunStart(token = null) {
+  if (token) return pendingAreaStarts.has(token) && token.chapter === editor.chapter ? token : null
+  if (!editor.chapter) return null
+  if (pendingRunStart || editor.run.active) {
+    notify({ key: 'notice.run.busy', tone: 'warn' })
+    return null
+  }
+  const claim = { chapter: editor.chapter }
+  pendingAreaStarts.add(claim)
+  return claim
+}
+
+export function releaseAreaRunStart(token) {
+  pendingAreaStarts.delete(token)
+}
 
 /** Claim the interval before a run handle exists, including any consent. */
 export function claimRunStart(token = null) {
   if (token && pendingRunStart === token && !editor.run.active) return token
-  if (pendingRunStart || editor.run.active) {
+  if (pendingRunStart || editor.run.active || pendingAreaStarts.size || editor.areaRuns.length) {
     notify({ key: 'notice.run.busy', tone: 'warn' })
     return null
   }
@@ -1494,7 +1580,8 @@ export function releaseRunStart(token) {
  */
 export async function startRun(scope = 'page', { cloudGrant = null, mode = 'auto', pendingToken = null, area = null, pageIndex = editor.pageIndex } = {}) {
   if (!editor.chapter) return null
-  const token = claimRunStart(pendingToken)
+  const individual = mode === 'detect' && !!area
+  const token = individual ? claimAreaRunStart(pendingToken) : claimRunStart(pendingToken)
   if (!token) return null
   try {
     const chapter = editor.chapter
@@ -1535,12 +1622,46 @@ export async function startRun(scope = 'page', { cloudGrant = null, mode = 'auto
       analysisTargets: unifyAnalysisTargets(session.analysisTargets),
       ...(cloudGrant ? { cloudGrant } : {}),
       ...(area ? { area } : {}),
+      // The clean's own choice, so a Detect never carries it. The run then
+      // cleans a speech bubble on flat paper and stores every other region
+      // as detected (`run.rs`).
+      ...(mode !== 'detect' && solidOnlyOf(params) ? { solidBubblesOnly: true } : {}),
     })
     if (editor.chapter !== chapter) return null
-    return adoptRun(handle, scope, mode)
+    return individual ? adoptAreaRun(handle, pageIndex) : adoptRun(handle, scope, mode)
   } finally {
-    if (!pendingToken) releaseRunStart(token)
+    if (!pendingToken) {
+      if (individual) releaseAreaRunStart(token)
+      else releaseRunStart(token)
+    }
   }
+}
+
+/** Register an independent selection detection without replacing a batch's state. */
+function adoptAreaRun(handle, pageIndex) {
+  if (handle?.atCapacity) {
+    notify({ key: 'notice.run.atCapacity', tone: 'warn' })
+    return null
+  }
+  if (handle?.alreadyRunning) {
+    notify({ key: 'notice.run.busy', tone: 'warn' })
+    return null
+  }
+  if (!handle?.runId) return null
+  registerEditorJob(handle.runId, 'detect', handle.pages?.length ?? 1)
+  // An especially quick job can finish before its handle reaches this call.
+  if (finishedRuns.has(handle.runId)) void reloadAreaPage(pageIndex).catch(() => {})
+  else editor.areaRuns.push({ runId: handle.runId, pageIndex })
+  return handle.runId
+}
+
+/** Refresh merged detections while keeping a still-running area's page marked busy. */
+async function reloadAreaPage(pageIndex) {
+  const chapter = editor.chapter
+  await reloadPage(pageIndex)
+  if (editor.chapter !== chapter || !pageBusy(pageIndex)) return
+  const page = pageAt(pageIndex)
+  if (page) page.status = 'cleaning'
 }
 
 /**
@@ -1551,6 +1672,19 @@ export async function startRun(scope = 'page', { cloudGrant = null, mode = 'auto
  */
 export function paddingOf(params) {
   return Math.round(numberIn(Number(params.maskPadding ?? 0), { min: 0, max: MAX_MASK_PADDING, fallback: 0 }))
+}
+
+/**
+ * Whether a clean on this computer takes only speech bubbles on flat paper:
+ * the Text cleanup panel's Solid bubbles only (`toolParams.autoClean.solidOnly`).
+ * The record holds it once the box has been pressed in this window; until
+ * then it is the choice the last window left (`session.cleanSolidOnly`).
+ *
+ * @param {Record<string, unknown>} [params]
+ * @returns {boolean}
+ */
+export function solidOnlyOf(params = editor.toolParams.autoClean ?? {}) {
+  return typeof params?.solidOnly === 'boolean' ? params.solidOnly : session.cleanSolidOnly
 }
 
 /**
@@ -1566,7 +1700,10 @@ export function paddingOf(params) {
  */
 export async function applyDetectionPadding(scope) {
   const chapter = editor.chapter
-  if (!chapter || editor.run.active) return false
+  if (!chapter) return false
+  // A chapter's worth of masks waits for the run to leave the chapter; one
+  // page's waits only while the run is on that page.
+  if (scope === 'page' ? pageBusy(editor.pageIndex) : editor.run.active) return false
   const paddingPx = paddingOf(editor.toolParams.autoClean ?? {})
   let result
   try {
@@ -1628,6 +1765,7 @@ export function adoptRun(handle, scope, mode = 'auto', kind = null) {
     queued: handle.pages?.length ?? 0,
     pagesDone: 0,
     currentPageIndex: null,
+    busyPages: [],
     nextPageIndex: null,
   }
   registerEditorJob(handle.runId, kind ?? kindOfMode(mode), editor.run.queued)
@@ -1674,8 +1812,12 @@ export async function adoptChapterJob() {
   if (!chapter || editor.run.active) return null
   const listed = await refreshJobs()
   if (editor.chapter !== chapter || editor.run.active) return null
-  const entry = listed.find((job) => job?.chapterId === chapter.id && RUN_KINDS.includes(job.kind))
-  if (!entry) return null
+  const chapterJobs = listed.filter((job) => job?.chapterId === chapter.id && RUN_KINDS.includes(job.kind))
+  editor.areaRuns = chapterJobs.filter((entry) => entry.area === true && Number.isInteger(entry.areaPageIndex)
+    && jobById(entry.runId)?.status === 'running')
+    .map((entry) => ({ runId: entry.runId, pageIndex: entry.areaPageIndex }))
+  const entry = chapterJobs.find((job) => job.area !== true)
+  if (!entry) return editor.areaRuns[0]?.runId ?? null
   const job = jobById(entry.runId)
   if (job?.status !== 'running') return null
   editor.run = {
@@ -1686,6 +1828,9 @@ export async function adoptChapterJob() {
     queued: job.total,
     pagesDone: Math.min(job.done, job.total || job.done),
     currentPageIndex: null,
+    // The pages it is on now, as the list says: their `page-started` went by
+    // before this window was listening.
+    busyPages: Array.isArray(entry.pages) ? entry.pages.filter(Number.isInteger) : [],
     nextPageIndex: null,
   }
   registerEditorJob(job.runId, job.kind, job.total)
@@ -1710,7 +1855,9 @@ function settleRun(event) {
   if (waiting) for (const resolve of waiting) resolve(event)
   else {
     finishedRuns.set(event.runId, event)
-    if (finishedRuns.size > 8) finishedRuns.delete(finishedRuns.keys().next().value)
+    // Up to 16 cloud areas may finish before their IPC handles arrive, beside
+    // ordinary runs. Keep the short handoff cache large enough for that burst.
+    if (finishedRuns.size > 32) finishedRuns.delete(finishedRuns.keys().next().value)
   }
 }
 
@@ -1799,6 +1946,7 @@ export async function consumeResume() {
     queued: result.pages.length,
     pagesDone: 0,
     currentPageIndex: null,
+    busyPages: [],
     nextPageIndex: null,
   }
   registerEditorJob(result.runId, kindOfMode(editor.run.mode), editor.run.queued)
@@ -2112,6 +2260,14 @@ async function replayHistory(direction) {
       try {
         step = await getBackend().historyMove({ chapterId: chapter.id, direction })
       } catch (error) {
+        // A run is on the entry's page. The journal refused before it moved
+        // (`history.rs#history_move`), so the step was not taken and the
+        // cursor this window moved ahead of it goes back.
+        if (jobConflictKey(error) === 'notice.run.pageBusy') {
+          if (editor.history === history) history.cursor += direction === 'undo' ? 1 : -1
+          reportJobConflict(error)
+          return
+        }
         if (editor.history === history) history.error = error
         if (!reportJobConflict(error)) notify({ key: 'notice.history.saveFailed', tone: 'warn' })
         return
@@ -2138,13 +2294,19 @@ export function undo() {
  * backend's message, and is looked for anywhere in it because a layer that
  * wraps the message puts a path in front.
  *
+ * A write a run of this window's own refused is said here too: `page_busy`
+ * for an edit of the page the run is on, and `run_in_progress` for a
+ * chapter-wide write (an export, a delete) while the chapter has a run.
+ *
  * @param {unknown} error
- * @returns {'notice.job.busy'|'notice.job.stale'|null}
+ * @returns {'notice.job.busy'|'notice.job.stale'|'notice.run.pageBusy'|'notice.run.busy'|null}
  */
 export function jobConflictKey(error) {
   const text = error instanceof Error ? error.message : String(error ?? '')
   if (/\bjob_stale\b/.test(text)) return 'notice.job.stale'
   if (/\bjob_busy\b/.test(text)) return 'notice.job.busy'
+  if (/\bpage_busy\b/.test(text)) return 'notice.run.pageBusy'
+  if (/\brun_in_progress\b/.test(text)) return 'notice.run.busy'
   return null
 }
 

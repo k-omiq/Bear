@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { flushSync } from 'svelte'
 import {
   GPU_POLL_MS,
+  GPU_WAIT_MS,
   STOP_SETTLE_MS,
   cloudGpu,
   gpuDeployments,
@@ -371,6 +372,66 @@ it('analysis events retain their own profile after selection changes', () => {
   expect(runningAnalyses({ provider: 'modal', profileId: 'mc-2' })).toBe(0)
   onAnalysisRecord({ proposal_id: 'p-A', provider: 'modal', profile_id: 'mc-1', phase: { phase: 'run_page_complete' } })
   expect(runningAnalyses()).toBe(0)
+})
+
+/** What the panel is told is waiting for a GPU on the selected deployment. */
+const waiting = () => gpuDeployments().find((deployment) => deployment.target.profileId === 'mc-1')?.waiting
+const out = (phase) => ({ proposal_id: 'p-1', provider: 'modal', profile_id: 'mc-1', phase })
+
+it('says an analysis waits for a GPU once a read half a minute after it went out finds none up', async () => {
+  vi.useFakeTimers()
+  const b = backend({ getCloudGpuStatus: vi.fn().mockResolvedValue({ supported: true, unsupported: null, containers: [idle] }) })
+  startCloudGpu(b)
+  flushSync()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(waiting()).toEqual([])
+
+  // The render GPU being up says nothing about the analysis GPU.
+  onAnalysisRecord(out({ phase: 'submitted_tile', index: 0 }))
+  flushSync()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(waiting()).toEqual([])
+  // A read 15 s in is too soon to say.
+  await vi.advanceTimersByTimeAsync(GPU_POLL_MS)
+  flushSync()
+  expect(waiting()).toEqual([])
+  await vi.advanceTimersByTimeAsync(GPU_WAIT_MS - GPU_POLL_MS)
+  flushSync()
+  expect(waiting()).toEqual(['analysis'])
+
+  // A container ends the wait, even one that is still starting.
+  b.getCloudGpuStatus.mockResolvedValue({ supported: true, unsupported: null,
+    containers: [{ ...analysis, state: 'starting', scaledownInMs: null }] })
+  await vi.advanceTimersByTimeAsync(GPU_POLL_MS)
+  expect(waiting()).toEqual([])
+})
+
+it('counts the wait from when the analysis was first heard of, and ends it with the analysis', async () => {
+  vi.useFakeTimers()
+  const b = backend({ getCloudGpuStatus: vi.fn().mockResolvedValue({ supported: true, unsupported: null, containers: [] }) })
+  onAnalysisRecord(out({ phase: 'confirmed' }))
+  await vi.advanceTimersByTimeAsync(GPU_WAIT_MS)
+  // A later record of the same analysis does not start the wait again.
+  onAnalysisRecord(out({ phase: 'submitted_tile', index: 0 }))
+  await refreshCloudGpu(b)
+  expect(waiting()).toEqual(['analysis'])
+
+  // A failed read leaves what the last one said.
+  b.getCloudGpuStatus.mockRejectedValueOnce(new Error('offline'))
+  await refreshCloudGpu(b)
+  expect(waiting()).toEqual(['analysis'])
+
+  onAnalysisRecord(out({ phase: 'unknown_remote_state', index: 0 }))
+  expect(waiting()).toEqual([])
+})
+
+it('does not say a deployment that cannot report its GPU is waiting for one', async () => {
+  vi.useFakeTimers()
+  const b = backend({ getCloudGpuStatus: vi.fn().mockResolvedValue({ supported: false, unsupported: 'provider', containers: [] }) })
+  onAnalysisRecord(out({ phase: 'submitted_tile', index: 0 }))
+  await vi.advanceTimersByTimeAsync(GPU_WAIT_MS)
+  await refreshCloudGpu(b)
+  expect(waiting()).toEqual([])
 })
 
 it('coalesces slow status reads independently for each endpoint', async () => {

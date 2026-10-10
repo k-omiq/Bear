@@ -1,5 +1,5 @@
 <script>
-  import { editor, hover, select, setToolParam } from '../state/editor.svelte.js'
+  import { claimPageEdit, editor, hover, select, setToolParam } from '../state/editor.svelte.js'
   import { notify } from '../state/app.svelte.js'
   import { session } from '../state/session.svelte.js'
   import { modifierHeld } from '../shortcuts.js'
@@ -22,7 +22,6 @@
     centredBbox,
     clientCentre,
     cloneOffset,
-    detectAreaAround,
     draftKeyIntent,
     menuPoint,
     moveBbox,
@@ -36,7 +35,6 @@
     steppedSize,
   } from './gesture.js'
   import { commitDraft } from './drawing.svelte.js'
-  import { detectArea } from './cloudrun.js'
   import { draftShape, toolSpec } from './tools.js'
   import { pageVersion } from '../api/tile.js'
   import { t } from '../i18n/index.js'
@@ -45,7 +43,6 @@
   import PaintLayer from './PaintLayer.svelte'
   import { flushPaintPreview } from './paintpreview.js'
   import RegionMenu from './RegionMenu.svelte'
-  import { ContextMenu } from '../ui/index.js'
 
   /**
    * The drawing surface: one element over the sheet that is both the pointer
@@ -59,7 +56,8 @@
    * round stroke every brush tool paints, and its lasso and rectangle are
    * Shapes' own drags (`tools.js#draftShape`); what differs is the commit
    * (`drawing.svelte.js#editMask`) and the preview, where remove reads as a
-   * cut rather than as more mask.
+   * cut rather than as more mask. In its Detect mode the drag is a rectangle
+   * and the commit is a Detect held to it (`drawing.svelte.js#detectDrawn`).
    *
    * **A tap is not a drag.** Below `TAP_SLOP` of movement the gesture is
    * treated as a click on whatever region is under it, which is exactly what
@@ -132,13 +130,6 @@
    * @type {{x: number, y: number, region: import('../api/backend.js').ApiRegion} | null}
    */
   let menu = $state(null)
-  /**
-   * The selection tool's menu over bare paper: where it opened, and the area
-   * a Detect from it is held to (page percent).
-   *
-   * @type {{x: number, y: number, area: import('./gesture.js').Bbox} | null}
-   */
-  let detectMenu = $state(null)
 
   const tool = $derived(editor.tool)
   const params = $derived(editor.toolParams[tool] ?? {})
@@ -157,6 +148,12 @@
    */
   const livePixels = $derived(tool === 'cloneStamp' || tool === 'brush')
   const stamping = $derived(tool === 'cloneStamp')
+  const detecting = $derived(tool === 'maskSelect' && params.mode === 'detect')
+
+  /** Detection submits another area; other gestures edit the held page. */
+  function claimGesture() {
+    return detecting || claimPageEdit(page.index)
+  }
 
   /**
    * How many of this page's gestures are still being committed, and how many
@@ -273,13 +270,15 @@
 
   /**
    * What the draft does: the Brush paints, the selection tool's remove mode
-   * erases from the detected masks, and everything else adds.
+   * erases from the detected masks, its Detect mode asks the detector about
+   * the area, and everything else adds.
    *
-   * @returns {'add'|'erase'|'paint'}
+   * @returns {'add'|'erase'|'paint'|'detect'}
    */
   function draftMode() {
     if (tool === 'brush') return 'paint'
     if (tool === 'maskSelect' && params.mode === 'remove') return 'erase'
+    if (tool === 'maskSelect' && params.mode === 'detect') return 'detect'
     return 'add'
   }
 
@@ -321,6 +320,13 @@
     // is not a modifier, so it needs no setting of its own.
     if (stamping && modifierHeld(event, session.cloneSourceModifier)) {
       sample(point)
+      event.preventDefault()
+      return
+    }
+
+    // Page edits wait while a run holds the page. Detect draws another area
+    // for its own background job, so additional rectangles remain available.
+    if (!claimGesture()) {
       event.preventDefault()
       return
     }
@@ -509,13 +515,6 @@
    * can only be the selected one, and the menu opens over that region's own
    * middle rather than the middle of the sheet.
    *
-   * **Over bare paper the selection tool offers Detect text here.** The tool
-   * edits detected masks, and the one edit a brush cannot make is the mask
-   * that is not there: text Detect missed, or a mask deleted by mistake. The
-   * detector looks again around the pointer and adds what it finds
-   * (`cloudrun.js#detectArea`). It needs a pointer, because the keyboard's
-   * event names no spot on the page.
-   *
    * @param {MouseEvent} event
    */
   function oncontextmenu(event) {
@@ -525,16 +524,7 @@
     const region = keyboard
       ? ((page.regions ?? []).find((candidate) => candidate.id === editor.selectionId) ?? null)
       : regionAt(pointIn(event.clientX, event.clientY, rect), page.regions)
-    if (!region) {
-      if (tool !== 'maskSelect' || keyboard) return
-      event.preventDefault()
-      const point = pointIn(event.clientX, event.clientY, rect)
-      detectMenu = {
-        ...menuPoint(event, rect),
-        area: detectAreaAround(point, page.width ?? 1600, page.height ?? 2400),
-      }
-      return
-    }
+    if (!region) return
     event.preventDefault()
     select(region.id)
     const anchor = keyboard ? clientCentre(region.bbox, rect) : menuPoint(event, rect)
@@ -667,13 +657,17 @@
     })
     if (!intent) return
 
-    if (intent.kind === 'open') openKeyboardDraft()
+    // The keyboard follows the same rule as the pointer: page edits wait,
+    // while Detect can submit another selected area.
+    if (intent.kind === 'open') {
+      if (claimGesture()) openKeyboardDraft()
+    }
     // A commit the draft is not ready for is still swallowed: the key belongs
     // to this surface either way, and letting it through would page the chapter
     // out from under a half-drawn polygon.
     else if (intent.kind === 'commit') {
       if (stamping && !active?.clone) notify({ key: 'notice.tool.cloneNeedsSource', tone: 'warn' })
-      else if (committable()) commit()
+      else if (committable() && claimGesture()) commit()
     } else if (intent.kind === 'sample') {
       sample(keyPoint())
     } else if (intent.kind === 'size' || intent.kind === 'hardness') {
@@ -801,24 +795,6 @@
 ></button>
 
 <RegionMenu at={menu} onclose={() => (menu = null)} />
-
-{#if detectMenu}
-  <ContextMenu
-    x={detectMenu.x}
-    y={detectMenu.y}
-    label={t('masks.menu.page')}
-    sections={[{
-      id: 'detect',
-      items: [{ id: 'detectHere', label: t('masks.menu.detectHere'), icon: 'sparkle', disabled: editor.run.active }],
-    }]}
-    onselect={() => {
-      // Read the area off the open menu before closing clears it.
-      const area = detectMenu?.area
-      if (area) void detectArea(page.index, area)
-    }}
-    onclose={() => (detectMenu = null)}
-  />
-{/if}
 
 <!-- The live pixels, under the cursor ring and over the artwork. Mounted only
      for the two tools it can preview, so no other tool pays for a canvas it

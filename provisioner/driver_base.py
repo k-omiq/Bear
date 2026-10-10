@@ -27,7 +27,13 @@ from deploy.cloud.common.deployment import (
     parse_idle_seconds,
     parse_routing_region,
 )
-from deploy.cloud.common.manifest import MODEL_PROD_FLUX, PRODUCTION_MODELS, production_model as production_model_spec
+from deploy.cloud.common.manifest import (
+    MODEL_NONE,
+    MODEL_PROD_FLUX,
+    PRODUCTION_MODELS,
+    deployable_model_id,
+    production_model as production_model_spec,
+)
 from deploy.cloud.common.analysis_seed import GRAPH_FILES, normalize_analysis_models
 from deploy.cloud.common.manifest import (
     get_production_model_info,
@@ -89,10 +95,15 @@ def normalize_options(
     idle = options.get("idle_seconds")
     model_id = options.get("model_id", MODEL_PROD_FLUX)
     try:
-        if not isinstance(model_id, str) or model_id not in PRODUCTION_MODELS:
-            raise ValueError("model_id is not a supported cloud render model")
-        spec = production_model_spec(model_id)
-        required_gpu = spec.required_gpu_for(provider)
+        try:
+            model_id = deployable_model_id(model_id)
+        except ValueError:
+            raise ValueError("model_id is not a supported cloud render model") from None
+        spec = None if model_id == MODEL_NONE else production_model_spec(model_id)
+        # Beam is paused and its app always deploys a render worker.
+        if spec is None and provider not in NO_MODEL_PROVIDERS:
+            raise ValueError("this provider needs a cleaning model")
+        required_gpu = spec.required_gpu_for(provider) if spec else None
         gpu = parse_gpu((required_gpu or default_gpu) if gpu is None else gpu, tuple(gpu_allowlist))
         if required_gpu and gpu != required_gpu:
             raise ValueError(f"{spec.label} requires {required_gpu} for sufficient GPU memory")
@@ -104,6 +115,8 @@ def normalize_options(
         if not isinstance(denoise, bool):
             raise ValueError("denoise must be true or false")
         routing_region = parse_routing_region(options.get("routing_region", DEFAULT_ROUTING_REGION))
+        if spec is None and not analysis_models and not denoise:
+            raise ValueError("choose a cleaning model, a detection model or page denoise")
     except ValueError as exc:
         raise ProtocolError(
             ERR_VALIDATION,
@@ -118,8 +131,14 @@ def normalize_options(
 # out of its hash, so a plan approved back then keeps its hash and still resumes.
 UNSET_OPTIONS = {"denoise": False, "routing_region": DEFAULT_ROUTING_REGION}
 
+# Providers whose app can be deployed without a cleaning model (`model_id` MODEL_NONE).
+NO_MODEL_PROVIDERS = ("modal",)
 
-def production_model(model_id: str = MODEL_PROD_FLUX) -> Dict[str, str]:
+
+def production_model(model_id: str = MODEL_PROD_FLUX) -> Optional[Dict[str, str]]:
+    """The pinned model an installation serves; None for one without a cleaning model."""
+    if model_id == MODEL_NONE:
+        return None
     info = get_production_model_info("modal", model_id)
     return {
         "model_id": info.model_id,
@@ -134,14 +153,16 @@ def read_seed_state(doc: Any, model_id: str = MODEL_PROD_FLUX) -> Tuple[str, Opt
 
     state is running, done, failed, or unknown for a missing or foreign document.
     """
-    model = production_model_spec(model_id)
-    if not isinstance(doc, dict) or doc.get("model_revision") != model.revision:
+    # Without a cleaning model the document names no snapshot (weights.seed_state).
+    model = None if model_id == MODEL_NONE else production_model_spec(model_id)
+    revision, total_bytes = (model.revision, model.total_bytes) if model else ("", 0)
+    if not isinstance(doc, dict) or doc.get("model_revision") != revision:
         return "unknown", None, ""
     if doc.get("snapshot_fingerprint") != snapshot_fingerprint(model_id):
         return "unknown", None, ""
     # The same revision with another file set (a recipe that gained a LoRA) is not
     # this snapshot: its "done" must not skip the seed that fetches the new file.
-    if doc.get("bytes_total") not in (None, model.total_bytes):
+    if doc.get("bytes_total") not in (None, total_bytes):
         return "unknown", None, ""
     state = doc.get("state")
     if state == "done":
@@ -151,7 +172,7 @@ def read_seed_state(doc: Any, model_id: str = MODEL_PROD_FLUX) -> Tuple[str, Opt
         message = str(doc.get("message") or "")[:512]
         return "failed", None, f"{code}: {message}" if message else code
     if state == "running":
-        done, total = doc.get("bytes_done"), doc.get("bytes_total") or model.total_bytes
+        done, total = doc.get("bytes_done"), doc.get("bytes_total") or total_bytes
         if isinstance(done, int) and isinstance(total, int) and total > 0:
             return "running", max(0, min(99, done * 100 // total)), ""
         return "running", None, ""
@@ -342,15 +363,16 @@ def build_plan(
     notes: Sequence[str],
     cleanup_summary: Sequence[str],
 ) -> DeploymentPlan:
+    # Both None for an installation without a cleaning model.
     model = production_model(options["model_id"])
-    selected_spec = production_model_spec(options["model_id"])
+    selected_spec = production_model_spec(options["model_id"]) if model else None
     resource_allocation = {
         "gpu": options["gpu"],
         "gpu_options": list(gpu_allowlist),
         "idle_seconds": options["idle_seconds"],
-        "model_weights_bytes": selected_spec.total_bytes,
-        "model_id": model["model_id"],
-        "model_revision": model["model_revision"],
+        "model_weights_bytes": selected_spec.total_bytes if selected_spec else 0,
+        "model_id": options["model_id"],
+        "model_revision": model["model_revision"] if model else "",
         "analysis_models": options["analysis_models"],
         "analysis_graph_bytes": sum(size for capability in options["analysis_models"]
                                     for _, size, _ in GRAPH_FILES[capability]),
@@ -363,8 +385,9 @@ def build_plan(
              "weights_bytes": item.total_bytes, "license": item.license,
              "required_gpu": item.required_gpu_for(provider)}
             for item in PRODUCTION_MODELS.values()
-        ],
-        "model_license": selected_spec.license,
+        ] + ([{"model_id": MODEL_NONE, "label": "No cleaning model", "weights_bytes": 0,
+               "license": "", "required_gpu": None}] if provider in NO_MODEL_PROVIDERS else []),
+        "model_license": selected_spec.license if selected_spec else "",
         # Page denoise: Modal only. The review screen shows the switch when supported.
         "denoise": bool(options.get("denoise", False)),
         "denoise_supported": provider == "modal",
@@ -382,8 +405,8 @@ def build_plan(
         "app_name": app_name,
         "options": {k: v for k, v in options.items() if not (k in UNSET_OPTIONS and UNSET_OPTIONS[k] == v)},
         "resources": [(r.type, r.name) for r in resources],
-        "model_revision": model["model_revision"],
-        "recipe_id": model["recipe_id"],
+        "model_revision": model["model_revision"] if model else "",
+        "recipe_id": model["recipe_id"] if model else "",
         "model_snapshot_fingerprint": snapshot_fingerprint(options["model_id"]),
     }
     plan_hash = compute_canonical_hash(identity, set())

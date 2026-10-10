@@ -80,6 +80,20 @@ describe('installations that already exist', () => {
     expect(reuseDownloadsNothing({ ...found, weightsChecked: false }, { model_id: 'owner/model-a' })).toBe(false)
   })
 
+  it('takes a setup with no cleaning model: nothing of a model to download, its choices kept', async () => {
+    const { cleanOptions, existingInstallationsOf, NO_CLEAN_MODEL, reuseDownloadsNothing } = await import('./provisioning.svelte.js')
+    expect(cleanOptions({ model_id: NO_CLEAN_MODEL })).toEqual({ model_id: 'none' })
+    expect(cleanOptions({ model_id: 'nothing' })).toEqual({})
+    const [found] = existingInstallationsOf({ existing_installations: [
+      entry({ models_ready: [], options: { gpu: 'L4', idle_seconds: 120, model_id: 'none', analysis_models: ['text_regions_rt@1'] } }),
+    ] })
+    expect(found.options?.model_id).toBe(NO_CLEAN_MODEL)
+    expect(reuseDownloadsNothing(found, { model_id: NO_CLEAN_MODEL, analysis_models: ['text_regions_rt@1'] })).toBe(true)
+    expect(reuseDownloadsNothing(found, { model_id: NO_CLEAN_MODEL, analysis_models: ['text_mask_sam_ts@1'] })).toBe(false)
+    // Adding a cleaning model to it later does download one.
+    expect(reuseDownloadsNothing(found, { model_id: 'owner/model-a', analysis_models: [] })).toBe(false)
+  })
+
   it('keeps a recorded Page denoise choice only as a boolean', async () => {
     const { cleanOptions, existingInstallationsOf } = await import('./provisioning.svelte.js')
     expect(cleanOptions({ denoise: true })).toEqual({ denoise: true })

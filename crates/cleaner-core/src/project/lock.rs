@@ -24,8 +24,9 @@
 //! builds with Rust 1.82, `File::lock` needs 1.89, and the cloud attempt journal
 //! already locks its files this way with these two crates.
 //!
-//! **Waiting on another process is bounded.** A process can hold a job for a
-//! long time: a headless run holds its chapter from the first page to the last.
+//! **Waiting on another process is bounded.** Nothing here can tell how long
+//! another process will hold a job: a run holds its chapter only while it
+//! writes a page, but a process that hangs in a write holds it until it dies.
 //! So a writer waits [`PATIENCE`] for one and then gives up with
 //! [`LockError::Busy`], which the interface says as "another Manga Cleaner
 //! process is using this chapter" instead of a command that never answers. A

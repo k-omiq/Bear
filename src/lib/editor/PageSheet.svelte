@@ -42,12 +42,18 @@
    *   stripMaxY?: number,
    *   loadFrom?: number,
    *   loadTo?: number,
+   *   waiting?: boolean,
+   *   onshown?: (shown: boolean) => void,
    * }}
    */
   let {
     page, width, current = true, strip = false, tabbable = true, stripMinY = 0, stripMaxY = 100,
     // The share of the page, in percent of its height, whose pixels to load.
     loadFrom = 0, loadTo = 100,
+    // A neighbour mounted ahead of a page turn is `waiting` while the page on
+    // screen is still loading; `onshown` is how that page, and no other, says
+    // whether it is shown yet.
+    waiting = false, onshown,
   } = $props()
 
   const ratio = $derived(pageRatio(page))
@@ -59,6 +65,11 @@
   const clip = $derived(original ? 'inset(0 100% 0 0)' : `inset(0 ${100 - wipe}% 0 0)`)
   const divider = $derived(!original && wipe < 100)
 
+  // The stack the wipe leaves nothing of, when there is one: the cleaned page
+  // while the original is shown outright or the wipe is at zero, the original
+  // under a full wipe.
+  const covered = $derived(original || wipe === 0 ? 'cleaned' : wipe === 100 ? 'original' : null)
+
   // The four drag tools put a drawing surface over the sheet. It covers the
   // region buttons, so `RegionLayer` yields the *pointer* while it is up - a
   // drag has to be able to start over a region, and erasing means starting
@@ -67,25 +78,51 @@
   // region-click seam survives underneath.
   const drawing = $derived(isDrawingTool(editor.tool))
 
-  // Inside the app a page is shown once its cleaned tiles have decoded, so it
-  // never opens on its lettering and cleans itself a moment later. Shown once,
-  // it stays shown: later edits retain the old tiles while replacements decode.
-  // This includes neighbours mounted ahead of navigation. A tile that never
-  // answers does not hold the page back past `SHOW_AFTER_MS`. The mock has no
+  const layered = tileOrigin() !== null
+
+  // Tiles are asked for in the order they are looked at. `tile.rs` draws three
+  // pages at a time and a paginated chapter mounts three sheets in two
+  // variants, so a jump to a cold page queued the page on screen behind the
+  // one before it. A neighbour asks for nothing while it is `waiting`, and
+  // every sheet asks for the stack the wipe covers one pass after the stack on
+  // screen. Once asked for, a stack stays mounted: its decoded tiles are what
+  // makes the next turn instant. A strip has its own window (`strip.js`) and
+  // the mock has no tiles, so both mount everything at once.
+  let begun = $state(false)
+  const asked = $derived(!layered || !waiting || begun)
+  const both = $derived(!layered || strip || begun)
+  $effect(() => {
+    if (asked) begun = true
+  })
+
+  // Inside the app a page is shown once the tiles of the view on screen have
+  // decoded, so it never opens on its lettering and cleans itself a moment
+  // later. Under the cleaned page those are the cleaned tiles, at any wipe.
+  // With the original shown outright only the source tiles are seen, and the
+  // page does not wait for cleaned ones nobody is looking at. Shown once, it
+  // stays shown: later edits retain the old tiles while replacements decode,
+  // and a cleaned stack still decoding when the original is let go covers the
+  // lettering with its own paper. This includes neighbours mounted ahead of
+  // navigation. A tile that never answers does not hold the page back past
+  // `SHOW_AFTER_MS`, counted from when it was asked for. The mock has no
   // tiles and nothing to wait for.
   const SHOW_AFTER_MS = 2000
-  const layered = tileOrigin() !== null
+  let sourceReady = $state(/** @type {string|null} */ (null))
   let layersReady = $state(/** @type {string|null} */ (null))
   let shownFor = $state(/** @type {string|null} */ (null))
   const shown = $derived(!layered || shownFor === page.id)
   $effect(() => {
-    if (layersReady !== null && layersReady === page.id) shownFor = page.id
+    const ready = covered === 'cleaned' ? sourceReady : layersReady
+    if (ready !== null && ready === page.id) shownFor = page.id
   })
   $effect(() => {
     const id = page.id
-    if (shown) return
+    if (shown || !asked) return
     const timer = setTimeout(() => (shownFor = id), SHOW_AFTER_MS)
     return () => clearTimeout(timer)
+  })
+  $effect(() => {
+    if (current) onshown?.(shown)
   })
 </script>
 
@@ -95,9 +132,13 @@
   style:width="{width}px"
   style:aspect-ratio="1 / {ratio}"
 >
-  <PageArtwork {page} variant="original" from={loadFrom} to={loadTo} hidden={!shown} />
+  {#if asked && (both || covered !== 'original')}
+    <PageArtwork {page} variant="original" from={loadFrom} to={loadTo} hidden={!shown} bind:ready={sourceReady} />
+  {/if}
   <div class="cleaned" style:clip-path={clip}>
-    <PageArtwork {page} variant="cleaned" from={loadFrom} to={loadTo} hidden={!shown} bind:ready={layersReady} />
+    {#if asked && (both || covered !== 'cleaned')}
+      <PageArtwork {page} variant="cleaned" from={loadFrom} to={loadTo} hidden={!shown} bind:ready={layersReady} />
+    {/if}
   </div>
 
   <!-- Not clipped by the wipe, for the reason the region outlines are not:

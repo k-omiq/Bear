@@ -127,28 +127,32 @@
    * pass is what stops that being a matter of luck: it costs one `tick()` and
    * nothing at all when the first pass was already right.
    *
-   * **The scroll room is read on each pass**, not once: a saved `top` is
+   * **The scroll room is read on each pass**, not once: a saved position is
    * measured from the page's place at rest, and the canvas reports the room
-   * above it (`editor.scrollRoom`) from the same measurement. A second pass
-   * aimed at the first pass's room would undo the canvas's own correction.
+   * above it and beside it (`editor.scrollRoom`, `editor.scrollRoomSide`) from
+   * the same measurement. A second pass aimed at the first pass's room would
+   * undo the canvas's own correction.
    *
    * @param {number} top from the page's place at rest
-   * @param {number} left
+   * @param {number} left from the page's place at rest
    */
   async function adoptScroll(top, left) {
     const box = viewport
     if (!box) return
-    box.scrollTo({ top: top + editor.scrollRoom, left })
+    box.scrollTo({ top: top + editor.scrollRoom, left: left + editor.scrollRoomSide })
     await tick()
-    const target = top + editor.scrollRoom
-    if (box.scrollTop !== target || box.scrollLeft !== left) box.scrollTo({ top: target, left })
+    const target = { top: top + editor.scrollRoom, left: left + editor.scrollRoomSide }
+    if (box.scrollTop !== target.top || box.scrollLeft !== target.left) box.scrollTo(target)
   }
 
   /** @param {Event & {currentTarget: HTMLElement}} event */
   function onscroll(event) {
     // A placeholder's scroll position is not the reader's place in the chapter.
     if (editor.loading) return
-    setScroll(event.currentTarget.scrollTop - editor.scrollRoom, event.currentTarget.scrollLeft)
+    setScroll(
+      event.currentTarget.scrollTop - editor.scrollRoom,
+      event.currentTarget.scrollLeft - editor.scrollRoomSide,
+    )
   }
 </script>
 
@@ -211,6 +215,9 @@
        `safe` falls back to start alignment exactly when the sheet overflows. */
     justify-content: safe center;
     overflow: auto;
+    /* No scroll bars. The canvas is moved by wheel, trackpad and pinch, and a
+       classic bar is a grey strip down the side of the artwork. */
+    scrollbar-width: none;
     /* The canvas owns navigation and zoom offsets; virtual sheets must not
        invite a second scroll correction from the browser. */
     overflow-anchor: none;
@@ -223,4 +230,7 @@
     -webkit-user-select: none;
     user-select: none;
   }
+
+  /* WebKit before `scrollbar-width`. */
+  .viewport::-webkit-scrollbar { display: none }
 </style>

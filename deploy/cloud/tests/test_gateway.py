@@ -1351,5 +1351,58 @@ class TestCloudGateway(unittest.TestCase):
         self.assertFalse(record.cancel_requested)
 
 
+class TestGatewayWithoutRender(unittest.TestCase):
+    """An installation set up without a cleaning model: analysis and denoise only."""
+
+    HEADERS = {"Modal-Key": "modal-key-123", "Modal-Secret": "modal-secret-456"}
+
+    def setUp(self):
+        self.gateway = CloudGateway(provider=CloudProvider.MODAL, render=False,
+                                    proxy_token_id="modal-key-123", proxy_token_secret="modal-secret-456")
+
+    def get(self, path):
+        code, _, body = self.gateway.handle_http_request("GET", path, self.HEADERS, b"")
+        return code, json.loads(body.decode("utf-8"))
+
+    def test_it_holds_no_model_no_backend_and_no_stand_in_worker(self):
+        self.assertIsNone(self.gateway.model_info)
+        self.assertIsNone(self.gateway.backend)
+        self.assertIsNone(self.gateway.worker)
+
+    def test_health_answers_and_capabilities_say_render_is_off(self):
+        self.assertEqual(self.get("/mc/v1/health")[0], 200)
+        code, advertised = self.get("/mc/v1/capabilities")
+        self.assertEqual(code, 200)
+        self.assertIs(advertised["render"], False)
+        # The job operations stay listed: the app requires them of a current gateway.
+        for operation in ("jobs.submit", "jobs.status", "jobs.result", "jobs.cancel"):
+            self.assertIn(operation, advertised["operations"])
+
+    def test_a_gateway_with_a_model_does_not_mention_render(self):
+        with_model = CloudGateway(provider=CloudProvider.MODAL, proxy_token_id="modal-key-123",
+                                  proxy_token_secret="modal-secret-456")
+        code, _, body = with_model.handle_http_request("GET", "/mc/v1/capabilities", self.HEADERS, b"")
+        self.assertEqual(code, 200)
+        self.assertNotIn("render", json.loads(body.decode("utf-8")))
+
+    def test_every_render_route_is_refused_as_not_configured(self):
+        handle = "handle-modal-" + "a" * 32
+        for method, path in (("GET", "/mc/v1/model-info"), ("POST", "/mc/v1/jobs"), ("GET", f"/mc/v1/jobs/{handle}"),
+                             ("GET", f"/mc/v1/jobs/{handle}/result"), ("POST", f"/mc/v1/jobs/{handle}/cancel"),
+                             ("POST", "/mc/v1/warmup")):
+            code, _, body = self.gateway.handle_http_request(method, path, self.HEADERS, b"")
+            self.assertEqual(code, 503, path)
+            self.assertEqual(json.loads(body.decode("utf-8")),
+                             {"error_code": "capability_unavailable", "message": "Render is not configured"}, path)
+
+    def test_the_other_routes_are_untouched(self):
+        self.assertEqual(self.get("/mc/v1/gpu")[0], 200)
+        # No analysis or denoise worker was given to this gateway: their own answers stand.
+        self.assertEqual(self.get("/mc/analysis/v1/capabilities")[1]["message"], "Analysis is not configured")
+        self.assertEqual(self.get("/mc/denoise/v1/capabilities")[1]["message"], "Denoise is not configured")
+        code, _, _ = self.gateway.handle_http_request("GET", "/mc/v1/health", {}, b"")
+        self.assertEqual(code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()

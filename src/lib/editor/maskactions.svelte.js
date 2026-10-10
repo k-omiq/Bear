@@ -41,8 +41,9 @@ import { notify } from '../state/app.svelte.js'
 import {
   applyRegionDelta,
   applyRegionState,
-  claimRunStart,
+  claimPageEdit,
   editor,
+  pageBusy,
   holdsRegion,
   hover,
   paddingOf,
@@ -50,7 +51,6 @@ import {
   replaceRegion,
   pageStatusOf,
   reloadPage,
-  releaseRunStart,
   reportJobConflict,
   select,
   setTool,
@@ -459,6 +459,10 @@ export async function approveHeldMask(region) {
  * edit: undo would have to put a detection back, which the native side does
  * not do. The patch it made is deleted like any other.
  *
+ * It is an edit of its own page and not a run: a run elsewhere in the chapter
+ * does not hold it back, and only the page the run is on right now does
+ * (`claimPageEdit`).
+ *
  * @param {import('../api/backend.js').ApiRegion} region
  * @param {string} [engine] - a local rung (`ROW_ENGINES`); absent starts at the stored pick
  * @returns {Promise<boolean>} whether anything changed
@@ -467,8 +471,9 @@ export async function cleanDetected(region, engine) {
   const chapterId = editor.chapter?.id ?? null
   const pageIndex = pageIndexOf(region.id)
   if (!chapterId || pageIndex === null) return false
-  const token = claimRunStart()
-  if (!token) return false
+  // A second press while the first is cleaning is not a second clean.
+  if (cleaning.has(region.id) || !claimPageEdit(pageIndex)) return false
+  cleaning.add(region.id)
   try {
     const params = /** @type {any} */ (editor.toolParams.autoClean ?? {})
     /** @type {any} */
@@ -492,9 +497,12 @@ export async function cleanDetected(region, engine) {
     refreshPage(pageIndex)
     return true
   } finally {
-    releaseRunStart(token)
+    cleaning.delete(region.id)
   }
 }
+
+/** The detections a clean of their own is in flight for, by id. */
+const cleaning = new Set()
 
 /**
  * Clean one detected region on the cloud GPU: one consent for this region,
@@ -601,9 +609,7 @@ export async function setDetectedMaskPadding(region, paddingPx) {
   if (!isDetected(region) || !Number.isInteger(paddingPx) || paddingPx < 0 || paddingPx > MAX_MASK_PADDING) return false
   const chapterId = editor.chapter?.id ?? null
   const pageIndex = pageIndexOf(region.id)
-  if (!chapterId || pageIndex === null) return false
-  const token = claimRunStart()
-  if (!token) return false
+  if (!chapterId || pageIndex === null || !claimPageEdit(pageIndex)) return false
   try {
     const result = await getBackend().setDetectionPadding({ chapterId, pageIndex, regionId: region.id, paddingPx })
     const taken = result?.removed?.includes(region.id) ?? false
@@ -622,8 +628,6 @@ export async function setDetectedMaskPadding(region, paddingPx) {
     console.error('a mask padding change was rejected', error)
     if (!reportJobConflict(error)) notify({ key: 'notice.mask.paddingFailed', tone: 'warn' })
     return false
-  } finally {
-    releaseRunStart(token)
   }
 }
 
@@ -835,6 +839,17 @@ function pageIndexOf(regionId) {
     if (page.regions.some((candidate) => candidate.id === regionId)) return page.index
   }
   return null
+}
+
+/**
+ * Whether a run is on this region's page right now, so a control that edits
+ * the region waits (`editor.svelte.js#pageBusy`).
+ *
+ * @param {{id: string}} region
+ * @returns {boolean}
+ */
+export function regionPageBusy(region) {
+  return pageBusy(pageIndexOf(region.id))
 }
 
 /**

@@ -9,6 +9,7 @@ the SDK objects in, so the offline tests drive this code with fakes.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import threading
 import time
@@ -43,6 +44,9 @@ class ModalDictStore:
 
     def put(self, key: str, value: Dict[str, Any]) -> None:
         self._dict.put(key, dict(value))
+
+    def put_many(self, values: Dict[str, Dict[str, Any]]) -> None:
+        self._dict.update(values)
 
     def put_if_absent(self, key: str, value: Dict[str, Any]) -> bool:
         return bool(self._dict.put(key, dict(value), skip_if_exists=True))
@@ -140,10 +144,9 @@ class ModalWorkerDispatcher:
 
 
 ANALYSIS_CALLS_KEY = "gpu:analysis_calls"
-# Analysis tiles in flight at once, at most. The gateway takes 32 concurrent
-# requests; anything past this bound is still cancelled by the container terminate
-# the others trigger, since AnalysisGPU runs one container.
-ANALYSIS_CALLS_LIMIT = 32
+# The gateway's concurrent request bound does not bound queued GPU calls: a submit
+# returns while its call stays queued. Keep every call until it settles or expires,
+# so a stop reaches older queued tiles as well as the newest requests.
 # The longest an AnalysisGPU call can live: its startup_timeout plus its timeout, both
 # app.py ANALYSIS_TIMEOUT_SECONDS at their largest (600 s with page denoise on).
 GPU_JOB_LONGEST_CALL_SECONDS = 2 * 600
@@ -173,7 +176,7 @@ def _live_calls(store: Any, now: float) -> List[Dict[str, Any]]:
 
 def _write_calls(store: Any, calls: List[Dict[str, Any]]) -> None:
     if calls:
-        store.put(ANALYSIS_CALLS_KEY, {"calls": calls[-ANALYSIS_CALLS_LIMIT:]})
+        store.put(ANALYSIS_CALLS_KEY, {"calls": calls})
     else:
         store.delete(ANALYSIS_CALLS_KEY)
 
@@ -495,6 +498,83 @@ class ModalGpuJobs:
         stored = self._end(handle, status, error) or doc
         _untrack_call(self._store, call_id, self._clock)
         return gpu_job_view(stored)
+
+    def denoise_metadata(self, handle: str) -> Optional[Dict[str, Any]]:
+        """Publish small completed metadata. Pixels are cached on first download,
+        keeping a large provider queue from filling the Dict with page images."""
+        from deploy.cloud.common.denoise import DENOISE_MAX_PNG_BYTES
+        key = f"gpujob-result:{handle}"
+        doc = self._read("denoise", handle)
+        if doc is None:
+            return None
+        cached = self._store.get(key)
+        if doc["status"] == "completed" and isinstance(cached, dict):
+            return {**gpu_job_view(doc), "result": cached}
+        view = self.status("denoise", handle, denoise_failure)
+        if view is not None and view["status"] == "completed" and "result" not in view:
+            # The durable job is complete but the SDK read failed transiently.
+            # Keep polling for metadata rather than emitting a malformed completion.
+            return {**view, "status": "running"}
+        if view is None or view["status"] != "completed" or "result" not in view:
+            return view
+        result = view["result"]
+        png = result["page_png"]
+        if not isinstance(png, bytes) or not 0 < len(png) <= DENOISE_MAX_PNG_BYTES:
+            return {**gpu_job_view(doc), "status": "failed",
+                    "error": _job_error("inference_failed", "Result exceeded the response limit")}
+        meta = {"protocol_version": result["protocol_version"], "request_digest": result["request_digest"],
+                "png_sha256": hashlib.sha256(png).hexdigest(), "png_bytes": len(png), "info": result["info"]}
+        if meta["request_digest"] != doc["request_digest"]:
+            raise ValueError("Denoise result identity mismatch")
+        self._store.put(key, meta)
+        return {**view, "result": meta}
+
+    def denoise_chunk(self, handle: str, index: int) -> Optional[bytes]:
+        key = f"gpujob-result:{handle}"
+        meta = self._store.get(key)
+        if not isinstance(meta, dict):
+            view = self.denoise_metadata(handle)
+            meta = view.get("result") if isinstance(view, dict) else None
+        if not isinstance(meta, dict) or not 0 <= index < (meta["png_bytes"] + 32767) // 32768:
+            return None
+        if self._store.get(f"{key}:ready") is None:
+            # Only active downloads materialize pixels in the Dict. Publish the
+            # ready marker last, so interruptions repeat this idempotent cache fill.
+            view = self.status("denoise", handle, denoise_failure)
+            if view is not None and view.get("status") == "completed" and "result" not in view:
+                raise OSError("Completed result temporarily unavailable")
+            if view is None or view.get("status") != "completed" or "result" not in view:
+                return None
+            png = view["result"]["page_png"]
+            if len(png) != meta["png_bytes"] or hashlib.sha256(png).hexdigest() != meta["png_sha256"]:
+                raise ValueError("Denoise result identity mismatch")
+            chunks = {f"{key}:{i}": {"bytes": png[at:at + 32768]}
+                      for i, at in enumerate(range(0, len(png), 32768))}
+            put_many = getattr(self._store, "put_many", None)
+            if callable(put_many):
+                put_many(chunks)
+            else:
+                for chunk_key, chunk in chunks.items():
+                    self._store.put(chunk_key, chunk)
+            self._store.put(f"{key}:ready", {"ready": True})
+        value = self._store.get(f"{key}:{index}")
+        return value.get("bytes") if isinstance(value, dict) else None
+
+    def release_denoise_result(self, handle: str) -> None:
+        """Discard cached pixels after the client saved its verified result."""
+        key = f"gpujob-result:{handle}"
+        meta = self._store.get(key)
+        if not isinstance(meta, dict):
+            return
+        keys = [f"{key}:{i}" for i in range((meta["png_bytes"] + 32767) // 32768)]
+        put_many = getattr(self._store, "put_many", None)
+        if callable(put_many):
+            put_many({k: {} for k in keys})
+        else:
+            for k in keys:
+                self._store.delete(k)
+        self._store.delete(key)
+        self._store.delete(f"{key}:ready")
 
     def cancel(self, kind: str, handle: str) -> Optional[Dict[str, Any]]:
         """Cancel the job's call, keeping the container and its loaded models. None: no

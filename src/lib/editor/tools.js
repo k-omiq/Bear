@@ -365,7 +365,18 @@ export const TOOL_SPECS = [
       // Detect and Detect & clean grow the masks they fit by it; the panel's
       // Apply beside it re-pads masks already detected, from their unpadded
       // shape (`region.rs#set_detection_padding`).
-      ...section('mask', [range('maskPadding', 'tools.param.maskPadding', 0, MAX_MASK_PADDING, 1, 'px')]),
+      //
+      // The row is drawn for Detect and for Clean. Detect & clean is the
+      // one-press run and keeps its panel to the choices it has to ask. The
+      // padding it grows its masks by is still the value held here
+      // (`editor.svelte.js#startRun`), so the two steps and the one pass
+      // leave the same masks.
+      ...section('mask', [
+        onlyWhen(
+          range('maskPadding', 'tools.param.maskPadding', 0, MAX_MASK_PADDING, 1, 'px'),
+          (values) => values.step === 'detect' || values.step === 'clean',
+        ),
+      ]),
       // Two rows rather than one, because the two kinds of text want opposite
       // engines and always did: a speech balloon is flat white or flat black
       // and the fill family covers it for nothing, where text over art has to
@@ -551,6 +562,9 @@ export const TOOL_SPECS = [
     // new one; remove takes it out of every detection it touches
     // (`api/backend.js#editDetectionMask`). No engine and no cloud option:
     // what happens to the area is Clean's decision, later.
+    // Detect makes the mask that is not there yet: the detector looks again
+    // inside the rectangle that is drawn and adds what it finds
+    // (`cloudrun.js#detectArea`), where Text cleanup detects.
     id: 'maskSelect',
     slot: 6,
     nameKey: 'tools.name.maskSelect',
@@ -560,18 +574,23 @@ export const TOOL_SPECS = [
         choice('mode', 'tools.param.mode', [
           { value: 'add', labelKey: 'tools.option.maskAdd', icon: 'mask-add' },
           { value: 'remove', labelKey: 'tools.option.maskRemove', icon: 'mask-remove' },
+          { value: 'detect', labelKey: 'tools.option.maskDetect', icon: 'sparkle' },
         ]),
       ]),
       // A round brush for the edge of a balloon's text, a lasso for an
       // irregular area, a rectangle for a caption box. Size means something
-      // for the brush alone, so it is there only then.
+      // for the brush alone, so it is there only then. A Detect is held to a
+      // rectangle, which is what the run takes, so it has no shape to choose.
       ...section('shape', [
-        choice('shape', 'tools.param.shape', [
+        onlyWhen(choice('shape', 'tools.param.shape', [
           { value: 'brush', labelKey: 'tools.option.brush', icon: 'brush' },
           { value: 'lasso', labelKey: 'tools.option.lasso', icon: 'shape-lasso' },
           { value: 'rect', labelKey: 'tools.option.rect', icon: 'shape-rect' },
-        ]),
-        onlyWhen(range('size', 'tools.param.size', 4, 160, 2, 'px'), (values) => (values.shape ?? 'brush') === 'brush'),
+        ]), (values) => values.mode !== 'detect'),
+        onlyWhen(
+          range('size', 'tools.param.size', 4, 160, 2, 'px'),
+          (values) => values.mode !== 'detect' && (values.shape ?? 'brush') === 'brush',
+        ),
       ]),
     ],
     runnable: false,
@@ -641,7 +660,8 @@ export const DRAWING_TOOLS = /** @type {const} */ ([
  * Shapes is always an area, of whichever shape its row names. The selection
  * tool is a brush or an area by its own `shape` row: `brush` strokes, and
  * `lasso` and `rect` draw what Shapes draws under the same names, through the
- * same gestures. Every other drawing tool strokes.
+ * same gestures. Its Detect mode is a rectangle whatever the row says: the
+ * row is away, and a Detect is held to a box. Every other drawing tool strokes.
  *
  * @param {string} tool
  * @param {Record<string, unknown>} [params]
@@ -650,6 +670,7 @@ export const DRAWING_TOOLS = /** @type {const} */ ([
 export function draftShape(tool, params = {}) {
   if (tool === 'shapes') return /** @type {any} */ (String(params?.shape ?? 'rect'))
   if (tool === 'maskSelect') {
+    if (params?.mode === 'detect') return 'rect'
     const shape = params?.shape
     return shape === 'lasso' || shape === 'rect' ? shape : null
   }

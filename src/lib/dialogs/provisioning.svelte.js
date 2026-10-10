@@ -90,7 +90,7 @@ const NOTHING_RAN = new Set([
  * @typedef {Object} SetupOptions
  * @property {string} [gpu]
  * @property {number} [idle_seconds]
- * @property {string} [model_id]
+ * @property {string} [model_id] - a cleaning model, or `NO_CLEAN_MODEL`
  * @property {string[]} [analysis_models]
  * @property {boolean} [denoise] - page denoise; Modal only
  * @property {string} [routing_region] - where requests enter the provider; Modal only
@@ -98,6 +98,12 @@ const NOTHING_RAN = new Set([
 
 /** Where Modal's proxy for a gateway may sit (`deploy/cloud/common/deployment.py`). */
 export const ROUTING_REGIONS = Object.freeze(['us-east', 'us-west', 'eu-west', 'ap-south'])
+
+/**
+ * The `model_id` of a setup with no cleaning model: detection and page denoise
+ * only (`MODEL_NONE` in `deploy/cloud/common/manifest.py`).
+ */
+export const NO_CLEAN_MODEL = 'none'
 
 const GPU_NAME = /^[A-Za-z0-9_-]{1,32}$/
 const MODEL_ID = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]{1,100}$/
@@ -116,7 +122,7 @@ export function cleanOptions(value) {
   const { gpu, idle_seconds: idle, model_id, analysis_models, denoise, routing_region: region } = /** @type {Record<string, unknown>} */ (value)
   if (typeof gpu === 'string' && GPU_NAME.test(gpu)) options.gpu = gpu
   if (typeof idle === 'number' && Number.isInteger(idle) && idle >= 0 && idle <= 86_400) options.idle_seconds = idle
-  if (typeof model_id === 'string' && MODEL_ID.test(model_id)) options.model_id = model_id
+  if (typeof model_id === 'string' && (model_id === NO_CLEAN_MODEL || MODEL_ID.test(model_id))) options.model_id = model_id
   if (Array.isArray(analysis_models) && analysis_models.length <= 2 &&
       analysis_models.every((item) => item === 'text_mask_sam_ts@1' || item === 'text_regions_rt@1') &&
       new Set(analysis_models).size === analysis_models.length) options.analysis_models = analysis_models
@@ -356,10 +362,11 @@ export function existingInstallationsOf(data) {
 }
 
 /**
- * Whether reusing `entry` with `options` downloads nothing: the model and
- * every selected analysis graph are already in its storage, and page denoise
- * is off or the installation already recorded it on (discovery lists no
- * denoise models, so only that record says they are on its volume).
+ * Whether reusing `entry` with `options` downloads nothing: the model (when
+ * one is chosen) and every selected analysis graph are already in its storage,
+ * and page denoise is off or the installation already recorded it on
+ * (discovery lists no denoise models, so only that record says they are on its
+ * volume).
  *
  * @param {ExistingInstallation} entry
  * @param {{model_id?: string, analysis_models?: string[], denoise?: boolean}} options
@@ -368,7 +375,7 @@ export function reuseDownloadsNothing(entry, options) {
   if (!entry.weightsChecked) return false
   if (options.denoise === true && entry.options?.denoise !== true) return false
   const model = options.model_id
-  if (!model || !entry.modelsReady.includes(model)) return false
+  if (!model || (model !== NO_CLEAN_MODEL && !entry.modelsReady.includes(model))) return false
   return (options.analysis_models ?? []).every((capability) => entry.analysisReady.includes(capability))
 }
 

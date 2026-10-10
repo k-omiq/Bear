@@ -7,7 +7,7 @@
 //! be resolved at ingest; this module does not decode an original JPEG again.
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
@@ -18,6 +18,51 @@ use crate::image::Raster;
 pub const SIDE: usize = 1024;
 pub const ENCODER: &str = "koharu_samts_encoder.onnx";
 pub const HEAD: &str = "koharu_samts_text_head.onnx";
+
+/// The measured CPU path peaked at 8.55 GB. Reserve room for its tensors,
+/// decoded page and editor before loading either graph.
+pub const MIN_ROOM_BYTES: u64 = 10_000_000_000;
+
+/// A single SAM graph pair can consume most of a desktop's available memory.
+/// Runs and review previews share this permit for the whole session lifetime;
+/// queued requests wait without loading another copy and can be cancelled.
+struct SessionPermit(&'static (Mutex<bool>, Condvar));
+
+fn session_permit() -> &'static (Mutex<bool>, Condvar) {
+    static PERMIT: OnceLock<(Mutex<bool>, Condvar)> = OnceLock::new();
+    PERMIT.get_or_init(|| (Mutex::new(false), Condvar::new()))
+}
+
+impl SessionPermit {
+    fn acquire(cancel: &Cancellation) -> Result<Self, String> {
+        Self::acquire_on(session_permit(), cancel)
+    }
+
+    fn acquire_on(state: &'static (Mutex<bool>, Condvar), cancel: &Cancellation) -> Result<Self, String> {
+        let (lock, changed) = state;
+        let mut held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            cancel.check()?;
+            if !*held { *held = true; return Ok(Self(state)); }
+            held = changed.wait_timeout(held, Duration::from_millis(50))
+                .unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+}
+
+impl Drop for SessionPermit {
+    fn drop(&mut self) {
+        let (lock, changed) = self.0;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        changed.notify_all();
+    }
+}
+
+pub fn ensure_memory_room(room: Option<u64>) -> Result<(), String> {
+    if room.is_some_and(|bytes| bytes >= MIN_ROOM_BYTES) { Ok(()) } else {
+        Err("The SAM-TS-L lettering mask needs at least 10 GB of measured process memory room".into())
+    }
+}
 
 #[derive(Default)]
 pub struct Cancellation {
@@ -256,6 +301,8 @@ pub struct SamTsSession {
     backend: crate::accel::Accelerator,
     profiles: Option<ProfileCleanup>,
     verified_nodes: Option<(u64, u64)>,
+    // Declared last so both graphs are released before the next waiter loads.
+    _permit: SessionPermit,
 }
 
 impl SamTsSession {
@@ -269,7 +316,6 @@ impl SamTsSession {
 
     pub fn open_on(graph_dir: &Path, backend: crate::accel::Accelerator, cancel: &Cancellation) -> Result<Self, String> {
         cancel.check()?;
-        let started = Instant::now();
         if !matches!(backend, crate::accel::Accelerator::Cpu | crate::accel::Accelerator::WebGpu) {
             return Err(format!("SAM-TS-L does not support {backend:?}"));
         }
@@ -277,6 +323,11 @@ impl SamTsSession {
             && (!cfg!(target_os = "macos") || !built_in_webgpu_available()) {
             return Err("SAM-TS-L WebGPU needs the built-in Apple WebGPU runtime and device".into());
         }
+        let permit = SessionPermit::acquire(cancel)?;
+        crate::residency::evict_for_sam();
+        cancel.check()?;
+        ensure_memory_room(crate::memory::room())?;
+        let started = Instant::now();
         let profiles = (backend == crate::accel::Accelerator::WebGpu)
             .then(|| ProfileCleanup([profile_prefix("encoder"), profile_prefix("head")]));
         let open = |path: &Path, index: usize| -> Result<ort::session::Session, String> {
@@ -312,6 +363,7 @@ impl SamTsSession {
             backend,
             profiles,
             verified_nodes: None,
+            _permit: permit,
         })
     }
 
@@ -762,6 +814,10 @@ pub fn infer_webgpu_cancellable(page: &Raster, graph_dir: &Path, cancel: &Cancel
     if !built_in_webgpu_available() {
         return Err("SAM-TS-L WebGPU is absent from the installed runtime or has no device".into());
     }
+    let _permit = SessionPermit::acquire(cancel)?;
+    crate::residency::evict_for_sam();
+    cancel.check()?;
+    ensure_memory_room(crate::memory::room())?;
     let sampler = MetalSampler::start();
     let profiles = ProfileCleanup([profile_prefix("encoder"), profile_prefix("head")]);
     let started = Instant::now();
@@ -828,6 +884,34 @@ pub fn infer_webgpu_cancellable(page: &Raster, graph_dir: &Path, cancel: &Cancel
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_sam_memory_gate_requires_measured_room() {
+        assert!(ensure_memory_room(None).is_err());
+        assert!(ensure_memory_room(Some(MIN_ROOM_BYTES - 1)).is_err());
+        assert!(ensure_memory_room(Some(MIN_ROOM_BYTES)).is_ok());
+    }
+
+    #[test]
+    fn queued_sam_sessions_do_not_load_another_copy_and_waits_are_cancellable() {
+        let state: &'static (Mutex<bool>, Condvar) = Box::leak(Box::new((Mutex::new(false), Condvar::new())));
+        let first = SessionPermit::acquire_on(state, &Cancellation::default()).unwrap();
+        let cancelled = Arc::new(Cancellation::default());
+        let (done, result) = std::sync::mpsc::channel();
+        let waiting = cancelled.clone();
+        let worker = std::thread::spawn(move || {
+            done.send(SessionPermit::acquire_on(state, &waiting).err()).unwrap();
+        });
+        assert!(result.recv_timeout(Duration::from_millis(100)).is_err());
+        cancelled.cancel();
+        assert_eq!(result.recv_timeout(Duration::from_secs(1)).unwrap().as_deref(), Some("analysis cancelled"));
+        worker.join().unwrap();
+        assert!(*state.0.lock().unwrap(), "a cancelled waiter released another session's permit");
+        drop(first);
+        assert!(!*state.0.lock().unwrap());
+        let next = SessionPermit::acquire_on(state, &Cancellation::default()).unwrap();
+        drop(next);
+    }
 
     #[test]
     fn cancellation_is_checked_before_a_graph_is_loaded() {

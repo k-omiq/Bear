@@ -91,7 +91,9 @@ Idempotent: with nothing up it returns `stopped: []`.
 
 If Modal spawn raises after the job claim is stored, the gateway answers `503` with `error_code: "submission_unknown"`, without a pre-enqueue rejection body. The claim stays in the job store and another request using that attempt does not spawn a second render. Its status may remain pending without a native call ID; the client must not automatically retry or create a new attempt from this answer.
 
-**Idle release** (`{"role": "analysis", "idle_only": true}` or `{"role": "render", "idle_only": true}`). The app sends the analysis one once a Text cleanup run with cloud detection has analyzed its last page (or stopped early), so the analysis GPU leaves now instead of billing its idle window while the computer cleans, and the render one once a batch cloud clean (`docs/detect-clean.md` §3) has its last region back. It cancels nothing and writes no release marker, so no tile is refused afterwards and the next container loads its model as usual. A role's `release` is sent only when its heartbeat reads `idle` and no work of that role is tracked in flight: for `analysis` no tile call, for `render` no job pending or running in the gateway's active job index (a job another device queued behind an idle heartbeat). A count that cannot be read counts as busy. A job turns terminal in the index when it is polled, so one whose caller stopped polling holds the render release back until a plain stop settles it; the GPU then scales down on its idle timer, as before. A busy, starting or absent container is left exactly as it is. The response has the same shape, with `cancelled_jobs: 0` and the released role in `stopped`. Without the marker, a release that races the provider's own scale-down can cold-start one container that loads its model and then leaves. The app ignores any failure (an older gateway's `400`, Beam's `501`, the network) and the GPU then scales down on its idle timer.
+**Idle release** (`{"role": "analysis", "idle_only": true}` or `{"role": "render", "idle_only": true}`). The app sends the render one once a batch cloud clean (`docs/detect-clean.md` §3) has its last region back. Detection and denoise leave the shared analysis GPU warm for its configured idle window: 120 seconds by default, configurable from 60 to 600 seconds (`MC_MODAL_IDLE_SECONDS`). Finishing or cancelling a selection no longer releases its container; another detection can reuse the loaded models during that window. Explicit **Stop GPU** still ends the container immediately. The endpoint continues accepting an idle-only analysis release for older clients.
+
+An idle-only release cancels nothing and writes no release marker, so no tile is refused afterwards and the next container loads its model as usual. A role's `release` is sent only when its heartbeat reads `idle` and no work of that role is tracked in flight: for `analysis` no tile call, for `render` no job pending or running in the gateway's active job index (a job another device queued behind an idle heartbeat). A count that cannot be read counts as busy. A job turns terminal in the index when it is polled, so one whose caller stopped polling holds the render release back until a plain stop settles it; the GPU then scales down on its idle timer, as before. A busy, starting or absent container is left exactly as it is. The response has the same shape, with `cancelled_jobs: 0` and the released role in `stopped`. Without the marker, a release that races the provider's own scale-down can cold-start one container that loads its model and then leaves. The app ignores any failure (an older gateway's `400`, Beam's `501`, the network) and the GPU then scales down on its idle timer.
 A deployment that cannot stop its GPU answers `501` with `error_code: "unsupported"`.
 
 ---
@@ -147,6 +149,18 @@ endpoint produce "Gateway out of date. Redeploy the gateway" at connection check
 The model-info and analysis capability contracts continue to bind the exact recipe,
 preprocessing, model revision, and graph pins. Redeploy the CPU gateway and GPU
 classes together; do not clear durable job documents when upgrading.
+
+A Modal deployment set up without a cleaning model adds `"render": false` to the
+capabilities answer; a deployment with a model leaves the field out. The four
+`jobs.*` operations stay listed, so the connection check still takes the gateway
+as current. On such a deployment `/mc/v1/model-info`, `/mc/v1/jobs`,
+`/mc/v1/jobs/*` and `/mc/v1/warmup` answer 503 with
+`{"error_code": "capability_unavailable", "message": "Render is not configured"}`.
+Health, capabilities, GPU status and stop, analysis and denoise answer as usual.
+The desktop reads a 503 from model-info as "no cleaning model" only when
+capabilities says `render: false` (`HttpTransportError::RenderNotConfigured` in
+`src-tauri/src/inference/http.rs`), and the connection check then passes. A bare
+503 stays a failure, so a gateway in trouble never reads as a setup choice.
 
 Unknown Modal submissions use authenticated `GET /mc/v1/jobs/{handle}`. Only the
 Modal dispatch backend has the desktop lookup contract: `handle-modal-` followed

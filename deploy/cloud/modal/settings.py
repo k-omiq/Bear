@@ -21,7 +21,7 @@ from deploy.cloud.common.deployment import (
     parse_idle_seconds,
     parse_routing_region,
 )
-from deploy.cloud.common.manifest import MODEL_PROD_FLUX, production_model
+from deploy.cloud.common.manifest import MODEL_NONE, MODEL_PROD_FLUX, deployable_model_id
 from deploy.cloud.common.analysis_seed import normalize_analysis_models
 
 GPU_ALLOWLIST = ("L4", "A10", "L40S")
@@ -59,6 +59,7 @@ class ModalSettings:
     environment_name: str
     gpu: str
     idle_seconds: int
+    # MODEL_NONE: no cleaning model, so no render worker (see `render`).
     model_id: str = MODEL_PROD_FLUX
     analysis_models: tuple[str, ...] = ()
     # Page denoise: seed its models and serve /mc/denoise/v1 on the analysis GPU.
@@ -87,7 +88,7 @@ class ModalSettings:
             environment_name=environment_name,
             gpu=parse_gpu(gpu, GPU_ALLOWLIST),
             idle_seconds=parse_idle_seconds(idle_seconds),
-            model_id=production_model(model_id).model_id,
+            model_id=deployable_model_id(model_id),
             analysis_models=normalize_analysis_models(analysis_models),
             denoise=bool(denoise),
             routing_region=parse_routing_region(routing_region),
@@ -106,7 +107,7 @@ class ModalSettings:
             environment_name=env.get(ENV_ENVIRONMENT) or "",
             gpu=parse_gpu(env.get(ENV_GPU) or DEFAULT_GPU, GPU_ALLOWLIST),
             idle_seconds=parse_idle_seconds(env.get(ENV_IDLE_SECONDS) or DEFAULT_IDLE_SECONDS),
-            model_id=production_model(env.get(ENV_MODEL_ID) or MODEL_PROD_FLUX).model_id,
+            model_id=deployable_model_id(env.get(ENV_MODEL_ID) or MODEL_PROD_FLUX),
             analysis_models=normalize_analysis_models(tuple(filter(None, (env.get(ENV_ANALYSIS_MODELS) or "").split(",")))),
             denoise=env.get(ENV_DENOISE) == "1",
             routing_region=parse_routing_region(env.get(ENV_ROUTING_REGION) or DEFAULT_ROUTING_REGION),
@@ -126,6 +127,11 @@ class ModalSettings:
             ENV_DENOISE: "1" if self.denoise else "0",
             ENV_ROUTING_REGION: self.routing_region,
         }
+
+    @property
+    def render(self) -> bool:
+        """Whether the installation has a cleaning model, and so a render worker."""
+        return self.model_id != MODEL_NONE
 
     @property
     def gateway_function(self) -> str:

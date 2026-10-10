@@ -38,6 +38,7 @@ from deploy.cloud.common.contract import (
     valid_gpu_job_handle,
 )
 from deploy.cloud.common.jobs import GpuWaitExceeded
+from deploy.cloud.common.gpu import GpuControl, GpuHeartbeat, STALE_GRACE_SECONDS
 from deploy.cloud.modal.backend import (
     ANALYSIS_CALLS_KEY,
     GPU_JOB_DISPATCH_GRACE_SECONDS,
@@ -153,6 +154,15 @@ class Proxy:
     def cancel_job(self, handle):
         return self.jobs.cancel(self._kind(handle), handle)
 
+    def job_metadata(self, handle):
+        return self.jobs.denoise_metadata(handle)
+
+    def result_chunk(self, handle, index):
+        return self.jobs.denoise_chunk(handle, index)
+
+    def release_result(self, handle):
+        return self.jobs.release_denoise_result(handle)
+
 
 class HandleTest(unittest.TestCase):
     def test_handle_is_shared_with_the_desktop(self) -> None:
@@ -203,6 +213,15 @@ class ModalGpuJobsTest(unittest.TestCase):
         self.assertNotEqual(other["handle"], first["handle"])
         self.assertEqual(len(self.modal.spawned), 2)
 
+    def test_more_than_thirty_two_queued_calls_are_all_stopped(self) -> None:
+        for index in range(65):
+            self.submit(f"attempt-queued-{index:04d}")
+        self.assertEqual(count_tracked_analysis(self.store, clock=self.clock), 65)
+        self.assertEqual(cancel_tracked_analysis(self.store, self.modal.from_id, clock=self.clock), 65)
+        self.assertEqual(self.tracked(), [])
+        for call in self.modal.calls.values():
+            self.assertEqual(call.cancels, [{"terminate_containers": True}])
+
     def test_status_never_waits_and_answers_the_result_until_collected(self) -> None:
         handle = self.submit()["handle"]
         self.assertEqual(self.status(handle)["status"], "running")
@@ -215,6 +234,44 @@ class ModalGpuJobsTest(unittest.TestCase):
         self.assertEqual(self.tracked(), [], "a collected call stayed listed and would hold an idle release")
         self.assertIsNone(self.jobs.status("analysis", handle, analysis_failure), "kinds share a handle space")
         self.assertIsNone(self.status("denoise-" + "0" * 32))
+
+    def test_finished_analysis_role_jobs_keep_models_warm_until_idle_timeout_or_explicit_stop(self) -> None:
+        for kind in ("analysis", "denoise"):
+            with self.subTest(kind=kind):
+                clock = Clock()
+                store = ModalDictStore(FakeModalDict())
+                modal = FakeModal()
+                jobs = ModalGpuJobs(store, modal.from_id, ModalErrors, clock=clock)
+                releases = []
+                gpu = GpuControl("modal", store, "L4", clock=clock,
+                                 release={"analysis": lambda: releases.append("analysis")},
+                                 cancel_analysis=lambda: cancel_tracked_analysis(store, modal.from_id, clock=clock))
+                heartbeat = GpuHeartbeat(store, "analysis", "L4", 120, 600, 600, clock=clock)
+                heartbeat.idle()
+                started_at = heartbeat.started_at
+                payload = self.page if kind == "denoise" else rgb_png()
+                metadata = denoise_meta(payload) if kind == "denoise" else analysis_meta(payload)
+                failure = denoise_failure if kind == "denoise" else analysis_failure
+
+                for index in range(2):
+                    accepted = jobs.submit(kind, modal.spawn, metadata, payload,
+                                           f"attempt-warm-{index:04d}")
+                    call = modal.calls[f"fc-{index + 1}"]
+                    with heartbeat.serving():
+                        clock.now += 1
+                        call.error, call.result = None, {"request_digest": metadata["request_digest"]}
+                    self.assertEqual(jobs.status(kind, accepted["handle"], failure)["status"], "completed")
+                    self.assertEqual(count_tracked_analysis(store, clock=clock), 0)
+                    clock.now += 60
+                    view = gpu.status()["containers"][0]
+                    self.assertEqual((view["state"], view["started_at"]), ("idle", started_at))
+                    self.assertEqual(releases, [], "completed work must not release its GPU")
+                    self.assertEqual(call.cancels, [])
+
+                self.assertEqual(gpu.stop("analysis")["stopped"], ["analysis"])
+                self.assertEqual(releases, ["analysis"], "explicit Stop must still release an idle GPU")
+                clock.now += 120 + STALE_GRACE_SECONDS + 1
+                self.assertEqual(gpu.status()["containers"], [])
 
     def test_failures_keep_their_typed_codes(self) -> None:
         cases = [
@@ -364,6 +421,70 @@ class GatewayJobRoutesTest(unittest.TestCase):
         # The same body again answers the same job; nothing is spawned twice.
         self.assertEqual(self.submit_page()[1]["handle"], handle)
         self.assertEqual(len(self.modal.spawned), 1)
+
+    def test_completed_metadata_is_small_and_chunks_resume_without_reading_gpu_again(self) -> None:
+        _, accepted = self.submit_page()
+        handle = accepted["handle"]
+        _, caps = self.call("GET", "/mc/v1/capabilities")
+        self.assertIn("denoise.results", caps["operations"])
+        route = f"/mc/denoise/v1/jobs/{handle}"
+        _, waiting = self.call("GET", route + "/metadata")
+        self.assertEqual(waiting["status"], "running")
+        png = self.page + bytes(range(256)) * 13000
+        call = self.modal.calls["fc-1"]
+        call.error, call.result = None, {"protocol_version": d.DENOISE_VERSION,
+            "request_digest": accepted["request_digest"], "page_png": png,
+            "info": {"width": 8, "height": 8, "gray": True, "steps": []}}
+        status, metadata = self.call("GET", route + "/metadata")
+        self.assertEqual((status, metadata["status"]), (200, "completed"))
+        self.assertLess(len(json.dumps(metadata)), 16384)
+        self.assertNotIn("page_png_b64", metadata["result"])
+        self.assertEqual(metadata["result"]["png_sha256"], hashlib.sha256(png).hexdigest())
+        self.assertIsNone(self.store.get(f"gpujob-result:{handle}:0"), "queued results should not cache pixels before download")
+        self.assertEqual(self.jobs.denoise_chunk(handle, 0), png[:32768])
+        # Even expired provider outputs are recoverable from the durable result cache.
+        call.error = ModalErrors.OutputExpiredError("expired")
+        self.assertEqual(self.call("GET", route + "/metadata")[1], metadata)
+        joined = bytearray()
+        for index in range((len(png) + 32767) // 32768):
+            status, headers, chunk = self.gateway.handle_http_request("GET", route + f"/result/{index}", {}, b"")
+            self.assertEqual(status, 200)
+            self.assertLessEqual(len(chunk), 32768)
+            joined.extend(chunk)
+        self.assertEqual(joined, png)
+        status, headers, tail = self.gateway.handle_http_request("GET", route + "/result/0", {"Range": "bytes=17-"}, b"")
+        self.assertEqual((status, headers["Content-Range"], tail), (206, "bytes 17-32767/32768", png[17:32768]))
+        self.assertEqual(len(self.modal.spawned), 1)
+        self.assertEqual(self.call("POST", route + "/result/release")[0], 200)
+        self.assertIsNone(self.jobs.denoise_chunk(handle, 0))
+
+    def test_result_routes_reject_bad_ranges_and_require_authentication(self) -> None:
+        _, accepted = self.submit_page()
+        handle = accepted["handle"]
+        call = self.modal.calls["fc-1"]
+        call.error, call.result = None, {"protocol_version": d.DENOISE_VERSION,
+            "request_digest": accepted["request_digest"], "page_png": self.page, "info": {"steps": []}}
+        route = f"/mc/denoise/v1/jobs/{handle}"
+        self.call("GET", route + "/metadata")
+        for header in ["bytes=-1", "bytes=0-999", "bytes=99999-", "bytes=1-2,3-4"]:
+            self.assertEqual(self.gateway.handle_http_request("GET", route + "/result/0", {"Range": header}, b"")[0], 416)
+        for suffix in ["/result/9999", "/result/-1", "/result/999999999999"]:
+            self.assertEqual(self.gateway.handle_http_request("GET", route + suffix, {}, b"")[0], 404)
+        self.gateway.trust_edge_auth = False
+        for method, suffix in [("GET", "/metadata"), ("GET", "/result/0"), ("POST", "/result/release")]:
+            self.assertEqual(self.gateway.handle_http_request(method, route + suffix, {}, b"")[0], 401)
+
+    def test_completed_job_with_a_transient_provider_read_keeps_polling_for_metadata(self) -> None:
+        _, accepted = self.submit_page()
+        call = self.modal.calls["fc-1"]
+        call.error, call.result = None, {"protocol_version": d.DENOISE_VERSION,
+            "request_digest": accepted["request_digest"], "page_png": self.page, "info": {"steps": []}}
+        route = f"/mc/denoise/v1/jobs/{accepted['handle']}"
+        self.call("GET", route)  # An old client already recorded completion.
+        call.error = ModalErrors.InternalError("transient")
+        self.assertEqual(self.call("GET", route + "/metadata")[1]["status"], "running")
+        call.error = None
+        self.assertEqual(self.call("GET", route + "/metadata")[1]["status"], "completed")
 
     def test_tile_submit_poll_and_cancel(self) -> None:
         meta = analysis_meta(self.tile)

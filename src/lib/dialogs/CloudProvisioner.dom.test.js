@@ -15,7 +15,7 @@ import { createMockBackend, PINNED_CLOUD_MODEL_ID, PROVISION_APPLY_STEPS } from 
 import { t } from '../i18n/index.js'
 import { clearNotices } from '../state/app.svelte.js'
 import CloudProvisioner, { isValidInstallationId, isValidPlanHash } from './CloudProvisioner.svelte'
-import { forgetUnfinished, setup } from './provisioning.svelte.js'
+import { forgetUnfinished, NO_CLEAN_MODEL, setup } from './provisioning.svelte.js'
 
 const ZERO = { method: 0, openChapter: 0, export: 0, cloud: 0, provision: 0, region: 0, pageTail: 0, noticeStagger: 0 }
 const HASH = 'ab'.repeat(32)
@@ -312,7 +312,10 @@ describe('setting up end to end on the mock backend', () => {
     const gpu = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('settings.cloud.setup.review.gpu')))
     expect(Array.from(gpu.options, (option) => option.value)).toEqual(['L4', 'A10', 'L40S'])
     expect(gpu.value).toBe('L4')
-    expect(screen.getByText(PINNED_CLOUD_MODEL_ID)).toBeTruthy()
+    // The cleaning model is a choice too, and "none" is one of them on Modal.
+    const model = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('settings.cloud.setup.review.model')))
+    expect(Array.from(model.options, (option) => option.value)).toEqual([PINNED_CLOUD_MODEL_ID, NO_CLEAN_MODEL])
+    expect(model.value).toBe(PINNED_CLOUD_MODEL_ID)
     const idle = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('settings.cloud.setup.review.idle')))
     expect(idle.value).toBe('120')
     for (const name of [`mc-weights-${ID}`, `mc-jobs-${ID}`, `mc-${ID}`, `mc-token-${ID}`]) {
@@ -507,6 +510,62 @@ describe('setting up end to end on the mock backend', () => {
         options: { analysis_models: ['text_mask_sam_ts@1'] } } }))
     expect(screen.getByRole('checkbox', { name: 'SAM-TS-L lettering mask' }).checked).toBe(true)
     expect(screen.getByText(t('settings.cloud.setup.review.analysisNote'))).toBeTruthy()
+  })
+
+  it('sets up a cloud GPU with no cleaning model: detection only, and no weights download', async () => {
+    const backend = createMockBackend({ timing: ZERO })
+    /** @type {Promise<unknown>[]} */
+    const answers = []
+    const runner = vi.fn((/** @type {any} */ spec) => {
+      const answer = backend.runCloudProvisioner(spec)
+      answers.push(answer)
+      return answer
+    })
+    const settled = async () => {
+      await Promise.all(answers)
+      await tick()
+      await waitFor(() => expect(model.disabled).toBe(false))
+    }
+    const onconfigured = vi.fn()
+    render(CloudProvisioner, { props: { inline: true, installationId: ID, backend, runCloudProvisioner: runner, onconfigured } })
+    await connectModal()
+    const model = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('settings.cloud.setup.review.model')))
+    expect(Array.from(model.options, (option) => option.textContent?.trim())).toContain(t('settings.cloud.setup.review.noCleanModel'))
+
+    // Chosen with nothing else selected, it selects the detection models: a setup must install something.
+    const both = ['text_regions_rt@1', 'text_mask_sam_ts@1']
+    await fireEvent.change(model, { target: { value: NO_CLEAN_MODEL } })
+    await waitFor(() => expect(runner).toHaveBeenLastCalledWith(expect.objectContaining({
+      op: 'plan', provider: 'modal', params: expect.objectContaining({ options: { model_id: NO_CLEAN_MODEL, analysis_models: both } }) })))
+    await settled()
+    expect(model.value).toBe(NO_CLEAN_MODEL)
+    expect(screen.getByText(t('settings.cloud.setup.review.noCleanNote'))).toBeTruthy()
+    expect(screen.queryByText(t('settings.cloud.setup.review.weights', { size: '5.5' }))).toBeNull()
+    const boxes = /** @type {HTMLInputElement[]} */ (within(
+      screen.getByRole('group', { name: t('settings.cloud.setup.review.analysisModels') })).getAllByRole('checkbox'))
+    expect(boxes.map((box) => box.checked)).toEqual([true, true])
+
+    // One detection model may go. The last one may not: nothing is planned, and the box is ticked again.
+    await fireEvent.click(boxes[0])
+    await waitFor(() => expect(runner).toHaveBeenLastCalledWith(expect.objectContaining({
+      op: 'plan', params: expect.objectContaining({ options: { model_id: NO_CLEAN_MODEL, analysis_models: ['text_mask_sam_ts@1'] } }) })))
+    await settled()
+    const planned = runner.mock.calls.length
+    await fireEvent.click(boxes[1])
+    await screen.findByText(t('settings.cloud.setup.review.nothingChosen'))
+    await waitFor(() => expect(model.disabled).toBe(false))
+    expect(runner).toHaveBeenCalledTimes(planned)
+    expect(boxes.map((box) => box.checked)).toEqual([false, true])
+
+    await approveAndStart()
+    await screen.findByRole('heading', { name: t('settings.cloud.setup.heading.done') }, { timeout: 10_000 })
+    // The finished screen offers no cloud render to try: it says how to add a cleaning model.
+    expect(screen.getByText(t('cloud.configuration.cleanNotInstalled'))).toBeTruthy()
+    expect(screen.queryByText(t('settings.cloud.setup.done.tryIt'))).toBeNull()
+    expect(onconfigured).toHaveBeenCalledTimes(1)
+    // The endpoint it saved says it has no cleaning model, as the native side does.
+    await expect(backend.getCloudModelInfo({ provider: 'modal', profileId: ID }))
+      .rejects.toThrow('capability_unavailable: gateway render is not configured')
   })
 
   it('offers Page denoise on Modal, off by default, and replans when it is turned on', async () => {
@@ -1173,6 +1232,32 @@ describe('a setup that already exists', () => {
     await fireEvent.click(button(t('settings.cloud.setup.guard.update')))
     await waitFor(() => expect(runner.mock.calls.map(([spec]) => spec.op)).toEqual(['inspect', 'resume']))
     expect(runner.mock.calls[1][0].params.installation_id).toBe('mc-mine01')
+  })
+
+  it('a found setup with page denoise alone says it has no cleaning model, not that a download failed', async () => {
+    const found = (/** @type {string} */ id, /** @type {any} */ options, /** @type {string[]} */ analysis) => ({
+      installation_id: id, app_name: id, created_at: null, deployed_at: null,
+      weights_checked: true, models_ready: [], analysis_ready: analysis, options, on_this_computer: false,
+    })
+    const choices = { gpu: 'L4', idle_seconds: 120, model_id: 'none' }
+    const runner = scripted({
+      inspect: ok({
+        workspace_name: 'acme',
+        existing_installations: [
+          found('mc-denoi1', { ...choices, analysis_models: [], denoise: true }, []),
+          // Detection models were chosen and none is on the volume: that download did not finish.
+          found('mc-halfw2', { ...choices, analysis_models: ['text_regions_rt@1'], denoise: false }, []),
+        ],
+        existing_installations_complete: true,
+      }),
+    })
+    render(CloudProvisioner, { props: { inline: true, installationId: ID, runCloudProvisioner: runner } })
+    await typeModalKeys()
+    await fireEvent.click(button(t('settings.cloud.setup.connect.continue')))
+    await heading('settings.cloud.setup.heading.found')
+    // One line per setup: the first has nothing to download, the second is the unfinished one.
+    expect(screen.getAllByText(t('settings.cloud.setup.review.noCleanModel'))).toHaveLength(1)
+    expect(screen.getAllByText(t('settings.cloud.setup.found.noModels'))).toHaveLength(1)
   })
 
   it('a refused update names the account, not a plan, and leaves the setup finished', async () => {

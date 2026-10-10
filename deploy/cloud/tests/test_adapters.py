@@ -33,6 +33,7 @@ from deploy.cloud.common.deployment import (
 )
 from deploy.cloud.common.handle_mapping import InMemoryHandleRegistry
 from deploy.cloud.common.manifest import (
+    MODEL_NONE,
     RECIPE_TEST_SDNQ,
     REVISION_TEST_FLUX,
     ManifestFileRecord,
@@ -295,6 +296,24 @@ class ModalAppImportTest(unittest.TestCase):
             warnings.simplefilter("ignore")
             self.assertIn("AnalysisGPU", selected.app.registered_classes)
         self.assertEqual(selected.AnalysisGPU.__name__, "AnalysisGPU")
+
+    def test_an_installation_without_a_cleaning_model_declares_no_render_worker(self) -> None:
+        settings = ModalSettings.for_installation("mc-none", "mc-none", model_id=MODEL_NONE,
+                                                  analysis_models=("text_regions_rt@1",))
+        self.assertIs(settings.render, False)
+        self.assertEqual(ModalSettings.from_env(settings.to_env()), settings)
+        env = {**settings.to_env(), "MODAL_CONFIG_PATH": str(Path(self._tmp.name) / "absent.toml"),
+               "MODAL_SERVER_URL": "http://127.0.0.1:9"}
+        sys.modules.pop("deploy.cloud.modal.app", None)
+        with patched_environ(env), warnings.catch_warnings():
+            warnings.simplefilter("error")
+            selected = importlib.import_module("deploy.cloud.modal.app")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.assertEqual(sorted(selected.app.registered_functions), ["AnalysisGPU.*", "gateway", "seed_weights"])
+            self.assertEqual(sorted(selected.app.registered_classes), ["AnalysisGPU"])
+        self.assertFalse(hasattr(selected, "Worker"))
+        self.assertEqual(selected.RENDER_COPIES, 0)
 
     def test_only_the_deploy_sources_are_uploaded(self) -> None:
         shipped = self.module._not_shipped
