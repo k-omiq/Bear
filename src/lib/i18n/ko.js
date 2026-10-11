@@ -984,6 +984,7 @@ export const ko = {
     denoised: {
       failed: '{number}화의 노이즈 제거 기록을 읽지 못했습니다.',
       run: '{when} · {preset}',
+      runScaled: '{when} · {preset} · {scale}x로 저장',
       presetUnknown: '프리셋 기록 없음',
       fromRaw: '원본 페이지에서',
       fromCleaned: '클린한 페이지에서',
@@ -1587,6 +1588,51 @@ export const ko = {
         name: 'Real-CUGAN 3x 강한 노이즈 제거',
         note: '심한 입자와 JPEG 노이즈를 없앱니다. 미세한 스크린톤이 흐려질 수 있습니다.',
       },
+      digimangaBw4x: {
+        name: 'Digimanga BW 4x',
+        note: '디지털 흑백 만화로 학습한 모델. 깨끗한 디지털 페이지를 선명하게 합니다.',
+      },
+      mangajpegHq: {
+        name: 'MangaJPEG HQ',
+        note: '가벼운 JPEG 블록과 번짐을 없앱니다. 페이지 크기는 그대로입니다.',
+      },
+      mangajpegLq: {
+        name: 'MangaJPEG LQ',
+        note: '심한 JPEG 손상을 없앱니다. 페이지 크기는 그대로입니다.',
+      },
+      waifu2xScanLight: {
+        name: 'waifu2x 스캔, 약한 노이즈',
+        note: '선명하게 하지 않고 가벼운 스캔 입자만 없앱니다. 페이지 크기는 그대로입니다.',
+      },
+      waifu2xScanHeavy: {
+        name: 'waifu2x 스캔, 강한 노이즈',
+        note: '선명하게 하지 않고 심한 스캔 입자를 없앱니다. 페이지 크기는 그대로입니다.',
+      },
+      realcugan4x: {
+        name: 'Real-CUGAN 4x conservative',
+        note: '원래 느낌을 유지하면서 가장 강하게 선명하게 합니다.',
+      },
+      waifu2xArtLight: {
+        name: 'waifu2x 아트 2x, 약한 노이즈',
+        note: '컬러 일러스트용. 선명하게 하고 가벼운 노이즈를 없앱니다.',
+      },
+      waifu2xArtStrong: {
+        name: 'waifu2x 아트 2x, 강한 노이즈',
+        note: '컬러 일러스트용. 선명하게 하고 강한 노이즈를 없앱니다.',
+      },
+    },
+    pages: {
+      label: '페이지 종류',
+      bw: '흑백',
+      color: '컬러',
+    },
+    output: {
+      label: '출력 크기',
+      same: '같은 크기',
+      times: '{scale}x',
+      fixed: '이 프리셋은 페이지 크기를 유지합니다',
+      becomes: '1페이지는 {width} x {height}이며 {outWidth} x {outHeight}로 저장됩니다.',
+      larger: '더 큰 페이지는 클리닝하기 전이라면 챕터의 페이지를 대체할 수 있습니다. 감지된 마스크는 페이지와 함께 커집니다.',
     },
     credit: '{name}, 제작: {author}, {license}',
     duration: {
@@ -1617,6 +1663,7 @@ export const ko = {
       pages: '이 페이지들의 크기 기준 GPU 시간입니다. 업로드와 GPU 시작 시간은 별도입니다.',
       reference: '페이지 크기를 알 수 없어 {width} x {height} 페이지로 가정합니다. 업로드와 GPU 시작 시간은 별도입니다.',
       measured: '이 컴퓨터에서 측정한 시간 기준입니다.',
+      unmeasured: '이 프리셋은 아직 클라우드 GPU에서 시간을 측정하지 않았습니다.',
     },
     out: {
       label: '저장 위치',
@@ -1657,6 +1704,7 @@ export const ko = {
         other: '페이지 전체 {count}장, {pixels} 픽셀',
       },
       models: '모델',
+      output: '각 페이지의 {scale}배 크기',
       tooLarge: '제외됨',
       tooLargeValue: {
         other: '{count}페이지가 이 프리셋에 비해 너무 커서 보내지 않습니다.',
@@ -1679,7 +1727,7 @@ export const ko = {
       copied: '복사됨',
     },
     reason: {
-      tooLarge: '이 프리셋에 비해 너무 큼',
+      tooLarge: '이 출력 크기에서는 이 프리셋에 비해 너무 큼',
       unsupported: '이 프리셋이 읽을 수 있는 이미지가 아님',
       inference: '모델이 처리하지 못함',
       unreadable: '페이지를 읽지 못함',
@@ -1705,6 +1753,7 @@ export const ko = {
       cloudDisabled: '클라우드 사용이 꺼져 있습니다. 설정 > 클라우드에서 켠 뒤 다시 시도하세요.',
       noProfile: '선택한 클라우드 GPU가 없습니다. 설정 > 클라우드에서 선택하세요.',
       notSetUp: '이 클라우드 GPU는 페이지 노이즈 제거용으로 구성되지 않았습니다. 설정 > 클라우드에서 페이지 노이즈 제거를 켜고 Modal로 구성한 뒤 다시 시도하세요.',
+      cloudOutdated: '이 클라우드 GPU는 더 큰 출력 크기가 생기기 전에 구성되었습니다. 설정 > 클라우드에서 구성을 업데이트하거나 같은 크기를 선택한 뒤 다시 시도하세요.',
       openCloud: '클라우드 설정 열기',
       modelMissing: '로컬 모델이 없거나 확인에 실패했습니다. 뒤로 가서 다시 다운로드하세요.',
       runtimeMissing: '이 모델이 실행되는 ONNX 런타임이 설치되지 않았습니다. 설정 > 모델에서 다운로드하세요.',

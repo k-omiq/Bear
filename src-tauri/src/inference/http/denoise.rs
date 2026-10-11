@@ -302,13 +302,16 @@ impl CloudHttpClient {
             fs::write(checkpoint, []).map_err(|_| HttpTransportError::DenoiseStorage)?;
             return Err(HttpTransportError::WireValidation);
         }
+        // The metadata names the answer's own size; the page's is that over
+        // the recipe's output scale.
+        let (width, height) = meta.page_size(&job.metadata).ok_or(HttpTransportError::WireValidation)?;
         DenoiseResult {
             protocol_version: meta.protocol_version.clone(),
             request_digest: meta.request_digest.clone(),
             page_png_b64: String::new(),
             info: meta.info.clone(),
         }
-        .validate(&job.metadata, meta.info.width, meta.info.height, &png)
+        .validate(&job.metadata, width, height, &png)
         .map_err(|_| HttpTransportError::WireValidation)?;
         Ok(png)
     }

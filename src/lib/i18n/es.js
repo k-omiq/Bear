@@ -1005,6 +1005,7 @@ export const es = {
     denoised: {
       failed: 'No se pudo leer el historial de reducción de ruido del capítulo {number}.',
       run: '{when} · {preset}',
+      runScaled: '{when} · {preset} · guardado a {scale}x',
       presetUnknown: 'Preajuste no registrado',
       fromRaw: 'Desde páginas en bruto',
       fromCleaned: 'Desde páginas limpias',
@@ -1619,6 +1620,51 @@ export const es = {
         name: 'Real-CUGAN 3x reducción de ruido fuerte',
         note: 'Quita el grano intenso y el ruido JPEG. Puede suavizar las tramas finas.',
       },
+      digimangaBw4x: {
+        name: 'Digimanga BW 4x',
+        note: 'Entrenado con manga digital en blanco y negro. Enfoca páginas digitales limpias.',
+      },
+      mangajpegHq: {
+        name: 'MangaJPEG HQ',
+        note: 'Quita los bloques JPEG leves y los halos. Mantiene el tamaño de la página.',
+      },
+      mangajpegLq: {
+        name: 'MangaJPEG LQ',
+        note: 'Quita los daños JPEG fuertes. Mantiene el tamaño de la página.',
+      },
+      waifu2xScanLight: {
+        name: 'waifu2x escaneo, ruido leve',
+        note: 'Quita el grano leve del escaneo sin enfocar. Mantiene el tamaño de la página.',
+      },
+      waifu2xScanHeavy: {
+        name: 'waifu2x escaneo, ruido fuerte',
+        note: 'Quita el grano intenso del escaneo sin enfocar. Mantiene el tamaño de la página.',
+      },
+      realcugan4x: {
+        name: 'Real-CUGAN 4x conservador',
+        note: 'Conserva el aspecto original, con el enfoque más fuerte.',
+      },
+      waifu2xArtLight: {
+        name: 'waifu2x arte 2x, ruido leve',
+        note: 'Para ilustraciones en color. Enfoca y quita el ruido leve.',
+      },
+      waifu2xArtStrong: {
+        name: 'waifu2x arte 2x, ruido fuerte',
+        note: 'Para ilustraciones en color. Enfoca y quita el ruido fuerte.',
+      },
+    },
+    pages: {
+      label: 'Las páginas son',
+      bw: 'En blanco y negro',
+      color: 'En color',
+    },
+    output: {
+      label: 'Tamaño de salida',
+      same: 'Mismo tamaño',
+      times: '{scale}x',
+      fixed: 'Este preajuste mantiene el tamaño de la página',
+      becomes: 'La página 1 mide {width} x {height} y se guarda a {outWidth} x {outHeight}.',
+      larger: 'Las páginas más grandes pueden reemplazar las páginas del capítulo antes de limpiarlas. Las máscaras detectadas crecen con la página.',
     },
     credit: '{name} de {author}, {license}',
     duration: {
@@ -1649,6 +1695,7 @@ export const es = {
       pages: 'Tiempo de GPU para estas páginas según su tamaño. La subida y el arranque de la GPU se suman aparte.',
       reference: 'Se desconoce el tamaño de las páginas, así que se suponen páginas de {width} x {height}. La subida y el arranque de la GPU se suman aparte.',
       measured: 'Según el tiempo medido en este equipo.',
+      unmeasured: 'Este preajuste aún no se ha cronometrado en una GPU en la nube.',
     },
     out: {
       label: 'Guardar en',
@@ -1692,6 +1739,7 @@ export const es = {
         other: '{count} páginas completas, {pixels} píxeles',
       },
       models: 'Modelos',
+      output: '{scale}x el tamaño de cada página',
       tooLarge: 'Excluidas',
       tooLargeValue: {
         one: '1 página es demasiado grande para este preajuste y no se envía.',
@@ -1717,7 +1765,7 @@ export const es = {
       copied: 'Copiado',
     },
     reason: {
-      tooLarge: 'Demasiado grande para este preajuste',
+      tooLarge: 'Demasiado grande para este preajuste con este tamaño de salida',
       unsupported: 'No es una imagen que este preajuste pueda leer',
       inference: 'El modelo no pudo procesarla',
       unreadable: 'No se pudo leer la página',
@@ -1746,6 +1794,7 @@ export const es = {
       cloudDisabled: 'El uso de la nube está desactivado. Actívalo en Ajustes > Nube e inténtalo de nuevo.',
       noProfile: 'No hay ninguna GPU en la nube seleccionada. Elige una en Ajustes > Nube.',
       notSetUp: 'Esta GPU en la nube no está configurada para la reducción de ruido de páginas. En Ajustes > Nube, configúrala con Modal y activa Reducción de ruido de páginas, e inténtalo de nuevo.',
+      cloudOutdated: 'Esta GPU en la nube se configuró antes de que existieran los tamaños de salida más grandes. Actualiza la configuración en Ajustes > Nube, o elige Mismo tamaño, e inténtalo de nuevo.',
       openCloud: 'Abrir ajustes de la nube',
       modelMissing: 'Falta el modelo local o no superó su comprobación. Vuelve atrás para descargarlo de nuevo.',
       runtimeMissing: 'El entorno ONNX Runtime con el que se ejecuta este modelo no está instalado. Descárgalo en Ajustes > Modelos.',

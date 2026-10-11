@@ -1,7 +1,8 @@
 //! Page denoise on this computer: the three commands the interface calls.
 //!
 //! - [`denoise_chapter_local`] denoises a chapter's pages with a local preset
-//!   into `<out_dir>/<source stem>.png` and answers the same report a cloud
+//!   into `<out_dir>/<source stem>.png`, at the page's size or an output scale
+//!   of 2 to 4 times it, and answers the same report a cloud
 //!   denoise does ([`CloudDenoiseReport`]). While it runs it emits
 //!   `denoise://progress` ([`DenoiseProgress`]), and [`cancel_denoise_local`]
 //!   stops it at the next tile.
@@ -169,13 +170,17 @@ pub fn presets() -> Vec<PresetView> {
     wire::PRESETS.iter().map(|preset| PresetView { id: preset.id, targets: preset.targets, recipe: preset.recipe() }).collect()
 }
 
-/// The step a local preset runs, or why it cannot run here.
-fn local_preset(preset_id: &str) -> Result<LocalStep, String> {
+/// The step a local preset runs at `output_scale` (absent or 1: the page's
+/// own size), or why it cannot run here.
+fn local_preset(preset_id: &str, output_scale: Option<u8>) -> Result<LocalStep, String> {
     let preset = wire::preset(preset_id).ok_or("denoise_preset_unknown")?;
     if !preset.runs_locally() {
         return Err("denoise_preset_not_local".into());
     }
-    engine::local_step(&preset.recipe()).map_err(|e| format!("denoise_preset_not_local: {e}"))
+    let recipe = DenoiseRecipe { output_scale: output_scale.filter(|scale| *scale != 1), ..preset.recipe() };
+    // The preset's own recipe is valid, so only the scale can be refused here.
+    recipe.resolve().map_err(|e| format!("denoise_output_scale_invalid: {e}"))?;
+    engine::local_step(&recipe).map_err(|e| format!("denoise_preset_not_local: {e}"))
 }
 
 /// Open the preset's model on the user's provider, after checking both files
@@ -282,11 +287,12 @@ fn run_chapter(
     chapter_id: &str,
     page_indices: Option<Vec<u32>>,
     preset_id: &str,
+    output_scale: Option<u8>,
     out_dir: &Path,
 ) -> Result<CloudDenoiseReport, String> {
     // First, so a Stop pressed while the model opens is already heard.
     let registered = Registered::new(run_id, DenoiseKind::Local, chapter_id)?;
-    let step = local_preset(preset_id)?;
+    let step = local_preset(preset_id, output_scale)?;
     if !out_dir.is_absolute() { return Err("denoise_out_dir_invalid".into()); }
     std::fs::create_dir_all(out_dir).map_err(|_| "denoise_out_dir_unwritable")?;
     let job_path = Library::for_app(app).map_err(|e| e.to_string())?
@@ -301,7 +307,7 @@ fn run_chapter(
         CleanedError::Changed => "denoise_page_changed".to_string(),
     });
     let mut denoise = |raster: &Raster, tick: &mut dyn FnMut(usize, usize) -> bool| {
-        engine.denoise_watched(raster, step.strength, tick)
+        engine.denoise_watched(raster, step.strength, step.out, tick)
     };
     let total = pages.len();
     registered.progress(0, total);
@@ -311,7 +317,7 @@ fn run_chapter(
         let _ = app.emit(PROGRESS_EVENT, DenoiseProgress { run_id: run_id.to_string(), done, total, page });
     };
     let report = denoise_pages(&pages, &names, out_dir, &read, &mut denoise, registered.cancel(), &mut progress);
-    record_written_soon(app, run_id, &job_path, &pages, &report, Some(preset_id), PresetTarget::Local);
+    record_written_soon(app, run_id, &job_path, &pages, &report, Some(preset_id), PresetTarget::Local, step.out as u32);
     Ok(report)
 }
 
@@ -332,7 +338,9 @@ enum Standing {
     Ready,
     /// It stays as it is: cleaned, or changed since it was denoised. A file
     /// made from a cleaned page has the cleaning in its pixels, and taking it
-    /// as the source would draw every patch twice.
+    /// as the source would draw every patch twice. A file denoised at an
+    /// output scale is ready like any other while the page is not cleaned:
+    /// the page's masks grow with it (`Job::replace_source`).
     Kept,
 }
 
@@ -477,12 +485,12 @@ fn synthetic_page() -> Raster {
 }
 
 fn benchmark(app: &tauri::AppHandle, preset_id: &str) -> Result<f64, String> {
-    let step = local_preset(preset_id)?;
+    let step = local_preset(preset_id, None)?;
     let mut engine = open_engine(app, &step)?;
     let page = synthetic_page();
     engine.warm_up().map_err(|e| format!("{}: {e}", e.code()))?;
     let started = std::time::Instant::now();
-    engine.denoise(&page, step.strength).map_err(|e| format!("{}: {e}", e.code()))?;
+    engine.denoise(&page, step.strength, step.out).map_err(|e| format!("{}: {e}", e.code()))?;
     Ok(started.elapsed().as_secs_f64())
 }
 
@@ -493,7 +501,9 @@ fn benchmark(app: &tauri::AppHandle, preset_id: &str) -> Result<f64, String> {
 /// Denoise `page_indices` (every page when absent) of a chapter on this
 /// computer with a local preset, writing `<out_dir>/<source stem>.png`.
 /// `run_id` is the interface's name for the run: progress events carry it and
-/// [`cancel_denoise_local`] takes it.
+/// [`cancel_denoise_local`] takes it. `output_scale` (2 to 4, never past the
+/// preset's model) writes each page that many times larger each way; absent
+/// or 1 keeps the page's size. Refused with `denoise_output_scale_invalid`.
 #[tauri::command]
 pub async fn denoise_chapter_local(
     app: tauri::AppHandle,
@@ -501,10 +511,11 @@ pub async fn denoise_chapter_local(
     chapter_id: String,
     page_indices: Option<Vec<u32>>,
     preset_id: String,
+    output_scale: Option<u8>,
     out_dir: String,
 ) -> Result<CloudDenoiseReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_chapter(&app, &run_id, &chapter_id, page_indices, &preset_id, &PathBuf::from(out_dir))
+        run_chapter(&app, &run_id, &chapter_id, page_indices, &preset_id, output_scale, &PathBuf::from(out_dir))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -556,15 +567,20 @@ mod tests {
     #[test]
     fn presets_list_every_recipe_and_one_local() {
         let listed = presets();
-        assert_eq!(listed.len(), 6);
+        assert_eq!(listed.len(), 14);
         let value = serde_json::to_value(&listed).unwrap();
         assert_eq!(value[0]["id"], "waifu2x-scan-4x-n2");
         assert_eq!(value[0]["targets"], serde_json::json!(["cloud", "local"]));
         assert_eq!(value[0]["recipe"]["steps"][0]["engine"], "waifu2x-art-scan");
         assert!(value.as_array().unwrap()[1..].iter().all(|preset| preset["targets"] == serde_json::json!(["cloud"])));
-        assert!(local_preset("waifu2x-scan-4x-n2").is_ok());
-        assert_eq!(local_preset("mangajanai-2x").unwrap_err(), "denoise_preset_not_local");
-        assert_eq!(local_preset("sharpest").unwrap_err(), "denoise_preset_unknown");
+        assert_eq!(local_preset("waifu2x-scan-4x-n2", None).unwrap().out, 1);
+        assert_eq!(local_preset("waifu2x-scan-4x-n2", Some(1)).unwrap().out, 1);
+        assert_eq!(local_preset("waifu2x-scan-4x-n2", Some(3)).unwrap().out, 3);
+        for past in [0, 5] {
+            assert!(local_preset("waifu2x-scan-4x-n2", Some(past)).unwrap_err().starts_with("denoise_output_scale_invalid"));
+        }
+        assert_eq!(local_preset("mangajanai-2x", None).unwrap_err(), "denoise_preset_not_local");
+        assert_eq!(local_preset("sharpest", None).unwrap_err(), "denoise_preset_unknown");
     }
 
     #[test]
@@ -707,7 +723,7 @@ mod tests {
             std::fs::write(&path, grey(8, 6, 40 + page.page_index as u8)).unwrap();
             report.written.push(DenoisedOutput { page_index: page.page_index, path: path.display().to_string(), gray: true });
         }
-        record_written(&manifest, &pages, &report, Some("waifu2x-scan-4x-n2"), PresetTarget::Local);
+        record_written(&manifest, &pages, &report, Some("waifu2x-scan-4x-n2"), PresetTarget::Local, 1);
         manifest
     }
 
@@ -764,6 +780,10 @@ mod tests {
         assert_eq!(replacement(&partial), offer(1, 0, 1), "so does a page never denoised");
         changed.denoised[0].appearance = "before an edit".into();
         assert_eq!(replacement(&changed), None, "and with nothing left to take there is no offer");
+        // A file written at an output scale is offered like any other.
+        let mut larger = project.clone();
+        larger.denoised[0].scale = Some(2);
+        assert_eq!(replacement(&larger), offer(2, 0, 0), "an enlarged page can be taken");
         let json = serde_json::to_value(replacement(&partial).unwrap()).unwrap();
         assert_eq!(json, serde_json::json!({"pages": 1, "kept": 0, "missing": 1}));
         std::fs::remove_dir_all(&dir).ok();
@@ -805,6 +825,39 @@ mod tests {
         assert_eq!(rows, [(0, true), (1, false)], "both rows stay as history, the replaced one taken");
         assert_eq!(job.project.denoised[0].source.as_deref(), Some(before.sources[0].rel_path.as_path()),
             "the taken row keeps the raw page it was made from");
+        assert_eq!(replacement(&job.project), None, "spent");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A page denoised at an output scale is taken at that size, and its
+    /// detection grows with it. The other page keeps its own size.
+    #[test]
+    fn replacing_takes_a_larger_denoised_file_and_grows_the_detection() {
+        use cleaner_core::mask::{Mask, Rect};
+        let dir = std::env::temp_dir().join(format!("mc-denoise-replace-larger-{}", std::process::id()));
+        let manifest = a_denoised_chapter(&dir);
+        let mask = Mask::filled(Rect::new(1, 1, 3, 2));
+        {
+            let mut job = Job::open(&manifest).unwrap();
+            let record = serde_json::from_value(serde_json::json!({
+                "id": "c1-p001-d0", "source_idx": 0, "bbox": {"x": 1, "y": 1, "w": 3, "h": 2}, "mask_ref": "",
+                "inside": true, "pick": "fill", "detector": "local", "created": 1,
+            })).unwrap();
+            job.store_detection(record, &mask, &mask).unwrap();
+            job.project.denoised[0].scale = Some(2);
+            job.flush().unwrap();
+        }
+        std::fs::write(dir.join("denoised").join("001.png"), grey(16, 12, 40)).unwrap();
+
+        let report = replace_pages(&manifest).unwrap();
+        assert_eq!((report.replaced.as_slice(), report.failed.len()), (&[0, 1][..], 0));
+
+        let job = Job::open(&manifest).unwrap();
+        let sizes: Vec<(u32, u32)> = job.project.sources.iter().map(|source| (source.w, source.h)).collect();
+        assert_eq!(sizes, [(16, 12), (8, 6)]);
+        assert!(job.verify_sources().iter().all(|state| !state.is_stale()));
+        let found = job.load_detection("c1-p001-d0").unwrap().expect("the detection stays");
+        assert_eq!((found.mask, found.record.bbox), (Mask::filled(Rect::new(2, 2, 6, 4)), Rect::new(2, 2, 6, 4)));
         assert_eq!(replacement(&job.project), None, "spent");
         std::fs::remove_dir_all(&dir).ok();
     }

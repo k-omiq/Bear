@@ -391,9 +391,57 @@ fn ink_for(seed: &Mask, scale: f32, bounds: Rect, edges: &noise::EdgeMap) -> Mas
 /// lettering the segmentation missed, in multiples of the first step.
 const STRAY_REACH_STEPS: u32 = 2;
 
-/// The share of the paper around the lettering that must sit at one tone for
-/// [`with_stray_lettering`] to run at all.
-const STRAY_FLAT_SHARE: f32 = 0.9;
+/// The share of a set of paper pixels that must sit at one tone for the paper
+/// to be called flat: [`with_stray_lettering`] runs only there, and
+/// [`on_flat_paper`] answers it for a mask's own ring.
+const FLAT_SHARE: f32 = 0.9;
+
+/// The tone `levels` sit at and how far from it a level may be and still be
+/// that tone, when at least [`FLAT_SHARE`] of them are. `None` is paper that
+/// is not flat, or no paper at all.
+///
+/// A share and not a deviation, because the pixels beside lettering are
+/// rarely all paper: a balloon's outline, a neighbouring glyph or a speed
+/// line takes a few of them, and a few are enough to move a standard
+/// deviation past any threshold while the paper is as flat as it was.
+fn flat_tone(levels: &mut [i32], noise_sigma: f32) -> Option<(i32, i32)> {
+    if levels.is_empty() {
+        return None;
+    }
+    levels.sort_unstable();
+    let paper = levels[levels.len() / 2];
+    let tolerance = (2.0 * deviation_threshold(noise_sigma)) as i32;
+    let at_paper = levels.iter().filter(|&&v| (v - paper).abs() <= tolerance).count();
+    ((at_paper as f32) >= FLAT_SHARE * levels.len() as f32).then_some((paper, tolerance))
+}
+
+/// Whether the paper around `mask` is one tone: at least [`FLAT_SHARE`] of
+/// the annulus [`ring::paper_annulus`] starts from sits at its median.
+///
+/// It answers what [`RingStats`] does not. A deviation and a periodicity are
+/// over every pixel of the ring, so a white balloon whose ring clips its own
+/// outline, a speed line or a glyph the mask missed reads as paper no fill
+/// should be laid on, and [`route_for`] sends it to the ladder. The median the
+/// fill paints with is the paper's tone there all the same.
+///
+/// **The whole annulus, with no edge map.** The ring the fit samples is cut
+/// back to the paper the mask can reach without crossing a strong edge, and
+/// over a halftone that leaves the white between the dots:
+/// `a_halftone_the_ring_restriction_flattens_is_still_kept_off_rung_zero` is
+/// that case. Counted here, the dots are the share that is not paper.
+pub fn on_flat_paper(page: &Raster, mask: &Mask, noise_sigma: f32) -> bool {
+    let annulus = ring::paper_annulus(page, mask, 0, &noise::EdgeMap::none(page.width, page.height));
+    let bounds = annulus.bounds;
+    let mut levels: Vec<i32> = Vec::new();
+    for y in bounds.y..bounds.bottom() {
+        for x in bounds.x..bounds.right() {
+            if annulus.contains(x, y) {
+                levels.push(page.luma16_at(x as u32, y as u32) as i32);
+            }
+        }
+    }
+    flat_tone(&mut levels, noise_sigma).is_some()
+}
 
 /// The seed plus the lettering the segmentation left out of it, on flat paper.
 ///
@@ -416,7 +464,7 @@ const STRAY_FLAT_SHARE: f32 = 0.9;
 /// - its box does not span the lettering's box in both directions, so a small
 ///   balloon's whole outline, which fits inside the search box, is not either.
 ///
-/// And only on flat paper: at least [`STRAY_FLAT_SHARE`] of the pixels around
+/// And only on flat paper: at least [`FLAT_SHARE`] of the pixels around
 /// the lettering, past its anti-aliasing, must sit at the paper's tone. A
 /// screentone or a drawn background fails that, and is left to the fit as it
 /// was. Where it holds, painting a wrongly taken island is painting the paper's
@@ -445,16 +493,9 @@ fn with_stray_lettering(page: &Raster, seed: &Mask, scale: f32, noise_sigma: f32
             }
         }
     }
-    if paper_levels.is_empty() {
+    let Some((paper, tolerance)) = flat_tone(&mut paper_levels, noise_sigma) else {
         return seed.clone();
-    }
-    paper_levels.sort_unstable();
-    let paper = paper_levels[paper_levels.len() / 2];
-    let tolerance = (2.0 * deviation_threshold(noise_sigma)) as i32;
-    let at_paper = paper_levels.iter().filter(|&&v| (v - paper).abs() <= tolerance).count();
-    if (at_paper as f32) < STRAY_FLAT_SHARE * paper_levels.len() as f32 {
-        return seed.clone();
-    }
+    };
 
     let is_ink = |x: i64, y: i64| !seed.contains(x, y) && (luma(x, y) - paper).abs() > tolerance;
     let r = reach as i64;
@@ -821,6 +862,29 @@ mod tests {
         // And the route is the ladder regardless.
         let fitted = fit(&page, &seed, 1.0, page_noise_sigma(&page), &edges, false);
         assert_eq!(fitted.route, Route::Inpaint, "a flat fill would land in dotted tone");
+    }
+
+    /// White paper whose ring a stroke crosses, the way a balloon's outline
+    /// does beside lettering that nearly fills it. The route is the ladder,
+    /// because the stroke is in the ring's deviation, and the paper is one
+    /// tone all the same. A halftone is not, with or without an edge map to
+    /// hide its dots from the ring.
+    #[test]
+    fn paper_a_stroke_crosses_is_flat_and_a_halftone_is_not() {
+        let stroke_x = (REGION.right() + 1) as u32;
+        let rows = REGION.y as u32..REGION.bottom() as u32;
+        let page = gray_page(|x, y| if x == stroke_x && rows.contains(&y) { 20 } else { 245 });
+        let seed = Mask::filled(REGION);
+        let edges = EdgeMap::none(PAGE, PAGE);
+        let noise = page_noise_sigma(&page);
+        let fitted = fit(&page, &seed, 1.0, noise, &edges, true);
+        assert_eq!(fitted.route, Route::Inpaint, "the premise is gone; rewrite this test");
+        assert!(on_flat_paper(&page, &fitted.mask, noise));
+
+        // The first page's noise floor: a page that is tone from edge to edge
+        // has no flat tile to measure one from, and reports the tone itself.
+        let toned = gray_page(|x, y| if tone(x, y) { 40 } else { 250 });
+        assert!(!on_flat_paper(&toned, &seed, noise));
     }
 
     #[test]

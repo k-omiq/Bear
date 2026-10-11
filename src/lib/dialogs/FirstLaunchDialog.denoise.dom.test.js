@@ -17,6 +17,7 @@ import { setBackend } from '../api/backend.js'
 import { createMockBackend } from '../api/mock.js'
 import { t } from '../i18n/index.js'
 import { session, setCloudAllowed, setDenoisePreset, setDenoiseTarget } from '../state/session.svelte.js'
+import { DENOISE_PRESETS, presetsForPages } from '../model/denoise.js'
 import { resetDenoiseState } from '../state/denoise.svelte.js'
 import { RUNTIME_ID } from './firstlaunch.js'
 import { chosenFiles, firstLaunch, offerFirstLaunch, resetFirstLaunch } from './firstlaunch.svelte.js'
@@ -51,6 +52,9 @@ const targets = (container) =>
 const presetIds = (container) =>
   [...container.querySelectorAll('[data-preset]')].map((row) => row.getAttribute('data-preset'))
 
+/** The cloud presets listed for a page type, in table order. @param {'bw'|'color'} pages */
+const cloudIds = (pages) => presetsForPages(DENOISE_PRESETS, pages).map((preset) => preset.id)
+
 /** @param {HTMLElement} container @param {string} target */
 const card = (container, target) => /** @type {HTMLElement} */ (container.querySelector(`[data-target="${target}"]`))
 
@@ -67,7 +71,7 @@ describe('the denoise step', () => {
     expect(container.querySelector('[data-cloud-next]')).toBeNull()
 
     await fireEvent.click(card(container, 'cloud'))
-    await waitFor(() => expect(presetIds(container)).toHaveLength(6))
+    await waitFor(() => expect(presetIds(container)).toEqual(cloudIds('bw')))
     expect(container.querySelector('[data-cloud-next]')?.textContent).toBe(t('onboarding.denoise.cloudNext'))
   })
 
@@ -79,24 +83,39 @@ describe('the denoise step', () => {
     await waitFor(() => expect(container.querySelector('[data-cloud-next]')?.textContent).toBe(t('onboarding.denoise.cloudAdd')))
   })
 
-  it('offers the cloud GPU too once one is set up, with all six presets and their cloud times', async () => {
+  it('offers the cloud GPU too once one is set up, with the black and white presets and their cloud times', async () => {
     setCloudAllowed(true)
     const { container } = render(DenoiseStep)
     expect(targets(container)).toEqual(['local', 'cloud', 'off'])
 
     await fireEvent.click(card(container, 'cloud'))
-    await waitFor(() => expect(presetIds(container)).toHaveLength(6))
+    await waitFor(() => expect(presetIds(container)).toEqual(cloudIds('bw')))
     expect(session.denoiseTarget).toBe('cloud')
     const first = /** @type {HTMLElement} */ (container.querySelector('[data-preset="mangajanai-2x"]'))
     expect(first.textContent).toContain(t('denoise.time.cloud', { duration: t('denoise.duration.seconds', { value: '4' }) }))
     expect(chosenFiles().filter((id) => LOCAL_PACKAGE.includes(id))).toEqual([])
   })
 
+  it('lists the colour presets when the pages are colour, and saves the first when the chosen one is not among them', async () => {
+    setCloudAllowed(true)
+    const { container, getByRole } = render(DenoiseStep)
+    await fireEvent.click(card(container, 'cloud'))
+    await waitFor(() => expect(session.denoisePreset).toBe('mangajanai-2x'))
+    expect(getByRole('radio', { name: t('denoise.pages.bw') }).getAttribute('aria-checked')).toBe('true')
+
+    await fireEvent.click(getByRole('radio', { name: t('denoise.pages.color') }))
+    await waitFor(() => expect(presetIds(container)).toEqual(cloudIds('color')))
+    expect(session.denoisePreset).toBe(cloudIds('color')[0])
+    await waitFor(async () => expect(await mock.readSettings()).toEqual(expect.objectContaining({ denoisePreset: cloudIds('color')[0] })))
+  })
+
   it('queues the local package and its runtime for this computer, and says what it costs', async () => {
-    const { container } = render(DenoiseStep)
+    const { container, queryByRole } = render(DenoiseStep)
     await fireEvent.click(card(container, 'local'))
 
     await waitFor(() => expect(presetIds(container)).toEqual(['waifu2x-scan-4x-n2']))
+    // One preset, made for both page types: no filter to offer.
+    expect(queryByRole('radio', { name: t('denoise.pages.color') })).toBeNull()
     expect(container.querySelector('[data-preset] [data-time]')?.getAttribute('data-time')).toBe('unknown')
     expect(container.querySelector('[data-denoise-download]')).not.toBeNull()
     const files = chosenFiles()

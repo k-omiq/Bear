@@ -1005,6 +1005,7 @@ export const pt = {
     denoised: {
       failed: 'Não foi possível ler o histórico de remoção de ruído do capítulo {number}.',
       run: '{when} · {preset}',
+      runScaled: '{when} · {preset} · salvo em {scale}x',
       presetUnknown: 'Predefinição não registrada',
       fromRaw: 'A partir das páginas raw',
       fromCleaned: 'A partir das páginas limpas',
@@ -1619,6 +1620,51 @@ export const pt = {
         name: 'Real-CUGAN 3x remoção de ruído forte',
         note: 'Remove granulação pesada e ruído de JPEG. Pode suavizar retículas finas.',
       },
+      digimangaBw4x: {
+        name: 'Digimanga BW 4x',
+        note: 'Treinado em mangá digital em preto e branco. Aumenta a nitidez de páginas digitais limpas.',
+      },
+      mangajpegHq: {
+        name: 'MangaJPEG HQ',
+        note: 'Remove blocos de JPEG leves e halos. Mantém o tamanho da página.',
+      },
+      mangajpegLq: {
+        name: 'MangaJPEG LQ',
+        note: 'Remove danos pesados de JPEG. Mantém o tamanho da página.',
+      },
+      waifu2xScanLight: {
+        name: 'waifu2x scan, ruído leve',
+        note: 'Remove a granulação leve do scan sem aumentar a nitidez. Mantém o tamanho da página.',
+      },
+      waifu2xScanHeavy: {
+        name: 'waifu2x scan, ruído forte',
+        note: 'Remove a granulação pesada do scan sem aumentar a nitidez. Mantém o tamanho da página.',
+      },
+      realcugan4x: {
+        name: 'Real-CUGAN 4x conservador',
+        note: 'Mantém o visual original, com a nitidez mais forte.',
+      },
+      waifu2xArtLight: {
+        name: 'waifu2x arte 2x, ruído leve',
+        note: 'Para ilustrações coloridas. Aumenta a nitidez e remove ruído leve.',
+      },
+      waifu2xArtStrong: {
+        name: 'waifu2x arte 2x, ruído forte',
+        note: 'Para ilustrações coloridas. Aumenta a nitidez e remove ruído forte.',
+      },
+    },
+    pages: {
+      label: 'As páginas são',
+      bw: 'Em preto e branco',
+      color: 'Coloridas',
+    },
+    output: {
+      label: 'Tamanho de saída',
+      same: 'Mesmo tamanho',
+      times: '{scale}x',
+      fixed: 'Esta predefinição mantém o tamanho da página',
+      becomes: 'A página 1 tem {width} x {height} e é salva em {outWidth} x {outHeight}.',
+      larger: 'As páginas maiores podem substituir as páginas do capítulo antes da limpeza. As máscaras detectadas crescem com a página.',
     },
     credit: '{name} por {author}, {license}',
     duration: {
@@ -1649,6 +1695,7 @@ export const pt = {
       pages: 'Tempo de GPU para estas páginas no tamanho delas. O envio e a inicialização da GPU somam-se a isso.',
       reference: 'Os tamanhos das páginas são desconhecidos, então isto supõe páginas de {width} x {height}. O envio e a inicialização da GPU somam-se a isso.',
       measured: 'Com base no tempo medido neste computador.',
+      unmeasured: 'Esta predefinição ainda não foi cronometrada em uma GPU na nuvem.',
     },
     out: {
       label: 'Salvar em',
@@ -1692,6 +1739,7 @@ export const pt = {
         other: '{count} páginas inteiras, {pixels} pixels',
       },
       models: 'Modelos',
+      output: '{scale}x o tamanho de cada página',
       tooLarge: 'Deixadas de fora',
       tooLargeValue: {
         one: '1 página é grande demais para esta predefinição e não é enviada.',
@@ -1717,7 +1765,7 @@ export const pt = {
       copied: 'Copiado',
     },
     reason: {
-      tooLarge: 'Grande demais para esta predefinição',
+      tooLarge: 'Grande demais para esta predefinição neste tamanho de saída',
       unsupported: 'Não é uma imagem que esta predefinição consegue ler',
       inference: 'O modelo não conseguiu processá-la',
       unreadable: 'Não foi possível ler a página',
@@ -1746,6 +1794,7 @@ export const pt = {
       cloudDisabled: 'O uso da nuvem está desligado. Ligue-o em Configurações > Nuvem e tente de novo.',
       noProfile: 'Nenhuma GPU na nuvem selecionada. Escolha uma em Configurações > Nuvem.',
       notSetUp: 'Esta GPU na nuvem não está configurada para remoção de ruído. Em Configurações > Nuvem, configure com o Modal e ligue Remoção de ruído, depois tente de novo.',
+      cloudOutdated: 'Esta GPU na nuvem foi configurada antes dos tamanhos de saída maiores. Atualize a configuração em Configurações > Nuvem, ou escolha Mesmo tamanho, e tente de novo.',
       openCloud: 'Abrir configurações da Nuvem',
       modelMissing: 'O modelo local está faltando ou falhou na verificação. Volte para baixá-lo de novo.',
       runtimeMissing: 'O ONNX Runtime em que este modelo roda não está instalado. Baixe-o em Configurações > Modelos.',

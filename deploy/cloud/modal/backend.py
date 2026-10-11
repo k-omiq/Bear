@@ -56,6 +56,8 @@ class ModalDictStore:
 
 
 RENDER_STARTUP_FAILURE_KEY = "gpu:startup_failure:render"
+# How many 32 KiB result chunks one write to the store carries.
+RESULT_CHUNKS_PER_WRITE = 256
 
 
 class ModalWorkerDispatcher:
@@ -314,6 +316,8 @@ def denoise_failure(error: BaseException) -> Tuple[str, str]:
             return "capability_unavailable", str(error)
         if error.error_code == "unsupported_mode":
             return "unsupported_page", str(error)
+        if error.error_code == "page_too_large":
+            return "page_too_large", str(error)
     return "inference_failed", "Denoise inference failed"
 
 
@@ -502,7 +506,7 @@ class ModalGpuJobs:
     def denoise_metadata(self, handle: str) -> Optional[Dict[str, Any]]:
         """Publish small completed metadata. Pixels are cached on first download,
         keeping a large provider queue from filling the Dict with page images."""
-        from deploy.cloud.common.denoise import DENOISE_MAX_PNG_BYTES
+        from deploy.cloud.common.denoise import DENOISE_MAX_RESULT_PNG_BYTES
         key = f"gpujob-result:{handle}"
         doc = self._read("denoise", handle)
         if doc is None:
@@ -519,7 +523,7 @@ class ModalGpuJobs:
             return view
         result = view["result"]
         png = result["page_png"]
-        if not isinstance(png, bytes) or not 0 < len(png) <= DENOISE_MAX_PNG_BYTES:
+        if not isinstance(png, bytes) or not 0 < len(png) <= DENOISE_MAX_RESULT_PNG_BYTES:
             return {**gpu_job_view(doc), "status": "failed",
                     "error": _job_error("inference_failed", "Result exceeded the response limit")}
         meta = {"protocol_version": result["protocol_version"], "request_digest": result["request_digest"],
@@ -552,7 +556,10 @@ class ModalGpuJobs:
                       for i, at in enumerate(range(0, len(png), 32768))}
             put_many = getattr(self._store, "put_many", None)
             if callable(put_many):
-                put_many(chunks)
+                # In writes of at most 8 MiB, so the largest answer is never one request to the store.
+                names = list(chunks)
+                for at in range(0, len(names), RESULT_CHUNKS_PER_WRITE):
+                    put_many({name: chunks[name] for name in names[at:at + RESULT_CHUNKS_PER_WRITE]})
             else:
                 for chunk_key, chunk in chunks.items():
                     self._store.put(chunk_key, chunk)

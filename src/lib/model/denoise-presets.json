@@ -5,11 +5,13 @@
     "gpu": "L4",
     "pageWidth": 1284,
     "pageHeight": 1809,
-    "note": "Cloud seconds are medians of five pages after the model was loaded (spikes/denoise/modal_compare.py --warm). Time grows with page area, so scale by megapixels."
+    "note": "Cloud seconds are medians of five pages after the model was loaded (spikes/denoise/modal_compare.py --warm). Time grows with page area, so scale by megapixels. A preset with null seconds has not been measured this way. The eight presets added on 2026-10-10 were measured that day on 1136x1601 pages (per megapixel) and their page seconds are that rate at this page size."
   },
   "presets": [
     {
       "id": "mangajanai-2x",
+      "kind": "bw",
+      "maxScale": 2,
       "targets": ["cloud"],
       "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "mangajanai", "scale": 2 }] },
       "cloudSecondsPerPage": 4.0,
@@ -18,6 +20,8 @@
     },
     {
       "id": "mangajanai-4x",
+      "kind": "bw",
+      "maxScale": 4,
       "targets": ["cloud"],
       "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "mangajanai", "scale": 4 }] },
       "cloudSecondsPerPage": 15.8,
@@ -25,7 +29,39 @@
       "credit": { "name": "MangaJaNai", "author": "the-database", "license": "CC BY-NC 4.0" }
     },
     {
+      "id": "digimanga-bw-4x",
+      "kind": "bw",
+      "maxScale": 4,
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "digimanga-bw-4x" }] },
+      "cloudSecondsPerPage": 19.3,
+      "cloudSecondsPerMegapixel": 8.3,
+      "credit": { "name": "4x-eula-digimanga-bw-v2-nc1", "author": "eula", "license": "CC BY-NC-SA 4.0" }
+    },
+    {
+      "id": "mangajpeg-hq",
+      "kind": "bw",
+      "maxScale": 1,
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "jpeg", "engine": "mangajpeg-hq" }] },
+      "cloudSecondsPerPage": 5.8,
+      "cloudSecondsPerMegapixel": 2.5,
+      "credit": { "name": "1x-MangaJPEGHQ", "author": "bunzero", "license": "CC BY-NC-SA 4.0" }
+    },
+    {
+      "id": "mangajpeg-lq",
+      "kind": "bw",
+      "maxScale": 1,
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "jpeg", "engine": "mangajpeg-lq" }] },
+      "cloudSecondsPerPage": 5.7,
+      "cloudSecondsPerMegapixel": 2.47,
+      "credit": { "name": "1x-MangaJPEGLQ", "author": "bunzero", "license": "CC BY-NC-SA 4.0" }
+    },
+    {
       "id": "waifu2x-scan-4x-n2",
+      "kind": "any",
+      "maxScale": 4,
       "targets": ["cloud", "local"],
       "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "waifu2x-art-scan", "scale": 4, "level": 2 }] },
       "cloudSecondsPerPage": 9.8,
@@ -33,7 +69,29 @@
       "credit": { "name": "waifu2x (nunif)", "author": "nagadomi", "license": "MIT" }
     },
     {
+      "id": "waifu2x-scan-n1",
+      "kind": "any",
+      "maxScale": 1,
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "denoise", "engine": "waifu2x-art-scan", "level": 1 }] },
+      "cloudSecondsPerPage": 6.9,
+      "cloudSecondsPerMegapixel": 2.99,
+      "credit": { "name": "waifu2x (nunif)", "author": "nagadomi", "license": "MIT" }
+    },
+    {
+      "id": "waifu2x-scan-n3",
+      "kind": "any",
+      "maxScale": 1,
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "denoise", "engine": "waifu2x-art-scan", "level": 3 }] },
+      "cloudSecondsPerPage": 7.1,
+      "cloudSecondsPerMegapixel": 3.05,
+      "credit": { "name": "waifu2x (nunif)", "author": "nagadomi", "license": "MIT" }
+    },
+    {
       "id": "realcugan-2x-conservative",
+      "kind": "any",
+      "maxScale": 2,
       "targets": ["cloud"],
       "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "realcugan", "scale": 2 }] },
       "cloudSecondsPerPage": 2.1,
@@ -42,6 +100,8 @@
     },
     {
       "id": "realcugan-3x-conservative",
+      "kind": "any",
+      "maxScale": 3,
       "targets": ["cloud"],
       "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "realcugan", "scale": 3 }] },
       "cloudSecondsPerPage": 3.7,
@@ -50,11 +110,43 @@
     },
     {
       "id": "realcugan-3x-denoise3",
+      "kind": "any",
+      "maxScale": 3,
       "targets": ["cloud"],
       "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "realcugan", "scale": 3, "level": 3 }] },
       "cloudSecondsPerPage": 3.7,
       "cloudSecondsPerMegapixel": 1.61,
       "credit": { "name": "Real-CUGAN", "author": "bilibili", "license": "MIT" }
+    },
+    {
+      "id": "realcugan-4x-conservative",
+      "kind": "any",
+      "maxScale": 4,
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "realcugan", "scale": 4 }] },
+      "cloudSecondsPerPage": 5.5,
+      "cloudSecondsPerMegapixel": 2.37,
+      "credit": { "name": "Real-CUGAN", "author": "bilibili", "license": "MIT" }
+    },
+    {
+      "id": "waifu2x-art-2x-n1",
+      "kind": "color",
+      "maxScale": 2,
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "waifu2x-art", "scale": 2, "level": 1 }] },
+      "cloudSecondsPerPage": 6.4,
+      "cloudSecondsPerMegapixel": 2.76,
+      "credit": { "name": "waifu2x (nunif)", "author": "nagadomi", "license": "MIT" }
+    },
+    {
+      "id": "waifu2x-art-2x-n3",
+      "kind": "color",
+      "maxScale": 2,
+      "targets": ["cloud"],
+      "recipe": { "schema": 1, "steps": [{ "op": "sharpen", "engine": "waifu2x-art", "scale": 2, "level": 3 }] },
+      "cloudSecondsPerPage": 6.3,
+      "cloudSecondsPerMegapixel": 2.73,
+      "credit": { "name": "waifu2x (nunif)", "author": "nagadomi", "license": "MIT" }
     }
   ]
 }

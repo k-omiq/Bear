@@ -670,6 +670,118 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Page denoise output scale, and more presets (2026-10-10).** A denoised page always came back at
+the page's own size: the model upscaled 2 to 4 times and the result was scaled back down. A run can
+now keep the page larger. A recipe takes `output_scale` 2 to 4, never past the scale of its last
+upscaling step; that step scales down only to that multiple (not at all when the model's own scale
+is asked for), and the answer is that many times the page each way
+(`deploy/cloud/common/denoise.py`, `cloud_denoise_wire.rs`, `cleaner_core::page_denoise`). The
+dialog offers Same size, 2x, 3x and 4x up to what the preset's model gives. A gateway lists the
+feature (`features: ["output_scale"]` in its capabilities), and a recipe that names a scale is not
+sent to one that does not, since it would ignore the field and answer at the page's size after the
+GPU ran. An answer whose PNG is past the result limit fails that page as `page_too_large` (16 MiB at
+first, 64 MiB since the measurement below).
+
+The presets grew from 6 to 14, each marked for black and white pages, colour pages or both, and
+the preset list filters on that. New: `digimanga-bw-4x`, `mangajpeg-hq`, `mangajpeg-lq` (black and
+white), `waifu2x-scan-n1`, `waifu2x-scan-n3`, `realcugan-4x-conservative` (both), `waifu2x-art-2x-n1`
+and `waifu2x-art-2x-n3` (colour). Every model was already pinned in `denoise.py`; an installation
+seeds about 184 MB more. `DenoiseCapabilities::supports` now takes a listed preset as supported:
+before, an engine was listed from one probe model (the plain 2x for a waifu2x sharpen), which no
+preset seeds, so the waifu2x preset was refused on a deployment seeded with preset models only.
+
+Checked by the Python and Rust unit tests (digests and rules byte for byte against `denoise.py`,
+the tiler at 2x, 3x and 4x with a stand-in model) and the interface's own tests.
+
+**Cloud times for the new presets, and the first real run at an output scale (2026-10-10).** One
+warm round of `spikes/denoise/modal_compare.py --warm --timings-only` on Modal (one L4 class, five
+pages of a real chapter as 8-bit RGB at 1136x1601, median of the second pass per page). The table
+in `src/lib/model/denoise-presets.json` now has a time for all 14 presets. The page seconds are the
+measured rate at the table's 1284x1809 reference page.
+
+| Preset | s per megapixel | s per reference page |
+| --- | --- | --- |
+| `digimanga-bw-4x` | 8.30 | 19.3 |
+| `mangajpeg-hq` | 2.50 | 5.8 |
+| `mangajpeg-lq` | 2.47 | 5.7 |
+| `waifu2x-scan-n1` | 2.99 | 6.9 |
+| `waifu2x-scan-n3` | 3.05 | 7.1 |
+| `realcugan-4x-conservative` | 2.37 | 5.5 |
+| `waifu2x-art-2x-n1` | 2.76 | 6.4 |
+| `waifu2x-art-2x-n3` | 2.73 | 6.3 |
+
+Two presets already in the table ran in the same round as a check: `realcugan-2x-conservative` at
+0.94 s per megapixel (the table says 0.88) and `mangajanai-2x` at 2.10 (the table says 1.73, so
+this round was 21% slower on that one). Their rows were left as they were.
+
+The same round ran four recipes with an output scale. The answers had the right size (2272x3202 at
+2x, 4544x6404 at 4x).
+
+| Recipe | s per megapixel of page | Answer PNG |
+| --- | --- | --- |
+| `realcugan-2x-conservative` at 2x | 0.83 | 2.0 to 5.2 MiB |
+| `waifu2x-scan-4x-n2` at 2x | 5.17 | 1.9 to 5.0 MiB |
+| `waifu2x-scan-4x-n2` at 4x | 3.43 | 6.2 to 9.1 MiB, one page of five refused |
+| `mangajanai-4x` at 4x | 8.35 | 5.6 to 8.7 MiB, one page of five refused |
+
+The refused page is the one with the most screentone (page 02): its 4x answer was past the 16 MiB
+result limit of that day and failed as `page_too_large` after the GPU had run. A grey copy of that
+page passed with waifu2x at 4x (5.6 MiB) and was refused with MangaJaNai at 4x. The first attempt
+at the round stopped on that refusal; the spike now records a refusal as a result.
+
+**The answer's limit is 64 MiB, the upload's stays 16 MiB (2026-10-10).** Because of that refusal
+the two limits are now separate (`DENOISE_MAX_RESULT_PNG_BYTES` in `denoise.py`,
+`MAX_RESULT_PNG_BYTES` in `cloud_denoise_wire.rs`). An answer past 16 MiB travels only by the job
+routes' 32 KiB result chunks, which is the path the app uses; the gateway now writes those chunks to
+its store in writes of at most 8 MiB (`RESULT_CHUNKS_PER_WRITE`), where one write used to carry the
+whole answer. An answer that one JSON body cannot carry (the synchronous route, and a job result
+sent inline) is refused as `page_too_large`, where it was `inference_failed`. Checked by the gateway
+tests with a 16 MiB answer and by the wire tests.
+
+**A larger denoised page can be taken as the chapter's page (2026-10-10).** "Replace pages with
+denoised" now offers a page denoised at an output scale like any other, under the rule it already
+had: only a page with no cleaning on it. `Job::replace_source` takes a file that is a whole 2 to 4
+times the page on both axes, sets the source row's new width and height, and carries what Detect
+stored for the page with it (`Job::enlarge_page_regions`): each detection's mask, lettering and
+unpadded pair, and each held region's lettering, grow by pixel repetition (`Mask::enlarged`); boxes,
+padding, the fitted thickness and the proxy scales are multiplied by the same factor. The masks go
+to new files under the next edit number, and the old ones are swept at the next open, so a replace
+that is never saved leaves the chapter as it was. A detection loses its text group record, as a cut
+or joined mask does, because the group's evidence file is in the smaller page's pixels.
+
+Checked by unit tests in every orientation at 2x, 3x and 4x (masks, boxes, padding base pair, held
+lettering, reopen and source verification), by the app's replace test with one page larger and one
+not, and by the interface's tests.
+
+Not measured, or put off:
+
+- The 64 MiB answer limit has not run on Modal. No answer past 16 MiB has gone through the real
+  Dict store (2048 entries and 64 MiB for the largest answer, per page being downloaded) or down the
+  real link, where it is 2048 requests. How large the refused page's 4x answer is was not recorded,
+  so it is not known that 64 MiB is enough for it. A page past the limit still pays for its GPU
+  time. An app from before this change fails a page whose answer is past 16 MiB as a protocol
+  error.
+- The timing round kept no images (`--timings-only`), so the look of a kept 2x, 3x or 4x page and
+  the download time of the larger answer are still unknown. Nothing ran at an output scale on this
+  computer. The eight new presets have not been through a visual comparison round, as the first six
+  were.
+- The deployed gateway is the old one. It needs an update from Settings > Cloud before it lists the
+  feature, seeds the new models and offers the new presets.
+- No real chapter went through Detect, a larger replace and then Clean. An enlarged mask has
+  stair-step edges as wide as the factor, and the fit a Clean runs from it was not looked at. The
+  patch a Clean writes for such a detection has no text group in its provenance.
+- A chapter can now hold pages of different sizes, when only some pages are taken larger. The strip
+  layout centres a narrower page; the look of such a chapter in the editor and its export were not
+  checked.
+- This computer still runs one model (`waifu2x-scan-4x-n2`), now at any output scale up to 4x. The
+  other waifu2x swin models are ONNX and would run through the same tiler, but each needs a pinned
+  download row in `weights.rs` and `scripts/fetch-models.sh`. Put off.
+- A local run at an output scale holds the whole enlarged page as float32, about 150 MB for a grey
+  1284x1809 page at 4x and three times that in colour. Peak memory was not taken.
+- A step with a strength below 1 blends, at an output scale, with the page enlarged by pixel
+  repetition on this computer and by Lanczos on the cloud. No shipped preset has such a step.
+- The cost estimate does not count the larger answer's encode and download.
+
 **A cloud GPU with no cleaning model (2026-10-08).** Setup always installed one cleaning model,
 so a user who wanted the cloud GPU for detection or page denoise alone paid for a 5.5 GB download
 and a render worker. `model_id: "none"` now sets up a Modal installation with no cleaning model:
@@ -766,10 +878,26 @@ Not measured, or known to be incomplete:
 - `ahead()` in `tile.js` takes the layers a page object is first seen holding as its baseline. A
   page object first seen with a layer its `appearance` stamp does not cover would keep a stale
   URL until the next reload. No path that builds such an object was found; none was ruled out.
-- Solid bubbles only (`docs/detect-clean.md` §3) was tested on fixtures and in the mock. It was
-  not run on a real chapter. How often rung 0 passes the metric on a screentone or gradient
-  balloon, and how many regions the gate calls `inside` that a reader would not call a speech
-  bubble, are not known; `spikes/gate-probe` on real pages is the measure.
+- Solid bubbles only (`docs/detect-clean.md` §3) was run on two real chapters on 2026-10-10,
+  copies of the user's library read headless through `clean_stored` (191 and 218 pages, cloud
+  detection, mask padding 7). By the stored route alone the first chapter left 112 balloon
+  regions after 654 fills, 102 of them routed to the inpainter and 85 of the 112 measured as
+  pure white balloons; the second would have left 214 of 1118. With `fit::on_flat_paper` the same
+  runs leave 44 and 43. All 61 regions the rule added in the first chapter and a sample of 57
+  of the 171 in the second were looked at before and after: none was a fill over tone or
+  artwork. What is still not known:
+  - The share is 0.9 and was not tuned. Read over the ring the fit samples, which is cut back
+    at strong edges, it cleaned 10 more regions in the first chapter, about half of them plain
+    balloons;
+    that ring reads a crisp halftone as flat, so the whole annulus is what is read.
+  - About ten of the 44 are plain boxes whose lettering nearly fills them, so the annulus is on
+    the border. They wait for a clean without the option.
+  - The tolerance scales with the page's noise floor. A page that is tone from edge to edge has
+    no flat tile, reports the tone as noise, and every annulus on it reads as flat. No such page
+    was in either chapter.
+  - How many regions the gate calls `inside` that a reader would not call a speech bubble was
+    not counted. Sound effects on flat light paper are among the regions the rule now fills.
+  - Both chapters were denoised scans with a noise floor near zero. A noisy scan was not run.
 - Under solid bubbles only, the forced `outsideBubbles: clean` is exercised with a stub cleaner,
   not through the real gate, and `resume_job` passing the option on is not under test (it needs an
   `AppHandle`).

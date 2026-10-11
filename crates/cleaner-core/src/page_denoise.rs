@@ -29,6 +29,14 @@
 //! differ by 1.5/255 or more counts as grey; alpha is copied unchanged, and an
 //! alpha channel that is fully opaque is dropped, as the cloud drops it; a
 //! 16-bit page is written back at 16 bits.
+//!
+//! ## Output scale
+//!
+//! A recipe's `output_scale` keeps the page larger: the downscale stops at
+//! that multiple of the page instead of the page's own size, as the cloud's
+//! `run_step` does. The answer is then written onto the page enlarged by
+//! pixel repetition ([`enlarged`]), which carries what the model never sees
+//! (alpha, the profile, the depth) at the new size.
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -117,6 +125,8 @@ pub struct LocalStep {
     pub model: Waifu2xModel,
     pub file: &'static str,
     pub strength: f64,
+    /// The recipe's output scale: how many times the page each way the answer is.
+    pub out: usize,
 }
 
 pub fn local_step(recipe: &DenoiseRecipe) -> Result<LocalStep, String> {
@@ -126,6 +136,7 @@ pub fn local_step(recipe: &DenoiseRecipe) -> Result<LocalStep, String> {
             model: Waifu2xModel::swin(4),
             file: MODEL_FILE,
             strength: raw.strength.unwrap_or(1.0),
+            out: recipe.output_scale() as usize,
         }),
         _ => Err("this recipe does not run on this computer".into()),
     }
@@ -218,14 +229,46 @@ pub struct Denoised {
     pub gray: bool,
 }
 
-/// `encode_page`: `out` is one plane for a grey page, three otherwise, in [0, 1].
-fn encode_page(page: &Page, out: &[f32], strength: f64) -> Result<Raster, Error> {
-    let plane = page.width * page.height;
-    let managed = crate::engines::model::editable_color(&page.source).map_err(|e| Error::Run(e.to_string()))?;
-    let mut raster = page.source.clone();
-    for y in 0..page.height {
-        for x in 0..page.width {
-            let at = y * page.width + x;
+/// `raster` with every pixel repeated `scale` times each way: the page an
+/// enlarged answer is written onto. Mode, depth, profile and colour key are
+/// the page's own, and alpha is the page's at the new size. Every colour
+/// sample is then written over, at full strength by every shipped preset; a
+/// weaker step would blend with these repeated pixels, where the cloud blends
+/// with a Lanczos enlargement.
+pub fn enlarged(raster: &Raster, scale: u32) -> Raster {
+    let mut out = Raster {
+        width: raster.width * scale,
+        height: raster.height * scale,
+        mode: raster.mode,
+        depth: raster.depth,
+        icc: raster.icc.clone(),
+        palette: raster.palette.clone(),
+        trns: raster.trns.clone(),
+        srgb_intent: raster.srgb_intent,
+        color: raster.color.clone(),
+        data: Vec::new(),
+    };
+    out.data = vec![0; out.stride() * out.height as usize];
+    for y in 0..out.height {
+        for x in 0..out.width {
+            for c in 0..raster.mode.samples() {
+                out.set_sample(x, y, c, raster.sample(x / scale, y / scale, c));
+            }
+        }
+    }
+    out
+}
+
+/// `encode_page`: `out` is one plane for a grey page, three otherwise, in
+/// [0, 1], at `scale` times the page each way.
+fn encode_page(page: &Page, out: &[f32], strength: f64, scale: usize) -> Result<Raster, Error> {
+    let (width, height) = (page.width * scale, page.height * scale);
+    let plane = width * height;
+    let mut raster = if scale == 1 { page.source.clone() } else { enlarged(&page.source, scale as u32) };
+    let managed = crate::engines::model::editable_color(&raster).map_err(|e| Error::Run(e.to_string()))?;
+    for y in 0..height {
+        for x in 0..width {
+            let at = y * width + x;
             let rgb = std::array::from_fn(|c| if page.gray { out[at] } else { out[c * plane + at] });
             crate::engines::model::commit_srgb(&managed, &mut raster, x as u32, y as u32, rgb, strength, 0.0)
                 .map_err(|e| Error::Run(e.to_string()))?;
@@ -432,7 +475,9 @@ impl Axis {
 
 /// `downscale_linear_lanczos`, streamed: canvas rows in (already in linear
 /// light), output rows out. Pillow's order: the horizontal pass first, kept
-/// as float32, then the vertical pass over it.
+/// as float32, then the vertical pass over it. Asked for the canvas's own
+/// size (an output scale equal to the model's), every kernel is one tap and
+/// the rows pass through, where the cloud skips the call.
 struct Downscale {
     channels: usize,
     in_w: usize,
@@ -518,14 +563,19 @@ impl Downscale {
 }
 
 /// `run_step` for one waifu2x step: tile, blend, fold grey, downscale in
-/// linear light, blend with the input by `strength`, and encode.
+/// linear light to `out` times the page each way (1 is the page's own size),
+/// blend with the input by `strength`, and encode.
 pub fn denoise(
     raster: &Raster,
     model: &mut dyn TileModel,
     spec: Waifu2xModel,
     filter: &[f32],
     strength: f64,
+    out: usize,
 ) -> Result<Denoised, Error> {
+    if out == 0 || out > spec.scale {
+        return Err(Error::Run("the output scale is past the model's".into()));
+    }
     let page = decode_page(raster)?;
     let pixels = (page.width * page.height) as u64;
     if pixels * (spec.scale * spec.scale) as u64 > MAX_UPSCALED_PIXELS {
@@ -534,7 +584,7 @@ pub fn denoise(
     let tiling = Tiling::new(spec, page.height, page.width);
     let channels = if page.gray { 1 } else { 3 };
     let (in_w, in_h) = (page.width * spec.scale, page.height * spec.scale);
-    let mut downscale = Downscale::new(channels, in_w, in_h, page.width, page.height);
+    let mut downscale = Downscale::new(channels, in_w, in_h, page.width * out, page.height * out);
     let mut linear = vec![0f32; channels * in_w];
     upscale(&page, model, &tiling, filter, |row| {
         if page.gray {
@@ -549,8 +599,8 @@ pub fn denoise(
         }
         downscale.push(&linear);
     })?;
-    let out = downscale.finish()?;
-    Ok(Denoised { raster: encode_page(&page, &out, strength)?, gray: page.gray })
+    let planes = downscale.finish()?;
+    Ok(Denoised { raster: encode_page(&page, &planes, strength, out)?, gray: page.gray })
 }
 
 /* ------------------------------------------------------------------ */
@@ -638,8 +688,9 @@ impl Waifu2x {
         OrtTile(&mut self.session).run(vec![0.5; 3 * side * side], side).map(drop)
     }
 
-    pub fn denoise(&mut self, page: &Raster, strength: f64) -> Result<Denoised, Error> {
-        self.denoise_watched(page, strength, &mut |_, _| true)
+    /// One page, answered at `out` times its size each way ([`denoise`]).
+    pub fn denoise(&mut self, page: &Raster, strength: f64, out: usize) -> Result<Denoised, Error> {
+        self.denoise_watched(page, strength, out, &mut |_, _| true)
     }
 
     /// [`Waifu2x::denoise`], asking `tick` before each tile ([`Watched`]).
@@ -647,12 +698,13 @@ impl Waifu2x {
         &mut self,
         page: &Raster,
         strength: f64,
+        out: usize,
         tick: &mut dyn FnMut(usize, usize) -> bool,
     ) -> Result<Denoised, Error> {
         let total = Tiling::new(self.model, page.height as usize, page.width as usize).tiles();
         let mut session = OrtTile(&mut self.session);
         let mut watched = Watched { inner: &mut session, done: 0, total, tick };
-        denoise(page, &mut watched, self.model, &self.filter, strength)
+        denoise(page, &mut watched, self.model, &self.filter, strength, out)
     }
 }
 
@@ -736,14 +788,14 @@ mod tests {
         let page = decode_page(&source).unwrap();
         // IEC sRGB encoded value of linear 0.25, independent of the implementation.
         assert!((page.rgb[1] - 0.5370987).abs() < 0.0001);
-        let out = encode_page(&page, &[0.5; 8], 1.0).unwrap();
+        let out = encode_page(&page, &[0.5; 8], 1.0, 1).unwrap();
         assert_eq!(out.mode, source.mode);
         assert_eq!(out.depth, source.depth);
         assert_eq!(out.color, source.color);
         assert_eq!(&out.data[..8], &source.data[..8], "transparent native pixel remains exact");
         for c in 0..3 { assert!((out.sample(1,0,c) as i32 - 14027).abs() <= 3); }
         assert_eq!(out.sample(1,0,3),12345);
-        assert_eq!(encode_page(&page, &[1.0;8],0.0).unwrap().data,source.data);
+        assert_eq!(encode_page(&page, &[1.0;8],0.0,1).unwrap().data,source.data);
     }
 
     #[test]
@@ -831,7 +883,7 @@ mod tests {
 
     fn run(raster: &Raster) -> Denoised {
         let model = Waifu2xModel { scale: 4, offset: 32, tile: 64 };
-        denoise(raster, &mut Nearest { model, calls: 0 }, model, &ring_filter(model), 1.0).unwrap()
+        denoise(raster, &mut Nearest { model, calls: 0 }, model, &ring_filter(model), 1.0, 1).unwrap()
     }
 
     #[test]
@@ -845,13 +897,13 @@ mod tests {
         let mut inner = Nearest { model, calls: 0 };
         let mut tick = |done: usize, of: usize| { seen.push((done, of)); true };
         let mut watched = Watched { inner: &mut inner, done: 0, total, tick: &mut tick };
-        denoise(&page, &mut watched, model, &ring_filter(model), 1.0).unwrap();
+        denoise(&page, &mut watched, model, &ring_filter(model), 1.0, 1).unwrap();
         assert_eq!(seen, (0..total).map(|done| (done, total)).collect::<Vec<_>>());
 
         let mut inner = Nearest { model, calls: 0 };
         let mut tick = |done: usize, _: usize| done < 2;
         let mut watched = Watched { inner: &mut inner, done: 0, total, tick: &mut tick };
-        let stopped = denoise(&page, &mut watched, model, &ring_filter(model), 1.0).unwrap_err();
+        let stopped = denoise(&page, &mut watched, model, &ring_filter(model), 1.0, 1).unwrap_err();
         assert!(matches!(stopped, Error::Cancelled));
         assert_eq!(stopped.code(), "denoise_cancelled");
         assert_eq!(inner.calls, 2, "no tile runs after the stop");
@@ -919,7 +971,7 @@ mod tests {
         let model = Waifu2xModel::swin(4);
         for page in [indexed, cmyk, bitonal] {
             let mut fake = Nearest { model, calls: 0 };
-            let error = denoise(&page, &mut fake, model, &ring_filter(model), 1.0).unwrap_err();
+            let error = denoise(&page, &mut fake, model, &ring_filter(model), 1.0, 1).unwrap_err();
             assert_eq!(error.code(), "denoise_unsupported_page", "{:?}", page.mode);
             assert_eq!(fake.calls, 0, "declined before any tile runs");
         }
@@ -929,7 +981,7 @@ mod tests {
     fn strength_blends_with_the_input() {
         let page = raster(16, 16, ColorMode::Gray, BitDepth::Eight, |x, _, _| if x < 8 { 0 } else { 255 });
         let model = Waifu2xModel { scale: 4, offset: 32, tile: 64 };
-        let none = denoise(&page, &mut Nearest { model, calls: 0 }, model, &ring_filter(model), 0.0).unwrap();
+        let none = denoise(&page, &mut Nearest { model, calls: 0 }, model, &ring_filter(model), 0.0, 1).unwrap();
         assert_eq!(none.raster.data, page.data, "strength 0 is the input");
     }
 
@@ -940,7 +992,54 @@ mod tests {
             assert_eq!(local_step(&preset.recipe()).is_ok(), preset.runs_locally(), "{}", preset.id);
         }
         let step = local_step(&crate::cloud_denoise_wire::preset(LOCAL_PRESET).unwrap().recipe()).unwrap();
-        assert_eq!((step.model, step.file, step.strength), (Waifu2xModel::swin(4), MODEL_FILE, 1.0));
+        assert_eq!((step.model, step.file, step.strength, step.out), (Waifu2xModel::swin(4), MODEL_FILE, 1.0, 1));
+        let mut scaled = crate::cloud_denoise_wire::preset(LOCAL_PRESET).unwrap().recipe();
+        scaled.output_scale = Some(3);
+        assert_eq!(local_step(&scaled).unwrap().out, 3);
+        scaled.output_scale = Some(5);
+        assert!(local_step(&scaled).is_err());
+    }
+
+    #[test]
+    fn an_output_scale_keeps_the_page_larger() {
+        let model = Waifu2xModel { scale: 4, offset: 32, tile: 64 };
+        let at = |raster: &Raster, out: usize| {
+            denoise(raster, &mut Nearest { model, calls: 0 }, model, &ring_filter(model), 1.0, out)
+        };
+        // The model's own scale: nothing is scaled down, so the nearest
+        // upscale the fake model gives comes back, sample for sample.
+        let grey = raster(21, 13, ColorMode::Gray, BitDepth::Eight, |x, y, _| ((x * 7 + y * 13) % 256) as u16);
+        let out = at(&grey, 4).unwrap().raster;
+        assert_eq!((out.width, out.height, out.mode, out.depth), (84, 52, ColorMode::Gray, BitDepth::Eight));
+        for y in 0..52 {
+            for x in 0..84 {
+                assert_eq!(out.sample(x, y, 0), grey.sample(x / 4, y / 4, 0), "({x}, {y})");
+            }
+        }
+        // Between: a flat page stays flat at every size, in colour and at 16 bits.
+        for (mode, depth, level) in [(ColorMode::Rgb, BitDepth::Eight, 200u16), (ColorMode::Gray, BitDepth::Sixteen, 40_000)] {
+            let page = raster(19, 11, mode, depth, |_, _, c| level - c as u16 * 60);
+            for scale in [2usize, 3] {
+                let out = at(&page, scale).unwrap().raster;
+                assert_eq!((out.width, out.height, out.mode, out.depth), (19 * scale as u32, 11 * scale as u32, mode, depth));
+                let slack = if depth == BitDepth::Sixteen { 3 } else { 0 };
+                for c in 0..mode.samples() {
+                    let (got, want) = (out.sample(out.width - 1, out.height - 1, c) as i32, page.sample(0, 0, c) as i32);
+                    assert!((got - want).abs() <= slack, "{mode:?} {scale}x channel {c}: {got} vs {want}");
+                }
+            }
+        }
+        // Alpha, which the model never sees, is the page's at the new size.
+        let rgba = raster(9, 7, ColorMode::Rgba, BitDepth::Eight, |x, y, c| if c == 3 { (x * 20 + y) as u16 } else { 90 + c as u16 * 40 });
+        let out = at(&rgba, 2).unwrap().raster;
+        assert_eq!((out.width, out.height, out.mode), (18, 14, ColorMode::Rgba));
+        for y in 0..14 {
+            for x in 0..18 {
+                assert_eq!(out.sample(x, y, 3), rgba.sample(x / 2, y / 2, 3), "alpha at ({x}, {y})");
+            }
+        }
+        // Never past the model's own scale, and never nothing.
+        assert!(at(&grey, 5).is_err() && at(&grey, 0).is_err());
     }
 
     /* -------------------------------------------------------------- */
@@ -997,7 +1096,7 @@ mod tests {
             let input = crate::image::decode(&std::fs::read(&path).unwrap()).unwrap();
             let golden = crate::image::decode(&std::fs::read(dir.join(format!("{name}-golden.png"))).unwrap()).unwrap();
             let started = std::time::Instant::now();
-            let out = engine.denoise(&input, 1.0).unwrap().raster;
+            let out = engine.denoise(&input, 1.0, 1).unwrap().raster;
             let seconds = started.elapsed().as_secs_f64();
             assert_eq!((out.width, out.height, out.mode, out.depth), (golden.width, golden.height, golden.mode, golden.depth));
             let (mut max, mut sum, mut count) = (0i32, 0f64, 0usize);
@@ -1054,7 +1153,7 @@ mod tests {
             }
             let warm = warm.elapsed().as_secs_f64();
             let started = std::time::Instant::now();
-            let out = engine.denoise(&page, 1.0);
+            let out = engine.denoise(&page, 1.0, 1);
             println!("{name}: landed on {:?} (declined {:?}), build {build:.1} s, warm-up tile {warm:.2} s, page {:.1} s ({})",
                 engine.selection().accelerator, engine.selection().declined.map(|d| d.reason_key),
                 started.elapsed().as_secs_f64(), out.map(|d| format!("gray {}", d.gray)).unwrap_or_else(|e| e.to_string()));

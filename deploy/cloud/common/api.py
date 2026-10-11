@@ -574,13 +574,16 @@ class CloudGateway:
             result = self.denoise_worker.denoise(metadata, page_png)
             response = self._denoise_result_json(result)
             if len(response) > DENOISE_MAX_RESPONSE_BYTES:
-                return self._denoise_error(500, "inference_failed", "Denoise response exceeded limit", metadata["request_digest"])
+                # A valid answer that one JSON body cannot carry; the job routes send it in chunks.
+                return self._denoise_error(413, "page_too_large", "The denoised page is past this route's answer limit",
+                                           metadata["request_digest"])
             return 200, {"Content-Type": "application/json"}, response
         except GpuWaitExceeded:
             return self._denoise_error(504, "inference_failed", "No answer within the synchronous wait; poll the job routes", metadata["request_digest"])
         except DenoiseError as exc:
-            status = 503 if exc.error_code == "weights_missing" else 422 if exc.error_code == "unsupported_mode" else 500
-            code = {"weights_missing": "capability_unavailable", "unsupported_mode": "unsupported_page"}.get(exc.error_code, "inference_failed")
+            status = {"weights_missing": 503, "unsupported_mode": 422, "page_too_large": 413}.get(exc.error_code, 500)
+            code = {"weights_missing": "capability_unavailable", "unsupported_mode": "unsupported_page",
+                    "page_too_large": "page_too_large"}.get(exc.error_code, "inference_failed")
             return self._denoise_error(status, code, str(exc), metadata["request_digest"])
         except Exception as exc:
             logger.error("Denoise inference failed: %s", redact_text(str(exc)))
@@ -708,8 +711,10 @@ class CloudGateway:
             result_json = self._denoise_result_json(result)
             limit = DENOISE_MAX_RESPONSE_BYTES
         if len(result_json) > limit:
+            # A denoised page may be larger than one JSON body carries; it was not a failed inference.
+            code = "inference_failed" if kind in ("analysis", "analysis_batch") else "page_too_large"
             failed = {**view, "status": "failed",
-                      "error": {"error_code": "inference_failed", "message": "Result exceeded the response limit"}}
+                      "error": {"error_code": code, "message": "Result exceeded the response limit"}}
             return self._gpu_job_answer(200, version, failed)
         return self._gpu_job_answer(200, version, view, result_json)
 

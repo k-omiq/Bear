@@ -1,15 +1,20 @@
 """Page denoise: pinned models, recipe validation and the GPU runtime.
 
 A page denoise run takes one whole page (PNG) and a recipe, an ordered list of 1 to
-3 steps, and returns one PNG with the same width, height and colour kind. Steps:
+3 steps, and returns one PNG of the same colour kind. Steps:
 
 - `denoise`: a 1x grain model (waifu2x `noise0..3`).
-- `sharpen`: a 2x or 4x model, then a linear-light Lanczos downscale back to the
+- `sharpen`: a 2x to 4x model, then a linear-light Lanczos downscale back to the
   input size. The model redraws edges at the higher resolution; the downscale keeps
-  that sharpness and drops the size change, so a recipe never changes page geometry.
+  that sharpness and drops the size change.
 - `jpeg`: a 1x JPEG artefact model (MangaJPEG family, one luma channel).
 
 Every step has a `strength` in [0, 1] that blends its output with its input.
+
+A recipe keeps the page's width and height unless it names an `output_scale` of 2
+to 4. Then its last upscaling step scales down only to that multiple of the page
+(or not at all, when the model's own scale is the one asked for), any step after it
+runs at the larger size, and the answer is that many times the page each way.
 
 waifu2x runs as ONNX through onnxruntime, the same files the desktop can run with
 `ort`. The ESRGAN-family models on OpenModelDB ship only as PyTorch `.pth` files, so
@@ -35,7 +40,7 @@ import threading
 import time
 import urllib.request
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
@@ -257,12 +262,19 @@ MANGAJANAI_HEIGHTS = (1200, 1300, 1400, 1500, 1600, 1920, 2048)
 # Real-CUGAN levels: no level = conservative, 0 = no denoise, 1-3 = denoise strength.
 CUGAN_LEVELS = {None: "conservative", 0: "no-denoise", 1: "denoise1x", 2: "denoise2x", 3: "denoise3x"}
 OPS = ("denoise", "sharpen", "jpeg")
+# What a gateway of this version can do beyond the first contract; the desktop sends
+# a recipe that needs one only to a gateway that lists it (`denoise_capabilities`).
+FEATURE_OUTPUT_SCALE = "output_scale"
+FEATURES = (FEATURE_OUTPUT_SCALE,)
 
 
-# The recipes the app offers (user choice, 2026-09-28, after two comparison rounds in
-# spikes/denoise). Only these presets' models are seeded on an installation; the full
-# MODELS table stays for research runs. src/lib/model/denoise-presets.json holds the
-# same recipes for the interface, and test_denoise checks the two agree.
+# The recipes the app offers. The first six are the user's choice of 2026-09-28, after
+# two comparison rounds in spikes/denoise; the rest were added on 2026-10-10 so black
+# and white pages and colour pages each have more than one kind of model to try, and
+# have not been through a comparison round. Only these presets' models are seeded on
+# an installation; the full MODELS table stays for research runs.
+# src/lib/model/denoise-presets.json holds the same recipes for the interface, and
+# test_denoise checks the two agree.
 PRESETS: Dict[str, Dict[str, Any]] = {
     "waifu2x-scan-4x-n2": {"schema": 1, "steps": [
         {"op": "sharpen", "engine": "waifu2x-art-scan", "scale": 4, "level": 2}]},
@@ -276,6 +288,22 @@ PRESETS: Dict[str, Dict[str, Any]] = {
         {"op": "sharpen", "engine": "mangajanai", "scale": 2}]},
     "mangajanai-4x": {"schema": 1, "steps": [
         {"op": "sharpen", "engine": "mangajanai", "scale": 4}]},
+    "digimanga-bw-4x": {"schema": 1, "steps": [
+        {"op": "sharpen", "engine": "digimanga-bw-4x"}]},
+    "mangajpeg-hq": {"schema": 1, "steps": [
+        {"op": "jpeg", "engine": "mangajpeg-hq"}]},
+    "mangajpeg-lq": {"schema": 1, "steps": [
+        {"op": "jpeg", "engine": "mangajpeg-lq"}]},
+    "waifu2x-scan-n1": {"schema": 1, "steps": [
+        {"op": "denoise", "engine": "waifu2x-art-scan", "level": 1}]},
+    "waifu2x-scan-n3": {"schema": 1, "steps": [
+        {"op": "denoise", "engine": "waifu2x-art-scan", "level": 3}]},
+    "realcugan-4x-conservative": {"schema": 1, "steps": [
+        {"op": "sharpen", "engine": "realcugan", "scale": 4}]},
+    "waifu2x-art-2x-n1": {"schema": 1, "steps": [
+        {"op": "sharpen", "engine": "waifu2x-art", "scale": 2, "level": 1}]},
+    "waifu2x-art-2x-n3": {"schema": 1, "steps": [
+        {"op": "sharpen", "engine": "waifu2x-art", "scale": 2, "level": 3}]},
 }
 
 
@@ -285,6 +313,9 @@ class Step:
     engine: str
     model_id: str
     strength: float
+    # How many times its input's width and height the step answers: 1 unless the
+    # recipe's `output_scale` lands on this step (`resolve_recipe`).
+    out: int = 1
 
 
 def _level(raw: Any) -> Optional[int]:
@@ -355,13 +386,27 @@ def resolve_step(raw: Mapping[str, Any]) -> Step:
 
 
 def resolve_recipe(raw: Mapping[str, Any]) -> List[Step]:
-    """Validate a recipe document: {"schema": 1, "steps": [...]}."""
+    """Validate a recipe document: {"schema": 1, "steps": [...]}, with an optional
+    "output_scale" of 2 to 4 that the recipe's last upscaling step keeps."""
     if not isinstance(raw, Mapping) or raw.get("schema") != RECIPE_SCHEMA:
         raise DenoiseError(f"recipe schema must be {RECIPE_SCHEMA}")
-    steps = raw.get("steps")
-    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_STEPS:
+    unknown = set(raw) - {"schema", "steps", "output_scale"}
+    if unknown:
+        raise DenoiseError(f"unknown recipe fields: {sorted(unknown)}")
+    raw_steps = raw.get("steps")
+    if not isinstance(raw_steps, list) or not 1 <= len(raw_steps) <= MAX_STEPS:
         raise DenoiseError(f"a recipe has 1 to {MAX_STEPS} steps")
-    return [resolve_step(step) for step in steps]
+    steps = [resolve_step(step) for step in raw_steps]
+    if "output_scale" in raw:
+        # Absent means the page's own size, so 1 has one spelling and one digest.
+        out = raw["output_scale"]
+        if isinstance(out, bool) or not isinstance(out, int) or not 2 <= out <= 4:
+            raise DenoiseError("output_scale must be an integer from 2 to 4")
+        last = max((at for at, step in enumerate(steps) if step_scale(step) > 1), default=None)
+        if last is None or out > step_scale(steps[last]):
+            raise DenoiseError("output_scale is past what the recipe's last upscaling step gives")
+        steps[last] = replace(steps[last], out=out)
+    return steps
 
 
 def step_scale(step: Step) -> int:
@@ -480,7 +525,9 @@ def linear_to_srgb(x):
 
 
 def downscale_linear_lanczos(chw, width: int, height: int):
-    """CHW float in [0, 1] -> CHW at (height, width), Lanczos in linear light."""
+    """CHW float in [0, 1] -> CHW at (height, width), Lanczos in linear light. Named
+    for its main use; it also enlarges, which a step's strength blend needs when the
+    step answers larger than its input."""
     import numpy as np
     from PIL import Image
 
@@ -525,6 +572,13 @@ def decode_page(png: bytes) -> Page:
     return Page(rgb=rgb, alpha=alpha, gray=gray, sixteen_bit=sixteen)
 
 
+def _alpha_for(page: Page, size: Tuple[int, int]):
+    """The page's alpha at the answer's size: unchanged, or enlarged with it."""
+    from PIL import Image
+    alpha = Image.fromarray(page.alpha)
+    return alpha if alpha.size == size else alpha.resize(size, Image.Resampling.BICUBIC)
+
+
 def encode_page(page: Page, rgb) -> bytes:
     import numpy as np
     from PIL import Image
@@ -537,11 +591,11 @@ def encode_page(page: Page, rgb) -> bytes:
         else:
             image = Image.fromarray((luma * 255.0 + 0.5).astype(np.uint8))
             if page.alpha is not None:
-                image.putalpha(Image.fromarray(page.alpha))
+                image.putalpha(_alpha_for(page, image.size))
     else:
         image = Image.fromarray((rgb.transpose(1, 2, 0) * 255.0 + 0.5).astype(np.uint8))
         if page.alpha is not None:
-            image.putalpha(Image.fromarray(page.alpha))
+            image.putalpha(_alpha_for(page, image.size))
     out = io.BytesIO()
     image.save(out, format="PNG", compress_level=6)
     return out.getvalue()
@@ -813,10 +867,11 @@ def run_step(sessions: SessionCache, step: Step, page: Page, rgb):
     else:
         with _pinned(sessions, model):
             out = Spandrel(sessions, model).run(rgb, page.gray)
-    if model.scale != 1:
-        out = downscale_linear_lanczos(out, w, h)
+    if model.scale != step.out:
+        out = downscale_linear_lanczos(out, w * step.out, h * step.out)
     if step.strength < 1.0:
-        out = rgb * (1.0 - step.strength) + out * step.strength
+        base = rgb if step.out == 1 else downscale_linear_lanczos(rgb, w * step.out, h * step.out)
+        out = base * (1.0 - step.strength) + out * step.strength
     return out.astype(np.float32), model.model_id
 
 
@@ -833,9 +888,15 @@ def denoise_page(sessions: SessionCache, steps: Sequence[Step], png: bytes) -> T
         rgb, model_id = run_step(sessions, step, page, rgb)
         # The model that actually ran: an `.auto` step names the one this page picked.
         timings.append({"model_id": model_id, "ms": round((time.perf_counter() - started) * 1000)})
-    return encode_page(page, rgb), {
-        "width": int(page.rgb.shape[2]),
-        "height": int(page.rgb.shape[1]),
+    out = encode_page(page, rgb)
+    if len(out) > DENOISE_MAX_RESULT_PNG_BYTES:
+        # The answer's limit is above the upload's; a page kept much larger is what outgrows it.
+        raise DenoiseError("the denoised page is past the answer's size limit; use a smaller output_scale",
+                           "page_too_large")
+    # The answer's own size: the page's, times the recipe's output scale.
+    return out, {
+        "width": int(rgb.shape[2]),
+        "height": int(rgb.shape[1]),
         "gray": page.gray,
         "steps": timings,
     }
@@ -845,7 +906,13 @@ def denoise_page(sessions: SessionCache, steps: Sequence[Step], png: bytes) -> T
 
 DENOISE_VERSION = "1.0.0"
 DENOISE_MAX_PNG_BYTES = 16 * 1024 * 1024
-# Base64 of the largest page plus the metadata, and the same for the answer.
+# The answer may be larger than the upload: an output scale keeps up to 16 times
+# the page's pixels. Measured 2026-10-10: a 4x answer of a 1136x1601 page dense
+# with screentone was past 16 MiB. An answer this large travels by the job
+# routes' result chunks only.
+DENOISE_MAX_RESULT_PNG_BYTES = 64 * 1024 * 1024
+# Base64 of the largest page plus the metadata, and the same for an answer sent
+# whole in one JSON body (the synchronous route, and a job result sent inline).
 DENOISE_MAX_BODY_BYTES = 24_000_000
 DENOISE_MAX_RESPONSE_BYTES = 24_000_000
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -912,6 +979,7 @@ def denoise_capabilities(root: os.PathLike | str) -> Dict[str, Any]:
         "protocol_version": DENOISE_VERSION,
         "available": bool(presets) or (SEAM_FILTER.model_id in seeded and any(engines.values())),
         "presets": presets,
+        "features": list(FEATURES),
         "engines": engines,
         "models": [{"model_id": m.model_id, "license": m.license, "author": m.author,
                     "seeded": m.model_id in seeded} for m in MODELS.values() if m.family != "helper"],

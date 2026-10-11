@@ -128,6 +128,34 @@ class RecipeTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(d.DenoiseError):
                 d.resolve_recipe(raw)
 
+    def test_output_scale_lands_on_the_last_upscaling_step(self):
+        sharpen4 = {"op": "sharpen", "engine": "waifu2x-art-scan", "scale": 4}
+        sharpen2 = {"op": "sharpen", "engine": "realcugan", "scale": 2}
+        self.assertEqual([s.out for s in d.resolve_recipe(recipe(sharpen4))], [1])
+        for out in (2, 3, 4):
+            steps = d.resolve_recipe({**recipe(sharpen4, GRAIN), "output_scale": out})
+            self.assertEqual([s.out for s in steps], [out, 1])
+        # The last step that upscales keeps it; an earlier one still returns to size.
+        steps = d.resolve_recipe({**recipe(sharpen4, sharpen2), "output_scale": 2})
+        self.assertEqual([s.out for s in steps], [1, 2])
+        fixed = d.resolve_recipe({**recipe({"op": "sharpen", "engine": "digimanga-bw-4x"}), "output_scale": 4})
+        self.assertEqual([s.out for s in fixed], [4])
+        bad = [
+            {**recipe(sharpen4), "output_scale": 1},
+            {**recipe(sharpen4), "output_scale": 5},
+            {**recipe(sharpen4), "output_scale": 2.0},
+            {**recipe(sharpen4), "output_scale": True},
+            {**recipe(sharpen4), "output_scale": None},
+            {**recipe(sharpen2), "output_scale": 3},
+            {**recipe(sharpen4, sharpen2), "output_scale": 4},
+            {**recipe(GRAIN), "output_scale": 2},
+            {**recipe({"op": "jpeg", "engine": "mangajpeg-hq"}), "output_scale": 2},
+            {**recipe(sharpen4), "scale": 2},
+        ]
+        for raw in bad:
+            with self.subTest(raw=raw), self.assertRaises(d.DenoiseError):
+                d.resolve_recipe(raw)
+
     def test_every_model_is_pinned(self):
         for model in d.MODELS.values():
             with self.subTest(model=model.model_id):
@@ -146,16 +174,26 @@ class PresetTests(unittest.TestCase):
         for name, recipe_doc in d.PRESETS.items():
             with self.subTest(preset=name):
                 self.assertEqual(shipped[name]["recipe"], recipe_doc)
-                d.resolve_recipe(recipe_doc)
-                # Only waifu2x ships as ONNX, so only it can run on the user's computer.
-                expected = ["cloud", "local"] if name.startswith("waifu2x") else ["cloud"]
+                steps = d.resolve_recipe(recipe_doc)
+                # The desktop has one model, the ONNX file this preset runs.
+                expected = ["cloud", "local"] if name == "waifu2x-scan-4x-n2" else ["cloud"]
                 self.assertEqual(shipped[name]["targets"], expected)
+                self.assertIn(shipped[name]["kind"], ("bw", "color", "any"))
+                # The largest output_scale the recipe takes, and no larger.
+                largest = shipped[name]["maxScale"]
+                self.assertEqual(largest, max([d.step_scale(s) for s in steps if d.step_scale(s) > 1][-1:], default=1))
+                if largest > 1:
+                    d.resolve_recipe({**recipe_doc, "output_scale": largest})
+                with self.assertRaises(d.DenoiseError):
+                    d.resolve_recipe({**recipe_doc, "output_scale": largest + 1})
 
     def test_only_preset_models_are_seeded(self):
         ids = {m.model_id for m in d.preset_models()}
         self.assertIn("waifu2x.swin_unet.art_scan.noise2_scale4x", ids)
         self.assertIn(d.SEAM_FILTER.model_id, ids)
-        self.assertNotIn("omdb.1x-MangaJPEGHQ", ids)
+        self.assertIn("omdb.1x-MangaJPEGHQ", ids)
+        self.assertNotIn("omdb.1x-MangaJPEGMQ", ids)
+        self.assertNotIn("waifu2x.cunet.art.noise1", ids)
 
 
 class WireTests(unittest.TestCase):
@@ -209,6 +247,50 @@ class ImageTests(unittest.TestCase):
         image = Image.open(io.BytesIO(d.encode_page(page, page.rgb)))
         self.assertEqual((image.mode, image.size), ("L", (35, 17)))
 
+    def test_output_scale_enlarges_the_answer(self):
+        rng = np.random.default_rng(3)
+        gray = (rng.random((23, 31)) * 255).astype(np.uint8)
+        png = png_of(gray, "L")
+        sharpen = {"op": "sharpen", "engine": "waifu2x-art-scan", "scale": 4}
+        sessions = FakeSessions(d.MODELS["waifu2x.swin_unet.art_scan.scale4x"])
+        # No output_scale: the page's own size, as before.
+        out, info = d.denoise_page(sessions, d.resolve_recipe(recipe(sharpen)), png)
+        self.assertEqual((Image.open(io.BytesIO(out)).size, info["width"], info["height"]), ((31, 23), 31, 23))
+        # The model's own scale: nothing is scaled down, so the fake's nearest upscale comes back.
+        out, info = d.denoise_page(sessions, d.resolve_recipe({**recipe(sharpen), "output_scale": 4}), png)
+        image = Image.open(io.BytesIO(out))
+        self.assertEqual((image.mode, image.size, info["width"], info["height"]), ("L", (124, 92), 124, 92))
+        np.testing.assert_array_equal(np.asarray(image), gray.repeat(4, axis=0).repeat(4, axis=1))
+        # Between the two: scaled down to that multiple, and a later 1x step runs there.
+        for out_scale in (2, 3):
+            steps = d.resolve_recipe({**recipe({**sharpen, "strength": 0.5}, GRAIN), "output_scale": out_scale})
+            out, info = d.denoise_page(sessions, steps, png)
+            with self.subTest(out_scale=out_scale):
+                self.assertEqual(Image.open(io.BytesIO(out)).size, (31 * out_scale, 23 * out_scale))
+                self.assertEqual((info["width"], info["height"], len(info["steps"])), (31 * out_scale, 23 * out_scale, 2))
+
+    def test_an_answer_past_the_size_limit_is_page_too_large(self):
+        png = png_of(np.zeros((8, 8), dtype=np.uint8), "L")
+        steps = d.resolve_recipe({**recipe({"op": "sharpen", "engine": "waifu2x-art-scan", "scale": 4}), "output_scale": 4})
+        limit, d.DENOISE_MAX_RESULT_PNG_BYTES = d.DENOISE_MAX_RESULT_PNG_BYTES, 16
+        try:
+            with self.assertRaises(d.DenoiseError) as caught:
+                d.denoise_page(FakeSessions(d.MODELS["waifu2x.swin_unet.art_scan.scale4x"]), steps, png)
+        finally:
+            d.DENOISE_MAX_RESULT_PNG_BYTES = limit
+        self.assertEqual(caught.exception.error_code, "page_too_large")
+        # The answer's limit is its own, above the upload's.
+        self.assertEqual((d.DENOISE_MAX_PNG_BYTES, d.DENOISE_MAX_RESULT_PNG_BYTES), (16 << 20, 64 << 20))
+
+    def test_alpha_is_enlarged_with_the_page(self):
+        rgba = np.zeros((6, 9, 4), dtype=np.uint8)
+        rgba[..., 0] = 200
+        rgba[..., 3] = 77
+        page = d.decode_page(png_of(rgba, "RGBA"))
+        image = Image.open(io.BytesIO(d.encode_page(page, page.rgb.repeat(2, axis=1).repeat(2, axis=2))))
+        self.assertEqual((image.mode, image.size), ("RGBA", (18, 12)))
+        self.assertTrue((np.asarray(image)[..., 3] == 77).all())
+
     def test_alpha_is_carried_unchanged(self):
         rgba = np.zeros((6, 9, 4), dtype=np.uint8)
         rgba[..., 0] = 200
@@ -239,6 +321,7 @@ class SeedTests(unittest.TestCase):
                     handle.truncate(model.bytes)
             caps = d.denoise_capabilities(root)
             self.assertTrue(caps["available"])
+            self.assertEqual(caps["features"], ["output_scale"])
             self.assertEqual(caps["engines"]["denoise"], ["waifu2x-art-scan"])
             self.assertEqual(caps["engines"]["jpeg"], [])
 
@@ -304,6 +387,22 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual((status, body["error_code"]), (503, "capability_unavailable"))
         status, _, _ = gateway.handle_http_request("GET", "/mc/denoise/v1/capabilities", {}, b"")
         self.assertEqual(status, 503)
+
+    def test_a_worker_answer_past_the_size_limit_is_413(self):
+        def too_large(metadata, page_png):
+            raise d.DenoiseError("the denoised page is past the answer's size limit", "page_too_large")
+        self.worker.denoise = too_large
+        status, body = self.post(self.gateway, self.meta())
+        self.assertEqual((status, body["error_code"]), (413, "page_too_large"))
+
+    def test_an_answer_one_body_cannot_carry_is_413(self):
+        # Inside the answer's limit, past what the synchronous route's JSON body holds.
+        def large(metadata, page_png):
+            return {"protocol_version": d.DENOISE_VERSION, "request_digest": metadata["request_digest"],
+                    "page_png": bytes(d.DENOISE_MAX_RESPONSE_BYTES), "info": {"steps": []}}
+        self.worker.denoise = large
+        status, body = self.post(self.gateway, self.meta())
+        self.assertEqual((status, body["error_code"]), (413, "page_too_large"))
 
     def test_capabilities(self):
         status, _, raw = self.gateway.handle_http_request("GET", "/mc/denoise/v1/capabilities", {}, b"")

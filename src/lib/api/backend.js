@@ -445,7 +445,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: {proposalId: string}) => Promise<boolean>} cancelCloudClean - discard an unconfirmed cloud clean proposal
  * @property {() => Promise<Array<{id: string, targets: string[], recipe: Object}>>} denoisePresets - the page denoise presets the backend knows, from its own copy of `model/denoise-presets.json`
  * @property {(spec?: {presetId?: string}) => Promise<number|{secondsPerPage: number}>} benchmarkDenoiseLocal - denoise a reference page on this computer and answer the seconds one page took. Needs the local denoise model installed
- * @property {(spec: {runId: string, chapterId: string, pageIndices?: number[]|null, presetId: string, outDir: string}) => Promise<DenoiseReport>} denoiseChapterLocal - denoise the chapter's pages (every page when `pageIndices` is null) on this computer into `outDir`. `runId` is the caller's name for the run: `onDenoiseProgress` events carry it and `cancelDenoiseLocal` takes it. Answers when every page is done or the run was stopped
+ * @property {(spec: {runId: string, chapterId: string, pageIndices?: number[]|null, presetId: string, outDir: string, outputScale?: number|null}) => Promise<DenoiseReport>} denoiseChapterLocal - denoise the chapter's pages (every page when `pageIndices` is null) on this computer into `outDir`. `runId` is the caller's name for the run: `onDenoiseProgress` events carry it and `cancelDenoiseLocal` takes it. `outputScale` is the size the pages are saved at, as a whole multiple of their own: 1 (or null, or left out) for the same size, up to the preset's `maxScale`; anything else is refused with `denoise_output_scale_invalid`. Answers when every page is done or the run was stopped
  * @property {(spec: {runId: string}) => Promise<boolean>} cancelDenoiseLocal - stop a denoise, local or cloud: a local one at its next tile, a cloud one after the pages in flight. Pages already saved stay. Answers whether that run was in flight
  * @property {(spec: {chapterId: string}) => Promise<ReplaceReport>} replaceWithDenoised - take the files the chapter's last denoise wrote as its pages, for every page denoised from its bare source and not cleaned since. Detections and their masks stay; the other pages are kept and listed, those with no denoised file to take (never denoised, failed, or gone) as `missing`. When any page fails nothing is replaced
  * @property {(spec: {chapterId: string}) => Promise<DenoiseRun[]>} denoiseHistory - every denoise run the chapter's manifest remembers (the newest ten), newest first, with what each page has left
@@ -453,7 +453,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(handler: (progress: DenoiseProgress) => void) => Promise<() => void>} onDenoiseProgress - `denoise://progress`: a local denoise after each tile and each page
  * @property {(handler: (recorded: {runId: string}) => void) => Promise<() => void>} onDenoiseRecorded - `denoise://recorded`: a finished denoise's pages are in its chapter's manifest, after a run walking that chapter let it go. A denoise answers without waiting for that
  * @property {(target?: {provider: 'modal'|'beam', profileId: string}) => Promise<string[]>} cloudDenoisePresets - the preset ids the selected cloud deployment can run now, from its own advertisement. Sends no page and starts no GPU. Rejects with `capability_unavailable: ...` when the deployment has no page denoise
- * @property {(spec: {chapterId: string, pageIndices?: number[]|null, recipe: Object}) => Promise<CloudDenoiseProposal>} prepareCloudDenoise - state what a cloud denoise of the chapter would send and cost. Sends nothing
+ * @property {(spec: {chapterId: string, pageIndices?: number[]|null, recipe: Object}) => Promise<CloudDenoiseProposal>} prepareCloudDenoise - state what a cloud denoise of the chapter would send and cost. Sends nothing. `recipe` is a preset's recipe, with a top-level `output_scale` of 2 to 4 only when the pages are to be saved larger (`model/denoise.js#recipeAt`). Rejects with `capability_unavailable: the deployment cannot upscale` when the deployment is older than that
  * @property {(spec: {proposalId: string, planDigest: string, rightsAttested: boolean, retentionAcknowledged: boolean}) => Promise<{grantId: string, expiresAtMs: number}>} confirmCloudDenoise - mint the single-use grant `startCloudDenoise` spends, only for the plan the consent showed. A `standing` proposal is confirmed with `false` for both
  * @property {(spec: {grantId: string, outDir: string, runId?: string}) => Promise<DenoiseReport>} startCloudDenoise - spend the grant and denoise its pages into `outDir`. `runId` names the run as a local one's does: `onDenoiseProgress` carries it and `cancelDenoiseLocal` stops it. Answers when every page is done or the run was stopped
  * @property {(spec: {proposalId: string}) => Promise<boolean>} cancelCloudDenoise - discard an unconfirmed cloud denoise proposal
@@ -514,6 +514,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @typedef {Object} DenoiseRun
  * @property {number} created - seconds since the epoch
  * @property {string|null} preset
+ * @property {number} [scale] - the size its pages were saved at, as a multiple of their own: 1 for the same size, and what an older backend's missing field reads as
  * @property {'local'|'cloud'|null} target
  * @property {boolean|null} fromCleaned
  * @property {string} folder - where the files were written
@@ -550,7 +551,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {number} pages
  * @property {number[]} tooLargePages - pages in scope left out: past the gateway's limits for this recipe
  * @property {number} totalPixels
- * @property {Object} recipe
+ * @property {Object} recipe - the recipe as sent, with `output_scale` when the pages are saved larger
  * @property {string[]} modelIds - the pinned model of each step
  * @property {{low: number, high: number}} estimatedGpuSeconds
  * @property {{low: number, high: number}|null} estimatedCostUsd - null when the gateway states no price

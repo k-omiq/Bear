@@ -274,7 +274,7 @@ fn check_upload(recipe: &DenoiseRecipe, page_png: &[u8]) -> Result<Header, Strin
 
 /// Send one page through `recipe` and check the answer: the version and the
 /// digest echo, the recipe's models in order, and a PNG of the page's size
-/// within the size limit. `cancel` gives the page up while it is out
+/// (times the recipe's output scale) within the size limit. `cancel` gives the page up while it is out
 /// ([`DenoiseGateway::denoise_cancellable`]).
 pub(crate) fn denoise_page<G: DenoiseGateway + ?Sized>(gateway: &G, recipe: &DenoiseRecipe, page_png: &[u8],
     cancel: &AtomicBool) -> Result<DenoisedPage, String> {
@@ -449,6 +449,11 @@ pub(crate) fn prepare<G: DenoiseGateway + ?Sized>(
     let advertised = capabilities(gateway)?;
     if !advertised.supports(&recipe) {
         return Err("capability_unavailable: the deployment has no models for this recipe".into());
+    }
+    // An older gateway ignores the field and answers at the page's size, which
+    // would only be found out after the GPU ran every page.
+    if recipe.output_scale.is_some() && !advertised.upscales() {
+        return Err("capability_unavailable: the deployment cannot upscale".into());
     }
     let profile_epoch = GrantService::global().get_profile_epoch(destination.provider, &destination.profile_id);
     let (mut pages, mut too_large) = (Vec::new(), Vec::new());
@@ -885,10 +890,16 @@ pub(crate) fn upload_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
     encode(&upload,Format::Png).map_err(|e| format!("cloud_denoise_page_unreadable: {e}"))
 }
 
+/// The answer's pixels in the page's own storage: its depth, profile and
+/// alpha. An answer a whole 2 to 4 times the page each way (a recipe with an
+/// output scale, already checked against it) is written onto the page
+/// enlarged to that size.
 fn restore_denoised(source: &[u8], answer: &[u8]) -> Result<Vec<u8>,String> {
     let mut native = decode(source).map_err(|e|e.to_string())?;
     let result = decode(answer).map_err(|e|e.to_string())?;
-    if (native.width,native.height)!=(result.width,result.height) { return Err("cloud_denoise_page_changed".into()); }
+    let scale = (1..=4u32).find(|scale| (native.width.checked_mul(*scale),native.height.checked_mul(*scale))==(Some(result.width),Some(result.height)))
+        .ok_or("cloud_denoise_page_changed")?;
+    if scale > 1 { native = cleaner_core::page_denoise::enlarged(&native, scale); }
     let managed = cleaner_core::engines::model::editable_color(&native).map_err(|e|e.to_string())?;
     let display = cleaner_core::image::color::ManagedColor::for_raster(&result).map_err(|e|e.to_string())?;
     for y in 0..native.height { for x in 0..native.width {
@@ -975,10 +986,11 @@ pub(crate) fn record_written(
     report: &CloudDenoiseReport,
     preset: Option<&str>,
     target: wire::PresetTarget,
+    scale: u32,
 ) {
     if report.written.is_empty() { return; }
     let recorded = crate::run::lock_job(job_path).map_err(String::from)
-        .and_then(|_lock| record_held(job_path, pages, report, preset, target));
+        .and_then(|_lock| record_held(job_path, pages, report, preset, target, scale));
     recorded_or_logged(job_path, recorded);
 }
 
@@ -1004,28 +1016,31 @@ pub(crate) fn record_written_soon(
     report: &CloudDenoiseReport,
     preset: Option<&str>,
     target: wire::PresetTarget,
+    scale: u32,
 ) {
     if report.written.is_empty() { return; }
     if let Some(_lock) = cleaner_core::project::lock::try_lock(job_path) {
-        recorded_or_logged(job_path, record_held(job_path, pages, report, preset, target));
+        recorded_or_logged(job_path, record_held(job_path, pages, report, preset, target, scale));
         return;
     }
     let (app, run_id, job_path, pages, report, preset) =
         (app.clone(), run_id.to_owned(), job_path.to_owned(), pages.to_vec(), report.clone(), preset.map(str::to_owned));
     std::thread::spawn(move || {
-        record_written(&job_path, &pages, &report, preset.as_deref(), target);
+        record_written(&job_path, &pages, &report, preset.as_deref(), target, scale);
         use tauri::Emitter;
         let _ = app.emit(RECORDED_EVENT, serde_json::json!({ "runId": run_id }));
     });
 }
 
 /// [`record_written`]'s rows, written by a caller that holds the job.
+/// `scale` is the run's output scale, 1 for the page's own size.
 fn record_held(
     job_path: &Path,
     pages: &[PlannedPage],
     report: &CloudDenoiseReport,
     preset: Option<&str>,
     target: wire::PresetTarget,
+    scale: u32,
 ) -> Result<(), String> {
     let created = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_secs());
     let mut job = Job::open(job_path).map_err(|e| e.to_string())?;
@@ -1042,6 +1057,7 @@ fn record_held(
             from_cleaned: Some(page.appearance != bare),
             source: job.project.sources.get(page.source_idx).map(|source| source.rel_path.clone()),
             taken: false,
+            scale: u8::try_from(scale).ok().filter(|scale| *scale > 1),
         })
     }).collect();
     job.record_denoised(rows).map_err(|e| e.to_string())
@@ -1054,11 +1070,10 @@ fn recorded_or_logged(job_path: &Path, recorded: Result<(), String>) {
     }
 }
 
-/// The shipped preset a cloud recipe is, by its canonical bytes, for the
+/// The shipped preset a cloud recipe is, whatever its output scale, for the
 /// history to name. `None` for a recipe that is no preset.
 pub(crate) fn preset_of(recipe: &DenoiseRecipe) -> Option<&'static str> {
-    let bytes = recipe.canonical_bytes().ok()?;
-    wire::PRESETS.iter().find(|preset| preset.recipe().canonical_bytes().ok().as_ref() == Some(&bytes)).map(|preset| preset.id)
+    wire::preset_of(recipe).map(|preset| preset.id)
 }
 
 /* ------------------------------------------------------------------ */
@@ -1233,7 +1248,8 @@ fn start(app: &tauri::AppHandle, grant_id: &str, out_dir: &Path, run_id: &str) -
         plan: &plan, out_dir, names: &names, gateway: &client, grants: GrantService::global(),
         journal: Some(&journal), allowed: &allowed, read: &read,
     }, registered.cancel(), &emit);
-    record_written_soon(app, run_id, &job_path, &plan.pages, &report, preset_of(&plan.recipe), wire::PresetTarget::Cloud);
+    record_written_soon(app, run_id, &job_path, &plan.pages, &report, preset_of(&plan.recipe), wire::PresetTarget::Cloud,
+        plan.recipe.output_scale());
     Ok(report)
 }
 
@@ -1389,6 +1405,51 @@ mod tests {
         assert_eq!(&restored.data[..8],&source.data[..8]);
         for channel in 0..3 { assert!(restored.sample(1,0,channel).abs_diff(14146)<=1,"independent IEC sRGB inverse"); }
         assert_eq!(restored.sample(1,0,3),32000);
+
+        // An answer twice the page each way lands on the page enlarged: its
+        // depth and metadata, and each pixel's alpha over the four it became.
+        let twice=Raster{width:4,height:2,data:vec![128;24],..answer.clone()};
+        let restored=decode(&restore_denoised(&bytes,&encode(&twice,Format::Png).unwrap()).unwrap()).unwrap();
+        assert_eq!((restored.width,restored.height,restored.mode,restored.depth,restored.color.gamma),
+            (4,2,source.mode,source.depth,Some(100_000)));
+        for y in 0..2 { for x in 0..4 {
+            assert_eq!(restored.sample(x,y,3),source.sample(x/2,0,3),"alpha at ({x}, {y})");
+        }}
+        for channel in 0..3 { assert!(restored.sample(3,1,channel).abs_diff(14146)<=1); }
+        // No whole multiple of the page is another page's answer.
+        let odd=Raster{width:3,height:1,data:vec![128;9],..answer.clone()};
+        assert_eq!(restore_denoised(&bytes,&encode(&odd,Format::Png).unwrap()).unwrap_err(),"cloud_denoise_page_changed");
+    }
+
+    /// A recipe with an output scale goes only to a gateway that keeps it: an
+    /// older one would answer at the page's size after the GPU ran.
+    #[test]
+    fn an_output_scale_is_refused_before_anything_is_sent_to_a_gateway_that_ignores_it() {
+        let dir=scratch("upscale-plan");
+        let page_path=dir.join("page.png");std::fs::write(&page_path,rgb(16,16)).unwrap();
+        let source=cleaner_core::ingest::source_ref(&page_path,&rgb(16,16)).unwrap();
+        let path=dir.join("chapter.mtclean");
+        let project=cleaner_core::project::Project::new(&dir,"test",cleaner_core::project::StripMode::Single,&[source]);
+        drop(Job::create(&path,project).unwrap());
+        struct Presets;
+        impl DenoiseGateway for Presets {
+            fn capabilities(&self) -> Result<DenoiseCapabilities, String> {
+                Ok(serde_json::from_value(serde_json::json!({
+                    "protocol_version": VERSION, "available": true, "presets": ["waifu2x-scan-4x-n2"],
+                    "engines": {"denoise": [], "sharpen": [], "jpeg": []}, "models": [],
+                })).unwrap())
+            }
+            fn denoise(&self,_:&DenoiseMetadata,_:&[u8])->Result<DenoiseResult,String> {panic!("nothing is sent")}
+        }
+        let scaled=|out| DenoiseRecipe { output_scale: out, ..wire::preset("waifu2x-scan-4x-n2").unwrap().recipe() };
+        let ask=|recipe| prepare(&path,"upscale".into(),None,recipe,Destination {
+            provider:CloudProvider::Modal,profile_id:"upscale-test".into(),profile_name:"test".into(),endpoint_fingerprint:"test".into(),
+        },&Presets);
+        assert_eq!(ask(scaled(Some(2))).err().as_deref(),Some("capability_unavailable: the deployment cannot upscale"));
+        let plain=ask(scaled(None)).unwrap();
+        assert_eq!(plain.pages,1,"the same preset at the page's size is taken");
+        proposals().lock().unwrap().remove(&plain.proposal_id);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn rgba_page(level: u8, tint: Option<[u8; 3]>, alpha: u8) -> Raster {

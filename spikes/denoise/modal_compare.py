@@ -6,7 +6,9 @@ its own volume, so the installation's deployed app and weights volume are untouc
     modal run spikes/denoise/modal_compare.py --chapter "<dir of PNG pages>" --out <dir> [--limit N]
     modal volume delete mc-denoise-spike   # afterwards
 
-Writes <out>/<variant>/<page>.png and <out>/timings.json.
+Writes <out>/<variant>/<page>.png and <out>/timings.json. With --timings-only no page
+comes back, only each answer's size and time, for the interface's time table
+(src/lib/model/denoise-presets.json) over a slow link.
 """
 
 from __future__ import annotations
@@ -66,10 +68,28 @@ VARIANTS_R2 = {
 }
 VARIANTS.update(VARIANTS_R2)
 
+# Round 3 (2026-10-10): the presets added that day that no earlier variant is, and
+# recipes with an output scale, which keep the page larger. A dict is a whole recipe.
+VARIANTS_R3 = {
+    "jpeg-lq": [_w("jpeg", "mangajpeg-lq")],
+    "cugan-4x-conservative": [_w("sharpen", "realcugan", scale=4)],
+    "w2x-art-2x-n1": [_w("sharpen", "waifu2x-art", scale=2, level=1)],
+    "w2x-art-2x-n3": [_w("sharpen", "waifu2x-art", scale=2, level=3)],
+    "cugan-2x-conservative@2x": {"schema": 1, "steps": [_w("sharpen", "realcugan", scale=2)], "output_scale": 2},
+    "w2x-scan-4x-n2@2x": {"schema": 1, "steps": [_w("sharpen", "waifu2x-art-scan", scale=4, level=2)], "output_scale": 2},
+    "w2x-scan-4x-n2@4x": {"schema": 1, "steps": [_w("sharpen", "waifu2x-art-scan", scale=4, level=2)], "output_scale": 4},
+    "mangajanai-4x@4x": {"schema": 1, "steps": [_w("sharpen", "mangajanai", scale=4)], "output_scale": 4},
+}
+VARIANTS.update(VARIANTS_R3)
+
+
+def _recipe(spec):
+    return spec if isinstance(spec, dict) else {"schema": 1, "steps": spec}
+
 
 def _all_models():
     import mc_denoise as d
-    steps = [step for spec in VARIANTS.values() for step in d.resolve_recipe({"schema": 1, "steps": spec})]
+    steps = [step for spec in VARIANTS.values() for step in d.resolve_recipe(_recipe(spec))]
     return d.models_for(steps)
 
 
@@ -91,19 +111,25 @@ class Denoiser:
         self.sessions = d.SessionCache(d.ensure_models(ROOT, _all_models(), download=False))
 
     @modal.method()
-    def page(self, name: str, png: bytes, variants: list) -> dict:
+    def page(self, name: str, png: bytes, variants: list, timings_only: bool = False) -> dict:
         results = {}
         for variant in variants:
-            steps = self.d.resolve_recipe({"schema": 1, "steps": VARIANTS[variant]})
+            steps = self.d.resolve_recipe(_recipe(VARIANTS[variant]))
             started = time.perf_counter()
-            out, info = self.d.denoise_page(self.sessions, steps, png)
+            try:
+                out, info = self.d.denoise_page(self.sessions, steps, png)
+            except self.d.DenoiseError as error:
+                # A refusal is a result too: an enlarged answer can outgrow the size limit.
+                out, info = b"", {"error": error.error_code}
             info["total_ms"] = round((time.perf_counter() - started) * 1000)
-            results[variant] = (out, info)
+            info["png_bytes"] = len(out)
+            results[variant] = (b"" if timings_only else out, info)
         return {"name": name, "results": results}
 
 
 @app.local_entrypoint()
-def main(chapter: str, out: str, limit: int = 0, only: str = "", warm: bool = False) -> None:
+def main(chapter: str, out: str, limit: int = 0, only: str = "", warm: bool = False,
+         timings_only: bool = False) -> None:
     pages = sorted(Path(chapter).glob("*.png"))
     if limit:
         pages = pages[:limit]
@@ -114,12 +140,14 @@ def main(chapter: str, out: str, limit: int = 0, only: str = "", warm: bool = Fa
     started = time.time()
     # --warm runs every variant twice per page and keeps the second timing, so the
     # numbers exclude model loading (what a user sees after the first page).
-    args = [(p.name, p.read_bytes(), variants * 2 if warm else variants) for p in pages]
+    args = [(p.name, p.read_bytes(), variants * 2 if warm else variants, timings_only) for p in pages]
+    out_dir.mkdir(parents=True, exist_ok=True)
     for result in Denoiser().page.starmap(args, order_outputs=False):
         for variant, (png, info) in result["results"].items():
-            target = out_dir / variant / result["name"]
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(png)
+            if png:
+                target = out_dir / variant / result["name"]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(png)
             timings.setdefault(variant, {})[result["name"]] = info
         print("done", result["name"], flush=True)
     (out_dir / "timings.json").write_text(json.dumps(

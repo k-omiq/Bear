@@ -743,6 +743,11 @@ pub struct DenoisedPage {
     /// Set by [`Job::replace_source`] when this file was taken as the page.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub taken: bool,
+    /// How many times the page each way the file is, when the run asked for
+    /// an output scale. `None` is the page's own size. A larger file taken as
+    /// the page takes the page's masks with it ([`Job::replace_source`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<u8>,
 }
 
 /// How many denoise runs a manifest remembers. A run is the rows sharing one
@@ -1123,6 +1128,10 @@ impl Project {
         (!row.taken).then_some(row)
     }
 }
+
+/// The largest file [`Job::replace_source`] takes as a page, as a multiple of
+/// the page on each axis: page denoise's largest output scale.
+pub const MAX_PAGE_ENLARGEMENT: u32 = 4;
 
 /// Why [`Job::replace_source`] kept a page's source. Nothing was written.
 #[derive(Debug, thiserror::Error)]
@@ -3173,24 +3182,29 @@ impl Job {
         self.flush()
     }
 
-    /// Take `bytes`, a PNG of the page's displayed size, as source `source_idx`
-    /// from now on: typically the file page denoise wrote for it. They are
-    /// copied into the sidecar as `pages/denoised/<digest>/<page name>.png`,
-    /// a directory of their own so the file keeps the page's name (an export
-    /// names its files after it), and the source row names that file. The
-    /// old file stays where it is.
+    /// Take `bytes`, a PNG of the page's displayed size or a whole 2 to 4
+    /// times that on both axes, as source `source_idx` from now on: typically
+    /// the file page denoise wrote for it. They are copied into the sidecar
+    /// as `pages/denoised/<digest>/<page name>.png`, a directory of their own
+    /// so the file keeps the page's name (an export names its files after
+    /// it), and the source row names that file. The old file stays where it
+    /// is.
     ///
-    /// Only the source changes. Detections with their masks and lettering,
-    /// and the examined and errored lists, stay: a page of the same size is
-    /// the same page to every coordinate stored against it. The page's
-    /// current denoise row ([`Project::current_denoised`]) stays as history,
-    /// marked taken, and keeps the source it was made from, since the file
-    /// it names is now the page and the raw page is only there.
+    /// A page of the same size is the same page to every coordinate stored
+    /// against it, so only the source changes: detections with their masks
+    /// and lettering, and the examined and errored lists, stay. A larger page
+    /// takes them with it ([`Job::enlarge_page_regions`]): each mask and box
+    /// grows by the factor the page did. The page's current denoise row
+    /// ([`Project::current_denoised`]) stays as history, marked taken, and
+    /// keeps the source it was made from, since the file it names is now the
+    /// page and the raw page is only there.
     ///
     /// Refused, with nothing written, for a page with cleaning on it
-    /// ([`Project::has_cleaning`]) or bytes that are not a whole PNG of the
-    /// page's size. The manifest is not saved here: a batch of pages is one
-    /// [`Job::flush`].
+    /// ([`Project::has_cleaning`]) or bytes that are not a whole PNG of one of
+    /// those sizes. The manifest is not saved here: a batch of pages is one
+    /// [`Job::flush`]. The mask files a larger page superseded stay until the
+    /// next open sweeps them, so the manifest on disk never names a missing
+    /// file.
     pub fn replace_source(&mut self, source_idx: usize, bytes: &[u8]) -> Result<(), ReplaceError> {
         let _write = self.begin_write()?;
         let source = self.project.sources.get(source_idx).ok_or(ReplaceError::NoSource(source_idx))?;
@@ -3202,9 +3216,8 @@ impl Job {
         }
         let page = crate::image::decode(bytes).map_err(|e| ReplaceError::Unreadable(e.to_string()))?;
         let (width,height)=source.orientation.size(source.w,source.h);
-        if (page.width, page.height) != (width,height) {
-            return Err(ReplaceError::SizeChanged { w: width, h: height, found_w: page.width, found_h: page.height });
-        }
+        let by = (1..=MAX_PAGE_ENLARGEMENT).find(|by| (page.width, page.height) == (width * by, height * by))
+            .ok_or(ReplaceError::SizeChanged { w: width, h: height, found_w: page.width, found_h: page.height })?;
         // Denoise works in the visible page. Persist native samples and their
         // orientation so detections/history and standalone exports still agree.
         let owned_bytes = if source.orientation.0 == 1 { std::borrow::Cow::Borrowed(bytes) } else {
@@ -3220,6 +3233,9 @@ impl Job {
         std::fs::create_dir_all(&dir).map_err(|e| StoreError::io(&dir, e))?;
         let path = dir.join(format!("{stem}.png"));
         buffers::write_atomic(&path, &owned_bytes)?;
+        if by > 1 {
+            self.enlarge_page_regions(source_idx, by)?;
+        }
         let rel_path = relative_to(self.root(), &path);
         let before = std::mem::replace(&mut self.project.sources[source_idx].rel_path, rel_path);
         if let Some(at) = newest_denoised(&self.project.denoised, source_idx) {
@@ -3236,6 +3252,81 @@ impl Job {
         row.mtime = mtime_of(&path);
         row.mode = page.mode;
         row.bit_depth = page.depth;
+        row.w *= by;
+        row.h *= by;
+        Ok(())
+    }
+
+    /// Carry what Detect stored for a page onto the same page `by` times
+    /// larger: every detection's masks, lettering and box, and every held
+    /// region's box and lettering, grow by `by`, with the lengths measured in
+    /// page pixels (padding, fitted thickness, proxy scale). The masks go to
+    /// fresh files, as a hand edit's do ([`Job::rewrite_page_detections`]).
+    /// A detection's text group goes: its evidence is the smaller page's.
+    ///
+    /// Nothing in the manifest changes unless every file was written.
+    fn enlarge_page_regions(&mut self, source_idx: usize, by: u32) -> Result<(), StoreError> {
+        let _detection_io = detection_io().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let enlarge = |from: &Path, to: &Path| -> Result<Vec<u8>, StoreError> {
+            let bytes = std::fs::read(from).map_err(|error| StoreError::io(from, error))?;
+            let bytes = buffers::encode_mask(&buffers::decode_mask(&bytes)?.enlarged(by));
+            buffers::write_atomic(to, &bytes)?;
+            Ok(bytes)
+        };
+        let mut detections = Vec::new();
+        for (at, old) in self.project.detections.iter().enumerate().filter(|(_, row)| row.source_idx == source_idx) {
+            let mut record = old.clone();
+            record.mask_ref = format!("detections/{}.e{}.mask", old.id, old.edits().saturating_add(1));
+            let mask = enlarge(&self.dir.join(&old.mask_ref), &self.dir.join(&record.mask_ref))?;
+            record.mask_sha256 = sha256_hex(&mask);
+            // A detection from before lettering was stored has no ink file,
+            // and reads its mask as its lettering: the new mask is both.
+            match enlarge(&self.dir.join(old.ink_ref()), &self.dir.join(record.ink_ref())) {
+                Err(StoreError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+                    buffers::write_atomic(&self.dir.join(record.ink_ref()), &mask)?;
+                }
+                written => { written?; }
+            }
+            if old.padding_px > 0 {
+                enlarge(&self.dir.join(old.base_mask_ref()), &self.dir.join(record.base_mask_ref()))?;
+                enlarge(&self.dir.join(old.base_ink_ref()), &self.dir.join(record.base_ink_ref()))?;
+            }
+            record.bbox = old.bbox.enlarged(by);
+            record.padding_px = old.padding_px * by;
+            if let Some(fit) = &mut record.fit {
+                fit.thickness *= by;
+                fit.scale *= by as f32;
+            }
+            record.group = None;
+            detections.push((at, record));
+        }
+        let mut held = Vec::new();
+        for (at, old) in self.project.regions_untouched.iter().enumerate().filter(|(_, row)| row.source_idx == source_idx) {
+            let mut row = old.clone();
+            row.bbox = old.bbox.enlarged(by);
+            if let Some(lettering) = &mut row.lettering {
+                let from = self.dir.join(&lettering.mask_ref);
+                match std::fs::read(&from) {
+                    Ok(bytes) => {
+                        let bytes = buffers::encode_mask(&buffers::decode_mask(&bytes)?.enlarged(by));
+                        lettering.mask_ref = format!("candidates/{}.mask", sha256_hex(&bytes));
+                        buffers::write_atomic(&self.dir.join(&lettering.mask_ref), &bytes)?;
+                        lettering.scale *= by as f32;
+                    }
+                    // A row whose file is gone looks under its box
+                    // ([`Job::load_held_lettering`]), and still does.
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => row.lettering = None,
+                    Err(error) => return Err(StoreError::io(&from, error)),
+                }
+            }
+            held.push((at, row));
+        }
+        for (at, record) in detections {
+            self.project.detections[at] = record;
+        }
+        for (at, row) in held {
+            self.project.regions_untouched[at] = row;
+        }
         Ok(())
     }
 
@@ -4556,6 +4647,92 @@ mod tests {
             let exported=crate::export::export_page(&owned,&[],crate::export::Target::Explicit(Format::Tiff)).unwrap();let exported=crate::image::decode(&exported.bytes).unwrap();
             assert_eq!((exported.width,exported.height),(display.width,display.height));assert_eq!(exported.data,display.data);
         }
+    }
+
+    /// A larger denoised file taken as the page takes what Detect stored with
+    /// it: each mask, box and pixel length grows by the factor the page did,
+    /// in every orientation, and the reopened job reads all of it.
+    #[test]
+    fn a_larger_replaced_source_grows_its_masks_with_the_page() {
+        for (value, by) in [(1, 2), (1, 4), (6, 3), (8, 2)] {
+            let scratch = Scratch::new(&format!("replace-larger-{value}-{by}"));
+            let mut job = a_job(&scratch);
+            let orientation = crate::image::orientation::Orientation(value);
+            job.project.sources[0].orientation = orientation;
+            let before = job.project.sources[0].clone();
+            let original = crate::image::decode(&std::fs::read(job.source_path(0).unwrap()).unwrap()).unwrap();
+            let shown = orientation.raster(&original);
+
+            let base = Mask::filled(Rect::new(8, 12, 5, 7));
+            let mut grown = Mask::filled(Rect::new(6, 10, 9, 11));
+            grown.bits[3] = 0;
+            let mut record = a_detection(&mut job, base.bounds);
+            record.padding_px = 2;
+            let fit = record.fit.expect("the fixture records its fit");
+            let mut lettering = Mask::empty(Rect::new(2, 3, 4, 2));
+            lettering.set(2, 3, true);
+            lettering.set(5, 4, true);
+            job.replace_page_detection_results(0, "c1-p001", vec![LoadedDetection {
+                record, mask: grown.clone(), ink: base.clone(), evidence: None, base: Some((base.clone(), base.clone())),
+            }], vec![PendingUntouched {
+                row: RegionUntouched { source_idx: 0, bbox: lettering.bounds, reason: "review.reason.unassignedMask".into(),
+                    inside_bubble: Some(false), lettering: None },
+                lettering: Some((lettering.clone(), 1.5)),
+            }]).unwrap();
+            let stored = job.project.detections[0].clone();
+            let held = job.project.regions_untouched[0].clone();
+
+            let larger = crate::page_denoise::enlarged(&shown, by);
+            job.replace_source(0, &encode(&larger, Format::Png).unwrap()).unwrap();
+            job.flush().unwrap();
+
+            let reopened = Job::open(job.path()).unwrap();
+            let source = &reopened.project.sources[0];
+            assert_eq!((source.w, source.h), (before.w * by, before.h * by));
+            assert!(reopened.verify_sources().iter().all(|state| !state.is_stale()));
+            let native = crate::image::decode(&std::fs::read(reopened.source_path(0).unwrap()).unwrap()).unwrap();
+            assert_eq!(orientation.raster(&native).data, larger.data);
+
+            let found = reopened.load_detection(&stored.id).unwrap().expect("the detection is kept");
+            assert_eq!(found.mask, grown.enlarged(by), "orientation {value}, {by}x");
+            assert_eq!(found.ink, base.enlarged(by));
+            assert_eq!(found.record.bbox, base.bounds.enlarged(by));
+            assert_eq!(reopened.load_detection_base(&stored.id).unwrap().unwrap(), (base.enlarged(by), base.enlarged(by)));
+            let record = &reopened.project.detections[0];
+            assert_eq!((record.padding_px, record.edits(), record.group.as_ref()), (2 * by, 1, None));
+            let kept = record.fit.expect("the fit is kept");
+            assert_eq!((kept.route, kept.thickness, kept.scale), (fit.route, fit.thickness * by, fit.scale * by as f32));
+            for file in stored.files() {
+                assert!(!reopened.sidecar().join(file).exists(), "the smaller page's mask files are swept at open");
+            }
+
+            let row = &reopened.project.regions_untouched[0];
+            assert_eq!(row.bbox, held.bbox.enlarged(by));
+            assert_eq!(reopened.load_held_lettering(row).unwrap(), Some((lettering.enlarged(by), 1.5 * by as f32)));
+        }
+    }
+
+    /// Only a whole multiple of the page on both axes, up to the largest
+    /// output scale, is the same page larger.
+    #[test]
+    fn a_source_is_kept_for_a_file_that_is_not_the_page_enlarged() {
+        let scratch = Scratch::new("replace-not-a-multiple");
+        let mut job = a_job(&scratch);
+        let before = job.project.clone();
+        let page = fixtures::by_name("l8").raster;
+        let sized = |width: u32, height: u32| {
+            let mut other = page.clone();
+            (other.width, other.height) = (width, height);
+            other.data = vec![0; other.stride() * height as usize];
+            encode(&other, Format::Png).unwrap()
+        };
+        for (width, height) in [(page.width * 2, page.height), (page.width * 2, page.height * 3),
+            (page.width * 2 + 1, page.height * 2), (page.width * 5, page.height * 5)] {
+            assert!(matches!(job.replace_source(0, &sized(width, height)), Err(ReplaceError::SizeChanged { .. })),
+                "{width}x{height}");
+        }
+        assert_eq!(job.project, before);
+        assert!(!job.sidecar().join("pages").exists(), "nothing was written");
     }
 
     fn a_denoised_row(source_idx: usize, path: &str, created: u64) -> DenoisedPage {

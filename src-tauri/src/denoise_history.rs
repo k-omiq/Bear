@@ -83,6 +83,9 @@ pub struct DenoiseRun {
     pub from_cleaned: Option<bool>,
     /// The folder the files were written to, from the first page's file.
     pub folder: String,
+    /// How many times the page each way the run's files are: 1 for the
+    /// page's own size, 2 to 4 for a run with an output scale.
+    pub scale: u32,
     /// In reading order.
     pub pages: Vec<DenoiseRunPage>,
 }
@@ -122,6 +125,7 @@ pub(crate) fn history(project: &Project) -> Vec<DenoiseRun> {
                 target: row.target,
                 from_cleaned: None,
                 folder: row.path.parent().map(|dir| dir.display().to_string()).unwrap_or_default(),
+                scale: row.scale.map_or(1, u32::from),
                 pages: vec![page],
             }),
         }
@@ -258,6 +262,7 @@ mod tests {
             from_cleaned: Some(false),
             source: Some(job.project.sources[at].rel_path.clone()),
             taken: false,
+            scale: None,
         }).collect();
         job.record_denoised(rows).unwrap();
         manifest

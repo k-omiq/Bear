@@ -454,8 +454,9 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // the cloud three spend money, and the local one writes files.
     denoisePresets: () => call(IMPLEMENTED.denoisePresets),
     benchmarkDenoiseLocal: ({ presetId } = {}) => call(IMPLEMENTED.benchmarkDenoiseLocal, { presetId: presetId ?? null }),
-    denoiseChapterLocal: ({ runId, chapterId, pageIndices = null, presetId, outDir }) =>
-      call(IMPLEMENTED.denoiseChapterLocal, { runId, chapterId, pageIndices, presetId, outDir }),
+    // `outputScale` is 1 to 4, or null for the page's own size.
+    denoiseChapterLocal: ({ runId, chapterId, pageIndices = null, presetId, outDir, outputScale = null }) =>
+      call(IMPLEMENTED.denoiseChapterLocal, { runId, chapterId, pageIndices, presetId, outDir, outputScale: outputScale ?? null }),
     cancelDenoiseLocal: ({ runId }) => call(IMPLEMENTED.cancelDenoiseLocal, { runId }),
     replaceWithDenoised: ({ chapterId }) => call(IMPLEMENTED.replaceWithDenoised, { chapterId }),
     denoiseHistory: ({ chapterId }) => call(IMPLEMENTED.denoiseHistory, { chapterId }),

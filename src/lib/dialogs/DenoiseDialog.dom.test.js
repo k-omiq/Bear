@@ -147,7 +147,10 @@ describe('the denoise dialog', () => {
     const start = vi.spyOn(mock, 'startCloudDenoise')
     const { getByRole, getByLabelText, container, held, phase } = await open()
 
-    expect(container.querySelectorAll('[data-preset]')).toHaveLength(6)
+    // Black and white pages first: the presets made for them and for both.
+    expect(container.querySelector('[data-pages]')?.getAttribute('data-pages')).toBe('bw')
+    expect(container.querySelectorAll('[data-preset]')).toHaveLength(12)
+    expect(container.querySelector('[data-preset="waifu2x-art-2x-n1"]')).toBeNull()
     expect(container.querySelector('[data-basis]')?.getAttribute('data-basis')).toMatch(/^(pages|reference)$/)
     await fireEvent.click(getByRole('button', { name: t('denoise.action.review') }))
     await waitFor(() => expect(phase()).toBe('consent'))
@@ -164,6 +167,81 @@ describe('the denoise dialog', () => {
     await waitFor(() => expect(phase()).toBe('summary'))
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ outDir: expect.stringMatching(/denoised$/) }))
     expect(container.querySelector('[data-written]')?.getAttribute('data-written')).toBe(String(held.pages.length))
+  })
+
+  it('keeps the page larger on this computer when an output size is picked', async () => {
+    await mock.downloadModelGroup({ id: 'pageDenoise' })
+    await vi.waitFor(async () => {
+      const view = await mock.listModels()
+      expect(view.models.filter((row) => row.requiredBy.includes('pageDenoise')).every((row) => row.installed)).toBe(true)
+    }, { timeout: 5000 })
+    const local = vi.spyOn(mock, 'denoiseChapterLocal')
+    const { getByRole, queryByRole, container, held, phase } = await open()
+
+    // The local model is 4x, so every size up to it is offered, and same size is the start.
+    expect(container.querySelector('[data-output]')?.getAttribute('data-output')).toBe('1')
+    expect(getByRole('radio', { name: t('denoise.output.same') }).getAttribute('aria-checked')).toBe('true')
+    expect(queryByRole('radio', { name: t('denoise.output.times', { scale: 4 }) })).toBeTruthy()
+    expect(container.querySelector('[data-output-larger]')).toBeNull()
+
+    await fireEvent.click(getByRole('radio', { name: t('denoise.output.times', { scale: 2 }) }))
+    expect(container.querySelector('[data-output]')?.getAttribute('data-output')).toBe('2')
+    expect(container.querySelector('[data-output-larger]')?.textContent).toBe(t('denoise.output.larger'))
+    const first = held.pages[0]
+    if (first?.width > 0 && first?.height > 0) {
+      expect(container.querySelector('[data-output-becomes]')?.textContent)
+        .toContain(`${first.width * 2} x ${first.height * 2}`)
+    }
+
+    const run = getByRole('button', { name: t('denoise.action.run', { count: held.pages.length }) })
+    await waitFor(() => expect(run.hasAttribute('disabled')).toBe(false))
+    await fireEvent.click(run)
+    await waitFor(() => expect(phase()).toBe('summary'))
+    expect(local).toHaveBeenCalledWith(expect.objectContaining({ presetId: 'waifu2x-scan-4x-n2', outputScale: 2 }))
+    // The history names the size a larger page was saved at.
+    const [newest] = await mock.denoiseHistory({ chapterId: CHAPTER_ID })
+    expect(newest.scale).toBe(2)
+  })
+
+  it('sends the output size with the recipe on the cloud, and only up to what the preset gives', async () => {
+    await provision()
+    setDenoiseTarget('cloud')
+    setDenoisePreset('realcugan-3x-conservative')
+    const prepare = vi.spyOn(mock, 'prepareCloudDenoise')
+    const { getByRole, queryByRole, container, phase } = await open()
+    await waitFor(() => expect(container.querySelector('[data-preset="realcugan-3x-conservative"]')?.getAttribute('aria-checked')).toBe('true'))
+
+    // A 3x model offers up to 3x.
+    expect(queryByRole('radio', { name: t('denoise.output.times', { scale: 3 }) })).toBeTruthy()
+    expect(queryByRole('radio', { name: t('denoise.output.times', { scale: 4 }) })).toBeNull()
+    await fireEvent.click(getByRole('radio', { name: t('denoise.output.times', { scale: 3 }) }))
+
+    // A preset that cannot give the size goes back to same size, and a 1x one offers no choice.
+    await fireEvent.click(/** @type {Element} */ (container.querySelector('[data-preset="mangajanai-2x"]')))
+    expect(container.querySelector('[data-output]')?.getAttribute('data-output')).toBe('1')
+    await fireEvent.click(/** @type {Element} */ (container.querySelector('[data-preset="waifu2x-scan-n1"]')))
+    expect(queryByRole('radio', { name: t('denoise.output.same') })).toBeNull()
+    expect(container.querySelector('[data-output]')?.textContent).toContain(t('denoise.output.fixed'))
+
+    await fireEvent.click(/** @type {Element} */ (container.querySelector('[data-preset="mangajanai-2x"]')))
+    await fireEvent.click(getByRole('radio', { name: t('denoise.output.times', { scale: 2 }) }))
+    await fireEvent.click(getByRole('button', { name: t('denoise.action.review') }))
+    await waitFor(() => expect(phase()).toBe('consent'))
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({
+      recipe: { schema: 1, steps: [{ op: 'sharpen', engine: 'mangajanai', scale: 2 }], output_scale: 2 },
+    }))
+    expect(container.querySelector('[data-fact="output"]')?.textContent).toBe(t('denoise.consent.output', { scale: 2 }))
+  })
+
+  it('at same size sends the preset\'s own recipe, with no output scale in it', async () => {
+    await provision()
+    setDenoiseTarget('cloud')
+    const prepare = vi.spyOn(mock, 'prepareCloudDenoise')
+    const { getByRole, container, phase } = await open()
+    await fireEvent.click(getByRole('button', { name: t('denoise.action.review') }))
+    await waitFor(() => expect(phase()).toBe('consent'))
+    expect(prepare.mock.calls[0][0].recipe).not.toHaveProperty('output_scale')
+    expect(container.querySelector('[data-fact="output"]')).toBeNull()
   })
 
   it('offers no Cloud, and says why, when the endpoint was set up without Page denoise', async () => {

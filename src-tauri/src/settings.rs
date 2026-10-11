@@ -673,7 +673,8 @@ mod tests {
         for bad in [serde_json::json!("custom"), serde_json::json!("Mangajanai-2x"), serde_json::json!(2)] {
             assert!(write_patch(&path, serde_json::json!({"denoisePreset": bad})).is_err(), "{bad}");
         }
-        assert_eq!(read_file(&path).unwrap()["denoisePreset"], "mangajanai-4x", "a refused patch writes nothing");
+        let last = cleaner_core::cloud_denoise_wire::PRESETS.last().unwrap().id;
+        assert_eq!(read_file(&path).unwrap()["denoisePreset"], last, "a refused patch writes nothing");
         assert!(write_patch(&path, serde_json::json!({"denoisePreset": null})).is_ok());
 
         assert_eq!(write_patch(&path, serde_json::json!({"denoiseLocalSecondsPerPage": 32.5})).unwrap()

@@ -3,8 +3,9 @@
  *
  * Cloud: the preset's measured seconds on the reference page, or scaled to
  * the chapter's own pages when the caller has them, always said to be on a
- * cloud GPU. Local: the figure measured on this computer, or `null` when
- * there is none, which the row draws as "Not measured yet".
+ * cloud GPU; `null` for a preset the table has no seconds for. Local: the
+ * figure measured on this computer, or `null` when there is none. The row
+ * draws a `null` as "Not measured yet".
  */
 
 import { t } from '../../i18n/index.js'
@@ -25,8 +26,9 @@ export function durationWords(seconds) {
 export function presetTime(preset, target, { pages = null, localPerPage = null } = {}) {
   if (target === 'cloud') {
     const perPage = pages?.length
-      ? chapterEstimate({ target, preset, pages }).perPage ?? preset.cloudSecondsPerPage
-      : preset.cloudSecondsPerPage
+      ? chapterEstimate({ target, preset, pages }).perPage
+      : localSeconds(preset.cloudSecondsPerPage)
+    if (perPage === null) return null
     return {
       value: t('denoise.time.cloud', { duration: durationWords(perPage) }),
       where: t('denoise.time.cloudWhere', { gpu: DENOISE_REFERENCE.gpu }),

@@ -8,7 +8,7 @@
  */
 
 import { t } from '../i18n/index.js'
-import { PRESET_TEXT } from './denoise.js'
+import { PRESET_TEXT, runScale } from './denoise.js'
 
 /** @typedef {import('../api/backend.js').DenoiseRun} DenoiseRun */
 
@@ -33,9 +33,17 @@ export function runWhen(created) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(created * 1000)
 }
 
-/** The run's first line: when, and which preset. @param {DenoiseRun} run */
+/**
+ * The run's first line: when, which preset, and the size its pages were saved
+ * at when that is larger than their own. A run from before sizes were
+ * recorded was saved at the same size, and reads so.
+ *
+ * @param {DenoiseRun} run
+ */
 export function runLabel(run) {
-  return t('home.denoised.run', { when: runWhen(run.created), preset: presetName(run.preset) })
+  const scale = runScale(run.scale)
+  const params = { when: runWhen(run.created), preset: presetName(run.preset) }
+  return scale > 1 ? t('home.denoised.runScaled', { ...params, scale }) : t('home.denoised.run', params)
 }
 
 /**

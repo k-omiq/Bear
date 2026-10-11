@@ -1254,6 +1254,7 @@ export const en = {
       failed: 'Could not read the denoise history of chapter {number}.',
       // A run's two lines: when and which preset, then the facts.
       run: '{when} · {preset}',
+      runScaled: '{when} · {preset} · saved at {scale}x',
       presetUnknown: 'Preset not recorded',
       fromRaw: 'From raw pages',
       fromCleaned: 'From cleaned pages',
@@ -2170,6 +2171,55 @@ export const en = {
         name: 'Real-CUGAN 3x strong denoise',
         note: 'Removes heavy grain and JPEG noise. Can soften fine screentone.',
       },
+      digimangaBw4x: {
+        name: 'Digimanga BW 4x',
+        note: 'Trained on digital black and white manga. Sharpens clean digital pages.',
+      },
+      mangajpegHq: {
+        name: 'MangaJPEG HQ',
+        note: 'Removes light JPEG blocks and ringing. Keeps the page size.',
+      },
+      mangajpegLq: {
+        name: 'MangaJPEG LQ',
+        note: 'Removes heavy JPEG damage. Keeps the page size.',
+      },
+      waifu2xScanLight: {
+        name: 'waifu2x scan, light noise',
+        note: 'Removes light scan grain without sharpening. Keeps the page size.',
+      },
+      waifu2xScanHeavy: {
+        name: 'waifu2x scan, heavy noise',
+        note: 'Removes heavy scan grain without sharpening. Keeps the page size.',
+      },
+      realcugan4x: {
+        name: 'Real-CUGAN 4x conservative',
+        note: 'Keeps the original look, with the most sharpening.',
+      },
+      waifu2xArtLight: {
+        name: 'waifu2x art 2x, light noise',
+        note: 'For colour illustrations. Sharpens and removes light noise.',
+      },
+      waifu2xArtStrong: {
+        name: 'waifu2x art 2x, strong noise',
+        note: 'For colour illustrations. Sharpens and removes strong noise.',
+      },
+    },
+    // What the pages are, which decides the presets listed: a preset made for
+    // the other kind is left out.
+    pages: {
+      label: 'Pages are',
+      bw: 'Black and white',
+      color: 'Colour',
+    },
+    // The size a run saves its pages at: their own, or a whole multiple of it.
+    // A larger page can be taken as the page while the page has no cleaning on it.
+    output: {
+      label: 'Output size',
+      same: 'Same size',
+      times: '{scale}x',
+      fixed: 'This preset keeps the page size',
+      becomes: 'Page 1 is {width} x {height} and is saved at {outWidth} x {outHeight}.',
+      larger: 'Larger pages can replace the chapter\'s pages before you clean them. Detected masks grow with the page.',
     },
     credit: '{name} by {author}, {license}',
     duration: {
@@ -2200,6 +2250,7 @@ export const en = {
       pages: 'GPU time for these pages at their size. Upload and GPU start-up come on top.',
       reference: 'Page sizes are unknown, so this assumes {width} x {height} pages. Upload and GPU start-up come on top.',
       measured: 'From the time measured on this computer.',
+      unmeasured: 'This preset has not been timed on a cloud GPU yet.',
     },
     out: {
       label: 'Save to',
@@ -2244,6 +2295,7 @@ export const en = {
         other: '{count} whole pages, {pixels} pixels',
       },
       models: 'Models',
+      output: '{scale}x the size of each page',
       tooLarge: 'Left out',
       tooLargeValue: {
         one: '1 page is too large for this preset and is not sent.',
@@ -2269,7 +2321,7 @@ export const en = {
       copied: 'Copied',
     },
     reason: {
-      tooLarge: 'Too large for this preset',
+      tooLarge: 'Too large for this preset at this output size',
       unsupported: 'Not an image this preset can read',
       inference: 'The model could not process it',
       unreadable: 'The page could not be read',
@@ -2298,6 +2350,7 @@ export const en = {
       cloudDisabled: 'Cloud use is off. Turn it on in Settings > Cloud, then try again.',
       noProfile: 'No cloud GPU is selected. Choose one in Settings > Cloud.',
       notSetUp: 'This cloud GPU is not set up for page denoise. In Settings > Cloud, set up with Modal and turn on Page denoise, then try again.',
+      cloudOutdated: 'This cloud GPU was set up before larger output sizes. Update the setup in Settings > Cloud, or choose Same size, then try again.',
       openCloud: 'Open Cloud settings',
       modelMissing: 'The local model is missing or failed its check. Go back to download it again.',
       runtimeMissing: 'The ONNX runtime this model runs on is not installed. Download it in Settings > Models.',

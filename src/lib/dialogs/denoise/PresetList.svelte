@@ -9,9 +9,21 @@
    * page. The credit line is a licence obligation, not decoration, and is on
    * every row wherever the list is drawn.
    *
+   * Above the rows, what the pages are: black and white or colour. A preset
+   * is listed when it is made for that or for both (`presetsForPages`), so a
+   * colour illustration model is not offered for a black and white chapter.
+   * The filter starts on the chosen preset's own type and is this list's
+   * alone, not a setting. Switching it away from the chosen preset chooses the
+   * first one still listed, through `onchange` like any other choice; a preset
+   * chosen from outside that the filter would hide moves the filter instead
+   * (`pageKindFor`). A choice made in the list holds the filter where it is,
+   * so picking a preset made for both never changes what is listed. It is left
+   * out when every preset is for both, as on this computer, where it would
+   * change nothing.
+   *
    * A real radio group: one tab stop, arrows move and select, Home and End go
-   * to the ends. Stopped as well as prevented, because the editor underneath
-   * pages the chapter on the arrows.
+   * to the ends, all over the rows the filter shows. Stopped as well as
+   * prevented, because the editor underneath pages the chapter on the arrows.
    *
    * @type {{
    *   presets: import('../../model/denoise.js').DenoisePreset[],
@@ -23,15 +35,46 @@
    * }}
    */
   import { t } from '../../i18n/index.js'
-  import { PRESET_TEXT } from '../../model/denoise.js'
+  import { PAGE_KINDS, PRESET_TEXT, pageKindFor, presetsForPages } from '../../model/denoise.js'
+  import { Segmented } from '../../ui/index.js'
   import Icon from '../../icons/Icon.svelte'
 
   let { presets, value, onchange, label, timeOf, disabled = false } = $props()
+  const uid = $props.id()
 
   /** @type {HTMLButtonElement[]} */
   let rows = $state([])
 
-  const selected = $derived(presets.some((preset) => preset.id === value) ? value : presets[0]?.id ?? null)
+  /**
+   * The page type held here, by a pick on the filter or by a choice made in
+   * the list, until a preset chosen elsewhere contradicts it. Null until
+   * either: the chosen preset decides.
+   */
+  let picked = $state(/** @type {import('../../model/denoise.js').PageKind|null} */ (null))
+  const pages = $derived(pageKindFor(presets, value, picked))
+  const shown = $derived(presetsForPages(presets, pages))
+  const filtered = $derived(presets.some((preset) => preset.kind === 'bw' || preset.kind === 'color'))
+  const kinds = $derived(PAGE_KINDS.map((kind) => ({
+    value: kind,
+    label: t(kind === 'color' ? 'denoise.pages.color' : 'denoise.pages.bw'),
+    disabled: !presetsForPages(presets, kind).length,
+  })))
+
+  const selected = $derived(shown.some((preset) => preset.id === value) ? value : shown[0]?.id ?? null)
+
+  /** @param {string} kind */
+  function choosePages(kind) {
+    const next = presetsForPages(presets, kind)
+    if (!next.length) return
+    picked = /** @type {import('../../model/denoise.js').PageKind} */ (kind)
+    if (!next.some((preset) => preset.id === selected)) onchange(next[0].id)
+  }
+
+  /** A choice made in the list: the list stays as it is shown. @param {string} id */
+  function choose(id) {
+    picked = pages
+    onchange(id)
+  }
 
   /** @param {string} id */
   function nameOf(id) {
@@ -48,20 +91,26 @@
   /** @param {KeyboardEvent} event @param {number} index */
   function onkeydown(event, index) {
     let next = null
-    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % presets.length
-    else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index - 1 + presets.length) % presets.length
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % shown.length
+    else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index - 1 + shown.length) % shown.length
     else if (event.key === 'Home') next = 0
-    else if (event.key === 'End') next = presets.length - 1
+    else if (event.key === 'End') next = shown.length - 1
     if (next === null) return
     event.preventDefault()
     event.stopPropagation()
-    onchange(presets[next].id)
+    choose(shown[next].id)
     rows[next]?.focus()
   }
 </script>
 
-<div class="presets" role="radiogroup" aria-label={label} aria-disabled={disabled || undefined}>
-  {#each presets as preset, index (preset.id)}
+{#if filtered}
+  <div class="pages">
+    <span class="pages-label" id="{uid}-pages">{t('denoise.pages.label')}</span>
+    <Segmented options={kinds} value={pages} labelledBy="{uid}-pages" {disabled} onchange={choosePages} />
+  </div>
+{/if}
+<div class="presets" role="radiogroup" aria-label={label} aria-disabled={disabled || undefined} data-pages={pages}>
+  {#each shown as preset, index (preset.id)}
     {@const on = preset.id === selected}
     {@const time = timeOf(preset)}
     <button
@@ -74,7 +123,7 @@
       tabindex={on ? 0 : -1}
       data-preset={preset.id}
       {disabled}
-      onclick={() => onchange(preset.id)}
+      onclick={() => choose(preset.id)}
       onkeydown={(event) => onkeydown(event, index)}
     >
       <span class="mark" aria-hidden="true">{#if on}<Icon name="check" size={12} />{/if}</span>
@@ -96,6 +145,15 @@
 </div>
 
 <style>
+  .pages {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-5);
+    padding-bottom: var(--s-3);
+  }
+  .pages-label { font-size: 11px; color: var(--t3) }
+
   .presets { display: grid; border-top: 1px solid var(--line) }
 
   .preset {

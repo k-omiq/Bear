@@ -39,6 +39,11 @@ impl Rect {
         x >= self.x && x < self.right() && y >= self.y && y < self.bottom()
     }
 
+    /// The same box on a page `by` times larger on each axis.
+    pub fn enlarged(&self, by: u32) -> Rect {
+        Rect::new(self.x * by as i64, self.y * by as i64, self.w * by, self.h * by)
+    }
+
     /// Grown by `by` on every side, clamped to a page of the given size. The
     /// clamp is why this takes the page: a bbox at the edge must not grow
     /// negative and then be cast to an index.
@@ -118,6 +123,20 @@ impl Mask {
             *value = (f32::from(*value) * fade * rim).round() as u8;
         }
         out
+    }
+
+    /// The same mask on a page `by` times larger on each axis: each pixel
+    /// becomes a `by` x `by` block, so it covers what it covered before.
+    pub fn enlarged(&self, by: u32) -> Mask {
+        let (w, by) = (self.bounds.w as usize, by as usize);
+        let mut bits = Vec::with_capacity(self.bits.len() * by * by);
+        for row in self.bits.chunks_exact(w.max(1)) {
+            let wide: Vec<u8> = row.iter().flat_map(|&bit| std::iter::repeat(bit).take(by)).collect();
+            for _ in 0..by {
+                bits.extend_from_slice(&wide);
+            }
+        }
+        Mask { bounds: self.bounds.enlarged(by as u32), bits }
     }
 
     pub fn empty(bounds: Rect) -> Self {
@@ -507,6 +526,22 @@ mod tests {
 
     /// `intersects` is the filter that decides which detected text a stroke is
     /// actually over, so it has to answer the *shape* and not the box.
+    #[test]
+    fn an_enlarged_mask_covers_what_it_covered() {
+        let mut mask = Mask::empty(Rect::new(3, 5, 2, 2));
+        mask.set(3, 5, true);
+        mask.set_coverage(4, 6, 90);
+        let large = mask.enlarged(3);
+        assert_eq!(large.bounds, Rect::new(9, 15, 6, 6));
+        assert_eq!(large.bits.len(), 36);
+        for y in 15..21 {
+            for x in 9..15 {
+                assert_eq!(large.coverage(x, y), mask.coverage(x / 3, y / 3), "({x}, {y})");
+            }
+        }
+        assert_eq!(Mask::empty(Rect::new(0, 0, 0, 0)).enlarged(2), Mask::empty(Rect::new(0, 0, 0, 0)));
+    }
+
     #[test]
     fn intersects_answers_the_shape_rather_than_the_bounding_box() {
         let stroke = Mask::from_stroke(&[(20.0, 20.0), (80.0, 80.0)], 4.0, 200, 200);

@@ -458,6 +458,41 @@ class GatewayJobRoutesTest(unittest.TestCase):
         self.assertEqual(self.call("POST", route + "/result/release")[0], 200)
         self.assertIsNone(self.jobs.denoise_chunk(handle, 0))
 
+    def test_an_answer_larger_than_an_upload_is_served_in_bounded_writes(self) -> None:
+        _, accepted = self.submit_page()
+        handle = accepted["handle"]
+        route = f"/mc/denoise/v1/jobs/{handle}"
+        # Past the upload limit and inside the answer's: a page kept at an output scale.
+        png = self.page + bytes(d.DENOISE_MAX_PNG_BYTES + 70000)
+        call = self.modal.calls["fc-1"]
+        call.error, call.result = None, {"protocol_version": d.DENOISE_VERSION,
+            "request_digest": accepted["request_digest"], "page_png": png,
+            "info": {"width": 32, "height": 32, "gray": True, "steps": []}}
+        status, metadata = self.call("GET", route + "/metadata")
+        self.assertEqual((status, metadata["status"], metadata["result"]["png_bytes"]), (200, "completed", len(png)))
+        writes = []
+        update = self.store._dict.update
+        self.store._dict.update = lambda values: (writes.append(len(values)), update(values))[1]
+        last = (len(png) - 1) // 32768
+        self.assertEqual(self.jobs.denoise_chunk(handle, last), png[last * 32768:])
+        self.assertEqual(sum(writes), last + 1)
+        self.assertLessEqual(max(writes), 256, "no write to the store carries more than 8 MiB")
+        self.assertEqual(self.jobs.denoise_chunk(handle, 0), png[:32768])
+
+    def test_an_answer_past_the_answer_limit_fails_the_job(self) -> None:
+        _, accepted = self.submit_page()
+        route = f"/mc/denoise/v1/jobs/{accepted['handle']}"
+        call = self.modal.calls["fc-1"]
+        call.error, call.result = None, {"protocol_version": d.DENOISE_VERSION,
+            "request_digest": accepted["request_digest"], "page_png": self.page + bytes(64),
+            "info": {"width": 8, "height": 8, "gray": True, "steps": []}}
+        limit, d.DENOISE_MAX_RESULT_PNG_BYTES = d.DENOISE_MAX_RESULT_PNG_BYTES, len(self.page)
+        try:
+            _, failed = self.call("GET", route + "/metadata")
+        finally:
+            d.DENOISE_MAX_RESULT_PNG_BYTES = limit
+        self.assertEqual(failed["status"], "failed")
+
     def test_result_routes_reject_bad_ranges_and_require_authentication(self) -> None:
         _, accepted = self.submit_page()
         handle = accepted["handle"]

@@ -987,6 +987,7 @@ export const ja = {
     denoised: {
       failed: '第 {number} 話のノイズ除去の履歴を読み取れませんでした。',
       run: '{when}・{preset}',
+      runScaled: '{when}・{preset}・{scale}x で保存',
       presetUnknown: 'プリセットの記録なし',
       fromRaw: '元のページから',
       fromCleaned: 'クリーン済みのページから',
@@ -1590,6 +1591,51 @@ export const ja = {
         name: 'Real-CUGAN 3x strong denoise',
         note: '強い粒状ノイズや JPEG ノイズを除去します。細かいトーンがぼやけることがあります。',
       },
+      digimangaBw4x: {
+        name: 'Digimanga BW 4x',
+        note: 'デジタルの白黒漫画で学習したモデル。きれいなデジタルページをシャープにします。',
+      },
+      mangajpegHq: {
+        name: 'MangaJPEG HQ',
+        note: '軽い JPEG のブロックノイズやにじみを除去します。ページのサイズは変わりません。',
+      },
+      mangajpegLq: {
+        name: 'MangaJPEG LQ',
+        note: '強い JPEG 劣化を除去します。ページのサイズは変わりません。',
+      },
+      waifu2xScanLight: {
+        name: 'waifu2x スキャン、ノイズ弱',
+        note: 'シャープ化せずに、軽い粒状ノイズを除去します。ページのサイズは変わりません。',
+      },
+      waifu2xScanHeavy: {
+        name: 'waifu2x スキャン、ノイズ強',
+        note: 'シャープ化せずに、強い粒状ノイズを除去します。ページのサイズは変わりません。',
+      },
+      realcugan4x: {
+        name: 'Real-CUGAN 4x conservative',
+        note: '元の見た目を保ちつつ、最も強くシャープにします。',
+      },
+      waifu2xArtLight: {
+        name: 'waifu2x アート 2x、ノイズ弱',
+        note: 'カラーイラスト向け。シャープにして、軽いノイズを除去します。',
+      },
+      waifu2xArtStrong: {
+        name: 'waifu2x アート 2x、ノイズ強',
+        note: 'カラーイラスト向け。シャープにして、強いノイズを除去します。',
+      },
+    },
+    pages: {
+      label: 'ページの種類',
+      bw: '白黒',
+      color: 'カラー',
+    },
+    output: {
+      label: '出力サイズ',
+      same: '同じサイズ',
+      times: '{scale}x',
+      fixed: 'このプリセットはページのサイズを変えません',
+      becomes: '1 ページ目は {width} x {height} で、{outWidth} x {outHeight} で保存されます。',
+      larger: '大きくしたページは、クリーニングの前ならチャプターのページと置き換えられます。検出したマスクはページと同じ倍率で大きくなります。',
     },
     credit: '{name}（作者：{author}、{license}）',
     duration: {
@@ -1620,6 +1666,7 @@ export const ja = {
       pages: 'このページのサイズでの GPU 時間です。アップロードと GPU の起動時間は別途かかります。',
       reference: 'ページサイズが不明なため、{width} x {height} のページと仮定しています。アップロードと GPU の起動時間は別途かかります。',
       measured: 'このコンピューターで計測した時間に基づきます。',
+      unmeasured: 'このプリセットは、クラウド GPU での時間をまだ計測していません。',
     },
     out: {
       label: '保存先',
@@ -1660,6 +1707,7 @@ export const ja = {
         other: 'ページ全体 {count} 枚、{pixels} ピクセル',
       },
       models: 'モデル',
+      output: '各ページの {scale} 倍のサイズ',
       tooLarge: '対象外',
       tooLargeValue: {
         other: '{count} ページはこのプリセットには大きすぎるため、送信しません。',
@@ -1682,7 +1730,7 @@ export const ja = {
       copied: 'コピーしました',
     },
     reason: {
-      tooLarge: 'このプリセットには大きすぎます',
+      tooLarge: 'この出力サイズでは、このプリセットには大きすぎます',
       unsupported: 'このプリセットで読み込める画像ではありません',
       inference: 'モデルで処理できませんでした',
       unreadable: 'ページを読み取れませんでした',
@@ -1708,6 +1756,7 @@ export const ja = {
       cloudDisabled: 'クラウドの使用はオフです。設定 > クラウドでオンにしてから、もう一度お試しください。',
       noProfile: 'クラウド GPU が選択されていません。設定 > クラウドで選んでください。',
       notSetUp: 'このクラウド GPU はページのノイズ除去用にセットアップされていません。設定 > クラウドで、Modal でセットアップしてページのノイズ除去をオンにしてから、もう一度お試しください。',
+      cloudOutdated: 'このクラウド GPU は、大きい出力サイズに対応する前にセットアップされています。設定 > クラウドでセットアップを更新するか、「同じサイズ」を選んでから、もう一度お試しください。',
       openCloud: 'クラウド設定を開く',
       modelMissing: 'ローカルモデルが見つからないか、検証に失敗しました。戻ってもう一度ダウンロードしてください。',
       runtimeMissing: 'このモデルの実行に必要な ONNX ランタイムがインストールされていません。設定 > モデルからダウンロードしてください。',

@@ -1,6 +1,8 @@
 //! Page denoise contract for `/mc/denoise/v1` (`deploy/cloud/common/denoise.py`).
 //!
-//! One whole page and a recipe go up; one PNG of the same size comes back. The
+//! One whole page and a recipe go up; one PNG comes back, of the same size
+//! unless the recipe names an `output_scale`, and then that many times the
+//! page each way. The
 //! recipe rules mirror `resolve_step`, so a recipe the gateway would refuse is
 //! refused here before anything is uploaded. The request digest is computed
 //! over the bytes the gateway computes it over: `canonical_recipe`, which is
@@ -18,6 +20,10 @@ pub const CAPABILITY: &str = "page_denoise@1";
 pub const RECIPE_SCHEMA: u32 = 1;
 pub const MAX_STEPS: usize = 3;
 pub const MAX_PNG_BYTES: usize = 16 * 1024 * 1024;
+/// The gateway's ceiling on an answer (`DENOISE_MAX_RESULT_PNG_BYTES`), above
+/// the upload's: an output scale keeps up to 16 times the page's pixels. An
+/// answer past [`MAX_PNG_BYTES`] comes by the result chunks only.
+pub const MAX_RESULT_PNG_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_BODY_BYTES: usize = 24_000_000;
 pub const MAX_RESPONSE_BYTES: usize = 24_000_000;
 pub const MAX_PNG_B64_BYTES: usize = 4 * MAX_PNG_BYTES.div_ceil(3);
@@ -26,6 +32,10 @@ pub const MAX_PAGE_PIXELS: u64 = 40_000_000;
 /// The gateway's ceiling on a sharpen step's upscaled page (`MAX_UPSCALED_PIXELS`).
 pub const MAX_UPSCALED_PIXELS: u64 = 160_000_000;
 const DIGEST_DOMAIN: &[u8] = b"mc-denoise-v1\0";
+/// `FEATURE_OUTPUT_SCALE`: a gateway that lists it honours a recipe's
+/// `output_scale`. An older one ignores the field and answers at the page's
+/// size, so a recipe that names one is never sent to it.
+pub const FEATURE_OUTPUT_SCALE: &str = "output_scale";
 
 /// waifu2x engines: name, architecture, domain, and whether it has 1x
 /// (`noise{N}`) and 4x models. swin_unet `art` ships 2x models only.
@@ -161,6 +171,11 @@ impl DenoiseStep {
 pub struct DenoiseRecipe {
     pub schema: u32,
     pub steps: Vec<DenoiseStep>,
+    /// How many times the page's width and height the answer is, 2 to 4.
+    /// Absent is the page's own size, the one spelling of 1. The recipe's
+    /// last upscaling step keeps it, so it is never past that step's scale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_scale: Option<u8>,
 }
 
 impl DenoiseRecipe {
@@ -170,7 +185,32 @@ impl DenoiseRecipe {
         if self.steps.is_empty() || self.steps.len() > MAX_STEPS {
             return Err(format!("a recipe has 1 to {MAX_STEPS} steps"));
         }
-        self.steps.iter().map(DenoiseStep::resolve).collect()
+        let steps: Vec<ResolvedStep> = self.steps.iter().map(DenoiseStep::resolve).collect::<Result<_, _>>()?;
+        if let Some(out) = self.output_scale {
+            if !(2..=4).contains(&out) { return Err("output_scale must be an integer from 2 to 4".into()); }
+            let last = steps.iter().rev().find(|step| step.scale > 1);
+            if last.is_none_or(|step| u32::from(out) > step.scale) {
+                return Err("output_scale is past what the recipe's last upscaling step gives".into());
+            }
+        }
+        Ok(steps)
+    }
+
+    /// `output_scale`: how many times the page each way the answer is.
+    pub fn output_scale(&self) -> u32 {
+        self.output_scale.map_or(1, u32::from)
+    }
+
+    /// The size the answer to a page of this size has.
+    pub fn output_size(&self, width: u32, height: u32) -> Option<(u32, u32)> {
+        let scale = self.output_scale();
+        Some((width.checked_mul(scale)?, height.checked_mul(scale)?))
+    }
+
+    /// The recipe at the page's own size: what a preset is, whatever output
+    /// scale a run asked of it.
+    pub fn at_page_size(&self) -> DenoiseRecipe {
+        DenoiseRecipe { output_scale: None, ..self.clone() }
     }
 
     /// Whether a page of this size is inside the gateway's pixel limits for
@@ -226,9 +266,9 @@ impl DenoisePreset {
 
 const CLOUD: &[PresetTarget] = &[PresetTarget::Cloud];
 
-/// The six presets, in `denoise.py`'s order. Only the waifu2x one runs locally:
-/// its model is ONNX, and the rest are PyTorch files the cloud worker loads.
-pub const PRESETS: [DenoisePreset; 6] = [
+/// The presets, in `denoise.py`'s order. Only the first runs locally: its
+/// model is the one ONNX file the desktop installs.
+pub const PRESETS: [DenoisePreset; 14] = [
     DenoisePreset {
         id: "waifu2x-scan-4x-n2",
         recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"waifu2x-art-scan","scale":4,"level":2}]}"#,
@@ -259,10 +299,57 @@ pub const PRESETS: [DenoisePreset; 6] = [
         recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"mangajanai","scale":4}]}"#,
         targets: CLOUD,
     },
+    DenoisePreset {
+        id: "digimanga-bw-4x",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"digimanga-bw-4x"}]}"#,
+        targets: CLOUD,
+    },
+    DenoisePreset {
+        id: "mangajpeg-hq",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"jpeg","engine":"mangajpeg-hq"}]}"#,
+        targets: CLOUD,
+    },
+    DenoisePreset {
+        id: "mangajpeg-lq",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"jpeg","engine":"mangajpeg-lq"}]}"#,
+        targets: CLOUD,
+    },
+    DenoisePreset {
+        id: "waifu2x-scan-n1",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"denoise","engine":"waifu2x-art-scan","level":1}]}"#,
+        targets: CLOUD,
+    },
+    DenoisePreset {
+        id: "waifu2x-scan-n3",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"denoise","engine":"waifu2x-art-scan","level":3}]}"#,
+        targets: CLOUD,
+    },
+    DenoisePreset {
+        id: "realcugan-4x-conservative",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":4}]}"#,
+        targets: CLOUD,
+    },
+    DenoisePreset {
+        id: "waifu2x-art-2x-n1",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"waifu2x-art","scale":2,"level":1}]}"#,
+        targets: CLOUD,
+    },
+    DenoisePreset {
+        id: "waifu2x-art-2x-n3",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"waifu2x-art","scale":2,"level":3}]}"#,
+        targets: CLOUD,
+    },
 ];
 
 pub fn preset(id: &str) -> Option<&'static DenoisePreset> {
     PRESETS.iter().find(|preset| preset.id == id)
+}
+
+/// The shipped preset a recipe is, by its canonical bytes at the page's own
+/// size: the output scale is the run's choice, not the preset's.
+pub fn preset_of(recipe: &DenoiseRecipe) -> Option<&'static DenoisePreset> {
+    let bytes = recipe.at_page_size().canonical_bytes().ok()?;
+    PRESETS.iter().find(|preset| preset.recipe().canonical_bytes().ok().as_ref() == Some(&bytes))
 }
 
 /// Whether a result's step names the model the request resolved to. A
@@ -473,21 +560,31 @@ impl DenoiseResultMetadata {
     pub fn validate(&self, request: &DenoiseMetadata) -> Result<(), String> {
         let models = request.recipe.resolve()?;
         if self.protocol_version != VERSION || self.request_digest != request.request_digest
-            || self.png_bytes == 0 || self.png_bytes > MAX_PNG_BYTES
+            || self.png_bytes == 0 || self.png_bytes > MAX_RESULT_PNG_BYTES
             || self.png_sha256.len() != 64
             || !self.png_sha256.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
             || self.info.width == 0 || self.info.height == 0
             || self.info.steps.len() != models.len()
             || self.info.steps.iter().zip(&models).any(|(timing, step)| !ran_as(&timing.model_id, &step.model_id))
         { return Err("denoise result metadata mismatch".into()); }
-        request.recipe.fits(self.info.width, self.info.height)?;
+        let (width, height) = self.page_size(request).ok_or("denoise result metadata mismatch")?;
+        request.recipe.fits(width, height)?;
         Ok(())
+    }
+
+    /// The uploaded page's size, from the answer's own (`info`) and the
+    /// recipe's output scale. `None` when the answer is no whole multiple.
+    pub fn page_size(&self, request: &DenoiseMetadata) -> Option<(u32, u32)> {
+        let scale = request.recipe.output_scale();
+        (self.info.width % scale == 0 && self.info.height % scale == 0)
+            .then(|| (self.info.width / scale, self.info.height / scale))
     }
 }
 
 impl DenoiseResult {
     /// The answer is bound to the request (version, digest echo, the recipe's
-    /// models in order) and its PNG is the uploaded page's size. The upload is
+    /// models in order) and its PNG is the uploaded page's size (`width` by
+    /// `height`) times the recipe's output scale. The upload is
     /// an 8-bit page without alpha, so the gateway answers 8-bit grey when it
     /// found the page grey and 8-bit RGB otherwise.
     pub fn validate(&self, request: &DenoiseMetadata, width: u32, height: u32, png: &[u8]) -> Result<(), String> {
@@ -495,12 +592,13 @@ impl DenoiseResult {
             return Err("denoise result identity mismatch".into());
         }
         let models = request.recipe.resolve()?;
+        let (width, height) = request.recipe.output_size(width, height).ok_or("denoise result is too large")?;
         if self.info.width != width || self.info.height != height || self.info.steps.len() != models.len()
             || self.info.steps.iter().zip(&models).any(|(timing, step)| !ran_as(&timing.model_id, &step.model_id))
         {
             return Err("denoise result does not describe the request".into());
         }
-        if png.len() > MAX_PNG_BYTES { return Err("denoise result PNG too large".into()); }
+        if png.len() > MAX_RESULT_PNG_BYTES { return Err("denoise result PNG too large".into()); }
         let color = if self.info.gray { PngColorMode::Gray8 } else { PngColorMode::Rgb8 };
         validate_png_header(png, width, height, color).map_err(|e| e.to_string())
     }
@@ -555,6 +653,10 @@ pub struct DenoiseCapabilities {
     /// The shipped presets whose every model is seeded. Absent from an older gateway.
     #[serde(default)]
     pub presets: Vec<String>,
+    /// What the gateway does beyond the first contract ([`FEATURE_OUTPUT_SCALE`]).
+    /// Absent from an older gateway.
+    #[serde(default)]
+    pub features: Vec<String>,
     pub engines: DenoiseEngines,
     pub models: Vec<DenoiseModelInfo>,
 }
@@ -574,22 +676,33 @@ impl DenoiseCapabilities {
             || !known(DenoiseOp::Sharpen, &self.engines.sharpen)
             || !known(DenoiseOp::Jpeg, &self.engines.jpeg)
             || self.presets.len() > PRESETS.len() || !self.presets.iter().all(|id| preset(id).is_some())
+            || self.features.len() > 8 || !self.features.iter().all(|feature| text(feature))
             || self.models.len() > 64
             || !self.models.iter().all(|model| text(&model.model_id) && text(&model.license) && text(&model.author))
         { return Err("invalid denoise capabilities".into()); }
         Ok(())
     }
 
-    /// Whether every step's engine is advertised for its op.
+    /// Whether the gateway has the recipe's models: it lists the preset the
+    /// recipe is, or every step's engine for its op. The preset list is the
+    /// exact answer (every model of the recipe is seeded); an engine is listed
+    /// from one probe model, which a preset of that engine need not be.
     pub fn supports(&self, recipe: &DenoiseRecipe) -> bool {
-        self.available && recipe.steps.iter().all(|step| {
-            let names = match step.op {
-                DenoiseOp::Denoise => &self.engines.denoise,
-                DenoiseOp::Sharpen => &self.engines.sharpen,
-                DenoiseOp::Jpeg => &self.engines.jpeg,
-            };
-            names.contains(&step.engine)
-        })
+        self.available && (preset_of(recipe).is_some_and(|preset| self.presets.iter().any(|id| id == preset.id))
+            || recipe.steps.iter().all(|step| {
+                let names = match step.op {
+                    DenoiseOp::Denoise => &self.engines.denoise,
+                    DenoiseOp::Sharpen => &self.engines.sharpen,
+                    DenoiseOp::Jpeg => &self.engines.jpeg,
+                };
+                names.contains(&step.engine)
+            }))
+    }
+
+    /// Whether the gateway keeps a recipe's `output_scale`. One that does not
+    /// would ignore it and answer at the page's size, after the GPU ran.
+    pub fn upscales(&self) -> bool {
+        self.features.iter().any(|feature| feature == FEATURE_OUTPUT_SCALE)
     }
 }
 
@@ -638,6 +751,13 @@ mod tests {
             "1a8a64640123deab2849e07a756e77313ccb4de358a85d7ef851642cd189125f");
         let models: Vec<String> = three.resolve().unwrap().into_iter().map(|step| step.model_id).collect();
         assert_eq!(models, ["waifu2x.swin_unet.art_scan.noise1", "waifu2x.cunet.art.noise3_scale2x", "omdb.1x-MangaJPEGHQ"]);
+
+        // An output scale is in the bytes, and so in the digest; without one the bytes are the old ones.
+        let scaled = recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"waifu2x-art-scan","scale":4,"level":2}],"output_scale":2}"#);
+        assert_eq!(String::from_utf8(scaled.canonical_bytes().unwrap()).unwrap(),
+            r#"{"output_scale":2,"schema":1,"steps":[{"engine":"waifu2x-art-scan","level":2,"op":"sharpen","scale":4}]}"#);
+        assert_eq!(request_digest(&scaled, TINY_PNG).unwrap(),
+            "97b9b018f968c2964d656391e32b3b16be8f2549604c3db49596b92868f52012");
 
         let fixed = recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"digimanga-bw-4x"}]}"#);
         assert_eq!(fixed.canonical_bytes().unwrap(), br#"{"schema":1,"steps":[{"engine":"digimanga-bw-4x","op":"sharpen"}]}"#);
@@ -727,6 +847,28 @@ mod tests {
         assert!(recipe(&format!(r#"{{"schema":1,"steps":[{four},{four},{four},{four}]}}"#)).resolve().is_err());
         assert!(serde_json::from_str::<DenoiseRecipe>(r#"{"schema":1,"steps":[],"extra":1}"#).is_err());
 
+        // output_scale: 2 to 4, never past the last upscaling step's scale.
+        // Each case was run through resolve_recipe in denoise.py.
+        let scaled = |steps: &str, out: &str| serde_json::from_str::<DenoiseRecipe>(
+            &format!(r#"{{"schema":1,"steps":[{steps}],"output_scale":{out}}}"#)).map_err(|e| e.to_string())
+            .and_then(|recipe| recipe.resolve().map(|_| recipe.output_scale()));
+        let (w4, cugan2, grain) = (r#"{"op":"sharpen","engine":"waifu2x-art-scan","scale":4}"#,
+            r#"{"op":"sharpen","engine":"realcugan","scale":2}"#, r#"{"op":"denoise","engine":"waifu2x-art-scan","level":1}"#);
+        for (steps, out) in [(w4.to_string(), 2), (w4.to_string(), 3), (w4.to_string(), 4), (format!("{w4},{grain}"), 4),
+            (format!("{w4},{cugan2}"), 2), (r#"{"op":"sharpen","engine":"digimanga-bw-4x"}"#.to_string(), 4)] {
+            assert_eq!(scaled(&steps, &out.to_string()), Ok(out), "{steps} at {out}");
+        }
+        for (steps, out) in [(w4.to_string(), "1"), (w4.to_string(), "5"), (w4.to_string(), "2.0"), (w4.to_string(), "true"),
+            (cugan2.to_string(), "3"), (format!("{w4},{cugan2}"), "4"), (grain.to_string(), "2"),
+            (r#"{"op":"jpeg","engine":"mangajpeg-hq"}"#.to_string(), "2")] {
+            assert!(scaled(&steps, out).is_err(), "{steps} at {out}");
+        }
+        let plain = recipe(&format!(r#"{{"schema":1,"steps":[{w4}]}}"#));
+        assert_eq!((plain.output_scale(), plain.output_size(30, 20)), (1, Some((30, 20))));
+        let twice = DenoiseRecipe { output_scale: Some(2), ..plain.clone() };
+        assert_eq!((twice.output_size(30, 20), twice.at_page_size()), (Some((60, 40)), plain));
+        assert_eq!(twice.output_size(u32::MAX, 1), None);
+
         let sharpen4 = recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"digimanga-bw-4x"}]}"#);
         assert!(sharpen4.fits(3000, 3000).is_ok());
         assert!(sharpen4.fits(4000, 4000).is_err(), "16 MP at 4x is past the upscaled ceiling");
@@ -765,11 +907,24 @@ mod tests {
         assert!(result.validate(&request, 16, 16, &png(16, 16, png::ColorType::Rgb)).is_err(), "grey said, RGB sent");
         assert!(result.validate(&request, 17, 16, &answer).is_err());
         let mut oversize = answer.clone();
-        oversize.resize(MAX_PNG_BYTES + 1, 0);
+        oversize.resize(MAX_RESULT_PNG_BYTES + 1, 0);
         assert!(result.validate(&request, 16, 16, &oversize).is_err());
         let mut extra = serde_json::to_value(&result).unwrap();
         extra["reported_cost_usd"] = serde_json::json!(0.01);
         assert!(serde_json::from_value::<DenoiseResult>(extra).is_err());
+
+        // With an output scale the answer is that many times the page, and no other size.
+        let sharpen = recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":3}],"output_scale":3}"#);
+        let request = DenoiseMetadata::new(sharpen, &page).unwrap();
+        let answer_of = |width, height| DenoiseResult {
+            protocol_version: VERSION.into(), request_digest: request.request_digest.clone(), page_png_b64: String::new(),
+            info: DenoiseInfo { width, height, gray: false,
+                steps: vec![DenoiseStepTiming { model_id: "realcugan.up3x-latest-conservative".into(), ms: 5 }] },
+        };
+        answer_of(48, 48).validate(&request, 16, 16, &png(48, 48, png::ColorType::Rgb)).unwrap();
+        assert!(answer_of(16, 16).validate(&request, 16, 16, &png(16, 16, png::ColorType::Rgb)).is_err(), "the page's size");
+        assert!(answer_of(48, 48).validate(&request, 16, 16, &png(16, 16, png::ColorType::Rgb)).is_err(), "said large, sent small");
+        assert!(answer_of(32, 32).validate(&request, 16, 16, &png(32, 32, png::ColorType::Rgb)).is_err(), "another scale");
     }
 
     #[test]
@@ -809,6 +964,23 @@ mod tests {
         let mut no_1x = current.clone();
         no_1x.engines.denoise.push("waifu2x-art".into());
         assert!(no_1x.validate().is_err(), "waifu2x-art has no 1x models");
+
+        // A listed preset is supported though its engine's probe model is not
+        // seeded: only preset models are, and the scan probe is the plain 2x.
+        let presets_only: DenoiseCapabilities = serde_json::from_value(serde_json::json!({
+            "protocol_version": "1.0.0", "available": true, "features": ["output_scale"],
+            "presets": ["waifu2x-scan-4x-n2", "mangajpeg-hq"],
+            "engines": {"denoise": [], "sharpen": [], "jpeg": []}, "models": [],
+        })).unwrap();
+        presets_only.validate().unwrap();
+        let scan = preset("waifu2x-scan-4x-n2").unwrap().recipe();
+        assert!(presets_only.supports(&scan) && presets_only.supports(&preset("mangajpeg-hq").unwrap().recipe()));
+        assert!(presets_only.supports(&DenoiseRecipe { output_scale: Some(2), ..scan }), "a preset at any output scale");
+        assert!(!presets_only.supports(&preset("mangajanai-2x").unwrap().recipe()));
+        assert!(presets_only.upscales() && !current.upscales(), "an older gateway lists no features");
+        let mut odd = presets_only.clone();
+        odd.features = vec!["\u{0}".into()];
+        assert!(odd.validate().is_err());
     }
 
     #[test]
@@ -828,6 +1000,22 @@ mod tests {
                 "d6369d2839ea7c19908ca3e1d0c39972b0d2c9e3eca1c4a628e62b813a5ac721", "mangajanai.2x.auto", 2),
             ("mangajanai-4x", r#"{"schema":1,"steps":[{"engine":"mangajanai","op":"sharpen","scale":4}]}"#,
                 "c2f364a61b03ba3424769c0fd26eedc2c817a74e4dbafbbcbcf1be72564ebe2d", "mangajanai.4x.auto", 4),
+            ("digimanga-bw-4x", r#"{"schema":1,"steps":[{"engine":"digimanga-bw-4x","op":"sharpen"}]}"#,
+                "e09fcb3dd611f11b43d9d3b4b5255cc602481bf515f65fa3759d62e32f28ffdb", "omdb.4x-eula-digimanga-bw-v2-nc1", 4),
+            ("mangajpeg-hq", r#"{"schema":1,"steps":[{"engine":"mangajpeg-hq","op":"jpeg"}]}"#,
+                "7313bcf22a54785a4dcd317745eaa54b5d6f6a9c45e0ecf17c718f75b22f114a", "omdb.1x-MangaJPEGHQ", 1),
+            ("mangajpeg-lq", r#"{"schema":1,"steps":[{"engine":"mangajpeg-lq","op":"jpeg"}]}"#,
+                "d50d63605b97cea37d9a0d876d8f939cacf93a769769f8bc6406fe165e3adde1", "omdb.1x-MangaJPEGLQ", 1),
+            ("waifu2x-scan-n1", r#"{"schema":1,"steps":[{"engine":"waifu2x-art-scan","level":1,"op":"denoise"}]}"#,
+                "82827ec123195f662466f44e1a1e37ec64646bf304481283a019a83cb7766650", "waifu2x.swin_unet.art_scan.noise1", 1),
+            ("waifu2x-scan-n3", r#"{"schema":1,"steps":[{"engine":"waifu2x-art-scan","level":3,"op":"denoise"}]}"#,
+                "467fa3b3a6027ee67f4e5b9d703754d797964d9f767c7ae0cc9e0e0b7218ef90", "waifu2x.swin_unet.art_scan.noise3", 1),
+            ("realcugan-4x-conservative", r#"{"schema":1,"steps":[{"engine":"realcugan","op":"sharpen","scale":4}]}"#,
+                "5ce4a9914811272973bf0be6a632bd6a616315b50aa968425ef5809a967a3768", "realcugan.up4x-latest-conservative", 4),
+            ("waifu2x-art-2x-n1", r#"{"schema":1,"steps":[{"engine":"waifu2x-art","level":1,"op":"sharpen","scale":2}]}"#,
+                "900010ea84b33f375849070a10aa129e40757ba7f1990fda2bc04ef7813a1733", "waifu2x.swin_unet.art.noise1_scale2x", 2),
+            ("waifu2x-art-2x-n3", r#"{"schema":1,"steps":[{"engine":"waifu2x-art","level":3,"op":"sharpen","scale":2}]}"#,
+                "48dd6252198e3b8c089a979208d4fa6b75a4c6c5188c7778cbc9936eff4f4b53", "waifu2x.swin_unet.art.noise3_scale2x", 2),
         ];
         assert_eq!(PRESETS.len(), golden.len());
         for (preset, (id, canonical, digest, model, scale)) in PRESETS.iter().zip(golden) {
@@ -838,6 +1026,12 @@ mod tests {
             assert_eq!(request_digest(&recipe, TINY_PNG).unwrap(), digest, "{id}");
             assert!(preset.targets.contains(&PresetTarget::Cloud), "{id}");
             assert_eq!(super::preset(id).map(|found| found.id), Some(id));
+            assert_eq!(preset_of(&recipe).map(|found| found.id), Some(id));
+            // A run's output scale does not make it another preset.
+            if scale > 1 {
+                let scaled = DenoiseRecipe { output_scale: Some(scale as u8), ..recipe.clone() };
+                assert_eq!((scaled.resolve().is_ok(), preset_of(&scaled).map(|found| found.id)), (true, Some(id)), "{id}");
+            }
         }
         let local: Vec<&str> = PRESETS.iter().filter(|preset| preset.runs_locally()).map(|preset| preset.id).collect();
         assert_eq!(local, ["waifu2x-scan-4x-n2"]);
@@ -862,11 +1056,20 @@ mod tests {
             png_sha256:"a".repeat(64),png_bytes:TINY_PNG.len(),info:DenoiseInfo {width:16,height:16,gray:false,
                 steps:request.recipe.resolve().unwrap().iter().map(|s|DenoiseStepTiming {model_id:s.model_id.clone(),ms:1}).collect()}};
         meta.validate(&request).unwrap();
-        let mut bad=meta.clone();bad.png_bytes=MAX_PNG_BYTES+1;assert!(bad.validate(&request).is_err());
+        let mut bad=meta.clone();bad.png_bytes=MAX_RESULT_PNG_BYTES+1;assert!(bad.validate(&request).is_err());
+        // An answer may be larger than an upload.
+        let mut large=meta.clone();large.png_bytes=MAX_PNG_BYTES+1;assert!(large.validate(&request).is_ok());
         bad=meta.clone();bad.png_sha256="A".repeat(64);assert!(bad.validate(&request).is_err());
         bad=meta.clone();bad.request_digest="b".repeat(64);assert!(bad.validate(&request).is_err());
         bad=meta.clone();bad.info.steps[0].model_id="another model".into();assert!(bad.validate(&request).is_err());
         bad=meta.clone();bad.info.width=u32::MAX;assert!(bad.validate(&request).is_err());
-        bad=meta;bad.info.height=0;assert!(bad.validate(&request).is_err());
+        bad=meta.clone();bad.info.height=0;assert!(bad.validate(&request).is_err());
+        // With an output scale the metadata names the answer's size, a whole multiple of the page's.
+        let mut twice=preset("realcugan-2x-conservative").unwrap().recipe();twice.output_scale=Some(2);
+        let request=DenoiseMetadata::new(twice,TINY_PNG).unwrap();
+        let mut scaled=meta;scaled.request_digest=request.request_digest.clone();scaled.info.width=32;scaled.info.height=32;
+        scaled.validate(&request).unwrap();
+        assert_eq!(scaled.page_size(&request),Some((16,16)));
+        scaled.info.width=33;assert!(scaled.validate(&request).is_err());
     }
 }

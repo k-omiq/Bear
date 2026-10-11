@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { t } from '../i18n/index.js'
-import { imageType, presetName, runFacts } from './denoisehistory.js'
+import { imageType, presetName, runFacts, runLabel, runWhen } from './denoisehistory.js'
 
 /** @param {Partial<import('../api/backend.js').DenoiseRun>} [over] */
 const aRun = (over = {}) => ({
@@ -38,6 +38,17 @@ describe('the words for a denoise run', () => {
       t('denoise.target.cloud'), t('home.denoised.fromCleaned'), t('home.denoised.pages', { count: 2 }),
       t('home.denoised.taken', { count: 1 }), t('home.denoised.missing', { count: 1 }),
     ])
+  })
+
+  it('says the size a run was saved at only when it is larger than the page', () => {
+    const when = runWhen(1790000000)
+    const preset = t('denoise.preset.waifu2xScan.name')
+    const plain = t('home.denoised.run', { when, preset })
+    expect(runLabel(aRun({ scale: 2 }))).toBe(t('home.denoised.runScaled', { when, preset, scale: 2 }))
+    expect(runLabel(aRun({ scale: 2 }))).toContain('2x')
+    expect(runLabel(aRun({ scale: 1 }))).toBe(plain)
+    // An older backend records no scale: the run was saved at the page's size.
+    expect(runLabel(aRun())).toBe(plain)
   })
 
   it('leaves out what an old run did not record', () => {

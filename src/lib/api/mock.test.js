@@ -1729,6 +1729,24 @@ describe('replacing pages with denoised pages, in the mock', () => {
     expect(replaced.missing).toEqual([2])
     vi.unstubAllGlobals()
   })
+
+  it('takes pages saved larger at their new size, with their regions', async () => {
+    const backend = createMockBackend({ timing: { method: 0, analysis: 0, region: 0, pageTail: 0 } })
+    await settle(backend.downloadModelGroup({ id: 'pageDenoise' }))
+    await vi.runAllTimersAsync()
+    const before = await chapterOf(backend)
+    await settle(backend.denoiseChapterLocal({ runId: 'den-2x', chapterId: CHAPTER, presetId: 'waifu2x-scan-4x-n2',
+      outputScale: 2, outDir: '/scans/denoised' }))
+    expect((await chapterOf(backend)).denoiseReplacement).toEqual({ pages: before.pages.length, kept: 0, missing: 0 })
+
+    const report = await settle(backend.replaceWithDenoised({ chapterId: CHAPTER }))
+    expect(report.replaced).toEqual(before.pages.map((page) => page.index))
+    const after = await chapterOf(backend)
+    after.pages.forEach((page, at) => {
+      expect([page.width, page.height]).toEqual([before.pages[at].width * 2, before.pages[at].height * 2])
+      expect(page.regionCount).toBe(before.pages[at].regionCount)
+    })
+  })
 })
 
 describe('the denoise history of a chapter, in the mock', () => {

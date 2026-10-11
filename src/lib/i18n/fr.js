@@ -1005,6 +1005,7 @@ export const fr = {
     denoised: {
       failed: 'Impossible de lire l’historique de débruitage du chapitre {number}.',
       run: '{when} · {preset}',
+      runScaled: '{when} · {preset} · enregistré en {scale}x',
       presetUnknown: 'Préréglage non enregistré',
       fromRaw: 'Depuis les pages brutes',
       fromCleaned: 'Depuis les pages nettoyées',
@@ -1619,6 +1620,51 @@ export const fr = {
         name: 'Real-CUGAN 3x débruitage fort',
         note: 'Retire le grain prononcé et le bruit JPEG. Peut adoucir les trames fines.',
       },
+      digimangaBw4x: {
+        name: 'Digimanga BW 4x',
+        note: 'Entraîné sur du manga numérique en noir et blanc. Accentue la netteté des pages numériques propres.',
+      },
+      mangajpegHq: {
+        name: 'MangaJPEG HQ',
+        note: 'Retire les blocs JPEG légers et les halos. Conserve la taille de la page.',
+      },
+      mangajpegLq: {
+        name: 'MangaJPEG LQ',
+        note: 'Retire les forts dégâts JPEG. Conserve la taille de la page.',
+      },
+      waifu2xScanLight: {
+        name: 'waifu2x scan, bruit léger',
+        note: 'Retire le grain de scan léger sans accentuer la netteté. Conserve la taille de la page.',
+      },
+      waifu2xScanHeavy: {
+        name: 'waifu2x scan, bruit fort',
+        note: 'Retire le grain de scan prononcé sans accentuer la netteté. Conserve la taille de la page.',
+      },
+      realcugan4x: {
+        name: 'Real-CUGAN 4x conservateur',
+        note: 'Préserve l’aspect d’origine, avec la netteté la plus forte.',
+      },
+      waifu2xArtLight: {
+        name: 'waifu2x art 2x, bruit léger',
+        note: 'Pour les illustrations en couleur. Accentue la netteté et retire le bruit léger.',
+      },
+      waifu2xArtStrong: {
+        name: 'waifu2x art 2x, bruit fort',
+        note: 'Pour les illustrations en couleur. Accentue la netteté et retire le bruit fort.',
+      },
+    },
+    pages: {
+      label: 'Les pages sont',
+      bw: 'En noir et blanc',
+      color: 'En couleur',
+    },
+    output: {
+      label: 'Taille de sortie',
+      same: 'Même taille',
+      times: '{scale}x',
+      fixed: 'Ce préréglage conserve la taille de la page',
+      becomes: 'La page 1 fait {width} x {height} et est enregistrée en {outWidth} x {outHeight}.',
+      larger: 'Les pages agrandies peuvent remplacer les pages du chapitre avant leur nettoyage. Les masques détectés grandissent avec la page.',
     },
     credit: '{name} par {author}, {license}',
     duration: {
@@ -1649,6 +1695,7 @@ export const fr = {
       pages: 'Temps GPU pour ces pages à leur taille. L’envoi et le démarrage du GPU s’y ajoutent.',
       reference: 'La taille des pages est inconnue, l’estimation suppose donc des pages de {width} x {height}. L’envoi et le démarrage du GPU s’y ajoutent.',
       measured: 'D’après le temps mesuré sur cet ordinateur.',
+      unmeasured: 'Ce préréglage n’a pas encore été chronométré sur un GPU cloud.',
     },
     out: {
       label: 'Enregistrer dans',
@@ -1692,6 +1739,7 @@ export const fr = {
         other: '{count} pages entières, {pixels} pixels',
       },
       models: 'Modèles',
+      output: '{scale}x la taille de chaque page',
       tooLarge: 'Exclues',
       tooLargeValue: {
         one: '{count} page est trop grande pour ce préréglage et n’est pas envoyée.',
@@ -1717,7 +1765,7 @@ export const fr = {
       copied: 'Copié',
     },
     reason: {
-      tooLarge: 'Trop grande pour ce préréglage',
+      tooLarge: 'Trop grande pour ce préréglage à cette taille de sortie',
       unsupported: 'Image illisible pour ce préréglage',
       inference: 'Le modèle n’a pas pu la traiter',
       unreadable: 'La page est illisible',
@@ -1746,6 +1794,7 @@ export const fr = {
       cloudDisabled: 'L’utilisation du cloud est désactivée. Activez-la dans Réglages > Cloud, puis réessayez.',
       noProfile: 'Aucun GPU cloud n’est sélectionné. Choisissez-en un dans Réglages > Cloud.',
       notSetUp: 'Ce GPU cloud n’est pas configuré pour le débruitage des pages. Dans Réglages > Cloud, configurez-le avec Modal et activez Débruitage des pages, puis réessayez.',
+      cloudOutdated: 'Ce GPU cloud a été configuré avant les tailles de sortie agrandies. Mettez à jour la configuration dans Réglages > Cloud, ou choisissez Même taille, puis réessayez.',
       openCloud: 'Ouvrir les réglages Cloud',
       modelMissing: 'Le modèle local est manquant ou a échoué à sa vérification. Revenez en arrière pour le retélécharger.',
       runtimeMissing: 'ONNX Runtime, sur lequel ce modèle s’exécute, n’est pas installé. Téléchargez-le dans Réglages > Modèles.',

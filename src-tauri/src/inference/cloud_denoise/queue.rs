@@ -270,7 +270,7 @@ fn poll(batch: &Batch<'_>, transfer: &mut PageTransfer, cancel: &AtomicBool) -> 
                 meta.validate(&transfer.record.job.metadata)
                     .map_err(|_| "gateway_protocol")?;
                 let page = &batch.plan.pages[transfer.at];
-                if (meta.info.width, meta.info.height) != (page.width, page.height) {
+                if meta.page_size(&transfer.record.job.metadata) != Some((page.width, page.height)) {
                     return Err("gateway_protocol".into());
                 }
                 transfer.record.result = Some(meta);

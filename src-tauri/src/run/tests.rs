@@ -4410,6 +4410,21 @@ fn a_reader_that_is_absent_or_will_not_open_leaves_the_gate_standing() {
     events::unregister(subscription);
 }
 
+/// Whether this machine is under memory pressure, said on stderr when it is.
+///
+/// The pressure ladder reads the kernel and not the test
+/// ([`Pipeline::under_pressure`]), and its first step surrenders rung 2
+/// before a region is cleaned. A test that asserts what a run did with rung
+/// 2 has nothing to assert on such a machine, so it asks this and returns.
+/// A full disk is enough to put macOS there: the swap has nowhere to grow.
+fn host_under_pressure() -> bool {
+    let level = memory::pressure();
+    if level.is_elevated() {
+        eprintln!("skipped: host is under memory pressure ({level:?})");
+    }
+    level.is_elevated()
+}
+
 fn one_gpu_at_a_time() -> std::sync::MutexGuard<'static, ()> {
     static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
     GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -4594,9 +4609,7 @@ fn the_regions_a_page_reports_are_in_reading_order() {
 fn a_crowded_page_reaches_rung_two_and_records_where_it_ran() {
     // A host under memory pressure surrenders rung 2 before this test's first
     // assertion, which is the ladder doing its job on the wrong machine.
-    let level = memory::pressure();
-    if level.is_elevated() {
-        eprintln!("skipped: host is under memory pressure ({level:?})");
+    if host_under_pressure() {
         return;
     }
     let _serial = one_gpu_at_a_time();
@@ -4722,9 +4735,7 @@ fn a_run_under_pressure_gives_back_the_inpainter_and_keeps_going() {
     // The "before" half of this test asserts the host is *not* under pressure;
     // a host that already is fails that assertion before the test's own signal
     // is ever supplied.
-    let level = memory::pressure();
-    if level.is_elevated() {
-        eprintln!("skipped: host is under memory pressure ({level:?})");
+    if host_under_pressure() {
         return;
     }
     let _serial = one_gpu_at_a_time();
@@ -6613,6 +6624,11 @@ fn left_on(job: &Job) -> serde_json::Value {
 /// Clean without the option takes what was left.
 #[test]
 fn solid_bubbles_only_cleans_the_bubble_and_leaves_the_rest_detected() {
+    // Each assertion on rung 2's session below is one the pressure ladder
+    // answers first on a machine short of memory.
+    if host_under_pressure() {
+        return;
+    }
     let scratch = Scratch::new("solid-stored");
     let (library, chapter_id) = a_lettered_chapter(&scratch, 1);
     let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Detect).unwrap();
@@ -6670,6 +6686,11 @@ fn solid_bubbles_only_cleans_the_bubble_and_leaves_the_rest_detected() {
 /// is announced once and finished once, with its cleaned region between.
 #[test]
 fn solid_bubbles_only_in_one_run_leaves_what_detect_then_clean_leaves() {
+    // Each assertion on rung 2's session below is one the pressure ladder
+    // answers first on a machine short of memory.
+    if host_under_pressure() {
+        return;
+    }
     let one = Scratch::new("solid-one-run");
     let (one_library, one_chapter) = a_lettered_chapter(&one, 2);
     let entries = plan(&one_library, "chapter", &one_chapter, None).unwrap();
@@ -6718,18 +6739,37 @@ fn solid_bubbles_only_in_one_run_leaves_what_detect_then_clean_leaves() {
 
 /// What rung 0 does not settle is left stored and nothing above it is asked:
 /// a fill the quality metric refuses, a solid colour that is not the bubble's
-/// paper, and text outside a balloon on paper a fill would pass on. Without
-/// the option the first is escalated, the second painted and the third
-/// filled. A bubble on flat paper is cleaned either way, its route measured
-/// from the stored mask where no fit was stored.
+/// paper, text outside a balloon on paper a fill would pass on, and a bubble
+/// over tone. Without the option the first is escalated, the second painted
+/// and the third filled. A bubble on flat paper is cleaned either way, its
+/// route measured from the stored mask where no fit was stored.
+///
+/// **A bubble the fit routed to the inpainter is cleaned too, where its paper
+/// is one tone.** On a real chapter that route was the reason for 102 of the
+/// 112 bubbles a solid-bubbles clean left, most of them white: the ring had
+/// clipped an outline or a glyph. Under a plain fill-only ceiling the same
+/// route still declines.
 #[test]
 fn solid_bubbles_only_keeps_what_rung_zero_does_not_settle_and_asks_no_model() {
+    // Each assertion on rung 2's session below is one the pressure ladder
+    // answers first on a machine short of memory.
+    if host_under_pressure() {
+        return;
+    }
     // Lettering in a dark frame three pixels wide: the fill is measured from
     // the frame, and the paper beyond the frame says it is not paper.
-    let mut page = gray_test_page(320, 140);
+    let mut page = gray_test_page(460, 140);
     for y in 57..79usize {
         for x in 37..59usize {
-            page.data[y * 320 + x] = 30;
+            page.data[y * 460 + x] = 30;
+        }
+    }
+    // And a 2 px checker of tone under the last bubble.
+    for y in 44..92usize {
+        for x in 374..422usize {
+            if (x / 2 + y / 2) % 2 == 0 {
+                page.data[y * 460 + x] = 60;
+            }
         }
     }
     let bytes = encode(&page, Format::Png).unwrap();
@@ -6739,6 +6779,7 @@ fn solid_bubbles_only_keeps_what_rung_zero_does_not_settle_and_asks_no_model() {
         strip: &strip, joins: &survey.joins, segments: &survey.segments, placement: 0, sources: &[],
     };
     let filled = Some(DetectionFit { route: Route::Fill, thickness: 0, best_deviation: 0.0, scale: 1.0 });
+    let laddered = Some(DetectionFit { route: Route::Inpaint, thickness: 0, best_deviation: f32::MAX, scale: 1.0 });
     let stored = |id: &str, x: i64, inside: bool, pick: &str, balloon_color: Option<[u8; 3]>, fit: Option<DetectionFit>| {
         let bbox = Rect::new(x, 60, 16, 16);
         LoadedDetection {
@@ -6758,6 +6799,8 @@ fn solid_bubbles_only_keeps_what_rung_zero_does_not_settle_and_asks_no_model() {
         stored("black", 110, true, "solid", Some([0; 3]), filled),
         stored("outside", 180, false, "fill", None, filled),
         stored("flat", 250, true, "lama", Some([245; 3]), None),
+        stored("routed", 320, true, "fill", Some([245; 3]), laddered),
+        stored("toned", 390, true, "fill", Some([245; 3]), laddered),
     ];
     let answered = |outcome: &DetectionsOutcome| outcome.regions.iter().map(|(id, region)| (id.clone(), match region {
         RegionOutcome::Cleaned(patch, _) => patch.provenance.engine.rung_key().to_owned(),
@@ -6775,6 +6818,8 @@ fn solid_bubbles_only_keeps_what_rung_zero_does_not_settle_and_asks_no_model() {
         ("black".to_owned(), Engine::Fill.rung_key().to_owned()),
         ("outside".to_owned(), Engine::Fill.rung_key().to_owned()),
         ("flat".to_owned(), Engine::Fill.rung_key().to_owned()),
+        ("routed".to_owned(), "decline.reason.rungUnavailable".to_owned()),
+        ("toned".to_owned(), "decline.reason.rungUnavailable".to_owned()),
     ]);
     // Without it under the run's own ceiling the refused fill goes up the
     // ladder, which here has nothing on it.
@@ -6784,7 +6829,10 @@ fn solid_bubbles_only_keeps_what_rung_zero_does_not_settle_and_asks_no_model() {
 
     let mut only = pipeline().with_solid_bubbles_only(true);
     let outcome = only.clean_detections("c1-p001", &bytes, Engine::Lama, &context, &detections).unwrap();
-    assert_eq!(answered(&outcome), [("flat".to_owned(), Engine::Fill.rung_key().to_owned())]);
+    assert_eq!(answered(&outcome), [
+        ("flat".to_owned(), Engine::Fill.rung_key().to_owned()),
+        ("routed".to_owned(), Engine::Fill.rung_key().to_owned()),
+    ]);
     assert!(matches!(only.rung2.state, Session::Unopened), "the option asked for the inpainter");
 }
 

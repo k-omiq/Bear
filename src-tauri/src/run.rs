@@ -3763,10 +3763,12 @@ impl Pipeline {
     ) -> Result<DetectionsOutcome, String> {
         self.fault = None;
         // Solid bubbles only is rung 0 and nothing above it. Under that
-        // ceiling a LaMa pick starts on the routed fill, and a region the fit
-        // sent to the inpainter declines without any rung being asked
+        // ceiling a LaMa pick starts on the routed fill, and a region routed
+        // to the inpainter declines without any rung being asked
         // ([`start_rung`], [`engine_for`]): the rule the cloud clean's local
-        // first pass already cleans by ([`clean_fill_rung_first`]).
+        // first pass already cleans by ([`clean_fill_rung_first`]). The route
+        // it declines by is the stored one, moved to the fill below where the
+        // balloon's paper is one tone.
         let solid_only = self.solid_bubbles_only;
         let ceiling = if solid_only { Engine::Fill } else { ceiling };
         let page = cleaner_core::image::orientation::from_bytes(bytes).raster(&decode(bytes).map_err(|e| e.to_string())?);
@@ -3828,6 +3830,16 @@ impl Pipeline {
                 fitted.route = stored.route;
                 fitted.thickness = stored.thickness;
                 fitted.best_deviation = stored.best_deviation;
+            }
+            // Solid bubbles only asks one thing of a balloon: is its paper
+            // one tone. The route answers something stricter, whether the
+            // whole ring fits a plane, and a ring that clips the balloon's
+            // outline or a neighbouring glyph fails that on white paper. Under
+            // a ceiling with no inpainter that region had no rung at all, so
+            // the plain balloons were the ones left. The fill paints the
+            // ring's median, and the metric still judges what it made.
+            if solid_only && fitted.route.needs_a_model() && fit::on_flat_paper(engine_crop, &fitted.mask, noise) {
+                fitted.route = Route::Fill;
             }
 
             if let Some(step) = self.under_pressure() {

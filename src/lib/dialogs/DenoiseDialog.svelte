@@ -9,8 +9,12 @@
    *   (`cloudOffered`), asked when the dialog opens.
    *   The choice is saved as the setting, then the form follows.
    * - **form**: where to run and the preset (both start at the settings and
-   *   can be changed here for this run), the estimated time for the whole
-   *   chapter, and the folder the pages go to.
+   *   can be changed here for this run), the output size, the estimated time
+   *   for the whole chapter, and the folder the pages go to. The output size
+   *   is this run's alone, never a setting: same size, or 2 to 4 times it, as
+   *   far as the preset can give (`outputScalesFor`). Larger pages are saved
+   *   in the folder and cannot be taken as the chapter's pages, and the form
+   *   says so when one is chosen.
    * - **consent**, cloud only: what `prepare_cloud_denoise` says would be
    *   sent, where, and at what GPU time and cost, with the same two
    *   statements every cloud consent asks for (`CloudCleanConsentDialog`).
@@ -45,7 +49,9 @@
   import {
     checkCloudDenoise, cloudNote, cloudOffered, currentPreset, loadDenoisePresets, offeredPresets, saveDenoiseChoice,
   } from '../state/denoise.svelte.js'
-  import { DENOISE_REFERENCE, chapterEstimate, defaultOutDir, pageMegapixels, presetById } from '../model/denoise.js'
+  import {
+    DENOISE_REFERENCE, chapterEstimate, defaultOutDir, outputScalesFor, pageMegapixels, presetById, recipeAt, runScale,
+  } from '../model/denoise.js'
   import { providerKeyOf } from './CloudAnalysis.svelte'
   import { openSettings } from './settingslinks.js'
   import PresetList from './denoise/PresetList.svelte'
@@ -73,6 +79,8 @@
   /** Where this run goes; starts at the setting, and Cloud only while it can. */
   let target = $state(untrack(() => (ongoing ? (ongoing.kind === 'cloudDenoise' ? 'cloud' : 'local') : startTarget())))
   let preset = $state(untrack(() => currentPreset(target)))
+  /** The output size picked for this run, as a multiple of the page's own. */
+  let scale = $state(1)
   let outDir = $state(defaultOutDir(chapter?.sourcePath, cleaned ? 'denoised-cleaned' : 'denoised'))
   let installed = $state(false)
   let setupFailed = $state(false)
@@ -133,6 +141,21 @@
   }))
   const sized = $derived(pageMegapixels(pages) !== null)
 
+  /** The output sizes the chosen preset offers, and the one this run uses. */
+  const scales = $derived(outputScalesFor(chosen ? presetById(chosen) : null))
+  const outputScale = $derived(scales.includes(scale) ? scale : 1)
+  const sizes = $derived(scales.map((value) => ({
+    value: String(value),
+    label: value === 1 ? t('denoise.output.same') : t('denoise.output.times', { scale: value }),
+  })))
+  /** What the first page becomes at a larger output size, when its size is known. */
+  const grown = $derived.by(() => {
+    const width = Number(pages[0]?.width)
+    const height = Number(pages[0]?.height)
+    if (outputScale === 1 || !(width > 0) || !(height > 0)) return null
+    return { width, height, outWidth: width * outputScale, outHeight: height * outputScale }
+  })
+
   const targets = $derived([
     { value: 'local', label: t('denoise.target.local') },
     { value: 'cloud', label: t('denoise.target.cloud'), disabled: !cloudOffered() },
@@ -158,17 +181,28 @@
     } finally {
       switching = false
     }
-    preset = currentPreset(target)
+    choosePreset(currentPreset(target))
   }
 
   const folder = $derived(outDir.trim())
   const canRun = $derived(Boolean(chosen && folder && count > 0 &&
     (target === 'local' ? installed : cloudOffered() && !switching)))
 
+  /**
+   * A size the new preset cannot give goes back to same size, for good: it
+   * does not come back when a preset that can give it is chosen again.
+   *
+   * @param {string|null} id
+   */
+  function choosePreset(id) {
+    preset = id
+    if (!outputScalesFor(id ? presetById(id) : null).includes(scale)) scale = 1
+  }
+
   /** @param {string} next */
   function chooseTarget(next) {
     target = next
-    preset = currentPreset(next)
+    choosePreset(currentPreset(next))
   }
 
   /** @param {'local'|'cloud'} next */
@@ -193,6 +227,9 @@
     // denoise off, or on Beam, which cannot run it.
     if (code.startsWith('capability_unavailable: gateway denoise is not configured') ||
         code.startsWith('capability_unavailable: the deployment has no models')) return { key: 'denoise.error.notSetUp' }
+    // The deployment has page denoise but was set up before it could keep a
+    // larger result.
+    if (code.startsWith('capability_unavailable: the deployment cannot upscale')) return { key: 'denoise.error.cloudOutdated' }
     if (code.startsWith('denoise_models_missing')) return { key: 'denoise.error.modelMissing' }
     if (code.startsWith('denoise_runtime_unavailable')) return { key: 'denoise.error.runtimeMissing' }
     if (code.includes('out_dir')) return { key: 'denoise.error.outDir' }
@@ -224,7 +261,10 @@
     const backend = getBackend()
     const id = mintRunId()
     const presetId = chosen
-    await follow(id, 'denoise', () => backend.denoiseChapterLocal({ runId: id, chapterId: chapter.id, pageIndices: null, presetId, outDir: folder }))
+    const size = outputScale
+    await follow(id, 'denoise', () => backend.denoiseChapterLocal({
+      runId: id, chapterId: chapter.id, pageIndices: null, presetId, outDir: folder, outputScale: size,
+    }))
   }
 
   /**
@@ -290,7 +330,9 @@
     const profileId = cloud.readiness.target?.profile_id
     const configKey = configurationKey(cloud.readiness)
     try {
-      const prepared = await getBackend().prepareCloudDenoise({ chapterId: chapter.id, pageIndices: null, recipe: entry.recipe })
+      const prepared = await getBackend().prepareCloudDenoise({
+        chapterId: chapter.id, pageIndices: null, recipe: recipeAt(entry, outputScale),
+      })
       proposal = { ...prepared, profileId: prepared.profileId ?? profileId }
       rights = false
       retention = false
@@ -368,6 +410,7 @@
       pixels: numbers.format(proposal.totalPixels ?? 0),
       tooLarge: Array.isArray(proposal.tooLargePages) ? proposal.tooLargePages.length : 0,
       models: Array.isArray(proposal.modelIds) ? proposal.modelIds : [],
+      scale: runScale(proposal.recipe?.output_scale),
       minutes: seconds && Number.isFinite(seconds.low) && Number.isFinite(seconds.high) && seconds.high >= seconds.low
         ? { low: Math.max(1, Math.round(seconds.low / 60)), high: Math.max(1, Math.round(seconds.high / 60)) }
         : null,
@@ -441,8 +484,28 @@
           value={chosen}
           label={t('denoise.preset.label')}
           timeOf={(entry) => presetTime(entry, target, { pages: sized ? pages : null, localPerPage: session.denoiseLocalSecondsPerPage })}
-          onchange={(id) => (preset = id)}
+          onchange={choosePreset}
         />
+      </div>
+
+      <div class="section" data-output={outputScale}>
+        <div class="row">
+          <span class="label" id="{uid}-size">{t('denoise.output.label')}</span>
+          {#if scales.length > 1}
+            <Segmented
+              options={sizes}
+              value={String(outputScale)}
+              labelledBy="{uid}-size"
+              onchange={(value) => (scale = Number(value))}
+            />
+          {:else}
+            <span class="fixed">{t('denoise.output.fixed')}</span>
+          {/if}
+        </div>
+        {#if outputScale > 1}
+          {#if grown}<p class="small" data-output-becomes>{t('denoise.output.becomes', grown)}</p>{/if}
+          <p class="small" data-output-larger>{t('denoise.output.larger')}</p>
+        {/if}
       </div>
 
       {#if target === 'local'}
@@ -461,8 +524,10 @@
             {:else if estimate.basis === 'reference'}{t('denoise.estimate.reference', DENOISE_REFERENCE)}
             {:else}{t('denoise.estimate.measured')}{/if}
           </p>
-        {:else}
+        {:else if target === 'local'}
           <LocalTime {installed} />
+        {:else}
+          <p class="small">{t('denoise.estimate.unmeasured')}</p>
         {/if}
       </div>
 
@@ -521,6 +586,12 @@
           <dt>{t('denoise.consent.models')}</dt>
           <dd data-fact="models">{#each consent.models as model (model)}<code>{model}</code>{/each}</dd>
         </div>
+        {#if consent.scale > 1}
+          <div class="fact">
+            <dt>{t('denoise.output.label')}</dt>
+            <dd data-fact="output">{t('denoise.consent.output', { scale: consent.scale })}</dd>
+          </div>
+        {/if}
         <div class="fact">
           <dt>{t('cloud.analysis.run.where')}</dt>
           <dd data-fact="where">{t('cloud.analysis.consent.whereValue', { name: proposal.profileName, providerKey: providerKeyOf(proposal.provider) })}</dd>
@@ -592,7 +663,7 @@
       <p class="failed-line" role="alert">{t(failure.key, failure.params ?? {})}</p>
       {#if failure.key === 'denoise.error.runtimeMissing'}
         <Button size="sm" onclick={() => { closeModal(null); openSettings('models') }}>{t('denoise.model.openSettings')}</Button>
-      {:else if failure.key === 'denoise.error.notSetUp'}
+      {:else if failure.key === 'denoise.error.notSetUp' || failure.key === 'denoise.error.cloudOutdated'}
         <Button size="sm" onclick={() => { closeModal(null); openSettings('cloud') }}>{t('denoise.error.openCloud')}</Button>
       {/if}
     {/if}
@@ -638,6 +709,7 @@
 
   .row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-5) }
   .label { font-size: 11px; color: var(--t3) }
+  .fixed { font-size: 12px; color: var(--t2) }
   .section { display: grid; gap: var(--s-3) }
   .section.hidden { display: none }
   .figure { margin: 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text) }

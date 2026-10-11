@@ -23,7 +23,7 @@ import { buildReviewPage, supportOf } from './mockreview.js'
 import { commitMask, ENGINE_INFO } from './provenance.js'
 import { createRng } from './rng.js'
 import { createRunnerPool } from './runner.js'
-import { DENOISE_PRESETS, presetById } from '../model/denoise.js'
+import { DENOISE_PRESETS, outputScalesFor, presetById, recipeAt } from '../model/denoise.js'
 import { currentRung } from '../model/ladder.js'
 import { MAX_MASK_PADDING } from '../model/masks.js'
 import {
@@ -293,8 +293,9 @@ export function createMockBackend(options = {}) {
    * rows sharing `created`. A rerun into the same folder replaces the rows
    * whose files it wrote over, a run in the same second as a held one moves
    * a second on, and only the newest `MAX_DENOISE_RUNS` runs are kept.
+   * `scale` is the size the file was saved at, as a multiple of the page's.
    *
-   * @typedef {{pageIndex: number, path: string, created: number, preset: string|null,
+   * @typedef {{pageIndex: number, path: string, created: number, preset: string|null, scale: number,
    *   target: 'local'|'cloud', fromCleaned: boolean, taken: boolean}} MockDenoiseRow
    * @type {Map<string, MockDenoiseRow[]>}
    */
@@ -305,16 +306,16 @@ export function createMockBackend(options = {}) {
   /**
    * @param {any} chapter
    * @param {{written: Array<{pageIndex: number, path: string}>}} report
-   * @param {{preset: string|null, target: 'local'|'cloud'}} run
+   * @param {{preset: string|null, target: 'local'|'cloud', scale?: number}} run
    */
-  const recordDenoised = (chapter, report, { preset, target }) => {
+  const recordDenoised = (chapter, report, { preset, target, scale = 1 }) => {
     if (!report.written.length) return
     let rows = (denoiseRows.get(chapter.id) ?? []).filter((row) => !report.written.some((output) => output.path === row.path))
     let created = Math.floor(Date.now() / 1000)
     if (rows.some((row) => row.created === created)) created = Math.max(...rows.map((row) => row.created)) + 1
     for (const output of report.written) {
       const page = chapter.pages.find((/** @type {any} */ entry) => entry.index === output.pageIndex)
-      rows.push({ pageIndex: output.pageIndex, path: output.path, created, preset, target,
+      rows.push({ pageIndex: output.pageIndex, path: output.path, created, preset, target, scale,
         fromCleaned: page ? pageCleaned(page) : false, taken: false })
     }
     const runs = [...new Set(rows.map((row) => row.created))].sort((a, b) => b - a)
@@ -339,8 +340,9 @@ export function createMockBackend(options = {}) {
    * `page_denoise.rs#standings`, page by page: a page with no current
    * denoised file is missing and stays raw (a run that failed it, as
    * `?denoise=pageFail` does); a cleaned page, or one denoised from its
-   * cleaning, is kept; the rest are ready. The mock's files never go missing
-   * and its pages never change under a run.
+   * cleaning, is kept; the rest are ready, a file saved larger than the page
+   * among them. The mock's files never go missing and its pages never change
+   * under a run.
    *
    * @param {any} chapter
    * @returns {{ready: number[], kept: number[], missing: number[]}}
@@ -371,11 +373,13 @@ export function createMockBackend(options = {}) {
   /**
    * A stand-in page for the compare view: the page's panels on paper, and on
    * the raw side a grain over it, so the wipe has something to show. SVG, as
-   * the mock has no encoder; the view sniffs the type from the bytes.
+   * the mock has no encoder; the view sniffs the type from the bytes. A file
+   * saved larger says so in its own size, as a real one does, so the view is
+   * shown two sides of different sizes.
    *
-   * @param {any} page @param {boolean} raw
+   * @param {any} page @param {boolean} raw @param {number} [scale]
    */
-  const compareArt = (page, raw) => {
+  const compareArt = (page, raw, scale = 1) => {
     const height = Math.round(100 * (page.height ?? 1400) / (page.width ?? 1000))
     const panels = (page.panels ?? []).map((/** @type {any} */ panel) =>
       `<rect x="${panel.x}" y="${panel.y * height / 100}" width="${panel.w}" height="${panel.h * height / 100}" fill="none" stroke="#222" stroke-width="0.6"/>`).join('')
@@ -383,7 +387,7 @@ export function createMockBackend(options = {}) {
       ? '<filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2"/><feColorMatrix values="0 0 0 0 0.4 0 0 0 0 0.4 0 0 0 0 0.4 0 0 0 0.55 0"/></filter>'
         + `<rect width="100" height="${height}" filter="url(#g)"/>`
       : ''
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 ${height}" width="${page.width ?? 1000}" height="${page.height ?? 1400}">`
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 ${height}" width="${(page.width ?? 1000) * scale}" height="${(page.height ?? 1400) * scale}">`
       + `<rect width="100" height="${height}" fill="${raw ? '#e9e4d8' : '#fbfaf7'}"/>${panels}${grain}</svg>`
     return new TextEncoder().encode(svg)
   }
@@ -4422,13 +4426,16 @@ export function createMockBackend(options = {}) {
     /**
      * Four tiles a page, a progress event after each, and a stop heard at the
      * next tile, as the native run does. The page in flight when it stops is
-     * in neither list.
+     * in neither list. `outputScale` is 1 to the preset's `maxScale`, null or
+     * left out for 1.
      */
-    async denoiseChapterLocal({ runId, chapterId, pageIndices = null, presetId, outDir }) {
+    async denoiseChapterLocal({ runId, chapterId, pageIndices = null, presetId, outDir, outputScale = null }) {
       if (typeof runId !== 'string' || !runId || denoiseRuns.has(runId)) throw new Error('denoise_run_id_invalid')
       const found = findChapter(chapterId)
       if (!found) throw new Error('chapter_not_found')
       if (!presetById(presetId)?.targets.includes('local')) throw new Error('denoise_preset_unknown')
+      const scale = outputScale ?? 1
+      if (!outputScalesFor(presetById(presetId)).includes(scale)) throw new Error('denoise_output_scale_invalid')
       if (denoiseMissing()) throw new Error('denoise_models_missing')
       checkOutDir(outDir)
       const pages = denoisePages(found.chapter, pageIndices)
@@ -4449,7 +4456,7 @@ export function createMockBackend(options = {}) {
           if (!run.stopped) progress(reached + 1, 0)
         }
         const report = denoiseReport(pages.slice(0, reached), outDir, 'denoise_')
-        recordDenoised(found.chapter, report, { preset: presetId, target: 'local' })
+        recordDenoised(found.chapter, report, { preset: presetId, target: 'local', scale })
         return run.stopped ? { ...report, cancelled: true } : report
       } finally {
         denoiseRuns.delete(runId)
@@ -4477,6 +4484,12 @@ export function createMockBackend(options = {}) {
         const page = found.chapter.pages.find((/** @type {any} */ entry) => entry.index === index)
         const row = /** @type {MockDenoiseRow} */ (currentDenoised(chapterId, index))
         page.sourceSha = sha256Hex(`denoised:${row.path}:${page.sourceSha}`)
+        // `Job::replace_source`: a file saved larger is the page at that
+        // size. Boxes here are in page percent, so they grow with it.
+        if (row.scale > 1 && page.width && page.height) {
+          page.width *= row.scale
+          page.height *= row.scale
+        }
         row.taken = true
       }
       return { replaced: plan.ready, kept: plan.kept, missing: plan.missing, failed: [] }
@@ -4493,7 +4506,7 @@ export function createMockBackend(options = {}) {
       for (const row of rows) {
         let run = runs[runs.length - 1]
         if (run?.created !== row.created) {
-          run = { created: row.created, preset: row.preset, target: row.target, fromCleaned: false,
+          run = { created: row.created, preset: row.preset, scale: row.scale, target: row.target, fromCleaned: false,
             folder: row.path.replace(/[\\/][^\\/]*$/, ''), pages: [] }
           runs.push(run)
         }
@@ -4516,7 +4529,7 @@ export function createMockBackend(options = {}) {
       const row = (denoiseRows.get(chapterId) ?? []).find((entry) => entry.pageIndex === pageIndex && entry.created === run)
       if (!row) throw new Error('denoise_run_missing')
       if (side !== 'raw' && side !== 'denoised') throw new Error('denoise_side_invalid')
-      return compareArt(page, side === 'raw')
+      return compareArt(page, side === 'raw', side === 'raw' ? 1 : row.scale)
     },
 
     /** The presets the selected deployment advertises. A setup made with Page denoise off has none. */
@@ -4534,7 +4547,13 @@ export function createMockBackend(options = {}) {
       return DENOISE_PRESETS.map((preset) => preset.id)
     },
 
-    /** What a cloud denoise would send: pages, models, GPU time and cost. Sends nothing. */
+    /**
+     * What a cloud denoise would send: pages, models, GPU time and cost. Sends
+     * nothing. The preset is found by the recipe's steps, so a recipe that
+     * asks for a larger result (`output_scale`) is still its preset's; the
+     * scale must be one the preset can give, and never a stated 1, which the
+     * gateway refuses. A preset with no measured time gives no estimate.
+     */
     async prepareCloudDenoise({ chapterId, pageIndices = null, recipe }) {
       await delay(timing.method)
       if (state.settings.cloudEngines !== 'allowed') throw new Error('cloud_disabled')
@@ -4550,35 +4569,43 @@ export function createMockBackend(options = {}) {
       }
       const found = findChapter(chapterId)
       if (!found) throw new Error('chapter_not_found')
-      const preset = DENOISE_PRESETS.find((entry) => JSON.stringify(entry.recipe) === JSON.stringify(recipe))
+      const preset = DENOISE_PRESETS.find((entry) => entry.recipe.schema === recipe?.schema
+        && JSON.stringify(entry.recipe.steps) === JSON.stringify(recipe?.steps))
       if (!preset) throw new Error('cloud_denoise_invalid_recipe: unknown recipe')
+      const scale = recipe.output_scale ?? 1
+      if (!outputScalesFor(preset).includes(scale) || recipe.output_scale === 1) {
+        throw new Error('cloud_denoise_invalid_recipe: output_scale is not one this recipe can give')
+      }
       const pages = denoisePages(found.chapter, pageIndices)
       const totalPixels = pages.reduce((sum, page) => sum + (page.width ?? 0) * (page.height ?? 0), 0)
-      const busy = (totalPixels / 1e6) * preset.cloudSecondsPerMegapixel
+      const measured = typeof preset.cloudSecondsPerMegapixel === 'number'
+      const busy = measured ? (totalPixels / 1e6) * preset.cloudSecondsPerMegapixel : 0
       const profile = profileOf(target.type, target.profile_id)
       const issuedAtMs = Date.now()
       const low = Math.round(busy)
       const high = Math.round(busy * 1.4 + 150)
       const proposal = {
-        proposalId: sha256Hex(`cloud-denoise:${chapterId}:${preset.id}:${issuedAtMs}:${denoiseProposals.size}`).slice(0, 32),
+        proposalId: sha256Hex(`cloud-denoise:${chapterId}:${preset.id}:${scale}:${issuedAtMs}:${denoiseProposals.size}`).slice(0, 32),
         chapterId,
         pageIndices: pages.map((page) => page.index),
         pages: pages.length,
         tooLargePages: [],
         totalPixels,
-        recipe: structuredClone(preset.recipe),
+        recipe: structuredClone(recipeAt(preset, scale)),
         modelIds: preset.recipe.steps.map((step) => `${step.engine}.${step.op}.x${step.scale ?? 1}`),
-        estimatedGpuSeconds: { low, high },
-        estimatedCostUsd: { low: Math.round((low / 3600) * 0.8 * 100) / 100, high: Math.round((high / 3600) * 0.8 * 100) / 100 },
+        estimatedGpuSeconds: measured ? { low, high } : null,
+        estimatedCostUsd: measured
+          ? { low: Math.round((low / 3600) * 0.8 * 100) / 100, high: Math.round((high / 3600) * 0.8 * 100) / 100 }
+          : null,
         gpu: profile?.gpu ?? 'L4',
         provider: target.type,
         profileName: profile?.name ?? target.profile_id,
         profileId: target.profile_id,
-        planDigest: sha256Hex(`cloud-denoise-plan:${chapterId}:${preset.id}:${pages.map((page) => page.index).join(',')}`),
+        planDigest: sha256Hex(`cloud-denoise-plan:${chapterId}:${preset.id}:${scale}:${pages.map((page) => page.index).join(',')}`),
         expiresAtMs: issuedAtMs + 300000,
         standing: standingFor(chapterId, target.type, target.profile_id, profile?.canonicalOriginFingerprint ?? ''),
       }
-      denoiseProposals.set(proposal.proposalId, { ...proposal, target: { ...target }, presetId: preset.id })
+      denoiseProposals.set(proposal.proposalId, { ...proposal, target: { ...target }, presetId: preset.id, scale })
       return structuredClone(proposal)
     },
 
@@ -4594,7 +4621,7 @@ export function createMockBackend(options = {}) {
       if (planDigest !== proposal.planDigest) throw new Error('cloud_denoise_plan_mismatch')
       const grant = { grantId: sha256Hex(`cloud-denoise-grant:${proposalId}`).slice(0, 32), expiresAtMs: Date.now() + 120000 }
       denoiseGrants.set(grant.grantId, { ...grant, chapterId: proposal.chapterId, pageIndices: proposal.pageIndices,
-        presetId: proposal.presetId })
+        presetId: proposal.presetId, scale: proposal.scale })
       recordStanding(proposal.chapterId, proposal.target.type, proposal.target.profile_id, fingerprint,
         rightsAttested === true && retentionAcknowledged === true)
       return structuredClone(grant)
@@ -4638,7 +4665,7 @@ export function createMockBackend(options = {}) {
           progress(reached + 1, reached + 1 === pages.length ? 1 : 0)
         }
         const report = denoiseReport(pages.slice(0, reached), outDir, 'cloud_denoise_')
-        recordDenoised(found.chapter, report, { preset: grant.presetId ?? null, target: 'cloud' })
+        recordDenoised(found.chapter, report, { preset: grant.presetId ?? null, target: 'cloud', scale: grant.scale ?? 1 })
         return run.stopped && reached < pages.length ? { ...report, cancelled: true } : report
       } finally {
         denoiseRuns.delete(id)
