@@ -511,19 +511,57 @@ pub fn rescued_by(verdict: Verdict, reading: Option<&hayai::Reading>) -> Verdict
     }
 }
 
+/// What a run does with text the reader reads as Latin letters: English, and
+/// every other language written in them. Left on the page unless the user
+/// turned the setting on, because it is what a localiser typeset and what a
+/// page already translated is made of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LatinText {
+    #[default]
+    Leave,
+    Clean,
+}
+
+impl LatinText {
+    pub fn cleaned(clean: bool) -> LatinText {
+        if clean { LatinText::Clean } else { LatinText::Leave }
+    }
+}
+
+/// The `script` of a verdict that holds a region because [`hayai`] read Latin
+/// letters there. Not the identifier's `Latin`, for the reason
+/// [`RESCUED_SCRIPT`] gives.
+pub const READ_LATIN: &str = "Latin_ocr";
+
 /// The text check on a region about to be cleaned. A reading that is not
-/// lettering holds it back as [`Verdict::NotText`]; a reader that failed or
-/// was not there changes nothing. It only ever holds back: no verdict that
-/// holds a region becomes one that cleans it.
+/// lettering holds it back as [`Verdict::NotText`], and a sure reading in
+/// Latin letters as [`Verdict::NotJapanese`] unless the run cleans Latin text;
+/// a reader that failed or was not there changes nothing. It only ever holds
+/// back: no verdict that holds a region becomes one that cleans it.
 ///
 /// The caller decides which regions are checked: those cleaned without a
 /// script reading ([`Verdict::OptedIn`], the outside-bubble opt-in and every
 /// region under the All text policy) and those no text box claimed, whose
 /// only evidence is the mask.
-pub fn text_checked(verdict: Verdict, reading: Option<&hayai::Reading>) -> Verdict {
+pub fn text_checked(verdict: Verdict, reading: Option<&hayai::Reading>, latin: LatinText) -> Verdict {
     match reading {
         Some(reading) if verdict.cleans() && !reading.is_lettering() => Verdict::NotText,
+        Some(reading) if verdict.cleans() && latin == LatinText::Leave && reading.is_latin() => {
+            Verdict::NotJapanese { script: READ_LATIN.to_owned() }
+        }
         _ => verdict,
+    }
+}
+
+/// [`text_checked`] for one unit of a grouping, read on its own before it may
+/// join another ([`crate::text_groups::group_checked`]). A unit that could
+/// not be read is text: the reader is optional.
+pub fn unit_answer(reading: Option<&hayai::Reading>, latin: LatinText) -> crate::text_groups::UnitAnswer {
+    use crate::text_groups::UnitAnswer;
+    match text_checked(Verdict::OptedIn, reading, latin) {
+        Verdict::NotText => UnitAnswer::NotText,
+        Verdict::NotJapanese { .. } => UnitAnswer::LanguageLeft,
+        _ => UnitAnswer::Text,
     }
 }
 
@@ -811,22 +849,55 @@ mod tests {
     fn the_text_check_holds_art_and_nothing_else() {
         let art = hayai("ド", 0.6);
         let text = hayai("シャコーン", 0.9);
-        assert_eq!(text_checked(Verdict::OptedIn, Some(&art)), Verdict::NotText);
-        assert_eq!(text_checked(Verdict::OptedIn, Some(&text)), Verdict::OptedIn);
-        assert_eq!(text_checked(Verdict::OptedIn, None), Verdict::OptedIn);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&art), LatinText::Leave), Verdict::NotText);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&text), LatinText::Leave), Verdict::OptedIn);
+        assert_eq!(text_checked(Verdict::OptedIn, None, LatinText::Leave), Verdict::OptedIn);
         let clean = Verdict::Clean { script: "Japanese".into() };
-        assert_eq!(text_checked(clean.clone(), Some(&art)), Verdict::NotText);
-        assert_eq!(text_checked(clean.clone(), Some(&text)), clean);
-        assert_eq!(text_checked(Verdict::Uncertain, Some(&art)), Verdict::Uncertain);
-        assert_eq!(text_checked(Verdict::OutOfBalloon, Some(&text)), Verdict::OutOfBalloon);
+        assert_eq!(text_checked(clean.clone(), Some(&art), LatinText::Leave), Verdict::NotText);
+        assert_eq!(text_checked(clean.clone(), Some(&text), LatinText::Leave), clean);
+        assert_eq!(text_checked(Verdict::Uncertain, Some(&art), LatinText::Leave), Verdict::Uncertain);
+        assert_eq!(text_checked(Verdict::OutOfBalloon, Some(&text), LatinText::Leave), Verdict::OutOfBalloon);
         // A low Hangul reading is a stylised sound effect, not art.
-        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("컹", 0.44))), Verdict::OptedIn);
-        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("우", 0.2))), Verdict::NotText);
-        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("ア", 0.5))), Verdict::NotText);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("컹", 0.44)), LatinText::Leave), Verdict::OptedIn);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("우", 0.2)), LatinText::Leave), Verdict::NotText);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("ア", 0.5)), LatinText::Leave), Verdict::NotText);
         // A long low reading is dense lettering; a long reading under the floor is not.
-        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("現不早了, 我天再来!", 0.45))), Verdict::OptedIn);
-        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("ゼラミコ", 0.18))), Verdict::NotText);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("現不早了, 我天再来!", 0.45)), LatinText::Leave), Verdict::OptedIn);
+        assert_eq!(text_checked(Verdict::OptedIn, Some(&hayai("ゼラミコ", 0.18)), LatinText::Leave), Verdict::NotText);
         assert!(!Verdict::NotText.cleans());
         assert_eq!(Verdict::NotText.skip_cause(), Some("not-text"));
+    }
+
+    /// English is left on the page unless the run cleans Latin text, and only
+    /// on a sure reading: a low one in Latin letters is the reader's guess at
+    /// drawn kana.
+    #[test]
+    fn a_sure_latin_reading_is_left_unless_the_run_cleans_latin() {
+        let held = Verdict::NotJapanese { script: READ_LATIN.to_owned() };
+        for text in ["POLICE", "NO!!", "Abo...?", "ＬＯＶＥ"] {
+            let reading = hayai(text, 0.9);
+            assert!(reading.is_latin(), "{text}");
+            assert_eq!(text_checked(Verdict::OptedIn, Some(&reading), LatinText::Leave), held, "{text}");
+            assert_eq!(text_checked(Verdict::OptedIn, Some(&reading), LatinText::Clean), Verdict::OptedIn, "{text}");
+        }
+        // Japanese with a Latin word in it, one letter, and a low reading.
+        for (text, confidence) in [("2025年www", 0.9), ("NTRビデオレター!?", 0.9), ("c", 0.9), ("THEMIIIIIII", 0.42)] {
+            let reading = hayai(text, confidence);
+            assert!(!reading.is_latin(), "{text}");
+            assert_eq!(text_checked(Verdict::OptedIn, Some(&reading), LatinText::Leave), Verdict::OptedIn, "{text}");
+        }
+        // Never a verdict that already holds the region.
+        assert_eq!(text_checked(Verdict::OutOfBalloon, Some(&hayai("POLICE", 0.9)), LatinText::Leave), Verdict::OutOfBalloon);
+    }
+
+    #[test]
+    fn a_unit_answer_is_the_text_check_of_a_unit_read_alone() {
+        use crate::text_groups::UnitAnswer;
+        assert_eq!(unit_answer(Some(&hayai("ドドド", 0.9)), LatinText::Leave), UnitAnswer::Text);
+        assert_eq!(unit_answer(Some(&hayai("ア", 0.5)), LatinText::Leave), UnitAnswer::NotText);
+        assert_eq!(unit_answer(Some(&hayai("POLICE", 0.9)), LatinText::Leave), UnitAnswer::LanguageLeft);
+        assert_eq!(unit_answer(Some(&hayai("POLICE", 0.9)), LatinText::Clean), UnitAnswer::Text);
+        // No reading: the reader is optional, and the mask stands.
+        assert_eq!(unit_answer(None, LatinText::Leave), UnitAnswer::Text);
     }
 }

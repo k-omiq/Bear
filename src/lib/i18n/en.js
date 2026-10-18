@@ -53,23 +53,15 @@ export const en = {
         "otherText": "Other",
         "description": "Description (optional)",
         "example": "Big black letters beside the hand.",
-        "preserve": "Manga Cleaner adds instructions to preserve the artwork, bubble outlines, and surrounding details. You will review the result before it is applied.",
+        "preserve": "Manga Cleaner adds instructions to preserve the artwork, bubble outlines, and surrounding details. The result is applied at once and flagged for review. To take it back, use Reject result.",
         "cancel": "Cancel",
         "clean": "Clean with Qwen",
-        "updateRequired": "Update the Qwen cloud deployment to use descriptions and the 8-step erase recipe."
-    },
-    "review": {
-        "title": "Review Qwen clean",
-        "help": "Check that the lettering is gone and the artwork is intact. Use result applies the blended preview to the page.",
-        "before": "Before",
-        "after": "After",
-        "retryCost": "Trying again makes another paid cloud request.",
-        "discard": "Discard",
-        "retry": "Try again",
-        "use": "Use result",
-        "expired": "This review has expired. The result was not applied.",
-        "failed": "Qwen did not make a sufficient edit after three seeds. Describe the lettering and try again.",
-        "required": "This Qwen result is cached and needs review before it can be applied."
+        "updateRequired": "Update the Qwen cloud deployment to use descriptions and the 8-step erase recipe.",
+        "helpFlux": "Pick the lettering type. You can say what the lettering covers, so the redraw matches it. No prompt-writing needed.",
+        "descriptionFlux": "What is behind the lettering (optional)",
+        "exampleFlux": "A brick wall with a window frame.",
+        "preserveFlux": "Only the masked lettering is redrawn. Manga Cleaner adds instructions to preserve the artwork. A wrong description draws the wrong thing, so leave it empty if you are not sure.",
+        "cleanFlux": "Clean with FLUX"
     }
 },
   /* ================================================================== */
@@ -439,6 +431,13 @@ export const en = {
       label: 'Original view',
       hold: 'Hold only',
       pinned: 'Pinned',
+    },
+    undoLimit: {
+      label: 'Undo history',
+      description:
+        'How many undo steps each chapter keeps, from {min} to {max}. A lower number drops the oldest steps at the next edit.',
+      outOfRange: 'Enter a whole number from {min} to {max}.',
+      saveFailed: 'The undo history size was not saved.',
     },
     language: {
       label: 'Language',
@@ -1918,6 +1917,8 @@ export const en = {
     workflow: {
       ocrRescue: 'Use the Hayai OCR text reader (optional)',
       ocrRescueDescription: 'Reads each region on this computer before cleaning. It holds art that is not text, and confirms unclear Japanese, Chinese and Korean script. Works with both text policies.',
+      cleanLatin: 'Clean English text',
+      cleanLatinDescription: 'Off: text the reader reads as English or another language in Latin letters stays on the page, as a held region you can still clean. On: it is cleaned like other text. Needs the Hayai OCR text reader.',
       ratingsNote: 'Engine ratings are provisional estimates, not measurements from one shared benchmark.',
     },
     cleaner: {
@@ -2575,6 +2576,10 @@ export const en = {
       // again repeats the last result exactly; this one changes it.
       retryWider: 'Try again wider',
       retryWiderHint: 'Clean again with the same engine over a slightly larger area. Each press grows it a little more.',
+      // Beside Try again on a result an automatic clean made: the result is
+      // taken off and the region is detected again, with the mask it had
+      // before the clean (`model/masks.js#rejectable`).
+      rejectResult: 'Reject result',
       engine: 'Clean with',
       engineHint: 'Replace this layer using another engine, from the layers below it',
       // The region menu's heading over a detected region's two kinds of text,
@@ -2646,6 +2651,10 @@ export const en = {
       layerLock: 'layer lock changed',
       layerMove: 'layer moved',
       layerRotate: 'layer turned',
+      // The two steps the backend records by itself (`history.rs`): a clean
+      // of a detected region, whoever started it, and a rejected result.
+      cleanRegion: 'a region cleaned',
+      rejectResult: 'a result rejected',
     },
   },
 
@@ -2970,9 +2979,10 @@ export const en = {
   /* something that already happened.                                    */
   /* ================================================================== */
   notice: {
-    // The cloud clean batch's own notices (`inference/cloud_clean.rs`). Each
-    // with a cause has a form without it, for a code the catalogue has no
-    // words for (`model/cloudnotices.js`).
+    // The cloud clean batch's own notices (`inference/cloud_clean.rs`). A
+    // failure or a stop is always said with its cause, `code.generic` for a
+    // code the catalogue has no words for (`model/cloudnotices.js`); the
+    // forms without `Because` are the keys the batch sends.
     cloudClean: {
       regionFailed: 'A region on page {page} was not cleaned on the cloud GPU. It stays detected.',
       regionFailedBecause: 'A region on page {page} was not cleaned: {codeKey}. It stays detected.',
@@ -2997,6 +3007,20 @@ export const en = {
         chunkRefused: 'a batch did not match what you confirmed',
         pollTimeout: 'the cloud GPU took too long to answer',
         submissionUnknown: 'the app could not tell whether it was sent',
+        regionChanged: 'the region changed while it was being cleaned',
+        regionUnsupported: 'the region cannot be cleaned on the cloud GPU',
+        busy: 'the region is already being cleaned on the cloud GPU',
+        pageBusy: 'a run was working on its page',
+        recoveryRequired: 'an earlier cloud request for it has not been resolved',
+        local: 'something went wrong on this computer',
+        providerPaused: 'the cloud provider is paused in this version',
+        // Only a cloud setup from before results stopped being rejected by
+        // the worker can send this (`edit_not_applied`).
+        editNotApplied: 'your cloud setup is out of date and returned no result (update it in Settings, Cloud)',
+        weights: 'your cloud setup is missing required model files',
+        remoteCancelled: 'the provider cancelled it',
+        cancelled: 'it was cancelled',
+        generic: 'the app was given no reason it has words for',
       },
     },
     paint: { colorApproximated: 'This page uses a palette or limited gray levels. The selected color was replaced by the closest available color.' },
@@ -3233,7 +3257,9 @@ export const en = {
         remoteCancelled: 'The provider cancelled the render.',
         cancelled: 'It was cancelled.',
         timeout: 'The render took too long and was stopped.',
-        generic: 'Something went wrong.',
+        providerPaused: 'This cloud provider is paused in this version. Choose another endpoint in Settings, Cloud.',
+        editNotApplied: 'This cloud setup is out of date and returned no result. Update it in Settings, Cloud, to get a result every time.',
+        generic: 'The app was given no reason it has words for.',
       },
       // The status element, bottom left, while renders are in flight.
       job: {
@@ -3276,6 +3302,15 @@ export const en = {
       // The region menu's Approve mask was refused: the held region was
       // cleaned or removed meanwhile, or could not be saved. Nothing changed.
       approveFailed: 'Could not approve the mask. The region is as it was.',
+      // Reject result, or Undo of a clean, on a result with no detection kept
+      // for it: the chapter was cleaned before a clean kept one. Deleting the
+      // layer is what brings the original pixels back there.
+      rejectNoMask: 'This result has no saved mask, so it cannot be rejected. Delete it to bring the original back.',
+      // The same two, refused for any other reason. Nothing changed.
+      rejectFailed: 'The result could not be rejected. The page is as it was.',
+      // Redo of a clean, or Undo of a reject, with no saved result to put
+      // back: a later clean replaced it. Nothing changed.
+      reapplyFailed: 'The result could not be put back. The page is as it was.',
     },
     tool: {
       cloneSourceSet: 'Clone source sampled. Paint to copy from it.',
@@ -3322,6 +3357,8 @@ export const en = {
         'This page has more layers than a PSD can hold. Nothing was written. Export a flattened PNG or TIFF instead.',
       refusedDestination:
         'That destination is not somewhere this export can write. Nothing was written. Choose a new folder, or give a full path from the top of the disk.',
+      destinationUnavailable:
+        'The export folder {path} cannot be created. The drive or folder that holds it is not connected, or it cannot be written to. Nothing was written. Connect the drive, or choose another folder.',
       refusedStitchPaginated:
         'One file for the chapter is a longstrip layout, and this project is paginated. Nothing was written. Its pages are separate images, and stacking them would make a document that has no original.',
       refusedStitchedArchive:

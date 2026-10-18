@@ -121,6 +121,32 @@ describe('several runs at once', () => {
     expect(await mock.listJobs()).toEqual([])
   })
 
+  // `undoLimit` is the backend's: it reports the value and its bounds, refuses
+  // a write outside them, and applies a lower value at the next push.
+  it('keeps the undo journal to the undoLimit setting', async () => {
+    const mock = makeMock()
+    expect(await mock.undoLimit()).toEqual({ value: 500, min: 20, max: 2000, default: 500 })
+    const push = (n) => mock.historyPush({
+      chapterId: CHAPTER,
+      entry: { op: 'region-state', label: `e${n}`, regionId: 'none', before: null, after: null },
+    })
+    for (let n = 0; n < 30; n += 1) await push(n)
+    expect((await mock.historyLoad({ chapterId: CHAPTER })).entries).toHaveLength(30)
+
+    for (const bad of [19, 2001, 100.5, '100']) {
+      await expect(mock.writeSettings({ undoLimit: bad })).rejects.toThrow('undoLimit')
+    }
+    expect((await mock.undoLimit()).value).toBe(500)
+
+    await mock.writeSettings({ undoLimit: 20 })
+    expect((await mock.undoLimit()).value).toBe(20)
+    const view = await push(30)
+    expect(view.limit).toBe(20)
+    expect(view.entries).toHaveLength(20)
+    expect(view.cursor).toBe(20)
+    expect(view.entries[0].label).toBe('e11')
+  })
+
   // The journal is the chapter's, and a step of it writes one page. A step
   // onto the page a run is on is refused before the cursor moves
   // (`history.rs#history_move`), and so is the restore it would have sent.

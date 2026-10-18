@@ -632,3 +632,228 @@ describe('cloud clean', () => {
     expect(maskRow(region, false)).toMatchObject({ status: 'applied', engine: 'cloud' })
   })
 })
+
+/**
+ * A clean of a detected region keeps what it replaced, and the mock records
+ * the step itself, as the native side does (docs/fixes-2026-10-12/06). Undo
+ * puts the detection back with its mask, Redo the same result with no new
+ * render, and Reject result is the Undo offered at any later time.
+ */
+describe('a clean kept, and taken back', () => {
+  /** A mock whose first page is detected, with the detections on it. */
+  async function detectedMock(make = makeMock) {
+    const mock = await make()
+    await ranToEnd(mock, () => mock.runClean(runOn('detect')))
+    const detected = (await firstPage(mock)).regions.filter((region) => region.outcome === 'detected')
+    expect(detected.length).toBeGreaterThan(0)
+    return { mock, detected }
+  }
+
+  const cleanHere = (mock, regionId) =>
+    mock.applyTool({ tool: 'autoClean', chapterId: CHAPTER, pageIndex: 0, regionId, params: {} })
+
+  const regionNow = async (mock, regionId) =>
+    (await firstPage(mock)).regions.find((region) => region.id === regionId)
+
+  /** One journal step, replayed as the interface replays a `clean-state` entry. */
+  async function replay(mock, direction) {
+    const { entry } = await mock.historyMove({ chapterId: CHAPTER, direction })
+    const side = direction === 'undo' ? entry.before : entry.after
+    const answer = await mock.setRegionCleaned({ regionId: entry.regionId, cleaned: side.region?.outcome !== 'detected' })
+    return { entry, answer }
+  }
+
+  it('records one clean-state step, written by the backend, and says the index moved', async () => {
+    const { mock, detected } = await detectedMock()
+    const [first] = detected
+    const events = []
+    mock.subscribe((event) => events.push(event))
+    const applied = await cleanHere(mock, first.id)
+
+    expect(events.filter((event) => event.type === 'history-changed')).toEqual([{ type: 'history-changed', chapterId: CHAPTER }])
+    const view = await mock.historyLoad({ chapterId: CHAPTER })
+    expect(view).toMatchObject({ cursor: 1, entries: [{ seq: 1, label: 'masks.command.cleanRegion' }] })
+    const { entry } = await mock.historyMove({ chapterId: CHAPTER, direction: 'undo' })
+    expect(entry).toMatchObject({ op: 'clean-state', label: 'masks.command.cleanRegion', regionId: first.id })
+    // Before is the detection as it was, mask and all; after is the result.
+    expect(entry.before).toEqual({ present: true, pageStatus: 'detected', region: first })
+    expect(entry.after.region).toEqual(applied.region)
+    expect(entry.after.present).toBe(true)
+  })
+
+  it('puts the detection back on Undo exactly as it was, and the same result on Redo with no new render', async () => {
+    const { mock, detected } = await detectedMock()
+    const [first] = detected
+    const applied = await cleanHere(mock, first.id)
+    const status = (await firstPage(mock)).status
+
+    const undone = await replay(mock, 'undo')
+    expect(undone.answer).toEqual({ region: first, pageStatus: 'detected' })
+    expect(undone.answer.region.mask).toEqual(first.mask)
+    expect(await regionNow(mock, first.id)).toEqual(first)
+    expect((await firstPage(mock)).status).toBe('detected')
+
+    const redone = await replay(mock, 'redo')
+    expect(redone.answer).toEqual({ region: applied.region, pageStatus: status })
+    expect(await regionNow(mock, first.id)).toEqual(applied.region)
+    // Neither replay wrote an undo step.
+    expect(await mock.historyLoad({ chapterId: CHAPTER })).toMatchObject({ cursor: 1, entries: [{ label: 'masks.command.cleanRegion' }] })
+    // Nothing rendered in between: the next render takes the very next
+    // revision number, which is also what a mask's id is minted from.
+    const again = await mock.rerunMask({ maskId: applied.region.mask.id, kind: 'retry' })
+    expect(again.mask.sequence).toBe(applied.region.mask.sequence + 1)
+  })
+
+  it('answers the region and changes nothing when asked for the state it is in', async () => {
+    const { mock, detected } = await detectedMock()
+    const [first] = detected
+    const applied = await cleanHere(mock, first.id)
+    expect((await mock.setRegionCleaned({ regionId: first.id, cleaned: true })).region).toEqual(applied.region)
+    await mock.setRegionCleaned({ regionId: first.id, cleaned: false })
+    expect((await mock.setRegionCleaned({ regionId: first.id, cleaned: false })).region).toEqual(first)
+    // The result set aside by the first call is still the one that returns.
+    expect((await mock.setRegionCleaned({ regionId: first.id, cleaned: true })).region).toEqual(applied.region)
+    expect(await mock.setRegionCleaned({ regionId: 'no-such-region', cleaned: false })).toBeNull()
+  })
+
+  it('rejects a result into the detection, as one new step whose undo puts the result back', async () => {
+    const { mock, detected } = await detectedMock()
+    const [first] = detected
+    const applied = await cleanHere(mock, first.id)
+    const events = []
+    mock.subscribe((event) => events.push(event))
+
+    const rejected = await mock.rejectResult({ regionId: first.id })
+    expect(rejected.region).toEqual(first)
+    expect(rejected.pageStatus).toBe('detected')
+    expect(rejected.history).toMatchObject({ cursor: 2,
+      entries: [{ label: 'masks.command.cleanRegion' }, { label: 'masks.command.rejectResult' }] })
+    expect(rejected.history).toEqual(await mock.historyLoad({ chapterId: CHAPTER }))
+    expect(events.filter((event) => event.type === 'history-changed')).toHaveLength(1)
+    expect(await regionNow(mock, first.id)).toEqual(first)
+
+    const undone = await replay(mock, 'undo')
+    expect(undone.entry).toMatchObject({ op: 'clean-state', label: 'masks.command.rejectResult', regionId: first.id })
+    expect(undone.entry.before.region).toEqual(applied.region)
+    expect(undone.entry.after.region).toEqual(first)
+    expect(undone.answer.region).toEqual(applied.region)
+    expect(await regionNow(mock, first.id)).toEqual(applied.region)
+    // And the reject again, by Redo.
+    expect((await replay(mock, 'redo')).answer.region).toEqual(first)
+  })
+
+  it('refuses a result with no detection kept, and leaves the chapter as it was', async () => {
+    // A fixture chapter that is cleaned from the start, as a chapter cleaned
+    // by an older build is: nothing was kept for its results.
+    const mock = makeMock()
+    const OLD = 'wandering-moon-ch12'
+    const before = await mock.loadPages({ chapterId: OLD, indices: [0] })
+    const region = before[0].regions.find((candidate) => candidate.outcome === 'cleaned' && candidate.mask)
+    expect(region).toBeTruthy()
+
+    await expect(mock.rejectResult({ regionId: region.id })).rejects.toThrow(/^clean_not_restorable: /)
+    await expect(mock.setRegionCleaned({ regionId: region.id, cleaned: false })).rejects.toThrow(/^clean_not_restorable: /)
+    expect(await mock.loadPages({ chapterId: OLD, indices: [0] })).toEqual(before)
+    expect(await mock.historyLoad({ chapterId: OLD })).toMatchObject({ cursor: 0, entries: [] })
+    // It is on the page already, so asking for the result is no change.
+    expect((await mock.setRegionCleaned({ regionId: region.id, cleaned: true })).region).toEqual(region)
+  })
+
+  it('refuses with the native codes where there is no result to move', async () => {
+    const { mock, detected } = await detectedMock()
+    const [first] = detected
+    // Detected and never cleaned: nothing to reject, nothing saved to put back.
+    await expect(mock.rejectResult({ regionId: first.id })).rejects.toThrow(/^clean_no_patch: /)
+    await expect(mock.setRegionCleaned({ regionId: first.id, cleaned: true })).rejects.toThrow(/^clean_no_result: /)
+    expect(await mock.historyLoad({ chapterId: CHAPTER })).toMatchObject({ entries: [] })
+    // A region with no mask at all has no result either.
+    const bare = (await mock.loadPages({ chapterId: CHAPTER, indices: [1] }))[0].regions.find((region) => !region.mask)
+    expect(bare).toBeTruthy()
+    await expect(mock.setRegionCleaned({ regionId: bare.id, cleaned: false })).rejects.toThrow(/^clean_no_patch: /)
+    expect(await mock.rejectResult({ regionId: 'no-such-region' })).toBeNull()
+  })
+
+  it('drops the saved result when the region is cleaned again', async () => {
+    const { mock, detected } = await detectedMock()
+    const [first] = detected
+    await cleanHere(mock, first.id)
+    await mock.rejectResult({ regionId: first.id })
+    const second = await cleanHere(mock, first.id)
+    expect(second.region.mask.id).not.toBe(first.mask.id)
+    // Undo of the second clean, then of the reject: the result that returns
+    // is the one the page last held, as the native side keeps one.
+    await replay(mock, 'undo')
+    expect((await replay(mock, 'undo')).answer.region).toEqual(second.region)
+  })
+
+  it('records one step for each detection a Clean run cleans', async () => {
+    const { mock, detected } = await detectedMock()
+    const { events } = await ranToEnd(mock, () => mock.runClean(runOn('clean')))
+    expect(events.filter((event) => event.type === 'history-changed')).toHaveLength(detected.length)
+    const view = await mock.historyLoad({ chapterId: CHAPTER })
+    expect(view.entries.map((entry) => entry.label)).toEqual(detected.map(() => 'masks.command.cleanRegion'))
+    // The newest step is the last region the run cleaned.
+    const undone = await replay(mock, 'undo')
+    expect(undone.entry.before.pageStatus).toBe('detected')
+    expect(undone.entry.after.pageStatus).not.toBe('cleaning')
+    expect(undone.answer.region).toEqual(detected.find((region) => region.id === undone.entry.regionId))
+    expect((await firstPage(mock)).status).toBe('detected')
+  })
+
+  it('records one step for each region of a cloud clean batch', async () => {
+    const { mock, detected } = await detectedMock(readyMock)
+    const proposal = await mock.prepareCloudClean({ chapterId: CHAPTER, scope: 'page', pageIndices: [0], localFirst: false })
+    const grant = await mock.confirmCloudClean({ proposalId: proposal.proposalId, planDigest: proposal.planDigest, ...ANSWER })
+    const { events } = await ranToEnd(mock, () => mock.startCloudClean({ grantId: grant.grantId }))
+    expect(events.filter((event) => event.type === 'history-changed')).toHaveLength(proposal.regionIds.length)
+    const view = await mock.historyLoad({ chapterId: CHAPTER })
+    expect(view.entries).toHaveLength(proposal.regionIds.length)
+    const cloud = await regionNow(mock, proposal.regionIds.at(-1))
+    const undone = await replay(mock, 'undo')
+    expect(undone.entry.after.region).toEqual(cloud)
+    expect(undone.answer.region).toEqual(detected.find((region) => region.id === undone.entry.regionId))
+    // Redo is the same cloud result, with no new request.
+    expect((await replay(mock, 'redo')).answer.region).toEqual(cloud)
+  })
+
+  it('records a single cloud clean of a detection, and settles its page', async () => {
+    const { mock, detected } = await detectedMock(readyMock)
+    for (const region of detected.slice(1)) await cleanHere(mock, region.id)
+    const [first] = detected
+    const intent = { action: 'applyTool', tool: 'autoClean', params: { engine: 'cloud' } }
+    const target = (await mock.readInferenceConfig()).selectedTarget
+    const proposal = await mock.prepareCloudConsent({ target, intent, regionId: first.id, chapterId: CHAPTER, pageIndex: 0 })
+    const grant = await mock.confirmCloudConsent({ proposalId: proposal.proposalId, intent, ...ANSWER })
+    const applied = await mock.applyTool({ tool: 'autoClean', chapterId: CHAPTER, pageIndex: 0, regionId: first.id,
+      params: { engine: 'cloud', grantNonce: grant.nonce, executionTarget: target, recipe: proposal.recipe, intent } })
+    expect(applied).toMatchObject({ status: 'applied', region: { id: first.id, outcome: 'cleaned' } })
+    expect(applied.pageStatus).not.toBe('detected')
+    const view = await mock.historyLoad({ chapterId: CHAPTER })
+    expect(view.entries).toHaveLength(detected.length)
+    const undone = await replay(mock, 'undo')
+    expect(undone.entry).toMatchObject({ op: 'clean-state', label: 'masks.command.cleanRegion', regionId: first.id })
+    expect(undone.answer.region).toEqual(first)
+  })
+
+  it('refuses a step onto the page a run is on before the cursor moves', async () => {
+    const mock = createMockBackend({ timing: { method: 0, cloud: 0, provision: 0, region: 20, pageTail: 20 } })
+    const finished = (start) => ranToEnd(mock, start)
+    await finished(() => mock.runClean(runOn('detect')))
+    const [first] = (await firstPage(mock)).regions.filter((region) => region.outcome === 'detected')
+    await cleanHere(mock, first.id)
+    const run = finished(() => mock.runClean(runOn('detect')))
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    await expect(mock.historyMove({ chapterId: CHAPTER, direction: 'undo' })).rejects.toThrow('page_busy')
+    expect((await mock.historyLoad({ chapterId: CHAPTER })).cursor).toBe(1)
+    await run
+  })
+
+  it('forgets what was kept when the chapter is deleted', async () => {
+    const { mock, detected } = await detectedMock()
+    await cleanHere(mock, detected[0].id)
+    const project = (await mock.listProjects()).find((candidate) => candidate.chapters.some((chapter) => chapter.id === CHAPTER))
+    expect(await mock.deleteChapter({ projectId: project.id, chapterId: CHAPTER })).toBe(true)
+    expect(await mock.setRegionCleaned({ regionId: detected[0].id, cleaned: false })).toBeNull()
+    expect(await mock.historyLoad({ chapterId: CHAPTER })).toMatchObject({ cursor: 0, entries: [] })
+  })
+})

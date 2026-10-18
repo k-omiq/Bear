@@ -522,6 +522,9 @@ pub struct AttemptRecord {
     pub native_mask_conditioning: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qwen_edit: Option<cleaner_core::engines::render::QwenEdit>,
+    /// Written by builds that asked a person before a Qwen result was
+    /// applied. Nothing reads it: a result is applied at once. Kept because
+    /// records on disk carry it and unknown fields are refused.
     #[serde(default)]
     pub review_accepted: bool,
     pub source_image_hash: String,
@@ -634,6 +637,22 @@ impl RecoveryDecision {
     pub fn is_auto_retryable(&self) -> bool {
         false
     }
+}
+
+const MAX_FAILURE_MESSAGE_CHARS: usize = 300;
+
+/// A failure code as the journal stores it: a short lowercase identifier.
+/// Anything else is not a code a gateway of this protocol sends.
+fn failure_code(code: &str) -> String {
+    let safe = !code.is_empty() && code.len() <= 64
+        && code.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+    if safe { code.to_owned() } else { "remote_failure".to_owned() }
+}
+
+/// A failure message as the journal stores it: one bounded line of text.
+fn failure_message(message: &str) -> String {
+    let line: String = message.chars().filter(|c| !c.is_control()).take(MAX_FAILURE_MESSAGE_CHARS).collect();
+    if line.trim().is_empty() { "remote job failed".to_owned() } else { line }
 }
 
 fn unresolved_phase(phase: &AttemptPhase) -> bool {
@@ -1036,19 +1055,6 @@ impl AttemptJournal {
         Ok(record)
     }
 
-    /// A review applies only to a downloaded, validated result. Rejecting it
-    /// is terminal, so crash recovery cannot apply a discarded candidate.
-    pub fn record_review(&self, guard: &AttemptLockGuard, accepted: bool) -> Result<AttemptRecord, JournalError> {
-        self.mutate_record(guard, |record| {
-            let AttemptPhase::ResultCached { handle, .. } = &record.phase else {
-                return Err(JournalError::InvalidTransition { current: format!("{:?}", record.phase), attempted: "review result".into() });
-            };
-            if accepted { record.review_accepted = true; }
-            else { record.phase = AttemptPhase::Cancelled { handle: Some(handle.clone()), reason: "result discarded in review".into() }; }
-            Ok(())
-        })
-    }
-
     fn write_record_atomic(
         &self,
         attempt_id: &str,
@@ -1373,12 +1379,21 @@ impl AttemptJournal {
         })
     }
 
-    pub fn record_failed(&self, guard: &AttemptLockGuard) -> Result<AttemptRecord, JournalError> {
+    /// End an attempt as failed and keep why.
+    ///
+    /// For a remote failure `error_code` and `message` are the gateway's own;
+    /// for a result that could not be applied they are the recovery sweep's
+    /// (`region_changed`, `result_corrupt`, ...). Both are bounded before they
+    /// are stored ([`failure_code`], [`failure_message`]).
+    pub fn record_failed(
+        &self, guard: &AttemptLockGuard, error_code: &str, message: &str,
+    ) -> Result<AttemptRecord, JournalError> {
         self.mutate_record(guard, |rec| {
             let handle = match &rec.phase {
-                AttemptPhase::Accepted { handle } | AttemptPhase::CancelRequested { handle } => {
-                    Some(handle.clone())
-                }
+                AttemptPhase::Accepted { handle }
+                | AttemptPhase::CancelRequested { handle }
+                | AttemptPhase::ResultCached { handle, .. }
+                | AttemptPhase::AttachmentPending { handle, .. } => Some(handle.clone()),
                 other => {
                     return Err(JournalError::InvalidTransition {
                         current: format!("{:?}", other),
@@ -1388,11 +1403,61 @@ impl AttemptJournal {
             };
             rec.phase = AttemptPhase::Failed {
                 handle,
-                error_code: "remote_failure".into(),
-                message: "remote job failed".into(),
+                error_code: failure_code(error_code),
+                message: failure_message(message),
             };
             Ok(())
         })
+    }
+
+    /// [`Self::record_failed`] with what the gateway said of a failed job. A
+    /// gateway that names no error gets the general code.
+    pub fn record_remote_failure(
+        &self, guard: &AttemptLockGuard, error: Option<&cleaner_core::cloud_wire::TypedError>,
+    ) -> Result<AttemptRecord, JournalError> {
+        match error {
+            Some(error) => self.record_failed(guard, &error.error_code, &error.message),
+            None => self.record_failed(guard, "remote_failure", "remote job failed"),
+        }
+    }
+
+    /// Remove an ended attempt's cached result. The journal record stays.
+    pub fn drop_cached_result(&self, guard: &AttemptLockGuard) -> Result<(), JournalError> {
+        self.verify_guard(guard)?;
+        if unresolved_phase(&self.read_record_locked(guard)?.phase) {
+            return Err(JournalError::InvalidTransition {
+                current: "unresolved".into(), attempted: "drop_cached_result".into(),
+            });
+        }
+        for path in [self.result_png_path(guard.attempt_id()), self.result_meta_path(guard.attempt_id())] {
+            match fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// How many earlier attempts for a region were sent, or may have been.
+    ///
+    /// The scope is the scope index's: chapter, page and region. An attempt
+    /// that certainly never left (`Cancelled` with no handle) rendered nothing
+    /// and is not counted; one that cannot be read may have rendered and is.
+    pub fn sent_attempts(
+        &self, chapter_id: Option<&str>, page_index: Option<u32>, region_id: &str,
+    ) -> Result<u64, JournalError> {
+        let mut sent = 0;
+        for id in self.list_attempt_ids()? {
+            let Some(scope) = self.read_scope_loosely(&id) else { continue };
+            if scope.chapter_id.as_deref() != chapter_id || scope.page_index != page_index
+                || scope.region_id != region_id { continue; }
+            match self.get_record(&id) {
+                Ok(AttemptRecord { phase: AttemptPhase::Cancelled { handle: None, .. }, .. })
+                | Err(JournalError::AttemptNotFound { .. }) => {}
+                _ => sent += 1,
+            }
+        }
+        Ok(sent)
     }
 
     pub fn cache_result(
@@ -2295,7 +2360,7 @@ mod tests {
             Err(()) // Server accepted, then connection closed before returning a handle.
         };
         assert!(fake_transport(permit).is_err());
-        assert!(journal.record_failed(&guard).is_err());
+        assert!(journal.record_remote_failure(&guard, None).is_err());
         let updated = journal.record_dispatch_transport_error(&guard).unwrap();
         assert!(matches!(updated.phase, AttemptPhase::Unknown { .. }));
         assert!(!updated.is_retryable());
@@ -2727,12 +2792,73 @@ mod tests {
             .record_accepted_handle(&guard, "handle-test-modal-999")
             .unwrap();
 
-        let failed = journal.record_failed(&guard).unwrap();
+        let failed = journal.record_remote_failure(&guard, None).unwrap();
         assert!(matches!(failed.phase, AttemptPhase::Failed { .. }));
         assert!(!failed.is_retryable());
 
         let dec = journal.recover_attempt(&guard).unwrap();
         assert!(!dec.is_auto_retryable());
         assert!(matches!(dec, RecoveryDecision::Terminal { .. }));
+    }
+
+    fn accepted(journal: &AttemptJournal, attempt_id: &str) -> AttemptLockGuard {
+        let (_, guard) = journal.create_intent(fresh_intent(attempt_id, "reg-test-101")).unwrap();
+        journal.mark_dispatching(&guard).unwrap();
+        journal.record_accepted_handle(&guard, "handle-test-modal-999").unwrap();
+        guard
+    }
+
+    #[test]
+    fn a_failure_keeps_the_gateways_code_and_message() {
+        let td = TestDir::new("failure_reason");
+        let journal = AttemptJournal::new(td.path(), provisional_fixture_limits());
+        let guard = accepted(&journal, "att-reason-kept");
+        journal.record_remote_failure(&guard, Some(&cleaner_core::cloud_wire::TypedError {
+            error_code: "edit_not_applied".into(),
+            message: "Qwen did not make a sufficient edit after three seeds.".into(),
+        })).unwrap();
+        drop(guard);
+        // Read back from disk, as the next start reads it.
+        let reread = AttemptJournal::new(td.path(), provisional_fixture_limits());
+        let AttemptPhase::Failed { handle, error_code, message } = reread.get_record("att-reason-kept").unwrap().phase
+            else { panic!("the attempt ended failed") };
+        assert_eq!(handle.as_deref(), Some("handle-test-modal-999"));
+        assert_eq!(error_code, "edit_not_applied");
+        assert_eq!(message, "Qwen did not make a sufficient edit after three seeds.");
+    }
+
+    #[test]
+    fn a_stored_failure_reason_is_a_bounded_code_and_one_line() {
+        let td = TestDir::new("failure_bounds");
+        let journal = AttemptJournal::new(td.path(), provisional_fixture_limits());
+        let guard = accepted(&journal, "att-reason-bounded");
+        let long = format!("first line\nsecond {}", "x".repeat(2000));
+        journal.record_failed(&guard, "Not A Code!", &long).unwrap();
+        let AttemptPhase::Failed { error_code, message, .. } = journal.read_record_locked(&guard).unwrap().phase
+            else { panic!("the attempt ended failed") };
+        assert_eq!(error_code, "remote_failure");
+        assert_eq!(message.chars().count(), MAX_FAILURE_MESSAGE_CHARS);
+        assert!(message.starts_with("first linesecond x"));
+    }
+
+    #[test]
+    fn only_attempts_that_may_have_rendered_count_as_sent() {
+        let td = TestDir::new("sent_attempts");
+        let journal = AttemptJournal::new(td.path(), provisional_fixture_limits());
+        let scope = test_intent();
+        let count = || journal.sent_attempts(scope.chapter_id.as_deref(), scope.page_index, &scope.region_id).unwrap();
+        assert_eq!(count(), 0);
+        // Never left: counts for nothing.
+        let (_, guard) = journal.create_intent(fresh_intent("att-never-sent", "reg-test-101")).unwrap();
+        journal.abort_intent_no_dispatch(&guard).unwrap();
+        drop(guard);
+        assert_eq!(count(), 0);
+        // Sent and failed: the next attempt is a retry.
+        let guard = accepted(&journal, "att-sent-failed");
+        journal.record_remote_failure(&guard, None).unwrap();
+        drop(guard);
+        assert_eq!(count(), 1);
+        // Another region's attempts are not this region's.
+        assert_eq!(journal.sent_attempts(scope.chapter_id.as_deref(), scope.page_index, "another-region").unwrap(), 0);
     }
 }

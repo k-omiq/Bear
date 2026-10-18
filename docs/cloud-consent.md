@@ -1,16 +1,14 @@
-# Manga Cleaner: Backend Authorization Preparation & Consent Service (P3b2)
+# Cloud consent and authorisation
 
-**Status: P3b2 accepted after two final source re-reviews.** The backend consent and authorization foundation has atomic epoch validation inside grant issuance, a hard bounded grant cache (`MAX_CACHED_GRANTS = 256`), full operation/source/geometry binding against the edit pipeline, and focused concurrency/boundary tests. No consent IPC or paid dispatch is exposed.
-
-**Remaining Milestone Scope (at P3b2):** P3b3 (Frontend Consent Dialogs, i18n copy, and UI integration), P4 (Durable Attempt Journal & Crash Recovery integration), P5 to P11 (Remote Network Dispatch, Cloud Provisioning, Chapter Batching, Release Gates). Later work implemented P3b3, P4 and P5 to P9 offline. P10 (cloud-assisted chapters) is not implemented: chapter runs stay local only. No phase from P5 on has run live. See [cloud-work-log.md](cloud-work-log.md).
+This document covers the backend consent service: how a cloud render becomes a one-time, scope-bound grant, and the invariants that stop anything leaving the machine without one. The code is `src-tauri/src/inference/consent.rs` and `policy.rs`. The interface side is in [cloud-frontend.md](cloud-frontend.md).
 
 ---
 
-## 1. Overview & Architecture
+## 1. Overview and architecture
 
-Remote diffusion execution incurs cost and transmits cropped image regions over the network. The intended backend authorization model requires an authoritative, backend-issued, attempt-limited [`Grant`](../src-tauri/src/inference/policy.rs) bound bit-for-bit to real local assets and user intent.
+Remote diffusion costs money and sends cropped image regions over the network. The backend therefore issues an attempt-limited [`Grant`](../src-tauri/src/inference/policy.rs), bound bit for bit to real local assets and to the user's intent.
 
-Phase P3b2 establishes the backend-only two-step [`ConsentService`](../src-tauri/src/inference/consent.rs):
+The two-step [`ConsentService`](../src-tauri/src/inference/consent.rs) issues it:
 
 ```mermaid
 sequenceDiagram
@@ -44,72 +42,62 @@ sequenceDiagram
 
 ---
 
-## 2. Implemented checks and intended invariants
+## 2. Invariants
 
-1. **No Caller-Supplied Hashes or Asserted Revisions:**
-   - The caller cannot supply digests, geometry assertions, or revisions.
-   - All SHA-256 digests (`source_hash`, `mask_hash`, `crop_sha256`, `hint_sha256`) and the 64-bit `revision` fingerprint are derived strictly from disk assets under [`crate::run::lock_job`].
+1. **No caller-supplied hashes or revisions.**
+   - The caller cannot supply digests, geometry assertions or revisions.
+   - Every SHA-256 digest (`source_hash`, `mask_hash`, `crop_sha256`, `hint_sha256`) and the 64-bit `revision` fingerprint is derived from disk assets under [`crate::run::lock_job`].
 
-2. **Real Local Source & Geometry Preparation:**
+2. **Real local source and geometry.**
    - `prepare_proposal` loads the actual unedited source page raster and the region's mask from the project manifest (`Job`).
-   - Evaluates [`PreparedRender::prepare`](../crates/cleaner-core/src/engines/render.rs) to compute latent-snapped bounds (16-pixel multiples), context padding (`CONTEXT_MIN = 24`, `CONTEXT_MAX = 80`), edge replication, and grayscale hint masks.
-   - Encodes exact RGB8 crop PNG and Gray8 hint PNG rasters using the lossless PNG encoder (`cleaner_core::image::encode`) and hashes them.
+   - It runs [`PreparedRender::prepare`](../crates/cleaner-core/src/engines/render.rs) to compute the latent-snapped bounds (16-pixel multiples), the context padding (`CONTEXT_MIN = 24`, `CONTEXT_MAX = 80`), edge replication and the grayscale hint mask.
+   - It encodes the exact RGB8 crop PNG and Gray8 hint PNG with the lossless encoder (`cleaner_core::image::encode`) and hashes them.
 
-3. **Deterministic Backend Revision Fingerprinting:**
-   - For pipelines without a monotonic integer counter, `compute_region_revision_hash` hashes the source identity, complete serialized patch record, mask bounds/bits, and ink bounds/bits. It retains the full SHA-256 and derives a 64-bit content fingerprint; neither value is a monotonic revision counter.
-   - Any modification to source pixels, mask boundaries, or parameters between prepare and confirm immediately fails confirmation with [`ConsentError::RevisionMismatch`].
+3. **Deterministic revision fingerprint.**
+   - Pipelines without a monotonic integer counter use `compute_region_revision_hash`. It hashes the source identity, the complete serialised patch record, the mask bounds and bits, and the ink bounds and bits. It keeps the full SHA-256 and derives a 64-bit content fingerprint. Neither value is a monotonic revision counter.
+   - Any change to source pixels, mask boundaries or parameters between prepare and confirm fails confirmation with [`ConsentError::RevisionMismatch`].
 
-4. **Bounded Proposal Caching & Zero Full-Page Memory Residency:**
-   - `ConsentService` maintains a thread-safe in-memory cache bounded to [`MAX_CACHED_PROPOSALS`] (256 entries).
+4. **Bounded proposal cache, no full pages in memory.**
+   - `ConsentService` keeps a thread-safe in-memory cache bounded to [`MAX_CACHED_PROPOSALS`] (256 entries).
    - Proposals expire after [`DEFAULT_PROPOSAL_TTL`] (300 seconds).
-   - Proposals store only bounded metadata, SHA-256 strings, Rect geometries, and recipes; full page rasters ([`Raster`]) are dropped immediately after crop/hint extraction.
+   - A proposal holds only bounded metadata, SHA-256 strings, rectangles and recipes. Full page rasters ([`Raster`]) are dropped as soon as the crop and hint are extracted.
 
-5. **Hard-Bounded Grant Cache & Eviction Policy:**
-   - `GrantService` enforces a strict capacity ceiling [`MAX_CACHED_GRANTS`] (256 entries).
-   - Grants automatically purge expired records upon issuance and consumption.
-   - If capacity is reached, the oldest grant by `issued_at_ms` is evicted.
+5. **Hard-bounded grant cache.**
+   - `GrantService` enforces a ceiling of [`MAX_CACHED_GRANTS`] (256 entries).
+   - It purges expired grants on issuance and consumption.
+   - At capacity, the oldest grant by `issued_at_ms` is evicted.
 
-6. **Profile/Credential Mutation & Grant-Issuance Coordination:**
-   - `GrantService` keeps profile mutation epochs and grants under one mutex. Epoch comparison and grant insertion therefore occur in the same critical section.
-   - Any modification or deletion of configuration profiles (`write_inference_config`) or credentials (`store_cloud_secret`, `delete_cloud_secret`) invalidates before and after mutation, advancing the epoch, consuming pending proposals, and revoking issued grants. Malformed on-disk public configuration can be replaced only after global invalidation.
-   - Proposal preparation captures the epoch before raster work and rechecks it while inserting into the proposal cache. Confirmation passes the captured epoch into atomic grant issuance. Concurrent mutation therefore either invalidates the stored proposal/grant or returns [`ConsentError::ProfileMutated`].
-   - Real remote dispatch does not exist in P3b2. P5 must keep grant consumption and submission coordinated rather than treating a successful preflight check as permission that survives a later mutation. Grant consumption and submission are now coordinated in `execute_cloud_render` (`src-tauri/src/inference/service.rs`).
+6. **Profile and credential changes, coordinated with grant issuance.**
+   - `GrantService` keeps profile mutation epochs and grants under one mutex, so the epoch comparison and the grant insertion happen in one critical section.
+   - Changing or deleting a configuration profile (`write_inference_config`) or a credential (`store_cloud_secret`, `delete_cloud_secret`) invalidates before and after the mutation. That advances the epoch, consumes pending proposals and revokes issued grants. A malformed public configuration on disk can be replaced only after global invalidation.
+   - Proposal preparation captures the epoch before raster work and rechecks it when it inserts into the proposal cache. Confirmation passes the captured epoch into atomic grant issuance. A concurrent mutation therefore either invalidates the stored proposal or grant, or returns [`ConsentError::ProfileMutated`].
+   - Grant consumption and submission are coordinated in `execute_cloud_render` (`src-tauri/src/inference/service.rs`), so a successful preflight check is never treated as permission that survives a later mutation.
 
-7. **Operation Intent Binding & Replay Prevention:**
-   - Proposals bind the exact [`OperationIntent`] (`ApplyTool`, `CreateRegion`, `RerunMask`, `CleanAnyway`), including optional tool parameters and `RerunMask` engine parameters.
-   - Confirming with mismatched tool names, parameter differences, engine differences, or different operation verbs fails with [`ConsentError::IntentMismatch`].
-   - Confirmation is single-use; subsequent confirmation attempts fail with [`ConsentError::ProposalAlreadyConsumed`].
+7. **Operation intent binding and replay prevention.**
+   - A proposal binds the exact [`OperationIntent`] (`ApplyTool`, `CreateRegion`, `RerunMask`, `CleanAnyway`), including optional tool parameters and the engine parameters of `RerunMask`.
+   - Confirming with a different tool name, parameters, engine or operation verb fails with [`ConsentError::IntentMismatch`].
+   - Confirmation is single-use. A second attempt fails with [`ConsentError::ProposalAlreadyConsumed`].
 
-8. **Pinned Wire Recipe Validation:**
-   - Recipes are validated via [`cleaner_core::cloud_wire::validate_recipe`].
-   - Enforces ASCII identifiers, strict revision strings, and honesty checks (`native_mask_conditioning = false`).
-   - No placeholder or fabricated defaults are permitted.
+8. **Pinned wire recipe validation.**
+   - Recipes are validated with [`cleaner_core::cloud_wire::validate_recipe`].
+   - That enforces ASCII identifiers, strict revision strings and the honesty check (`native_mask_conditioning = false`).
+   - No placeholder or invented defaults are accepted.
 
-9. **Zero Network & Zero Model Warming on Prepare:**
-   - Proposal preparation is 100% offline. No remote HTTP sockets, DNS lookups, or remote containers are warmed during proposal preparation.
+9. **No network and no model warming on prepare.** Preparing a proposal is fully offline. It opens no sockets, does no DNS lookups and warms no remote container.
 
-10. **Fail-Closed Region Pipeline Guards:**
-    - Explicit remote targets now reach the cloud only with a valid single-use grant from the consent flow. Without one, nothing is sent.
-    - A re-run of a patch with cloud provenance (`record.provenance.cloud.is_some()`) does not silently re-run locally. It goes to the cloud with a grant, runs locally only when the user names a local engine, and otherwise fails closed with `decline.reason.rungUnavailable`, or `notice.cloud.blocked` when cloud is off.
-    - Local Flux and automatic LaMa behavior remain fully preserved.
+10. **Fail-closed region pipeline.**
+    - An explicit remote target reaches the cloud only with a valid single-use grant from the consent flow. Without one, nothing is sent.
+    - A re-run of a patch with cloud provenance (`record.provenance.cloud.is_some()`) never silently re-runs locally. It goes to the cloud with a grant. It runs locally only when the user names a local engine. Otherwise it fails closed with `decline.reason.rungUnavailable`, or with `notice.cloud.blocked` when cloud is off.
+    - Local Flux and automatic LaMa behaviour are unchanged.
 
 ---
 
-## 3. Unsupported Paths & Future Command Surface
+## 3. Limits and command surface
 
-- **Ad-Hoc New Region Drawing:**
-  - `prepare_proposal` currently narrows to existing stored regions (`region_id: Some(...)`).
-  - Preparing proposals for unsaved new manual region gestures without stored project state is explicitly refused with [`ConsentError::UnsupportedNewRegion`].
-- **Future Tauri Commands (Not Yet Exposed):**
-  - Dedicated cloud commands are now registered: `prepare_cloud_consent`, `confirm_cloud_consent`, `submit_cloud_attempt`, `get_cloud_attempt_status`, `get_cloud_attempt_result`, `cancel_cloud_attempt`, `reconcile_cloud_recovery`, `check_cloud_connection`, `get_cloud_model_info`, `read_inference_config`, `write_inference_config`, `store_cloud_secret`, `delete_cloud_secret`, `get_cloud_secret_summary`, `run_cloud_provisioner`, and `cancel_cloud_provisioner`.
-  - To prevent spoofed readiness, no fake or mock Tauri commands are registered in this milestone.
+- **Ad-hoc new regions.** `prepare_proposal` works on stored regions (`region_id: Some(...)`). A new manual region gesture with no stored project state is refused with [`ConsentError::UnsupportedNewRegion`].
+- **Registered commands.** The cloud commands are `prepare_cloud_consent`, `confirm_cloud_consent`, `submit_cloud_attempt`, `get_cloud_attempt_status`, `get_cloud_attempt_result`, `cancel_cloud_attempt`, `reconcile_cloud_recovery`, `check_cloud_connection`, `get_cloud_model_info`, `read_inference_config`, `write_inference_config`, `store_cloud_secret`, `delete_cloud_secret`, `get_cloud_secret_summary`, `run_cloud_provisioner` and `cancel_cloud_provisioner`. No fake or mock command is registered in the native app, so readiness cannot be spoofed.
+- **Locking.** `run::lock_job` is an in-process lock. The cross-process attempt lock in the journal does not make project writers safe across processes.
 
-## Stop-point verification
+---
 
-- 69 inference tests pass: `cargo test -p manga-cleaner --lib inference::`.
-- 42 region tests pass: `cargo test -p manga-cleaner --lib region::`.
-- Strict app-library Clippy passes: `cargo clippy -p manga-cleaner --no-deps --lib -- -D warnings`.
-- Both post-fix source re-reviews approve with no P0 to P3 findings:
-  `/tmp/manga-cloud-p3b2-rereview-vesper.json` and
-  `/tmp/manga-cloud-p3b2-rereview-onyx.json`.
-- `run::lock_job` remains an in-process lock. Cross-process attempt locking in the journal does not make project writers cross-process safe.
+See also: [cloud-security.md](cloud-security.md), [cloud-contract.md](cloud-contract.md), [cloud-journal.md](cloud-journal.md), [cloud-frontend.md](cloud-frontend.md).

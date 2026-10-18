@@ -186,13 +186,15 @@ class EditRetryTest(unittest.TestCase):
         # c32 p20: seed 1 scored 0.6 and left both sound effects; seed 2 removed them.
         self.assertEqual(self.run_with({1: 0.6, 2: 8.0}), (b"seed 2", [1, 2], 1))
 
-    def test_no_seed_edits_reports_failure(self) -> None:
+    def test_three_weak_renders_return_the_best_one(self) -> None:
+        # The worker never rejects a result: the user does, on the page.
         ratios = {1: 0.6, 2: 1.4, 3: 0.9}
         self.assertEqual(len(ratios), 1 + EDIT_RETRIES)
         self.assertTrue(all(r < MIN_EDIT_RATIO for r in ratios.values()))
-        with self.assertRaises(WorkerRenderError) as raised:
-            self.run_with(ratios)
-        self.assertEqual(raised.exception.error_code, "edit_not_applied")
+        self.assertEqual(self.run_with(ratios), (b"seed 2", [1, 2, 3], 1))
+
+    def test_equal_weak_renders_return_the_first(self) -> None:
+        self.assertEqual(self.run_with({1: 0.5, 2: 0.5, 3: 0.5}), (b"seed 1", [1, 2, 3], 1))
 
     def test_no_hint_is_never_retried(self) -> None:
         self.assertEqual(self.run_with({1: 0.0}, hint=b""), (b"seed 1", [1], 1))

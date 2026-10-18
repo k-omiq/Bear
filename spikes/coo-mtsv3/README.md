@@ -1,5 +1,7 @@
 # COO MTSv3 local detection probe
 
+This experiment runs the COO MTSv3 detection branch locally on one comic chapter and records its candidate regions; it is not shipped code.
+
 `probe.py` reconstructs only the inference path in the pinned COO MTSv3
 R-50-FPN detector: backbone, FPN, segmentation proposal head, and the
 published contour/polygon scoring rules. It verifies the full checkpoint
@@ -42,9 +44,9 @@ spikes/coo-mtsv3/artifacts/venv/bin/python spikes/coo-mtsv3/render_overlays.py \
 
 The default `eval_pil` mode follows the published `best_test.yaml` detection
 evaluation path. [The evaluation transform](https://github.com/ku21fan/COO-Comic-Onomatopoeia/blob/d8028f015b8ce99a4dd798427342f97087529357/MTSv3/maskrcnn_benchmark/data/transforms/build.py#L62-L70)
-resizes the PIL image before conversion and BGR255 normalization; the config
+resizes the PIL image before conversion and BGR255 normalisation; the config
 sets minimum side 1440 and maximum side 4000. [The standalone demo](https://github.com/ku21fan/COO-Comic-Onomatopoeia/blob/d8028f015b8ce99a4dd798427342f97087529357/MTSv3/demo.py#L53-L80)
-uses the same resize-before-normalize ordering but its main function
+uses the same resize-before-normalise ordering but its main function
 [overrides the minimum side to 800](https://github.com/ku21fan/COO-Comic-Onomatopoeia/blob/d8028f015b8ce99a4dd798427342f97087529357/MTSv3/demo.py#L296-L298).
 [The separate M4C feature extraction script](https://github.com/ku21fan/COO-Comic-Onomatopoeia/blob/d8028f015b8ce99a4dd798427342f97087529357/MTSv3/extract_features_vmb.py#L195-L225)
 converts to float32 BGR and subtracts means before `cv2.INTER_LINEAR`
@@ -53,16 +55,16 @@ resizing. This is a different, named preprocessing path, supported with
 explicit; it was prepared for the two-page input comparison but not used for
 the 45-page quality comparison.
 
-`artifacts/chapter-109-eval-pil/summary.json` contains all 45
+`artifacts/chapter-109-eval-pil/summary.json` (written when the spike runs; not committed) contains all 45
 source-coordinate detections and timings. `artifacts/chapter-109` is a
 compatibility symlink to that preserved result. A two-page sensitivity run
 for the feature extractor is in `artifacts/chapter-109-feature-cv2-smoke/`.
 `compare_preprocessing.py` saves exact prepared tensors and an input
 difference report for pages 02 and 07 in `artifacts/preprocessing/`.
-Each page directory contains `detections.json`, a float32 sigmoid
+Each page directory contains `detections.json` (written when the spike runs; not committed), a float32 sigmoid
 `proposal-map.npz`, and a `proposal-bitmap.png` at the model's padded
 resolution. Pages 02 and 07 additionally save the exact prepared CHW input
-tensor. `manifest.json` hashes the output artifacts, scripts, source revision,
+tensor. `manifest.json` (written when the spike runs; not committed) hashes the output artifacts, scripts, source revision,
 checkpoint, and package versions. Overlays and the contact sheet are visual
 review aids. All comic-derived artifacts remain ignored by Git.
 

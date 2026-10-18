@@ -131,6 +131,9 @@ fn check_no_cloud_secrets(key_path: &str, value: &Value) -> Result<(), String> {
 /// would decide where a page is sent. `analysisTargets` routes detection
 /// stages to the cloud, `cleanTarget` the cleaning and `denoiseTarget` the
 /// denoise, so each is refused whole rather than half-read later.
+///
+/// `undoLimit` is checked for a different reason: it is how much undo history
+/// is written to disk on every edit, and [`crate::history`] owns its bounds.
 fn check_known_shapes(patch: &Value) -> Result<(), String> {
     use crate::inference::cloud_clean::{CleanTarget, CLEAN_TARGET_KEY};
     use crate::inference::cloud_denoise::{DenoiseTarget, DENOISE_TARGET_KEY};
@@ -144,7 +147,19 @@ fn check_known_shapes(patch: &Value) -> Result<(), String> {
     if let Some(target) = patch.get(DENOISE_TARGET_KEY) {
         DenoiseTarget::from_value(Some(target))?;
     }
+    check_undo_limit(patch)?;
     check_denoise_defaults(patch)
+}
+
+/// A whole number inside the bounds `history` sets. Null clears it, which is
+/// the default.
+fn check_undo_limit(patch: &Value) -> Result<(), String> {
+    use crate::history::{valid_limit, UNDO_LIMIT_KEY, UNDO_LIMIT_MAX, UNDO_LIMIT_MIN};
+    match patch.get(UNDO_LIMIT_KEY) {
+        None | Some(Value::Null) => Ok(()),
+        Some(value) if valid_limit(value).is_some() => Ok(()),
+        Some(_) => Err(format!("{UNDO_LIMIT_KEY} must be a whole number from {UNDO_LIMIT_MIN} to {UNDO_LIMIT_MAX}")),
+    }
 }
 
 /// `denoisePreset` names one of the shipped presets, and
@@ -683,6 +698,24 @@ mod tests {
             assert!(write_patch(&path, serde_json::json!({"denoiseLocalSecondsPerPage": bad})).is_err(), "{bad}");
         }
         assert!(write_patch(&path, serde_json::json!({"denoiseLocalSecondsPerPage": null})).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn undo_limit_is_validated_on_write() {
+        use crate::history::{UNDO_LIMIT_MAX, UNDO_LIMIT_MIN};
+        let dir = std::env::temp_dir().join(format!("mc-settings-undo-limit-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        for good in [UNDO_LIMIT_MIN, 800, UNDO_LIMIT_MAX] {
+            assert_eq!(write_patch(&path, serde_json::json!({"undoLimit": good})).unwrap()["undoLimit"], good);
+        }
+        for bad in [serde_json::json!(UNDO_LIMIT_MIN - 1), serde_json::json!(UNDO_LIMIT_MAX + 1), serde_json::json!(-1),
+            serde_json::json!(100.5), serde_json::json!("100"), serde_json::json!(true)] {
+            assert!(write_patch(&path, serde_json::json!({"undoLimit": bad})).is_err(), "{bad}");
+        }
+        assert_eq!(read_file(&path).unwrap()["undoLimit"], UNDO_LIMIT_MAX, "a refused patch writes nothing");
+        assert!(write_patch(&path, serde_json::json!({"undoLimit": null})).is_ok());
+        assert_eq!(crate::history::limit_from(&read_file(&path).unwrap()), crate::history::UNDO_LIMIT_DEFAULT);
         std::fs::remove_dir_all(&dir).ok();
     }
 

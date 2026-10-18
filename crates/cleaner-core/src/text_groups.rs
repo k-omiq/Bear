@@ -111,6 +111,17 @@
 //!   pieces is one job and one crop. Only the grouping widens: the lettering
 //!   each group cleans stays the mask's own pixels, and the fit adds its halo
 //!   as before.
+//! - **Confirm, then merge** ([`group_checked`]): a box is a second source
+//!   for the lettering under it. What no box claimed has the mask alone, so
+//!   where the caller has a text reader the reader is its second source, asked
+//!   before any of it may join a box's lettering. Layout groups within reach
+//!   of each other are one unit (one stroke of a drawn sound effect does not
+//!   read alone), each unit is read by itself, and one the reader refuses is
+//!   a candidate with the reader's reason: listed with its lettering, never
+//!   joined to another group and never in another group's mask. A piece
+//!   beside a box is such a unit too, where [`group`] attaches it unread;
+//!   only specks still attach unread. [`group`] asks no reader and joins as
+//!   before.
 //!
 //! ## Where it is used
 //!
@@ -137,7 +148,11 @@ use crate::mask::{Mask, Rect};
 /// 5: the mask decides what is lettering: a layout group is a cleaning job,
 /// recorded when no box claimed it, and lettering within reach of other
 /// lettering in one balloon (or both in none) is one group ([`within_reach`]).
-pub const GROUPING_VERSION: u32 = 5;
+/// 6: confirm, then merge: where the caller has a text reader, what no box
+/// claimed is read on its own before it may join a box's lettering, and a
+/// unit that does not read as text the run cleans is listed and joins nothing
+/// ([`group_checked`]).
+pub const GROUPING_VERSION: u32 = 6;
 /// Bubble boxes below this score are not walls. The balloon module's own
 /// "sure" line, for the same reason: a weak shape is a statement about
 /// something near the text, not a boundary.
@@ -423,6 +438,12 @@ pub enum Assignment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewReason {
+    /// A unit no box claimed, which the text reader read on its own and found
+    /// no lettering in ([`group_checked`]). First, with the next, so that it
+    /// is the reason a held row shows.
+    NotText,
+    /// Such a unit, read as text in a language the run leaves on the page.
+    LanguageLeft,
     /// Lettering no text box claims, while a box detector ran.
     UnassignedComponent,
     /// SAM-only: a single island with no neighbour in text layout.
@@ -437,6 +458,8 @@ impl ReviewReason {
     /// The `review.reason.*` key a layer row shows.
     pub fn key(self) -> &'static str {
         match self {
+            ReviewReason::NotText => "review.reason.gateSkippedNotText",
+            ReviewReason::LanguageLeft => "review.reason.gateSkippedNotJapanese",
             ReviewReason::UnassignedComponent => "review.reason.unassignedMask",
             ReviewReason::IsolatedComponent => "review.reason.isolatedMask",
             ReviewReason::CrossesBalloon => "review.reason.crossesBalloon",
@@ -867,8 +890,31 @@ impl Draft {
     }
 }
 
+/// What the caller's text reader says of one unit, read on its own
+/// ([`group_checked`]). A caller that could not read a unit answers
+/// [`UnitAnswer::Text`]: the reader is optional, and the mask stands without it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitAnswer {
+    /// Text the run cleans.
+    Text,
+    /// Not lettering: art the mask took for text.
+    NotText,
+    /// Lettering in a language the run leaves on the page.
+    LanguageLeft,
+}
+
 /// Group one raster's evidence. See the module notes for the rules.
 pub fn group(inputs: &Inputs) -> Result<Grouping, String> {
+    group_checked(inputs, None)
+}
+
+/// [`group`], with a text reader asked about each unit no box claimed before
+/// it may join a box's lettering. `check` is given the unit's lettering bounds
+/// in this raster and is called in a fixed order.
+pub fn group_checked(
+    inputs: &Inputs,
+    mut check: Option<&mut dyn FnMut(Rect) -> UnitAnswer>,
+) -> Result<Grouping, String> {
     let (width, height) = (inputs.width, inputs.height);
     let length = width as usize * height as usize;
     if width == 0 || height == 0 || length > 100_000_000 {
@@ -1146,7 +1192,9 @@ pub fn group(inputs: &Inputs) -> Result<Grouping, String> {
     let mut drafts = fold(drafts, &into, &mut owner, &boxes);
 
     // Proximity: punctuation and strokes just outside an anchor, same balloon.
-    attach_by_proximity(&mut drafts, &mut owner, &components, &here_of);
+    // With a reader only specks attach here: a larger piece no box claimed is
+    // read, in its layout unit, before it may join the box's lettering.
+    attach_by_proximity(&mut drafts, &mut owner, &components, &here_of, check.is_some());
 
     // Detector-only anchors: a text box with no lettering under it.
     if inputs.mask.is_some() {
@@ -1209,7 +1257,7 @@ pub fn group(inputs: &Inputs) -> Result<Grouping, String> {
     }
     // Specks beside a layout group (an ellipsis, a dakuten) are its lettering
     // too, as they are beside an anchored group.
-    attach_by_proximity(&mut drafts, &mut owner, &components, &here_of);
+    attach_by_proximity(&mut drafts, &mut owner, &components, &here_of, false);
 
     // Crossing flags: a component's is its group's too, and a group whose
     // lettering lies in two balloons (an unconfined box took both) is flagged.
@@ -1258,6 +1306,36 @@ pub fn group(inputs: &Inputs) -> Result<Grouping, String> {
         }
     }
 
+    // Confirm, then merge. What no box claimed has no second source, so the
+    // reader is asked before the reach can join it to a box's lettering.
+    // Layout groups within reach of each other are read as one unit: a sound
+    // effect drawn as separate strokes reads whole where no stroke reads
+    // alone. A unit the reader refuses is a candidate from here on.
+    if let Some(check) = check.as_mut() {
+        let unclaimed: Vec<bool> = drafts
+            .iter()
+            .map(|draft| draft.origin == GroupOrigin::MaskLayout && draft.disposition == Disposition::Clean)
+            .collect();
+        let into = within_reach(&drafts, &unclaimed, &owner, &components, &labels, &boxes, width, height);
+        drafts = fold(drafts, &into, &mut owner, &boxes);
+        for draft in drafts.iter_mut() {
+            if draft.origin != GroupOrigin::MaskLayout || draft.disposition != Disposition::Clean {
+                continue;
+            }
+            let Some(bounds) = draft.lettering_bounds(&components) else { continue };
+            let reason = match check(bounds) {
+                UnitAnswer::Text => continue,
+                UnitAnswer::NotText => ReviewReason::NotText,
+                UnitAnswer::LanguageLeft => ReviewReason::LanguageLeft,
+            };
+            draft.disposition = Disposition::Candidate;
+            draft.reasons.insert(reason);
+            for &m in &draft.members {
+                component_reasons[m].insert(reason);
+            }
+        }
+    }
+
     // Reach: one text the boxes cut apart is one job. Cleaning groups whose
     // lettering is within reach of each other, in the same balloon, are one
     // group, so an effect the detector boxed in two pieces, or whose strokes
@@ -1266,7 +1344,8 @@ pub fn group(inputs: &Inputs) -> Result<Grouping, String> {
     // lettering with it. The reach only decides the grouping: no pixel is
     // added to the lettering here. Lettering that joined a box's group is
     // claimed by it and loses its reason.
-    let into = within_reach(&drafts, &owner, &components, &labels, &boxes, width, height);
+    let cleaning: Vec<bool> = drafts.iter().map(|draft| draft.disposition == Disposition::Clean).collect();
+    let into = within_reach(&drafts, &cleaning, &owner, &components, &labels, &boxes, width, height);
     drafts = fold(drafts, &into, &mut owner, &boxes);
     for (index, slot) in owner.iter_mut().enumerate() {
         let Some((d, via)) = slot else { continue };
@@ -1568,8 +1647,8 @@ fn reach(glyph: i64) -> i64 {
     ((REACH_FRACTION * glyph as f64) as i64).clamp(2, REACH_MAX)
 }
 
-/// Which lettered cleaning drafts join which: two in the same balloon (or
-/// both in none) whose lettering comes within [`reach`] of each other are
+/// Which lettered drafts among `eligible` join which: two in the same balloon
+/// (or both in none) whose lettering comes within [`reach`] of each other are
 /// one. Returns the fold targets: each joined draft names its class's lowest
 /// index.
 ///
@@ -1586,6 +1665,7 @@ fn reach(glyph: i64) -> i64 {
 #[allow(clippy::too_many_arguments)]
 fn within_reach(
     drafts: &[Draft],
+    eligible: &[bool],
     owner: &[Option<(usize, Assignment)>],
     components: &[(Rect, u32)],
     labels: &[u32],
@@ -1595,7 +1675,8 @@ fn within_reach(
 ) -> Vec<Option<usize>> {
     let bounds: Vec<Option<Rect>> = drafts
         .iter()
-        .map(|d| d.lettering_bounds(components).filter(|_| d.disposition == Disposition::Clean))
+        .zip(eligible)
+        .map(|(d, eligible)| d.lettering_bounds(components).filter(|_| *eligible))
         .collect();
     let glyphs: Vec<i64> = drafts.iter().map(|d| d.glyph(components)).collect();
     let loose_bubble_text =
@@ -1690,11 +1771,13 @@ fn reaches(
 /// punctuation and strokes just outside an anchor, specks beside a layout
 /// group. Each pass decides from the previous pass's state, so a pass's
 /// result does not depend on the order components are visited in.
+/// `specks_only` leaves every larger component loose ([`group_checked`]).
 fn attach_by_proximity(
     drafts: &mut [Draft],
     owner: &mut [Option<(usize, Assignment)>],
     components: &[(Rect, u32)],
     here_of: &[Option<usize>],
+    specks_only: bool,
 ) {
     for _ in 0..3 {
         let glyphs: Vec<i64> = drafts.iter().map(|d| d.glyph(components)).collect();
@@ -1706,8 +1789,8 @@ fn attach_by_proximity(
             })
             .collect();
         let mut attached = Vec::new();
-        for (index, (bounds, _)) in components.iter().enumerate() {
-            if owner[index].is_some() {
+        for (index, (bounds, pixels)) in components.iter().enumerate() {
+            if owner[index].is_some() || (specks_only && *pixels >= SPECK_PIXELS) {
                 continue;
             }
             let best = (0..drafts.len())
@@ -2128,6 +2211,7 @@ impl Grouping {
             estimated: group.estimated,
             evidence_ref: evidence.map(|e| e.reference()),
             evidence_sha256: evidence.map(|e| e.sha256.clone()),
+            reading: None,
         }
     }
 
@@ -2270,6 +2354,39 @@ pub struct GroupRecord {
     pub evidence_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_sha256: Option<String>,
+    /// What the text reader said of the group in the run that made this
+    /// record. Absent on records written before readings were kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading: Option<ReaderRecord>,
+}
+
+/// The Hayai reader's answer for one group ([`crate::gate::hayai::Reading`]),
+/// kept so that a wrong clean can be traced to the answer that allowed it.
+/// Provenance only: nothing reads it back to decide anything.
+///
+/// `manga-ocr`'s rescue is not kept here. The script it leaves on the
+/// detection ([`crate::gate::RESCUED_SCRIPT`]) names it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReaderRecord {
+    /// The run did not put the group to the reader, or the reader gave no
+    /// answer: reading was off, no reader path applied to the verdict, the
+    /// reader would not open, or the read failed.
+    NotRead,
+    Read { text: String, confidence: f32, floor: f32 },
+}
+
+impl ReaderRecord {
+    pub fn of(reading: Option<&crate::gate::hayai::Reading>) -> ReaderRecord {
+        match reading {
+            Some(reading) => ReaderRecord::Read {
+                text: reading.text.clone(),
+                confidence: reading.confidence,
+                floor: reading.floor,
+            },
+            None => ReaderRecord::NotRead,
+        }
+    }
 }
 
 impl GroupRecord {
@@ -2287,7 +2404,8 @@ impl GroupRecord {
 
     /// The compact provenance object patch snapshots carry. `modelsDescribed`
     /// names each model's checkpoint, revision, execution and spatial input
-    /// ([`ModelUse::identity`]) beside the bare `models` tags.
+    /// ([`ModelUse::identity`]) beside the bare `models` tags. `reading` is
+    /// null for a record made before readings were kept.
     pub fn snapshot(&self) -> serde_json::Value {
         serde_json::json!({
             "id": self.id,
@@ -2302,6 +2420,7 @@ impl GroupRecord {
             "letteringPixels": self.lettering_pixels,
             "letteringSha256": self.lettering_sha256,
             "evidence": self.evidence_ref,
+            "reading": self.reading,
         })
     }
 }

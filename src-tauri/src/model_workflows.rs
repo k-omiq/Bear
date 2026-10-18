@@ -3097,7 +3097,7 @@ mod tests {
                 page_status: Some(applied.page_status),
                 region: Some(serde_json::to_value(applied.region).unwrap()),
             },
-        });
+        }, crate::history::UNDO_LIMIT_DEFAULT);
         crate::history::save(&path, &journal).unwrap();
         let mut reopened = crate::history::load(&path);
         assert_eq!(reopened.cursor, 1);

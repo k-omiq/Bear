@@ -1,13 +1,16 @@
 """FLUX worker: the pinned recipe, run the way the local sdnq backend runs it.
 
-`SdnqFluxRunner` is the production path. It mirrors
-sidecar/manga_cleaner_sidecar/backend/sdnq.py step for step (working size, call
-arguments, the hole, output conversion) so a crop rendered in the cloud matches a
-local render of the same crop. Both render through FLUX.2 Klein's inpaint pipeline:
-the hint, grown by `HOLE_GROWTH`, is the hole, and the latents outside it are held
-to the crop's own at every step. torch, diffusers, sdnq, PIL and numpy are imported
-when a runner loads, never at module import, so the CPU gateway image does not
-need them.
+`SdnqFluxRunner` is the production path. It shares the local sidecar's working size,
+hole and output conversion (sidecar/manga_cleaner_sidecar/backend/sdnq.py). Both render
+through FLUX.2 Klein's inpaint pipeline: the hint, grown by `HOLE_GROWTH`, is the hole,
+and the latents outside it are held to the crop's own at every step. Since recipe v2
+the cloud runner first fills the hole with the app's manga LaMa (`LamaFill`) and gives
+Klein that filled crop as its only image. The pipeline conditions on the image it is
+given, so with the lettering still in it Klein drew bold sound effects back
+(docs/findings.md, "Cloud Klein v2"). The local sidecar does not fill yet. A request
+may carry guidance (`flux_prompt`). torch, diffusers, sdnq, onnxruntime, PIL and numpy
+are imported when a runner loads, never at module import, so the CPU gateway image
+does not need them.
 
 `render_job` is what a GPU worker runs per job: validate, render, validate the result.
 `FluxWorker` is the offline fake the gateway tests drive through the local backend.
@@ -30,6 +33,7 @@ from deploy.cloud.common.contract import (
     LATENT_STRIDE,
     ContractValidationError,
     JobRequestMetadata,
+    QwenEdit,
     ServiceLimits,
     provisional_fixture_limits,
     validate_crop_payload,
@@ -37,6 +41,8 @@ from deploy.cloud.common.contract import (
 )
 from deploy.cloud.common.handle_mapping import JobRecord
 from deploy.cloud.common.manifest import (
+    ADAPTER_DIR,
+    LAMA_FILE,
     RECIPE_PROMPT,
     WORK_LONG_SIDE,
     get_pinned_sampling,
@@ -84,6 +90,28 @@ def filter_call_kwargs(pipeline: Any, candidate: Dict[str, Any]) -> Dict[str, An
     return {name: value for name, value in candidate.items() if name in accepted}
 
 
+# What each guidance target asks Klein to do. Measured on two real pages (docs/findings.md,
+# "Cloud Klein v2"): the target alone never hurt, while a description is drawn as said,
+# so it describes what lies under the lettering.
+FLUX_ACTIONS: Dict[str, str] = {
+    "auto": "Remove all text, including hand-drawn Japanese sound effects and onomatopoeia.",
+    "dialogue": "Remove the dialogue lettering inside the speech bubble and leave the bubble interior blank.",
+    "sound_effect": "Remove the hand-drawn sound effect lettering and redraw the artwork it covered.",
+    "other": "Remove the unwanted lettering and redraw what it covered.",
+}
+
+
+def flux_prompt(edit: Optional[QwenEdit]) -> str:
+    """The prompt for one render: the recipe's own, unless the request carries guidance."""
+    if edit is None or (edit.target == "auto" and not edit.description.strip()):
+        return RECIPE_PROMPT
+    behind = f" Behind the lettering: {edit.description.strip()}." if edit.description.strip() else ""
+    return (FLUX_ACTIONS[edit.target] + behind
+            + " Preserve character line art, screentones, panel borders, and background"
+            + " details exactly as they appear. Match the original contrast, line weight and shading."
+            + " Add no new text or symbols.")
+
+
 def recipe_mismatch(meta: JobRequestMetadata) -> Optional[str]:
     """Why a request is not the pinned render, or None when it is."""
     if not is_recipe_supported(meta.recipe):
@@ -92,17 +120,22 @@ def recipe_mismatch(meta: JobRequestMetadata) -> Optional[str]:
 
 
 def sampling_mismatch(meta: JobRequestMetadata) -> Optional[str]:
-    """Why a request's seed, steps or guidance differ from what its recipe pins."""
+    """Why a request's seed, steps or guidance differ from what its recipe pins.
+
+    Steps and guidance are fixed. The pinned seed is the one a first request for a
+    region carries. A retry of the same region carries a later seed, so that it is
+    a new render and not the same image again; a seed below the pinned one is no
+    request the app makes.
+    """
     sampling = get_pinned_sampling(meta.recipe.recipe_id)
     if sampling is None:
         return None
-    if (meta.seed, meta.steps, meta.guidance_scaled) != (
-        sampling.seed,
+    if meta.seed < sampling.seed or (meta.steps, meta.guidance_scaled) != (
         sampling.steps,
         sampling.guidance_scaled,
     ):
         return (
-            f"Recipe '{meta.recipe.recipe_id}' is pinned to seed={sampling.seed}, "
+            f"Recipe '{meta.recipe.recipe_id}' is pinned to seed>={sampling.seed}, "
             f"steps={sampling.steps}, guidance_scaled={sampling.guidance_scaled}"
         )
     return None
@@ -135,6 +168,61 @@ def looks_like_memory(detail: str) -> bool:
     return "out of memory" in detail.lower()
 
 
+# lama-manga.onnx takes a fixed 512 x 512 input (crates/cleaner-core/src/engines/lama.rs).
+LAMA_SIDE = 512
+# Tiles of a larger crop overlap by 128 px, as rung 2's do.
+LAMA_STEP = LAMA_SIDE - 128
+
+
+class LamaFill:
+    """The hole filled by the app's manga LaMa, at the crop's own resolution.
+
+    The graph's contract is rung 2's: RGB in 0..1, mask 1 = hole, fixed 512 x 512. A
+    crop smaller than that is padded by edge replication; a larger one runs in 512 tiles
+    128 px apart, each filling what is still a hole, so a later tile reads the fill of
+    an earlier one. Only hole pixels change. ONNX Runtime must run it on CUDA in a GPU
+    worker: a CPU fallback would hide a broken image.
+    """
+
+    def __init__(self, path: str, device: str):
+        import numpy
+        import onnxruntime
+        import torch  # noqa: F401  loads the CUDA libraries ONNX Runtime links against
+        from PIL import Image
+
+        self.np, self.Image = numpy, Image
+        providers = ["CUDAExecutionProvider"] if device == "cuda" else ["CPUExecutionProvider"]
+        self.session = onnxruntime.InferenceSession(path, providers=providers)
+        if providers[0] not in self.session.get_providers():
+            raise RuntimeError(f"LaMa did not start on {providers[0]}")
+
+    def fill(self, crop: Any, hole: Any) -> Any:
+        np = self.np
+        image = np.asarray(crop.convert("RGB"), dtype=np.float32) / 255.0
+        left = np.asarray(hole, dtype=np.uint8) > 0
+        height, width = left.shape
+        pad_h, pad_w = max(height, LAMA_SIDE), max(width, LAMA_SIDE)
+        if (pad_h, pad_w) != (height, width):
+            image = np.pad(image, ((0, pad_h - height), (0, pad_w - width), (0, 0)), mode="edge")
+            left = np.pad(left, ((0, pad_h - height), (0, pad_w - width)))
+        rows = sorted(set(range(0, pad_h - LAMA_SIDE + 1, LAMA_STEP)) | {pad_h - LAMA_SIDE})
+        cols = sorted(set(range(0, pad_w - LAMA_SIDE + 1, LAMA_STEP)) | {pad_w - LAMA_SIDE})
+        for y in rows:
+            for x in cols:
+                window = (slice(y, y + LAMA_SIDE), slice(x, x + LAMA_SIDE))
+                mask = left[window]
+                if not mask.any():
+                    continue
+                weight = mask.astype(np.float32)
+                tile = image[window] * (1.0 - weight[..., None])
+                out = self.session.run(None, {"image": tile.transpose(2, 0, 1)[None],
+                                              "mask": weight[None, None]})[0][0].transpose(1, 2, 0)
+                image[window][mask] = np.clip(out[mask], 0.0, 1.0)
+                left[window] = False
+        filled = (image[:height, :width] * 255.0).round().astype(np.uint8)
+        return self.Image.fromarray(np.ascontiguousarray(filled))
+
+
 def _default_modules() -> SimpleNamespace:
     import numpy
     import torch
@@ -146,7 +234,7 @@ def _default_modules() -> SimpleNamespace:
     from PIL import Image, ImageFilter
 
     return SimpleNamespace(torch=torch, np=numpy, Image=Image, ImageFilter=ImageFilter,
-                           Pipeline=Flux2KleinInpaintPipeline)
+                           Pipeline=Flux2KleinInpaintPipeline, Lama=LamaFill)
 
 
 class SdnqFluxRunner:
@@ -157,6 +245,7 @@ class SdnqFluxRunner:
         self.device = device
         self._modules = modules
         self.pipeline: Any = None
+        self.lama: Any = None
         self.render_count = 0
 
     def _mods(self) -> SimpleNamespace:
@@ -185,11 +274,13 @@ class SdnqFluxRunner:
             # SDNQ's Triton quantized matmul stays off on purpose: it compiles kernels on
             # the first call, and with scale-to-zero that compile lands on most jobs.
             pipeline.to(self.device)
+            lama = m.Lama(f"{self.snapshot_path}/{ADAPTER_DIR}/{LAMA_FILE}", self.device)
         except WorkerRenderError:
             raise
         except Exception as exc:
             code = "out_of_memory" if looks_like_memory(str(exc)) else "model_load_failed"
             raise WorkerRenderError(code, f"Failed to load the pinned pipeline: {exc}") from exc
+        self.lama = lama
         self.pipeline = pipeline
         return pipeline
 
@@ -204,7 +295,10 @@ class SdnqFluxRunner:
         m = self._mods()
         image, hint = io.BytesIO(), io.BytesIO()
         m.Image.new("RGB", (WARMUP_SIDE, WARMUP_SIDE), (255, 255, 255)).save(image, format="PNG")
-        m.Image.new("L", (WARMUP_SIDE, WARMUP_SIDE), 0).save(hint, format="PNG")
+        # Some lettering, so LaMa runs too and its CUDA setup is not left to the first job.
+        lettering = m.Image.new("L", (WARMUP_SIDE, WARMUP_SIDE), 0)
+        lettering.paste(255, (WARMUP_SIDE // 4, WARMUP_SIDE // 4, WARMUP_SIDE // 2, WARMUP_SIDE // 2))
+        lettering.save(hint, format="PNG")
         count = self.render_count
         self.render_png(image.getvalue(), hint.getvalue(), WARMUP_SIDE, WARMUP_SIDE,
                         seed=0, steps=1, guidance_scaled=100)
@@ -219,8 +313,12 @@ class SdnqFluxRunner:
         seed: int,
         steps: int,
         guidance_scaled: int,
+        qwen_edit: Optional[QwenEdit] = None,
     ) -> bytes:
-        """Inpaint the hint's lettering in one crop; an RGB PNG at exactly width x height."""
+        """Inpaint the hint's lettering in one crop; an RGB PNG at exactly width x height.
+
+        `qwen_edit` is the request's guidance, None for a recipe that takes none.
+        """
         pipeline = self.load()
         m = self._mods()
         torch, np, Image = m.torch, m.np, m.Image
@@ -234,9 +332,14 @@ class SdnqFluxRunner:
 
         work_w, work_h = working_size(width, height)
         resized = (work_w, work_h) != crop.size
-        work_crop = crop.resize((work_w, work_h), Image.Resampling.BICUBIC) if resized else crop
         # backend/base.py hole_for, in the sidecar.
         grown = hint.point(lambda v: 255 if v else 0).filter(m.ImageFilter.MaxFilter(2 * HOLE_GROWTH + 1))
+        try:
+            filled = self.lama.fill(crop, grown)
+        except Exception as exc:
+            code = "out_of_memory" if looks_like_memory(str(exc)) else "inference_failed"
+            raise WorkerRenderError(code, f"LaMa fill failed: {exc}") from exc
+        work_crop = filled.resize((work_w, work_h), Image.Resampling.BICUBIC) if resized else filled
         hole = grown.resize((work_w, work_h), Image.Resampling.NEAREST) if resized else grown
         # Host generator, as locally: one seed gives one result on any accelerator.
         generator = torch.Generator(device="cpu").manual_seed(int(seed))
@@ -244,7 +347,7 @@ class SdnqFluxRunner:
             pipeline,
             {
                 "image": work_crop,
-                "prompt": RECIPE_PROMPT,
+                "prompt": flux_prompt(qwen_edit),
                 "width": work_w,
                 "height": work_h,
                 "num_inference_steps": int(steps),
@@ -254,10 +357,10 @@ class SdnqFluxRunner:
                 "max_area": work_w * work_h,
             },
         )
-        # Never filtered: a pipeline without them would redraw the whole crop. The crop
-        # is also the reference image, so the model sees the page around the hole;
-        # without it the benchmark drew new strokes into sound effects.
-        kwargs.update(mask_image=hole, image_reference=work_crop, strength=1.0)
+        # Never filtered: a pipeline without them would redraw the whole crop. The pipeline
+        # already conditions on `image`, the filled crop; a second copy as
+        # `image_reference` changed nothing on the bench and cost 30% more time.
+        kwargs.update(mask_image=hole, strength=1.0)
 
         try:
             # Out-of-place nan_to_num and clamp: inference tensors refuse in-place edits.
@@ -323,7 +426,8 @@ def render_job(
         meta.seed,
         meta.steps,
         meta.guidance_scaled,
-        **({"qwen_edit": meta.recipe.qwen_edit} if meta.recipe.model_id.startswith("Disty0/Qwen-Image-Edit") else {}),
+        # The contract admits guidance only on a recipe whose runner takes it.
+        **({"qwen_edit": meta.recipe.qwen_edit} if meta.recipe.qwen_edit is not None else {}),
     )
     digest = hashlib.sha256(png).hexdigest()
     try:
@@ -453,6 +557,7 @@ __all__ = [
     "WorkerRenderError",
     "encode_png_rgb8",
     "filter_call_kwargs",
+    "flux_prompt",
     "guidance_from_scaled",
     "recipe_mismatch",
     "render_job",

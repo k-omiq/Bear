@@ -1,6 +1,6 @@
 //! Whether the selected cloud deployment has a GPU container up, and stopping it.
 //!
-//! Two gateway routes back this (`docs/cloud-api.md`): `GET /mc/v1/gpu` reads the
+//! Two gateway routes back this (`docs/cloud-contract.md`): `GET /mc/v1/gpu` reads the
 //! heartbeats GPU containers publish and never starts a GPU, and `POST /mc/v1/gpu/stop`
 //! ends what is up. Both are strict on the way in, like every other `/mc/v1` answer:
 //! known enums only, at most one container per role, finite non-negative times, a

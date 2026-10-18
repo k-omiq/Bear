@@ -36,9 +36,9 @@
    * file inside a reader's archive would be read as a page and the backend
    * refuses the pair; the seam is sent `'flattened'` for it.
    *
-   * **The overwrite refusal, and the ten that are not it.**
-   * `backend.exportChapter` answers `status: 'refused'` for eleven different
-   * reasons now, and only one of them has a way out this dialog can offer.
+   * **The overwrite refusal, and the ones that are not it.**
+   * `backend.exportChapter` answers `status: 'refused'` for twelve different
+   * reasons now, and only two of them have a way out this dialog can offer.
    * `notice.export.refusedOverwrite` (output never
    * overwrites input) is pushed *on top of* this dialog with `dismissable:
    * false` - no Escape, no backdrop - and exactly one action, "Choose another
@@ -47,6 +47,15 @@
    * for, so the adapter's notice says why and this dialog simply stays open
    * with the choices still in it. Branching on `status` alone would push the
    * overwrite modal over a user who asked for JPEG.
+   *
+   * **The folder that is not there.** The default destination is beside the
+   * chapter's scan folder, and a chapter imported from an external drive
+   * still opens and cleans with the drive unplugged. Its plan then comes back
+   * refused with `notice.export.destinationUnavailable` and the path. The
+   * sentence is shown with the other plan refusals, and the way out is
+   * offered under it: "Choose another folder…" moves the destination to a
+   * folder the user names and opens the chooser. The export never picks a
+   * folder for them.
    *
    * **The draft lives in `spec.props`, not in this component.** Pushing the
    * refusal unmounts this dialog - the host mounts only the top of the stack -
@@ -57,7 +66,8 @@
   import { untrack } from 'svelte'
   import { Button, Field, Modal, Segmented } from '../ui/index.js'
   import SourceFolderField from '../home/dialogs/SourceFolderField.svelte'
-  import { closeModal, modalWidth, pushModal } from '../state/app.svelte.js'
+  import { chooseFolder } from '../api/folder.js'
+  import { closeModal, modalWidth, notify, pushModal } from '../state/app.svelte.js'
   import { editor, pageCount, pages, reportJobConflict, reviewEntries } from '../state/editor.svelte.js'
   import { getBackend } from '../api/backend.js'
   import { t } from '../i18n/index.js'
@@ -180,7 +190,10 @@
       // One refusal leads somewhere; the rest were announced with a sentence
       // saying what to change, and this dialog is where it gets changed.
       if (result.reasonKey === 'notice.export.refusedOverwrite') refuse()
+      // Both mean the plan on screen is no longer true: plan again, and the
+      // dialog shows what the backend just said.
       if (result.reasonKey === 'notice.export.stalePlan') refresh += 1
+      if (result.reasonKey === UNAVAILABLE) refresh += 1
       return
     }
     // The adapter announces the export itself (`notice.export.finished`, or
@@ -188,6 +201,29 @@
     // nothing left for the dialog to say.
     if (result?.status === 'exported') closeModal('export')
     else planError = result?.detail ?? t(result?.reasonKey ?? 'notice.export.partial')
+  }
+
+  const UNAVAILABLE = 'notice.export.destinationUnavailable'
+  let choosing = $state(false)
+
+  /**
+   * The way out of a destination that cannot be written. The destination
+   * becomes a named folder first, so the path field is on screen whatever the
+   * chooser answers: outside a Tauri window there is no chooser, and a
+   * dismissed one leaves the field for a typed path.
+   */
+  async function chooseAnotherFolder() {
+    if (choosing) return
+    draft.destination = 'custom'
+    choosing = true
+    try {
+      const chosen = await chooseFolder({ title: t('export.destination.chooserTitle') })
+      if (chosen) draft.path = chosen
+    } catch {
+      notify({ key: 'notice.project.sourcePickFailed', params: {}, tone: 'warn' })
+    } finally {
+      choosing = false
+    }
   }
 
   function refuse() {
@@ -300,6 +336,9 @@
     {#if planError}<p role="alert">{planError}</p>{/if}
     {#if plan?.status === 'refused'}
       <p role="alert">{t(plan.reasonKey, { format: draft.format, path: plan.path ?? '' })} {plan.detail ?? ''}</p>
+      {#if plan.reasonKey === UNAVAILABLE}
+        <p><Button disabled={busy || choosing} onclick={chooseAnotherFolder}>{t('export.action.chooseAnotherFolder')}</Button></p>
+      {/if}
     {/if}
     {#if plan?.status === 'planned'}
       <p>{t('export.note.actualFormats', { formats: plan.actualFormats.join(' / ') })}</p>

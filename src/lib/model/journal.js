@@ -7,9 +7,11 @@
  *  1. A push **truncates the future**. Once a new action happens the old redo
  *     stack is unreachable, which is the rule the session-only history had and
  *     the one a persisted history is most likely to lose.
- *  2. The journal is **capped** at `JOURNAL_LIMIT`, oldest out, and the cursor
- *     moves with the entries that leave. An unlimited persisted history is an
- *     unbounded term in a budget whose whole claim is that it is bounded.
+ *  2. The journal is **capped**, oldest out, and the cursor moves with the
+ *     entries that leave. An unlimited persisted history is an unbounded term
+ *     in a budget whose whole claim is that it is bounded. The cap is the
+ *     `undoLimit` setting and the backend owns it: there is no number here,
+ *     the caller passes the limit in.
  *  3. `seq` is **never reissued**. A number that came back would make two
  *     different edits the same entry to anything holding the old one.
  *
@@ -21,9 +23,6 @@
  * Nothing here is reactive and nothing here touches the seam - a journal is
  * plain data, and `src/lib/state/history.svelte.js` is what makes it move.
  */
-
-/** How many entries a chapter keeps. Matches `history::JOURNAL_LIMIT`. */
-export const JOURNAL_LIMIT = 500
 
 /** The format `src-tauri/src/history.rs` writes. */
 export const JOURNAL_VERSION = 1
@@ -39,7 +38,13 @@ export const JOURNAL_VERSION = 1
  * @typedef {Object} Delta
  * @property {number} seq
  * @property {string} label - i18n key for the Undo/Redo tooltip
- * @property {string} op - the verb; `region-state` is the only one today
+ * @property {'region-state'|'clean-state'} op - the verb. `region-state` is an
+ *   edit the interface recorded: each side is the region as it was, and a
+ *   replay puts that side back (`restoreRegion`). `clean-state` is a clean of
+ *   a detected region, or a rejected result, which the backend records by
+ *   itself: one side's region is the detection (`outcome: 'detected'`), the
+ *   other its cleaned result, and a replay asks for whichever the side is
+ *   (`setRegionCleaned`), so nothing renders again
  * @property {string} regionId
  * @property {DeltaSide} before
  * @property {DeltaSide} after
@@ -63,17 +68,15 @@ export function createJournal() {
  *
  * @param {Journal} journal
  * @param {Omit<Delta, 'seq'>} delta
+ * @param {number} limit - how many entries the journal keeps
  * @returns {Delta} the entry, with the number it was given
  */
-export function pushEntry(journal, delta) {
+export function pushEntry(journal, delta, limit) {
   journal.entries.length = journal.cursor
   const entry = { ...delta, seq: journal.nextSeq }
   journal.nextSeq += 1
   journal.entries.push(entry)
-  while (journal.entries.length > JOURNAL_LIMIT) {
-    journal.entries.shift()
-    journal.cursor = Math.max(0, journal.cursor - 1)
-  }
+  journal.entries.splice(0, Math.max(0, journal.entries.length - limit))
   journal.cursor = journal.entries.length
   return entry
 }
@@ -106,10 +109,12 @@ export function redoEntry(journal) {
  * size.
  *
  * @param {Journal} journal
- * @returns {{cursor: number, entries: Array<{seq: number, label: string}>}}
+ * @param {number} limit - the limit the journal is kept to, reported with the index
+ * @returns {{limit: number, cursor: number, entries: Array<{seq: number, label: string}>}}
  */
-export function viewOf(journal) {
+export function viewOf(journal, limit) {
   return {
+    limit,
     cursor: journal.cursor,
     entries: journal.entries.map((entry) => ({ seq: entry.seq, label: entry.label })),
   }

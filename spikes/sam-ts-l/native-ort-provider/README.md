@@ -1,5 +1,7 @@
 # Native Rust/ORT WebGPU SAM-TS-L probe
 
+This experiment checks that the pinned SAM-TS-L graphs run on ONNX Runtime's native WebGPU provider from Rust with exact mask parity; it is not shipped code.
+
 This standalone Rust crate uses the application's `ort = 2.0.0-rc.13` version and an installed ONNX Runtime 1.28.0 WebGPU provider library. It registers the plugin with `Environment::register_ep_library`, selects the discovered `WebGpuExecutionProvider` device with `SessionBuilder::with_devices`, runs the pinned 1024² encoder and text head on saved page tensors, and counts provider node events from ORT profiles. The mask verifier uses the exact Pillow nearest resize used by the saved reference.
 
 From the repository root on the M5 host:
@@ -27,7 +29,7 @@ The actual app-downloaded macOS runtime has a built-in WebGPU EP and does not ne
 
 ```sh
 spikes/sam-ts-l/native-ort-provider/target/release/sam-ts-native-ort-provider \
-  /Users/caved/dev/manga-cleaner/runtimes/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.dylib \
+  <repo-root>/runtimes/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.dylib \
   - spikes/sam-ts-l/artifacts/proof \
   spikes/sam-ts-l/artifacts/examples/apocalypse-109/page-07 \
   spikes/sam-ts-l/results/native-rust-app-webgpu-page07.json

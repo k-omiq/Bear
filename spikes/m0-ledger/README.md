@@ -1,5 +1,7 @@
 # M0 legacy region ledger
 
+This experiment runs the legacy region pipeline over sample pages and writes a per-region outcome ledger; it is not shipped code.
+
 Run `cargo run -p spike-m0-ledger -- --input-dir /path/to/pages --output-dir /path/to/scratch --max-pages 3`.
 The harness opens the same `Pipeline` and `PageContext` as `spike-clean-page`.
 It requires installed CTD, RT-DETR, script gate, gate labels, and LaMa model
@@ -14,10 +16,10 @@ applied mask bounds, plus `ink-proxy.png`, `applied-mask.png`, and `patch.png`.
 The pipeline does not expose a cleaned region's detector candidate box or its
 base mask. Their ledger columns are empty, and no `base-mask.png` is written.
 `candidate_box_proxy` and `ink_proxy_bounds` identify the retained proxies.
-`candidate.json` uses null for unavailable boxes and mask bounds. Untouched
+`candidate.json` (written when the spike runs; not committed) uses null for unavailable boxes and mask bounds. Untouched
 regions have no mask files. A page with no regions has one row for page time
 and process high-water RSS, with its region and outcome fields empty.
-`ledger.json` and `ledger.csv` record automatic outcomes and reason keys.
+`ledger.json` and `ledger.csv` (written when the spike runs; not committed) record automatic outcomes and reason keys.
 Human failure categories and correction time remain blank for review. Missed
 discovery cannot be inferred without labels. The current pipeline silently
 skips an empty detector seed before returning a region outcome, so the ledger

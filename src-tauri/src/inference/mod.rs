@@ -102,4 +102,3 @@ pub(crate) fn profile_in_service(
     if configured { Ok(()) } else { Err(Withdrawn::ProfileGone) }
 }
 
-pub mod review;

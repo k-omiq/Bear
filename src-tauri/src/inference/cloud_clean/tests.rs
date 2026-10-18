@@ -72,6 +72,7 @@ fn group(id: &str, bounds: Rect) -> GroupRecord {
         lettering_pixels: bounds.w * bounds.h, lettering_sha256: "b".repeat(64),
         components: vec!["sam-00001".into()], boxes: Vec::new(), bubble: None, models: Vec::new(),
         reasons: Vec::new(), split: None, estimated: false, evidence_ref: None, evidence_sha256: None,
+        reading: None,
     }
 }
 
@@ -194,6 +195,56 @@ fn preparing_describes_the_plan_and_cleans_nothing() {
     assert_eq!(std::fs::read(&path).unwrap(), before, "preparing wrote to the chapter");
     assert!(Job::open(&path).unwrap().project.patches.is_empty());
     assert_eq!(detection_ids(&path), vec![fill, remote0, remote1]);
+}
+
+/// A rejected result leaves an ordinary detection: the next cloud clean
+/// plans it, bound to the revision the first plan bound.
+#[test]
+fn a_rejected_result_is_planned_again_as_the_detection_it_was() {
+    let path = chapter("reject-replan", 1, StripMode::Single);
+    let id = detect(&path, 0, Rect::new(100, 100, 30, 20), REMOTE_PICK, 0);
+    let gateway = Gateway::priced();
+    // Each plan is let go once read: the proposals are one cache for every test.
+    let plan = |profile: &str| {
+        let proposal = prepare(&path, asked("chapter", false), destination(profile), &gateway, &settled).unwrap();
+        if let Some(id) = proposal.proposal_id.as_deref() { discard(id).unwrap(); }
+        proposal
+    };
+    assert_eq!(plan("modal-prof-clean-replan-a").region_ids, vec![id.clone()]);
+    let bound = |path: &Path| bind(path, std::slice::from_ref(&id), recipe_preprocessing(&recipe()).unwrap()).unwrap().regions;
+    let first = bound(&path);
+
+    // The result is applied at once, as a cloud render commits it.
+    {
+        let _lock = run::lock_job(&path).unwrap();
+        let mut job = Job::open(&path).unwrap();
+        let loaded = job.load_detection(&id).unwrap().unwrap();
+        let bounds = loaded.mask.bounds;
+        let pixels = Raster { width: bounds.w, height: bounds.h, data: vec![200; (bounds.w * bounds.h) as usize],
+            ..page_raster() };
+        let patch = Patch {
+            id: id.clone(), mask: loaded.mask, ink: loaded.ink, pixels, order: loaded.record.order, visible: true,
+            provenance: Provenance {
+                engine: Engine::Flux, engine_version: "test".into(), model_sha256: None,
+                execution_provider: "cloud".into(), params_snapshot: serde_json::json!({}),
+                mask_sha256: String::new(), source_sha256: String::new(), cloud: None, created: 1_760_000_000,
+            },
+        };
+        assert!(job.complete_detection(&id, &patch, None).unwrap());
+        library::invalidate_manifest_cache(&path);
+    }
+    assert!(plan("modal-prof-clean-replan-b").region_ids.is_empty(), "a cleaned region is not planned");
+
+    // Rejected.
+    {
+        let _lock = run::lock_job(&path).unwrap();
+        Job::open(&path).unwrap().restore_detection(&id).unwrap();
+        library::invalidate_manifest_cache(&path);
+    }
+    let again = plan("modal-prof-clean-replan-c");
+    assert_eq!(again.region_ids, vec![id.clone()]);
+    assert!(again.unresolved_ids.is_empty());
+    assert_eq!(format!("{:?}", bound(&path)), format!("{first:?}"), "the same region, at the same revision");
 }
 
 /// Mixed is a choice made by name. Preparing it still only describes: the
@@ -919,22 +970,29 @@ impl RegionRenderer for Renderer {
 /// into chunks of `chunk_regions`.
 fn plan_for(path: &Path, ids: &[String], grants: &GrantService, chunk_regions: usize, execution: CleanExecution)
     -> CleanGrantScope {
-    let Bound { regions, too_large } = bind(path, ids, recipe_preprocessing(&recipe()).unwrap()).unwrap();
+    plan_with(path, ids, grants, chunk_regions, execution, &recipe(), "modal-prof-clean-run", &FINGERPRINT)
+}
+
+/// [`plan_for`] against a named recipe, profile and endpoint.
+#[allow(clippy::too_many_arguments)]
+fn plan_with(path: &Path, ids: &[String], grants: &GrantService, chunk_regions: usize, execution: CleanExecution,
+    recipe: &RenderRecipe, profile: &str, endpoint_fingerprint: &str) -> CleanGrantScope {
+    let Bound { regions, too_large } = bind(path, ids, recipe_preprocessing(recipe).unwrap()).unwrap();
     assert!(too_large.is_empty());
-    let estimate = Estimate::of(&regions, RenderRate::of(&recipe()));
+    let estimate = Estimate::of(&regions, RenderRate::of(recipe));
     let mut scope = CleanGrantScope {
         chapter_id: "chapter".into(),
         regions,
         provider: CloudProvider::Modal,
-        profile_id: "modal-prof-clean-run".into(),
-        endpoint_fingerprint: FINGERPRINT.clone(),
-        profile_epoch: grants.get_profile_epoch(CloudProvider::Modal, "modal-prof-clean-run"),
-        recipe: recipe(),
+        profile_id: profile.into(),
+        endpoint_fingerprint: endpoint_fingerprint.into(),
+        profile_epoch: grants.get_profile_epoch(CloudProvider::Modal, profile),
+        recipe: recipe.clone(),
         execution,
         chunk_regions,
         estimate,
         price: l4(),
-        cost: Some(cost(estimate.gpu_seconds, 0.8, &recipe(), CloudProvider::Modal)),
+        cost: Some(cost(estimate.gpu_seconds, 0.8, recipe, CloudProvider::Modal)),
         plan_digest: String::new(),
     };
     scope.plan_digest = scope.digest().unwrap();
@@ -993,10 +1051,15 @@ fn batch_renders_keep_qwen_guidance_bound_to_their_region_grants() {
     use cleaner_core::engines::render::{QwenEdit, QwenTarget};
     let qwen = RenderRecipe::new("mc-qwen-image-edit-2511-v4", "1.0.0",
         "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32", recipe().model_revision, false);
+    let klein = RenderRecipe::new("mc-flux2-klein-9b-inpaint-v2", "1.0.0",
+        "Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32", recipe().model_revision, false);
     let guided = QwenEdit { target: QwenTarget::SoundEffect, description: "Letters beside the hand".into() };
+    let auto = QwenEdit { target: QwenTarget::Auto, description: String::new() };
     for (name, deployment, guidance, expected) in [
-        ("guided", qwen.clone(), Some(guided.clone()), Some(guided)),
-        ("default", qwen, None, Some(QwenEdit { target: QwenTarget::Auto, description: String::new() })),
+        ("guided", qwen.clone(), Some(guided.clone()), Some(guided.clone())),
+        ("default", qwen, None, Some(auto.clone())),
+        ("klein", klein.clone(), Some(guided.clone()), Some(guided.clone())),
+        ("klein-default", klein, None, Some(auto)),
         ("flux", recipe(), None, None),
     ] {
         let profile = format!("modal-prof-batch-guidance-{name}");
@@ -1102,6 +1165,226 @@ fn queued_jobs_do_not_expand_the_crop_preparation_budget() {
     });
     assert_eq!(most_reading.load(Ordering::SeqCst), MAX_PREPARING);
     assert_eq!(summary.regions_cleaned as usize, ids.len());
+}
+
+/// A gateway of many jobs. It counts the jobs it holds between a submission
+/// and the download of the result, and keeps every job running until
+/// [`QueueState::finish`] is set.
+struct QueueGateway {
+    endpoint: String,
+    state: Arc<QueueState>,
+}
+
+#[derive(Default)]
+struct QueueState {
+    /// Each accepted job's request, by handle.
+    jobs: Mutex<HashMap<String, serde_json::Value>>,
+    /// Jobs sent whose result is not downloaded yet.
+    open: Mutex<HashSet<String>>,
+    accepted: AtomicUsize,
+    most_open: AtomicUsize,
+    finish: AtomicBool,
+}
+
+impl QueueGateway {
+    fn start() -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://127.0.0.1:{}/mc/v1", listener.local_addr().unwrap().port());
+        let state = Arc::new(QueueState::default());
+        let shared = Arc::clone(&state);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let state = Arc::clone(&shared);
+                std::thread::spawn(move || state.serve(&mut stream));
+            }
+        });
+        Self { endpoint, state }
+    }
+
+    fn client(&self, profile: &str) -> CloudHttpClient {
+        use crate::inference::http::{BoundRuntimeCredential, CloudEndpointTarget, RuntimeCredential};
+        let target = CloudEndpointTarget::new_test_target(CloudProvider::Modal, profile, &self.endpoint).unwrap();
+        let credential = BoundRuntimeCredential::new(&target, RuntimeCredential::ModalProxy {
+            token_id: "tid".into(),
+            token_secret: crate::inference::secrets::SecretValue::new("tsec"),
+        }).unwrap();
+        CloudHttpClient::new_test_client(target, credential,
+            reqwest::blocking::Client::builder().timeout(Duration::from_secs(30)).build().unwrap())
+    }
+
+    fn open(&self) -> usize { self.state.open.lock().unwrap().len() }
+    fn accepted(&self) -> usize { self.state.accepted.load(Ordering::SeqCst) }
+}
+
+impl QueueState {
+    fn serve(&self, stream: &mut std::net::TcpStream) {
+        use crate::inference::service::tests as wire;
+        let Some(request) = wire::read_fake_request(stream) else { return };
+        let answer = |stream: &mut std::net::TcpStream, status: &str, body: serde_json::Value| {
+            wire::fake_respond(stream, status, "application/json", body.to_string().as_bytes())
+        };
+        let known = |handle: &str| self.jobs.lock().unwrap().get(handle).cloned();
+        let parts: Vec<&str> = request.path.trim_start_matches("/mc/v1/").split('/').collect();
+        match (request.method.as_str(), parts.as_slice()) {
+            ("GET", ["capabilities"]) => answer(stream, "200 OK", serde_json::json!({
+                "protocol_version": "1.0.0", "provider": "modal",
+                "operations": ["jobs.submit", "jobs.status", "jobs.result", "jobs.cancel"],
+            })),
+            ("POST", ["jobs"]) => {
+                let meta = wire::submission_metadata(&request.body);
+                let handle = format!("h-{}", meta["attempt_id"].as_str().unwrap());
+                let mut body = wire::fake_job_identity(&meta);
+                body["handle"] = handle.clone().into();
+                body["status"] = "pending".into();
+                self.jobs.lock().unwrap().insert(handle.clone(), meta);
+                {
+                    let mut open = self.open.lock().unwrap();
+                    open.insert(handle);
+                    self.most_open.fetch_max(open.len(), Ordering::SeqCst);
+                }
+                self.accepted.fetch_add(1, Ordering::SeqCst);
+                answer(stream, "202 Accepted", body);
+            }
+            ("GET", ["jobs", handle]) => {
+                let Some(meta) = known(handle) else { return answer(stream, "404 Not Found", serde_json::json!({})) };
+                let mut body = wire::fake_job_identity(&meta);
+                body["handle"] = (*handle).into();
+                body["status"] = "running".into();
+                if self.finish.load(Ordering::SeqCst) {
+                    let png = wire::fake_result_png(&meta);
+                    body["status"] = "completed".into();
+                    body["result_digest"] = sha256_hex(&png).into();
+                    body["result_bytes"] = png.len().into();
+                }
+                answer(stream, "200 OK", body);
+            }
+            ("GET", ["jobs", handle, "result"]) => {
+                let Some(meta) = known(handle) else { return answer(stream, "404 Not Found", serde_json::json!({})) };
+                self.open.lock().unwrap().remove(*handle);
+                wire::fake_respond(stream, "200 OK", "image/png", &wire::fake_result_png(&meta));
+            }
+            _ => answer(stream, "404 Not Found", serde_json::json!({})),
+        }
+    }
+}
+
+/// The app's own render path ([`ServiceRenderer`]) without the app.
+struct ServiceBacked<'a> {
+    service: &'a InferenceService,
+    job_path: &'a Path,
+    target: ExecutionTarget,
+    config: &'a InferenceConfig,
+    deployed: RenderRecipe,
+}
+
+impl RegionRenderer for ServiceBacked<'_> {
+    fn render(&self, nonce: &str, page_index: u32, region_id: &str, recipe: &RenderRecipe,
+        submitted: &dyn Fn()) -> Result<ApiRegion, String> {
+        let poll = PollOptions { poll_interval: Duration::from_millis(20), timeout: Duration::from_secs(60),
+            max_polls: 3000 };
+        self.service.execute_cloud_render_queued(nonce, self.job_path, page_index, region_id, &self.target,
+            recipe, &OperationIntent::CloudClean, self.config, true, &poll, submitted)
+            .map_err(|e| e.code().to_owned())
+    }
+
+    fn deployment(&self) -> Result<(RenderRecipe, Option<(String, f64)>), String> {
+        Ok((self.deployed.clone(), l4()))
+    }
+
+    fn release_idle(&self) {}
+}
+
+/// Wait, bounded, until `reached` holds. Answers whether it did.
+fn wait_until(limit: Duration, reached: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    while !reached() {
+        if std::time::Instant::now() >= deadline { return false; }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    true
+}
+
+/// The queue keeps filling while regions are left (docs/fixes-2026-10-12/04).
+/// Forty Qwen regions on forty pages go through the app's own render path.
+/// The gateway holds every job until [`MAX_IN_FLIGHT`] are open, so the bound
+/// is met and seen not to be passed. Then all forty are sent and committed.
+/// Nobody is asked about a result: while a person was, sixteen results that
+/// waited for an answer held every worker and nothing more was sent.
+#[test]
+fn forty_qwen_regions_are_all_sent_and_committed_with_sixteen_at_most_in_flight() {
+    use cleaner_core::engines::render::{QwenEdit, QwenTarget};
+    use crate::inference::config::{compute_canonical_endpoint_fingerprint, validate_https_endpoint, CloudProfile};
+    use crate::inference::consent::ConsentService;
+    use crate::inference::journal::AttemptPhase;
+    use crate::inference::secrets::SecretManager;
+    const PAGES: usize = 40;
+    const PROFILE: &str = "modal-prof-queue";
+    const URL: &str = "https://modal.run/mc/v1";
+
+    let path = chapter("qwen-queue", PAGES, StripMode::Single);
+    let ids: Vec<String> = (0..PAGES)
+        .map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
+    let mut qwen = RenderRecipe::new("mc-qwen-image-edit-2511-v4", "1.0.0",
+        "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32", recipe().model_revision, false);
+    qwen.qwen_edit = Some(QwenEdit { target: QwenTarget::Auto, description: String::new() });
+
+    let mut config = InferenceConfig::default();
+    let (origin, origin_fingerprint) = validate_https_endpoint(URL).unwrap();
+    config.modal_profiles.insert(PROFILE.into(), CloudProfile {
+        id: PROFILE.into(), name: "Queue".into(), endpoint_url: URL.into(), canonical_origin: origin,
+        canonical_origin_fingerprint: origin_fingerprint, created_at_ms: 100, updated_at_ms: 100,
+    });
+    let grants = Arc::new(GrantService::new());
+    let scope = plan_with(&path, &ids, &grants, CHUNK_REGIONS, CleanExecution::Cloud, &qwen, PROFILE,
+        &compute_canonical_endpoint_fingerprint(URL).unwrap());
+
+    let gateway = QueueGateway::start();
+    let service = InferenceService::new_isolated(
+        path.parent().unwrap().parent().unwrap().join("journal"),
+        cleaner_core::cloud_wire::provisional_fixture_limits(),
+        Arc::new(ConsentService::new_isolated(Arc::clone(&grants))), Arc::clone(&grants),
+        Arc::new(SecretManager::new_in_memory()),
+    ).with_custom_client(gateway.client(PROFILE));
+    let renderer = ServiceBacked {
+        service: &service, job_path: &path, target: ExecutionTarget::Modal { profile_id: PROFILE.into() },
+        config: &config, deployed: qwen.clone(),
+    };
+    let batch = Batch {
+        scope: &scope, job_path: &path, grants: &grants, allowed: OPEN.allowed, unresolved: OPEN.unresolved,
+        local_pass: None, read: OPEN.read,
+    };
+
+    let events = Mutex::new(Vec::new());
+    let (summary, held) = std::thread::scope(|threads| {
+        let watch = threads.spawn(|| {
+            // Every job stays running until the bound is met, and a little
+            // longer, so a seventeenth request would be seen.
+            let full = wait_until(Duration::from_secs(20), || gateway.open() >= MAX_IN_FLIGHT);
+            std::thread::sleep(Duration::from_millis(300));
+            let held = (full, gateway.accepted());
+            gateway.state.finish.store(true, Ordering::SeqCst);
+            held
+        });
+        let summary = run_plan(&batch, &renderer, "run-test", &AtomicBool::new(false),
+            &|event| events.lock().unwrap().push(event));
+        (summary, watch.join().unwrap())
+    });
+
+    assert_eq!(held, (true, MAX_IN_FLIGHT), "the bound is met, and no request passes it");
+    // Each result is on the page with the flag the user finds it by.
+    let flagged = events.into_inner().unwrap().into_iter().filter(|event| matches!(event,
+        Event::RegionDone { region, .. } if region.mask.as_ref().is_some_and(|mask| mask.generated_texture_review)))
+        .count();
+    assert_eq!(flagged, PAGES);
+    assert_eq!(gateway.state.most_open.load(Ordering::SeqCst), MAX_IN_FLIGHT);
+    assert_eq!((summary.reason, summary.regions_cleaned as usize, summary.errored), ("completed", PAGES, 0));
+    assert_eq!(gateway.accepted(), PAGES);
+    assert!(detection_ids(&path).is_empty());
+    let attempts = service.journal().list_attempt_ids().unwrap();
+    assert_eq!(attempts.len(), PAGES);
+    assert!(attempts.iter().all(|id| matches!(service.journal().get_record(id).unwrap().phase,
+        AttemptPhase::Committed { .. })));
 }
 
 /// A failed region stays detected with a notice and the run goes on; a region
@@ -1904,4 +2187,56 @@ fn the_journal_answers_which_regions_are_unresolved() {
     let proposal = prepare(&path, asked("chapter", false), destination("modal-prof-clean-journal"),
         &Gateway::priced(), &unresolved).unwrap();
     assert_eq!(proposal.unresolved_ids, vec![ids[2].clone()]);
+}
+
+/// A request that will never finish does not hold its region: the sweep that
+/// runs before a cloud clean is prepared records it failed, and the plan made
+/// next cleans the region. Here the result arrived and its cached file is
+/// gone, so it can never be applied.
+#[test]
+fn a_region_whose_attempt_the_sweep_ended_is_planned_by_the_next_prepare() {
+    use crate::inference::journal::AttemptPhase;
+    let (path, ids) = three_chunks("journal-swept");
+    let root = path.parent().unwrap().join("journal");
+    let journal = AttemptJournal::new(&root, cleaner_core::cloud_wire::provisional_fixture_limits());
+    let request: cleaner_core::cloud_wire::JobRequestMetadata = serde_json::from_str(JOB_REQUEST_FIXTURE).unwrap();
+    let intent = CreateAttemptIntent {
+        qwen_edit: None,
+        attempt_id: request.attempt_id.clone(), job_id: request.job_id.clone(), provider: CloudProvider::Modal,
+        profile_id: "modal-prof-clean-journal".into(), endpoint_fingerprint: FINGERPRINT.clone(),
+        recipe_id: request.recipe.recipe_id.clone(), preprocessing_version: request.recipe.preprocessing_version.clone(),
+        model_id: request.recipe.model_id.clone(), model_revision: request.recipe.model_revision.clone(),
+        native_mask_conditioning: request.recipe.native_mask_conditioning, width: request.width,
+        height: request.height, seed: request.seed, steps: request.steps, guidance_scaled: request.guidance_scaled,
+        source_image_hash: "2".repeat(64), region_id: ids[2].clone(), region_revision: 1, input_sha256: None,
+        predecessors_sha256: None, crop_sha256: request.image_sha256.clone(), hint_sha256: request.hint_sha256.clone(),
+        request_digest: cleaner_core::cloud_wire::compute_request_digest(&request),
+        chapter_id: Some("chapter".into()), page_index: Some(1),
+    };
+    let (_, guard) = journal.create_intent(intent).unwrap();
+    journal.mark_dispatching(&guard).unwrap();
+    journal.record_accepted_handle(&guard, "handle-swept").unwrap();
+    drop(guard);
+    let mut record = journal.get_record(&request.attempt_id).unwrap();
+    record.phase = AttemptPhase::ResultCached {
+        handle: "handle-swept".into(), result_digest: "a".repeat(64), cached_png_bytes: 64, reported_cost_usd: None,
+    };
+    std::fs::write(root.join("attempts").join(&request.attempt_id).join("journal.json"),
+        serde_json::to_vec(&record).unwrap()).unwrap();
+
+    let unresolved = journal_unresolved(journal.clone(), &path);
+    let plan = || prepare(&path, asked("chapter", false), destination("modal-prof-clean-journal"),
+        &Gateway::priced(), &unresolved).unwrap();
+    let held = plan();
+    assert_eq!(held.unresolved_ids, vec![ids[2].clone()]);
+    assert!(!held.region_ids.contains(&ids[2]));
+
+    let service = crate::inference::service::InferenceService::new(&root, cleaner_core::cloud_wire::provisional_fixture_limits());
+    let (report, waits) = crate::inference::commands::end_unresolved_attempts(&service, &|_| Some(path.clone()));
+    assert_eq!((report.released.len(), report.needs_attention.len(), waits.len()), (1, 0, 0));
+    assert!(matches!(journal.get_record(&request.attempt_id).unwrap().phase, AttemptPhase::Failed { .. }));
+
+    let freed = plan();
+    assert!(freed.unresolved_ids.is_empty());
+    assert!(freed.region_ids.contains(&ids[2]), "the region is planned again");
 }

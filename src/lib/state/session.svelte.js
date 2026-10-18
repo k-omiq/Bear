@@ -200,6 +200,7 @@ function viewport() {
  * @property {number|null} denoiseLocalSecondsPerPage - what `benchmark_denoise_local` measured on this computer, or null before it has run
  * @property {'legacy_gate'|'all_text'} textPolicy - whether to use the legacy script gate or open no-recognition text-shaped review
  * @property {boolean} ocrRescue - whether the optional Japanese OCR rescue may run after an uncertain script decision
+ * @property {boolean} cleanLatinText - whether a run cleans text the reader reads as English (Latin letters); off leaves it on the page as a held region
  * @property {Record<string, import('../shortcuts.js').Chord|null>} shortcuts - rebindings, by shortcut id; only the differences from the defaults
  * @property {string} maskColor - the colour the canvas draws a mask over speech bubble text in, `#rrggbb`; also every region whose place is unknown. The key the single mask colour was stored under, so a saved pick carries over as this one
  * @property {string} outsideMaskColor - the colour the canvas draws a mask over text outside speech bubbles in, `#rrggbb`
@@ -239,6 +240,7 @@ function defaults() {
     denoiseLocalSecondsPerPage: null,
     textPolicy: 'legacy_gate',
     ocrRescue: false,
+    cleanLatinText: false,
     shortcuts: {},
     maskColor: DEFAULT_MASK_COLOR,
     outsideMaskColor: DEFAULT_OUTSIDE_MASK_COLOR,
@@ -359,6 +361,7 @@ export function sanitizeSession(raw) {
     // reads back as the plain detector (above) with the rescue on, so the
     // intent survives the row. The first save then stores the migrated pair.
     ocrRescue: storedRetiredRescue(record.detection) || boolOr(record.ocrRescue, base.ocrRescue),
+    cleanLatinText: boolOr(record.cleanLatinText, base.cleanLatinText),
     // The shortcut table owns this vocabulary and validates it: an id the
     // table no longer has, a chord that will not parse, or a chord that is
     // only the default written out is dropped here rather than kept as a
@@ -448,6 +451,7 @@ function persistable() {
     denoiseLocalSecondsPerPage: session.denoiseLocalSecondsPerPage,
     textPolicy: session.textPolicy,
     ocrRescue: session.ocrRescue,
+    cleanLatinText: session.cleanLatinText,
     shortcuts: shortcutOverrides(),
     maskColor: session.maskColor,
     outsideMaskColor: session.outsideMaskColor,
@@ -684,6 +688,12 @@ export function setTextPolicy(policy) {
 /** @param {boolean} enabled */
 export function setOcrRescue(enabled) {
   session.ocrRescue = boolOr(enabled, session.ocrRescue)
+  save()
+}
+
+/** @param {boolean} enabled */
+export function setCleanLatinText(enabled) {
+  session.cleanLatinText = boolOr(enabled, session.cleanLatinText)
   save()
 }
 

@@ -1,7 +1,9 @@
 # Apocalypse 109: full-chapter mask and detector probe
 
-The local input was `/Users/caved/Downloads/apocalypse/109`: 45 JPEG pages,
-numbered 01–45, each 690 × 1600. This is a Korean color webtoon, whereas
+This experiment runs the SAM-TS-L mask model and an RT-DETR-v2 detector over one 45-page chapter and compares their outputs; it is not shipped code.
+
+The local input was `<chapter-dir>`: 45 JPEG pages,
+numbered 01–45, each 690 × 1600. This is a Korean colour webtoon, whereas
 the published SAM-TS-L and COO evaluations use Japanese manga/comics. The
 images and derived masks stay in ignored local `artifacts/`.
 
@@ -18,13 +20,13 @@ the text-pixel mask; it does not output boxes, instances, OCR, or inpainting.
 
 ```sh
 spikes/sam-ts-l/artifacts/venv/bin/python spikes/sam-ts-l/run_chapter_torch.py \
-  --source-dir /Users/caved/Downloads/apocalypse/109 \
+  --source-dir <chapter-dir> \
   --output-dir spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps \
   --device mps
 ```
 
 All 45 pages completed in **137.217 s** including the one model load and mask
-writes. Synchronized forward plus logits transfer: mean **3.009 s**, median
+writes. Synchronised forward plus logits transfer: mean **3.009 s**, median
 **3.003 s**, p95 **3.585 s** per page. Full per-page work: mean **3.022 s**,
 median **3.013 s**, p95 **3.599 s**. Model CPU load took 967 ms and MPS
 transfer 232 ms. Peak process RSS was **2,936,553,472 bytes (2.94 GB)**.
@@ -38,8 +40,8 @@ foreground pixels in total; page 30 is empty and its source page appears to
 have no text. Pages 07–09 matched the saved FP32 PyTorch reference masks with
 **zero changed restored pixels** each. This checks execution against the
 reference, not the reference's semantic accuracy. The local
-`artifacts/examples/chapter-109-torch-mps/` directory contains the numbered
-masks, page JSON, `summary.json`, a labeled contact sheet, and `masks.zip`.
+`artifacts/examples/chapter-109-torch-mps/` directory (written when the spike runs; not committed) contains the numbered
+masks, page JSON, `summary.json`, a labelled contact sheet, and `masks.zip`.
 `package.json` records the ZIP SHA-256
 `8ebaea881f1665461cf50de2a240f83cb11bf80b6c899717ae6cfcca98d03397`.
 Compact run results are in `results/chapter-109-torch-mps.json`.
@@ -54,9 +56,9 @@ The local int8 checkpoint SHA-256 was
 
 ```sh
 cargo build -p chapter-rtdetr
-ORT_DYLIB_PATH=/Users/caved/dev/manga-cleaner/runtimes/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.dylib \
-  target/debug/chapter-rtdetr /Users/caved/Downloads/apocalypse/109 \
-  /Users/caved/dev/manga-cleaner/models/comic-text-and-bubble-detector-detector-v4-s_int8.onnx \
+ORT_DYLIB_PATH=<repo-root>/runtimes/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.dylib \
+  target/debug/chapter-rtdetr <chapter-dir> \
+  <repo-root>/models/comic-text-and-bubble-detector-detector-v4-s_int8.onnx \
   spikes/sam-ts-l/artifacts/chapter-109-rtdetr.json
 spikes/sam-ts-l/artifacts/ort-webgpu-venv/bin/python spikes/chapter-rtdetr/agreement.py \
   --boxes spikes/sam-ts-l/artifacts/chapter-109-rtdetr.json \
@@ -86,7 +88,7 @@ fragment at the bottom-right crop edge over a character's clothing that
 appears to be a drawing false positive. It warrants a human decision before
 cleanup. This inspection is not a full annotation or an accuracy estimate.
 The raw RT-DETR boxes are in ignored
-`artifacts/chapter-109-rtdetr.json`; per-page agreement is in the compact JSON
+`artifacts/chapter-109-rtdetr.json` (written when the spike runs; not committed); per-page agreement is in the compact JSON
 under `results/`.
 
 ## Default recommendation and accuracy gate
@@ -113,7 +115,7 @@ COO's published task concerns Japanese onomatopoeia, and its checkpoint
 redistribution/commercial-use rights remain unresolved. The comparison is
 still not a ground-truth accuracy ranking for this Korean webtoon.
 The [SAM-TS-L model card](https://huggingface.co/mayocream/koharu-text-sam-ts-l)
-describes text-pixel segmentation and limitations on small/stylized lettering;
+describes text-pixel segmentation and limitations on small/stylised lettering;
 the [RT-DETR model card](https://huggingface.co/ogkalu/comic-text-and-bubble-detector)
 describes its bubble/text-box classes; the
 [COO model card](https://huggingface.co/mayocream/coo-comic-onomatopoeia-safetensors)

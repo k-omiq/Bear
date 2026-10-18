@@ -361,7 +361,7 @@ pub fn validate_recipe(recipe: &WireRenderRecipe) -> Result<(), WireValidationEr
         ));
     }
     if let Some(edit) = &recipe.qwen_edit {
-        if !recipe.model_id.starts_with("Disty0/Qwen-Image-Edit") || recipe.recipe_id != "mc-qwen-image-edit-2511-v4" {
+        if !crate::engines::render::takes_guidance(&recipe.recipe_id, &recipe.model_id) {
             return Err(WireValidationError::UnsupportedCapability("qwen_edit"));
         }
         if edit.description.chars().count() > 500 || edit.description.chars().any(|c| c.is_control()) {
@@ -1379,6 +1379,28 @@ mod tests {
         meta.recipe.qwen_edit.as_mut().unwrap().description.clear();
         meta.recipe.recipe_id = "mc-qwen-image-edit-2511-v3".into();
         assert!(validate_job_request_metadata(&meta).is_err());
+    }
+
+    #[test]
+    fn klein_v2_takes_guidance_and_v1_or_another_family_does_not() {
+        use crate::engines::render::{QwenEdit, QwenTarget};
+        let edit = QwenEdit { target: QwenTarget::SoundEffect, description: "a brick wall".into() };
+        for (id, model) in [
+            ("mc-flux2-klein-inpaint-v2", "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic"),
+            ("mc-flux2-klein-9b-inpaint-v2", "Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32"),
+        ] {
+            let mut recipe = WireRenderRecipe {
+                recipe_id: id.into(), preprocessing_version: "2.0.0".into(), model_id: model.into(),
+                model_revision: "45e9cc76cb70f84473ce5c6c2e2282d0ef3c6ecd".into(),
+                native_mask_conditioning: false, qwen_edit: Some(edit.clone()),
+            };
+            assert_eq!(validate_recipe(&recipe), Ok(()), "{id}");
+            recipe.recipe_id = id.replace("-v2", "-v1");
+            assert!(validate_recipe(&recipe).is_err(), "{id} v1");
+            recipe.recipe_id = id.into();
+            recipe.model_id = "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32".into();
+            assert!(validate_recipe(&recipe).is_err(), "{id} on Qwen");
+        }
     }
 
     const HEALTH_FIXTURE: &str = include_str!("../../../deploy/cloud/fixtures/health_response.json");

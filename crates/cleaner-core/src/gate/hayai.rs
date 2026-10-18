@@ -151,6 +151,15 @@ impl Reading {
                 && (self.letters() >= 3 || self.text.chars().any(|c| ('\u{AC00}'..='\u{D7AF}').contains(&c))))
     }
 
+    /// Whether this is a sure reading ([`Self::is_text`]) of text in Latin
+    /// letters: two of them or more, and [`LATIN_SHARE`] of its letters. A
+    /// low reading in Latin letters is what the reader writes over drawn kana
+    /// and art (`THEMIIIIIII` at 0.42 on a sound effect), so it is not one.
+    pub fn is_latin(&self) -> bool {
+        let latin = self.text.chars().filter(|c| is_latin_letter(*c)).count();
+        self.is_text() && latin >= 2 && latin as f32 >= LATIN_SHARE * self.letters() as f32
+    }
+
     /// The CJK script of a reading at least `min_share` CJK by letters and with
     /// at least two CJK letters, or `None`.
     pub fn cjk_script(&self, min_share: f32) -> Option<CjkScript> {
@@ -181,6 +190,18 @@ impl Reading {
 fn is_letter(ch: char) -> bool {
     !super::ocr::is_neutral(ch) && ch != '\u{FFFD}'
 }
+
+/// Basic Latin letters, their accented forms, and the full-width forms a
+/// Japanese font sets them in.
+fn is_latin_letter(ch: char) -> bool {
+    ch.is_ascii_alphabetic()
+        || matches!(ch as u32, 0x00C0..=0x024F | 0xFF21..=0xFF3A | 0xFF41..=0xFF5A) && ch.is_alphabetic()
+}
+
+/// The share of a reading's letters that must be Latin for it to be Latin
+/// text ([`Reading::is_latin`]). Under it a Japanese line with a Latin word
+/// in it stays Japanese (`2025年www`, `NTRビデオレター!?`).
+const LATIN_SHARE: f32 = 0.8;
 
 /// The confidence under which a reading is a guess whatever it says
 /// ([`Reading::is_lettering`]).

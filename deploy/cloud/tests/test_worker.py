@@ -11,12 +11,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
+from deploy.cloud.common.contract import QwenEdit
 from deploy.cloud.common.flux import (
     HOLE_GROWTH,
+    LamaFill,
     SdnqFluxRunner,
     WorkerRenderError,
     encode_png_rgb8,
     filter_call_kwargs,
+    flux_prompt,
     guidance_from_scaled,
     recipe_mismatch,
     render_job,
@@ -75,6 +78,9 @@ class FakeImage:
         self.log.append(("filter", kernel))
         return FakeImage(self.size, self.mode, self.log)
 
+    def paste(self, color: Any, box: Tuple[int, int, int, int]) -> None:
+        self.log.append(("paste", color, box))
+
     def save(self, buffer: io.BytesIO, format: str) -> None:
         self.log.append(("save", self.size, format))
         buffer.write(encode_png_rgb8(*self.size))
@@ -107,6 +113,22 @@ class FakeGenerator:
         return self
 
 
+class FakeLama:
+    """LamaFill-like: logs each fill and returns a new image of the crop's size."""
+
+    def __init__(self, log: List[Any], path: str, device: str, error: Optional[Exception] = None):
+        self.log = log
+        self.path = path
+        self.device = device
+        self.error = error
+
+    def fill(self, crop: FakeImage, hole: FakeImage) -> FakeImage:
+        self.log.append(("lama", crop.size, hole.size))
+        if self.error is not None:
+            raise self.error
+        return FakeImage(crop.size, "RGB", self.log)
+
+
 class FakePipeline:
     """Flux2KleinInpaintPipeline-like: no max_area parameter, so the runner must drop it."""
 
@@ -121,7 +143,7 @@ class FakePipeline:
         return self
 
     def __call__(self, image, prompt, width, height, num_inference_steps, guidance_scale, generator, output_type,
-                 mask_image, image_reference, strength):
+                 mask_image, strength, image_reference=None):
         self.calls.append(
             {
                 "image": image,
@@ -147,10 +169,19 @@ def fake_modules(
     load_error: Optional[Exception] = None,
     call_error: Optional[Exception] = None,
     image_size: Tuple[int, int] = (32, 32),
+    lama_load_error: Optional[Exception] = None,
+    lama_error: Optional[Exception] = None,
 ) -> SimpleNamespace:
     log: List[Any] = []
     pipeline = FakePipeline(log, call_error)
     loads: List[Tuple[str, Dict[str, Any]]] = []
+    lamas: List[FakeLama] = []
+
+    def lama(path: str, device: str) -> FakeLama:
+        if lama_load_error is not None:
+            raise lama_load_error
+        lamas.append(FakeLama(log, path, device, lama_error))
+        return lamas[-1]
 
     def from_pretrained(path: str, **kwargs: Any) -> FakePipeline:
         loads.append((path, kwargs))
@@ -183,9 +214,11 @@ def fake_modules(
         Image=image_module,
         ImageFilter=SimpleNamespace(MaxFilter=lambda size: ("max", size)),
         Pipeline=SimpleNamespace(from_pretrained=from_pretrained),
+        Lama=lama,
         log=log,
         pipeline=pipeline,
         loads=loads,
+        lamas=lamas,
     )
 
 
@@ -229,11 +262,16 @@ class RecipeGateTest(unittest.TestCase):
         self.assertIsNone(recipe_mismatch(meta))
 
     def test_other_sampling_is_rejected(self) -> None:
-        for changes in ({"seed": 2}, {"steps": 8}, {"guidance_scaled": 250}):
+        for changes in ({"seed": 0}, {"steps": 8}, {"guidance_scaled": 250}):
             meta, _, _ = make_job(**changes)
             message = sampling_mismatch(meta)
             self.assertIsNotNone(message, changes)
-            self.assertIn("seed=1, steps=4, guidance_scaled=100", message)
+            self.assertIn("seed>=1, steps=4, guidance_scaled=100", message)
+
+    def test_a_retry_seed_above_the_pinned_one_is_accepted(self) -> None:
+        for seed in (2, 4, 31):
+            meta, _, _ = make_job(seed=seed)
+            self.assertIsNone(recipe_mismatch(meta), seed)
 
     def test_test_recipe_leaves_sampling_to_the_request(self) -> None:
         meta, _, _ = make_job(recipe_id=RECIPE_TEST_SDNQ, seed=42, guidance_scaled=350)
@@ -250,6 +288,8 @@ class SdnqFluxRunnerTest(unittest.TestCase):
         self.assertEqual(path, "/weights/snap")
         self.assertEqual(kwargs, {"torch_dtype": "bfloat16", "local_files_only": True, "low_cpu_mem_usage": True})
         self.assertEqual(mods.pipeline.device, "cuda")
+        self.assertEqual([(lama.path, lama.device) for lama in mods.lamas],
+                         [("/weights/snap/adapters/lama-manga.onnx", "cuda")])
 
         call = mods.pipeline.calls[0]
         self.assertEqual(call["prompt"], RECIPE_PROMPT)
@@ -264,10 +304,13 @@ class SdnqFluxRunnerTest(unittest.TestCase):
         self.assertIn(("filter", ("max", 2 * HOLE_GROWTH + 1)), mods.log)
         self.assertIn(("resize", (768, 384), "nearest"), mods.log)
         self.assertEqual(call["mask_image"].size, (768, 384))
-        self.assertIs(call["image_reference"], call["image"])
+        self.assertIsNone(call["image_reference"], "the filled crop is already the condition image")
         self.assertEqual(call["strength"], 1.0)
 
-        self.assertIn(("resize", (768, 384), "bicubic"), mods.log)
+        # LaMa fills the grown hole at the crop's own size; Klein gets that fill, upscaled.
+        filled = mods.log.index(("lama", (32, 16), (32, 16)))
+        self.assertGreater(mods.log.index(("resize", (768, 384), "bicubic")), filled)
+        self.assertGreater(filled, mods.log.index(("filter", ("max", 2 * HOLE_GROWTH + 1))))
         self.assertIn(("nan_to_num", {"nan": 0.0, "posinf": 1.0, "neginf": 0.0}), mods.log)
         self.assertIn(("clamp", 0.0, 1.0), mods.log)
         self.assertIn(("mul", 255.0), mods.log)
@@ -305,10 +348,98 @@ class SdnqFluxRunnerTest(unittest.TestCase):
 
     def test_typed_inference_failures(self) -> None:
         for error, code in ((RuntimeError("CUDA out of memory"), "out_of_memory"), (ValueError("bad"), "inference_failed")):
-            mods = fake_modules(call_error=error)
-            with self.assertRaises(WorkerRenderError) as caught:
-                SdnqFluxRunner("/w", modules=mods).render_png(b"png", b"hint", 32, 32, 1, 4, 100)
-            self.assertEqual(caught.exception.error_code, code)
+            for mods in (fake_modules(call_error=error), fake_modules(lama_error=error)):
+                with self.assertRaises(WorkerRenderError) as caught:
+                    SdnqFluxRunner("/w", modules=mods).render_png(b"png", b"hint", 32, 32, 1, 4, 100)
+                self.assertEqual(caught.exception.error_code, code)
+
+    def test_a_lama_that_cannot_start_fails_the_load(self) -> None:
+        mods = fake_modules(lama_load_error=RuntimeError("LaMa did not start on CUDAExecutionProvider"))
+        with self.assertRaises(WorkerRenderError) as caught:
+            SdnqFluxRunner("/w", modules=mods).load()
+        self.assertEqual(caught.exception.error_code, "model_load_failed")
+
+    def test_guidance_reaches_the_prompt(self) -> None:
+        edit = QwenEdit(target="sound_effect", description="a brick wall")
+        mods = fake_modules()
+        runner = SdnqFluxRunner("/w", modules=mods)
+        runner.render_png(b"png", b"hint", 32, 32, 1, 4, 100, qwen_edit=edit)
+        runner.render_png(b"png", b"hint", 32, 32, 1, 4, 100)
+        self.assertEqual([call["prompt"] for call in mods.pipeline.calls], [flux_prompt(edit), RECIPE_PROMPT])
+
+
+class FluxPromptTest(unittest.TestCase):
+    def test_no_guidance_is_the_recipe_prompt(self) -> None:
+        self.assertEqual(flux_prompt(None), RECIPE_PROMPT)
+        self.assertEqual(flux_prompt(QwenEdit(target="auto", description="")), RECIPE_PROMPT)
+
+    def test_each_target_names_its_lettering_and_keeps_the_art(self) -> None:
+        for target, word in (("dialogue", "speech bubble"), ("sound_effect", "sound effect"),
+                             ("other", "unwanted lettering")):
+            prompt = flux_prompt(QwenEdit(target=target, description=""))
+            self.assertIn(word, prompt)
+            self.assertIn("Add no new text or symbols.", prompt)
+            self.assertNotIn("Behind the lettering", prompt)
+
+    def test_the_description_says_what_is_behind_the_lettering(self) -> None:
+        prompt = flux_prompt(QwenEdit(target="auto", description="a girl's legs on a striped bench"))
+        self.assertIn("Behind the lettering: a girl's legs on a striped bench.", prompt)
+        self.assertNotEqual(prompt, RECIPE_PROMPT)
+
+
+class FakeSession:
+    """An ONNX session that paints every pixel it is given 0.5 and logs each tile."""
+
+    def __init__(self, np: Any):
+        self.np = np
+        self.tiles: List[Tuple[int, int]] = []
+
+    def run(self, outputs: Any, feeds: Dict[str, Any]) -> List[Any]:
+        image, mask = feeds["image"], feeds["mask"]
+        self.tiles.append((image.shape, mask.shape))
+        # A real LaMa only sees zeros under the hole.
+        assert not (image * mask).any()
+        return [self.np.full_like(image, 0.5)]
+
+
+class LamaFillTest(unittest.TestCase):
+    def setUp(self) -> None:
+        try:
+            import numpy
+            from PIL import Image
+        except ImportError:
+            self.skipTest("numpy and Pillow are not installed")
+        self.np, self.Image = numpy, Image
+
+    def lama(self) -> LamaFill:
+        lama = LamaFill.__new__(LamaFill)
+        lama.np, lama.Image, lama.session = self.np, self.Image, FakeSession(self.np)
+        return lama
+
+    def test_a_small_crop_is_padded_to_one_tile_and_only_the_hole_changes(self) -> None:
+        np, Image = self.np, self.Image
+        crop = Image.fromarray(np.full((40, 60, 3), 200, dtype=np.uint8))
+        hole = np.zeros((40, 60), dtype=np.uint8)
+        hole[10:20, 5:25] = 255
+        lama = self.lama()
+        out = np.asarray(lama.fill(crop, Image.fromarray(hole)))
+        self.assertEqual(out.shape, (40, 60, 3))
+        self.assertEqual(lama.session.tiles, [((1, 3, 512, 512), (1, 1, 512, 512))])
+        self.assertTrue((out[hole > 0] == 128).all())
+        self.assertTrue((out[hole == 0] == 200).all())
+
+    def test_a_large_crop_runs_overlapping_tiles_only_where_a_hole_is_left(self) -> None:
+        np, Image = self.np, self.Image
+        crop = Image.fromarray(np.full((600, 1000, 3), 30, dtype=np.uint8))
+        hole = np.zeros((600, 1000), dtype=np.uint8)
+        hole[0:4, 0:4] = 255
+        hole[590:600, 990:1000] = 255
+        lama = self.lama()
+        out = np.asarray(lama.fill(crop, Image.fromarray(hole)))
+        # Columns 0, 384 and 488, rows 0 and 88: only the first and last tile hold a hole.
+        self.assertEqual(len(lama.session.tiles), 2)
+        self.assertTrue((out[hole > 0] == 128).all())
+        self.assertTrue((out[hole == 0] == 30).all())
 
 
 class RenderJobTest(unittest.TestCase):
@@ -320,7 +451,7 @@ class RenderJobTest(unittest.TestCase):
         self.assertEqual(rendered.digest, hashlib.sha256(rendered.png).hexdigest())
 
     def test_sampling_mismatch_never_reaches_the_model(self) -> None:
-        meta, image, hint = make_job(seed=7)
+        meta, image, hint = make_job(steps=7)
         runner = FakeRunner()
         with self.assertRaises(WorkerRenderError) as caught:
             render_job(runner, meta, image, hint, production_limits())

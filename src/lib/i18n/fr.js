@@ -29,23 +29,15 @@ export const fr = {
         "otherText": "Autre",
         "description": "Description (facultatif)",
         "example": "Grandes lettres noires à côté de la main.",
-        "preserve": "Manga Cleaner ajoute des instructions pour préserver le dessin, les contours des bulles et les détails voisins. Vous vérifierez le résultat avant de l’appliquer.",
+        "preserve": "Manga Cleaner ajoute des instructions pour préserver le dessin, les contours des bulles et les détails voisins. Le résultat est appliqué aussitôt et marqué à vérifier. Pour le retirer, utilisez Rejeter le résultat.",
         "cancel": "Annuler",
         "clean": "Nettoyer avec Qwen",
-        "updateRequired": "Mettez à jour Qwen dans le cloud pour utiliser les descriptions et la recette d’effacement en 8 étapes."
-    },
-    "review": {
-        "title": "Vérifier le nettoyage Qwen",
-        "help": "Vérifiez que le texte a disparu et que le dessin est intact. Utiliser le résultat applique cet aperçu fusionné à la page.",
-        "before": "Avant",
-        "after": "Après",
-        "retryCost": "Réessayer lance une nouvelle requête cloud payante.",
-        "discard": "Ignorer",
-        "retry": "Réessayer",
-        "use": "Utiliser le résultat",
-        "expired": "Cette vérification a expiré. Le résultat n’a pas été appliqué.",
-        "failed": "Qwen n’a pas assez modifié le texte après trois graines. Décrivez le texte et réessayez.",
-        "required": "Ce résultat Qwen est en cache et doit être vérifié avant application."
+        "updateRequired": "Mettez à jour Qwen dans le cloud pour utiliser les descriptions et la recette d’effacement en 8 étapes.",
+        "helpFlux": "Choisissez le type de texte. Vous pouvez dire ce que le texte recouvre, pour que le redessin corresponde. Aucune consigne à rédiger.",
+        "descriptionFlux": "Ce qu’il y a derrière le texte (facultatif)",
+        "exampleFlux": "Un mur de briques avec un cadre de fenêtre.",
+        "preserveFlux": "Seul le texte masqué est redessiné. Manga Cleaner ajoute des consignes pour préserver le dessin. Une description fausse dessine la mauvaise chose, alors laissez-la vide en cas de doute.",
+        "cleanFlux": "Nettoyer avec FLUX"
     }
 },
   app: {
@@ -369,6 +361,13 @@ export const fr = {
       label: 'Vue de l’original',
       hold: 'Maintien uniquement',
       pinned: 'Épinglée',
+    },
+    undoLimit: {
+      label: 'Historique d’annulation',
+      description:
+        'Nombre d’étapes d’annulation conservées pour chaque chapitre, de {min} à {max}. Un nombre plus bas supprime les étapes les plus anciennes à la prochaine modification.',
+      outOfRange: 'Saisissez un nombre entier de {min} à {max}.',
+      saveFailed: 'La taille de l’historique d’annulation n’a pas été enregistrée.',
     },
     language: {
       label: 'Langue',
@@ -1381,6 +1380,8 @@ export const fr = {
     workflow: {
       ocrRescue: 'Utiliser le lecteur de texte Hayai OCR (facultatif)',
       ocrRescueDescription: 'Lit chaque zone sur cet ordinateur avant le nettoyage. Retient le dessin qui n’est pas du texte et confirme l’écriture japonaise, chinoise et coréenne douteuse. Fonctionne avec les deux politiques de texte.',
+      cleanLatin: 'Nettoyer le texte anglais',
+      cleanLatinDescription: 'Désactivé : le texte que le lecteur lit comme de l’anglais ou une autre langue en lettres latines reste sur la page, en zone retenue que vous pouvez encore nettoyer. Activé : il est nettoyé comme le reste. Nécessite le lecteur de texte Hayai OCR.',
       ratingsNote: 'Les notes des moteurs sont des estimations provisoires, pas des mesures issues d’un même banc d’essai.',
     },
     cleaner: {
@@ -1964,6 +1965,7 @@ export const fr = {
       retryBlocked: 'Réessayer n’est pas disponible pour les traits de peinture et de clonage. Peignez par-dessus ou supprimez-le.',
       retryWider: 'Réessayer plus large',
       retryWiderHint: 'Nettoyer de nouveau avec le même moteur sur une zone un peu plus grande. Chaque clic l’agrandit un peu plus.',
+      rejectResult: 'Rejeter le résultat',
       engine: 'Nettoyer avec',
       engineHint: 'Remplacer ce calque avec un autre moteur, à partir des calques inférieurs',
       textType: 'Type de texte',
@@ -2017,6 +2019,8 @@ export const fr = {
       layerLock: 'changement de verrouillage du calque',
       layerMove: 'déplacement du calque',
       layerRotate: 'rotation du calque',
+      cleanRegion: 'nettoyage d’une zone',
+      rejectResult: 'rejet d’un résultat',
     },
   },
   tools: {
@@ -2254,6 +2258,18 @@ export const fr = {
         chunkRefused: 'un lot ne correspondait pas à ce que vous avez confirmé',
         pollTimeout: 'le GPU cloud a mis trop de temps à répondre',
         submissionUnknown: 'l’application n’a pas pu savoir si elle avait été envoyée',
+        regionChanged: 'la zone a changé pendant son nettoyage',
+        regionUnsupported: 'la zone ne peut pas être nettoyée sur le GPU cloud',
+        busy: 'la zone est déjà en cours de nettoyage sur le GPU cloud',
+        pageBusy: 'une exécution travaillait sur sa page',
+        recoveryRequired: 'une requête cloud antérieure la concernant n’est pas résolue',
+        local: 'un problème est survenu sur cet ordinateur',
+        providerPaused: 'le fournisseur cloud est en pause dans cette version',
+        editNotApplied: 'votre configuration cloud n’est pas à jour et n’a renvoyé aucun résultat (mettez-la à jour dans Réglages, Cloud)',
+        weights: 'des fichiers de modèle requis manquent dans votre configuration cloud',
+        remoteCancelled: 'le fournisseur l’a annulée',
+        cancelled: 'elle a été annulée',
+        generic: 'l’application n’a reçu aucune raison qu’elle sache exprimer',
       },
     },
     run: {
@@ -2404,7 +2420,9 @@ export const fr = {
         remoteCancelled: 'Le fournisseur a annulé le rendu.',
         cancelled: 'Il a été annulé.',
         timeout: 'Le rendu a pris trop de temps et a été arrêté.',
-        generic: 'Un problème est survenu.',
+        providerPaused: 'Ce fournisseur cloud est en pause dans cette version. Choisissez un autre endpoint dans Réglages, Cloud.',
+        editNotApplied: 'Cette configuration cloud n’est pas à jour et n’a renvoyé aucun résultat. Mettez-la à jour dans Réglages, Cloud, pour obtenir un résultat à chaque fois.',
+        generic: 'L’application n’a reçu aucune raison qu’elle sache exprimer.',
       },
       job: {
         title: 'Cloud',
@@ -2434,6 +2452,9 @@ export const fr = {
       paddingRefreshFailed: 'La marge du masque a été enregistrée, mais la page n’a pas pu être actualisée. Rouvrez le chapitre pour voir le masque mis à jour.',
       typeFailed: 'Impossible de modifier le type de texte. La zone est inchangée.',
       approveFailed: 'Impossible d’approuver le masque. La zone est inchangée.',
+      rejectNoMask: 'Ce résultat n’a pas de masque enregistré et ne peut donc pas être rejeté. Supprimez-le pour rétablir l’original.',
+      rejectFailed: 'Impossible de rejeter le résultat. La page est inchangée.',
+      reapplyFailed: 'Impossible de rétablir le résultat. La page est inchangée.',
     },
     tool: {
       cloneSourceSet: 'Source de clonage prélevée. Peignez pour copier à partir d’elle.',
@@ -2463,6 +2484,7 @@ export const fr = {
       refusedLayeredFileSize: 'Ce PSD dépasserait sa taille de fichier maximale de 2 Go. Rien n’a été écrit. Exportez plutôt en PNG ou TIFF.',
       refusedLayeredCount: 'Cette page a plus de calques qu’un PSD ne peut en contenir. Rien n’a été écrit. Exportez plutôt un PNG ou TIFF aplati.',
       refusedDestination: 'Cet export ne peut pas écrire à cette destination. Rien n’a été écrit. Choisissez un nouveau dossier, ou indiquez un chemin complet depuis la racine du disque.',
+      destinationUnavailable: 'Le dossier d’export {path} ne peut pas être créé. Le disque ou le dossier qui le contient n’est pas connecté, ou il n’est pas accessible en écriture. Rien n’a été écrit. Connectez le disque, ou choisissez un autre dossier.',
       refusedStitchPaginated: 'Un fichier pour le chapitre est une disposition en défilement vertical, et ce projet est paginé. Rien n’a été écrit. Ses pages sont des images distinctes, et les empiler créerait un document sans original.',
       refusedStitchedArchive: 'Un CBZ contient un fichier par page, il ne peut donc pas contenir un seul fichier pour le chapitre. Rien n’a été écrit. Exportez le chapitre en un seul PNG ou TIFF, ou gardez l’archive et exportez page par page.',
       stitchRefused: {

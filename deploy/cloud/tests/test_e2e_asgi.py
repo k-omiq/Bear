@@ -205,10 +205,18 @@ class EndToEndCases:
         self.assertEqual(self.runners, [], "the cancelled job never reached the model")
 
     def test_pinned_sampling_is_enforced_before_the_queue(self) -> None:
-        meta, image, hint = make_job(seed=5)
+        meta, image, hint = make_job(steps=5)
         status, rejection = self.submit(meta, image, hint)
         self.assertEqual((status, rejection["error_code"], rejection["enqueued"]), (400, "unsupported_recipe", False))
         self.assertEqual(self.harness.dispatch_count, 0)
+
+    def test_a_retry_seed_is_advertised_and_accepted(self) -> None:
+        status, _, payload = self.request("GET", "/mc/v1/capabilities")
+        self.assertEqual(status, 200)
+        self.assertIn("jobs.retry_seed", json.loads(payload)["operations"])
+        meta, image, hint = make_job(job_id="job-retry-seed", seed=4)
+        status, accepted = self.submit(meta, image, hint)
+        self.assertEqual(status, 202, accepted)
 
     def test_unreachable_queue_keeps_the_attempt_unknown(self) -> None:
         meta, image, hint = make_job(job_id="job-retry")

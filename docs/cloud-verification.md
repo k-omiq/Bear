@@ -1,118 +1,78 @@
-# Manga Cleaner Cloud Verification Baseline & Architecture Decisions (P0 / P2a / P2b)
+# Cloud design decisions and invariants
 
-**Commit:** `03fcaba` | **Branch:** `codex/cloud-integration` | **Role:** P2b IMPLEMENTER
-**Status:** Phase record of partial implementation. Current acceptance and actual test logs are tracked in [cloud-work-log.md](cloud-work-log.md); the architecture decisions it lists are now implemented offline (see [features.md](features.md) Cloud section, [cloud-frontend.md](cloud-frontend.md), [cloud-provisioning.md](cloud-provisioning.md), and [findings.md](findings.md)).
-
----
-
-## 1. Test Baseline & Failure Diagnosis
-
-### 1.1 Test Execution Evidence
-- **Prior Review Results:** Core unit tests (`cargo test -p cleaner-core -- --test-threads=1`) passed 527 tests. Frontend tests (`npm test`) passed 913 tests (48 files) and `npm run build` succeeded (exit 0; logs at `/tmp/manga-cloud-p0-frontend.log`).
-- **Targeted Baseline Reproduction (P0 Turn):**
-  - Executed: `cargo test --target-dir /Users/caved/dev/manga-cleaner/target -p manga-cleaner --lib run::tests::the_shipped_picks_keep_bubble_text_off_the_inpainter -- --nocapture`.
-  - Outcome: FAILED (exit 101; duration: 26.98s). Panicked at [`src-tauri/src/run/tests.rs:2456:13`](../src-tauri/src/run/tests.rs#L2456): `c1-p001-r8 is bubble text and ran at Lama`.
-  - Evidence: Full terminal output preserved at `/tmp/manga-cloud-p0-baseline.log`.
-  - Temporary Test Setup: Symlinks `models` and `runtimes` in the worktree pointing to local dev directories were used solely to resolve model weights without network downloads.
-- **Limitation & Root Cause Analysis:**
-  - The root cause remains **undiagnosed** on `03fcaba`. Two distinct hypotheses exist:
-    1. Divergence between detector-only classification (`detected.inside()` at [`src-tauri/src/run.rs:1715`](../src-tauri/src/run.rs#L1715)) and script gate interior settlement (`gate/mod.rs:328`), routing region `r8` to `outside: EnginePick::Lama`.
-    2. Region `r8` starts at `Fill` but fails the quality metric in `quality::assess` ([`src-tauri/src/run.rs:1989`](../src-tauri/src/run.rs#L1989)), escalating up `ladder_from` to `Engine::Lama`.
-  - In accordance with P0 instructions, no production code or assertions are modified to force a pass; this remains an open baseline issue.
+This document records the architecture decisions behind cloud rendering and the invariants every cloud path relies on: which entry points can reach the cloud, how geometry and masks stay local, and how provenance, secrets and the attempt journal are kept. The wire contract is in [cloud-contract.md](cloud-contract.md).
 
 ---
 
-## 2. Source-Linked Entry-Point Inventory
+## 1. Entry points that can reach the cloud
 
-| Operation | Frontend Entry Point | Backend Command | Processing Seam & Invariant |
+| Operation | Frontend entry point | Backend command | Rule |
 |---|---|---|---|
-| **Auto Run** | [`src/lib/state/editor.svelte.js:1310`](../src/lib/state/editor.svelte.js#L1310)<br>`startRun()` | [`src-tauri/src/run.rs:3086`](../src-tauri/src/run.rs#L3086)<br>`start_run` | `Pipeline::clean_page`. Preserves `HIGHEST_AUTOMATIC = Engine::Lama`. Never triggers remote inference. |
-| **Apply Tool** | [`src/lib/editor/toolapply.svelte.js:93`](../src/lib/editor/toolapply.svelte.js#L93)<br>`applyTool()` | [`src-tauri/src/region.rs:2254`](../src-tauri/src/region.rs#L2254)<br>`apply_tool` | Manual editing tools (Brush/Clone/Fill/Lama/Flux). Legacy Cloud returns unavailable notice; future cloud routes to `RegionRenderer`. |
-| **Create Region** | [`src/lib/editor/drawing.svelte.js:258`](../src/lib/editor/drawing.svelte.js#L258)<br>`createRegion()` | [`src-tauri/src/region.rs:2460`](../src-tauri/src/region.rs#L2460)<br>`create_region` | User-drawn box/lasso. Invokes `Bench::render_plan`. Backend authorization required before remote dispatch. |
-| **Rerun Mask** | [`src/lib/editor/maskactions.svelte.js:220`](../src/lib/editor/maskactions.svelte.js#L220)<br>`rerunMask()` | [`src-tauri/src/region.rs:2565`](../src-tauri/src/region.rs#L2565)<br>`rerun_mask` | Re-executes existing patch. Validates engine choice; must verify backend grant if targeting remote cloud. |
-| **Clean Anyway** | [`src/lib/editor/maskactions.svelte.js:268`](../src/lib/editor/maskactions.svelte.js#L268)<br>`cleanAnyway()` | [`src-tauri/src/region.rs:2786`](../src-tauri/src/region.rs#L2786)<br>`clean_anyway` | Cleans gate-skipped regions using user-chosen engine pick; requires backend authorization if cloud target. |
+| **Auto Run** | `startRun()` in `src/lib/state/editor.svelte.js` | `start_run` (`src-tauri/src/run.rs`) | `Pipeline::clean_page`. Automatic work stops at `HIGHEST_AUTOMATIC = Engine::Lama`. It never reaches the cloud on its own. |
+| **Apply Tool** | `applyTool()` in `src/lib/editor/toolapply.svelte.js` | `apply_tool` (`src-tauri/src/region.rs`) | Manual tools (Brush, Clone, Fill, LaMa, Flux, Cloud). A cloud choice needs a consent grant. |
+| **Create Region** | `createRegion()` in `src/lib/editor/drawing.svelte.js` | `create_region` | User-drawn box or lasso. The region is created and rendered locally. A cloud render of it is a separate step on the stored region. |
+| **Rerun Mask** | `rerunMask()` in `src/lib/editor/maskactions.svelte.js` | `rerun_mask` | Re-executes an existing patch. It validates the engine choice and needs a grant when it targets the cloud. |
+| **Clean Anyway** | `cleanAnyway()` in `src/lib/editor/maskactions.svelte.js` | `clean_anyway` | Cleans a gate-skipped region with the engine the user picked. It is always local. |
+
+Batch cloud cleaning and cloud detection have their own plan and consent flow ([detect-clean.md](detect-clean.md), [cloud-security.md](cloud-security.md)).
 
 ---
 
-## 3. Geometry, Masks, and Lifecycle Invariants
+## 2. Geometry, masks and lifecycle invariants
 
-1. **Source Ink Mask vs. Applied Blend Mask:**
-   - *Source Ink / Export Mask:* The detected or drawn stroke contour (`Fitted::mask` in [`crates/cleaner-core/src/fit.rs`](../crates/cleaner-core/src/fit.rs)). Dictates export preservation.
-   - *Applied Blend Mask:* The dilated and feathered geometry (`applied_mask()` and `AlphaRamp` in [`crates/cleaner-core/src/engines/flux.rs:348-380`](../crates/cleaner-core/src/engines/flux.rs#L348-L380)).
-   - *Invariant:* Pixels outside the applied blend mask are bit-identical to the original page. Remote diffusion output is blended strictly locally via `alpha * model + (1.0 - alpha) * original` with dither.
-2. **Longstrip Coordinates:**
-   - Multi-segment longstrips map canvas rectangles (`strip_rect`) to page coordinates (`on_page` in [`src-tauri/src/run.rs:1711`](../src-tauri/src/run.rs#L1711)). All remote crop bounds must be expressed in canonical page-relative coordinates.
-3. **Undo & History Lifecycle:**
-   - In frontend, undo restores historical snapshots via `applyRegionDelta` / `recordEdit`. In backend, `restore_region` ([`src-tauri/src/library.rs:2488`](../src-tauri/src/library.rs#L2488)) toggles mask visibility (`set_mask_visible`).
-   - *Invariant:* Undo and redo restore cached local patch states and never trigger remote network requests.
+1. **Source ink mask against applied blend mask.**
+   - The *source ink mask* is the detected or drawn stroke contour (`Fitted::mask` in `crates/cleaner-core/src/fit/`). It decides what export preserves.
+   - The *applied blend mask* is the dilated and feathered geometry (`applied_mask()` and `AlphaRamp` in `crates/cleaner-core/src/engines/model.rs`).
+   - Pixels outside the applied blend mask are bit-identical to the original page. Remote diffusion output is blended locally, as `alpha * model + (1.0 - alpha) * original`, with dither.
+2. **Longstrip coordinates.** Multi-segment longstrips map canvas rectangles (`strip_rect`) to page coordinates (`on_page`). Every remote crop bound is expressed in canonical page-relative coordinates on the host. Those coordinates never go on the wire.
+3. **Undo and history.** In the frontend, undo restores historical snapshots through `applyRegionDelta` and `recordEdit`. In the backend, `restore_region` (`src-tauri/src/library.rs`) toggles mask visibility. Undo and redo restore cached local patch states and never send a network request.
 
 ---
 
-## 4. Architecture Decision Records (ADRs)
+## 3. Architecture decision records
 
-### 4.1 Engine Identity vs. Execution Target
-- **Decision:** Separate `Engine` (`Fill | Denoise | Lama | Flux | Paint | Clone`) from `ExecutionTarget` (`Local | Beam(profile_id) | Modal(profile_id)`).
-- **Rationale:** Decouples algorithm selection from provider hosting. A cloud FLUX run yields `engine: Engine::Flux` with provider recorded in cloud provenance.
+### 3.1 Engine identity against execution target
 
-### 4.2 Backend-Issued Scoped Authorization Grant
-- **Decision:** Cloud execution requires an authoritative, backend-issued opaque grant.
-- **Scope:** Binds provider/profile ID, endpoint fingerprint, SHA256 of source crop and mask, context padding, recipe/model revision, region set, maximum attempt count, and expiry timestamp.
-- **Enforcement:** Atomically checked and consumed prior to dispatch. Client never sends local file paths, page coordinates, or internal region IDs to remote gateways.
-- **Deployment Plans:** Automatic deployment approval hashes the canonical reviewed resource plan to prevent silent scope expansion.
+- **Decision:** `Engine` (`Fill`, `Lama`, `Flux`, `Cloud`, `Paint`, `Clone`) is separate from `ExecutionTarget` (`Local`, `Beam { profile_id }`, `Modal { profile_id }`).
+- **Rationale:** Algorithm choice stays independent of hosting. A cloud FLUX run records `engine: Engine::Flux` with the provider in the cloud provenance. `Engine::Cloud` survives only so legacy manifests still read. The old `denoise` rung reads as `Fill`. The ladder in `src/lib/model/ladder.js` is `fill`, `lama`, `flux`, with a safe stepping fallback for a legacy `cloud`.
 
-### 4.3 Nullable Cost Semantics & Project Format v3
-- **Decision:** Update `CloudRecord.cost` ([`crates/cleaner-core/src/patch.rs:74`](../crates/cleaner-core/src/patch.rs#L74)) from mandatory `f64` to `Option<f64>`.
-- **Migration Policy:** Bump [`crates/cleaner-core/src/project/mod.rs`](../crates/cleaner-core/src/project/mod.rs) to `FORMAT_VERSION = 3` while retaining `OLDEST_READABLE_VERSION = 1`. Old v1/v2 projects decode gracefully; unknown future versions (v4+) are rejected. Format migration will be accompanied by roundtrip and refusal test suites in P2.
+### 3.2 Backend-issued scoped authorisation grant
 
-### 4.4 Secret Storage vs. Existing Insecure Fallback
-- **Decision:** Cloud setup credentials and runtime tokens must NEVER use the insecure plaintext `settings.json` fallback that exists for HuggingFace tokens ([`src-tauri/src/settings.rs:87-148`](../src-tauri/src/settings.rs#L87-L148)).
-- **Policy:** Secrets are stored strictly in OS keyrings, falling back only to session-in-memory storage when OS keychains are unavailable.
+- **Decision:** Cloud execution needs an authoritative, backend-issued opaque grant.
+- **Scope:** The grant binds the provider and profile ID, the endpoint fingerprint, the SHA-256 of the source crop and mask, the context padding, the recipe and model revision, the region set, the maximum attempt count and the expiry.
+- **Enforcement:** The grant is checked and consumed atomically before dispatch. The client never sends local file paths, page coordinates or internal region IDs to a gateway.
+- **Deployment plans:** Provisioning approval hashes the canonical reviewed resource plan, so scope cannot widen silently ([cloud-provisioning.md](cloud-provisioning.md)).
+- **Detail:** [cloud-consent.md](cloud-consent.md) and [cloud-security.md](cloud-security.md).
 
-### 4.5 Journal Ownership & Single-Instance Locking
-- **Decision:** Inference attempts, handles, and cached results are tracked in a dedicated auxiliary transactional journal (SQLite is a proposed candidate architecture, not an existing repo dependency).
-- **Locking Policy:** Single-instance application lease policy. Preserve the existing single-writer project discipline initially. Releasing a project lock around network work requires an immutable snapshot and revision validation before attachment; this is not implemented yet.
+### 3.3 Nullable cost and project format
 
----
+- **Decision:** `CloudRecord.cost` (`crates/cleaner-core/src/patch.rs`) is `Option<f64>`, and an unknown cost serialises as `null`. The interface shows an unknown cost as unknown and never coerces it to zero (`masks.value.cloudCostUnknown`).
+- **Provenance fields:** `CloudRecord` also holds optional `profile_id`, `job_id`, `attempt_id`, `recipe_id`, `model_revision`, `tier` and `duration_ms`, all skipped when empty.
+- **Format:** The project manifest format (`FORMAT_VERSION` in `crates/cleaner-core/src/project/mod.rs`) was bumped for these fields while `OLDEST_READABLE_VERSION = 1` stays. Older projects decode and are upgraded in memory without touching disk until a flush. A version above the current one is refused.
 
-## 5. P2a Core Seam Implementation Evidence
+### 3.4 Secret storage
 
-### 5.1 Pure Render Extraction & Contract Separation
-- Extracted pure raster crop preparation and host-side composition into [`crates/cleaner-core/src/engines/render.rs`](../crates/cleaner-core/src/engines/render.rs).
-- Implemented [`PreparedRender`] and [`GeneratedCrop`] contracts:
-  - `PreparedRender` encapsulates private fields with read-only getters (`bounds()`, `crop()`, `pad()`, `image_rgb8()`, `hint_gray8()`, `applied()`).
-  - `PreparedRender::prepare`: enforces non-zero dimensions and legitimate engine eligibility, computes proportional context (`CONTEXT_MIN = 24`, `CONTEXT_MAX = 80`), snaps to `LATENT_STRIDE = 16`, edge-replicates pixels off-page (`EdgePad::Replicate`), isolates the grayscale hint mask from `Fitted::ink`, and captures the target unedited patch and `AlphaRamp`.
-  - `PreparedRender::composite`: clones the captured bounded patch and evaluates the captured `AlphaRamp` without requiring `page` or `fitted` to be passed again, preventing caller desynchronization by construction. Performs explicit checked geometry/byte length verification on `GeneratedCrop` before compositing, blends via `AlphaRamp`, copies alpha unmodified, and dithers 16-bit boundaries.
-- Local sidecar [`Inpainter::render`](../crates/cleaner-core/src/engines/flux.rs) delegates directly to `PreparedRender::prepare` and `PreparedRender::composite`, preserving existing sidecar protocol and memory observation guards without behavioral divergence.
+- **Decision:** Cloud setup credentials and runtime tokens never use the plaintext `settings.json` fallback that exists for the Hugging Face token (`src-tauri/src/settings.rs`).
+- **Policy:** Secrets live in the OS keyring. Only when no keyring is available do they fall back to in-memory session storage. See [cloud-security.md](cloud-security.md) section 3.
+
+### 3.5 Journal ownership and locking
+
+- **Decision:** Inference attempts, handles and cached results live in a dedicated file-based journal (`src-tauri/src/inference/journal.rs`, [cloud-journal.md](cloud-journal.md)). It is not a database and not part of the project manifest.
+- **Locking:** Each attempt has an OS file lock. The existing single-writer project discipline stays. Releasing the project lock around network work needs an immutable snapshot and a revision check before attachment, which the journal's attachment reconciler provides.
 
 ---
 
-## 6. P2b Domain, Provenance & Vocabulary Implementation Evidence
+## 4. Render seam
 
-### 6.1 Domain Types & Provenance Structure
-- Defined typed [`CloudProvider`] (`Beam`, `Modal`), [`ExecutionTarget`] (`Local`, `Beam { profile_id }`, `Modal { profile_id }`), and [`RenderRecipe`] in [`crates/cleaner-core/src/engines/render.rs`](../crates/cleaner-core/src/engines/render.rs) and exported them via [`cleaner_core::engines`](../crates/cleaner-core/src/engines/mod.rs).
-- Extended [`CloudRecord`] in [`crates/cleaner-core/src/patch.rs`](../crates/cleaner-core/src/patch.rs):
-  - `cost` evolved to `Option<f64>` with honest null semantics.
-  - Added optional `profile_id`, `job_id`, `attempt_id`, `recipe_id`, `model_revision`, `tier`, and `duration_ms` with `#[serde(default, skip_serializing_if = "Option::is_none")]`.
-  - Preserved `Engine::Cloud` for reading legacy manifests without inferring or fabricating models.
-  - New remote records represent `Engine::Flux` with `provenance.cloud` populated.
+Raster crop preparation and host-side composition are pure functions in `crates/cleaner-core/src/engines/render.rs`:
 
-### 6.2 Project Manifest Format v3 Migration
-- Bumped `FORMAT_VERSION = 3` in [`crates/cleaner-core/src/project/mod.rs`](../crates/cleaner-core/src/project/mod.rs) while keeping `OLDEST_READABLE_VERSION = 1`.
-- Verified non-mutating reads: opening a v1 or v2 manifest upgrades in-memory version to 3 without modifying disk until explicit flush.
-- Verified version gate: future versions (e.g. v4) are refused with `StoreError::Version { expected: 3, found: 4 }`.
-- Verified undo/export serialization on patches and manifests without invoking render models or network operations.
+- `PreparedRender` holds private fields behind read-only getters (`bounds()`, `crop()`, `pad()`, `image_rgb8()`, `hint_gray8()`, `applied()`).
+- `PreparedRender::prepare` enforces non-zero dimensions and engine eligibility, computes proportional context (`CONTEXT_MIN = 24`, `CONTEXT_MAX = 80`), snaps to `LATENT_STRIDE = 16`, edge-replicates pixels off the page (`EdgePad::Replicate`), builds the grayscale hint from `Fitted::ink`, and captures the unedited target patch and the `AlphaRamp`.
+- `PreparedRender::composite` clones the captured patch and applies the captured `AlphaRamp`. It needs no `page` or `fitted` again, so the caller cannot desynchronise them. It checks the geometry and byte length of the `GeneratedCrop`, blends through the `AlphaRamp`, copies alpha unchanged and dithers 16-bit boundaries.
+- The local sidecar `Inpainter::render` uses the same two functions, so local and cloud results composite identically.
 
-### 6.3 Frontend Vocabulary & UI Policy Reconciliation
-- Reconciled [`src/lib/model/ladder.js`](../src/lib/model/ladder.js): `RUNGS = ['fill', 'denoise', 'lama', 'flux']`, with safe stepping fallback for legacy `cloud`.
-- Updated [`src/lib/model/masks.js`](../src/lib/model/masks.js) `reRunnable(mask)` policy: returns `false` for legacy `cloud` and remote FLUX masks with cloud provenance, preventing unconfirmed paid executions from Layers row menus.
-- Honest cost display: updated [`src/lib/model/masks.js`](../src/lib/model/masks.js), [`src/lib/editor/maskrows.js`](../src/lib/editor/maskrows.js), and [`src/lib/editor/cloudflow.svelte.js`](../src/lib/editor/cloudflow.svelte.js) so null costs are not coerced to fake zero.
-- Updated typedefs in [`src/lib/model/types.js`](../src/lib/model/types.js).
+The same file defines `CloudProvider` (`Beam`, `Modal`), `ExecutionTarget` and `RenderRecipe`. Recipes are pinned and carry no invented defaults.
 
-### 6.4 Verification Evidence & Test Ownership
-- **P2b Source Fixes Completed:**
-  - `CloudCostDialog.svelte` & `en.js`: updated cost evaluation (`isCostKnown = rawCost >= 0`), added explicit unknown cost copy (`modal.body.cloudCostUnknown`), removed false promises ("billed on return", "rejected request is not billed") from both strings.
-  - `src-tauri/src/library.rs`: implemented conservative bounded symbolic allowlist (`[a-zA-Z0-9._\-/]`, len <= 128, no URLs/userinfo/control/whitespace) in `sanitize_identifier`, documented lexical boundary guarantee (non-cryptographic secret detection), removed duplicate `ApiProvenance` docblock, and verified safe `"unknown"` fallback.
-  - `crates/cleaner-core/src/project/mod.rs`: restored from HEAD to eliminate whole-file formatting churn; transplanted `FORMAT_VERSION = 3` / `OLDEST_READABLE_VERSION = 1` documentation, raw JSON v1 and v2 migration fixtures, v3 roundtrip tests, and non-inferring undo serialization tests.
-  - `crates/cleaner-core/src/engines/render.rs` & `patch.rs`: explicit pinned `RenderRecipe` without fabricated defaults, serde-derived `ExecutionTarget`, and honest `cost: Option<f64>` serializing explicit `null`.
-  - Frontend Routing & UI: `cleanRegionAutomatically` capped at `lama` for all automatic paths, `masks.provenance.cloudCost` retained with a `null` value, shown as an unknown cost (`masks.value.cloudCostUnknown`), and DOM tests added for `CloudCostDialog`.
-- **Test Execution Ownership:** Full test execution (`cargo check`, `cargo test -p cleaner-core`, `cargo test -p manga-cleaner`, `cargo clippy`, `npm test`) is handed over to orchestrator. Source files have been pruned of EOF whitespace and prepared for verification.
+---
+
+See also: [cloud-contract.md](cloud-contract.md), [cloud-consent.md](cloud-consent.md), [cloud-security.md](cloud-security.md), [cloud-journal.md](cloud-journal.md), [cloud-frontend.md](cloud-frontend.md), [features.md](features.md).

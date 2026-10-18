@@ -426,7 +426,7 @@ describe('P3c1 cloud inference and secrets frontend API mapping', () => {
 
         expect(info.supportedProtocolVersion).toBe('1.0.0')
         expect(info.pinnedModelId).toBe('Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic')
-        expect(info.pinnedRecipeId).toBe('mc-flux2-klein-inpaint-v1')
+        expect(info.pinnedRecipeId).toBe('mc-flux2-klein-inpaint-v2')
         expect(info.preprocessingVersion).toBe('2.0.0')
         expect(info.nativeMaskConditioning).toBe(false)
         expect(info.limits.maxDimensions).toEqual([2048, 2048])

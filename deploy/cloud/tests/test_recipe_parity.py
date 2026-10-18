@@ -1,10 +1,14 @@
-"""The cloud recipe must be the local recipe.
+"""The cloud recipe must be the local recipe, except where v2 says otherwise.
 
 The local engine owns every recipe value: flux.rs holds the prompt and sampling
 knobs, sdnq.py holds the working-size rule and the pipeline call, and the sidecar's
 backend/base.py holds the hole's reach. These tests read those files as text, so a
 change on either side fails here instead of letting cloud and local renders drift
 apart.
+
+Cloud v2 departs in two places, both pinned below: the cloud fills the hole with the
+manga LaMa before Klein and so passes no `image_reference`, and the prompt can carry
+the request's guidance. The local sidecar is still v1 (docs/findings.md).
 """
 
 from __future__ import annotations
@@ -93,10 +97,11 @@ class RecipeParityTest(unittest.TestCase):
         self.assertEqual(flux.HOLE_GROWTH, _python_const(self.base_tree, "HOLE_GROWTH"))
         local = _update_keywords(self.sdnq_tree)
         cloud = _update_keywords(self.flux_tree)
-        self.assertEqual(local, cloud)
-        self.assertEqual(sorted(cloud), ["image_reference", "mask_image", "strength"])
+        self.assertEqual({key: local[key] for key in cloud}, cloud)
+        self.assertEqual(sorted(cloud), ["mask_image", "strength"])
         self.assertEqual(cloud["strength"], "1.0")
-        self.assertEqual(cloud["image_reference"], "work_crop")
+        # v1, still local: the unfilled crop again as the reference image.
+        self.assertEqual(local["image_reference"], "work_crop")
 
     def test_sampling_matches_flux_rs(self) -> None:
         steps = int(_rust_const(self.flux_rs, "STEPS", "u32", r"(\d+)"))
@@ -113,8 +118,8 @@ class RecipeParityTest(unittest.TestCase):
         # IC-6 fixes these on the wire; the parse above ties them to the local engine.
         pinned = manifest.PINNED_SAMPLING[manifest.RECIPE_PROD_SDNQ]
         self.assertEqual((pinned.seed, pinned.steps, pinned.guidance_scaled), (1, 4, 100))
-        self.assertEqual(manifest.RECIPE_PROD_SDNQ, "mc-flux2-klein-inpaint-v1")
-        self.assertEqual(manifest.RECIPE_PROD_SDNQ_9B, "mc-flux2-klein-9b-inpaint-v1")
+        self.assertEqual(manifest.RECIPE_PROD_SDNQ, "mc-flux2-klein-inpaint-v2")
+        self.assertEqual(manifest.RECIPE_PROD_SDNQ_9B, "mc-flux2-klein-9b-inpaint-v2")
         recipe = manifest.PINNED_RECIPES[manifest.RECIPE_PROD_SDNQ]
         self.assertEqual(recipe.preprocessing_version, "2.0.0")
         self.assertFalse(recipe.native_mask_conditioning)
@@ -169,9 +174,19 @@ class RecipeParityTest(unittest.TestCase):
         # number comes from (the recipe instead of a request argument).
         for key in ("image", "width", "height", "generator", "output_type", "max_area"):
             self.assertEqual(local[key], cloud[key], key)
-        self.assertEqual(cloud["prompt"], "RECIPE_PROMPT")
+        # The pinned prompt unless the request carries guidance.
+        self.assertEqual(cloud["prompt"], "flux_prompt(qwen_edit)")
+        self.assertEqual(flux.flux_prompt(None), manifest.RECIPE_PROMPT)
         self.assertEqual(cloud["num_inference_steps"], "int(steps)")
         self.assertIn("guidance_from_scaled(guidance_scaled)", cloud["guidance_scale"])
+
+    def test_guided_recipes_match_render_rs(self) -> None:
+        table = re.search(r"pub const GUIDED_RECIPES: \[\(&str, &str\); \d+\] = \[(.*?)\];", self.render_rs, re.S)
+        self.assertIsNotNone(table, "GUIDED_RECIPES not found in render.rs")
+        rust = dict(re.findall(r'\("([^"]+)", "([^"]+)"\)', table.group(1)))
+        self.assertEqual(set(rust), contract.GUIDED_RECIPE_IDS)
+        for recipe_id, family in rust.items():
+            self.assertTrue(manifest.PINNED_RECIPES[recipe_id].model_id.startswith(family), recipe_id)
 
     def test_generator_is_seeded_on_the_host(self) -> None:
         needle = 'torch.Generator(device="cpu").manual_seed(int(seed))'

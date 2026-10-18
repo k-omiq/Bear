@@ -1,5 +1,7 @@
 # Chinese and Korean automatic cleaning
 
+This note explains how Chinese and Korean text reaches automatic cleaning without a separate OCR model, and what has been checked.
+
 The shipped `comictextdetector.onnx` supplies both boxes and a pixel mask, but
 its upstream project describes training on synthetic manga/comic data. The
 already-shipped `ogkalu/comic-text-and-bubble-detector` is the complementary

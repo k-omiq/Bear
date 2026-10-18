@@ -84,6 +84,7 @@ beforeEach(() => {
       sidecarAvailable: vi.fn(async () => ({ available: false, reasonKey: null })),
       about: vi.fn(async () => ({ appVersion: '0.0.0-test', facts: [] })),
       subscribe: vi.fn(() => () => {}),
+      undoLimit: vi.fn(async () => ({ value: 800, min: 20, max: 2000, default: 500 })),
       writeSettings: (/** @type {any} */ patch) => writeSettings(patch),
     }),
   )
@@ -227,5 +228,58 @@ describe('keep running in background', () => {
     await waitFor(() => expect(session.closeToTray).toBe(true))
     expect(writeSettings).toHaveBeenCalledWith({ closeToTray: true })
     expect(view.queryByText(t('settings.background.saveFailed'))).toBe(null)
+  })
+})
+
+/*
+ * The backend owns the number and its bounds (`history.rs`), so the stub's
+ * 800 and 20 to 2,000 are what the field has to show and hold to. Nothing in
+ * the interface says 500.
+ */
+describe('undo history size', () => {
+  async function field() {
+    const view = render(SettingsDialog, { props: { spec: SPEC } })
+    const input = /** @type {HTMLInputElement} */ (
+      await waitFor(() => view.getByLabelText(t('settings.undoLimit.label')))
+    )
+    const type = async (/** @type {string} */ value) => {
+      await fireEvent.input(input, { target: { value } })
+      await fireEvent.keyDown(input, { key: 'Enter' })
+    }
+    return { view, input, type }
+  }
+
+  it('shows the stored value and writes a new one inside the bounds', async () => {
+    const { view, input, type } = await field()
+    expect(input.value).toBe('800')
+
+    await type('1200')
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledWith({ undoLimit: 1200 }))
+    expect(input.value).toBe('1200')
+    expect(view.queryByRole('alert')).toBe(null)
+  })
+
+  it('refuses a value outside the bounds and writes nothing', async () => {
+    const { view, input, type } = await field()
+    for (const bad of ['19', '2001', '']) {
+      await type(bad)
+      await waitFor(() =>
+        expect(view.getByRole('alert').textContent).toBe(t('settings.undoLimit.outOfRange', { min: 20, max: 2000 })),
+      )
+    }
+    expect(writeSettings).not.toHaveBeenCalled()
+
+    // The bounds themselves are values, and the refusal goes when one lands.
+    await type('2000')
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledWith({ undoLimit: 2000 }))
+    expect(view.queryByRole('alert')).toBe(null)
+    expect(input.value).toBe('2000')
+  })
+
+  it('says so when the backend does not take the value', async () => {
+    writeSettings.mockRejectedValue(new Error('undoLimit must be a whole number from 20 to 2000'))
+    const { view, type } = await field()
+    await type('900')
+    await waitFor(() => expect(view.getByRole('alert').textContent).toBe(t('settings.undoLimit.saveFailed')))
   })
 })

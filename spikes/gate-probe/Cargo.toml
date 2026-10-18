@@ -13,3 +13,4 @@ publish = false
 [dependencies]
 cleaner-core = { path = "../../crates/cleaner-core" }
 anyhow.workspace = true
+serde_json.workspace = true

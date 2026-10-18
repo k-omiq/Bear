@@ -1,5 +1,7 @@
 # Hayai OCR v2.5 Nova to ONNX
 
+This experiment exports the Hayai OCR v2.5 Nova reader to ONNX and measures how its readings and timings compare with PyTorch; the scripts here are not shipped code.
+
 The multi-script reader behind `crates/cleaner-core/src/gate/hayai.rs`.
 Upstream ships PyTorch only, so this folder exports it.
 
@@ -29,7 +31,7 @@ python export.py onnx
 ```
 
 `read_torch.py` reads a folder of crops (`crops/index.json`) with the PyTorch
-model and writes `torch_results.json`. `check_onnx.py` reads the same crops
+model and writes `torch_results.json` (written when the spike runs; not committed). `check_onnx.py` reads the same crops
 through the exported graphs, doing in numpy what the Rust side does (NaFlex
 resize, unshuffle, rotary tables, cache), and reports how many readings match.
 

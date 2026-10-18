@@ -22,7 +22,6 @@
 
 import * as homeDialogs from '../home/dialogs/index.js'
 import QwenPromptDialog from './QwenPromptDialog.svelte'
-import QwenReviewDialog from './QwenReviewDialog.svelte'
 import SettingsDialog from './SettingsDialog.svelte'
 import ShortcutsDialog from './ShortcutsDialog.svelte'
 import ExportDialog from './ExportDialog.svelte'
@@ -41,7 +40,6 @@ import DenoiseCompareDialog from './DenoiseCompareDialog.svelte'
  */
 const DIALOGS = Object.assign(Object.create(null), homeDialogs, {
   qwenPrompt: QwenPromptDialog,
-  qwenReview: QwenReviewDialog,
   settings: SettingsDialog,
   shortcuts: ShortcutsDialog,
   export: ExportDialog,

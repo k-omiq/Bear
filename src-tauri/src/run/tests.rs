@@ -545,6 +545,9 @@ fn kind_of(event: &Event) -> &'static str {
         // than swept into a wildcard so that the next event type added to the
         // seam fails this match instead of being silently mislabelled.
         Event::ModelProgress { .. } => "model-progress",
+        // The backend's own undo step. It goes to the window's channel, not
+        // through a run's sink.
+        Event::HistoryChanged { .. } => "history-changed",
     }
 }
 
@@ -2081,7 +2084,7 @@ fn a_history_step_onto_the_runs_page_is_refused_and_leaves_the_cursor() {
             region_id: format!("{}-h1", library::page_id(&chapter_id, page)),
             before: side(true),
             after: side(false),
-        });
+        }, crate::history::UNDO_LIMIT_DEFAULT);
     }
     // Page 1's edit is the past and page 0's the future: undo steps onto
     // page 1, redo onto page 0.
@@ -3201,7 +3204,7 @@ fn a_run_id_cannot_collide_with_the_mocks() {
 #[test]
 fn every_command_is_async_and_so_never_runs_on_the_invoke_handlers_thread() {
     #[allow(clippy::type_complexity)]
-    fn check<A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, R: std::future::Future>(_: fn(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U) -> R) {}
+    fn check<A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, V, R: std::future::Future>(_: fn(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, V) -> R) {}
     fn check1<A, R: std::future::Future>(_: fn(A) -> R) {}
     fn check3<A, B, C, R: std::future::Future>(_: fn(A, B, C) -> R) {}
     check(run_clean);
@@ -3378,6 +3381,29 @@ fn interrupted_run_captures_effective_ocr_rescue_choice() {
         &serde_json::json!({}), None, &pipeline, None, "chapter", None, RunMode::Auto,
     );
     assert_eq!(snapshot["runOcrRescue"], false);
+}
+
+/// English is left on the page unless the setting is on, and a resumed run
+/// makes the choice the interrupted one made. A snapshot written before the
+/// setting leaves it.
+#[test]
+fn interrupted_run_keeps_its_clean_english_choice() {
+    use cleaner_core::gate::LatinText;
+    for (all_text, asked) in [(false, None), (false, Some(true)), (true, Some(true)), (true, Some(false))] {
+        let (_scratch, pipeline) = snapshot_pipeline("clean-latin-snapshot");
+        let selection = if all_text { RunSelection::all_text(None) } else { RunSelection::from_args(None, None).unwrap() }
+            .with_clean_latin(asked);
+        assert_eq!(selection.latin(), LatinText::cleaned(asked == Some(true)));
+        let pipeline = pipeline.with_selection(selection);
+        let mut snapshot = run_settings_snapshot(
+            &serde_json::json!({}), None, &pipeline, None, "chapter", None, RunMode::Detect,
+        );
+        assert_eq!(snapshot["runCleanLatin"], asked == Some(true));
+        snapshot["runTextPolicy"] = serde_json::json!(if all_text { "all_text" } else { "legacy_gate" });
+        assert_eq!(captured_run_policy(&snapshot).unwrap().selection.latin(), selection.latin());
+    }
+    let before = serde_json::json!({ "runTextPolicy": "all_text", "runOcrRescue": true });
+    assert_eq!(captured_run_policy(&before).unwrap().selection.latin(), LatinText::Leave);
 }
 
 #[test]
@@ -5488,7 +5514,7 @@ mod cloud_stages {
         crop.width = 32;
         crop.height = 32;
         crop.data = vec![200; 32 * 32];
-        let SegmentDetection { balloons, detection, grouping, evidence } =
+        let SegmentDetection { balloons, detection, grouping, evidence, .. } =
             pipeline.detect_segment(&crop, 0, (0, 0), "").unwrap();
         assert_eq!(balloons.len(), 1);
         assert_eq!(balloons[0].rect, Rect::new(8, 8, 14, 8));
@@ -7942,7 +7968,7 @@ fn repeat_cloud_detection_preserves_existing_masks_edits_and_undo_history() {
         label: "masks.command.rerunMask".into(), op: "region-state".into(), region_id: patches[0].id.clone(),
         before: Side { present: true, page_status: Some("cleaned".into()), region: None },
         after: Side { present: true, page_status: Some("cleaned".into()), region: None },
-    });
+    }, crate::history::UNDO_LIMIT_DEFAULT);
     journal.undo(); // Preserve the redo stack as well as existing entries.
     crate::history::save(&path, &journal).unwrap();
     let history_before = std::fs::read(crate::history::journal_path(&path)).unwrap();

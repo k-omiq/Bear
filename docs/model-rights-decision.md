@@ -1,8 +1,8 @@
 # Model rights decision for the desktop candidate workflow
 
-Status: 2026-09-25. This is a release scope decision based on published terms, not a grant of rights or legal clearance.
+This document records which detection models the desktop app may import, download or bundle, based on their published terms (read in September 2026). It is a scope decision, not a grant of rights or legal clearance.
 
-Implementation update, 2026-09-26: the requested detection combination work adds a direct full RT-DETR download and a local SAM-TS-L checkpoint download/export during setup. These are code paths, not a new rights determination. The release decision below has not been re-reviewed for these new acquisition paths; their availability must not be described as redistribution or commercial clearance.
+Setup includes a direct full RT-DETR download and a local SAM-TS-L checkpoint download and export. These are code paths, not a rights determination. The table below has not been re-reviewed for these acquisition paths, so their availability must not be described as redistribution or commercial clearance.
 
 | Component | Published evidence | Desktop decision |
 | --- | --- | --- |

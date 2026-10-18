@@ -69,6 +69,8 @@ GPU_REQUIREMENTS = [
     "numpy==2.4.6",
     # Qwen-Image-Edit loads its Lightning LoRA as a PEFT adapter.
     "peft==0.21.1",
+    # FLUX fills the hole with the manga LaMa graph first (common/flux.py LamaFill).
+    "onnxruntime-gpu==1.23.2",
 ]
 SEED_REQUIREMENTS = ["huggingface-hub==1.24.0"]
 SAM_EXPORT_REQUIREMENTS = [

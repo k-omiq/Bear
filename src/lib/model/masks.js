@@ -234,6 +234,32 @@ export function retryWidens(mask) {
 }
 
 /**
+ * Whether a region offers Reject result: it has a cleaned result that an
+ * automatic clean made, which is what a clean of a detected region leaves.
+ * Rejecting puts the region back as detected, with the mask it had before the
+ * clean (`maskactions.svelte.js#rejectResult`).
+ *
+ * The test is three things every region carries, whichever build wrote it:
+ * it is not a detection now, its mask can be run again (`reRunnable`: not a
+ * paint or clone stroke, not an approved review component), and its `source`
+ * is not `hand`. The native side writes `source: 'auto'` on a result made
+ * from a detection's own mask, whoever asked for the clean, and `hand` on one
+ * a tool drew or redrew, which is a mask of the user's and no detection's.
+ *
+ * Deliberately not narrower. Nothing on a region says whether its detection
+ * was kept, so a chapter cleaned before cleans kept one is offered the entry
+ * too: there the native side refuses, and the notice says so and names the
+ * way out (`notice.mask.rejectNoMask`). A missing entry would say nothing.
+ *
+ * @param {import('./types.js').Region|null|undefined} region
+ * @returns {boolean}
+ */
+export function rejectable(region) {
+  return !isDetected(region) && reRunnable(region?.mask ?? null)
+    && /** @type {any} */ (region)?.source !== 'hand'
+}
+
+/**
  * The plain-language name a row's engine picker shows for a rung.
  *
  * Separate from `ladder.js#rungLabel`, which is the engine's *own* name  - 
@@ -347,9 +373,9 @@ export function detectedActions(options = {}) {
 
 /**
  * @typedef {Object} RegionMenuItem
- * @property {string} id - `retry`, `retryWider`, `delete`, `engine:<rung>`,
- *   `type:inside` / `type:outside` (a detected region's text type), or, on a
- *   held region, `approveMask`, `approve` and `approve:<rung>`
+ * @property {string} id - `retry`, `retryWider`, `reject`, `delete`,
+ *   `engine:<rung>`, `type:inside` / `type:outside` (a detected region's text
+ *   type), or, on a held region, `approveMask`, `approve` and `approve:<rung>`
  * @property {string} labelKey
  * @property {string} [icon]
  * @property {boolean} [selected] - present only on the engine and text type choices
@@ -366,7 +392,12 @@ export function detectedActions(options = {}) {
  * here rather than assembled twice.
  *
  * The three, in order: **Try again**, **Clean with** (the engines, with the
- * one in use checked), **Delete**. A detected region has no result to try
+ * one in use checked), **Delete**. Beside Try again, a result an automatic
+ * clean made gets **Reject result**: the region comes back as detected, with
+ * the mask it had before the clean (`rejectable`). A hand-drawn or tool-made
+ * mask has no detection to go back to and is not offered it, nor is a
+ * detected region or a region with no mask, which have no result to reject.
+ * A detected region has no result to try
  * again, so it gets Clean with, nothing checked, and Delete: picking a local
  * model cleans it here with exactly that model, and Cloud on the cloud GPU.
  * Between the two it gets **Text type**, speech bubble text or text outside
@@ -464,6 +495,7 @@ export function regionMenuSections(region, options = {}) {
       items: [
         { id: 'retry', labelKey: 'masks.action.retry', icon: 'refresh' },
         ...(retryWidens(mask) ? [{ id: 'retryWider', labelKey: 'masks.action.retryWider', icon: 'mask-add' }] : []),
+        ...(rejectable(region) ? [{ id: 'reject', labelKey: 'masks.action.rejectResult', icon: 'undo' }] : []),
       ],
     })
     // The engine the mask actually used leads the list even when the picker

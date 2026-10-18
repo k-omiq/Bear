@@ -37,8 +37,6 @@
  * ordering guarantee, and whichever settled last would win.
  */
 
-import { JOURNAL_LIMIT } from './journal.js'
-
 /**
  * @typedef {Object} HistoryLabel
  * @property {number} seq - the entry's number in the chapter's journal
@@ -49,6 +47,7 @@ import { JOURNAL_LIMIT } from './journal.js'
  * @typedef {Object} History
  * @property {HistoryLabel[]} entries - the whole journal, oldest first
  * @property {number} cursor - how many entries are in the past
+ * @property {number} limit - how many entries the backend keeps; unbounded until it has said
  * @property {Promise<void>} running - the tail of the replay chain; await it to settle
  * @property {unknown} error - why the last replay failed, or null
  */
@@ -57,29 +56,31 @@ import { JOURNAL_LIMIT } from './journal.js'
  * @returns {History}
  */
 export function createHistory() {
-  return { entries: [], cursor: 0, running: Promise.resolve(), error: null }
+  return { entries: [], cursor: 0, limit: Infinity, running: Promise.resolve(), error: null }
 }
 
 /**
  * Take on the journal a backend just reported - on opening a chapter, and after
  * every write, since the backend is the one that numbers entries and applies
- * the cap.
+ * the cap. The cap itself comes with the index (`limit`, the `undoLimit`
+ * setting as the backend reads it), so this side keeps no copy of the number.
  *
  * @param {History} history
- * @param {{cursor?: number, entries?: HistoryLabel[]}|null|undefined} view
+ * @param {{limit?: number, cursor?: number, entries?: HistoryLabel[]}|null|undefined} view
  * @returns {History}
  */
 export function adopt(history, view) {
   const entries = Array.isArray(view?.entries) ? view.entries : []
   history.entries = entries.map((entry) => ({ seq: entry.seq, label: entry.label }))
   history.cursor = clampCursor(view?.cursor, history.entries.length)
+  if (Number.isInteger(view?.limit) && view.limit > 0) history.limit = view.limit
   return history
 }
 
 /**
  * Records a just-performed command, locally. Clears the redo stack - once a new
- * action happens, the old future is no longer reachable - and applies the same
- * cap the journal does, so the index cannot describe entries the file has
+ * action happens, the old future is no longer reachable - and applies the cap
+ * the backend last reported, so the index cannot describe entries the file has
  * already dropped.
  *
  * @param {History} history
@@ -89,7 +90,7 @@ export function adopt(history, view) {
 export function push(history, entry) {
   history.entries.length = history.cursor
   history.entries.push({ seq: entry.seq, label: entry.label })
-  while (history.entries.length > JOURNAL_LIMIT) history.entries.shift()
+  history.entries.splice(0, Math.max(0, history.entries.length - history.limit))
   history.cursor = history.entries.length
   return history
 }

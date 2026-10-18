@@ -20,8 +20,8 @@ const CHAPTER = 'tsuki-to-hane-ch107'
 /** A chapter of 48 pages with no text detected on any of them. */
 const EMPTY_CHAPTER = 'yoake-photobook-ch1'
 
-function makeBackend() {
-  const backend = createMockBackend({ timing: TIMING })
+function makeBackend(options = {}) {
+  const backend = createMockBackend({ timing: TIMING, ...options })
   /** @type {Object[]} */
   const events = []
   backend.subscribe((event) => events.push(event))
@@ -877,6 +877,21 @@ describe('export refusals', () => {
       status: 'refused',
       reasonKey: 'notice.export.refusedDestination',
     })
+  })
+
+  it('refuses the default folder when the scan drive is missing, and takes a named one', async () => {
+    const { backend, events } = makeBackend({ exportDrive: 'missing' })
+    const plan = await settle(backend.planExportChapter({ chapterId: CHAPTER }))
+    expect(plan).toMatchObject({ status: 'refused', reasonKey: 'notice.export.destinationUnavailable' })
+    expect(plan.path).toMatch(/_cleaned$/)
+    // Planning announces nothing; the export does, with the folder on it.
+    expect(events.filter((e) => e.type === 'notice')).toEqual([])
+    const refused = await settle(backend.exportChapter({ chapterId: CHAPTER }))
+    expect(refused.reasonKey).toBe('notice.export.destinationUnavailable')
+    expect(events.filter((e) => e.type === 'notice')[0].params.path).toBe(plan.path)
+
+    const chosen = await settle(backend.exportChapter({ chapterId: CHAPTER, destination: '/Users/me/out' }))
+    expect(chosen).toMatchObject({ status: 'exported', path: '/Users/me/out' })
   })
 
   it('still refuses the source folder, and says which folder', async () => {

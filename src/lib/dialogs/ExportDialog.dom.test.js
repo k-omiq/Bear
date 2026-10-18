@@ -43,3 +43,19 @@ it('keeps the dialog open and surfaces validation failure', async () => {
   expect(view.getByRole('button', { name: 'Export PNG' }).disabled).toBe(true)
   expect(backend.exportChapter).not.toHaveBeenCalled()
 })
+it('names a destination that is not there and offers the folder picker', async () => {
+  const missing = '/Volumes/Portable/scans/ch1_cleaned'
+  backend.planExportChapter.mockImplementation(async ({ destination }) => destination === 'new-folder'
+    ? { status: 'refused', reasonKey: 'notice.export.destinationUnavailable', path: missing, actualFormats: [], declared: [] }
+    : { status: 'planned', revision: 'revision-2', actualFormats: ['PNG'], declared: [], outputs: [] })
+  const view = open()
+  await waitFor(() => expect(view.getByRole('alert').textContent).toContain(missing))
+  expect(view.getByRole('button', { name: 'Export PNG' }).disabled).toBe(true)
+  await fireEvent.click(view.getByRole('button', { name: 'Choose another folder…' }))
+  // No chooser outside a Tauri window: the path field is the way in.
+  const field = await waitFor(() => view.getByRole('textbox'))
+  await fireEvent.input(field, { target: { value: '/Users/me/out' } })
+  await waitFor(() => expect(view.getByRole('button', { name: 'Export PNG' }).disabled).toBe(false))
+  await fireEvent.click(view.getByRole('button', { name: 'Export PNG' }))
+  expect(backend.exportChapter).toHaveBeenCalledWith(expect.objectContaining({ destination: '/Users/me/out', planRevision: 'revision-2' }))
+})

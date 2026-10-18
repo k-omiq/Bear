@@ -875,6 +875,9 @@ pub const REQUIRED_GATEWAY_OPERATIONS: &[&str] = &[
     "jobs.submit", "jobs.status", "jobs.result", "jobs.cancel",
 ];
 pub const MODAL_GPU_OPERATIONS: &[&str] = &["gpu.status", "gpu.stop", "gpu.release_idle"];
+/// A gateway that lists this renders a seed above the recipe's pinned one, so
+/// a retry of a region is a new render. One that does not refuses such a seed.
+pub const RETRY_SEED_OPERATION: &str = "jobs.retry_seed";
 
 fn required_gateway_operations(provider: CloudProvider) -> impl Iterator<Item = &'static str> {
     REQUIRED_GATEWAY_OPERATIONS.iter().copied().chain(
@@ -1007,6 +1010,12 @@ impl CloudHttpClient {
     /// client. A gateway without the route (404/501) serves none; any other
     /// failure is returned and not remembered.
     pub fn serves_gpu_jobs(&self, kind: JobKind) -> Result<bool, HttpTransportError> {
+        self.serves_operation(kind.operation())
+    }
+
+    /// Whether the gateway lists `operation` in `GET /mc/v1/capabilities`,
+    /// read as [`Self::serves_gpu_jobs`] reads it.
+    pub fn serves_operation(&self, operation: &str) -> Result<bool, HttpTransportError> {
         let operations = match self.operations.get() {
             Some(operations) => operations,
             None => {
@@ -1019,7 +1028,7 @@ impl CloudHttpClient {
                 self.operations.get_or_init(|| listed)
             }
         };
-        Ok(operations.iter().any(|op| op == kind.operation()))
+        Ok(operations.iter().any(|op| op == operation))
     }
 
     /// One analysis tile. Submitted and polled ([`gpu_jobs::run_job`]) when the

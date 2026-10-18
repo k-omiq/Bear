@@ -1,5 +1,7 @@
 # Native SAM-TS-L page 27 parity decision
 
+This experiment compares Rust and Python ONNX Runtime masks with PyTorch for page 27 of the pinned chapter; it is not shipped code.
+
 25 September 2026, Apple M5/macOS, local CPU only. This is a diagnostic for the pinned Apocalypse 109 page 27 and graphs; it is not a human-label accuracy result. No source image or model weights are checked in.
 
 ## Input identity and result
@@ -33,7 +35,7 @@ Both differing restored pixels read one canvas logit at `(x=162, y=463)` after n
 
 Rust ORT 1.28.0 and Python ORT 1.23.2 produced the same mask on identical Pillow input. Their encoder embeddings differ numerically in 1,026,981 float elements (maximum absolute difference `1.5974045e-5`, mean `9.5582914e-7`). Their head logits differ in 1,043,357 elements (maximum `1.7005205e-4`, mean `2.5584743e-5`), but have **zero sign differences** across the 1024-square canvas. Thus Rust preparation, sign threshold, crop, and nearest restoration do not explain the two pixels. PyTorch CPU and MPS agree on their foreground decision; ONNX Runtime CPU makes the opposite decision for one near-zero logit. An epsilon adjustment to force this pixel would change the model's pinned zero-threshold rule and has not been adopted.
 
-As a targeted operation-order check, Python ORT CPU 1.23.2 was run again with `SessionOptions.graph_optimization_level` set to `ORT_DISABLE_ALL` and `ORT_ENABLE_BASIC` instead of the default. The affected logit stayed negative (`-8.0302916e-6` and `-2.5677602e-5`, respectively), with zero canvas-sign changes relative to the default run. Graph optimization changes the floating-point value but does not restore exact PyTorch mask parity on this input.
+As a targeted operation-order check, Python ORT CPU 1.23.2 was run again with `SessionOptions.graph_optimization_level` set to `ORT_DISABLE_ALL` and `ORT_ENABLE_BASIC` instead of the default. The affected logit stayed negative (`-8.0302916e-6` and `-2.5677602e-5`, respectively), with zero canvas-sign changes relative to the default run. Graph optimisation changes the floating-point value but does not restore exact PyTorch mask parity on this input.
 
 With the Rust-decoded PNG as input, Rust and Python ORT again had exact prepared tensors and exact masks, with zero canvas-logit sign differences. Their embedding maximum absolute difference was `3.5390258e-5`, logit maximum `1.9550323e-4`. The native logit at `(162,463)` was `-0.03598851`, far from the Pillow-input near-zero value: the JPEG decoder is a material input change.
 
@@ -45,22 +47,22 @@ For the pinned page27 input, native CPU ORT is mask-exact against Python CPU ORT
 
 ## Reproduction
 
-Versions: Pillow 11.3.0, NumPy 2.3.3, Python ONNX Runtime 1.23.2 CPU, PyTorch 2.13.0 CPU/MPS; native ONNX Runtime 1.28.0 CPU, Rust `image` 0.25.10. Use the pinned graphs under the ignored `spikes/sam-ts-l/artifacts/proof/` and source `/Users/caved/Downloads/apocalypse/109/27.jpg`. The encoder SHA-256 is `9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe`; the head SHA-256 is `a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281`.
+Versions: Pillow 11.3.0, NumPy 2.3.3, Python ONNX Runtime 1.23.2 CPU, PyTorch 2.13.0 CPU/MPS; native ONNX Runtime 1.28.0 CPU, Rust `image` 0.25.10. Use the pinned graphs under the ignored `spikes/sam-ts-l/artifacts/proof/` (written when the spike runs; not committed) and source `<chapter-dir>/27.jpg`. The encoder SHA-256 is `9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe`; the head SHA-256 is `a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281`.
 
-Create the Pillow input, then use the ignored Rust JPEG comparison test to create the native-decoded PNG:
+Create the directory `spikes/sam-ts-l/artifacts/page27/` (written when the spike runs; not committed), then create the Pillow input and use the ignored Rust JPEG comparison test to create the native-decoded PNG:
 
 ```sh
 spikes/sam-ts-l/artifacts/venv/bin/python - <<'PY'
 from PIL import Image
-Image.open('/Users/caved/Downloads/apocalypse/109/27.jpg').convert('RGB').save('/tmp/sam-page27-pillow.png')
+Image.open('<chapter-dir>/27.jpg').convert('RGB').save('spikes/sam-ts-l/artifacts/page27/sam-page27-pillow.png')
 PY
-SAM_TS_CHAPTER_DIR=/Users/caved/Downloads/apocalypse/109 \
-SAM_TS_DECODED_PNG=/tmp/sam-page27-pillow.png \
-SAM_TS_NATIVE_PNG=/tmp/sam-page27-native.png \
+SAM_TS_CHAPTER_DIR=<chapter-dir> \
+SAM_TS_DECODED_PNG=<repo-root>/spikes/sam-ts-l/artifacts/page27/sam-page27-pillow.png \
+SAM_TS_NATIVE_PNG=<repo-root>/spikes/sam-ts-l/artifacts/page27/sam-page27-native.png \
 cargo test -p cleaner-core diagnose_page27_jpeg_decode -- --ignored --nocapture
 ```
 
-For either PNG, save Python ORT stage tensors under `/tmp/sam-page27-stage` (change `page` and `stage` for the other PNG):
+For either PNG, save Python ORT stage tensors under `spikes/sam-ts-l/artifacts/page27/stage` (change `page` and `stage` for the other PNG):
 
 ```sh
 spikes/sam-ts-l/artifacts/venv/bin/python - <<'PY'
@@ -72,8 +74,8 @@ from PIL import Image
 root = Path('spikes/sam-ts-l').resolve()
 sys.path.insert(0, str(root))
 from run_real_pages import prepare, restore
-page = Path('/tmp/sam-page27-pillow.png')
-stage = Path('/tmp/sam-page27-stage')
+page = Path('spikes/sam-ts-l/artifacts/page27/sam-page27-pillow.png')
+stage = Path('spikes/sam-ts-l/artifacts/page27/stage')
 stage.mkdir(exist_ok=True)
 chw, resized, original = prepare(Image.open(page))
 batch = chw[None]
@@ -89,12 +91,12 @@ for name, value in [('prepared', batch), ('embedding', embedding), ('logits', lo
     np.save(stage/f'{name}.npy', value)
 print('page27 logit', logits[0, 0, 463, 162])
 PY
-SAM_TS_RUNTIME=/Users/caved/dev/manga-cleaner/runtimes/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.dylib \
-SAM_TS_DECODED_PNG=/tmp/sam-page27-pillow.png \
-SAM_TS_STAGE_DIR=/tmp/sam-page27-stage \
+SAM_TS_RUNTIME=<repo-root>/runtimes/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.dylib \
+SAM_TS_DECODED_PNG=<repo-root>/spikes/sam-ts-l/artifacts/page27/sam-page27-pillow.png \
+SAM_TS_STAGE_DIR=<repo-root>/spikes/sam-ts-l/artifacts/page27/stage \
 cargo test -p cleaner-core diagnose_page27_cpu_stages -- --ignored --nocapture
 ```
 
-For the PyTorch logits, `export_mask.load_model`, `export_mask.prepare`, and `export_mask.restore` are used exactly as in `run_chapter_torch.py`; run once on `cpu` and once on `mps` with `PYTORCH_ENABLE_MPS_FALLBACK=0`, then inspect `result[3][0,0,463,162]`. The saved chapter MPS mask is `spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/27.png`.
+For the PyTorch logits, `export_mask.load_model`, `export_mask.prepare`, and `export_mask.restore` are used exactly as in `run_chapter_torch.py`; run once on `cpu` and once on `mps` with `PYTORCH_ENABLE_MPS_FALLBACK=0`, then inspect `result[3][0,0,463,162]`. The saved chapter MPS mask is `spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps/masks/27.png` (written when the spike runs; not committed).
 
-To repeat the graph-optimization check, set `options.graph_optimization_level` in the Python block above to `ort.GraphOptimizationLevel.ORT_DISABLE_ALL` and then `ort.GraphOptimizationLevel.ORT_ENABLE_BASIC`; use the same prepared input and compare `(logits > 0)` against the default output.
+To repeat the graph-optimisation check, set `options.graph_optimization_level` in the Python block above to `ort.GraphOptimizationLevel.ORT_DISABLE_ALL` and then `ort.GraphOptimizationLevel.ORT_ENABLE_BASIC`; use the same prepared input and compare `(logits > 0)` against the default output.

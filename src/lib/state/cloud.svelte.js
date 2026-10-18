@@ -21,13 +21,13 @@
  *    provider, which is why it waits for the permission.
  */
 
-import { dismissQwenReview, reviewQwen } from '../editor/qwenflow.js'
 import { untrack } from 'svelte'
 import { getBackend, readCloudReadiness } from '../api/backend.js'
 import { notify, pushModal } from './app.svelte.js'
 import { editor, replaceRegion } from './editor.svelte.js'
 import { backendSettingsPatch, session, setCloudAllowed } from './session.svelte.js'
 import { writeSettingsSerialized } from './settingswrite.js'
+import { cloudErrorKey } from '../model/cloudnotices.js'
 import { currentCloudModelId } from '../model/model-names.js'
 import { providerPaused } from '../model/providers.js'
 import { checkCleanConfiguration, checkConfiguration, configurationKey, configurationFailed, loadCloudConfiguration, rememberedConfiguration, resetCloudConfiguration } from './cloudconfig.svelte.js'
@@ -76,7 +76,6 @@ const RUNNING_PHASES = Object.freeze([
   'queued',
   'running',
   'downloading',
-  'reviewing',
   'compositing',
 ])
 const ENDING_PHASES = Object.freeze(['committed', 'failed', 'cancelled', 'unknown'])
@@ -88,56 +87,11 @@ const PHASE_KEYS = new Map([
   ['queued', 'notice.cloud.phase.queued'],
   ['running', 'notice.cloud.phase.running'],
   ['downloading', 'notice.cloud.phase.downloading'],
-  ['reviewing', 'qwen.review.title'],
   ['compositing', 'notice.cloud.phase.compositing'],
 ])
 
-/**
- * Why a render did not finish, per stable error code. Codes that mean the same
- * thing to the person reading the notice share a sentence. Anything not listed
- * reads `notice.cloud.error.generic`.
- */
-const ERROR_KEYS = new Map([
-  ['cloud_disabled', 'notice.cloud.error.disabled'],
-  ['target_invalid', 'notice.cloud.error.target'],
-  ['target_changed', 'notice.cloud.error.target'],
-  ['profile_missing', 'notice.cloud.error.target'],
-  ['endpoint_invalid', 'notice.cloud.error.target'],
-  ['credential_missing', 'notice.cloud.error.credential'],
-  ['consent_invalid', 'notice.cloud.error.consent'],
-  ['region_not_found', 'notice.cloud.error.region'],
-  ['region_changed', 'notice.cloud.error.region'],
-  ['region_unsupported', 'notice.cloud.error.regionUnsupported'],
-  ['attempt_busy', 'notice.cloud.error.busy'],
-  ['attempt_exists', 'notice.cloud.error.busy'],
-  // A run is on the region's page (`run::lock_page`): the edit's own words.
-  ['page_busy', 'notice.run.pageBusy'],
-  ['journal_error', 'notice.cloud.error.local'],
-  ['project_error', 'notice.cloud.error.local'],
-  ['config_unreadable', 'notice.cloud.error.local'],
-  ['invalid_request', 'notice.cloud.error.local'],
-  ['result_invalid', 'notice.cloud.error.result'],
-  ['gateway_protocol', 'notice.cloud.error.result'],
-  ['gateway_unauthorized', 'notice.cloud.error.unauthorized'],
-  ['gateway_error', 'notice.cloud.error.gateway'],
-  ['gateway_unreachable', 'notice.cloud.error.unreachable'],
-  ['submission_unknown', 'notice.cloud.error.submission'],
-  ['edit_not_applied', 'qwen.review.failed'],
-  ['qwen_review_required', 'qwen.review.required'],
-  ['remote_failed', 'notice.cloud.error.remote'],
-  ['weights_unavailable', 'notice.cloud.error.weights'],
-  ['remote_cancelled', 'notice.cloud.error.remoteCancelled'],
-  ['cancelled', 'notice.cloud.error.cancelled'],
-  ['poll_timeout', 'notice.cloud.error.timeout'],
-])
-
-/**
- * @param {string|null|undefined} code
- * @returns {string} the i18n key for why a render did not finish
- */
-export function cloudErrorKey(code) {
-  return (typeof code === 'string' && ERROR_KEYS.get(code)) || 'notice.cloud.error.generic'
-}
+// Why a render did not finish, in words: one table with the batch's notices.
+export { cloudErrorKey }
 
 /**
  * @param {string} phase
@@ -518,9 +472,6 @@ export function startCloud(backend = getBackend()) {
   started = run
 
   try {
-    Promise.resolve(backend.onQwenReview?.((preview) => reviewQwen(preview, backend)))
-      .then((off) => { if (typeof off === 'function') { if (started === run) run.unlisten.push(off); else off() } })
-      .catch(() => {})
     Promise.resolve(backend.onCloudAttempt?.(onAttemptEvent))
       .then((off) => {
         if (typeof off !== 'function') return
@@ -608,6 +559,9 @@ async function recoverWithBackend(backend, current = () => true) {
     notify({ key: 'notice.cloud.recovered', params: { count: attached.length } })
     for (const entry of attached) void reloadRegion(entry, backend)
   }
+  // Ended with nothing applied: the region is detected again and its "never
+  // applied" flag is gone natively, so read it back.
+  for (const entry of list(report?.released)) void reloadRegion(entry, backend)
   if (needsAttention.length) {
     notify({ key: 'notice.cloud.needsAttention', params: { count: needsAttention.length }, tone: 'warn' })
     // The regions these name are flagged natively from the attempt journal
@@ -761,8 +715,7 @@ export function onAttemptEvent(payload) {
   const errorCode = typeof event.errorCode === 'string' && ERROR_CODE.test(event.errorCode) ? event.errorCode : null
 
   if (ENDING_PHASES.includes(phase)) {
-    dismissQwenReview(attemptId)
-    finishJob(attemptId, { phase: /** @type {CloudOutcome['phase']} */ (phase), errorCode, quiet: errorCode === 'qwen_retry' }, elapsed, {
+    finishJob(attemptId, { phase: /** @type {CloudOutcome['phase']} */ (phase), errorCode }, elapsed, {
       regionId: typeof event.regionId === 'string' ? event.regionId : null,
       chapterId: typeof event.chapterId === 'string' ? event.chapterId : null,
       pageIndex: typeof event.pageIndex === 'number' ? event.pageIndex : null,

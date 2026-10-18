@@ -2515,7 +2515,14 @@ fn commit(
     match (text_shape_identity, review_state) {
         (Some(identity), _) => job.complete_text_shape_region(source_idx, &patch, identity, None),
         (None, Some(review_state)) => {
-            job.complete_detection(region_id, &patch, review_state).map(|_| ())
+            // One undo step, written with the commit: undo puts the
+            // detection back with its mask (`history::record_clean`).
+            let before = crate::history::side_now(&located.chapter_id, &job.project, source_idx, region_id);
+            job.complete_detection(region_id, &patch, review_state).map(|replaced| {
+                if replaced {
+                    crate::history::record_clean(&located.job_path, &located.chapter_id, &job.project, source_idx, region_id, before);
+                }
+            })
         }
         (None, None) => job.complete_display_region(source_idx, &patch, None),
     }
@@ -6519,7 +6526,18 @@ mod tests {
         assert_eq!(patch.order, 4);
         assert_eq!(patch.review_state.as_deref(), Some("review.reason.unusuallyLarge"));
         assert_eq!(patch.provenance.params_snapshot["source"], "auto");
-        assert!(!job.sidecar().join("detections/chapter-p001-d0.mask").exists());
+        // The clean keeps the detection beside its patch and is one undo
+        // step, written with the commit: undo puts the detection back.
+        assert!(job.sidecar().join("detections/chapter-p001-d0.mask").exists());
+        assert_eq!(job.project.cleaned_detections.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["chapter-p001-d0"]);
+        let journal = crate::history::load(&located.job_path);
+        assert_eq!(journal.entries.len(), 1);
+        let step = &journal.entries[0];
+        assert_eq!((step.op.as_str(), step.label.as_str(), step.region_id.as_str()),
+            (crate::history::CLEAN_OP, crate::history::CLEAN_LABEL, "chapter-p001-d0"));
+        assert_eq!(step.before.region.as_ref().unwrap()["outcome"], "detected");
+        assert_eq!(step.after.region.as_ref().unwrap()["outcome"], "cleaned");
 
         // The real ladder, from the stored pick: rung 0 paints the lettering out.
         assert!(matches!(edit_with_bench(&mut bench, Engine::Fill, &located, plan("chapter-p001-d1")).unwrap(),
@@ -9762,7 +9780,7 @@ mod tests {
             assert_eq!(committed.sample(tx,ty,0),visible.sample(sx,ty,0),"clone orientation {value}");
             let record=job.project.patches[0].clone();let mut journal=crate::history::Journal::default();
             let state=crate::history::Side{present:true,page_status:Some("cleaned".into()),region:None};
-            journal.push(crate::history::NewDelta{label:"clone".into(),op:"region-state".into(),region_id:record.id.clone(),before:crate::history::Side{present:false,page_status:Some("unclean".into()),region:None},after:state});
+            journal.push(crate::history::NewDelta{label:"clone".into(),op:"region-state".into(),region_id:record.id.clone(),before:crate::history::Side{present:false,page_status:Some("unclean".into()),region:None},after:state},crate::history::UNDO_LIMIT_DEFAULT);
             crate::history::save(job.path(),&journal).unwrap();let mut recovered=crate::history::load(job.path());
             assert_eq!(recovered.undo().unwrap().region_id,record.id);job.project.patches[0].visible=false;job.flush().unwrap();
             assert_eq!(crate::tile::render(job.path(),0,crate::tile::Variant::Cleaned,None).unwrap(),crate::tile::render(job.path(),0,crate::tile::Variant::Source,None).unwrap());

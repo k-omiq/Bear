@@ -228,7 +228,7 @@ describe('the mock provisioner', () => {
     expect(result.data.endpoint_url).toMatch(/^https:\/\/.+\/mc\/v1$/)
     expect(result.data.health).toMatchObject({ ok: true, status: 'reachable' })
     expect(result.data.selected).toBe(true)
-    expect(result.data.model.recipe_id).toBe('mc-flux2-klein-inpaint-v1')
+    expect(result.data.model.recipe_id).toBe('mc-flux2-klein-inpaint-v2')
 
     // Every step starts and finishes in order; weights report a percentage.
     const finished = progress.filter((event) => event.state === 'done').map((event) => event.step)

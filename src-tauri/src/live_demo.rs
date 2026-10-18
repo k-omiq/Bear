@@ -341,6 +341,7 @@ async fn detect(
         Some("legacy".into()),
         Some("all_text".into()),
         Some(false),
+        None,
         Some(targets.to_value()),
         Some(grant.grant_id),
         Some("detect".into()),

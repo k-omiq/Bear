@@ -121,6 +121,15 @@ pub enum Event {
         done: bool,
         error: Option<String>,
     },
+    /// The backend recorded an undo step of its own on this chapter: a
+    /// result committed, a detected region was cleaned, a result was
+    /// rejected (`history::record_step`). The interface reads the chapter's
+    /// index again if that chapter is the open one. No payload: the index is
+    /// read under the same lock every other history read takes.
+    #[serde(rename_all = "camelCase")]
+    HistoryChanged {
+        chapter_id: String,
+    },
     /// The transient stack. `key` and `params` are i18n data; no English
     /// crosses the seam.
     Notice {

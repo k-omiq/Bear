@@ -165,6 +165,16 @@ def _assert_no_forbidden_fields(d: Any) -> None:
             _assert_no_forbidden_fields(item)
 
 
+# Recipes whose worker builds its prompt from request guidance (`qwen_edit`, named for
+# the first recipe that took it). manifest.py names these recipes; contract.py cannot
+# import it, so the ids are repeated here and test_contract holds the two equal.
+GUIDED_RECIPE_IDS = frozenset({
+    "mc-qwen-image-edit-2511-v4",
+    "mc-flux2-klein-inpaint-v2",
+    "mc-flux2-klein-9b-inpaint-v2",
+})
+
+
 @dataclass(frozen=True)
 class QwenEdit:
     target: str = "auto"
@@ -220,8 +230,8 @@ class RenderRecipe:
         _validate_revision_identity(model_revision)
         native_mask = _check_exact_bool(d.get("native_mask_conditioning"), "native_mask_conditioning")
         edit = QwenEdit.from_dict(d["qwen_edit"]) if "qwen_edit" in d else None
-        if edit is not None and (not model_id.startswith("Disty0/Qwen-Image-Edit") or recipe_id != "mc-qwen-image-edit-2511-v4"):
-            raise ContractValidationError("This recipe does not support Qwen guidance")
+        if edit is not None and recipe_id not in GUIDED_RECIPE_IDS:
+            raise ContractValidationError("This recipe does not support guidance")
         return cls(
             qwen_edit=edit,
             recipe_id=recipe_id,

@@ -23,6 +23,9 @@ from deploy.cloud.common.manifest import (
     PROD_SNAPSHOT_9B_FILES,
     PROD_SNAPSHOT_9B_TOTAL_BYTES,
     ADAPTER_DIR,
+    LAMA_FILE,
+    LAMA_REPO,
+    LAMA_REVISION,
     FUKIDASHI_FILE,
     FUKIDASHI_REPO,
     FUKIDASHI_REVISION,
@@ -70,7 +73,13 @@ class FakeDownload:
         self.calls.append(kwargs)
         if self.error is not None and len(self.calls) <= self.failures:
             raise self.error
-        write_sparse(Path(kwargs["local_dir"]), self.files)
+        adapters = [(path.split("/", 1)[1], size) for path, size in self.files if path.startswith(f"{ADAPTER_DIR}/")]
+        if "allow_patterns" in kwargs:
+            # A pinned adapter: only the named files, into <snapshot>/adapters.
+            files = [(name, size) for name, size in adapters if name in kwargs["allow_patterns"]]
+        else:
+            files = [(path, size) for path, size in self.files if not path.startswith(f"{ADAPTER_DIR}/")]
+        write_sparse(Path(kwargs["local_dir"]), files)
         return kwargs["local_dir"]
 
 
@@ -108,9 +117,12 @@ class SeedSnapshotTest(unittest.TestCase):
             self.root, download, lambda: commits.append(1), lambda done, total: progress.append((done, total))
         )
         self.assertEqual(result["status"], "seeded")
+        snapshot = weights.snapshot_dir(self.root)
         self.assertEqual(
             download.calls,
-            [{"repo_id": MODEL_PROD_FLUX, "revision": REVISION_PROD_FLUX, "local_dir": str(weights.snapshot_dir(self.root))}],
+            [{"repo_id": MODEL_PROD_FLUX, "revision": REVISION_PROD_FLUX, "local_dir": str(snapshot)},
+             {"repo_id": LAMA_REPO, "revision": LAMA_REVISION, "local_dir": str(snapshot / ADAPTER_DIR),
+              "allow_patterns": [LAMA_FILE]}],
         )
         self.assertEqual(commits, [1])
         self.assertTrue(weights.is_seeded(self.root))
@@ -119,7 +131,7 @@ class SeedSnapshotTest(unittest.TestCase):
 
         again = weights.seed_snapshot(self.root, download, lambda: commits.append(1))
         self.assertEqual(again["status"], "present")
-        self.assertEqual(len(download.calls), 1, "a seeded volume never downloads again")
+        self.assertEqual(len(download.calls), 2, "a seeded volume never downloads again")
         self.assertEqual(commits, [1])
 
     def test_9b_seed_uses_its_own_pin_marker_and_size(self) -> None:
@@ -271,7 +283,8 @@ class RunSeedTest(unittest.TestCase):
             self.root, self.store, snapshot_download=download, retry_delay_seconds=3, sleep=self.sleeps.append
         )
         self.assertEqual(result["status"], "seeded")
-        self.assertEqual(len(download.calls), 2)
+        # The failed model download, its retry, then the LaMa adapter.
+        self.assertEqual([c["repo_id"] for c in download.calls], [MODEL_PROD_FLUX, MODEL_PROD_FLUX, LAMA_REPO])
         self.assertEqual(self.sleeps, [3])
 
     def test_exhausted_attempts_return_a_typed_failure(self) -> None:

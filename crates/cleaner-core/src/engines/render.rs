@@ -105,6 +105,21 @@ pub struct QwenEdit {
 #[serde(rename_all = "snake_case")]
 pub enum QwenTarget { Auto, Dialogue, SoundEffect, Other }
 
+/// The recipes whose worker takes [`QwenEdit`] guidance, each with the model
+/// family it must name. Qwen edits the whole crop; Klein v2 inpaints a
+/// LaMa-filled hole and reads the description as what the lettering covers.
+/// deploy/cloud/common/contract.py GUIDED_RECIPE_IDS is the same set.
+pub const GUIDED_RECIPES: [(&str, &str); 3] = [
+    ("mc-qwen-image-edit-2511-v4", "Disty0/Qwen-Image-Edit"),
+    ("mc-flux2-klein-inpaint-v2", "Disty0/FLUX.2-klein-4B"),
+    ("mc-flux2-klein-9b-inpaint-v2", "Disty0/FLUX.2-klein-9B"),
+];
+
+/// Whether the worker for this recipe and model reads `qwen_edit`.
+pub fn takes_guidance(recipe_id: &str, model_id: &str) -> bool {
+    GUIDED_RECIPES.iter().any(|(id, model)| recipe_id == *id && model_id.starts_with(model))
+}
+
 /// Model and recipe identity contract for diffusion rendering.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RenderRecipe {
@@ -123,6 +138,15 @@ impl RenderRecipe {
         if self.recipe_id == "mc-qwen-image-edit-2511-v4" { sampling.steps = 8; }
         sampling
     }
+
+    /// How far each retry of a region moves the seed. The Qwen worker itself
+    /// renders up to three seeds in a row from the one it is sent, so a retry
+    /// steps past all three.
+    pub fn retry_seed_stride(&self) -> u64 {
+        if self.recipe_id == "mc-qwen-image-edit-2511-v4" { 3 } else { 1 }
+    }
+
+    pub fn takes_guidance(&self) -> bool { takes_guidance(&self.recipe_id, &self.model_id) }
 
     /// Deployment identity excludes request-local guidance. Grant equality
     /// still compares the complete recipe, including that guidance.

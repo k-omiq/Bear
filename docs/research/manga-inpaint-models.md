@@ -1,7 +1,6 @@
 # Manga text removal models: research and the masked Klein recipe
 
-Written 2026-10-01 on `codex/cloud-integration`. Everything below was run on one page:
-`~/Downloads/test inno/denoised/08-058.png` (654 by 919, black and white with screentone, royalty free),
+This note compares open models for removing text from black-and-white manga and records the recipe the app uses for FLUX.2 Klein. The runs date from 1 October 2026 and used one page: `08-058.png` (654 by 919, black and white with screentone, royalty free),
 12 regions: 7 balloons from the app's own detection and 5 sound effects drawn over art. The app's
 bubble detector does not see the sound effects; their masks are the SAM-TS-L text mask
 (`spikes/sam-ts-l/infer_ort.py --provider cpu`) inside a box per sound effect, taken through
@@ -152,7 +151,7 @@ grey and left a light streak across the screentone under "ズバババ", where 9
 
 - Cloud: `deploy/cloud/common/flux.py` `SdnqFluxRunner` renders through `Flux2KleinInpaintPipeline`
   with the hint grown by `HOLE_GROWTH` (8 px) as the mask and the crop as `image_reference`;
-  `mask_image`, `image_reference` and `strength=1.0` are passed unfiltered. Recipe ids are now
+  `mask_image`, `image_reference` and `strength=1.0` are passed unfiltered. Recipe ids are
   `mc-flux2-klein-inpaint-v1` and `mc-flux2-klein-9b-inpaint-v1`. `native_mask_conditioning` stays
   false: the model takes no mask channel; the pipeline holds the latents outside the hole.
 - Local sdnq backend: the same pipeline and call (`backend/sdnq.py`), the hole from

@@ -37,6 +37,23 @@ it('duplicates a native region through the registered command', async () => {
   expect(invoke).toHaveBeenCalledWith('duplicate_region', { regionId: 'c-p001-h1' })
 })
 
+// The two halves of a cleaned detection (docs/fixes-2026-10-12/06): the
+// replay of a `clean-state` undo entry, and the reject that records its own.
+it('swaps a cleaned detection and rejects a result through the registered commands', async () => {
+  const answer = { region: { id: 'c-p001-d1', outcome: 'detected' }, pageStatus: 'detected' }
+  const invoke = vi.fn().mockResolvedValue(answer)
+  const backend = createTauriBackend({ invoke, fallback: {} })
+  expect(await backend.setRegionCleaned({ regionId: 'c-p001-d1', cleaned: false })).toEqual(answer)
+  expect(invoke).toHaveBeenLastCalledWith('set_region_cleaned', { regionId: 'c-p001-d1', cleaned: false })
+  await backend.setRegionCleaned({ regionId: 'c-p001-d1', cleaned: true })
+  expect(invoke).toHaveBeenLastCalledWith('set_region_cleaned', { regionId: 'c-p001-d1', cleaned: true })
+  await backend.rejectResult({ regionId: 'c-p001-d1' })
+  expect(invoke).toHaveBeenLastCalledWith('reject_result', { regionId: 'c-p001-d1' })
+  // A refusal reaches the caller with its code leading the message.
+  invoke.mockRejectedValueOnce('clean_not_restorable: no detection was kept for region c-p001-d1; its mask cannot be put back')
+  await expect(backend.rejectResult({ regionId: 'c-p001-d1' })).rejects.toThrow(/^clean_not_restorable: /)
+})
+
 /** The seam methods that are commands, as opposed to event listeners. */
 const COMMAND_METHODS = SEAM_METHODS.filter((method) => !EVENT_METHODS.includes(method))
 
@@ -868,7 +885,6 @@ describe('the Tauri adapter', () => {
         'submit_cloud_attempt',
         'get_cloud_attempt_status',
         'get_cloud_attempt_result',
-        'resolve_qwen_review',
         'cancel_cloud_attempt',
         'reconcile_cloud_recovery',
       ])
@@ -972,7 +988,6 @@ describe('the Tauri adapter', () => {
       expect(listen).toHaveBeenNthCalledWith(4, CLOUD_EVENTS.denoiseProgress, onDenoise)
       expect(CLOUD_EVENTS).toEqual({
         provisionProgress: 'provision://progress',
-        qwenReview: 'qwen://review',
         cloudAttempt: 'cloud://attempt',
         remoteAnalysis: 'cloud://analysis',
         denoiseProgress: 'denoise://progress',
@@ -1051,7 +1066,7 @@ describe('the Tauri adapter', () => {
       const params = {
         grantNonce: 'grant-1',
         executionTarget: { type: 'modal', profile_id: 'm1' },
-        recipe: { recipe_id: 'mc-flux2-klein-inpaint-v1' },
+        recipe: { recipe_id: 'mc-flux2-klein-inpaint-v2' },
         intent: { action: 'cleanAnyway' },
       }
       await backend.rerunMask({ maskId: 'r1-m2', kind: 'fill', engine: 'cloud', params })
@@ -1189,12 +1204,10 @@ describe('selecting a backend', () => {
   })
 })
 
-it('passes Qwen guidance to batch preparation and review choices to their command', async () => {
+it('passes Qwen guidance to batch preparation', async () => {
   const invoke = vi.fn().mockResolvedValue(null)
   const backend = createTauriBackend({ invoke, fallback: {} })
   const qwenEdit = { target: 'sound_effect', description: 'Black letters beside the hand' }
   await backend.prepareCloudClean({ chapterId: 'c1', scope: 'page', qwenEdit })
   expect(invoke).toHaveBeenLastCalledWith('prepare_cloud_clean', expect.objectContaining({ qwenEdit }))
-  await backend.resolveQwenReview({ attemptId: 'att-' + 'a'.repeat(24), choice: 'discard' })
-  expect(invoke).toHaveBeenLastCalledWith('resolve_qwen_review', { attemptId: 'att-' + 'a'.repeat(24), choice: 'discard' })
 })

@@ -17,8 +17,7 @@ import { app, clearNotices, closeAllModals, closeModal } from '../state/app.svel
 import { stopCloud } from '../state/cloud.svelte.js'
 import { editor } from '../state/editor.svelte.js'
 import { setCloudAllowed } from '../state/session.svelte.js'
-import { requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
-import { reviewQwen } from './qwenflow.js'
+import { requestCloudConsent } from './cloudflow.svelte.js'
 import { cleanAnyway, rerunMask, runRegionMenuItem, updateLayer } from './maskactions.svelte.js'
 
 const ZERO = { method: 0, openChapter: 0, export: 0, cloud: 0, provision: 0, region: 0, pageTail: 0, noticeStagger: 0 }
@@ -211,8 +210,12 @@ describe('the cloud from the Layers panel', () => {
     const prepare = vi.spyOn(backend, 'prepareCloudConsent')
     const confirm = vi.spyOn(backend, 'confirmCloudConsent')
     const rerun = vi.spyOn(backend, 'rerunMask')
-    // The project consented with the first render.
-    expect(await rerunMask(rendered, 'retry')).toBe(true)
+    // The project consented with the first render. Redoing a cloud result asks
+    // only what the lettering covers.
+    const again = rerunMask(rendered, 'retry')
+    await vi.waitFor(() => expect(app.modals.map((modal) => modal.kind)).toEqual(['qwenPrompt']))
+    closeModal({ target: 'auto', description: '' })
+    expect(await again).toBe(true)
     expect(app.modals).toEqual([])
 
     expect(prepare).toHaveBeenCalledTimes(1)
@@ -408,6 +411,29 @@ describe('Qwen descriptions before consent', () => {
     expect(prepare).not.toHaveBeenCalled()
   })
 
+  it('Klein v2 asks what the lettering covers only to redo a cloud result; Klein v1 never asks', async () => {
+    const { backend, regionId } = await opened()
+    const prepare = vi.spyOn(backend, 'prepareCloudConsent')
+    const first = runRegionMenuItem(`engine:${CLOUD_ENGINE}`, current(regionId))
+    await answerConsent('confirm')
+    expect(await first).toBe(true)
+    expect(prepare.mock.calls[0][0].recipe).toMatchObject({ recipe_id: 'mc-flux2-klein-inpaint-v2' })
+    expect(prepare.mock.calls[0][0].recipe.qwen_edit).toBeUndefined()
+
+    const again = rerunMask(current(regionId), 'retry')
+    await vi.waitFor(() => expect(app.modals.at(-1)?.kind).toBe('qwenPrompt'))
+    expect(app.modals.at(-1).props.flux).toBe(true)
+    closeModal({ target: 'sound_effect', description: ' A brick wall ' })
+    expect(await again).toBe(true)
+    expect(prepare.mock.calls[1][0].recipe.qwen_edit).toEqual({ target: 'sound_effect', description: 'A brick wall' })
+
+    const info = await backend.getCloudModelInfo({ provider: 'modal', profileId: PROFILE.id })
+    vi.spyOn(backend, 'getCloudModelInfo').mockResolvedValue({ ...info, pinnedRecipeId: 'mc-flux2-klein-inpaint-v1' })
+    await rerunMask(current(regionId), 'retry')
+    expect(prepare.mock.calls[2][0].recipe.qwen_edit).toBeUndefined()
+    expect(app.modals).toEqual([])
+  })
+
   it('an older Qwen worker is refused before the description can be silently ignored', async () => {
     const { backend, regionId } = await opened()
     vi.spyOn(backend, 'getCloudModelInfo').mockResolvedValue({ ...model, pinnedRecipeId: 'mc-qwen-image-edit-2511-v3' })
@@ -416,34 +442,4 @@ describe('Qwen descriptions before consent', () => {
     expect(prepare).not.toHaveBeenCalled()
     expect(app.notices.at(-1).key).toBe('qwen.prompt.updateRequired')
   })
-})
-
-it('a review retry acquires a fresh grant with the revised description before rendering again', async () => {
-  const { backend, regionId } = await opened()
-  const model = { pinnedModelId: 'Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32', pinnedRecipeId: 'mc-qwen-image-edit-2511-v4',
-    pinnedModelRevision: 'a'.repeat(40), preprocessingVersion: '2.0.0', nativeMaskConditioning: false }
-  vi.spyOn(backend, 'getCloudModelInfo').mockResolvedValue(model)
-  vi.spyOn(backend, 'prepareCloudConsent').mockResolvedValue({ proposalId: 'retry-prop', standing: true })
-  const confirm = vi.spyOn(backend, 'confirmCloudConsent').mockResolvedValue({ nonce: 'second-grant' })
-  vi.spyOn(backend, 'resolveQwenReview').mockResolvedValue(undefined)
-  let finishFirst
-  const call = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve }))
-    .mockResolvedValueOnce({ status: 'applied' })
-  const grant = { attemptId: 'att-' + 'a'.repeat(24), params: { grantNonce: 'first-grant',
-    executionTarget: { type: 'modal', profile_id: PROFILE.id }, intent: { action: 'cleanAnyway' },
-    recipe: { model_id: model.pinnedModelId, qwen_edit: { target: 'sound_effect', description: 'Black letters' } } } }
-  const work = runCloudJob(grant, { chapterId: CHAPTER, pageIndex: 0, regionId }, call,
-    (answer) => ({ phase: answer.status === 'applied' ? 'committed' : 'cancelled' }))
-  reviewQwen({ attemptId: grant.attemptId, before: 'data:image/png;base64,AA==', after: 'data:image/png;base64,AQ==',
-    edit: grant.params.recipe.qwen_edit, canRetry: true }, backend)
-  closeModal({ choice: 'retry', edit: { target: 'sound_effect', description: 'Also the thick strokes at the top edge' } })
-  finishFirst({ status: 'cancelled' })
-  await vi.waitFor(() => expect(app.modals.at(-1)?.kind).toBe('qwenPrompt'))
-  expect(app.modals.at(-1).props.initial.description).toBe('Also the thick strokes at the top edge')
-  expect(call).toHaveBeenCalledTimes(1)
-  closeModal({ target: 'sound_effect', description: 'Also the thick strokes at the top edge' })
-  expect(await work).toEqual({ status: 'applied' })
-  expect(confirm).toHaveBeenCalledOnce()
-  expect(call.mock.calls[1][0].grantNonce).toBe('second-grant')
-  expect(call.mock.calls[1][0].recipe.qwen_edit.description).toBe('Also the thick strokes at the top edge')
 })

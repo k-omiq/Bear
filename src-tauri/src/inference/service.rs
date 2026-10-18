@@ -33,7 +33,7 @@
 //! stops the wait as well.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -57,7 +57,7 @@ use cleaner_core::fit::{self, EdgeMap};
 use cleaner_core::ingest::sha256_hex;
 use cleaner_core::patch::{CloudRecord, Engine, Patch, Provenance};
 use cleaner_core::project::Job;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::inference::config::{compute_canonical_endpoint_fingerprint, InferenceConfig};
@@ -68,7 +68,7 @@ use crate::inference::consent::{
 };
 use crate::inference::http::{
     BoundRuntimeCredential, CloudEndpointTarget, CloudHttpClient, HttpTransportError,
-    RuntimeCredential,
+    RuntimeCredential, RETRY_SEED_OPERATION,
 };
 use crate::inference::journal::{
     AttemptJournal, AttemptLockGuard, AttemptPhase, AttemptRecord, CreateAttemptIntent,
@@ -131,11 +131,6 @@ pub enum InferenceServiceError {
     RemoteJobCancelled(String),
 
     /// The user cancelled the render and it stopped waiting.
-    #[error("Qwen result awaits human review")]
-    ReviewRequired,
-    #[error("Qwen result rejected; a revised description was requested")]
-    ReviewRetry,
-
     #[error("cloud render was cancelled")]
     Cancelled,
 
@@ -165,8 +160,6 @@ impl InferenceServiceError {
     /// path, a remote handle or words a gateway chose.
     pub fn code(&self) -> &'static str {
         match self {
-            Self::ReviewRequired => "qwen_review_required",
-            Self::ReviewRetry => "qwen_retry",
             Self::CloudDisabled => "cloud_disabled",
             Self::ProfileChanged => "cloud_run_profile_changed",
             Self::LocalTargetNotAllowed => "target_invalid",
@@ -200,7 +193,7 @@ impl InferenceServiceError {
     /// The phase a render that failed with this error ends in.
     pub fn phase(&self) -> RenderPhase {
         match self {
-            Self::Cancelled | Self::ReviewRetry | Self::RemoteJobCancelled(_) => RenderPhase::Cancelled,
+            Self::Cancelled | Self::RemoteJobCancelled(_) => RenderPhase::Cancelled,
             Self::AmbiguousSubmission(_) => RenderPhase::Unknown,
             _ => RenderPhase::Failed,
         }
@@ -320,7 +313,6 @@ pub enum RenderPhase {
     Queued,
     Running,
     Downloading,
-    Reviewing,
     Compositing,
     Committed,
     Failed,
@@ -344,18 +336,6 @@ pub struct CloudAttemptProgress {
     pub error_code: Option<&'static str>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct QwenPreview {
-    pub attempt_id: String, pub region_id: String, pub chapter_id: String, pub page_index: u32,
-    pub before: String, pub after: String,
-    pub edit: Option<cleaner_core::engines::render::QwenEdit>, pub can_retry: bool,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReviewChoice { Use, Discard, Retry }
-pub type ReviewSink = Arc<dyn Fn(&QwenPreview) -> Result<ReviewChoice, InferenceServiceError> + Send + Sync>;
-
 /// Where a render's phases go: the Tauri layer emits them as events, tests
 /// collect them.
 pub type ProgressSink = Arc<dyn Fn(&CloudAttemptProgress) + Send + Sync>;
@@ -365,6 +345,11 @@ const CANCEL_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 /// The gateway's window to confirm a cancel before the render stops waiting
 /// for it. An unconfirmed cancel stays `CancelRequested` for recovery.
 const CANCEL_CONFIRM_POLLS: u32 = 10;
+/// The journal's code and message for a cached result that fails validation.
+const RESULT_CORRUPT: (&str, &str) = ("result_corrupt", "the cached result failed validation");
+/// How many polls in a row must answer "no such job" before a resumed wait
+/// ends its attempt as failed.
+const UNKNOWN_JOB_POLLS: u32 = 3;
 const CANCEL_CONFIRM_INTERVAL: Duration = Duration::from_millis(200);
 /// How long a journal write waits out a lock that another command holds for
 /// the length of one write of its own.
@@ -389,6 +374,17 @@ pub fn attempt_id_for_nonce(grant_nonce: &str) -> String {
 /// The chapter a job is. A library job lives at `<project>/<chapter>.mtclean`
 /// ([`crate::library::Library::job_path`]), so the id is the file's stem and
 /// not its folder's name, which is the project's.
+/// Why a cloud result is flagged for review when its region carries no
+/// reason of its own. A Qwen result always is: it is applied with nobody
+/// asked first, and the flag is where the user finds it to keep or reject it.
+/// Any other model is flagged where it generated texture unmasked, on a
+/// region too `complex` to fit.
+fn generated_review(recipe: &RenderRecipe, complex: bool) -> Option<String> {
+    let qwen = recipe.model_id.starts_with(crate::inference::cloud_clean::QWEN_MODEL_PREFIX);
+    (qwen || (complex && !recipe.native_mask_conditioning))
+        .then(|| "review.reason.checkGeneratedTexture".to_owned())
+}
+
 fn chapter_id_of(job_path: &Path) -> String {
     job_path
         .file_stem()
@@ -476,32 +472,6 @@ impl Drop for LiveRender {
     fn drop(&mut self) {
         live_renders().remove(&self.attempt_id);
     }
-}
-
-/// Human review releases the journal lock, but still has one owner. This
-/// claim is separate from LiveRender because a live render also reviews.
-struct ReviewOwner {
-    attempt_id: String,
-}
-
-fn active_reviews() -> MutexGuard<'static, HashSet<String>> {
-    static REVIEWS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    REVIEWS.get_or_init(Default::default).lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-impl ReviewOwner {
-    fn register(attempt_id: &str) -> Result<Self, InferenceServiceError> {
-        if !active_reviews().insert(attempt_id.to_owned()) {
-            return Err(InferenceServiceError::Journal(JournalError::AttemptLocked {
-                attempt_id: attempt_id.to_owned(),
-            }));
-        }
-        Ok(Self { attempt_id: attempt_id.to_owned() })
-    }
-}
-
-impl Drop for ReviewOwner {
-    fn drop(&mut self) { active_reviews().remove(&self.attempt_id); }
 }
 
 /// Reports one render's phases to the sink, each change once.
@@ -741,8 +711,6 @@ pub struct InferenceService {
     secrets: Option<Arc<SecretManager>>,
     custom_client: Option<CloudHttpClient>,
     progress: Option<ProgressSink>,
-    review: Option<ReviewSink>,
-    review_retry: bool,
     dispatch_guard: Option<DispatchGuard>,
     #[cfg(test)]
     attachment_fault: Option<&'static str>,
@@ -766,8 +734,6 @@ impl InferenceService {
             secrets: None,
             custom_client: None,
             progress: None,
-            review: None,
-            review_retry: true,
             dispatch_guard: None,
             #[cfg(test)]
             attachment_fault: None,
@@ -789,8 +755,6 @@ impl InferenceService {
             secrets: Some(secrets),
             custom_client: None,
             progress: None,
-            review: None,
-            review_retry: true,
             dispatch_guard: None,
             #[cfg(test)]
             attachment_fault: None,
@@ -810,9 +774,6 @@ impl InferenceService {
         self.progress = Some(sink);
         self
     }
-
-    pub fn with_review(mut self, sink: ReviewSink) -> Self { self.review = Some(sink); self }
-    pub fn with_review_retry(mut self, allowed: bool) -> Self { self.review_retry = allowed; self }
 
     /// Live app selection check for the last gap between grant consumption
     /// and the HTTP submit. Isolated services can supply their own guard.
@@ -1113,7 +1074,16 @@ impl InferenceService {
         );
 
         let wire_recipe: WireRenderRecipe = recipe.clone().into();
-        let sampling = recipe.sampling();
+        // The recipe's sampling has one source. A retry of a region adds to
+        // its seed here, so that it is a new render and not the same image
+        // again; a first attempt carries the seed unchanged. A gateway that
+        // does not say it takes a later seed refuses one, so it gets the
+        // recipe's, as before.
+        let mut sampling = recipe.sampling();
+        let sent_before = self.journal.sent_attempts(Some(&chapter_id_of(job_path)), Some(page_index), region_id)?;
+        if sent_before > 0 && client.serves_operation(RETRY_SEED_OPERATION).unwrap_or(false) {
+            sampling.seed += sent_before * recipe.retry_seed_stride();
+        }
 
         let req_meta = JobRequestMetadata {
             protocol_version: PROTOCOL_VERSION.to_string(),
@@ -1252,6 +1222,7 @@ impl InferenceService {
             &req_meta,
             poll_opts,
             true,
+            false,
         )?;
 
         // 9. Download, cache and attach
@@ -1284,9 +1255,11 @@ impl InferenceService {
         req_meta: &JobRequestMetadata,
         poll_opts: &PollOptions,
         watch_journal: bool,
+        unknown_job_ends: bool,
     ) -> Result<JobStatusResponse, InferenceServiceError> {
         let start = Instant::now();
         let mut polls = 0;
+        let mut not_found = 0;
         loop {
             if self.journal.get_record(attempt_id).is_ok_and(|record| matches!(record.phase, AttemptPhase::Abandoned { .. })) {
                 return Err(InferenceServiceError::Cancelled);
@@ -1300,14 +1273,27 @@ impl InferenceService {
             polls += 1;
             // A polling fault leaves the durable handle in place: the next
             // poll asks again and nothing is resubmitted.
-            if let Ok(status) = client.get_job_status(handle, req_meta) {
+            let answer = client.get_job_status(handle, req_meta);
+            // A job the gateway no longer knows can never finish. Only a wait
+            // that resumes an old attempt ends it, and only on the same answer
+            // several polls in a row: a render just accepted is not failed on
+            // one stray answer.
+            not_found = if matches!(answer, Err(HttpTransportError::UnexpectedStatus { status: 404 })) { not_found + 1 } else { 0 };
+            if unknown_job_ends && not_found >= UNKNOWN_JOB_POLLS {
+                let (error_code, message) = ("remote_job_not_found", "the gateway does not know this job");
+                if let Ok(guard) = self.lock_attempt(attempt_id) {
+                    let _ = self.journal.record_failed(&guard, error_code, message);
+                }
+                return Err(InferenceServiceError::RemoteJobFailed { error_code: error_code.into(), message: message.into() });
+            }
+            if let Ok(status) = answer {
                 match status.status {
                     JobExecutionStatus::Pending => reporter.enter(RenderPhase::Queued),
                     JobExecutionStatus::Running => reporter.enter(RenderPhase::Running),
                     JobExecutionStatus::Completed => return Ok(status),
                     JobExecutionStatus::Failed => {
                         if let Ok(guard) = self.lock_attempt(attempt_id) {
-                            let _ = self.journal.record_failed(&guard);
+                            let _ = self.journal.record_remote_failure(&guard, status.error.as_ref());
                         }
                         let err = status.error.unwrap_or(TypedError {
                             error_code: "remote_failure".into(),
@@ -1363,10 +1349,8 @@ impl InferenceService {
         }
         let _ = client.cancel_job(handle, req_meta);
         for _ in 0..CANCEL_CONFIRM_POLLS {
-            match client
-                .get_job_status(handle, req_meta)
-                .map(|status| status.status)
-            {
+            let status = client.get_job_status(handle, req_meta);
+            match status.as_ref().map(|status| status.status) {
                 Ok(JobExecutionStatus::Cancelled) => {
                     if let Ok(guard) = self.lock_attempt(attempt_id) {
                         let _ = self.journal.record_cancelled(&guard);
@@ -1375,7 +1359,7 @@ impl InferenceService {
                 }
                 Ok(JobExecutionStatus::Failed) => {
                     if let Ok(guard) = self.lock_attempt(attempt_id) {
-                        let _ = self.journal.record_failed(&guard);
+                        let _ = self.journal.record_remote_failure(&guard, status.as_ref().ok().and_then(|status| status.error.as_ref()));
                     }
                     break;
                 }
@@ -1443,10 +1427,8 @@ impl InferenceService {
 
         #[cfg(test)]
         self.fail_attachment_at("cache_result")?;
-        drop(guard);
-        if req_meta.recipe.recipe_id == "mc-qwen-image-edit-2511-v4" { reporter.enter(RenderPhase::Reviewing); }
-        self.review_cached(attempt_id, job_path)?;
-        let guard = self.lock_attempt(attempt_id)?;
+        // Applied at once, whatever the model: nobody is asked first. Only
+        // the user rejects a result, afterwards (`library::reject_result`).
         reporter.enter(RenderPhase::Compositing);
         let (_patch_id, region) = self.attach_cached(&guard, job_path, source_idx, &decoded)?;
         Ok(region)
@@ -1504,9 +1486,6 @@ impl InferenceService {
         };
 
         let (source_idx, attached) = self.attachment_site(job_path, &record, source_idx)?;
-        if record.recipe_id == "mc-qwen-image-edit-2511-v4" && !record.review_accepted && attached.is_none() {
-            return Err(InferenceServiceError::ReviewRequired);
-        }
 
         // Taken from the record, which is what the grant and the crop were
         // bound to: the attach re-reads the project and refuses any drift.
@@ -1558,60 +1537,6 @@ impl InferenceService {
         #[cfg(test)]
         self.fail_attachment_at("confirm_committed")?;
         Ok((patch_id, region))
-    }
-
-    fn review_cached(&self, attempt_id: &str, job_path: &Path) -> Result<(), InferenceServiceError> {
-        let record = self.journal.get_record(attempt_id)?;
-        if record.recipe_id != "mc-qwen-image-edit-2511-v4" || record.review_accepted || !matches!(record.phase, AttemptPhase::ResultCached { .. }) { return Ok(()); }
-        let review = self.review.as_ref().ok_or(InferenceServiceError::ReviewRequired)?;
-        let _owner = ReviewOwner::register(attempt_id)?;
-        let (record, decoded) = {
-            let guard = self.lock_attempt(attempt_id)?;
-            // A previous owner may have settled between the initial read
-            // and this claim. Never ask again or overwrite its decision.
-            let record = self.journal.read_record_locked(&guard)?;
-            if record.review_accepted || !matches!(record.phase, AttemptPhase::ResultCached { .. }) { return Ok(()); }
-            (record, self.journal.read_cached_crop(&guard)?)
-        };
-        let preview = self.qwen_preview(job_path, &record, &decoded)?;
-        // No project or attempt lock is held while a human decides.
-        let choice = review(&preview)?;
-        let guard = self.lock_attempt(attempt_id)?;
-        self.journal.record_review(&guard, choice == ReviewChoice::Use)?;
-        if choice != ReviewChoice::Use {
-            return Err(if choice == ReviewChoice::Retry { InferenceServiceError::ReviewRetry } else { InferenceServiceError::Cancelled });
-        }
-        Ok(())
-    }
-
-    fn qwen_preview(&self, job_path: &Path, record: &AttemptRecord, decoded: &DecodedResultCrop) -> Result<QwenPreview, InferenceServiceError> {
-        use base64::Engine;
-        let _lock = run::lock_job(job_path).map_err(|e| InferenceServiceError::JobManifest(e.to_string()))?;
-        let job = Job::open(job_path).map_err(|e| InferenceServiceError::JobManifest(e.to_string()))?;
-        let source_idx = Library::resolve_page(&job.project, record.page_index.unwrap_or_default() as usize)
-            .ok_or_else(|| InferenceServiceError::StaleAttachment("page mapping changed".into()))?;
-        let bytes = std::fs::read(job.source_path(source_idx).ok_or_else(|| InferenceServiceError::JobManifest("source missing".into()))?)?;
-        if sha256_hex(&bytes) != record.source_image_hash { return Err(InferenceServiceError::StaleAttachment("source changed".into())); }
-        let region = load_cloud_region(&job, &record.region_id, &record.source_image_hash)?;
-        if region.revision != record.region_revision || region.source_idx != source_idx { return Err(InferenceServiceError::StaleAttachment("region changed".into())); }
-        let page = job.display_page(source_idx, &bytes).map_err(|e| InferenceServiceError::JobManifest(e.to_string()))?;
-        let cloud = region.prepare(&job, &page, Preprocessing::of(&record.preprocessing_version).map_err(|e| InferenceServiceError::StaleAttachment(e.to_string()))?)
-            .map_err(InferenceServiceError::JobManifest)?;
-        let prepared = &cloud.prepared;
-        let crop = prepared.crop();
-        let original = encode_rgb8_png(crop.w, crop.h, prepared.image_rgb8())?;
-        let hint = encode_gray8_png(crop.w, crop.h, prepared.hint_gray8())?;
-        if record.input_sha256.as_deref().is_some_and(|hash| hash != cloud.input.digest)
-            || record.predecessors_sha256.as_deref().is_some_and(|hash| hash != cloud.input.predecessors)
-            || sha256_hex(&original) != record.crop_sha256 || sha256_hex(&hint) != record.hint_sha256 {
-            return Err(InferenceServiceError::StaleAttachment("preview input changed".into()));
-        }
-        let (_, after) = prepared.preview_rgb8(&decoded.as_generated_crop()).map_err(|e| InferenceServiceError::JobManifest(e.to_string()))?;
-        let url = |png: Vec<u8>| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png));
-        Ok(QwenPreview { attempt_id: record.attempt_id.clone(), region_id: record.region_id.clone(),
-            chapter_id: record.chapter_id.clone().unwrap_or_default(), page_index: record.page_index.unwrap_or_default(),
-            before: url(original), after: url(encode_rgb8_png(crop.w, crop.h, &after)?),
-            edit: record.qwen_edit.clone(), can_retry: self.review_retry })
     }
 
     /// Where an attempt's result goes, and the region as it stands when the
@@ -1894,6 +1819,9 @@ impl InferenceService {
             "reach_sha256": cloud.reach_digest,
         });
         let tone = rendered.tone.as_ref().map(|tone| tone.provenance());
+        // The detected region as it stands before its result replaces it: one
+        // side of the undo step the commit records below.
+        let mut clean_before = None;
 
         match cur.kind {
             CloudRegionKind::Patch(stored) => {
@@ -1904,7 +1832,7 @@ impl InferenceService {
                         .and_then(|value| value.as_str())
                         .map(str::to_owned),
                     _ => record.review_state,
-                };
+                }.or_else(|| generated_review(recipe, false));
                 if let Some(params) = updated_patch.provenance.params_snapshot.as_object_mut() {
                     params.remove("review_before_input_change");
                 }
@@ -1969,16 +1897,15 @@ impl InferenceService {
                         created: run::now(),
                     },
                 };
+                clean_before = crate::history::side_now(&chapter_id, &job.project, source_idx, region_id);
                 let replaced = job
                     .complete_detection(
                         region_id,
                         &patch,
                         detection.review_state.clone().or_else(|| {
-                            let complex = detection.fit.is_some_and(|fit| {
+                            generated_review(recipe, detection.fit.is_some_and(|fit| {
                                 fit.route == cleaner_core::fit::Route::Inpaint
-                            });
-                            (complex && !recipe.native_mask_conditioning)
-                                .then(|| "review.reason.checkGeneratedTexture".to_owned())
+                            }))
                         }),
                     )
                     .map_err(|e| InferenceServiceError::JobManifest(e.to_string()))?;
@@ -1992,6 +1919,10 @@ impl InferenceService {
         crate::underlay::refresh_dependencies(&mut job, region_id)
             .map_err(InferenceServiceError::JobManifest)?;
         crate::library::invalidate_manifest_cache(job_path);
+        // Every generated result is one undo step, written here under the
+        // job's lock and not by the interface afterwards: a batch commits
+        // while another chapter may be the open one.
+        crate::history::record_clean(job_path, &chapter_id, &job.project, source_idx, region_id, clean_before);
 
         let (api_region, _) = crate::library::region_and_status(
             &chapter_id_of(job_path),
@@ -2071,12 +2002,16 @@ impl InferenceService {
     /// Settle what can be settled about an attempt without the network.
     ///
     /// An interrupted submission becomes `AmbiguousUnknown` and is never
-    /// resubmitted; a cached result is attached (`AlreadyCommitted`), or
-    /// refused as [`InferenceServiceError::StaleAttachment`] and kept cached
-    /// when its region has moved on or `job_path` is unknown; an accepted job
+    /// resubmitted. A cached result gets one try at its attach: it is attached
+    /// (`AlreadyCommitted`), or, when it can never be (its region, page or
+    /// chapter changed or is gone, or the cached file is damaged), its attempt
+    /// is recorded failed and comes back `Terminal`, so the region is free to
+    /// be cleaned again. A chapter that cannot be read at this moment is an
+    /// error and the attempt is kept for the next recovery. An accepted job
     /// comes back as `ResumePolling` or `ResumeCancelPolling` for
     /// [`Self::resume_cloud_render`]. Everything else is the journal's own
-    /// decision, unchanged.
+    /// decision, unchanged. The rule is the table in `docs/cloud-journal.md`
+    /// section 4.3.
     pub fn recover_attempt_locally(
         &self,
         attempt_id: &str,
@@ -2088,26 +2023,36 @@ impl InferenceService {
     pub(crate) fn recover_attempt_with_snapshot(
         &self, attempt_id: &str, job_path: Option<&Path>, snapshot: Option<&RecoveryAuditSnapshot>,
     ) -> Result<RecoveryDecision, InferenceServiceError> {
-        if let Some(path) = job_path {
-            // A crash may leave validated result files beside an Accepted
-            // journal entry. Reconcile those files before deciding whether
-            // human review is required, without holding the lock for review.
-            {
-                let guard = self.lock_attempt(attempt_id)?;
-                self.journal.recover_attempt(&guard)?;
-            }
-            self.review_cached(attempt_id, path)?;
-        }
         let guard = self.lock_attempt(attempt_id)?;
         match self.journal.recover_attempt(&guard)? {
             RecoveryDecision::ResultCachedReadyForAttach { .. }
             | RecoveryDecision::AttachmentPendingVerification { .. } => {
-                let job_path = job_path.ok_or_else(|| {
-                    InferenceServiceError::StaleAttachment("chapter no longer in library".into())
-                })?;
-                let decoded = self.journal.read_cached_crop(&guard)?;
-                let (patch_id, _) = self.attach_cached(&guard, job_path, None, &decoded)?;
-                Ok(RecoveryDecision::AlreadyCommitted { patch_id })
+                let Some(job_path) = job_path else {
+                    return self.end_unapplied(&guard, "region_changed", "the chapter is no longer in the library", true);
+                };
+                let decoded = match self.journal.read_cached_crop(&guard) {
+                    Ok(decoded) => decoded,
+                    Err(JournalError::Io(error)) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(JournalError::Io(error).into());
+                    }
+                    Err(JournalError::AttemptLocked { attempt_id }) => {
+                        return Err(JournalError::AttemptLocked { attempt_id }.into());
+                    }
+                    // Kept on disk: a damaged result is evidence.
+                    Err(_) => return self.end_unapplied(&guard, RESULT_CORRUPT.0, RESULT_CORRUPT.1, false),
+                };
+                match self.attach_cached(&guard, job_path, None, &decoded) {
+                    Ok((patch_id, _)) => Ok(RecoveryDecision::AlreadyCommitted { patch_id }),
+                    Err(
+                        InferenceServiceError::StaleAttachment(_)
+                        | InferenceServiceError::Journal(JournalError::StaleAttachment { .. }),
+                    ) => self.end_unapplied(&guard, "region_changed",
+                        "the region or its page changed before the result was applied", true),
+                    Err(error) => Err(error),
+                }
+            }
+            RecoveryDecision::CorruptedResultRetainedForInspection { .. } => {
+                self.end_unapplied(&guard, RESULT_CORRUPT.0, RESULT_CORRUPT.1, false)
             }
             decision @ RecoveryDecision::AlreadyCommitted { .. } => {
                 let record = self.journal.read_record_locked(&guard)?;
@@ -2139,6 +2084,16 @@ impl InferenceService {
         }
     }
 
+    /// End an attempt whose result can never be applied. Its region is then
+    /// an ordinary detected region again, and the next cloud clean plans it.
+    fn end_unapplied(
+        &self, guard: &AttemptLockGuard, error_code: &str, message: &str, drop_result: bool,
+    ) -> Result<RecoveryDecision, InferenceServiceError> {
+        self.journal.record_failed(guard, error_code, message)?;
+        if drop_result { self.journal.drop_cached_result(guard)?; }
+        Ok(RecoveryDecision::Terminal { message: message.into() })
+    }
+
     /// Whether a committed attempt's result is still what its region shows:
     /// the audit [`Self::recover_attempt_with_snapshot`] runs, and nothing
     /// else - no attach, no network, no change to the attempt. An answer
@@ -2163,6 +2118,16 @@ impl InferenceService {
     ) -> Result<bool, InferenceServiceError> {
         let job = &snapshot.job;
         if snapshot.records_user_replacement(record) { return Ok(true); }
+        // A result the user rejected or undid is set aside whole
+        // (`Job::restore_detection`), and its region is the detection it was
+        // rendered from, at the revision the attempt captured. That is the
+        // user's choice and not a lost result, whether or not the undo
+        // journal still holds the step.
+        if job.project.withdrawn_patches.iter().any(|patch| patch.id == record.region_id
+            && patch.provenance.cloud.as_ref().and_then(|cloud| cloud.attempt_id.as_deref()) == Some(record.attempt_id.as_str()))
+        {
+            return Ok(true);
+        }
         let patch = job.project.patches.iter().find(|patch| patch.id == record.region_id);
         let detection = job.project.detections.iter().find(|row| row.id == record.region_id);
         let Some(source_idx) = patch.map(|row| row.source_idx).or_else(|| detection.map(|row| row.source_idx)) else {
@@ -2331,6 +2296,7 @@ impl InferenceService {
             &req_meta,
             poll_opts,
             cancel_is_news,
+            true,
         )?;
         self.download_and_attach(
             reporter,
@@ -2349,8 +2315,9 @@ impl InferenceService {
     /// [`Self::recover_attempt_locally`], and then for an accepted job a wait
     /// bounded by `poll_opts`: a result that arrives is attached
     /// (`AlreadyCommitted`), a job still running stays `ResumePolling` (or
-    /// `ResumeCancelPolling`), and one the gateway failed or cancelled is
-    /// `Terminal`. Nothing is ever resubmitted.
+    /// `ResumeCancelPolling`), and one the gateway failed, cancelled or no
+    /// longer knows, or whose endpoint is no longer configured, is `Terminal`.
+    /// Nothing is ever resubmitted.
     pub fn recover_cloud_attempt(
         &self,
         attempt_id: &str,
@@ -2386,13 +2353,21 @@ impl InferenceService {
             ) => Ok(RecoveryDecision::Terminal {
                 message: err.to_string(),
             }),
+            // The endpoint the job was sent to is no longer configured, so
+            // nothing can ask for its result again.
+            Err(InferenceServiceError::ProfileChanged) => {
+                let message = "the endpoint this job was sent to is no longer configured";
+                let guard = self.lock_attempt(attempt_id)?;
+                self.journal.record_failed(&guard, "profile_removed", message)?;
+                Ok(RecoveryDecision::Terminal { message: message.into() })
+            }
             Err(err) => Err(err),
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -3755,17 +3730,24 @@ mod tests {
         use cleaner_core::fit::Route;
         use cleaner_core::project::DetectionFit;
 
-        for (name, route, existing, native_mask, expected) in [
-            ("complex", Route::Inpaint, None, false, Some("review.reason.checkGeneratedTexture")),
+        const QWEN: &str = "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32";
+        for (name, route, existing, native_mask, model, expected) in [
+            ("complex", Route::Inpaint, None, false, "flux-schnell", Some("review.reason.checkGeneratedTexture")),
             (
                 "existing",
                 Route::Inpaint,
                 Some("review.reason.unusuallyLarge"),
                 false,
+                "flux-schnell",
                 Some("review.reason.unusuallyLarge"),
             ),
-            ("flat", Route::Fill, None, false, None),
-            ("masked", Route::Inpaint, None, true, None),
+            ("flat", Route::Fill, None, false, "flux-schnell", None),
+            ("masked", Route::Inpaint, None, true, "flux-schnell", None),
+            // A Qwen result is flagged whatever its region is.
+            ("qwen-flat", Route::Fill, None, false, QWEN, Some("review.reason.checkGeneratedTexture")),
+            ("qwen-masked", Route::Inpaint, None, true, QWEN, Some("review.reason.checkGeneratedTexture")),
+            ("qwen-existing", Route::Fill, Some("review.reason.unusuallyLarge"), false, QWEN,
+                Some("review.reason.unusuallyLarge")),
         ] {
             let scratch = test_scratch(&format!("texture-review-{name}"));
             let (manifest, _) = setup_test_job(&scratch, "reg-1");
@@ -3786,11 +3768,20 @@ mod tests {
             let service = isolated_service(&scratch);
             let mut recipe = recipe_at(cleaner_core::engines::render::PREPROCESSING_VERSION);
             recipe.native_mask_conditioning = native_mask;
+            recipe.model_id = model.into();
             attach_white(&service, &manifest, "p-d0", &recipe, &recipe).unwrap();
             let job = Job::open(&manifest).unwrap();
             let record = job.project.patches.iter().find(|row| row.id == "p-d0").unwrap();
             assert_eq!(record.review_state.as_deref(), expected, "{name}");
             drop(job);
+
+            if name == "qwen-flat" {
+                // A result that was not flagged is, once Qwen renders it again.
+                attach_white(&service, &manifest, "reg-1", &recipe, &recipe).unwrap();
+                let reopened = Job::open(&manifest).unwrap();
+                let record = reopened.project.patches.iter().find(|row| row.id == "reg-1").unwrap();
+                assert_eq!(record.review_state.as_deref(), expected, "a Qwen rerender is flagged");
+            }
 
             if name == "complex" {
                 attach_white(&service, &manifest, "p-d0", &recipe, &recipe).unwrap();
@@ -4685,16 +4676,23 @@ mod tests {
         PendingTimeout,
         WrongIdentityTimeout,
         NotEnqueued(u16),
+        /// `failed`, with the worker's own code and message.
+        Fails,
+        /// The gateway no longer knows the job: every status request is a 404.
+        Forgotten,
     }
+
+    /// What the fake gateway's failed job says of itself.
+    const FAKE_FAILURE: (&str, &str) = ("edit_not_applied", "Qwen did not make a sufficient edit after three seeds.");
 
     /// One parsed HTTP/1.1 request.
-    struct FakeRequest {
-        method: String,
-        path: String,
-        body: Vec<u8>,
+    pub(crate) struct FakeRequest {
+        pub(crate) method: String,
+        pub(crate) path: String,
+        pub(crate) body: Vec<u8>,
     }
 
-    fn read_fake_request(stream: &mut std::net::TcpStream) -> Option<FakeRequest> {
+    pub(crate) fn read_fake_request(stream: &mut std::net::TcpStream) -> Option<FakeRequest> {
         let mut buf = Vec::new();
         let mut chunk = [0u8; 8192];
         let header_end = loop {
@@ -4723,7 +4721,7 @@ mod tests {
         Some(FakeRequest { method, path, body })
     }
 
-    fn fake_respond(
+    pub(crate) fn fake_respond(
         stream: &mut std::net::TcpStream,
         status: &str,
         content_type: &str,
@@ -4738,7 +4736,7 @@ mod tests {
     }
 
     /// The JSON metadata part of a multipart submission.
-    fn submission_metadata(body: &[u8]) -> serde_json::Value {
+    pub(crate) fn submission_metadata(body: &[u8]) -> serde_json::Value {
         let needle = b"{\"protocol_version\"";
         let start = body
             .windows(needle.len())
@@ -4752,7 +4750,7 @@ mod tests {
     }
 
     /// A result the size the request asked for.
-    fn fake_result_png(meta: &serde_json::Value) -> Vec<u8> {
+    pub(crate) fn fake_result_png(meta: &serde_json::Value) -> Vec<u8> {
         let width = meta["width"].as_u64().unwrap() as u32;
         let height = meta["height"].as_u64().unwrap() as u32;
         let raster = cleaner_core::image::Raster {
@@ -4770,7 +4768,7 @@ mod tests {
     }
 
     /// The identity every job answer repeats back from the request.
-    fn fake_job_identity(meta: &serde_json::Value) -> serde_json::Value {
+    pub(crate) fn fake_job_identity(meta: &serde_json::Value) -> serde_json::Value {
         serde_json::json!({
             "handle": FAKE_HANDLE,
             "job_id": meta["job_id"],
@@ -4792,6 +4790,8 @@ mod tests {
         results: Arc<AtomicUsize>,
         metadata: Arc<Mutex<Option<serde_json::Value>>>,
         finished: Arc<AtomicBool>,
+        /// A gateway from before `jobs.retry_seed`: it does not list it.
+        old: Arc<AtomicBool>,
     }
 
     struct FakeGateway {
@@ -4872,6 +4872,12 @@ mod tests {
                     .expect("a submission first")
             };
             match (request.method.as_str(), request.path.as_str()) {
+                ("GET", "/mc/v1/capabilities") => {
+                    let mut operations = vec!["jobs.submit", "jobs.status", "jobs.result", "jobs.cancel"];
+                    if !self.old.load(Ordering::SeqCst) { operations.push(RETRY_SEED_OPERATION); }
+                    let body = serde_json::json!({"protocol_version": "1.0.0", "provider": "modal", "operations": operations});
+                    fake_respond(stream, "200 OK", "application/json", body.to_string().as_bytes());
+                }
                 ("POST", "/mc/v1/jobs") => {
                     self.submits.fetch_add(1, Ordering::SeqCst);
                     if script == JobScript::DropsSubmission {
@@ -4923,8 +4929,14 @@ mod tests {
                 }
                 ("GET", path) if path == job => {
                     let poll = self.polls.fetch_add(1, Ordering::SeqCst);
+                    if script == JobScript::Forgotten {
+                        let body = serde_json::json!({"error_code": "not_found", "message": "Job handle not found"});
+                        fake_respond(stream, "404 Not Found", "application/json", body.to_string().as_bytes());
+                        return;
+                    }
                     let cancelled = self.cancels.load(Ordering::SeqCst) > 0;
                     let status = match script {
+                        JobScript::Fails => "failed",
                         JobScript::Completes => ["pending", "running", "completed"][poll.min(2)],
                         JobScript::AcceptedTimeout | JobScript::WrongIdentityTimeout => "completed",
                         JobScript::PendingTimeout => "pending",
@@ -4939,6 +4951,9 @@ mod tests {
                     body["status"] = status.into();
                     body["handle"] = handle.into();
                     if script == JobScript::WrongIdentityTimeout { body["attempt_id"] = "different-attempt".into(); }
+                    if status == "failed" {
+                        body["error"] = serde_json::json!({"error_code": FAKE_FAILURE.0, "message": FAKE_FAILURE.1});
+                    }
                     if status == "completed" {
                         let png = fake_result_png(&meta);
                         body["result_digest"] = sha256_hex(&png).into();
@@ -5082,22 +5097,43 @@ mod tests {
         (fixture, service)
     }
 
+    /// A cached Qwen result is applied at once, with nobody asked.
     #[test]
-    fn qwen_recovery_requires_review_and_retains_the_exact_guidance() {
+    fn qwen_recovery_applies_the_result_at_once_and_retains_the_exact_guidance() {
         let (fixture, service) = qwen_cached_fixture("qwen-unreviewed");
-        let original = std::fs::read(&fixture.manifest).unwrap();
-        assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)), Err(InferenceServiceError::ReviewRequired)));
-        assert_eq!(std::fs::read(&fixture.manifest).unwrap(), original);
+        for _ in 0..2 {
+            assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(),
+                RecoveryDecision::AlreadyCommitted { .. }));
+        }
         let record = service.journal.get_record(&fixture.attempt_id()).unwrap();
-        assert!(!record.review_accepted);
-        assert!(matches!(record.phase, AttemptPhase::ResultCached { .. }));
+        assert!(matches!(record.phase, AttemptPhase::Committed { .. }));
         assert_eq!(record.qwen_edit, fixture.recipe.qwen_edit);
         assert_eq!(compute_request_digest(&record.to_request_metadata()), record.request_digest);
+        assert_eq!(fixture.committed_patch().provenance.params_snapshot["qwen_edit"]["description"], "Letters beside the hand");
+        assert_eq!(review_state_of(&fixture).as_deref(), Some("review.reason.checkGeneratedTexture"));
+        let (fixture, service) = qwen_cached_fixture("qwen-sweep-unreviewed");
+        let (report, _) = crate::inference::commands::recover_all_attempts(&service, &|_| Some(fixture.manifest.clone()));
+        assert_eq!((report.attached.len(), report.needs_attention.len()), (1, 0));
+    }
+
+    /// A record an older build left waiting for a review, or marked reviewed,
+    /// is applied like any other: nothing reads `review_accepted`.
+    #[test]
+    fn a_qwen_result_cached_by_a_build_that_asked_first_is_applied() {
+        for reviewed in [false, true] {
+            let (fixture, service) = qwen_cached_fixture("qwen-old-record");
+            let mut record = service.journal.get_record(&fixture.attempt_id()).unwrap();
+            record.review_accepted = reviewed;
+            let directory = fixture.journal_dir.join("attempts").join(fixture.attempt_id());
+            std::fs::write(directory.join("journal.json"), serde_json::to_vec(&record).unwrap()).unwrap();
+            assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(),
+                RecoveryDecision::AlreadyCommitted { .. }));
+        }
     }
 
     #[test]
-    fn qwen_accepted_recovery_reviews_without_offering_an_unhandled_retry() {
-        let (fixture, service) = qwen_cached_fixture("qwen-accepted-review");
+    fn qwen_accepted_recovery_downloads_and_applies_the_result() {
+        let (fixture, service) = qwen_cached_fixture("qwen-accepted-recovery");
         let mut record = service.journal.get_record(&fixture.attempt_id()).unwrap();
         record.phase = AttemptPhase::Accepted { handle: FAKE_HANDLE.into() };
         let directory = fixture.journal_dir.join("attempts").join(fixture.attempt_id());
@@ -5106,133 +5142,60 @@ mod tests {
         std::fs::remove_file(directory.join("result_meta.json")).unwrap();
         let gateway = FakeGateway::start(JobScript::Completes);
         *gateway.seen.metadata.lock().unwrap() = Some(serde_json::to_value(record.to_request_metadata()).unwrap());
-        let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let count = Arc::clone(&seen);
-        let service = service.with_custom_client(gateway.client()).with_review_retry(false)
-            .with_review(Arc::new(move |preview| {
-                assert!(!preview.can_retry, "background recovery has no new-grant retry runner");
-                assert_eq!(preview.edit.as_ref().unwrap().description, "Letters beside the hand");
-                count.fetch_add(1, Ordering::SeqCst);
-                Ok(ReviewChoice::Use)
-            }));
+        let service = service.with_custom_client(gateway.client());
         assert!(matches!(service.recover_cloud_attempt(&fixture.attempt_id(), &fixture.manifest,
             &fixture.config, &PollOptions::default()).unwrap(), RecoveryDecision::AlreadyCommitted { .. }));
-        assert_eq!(seen.load(Ordering::SeqCst), 1);
         assert_eq!(FakeGateway::count(&gateway.seen.submits), 0);
         assert_eq!(FakeGateway::count(&gateway.seen.results), 1);
+        assert_eq!(review_state_of(&fixture).as_deref(), Some("review.reason.checkGeneratedTexture"));
     }
 
     #[test]
-    fn qwen_cache_written_before_journal_update_is_reviewed_on_first_recovery() {
-        for choice in [ReviewChoice::Use, ReviewChoice::Discard] {
-            let (fixture, service) = qwen_cached_fixture("qwen-cache-crash-review");
-            let before = std::fs::read(&fixture.manifest).unwrap();
-            let mut record = service.journal.get_record(&fixture.attempt_id()).unwrap();
-            // Simulate cache_result's crash boundary: metadata and PNG are
-            // durable, but the phase still names the accepted remote job.
-            record.phase = AttemptPhase::Accepted { handle: FAKE_HANDLE.into() };
-            let directory = fixture.journal_dir.join("attempts").join(fixture.attempt_id());
-            std::fs::write(directory.join("journal.json"), serde_json::to_vec(&record).unwrap()).unwrap();
-            let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let count = Arc::clone(&seen);
-            let path = fixture.manifest.clone();
-            let original = before.clone();
-            let service = service.with_review_retry(false).with_review(Arc::new(move |_| {
-                assert_eq!(std::fs::read(&path).unwrap(), original, "no attachment before review");
-                count.fetch_add(1, Ordering::SeqCst);
-                Ok(choice)
-            }));
-            let result = service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest));
-            assert_eq!(seen.load(Ordering::SeqCst), 1, "review must happen during the first recovery");
-            if choice == ReviewChoice::Use {
-                assert!(matches!(result.unwrap(), RecoveryDecision::AlreadyCommitted { .. }));
-                assert!(service.journal.get_record(&fixture.attempt_id()).unwrap().review_accepted);
-            } else {
-                assert!(matches!(result, Err(InferenceServiceError::Cancelled)));
-                assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
-                assert!(matches!(service.journal.get_record(&fixture.attempt_id()).unwrap().phase,
-                    AttemptPhase::Cancelled { .. }));
-            }
-        }
+    fn qwen_cache_written_before_journal_update_is_applied_on_first_recovery() {
+        let (fixture, service) = qwen_cached_fixture("qwen-cache-crash");
+        let mut record = service.journal.get_record(&fixture.attempt_id()).unwrap();
+        // Simulate cache_result's crash boundary: metadata and PNG are
+        // durable, but the phase still names the accepted remote job.
+        record.phase = AttemptPhase::Accepted { handle: FAKE_HANDLE.into() };
+        let directory = fixture.journal_dir.join("attempts").join(fixture.attempt_id());
+        std::fs::write(directory.join("journal.json"), serde_json::to_vec(&record).unwrap()).unwrap();
+        assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(),
+            RecoveryDecision::AlreadyCommitted { .. }));
+        assert!(matches!(service.journal.get_record(&fixture.attempt_id()).unwrap().phase,
+            AttemptPhase::Committed { .. }));
     }
 
+    /// The app never rejects a result (docs/fixes-2026-10-12/02). A Qwen
+    /// render ends committed with nobody asked, reports no review phase, and
+    /// its result carries the review flag the user finds it by.
     #[test]
-    fn overlapping_qwen_recoveries_keep_one_review_owner_and_preserve_the_candidate() {
-        let (fixture, service) = qwen_cached_fixture("qwen-review-overlap");
-        let before = std::fs::read(&fixture.manifest).unwrap();
-        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let release_rx = Mutex::new(release_rx);
-        let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let count = Arc::clone(&seen);
-        let service = service.with_review(Arc::new(move |_| {
-            count.fetch_add(1, Ordering::SeqCst);
-            entered_tx.send(()).unwrap();
-            release_rx.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
-            Ok(ReviewChoice::Use)
-        }));
-        std::thread::scope(|threads| {
-            let first = threads.spawn(|| service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)));
-            entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-            let second = service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest));
-            let while_waiting = service.journal.get_record(&fixture.attempt_id()).unwrap();
-            let unchanged = std::fs::read(&fixture.manifest).unwrap() == before;
-            let cached = {
-                let guard = service.journal.acquire_lock(&fixture.attempt_id()).unwrap();
-                service.journal.read_cached_crop(&guard).is_ok()
-            };
-            // Release even if the subsequent assertion fails, so the first
-            // thread cannot keep the test waiting on a human decision.
-            release_tx.send(()).unwrap();
-            assert!(matches!(second, Err(InferenceServiceError::Journal(JournalError::AttemptLocked { .. }))));
-            assert!(matches!(while_waiting.phase, AttemptPhase::ResultCached { .. }));
-            assert!(!while_waiting.review_accepted);
-            assert!(unchanged && cached, "overlapping recovery must leave the candidate intact");
-            assert!(matches!(first.join().unwrap().unwrap(), RecoveryDecision::AlreadyCommitted { .. }));
+    fn a_qwen_render_is_applied_with_nobody_asked_and_carries_the_review_flag() {
+        let mut fixture = RenderFixture::new("qwen-live-render");
+        fixture.recipe.recipe_id = "mc-qwen-image-edit-2511-v4".into();
+        fixture.recipe.model_id = "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32".into();
+        fixture.recipe.qwen_edit = Some(cleaner_core::engines::render::QwenEdit {
+            target: cleaner_core::engines::render::QwenTarget::Auto, description: String::new(),
         });
-        assert_eq!(seen.load(Ordering::SeqCst), 1);
-        let record = service.journal.get_record(&fixture.attempt_id()).unwrap();
-        assert!(record.review_accepted);
-        assert!(matches!(record.phase, AttemptPhase::Committed { .. }));
-        assert_ne!(std::fs::read(&fixture.manifest).unwrap(), before);
-        let after = std::fs::read(&fixture.manifest).unwrap();
-        service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap();
-        assert_eq!(std::fs::read(&fixture.manifest).unwrap(), after);
-        assert_eq!(seen.load(Ordering::SeqCst), 1);
+        fixture.nonce = fixture.grant();
+        let gateway = FakeGateway::start(JobScript::Completes);
+        let service = fixture.service(&gateway);
+
+        let region = fixture.render(&service, &fast_polls()).unwrap();
+
+        assert_eq!(region.outcome, "cleaned");
+        assert!(region.mask.as_ref().unwrap().generated_texture_review);
+        assert_eq!(fixture.take_phases(), [
+            RenderPhase::Preparing, RenderPhase::Submitting, RenderPhase::Queued, RenderPhase::Running,
+            RenderPhase::Downloading, RenderPhase::Compositing, RenderPhase::Committed,
+        ]);
+        assert!(matches!(fixture.phase_on_disk(&service), AttemptPhase::Committed { .. }));
+        assert_eq!(review_state_of(&fixture).as_deref(), Some("review.reason.checkGeneratedTexture"));
     }
 
-    #[test]
-    fn qwen_discard_is_terminal_and_holds_no_locks_while_reviewing() {
-        let (fixture, service) = qwen_cached_fixture("qwen-discard");
-        let original = std::fs::read(&fixture.manifest).unwrap();
-        let journal = service.journal.clone();
-        let path = fixture.manifest.clone();
-        let service = service.with_review(Arc::new(move |preview| {
-            let _attempt_lock = journal.acquire_lock(&preview.attempt_id).unwrap();
-            let _project_lock = run::lock_job(&path).unwrap();
-            assert!(preview.before.starts_with("data:image/png;base64,"));
-            assert!(preview.after.starts_with("data:image/png;base64,"));
-            assert_eq!(preview.edit.as_ref().unwrap().description, "Letters beside the hand");
-            Ok(ReviewChoice::Discard)
-        }));
-        assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)), Err(InferenceServiceError::Cancelled)));
-        assert!(matches!(service.journal.get_record(&fixture.attempt_id()).unwrap().phase, AttemptPhase::Cancelled { .. }));
-        service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap();
-        assert_eq!(std::fs::read(&fixture.manifest).unwrap(), original);
-    }
-
-    #[test]
-    fn qwen_accept_commits_once_and_recovery_does_not_ask_again() {
-        let (fixture, service) = qwen_cached_fixture("qwen-accept");
-        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let seen = Arc::clone(&count);
-        let service = service.with_review(Arc::new(move |_| { seen.fetch_add(1, Ordering::SeqCst); Ok(ReviewChoice::Use) }));
-        for _ in 0..2 {
-            assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(), RecoveryDecision::AlreadyCommitted { .. }));
-        }
-        assert_eq!(count.load(Ordering::SeqCst), 1);
-        assert!(service.journal.get_record(&fixture.attempt_id()).unwrap().review_accepted);
-        assert_eq!(fixture.committed_patch().provenance.params_snapshot["qwen_edit"]["description"], "Letters beside the hand");
+    /// The review reason `reg-1` carries in the chapter.
+    fn review_state_of(fixture: &RenderFixture) -> Option<String> {
+        let job = Job::open(&fixture.manifest).unwrap();
+        job.project.patches.iter().find(|row| row.id == "reg-1").unwrap().review_state.clone()
     }
 
     fn detection_predecessor(fixture: &RenderFixture) {
@@ -5435,10 +5398,9 @@ mod tests {
         assert_eq!(report.needs_attention[0].reason, Some("repair_needed"));
     }
 
-    #[test]
-    fn changed_underlay_refuses_cached_attachment_and_preserves_evidence() {
-        let fixture = RenderFixture::new("changed-underlay-recovery");
-        let service = cached_fixture(&fixture);
+    /// An earlier patch lands under `reg-1`: its underlay, and so the input
+    /// the cached result was rendered from, is no longer what the page holds.
+    fn change_underlay(fixture: &RenderFixture) {
         let mut job = Job::open(&fixture.manifest).unwrap();
         let mut earlier = job.load_patch(&job.project.patches[0]).unwrap();
         earlier.id = "earlier".into();
@@ -5449,23 +5411,318 @@ mod tests {
         earlier.pixels.height = 16;
         earlier.pixels.data = vec![100; 16 * 16];
         job.complete_region(0, &earlier, None).unwrap();
+    }
+
+    /// `cached_fixture` one step on: the attach was prepared and did not finish.
+    fn pending_fixture(fixture: &RenderFixture) -> InferenceService {
+        let service = cached_fixture(fixture);
+        let guard = service.journal.acquire_lock(&fixture.attempt_id()).unwrap();
+        let record = service.journal.read_record_locked(&guard).unwrap();
+        service.journal.prepare_attachment(&guard, &ProjectRegionSnapshot {
+            source_image_hash: record.source_image_hash.clone(), region_id: record.region_id.clone(),
+            region_revision: record.region_revision, input_sha256: record.input_sha256.clone(),
+            predecessors_sha256: record.predecessors_sha256.clone(), crop_sha256: record.crop_sha256.clone(),
+            hint_sha256: record.hint_sha256.clone(),
+        }, "reg-1").unwrap();
+        assert!(matches!(service.journal.read_record_locked(&guard).unwrap().phase, AttemptPhase::AttachmentPending { .. }));
+        drop(guard);
+        service
+    }
+
+    /// `cached_fixture` one step back: accepted, with no result on disk yet.
+    /// The gateway is told the request, as if it had taken the submission.
+    fn accepted_fixture(fixture: &RenderFixture, gateway: &FakeGateway) -> InferenceService {
+        let service = cached_fixture(fixture);
+        let mut record = service.journal.get_record(&fixture.attempt_id()).unwrap();
+        record.phase = AttemptPhase::Accepted { handle: FAKE_HANDLE.into() };
+        let directory = fixture.journal_dir.join("attempts").join(fixture.attempt_id());
+        std::fs::write(directory.join("journal.json"), serde_json::to_vec(&record).unwrap()).unwrap();
+        std::fs::remove_file(directory.join("result.png")).unwrap();
+        std::fs::remove_file(directory.join("result_meta.json")).unwrap();
+        *gateway.seen.metadata.lock().unwrap() = Some(serde_json::to_value(record.to_request_metadata()).unwrap());
+        service.with_custom_client(gateway.client())
+    }
+
+    fn sweep(fixture: &RenderFixture, service: &InferenceService)
+        -> (crate::inference::commands::CloudRecoveryReportDto, Vec<(String, PathBuf)>) {
+        crate::inference::commands::recover_all_attempts(service, &|_| Some(fixture.manifest.clone()))
+    }
+
+    /// The end the sweep gave an attempt, and that its region is free: the
+    /// question a cloud clean's plan asks of the journal.
+    fn assert_ended(fixture: &RenderFixture, service: &InferenceService, code: &str) {
+        let phase = fixture.phase_on_disk(service);
+        assert!(matches!(&phase, AttemptPhase::Failed { error_code, .. } if error_code == code), "{phase:?}");
+        assert!(service.journal.unresolved_region_attempt(Some("chapter"), Some(0), "reg-1").unwrap().is_none());
+    }
+
+    fn cached_files(fixture: &RenderFixture) -> [bool; 2] {
+        let directory = fixture.journal_dir.join("attempts").join(fixture.attempt_id());
+        [directory.join("result.png").exists(), directory.join("result_meta.json").exists()]
+    }
+
+    // The sweep's table (docs/cloud-journal.md 4.3), one test per row. After
+    // it no attempt is unresolved except an unknown one.
+
+    /// Row `result_cached`: it goes on to attach, or ends when it never can.
+    #[test]
+    fn sweep_attaches_a_cached_result_or_ends_one_whose_region_changed() {
+        let fixture = RenderFixture::new("sweep-cached-attach");
+        let service = cached_fixture(&fixture);
+        let (report, waits) = sweep(&fixture, &service);
+        assert_eq!((report.attached.len(), report.released.len(), report.needs_attention.len(), waits.len()), (1, 0, 0, 0));
+        assert!(matches!(fixture.phase_on_disk(&service), AttemptPhase::Committed { .. }));
+
+        let fixture = RenderFixture::new("sweep-cached-changed");
+        let service = cached_fixture(&fixture);
+        change_underlay(&fixture);
         let before = std::fs::read(&fixture.manifest).unwrap();
-        assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)), Err(InferenceServiceError::StaleAttachment(_))));
-        let (report, _) = crate::inference::commands::recover_all_attempts(&service, &|_| Some(fixture.manifest.clone()));
-        assert_eq!(report.needs_attention[0].reason, Some("repair_needed"));
-        assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
-        {
-            let guard = service.journal.acquire_lock(&fixture.attempt_id()).unwrap();
-            service.journal.read_cached_crop(&guard).unwrap();
-        }
-        // Dismissing a result that never attached keeps it out of every later
-        // report, and keeps its evidence.
-        crate::inference::commands::apply_recovery_action(&service.journal, &fixture.attempt_id(), "acknowledge", false).unwrap();
+        let (report, waits) = sweep(&fixture, &service);
+        assert_eq!((report.attached.len(), report.released.len(), report.needs_attention.len(), waits.len()), (0, 1, 0, 0));
+        assert_eq!(report.released[0].attempt_id, fixture.attempt_id());
+        assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before, "nothing was applied");
+        assert_ended(&fixture, &service, "region_changed");
+        assert_eq!(cached_files(&fixture), [false, false], "the result that cannot be applied is dropped");
+        // Ended: a restart has nothing more to say about it.
         let restarted = InferenceService::new(&fixture.journal_dir, cleaner_core::cloud_wire::provisional_fixture_limits());
-        let (report, _) = crate::inference::commands::recover_all_attempts(&restarted, &|_| Some(fixture.manifest.clone()));
-        assert!(report.needs_attention.is_empty());
-        let guard = restarted.journal.acquire_lock(&fixture.attempt_id()).unwrap();
-        restarted.journal.read_cached_crop(&guard).unwrap();
+        let (report, waits) = sweep(&fixture, &restarted);
+        assert!(report.released.is_empty() && report.needs_attention.is_empty() && waits.is_empty());
+    }
+
+    /// Row `attachment_pending`: one try at the attach.
+    #[test]
+    fn sweep_tries_a_pending_attach_once_and_ends_one_whose_region_changed() {
+        let fixture = RenderFixture::new("sweep-pending-attach");
+        let service = pending_fixture(&fixture);
+        let (report, _) = sweep(&fixture, &service);
+        assert_eq!((report.attached.len(), report.released.len(), report.needs_attention.len()), (1, 0, 0));
+        assert!(matches!(fixture.phase_on_disk(&service), AttemptPhase::Committed { .. }));
+
+        let fixture = RenderFixture::new("sweep-pending-changed");
+        let service = pending_fixture(&fixture);
+        change_underlay(&fixture);
+        let before = std::fs::read(&fixture.manifest).unwrap();
+        let (report, _) = sweep(&fixture, &service);
+        assert_eq!((report.attached.len(), report.released.len(), report.needs_attention.len()), (0, 1, 0));
+        assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
+        assert_ended(&fixture, &service, "region_changed");
+        assert_eq!(cached_files(&fixture), [false, false]);
+    }
+
+    /// A chapter that is gone is a page that changed, for a result and for a
+    /// job still accepted: there is nowhere to put either.
+    #[test]
+    fn sweep_ends_every_attempt_of_a_chapter_that_is_gone() {
+        let gone = |service: &InferenceService| crate::inference::commands::recover_all_attempts(service, &|_| None);
+        let fixture = RenderFixture::new("sweep-gone-pending");
+        let service = pending_fixture(&fixture);
+        let (report, waits) = gone(&service);
+        assert_eq!((report.released.len(), report.needs_attention.len(), waits.len()), (1, 0, 0));
+        assert_ended(&fixture, &service, "region_changed");
+
+        let fixture = RenderFixture::new("sweep-gone-accepted");
+        let gateway = FakeGateway::start(JobScript::Completes);
+        let service = accepted_fixture(&fixture, &gateway);
+        let (report, waits) = gone(&service);
+        assert_eq!((report.released.len(), report.needs_attention.len(), waits.len()), (1, 0, 0));
+        assert_ended(&fixture, &service, "region_changed");
+        assert_eq!(FakeGateway::count(&gateway.seen.polls), 0, "nothing is fetched for a chapter that is gone");
+    }
+
+    /// The reason the 20 requests of 2026-10-12 stayed stuck: a dismissed
+    /// notice kept its attempt out of the sweep. The notice stays dismissed
+    /// and the attempt is ended all the same.
+    #[test]
+    fn sweep_ends_an_attempt_whose_notice_was_dismissed() {
+        let fixture = RenderFixture::new("sweep-dismissed");
+        let service = pending_fixture(&fixture);
+        change_underlay(&fixture);
+        crate::inference::commands::apply_recovery_action(&service.journal, &fixture.attempt_id(), "acknowledge", false).unwrap();
+        let (report, _) = sweep(&fixture, &service);
+        assert_eq!((report.released.len(), report.needs_attention.len()), (1, 0));
+        assert_ended(&fixture, &service, "region_changed");
+
+        // An unknown submission whose notice was dismissed is not reported
+        // again, and is still the user's to decide: nothing ends it.
+        let fixture = RenderFixture::new("sweep-dismissed-unknown");
+        let service = cached_fixture(&fixture);
+        let mut record = service.journal.get_record(&fixture.attempt_id()).unwrap();
+        record.phase = AttemptPhase::Dispatching;
+        std::fs::write(fixture.journal_dir.join("attempts").join(fixture.attempt_id()).join("journal.json"),
+            serde_json::to_vec(&record).unwrap()).unwrap();
+        crate::inference::commands::apply_recovery_action(&service.journal, &fixture.attempt_id(), "acknowledge", false).unwrap();
+        let (report, _) = sweep(&fixture, &service);
+        assert!(report.needs_attention.is_empty() && report.released.is_empty());
+        assert!(matches!(fixture.phase_on_disk(&service), AttemptPhase::Unknown { .. }));
+    }
+
+    /// Row `unknown`: the one case left to the user. It is reported, never
+    /// resent and never ended, and it still holds its region.
+    #[test]
+    fn sweep_leaves_an_unknown_submission_to_the_user() {
+        let fixture = RenderFixture::new("sweep-unknown");
+        let service = cached_fixture(&fixture);
+        let mut record = service.journal.get_record(&fixture.attempt_id()).unwrap();
+        record.phase = AttemptPhase::Dispatching;
+        std::fs::write(fixture.journal_dir.join("attempts").join(fixture.attempt_id()).join("journal.json"),
+            serde_json::to_vec(&record).unwrap()).unwrap();
+        for _ in 0..2 {
+            let (report, _) = sweep(&fixture, &service);
+            assert_eq!(report.needs_attention.len(), 1);
+            assert_eq!(report.needs_attention[0].reason, Some("ambiguous"));
+            assert!(report.released.is_empty() && report.attached.is_empty());
+            assert!(matches!(fixture.phase_on_disk(&service), AttemptPhase::Unknown { .. }));
+        }
+        assert_eq!(service.journal.unresolved_region_attempt(Some("chapter"), Some(0), "reg-1").unwrap(),
+            Some(fixture.attempt_id()));
+    }
+
+    /// Row `accepted`: the gateway is asked. A job it failed, no longer knows,
+    /// or that sits on an endpoint no longer configured ends as failed, with
+    /// the reason kept. (A job it completed is downloaded and attached:
+    /// `a_job_that_outlives_the_app_is_attached_after_a_restart`.)
+    #[test]
+    fn sweep_ends_an_accepted_job_the_gateway_failed_or_no_longer_knows() {
+        for (script, code) in [(JobScript::Fails, FAKE_FAILURE.0), (JobScript::Forgotten, "remote_job_not_found")] {
+            let fixture = RenderFixture::new(&format!("sweep-accepted-{code}"));
+            let gateway = FakeGateway::start(script);
+            let service = accepted_fixture(&fixture, &gateway);
+            let (report, waits) = sweep(&fixture, &service);
+            assert_eq!((report.still_running.len(), report.released.len()), (1, 0), "the gateway is asked first");
+            assert_eq!(waits, [(fixture.attempt_id(), fixture.manifest.clone())]);
+            // The wait the sweep starts for it.
+            let decision = service.recover_cloud_attempt(&fixture.attempt_id(), &fixture.manifest, &fixture.config, &fast_polls()).unwrap();
+            assert!(matches!(decision, RecoveryDecision::Terminal { .. }), "{decision:?}");
+            assert_ended(&fixture, &service, code);
+            assert_eq!(FakeGateway::count(&gateway.seen.submits), 0, "nothing is sent again");
+            let (report, waits) = sweep(&fixture, &service);
+            assert!(report.still_running.is_empty() && report.needs_attention.is_empty() && waits.is_empty());
+        }
+        let fixture = RenderFixture::new("sweep-accepted-failed-reason");
+        let gateway = FakeGateway::start(JobScript::Fails);
+        let service = accepted_fixture(&fixture, &gateway);
+        service.recover_cloud_attempt(&fixture.attempt_id(), &fixture.manifest, &fixture.config, &fast_polls()).unwrap();
+        assert!(matches!(fixture.phase_on_disk(&service),
+            AttemptPhase::Failed { message, .. } if message == FAKE_FAILURE.1), "the gateway's own message is kept");
+
+        let fixture = RenderFixture::new("sweep-accepted-profile-removed");
+        let gateway = FakeGateway::start(JobScript::Completes);
+        let service = accepted_fixture(&fixture, &gateway);
+        let mut config = fixture.config.clone();
+        config.modal_profiles.remove("modal-prof-1");
+        let decision = service.recover_cloud_attempt(&fixture.attempt_id(), &fixture.manifest, &config, &fast_polls()).unwrap();
+        assert!(matches!(decision, RecoveryDecision::Terminal { .. }), "{decision:?}");
+        assert_ended(&fixture, &service, "profile_removed");
+        assert_eq!(FakeGateway::count(&gateway.seen.polls), 0);
+    }
+
+    /// A live render is not a recovery: one "no such job" answer to a job
+    /// just accepted does not end it.
+    #[test]
+    fn a_live_render_is_not_failed_by_a_gateway_that_does_not_know_its_job_yet() {
+        let fixture = RenderFixture::new("live-not-found");
+        let gateway = FakeGateway::start(JobScript::Forgotten);
+        let service = fixture.service(&gateway);
+        let short = PollOptions { poll_interval: Duration::from_millis(10), timeout: Duration::from_millis(200), max_polls: 1000 };
+        assert!(matches!(fixture.render(&service, &short), Err(InferenceServiceError::PollingTimeout(_))));
+        assert!(matches!(fixture.phase_on_disk(&service), AttemptPhase::Accepted { .. }));
+    }
+
+    /// A damaged cached result ends its attempt and is kept as evidence. A
+    /// chapter that cannot be read just now ends nothing: the result waits for
+    /// the next sweep that can read it.
+    #[test]
+    fn sweep_ends_a_damaged_result_and_keeps_one_whose_chapter_cannot_be_read() {
+        let fixture = RenderFixture::new("sweep-corrupt");
+        let service = cached_fixture(&fixture);
+        let png = fixture.journal_dir.join("attempts").join(fixture.attempt_id()).join("result.png");
+        std::fs::write(&png, b"not the result").unwrap();
+        let (report, _) = sweep(&fixture, &service);
+        assert_eq!((report.released.len(), report.needs_attention.len()), (1, 0));
+        assert_ended(&fixture, &service, "result_corrupt");
+        assert_eq!(cached_files(&fixture), [true, true]);
+
+        let fixture = RenderFixture::new("sweep-unreadable-chapter");
+        let service = cached_fixture(&fixture);
+        let manifest = std::fs::read(&fixture.manifest).unwrap();
+        std::fs::write(&fixture.manifest, b"invalid manifest").unwrap();
+        let (report, _) = sweep(&fixture, &service);
+        assert_eq!(report.needs_attention.len(), 1);
+        assert_eq!(report.needs_attention[0].reason, Some("load_error"));
+        assert!(report.released.is_empty());
+        assert!(matches!(fixture.phase_on_disk(&service), AttemptPhase::ResultCached { .. }));
+        assert_eq!(cached_files(&fixture), [true, true]);
+        // Readable again: the same result is applied.
+        std::fs::write(&fixture.manifest, manifest).unwrap();
+        crate::library::invalidate_manifest_cache(&fixture.manifest);
+        let (report, _) = sweep(&fixture, &service);
+        assert_eq!((report.attached.len(), report.needs_attention.len()), (1, 0));
+    }
+
+    /// The sweep before a cloud clean looks only at attempts that have not
+    /// ended: it does not audit results already applied.
+    #[test]
+    fn the_sweep_before_a_clean_ends_what_is_open_and_audits_nothing() {
+        let fixture = RenderFixture::new("sweep-before-clean");
+        let service = cached_fixture(&fixture);
+        change_underlay(&fixture);
+        let (report, _) = crate::inference::commands::end_unresolved_attempts(&service, &|_| Some(fixture.manifest.clone()));
+        assert_eq!(report.released.len(), 1);
+        assert_ended(&fixture, &service, "region_changed");
+
+        let fixture = RenderFixture::new("sweep-before-clean-committed");
+        let service = cached_fixture(&fixture);
+        service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap();
+        // A lost commit is the start sweep's to find, not this one's.
+        std::fs::write(&fixture.manifest, b"invalid manifest").unwrap();
+        let (report, waits) = crate::inference::commands::end_unresolved_attempts(&service, &|_| Some(fixture.manifest.clone()));
+        assert!(report.needs_attention.is_empty() && report.released.is_empty() && waits.is_empty());
+    }
+
+    /// A first attempt for a region carries the recipe's seed. A retry of the
+    /// region carries a later one, so it is a new render; every request and
+    /// its journal record agree. A gateway from before `jobs.retry_seed`
+    /// refuses any seed but the recipe's, so it is sent the recipe's.
+    #[test]
+    fn a_retry_of_a_region_carries_a_new_seed_and_a_first_attempt_the_base_seed() {
+        let fixture = RenderFixture::new("retry-seed");
+        let gateway = FakeGateway::start(JobScript::Fails);
+        let service = fixture.service(&gateway);
+        let base = fixture.recipe.sampling().seed;
+        let sent = |nonce: &str| {
+            let outcome = service.execute_cloud_render(nonce, &fixture.manifest, 0, "reg-1", &fixture.target,
+                &fixture.recipe, &fixture.intent, &fixture.config, true, &fast_polls());
+            assert!(matches!(&outcome, Err(InferenceServiceError::RemoteJobFailed { error_code, .. })
+                if error_code == FAKE_FAILURE.0), "{outcome:?}");
+            let on_wire = gateway.seen.metadata.lock().unwrap().clone().unwrap()["seed"].as_u64().unwrap();
+            let record = service.journal.get_record(&attempt_id_for_nonce(nonce)).unwrap();
+            assert_eq!(record.seed, on_wire, "the journal records the seed that was sent");
+            // Part 3 on the live path: the journal keeps the gateway's reason.
+            assert!(matches!(&record.phase, AttemptPhase::Failed { error_code, message, .. }
+                if error_code == FAKE_FAILURE.0 && message == FAKE_FAILURE.1), "{:?}", record.phase);
+            on_wire
+        };
+        assert_eq!(sent(&fixture.nonce), base, "a first attempt is the render it always was");
+        assert_eq!(sent(&fixture.grant()), base + 1);
+        assert_eq!(sent(&fixture.grant()), base + 2);
+        assert_eq!(FakeGateway::count(&gateway.seen.submits), 3);
+
+        // The Qwen worker itself renders three seeds in a row from the one it
+        // is sent, so its retry steps past all three.
+        let mut qwen = fixture.recipe.clone();
+        qwen.recipe_id = "mc-qwen-image-edit-2511-v4".into();
+        assert_eq!((fixture.recipe.retry_seed_stride(), qwen.retry_seed_stride()), (1, 3));
+
+        let fixture = RenderFixture::new("retry-seed-old-gateway");
+        let gateway = FakeGateway::start(JobScript::Fails);
+        gateway.seen.old.store(true, Ordering::SeqCst);
+        let service = fixture.service(&gateway);
+        for nonce in [fixture.nonce.clone(), fixture.grant()] {
+            let _ = service.execute_cloud_render(&nonce, &fixture.manifest, 0, "reg-1", &fixture.target,
+                &fixture.recipe, &fixture.intent, &fixture.config, true, &fast_polls());
+            assert_eq!(gateway.seen.metadata.lock().unwrap().clone().unwrap()["seed"].as_u64(), Some(base));
+        }
+        assert_eq!(FakeGateway::count(&gateway.seen.submits), 2);
     }
 
     #[test]
@@ -5516,44 +5773,52 @@ mod tests {
                 false,
             );
             let intent = OperationIntent::CleanAnyway;
-            let proposal = consent
-                .prepare_proposal(
-                    PrepareProposalRequest {
-                        chapter_id: "chapter".into(),
-                        page_index: 0,
-                        region_id: Some("reg-1".into()),
-                        target: target.clone(),
-                        recipe: recipe.clone(),
-                        intent: intent.clone(),
-                    },
-                    &config,
-                    true,
-                    &manifest,
-                )
-                .unwrap();
-            let grant = consent
-                .confirm_proposal(ConfirmProposalOptions {
-                    proposal_id: &proposal.proposal_id,
-                    intent: &intent,
-                    config: &config,
-                    cloud_allowed: true,
-                    job_path: &manifest,
-                    grant_ttl: Duration::from_secs(120),
-                    max_attempts: 1,
-                })
-                .unwrap();
-            RenderFixture {
+            let mut fixture = RenderFixture {
                 journal_dir: scratch.join("journal"),
                 manifest,
                 config,
                 target,
                 recipe,
                 intent,
-                nonce: grant.nonce,
+                nonce: String::new(),
                 consent,
                 grants,
                 events: Arc::default(),
-            }
+            };
+            fixture.nonce = fixture.grant();
+            fixture
+        }
+
+        /// A new grant to clean `reg-1`: what the user confirms before each
+        /// request, a retry included.
+        fn grant(&self) -> String {
+            let proposal = self.consent
+                .prepare_proposal(
+                    PrepareProposalRequest {
+                        chapter_id: "chapter".into(),
+                        page_index: 0,
+                        region_id: Some("reg-1".into()),
+                        target: self.target.clone(),
+                        recipe: self.recipe.clone(),
+                        intent: self.intent.clone(),
+                    },
+                    &self.config,
+                    true,
+                    &self.manifest,
+                )
+                .unwrap();
+            self.consent
+                .confirm_proposal(ConfirmProposalOptions {
+                    proposal_id: &proposal.proposal_id,
+                    intent: &self.intent,
+                    config: &self.config,
+                    cloud_allowed: true,
+                    job_path: &self.manifest,
+                    grant_ttl: Duration::from_secs(120),
+                    max_attempts: 1,
+                })
+                .unwrap()
+                .nonce
         }
 
         /// A service on this fixture's journal, as a fresh process would build it.
@@ -5785,6 +6050,7 @@ mod tests {
             estimated: false,
             evidence_ref: None,
             evidence_sha256: None,
+            reading: None,
         }
     }
 
@@ -5824,6 +6090,8 @@ mod tests {
             )
             .unwrap();
         }
+        let detected = Job::open(&manifest).unwrap().project.detections.clone();
+        let detected_mask = std::fs::read(cleaner_core::project::sidecar_dir(&manifest).join("detections/p-d0.mask")).unwrap();
         let config = test_config();
         let grants = Arc::new(GrantService::new());
         let target = ExecutionTarget::Modal { profile_id: "modal-prof-1".into() };
@@ -5880,7 +6148,8 @@ mod tests {
         assert_eq!(region.outcome, "cleaned");
         let job = Job::open(&manifest).unwrap();
         assert!(job.project.detections.is_empty(), "the detection left in the same write");
-        assert!(!job.sidecar().join("detections/p-d0.mask").exists());
+        assert_eq!(job.project.cleaned_detections, detected, "and is kept beside its patch");
+        assert!(job.sidecar().join("detections/p-d0.mask").exists());
         let record = job.project.patches.iter().find(|r| r.id == "p-d0").unwrap();
         assert_eq!(record.review_state.as_deref(), Some("review.reason.unusuallyLarge"));
         let patch = job.load_patch(record).unwrap();
@@ -5902,6 +6171,54 @@ mod tests {
         ));
         // Spent: the grant does not start a second render.
         assert!(grants.get_grant(&grant.nonce).is_none_or(|grant| grant.attempts_used == 1));
+
+        // The commit wrote one undo step, with the detected region on one
+        // side and its result on the other.
+        let journal = crate::history::load(&manifest);
+        assert_eq!((journal.entries.len(), journal.cursor), (1, 1));
+        let entry = &journal.entries[0];
+        assert_eq!((entry.op.as_str(), entry.label.as_str(), entry.region_id.as_str()),
+            (crate::history::CLEAN_OP, crate::history::CLEAN_LABEL, "p-d0"));
+        assert_eq!(entry.before.region.as_ref().unwrap()["outcome"], "detected");
+        assert_eq!(entry.after.region.as_ref().unwrap()["outcome"], "cleaned");
+
+        // Undo: the detection is back as stored, and the attempt is still a
+        // committed, resolved one, so the region can be sent again.
+        let asked = |seen: &GatewayCounters| [&seen.submits, &seen.polls, &seen.results, &seen.cancels]
+            .map(|count| count.load(Ordering::SeqCst));
+        let before_undo = asked(&gateway.seen);
+        let attempt = attempt_id_for_nonce(&grant.nonce);
+        let patches = job.project.patches.clone();
+        drop(job);
+        assert_eq!(crate::history::move_at(&manifest, "chapter", "undo").unwrap().entry.unwrap().seq, entry.seq);
+        {
+            let _lock = run::lock_job(&manifest).unwrap();
+            Job::open(&manifest).unwrap().restore_detection("p-d0").unwrap();
+        }
+        let job = Job::open(&manifest).unwrap();
+        assert_eq!(job.project.detections, detected);
+        assert_eq!(std::fs::read(job.sidecar().join("detections/p-d0.mask")).unwrap(), detected_mask);
+        assert!(job.project.patches.iter().all(|row| row.id != "p-d0"));
+        assert!(matches!(
+            service.recover_attempt_locally(&attempt, Some(&manifest)).unwrap(),
+            RecoveryDecision::AlreadyCommitted { .. }
+        ), "a result set aside is not a result lost");
+        assert_eq!(service.journal().unresolved_region_attempt(Some("chapter"), Some(0), "p-d0").unwrap(), None);
+        let again = read_render_input(&manifest, 0, "p-d0", &recipe).unwrap();
+        assert_eq!((again.revision, &again.revision_hash), (input.revision, &input.revision_hash),
+            "the next request binds the same detection");
+
+        // Redo: the same patch, and the gateway is asked nothing.
+        assert!(crate::history::move_at(&manifest, "chapter", "redo").unwrap().entry.is_some());
+        {
+            let _lock = run::lock_job(&manifest).unwrap();
+            Job::open(&manifest).unwrap().restore_patch("p-d0").unwrap();
+        }
+        let job = Job::open(&manifest).unwrap();
+        assert_eq!(job.project.patches, patches);
+        assert!(job.load_patch(&job.project.patches[job.project.patches.len() - 1]).is_ok());
+        assert!(job.project.detections.is_empty());
+        assert_eq!(asked(&gateway.seen), before_undo, "redo renders nothing");
     }
 
     #[test]

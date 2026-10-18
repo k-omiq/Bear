@@ -1,12 +1,12 @@
 # Training a custom mid-size manga inpainting model on $600 of OCI credits
 
-Research note, 2026-08-30. Every figure below is traced to a primary source and
+This note assesses whether a custom mid-size manga inpainting model could be trained on a fixed budget of cloud credits. It was written on 2026-08-30. Every figure below is traced to a primary source and
 the URL is given inline. Where a number is derived rather than published, the
 derivation is shown and the assumption is named.
 
 ## 0. The question
 
-The engine ladder in [03-engines.md](../03-engines.md) has a gap. Rung 2 is
+The engine ladder (see [features.md](../features.md#the-engine-ladder)) has a gap. Rung 2 is
 `dreMaz/AnimeMangaInpainting`, a 51M-parameter big-LaMa finetune that ships as a
 207 MB ONNX file and clears a 512² region in 0.63 s on WebGPU. Rung 3a is
 FLUX.2 Klein 4B, 4.6 GB of weights in an out-of-process Python sidecar, about
@@ -343,8 +343,8 @@ Runtime's own kernel table
 `main`, retrieved 2026-08-30), `DFT` appears in exactly two provider sections:
 **CPUExecutionProvider** (opset 20+, float/double) and
 **DmlExecutionProvider** (opset 20+, float/double/float16). It does **not**
-appear under CUDAExecutionProvider. This is the constraint [03-engines.md](../03-engines.md)
-already records, confirmed at source.
+appear under CUDAExecutionProvider. So a LaMa ONNX graph cannot run on CUDA
+without a CPU fallback for those nodes; this is confirmed at the source table.
 
 The consequence for this project: **any scaled-up LaMa inherits the same
 execution-provider restriction.** A 400M-parameter FFC network would still be
@@ -567,7 +567,7 @@ not a new model, at any size.
   require that use of the dataset "be indicated clearly within the published
   work" for published pre-trained models. If a Manga109-s-trained model ships,
   the attribution must land in the about box and the model card, and this needs
-  a row in [06-licensing.md](../06-licensing.md) before the first training run,
+  an entry in the About section and the [model rights decision](../model-rights-decision.md) before the first training run,
   not after.
 - **Provenance of any non-Manga109 corpus is unresolved.** Danbooru-derived data
   is what the ecosystem uses and what rung 2's finetune probably rests on, but

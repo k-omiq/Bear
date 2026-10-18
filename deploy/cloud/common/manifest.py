@@ -45,12 +45,16 @@ REVISION_TEST_FLUX: str = "0123456789abcdef0123456789abcdef01234567"
 # side fails the suite instead of silently drifting. "inpaint": since 2026-10-01 both
 # sides redraw only the hint's lettering (common/flux.py), where the "edit" recipes
 # redrew the whole crop.
-RECIPE_PROD_SDNQ: str = "mc-flux2-klein-inpaint-v1"
+# v2 (2026-10-18, cloud only): the worker fills the hole with LaMa before Klein runs and
+# passes no second reference, and the request may carry guidance (`qwen_edit`). Klein's
+# inpaint pipeline conditions on the image it is given, so v1 drew bold sound effects
+# back into the hole (docs/findings.md, "Cloud Klein v2").
+RECIPE_PROD_SDNQ: str = "mc-flux2-klein-inpaint-v2"
 MODEL_PROD_FLUX: str = "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic"
 REVISION_PROD_FLUX: str = "45e9cc76cb70f84473ce5c6c2e2282d0ef3c6ecd"
 MODEL_PROD_FLUX_9B: str = "Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32"
 REVISION_PROD_FLUX_9B: str = "94ef5985edc982fa93f87df6e1c0faf94d9e9004"
-RECIPE_PROD_SDNQ_9B: str = "mc-flux2-klein-9b-inpaint-v1"
+RECIPE_PROD_SDNQ_9B: str = "mc-flux2-klein-9b-inpaint-v2"
 
 # Qwen-Image-Edit-2511, cloud only: no local sidecar twin. The 4-bit SDNQ build of the
 # base model plus the lightx2v Lightning LoRA, which distills 40 steps with true CFG
@@ -72,7 +76,13 @@ FUKIDASHI_REPO: str = "tori29umai/QwenImageEdit2511_LoRA"
 FUKIDASHI_REVISION: str = "3ca05a1ece5606d4de68ebc564d46713fd77e549"
 FUKIDASHI_FILE: str = "QIE2511_FukidashiErase_V1_dim4_1e-3-000080_dim1.safetensors"
 FUKIDASHI_BYTES: int = 18753872
-# The directory of the snapshot the LoRA is downloaded into.
+# The app's own rung-2 inpainter (scripts/fetch-models.sh), which fills the hole before
+# a Klein render: big-LaMa finetuned on manga, ONNX, fixed 512 x 512 input.
+LAMA_REPO: str = "mayocream/lama-manga-onnx"
+LAMA_REVISION: str = "b55497aadbfcb9740e1ed16f008268d71b4f3f79"
+LAMA_FILE: str = "lama-manga.onnx"
+LAMA_BYTES: int = 207482644
+# The directory of the snapshot the LoRA (and LaMa) is downloaded into.
 ADAPTER_DIR: str = "adapters"
 
 # The prompt belongs to the recipe on the server and never travels on the wire.
@@ -115,7 +125,7 @@ PINNED_SAMPLING: Dict[str, PinnedSampling] = {
 # Files of the pinned snapshot, exactly as the Hub lists them at REVISION_PROD_FLUX.
 # The Hub does not publish per-file SHA-256 for the small files, so the seed job checks
 # the file set and every size; the commit hash pins the content itself.
-PROD_SNAPSHOT_FILES: Tuple[Tuple[str, int], ...] = (
+PROD_SNAPSHOT_REPO_FILES: Tuple[Tuple[str, int], ...] = (
     (".gitattributes", 1580),
     ("README.md", 2338),
     ("model_index.json", 498),
@@ -137,10 +147,14 @@ PROD_SNAPSHOT_FILES: Tuple[Tuple[str, int], ...] = (
     ("vae/config.json", 925),
     ("vae/diffusion_pytorch_model.safetensors", 168120878),
 )
-PROD_SNAPSHOT_TOTAL_BYTES: int = 5475930180
+# The snapshot as seeded: the repository plus LaMa in ADAPTER_DIR.
+PROD_SNAPSHOT_FILES: Tuple[Tuple[str, int], ...] = PROD_SNAPSHOT_REPO_FILES + (
+    (f"{ADAPTER_DIR}/{LAMA_FILE}", LAMA_BYTES),
+)
+PROD_SNAPSHOT_TOTAL_BYTES: int = 5475930180 + LAMA_BYTES
 
 # Pinned from the Hugging Face repository tree at REVISION_PROD_FLUX_9B.
-PROD_SNAPSHOT_9B_FILES: Tuple[Tuple[str, int], ...] = (
+PROD_SNAPSHOT_9B_REPO_FILES: Tuple[Tuple[str, int], ...] = (
     (".gitattributes", 1580),
     ("README.md", 2367),
     ("model_index.json", 498),
@@ -166,7 +180,10 @@ PROD_SNAPSHOT_9B_FILES: Tuple[Tuple[str, int], ...] = (
     ("vae/config.json", 925),
     ("vae/diffusion_pytorch_model.safetensors", 168120878),
 )
-PROD_SNAPSHOT_9B_TOTAL_BYTES: int = 12606105778
+PROD_SNAPSHOT_9B_FILES: Tuple[Tuple[str, int], ...] = PROD_SNAPSHOT_9B_REPO_FILES + (
+    (f"{ADAPTER_DIR}/{LAMA_FILE}", LAMA_BYTES),
+)
+PROD_SNAPSHOT_9B_TOTAL_BYTES: int = 12606105778 + LAMA_BYTES
 
 # Pinned from the Hugging Face repository tree at REVISION_PROD_QWEN.
 PROD_SNAPSHOT_QWEN_REPO_FILES: Tuple[Tuple[str, int], ...] = (
@@ -252,20 +269,30 @@ class ProductionModel:
         return dict(self.required_gpu).get(provider)
 
 
+# Seeded beside every Klein snapshot; the FLUX runner fills the hole with it.
+LAMA_ADAPTER = PinnedAdapter(LAMA_REPO, LAMA_REVISION, LAMA_FILE, LAMA_BYTES)
+
+
 PRODUCTION_MODELS: Dict[str, ProductionModel] = {
     MODEL_PROD_FLUX: ProductionModel(MODEL_PROD_FLUX, REVISION_PROD_FLUX, RECIPE_PROD_SDNQ,
                                       PROD_SNAPSHOT_FILES, PROD_SNAPSHOT_TOTAL_BYTES, "Apache-2.0",
                                       label="FLUX.2 Klein 4B (4-bit)",
-                                      # Live on an L4 (docs/cloud-work-log.md): 7,176 MiB loaded,
-                                      # 7,180 MiB peak rendering a 768x576 working size; worker
-                                      # RSS 7,121,456 kB after renders, rounded up to 7 GiB.
-                                      render_peak_vram_mib=7180, render_copy_host_gib=7),
+                                      # Bench on an L4, 2026-10-18 (docs/findings.md): 8,757 MiB in
+                                      # nvidia-smi with the LaMa session, 14 real crops up to a
+                                      # 1024 px working side. Worker RSS before LaMa (cloud-work-log,
+                                      # 2026-09-25): 7,121,456 kB, rounded up to 7 GiB.
+                                      render_peak_vram_mib=8757, render_copy_host_gib=7,
+                                      adapters=(LAMA_ADAPTER,)),
     MODEL_PROD_FLUX_9B: ProductionModel(MODEL_PROD_FLUX_9B, REVISION_PROD_FLUX_9B,
                                          RECIPE_PROD_SDNQ_9B, PROD_SNAPSHOT_9B_FILES,
                                          PROD_SNAPSHOT_9B_TOTAL_BYTES, "FLUX non-commercial",
                                          label="FLUX.2 Klein 9B (4-bit)",
+                                         # One copy with LaMa: 16,540 MiB in nvidia-smi on an L40S,
+                                         # 16,207 on an L4 (bench 2026-10-18). A second copy runs
+                                         # an L4 out of memory while loading.
                                          required_gpu=(("modal", "L40S"), ("beam", "RTX5090")),
-                                         worker_memory_gib=24, multi_copy_gpus=("L40S",)),
+                                         worker_memory_gib=24, multi_copy_gpus=("L40S",),
+                                         adapters=(LAMA_ADAPTER,)),
     # Measured on an L40S: 21.3 GiB peak VRAM, 23.6 GiB peak host memory while loading.
     MODEL_PROD_QWEN: ProductionModel(MODEL_PROD_QWEN, REVISION_PROD_QWEN, RECIPE_PROD_QWEN,
                                       PROD_SNAPSHOT_QWEN_FILES, PROD_SNAPSHOT_QWEN_TOTAL_BYTES,

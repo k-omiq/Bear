@@ -78,7 +78,7 @@ const EXPORT_FORMATS = Object.freeze({
  */
 export const PINNED_CLOUD_MODEL_ID = 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic'
 export const PINNED_CLOUD_MODEL_REVISION = '45e9cc76cb70f84473ce5c6c2e2282d0ef3c6ecd'
-export const PINNED_CLOUD_RECIPE_ID = 'mc-flux2-klein-inpaint-v1'
+export const PINNED_CLOUD_RECIPE_ID = 'mc-flux2-klein-inpaint-v2'
 export const CLOUD_PREPROCESSING_VERSION = '2.0.0'
 
 /**
@@ -172,6 +172,12 @@ export const PROVISION_APPLY_STEPS = Object.freeze([
 ])
 
 /** @param {string} value */
+/**
+ * The mock's own copy of `history::UNDO_LIMIT_*`. It is a backend, so it owns
+ * these as the Rust side owns its own; the interface asks `undoLimit()`.
+ */
+const UNDO_LIMIT = Object.freeze({ min: 20, max: 2000, default: 500 })
+
 function isAbsolutePath(value) {
   return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(String(value ?? ''))
 }
@@ -262,6 +268,14 @@ export function createMockBackend(options = {}) {
    */
   const denoiseScenario = () =>
     options.denoiseScenario ?? new URLSearchParams(globalThis.location?.search ?? '').get('denoise')
+  /** As `history::valid_limit` and `history::limit_from`. */
+  const validUndoLimit = (/** @type {unknown} */ value) =>
+    Number.isInteger(value) && Number(value) >= UNDO_LIMIT.min && Number(value) <= UNDO_LIMIT.max
+  const undoLimitValue = () =>
+    validUndoLimit(state.settings.undoLimit) ? state.settings.undoLimit : UNDO_LIMIT.default
+  /** `missing`: the chapter's scan folder is on a drive that is not connected. */
+  const exportDrive =
+    options.exportDrive ?? new URLSearchParams(globalThis.location?.search ?? '').get('exportDrive')
   /** Whether any local page denoise file is still to download. */
   const denoiseMissing = () => ['pageDenoiseModel', 'pageDenoiseSeams'].some((id) => state.missingModels.has(id))
   /** @param {unknown} outDir */
@@ -908,13 +922,178 @@ export function createMockBackend(options = {}) {
    * No detection runs. A pick saved as the retired `denoise` rung starts on
    * Fill.
    */
-  const cleanDetection = (region, page, ctx = {}) => {
-    const pick = currentRung(ctx.engine ?? region.pick ?? 'fill')
-    cleanRegionAutomatically(region, page, toolContext, { ...ctx, bubbleEngine: pick, outsideEngine: pick })
-    delete region.pick
-    delete region.detector
-    delete region.insideBubble
-    return true
+  const cleanDetection = (region, page, ctx = {}) =>
+    cleaningDetection(region, page, () => {
+      const pick = currentRung(ctx.engine ?? region.pick ?? 'fill')
+      cleanRegionAutomatically(region, page, toolContext, { ...ctx, bubbleEngine: pick, outsideEngine: pick })
+      delete region.pick
+      delete region.detector
+      delete region.insideBubble
+      return true
+    })
+
+  /* ---------- a clean kept, and taken back ---------- */
+
+  /**
+   * What a clean of a detection keeps, as the native manifest does. The
+   * detection it replaced, by region id (`cleaned_detections`), so the clean
+   * can be taken back exactly. And, while a clean is taken back, the result
+   * that left the page (`withdrawn_patches`), so it can be put back with no
+   * render. A fixture region that is cleaned from the start has neither, as
+   * a chapter cleaned by an older build has not.
+   */
+  /** @type {Map<string, Object>} */
+  const keptDetections = new Map()
+  /** @type {Map<string, {region: Object, pageId: string}>} */
+  const withdrawnResults = new Map()
+
+  /** The Undo tooltip of a clean the backend recorded, and of a reject (`history.rs`). */
+  const CLEAN_LABEL = 'masks.command.cleanRegion'
+  const REJECT_LABEL = 'masks.command.rejectResult'
+
+  const chapterOfPage = (page) =>
+    state.projects.flatMap((project) => project.chapters).find((chapter) => chapter.pages.includes(page)) ?? null
+
+  /** Forget what was kept for regions that are gone for good, by their pages. */
+  const dropKeptFor = (pages) => {
+    const stems = pages.map((page) => `${page.id}-`)
+    for (const map of [keptDetections, withdrawnResults]) {
+      for (const id of [...map.keys()]) {
+        if (stems.some((stem) => id.startsWith(stem))) map.delete(id)
+      }
+    }
+  }
+
+  /**
+   * Write one `clean-state` step into a chapter's journal and say the index
+   * moved, as `history.rs#record_step` does. Answers the index after it.
+   */
+  const recordCleanStep = (chapterId, label, regionId, before, after) => {
+    const journal = journalFor(chapterId)
+    pushEntry(journal, { label, op: 'clean-state', regionId, before, after }, undoLimitValue())
+    emit({ type: 'history-changed', chapterId })
+    return snapshot(viewOf(journal, undoLimitValue()))
+  }
+
+  /**
+   * Run `clean` on a region and, when the region was a stored detection and
+   * the clean left a result, keep the detection it replaced and record the
+   * step, as `Job::complete_detection` and `history.rs` do for every cleaner
+   * of a detection: a run, a region edit, a cloud render. A clean of anything
+   * else keeps and records nothing.
+   *
+   * The page's status in the entry is what the page settles as, never the
+   * `cleaning` a run shows while it is on the page.
+   *
+   * @template T
+   * @param {any} region
+   * @param {any} page
+   * @param {() => T} clean
+   * @returns {T}
+   */
+  const cleaningDetection = (region, page, clean) => {
+    if (!isDetection(region)) return clean()
+    const detected = snapshot(region)
+    const before = { present: true, pageStatus: settledStatus(page), region: detected }
+    // A detection's mask is the detector's, whoever asked for it cleaned
+    // (`region.rs`), so the result is not a hand mask.
+    region.source = 'auto'
+    const answer = clean()
+    if (isDetection(region) || !region.mask) {
+      region.source = detected.source
+      return answer
+    }
+    keptDetections.set(region.id, detected)
+    // A result set aside for this region is replaced by the new one.
+    withdrawnResults.delete(region.id)
+    const chapter = chapterOfPage(page)
+    if (chapter) {
+      recordCleanStep(chapter.id, CLEAN_LABEL, region.id, before,
+        { present: true, pageStatus: settledStatus(page), region: snapshot(region) })
+    }
+    return answer
+  }
+
+  /**
+   * A region edit that is not Clean itself (a hand tool, a re-run, Clean
+   * anyway) on a region that may be a stored detection. When it is one and
+   * the edit leaves a result, the detection is kept and the step recorded as
+   * for any clean of one, and the page settles: `region.rs` commits every
+   * edit of a detection's id through the same replacement.
+   *
+   * @template T
+   * @param {{region: any, page: any}} found
+   * @param {() => T} edit
+   * @returns {T}
+   */
+  const cleaningHere = (found, edit) => {
+    if (!isDetection(found.region)) return edit()
+    const answer = cleaningDetection(found.region, found.page, () => {
+      const made = edit()
+      if (!isDetection(found.region) && found.region.mask) {
+        delete found.region.pick
+        delete found.region.detector
+        delete found.region.insideBubble
+      }
+      return made
+    })
+    if (!isDetection(found.region) && found.page.status === 'detected') found.page.status = settledStatus(found.page)
+    return answer
+  }
+
+  /**
+   * Take a clean back or put its result back, as `Job::restore_detection` and
+   * `Job::restore_patch` do, with their refusals in their order. Answers the
+   * region's place after it, or `null` when no chapter names the region.
+   * Nothing renders: the result that returns is the one that left.
+   *
+   * @param {string} regionId
+   * @param {boolean} cleaned
+   * @returns {{region: any, page: any, chapter: any}|null}
+   */
+  const moveRegionCleaned = (regionId, cleaned) => {
+    const found = findRegion(regionId)
+    if (cleaned) {
+      const saved = withdrawnResults.get(regionId)
+      if (!saved) {
+        if (!found) return null
+        // On the page already. Redo may ask twice.
+        if (found.region.mask && !isDetection(found.region)) return found
+        throw new Error(`clean_no_result: no result is saved for region ${regionId} to put back`)
+      }
+      // A detection deleted in between is not needed: the result returns
+      // to its page without it.
+      const page = found?.page ?? findPage(saved.pageId)
+      const chapter = page ? chapterOfPage(page) : null
+      if (!page || !chapter) return null
+      refuseBusyPage(chapter.id, page.index)
+      // The detection as it stands now is the one kept, as a clean keeps it.
+      if (found && isDetection(found.region)) keptDetections.set(regionId, snapshot(found.region))
+      const region = snapshot(saved.region)
+      const at = page.regions.findIndex((candidate) => candidate.id === regionId)
+      if (at >= 0) page.regions[at] = region
+      else page.regions.push(region)
+      withdrawnResults.delete(regionId)
+      page.status = settledStatus(page)
+      return { region, page, chapter }
+    }
+    if (!found) return null
+    // It is a detection already. Undo may ask twice.
+    if (isDetection(found.region)) return found
+    if (!found.region.mask) {
+      throw new Error(`clean_no_patch: region ${regionId} has no cleaned result to take back`)
+    }
+    const kept = keptDetections.get(regionId)
+    if (!kept) {
+      throw new Error(`clean_not_restorable: no detection was kept for region ${regionId}; its mask cannot be put back`)
+    }
+    refuseBusyPage(found.chapter.id, found.page.index)
+    withdrawnResults.set(regionId, { region: snapshot(found.region), pageId: found.page.id })
+    keptDetections.delete(regionId)
+    const region = snapshot(kept)
+    found.page.regions[found.page.regions.indexOf(found.region)] = region
+    found.page.status = settledStatus(found.page)
+    return { region, page: found.page, chapter: found.chapter }
   }
 
   // Several runs at once, one per chapter and three in all, as `run.rs`
@@ -1749,18 +1928,27 @@ export function createMockBackend(options = {}) {
    * cloud record beside it, as the native side commits one.
    */
   const commitCloudResult = (found, cloud, tool) => {
-    const mask = commitMask(found.region, toolContext, {
-      engine: 'flux',
-      fillMode: 'reconstruct',
-      ...(tool ? { tool } : {}),
+    // A detection the cloud cleaned keeps what it replaced and is one undo
+    // step, as one cleaned here is (`cleaningDetection`).
+    const wasDetection = isDetection(found.region)
+    const mask = cleaningDetection(found.region, found.page, () => {
+      const committed = commitMask(found.region, toolContext, {
+        engine: 'flux',
+        fillMode: 'reconstruct',
+        ...(tool ? { tool } : {}),
+      })
+      committed.provenance.cloud = cloud
+      // A detection the cloud cleaned is no longer one, as `cleanDetection`
+      // leaves a detection cleaned here.
+      delete found.region.pick
+      delete found.region.detector
+      delete found.region.insideBubble
+      return committed
     })
-    mask.provenance.cloud = cloud
-    // A detection the cloud cleaned is no longer one, as `cleanDetection`
-    // leaves a detection cleaned here.
-    delete found.region.pick
-    delete found.region.detector
-    delete found.region.insideBubble
     if (found.page.status === 'unclean') found.page.status = 'cleaned'
+    // A page whose last detection was just cleaned is no longer waiting. A
+    // run sets its own page's status when it leaves the page.
+    if (wasDetection && found.page.status === 'detected') found.page.status = settledStatus(found.page)
     return mask
   }
 
@@ -2267,8 +2455,6 @@ export function createMockBackend(options = {}) {
       return listenOn(provisionListeners, handler)
     },
 
-    async onQwenReview() { return () => {} },
-    async resolveQwenReview() {},
     onCloudAttempt(handler) {
       return listenOn(attemptListeners, handler)
     },
@@ -2484,14 +2670,20 @@ export function createMockBackend(options = {}) {
 
     async historyLoad({ chapterId }) {
       await delay(timing.method)
-      return snapshot(viewOf(journalFor(chapterId)))
+      return snapshot(viewOf(journalFor(chapterId), undoLimitValue()))
     },
 
     async historyPush({ chapterId, entry }) {
       await delay(timing.method)
       const journal = journalFor(chapterId)
-      pushEntry(journal, entry)
-      return snapshot(viewOf(journal))
+      pushEntry(journal, entry, undoLimitValue())
+      return snapshot(viewOf(journal, undoLimitValue()))
+    },
+
+    /** As `history::undo_limit`: the value in force, and its bounds. */
+    async undoLimit() {
+      await delay(timing.method)
+      return { value: undoLimitValue(), ...UNDO_LIMIT }
     },
 
     /**
@@ -2506,7 +2698,7 @@ export function createMockBackend(options = {}) {
       // as `history.rs#history_move` refuses it: the caller replays nothing
       // and puts its own cursor back.
       const next = journal.entries[direction === 'redo' ? journal.cursor : journal.cursor - 1]
-      if (next?.op === 'region-state') {
+      if (next?.op === 'region-state' || next?.op === 'clean-state') {
         const page =
           findRegion(next.regionId)?.page ?? findPage(next.before?.pageId ?? next.after?.pageId)
         if (page) refuseBusyPage(chapterId, page.index)
@@ -2529,6 +2721,10 @@ export function createMockBackend(options = {}) {
       const index = state.projects.findIndex((p) => p.id === projectId)
       if (index === -1) return false
       const [removed] = state.projects.splice(index, 1)
+      for (const chapter of removed.chapters) {
+        dropKeptFor(chapter.pages)
+        journals.delete(chapter.id)
+      }
       notify('notice.project.deleted', { name: removed.name }, 'warn')
       return true
     },
@@ -2546,6 +2742,8 @@ export function createMockBackend(options = {}) {
       const at = project.chapters.findIndex((c) => c.id === chapterId)
       if (at === -1) return false
       const [removed] = project.chapters.splice(at, 1)
+      dropKeptFor(removed.pages)
+      journals.delete(chapterId)
       project.chapters.forEach((c, order) => {
         c.order = order
       })
@@ -2723,7 +2921,9 @@ export function createMockBackend(options = {}) {
         return { status: 'needs-confirmation' }
       }
 
-      const applied = applyToolToRegion(found.region, found.page, toolContext, { tool, params })
+      // A hand tool over a stored detection cleans it too, so it keeps the
+      // detection and is the backend's undo step, as `region.rs` commits it.
+      const applied = cleaningHere(found, () => applyToolToRegion(found.region, found.page, toolContext, { tool, params }))
       await delay(timing.method)
       notifyAll(applied.notices)
       return {
@@ -3013,6 +3213,43 @@ export function createMockBackend(options = {}) {
     },
 
     /**
+     * The replay of a `clean-state` undo entry, as `library.rs`
+     * `set_region_cleaned` answers it: the detected region with its mask
+     * (`cleaned: false`) or the saved result with no render (`cleaned: true`).
+     * Writes no undo step. Asked for the state the region is in already, it
+     * answers the region and changes nothing. `null` when no chapter names the
+     * region; refused with `clean_not_restorable`, `clean_no_result` or
+     * `clean_no_patch`, or while a run is on the page. The mock keeps no mask
+     * files, so nothing here answers `clean_mask_unreadable`.
+     */
+    async setRegionCleaned({ regionId, cleaned }) {
+      await delay(timing.method)
+      const moved = moveRegionCleaned(regionId, cleaned === true)
+      return moved ? { region: snapshot(moved.region), pageStatus: moved.page.status } : null
+    },
+
+    /**
+     * Reject a generated result, as `library.rs` `reject_result` does: the
+     * region is detected again with its mask, and the reject is one undo step
+     * this side records itself. A region that is not a cleaned result on its
+     * page is refused, and nothing is recorded.
+     */
+    async rejectResult({ regionId }) {
+      await delay(timing.method)
+      const found = findRegion(regionId)
+      if (!found) return null
+      if (!found.region.mask || isDetection(found.region)) {
+        throw new Error(`clean_no_patch: region ${regionId} has no cleaned result to take back`)
+      }
+      const before = { present: true, pageStatus: found.page.status, region: snapshot(found.region) }
+      const moved = moveRegionCleaned(regionId, false)
+      if (!moved) return null
+      const after = { present: true, pageStatus: moved.page.status, region: snapshot(moved.region) }
+      const history = recordCleanStep(moved.chapter.id, REJECT_LABEL, regionId, before, after)
+      return { region: snapshot(moved.region), pageStatus: moved.page.status, history }
+    },
+
+    /**
      * One layer's opacity, placement or lock, judged by the capabilities the
      * native command enforces (`model/layers.js` is this side's copy of them):
      * a fixed redraw moved, a locked layer moved or a detection styled is
@@ -3098,7 +3335,7 @@ export function createMockBackend(options = {}) {
         if (!cloudBlocked()) notify('notice.mask.rerunFailed', { reasonKey: 'decline.reason.rungUnavailable' }, 'warn')
         return null
       }
-      const result = rerunRegionMask(found.region, toolContext, { kind, engine })
+      const result = cleaningHere(found, () => rerunRegionMask(found.region, toolContext, { kind, engine }))
       notifyAll(result.notices)
       return {
         region: snapshot(found.region),
@@ -3678,7 +3915,7 @@ export function createMockBackend(options = {}) {
         if (!ended.mask) return null
         return { region: snapshot(found.region), mask: snapshot(ended.mask), pageStatus: found.page.status }
       }
-      const result = cleanRegionAnyway(found.region, found.page, toolContext, engine)
+      const result = cleaningHere(found, () => cleanRegionAnyway(found.region, found.page, toolContext, engine))
       notifyAll(result.notices)
       return {
         region: snapshot(found.region),
@@ -3714,6 +3951,11 @@ export function createMockBackend(options = {}) {
      * sub-8-bit page (`refusedLayeredMode`) and of a page over 30 000 px
      * (`refusedLayeredSize`) are decided from the manifest's per-source mode,
      * depth and dimensions, which the mock's pages do not carry.
+     *
+     * `destinationUnavailable` is decided from a disk the mock does not have,
+     * so it is a knob: `?exportDrive=missing` (or `options.exportDrive`) says
+     * the chapter's scan folder is on a drive that is not connected. The
+     * default destination is then refused, and a named folder is not.
      */
     async planExportChapter(spec) { return this.exportChapter({ ...spec, planning: true }) },
 
@@ -3733,7 +3975,7 @@ export function createMockBackend(options = {}) {
       const refuse = async (reasonKey, params = {}) => {
         await delay(timing.method)
         if (!planning) notify(reasonKey, { format, ...params }, 'warn')
-        return { status: 'refused', reasonKey, actualFormats: [], declared: [], outputs: [] }
+        return { status: 'refused', reasonKey, ...(params.path ? { path: params.path } : {}), actualFormats: [], declared: [], outputs: [] }
       }
 
       const container = EXPORT_FORMATS[String(format).toUpperCase()]
@@ -3769,6 +4011,9 @@ export function createMockBackend(options = {}) {
       if (destination !== 'new-folder' && !isAbsolutePath(destination)) {
         return refuse('notice.export.refusedDestination')
       }
+      if (destination === 'new-folder' && exportDrive === 'missing') {
+        return refuse('notice.export.destinationUnavailable', { path: `${found.project.sourcePath}_cleaned` })
+      }
 
       const revision = JSON.stringify([found.chapter, format, destination, masks, layout])
       if (planRevision && planRevision !== revision) return refuse('notice.export.stalePlan')
@@ -3801,6 +4046,10 @@ export function createMockBackend(options = {}) {
 
     async writeSettings(patch) {
       await delay(timing.method)
+      // As `settings::check_undo_limit`: a refused patch writes nothing.
+      if (patch?.undoLimit != null && !validUndoLimit(patch.undoLimit)) {
+        throw new Error(`undoLimit must be a whole number from ${UNDO_LIMIT.min} to ${UNDO_LIMIT.max}`)
+      }
       Object.assign(state.settings, patch)
       return withoutToken(snapshot(state.settings))
     },

@@ -1138,9 +1138,44 @@ fn a_group_snapshot_describes_its_models() {
     assert!(described.iter().any(|d| d.contains("ogkalu/comic-text-and-bubble-detector detector.onnx (RT-DETR v2, FP32) @ 16e8a622f91fabc6b5b65c96d32d1183f8843546")));
 }
 
+/// A record keeps the reader's answer, or that there was none, and a record
+/// written before readings were kept still opens.
+#[test]
+fn a_group_record_keeps_the_reading() {
+    let f = fixture();
+    let g = run(&f, &f.rt, &f.ctd);
+    let made = g.record(with_box(&g, "rt-0001"), None);
+    assert_eq!(made.reading, None);
+    let before = serde_json::to_value(&made).unwrap();
+    assert!(before.get("reading").is_none(), "an old record has no such field");
+    assert_eq!(serde_json::from_value::<GroupRecord>(before.clone()).unwrap(), made);
+    assert_eq!(made.snapshot()["reading"], serde_json::Value::Null);
+
+    let reading = crate::gate::hayai::Reading { text: "ドン".into(), confidence: 0.5, floor: 0.25 };
+    let read = GroupRecord { reading: Some(ReaderRecord::of(Some(&reading))), ..made.clone() };
+    let stored = serde_json::to_value(&read).unwrap();
+    assert_eq!(stored["reading"], serde_json::json!({ "read": { "text": "ドン", "confidence": 0.5, "floor": 0.25 } }));
+    assert_eq!(serde_json::from_value::<GroupRecord>(stored).unwrap(), read);
+    assert_eq!(read.snapshot()["reading"]["read"]["text"], "ドン");
+
+    let unread = GroupRecord { reading: Some(ReaderRecord::of(None)), ..made.clone() };
+    let stored = serde_json::to_value(&unread).unwrap();
+    assert_eq!(stored["reading"], "notRead");
+    assert_eq!(serde_json::from_value::<GroupRecord>(stored).unwrap(), unread);
+    assert_eq!(unread.snapshot()["reading"], "notRead");
+
+    // The reading is provenance: it changes neither the flag nor the identity.
+    assert_eq!((read.review_key(), &read.id, &read.lettering_sha256), (made.review_key(), &made.id, &made.lettering_sha256));
+}
+
 /// Big effect lettering: SAM pixels and text-free boxes over them, as Ogkalu
 /// boxes an effect it cut in pieces.
 fn effect(glyphs: &[Rect], boxes: &[Rect]) -> Grouping {
+    effect_read(glyphs, boxes, None)
+}
+
+/// [`effect`], with a reader asked about each unit no box claimed.
+fn effect_read(glyphs: &[Rect], boxes: &[Rect], check: Option<&mut dyn FnMut(Rect) -> UnitAnswer>) -> Grouping {
     let mut mask = vec![0u8; (W * H) as usize];
     for &glyph in glyphs {
         fill(&mut mask, glyph);
@@ -1152,7 +1187,7 @@ fn effect(glyphs: &[Rect], boxes: &[Rect]) -> Grouping {
         ModelUse::new(EvidenceModel::SamTsL, Execution::Local, SpatialInput::Whole),
         ModelUse::new(EvidenceModel::OgkaluFull, Execution::Local, SpatialInput::Whole),
     ];
-    group(&inputs).unwrap()
+    group_checked(&inputs, check).unwrap()
 }
 
 #[test]
@@ -1266,4 +1301,131 @@ fn a_speckle_box_never_takes_the_lettering_beside_it_out_of_cleaning() {
     let speck = group_at(&g, (403, 403)).unwrap();
     assert_ne!(speck.id, glyph.id);
     assert_eq!(speck.disposition, Disposition::Candidate);
+}
+
+/* ------------------------------------------------------------------ */
+/* Confirm, then merge                                                 */
+/* ------------------------------------------------------------------ */
+
+/// Three boxed glyphs and a long stroke no box claimed, within reach of them.
+fn text_and_a_stroke() -> (Vec<Rect>, [Rect; 1]) {
+    let mut glyphs: Vec<Rect> = (0..3).map(|k| Rect::new(100 + 80 * k, 600, 60, 60)).collect();
+    glyphs.push(Rect::new(345, 560, 20, 140));
+    (glyphs, [Rect::new(95, 595, 230, 70)])
+}
+
+#[test]
+fn a_unit_the_reader_refuses_never_joins_the_text_beside_it() {
+    let (glyphs, boxes) = text_and_a_stroke();
+    let mut asked = Vec::new();
+    let mut check = |rect: Rect| {
+        asked.push(rect);
+        UnitAnswer::NotText
+    };
+    let g = effect_read(&glyphs, &boxes, Some(&mut check));
+    // Only the unit no box claimed is put to the reader, by its own bounds.
+    assert_eq!(asked, vec![Rect::new(345, 560, 20, 140)]);
+    let clean: Vec<&TextGroup> = g.cleaning().collect();
+    assert_eq!(clean.len(), 1);
+    assert_eq!(clean[0].component_ids.len(), 3, "the boxed text, without the stroke");
+    assert_eq!(clean[0].bounds, Rect::new(100, 600, 220, 60));
+    let held: Vec<&TextGroup> = g.candidates().collect();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].bounds, Rect::new(345, 560, 20, 140));
+    assert_eq!(held[0].reasons.first(), Some(&ReviewReason::NotText), "the reason a held row shows");
+    assert_eq!(g.record(held[0], None).review_key(), Some("review.reason.gateSkippedNotText"));
+    // Its pixels are in no cleaning group's lettering.
+    assert!(!g.lettering(clean[0]).contains(350, 600));
+}
+
+#[test]
+fn a_unit_the_reader_confirms_joins_as_it_did() {
+    let (glyphs, boxes) = text_and_a_stroke();
+    let mut check = |_: Rect| UnitAnswer::Text;
+    let read = effect_read(&glyphs, &boxes, Some(&mut check));
+    assert_eq!(read, effect(&glyphs, &boxes), "a reader that confirms every unit changes nothing");
+}
+
+#[test]
+fn text_in_a_language_the_run_leaves_is_listed_with_that_reason() {
+    let (glyphs, boxes) = text_and_a_stroke();
+    let mut check = |_: Rect| UnitAnswer::LanguageLeft;
+    let g = effect_read(&glyphs, &boxes, Some(&mut check));
+    let held: Vec<&TextGroup> = g.candidates().collect();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].reasons.first(), Some(&ReviewReason::LanguageLeft));
+    assert_eq!(g.record(held[0], None).review_key(), Some("review.reason.gateSkippedNotJapanese"));
+}
+
+/// Two strokes of one drawn effect, no box: too far apart for one layout
+/// unit, within reach of each other.
+fn two_far_strokes() -> [Rect; 2] {
+    [Rect::new(100, 600, 60, 60), Rect::new(210, 600, 60, 60)]
+}
+
+#[test]
+fn strokes_of_one_effect_are_read_together() {
+    // No stroke of a drawn effect reads alone, so the unit is every unclaimed
+    // layout group within reach of another.
+    let mut asked = Vec::new();
+    let mut check = |rect: Rect| {
+        asked.push(rect);
+        if rect.w > 60 { UnitAnswer::Text } else { UnitAnswer::NotText }
+    };
+    let g = effect_read(&two_far_strokes(), &[], Some(&mut check));
+    assert_eq!(asked, vec![Rect::new(100, 600, 170, 60)]);
+    assert_eq!(g.candidates().count(), 0);
+    let clean: Vec<&TextGroup> = g.cleaning().collect();
+    assert_eq!(clean.len(), 1);
+    assert_eq!(clean[0].component_ids.len(), 2);
+}
+
+#[test]
+fn an_effect_the_reader_refuses_is_listed_whole() {
+    let mut check = |_: Rect| UnitAnswer::NotText;
+    let g = effect_read(&two_far_strokes(), &[], Some(&mut check));
+    assert_eq!(g.cleaning().count(), 0);
+    let held: Vec<&TextGroup> = g.candidates().collect();
+    assert_eq!((held.len(), held[0].component_ids.len()), (1, 2));
+}
+
+#[test]
+fn a_mark_beside_a_box_is_read_before_it_joins() {
+    // An exclamation mark just left of the box: [`group`] attaches it unread.
+    // With a reader it is a unit, and joins only when it reads as text.
+    let mut glyphs: Vec<Rect> = (0..3).map(|k| Rect::new(100 + 80 * k, 600, 60, 60)).collect();
+    glyphs.push(Rect::new(70, 610, 14, 40));
+    let boxes = [Rect::new(95, 595, 230, 70)];
+    let plain = effect(&glyphs, &boxes);
+    assert_eq!(plain.cleaning().next().unwrap().component_ids.len(), 4);
+
+    let mut asked = Vec::new();
+    let mut refuse = |rect: Rect| {
+        asked.push(rect);
+        UnitAnswer::NotText
+    };
+    let refused = effect_read(&glyphs, &boxes, Some(&mut refuse));
+    assert_eq!(asked, vec![Rect::new(70, 610, 14, 40)]);
+    assert_eq!(refused.cleaning().next().unwrap().component_ids.len(), 3);
+    assert_eq!(refused.candidates().count(), 1);
+
+    let mut confirm = |_: Rect| UnitAnswer::Text;
+    let confirmed = effect_read(&glyphs, &boxes, Some(&mut confirm));
+    let clean: Vec<&TextGroup> = confirmed.cleaning().collect();
+    assert_eq!((clean.len(), clean[0].component_ids.len()), (1, 4));
+    assert_eq!(confirmed.candidates().count(), 0);
+}
+
+#[test]
+fn a_speck_beside_a_box_still_attaches_unread() {
+    let mut glyphs: Vec<Rect> = (0..3).map(|k| Rect::new(100 + 80 * k, 600, 60, 60)).collect();
+    glyphs.push(Rect::new(86, 640, 3, 3));
+    let mut asked = 0;
+    let mut check = |_: Rect| {
+        asked += 1;
+        UnitAnswer::NotText
+    };
+    let g = effect_read(&glyphs, &[Rect::new(95, 595, 230, 70)], Some(&mut check));
+    assert_eq!(asked, 0);
+    assert_eq!(g.cleaning().next().unwrap().component_ids.len(), 4);
 }

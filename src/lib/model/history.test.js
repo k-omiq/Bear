@@ -149,6 +149,27 @@ describe('history', () => {
     expect(canRedo(h)).toBe(false)
   })
 
+  /*
+   * The cap is the backend's number. Until a view has carried it the index is
+   * not capped at all, and after that a local push holds to it.
+   */
+  it('caps a local push at the limit the backend reported', () => {
+    const h = createHistory()
+    for (let n = 1; n <= 30; n += 1) push(h, entry(`e${n}`))
+    expect(h.entries).toHaveLength(30)
+
+    adopt(h, { limit: 20, cursor: 20, entries: h.entries.slice(10) })
+    push(h, entry('new'))
+    expect(h.entries).toHaveLength(20)
+    expect(h.cursor).toBe(20)
+    expect(h.entries[0].label).toBe('e12')
+    expect(undoLabel(h)).toBe('new')
+
+    // A view with no limit on it leaves the last one in force.
+    adopt(h, { cursor: 1, entries: [{ seq: 1, label: 'from disk' }] })
+    expect(h.limit).toBe(20)
+  })
+
   it('adopts an empty or missing view as an empty history', () => {
     const h = createHistory()
     push(h, entry('local'))

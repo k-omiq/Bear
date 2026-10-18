@@ -98,7 +98,6 @@ pub(crate) fn app_inference_service(app: &tauri::AppHandle) -> Result<InferenceS
     Ok(
         InferenceService::new(dir, cleaner_core::cloud_wire::provisional_fixture_limits())
             .with_progress(cloud_attempt_sink(app))
-            .with_review(crate::inference::review::review_sink(app))
             .with_dispatch_guard(Box::new({
                 let app = app.clone();
                 move |provider, profile_id| {
@@ -2155,7 +2154,7 @@ pub fn get_cloud_attempt_status_inner(
                             }
                             JobExecutionStatus::Failed => {
                                 if let Ok(guard) = journal.acquire_lock(attempt_id) {
-                                    let _ = journal.record_failed(&guard);
+                                    let _ = journal.record_remote_failure(&guard, st.error.as_ref());
                                 }
                                 return Ok(CloudAttemptStatusDto {
                                     attempt_id: attempt_id.to_string(),
@@ -2937,6 +2936,9 @@ pub struct CloudRecoveryReportDto {
     pub attached: Vec<RecoveredAttemptDto>,
     pub still_running: Vec<RecoveredAttemptDto>,
     pub needs_attention: Vec<RecoveredAttemptDto>,
+    /// Ended by this sweep with nothing applied: the region is an ordinary
+    /// detected region again.
+    pub released: Vec<RecoveredAttemptDto>,
 }
 
 /// `reconcileCloudRecovery`'s answer: one attempt's decision, or with `apply`
@@ -2948,23 +2950,47 @@ pub enum CloudRecoveryResponse {
     Report(CloudRecoveryReportDto),
 }
 
-/// Settle every attempt the journal holds that can be settled without the
-/// network, and name the accepted jobs still to be waited on.
+/// The recovery sweep: settle every attempt the journal holds that can be
+/// settled without the network, and name the accepted jobs still to be waited
+/// on. Every attempt ends, by the table in `docs/cloud-journal.md` section 4.3.
 ///
-/// A cached result is attached; an interrupted submission is closed as
-/// unknown and reported as `ambiguous`, never resubmitted; a result whose
-/// region has moved on stays cached and is reported as `stale`. An accepted
-/// job is reported as still running and returned with its job, for the caller
-/// to wait on without holding up the report. Attempts that have already ended
-/// are left out, and one a render in this process is working on is only
-/// listed: it is that render's to finish.
+/// A cached result is attached, or its attempt is recorded failed when the
+/// result can never be applied (its region, page or chapter changed or is
+/// gone), and listed as `released`. An interrupted submission is closed as
+/// unknown and reported as `ambiguous`, never resubmitted: it is the one case
+/// left to the user. An accepted job is reported as still running and returned
+/// with its job, for the caller to ask the gateway about without holding up the
+/// report. Attempts that have already ended are left out, and one a render in
+/// this process is working on is only listed: it is that render's to finish.
+///
+/// `job_path_of` answers `None` only for a chapter that is certainly not in
+/// the library. A caller that could not read the library does not sweep.
 pub fn recover_all_attempts(
     service: &InferenceService,
     job_path_of: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> (CloudRecoveryReportDto, Vec<(String, PathBuf)>) {
+    sweep_attempts(service, job_path_of, true)
+}
+
+/// [`recover_all_attempts`] for the attempts that have not ended, without the
+/// audit of results already applied: what runs before a cloud clean is
+/// prepared, so that no region is left out for a request that is over.
+pub fn end_unresolved_attempts(
+    service: &InferenceService,
+    job_path_of: &dyn Fn(&str) -> Option<PathBuf>,
+) -> (CloudRecoveryReportDto, Vec<(String, PathBuf)>) {
+    sweep_attempts(service, job_path_of, false)
+}
+
+fn sweep_attempts(
+    service: &InferenceService,
+    job_path_of: &dyn Fn(&str) -> Option<PathBuf>,
+    audit_committed: bool,
+) -> (CloudRecoveryReportDto, Vec<(String, PathBuf)>) {
     let mut report = CloudRecoveryReportDto::default();
     let mut waits = Vec::new();
     let mut snapshots = std::collections::HashMap::new();
+    let mut dismissed = std::collections::HashSet::new();
     for attempt_id in service.journal().list_attempt_ids().unwrap_or_default() {
         let record = match service.journal().get_record(&attempt_id) {
             Ok(record) => record,
@@ -2983,15 +3009,21 @@ pub fn recover_all_attempts(
             report.still_running.push(entry);
             continue;
         }
-        // Dismissed stays dismissed, whatever phase the attempt was left in:
-        // its cached result and journal are kept, only the report forgets it.
-        if matches!(record.phase, AttemptPhase::Cancelled { .. } | AttemptPhase::Failed { .. } | AttemptPhase::Abandoned { .. })
-            || service.journal().repair_acknowledged(&attempt_id)
-        {
+        if matches!(record.phase, AttemptPhase::Cancelled { .. } | AttemptPhase::Failed { .. } | AttemptPhase::Abandoned { .. }) {
             continue;
         }
+        let committed = matches!(record.phase, AttemptPhase::Committed { .. });
+        // A dismissed notice stays dismissed: the report forgets the attempt.
+        // The sweep does not. An attempt that has not ended holds its region,
+        // and a dismissal that kept it out of the sweep held the region for
+        // good with nothing left on screen to say so.
+        if service.journal().repair_acknowledged(&attempt_id) {
+            if committed { continue; }
+            dismissed.insert(attempt_id.clone());
+        }
+        if committed && !audit_committed { continue; }
         let job_path = record.chapter_id.as_deref().and_then(job_path_of);
-        let snapshot = if matches!(record.phase, AttemptPhase::Committed { .. }) {
+        let snapshot = if committed {
             match job_path.as_ref() {
                 Some(path) => {
                     let result = snapshots.entry(path.clone()).or_insert_with(|| service::RecoveryAuditSnapshot::load(path));
@@ -3017,8 +3049,16 @@ pub fn recover_all_attempts(
                     report.still_running.push(entry);
                     waits.push((attempt_id, path));
                 }
-                // Nowhere to put the result: waiting on it would only spend.
-                None => report.needs_attention.push(entry.because("stale")),
+                // Nowhere to put the result: waiting on it would only spend,
+                // so the attempt ends here.
+                None => {
+                    let ended = service.journal().acquire_lock(&attempt_id).and_then(|guard| service.journal()
+                        .record_failed(&guard, "region_changed", "the chapter is no longer in the library"));
+                    match ended {
+                        Ok(_) => report.released.push(entry),
+                        Err(_) => report.needs_attention.push(entry.because("stale")),
+                    }
+                }
             },
             Ok(RecoveryDecision::AmbiguousUnknown { .. }) => {
                 if let Some(path) = job_path {
@@ -3029,10 +3069,14 @@ pub fn recover_all_attempts(
             Ok(RecoveryDecision::CorruptedResultRetainedForInspection { .. }) => {
                 report.needs_attention.push(entry.because("failed"))
             }
-            // Ended before this run looked at it: nothing to show.
-            Ok(RecoveryDecision::Terminal { .. }) => {}
-            // Attached by `recover_attempt_locally` itself; one that comes back
-            // unattached could not be.
+            // A committed attempt whose chapter is gone has nothing to show.
+            // Any other was ended by this sweep: its result could not be
+            // applied, and its region is free again.
+            Ok(RecoveryDecision::Terminal { .. }) => {
+                if !committed { report.released.push(entry); }
+            }
+            // Attached or ended by `recover_attempt_locally` itself; one that
+            // comes back as it was could be neither.
             Ok(
                 RecoveryDecision::ResultCachedReadyForAttach { .. }
                 | RecoveryDecision::AttachmentPendingVerification { .. },
@@ -3040,6 +3084,11 @@ pub fn recover_all_attempts(
             // Another command holds the attempt this instant; the next
             // recovery sees it.
             Err(InferenceServiceError::Journal(JournalError::AttemptLocked { .. })) => {}
+            // The chapter or a source image could not be read just now. The
+            // attempt and its result are kept for the next sweep that can.
+            Err(InferenceServiceError::JobManifest(_) | InferenceServiceError::Io(_)) if !committed => {
+                report.needs_attention.push(entry.because("load_error"))
+            }
             Err(
                 InferenceServiceError::StaleAttachment(_)
                 | InferenceServiceError::Journal(JournalError::StaleAttachment { .. })
@@ -3049,6 +3098,7 @@ pub fn recover_all_attempts(
             Err(_) => report.needs_attention.push(entry.because("failed")),
         }
     }
+    report.needs_attention.retain(|entry| !dismissed.contains(&entry.attempt_id));
     (report, waits)
 }
 
@@ -3128,19 +3178,36 @@ pub(crate) fn refresh_cloud_attention(app: &tauri::AppHandle) {
     }
 }
 
-/// `apply`: recover what is local now, and wait on accepted jobs in the
-/// background, each reporting on `cloud://attempt` like a render the user
-/// started. A job still running when its wait runs out stays accepted for the
-/// next recovery.
-fn reconcile_and_resume(app: &tauri::AppHandle) -> Result<CloudRecoveryReportDto, String> {
-    let service = app_inference_service(app)?.with_review_retry(false);
+/// `apply`: the recovery sweep. It settles what is local now, and asks the
+/// gateway about accepted jobs in the background, each reporting on
+/// `cloud://attempt` like a render the user started. A job still running when
+/// its wait runs out stays accepted for the next sweep.
+///
+/// It runs at start with `audit_committed`, and without it before a cloud
+/// clean is prepared ([`end_unresolved_before_clean`]). Nobody is asked about
+/// a result on this path: one that arrives is applied at once.
+fn reconcile_and_resume(app: &tauri::AppHandle, audit_committed: bool) -> Result<CloudRecoveryReportDto, String> {
+    let recovery_service = |app: &tauri::AppHandle| {
+        app_inference_service(app)
+    };
+    let service = recovery_service(app)?;
     let library = Library::for_app(app).map_err(|_| "recovery_library_load_failed".to_string())?;
-    let (mut report, waits) = recover_all_attempts(&service, &|chapter_id| {
-        library.resolve_chapter(chapter_id).ok()
-    });
+    // Read once, and no sweep without it: a chapter this index does not name
+    // is gone for certain, which is what lets the sweep end an attempt whose
+    // result has nowhere to go. A read that failed must never look like that.
+    let index = library.index().map_err(|_| "recovery_library_load_failed".to_string())?;
+    let job_path_of = |chapter_id: &str| {
+        index.projects.iter()
+            .find(|project| project.chapters.iter().any(|chapter| chapter.id == chapter_id))
+            .map(|project| library.job_path(&project.id, chapter_id))
+            .filter(|path| path.exists())
+    };
+    let (mut report, waits) = sweep_attempts(&service, &job_path_of, audit_committed);
     // The regions themselves carry the reason, not only this report: read
-    // again now that recovery has attached and audited what it could.
-    refresh_cloud_attention(app);
+    // again now that recovery has attached, ended and audited what it could.
+    if audit_committed || !report.attached.is_empty() || !report.released.is_empty() {
+        refresh_cloud_attention(app);
+    }
     if waits.is_empty() {
         return Ok(report);
     }
@@ -3163,11 +3230,19 @@ fn reconcile_and_resume(app: &tauri::AppHandle) -> Result<CloudRecoveryReportDto
     };
     let app = app.clone();
     spawn_recovery_waits(waits, move |attempt_id, job_path| {
-        if let Ok(service) = app_inference_service(&app).map(|service| service.with_review_retry(false)) {
+        if let Ok(service) = recovery_service(&app) {
             let _ = service.recover_cloud_attempt(&attempt_id, &job_path, &config, &PollOptions::interactive());
         }
     });
     Ok(report)
+}
+
+/// The recovery sweep before a cloud clean is prepared, so that the plan does
+/// not leave a region out for a request that is over. What it cannot do now
+/// (a gateway to ask, a chapter that cannot be read) it leaves for the next
+/// sweep; the plan then holds those regions as before.
+pub(crate) fn end_unresolved_before_clean(app: &tauri::AppHandle) {
+    let _ = reconcile_and_resume(app, false);
 }
 
 /// Unknown lookups and accepted waits start independently, outside the report path.
@@ -3225,7 +3300,7 @@ pub async fn reconcile_cloud_recovery(
             }));
         }
         if apply == Some(true) {
-            return reconcile_and_resume(&app).map(CloudRecoveryResponse::Report);
+            return reconcile_and_resume(&app, true).map(CloudRecoveryResponse::Report);
         }
         let journal = get_app_journal(&app)?;
         let library = Library::for_app(&app).ok();
@@ -4261,7 +4336,7 @@ mod tests {
             .unwrap();
         journal.mark_dispatching(&guard4).unwrap();
         journal.record_accepted_handle(&guard4, "h-400").unwrap();
-        journal.record_failed(&guard4).unwrap();
+        journal.record_remote_failure(&guard4, None).unwrap();
         let rec4 = journal.read_record_locked(&guard4).unwrap();
         assert!(matches!(rec4.phase, AttemptPhase::Failed { .. }));
 

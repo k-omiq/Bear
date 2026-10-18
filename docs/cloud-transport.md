@@ -1,116 +1,72 @@
-> Current implementation note: both modules are registered. Orchestrator checks
-> pass eight loopback HTTP tests and ten decoder tests. Client requests explicitly
-> disable retries. Result reads cap encoded bytes at 64 MiB regardless of server
-> limits; decoding caps pixels at 16 Mi pixels and checks all chunk framing/CRCs
-> through a final IEND with no trailing bytes. These are host safety ceilings,
-> not measured serving limits. The status-to-result helper requires the expected
-> handle from the accepted attempt. No live provider verification is claimed.
+# Cloud transport and bounded result decode
 
-# Cloud Transport and Bounded Result Decode (P3b1)
+This document specifies the security controls and invariants of the desktop's HTTP client for the `/mc/v1` wire contract, and of the bounded PNG decoder that turns a cloud result into pixels. The wire contract itself is in [cloud-contract.md](cloud-contract.md).
 
-## Architecture Overview
+## Architecture
 
-This document specifies the security controls, invariants, and implementation status for the bounded **P3b1** milestone of Manga Cleaner's cloud diffusion inference integration.
+Two components carry the work:
 
-The implementation consists of two core components:
-1. **Hardened HTTP Control Transport (`src-tauri/src/inference/http.rs`)**: An immutable, read-only HTTP transport client connecting the desktop application to Modal and Beam cloud backends over the provider-neutral `/mc/v1` REST wire contract.
-2. **Bounded Result PNG Decoder (`crates/cleaner-core/src/cloud_decode.rs`)**: A memory-safe, bounded PNG decompression pipeline validating raw bytes against declared wire metadata, latent stride, single-frame RGB8 format, `.finish()` stream completeness, and SHA-256 digests before producing [`GeneratedCrop`] for host-side compositing.
+1. **Hardened HTTP transport (`src-tauri/src/inference/http.rs`).** The client that connects the desktop app to Modal and Beam gateways over the provider-neutral REST contract.
+2. **Bounded result PNG decoder (`crates/cleaner-core/src/cloud_decode.rs`).** A memory-safe decompression pipeline. It checks raw bytes against the declared wire metadata, the latent stride, the single-frame RGB8 format, stream completeness and the SHA-256 digest, then produces a [`GeneratedCrop`] for host-side compositing.
+
+All limits below are host safety ceilings, not measured serving limits. Tests use loopback HTTP servers under `#[cfg(test)]`.
 
 ---
 
-## Security Invariants and Hardening Controls
+## Security invariants and hardening controls
 
-### 1. Process-Global Single-Worker DNS & Anti-SSRF Protection
-- **Single Process-Global Worker (`resolve_and_validate_host`)**: Uses a single background worker thread receiving requests over a bounded `sync_channel(32)` queue. If the DNS worker is stalled or the queue is full, new requests fail closed immediately with `HttpTransportError::DnsResolverBusy` without spawning additional threads.
-- **Strict Public IP Validation (`is_public_ip`)**:
-  - **IPv4**: Rejects all private, loopback, link-local, carrier-grade NAT (`100.64.0.0/10`), documentation (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`), benchmarking (`198.18.0.0/15`), broadcast, and multicast ranges.
-  - **IPv6**: Allows **ONLY** global unicast within `2000::/3`, while explicitly excluding all special, transition, or documentation prefixes (`2001::/23`, `2002::/16`, `3ffe::/16`, `3fff::/16`). All addresses outside `2000::/3` (including `::/128`, `::1/128`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `ff00::/8`, `100::/64`, `64:ff9b::/96`, `::ffff:0:0/96`) are rejected.
-- **Connection IP Pinning**: Validated public socket addresses are pinned to the `reqwest` client via `resolve_to_addrs`, preventing time-of-check to time-of-use DNS rebinding attacks.
-- **Localhost Test Gating**: Localhost/loopback injection is strictly gated to `#[cfg(test)]`.
+### 1. Process-global single-worker DNS and anti-SSRF protection
 
-### 2. Transport Client Hardening
-- **HTTPS Enforced**: Enforces default rustls root certificate validation; plaintext `http://` endpoints fail closed.
-- **All Redirects Denied**: `reqwest::redirect::Policy::none()` is enforced. Any redirect status code (`300..=399`) or presence of a `Location` header is rejected immediately with `HttpTransportError::RedirectForbidden`.
-- **Zero Environment Proxy Leaks**: `.no_proxy()` ensures local environment proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored.
-- **Automatic Retries Disabled**: No automatic retry middleware is configured; network failures transition directly to caller error handling.
-- **Timeouts**: Enforces `DEFAULT_CONNECT_TIMEOUT` (10s), `DEFAULT_REQUEST_TIMEOUT` (30s), and `DEFAULT_DNS_TIMEOUT` (5s).
-- **Static Sanitized Error Reporting**: Public error enum variants (`HttpTransportError`) are static and leak-free; they never echo untrusted MIME types, bearer tokens, internal query parameters, raw URLs, or server error bodies.
+- **One process-global worker (`resolve_and_validate_host`).** A single background thread takes requests over a bounded `sync_channel(32)` queue. If the DNS worker is stalled or the queue is full, new requests fail at once with `HttpTransportError::DnsResolverBusy`. No extra threads are spawned.
+- **Strict public IP validation (`is_public_ip`).**
+  - **IPv4:** rejects private, loopback, link-local, carrier-grade NAT (`100.64.0.0/10`), documentation (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`), benchmarking (`198.18.0.0/15`), broadcast and multicast ranges.
+  - **IPv6:** allows only global unicast within `2000::/3`, and excludes the special, transition and documentation prefixes (`2001::/23`, `2002::/16`, `3ffe::/16`, `3fff::/16`). Every address outside `2000::/3` is rejected, including `::/128`, `::1/128`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `ff00::/8`, `100::/64`, `64:ff9b::/96` and `::ffff:0:0/96`.
+- **Connection IP pinning.** The validated public socket addresses are pinned to the `reqwest` client with `resolve_to_addrs`. This prevents DNS rebinding between the check and the connection.
+- **Localhost only in tests.** Loopback injection is gated to `#[cfg(test)]`.
 
-### 3. Typed Runtime Credential Binding
-- **Typed Provider Variants (`RuntimeCredential`)**:
-  - `RuntimeCredential::BeamBearer(SecretValue)`: Sends `Authorization: Bearer <token>` with `val.set_sensitive(true)`.
-  - `RuntimeCredential::ModalProxy { token_id, token_secret }`: Sends official `Modal-Key` and `Modal-Secret` headers with `set_sensitive(true)`.
-- **No Invented Headers**: Does not invent vendor headers (e.g. `x-beam-token` or generic bearer claims).
-- **Target Binding (`BoundRuntimeCredential`)**: Credentials must be explicitly bound to the target provider, profile ID, and canonical origin fingerprint. Arbitrary unbound secret parameters are prohibited in client constructors.
-- **Memory Zeroization**: Secret strings are wrapped in [`SecretValue`], enforcing compiler-barrier zeroization on drop and formatting as `[REDACTED]` in `Debug` and `Display`.
+### 2. Transport client hardening
 
-### 4. Read-Only Control Surface
-- **Implemented GET Endpoints**:
-  - `GET /mc/v1/health`: Validates typed server health and asserts provider identity matching.
-  - `GET /mc/v1/model-info`: Validates advertised recipe, model revision, service limits, and verifies `native_mask_conditioning = false` honesty.
-  - `GET /mc/v1/jobs/{handle}`: Checks job status and validates response binding against the caller's [`JobRequestMetadata`].
-  - `GET /mc/v1/jobs/{handle}/result`: Downloads raw PNG result buffers from the verified endpoint origin.
-- **Zero POST Endpoints**: Job creation (`POST /jobs`) and cancellation (`POST /jobs/{handle}/cancel`) are intentionally omitted from this transport client.
-- **Safe Route Construction**: Uses internal enums and `path_segments_mut` to append fixed route segments, preventing origin overwrites or path traversal. Opaque handles are strictly validated (`validate_ascii_id`) and reject dot segments, slashes, percent encoding, and special characters.
-- **Exact MIME Essence Validation**: Verifies that the MIME type essence (ignoring parameters) exactly equals `"application/json"` for control endpoints and `"image/png"` for result endpoints.
-- **Bounded Streaming**: All HTTP response bodies are read via `io::Read::take(max_bytes + 1)`, guaranteeing strict memory ceilings on streaming/chunked transfers.
+- **HTTPS only.** The client uses the default rustls root certificate validation. Plain `http://` endpoints fail closed.
+- **No redirects.** `reqwest::redirect::Policy::none()` is set. Any redirect status (`300..=399`) or a `Location` header is rejected at once with `HttpTransportError::RedirectForbidden`. Modal answers a web request past 150 s with a 303, which is why long analysis and denoise work runs as submit-then-poll jobs ([cloud-provisioning.md](cloud-provisioning.md)).
+- **No environment proxies.** `.no_proxy()` ignores `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`.
+- **No automatic retries.** No retry middleware is configured. A network failure goes straight to the caller's error handling.
+- **Bounded timeouts.** `DEFAULT_CONNECT_TIMEOUT` is 10 s, `DEFAULT_REQUEST_TIMEOUT` is 30 s and `DEFAULT_DNS_TIMEOUT` is 5 s. Some operations pass their own bound, such as 90 s for analysis and denoise job requests.
+- **Static, sanitised errors.** `HttpTransportError` variants are static. They never echo untrusted MIME types, bearer tokens, query parameters, raw URLs or server error bodies.
 
-### 5. Bounded PNG Result Decoder
-- **Preflight Wire Check**: Calls `cleaner_core::cloud_wire::validate_result_bytes`, verifying IHDR header CRC-32, dimension alignment with latent stride (16), declared vs actual byte length, and SHA-256 payload digest.
-- **Separate Encoded and Decoded Bounds**: Encoded stream byte limit is bounded by `ServiceLimits::max_png_bytes` (`png::Limits`), while decoded pixel count is bounded by `ServiceLimits::max_pixels`.
-- **Format Verification**: Rejects interlacing, multi-frame APNG streams, non-RGB8 color types (e.g. Grayscale, RGBA, Indexed, CMYK), and bit depths other than 8.
-- **Stream Completeness (`reader.finish()`)**: Decodes image data and consumes all remaining chunks to `IEND`, verifying chunk CRC and rejecting trailing corruption or garbage bytes.
-- **Compositor Integration**: Outputs [`DecodedResultCrop`], which provides `.as_generated_crop()` to construct a [`GeneratedCrop`] for evaluation by [`PreparedRender::composite`].
+### 3. Typed runtime credential binding
 
----
+- **Typed provider variants (`RuntimeCredential`).**
+  - `RuntimeCredential::BeamBearer(SecretValue)` sends `Authorization: Bearer <token>`, marked sensitive.
+  - `RuntimeCredential::ModalProxy { token_id, token_secret }` sends the official `Modal-Key` and `Modal-Secret` headers, marked sensitive.
+- **No invented headers.** The client uses no vendor headers beyond those (no `x-beam-token`, no generic bearer claims).
+- **Target binding (`BoundRuntimeCredential`).** A credential is bound to the target provider, profile ID and canonical origin fingerprint. Constructors accept no unbound secret.
+- **Zeroisation.** Secret strings are wrapped in [`SecretValue`], which zeroises on drop and formats as `[REDACTED]` in `Debug` and `Display`.
 
-## Status, Limitations, and Milestones
+### 4. Control surface
 
-> [!IMPORTANT]
-> **P3 Implementation Status**: P3 is **partially complete** (P3b1: hardened HTTP transport and result decode).
-> Remote job submission (`POST /mc/v1/jobs`) is **intentionally unavailable** in this build.
-> Vendor authentication headers are prepared based on P1 feasibility specifications and have not been executed against live cloud accounts.
+- **Control reads.** `GET /mc/v1/health` (typed health, provider identity must match), `GET /mc/v1/model-info` (advertised recipe, model revision and limits; checks the `native_mask_conditioning = false` honesty), `GET /mc/v1/capabilities` (deployment handshake), `GET /mc/v1/gpu`.
+- **Job calls.** `POST /mc/v1/jobs` (multipart: `metadata`, `image`, `hint`), `GET /mc/v1/jobs/{handle}` (status, bound against the caller's [`JobRequestMetadata`]), `GET /mc/v1/jobs/{handle}/result` (raw PNG bytes from the verified endpoint origin, with resumable ranges) and `POST /mc/v1/jobs/{handle}/cancel`. A submission that fails in a way that could hide acceptance is classified so it is never retried blindly ([cloud-contract.md](cloud-contract.md) section 6).
+- **GPU control.** `POST /mc/v1/gpu/stop`, including the idle-only release.
+- **Analysis and denoise.** Submit-then-poll job routes under `/mc/analysis/v1/` and `/mc/denoise/v1/`.
+- **Safe route construction.** Internal enums and `path_segments_mut` append fixed route segments, so an origin cannot be overwritten and a path cannot be traversed. Opaque handles are checked with `validate_ascii_id`. Dot segments, slashes, percent encoding and special characters are rejected.
+- **Exact MIME essence.** The MIME type, ignoring parameters, must equal `application/json` for control endpoints and `image/png` for results.
+- **Bounded streaming.** Every response body is read through `io::Read::take(max_bytes + 1)`, so streaming and chunked transfers hit a strict memory ceiling. Control JSON is capped at `MAX_CONTROL_JSON_BYTES` (1 MiB). Result reads cap the encoded bytes at the smaller of the advertised `max_png_bytes` and 64 MiB.
 
-| Milestone | Scope | Status | Notes |
-|---|---|---|---|
-| **P3a** | Cloud Wire Contract & Schemas | **Complete** | Defined in `crates/cleaner-core/src/cloud_wire.rs`. |
-| **P3b1** | Hardened HTTP Transport & Result Decode | **Complete (Source + Tests)** | Defined in `src-tauri/src/inference/http.rs` and `crates/cleaner-core/src/cloud_decode.rs`. |
-| **P3b2** | Polling Loop & Attempt State Machine | *Pending* | Implements bounded exponential backoff status polling and retry classification. |
-| **P3c** | Orchestration & Failover Ladder | *Pending* | Integrates cloud render calls into the active cleaning pipeline with automatic local fallback. |
-| **P4** | Persistence, Journaling & User Consent | *Pending* | Persisted job journal, cryptographic nonce consumption, and preflight cost dialogs. |
+### 5. Bounded PNG result decoder
 
-### Clear Remaining Limitations
-1. **No Job Submission**: `POST /mc/v1/jobs` is not implemented in `http.rs`.
-2. **No Status Polling Loop**: Automated polling with backoff and timeout handling remains P3b2 scope.
-3. **No Automatic Pipeline Failover**: Failover between cloud execution and local inpainting remains P3c scope.
-4. **No Live Vendor Account Verification**: Tests use mock HTTP loopback servers in `#[cfg(test)]`; no live cloud credentials or billable GPU workloads have been executed.
+- **Wire preflight.** `cleaner_core::cloud_wire::validate_result_bytes` checks the `IHDR` CRC-32, dimension alignment with the latent stride (16), declared against actual byte length and the SHA-256 payload digest. The expected handle must come from the accepted attempt.
+- **Separate encoded and decoded bounds.** The encoded stream is bounded by `ServiceLimits::max_png_bytes` (`png::Limits`), and the decoded pixel count by `ServiceLimits::max_pixels`. Host ceilings apply on top: 64 MiB encoded and 16 Mi pixels (`MAX_RESULT_ENCODED_BYTES`, `MAX_RESULT_PIXELS`).
+- **Format check.** Interlacing, multi-frame APNG streams, non-RGB8 colour types (grayscale, RGBA, indexed, CMYK) and bit depths other than 8 are rejected.
+- **Stream completeness (`reader.finish()`).** The decoder consumes every chunk through `IEND`, verifying chunk CRCs and rejecting trailing bytes or truncation.
+- **Compositor hand-off.** The output is a [`DecodedResultCrop`]. Its `.as_generated_crop()` builds the [`GeneratedCrop`] that [`PreparedRender::composite`] evaluates.
 
 ---
 
-## Required Orchestrator Module & Dependency Changes
+## Not verified live
 
-The following changes were intentionally left unedited in existing files (pursuant to ownership boundaries) and must be linked by the orchestrator:
+- Modal has run end to end on a real account ([findings.md](findings.md)). Beam has not.
+- Vendor authentication headers follow the providers' documentation. The Beam bearer path has not run against a live account.
 
-### 1. `crates/cleaner-core/src/lib.rs`
-Add the new module declaration:
-```rust
-pub mod cloud_decode;
-```
+---
 
-### 2. `src-tauri/src/inference/mod.rs`
-Add the new module declaration and re-exports:
-```rust
-pub mod http;
-
-pub use http::{
-    BoundRuntimeCredential, CloudEndpointTarget, CloudHttpClient, HttpTransportError,
-    RuntimeCredential, DEFAULT_CONNECT_TIMEOUT, DEFAULT_DNS_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
-    MAX_CONTROL_JSON_BYTES,
-};
-```
-
-### 3. Dependencies
-No new dependencies are required. The workspace already includes:
-- `reqwest = { version = "0.13", features = ["blocking", "rustls"] }` (in `src-tauri/Cargo.toml`)
-- `png = "0.18"` (in `crates/cleaner-core/Cargo.toml`)
-- `sha2 = "0.10"`, `crc32fast = "1"`, `thiserror = "2"`, `serde = "1"`, `serde_json = "1"`, `zeroize = "1"`, `url = "2"`.
+See also: [cloud-contract.md](cloud-contract.md), [cloud-security.md](cloud-security.md), [cloud-journal.md](cloud-journal.md), [cloud-provisioning.md](cloud-provisioning.md).

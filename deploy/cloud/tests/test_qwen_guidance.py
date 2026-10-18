@@ -3,8 +3,8 @@ import dataclasses
 import json
 from pathlib import Path
 import unittest
-from deploy.cloud.common.contract import ContractValidationError, JobRequestMetadata, QwenEdit, RenderRecipe, compute_request_digest, validate_job_request_metadata
-from deploy.cloud.common.manifest import RECIPE_PROD_QWEN, get_pinned_recipe
+from deploy.cloud.common.contract import GUIDED_RECIPE_IDS, ContractValidationError, JobRequestMetadata, QwenEdit, RenderRecipe, compute_request_digest, validate_job_request_metadata
+from deploy.cloud.common.manifest import RECIPE_PROD_QWEN, RECIPE_PROD_SDNQ, RECIPE_PROD_SDNQ_9B, get_pinned_recipe
 from deploy.cloud.common.qwen import build_prompt, QwenEditRunner
 from deploy.cloud.tests.test_qwen import qwen_modules
 
@@ -49,6 +49,19 @@ class GuidanceTest(unittest.TestCase):
                 RenderRecipe.from_dict({**recipe, 'qwen_edit': edit})
         with self.assertRaises(ContractValidationError):
             RenderRecipe.from_dict({**recipe, 'recipe_id': 'mc-qwen-image-edit-2511-v3', 'qwen_edit': {'target': 'dialogue', 'description': ''}})
+
+    def test_klein_v2_takes_guidance_and_v1_does_not(self):
+        edit = {'target': 'sound_effect', 'description': 'a brick wall'}
+        for recipe_id in (RECIPE_PROD_SDNQ, RECIPE_PROD_SDNQ_9B):
+            recipe = get_pinned_recipe(recipe_id).to_dict()
+            self.assertEqual(RenderRecipe.from_dict({**recipe, 'qwen_edit': edit}).qwen_edit, QwenEdit(**edit))
+            with self.assertRaises(ContractValidationError):
+                RenderRecipe.from_dict({**recipe, 'recipe_id': recipe_id.replace('-v2', '-v1'), 'qwen_edit': edit})
+
+    def test_every_guided_recipe_is_pinned(self):
+        self.assertEqual(GUIDED_RECIPE_IDS, {RECIPE_PROD_QWEN, RECIPE_PROD_SDNQ, RECIPE_PROD_SDNQ_9B})
+        for recipe_id in GUIDED_RECIPE_IDS:
+            self.assertIsNotNone(get_pinned_recipe(recipe_id), recipe_id)
 
     def test_validated_job_forwards_guidance_to_the_runner(self):
         from deploy.cloud.common.flux import render_job

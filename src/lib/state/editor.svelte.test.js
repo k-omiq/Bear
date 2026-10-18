@@ -848,6 +848,25 @@ describe('startRun local engine ceiling boundary', () => {
     },
   )
 
+  // English is left on the page by default: the flag is absent unless the
+  // setting is on, so the run is the one that leaves it.
+  it('sends Clean English text only while the setting is on', async () => {
+    const previous = session.cleanLatinText
+    const runClean = vi.fn().mockResolvedValue({ runId: 'latin-run', pages: [{ id: 'p0' }] })
+    setBackend(/** @type {any} */ ({ runClean }))
+    try {
+      for (const stored of [true, false]) {
+        session.cleanLatinText = stored
+        runClean.mockClear()
+        editor.run.active = false
+        await startRun('page', { mode: 'detect' })
+        expect(runClean.mock.calls[0][0].cleanLatin, String(stored)).toBe(stored ? true : undefined)
+      }
+    } finally {
+      session.cleanLatinText = previous
+    }
+  })
+
   // Solid bubbles only is the clean's choice: the flag rides a Clean and a
   // Detect & clean, never a Detect, and is absent while the box is off so the
   // run is the one it always was.
@@ -1347,5 +1366,211 @@ describe('a run that outlives the editor', () => {
     expect(await startRun('chapter')).toBeNull()
     expect(app.notices.at(-1)?.key).toBe('notice.run.atCapacity')
     expect(editor.run.active).toBe(false)
+  })
+})
+
+/**
+ * A clean of a detected region is an undo step the backend records by itself
+ * (`clean-state`, docs/fixes-2026-10-12/06). This window replays it by asking
+ * for the side's state, and learns of a new one from `history-changed`.
+ */
+describe('a clean the backend recorded', () => {
+  /** @type {(event: any) => void} */
+  let emit
+  /** @type {any} */
+  let onPage
+  /** @type {Record<string, any>} */
+  let api
+
+  const detection = { id: 'p0-d1', pageId: 'p0', source: 'auto', detected: true, outcome: 'detected', insideBubble: true,
+    pick: 'fill', bbox: { x: 1, y: 2, w: 3, h: 4 }, mask: { id: 'p0-d1-m1', regionId: 'p0-d1', sequence: 1 } }
+  const result = { id: 'p0-d1', pageId: 'p0', source: 'auto', detected: true, outcome: 'cleaned',
+    bbox: { x: 1, y: 2, w: 3, h: 4 }, mask: { id: 'p0-d1-m7', regionId: 'p0-d1', sequence: 7, provenance: { engine: 'fill' } } }
+  const cleanStep = { seq: 1, label: 'masks.command.cleanRegion', op: 'clean-state', regionId: 'p0-d1',
+    before: { present: true, pageStatus: 'detected', region: detection },
+    after: { present: true, pageStatus: 'cleaned', region: result } }
+  const index = (cursor, ...labels) => ({ limit: 500, cursor, entries: labels.map((label, at) => ({ seq: at + 1, label })) })
+  const page = () => ({ id: 'p0', chapterId: 'ch1', index: 0, number: 1, status: onPage.outcome === 'detected' ? 'detected' : 'cleaned',
+    skipReason: null, regions: [structuredClone(onPage)], regionCount: 1, doneCount: 0, reviewCount: 0, resident: true })
+  const shown = () => editor.chapter.pages[0].regions.find((region) => region.id === 'p0-d1')
+
+  beforeEach(async () => {
+    closeEditorChapter()
+    app.notices.length = 0
+    onPage = result
+    api = {
+      subscribe: (/** @type {any} */ handler) => {
+        emit = handler
+        return () => {}
+      },
+      openChapter: async () => ({
+        project: { id: 'pr1', mode: 'single', readingDirection: 'rtl' },
+        chapter: { id: 'ch1', projectId: 'pr1', pages: [{ ...page(), regions: [], resident: false }], review: [] },
+        pendingConversion: null,
+      }),
+      loadPages: async () => [page()],
+      listJobs: async () => [],
+      historyLoad: vi.fn(async () => index(1, 'masks.command.cleanRegion')),
+      historyMove: vi.fn(async () => ({ cursor: 0, entry: cleanStep })),
+      historyPush: vi.fn(async () => index(2, 'masks.command.cleanRegion', 'masks.command.rerunMask')),
+      // Answers as the native side does: the region it kept, never a render.
+      setRegionCleaned: vi.fn(async ({ cleaned }) => {
+        onPage = cleaned ? result : detection
+        return { region: structuredClone(onPage), pageStatus: cleaned ? 'cleaned' : 'detected' }
+      }),
+      restoreRegion: vi.fn(),
+    }
+    setBackend(/** @type {any} */ (api))
+    await openEditorChapter('pr1', 'ch1')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    closeEditorChapter()
+    setBackend(null)
+    vi.restoreAllMocks()
+  })
+
+  it('asks for the detection on undo and for the saved result on redo', async () => {
+    expect(shown()).toMatchObject({ outcome: 'cleaned' })
+    expect(editor.history.cursor).toBe(1)
+
+    undo()
+    await editor.history.running
+    expect(api.setRegionCleaned).toHaveBeenLastCalledWith({ regionId: 'p0-d1', cleaned: false })
+    expect(shown()).toMatchObject({ outcome: 'detected', mask: detection.mask })
+    expect(editor.chapter.pages[0].status).toBe('detected')
+
+    redo()
+    await editor.history.running
+    expect(api.setRegionCleaned).toHaveBeenLastCalledWith({ regionId: 'p0-d1', cleaned: true })
+    expect(shown()).toMatchObject({ outcome: 'cleaned', mask: result.mask })
+    expect(editor.chapter.pages[0].status).toBe('cleaned')
+    // A swap, not a restore of this window's copy, and no step of its own.
+    expect(api.setRegionCleaned).toHaveBeenCalledTimes(2)
+    expect(api.restoreRegion).not.toHaveBeenCalled()
+    expect(api.historyPush).not.toHaveBeenCalled()
+    expect(app.notices).toEqual([])
+  })
+
+  it('replays a rejected result the other way round: undo puts the result back', async () => {
+    onPage = detection
+    await reloadPage(0)
+    api.historyMove.mockResolvedValue({ cursor: 0, entry: { ...cleanStep, label: 'masks.command.rejectResult',
+      before: cleanStep.after, after: cleanStep.before } })
+    undo()
+    await editor.history.running
+    expect(api.setRegionCleaned).toHaveBeenLastCalledWith({ regionId: 'p0-d1', cleaned: true })
+    expect(shown()).toMatchObject({ outcome: 'cleaned' })
+  })
+
+  it('still replays an edit this window recorded by putting its side back', async () => {
+    api.restoreRegion.mockResolvedValue(structuredClone(result))
+    api.historyMove.mockResolvedValue({ cursor: 0, entry: { ...cleanStep, op: 'region-state', label: 'masks.command.rerunMask' } })
+    undo()
+    await editor.history.running
+    expect(api.restoreRegion).toHaveBeenCalledWith({ regionId: 'p0-d1', region: detection, pageStatus: 'detected' })
+    expect(api.setRegionCleaned).not.toHaveBeenCalled()
+  })
+
+  it('says a clean from before detections were kept cannot be taken back, and leaves the region', async () => {
+    api.setRegionCleaned.mockRejectedValue(
+      new Error('clean_not_restorable: no detection was kept for region p0-d1; its mask cannot be put back'))
+    undo()
+    await editor.history.running
+    expect(app.notices.map((notice) => notice.key)).toEqual(['notice.mask.rejectNoMask'])
+    expect(app.notices[0].tone).toBe('warn')
+    expect(shown()).toMatchObject({ outcome: 'cleaned', mask: result.mask })
+    expect(editor.history.error ?? null).toBeNull()
+  })
+
+  it('says a refused replay in the words of its direction, and a busy page in its own', async () => {
+    api.setRegionCleaned.mockRejectedValueOnce(new Error('clean_mask_unreadable: the saved mask of region p0-d1 cannot be read (gone)'))
+    undo()
+    await editor.history.running
+    expect(app.notices.at(-1)).toMatchObject({ key: 'notice.mask.rejectFailed', tone: 'warn' })
+
+    api.historyMove.mockResolvedValue({ cursor: 1, entry: cleanStep })
+    api.setRegionCleaned.mockRejectedValueOnce(new Error('clean_no_result: no result is saved for region p0-d1 to put back'))
+    redo()
+    await editor.history.running
+    expect(app.notices.at(-1)).toMatchObject({ key: 'notice.mask.reapplyFailed', tone: 'warn' })
+
+    api.historyMove.mockResolvedValue({ cursor: 0, entry: cleanStep })
+    api.setRegionCleaned.mockRejectedValueOnce(new Error('page_busy'))
+    undo()
+    await editor.history.running
+    expect(app.notices.at(-1)).toMatchObject({ key: 'notice.run.pageBusy', tone: 'warn' })
+    expect(shown()).toMatchObject({ outcome: 'cleaned' })
+    expect(editor.history.error ?? null).toBeNull()
+  })
+
+  it('leaves the open chapter alone when the answer is for a chapter since closed', async () => {
+    /** @type {(value: any) => void} */
+    let answer = () => {}
+    api.setRegionCleaned.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
+    undo()
+    await vi.waitFor(() => expect(api.setRegionCleaned).toHaveBeenCalled())
+    editor.chapter = /** @type {any} */ ({ id: 'other', pages: [{ ...page(), chapterId: 'other' }], review: [] })
+    answer({ region: structuredClone(detection), pageStatus: 'detected' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(shown()).toMatchObject({ outcome: 'cleaned' })
+  })
+
+  it('reads the index again when the backend says the open chapter\'s history changed', async () => {
+    expect(api.historyLoad).toHaveBeenCalledTimes(1)
+    api.historyLoad.mockResolvedValue(index(2, 'masks.command.cleanRegion', 'masks.command.rejectResult'))
+    emit({ type: 'history-changed', chapterId: 'ch1' })
+    await editor.history.running
+    expect(api.historyLoad).toHaveBeenCalledTimes(2)
+    expect(api.historyLoad).toHaveBeenLastCalledWith({ chapterId: 'ch1' })
+    expect(editor.history.cursor).toBe(2)
+    expect(editor.history.entries.map((entry) => entry.label)).toEqual(['masks.command.cleanRegion', 'masks.command.rejectResult'])
+  })
+
+  it('does nothing for another chapter\'s history', async () => {
+    emit({ type: 'history-changed', chapterId: 'some-other-chapter' })
+    await editor.history.running
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(api.historyLoad).toHaveBeenCalledTimes(1)
+    expect(editor.history.entries.map((entry) => entry.label)).toEqual(['masks.command.cleanRegion'])
+  })
+
+  it('reads once for a burst of events, behind a push that is in flight', async () => {
+    /** @type {(value: any) => void} */
+    let pushed = () => {}
+    api.historyPush.mockImplementation(() => new Promise((resolve) => { pushed = resolve }))
+    recordRegionEdit('masks.command.rerunMask', 'p0-d1', { region: result, pageStatus: 'cleaned' },
+      { region: result, pageStatus: 'cleaned' })
+    await vi.waitFor(() => expect(api.historyPush).toHaveBeenCalledTimes(1))
+    for (let i = 0; i < 5; i += 1) emit({ type: 'history-changed', chapterId: 'ch1' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // The push has not answered, so the journal is not read yet.
+    expect(api.historyLoad).toHaveBeenCalledTimes(1)
+
+    api.historyLoad.mockResolvedValue(index(3, 'masks.command.cleanRegion', 'masks.command.rerunMask', 'masks.command.cleanRegion'))
+    pushed(index(2, 'masks.command.cleanRegion', 'masks.command.rerunMask'))
+    await vi.waitFor(() => expect(editor.history.cursor).toBe(3))
+    await editor.history.running
+    expect(api.historyLoad).toHaveBeenCalledTimes(2)
+    expect(editor.history.entries).toHaveLength(3)
+  })
+
+  it('reads again behind an undo pressed while the read was out, so the step is not taken back', async () => {
+    /** @type {(value: any) => void} */
+    let loaded = () => {}
+    api.historyLoad.mockImplementationOnce(() => new Promise((resolve) => { loaded = resolve }))
+    emit({ type: 'history-changed', chapterId: 'ch1' })
+    await vi.waitFor(() => expect(api.historyLoad).toHaveBeenCalledTimes(2))
+    undo()
+    expect(editor.history.cursor).toBe(0)
+    // What was read is from before the undo. After it, the journal agrees.
+    api.historyLoad.mockResolvedValue(index(0, 'masks.command.cleanRegion'))
+    loaded(index(1, 'masks.command.cleanRegion'))
+    await vi.waitFor(() => expect(api.historyLoad).toHaveBeenCalledTimes(3))
+    await editor.history.running
+    expect(api.historyMove).toHaveBeenCalledTimes(1)
+    expect(editor.history.cursor).toBe(0)
+    expect(shown()).toMatchObject({ outcome: 'detected' })
   })
 })

@@ -35,14 +35,29 @@
 //! An append-only log is the obvious shape and it is the wrong one here: undo
 //! moves a cursor backwards and the next edit **truncates the future**, which an
 //! append-only file cannot express without a compaction pass nobody would ever
-//! test. The journal is capped at [`JOURNAL_LIMIT`] entries, each of them a few
-//! hundred bytes, so the whole document is tens of kilobytes and the rewrite is
-//! one `write_atomic` - the same temp-fsync-rename every other write in this
+//! test. The journal is capped, so the rewrite is one `write_atomic` of a
+//! bounded document - the same temp-fsync-rename every other write in this
 //! application uses.
 //!
 //! The cap is a **behaviour change**: the session-only history was
 //! unlimited, and an unlimited *persisted* history is an unbounded term in a
 //! budget whose whole claim is that it is bounded.
+//!
+//! ## The cap is a setting, and this module owns it
+//!
+//! `undoLimit` in `settings.json` is how many entries a chapter keeps:
+//! [`UNDO_LIMIT_DEFAULT`] when it is not set, never below [`UNDO_LIMIT_MIN`]
+//! and never above [`UNDO_LIMIT_MAX`]. The interface holds no copy of these
+//! numbers. It asks [`undo_limit`] for them, and every index this module
+//! answers with carries the limit that was applied.
+//!
+//! The ceiling comes from the rewrite. An entry is not the few hundred bytes
+//! this comment used to claim: each side carries the region's whole record,
+//! and real journals measure 2.4 to 3.5 KB an entry. A full journal is
+//! therefore megabytes, written again on every edit, and
+//! `a_push_is_timed_on_a_real_journal` below is the measurement the ceiling
+//! was checked against. A lower setting takes effect at the next push, which
+//! trims the oldest entries.
 
 use std::path::{Path, PathBuf};
 
@@ -55,8 +70,139 @@ use serde::{Deserialize, Serialize};
 /// chapter over it would be the worse failure by a wide margin.
 pub const JOURNAL_VERSION: u32 = 1;
 
-/// How many entries a chapter keeps. Oldest first out.
-pub const JOURNAL_LIMIT: usize = 500;
+/// The setting that says how many entries a chapter keeps. Oldest first out.
+pub const UNDO_LIMIT_KEY: &str = "undoLimit";
+/// What a chapter keeps when the setting was never written.
+pub const UNDO_LIMIT_DEFAULT: usize = 500;
+/// Low enough to be a real choice, high enough that Undo always has a step.
+pub const UNDO_LIMIT_MIN: usize = 20;
+/// The whole journal is rewritten on every push. See the module docs. At this
+/// size one push took 19 to 29 ms on real entries (Apple M5, internal disk,
+/// 2026-10-12), against 9 to 10 ms at the default.
+pub const UNDO_LIMIT_MAX: usize = 2_000;
+
+/// A stored `undoLimit`, if it is one: a whole number inside the bounds.
+pub fn valid_limit(value: &serde_json::Value) -> Option<usize> {
+    let limit = usize::try_from(value.as_u64()?).ok()?;
+    (UNDO_LIMIT_MIN..=UNDO_LIMIT_MAX).contains(&limit).then_some(limit)
+}
+
+/// The limit a settings snapshot asks for. Anything that is not a valid limit
+/// - no key, a hand-edited file, a value from a build with other bounds - is
+/// the default, because a journal with a wrong cap is a worse answer than a
+/// journal with the usual one.
+pub fn limit_from(settings: &serde_json::Value) -> usize {
+    settings.get(UNDO_LIMIT_KEY).and_then(valid_limit).unwrap_or(UNDO_LIMIT_DEFAULT)
+}
+
+fn limit_for(app: &tauri::AppHandle) -> usize {
+    let limit = limit_from(&crate::settings::read(app).unwrap_or(serde_json::Value::Null));
+    LAST_LIMIT.store(limit, std::sync::atomic::Ordering::Relaxed);
+    limit
+}
+
+/// The limit the setting last read as. A step the backend records itself
+/// ([`record_step`]) is written where no settings file is at hand - a cloud
+/// result committing, a run cleaning a page - so it trims by this. Every
+/// command here that reads the setting keeps it current, and opening a
+/// chapter is one of them. A limit that changed since is applied by the next
+/// push that reads it.
+static LAST_LIMIT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(UNDO_LIMIT_DEFAULT);
+
+/// The verb of a clean of a detected region, and of taking one back. One side
+/// of the entry is the detected region and the other is its result; a replay
+/// asks for whichever its side is (`library::set_region_cleaned`), so undo
+/// and redo are one call with a different boolean, and a rejected result is
+/// the same entry written the other way round.
+pub const CLEAN_OP: &str = "clean-state";
+/// The Undo tooltip of a clean the backend recorded.
+pub const CLEAN_LABEL: &str = "masks.command.cleanRegion";
+/// The Undo tooltip of a rejected result.
+pub const REJECT_LABEL: &str = "masks.command.rejectResult";
+
+/// One side of a step the backend records: the region as the manifest holds
+/// it now, with its page's status. `None` for a region the page does not
+/// list.
+pub(crate) fn side_now(
+    chapter_id: &str,
+    project: &cleaner_core::project::Project,
+    source_idx: usize,
+    region_id: &str,
+) -> Option<Side> {
+    let (region, page_status) = crate::library::region_and_status(chapter_id, project, source_idx, region_id)?;
+    Some(Side {
+        present: true,
+        page_status: Some(page_status),
+        region: serde_json::to_value(region).ok(),
+    })
+}
+
+/// Record a step the backend made itself, and tell the interface its index
+/// moved (`history-changed`).
+///
+/// **The caller holds the job's lock**, and calls this right after the
+/// manifest write the step describes, so the journal never describes a
+/// manifest another writer has moved. A result that commits while its
+/// chapter is not the open one is recorded all the same, which is why the
+/// backend writes it and the interface does not.
+pub(crate) fn record_step(
+    job: &Path,
+    chapter_id: &str,
+    label: &str,
+    region_id: &str,
+    before: Side,
+    after: Side,
+) -> Result<HistoryView, String> {
+    let limit = LAST_LIMIT.load(std::sync::atomic::Ordering::Relaxed);
+    let mut journal = load(job);
+    journal.push(
+        NewDelta { label: label.to_owned(), op: CLEAN_OP.to_owned(), region_id: region_id.to_owned(), before, after },
+        limit,
+    );
+    save(job, &journal)?;
+    crate::events::emit(&crate::events::Event::HistoryChanged { chapter_id: chapter_id.to_owned() });
+    Ok(journal.view(limit))
+}
+
+/// [`record_step`] for a clean of a detected region: `before` is the region
+/// as it was detected ([`side_now`], read before the commit), and the other
+/// side is read here, after it. A clean of anything else (`before` is `None`)
+/// records nothing. A journal that could not be written is reported on the
+/// console and does not fail the clean: the result is on the page, and the
+/// manifest is the record of that.
+pub(crate) fn record_clean(
+    job: &Path,
+    chapter_id: &str,
+    project: &cleaner_core::project::Project,
+    source_idx: usize,
+    region_id: &str,
+    before: Option<Side>,
+) {
+    let Some(before) = before else { return };
+    let Some(after) = side_now(chapter_id, project, source_idx, region_id) else { return };
+    if let Err(error) = record_step(job, chapter_id, CLEAN_LABEL, region_id, before, after) {
+        eprintln!("a clean of {region_id} could not be saved to undo history: {error}");
+    }
+}
+
+/// The limit and its bounds, as the settings dialog shows them.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoLimit {
+    pub value: usize,
+    pub min: usize,
+    pub max: usize,
+    pub default: usize,
+}
+
+fn undo_limit_of(settings: &serde_json::Value) -> UndoLimit {
+    UndoLimit {
+        value: limit_from(settings),
+        min: UNDO_LIMIT_MIN,
+        max: UNDO_LIMIT_MAX,
+        default: UNDO_LIMIT_DEFAULT,
+    }
+}
 
 /// The file, inside `<job>.mtclean.d/`.
 pub const JOURNAL_FILE: &str = "history.json";
@@ -95,12 +241,14 @@ pub struct Side {
 
 /// One undoable edit, as data rather than as a pair of closures.
 ///
-/// `op` is the vocabulary, and there is exactly one verb in it today -
-/// `region-state`, which every editing surface already funnels through
-/// (`maskactions`, `toolapply`, `drawing`). It is a field rather than an
-/// implied constant so that a second verb can be added without a second file
-/// format, and so an entry written by a later build is recognisably *not*
-/// something this one knows how to replay.
+/// `op` is the vocabulary, and it has two verbs. `region-state` is the one
+/// every editing surface of the interface funnels through (`maskactions`,
+/// `toolapply`, `drawing`). [`CLEAN_OP`], `clean-state`, is a clean of a
+/// detected region or a rejected result, and the backend writes it with the
+/// commit ([`record_step`]). It is a field rather than an implied constant so
+/// that a verb can be added without a second file format, and so an entry
+/// written by a later build is recognisably *not* something this one knows
+/// how to replay.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Delta {
@@ -111,7 +259,7 @@ pub struct Delta {
     /// The i18n key the Undo/Redo tooltip renders. No English crosses the seam,
     /// here or anywhere.
     pub label: String,
-    /// The verb. `region-state` today.
+    /// The verb: `region-state` or `clean-state`.
     pub op: String,
     /// Which region the delta is about.
     pub region_id: String,
@@ -165,7 +313,10 @@ impl Journal {
     /// Record an edit that has **already happened**, exactly as the in-memory
     /// history did: the future is dropped, because once a new action happens the
     /// old one is no longer reachable.
-    pub fn push(&mut self, delta: NewDelta) -> Delta {
+    ///
+    /// `limit` is how many entries are kept, and it is read from the setting
+    /// at each push: a limit that was lowered trims the oldest entries here.
+    pub fn push(&mut self, delta: NewDelta, limit: usize) -> Delta {
         self.entries.truncate(self.cursor);
         let entry = Delta {
             seq: self.next_seq,
@@ -177,13 +328,10 @@ impl Journal {
         };
         self.next_seq += 1;
         self.entries.push(entry.clone());
-        // Oldest out, and the cursor moves with them: an entry that has left the
-        // journal has left the past, and a cursor that stayed put would count
-        // entries that are no longer there.
-        while self.entries.len() > JOURNAL_LIMIT {
-            self.entries.remove(0);
-            self.cursor = self.cursor.saturating_sub(1);
-        }
+        // Oldest out. Every entry left is in the past, since the future was
+        // dropped above, so the cursor is the length.
+        let excess = self.entries.len().saturating_sub(limit.max(1));
+        self.entries.drain(..excess);
         self.cursor = self.entries.len();
         entry
     }
@@ -216,8 +364,9 @@ impl Journal {
 
     /// The labels the interface holds: one short pair per entry, and never a
     /// payload. This is the whole of what undo costs in RAM.
-    pub fn view(&self) -> HistoryView {
+    pub fn view(&self, limit: usize) -> HistoryView {
         HistoryView {
+            limit,
             cursor: self.cursor,
             entries: self
                 .entries
@@ -239,10 +388,12 @@ pub struct HistoryLabel {
     pub label: String,
 }
 
-/// The journal's index - cursor and labels, no payloads.
+/// The journal's index - cursor and labels, no payloads - and the limit the
+/// journal is kept to, so the interface's index is capped by the same number.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryView {
+    pub limit: usize,
     pub cursor: usize,
     pub entries: Vec<HistoryLabel>,
 }
@@ -386,9 +537,17 @@ pub async fn history_load(
 ) -> Result<HistoryView, String> {
     crate::library::blocking(move || {
         let job = crate::library::resolve_chapter(&app, &chapter_id)?;
-        Ok(load(&job).view())
+        Ok(load(&job).view(limit_for(&app)))
     })
     .await
+}
+
+/// How many undo steps a chapter keeps, and the bounds a new value must be in.
+#[tauri::command]
+pub fn undo_limit(app: tauri::AppHandle) -> UndoLimit {
+    let limit = undo_limit_of(&crate::settings::read(&app).unwrap_or(serde_json::Value::Null));
+    LAST_LIMIT.store(limit.value, std::sync::atomic::Ordering::Relaxed);
+    limit
 }
 
 #[tauri::command]
@@ -398,9 +557,10 @@ pub async fn history_push(
     entry: NewDelta,
 ) -> Result<HistoryView, String> {
     crate::library::blocking(move || {
+        let limit = limit_for(&app);
         with_journal(&app, &chapter_id, |journal| {
-            journal.push(entry);
-            journal.view()
+            journal.push(entry, limit);
+            journal.view(limit)
         })
     })
     .await
@@ -478,12 +638,12 @@ mod tests {
     #[test]
     fn a_push_numbers_the_entry_and_moves_the_cursor_to_the_end() {
         let mut journal = Journal::default();
-        let first = journal.push(delta("masks.command.deleteMask", "r1"));
-        let second = journal.push(delta("masks.command.rerunMask", "r2"));
+        let first = journal.push(delta("masks.command.deleteMask", "r1"), UNDO_LIMIT_DEFAULT);
+        let second = journal.push(delta("masks.command.rerunMask", "r2"), UNDO_LIMIT_DEFAULT);
         assert_eq!(first.seq, 1);
         assert_eq!(second.seq, 2);
         assert_eq!(journal.cursor, 2);
-        assert_eq!(journal.view().entries.len(), 2);
+        assert_eq!(journal.view(UNDO_LIMIT_DEFAULT).entries.len(), 2);
     }
 
     /// The interface's copy is labels and nothing else - the payload never
@@ -491,8 +651,9 @@ mod tests {
     #[test]
     fn the_view_carries_no_payload() {
         let mut journal = Journal::default();
-        journal.push(delta("masks.command.deleteMask", "r1"));
-        let view = journal.view();
+        journal.push(delta("masks.command.deleteMask", "r1"), UNDO_LIMIT_DEFAULT);
+        let view = journal.view(UNDO_LIMIT_DEFAULT);
+        assert_eq!(view.limit, UNDO_LIMIT_DEFAULT);
         assert_eq!(
             view.entries[0],
             HistoryLabel {
@@ -505,8 +666,8 @@ mod tests {
     #[test]
     fn undo_and_redo_walk_the_same_entries() {
         let mut journal = Journal::default();
-        journal.push(delta("a", "r1"));
-        journal.push(delta("b", "r2"));
+        journal.push(delta("a", "r1"), UNDO_LIMIT_DEFAULT);
+        journal.push(delta("b", "r2"), UNDO_LIMIT_DEFAULT);
 
         assert_eq!(journal.undo().unwrap().label, "b");
         assert_eq!(journal.cursor, 1);
@@ -527,13 +688,13 @@ mod tests {
     #[test]
     fn a_push_after_an_undo_drops_the_future() {
         let mut journal = Journal::default();
-        journal.push(delta("a", "r1"));
-        journal.push(delta("b", "r2"));
+        journal.push(delta("a", "r1"), UNDO_LIMIT_DEFAULT);
+        journal.push(delta("b", "r2"), UNDO_LIMIT_DEFAULT);
         journal.undo();
-        journal.push(delta("c", "r3"));
+        journal.push(delta("c", "r3"), UNDO_LIMIT_DEFAULT);
 
         let labels: Vec<_> = journal
-            .view()
+            .view(UNDO_LIMIT_DEFAULT)
             .entries
             .iter()
             .map(|e| e.label.clone())
@@ -547,14 +708,103 @@ mod tests {
     /// two different edits the same entry to any caller holding the old one.
     #[test]
     fn the_journal_is_capped_and_never_reissues_a_number() {
-        let mut journal = Journal::default();
-        for n in 0..JOURNAL_LIMIT + 10 {
-            journal.push(delta(&format!("e{n}"), "r1"));
+        for limit in [UNDO_LIMIT_MIN, UNDO_LIMIT_DEFAULT, UNDO_LIMIT_MAX] {
+            let mut journal = Journal::default();
+            for n in 0..limit + 10 {
+                journal.push(delta(&format!("e{n}"), "r1"), limit);
+            }
+            assert_eq!(journal.entries.len(), limit);
+            assert_eq!(journal.cursor, limit);
+            assert_eq!(journal.entries[0].label, "e10");
+            assert_eq!(journal.next_seq, limit as u64 + 11);
         }
-        assert_eq!(journal.entries.len(), JOURNAL_LIMIT);
-        assert_eq!(journal.cursor, JOURNAL_LIMIT);
-        assert_eq!(journal.entries[0].label, "e10");
-        assert_eq!(journal.next_seq, JOURNAL_LIMIT as u64 + 11);
+    }
+
+    /// The setting is read at each push, so a lower number takes effect at the
+    /// next edit: the oldest entries go, the newest stay, and Undo still
+    /// answers with the edit that was just made.
+    #[test]
+    fn lowering_the_limit_trims_the_oldest_at_the_next_push() {
+        let mut journal = Journal::default();
+        for n in 0..100 {
+            journal.push(delta(&format!("e{n}"), "r1"), UNDO_LIMIT_DEFAULT);
+        }
+        // Two steps back, so the push also has a future to drop.
+        journal.undo();
+        journal.undo();
+        journal.push(delta("new", "r1"), UNDO_LIMIT_MIN);
+
+        assert_eq!(journal.entries.len(), UNDO_LIMIT_MIN);
+        assert_eq!(journal.cursor, UNDO_LIMIT_MIN);
+        assert_eq!(journal.entries[0].label, "e79");
+        assert_eq!(journal.undo().unwrap().label, "new");
+        assert_eq!(journal.undo().unwrap().label, "e97");
+        assert!(journal.redo().is_some());
+    }
+
+    /// A stored value this build cannot use is the default, not an error and
+    /// not a journal of the wrong size.
+    #[test]
+    fn an_invalid_stored_limit_falls_back_to_the_default() {
+        use serde_json::json;
+        assert_eq!(limit_from(&json!({})), UNDO_LIMIT_DEFAULT);
+        assert_eq!(limit_from(&serde_json::Value::Null), UNDO_LIMIT_DEFAULT);
+        for bad in [json!("800"), json!(19), json!(2_001), json!(-5), json!(250.5), json!(null), json!(true), json!([800])] {
+            assert_eq!(limit_from(&json!({ "undoLimit": bad })), UNDO_LIMIT_DEFAULT, "{bad}");
+        }
+        for good in [UNDO_LIMIT_MIN, 800, UNDO_LIMIT_MAX] {
+            assert_eq!(limit_from(&json!({ "undoLimit": good })), good);
+        }
+        assert_eq!(
+            undo_limit_of(&json!({ "undoLimit": 800 })),
+            UndoLimit { value: 800, min: UNDO_LIMIT_MIN, max: UNDO_LIMIT_MAX, default: UNDO_LIMIT_DEFAULT }
+        );
+    }
+
+    /// One push as the application does it - read the file, push, write the
+    /// file - on a journal filled to each limit with the entries of a real
+    /// one. Ignored: it needs a `history.json` from a real chapter, named in
+    /// `MANGA_CLEANER_HISTORY_SAMPLE`, and its answer is a time, not a pass.
+    #[test]
+    #[ignore]
+    fn a_push_is_timed_on_a_real_journal() {
+        let sample = std::env::var("MANGA_CLEANER_HISTORY_SAMPLE").expect("MANGA_CLEANER_HISTORY_SAMPLE");
+        let real: Journal = serde_json::from_slice(&std::fs::read(&sample).unwrap()).unwrap();
+        assert!(!real.entries.is_empty(), "the sample journal has no entries");
+        let dir = std::env::temp_dir().join(format!("mtclean-history-timing-{}", std::process::id()));
+        let job = dir.join("chapter.mtclean");
+        for limit in [UNDO_LIMIT_DEFAULT, UNDO_LIMIT_MAX, 5_000] {
+            let mut journal = Journal::default();
+            journal.entries = real.entries.iter().cycle().take(limit).cloned().collect();
+            journal.cursor = limit;
+            journal.next_seq = limit as u64 + 1;
+            save(&job, &journal).unwrap();
+            let bytes = std::fs::metadata(journal_path(&job)).unwrap().len();
+            let mut times: Vec<f64> = (0..15)
+                .map(|_| {
+                    let entry = NewDelta {
+                        label: real.entries[0].label.clone(),
+                        op: real.entries[0].op.clone(),
+                        region_id: real.entries[0].region_id.clone(),
+                        before: real.entries[0].before.clone(),
+                        after: real.entries[0].after.clone(),
+                    };
+                    let started = std::time::Instant::now();
+                    let mut journal = load(&job);
+                    journal.push(entry, limit);
+                    save(&job, &journal).unwrap();
+                    started.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect();
+            times.sort_by(f64::total_cmp);
+            println!(
+                "{limit} entries, {bytes} bytes: median {:.1} ms, fastest {:.1} ms, slowest {:.1} ms",
+                times[times.len() / 2],
+                times[0],
+                times[times.len() - 1]
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -564,7 +814,7 @@ mod tests {
         let job = dir.join("chapter.mtclean");
 
         let mut journal = Journal::default();
-        journal.push(delta("masks.command.deleteMask", "r1"));
+        journal.push(delta("masks.command.deleteMask", "r1"), UNDO_LIMIT_DEFAULT);
         save(&job, &journal).unwrap();
 
         let read = load(&job);

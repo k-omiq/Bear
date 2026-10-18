@@ -847,8 +847,8 @@ function pageAt(index) {
 /** @param {import('../api/backend.js').BackendEvent} event */
 function onBackendEvent(event) {
   if (event.type === 'notice') {
-    // A cloud clean's notice carries a machine code; this says it in words,
-    // or leaves it out (`model/cloudnotices.js`).
+    // A cloud clean's notice carries a machine code; this says it in words
+    // (`model/cloudnotices.js`).
     const { key, params } = presentNotice(event.key, event.params ?? {})
     notify({ key, params, tone: event.tone })
     return
@@ -857,6 +857,13 @@ function onBackendEvent(event) {
   // hear the end of it even when the reader has opened another chapter since.
   if (event.type === 'run-finished') settleRun(event)
   if (!editor.chapter || event.chapterId !== editor.chapter.id) return
+  // The backend wrote an undo step by itself (a detection cleaned, a result
+  // rejected). Only the open chapter's index is held here, so another
+  // chapter's event stopped at the line above.
+  if (event.type === 'history-changed') {
+    refreshHistory(event.chapterId)
+    return
+  }
   const areaRun = editor.areaRuns.find((run) => run.runId === event.runId)
   const currentRun = editor.run.runId === event.runId
 
@@ -1624,6 +1631,9 @@ export async function startRun(scope = 'page', { cloudGrant = null, mode = 'auto
       geometryPolicy: 'legacy',
       textPolicy: findAll ? 'all_text' : session.textPolicy,
       ocrRescue: run.ocrRescue,
+      // English is left on the page unless the setting is on; absent is off
+      // on the other side of the seam too.
+      ...(session.cleanLatinText ? { cleanLatin: true } : {}),
       analysisTargets: unifyAnalysisTargets(session.analysisTargets),
       ...(cloudGrant ? { cloudGrant } : {}),
       ...(area ? { area } : {}),
@@ -2066,6 +2076,65 @@ export async function applyRegionDelta(regionId, side, chapterId = editor.chapte
 }
 
 /**
+ * The notice for a refused `setRegionCleaned` or `rejectResult`, by the code
+ * that leads the backend's message. `clean_not_restorable` is a region
+ * cleaned before a clean kept its detection (an older build's chapter), which
+ * has its own sentence because it has its own way out: delete the layer. The
+ * rest say the page is as it was, in the words of the direction asked for:
+ * taking the result off (`cleaned: false`) or putting it back.
+ *
+ * @param {unknown} error
+ * @param {boolean} [cleaned] - the state that was asked for
+ * @returns {'notice.mask.rejectNoMask'|'notice.mask.rejectFailed'|'notice.mask.reapplyFailed'}
+ */
+export function cleanRefusalKey(error, cleaned = false) {
+  const text = error instanceof Error ? error.message : String(error ?? '')
+  if (/\bclean_not_restorable\b/.test(text)) return 'notice.mask.rejectNoMask'
+  return cleaned ? 'notice.mask.reapplyFailed' : 'notice.mask.rejectFailed'
+}
+
+/**
+ * Apply one side of a `clean-state` delta: a clean of a detected region, or a
+ * rejected result, which the backend recorded by itself. One side's region is
+ * the detection and the other its cleaned result, so the side says which of
+ * the two is asked for and `setRegionCleaned` swaps them: the detection comes
+ * back with its mask, or the saved result comes back with no new render.
+ *
+ * The region the backend answers with is what goes into the open chapter,
+ * not the side's own copy: the backend restores what it kept, and that is the
+ * truth. As with `applyRegionDelta`, the interface's copy is touched only
+ * while `chapterId` is still the open chapter.
+ *
+ * **A refusal is said and nothing is thrown.** A chapter cleaned before a
+ * clean kept its detection has nothing to put back (`clean_not_restorable`),
+ * and a result a later clean replaced is gone (`clean_no_result`). The region
+ * stays as it is and a notice says why (`cleanRefusalKey`); a chapter another
+ * process holds, or a run on the page, is said in its own words.
+ *
+ * @param {string} regionId
+ * @param {import('../model/journal.js').DeltaSide} side
+ * @param {string|null} [chapterId]
+ * @returns {Promise<boolean>} whether the backend made the swap
+ */
+export async function applyCleanDelta(regionId, side, chapterId = editor.chapter?.id ?? null) {
+  const cleaned = side?.region?.outcome !== 'detected'
+  let result
+  try {
+    result = await getBackend().setRegionCleaned({ regionId, cleaned })
+  } catch (error) {
+    console.error('a clean could not be replayed', error)
+    if (!reportJobConflict(error)) notify({ key: cleanRefusalKey(error, cleaned), tone: 'warn' })
+    return false
+  }
+  if (!result?.region) return false
+  if (!chapterId || editor.chapter?.id !== chapterId) return true
+  applyRegionState(regionId, result.region, result.pageStatus ?? undefined)
+  const page = pageHolding(regionId)
+  if (page) await reloadPage(page.index).catch(() => {})
+  return true
+}
+
+/**
  * Update the in-memory history once a backend push answers.
  *
  * @param {import('../model/history.js').History} history
@@ -2280,8 +2349,15 @@ async function replayHistory(direction) {
     }
     const entry = step?.entry
     if (!entry) return
-    if (entry.op !== 'region-state') return
     const side = direction === 'undo' ? entry.before : entry.after
+    // The two ops there are: a clean of a detection the backend recorded,
+    // replayed by asking for the side's state, and an edit this window
+    // recorded, replayed by putting the side's region back.
+    if (entry.op === 'clean-state') {
+      await applyCleanDelta(entry.regionId, side, chapter.id)
+      return
+    }
+    if (entry.op !== 'region-state') return
     await applyRegionDelta(entry.regionId, side, chapter.id)
   } finally {
     history._busy = false
@@ -2355,6 +2431,72 @@ async function loadHistory(chapterId) {
   } catch (error) {
     history.error = error
   }
+}
+
+/**
+ * Read the open chapter's journal index again, because the backend wrote an
+ * entry by itself (`history-changed`): a detection cleaned, a result
+ * rejected. For any other chapter this does nothing; its index is read when
+ * it is opened.
+ *
+ * **Queued behind whatever history task is in flight**, so the read sees the
+ * journal after the pushes and replays this window already sent. An Undo,
+ * Redo or edit made *while* the read is out moved this window's index ahead
+ * of what was read, and is itself queued behind the read; adopting the answer
+ * then would take that move back, so the answer is dropped and the index is
+ * read once more, behind it.
+ *
+ * One read waiting is enough for any number of events: it reads whatever the
+ * journal holds when it runs. A cloud clean of two hundred regions is two
+ * hundred events and a handful of reads.
+ *
+ * @param {string|null|undefined} chapterId
+ */
+export function refreshHistory(chapterId) {
+  if (!chapterId || editor.chapter?.id !== chapterId) return
+  const history = editor.history
+  if (history._reload) return
+  history._reload = true
+  enqueueHistoryTask(history, async () => {
+    history._reload = false
+    if (editor.history !== history || editor.chapter?.id !== chapterId) return
+    const cursor = history.cursor
+    const length = history.entries.length
+    let view
+    try {
+      view = await getBackend().historyLoad({ chapterId })
+    } catch (error) {
+      if (editor.history === history) history.error = error
+      return
+    }
+    if (editor.history !== history) return
+    if (history.cursor !== cursor || history.entries.length !== length) {
+      refreshHistory(chapterId)
+      return
+    }
+    adoptHistory(history, view)
+  })
+}
+
+/**
+ * Take on the index a backend call answered with after it recorded a step of
+ * its own (`rejectResult`). With nothing in flight the answer is the journal
+ * as it stands and is adopted at once, so Undo names the step without a
+ * second round trip. With a push or a replay in flight the answer may be
+ * older than what those leave behind, so the index is read again behind them
+ * (`refreshHistory`).
+ *
+ * @param {string|null|undefined} chapterId - the chapter the step was recorded in
+ * @param {import('../api/backend.js').HistoryView|null|undefined} view
+ */
+export function adoptBackendHistory(chapterId, view) {
+  if (!chapterId || editor.chapter?.id !== chapterId) return
+  const history = editor.history
+  if (view && !history._busy) {
+    adoptHistory(history, view)
+    return
+  }
+  refreshHistory(chapterId)
 }
 
 /* ------------------------------------------------------------------ */

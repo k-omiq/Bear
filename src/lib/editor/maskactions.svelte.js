@@ -16,6 +16,12 @@
  * Deleting restores the original text under the mask, and
  * undoing the delete puts the mask back.
  *
+ * Two edits are not recorded here, because the backend records them itself,
+ * under the lock it makes the edit in: a clean of a detected region
+ * (`cleanDetected`, `cleanDetectedOnCloud`) and a rejected result
+ * (`rejectResult`). Undo of the first puts the detection back with its mask,
+ * and Redo puts the same result back with no new render.
+ *
  * **A region edit can move its page.** Cleaning a gate-skipped region makes an
  * unclean page a cleaned one, and deleting the last mask on a page takes that
  * back; the Pages row's mark comes from the page and its track from the
@@ -33,15 +39,17 @@
 
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
-import { CLOUD_ENGINE, MAX_MASK_PADDING, isCloudMask, isDetected, reRunnable, retryWidens } from '../model/masks.js'
+import { CLOUD_ENGINE, MAX_MASK_PADDING, isCloudMask, isDetected, reRunnable, rejectable, retryWidens } from '../model/masks.js'
 import { isRegionCopy, layerOf, sameLayer, sanitizeLayer } from '../model/layers.js'
 import { heldStartsOutside } from '../model/review.js'
 import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
 import { notify } from '../state/app.svelte.js'
 import {
+  adoptBackendHistory,
   applyRegionDelta,
   applyRegionState,
   claimPageEdit,
+  cleanRefusalKey,
   editor,
   pageBusy,
   holdsRegion,
@@ -489,9 +497,13 @@ export async function approveHeldMask(region) {
  * it, and the ladder escalates from there as a run's does. With an engine
  * (Clean with > a local model, from the region menu) that model renders it
  * and nothing else: the user named it. The detection is replaced by what the
- * clean made, under the same id. Like a run's clean it is not an undoable
- * edit: undo would have to put a detection back, which the native side does
- * not do. The patch it made is deleted like any other.
+ * clean made, under the same id. Like a run's clean it is one undo step, and
+ * the backend records it, not this: the native side keeps the detection the
+ * clean replaced, so Undo puts it back with its mask and Redo puts the same
+ * result back with no new render (`editor.svelte.js#applyCleanDelta`). The
+ * step reaches this window's index as a `history-changed` event. Reject
+ * result does what Undo does at any later time (`rejectResult`), and the
+ * patch is deleted like any other.
  *
  * It is an edit of its own page and not a run: a run elsewhere in the chapter
  * does not hold it back, and only the page the run is on right now does
@@ -546,7 +558,9 @@ const cleaning = new Set()
  * Always the cloud, whatever the region's stored pick. A Text cleanup run
  * keeps LaMa picks on this computer (`cloudrun.js`), but here the user chose
  * the cloud for this one region, and a LaMa pick cleaned locally instead was
- * the defect this replaced. Like `cleanDetected` it is not an undoable edit.
+ * the defect this replaced. Like `cleanDetected` it is one undo step the
+ * backend records when the render commits: Undo puts the detection back with
+ * its mask, and Redo the same result with no new render and no new request.
  *
  * @param {import('../api/backend.js').ApiRegion} region
  * @returns {Promise<boolean>} whether the render committed
@@ -572,6 +586,56 @@ export async function cleanDetectedOnCloud(region) {
   refreshPage(pageIndex)
   return true
 }
+
+/**
+ * Reject a generated result: the region is detected again, with the mask it
+ * had before the clean, ready to be cleaned again. What Undo does right after
+ * a clean, offered at any later time.
+ *
+ * **Nothing is recorded here.** The backend takes the result off and writes
+ * the undo step under one lock (`reject_result`), and answers with the
+ * chapter's index after it, which is adopted. Undo of a reject puts the same
+ * result back with no new render.
+ *
+ * A result with nothing kept to go back to is refused and said so: a chapter
+ * cleaned before a clean kept its detection (`clean_not_restorable`) gets the
+ * sentence that names the way out, which is deleting the layer. The region is
+ * as it was either way.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @returns {Promise<boolean>} whether the result was rejected
+ */
+export async function rejectResult(region) {
+  if (!rejectable(region)) return false
+  const chapterId = editor.chapter?.id ?? null
+  const pageIndex = pageIndexOf(region.id)
+  if (!chapterId || pageIndex === null) return false
+  // A second press while the first is in flight is not a second reject.
+  if (rejecting.has(region.id) || !claimPageEdit(pageIndex)) return false
+  rejecting.add(region.id)
+  try {
+    /** @type {Awaited<ReturnType<import('../api/backend.js').Backend['rejectResult']>>} */
+    let result
+    try {
+      result = await getBackend().rejectResult({ regionId: region.id })
+    } catch (error) {
+      console.error('a result could not be rejected', error)
+      if (!reportJobConflict(error)) notify({ key: cleanRefusalKey(error), tone: 'warn' })
+      return false
+    }
+    if (!result?.region) return false
+    if (!stillOpen(chapterId)) return true
+    replaceRegion(result.region, result.pageStatus)
+    adoptBackendHistory(chapterId, result.history)
+    refreshPage(pageIndex)
+    return true
+  } finally {
+    rejecting.delete(region.id)
+  }
+}
+
+/** The results a reject of their own is in flight for, by region id. */
+const rejecting = new Set()
 
 /**
  * Set a detected region's text type: speech bubble text (`inside: true`) or
@@ -988,8 +1052,9 @@ export function showOnPage(region) {
  * Clean with on a detected region cleans it for the first time, with the
  * model picked: a local one here, Cloud on the cloud GPU. On a cleaned one it
  * replaces the layer, as the row's picker does. Text type is a detected
- * region's alone, and Approve mask a held region's, the two entries with no
- * row control: `setDetectionType` and `approveHeldMask`.
+ * region's alone, Approve mask a held region's, and Reject result a cleaned
+ * detection's, the three entries with no row control: `setDetectionType`,
+ * `approveHeldMask` and `rejectResult`.
  *
  * @param {string} id
  * @param {import('../api/backend.js').ApiRegion} region
@@ -999,6 +1064,7 @@ export async function runRegionMenuItem(id, region) {
   if (!region) return false
   if (id === 'retry') return rerunMask(region, 'retry')
   if (id === 'retryWider') return rerunMask(region, 'retryWider')
+  if (id === 'reject') return rejectResult(region)
   if (id === 'delete') return deleteRow(region)
   if (id === 'duplicate') return duplicateRegion(region)
   if (id === 'approveMask') return approveHeldMask(region)

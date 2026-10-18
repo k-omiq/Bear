@@ -1,12 +1,14 @@
 # COO MTSv3 on Apocalypse chapter 109
 
+This experiment reports the COO MTSv3 detection run on one 45-page chapter using PyTorch MPS; it is not shipped code.
+
 The local MPS probe processed all 45 user-provided pages using the pinned
 `best_test.yaml` detection evaluation preprocessing. Its
 [evaluation transform](https://github.com/ku21fan/COO-Comic-Onomatopoeia/blob/d8028f015b8ce99a4dd798427342f97087529357/MTSv3/maskrcnn_benchmark/data/transforms/build.py#L62-L70)
-uses PIL resize before tensor conversion and BGR255 normalization. It uses the published
+uses PIL resize before tensor conversion and BGR255 normalisation. It uses the published
 1440-pixel minimum side and 4000-pixel maximum side. Pages at 690×1600 were
 resized to 1440×3339, padded to 1440×3360, converted to BGR255, and
-normalized by Caffe means `[102.9801, 115.9465, 122.7717]`. All 300
+normalised by Caffe means `[102.9801, 115.9465, 122.7717]`. All 300
 checkpoint tensors loaded strictly after full SHA-256 verification.
 
 | Measurement | Result |
@@ -24,9 +26,9 @@ checkpoint tensors loaded strictly after full SHA-256 verification.
 Timings exclude checkpoint load and artifact writes. Peak RSS is process
 memory; it is not a separate measure of Apple unified GPU allocations.
 The preserved run is in `artifacts/chapter-109-eval-pil/`; the old
-`artifacts/chapter-109/` path remains a symlink to it. `summary.json`
+`artifacts/chapter-109/` path remains a symlink to it. `summary.json` (written when the spike runs; not committed)
 includes each page's image hash, prepared tensor hash, raw
-proposal map hash, dimensions, detections, and stage timings. `manifest.json`
+proposal map hash, dimensions, detections, and stage timings. `manifest.json` (written when the spike runs; not committed)
 includes SHA-256 and byte size for every artifact.
 The final output directory contains 144 files totaling 862,806,323 bytes.
 `summary.json` is 881,893 bytes with SHA-256
@@ -51,8 +53,8 @@ Visual examples:
 
 The chapter overlays are in ignored
 `artifacts/chapter-109-eval-pil/overlay-{02,07,24,35}.png` and
-`artifacts/chapter-109-eval-pil/contact-sheet.png`. Numeric counts are model output,
-not precision or recall; the pages have no new hand-labeled truth set. The
+`artifacts/chapter-109-eval-pil/contact-sheet.png` (written when the spike runs; not committed). Numeric counts are model output,
+not precision or recall; the pages have no new hand-labelled truth set. The
 incremental value of COO must be judged against the full RT-DETRv2 + SAM-TS
 run using the same source coordinates, then weighed against these false
 candidates, roughly 1.3 s/page inference, memory, and non-commercial terms.
@@ -60,7 +62,7 @@ candidates, roughly 1.3 s/page inference, memory, and non-commercial terms.
 ## Preprocessing source check
 
 The pinned [standalone demo](https://github.com/ku21fan/COO-Comic-Onomatopoeia/blob/d8028f015b8ce99a4dd798427342f97087529357/MTSv3/demo.py#L53-L80)
-also resizes through PIL before normalization, but its `main` uses an
+also resizes through PIL before normalisation, but its `main` uses an
 [800-pixel minimum side](https://github.com/ku21fan/COO-Comic-Onomatopoeia/blob/d8028f015b8ce99a4dd798427342f97087529357/MTSv3/demo.py#L296-L298).
 The pinned [M4C feature extraction path](https://github.com/ku21fan/COO-Comic-Onomatopoeia/blob/d8028f015b8ce99a4dd798427342f97087529357/MTSv3/extract_features_vmb.py#L195-L225)
 instead subtracts the Caffe means in float32 BGR before OpenCV linear resize.

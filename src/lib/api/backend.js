@@ -158,8 +158,28 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * The deltas themselves stay on disk.
  *
  * @typedef {Object} HistoryView
+ * @property {number} limit - how many entries the journal keeps: the `undoLimit` setting as the backend reads it
  * @property {number} cursor - how many entries are in the past
  * @property {Array<{seq: number, label: string}>} entries
+ */
+
+/**
+ * One entry of the undo journal, as `historyMove` answers it. Two ops:
+ *
+ * - `region-state`: the interface recorded it (`historyPush`) after an edit.
+ *   Replayed with `restoreRegion`, which puts the side's region back.
+ * - `clean-state`: the backend recorded it by itself, when a stored detection
+ *   was cleaned or a result was rejected. One side's region is the detection
+ *   (`outcome: 'detected'`), the other the cleaned result. Replayed with
+ *   `setRegionCleaned`, which swaps the two with no new render.
+ *
+ * @typedef {Object} HistoryEntry
+ * @property {number} seq
+ * @property {string} label - i18n key for the Undo/Redo tooltip
+ * @property {'region-state'|'clean-state'} op
+ * @property {string} regionId
+ * @property {{present: boolean, pageStatus?: string|null, region?: ApiRegion|null}} before
+ * @property {{present: boolean, pageStatus?: string|null, region?: ApiRegion|null}} after
  */
 
 /**
@@ -268,7 +288,23 @@ import { createTauriBackend, isTauri } from './tauri.js'
  */
 
 /**
- * @typedef {PageStartedEvent|RegionDoneEvent|PageDoneEvent|RunFinishedEvent|NoticeEvent|ModelProgressEvent} BackendEvent
+ * The backend wrote an entry into a chapter's undo journal by itself: a stored
+ * detection was cleaned (`masks.command.cleanRegion`, one entry for each
+ * region, whoever started the clean), or a result was rejected
+ * (`rejectResult`). The entry is a `clean-state` one and is in the journal
+ * already; the event says the index the interface holds is behind.
+ *
+ * The interface reads the index again (`historyLoad`) when `chapterId` is the
+ * open chapter, and ignores the event otherwise: another chapter's index is
+ * read when that chapter is opened.
+ *
+ * @typedef {Object} HistoryChangedEvent
+ * @property {'history-changed'} type
+ * @property {string} chapterId
+ */
+
+/**
+ * @typedef {PageStartedEvent|RegionDoneEvent|PageDoneEvent|RunFinishedEvent|NoticeEvent|ModelProgressEvent|HistoryChangedEvent} BackendEvent
  */
 
 /* ------------------------------------------------------------------ */
@@ -310,15 +346,17 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * shape: `{status: 'refused', reasonKey}`, with the sentence in the catalogue
  * and the backend announcing it on the notice stack. Callers branch on
  * `reasonKey`, never on `status` alone - only
- * `notice.export.refusedOverwrite` has a way out the interface can offer
- * (choose another folder), and the rest are answered by changing what was
- * asked for.
+ * `notice.export.refusedOverwrite` and `notice.export.destinationUnavailable`
+ * have a way out the interface can offer (choose another folder), and the
+ * rest are answered by changing what was asked for.
  *
  * The refusals are: a lossy format (`refusedLossyFormat`), PSB
  * (`refusedLayeredFormat`), a format string the backend does not know
  * (`refusedUnknownFormat`), `masks: 'separate-layer'` into a CBZ
  * (`refusedMaskLayers`), a destination that is neither sentinel nor an
- * absolute path (`refusedDestination`), a stitched export of a paginated
+ * absolute path (`refusedDestination`), a destination that cannot be created
+ * or written, such as a folder on a drive that is not connected
+ * (`destinationUnavailable`, with the folder on `path`), a stitched export of a paginated
  * project (`refusedStitchPaginated`), into a CBZ (`refusedStitchedArchive`) or
  * as PSD (`refusedStitchedLayered`), a PSD of a page PSD cannot carry
  * (`refusedLayeredMode`, `refusedLayeredSize`), and the five
@@ -349,12 +387,13 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: {chapterId: string, indices: number[]}) => Promise<ApiPage[]>} loadPages - the regions of a window of pages. Indices that are not there are skipped, never refused
  * @property {(spec: {chapterId: string}) => Promise<HistoryView>} historyLoad - the chapter's undo journal as an index: a cursor and one `{seq, label}` per entry, no payloads
  * @property {(spec: {chapterId: string, entry: Object}) => Promise<HistoryView>} historyPush - record a delta that has already been applied; truncates the redo stack, caps the journal, and answers with the index as it now stands
- * @property {(spec: {chapterId: string, direction: 'undo'|'redo'}) => Promise<{cursor: number, entry: Object|null}>} historyMove - move the journal's cursor and answer with the one delta to replay
+ * @property {(spec: {chapterId: string, direction: 'undo'|'redo'}) => Promise<{cursor: number, entry: HistoryEntry|null}>} historyMove - move the journal's cursor and answer with the one delta to replay
+ * @property {() => Promise<{value: number, min: number, max: number, default: number}>} undoLimit - how many undo steps a chapter keeps and the bounds a new value must be in. The backend owns all four numbers; a new value is written as `writeSettings({undoLimit})`, which refuses one outside the bounds
  * @property {(spec: {projectId: string, name: string}) => Promise<ApiProject|null>} renameProject
  * @property {(spec: {projectId: string}) => Promise<boolean>} deleteProject
  * @property {(spec: {projectId: string, chapterId: string, sourceFiles?: boolean}) => Promise<boolean>} deleteChapter - always removes the chapter's row and the library's own files for it (its manifest, masks and patches). `sourceFiles: true` also deletes the folder of scans it was read from - except the project's own folder, which a backend must refuse to remove so that deleting one chapter cannot empty the project. `false` means the chapter was not there
  * @property {(spec: {projectId: string, chapterId?: string}) => Promise<{project: ApiProject, chapter: ApiChapter, resumedFrom: number, runId: string|null, pages: Array<Object>, mode?: RunMode}|null>} resumeJob
- * @property {(spec: {scope: 'page'|'chapter'|'project', mode?: RunMode, chapterId: string, pageIndex?: number, engineCeiling?: string, bubbleEngine?: string, outsideEngine?: string, outsideBubbles?: 'review'|'clean', bubbleColor?: string, maskPaddingPx?: number, detection?: Record<string, string|null>, detectorModels?: string[], geometryPolicy?: 'legacy'|'text_shape', textPolicy?: 'legacy_gate'|'all_text', ocrRescue?: boolean, analysisTargets?: {rtFull?: 'local'|'cloud', samTs?: 'local'|'cloud'}, cloudGrant?: string, area?: {x: number, y: number, w: number, h: number}, solidBubblesOnly?: boolean}) => Promise<RunHandle>} runClean - selected models, source languages, geometry and text policy are captured for the native run. A stage `analysisTargets` routes to the cloud needs `cloudGrant` from `confirmRunAnalysis`; without it the run is refused (`cloud_run_grant_required`). `mode` is the step (docs/detect-clean.md §3), `auto` when absent. `maskPaddingPx` grows every fitted mask by that many page pixels, 0 to 32 (`mask_padding_invalid` past it), 0 when absent. `area` (page percent, as a region's `bbox`) holds a `detect` of one page to that area: the models read a window around it at the page's own resolution, and what they find there is added to the page's detections, less what the page holds already; nothing stored is replaced and the page is not marked detected. Refused with `detect_area_invalid` off the page, and `detect_area_scope_unsupported` for any other mode or scope. `solidBubblesOnly` (false when absent) narrows a `clean` or `auto` to speech bubbles on flat paper: one is painted flat on this computer, and every other region is left, or stored, as a detected region for a later clean, text outside a bubble included; nothing is escalated, declined or held for it, and the run ends with `notice.run.solidOnly` and both counts
+ * @property {(spec: {scope: 'page'|'chapter'|'project', mode?: RunMode, chapterId: string, pageIndex?: number, engineCeiling?: string, bubbleEngine?: string, outsideEngine?: string, outsideBubbles?: 'review'|'clean', bubbleColor?: string, maskPaddingPx?: number, detection?: Record<string, string|null>, detectorModels?: string[], geometryPolicy?: 'legacy'|'text_shape', textPolicy?: 'legacy_gate'|'all_text', ocrRescue?: boolean, cleanLatin?: boolean, analysisTargets?: {rtFull?: 'local'|'cloud', samTs?: 'local'|'cloud'}, cloudGrant?: string, area?: {x: number, y: number, w: number, h: number}, solidBubblesOnly?: boolean}) => Promise<RunHandle>} runClean - selected models, source languages, geometry and text policy are captured for the native run. A stage `analysisTargets` routes to the cloud needs `cloudGrant` from `confirmRunAnalysis`; without it the run is refused (`cloud_run_grant_required`). `mode` is the step (docs/detect-clean.md §3), `auto` when absent. `maskPaddingPx` grows every fitted mask by that many page pixels, 0 to 32 (`mask_padding_invalid` past it), 0 when absent. `cleanLatin` (false when absent) lets the run clean text the reader reads as English (Latin letters); without it such text is held with `review.reason.gateSkippedNotJapanese`, under either text policy, and only while the reader runs. `area` (page percent, as a region's `bbox`) holds a `detect` of one page to that area: the models read a window around it at the page's own resolution, and what they find there is added to the page's detections, less what the page holds already; nothing stored is replaced and the page is not marked detected. Refused with `detect_area_invalid` off the page, and `detect_area_scope_unsupported` for any other mode or scope. `solidBubblesOnly` (false when absent) narrows a `clean` or `auto` to speech bubbles on flat paper: one is painted flat on this computer, and every other region is left, or stored, as a detected region for a later clean, text outside a bubble included; nothing is escalated, declined or held for it, and the run ends with `notice.run.solidOnly` and both counts
  * @property {(spec?: {runId?: string}) => Promise<string|null>} cancelRun
  * @property {(spec: {tool: string, params?: Object, chapterId?: string, pageIndex?: number, regionId?: string}) => Promise<ApplyResult>} applyTool
  * @property {(spec: {chapterId: string, pageIndex: number, sourceIndex?: number, sourceSha?: string, tool: string, params: Object, requestId: number, revision: string}) => Promise<{requestId: number, revision: string, chapterId: string, pageIndex: number, bounds: {x:number,y:number,w:number,h:number}, png:number[]}|null>} previewPaint
@@ -364,6 +403,8 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: {maskId: string}) => Promise<{region: null, pageStatus: string}|null>} deleteMask - deleting a mask deletes the row: the text under it comes back and the region goes off the page, so there is no region to answer with. `null` (rather than `{region: null}`) means the mask was not found
  * @property {(spec: {regionId: string}) => Promise<{region: ApiRegion, pageStatus: string}|null>} duplicateRegion - independently copy a frozen regional selection and its presentation settings
  * @property {(spec: {regionId: string, region: ApiRegion|null, pageStatus?: string}) => Promise<ApiRegion|null>} restoreRegion - put a region back as it was; the undo half of every region-level edit. `region: null` means it was not there
+ * @property {(spec: {regionId: string, cleaned: boolean}) => Promise<{region: ApiRegion, pageStatus: string}|null>} setRegionCleaned - swap a cleaned detection between its two states; the replay half of a `clean-state` entry. `cleaned: false` puts the detected region back (outcome `detected`, with the mask it had before the clean); `cleaned: true` puts the saved result back, the same patch, with no render. Writes no undo step. Asked for the state the region is already in, it answers the region and changes nothing. `null` when no chapter names the region. Rejects with a message that starts with a code: `clean_not_restorable` (cleaned by an older build or without a stored detection, so no mask was kept), `clean_mask_unreadable` (the kept mask files are damaged), `clean_no_result` (no saved result to put back: a later clean replaced it, or the region was removed), `clean_no_patch` (the region has no cleaned result), or the busy code a job holds
+ * @property {(spec: {regionId: string}) => Promise<{region: ApiRegion, pageStatus: string, history: HistoryView}|null>} rejectResult - reject a generated result: the region comes back as detected with its mask, as `setRegionCleaned` with `cleaned: false` does, and the backend records one `clean-state` undo step (`masks.command.rejectResult`) under the same lock. `history` is the chapter's index after that push, so the caller records nothing itself. The same refusals as `setRegionCleaned`
  * @property {(spec: {regionId: string, layer: {opacity: number, offsetX: number, offsetY: number, rotation: number, locked: boolean, feather?: number, edgeOpacity?: number}}) => Promise<ApiRegion|null>} setLayerStyle - change one layer's opacity, placement or lock; rejects with a `masks.refused.*` key when the layer's `mask.capabilities` do not allow it (a fixed redraw moved, a locked layer moved, a detection styled)
  * @property {(spec: {regionId: string}) => Promise<ApiRegion|null>} keepDependencyResult - accept a later committed result after its earlier input changed
  * @property {(spec: {regionId: string, inside: boolean}) => Promise<ApiRegion>} setDetectionType - set a stored detection's text type, inside a speech bubble or outside one, before it is cleaned; answers the region as it now is. The balloon colour Detect measured is cleared, and a Fill or Solid pick moved outside a balloon becomes LaMa; any other pick stays. The page's status does not move. No undo, as with `editDetectionMask`. Rejects with `not_a_detection` for an id that is not a stored detection (a cleaned layer, a held row, a region gone), or with the chapter-busy code a run holds
@@ -427,8 +468,6 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: { op: string, provider: string, params?: Object }) => Promise<Object>} runCloudProvisioner - execute bounded cloud provisioner helper operation (inspect/plan/apply/resume/cleanup/probe) with secrets via stdin only. `inspect` also lists installations already in the account (`ProvisionInspectDiscovery`)
  * @property {() => Promise<unknown>} cancelCloudProvisioner - stop the helper that is running. Its journal makes a later `resume` safe, so a stop loses nothing already created
  * @property {(handler: (event: ProvisionProgress) => void) => Promise<() => void>} onProvisionProgress - `provision://progress`: one event per step the helper starts, finishes, skips or fails. Answers with a promise of the unlisten function
- * @property {(spec: {attemptId: string, choice: 'use'|'discard'|'retry'}) => Promise<void>} resolveQwenReview
- * @property {(handler: (preview: any) => void) => Promise<() => void>} onQwenReview
  * @property {(handler: (event: CloudAttemptEvent) => void) => Promise<() => void>} onCloudAttempt - `cloud://attempt`: one event per phase of an interactive cloud render. Answers with a promise of the unlisten function
  * @property {(spec: {provider: 'modal'|'beam', profileId: string}) => Promise<RemoteAnalysisCapabilities>} listRemoteAnalysisCapabilities - which analysis models the selected endpoint advertises. Reads the model list only; no page data is sent
  * @property {(spec: {chapterId: string, pageIndex: number, provider: 'modal'|'beam', profileId: string, capability: string, companion?: string|null, regions?: Array<{x: number, y: number, width: number, height: number}>}) => Promise<Object>} proposeRemoteAnalysis - state exactly which tiles of one page would be sent, to which models (`capability`, then `companion` for the same tiles). Sends nothing
@@ -699,7 +738,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {string} regionId
  * @property {string} chapterId
  * @property {number} pageIndex
- * @property {'preparing'|'submitting'|'queued'|'running'|'downloading'|'reviewing'|'compositing'|'committed'|'failed'|'cancelled'|'unknown'} phase
+ * @property {'preparing'|'submitting'|'queued'|'running'|'downloading'|'compositing'|'committed'|'failed'|'cancelled'|'unknown'} phase
  * @property {number} elapsedMs - since the render started
  * @property {string|null} errorCode - a stable snake_case code on `failed`, null otherwise
  */
@@ -712,6 +751,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {Array<{attemptId: string, chapterId: string, pageIndex: number, regionId: string}>} attached
  * @property {Array<{attemptId: string, chapterId: string, pageIndex: number, regionId: string, canAbandon?: boolean}>} stillRunning
  * @property {Array<{attemptId: string, chapterId: string, pageIndex: number, regionId: string, canAbandon?: boolean, reason: 'ambiguous'|'stale'|'failed'|'repair_needed'|'load_error'}>} needsAttention
+ * @property {Array<{attemptId: string, chapterId: string, pageIndex: number, regionId: string}>} [released] - ended with nothing applied (the region or its page changed); the region is an ordinary detected region again. The mock does not model this
  */
 
 /**
@@ -1017,7 +1057,6 @@ export const TAURI_REGISTERED_CLOUD_COMMANDS = Object.freeze([
   'submit_cloud_attempt',
   'get_cloud_attempt_status',
   'get_cloud_attempt_result',
-  'resolve_qwen_review',
   'cancel_cloud_attempt',
   'reconcile_cloud_recovery',
 ])

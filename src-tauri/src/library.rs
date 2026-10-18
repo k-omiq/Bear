@@ -218,6 +218,10 @@ pub enum LibraryError {
     /// The chapter has a run, and the write is to all of it
     /// ([`crate::run::lock_chapter`]). Nothing was changed.
     RunInProgress,
+    /// A clean could not be taken back, or put back
+    /// ([`Library::set_region_cleaned`]). Nothing was changed. Displayed as
+    /// the core's own words, which start with a code the interface reads.
+    CleanNotRestored(String),
 }
 
 impl From<crate::run::LockError> for LibraryError {
@@ -274,6 +278,7 @@ impl LibraryError {
             LibraryError::Busy { .. } => "notice.job.busy",
             LibraryError::PageBusy { .. } => "notice.run.pageBusy",
             LibraryError::RunInProgress => "notice.run.busy",
+            LibraryError::CleanNotRestored(_) => "notice.mask.rejectFailed",
         }
     }
 }
@@ -296,6 +301,7 @@ impl std::fmt::Display for LibraryError {
                 write!(f, "job_busy: another Manga Cleaner process is using {}", path.display())
             }
             // In `WriteRefused`'s own words, code first for the same reason.
+            LibraryError::CleanNotRestored(detail) => f.write_str(detail),
             LibraryError::PageBusy { page_index } => {
                 write!(f, "{}", crate::run::WriteRefused::PageBusy { page_index: *page_index })
             }
@@ -2463,6 +2469,119 @@ impl Library {
         ))
     }
 
+    /// Take a clean of a detected region back (`cleaned: false`), or put the
+    /// result that was taken back on the page again (`cleaned: true`), and
+    /// answer with the region as the manifest now holds it. The replay of a
+    /// `clean-state` undo entry in each direction, and the first is what
+    /// rejecting a result is ([`Library::reject_result`]).
+    ///
+    /// One manifest write in the core for each
+    /// (`Job::restore_detection`, `Job::restore_patch`): the detection comes
+    /// back as it was stored, with its mask, and the result comes back as the
+    /// same patch, with no render. Asked for the state the region is already
+    /// in, it answers with the region and writes nothing, as
+    /// [`Library::set_mask_visible`] does, so an undo may ask twice.
+    ///
+    /// `None` when no chapter names the region. Refused with
+    /// [`LibraryError::CleanNotRestored`] when there is nothing to restore
+    /// from: a region cleaned before a clean kept its detection
+    /// (`clean_not_restorable`), a kept mask that cannot be read, or a result
+    /// a later clean replaced. The chapter is as it was.
+    pub fn set_region_cleaned(
+        &self,
+        region_id: &str,
+        cleaned: bool,
+    ) -> Result<Option<(ApiRegion, String)>, LibraryError> {
+        let index = self.index()?;
+        let Some(chapter_id) = chapter_holding(&index, region_id) else {
+            return Ok(None);
+        };
+        let path = self.resolve_chapter(&chapter_id)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
+        let mut job = Job::open(&path).map_err(|e| LibraryError::Manifest {
+            path: path.clone(),
+            detail: e.to_string(),
+        })?;
+        self.set_region_cleaned_in(&mut job, &chapter_id, region_id, cleaned)
+            .map(Some)
+    }
+
+    /// [`Library::set_region_cleaned`] on a job the caller opened and holds.
+    fn set_region_cleaned_in(
+        &self,
+        job: &mut Job,
+        chapter_id: &str,
+        region_id: &str,
+        cleaned: bool,
+    ) -> Result<(ApiRegion, String), LibraryError> {
+        use cleaner_core::project::CleanRestoreError;
+        let path = job.path().to_path_buf();
+        let refused = |error: CleanRestoreError| match error {
+            CleanRestoreError::Store(error) => LibraryError::Manifest { path: path.clone(), detail: error.to_string() },
+            other => LibraryError::CleanNotRestored(other.to_string()),
+        };
+        let manifest = |detail: String| LibraryError::Manifest { path: path.clone(), detail };
+        let withdrawn = if cleaned {
+            job.restore_patch(region_id).map_err(refused)?;
+            None
+        } else {
+            let on_page = job.project.patches.iter().find(|row| row.id == region_id).cloned();
+            job.restore_detection(region_id).map_err(refused)?;
+            on_page
+        };
+        // The layers above read this region's pixels, which have just left
+        // the page or come back to it.
+        match withdrawn {
+            Some(record) => crate::underlay::refresh_dependencies_of(job, record, None),
+            None => crate::underlay::refresh_dependencies(job, region_id),
+        }
+        .map_err(manifest)?;
+        invalidate_manifest_cache(&path);
+        let source_idx = job.project.patches.iter().find(|row| row.id == region_id).map(|row| row.source_idx)
+            .or_else(|| job.project.detections.iter().find(|row| row.id == region_id).map(|row| row.source_idx))
+            .ok_or_else(|| manifest(format!("region {region_id} is not in the chapter after its restore")))?;
+        region_and_status(chapter_id, &job.project, source_idx, region_id)
+            .ok_or_else(|| manifest(format!("region {region_id} is not on its page after its restore")))
+    }
+
+    /// Reject a generated result: the region is detected again, with its
+    /// mask, ready to be cleaned again, and the reject is one undo step
+    /// written under the same lock as the manifest write
+    /// ([`crate::history::record_step`]). Undo of it puts the result back.
+    ///
+    /// Answers with the detected region, its page's status and the chapter's
+    /// history index as it now stands. `None`, and refusals, as
+    /// [`Library::set_region_cleaned`] gives them. A region that is not a
+    /// cleaned result on its page is refused, and nothing is recorded.
+    pub fn reject_result(
+        &self,
+        region_id: &str,
+    ) -> Result<Option<(ApiRegion, String, crate::history::HistoryView)>, LibraryError> {
+        let index = self.index()?;
+        let Some(chapter_id) = chapter_holding(&index, region_id) else {
+            return Ok(None);
+        };
+        let path = self.resolve_chapter(&chapter_id)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
+        let mut job = Job::open(&path).map_err(|e| LibraryError::Manifest {
+            path: path.clone(),
+            detail: e.to_string(),
+        })?;
+        let before = job.project.patches.iter().find(|row| row.id == region_id && row.visible)
+            .and_then(|row| crate::history::side_now(&chapter_id, &job.project, row.source_idx, region_id))
+            .ok_or_else(|| LibraryError::CleanNotRestored(
+                format!("clean_no_patch: region {region_id} has no cleaned result to take back")))?;
+        let (region, page_status) = self.set_region_cleaned_in(&mut job, &chapter_id, region_id, false)?;
+        let after = crate::history::Side {
+            present: true,
+            page_status: Some(page_status.clone()),
+            region: serde_json::to_value(&region).ok(),
+        };
+        let view = crate::history::record_step(&path, &chapter_id, crate::history::REJECT_LABEL, region_id, before, after)
+            .map_err(|detail| LibraryError::Manifest { path: path.clone(), detail })?;
+        Ok(Some((region, page_status, view)))
+    }
+
     /// Restore the exact committed text-shaped revision named by an undo
     /// snapshot. Its immutable patch and plan artifacts are checked by the
     /// store before the current row changes. Never turn on the latest patch
@@ -2709,6 +2828,15 @@ impl Library {
             false
         });
         job.project.text_shape_corrections.retain(|entry| entry.region_id != region_id);
+        // A region removed for good takes what a clean kept for it: the
+        // detection its patch replaced, and a result that was set aside
+        // (its files are the revision rows', gone above).
+        job.project.withdrawn_patches.retain(|record| record.id != region_id);
+        job.project.cleaned_detections.retain(|record| {
+            if record.id != region_id { return true; }
+            removed_artifacts.extend([record.mask_ref.clone(), record.ink_ref()]);
+            false
+        });
         // A detection is removed outright for the same reason an untouched row
         // is: there is no flag to turn off and nothing to restore.
         if let Some(pos) = job.project.detections.iter().position(|r| r.id == region_id) {
@@ -4152,6 +4280,54 @@ pub async fn set_detection_type(
         Library::for_app(&app)?
             .set_detection_inside(&region_id, inside)?
             .ok_or_else(|| format!("not_a_detection: {region_id} is not a stored detection"))
+    })
+    .await
+}
+
+/// `setRegionCleaned`'s and `rejectResult`'s answer. `history` is the
+/// chapter's index after a reject recorded its step, and absent from a
+/// replay, which records nothing.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoredClean {
+    pub region: ApiRegion,
+    pub page_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<crate::history::HistoryView>,
+}
+
+/// Replay one side of a `clean-state` undo entry: the detected region with
+/// its mask (`cleaned: false`), or its result, put back with no render
+/// (`cleaned: true`). See [`Library::set_region_cleaned`]. `null` for a
+/// region no chapter names. A refusal's message starts with its code:
+/// `clean_not_restorable` for a region cleaned before results kept their
+/// mask, `clean_mask_unreadable`, `clean_no_result`, `clean_no_patch`.
+#[tauri::command]
+pub async fn set_region_cleaned(
+    app: tauri::AppHandle,
+    region_id: String,
+    cleaned: bool,
+) -> Result<Option<RestoredClean>, String> {
+    blocking(move || {
+        Ok(Library::for_app(&app)?
+            .set_region_cleaned(&region_id, cleaned)?
+            .map(|(region, page_status)| RestoredClean { region, page_status, history: None }))
+    })
+    .await
+}
+
+/// Reject a generated result: the region is detected again with its mask,
+/// and the reject is an undo step. See [`Library::reject_result`]. Refused as
+/// [`set_region_cleaned`] is.
+#[tauri::command]
+pub async fn reject_result(
+    app: tauri::AppHandle,
+    region_id: String,
+) -> Result<Option<RestoredClean>, String> {
+    blocking(move || {
+        Ok(Library::for_app(&app)?
+            .reject_result(&region_id)?
+            .map(|(region, page_status, history)| RestoredClean { region, page_status, history: Some(history) }))
     })
     .await
 }
@@ -5959,6 +6135,161 @@ mod tests {
         let (_, status) = library.delete_observed_mask(region_id, observed).unwrap().expect("deleted");
         assert_eq!(status, "unclean");
         assert!(library.load_pages(&chapter.id, &[0]).unwrap()[0].regions.iter().all(|region| region.id != id));
+    }
+
+    /// A chapter with one stored detection, cleaned the way every commit
+    /// site cleans one: the detected side read first, the patch committed,
+    /// the undo step recorded, all under the job's lock.
+    fn a_cleaned_detection(library: &Library, scratch: &Scratch) -> (String, PathBuf, String) {
+        let project = a_project(library, scratch, 1);
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, None)
+            .unwrap().created().unwrap();
+        let path = library.resolve_chapter(&chapter.id).unwrap();
+        let bbox = Rect::new(20, 10, 8, 6);
+        let _lock = crate::run::lock_job(&path).unwrap();
+        let mut job = Job::open(&path).unwrap();
+        let id = a_stored_detection(&mut job, &page_id(&chapter.id, 0), bbox);
+        let before = crate::history::side_now(&chapter.id, &job.project, 0, &id);
+        assert!(job.complete_detection(&id, &a_patch(&id, bbox, Engine::Lama), None).unwrap());
+        crate::history::record_clean(&path, &chapter.id, &job.project, 0, &id, before);
+        invalidate_manifest_cache(&path);
+        (chapter.id, path, id)
+    }
+
+    /// A result that was cleaned over a neighbour's result read that
+    /// neighbour's pixels. Rejecting the neighbour takes them away, so the
+    /// result above it is flagged for review and is not left looking sound
+    /// (docs/fixes-2026-10-12/04, the order rule).
+    #[test]
+    fn rejecting_a_result_flags_the_committed_neighbour_that_was_cleaned_over_it() {
+        let scratch = Scratch::new("reject-neighbour");
+        let library = library(&scratch);
+        let (chapter_id, path, below) = a_cleaned_detection(&library, &scratch);
+        {
+            let _lock = crate::run::lock_job(&path).unwrap();
+            let mut job = Job::open(&path).unwrap();
+            let mut above = a_patch("above", Rect::new(30, 10, 8, 6), Engine::Lama);
+            above.order = 1;
+            job.complete_region(0, &above, None).unwrap();
+            invalidate_manifest_cache(&path);
+        }
+        let state = |id: &str| Job::open(&path).unwrap().project.patches.iter()
+            .find(|row| row.id == id).and_then(|row| row.review_state.clone());
+        assert_eq!(state("above"), None);
+
+        library.reject_result(&below).unwrap().unwrap();
+
+        assert_eq!(state("above").as_deref(), Some("review.reason.inputUnknown"));
+        let page = &library.load_pages(&chapter_id, &[0]).unwrap()[0];
+        let above = page.regions.iter().find(|region| region.id == "above").unwrap();
+        assert_eq!(above.outcome, "cleaned", "the result above stays on the page");
+        assert_eq!(review_reason(above), Some("review.reason.inputUnknown"));
+    }
+
+    /// Undo after a clean, and a reject, put the region back as detected with
+    /// its mask, byte for byte; redo puts the same patch back.
+    #[test]
+    fn an_undone_or_rejected_clean_is_the_detection_again_and_redo_is_the_same_patch() {
+        let scratch = Scratch::new("reject-clean");
+        let library = library(&scratch);
+        let (chapter_id, path, id) = a_cleaned_detection(&library, &scratch);
+        let json = |region: &ApiRegion| serde_json::to_value(region).unwrap();
+        let on_page = |id: &str| library.load_pages(&chapter_id, &[0]).unwrap()[0].regions.iter()
+            .find(|region| region.id == id).cloned().unwrap();
+        let cleaned = on_page(&id);
+        assert_eq!(cleaned.outcome, "cleaned");
+        let job = Job::open(&path).unwrap();
+        let (kept, patches) = (job.project.cleaned_detections.clone(), job.project.patches.clone());
+        let mask_path = job.sidecar().join(format!("detections/{id}.mask"));
+        let mask = std::fs::read(&mask_path).unwrap();
+        drop(job);
+
+        // The commit's own step, and its replay.
+        let journal = crate::history::load(&path);
+        assert_eq!(journal.entries.len(), 1);
+        assert_eq!((journal.entries[0].op.as_str(), journal.entries[0].label.as_str()),
+            (crate::history::CLEAN_OP, crate::history::CLEAN_LABEL));
+        let detected_side = journal.entries[0].before.region.clone().unwrap();
+        assert_eq!(detected_side["outcome"], "detected");
+        let step = crate::history::move_at(&path, &chapter_id, "undo").unwrap().entry.unwrap();
+        assert_eq!(step.op, crate::history::CLEAN_OP);
+        let (region, _) = library.set_region_cleaned(&id, false).unwrap().unwrap();
+        assert_eq!(json(&region), detected_side, "the region the commit replaced");
+        assert!(region.mask.is_some() && region.outcome == "detected");
+        assert_eq!(json(&on_page(&id)), detected_side);
+        let job = Job::open(&path).unwrap();
+        assert_eq!(job.project.detections, kept, "the record as stored");
+        assert_eq!(std::fs::read(&mask_path).unwrap(), mask, "its mask, byte for byte");
+        assert!(job.project.patches.is_empty() && job.project.withdrawn_patches == patches);
+        drop(job);
+        // Asked again, it is as asked.
+        assert_eq!(json(&library.set_region_cleaned(&id, false).unwrap().unwrap().0), detected_side);
+
+        // Redo.
+        assert!(crate::history::move_at(&path, &chapter_id, "redo").unwrap().entry.is_some());
+        let (region, _) = library.set_region_cleaned(&id, true).unwrap().unwrap();
+        assert_eq!(json(&region), json(&cleaned));
+        assert_eq!(Job::open(&path).unwrap().project.patches, patches, "the same patch record");
+
+        // Reject: the same restore, and one more step, written with it.
+        let (region, _, view) = library.reject_result(&id).unwrap().unwrap();
+        assert_eq!(json(&region), detected_side);
+        assert_eq!((view.cursor, view.entries.len()), (2, 2));
+        assert_eq!(view.entries[1].label, crate::history::REJECT_LABEL);
+        assert_eq!(Job::open(&path).unwrap().project.detections, kept);
+        // A region that is not a result on its page is not rejected again.
+        let refused = library.reject_result(&id).unwrap_err().to_string();
+        assert!(refused.starts_with("clean_no_patch: "), "{refused}");
+        assert_eq!(crate::history::load(&path).entries.len(), 2);
+
+        // Undo of the reject is the result again: the entry's earlier side.
+        let step = crate::history::move_at(&path, &chapter_id, "undo").unwrap().entry.unwrap();
+        assert_eq!(step.before.region.as_ref().unwrap()["outcome"], "cleaned");
+        let (region, _) = library.set_region_cleaned(&id, true).unwrap().unwrap();
+        assert_eq!(json(&region), json(&cleaned));
+
+        // Removing the region for good takes what was kept for it.
+        library.set_region_cleaned(&id, false).unwrap().unwrap();
+        library.remove_region(&id).unwrap();
+        let job = Job::open(&path).unwrap();
+        assert!(job.project.detections.is_empty() && job.project.withdrawn_patches.is_empty()
+            && job.project.cleaned_detections.is_empty());
+        let gone = library.set_region_cleaned(&id, true).unwrap_err().to_string();
+        assert!(gone.starts_with("clean_no_result: "), "{gone}");
+    }
+
+    /// A chapter cleaned before a clean kept its detection opens as before,
+    /// and a reject there says why it cannot be done and changes nothing.
+    #[test]
+    fn a_result_from_before_detections_were_kept_refuses_reject_and_the_chapter_is_as_it_was() {
+        let scratch = Scratch::new("reject-old-clean");
+        let library = library(&scratch);
+        let (chapter_id, path, id) = a_cleaned_detection(&library, &scratch);
+        {
+            // As the earlier build left it: the patch, no kept row, no files,
+            // and no step of the clean in the journal.
+            let _lock = crate::run::lock_job(&path).unwrap();
+            let mut job = Job::open(&path).unwrap();
+            let kept = std::mem::take(&mut job.project.cleaned_detections);
+            job.flush().unwrap();
+            job.delete_detection_files(&kept);
+            std::fs::remove_file(crate::history::journal_path(&path)).unwrap();
+            invalidate_manifest_cache(&path);
+        }
+        let before = std::fs::read(&path).unwrap();
+
+        let refused = library.reject_result(&id).unwrap_err();
+        assert_eq!(refused.reason_key(), "notice.mask.rejectFailed");
+        assert!(refused.to_string().starts_with("clean_not_restorable: "), "{refused}");
+        let refused = library.set_region_cleaned(&id, false).unwrap_err().to_string();
+        assert!(refused.starts_with("clean_not_restorable: "), "{refused}");
+
+        assert_eq!(std::fs::read(&path).unwrap(), before, "nothing was written");
+        assert!(crate::history::load(&path).entries.is_empty(), "and nothing recorded");
+        let pages = library.load_pages(&chapter_id, &[0]).unwrap();
+        assert!(pages[0].regions.iter().any(|region| region.id == id && region.outcome == "cleaned"));
+        // The old way out still works: Delete hides the result.
+        assert!(library.set_mask_visible(&id, false).unwrap().is_some());
     }
 
     #[test]

@@ -203,6 +203,13 @@ describe('how a render ends', () => {
     expect(cloudNotices()).toEqual([['notice.cloud.failed', { reasonKey: 'notice.cloud.error.generic' }]])
   })
 
+  it('tells an out of date cloud setup that sent back no result to update', () => {
+    mockBackend()
+    trackCloudJob({ attemptId: A, ...where })
+    settleCloudJob(A, { phase: 'failed', errorCode: 'edit_not_applied' })
+    expect(cloudNotices()).toEqual([['notice.cloud.failed', { reasonKey: 'notice.cloud.error.editNotApplied' }]])
+  })
+
   it('says a render refused on a page a run is on in the edit\'s own words', () => {
     mockBackend()
     trackCloudJob({ attemptId: A, ...where })

@@ -173,9 +173,11 @@ impl Guard {
         collect_references(&project, &mut references);
         let patches = job.project.patches.iter()
             .chain(&job.project.text_shape_patch_revisions)
-            .chain(&job.project.legacy_patch_revisions);
+            .chain(&job.project.legacy_patch_revisions)
+            .chain(&job.project.withdrawn_patches);
         references.extend(patches.map(|record| record.ink_ref()));
-        references.extend(job.project.detections.iter().map(|record| record.ink_ref()));
+        references.extend(job.project.detections.iter().chain(&job.project.cleaned_detections)
+            .map(|record| record.ink_ref()));
         if let Some(bad) = references.iter().find(|reference| !plain_relative(reference)) {
             return Err(format!("{} names {bad:?}, outside its own folder", job.path().display()));
         }

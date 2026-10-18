@@ -17,7 +17,7 @@
  *    the first moment, and it ends in exactly one notice.
  */
 
-import { askQwenEdit, isQwen, qwenSupported, takeQwenRetry } from './qwenflow.js'
+import { askQwenEdit, asksGuidance, isQwen, qwenSupported } from './qwenflow.js'
 import { getBackend } from '../api/backend.js'
 import { cloudAttemptId } from '../api/attempt.js'
 import { notify, pushModal } from '../state/app.svelte.js'
@@ -140,7 +140,7 @@ function consentFailureKey(cause) {
  * still gets its own proposal and single-use grant, confirmed without the
  * statements, which the native side holds from the first.
  *
- * @param {{qwenEdit?: any, regionId: string, chapterId: string, pageIndex: number, intent: import('../model/types.js').OperationIntent}} request
+ * @param {{regionId: string, chapterId: string, pageIndex: number, intent: import('../model/types.js').OperationIntent}} request
  * @param {import('../api/backend.js').Backend} [backend]
  * @returns {Promise<CloudGrant|null>}
  */
@@ -172,9 +172,9 @@ export async function requestCloudConsent(request, backend = getBackend()) {
       model_revision: model.pinnedModelRevision,
       native_mask_conditioning: model.nativeMaskConditioning,
     }
-    if (isQwen(recipe.model_id)) {
-      if (!qwenSupported(model)) return null
-      const edit = await askQwenEdit({ regionId: request.regionId, initial: request.qwenEdit })
+    if (!qwenSupported(model)) return null
+    if (asksGuidance(model, request.regionId)) {
+      const edit = await askQwenEdit({ regionId: request.regionId, flux: !isQwen(recipe.model_id) })
       if (!edit) return null
       recipe.qwen_edit = edit
     }
@@ -282,24 +282,17 @@ function codeOf(error) {
  * @returns {Promise<T|null>} the command's answer, or null when it threw
  */
 export async function runCloudJob(grant, where, call, outcomeOf) {
-  while (true) {
-    trackCloudJob({ attemptId: grant.attemptId, ...where, target: {
-      provider: grant.params.executionTarget.type, profileId: grant.params.executionTarget.profile_id,
-    } })
-    /** @type {T|null} */
-    let answer = null
-    let rejected = false
-    try {
-      answer = await call(grant.params)
-    } catch (error) {
-      rejected = true
-      settleCloudJob(grant.attemptId, { phase: 'failed', errorCode: codeOf(error) })
-    }
-    if (!rejected) settleCloudJob(grant.attemptId, outcomeOf(/** @type {T} */ (answer)))
-    const retry = takeQwenRetry(grant.attemptId)
-    if (!retry) return answer
-    const next = await requestCloudConsent({ ...where, intent: grant.params.intent, qwenEdit: retry })
-    if (!next) return answer
-    grant = next
+  trackCloudJob({ attemptId: grant.attemptId, ...where, target: {
+    provider: grant.params.executionTarget.type, profileId: grant.params.executionTarget.profile_id,
+  } })
+  /** @type {T} */
+  let answer
+  try {
+    answer = await call(grant.params)
+  } catch (error) {
+    settleCloudJob(grant.attemptId, { phase: 'failed', errorCode: codeOf(error) })
+    return null
   }
+  settleCloudJob(grant.attemptId, outcomeOf(answer))
+  return answer
 }

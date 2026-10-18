@@ -12,7 +12,7 @@
 //!
 //! ## Every "no" is a refusal with a reason
 //!
-//! There are eleven things this command will not do, and all eleven come back
+//! There are twelve things this command will not do, and all twelve come back
 //! the same way: `status: 'refused'` and a `reasonKey` the catalogue has a
 //! sentence for. **One of them was always here** - writing over the source
 //! folder, which is [`Job::output_refusal`]'s decision and not this module's
@@ -28,6 +28,7 @@
 //! | a format string this build does not know | `notice.export.refusedUnknownFormat` |
 //! | `masks: 'separate-layer'` into a CBZ | `notice.export.refusedMaskLayers` |
 //! | a destination that is neither sentinel nor an absolute path | `notice.export.refusedDestination` |
+//! | a destination that cannot be created or written, such as a folder on a drive that is not connected | `notice.export.destinationUnavailable` |
 //! | a stitched export of a paginated project | `notice.export.refusedStitchPaginated` |
 //! | a stitched export into a CBZ | `notice.export.refusedStitchedArchive` |
 //! | a stitched export as PSD | `notice.export.refusedStitchedLayered` |
@@ -303,6 +304,9 @@ fn plan_open_job(job: &Job, format: &str, destination: &str, masks: &str, layout
     if let Some(refusal) = job.output_refusal(&dir) {
         return Ok(ExportResult::refused(refusal.reason_key(), Some(dir.display().to_string())));
     }
+    if !destination_available(&dir) {
+        return Ok(ExportResult::refused("notice.export.destinationUnavailable", Some(dir.display().to_string())));
+    }
     if let Container::Layered { .. } = container {
         for source in &job.project.sources {
             if let Some(refusal) = psd::refusal(source.w, source.h, source.mode, source.bit_depth) {
@@ -512,11 +516,11 @@ fn export_reviewed_job(job: &Job, format: &str, destination: &str, masks: &str, 
     let plan = plan_open_job(job, format, destination, masks, layout)?;
     if plan.status != "planned" { return Ok(plan); }
     let destination_dir = destination_dir(destination, &source_directory(job)).map_err(str::to_owned)?;
-    std::fs::create_dir_all(&destination_dir).map_err(|e| e.to_string())?;
-    let destination_dir = destination_dir.canonicalize().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&destination_dir).map_err(|e| format!("{}: {e}", destination_dir.display()))?;
+    let destination_dir = destination_dir.canonicalize().map_err(|e| format!("{}: {e}", destination_dir.display()))?;
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stage = destination_dir.join(format!(".export-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
-    std::fs::create_dir(&stage).map_err(|e| e.to_string())?;
+    std::fs::create_dir(&stage).map_err(|e| format!("{}: {e}", stage.display()))?;
     let outcome = (|| {
         let mut result = match write_open_job(job, format, &stage.to_string_lossy(), masks, layout) {
             Ok(result) => result,
@@ -826,6 +830,43 @@ fn destination_dir(destination: &str, source_dir: &Path) -> Result<PathBuf, &'st
         other if Path::new(other).is_absolute() => Ok(PathBuf::from(other)),
         _ => Err("notice.export.refusedDestination"),
     }
+}
+
+/// Whether an export could create `dir` and write into it, decided without
+/// writing anything: the nearest ancestor that exists must be a directory this
+/// process may write to.
+///
+/// The default destination is a sibling of the chapter's scan folder, and the
+/// scan folder is a path from the manifest, not a place that was checked. The
+/// application keeps its own copy of every page, so a chapter imported from an
+/// external drive opens and cleans with the drive unplugged. Its export then
+/// asked `create_dir_all` to recreate the mount point, which on macOS means a
+/// directory inside `/Volumes`, and the answer was a bare `Permission denied
+/// (os error 13)`. Nothing here names `/Volumes`: a missing mount point on
+/// Linux and a missing drive letter on Windows end at an ancestor that cannot
+/// be written, or at no ancestor at all, in the same way.
+fn destination_available(dir: &Path) -> bool {
+    dir.ancestors().find(|path| path.exists()).is_some_and(|existing| existing.is_dir() && writable(existing))
+}
+
+/// `access(2)` and not the permission bits: the bits of `/Volumes` say its
+/// owner may write, and the owner is root. It also answers for a volume that
+/// is mounted read-only.
+#[cfg(unix)]
+fn writable(dir: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(name) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else { return false };
+    // SAFETY: `name` is a NUL-terminated string that lives across the call.
+    unsafe { libc::access(name.as_ptr(), libc::W_OK | libc::X_OK) == 0 }
+}
+
+/// Windows decides this from an access control list, and the read-only
+/// attribute on a directory does not stop a file being created in it. A
+/// directory that exists is taken as writable; the write itself reports the
+/// rest, with the path.
+#[cfg(not(unix))]
+fn writable(_dir: &Path) -> bool {
+    true
 }
 
 /// One file per page, streamed, and a mask file beside each when asked for.
@@ -2056,6 +2097,84 @@ mod tests {
         let refused = export(&job, "PNG", "../up/one");
         assert_eq!(refused.status, "refused");
         assert_eq!(refused.reason_key, Some("notice.export.refusedDestination"));
+    }
+
+    /// A chapter imported from a drive that is no longer connected. The pages
+    /// are in the job's own sidecar and the origin is a path on the drive, so
+    /// the default destination sits under a mount point that does not exist,
+    /// inside a directory this process cannot write to. `/Volumes` is that
+    /// directory on macOS; a read-only one stands in for it here.
+    #[cfg(unix)]
+    fn a_job_from_a_missing_drive(scratch: &Scratch) -> (Job, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut job = a_job(scratch);
+        let volumes = scratch.join("volumes");
+        std::fs::create_dir_all(&volumes).unwrap();
+        std::fs::set_permissions(&volumes, std::fs::Permissions::from_mode(0o555)).unwrap();
+        job.project.sources[0].converted_from = Some(volumes.join("Portable/chapter/001.jpg"));
+        (job, volumes)
+    }
+
+    #[cfg(unix)]
+    fn unlock(dir: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The refusal is decided in the plan, names the folder, and creates
+    /// nothing. The export itself answers the same way, not with a bare
+    /// `Permission denied (os error 13)`.
+    #[cfg(unix)]
+    #[test]
+    fn a_destination_on_a_missing_drive_is_refused_with_its_path_and_writes_nothing() {
+        let scratch = Scratch::new("missing-drive");
+        let (job, volumes) = a_job_from_a_missing_drive(&scratch);
+        let expected = volumes.join("Portable/chapter_cleaned");
+
+        let plan = plan_open_job(&job, "PNG", "new-folder", "flattened", "per-page").unwrap();
+        let result = export_open_job(&job, "PNG", "new-folder", "flattened", "per-page");
+        let created = volumes.join("Portable").exists();
+        unlock(&volumes);
+
+        assert_eq!(plan.status, "refused");
+        assert_eq!(plan.reason_key, Some("notice.export.destinationUnavailable"));
+        assert_eq!(plan.path.as_deref(), Some(expected.to_str().unwrap()));
+        let result = result.unwrap();
+        assert_eq!(result.status, "refused");
+        assert_eq!(result.reason_key, Some("notice.export.destinationUnavailable"));
+        assert!(!created, "a refused export created part of its destination");
+        let (key, params, _) = announcement(&result, "PNG").unwrap();
+        assert_eq!(key, "notice.export.destinationUnavailable");
+        assert_eq!(params["path"], expected.to_str().unwrap());
+    }
+
+    /// The way out the dialog offers: the same chapter, a folder the user
+    /// names.
+    #[cfg(unix)]
+    #[test]
+    fn a_job_from_a_missing_drive_exports_to_an_absolute_folder() {
+        let scratch = Scratch::new("missing-drive-elsewhere");
+        let (job, volumes) = a_job_from_a_missing_drive(&scratch);
+        let elsewhere = scratch.join("chosen/folder");
+
+        let result = export(&job, "PNG", elsewhere.to_str().unwrap());
+        unlock(&volumes);
+
+        assert_eq!(result.status, "exported");
+        assert_eq!(result.file_count, Some(1));
+        assert!(elsewhere.join("001.png").exists());
+    }
+
+    /// A destination whose nearest existing ancestor is a file cannot be
+    /// created either, and a folder that only has to be made can.
+    #[test]
+    fn availability_is_decided_from_the_nearest_ancestor_that_exists() {
+        let scratch = Scratch::new("available");
+        assert!(destination_available(&scratch.join("not/yet/made")));
+        let file = scratch.join("a-file");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(!destination_available(&file.join("under")));
+        assert!(!scratch.join("not").exists(), "the check created a folder");
     }
 
     /// An absolute path is still put to `Job::output_refusal`: naming the

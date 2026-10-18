@@ -135,6 +135,12 @@ describe('sanitizeSession', () => {
     expect(sanitizeSession({}).cleanSolidOnly).toBe(false)
     expect(sanitizeSession({ cleanSolidOnly: 'true' }).cleanSolidOnly).toBe(false)
   })
+  it('retains Clean English text, off for anything that is not a boolean', async () => {
+    const { sanitizeSession } = await import('./session.svelte.js')
+    expect(sanitizeSession({ cleanLatinText: true }).cleanLatinText).toBe(true)
+    expect(sanitizeSession({}).cleanLatinText).toBe(false)
+    expect(sanitizeSession({ cleanLatinText: 'true' }).cleanLatinText).toBe(false)
+  })
   it('preserves sidecarPath from stored session', async () => {
     const { sanitizeSession } = await import('./session.svelte.js')
     const session = sanitizeSession({ sidecarPath: '/path/to/flux' })

@@ -2,7 +2,16 @@
 //!
 //! ```text
 //! spike-gate-probe [--models DIR] [--outside review|clean] <page.png> ...
+//! spike-gate-probe [--models DIR] --chapter <copy/cN.mtclean> --out DIR
+//! spike-gate-probe [--models DIR] --rects <list.json> --out DIR
+//! spike-gate-probe [--models DIR] --regroup <copy/cN.mtclean> --out DIR [--clean-latin]
 //! ```
+//!
+//! The second form reads a copy of a detected library chapter instead of
+//! detecting pages again ([`chapter`]). The third puts both text readers to
+//! given rectangles ([`rects`]). The fourth makes each page's grouping again
+//! from its evidence, without and with the reader's check of each unit
+//! ([`regroup`]).
 //!
 //! For every region the detector emits: the balloon detector's answer and the
 //! boxes it rests on, the paper reading (`balloon::interior_of`) around the
@@ -28,6 +37,10 @@ use cleaner_core::text_groups::{self, EvidenceModel, Execution, ModelUse, Spatia
 use cleaner_core::gate::{OutsideText, ScriptGate, Verdict};
 use cleaner_core::image::decode;
 
+mod chapter;
+mod rects;
+mod regroup;
+
 const DETECTOR: &str = "comictextdetector.onnx";
 const BALLOONS: &str = "comic-text-and-bubble-detector-detector-v4-s_int8.onnx";
 const GATE_MODEL: &str = "image-script-identification-osd_lstm.onnx";
@@ -38,6 +51,12 @@ fn main() -> Result<()> {
     let mut models = PathBuf::from("models");
     let mut lama_out: Option<PathBuf> = None;
     let mut outside = OutsideText::Review;
+    let mut outside_given = false;
+    let mut chapters: Vec<PathBuf> = Vec::new();
+    let mut out: Option<PathBuf> = None;
+    let mut rect_list: Option<PathBuf> = None;
+    let mut regroups: Vec<PathBuf> = Vec::new();
+    let mut latin = cleaner_core::gate::LatinText::Leave;
     let mut pages: Vec<PathBuf> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -45,18 +64,44 @@ fn main() -> Result<()> {
             "--lama" => lama_out = Some(PathBuf::from(args.next().context("--lama needs a dir")?)),
             // §3's opt-in, so the probe can show what a region the balloon
             // question puts outside a bubble would do under either setting.
-            "--outside" => outside = OutsideText::from_arg(args.next().as_deref()),
+            "--outside" => {
+                outside = OutsideText::from_arg(args.next().as_deref());
+                outside_given = true;
+            }
+            "--chapter" => chapters.push(PathBuf::from(args.next().context("--chapter needs a manifest")?)),
+            "--rects" => rect_list = Some(PathBuf::from(args.next().context("--rects needs a list")?)),
+            "--regroup" => regroups.push(PathBuf::from(args.next().context("--regroup needs a manifest")?)),
+            "--clean-latin" => latin = cleaner_core::gate::LatinText::Clean,
+            "--out" => out = Some(PathBuf::from(args.next().context("--out needs a dir")?)),
             other => pages.push(PathBuf::from(other)),
         }
     }
-    if pages.is_empty() {
+    if pages.is_empty() && chapters.is_empty() && rect_list.is_none() && regroups.is_empty() {
         return Err(anyhow!(
-            "usage: spike-gate-probe [--models DIR] [--lama OUTDIR] [--outside review|clean] <page.png> ..."
+            "usage: spike-gate-probe [--models DIR] [--lama OUTDIR] [--outside review|clean] <page.png> ...\n       spike-gate-probe [--models DIR] --chapter <copy/cN.mtclean> --out DIR"
         ));
     }
 
     cleaner_core::runtime::load(&cleaner_core::runtime::find(None).context("ONNX Runtime")?)?;
     let preference = Preference::Automatic;
+    if let Some(list) = rect_list {
+        return rects::run(&list, &out.context("--rects needs --out")?, &models);
+    }
+    if !regroups.is_empty() {
+        let out = out.context("--regroup needs --out")?;
+        for manifest in &regroups {
+            regroup::run(manifest, &out, &models, latin)?;
+        }
+        return Ok(());
+    }
+    if !chapters.is_empty() {
+        let out = out.context("--chapter needs --out")?;
+        let mut gate = ScriptGate::open(&models.join(GATE_MODEL), &models.join(GATE_LABELS), preference)?;
+        for manifest in &chapters {
+            chapter::run(manifest, &out, &models, outside_given.then_some(outside), &mut gate)?;
+        }
+        return Ok(());
+    }
     let mut detector = Detector::open(&models.join(DETECTOR), preference)?;
     let mut balloons = BalloonDetector::open(&models.join(BALLOONS), preference)?;
     let mut gate = ScriptGate::open(&models.join(GATE_MODEL), &models.join(GATE_LABELS), preference)?;

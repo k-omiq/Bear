@@ -187,9 +187,10 @@ class QwenEditRunner:
         """Edit one crop and return an RGB PNG at exactly width x height.
 
         The edit pipeline takes no mask and redraws the whole crop. The hint only
-        decides whether the lettering was edited; when it was not, the next seed runs,
-        and if no seed edits it the job fails without offering a patch.
-        An empty hint (the warmup) skips the check.
+        decides whether the lettering was edited; when it was not, the next seed runs.
+        If no seed edits it, the render that changed the lettering most is returned:
+        the worker never rejects a result, the user does. An empty hint (the warmup)
+        skips the check.
         """
         m = self._mods()
         with m.Image.open(io.BytesIO(image_png)) as source:
@@ -210,8 +211,6 @@ class QwenEditRunner:
             if ratio >= MIN_EDIT_RATIO:
                 break
         if best is not None:
-            if best[0] < MIN_EDIT_RATIO:
-                raise WorkerRenderError("edit_not_applied", "Qwen did not make a sufficient edit after three seeds. Try describing the lettering.")
             result = best[1]
 
         buffer = io.BytesIO()

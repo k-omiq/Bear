@@ -9,15 +9,31 @@
  *
  * And its Approve mask on a held region: the region becomes a detection with
  * Text cleanup's padding, nothing is cleaned, and the selection follows it.
+ *
+ * And its Reject result on a cleaned detection: the detection comes back with
+ * its mask, the backend records the step, and a refusal is said.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setBackend } from '../api/backend.js'
 import { createMockBackend } from '../api/mock.js'
-import { maskColorFor } from '../model/masks.js'
+import { createHistory, settled } from '../model/history.js'
+import { maskColorFor, regionMenuSections } from '../model/masks.js'
 import { app, clearNotices } from '../state/app.svelte.js'
-import { editor, select } from '../state/editor.svelte.js'
+import {
+  closeEditorChapter,
+  editor,
+  openEditorChapter,
+  redo,
+  redoLabelKey,
+  reloadPage,
+  select,
+  undo,
+  undoAvailable,
+  undoLabelKey,
+} from '../state/editor.svelte.js'
 import { session } from '../state/session.svelte.js'
 import { runRegionMenuItem, setDetectedMaskPadding } from './maskactions.svelte.js'
+import { applyActiveToolToRegion } from './toolapply.svelte.js'
 
 const ZERO = { method: 0, openChapter: 0, export: 0, cloud: 0, provision: 0, region: 0, pageTail: 0, noticeStagger: 0 }
 const CHAPTER = 'tsuki-to-hane-ch107'
@@ -267,5 +283,222 @@ describe('Approve mask on a held region', () => {
     expect(await runRegionMenuItem('approveMask', region)).toBe(false)
     expect(app.notices.at(-1)?.key).toBe('notice.job.busy')
     expect(current(region.id)).toMatchObject({ outcome: 'gate-skipped', mask: null })
+  })
+})
+
+/**
+ * Reject result on a cleaned detection, against the browser mock: the region
+ * is detected again with the mask it had, the backend records the step and
+ * this side records nothing, and Undo puts the same result back.
+ */
+describe('Reject result on a cleaned detection', () => {
+  /** A region out of the open chapter as plain data, to compare by value. */
+  const plain = (/** @type {any} */ value) => JSON.parse(JSON.stringify(value))
+
+  /** A detection cleaned here, as the open chapter holds it, with the detection it was. */
+  async function cleaned() {
+    const { backend, regions } = await detected()
+    const detection = plain(regions.find((/** @type {any} */ region) => region.outcome === 'detected'))
+    editor.history = createHistory()
+    expect(await runRegionMenuItem('engine:fill', current(detection.id))).toBe(true)
+    const result = plain(current(detection.id))
+    expect(result).toMatchObject({ outcome: 'cleaned', source: 'auto' })
+    return { backend, detection, result }
+  }
+
+  afterEach(() => {
+    editor.history = createHistory()
+  })
+
+  it('offers the entry on the result, and not on the detection it was', async () => {
+    const { detection, result } = await cleaned()
+    const ids = (/** @type {any} */ region) => regionMenuSections(region).flatMap((section) => section.items.map((item) => item.id))
+    expect(ids(result)).toContain('reject')
+    expect(ids(detection)).not.toContain('reject')
+  })
+
+  it('puts the detection back with its mask and adopts the step the backend recorded', async () => {
+    const { backend, detection, result } = await cleaned()
+    const reject = vi.spyOn(backend, 'rejectResult')
+    const push = vi.spyOn(backend, 'historyPush')
+
+    expect(await runRegionMenuItem('reject', current(detection.id))).toBe(true)
+    expect(reject).toHaveBeenCalledWith({ regionId: detection.id })
+    expect(plain(current(detection.id))).toEqual(detection)
+    expect(current(detection.id).mask).toEqual(detection.mask)
+    // The backend's own two steps, and none of this side's.
+    expect(push).not.toHaveBeenCalled()
+    expect(editor.history.cursor).toBe(2)
+    expect(editor.history.entries.map((entry) => entry.label)).toEqual(['masks.command.cleanRegion', 'masks.command.rejectResult'])
+    expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
+
+    // Undo of the reject is the same result, with no new render.
+    const render = vi.spyOn(backend, 'applyTool')
+    undo()
+    await settled(editor.history)
+    expect(plain(current(detection.id))).toEqual(result)
+    expect(render).not.toHaveBeenCalled()
+    // And Undo of the clean is the detection again.
+    undo()
+    await settled(editor.history)
+    expect(plain(current(detection.id))).toEqual(detection)
+    redo()
+    await settled(editor.history)
+    expect(plain(current(detection.id))).toEqual(result)
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it('says a result with no saved mask cannot be rejected, and leaves it as it was', async () => {
+    // A fixture chapter cleaned from the start, as an older build left one.
+    const OLD = 'wandering-moon-ch12'
+    const backend = createMockBackend({ timing: ZERO })
+    setBackend(backend)
+    editor.chapter = /** @type {any} */ ({ id: OLD, review: [], pages: await backend.loadPages({ chapterId: OLD, indices: [0] }) })
+    editor.history = createHistory()
+    const region = editor.chapter.pages[0].regions.find((/** @type {any} */ candidate) => candidate.outcome === 'cleaned' && candidate.mask)
+    const before = plain(region)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    expect(await runRegionMenuItem('reject', region)).toBe(false)
+    expect(app.notices.map((notice) => notice.key)).toEqual(['notice.mask.rejectNoMask'])
+    expect(app.notices[0].tone).toBe('warn')
+    expect(plain(current(region.id))).toEqual(before)
+    expect(editor.history.entries).toEqual([])
+    expect((await backend.loadPages({ chapterId: OLD, indices: [0] }))[0].regions.find((candidate) => candidate.id === region.id)).toEqual(before)
+  })
+
+  it('says any other refusal in one sentence, and a page a run holds in its own words', async () => {
+    const region = { id: 'p0-d1', pageId: 'p0', source: 'auto', outcome: 'cleaned', mask: { id: 'p0-d1-m1', provenance: { engine: 'fill' } } }
+    editor.chapter = /** @type {any} */ ({ id: 'c', review: [], pages: [{ id: 'p0', index: 0, status: 'cleaned', resident: true, regions: [region] }] })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rejectResult = vi.fn()
+    setBackend(/** @type {any} */ ({ rejectResult }))
+
+    rejectResult.mockRejectedValueOnce(new Error('clean_mask_unreadable: the saved mask of region p0-d1 cannot be read (d.mask: gone)'))
+    expect(await runRegionMenuItem('reject', current('p0-d1'))).toBe(false)
+    expect(app.notices.at(-1)).toMatchObject({ key: 'notice.mask.rejectFailed', tone: 'warn' })
+
+    rejectResult.mockRejectedValueOnce(new Error('page_busy'))
+    expect(await runRegionMenuItem('reject', current('p0-d1'))).toBe(false)
+    expect(app.notices.at(-1)).toMatchObject({ key: 'notice.run.pageBusy', tone: 'warn' })
+
+    // No chapter names the region: nothing changed, and nothing to say.
+    rejectResult.mockResolvedValueOnce(null)
+    const said = app.notices.length
+    expect(await runRegionMenuItem('reject', current('p0-d1'))).toBe(false)
+    expect(app.notices).toHaveLength(said)
+    expect(current('p0-d1')).toMatchObject({ outcome: 'cleaned' })
+  })
+
+  it('never sends a hand mask, a detection or a region with no mask', async () => {
+    const rejectResult = vi.fn()
+    setBackend(/** @type {any} */ ({ rejectResult }))
+    const mask = { id: 'p0-h1-m1', provenance: { engine: 'fill' } }
+    for (const region of [
+      { id: 'p0-h1', source: 'hand', outcome: 'cleaned', mask },
+      { id: 'p0-d1', source: 'auto', outcome: 'detected', mask },
+      { id: 'p0-d2', source: 'auto', outcome: 'pending', mask: null },
+    ]) {
+      expect(await runRegionMenuItem('reject', /** @type {any} */ (region))).toBe(false)
+    }
+    expect(rejectResult).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * A hand tool clicked onto a detected region cleans it, and the backend
+ * records that step as it records every clean of a detection. This side
+ * records nothing for it, so the edit is one undo step and not two.
+ */
+describe('a tool applied to a detected region', () => {
+  afterEach(() => {
+    editor.history = createHistory()
+    editor.tool = 'autoClean'
+  })
+
+  it('leaves the undo step to the backend, and still records an edit of a cleaned region', async () => {
+    const { backend, regions } = await detected()
+    const detection = regions.find((/** @type {any} */ region) => region.outcome === 'detected')
+    editor.history = createHistory()
+    editor.tool = 'contentAwareFill'
+    const push = vi.spyOn(backend, 'historyPush')
+
+    expect(await applyActiveToolToRegion(detection.id)).toBe(true)
+    expect(current(detection.id)).toMatchObject({ outcome: 'cleaned' })
+    expect(push).not.toHaveBeenCalled()
+    const { entry } = await backend.historyMove({ chapterId: CHAPTER, direction: 'undo' })
+    expect(entry).toMatchObject({ op: 'clean-state', label: 'masks.command.cleanRegion', regionId: detection.id })
+    expect(entry.before.region).toMatchObject({ outcome: 'detected', mask: { id: detection.mask.id } })
+    await backend.historyMove({ chapterId: CHAPTER, direction: 'redo' })
+
+    // The same tool on the result is this side's edit, recorded as before.
+    expect(await applyActiveToolToRegion(detection.id)).toBe(true)
+    await settled(editor.history)
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(push.mock.calls[0][0].entry).toMatchObject({ op: 'region-state', label: 'canvas.command.applyTool' })
+  })
+})
+
+/**
+ * The whole round as the browser mock serves it to an open editor: Detect,
+ * Clean one region, Undo, Redo, Reject result, Undo. The editor hears of the
+ * backend's steps on the event channel and replays them through the seam.
+ */
+describe('clean, undo, redo and reject in an open chapter', () => {
+  afterEach(() => {
+    closeEditorChapter()
+  })
+
+  it('walks a detection to its result and back, with the history following', async () => {
+    const backend = createMockBackend({ timing: ZERO })
+    setBackend(backend)
+    const project = (await backend.listProjects()).find((candidate) => candidate.chapters.some((chapter) => chapter.id === CHAPTER))
+    expect(await openEditorChapter(project.id, CHAPTER)).toBe(true)
+    const plain = (/** @type {any} */ value) => JSON.parse(JSON.stringify(value))
+    const quiet = async () => {
+      await settled(editor.history)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await settled(editor.history)
+    }
+
+    let done = () => {}
+    const finished = new Promise((resolve) => { done = /** @type {any} */ (resolve) })
+    const stop = backend.subscribe((event) => { if (event.type === 'run-finished') done() })
+    await backend.runClean({ scope: 'page', chapterId: CHAPTER, pageIndex: 0, mode: 'detect' })
+    await finished
+    stop()
+    await reloadPage(0)
+    const detection = plain(editor.chapter.pages[0].regions.find((/** @type {any} */ region) => region.outcome === 'detected'))
+    expect(detection, 'a detection on the first page').toBeTruthy()
+    expect(undoAvailable()).toBe(false)
+
+    // Clean: the backend's step arrives as `history-changed`.
+    expect(await runRegionMenuItem('engine:fill', current(detection.id))).toBe(true)
+    await quiet()
+    const result = plain(current(detection.id))
+    expect(result.outcome).toBe('cleaned')
+    expect(undoLabelKey()).toBe('masks.command.cleanRegion')
+
+    undo()
+    await quiet()
+    expect(plain(current(detection.id))).toEqual(detection)
+    expect(undoAvailable()).toBe(false)
+    expect(redoLabelKey()).toBe('masks.command.cleanRegion')
+
+    redo()
+    await quiet()
+    expect(plain(current(detection.id))).toEqual(result)
+
+    expect(await runRegionMenuItem('reject', current(detection.id))).toBe(true)
+    await quiet()
+    expect(plain(current(detection.id))).toEqual(detection)
+    expect(undoLabelKey()).toBe('masks.command.rejectResult')
+    expect(editor.history.entries).toHaveLength(2)
+
+    undo()
+    await quiet()
+    expect(plain(current(detection.id))).toEqual(result)
+    expect(undoLabelKey()).toBe('masks.command.cleanRegion')
+    expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
   })
 })

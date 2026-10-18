@@ -507,6 +507,9 @@ pub struct RunSelection {
     /// The same switch as asked, for the Hayai reader ([`HAYAI_MODELS`]),
     /// which reads every language and runs under either text policy.
     reader: bool,
+    /// Whether text the reader reads as Latin letters is cleaned
+    /// ([`cleaner_core::gate::LatinText`]). Off unless the setting is on.
+    clean_latin: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -548,7 +551,7 @@ impl DetectorModels {
 
 impl Default for RunSelection {
     fn default() -> Self {
-        Self { ja: true, zh: true, ko: true, ocr_rescue: false, reader: false }
+        Self { ja: true, zh: true, ko: true, ocr_rescue: false, reader: false, clean_latin: false }
     }
 }
 
@@ -585,6 +588,16 @@ impl RunSelection {
     /// the reader when the switch asks for it.
     pub(crate) fn all_text(reader: Option<bool>) -> Self {
         Self { reader: reader.unwrap_or(false), ..Self::default() }
+    }
+
+    /// The run's "Clean English text" setting; absent is off.
+    pub(crate) fn with_clean_latin(mut self, clean: Option<bool>) -> Self {
+        self.clean_latin = clean.unwrap_or(false);
+        self
+    }
+
+    fn latin(self) -> cleaner_core::gate::LatinText {
+        cleaner_core::gate::LatinText::cleaned(self.clean_latin)
     }
 
     fn any(self) -> bool { self.ja || self.zh || self.ko }
@@ -1449,7 +1462,14 @@ struct SegmentDetection {
     /// component assignment and any ink estimate, written beside the manifest
     /// with the detections.
     evidence: EvidenceBlob,
+    /// What the reader read while the units were confirmed
+    /// ([`Pipeline::group_segment`]), by rectangle of this crop.
+    readings: UnitReadings,
 }
+
+/// The readings one segment's grouping asked for, each by the rectangle of
+/// the crop it was read from. `None` is a read that failed.
+type UnitReadings = Vec<(Rect, Option<cleaner_core::gate::hayai::Reading>)>;
 
 /// One segment's detection, kept for as long as a region it saw is waiting on
 /// a later segment: the crop and everything that region is judged, fitted and
@@ -1465,6 +1485,7 @@ struct SeenSegment {
     balloons: Vec<cleaner_core::balloon::BalloonBox>,
     grouping: Grouping,
     evidence: EvidenceBlob,
+    readings: UnitReadings,
 }
 
 impl SeenSegment {
@@ -2468,7 +2489,7 @@ impl Pipeline {
             None if self.detection_models.ctd => (Some(detection.segmentation.lettering_mask()), EvidenceModel::Ctd),
             None => (None, EvidenceModel::SamTsL),
         };
-        let (grouping, evidence) =
+        let (grouping, evidence, readings) =
             self.group_segment(crop, page_offset, scope, pixels.as_deref(), pixel_model, &balloons, &ctd)?;
         // SAM's pixels are the lettering the gate reads too; CTD's own
         // segmentation already is, and an estimate is painted in per region.
@@ -2478,7 +2499,7 @@ impl Pipeline {
             detection.segmentation.levels.fill(0);
         }
         detection.boxes = ctd;
-        Ok(SegmentDetection { balloons, detection, grouping, evidence })
+        Ok(SegmentDetection { balloons, detection, grouping, evidence, readings })
     }
 
     /// Run the selected models over one segment crop: Ogkalu's boxes, CTD's
@@ -2555,9 +2576,15 @@ impl Pipeline {
     /// Group one segment's evidence and encode its evidence file. `scope`
     /// names the page (source digest and page id), so no two pages' group ids
     /// collide.
+    ///
+    /// **Confirm, then merge.** While the run reads, each unit no box claimed
+    /// is read on its own before the grouping may join it to another
+    /// ([`text_groups::group_checked`]), so art beside real lettering is
+    /// listed instead of cleaned with it. The readings come back with the
+    /// grouping: a region that is exactly one unit is not read twice.
     #[allow(clippy::too_many_arguments)]
     fn group_segment(
-        &self,
+        &mut self,
         crop: &Raster,
         page_offset: (i64, i64),
         scope: &str,
@@ -2565,7 +2592,7 @@ impl Pipeline {
         pixel_model: EvidenceModel,
         balloons: &[cleaner_core::balloon::BalloonBox],
         ctd: &[DetBox],
-    ) -> Result<(Grouping, EvidenceBlob), String> {
+    ) -> Result<(Grouping, EvidenceBlob, UnitReadings), String> {
         let mut inputs = text_groups::Inputs::new(crop.width, crop.height, mask);
         inputs.pixel_model = pixel_model;
         inputs.page = Some(crop);
@@ -2575,9 +2602,24 @@ impl Pipeline {
         inputs.ctd = ctd;
         inputs.models = self.model_uses();
         inputs.seams = self.segment_seams(crop, page_offset);
-        let grouping = text_groups::group(&inputs)?;
+        let mut readings = UnitReadings::new();
+        let grouping = if self.reads {
+            let latin = self.selection.latin();
+            let mut check = |rect: Rect| {
+                // The rectangle a region of exactly this unit is read by
+                // (`Region::text_bounds`), so its reading is found again.
+                let rect = cleaner_core::detect::tight_rect(rect, crop.width, crop.height);
+                let reading = self.read_rect(crop, rect);
+                let answer = cleaner_core::gate::unit_answer(reading.as_ref(), latin);
+                readings.push((rect, reading));
+                answer
+            };
+            text_groups::group_checked(&inputs, Some(&mut check))?
+        } else {
+            text_groups::group(&inputs)?
+        };
         let evidence = grouping.evidence(mask)?;
-        Ok((grouping, evidence))
+        Ok((grouping, evidence, readings))
     }
 
     /// Every detection model this run uses, where it runs, and the spatial
@@ -2639,6 +2681,9 @@ impl Pipeline {
     /// text policy no gate runs and every region is opted in; `inside` has
     /// still been computed by then, and still decides the region's engine pick
     /// and what its stored detection records.
+    ///
+    /// Beside the verdict, the Hayai reading it rests on, when the region was
+    /// read ([`Pipeline::read_check`]): the group's record keeps it.
     fn judge_region(
         &mut self,
         crop: &Raster,
@@ -2646,12 +2691,13 @@ impl Pipeline {
         region: &cleaner_core::detect::Region,
         detected: cleaner_core::balloon::Detected,
         inside: bool,
-    ) -> Result<Verdict, String> {
+        known: &UnitReadings,
+    ) -> Result<(Verdict, Option<cleaner_core::gate::hayai::Reading>), String> {
         #[cfg(test)]
         if let Some(vision) = self.test_vision {
-            return Ok((vision.judge)(region));
+            return Ok(((vision.judge)(region), None));
         }
-        if self.all_text { return Ok(self.read_check(crop, region, detected, Verdict::OptedIn)); }
+        if self.all_text { return Ok(self.read_check(crop, region, detected, Verdict::OptedIn, known)); }
         let session = self.gate.get()?;
         let reader_missing = self.selection.ocr_rescue && !session.has_reader();
         // A solid-bubbles run cleans no text outside a balloon, so it has
@@ -2665,7 +2711,7 @@ impl Pipeline {
             self.gate.open = open_gate_bare;
             self.gate.key = session_key(registry::Kind::ScriptGate, &self.gate.models, self.gate.preference);
         }
-        Ok(self.read_check(crop, region, detected, verdict))
+        Ok(self.read_check(crop, region, detected, verdict, known))
     }
 
     /// What a Hayai reading does to a verdict: a failed in-balloon verdict may
@@ -2675,15 +2721,18 @@ impl Pipeline {
     /// verdict is not read.
     /// The reader is optional, so a reader that will not open turns reading
     /// off for the run with a notice, and a failed read changes nothing.
+    /// The reading comes back with the verdict, `None` when there was none.
+    /// `known` is what the segment's grouping already read of this crop.
     fn read_check(
         &mut self,
         crop: &Raster,
         region: &cleaner_core::detect::Region,
         detected: cleaner_core::balloon::Detected,
         verdict: Verdict,
-    ) -> Verdict {
+        known: &UnitReadings,
+    ) -> (Verdict, Option<cleaner_core::gate::hayai::Reading>) {
         if !self.reads {
-            return verdict;
+            return (verdict, None);
         }
         let rescue = cleaner_core::gate::rescue_applies(&verdict, detected);
         let shape = cleaner_core::gate::shape_rescue_applies(&verdict, detected);
@@ -2692,10 +2741,34 @@ impl Pipeline {
             .is_some_and(|held| held.group.origin == cleaner_core::text_groups::GroupOrigin::MaskLayout);
         let check = verdict == Verdict::OptedIn || (boxless && verdict.cleans());
         if !rescue && !shape && !overrule && !check {
-            return verdict;
+            return (verdict, None);
         }
-        let reading = match self.reader.get() {
-            Ok(reader) => reader.read(crop, region.text_bounds()).ok(),
+        let bounds = region.text_bounds();
+        let reading = match known.iter().find(|(rect, _)| *rect == bounds) {
+            Some((_, reading)) => reading.clone(),
+            None => self.read_rect(crop, bounds),
+        };
+        let verdict = if rescue {
+            cleaner_core::gate::rescued_by(verdict, reading.as_ref())
+        } else if shape {
+            cleaner_core::gate::shape_rescued_by(verdict, reading.as_ref())
+        } else if overrule {
+            cleaner_core::gate::overruled_by(verdict, reading.as_ref())
+        } else {
+            cleaner_core::gate::text_checked(verdict, reading.as_ref(), self.selection.latin())
+        };
+        (verdict, reading)
+    }
+
+    /// One Hayai reading of a rectangle of `crop`, `None` when the run does
+    /// not read or the read failed. A reader that will not open turns reading
+    /// off for the rest of the run, with one notice.
+    fn read_rect(&mut self, crop: &Raster, rect: Rect) -> Option<cleaner_core::gate::hayai::Reading> {
+        if !self.reads {
+            return None;
+        }
+        match self.reader.get() {
+            Ok(reader) => reader.read(crop, rect).ok(),
             Err(error) => {
                 eprintln!("manga-cleaner: the Hayai text reader could not be opened, cleaning without it: {error}");
                 events::notice(
@@ -2706,15 +2779,6 @@ impl Pipeline {
                 self.reads = false;
                 None
             }
-        };
-        if rescue {
-            cleaner_core::gate::rescued_by(verdict, reading.as_ref())
-        } else if shape {
-            cleaner_core::gate::shape_rescued_by(verdict, reading.as_ref())
-        } else if overrule {
-            cleaner_core::gate::overruled_by(verdict, reading.as_ref())
-        } else {
-            cleaner_core::gate::text_checked(verdict, reading.as_ref())
         }
     }
 }
@@ -3204,7 +3268,7 @@ impl Pipeline {
             })?;
             let (crop_x, crop_y) = bounded.origin;
 
-            let SegmentDetection { balloons, mut detection, grouping, evidence: segment_evidence } =
+            let SegmentDetection { balloons, mut detection, grouping, evidence: segment_evidence, readings } =
                 self.detect_segment(&bounded.raster, segment.index, (crop_x - page_x, crop_y - page_y), &group_scope)?;
             if !self.detection_models.ctd {
                 #[cfg(test)]
@@ -3307,6 +3371,7 @@ impl Pipeline {
                 balloons,
                 grouping,
                 evidence: segment_evidence,
+                readings,
             });
             let crop_height = i64::from(seen.crop.height);
 
@@ -3503,7 +3568,7 @@ impl Pipeline {
         let detected = cleaner_core::balloon::detected(region.masking, &seen.balloons);
         let inside = cleaner_core::balloon::in_bubble(
             crop, &seen.segmentation, region.text_bounds(), region.masking, &seen.balloons);
-        let verdict = self.judge_region(crop, &seen.segmentation, region, detected, inside)?;
+        let (verdict, reading) = self.judge_region(crop, &seen.segmentation, region, detected, inside, &seen.readings)?;
         if !self.selection.allows(&verdict) {
             let reason = verdict.reason_key().unwrap_or(match verdict {
                 Verdict::OptedIn => "review.reason.outsideLanguageUnverified",
@@ -3544,7 +3609,10 @@ impl Pipeline {
         // library view restores it from the key; a group reason is
         // persisted as the key otherwise, and always in the record.
         let (grouping, segment_evidence) = seen.evidence_on(at.origin)?;
-        let group_record = Some(grouping.record(&held.group, Some(&segment_evidence)));
+        let group_record = Some(text_groups::GroupRecord {
+            reading: Some(text_groups::ReaderRecord::of(reading.as_ref())),
+            ..grouping.record(&held.group, Some(&segment_evidence))
+        });
         let review_state = region.flagged_large.then(|| "review.reason.unusuallyLarge".to_owned())
             .or_else(|| group_record.as_ref().and_then(|record| record.review_key()).map(str::to_owned));
 
@@ -5561,9 +5629,16 @@ fn walk(
                     // its patch. A detection that is no longer there - nothing
                     // in this build removes one from a page a run is on, but
                     // the manifest is the truth - still gets its patch.
+                    // A clean of a stored detection is one undo step, written
+                    // with the commit (`history::record_clean`).
+                    let before = replaces.as_deref()
+                        .and_then(|id| crate::history::side_now(&entry.chapter_id, &job.project, entry.source_idx, id));
                     let written = written.and_then(|()| match replaces.as_deref() {
                         Some(id) => job.complete_detection(id, &patch, review_state.clone())
-                            .and_then(|replaced| if replaced { Ok(()) } else {
+                            .and_then(|replaced| if replaced {
+                                crate::history::record_clean(job.path(), &entry.chapter_id, &job.project, entry.source_idx, id, before);
+                                Ok(())
+                            } else {
                                 job.complete_display_region(entry.source_idx, &patch, review_state)
                             }),
                         None => job.complete_display_region(entry.source_idx, &patch, review_state),
@@ -6538,6 +6613,7 @@ fn clean_picks_here(job_path: &Path, ids: &[String], picks: &[&str], ceiling: En
         return Ok(Vec::new());
     }
     let geometry = survey_job(&mut job, &|_| {});
+    let chapter_id = job_path.file_stem().and_then(|stem| stem.to_str()).unwrap_or_default().to_owned();
     let mut cleaned = Vec::new();
     for (placement, mut rows) in pages {
         if cancel.load(Ordering::SeqCst) { break; }
@@ -6562,7 +6638,9 @@ fn clean_picks_here(job_path: &Path, ids: &[String], picks: &[&str], ceiling: En
                 if let RegionOutcome::Cleaned(patch, review_state) = region {
                     let mut patch = *patch;
                     patch.provenance.mask_sha256 = mask_digest(&patch.mask);
+                    let before = crate::history::side_now(&chapter_id, &job.project, source_idx, &id);
                     if job.complete_detection(&id, &patch, review_state).map_err(|e| e.to_string())? {
+                        crate::history::record_clean(job_path, &chapter_id, &job.project, source_idx, &id, before);
                         cleaned.push(id);
                     }
                 }
@@ -6934,6 +7012,7 @@ fn run_settings_snapshot(
     // The reader the run actually has, Hayai or manga-ocr: a resume asks for
     // what ran, not for what was asked and missing.
     settings_snapshot["runOcrRescue"] = serde_json::json!(pipeline.reads || pipeline.selection.ocr_rescue);
+    settings_snapshot["runCleanLatin"] = serde_json::json!(pipeline.selection.clean_latin);
     settings_snapshot["runEngineCeiling"] = serde_json::json!(engine_ceiling);
     settings_snapshot["runScope"] = serde_json::json!(scope);
     settings_snapshot["runPageIndex"] = serde_json::json!(page_index);
@@ -7179,7 +7258,9 @@ fn captured_run_policy(snapshot: &serde_json::Value) -> Result<CapturedRunPolicy
     let detection = snapshot.get("runDetection").filter(|value| !value.is_null()).cloned();
     let all_text = snapshot.get("runTextPolicy").and_then(|v| v.as_str()) == Some("all_text");
     let rescue = snapshot.get("runOcrRescue").and_then(|value| value.as_bool());
-    let selection = if all_text { RunSelection::all_text(rescue) } else { RunSelection::from_args(detection.as_ref(), rescue)? };
+    // Absent from a snapshot written before the setting: off.
+    let selection = if all_text { RunSelection::all_text(rescue) } else { RunSelection::from_args(detection.as_ref(), rescue)? }
+        .with_clean_latin(snapshot.get("runCleanLatin").and_then(|value| value.as_bool()));
     let scope = snapshot.get("runScope").and_then(|value| value.as_str()).unwrap_or("chapter");
     if !matches!(scope, "chapter" | "project" | "page") {
         return Err("This interrupted workflow has an unknown run scope".into());
@@ -7251,6 +7332,7 @@ pub async fn run_clean(
     geometry_policy: Option<String>,
     text_policy: Option<String>,
     ocr_rescue: Option<bool>,
+    clean_latin: Option<bool>,
     analysis_targets: Option<serde_json::Value>,
     cloud_grant: Option<String>,
     mode: Option<String>,
@@ -7267,7 +7349,8 @@ pub async fn run_clean(
             return Err("Unsupported text policy".to_owned());
         }
         let all_text = text_policy.as_deref() == Some("all_text");
-        let selection = if all_text { RunSelection::all_text(ocr_rescue) } else { RunSelection::from_args(detection.as_ref(), ocr_rescue)? };
+        let selection = if all_text { RunSelection::all_text(ocr_rescue) } else { RunSelection::from_args(detection.as_ref(), ocr_rescue)? }
+            .with_clean_latin(clean_latin);
         let selected_models = DetectorModels::from_args(detector_models.as_ref())?;
         let picks = Picks::from_args(bubble_engine.as_deref(), outside_engine.as_deref());
         let outside = OutsideText::from_arg(outside_bubbles.as_deref());

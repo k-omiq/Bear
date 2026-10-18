@@ -27,6 +27,7 @@ import {
 } from '../state/editor.svelte.js'
 import { cloudOutcomeOf, cloudRefused, requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
 import { toolSpendsCloud } from './tools.js'
+import { isDetected } from '../model/masks.js'
 // The reporter lives beside the actions it was written for, and this module
 // already follows that one for everything else it does; a second copy of the
 // same three lines is a second sentence a failed edit could start saying.
@@ -196,6 +197,7 @@ async function applyInCloud({ chapterId, pageIndex, regionId, tool, params, befo
 function landIn(chapterId, result, regionId, before, label = 'canvas.command.applyTool') {
   if (editor.chapter?.id !== chapterId && result?.status === 'applied') {
     if (!result.region) return false
+    if (cleanedDetection(before, result)) return true
     return recordBackgroundRegionEdit(chapterId, label, regionId, before,
       { region: result.region, pageStatus: result.pageStatus ?? before.pageStatus })
   }
@@ -203,7 +205,26 @@ function landIn(chapterId, result, regionId, before, label = 'canvas.command.app
 }
 
 /**
+ * Whether an applied edit cleaned a stored detection: the region was detected
+ * before it and is not after it. The backend records that step itself, under
+ * the lock it commits in (a `clean-state` entry, which Undo replays by
+ * putting the detection back with its mask), so recording it here as well
+ * would be a second step for one edit, and one whose undo has no detection
+ * to restore.
+ *
+ * @param {RegionState} before
+ * @param {any} result
+ * @returns {boolean}
+ */
+function cleanedDetection(before, result) {
+  return isDetected(before?.region) && !isDetected(result?.region)
+}
+
+/**
  * Swap in what `applyTool` answered and record it for undo.
+ *
+ * A tool applied to a detected region is the one edit not recorded here: see
+ * `cleanedDetection`.
  *
  * @param {any} result
  * @param {string} regionId
@@ -219,10 +240,12 @@ function landApplied(result, regionId, before, label = 'canvas.command.applyTool
       // unclean page to cleaned, and a region put back without its page's
       // status is how a full track ends up under a "not cleaned" mark.
       if (!replaceRegion(result.region, result.pageStatus)) return false
-      recordRegionEdit(label, regionId, before, {
-        region: result.region,
-        pageStatus: result.pageStatus ?? before.pageStatus,
-      })
+      if (!cleanedDetection(before, result)) {
+        recordRegionEdit(label, regionId, before, {
+          region: result.region,
+          pageStatus: result.pageStatus ?? before.pageStatus,
+        })
+      }
       const pageIndex = locateRegion(regionId)?.pageIndex
       if (pageIndex !== undefined) void reloadPage(pageIndex).catch(() => {})
       return true

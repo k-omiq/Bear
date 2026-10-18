@@ -51,7 +51,7 @@ Python 3.10, 3.11 or 3.12. The `mflux` backend additionally requires macOS on Ap
 Create a dedicated virtual environment in the project directory (defaulting to `.sidecar-venv`):
 
 ```bash
-cd /Users/caved/dev/manga-cleaner
+cd <repo-root>
 python3 -m venv .sidecar-venv
 source .sidecar-venv/bin/activate
 ```

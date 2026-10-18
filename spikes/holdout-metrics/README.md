@@ -1,6 +1,8 @@
 # Holdout measurement
 
-Create a rights-cleared, human-labeled set outside the repository. All masks
+This experiment defines the scoring script (`measure.py`) for predicted masks and reconstructions against a holdout set; it is not shipped code.
+
+Create a rights-cleared, human-labelled set outside the repository. All masks
 use source-page coordinates and nonzero pixels mean membership. Run:
 
 ```sh
@@ -26,8 +28,8 @@ from `spikes/chapter-combo/results` and its associated run cache, with
 PNG and page JSON must remain together. Detector-only candidate boxes count
 as candidates but do not grant predicted write pixels. Applied-mask connected
 components are 8-connected candidates. An instance is found when at least
-50% of its labeled pixels are predicted, configurable with
-`--instance-threshold`. A false candidate overlaps no labeled instance pixel.
+50% of its labelled pixels are predicted, configurable with
+`--instance-threshold`. A false candidate overlaps no labelled instance pixel.
 Complete-page recall includes no-text pages. Non-text exposure and protected
 art damage are pixel counts, and protected-art damage is included in exposure
 when masks do not overlap lettering. Runtime and peak memory are reported only
@@ -36,9 +38,9 @@ when the prediction JSON carries them. Missing measurements are not zero.
 The chapter reference run is indexed by
 `spikes/chapter-combo/results/live-chapter-109-run.json`. Its per-page fusion
 JSON and numbered component PNGs are under
-`spikes/chapter-combo/.cache/live-chapter-109/fusion/`; SAM page JSON and
+`spikes/chapter-combo/.cache/live-chapter-109/fusion/` (written when the spike runs; not committed); SAM page JSON and
 binary masks are under `.../sam/` and `.../sam/masks/`. That cache is an
-unlabeled research run, not holdout ground truth.
+unlabelled research run, not holdout ground truth.
 
 Optional correction CSV columns are `page_id,seconds`, one row per corrected
 page. Mask and reconstruction judgments stay in separate JSON records using

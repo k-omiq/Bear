@@ -68,7 +68,6 @@ const IMPLEMENTED = Object.freeze({
   proposeRunAnalysis: 'propose_run_analysis',
   confirmRunAnalysis: 'confirm_run_analysis',
   cancelRunAnalysis: 'cancel_run_analysis',
-  resolveQwenReview: 'resolve_qwen_review',
   prepareCloudClean: 'prepare_cloud_clean',
   confirmCloudClean: 'confirm_cloud_clean',
   startCloudClean: 'start_cloud_clean',
@@ -102,6 +101,7 @@ const IMPLEMENTED = Object.freeze({
   historyLoad: 'history_load',
   historyPush: 'history_push',
   historyMove: 'history_move',
+  undoLimit: 'undo_limit',
   renameProject: 'rename_project',
   deleteProject: 'delete_project',
   deleteChapter: 'delete_chapter',
@@ -110,6 +110,8 @@ const IMPLEMENTED = Object.freeze({
   deleteMask: 'delete_mask',
   duplicateRegion: 'duplicate_region',
   restoreRegion: 'restore_region',
+  setRegionCleaned: 'set_region_cleaned',
+  rejectResult: 'reject_result',
   setLayerStyle: 'set_layer_style',
   keepDependencyResult: 'keep_dependency_result',
   setDetectionType: 'set_detection_type',
@@ -170,6 +172,7 @@ export const SEAM_METHODS = Object.freeze([
   'historyLoad',
   'historyPush',
   'historyMove',
+  'undoLimit',
   'renameProject',
   'deleteProject',
   'deleteChapter',
@@ -184,6 +187,8 @@ export const SEAM_METHODS = Object.freeze([
   'deleteMask',
   'duplicateRegion',
   'restoreRegion',
+  'setRegionCleaned',
+  'rejectResult',
   'setLayerStyle',
   'keepDependencyResult',
   'setDetectionType',
@@ -243,8 +248,6 @@ export const SEAM_METHODS = Object.freeze([
   'runCloudProvisioner',
   'cancelCloudProvisioner',
   'onProvisionProgress',
-  'onQwenReview',
-  'resolveQwenReview',
   'onCloudAttempt',
   'onRemoteAnalysis',
   'onDenoiseProgress',
@@ -293,12 +296,11 @@ export const SEAM_METHODS = Object.freeze([
  * and each answers with a promise of its unlisten function, the shape Tauri's
  * own `listen` has. None of them is a command, so none is in `IMPLEMENTED`.
  */
-export const EVENT_METHODS = Object.freeze(['subscribe', 'onProvisionProgress', 'onQwenReview', 'onCloudAttempt', 'onRemoteAnalysis', 'onDenoiseProgress', 'onDenoiseRecorded', 'onQuitRequested'])
+export const EVENT_METHODS = Object.freeze(['subscribe', 'onProvisionProgress', 'onCloudAttempt', 'onRemoteAnalysis', 'onDenoiseProgress', 'onDenoiseRecorded', 'onQuitRequested'])
 
 /** The event names the listeners attach to. */
 export const CLOUD_EVENTS = Object.freeze({
   provisionProgress: 'provision://progress',
-  qwenReview: 'qwen://review',
   cloudAttempt: 'cloud://attempt',
   remoteAnalysis: 'cloud://analysis',
   denoiseProgress: 'denoise://progress',
@@ -439,7 +441,6 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // here rather than passed through, so nothing the interface happens to
     // carry reaches a command that spends money.
     // Strictly the cloud unless mixed execution is asked for by name.
-    resolveQwenReview: ({ attemptId, choice }) => call(IMPLEMENTED.resolveQwenReview, { attemptId, choice }),
     prepareCloudClean: ({ chapterId, scope, pageIndices = null, regionIds = null, localFirst = false,
       bubbleEngine = null, outsideEngine = null, qwenEdit }) =>
       call(IMPLEMENTED.prepareCloudClean, { chapterId, scope, pageIndices, regionIds, localFirst,
@@ -510,6 +511,7 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     historyPush: ({ chapterId, entry }) => call(IMPLEMENTED.historyPush, { chapterId, entry }),
     historyMove: ({ chapterId, direction }) =>
       call(IMPLEMENTED.historyMove, { chapterId, direction }),
+    undoLimit: () => call(IMPLEMENTED.undoLimit),
     renameProject: (spec) => call(IMPLEMENTED.renameProject, spec),
     deleteProject: (spec) => call(IMPLEMENTED.deleteProject, spec),
     // The command's `source_files` is required; the seam leaves it optional.
@@ -526,6 +528,12 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     duplicateRegion: ({ regionId }) => call(IMPLEMENTED.duplicateRegion, { regionId }),
     restoreRegion: ({ regionId, region }) =>
       call(IMPLEMENTED.restoreRegion, { regionId, region: region ?? null }),
+    // The two halves of a cleaned detection. `setRegionCleaned` is the replay
+    // of a `clean-state` undo entry and records nothing; `rejectResult` is the
+    // user's reject, and the command records its own undo step.
+    setRegionCleaned: ({ regionId, cleaned }) =>
+      call(IMPLEMENTED.setRegionCleaned, { regionId, cleaned }),
+    rejectResult: ({ regionId }) => call(IMPLEMENTED.rejectResult, { regionId }),
     // A deliberate layer change, judged by the layer's capabilities; history
     // replay goes through `restoreRegion` instead.
     setLayerStyle: ({ regionId, layer }) => call(IMPLEMENTED.setLayerStyle, { regionId, layer }),
@@ -702,7 +710,6 @@ export function createTauriBackend({ fallback, invoke, listen }) {
   // helper, `applyTool`, `rerunMask`, `cleanAnyway` - is served here, never by
   // the fallback, so there is no second stream to merge.
   backend.onProvisionProgress = (handler) => on(CLOUD_EVENTS.provisionProgress, handler)
-  backend.onQwenReview = (handler) => on(CLOUD_EVENTS.qwenReview, handler)
   backend.onCloudAttempt = (handler) => on(CLOUD_EVENTS.cloudAttempt, handler)
   backend.onRemoteAnalysis = (handler) => on(CLOUD_EVENTS.remoteAnalysis, handler)
   backend.onDenoiseProgress = (handler) => on(CLOUD_EVENTS.denoiseProgress, handler)
@@ -749,7 +756,6 @@ export const TAURI_REGISTERED_CLOUD_COMMANDS = Object.freeze([
   'submit_cloud_attempt',
   'get_cloud_attempt_status',
   'get_cloud_attempt_result',
-  'resolve_qwen_review',
   'cancel_cloud_attempt',
   'reconcile_cloud_recovery',
 ])

@@ -670,6 +670,153 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Cloud Klein v2 (2026-10-18): left open.** Measured on 14 regions of two black-and-white pages
+only (see "Cloud Klein v2" under Engines and quality). Not done: the local sidecar's Klein is still
+v1 and can return lettering; no live deploy and no run through the app; no colour page; no Beam;
+`RenderRate` prices neither the LaMa fill nor a 9B on an L4; the cloud and local SAM masks of one
+page were not compared. Guidance on Klein showed no visible gain on these regions, so the editor
+asks for it only when a cloud result is done again.
+
+**Documentation pass (2026-10-15): left open.** Three code comments still describe old
+behaviour and were not changed with the docs: `deploy/cloud/common/contract.py` points at the
+removed `docs/cloud-api.md` (the route reference is now `docs/cloud-contract.md`; an edit there
+changes the cloud code digest, so it waits for the next worker change), the header of
+`src-tauri/src/inference/http.rs` still says the client sends no POST, and the docstring of
+`deploy/cloud/common/qwen.py` still says a failed job goes to human review, while the worker
+returns the best of three renders.
+
+**Qwen guidance prompt builder: not benchmarked.** The generic prompt builder that turns the
+lettering type and optional description into the Qwen Clean instruction has not been run on a GPU
+against the earlier hand-written diagnostic prompt. No claim is made that it matches that prompt's
+quality.
+
+**Export, cloud clean, detection and undo: investigated, six of seven done (2026-10-13).** Five
+problems were traced to their causes from the code and from the installed app's own library and
+cloud attempt journal, and two requirements were added. 01 and 07 were done the same day and 03
+and 06 on 2026-10-13, and 02 and 04 the same day; none is committed. 05 is done in part. Each was worked through with its evidence, its fix and its proof. What was
+not measured, by item:
+
+- 01, export, done: not run in the installed app with the drive unplugged, and not run on Windows
+  or Linux. On Windows a folder that exists and denies writes is not caught by the plan; it fails
+  at the write, with its path. A locked volume was not tried, only a read-only folder. The folder
+  chooser was not seen opening from the new button, because the Vite mock has none. The time of
+  the failed export is still unknown.
+- 02, automatic rejects, done in the app and in the worker: the three Qwen profiles
+  (`mc-unbswc`, `mc-j4avmb`, `mc-ab3xgz`) were redeployed, code only, and one real render on
+  `mc-unbswc` of a region that failed twice (`c86-p026-d117`, the same request, seed 1) ended
+  committed with the review flag in 173 s, for about $0.17. Its edit ratio was 1.78 against a
+  minimum of 2.0, so it is the best of three weak renders, and the lettering is still in the
+  picture: the user would reject it. Not measured: how often the best of three weak renders is
+  usable; a region where one render passes, after the redeploy; `mc-j4avmb` and `mc-ab3xgz`
+  were not called. Not run: the installed app, which is still the old build with the review
+  wait and must be rebuilt and installed; the Vite mock. Deferred:
+  the before and after picture of the old review is not shown beside Reject result
+  (`preview_rgb8` in the core has no caller but a test); results cleaned before the change were
+  not flagged after the fact; a failure code the table does not know gets a general reason and
+  the code itself is not shown; the recipe id did not move, so the only sign of an old
+  deployment is the `edit_not_applied` notice that says to update the cloud setup.
+- 03, retries and stuck requests, done: the sweep was run on a copy of the journal and of five
+  chapters (20 unresolved before, 0 after, all ended as `region_changed`, none attached), never
+  on the real journal and never in the installed app. The three Qwen profiles were redeployed
+  with 02 and `mc-unbswc` lists `jobs.retry_seed`, but no retry was rendered: whether a
+  different seed makes Qwen edit a region it refused is still not known. Whether a gateway
+  still knows handles from September was not asked;
+  none of the 20 needed it. Deferred or not measured: the sweep before a cloud clean was not run
+  through the app command, only through its parts; when that sweep attaches or ends something,
+  the open chapter is not read again; an accepted job that the gateway reports as pending for
+  ever is never ended; three 404 answers in a row end a resumed job, and whether a Modal app
+  being redeployed can answer 404 for a live job was not checked; an attempt whose chapter file
+  or source image cannot be read is kept until a sweep can read it, so a manifest that is damaged
+  for good keeps its attempt; a dismissed unknown submission is never shown again and still holds
+  its region; the count behind the retry seed reads every attempt's scope file on each request
+  and was not timed on a large journal; the mock backend does not model the `released` list or
+  the new rule; a result the sweep ends is dropped with no notice to the user, only the journal
+  says why.
+- 04, queue, done: proved against a fake gateway of 40 jobs, not on a real one. The one real
+  render of 02 ended committed with nobody asked, through the single render path and not the
+  batch. Not measured: whether 16 in flight is the right number once slots turn over, and a
+  real batch of more than 16 Qwen regions. The cap of 16 in `src/lib/api/runner.js` is the mock's copy of the limit on
+  area detection uploads and was left as it is.
+- 06, reject and undo, done: not run in the installed app, and no cloud call was made, so no real
+  cloud result was rejected. Results cleaned before 2026-10-13 cannot be restored; on a copy of
+  `c86` all 394 refuse with `clean_not_restorable` and the copy is unchanged. Not measured: the
+  disk cost of the detection files a clean now keeps (the `detections` folder of `c86` is
+  1.7 MB), and the time of a full run that writes one undo step for each region (200 regions
+  rewrite the journal 200 times and fill 200 of 500 steps). Not tried: a build from before this
+  change opening a chapter written by this one; its sweep deletes the kept mask files and a
+  reject then fails with `clean_mask_unreadable`. Deferred: Detect run again on a page after an
+  undo or a reject gives the text a new id, and Redo of the old step puts the old result back
+  beside the new detection; deleting a restored detection through its mask leaves the result
+  that was set aside, and through `restoreRegion` drops it; a refused replay leaves the history
+  one step moved; a journal write that fails after a clean is written to the console only; the
+  backend trims its steps by the undo limit a command last read. Nothing is kept, so nothing
+  can be rejected, for a one-pass run's results, hand and tool masks, a detection the quality
+  metric declined and a detection cleaned through a text-shaped plan. The result is set aside
+  in `withdrawn_patches` and not left hidden in `patches`, which differs from the plan in the
+  file. Windows and Linux were not run.
+- 05, detection, steps 0 to 2 done (step 2 changes grouping, version 6): five real chapters were read back from
+  their evidence files, 1,628 groups. 299 mask-only groups were cleaned or are queued (not 157:
+  143 sit under a row that lost its group record), and the reader held another 261. How many of
+  the 299 are art, how many of the 261 are real lettering, and how many box-backed groups are art
+  are not known: the picture sheets are made and the user has not marked them. One Hayai read
+  took a median of 98 to 120 ms on the CPU of an Apple M5 in a release build; not timed on
+  Windows, Linux or a GPU. All five chapters are Japanese single pages detected under All text
+  with the cloud models; no gate-policy chapter, long strip, Korean or Chinese title was read.
+  The policy of each Detect run was inferred, because the manifest keeps only the last run's
+  settings. Why 329 cleaned rows carry no group record, and why 31 groups the reader calls not
+  lettering were cleaned, were not traced. A new group record keeps the reader's text, confidence
+  and floor; the reading of a region the gate held, and `manga-ocr`'s rescue text, are still not
+  kept. Grouping merges nearby mask pieces before any check: 47 of 950 cleaned box-backed groups
+  hold pieces merged in from outside their boxes, and the user marked 7 of the 47 as art. Read
+  alone, the merged pieces of 4 of those 7 fail the reader, and so do pieces of 23 of the 40
+  unmarked groups, mostly real punctuation and single kana. The user's order (pixels, then a
+  reader on each unit, English held unless a setting says otherwise, then merge) is built as
+  step 2: with a reader, what no box claimed is read in its own unit before it may join a box's
+  lettering, and a refused unit is listed and joins nothing. Made again from the evidence of the
+  same 162 pages with the real reader: of 959 box-backed groups the reader let through before,
+  927 are unchanged and 32 have a part held; of 322 mask-only groups, 314 are unchanged and 8
+  are held, 7 of them read as English (one of the 7 is hand-drawn Japanese read as `AIL!`). The
+  art is out of 3 of the user's 7 marked groups, about 85% out of 2 more, and still in 2 (the
+  reader reads the art as `し` 0.87 and `ッ` 0.81). About half of the 32 held parts are real
+  small marks by the author's eye; the user has not marked the R sheets. The check adds 4.2
+  reads a page, and 316 of 685 are used again when the region is judged. Not done: a run in the
+  installed app (two pages went through the app's own Detect path headless), a long strip, a
+  Korean or Chinese title, a gate-policy chapter, a second manga artist's hand lettering. With
+  the reader off or unable to open, nothing is checked and grouping is as before (the plan's
+  fail-closed rule was not built). A refused unit's reading is not kept. The page preview groups
+  without the reader. English is held from the reader's letters alone (2 or more Latin letters,
+  0.8 of all letters); the share was not tuned. Steps 3 and 4 of the plan are not started.
+  `manga-ocr` and Hayai disagree on 172 of 560 mask-only groups and nobody has said
+  which is right. COO was not run again. Koharu's current detector (one instance segmentation
+  model with a sound effect class, no reader before cleaning) was run on the same 162 pages in
+  PyTorch outside the app: its text class agrees with 906 of 950 cleaned box-backed groups, it
+  calls 227 of 299 cleaned mask-only groups sound effects (which Koharu does not remove) and
+  finds nothing in 45, and its sound effect class takes in art. Not done: an ONNX export, a run in
+  the app or on CPU, Windows or Linux, a check of its licence ("other"), other score limits than
+  0.25 and 0.2, and the user's marks on the K sheets. Both
+  Rust suites passed once after step 2 (`cleaner-core` 851, app crate 1,019). The front end
+  suite ran once with the machine at a load average over 70: 2,369 passed and 10 dialog tests
+  timed out at 5 s; the six files they are in passed when run again in two smaller batches. A
+  clean full front end run was not made. The strict clippy gate is red on lints in
+  files this step did not touch (`mask.rs`, `history.rs`, `region.rs`, `cloud_denoise.rs`) and was
+  not fixed here.
+- 06, reject and undo: what Undo does today after a single-region local clean, and the disk cost
+  of keeping each cleaned region's detection files. Chapters cleaned before the change cannot
+  have their masks restored.
+- 07, undo history size, done for edit steps: one journal write takes 9 to 10 ms at 500 entries,
+  19 to 29 ms at 2,000 and 45 to 67 ms at 5,000, on an Apple M5 with the internal disk and an
+  optimised test build. Not timed on a release build, a slow or external disk, Windows or Linux.
+  A real entry is 1.9 to 3.5 KB and the record it carries was not broken down. The whole app
+  crate suite was not run, only the 70 tests in the modules that changed. The setting was not
+  seen in the installed app. No setting for denoise runs was built, as decided.
+- 01 and 07, both: the new sentences in Spanish, French, Japanese, Korean and Portuguese were not
+  read by a native speaker. Both dialogs were seen in Chromium only; the shipped window is
+  WKWebView.
+
+Decided the same day: stuck cloud requests are released; a cloud result is applied at once and
+only the user rejects it; a reject or an undo puts the mask back; the undo history size becomes a
+setting.
+
 **Page denoise output scale, and more presets (2026-10-10).** A denoised page always came back at
 the page's own size: the model upscaled 2 to 4 times and the result was scaled back down. A run can
 now keep the page larger. A recipe takes `output_scale` 2 to 4, never past the scale of its last
@@ -786,12 +933,12 @@ Not measured, or put off:
 so a user who wanted the cloud GPU for detection or page denoise alone paid for a 5.5 GB download
 and a render worker. `model_id: "none"` now sets up a Modal installation with no cleaning model:
 no `Worker` class, no snapshot download, and a gateway that says `render: false`
-(`docs/cloud-provisioning.md` section 6, `docs/cloud-api.md`). The app remembers such a deployment
+(`docs/cloud-provisioning.md` section 6, `docs/cloud-contract.md`). The app remembers such a deployment
 as `none`, which is quiet, and not as `missing`, which asks for a repair.
 
 Not measured, or known to be incomplete:
 
-- Not run against a Modal account. The helper is under its fake SDKs and the gateway under unit
+- This change has not run against a live Modal account. The helper is under its fake SDKs and the gateway under unit
   tests. Not seen live: a deploy of the app with no `Worker` class, that no render image is built,
   an update that removes the `Worker` and one that creates it again, and how long the old gateway
   keeps answering `/model-info` after such an update (the health step waits for it, up to its budget).
@@ -915,8 +1062,7 @@ Not measured, or known to be incomplete:
 stroke's box changed: the preview was the whole box at the page's own resolution, opaque, laid over
 proxy tiles the browser scaled separately. It is now a see-through layer on the tiles' own grid
 that holds only the stroke (`managed_proxy_overlay` in `proxy.rs`, `preview_paint` in `region.rs`),
-drawn on a canvas (`PaintLayer.svelte`). The plan and the numbers are in
-`docs/brush-preview-fix-plan.md`.
+drawn on a canvas (`PaintLayer.svelte`).
 
 Measured, on one real page (1136x1601, proxy 1024x1443): before, 8.5 to 8.9% of the untouched
 pixels in the box were more than 16 levels off the tile under them; after, none of 221721 changed,
@@ -1100,7 +1246,7 @@ Measured with the headless real run (Detect only), reader off then on, regions c
 | pages | CTD + Ogkalu Full, legacy | + SAM-TS-L, All text |
 | --- | --- | --- |
 | Black Jack ch. 1, 11 pages | 37 to 42 | 84 to 56 (28 held, nearly all art) |
-| `~/dev/120 noisy png`, 10 pages | 106 to 111 | 130 to 121 (8 of 9 held are art) |
+| `120 noisy png` (local), 10 pages | 106 to 111 | 130 to 121 (8 of 9 held are art) |
 | apocalypse 109 webtoon (Korean), 12 strips | 2 to 5 | 33 to 23 |
 | 8 public-domain Taiwanese comic pages (Wikimedia Commons) | 81 to 82 | 188 to 166 |
 
@@ -1131,7 +1277,7 @@ only speed up NVIDIA machines. Not yet done:
 32 page pixels at Detect (and in a one-pass run), and its Apply re-pads masks already detected from
 their stored unpadded pair (`region.rs#set_detection_padding`). Unit tested on synthetic masks and
 checked in the Vite mock only. Not yet run:
-- A real Detect and Clean with padding on the user's scans (`~/dev/120 noisy png`), in the app or
+- A real Detect and Clean with padding on the user's scans (`120 noisy png`, local only), in the app or
   the headless real run: whether a padded mask helps LaMa or the fill, and whether the quality
   check declines more regions once the mask reaches into its ring.
 - No default other than 0 was chosen; nothing measured says which padding suits which page.
@@ -1194,6 +1340,54 @@ marker and the seed status's byte total, so a recipe that gains a file seeds aga
 - One page, black and white. No colour page, no Beam, no live v3 deploy at the time of writing.
 - `MIN_EDIT_RATIO` (2.0) rests on six renders of one crop; low-contrast lettering may need another
   threshold. A retried render costs up to three times the GPU time and `RenderRate` does not price it.
+
+**Cloud Klein v2: LaMa fill in the worker, no reference, guidance; 9B on an L4 (2026-10-18).** The
+fix the entry above left unbuilt now runs in the cloud worker, not the client. Recipes
+`mc-flux2-klein-inpaint-v2` and `mc-flux2-klein-9b-inpaint-v2`: the hint, grown 8 px, is filled by
+`lama-manga.onnx` (pinned as an adapter in the snapshot, ONNX Runtime on CUDA, 512 px tiles 128 px
+apart), and Klein inpaints that hole at strength 1.0 with the filled crop as its only image
+(`deploy/cloud/common/flux.py`). Both recipes now take `qwen_edit`: `flux_prompt` names the
+lettering type and reads the description as what the lettering covers; Automatic with no
+description is the pinned prompt.
+
+Measured on two black-and-white pages (984 x 1400) the user sent, detected headlessly by the app's
+own pipeline (CTD, Ogkalu RT-DETR Full, SAM-TS-L, all text, outside clean, padding 5, OCR rescue):
+14 regions, cut by `load_cloud_region` and `CloudRegion::prepare` (preprocessing 2.0.0) and reused
+unchanged for every method. Modal, profiles onlybixi and aizendazai46, the production pins (torch
+2.13 cu129, diffusers 0.39, sdnq 0.2.4, onnxruntime-gpu 1.23.2), seed 1, 4 steps:
+- v1 (the crop as image and reference) sent back the bold sound effect of c2-p002-d8 on 4B and 9B,
+  seeds 1 and 2, as on 2026-10-02; the other 13 regions came out clean under v1 too, some with dark
+  smudges where the strokes were. LaMa alone blurs every large hole.
+- LaMa fill then Klein at strength 1.0 cleaned all 14 on both models. Without the reference the
+  result is the same to the eye and Klein takes about 30% less time: 4B on an L4 4.0 s instead of
+  5.9 s, 9B on an L40S 2.5 s instead of 3.5 s. Strength 0.6 with the reference looked about the
+  same and was not faster. Filling only a 2 px grown hole left smears and white blobs on 4B
+  (c2-p002-d7, c2-p001-d6). LaMa adds 0.05 to 0.13 s per crop.
+- The production `SdnqFluxRunner`, run on an L40S over the bench volume: 9B equal to the bench
+  winner on all 14 crops (largest pixel difference 0); 4B mean difference 0.1 of 255 (its bench ran
+  on an L4). Warm, per crop: 4B 1.0 to 1.5 s, 9B 2.2 to 3.1 s. Peak allocated 6.7 GB and 13.4 GB.
+- 9B on an L4: one copy fits (16,207 MiB used of 23,034) at 8.8 s per crop; a second copy runs out
+  of memory. At Modal's list prices an L4 crop costs about $0.0020 and an L40S crop about $0.0014,
+  so the 9B stays pinned to the L40S. The 4B uses 8,757 MiB, so two copies fit an L4.
+- Guidance, every region rendered with and without it in production: a right description changed
+  the pixels (up to 9 of 255 on average, on the speed lines of c2-p002-d7) but nothing looked
+  better on these 14. A wrong one draws what it says: "grey crowd and wall" made 4B draw grey
+  figures where there was only a wall (c2-p001-d0). The editor asks for it only when a cloud result is done again
+  (`asksGuidance` in `src/lib/editor/qwenflow.js`); a first clean and a batch keep one click, and
+  Qwen still asks every time.
+
+Not done or not measured:
+- The local sidecar (`backend/sdnq.py`, `backend/mflux.py`) is still v1: no LaMa fill, the crop as
+  reference. A local Klein render can still return lettering. `test_recipe_parity.py` now allows
+  those two differences and pins them.
+- No live deploy, no run through the app. A deployed gateway advertises v1 until it is deployed
+  again, and its volume then needs the 207 MB LaMa adapter (`npm run helpers` first).
+- No colour page, no Beam. `RenderRate` is unchanged: it does not price the LaMa fill, and the 9B
+  on an L4 is not offered.
+- Two black sound effects held by the script gate and one `!?` were never sent. Strokes outside
+  the hint stay: one in c2-p002-d7, and most of the large sound effect beside c2-p002-d8. Detection,
+  not Klein.
+- The cloud SAM tiles a page; the local run masks it whole. The two masks were not compared.
 
 **Interface languages (2026-10-01).** The interface speaks English, Korean, Japanese, Spanish,
 Brazilian Portuguese and French (`src/lib/i18n/`). A first run starts in the OS language when it
@@ -1297,7 +1491,7 @@ left inside a mask's bounding box but outside the mask, so a flat fill passes th
 leaves; scoring those pixels would let a bad fill escalate to LaMa as the pick design intends.
 
 **The app on a real Windows or Linux desktop (2026-09-29).** A read-only code audit of commit
-`91edc3b` is in `docs/windows-linux-audit-2026-09-29.md`: 4 blockers, about 20 major and 40
+`91edc3b` found 4 blockers, about 20 major and 40
 minor findings, each with `path:line`. A launch check (`src-tauri/src/smoke.rs`) now opens the
 installed app on every Windows and Linux release build and loads the ONNX Runtime; it passed
 once locally in an Ubuntu 22.04 arm64 container (WebKitGTK 2.50.4, tile fetch answered), and has
@@ -1383,7 +1577,7 @@ clean groups) the paper rescues 122 groups Ogkalu put outside: the same 121 the 
 when it was first measured, plus one group whose stored lettering lies wholly below its page, which
 is an artifact of reading that evidence against a single page. The 3 groups the paper used to veto
 (a Bubble grade over paper that reads as picture) are now inside. On the 28 noisy scans
-(`~/dev/120 noisy png`, CTD and Ogkalu small, `spike-gate-probe`) 374 regions: no Ogkalu-inside
+(`120 noisy png`, local only, CTD and Ogkalu small, `spike-gate-probe`) 374 regions: no Ogkalu-inside
 region became outside, 1 went from outside to inside (16.png at 837,125, short text beside a
 Bubble@0.92 shape over tone, which the paper used to veto), and 28 went from inside to outside, all
 of them regions Ogkalu put outside and the old reading rescued (26 through the between-the-strokes
@@ -1420,7 +1614,7 @@ still load: a `denoise` patch engine, detection pick, run pick or ceiling reads 
 stored `fill_and_denoise` route reads as `fill`. `EDIT_MARGIN` drops from 6 px to the isolation
 radius, 5 px, since no rung writes wider now. In a Mixed cloud clean, a region saved with the
 Denoise fill pick used to go straight to the cloud; it is now tried here first as a fill. Unit
-tests cover all of this. Not measured: the flat fill on the real scans in `~/dev/120 noisy png`;
+tests cover all of this. Not measured: the flat fill on the real scans in `120 noisy png` (local only);
 and routing, which still measures the ring's deviation about a fitted plane, so paper with a mild
 gradient can still route to Fill and now gets one flat colour where it used to get the gradient.
 Measuring the deviation about the flat median instead would send those regions to LaMa, but it also
@@ -1490,7 +1684,6 @@ already saved; checked by unit tests and the dialog's DOM test, not yet in the s
 run still has no progress or stop: `start_cloud_denoise` answers only at the end. Where denoise runs
 now asks the selected deployment (`cloud_denoise_presets`, no GPU started) and offers Cloud only when
 it lists page denoise, and only the presets it lists; not yet tried against the deployed gateway.
-Plan: `docs/denoise-engine-plan.md`.
 
 **Updating a cloud setup (2026-09-28).** A finished Modal setup could not get page denoise: Apply
 refuses a finished installation and Resume refused any change of options, and onboarding offered no
@@ -2044,8 +2237,8 @@ to the earlier prompt.
   cloud permission before each SAM upload. Their artifact paths reject traversal and symlink
   escape from the validation folder. The unknown-submission, old-recipe, SAM and fixture tools
   compile under the isolated app identity; the separate live outcomes are recorded above.
-- The local evidence folder is `/Users/caved/dev/manga-release-validation-2026-09-27`.
-  It holds preserved inputs, human annotations, detector and texture comparisons, test logs and
+- The local validation folder (not in the repository)
+  holds preserved inputs, human annotations, detector and texture comparisons, test logs and
   the validation ledger. The original result folder and production library remain read-only.
 - The debug-only `release_probe` bound one unknown-submission render to the validation app,
   exact consent scope and a single-use execution record. Its GET-only capability mode and live
@@ -2221,9 +2414,10 @@ to the earlier prompt.
 - **The disagreement between two harnesses on one machine,** 1.7× to 2.1× on the same models.
   The in-process rung peaks came off the same tool that produced the wrong sidecar figure and
   may be the same wrong line of its output.
-- **The cloud path has run once on a real Modal account, never on Beam.** On 25 September 2026
+- **The cloud path first ran on a real Modal account on 25 September 2026, and has run live on
+  Modal since (see the later live entries); it has never run on Beam.** On that first day
   the setup helper deployed to workspace `k-omiq` on an L4 and a contract client rendered a
-  synthetic 512x384 crop; the numbers are in [cloud-work-log.md](cloud-work-log.md). Setup took
+  synthetic 512x384 crop. Setup took
   191 s, a cold render 71 s and a warm one 10 s, the pipeline held about 7.0 GiB of GPU memory,
   cancel, recovery after scale to zero and cleanup worked, and the whole run metered $0.10 to $0.15, covered by Modal's credits. The
   desktop app did not drive it: the Rust client, the keychain and the consent flow in WKWebView
@@ -2268,14 +2462,14 @@ to the earlier prompt.
 - **The cloud interface has not run in the shipped webview.** It is tested in jsdom and was walked
   through in a Chromium mock. The app ships WKWebView on macOS, where focus and event timing differ,
   and no `cloud://attempt` or `provision://progress` event has yet crossed a real Tauri bridge.
-- **The M0 failure ledger has no human labels.** `spikes/m0-ledger` runs the current pipeline on
+- **The failure ledger has no human labels.** `spikes/m0-ledger` runs the current pipeline on
   real pages and writes one row per region with its artifacts. On three of the user's scans it gave
   22 regions: 21 cleaned and 1 held by policy. Missed discovery, a weak mask and bad inpainting are
   categories only a person can assign, so those columns are empty. A detector seed the pipeline
   drops as empty gets no row. The raw crop and ink are proxies and carry a `_proxy` name; the
   pipeline does not expose its true base mask or candidate box. Times are CPU only (61.1 s, 19.7 s
   and 27.4 s) and the peak RSS is cumulative for the process.
-- **No labeled holdout exists, so M5's exit has no numbers.** `spikes/holdout-metrics` computes
+- **No labeled holdout exists, so text-shaped quality has no numbers.** `spikes/holdout-metrics` computes
   instance and page recall, text-pixel recall, non-text exposure, protected-art damage, false
   candidates per page and correction time from labels, by slice. Nobody has labeled a page, and
   no human mask or reconstruction review has run. The padding default, mask threshold, crop
@@ -2287,13 +2481,14 @@ to the earlier prompt.
 - **Needs review's Undo is the chapter's last action.** It reverses the latest journal entry, not the
   specific change that flagged the layer, and is labeled "Undo last action". Undoing the one causing
   change is not built.
-- **Cloud analysis (M7) has run only against fakes.** Consent, grants, the journal, tile submission,
+- **Cloud analysis (M7) ran live on Modal after this entry was written (see "Cloud detection in
+  Text cleanup ran live"); the parts below were tested only with fakes.** Consent, grants, the journal, tile submission,
   validation, stitching and review-only evidence are tested with an in-process contract fake and the
   Python gateway driven in process; no actual HTTP loopback test drives the analysis path end to end.
   A gateway with the job routes (2026-10-01) is polled per tile and Cancel also cancels the tile in
   flight on it; an older gateway answers each tile in one synchronous request, so Cancel there stops
   the tiles not yet sent and a tile already sent runs to its end. Remote
-  evidence lives in memory and is lost on restart. No real Modal or Beam account has run it, so
+  evidence lives in memory and is lost on restart. No Beam account has run it. This entry measured none of these, so
   latency, transfer time, GPU and host memory, the bill, provider retention and training terms, and
   cleanup are all unknown, and the consent screen shows the cost as unknown. Whether remote SAM is
   worth an upload has not been measured against the local path.
@@ -2395,7 +2590,7 @@ to the earlier prompt.
   against fakes (`run_analysis` and `run::tests::cloud_stages`), and the packaged validation app
   completed the five-page Modal Detect run. A separate guarded capture compared cloud tiled SAM
   masks with local whole-page masks on those same source pixels (above). Neither Beam nor the real scans in
-  `~/dev/120 noisy png` have this comparison.
+  `120 noisy png` (local only) have this comparison.
 - **Run source binding and tile-time profile revocation are proven offline only.** A changed
   page is refused before its first tile, and selection or epoch changes stop later tiles in
   fake gateway tests. A live Modal or Beam run has not exercised those races.
@@ -2441,8 +2636,7 @@ to the earlier prompt.
   after the first deploy (21:24:04), after the adopt redeploy (21:28:34, expected, new code), and
   again at 21:31:40 for a plain cold start on the same deployment, which should have restored the
   21:28 snapshot. Each build was about 55 s of load and warmup plus about 1 min 45 s of snapshot
-  writing, so a cold render took 171 to 186 s against 52 s without snapshots
-  (docs/cloud-live-modal-2026-09-26.md). The 21:31:40 rebuild is the strange part: the
+  writing, so a cold render took 171 to 186 s against 52 s without snapshots. The 21:31:40 rebuild is the strange part: the
   deployment, image and class config had not changed since the 21:28 snapshot, which Modal
   reported as created and restored from, and Modal's docs name only a redeploy as the reason to
   build again. No cold start in the run restored an existing snapshot;
@@ -2503,7 +2697,7 @@ to the earlier prompt.
 - **Detect then Clean matches one pass on fixtures only.** `detect_then_clean_leaves_what_one_pass_leaves`
   (`src-tauri/src/run/tests.rs`) proves the stored mask, ink, route, thickness, deviation and
   segmentation scale rebuild the same patches as Auto on a synthetic page. It was not run on the
-  real scans in `~/dev/120 noisy png`, and a clean after an engine or model update rebuilds the fit
+  real scans in `120 noisy png` (local only), and a clean after an engine or model update rebuilds the fit
   with the stored values, not the new detector's.
 - **A deleted detection cannot be restored.** It has no pixels, and its mask files go with it, so
   `restoreRegion` and undo cannot bring it back. What undo does after `applyTool` cleans a
@@ -2511,7 +2705,7 @@ to the earlier prompt.
 - **A Solid pick in a Clean run now fills with the stored `balloon_color`.** The run's `bubbleColor`
   is used only for a detection with no measured colour. Tested on a synthetic flat page
   (`a_solid_pick_fills_with_its_measured_balloon_colour_before_the_runs`); whether the ring gray
-  reads right on real balloons was not checked on the scans in `~/dev/120 noisy png`.
+  reads right on real balloons was not checked on the scans in `120 noisy png` (local only).
 - **The one-pass guard over kept patches is tested with the stub cleaner only.** An Auto pass on an
   unexamined page skips a region at least half inside a patch the page held before the pass
   (`an_auto_pass_leaves_regions_inside_the_pages_existing_patches_alone`). The half-area test is

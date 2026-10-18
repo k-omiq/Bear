@@ -29,23 +29,15 @@ export const ko = {
         "otherText": "기타",
         "description": "설명 (선택 사항)",
         "example": "손 옆에 있는 크고 검은 글자.",
-        "preserve": "Manga Cleaner가 그림, 말풍선 테두리, 주변 세부 사항을 보존하는 지시를 추가합니다. 적용 전에 결과를 확인합니다.",
+        "preserve": "Manga Cleaner가 그림, 말풍선 테두리, 주변 세부 사항을 보존하는 지시를 추가합니다. 결과는 바로 적용되고 검토 필요로 표시됩니다. 되돌리려면 결과 거부를 사용하세요.",
         "cancel": "취소",
         "clean": "Qwen으로 지우기",
-        "updateRequired": "설명과 8단계 지우기 설정을 사용하려면 클라우드 Qwen을 업데이트하세요."
-    },
-    "review": {
-        "title": "Qwen 지우기 결과 검토",
-        "help": "글자가 지워지고 그림이 온전한지 확인하세요. 결과 사용을 누르면 이 합성 미리보기를 페이지에 적용합니다.",
-        "before": "변경 전",
-        "after": "변경 후",
-        "retryCost": "다시 시도하면 유료 클라우드 요청이 추가됩니다.",
-        "discard": "버리기",
-        "retry": "다시 시도",
-        "use": "결과 사용",
-        "expired": "검토 시간이 만료되었습니다. 결과는 적용되지 않았습니다.",
-        "failed": "Qwen이 세 시드 모두에서 충분히 수정하지 못했습니다. 글자를 설명하고 다시 시도하세요.",
-        "required": "이 Qwen 결과는 캐시되어 있으며 적용 전에 검토가 필요합니다."
+        "updateRequired": "설명과 8단계 지우기 설정을 사용하려면 클라우드 Qwen을 업데이트하세요.",
+        "helpFlux": "글자 종류를 고르세요. 글자 아래에 무엇이 있는지 쓰면 다시 그린 부분이 그에 맞춰집니다. 프롬프트를 쓸 필요는 없습니다.",
+        "descriptionFlux": "글자 아래에 있는 것 (선택)",
+        "exampleFlux": "창틀이 있는 벽돌 벽.",
+        "preserveFlux": "마스크한 글자만 다시 그립니다. Manga Cleaner가 그림을 지키는 지시를 더합니다. 설명이 틀리면 엉뚱한 것을 그리므로, 확실하지 않으면 비워 두세요.",
+        "cleanFlux": "FLUX로 지우기"
     }
 },
   app: {
@@ -363,6 +355,13 @@ export const ko = {
       label: '원본 보기',
       hold: '누르는 동안만',
       pinned: '고정',
+    },
+    undoLimit: {
+      label: '실행 취소 기록',
+      description:
+        '챕터마다 보관하는 실행 취소 단계 수입니다. {min}부터 {max}까지 지정할 수 있습니다. 값을 낮추면 다음 편집 때 가장 오래된 단계부터 삭제됩니다.',
+      outOfRange: '{min}부터 {max}까지의 정수를 입력하세요.',
+      saveFailed: '실행 취소 기록 크기를 저장하지 못했습니다.',
     },
     language: {
       label: '언어',
@@ -1350,6 +1349,8 @@ export const ko = {
     workflow: {
       ocrRescue: 'Hayai OCR 텍스트 판독기 사용(선택)',
       ocrRescueDescription: '클린 전에 이 컴퓨터에서 각 영역을 읽습니다. 텍스트가 아닌 그림은 보류하고, 불확실한 일본어, 중국어, 한국어 문자를 확인합니다. 두 텍스트 정책 모두에서 작동합니다.',
+      cleanLatin: '영어 텍스트도 클린',
+      cleanLatinDescription: '끔: 판독기가 영어 등 라틴 문자로 읽은 텍스트는 페이지에 남고, 보류 영역으로 나중에 클린할 수 있습니다. 켬: 다른 텍스트처럼 클린합니다. Hayai OCR 텍스트 판독기가 필요합니다.',
       ratingsNote: '엔진 평점은 잠정 추정치이며, 공통 벤치마크로 측정한 값이 아닙니다.',
     },
     cleaner: {
@@ -1919,6 +1920,7 @@ export const ko = {
       retryBlocked: '페인트와 복제 획에는 다시 시도를 쓸 수 없습니다. 위에 칠하거나 삭제하세요.',
       retryWider: '더 넓게 다시 시도',
       retryWiderHint: '같은 엔진으로 조금 더 넓은 영역을 다시 클린합니다. 누를 때마다 조금씩 넓어집니다.',
+      rejectResult: '결과 거부',
       engine: '클린 엔진',
       engineHint: '아래 레이어부터 다른 엔진으로 이 레이어를 교체합니다',
       textType: '텍스트 유형',
@@ -1972,6 +1974,8 @@ export const ko = {
       layerLock: '레이어 잠금 변경',
       layerMove: '레이어 이동',
       layerRotate: '레이어 회전',
+      cleanRegion: '영역 클린',
+      rejectResult: '결과 거부',
     },
   },
   tools: {
@@ -2206,6 +2210,18 @@ export const ko = {
         chunkRefused: '일괄 처리 내용이 확인한 내용과 다름',
         pollTimeout: '클라우드 GPU의 응답이 너무 늦음',
         submissionUnknown: '전송되었는지 앱이 알 수 없음',
+        regionChanged: '클린하는 동안 영역이 바뀜',
+        regionUnsupported: '이 영역은 클라우드 GPU에서 클린할 수 없음',
+        busy: '이 영역은 이미 클라우드 GPU에서 클린 중임',
+        pageBusy: '실행이 해당 페이지를 처리하는 중이었음',
+        recoveryRequired: '이 영역에 대한 이전 클라우드 요청이 아직 해결되지 않음',
+        local: '이 컴퓨터에서 문제가 발생함',
+        providerPaused: '이 버전에서는 클라우드 제공업체가 일시 중지됨',
+        editNotApplied: '클라우드 구성이 오래되어 결과를 돌려주지 않음(설정, 클라우드에서 업데이트하세요)',
+        weights: '클라우드 구성에 필요한 모델 파일이 없음',
+        remoteCancelled: '제공업체가 취소함',
+        cancelled: '취소됨',
+        generic: '앱이 말로 옮길 수 있는 이유를 받지 못함',
       },
     },
     run: {
@@ -2348,7 +2364,9 @@ export const ko = {
         remoteCancelled: '제공업체가 렌더를 취소했습니다.',
         cancelled: '취소되었습니다.',
         timeout: '렌더가 너무 오래 걸려 중지되었습니다.',
-        generic: '문제가 발생했습니다.',
+        providerPaused: '이 버전에서는 이 클라우드 제공업체가 일시 중지되었습니다. 설정, 클라우드에서 다른 엔드포인트를 선택하세요.',
+        editNotApplied: '이 클라우드 설정이 오래되어 결과를 돌려주지 않았습니다. 매번 결과를 받으려면 설정, 클라우드에서 업데이트하세요.',
+        generic: '앱이 말로 옮길 수 있는 이유를 받지 못했습니다.',
       },
       job: {
         title: '클라우드',
@@ -2378,6 +2396,9 @@ export const ko = {
       paddingRefreshFailed: '마스크 여백은 저장되었지만 페이지를 새로 고치지 못했습니다. 챕터를 다시 열어 변경된 마스크를 확인하세요.',
       typeFailed: '텍스트 유형을 바꾸지 못했습니다. 영역은 그대로입니다.',
       approveFailed: '마스크를 승인하지 못했습니다. 영역은 그대로입니다.',
+      rejectNoMask: '이 결과에는 저장된 마스크가 없어 거부할 수 없습니다. 원본을 되돌리려면 삭제하세요.',
+      rejectFailed: '결과를 거부하지 못했습니다. 페이지는 그대로입니다.',
+      reapplyFailed: '결과를 되돌리지 못했습니다. 페이지는 그대로입니다.',
     },
     tool: {
       cloneSourceSet: '복제 소스를 샘플링했습니다. 칠하면 그곳에서 복사합니다.',
@@ -2406,6 +2427,7 @@ export const ko = {
       refusedLayeredFileSize: '이 PSD는 2 GB 파일 크기 제한을 넘습니다. 아무것도 기록하지 않았습니다. 대신 PNG나 TIFF로 내보내세요.',
       refusedLayeredCount: '이 페이지의 레이어가 PSD에 담을 수 있는 수보다 많습니다. 아무것도 기록하지 않았습니다. 대신 병합한 PNG나 TIFF로 내보내세요.',
       refusedDestination: '그 위치에는 내보낼 수 없습니다. 아무것도 기록하지 않았습니다. 새 폴더를 고르거나 디스크 최상위부터 시작하는 전체 경로를 입력하세요.',
+      destinationUnavailable: '내보내기 폴더를 만들 수 없습니다: {path}. 이 폴더가 있는 드라이브나 폴더가 연결되어 있지 않거나 쓸 수 없습니다. 아무것도 기록하지 않았습니다. 드라이브를 연결하거나 다른 폴더를 선택하세요.',
       refusedStitchPaginated: '챕터 전체를 파일 하나로 내보내기는 세로 스크롤 레이아웃인데, 이 프로젝트는 페이지 단위입니다. 아무것도 기록하지 않았습니다. 페이지가 서로 독립된 이미지라 이어 붙이면 원본에 없는 문서가 됩니다.',
       refusedStitchedArchive: 'CBZ는 페이지마다 파일 하나를 담으므로 챕터 전체를 파일 하나로 담을 수 없습니다. 아무것도 기록하지 않았습니다. 챕터를 PNG나 TIFF 하나로 내보내거나, 압축 파일을 유지하고 페이지별로 내보내세요.',
       stitchRefused: {

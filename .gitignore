@@ -61,3 +61,38 @@ src-tauri/binaries/manga-cleaner-provisioner-*
 
 # Managed Python launcher staged by .github/scripts/stage-flux-python.py.
 src-tauri/binaries/manga-cleaner-uv-*
+
+# Working notes of one fix set: plans, progress, reports and picture sheets.
+# Local only.
+docs/fixes-*/
+
+# Helper scripts written for one probe measurement. The probe's Rust source is
+# committed; these are not.
+spikes/gate-probe/*.py
+
+# Plans, progress logs and reports. They are working papers and stay on the
+# machine that wrote them. The reference documents in docs/ (contracts, the
+# feature list, findings.md) are committed.
+/Plan for models/
+/manga-cleaner-cloud-master-plan.md
+docs/*-plan.md
+docs/research/*-plan.md
+docs/*-report.md
+docs/*-audit*.md
+docs/*-evidence*.md
+docs/*-validation*.md
+docs/*-20[0-9][0-9]-[0-9][0-9]-[0-9][0-9].md
+docs/*-work-log.md
+docs/*-ledger.md
+docs/*-handoff.md
+docs/cloud-feasibility.md
+docs/cloud-queue-latency.md
+docs/denoise-queue-fix.md
+
+# Generated output: the rendered promo video and its stills, and the icon
+# exploration runs. The final icon is design/icon.png and design/icon.svg.
+promo/out/
+design/icon-explore/
+
+# Wrangler and Miniflare local state.
+.wrangler/

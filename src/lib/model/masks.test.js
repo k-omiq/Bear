@@ -15,6 +15,7 @@ import {
   nextFillMode,
   provenanceFacts,
   reRunnable,
+  rejectable,
   retryWidens,
   regionMenuSections,
   rowEngines,
@@ -126,14 +127,14 @@ describe('cloud masks', () => {
 
   it('keep Cloud checked in the menu, leading the list while the cloud is not ready', () => {
     const sections = regionMenuSections(remote, { engines: { flux: false } })
-    expect(ids(sections)).toEqual(['retry', 'engine:cloud', 'engine:fill', 'engine:lama', 'delete'])
+    expect(ids(sections)).toEqual(['retry', 'reject', 'engine:cloud', 'engine:fill', 'engine:lama', 'delete'])
     const engines = sections.find((section) => section.id === 'engine')
     expect(engines.items.filter((item) => item.selected).map((item) => item.id)).toEqual(['engine:cloud'])
   })
 
   it('take Cloud in its own place once the cloud is ready', () => {
     const sections = regionMenuSections(remote, { engines: { flux: false }, cloud: true })
-    expect(ids(sections)).toEqual(['retry', 'engine:fill', 'engine:lama', 'engine:cloud', 'delete'])
+    expect(ids(sections)).toEqual(['retry', 'reject', 'engine:fill', 'engine:lama', 'engine:cloud', 'delete'])
   })
 })
 
@@ -256,6 +257,7 @@ describe('regionMenuSections', () => {
     expect(ids(sections)).toEqual([
       'retry',
       'retryWider',
+      'reject',
       'engine:fill',
       'engine:lama',
       'delete',
@@ -297,6 +299,7 @@ describe('regionMenuSections', () => {
     expect(ids(sections)).toEqual([
       'retry',
       'retryWider',
+      'reject',
       'engine:lama',
       'engine:fill',
       'delete',
@@ -320,6 +323,7 @@ describe('regionMenuSections', () => {
     expect(ids(regionMenuSections(masked('lama'), { engines: { flux: false }, cloud: true }))).toEqual([
       'retry',
       'retryWider',
+      'reject',
       'engine:fill',
       'engine:lama',
       'engine:cloud',
@@ -359,6 +363,73 @@ describe('regionMenuSections', () => {
         expect(item.labelKey, item.id).toMatch(/^masks\.[a-zA-Z]+\.[a-zA-Z]+$/)
       }
     }
+  })
+})
+
+/**
+ * Reject result puts a cleaned detection back as detected, with its mask
+ * (docs/fixes-2026-10-12/06). It is offered for a result an automatic clean
+ * made and for nothing else, and the test reads only what every region
+ * carries, so a chapter cleaned by an older build is offered it too and is
+ * told why it cannot be done.
+ */
+describe('Reject result', () => {
+  /** A result as a clean of a detection leaves it: `source: 'auto'`, the detection's id. */
+  const cleaned = (engine = 'lama') => ({ ...masked(engine), id: 'c1-p001-d3', source: 'auto', detected: true, outcome: 'cleaned' })
+
+  it('is offered beside Try again for a result an automatic clean made', () => {
+    expect(rejectable(cleaned())).toBe(true)
+    const rerun = regionMenuSections(cleaned(), { engines: { flux: false } }).find((section) => section.id === 'rerun')
+    expect(rerun.items.map((item) => item.id)).toEqual(['retry', 'retryWider', 'reject'])
+    expect(rerun.items.at(-1)).toEqual({ id: 'reject', labelKey: 'masks.action.rejectResult', icon: 'undo' })
+  })
+
+  it('is offered for a cloud result as for a local one', () => {
+    const cloud = { ...cleaned('flux') }
+    cloud.mask = { ...cloud.mask, provenance: { engine: 'flux', cloud: { provider: 'modal', request_id: 'req-1', cost: null } } }
+    expect(ids(regionMenuSections(cloud, { engines: { flux: false }, cloud: true }))).toContain('reject')
+  })
+
+  // Nothing on a region says whether its detection was kept, so an older
+  // chapter's result is offered the entry: the refusal is what explains it.
+  it('is offered for a result from before cleans kept their detection', () => {
+    expect(rejectable({ ...cleaned(), id: 'c1-p001-r2' })).toBe(true)
+  })
+
+  it('is not offered for a hand-drawn or tool-made mask', () => {
+    const hand = { ...cleaned(), id: 'c1-p001-h1', source: 'hand' }
+    expect(rejectable(hand)).toBe(false)
+    expect(ids(regionMenuSections(hand, { engines: { flux: false } }))).toEqual([
+      'retry', 'retryWider', 'engine:fill', 'engine:lama', 'delete',
+    ])
+    // A hand tool applied over a cleaned detection: the mask is the user's now.
+    expect(rejectable({ ...cleaned(), source: 'hand' })).toBe(false)
+    for (const engine of ['paint', 'clone']) {
+      expect(rejectable({ ...cleaned(engine), source: 'auto' })).toBe(false)
+      expect(ids(regionMenuSections({ ...cleaned(engine), source: 'auto' }))).not.toContain('reject')
+    }
+  })
+
+  it('is not offered for a detected region, which has no result yet', () => {
+    const detected = { ...cleaned(), outcome: 'detected', insideBubble: true }
+    expect(rejectable(detected)).toBe(false)
+    expect(ids(regionMenuSections(detected, { engines: { flux: false } }))).not.toContain('reject')
+  })
+
+  it('is not offered for a region with no mask', () => {
+    for (const outcome of ['pending', 'declined', 'gate-skipped', 'candidate']) {
+      const bare = { id: 'c1-p001-d3', source: 'auto', outcome, mask: null }
+      expect(rejectable(bare), outcome).toBe(false)
+      expect(ids(regionMenuSections(bare, { engines: { flux: false } })), outcome).not.toContain('reject')
+    }
+    expect(rejectable(null)).toBe(false)
+  })
+
+  it('is not offered for an approved review component, which has no detection behind it', () => {
+    const component = cleaned('fill')
+    component.id = 'c1-p001-hreview-sam-00001-deadbeef'
+    component.mask = { ...component.mask, id: `${component.id}-m1` }
+    expect(rejectable(component)).toBe(false)
   })
 })
 

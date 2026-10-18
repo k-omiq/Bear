@@ -327,6 +327,11 @@ class CloudGateway:
 
             if method == "GET" and norm_path == "/capabilities":
                 operations = ["jobs.submit", "jobs.status", "jobs.result", "jobs.cancel"]
+                # A retry of a region may carry a seed above the pinned one
+                # (flux.sampling_mismatch). An app that finds this missing keeps
+                # the pinned seed, which an older gateway requires.
+                if self.render:
+                    operations.append("jobs.retry_seed")
                 if self.gpu_control is not None:
                     operations.extend(["gpu.status", "gpu.stop", "gpu.release_idle"])
                 # Submit-then-poll tiles and pages (contract.py GPU_JOB_OPERATIONS). An

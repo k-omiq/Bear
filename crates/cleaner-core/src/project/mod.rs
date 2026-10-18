@@ -125,6 +125,26 @@ impl StoreError {
     }
 }
 
+/// Why a clean could not be taken back, or put back
+/// ([`Job::restore_detection`], [`Job::restore_patch`]). Nothing was written.
+/// Each display starts with a code the interface reads wherever the message
+/// ends up, as [`StoreError::Stale`]'s does.
+#[derive(Debug, thiserror::Error)]
+pub enum CleanRestoreError {
+    #[error("clean_no_patch: region {0} has no cleaned result to take back")]
+    NoPatch(String),
+    /// The patch was made before a clean kept its detection, or by a clean
+    /// that replaced none (a one-pass run, a hand mask).
+    #[error("clean_not_restorable: no detection was kept for region {0}; its mask cannot be put back")]
+    NoSavedDetection(String),
+    #[error("clean_mask_unreadable: the saved mask of region {id} cannot be read ({detail})")]
+    SavedDetectionUnreadable { id: String, detail: String },
+    #[error("clean_no_result: no result is saved for region {0} to put back")]
+    NoSavedPatch(String),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
 /// A sidecar writer and an opener's orphan sweep cannot cross in this process:
 /// the writer names new files before its manifest flush, and the opener must
 /// not call those files orphaned during that interval.
@@ -919,6 +939,22 @@ pub struct Project {
     /// projects open and flush unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detections: Vec<DetectedRegion>,
+    /// The detection each clean replaced, kept for as long as its patch is:
+    /// the record as it stood, naming its mask and lettering files, which stay
+    /// where they are. It is what [`Job::restore_detection`] puts back when a
+    /// result is rejected or undone. One row for an id at most. Absent from a
+    /// manifest written before a clean kept anything, and skipped while empty,
+    /// so old projects open and flush unchanged; their patches have no row and
+    /// cannot be taken back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cleaned_detections: Vec<DetectedRegion>,
+    /// The patch each taken-back clean set aside ([`Job::restore_detection`]),
+    /// kept so [`Job::restore_patch`] puts the same result back with no new
+    /// render. Not on the page and not in `patches`: while a row is here its
+    /// region is a detection again, to every reader. One row for an id at
+    /// most.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withdrawn_patches: Vec<PatchRecord>,
     /// The files page denoise wrote, one row per page per run, for the
     /// newest [`MAX_DENOISE_RUNS`] runs ([`Job::record_denoised`]). Absent
     /// from a manifest no denoise has written to, and skipped while empty, so
@@ -1066,6 +1102,8 @@ impl Project {
             text_shape_corrections: Vec::new(),
             regions_untouched: Vec::new(),
             detections: Vec::new(),
+            cleaned_detections: Vec::new(),
+            withdrawn_patches: Vec::new(),
             denoised: Vec::new(),
             counters: Counters::default(),
             input_report: InputReport::default(),
@@ -1115,6 +1153,7 @@ impl Project {
             || self.text_shape_plans.iter().any(|row| row.source_idx == source_idx)
             || self.text_shape_patch_revisions.iter().any(|row| row.source_idx == source_idx)
             || self.legacy_patch_revisions.iter().any(|row| row.source_idx == source_idx)
+            || self.withdrawn_patches.iter().any(|row| row.source_idx == source_idx)
             || self.text_shape_corrections.iter().any(|row| row.source_idx == source_idx)
     }
 
@@ -1336,7 +1375,7 @@ impl Job {
             }
         }
         if project.sources.iter().any(|s| s.orientation.0 != 1) {
-            for record in project.patches.iter_mut().chain(project.legacy_patch_revisions.iter_mut()).chain(project.text_shape_patch_revisions.iter_mut()) {
+            for record in project.patches.iter_mut().chain(project.legacy_patch_revisions.iter_mut()).chain(project.text_shape_patch_revisions.iter_mut()).chain(project.withdrawn_patches.iter_mut()) {
                 if record.native_parts.is_empty() && record.native_order.is_empty() { record.native_order = project.strip.order.clone(); }
             }
         }
@@ -2736,7 +2775,10 @@ impl Job {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(StoreError::io(&dir, error)),
         };
+        // A detection its clean kept is named too: its files are what a
+        // rejected result is taken back to.
         let named: std::collections::HashSet<_> = self.project.detections.iter()
+            .chain(&self.project.cleaned_detections)
             .flat_map(DetectedRegion::files)
             .collect();
         for entry in entries {
@@ -2794,8 +2836,10 @@ impl Job {
         };
         let patches = self.project.patches.iter()
             .chain(&self.project.text_shape_patch_revisions)
-            .chain(&self.project.legacy_patch_revisions);
+            .chain(&self.project.legacy_patch_revisions)
+            .chain(&self.project.withdrawn_patches);
         let named: std::collections::HashSet<String> = self.project.detections.iter()
+            .chain(&self.project.cleaned_detections)
             .filter_map(|row| row.group.as_ref()?.evidence_ref.clone())
             .chain(patches.filter_map(|row| {
                 row.provenance.params_snapshot["group"]["evidence"].as_str().map(str::to_owned)
@@ -2859,9 +2903,15 @@ impl Job {
 
     /// Replace a detection with the patch that cleaned it, **in one manifest
     /// write**: the record leaves in the same flush that names the patch, so no
-    /// reader ever sees the region twice or not at all. The detection's files go
-    /// after that flush. Every cleaner of a detection - a run, a region edit, a
-    /// cloud render - commits through this.
+    /// reader ever sees the region twice or not at all. Every cleaner of a
+    /// detection - a run, a region edit, a cloud render - commits through this.
+    ///
+    /// **The detection is kept, not deleted.** Its record moves to
+    /// [`Project::cleaned_detections`] in that same write and its files stay
+    /// where they are, so [`Job::restore_detection`] can put it back exactly.
+    /// A row an earlier clean of this id kept is replaced, and a result that
+    /// was set aside for it ([`Project::withdrawn_patches`]) goes: the new
+    /// patch is the region's result now.
     ///
     /// **Nothing is written outside the detection's display set**, its mask
     /// and its lettering together, which is the area the canvas draws and the
@@ -2889,12 +2939,116 @@ impl Job {
             return Ok(false);
         };
         let record = self.project.detections.remove(position);
+        let kept_before = self.project.cleaned_detections.clone();
+        let withdrawn_before = self.project.withdrawn_patches.clone();
+        self.project.cleaned_detections.retain(|row| row.id != id);
+        self.project.cleaned_detections.push(record.clone());
+        self.project.withdrawn_patches.retain(|row| row.id != id);
         if let Err(error) = self.complete_display_region(record.source_idx, patch, review_state) {
             self.project.detections.insert(position, record);
+            self.project.cleaned_detections = kept_before;
+            self.project.withdrawn_patches = withdrawn_before;
             return Err(error);
         }
-        self.delete_detection_files(std::slice::from_ref(&record));
         Ok(true)
+    }
+
+    /// Take a clean back: the region is the detection it was before, with its
+    /// mask, **in one manifest write**. The reverse of
+    /// [`Job::complete_detection`], and what rejecting a result and undoing
+    /// one both are.
+    ///
+    /// The record [`Project::cleaned_detections`] kept returns to
+    /// [`Project::detections`] as it was stored, naming the same files, whose
+    /// bytes were never touched. The patch leaves `patches` for
+    /// [`Project::withdrawn_patches`] with its record unchanged, so
+    /// [`Job::restore_patch`] puts the same result back. Its pixels stay on
+    /// disk, named by its revision row. Nothing reads the region as cleaned
+    /// after this, and nothing reads it twice.
+    ///
+    /// Refused, with nothing written, when the region has no patch
+    /// ([`CleanRestoreError::NoPatch`]), when its clean kept no detection
+    /// because it was made before cleans kept one
+    /// ([`CleanRestoreError::NoSavedDetection`]), or when the kept files are
+    /// gone or not the bytes the record names
+    /// ([`CleanRestoreError::SavedDetectionUnreadable`]).
+    pub fn restore_detection(&mut self, id: &str) -> Result<(), CleanRestoreError> {
+        let _write = self.begin_write()?;
+        let _detection_io = detection_io().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.project.detections.iter().any(|row| row.id == id) {
+            // It is a detection already. Undo may ask twice.
+            return Ok(());
+        }
+        let Some(patch_at) = self.project.patches.iter().position(|row| row.id == id) else {
+            return Err(CleanRestoreError::NoPatch(id.to_owned()));
+        };
+        let Some(kept_at) = self.project.cleaned_detections.iter().position(|row| row.id == id) else {
+            return Err(CleanRestoreError::NoSavedDetection(id.to_owned()));
+        };
+        let unreadable = |detail: String| CleanRestoreError::SavedDetectionUnreadable { id: id.to_owned(), detail };
+        let record = &self.project.cleaned_detections[kept_at];
+        for file in record.files() {
+            let path = self.dir.join(&file);
+            let bytes = std::fs::read(&path).map_err(|error| unreadable(format!("{file}: {error}")))?;
+            if file == record.mask_ref && !record.mask_sha256.is_empty() && sha256_hex(&bytes) != record.mask_sha256 {
+                return Err(unreadable(format!("{file}: digest mismatch")));
+            }
+            buffers::decode_mask(&bytes).map_err(|error| unreadable(format!("{file}: {error}")))?;
+        }
+        let record = self.project.cleaned_detections.remove(kept_at);
+        let patch = self.project.patches.remove(patch_at);
+        self.project.detections.push(record);
+        self.project.withdrawn_patches.retain(|row| row.id != id);
+        self.project.withdrawn_patches.push(patch);
+        if let Err(error) = self.flush() {
+            let patch = self.project.withdrawn_patches.pop().expect("pushed above");
+            let record = self.project.detections.pop().expect("pushed above");
+            self.project.patches.insert(patch_at, patch);
+            self.project.cleaned_detections.insert(kept_at, record);
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    /// Put a taken-back result on the page again, **in one manifest write**
+    /// and with no render: the reverse of [`Job::restore_detection`], and
+    /// what Redo is. The patch [`Project::withdrawn_patches`] kept returns to
+    /// `patches` unchanged, and the detection, as it stands now, moves to
+    /// [`Project::cleaned_detections`], as a clean moves it. A detection
+    /// deleted in between is not needed: the patch returns without it.
+    ///
+    /// Refused, with nothing written, when no result was set aside for the
+    /// region ([`CleanRestoreError::NoSavedPatch`]): a later clean replaced
+    /// it, or the region was removed.
+    pub fn restore_patch(&mut self, id: &str) -> Result<(), CleanRestoreError> {
+        let _write = self.begin_write()?;
+        let _detection_io = detection_io().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(withdrawn_at) = self.project.withdrawn_patches.iter().position(|row| row.id == id) else {
+            if self.project.patches.iter().any(|row| row.id == id) {
+                // It is on the page already. Redo may ask twice.
+                return Ok(());
+            }
+            return Err(CleanRestoreError::NoSavedPatch(id.to_owned()));
+        };
+        let before = (
+            self.project.patches.clone(),
+            self.project.detections.clone(),
+            self.project.cleaned_detections.clone(),
+            self.project.withdrawn_patches.clone(),
+        );
+        let patch = self.project.withdrawn_patches.remove(withdrawn_at);
+        self.project.patches.retain(|row| row.id != id);
+        self.project.patches.push(patch);
+        if let Some(at) = self.project.detections.iter().position(|row| row.id == id) {
+            let record = self.project.detections.remove(at);
+            self.project.cleaned_detections.retain(|row| row.id != id);
+            self.project.cleaned_detections.push(record);
+        }
+        if let Err(error) = self.flush() {
+            (self.project.patches, self.project.detections, self.project.cleaned_detections, self.project.withdrawn_patches) = before;
+            return Err(error.into());
+        }
+        Ok(())
     }
 
     /// Replace a detection with the untouched row a clean left it as, in one
@@ -3127,14 +3281,23 @@ impl Job {
             .text_shape_corrections
             .retain(|record| !stale.contains(&record.source_idx));
         self.project
+            .withdrawn_patches
+            .retain(|record| !stale.contains(&record.source_idx));
+        self.project
             .regions_untouched
             .retain(|region| !stale.contains(&region.source_idx));
         // A detection's mask is coordinates on a page that is not there any
-        // more, for the same reason its patches are.
+        // more, for the same reason its patches are. One a clean kept goes
+        // with the patch it was kept for.
         let mut detections = Vec::new();
         for source_idx in stale {
             detections.extend(self.take_page_detections(*source_idx));
         }
+        let (gone, kept) = std::mem::take(&mut self.project.cleaned_detections)
+            .into_iter()
+            .partition(|row| stale.contains(&row.source_idx));
+        self.project.cleaned_detections = kept;
+        detections.extend::<Vec<DetectedRegion>>(gone);
         // A source that changed has not been examined in its present form. The
         // patches go, and the record of having looked has to go with them, or a
         // re-crop would leave the page permanently out of the queue with
@@ -4516,12 +4679,154 @@ mod tests {
         assert!(reopened.project.detections.is_empty());
         assert_eq!(reopened.project.patches.len(), 1);
         assert_eq!(reopened.project.patches[0].id, "c1-p001-d0");
-        assert!(!job.sidecar().join("detections/c1-p001-d0.mask").exists());
-        assert!(!job.sidecar().join("detections/c1-p001-d0.ink").exists());
+        // The clean keeps the detection beside its patch, files and all, and
+        // the open-time sweep leaves them.
+        assert_eq!(reopened.project.cleaned_detections.len(), 1);
+        assert!(job.sidecar().join("detections/c1-p001-d0.mask").exists());
+        assert!(job.sidecar().join("detections/c1-p001-d0.ink").exists());
         // The patch's own compatibility ink sits at the root and is untouched.
         assert!(job.sidecar().join("c1-p001-d0.ink").exists());
         // The allocator never hands the id out again.
         assert_eq!(job.next_detection_id("c1-p001"), "c1-p001-d1");
+    }
+
+    /// Every file under a job's `detections/`, by name, with its bytes.
+    fn detection_files(job: &Job) -> std::collections::BTreeMap<String, Vec<u8>> {
+        std::fs::read_dir(job.sidecar().join("detections")).unwrap()
+            .map(|entry| entry.unwrap())
+            .map(|entry| (entry.file_name().to_string_lossy().into_owned(), std::fs::read(entry.path()).unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn a_clean_taken_back_is_the_detection_it_replaced_and_put_back_is_the_same_patch() {
+        let scratch = Scratch::new("clean-restore");
+        let mut job = a_job(&scratch);
+        // One plain detection, and one padded, which owns four files.
+        let (mask, ink) = (Mask::filled(Rect::new(8, 8, 12, 10)), Mask::filled(Rect::new(10, 10, 6, 4)));
+        let plain = a_detection(&mut job, Rect::new(9, 9, 10, 8));
+        job.store_detection(plain, &mask, &ink).unwrap();
+        let (base, grown) = (Mask::filled(Rect::new(30, 30, 4, 4)), Mask::filled(Rect::new(28, 28, 8, 8)));
+        let mut padded = a_detection(&mut job, Rect::new(30, 30, 4, 4));
+        padded.padding_px = 2;
+        job.append_page_detection_results(0, "c1-p001", vec![LoadedDetection {
+            record: padded, mask: grown.clone(), ink: grown.clone(), evidence: None, base: Some((base.clone(), base.clone())),
+        }], Vec::<RegionUntouched>::new()).unwrap();
+        let ids: Vec<String> = job.project.detections.iter().map(|row| row.id.clone()).collect();
+        let records = job.project.detections.clone();
+        let files = detection_files(&job);
+        assert_eq!(files.len(), 6);
+
+        for id in &ids {
+            let mut patch = a_patch(id);
+            patch.mask = job.load_detection(id).unwrap().unwrap().mask;
+            patch.ink = patch.mask.clone();
+            assert!(job.complete_detection(id, &patch, Some("review.reason.unusuallyLarge".into())).unwrap());
+        }
+        let patches = job.project.patches.clone();
+        let pixels_of = |job: &Job, rows: &[PatchRecord]| -> Vec<(Mask, Mask, Vec<u8>)> {
+            rows.iter().map(|row| job.load_patch(row).unwrap()).map(|patch| (patch.mask, patch.ink, buffers::encode_patch(&patch.pixels))).collect()
+        };
+        let patch_bytes = pixels_of(&job, &patches);
+        assert!(job.project.detections.is_empty());
+        assert_eq!(job.project.cleaned_detections, records);
+
+        // Taken back, after a reopen whose sweep must leave the kept files.
+        let mut job = Job::open(job.path()).unwrap();
+        for id in &ids {
+            job.restore_detection(id).unwrap();
+        }
+        let reopened = Job::open(job.path()).unwrap();
+        assert_eq!(reopened.project.detections, records, "the records, as stored");
+        assert_eq!(detection_files(&reopened), files, "the files, byte for byte");
+        assert!(reopened.project.patches.is_empty() && reopened.project.cleaned_detections.is_empty());
+        assert_eq!(reopened.project.withdrawn_patches, patches);
+        assert_eq!(reopened.load_detection(&ids[0]).unwrap().unwrap().mask, mask);
+        assert_eq!(reopened.load_detection_base(&ids[1]).unwrap(), Some((base.clone(), base)));
+        // Asked twice, it is as asked.
+        let mut job = reopened;
+        job.restore_detection(&ids[0]).unwrap();
+        assert_eq!(job.project.detections, records);
+
+        // Put back: the first patches, with no new bytes written for them.
+        for id in &ids {
+            job.restore_patch(id).unwrap();
+        }
+        let reopened = Job::open(job.path()).unwrap();
+        assert_eq!(reopened.project.patches, patches);
+        assert_eq!(pixels_of(&reopened, &reopened.project.patches), patch_bytes);
+        assert!(reopened.project.detections.is_empty() && reopened.project.withdrawn_patches.is_empty());
+        assert_eq!(reopened.project.cleaned_detections, records);
+        assert_eq!(detection_files(&reopened), files);
+        let mut job = reopened;
+        job.restore_patch(&ids[0]).unwrap();
+        assert_eq!(job.project.patches, patches);
+    }
+
+    #[test]
+    fn a_patch_cleaned_before_detections_were_kept_opens_and_refuses_to_be_taken_back() {
+        // A manifest as an earlier build left it: the patch, and nothing kept.
+        let scratch = Scratch::new("clean-restore-old");
+        let mut job = a_job(&scratch);
+        let record = a_detection(&mut job, Rect::new(9, 9, 10, 8));
+        let id = record.id.clone();
+        job.store_detection(record, &Mask::filled(Rect::new(8, 8, 12, 10)), &Mask::filled(Rect::new(10, 10, 6, 4))).unwrap();
+        assert!(job.complete_detection(&id, &a_patch(&id), None).unwrap());
+        let kept = job.project.cleaned_detections.pop().unwrap();
+        job.flush().unwrap();
+        job.delete_detection_files(std::slice::from_ref(&kept));
+        let before = std::fs::read(job.path()).unwrap();
+        assert!(!String::from_utf8_lossy(&before).contains("cleaned_detections"));
+
+        let mut job = Job::open(job.path()).unwrap();
+        assert_eq!(job.project.patches.len(), 1);
+        let refusal = job.restore_detection(&id).unwrap_err();
+        assert!(matches!(refusal, CleanRestoreError::NoSavedDetection(_)));
+        assert!(refusal.to_string().starts_with("clean_not_restorable: "));
+        assert_eq!(std::fs::read(job.path()).unwrap(), before, "nothing was written");
+        assert!(job.load_patch(&job.project.patches[0]).is_ok());
+        // The fixture four patches of a version three chapter say the same.
+        let path = scratch.join("old.mtclean");
+        std::fs::write(&path, include_bytes!("fixtures/legacy_v3_patches.json")).unwrap();
+        let mut old = Job::open(&path).unwrap();
+        let first = old.project.patches[0].id.clone();
+        assert!(matches!(old.restore_detection(&first), Err(CleanRestoreError::NoSavedDetection(_))));
+        assert!(matches!(old.restore_patch(&first), Ok(())), "it is on the page already");
+        assert!(matches!(old.restore_patch("nothing"), Err(CleanRestoreError::NoSavedPatch(_))));
+        assert!(matches!(old.restore_detection("nothing"), Err(CleanRestoreError::NoPatch(_))));
+        assert_eq!(std::fs::read(&path).unwrap(), include_bytes!("fixtures/legacy_v3_patches.json"));
+    }
+
+    #[test]
+    fn a_kept_mask_that_is_gone_or_changed_refuses_and_a_new_clean_drops_the_result_set_aside() {
+        let scratch = Scratch::new("clean-restore-damage");
+        let mut job = a_job(&scratch);
+        let record = a_detection(&mut job, Rect::new(9, 9, 10, 8));
+        let id = record.id.clone();
+        let mask = Mask::filled(Rect::new(8, 8, 12, 10));
+        job.store_detection(record, &mask, &mask).unwrap();
+        assert!(job.complete_detection(&id, &a_patch(&id), None).unwrap());
+        let mask_path = job.sidecar().join(format!("detections/{id}.mask"));
+        let good = std::fs::read(&mask_path).unwrap();
+        std::fs::write(&mask_path, buffers::encode_mask(&Mask::filled(Rect::new(0, 0, 2, 2)))).unwrap();
+        assert!(matches!(job.restore_detection(&id), Err(CleanRestoreError::SavedDetectionUnreadable { .. })));
+        std::fs::remove_file(&mask_path).unwrap();
+        assert!(matches!(job.restore_detection(&id), Err(CleanRestoreError::SavedDetectionUnreadable { .. })));
+        assert_eq!(job.project.patches.len(), 1, "the result stays on the page");
+        std::fs::write(&mask_path, good).unwrap();
+        job.restore_detection(&id).unwrap();
+
+        // Cleaned again from the restored detection: the result set aside
+        // goes, and the new patch has the detection kept beside it.
+        let mut second = a_patch(&id);
+        second.pixels.data.fill(17);
+        assert!(job.complete_detection(&id, &second, None).unwrap());
+        assert!(job.project.withdrawn_patches.is_empty());
+        assert_eq!(job.project.cleaned_detections.len(), 1);
+        assert!(matches!(job.restore_patch("c1-p001-d9"), Err(CleanRestoreError::NoSavedPatch(_))));
+        job.restore_detection(&id).unwrap();
+        job.restore_patch(&id).unwrap();
+        assert!(job.load_patch(&job.project.patches[0]).unwrap().pixels.data.iter().all(|&p| p == 17));
     }
 
     #[test]

@@ -160,6 +160,11 @@ two is on. Japanese can turn on the optional OCR rescue; it is off unless you ch
 will not open says so and goes on without it. With Outside bubbles set to clean and only some languages on, regions
 outside a balloon are held, because nothing checks their language.
 
+**Clean English text** (Settings, Detection) is off unless you turn it on. While the Hayai OCR text reader runs, a
+region it reads with confidence as English, or another language in Latin letters, is held with its mask and not
+cleaned, under either text policy. You can still clean a held region by hand. The choice is captured when a run
+starts, so a resumed run keeps it. Without the reader nothing reads the text, and the setting does nothing.
+
 ### Detection model combinations and page review
 
 Settings and first-launch setup let you select Comic Text Detector (CTD), one RT-DETR v2 profile (small or full),
@@ -170,20 +175,29 @@ export. The full RT-DETR graph is a managed download. SAM-TS-L setup downloads i
 exports the two ONNX graphs locally, and verifies their hashes before installation. A local graph import remains
 available if automatic setup fails. COO SFX detection is not part of this version.
 
-The editor also offers **Text-shaped review** for the current page. The analysis finds regions and draws the lettering
-pixels, and the review lists every component, including ones no region claimed, so nothing is dropped silently. The
-tinted area is the exact set of pixels a clean may change; the box around it only helps you find it. Padding (0 px by
-default, up to 64 px) grows that area evenly around the lettering, and add and remove brushes correct it; both are
-recomputed from the original model output each time, so going from 2 to 5 and back to 2 gives the first result again.
-Apply asks the backend to prepare the write, shows it, and writes only if nothing changed in between; reconstruction
-may read more of the page, but only the tinted pixels change. Text outside balloons is held unless you allow it for the
-review, a switch separate from Text cleanup's.
+Text cleanup, with the legacy script filter and optional Japanese OCR rescue above, stays the default for every
+project. **Text-shaped review** is a separate, optional mode on the current page of a library chapter.
+
+Text-shaped review finds regions and draws the lettering pixels. RT-DETR supplies candidate boxes. The SAM-TS-L
+encoder and text head supply the lettering pixels and keep every component no box claimed, so nothing is dropped
+silently. This all-text analysis does not use the script checker or the Japanese reader. The review lists every
+component. The tinted area is the exact set of pixels a clean may change; the box around it only helps you find it.
+
+Padding (0 px by default, up to 64 px) grows that area evenly around the lettering, and add and remove brushes
+correct it. Both are recomputed from the original model output each time, so going from 2 to 5 and back to 2 gives the
+first result again. Selecting a component you edited earlier reloads its saved correction, padding and revision
+before the next preview. Apply asks the backend to prepare the write, shows it, and writes only if nothing changed in
+between; reconstruction may read more of the page, but only the tinted pixels change. See the
+[write contract](component-write-contract.md) for the rules behind that. Text outside balloons is held unless you
+allow it for the review, a switch separate from Text cleanup's.
 
 Writing is qualified for PNG pages on an Apple M5 with the app's ONNX Runtime on WebGPU only. On any other page type or
 machine (JPEG, CPU, Windows, Linux), the review shows the analysis and prepares nothing. Long-strip chapters are not
-analyzed yet; the review needs a paginated chapter. Every change is one
-undo step and is saved with the mask it used, so it reopens and exports the same. Turning the option off leaves saved
-edits viewable and legacy cleaning unchanged.
+analysed yet; the review needs a paginated chapter. Every change is one undo step and is saved with the mask it used,
+so it reopens and exports the same, and undo and redo pick the exact earlier revision. Turning the option off leaves
+saved edits viewable and legacy cleaning unchanged; that is the way to roll the mode back. The measured memory, speed
+and parity figures are in the [model workflow benchmarks](model-workflow-benchmarks.md), and the licence position on
+each model is in the [model rights decision](model-rights-decision.md).
 
 ## The engine ladder
 
@@ -248,13 +262,12 @@ exactly the shape you painted. It differs from the Brush in one way: the Brush c
 whichever engine the row names. The engine is named outright rather than as a starting point, so a hand that picks
 LaMa gets LaMa. The list is the same four engines a Layers row offers, under the same names.
 
-### Content-Aware Fill
+### Selection
 
-Options: fill mode (Match surround, Reconstruct or Solid), and engine (Local or Cloud). This one fills a mask that
-already exists, so it is a click on a region rather than a stroke. Match surround is Fill, one flat colour measured
-from the ring of paper, exact on flat paper; Reconstruct is the redraw engine, for screentone and art crossing the
-mask. A Layers row and the region menu can also send a region to the cloud, and every cloud render asks first in one
-dialog.
+Key `6`. It adds to or removes from the area Clean erases, or detects text in an area you draw. Draw with a brush, a
+lasso or a rectangle: `S` steps the shape and `X` swaps add for remove. There is no separate Content-Aware Fill tool.
+Its old id opens the AI Mask Brush, and the fill choices it offered (Fill or a redraw engine, local or cloud) are the
+engine pick on the AI Mask Brush and on each Layers row and region menu. Every cloud render asks first in one dialog.
 
 ### Clone stamp
 
@@ -308,7 +321,10 @@ provider, endpoint, job and attempt, recipe and model revision, and cost only wh
 Each row can be re-run: **Try again** with the same setting, **Clean with** a different engine, or reopened in the tool
 that made it with the mask intact. **Delete** removes the mask, brings the original text back, and takes the row off the
 list, leaving no empty placeholder. **Dismiss** takes a flagged region off the list and leaves the page as it is, and
-**Show on page** scrolls to a region and selects it. Everything here is undoable. Clean with offers Cloud when a cloud
+**Show on page** scrolls to a region and selects it. **Reject result**, on a result cleaned from detected text, takes
+the result off and puts the region back as detected with its mask, ready to clean again; Undo after any clean of
+detected text does the same, and Redo puts the same result back without rendering it again. A result cleaned before
+the app kept the detected mask has none to restore and says so. Everything here is undoable. Clean with offers Cloud when a cloud
 GPU is ready, and Try again on a cloud region asks for confirmation again, as every cloud render does. Clicking a region
 on the page selects it under every tool, lights its outline and scrolls the matching row into view. A right click, or
 Shift+F10 from the keyboard, selects the region and offers the same three things the row does. On a region that is
@@ -420,8 +436,8 @@ bubble color, and a color picked when there was only one is kept as that one),
 hides while downloads continue, and the tray icon reopens or quits; off, the close button quits; shown only when a tray
 icon exists), **Reading direction** (the default for new projects; an open project keeps the direction it was made
 with), **Cloud GPU** (says whether it is on, plus **Open Cloud settings**), **Original view** (whether O shows the
-original only while held or toggles it on), **Language** (English is the only catalogue that ships today, though every
-string in the app, errors included, is in it), and **Setup** with **Run setup again** (walks through downloads,
+original only while held or toggles it on), **Language** (English, 한국어, 日本語, Español, Português or Français; every
+string in the app, errors included, is in the catalogue), and **Setup** with **Run setup again** (walks through downloads,
 defaults, the cloud GPU and app behavior again).
 
 ### Models
@@ -431,6 +447,11 @@ section is a list of files: one row per model plus one for the runtime, each say
 whether it is here, with **Download**, **Cancel**, **Check**, **Delete** and, when a stopped transfer left bytes
 behind, **Discard partial**. A row with a remainder says how much is already here and that the next press continues
 from there. Downloads are verified against a published checksum, and Check re-reads a file you suspect.
+
+The script gate and the Japanese reader each show as one capability: their component files, sizes and pinned
+SHA-256 values can be inspected, but they install and update together. The install stages and verifies every missing
+file before it switches anything on, so a failed transfer leaves the files already installed intact. Removing the
+Japanese filter does not remove the RT-DETR weights, which other workflows share.
 
 One row is optional in the strongest sense. The **Japanese text reader** (manga-ocr, three files, about 460 MB) is
 offered here and, unticked, in the first-launch setup: nothing depends on it, and a machine without it reads scripts

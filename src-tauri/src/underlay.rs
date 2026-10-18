@@ -419,6 +419,18 @@ pub(crate) fn refresh_dependencies_from(
     else {
         return Ok(());
     };
+    refresh_dependencies_of(job, changed, previous)
+}
+
+/// [`refresh_dependencies_from`] for a layer given by its record, which a
+/// layer that has just left the page still has (a clean taken back,
+/// `Job::restore_detection`): its pixels are gone from under the layers
+/// above it, and its row is no longer among the patches to be looked up.
+pub(crate) fn refresh_dependencies_of(
+    job: &mut Job,
+    changed: PatchRecord,
+    previous: Option<Rect>,
+) -> Result<(), String> {
     // Every place this change could have altered what a later layer read:
     // where the patch was made, where it is drawn now, where it was drawn
     // before this edit, and where each earlier revision of it was. A re-run

@@ -137,6 +137,7 @@
     setReadingDirection,
     setSidecarPath,
     setOcrRescue,
+    setCleanLatinText,
     setLanguage,
     setTheme,
     setMaskColor,
@@ -227,6 +228,47 @@
       backgroundError = true
       input.checked = session.closeToTray
     }
+  }
+
+  /* ---------- Undo history ---------- */
+
+  /**
+   * How many undo steps a chapter keeps. The backend owns the number and its
+   * bounds (`undoLimit()`), so there is no default here and the field is not
+   * drawn until the backend has answered. It is written on its own, as a
+   * fixed patch, and it is not part of the session: the session mirrors a
+   * setting the interface owns, and this one it does not.
+   */
+  /** @type {{value: number, min: number, max: number, default: number}|null} */
+  let undoLimit = $state(null)
+  /** @type {string|null} */
+  let undoDraft = $state(null)
+  /** @type {''|'outOfRange'|'saveFailed'} */
+  let undoError = $state('')
+
+  getBackend().undoLimit?.().then(
+    (/** @type {any} */ limits) => (undoLimit = limits),
+    () => {},
+  )
+
+  async function commitUndoLimit() {
+    if (undoDraft === null || !undoLimit) return
+    const wanted = Number(undoDraft)
+    if (undoDraft.trim() === '' || !Number.isInteger(wanted) || wanted < undoLimit.min || wanted > undoLimit.max) {
+      undoError = 'outOfRange'
+      return
+    }
+    if (wanted !== undoLimit.value) {
+      try {
+        await writeSettingsSerialized(getBackend(), { undoLimit: wanted })
+        undoLimit = { ...undoLimit, value: wanted }
+      } catch {
+        undoError = 'saveFailed'
+        return
+      }
+    }
+    undoDraft = null
+    undoError = ''
   }
 
   /* ---------- Models ---------- */
@@ -2391,6 +2433,25 @@
      section's own combination note describes it. The label sits left and the box
      right, the shape every switch on this screen has; the description and the
      status are both read with the box. -->
+<!-- English is left on the page unless this is on. The reader decides what is
+     English, so the description says the switch needs it. -->
+{#snippet latinOption()}
+  <div class="option">
+    <div class="option-line">
+      <label class="option-label" for="settings-clean-latin">{t('pipelines.workflow.cleanLatin')}</label>
+      <input
+        id="settings-clean-latin"
+        class="check"
+        type="checkbox"
+        aria-describedby="settings-clean-latin-description"
+        checked={session.cleanLatinText}
+        onchange={(event) => setCleanLatinText(event.currentTarget.checked)}
+      />
+    </div>
+    <p class="option-description" id="settings-clean-latin-description">{t('pipelines.workflow.cleanLatinDescription')}</p>
+  </div>
+{/snippet}
+
 {#snippet rescueOption()}
   <div class="option">
     <div class="option-line">
@@ -2751,6 +2812,39 @@
 
         {#if backgroundError}<p class="error" role="alert">{t('settings.background.saveFailed')}</p>{/if}
 
+        {#if undoLimit}
+          <Field
+            label={t('settings.undoLimit.label')}
+            description={t('settings.undoLimit.description', { min: undoLimit.min, max: undoLimit.max })}
+            layout="row"
+            controlId="settings-undo-limit"
+          >
+            {#snippet children({ descriptionId })}
+              <span class="undo-limit">
+                <TextInput
+                  id="settings-undo-limit"
+                  numeric
+                  value={undoDraft ?? String(undoLimit.value)}
+                  aria-describedby={descriptionId}
+                  aria-invalid={undoError === 'outOfRange'}
+                  onchange={(value) => (undoDraft = value)}
+                  onblur={commitUndoLimit}
+                  onkeydown={(/** @type {KeyboardEvent} */ event) => {
+                    if (event.key === 'Enter') commitUndoLimit()
+                  }}
+                />
+              </span>
+            {/snippet}
+          </Field>
+          {#if undoError}
+            <p class="error" role="alert">
+              {undoError === 'outOfRange'
+                ? t('settings.undoLimit.outOfRange', { min: undoLimit.min, max: undoLimit.max })
+                : t('settings.undoLimit.saveFailed')}
+            </p>
+          {/if}
+        {/if}
+
         <Field label={t('settings.language.label')} layout="row">
           {#snippet children({ labelId })}
             <Select options={languages} value={session.language} labelledBy={labelId} fit onchange={setLanguage} />
@@ -2853,6 +2947,7 @@
             </ul>
           </fieldset>
           {@render rescueOption()}
+          {@render latinOption()}
           {#if cloudFixed}<p class="line" id="{uid}-cloud-combo" data-cloud-combo>{t('pipelines.cloudCombo')}</p>{/if}
           <p class="line" id="{uid}-choices-note">{t('settings.detection.profiles')}</p>
           {@render review()}
@@ -3176,6 +3271,11 @@
 </Screen>
 
 <style>
+  .undo-limit {
+    display: inline-flex;
+    width: 88px;
+  }
+
   .settings {
     flex: 1;
     min-height: 0;

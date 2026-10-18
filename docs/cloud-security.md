@@ -1,7 +1,6 @@
-# Manga Cleaner: Cloud Security Architecture & Backend Foundation
+# Cloud security architecture
 
-**Milestone Status:** P3a Delivered (Backend Security, Profiles, Credentials, Policy & Grant Foundation)
-**Remaining Milestone Scope (at P3a):** P3b (Backend Region Binding Integration & Consent Copy), P4 to P11 (Durable Transport, Adapters, Provisioning, Batching, Release Gates). Later work implemented P3b, P4 and P5 to P9 offline. P10 is not implemented, and no phase from P5 on has run live. See [cloud-work-log.md](cloud-work-log.md).
+This document covers the threat model and security invariants of cloud rendering: public profile storage, credential isolation, the authorisation grant service and the Tauri permission surface. The code is in `src-tauri/src/inference/` (`config.rs`, `secrets.rs`, `policy.rs`).
 
 ---
 
@@ -12,7 +11,7 @@ The Manga Cleaner cloud inference architecture is governed by strict fail-closed
 1. **Crop-Only Transmission & Zero Coordinate Leakage:** Only tightly bounded raster crops snapped to `LATENT_STRIDE = 16` and context padding are transmitted. Full pages, page-relative coordinates (`x`, `y`, `page_x`, `page_y`, `strip_rect`, `on_page`), region IDs, and local filesystem paths are strictly forbidden in wire payloads (`/mc/v1`).
 2. **Local Default Target:** The default execution target is always [`ExecutionTarget::Local`]. Remote cloud execution requires explicit user configuration and backend grant issuance.
 3. **Simultaneous Versioned Public Profiles:** Both Beam and Modal profiles can be configured and persisted simultaneously in dedicated `inference.json`. Public configurations enforce `deny_unknown_fields` and never contain secrets.
-4. **URL & Host Hygiene (`reqwest::Url`):** All remote endpoints must use HTTPS with valid hostnames. Embedded user credentials (`@`), query parameters (`?`), URL fragments (`#`), control characters, surrounding whitespace, and conservative IP literals / loopback domains (`localhost`, `127.0.0.1`, `[::1]`, `0.0.0.0`, `10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`, `169.254.0.0/16`, WHATWG octal/hex/decimal IPs, IPv4-mapped IPv6, and `.local`/`.localhost`/`.internal`/`.arpa`) are strictly rejected following trailing-dot normalization. (DNS resolution and connect-time network verification remain P3b scope).
+4. **URL & Host Hygiene (`reqwest::Url`):** All remote endpoints must use HTTPS with valid hostnames. Embedded user credentials (`@`), query parameters (`?`), URL fragments (`#`), control characters, surrounding whitespace, and conservative IP literals / loopback domains (`localhost`, `127.0.0.1`, `[::1]`, `0.0.0.0`, `10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`, `169.254.0.0/16`, WHATWG octal/hex/decimal IPs, IPv4-mapped IPv6, and `.local`/`.localhost`/`.internal`/`.arpa`) are strictly rejected following trailing-dot normalization. (DNS resolution and connect-time verification are in [cloud-transport.md](cloud-transport.md).)
 5. **Canonical Origin Fingerprinting:** Profile URLs are canonicalized (`https://<host>` or `https://<host>:<port>`) and hashed to generate a deterministic SHA-256 fingerprint for binding secrets and grants.
 6. **Origin-Bound Credential Isolation:** Cloud API keys and tokens are stored in the OS credential manager or an explicit in-memory session-only store, bound directly to the profile's canonical origin fingerprint. Changing a profile's endpoint URL prevents reuse of old credentials.
 7. **Role Separation:** Cloud credentials are partitioned into separate scopes (`Setup`, `Runtime`, `ModelDownload`) that cannot substitute for or overwrite one another.
@@ -127,25 +126,23 @@ Cloud detection runs have a separate chapter grant. Its proposal records each pa
 
 Custom commands are governed by explicit application manifest declarations in `build.rs` and capability declarations under `src-tauri/permissions/cloud.toml` and `src-tauri/capabilities/cloud.json`.
 
-Exposed Command Surface:
-- `read_inference_config`: Read public configuration from `inference.json`.
-- `write_inference_config`: Validate and write public configuration to `inference.json`.
-- `store_cloud_secret`: Write-only credential storage into OS keyring or session store.
-- `delete_cloud_secret`: Delete credentials from OS keyring and session store.
-- `get_cloud_secret_summary`: Safe summary of credential presence and backend.
+The profile and credential commands are:
+- `read_inference_config`: read public configuration from `inference.json`.
+- `write_inference_config`: validate and write public configuration to `inference.json`.
+- `store_cloud_secret`: write-only credential storage into the OS keyring or the session store.
+- `delete_cloud_secret`: delete credentials from the OS keyring and the session store.
+- `get_cloud_secret_summary`: a safe summary of credential presence and backend.
+
+The consent, dispatch, recovery and provisioning commands are listed in [cloud-consent.md](cloud-consent.md) section 3.
 
 ---
 
-## 6. Milestone Register & Remaining Work
+## 6. Scope and limits
 
-| Phase | Description | Status |
-|---|---|---|
-| **P3a** | Backend security foundation, public profiles, secrets, policy, grants, and settings guards | **Completed** |
-| **P3b** | Backend region binding integration, frontend consent dialogs, i18n copy updates | Implemented offline |
-| **P4** | Durable attempt journal, local result caching, crash recovery, and cancellation | Implemented offline |
-| **P5** | First real cloud crop via Modal staging adapter | Implemented offline, not yet run live |
-| **P6** | Beam runtime parity and token permission verification | Implemented offline, not yet run live |
-| **P7 to P8** | Automatic provisioning helpers for Modal and Beam | Implemented offline, not yet run live |
-| **P9** | Complete account connection and lifecycle UX | Implemented offline |
-| **P10** | Cloud-assisted chapter workflows and conservative routing | Not implemented: chapter runs stay local only |
-| **P11** | End-to-end integration and release gating | Partial: CPU-only CI and the release install step; no live end-to-end run |
+- Cloud-assisted chapter workflows route only the steps the user chose: a cloud clean sends exactly the regions of a confirmed plan, and a failed cloud render never falls back to a local engine or another endpoint.
+- Modal has run end to end on a real account ([findings.md](findings.md)). Beam has not run live.
+- CI is CPU only. The release workflow checks that the setup helper is bundled ([cloud-provisioning.md](cloud-provisioning.md) section 7).
+
+---
+
+See also: [cloud-consent.md](cloud-consent.md), [cloud-transport.md](cloud-transport.md), [cloud-journal.md](cloud-journal.md), [cloud-provisioning.md](cloud-provisioning.md), [cloud-configuration-memory.md](cloud-configuration-memory.md).

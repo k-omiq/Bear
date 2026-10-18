@@ -180,7 +180,7 @@ pub const SECONDS_PER_WORK_MEGAPIXEL: f64 = 10.0;
 /// A cold container: image, snapshot restore and weights.
 pub const COLD_START_SECONDS: f64 = 55.0;
 /// The Qwen-Image-Edit model family (deploy/cloud/common/qwen.py).
-const QWEN_MODEL_PREFIX: &str = "Disty0/Qwen-Image-Edit";
+pub(crate) const QWEN_MODEL_PREFIX: &str = "Disty0/Qwen-Image-Edit";
 /// The reference area the Qwen pipeline edits every crop at, on a 32 px grid.
 const QWEN_WORK_AREA: f64 = 1024.0 * 1024.0;
 const QWEN_GRID: f64 = 32.0;
@@ -629,11 +629,14 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
     } else {
         open(&mut *proposals.lock().map_err(|e| e.to_string())?)?;
         let mut recipe = gateway.recipe()?;
-        if recipe.model_id.starts_with(QWEN_MODEL_PREFIX) {
-            if recipe.recipe_id != "mc-qwen-image-edit-2511-v4" { return Err("qwen_update_required".into()); }
+        // A guided recipe always carries guidance, Auto with no description when
+        // the clean asked none; an older Qwen deployment cannot take it at all.
+        if recipe.takes_guidance() {
             recipe.qwen_edit = Some(request.qwen_edit.clone().unwrap_or(cleaner_core::engines::render::QwenEdit {
                 target: cleaner_core::engines::render::QwenTarget::Auto, description: String::new(),
             }));
+        } else if recipe.model_id.starts_with(QWEN_MODEL_PREFIX) {
+            return Err("qwen_update_required".into());
         } else if request.qwen_edit.is_some() { return Err("cloud_clean_recipe_changed".into()); }
         cleaner_core::cloud_wire::validate_recipe(&recipe.clone().into()).map_err(|_| "invalid_request".to_string())?;
         let bound = bind(job_path, &ids, recipe_preprocessing(&recipe)?)?;
@@ -1719,6 +1722,13 @@ pub async fn prepare_cloud_clean(
         };
         let library = Library::for_app(&app).map_err(|e| e.to_string())?;
         let path = library.resolve_chapter(&chapter_id).map_err(|e| e.to_string())?;
+        // Every earlier request that is over is ended first, so the plan
+        // leaves a region out only for a request still in flight or unknown.
+        // Asking a gateway about an accepted job contacts the provider, which
+        // waits for the permission as it does at start.
+        if crate::inference::cloud_allowed(&app) {
+            crate::inference::commands::end_unresolved_before_clean(&app);
+        }
         let unresolved = journal_unresolved(app_inference_service(&app)?.journal().clone(), &path);
         let standing = library.cloud_consent_covers(&chapter_id, selected.provider,
             &selected.profile_id, &selected.endpoint_fingerprint);
@@ -1801,7 +1811,7 @@ fn start(app: &tauri::AppHandle, grant_id: &str) -> Result<RunHandle, String> {
         }).collect();
     // One profile-bound client retains its HTTP pool throughout the batch.
     // Every dispatch still checks permission, profile epoch, and its grant.
-    let service = app_inference_service(app)?.with_review_retry(false).with_custom_client(client.clone());
+    let service = app_inference_service(app)?.with_custom_client(client.clone());
     let unresolved = journal_unresolved(service.journal().clone(), &job_path);
     let renderer = ServiceRenderer {
         app: app.clone(),

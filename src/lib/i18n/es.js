@@ -29,23 +29,15 @@ export const es = {
         "otherText": "Otro",
         "description": "Descripción (opcional)",
         "example": "Letras negras grandes junto a la mano.",
-        "preserve": "Manga Cleaner añade instrucciones para conservar el dibujo, los contornos de los bocadillos y los detalles cercanos. Revisarás el resultado antes de aplicarlo.",
+        "preserve": "Manga Cleaner añade instrucciones para conservar el dibujo, los contornos de los bocadillos y los detalles cercanos. El resultado se aplica de inmediato y queda marcado para revisión. Para retirarlo, usa Rechazar resultado.",
         "cancel": "Cancelar",
         "clean": "Limpiar con Qwen",
-        "updateRequired": "Actualiza Qwen en la nube para usar descripciones y la receta de borrado de 8 pasos."
-    },
-    "review": {
-        "title": "Revisar limpieza de Qwen",
-        "help": "Comprueba que el texto ha desaparecido y que el dibujo está intacto. Usar resultado aplica esta vista combinada a la página.",
-        "before": "Antes",
-        "after": "Después",
-        "retryCost": "Reintentar crea otra solicitud de pago en la nube.",
-        "discard": "Descartar",
-        "retry": "Reintentar",
-        "use": "Usar resultado",
-        "expired": "Esta revisión ha caducado. El resultado no se ha aplicado.",
-        "failed": "Qwen no hizo un cambio suficiente tras tres semillas. Describe el texto y vuelve a intentarlo.",
-        "required": "Este resultado de Qwen está guardado y debe revisarse antes de aplicarlo."
+        "updateRequired": "Actualiza Qwen en la nube para usar descripciones y la receta de borrado de 8 pasos.",
+        "helpFlux": "Elige el tipo de texto. Puedes decir qué hay detrás del texto para que el redibujo coincida. No hace falta escribir instrucciones.",
+        "descriptionFlux": "Qué hay detrás del texto (opcional)",
+        "exampleFlux": "Una pared de ladrillo con el marco de una ventana.",
+        "preserveFlux": "Solo se redibuja el texto enmascarado. Manga Cleaner añade instrucciones para conservar el dibujo. Una descripción incorrecta dibuja algo incorrecto, así que déjala vacía si no estás seguro.",
+        "cleanFlux": "Limpiar con FLUX"
     }
 },
   app: {
@@ -369,6 +361,13 @@ export const es = {
       label: 'Vista del original',
       hold: 'Solo al mantener pulsado',
       pinned: 'Fija',
+    },
+    undoLimit: {
+      label: 'Historial de deshacer',
+      description:
+        'Cuántos pasos de deshacer conserva cada capítulo, de {min} a {max}. Un número menor descarta los pasos más antiguos en la siguiente edición.',
+      outOfRange: 'Introduce un número entero de {min} a {max}.',
+      saveFailed: 'No se guardó el tamaño del historial de deshacer.',
     },
     language: {
       label: 'Idioma',
@@ -1381,6 +1380,8 @@ export const es = {
     workflow: {
       ocrRescue: 'Usar el lector de texto Hayai OCR (opcional)',
       ocrRescueDescription: 'Lee cada región en este equipo antes de limpiar. Retiene el dibujo que no es texto y confirma escritura japonesa, china y coreana dudosa. Funciona con ambas políticas de texto.',
+      cleanLatin: 'Limpiar el texto en inglés',
+      cleanLatinDescription: 'Desactivado: el texto que el lector lee como inglés u otro idioma en letras latinas se queda en la página, como región retenida que aún puedes limpiar. Activado: se limpia como el resto. Requiere el lector de texto Hayai OCR.',
       ratingsNote: 'Las valoraciones de los motores son estimaciones provisionales, no mediciones de un mismo benchmark.',
     },
     cleaner: {
@@ -1964,6 +1965,7 @@ export const es = {
       retryBlocked: 'Reintentar no está disponible para trazos de pintura y clonado. Pinta encima o elimínalo.',
       retryWider: 'Reintentar más amplio',
       retryWiderHint: 'Limpiar de nuevo con el mismo motor sobre un área algo mayor. Cada pulsación la amplía un poco más.',
+      rejectResult: 'Rechazar resultado',
       engine: 'Limpiar con',
       engineHint: 'Reemplazar esta capa usando otro motor, desde las capas inferiores',
       textType: 'Tipo de texto',
@@ -2017,6 +2019,8 @@ export const es = {
       layerLock: 'el cambio de bloqueo de la capa',
       layerMove: 'el movimiento de la capa',
       layerRotate: 'el giro de la capa',
+      cleanRegion: 'una región limpiada',
+      rejectResult: 'un resultado rechazado',
     },
   },
   tools: {
@@ -2254,6 +2258,18 @@ export const es = {
         chunkRefused: 'un lote no coincidía con lo que confirmaste',
         pollTimeout: 'la GPU en la nube tardó demasiado en responder',
         submissionUnknown: 'la aplicación no pudo saber si se envió',
+        regionChanged: 'la región cambió mientras se limpiaba',
+        regionUnsupported: 'la región no se puede limpiar en la GPU en la nube',
+        busy: 'la región ya se está limpiando en la GPU en la nube',
+        pageBusy: 'una ejecución estaba trabajando en su página',
+        recoveryRequired: 'una solicitud anterior a la nube para ella no se ha resuelto',
+        local: 'algo salió mal en este equipo',
+        providerPaused: 'el proveedor de la nube está en pausa en esta versión',
+        editNotApplied: 'tu configuración de la nube está desactualizada y no devolvió ningún resultado (actualízala en Ajustes, Nube)',
+        weights: 'a tu configuración de la nube le faltan archivos de modelo necesarios',
+        remoteCancelled: 'el proveedor la canceló',
+        cancelled: 'se canceló',
+        generic: 'la aplicación no recibió un motivo que sepa expresar',
       },
     },
     run: {
@@ -2404,7 +2420,9 @@ export const es = {
         remoteCancelled: 'El proveedor canceló el renderizado.',
         cancelled: 'Se canceló.',
         timeout: 'El renderizado tardó demasiado y se detuvo.',
-        generic: 'Algo salió mal.',
+        providerPaused: 'Este proveedor de la nube está en pausa en esta versión. Elige otro endpoint en Ajustes, Nube.',
+        editNotApplied: 'Esta configuración en la nube está desactualizada y no devolvió ningún resultado. Actualízala en Ajustes, Nube, para obtener siempre un resultado.',
+        generic: 'La aplicación no recibió un motivo que sepa expresar.',
       },
       job: {
         title: 'Nube',
@@ -2434,6 +2452,9 @@ export const es = {
       paddingRefreshFailed: 'Se guardó el margen de la máscara, pero no se pudo actualizar la página. Vuelve a abrir el capítulo para ver la máscara actualizada.',
       typeFailed: 'No se pudo cambiar el tipo de texto. La región está como estaba.',
       approveFailed: 'No se pudo aprobar la máscara. La región está como estaba.',
+      rejectNoMask: 'Este resultado no tiene una máscara guardada, así que no se puede rechazar. Elimínalo para recuperar el original.',
+      rejectFailed: 'No se pudo rechazar el resultado. La página está como estaba.',
+      reapplyFailed: 'No se pudo restaurar el resultado. La página está como estaba.',
     },
     tool: {
       cloneSourceSet: 'Origen de clonado tomado. Pinta para copiar desde él.',
@@ -2463,6 +2484,7 @@ export const es = {
       refusedLayeredFileSize: 'Este PSD superaría su límite de tamaño de archivo de 2 GB. No se escribió nada. Exporta en PNG o TIFF.',
       refusedLayeredCount: 'Esta página tiene más capas de las que admite un PSD. No se escribió nada. Exporta un PNG o TIFF acoplado.',
       refusedDestination: 'En ese destino no puede escribir esta exportación. No se escribió nada. Elige una carpeta nueva o indica una ruta completa desde la raíz del disco.',
+      destinationUnavailable: 'No se puede crear la carpeta de exportación {path}. La unidad o la carpeta que la contiene no está conectada, o no se puede escribir en ella. No se escribió nada. Conecta la unidad o elige otra carpeta.',
       refusedStitchPaginated: 'Un archivo para el capítulo es una disposición de tira larga, y este proyecto está paginado. No se escribió nada. Sus páginas son imágenes separadas, y apilarlas crearía un documento que no tiene original.',
       refusedStitchedArchive: 'Un CBZ guarda un archivo por página, así que no puede guardar un único archivo para el capítulo. No se escribió nada. Exporta el capítulo como un único PNG o TIFF, o conserva el archivo comprimido y exporta por página.',
       stitchRefused: {

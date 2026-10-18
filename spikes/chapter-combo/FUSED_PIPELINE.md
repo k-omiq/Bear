@@ -1,13 +1,13 @@
 # Live three-model detection pipeline: Apocalypse 109
 
 The requested **combined pipeline** ran on all 45 JPEG pages at
-`/Users/caved/Downloads/apocalypse/109`. This is a single command that executes
+`<chapter-dir>`. This is a single command that executes
 the full ogkalu RT-DETR-v2 FP32 graph on two vertical tiles, the full pinned
 Koharu SAM-TS-L mask model, and COO MTSv3 detection-only proposals, then joins
 their source-coordinate evidence into one candidate list per page. It is a
 local Python proof. The intended desktop implementation remains Rust/ONNX
 Runtime, and this run changes no app UI, catalogue, routing, cloud service, or
-M0–M1 checkout.
+M0–M1 code.
 
 ## What the fusion actually does
 
@@ -69,7 +69,7 @@ detector-only set found **no visible extra text for SAM to recover** from those
 regions on this chapter. It does not establish chapter-wide mask precision
 or recall. See the [candidate audit](results/live-chapter-109-detector-only-audit.json).
 
-The grouping and retention behavior matters on specific pages:
+The grouping and retention behaviour matters on specific pages:
 
 - Page 02: RT found no box. COO's two polygons suggest two groups from seven
   SAM components, corresponding to the two visible sound effects.
@@ -102,7 +102,7 @@ remain in its own saved result.
 
 ```sh
 python3 spikes/chapter-combo/run_pipeline.py \
-  --source-dir /Users/caved/Downloads/apocalypse/109 \
+  --source-dir <chapter-dir> \
   --output-dir spikes/chapter-combo/.cache/live-chapter-109
 python3 spikes/chapter-combo/render_fused.py \
   spikes/chapter-combo/.cache/live-chapter-109
@@ -114,7 +114,7 @@ full run. The complete run's [stage/command/memory record](results/live-chapter-
 and [fusion summary](results/live-chapter-109-fusion-summary.json) are tracked.
 Per-page candidate JSON, exact component-label PNGs, model outputs, logs,
 source hashes, and the eight rendered visual previews are in ignored
-`spikes/chapter-combo/.cache/live-chapter-109/`. The renderer verifies source,
+`spikes/chapter-combo/.cache/live-chapter-109/` (written when the spike runs; not committed). The renderer verifies source,
 mask and label checksums and dimensions before drawing. The
 [fusion code](fuse.py) and [runner](run_pipeline.py) are small, reproducible
 local probes; no manga-ocr, cloud job or inpainting model is involved.

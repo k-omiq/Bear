@@ -1,24 +1,21 @@
 # Model workflow decisions and measured benchmarks
 
-Status: 25 September 2026, `codex/cloud-integration`. This is the consolidated
-record for work added **beside and after** the M2 SAM-TS-L mask-only export. The
-[M2 report](../spikes/sam-ts-l/REPORT.md) remains the export and FP32 reference
-record; [M0–M1 evidence](m0-m1-evidence.md) covers the earlier edit-history and
-cloud-input work. All timings below are local measurements on a MacBook Air
-Mac17,3 with an Apple M5 and 32 GB unified memory. They are not Windows/Linux
-benchmarks or human-label accuracy scores. The M2 and chapter spike reports
-are historical snapshots: their statements that the app had no SAM route were
-true at the time of those probes and are superseded by the later desktop work
-recorded here.
+This document records the model workflow decisions behind the optional local text-shaped review, with the benchmarks that
+support them: the SAM-TS-L mask-only export, the RT-DETR variants, the combined chapter run, and the resource and
+quality limits of the supervised write. The [SAM-TS-L export report](../spikes/sam-ts-l/REPORT.md) holds the export
+and FP32 reference record. All timings below are local measurements on a MacBook Air Mac17,3 with an Apple M5 and 32 GB
+unified memory, taken in September 2026. They are not Windows/Linux benchmarks or human-label accuracy scores. The
+export and chapter spike reports are historical snapshots: their statements that the app had no SAM route were true
+when they were measured and are superseded by the desktop work described here.
 
-## What was added beyond M2
+## Desktop workflow summary
 
 | Area | Current implementation or proof |
 | --- | --- |
-| Independent desktop analysis | **Regions only** runs RT-DETR-v2, **Mask only** runs SAM-TS-L, and **Text-shaped review** runs RT then SAM on the same page and combines their evidence. The RT choice is the pinned full graph on two vertical tiles or the existing small whole-page graph. Local graph import verifies size and SHA-256. These are review modes; legacy CTD-based Auto Clean remains the default. See [native capability evidence](model-capabilities-evidence.md). |
+| Independent desktop analysis | **Regions only** runs RT-DETR-v2, **Mask only** runs SAM-TS-L, and **Text-shaped review** runs RT then SAM on the same page and combines their evidence. The RT choice is the pinned full graph on two vertical tiles or the existing small whole-page graph. Local graph import verifies size and SHA-256. These are review modes; legacy CTD-based Auto Clean remains the default. |
 | Source-coordinate fusion | Every 8-connected SAM component survives, including components with no RT box. RT text boxes provide region context; bubble-only boxes are context, and detector-only proposals have no erase pixels. The local three-model research runner also accepted COO SFX polygons as grouping suggestions, without changing the SAM mask. See the [live fusion run](../spikes/chapter-combo/FUSED_PIPELINE.md). |
 | Provider paths | Native Rust/ONNX Runtime implements SAM CPU and explicit Apple WebGPU review. Both WebGPU graph sessions disable CPU fallback and verify every profiled node's provider. Separate reproducible Python proof selectors expose PyTorch CPU/MPS/CUDA and ONNX CPU/CoreML/CUDA/DirectML/WebGPU/MIGraphX when installed; they are not a desktop Python dependency or evidence that those devices were qualified. See [provider qualification](provider-qualification.md). |
-| Supervised edits | A selected SAM component can become a versioned `MaskPlan` with explicit add/remove corrections and round source-pixel padding. The default is 0 px; the supported engineering range is 0–64 px, not a quality-tuned recommendation. The previewed support raster and its hash are the exact write permission. Prepare/apply bind the model, backend/runtime, source, lower composited underlay, predecessor edits and plan revision. Immutable patch revisions support export and persisted undo/redo. See the [write contract](component-write-contract.md) and [local release evidence](local-text-shape-release.md). |
+| Supervised edits | A selected SAM component can become a versioned `MaskPlan` with explicit add/remove corrections and round source-pixel padding. The default is 0 px; the supported engineering range is 0–64 px, not a quality-tuned recommendation. The previewed support raster and its hash are the exact write permission. Prepare/apply bind the model, backend/runtime, source, lower composited underlay, predecessor edits and plan revision. Immutable patch revisions support export and persisted undo/redo. See the [write contract](component-write-contract.md) and [features](features.md). |
 | Chapter comparison | All 45 pages of local Apocalypse 109 were run with SAM alone and with RT/COO comparison probes. A one-command three-model research run produced 922 SAM components and four detector-only candidates; the latter four appeared to be art on visual review. Model association improved review information but left all 45 SAM mask hashes unchanged. See the [chapter mask report](../spikes/sam-ts-l/CHAPTER_109.md), [RT variants](../spikes/chapter-rtdetr/FULL_MODEL_COMPARISON.md), and [fusion report](../spikes/chapter-combo/FUSED_PIPELINE.md). |
 
 ## Decision changes
@@ -60,12 +57,12 @@ recorded here.
    and provider/node/memory/parity measurements. Human-labeled mask and
    reconstruction quality, model distribution rights, and broad automatic
    cleaning remain unqualified. No paid cloud job was started. See
-   [provider qualification](provider-qualification.md) and [release evidence](local-text-shape-release.md).
+   [provider qualification](provider-qualification.md).
 
 The CoreML encoder did not finish session construction within 180 seconds in
 the bounded probe. Its head alone split 44 node events to CoreML and 52 to
 CPU and changed four restored pixels, so provider availability did not make
-it an alternate qualified desktop path. See [M2 provider observations](../spikes/sam-ts-l/REPORT.md).
+it an alternate qualified desktop path. See [provider observations in the export report](../spikes/sam-ts-l/REPORT.md).
 
 ## Benchmark ledger
 
@@ -103,7 +100,7 @@ SafeTensors checkpoint. The live mask path retains 99.755% of tensor-data
 bytes, mainly the ViT-L encoder. CPU ORT's measured 10.87 GB RSS and 11.18 s
 warm run are worse than the PyTorch CPU observation above. The speed benefit
 on this host came from a suitable GPU provider, not from the ONNX file format
-or removal of unrelated heads. See [M2 graph inventory](../spikes/sam-ts-l/REPORT.md).
+or removal of unrelated heads. See [graph inventory in the export report](../spikes/sam-ts-l/REPORT.md).
 
 ### Whole chapter and native desktop provider
 
@@ -121,9 +118,8 @@ These rows use different preparation, inclusion of writes, session lifetimes
 and host bindings; do not rank them as a single end-to-end desktop speed test.
 The WebGPU chapter probe used Pillow-prepared JPEG tensors, whereas the app
 defines its own decoded raster as input. Its Metal sampler polled at 20 ms and
-can miss transients. The source figures are in [the chapter MPS result](../spikes/sam-ts-l/results/chapter-109-torch-mps.json),
-[native capability evidence](model-capabilities-evidence.md), and
-[the app-runtime WebGPU result](../spikes/sam-ts-l/results/native-rust-app-webgpu-45-pillow.json).
+can miss transients. The source figures are in [the chapter MPS result](../spikes/sam-ts-l/results/chapter-109-torch-mps.json)
+and [the app-runtime WebGPU result](../spikes/sam-ts-l/results/native-rust-app-webgpu-45-pillow.json).
 
 ### Detector variants and combined chapter run
 
@@ -167,6 +163,31 @@ chapter in its earlier separate run. Neither coverage nor proposal count is
 human-label recall, and this research value does not override the COO rights
 exclusion. See [three-model comparison](../spikes/chapter-combo/REPORT.md).
 
+### Supervised write path: resources and quality limits
+
+These rows measure the write path (page decode, SAM analysis, component preparation, apply, export) on the same M5 host.
+
+| Sample | Observation | Limit |
+| --- | --- | --- |
+| 4000x6000 Gray8 page + 128x128 prepared mask | 24,000,000 decoded page bytes; 33,701,888 B process RSS high-water; 26,804,704 B reported peak footprint | No ONNX, renderer or PSD in this measurement. |
+| 4000x6000 synthetic white L8 SAM-TS-L WebGPU run, app ORT 1.28.0 | 15.879 s total; 2,625,880,064 B process RSS high-water; 5,903,499,264 B Metal high-water sampled at 20 ms | One synthetic page. Metal sampling can miss transients and overlaps RSS in unified memory. |
+| Saved 45-page Korean colour webtoon chapter (Apocalypse 109), identical Pillow-prepared input, WebGPU | 45/45 restored masks match saved PyTorch MPS masks; zero changed pixels | Mask parity, not human-label accuracy or reconstruction quality. |
+| Native CPU on the Pillow-decoded chapter | 44/45 exact restored masks; page 27 differs by two threshold pixels | CPU stays a review path. |
+
+An integration test with the real WebGPU graphs ran native SAM inference, component preparation, hash-approved apply and lossless export, and every changed decoded pixel lay inside the approved support. That validates the write bridge on the measured host. It does not measure reconstruction quality.
+
+No rights-cleared, untouched Japanese or Korean human-labelled holdout exists, with instance, complete-page, text-pixel, artwork-damage, false-candidate and correction-time measures. Quality claims for automatic text-shaped cleaning therefore stay unmade. Windows and Linux providers have no matching-hardware measurement.
+
+### Known failure cases
+
+| Case | Artifact | Product response |
+| --- | --- | --- |
+| Near-zero logit changes two CPU mask pixels on page 27 | [stage diagnosis](../spikes/sam-ts-l/results/native-page27-parity.md) | CPU review only; no exact-parity write approval. |
+| Original JPEG decoding changes the SAM input, and 666 mask pixels on page 27, relative to Pillow | Decision 5 above | JPEG review only; the native decoded raster is canonical for any future qualification. |
+| SAM-only suspect components on page 35; RT misses components on pages 02 and 16 | [fusion summary](../spikes/chapter-combo/results/live-chapter-109-fusion-summary.json) | Unassociated components stay in review; none is silently erased or dropped. |
+| COO rock proposal on page 24 has no lettering mask; page 30 has no candidates | [fusion report](../spikes/chapter-combo/FUSED_PIPELINE.md) | No polygon-to-erase conversion and no filled fallback rectangle. |
+| Human-label accuracy and reconstruction quality are unmeasured | None | Mask and reconstruction reviews stay separate gates before any automatic or broad release claim. |
+
 ## Reproduction and interpretation
 
 The individual reports above contain pinned hashes, commands, source-page
@@ -175,6 +196,6 @@ checkpoint files and large prepared tensors live in ignored `artifacts/` and
 are not redistributed by this repository. Provider availability is not graph
 assignment; graph validation is not mask parity; mask parity is not semantic
 accuracy. The benchmark rows describe the tested inputs and host only. The
-[provider procedure](provider-qualification.md) specifies the next
-matching-hardware Windows/Linux experiment, while the [rights decision](model-rights-decision.md)
+[provider procedure](provider-qualification.md) specifies the
+matching-hardware Windows/Linux measurements still needed, while the [rights decision](model-rights-decision.md)
 records what must be resolved before distributing weights.

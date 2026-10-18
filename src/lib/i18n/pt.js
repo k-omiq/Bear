@@ -29,23 +29,15 @@ export const pt = {
         "otherText": "Outro",
         "description": "Descrição (opcional)",
         "example": "Letras pretas grandes ao lado da mão.",
-        "preserve": "Manga Cleaner adiciona instruções para preservar a arte, os contornos dos balões e os detalhes próximos. Você revisará o resultado antes de aplicá-lo.",
+        "preserve": "Manga Cleaner adiciona instruções para preservar a arte, os contornos dos balões e os detalhes próximos. O resultado é aplicado na hora e fica marcado para revisão. Para retirá-lo, use Rejeitar resultado.",
         "cancel": "Cancelar",
         "clean": "Limpar com Qwen",
-        "updateRequired": "Atualize o Qwen na nuvem para usar descrições e a receita de apagamento de 8 passos."
-    },
-    "review": {
-        "title": "Revisar limpeza do Qwen",
-        "help": "Confira se o texto sumiu e a arte está intacta. Usar resultado aplica esta prévia combinada à página.",
-        "before": "Antes",
-        "after": "Depois",
-        "retryCost": "Tentar novamente faz outra solicitação paga na nuvem.",
-        "discard": "Descartar",
-        "retry": "Tentar novamente",
-        "use": "Usar resultado",
-        "expired": "Esta revisão expirou. O resultado não foi aplicado.",
-        "failed": "Qwen não fez uma alteração suficiente após três sementes. Descreva o texto e tente novamente.",
-        "required": "Este resultado do Qwen está em cache e precisa ser revisado antes de ser aplicado."
+        "updateRequired": "Atualize o Qwen na nuvem para usar descrições e a receita de apagamento de 8 passos.",
+        "helpFlux": "Escolha o tipo de texto. Você pode dizer o que há atrás do texto, para que o redesenho combine. Não é preciso escrever instruções.",
+        "descriptionFlux": "O que há atrás do texto (opcional)",
+        "exampleFlux": "Uma parede de tijolos com a moldura de uma janela.",
+        "preserveFlux": "Só o texto mascarado é redesenhado. O Manga Cleaner adiciona instruções para preservar o desenho. Uma descrição errada desenha a coisa errada, então deixe vazia se não tiver certeza.",
+        "cleanFlux": "Limpar com FLUX"
     }
 },
   app: {
@@ -369,6 +361,13 @@ export const pt = {
       label: 'Ver original',
       hold: 'Só segurando',
       pinned: 'Fixado',
+    },
+    undoLimit: {
+      label: 'Histórico de desfazer',
+      description:
+        'Quantas etapas de desfazer cada capítulo mantém, de {min} a {max}. Um número menor descarta as etapas mais antigas na próxima edição.',
+      outOfRange: 'Digite um número inteiro de {min} a {max}.',
+      saveFailed: 'O tamanho do histórico de desfazer não foi salvo.',
     },
     language: {
       label: 'Idioma',
@@ -1381,6 +1380,8 @@ export const pt = {
     workflow: {
       ocrRescue: 'Usar o leitor de texto Hayai OCR (opcional)',
       ocrRescueDescription: 'Lê cada região neste computador antes da limpeza. Segura arte que não é texto e confirma escrita japonesa, chinesa e coreana incerta. Funciona nas duas políticas de texto.',
+      cleanLatin: 'Limpar texto em inglês',
+      cleanLatinDescription: 'Desligado: o texto que o leitor lê como inglês ou outro idioma em letras latinas fica na página, como região retida que você ainda pode limpar. Ligado: é limpo como o restante. Requer o leitor de texto Hayai OCR.',
       ratingsNote: 'As notas dos motores são estimativas provisórias, não medições de um benchmark comum.',
     },
     cleaner: {
@@ -1964,6 +1965,7 @@ export const pt = {
       retryBlocked: 'Tentar de novo não está disponível para traços de pintura e clone. Pinte por cima ou exclua.',
       retryWider: 'Tentar de novo mais amplo',
       retryWiderHint: 'Limpar de novo com o mesmo motor numa área um pouco maior. Cada clique a aumenta um pouco mais.',
+      rejectResult: 'Rejeitar resultado',
       engine: 'Limpar com',
       engineHint: 'Substituir esta camada usando outro motor, a partir das camadas de baixo',
       textType: 'Tipo de texto',
@@ -2017,6 +2019,8 @@ export const pt = {
       layerLock: 'mudança na trava da camada',
       layerMove: 'movimento da camada',
       layerRotate: 'rotação da camada',
+      cleanRegion: 'limpeza de região',
+      rejectResult: 'rejeição de resultado',
     },
   },
   tools: {
@@ -2254,6 +2258,18 @@ export const pt = {
         chunkRefused: 'um lote não correspondia ao que você confirmou',
         pollTimeout: 'a GPU na nuvem demorou demais para responder',
         submissionUnknown: 'o app não conseguiu saber se ela foi enviada',
+        regionChanged: 'a região mudou enquanto era limpa',
+        regionUnsupported: 'a região não pode ser limpa na GPU na nuvem',
+        busy: 'a região já está sendo limpa na GPU na nuvem',
+        pageBusy: 'uma execução estava trabalhando na página dela',
+        recoveryRequired: 'uma solicitação anterior à nuvem para ela ainda não foi resolvida',
+        local: 'algo deu errado neste computador',
+        providerPaused: 'o provedor da nuvem está pausado nesta versão',
+        editNotApplied: 'sua configuração da nuvem está desatualizada e não devolveu nenhum resultado (atualize-a em Configurações, Nuvem)',
+        weights: 'faltam arquivos de modelo necessários na sua configuração da nuvem',
+        remoteCancelled: 'o provedor a cancelou',
+        cancelled: 'ela foi cancelada',
+        generic: 'o app não recebeu um motivo que saiba expressar',
       },
     },
     run: {
@@ -2404,7 +2420,9 @@ export const pt = {
         remoteCancelled: 'O provedor cancelou a renderização.',
         cancelled: 'Ela foi cancelada.',
         timeout: 'A renderização demorou demais e foi interrompida.',
-        generic: 'Algo deu errado.',
+        providerPaused: 'Este provedor de nuvem está pausado nesta versão. Escolha outro endpoint em Configurações, Nuvem.',
+        editNotApplied: 'Esta configuração na nuvem está desatualizada e não devolveu nenhum resultado. Atualize-a em Configurações, Nuvem, para receber sempre um resultado.',
+        generic: 'O app não recebeu um motivo que saiba expressar.',
       },
       job: {
         title: 'Nuvem',
@@ -2434,6 +2452,9 @@ export const pt = {
       paddingRefreshFailed: 'A margem da máscara foi salva, mas não foi possível atualizar a página. Reabra o capítulo para ver a máscara atualizada.',
       typeFailed: 'Não foi possível alterar o tipo de texto. A região está como estava.',
       approveFailed: 'Não foi possível aprovar a máscara. A região está como estava.',
+      rejectNoMask: 'Este resultado não tem máscara salva, por isso não pode ser rejeitado. Exclua-o para trazer o original de volta.',
+      rejectFailed: 'Não foi possível rejeitar o resultado. A página está como estava.',
+      reapplyFailed: 'Não foi possível restaurar o resultado. A página está como estava.',
     },
     tool: {
       cloneSourceSet: 'Origem do clone definida. Pinte para copiar dela.',
@@ -2463,6 +2484,7 @@ export const pt = {
       refusedLayeredFileSize: 'Este PSD ultrapassaria o limite de 2 GB de tamanho de arquivo. Nada foi gravado. Exporte PNG ou TIFF.',
       refusedLayeredCount: 'Esta página tem mais camadas do que um PSD comporta. Nada foi gravado. Exporte um PNG ou TIFF mesclado.',
       refusedDestination: 'Esse destino não é um lugar onde esta exportação possa gravar. Nada foi gravado. Escolha uma nova pasta ou informe um caminho completo a partir da raiz do disco.',
+      destinationUnavailable: 'Não é possível criar a pasta de exportação {path}. A unidade ou a pasta que a contém não está conectada, ou não permite gravação. Nada foi gravado. Conecte a unidade ou escolha outra pasta.',
       refusedStitchPaginated: 'Um arquivo para o capítulo é um layout de tira longa, e este projeto é paginado. Nada foi gravado. As páginas são imagens separadas, e empilhá-las criaria um documento que não tem original.',
       refusedStitchedArchive: 'Um CBZ guarda um arquivo por página, então não comporta um arquivo para o capítulo. Nada foi gravado. Exporte o capítulo como um único PNG ou TIFF, ou mantenha o arquivo compactado e exporte por página.',
       stitchRefused: {

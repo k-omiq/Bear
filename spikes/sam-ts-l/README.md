@@ -1,8 +1,10 @@
 # SAM-TS-L mask export proof
 
+This experiment measures whether a mask-only ONNX export of the pinned SAM-TS-L text model reproduces its PyTorch masks and how it runs on local providers; it is not shipped code.
+
 `export_mask.py` reconstructs the pinned Koharu `vit_l` model, verifies the
 full safetensors SHA-256, and strictly loads every checkpoint key. It follows
-the pinned `inference.py` image preparation and mask restoration. Its two
+the pinned upstream Koharu `inference.py` image preparation and mask restoration (fetched into the ignored `artifacts/` directory by `fetch_sources.sh`; not committed). Its two
 ONNX outputs cover only the trained encoder/adapters and the learned modal
 aligner plus high-resolution text-mask path. The full source model runs for
 the independent PyTorch reference.
@@ -27,18 +29,18 @@ The default output directory is `artifacts/proof`, which keeps the large local
 graphs, weights, and uncompressed arrays out of version control. Compact
 copies of the fixture arrays, manifest, parity metrics, and benchmark results
 are in `fixtures/` and `results/`; see `REPORT.md` for measurements and
-limitations. `manifest.json` records the
+limitations. `manifest.json` (written when the spike runs; not committed) records the
 strictly loaded keys, the live mask-path key set, omitted keys, ONNX IR/opset,
-operators, initializers, external data files, sizes, and hashes. `parity.json`
+operators, initializers, external data files, sizes, and hashes. `parity.json` (written when the spike runs; not committed)
 records actual maximum/mean/RMS differences and changed restored mask pixels;
 it does not impose an arbitrary acceptance threshold. Fixed `.npy` arrays
-include prepared RGB, normalized RGB, PyTorch embeddings/logits, ONNX stage
+include prepared RGB, normalised RGB, PyTorch embeddings/logits, ONNX stage
 outputs, and restored masks. The PNG masks are convenient visual copies.
 
 The encoder input is `[1,3,1024,1024]` RGB float32 in 0–255 with PIL bilinear
-resize and top-left placement on RGB-128 canvas. It normalizes internally.
+resize and top-left placement on RGB-128 canvas. It normalises internally.
 The text head consumes `[1,256,64,64]` embeddings and emits
-`[1,1,1024,1024]` float32 logits. Threshold, crop, and nearest-neighbor
+`[1,1,1024,1024]` float32 logits. Threshold, crop, and nearest-neighbour
 restoration remain outside ONNX. There is no OCR dependency.
 
 After reviewing CPU parity, `benchmark.py --parity-confirmed` measures graph
@@ -133,7 +135,7 @@ spikes/sam-ts-l/artifacts/ort-webgpu-venv/bin/python spikes/sam-ts-l/benchmark.p
   --parity-confirmed --provider webgpu --stage chain --warmups 1 --repeats 2 \
   --timeout-seconds 120 --output spikes/sam-ts-l/artifacts/proof/benchmark-webgpu.json
 spikes/sam-ts-l/artifacts/ort-webgpu-venv/bin/python spikes/sam-ts-l/run_real_pages.py \
-  --source-dir '/Users/caved/Downloads/apocalypse/109' --pages 07 08 09 --provider webgpu
+  --source-dir '<chapter-dir>' --pages 07 08 09 --provider webgpu
 ```
 
 `run_real_pages.py` uses PIL/NumPy preparation and needs no PyTorch import.
@@ -152,7 +154,7 @@ available, and `cuda` when the installed PyTorch build and NVIDIA device make
 CUDA available. Use `--list-backends` for machine-readable availability before
 offering a device choice. Selection is explicit; an unavailable device fails
 before model loading. PyTorch MPS CPU fallback is disabled. CUDA and MPS work
-are synchronized before latency is recorded. A CUDA run also reports PyTorch
+are synchronised before latency is recorded. A CUDA run also reports PyTorch
 allocator peaks, which are not a measure of all device memory use.
 
 ```sh
@@ -225,7 +227,7 @@ disabled before PyTorch is imported.
 
 ```sh
 spikes/sam-ts-l/artifacts/venv/bin/python spikes/sam-ts-l/run_chapter_torch.py \
-  --source-dir /Users/caved/Downloads/apocalypse/109 \
+  --source-dir <chapter-dir> \
   --output-dir spikes/sam-ts-l/artifacts/examples/chapter-109-torch-mps \
   --device mps
 ```
@@ -234,6 +236,6 @@ For a quick first-page check, add `--limit 1` and choose a different output
 directory. Outputs under `artifacts/` are ignored by Git because they contain
 local comic-derived images. The script also accepts `--device cpu` or
 `--device cuda` when the corresponding PyTorch build and hardware support it.
-The completed chapter 109 run has a labeled `contact-sheet.png`, `masks.zip`
-containing all 45 PNGs, and `package.json` in its output directory. Compact
+The completed chapter 109 run has a labelled `contact-sheet.png`, `masks.zip`
+containing all 45 PNGs, and `package.json` in its output directory (written when the spike runs; not committed). Compact
 measurements and artifact hashes are in `results/chapter-109-torch-mps.json`.
