@@ -179,8 +179,8 @@ Providers are picked per model from runtime hardware detection and suitability b
 | Platform | Providers | Default | Status |
 |---|---|---|---|
 | macOS (Apple Silicon) | WebGPU, CoreML, CPU | WebGPU for manga-LaMa, CoreML for the detector, CPU for script ID and balloon | Measured on Apple M-series |
-| Windows (x64 / arm64) | DirectML, WebGPU (plugin), CPU | DirectML, which supplies `DFT` for GPU inpainting on NVIDIA, AMD, and Intel; the WebGPU plugin beside it | Designed; unmeasured on real hardware |
-| Windows (x64, NVIDIA) | CUDA 12/13, TensorRT, WebGPU (plugin), CPU | Optional flavour; detector on CUDA, and since CUDA lacks `DFT`, LaMa runs on the WebGPU plugin | Optional; needs user-installed CUDA and cuDNN |
+| Windows (x64 / arm64) | DirectML, WebGPU (plugin), CPU | DirectML for GPU detection and inpainting on NVIDIA, AMD, and Intel; the WebGPU plugin beside it | Designed; unmeasured on real hardware |
+| Windows (x64, NVIDIA) | CUDA 12/13, TensorRT, WebGPU (plugin), CPU | Optional flavour; detector and LaMa on CUDA, the WebGPU plugin as the fallback | Optional; needs user-installed CUDA and cuDNN |
 | Linux (x64) | WebGPU (plugin), CPU | WebGPU plugin over Vulkan (NVIDIA, AMD, Intel; needs the system Vulkan loader) | Designed; unmeasured on real hardware |
 | Linux (x64, NVIDIA) | CUDA 12/13, TensorRT, WebGPU (plugin), CPU | Optional flavour, same terms as Windows | Optional; unmeasured on real hardware |
 | Linux (aarch64) | CPU | CPU | Best effort; no CUDA archive or plugin is published |

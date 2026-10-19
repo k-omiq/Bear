@@ -32,7 +32,7 @@
 //! `onnxruntime_providers_webgpu` per platform - rather than compiling it into
 //! every general release. The macOS archive still has it built in; the
 //! Windows and Linux ones do not, and the plugin is what gives them the one
-//! cross-vendor provider with a `DFT` kernel ([`crate::accel`]). [`package`]
+//! cross-vendor GPU provider ([`crate::accel`]). [`package`]
 //! puts it beside the runtime on those platforms, and [`load`] registers it
 //! when it is there: [`WEBGPU_PLUGIN_NAME`] in the runtime's own directory,
 //! registered once, and reported through [`webgpu_plugin`] rather than

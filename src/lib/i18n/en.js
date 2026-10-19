@@ -1785,8 +1785,8 @@ export const en = {
     sidecar: 'Helper app',
     declined: {
       unavailable: 'not available in this runtime',
-      // A provider without a `DFT` kernel does not fail, it makes
-      // the graph split and run slower.
+      // A provider missing operators the graph needs does not fail, it
+      // makes the graph split and run slower.
       partitioned: 'it would split this model and run it slower',
       failed: 'it could not build a session for this model',
       // Forcing CoreML costs 8.19 GB on rung 2 and 5.62 GB on

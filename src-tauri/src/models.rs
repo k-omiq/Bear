@@ -342,8 +342,10 @@ pub(crate) fn supports_model(id: &str, accelerator: Accelerator, host: Option<cl
         "hayai" => accelerator == Accelerator::Cuda && host.is_some_and(|h| matches!(h.os, Os::Windows | Os::Linux)),
         // Every GPU provider the platform has but CoreML: the forced session
         // keeps the CPU fallback for what the provider cannot hold
-        // (`accel::LAMA.partitioned_on`). CoreML is left out: it has no `DFT`,
-        // measured slower than the CPU, and peaked at 8.4 GB (`accel::LAMA`).
+        // (`accel::LAMA.partitioned_on`). CoreML is left out: it has no builder
+        // for `Einsum`, `Range`, `ConstantOfShape` or `Neg`, so the graph splits
+        // into CPU islands; it measured slower than the CPU and peaked at
+        // 8.4 GB (`accel::LAMA`).
         "inpainter" => match accelerator {
             Accelerator::WebGpu => true,
             Accelerator::DirectMl => host.is_some_and(|h| h.os == Os::Windows),
@@ -376,7 +378,7 @@ fn accelerators_configured(
     // SAM's automatic route deliberately uses CPU. Its model category and
     // memory requirement differ from the much smaller RT-DETR graph.
     const SAM_PROFILE: accel::ModelProfile = accel::ModelProfile {
-        name: "sam-ts-l", label_key: "models.kind.textDetector", uses_dft: false,
+        name: "sam-ts-l", label_key: "models.kind.textDetector", cpu_islands_on: &[],
         measured_better: &[], unmeasured_candidates: &[],
         measured_peak_rss: &[(Accelerator::Cpu, 8_547_975_168)], partitioned_on: &[],
     };

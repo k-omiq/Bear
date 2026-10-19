@@ -7,40 +7,48 @@
 //! DirectML on any Direct3D 12 GPU (so NVIDIA, AMD and Intel alike), CUDA or
 //! TensorRT where they are installed, WebGPU as a cross-vendor fallback.
 //!
-//! ## Why the inpainter still defaults to the CPU
+//! ## Why the inpainter stays off CoreML
 //!
-//! One operator decides it. LaMa's fast Fourier convolutions need `DFT`, and in
-//! ONNX Runtime **`DFT` is implemented by three providers only** -
-//! `core/providers/cpu/signal/dft.cc`,
-//! `dml/DmlExecutionProvider/src/Operators/DmlDFT.h` and
-//! `webgpu/math/dft.cc`. There is no CUDA, ROCm, CoreML, OpenVINO or TensorRT
-//! implementation.
+//! The operators decide it, and `DFT` is not one of them. The shipped
+//! `lama-manga.onnx` has no `DFT` node: its Fourier units are Carve's
+//! matrix-product form, `MatMul` and `Einsum` against `Cos` and `Sin` matrices
+//! built at run time from `Range`. Counted with the `onnx` package on
+//! 2026-10-19 (`docs/research/big-lama.md`, section 1): 17,472 nodes, of them
+//! 216 `MatMul`, 216 `Einsum`, 144 `Cos`, 144 `Sin`, 180 `Range`, 98
+//! `ConstantOfShape` and 36 `Neg`.
 //!
+//! ONNX Runtime's CoreML provider has no builder for `Einsum`, `Range`,
+//! `ConstantOfShape` or `Neg` (`coreml/builders/op_builder_factory.cc`).
 //! When a provider cannot run an operator, ONNX Runtime does not fail: it
 //! partitions the graph, gives the provider what it can take, and keeps the
-//! rest on the CPU - with a tensor copy at every boundary. LaMa's FFT blocks
-//! sit in the middle of the network, so the partition is not a tail that can be
+//! rest on the CPU - with a tensor copy at every boundary. LaMa's Fourier units
+//! sit in every residual block, so the partition is not a tail that can be
 //! sliced off; it is a dozen round trips. Measured: CoreML runs
 //! LaMa at **3197 ms against 2719 ms on the CPU alone**, after a 23.7 s session
-//! build. That is the mechanism, and it applies to CUDA for the same reason.
+//! build. That is the mechanism, and [`ModelProfile::cpu_islands_on`] is where
+//! it is written down.
 //!
-//! **DirectML and WebGPU are the exceptions.** Both implement `DFT`, so on
-//! either the whole graph is resident and there is no partition to pay for.
-//! Which of them a machine gets is a packaging question, not a preference -
-//! see [`crate::runtime::package`]: the macOS build carries WebGPU, the Windows
+//! WebGPU holds all of it but the shape arithmetic, measured. DirectML and CUDA
+//! are expected to hold the Fourier units too, but neither has been run on this
+//! graph on a desktop, so both are [`ModelProfile::unmeasured_candidates`]
+//! rather than measured winners. The cloud worker runs the same file on CUDA
+//! (`deploy/cloud/common/flux.py`, `LamaFill`), which shows the CUDA provider
+//! accepts it, not how fast it is against the CPU. Which provider a machine
+//! gets is a packaging question, not a preference - see
+//! [`crate::runtime::package`]: the macOS build carries WebGPU, the Windows
 //! build carries DirectML, and **the WebGPU plugin rides beside every Windows
-//! and Linux x64 runtime**, so every platform but Linux aarch64 has a
-//! `DFT`-capable GPU provider whatever its vendor.
+//! and Linux x64 runtime**, so every platform but Linux aarch64 has a GPU
+//! provider for the inpainter whatever its vendor.
 //!
 //! ## Windows: one GPU provider for all three vendors, and CUDA beside it
 //!
 //! DirectML is Direct3D 12, so **NVIDIA, AMD and Intel all reach it through the
 //! same download** - there is no per-vendor package to pick and no *vendor*
-//! runtime for the user to install. It also has the `DFT` kernel, so the
-//! inpainter is on the GPU there exactly as it is on a Mac. That is why
-//! [`crate::runtime::package::Flavour::DirectMl`] is the Windows default and why
-//! this module needs nothing vendor-specific to make a Windows machine as busy
-//! as an Apple one.
+//! runtime for the user to install. The inpainter is its first candidate, as
+//! the detector's, so the GPU does the work there as it does on a Mac. That is
+//! why [`crate::runtime::package::Flavour::DirectMl`] is the Windows default
+//! and why this module needs nothing vendor-specific to make a Windows machine
+//! as busy as an Apple one.
 //!
 //! **There is one user-side install after all, and it is not a vendor's.**
 //! Parsing the PE import directory of the shipped
@@ -58,13 +66,13 @@
 //! that lacks it is common is not something this repository can say; it has
 //! never run there.
 //!
-//! CUDA is offered as a **second flavour and never as the default**, and the
-//! reason is this file's own rule rather than a preference. The two Windows
-//! builds are different `onnxruntime.dll`s and the process loads exactly one, so
-//! taking CUDA means giving up DirectML - and CUDA has no `DFT` kernel, so
-//! [`Preference::Automatic`] never puts LaMa on it. What keeps the inpainter on
-//! the GPU on that flavour is the WebGPU plugin unpacked beside it: an NVIDIA
-//! user on CUDA gets the detector on CUDA and LaMa on WebGPU. Linux x64 has
+//! CUDA is offered as a **second flavour and never as the default**. The two
+//! Windows builds are different `onnxruntime.dll`s and the process loads
+//! exactly one, so taking CUDA means giving up DirectML, which reaches every
+//! vendor, for a provider that reaches one vendor and needs a toolkit the user
+//! installs. On that flavour an NVIDIA user gets the detector and LaMa on CUDA,
+//! both unmeasured, and the WebGPU plugin unpacked beside it is what
+//! [`Preference::Automatic`] falls to when CUDA is not usable. Linux x64 has
 //! the same two CUDA flavours on the same terms.
 //!
 //! ## Every figure below is an Apple M5's, and the other platforms are told so
@@ -79,9 +87,9 @@
 //! [`ModelProfile::unmeasured_candidates`] **before** the Mac's measured
 //! winners. The second rule is what makes a downloaded flavour mean
 //! something: on the DirectML flavour the detector and the inpainter both
-//! land on DirectML, on a CUDA flavour the detector lands on CUDA, and WebGPU
-//! takes whatever the platform's candidates could not - which on every CUDA
-//! flavour is LaMa. A Mac reads the table exactly as before.
+//! land on DirectML, on a CUDA flavour both land on CUDA, and WebGPU takes
+//! whatever the platform's candidates could not. A Mac reads the table exactly
+//! as before.
 //!
 //! CUDA also needs components this application does not ship - the CUDA runtime
 //! and cuDNN 9 - which no other provider here does. [`Accelerator::availability`]
@@ -107,8 +115,8 @@
 //! | script-ID 48×200 | **2 ms** | - | 8 ms |
 //!
 //! So the inpainter is not CPU-bound after all - it is 1.9× faster on the GPU
-//! than the best CPU thread count, through the one provider that has the
-//! operator. And **no single provider wins**: the detector belongs on CoreML,
+//! than the best CPU thread count, through the one measured provider that
+//! holds its Fourier units. And **no single provider wins**: the detector belongs on CoreML,
 //! the inpainter on WebGPU, and the small models on the CPU, where the
 //! transfer costs more than the compute. That is why the choice is per model
 //! and why every entry below cites a measurement.
@@ -139,7 +147,7 @@
 //! | manga-LaMa | WebGPU | 740 MB | 986 ms |
 //! | manga-LaMa | **CoreML** | **8.19 GB** | 1856 ms |
 //!
-//! It is not reachable automatically - [`Accelerator::implements_dft`] keeps
+//! It is not reachable automatically - [`ModelProfile::cpu_islands_on`] keeps
 //! LaMa off CoreML - but the provider override is a per-install setting, so a
 //! user can ask for it. An 8 GB working set is not a slow setting. On a machine
 //! that cannot carry it, it is the failure the memory rule names: *"a runaway
@@ -228,8 +236,7 @@ pub enum Accelerator {
     Rocm,
     /// Intel CPUs, GPUs and NPUs.
     OpenVino,
-    /// Cross-vendor and cross-platform, and one of the three providers that
-    /// implements `DFT`.
+    /// Cross-vendor and cross-platform.
     WebGpu,
     /// CPU, but with hand-written kernels that are often faster than the
     /// default ones on ARM.
@@ -266,16 +273,6 @@ impl Accelerator {
             Accelerator::WebGpu => "accel.webgpu",
             Accelerator::Xnnpack => "accel.xnnpack",
         }
-    }
-
-    /// Whether this provider has a `DFT` kernel.
-    ///
-    /// Read off ONNX Runtime's own source tree, not inferred: `dft` appears
-    /// under `providers/cpu`, `providers/dml` and `providers/webgpu`, and
-    /// nowhere else. A model containing `DFT` on any other provider is a
-    /// partitioned graph with a CPU island in the middle of it.
-    pub fn implements_dft(self) -> bool {
-        matches!(self, Accelerator::Cpu | Accelerator::DirectMl | Accelerator::WebGpu)
     }
 
     /// Whether this provider needs something the **user** installs, which this
@@ -645,9 +642,14 @@ pub struct ModelProfile {
     /// name the same thing the same way. A key rather than a name because no
     /// English crosses the seam.
     pub label_key: &'static str,
-    /// The graph contains `DFT`. Only [`Accelerator::implements_dft`]
-    /// providers can hold the whole graph; every other one partitions.
-    pub uses_dft: bool,
+    /// Providers with no builder for operators spread through this graph, so
+    /// ONNX Runtime splits it into many CPU islands with a tensor copy at each
+    /// edge, and the run is slower than the CPU alone. `Automatic` never picks
+    /// one; a forced one is honoured and reported as
+    /// `accel.declined.partitioned`. Not the same list as
+    /// [`ModelProfile::partitioned_on`], which is about strict placement and
+    /// includes providers that leave only the shape arithmetic behind.
+    pub cpu_islands_on: &'static [Accelerator],
     /// Providers **measured** to beat the CPU for this model, best first. Empty
     /// means nothing has been measured. Measured on [`MEASURED_ON`] and
     /// nowhere else; [`choose_on`] is what says so to the other platforms.
@@ -657,9 +659,8 @@ pub struct ModelProfile {
     /// measured is present, and says so - `accel.chosen.unmeasured`.
     ///
     /// This exists because the alternative is worse. The Windows GPU package
-    /// carries DirectML and nothing else, DirectML is one of the three
-    /// providers with a `DFT` kernel, and leaving a machine on the CPU because
-    /// the benchmark was run on a Mac would waste a download made for exactly
+    /// carries DirectML and nothing else, and leaving a machine on the CPU
+    /// because the benchmark was run on a Mac would waste a download made for exactly
     /// this. A guess reported as a guess is not the error; a guess written
     /// down as a measurement is.
     pub unmeasured_candidates: &'static [Accelerator],
@@ -700,12 +701,11 @@ impl ModelProfile {
 pub const DETECTOR: ModelProfile = ModelProfile {
     name: "detector",
     label_key: "models.kind.textDetector",
-    uses_dft: false,
+    cpu_islands_on: &[],
     measured_better: &[Accelerator::WebGpu],
     // Windows, in the order the two flavours are offered: DirectML is the
-    // default download and reaches every vendor; CUDA is the opt-in one and is
-    // only ever in this list because the detector has no `DFT` in it. Neither
-    // has been timed.
+    // default download and reaches every vendor; CUDA is the opt-in one.
+    // Neither has been timed.
     unmeasured_candidates: &[Accelerator::DirectMl, Accelerator::Cuda],
     // The detector is the one model `Automatic` sends to CoreML, and its peak
     // there is the budget itself - the ~195 MB session and the ~1.2 GB
@@ -722,7 +722,7 @@ pub const DETECTOR: ModelProfile = ModelProfile {
 pub const BALLOON: ModelProfile = ModelProfile {
     name: "balloon",
     label_key: "models.kind.balloonDetector",
-    uses_dft: false,
+    cpu_islands_on: &[],
     measured_better: &[],
     unmeasured_candidates: &[],
     measured_peak_rss: &[],
@@ -735,7 +735,7 @@ pub const BALLOON: ModelProfile = ModelProfile {
 pub const FULL_RT: ModelProfile = ModelProfile {
     name: "rt-full",
     label_key: "models.kind.balloonDetector",
-    uses_dft: false,
+    cpu_islands_on: &[],
     measured_better: &[],
     unmeasured_candidates: &[],
     measured_peak_rss: &[],
@@ -748,33 +748,34 @@ pub const FULL_RT: ModelProfile = ModelProfile {
 pub const SCRIPT_ID: ModelProfile = ModelProfile {
     name: "script-id",
     label_key: "models.kind.scriptGate",
-    uses_dft: false,
+    cpu_islands_on: &[],
     measured_better: &[],
     unmeasured_candidates: &[],
     measured_peak_rss: &[],
     partitioned_on: &[],
 };
 
-/// `lama-manga.onnx`. The one with `DFT` in it.
+/// `lama-manga.onnx`. No `DFT` node: its Fourier units are `MatMul` and
+/// `Einsum` against `Cos` and `Sin` matrices built from `Range` (counted
+/// 2026-10-19, see the module docs).
 ///
 /// Measured: WebGPU **1311 ms**, CPU 2540 ms at two threads, CoreML 3899 ms
-/// after a 25.7 s session build. The ordering is the `DFT` rule made visible -
-/// the provider that has the kernel is nearly twice the CPU, and the one that
-/// does not is half of it.
+/// after a 25.7 s session build. CoreML is slower because its provider has no
+/// builder for `Einsum`, `Range`, `ConstantOfShape` or `Neg`, so the graph
+/// splits into CPU islands.
 ///
-/// DirectML also has the kernel and is unmeasured; on Windows it is the first
-/// thing to try.
+/// DirectML and CUDA are unmeasured; on Windows DirectML is the first thing to
+/// try, and on a CUDA flavour CUDA is.
 pub const LAMA: ModelProfile = ModelProfile {
     name: "lama",
     label_key: "models.kind.inpainter",
-    uses_dft: true,
+    cpu_islands_on: &[Accelerator::CoreMl],
     measured_better: &[Accelerator::WebGpu],
-    // The Windows GPU path, and **CUDA is deliberately not beside it**. It has
-    // the `DFT` kernel, so the partition that made CoreML slower does not apply
-    // - but nobody has timed it. `choose_within` would filter CUDA out of this
-    // list anyway (`implements_dft`); leaving it out says the same thing where a
-    // reader looks first.
-    unmeasured_candidates: &[Accelerator::DirectMl],
+    // Windows and Linux, in the order the flavours are offered, as for the
+    // detector. Neither has been timed on this graph on a desktop. The cloud
+    // worker runs this file on CUDA, which shows the provider takes it and
+    // says nothing about speed against the CPU.
+    unmeasured_candidates: &[Accelerator::DirectMl, Accelerator::Cuda],
     // Forty sequential regions through one held session, peak process RSS flat
     // from the first region to the fortieth in all three rows. CoreML is
     // eleven times WebGPU.
@@ -787,7 +788,7 @@ pub const LAMA: ModelProfile = ModelProfile {
     // which leaves the shape arithmetic on the CPU: 2808 of 8163 nodes
     // (`Concat`, `Gather`, `Slice`, `Cast` and the like), about 38 ms of a run.
     // Strict placement refuses that graph outright on WebGPU, and every other
-    // GPU provider offered for it lacks at least the shape ops or `DFT`, so a
+    // GPU provider offered for it may leave at least the shape ops behind, so a
     // forced GPU provider keeps the fallback. CoreML is not offered
     // (`models::supports_model`), so it stays strict.
     partitioned_on: &[Accelerator::WebGpu, Accelerator::DirectMl, Accelerator::Cuda],
@@ -814,7 +815,7 @@ pub const LAMA: ModelProfile = ModelProfile {
 pub const OCR: ModelProfile = ModelProfile {
     name: "ocr",
     label_key: "models.kind.ocr",
-    uses_dft: false,
+    cpu_islands_on: &[],
     measured_better: &[],
     unmeasured_candidates: &[],
     measured_peak_rss: &[],
@@ -855,7 +856,7 @@ pub const OCR: ModelProfile = ModelProfile {
 pub const HAYAI: ModelProfile = ModelProfile {
     name: "hayai",
     label_key: "models.kind.hayai",
-    uses_dft: false,
+    cpu_islands_on: &[],
     measured_better: &[],
     unmeasured_candidates: &[Accelerator::Cuda],
     measured_peak_rss: &[],
@@ -915,7 +916,7 @@ impl Selection {
 /// any platform gets when its own probe fails. It stopped being "every platform
 /// but macOS" once Windows and Linux got a probe of their own. It is the
 /// whole of the selection logic apart from the memory gate, so every rule
-/// about `DFT`, measured winners and unmeasured candidates is testable
+/// about split graphs, measured winners and unmeasured candidates is testable
 /// without a machine.
 pub fn choose(profile: &ModelProfile, preference: Preference, available: &[Accelerator]) -> Selection {
     choose_within(profile, preference, available, None)
@@ -938,9 +939,9 @@ pub const MEASURED_ON: Os = Os::MacOs;
 /// - **The platform's own candidates come before the Mac's winners.** A
 ///   candidate row exists for a provider that is not on a Mac at all, and it
 ///   was written for the machine that has it - so on the DirectML flavour
-///   both GPU models go to DirectML, and on a CUDA flavour the detector goes to
-///   CUDA rather than to the plugin beside it. WebGPU then takes what the
-///   candidates could not, which is LaMa on every CUDA flavour.
+///   both GPU models go to DirectML, and on a CUDA flavour both go to CUDA
+///   rather than to the plugin beside it. WebGPU then takes what the
+///   candidates could not.
 ///
 /// `host` is `None` for a platform this build cannot name, which is treated
 /// as unmeasured because it is.
@@ -970,9 +971,9 @@ pub fn choose_on(
 }
 
 /// [`Preference::Automatic`]'s one rule about a provider: it is present, and
-/// it would not partition a `DFT` graph.
+/// it would not split the graph into CPU islands.
 fn usable_automatically(profile: &ModelProfile, available: &[Accelerator], a: Accelerator) -> bool {
-    (a == Accelerator::Cpu || available.contains(&a)) && (!profile.uses_dft || a.implements_dft())
+    (a == Accelerator::Cpu || available.contains(&a)) && !profile.cpu_islands_on.contains(&a)
 }
 
 /// Pick a provider for one model, against the room this machine has.
@@ -1008,7 +1009,7 @@ pub fn choose_within(
                     note: None,
                 };
             }
-            // **The memory gate**, and it fires before the `DFT` one because
+            // **The memory gate**, and it fires before the split-graph one because
             // its answer is different in kind: the partition costs seconds and
             // this costs the machine. It fires only where all three of a
             // measurement, a room figure and an overrun exist - a provider
@@ -1028,7 +1029,7 @@ pub fn choose_within(
                     };
                 }
             }
-            if profile.uses_dft && !wanted.implements_dft() {
+            if profile.cpu_islands_on.contains(&wanted) {
                 // Honoured, and reported. The user asked for it and it will
                 // work; it will also be slower than the CPU, and saying so is
                 // the difference between a setting and a trap.
@@ -1042,7 +1043,7 @@ pub fn choose_within(
         }
 
         Preference::Automatic => {
-            // A provider that would partition a `DFT` graph is never chosen
+            // A provider that would split the graph into CPU islands is never chosen
             // automatically, whatever else is known about it.
             let usable = |a: &Accelerator| usable_automatically(profile, available, *a);
 
@@ -1262,27 +1263,15 @@ mod tests {
     }
 
     #[test]
-    fn only_three_providers_implement_the_operator_lama_needs() {
-        // Read off ONNX Runtime's source tree. If this ever changes, the whole
-        // of LAMA's default changes with it.
-        assert!(Accelerator::Cpu.implements_dft());
-        assert!(Accelerator::DirectMl.implements_dft());
-        assert!(Accelerator::WebGpu.implements_dft());
-        for other in [Accelerator::CoreMl, Accelerator::Cuda, Accelerator::TensorRt, Accelerator::Rocm] {
-            assert!(!other.implements_dft(), "{other:?}");
-        }
-    }
-
-    #[test]
-    fn automatic_never_partitions_a_dft_graph() {
-        // Even if CUDA were measured faster for something else, LaMa must not
-        // land there by default: the partition is what made CoreML slower.
+    fn automatic_never_picks_a_provider_that_splits_the_graph() {
+        // Even if a list names it, a provider that leaves CPU islands all
+        // through the graph is skipped: the split is what made CoreML slower.
         let profile = ModelProfile {
             name: "test",
             label_key: "models.kind.inpainter",
-            uses_dft: true,
-            measured_better: &[Accelerator::Cuda, Accelerator::CoreMl],
-            unmeasured_candidates: &[Accelerator::Cuda],
+            cpu_islands_on: &[Accelerator::CoreMl],
+            measured_better: &[Accelerator::CoreMl],
+            unmeasured_candidates: &[Accelerator::CoreMl],
             measured_peak_rss: &[],
             partitioned_on: &[],
         };
@@ -1290,9 +1279,20 @@ mod tests {
         assert_eq!(chosen.accelerator, Accelerator::Cpu);
         assert_eq!(chosen.declined, None);
 
-        // DirectML holds the whole graph, so it is allowed through.
-        let with_dml = ModelProfile { measured_better: &[Accelerator::DirectMl], ..profile };
-        assert_eq!(choose(&with_dml, Preference::Automatic, &ALL).accelerator, Accelerator::DirectMl);
+        // A provider not on that list is allowed through.
+        let with_cuda = ModelProfile { measured_better: &[Accelerator::CoreMl, Accelerator::Cuda], ..profile };
+        assert_eq!(choose(&with_cuda, Preference::Automatic, &ALL).accelerator, Accelerator::Cuda);
+    }
+
+    #[test]
+    fn lama_has_no_dft_and_only_coreml_splits_it() {
+        // `lama-manga.onnx` has no `DFT` node (counted 2026-10-19), so no
+        // operator rule keeps CUDA away from it. CoreML lacks `Einsum`,
+        // `Range`, `ConstantOfShape` and `Neg`, and that is the one split.
+        assert_eq!(LAMA.cpu_islands_on, &[Accelerator::CoreMl]);
+        assert_eq!(LAMA.unmeasured_candidates, &[Accelerator::DirectMl, Accelerator::Cuda]);
+        assert!(!LAMA.measured_better.contains(&Accelerator::Cuda), "CUDA is not measured");
+        assert!(!LAMA.measured_better.contains(&Accelerator::DirectMl), "DirectML is not measured");
     }
 
     #[test]
@@ -1320,9 +1320,9 @@ mod tests {
     /// download ([`crate::runtime::package`]).
     #[test]
     fn the_two_windows_flavours_route_every_model_the_way_the_package_table_promises() {
-        // The DirectML download: one provider, all three GPU vendors, and it
-        // has the `DFT` kernel - so every model that belongs on a GPU is on one,
-        // the inpainter included. This is the row that makes Windows as busy as
+        // The DirectML download: one provider, all three GPU vendors, and the
+        // first candidate for both GPU models - so every model that belongs on
+        // a GPU is on one, the inpainter included. This is the row that makes Windows as busy as
         // a Mac.
         let directml = [Accelerator::DirectMl];
         for profile in [LAMA, DETECTOR] {
@@ -1333,22 +1333,20 @@ mod tests {
         }
 
         // The CUDA download: TensorRT rides along in the same archive, and
-        // the archive alone has no operator for the inpainter, so on its own
-        // it sends LaMa **back to the CPU**. Nothing here may quietly put LaMa
-        // on CUDA.
+        // both GPU models go to CUDA, flagged, because neither was timed there.
         let cuda = [Accelerator::Cuda, Accelerator::TensorRt];
-        assert_eq!(choose(&LAMA, Preference::Automatic, &cuda).accelerator, Accelerator::Cpu);
-        let chosen = choose(&DETECTOR, Preference::Automatic, &cuda);
-        assert_eq!(chosen.accelerator, Accelerator::Cuda, "{}", DETECTOR.name);
-        assert!(!chosen.is_measured(), "{}", DETECTOR.name);
+        for profile in [LAMA, DETECTOR] {
+            let chosen = choose(&profile, Preference::Automatic, &cuda);
+            assert_eq!(chosen.accelerator, Accelerator::Cuda, "{}", profile.name);
+            assert!(!chosen.is_measured(), "{}", profile.name);
+        }
 
-        // With the WebGPU plugin the package unpacks beside it, the inpainter
-        // has its provider back - and the detector, on this platform, stays
-        // where the flavour put it. Both guesses, both said so.
+        // With the WebGPU plugin the package unpacks beside it, both models
+        // still stay where the flavour put them. Both guesses, both said so.
         let windows = Some(Platform { os: Os::Windows, arch: Arch::X86_64 });
         let cuda_with_plugin = [Accelerator::Cuda, Accelerator::TensorRt, Accelerator::WebGpu];
         let lama = choose_on(&LAMA, Preference::Automatic, &cuda_with_plugin, None, windows);
-        assert_eq!(lama.accelerator, Accelerator::WebGpu);
+        assert_eq!(lama.accelerator, Accelerator::Cuda);
         assert_eq!(lama.note, Some("accel.chosen.unmeasured"));
         let detector = choose_on(&DETECTOR, Preference::Automatic, &cuda_with_plugin, None, windows);
         assert_eq!(detector.accelerator, Accelerator::Cuda);
@@ -1369,18 +1367,17 @@ mod tests {
     }
 
     /// **The three Linux x64 flavours and the one aarch64 build, end to end.**
-    /// Every x64 flavour keeps the inpainter on the GPU through the plugin, a
-    /// CUDA flavour puts the detector on CUDA, and every one of those is a
-    /// guess said aloud. Linux aarch64 is the CPU, and that is not a guess.
+    /// Every x64 flavour keeps the inpainter on the GPU, a CUDA flavour puts
+    /// both GPU models on CUDA, and every one of those is a guess said aloud. Linux aarch64 is the CPU, and that is not a guess.
     #[test]
     fn every_linux_flavour_keeps_the_inpainter_on_the_gpu_except_the_one_with_no_gpu() {
         let linux = Some(Platform { os: Os::Linux, arch: Arch::X86_64 });
         let stock = [Accelerator::WebGpu];
         let cuda = [Accelerator::Cuda, Accelerator::TensorRt, Accelerator::WebGpu];
 
-        for available in [stock.as_slice(), cuda.as_slice()] {
+        for (available, expected) in [(stock.as_slice(), Accelerator::WebGpu), (cuda.as_slice(), Accelerator::Cuda)] {
             let lama = choose_on(&LAMA, Preference::Automatic, available, None, linux);
-            assert_eq!(lama.accelerator, Accelerator::WebGpu);
+            assert_eq!(lama.accelerator, expected);
             assert_eq!(lama.note, Some("accel.chosen.unmeasured"));
             assert!(!lama.is_measured());
         }
@@ -1513,9 +1510,9 @@ mod tests {
     }
 
     #[test]
-    fn the_inpainter_goes_to_the_gpu_that_has_the_operator() {
-        // Measured 1311 ms against 2540 ms. The rule that keeps it off CoreML
-        // is the same rule that lets it onto WebGPU.
+    fn the_inpainter_goes_to_the_measured_gpu_and_never_to_coreml() {
+        // Measured 1311 ms against 2540 ms. CoreML splits the graph, so a Mac
+        // with nothing else stays on the CPU.
         assert_eq!(choose(&LAMA, Preference::Automatic, &ALL).accelerator, Accelerator::WebGpu);
         let apple_only = [Accelerator::CoreMl];
         assert_eq!(choose(&LAMA, Preference::Automatic, &apple_only).accelerator, Accelerator::Cpu);

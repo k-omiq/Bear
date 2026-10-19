@@ -1,8 +1,8 @@
 //! The geometry a model rung is run inside, held apart from the model.
 //!
 //! This was extracted when the ladder carried **two** in-process model rungs  - 
-//! the manga-finetuned LaMa, with a fixed 512² float input and `DFT` in the
-//! middle of it, and MI-GAN, a 28 MB GAN pipeline with dynamic uint8 tensors
+//! the manga-finetuned LaMa, with a fixed 512² float input and matrix-product
+//! Fourier units in the middle of it, and MI-GAN, a 28 MB GAN pipeline with dynamic uint8 tensors
 //! and an inverted mask. They differed in almost everything a reader would
 //! notice, and yet the geometry they were run inside was the same geometry,
 //! because it is the pipeline's and not the model's.

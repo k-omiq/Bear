@@ -798,9 +798,9 @@ export function setFluxBackend(backend) {
  * Which execution provider the next session is built on.
  *
  * `auto` - the default and the right answer for almost everybody - lets
- * `cleaner_core::accel` choose per model, which is not one answer: the
- * inpainter needs a `DFT` kernel that CUDA does not have, so a machine can
- * correctly run the detector on the GPU and LaMa on the CPU. `cpu` pins
+ * `cleaner_core::accel` choose per model, which is not one answer: CoreML
+ * splits the inpainter's graph, so a Mac can correctly run the detector on
+ * CoreML and LaMa on WebGPU or the CPU. `cpu` pins
  * everything to the CPU, and a provider id forces that one and is **refused
  * with a reason** where it cannot be had rather than silently ignored.
  *

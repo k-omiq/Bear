@@ -889,8 +889,8 @@ mod tests {
     }
 
     /// `ScatterND` is the CPU-EP non-determinism case. That operator was in
-    /// MI-GAN's graph rather than this one's - LaMa's is `DFT` - so the rung
-    /// this ladder kept is the determinable one. Confirmed rather than assumed,
+    /// MI-GAN's graph and is not in this one's, so the rung this ladder kept
+    /// is the determinable one. Confirmed rather than assumed,
     /// which is why the test outlived the engine it was distinguishing this one
     /// from.
     #[test]

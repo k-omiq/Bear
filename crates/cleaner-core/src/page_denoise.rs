@@ -66,7 +66,7 @@ pub const BLEND_SIZE: usize = 16;
 pub const PROFILE: ModelProfile = ModelProfile {
     name: "pageDenoise",
     label_key: "models.kind.pageDenoise",
-    uses_dft: false,
+    cpu_islands_on: &[],
     measured_better: &[Accelerator::WebGpu],
     unmeasured_candidates: &[],
     measured_peak_rss: &[],
@@ -77,7 +77,7 @@ pub const PROFILE: ModelProfile = ModelProfile {
 pub const SEAM_PROFILE: ModelProfile = ModelProfile {
     name: "pageDenoiseSeams",
     label_key: "models.kind.pageDenoiseSeams",
-    uses_dft: false,
+    cpu_islands_on: &[],
     measured_better: &[],
     unmeasured_candidates: &[],
     measured_peak_rss: &[],

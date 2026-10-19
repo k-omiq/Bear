@@ -37,8 +37,8 @@
 //!
 //! So the GPU path differs by platform and neither choice is ours: **macOS gets
 //! WebGPU built in, Windows gets DirectML, and the stock Windows and Linux
-//! archives get nothing.** DirectML and WebGPU both implement `DFT`, which is
-//! the operator that decides whether the inpainter can leave the CPU at all
+//! archives get nothing.** CoreML splits the inpainter's graph into CPU
+//! islands, so on a Mac WebGPU is what takes it off the CPU
 //! ([`crate::accel`]).
 //!
 //! ## The WebGPU plugin closes the gap on Windows and Linux
@@ -48,11 +48,11 @@
 //! 1.24.4 or later ([`crate::runtime::load`] does it), and built for win-x64,
 //! win-arm64, linux-x64 and osx-arm64. It is Dawn over Direct3D 12 on Windows
 //! and over Vulkan on Linux, so **it reaches NVIDIA, AMD and Intel alike** and
-//! is the one provider with a `DFT` kernel that every platform but Linux
+//! is the one GPU provider for the inpainter that every platform but Linux
 //! aarch64 can have. Every Windows and Linux x64 row below carries it as a
-//! companion artefact: on the DirectML flavour it is a second `DFT`-capable
-//! provider, on the CUDA flavours it is the one that keeps the inpainter on
-//! the GPU, and on the stock Linux build it is the whole of the GPU path. On
+//! companion artefact: on the DirectML and CUDA flavours it is the fallback
+//! when the flavour's own provider is not usable, and on the stock Linux build
+//! it is the whole of the GPU path. On
 //! Linux it needs the system Vulkan loader, `libvulkan.so.1`, which every GPU
 //! driver package installs and which is not listed under
 //! [`Package::user_installed`] for that reason - a machine without it reads
@@ -64,9 +64,9 @@
 //!
 //! Windows is the platform where "which archive" stopped being one answer.
 //! **DirectML is the default and reaches every vendor** - Direct3D 12, so
-//! NVIDIA, AMD and Intel alike, nothing for the user to install, and it has the
-//! `DFT` kernel, so the inpainter runs on the GPU there the way it does on a
-//! Mac. That is the whole of what a Windows machine needs to be as busy as an
+//! NVIDIA, AMD and Intel alike, nothing for the user to install, and it is the
+//! inpainter's first candidate, so the inpainter runs on the GPU there the way
+//! it does on a Mac. That is the whole of what a Windows machine needs to be as busy as an
 //! Apple one.
 //!
 //! It is not the small download the earlier note claimed, and the arithmetic is
@@ -75,7 +75,8 @@
 //! `DirectML.dll` is used - the package carries eight architectures, three of
 //! them Xbox. So Windows costs about 215 MB either way and CUDA costs 366–455
 //! MB *plus* a toolkit the user installs. Size is therefore the weaker half of
-//! the argument; the `DFT` kernel is the whole of it.
+//! the argument; reaching every vendor with nothing to install is the whole of
+//! it.
 //!
 //! CUDA is a **second flavour, offered and never chosen for anyone**, which
 //! corrects an earlier "declined" without reversing its reasoning. Three
@@ -85,10 +86,9 @@
 //! - The CUDA archive's `onnxruntime.dll` is a **different build** from the
 //!   DirectML one and carries no `DmlExecutionProvider`. [`crate::runtime::load`]
 //!   loads exactly one library, so taking CUDA means giving DirectML up.
-//! - CUDA has no `DFT` kernel, so `Automatic` never puts LaMa on it
-//!   ([`crate::accel`]). The WebGPU plugin beside it is what keeps the
-//!   inpainter on the GPU on that flavour; without the plugin LaMa would be
-//!   back on the CPU, which is where it was before the plugin shipped.
+//! - It reaches NVIDIA only. `Automatic` puts the detector and LaMa on it as
+//!   unmeasured candidates ([`crate::accel`]); the WebGPU plugin beside it is
+//!   the fallback when CUDA is not usable.
 //! - It carries `onnxruntime_providers_cuda.dll` and nothing else: **no
 //!   `cudart`, no cuDNN**. The user installs those, and
 //!   [`crate::accel::Accelerator::availability`] says which is missing.
@@ -192,8 +192,8 @@ pub enum Flavour {
     /// macOS carries CoreML and WebGPU; Linux carries the CPU only and gets
     /// the WebGPU plugin beside it on x64.
     Stock,
-    /// The Direct3D 12 build: every GPU on Windows through one provider, and
-    /// the one Windows archive with a `DFT` kernel in it.
+    /// The Direct3D 12 build: every GPU on Windows through one provider, with
+    /// nothing for the user to install.
     DirectMl,
     /// NVIDIA, built against CUDA 12.x. Needs a CUDA install this application
     /// does not ship.
@@ -712,8 +712,8 @@ mod tests {
     /// **The Linux decision, as a test.** The stock build with the plugin is
     /// the default and needs nothing installed; the two CUDA archives are
     /// offered beside it on the same terms as on Windows; and every one of the
-    /// three keeps a `DFT`-capable provider, so no flavour puts the inpainter
-    /// back on the CPU. Linux aarch64 has one build and it is the CPU.
+    /// three keeps a GPU provider for the inpainter, so no flavour puts it back
+    /// on the CPU. Linux aarch64 has one build and it is the CPU.
     #[test]
     fn linux_x64_defaults_to_the_plugin_and_offers_cuda_beside_it() {
         let linux = Platform { os: Os::Linux, arch: Arch::X86_64 };
@@ -765,11 +765,11 @@ mod tests {
             let package = for_flavour(windows, flavour).expect("a CUDA row");
             assert!(!package.default_flavour);
             assert!(package.advertised.contains(&"CUDAExecutionProvider"));
-            // The one fact that keeps the DFT ruling intact: this archive has
-            // no DirectML in it, so choosing it *is* giving up the inpainter's
-            // GPU. `accel`'s tests pin the other half.
+            // This archive has no DirectML in it, so choosing it *is* giving
+            // up the provider that reaches every vendor. `accel`'s tests pin
+            // where each model goes on it.
             assert!(!package.advertised.contains(&"DmlExecutionProvider"), "{}", flavour.id());
-            // And the plugin is what keeps LaMa on the GPU without it.
+            // And the plugin is the fallback when CUDA is not usable.
             assert!(package.advertised.contains(&"WebGpuExecutionProvider"), "{}", flavour.id());
             assert_eq!(package.user_installed.len(), 2, "{}", flavour.id());
         }
@@ -811,7 +811,7 @@ mod tests {
     #[test]
     fn the_gpu_path_differs_by_platform_and_the_table_says_so() {
         // The correction this module exists for, and its closure: macOS,
-        // Windows and Linux x64 all have a GPU provider with a DFT kernel now,
+        // Windows and Linux x64 all have a GPU provider for the inpainter now,
         // and Linux aarch64 is the one platform left on the CPU.
         assert!(has_gpu_provider(Platform { os: Os::MacOs, arch: Arch::Aarch64 }));
         assert!(has_gpu_provider(Platform { os: Os::Windows, arch: Arch::X86_64 }));

@@ -79,9 +79,9 @@ fn main() -> Result<()> {
         // The probe is not one of the five models, so it borrows the key the
         // interface would name a session under. Nothing renders it here.
         label_key: "models.kind.inpainter",
-        // The probe forces whatever it was asked for, so the DFT rule must not
-        // silently redirect it - measuring the partitioned case is the point.
-        uses_dft: false,
+        // The probe forces whatever it was asked for, so the split-graph rule
+        // must not silently redirect it - measuring the partitioned case is the point.
+        cpu_islands_on: &[],
         measured_better: &[],
         unmeasured_candidates: &[],
         // The probe is what *produces* peak figures; it must not be gated by

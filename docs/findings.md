@@ -11,10 +11,14 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## Hardware and acceleration
 
-- **One operator decides where the inpainter runs.** `DFT` is implemented by exactly three ONNX
-  Runtime providers: CPU, DirectML and WebGPU. A provider without the kernel does not fail; the
-  runtime partitions the graph and copies tensors at every boundary. LaMa's Fourier convolutions
-  sit mid-network, so the partition is a dozen round trips rather than a tail.
+- **Missing operators decide where the inpainter runs, and `DFT` is not one of them.** The
+  shipped `lama-manga.onnx` has no `DFT` node: its Fourier units are `MatMul` and `Einsum` against
+  `Cos` and `Sin` matrices built from `Range` (counted with the `onnx` package, 2026-10-19).
+  CoreML has no builder for `Einsum`, `Range`, `ConstantOfShape` or `Neg`. A provider without an
+  operator does not fail; the runtime partitions the graph and copies tensors at every boundary.
+  LaMa's Fourier units sit in every residual block, so the partition is a dozen round trips
+  rather than a tail. An earlier version of this file said `DFT` decided it; that was wrong about
+  the file.
 - **Provider medians, per model.** manga-LaMa 512²: 2540 ms CPU, 3899 ms CoreML, 1311 ms
   WebGPU. Detector 1024²: 703 / 383 / 548 ms. MI-GAN 512²: 415 / 569 / 256 ms. Balloon detector
   640² int8: 129 ms CPU, 222 ms WebGPU, and CoreML cannot build a session at all, taking 8 s to
@@ -40,19 +44,17 @@ Windows or Linux, and a one-machine number is never written as though it were ge
   (1311 ms). A forced provider whose measured peak will not fit the room the platform grants is
   declined to the CPU. It gates on a measurement or not at all.
 - **Windows gets DirectML for every vendor:** Direct3D 12, so NVIDIA, AMD and Intel come through
-  one download, and it has the `DFT` kernel. CUDA is offered and never default: that archive
-  carries no DirectML, the process loads exactly one runtime library, and CUDA has no `DFT`, and
-  it needs cuDNN 9 installed by hand.
+  one download. CUDA is offered and never default: that archive carries no DirectML, the process
+  loads exactly one runtime library, CUDA reaches NVIDIA only, and it needs cuDNN 9 installed by
+  hand.
 - **The WebGPU plugin gives every desktop platform but one a GPU path.** Because the plugin
-  registers into the runtime beside it and carries the `DFT` kernel, Windows has it next to
-  DirectML, Linux x64 has it over Vulkan for every vendor, and a CUDA build no longer puts the
-  inpainter back on the CPU: the detector goes to CUDA and the inpainter to the plugin. On Linux
+  registers into the runtime beside it, Windows has it next to DirectML, Linux x64 has it over
+  Vulkan for every vendor, and a CUDA build has it as the fallback when CUDA is not usable; the
+  detector and the inpainter both go to CUDA there, unmeasured. On Linux
   it needs the system Vulkan loader, and a machine without one has the provider registered,
   finding no adapter, and declined for that reason rather than silently absent. Linux aarch64 has
   neither a plugin nor a CUDA archive published and stays on the CPU. AMD's and Intel's own
-  providers are not an alternative there: nobody publishes a C archive carrying them, and neither
-  ROCm nor OpenVINO has `DFT`, so even downloadable they would take the detector and not the
-  inpainter.
+  providers are not an alternative there: nobody publishes a C archive carrying them.
 - **The Japanese text reader stays on the CPU, and that is a measurement.** One 224 px crop, ten
   runs: encoder 270 ms on the CPU against 218 ms on CoreML, decoder at eight tokens 4 ms against
   15 ms, and the encoder's 52 ms of gain costs a 6.6 s session build. The decoder runs once per
@@ -669,6 +671,15 @@ Windows or Linux, and a one-machine number is never written as though it were ge
   beside every Windows and Linux x64 runtime.
 
 ## What has not been measured
+
+**LaMa on CUDA and DirectML (2026-10-19): not timed.** `lama-manga.onnx` has no `DFT` node (its
+Fourier units are `MatMul` and `Einsum` against `Cos` and `Sin` matrices), so `accel::LAMA` no
+longer filters CUDA out and lists DirectML and CUDA as unmeasured candidates. `Automatic` now puts
+LaMa on CUDA on a CUDA flavour, where it used to go to the WebGPU plugin. Neither provider has been
+run on this graph on a desktop: no latency, no peak memory, and no check that either holds the
+Fourier units without CPU islands. The cloud worker runs the same file on CUDA, which shows the
+provider accepts it and nothing about speed against the CPU. `spike-onnx-probe --ep cuda` and
+`--ep directml` on a Windows or Linux machine would close it.
 
 **Cloud Klein v2 (2026-10-18): left open.** Measured on 14 regions of two black-and-white pages
 only (see "Cloud Klein v2" under Engines and quality). Not done: the local sidecar's Klein is still
