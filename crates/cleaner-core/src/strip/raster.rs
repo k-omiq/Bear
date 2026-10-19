@@ -1,7 +1,6 @@
 //! Bounded native-pixel reads from a logical strip.
 
 use crate::image::Raster;
-use crate::mask::Rect;
 use super::{DecodeWindow, Strip};
 use std::borrow::Cow;
 
@@ -36,7 +35,7 @@ pub fn read_window_borrowing<'a>(
     let mut out: Option<Raster> = None;
     let mut covered_rows = 0u32;
     for (position, placed) in strip.pages().iter().enumerate() {
-        let part = intersection(rect, placed.rect());
+        let part = rect.intersection(placed.rect());
         if part.w == 0 || part.h == 0 { continue; }
         if part.x != rect.x || part.w != rect.w {
             return Err("strip decode window crosses an uncovered gutter".into());
@@ -73,17 +72,12 @@ pub fn read_window_borrowing<'a>(
     Ok(WindowRaster { raster, origin: (rect.x, rect.y) })
 }
 
-fn intersection(a: Rect, b: Rect) -> Rect {
-    let x = a.x.max(b.x); let y = a.y.max(b.y);
-    let right = a.right().min(b.right()); let bottom = a.bottom().min(b.bottom());
-    Rect::new(x, y, (right - x).max(0) as u32, (bottom - y).max(0) as u32)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::image::{BitDepth, ColorMode};
     use crate::strip::{DecodeWindow, EdgePad};
+    use crate::mask::Rect;
     fn gray(w: u32, h: u32, value: u8) -> Raster { Raster { width: w, height: h,
         mode: ColorMode::Gray, depth: BitDepth::Eight, icc: None, palette: None, trns: None,
         srgb_intent: None, color: Default::default(), data: vec![value; (w * h) as usize] } }

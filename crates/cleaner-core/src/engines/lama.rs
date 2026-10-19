@@ -50,6 +50,13 @@
 //! [`Rendered::pixels`] carries the page's own pixels everywhere the mask does
 //! not reach.
 //!
+//! That drift is also what the tone alignment reads. On 27 real screentone
+//! crops (`docs/research/big-lama.md` section 7) the answer came back about
+//! 2.5 levels darker than the page, and the ring outside the applied mask
+//! drifts the same way. Each tile's raw answer is measured on that ring by the
+//! same code the generated path uses ([`crate::engines::render::ToneSite`]),
+//! and the curve is taken out of the answer before it is committed.
+//!
 //! ## Sessions are held and regions are not batched
 //!
 //! [`Inpainter`] owns a session for its whole life. Building costs seconds
@@ -137,6 +144,8 @@ pub use crate::engines::model::{
     TILE_STRIDE, applied_mask, plan, tile_origins, write_bound,
 };
 use crate::engines::model::{AlphaRamp, answer_mode, ceiling_for, dither_at, page_crop, commit_srgb, tiles};
+use crate::engines::render::{Preprocessing, ToneReport, ToneSite, crop_opacity, crop_samples};
+use crate::mask::Rect;
 use crate::strip::window::EdgePad;
 
 /// Whether this rung can run on this page at all.
@@ -340,6 +349,10 @@ impl Inpainter {
         let mut done = Mask::empty(bounds);
         let mut pad = EdgePad::None;
         let mut ran = 0u32;
+        let page_rect = Rect::new(0, 0, page.width, page.height);
+        // The best-evidenced tile's alignment: the one whose ring held the
+        // most samples of the page.
+        let mut tone: Option<ToneReport> = None;
 
         for tile in tiles(bounds) {
             let (crop, commit) = (tile.crop, tile.commit);
@@ -407,6 +420,31 @@ impl Inpainter {
             let out = self.run(image, model_mask)?;
             ran += 1;
 
+            // The answer's drift, learned on the ring outside the applied mask
+            // and taken out before the commit - per tile, so the next tile's
+            // context is already the page's level. The graph moves the pixels
+            // it was not asked about by the same drift it puts in the hole,
+            // which is what makes the drift measurable there: the ring is read
+            // from the raw answer, and nothing outside the mask is written.
+            let answer: Vec<u8> = (0..plane)
+                .flat_map(|at| [0, 1, 2].map(|c| (out[c * plane + at] * 255.0).round().clamp(0.0, 255.0) as u8))
+                .collect();
+            let (_, shown) = crop_samples(page, crop, &managed);
+            let opaque = crop_opacity(page, crop, ceiling);
+            let site = ToneSite {
+                preprocessing: Preprocessing::V2,
+                extent: page_rect,
+                crop,
+                applied: &applied,
+                ink: &hole,
+                opaque: opaque.as_deref(),
+                shown: &shown,
+                reading,
+            };
+            let aligned = site.measure(&answer);
+            let written = commit.intersection(bounds);
+            let levels = site.box_levels(&answer, written);
+
             for y in 0..MODEL_INPUT as i64 {
                 for x in 0..MODEL_INPUT as i64 {
                     let (px, py) = (crop.x + x, crop.y + y);
@@ -422,6 +460,11 @@ impl Inpainter {
                     let dither = dither_at(page.depth, alpha, px, py, ceiling);
                     let mut rgb = [out[at], out[plane + at], out[2 * plane + at]];
                     if matches!(reading, ColorMode::Gray | ColorMode::GrayAlpha) { rgb = [rgb.iter().sum::<f32>() / 3.0; 3]; }
+                    let mean_at = ((py - written.y) * written.w as i64 + (px - written.x)) as usize;
+                    for (channel, value) in rgb.iter_mut().enumerate() {
+                        let mean = levels[channel.min(levels.len() - 1)][mean_at];
+                        *value = aligned.corrected(channel, f64::from(*value), mean) as f32;
+                    }
                     commit_srgb(&managed, &mut patch, lx, ly, rgb, alpha, dither)?;
                     done.set(px, py, true);
                 }
@@ -430,9 +473,12 @@ impl Inpainter {
             // output goes before the next tile's input is built, so the peak is
             // one tile and not two.
             drop(out);
+            if tone.as_ref().is_none_or(|best| aligned.samples > best.samples) {
+                tone = Some(aligned);
+            }
         }
 
-        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran, tone: None })
+        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran, tone })
     }
 
     fn run(&mut self, image: Vec<f32>, mask: Vec<f32>) -> Result<Vec<f32>, Error> {
@@ -750,6 +796,43 @@ mod tests {
             })
             .count();
         assert_eq!(parted, 0, "the colour model's chroma reached a grey page");
+    }
+
+    /// **The fill lands on the page's grey level.** Left as it came back, the
+    /// model's answer on a flat light grey sits 2.8 levels under the page at
+    /// 220 and 2.6 at 245; the ring around the applied mask shows the same
+    /// drift, and the curve learned there takes it out.
+    #[test]
+    fn a_grey_pages_fill_is_aligned_to_the_page_level() {
+        let Some(held) = inpainter() else { return };
+        let mut held = held.lock().unwrap();
+        for level in [220u8, 245] {
+            let page = gray_page(900, 900, |_, _| level);
+            let fitted = fitted_over(&page, Rect::new(380, 400, 160, 90));
+            let rendered = held.render(&page, &fitted).expect("the region rendered");
+
+            let tone = rendered.tone.as_ref().expect("LaMa reports its tone");
+            assert_eq!(tone.abstained, None, "{level}: the alignment abstained");
+            let added = tone.correction(0, f64::from(level));
+            assert!(added >= 1.5, "{level}: the ring showed no drift to take out ({added:.2} levels)");
+
+            let pixels = &rendered.pixels;
+            let (mut sum, mut count) = (0.0, 0.0);
+            for y in 0..pixels.height {
+                for x in 0..pixels.width {
+                    let (px, py) = (rendered.mask.bounds.x + x as i64, rendered.mask.bounds.y + y as i64);
+                    if rendered.mask.contains(px, py) {
+                        sum += f64::from(pixels.sample(x, y, 0));
+                        count += 1.0;
+                    }
+                }
+            }
+            let mean = sum / count;
+            assert!(
+                (mean - f64::from(level)).abs() <= 1.0,
+                "{level}: the fill averages {mean:.2}, more than a level off the page"
+            );
+        }
     }
 
     #[test]
@@ -1085,3 +1168,4 @@ mod tests {
         }
     }
 }
+

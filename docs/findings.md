@@ -157,6 +157,20 @@ Windows or Linux, and a one-machine number is never written as though it were ge
   saturation is a rejection cause. The ring must be at least 32 px wide: at about 10 px the
   outer half gives one block row, so a p99 over roughly 50 samples is the maximum, the statistic
   it claimed to replace.
+- **Local LaMa now takes out its own grey drift (2026-10-19).** The manga LaMa darkens its fill
+  by a few levels and moves the page outside the hole the same way, so `lama.rs` measures each
+  tile's raw answer on the ring outside the applied mask with the generated path's V2 code
+  (`ToneSite` in `engines/render.rs`: 6 to 18 px ring, 7 px box means, 8 bands, 24-level clamp,
+  background filter) and corrects the answer before it is committed. Each tile is corrected before
+  the next reads it as context, and `Rendered::tone` reports the tile with the most ring samples.
+  On a flat grey page (160x90 region, one model run, mean over the applied mask against the page):
+  at 220 from -2.75 to -0.15 levels, at 235 from -4.06 to -0.89, at 245 from -2.59 to -0.54, at
+  200 from -0.77 to +0.89, at 160 from -2.52 to -1.78. On seven holes in the dot field of
+  `fixtures/pages/page-screentone.png` (9 px box-mean error over the hole): 4.56 to 4.02 levels,
+  bias -3.21 to -2.19, better on all seven. Two variants were tried and not kept: reading the
+  curve always at the box level instead of V2's own-level rule (4.02 to 3.89, bias -1.72, but it
+  drops the guard that keeps clipped white beside dark art at its own level), and measuring the
+  ring from the hole instead of the applied mask (no gain).
 
 ## Detection and the script gate
 
@@ -680,6 +694,14 @@ run on this graph on a desktop: no latency, no peak memory, and no check that ei
 Fourier units without CPU islands. The cloud worker runs the same file on CUDA, which shows the
 provider accepts it and nothing about speed against the CPU. `spike-onnx-probe --ep cuda` and
 `--ep directml` on a Windows or Linux machine would close it.
+
+**LaMa tone alignment (2026-10-19): left open.** Measured on synthetic flat grey and on the
+screentone fixture only, CPU provider. On that fixture about 2 levels of darkening remain inside the
+hole, so the ring shows less drift than the hole has there; the research numbers on 27 real crops
+(bias -2.56 to -0.14) came from a Python copy, not from this code. Not done: no run on real library
+pages or through the app; the tone report is not yet written to a LaMa patch's provenance
+(`run::Made` in the app crate drops it); the cloud Klein pre-fill (`LamaFill` in
+`deploy/cloud/common/flux.py`) has no correction yet.
 
 **Cloud Klein v2 (2026-10-18): left open.** Measured on 14 regions of two black-and-white pages
 only (see "Cloud Klein v2" under Engines and quality). Not done: the local sidecar's Klein is still

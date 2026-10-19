@@ -711,11 +711,107 @@ impl PreparedRender {
     /// the true paper already holds.
     pub fn tone(&self, generated: &GeneratedCrop<'_>) -> Result<ToneReport, Error> {
         self.validate_generated(generated)?;
+        Ok(self.site().measure(generated.rgb8))
+    }
+
+    /// Where this preparation's tone alignment measures: its crop, as the
+    /// model was shown it.
+    fn site(&self) -> ToneSite<'_> {
+        ToneSite {
+            preprocessing: self.preprocessing,
+            extent: self.extent,
+            crop: self.crop,
+            applied: &self.applied,
+            ink: &self.ink,
+            opaque: self.opaque.as_deref(),
+            shown: &self.image_rgb8,
+            reading: self.reading,
+        }
+    }
+
+    /// Composite with an explicit `tone`: `None` blends the answer as it came
+    /// back, whatever this preparation's version. [`PreparedRender::composite`]
+    /// is the call a render makes; this one exists so a V1 capture can be
+    /// measured against the V2 alignment.
+    pub fn blend(
+        &self,
+        generated: &GeneratedCrop<'_>,
+        tone: Option<ToneReport>,
+    ) -> Result<Rendered, Error> {
+        self.validate_generated(generated)?;
+        let mut patch = self.patch.clone();
+        let managed = model::editable_color(&patch)?;
+        let means: Vec<Vec<f64>> = match &tone {
+            Some(_) => self.site().box_levels(generated.rgb8, self.bounds),
+            None => Vec::new(),
+        };
+
+        for y in self.bounds.y..self.bounds.bottom() {
+            for x in self.bounds.x..self.bounds.right() {
+                if !self.applied.contains(x, y) {
+                    continue;
+                }
+                let alpha = self.ramp.at(x, y);
+                if alpha == 0.0 {
+                    continue;
+                }
+                let at = ((y - self.crop.y) * self.crop.w as i64 + (x - self.crop.x)) as usize * 3;
+                let (lx, ly) = ((x - self.bounds.x) as u32, (y - self.bounds.y) as u32);
+                let dither = dither_at(self.depth, alpha, x, y, self.ceiling);
+                let mut rgb = [0.0f32; 3];
+                for (channel, value) in rgb.iter_mut().enumerate() {
+                    let model = returned_sample(generated.rgb8, self.reading, channel, at);
+                    let model = match (&tone, means.get(channel.min(means.len().saturating_sub(1)))) {
+                        (Some(tone), Some(means)) => {
+                            tone.corrected(channel, model, means[(ly * self.bounds.w + lx) as usize])
+                        }
+                        _ => model,
+                    };
+                    *value = model as f32;
+                }
+                model::commit_srgb(&managed, &mut patch, lx, ly, rgb, alpha, dither)?;
+            }
+        }
+
+        Ok(Rendered {
+            mask: self.applied.clone(),
+            pixels: patch,
+            pad: self.pad,
+            tiles: 1,
+            tone,
+        })
+    }
+}
+
+/// Where a tone alignment measures: one crop of the page, the page as the
+/// model was shown it there, and the masks that say which of its pixels are
+/// ring and which are the lettering's surroundings. A generated render has
+/// one ([`PreparedRender::tone`]); the LaMa rung has one per tile.
+pub(crate) struct ToneSite<'a> {
+    pub preprocessing: Preprocessing,
+    /// The page, in its own coordinates: crop outside it is edge replication.
+    pub extent: Rect,
+    pub crop: Rect,
+    pub applied: &'a Mask,
+    pub ink: &'a Mask,
+    /// Per crop pixel, whether the page is fully opaque there
+    /// ([`crop_opacity`]).
+    pub opaque: Option<&'a [bool]>,
+    /// The crop as the model was shown it, RGB8 ([`crop_samples`]).
+    pub shown: &'a [u8],
+    /// The mode the answer is read in ([`answer_mode`]).
+    pub reading: ColorMode,
+}
+
+impl ToneSite<'_> {
+    /// The drift of `answer`, a crop-sized RGB8 answer, from the page:
+    /// see [`PreparedRender::tone`].
+    pub(crate) fn measure(&self, answer: &[u8]) -> ToneReport {
         let channels = tone_channels(self.reading);
         let (w, h) = (self.crop.w as i64, self.crop.h as i64);
         let distance = self.distance_to_applied();
         let half = (TONE_BOX / 2) as i64;
-        let opaque = |x: i64, y: i64| self.opaque.as_ref().is_none_or(|opaque| opaque[(y * w + x) as usize]);
+        let opaque = |x: i64, y: i64| self.opaque.is_none_or(|opaque| opaque[(y * w + x) as usize]);
         // The lettering and the pixel around it: an anti-aliased edge the
         // hole stops short of is lettering too, not the page it sits on.
         let lettering = self.ink.dilated(1, u32::MAX, u32::MAX);
@@ -748,7 +844,7 @@ impl PreparedRender {
                 if !self.applied.contains(px, py) || self.ink.contains(px, py) || !usable(cx, cy) {
                     continue;
                 }
-                background.extend(box_mean(&self.image_rgb8, cx, cy));
+                background.extend(box_mean(self.shown, cx, cy));
             }
         }
         let background_colours = ColourIndex::new(&background, channels);
@@ -766,7 +862,7 @@ impl PreparedRender {
                 if !opaque(cx, cy) {
                     continue;
                 }
-                let (Some(shown), Some(returned)) = (box_mean(&self.image_rgb8, cx, cy), box_mean(generated.rgb8, cx, cy))
+                let (Some(shown), Some(returned)) = (box_mean(self.shown, cx, cy), box_mean(answer, cx, cy))
                 else {
                     continue;
                 };
@@ -775,9 +871,9 @@ impl PreparedRender {
                 }
                 let at = ((cy * w + cx) * 3) as usize;
                 for channel in 0..channels {
-                    texture_shown += (returned_sample(&self.image_rgb8, self.reading, channel, at) * 255.0 - shown[channel]).abs();
+                    texture_shown += (returned_sample(self.shown, self.reading, channel, at) * 255.0 - shown[channel]).abs();
                     texture_returned +=
-                        (returned_sample(generated.rgb8, self.reading, channel, at) * 255.0 - returned[channel]).abs();
+                        (returned_sample(answer, self.reading, channel, at) * 255.0 - returned[channel]).abs();
                 }
                 ring.push((shown, returned));
             }
@@ -860,7 +956,7 @@ impl PreparedRender {
         // of two noise floors says nothing about the model.
         let texture = source_texture.filter(|&source| source >= 1.0)
             .map(|_| texture_returned / texture_shown);
-        Ok(ToneReport {
+        ToneReport {
             curves,
             samples,
             ring: ring_samples,
@@ -869,73 +965,14 @@ impl PreparedRender {
             preprocessing: self.preprocessing,
             source_texture,
             texture,
-        })
+        }
     }
 
-    /// Composite with an explicit `tone`: `None` blends the answer as it came
-    /// back, whatever this preparation's version. [`PreparedRender::composite`]
-    /// is the call a render makes; this one exists so a V1 capture can be
-    /// measured against the V2 alignment.
-    pub fn blend(
-        &self,
-        generated: &GeneratedCrop<'_>,
-        tone: Option<ToneReport>,
-    ) -> Result<Rendered, Error> {
-        self.validate_generated(generated)?;
-        let mut patch = self.patch.clone();
-        let managed = model::editable_color(&patch)?;
-        // Where the curve is read: at the pixel's own level where the ring
-        // measured that level, and otherwise at the level its box averages to,
-        // which is all the ring ever showed of a texture - a screentone's dots
-        // and gaps then take the correction of the tone they make up, while a
-        // clipped sky beside darker art keeps its own, right up to the edge.
-        let means: Vec<Vec<f64>> = match &tone {
-            Some(_) => (0..tone_channels(self.reading))
-                .map(|channel| self.box_means(generated.rgb8, channel, self.bounds))
-                .collect(),
-            None => Vec::new(),
-        };
 
-        for y in self.bounds.y..self.bounds.bottom() {
-            for x in self.bounds.x..self.bounds.right() {
-                if !self.applied.contains(x, y) {
-                    continue;
-                }
-                let alpha = self.ramp.at(x, y);
-                if alpha == 0.0 {
-                    continue;
-                }
-                let at = ((y - self.crop.y) * self.crop.w as i64 + (x - self.crop.x)) as usize * 3;
-                let (lx, ly) = ((x - self.bounds.x) as u32, (y - self.bounds.y) as u32);
-                let dither = dither_at(self.depth, alpha, x, y, self.ceiling);
-                let mut rgb = [0.0f32; 3];
-                for (channel, value) in rgb.iter_mut().enumerate() {
-                    let model = returned_sample(generated.rgb8, self.reading, channel, at);
-                    let model = match (&tone, means.get(channel.min(means.len().saturating_sub(1)))) {
-                        (Some(tone), Some(means)) => {
-                            let own = model * 255.0;
-                            let level = if tone.measured(channel, own) {
-                                own
-                            } else {
-                                means[(ly * self.bounds.w + lx) as usize]
-                            };
-                            (model + tone.correction(channel, level) / 255.0).clamp(0.0, 1.0)
-                        }
-                        _ => model,
-                    };
-                    *value = model as f32;
-                }
-                model::commit_srgb(&managed, &mut patch, lx, ly, rgb, alpha, dither)?;
-            }
-        }
-
-        Ok(Rendered {
-            mask: self.applied.clone(),
-            pixels: patch,
-            pad: self.pad,
-            tiles: 1,
-            tone,
-        })
+    /// [`ToneSite::box_means`] for every channel a tone offset is measured
+    /// for: what [`ToneReport::corrected`] reads a pixel's level from.
+    pub(crate) fn box_levels(&self, rgb8: &[u8], rect: Rect) -> Vec<Vec<f64>> {
+        (0..tone_channels(self.reading)).map(|channel| self.box_means(rgb8, channel, rect)).collect()
     }
 
     /// The [`TONE_BOX`]-wide box mean of `rgb8` (a crop-sized RGB8 buffer),
@@ -977,12 +1014,17 @@ impl PreparedRender {
     /// one past [`TONE_RING_OUTER`]: a two-pass chamfer, which is exact for
     /// this metric.
     fn distance_to_applied(&self) -> Vec<u16> {
-        let (w, h) = (self.crop.w as usize, self.crop.h as usize);
+        // Measured over the crop grown by the ring's width, so applied mask
+        // just past the crop's edge - the next tile's share of a tiled
+        // region - still counts as near.
         let far = TONE_RING_OUTER + 1;
+        let margin = far as i64;
+        let (cw, ch) = (self.crop.w as usize, self.crop.h as usize);
+        let (w, h) = (cw + 2 * far as usize, ch + 2 * far as usize);
         let mut distance = vec![far; w * h];
         for y in 0..h {
             for x in 0..w {
-                if self.applied.contains(self.crop.x + x as i64, self.crop.y + y as i64) {
+                if self.applied.contains(self.crop.x - margin + x as i64, self.crop.y - margin + y as i64) {
                     distance[y * w + x] = 0;
                 }
             }
@@ -1012,7 +1054,8 @@ impl PreparedRender {
                 }
             }
         }
-        distance
+        let skip = far as usize;
+        (0..ch).flat_map(|y| distance[(y + skip) * w + skip..(y + skip) * w + skip + cw].to_vec()).collect()
     }
 }
 
@@ -1218,6 +1261,19 @@ impl ToneReport {
     pub fn measured(&self, channel: usize, level: f64) -> bool {
         self.curve(channel)
             .is_some_and(|curve| curve.iter().any(|point| tone_band(point[0]) == tone_band(level)))
+    }
+
+    /// `model`, a returned sample of page channel `channel` in 0..1, with
+    /// the correction added. The curve is read at the sample's own level
+    /// where the ring measured that level, and otherwise at `mean`, the
+    /// 8-bit level its [`TONE_BOX`] averages to, which is all the ring ever
+    /// showed of a texture - a screentone's dots and gaps then take the
+    /// correction of the tone they make up, while a clipped sky beside
+    /// darker art keeps its own, right up to the edge.
+    pub fn corrected(&self, channel: usize, model: f64, mean: f64) -> f64 {
+        let own = model * 255.0;
+        let level = if self.measured(channel, own) { own } else { mean };
+        (model + self.correction(channel, level) / 255.0).clamp(0.0, 1.0)
     }
 
     /// The levels added to a returned `level` of page channel `channel`:

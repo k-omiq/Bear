@@ -327,7 +327,9 @@ pub struct Rendered {
     /// to 25 at the decline threshold.
     pub tiles: u32,
     /// What a [`crate::engines::render::Preprocessing::V2`] composite aligned
-    /// the answer's tone by. `None` for an answer blended as it came back.
+    /// the answer's tone by, or for LaMa the best-evidenced tile's alignment
+    /// (the one whose ring held the most samples). `None` for an answer
+    /// blended as it came back.
     pub tone: Option<crate::engines::render::ToneReport>,
 }
 

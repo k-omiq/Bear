@@ -39,6 +39,14 @@ impl Rect {
         x >= self.x && x < self.right() && y >= self.y && y < self.bottom()
     }
 
+    /// The pixels this box shares with `other`: zero-sized when they share
+    /// none.
+    pub fn intersection(&self, other: Rect) -> Rect {
+        let (x, y) = (self.x.max(other.x), self.y.max(other.y));
+        let (right, bottom) = (self.right().min(other.right()), self.bottom().min(other.bottom()));
+        Rect::new(x, y, (right - x).max(0) as u32, (bottom - y).max(0) as u32)
+    }
+
     /// The same box on a page `by` times larger on each axis.
     pub fn enlarged(&self, by: u32) -> Rect {
         Rect::new(self.x * by as i64, self.y * by as i64, self.w * by, self.h * by)
