@@ -521,7 +521,7 @@ jobs:
   # gates publishing: the AppImage legs only reported for a while, and the
   # AppImage then shipped crashing at launch on Fedora and Arch. A bare
   # container lacks libraries every desktop has, so each AppImage leg installs
-  # those (GLES with Mesa). They run through APPIMAGE_EXTRACT_AND_RUN, because
+  # those (GLES and the Mesa drivers). They run through APPIMAGE_EXTRACT_AND_RUN, because
   # Ubuntu 24.04 and Arch ship no libfuse2 (docs/windows-linux-audit-2026-09-29.md).
   smoke-linux:
     name: Launch smoke (${{ matrix.id }})
@@ -548,7 +548,7 @@ jobs:
           - id: fedora-40-appimage
             image: fedora:40
             package: appimage
-            setup: dnf -y install xorg-x11-server-Xvfb dbus-daemon ImageMagick ca-certificates dejavu-sans-fonts mesa-libEGL mesa-libGL mesa-libgbm findutils
+            setup: dnf -y install xorg-x11-server-Xvfb dbus-daemon ImageMagick ca-certificates dejavu-sans-fonts mesa-libEGL mesa-libGL mesa-libgbm mesa-dri-drivers libglvnd-gles findutils
           - id: arch-appimage
             image: archlinux:latest
             package: appimage
