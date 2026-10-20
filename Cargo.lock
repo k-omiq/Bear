@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "chapter-rtdetr"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "cleaner-core"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -2434,7 +2434,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "manga-cleaner"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4189,7 +4189,7 @@ dependencies = [
 
 [[package]]
 name = "spike-clean-page"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
@@ -4199,7 +4199,7 @@ dependencies = [
 
 [[package]]
 name = "spike-cloud-crops"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
@@ -4209,7 +4209,7 @@ dependencies = [
 
 [[package]]
 name = "spike-detect-page"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
@@ -4217,7 +4217,7 @@ dependencies = [
 
 [[package]]
 name = "spike-gate-probe"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
@@ -4226,7 +4226,7 @@ dependencies = [
 
 [[package]]
 name = "spike-inpaint-bench"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
@@ -4235,7 +4235,7 @@ dependencies = [
 
 [[package]]
 name = "spike-m0-ledger"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
@@ -4247,7 +4247,7 @@ dependencies = [
 
 [[package]]
 name = "spike-ocr-probe"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
@@ -4255,7 +4255,7 @@ dependencies = [
 
 [[package]]
 name = "spike-onnx-probe"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
@@ -4264,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "spike-ort-loaddynamic"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "ort",
@@ -4272,7 +4272,7 @@ dependencies = [
 
 [[package]]
 name = "spike-script-id"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
@@ -4281,7 +4281,7 @@ dependencies = [
 
 [[package]]
 name = "spike-strip-memory"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "cleaner-core",
