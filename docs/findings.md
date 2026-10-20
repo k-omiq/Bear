@@ -2885,6 +2885,19 @@ to the earlier prompt.
   one tile's inference at a time under a lock; decode, resize, components and PNG work still
   overlap, and inference was about 2 s of a 9.3 s batch, so most of the three-page gain should
   stay. Not yet measured on Modal after the fix.
+- **The same race also lost lettering without an error (2026-10-20).** The third Detect of the
+  same 66 pages (`p93/c96`, beta.7, `mc-acb01f` still on its 09:13 deploy without the lock) left
+  out an SFX, a narration block, a title card and four smaller SFX on pages 11, 17, 25/26 and 29.
+  Read from the evidence files of `c94`, `c95` and `c96`: RT-DETR and CTD boxes were the same in
+  all three, and the SAM mask was bit-identical everywhere except whole tile cores of `c96`
+  (page 11 rows 800-1600, page 17 rows 0-800, page 26 rows 0-800, page 29 rows 800-1600), which
+  came back with no pixel at all. The worker already refuses non-finite logits, so these were
+  finite and all at or below 0. The lock was deployed to `mc-acb01f` that evening (v6, code only,
+  no image build). `run_tiles` now fails a page with `cloud_sam_blank_tile` when a SAM tile is
+  empty and an RT-DETR text box of 0.6 or more lies whole inside that tile's core. Of the 1,222
+  cloud tile cores in the library, 93 had no SAM pixel; only the two lost `c96` cores with such a
+  box (0.65, 0.96) meet the rule. A blank tile under weak boxes is common and real (page 61 in all
+  three runs, 0.51), so the rule cannot go lower without failing pages on every run.
 - **Cloud Detect sends a grey tile as a grey PNG (2026-10-20).** Tiles went as 8-bit RGB PNGs at the
   encoder's default effort. Measured with Pillow on copies of the 28 pages of `p19/c23` (1080x1536,
   four 1024 tiles a page): 5.58 MB of RGB tiles a page, 5.59 MB at deflate level 9 (no gain, the
@@ -3161,3 +3174,9 @@ no L40S free. Nothing in the app or the deployed code was at fault.
   the 2026-10-20 fault the same `AnalysisGPU` container failed every tile it got until it idled
   out. The worker does not stop its container on such an error. Left open after the inference lock
   removed the known cause.
+- **An empty SAM tile with no strong box still passes.** The `cloud_sam_blank_tile` check misses a
+  lost tile whose lettering no box model saw (page 17 of `p93/c96`) or saw only weakly (page 26,
+  0.36). Asking again for every empty SAM tile would catch both, but the gateway answers a repeated
+  request digest from its job, so it needs a fresh attempt per retry; not built. The lock is
+  deployed on `mc-acb01f` only: other profiles that serve analysis (`mc-b6qtpr`, `mc-ab3xgz`) still
+  run without it, and three-page Detect on the lock is not yet measured.

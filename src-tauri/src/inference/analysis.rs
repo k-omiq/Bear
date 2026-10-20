@@ -610,7 +610,9 @@ fn page_batches<'a>(steps: &[(AnalysisRequest, &'a [u8])], canvas: bool)
 /// refuse it, and `after` sees each validated answer, both in request order. A
 /// failure stops the loop: nothing is retried and nothing else is sent. A
 /// `cancel` set while a request is out ends it as
-/// [`AnalysisFlowError::Cancelled`].
+/// [`AnalysisFlowError::Cancelled`]. A tile whose SAM mask is empty under a
+/// strong text box fails the page once every tile is in
+/// ([`TileFacts::blank_sam_tile`], `cloud_sam_blank_tile`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_tiles<G: AnalysisGateway + ?Sized>(
     client: &G,
@@ -629,6 +631,10 @@ pub(crate) fn run_tiles<G: AnalysisGateway + ?Sized>(
     let mut mask = models.iter().any(|model| model.capability == SAM).then(|| vec![0u8; page_pixels]);
     let mut boxes = Vec::new();
     let steps = page_steps(models, source_page_sha256, tiles, width, height)?;
+    // What each tile's answers said, for [`blank_sam_tile`]. A tile's requests
+    // are next to each other in `steps`, one per model.
+    let mut facts = vec![TileFacts::default(); tiles.len()];
+    let per_tile = models.len().max(1);
     // A cancel while a request is out gives it up (and cancels it on a gateway
     // that polls); the journal then treats it as the caller's cancel always has.
     let sent = |error: String| {
@@ -642,7 +648,7 @@ pub(crate) fn run_tiles<G: AnalysisGateway + ?Sized>(
             let answer = client.analyze_batch(&batch, &upload, cancel).map_err(sent)?;
             answer.validate(&batch)?;
             for ((step, request), result) in range.zip(&batch.requests).zip(&answer.results) {
-                stitch(result, request.tile_core, &mut mask, &mut boxes, width, height)?;
+                facts[step / per_tile].add(stitch(result, request.tile_core, &mut mask, &mut boxes, width, height)?);
                 after(step, result)?;
             }
         }
@@ -651,9 +657,14 @@ pub(crate) fn run_tiles<G: AnalysisGateway + ?Sized>(
             before(step)?;
             let result = client.analyze_cancellable(request, png, cancel).map_err(sent)?;
             result.validate(request)?;
-            stitch(&result, request.tile_core, &mut mask, &mut boxes, width, height)?;
+            facts[step / per_tile].add(stitch(&result, request.tile_core, &mut mask, &mut boxes, width, height)?);
             after(step, &result)?;
         }
+    }
+    if let Some(index) = facts.iter().position(TileFacts::blank_sam_tile) {
+        return Err(AnalysisFlowError::Other(format!(
+            "cloud_sam_blank_tile: the SAM mask of tile {index} came back empty under a text box"
+        )));
     }
     let boxes = cloud_tiles::merge_tile_boxes(width, height, &boxes);
     Ok(Stitched { mask, boxes })
@@ -863,10 +874,49 @@ pub(crate) fn confirm_and_run<G: AnalysisGateway>(
     result.map_err(|e| e.to_string())
 }
 
+/// The least RT-DETR score of a text box that makes an empty SAM tile a
+/// failure ([`TileFacts::blank_sam_tile`]). Measured on the library's cloud
+/// evidence on 2026-10-20: of 1,222 tile cores, 93 had no SAM pixel, and only
+/// two held a text box this strong whole inside them, both lost tiles of
+/// `p93/c96` (0.65 and 0.96). Below it, real blank tiles under weak boxes
+/// (0.36 to 0.52, `c94`/`c95`/`c96` page 61 among them) would fail every run.
+const BLANK_TILE_TEXT_SCORE: f32 = 0.6;
+
+/// What one tile's answers said, as far as the blank-tile check needs.
+#[derive(Debug, Clone, Copy, Default)]
+struct TileFacts {
+    /// `Some(true)` when the tile's SAM mask has no pixel at all.
+    sam_blank: Option<bool>,
+    /// An RT-DETR text box of at least [`BLANK_TILE_TEXT_SCORE`] lies whole
+    /// inside the tile's core.
+    strong_text: bool,
+}
+
+impl TileFacts {
+    fn add(&mut self, other: TileFacts) {
+        self.sam_blank = self.sam_blank.or(other.sam_blank);
+        self.strong_text |= other.strong_text;
+    }
+
+    /// **An empty SAM tile under a strong text box fails the page.** Three
+    /// pages at once on one CUDA session gave whole tiles of empty SAM masks
+    /// on 2026-10-20 (`p93/c96` pages 11, 17, 26 and 29), with the boxes of the
+    /// same tiles intact, and the page went on with its lettering missing and
+    /// nothing said. A tile with no lettering is common and fine; one where
+    /// the box model is sure of text in the part SAM owns is not. Failing the
+    /// page leaves it as it was and says so (`cloud.analysis.run.pageFailed`);
+    /// a new run sends a new attempt, so the gateway does not answer it from
+    /// the failed one. Pages whose lost tile held no strong box still pass.
+    fn blank_sam_tile(&self) -> bool {
+        self.sam_blank == Some(true) && self.strong_text
+    }
+}
+
 /// Place one tile's answer: the mask only inside the tile's core, and its
 /// boxes whole, in page coordinates, for [`cloud_tiles::merge_tile_boxes`].
 fn stitch(result: &AnalysisResult, core: TileRect, mask: &mut Option<Vec<u8>>,
-    boxes: &mut Vec<cloud_tiles::TileBox>, page_width: u32, page_height: u32) -> Result<(), String> {
+    boxes: &mut Vec<cloud_tiles::TileBox>, page_width: u32, page_height: u32) -> Result<TileFacts, String> {
+    let mut facts = TileFacts::default();
     let tile = result.tile_rect;
     if tile.x.checked_add(tile.width).is_none_or(|right| right > page_width)
         || tile.y.checked_add(tile.height).is_none_or(|bottom| bottom > page_height)
@@ -878,6 +928,7 @@ fn stitch(result: &AnalysisResult, core: TileRect, mask: &mut Option<Vec<u8>>,
     if let (Some(pixels), true) = (mask.as_mut(), result.capability == SAM) {
         let encoded = result.mask_bytes()?.ok_or("analysis mask missing")?;
         let decoded = decode_analysis_mask(&encoded, tile).map_err(|e| e.to_string())?;
+        facts.sam_blank = Some(decoded.iter().all(|&value| value == 0));
         cloud_tiles::stitch_mask(pixels, page_width, tile, core, &decoded);
     }
     for item in &result.boxes {
@@ -885,12 +936,15 @@ fn stitch(result: &AnalysisResult, core: TileRect, mask: &mut Option<Vec<u8>>,
             0 => BalloonClass::Bubble, 1 => BalloonClass::TextInBubble,
             2 => BalloonClass::TextFree, _ => return Err("invalid analysis box class".into()),
         };
+        let (x, y) = (tile.x + item.rect.x, tile.y + item.rect.y);
+        facts.strong_text |= class != BalloonClass::Bubble && item.score >= BLANK_TILE_TEXT_SCORE
+            && x >= core.x && y >= core.y
+            && x + item.rect.width <= core.x + core.width && y + item.rect.height <= core.y + core.height;
         boxes.push(cloud_tiles::TileBox { tile, core, found: BalloonBox { rect: Rect::new(
-            i64::from(tile.x + item.rect.x), i64::from(tile.y + item.rect.y),
-            item.rect.width, item.rect.height,
+            i64::from(x), i64::from(y), item.rect.width, item.rect.height,
         ), class, score: item.score } });
     }
-    Ok(())
+    Ok(facts)
 }
 
 pub(crate) fn journal_for(app: &tauri::AppHandle) -> Result<AnalysisJournal, String> {
@@ -1023,7 +1077,7 @@ pub fn get_remote_analysis_status(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use cleaner_core::cloud_analysis_wire::{AnalysisCapability, AnalysisLimits, AnalysisTimings};
+    use cleaner_core::cloud_analysis_wire::{AnalysisBox, AnalysisCapability, AnalysisLimits, AnalysisTimings};
     use cleaner_core::image::{fixtures, Format};
     use cleaner_core::mask::Mask;
     use cleaner_core::patch::{Engine, Patch, Provenance};
@@ -1314,6 +1368,83 @@ mod tests {
         let (sequential, ..) = run(&one_by_one);
         assert_eq!(one_by_one.submissions.load(Ordering::SeqCst), 2);
         assert!(batched.is_some() && batched == sequential);
+    }
+
+    /// Answers RT-DETR with `boxes` on `tile` and none elsewhere, and SAM
+    /// with a full mask everywhere, or an empty one on `tile` when `blank`.
+    struct BlankSam {
+        tile: TileRect,
+        blank: bool,
+        boxes: Vec<AnalysisBox>,
+    }
+
+    impl AnalysisGateway for BlankSam {
+        fn capabilities(&self) -> Result<AnalysisCapabilities, String> { fake_gateway().capabilities() }
+        fn analyze(&self, request: &AnalysisRequest, png: &[u8]) -> Result<AnalysisResult, String> {
+            let here = request.tile_rect == self.tile;
+            if request.capability == RT {
+                let result = AnalysisResult {
+                    protocol_version: VERSION.into(), capability: RT.into(),
+                    request_digest: request.request_digest.clone(), tile_id: request.tile_id.clone(),
+                    tile_rect: request.tile_rect, graph_sha256s: request.graph_sha256s.clone(),
+                    model_revision: request.model_revision.clone(), mask_png_b64: None, components: vec![],
+                    boxes: if here { self.boxes.clone() } else { vec![] },
+                    timings: AnalysisTimings { load_ms: 0, preprocess_ms: 0, inference_ms: 0, postprocess_ms: 0 },
+                    reported_cost_usd: None,
+                };
+                result.validate(request)?;
+                return Ok(result);
+            }
+            let mut result = fake_gateway().analyze(request, png)?;
+            if here && self.blank {
+                let rect = request.tile_rect;
+                let mut bytes = Vec::new();
+                {
+                    let mut encoder = png::Encoder::new(&mut bytes, rect.width, rect.height);
+                    encoder.set_color(png::ColorType::Grayscale);
+                    encoder.set_depth(png::BitDepth::Eight);
+                    encoder.write_header().unwrap()
+                        .write_image_data(&vec![0; (rect.width * rect.height) as usize]).unwrap();
+                }
+                result.mask_png_b64 = Some(base64::engine::general_purpose::STANDARD.encode(bytes));
+            }
+            result.validate(request)?;
+            Ok(result)
+        }
+    }
+
+    /// An empty SAM tile fails the page only when RT-DETR is sure of text
+    /// whole inside the part of the page that tile owns.
+    #[test]
+    fn an_empty_sam_tile_under_a_strong_text_box_fails_the_page() {
+        let mut page = fixtures::by_name("l8").raster;
+        (page.width, page.height) = (1500, 256);
+        page.data = (0..1500 * 256).map(|i| (i % 251) as u8).collect();
+        let encoded: Vec<(TileRect, String, Vec<u8>)> = cloud_tiles::plan(1500, 256, &[]).unwrap().tiles.iter()
+            .map(|rect| { let (sha, png) = encode_tile(&page, *rect, TileEncoding::Png { gray: false }).unwrap(); (*rect, sha, png) }).collect();
+        let uploads: Vec<TileUpload<'_>> = encoded.iter().map(|(rect, sha, png)| (*rect, sha.as_str(), png.as_slice())).collect();
+        let models = vec![
+            RemoteModel { capability: SAM.into(), graph_sha256s: vec!["a".repeat(64), "b".repeat(64)],
+                model_revision: "c".repeat(40) },
+            RemoteModel { capability: RT.into(), graph_sha256s: vec!["d".repeat(64)], model_revision: "f".repeat(40) },
+        ];
+        // The first tile is x 0..1024 and owns x 0..750.
+        let first = encoded[0].0;
+        let run = |blank: bool, class: u8, score: f32, x: u32| {
+            let gateway = BlankSam {
+                tile: first, blank,
+                boxes: vec![AnalysisBox { rect: TileRect { x, y: 10, width: 100, height: 50 }, class, score }],
+            };
+            run_tiles(&gateway, &models, &"e".repeat(64), &uploads, 1500, 256, TileEncoding::Png { gray: false },
+                &AtomicBool::new(false), &mut |_| Ok(()), &mut |_, _| Ok(()))
+        };
+        let failed = run(true, 2, 0.9, 100).err().expect("a strong free-text box over an empty tile");
+        assert!(failed.to_string().starts_with("cloud_sam_blank_tile:"), "{failed}");
+        assert!(run(true, 1, 0.9, 100).is_err(), "text in a bubble counts too");
+        assert!(run(true, 2, 0.5, 100).is_ok(), "a weak box: the tile may hold no lettering");
+        assert!(run(true, 0, 0.9, 100).is_ok(), "a bubble is not text");
+        assert!(run(true, 2, 0.9, 700).is_ok(), "a box past the core is the neighbour's to answer");
+        assert!(run(false, 2, 0.9, 100).is_ok(), "SAM found lettering on the tile");
     }
 
     fn fixture(name: &str) -> (PathBuf, AnalysisJournal) {
