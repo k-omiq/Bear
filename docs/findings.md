@@ -2875,6 +2875,16 @@ to the earlier prompt.
   upload, gateway and polling, not split further; the 5.4 MB upload over the slow link to us-east is
   a likely part. The cold start of the first page took 75 s. Not measured: GPU memory with three SAM runs beside a denoise page, and how many extra
   pages a closed or refused run has out (at most two beyond the one it stops at).
+- **Three pages at once crashed the live analysis GPU (2026-10-20).** A chapter Detect on profile
+  `mc-acb01f` (yarafiq1971, L4) failed on most pages with `cloud_analysis_failed`. The gateway log
+  shows the first three batches start together; one fails with "too many SAM components" (garbage
+  logits), two seconds later the GPU reports Xid 31 (MMU fault), and every later tile in that
+  container fails with CUDA error 700 (illegal memory access) or a cuBLAS internal error inside the
+  SAM encoder. The threads shared one ONNX Runtime CUDA session and called `run` on it at once; the
+  9-page scratch test above passed, so the race does not fire every time. `AnalysisWorker` now runs
+  one tile's inference at a time under a lock; decode, resize, components and PNG work still
+  overlap, and inference was about 2 s of a 9.3 s batch, so most of the three-page gain should
+  stay. Not yet measured on Modal after the fix.
 - **Cloud Detect sends a grey tile as a grey PNG (2026-10-20).** Tiles went as 8-bit RGB PNGs at the
   encoder's default effort. Measured with Pillow on copies of the 28 pages of `p19/c23` (1080x1536,
   four 1024 tiles a page): 5.58 MB of RGB tiles a page, 5.59 MB at deflate level 9 (no gain, the
@@ -3147,3 +3157,7 @@ no L40S free. Nothing in the app or the deployed code was at fault.
 - **The wait before the first cloud request was not traced.** In this run the first request reached
   the gateway 46 s before the batch was sent; how much of that is the consent dialog and how much is
   work on this computer is not known.
+- **A CUDA fault leaves the analysis container serving failures.** CUDA error 700 is sticky: after
+  the 2026-10-20 fault the same `AnalysisGPU` container failed every tile it got until it idled
+  out. The worker does not stop its container on such an error. Left open after the inference lock
+  removed the known cause.

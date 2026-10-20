@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List
@@ -27,6 +28,13 @@ class AnalysisWorker:
         # encoder for every tile would dominate analysis; standalone workers
         # retain the original per-request digest check when no cache is given.
         self.verified_digests = verified_digests or {}
+        # One tile on the GPU at a time. The container serves several pages on
+        # threads (Modal AnalysisGPU is @modal.concurrent), and concurrent Run
+        # calls on one shared CUDA session faulted on a live L4 (2026-10-20):
+        # garbage SAM logits, then Xid 31 and CUDA error 700, which poisons the
+        # context so every later tile in that container fails. Decode, resize,
+        # mask components and PNG work stay concurrent.
+        self._inference_lock = threading.Lock()
 
     def capabilities(self) -> Dict[str, Any]:
         return {
@@ -72,8 +80,9 @@ class AnalysisWorker:
             resized = None
         preprocessed = time.monotonic()
         if capability == ANALYSIS_SAM:
-            embedding = sessions[0].run(["embedding"], {"prepared_rgb": prepared})[0]
-            logits = sessions[1].run(["high_res_logits"], {"embedding": embedding})[0]
+            with self._inference_lock:
+                embedding = sessions[0].run(["embedding"], {"prepared_rgb": prepared})[0]
+                logits = sessions[1].run(["high_res_logits"], {"embedding": embedding})[0]
             inferred = time.monotonic()
             mask = sam_restore(logits, rgb.size, resized)
             components = connected_components(mask)
@@ -82,10 +91,11 @@ class AnalysisWorker:
             Image.fromarray(mask).save(output, format="PNG")
             mask_png = output.getvalue()
         else:
-            labels, raw_boxes, scores = sessions[0].run(
-                ["labels", "boxes", "scores"],
-                {"images": prepared, "orig_target_sizes": np.asarray([[rgb.width, rgb.height]], dtype=np.int64)},
-            )
+            with self._inference_lock:
+                labels, raw_boxes, scores = sessions[0].run(
+                    ["labels", "boxes", "scores"],
+                    {"images": prepared, "orig_target_sizes": np.asarray([[rgb.width, rgb.height]], dtype=np.int64)},
+                )
             inferred = time.monotonic()
             boxes = rt_boxes(labels, raw_boxes, scores, rgb.size)
             components = []

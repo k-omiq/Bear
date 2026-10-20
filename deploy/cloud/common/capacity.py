@@ -16,7 +16,8 @@ the Beam app and the provisioner's quote agree:
   so each extra copy adds its measured resident size; Beam runs each copy as its own
   worker process (`workers=`), all loading at once, so each adds a whole worker.
 - `ANALYSIS_MAX_INPUTS`: concurrent inputs of the analysis GPU (ONNX detection tiles
-  and page denoise), which share their sessions across threads.
+  and page denoise), which share their sessions across threads. ONNX inference itself
+  runs one tile at a time (common/analysis.py); the rest of each input overlaps.
 - `GATEWAY_TIMEOUT_SECONDS`: the Modal gateway's per-request limit. Analysis tiles and
   denoise pages go through submit-then-poll job routes (common/contract.py
   `GPU_JOB_OPERATIONS`) whose every request returns in seconds, so it only has to

@@ -6,6 +6,8 @@ import hashlib
 import io
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -81,6 +83,31 @@ class AnalysisCases(unittest.TestCase):
         }
         request["request_digest"] = analysis_request_digest(request)[1]
         return request
+
+    def test_threads_run_one_tile_on_the_gpu_at_a_time(self):
+        # Concurrent Run calls on a shared CUDA session faulted the GPU live.
+        state = {"active": 0, "peak": 0}
+        guard = threading.Lock()
+
+        class Overlap(FakeSession):
+            def run(self, outputs, inputs):
+                with guard:
+                    state["active"] += 1
+                    state["peak"] = max(state["peak"], state["active"])
+                time.sleep(0.02)
+                with guard:
+                    state["active"] -= 1
+                return super().run(outputs, inputs)
+
+        worker = AnalysisWorker(self.worker.graphs, self.worker.revisions, lambda path: Overlap(path, self.seen))
+        requests = [self.request(ANALYSIS_SAM), self.request(ANALYSIS_RT), self.request(ANALYSIS_SAM)]
+        threads = [threading.Thread(target=worker.analyze, args=(request, self.png)) for request in requests]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(self.seen), 5)
+        self.assertEqual(state["peak"], 1)
 
     def test_shared_vectors_and_collisions(self):
         vectors = json.loads(VECTORS.read_text())

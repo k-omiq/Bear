@@ -24,9 +24,9 @@ class OnDemandAnalysis:
     """Load ONNX sessions only in a GPU worker and never fall back to CPU.
 
     Tiles arrive on several threads at once (AnalysisGPU is @modal.concurrent).
-    InferenceSession.run is thread safe, so threads share one session per graph; only
-    the first load and the session map are locked, so two tiles never create two
-    sessions (two CUDA arenas) for one graph or verify the graphs twice.
+    Threads share one session per graph; the first load and the session map are
+    locked, so two tiles never create two sessions (two CUDA arenas) for one graph or
+    verify the graphs twice. AnalysisWorker runs one tile's inference at a time.
     """
 
     def __init__(self, root: str, selected: Iterable[str],
