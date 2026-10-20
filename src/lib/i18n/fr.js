@@ -2285,6 +2285,7 @@ export const fr = {
       busy: 'Une autre exécution démarre ou est déjà en cours. Attendez qu’elle se termine.',
       atCapacity: 'Le nombre maximal d’exécutions simultanées est déjà atteint. Attendez qu’une se termine, puis lancez celle-ci.',
       pageBusy: 'Une exécution travaille sur cette page. Rien n’a été modifié ; réessayez quand elle sera passée à la suivante.',
+      stepInProgress: 'Cette étape appartient à une exécution encore en cours. Rien n’a été modifié ; annulez-la quand l’exécution sera terminée.',
       finished: {
         select: 'pages',
         zero: 'Nettoyage du texte terminé : aucune page à nettoyer.',

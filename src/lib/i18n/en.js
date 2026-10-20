@@ -3042,6 +3042,7 @@ export const en = {
       // An edit of the one page a run is on right now (`page_busy`). Every
       // other page of the chapter can be edited while the run goes on.
       pageBusy: 'A run is working on this page. Nothing was changed; try again when it moves on.',
+      stepInProgress: 'This step belongs to a run that is still going. Nothing was changed; undo it when the run finishes.',
       finished: {
         select: 'pages',
         zero: 'Text cleanup finished: no pages needed cleaning.',

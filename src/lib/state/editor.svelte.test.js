@@ -167,6 +167,23 @@ describe('editor history persistence failures', () => {
     expect(app.notices.at(-1)).toMatchObject({ key: 'notice.run.pageBusy' })
   })
 
+  // The step a run still going writes into is refused the same way, before
+  // the journal moves (`history.rs#move_at`).
+  it('puts the cursor back when the undo is of a run still going', async () => {
+    const moveMock = vi.fn().mockRejectedValue(new Error('run_step_in_progress: the step belongs to a run that is still going'))
+    setBackend(/** @type {any} */ ({ historyMove: moveMock }))
+
+    push(editor.history, { seq: 1, label: 'masks.command.detectPages' })
+    undo()
+    expect(editor.history.cursor).toBe(0)
+    await vi.advanceTimersByTimeAsync(60)
+
+    expect(editor.history.cursor).toBe(1)
+    expect(editor.history.error ?? null).toBeNull()
+    expect(app.notices).toHaveLength(1)
+    expect(app.notices[0]).toMatchObject({ key: 'notice.run.stepInProgress', tone: 'warn' })
+  })
+
   it('historyMove rejecting once then succeeding during undo yields no notice', async () => {
     const moveMock = vi
       .fn()
@@ -505,9 +522,33 @@ describe('a run over pages the window is not holding', () => {
     await vi.waitFor(() => expect(loadPages).toHaveBeenCalledWith({ chapterId: 'ch1', indices: [3] }))
   })
 
-  // A longstrip is one surface: a patch crosses a join and the run reads its
-  // neighbours, so the whole chapter is held while a run is on it.
-  it('holds every page of a longstrip while a run is going', () => {
+  // A detection on a longstrip writes only its own page, but a mask edit on
+  // either neighbour writes that page too: it holds those three and no more.
+  it('holds a longstrip detection page and its neighbours only', () => {
+    // Registering the run starts the jobs list, and on a backend that can
+    // subscribe it would take `emit` from the editor.
+    setBackend(/** @type {any} */ ({ loadPages: async () => [] }))
+    adoptRun({ runId: 'r-strip-detect', pages: [{}] }, 'chapter', 'detect')
+    editor.project.mode = 'longstrip'
+    try {
+      expect([0, 1, 2, 3, 4].map(pageBusy)).toEqual([false, false, false, false, false])
+      emit({ type: 'page-started', chapterId: 'ch1', runId: 'r-strip-detect', pageIndex: 2 })
+      expect([0, 1, 2, 3, 4].map(pageBusy)).toEqual([false, true, true, true, false])
+      editor.run.active = false
+      editor.areaRuns = [{ runId: 'area-1', pageIndex: 0 }]
+      expect([0, 1, 2].map(pageBusy)).toEqual([true, true, false])
+    } finally {
+      editor.project.mode = 'single'
+      editor.run.active = false
+      editor.run.runId = null
+      editor.run.busyPages = []
+      editor.areaRuns = []
+    }
+  })
+
+  // A longstrip is one surface: a patch crosses a join and a clean reads its
+  // neighbours, so the whole chapter is held while a clean is on it.
+  it('holds every page of a longstrip while a clean is going', () => {
     adoptRun({ runId: 'r-strip', pages: [{}] }, 'chapter', 'clean')
     editor.project.mode = 'longstrip'
     try {

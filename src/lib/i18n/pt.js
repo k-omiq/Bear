@@ -2285,6 +2285,7 @@ export const pt = {
       busy: 'Outra execução está começando ou já está rodando. Espere ela terminar.',
       atCapacity: 'O número máximo de execuções simultâneas já está rodando. Espere uma terminar e depois inicie esta.',
       pageBusy: 'Uma execução está trabalhando nesta página. Nada foi alterado; tente de novo quando ela passar para a próxima.',
+      stepInProgress: 'Esta etapa pertence a uma execução que ainda está em andamento. Nada foi alterado; desfaça quando a execução terminar.',
       finished: {
         select: 'pages',
         zero: 'Limpeza de texto concluída: nenhuma página precisou de limpeza.',

@@ -4958,8 +4958,9 @@ fn edit_detection_mask_at(
 ) -> Result<Option<MaskEdit>, String> {
     // The same lock every other edit of a page takes, so a run working on
     // this page refuses this one the same way (`page_busy`). On a longstrip
-    // chapter a run on any page refuses it (`run::page_run`), so the
-    // neighbouring pages this edit may write are held as well.
+    // chapter a run on this page or either neighbour refuses it
+    // (`run::page_run`), so the neighbouring pages this edit may write are
+    // never a page a run is on.
     let _lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
     let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
     let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else {

@@ -2158,46 +2158,101 @@ fn list_jobs_names_a_page_from_its_start_to_its_end() {
     assert!(on().is_empty(), "a finished run was still listed");
 }
 
-/// A longstrip page is read and cleaned across its joins, so a run on a
+/// A longstrip page is read and cleaned across its joins. A Clean on a
 /// longstrip chapter holds every page of it, on whichever page it is and
-/// before it has started one. A chapter of single pages with a run that is on
-/// no page holds none.
+/// before it has started one. A Detect holds the pages it is on and the page
+/// on each side, since a hand mask edit there writes the run's page too, and
+/// leaves every other page editable. A chapter of single pages with a run
+/// that is on no page holds none.
 #[test]
-fn a_run_on_a_longstrip_chapter_holds_every_page_of_it() {
+fn a_run_on_a_longstrip_chapter_holds_what_its_kind_reaches() {
     let _exclusive = exclusively();
     let scratch = Scratch::new("longstrip-held");
     let library = Library::at(scratch.join("library"));
     let strip = library
-        .create_project("Webtoon", StripMode::Longstrip, Some(scans(&scratch.join("strip-raws"), 3)), None)
+        .create_project("Webtoon", StripMode::Longstrip, Some(scans(&scratch.join("strip-raws"), 4)), None)
         .unwrap();
     let chapter = library.create_chapter(&strip.id, "Ch. 1", None, None).unwrap().created().unwrap();
     let job_path = library.resolve_chapter(&chapter.id).unwrap();
     let entries = plan(&library, "chapter", &chapter.id, None).unwrap();
-    let hand = a_hand_patch(&job_path, &chapter.id, &entries[2]);
+    let far = a_hand_patch(&job_path, &chapter.id, &entries[0]);
+    let next_to_run = a_hand_patch(&job_path, &chapter.id, &entries[1]);
     let pages = |job: &Path, chapter_id: &str| -> Vec<bool> {
-        (0..3).map(|page| page_run(job, chapter_id, page).is_some()).collect()
+        (0..4).map(|page| page_run(job, chapter_id, page).is_some()).collect()
     };
-    assert_eq!(pages(&job_path, &chapter.id), [false; 3], "a chapter with no run was held");
+    assert_eq!(pages(&job_path, &chapter.id), [false; 4], "a chapter with no run was held");
 
-    let reservation = reserve_run(&chapter.id, &[], RunKind::Detect).unwrap().unwrap();
-    reservation.set_jobs([&job_path]);
-    assert_eq!(pages(&job_path, &chapter.id), [true; 3]);
-    assert_eq!(lock_page(&job_path, &chapter.id, 2).err(), Some(WriteRefused::PageBusy { page_index: 2 }));
-    assert!(matches!(library.set_mask_visible(&hand, false), Err(LibraryError::PageBusy { page_index: 2 })));
-    drop(reservation);
-    assert_eq!(pages(&job_path, &chapter.id), [false; 3], "a run that had ended still held the chapter");
+    let detect = reserve_run(&chapter.id, &[], RunKind::Detect).unwrap().unwrap();
+    detect.set_jobs([&job_path]);
+    assert_eq!(pages(&job_path, &chapter.id), [false; 4], "a detect on no page yet held one");
+    detect.progress.observe(&page_started_event(&detect.run_id, &chapter.id, 2));
+    assert_eq!(pages(&job_path, &chapter.id), [false, true, true, true]);
+    assert!(matches!(library.set_mask_visible(&next_to_run, false), Err(LibraryError::PageBusy { page_index: 1 })));
+    library.set_mask_visible(&far, false).expect("a page away from the detect was held");
+    let page = library.load_pages(&chapter.id, &[2]).unwrap().remove(0);
+    detect.progress.observe(&Event::PageDone {
+        run_id: detect.run_id.clone(), chapter_id: chapter.id.clone(), page_id: page.id.clone(), page_index: 2, page: Box::new(page),
+    });
+    assert_eq!(pages(&job_path, &chapter.id), [false; 4], "a finished page still held its neighbours");
+    drop(detect);
+
+    // A selection detection holds its page and the neighbours before it starts.
+    let area = reserve_scoped_run(&chapter.id, &[], RunKind::Detect, RunAdmission::LocalArea).unwrap().unwrap();
+    area.set_jobs([&job_path]);
+    active().lock().unwrap().iter_mut().find(|slot| slot.run_id == area.run_id).unwrap().area_page_index = Some(3);
+    assert_eq!(pages(&job_path, &chapter.id), [false, false, true, true]);
+    drop(area);
+    assert_eq!(pages(&job_path, &chapter.id), [false; 4], "a run that had ended still held the chapter");
+
+    let clean = reserve_run(&chapter.id, &[], RunKind::Clean).unwrap().unwrap();
+    clean.set_jobs([&job_path]);
+    assert_eq!(pages(&job_path, &chapter.id), [true; 4]);
+    assert_eq!(lock_page(&job_path, &chapter.id, 3).err(), Some(WriteRefused::PageBusy { page_index: 3 }));
+    assert!(matches!(library.set_mask_visible(&far, true), Err(LibraryError::PageBusy { page_index: 0 })));
+    drop(clean);
+    assert_eq!(pages(&job_path, &chapter.id), [false; 4], "a run that had ended still held the chapter");
 
     // Single pages: the run holds what it has started and nothing else.
     let single = Scratch::new("single-held");
-    let (single_library, _, single_id) = a_chapter(&single, 3);
+    let (single_library, _, single_id) = a_chapter(&single, 4);
     let single_job = single_library.resolve_chapter(&single_id).unwrap();
     let reservation = reserve_run(&single_id, &[], RunKind::Detect).unwrap().unwrap();
     reservation.set_jobs([&single_job]);
-    assert_eq!(pages(&single_job, &single_id), [false; 3]);
+    assert_eq!(pages(&single_job, &single_id), [false; 4]);
     reservation.progress.observe(&page_started_event(&reservation.run_id, &single_id, 1));
-    assert_eq!(pages(&single_job, &single_id), [false, true, false]);
+    assert_eq!(pages(&single_job, &single_id), [false, true, false, false]);
     // A chapter of another library with the same id is not this run's.
-    assert_eq!(pages(&job_path, &single_id), [false; 3]);
+    assert_eq!(pages(&job_path, &single_id), [false; 4]);
+}
+
+/// The step a Detect run writes its pages into is not undone or redone while
+/// the run is still going: refused before the cursor moves, and taken once
+/// the run has ended. The run's id names the step, so it is never one an
+/// earlier launch minted.
+#[test]
+fn a_live_runs_step_is_not_undone_until_the_run_ends() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("live-step");
+    let (library, _, chapter_id) = a_chapter(&scratch, 2);
+    let job_path = library.resolve_chapter(&chapter_id).unwrap();
+    let reservation = reserve_run(&chapter_id, &[], RunKind::Detect).unwrap().unwrap();
+    reservation.set_jobs([&job_path]);
+    assert!(reservation.run_id.strip_prefix("backend-run-").is_some_and(|rest| rest.split('-').count() == 2),
+        "{} has no launch part", reservation.run_id);
+    let mut journal = crate::history::load(&job_path);
+    journal.push(crate::history::NewDelta {
+        label: crate::history::DETECT_LABEL.into(),
+        op: crate::history::DETECTION_OP.into(),
+        group: Some(reservation.run_id.clone()),
+        ..Default::default()
+    }, 100);
+    crate::history::save(&job_path, &journal).unwrap();
+
+    let refused = crate::history::move_at(&job_path, &chapter_id, "undo").unwrap_err();
+    assert!(refused.starts_with("run_step_in_progress: "), "{refused}");
+    assert_eq!(crate::history::load(&job_path).cursor, 1, "a refused undo moved the cursor");
+    drop(reservation);
+    assert_eq!(crate::history::move_at(&job_path, &chapter_id, "undo").unwrap().cursor, 0);
 }
 
 /// A cancel heard while a page's models work writes nothing of that page:

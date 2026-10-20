@@ -6154,11 +6154,6 @@ impl RunProgress {
         }
     }
 
-    /// Whether the run is on this page now.
-    fn on_page(&self, chapter_id: &str, page_index: u32) -> bool {
-        self.pages().iter().any(|(chapter, page)| chapter == chapter_id && *page == page_index)
-    }
-
     /// The pages of `chapter_id` the run is on now, in order.
     fn pages_of(&self, chapter_id: &str) -> Vec<u32> {
         self.pages().iter().filter(|(chapter, _)| chapter == chapter_id).map(|(_, page)| *page).collect()
@@ -6191,7 +6186,13 @@ fn scoped_refusal(slots: &[Active], chapters: &[String], admission: RunAdmission
     })
 }
 
-/// `backend-run-1`, `backend-run-2`, ….
+/// `backend-run-<launch>-1`, `backend-run-<launch>-2`, ….
+///
+/// **The launch part is load-bearing too.** A Detect run's id names its undo
+/// step in the chapter's journal (`history::Delta::group`), which outlives the
+/// process. A counter alone starts again at 1 on every launch, so a new run
+/// would join an old run's step ([`crate::history::record_pages`]) or have
+/// that step taken for its own ([`crate::history::move_at`]).
 ///
 /// **The prefix is load-bearing.** `subscribe` is a merge of this stream and
 /// the mock's, and the mock mints `run-1`,
@@ -6202,7 +6203,12 @@ fn scoped_refusal(slots: &[Active], chapters: &[String], admission: RunAdmission
 /// counters disjoint; a prefix does.
 fn next_run_id() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    format!("backend-run-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+    static LAUNCH: OnceLock<String> = OnceLock::new();
+    let launch = LAUNCH.get_or_init(|| {
+        let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        format!("{:x}", since.as_millis())
+    });
+    format!("backend-run-{launch}-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 /// How long `cancelRun` will wait for the worker to stop.
@@ -6284,25 +6290,41 @@ pub(crate) fn chapter_run(chapter_id: &str) -> Option<String> {
 /// the page has gone out and its `page-done` has not. Answered with the run's
 /// kind, because a cloud clean's own results land on the pages it is on.
 ///
-/// **Every page of a longstrip chapter that has a run**, whichever page the
-/// run is on: a longstrip page is read and cleaned across its joins, with its
-/// neighbours' pixels, so there the run's page is the chapter. The mode is the
-/// manifest's own, fixed for the project's life, and is read only when the
-/// chapter has a run.
+/// **On a longstrip chapter a run holds more than its page**, because a
+/// longstrip page is read and edited across its joins:
+///
+/// - A Clean or cloud clean holds **every page**, whichever page it is on and
+///   before it has started one: it cleans with its neighbours' pixels and
+///   patches.
+/// - A Detect holds its pages **and the page on each side of them**. It writes
+///   only the page it is on, but a hand mask edit on a neighbour writes that
+///   neighbour's neighbours too (`region::mask_edit_pages`), the run's page
+///   among them, and the run would drop that edit when it replaces the page's
+///   detections. Every other page stays editable while it works.
+///
+/// The mode is the manifest's own, fixed for the project's life, and is read
+/// only when the chapter has a run.
 pub(crate) fn page_run(job_path: &Path, chapter_id: &str, page_index: usize) -> Option<RunKind> {
-    let kind = {
+    let page = u32::try_from(page_index).ok()?;
+    let runs: Vec<(RunKind, Vec<u32>)> = {
         let slots = active().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut runs = slots.iter().filter(|run| run.progress.walks(job_path));
-        let run = runs.next()?;
-        if u32::try_from(page_index).is_ok_and(|page|
-            run.progress.on_page(chapter_id, page) || (run.admission.is_area() && run.area_page_index == Some(page))
-                || runs.any(|run| run.progress.on_page(chapter_id, page)
-                    || (run.admission.is_area() && run.area_page_index == Some(page)))) {
-            return Some(run.kind);
-        }
-        run.kind
+        slots.iter().filter(|run| run.progress.walks(job_path)).map(|run| {
+            let mut held = run.progress.pages_of(chapter_id);
+            if run.admission.is_area() {
+                held.extend(run.area_page_index);
+            }
+            (run.kind, held)
+        }).collect()
     };
-    is_longstrip(job_path).then_some(kind)
+    if runs.is_empty() {
+        return None;
+    }
+    let longstrip = is_longstrip(job_path);
+    runs.into_iter().find(|(kind, held)| match (longstrip, kind) {
+        (false, _) => held.contains(&page),
+        (true, RunKind::Detect) => held.iter().any(|held| held.abs_diff(page) <= 1),
+        (true, _) => true,
+    }).map(|(kind, _)| kind)
 }
 
 /// Whether the chapter whose manifest is at `job_path` has a run, whichever

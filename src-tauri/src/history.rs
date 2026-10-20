@@ -650,6 +650,12 @@ pub async fn history_push(
 /// page a run is working on (`page_busy`). The replay is an edit of that page
 /// and would be refused itself ([`crate::run::lock_page`]), and a cursor that
 /// had moved on would say an edit was taken back that was not.
+///
+/// **Refused the same way when the entry is a run's that is still going**
+/// (`run_step_in_progress`). The run writes each page it finishes into that
+/// step. Taken back mid-run, the step would hold only the pages done so far,
+/// and the run's later pages would make a second step that one Undo no
+/// longer takes back.
 #[tauri::command]
 pub async fn history_move(
     app: tauri::AppHandle,
@@ -663,11 +669,18 @@ pub async fn history_move(
     .await
 }
 
+/// What [`move_at`] answers for a step whose run is still going. Starts with
+/// its code, which the interface reads.
+const RUN_STEP_IN_PROGRESS: &str = "run_step_in_progress: the step belongs to a run that is still going";
+
 /// The command's body, on a chapter already resolved to its job.
 pub(crate) fn move_at(job: &Path, chapter_id: &str, direction: &str) -> Result<HistoryStep, String> {
     let _lock = crate::run::lock_job(job)?;
     let mut journal = load(job);
     let next = journal.next(direction).cloned();
+    if next.as_ref().and_then(|entry| entry.group.as_deref()).is_some_and(crate::run::is_running) {
+        return Err(RUN_STEP_IN_PROGRESS.to_owned());
+    }
     let page_index = next.as_ref()
         .and_then(|entry| crate::region::page_index_in(chapter_id, &entry.region_id));
     if let Some(page_index) = page_index {

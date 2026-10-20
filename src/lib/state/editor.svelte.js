@@ -316,17 +316,23 @@ export function runningPage() {
  * processed; independently queued selection detections hold their submitted
  * pages until each finishes. Every other page remains editable.
  *
- * A longstrip is one surface. A patch reaches across a join and the run
- * reads its neighbours, so there the whole chapter is held while a run is on
- * it, as the native side holds it.
+ * A longstrip is one surface, held as the native side holds it (`run::page_run`).
+ * A patch reaches across a join and a clean reads its neighbours, so a clean
+ * holds the whole chapter. A detection holds its pages and the page on each
+ * side: a mask edit there writes the detection's page too.
  *
  * @param {number|null|undefined} pageIndex
  * @returns {boolean}
  */
 export function pageBusy(pageIndex) {
   if (pageIndex == null) return false
-  if (editor.project?.mode === 'longstrip') return editor.run.active || editor.areaRuns.length > 0
-  return (editor.run.active && editor.run.busyPages.includes(pageIndex)) || editor.areaRuns.some((run) => run.pageIndex === pageIndex)
+  const longstrip = editor.project?.mode === 'longstrip'
+  /** @param {number} held */
+  const holds = (held) => (longstrip ? Math.abs(held - pageIndex) <= 1 : held === pageIndex)
+  if (editor.areaRuns.some((run) => holds(run.pageIndex))) return true
+  if (!editor.run.active) return false
+  if (longstrip && editor.run.mode !== 'detect') return true
+  return editor.run.busyPages.some(holds)
 }
 
 /**
@@ -2339,10 +2345,12 @@ async function replayHistory(direction) {
       try {
         step = await getBackend().historyMove({ chapterId: chapter.id, direction })
       } catch (error) {
-        // A run is on the entry's page. The journal refused before it moved
-        // (`history.rs#history_move`), so the step was not taken and the
-        // cursor this window moved ahead of it goes back.
-        if (jobConflictKey(error) === 'notice.run.pageBusy') {
+        // A run is on the entry's page, or the entry is a run's that is still
+        // going. The journal refused before it moved (`history.rs#move_at`),
+        // so the step was not taken and the cursor this window moved ahead of
+        // it goes back.
+        const conflict = jobConflictKey(error)
+        if (conflict === 'notice.run.pageBusy' || conflict === 'notice.run.stepInProgress') {
           if (editor.history === history) history.cursor += direction === 'undo' ? 1 : -1
           reportJobConflict(error)
           return
@@ -2419,11 +2427,13 @@ export function undo() {
  * wraps the message puts a path in front.
  *
  * A write a run of this window's own refused is said here too: `page_busy`
- * for an edit of the page the run is on, and `run_in_progress` for a
- * chapter-wide write (an export, a delete) while the chapter has a run.
+ * for an edit of the page the run is on, `run_in_progress` for a
+ * chapter-wide write (an export, a delete) while the chapter has a run, and
+ * `run_step_in_progress` for an undo or redo of the step a run still going
+ * writes into.
  *
  * @param {unknown} error
- * @returns {'notice.job.busy'|'notice.job.stale'|'notice.run.pageBusy'|'notice.run.busy'|null}
+ * @returns {'notice.job.busy'|'notice.job.stale'|'notice.run.pageBusy'|'notice.run.busy'|'notice.run.stepInProgress'|null}
  */
 export function jobConflictKey(error) {
   const text = error instanceof Error ? error.message : String(error ?? '')
@@ -2431,6 +2441,7 @@ export function jobConflictKey(error) {
   if (/\bjob_busy\b/.test(text)) return 'notice.job.busy'
   if (/\bpage_busy\b/.test(text)) return 'notice.run.pageBusy'
   if (/\brun_in_progress\b/.test(text)) return 'notice.run.busy'
+  if (/\brun_step_in_progress\b/.test(text)) return 'notice.run.stepInProgress'
   return null
 }
 
