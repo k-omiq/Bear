@@ -642,8 +642,9 @@ jobs:
 
           python3 -c "import json; [print(f'{l}\t{r}') for l, r in json.load(open('uploads.json'))]" | while IFS=$'\t' read -r LOCAL REMOTE; do
             echo "uploading $REMOTE"
-            curl -sSf -X PUT -H "Authorization: Bearer $CLEANER_PUBLISH_TOKEN" -H "Content-Type: application/octet-stream" --data-binary @"$LOCAL" "https://cleaner-publish.komiq.cc/$REMOTE"
+            # In parts when it is over the worker's 100 MB request cap (the AppImage).
+            python3 .github/scripts/publish-upload.py "$LOCAL" "$REMOTE"
           done
           echo "uploading latest.json"
-          curl -sSf -X PUT -H "Authorization: Bearer $CLEANER_PUBLISH_TOKEN" -H "Content-Type: application/json" --data-binary @latest.json "https://cleaner-publish.komiq.cc/latest.json"
+          python3 .github/scripts/publish-upload.py latest.json latest.json application/json
           echo "== published: $BASE_URL/latest.json =="
