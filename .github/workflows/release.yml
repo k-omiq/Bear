@@ -610,6 +610,10 @@ jobs:
           uploads = []  # (local, remote)
           for pdir in sorted(glob.glob("artifacts/*")):
               platform = os.path.basename(pdir)
+              # The launch smoke legs upload their reports beside the
+              # installers; they are evidence, not a platform to publish.
+              if platform.startswith("launch-smoke-"):
+                  continue
               sigs = glob.glob(pdir + "/*.sig")
               if not sigs:
                   sys.exit(f"no signature in {pdir}")
