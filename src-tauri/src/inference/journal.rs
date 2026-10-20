@@ -302,7 +302,15 @@ fn try_lock_file(file: &File) -> Result<(), std::io::Error> {
         windows_sys::Win32::Storage::FileSystem::LockFile(file.as_raw_handle() as _, 0, 0, 1, 0)
     };
     if ret == 0 {
-        return Err(std::io::Error::last_os_error());
+        let error = std::io::Error::last_os_error();
+        // A lock someone holds answers ERROR_LOCK_VIOLATION, which std does not
+        // read as WouldBlock the way it reads flock's EWOULDBLOCK. A caller that
+        // waits out a held lock looks for WouldBlock, and without this gave up
+        // at once on Windows whenever two renders took the scope index together.
+        if error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION as i32) {
+            return Err(std::io::ErrorKind::WouldBlock.into());
+        }
+        return Err(error);
     }
     Ok(())
 }
@@ -2016,6 +2024,21 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    /// A held scope index is waited out, not refused, on every platform: on
+    /// Windows a held lock used to fail at once with `AttemptLocked`.
+    #[test]
+    fn a_held_scope_index_lock_is_waited_for() {
+        let scratch = TestDir::new("index_lock_wait");
+        let journal = AttemptJournal::new(scratch.path(), provisional_fixture_limits());
+        let held = journal.index_lock().unwrap();
+        std::thread::scope(|threads| {
+            let waiter = threads.spawn(|| journal.index_lock().map(drop));
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            drop(held);
+            assert!(waiter.join().unwrap().is_ok());
+        });
     }
 
     #[test]
