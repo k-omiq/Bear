@@ -92,6 +92,10 @@ docs/denoise-queue-fix.md
 # Generated output: the rendered promo video and its stills, and the icon
 # exploration runs. The final icon is design/icon.png and design/icon.svg.
 promo/out/
+# The recorded app clips (promo/app/record.mjs). Hundreds of MB, made again
+# by recording, and kept out of history so a clone stays small.
+promo/app/clips/
+promo/app/clips-seek/
 design/icon-explore/
 
 # Wrangler and Miniflare local state.

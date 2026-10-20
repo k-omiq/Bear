@@ -4,3 +4,10 @@
 # Windows checkout otherwise converts them to CRLF (core.autocrlf) and reaches
 # different answers from the same commit.
 * text=auto eol=lf
+
+# GitHub's language bar counts bytes. Translations, the browser stand-in for
+# the native backend and tests are not the app's code, so they are left out of
+# it. Diffs and search are unchanged.
+src/lib/i18n/*.js linguist-detectable=false
+src/lib/api/mock.js linguist-detectable=false
+*.test.js linguist-detectable=false
