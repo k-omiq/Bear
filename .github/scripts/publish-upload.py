@@ -23,6 +23,8 @@ def call(method, key, query="", body=None, content_type="application/octet-strea
     request = urllib.request.Request(url, data=body, method=method, headers={
         "Authorization": f"Bearer {os.environ['CLEANER_PUBLISH_TOKEN']}",
         "Content-Type": content_type,
+        # Cloudflare's bot rules answer Python-urllib's own user agent with 403.
+        "User-Agent": "manga-cleaner-release",
     })
     with urllib.request.urlopen(request, timeout=600) as response:
         text = response.read().decode()
