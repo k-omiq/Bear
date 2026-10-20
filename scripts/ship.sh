@@ -100,6 +100,9 @@ fi
 echo "preflight ok: $CURRENT -> $VERSION"
 
 echo "== bump version =="
+# Every file the bump writes. The dry run reverts this list and the release
+# commits it, so a file added to the bump cannot be left behind by either.
+BUMPED=(src-tauri/tauri.conf.json package.json package-lock.json Cargo.toml Cargo.lock)
 python3 - "$VERSION" <<'PY'
 import json, sys
 v = sys.argv[1]
@@ -138,12 +141,12 @@ git diff --stat | sed 's/^/  /'
 
 if [ "$DRY_RUN" = "--dry-run" ]; then
   echo "== dry run: reverting bump, nothing pushed =="
-  git checkout -- src-tauri/tauri.conf.json package.json Cargo.toml Cargo.lock 2>/dev/null || true
+  git checkout -- "${BUMPED[@]}"
   exit 0
 fi
 
 echo "== commit and tag =="
-git add src-tauri/tauri.conf.json package.json Cargo.toml Cargo.lock package-lock.json 2>/dev/null || true
+git add "${BUMPED[@]}"
 git commit -m "release: v$VERSION"
 git tag -a "v$VERSION" -m "$NOTES"
 git push origin main
