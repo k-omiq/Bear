@@ -53,8 +53,11 @@ jobs:
       # image's own, from deploy/cloud/modal/app.py, so the tests see the
       # versions the worker runs. The heavy SDKs (modal, beam, torch) stay
       # out: their suites skip, loudly, which is what this gate is for.
-      - name: Install NumPy, Pillow and SciPy
-        run: python3 -m pip install numpy==2.4.6 pillow==12.3.0 scipy==1.18.1
+      # certifi is the provisioner's own (provisioner/endpoint.py verifies
+      # HTTPS against its bundle), pinned as in provisioner/requirements.lock:
+      # without it every helper subprocess test fails at import.
+      - name: Install NumPy, Pillow, SciPy and certifi
+        run: python3 -m pip install numpy==2.4.6 pillow==12.3.0 scipy==1.18.1 certifi==2026.7.22
       - name: Run deploy/cloud unit tests
         run: python3 -m unittest discover -v -s deploy/cloud/tests
       - name: Run provisioner unit tests
