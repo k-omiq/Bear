@@ -53,7 +53,7 @@ from provisioner.driver_base import (
     read_seed_state,
     seed_failed,
 )
-from provisioner.endpoint import check_endpoint, endpoint_from_base, runtime_credential
+from provisioner.endpoint import check_endpoint, endpoint_from_base, runtime_credential, tls_context
 from provisioner.journal import STAGE_DEPLOYING
 from provisioner.modal_driver import working_directory
 from provisioner.protocol import (
@@ -187,7 +187,7 @@ def post_json(url: str, token: str, body: Dict[str, Any], timeout: float) -> Tup
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=tls_context()) as response:
             return response.status, response.read(64 * 1024)
     except urllib.error.HTTPError as exc:
         try:

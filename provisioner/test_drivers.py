@@ -7,9 +7,11 @@ providers. `Killed` stands in for the desktop killing the helper mid-run.
 
 import io
 import json
+import os
 import pickle
 import re
 import shutil
+import ssl
 import tempfile
 import threading
 import time
@@ -22,7 +24,7 @@ from provisioner.beam_driver import BeamDriver, load_plain
 from provisioner.controller import ProvisioningController
 from provisioner.driver_base import SEED_INTENT_KEY, SEED_STALE_SECONDS, SEED_START_GRACE_SECONDS, Deadline, read_seed_state
 from provisioner import driver_base
-from provisioner.endpoint import check_endpoint
+from provisioner.endpoint import check_endpoint, tls_context
 from provisioner.fake_sdks import (
     FakeBeamCloud,
     FakeModalCloud,
@@ -122,6 +124,19 @@ class NoCleaningModelTest(unittest.TestCase):
             with self.assertRaises(ProtocolError) as caught:
                 normalize_options(options, ("L4",), "L4", provider)
             self.assertEqual(caught.exception.code, "ERR_VALIDATION_ERROR")
+
+
+class TlsContextTest(unittest.TestCase):
+    """The helper's own HTTPS calls must not depend on the computer's certificate folders."""
+
+    def test_certificates_load_with_no_system_store(self) -> None:
+        with tempfile.TemporaryDirectory() as empty, mock.patch.dict(
+            os.environ, {"SSL_CERT_FILE": os.path.join(empty, "none.pem"), "SSL_CERT_DIR": empty}
+        ):
+            context = tls_context()
+        self.assertGreater(context.cert_store_stats()["x509_ca"], 0)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
 
 
 class EndpointModelCheckTest(unittest.TestCase):

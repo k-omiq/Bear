@@ -10,11 +10,14 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import json
+import ssl
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urlsplit
+
+import certifi
 
 from provisioner.driver_base import Deadline, production_model
 from provisioner.protocol import (
@@ -134,8 +137,19 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def tls_context() -> ssl.SSLContext:
+    """Verify against certifi's bundle, which the frozen helper carries.
+
+    The frozen helper's OpenSSL looks for system certificates where the build
+    machine's Python kept them (/Library/Frameworks/Python.framework/... on the
+    macOS runner), a folder most computers do not have, and every HTTPS request
+    then fails its handshake.
+    """
+    return ssl.create_default_context(cafile=certifi.where())
+
+
 def urllib_get(url: str, headers: Dict[str, str], timeout: float) -> Tuple[Optional[int], bytes]:
-    opener = urllib.request.build_opener(_NoRedirect())
+    opener = urllib.request.build_opener(_NoRedirect(), urllib.request.HTTPSHandler(context=tls_context()))
     request = urllib.request.Request(
         url,
         headers={**headers, "Accept": "application/json", "User-Agent": "manga-cleaner-provisioner"},
