@@ -117,7 +117,9 @@ describe('the Tauri adapter', () => {
   })
 
   it('sends a mask edit bound to the source it was drawn over, with one gesture and the other null', async () => {
-    const invoke = vi.fn().mockResolvedValue({ pageStatus: 'detected', changed: ['r1'], created: [], removed: [] })
+    const written = { pageStatus: 'detected', changed: ['r1'], created: [], removed: [],
+      pages: [{ pageIndex: 2, pageStatus: 'detected' }, { pageIndex: 3, pageStatus: 'detected' }] }
+    const invoke = vi.fn().mockResolvedValue(written)
     const backend = createTauriBackend({ fallback: recordingFallback(), invoke })
     const stroke = { points: [{ x: 10, y: 20 }, { x: 12, y: 22 }], radius: 16 }
     const answer = await backend.editDetectionMask({ chapterId: 'c1', pageIndex: 2,
@@ -126,7 +128,7 @@ describe('the Tauri adapter', () => {
       chapterId: 'c1', pageIndex: 2, expectedSourceIdx: 7, expectedSourceSha: 'scan-digest',
       mode: 'add', stroke, painted: null,
     })
-    expect(answer).toEqual({ pageStatus: 'detected', changed: ['r1'], created: [], removed: [] })
+    expect(answer).toEqual(written)
 
     const painted = { kind: 'polygon', points: [{ x: 1, y: 1 }, { x: 9, y: 1 }, { x: 5, y: 8 }], feather: 0 }
     await backend.editDetectionMask({ chapterId: 'c1', pageIndex: 0, mode: 'remove', painted })

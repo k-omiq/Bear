@@ -54,6 +54,7 @@
       "../sam-bootstrap/bootstrap.py": "sam-bootstrap/bootstrap.py",
       "../spikes/sam-ts-l/export_mask.py": "sam-bootstrap/export_mask.py",
       "../spikes/sam-ts-l/environment.txt": "sam-bootstrap/environment.txt",
+      "../spikes/sam-ts-l/dense_pe.f32.xz": "sam-bootstrap/dense_pe.f32.xz",
       "../spikes/sam-ts-l/fixtures/synthetic_page.png": "sam-bootstrap/synthetic_page.png"
     },
     "macOS": {

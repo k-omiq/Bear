@@ -1,0 +1,33 @@
+{
+  "comment": "Canonical tile PNGs (contract.py analysis_canonical_tile_png, cloud_analysis_wire::canonical_tile_png). Pixel (x, y) of pattern rgb is [(7x+3y)%256, (5x+11y)%256, (13x+y)%256]; of pattern gray, v=(3x+5y)%256 in all three channels.",
+  "cases": [
+    {
+      "width": 1,
+      "height": 1,
+      "pattern": "gray",
+      "png_bytes": 83,
+      "png_sha256": "011e4336216f67e891af5aae444886228bfc60e055716f260f5dbc3b98d6858e"
+    },
+    {
+      "width": 3,
+      "height": 2,
+      "pattern": "rgb",
+      "png_bytes": 101,
+      "png_sha256": "83b9ee9342bfa0a74a66d549783174e04d7a49ab08ed4c323a36729a55f78cde"
+    },
+    {
+      "width": 200,
+      "height": 120,
+      "pattern": "rgb",
+      "png_bytes": 72206,
+      "png_sha256": "555c4b1cf2c1db9f3c4f85b0105e2fd68d38953db86d17034ac52362cdbff8a6"
+    },
+    {
+      "width": 300,
+      "height": 300,
+      "pattern": "gray",
+      "png_bytes": 90386,
+      "png_sha256": "19ef461c8257e6473a0c2269f5fa6787b96385652152d0a1b9368e5081ded5f0"
+    }
+  ]
+}

@@ -426,7 +426,7 @@ Windows or Linux, and a one-machine number is never written as though it were ge
   per strip row, so a 200-page webtoon is 3.2 MB of profile and one page of pixels.
 - **The interface's chapter-scale allocation was region state, not pixels.** Opening a chapter
   answered with every page's region list, four thousand objects for a 200-page chapter, live for
-  the session. Three pages' regions are resident now, plus per-page counts and a review index at
+  the session. Three pages' regions are resident now (eleven on a long strip since 2026-10-19), plus per-page counts and a review index at
   about 90 bytes per flagged region. Undo history was the other half: a command held as a
   closure over two region snapshots pinned every page the user had edited.
 
@@ -685,6 +685,53 @@ Windows or Linux, and a one-machine number is never written as though it were ge
   beside every Windows and Linux x64 runtime.
 
 ## What has not been measured
+
+**Longstrip zoom, warm pages and overhangs (2026-10-19): left open.** Three faults the user saw on a
+long strip. A zoom deep in a chapter built the mounted band from the new scale at the old scroll
+position for one pass (66 pages of 690x1600 at page 40, 0.5 to 0.55: pages 34 to 40 instead of 37
+to 44), so the pages on screen unmounted and drew in white; a scale change now moves the column's
+anchor before the band is taken (`anchorColumnTop` in `src/lib/editor/strip.js`), for a pinch, the
+buttons, keys and fit alike, and a pinch holds the band it started from until it has been quiet for
+250 ms. A detection hanging across a join (14 joins on the user's chapter c94) showed its lower
+part only on hover, because every `.sheet` was a size container and so a stacking context, and the
+next page's artwork painted over the overhang; the sheets now make none, every page's layers share
+one z-index scale (`PageSheet.svelte`), and `--sheet-w` replaces `cqw`. The "five pages either
+side" rule was not in the code (regions were held one page either side); it is now `KEEP_PAGES`,
+mounted whole and resident, inside a 192 MiB decoded-tile budget in which no page may take more than
+an eleventh, so a raw 800x20000 segment keeps its tile window. A polygon clicked across a join stays
+one draft, and a tap on an overhang selects the region above. Measured by unit and DOM tests (the
+new zoom tests fail on the old code) and in the Vite mock in Chromium (a region hanging from page 1
+is the hit target over page 2's clear button, z 4 over 3). Not measured: any of it in the shipped
+WKWebView or on the installed app; the warm range's real memory on c94; a zoom on the mock, whose
+longstrip has six pages and is never virtual; a region hanging upward, which `regionAt` reaches but
+no chapter has.
+
+**Qwen Lanczos resize (2026-10-19): left open.** 12 real crops, black and white only, one seed.
+Not done: no live deploy (the three Qwen profiles still run bicubic in, box out until the user
+approves a redeploy), no run through the app, no colour page, no Beam. The bigger loss that is left
+is Qwen itself (0.88 of the detail after the resize fix).
+
+**Restore mask from a result's own mask (2026-10-19): not driven in the real app.** The real
+library (`com.mangacleaner.studio`, 49 chapters) has no `cleaned_detections` at all, so Reject
+result refused every one of its 5,928 visible patches. Restore mask now makes those a detection
+from the patch's mask and lettering files. Tested with a cleaner-core unit test, a library test and
+the Vite mock (restore, pad from the menu, Undo, Redo). Not measured: a real chapter with rotated
+pages (`native_parts` patches are refused, none exist in the library today), longstrip patches
+that cross a page, and whether the `inside` guess from the engine (Fill means inside) is right often
+enough; the user can change it with Text type.
+
+**Undo of detection edits (2026-10-19): not driven in the real app.** Deleting, brushing, padding
+and retyping a detection, approving or dismissing a held row, and each Detect run are now undo
+steps that keep whole page states by digest in `<job>.mtclean.d/history/` (`history.rs`,
+`detection-state`). Tested with Rust unit tests on a synthetic 64 x 48 page and on the held-row
+fixture, and in the Vite mock (Undo button and `Shift+U`). Not measured: disk per step and capture
+time on a real chapter (a chapter-wide padding reads every detection file of every page once),
+the size of the group evidence files a state names, and a sweep on a journal at the cap. A Detect
+run's step drops the redo stack, as every new step does; a cloud Detect run takes the same path
+and was tested only as `repeat_cloud_detection_preserves_existing_masks_edits_and_undo_history`.
+An Auto run's one-pass patches are still not undo steps; only cleans of stored detections are.
+Old journals keep their `region-state` entries for dismissed warning rows, and undoing one of
+those still cannot bring the row back; it now says so instead of doing nothing.
 
 **LaMa on CUDA and DirectML (2026-10-19): not timed.** `lama-manga.onnx` has no `DFT` node (its
 Fourier units are `MatMul` and `Einsum` against `Cos` and `Sin` matrices), so `accel::LAMA` no
@@ -1019,7 +1066,7 @@ Not measured, or known to be incomplete:
   checked against the source's hash only. A layer hidden, shown or added on such a page between
   the read and the run's arrival leaves detections found on the earlier picture. No digest of the
   analyzed picture is carried with the answer.
-- An undo or redo is two calls: `history_move` moves the cursor, then the step is replayed. A run
+- An undo or redo of a region or clean step is two calls: `history_move` moves the cursor, then the step is replayed. (A detection step is one: `history_move` replays it under its lock.) A run
   that reaches the step's page between the two refuses the replay, and the journal is then one
   step ahead of the page. Redo and undo again put it right, because a step re-applied to a state
   already in it changes nothing. The two calls were not made one.
@@ -1087,9 +1134,8 @@ Not measured, or known to be incomplete:
   user expects was not asked.
 - A solid-bubbles run that finds no region at all ends with `notice.run.solidOnly` saying 0 and 0,
   not with the "no text" notice.
-- Mask padding is hidden in Detect and clean, and the run still pads by the stored value. A user
-  who set a large value in Detect, then switched to Detect and clean, gets that padding with no
-  row to see it by.
+- Mask padding was hidden in Detect and clean while the run still padded by the stored value.
+  Fixed 2026-10-19: the slider and its Apply are shown for every step.
 
 **Live brush and clone stamp preview (2026-10-07).** While a stroke was drawn, the page inside the
 stroke's box changed: the preview was the whole box at the page's own resolution, opaque, laid over
@@ -1113,6 +1159,147 @@ Not measured, or known to be incomplete:
 - A stroke that crosses a longstrip join is placed on the anchor page's grid continued; the
   neighbour's grid can be out of phase by under one proxy pixel. Covered by a unit test for the
   placement, not looked at on a real strip.
+
+**Brush lag and jagged strokes (2026-10-20).** The Brush trailed a fast drag, because every pointer
+move asked the native side for a frame and each frame did the work listed above. Strokes were also
+jagged: only one sample per display frame was used, and a sample was dropped until the pointer had
+moved 12% of the brush's diameter, so a fast curve became straight segments.
+
+- The Brush's live pixels are drawn in the page now (`brushsurface.js`), from the same dab plan as
+  the commit (`paintplan.js#strokePlanner`, fed point by point) and the same coverage rule as
+  `brush.rs` (analytic tip, max coverage capped at opacity), on the tiles' proxy grid. Only new
+  dabs are stamped and only changed 128 px tiles are put on the canvas, once per display frame.
+  The clone stamp keeps the native frame, because it reads the page.
+- Every coalesced pointer sample is used (`getCoalescedEvents`), pulled through a 3 px rope
+  (`gesture.js#pullRope`, the lazy-brush idea), and recorded every 1.5 px. The release adds the
+  pointer's own place. A lasso has no rope and keeps every half pixel.
+- No GitHub library was taken. perfect-freehand, lazy-brush, atrament and the like draw their own
+  line, and the committed stroke is drawn by `cleaner-core`, so the preview has to follow its plan.
+
+Measured, in the Vite mock (Chromium, 2x screen), a 120-move wavy stroke with a 40 px brush: one
+pointer move took 1.0 ms median, 1.7 ms worst, including the stamping. The mock had no live
+preview at all before (its `previewPaint` answers null).
+
+Not measured, or known to be incomplete:
+
+- Not run in the shipped WKWebView or the real app. That WebKit gives coalesced samples there is
+  not checked; without them the stroke falls back to one sample per event and still gets the rope.
+- The native renderer blends in linear light and the canvas in sRGB, so a soft rim can read a
+  little lighter or darker until the committed tiles replace it. Not compared on a real page.
+- Above a 1024 px short edge the preview averages 2 by 2 samples per proxy pixel, which stands in
+  for the tiles' box average; not compared with a committed tile.
+- The clone stamp still waits on a native frame per move and lags the same way. Fixed in the
+  next entry.
+
+**Clone stamp lag (2026-10-20).** The clone stamp's live preview still asked the native side for a
+frame on every pointer move, so it trailed a fast drag as the Brush had.
+
+- A clone stroke is drawn in the page now, like the Brush. Its coverage comes from the same surface
+  (`brushsurface.js`, fed by `paintplan.js#strokePlanner`) with `render_clone`'s build-up rule: each
+  dab takes a pixel part of the way to the opacity, by its flow. Its pixels are the cleaned tiles
+  already on the sheet, drawn moved by the clone offset (rounded to whole page pixels, half away
+  from zero, as `render_clone` rounds it) and kept where the coverage is (`destination-in`). The
+  tiles are the page as it stood before the stroke, which is the source `render_clone` freezes.
+- `PaintLayer.svelte` has no native path left. `previewPaint` is not called from the frontend, and
+  the request queue it used (`paintpreview.js#previewQueue`) is gone with its tests. A committed
+  frame is held until its tiles load, as before, and a held frame is never drawn again.
+- `CloneSource.svelte` and the preview read the sheet's tiles through one helper
+  (`paintpreview.js#cleanedTiles`).
+
+Measured, in the Vite mock (Chromium, hidden pane, so timers stood in for display frames), a
+120-move wavy clone stroke with a 32 px brush, over a test image put in the sheet's cleaned stack
+(the mock has no tiles): one pointer move took 0.4 to 0.5 ms median, 1.0 ms worst. The live canvas
+was read back: the best whole-pixel match of its opaque pixels to the test image is exactly the
+offset the commit uses (-307, -77 proxy pixels for a -30%, -5% offset on a 1024 by 1536 page).
+91% of those pixels are within 2 levels; the rest, up to 48 levels, lie on edges in the test image
+(1 px around its squares, and its text).
+
+Not measured, or known to be incomplete:
+
+- Not run in the shipped WKWebView or the real app, and not on a real page's `tile://` tiles.
+- The cost of one display frame was not timed: each frame clears the canvas, draws every cleaned
+  tile on the sheet and composites the coverage. A long stroke on a tall page draws a big canvas.
+- The edge mismatches above were not explained. They are likely two resampling paths of the test
+  image, not a placement error, but that was not proven.
+- The canvas blends in sRGB and `render_clone` blends a partly covered pixel in linear light. Where
+  the coverage is full, `render_clone` copies the native pixels and the preview shows the proxy
+  tile's. Not compared with a committed tile.
+- The source is the cleaned tiles on screen. A quick tap that reads from where the last tap painted
+  shows the page before that tap until its tiles load; the commit reads the stored patch.
+- A tile still loading when the stroke starts is left out of the preview until it loads. Hidden
+  tiles (replacements still loading) are left out too.
+- `render_clone` drops coverage where the page itself is see-through. The preview does not.
+- Done the same day: `previewPaint` (backend, Tauri adapter, mock) and the native `preview_paint`
+  command are removed, with its permission entries, `paint_preview_fits`, `preview_layer` and
+  `proxy::managed_proxy_overlay`, whose only caller it was.
+
+**Bare Brush layers and the eraser (2026-10-20).** A Brush stroke used to land as a region like any
+other: it was selected when it committed, framed on the canvas with its readout, and could be hit
+by a click. The ask was a bare stroke, as in Photoshop, and an eraser for Brush paint.
+
+- A Brush layer (`layers.js#isBrushLayer`: engine `paint`, tool `brush` in the params snapshot) is
+  not selected when it commits, gets no frame or readout on the canvas (`RegionLayer.svelte`,
+  `DraftPreview.svelte`), and is not reachable by a click or hover (`DrawLayer.svelte`). It is still
+  listed in the Layers panel, where it can be selected, hidden and given an opacity.
+- The Eraser (slot 7, key 7) is a stroke tool with size, hardness and opacity. The native command
+  `erase_paint` (`region.rs#erase_paint_at`) plans its dabs as a Brush stroke does
+  (`paint/erase.rs#erase_coverage`, same tip, no build-up, capped at opacity) and scales down the
+  coverage of every visible Brush layer on the page under it (`paint/erase.rs#erase_patch`), where
+  the layer is drawn, so a moved or turned layer is erased where it shows. A Brush patch's pixels
+  already hold the stroke over the page, so cutting the coverage is the whole erase.
+- A layer cut part way is stored as a new revision; a layer cut to nothing is hidden. The old
+  revision stays, so one undo puts every layer the stroke touched back: the journal entry carries
+  one `parts` item per layer (`history.rs#Part`, `editor.svelte.js#recordRegionEdits`).
+
+Tested: `paint::erase` unit tests, `region.rs#the_eraser_takes_brush_paint_off_and_leaves_a_way_back`
+(through the real Brush commit, with a shape left alone), and two frontend cases for the one-step
+undo. In the Vite mock: a stroke committed with no selection and no frame, a click with two other
+tools did not select it, the Layers panel selected it and showed its opacity, the eraser removed
+it, and undo and redo swapped it back and forth.
+
+Not measured, or known to be incomplete:
+
+- Not run in the shipped WKWebView or the real app, and not on a real chapter.
+- Layers with native parts (chapters whose source is turned) are skipped by the eraser.
+- In a longstrip, only Brush layers made on the stroke's anchor page are erased; a stroke that
+  crosses a join leaves the neighbour page's layers alone.
+- The mock erases by boxes: a layer the stroke box covers whole is removed, any other it crosses
+  gets a new revision with the same pixels.
+- Only the Brush's own layers are erased. Shapes, clone stamp and fill results are not.
+
+**Eraser live preview (2026-10-20).** The eraser first previewed as a hatched band, and the paint
+only went when the page tiles reloaded. It now shows the Brush paint thinning under the pointer.
+
+- The page at rest is the native composite, which has the Brush paint baked in, so nothing drawn
+  over it can show the page under the paint. While the eraser is picked, a page with Brush layers
+  prepares the layered view the regional copy uses (`PageSheet.svelte`: source tiles and one canvas
+  per patch), and shows it while a stroke is on the page and until the committed composite decodes.
+- The stroke's coverage is drawn by `PaintLayer.svelte` on a Brush surface (same dab plan, same
+  tip, no build-up, capped at opacity) onto a canvas that is never shown. Each Brush layer
+  (`PatchLayer.svelte`) draws its picture again and takes that coverage off with
+  `destination-out`, which is `erase.rs`'s `old * (255 - e) / 255` on alpha
+  (`erasepreview.svelte.js`).
+- A stroke is taken off only the layer picture it first reached. The commit gives an erased layer
+  a new picture; until that picture is drawn the canvas keeps its erased look, and once it is drawn
+  the stroke is not taken off it again. A committed stroke is held only while its commit is in
+  flight.
+- The hatch is gone; only the cursor ring is drawn over the stroke.
+
+Measured, in the Vite mock with a stand-in layer (a red bar served as a layer image, the mock has
+no tiles): under a 100% stroke the layer's alpha went from 255 to 0, under a 60% stroke to 102,
+which is the commit's rounding; beside the stroke it stayed 255. One pointer move took 0.9 ms
+median.
+
+Not measured, or known to be incomplete:
+
+- Not run in the shipped WKWebView or the real app, and not on real `tile://` layers. The switch
+  from the composite to the layered view and back was not seen on real tiles; the mock's stand-in
+  source tile never loads, so the layered view's own readiness was faked by hand.
+- The layered view blends each layer over the source on the canvas, in sRGB, where the composite
+  blends in linear light; soft Brush edges can read slightly different while the eraser is out.
+- A layer still loading when the stroke starts shows the composite until it is ready. Picking the
+  eraser starts that load, so it is ready in most cases.
+- Moving or turning a layer and erasing it in the same moment was not tried.
 
 **Reading-order test and held candidates (2026-10-07).**
 `the_regions_a_page_reports_are_in_reading_order` failed on a machine with the real models and
@@ -1154,7 +1341,7 @@ Not measured, or known to be incomplete:
 - A row stored before this change kept no lettering. It is approved from what the Comic Text
   Detector finds under its box, or from the box itself. Detecting the page again stores the
   lettering. The low-confidence rows a long strip adopts across a cut keep none either.
-- No undo. Deleting the detection is the way back, and the held row does not return with it.
+- One undo step (2026-10-19): Undo puts the held row back and takes the detection off.
 - The menu is the only way in: the Layers row has no button for it. A region the quality metric
   declined is not offered it.
 - The mock backend keeps the region's id where the native side mints a detection's.
@@ -1325,7 +1512,7 @@ within 4 px) are stored as one, at Detect and in `set_detection_padding` (`regio
 - The 4 px reach is a choice, not a measurement: no real scan was used to pick it.
 - No real Detect and Clean of a merged region on the user's scans: a merged region drops its fit
   and cleans as a hand mask, and two balloons merged across their wall start on LaMa.
-- A merge cannot be undone except by Detect on the page again; no split was built.
+- A merge is split by Undo of the padding that made it (2026-10-19); a smaller padding does not split it.
 
 **Canvas scroll room (2026-10-05, sides 2026-10-07).** A zoomed page and a long strip keep half a
 viewport of empty canvas on every side (`CanvasStage.svelte`, "Scroll room"), a saved scroll is
@@ -1421,6 +1608,29 @@ Not done or not measured:
   the hint stay: one in c2-p002-d7, and most of the large sound effect beside c2-p002-d8. Detection,
   not Klein.
 - The cloud SAM tiles a page; the local run masks it whole. The two masks were not compared.
+
+**Qwen blur came from the worker's resize, not from too few pixels (2026-10-19).** The user saw
+Qwen answers come back blurry, with screentone that did not match the page, and asked whether a 2K
+output would help. The pipeline always encodes its reference at about 1 MP on a 32 px grid, and the
+worker resized each crop to that size and back (`deploy/cloud/common/qwen.py`).
+- Of 214 real Qwen attempts in the installed app's attempt journal, 206 were stretched up 1.5 to 3
+  times to reach 1 MP, 5 were within 5% and 3 were shrunk. Crops are small (region plus 128 px a
+  side), so shrinking big crops is not the problem.
+- The resize round trip alone, with no model, on the 121 stretched crops that could be found again on
+  their pages: bicubic in and box out (as shipped) kept a median 0.78 of the fine detail outside the
+  edited box (mean absolute Laplacian, answer over crop); Lanczos in and box out 0.81; Lanczos both
+  ways 0.86. Qwen's own answers kept 0.71, so most of the loss was the resize.
+- Real Qwen on 12 of those crops (4 per third of the stretch range, busy and plain, mostly ones the
+  user had turned down), recipe v4 prompt and seed, 8 steps, one render each, on an L40S over the
+  live aizendazai46 weights volume: as shipped 0.76 detail and 24.0 dB outside the box; Lanczos both
+  ways 0.88 and 27.0 dB, the lettering removed at least as strongly (change inside the box over
+  change outside, 6.0 against 8.8), no drift, the same 16 s. Screentone and hair keep their dots
+  instead of turning to grey mush. The worker now resizes with Lanczos both ways.
+- 2K output (reference still 1 MP inside the pipeline, output twice the side) breaks Qwen: it zooms
+  out or repeats the scene, 8.2 dB outside the box, drift up to 74 px, lettering barely touched, at
+  twice the GPU time. Not shipped.
+- Spend: about $0.55 of aizendazai46 Modal credit (one L40S, about 15 minutes with load); a first
+  try crashed on import before any render and was stopped. The ephemeral app made no volume.
 
 **Interface languages (2026-10-01).** The interface speaks English, Korean, Japanese, Spanish,
 Brazilian Portuguese and French (`src/lib/i18n/`). A first run starts in the OS language when it
@@ -2650,6 +2860,75 @@ to the earlier prompt.
   updated. A page is now decoded twice in a cloud run (once to send, once to clean); the cost
   was not measured. Turning cloud off mid-run stops the next upload but pages already analyzed
   ahead are still cleaned with their answers.
+- **Cloud Detect sends three pages at once and resumes where it stopped (2026-10-19).** The
+  prefetch producer sends `PAGES_IN_FLIGHT` (3) pages at once, the analysis GPU's
+  `ANALYSIS_MAX_INPUTS`, and queues the answers in run order. A chapter Detect skips pages a cloud pass
+  already finished (`Project::cloud_detected`, cleared when the source changes or a local Detect
+  replaces the page), so a stopped run resumes instead of starting at page 1; a page detected alone is
+  always sent again. The worker labels SAM mask components with SciPy: identical boxes to the old
+  Python scan, 286 ms down to 9.3 ms for a 1024 tile on a 2-core Modal CPU. Live on a scratch app on
+  the aizendazai46 profile (L4, SAM-TS-L and RT full, 9 real 1080x1536 pages of one chapter, 8 requests
+  and 5.4 MB of tile PNGs a page, optimised test build of the producer, about $0.13): one page at a
+  time 10.6 and 11.5 s a page, three at once 5.4 and 5.1 s a page, about 2.1 times faster, all pages
+  answered. A page's batch took 9.3 s alone, of which about 2 s was GPU inference and 0.1 s post
+  processing; three at once share the GPU, so inference rose to 3.7 s a batch. The other 7 s is
+  upload, gateway and polling, not split further; the 5.4 MB upload over the slow link to us-east is
+  a likely part. The cold start of the first page took 75 s. Not measured: GPU memory with three SAM runs beside a denoise page, and how many extra
+  pages a closed or refused run has out (at most two beyond the one it stops at).
+- **Cloud Detect sends a grey tile as a grey PNG (2026-10-20).** Tiles went as 8-bit RGB PNGs at the
+  encoder's default effort. Measured with Pillow on copies of the 28 pages of `p19/c23` (1080x1536,
+  four 1024 tiles a page): 5.58 MB of RGB tiles a page, 5.59 MB at deflate level 9 (no gain, the
+  scans are noisy), 2.52 MB as grey. On the one page whose every pixel is grey, 6.83 MB fell to 3.17
+  MB. `encode_tile` now writes a grey PNG when every pixel of the tile is grey and the gateway lists
+  `analysis.gray_tiles` among its `/capabilities` operations; the worker already expands a tile to
+  RGB before either model reads it, so the models see the same pixels, and a gateway without the
+  operation (one not yet redeployed, or with no analysis worker) keeps getting RGB. The review
+  remembers which encoding its proposal used, so the confirmation's digests match. Checked locally
+  with the cloud's own SAM-TS-L and RT-DETR graphs and the worker's pre and post processing on CPU:
+  on the grey page, mask, components and boxes are identical. How often it applies: one random page
+  from each of the 33 chapters in the library, 11 exactly grey, 9 grey but for a 1-level colour
+  difference on about 2 per cent of pixels, 13 coloured. Those near grey pages, all 27 others in
+  `p19/c23` among them, are left RGB: forcing them grey changed 223 of 472,651 mask pixels over 20
+  tiles of five pages, the component count in 8 tiles, and one box by 1 px. Live upload time on the
+  slow link not measured; needs a worker redeploy and an app build to take effect.
+- **Cloud Detect sends each page's pixels once (2026-10-20).** The four overlapping 1024 tiles
+  of a 1080x1536 page carry 4.19 Mpx for a 1.66 Mpx page, so the tiles were 5.58 MB a page as RGB
+  PNGs. A gateway that serves `analysis.batches` now also lists `analysis.batch_canvas`, and a
+  batch then carries one PNG over its tiles' bounding box (`canvas_png_b64`, `canvas_rect`) in
+  place of the tile PNGs. Design: each tile is named by its canonical PNG
+  (`cloud_analysis_wire::canonical_tile_png`, `contract.py` `analysis_canonical_tile_png`): grey
+  when every pixel is grey, else RGB, unfiltered rows in stored deflate blocks, so it depends on no
+  encoder. The gateway cuts each tile out of the canvas, rebuilds that PNG byte for byte, and
+  validates the batch exactly as a batch of tile PNGs, so `tile_png_sha256`, the request and batch
+  digests, the review's disclosure, the attempt journal and the worker are unchanged, and a canvas
+  that does not hold a request's exact pixels is refused. Every canvas pixel outside the batch's
+  tiles is white, so a partial review sends only what it approved. The client checks that every
+  tile is canonical and that overlapping tiles agree before it sends a canvas, and sends the tile
+  PNGs when the canvas would be larger or over 16 Mpx. Two tiles with the same pixels (a blank
+  margin) are both in the canvas and one PNG among the tile PNGs; before, a batch that named one
+  PNG twice was refused by the gateway. A gateway without the operation (older, or
+  Beam) gets compressed tile PNGs as before, grey tiles included; the review keeps the encoding its
+  proposal was made with (`TileEncoding`), and its run is refused when the gateway no longer takes
+  that encoding, since the review named that encoding's bytes. The gateway cuts every tile place,
+  not one place a digest, and refuses a place whose pixels do not give the digest its requests
+  name. A run of tiles with one digest (a blank page) is cut at the 16-request batch bound; before,
+  a blank page of nine or more tiles made one batch past it, which the gateway refused. Measured on copies of the 28 pages of `p19/c23` with the
+  app's own encoder: 5.58 MB of RGB tiles a page (5.45 MB with grey tiles), 2.11 MB as one canvas
+  (1.23 to 2.46 MB), every page in one batch: 156 MB for the chapter down to 59 MB. Proof that the
+  models see the same input: on all 28 pages the gateway code cut the Rust canvas back into tiles
+  whose digests match the requests, each cut tile decodes to the same pixels as the compressed RGB
+  and grey tiles, and the real worker (`AnalysisWorker.analyze`, with pixel-dependent stand-in
+  sessions, since this Mac's Python has no onnxruntime) fed byte-identical arrays to the graphs
+  and returned identical masks, components and boxes for all 224 requests. The real SAM-TS-L and
+  RT-DETR graphs were not run on the canvas path; with identical input arrays they cannot differ.
+  Costs: the hop from gateway to GPU now carries the uncompressed canonical tiles (about 12.3 MB a
+  page against 5.6 MB), inside Modal; the client's batch bound counts canonical sizes, so at most
+  five RGB tiles share a batch and a page of six or more RGB tiles goes as two canvases with their
+  overlap sent twice. Not measured: live upload time on the slow link, and the gateway's decode
+  time for a canvas. Needs a worker redeploy and an app build (`npm run helpers` first) to take
+  effect. History: analysis protocol 1.0.0 sent tiles that did not overlap; 1.1.0 overlapped them
+  for mask quality at seams ("Overlapping cloud SAM tiles now have a five-page live comparison"
+  above) and put the overlap on the wire.
 - **The run consent shows no cost and no encoded size.** `costEstimateUsd` is always null, and
   `sourceBytes` is estimated from the source file, not the PNG tiles actually sent.
 - **Cloud detection on a long strip is proven offline only.** A run sends each page once and a
@@ -2732,9 +3011,8 @@ to the earlier prompt.
   segmentation scale rebuild the same patches as Auto on a synthetic page. It was not run on the
   real scans in `120 noisy png` (local only), and a clean after an engine or model update rebuilds the fit
   with the stored values, not the new detector's.
-- **A deleted detection cannot be restored.** It has no pixels, and its mask files go with it, so
-  `restoreRegion` and undo cannot bring it back. What undo does after `applyTool` cleans a
-  detection (the patch replaces the detection in one write) was not tested.
+- **A deleted detection is restored by Undo since 2026-10-19,** from the page state the delete
+  kept (`history.rs#record_pages`), not by `restoreRegion`.
 - **A Solid pick in a Clean run now fills with the stored `balloon_color`.** The run's `bubbleColor`
   is used only for a detection with no measured colour. Tested on a synthetic flat page
   (`a_solid_pick_fills_with_its_measured_balloon_colour_before_the_runs`); whether the ring gray
@@ -2823,9 +3101,10 @@ consent, held-candidate approval, LaMa routing):
 - **No standing project consent can be revoked from the interface.** It clears when cloud engines are
   turned off or the endpoint's profile is removed; there is no project settings screen yet.
 - **None of these fixes was driven in the real app.** Evidence is unit, DOM and mock tests only.
-- **Changing a detection's text type has no undo and is not offered on held candidates.** The region
-  menu's Text type section (`set_detection_type`) flips a stored detection only. Detection mask edits
-  have no undo either, and a held candidate row has no stable id to address. Moving a detection
+- **Changing a detection's text type is not offered on held candidates.** The region
+  menu's Text type section (`set_detection_type`) flips a stored detection only, and a held
+  candidate row has no stable id to address. It is one undo step since 2026-10-19, as detection
+  mask edits are. Moving a detection
   outside turns a stored `fill` or `solid` pick into `lama` and clears its measured bubble tone;
   moving it back keeps `lama` and does not re-measure the tone. A Clean with its own picks follows
   the flag regardless. Only the Vite mock was driven; the native command has unit tests only.

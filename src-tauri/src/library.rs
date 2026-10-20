@@ -2762,16 +2762,22 @@ impl Library {
             path: path.clone(),
             detail: e.to_string(),
         })?;
-        let Some(record) = job.project.detections.iter_mut().find(|row| row.id == region_id) else {
+        let Some(record) = job.project.detections.iter().find(|row| row.id == region_id) else {
             return Ok(None);
         };
         let source_idx = record.source_idx;
-        if retype_detection(record, inside) {
+        let mut changed = record.clone();
+        if retype_detection(&mut changed, inside) {
+            let page_before = crate::history::capture_pages(&job, &[source_idx]);
+            if let Some(record) = job.project.detections.iter_mut().find(|row| row.id == region_id) {
+                *record = changed;
+            }
             job.flush().map_err(|e| LibraryError::Manifest {
                 path: path.clone(),
                 detail: e.to_string(),
             })?;
             invalidate_manifest_cache(&path);
+            crate::history::record_pages(&job, &chapter_id, crate::history::DETECTION_TYPE_LABEL, None, page_before);
         }
         Ok(region_and_status(&chapter_id, &job.project, source_idx, region_id).map(|(region, _)| region))
     }
@@ -2785,6 +2791,27 @@ impl Library {
         &self,
         region_id: &str,
     ) -> Result<Option<(ApiRegion, String)>, LibraryError> {
+        self.remove_region_as(region_id, None)
+    }
+
+    /// Dismiss a row with no mask: a region the gate or the decliner held
+    /// back, which the user has read and decided to leave alone. Removed as
+    /// [`Library::remove_region`] removes it, and one undo step: the row has
+    /// no `visible` flag to turn back on, so its page is kept as it was
+    /// (`history::record_pages`). `None` for a patch, which `deleteMask`
+    /// soft-deletes instead, and for an id no chapter names.
+    pub fn dismiss_region(
+        &self,
+        region_id: &str,
+    ) -> Result<Option<(ApiRegion, String)>, LibraryError> {
+        self.remove_region_as(region_id, Some(crate::history::DISMISS_LABEL))
+    }
+
+    fn remove_region_as(
+        &self,
+        region_id: &str,
+        label: Option<&str>,
+    ) -> Result<Option<(ApiRegion, String)>, LibraryError> {
         let index = self.index()?;
         let Some(chapter_id) = chapter_holding(&index, region_id) else {
             return Ok(None);
@@ -2796,6 +2823,16 @@ impl Library {
             path: path.clone(),
             detail: e.to_string(),
         })?;
+        if label.is_some() && job.project.patches.iter().any(|row| row.id == region_id) {
+            return Ok(None);
+        }
+        let page_before = match label {
+            Some(_) => crate::region::page_index_in(&chapter_id, region_id)
+                .and_then(|at| job.project.strip.order.get(at).copied())
+                .map(|source_idx| crate::history::capture_pages(&job, &[source_idx]))
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
 
         let mut source_idx = None;
         let mut removed_artifacts = Vec::<String>::new();
@@ -2884,6 +2921,9 @@ impl Library {
             let _ = std::fs::remove_file(job.sidecar().join(reference));
         }
         invalidate_manifest_cache(&path);
+        if let Some(label) = label {
+            crate::history::record_pages(&job, &chapter_id, label, None, page_before);
+        }
         Ok(source_idx.and_then(|idx| {
             let page_index = job
                 .project
@@ -4080,8 +4120,12 @@ impl Library {
                 if job.project.detections.iter().find(|row| row.id == region_id) != Some(&*before) {
                     return Err("mask_changed".into());
                 }
+                // A detection has no `visible` flag to turn back on, so its
+                // page is kept as it was, whole (`history::record_pages`).
+                let page_before = crate::history::capture_pages(&job, &[before.source_idx]);
                 let record = job.remove_detection(region_id).map_err(|e| e.to_string())?.ok_or("mask_changed")?;
                 invalidate_manifest_cache(&path);
+                crate::history::record_pages(&job, &chapter_id, crate::history::DELETE_DETECTION_LABEL, None, page_before);
                 let Some(page_index) = job.project.strip.order.iter().position(|index| *index == record.source_idx) else { return Ok(None) };
                 let Some(page) = page_of(&chapter_id, &job.project, page_index) else { return Ok(None) };
                 Ok(Some((region_of_detection(&record, &page), page.status.to_owned())))
@@ -4228,6 +4272,18 @@ pub async fn restore_region(
     } else {
         None
     })
+}
+
+/// Dismiss a row with no mask, as one undo step: see
+/// [`Library::dismiss_region`]. Answers the page's status, or `null` for a
+/// region that is not such a row.
+#[tauri::command]
+pub async fn dismiss_region(
+    app: tauri::AppHandle,
+    region_id: String,
+) -> Result<Option<DeletedMask>, String> {
+    let dismissed = blocking(move || Ok(Library::for_app(&app)?.dismiss_region(&region_id)?)).await?;
+    Ok(dismissed.map(|(_, page_status)| DeletedMask { region: None, page_status }))
 }
 
 /// Change one layer's opacity, position, rotation or lock - the layer
@@ -6258,10 +6314,11 @@ mod tests {
         assert!(gone.starts_with("clean_no_result: "), "{gone}");
     }
 
-    /// A chapter cleaned before a clean kept its detection opens as before,
-    /// and a reject there says why it cannot be done and changes nothing.
+    /// A chapter cleaned before a clean kept its detection: Restore mask
+    /// makes the result a detection from its own mask, as one undo step,
+    /// and a patch no cleaner made is refused with nothing written.
     #[test]
-    fn a_result_from_before_detections_were_kept_refuses_reject_and_the_chapter_is_as_it_was() {
+    fn a_result_from_before_detections_were_kept_restores_its_own_mask() {
         let scratch = Scratch::new("reject-old-clean");
         let library = library(&scratch);
         let (chapter_id, path, id) = a_cleaned_detection(&library, &scratch);
@@ -6271,25 +6328,32 @@ mod tests {
             let _lock = crate::run::lock_job(&path).unwrap();
             let mut job = Job::open(&path).unwrap();
             let kept = std::mem::take(&mut job.project.cleaned_detections);
+            let painted = a_patch(&format!("{}-r9", page_id(&chapter_id, 0)), Rect::new(40, 10, 6, 6), Engine::Paint);
+            job.complete_region(0, &painted, None).unwrap();
             job.flush().unwrap();
             job.delete_detection_files(&kept);
             std::fs::remove_file(crate::history::journal_path(&path)).unwrap();
             invalidate_manifest_cache(&path);
         }
         let before = std::fs::read(&path).unwrap();
-
-        let refused = library.reject_result(&id).unwrap_err();
-        assert_eq!(refused.reason_key(), "notice.mask.rejectFailed");
+        let refused = library.reject_result(&format!("{}-r9", page_id(&chapter_id, 0))).unwrap_err();
         assert!(refused.to_string().starts_with("clean_not_restorable: "), "{refused}");
-        let refused = library.set_region_cleaned(&id, false).unwrap_err().to_string();
-        assert!(refused.starts_with("clean_not_restorable: "), "{refused}");
-
         assert_eq!(std::fs::read(&path).unwrap(), before, "nothing was written");
         assert!(crate::history::load(&path).entries.is_empty(), "and nothing recorded");
+
+        let (region, _, view) = library.reject_result(&id).unwrap().unwrap();
+        assert_eq!(region.outcome, "detected");
+        assert_eq!(region.inside_bubble, Some(false), "a LaMa result starts as text outside");
+        assert_eq!(view.entries.len(), 1);
+        let job = Job::open(&path).unwrap();
+        let mask = job.load_detection(&id).unwrap().unwrap().mask;
+        assert_eq!(mask.bounds, Rect::new(20, 10, 8, 6));
+        // Undo is the result again, with no render.
+        crate::history::move_at(&path, &chapter_id, "undo").unwrap();
+        let (region, _) = library.set_region_cleaned(&id, true).unwrap().unwrap();
+        assert_eq!(region.outcome, "cleaned");
         let pages = library.load_pages(&chapter_id, &[0]).unwrap();
         assert!(pages[0].regions.iter().any(|region| region.id == id && region.outcome == "cleaned"));
-        // The old way out still works: Delete hides the result.
-        assert!(library.set_mask_visible(&id, false).unwrap().is_some());
     }
 
     #[test]

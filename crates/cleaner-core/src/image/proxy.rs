@@ -321,56 +321,6 @@ pub fn managed_proxy_layer(pixels: &Raster, mask: &Mask, plan: &ProxyPlan) -> Re
     Ok(Some((TileRect { x: rect.x as u32, y: rect.y as u32, w: rect.w, h: rect.h }, layer)))
 }
 
-/// What a stroke lays over the page's tiles while it is being drawn: for every
-/// proxy pixel the stroke touches, the pixel the tile will hold once the stroke
-/// is committed, and nothing at all everywhere else.
-///
-/// **`pixels` must be the page as it will be, over the whole of `mask.bounds`** -
-/// the surface under the stroke with the stroke blended into it, which is what
-/// `paint::render_brush` and `paint::render_clone` leave. That is what lets a
-/// proxy pixel on the stroke's rim be exact: it is reduced from every source
-/// pixel under it, painted or not, just as the tile will be. A layer that kept
-/// only the masked pixels and left the rest to the browser's own blend
-/// ([`managed_proxy_layer`]) is some levels off along that rim, and is off
-/// again when it lies over a tile that already holds the stroke.
-///
-/// **Not held to the page.** A longstrip stroke can cross a join, and the part
-/// of it on the next page still has to be shown. So the rectangle is in the
-/// page's proxy pixels and may start before zero or end past the proxy: the
-/// page's own grid, continued. The neighbouring page's grid can sit a fraction
-/// of a proxy pixel away from that, which moves the paint by that much until
-/// its tiles reload and never moves anything else.
-///
-/// What is left inexact is small: a rim pixel whose span runs out of
-/// `mask.bounds` has only part of its surface here, and is see-through by the
-/// part that is missing; and a page pixel that is itself see-through stays so,
-/// which a browser draws *over* the tile rather than in place of it.
-pub fn managed_proxy_overlay(pixels: &Raster, mask: &Mask, plan: &ProxyPlan) -> Result<Option<(Rect, Raster)>, super::ImageError> {
-    use super::color::{alpha, ManagedColor};
-    let bounds = mask.bounds;
-    if bounds.w == 0 || bounds.h == 0 || pixels.width != bounds.w || pixels.height != bounds.h { return Ok(None); }
-    let rect = proxy_rect((bounds.x, bounds.y), (bounds.right(), bounds.bottom()), plan);
-    let transform = ManagedColor::for_raster(pixels)?;
-    let mut layer = reduce_managed(rect, plan.proxy_w, plan.proxy_h, plan.page_w, plan.page_h, true, |x, y| {
-        if !bounds.contains(x, y) { return ([0.0; 3], 0.0); }
-        let (lx, ly) = ((x - bounds.x) as u32, (y - bounds.y) as u32);
-        (transform.pixel(pixels, lx, ly), alpha(pixels, lx, ly))
-    });
-    // The page around the stroke is the tiles' to draw, and theirs alone.
-    for ty in 0..rect.h {
-        let (y0, y1) = span(rect.y + i64::from(ty), plan.proxy_h, plan.page_h);
-        for tx in 0..rect.w {
-            let (x0, x1) = span(rect.x + i64::from(tx), plan.proxy_w, plan.page_w);
-            if !(y0..y1).any(|y| (x0..x1).any(|x| mask.coverage(x, y) != 0)) {
-                for c in 0..4 {
-                    layer.set_sample(tx, ty, c, 0);
-                }
-            }
-        }
-    }
-    Ok(Some((rect, layer)))
-}
-
 /// The proxy pixels whose spans hold the page rectangle `from..to`: floor at
 /// the start and ceiling at the end, signed so that a start before the page
 /// rounds outwards like any other.
@@ -787,64 +737,6 @@ mod tests {
         assert!(clear > 0 && solid > 0, "{clear} clear, {solid} solid");
     }
 
-    /// **An overlay is the committed tile wherever the stroke touches, and
-    /// nothing anywhere else.** The rim is the part that matters: a proxy pixel
-    /// half under the stroke is still the tile's own pixel, byte for byte, so
-    /// it reads the same over the tile from before the commit and over the one
-    /// from after it.
-    #[test]
-    fn an_overlay_is_the_committed_tile_wherever_the_stroke_touches() {
-        let mut page = a_page(2400, 3000);
-        for y in 0..3000 {
-            for x in 0..2400 {
-                page.set_sample(x, y, 0, ((x / 7 + y / 11) % 256) as u16);
-            }
-        }
-        let bounds = Rect::new(301, 457, 533, 211);
-        let (mut mask, mut committed) = (Mask::empty(bounds), page.clone());
-        // The patch a stroke leaves: the page under its box, painted along a
-        // diagonal band.
-        let mut pixels = a_page(bounds.w, bounds.h);
-        for y in 0..bounds.h {
-            for x in 0..bounds.w {
-                let (px, py) = (bounds.x as u32 + x, bounds.y as u32 + y);
-                let painted = (i64::from(x) - i64::from(y) * 2).abs() < 40;
-                if painted {
-                    mask.set(i64::from(px), i64::from(py), true);
-                    committed.set_sample(px, py, 0, 250);
-                }
-                pixels.set_sample(x, y, 0, committed.sample(px, py, 0));
-            }
-        }
-
-        let plan = ProxyPlan::of(&page);
-        let (rect, overlay) = managed_proxy_overlay(&pixels, &mask, &plan).unwrap().unwrap();
-        let tile = proxy_tile(&committed, 0).unwrap();
-        let (mut clear, mut inside, mut rim) = (0, 0, 0);
-        for ty in 0..rect.h {
-            let (y0, y1) = span(rect.y + i64::from(ty), plan.proxy_h, plan.page_h);
-            for tx in 0..rect.w {
-                let (x0, x1) = span(rect.x + i64::from(tx), plan.proxy_w, plan.page_w);
-                let under = || (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y)));
-                let covered = under().filter(|(x, y)| mask.contains(*x, *y)).count() as i64;
-                if covered == 0 {
-                    assert_eq!(overlay.sample(tx, ty, 3), 0, "{tx},{ty} is page the stroke never touched");
-                    clear += 1;
-                    continue;
-                }
-                // The box's own edge is the one place a span can leave it.
-                if !under().all(|(x, y)| bounds.contains(x, y)) {
-                    continue;
-                }
-                let at = ((rect.x + i64::from(tx)) as u32, (rect.y + i64::from(ty)) as u32);
-                assert_eq!(overlay.sample(tx, ty, 3), 255, "{tx},{ty} is under the stroke");
-                assert_eq!(overlay.sample(tx, ty, 0), tile.sample(at.0, at.1, 0), "{tx},{ty} is not the tile's pixel");
-                if covered == (x1 - x0) * (y1 - y0) { inside += 1 } else { rim += 1 }
-            }
-        }
-        assert!(clear > 0 && inside > 0 && rim > 0, "{clear} clear, {inside} inside, {rim} on the rim");
-    }
-
     /// The grid's arithmetic holds to the far end of `u32`. A strip that long
     /// is not a page anybody has, but the products it would take pass 63 bits,
     /// and the answer must not depend on nobody having one.
@@ -862,49 +754,6 @@ mod tests {
         let (rect, layer) = managed_proxy_layer(&pixels, &Mask::filled(bounds), &plan).unwrap().unwrap();
         assert_eq!((rect.x, rect.y, rect.w, rect.h), (0, 3_500_000_000, 1, 1));
         assert_eq!(layer.sample(0, 0, 3), 255);
-        let (rect, layer) = managed_proxy_overlay(&pixels, &Mask::filled(bounds), &plan).unwrap().unwrap();
-        assert_eq!((rect.x, rect.y, rect.w, rect.h), (0, 3_500_000_000, 1, 1));
-        assert_eq!(layer.sample(0, 0, 3), 255);
-    }
-
-    /// An overlay is the layer without the page's edge. On the page the two
-    /// are one picture, sample for sample; past the edge the overlay goes on
-    /// along the same grid, which is how a stroke over a longstrip join is
-    /// shown on the page it ran onto.
-    #[test]
-    fn an_overlay_continues_the_page_s_grid_past_its_edges() {
-        let plan = ProxyPlan::for_page(2400, 3000);
-        for bounds in [Rect::new(-50, -70, 300, 260), Rect::new(2250, 2890, 300, 260)] {
-            let mut pixels = a_page(bounds.w, bounds.h);
-            for y in 0..bounds.h {
-                for x in 0..bounds.w {
-                    pixels.set_sample(x, y, 0, ((x * 3 + y * 5) % 251) as u16);
-                }
-            }
-            let mask = Mask::filled(bounds);
-            let (held, on_page) = managed_proxy_layer(&pixels, &mask, &plan).unwrap().unwrap();
-            let (rect, overlay) = managed_proxy_overlay(&pixels, &mask, &plan).unwrap().unwrap();
-            assert!(rect.w > held.w && rect.h > held.h, "{bounds:?}");
-            assert!(rect.x < 0 || rect.right() > i64::from(plan.proxy_w), "{bounds:?}");
-            assert!(rect.y < 0 || rect.bottom() > i64::from(plan.proxy_h), "{bounds:?}");
-            for ty in 0..held.h {
-                for tx in 0..held.w {
-                    let at = ((i64::from(held.x + tx) - rect.x) as u32, (i64::from(held.y + ty) - rect.y) as u32);
-                    for c in 0..4 {
-                        assert_eq!(overlay.sample(at.0, at.1, c), on_page.sample(tx, ty, c), "{bounds:?} at {tx},{ty}");
-                    }
-                }
-            }
-            // The corner that left the page is still the patch, not nothing.
-            let off = if bounds.x < 0 { (2, 2) } else { (rect.w - 3, rect.h - 3) };
-            assert_eq!(overlay.sample(off.0, off.1, 3), 255, "{bounds:?}");
-        }
-
-        // A patch that never leaves the page has one rectangle, either way.
-        let bounds = Rect::new(301, 457, 533, 211);
-        let (held, _) = managed_proxy_layer(&a_page(bounds.w, bounds.h), &Mask::filled(bounds), &plan).unwrap().unwrap();
-        let (rect, _) = managed_proxy_overlay(&a_page(bounds.w, bounds.h), &Mask::filled(bounds), &plan).unwrap().unwrap();
-        assert_eq!((rect.x, rect.y, rect.w, rect.h), (i64::from(held.x), i64::from(held.y), held.w, held.h));
     }
 
     /// A raster with no pixels in it. The plan clamps a zero dimension to 1 so

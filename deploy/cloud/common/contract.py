@@ -1557,17 +1557,17 @@ def validate_analysis_request(request: Dict[str, Any], tile_png: bytes) -> None:
         raise ContractValidationError("analysis request digest mismatch")
     if len(tile_png) > ANALYSIS_MAX_PNG_BYTES or hashlib.sha256(tile_png).hexdigest() != request["tile_png_sha256"]:
         raise ContractValidationError("analysis tile PNG digest or byte limit mismatch")
-    _validate_analysis_png(tile_png, request["tile_rect"], "RGB")
+    _validate_analysis_png(tile_png, request["tile_rect"], ("RGB", "L"))
 
 
-def _validate_analysis_png(data: bytes, rect: Dict[str, int], mode: str) -> None:
+def _validate_analysis_png(data: bytes, rect: Dict[str, int], modes: tuple[str, ...]) -> None:
     if len(data) > ANALYSIS_MAX_PNG_BYTES:
         raise ContractValidationError("analysis PNG too large")
     try:
         from PIL import Image
         from io import BytesIO
         with Image.open(BytesIO(data)) as image:
-            if image.format != "PNG" or image.mode != mode or image.size != (rect["width"], rect["height"]):
+            if image.format != "PNG" or image.mode not in modes or image.size != (rect["width"], rect["height"]):
                 raise ContractValidationError("analysis PNG geometry or format mismatch")
             image.load()
     except (OSError, ValueError) as exc:
@@ -1613,7 +1613,7 @@ def validate_analysis_result(result: Dict[str, Any], request: Dict[str, Any]) ->
     if request["capability"] == ANALYSIS_SAM:
         if boxes or type(mask) is not bytes:
             raise ContractValidationError("invalid SAM result")
-        _validate_analysis_png(mask, tile, "L")
+        _validate_analysis_png(mask, tile, ("L",))
     elif mask is not None or components:
         raise ContractValidationError("invalid RT result")
 
@@ -1662,6 +1662,11 @@ def validate_analysis_wire_result(result: Dict[str, Any], request: Dict[str, Any
 GPU_JOB_OPERATIONS: Dict[str, str] = {
     "analysis": "analysis.jobs", "denoise": "denoise.jobs", "analysis_batch": "analysis.batches",
 }
+# A tile whose every pixel is grey travels as an 8-bit grey PNG, at under half the
+# bytes of RGB. The worker expands it to RGB before either model reads it, so the
+# models see the same pixels. A gateway that serves analysis lists this operation;
+# an app that finds it absent (a worker that refuses grey) sends RGB.
+ANALYSIS_GRAY_TILES_OPERATION = "analysis.gray_tiles"
 GPU_JOB_STATUSES = ("pending", "running", "completed", "failed", "cancelled")
 GPU_JOB_TERMINAL = ("completed", "failed", "cancelled")
 GPU_JOB_ATTEMPT_MIN = 16
@@ -1746,3 +1751,96 @@ def validate_analysis_batch(metadata: Any, tiles: list) -> list:
     if _validate_lowercase_hex_hash(metadata.get("request_digest"), "request_digest") != analysis_batch_digest(digests):
         raise ContractValidationError("analysis batch digest mismatch")
     return pairs
+
+
+# A batch may carry its tiles as one canvas: `{metadata, canvas_png_b64,
+# canvas_rect, attempt_id}` in place of `tiles_png_b64`. Neighbouring tiles
+# overlap, so the four 1024 tiles of a 1080x1536 page carry 4.19 Mpx for a
+# 1.66 Mpx page; a canvas carries each pixel once. The gateway cuts each tile out
+# of it and makes the tile's canonical PNG (`analysis_canonical_tile_png`), whose
+# digest the request already names, then validates the batch exactly as a batch
+# of tile PNGs. The requests, their digests and the models' input are unchanged.
+# The client blanks every canvas pixel outside the batch's tiles, so a partial
+# review sends no pixel it did not approve. A gateway that serves batches lists
+# this operation; an app that finds it missing sends tile PNGs.
+# Mirrors `cleaner_core::cloud_analysis_wire::{canonical_tile_png, canvas_tiles}`;
+# both are checked against fixtures/analysis_v1/canonical_tiles.json.
+ANALYSIS_BATCH_CANVAS_OPERATION = "analysis.batch_canvas"
+ANALYSIS_BATCH_MAX_CANVAS_PIXELS = 16 * 1024 * 1024
+
+
+def _png_chunk(kind: bytes, data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+
+def analysis_canonical_tile_png(rgb: bytes, width: int, height: int) -> bytes:
+    """The one PNG of a tile's pixels (`rgb`, three bytes a pixel) both sides make:
+    8-bit grey when every pixel is grey, else RGB, an sRGB chunk, and one IDAT of
+    unfiltered rows in stored deflate blocks of at most 65535 bytes. It depends on
+    no encoder, so it is rebuilt byte for byte from the same pixels."""
+    if not (1 <= width <= ANALYSIS_TILE_SIDE and 1 <= height <= ANALYSIS_TILE_SIDE) or len(rgb) != width * height * 3:
+        raise ContractValidationError("invalid canonical tile pixels")
+    red, green, blue = rgb[0::3], rgb[1::3], rgb[2::3]
+    gray = red == green == blue
+    data, channels, color = (red, 1, 0) if gray else (rgb, 3, 2)
+    stride = width * channels
+    raw = b"".join(b"\x00" + data[row * stride:(row + 1) * stride] for row in range(height))
+    blocks = [raw[start:start + 65535] for start in range(0, len(raw), 65535)]
+    deflate = b"".join(
+        bytes([1 if index == len(blocks) - 1 else 0]) + struct.pack("<HH", len(block), len(block) ^ 0xFFFF) + block
+        for index, block in enumerate(blocks)
+    )
+    stream = b"\x78\x01" + deflate + struct.pack(">I", zlib.adler32(raw) & 0xFFFFFFFF)
+    png = (b"\x89PNG\r\n\x1a\n"
+           + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, color, 0, 0, 0))
+           + _png_chunk(b"sRGB", b"\x01") + _png_chunk(b"IDAT", stream) + _png_chunk(b"IEND", b""))
+    if len(png) > ANALYSIS_MAX_PNG_BYTES:
+        raise ContractValidationError("canonical tile PNG exceeds transfer limit")
+    return png
+
+
+def analysis_canvas_tiles(metadata: Any, canvas_rect: Any, canvas_png: bytes) -> list:
+    """The distinct tile PNGs a canvas batch stands for, in request order, for
+    `validate_analysis_batch`: each request's tile cut out of the canvas as its
+    canonical PNG. Each place is cut once and must give the digest its requests
+    name; places with one digest yield one PNG. Raises on a canvas that is too
+    large, not an 8-bit grey or RGB PNG of `canvas_rect`'s size, or that does not
+    hold a request's tile."""
+    if type(metadata) is not dict or type(metadata.get("requests")) is not list \
+            or not 1 <= len(metadata["requests"]) <= ANALYSIS_BATCH_MAX_REQUESTS:
+        raise ContractValidationError("analysis batch request count out of range")
+    rect = analysis_rect(canvas_rect)
+    if type(canvas_png) is not bytes or len(canvas_png) > ANALYSIS_BATCH_MAX_TILE_BYTES \
+            or rect["width"] * rect["height"] > ANALYSIS_BATCH_MAX_CANVAS_PIXELS:
+        raise ContractValidationError("analysis canvas too large")
+    wanted: Dict[tuple, str] = {}
+    for request in metadata["requests"]:
+        if type(request) is not dict:
+            raise ContractValidationError("analysis batch request must be an object")
+        tile = analysis_rect(request.get("tile_rect"), tile=True)
+        left, top = tile["x"] - rect["x"], tile["y"] - rect["y"]
+        if left < 0 or top < 0 or left + tile["width"] > rect["width"] or top + tile["height"] > rect["height"]:
+            raise ContractValidationError("analysis tile outside its canvas")
+        sha = _validate_lowercase_hex_hash(request.get("tile_png_sha256"), "tile_png_sha256")
+        place = (tile["x"], tile["y"], tile["width"], tile["height"])
+        if wanted.setdefault(place, sha) != sha:
+            raise ContractValidationError("analysis canvas does not hold a request's tile")
+    from PIL import Image
+    from io import BytesIO
+    try:
+        with Image.open(BytesIO(canvas_png)) as image:
+            if image.format != "PNG" or image.mode not in ("RGB", "L") or image.size != (rect["width"], rect["height"]):
+                raise ContractValidationError("analysis canvas geometry or format mismatch")
+            image.load()
+            canvas = image.convert("RGB")
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise ContractValidationError("invalid analysis canvas PNG") from exc
+    tiles: Dict[str, bytes] = {}
+    for (x, y, width, height), sha in wanted.items():
+        left, top = x - rect["x"], y - rect["y"]
+        pixels = canvas.crop((left, top, left + width, top + height)).tobytes()
+        png = analysis_canonical_tile_png(pixels, width, height)
+        if hashlib.sha256(png).hexdigest() != sha:
+            raise ContractValidationError("analysis canvas does not hold a request's tile")
+        tiles.setdefault(sha, png)
+    return list(tiles.values())

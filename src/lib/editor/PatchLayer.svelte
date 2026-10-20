@@ -2,6 +2,7 @@
   import { untrack } from 'svelte'
   import { cachedLayer, loadLayer, noteLayerDrawn } from './patchlayers.svelte.js'
   import { layerPreviews } from './layerpreview.svelte.js'
+  import { drawErased, eraseMasks } from './erasepreview.svelte.js'
 
   /**
    * One patch's layer: a canvas placed over its bounds on the page's proxy
@@ -17,6 +18,9 @@
    * its pixels, rather than through reactive style bindings, so a moved patch
    * never shows its new pixels at its old place for a frame.
    *
+   * A Brush layer is drawn with the eraser strokes on its page taken off
+   * (`erasepreview.svelte.js`), each only off the picture it first reached.
+   *
    * @type {{
    *   layer: import('./patchlayers.svelte.js').PageLayer,
    *   plan: {width: number, height: number},
@@ -30,7 +34,16 @@
   let canvasEl = $state()
   let drawnStyle = $state({ offsetX: 0, offsetY: 0, rotation: 0 })
   const placement = $derived(layerPreviews.get(layer.id) ?? layer.style ?? drawnStyle)
-  const movement = $derived(`translate(${((placement.offsetX - drawnStyle.offsetX) / (layer.pageWidth || 1)) * 100}cqw, ${((placement.offsetY - drawnStyle.offsetY) / (layer.pageWidth || 1)) * 100}cqw) rotate(${placement.rotation - drawnStyle.rotation}deg)`)
+  // In the sheet's own width (`--sheet-w`, set by `PageSheet`), so the move
+  // follows the zoom without taking it as a prop.
+  const sheetShare = (/** @type {number} */ px) => `calc(var(--sheet-w) * ${px / (layer.pageWidth || 1)})`
+  /** The picture on the canvas, and the URL it came from. */
+  let shown = /** @type {import('../api/boundedimage.js').BoundedImage|null} */ (null)
+  let shownUrl = /** @type {string|null} */ (null)
+  /** The picture each eraser stroke first reached, by stroke id. */
+  const reached = new Map()
+  const masks = $derived(layer.brush ? (eraseMasks.get(pageId) ?? []) : [])
+  const movement = $derived(`translate(${sheetShare(placement.offsetX - drawnStyle.offsetX)}, ${sheetShare(placement.offsetY - drawnStyle.offsetY)}) rotate(${placement.rotation - drawnStyle.rotation}deg)`)
 
   /**
    * Put a decoded layer on the canvas, or clear it for a `204`.
@@ -55,11 +68,59 @@
       node.style.width = `${(bounds.w / plan.width) * 100}%`
       node.style.height = `${(bounds.h / plan.height) * 100}%`
       node.style.display = 'block'
-      node.getContext('2d')?.drawImage(image, 0, 0)
+      const context = node.getContext('2d')
+      if (context) drawErased(context, image, erasing(bounds), bounds, plan)
     }
+    shown = entry
+    shownUrl = layer.url
     noteLayerDrawn(pageId)
     onsettle(layer.id)
   }
+
+  /** How many strokes the picture on the canvas has taken off it. */
+  let erasedBy = 0
+
+  /**
+   * The eraser strokes to take off the layer's current picture: those over
+   * it that first reached this picture.
+   *
+   * @param {{x: number, y: number, w: number, h: number}} bounds - the picture's, in proxy pixels
+   */
+  function erasing(bounds) {
+    const live = new Set()
+    const list = masks.filter((mask) => {
+      live.add(mask.id)
+      if (!reached.has(mask.id)) reached.set(mask.id, layer.url)
+      const x = (mask.box.x / 100) * plan.width
+      const y = (mask.box.y / 100) * plan.height
+      const over = x < bounds.x + bounds.w && x + (mask.box.w / 100) * plan.width > bounds.x &&
+        y < bounds.y + bounds.h && y + (mask.box.h / 100) * plan.height > bounds.y
+      return over && reached.get(mask.id) === layer.url
+    })
+    for (const id of reached.keys()) if (!live.has(id)) reached.delete(id)
+    erasedBy = list.length
+    return list
+  }
+
+  // A stroke that grows or goes is drawn again, over the picture already
+  // shown. While a newer picture is on its way the canvas is left as it is:
+  // the stroke being let go must not bring back the paint it took off.
+  $effect(() => {
+    for (const mask of masks) mask.tick
+    untrack(() => {
+      const node = canvasEl
+      const image = shown?.image
+      const bounds = shown?.bounds
+      if (!node || !image || !bounds || shownUrl !== layer.url) return
+      const before = erasedBy
+      const list = erasing(bounds)
+      if (list.length === 0 && before === 0) return
+      const context = node.getContext('2d')
+      if (!context) return
+      context.clearRect(0, 0, node.width, node.height)
+      drawErased(context, image, list, bounds, plan)
+    })
+  })
 
   $effect(() => {
     const url = layer.url

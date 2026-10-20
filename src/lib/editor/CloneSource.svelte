@@ -1,5 +1,6 @@
 <script>
   import { renderCloneTiles } from './paintrender.js'
+  import { cleanedTiles } from './paintpreview.js'
 
   /**
    * What the clone stamp is about to copy, shown where it will land.
@@ -77,21 +78,7 @@
     if (!ctx) return
     ctx.clearRect(0, 0, width, height)
 
-    const tiles = [...sheet.querySelectorAll('[data-artwork="cleaned"] img')]
-      // A tile still loading its replacement is in the document twice; the
-      // one on screen is the one that is not hidden.
-      .filter((image) => image.complete && image.naturalWidth > 0 && image.style.visibility !== 'hidden')
-      .map((image) => {
-        const tile = image.getBoundingClientRect()
-        return {
-          image,
-          left: (tile.left - box.left) / box.width,
-          top: (tile.top - box.top) / box.height,
-          width: tile.width / box.width,
-          height: tile.height / box.height,
-        }
-      })
-    renderCloneTiles(ctx, tiles, {
+    renderCloneTiles(ctx, cleanedTiles(sheet), {
       width: box.width * density,
       height: box.height * density,
       dx: -((from.x - reach.rx) / 100) * box.width * density,
@@ -123,6 +110,7 @@
      sheet is drawn at the page's own aspect ratio, so it is a circle. */
   .overlay {
     position: absolute;
+    z-index: var(--z-draw);
     border-radius: 50%;
     pointer-events: none;
   }

@@ -32,6 +32,8 @@ HF_REVISION = "5dd97423e0fbf2404264979136d47e8101144046"
 HI_SAM_REVISION = "69009434d4dba5541f228d8f5acb0754c333d417"
 HI_SAM_ARCHIVE_SHA256 = "f18fb049813f9b9319ac074449f4539fbe5b58f4e3f450ce331578d74bc3e327"
 OPSET = 17
+# The desktop app pins the macOS export; see pinned_dense_pe().
+DENSE_PE_SHA256 = "b7bdceb7a309e338316b2a69aa3efea9ce196957466f018849bdb427318f43ba"
 
 
 def sha256(path: Path) -> str:
@@ -277,6 +279,28 @@ class Encoder(torch.nn.Module):
         return self.image_encoder(normalized)
 
 
+def pinned_dense_pe(path: Path, computed: torch.Tensor) -> torch.Tensor:
+    """The dense positional encoding exactly as the pinned export holds it.
+
+    get_dense_pe() takes sin and cos in float32, and each platform's math
+    library rounds some of those values one unit differently: on Windows
+    x64, 22,640 of 1,048,576. The text head stores the result as a constant,
+    so a Windows export came out with different bytes and failed the app's
+    SHA-256 pin. The pinned buffer is the macOS result for the same
+    checkpoint, and the check below proves it is the same quantity first.
+    The cloud seed does not pass one: it keeps its own Linux pin.
+    """
+    import lzma
+
+    raw = lzma.decompress(path.read_bytes())
+    if hashlib.sha256(raw).hexdigest() != DENSE_PE_SHA256:
+        raise ValueError("pinned dense positional encoding SHA-256 mismatch")
+    pinned = torch.from_numpy(np.frombuffer(raw, dtype="<f4").copy()).reshape(computed.shape)
+    if not torch.allclose(pinned, computed, rtol=0, atol=1e-6):
+        raise ValueError("pinned dense positional encoding differs from this checkpoint's")
+    return pinned
+
+
 class TextHead(torch.nn.Module):
     """The live dependency slice of MaskDecoder.predict_masks for hr_masks.
 
@@ -286,7 +310,7 @@ class TextHead(torch.nn.Module):
     intentionally absent from this wrapper's forward graph.
     """
 
-    def __init__(self, model):
+    def __init__(self, model, dense_pe: Path | None = None):
         super().__init__()
         self.modal_aligner = model.modal_aligner
         decoder = model.mask_decoder
@@ -298,7 +322,10 @@ class TextHead(torch.nn.Module):
         self.output_hypernetworks_mlps_hr = decoder.output_hypernetworks_mlps_hr
         # The positional encoding is fixed for static 64x64 embeddings. It
         # depends on prompt_encoder.pe_layer's learned Gaussian matrix.
-        self.register_buffer("image_pe", model.prompt_encoder.get_dense_pe().detach().clone())
+        image_pe = model.prompt_encoder.get_dense_pe().detach().clone()
+        if dense_pe is not None:
+            image_pe = pinned_dense_pe(dense_pe, image_pe)
+        self.register_buffer("image_pe", image_pe)
 
     def forward(self, image_embeddings: torch.Tensor) -> torch.Tensor:
         sparse = self.modal_aligner(image_embeddings)
@@ -380,7 +407,7 @@ def run(args: argparse.Namespace) -> None:
     np.save(output / "prepared_rgb_f32.npy", prepared_batch.numpy())
     model, checkpoint_keys, checkpoint_elements, source = load_model(args.hi_sam_root, weights)
     encoder = Encoder(model).eval()
-    head = TextHead(model).eval()
+    head = TextHead(model, args.dense_pe).eval()
     live_prefixes = ("image_encoder.", "modal_aligner.",
                      "mask_decoder.iou_token.", "mask_decoder.mask_tokens.",
                      "mask_decoder.transformer.", "mask_decoder.output_upscaling.",
@@ -570,6 +597,8 @@ def main() -> None:
     parser.add_argument("--key-map-output", type=Path,
                         default=root / "results/initializer-key-map.json")
     parser.add_argument("--torch-threads", type=int, default=4)
+    parser.add_argument("--dense-pe", type=Path,
+                        help="pinned dense positional encoding (dense_pe.f32.xz)")
     args = parser.parse_args()
     if args.torch_threads < 1:
         parser.error("--torch-threads must be positive")

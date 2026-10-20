@@ -691,6 +691,24 @@ describe('the layer controls on a row', () => {
 
 
 describe('padding on an individual detected mask', () => {
+  // The region menu's slider is the row's: the same call, the menu left open.
+  it('offers the same padding in the region menu, and keeps the menu open', async () => {
+    const { region } = await opened({ allowed: false })
+    const detected = { ...region, outcome: 'detected', detected: true, paddingPx: 3 }
+    const save = vi.mocked(setDetectedMaskPadding).mockResolvedValue(true)
+    const view = show(detected)
+    await fireEvent.contextMenu(/** @type {HTMLElement} */ (view.container.querySelector('[data-mask-row]')), { clientX: 20, clientY: 20 })
+    const menu = screen.getByRole('menu', { name: t('masks.menu.label') })
+    const slider = /** @type {HTMLInputElement} */ (within(menu).getByRole('slider', { name: t('tools.param.maskPadding') }))
+    expect(slider.value).toBe('3')
+    await fireEvent.input(slider, { target: { value: '9' } })
+    expect(slider.getAttribute('aria-valuetext')).toBe('9 px')
+    expect(save).not.toHaveBeenCalled()
+    await fireEvent.change(slider, { target: { value: '9' } })
+    await waitFor(() => expect(save).toHaveBeenCalledWith(detected, 9))
+    expect(screen.getByRole('menu', { name: t('masks.menu.label') })).toBeTruthy()
+  })
+
   it('shows the saved padding and saves only this row when the slider is released', async () => {
     const { region } = await opened({ allowed: false })
     const detected = { ...region, outcome: 'detected', detected: true, paddingPx: 3 }

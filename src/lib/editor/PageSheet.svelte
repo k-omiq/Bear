@@ -3,13 +3,14 @@
   import { editor } from '../state/editor.svelte.js'
   import { pageRatio } from './zoom.js'
   import { isDrawingTool } from './tools.js'
-  import { isRegionCopy } from '../model/layers.js'
+  import { isBrushLayer, isRegionCopy } from '../model/layers.js'
   import DetectionMasks from './DetectionMasks.svelte'
   import DrawLayer from './DrawLayer.svelte'
   import PageArtwork from './PageArtwork.svelte'
   import PatchLayers from './PatchLayers.svelte'
   import RegionLayer from './RegionLayer.svelte'
   import { layerPreviews } from './layerpreview.svelte.js'
+  import { eraseMasks } from './erasepreview.svelte.js'
 
   /**
    * One page: the `--paper` sheet, its shadow, its aspect ratio, and the stack
@@ -21,9 +22,15 @@
    *
    *   PageArtwork variant="original"   the source page
    *   PageArtwork variant="cleaned"    native composite, clipped by the wipe
+   *   PaintLayer                       a stroke's live pixels (DrawLayer's)
    *   DetectionMasks                   what Clean will erase, per detection
    *   RegionLayer                      region outlines, markers, hit targets
+   *   DrawLayer                        the drawing surface and its drafts
    *   the wipe divider
+   *
+   * The order is a z-index scale (`--z-*` below), not the order of the
+   * markup, and in a longstrip it holds across pages: one page's overlays
+   * are over the next page's artwork wherever they hang.
    *
    * **The wipe is a clip, not a predicate.** Two images, one of them cut off
    * at `editor.wipe`, is how the real thing will work once `PageArtwork` is an
@@ -125,15 +132,20 @@
   let previewLayersReady = $state(/** @type {string|null} */ (null))
   const previewing = $derived(layered && previewPage === page.id)
   const previewReady = $derived(previewSourceReady === page.id && previewLayersReady === page.id)
-  // Prepare independent canvases when a copy is selected. Show them during
-  // manipulation and until the committed composite has decoded. At rest the
-  // native composite preserves color-managed edge blending exactly.
+  // The eraser works on the same canvases: a Brush layer can only be seen
+  // thinning over the page without it, which the composite tiles cannot show.
+  const eraserReady = $derived(editor.tool === 'eraser' && (page.regions ?? []).some(isBrushLayer))
+  const erasing = $derived(eraseMasks.has(page.id))
+  // Prepare independent canvases when a copy is selected or the eraser is
+  // picked. Show them during manipulation or a stroke and until the
+  // committed composite has decoded. At rest the native composite preserves
+  // color-managed edge blending exactly.
   $effect(() => {
-    if (copySelected && (current || strip)) previewPage = page.id
-    else if (!movingCopy && cleanedVersion === pageVersion(page, 'cleaned')) previewPage = null
+    if ((copySelected || eraserReady) && (current || strip)) previewPage = page.id
+    else if (!movingCopy && !erasing && cleanedVersion === pageVersion(page, 'cleaned')) previewPage = null
   })
   $effect(() => {
-    if (movingCopy) previewShownFor = page.id
+    if (movingCopy || erasing) previewShownFor = page.id
     else if (cleanedVersion === pageVersion(page, 'cleaned')) previewShownFor = null
   })
   const shown = $derived(!layered || shownFor === page.id)
@@ -156,6 +168,7 @@
   class="sheet"
   class:strip
   style:width="{width}px"
+  style:--sheet-w="{width}px"
   style:aspect-ratio="1 / {ratio}"
 >
   {#if asked && (both || covered !== 'original')}
@@ -196,23 +209,34 @@
     flex: none;
     background: var(--paper);
     box-shadow: var(--page-shadow);
-    /* Lets everything drawn on the page size itself from the page's own width
-       (`cqw`) instead of taking the zoom as a prop - which is what keeps
-       `PageArtwork` swappable for an image element. */
-    container-type: inline-size;
+    /* Everything drawn on the page sizes itself from `--sheet-w`, the sheet's
+       drawn width, instead of taking the zoom as a prop. It used to be `cqw`
+       on a size container, and a container is a stacking context: in a
+       longstrip each page then painted its artwork over everything the page
+       above let hang across the join - a detection's mask, a region's box, a
+       paint preview - so a mask's lower part showed only while hovered.
+
+       With no stacking context here, every layer of every page takes its
+       place on one scale, set once below and inherited, and any overlay of
+       any page is over any page's artwork. Only the region layer's children
+       carry their z-index themselves: a region that hangs into the next page
+       must be over that page's clear button, so their parent may not group
+       them. A layer root added under the sheet must not create a stacking
+       context of its own (transform, opacity, filter, isolation, contain),
+       or the overhangs inside it are cut under the next page again. */
+    --z-paint: 1;
+    --z-mask: 2;
+    --z-clear: 3;
+    --z-region: 4;
+    --z-selected: 5;
+    --z-draw: 6;
+    --z-divider: 7;
   }
 
   /* Paginated sheets float above the canvas. A longstrip is one continuous
      image: shadows and focus outlines would draw artificial seams. */
   .sheet.strip {
     box-shadow: none;
-  }
-
-  /* A native preview may extend across a longstrip join. Container queries
-     make sheets stacking contexts, so lift its anchor above the next sheet
-     until the affected committed tiles have replaced the preview. */
-  .sheet:has(:global(.paint)) {
-    z-index: 1;
   }
 
   .cleaned {
@@ -228,6 +252,7 @@
 
   .divider {
     position: absolute;
+    z-index: var(--z-divider);
     top: 0;
     bottom: 0;
     width: 1px;

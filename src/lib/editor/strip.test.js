@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  KEEP_BUDGET_BYTES,
+  KEEP_PAGES,
   OVERSCAN,
+  anchorColumnTop,
+  keepRange,
+  pageBytes,
   STRIP_GAP,
   VIRTUAL_THRESHOLD,
   centreIndex,
@@ -305,5 +310,70 @@ describe('scrollTopFor', () => {
     // The end of the column is a position too: `index === count` is the bottom.
     expect(scrollTopFor({ index: 3, metrics, scrollTop: 0, columnTop: 70 })).toBe(70 + 10000)
     expect(scrollTopFor({ index: 99, metrics, scrollTop: 0, columnTop: 70 })).toBe(70 + 10000)
+  })
+})
+
+describe('keepRange', () => {
+  const cheap = () => 1
+
+  it('keeps five pages either side of the centre', () => {
+    expect(KEEP_PAGES).toBe(5)
+    expect(keepRange({ count: 60, centre: 40, cost: cheap })).toEqual({ start: 35, end: 46 })
+  })
+
+  it('clamps at both ends of the chapter', () => {
+    expect(keepRange({ count: 60, centre: 1, cost: cheap })).toEqual({ start: 0, end: 7 })
+    expect(keepRange({ count: 60, centre: 59, cost: cheap })).toEqual({ start: 54, end: 60 })
+    expect(keepRange({ count: 0, centre: 0, cost: cheap })).toEqual({ start: 0, end: 0 })
+  })
+
+  it('stops a side at the budget, and the other side keeps growing', () => {
+    // Share 11 of 121: pages 43 and beyond cost 12 and end the side below.
+    const cost = (index) => (index >= 43 ? 12 : 1)
+    expect(keepRange({ count: 60, centre: 40, budget: 121, cost })).toEqual({ start: 35, end: 43 })
+  })
+
+  it('keeps a page whole only when it costs no more than its share', () => {
+    // A 690x1600 segment fits; a raw 800x20000 one is left to its tile window.
+    expect(pageBytes({ width: 690, height: 1600 })).toBe(690 * 1600 * 8)
+    expect(pageBytes({ width: 690, height: 1600 })).toBeLessThanOrEqual(KEEP_BUDGET_BYTES / 11)
+    const tall = () => pageBytes({ width: 800, height: 20000 })
+    expect(keepRange({ count: 3, centre: 0, cost: tall })).toEqual({ start: 0, end: 0 })
+  })
+})
+
+describe('stripWindow keep and hold', () => {
+  it('adds the warm range and a held band to the viewport band', () => {
+    const metrics = uniform(60)
+    const viewportHeight = 1000
+    const columnTop = -metrics.offsets[40]
+    const plain = stripWindow({ metrics, columnTop, viewportHeight })
+    expect([plain.start, plain.end]).toEqual([39, 42])
+    const kept = stripWindow({ metrics, columnTop, viewportHeight, keep: { start: 35, end: 46 } })
+    expect([kept.start, kept.end]).toEqual([35, 46])
+    expect(kept.padTop).toBe(metrics.offsets[35])
+    expect(kept.padBottom).toBe(metrics.total - metrics.offsets[46])
+    const held = stripWindow({ metrics, columnTop: -metrics.offsets[10], viewportHeight, hold: { start: 39, end: 42 } })
+    expect([held.start, held.end]).toEqual([9, 42])
+  })
+})
+
+describe('anchorColumnTop', () => {
+  it('keeps the content under the anchor where it is, at rounded sheet widths', () => {
+    const pages = Array.from({ length: 60 }, () => ({ width: 690, height: 1600 }))
+    const before = metricsOf(pages, 0.5)
+    const after = metricsOf(pages, 0.55)
+    // Page 40 at the top, the anchor 450px down: 450 / 800 into page 40.
+    const columnTop = -before.offsets[40]
+    const top = anchorColumnTop({ before, after, columnTop, anchorY: 450 })
+    const fraction = 450 / before.units[40]
+    expect(450 - top).toBeCloseTo(after.offsets[40] + fraction * after.units[40], 6)
+    // Not the same as scaling the whole column, which rounding breaks.
+    expect(after.widths[0]).toBe(Math.round(690 * 0.55))
+  })
+
+  it('leaves the column alone when the page list changed shape', () => {
+    const before = uniform(3)
+    expect(anchorColumnTop({ before, after: uniform(4), columnTop: -50, anchorY: 10 })).toBe(-50)
   })
 })

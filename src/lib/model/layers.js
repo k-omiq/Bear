@@ -66,6 +66,18 @@ export function layerOf(region) {
   return { ...DEFAULT_LAYER, ...(region?.mask?.layer ?? {}) }
 }
 
+/**
+ * A Brush stroke's layer. It is paint, like Photoshop's: nothing on the canvas
+ * selects it or draws a box around it, the Layers panel is where it is picked
+ * and its opacity set, and the eraser is what takes it back off the page.
+ *
+ * @param {{mask?: any}|null|undefined} region
+ */
+export function isBrushLayer(region) {
+  const provenance = region?.mask?.provenance
+  return provenance?.params_snapshot?.tool === 'brush' && currentRung(provenance?.engine) === 'paint'
+}
+
 /** Independent regional copies are paint layers whose pixels came from artwork. */
 export function isRegionCopy(region) {
   return region?.mask?.provenance?.params_snapshot?.mode === 'region-copy'

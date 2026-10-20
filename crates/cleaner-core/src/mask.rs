@@ -139,7 +139,7 @@ impl Mask {
         let (w, by) = (self.bounds.w as usize, by as usize);
         let mut bits = Vec::with_capacity(self.bits.len() * by * by);
         for row in self.bits.chunks_exact(w.max(1)) {
-            let wide: Vec<u8> = row.iter().flat_map(|&bit| std::iter::repeat(bit).take(by)).collect();
+            let wide: Vec<u8> = row.iter().flat_map(|&bit| std::iter::repeat_n(bit, by)).collect();
             for _ in 0..by {
                 bits.extend_from_slice(&wide);
             }
@@ -355,6 +355,14 @@ impl Mask {
     /// is `union(masks)` in the fidelity contract, and the contract makes a
     /// point of it being the **applied** masks - post-growth, pre-isolation.
     pub fn union(masks: &[&Mask], page_w: u32, page_h: u32) -> Mask {
+        Mask::union_within(masks, Rect::new(0, 0, page_w, page_h))
+    }
+
+    /// [`Mask::union`] clamped to an arbitrary rectangle rather than to the
+    /// whole page, as [`Mask::dilated_within`] is to [`Mask::dilated`]: a
+    /// longstrip detection may hang past its page over a join, and joining it
+    /// to another must not cut what hangs.
+    pub fn union_within(masks: &[&Mask], within: Rect) -> Mask {
         let Some(first) = masks.first() else {
             return Mask::empty(Rect::new(0, 0, 0, 0));
         };
@@ -368,11 +376,12 @@ impl Mask {
             x1 = x1.max(mask.bounds.right());
             y1 = y1.max(mask.bounds.bottom());
         }
+        let (x0, y0) = (x0.max(within.x), y0.max(within.y));
         let bounds = Rect {
-            x: x0.max(0),
-            y: y0.max(0),
-            w: (x1.min(page_w as i64) - x0.max(0)).max(0) as u32,
-            h: (y1.min(page_h as i64) - y0.max(0)).max(0) as u32,
+            x: x0,
+            y: y0,
+            w: (x1.min(within.right()) - x0).max(0) as u32,
+            h: (y1.min(within.bottom()) - y0).max(0) as u32,
         };
         let mut out = Mask::empty(bounds);
         for mask in masks {
@@ -466,6 +475,32 @@ mod tests {
                 seed.dilated_within(radius, Rect::new(0, 0, 200, 200))
             );
         }
+    }
+
+    /// A longstrip detection hangs past its page over a join. Grown or joined
+    /// inside a rectangle that takes in the hang, it keeps it; the page-sized
+    /// calls cut it, and are exactly the window calls with the page passed.
+    #[test]
+    fn a_mask_that_hangs_past_its_page_keeps_the_hang_inside_a_wider_window() {
+        let mut hanging = Mask::empty(Rect::new(10, 90, 4, 20));
+        for y in 90..110 {
+            hanging.set(11, y, true);
+        }
+        let mut above = Mask::empty(Rect::new(10, -6, 2, 8));
+        above.set(10, -6, true);
+        above.set(10, 1, true);
+        let reach = Rect::new(0, -10, 100, 130);
+
+        let grown = hanging.dilated_within(2, reach);
+        assert!(grown.contains(11, 111) && grown.contains(13, 105));
+        assert!(!hanging.dilated(2, 100, 100).contains(11, 100), "the page call kept the hang");
+
+        let together = Mask::union_within(&[&hanging, &above], reach);
+        assert!(together.contains(11, 109) && together.contains(10, -6));
+        assert_eq!(together.bounds, Rect::new(10, -6, 4, 116));
+        let cut = Mask::union(&[&hanging, &above], 100, 100);
+        assert_eq!(cut, Mask::union_within(&[&hanging, &above], Rect::new(0, 0, 100, 100)));
+        assert!(!cut.contains(11, 100) && !cut.contains(10, -6) && cut.contains(10, 1));
     }
 
     #[test]

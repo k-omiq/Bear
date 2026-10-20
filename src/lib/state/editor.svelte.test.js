@@ -70,6 +70,23 @@ describe('editor history persistence failures', () => {
     expect(editor.history.error).toBeInstanceOf(Error)
   })
 
+  // The index held an entry the journal never got. Left there, the next
+  // Undo would move the journal past an entry this window never named.
+  it('reads the index again when a push fails for good', async () => {
+    const pushMock = vi.fn().mockRejectedValue(new Error('disk write failed'))
+    const loadMock = vi.fn().mockResolvedValue({ cursor: 0, entries: [] })
+    setBackend(/** @type {any} */ ({ historyPush: pushMock, historyLoad: loadMock }))
+
+    recordRegionEdit('canvas.command.applyTool', 'r1', { region: null, pageStatus: 'unclean' },
+      { region: { id: 'r1', pageId: 'p1' }, pageStatus: 'cleaned' })
+    expect(editor.history.cursor).toBe(1)
+    await vi.advanceTimersByTimeAsync(60)
+
+    expect(loadMock).toHaveBeenCalledWith({ chapterId: 'test-chapter' })
+    expect(editor.history.cursor).toBe(0)
+    expect(editor.history.entries).toEqual([])
+  })
+
   it('historyPush rejecting once then succeeding yields no notice', async () => {
     const pushMock = vi
       .fn()
@@ -138,8 +155,10 @@ describe('editor history persistence failures', () => {
     expect(app.notices[0]).toMatchObject({ key: 'notice.run.pageBusy', tone: 'warn' })
 
     // And a redo the same way.
-    undo()
+    // An idle queue starts the replay in the click's own turn, so the answer
+    // is set before the click.
     moveMock.mockResolvedValueOnce({ entry: null })
+    undo()
     await vi.advanceTimersByTimeAsync(0)
     expect(editor.history.cursor).toBe(0)
     redo()
@@ -1172,15 +1191,17 @@ describe('the tool slots', () => {
     editor.tool = 'autoClean'
   })
 
-  it('numbers the six tools in rail order, the selection tool last', () => {
-    expect([...TOOLS]).toEqual(['autoClean', 'brush', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect'])
+  it('numbers the seven tools by slot, the eraser last', () => {
+    expect([...TOOLS]).toEqual(['autoClean', 'brush', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect', 'eraser'])
   })
 
-  it('arms the selection tool from slot 6, and nothing from a slot past it', () => {
+  it('arms the selection tool from slot 6, the eraser from 7, and nothing from a slot past it', () => {
     setToolBySlot(6)
     expect(editor.tool).toBe('maskSelect')
     setToolBySlot(7)
-    expect(editor.tool).toBe('maskSelect')
+    expect(editor.tool).toBe('eraser')
+    setToolBySlot(8)
+    expect(editor.tool).toBe('eraser')
   })
 
   it('arms the selection tool on S or X first, then steps its shape and swaps its mode', () => {

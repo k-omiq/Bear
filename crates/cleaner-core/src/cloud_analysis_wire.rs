@@ -17,6 +17,12 @@ pub const MAX_COMPONENTS: usize = 4096;
 pub const MAX_BOXES: usize = 4096;
 pub const MAX_RESPONSE_BYTES: usize = 6_500_000;
 pub const MAX_MASK_B64_BYTES: usize = 4 * MAX_PNG_BYTES.div_ceil(3);
+/// Listed among the gateway's `/capabilities` operations when its worker takes
+/// a tile as an 8-bit grey PNG as well as RGB (`contract.py`
+/// `ANALYSIS_GRAY_TILES_OPERATION`). The worker expands grey to RGB before the
+/// models read it, so a tile whose every pixel is grey reaches them unchanged
+/// in under half the bytes. Without it every tile is sent as RGB.
+pub const GRAY_TILES_OPERATION: &str = "analysis.gray_tiles";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -109,18 +115,18 @@ impl AnalysisRequest {
         {
             return Err("analysis tile PNG digest or byte limit mismatch".into());
         }
-        validate_png(tile_png, self.tile_rect, png::ColorType::Rgb)
+        validate_png(tile_png, self.tile_rect, &[png::ColorType::Rgb, png::ColorType::Grayscale])
     }
 }
 
-pub fn validate_png(bytes: &[u8], rect: TileRect, color: png::ColorType) -> Result<(), String> {
+pub fn validate_png(bytes: &[u8], rect: TileRect, colors: &[png::ColorType]) -> Result<(), String> {
     if bytes.len() > MAX_PNG_BYTES { return Err("analysis PNG too large".into()); }
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_limits(png::Limits { bytes: MAX_PNG_BYTES });
     let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
     let info = reader.info();
     if info.width != rect.width || info.height != rect.height
-        || info.color_type != color || info.bit_depth != png::BitDepth::Eight
+        || !colors.contains(&info.color_type) || info.bit_depth != png::BitDepth::Eight
         || info.interlaced || info.animation_control.is_some()
     {
         return Err("analysis PNG geometry or format mismatch".into());
@@ -216,7 +222,7 @@ impl AnalysisResult {
         if self.capability == SAM {
             if !self.boxes.is_empty() { return Err("SAM result contained boxes".into()); }
             let mask = self.mask_bytes()?.ok_or("SAM mask missing")?;
-            validate_png(&mask, self.tile_rect, png::ColorType::Grayscale)?;
+            validate_png(&mask, self.tile_rect, &[png::ColorType::Grayscale])?;
         } else if self.mask_png_b64.is_some() || !self.components.is_empty() {
             return Err("RT result contained mask or components".into());
         }
@@ -356,14 +362,18 @@ impl AnalysisBatchResult {
 /// Cut `steps` (one page's requests in send order, each with its tile PNG; a
 /// tile's requests are next to each other) into batches within the bounds
 /// above, as index ranges. A tile's requests are never split across batches,
-/// so no PNG is sent twice.
+/// so no PNG is sent twice. Neighbouring tiles of the same pixels (a blank
+/// page) share a digest and so travel together, but never past the request
+/// bound: a run of them is cut at it, which keeps a tile's requests together
+/// while the model count divides the bound.
 pub fn batches(steps: &[(&AnalysisRequest, &[u8])]) -> Vec<std::ops::Range<usize>> {
     let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
     let (mut tiles, mut bytes) = (0usize, 0usize);
     let mut start = 0;
     while start < steps.len() {
         let sha = &steps[start].0.tile_png_sha256;
-        let end = start + steps[start..].iter().take_while(|(request, _)| &request.tile_png_sha256 == sha).count();
+        let end = start + steps[start..].iter().take_while(|(request, _)| &request.tile_png_sha256 == sha)
+            .take(BATCH_MAX_REQUESTS).count();
         let png_len = steps[start].1.len();
         let open = ranges.last().is_some_and(|range| range.end == start
             && range.len() + (end - start) <= BATCH_MAX_REQUESTS && tiles < BATCH_MAX_TILES
@@ -379,6 +389,206 @@ pub fn batches(steps: &[(&AnalysisRequest, &[u8])]) -> Vec<std::ops::Range<usize
         start = end;
     }
     ranges
+}
+
+/// Listed among the gateway's `/capabilities` operations, beside
+/// `analysis.batches`, when a batch may carry its tiles as one canvas
+/// (`contract.py` `ANALYSIS_BATCH_CANVAS_OPERATION`). Neighbouring tiles
+/// overlap ([`crate::cloud_tiles`]), so four 1024 tiles of a 1080x1536 page
+/// carry 4.19 Mpx for a 1.66 Mpx page; a canvas carries each pixel once. The
+/// gateway cuts every tile out of it and makes the tile's
+/// [`canonical_tile_png`], whose digest the request names, so the requests,
+/// their digests and the models' input are those of the tiles. Without the
+/// operation every tile PNG is sent, as before.
+pub const BATCH_CANVAS_OPERATION: &str = "analysis.batch_canvas";
+/// The largest canvas, in pixels, a gateway decodes.
+pub const BATCH_MAX_CANVAS_PIXELS: u64 = 16 * 1024 * 1024;
+
+/// The one PNG of a tile's pixels (`rgb`, three bytes a pixel) that both sides
+/// make: 8-bit grey when every pixel is grey, else RGB, an `sRGB` chunk, and
+/// one `IDAT` of unfiltered rows in stored (uncompressed) deflate blocks of at
+/// most 65535 bytes. Nothing in it depends on an encoder, so the gateway
+/// rebuilds it byte for byte from the pixels it cuts out of a canvas
+/// (`contract.py` `analysis_canonical_tile_png`). A 1024 RGB tile is about
+/// 3.15 MB, inside [`MAX_PNG_BYTES`]; it travels only when a canvas would be
+/// larger.
+pub fn canonical_tile_png(rgb: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 || width > MAX_TILE_SIDE || height > MAX_TILE_SIDE
+        || rgb.len() != width as usize * height as usize * 3
+    {
+        return Err("invalid canonical tile pixels".into());
+    }
+    let gray = rgb.chunks_exact(3).all(|p| p[0] == p[1] && p[1] == p[2]);
+    let (color, channels) = if gray { (0u8, 1) } else { (2u8, 3) };
+    let stride = width as usize * channels;
+    let mut raw = Vec::with_capacity((stride + 1) * height as usize);
+    for row in rgb.chunks_exact(width as usize * 3) {
+        raw.push(0);
+        if gray { raw.extend(row.chunks_exact(3).map(|p| p[0])); } else { raw.extend_from_slice(row); }
+    }
+    let mut zlib = Vec::with_capacity(raw.len() + raw.len() / 65535 * 5 + 11);
+    zlib.extend_from_slice(&[0x78, 0x01]);
+    let blocks = raw.chunks(65535).count();
+    for (index, block) in raw.chunks(65535).enumerate() {
+        let len = block.len() as u16;
+        zlib.push(u8::from(index + 1 == blocks));
+        zlib.extend_from_slice(&len.to_le_bytes());
+        zlib.extend_from_slice(&(!len).to_le_bytes());
+        zlib.extend_from_slice(block);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for chunk in raw.chunks(5552) {
+        for &byte in chunk { a += u32::from(byte); b += a; }
+        a %= 65521;
+        b %= 65521;
+    }
+    zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
+        png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(kind);
+        crc.update(data);
+        png.extend_from_slice(kind);
+        png.extend_from_slice(data);
+        png.extend_from_slice(&crc.finalize().to_be_bytes());
+    };
+    let mut header = Vec::with_capacity(13);
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    header.extend_from_slice(&[8, color, 0, 0, 0]);
+    chunk(b"IHDR", &header);
+    chunk(b"sRGB", &[1]);
+    chunk(b"IDAT", &zlib);
+    chunk(b"IEND", &[]);
+    if png.len() > MAX_PNG_BYTES { return Err("canonical tile PNG exceeds transfer limit".into()); }
+    Ok(png)
+}
+
+/// What one batch sends besides its metadata: the distinct tile PNGs
+/// (`tiles_png_b64`), or one canvas (`canvas_png_b64` and `canvas_rect`).
+#[derive(Debug, Clone)]
+pub enum BatchUpload<'a> {
+    Tiles(Vec<&'a [u8]>),
+    Canvas { rect: TileRect, png: Vec<u8> },
+}
+
+impl BatchUpload<'_> {
+    /// The image bytes it puts on the wire, before base64.
+    pub fn bytes(&self) -> usize {
+        match self {
+            Self::Tiles(pngs) => pngs.iter().map(|png| png.len()).sum(),
+            Self::Canvas { png, .. } => png.len(),
+        }
+    }
+}
+
+/// A PNG of `rect`'s size, grey or RGB, as RGB pixels.
+fn rgb_pixels(png: &[u8], rect: TileRect, max_pixels: u64) -> Result<Vec<u8>, String> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(png));
+    decoder.set_limits(png::Limits { bytes: (max_pixels * 3) as usize });
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let info = reader.info();
+    if info.width != rect.width || info.height != rect.height || info.bit_depth != png::BitDepth::Eight
+        || info.interlaced || u64::from(info.width) * u64::from(info.height) > max_pixels
+    {
+        return Err("analysis canvas or tile geometry mismatch".into());
+    }
+    let gray = match info.color_type {
+        png::ColorType::Grayscale => true,
+        png::ColorType::Rgb => false,
+        _ => return Err("analysis canvas or tile colour mismatch".into()),
+    };
+    let mut buffer = vec![0; reader.output_buffer_size().ok_or("PNG output too large")?];
+    reader.next_frame(&mut buffer).map_err(|e| e.to_string())?;
+    Ok(if gray { buffer.iter().flat_map(|&v| [v, v, v]).collect() } else { buffer })
+}
+
+fn cut(canvas: &[u8], canvas_rect: TileRect, tile: TileRect) -> Option<Vec<u8>> {
+    let end = |start: u32, len: u32| u64::from(start) + u64::from(len);
+    if tile.x < canvas_rect.x || tile.y < canvas_rect.y
+        || end(tile.x, tile.width) > end(canvas_rect.x, canvas_rect.width)
+        || end(tile.y, tile.height) > end(canvas_rect.y, canvas_rect.height)
+    {
+        return None;
+    }
+    let (dx, dy) = ((tile.x - canvas_rect.x) as usize, (tile.y - canvas_rect.y) as usize);
+    let stride = canvas_rect.width as usize * 3;
+    Some((0..tile.height as usize).flat_map(|row| {
+        let start = (dy + row) * stride + dx * 3;
+        canvas[start..start + tile.width as usize * 3].iter().copied()
+    }).collect())
+}
+
+/// What a batch of `tiles` (each tile's place on the page and its
+/// [`canonical_tile_png`]) sends: one canvas over their bounding box, every
+/// pixel outside the tiles white so nothing the tiles do not hold is sent, or
+/// the tile PNGs when that canvas would be larger or `canvas` is false. Tiles
+/// at two places can hold the same pixels (a blank margin); the canvas holds
+/// both places and the tile PNGs name that PNG once, as the gateway requires.
+/// Refused when a tile is not canonical or two tiles disagree where they
+/// overlap, since the gateway would then cut other pixels than the requests
+/// name.
+pub fn batch_upload<'a>(tiles: &[(TileRect, &'a [u8])], canvas: bool) -> Result<BatchUpload<'a>, String> {
+    let pngs = || {
+        let mut distinct: Vec<&'a [u8]> = Vec::new();
+        for (_, png) in tiles {
+            if !distinct.contains(png) { distinct.push(png); }
+        }
+        BatchUpload::Tiles(distinct)
+    };
+    let (Some(left), Some(top)) = (tiles.iter().map(|(r, _)| r.x).min(), tiles.iter().map(|(r, _)| r.y).min())
+    else { return Ok(pngs()) };
+    let right = tiles.iter().map(|(r, _)| r.x + r.width).max().unwrap_or(left);
+    let bottom = tiles.iter().map(|(r, _)| r.y + r.height).max().unwrap_or(top);
+    let rect = TileRect { x: left, y: top, width: right - left, height: bottom - top };
+    if !canvas || u64::from(rect.width) * u64::from(rect.height) > BATCH_MAX_CANVAS_PIXELS {
+        return Ok(pngs());
+    }
+    let stride = rect.width as usize * 3;
+    let mut pixels = vec![255u8; stride * rect.height as usize];
+    let mut decoded = Vec::with_capacity(tiles.len());
+    for (tile, png) in tiles {
+        let rgb = rgb_pixels(png, *tile, MAX_TILE_PIXELS)?;
+        let (dx, dy) = ((tile.x - left) as usize, (tile.y - top) as usize);
+        for (row, line) in rgb.chunks_exact(tile.width as usize * 3).enumerate() {
+            let start = (dy + row) * stride + dx * 3;
+            pixels[start..start + line.len()].copy_from_slice(line);
+        }
+        decoded.push(rgb);
+    }
+    for ((tile, png), rgb) in tiles.iter().zip(&decoded) {
+        if cut(&pixels, rect, *tile).as_deref() != Some(rgb.as_slice())
+            || canonical_tile_png(rgb, tile.width, tile.height)?.as_slice() != *png
+        {
+            return Err("analysis tiles are not canonical or disagree where they overlap".into());
+        }
+    }
+    let gray = pixels.chunks_exact(3).all(|p| p[0] == p[1] && p[1] == p[2]);
+    let raster = crate::image::Raster {
+        width: rect.width, height: rect.height,
+        mode: if gray { crate::image::ColorMode::Gray } else { crate::image::ColorMode::Rgb },
+        depth: crate::image::BitDepth::Eight, icc: None, palette: None, trns: None,
+        srgb_intent: Some(1), color: Default::default(),
+        data: if gray { pixels.chunks_exact(3).map(|p| p[0]).collect() } else { pixels },
+    };
+    let png = crate::image::encode(&raster, crate::image::Format::Png).map_err(|e| e.to_string())?;
+    let upload = BatchUpload::Canvas { rect, png };
+    Ok(if upload.bytes() < pngs().bytes() { upload } else { pngs() })
+}
+
+/// The gateway's side of a canvas: each of `tiles` cut out of it as its
+/// [`canonical_tile_png`]. Mirrors `contract.py` `analysis_canvas_tiles`; the
+/// app uses it in tests, standing in for the gateway.
+pub fn canvas_tiles(rect: TileRect, png: &[u8], tiles: &[TileRect]) -> Result<Vec<Vec<u8>>, String> {
+    if rect.width == 0 || rect.height == 0 || png.len() > BATCH_MAX_TILE_BYTES {
+        return Err("invalid analysis canvas".into());
+    }
+    let pixels = rgb_pixels(png, rect, BATCH_MAX_CANVAS_PIXELS)?;
+    tiles.iter().map(|tile| {
+        let rgb = cut(&pixels, rect, *tile).ok_or("analysis tile outside its canvas")?;
+        canonical_tile_png(&rgb, tile.width, tile.height)
+    }).collect()
 }
 
 #[cfg(test)]
@@ -435,6 +645,126 @@ mod tests {
         // The PNG byte bound.
         assert_eq!(plan(4, 2, 6_000_000), vec![0..4, 4..8]);
         assert!(plan(0, 2, 1).is_empty());
+        // Twelve blank tiles of one page share a digest: 24 requests, cut at the bound.
+        let blank: Vec<AnalysisRequest> = (0..24).map(|_| base.clone()).collect();
+        let png = [0u8; 10];
+        let steps: Vec<(&AnalysisRequest, &[u8])> = blank.iter().map(|request| (request, png.as_slice())).collect();
+        assert_eq!(batches(&steps), vec![0..16, 16..24]);
+    }
+
+    fn pattern(width: u32, height: u32, gray: bool) -> Vec<u8> {
+        (0..height).flat_map(|y| (0..width).flat_map(move |x| if gray {
+            let v = ((3 * x + 5 * y) % 256) as u8;
+            [v, v, v]
+        } else {
+            [((7 * x + 3 * y) % 256) as u8, ((5 * x + 11 * y) % 256) as u8, ((13 * x + y) % 256) as u8]
+        })).collect()
+    }
+
+    #[test]
+    fn cloud_canonical_tile_png_matches_the_gateway() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../deploy/cloud/fixtures/analysis_v1/canonical_tiles.json")).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let (width, height) = (case["width"].as_u64().unwrap() as u32, case["height"].as_u64().unwrap() as u32);
+            let gray = case["pattern"] == "gray";
+            let rgb = pattern(width, height, gray);
+            let png = canonical_tile_png(&rgb, width, height).unwrap();
+            assert_eq!(png.len() as u64, case["png_bytes"].as_u64().unwrap());
+            assert_eq!(format!("{:x}", Sha256::digest(&png)), case["png_sha256"].as_str().unwrap());
+            let rect = TileRect { x: 0, y: 0, width, height };
+            validate_png(&png, rect, &[if gray { png::ColorType::Grayscale } else { png::ColorType::Rgb }]).unwrap();
+            assert_eq!(rgb_pixels(&png, rect, MAX_TILE_PIXELS).unwrap(), rgb);
+        }
+        // A full RGB tile fits a tile request's PNG bound.
+        let full = canonical_tile_png(&vec![7u8; 1024 * 1024 * 3], 1024, 1024).unwrap();
+        assert!(full.len() <= MAX_PNG_BYTES && full.len() > 1024 * 1024);
+        assert!(canonical_tile_png(&[0; 3], 1, 2).is_err());
+    }
+
+    fn tile_of(page: &[u8], page_width: u32, rect: TileRect) -> Vec<u8> {
+        cut(page, TileRect { x: 0, y: 0, width: page_width, height: (page.len() / 3 / page_width as usize) as u32 }, rect).unwrap()
+    }
+
+    #[test]
+    fn cloud_canvas_carries_each_tile_once_and_blanks_what_was_not_approved() {
+        for gray in [false, true] {
+            let (width, height) = (1080, 1536);
+            let page = pattern(width, height, gray);
+            let plan = crate::cloud_tiles::planned(width, height).unwrap();
+            assert_eq!(plan.len(), 4);
+            let pngs: Vec<Vec<u8>> = plan.iter()
+                .map(|t| canonical_tile_png(&tile_of(&page, width, t.tile), t.tile.width, t.tile.height).unwrap()).collect();
+            // The whole page: one canvas of the page, cut back into the same tiles.
+            let all: Vec<(TileRect, &[u8])> = plan.iter().zip(&pngs).map(|(t, png)| (t.tile, png.as_slice())).collect();
+            let BatchUpload::Canvas { rect, png } = batch_upload(&all, true).unwrap() else { panic!("tiles sent") };
+            assert_eq!(rect, TileRect { x: 0, y: 0, width, height });
+            assert!(png.len() < pngs.iter().map(Vec::len).sum::<usize>());
+            let tiles: Vec<TileRect> = plan.iter().map(|t| t.tile).collect();
+            assert_eq!(canvas_tiles(rect, &png, &tiles).unwrap(), pngs);
+            // A partial review of two diagonal tiles: their bounding box is the
+            // page, and every pixel outside both tiles is white.
+            let chosen = [all[0], all[3]];
+            let BatchUpload::Canvas { rect, png } = batch_upload(&chosen, true).unwrap() else { panic!("tiles sent") };
+            assert_eq!(canvas_tiles(rect, &png, &[plan[0].tile, plan[3].tile]).unwrap(), vec![pngs[0].clone(), pngs[3].clone()]);
+            let sent = rgb_pixels(&png, rect, BATCH_MAX_CANVAS_PIXELS).unwrap();
+            let inside = |x: u32, y: u32, r: TileRect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
+            let mut blank = 0;
+            for y in 0..height {
+                for x in 0..width {
+                    let at = ((y * width + x) * 3) as usize;
+                    if inside(x, y, plan[0].tile) || inside(x, y, plan[3].tile) {
+                        assert_eq!(sent[at..at + 3], page[at..at + 3]);
+                    } else {
+                        assert_eq!(sent[at..at + 3], [255, 255, 255]);
+                        blank += 1;
+                    }
+                }
+            }
+            assert!(blank > 0);
+            // Without the operation the tile PNGs go, each distinct one once:
+            // this pattern repeats every 512 rows, so each lower tile is the
+            // PNG of the tile above it.
+            assert_eq!((&pngs[0], &pngs[1]), (&pngs[2], &pngs[3]));
+            assert!(matches!(batch_upload(&all, false).unwrap(), BatchUpload::Tiles(p) if p.len() == 2));
+        }
+    }
+
+    /// Two tiles of a blank page hold the same pixels: the canvas still holds
+    /// both places, and the tile PNGs name the one PNG once.
+    #[test]
+    fn cloud_canvas_keeps_two_places_of_one_blank_tile() {
+        let plan = crate::cloud_tiles::planned(1500, 256).unwrap();
+        let png = canonical_tile_png(&vec![255; 1024 * 256 * 3], 1024, 256).unwrap();
+        let tiles = [(plan[0].tile, png.as_slice()), (plan[1].tile, png.as_slice())];
+        let BatchUpload::Canvas { rect, png: canvas } = batch_upload(&tiles, true).unwrap() else { panic!("tiles sent") };
+        assert_eq!(rect, TileRect { x: 0, y: 0, width: 1500, height: 256 });
+        assert_eq!(canvas_tiles(rect, &canvas, &[plan[0].tile, plan[1].tile]).unwrap(), vec![png.clone(), png.clone()]);
+        assert!(matches!(batch_upload(&tiles, false).unwrap(), BatchUpload::Tiles(p) if p.len() == 1));
+    }
+
+    #[test]
+    fn cloud_canvas_refuses_tiles_it_cannot_reproduce() {
+        let (width, height) = (1080, 1536);
+        let page = pattern(width, height, false);
+        let plan = crate::cloud_tiles::planned(width, height).unwrap();
+        let first = tile_of(&page, width, plan[0].tile);
+        // A tile encoded by an ordinary encoder is not canonical.
+        let raster = crate::image::Raster {
+            width: 1024, height: 1024, mode: crate::image::ColorMode::Rgb, depth: crate::image::BitDepth::Eight,
+            icc: None, palette: None, trns: None, srgb_intent: Some(1), color: Default::default(), data: first.clone(),
+        };
+        let compressed = crate::image::encode(&raster, crate::image::Format::Png).unwrap();
+        assert!(batch_upload(&[(plan[0].tile, &compressed)], true).is_err());
+        // Two tiles that disagree where they overlap.
+        let mut other = tile_of(&page, width, plan[1].tile);
+        other[0] ^= 1;
+        let (a, b) = (canonical_tile_png(&first, 1024, 1024).unwrap(), canonical_tile_png(&other, 1024, 1024).unwrap());
+        assert!(batch_upload(&[(plan[0].tile, &a), (plan[1].tile, &b)], true).is_err());
+        // The gateway refuses a tile outside the canvas.
+        let BatchUpload::Canvas { rect, png } = batch_upload(&[(plan[0].tile, &a)], true).unwrap()
+            else { panic!("tile sent") };
+        assert!(canvas_tiles(rect, &png, &[plan[3].tile]).is_err());
     }
 
     #[test]

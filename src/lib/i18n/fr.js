@@ -1168,6 +1168,7 @@ export const fr = {
     command: {
       applyTool: 'l’outil appliqué à une zone',
       drawMask: 'un masque dessiné à la main',
+      erasePaint: 'peinture au pinceau effacée',
     },
   },
   pages: {
@@ -1965,7 +1966,7 @@ export const fr = {
       retryBlocked: 'Réessayer n’est pas disponible pour les traits de peinture et de clonage. Peignez par-dessus ou supprimez-le.',
       retryWider: 'Réessayer plus large',
       retryWiderHint: 'Nettoyer de nouveau avec le même moteur sur une zone un peu plus grande. Chaque clic l’agrandit un peu plus.',
-      rejectResult: 'Rejeter le résultat',
+      rejectResult: 'Restaurer le masque',
       engine: 'Nettoyer avec',
       engineHint: 'Remplacer ce calque avec un autre moteur, à partir des calques inférieurs',
       textType: 'Type de texte',
@@ -2020,13 +2021,20 @@ export const fr = {
       layerMove: 'déplacement du calque',
       layerRotate: 'rotation du calque',
       cleanRegion: 'nettoyage d’une zone',
-      rejectResult: 'rejet d’un résultat',
+      rejectResult: 'restauration d’un masque',
+      deleteDetection: 'suppression d’un masque détecté',
+      editDetection: 'modification d’un masque détecté',
+      detectionPadding: 'changement de marge du masque',
+      detectionType: 'changement de type de texte',
+      approveMask: 'approbation d’un masque retenu',
+      detectPages: 'détection de pages',
     },
   },
   tools: {
     name: {
       autoClean: 'Nettoyage du texte',
       brush: 'Pinceau',
+      eraser: 'Gomme',
       shapes: 'Formes',
       aiMaskBrush: 'Pinceau de masque IA',
       contentAwareFill: 'Remplissage d’après le contenu',
@@ -2036,6 +2044,7 @@ export const fr = {
     hint: {
       autoClean: 'Entrée pour lancer',
       brush: 'glisser pour peindre',
+      eraser: 'faites glisser pour effacer la peinture du pinceau',
       shapes: 'glisser sur la page',
       aiMaskBrush: 'tracer sur le texte',
       cloneStamp: '{cloneSourceModifier}-clic sur une source',
@@ -2339,6 +2348,7 @@ export const fr = {
     },
     history: {
       saveFailed: 'Impossible d’enregistrer l’historique d’annulation. Annuler risque de ne plus fonctionner après un redémarrage.',
+      stale: 'Cette étape n’a pas pu être annulée ni rétablie, car la page a changé depuis. Rien n’a été modifié.',
     },
     job: {
       resumed: 'Reprise à la page {page}.',
@@ -2452,7 +2462,7 @@ export const fr = {
       paddingRefreshFailed: 'La marge du masque a été enregistrée, mais la page n’a pas pu être actualisée. Rouvrez le chapitre pour voir le masque mis à jour.',
       typeFailed: 'Impossible de modifier le type de texte. La zone est inchangée.',
       approveFailed: 'Impossible d’approuver le masque. La zone est inchangée.',
-      rejectNoMask: 'Ce résultat n’a pas de masque enregistré et ne peut donc pas être rejeté. Supprimez-le pour rétablir l’original.',
+      rejectNoMask: 'Ce calque n’a pas été fait par un nettoyeur et n’a donc pas de masque à restaurer. Supprimez-le pour rétablir l’original.',
       rejectFailed: 'Impossible de rejeter le résultat. La page est inchangée.',
       reapplyFailed: 'Impossible de rétablir le résultat. La page est inchangée.',
     },
@@ -2968,7 +2978,7 @@ export const fr = {
         scopeProject: 'La détection cloud ne peut pas s’exécuter sur un projet entier : chaque chapitre est planifié séparément. Lancez un chapitre à la fois, ou choisissez Cet ordinateur pour Détecter sur dans Nettoyage du texte.',
         tooMany: 'Ce chapitre a plus de pages qu’une exécution cloud ne peut en envoyer. Rien n’a été envoyé. Lancez-le page par page, ou choisissez Cet ordinateur pour Détecter sur dans Nettoyage du texte.',
         tooLargeChapter: 'Ce chapitre a plus de pixels qu’une exécution cloud ne peut en envoyer. Rien n’a été envoyé. Lancez-le page par page, ou choisissez Cet ordinateur pour Détecter sur dans Nettoyage du texte.',
-        nothing: 'Toutes les pages de la portée sont déjà nettoyées. Rien n’a été envoyé.',
+        nothing: 'Votre GPU cloud a déjà détecté toutes les pages de la portée. Rien n’a été envoyé. Pour renvoyer une page, détectez cette page seule.',
         stopped: 'La détection cloud s’est arrêtée après la page {page} ({code}). Les pages suivantes n’ont pas été envoyées et sont gardées pour une prochaine exécution.',
         consentLost: 'L’autorisation cloud ne correspond plus à cette exécution. Rien n’a été envoyé. Relancez l’exécution.',
         expired: 'L’autorisation cloud a expiré avant le début de l’exécution. Rien n’a été envoyé. Relancez l’exécution.',

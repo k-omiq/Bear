@@ -504,12 +504,13 @@ pub struct RemotePage {
 }
 
 /// Hears each record a run writes to its journal.
-type RecordListener = Box<dyn Fn(&AnalysisAttemptRecord) + Send>;
+type RecordListener = Box<dyn Fn(&AnalysisAttemptRecord) + Send + Sync>;
 
 /// What a run holds for its cloud stages: the client, the spent grant's scope,
-/// and the run's cancel flag.
+/// and the run's cancel flag. Shared by the producer's page threads
+/// ([`PAGES_IN_FLIGHT`]), so it is `Sync`.
 pub struct RemoteDetection {
-    client: Box<dyn AnalysisGateway + Send>,
+    client: Box<dyn AnalysisGateway + Send + Sync>,
     scope: RunGrantScope,
     page_sources: Vec<GrantedPage>,
     job_path: Option<PathBuf>,
@@ -517,7 +518,7 @@ pub struct RemoteDetection {
     cancel: Arc<AtomicBool>,
     area: Option<crate::run::DetectArea>,
     /// Whether the selected endpoint is still active, asked before each tile.
-    allowed: Box<dyn Fn() -> Result<(), &'static str> + Send>,
+    allowed: Box<dyn Fn() -> Result<(), &'static str> + Send + Sync>,
     /// Told each record this run writes to its journal, as a review analysis
     /// tells `cloud://analysis`: the interface knows from it that a request is
     /// out, which is how it can say that no GPU has started for one.
@@ -525,7 +526,7 @@ pub struct RemoteDetection {
 }
 
 impl RemoteDetection {
-    pub(crate) fn new(client: Box<dyn AnalysisGateway + Send>, scope: RunGrantScope) -> Self {
+    pub(crate) fn new(client: Box<dyn AnalysisGateway + Send + Sync>, scope: RunGrantScope) -> Self {
         #[cfg(not(test))]
         let page_sources = scope.page_sources.clone();
         #[cfg(test)]
@@ -543,7 +544,7 @@ impl RemoteDetection {
 
     pub(crate) fn set_area(&mut self, area: Option<crate::run::DetectArea>) { self.area = area; }
 
-    pub(crate) fn set_allowed(&mut self, allowed: Box<dyn Fn() -> Result<(), &'static str> + Send>) {
+    pub(crate) fn set_allowed(&mut self, allowed: Box<dyn Fn() -> Result<(), &'static str> + Send + Sync>) {
         self.allowed = allowed;
     }
 
@@ -602,9 +603,10 @@ impl RemoteDetection {
         analysis::current_models(&available, &self.scope.models)?;
         let regions: Vec<_> = self.area.iter().map(|area| area.cloud_window(page.width, page.height)).collect();
         let extent = cloud_tiles::plan(page.width, page.height, &regions)?;
+        let encoding = analysis::tile_encoding(&*self.client)?;
         let mut encoded = Vec::with_capacity(extent.tiles.len());
         for rect in &extent.tiles {
-            let (sha, png) = analysis::encode_tile(page, *rect)?;
+            let (sha, png) = analysis::encode_tile(page, *rect, encoding)?;
             if analysis::exceeds_limits(&available, *rect, Some(png.len())) {
                 return Err(analysis::gateway_limit_error());
             }
@@ -673,7 +675,7 @@ impl RemoteDetection {
         let cost = std::cell::Cell::new(0.0);
         let all_costs_known = std::cell::Cell::new(true);
         let sent = analysis::run_tiles(&*self.client, &self.scope.models,
-            &source_sha256, &uploads, page.width, page.height, &cancel,
+            &source_sha256, &uploads, page.width, page.height, encoding, &cancel,
             &mut |index| {
                 if cancel.load(Ordering::SeqCst) { return Err(analysis::AnalysisFlowError::Cancelled); }
                 self.tile_authority().map_err(analysis::AnalysisFlowError::Other)?;
@@ -818,9 +820,9 @@ impl Drop for Finish<'_> {
 ///
 /// Owns the producer thread. Dropping it, which happens when the run's pipeline
 /// goes at the end of the run however it ended, closes the queue and joins the
-/// producer: it is then between pages, or finishing one tile the run's cancel
-/// flag will stop, all bounded by the client's
-/// timeouts. The run has already emitted `run-finished` and handed its slot back
+/// producer: it is then between pages, or finishing the pages it has out
+/// ([`PAGES_IN_FLIGHT`]), whose next tile the run's cancel flag stops, all
+/// bounded by the client's timeouts. The run has already emitted `run-finished` and handed its slot back
 /// by then, so the wait delays nobody.
 pub struct Prefetch {
     shared: Arc<Shared>,
@@ -925,37 +927,68 @@ pub(crate) fn page_input(job: &Job, page_index: usize, source: &[u8]) -> Result<
     cleaner_core::composite::composite(&raw, &patches).map_err(|e| e.to_string())
 }
 
+/// Pages the producer has out at once. The analysis GPU serves this many
+/// inputs at a time (`ANALYSIS_MAX_INPUTS` in deploy/cloud/common/capacity.py),
+/// so one page's upload, gateway and polling time overlaps another page's GPU
+/// work; one page at a time left the GPU idle for most of each page.
+pub const PAGES_IN_FLIGHT: usize = 3;
+
 /// The producer: every page in order until the last, a cancel, a failure that
-/// stops the run, or the run's end. Completion leaves the GPU's provider-managed
-/// idle window intact so a subsequent detection can reuse the loaded models.
+/// stops the run, or the run's end. [`PAGES_IN_FLIGHT`] pages are analyzed at
+/// once, each on its own thread, and queued in run order as each one's turn
+/// comes. Completion leaves the GPU's provider-managed idle window intact so a
+/// subsequent detection can reuse the loaded models.
 fn produce(remote: &RemoteDetection, pages: Vec<PrefetchPage>, shared: &Shared) {
-    {
-        let _finish = Finish(shared);
-        for page in pages {
-            if remote.cancel.load(Ordering::SeqCst) || shared.lock().closed { break; }
-            let read = page.source.ok_or_else(|| "cloud_run_source_unreadable".to_owned())
-                .and_then(|path| std::fs::read(&path).map_err(|_| "cloud_run_source_unreadable".to_owned()));
-            let (source_sha256, answer) = match read {
-                Ok(bytes) => {
-                    let input = match &page.job_path {
-                        Some(path) => Job::open(path).map_err(|e| e.to_string())
-                            .and_then(|job| page_input(&job, page.page_index, &bytes)),
-                        None => decode(&bytes).map(|raw| cleaner_core::image::orientation::from_bytes(&bytes).raster(&raw)).map_err(|e| e.to_string()),
-                    };
-                    let answer = input.and_then(|raster| remote.analyze_page(page.page_index, &bytes, &raster));
-                    (sha256_hex(&bytes), answer)
-                }
-                Err(detail) => (String::new(), Err(detail)),
-            };
-            let stop = answer.as_ref().is_err_and(|detail| stops_run(detail));
-            let bytes = answer.as_ref().map_or(0, |page| {
-                page.mask.as_ref().map_or(0, Vec::len) + page.boxes.len() * std::mem::size_of::<BalloonBox>()
-            });
-            if !shared.push(Prefetched { page_index: page.page_index, source_sha256, answer, bytes }) || stop {
-                break;
+    let _finish = Finish(shared);
+    let mut pages = pages.into_iter();
+    // Set by a page whose failure stops the run, whatever its turn, so no
+    // page starts after it.
+    let halted = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let mut in_flight = VecDeque::new();
+        loop {
+            while in_flight.len() < PAGES_IN_FLIGHT && !halted.load(Ordering::SeqCst)
+                && !remote.cancel.load(Ordering::SeqCst) && !shared.lock().closed {
+                let Some(page) = pages.next() else { break };
+                let halted = &halted;
+                in_flight.push_back(scope.spawn(move || {
+                    let item = analyze_ahead(remote, page);
+                    if item.answer.as_ref().is_err_and(|detail| stops_run(detail)) {
+                        halted.store(true, Ordering::SeqCst);
+                    }
+                    item
+                }));
             }
+            let Some(next) = in_flight.pop_front() else { break };
+            let item = next.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            let stop = item.answer.as_ref().is_err_and(|detail| stops_run(detail));
+            // The pages still out end on their own: a cancel stops their next
+            // tile, and a refused key refuses them too.
+            if !shared.push(item) || stop { break; }
         }
-    }
+    });
+}
+
+/// One page, read and analyzed as the run will read it.
+fn analyze_ahead(remote: &RemoteDetection, page: PrefetchPage) -> Prefetched {
+    let read = page.source.ok_or_else(|| "cloud_run_source_unreadable".to_owned())
+        .and_then(|path| std::fs::read(&path).map_err(|_| "cloud_run_source_unreadable".to_owned()));
+    let (source_sha256, answer) = match read {
+        Ok(bytes) => {
+            let input = match &page.job_path {
+                Some(path) => Job::open(path).map_err(|e| e.to_string())
+                    .and_then(|job| page_input(&job, page.page_index, &bytes)),
+                None => decode(&bytes).map(|raw| cleaner_core::image::orientation::from_bytes(&bytes).raster(&raw)).map_err(|e| e.to_string()),
+            };
+            let answer = input.and_then(|raster| remote.analyze_page(page.page_index, &bytes, &raster));
+            (sha256_hex(&bytes), answer)
+        }
+        Err(detail) => (String::new(), Err(detail)),
+    };
+    let bytes = answer.as_ref().map_or(0, |page| {
+        page.mask.as_ref().map_or(0, Vec::len) + page.boxes.len() * std::mem::size_of::<BalloonBox>()
+    });
+    Prefetched { page_index: page.page_index, source_sha256, answer, bytes }
 }
 
 /// The endpoint refused the key, or there is no usable key, in the stable
@@ -1128,12 +1161,14 @@ pub(crate) mod fake {
         pub fail: Arc<Mutex<HashMap<String, String>>>,
         /// While set, a tile waits here until its source page is let through.
         pub hold: Option<Arc<(Mutex<HashSet<String>>, Condvar)>>,
+        /// Takes grey tiles as grey PNGs.
+        pub gray: bool,
     }
 
     pub(crate) fn gateway() -> Gateway {
         Gateway {
             sent: Arc::new(AtomicUsize::new(0)), revision: "c".repeat(40),
-            seen: Arc::default(), uploads: Arc::default(), fail: Arc::default(), hold: None,
+            seen: Arc::default(), uploads: Arc::default(), fail: Arc::default(), hold: None, gray: false,
         }
     }
 
@@ -1205,6 +1240,7 @@ pub(crate) mod fake {
             Ok(result)
         }
 
+        fn accepts_gray_tiles(&self) -> Result<bool, String> { Ok(self.gray) }
     }
 
     /// The models a run grant pins, as this gateway advertises them.
@@ -1493,6 +1529,85 @@ mod tests {
         assert!(page.mask.as_ref().unwrap().iter().all(|value| *value == 255));
         assert_eq!(page.boxes.len(), 1);
         assert_eq!(page.boxes[0].rect, Rect::new(2, 3, 10, 8));
+    }
+
+    /// A grey page goes as grey tiles to a gateway that takes them, and as RGB
+    /// to one that does not; the answer is the same.
+    #[test]
+    fn a_grey_page_goes_grey_only_where_the_gateway_takes_it() {
+        let colour_of = |png: &[u8]| png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap().info().color_type;
+        let mut answers = Vec::new();
+        for gray in [false, true] {
+            let path = chapter(if gray { "grey-tiles" } else { "rgb-tiles" }, 1, StripMode::Single);
+            let gateway = Gateway { gray, ..gateway() };
+            let uploads = Arc::clone(&gateway.uploads);
+            let grant = confirm_run(&proposal(&path, vec![0], vec![SAM, RT], &gateway).proposal_id, true, true).unwrap();
+            let caps = both();
+            let scope = consume_grant(&grant.grant_id, &request(&[0], &caps)).unwrap();
+            let remote = RemoteDetection::new(Box::new(gateway), scope);
+            let (raster, source) = page_raster();
+            let page = remote.analyze_page(0, &source, &raster).unwrap();
+            let expected = if gray { png::ColorType::Grayscale } else { png::ColorType::Rgb };
+            assert!(uploads.lock().unwrap().iter().all(|png| colour_of(png) == expected));
+            answers.push((page.mask, page.boxes.iter().map(|b| b.rect).collect::<Vec<_>>()));
+        }
+        assert_eq!(answers[0], answers[1]);
+    }
+
+    /// Serves batches and takes a canvas, cutting the tiles out of it as the
+    /// gateway does; each request then goes to the inner gateway.
+    struct CanvasGateway(Gateway, Arc<Mutex<Vec<bool>>>);
+
+    impl AnalysisGateway for CanvasGateway {
+        fn capabilities(&self) -> Result<AnalysisCapabilities, String> { self.0.capabilities() }
+        fn analyze(&self, _: &AnalysisRequest, _: &[u8]) -> Result<AnalysisResult, String> {
+            Err("a tile sent to a gateway that serves batches".into())
+        }
+        fn serves_batches(&self) -> Result<bool, String> { Ok(true) }
+        fn accepts_batch_canvas(&self) -> Result<bool, String> { Ok(true) }
+        fn analyze_batch(&self, batch: &cleaner_core::cloud_analysis_wire::AnalysisBatch,
+            upload: &cleaner_core::cloud_analysis_wire::BatchUpload<'_>, _: &AtomicBool)
+            -> Result<cleaner_core::cloud_analysis_wire::AnalysisBatchResult, String> {
+            use cleaner_core::cloud_analysis_wire::{canvas_tiles, AnalysisBatchResult, BatchUpload};
+            let pngs = match upload {
+                BatchUpload::Tiles(tiles) => tiles.iter().map(|png| png.to_vec()).collect(),
+                BatchUpload::Canvas { rect, png } => {
+                    let mut rects: Vec<TileRect> = batch.requests.iter().map(|request| request.tile_rect).collect();
+                    rects.dedup();
+                    canvas_tiles(*rect, png, &rects)?
+                }
+            };
+            self.1.lock().unwrap().push(matches!(upload, BatchUpload::Canvas { .. }));
+            let results = batch.requests.iter().map(|request| {
+                let png = pngs.iter().find(|png| hex(png) == request.tile_png_sha256).ok_or("tile not sent")?;
+                self.0.analyze(request, png)
+            }).collect::<Result<_, String>>()?;
+            Ok(AnalysisBatchResult { protocol_version: VERSION.into(), request_digest: batch.request_digest.clone(), results })
+        }
+    }
+
+    /// A run page goes as one canvas to a gateway that takes it, and the
+    /// answer is the one tile PNGs get.
+    #[test]
+    fn a_run_page_goes_as_one_canvas_where_the_gateway_takes_it() {
+        let mut answers = Vec::new();
+        for canvas in [false, true] {
+            let path = chapter(if canvas { "canvas-run" } else { "tile-run" }, 1, StripMode::Single);
+            let gateway = gateway();
+            let grant = confirm_run(&proposal(&path, vec![0], vec![SAM, RT], &gateway).proposal_id, true, true).unwrap();
+            let caps = both();
+            let scope = consume_grant(&grant.grant_id, &request(&[0], &caps)).unwrap();
+            let batches = Arc::new(Mutex::new(Vec::new()));
+            let client: Box<dyn AnalysisGateway + Send + Sync> = if canvas {
+                Box::new(CanvasGateway(gateway, Arc::clone(&batches)))
+            } else { Box::new(gateway) };
+            let remote = RemoteDetection::new(client, scope);
+            let (raster, source) = page_raster();
+            let page = remote.analyze_page(0, &source, &raster).unwrap();
+            assert_eq!(*batches.lock().unwrap(), if canvas { vec![true] } else { vec![] });
+            answers.push((page.mask, page.boxes.iter().map(|b| b.rect).collect::<Vec<_>>()));
+        }
+        assert_eq!(answers[0], answers[1]);
     }
 
     #[test]
@@ -2057,16 +2172,22 @@ mod tests {
         assert!(!error.contains(&missing.display().to_string()));
     }
 
-    /// The producer walks the run's pages in the run's order, not sorted, and is
-    /// done with all of them before the run has taken one. Completion does not
-    /// stop the GPU before its configured idle window.
+    /// The producer sends the run's pages several at once and queues them in
+    /// the run's order, not sorted, and is done with all of them before the run
+    /// has taken one. Completion does not stop the GPU before its configured
+    /// idle window.
     #[test]
     fn prefetch_analyzes_in_run_order_ahead_of_the_run_and_keeps_gpu_warm() {
         let (paths, shas) = pages_on_disk("order", 3);
         let gateway = gateway();
         let (prefetch, _) = start(&gateway, "modal-prof-prefetch-order", &paths, &[1, 0, 2], PREFETCH_BUDGET_BYTES);
         eventually("every page analyzed", || gateway.sent.load(Ordering::SeqCst) == 3);
-        assert_eq!(*gateway.seen.lock().unwrap(), vec![shas[1].clone(), shas[0].clone(), shas[2].clone()]);
+        let mut seen = gateway.seen.lock().unwrap().clone();
+        seen.sort();
+        assert_eq!(seen, { let mut all = shas.clone(); all.sort(); all });
+        eventually("every page queued", || prefetch.shared.lock().ready.len() == 3);
+        let queued: Vec<usize> = prefetch.shared.lock().ready.iter().map(|item| item.page_index).collect();
+        assert_eq!(queued, vec![1, 0, 2], "queued in the run's order");
 
         let page = prefetch.take(1, &shas[1]).unwrap();
         assert_eq!((page.width, page.height), (64, 48));
@@ -2119,63 +2240,77 @@ mod tests {
     }
 
     /// A failure that withdraws the run's authority stops the producer at that
-    /// page: nothing after it is sent, and a later page has no answer.
+    /// page: no page starts after it, and a later page has no answer, even one
+    /// that was already out beside it.
     #[test]
     fn a_failure_that_stops_the_run_stops_the_producer() {
-        let (paths, shas) = pages_on_disk("stops", 4);
-        let gateway = gateway();
+        let (paths, shas) = pages_on_disk("stops", PAGES_IN_FLIGHT + 2);
+        let mut gateway = gateway();
+        gateway.hold = Some(Arc::default());
         let refused = crate::inference::http::HttpTransportError::UnexpectedStatus { status: 401 }.to_string();
         gateway.fail.lock().unwrap().insert(shas[1].clone(), refused);
-        let (prefetch, _) = start(&gateway, "modal-prof-prefetch-stops", &paths, &[0, 1, 2, 3], PREFETCH_BUDGET_BYTES);
+        let order: Vec<usize> = (0..paths.len()).collect();
+        let (prefetch, _) = start(&gateway, "modal-prof-prefetch-stops", &paths, &order, PREFETCH_BUDGET_BYTES);
+        // The refusal comes back while the pages before and beside it are out.
+        gateway.release_page(&shas[1]);
+        eventually("the refusal", || gateway.seen.lock().unwrap().contains(&shas[1]));
+        std::thread::sleep(Duration::from_millis(50));
+        for sha in &shas { gateway.release_page(sha); }
         assert!(prefetch.take(0, &shas[0]).is_ok());
         let error = prefetch.take(1, &shas[1]).unwrap_err();
         assert!(error.starts_with("gateway_unauthorized: ") && stops_run(&error), "{error}");
         assert_eq!(prefetch.take(2, &shas[2]).unwrap_err(), "cloud_run_page_missing");
-        assert_eq!(*gateway.seen.lock().unwrap(), vec![shas[0].clone(), shas[1].clone()]);
         drop(prefetch);
+        let seen = gateway.seen.lock().unwrap().clone();
+        assert!(!shas[PAGES_IN_FLIGHT..].iter().any(|sha| seen.contains(sha)), "a page started after the refusal");
     }
 
     /// The run's cancel stops the producer before its next page. The run's end
     /// joins it without stopping the GPU that another selection may be using.
     #[test]
     fn cancel_stops_the_producer_before_its_next_page() {
-        let (paths, shas) = pages_on_disk("cancel", 4);
+        let (paths, shas) = pages_on_disk("cancel", PAGES_IN_FLIGHT + 3);
         let mut gateway = gateway();
         gateway.hold = Some(Arc::default());
-        let (prefetch, cancel) = start(&gateway, "modal-prof-prefetch-cancel", &paths, &[0, 1, 2, 3], PREFETCH_BUDGET_BYTES);
+        let order: Vec<usize> = (0..paths.len()).collect();
+        let (prefetch, cancel) = start(&gateway, "modal-prof-prefetch-cancel", &paths, &order, PREFETCH_BUDGET_BYTES);
         gateway.release_page(&shas[0]);
         assert!(prefetch.take(0, &shas[0]).is_ok());
         cancel.store(true, Ordering::SeqCst);
-        // Page 1 may already be waiting at the gateway; it finishes, nothing after it starts.
-        gateway.release_page(&shas[1]);
-        gateway.release_page(&shas[2]);
-        gateway.release_page(&shas[3]);
-        assert_eq!(prefetch.take(2, &shas[2]).unwrap_err(), "analysis_cancelled");
+        // The pages already out may be waiting at the gateway; they finish,
+        // nothing after them starts.
+        for sha in &shas { gateway.release_page(sha); }
+        let after = PAGES_IN_FLIGHT + 1;
+        assert_eq!(prefetch.take(after, &shas[after]).unwrap_err(), "analysis_cancelled");
         drop(prefetch);
         let seen = gateway.seen.lock().unwrap().clone();
-        assert!(!seen.contains(&shas[2]) && !seen.contains(&shas[3]), "sent after the cancel");
+        assert!(!shas[after..].iter().any(|sha| seen.contains(sha)), "sent after the cancel");
     }
 
     /// The producer waits when the buffer is full, and never holds more than the
-    /// budget in it. A run that ends while it waits does not leave it waiting.
+    /// budget in it, plus the pages it has out. A run that ends while it waits
+    /// does not leave it waiting.
     #[test]
     fn the_buffer_holds_no_more_than_its_budget() {
-        let (paths, shas) = pages_on_disk("budget", 5);
+        let (paths, shas) = pages_on_disk("budget", PAGES_IN_FLIGHT + 5);
         let gateway = gateway();
         let page_bytes = 64 * 48;
         let budget = 2 * page_bytes;
-        let (prefetch, _) = start(&gateway, "modal-prof-prefetch-budget", &paths, &[0, 1, 2, 3, 4], budget);
-        // Two pages buffered and a third analyzed and waiting for room.
-        eventually("a full buffer", || gateway.sent.load(Ordering::SeqCst) == 3);
+        let order: Vec<usize> = (0..paths.len()).collect();
+        let (prefetch, _) = start(&gateway, "modal-prof-prefetch-budget", &paths, &order, budget);
+        // Two pages buffered, a third analyzed and waiting for room, and the
+        // pages out beside it.
+        let full = 2 + PAGES_IN_FLIGHT;
+        eventually("a full buffer", || gateway.sent.load(Ordering::SeqCst) == full);
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(gateway.sent.load(Ordering::SeqCst), 3, "the producer ran past its budget");
+        assert_eq!(gateway.sent.load(Ordering::SeqCst), full, "the producer ran past its budget");
         assert_eq!(prefetch.shared.lock().bytes, budget);
         assert!(prefetch.take(0, &shas[0]).is_ok());
-        eventually("room used again", || gateway.sent.load(Ordering::SeqCst) == 4);
+        eventually("room used again", || gateway.sent.load(Ordering::SeqCst) == full + 1);
         assert!(prefetch.shared.lock().bytes <= budget);
         // The run ends here, with the producer waiting for room again.
         drop(prefetch);
-        assert_eq!(gateway.sent.load(Ordering::SeqCst), 4);
+        assert_eq!(gateway.sent.load(Ordering::SeqCst), full + 1);
 
         // A single page larger than the budget still goes through, alone.
         let gateway = fake::gateway();

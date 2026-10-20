@@ -19,7 +19,8 @@
  *
  * ## The window
  *
- * **Previous, current, next.** Three pages' regions are resident; everything
+ * **Previous, current, next.** Three pages' regions are resident (eleven in a
+ * longstrip, `STRIP_RADIUS`); everything
  * else is a header - a name, a size, a status and a region *count*. Moving to a
  * page loads it and its neighbours and drops what has left, so the cost is flat
  * in chapter length rather than linear in it.
@@ -53,9 +54,18 @@
 
 import { getBackend } from '../api/backend.js'
 import { recountPage } from '../model/status.js'
+import { KEEP_PAGES } from '../editor/strip.js'
 
 /** Pages either side of the current one. Three resident pages in all. */
 export const WINDOW_RADIUS = 1
+
+/**
+ * In a longstrip the radius is the strip's warm range instead (`KEEP_PAGES`
+ * in `editor/strip.js`): the pages kept mounted are the pages whose regions
+ * are in hand, so a mask that hangs from the page above across a join is
+ * there whenever the page below is.
+ */
+export const STRIP_RADIUS = KEEP_PAGES
 
 let slideToken = 0
 
@@ -75,7 +85,8 @@ export function windowIndices(spec) {
   const centre = Math.min(last, Math.max(0, Math.trunc(spec.pageIndex ?? 0)))
 
   const wanted = new Set()
-  for (let offset = -WINDOW_RADIUS; offset <= WINDOW_RADIUS; offset += 1) {
+  const radius = spec.longstrip ? STRIP_RADIUS : WINDOW_RADIUS
+  for (let offset = -radius; offset <= radius; offset += 1) {
     const index = centre + offset
     if (index >= 0 && index <= last) wanted.add(index)
   }

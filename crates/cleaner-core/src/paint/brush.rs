@@ -4,6 +4,8 @@
 //! `#[cfg(target_arch = "wasm32")]` ABI exports are dropped - this crate links
 //! the kernels natively and `wasm32-unknown-unknown` is not even installed,
 //! and the `crate::types` / `crate::memory` dependencies go with them.
+//! A third, later: `analytic_radial_coverage` is `pub(crate)`, so the eraser
+//! (`erase.rs`) takes coverage off with the same tip the Brush lays it on with.
 //! The `#[cfg(test)]` TS-oracle parity tests are kept as they stood, because
 //! they are resolution-independent and they are what keeps the kernel verified.
 //!
@@ -117,7 +119,7 @@ fn soft_gradient_coverage(t: f64) -> f64 {
     }
 }
 
-fn analytic_radial_coverage(t: f64, hardness: f64) -> f64 {
+pub(crate) fn analytic_radial_coverage(t: f64, hardness: f64) -> f64 {
     let r = t.abs();
     if r >= 1.0 {
         return 0.0;

@@ -1008,6 +1008,7 @@ pub const RECORDED_EVENT: &str = "denoise://recorded";
 /// A Detect or Clean run on the chapter does not refuse these rows, as it
 /// refuses a write to its pages: they are the denoise's own history, and no
 /// page's regions, masks or source change with them.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn record_written_soon(
     app: &tauri::AppHandle,
     run_id: &str,
@@ -1852,7 +1853,7 @@ mod tests {
             Ok(())
         }
         fn poll_job(&self,job:&DenoiseJob)->Result<Polled<DenoiseResultMetadata>,String> {
-            if self.poll_errors.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|n|n.checked_sub(1)).is_ok() {
+            if self.poll_errors.try_update(Ordering::SeqCst,Ordering::SeqCst,|n|n.checked_sub(1)).is_ok() {
                 return Err("gateway_error".into());
             }
             if !self.ready.load(Ordering::SeqCst) {return Ok(Polled::Waiting);}

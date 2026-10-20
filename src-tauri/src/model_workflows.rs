@@ -731,7 +731,7 @@ pub async fn verify_sam_ts(app: tauri::AppHandle) -> Result<bool, String> {
 
 fn sam_bootstrap_source(app: &tauri::AppHandle, app_data: &Path) -> Result<PathBuf, String> {
     let bundled = app.path().resource_dir().map_err(|e| e.to_string())?.join("sam-bootstrap");
-    if bundled.join("bootstrap.py").is_file() && bundled.join("export_mask.py").is_file() {
+    if ["bootstrap.py", "export_mask.py", "dense_pe.f32.xz"].iter().all(|name| bundled.join(name).is_file()) {
         return Ok(bundled);
     }
     if cfg!(debug_assertions) {
@@ -743,6 +743,7 @@ fn sam_bootstrap_source(app: &tauri::AppHandle, app_data: &Path) -> Result<PathB
                 (checkout.join("sam-bootstrap/bootstrap.py"), "bootstrap.py"),
                 (checkout.join("spikes/sam-ts-l/export_mask.py"), "export_mask.py"),
                 (checkout.join("spikes/sam-ts-l/environment.txt"), "environment.txt"),
+                (checkout.join("spikes/sam-ts-l/dense_pe.f32.xz"), "dense_pe.f32.xz"),
                 (checkout.join("spikes/sam-ts-l/fixtures/synthetic_page.png"), "synthetic_page.png"),
             ] {
                 std::fs::copy(from, target.join(to)).map_err(|e| e.to_string())?;
@@ -803,16 +804,21 @@ pub async fn install_sam_ts(app: tauri::AppHandle) -> Result<bool, String> {
             let uv = sam_uv();
             let venv = root.join("venv");
             let mut setup = Command::new(&uv);
-            setup.args(["venv", "--python", &managed]).arg(&venv).env("UV_NO_CONFIG", "1");
+            // A retry after any later failure finds the previous attempt's
+            // environment; uv refuses to reuse it without --clear.
+            setup.args(["venv", "--clear", "--python", &managed]).arg(&venv).env("UV_NO_CONFIG", "1");
             sam_step(&app, "environment", setup, &root)?;
             let python = if cfg!(windows) { venv.join("Scripts/python.exe") } else { venv.join("bin/python") };
             let mut dependencies = Command::new(&uv);
-            dependencies.args(["pip", "sync", "--python"]).arg(&python).arg(source.join("environment.txt"))
+            // The export runs on the CPU. Without a backend, Linux gets the
+            // CUDA torch wheel, whose NVIDIA libraries pip sync never installs.
+            dependencies.args(["pip", "sync", "--torch-backend", "cpu", "--python"]).arg(&python).arg(source.join("environment.txt"))
                 .env("UV_NO_CONFIG", "1");
             sam_step(&app, "dependencies", dependencies, &root)?;
             let mut bootstrap = Command::new(&python);
             bootstrap.args(prefix).arg(source.join("bootstrap.py"))
-                .arg("--root").arg(&root).arg("--source").arg(&source);
+                .arg("--root").arg(&root).arg("--source").arg(&source)
+                .arg("--dense-pe").arg(source.join("dense_pe.f32.xz"));
             sam_step(&app, "sources-export", bootstrap, &root)?;
             let proof = root.join("proof");
             verify_graphs(&proof)?;
@@ -3084,6 +3090,7 @@ mod tests {
 
         let mut journal = crate::history::load(&path);
         journal.push(crate::history::NewDelta {
+            parts: Vec::new(),
             label: "canvas.command.applyTool".into(),
             op: "region-state".into(),
             region_id: applied.region_id.clone(),
@@ -3096,8 +3103,7 @@ mod tests {
                 present: true,
                 page_status: Some(applied.page_status),
                 region: Some(serde_json::to_value(applied.region).unwrap()),
-            },
-        }, crate::history::UNDO_LIMIT_DEFAULT);
+            }, ..Default::default() }, crate::history::UNDO_LIMIT_DEFAULT);
         crate::history::save(&path, &journal).unwrap();
         let mut reopened = crate::history::load(&path);
         assert_eq!(reopened.cursor, 1);

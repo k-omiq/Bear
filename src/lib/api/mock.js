@@ -15,7 +15,7 @@
  */
 
 import { createJournal, pushEntry, redoEntry, undoEntry, viewOf } from '../model/journal.js'
-import { displayBbox, editedLayer, isRegionCopy, layerCapabilities, layerOf, sanitizeLayer } from '../model/layers.js'
+import { displayBbox, editedLayer, isBrushLayer, isRegionCopy, layerCapabilities, layerOf, sanitizeLayer } from '../model/layers.js'
 import { regionState, reviewReason } from '../model/review.js'
 import { aboutInfo, buildChapter, buildFixtures, buildProject, defaultSettings } from './fixtures.js'
 import { cloudAttemptId, sha256Hex } from './attempt.js'
@@ -571,6 +571,9 @@ export function createMockBackend(options = {}) {
   let noticeCounter = 0
   let projectCounter = 0
   let handCounter = 0
+  let mockEraseCount = 0
+  /** Numbers each Detect run's undo group. */
+  let detectRuns = 0
 
   const emit = (event) => {
     const frozen = structuredClone(event)
@@ -817,21 +820,63 @@ export function createMockBackend(options = {}) {
   let maskEdits = 0
 
   /**
-   * The box around a mask edit's gesture, in page percent and clipped to the
-   * page, or `null` when there is no gesture or it covers nothing on the page.
-   * A stroke's radius is in page pixels, so it is taken to percent per axis.
+   * The pages a mask edit anchored on `page` reaches, each with where it
+   * sits in the anchor page's percent: `top` and `height` on the anchor's y
+   * axis, `left` and `width` on its x axis, pages centred in the strip as the
+   * native strip lays them. The anchor alone, at 0 to 100, on a chapter of
+   * single pages; on a longstrip one page more each way, as
+   * `region.rs#mask_edit_pages` reaches.
    */
-  const gestureBox = (page, stroke, painted) => {
+  const maskEditFrame = (found, page) => {
+    const anchor = { page, top: 0, height: 100, left: 0, width: 100 }
+    if (found.project.mode !== 'longstrip') return [anchor]
+    const width = (candidate) => candidate.width || 1600
+    const height = (candidate) => candidate.height || 2400
+    const near = [page.index - 1, page.index + 1]
+      .map((index) => found.chapter.pages.find((candidate) => candidate.index === index))
+      .filter(Boolean)
+    const strip = Math.max(width(page), ...near.map(width))
+    const centred = (candidate) => (strip - width(candidate)) / 2
+    return [anchor, ...near.map((other) => ({
+      page: other,
+      top: (other.index < page.index ? -height(other) : height(page)) / height(page) * 100,
+      height: height(other) / height(page) * 100,
+      left: (centred(other) - centred(page)) / width(page) * 100,
+      width: width(other) / width(page) * 100,
+    }))]
+  }
+
+  /** A box in `entry`'s page percent, in the anchor page's. The anchor's own is left as it is. */
+  const toAnchor = (entry, box) => entry.top === 0 && entry.left === 0 && entry.width === 100 && entry.height === 100
+    ? box
+    : { x: entry.left + box.x * entry.width / 100, y: entry.top + box.y * entry.height / 100,
+        w: box.w * entry.width / 100, h: box.h * entry.height / 100 }
+
+  /** A box in the anchor page's percent, in `entry`'s page percent: past 0 to 100 where it hangs. */
+  const fromAnchor = (entry, box) => entry.top === 0 && entry.left === 0 && entry.width === 100 && entry.height === 100
+    ? box
+    : { x: (box.x - entry.left) * 100 / entry.width, y: (box.y - entry.top) * 100 / entry.height,
+        w: box.w * 100 / entry.width, h: box.h * 100 / entry.height }
+
+  /**
+   * The box around a mask edit's gesture, in the anchor page's percent and
+   * clipped to the pages `frame` names, or `null` when there is no gesture or
+   * it covers none of them. A stroke's radius is in page pixels, so it is
+   * taken to percent per axis.
+   */
+  const gestureBox = (page, stroke, painted, frame) => {
     const points = (stroke?.points ?? painted?.points ?? [])
       .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
     if (points.length === 0) return null
     const reach = stroke ? Math.max(0, Number(stroke.radius) || 0) : Math.max(0, Number(painted?.feather) || 0)
     const rx = (reach / (page.width || 1600)) * 100
     const ry = (reach / (page.height || 2400)) * 100
-    const left = Math.max(0, Math.min(...points.map((point) => point.x)) - rx)
-    const top = Math.max(0, Math.min(...points.map((point) => point.y)) - ry)
-    const right = Math.min(100, Math.max(...points.map((point) => point.x)) + rx)
-    const bottom = Math.min(100, Math.max(...points.map((point) => point.y)) + ry)
+    const left = Math.max(Math.min(...frame.map((entry) => entry.left)), Math.min(...points.map((point) => point.x)) - rx)
+    const top = Math.max(Math.min(...frame.map((entry) => entry.top)), Math.min(...points.map((point) => point.y)) - ry)
+    const right = Math.min(Math.max(...frame.map((entry) => entry.left + entry.width)),
+      Math.max(...points.map((point) => point.x)) + rx)
+    const bottom = Math.min(Math.max(...frame.map((entry) => entry.top + entry.height)),
+      Math.max(...points.map((point) => point.y)) + ry)
     if (!(right > left) || !(bottom > top)) return null
     return { x: left, y: top, w: right - left, h: bottom - top }
   }
@@ -1042,6 +1087,25 @@ export function createMockBackend(options = {}) {
   }
 
   /**
+   * A detection made from a result's own mask, for a result whose clean kept
+   * nothing, as `Job::detection_of_patch` makes one: only a cleaner's result
+   * qualifies, never a paint or clone stroke or a region copy. A Fill result
+   * starts on Fill inside a balloon, anything else on LaMa outside.
+   *
+   * @param {any} region
+   * @returns {any|null}
+   */
+  const detectionOfResult = (region) => {
+    const engine = region.mask?.provenance?.engine
+    if (!engine || engine === 'paint' || engine === 'clone' || region.mask?.provenance?.params_snapshot?.mode === 'region-copy') return null
+    const fill = currentRung(engine) === 'fill'
+    const restored = snapshot(region)
+    delete restored.paddingPx
+    delete restored.baseBbox
+    return { ...restored, outcome: 'detected', detected: true, pick: fill ? 'fill' : 'lama', detector: 'restored', insideBubble: fill }
+  }
+
+  /**
    * Take a clean back or put its result back, as `Job::restore_detection` and
    * `Job::restore_patch` do, with their refusals in their order. Answers the
    * region's place after it, or `null` when no chapter names the region.
@@ -1083,7 +1147,7 @@ export function createMockBackend(options = {}) {
     if (!found.region.mask) {
       throw new Error(`clean_no_patch: region ${regionId} has no cleaned result to take back`)
     }
-    const kept = keptDetections.get(regionId)
+    const kept = keptDetections.get(regionId) ?? detectionOfResult(found.region)
     if (!kept) {
       throw new Error(`clean_not_restorable: no detection was kept for region ${regionId}; its mask cannot be put back`)
     }
@@ -1269,11 +1333,25 @@ export function createMockBackend(options = {}) {
     // Each step names its regions and what it does to them (runner.js). Detect
     // redoes a page's detections with its new ones; Detect and clean cleans a
     // page's stored detections rather than detecting it again.
+    // A Detect run's pages are one undo step, each page taken back to what
+    // it held before the run reached it (`run.rs`, `history::record_pages`).
+    const detectGroup = `mock-detect-${++detectRuns}`
+    const beforeDetect = new Map()
     const steps = {
       detect: {
-        pick: (page) => [...detectionsOf(page), ...fresh(page)],
+        pick: (page) => {
+          beforeDetect.set(page.id, capturePages([page]))
+          return [...detectionsOf(page), ...fresh(page)]
+        },
         apply: (region, page, ctx) => detectRegion(region, page, ctx, detector, maskPaddingPx),
-        pageStatus: settledStatus,
+        pageStatus: (page) => {
+          const status = settledStatus(page)
+          const captured = beforeDetect.get(page.id)
+          beforeDetect.delete(page.id)
+          const chapter = chapterOfPage(page)
+          if (captured && chapter) recordPageStep(chapter.id, DETECTION_LABELS.detect, captured, detectGroup)
+          return status
+        },
         // As `run.rs`: a detection arrives with its page, never as a region done.
         reportRegions: false,
       },
@@ -1531,6 +1609,75 @@ export function createMockBackend(options = {}) {
       journals.set(chapterId, journal)
     }
     return journal
+  }
+
+  /*
+   * `detection-state` steps, as `history.rs#record_pages` writes them: an edit
+   * of a page's detections and held rows, kept as the page's whole state
+   * before and after. The native side keeps each state once, by digest, in
+   * the job's sidecar; the mock keeps the copies in the entry, which is its
+   * memory either way.
+   */
+  const DETECTION_LABELS = {
+    delete: 'masks.command.deleteDetection',
+    type: 'masks.command.detectionType',
+    edit: 'masks.command.editDetection',
+    padding: 'masks.command.detectionPadding',
+    approve: 'masks.command.approveMask',
+    dismiss: 'masks.command.deleteRegion',
+    detect: 'masks.command.detectPages',
+  }
+  /** The rows a page state holds: every detection, and every row with no mask. */
+  const inPageState = (region) => isDetection(region) || !region.mask
+  const pageStateOf = (page) => snapshot(page.regions.filter(inPageState))
+  const samePageState = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  const putPageState = (page, regions) => {
+    page.regions = [...page.regions.filter((region) => !inPageState(region)), ...structuredClone(regions)]
+    page.status = settledStatus(page)
+  }
+  /** @type {(pages: any[]) => Array<{page: any, before: any}>} */
+  const capturePages = (pages) => pages.map((page) => ({ page, before: pageStateOf(page) }))
+  /**
+   * Record the pages `capturePages` took before an edit as one step; a page
+   * the edit left as it was is not part of it, and an edit that changed none
+   * records nothing. With a `group`, a run's later pages join its entry.
+   */
+  const recordPageStep = (chapterId, label, captured, group = null) => {
+    const pages = captured
+      .map(({ page, before }) => ({ pageIndex: page.index, pageId: page.id, before, after: pageStateOf(page) }))
+      .filter((step) => !samePageState(step.before, step.after))
+    if (pages.length === 0) return
+    const journal = journalFor(chapterId)
+    const last = journal.entries.at(-1)
+    if (group && last?.group === group && journal.cursor === journal.entries.length) {
+      for (const step of pages) {
+        const held = last.pages.find((page) => page.pageId === step.pageId)
+        if (held) held.after = step.after
+        else last.pages.push(step)
+      }
+    } else {
+      pushEntry(journal, { label, op: 'detection-state', regionId: '', before: { present: false }, after: { present: false }, pages, group }, undoLimitValue())
+    }
+    emit({ type: 'history-changed', chapterId })
+  }
+  /**
+   * Replay a `detection-state` entry, as `history.rs#replay_pages` does:
+   * every page is checked first, and a page not in the state the entry left
+   * it in writes nothing at all (`history_stale`).
+   */
+  const replayPageStep = (entry, undo) => {
+    const targets = []
+    for (const step of entry.pages) {
+      const page = findPage(step.pageId)
+      if (!page) return { pages: [], refused: 'history_stale' }
+      const [from, to] = undo ? [step.after, step.before] : [step.before, step.after]
+      const now = pageStateOf(page)
+      if (samePageState(now, to)) continue
+      if (!samePageState(now, from)) return { pages: [], refused: 'history_stale' }
+      targets.push([page, to])
+    }
+    for (const [page, to] of targets) putPageState(page, to)
+    return { pages: entry.pages.map((step) => step.pageIndex) }
   }
 
   /* ---------- the model catalogue ---------- */
@@ -2703,8 +2850,15 @@ export function createMockBackend(options = {}) {
           findRegion(next.regionId)?.page ?? findPage(next.before?.pageId ?? next.after?.pageId)
         if (page) refuseBusyPage(chapterId, page.index)
       }
+      // A page edit is put back here, before the answer, as the native side
+      // does it under the lock that moves the cursor.
+      let replayed = null
+      if (next?.op === 'detection-state') {
+        for (const step of next.pages) refuseBusyPage(chapterId, step.pageIndex)
+        replayed = replayPageStep(next, direction === 'undo')
+      }
       const entry = direction === 'redo' ? redoEntry(journal) : undoEntry(journal)
-      return snapshot({ cursor: journal.cursor, entry: entry ?? null })
+      return snapshot({ cursor: journal.cursor, entry: entry ?? null, ...(replayed ?? {}) })
     },
 
     async renameProject({ projectId, name }) {
@@ -2946,7 +3100,6 @@ export function createMockBackend(options = {}) {
      * Returns the page's status with the region for the same reason every other
      * region-level edit does: a hand mask on an unclean page makes it cleaned.
      */
-    async previewPaint() { return null },
     async createRegion({ chapterId, pageIndex, sourceIndex, sourceSha, bbox, tool, params = {} }) {
       await delay(timing.method)
       refuseBusyPage(chapterId, pageIndex)
@@ -2984,9 +3137,57 @@ export function createMockBackend(options = {}) {
      * overlaps most to take that box in, or makes a new detection shaped like
      * the ones a Detect run leaves where it overlaps none. `remove` deletes
      * every detection whose box centre the gesture's box covers, and changes
-     * no other. Cleaned layers are never touched, as natively, and the box is
-     * clipped to the page the gesture started on.
+     * no other. Cleaned layers are never touched, as natively.
+     *
+     * On a longstrip chapter the box reaches one page past the anchor each
+     * way (`maskEditFrame`) and is compared with those pages' detections in
+     * the anchor's percent. A grown detection stays on its page and may hang
+     * past 100 into the next; a new one goes to the page holding the box's
+     * top row, as natively. Every page written is answered in `pages`.
      */
+    /**
+     * An eraser stroke over the page's Brush layers, as `region.rs`
+     * `erase_paint` takes it. The mock keeps no pixels, so it works on boxes:
+     * a Brush layer the stroke's swept box covers whole goes off the page, and
+     * one it only crosses is answered as changed, with a new revision for an
+     * undo to name. Anything that is not Brush paint is left alone.
+     */
+    async erasePaint({ chapterId, pageIndex, points, size } = {}) {
+      await delay(timing.method)
+      const found = findChapter(chapterId)
+      const page = found?.chapter.pages.find((candidate) => candidate.index === pageIndex)
+      if (!page) return null
+      refuseBusyPage(chapterId, page.index)
+      const path = (points ?? []).filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+      if (path.length === 0) return { erased: [], pageStatus: page.status }
+      const rx = (Math.max(1, Number(size) || 1) / 2 / (Number(page.width) || 1600)) * 100
+      const ry = (Math.max(1, Number(size) || 1) / 2 / (Number(page.height) || 2400)) * 100
+      const swept = {
+        x0: Math.min(...path.map((point) => point.x)) - rx,
+        y0: Math.min(...path.map((point) => point.y)) - ry,
+        x1: Math.max(...path.map((point) => point.x)) + rx,
+        y1: Math.max(...path.map((point) => point.y)) + ry,
+      }
+      const erased = []
+      for (const region of [...page.regions]) {
+        if (!isBrushLayer(region)) continue
+        const box = region.bbox
+        const crosses = box.x < swept.x1 && box.x + box.w > swept.x0 && box.y < swept.y1 && box.y + box.h > swept.y0
+        if (!crosses) continue
+        const before = snapshot(region)
+        const covered = box.x >= swept.x0 && box.x + box.w <= swept.x1 && box.y >= swept.y0 && box.y + box.h <= swept.y1
+        if (covered) {
+          page.regions.splice(page.regions.indexOf(region), 1)
+          erased.push({ regionId: region.id, before, after: null })
+          continue
+        }
+        region.mask.legacyPatchRevision = `${region.id}-erase-${(mockEraseCount += 1)}`
+        erased.push({ regionId: region.id, before, after: snapshot(region) })
+      }
+      if (page.status === 'cleaned' && page.regions.every((candidate) => !candidate.mask)) page.status = 'unclean'
+      return { erased, pageStatus: page.status }
+    },
+
     async editDetectionMask({ chapterId, pageIndex, sourceIndex, sourceSha, mode, stroke, painted } = {}) {
       await delay(timing.method)
       if (mode !== 'add' && mode !== 'remove') throw new Error('mask_edit_mode_invalid')
@@ -2996,50 +3197,66 @@ export function createMockBackend(options = {}) {
       if (sourceIndex !== undefined && page.sourceIndex !== sourceIndex) return null
       if (sourceSha !== undefined && page.sourceSha !== sourceSha) return null
       refuseBusyPage(chapterId, pageIndex)
-      const box = gestureBox(page, stroke, painted)
+      const frame = maskEditFrame(found, page)
+      const box = gestureBox(page, stroke, painted, frame)
       if (!box) return null
+      // Every page the gesture can write, as the native edit records them.
+      const captured = capturePages(frame.map((entry) => entry.page))
 
-      /** @type {{pageStatus: string, changed: string[], created: string[], removed: string[]}} */
-      const answer = { pageStatus: page.status, changed: [], created: [], removed: [] }
+      /** @type {{pageStatus: string, changed: string[], created: string[], removed: string[], pages: Array<{pageIndex: number, pageStatus: string}>}} */
+      const answer = { pageStatus: page.status, changed: [], created: [], removed: [], pages: [] }
+      /** @type {Set<any>} the pages written, in frame order */
+      const touched = new Set()
       if (mode === 'remove') {
         const covered = (bbox) => {
           const cx = bbox.x + bbox.w / 2
           const cy = bbox.y + bbox.h / 2
           return cx >= box.x && cx <= box.x + box.w && cy >= box.y && cy <= box.y + box.h
         }
-        for (const region of detectionsOf(page).filter((candidate) => covered(candidate.bbox))) {
-          page.regions.splice(page.regions.indexOf(region), 1)
-          answer.removed.push(region.id)
+        for (const entry of frame) {
+          for (const region of detectionsOf(entry.page).filter((candidate) => covered(toAnchor(entry, candidate.bbox)))) {
+            entry.page.regions.splice(entry.page.regions.indexOf(region), 1)
+            answer.removed.push(region.id)
+            touched.add(entry)
+          }
         }
       } else {
         let best = null
+        let bestEntry = null
         let bestArea = 0
-        for (const region of detectionsOf(page)) {
-          const area = overlapArea(region.bbox, box)
-          if (area > bestArea) {
-            best = region
-            bestArea = area
+        for (const entry of frame) {
+          for (const region of detectionsOf(entry.page)) {
+            const area = overlapArea(toAnchor(entry, region.bbox), box)
+            if (area > bestArea) {
+              best = region
+              bestEntry = entry
+              bestArea = area
+            }
           }
         }
-        if (best) {
-          best.bbox = unionBox(best.bbox, box)
+        if (best && bestEntry) {
+          const grown = fromAnchor(bestEntry, box)
+          best.bbox = unionBox(best.bbox, grown)
           // A padded detection's unpadded box takes the add too, so it
           // outlives a later padding.
-          if (best.baseBbox) best.baseBbox = unionBox(best.baseBbox, box)
+          if (best.baseBbox) best.baseBbox = unionBox(best.baseBbox, grown)
           // A new digest and one more edit, as the native mask's would be:
           // the mask changed.
           maskEdits += 1
           if (best.mask?.provenance) best.mask.provenance.mask_sha256 = sha256Hex(`mask-edit:${best.id}:${maskEdits}`)
           if (best.mask) best.mask.sequence = (Number.isInteger(best.mask.sequence) ? best.mask.sequence : 1) + 1
           answer.changed.push(best.id)
+          touched.add(bestEntry)
         } else {
+          // The page holding the box's top row owns it.
+          const owner = frame.find((entry) => box.y >= entry.top && box.y < entry.top + entry.height) ?? frame[0]
           handCounter += 1
           /** @type {any} */
           const region = {
-            id: `${page.id}-h${handCounter}`,
-            pageId: page.id,
-            sourceSha: page.sourceSha,
-            bbox: box,
+            id: `${owner.page.id}-h${handCounter}`,
+            pageId: owner.page.id,
+            sourceSha: owner.page.sourceSha,
+            bbox: fromAnchor(owner, box),
             kind: 'outside',
             text: '',
             detected: false,
@@ -3050,17 +3267,20 @@ export function createMockBackend(options = {}) {
             unusuallyLarge: false,
             mask: null,
           }
-          page.regions.push(region)
-          detectRegion(region, page, {}, 'local')
+          owner.page.regions.push(region)
+          detectRegion(region, owner.page, {}, 'local')
           // Drawn by a person, not found: the one field that says so.
           region.source = 'hand'
           answer.created.push(region.id)
+          touched.add(owner)
         }
       }
-      if (answer.changed.length || answer.created.length || answer.removed.length) {
-        page.status = settledStatus(page)
+      for (const entry of frame.filter((candidate) => touched.has(candidate))) {
+        entry.page.status = settledStatus(entry.page)
+        answer.pages.push({ pageIndex: entry.page.index, pageStatus: entry.page.status })
       }
       answer.pageStatus = page.status
+      recordPageStep(chapterId, DETECTION_LABELS.edit, captured)
       return answer
     },
 
@@ -3089,12 +3309,14 @@ export function createMockBackend(options = {}) {
       // The mock pads boxes and never merges two, so `removed` stays empty.
       /** @type {{changed: string[], removed: string[], pages: number[]}} */
       const answer = { changed: [], removed: [], pages: [] }
+      const captured = capturePages(pages)
       for (const page of pages) {
         const changed = detectionsOf(page).filter((region) => (regionId == null || region.id === regionId) && padDetection(region, page, paddingPx))
         if (changed.length === 0) continue
         answer.changed.push(...changed.map((region) => region.id))
         answer.pages.push(page.index)
       }
+      recordPageStep(chapterId, DETECTION_LABELS.padding, captured)
       return answer
     },
 
@@ -3143,8 +3365,10 @@ export function createMockBackend(options = {}) {
       const found = findMask(maskId)
       if (!found) return null
       refuseBusyPage(found.chapter.id, found.page.index)
-      // A detection has no pixels to put back: it and its mask simply go.
+      // A detection has no pixels to put back: it and its mask simply go, and
+      // its page as it was is the undo step.
       const detection = isDetection(found.region)
+      const captured = detection ? capturePages([found.page]) : []
       const { notices } = deleteRegionMask(found.region)
       if (!detection) notifyAll(notices)
       const index = found.page.regions.findIndex((r) => r.id === found.region.id)
@@ -3154,6 +3378,24 @@ export function createMockBackend(options = {}) {
       if (found.page.status === 'cleaned' && found.page.regions.every((r) => !r.mask)) {
         found.page.status = 'unclean'
       }
+      if (detection) recordPageStep(found.chapter.id, DETECTION_LABELS.delete, captured)
+      return { region: null, pageStatus: found.page.status }
+    },
+
+    /**
+     * Remove a row with no mask, as `library.rs#dismiss_region` does, and
+     * record it as one step with its page as it was. `null` for a region with
+     * a mask, which `deleteMask` takes.
+     */
+    async dismissRegion({ regionId }) {
+      await delay(timing.method)
+      const found = findRegion(regionId)
+      if (!found || (found.region.mask && !isDetection(found.region))) return null
+      refuseBusyPage(found.chapter.id, found.page.index)
+      const captured = capturePages([found.page])
+      found.page.regions.splice(found.page.regions.indexOf(found.region), 1)
+      found.page.status = settledStatus(found.page)
+      recordPageStep(found.chapter.id, DETECTION_LABELS.dismiss, captured)
       return { region: null, pageStatus: found.page.status }
     },
 
@@ -3294,6 +3536,7 @@ export function createMockBackend(options = {}) {
       if (!found || !isDetection(found.region)) throw new Error(`not_a_detection: ${regionId} is not a stored detection`)
       refuseBusyPage(found.chapter.id, found.page.index)
       const { region } = found
+      const captured = capturePages([found.page])
       if (region.insideBubble !== inside) {
         region.insideBubble = inside
         if (!inside && (region.pick === 'fill' || region.pick === 'solid')) {
@@ -3304,6 +3547,7 @@ export function createMockBackend(options = {}) {
           }
         }
       }
+      recordPageStep(found.chapter.id, DETECTION_LABELS.type, captured)
       return snapshot(region)
     },
 
@@ -3936,8 +4180,10 @@ export function createMockBackend(options = {}) {
       const found = findRegion(regionId)
       if (!found || !['gate-skipped', 'candidate'].includes(found.region.outcome)) return null
       refuseBusyPage(found.chapter.id, found.page.index)
+      const captured = capturePages([found.page])
       detectRegion(found.region, found.page, {}, 'local', paddingPx)
       found.page.status = settledStatus(found.page)
+      recordPageStep(found.chapter.id, DETECTION_LABELS.approve, captured)
       return { regionId: found.region.id, pageStatus: found.page.status }
     },
 

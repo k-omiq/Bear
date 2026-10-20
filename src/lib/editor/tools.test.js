@@ -32,8 +32,8 @@ import { iconNames } from '../icons/paths.js'
 import { hexToRgb, hsbToHex, hsbToRgb, rgbToHex, rgbToHsb } from '../ui/color.js'
 
 describe('isDrawingTool', () => {
-  it('is the five tools whose gesture is a drag', () => {
-    expect([...DRAWING_TOOLS]).toEqual(['brush', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect'])
+  it('is the six tools whose gesture is a drag', () => {
+    expect([...DRAWING_TOOLS]).toEqual(['brush', 'eraser', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect'])
   })
 
   it('excludes the two that act on a region that already exists', () => {
@@ -278,7 +278,7 @@ describe('the Shapes tool', () => {
   // too, so whether the rows read Solid now is not the question
   // (`ToolBar.svelte` decides where a clean reads it).
   it('leaves an unconditional row alone', () => {
-    const all = ['step', 'scope', 'outsideBubbles', 'bubbleEngine', 'outsideEngine', 'bubbleColor']
+    const all = ['step', 'scope', 'outsideBubbles', 'maskPadding', 'bubbleEngine', 'outsideEngine', 'bubbleColor']
     expect(activeParams(toolSpec('autoClean'), { bubbleEngine: SOLID }).map((p) => p.key)).toEqual(all)
     expect(activeParams(toolSpec('autoClean'), { bubbleEngine: 'lama' }).map((p) => p.key)).toEqual(all)
     expect(activeParams(toolSpec('autoClean'), {}).map((p) => p.key)).toEqual(all)
@@ -315,7 +315,8 @@ describe('the selection tool', () => {
     expect(spec.runnable).toBe(false)
     expect(spec.nameKey).toBe('tools.name.maskSelect')
     expect(t(spec.hintKey)).not.toBe('')
-    expect(TOOL_SPECS.map((entry) => entry.slot)).toEqual([1, 2, 3, 4, 5, 6])
+    // The eraser sits beside the Brush on the rail and takes the next free slot.
+    expect(TOOL_SPECS.map((entry) => entry.slot)).toEqual([1, 2, 7, 3, 4, 5, 6])
     expect(isDrawingTool('maskSelect')).toBe(true)
   })
 
@@ -449,16 +450,12 @@ describe('paramGroups', () => {
     }
   })
 
-  // Detect & clean is the one-press run: the padding row is away, and its
-  // group goes with it. The value stays in the record and the run still sends
-  // it (`editor.svelte.js#startRun`).
-  it('drops the mask padding from Detect & clean, and from a record with no step', () => {
-    for (const values of [{ step: 'auto' }, {}]) {
-      expect(paramGroups(toolSpec('autoClean'), values).map((group) => group.key)).toEqual(['run', 'text', 'engines'])
-      expect(activeParams(toolSpec('autoClean'), values).map((p) => p.key)).not.toContain('maskPadding')
-    }
-    for (const step of ['detect', 'clean']) {
-      expect(activeParams(toolSpec('autoClean'), { step }).map((p) => p.key)).toContain('maskPadding')
+  // Every step draws the padding row: Detect & clean grows its masks by the
+  // same value (`editor.svelte.js#startRun`).
+  it('keeps the mask padding for every step, and for a record with no step', () => {
+    for (const values of [{ step: 'auto' }, { step: 'detect' }, { step: 'clean' }, {}]) {
+      expect(paramGroups(toolSpec('autoClean'), values).map((group) => group.key)).toContain('mask')
+      expect(activeParams(toolSpec('autoClean'), values).map((p) => p.key)).toContain('maskPadding')
     }
   })
 

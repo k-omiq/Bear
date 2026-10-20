@@ -1460,6 +1460,7 @@ export const en = {
       // already named in the Layers row this entry came from.
       applyTool: 'the tool applied to a region',
       drawMask: 'a mask drawn by hand',
+      erasePaint: 'erased brush paint',
     },
   },
 
@@ -2579,7 +2580,7 @@ export const en = {
       // Beside Try again on a result an automatic clean made: the result is
       // taken off and the region is detected again, with the mask it had
       // before the clean (`model/masks.js#rejectable`).
-      rejectResult: 'Reject result',
+      rejectResult: 'Restore mask',
       engine: 'Clean with',
       engineHint: 'Replace this layer using another engine, from the layers below it',
       // The region menu's heading over a detected region's two kinds of text,
@@ -2654,7 +2655,15 @@ export const en = {
       // The two steps the backend records by itself (`history.rs`): a clean
       // of a detected region, whoever started it, and a rejected result.
       cleanRegion: 'a region cleaned',
-      rejectResult: 'a result rejected',
+      rejectResult: 'a mask restored',
+      // The edits of a page's detections and held rows, which the backend
+      // records with the page as it was (`history.rs#record_pages`).
+      deleteDetection: 'a detected mask deleted',
+      editDetection: 'a detected mask edited',
+      detectionPadding: 'mask padding changed',
+      detectionType: 'text type changed',
+      approveMask: 'a held mask approved',
+      detectPages: 'pages detected',
     },
   },
 
@@ -2667,6 +2676,7 @@ export const en = {
       // native run key on the id, and only the words on screen changed.
       autoClean: 'Text cleanup',
       brush: 'Brush',
+      eraser: 'Eraser',
       shapes: 'Shapes',
       aiMaskBrush: 'AI mask brush',
       contentAwareFill: 'Content-aware fill',
@@ -2682,6 +2692,7 @@ export const en = {
     hint: {
       autoClean: 'Enter to run',
       brush: 'drag to paint',
+      eraser: 'drag to erase brush paint',
       shapes: 'drag on the page',
       aiMaskBrush: 'stroke over text',
       // `{cloneSourceModifier}` is a context param, not one this call site
@@ -3157,6 +3168,7 @@ export const en = {
     },
     history: {
       saveFailed: 'Could not save undo history. Undo may not work after a restart.',
+      stale: 'That step could not be undone or redone, because the page changed since. Nothing was changed.',
     },
     job: {
       resumed: 'Resuming at page {page}.',
@@ -3305,7 +3317,7 @@ export const en = {
       // Reject result, or Undo of a clean, on a result with no detection kept
       // for it: the chapter was cleaned before a clean kept one. Deleting the
       // layer is what brings the original pixels back there.
-      rejectNoMask: 'This result has no saved mask, so it cannot be rejected. Delete it to bring the original back.',
+      rejectNoMask: 'This layer was not made by a cleaner, so it has no mask to restore. Delete it to bring the original back.',
       // The same two, refused for any other reason. Nothing changed.
       rejectFailed: 'The result could not be rejected. The page is as it was.',
       // Redo of a clean, or Undo of a reject, with no saved result to put
@@ -3842,7 +3854,7 @@ export const en = {
         scopeProject: 'Cloud detection cannot run on a whole project: each chapter is planned on its own. Run one chapter at a time, or choose This computer for Detect on in Text cleanup.',
         tooMany: 'This chapter has more pages than one cloud run may send. Nothing was sent. Run it a page at a time, or choose This computer for Detect on in Text cleanup.',
         tooLargeChapter: 'This chapter has more pixels than one cloud run may send. Nothing was sent. Run it a page at a time, or choose This computer for Detect on in Text cleanup.',
-        nothing: 'Every page in scope is already cleaned. Nothing was sent.',
+        nothing: 'Your cloud GPU has already detected every page in scope. Nothing was sent. To send a page again, detect that page alone.',
         stopped: 'Cloud detection stopped after page {page} ({code}). The pages after it were not sent and are left for a later run.',
         consentLost: 'The cloud consent no longer matches this run. Nothing was sent. Start the run again.',
         expired: 'The cloud consent expired before the run started. Nothing was sent. Start the run again.',

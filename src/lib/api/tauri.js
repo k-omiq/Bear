@@ -110,6 +110,7 @@ const IMPLEMENTED = Object.freeze({
   deleteMask: 'delete_mask',
   duplicateRegion: 'duplicate_region',
   restoreRegion: 'restore_region',
+  dismissRegion: 'dismiss_region',
   setRegionCleaned: 'set_region_cleaned',
   rejectResult: 'reject_result',
   setLayerStyle: 'set_layer_style',
@@ -118,8 +119,8 @@ const IMPLEMENTED = Object.freeze({
   applyTool: 'apply_tool',
   createRegion: 'create_region',
   editDetectionMask: 'edit_detection_mask',
+  erasePaint: 'erase_paint',
   setDetectionPadding: 'set_detection_padding',
-  previewPaint: 'preview_paint',
   rerunMask: 'rerun_mask',
   cleanAnyway: 'clean_anyway',
   approveHeldMask: 'approve_held_mask',
@@ -182,11 +183,12 @@ export const SEAM_METHODS = Object.freeze([
   'applyTool',
   'createRegion',
   'editDetectionMask',
+  'erasePaint',
   'setDetectionPadding',
-  'previewPaint',
   'deleteMask',
   'duplicateRegion',
   'restoreRegion',
+  'dismissRegion',
   'setRegionCleaned',
   'rejectResult',
   'setLayerStyle',
@@ -528,6 +530,8 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     duplicateRegion: ({ regionId }) => call(IMPLEMENTED.duplicateRegion, { regionId }),
     restoreRegion: ({ regionId, region }) =>
       call(IMPLEMENTED.restoreRegion, { regionId, region: region ?? null }),
+    // A held row's removal, which the command records as its own undo step.
+    dismissRegion: ({ regionId }) => call(IMPLEMENTED.dismissRegion, { regionId }),
     // The two halves of a cleaned detection. `setRegionCleaned` is the replay
     // of a `clean-state` undo entry and records nothing; `rejectResult` is the
     // user's reject, and the command records its own undo step.
@@ -554,7 +558,6 @@ export function createTauriBackend({ fallback, invoke, listen }) {
         pageIndex: pageIndex ?? null,
         regionId: regionId ?? null,
       }),
-    previewPaint: (spec) => call(IMPLEMENTED.previewPaint, spec),
     createRegion: ({ chapterId, pageIndex, sourceIndex, sourceSha, bbox, tool, params }) =>
       call(IMPLEMENTED.createRegion, {
         chapterId,
@@ -569,6 +572,9 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // Exactly one of `stroke` and `painted` carries the gesture; the other
     // crosses as `null` so the command's two optional parameters are always
     // named.
+    // The answer comes back as the command wrote it, `pages` included: every
+    // page the edit wrote, which on a longstrip can be a neighbour of the
+    // anchor.
     editDetectionMask: ({ chapterId, pageIndex, sourceIndex, sourceSha, mode, stroke, painted }) =>
       call(IMPLEMENTED.editDetectionMask, {
         chapterId,
@@ -578,6 +584,18 @@ export function createTauriBackend({ fallback, invoke, listen }) {
         mode,
         stroke: stroke ?? null,
         painted: painted ?? null,
+      }),
+    // Bound to the source the gesture was drawn over, as `createRegion` is.
+    erasePaint: ({ chapterId, pageIndex, sourceIndex, sourceSha, points, size, hardness, opacity }) =>
+      call(IMPLEMENTED.erasePaint, {
+        chapterId,
+        pageIndex,
+        expectedSourceIdx: sourceIndex ?? null,
+        expectedSourceSha: sourceSha ?? null,
+        points,
+        size,
+        hardness,
+        opacity,
       }),
     // `pageIndex` crosses as `null` for the whole chapter, so the command's
     // optional parameter is always named.

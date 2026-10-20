@@ -12,11 +12,11 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from deploy.cloud.common.analysis import AnalysisWorker, sam_prepare
+from deploy.cloud.common.analysis import AnalysisWorker, connected_components, sam_prepare
 from deploy.cloud.common.api import CloudGateway
 from deploy.cloud.beam.routes import restore_gateway_path
 from deploy.cloud.common.contract import (
-    ANALYSIS_RT, ANALYSIS_SAM, ANALYSIS_TILE_CONTEXT, ANALYSIS_VERSION, ContractValidationError,
+    ANALYSIS_GRAY_TILES_OPERATION, ANALYSIS_RT, ANALYSIS_SAM, ANALYSIS_TILE_CONTEXT, ANALYSIS_VERSION, ContractValidationError,
     analysis_request_digest, analysis_tile_core, analysis_tile_plan,
     validate_analysis_request, validate_analysis_result, validate_analysis_wire_result,
 )
@@ -154,6 +154,22 @@ class AnalysisCases(unittest.TestCase):
         with self.assertRaises(ContractValidationError):
             validate_analysis_result(result, request)
 
+    def test_components_are_4_connected_boxes_in_raster_order_and_bounded(self):
+        mask = np.zeros((6, 8), dtype=np.uint8)
+        mask[0, 5:8] = 255          # first pixel at (5, 0)
+        mask[1, 0] = mask[2, 1] = 255  # diagonal only: two components
+        mask[3:6, 2:4] = 255
+        mask[5, 4:7] = 255          # joins the block by its edge
+        self.assertEqual(connected_components(mask), [
+            {"x": 5, "y": 0, "width": 3, "height": 1},
+            {"x": 0, "y": 1, "width": 1, "height": 1},
+            {"x": 1, "y": 2, "width": 1, "height": 1},
+            {"x": 2, "y": 3, "width": 5, "height": 3},
+        ])
+        checker = (np.indices((92, 92)).sum(axis=0) % 2 * 255).astype(np.uint8)
+        with self.assertRaises(ContractValidationError):
+            connected_components(checker)
+
     def test_unknown_capability_and_graph_mismatch_precede_model_load(self):
         request = self.request()
         request["capability"] = "coo@1"
@@ -273,6 +289,36 @@ class AnalysisCases(unittest.TestCase):
             )
             self.assertEqual(status, 500)
             self.assertEqual(json.loads(body), expected)
+
+    def test_a_grey_tile_reaches_the_models_as_its_rgb_twin(self):
+        def png(image):
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            return buffer.getvalue()
+        grey = Image.fromarray(np.arange(16 * 12, dtype=np.uint8).reshape(12, 16))
+        fed = []
+        for tile in (png(grey.convert("RGB")), png(grey)):
+            self.png = tile
+            for capability in (ANALYSIS_SAM, ANALYSIS_RT):
+                self.seen.clear()
+                result = self.worker.analyze(self.request(capability), tile)
+                fed.append((capability, [inputs for _, _, inputs in self.seen[:1]], result["components"], result["boxes"]))
+        for rgb, gray in zip(fed[:2], fed[2:]):
+            self.assertEqual(rgb[0], gray[0])
+            for a, b in zip(rgb[1][0].values(), gray[1][0].values()):
+                np.testing.assert_array_equal(a, b)
+            self.assertEqual(rgb[2:], gray[2:])
+        for refused in (grey.convert("LA"), Image.fromarray(np.zeros((12, 16), dtype=np.uint16))):
+            self.png = png(refused)
+            with self.assertRaises(ContractValidationError):
+                validate_analysis_request(self.request(), self.png)
+
+    def test_a_gateway_with_analysis_lists_grey_tiles(self):
+        gateway = CloudGateway("modal", trust_edge_auth=True, analysis_worker=self.worker)
+        _, _, raw = gateway.handle_http_request("GET", "/mc/v1/capabilities", {}, b"")
+        self.assertIn(ANALYSIS_GRAY_TILES_OPERATION, json.loads(raw)["operations"])
+        _, _, raw = CloudGateway("modal", trust_edge_auth=True).handle_http_request("GET", "/mc/v1/capabilities", {}, b"")
+        self.assertNotIn(ANALYSIS_GRAY_TILES_OPERATION, json.loads(raw)["operations"])
 
     def test_unknown_fields_and_digest_rejected(self):
         request = self.request()

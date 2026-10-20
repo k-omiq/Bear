@@ -36,6 +36,7 @@
  */
 
 import { naturalWidth, pageRatio, sheetWidth } from './zoom.js'
+import { proxyPlan } from '../api/tile.js'
 
 /** Longstrip pages meet on the same row boundary as the source pixels. */
 export const STRIP_GAP = 0
@@ -56,6 +57,103 @@ export const OVERSCAN = 1
  * page arrived blank and drew in as it was read.
  */
 export const PRELOAD_SCREENS = 1
+
+/**
+ * Pages kept warm on each side of the page at the viewport's centre: mounted,
+ * with every tile of both variants, and with their regions resident. A
+ * scroll or a zoom inside this range never shows a page that has to load
+ * again. Everything past it is let go: its sheet leaves the DOM, which hands
+ * the decoded tiles back, and its regions are evicted.
+ */
+export const KEEP_PAGES = 5
+
+/**
+ * The most decoded tile memory the warm range may hold, in bytes. A chapter of
+ * 690×1600 segments keeps all five pages a side at about 100 MB; a chapter of
+ * raw 800×20000 segments, whose proxies are 64 MB a variant, keeps none whole
+ * and loads each by its tile window, as before ([`keepRange`]).
+ */
+export const KEEP_BUDGET_BYTES = 192 * 1024 * 1024
+
+/**
+ * What one page's tiles cost decoded, both variants: the proxy's pixels at
+ * four bytes each, twice.
+ *
+ * @param {{width?: number, height?: number}|null|undefined} page
+ * @returns {number} bytes
+ */
+export function pageBytes(page) {
+  const plan = proxyPlan(page)
+  return plan.width * plan.height * 4 * 2
+}
+
+/**
+ * The warm range around `centre`: grown one page at a time, alternating below
+ * and above, until `keep` pages sit on each side or the next page would take
+ * the range past `budget`. No page may take more than its even share of the
+ * budget, `budget / (2 * keep + 1)`: a page that would (a raw 800×20000
+ * segment is 128 MB of tiles) ends the range on its side, and a centre page
+ * that would leaves the range empty. Such a page is left to the viewport band,
+ * which mounts it anyway, and to its own tile window, which loads only what is
+ * near the viewport.
+ *
+ * @param {{count: number, centre: number, keep?: number, budget?: number, cost: (index: number) => number}} spec
+ * @returns {{start: number, end: number}} `end` is one past the last index
+ */
+export function keepRange(spec) {
+  const count = Math.max(0, Math.trunc(finite(spec.count, 0)))
+  if (count === 0) return { start: 0, end: 0 }
+  const keep = Math.max(0, Math.trunc(finite(spec.keep, KEEP_PAGES)))
+  const budget = Math.max(0, finite(spec.budget, KEEP_BUDGET_BYTES))
+  const centre = clamp(Math.trunc(finite(spec.centre, 0)), 0, count - 1)
+
+  let start = centre
+  let end = centre + 1
+  const share = budget / (2 * keep + 1)
+  let spent = Math.max(0, finite(spec.cost(centre), 0))
+  if (spent > share) return { start: centre, end: centre }
+  let below = true
+  let above = true
+  for (let step = 1; step <= keep && (below || above); step += 1) {
+    for (const index of [centre + step, centre - step]) {
+      const side = index > centre ? below : above
+      if (!side || index < 0 || index >= count) continue
+      const cost = Math.max(0, finite(spec.cost(index), 0))
+      if (cost > share || spent + cost > budget) {
+        if (index > centre) below = false
+        else above = false
+        continue
+      }
+      spent += cost
+      if (index > centre) end = index + 1
+      else start = index
+    }
+  }
+  return { start, end }
+}
+
+/**
+ * Where the column's top must sit, relative to the viewport, so that the
+ * content under `anchorY` (px below the viewport's top edge) stays under it
+ * when the column's geometry changes from `before` to `after` - a zoom.
+ *
+ * The anchor is held as a page and a fraction of that page rather than as a
+ * fraction of the whole column, because sheet widths are rounded to whole
+ * pixels and the column does not scale exactly with the zoom.
+ *
+ * @param {{before: StripMetrics, after: StripMetrics, columnTop: number, anchorY: number}} spec
+ * @returns {number} the new `columnTop`
+ */
+export function anchorColumnTop(spec) {
+  const { before, after } = spec
+  const anchorY = finite(spec.anchorY, 0)
+  const columnTop = finite(spec.columnTop, 0)
+  if (before.count === 0 || after.count !== before.count) return columnTop
+  const y = clamp(anchorY - columnTop, 0, before.total)
+  const index = indexAt(before, y)
+  const fraction = before.units[index] > 0 ? (y - before.offsets[index]) / before.units[index] : 0
+  return anchorY - (after.offsets[index] + fraction * after.units[index])
+}
 
 /**
  * One page's share of the column: its height plus the gap under it.
@@ -159,6 +257,10 @@ function indexAt(metrics, y) {
  * the one holding focus. Unmounting the focused element drops focus to the
  * document. It is returned separately so a distant focus never widens the band.
  *
+ * `keep` is the warm range ([`keepRange`]) and `hold` the band a zoom gesture
+ * started from; both are added to the band, so neither can unmount a page the
+ * viewport still wants, and a gesture cannot unmount the pages it began on.
+ *
  * @param {{
  *   metrics?: StripMetrics,
  *   columnTop?: number,
@@ -167,6 +269,8 @@ function indexAt(metrics, y) {
  *   include?: number,
  *   overscan?: number,
  *   threshold?: number,
+ *   keep?: {start: number, end: number}|null,
+ *   hold?: {start: number, end: number}|null,
  * }} spec
  * @returns {StripWindow}
  */
@@ -181,8 +285,15 @@ export function stripWindow(spec) {
   const top = clamp(-finite(spec.columnTop, 0) - margin, 0, metrics.total)
   const bottom = clamp(-finite(spec.columnTop, 0) + finite(spec.viewportHeight, 0) + margin, top, metrics.total)
 
-  const start = Math.max(0, indexAt(metrics, top) - overscan)
-  const end = Math.min(count, indexAt(metrics, bottom) + 1 + overscan)
+  let start = Math.max(0, indexAt(metrics, top) - overscan)
+  let end = Math.min(count, indexAt(metrics, bottom) + 1 + overscan)
+  // The warm range and a live gesture's starting band are unions, never
+  // limits: what they name stays mounted wherever the viewport has got to.
+  for (const range of [spec.keep, spec.hold]) {
+    if (!range || !(range.end > range.start)) continue
+    start = Math.max(0, Math.min(start, Math.trunc(range.start)))
+    end = Math.min(count, Math.max(end, Math.trunc(range.end)))
+  }
 
   const include = spec.include
   const extra = Number.isInteger(include) && include >= 0 && include < count &&

@@ -234,29 +234,25 @@ export function retryWidens(mask) {
 }
 
 /**
- * Whether a region offers Reject result: it has a cleaned result that an
- * automatic clean made, which is what a clean of a detected region leaves.
- * Rejecting puts the region back as detected, with the mask it had before the
- * clean (`maskactions.svelte.js#rejectResult`).
+ * Whether a region offers Restore mask: it has a cleaned result a cleaner
+ * made. Restoring puts the region back as detected, with its mask, ready to
+ * be cleaned again (`maskactions.svelte.js#rejectResult`).
  *
- * The test is three things every region carries, whichever build wrote it:
- * it is not a detection now, its mask can be run again (`reRunnable`: not a
- * paint or clone stroke, not an approved review component), and its `source`
- * is not `hand`. The native side writes `source: 'auto'` on a result made
- * from a detection's own mask, whoever asked for the clean, and `hand` on one
- * a tool drew or redrew, which is a mask of the user's and no detection's.
+ * The test is two things every region carries, whichever build wrote it:
+ * it is not a detection now, and its mask can be run again (`reRunnable`: a
+ * cleaner made it, not a paint or clone stroke or an approved review
+ * component). A hand mask qualifies like a detection's.
  *
- * Deliberately not narrower. Nothing on a region says whether its detection
- * was kept, so a chapter cleaned before cleans kept one is offered the entry
- * too: there the native side refuses, and the notice says so and names the
- * way out (`notice.mask.rejectNoMask`). A missing entry would say nothing.
+ * The menu calls it Restore mask. A result whose clean kept its detection
+ * gets that detection back; any other is made a detection from its own mask
+ * (`Job::detection_of_patch`). What the native side still refuses, it says so
+ * and names the way out (`notice.mask.rejectNoMask`).
  *
  * @param {import('./types.js').Region|null|undefined} region
  * @returns {boolean}
  */
 export function rejectable(region) {
   return !isDetected(region) && reRunnable(region?.mask ?? null)
-    && /** @type {any} */ (region)?.source !== 'hand'
 }
 
 /**
@@ -375,10 +371,12 @@ export function detectedActions(options = {}) {
  * @typedef {Object} RegionMenuItem
  * @property {string} id - `retry`, `retryWider`, `reject`, `delete`,
  *   `engine:<rung>`, `type:inside` / `type:outside` (a detected region's text
- *   type), or, on a held region, `approveMask`, `approve` and `approve:<rung>`
+ *   type), `padding` (a detected region's Mask padding), or, on a held region,
+ *   `approveMask`, `approve` and `approve:<rung>`
  * @property {string} labelKey
  * @property {string} [icon]
  * @property {boolean} [selected] - present only on the engine and text type choices
+ * @property {{min: number, max: number, step: number, value: number, unit: string}} [range] - a slider, not an entry: only `padding`
  *
  * @typedef {Object} RegionMenuSection
  * @property {string} id
@@ -437,7 +435,7 @@ export function detectedActions(options = {}) {
 export function regionMenuSections(region, options = {}) {
   // A detection has nothing to try again and no engine yet: Clean with (the
   // same models a cleaned region offers, none checked), then its Text type,
-  // then Delete.
+  // its Mask padding, then Delete.
   if (isDetected(region)) {
     // The two kinds as a checked pair, named as Text cleanup's two engine rows
     // are. A row stored before the flag existed has no answer, so neither is
@@ -457,6 +455,16 @@ export function regionMenuSections(region, options = {}) {
           { id: 'type:inside', labelKey: 'tools.param.bubbleText', selected: inside === true },
           { id: 'type:outside', labelKey: 'tools.param.outsideText', selected: inside === false },
         ],
+      },
+      // This detection's own padding, as its Layers row's slider sets it.
+      {
+        id: 'padding',
+        labelKey: null,
+        items: [{
+          id: 'padding',
+          labelKey: 'tools.param.maskPadding',
+          range: { min: 0, max: MAX_MASK_PADDING, step: 1, value: Number(region?.paddingPx ?? 0), unit: ' px' },
+        }],
       },
       { id: 'remove', labelKey: null, items: [{ id: 'delete', labelKey: 'masks.action.deleteRegion', icon: 'trash' }] },
     ]

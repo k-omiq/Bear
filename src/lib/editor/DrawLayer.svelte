@@ -1,5 +1,5 @@
 <script>
-  import { claimPageEdit, editor, hover, select, setToolParam } from '../state/editor.svelte.js'
+  import { claimPageEdit, editor, hover, pages, select, setToolParam } from '../state/editor.svelte.js'
   import { notify } from '../state/app.svelte.js'
   import { session } from '../state/session.svelte.js'
   import { modifierHeld } from '../shortcuts.js'
@@ -8,7 +8,9 @@
     addPoint,
     beginDraft,
     clearDraft,
+    forwardToDraft,
     markMoved,
+    registerDraftHost,
     setCloneSource,
     setCloneStroke,
     setDraftBbox,
@@ -31,7 +33,7 @@
     stripRectBetween,
     regionAt,
     resizeBbox,
-    shouldStamp,
+    pullRope,
     steppedSize,
   } from './gesture.js'
   import { commitDraft } from './drawing.svelte.js'
@@ -44,6 +46,7 @@
   import { flushPaintPreview } from './paintpreview.js'
   import RegionMenu from './RegionMenu.svelte'
   import { artworkEdges, magneticPath } from './magneticlasso.js'
+  import { isBrushLayer } from '../model/layers.js'
 
   /**
    * The drawing surface: one element over the sheet that is both the pointer
@@ -104,6 +107,18 @@
   const KEY_STEP = 1
   /** How close a polygon's last vertex must land to its first to close it. */
   const CLOSE_WITHIN = 2.5
+  /**
+   * How far, in client pixels, a brush stroke's end trails the pointer
+   * (`gesture.js#pullRope`), and the shortest step it records. The rope takes
+   * out hand shake and a mouse's one-pixel stair steps; the step keeps a slow
+   * drag from piling up points that add nothing, since the dabs between two
+   * points are laid by the planner (`paintplan.js`) and not by the sampling.
+   * A lasso is an outline traced along an edge, so it has no rope and keeps
+   * every half pixel.
+   */
+  const ROPE_PX = 3
+  const STEP_PX = 1.5
+  const LASSO_STEP_PX = 0.5
 
   /** @type {HTMLElement|undefined} */
   let surfaceEl = $state()
@@ -138,6 +153,65 @@
   const shape = $derived(draftShape(tool, params))
   const polygonal = $derived(shape === 'polygon')
   const active = $derived(draft.active?.pageId === page.id ? draft.active : null)
+  /** A polygon is open on another page: this surface's clicks are its. */
+  const forwarding = $derived(polygonal && !!draft.active && draft.active.pageId !== page.id)
+
+  /**
+   * The regions a point on this sheet can be on: its own, and in a longstrip
+   * the ones that hang across a join from the page above or below, moved into
+   * this page's percent. They are drawn over this page (`PageSheet.svelte`'s
+   * z-index scale), so a tap or a hover over the overhang is theirs. Own
+   * regions come last, so where both are under the point the page's own wins
+   * (`regionAt` takes the last hit).
+   */
+  const reachable = $derived.by(() => {
+    // A Brush layer is not picked from the canvas (`model/layers.js#isBrushLayer`).
+    const own = (page.regions ?? []).filter((region) => !isBrushLayer(region))
+    if (!strip) return own
+    const list = pages()
+    const position = list.findIndex((candidate) => candidate.id === page.id)
+    const width = Number(page.width) || 1
+    const height = Number(page.height) || 1
+    const hanging = []
+    for (const [neighbour, below] of [[list[position - 1], false], [list[position + 1], true]]) {
+      if (position < 0 || !neighbour) continue
+      const nw = Number(neighbour.width) || 1
+      const nh = Number(neighbour.height) || 1
+      for (const region of neighbour.regions ?? []) {
+        const box = region?.bbox
+        if (isBrushLayer(region)) continue
+        if (!box || (below ? box.y >= 0 : box.y + box.h <= 100)) continue
+        // Same scale, centred sheets: a neighbour's pixel column x is this
+        // page's x - (nw - width) / 2; its rows start under or over this page.
+        const top = below ? height + (box.y / 100) * nh : (box.y / 100) * nh - nh
+        hanging.push({
+          ...region,
+          bbox: {
+            x: (((box.x / 100) * nw - (nw - width) / 2) / width) * 100,
+            y: (top / height) * 100,
+            w: ((box.w / 100) * nw / width) * 100,
+            h: ((box.h / 100) * nh / height) * 100,
+          },
+        })
+      }
+    }
+    return hanging.length ? [...hanging, ...own] : own
+  })
+
+  $effect(() => registerDraftHost(page.id, (kind, event) => {
+    if (kind === 'close') {
+      if (committable()) commit()
+      return
+    }
+    const point = at(/** @type {PointerEvent} */ (event))
+    if (!point) return
+    if (kind === 'vertex') {
+      surfaceEl?.focus({ preventScroll: true })
+      addVertex(point)
+    } else if (magnetic && active && !active.keyboard && fixedPoints.length) {
+      traceMagnetic(point)
+    }
+  }))
   /** The tools, and the selection tool's brush, that paint a round stroke rather than drag a shape. */
   const round = $derived(shape === null)
 
@@ -165,7 +239,7 @@
     })
   }
   $effect(() => () => cancelAnimationFrame(magneticFrame))
-  const livePixels = $derived((tool === 'cloneStamp' && !regional) || tool === 'brush')
+  const livePixels = $derived((tool === 'cloneStamp' && !regional) || tool === 'brush' || tool === 'eraser')
   const stamping = $derived(tool === 'cloneStamp' && !regional)
   const detecting = $derived(tool === 'maskSelect' && params.mode === 'detect')
 
@@ -248,6 +322,17 @@
   let joined = false
   /** Where the keyboard's stamp was last put, so the next one opens there. */
   let keyAt = /** @type {{x: number, y: number}|null} */ (null)
+  /**
+   * A freehand stroke's end, in client pixels: where the rope has pulled it
+   * to, and where the last recorded point was. `trailing` says the end is
+   * behind the pointer, so the release adds the pointer's own place.
+   *
+   * @type {{x: number, y: number}|null}
+   */
+  let rope = null
+  /** @type {{x: number, y: number}|null} */
+  let recordedAt = null
+  let trailing = false
 
   /**
    * The stroke half-width in page percent, per axis. Zero for a drag that
@@ -300,6 +385,7 @@
    */
   function draftMode() {
     if (tool === 'brush') return 'paint'
+    if (tool === 'eraser') return 'erase'
     if (tool === 'maskSelect' && params.mode === 'remove') return 'erase'
     if (tool === 'maskSelect' && params.mode === 'detect') return 'detect'
     return 'add'
@@ -333,6 +419,9 @@
   /** @param {PointerEvent} event */
   function onpointerdown(event) {
     if (event.button !== 0) return
+    // The next click of a polygon open on the page above or below: its page
+    // takes it, before this page claims anything or takes focus.
+    if (forwarding && forwardToDraft('vertex', event)) return
     const point = at(event)
     if (!point) return
     surfaceEl?.focus({ preventScroll: true })
@@ -388,6 +477,9 @@
     surfaceEl?.setPointerCapture(event.pointerId)
     pointerId = event.pointerId
     downAt = { x: event.clientX, y: event.clientY }
+    rope = { ...downAt }
+    recordedAt = { ...downAt }
+    trailing = false
     beginDraft({
       tool,
       kind: draftKind(),
@@ -455,13 +547,17 @@
     if (stamping) sampling = modifierHeld(event, session.cloneSourceModifier)
 
     if (pointerId === null) {
+      if (forwarding) {
+        forwardToDraft('move', event)
+        return
+      }
       if (magnetic && active && !active.keyboard && fixedPoints.length) {
         traceMagnetic(point)
         return
       }
       // Not drawing: still light whatever is under the pointer, so the Layers
       // panel keeps answering the canvas even with the surface over it.
-      hover(regionAt(point, page.regions)?.id ?? null)
+      hover(regionAt(point, reachable)?.id ?? null)
       return
     }
     if (!active) return
@@ -482,11 +578,47 @@
       if (active.kind === 'line') active.points = [active.points[0], point]
       return
     }
-    const next = stamping ? held(event, point) : point
-    if (next && shouldStamp(active.points.at(-1) ?? null, next, radius, Number(params.spacing ?? 12))) {
-      addPoint(next)
-    }
+    // Every sample the pointer took since the last event, not only the last:
+    // a fast drag reports one event per display frame, and joining those with
+    // straight lines is what turned a curve into a polygon.
+    const coalesced = event.getCoalescedEvents?.() ?? []
+    for (const input of coalesced.length ? coalesced : [event]) follow(event, input)
     setDraftBbox(strokeBounds(active.points))
+  }
+
+  /**
+   * One pointer sample of a freehand stroke: pulled along by the rope, held
+   * to an axis by `Shift` on the stamp, and recorded once it has moved a step.
+   *
+   * @param {PointerEvent} event - the event, for its modifier keys
+   * @param {PointerEvent} input - the sample, for where it was
+   */
+  function follow(event, input) {
+    if (!active || !rope || !recordedAt) return
+    const sample = { x: input.clientX, y: input.clientY }
+    if (stamping && event.shiftKey && !joined) {
+      // A line held to one axis is already straight, and a rope behind it
+      // would only shorten it.
+      const point = at(input)
+      const next = point && held(/** @type {PointerEvent} */ ({ clientX: sample.x, clientY: sample.y, shiftKey: true }), point)
+      rope = sample
+      trailing = false
+      if (next && Math.hypot(sample.x - recordedAt.x, sample.y - recordedAt.y) >= STEP_PX) {
+        recordedAt = sample
+        addPoint(next)
+      }
+      return
+    }
+    lock = null
+    const end = round ? pullRope(rope, sample, ROPE_PX) : sample
+    if (!end) return
+    rope = end
+    trailing = round
+    if (Math.hypot(end.x - recordedAt.x, end.y - recordedAt.y) < (round ? STEP_PX : LASSO_STEP_PX)) return
+    const point = at(/** @type {PointerEvent} */ ({ clientX: end.x, clientY: end.y, pointerType: input.pointerType, pressure: input.pressure }))
+    if (!point) return
+    recordedAt = end
+    addPoint(point)
   }
 
   /** @param {PointerEvent} event */
@@ -500,6 +632,15 @@
     if (point && active?.kind === 'line') {
       active.points = [active.points[0], point]
       if (!regional) setDraftBbox(strip ? stripRectBetween(active.points[0], point) : rectBetween(active.points[0], point))
+    }
+    // The rope left the stroke's end behind the pointer: the stroke ends where
+    // the pointer let go, at the pressure it was drawn with (a pen lifts at 0).
+    if (point && trailing && active?.moved && (active.kind === 'stroke' || active.kind === 'lasso')) {
+      const last = active.points.at(-1)
+      if (last && (last.x !== point.x || last.y !== point.y)) {
+        addPoint({ ...point, p: last.p ?? point.p })
+        setDraftBbox(strokeBounds(active.points))
+      }
     }
     releasePointer()
     const moved = active?.moved === true
@@ -522,6 +663,9 @@
     if (pointerId !== null) surfaceEl?.releasePointerCapture?.(pointerId)
     pointerId = null
     downAt = null
+    rope = null
+    recordedAt = null
+    trailing = false
   }
 
   /**
@@ -531,7 +675,7 @@
    * @param {{x: number, y: number}} point
    */
   function tap(point) {
-    const region = regionAt(point, page.regions)
+    const region = regionAt(point, reachable)
     if (region) select(region.id)
     else select(null)
   }
@@ -554,7 +698,7 @@
     const keyboard = event.clientX <= 0 && event.clientY <= 0
     const region = keyboard
       ? ((page.regions ?? []).find((candidate) => candidate.id === editor.selectionId) ?? null)
-      : regionAt(pointIn(event.clientX, event.clientY, rect), page.regions)
+      : regionAt(pointIn(event.clientX, event.clientY, rect), reachable)
     if (!region) return
     event.preventDefault()
     select(region.id)
@@ -857,7 +1001,7 @@
     sampling = false
     if (pointerId === null) hover(null)
   }}
-  ondblclick={() => committable() && commit()}
+  ondblclick={(event) => (forwarding ? forwardToDraft('close', event) : committable() && commit())}
   {oncontextmenu}
   {onkeydown}
 ></button>
@@ -865,10 +1009,10 @@
 <RegionMenu at={menu} onclose={() => (menu = null)} />
 
 <!-- The live pixels, under the cursor ring and over the artwork. Mounted only
-     for the two tools it can preview, so no other tool pays for a canvas it
-     never draws into. -->
+     for the tools it can preview (the eraser's are the Brush layers thinning),
+     so no other tool pays for a canvas it never draws into. -->
 {#if livePixels}
-  <PaintLayer {page} busy={inFlight} {dropped} />
+  <PaintLayer {page} {strip} busy={inFlight} {dropped} />
 {/if}
 
 <!-- What the stamp would copy, inside the ring, and a cross on the place it
@@ -898,6 +1042,7 @@
 <style>
   .surface {
     position: absolute;
+    z-index: var(--z-draw);
     inset: 0;
     padding: 0;
     border: 0;
@@ -927,6 +1072,7 @@
 
   .cursor {
     position: absolute;
+    z-index: var(--z-draw);
     inset: 0;
     width: 100%;
     height: 100%;

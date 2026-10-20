@@ -25,7 +25,7 @@ import {
   rectBetween,
   regionAt,
   resizeBbox,
-  shouldStamp,
+  pullRope,
   stripBoundsOf,
   stripRectBetween,
 } from './gesture.js'
@@ -171,22 +171,20 @@ describe('brushRadius', () => {
   })
 })
 
-describe('shouldStamp', () => {
-  const radius = { rx: 2, ry: 2 }
-
-  it('always stamps the first point', () => {
-    expect(shouldStamp(null, { x: 10, y: 10 }, radius, 12)).toBe(true)
+describe('pullRope', () => {
+  it('leaves the end where it is while the pointer is inside the slack', () => {
+    expect(pullRope({ x: 10, y: 10 }, { x: 12, y: 11 }, 3)).toBeNull()
+    expect(pullRope({ x: 10, y: 10 }, { x: 13, y: 10 }, 3)).toBeNull()
   })
 
-  it('skips a point inside the spacing step and takes one beyond it', () => {
-    expect(shouldStamp({ x: 10, y: 10 }, { x: 10.1, y: 10 }, radius, 12)).toBe(false)
-    expect(shouldStamp({ x: 10, y: 10 }, { x: 12, y: 10 }, radius, 12)).toBe(true)
+  it('drags the end along behind the pointer at the slack', () => {
+    expect(pullRope({ x: 10, y: 10 }, { x: 20, y: 10 }, 3)).toEqual({ x: 17, y: 10 })
+    const end = pullRope({ x: 0, y: 0 }, { x: 30, y: 40 }, 5)
+    expect(Math.hypot(30 - end.x, 40 - end.y)).toBeCloseTo(5)
   })
 
-  it('steps further for a wider brush at the same spacing', () => {
-    const near = { x: 10.6, y: 10 }
-    expect(shouldStamp({ x: 10, y: 10 }, near, { rx: 1, ry: 1 }, 20)).toBe(true)
-    expect(shouldStamp({ x: 10, y: 10 }, near, { rx: 8, ry: 8 }, 20)).toBe(false)
+  it('follows the pointer exactly with no slack', () => {
+    expect(pullRope({ x: 1, y: 1 }, { x: 4, y: 5 }, 0)).toEqual({ x: 4, y: 5 })
   })
 })
 

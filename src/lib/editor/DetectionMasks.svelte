@@ -41,6 +41,7 @@
 <style>
   .masks {
     position: absolute;
+    z-index: var(--z-mask);
     inset: 0;
     pointer-events: none;
   }

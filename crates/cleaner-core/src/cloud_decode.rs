@@ -90,7 +90,7 @@ pub fn decode_analysis_mask(
     tile: crate::cloud_analysis_wire::TileRect,
 ) -> Result<Vec<u8>, ResultDecodeError> {
     tile.validate().map_err(ResultDecodeError::PngDecoding)?;
-    crate::cloud_analysis_wire::validate_png(bytes, tile, png::ColorType::Grayscale)
+    crate::cloud_analysis_wire::validate_png(bytes, tile, &[png::ColorType::Grayscale])
         .map_err(ResultDecodeError::PngDecoding)?;
     let pixels = usize::try_from(u64::from(tile.width) * u64::from(tile.height))
         .map_err(|_| ResultDecodeError::DecompressionLimitExceeded)?;

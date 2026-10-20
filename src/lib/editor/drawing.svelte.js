@@ -19,7 +19,9 @@
  * - **The selection tool** creates no layer. It adds its gesture to the
  *   page's detected masks or takes it away from them - `editDetectionMask` -
  *   and those masks are what Clean erases later. A detection has no pixels to
- *   put back, so, like deleting one, the edit records no undo entry. In its
+ *   put back, so the backend records the edit itself, with the page's
+ *   detections as they were (`history.rs#record_pages`), as it does for
+ *   deleting one. In its
  *   Detect mode the gesture is an area for the detector: a Detect of the page
  *   held to the drawn rectangle (`cloudrun.js#detectArea`).
  *
@@ -38,6 +40,7 @@ import {
   editor,
   recordBackgroundRegionEdit,
   recordRegionEdit,
+  recordRegionEdits,
   reloadPage,
   reportJobConflict,
   scopePageIndices,
@@ -49,7 +52,7 @@ import { cloudRefused } from './cloudflow.svelte.js'
 import { detectArea } from './cloudrun.js'
 import { draft, clearDraft, markCommitted } from './draft.svelte.js'
 import { AI_STROKE_PX, detectAreaIn, paintedStroke } from './gesture.js'
-import { paintParamsOf } from './paint.js'
+import { paintParamsOf, paintPointsOf } from './paint.js'
 import { renderRegionInCloud } from './toolapply.svelte.js'
 import { reportRegionEditFailure } from './maskactions.svelte.js'
 import { SOLID, TOOL_SPECS, toolSpendsCloud } from './tools.js'
@@ -101,6 +104,8 @@ export async function commitDraft() {
     switch (spec.tool) {
     case 'brush':
       return createMask(spec)
+    case 'eraser':
+      return eraseDrawn(spec)
     case 'cloneStamp':
       return cloneInto(spec)
     case 'shapes':
@@ -352,7 +357,9 @@ async function createMask(spec, extraParams) {
   // Selected only while its page is still the one in view. A result that
   // arrives after a page turn is on a page the reader has left, and a
   // selection there is one a Delete shortcut would act on unseen.
-  if (scopePageIndices().includes(spec.pageIndex)) select(created.id)
+  // A Brush stroke is paint: it leaves no selection and so no box behind it,
+  // as a stroke in a raster editor does (`model/layers.js#isBrushLayer`).
+  if (spec.tool !== 'brush' && scopePageIndices().includes(spec.pageIndex)) select(created.id)
   // Before the gesture the region was not there at all, and that is what the
   // delta's `before` side says: `present: false`, which `restoreRegion` reads
   // as "take it away again".
@@ -416,6 +423,59 @@ async function createMask(spec, extraParams) {
 }
 
 /* ------------------------------------------------------------------ */
+/* The eraser                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Take an eraser stroke off the page's Brush layers (`erasePaint`).
+ *
+ * Every layer the stroke changed comes back with its region before and after,
+ * and the whole stroke is **one** undo step however many layers it crossed
+ * (`recordRegionEdits`). A layer left with nothing on it goes off the page and
+ * out of the Layers panel, and its undo brings it back.
+ *
+ * @param {CommitSpec} spec
+ * @returns {Promise<boolean>} whether any paint came off
+ */
+async function eraseDrawn(spec) {
+  const chapter = editor.chapter
+  const page = pageOf(spec.pageId)
+  if (!chapter || !page || chapter.id !== spec.chapterId || page.index !== spec.pageIndex) return false
+  const points = paintPointsOf(spec.points)
+  if (points.length === 0) return false
+  const percent = (/** @type {unknown} */ value, /** @type {number} */ fallback) =>
+    Math.max(0, Math.min(100, Number(value ?? fallback)))
+  const before = page.status
+  const result = await getBackend().erasePaint({
+    chapterId: spec.chapterId,
+    pageIndex: spec.pageIndex,
+    ...(spec.sourceIndex !== null && spec.sourceSha ? {
+      sourceIndex: spec.sourceIndex, sourceSha: spec.sourceSha,
+    } : {}),
+    points,
+    size: Math.max(1, Number(spec.params.size ?? 28)),
+    hardness: percent(spec.params.hardness, 100),
+    opacity: percent(spec.params.opacity, 100),
+  })
+  const erased = result?.erased ?? []
+  if (erased.length === 0) return false
+  const parts = erased.map(({ regionId, before: was, after }) => ({
+    regionId,
+    before: { region: was, pageStatus: before },
+    after: { region: after, pageStatus: result.pageStatus },
+  }))
+  if (editor.chapter?.id === spec.chapterId) {
+    for (const { regionId, after } of erased) {
+      if (!after && editor.selectionId === regionId) select(null)
+      applyRegionState(regionId, after, result.pageStatus)
+    }
+    void reloadPage(spec.pageIndex).catch(() => {})
+  }
+  recordRegionEdits('canvas.command.erasePaint', parts, spec.chapterId)
+  return true
+}
+
+/* ------------------------------------------------------------------ */
 /* Editing the detected masks                                          */
 /* ------------------------------------------------------------------ */
 
@@ -423,11 +483,14 @@ async function createMask(spec, extraParams) {
  * The selection tool's commit: the gesture added to the page's detected masks
  * or taken away from them.
  *
- * The page is read again afterwards rather than patched here, because an add
- * can grow one detection and a remove can empty and delete several, and the
- * native side is the one that knows which pixels went where. The reloaded
- * page moves the mask URL of each detection the edit changed, and only those
- * are fetched again (`api/tile.js#detectionMaskUrl`).
+ * The pages are read again afterwards rather than patched here, because an
+ * add can grow one detection and a remove can empty and delete several, and
+ * the native side is the one that knows which pixels went where. Every page
+ * the edit wrote (`result.pages`) is read again: on a longstrip chapter a
+ * gesture over a join can grow a detection owned by the page above, make one
+ * owned by the page below, or move one from one page to the other. A
+ * reloaded page moves the mask URL of each detection the edit changed, and
+ * only those are fetched again (`api/tile.js#detectionMaskUrl`).
  *
  * A result that arrives after its chapter was closed leaves the chapter now
  * open alone. A selection the edit deleted is let go of, so no shortcut acts
@@ -467,11 +530,11 @@ async function editMask(spec) {
   const removed = new Set(result.removed ?? [])
   if (editor.selectionId && removed.has(editor.selectionId)) select(null)
   if (editor.hoverId && removed.has(editor.hoverId)) hover(null)
-  try {
-    await reloadPage(spec.pageIndex)
-  } catch (error) {
+  // An answer without `pages` wrote the anchor alone.
+  const written = result.pages?.length ? result.pages.map((page) => page.pageIndex) : [spec.pageIndex]
+  await Promise.all([...new Set(written)].map((index) => reloadPage(index).catch((error) => {
     console.error('the page could not be read again after a mask edit', error)
-  }
+  })))
   return true
 }
 

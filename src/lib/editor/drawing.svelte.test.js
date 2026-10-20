@@ -1509,6 +1509,35 @@ describe('the selection tool', () => {
     expect(editor.chapter.pages[0].status).toBe('unclean')
   })
 
+  it('reads every page a longstrip edit across a join wrote, and lets go of a detection it moved', async () => {
+    const chapter = twoPages()
+    chapter.pages[0].regions = [detected()]
+    editor.chapter = chapter
+    editor.selectionId = DETECTED_ID
+    const moved = 'c1-p002-d2'
+    const adapter = maskBackend({
+      pageStatus: 'unclean', changed: [], created: [moved], removed: [DETECTED_ID],
+      pages: [{ pageIndex: 0, pageStatus: 'unclean' }, { pageIndex: 1, pageStatus: 'detected' }],
+    }, [], {
+      loadPages: vi.fn(async ({ indices: [index] }) => [{
+        ...chapter.pages[index],
+        status: index === 0 ? 'unclean' : 'detected',
+        regions: index === 0 ? [] : [{ ...detected(), id: moved, pageId: 'c1-p002' }],
+      }]),
+    })
+    setBackend(/** @type {any} */ (adapter))
+
+    // Drawn on page one, past its bottom edge into page two.
+    selection('rect', [{ x: 5, y: 95 }], { x: 5, y: 95, w: 30, h: 10 }, 'erase')
+    expect(await commitDraft()).toBe(true)
+
+    expect(adapter.loadPages.mock.calls.map(([spec]) => spec.indices)).toEqual([[0], [1]])
+    expect(editor.selectionId).toBeNull()
+    expect(editor.chapter.pages[0].regions).toEqual([])
+    expect(editor.chapter.pages[1].regions.map((region) => region.id)).toEqual([moved])
+    expect(editor.chapter.pages[1].status).toBe('detected')
+  })
+
   it('reads nothing again for an edit that changed nothing', async () => {
     const adapter = maskBackend({ pageStatus: 'detected', changed: [], created: [], removed: [] })
     setBackend(/** @type {any} */ (adapter))
@@ -1555,5 +1584,111 @@ describe('the selection tool', () => {
     expect(app.notices.map((notice) => notice.key)).toContain('notice.mask.selectionFailed')
     expect(adapter.loadPages).not.toHaveBeenCalled()
     expect(editor.chapter.pages[0].regions).toEqual([detected()])
+  })
+})
+
+/** A Brush layer as the backend answers one. */
+function brushLayer(id, revision = `${id}-v1`) {
+  return {
+    id,
+    pageId: 'c1-p001',
+    bbox: { x: 10, y: 10, w: 20, h: 5 },
+    source: 'hand',
+    outcome: 'cleaned',
+    mask: {
+      id: `${id}-m1`,
+      legacyPatchRevision: revision,
+      provenance: { engine: 'paint', params_snapshot: { tool: 'brush', mode: 'paint' } },
+    },
+  }
+}
+
+describe('the eraser stroke', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    app.notices.length = 0
+    editor.history = createHistory()
+    editor.tool = 'eraser'
+    editor.pageIndex = 0
+    editor.selectionId = null
+    resetDraftState()
+  })
+
+  afterEach(() => {
+    setBackend(null)
+    resetDraftState()
+  })
+
+  /** Two Brush layers; the stroke thins one and takes the other off. */
+  function erase() {
+    editor.chapter = chapterWith([brushLayer('c1-p001-h1'), brushLayer('c1-p001-h2')])
+    editor.selectionId = 'c1-p001-h2'
+    /** @type {{entries: any[], cursor: number}} */
+    const journal = { entries: [], cursor: 0 }
+    const view = () => ({ cursor: journal.cursor, entries: journal.entries.map((entry, index) => ({ seq: index + 1, label: entry.label })) })
+    const adapter = backend({
+      historyPush: vi.fn(async ({ entry }) => {
+        journal.entries.length = journal.cursor
+        journal.entries.push(structuredClone(entry))
+        journal.cursor = journal.entries.length
+        return view()
+      }),
+      historyMove: vi.fn(async ({ direction }) => {
+        let entry = null
+        if (direction === 'undo' && journal.cursor > 0) entry = journal.entries[--journal.cursor]
+        if (direction === 'redo' && journal.cursor < journal.entries.length) entry = journal.entries[journal.cursor++]
+        return { ...view(), entry }
+      }),
+      restoreRegion: vi.fn(async ({ region }) => (region ? structuredClone(region) : null)),
+      loadPages: vi.fn(async () => []),
+      erasePaint: vi.fn(async () => ({
+        erased: [
+          { regionId: 'c1-p001-h1', before: brushLayer('c1-p001-h1'), after: brushLayer('c1-p001-h1', 'c1-p001-h1-v2') },
+          { regionId: 'c1-p001-h2', before: brushLayer('c1-p001-h2'), after: null },
+        ],
+        pageStatus: 'cleaned',
+      })),
+    })
+    setBackend(/** @type {any} */ (adapter))
+    beginDraft({
+      tool: 'eraser',
+      kind: 'stroke',
+      pageId: 'c1-p001',
+      points: [{ x: 10, y: 12, p: 1 }, { x: 30, y: 12, p: 1 }],
+      bbox: { x: 10, y: 10, w: 20, h: 4 },
+      mode: 'erase',
+      keyboard: false,
+      moved: true,
+    })
+    return { adapter, journal }
+  }
+
+  const revisions = () => Object.fromEntries(editor.chapter.pages[0].regions.map((region) => [region.id, region.mask.legacyPatchRevision]))
+
+  it('erases every layer it crosses as one undo step, and undo puts them all back', async () => {
+    const { adapter, journal } = erase()
+    expect(await commitDraft()).toBe(true)
+    await settled(editor.history)
+    const [{ size, hardness, opacity, points }] = adapter.erasePaint.mock.calls[0]
+    expect({ size, hardness, opacity }).toEqual({ size: 28, hardness: 100, opacity: 100 })
+    expect(points).toHaveLength(2)
+    expect(revisions()).toEqual({ 'c1-p001-h1': 'c1-p001-h1-v2' })
+    expect(editor.selectionId).toBe(null)
+
+    expect(adapter.historyPush).toHaveBeenCalledTimes(1)
+    expect(journal.entries[0].parts.map((part) => part.regionId)).toEqual(['c1-p001-h1', 'c1-p001-h2'])
+
+    await step(undo)
+    expect(revisions()).toEqual({ 'c1-p001-h1': 'c1-p001-h1-v1', 'c1-p001-h2': 'c1-p001-h2-v1' })
+    await step(redo)
+    expect(revisions()).toEqual({ 'c1-p001-h1': 'c1-p001-h1-v2' })
+  })
+
+  it('records nothing when the stroke crossed no Brush paint', async () => {
+    const { adapter } = erase()
+    adapter.erasePaint.mockResolvedValue({ erased: [], pageStatus: 'cleaned' })
+    expect(await commitDraft()).toBe(false)
+    expect(adapter.historyPush).not.toHaveBeenCalled()
+    expect(Object.keys(revisions())).toHaveLength(2)
   })
 })

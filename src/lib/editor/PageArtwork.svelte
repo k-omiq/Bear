@@ -58,7 +58,7 @@
    * the only file that has to know which of the two it is drawing. It draws no
    * markers, no masks, no selection and no page tag - those are the app's, and
    * they live in `RegionLayer` and `PageSheet` - and it scales its type from
-   * the sheet's own width (`cqw`) rather than taking the zoom as a prop, which
+   * the sheet's own width (`--sheet-w`) rather than taking the zoom as a prop, which
    * the image elements has no use for.
    *
    * `original` is this component's word and `source` is the protocol's; the
@@ -249,7 +249,7 @@
 
   .text {
     writing-mode: vertical-rl;
-    font-size: max(8px, 2.6cqw);
+    font-size: max(8px, calc(var(--sheet-w) * 0.026));
     line-height: 1.15;
     letter-spacing: .05em;
     font-weight: 500;

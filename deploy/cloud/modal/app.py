@@ -85,6 +85,8 @@ TORCH_REQUIREMENT = "torch==2.13.0"
 # spandrel (page denoise, OpenModelDB .pth models) imports torchvision, which must come
 # from the same CUDA index as torch or its compiled operators do not register.
 TORCHVISION_REQUIREMENT = "torchvision==0.28.0"
+# The analysis GPU: ONNX sessions, mask components (scipy) and PNG work.
+ANALYSIS_REQUIREMENTS = ("onnxruntime-gpu==1.23.2", "numpy==2.4.6", "pillow==12.3.0", "scipy==1.18.1")
 DENOISE_REQUIREMENTS = ("spandrel==0.4.2",)
 GPU_REQUIREMENTS = (
     "diffusers==0.39.0",
@@ -155,11 +157,11 @@ _analysis_base = modal.Image.debian_slim(python_version=PYTHON_VERSION)
 if SETTINGS.denoise:
     _analysis_base = (_analysis_base
         .pip_install(TORCH_REQUIREMENT, TORCHVISION_REQUIREMENT, index_url=TORCH_INDEX_URL)
-        .pip_install("onnxruntime-gpu==1.23.2", "numpy==2.4.6", "pillow==12.3.0", *DENOISE_REQUIREMENTS))
+        .pip_install(*ANALYSIS_REQUIREMENTS, *DENOISE_REQUIREMENTS))
 else:
     _analysis_base = (_analysis_base
         .pip_install(TORCH_REQUIREMENT, index_url=TORCH_INDEX_URL)
-        .pip_install("onnxruntime-gpu==1.23.2", "numpy==2.4.6", "pillow==12.3.0"))
+        .pip_install(*ANALYSIS_REQUIREMENTS))
 analysis_gpu_image = _finish(_analysis_base, {"HF_HUB_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1"})
 
 weights_volume = modal.Volume.from_name(SETTINGS.volume_name, environment_name=SETTINGS.environment)

@@ -51,7 +51,7 @@ use cleaner_core::engines::render::CloudProvider;
 use cleaner_core::cloud_job_wire::{self as job_wire, JobEnvelope, JobKind, JobStatus};
 use cleaner_core::cloud_analysis_wire::{
     AnalysisBatch, AnalysisBatchResult, AnalysisCapabilities, AnalysisError, AnalysisRequest, AnalysisResult,
-    BATCH_MAX_BODY_BYTES, BATCH_MAX_RESPONSE_BYTES, MAX_RESPONSE_BYTES,
+    BatchUpload, BATCH_MAX_BODY_BYTES, BATCH_MAX_RESPONSE_BYTES, MAX_RESPONSE_BYTES,
 };
 use cleaner_core::cloud_denoise_wire::{
     DenoiseCapabilities, DenoiseMetadata, DenoiseRejection, DenoiseResult,
@@ -1064,22 +1064,32 @@ impl CloudHttpClient {
     }
 
     /// One batch of a page's analysis requests (`POST /mc/analysis/v1/batches`),
-    /// submitted and polled as a tile is. `tiles` are the batch's distinct PNGs,
-    /// each sent once. Only for a gateway that lists the operation
-    /// ([`Self::serves_gpu_jobs`] with [`JobKind::AnalysisBatch`]).
+    /// submitted and polled as a tile is. `upload` is the batch's distinct tile
+    /// PNGs, each sent once, or the canvas they are cut from (only for a
+    /// gateway that lists `analysis.batch_canvas`). Only for a gateway that
+    /// lists the operation ([`Self::serves_gpu_jobs`] with
+    /// [`JobKind::AnalysisBatch`]).
     pub fn submit_analysis_batch(
         &self,
         batch: &AnalysisBatch,
-        tiles: &[&[u8]],
+        upload: &BatchUpload<'_>,
         cancel: &AtomicBool,
     ) -> Result<AnalysisBatchResult, HttpTransportError> {
         let attempt_id = attempt_id()?;
-        let body = serde_json::to_vec(&serde_json::json!({
-            "metadata": batch,
-            "tiles_png_b64": tiles.iter().map(|png| base64::engine::general_purpose::STANDARD.encode(png))
-                .collect::<Vec<_>>(),
-            "attempt_id": attempt_id,
-        })).map_err(|_| HttpTransportError::WireValidation)?;
+        let base64 = |png: &[u8]| base64::engine::general_purpose::STANDARD.encode(png);
+        let body = serde_json::to_vec(&match upload {
+            BatchUpload::Tiles(tiles) => serde_json::json!({
+                "metadata": batch,
+                "tiles_png_b64": tiles.iter().map(|png| base64(png)).collect::<Vec<_>>(),
+                "attempt_id": attempt_id,
+            }),
+            BatchUpload::Canvas { rect, png } => serde_json::json!({
+                "metadata": batch,
+                "canvas_png_b64": base64(png),
+                "canvas_rect": rect,
+                "attempt_id": attempt_id,
+            }),
+        }).map_err(|_| HttpTransportError::WireValidation)?;
         if body.len() > BATCH_MAX_BODY_BYTES { return Err(HttpTransportError::BodySizeLimitExceeded); }
         let check = |result: &AnalysisBatchResult| result.validate(batch).map_err(|_| HttpTransportError::WireValidation);
         let job = HttpGpuJob {
@@ -2864,9 +2874,10 @@ mod tests {
         });
         let client = modal_client(&base);
         assert!(client.serves_gpu_jobs(JobKind::AnalysisBatch).unwrap());
-        let result = client.submit_analysis_batch(&batch, &[tile], &AtomicBool::new(false)).unwrap();
+        let result = client.submit_analysis_batch(&batch, &BatchUpload::Tiles(vec![tile]), &AtomicBool::new(false)).unwrap();
         assert_eq!(result.results.len(), 2);
-        let log = log.lock().unwrap();
+        let log_handle = log;
+        let log = log_handle.lock().unwrap();
         let sent: Vec<serde_json::Value> = log.iter()
             .filter(|(method, path, _)| method == "POST" && path == "/mc/analysis/v1/batches")
             .map(|(_, _, body)| serde_json::from_slice(body).unwrap()).collect();
@@ -2874,6 +2885,18 @@ mod tests {
         assert_eq!(sent[0]["tiles_png_b64"].as_array().unwrap().len(), 1, "one PNG for both models");
         assert_eq!(sent[0]["metadata"]["requests"].as_array().unwrap().len(), 2);
         assert!(!log.iter().any(|(_, path, _)| path.starts_with("/mc/analysis/v1/jobs")));
+        drop(log);
+        // A canvas goes in place of the tile PNGs, with its place on the page.
+        let canvas = BatchUpload::Canvas { rect, png: tile.to_vec() };
+        client.submit_analysis_batch(&batch, &canvas, &AtomicBool::new(false)).unwrap();
+        let log = log_handle.lock().unwrap();
+        let last: serde_json::Value = log.iter().rev()
+            .find(|(method, path, _)| method == "POST" && path == "/mc/analysis/v1/batches")
+            .map(|(_, _, body)| serde_json::from_slice(body).unwrap()).unwrap();
+        let mut keys: Vec<&str> = last.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["attempt_id", "canvas_png_b64", "canvas_rect", "metadata"]);
+        assert_eq!(last["canvas_rect"], serde_json::json!({"x": 0, "y": 0, "width": 16, "height": 16}));
     }
 
     /// A redirect on a status read is refused as everywhere in this client, and

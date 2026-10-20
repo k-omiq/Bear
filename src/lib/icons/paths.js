@@ -119,6 +119,14 @@ export const icons = {
     'M6.05 8.93c-1.58 .37-2.32 1.76-3.15 3.43 1.85-.19 3.43-.56 4.17-1.48 .74-.93 .37-1.67-1.02-1.95Z',
   ],
 
+  // Eraser: a block on the diagonal, its worn end on a baseline, a band across
+  // it. No smear and no ferrule, so it never reads as `brush`.
+  'eraser': [
+    'M9.6 2.9 13.1 6.4a1 1 0 0 1 0 1.4L8 12.9H5.2L2.9 10.6a1 1 0 0 1 0-1.4L8.2 2.9a1 1 0 0 1 1.4 0Z',
+    'M6 5.1 10.9 10',
+    'M8 12.9h5.1',
+  ],
+
   // Shapes: a square and a disc, overlapping.
   'shapes': [
     'M2.6 3.5a.9 .9 0 0 1 .9-.9h5a.9 .9 0 0 1 .9.9v5a.9 .9 0 0 1-.9.9h-5a.9 .9 0 0 1-.9-.9Z',

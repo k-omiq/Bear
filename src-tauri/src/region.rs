@@ -177,9 +177,9 @@ pub struct CleanedRegion {
     pub page_status: String,
 }
 
-/// `editDetectionMask`'s: which of the page's detections the edit rewrote,
-/// made or erased, by id, and the page's status after it. Three empty lists
-/// are an edit that changed nothing and wrote nothing.
+/// `editDetectionMask`'s: which detections the edit rewrote, made or erased,
+/// by id, the anchor page's status after it, and every page it wrote. Empty
+/// lists are an edit that changed nothing and wrote nothing.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MaskEdit {
@@ -188,8 +188,21 @@ pub struct MaskEdit {
     pub changed: Vec<String>,
     /// The detection an add over no detection made.
     pub created: Vec<String>,
-    /// Detections a remove erased entirely.
+    /// Detections a remove erased entirely, and on a longstrip chapter any an
+    /// erase moved to another page, which are made there under a new id.
     pub removed: Vec<String>,
+    /// Every page the edit wrote, with its status after it: the anchor, and
+    /// on a longstrip chapter the page on either side of a join the gesture
+    /// reached. Empty for an edit that wrote nothing.
+    pub pages: Vec<EditedPage>,
+}
+
+/// One page a mask edit wrote.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditedPage {
+    pub page_index: u32,
+    pub page_status: String,
 }
 
 /// Whether rung 3a can be offered on this machine, and what to say if not.
@@ -1212,50 +1225,22 @@ fn edit_with_bench_render(
             } else {
                 plan.geometry = Geometry::Given(local);
             }
+            let frame = GestureFrame {
+                anchor,
+                frame: Rect::new(read.origin.0, read.origin.1, read.raster.width, read.raster.height),
+            };
             if let Some(paint) = plan.paint.as_mut() {
-                let map = |x: f64, y: f64| {
-                    let gx = x / 100.0 * anchor.width as f64 + anchor.x_offset as f64;
-                    let gy = y / 100.0 * anchor.height as f64 + anchor.y_offset as f64;
-                    (
-                        (gx - read.origin.0 as f64) / read.raster.width as f64 * 100.0,
-                        (gy - read.origin.1 as f64) / read.raster.height as f64 * 100.0,
-                    )
-                };
-                for point in &mut paint.points {
-                    (point.x, point.y) = map(point.x, point.y);
-                }
-                match &mut paint.kind {
-                    PaintKind::Shape { shape, .. } | PaintKind::RegionCopy { shape: Some(shape), .. } => {
-                        for point in &mut shape.points {
-                            (point.x, point.y) = map(point.x, point.y);
-                        }
-                    }
-                    PaintKind::Clone { offset, .. } => {
-                        offset.0 = offset.0 * anchor.width as f64 / read.raster.width as f64;
-                        offset.1 = offset.1 * anchor.height as f64 / read.raster.height as f64;
-                    }
-                    PaintKind::Brush { .. } | PaintKind::RegionCopy { shape: None, .. } => {}
-                }
+                frame.paint(paint);
             }
             if plan.paint.is_none() {
                 if let Some(mut stroke) = plan.stroke.take() {
-                    for point in &mut stroke.points {
-                        let gx = point.x / 100.0 * anchor.width as f64 + anchor.x_offset as f64;
-                        let gy = point.y / 100.0 * anchor.height as f64 + anchor.y_offset as f64;
-                        point.x = (gx - read.origin.0 as f64) / read.raster.width as f64 * 100.0;
-                        point.y = (gy - read.origin.1 as f64) / read.raster.height as f64 * 100.0;
-                    }
+                    frame.stroke(&mut stroke);
                     if let Some(mask) = stroke_mask(&stroke, read.raster.width, read.raster.height)
                     {
                         plan.geometry = Geometry::Painted(mask);
                     }
                 } else if let Some(mut shape) = plan.drawn.take() {
-                    for point in &mut shape.points {
-                        let gx = point.x / 100.0 * anchor.width as f64 + anchor.x_offset as f64;
-                        let gy = point.y / 100.0 * anchor.height as f64 + anchor.y_offset as f64;
-                        point.x = (gx - read.origin.0 as f64) / read.raster.width as f64 * 100.0;
-                        point.y = (gy - read.origin.1 as f64) / read.raster.height as f64 * 100.0;
-                    }
+                    frame.shape(&mut shape);
                     if let Some(mask) = shape_mask(&shape, read.raster.width, read.raster.height) {
                         plan.geometry = Geometry::Painted(mask);
                     }
@@ -1628,27 +1613,51 @@ fn stored_hole_of(stored: &Patch) -> &Mask {
     cleaner_core::engines::render::Preprocessing::CURRENT.hole(&stored.mask, &stored.ink)
 }
 
-fn remap_paint(paint: &mut PaintPlan, anchor: cleaner_core::strip::Placement, origin: (i64,i64), width: u32, height: u32) {
-    let map = |x: f64, y: f64| {
+/// A gesture the interface measured on its anchor page, read in a wider
+/// `frame`: a rectangle in strip pixels that reaches over a join, such as a
+/// strip window a clean reads or the pages around a mask edit. Every point
+/// goes from anchor-page percent to frame percent, and a clone offset from
+/// anchor-page percent to frame percent, so a stroke rasterised at the
+/// frame's size lands on the same strip pixels it was drawn over.
+#[derive(Debug, Clone, Copy)]
+struct GestureFrame {
+    anchor: cleaner_core::strip::Placement,
+    frame: Rect,
+}
+
+impl GestureFrame {
+    fn point(&self, x: f64, y: f64) -> (f64, f64) {
+        let (anchor, frame) = (self.anchor, self.frame);
         let gx = x / 100.0 * anchor.width as f64 + anchor.x_offset as f64;
         let gy = y / 100.0 * anchor.height as f64 + anchor.y_offset as f64;
-        ((gx - origin.0 as f64) / width as f64 * 100.0,
-         (gy - origin.1 as f64) / height as f64 * 100.0)
-    };
-    for point in &mut paint.points {
-        (point.x, point.y) = map(point.x, point.y);
+        ((gx - frame.x as f64) / frame.w as f64 * 100.0,
+         (gy - frame.y as f64) / frame.h as f64 * 100.0)
     }
-    match &mut paint.kind {
-        PaintKind::Shape { shape, .. } | PaintKind::RegionCopy { shape: Some(shape), .. } => {
-            for point in &mut shape.points {
-                (point.x, point.y) = map(point.x, point.y);
+
+    fn stroke(&self, stroke: &mut PaintedStroke) {
+        for point in &mut stroke.points {
+            (point.x, point.y) = self.point(point.x, point.y);
+        }
+    }
+
+    fn shape(&self, shape: &mut PaintedShape) {
+        for point in &mut shape.points {
+            (point.x, point.y) = self.point(point.x, point.y);
+        }
+    }
+
+    fn paint(&self, paint: &mut PaintPlan) {
+        for point in &mut paint.points {
+            (point.x, point.y) = self.point(point.x, point.y);
+        }
+        match &mut paint.kind {
+            PaintKind::Shape { shape, .. } | PaintKind::RegionCopy { shape: Some(shape), .. } => self.shape(shape),
+            PaintKind::Clone { offset, .. } => {
+                offset.0 = offset.0 * self.anchor.width as f64 / self.frame.w as f64;
+                offset.1 = offset.1 * self.anchor.height as f64 / self.frame.h as f64;
             }
+            PaintKind::Brush { .. } | PaintKind::RegionCopy { shape: None, .. } => {}
         }
-        PaintKind::Clone { offset, .. } => {
-            offset.0 = offset.0 * anchor.width as f64 / width as f64;
-            offset.1 = offset.1 * anchor.height as f64 / height as f64;
-        }
-        PaintKind::Brush { .. } | PaintKind::RegionCopy { shape: None, .. } => {}
     }
 }
 
@@ -4311,7 +4320,7 @@ pub async fn apply_tool(
         let fill_mode = string("fillMode").unwrap_or_else(|| {
             if detected_pick == Some(EnginePick::Solid) { "solid" } else { "match-surround" }.to_owned()
         });
-        let mut requested = None;
+        let requested;
         let geometry = match bbox {
             Some(bbox) => {
                 let _lock = run::lock_job(&located.job_path)?;
@@ -4335,7 +4344,11 @@ pub async fn apply_tool(
                 requested = Some(rect);
                 painted_geometry(rect, painted)
             }
-            None => existing_geometry(&located, &region_id)?,
+            None => {
+                let (geometry, hangs) = existing_geometry(&located, &region_id)?;
+                requested = hangs;
+                geometry
+            }
         };
 
         let choice = match named_rung(string("engine").as_deref()) {
@@ -4405,7 +4418,13 @@ fn fill_mode_key(mode: &str) -> &'static str {
 /// stored lettering, or - for a region the gate held back, and a candidate
 /// written before rows kept lettering - the detector, under the box the
 /// manifest kept.
-fn existing_geometry(located: &Located, region_id: &str) -> Result<Geometry, String> {
+///
+/// With it, the box a clean of it has to read past its page, if any: a
+/// stored detection on a longstrip chapter whose mask hangs over a join. A
+/// clean then reads the strip window around it, as it does for a hand
+/// gesture that crosses a join ([`edit_with_bench_render`]), and writes
+/// both pages' rows. `None` for everything else, which reads its own page.
+fn existing_geometry(located: &Located, region_id: &str) -> Result<(Geometry, Option<Rect>), String> {
     let _lock = run::lock_job(&located.job_path)?;
     let job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
     if job
@@ -4414,25 +4433,30 @@ fn existing_geometry(located: &Located, region_id: &str) -> Result<Geometry, Str
         .iter()
         .any(|record| record.id == region_id)
     {
-        return Ok(Geometry::Stored);
+        return Ok((Geometry::Stored, None));
     }
-    if job.project.detections.iter().any(|record| record.id == region_id) {
-        return Ok(Geometry::StoredDetection);
+    if let Some(record) = job.project.detections.iter().find(|record| record.id == region_id) {
+        let hangs = job.project.strip.mode == cleaner_core::project::StripMode::Longstrip
+            && page_size(&job, record.source_idx).is_some_and(|(width, height)| {
+                let bbox = record.bbox;
+                bbox.x < 0 || bbox.y < 0 || bbox.right() > i64::from(width) || bbox.bottom() > i64::from(height)
+            });
+        return Ok((Geometry::StoredDetection, hangs.then_some(record.bbox)));
     }
     let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else {
-        return Ok(Geometry::Stored);
+        return Ok((Geometry::Stored, None));
     };
     let page_id = job_page_id(region_id);
     let found = job.project.regions_untouched.iter().find(|record| {
         record.source_idx == source_idx && untouched_id(page_id, record.bbox) == region_id
     });
     let Some(record) = found else {
-        return Ok(Geometry::Stored);
+        return Ok((Geometry::Stored, None));
     };
-    Ok(match job.load_held_lettering(record).map_err(|e| e.to_string())? {
+    Ok((match job.load_held_lettering(record).map_err(|e| e.to_string())? {
         Some((lettering, scale)) => Geometry::HeldLettering(lettering, scale),
         None => { let source=&job.project.sources[source_idx]; Geometry::Detected(source.orientation.rect(record.bbox,source.w,source.h)) },
-    })
+    }, None))
 }
 
 /// The pick a stored detection was detected with, or `None` for an id that is
@@ -4689,7 +4713,242 @@ pub async fn edit_detection_mask(
     .await
 }
 
+/// One point of an eraser stroke: page percent, with the pen's pressure.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct ErasePoint {
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub p: Option<f64>,
+}
+
+/// One Brush layer an eraser stroke changed: the region before and after,
+/// which an undo puts back. `after` is `None` for a layer left with nothing
+/// on it, which goes off the page as a deleted one does.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErasedLayer {
+    pub region_id: String,
+    pub before: ApiRegion,
+    pub after: Option<ApiRegion>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaintErase {
+    pub erased: Vec<ErasedLayer>,
+    pub page_status: String,
+}
+
+/// `erasePaint` - take an eraser stroke off every Brush layer on the page.
+///
+/// Each layer's coverage under the stroke is cut by the stroke's own
+/// (`cleaner_core::paint::erase`), and nothing that is not Brush paint is
+/// touched: no clean, no detection, no clone or shape paint. Brush layers are
+/// not picked on the canvas, so the eraser does not wait for one to be chosen.
+///
+/// Answers every layer that changed, before and after, for the interface to
+/// record as one undo step; an empty list when the stroke crossed no paint.
+/// `None` for a page that is not there or a source that moved under the
+/// interface. A layer saved as native parts (a chapter with a turned page) is
+/// left alone: its pixels are not in the page's own coordinates.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn erase_paint(
+    app: tauri::AppHandle,
+    chapter_id: String,
+    page_index: u32,
+    expected_source_idx: Option<usize>,
+    expected_source_sha: Option<String>,
+    points: Vec<ErasePoint>,
+    size: f64,
+    hardness: f64,
+    opacity: f64,
+) -> Result<Option<PaintErase>, String> {
+    crate::library::blocking(move || {
+        let expected_source = match (expected_source_idx, expected_source_sha) {
+            (Some(index), Some(hash)) => Some((index, hash)),
+            (None, None) => None,
+            _ => return Ok(None),
+        };
+        let library = Library::for_app(&app)?;
+        let located = match locate_page(&library, &chapter_id, page_index as usize) {
+            Ok(Some(located)) => located,
+            Ok(None) | Err(LibraryError::Unknown { .. } | LibraryError::NoJob { .. }) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let spec = cleaner_core::paint::BrushSpec {
+            size: if size.is_finite() { size.clamp(1.0, 2000.0) } else { 1.0 },
+            hardness: if hardness.is_finite() { hardness.clamp(0.0, 100.0) } else { 100.0 },
+            opacity: if opacity.is_finite() { opacity.clamp(0.0, 100.0) } else { 100.0 },
+            flow: 100.0,
+            ..cleaner_core::paint::BrushSpec::default()
+        };
+        erase_paint_at(&located, expected_source.as_ref(), &points, &spec)
+    })
+    .await
+}
+
+/// Whether a stored layer is a Brush stroke's: paint, made by the Brush.
+fn is_brush_record(record: &PatchRecord) -> bool {
+    record.engine == Engine::Paint
+        && record.provenance.params_snapshot.get("tool").and_then(|tool| tool.as_str()) == Some("brush")
+}
+
+/// [`erase_paint`]'s body, on a page already located.
+fn erase_paint_at(
+    located: &Located,
+    expected_source: Option<&(usize, String)>,
+    points: &[ErasePoint],
+    spec: &cleaner_core::paint::BrushSpec,
+) -> Result<Option<PaintErase>, String> {
+    use cleaner_core::paint::{erase, StrokePoint};
+
+    let _lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
+    let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+    let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else {
+        return Ok(None);
+    };
+    let Some(source) = job.project.sources.get(source_idx) else {
+        return Ok(None);
+    };
+    if expected_source.is_some_and(|(index, sha)| *index != source_idx || *sha != source.sha256) {
+        return Ok(None);
+    }
+    let (width, height) = source.orientation.size(source.w, source.h);
+    let stroke: Vec<StrokePoint> = points.iter()
+        .filter(|point| point.x.is_finite() && point.y.is_finite())
+        .map(|point| StrokePoint {
+            x: point.x * f64::from(width) / 100.0,
+            y: point.y * f64::from(height) / 100.0,
+            p: point.p.filter(|p| p.is_finite() && *p > 0.0).map_or(0.5, |p| p.min(1.0)),
+        })
+        .collect();
+    let status_now = |job: &Job| crate::library::page_of(&located.chapter_id, &job.project, located.page_index)
+        .map(|page| page.status.to_owned())
+        .unwrap_or_default();
+    let nothing = |job: &Job| Ok(Some(PaintErase { erased: Vec::new(), page_status: status_now(job) }));
+    if stroke.is_empty() || stroke.len() > 8192 {
+        return nothing(&job);
+    }
+    let Some(eraser) = erase::erase_coverage(&stroke, spec) else {
+        return nothing(&job);
+    };
+
+    let targets: Vec<PatchRecord> = job.project.patches.iter()
+        .filter(|record| record.source_idx == source_idx && record.visible && is_brush_record(record))
+        .filter(|record| record.native_parts.is_empty())
+        .filter(|record| {
+            let drawn = record.display_bbox().intersection(eraser.bounds);
+            drawn.w > 0 && drawn.h > 0
+        })
+        .cloned()
+        .collect();
+    let mut erased = Vec::new();
+    for record in targets {
+        let Some((before, _)) = crate::library::region_and_status(&located.chapter_id, &job.project, source_idx, &record.id) else {
+            continue;
+        };
+        let mut patch = job.load_display_patch(&record).map_err(|e| e.to_string())?;
+        if !erase::erase_patch(&mut patch, &eraser) {
+            continue;
+        }
+        if patch.mask.is_empty() {
+            // Nothing is left to show. The layer goes off the page as a
+            // deleted one does, its last coverage kept, so an undo turns it
+            // back on as it was.
+            if let Some(row) = job.project.patches.iter_mut().find(|row| row.id == record.id) {
+                row.visible = false;
+            }
+            job.flush().map_err(|e| e.to_string())?;
+        } else {
+            patch.provenance.mask_sha256 = run::mask_digest(&patch.mask);
+            job.complete_display_region(source_idx, &patch, record.review_state.clone())
+                .map_err(|e| e.to_string())?;
+        }
+        crate::underlay::refresh_dependencies(&mut job, &record.id)?;
+        let after = crate::library::region_and_status(&located.chapter_id, &job.project, source_idx, &record.id)
+            .map(|(region, _)| region)
+            .filter(|_| job.project.patches.iter().any(|row| row.id == record.id && row.visible));
+        erased.push(ErasedLayer { region_id: record.id.clone(), before, after });
+    }
+    if !erased.is_empty() {
+        crate::library::invalidate_manifest_cache(&located.job_path);
+    }
+    Ok(Some(PaintErase { erased, page_status: status_now(&job) }))
+}
+
+/// One page a mask edit may reach: its position in `strip.order`, its source,
+/// and where it sits in the strip (the page itself at the origin, on a
+/// chapter of single pages).
+#[derive(Debug, Clone, Copy)]
+struct MaskEditPage {
+    position: usize,
+    source_idx: usize,
+    placement: cleaner_core::strip::Placement,
+}
+
+/// The pages a mask edit anchored on `position` reaches, the anchor first.
+///
+/// On a longstrip chapter that is the anchor and one page each way: Run
+/// writes a detection on the page that holds its top row and its mask may
+/// hang over the join into the next one, so an edit near a join has to see,
+/// and may write, the detections on both sides of it. On a chapter of single
+/// pages it is the anchor alone, at the origin, so nothing moves.
+fn mask_edit_pages(project: &cleaner_core::project::Project, position: usize, size: (u32, u32)) -> Vec<MaskEditPage> {
+    let Some(source_idx) = Library::resolve_page(project, position) else {
+        return Vec::new();
+    };
+    if project.strip.mode != cleaner_core::project::StripMode::Longstrip {
+        let placement = cleaner_core::strip::Placement { source_idx, x_offset: 0, y_offset: 0, width: size.0, height: size.1 };
+        return vec![MaskEditPage { position, source_idx, placement }];
+    }
+    let strip = run::strip_of(project);
+    let Some(&placement) = strip.pages().get(position) else {
+        return Vec::new();
+    };
+    let neighbours = [position.checked_sub(1), position.checked_add(1)].into_iter().flatten();
+    std::iter::once((position, placement))
+        .chain(neighbours.filter_map(|at| strip.pages().get(at).map(|placement| (at, *placement))))
+        .filter_map(|(position, placement)| Some(MaskEditPage {
+            position,
+            source_idx: Library::resolve_page(project, position)?,
+            placement,
+        }))
+        .collect()
+}
+
+/// `mask` with every pixel that lies on no page taken out: the gutter beside
+/// a narrower page in a strip of mixed widths, which is no page's to clean.
+fn on_pages(mask: &Mask, pages: &[Rect]) -> Mask {
+    let mut out = mask.clone();
+    for y in mask.bounds.y..mask.bounds.bottom() {
+        for x in mask.bounds.x..mask.bounds.right() {
+            if mask.contains(x, y) && !pages.iter().any(|page| page.contains(x, y)) {
+                out.set(x, y, false);
+            }
+        }
+    }
+    out
+}
+
+/// Whether `mask` holds a pixel on a row from `top` to `bottom`.
+fn holds_rows(mask: &Mask, top: i64, bottom: i64) -> bool {
+    (mask.bounds.y.max(top)..mask.bounds.bottom().min(bottom))
+        .any(|y| (mask.bounds.x..mask.bounds.right()).any(|x| mask.contains(x, y)))
+}
+
 /// The command's body, under the chapter's lock, from a page already located.
+///
+/// Every mask is moved into one frame for the edit: the pages
+/// [`mask_edit_pages`] names, laid out as the strip lays them, which on a
+/// chapter of single pages is the page itself. [`plan_mask_edit`] runs there
+/// unchanged, and what it decided is moved back to the page that owns each
+/// detection, the page holding its top row, the rule Run stores detections
+/// by. A detection an erase leaves with no row on its page goes to the page
+/// that now holds its top row: removed from the one, made on the other, with
+/// its fit, its group and its padding. Every page is written in one manifest
+/// write.
 fn edit_detection_mask_at(
     located: &Located,
     expected_source: Option<&(usize, String)>,
@@ -4698,7 +4957,9 @@ fn edit_detection_mask_at(
     painted: Option<&serde_json::Value>,
 ) -> Result<Option<MaskEdit>, String> {
     // The same lock every other edit of a page takes, so a run working on
-    // this page refuses this one the same way (`page_busy`).
+    // this page refuses this one the same way (`page_busy`). On a longstrip
+    // chapter a run on any page refuses it (`run::page_run`), so the
+    // neighbouring pages this edit may write are held as well.
     let _lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
     let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
     let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else {
@@ -4712,48 +4973,83 @@ fn edit_detection_mask_at(
     if expected_source.is_some_and(|(index, sha)| *index != source_idx || *sha != source.sha256) {
         return Ok(None);
     }
-    let Some(gesture) = gesture_mask(stroke, painted, source.orientation.size(source.w,source.h).0, source.orientation.size(source.w,source.h).1) else {
+    let pages = mask_edit_pages(&job.project, located.page_index, source.orientation.size(source.w, source.h));
+    let Some(anchor) = pages.first().map(|page| page.placement) else {
         return Ok(None);
     };
-
-    let ids: Vec<String> = job
-        .project
-        .detections
-        .iter()
-        .filter(|record| record.source_idx == source_idx)
-        .map(|record| record.id.clone())
+    let frame = pages.iter().fold(anchor.rect(), |frame, page| span(frame, page.placement.rect()));
+    let Some(gesture) = gesture_mask(stroke, painted, GestureFrame { anchor, frame }) else {
+        return Ok(None);
+    };
+    // Where each page sits in the frame, and how far its own pixels are moved
+    // to get there.
+    let in_frame: Vec<Rect> = pages.iter()
+        .map(|page| Rect::new(page.placement.x_offset - frame.x, page.placement.y_offset - frame.y,
+            page.placement.width, page.placement.height))
         .collect();
-    let mut loaded = Vec::with_capacity(ids.len());
-    for id in &ids {
-        if let Some(found) = job.load_detection(id).map_err(|e| e.to_string())? {
-            loaded.push(found);
+    let shift = |at: usize| (in_frame[at].x, in_frame[at].y);
+    let gesture = if pages.len() > 1 { on_pages(&gesture, &in_frame) } else { gesture };
+    if tight(&gesture).is_none() {
+        return Ok(None);
+    }
+
+    // `(page, detection, mask, lettering)`, the masks moved into the frame.
+    let mut loaded = Vec::new();
+    for (at, page) in pages.iter().enumerate() {
+        let ids: Vec<String> = job.project.detections.iter()
+            .filter(|record| record.source_idx == page.source_idx)
+            .map(|record| record.id.clone())
+            .collect();
+        for id in &ids {
+            if let Some(found) = job.load_detection(id).map_err(|e| e.to_string())? {
+                let (mask, ink) = (translated_mask(&found.mask, shift(at)), translated_mask(&found.ink, shift(at)));
+                loaded.push((at, found, mask, ink));
+            }
         }
     }
-    let page: Vec<DetectionMasks<'_>> = loaded
+    let detections: Vec<DetectionMasks<'_>> = loaded
         .iter()
-        .map(|found| DetectionMasks {
-            id: &found.record.id,
-            order: found.record.order,
-            mask: &found.mask,
-            ink: &found.ink,
-        })
+        .map(|(_, found, mask, ink)| DetectionMasks { id: &found.record.id, order: found.record.order, mask, ink })
         .collect();
-    let plan = plan_mask_edit(&page, &gesture, mode);
+    let plan = plan_mask_edit(&detections, &gesture, mode);
 
     let mut edit = MaskEdit {
         page_status: String::new(),
-        changed: plan.updated.iter().map(|(id, _, _)| id.clone()).collect(),
+        changed: Vec::new(),
         created: Vec::new(),
-        removed: plan.removed.clone(),
+        removed: Vec::new(),
+        pages: Vec::new(),
     };
     if !plan.is_empty() {
-        // Everything but the pixels and the box stays as Detect left it: the
-        // fit, the group, the pick, the reading order and the padding.
-        let mut updated = Vec::with_capacity(plan.updated.len());
+        let mut changes: Vec<cleaner_core::project::PageDetectionChanges> = pages.iter()
+            .map(|page| cleaner_core::project::PageDetectionChanges {
+                source_idx: page.source_idx,
+                page_id: crate::library::page_id(&located.chapter_id, page.position),
+                ..Default::default()
+            })
+            .collect();
+        // The page holding a mask's top row, by where the mask lies in the
+        // frame. The anchor when no page does, which a mask cut from the
+        // gesture never is.
+        let owner_of = |mask: &Mask| in_frame.iter()
+            .position(|page| mask.bounds.y >= page.y && mask.bounds.y < page.bottom())
+            .unwrap_or(0);
+        let made_on = |job: &Job, changes: &mut Vec<cleaner_core::project::PageDetectionChanges>, at: usize,
+            mut found: cleaner_core::project::LoadedDetection| {
+            found.record.order = order_after_page(job, pages[at].source_idx)
+                .saturating_add(changes[at].created.len() as u32);
+            changes[at].created.push(found);
+        };
         for (id, mask, ink) in plan.updated {
-            let Some(found) = loaded.iter().find(|found| found.record.id == id) else {
+            let Some((at, found, _, _)) = loaded.iter().find(|(_, found, _, _)| found.record.id == id) else {
                 continue;
             };
+            let at = *at;
+            // Back on the page that owns it, where its stored masks are.
+            let back = (-shift(at).0, -shift(at).1);
+            let (mask, ink) = (translated_mask(&mask, back), translated_mask(&ink, back));
+            // Everything but the pixels and the box stays as Detect left it: the
+            // fit, the group, the pick, the reading order and the padding.
             let mut record = found.record.clone();
             record.bbox = mask.bounds;
             let base = if record.padding_px > 0 {
@@ -4773,29 +5069,80 @@ fn edit_detection_mask_at(
                     None
                 }
             };
-            updated.push(cleaner_core::project::LoadedDetection { record, mask, ink, evidence: None, base });
+            let page_rows = (0, i64::from(pages[at].placement.height));
+            if holds_rows(&mask, page_rows.0, page_rows.1) {
+                edit.changed.push(id.clone());
+                changes[at].updated.push(cleaner_core::project::LoadedDetection { record, mask, ink, evidence: None, base });
+                continue;
+            }
+            // Nothing left on its page: it belongs to the page that now holds
+            // its top row, under an id of that page.
+            let to = owner_of(&translated_mask(&mask, shift(at)));
+            let moved = (shift(at).0 - shift(to).0, shift(at).1 - shift(to).1);
+            let mask = translated_mask(&mask, moved);
+            record.bbox = mask.bounds;
+            let found = cleaner_core::project::LoadedDetection {
+                record,
+                ink: translated_mask(&ink, moved),
+                mask,
+                evidence: None,
+                // Cropped as it moves, so no empty row of the page it left is
+                // kept above the page it joins.
+                base: base.and_then(|(base_mask, base_ink)| {
+                    let base_mask = tight(&translated_mask(&base_mask, moved))?;
+                    let base_ink = tight(&translated_mask(&base_ink, moved)).unwrap_or_else(|| base_mask.clone());
+                    Some((base_mask, base_ink))
+                }),
+            };
+            changes[at].removed.push(id.clone());
+            edit.removed.push(id);
+            made_on(&job, &mut changes, to, found);
         }
-        let order = order_after_page(&job, source_idx);
-        let created = plan
-            .created
-            .map(|mask| cleaner_core::project::LoadedDetection {
-                record: hand_detection(source_idx, mask.bounds, order),
+        for id in &plan.removed {
+            if let Some((at, _, _, _)) = loaded.iter().find(|(_, found, _, _)| &found.record.id == id) {
+                changes[*at].removed.push(id.clone());
+                edit.removed.push(id.clone());
+            }
+        }
+        if let Some(mask) = plan.created {
+            let at = owner_of(&mask);
+            let mask = translated_mask(&mask, (-shift(at).0, -shift(at).1));
+            made_on(&job, &mut changes, at, cleaner_core::project::LoadedDetection {
+                record: hand_detection(pages[at].source_idx, mask.bounds, 0),
                 ink: mask.clone(),
                 mask,
                 evidence: None,
                 base: None,
-            })
-            .into_iter()
+            });
+        }
+        let touched: Vec<usize> = (0..pages.len())
+            .filter(|&at| !(changes[at].updated.is_empty() && changes[at].created.is_empty() && changes[at].removed.is_empty()))
             .collect();
-        let page_id = crate::library::page_id(&located.chapter_id, located.page_index);
-        edit.created = job
-            .rewrite_page_detections(source_idx, &page_id, updated, created, &plan.removed)
-            .map_err(|e| e.to_string())?;
+        let changes: Vec<_> = changes.into_iter().enumerate()
+            .filter(|(at, _)| touched.contains(at))
+            .map(|(_, change)| change)
+            .collect();
+        let sources: Vec<usize> = touched.iter().map(|&at| pages[at].source_idx).collect();
+        let page_before = crate::history::capture_pages(&job, &sources);
+        edit.created = job.rewrite_detections(changes).map_err(|e| e.to_string())?.into_iter().flatten().collect();
+        crate::history::record_pages(&job, &located.chapter_id, crate::history::EDIT_DETECTION_LABEL, None, page_before);
+        edit.pages = touched.iter()
+            .map(|&at| EditedPage {
+                page_index: pages[at].position as u32,
+                page_status: page_status(&located.chapter_id, &job.project, pages[at].position),
+            })
+            .collect();
     }
-    edit.page_status = crate::library::page_of(&located.chapter_id, &job.project, located.page_index)
-        .map(|page| page.status.to_owned())
-        .unwrap_or_default();
+    edit.page_status = page_status(&located.chapter_id, &job.project, located.page_index);
     Ok(Some(edit))
+}
+
+/// A page's status as the interface lists it, or empty for a page that is
+/// not there.
+fn page_status(chapter_id: &str, project: &cleaner_core::project::Project, page_index: usize) -> String {
+    crate::library::page_of(chapter_id, project, page_index)
+        .map(|page| page.status.to_owned())
+        .unwrap_or_default()
 }
 
 /// The order a detection added to a page takes: after every detection and
@@ -4912,6 +5259,8 @@ fn approve_held_mask_at(
         pick: run::pick_name(untouched_fallback_pick(Some(&row.reason), row.inside_bubble)).to_owned(),
         ..hand_detection(source_idx, mask.bounds, order_after_page(&job, source_idx))
     };
+    // The page as it was, held row and all, is what Undo puts back.
+    let page_before = crate::history::capture_pages(&job, &[source_idx]);
     // The row leaves in the write that names the detection, or the page
     // would list the warning beside the mask that answered it.
     clear_untouched(&mut job, source_idx, region_id);
@@ -4925,6 +5274,7 @@ fn approve_held_mask_at(
     if padding > 0 {
         pad_detections(&mut job, &located.chapter_id, Some(located.page_index), padding, Some(&created))?;
     }
+    crate::history::record_pages(&job, &located.chapter_id, crate::history::APPROVE_LABEL, None, page_before);
     let page_status = crate::library::page_of(&located.chapter_id, &job.project, located.page_index)
         .map(|page| page.status.to_owned())
         .unwrap_or_default();
@@ -5029,7 +5379,21 @@ pub(crate) fn set_detection_padding_scoped_at(
         None => run::lock_chapter(&located.job_path),
     }?;
     let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
-    pad_detections(&mut job, &located.chapter_id, page_index, padding, region_id)
+    // Only the pages holding a detection can change, and a chapter-wide
+    // padding is one undo step for all of them.
+    let sources: Vec<usize> = match page_index {
+        Some(index) => Library::resolve_page(&job.project, index).into_iter().collect(),
+        None => {
+            let mut held: Vec<usize> = job.project.detections.iter().map(|row| row.source_idx).collect();
+            held.sort_unstable();
+            held.dedup();
+            held
+        }
+    };
+    let page_before = crate::history::capture_pages(&job, &sources);
+    let edit = pad_detections(&mut job, &located.chapter_id, page_index, padding, region_id)?;
+    crate::history::record_pages(&job, &located.chapter_id, crate::history::PADDING_LABEL, None, page_before);
+    Ok(edit)
 }
 
 /// [`set_detection_padding_scoped_at`]'s work, on a job the caller holds.
@@ -5090,8 +5454,8 @@ fn pad_detections(
                 if let Some(fitted) = &mut record.fit { fitted.thickness = padding; }
             }
             updated.push(cleaner_core::project::LoadedDetection {
-                mask: base_mask.dilated(padding, width, height),
-                ink: base_ink.dilated(padding, width, height),
+                mask: dilated_on_page(&base_mask, padding, (width, height)),
+                ink: dilated_on_page(&base_ink, padding, (width, height)),
                 base: (padding > 0).then_some((base_mask, base_ink)),
                 record,
                 evidence: None,
@@ -5193,10 +5557,13 @@ pub(crate) fn run_together(
             let (Some(first), Some(second)) = (&shown[a], &shown[b]) else {
                 continue;
             };
-            if intersection(first.bounds.grown(MERGE_REACH, width, height), second.bounds).is_none() {
+            let room = page_reach(first.bounds, MERGE_REACH, (width, height));
+            let near = Rect::new(first.bounds.x - i64::from(MERGE_REACH), first.bounds.y - i64::from(MERGE_REACH),
+                first.bounds.w + 2 * MERGE_REACH, first.bounds.h + 2 * MERGE_REACH);
+            if intersection(near, room).and_then(|near| intersection(near, second.bounds)).is_none() {
                 continue;
             }
-            let grown = reach[a].get_or_insert_with(|| first.dilated(MERGE_REACH, width, height));
+            let grown = reach[a].get_or_insert_with(|| dilated_on_page(first, MERGE_REACH, (width, height)));
             if grown.intersects(second) {
                 let (a, b) = (find(&mut root, a), find(&mut root, b));
                 root[a.max(b)] = a.min(b);
@@ -5267,7 +5634,8 @@ pub(crate) fn made_one(
 
     let together = |of: &dyn Fn(&cleaner_core::project::LoadedDetection) -> &Mask| {
         let masks: Vec<&Mask> = members.iter().map(of).collect();
-        Mask::union(&masks, width, height)
+        let all = masks.iter().fold(Rect::new(0, 0, 0, 0), |all, mask| span(all, mask.bounds));
+        Mask::union_within(&masks, page_reach(all, 0, (width, height)))
     };
     let mask = together(&|found| &found.mask);
     let ink = together(&|found| &found.ink);
@@ -5342,21 +5710,33 @@ impl MaskEditMode {
     }
 }
 
-/// The gesture as a mask over the page. `None` when it does not parse, is a
-/// line, or covers nothing on the page. A stroke, when there is one, is the
+/// The gesture as a mask over `frame`, in frame pixels. The gesture is in the
+/// anchor page's percent, as the interface measured it; a frame that is the
+/// anchor page itself reads it as it is. `None` when it does not parse, is a
+/// line, or covers nothing in the frame. A stroke, when there is one, is the
 /// gesture and the shape is not looked at.
 fn gesture_mask(
     stroke: Option<&serde_json::Value>,
     painted: Option<&serde_json::Value>,
-    width: u32,
-    height: u32,
+    frame: GestureFrame,
 ) -> Option<Mask> {
+    let moved = frame.frame != frame.anchor.rect();
+    let (width, height) = (frame.frame.w, frame.frame.h);
     match stroke.filter(|value| !value.is_null()) {
-        Some(value) => stroke_mask(&PaintedStroke::deserialize(value).ok()?, width, height),
+        Some(value) => {
+            let mut stroke = PaintedStroke::deserialize(value).ok()?;
+            if moved {
+                frame.stroke(&mut stroke);
+            }
+            stroke_mask(&stroke, width, height)
+        }
         None => {
-            let shape = PaintedShape::deserialize(painted?).ok()?;
+            let mut shape = PaintedShape::deserialize(painted?).ok()?;
             if shape.kind == ShapeKind::Line {
                 return None;
+            }
+            if moved {
+                frame.shape(&mut shape);
             }
             shape_mask(&shape, width, height)
         }
@@ -5535,7 +5915,7 @@ pub(crate) fn area_detection_less_held(
 ) -> Option<cleaner_core::project::LoadedDetection> {
     let rims: Vec<Mask> = held.iter()
         .filter_map(|kept| display_set(&kept.mask, &kept.ink))
-        .map(|display| display.dilated(HELD_RIM, width, height))
+        .map(|display| dilated_on_page(&display, HELD_RIM, (width, height)))
         .filter(|rim| found.mask.intersects(rim) || found.ink.intersects(rim))
         .collect();
     if rims.is_empty() {
@@ -5606,6 +5986,30 @@ fn without_slivers(mut mask: Mask, rims: &[Mask]) -> Mask {
         }
     }
     mask
+}
+
+/// Where a detection whose masks lie in `bounds` may grow by `by`: its page,
+/// widened on each side the masks already reach past it, by `by` more.
+///
+/// A longstrip detection is stored on the page holding its top row, and its
+/// masks may hang over the join into the page below (or, rarely, above).
+/// Padding it, cutting a held rim from it or joining it to another must keep
+/// what hangs, so the clamp moves out on that side only. A mask inside its
+/// page, every mask on a chapter of single pages, gets the page, so it is
+/// clamped as it always was.
+fn page_reach(bounds: Rect, by: u32, (width, height): (u32, u32)) -> Rect {
+    let by = i64::from(by);
+    let x0 = if bounds.x < 0 { bounds.x - by } else { 0 };
+    let y0 = if bounds.y < 0 { bounds.y - by } else { 0 };
+    let x1 = if bounds.right() > i64::from(width) { bounds.right() + by } else { i64::from(width) };
+    let y1 = if bounds.bottom() > i64::from(height) { bounds.bottom() + by } else { i64::from(height) };
+    Rect::new(x0, y0, (x1 - x0).max(0) as u32, (y1 - y0).max(0) as u32)
+}
+
+/// `mask` grown by `radius` within [`page_reach`]: [`Mask::dilated`] for a
+/// mask on its page, and one that keeps a longstrip overhang.
+fn dilated_on_page(mask: &Mask, radius: u32, size: (u32, u32)) -> Mask {
+    mask.dilated_within(radius, page_reach(mask.bounds, radius, size))
 }
 
 /// The smallest rectangle holding both. A rectangle with no area holds
@@ -6004,138 +6408,6 @@ fn current_region(
     ))
 }
 
-/// Cap the native working window and dab count before allocating the preview.
-/// A clone composites its stroke's box twice, once where it lands and once
-/// where it reads, however far apart the two are.
-fn paint_preview_fits(paint: &PaintPlan, width: u32, height: u32) -> bool {
-    if paint.points.is_empty() || paint.points.len() > 8192 { return false; }
-    let points: Vec<(f64,f64)> = paint.points.iter().map(|p|
-        (p.x * width as f64 / 100.0, p.y * height as f64 / 100.0)).collect();
-    if points.iter().any(|(x,y)| !x.is_finite() || !y.is_finite()) { return false; }
-    let radius = paint.spec.size * 2.0;
-    let windows = match paint.kind {
-        PaintKind::Clone { .. } => 2.0,
-        PaintKind::Shape { .. } | PaintKind::RegionCopy { .. } => return false,
-        PaintKind::Brush { .. } => 1.0,
-    };
-    let extent = |axis: usize| {
-        let values = points.iter().map(|p| if axis == 0 {p.0} else {p.1});
-        values.clone().fold(f64::NEG_INFINITY, f64::max) - values.fold(f64::INFINITY, f64::min) + radius
-    };
-    let area = extent(0).min(width as f64) * extent(1).min(height as f64) * windows;
-    let length: f64 = points.windows(2).map(|p| (p[1].0-p[0].0).hypot(p[1].1-p[0].1)).sum();
-    let step = (paint.spec.size * paint.spec.spacing.clamp(1.0,50.0)/100.0).max(0.01);
-    let dabs = 1.0 + length / step;
-    let visits = dabs * (paint.spec.size + 2.0).powi(2).min(area);
-    area.is_finite() && area <= 4_194_304.0 && dabs <= 16384.0 && visits <= 67_108_864.0
-}
-
-/// Read-only authoritative paint preview. Pixels come from the same native
-/// renderer as commit, then cross the managed display boundary exactly once.
-///
-/// **Only the paint, on the page's own proxy grid.** `png` is see-through
-/// everywhere the stroke is not, and where the stroke is it holds the pixels
-/// the page's tiles will hold once it is committed
-/// (`proxy::managed_proxy_overlay`). So the interface lays it over those tiles
-/// and the artwork around the stroke is never redrawn. It used to be the
-/// stroke's whole box at the page's own resolution, opaque: the browser then
-/// scaled the box and the tiles under it apart, and the page inside the box
-/// shifted for as long as the stroke lasted.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaintPreview {
-    request_id: u64,
-    revision: String,
-    chapter_id: String,
-    page_index: u32,
-    bounds: Bbox,
-    png: Vec<u8>,
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn preview_paint(
-    app: tauri::AppHandle,
-    chapter_id: String,
-    page_index: u32,
-    tool: String,
-    params: serde_json::Value,
-    request_id: u64,
-    revision: String,
-    source_index: Option<usize>,
-    source_sha: Option<String>,
-) -> Result<Option<PaintPreview>, String> {
-    crate::library::blocking(move || {
-        let Some(mut paint) = paint_plan(&tool, &params) else { return Ok(None) };
-        if paint.points.len() > 8192 { return Err("paint preview point limit exceeded".into()); }
-        let library = Library::for_app(&app)?;
-        let Some(located) = locate_page(&library, &chapter_id, page_index as usize)? else { return Ok(None) };
-        let _lock = run::lock_job(&located.job_path)?;
-        let job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
-        let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else { return Ok(None) };
-        if source_index.is_some_and(|index|index!=source_idx) || source_sha.as_ref().is_some_and(|sha|sha!=&job.project.sources[source_idx].sha256) { return Ok(None); }
-        let Some(path) = job.source_path(source_idx) else { return Ok(None) };
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        let page = job.display_page(source_idx, &bytes).map_err(|e| e.to_string())?;
-        if !paint_preview_fits(&paint, page.width, page.height) { return Ok(None); }
-        let strip = run::strip_of(&job.project);
-        let anchor = strip.pages().get(located.page_index).copied();
-        let mut shift = (0,0);
-        let window_page;
-        let page_to_paint = if job.project.strip.mode == cleaner_core::project::StripMode::Longstrip {
-            let target = params.get("previewBbox").and_then(|v| serde_json::from_value::<Bbox>(v.clone()).ok())
-                .map(|bbox| pixels_of(bbox, page.width, page.height));
-            if let Some((requested, anchor)) = target.map(|r|manual_requested(r,Some(&paint),anchor)).zip(anchor)
-                .filter(|(r,p)|r.x<0 || r.y<0 || r.right()>p.width as i64 || r.bottom()>p.height as i64) {
-                let global = Rect::new(requested.x+anchor.x_offset, requested.y+anchor.y_offset,requested.w,requested.h);
-                let mut joins = cleaner_core::strip::Joins::unchecked(strip.joins());
-                for join in 0..strip.joins() { joins.set(join,cleaner_core::strip::JoinState::Verified); }
-                let window = cleaner_core::strip::decode_window(&strip,&joins,global,1.0,cleaner_core::strip::EngineContext::None);
-                if u64::from(window.rect.w)*u64::from(window.rect.h)>4_194_304 { return Ok(None); }
-                let read = cleaner_core::strip::read_window_borrowing(&strip,window,|position| {
-                    if position==located.page_index { return Ok(Cow::Borrowed(&page)); }
-                    let source = Library::resolve_page(&job.project,position).ok_or_else(||"preview strip page missing".to_owned())?;
-                    let path = job.source_path(source).ok_or_else(||"preview source missing".to_owned())?;
-                    let data = std::fs::read(path).map_err(|e|e.to_string())?;
-                    job.display_page(source,&data).map(Cow::Owned).map_err(|e|e.to_string())
-                })?;
-                shift=(read.origin.0-anchor.x_offset,read.origin.1-anchor.y_offset);
-                remap_paint(&mut paint,anchor,read.origin,read.raster.width,read.raster.height);
-                window_page=read.raster;
-                &window_page
-            } else { &page }
-        } else { &page };
-        let context = (job.project.strip.mode == cleaner_core::project::StripMode::Longstrip)
-            .then_some(StripPaintContext { strip: &strip, order: &job.project.strip.order, origin: (anchor.map_or(0, |p| p.x_offset)+shift.0, anchor.map_or(0, |p| p.y_offset)+shift.1) });
-        let (mut made, _, _) = paint_patch(&job, source_idx, page_to_paint, &paint, next_order(&job, source_idx), context)
-            .map_err(str::to_owned)?;
-        translate_made(&mut made,shift);
-        let bounds = made.mask.bounds;
-        if u64::from(bounds.w) * u64::from(bounds.h) > 4_194_304 { return Ok(None); }
-        let Some((bounds, layer)) = preview_layer(&made.pixels, &made.mask, page.width, page.height)? else { return Ok(None) };
-        let png = cleaner_core::image::encode(&layer, cleaner_core::image::Format::Png).map_err(|e|e.to_string())?;
-        Ok(Some(PaintPreview { request_id, revision, chapter_id, page_index, bounds, png }))
-    }).await
-}
-
-/// A previewed stroke as the interface draws it: where it sits, in percent of
-/// the page, and its see-through pixels on that page's proxy grid.
-///
-/// The mask may run past the page - a longstrip stroke over a join does - so
-/// the percentages may start below 0 or end above 100.
-fn preview_layer(pixels: &Raster, mask: &Mask, page_w: u32, page_h: u32) -> Result<Option<(Bbox, Raster)>, String> {
-    use cleaner_core::image::proxy::{managed_proxy_overlay, ProxyPlan};
-    let plan = ProxyPlan::for_page(page_w, page_h);
-    let Some((rect, layer)) = managed_proxy_overlay(pixels, mask, &plan).map_err(|e| e.to_string())? else { return Ok(None) };
-    let percent = |value: f64, total: u32| value * 100.0 / f64::from(total);
-    Ok(Some((Bbox {
-        x: percent(rect.x as f64, plan.proxy_w),
-        y: percent(rect.y as f64, plan.proxy_h),
-        w: percent(f64::from(rect.w), plan.proxy_w),
-        h: percent(f64::from(rect.h), plan.proxy_h),
-    }, layer)))
-}
-
 /// `cleanAnyway` - clean a region the script gate held back, on the user's
 /// say-so.
 ///
@@ -6250,7 +6522,7 @@ fn clean_anyway_plan(
     color: Option<[u8; 3]>,
     exact: bool,
 ) -> Result<Plan, String> {
-    let geometry = existing_geometry(located, region_id)?;
+    let (geometry, hangs) = existing_geometry(located, region_id)?;
     let row = untouched_reason(located, region_id)?;
     let fallback = untouched_fallback_pick(
         row.as_ref().map(|(reason, _)| reason.as_str()),
@@ -6272,7 +6544,7 @@ fn clean_anyway_plan(
         // `cleanAnyway` answers the gate, which nothing painted ever met.
         paint: None,
         clears_untouched: true,
-        requested: None,
+        requested: hangs,
         stroke: None,
         drawn: None,
     })
@@ -6477,7 +6749,7 @@ mod tests {
         let ink = Mask::filled(Rect::new(41, 39, 14, 8));
         store_a_detection(&located, "chapter-p001-d0", &mask, &ink, 4);
         store_a_detection(&located, "chapter-p001-d1", &mask, &ink, 5);
-        assert!(matches!(existing_geometry(&located, "chapter-p001-d0").unwrap(),
+        assert!(matches!(existing_geometry(&located, "chapter-p001-d0").unwrap().0,
             Geometry::StoredDetection));
         assert_eq!(job_page_id("chapter-p001-d0"), "chapter-p001");
 
@@ -6749,13 +7021,13 @@ mod tests {
         Job::open(&located.job_path).unwrap()
             .hold_candidate(0, bounds, "review.reason.isolatedMask", true).unwrap();
         let region_id = untouched_id(&format!("{}-p001", located.chapter_id), bounds);
-        assert!(matches!(existing_geometry(&located, &region_id).unwrap(),
+        assert!(matches!(existing_geometry(&located, &region_id).unwrap().0,
             Geometry::Detected(rect) if rect == bounds));
     }
 
     /// A held row on a blank 128 px page, with the lettering a run would have
     /// kept beside it (`None` for a row stored before rows kept any).
-    fn held_row_fixture(name: &str, bbox: Rect, reason: &str, lettering: Option<&Mask>) -> (Located, String) {
+    pub(super) fn held_row_fixture(name: &str, bbox: Rect, reason: &str, lettering: Option<&Mask>) -> (Located, String) {
         let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
         raw.width = 128;
         raw.height = 128;
@@ -6774,7 +7046,7 @@ mod tests {
     }
 
     /// Two glyph blobs at the ends of their box, whose middle is paper.
-    fn two_glyphs() -> Mask {
+    pub(super) fn two_glyphs() -> Mask {
         let mut lettering = Mask::empty(Rect::new(20, 20, 40, 10));
         for x0 in [20, 54] {
             for y in 20..30 {
@@ -6897,6 +7169,70 @@ mod tests {
         }
     }
 
+    /// A Brush layer made through the real commit, then erased: part way
+    /// leaves less coverage under a new revision, all the way takes the layer
+    /// off the page with its last coverage kept, and the revision before the
+    /// erase still puts the stroke back. Paint that is not the Brush's is
+    /// never touched.
+    #[test]
+    fn the_eraser_takes_brush_paint_off_and_leaves_a_way_back() {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128; raw.height = 128; raw.data = vec![0; 128 * 128];
+        let (root, located) = edit_fixture("eraser", &raw);
+        let paint = |tool: &str, id: &str, x: f64| {
+            let params = serde_json::json!({"mode": if tool == "shapes" { "solid" } else { "paint" },
+                "paint": {"points": [{"x": x, "y": 50.0, "p": 1.0}, {"x": x + 20.0, "y": 50.0, "p": 1.0}],
+                    "size": 16.0, "hardness": 100.0, "color": "#ffffff"},
+                "painted": {"kind": "rect", "points": [{"x": x, "y": 45.0}, {"x": x + 20.0, "y": 45.0},
+                    {"x": x + 20.0, "y": 55.0}, {"x": x, "y": 55.0}], "feather": 0}});
+            let bounds = Rect::new((x * 1.28) as i64 - 10, 54, 46, 20);
+            let mut plan = fixture_plan(id, Geometry::Given(bounds), Engine::Paint, bounds);
+            plan.tool = Some(tool.into());
+            plan.paint = paint_plan(tool, &params);
+            assert!(plan.paint.is_some(), "{tool}");
+            assert!(matches!(edit_with_bench(&mut test_bench(&root), Engine::Fill, &located, plan).unwrap(), Outcome::Cleaned(_)));
+        };
+        paint("brush", "stroke", 20.0);
+        paint("shapes", "shape", 20.0);
+        let spec = |size: f64| cleaner_core::paint::BrushSpec { size, hardness: 100.0, opacity: 100.0, flow: 100.0,
+            ..cleaner_core::paint::BrushSpec::default() };
+        let point = |x: f64| ErasePoint { x, y: 50.0, p: Some(1.0) };
+
+        // Across the middle of the stroke only.
+        let first = erase_paint_at(&located, None, &[point(30.0)], &spec(8.0)).unwrap().unwrap();
+        assert_eq!(first.erased.len(), 1, "only the Brush layer");
+        let layer = &first.erased[0];
+        assert_eq!(layer.region_id, "stroke");
+        let after = layer.after.as_ref().expect("still on the page");
+        let revision = |region: &ApiRegion| region.mask.as_ref().unwrap().legacy_patch_revision.clone().unwrap();
+        assert_ne!(revision(&layer.before), revision(after));
+        let job = Job::open(&located.job_path).unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "stroke").unwrap();
+        let patch = job.load_display_patch(record).unwrap();
+        assert_eq!(patch.mask.coverage(38, 64), 0);
+        assert_eq!(patch.mask.coverage(30, 64), 255);
+        let shape = job.project.patches.iter().find(|r| r.id == "shape").unwrap();
+        assert!(job.load_display_patch(shape).unwrap().mask.coverage(38, 64) > 0, "a shape is not Brush paint");
+        drop(job);
+
+        // Over all of it.
+        let second = erase_paint_at(&located, None, &[point(10.0), point(50.0)], &spec(60.0)).unwrap().unwrap();
+        assert_eq!(second.erased.len(), 1);
+        assert!(second.erased[0].after.is_none(), "nothing left, off the page");
+        let mut job = Job::open(&located.job_path).unwrap();
+        assert!(!job.project.patches.iter().find(|r| r.id == "stroke").unwrap().visible);
+
+        // The revision from before the first erase is still there to undo to.
+        assert!(job.restore_legacy_revision("stroke", &revision(&layer.before)).unwrap());
+        let record = job.project.patches.iter().find(|r| r.id == "stroke").unwrap();
+        assert_eq!(job.load_display_patch(record).unwrap().mask.coverage(38, 64), 255);
+
+        // A stroke that crosses no paint answers an empty list.
+        let none = erase_paint_at(&located, None, &[point(95.0)], &spec(4.0)).unwrap().unwrap();
+        assert!(none.erased.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn regional_copy_keeps_frozen_artwork_and_blends_at_its_new_destination() {
         let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
@@ -6956,7 +7292,7 @@ mod tests {
                 assert_eq!((copied.pixels.mode, copied.pixels.depth), (raw.mode, raw.depth));
                 // Stored buffers contain samples; the composited page carries
                 // the source profile and palette into native export.
-                let composited = cleaner_core::composite::composite(&raw, &[copied.clone()]).unwrap();
+                let composited = cleaner_core::composite::composite(&raw, std::slice::from_ref(&copied)).unwrap();
                 assert_eq!(composited.icc, raw.icc);
                 assert_eq!(composited.palette, raw.palette);
                 for y in 0..copied.pixels.height {
@@ -7793,74 +8129,6 @@ mod tests {
     }
 
     #[test]
-    fn paint_preview_limits_count_both_clone_windows_and_dab_work() {
-        let mut paint = PaintPlan {
-            kind: PaintKind::Brush { color: [128; 3] },
-            points: vec![PaintPoint { x: 50.0, y: 50.0, p: 1.0 }],
-            spec: cleaner_core::paint::BrushSpec::default(), alignment: "aligned",
-        };
-        assert!(paint_preview_fits(&paint, 10000, 10000));
-        // A source across the page costs no more than one beside the stroke:
-        // the two windows are composited apart, not as the box around both.
-        paint.kind = PaintKind::Clone { offset: (80.0,80.0) };
-        assert!(paint_preview_fits(&paint, 10000, 10000));
-        // But there are two of them, so a stroke that just fits as paint is
-        // too much as a clone.
-        paint.points.push(PaintPoint { x: 65.0, y: 68.0, p: 1.0 });
-        assert!(!paint_preview_fits(&paint, 10000, 10000));
-        paint.kind = PaintKind::Brush { color: [128;3] };
-        assert!(paint_preview_fits(&paint, 10000, 10000));
-        paint.points.pop();
-        paint.spec.size = 1.0;
-        paint.spec.spacing = 1.0;
-        paint.points.push(PaintPoint { x: 60.0,y: 50.0,p: 1.0 });
-        assert!(!paint_preview_fits(&paint,10000,10000));
-    }
-
-    /// What the interface lays over the page's tiles while a stroke is drawn
-    /// is the stroke and nothing else: clear in the corners of its own box,
-    /// solid along its path, and placed on the page's proxy grid - which is
-    /// what keeps the artwork around a stroke from moving under it.
-    #[test]
-    fn a_previewed_stroke_is_only_its_own_paint_on_the_proxy_grid() {
-        use cleaner_core::image::proxy::ProxyPlan;
-        use cleaner_core::image::{BitDepth, ColorMode};
-        use cleaner_core::paint::{render_brush, BrushSpec, StrokePoint};
-        let page = Raster {
-            width: 2400, height: 3000, mode: ColorMode::Gray, depth: BitDepth::Eight,
-            icc: None, palette: None, trns: None, srgb_intent: None, color: Default::default(),
-            data: vec![200; 2400 * 3000],
-        };
-        let spec = BrushSpec { size: 40.0, hardness: 100.0, pressure_size: false, ..BrushSpec::default() };
-        let points = [StrokePoint { x: 600.0, y: 900.0, p: 1.0 }, StrokePoint { x: 1100.0, y: 1300.0, p: 1.0 }];
-        let painted = render_brush(&page, &[], None, &points, &spec, [0, 0, 0]).unwrap();
-
-        let plan = ProxyPlan::for_page(page.width, page.height);
-        let (bounds, layer) = preview_layer(&painted.pixels, &painted.mask, page.width, page.height).unwrap().unwrap();
-        assert_eq!(layer.mode, ColorMode::Rgba);
-        // Whole proxy pixels, so the layer lines up with the tiles under it.
-        let on_grid = |percent: f64, proxy: u32| percent / 100.0 * f64::from(proxy);
-        assert_eq!(on_grid(bounds.w, plan.proxy_w).round() as u32, layer.width);
-        assert_eq!(on_grid(bounds.h, plan.proxy_h).round() as u32, layer.height);
-        assert!((on_grid(bounds.x, plan.proxy_w) - on_grid(bounds.x, plan.proxy_w).round()).abs() < 1e-9);
-        assert!(layer.width < painted.mask.bounds.w, "the layer is still at the page's own resolution");
-
-        // The stroke runs corner to corner of its box, so the other two
-        // corners are page the stroke never touched.
-        assert_eq!(layer.sample(layer.width - 2, 1, 3), 0, "the box's corner was redrawn");
-        assert_eq!(layer.sample(1, layer.height - 2, 3), 0, "the box's corner was redrawn");
-        let middle = (layer.width / 2, layer.height / 2);
-        assert_eq!(layer.sample(middle.0, middle.1, 3), 255);
-        assert_eq!(layer.sample(middle.0, middle.1, 0), 0, "the paint is not the colour that was asked for");
-
-        // A stroke that ran onto the next page of a strip is still shown there.
-        let mut below = painted.mask.clone();
-        below.bounds.y += 2000;
-        let (bounds, _) = preview_layer(&painted.pixels, &below, page.width, page.height).unwrap().unwrap();
-        assert!(bounds.y < 100.0 && bounds.y + bounds.h > 100.0, "{bounds:?}");
-    }
-
-    #[test]
     fn preview_and_commit_remap_cross_join_clone_to_same_native_locations() {
         let strip = cleaner_core::strip::Strip::of_sizes(&[(100,100),(100,100)]);
         let anchor = strip.pages()[0];
@@ -7869,7 +8137,7 @@ mod tests {
             points: vec![PaintPoint { x:50.0,y:95.0,p:1.0 }],
             spec: cleaner_core::paint::BrushSpec::default(), alignment: "aligned",
         };
-        remap_paint(&mut paint,anchor,(20,80),60,80);
+        GestureFrame { anchor, frame: Rect::new(20, 80, 60, 80) }.paint(&mut paint);
         assert_eq!(paint.points[0].x,50.0);
         assert_eq!(paint.points[0].y,18.75);
         let PaintKind::Clone { offset,.. } = paint.kind else { panic!("not clone") };
@@ -7877,7 +8145,7 @@ mod tests {
         assert_eq!(offset,(0.0,-37.5));
     }
 
-    fn strip_edit_fixture(name: &str) -> (PathBuf, Located) {
+    pub(super) fn strip_edit_fixture(name: &str) -> (PathBuf, Located) {
         use cleaner_core::image::{encode, fixtures, Format};
         use cleaner_core::ingest::source_ref;
         use cleaner_core::project::{Project, StripMode};
@@ -7998,7 +8266,7 @@ mod tests {
         assert!(provisional.prepare(20, 20).is_ok());
     }
 
-    fn test_bench(root: &std::path::Path) -> Bench {
+    pub(super) fn test_bench(root: &std::path::Path) -> Bench {
         let models = root.join("no-models");
         Bench {
             app_data: None,
@@ -9780,7 +10048,7 @@ mod tests {
             assert_eq!(committed.sample(tx,ty,0),visible.sample(sx,ty,0),"clone orientation {value}");
             let record=job.project.patches[0].clone();let mut journal=crate::history::Journal::default();
             let state=crate::history::Side{present:true,page_status:Some("cleaned".into()),region:None};
-            journal.push(crate::history::NewDelta{label:"clone".into(),op:"region-state".into(),region_id:record.id.clone(),before:crate::history::Side{present:false,page_status:Some("unclean".into()),region:None},after:state},crate::history::UNDO_LIMIT_DEFAULT);
+            journal.push(crate::history::NewDelta{label:"clone".into(),op:"region-state".into(),region_id:record.id.clone(),before:crate::history::Side{present:false,page_status:Some("unclean".into()),region:None},after:state, ..Default::default() },crate::history::UNDO_LIMIT_DEFAULT);
             crate::history::save(job.path(),&journal).unwrap();let mut recovered=crate::history::load(job.path());
             assert_eq!(recovered.undo().unwrap().region_id,record.id);job.project.patches[0].visible=false;job.flush().unwrap();
             assert_eq!(crate::tile::render(job.path(),0,crate::tile::Variant::Cleaned,None).unwrap(),crate::tile::render(job.path(),0,crate::tile::Variant::Source,None).unwrap());
@@ -10103,7 +10371,8 @@ mod mask_edit_tests {
         let grown = edit_detection_mask_at(&located, Some(&expected), MaskEditMode::Add, None,
             Some(&rect(12.0, 9.0, 20.0, 15.0))).unwrap().expect("an edit");
         assert_eq!(grown, MaskEdit { page_status: "detected".into(), changed: vec![first.clone()],
-            created: vec![], removed: vec![] });
+            created: vec![], removed: vec![],
+            pages: vec![EditedPage { page_index: 0, page_status: "detected".into() }] });
         let job = Job::open(&located.job_path).unwrap();
         let stored = job.load_detection(&first).unwrap().unwrap();
         assert_eq!(stored.record.mask_ref, format!("detections/{first}.e1.mask"));
@@ -10132,7 +10401,8 @@ mod mask_edit_tests {
         let manifest = std::fs::read(&located.job_path).unwrap();
         let nothing = edit_detection_mask_at(&located, None, MaskEditMode::Remove, None,
             Some(&rect(56.0, 0.0, 64.0, 6.0))).unwrap().expect("an answer");
-        assert_eq!(nothing, MaskEdit { page_status: "detected".into(), changed: vec![], created: vec![], removed: vec![] });
+        assert_eq!(nothing, MaskEdit { page_status: "detected".into(), changed: vec![], created: vec![], removed: vec![],
+            pages: vec![] });
         assert_eq!(std::fs::read(&located.job_path).unwrap(), manifest);
 
         // Erasing the dot removes it and its files; the first is not touched.
@@ -10173,6 +10443,171 @@ mod mask_edit_tests {
         assert_eq!(std::fs::read(&elsewhere.job_path).unwrap(), manifest);
         assert_eq!(MaskEditMode::parse("erase"), None);
         assert_eq!(MaskEditMode::parse("add"), Some(MaskEditMode::Add));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /* ---------- undo of detection edits (`history::DETECTION_OP`) ---------- */
+
+    /// Each detection on the page, by id, with its masks and padding: what an
+    /// undo must give back exactly.
+    fn detection_state(job_path: &std::path::Path) -> Vec<(String, Mask, Mask, u32, bool)> {
+        let job = Job::open(job_path).unwrap();
+        let mut state: Vec<_> = job.project.detections.iter().map(|row| {
+            let found = job.load_detection(&row.id).unwrap().unwrap();
+            (row.id.clone(), found.mask, found.ink, row.padding_px, row.inside)
+        }).collect();
+        state.sort_by(|a, b| a.0.cmp(&b.0));
+        state
+    }
+
+    fn step(located: &Located, direction: &str) -> crate::history::HistoryStep {
+        crate::history::move_at(&located.job_path, &located.chapter_id, direction).unwrap()
+    }
+
+    /// A brush edit, a padding and an erase are three undo steps. Undo walks
+    /// the page back through each state exactly, masks and all, and Redo
+    /// walks it forward again, though the erase deleted the files.
+    #[test]
+    fn detection_edits_undo_and_redo_exactly() {
+        let (root, located, _) = page_with_a_detection("undo-edits");
+        let start = detection_state(&located.job_path);
+        edit_detection_mask_at(&located, None, MaskEditMode::Add, None, Some(&rect(12.0, 9.0, 20.0, 15.0)))
+            .unwrap().expect("an edit");
+        let grown = detection_state(&located.job_path);
+        set_detection_padding_at(&located, Some(0), 4).unwrap();
+        let padded = detection_state(&located.job_path);
+        edit_detection_mask_at(&located, None, MaskEditMode::Remove, None, Some(&rect(0.0, 0.0, 64.0, 48.0)))
+            .unwrap().expect("an edit");
+        assert!(detection_state(&located.job_path).is_empty());
+
+        let journal = crate::history::load(&located.job_path);
+        let labels: Vec<_> = journal.entries.iter().map(|entry| entry.label.as_str()).collect();
+        assert_eq!(labels, [crate::history::EDIT_DETECTION_LABEL, crate::history::PADDING_LABEL,
+            crate::history::EDIT_DETECTION_LABEL]);
+        assert!(journal.entries.iter().all(|entry| entry.op == crate::history::DETECTION_OP && entry.pages.len() == 1));
+
+        for expected in [&padded, &grown, &start] {
+            let undone = step(&located, "undo");
+            assert_eq!((undone.refused.as_deref(), undone.pages.as_slice()), (None, [0usize].as_slice()));
+            assert_eq!(&detection_state(&located.job_path), expected);
+        }
+        for expected in [&grown, &padded] {
+            step(&located, "redo");
+            assert_eq!(&detection_state(&located.job_path), expected);
+        }
+        step(&located, "redo");
+        assert!(detection_state(&located.job_path).is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A page something outside the journal changed is not written over: the
+    /// step is refused as stale, nothing changes, and the cursor still moves
+    /// so the steps below it stay reachable.
+    #[test]
+    fn a_detection_undo_over_a_page_changed_since_is_refused() {
+        let (root, located, id) = page_with_a_detection("undo-stale");
+        edit_detection_mask_at(&located, None, MaskEditMode::Add, None, Some(&rect(12.0, 9.0, 20.0, 15.0)))
+            .unwrap().expect("an edit");
+        Job::open(&located.job_path).unwrap().remove_detection(&id).unwrap().expect("removed");
+        let manifest = std::fs::read(&located.job_path).unwrap();
+        let undone = step(&located, "undo");
+        assert_eq!(undone.refused.as_deref(), Some(crate::history::STALE));
+        assert_eq!(undone.cursor, 0);
+        assert_eq!(std::fs::read(&located.job_path).unwrap(), manifest);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Text type, approval of a held row and dismissal of one are undo steps
+    /// too, and each puts the page back as it was: the held row returns with
+    /// its count's place and its lettering, the detection leaves.
+    #[test]
+    fn approving_and_dismissing_held_rows_undo() {
+        let lettering = super::tests::two_glyphs();
+        let (located, region_id) = super::tests::held_row_fixture("undo-approve", Rect::new(16, 16, 48, 18),
+            "review.reason.gateSkippedOutsideBubble", Some(&lettering));
+        let rows = |located: &Located| Job::open(&located.job_path).unwrap().project.regions_untouched.clone();
+        let held = rows(&located);
+        let approved = approve_held_mask_at(&located, &region_id, 0, |_, _, _| None).unwrap().expect("approved");
+        assert!(rows(&located).is_empty());
+
+        step(&located, "undo");
+        assert_eq!(rows(&located), held);
+        assert!(detection_state(&located.job_path).is_empty());
+        let job = Job::open(&located.job_path).unwrap();
+        assert_eq!(job.load_held_lettering(&held[0]).unwrap().map(|(mask, _)| mask), Some(lettering.clone()));
+
+        step(&located, "redo");
+        assert!(rows(&located).is_empty());
+        let state = detection_state(&located.job_path);
+        assert_eq!(state.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(), [approved.region_id.as_str()]);
+
+        // The type of the approved detection, then back to the held row and
+        // a dismissal of it.
+        let root = std::env::temp_dir().join(format!("mc-region-command-undo-approve-{}", std::process::id()));
+        let library = Library::at(root.join("library"));
+        library.set_detection_inside(&approved.region_id, true).unwrap().expect("a detection");
+        assert!(detection_state(&located.job_path)[0].4);
+        step(&located, "undo");
+        assert!(!detection_state(&located.job_path)[0].4);
+        step(&located, "undo");
+        assert_eq!(rows(&located), held);
+        library.dismiss_region(&region_id).unwrap().expect("dismissed");
+        assert!(rows(&located).is_empty());
+        let labels: Vec<_> = crate::history::load(&located.job_path).entries.iter()
+            .map(|entry| entry.label.clone()).collect();
+        // A new edit drops the two undone steps, as every push does.
+        assert_eq!(labels, [crate::history::DISMISS_LABEL]);
+        step(&located, "undo");
+        assert_eq!(rows(&located), held);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The page states a dropped future named go at the next sweep, and the
+    /// states the journal still names stay and still replay.
+    #[test]
+    fn the_sweep_keeps_only_what_the_journal_names() {
+        let (root, located, _) = page_with_a_detection("undo-sweep");
+        let blobs = || std::fs::read_dir(Job::open(&located.job_path).unwrap().sidecar().join(crate::history::BLOB_DIR))
+            .unwrap().count();
+        let start = detection_state(&located.job_path);
+        edit_detection_mask_at(&located, None, MaskEditMode::Add, None, Some(&rect(12.0, 9.0, 20.0, 15.0)))
+            .unwrap().expect("an edit");
+        edit_detection_mask_at(&located, None, MaskEditMode::Add, None, Some(&rect(30.0, 30.0, 40.0, 40.0)))
+            .unwrap().expect("an edit");
+        step(&located, "undo");
+        // A new edit drops the undone one, whose state nothing else names.
+        set_detection_padding_at(&located, Some(0), 2).unwrap();
+        let unswept = blobs();
+        let journal = crate::history::load(&located.job_path);
+        let sidecar = Job::open(&located.job_path).unwrap().sidecar().to_path_buf();
+        crate::history::sweep_blobs(&sidecar, &journal);
+        assert!(blobs() < unswept, "the dropped state was kept");
+        step(&located, "undo");
+        step(&located, "undo");
+        assert_eq!(detection_state(&located.job_path), start);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The pages of one run are one undo step, and a page it writes twice
+    /// keeps the state from before its first write.
+    #[test]
+    fn a_runs_pages_join_one_step() {
+        let (root, located, id) = page_with_a_detection("undo-group");
+        let start = detection_state(&located.job_path);
+        let mut job = Job::open(&located.job_path).unwrap();
+        let before = crate::history::capture_pages(&job, &[0]);
+        job.remove_detection(&id).unwrap();
+        crate::history::record_pages(&job, "chapter", crate::history::DETECT_LABEL, Some("run-1"), before);
+        let before = crate::history::capture_pages(&job, &[0]);
+        job.store_detection(cleaner_core::project::DetectedRegion {
+            id: "chapter-p001-d9".into(), ..hand_detection(0, Rect::new(30, 20, 8, 8), 0)
+        }, &block(30, 20, 8, 8), &block(30, 20, 8, 8)).unwrap();
+        crate::history::record_pages(&job, "chapter", crate::history::DETECT_LABEL, Some("run-1"), before);
+        let journal = crate::history::load(&located.job_path);
+        assert_eq!((journal.entries.len(), journal.entries[0].pages.len()), (1, 1));
+
+        step(&located, "undo");
+        assert_eq!(detection_state(&located.job_path), start);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -10446,9 +10881,243 @@ mod mask_edit_tests {
 
     #[test]
     fn a_mask_edit_answers_in_camel_case() {
-        let edit = MaskEdit { page_status: "detected".into(), changed: vec!["a".into()], created: vec![], removed: vec![] };
+        let edit = MaskEdit { page_status: "detected".into(), changed: vec!["a".into()], created: vec![], removed: vec![],
+            pages: vec![EditedPage { page_index: 1, page_status: "detected".into() }] };
         assert_eq!(serde_json::to_value(edit).unwrap(),
-            serde_json::json!({ "pageStatus": "detected", "changed": ["a"], "created": [], "removed": [] }));
+            serde_json::json!({ "pageStatus": "detected", "changed": ["a"], "created": [], "removed": [],
+                "pages": [{ "pageIndex": 1, "pageStatus": "detected" }] }));
     }
+
+    /* ---------- a mask edit across a longstrip join ---------- */
+
+    use super::tests::{strip_edit_fixture, test_bench};
+
+    /// A rectangle as the Shapes tool sends it on the 64 x 400 pages of
+    /// [`strip_edit_fixture`], in the anchor page's pixels: a row past 400 is
+    /// on the page below, a row above 0 on the page above.
+    fn strip_rect(x0: f64, y0: f64, x1: f64, y1: f64) -> serde_json::Value {
+        let (x0, y0, x1, y1) = (x0 / 64.0 * 100.0, y0 / 400.0 * 100.0, x1 / 64.0 * 100.0, y1 / 400.0 * 100.0);
+        serde_json::json!({ "kind": "rect", "feather": 0,
+            "points": [{"x": x0, "y": y0}, {"x": x1, "y": y0}, {"x": x1, "y": y1}, {"x": x0, "y": y1}] })
+    }
+
+    /// A detection Detect could have stored on the strip page at `position`,
+    /// mask and lettering both `mask`, in that page's pixels.
+    fn strip_detection(located: &Located, position: usize, mask: &Mask) -> String {
+        let mut job = Job::open(&located.job_path).unwrap();
+        let source_idx = Library::resolve_page(&job.project, position).unwrap();
+        let id = job.next_detection_id(&crate::library::page_id(&located.chapter_id, position));
+        let mut record = hand_detection(source_idx, mask.bounds, order_after_page(&job, source_idx));
+        record.id = id.clone();
+        record.pick = "fill".into();
+        record.fit = Some(cleaner_core::project::DetectionFit {
+            route: fit::Route::Fill, thickness: 3, best_deviation: 0.5, scale: 1.0,
+        });
+        job.store_detection(record, mask, mask).unwrap();
+        id
+    }
+
+    fn strip_page(located: &Located, page_index: usize) -> Located {
+        Located { chapter_id: located.chapter_id.clone(), job_path: located.job_path.clone(), page_index }
+    }
+
+    fn edited_pages(edit: &MaskEdit) -> Vec<u32> {
+        edit.pages.iter().map(|page| page.page_index).collect()
+    }
+
+    /// An add that runs over the join grows the detection it meets on the page
+    /// that owns it, into the page below, and an add drawn on the page below
+    /// over that overhang grows the same detection.
+    #[test]
+    fn a_mask_edit_across_a_join_grows_the_owners_mask_into_the_next_page() {
+        let (root, located) = strip_edit_fixture("mask-grow");
+        let id = strip_detection(&located, 0, &Mask::filled(Rect::new(10, 380, 12, 16)));
+        let grown = edit_detection_mask_at(&located, None, MaskEditMode::Add, None,
+            Some(&strip_rect(12.0, 390.0, 20.0, 412.0))).unwrap().expect("an edit");
+        assert_eq!((grown.changed.clone(), grown.created.len(), grown.removed.len()), (vec![id.clone()], 0, 0));
+        assert_eq!(grown.pages, vec![EditedPage { page_index: 0, page_status: grown.page_status.clone() }]);
+        let stored = Job::open(&located.job_path).unwrap().load_detection(&id).unwrap().unwrap();
+        assert_eq!(stored.record.source_idx, 0);
+        assert!(stored.mask.contains(15, 408) && stored.ink.contains(15, 408), "the add stopped at the join");
+        assert_eq!(stored.record.bbox, stored.mask.bounds);
+        assert!(stored.record.bbox.bottom() > 400);
+
+        let below = edit_detection_mask_at(&strip_page(&located, 1), None, MaskEditMode::Add, None,
+            Some(&strip_rect(14.0, 5.0, 24.0, 20.0))).unwrap().expect("an edit");
+        assert_eq!((below.changed.clone(), below.created.len()), (vec![id.clone()], 0));
+        assert_eq!(edited_pages(&below), vec![0], "the page above owns the overhang");
+        let stored = Job::open(&located.job_path).unwrap().load_detection(&id).unwrap().unwrap();
+        assert!(stored.mask.contains(22, 416), "the add on the page below was lost");
+        assert!(Job::open(&located.job_path).unwrap().project.detections.iter().all(|row| row.source_idx == 0));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// An add over no detection is owned by the page that holds its top row:
+    /// one drawn from page one that starts below the join is page two's, in
+    /// page two's pixels, and one that starts above it is page one's and hangs.
+    #[test]
+    fn a_mask_drawn_from_one_page_that_starts_on_the_next_belongs_to_the_next() {
+        let (root, located) = strip_edit_fixture("mask-create");
+        let made = edit_detection_mask_at(&located, None, MaskEditMode::Add, None,
+            Some(&strip_rect(40.0, 410.0, 56.0, 430.0))).unwrap().expect("an edit");
+        let [created] = made.created.as_slice() else { panic!("one detection, got {made:?}") };
+        assert!(created.starts_with(&format!("{}-d", crate::library::page_id("chapter", 1))), "{created}");
+        assert_eq!(edited_pages(&made), vec![1]);
+        let job = Job::open(&located.job_path).unwrap();
+        let fresh = job.load_detection(created).unwrap().unwrap();
+        assert_eq!(fresh.record.source_idx, 1);
+        assert!(fresh.mask.contains(45, 15));
+        assert!(fresh.record.bbox.y >= 9 && fresh.record.bbox.bottom() <= 31, "{:?}", fresh.record.bbox);
+
+        let hanging = edit_detection_mask_at(&located, None, MaskEditMode::Add, None,
+            Some(&strip_rect(2.0, 390.0, 8.0, 410.0))).unwrap().expect("an edit");
+        let [hung] = hanging.created.as_slice() else { panic!("one detection, got {hanging:?}") };
+        assert!(hung.starts_with(&format!("{}-d", crate::library::page_id("chapter", 0))), "{hung}");
+        assert_eq!(edited_pages(&hanging), vec![0]);
+        let hung = Job::open(&located.job_path).unwrap().load_detection(hung).unwrap().unwrap();
+        assert!(hung.mask.contains(5, 395) && hung.mask.contains(5, 405));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// An erase that leaves a detection no row on its page moves it to the
+    /// page that holds its top row now: removed there, made here under a page
+    /// two id, with its fit, its pick, its padding and its ungrown masks.
+    #[test]
+    fn erasing_every_row_a_detection_has_on_its_page_moves_it_to_the_next() {
+        let (root, located) = strip_edit_fixture("mask-reown");
+        let id = strip_detection(&located, 0, &Mask::filled(Rect::new(10, 390, 12, 30)));
+        set_detection_padding_at(&located, Some(0), 2).unwrap();
+        let before = Job::open(&located.job_path).unwrap().load_detection(&id).unwrap().unwrap().record;
+        let moved = edit_detection_mask_at(&located, None, MaskEditMode::Remove, None,
+            Some(&strip_rect(0.0, 370.0, 64.0, 400.0))).unwrap().expect("an edit");
+        assert!(moved.changed.is_empty(), "{moved:?}");
+        assert_eq!(moved.removed, vec![id.clone()]);
+        let [new] = moved.created.as_slice() else { panic!("one detection, got {moved:?}") };
+        assert!(new.starts_with(&format!("{}-d", crate::library::page_id("chapter", 1))), "{new}");
+        assert_eq!(edited_pages(&moved), vec![0, 1]);
+
+        let job = Job::open(&located.job_path).unwrap();
+        assert!(job.load_detection(&id).unwrap().is_none());
+        let found = job.load_detection(new).unwrap().unwrap();
+        assert_eq!(found.record.source_idx, 1);
+        assert!(found.record.bbox.y < 2 && found.record.bbox.y >= 0, "{:?}", found.record.bbox);
+        assert!(found.mask.contains(15, 10) && found.mask.contains(15, 21));
+        assert_eq!((found.record.padding_px, found.record.pick.as_str()), (2, "fill"));
+        assert_eq!((found.record.fit, found.record.group, found.record.inside), (before.fit, before.group, before.inside));
+        let (base, _) = job.load_detection_base(new).unwrap().expect("its ungrown masks moved with it");
+        assert!(base.contains(15, 5) && base.bounds.y >= 0 && !base.contains(15, 20), "{:?}", base.bounds);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A padding of a detection that hangs over a join grows the hang as well,
+    /// and 0 gives it back whole. Two hanging detections a padding runs
+    /// together keep the hang in the one they become.
+    #[test]
+    fn padding_a_detection_that_hangs_over_a_join_keeps_the_hang() {
+        let (root, located) = strip_edit_fixture("mask-pad-hang");
+        let original = Mask::filled(Rect::new(10, 390, 12, 30));
+        let id = strip_detection(&located, 0, &original);
+        let load = |id: &str| Job::open(&located.job_path).unwrap().load_detection(id).unwrap().unwrap();
+        set_detection_padding_at(&located, Some(0), 3).unwrap();
+        let padded = load(&id);
+        assert!(padded.mask.contains(15, 422) && padded.mask.contains(7, 410), "the padding was cut at the join");
+        assert_eq!(padded.mask.bounds.bottom(), 423);
+        set_detection_padding_at(&located, Some(0), 0).unwrap();
+        assert_eq!(load(&id).mask, original);
+
+        let other = strip_detection(&located, 0, &Mask::filled(Rect::new(24, 395, 6, 20)));
+        let merged = set_detection_padding_at(&located, Some(0), 3).unwrap();
+        assert_eq!(merged.removed, vec![other]);
+        let one = load(&id);
+        assert!(one.mask.contains(26, 416) && one.mask.contains(15, 421), "the merge cut the hang");
+        assert!(one.mask.bounds.bottom() > 420);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A clean of one stored detection whose mask hangs over a join reads the
+    /// strip window around it and writes both pages' rows.
+    #[test]
+    fn cleaning_one_detection_that_hangs_over_a_join_cleans_both_pages_rows() {
+        let (root, located) = strip_edit_fixture("clean-hanging");
+        let mask = Mask::filled(Rect::new(20, 385, 16, 30));
+        let id = strip_detection(&located, 0, &mask);
+        let inside = strip_detection(&located, 0, &Mask::filled(Rect::new(20, 100, 8, 8)));
+        assert_eq!(existing_geometry(&located, &inside).unwrap().1, None);
+        let (geometry, hangs) = existing_geometry(&located, &id).unwrap();
+        assert!(matches!(geometry, Geometry::StoredDetection));
+        assert_eq!(hangs, Some(mask.bounds));
+        let plan = Plan {
+            expected_source: None,
+            region_id: id.clone(),
+            geometry,
+            choice: Choice::Exact(Engine::Fill),
+            source: "auto",
+            tool: Some("autoClean".into()),
+            fill_mode: None,
+            solid_color: None,
+            clears_untouched: true,
+            paint: None,
+            requested: hangs,
+            stroke: None,
+            drawn: None,
+        };
+        let mut bench = test_bench(&root);
+        let mut seen = None;
+        let mut fake = |image: &Raster, fitted: &Fitted| {
+            seen = Some((fitted.mask.count(), fitted.mask.bounds, image.width, image.height));
+            run::Made {
+                engine: Engine::Fill, mask: fitted.mask.clone(), ink: fitted.ink.clone(),
+                pixels: cleaner_core::engines::fill::render(image, fitted),
+                provider: None, model_sha256: None,
+                pad: cleaner_core::strip::EdgePad::None, tiles: None,
+            }
+        };
+        assert!(matches!(edit_with_bench_render(&mut bench, Engine::Fill, &located, plan, Some(&mut fake)).unwrap(),
+            Outcome::Cleaned(_)));
+        // The engine is given the pixels under every row of the mask, the
+        // page below's included, rather than a page the hang runs off.
+        let (count, bounds, width, height) = seen.expect("rendered");
+        assert!(count >= mask.count(), "the fitted mask lost the hang");
+        assert!(bounds.y >= 0 && bounds.x >= 0 && bounds.right() <= i64::from(width)
+            && bounds.bottom() <= i64::from(height), "the mask {bounds:?} runs off the {width} x {height} image");
+        let job = Job::open(&located.job_path).unwrap();
+        assert!(job.project.detections.iter().all(|row| row.id != id));
+        let record = job.project.patches.iter().find(|row| row.id == id).expect("the patch");
+        let patch = job.load_patch(record).unwrap();
+        let strip = run::strip_of(&job.project);
+        let global = cleaner_core::export::StripPatch::lift(&strip, 0, &patch).unwrap();
+        for page in 0..2 {
+            let on_page = cleaner_core::export::patches_on_page(&strip, page, std::slice::from_ref(&global));
+            assert!(!on_page.is_empty() && on_page[0].mask.bits.iter().any(|bit| *bit != 0),
+                "page {page} kept none of the detection's rows");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// An edit that writes both sides of a join and fails part way leaves
+    /// both pages as they were: one manifest write or none.
+    #[test]
+    fn a_mask_edit_across_a_join_that_fails_to_write_leaves_both_pages() {
+        let (root, located) = strip_edit_fixture("mask-rollback");
+        let above = strip_detection(&located, 0, &Mask::filled(Rect::new(10, 390, 12, 30)));
+        let below = strip_detection(&located, 1, &Mask::filled(Rect::new(40, 2, 12, 20)));
+        let mut job = Job::open(&located.job_path).unwrap();
+        job.project.counters.detections = u32::MAX;
+        job.flush().unwrap();
+        let manifest = std::fs::read(&located.job_path).unwrap();
+        // Trims the detection below, then moves the one above to page two,
+        // which mints an id there and fails.
+        let failed = edit_detection_mask_at(&located, None, MaskEditMode::Remove, None,
+            Some(&strip_rect(0.0, 370.0, 64.0, 405.0)));
+        assert!(failed.is_err(), "{failed:?}");
+        assert_eq!(std::fs::read(&located.job_path).unwrap(), manifest, "the manifest was written");
+        let job = Job::open(&located.job_path).unwrap();
+        for id in [&above, &below] {
+            let found = job.load_detection(id).unwrap().expect("the detection is still there");
+            assert_eq!(found.record.mask_ref, format!("detections/{id}.mask"));
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
 
 }

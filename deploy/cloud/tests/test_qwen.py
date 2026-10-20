@@ -115,15 +115,16 @@ class QwenEditRunnerTest(unittest.TestCase):
         self.assertEqual([image.size for image in call["image"]], [(640, 1664)])
         self.assertEqual((call["generator"].device, call["generator"].seed), ("cpu", 1))
         self.assertEqual(call["output_type"], "pt")
-        # Answer larger than the crop: shrunk back with BOX, to exactly the crop.
-        self.assertIn(("resize", (320, 848), "box"), mods.log)
+        # Answer larger than the crop: shrunk back with Lanczos, to exactly the crop.
+        self.assertIn(("resize", (640, 1664), "lanczos"), mods.log)
+        self.assertIn(("resize", (320, 848), "lanczos"), mods.log)
         self.assertEqual(png, encode_png_rgb8(320, 848))
 
     def test_large_crop_is_scaled_up_after_the_render(self) -> None:
         mods = qwen_modules(image_size=(1080, 1536))
         QwenEditRunner("/w", modules=mods).render_png(b"png", b"", 1080, 1536, seed=1, steps=4, guidance_scaled=100)
-        self.assertIn(("resize", (864, 1216), "bicubic"), mods.log)
-        self.assertIn(("resize", (1080, 1536), "bicubic"), mods.log)
+        self.assertIn(("resize", (864, 1216), "lanczos"), mods.log)
+        self.assertIn(("resize", (1080, 1536), "lanczos"), mods.log)
 
     def test_cfg_above_one_sends_a_negative_prompt(self) -> None:
         mods = qwen_modules(image_size=(64, 64))

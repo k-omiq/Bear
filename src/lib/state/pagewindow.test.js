@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { WINDOW_RADIUS, evictRegions, slideWindow, windowIndices, windowPlan } from './pagewindow.svelte.js'
+import { STRIP_RADIUS, WINDOW_RADIUS, evictRegions, slideWindow, windowIndices, windowPlan } from './pagewindow.svelte.js'
 import { setBackend } from '../api/backend.js'
 
 const page = (index, resident, count = 3) => ({
@@ -34,8 +34,13 @@ describe('the resident window', () => {
    */
   it('takes in the strip scope in a longstrip chapter', () => {
     expect(
-      windowIndices({ pageIndex: 5, pageCount: 20, longstrip: true, stripScope: [5, 6, 7, 8] }),
-    ).toEqual([4, 5, 6, 7, 8])
+      windowIndices({ pageIndex: 10, pageCount: 40, longstrip: true, stripScope: [10, 16, 17] }),
+    ).toEqual([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+  })
+
+  it('keeps the strip\'s warm range resident in a longstrip chapter, five pages a side', () => {
+    expect(STRIP_RADIUS).toBe(5)
+    expect(windowIndices({ pageIndex: 2, pageCount: 40, longstrip: true })).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
   })
 
   it('ignores the strip scope in a paginated chapter', () => {

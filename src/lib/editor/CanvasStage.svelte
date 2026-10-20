@@ -25,7 +25,10 @@
   import {
     PRELOAD_SCREENS,
     STRIP_GAP,
+    anchorColumnTop,
     centreIndex,
+    keepRange,
+    pageBytes,
     scrollTopFor,
     stripMetrics,
     stripWindow,
@@ -33,7 +36,6 @@
   } from './strip.js'
   import { Empty } from '../ui/index.js'
   import { t } from '../i18n/index.js'
-  import { draft } from './draft.svelte.js'
   import PageSheet from './PageSheet.svelte'
 
   /**
@@ -118,8 +120,34 @@
 
   // How far past the viewport pages and their tiles are fetched ahead.
   const margin = $derived(viewportHeight * PRELOAD_SCREENS)
+
+  // The warm range: `KEEP_PAGES` either side of the centre page, inside the
+  // decoded-memory budget, mounted whole wherever the viewport is. Read
+  // through primitives so a scroll inside one page changes nothing.
+  const costs = $derived(longstrip ? list.map(pageBytes) : [])
+  const centre = $derived(longstrip ? centreIndex({ metrics, columnTop, viewportHeight }) : 0)
+  const keep = $derived(longstrip ? keepRange({ count: list.length, centre, cost: (index) => costs[index] }) : null)
+  const keepStart = $derived(keep?.start ?? 0)
+  const keepEnd = $derived(keep?.end ?? 0)
+
+  // The band a zoom gesture started from. Held mounted until the gesture has
+  // been quiet for `HOLD_MS`, so no frame of a pinch can unmount the pages it
+  // began on, whatever a scroll event in between reports.
+  const HOLD_MS = 250
+  /** @type {{start: number, end: number}|null} */
+  let hold = $state(null)
+  let holdTimer = 0
+
   const band = $derived(
-    stripWindow({ metrics, columnTop, viewportHeight, margin, include: focusedIndex }),
+    stripWindow({
+      metrics,
+      columnTop,
+      viewportHeight,
+      margin,
+      include: focusedIndex,
+      keep: { start: keepStart, end: keepEnd },
+      hold,
+    }),
   )
   // The band is recomputed on every scroll event; its bounds rarely change.
   // Read through primitives, so the mounted list is rebuilt only when they do.
@@ -144,6 +172,14 @@
   function loadEdge(index, y) {
     const height = metrics.units[index] - STRIP_GAP
     return height > 0 ? ((y - columnTop - metrics.offsets[index]) / height) * 100 : 0
+  }
+
+  /**
+   * @param {number} index
+   * @returns {boolean} whether page `index` is in the warm range, all of its tiles mounted
+   */
+  function warm(index) {
+    return index >= keepStart && index < keepEnd
   }
 
   // Mount the current page and one neighbour either side, keyed by page ID.
@@ -277,6 +313,53 @@
 
   $effect(() => () => reportScrollRoom(0))
 
+  // **A zoom keeps its anchor.** Whatever changes the scale - a pinch, the
+  // buttons, a key, fit, a resize under fit - the content under the anchor
+  // stays where it is on screen: the pointer for a pinch, the viewport's
+  // centre otherwise. The new `columnTop` is written *before* the DOM takes
+  // the new geometry, so the band, the warm range and the reported position
+  // are all computed for the viewport the reader will see. Computed from the
+  // old scroll position instead, a zoom deep in a chapter mounted pages
+  // higher up for one pass and dropped the ones on screen, which then drew in
+  // white. The scroller follows in the effect after the DOM update, when the
+  // column already has its new height to scroll in.
+  /** @type {import('./strip.js').StripMetrics|null} */
+  let anchoredMetrics = null
+  let anchoredScale = Number.NaN
+  /** @type {number|null} px below the scroller's top edge */
+  let zoomAnchorY = null
+  /** @type {number|null} */
+  let pendingScrollTop = null
+
+  $effect.pre(() => {
+    const next = metrics
+    const nextScale = scale
+    untrack(() => {
+      const before = anchoredMetrics
+      const beforeScale = anchoredScale
+      anchoredMetrics = next
+      anchoredScale = nextScale
+      const anchorY = zoomAnchorY ?? viewportHeight / 2
+      zoomAnchorY = null
+      if (!longstrip || !before || beforeScale === nextScale || before.count !== next.count || !scroller()) return
+      const top = anchorColumnTop({ before, after: next, columnTop, anchorY })
+      columnTop = top
+      pendingScrollTop = columnOrigin - top
+    })
+  })
+
+  $effect(() => {
+    metrics
+    untrack(() => {
+      const target = pendingScrollTop
+      pendingScrollTop = null
+      const box = scroller()
+      if (target === null || !box) return
+      box.scrollTop = Math.max(0, target)
+      readScroll()
+    })
+  })
+
   // Where the column sits relative to the viewport, for the strip only. The
   // shell's own `onscroll` runs first (it is registered first) and records the
   // settle through `setScroll`; this only reads.
@@ -361,6 +444,11 @@
     if (target === null) return
     pinchZoom = target
     pinchAt = { x: event.clientX, y: event.clientY }
+    if (longstrip) {
+      hold ??= { start: bandStart, end: bandEnd }
+      clearTimeout(holdTimer)
+      holdTimer = setTimeout(() => (hold = null), HOLD_MS)
+    }
     if (!pinchFrame) pinchFrame = requestAnimationFrame(applyPinch)
   }
 
@@ -374,11 +462,15 @@
     const box = scroller()
     if (!box || !stageEl) return
     const before = boxOf(stageEl)
+    // A strip anchors vertically in the zoom effect above, before the band is
+    // taken; this hands it the pointer.
+    if (longstrip) zoomAnchorY = pinchAt.y - box.getBoundingClientRect().top - box.clientTop
     setZoom(pinchZoom)
     pinchKept = editor.zoom
     // The scale change and the scroll correction have to land in the same
     // frame, or the page jumps and then slides.
     flushSync()
+    zoomAnchorY = null
     const next = anchoredScroll({
       pointerX: pinchAt.x,
       pointerY: pinchAt.y,
@@ -388,7 +480,7 @@
       scrollTop: box.scrollTop,
     })
     box.scrollLeft = next.left
-    box.scrollTop = next.top
+    if (!longstrip) box.scrollTop = next.top
     readScroll()
   }
 
@@ -400,6 +492,7 @@
       box.removeEventListener('wheel', onwheel)
       if (pinchFrame) cancelAnimationFrame(pinchFrame)
       pinchFrame = 0
+      clearTimeout(holdTimer)
     }
   })
 
@@ -437,9 +530,6 @@
         data-strip-index={index}
         style:top="{metrics.offsets[index]}px"
         style:left="{(width - metrics.widths[index]) / 2}px"
-        class:selection-origin={page.regions?.some((region) => region.id === editor.selectionId)}
-        class:hover-origin={page.regions?.some((region) => region.id === editor.hoverId)}
-        class:gesture-origin={draft.active?.pageId === page.id}
       >
         <PageSheet
           {page}
@@ -449,8 +539,8 @@
           tabbable={index === editor.pageIndex}
           stripMinY={index > 0 ? -(Number(list[index - 1]?.height) || 1) / (Number(page.height) || 1) * 100 : 0}
           stripMaxY={index + 1 < list.length ? 100 + (Number(list[index + 1]?.height) || 1) / (Number(page.height) || 1) * 100 : 100}
-          loadFrom={loadEdge(index, -margin)}
-          loadTo={loadEdge(index, viewportHeight + margin)}
+          loadFrom={warm(index) ? 0 : loadEdge(index, -margin)}
+          loadTo={warm(index) ? 100 : loadEdge(index, viewportHeight + margin)}
         />
       </div>
     {/each}
@@ -471,8 +561,13 @@
 </div>
 
 <style>
+  /* One stacking context for the whole column, and none per page: every
+     page's layers sit on the one z-index scale `PageSheet.svelte` sets, so a
+     mask or a region hanging across a join is over the next page's artwork.
+     Isolated, so that scale stays inside the canvas. */
   .stage {
     position: relative;
+    isolation: isolate;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -485,10 +580,5 @@
     position: absolute;
   }
 
-  /* Cross-position drafts and selected region outlines belong to their
-     starting sheet. Keep them above the following sheet's artwork. */
-  .slot.selection-origin { z-index: 1 }
-  .slot.hover-origin { z-index: 2 }
-  .slot.gesture-origin { z-index: 3 }
 
 </style>

@@ -304,7 +304,7 @@ jobs:
           if (-not (Test-Path $sevenZip)) { throw '7-Zip is required to inspect the NSIS installer' }
           $listing = & $sevenZip l -slt $installer.FullName
           if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the NSIS installer' }
-          foreach ($name in @('manga-cleaner-provisioner.exe', 'manga-cleaner-uv.exe', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'bootstrap.py', 'export_mask.py', 'environment.txt')) {
+          foreach ($name in @('manga-cleaner-provisioner.exe', 'manga-cleaner-uv.exe', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'bootstrap.py', 'export_mask.py', 'environment.txt', 'dense_pe.f32.xz')) {
             if (-not ($listing | Select-String -SimpleMatch -Quiet $name)) {
               throw "The Windows installer is missing $name"
             }
@@ -430,7 +430,7 @@ jobs:
                 echo "$package: $helper missing or not executable" >&2; exit 1;
               }
             done
-            for resource in 'sidecar/bootstrap.py' 'sidecar/pyproject.toml' 'sam-bootstrap/bootstrap.py' 'sam-bootstrap/export_mask.py' 'sam-bootstrap/environment.txt'; do
+            for resource in 'sidecar/bootstrap.py' 'sidecar/pyproject.toml' 'sam-bootstrap/bootstrap.py' 'sam-bootstrap/export_mask.py' 'sam-bootstrap/environment.txt' 'sam-bootstrap/dense_pe.f32.xz'; do
               test -n "$(find "$package" -type f -path "*/$resource" -print -quit)" || {
                 echo "$package: $resource missing" >&2; exit 1;
               }

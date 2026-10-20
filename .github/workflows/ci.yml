@@ -46,14 +46,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       # Five deploy/cloud test modules build their inputs with NumPy and
-      # Pillow and fail at import without them. The pins are the analysis
+      # Pillow and fail at import without them, and the SAM tests label mask
+      # components with SciPy. The pins and the Python are the analysis
       # image's own, from deploy/cloud/modal/app.py, so the tests see the
       # versions the worker runs. The heavy SDKs (modal, beam, torch) stay
       # out: their suites skip, loudly, which is what this gate is for.
-      - name: Install NumPy and Pillow
-        run: python3 -m pip install numpy==2.4.6 pillow==12.3.0
+      - name: Install NumPy, Pillow and SciPy
+        run: python3 -m pip install numpy==2.4.6 pillow==12.3.0 scipy==1.18.1
       - name: Run deploy/cloud unit tests
         run: python3 -m unittest discover -v -s deploy/cloud/tests
       - name: Run provisioner unit tests

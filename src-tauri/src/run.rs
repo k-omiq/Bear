@@ -5012,6 +5012,12 @@ pub fn plan_for(
     plan_with_repeat(library, scope, chapter_id, page_index, mode, false)
 }
 
+/// The queue of a Detect that looks again: with cloud stages, or at an area.
+/// Every page, whatever a local Detect or a clean left on it, except the pages
+/// a cloud pass has already finished in their present form
+/// (`Project::cloud_detected`), so a stopped cloud run resumes where it
+/// stopped. A page asked for alone is always taken: that is how a page is
+/// sent again, and an area is always one page.
 pub(crate) fn plan_cloud_detection(
     library: &Library, scope: &str, chapter_id: &str, page_index: Option<u32>,
 ) -> Result<Vec<PlanEntry>, LibraryError> {
@@ -5044,7 +5050,12 @@ fn plan_with_repeat(
                 continue;
             }
             let Some(source_idx) = Library::resolve_page(&job.project, page) else { continue };
-            if repeat || runnable(&job.project, source_idx, mode, scope == "page") {
+            let wanted = if repeat {
+                scope == "page" || !job.project.cloud_detected.contains(&source_idx)
+            } else {
+                runnable(&job.project, source_idx, mode, scope == "page")
+            };
+            if wanted {
                 entries.push(PlanEntry {
                     chapter_id: id.to_owned(),
                     job_path: job_path.clone(),
@@ -5403,6 +5414,13 @@ fn walk(
             written = Some(read);
             continue;
         }
+        // A page's detections are one part of the run's undo step, taken
+        // back to what the page held before the run reached it.
+        let detect_before = if work == PageWork::Detect {
+            crate::history::capture_pages(job, &[entry.source_idx])
+        } else {
+            Vec::new()
+        };
         // What one pass must not clean again: the patches the page still holds
         // after its reset, which are cleaned detections (`-d` ids) and hand
         // edits, a deleted one included, since a deleted mask is text the user
@@ -5789,6 +5807,7 @@ fn walk(
                 progress.in_flight = None;
                 continue;
             };
+            crate::history::record_pages(job, &entry.chapter_id, crate::history::DETECT_LABEL, Some(run_id), detect_before);
             // A Detect run's count. What a solid-bubbles Auto run stores here
             // it cleans or leaves on its next visit, and counts there.
             if mode == RunMode::Detect {

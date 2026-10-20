@@ -9,7 +9,7 @@ import { glyph, iconNames, icons } from './paths.js'
  */
 const REQUIRED = [
   'home', 'pages', 'layers', 'tools', 'eye', 'eye-off', 'pin', 'mask-overlay',
-  'settings', 'export', 'sparkle', 'brush', 'shapes', 'wand', 'droplet',
+  'settings', 'export', 'sparkle', 'brush', 'eraser', 'shapes', 'wand', 'droplet',
   'stamp', 'zoom-fit', 'zoom-in', 'zoom-out', 'undo', 'redo', 'chevron-left',
   'chevron-right', 'chevron-up', 'chevron-down', 'chevrons-left',
   'chevrons-right', 'close', 'warning-triangle', 'check', 'dot', 'info',

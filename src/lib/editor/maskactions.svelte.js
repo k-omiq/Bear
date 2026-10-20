@@ -46,7 +46,6 @@ import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.sv
 import { notify } from '../state/app.svelte.js'
 import {
   adoptBackendHistory,
-  applyRegionDelta,
   applyRegionState,
   claimPageEdit,
   cleanRefusalKey,
@@ -193,9 +192,10 @@ export async function deleteMask(region) {
   // pointing at a region that is no longer on the page highlights nothing and
   // steps to nothing; the row it belonged to has gone.
   if (stillOpen(chapterId)) applyRegionState(region.id, null, after.pageStatus ?? undefined)
-  // A detection has no pixels to put back, and the native side removes it for
-  // good (docs/detect-clean.md §2), so its removal is not offered as an undo
-  // that could not be carried out. Detect finds it again.
+  // A detection has no `visible` flag to turn back on, so the backend keeps
+  // its whole page as it was and records the step itself
+  // (`history.rs#record_pages`); it reaches this window's index as a
+  // `history-changed` event. A patch is soft-deleted, and recorded here.
   if (region.outcome !== 'detected') recordEdit('masks.command.deleteMask', region.id, before, after, chapterId)
   if (stillOpen(chapterId)) refreshPage(pageIndex)
   return true
@@ -206,12 +206,11 @@ export async function deleteMask(region) {
  * to leave alone.
  *
  * Not the same call as `deleteMask`, because there is no mask to delete - only
- * the region, and the seam already has the method for that. Both ends up in the
- * same place: a row the user deleted is a row that is gone.
- * `restoreRegion` with a null region is how a hand-drawn region's *creation*
- * is undone (`drawing.svelte.js`), and removing a region is the same act
- * whichever end of its life it happens at - so it is the same call, and the
- * undo pair is the ordinary one.
+ * the row, and a held row has no `visible` flag either: once removed, nothing
+ * on the region could bring it back. So `dismissRegion` removes it and the
+ * backend records the step with its whole page as it was
+ * (`history.rs#record_pages`), as it does for a deleted detection. Both end
+ * up in the same place: a row the user deleted is a row that is gone.
  *
  * @param {import('../api/backend.js').ApiRegion} region
  * @returns {Promise<boolean>}
@@ -219,14 +218,18 @@ export async function deleteMask(region) {
 export async function deleteRegion(region) {
   if (region.mask) return deleteMask(region)
   const chapterId = editor.chapter?.id ?? null
-  const before = snapshot(region)
-  const gone = { region: null, pageStatus: before.pageStatus }
+  const pageIndex = pageIndexOf(region.id)
+  let result
   try {
-    await restoreRegionThroughSeam(region.id, gone, chapterId)
+    result = await getBackend().dismissRegion({ regionId: region.id })
   } catch (error) {
     return reportRegionEditFailure(error)
   }
-  recordEdit('masks.command.deleteRegion', region.id, before, gone, chapterId)
+  if (!result) return false
+  if (stillOpen(chapterId)) {
+    applyRegionState(region.id, null, result.pageStatus ?? undefined)
+    refreshPage(pageIndex)
+  }
   return true
 }
 
@@ -296,27 +299,6 @@ export async function keepDependencyResult(region) {
   if (!replaceRegion(result)) return false
   refreshPage(pageIndexOf(region.id))
   return true
-}
-
-/**
- * One direction of a removal: put the region - and its page's status - into
- * the state the snapshot describes, on the backend and then in the open
- * chapter. `{region: null}` means "it was not there".
- *
- * @param {string} regionId
- * @param {{region: import('../api/backend.js').ApiRegion|null, pageStatus: string|null}} state
- * @param {string|null} chapterId - the chapter the removal was made in
- * @returns {Promise<void>}
- */
-async function restoreRegionThroughSeam(regionId, state, chapterId) {
-  // One applier, in `state/editor.svelte.js`, shared with every replay the
-  // journal drives: a failed restore must not delete what it was asked to bring
-  // back, and that reading should exist once rather than at each call site.
-  await applyRegionDelta(regionId, {
-    present: !!state.region,
-    pageStatus: state.pageStatus ?? null,
-    region: state.region ?? null,
-  }, chapterId)
 }
 
 /**
@@ -451,7 +433,8 @@ export async function cleanAnyway(region, chosenEngine) {
  * The mask is grown by Text cleanup's Mask padding, as a Detect run grows
  * the masks beside it. The detection is a new region with its own id, so the
  * page is read again and the selection follows the mask. Like every edit of
- * a detection it is not undoable; deleting the detection is the way back.
+ * a detection it is one undo step the backend records with the page as it
+ * was (`history.rs#record_pages`): Undo puts the held row back.
  *
  * @param {import('../api/backend.js').ApiRegion} region
  * @returns {Promise<boolean>} whether the region became a detection
@@ -647,8 +630,8 @@ const rejecting = new Set()
  *
  * The region menu's Text type. Picking the type the region has already does
  * nothing. Like a hand edit of a detection's mask (`drawing.svelte.js`) it is
- * not an undoable edit: the native side keeps no earlier version of a
- * detection to put back, and picking the other type again sets the type back.
+ * one undo step, which the backend records with the page as it was
+ * (`history.rs#record_pages`).
  * A region cleaned or removed since the menu opened is refused, and said so.
  *
  * @param {import('../api/backend.js').ApiRegion} region
@@ -692,8 +675,9 @@ function reportDetectionTypeFailure(error) {
 
 /**
  * Change only this detection's total mask padding and reload its page so the
- * mask overlay and saved value move together. As with other detection edits,
- * choosing the old padding restores it; this does not create layer history.
+ * mask overlay and saved value move together. Like every edit of a
+ * detection it is one undo step the backend records (`history.rs#record_pages`),
+ * and Undo also splits a merge it made.
  *
  * A padding that runs this mask into another makes the two one. The earlier
  * in reading order is the one kept, so this row can be the one that goes: the

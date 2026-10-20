@@ -10,6 +10,7 @@ import { editor } from '../state/editor.svelte.js'
 import PatchLayers from './PatchLayers.svelte'
 import { LAYER_BOUNDS_HEADER, forgetLayerImages, layerDraws } from './patchlayers.svelte.js'
 import { layerPreviews } from './layerpreview.svelte.js'
+import { eraseMasks, keepEraseMasks, showEraseMask } from './erasepreview.svelte.js'
 
 /**
  * @param {string} id
@@ -75,6 +76,7 @@ afterEach(() => {
   editor.project = null
   forgetLayerImages()
   layerPreviews.clear()
+  eraseMasks.clear()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -91,7 +93,7 @@ describe('a patch layer', () => {
     const [canvas] = canvases(view.container)
     await waitFor(() => expect(canvas.width).toBe(160))
     layerPreviews.set('r1', { offsetX: 80, offsetY: 40, rotation: 30, opacity: 60 })
-    await waitFor(() => expect(canvas.style.transform).toBe('translate(10cqw, 5cqw) rotate(30deg)'))
+    await waitFor(() => expect(canvas.style.transform).toBe('translate(calc(var(--sheet-w) * 0.1), calc(var(--sheet-w) * 0.05)) rotate(30deg)'))
     expect(canvas.style.opacity).toBe('0.6')
     expect(fetcher).toHaveBeenCalledTimes(1)
     const moved = region('r1', { key: 'two', opacity: 60 })
@@ -99,9 +101,9 @@ describe('a patch layer', () => {
     await view.rerender({ page: aPage([moved]) })
     layerPreviews.delete('r1')
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
-    expect(canvas.style.transform).toBe('translate(10cqw, 5cqw) rotate(30deg)')
+    expect(canvas.style.transform).toBe('translate(calc(var(--sheet-w) * 0.1), calc(var(--sheet-w) * 0.05)) rotate(30deg)')
     await answer('/layer/r1?', '150,140,180,140')
-    await waitFor(() => expect(canvas.style.transform).toBe('translate(0cqw, 0cqw) rotate(0deg)'))
+    await waitFor(() => expect(canvas.style.transform).toBe('translate(calc(var(--sheet-w) * 0), calc(var(--sheet-w) * 0)) rotate(0deg)'))
     expect(canvas.style.left).toBe('18.75%')
   })
 
@@ -171,5 +173,54 @@ describe('a patch layer', () => {
     await waitFor(() => expect(ready).toBeNull())
     await answer('/layer/r1?', '0,0,10,10')
     await waitFor(() => expect(ready).toBe('c1-p001'))
+  })
+
+  it('takes an eraser stroke off a Brush layer\'s picture, and never off the next one', async () => {
+    const { fetcher, answer } = deferredFetch()
+    vi.stubGlobal('fetch', fetcher)
+    /** @type {any[]} */
+    const ops = []
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockImplementation(/** @type {any} */ (function () {
+      const layer = this.dataset.layer
+      const context = {
+        globalCompositeOperation: 'source-over',
+        clearRect: () => ops.push([layer, 'clear']),
+        drawImage: (image, x, y, w, h) => ops.push([layer, 'draw', image.from ?? image.name, x, y, w, h, context.globalCompositeOperation]),
+      }
+      return context
+    }))
+    const brush = (key) => {
+      const made = region('stroke', { key })
+      made.mask.provenance = { engine: 'paint', params_snapshot: { tool: 'brush', mode: 'paint' } }
+      return made
+    }
+    const view = render(PatchLayers, { page: aPage([brush('one'), region('fill')]) })
+    await answer('/layer/fill?', '80,100,160,100')
+    await answer('/layer/stroke?', '80,100,160,100')
+    await waitFor(() => expect(ops.filter(([, op]) => op === 'draw')).toHaveLength(2))
+    ops.length = 0
+
+    // Page percent: 10% of the 800 px proxy width is 80 px, the layer's left.
+    const mask = { id: 1, canvas: { name: 'mask', width: 128, height: 128 }, box: { x: 15, y: 12, w: 16, h: 12.8 }, tick: 1 }
+    showEraseMask('c1-p001', mask)
+    await waitFor(() => expect(ops).toEqual([
+      ['stroke', 'clear'],
+      ['stroke', 'draw', '80,100,160,100', 0, 0, undefined, undefined, 'source-over'],
+      ['stroke', 'draw', 'mask', 40, 20, 128, 128, 'destination-out'],
+    ]))
+
+    // The commit: the layer's next picture is on its way. Letting the stroke
+    // go leaves the erased look until that picture is drawn, as it is.
+    ops.length = 0
+    await view.rerender({ page: aPage([brush('two'), region('fill')]) })
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3))
+    showEraseMask('c1-p001', { ...mask, tick: 2 })
+    keepEraseMasks('c1-p001', new Set())
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(ops.filter(([layer]) => layer === 'stroke')).toEqual([])
+    showEraseMask('c1-p001', { ...mask, tick: 3 })
+    await answer('/layer/stroke?', '80,100,160,60')
+    await waitFor(() => expect(ops.at(-1)?.[2]).toBe('80,100,160,60'))
+    expect(ops.filter(([, op, what]) => op === 'draw' && what === 'mask')).toEqual([])
   })
 })

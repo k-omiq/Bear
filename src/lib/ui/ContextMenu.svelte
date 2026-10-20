@@ -17,6 +17,11 @@
    * without one is a plain run of `menuitem`s; a hairline separates them. Every
    * item keeps the mark column, so the labels of a mixed menu start at one x.
    *
+   * An item with a `range` is a slider rather than an entry: it takes the
+   * arrows' place in the focus order like any item, Left and Right move it,
+   * and a release (or a key) hands its value to `onrange`. The menu stays open,
+   * so the change can be seen and changed again.
+   *
    * No state, no strings: every label arrives translated, like the rest of the
    * vocabulary.
    *
@@ -27,21 +32,32 @@
    *   sections: Array<{
    *     id: string,
    *     label?: string | null,
-   *     items: Array<{ id: string, label: string, icon?: string, disabled?: boolean, selected?: boolean }>,
+   *     items: Array<{
+   *       id: string, label: string, icon?: string, disabled?: boolean, selected?: boolean,
+   *       range?: { min: number, max: number, step?: number, value: number, unit?: string },
+   *     }>,
    *   }>,
    *   onselect: (id: string) => void,
+   *   onrange?: (id: string, value: number) => void,
    *   onclose: () => void,
    * }}
    */
-  let { x, y, label, sections, onselect, onclose } = $props()
+  let { x, y, label, sections, onselect, onrange, onclose } = $props()
 
   /** How close to the window edge the panel may come. */
   const MARGIN = 6
 
   /** @type {HTMLElement | undefined} */
   let root = $state()
-  /** @type {HTMLButtonElement[]} */
+  /** @type {HTMLElement[]} */
   let itemEls = $state([])
+  /**
+   * A slider's value while it is dragged, by item id: the readout follows the
+   * thumb before the host has the value.
+   *
+   * @type {Record<string, number>}
+   */
+  let drafts = $state({})
   let at = $state(0)
   /**
    * Where the panel ended up once it had a size to clamp against - null until
@@ -187,6 +203,26 @@
       {/if}
       {#each section.items as item (item.id)}
         {@const index = flat.findIndex((entry) => entry.id === item.id)}
+        {#if item.range}
+          {@const shown = `${drafts[item.id] ?? item.range.value}${item.range.unit ?? ''}`}
+          <label class="range">
+            <span class="range-head"><span class="item-label">{item.label}</span><output>{shown}</output></span>
+            <input
+              bind:this={itemEls[index]}
+              type="range"
+              tabindex="-1"
+              min={item.range.min}
+              max={item.range.max}
+              step={item.range.step ?? 1}
+              value={drafts[item.id] ?? item.range.value}
+              disabled={item.disabled}
+              aria-label={item.label}
+              aria-valuetext={shown}
+              oninput={(event) => (drafts[item.id] = Number(event.currentTarget.value))}
+              onchange={(event) => onrange?.(item.id, Number(event.currentTarget.value))}
+            />
+          </label>
+        {:else}
         <button
           bind:this={itemEls[index]}
           type="button"
@@ -203,6 +239,7 @@
           </span>
           <span class="item-label">{item.label}</span>
         </button>
+        {/if}
       {/each}
     </div>
   {/each}
@@ -268,6 +305,18 @@
     width: 14px;
     color: var(--text);
   }
+
+  .range {
+    display: grid;
+    gap: 2px;
+    padding: 4px var(--s-3) 6px calc(var(--s-3) + 14px + var(--s-3));
+    color: var(--t2);
+    font-size: 12px;
+  }
+  .range-head { display: flex; gap: var(--s-2) }
+  .range output { color: var(--t3); font-variant-numeric: tabular-nums }
+  .range input { width: 100%; margin: 0 }
+  .range input:disabled { opacity: .4 }
 
   .sep {
     height: 1px;

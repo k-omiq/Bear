@@ -206,7 +206,7 @@ def fake_modules(
     image_module = SimpleNamespace(
         open=lambda stream: FakeImage(image_size, "RGB", log),
         fromarray=lambda array: FakeImage((array.shape[1], array.shape[0]), "RGB", log),
-        Resampling=SimpleNamespace(BICUBIC="bicubic", BOX="box", NEAREST="nearest"),
+        Resampling=SimpleNamespace(BICUBIC="bicubic", BOX="box", LANCZOS="lanczos", NEAREST="nearest"),
     )
     return SimpleNamespace(
         torch=torch,

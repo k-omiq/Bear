@@ -366,16 +366,11 @@ export const TOOL_SPECS = [
       // Apply beside it re-pads masks already detected, from their unpadded
       // shape (`region.rs#set_detection_padding`).
       //
-      // The row is drawn for Detect and for Clean. Detect & clean is the
-      // one-press run and keeps its panel to the choices it has to ask. The
-      // padding it grows its masks by is still the value held here
+      // The row is drawn for every step. Detect & clean sends the same value
       // (`editor.svelte.js#startRun`), so the two steps and the one pass
       // leave the same masks.
       ...section('mask', [
-        onlyWhen(
-          range('maskPadding', 'tools.param.maskPadding', 0, MAX_MASK_PADDING, 1, 'px'),
-          (values) => values.step === 'detect' || values.step === 'clean',
-        ),
+        range('maskPadding', 'tools.param.maskPadding', 0, MAX_MASK_PADDING, 1, 'px'),
       ]),
       // Two rows rather than one, because the two kinds of text want opposite
       // engines and always did: a speech balloon is flat white or flat black
@@ -458,6 +453,26 @@ export const TOOL_SPECS = [
         color('color', 'tools.param.color', '#ffffff'),
         range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
         range('flow', 'tools.param.flow', 0, 100, 5, '%'),
+      ]),
+    ],
+    runnable: false,
+    shell: 'pill',
+  },
+  {
+    // Takes Brush paint back off the page, as a raster editor's eraser takes
+    // it off a layer: every Brush layer under the stroke loses what the stroke
+    // covers, and nothing else is touched (`drawing.svelte.js#eraseDrawn`).
+    // Brush layers are not picked on the canvas, so the eraser does not wait
+    // for one to be chosen. It sits beside the Brush, on the next free slot.
+    id: 'eraser',
+    slot: 7,
+    nameKey: 'tools.name.eraser',
+    hintKey: 'tools.hint.eraser',
+    params: [
+      ...section('brush', [
+        range('size', 'tools.param.size', 4, 120, 2, 'px'),
+        range('hardness', 'tools.param.hardness', 0, 100, 5, '%'),
+        range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
       ]),
     ],
     runnable: false,
@@ -612,6 +627,7 @@ export const TOOL_SPECS = [
 export const TOOL_ICONS = /** @type {Record<string, string>} */ ({
   autoClean: 'sparkle',
   brush: 'brush',
+  eraser: 'eraser',
   shapes: 'shapes',
   aiMaskBrush: 'wand',
   cloneStamp: 'stamp',
@@ -657,6 +673,7 @@ export function toolShell(id) {
  */
 export const DRAWING_TOOLS = /** @type {const} */ ([
   'brush',
+  'eraser',
   'shapes',
   'aiMaskBrush',
   'cloneStamp',

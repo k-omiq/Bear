@@ -1140,6 +1140,7 @@ export const ko = {
     command: {
       applyTool: '영역에 도구 적용',
       drawMask: '직접 그린 마스크',
+      erasePaint: '브러시 칠 지우기',
     },
   },
   pages: {
@@ -1920,7 +1921,7 @@ export const ko = {
       retryBlocked: '페인트와 복제 획에는 다시 시도를 쓸 수 없습니다. 위에 칠하거나 삭제하세요.',
       retryWider: '더 넓게 다시 시도',
       retryWiderHint: '같은 엔진으로 조금 더 넓은 영역을 다시 클린합니다. 누를 때마다 조금씩 넓어집니다.',
-      rejectResult: '결과 거부',
+      rejectResult: '마스크 복원',
       engine: '클린 엔진',
       engineHint: '아래 레이어부터 다른 엔진으로 이 레이어를 교체합니다',
       textType: '텍스트 유형',
@@ -1975,13 +1976,20 @@ export const ko = {
       layerMove: '레이어 이동',
       layerRotate: '레이어 회전',
       cleanRegion: '영역 클린',
-      rejectResult: '결과 거부',
+      rejectResult: '마스크 복원',
+      deleteDetection: '감지된 마스크 삭제',
+      editDetection: '감지된 마스크 편집',
+      detectionPadding: '마스크 여백 변경',
+      detectionType: '텍스트 유형 변경',
+      approveMask: '보류된 마스크 승인',
+      detectPages: '페이지 감지',
     },
   },
   tools: {
     name: {
       autoClean: '텍스트 클린',
       brush: '브러시',
+      eraser: '지우개',
       shapes: '도형',
       aiMaskBrush: 'AI 마스크 브러시',
       contentAwareFill: '내용 인식 채우기',
@@ -1991,6 +1999,7 @@ export const ko = {
     hint: {
       autoClean: 'Enter로 실행',
       brush: '드래그해 칠하기',
+      eraser: '드래그해서 브러시 칠을 지우기',
       shapes: '페이지에서 드래그',
       aiMaskBrush: '텍스트 위로 긋기',
       cloneStamp: '{cloneSourceModifier}+클릭으로 소스 지정',
@@ -2288,6 +2297,7 @@ export const ko = {
     },
     history: {
       saveFailed: '실행 취소 기록을 저장하지 못했습니다. 다시 시작하면 실행 취소가 작동하지 않을 수 있습니다.',
+      stale: '이 단계는 실행 취소하거나 다시 실행할 수 없습니다. 그 뒤로 페이지가 바뀌었습니다. 아무것도 바뀌지 않았습니다.',
     },
     job: {
       resumed: '{page}페이지부터 재개합니다.',
@@ -2396,7 +2406,7 @@ export const ko = {
       paddingRefreshFailed: '마스크 여백은 저장되었지만 페이지를 새로 고치지 못했습니다. 챕터를 다시 열어 변경된 마스크를 확인하세요.',
       typeFailed: '텍스트 유형을 바꾸지 못했습니다. 영역은 그대로입니다.',
       approveFailed: '마스크를 승인하지 못했습니다. 영역은 그대로입니다.',
-      rejectNoMask: '이 결과에는 저장된 마스크가 없어 거부할 수 없습니다. 원본을 되돌리려면 삭제하세요.',
+      rejectNoMask: '이 레이어는 클리너로 만들지 않아 복원할 마스크가 없습니다. 원본을 되돌리려면 삭제하세요.',
       rejectFailed: '결과를 거부하지 못했습니다. 페이지는 그대로입니다.',
       reapplyFailed: '결과를 되돌리지 못했습니다. 페이지는 그대로입니다.',
     },

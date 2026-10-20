@@ -1,0 +1,44 @@
+name: Probe SAM head export
+on:
+  push:
+    branches: [probe-sam-head]
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
+      - name: Desktop install steps, as install_sam_ts runs them
+        shell: bash
+        run: |
+          set -e
+          ROOT=work; SRC=src; mkdir -p $ROOT $SRC
+          cp sam-bootstrap/bootstrap.py spikes/sam-ts-l/export_mask.py spikes/sam-ts-l/environment.txt spikes/sam-ts-l/dense_pe.f32.xz $SRC/
+          cp spikes/sam-ts-l/fixtures/synthetic_page.png $SRC/
+          uv python install 3.12
+          PYM=$(uv python find 3.12)
+          export UV_NO_CONFIG=1
+          uv venv --clear --python "$PYM" $ROOT/venv
+          uv venv --clear --python "$PYM" $ROOT/venv
+          if [ -f $ROOT/venv/Scripts/python.exe ]; then PY=$ROOT/venv/Scripts/python.exe; else PY=$ROOT/venv/bin/python; fi
+          uv pip sync --torch-backend cpu --python $PY $SRC/environment.txt
+          $PY $SRC/bootstrap.py --root $ROOT --source $SRC --dense-pe $SRC/dense_pe.f32.xz
+          ls -l $ROOT/proof/*.onnx
+          $PY - <<'PY'
+          import hashlib, pathlib
+          pins = {"koharu_samts_encoder.onnx": (1335305985, "9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe"),
+                  "koharu_samts_text_head.onnx": (22704641, "a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281")}
+          bad = 0
+          for name, (size, sha) in pins.items():
+              p = pathlib.Path("work/proof") / name
+              h = hashlib.sha256(p.read_bytes()).hexdigest()
+              print(name, p.stat().st_size, h, "OK" if (p.stat().st_size, h) == (size, sha) else "MISMATCH")
+              bad += (p.stat().st_size, h) != (size, sha)
+          raise SystemExit(bad)
+          PY

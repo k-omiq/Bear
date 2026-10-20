@@ -268,6 +268,7 @@ An idle-only release cancels nothing and writes no release marker, so no tile is
 - A gateway that renders also lists `jobs.retry_seed` (section 5). The app does not require it. Without it every request carries the pinned seed.
 - Modal also lists `gpu.status`, `gpu.stop` and `gpu.release_idle`, and the app requires them there. Beam uses a provider-managed GPU lifecycle and does not advertise them.
 - Analysis and denoise add `analysis.jobs`, `analysis.batches`, `denoise.jobs` and `denoise.results` when served. An app that finds them missing keeps the synchronous routes.
+- A gateway that serves `analysis.batches` also lists `analysis.batch_canvas`: a batch body may then carry `canvas_png_b64` and `canvas_rect` (one PNG over the batch's tiles, white outside them) in place of `tiles_png_b64`. The gateway cuts each tile out and rebuilds its canonical PNG (`contract.py` `analysis_canonical_tile_png`), whose digest the request names. An app that finds it missing sends tile PNGs.
 
 A missing required operation or an older endpoint produces "Gateway out of date. Redeploy the gateway" at the connection check. The model-info and analysis contracts keep binding the exact recipe, preprocessing, model revision and graph pins. Redeploy the CPU gateway and the GPU classes together, and do not clear durable job documents when upgrading.
 

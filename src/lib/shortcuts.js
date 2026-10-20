@@ -186,6 +186,15 @@ export const SHORTCUTS = [
     run: (c) => c.selectToolSlot(6),
   },
   {
+    id: 'tool.eraser',
+    group: 'tools',
+    labelKey: 'tools.name.eraser',
+    keys: ['7'],
+    chord: ['7'],
+    scope: 'editor',
+    run: (c) => c.selectToolSlot(7),
+  },
+  {
     // The selection tool's own two keys. Each arms the tool first; once it is
     // armed, `S` steps its shape (brush, lasso, rectangle) and `X` swaps add
     // for remove (`cycleMaskSelectShape` in the editor state). Not Photoshop's

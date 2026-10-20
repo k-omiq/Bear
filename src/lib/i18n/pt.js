@@ -1168,6 +1168,7 @@ export const pt = {
     command: {
       applyTool: 'a ferramenta aplicada a uma região',
       drawMask: 'uma máscara desenhada à mão',
+      erasePaint: 'pintura de pincel apagada',
     },
   },
   pages: {
@@ -1965,7 +1966,7 @@ export const pt = {
       retryBlocked: 'Tentar de novo não está disponível para traços de pintura e clone. Pinte por cima ou exclua.',
       retryWider: 'Tentar de novo mais amplo',
       retryWiderHint: 'Limpar de novo com o mesmo motor numa área um pouco maior. Cada clique a aumenta um pouco mais.',
-      rejectResult: 'Rejeitar resultado',
+      rejectResult: 'Restaurar máscara',
       engine: 'Limpar com',
       engineHint: 'Substituir esta camada usando outro motor, a partir das camadas de baixo',
       textType: 'Tipo de texto',
@@ -2020,13 +2021,20 @@ export const pt = {
       layerMove: 'movimento da camada',
       layerRotate: 'rotação da camada',
       cleanRegion: 'limpeza de região',
-      rejectResult: 'rejeição de resultado',
+      rejectResult: 'restauração de máscara',
+      deleteDetection: 'exclusão de máscara detectada',
+      editDetection: 'edição de máscara detectada',
+      detectionPadding: 'mudança da margem da máscara',
+      detectionType: 'mudança do tipo de texto',
+      approveMask: 'aprovação de máscara retida',
+      detectPages: 'detecção de páginas',
     },
   },
   tools: {
     name: {
       autoClean: 'Limpeza de texto',
       brush: 'Pincel',
+      eraser: 'Borracha',
       shapes: 'Formas',
       aiMaskBrush: 'Pincel de máscara com IA',
       contentAwareFill: 'Preenchimento sensível ao conteúdo',
@@ -2036,6 +2044,7 @@ export const pt = {
     hint: {
       autoClean: 'Enter para executar',
       brush: 'arraste para pintar',
+      eraser: 'arraste para apagar a pintura do pincel',
       shapes: 'arraste na página',
       aiMaskBrush: 'passe sobre o texto',
       cloneStamp: '{cloneSourceModifier} + clique numa origem',
@@ -2339,6 +2348,7 @@ export const pt = {
     },
     history: {
       saveFailed: 'Não foi possível salvar o histórico de desfazer. Desfazer pode não funcionar depois de reiniciar.',
+      stale: 'Não foi possível desfazer nem refazer essa etapa, porque a página mudou desde então. Nada foi alterado.',
     },
     job: {
       resumed: 'Retomando na página {page}.',
@@ -2452,7 +2462,7 @@ export const pt = {
       paddingRefreshFailed: 'A margem da máscara foi salva, mas não foi possível atualizar a página. Reabra o capítulo para ver a máscara atualizada.',
       typeFailed: 'Não foi possível alterar o tipo de texto. A região está como estava.',
       approveFailed: 'Não foi possível aprovar a máscara. A região está como estava.',
-      rejectNoMask: 'Este resultado não tem máscara salva, por isso não pode ser rejeitado. Exclua-o para trazer o original de volta.',
+      rejectNoMask: 'Esta camada não foi feita por um limpador, por isso não tem máscara para restaurar. Exclua-a para trazer o original de volta.',
       rejectFailed: 'Não foi possível rejeitar o resultado. A página está como estava.',
       reapplyFailed: 'Não foi possível restaurar o resultado. A página está como estava.',
     },

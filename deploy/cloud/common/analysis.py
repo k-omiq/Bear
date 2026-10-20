@@ -124,30 +124,19 @@ def sam_restore(logits: Any, size: tuple[int, int], resized: tuple[int, int]) ->
 
 
 def connected_components(mask: np.ndarray) -> List[Dict[str, int]]:
-    from collections import deque
-    height, width = mask.shape
-    seen = np.zeros((height, width), dtype=np.bool_)
-    result = []
-    for y in range(height):
-        for x in range(width):
-            if mask[y, x] == 0 or seen[y, x]:
-                continue
-            if len(result) >= ANALYSIS_MAX_COMPONENTS:
-                raise ContractValidationError("too many SAM components")
-            queue = deque([(x, y)])
-            seen[y, x] = True
-            x1 = x2 = x
-            y1 = y2 = y
-            while queue:
-                px, py = queue.popleft()
-                x1, x2 = min(x1, px), max(x2, px)
-                y1, y2 = min(y1, py), max(y2, py)
-                for nx, ny in ((px - 1, py), (px + 1, py), (px, py - 1), (px, py + 1)):
-                    if 0 <= nx < width and 0 <= ny < height and mask[ny, nx] and not seen[ny, nx]:
-                        seen[ny, nx] = True
-                        queue.append((nx, ny))
-            result.append({"x": x1, "y": y1, "width": x2 - x1 + 1, "height": y2 - y1 + 1})
-    return result
+    """Bounding boxes of the mask's 4-connected components, in the raster order
+    of each one's first pixel.
+
+    SciPy labels in C. The pure-Python scan this replaces held the GIL for about
+    0.15 s a 1024 tile on a fast CPU, so the tiles of other pages that the GPU
+    container serves on threads beside it waited.
+    """
+    from scipy import ndimage  # In the analysis GPU image only, not the gateway's.
+    labels, count = ndimage.label(mask)
+    if count > ANALYSIS_MAX_COMPONENTS:
+        raise ContractValidationError("too many SAM components")
+    return [{"x": cols.start, "y": rows.start, "width": cols.stop - cols.start, "height": rows.stop - rows.start}
+            for rows, cols in ndimage.find_objects(labels)]
 
 
 def rt_prepare(image: Image.Image) -> np.ndarray:

@@ -5282,11 +5282,11 @@ pub(crate) mod tests {
                 "undo" => {
                     let mut history = crate::history::load(&fixture.manifest);
                     history.entries.push(crate::history::Delta {
+                        parts: Vec::new(),
                         seq: 1, label: "undo".into(), op: "region-state".into(), region_id: "reg-1".into(),
                         before: crate::history::Side { present: true, page_status: None, region: None },
                         after: crate::history::Side { present: true, page_status: None,
-                            region: Some(serde_json::to_value(&job.project.patches[0]).unwrap()) },
-                    });
+                            region: Some(serde_json::to_value(&job.project.patches[0]).unwrap()) }, ..Default::default() });
                     history.cursor = 0;
                     crate::history::save(&fixture.manifest, &history).unwrap();
                     std::fs::write(&fixture.manifest, &predecessor).unwrap();

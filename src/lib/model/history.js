@@ -35,6 +35,12 @@
  *
  * Two fast undos would otherwise put two adapter calls in flight with no
  * ordering guarantee, and whichever settled last would win.
+ *
+ * **One queue for everything.** Pushes, replays and index reads all go
+ * through `enqueue`, and `pending` counts what is queued. A second queue that
+ * started a task at once whenever it believed itself idle could start a push
+ * while an undo was still waiting its turn on this one, and the two would
+ * reach the journal in either order.
  */
 
 /**
@@ -48,15 +54,16 @@
  * @property {HistoryLabel[]} entries - the whole journal, oldest first
  * @property {number} cursor - how many entries are in the past
  * @property {number} limit - how many entries the backend keeps; unbounded until it has said
- * @property {Promise<void>} running - the tail of the replay chain; await it to settle
- * @property {unknown} error - why the last replay failed, or null
+ * @property {Promise<void>} running - the tail of the task chain; await it to settle
+ * @property {number} pending - how many tasks are queued or running
+ * @property {unknown} error - why the last task failed, or null
  */
 
 /**
  * @returns {History}
  */
 export function createHistory() {
-  return { entries: [], cursor: 0, limit: Infinity, running: Promise.resolve(), error: null }
+  return { entries: [], cursor: 0, limit: Infinity, running: Promise.resolve(), pending: 0, error: null }
 }
 
 /**
@@ -96,18 +103,51 @@ export function push(history, entry) {
 }
 
 /**
- * Queue one replay behind everything already in flight.
+ * Queue one task behind everything already in flight: a replay, a push, a
+ * read of the index. A rejection is kept on `error` and does not stop the
+ * tasks behind it.
  *
  * @param {History} history
  * @param {() => void|Promise<void>} run
  */
-function enqueue(history, run) {
-  history.running = history.running.then(run).then(
-    () => undefined,
-    (error) => {
-      history.error = error
-    },
-  )
+export function enqueue(history, run) {
+  // An idle queue starts the task now, in the caller's turn: nothing is
+  // ahead of it, and a push that waited a tick would let a click land first.
+  const idle = !busy(history)
+  history.pending = (history.pending ?? 0) + 1
+  history.running = (idle ? started(run) : history.running.then(run))
+    .then(
+      () => undefined,
+      (error) => {
+        history.error = error
+      },
+    )
+    .finally(() => {
+      history.pending -= 1
+    })
+}
+
+/**
+ * @param {() => void|Promise<void>} run
+ * @returns {Promise<void>}
+ */
+function started(run) {
+  try {
+    return Promise.resolve(run())
+  } catch (error) {
+    return Promise.reject(error)
+  }
+}
+
+/**
+ * Whether a task is queued or running, so an index a backend answered with
+ * may already be older than what those leave behind.
+ *
+ * @param {History} history
+ * @returns {boolean}
+ */
+export function busy(history) {
+  return (history.pending ?? 0) > 0
 }
 
 /**

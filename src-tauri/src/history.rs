@@ -88,7 +88,7 @@ pub fn valid_limit(value: &serde_json::Value) -> Option<usize> {
 }
 
 /// The limit a settings snapshot asks for. Anything that is not a valid limit
-/// - no key, a hand-edited file, a value from a build with other bounds - is
+/// (no key, a hand-edited file, a value from a build with other bounds) is
 /// the default, because a journal with a wrong cap is a worse answer than a
 /// journal with the usual one.
 pub fn limit_from(settings: &serde_json::Value) -> usize {
@@ -119,6 +119,15 @@ pub const CLEAN_OP: &str = "clean-state";
 pub const CLEAN_LABEL: &str = "masks.command.cleanRegion";
 /// The Undo tooltip of a rejected result.
 pub const REJECT_LABEL: &str = "masks.command.rejectResult";
+/// The Undo tooltips of the edits of a page's detections and held rows
+/// ([`DETECTION_OP`]).
+pub const DELETE_DETECTION_LABEL: &str = "masks.command.deleteDetection";
+pub const DETECTION_TYPE_LABEL: &str = "masks.command.detectionType";
+pub const EDIT_DETECTION_LABEL: &str = "masks.command.editDetection";
+pub const PADDING_LABEL: &str = "masks.command.detectionPadding";
+pub const APPROVE_LABEL: &str = "masks.command.approveMask";
+pub const DISMISS_LABEL: &str = "masks.command.deleteRegion";
+pub const DETECT_LABEL: &str = "masks.command.detectPages";
 
 /// One side of a step the backend records: the region as the manifest holds
 /// it now, with its page's status. `None` for a region the page does not
@@ -156,7 +165,16 @@ pub(crate) fn record_step(
     let limit = LAST_LIMIT.load(std::sync::atomic::Ordering::Relaxed);
     let mut journal = load(job);
     journal.push(
-        NewDelta { label: label.to_owned(), op: CLEAN_OP.to_owned(), region_id: region_id.to_owned(), before, after },
+        NewDelta {
+            label: label.to_owned(),
+            op: CLEAN_OP.to_owned(),
+            region_id: region_id.to_owned(),
+            before,
+            after,
+            parts: Vec::new(),
+            pages: Vec::new(),
+            group: None,
+        },
         limit,
     );
     save(job, &journal)?;
@@ -222,7 +240,7 @@ pub const JOURNAL_FILE: &str = "history.json";
 /// something back into the open chapter without waiting for a re-read of the
 /// manifest, and because a backend that keeps its whole history in memory (the
 /// mock, and any fixture backend) restores from it directly.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Side {
     /// Whether the region existed at all in this state.
@@ -241,15 +259,17 @@ pub struct Side {
 
 /// One undoable edit, as data rather than as a pair of closures.
 ///
-/// `op` is the vocabulary, and it has two verbs. `region-state` is the one
+/// `op` is the vocabulary, and it has three verbs. `region-state` is the one
 /// every editing surface of the interface funnels through (`maskactions`,
 /// `toolapply`, `drawing`). [`CLEAN_OP`], `clean-state`, is a clean of a
 /// detected region or a rejected result, and the backend writes it with the
-/// commit ([`record_step`]). It is a field rather than an implied constant so
-/// that a verb can be added without a second file format, and so an entry
+/// commit ([`record_step`]). [`DETECTION_OP`], `detection-state`, is any
+/// edit of a page's detections and held rows, and it carries `pages` instead
+/// of sides ([`record_pages`]). It is a field rather than an implied constant
+/// so that a verb can be added without a second file format, and so an entry
 /// written by a later build is recognisably *not* something this one knows
 /// how to replay.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Delta {
     /// Monotonic within a chapter. Identifies an entry across a reload, which
@@ -259,23 +279,57 @@ pub struct Delta {
     /// The i18n key the Undo/Redo tooltip renders. No English crosses the seam,
     /// here or anywhere.
     pub label: String,
-    /// The verb: `region-state` or `clean-state`.
+    /// The verb: `region-state`, `clean-state` or `detection-state`.
     pub op: String,
-    /// Which region the delta is about.
+    /// Which region the delta is about. Empty for a `detection-state` entry,
+    /// which is about pages.
+    pub region_id: String,
+    #[serde(default)]
+    pub before: Side,
+    #[serde(default)]
+    pub after: Side,
+    /// One edit of several regions, the first included: an eraser stroke that
+    /// took paint off three Brush layers is one step. Empty for the usual
+    /// edit of one region, which `region_id`, `before` and `after` say whole.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<Part>,
+    /// A `detection-state` entry's pages: each page's state before and after,
+    /// by digest ([`PageStep`]). Empty for every other verb.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<PageStep>,
+    /// The run a `detection-state` entry was written by. A run's later pages
+    /// join its entry rather than adding one each, so one Undo takes back a
+    /// whole Detect run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+}
+
+/// One region of a delta that edited several.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Part {
     pub region_id: String,
     pub before: Side,
     pub after: Side,
 }
 
 /// What a delta looks like on the way in, before the journal numbers it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewDelta {
     pub label: String,
     pub op: String,
     pub region_id: String,
+    #[serde(default)]
     pub before: Side,
+    #[serde(default)]
     pub after: Side,
+    #[serde(default)]
+    pub parts: Vec<Part>,
+    #[serde(default)]
+    pub pages: Vec<PageStep>,
+    #[serde(default)]
+    pub group: Option<String>,
 }
 
 /// The journal as it sits on disk.
@@ -325,6 +379,9 @@ impl Journal {
             region_id: delta.region_id,
             before: delta.before,
             after: delta.after,
+            parts: delta.parts,
+            pages: delta.pages,
+            group: delta.group,
         };
         self.next_seq += 1;
         self.entries.push(entry.clone());
@@ -399,11 +456,20 @@ pub struct HistoryView {
 }
 
 /// One step of undo or redo: where the cursor now is, and what to replay.
+///
+/// A `detection-state` entry is replayed here, not by the interface: `pages`
+/// are the page indices it wrote, for the interface to read again, and
+/// `refused` is set when a page was not in the state the entry left it in
+/// ([`STALE`]). The cursor moved either way.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryStep {
     pub cursor: usize,
     pub entry: Option<Delta>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
 }
 
 /// `<job>.mtclean` → `<job>.mtclean.d/history.json`.
@@ -537,7 +603,14 @@ pub async fn history_load(
 ) -> Result<HistoryView, String> {
     crate::library::blocking(move || {
         let job = crate::library::resolve_chapter(&app, &chapter_id)?;
-        Ok(load(&job).view(limit_for(&app)))
+        let journal = load(&job);
+        // Opening a chapter is when page states no entry names any more go:
+        // under the job's lock, so a capture in flight is never swept, and
+        // skipped when another writer has the chapter.
+        if let Ok(_lock) = crate::run::lock_job(&job) {
+            sweep_blobs(&sidecar_dir(&job), &journal);
+        }
+        Ok(journal.view(limit_for(&app)))
     })
     .await
 }
@@ -594,13 +667,20 @@ pub async fn history_move(
 pub(crate) fn move_at(job: &Path, chapter_id: &str, direction: &str) -> Result<HistoryStep, String> {
     let _lock = crate::run::lock_job(job)?;
     let mut journal = load(job);
-    let page_index = journal.next(direction)
+    let next = journal.next(direction).cloned();
+    let page_index = next.as_ref()
         .and_then(|entry| crate::region::page_index_in(chapter_id, &entry.region_id));
     if let Some(page_index) = page_index {
         if crate::run::page_run(job, chapter_id, page_index).is_some() {
             return Err(crate::run::WriteRefused::PageBusy { page_index }.into());
         }
     }
+    // A detection edit is put back here, under the lock that moves the
+    // cursor, so no run can reach its pages between the two.
+    let (pages, refused) = match next.as_ref().filter(|entry| entry.op == DETECTION_OP) {
+        Some(entry) => replay_pages(job, chapter_id, entry, direction == "undo")?,
+        None => (Vec::new(), None),
+    };
     let entry = match direction {
         "undo" => journal.undo(),
         "redo" => journal.redo(),
@@ -610,7 +690,384 @@ pub(crate) fn move_at(job: &Path, chapter_id: &str, direction: &str) -> Result<H
     Ok(HistoryStep {
         cursor: journal.cursor,
         entry,
+        pages,
+        refused,
     })
+}
+
+/* ------------------------------------------------------------------ */
+/* Page states: what an edit of a page's detections is undone to       */
+/* ------------------------------------------------------------------ */
+
+/// The verb of an edit of a page's detections and held rows: a detection
+/// deleted, its mask brushed or padded, its text type changed, a held row
+/// approved or dismissed, a page detected. A detection has no pixels and
+/// no `visible` flag, so these could not be undone by turning a record off,
+/// the way a patch's are.
+///
+/// So the entry names **whole page states**, before and after, by digest. A
+/// page state is the page's detection records, its held rows, and the digest
+/// of every sidecar file they name, written once into `history/` beside this
+/// journal ([`capture_page`]). Every file there is named by its own SHA-256:
+/// an unchanged mask is the same file in every state that holds it, and the
+/// state after one edit is the same file as the state before the next. What
+/// an edit costs on disk is what it changed. Nothing is held in memory.
+///
+/// The backend replays the entry itself, in [`move_at`], under the lock that
+/// moves the cursor ([`replay_pages`]).
+pub const DETECTION_OP: &str = "detection-state";
+/// The directory, inside `<job>.mtclean.d/`, that page states and the files
+/// they name are kept in.
+pub const BLOB_DIR: &str = "history";
+/// The code a replay answers with when a page is not in the state the entry
+/// left it in. Something this journal does not know about changed the page,
+/// and putting the entry's state back would undo that too, so nothing is
+/// written. The cursor still moves, so the steps below stay reachable.
+pub const STALE: &str = "history_stale";
+
+/// One page of a `detection-state` entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PageStep {
+    pub source_idx: usize,
+    /// The digest of the page state before the edit.
+    pub before: String,
+    /// The digest of the page state after it.
+    pub after: String,
+}
+
+/// A page's detections and held rows, as a blob in `history/`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageState {
+    detections: Vec<cleaner_core::project::DetectedRegion>,
+    untouched: Vec<cleaner_core::project::RegionUntouched>,
+    /// Every sidecar file the records name, by its path relative to the
+    /// sidecar, and the digest of its bytes. A file that was not on disk is
+    /// left out, and a restore leaves it out too.
+    files: std::collections::BTreeMap<String, String>,
+}
+
+fn blob_dir(sidecar: &Path) -> PathBuf {
+    sidecar.join(BLOB_DIR)
+}
+
+fn is_digest(name: &str) -> bool {
+    name.len() == 64 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// A path a page state may name: relative, inside the sidecar, in one of the
+/// directories detections and held rows keep their files in.
+fn is_page_file(reference: &str) -> bool {
+    let path = Path::new(reference);
+    ["detections/", "candidates/", "evidence/"].iter().any(|dir| reference.starts_with(dir))
+        && path.components().all(|part| matches!(part, std::path::Component::Normal(_)))
+}
+
+fn digest_of(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(bytes))
+}
+
+/// Keep `bytes` in `history/` under their digest, once.
+fn put_blob(sidecar: &Path, bytes: &[u8]) -> Result<String, String> {
+    let digest = digest_of(bytes);
+    let path = blob_dir(sidecar).join(&digest);
+    if !path.exists() {
+        std::fs::create_dir_all(blob_dir(sidecar)).map_err(|e| e.to_string())?;
+        buffers::write_atomic(&path, bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(digest)
+}
+
+/// A blob's bytes, checked against the digest that names them.
+fn get_blob(sidecar: &Path, digest: &str) -> Result<Vec<u8>, String> {
+    if !is_digest(digest) {
+        return Err(format!("{STALE}: {digest} is not a page state"));
+    }
+    let path = blob_dir(sidecar).join(digest);
+    let bytes = std::fs::read(&path).map_err(|e| format!("{STALE}: {}: {e}", path.display()))?;
+    if digest_of(&bytes) != digest {
+        return Err(format!("{STALE}: {} fails its digest", path.display()));
+    }
+    Ok(bytes)
+}
+
+fn read_state(sidecar: &Path, digest: &str) -> Result<PageState, String> {
+    serde_json::from_slice(&get_blob(sidecar, digest)?).map_err(|e| format!("{STALE}: {e}"))
+}
+
+/// The files a page state names, each with the digest its record already
+/// carries, if it carries one: a mask whose digest is known and whose blob is
+/// kept already is not read again.
+fn page_files(state: &PageState) -> Vec<(String, Option<String>)> {
+    let mut files = Vec::new();
+    for record in &state.detections {
+        for reference in record.files() {
+            let known = (reference == record.mask_ref && !record.mask_sha256.is_empty())
+                .then(|| record.mask_sha256.clone());
+            files.push((reference, known));
+        }
+        if let Some(group) = &record.group {
+            if let Some(reference) = &group.evidence_ref {
+                files.push((reference.clone(), group.evidence_sha256.clone()));
+            }
+        }
+    }
+    for row in &state.untouched {
+        if let Some(held) = &row.lettering {
+            let known = held.mask_ref.strip_prefix("candidates/")
+                .and_then(|name| name.strip_suffix(".mask"))
+                .filter(|name| is_digest(name))
+                .map(str::to_owned);
+            files.push((held.mask_ref.clone(), known));
+        }
+    }
+    files
+}
+
+/// Write the state of one page into `history/` and answer its digest. The
+/// same page in the same state is the same digest, so a caller can tell
+/// whether an edit changed anything by comparing two.
+pub(crate) fn capture_page(job: &cleaner_core::project::Job, source_idx: usize) -> Result<String, String> {
+    let sidecar = job.sidecar();
+    let mut state = PageState {
+        detections: job.project.detections.iter().filter(|row| row.source_idx == source_idx).cloned().collect(),
+        untouched: job.project.regions_untouched.iter().filter(|row| row.source_idx == source_idx).cloned().collect(),
+        files: Default::default(),
+    };
+    for (reference, known) in page_files(&state) {
+        if !is_page_file(&reference) || state.files.contains_key(&reference) {
+            continue;
+        }
+        if let Some(digest) = known.filter(|digest| is_digest(digest) && blob_dir(sidecar).join(digest).exists()) {
+            state.files.insert(reference, digest);
+            continue;
+        }
+        match std::fs::read(sidecar.join(&reference)) {
+            Ok(bytes) => {
+                let digest = put_blob(sidecar, &bytes)?;
+                state.files.insert(reference, digest);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("{reference}: {error}")),
+        }
+    }
+    put_blob(sidecar, &serde_json::to_vec(&state).map_err(|e| e.to_string())?)
+}
+
+/// [`capture_page`] for every page named, to pass to [`record_pages`] once
+/// the edit is written. A page that cannot be captured is left out, and its
+/// edit is not undoable.
+pub(crate) fn capture_pages(job: &cleaner_core::project::Job, sources: &[usize]) -> Vec<(usize, String)> {
+    sources.iter().filter_map(|&source_idx| match capture_page(job, source_idx) {
+        Ok(digest) => Some((source_idx, digest)),
+        Err(error) => {
+            eprintln!("page {source_idx} could not be saved to undo history: {error}");
+            None
+        }
+    }).collect()
+}
+
+/// Record an edit of these pages' detections as one undo step, from the
+/// states [`capture_pages`] took before it. A page the edit left as it was is
+/// not part of the step, and an edit that changed no page records nothing.
+///
+/// With a `group` the step joins the journal's last entry when that entry is
+/// the same group's and nothing was undone since: a run's pages make one
+/// step, and a page it writes twice keeps its first `before`.
+///
+/// **The caller holds the job's lock**, as for [`record_step`]. A journal
+/// that cannot be written is said on the console and does not fail the edit:
+/// the manifest is the record of what was done.
+pub(crate) fn record_pages(
+    job: &cleaner_core::project::Job,
+    chapter_id: &str,
+    label: &str,
+    group: Option<&str>,
+    before: Vec<(usize, String)>,
+) {
+    let mut pages = Vec::new();
+    for (source_idx, before) in before {
+        match capture_page(job, source_idx) {
+            Ok(after) if after != before => pages.push(PageStep { source_idx, before, after }),
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("an edit of page {source_idx} could not be saved to undo history: {error}");
+                return;
+            }
+        }
+    }
+    if pages.is_empty() {
+        return;
+    }
+    let path = job.path();
+    let limit = LAST_LIMIT.load(std::sync::atomic::Ordering::Relaxed);
+    let mut journal = load(path);
+    let cursor_at_end = journal.cursor == journal.entries.len();
+    let joined = match (group, journal.entries.last_mut()) {
+        (Some(group), Some(last)) if cursor_at_end && last.op == DETECTION_OP && last.group.as_deref() == Some(group) => {
+            for page in pages.drain(..) {
+                match last.pages.iter_mut().find(|held| held.source_idx == page.source_idx) {
+                    Some(held) => held.after = page.after,
+                    None => last.pages.push(page),
+                }
+            }
+            last.pages.retain(|page| page.before != page.after);
+            true
+        }
+        _ => false,
+    };
+    if !joined {
+        journal.push(
+            NewDelta {
+                label: label.to_owned(),
+                op: DETECTION_OP.to_owned(),
+                region_id: String::new(),
+                before: Side::default(),
+                after: Side::default(),
+                parts: Vec::new(),
+                pages,
+                group: group.map(str::to_owned),
+            },
+            limit,
+        );
+    }
+    if let Err(error) = save(path, &journal) {
+        eprintln!("an edit of {chapter_id} could not be saved to undo history: {error}");
+        return;
+    }
+    crate::events::emit(&crate::events::Event::HistoryChanged { chapter_id: chapter_id.to_owned() });
+}
+
+/// Put one `detection-state` entry's pages back, in the direction asked for,
+/// in one manifest write. Answers the page indices written, and [`STALE`]
+/// when a page was not in the state the entry left it in, in which case
+/// nothing at all is written. A page already in the state asked for is not
+/// written again, so a replay may be asked twice.
+///
+/// Refused with `page_busy` before anything is read when a run is on one of
+/// the pages, as every edit of a page is.
+fn replay_pages(
+    job_path: &Path,
+    chapter_id: &str,
+    entry: &Delta,
+    undo: bool,
+) -> Result<(Vec<usize>, Option<String>), String> {
+    let mut job = cleaner_core::project::Job::open(job_path).map_err(|e| e.to_string())?;
+    let page_of = |job: &cleaner_core::project::Job, source_idx: usize| {
+        job.project.strip.order.iter().position(|&at| at == source_idx)
+    };
+    for step in &entry.pages {
+        if let Some(page_index) = page_of(&job, step.source_idx) {
+            if crate::run::page_run(job_path, chapter_id, page_index).is_some() {
+                return Err(crate::run::WriteRefused::PageBusy { page_index }.into());
+            }
+        }
+    }
+    let sidecar = job.sidecar().to_path_buf();
+    // Every page is checked, and every target read, before anything is written.
+    let mut targets = Vec::new();
+    for step in &entry.pages {
+        let (from, to) = if undo { (&step.after, &step.before) } else { (&step.before, &step.after) };
+        let now = capture_page(&job, step.source_idx)?;
+        if now == *to {
+            continue;
+        }
+        if now != *from {
+            return Ok((Vec::new(), Some(STALE.to_owned())));
+        }
+        match read_state(&sidecar, to) {
+            Ok(state) => targets.push((step.source_idx, state)),
+            Err(error) => {
+                eprintln!("an undo step of {chapter_id} could not be read: {error}");
+                return Ok((Vec::new(), Some(STALE.to_owned())));
+            }
+        }
+    }
+    if targets.is_empty() {
+        let pages = entry.pages.iter().filter_map(|step| page_of(&job, step.source_idx)).collect();
+        return Ok((pages, None));
+    }
+    // A file the manifest names now is never written over: a state that
+    // would change one is not the state this page came from.
+    let named: std::collections::HashSet<String> = job.project.detections.iter()
+        .chain(&job.project.cleaned_detections)
+        .flat_map(|row| row.files())
+        .chain(job.project.regions_untouched.iter().filter_map(|row| Some(row.lettering.as_ref()?.mask_ref.clone())))
+        .collect();
+    let mut writes = Vec::new();
+    for (source_idx, state) in &targets {
+        let clash = state.detections.iter().any(|row| {
+            row.source_idx != *source_idx
+                || job.project.patches.iter().any(|patch| patch.id == row.id)
+                || job.project.detections.iter().any(|held| held.id == row.id && held.source_idx != *source_idx)
+        }) || state.untouched.iter().any(|row| row.source_idx != *source_idx);
+        if clash {
+            return Ok((Vec::new(), Some(STALE.to_owned())));
+        }
+        for (reference, digest) in &state.files {
+            if !is_page_file(reference) {
+                return Ok((Vec::new(), Some(STALE.to_owned())));
+            }
+            let path = sidecar.join(reference);
+            match std::fs::read(&path) {
+                Ok(bytes) if digest_of(&bytes) == *digest => continue,
+                Ok(_) if named.contains(reference) => return Ok((Vec::new(), Some(STALE.to_owned()))),
+                _ => {}
+            }
+            match get_blob(&sidecar, digest) {
+                Ok(bytes) => writes.push((path, bytes)),
+                Err(error) => {
+                    eprintln!("an undo step of {chapter_id} could not be read: {error}");
+                    return Ok((Vec::new(), Some(STALE.to_owned())));
+                }
+            }
+        }
+    }
+    for (path, bytes) in &writes {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        buffers::write_atomic(path, bytes).map_err(|e| e.to_string())?;
+    }
+    let mut pages = Vec::new();
+    for (source_idx, state) in targets {
+        job.project.detections.retain(|row| row.source_idx != source_idx);
+        job.project.detections.extend(state.detections);
+        job.project.regions_untouched.retain(|row| row.source_idx != source_idx);
+        job.project.regions_untouched.extend(state.untouched);
+        pages.extend(page_of(&job, source_idx));
+    }
+    job.flush().map_err(|e| e.to_string())?;
+    crate::library::invalidate_manifest_cache(job_path);
+    Ok((pages, None))
+}
+
+/// Delete the page states and files in `history/` that no entry names any
+/// more: the entries a push dropped, trimmed or truncated. Run when a chapter
+/// is opened, under its lock. A state that cannot be read keeps nothing.
+pub(crate) fn sweep_blobs(sidecar: &Path, journal: &Journal) {
+    let Ok(listing) = std::fs::read_dir(blob_dir(sidecar)) else {
+        return;
+    };
+    let mut keep = std::collections::HashSet::new();
+    for step in journal.entries.iter().flat_map(|entry| &entry.pages) {
+        for digest in [&step.before, &step.after] {
+            if keep.insert(digest.clone()) {
+                if let Ok(state) = read_state(sidecar, digest) {
+                    keep.extend(state.files.into_values());
+                }
+            }
+        }
+    }
+    for item in listing.flatten() {
+        let name = item.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if is_digest(name) && !keep.contains(name) {
+            let _ = std::fs::remove_file(item.path());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -619,6 +1076,7 @@ mod tests {
 
     fn delta(label: &str, region: &str) -> NewDelta {
         NewDelta {
+            parts: Vec::new(),
             label: label.to_owned(),
             op: "region-state".to_owned(),
             region_id: region.to_owned(),
@@ -631,8 +1089,17 @@ mod tests {
                 present: false,
                 page_status: Some("unclean".into()),
                 region: None,
-            },
-        }
+            }, ..Default::default() }
+    }
+
+    #[test]
+    fn an_entry_from_the_interface_needs_no_pages_parts_or_group() {
+        // What `regionEntry` sends for a plain edit of one region.
+        let delta: NewDelta = serde_json::from_value(serde_json::json!({
+            "label": "masks.command.rerunMask", "op": "region-state", "regionId": "r1",
+            "before": {"present": false}, "after": {"present": true},
+        })).unwrap();
+        assert!(delta.parts.is_empty() && delta.pages.is_empty() && delta.group.is_none());
     }
 
     #[test]
@@ -774,21 +1241,23 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mtclean-history-timing-{}", std::process::id()));
         let job = dir.join("chapter.mtclean");
         for limit in [UNDO_LIMIT_DEFAULT, UNDO_LIMIT_MAX, 5_000] {
-            let mut journal = Journal::default();
-            journal.entries = real.entries.iter().cycle().take(limit).cloned().collect();
-            journal.cursor = limit;
-            journal.next_seq = limit as u64 + 1;
+            let journal = Journal {
+                entries: real.entries.iter().cycle().take(limit).cloned().collect(),
+                cursor: limit,
+                next_seq: limit as u64 + 1,
+                ..Default::default()
+            };
             save(&job, &journal).unwrap();
             let bytes = std::fs::metadata(journal_path(&job)).unwrap().len();
             let mut times: Vec<f64> = (0..15)
                 .map(|_| {
                     let entry = NewDelta {
+                        parts: Vec::new(),
                         label: real.entries[0].label.clone(),
                         op: real.entries[0].op.clone(),
                         region_id: real.entries[0].region_id.clone(),
                         before: real.entries[0].before.clone(),
-                        after: real.entries[0].after.clone(),
-                    };
+                        after: real.entries[0].after.clone(), ..Default::default() };
                     let started = std::time::Instant::now();
                     let mut journal = load(&job);
                     journal.push(entry, limit);

@@ -26,17 +26,21 @@
   let choosing = $state(false)
   let saveFailed = $state(false)
   let installing = $state(false)
+  // An install failure is not a settings failure: say what the helper said,
+  // the way Settings does, rather than "This setting could not be saved".
+  let installError = $state('')
 
   async function installFlux() {
     if (installing) return
     installing = true
     saveFailed = false
+    installError = ''
     try {
       await getBackend().installFluxHelper({ backend: 'auto', accelerator: 'auto' })
       await loadCapabilities()
       await loadFirstLaunchSidecarModels()
-    } catch {
-      saveFailed = true
+    } catch (error) {
+      installError = error instanceof Error ? error.message : String(error)
     } finally {
       installing = false
     }
@@ -110,6 +114,7 @@
     <p class="alert" role="alert">{t('onboarding.cleaning.helperMissing')}</p>
   {/if}
 {/if}
+{#if installError}<p class="alert" role="alert">{t('settings.sidecar.installFailed', { detail: installError })}</p>{/if}
 {#if saveFailed}<p class="alert" role="alert">{t('onboarding.saveFailed')}</p>{/if}
 
 <style>

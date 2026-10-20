@@ -7,6 +7,9 @@ and composite exactly as for Klein. Two things differ:
 - The pipeline always resizes its reference image to about one megapixel on a
   32 px grid. The crop is resized to exactly that size first, so the reference and
   the answer share one grid; any other size moves the answer by several pixels.
+  Both resizes are Lanczos: almost every crop is stretched 1.5 to 3 times, and the
+  bicubic-in, box-out round trip alone lost about a fifth of the fine tone and line
+  detail (docs/findings.md, 2026-10-19).
 - The LoRAs stay PEFT adapters at runtime, both at weight 1.0. SDNQ layers hold packed 4-bit weights
   that a fuse cannot write into, and the adapter costs little at 8 steps.
 - The runner compares changes inside the hint with changes outside it and retries
@@ -238,7 +241,7 @@ class QwenEditRunner:
         width, height = crop.size
 
         work_w, work_h = work_size(width, height)
-        work_crop = crop if crop.size == (work_w, work_h) else crop.resize((work_w, work_h), Image.Resampling.BICUBIC)
+        work_crop = crop if crop.size == (work_w, work_h) else crop.resize((work_w, work_h), Image.Resampling.LANCZOS)
         cfg = float(guidance_from_scaled(guidance_scaled))
         generator = torch.Generator(device="cpu").manual_seed(int(seed))
         kwargs = filter_call_kwargs(
@@ -270,8 +273,7 @@ class QwenEditRunner:
         if result.mode != "RGB":
             result = result.convert("RGB")
         if result.size != (width, height):
-            shrink = result.size[0] >= width
-            result = result.resize((width, height), Image.Resampling.BOX if shrink else Image.Resampling.BICUBIC)
+            result = result.resize((width, height), Image.Resampling.LANCZOS)
         return result
 
 

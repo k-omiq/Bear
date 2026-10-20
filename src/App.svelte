@@ -141,18 +141,33 @@
 
   // Notices are stored as i18n data and translated at the edge, here. A param
   // whose name ends in `Key` carries a key, which `t()` resolves.
+  // A notice whose remedy is in Settings carries a button that opens it there.
+  // An engine fault points at Performance's runtime row: re-downloading the
+  // runtime, or choosing CPU, is what fixes one.
+  /** @type {Record<string, {labelKey: string, open: (notice: {params?: Record<string, unknown>}) => void}>} */
+  const NOTICE_ACTIONS = {
+    'notice.run.modelsMissing': {
+      labelKey: 'tools.target.chooseModels',
+      open: (notice) => openModelSettings(typeof notice.params?.model === 'string' ? notice.params.model : null),
+    },
+    'notice.run.engineFault': {
+      labelKey: 'settings.section.performance',
+      open: () => openModelSettings('runtime'),
+    },
+  }
   const notices = $derived(
-    app.notices.map((notice) => ({
-      id: notice.id,
-      text: t(notice.key, notice.params),
-      tone: notice.tone,
-      icon: notice.icon,
-      duration: notice.duration,
-      actionLabel: notice.key === 'notice.run.modelsMissing' ? t('tools.target.chooseModels') : undefined,
-      onaction: notice.key === 'notice.run.modelsMissing'
-        ? () => { openModelSettings(typeof notice.params?.model === 'string' ? notice.params.model : null); dismissNotice(notice.id) }
-        : undefined,
-    }))
+    app.notices.map((notice) => {
+      const action = NOTICE_ACTIONS[notice.key]
+      return {
+        id: notice.id,
+        text: t(notice.key, notice.params),
+        tone: notice.tone,
+        icon: notice.icon,
+        duration: notice.duration,
+        actionLabel: action ? t(action.labelKey) : undefined,
+        onaction: action ? () => { action.open(notice); dismissNotice(notice.id) } : undefined,
+      }
+    })
   )
 
   // What is loaded, polled while the editor is on screen and only there.

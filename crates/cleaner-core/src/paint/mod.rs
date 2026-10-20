@@ -28,6 +28,7 @@
 //! back to native channels. Alpha and every uncovered native sample are copied.
 
 pub mod brush;
+pub mod erase;
 pub mod plan;
 
 use crate::composite::{composite_region, CompositeError};

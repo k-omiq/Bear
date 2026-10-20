@@ -26,6 +26,8 @@ import {
   canRedo,
   undoLabel,
   redoLabel,
+  enqueue as enqueueHistory,
+  busy as historyBusy,
 } from '../model/history.js'
 import { reviewList, reviewReason, stepIssue } from '../model/review.js'
 import { runDetection, unifyAnalysisTargets } from '../model/pipelines.js'
@@ -46,7 +48,7 @@ const AUTOSAVE_DEBOUNCE_MS = 250
 const HISTORY_RETRY_MS = 50
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Tool ids, in the order the `1` to `6` shortcuts and the tool rail use. */
+/** Tool ids, in the order of the `1` to `7` shortcuts (`slot` in `tools.js`). */
 export const TOOLS = /** @type {const} */ ([
   'autoClean',
   'brush',
@@ -54,6 +56,7 @@ export const TOOLS = /** @type {const} */ ([
   'aiMaskBrush',
   'cloneStamp',
   'maskSelect',
+  'eraser',
 ])
 
 /**
@@ -123,6 +126,7 @@ function defaultToolParams() {
       opacity: 100,
       flow: 100,
     },
+    eraser: { size: 28, hardness: 100, opacity: 100 },
     // A new shape paints with a solid colour. Its outline is optional.
     shapes: { shape: 'rect', mode: 'solid', color: '#ffffff', opacity: 100, outlineColor: '#000000', outlineWidth: 0, feather: 0 },
     // The AI mask brush defaults to the local LaMa Manga model.
@@ -2069,7 +2073,10 @@ export async function applyRegionDelta(regionId, side, chapterId = editor.chapte
   // belongs to is no longer open - and not an instruction to remove anything.
   // Passing it through would make a failed redo silently delete the region it
   // was meant to bring back, so the interface is left as it stands.
-  if (side?.present && !result) return
+  if (side?.present && !result) {
+    notify({ key: 'notice.history.stale', tone: 'warn' })
+    return
+  }
   applyRegionState(regionId, side?.present ? result : null, pageStatus)
   const page = pageHolding(regionId)
   if (page) await reloadPage(page.index).catch(() => {})
@@ -2162,53 +2169,22 @@ function applyPushView(history, view, expectedCursor) {
 }
 
 /**
- * Queue a history task behind whatever is already in flight, starting
- * immediately if idle.
+ * Queue a history task behind every push, replay and read already in flight
+ * (`model/history.js#enqueue`, the one queue all three share). A failure is
+ * kept on the history it belonged to, and never on one a chapter switch
+ * replaced.
  *
  * @param {import('../model/history.js').History} history
  * @param {() => Promise<void>} task
  */
 function enqueueHistoryTask(history, task) {
-  if (!history._busy) {
-    history._busy = true
-    const p = (async () => {
-      try {
-        await task()
-      } finally {
-        history._busy = false
-      }
-    })()
-    history.running = p.then(
-      () => undefined,
-      (error) => {
-        if (editor.history === history) history.error = error
-      },
-    )
-  } else {
-    history.running = history.running.then(
-      async () => {
-        history._busy = true
-        try {
-          await task()
-        } finally {
-          history._busy = false
-        }
-      },
-      async () => {
-        history._busy = true
-        try {
-          await task()
-        } finally {
-          history._busy = false
-        }
-      },
-    ).then(
-      () => undefined,
-      (error) => {
-        if (editor.history === history) history.error = error
-      },
-    )
-  }
+  enqueueHistory(history, async () => {
+    try {
+      await task()
+    } catch (error) {
+      if (editor.history === history) history.error = error
+    }
+  })
 }
 
 /**
@@ -2236,21 +2212,31 @@ function enqueueHistoryTask(history, task) {
  * @param {string|null} [chapterId]
  */
 export function recordRegionEdit(label, regionId, before, after, chapterId = editor.chapter?.id ?? null) {
-  if (!chapterId) return
+  recordRegionEdits(label, [{ regionId, before, after }], chapterId)
+}
+
+/**
+ * Record one edit of several regions as **one** undo step: an eraser stroke
+ * that took paint off three Brush layers is undone with one press.
+ *
+ * The entry is an ordinary `region-state` one about the first region, and
+ * carries every region, the first included, in `parts`; a replay applies each
+ * part's side (`replayHistory`). A single region is recorded without `parts`.
+ *
+ * @param {string} label - i18n key for the undo/redo tooltip
+ * @param {Array<{regionId: string, before: RegionState, after: RegionState}>} parts
+ * @param {string|null} [chapterId]
+ */
+export function recordRegionEdits(label, parts, chapterId = editor.chapter?.id ?? null) {
+  if (!chapterId || parts.length === 0) return
   // A cloud stroke's creation still waiting on its render goes on first, so
   // an edit to its seed is never the only step behind it (`heldcreations.js`).
-  settleCreation(regionId, before)
+  for (const part of parts) settleCreation(part.regionId, part.before)
+  const entry = regionEntry(label, parts)
   const chapter = editor.chapter
   if (chapter?.id !== chapterId) {
-    void recordBackgroundRegionEdit(chapterId, label, regionId, before, after)
+    void pushBackgroundEntry(chapterId, entry)
     return
-  }
-  const entry = {
-    label,
-    op: 'region-state',
-    regionId,
-    before: sideOf(before),
-    after: sideOf(after),
   }
   // A provisional number, replaced by the backend's the moment it answers. It
   // only has to be distinct from the entries already held, and the cursor is
@@ -2266,6 +2252,10 @@ export function recordRegionEdit(label, regionId, before, after, chapterId = edi
     } catch (error) {
       if (editor.history === history) history.error = error
       if (!reportJobConflict(error)) notify({ key: 'notice.history.saveFailed', tone: 'warn' })
+      // The index holds an entry the journal does not. Left there, the next
+      // Undo would move the journal past an entry this window never named,
+      // and replay the wrong one. The journal is the truth: read it again.
+      refreshHistory(chapter.id)
     }
   })
 }
@@ -2290,15 +2280,30 @@ function pushHistoryInChapterOrder(chapterId, entry) {
   return next
 }
 
-/** Persist an edit that finished after its chapter stopped being the open one. */
-export async function recordBackgroundRegionEdit(chapterId, label, regionId, before, after) {
-  const entry = {
+/**
+ * @param {string} label
+ * @param {Array<{regionId: string, before: RegionState, after: RegionState}>} parts
+ */
+function regionEntry(label, parts) {
+  const sides = parts.map((part) => ({ regionId: part.regionId, before: sideOf(part.before), after: sideOf(part.after) }))
+  return {
     label,
     op: 'region-state',
-    regionId,
-    before: sideOf(before),
-    after: sideOf(after),
+    ...sides[0],
+    ...(sides.length > 1 ? { parts: sides } : {}),
   }
+}
+
+/** Persist an edit that finished after its chapter stopped being the open one. */
+export async function recordBackgroundRegionEdit(chapterId, label, regionId, before, after) {
+  return pushBackgroundEntry(chapterId, regionEntry(label, [{ regionId, before, after }]))
+}
+
+/**
+ * @param {string} chapterId
+ * @param {ReturnType<typeof regionEntry>} entry
+ */
+async function pushBackgroundEntry(chapterId, entry) {
   try {
     await pushHistoryInChapterOrder(chapterId, entry)
     return true
@@ -2342,7 +2347,13 @@ async function replayHistory(direction) {
           reportJobConflict(error)
           return
         }
-        if (editor.history === history) history.error = error
+        // Whether the journal moved is not known. This window's cursor did,
+        // so the index is read again rather than guessed back: an index one
+        // step off replays the wrong entry on the next Undo.
+        if (editor.history === history) {
+          history.error = error
+          refreshHistory(chapter.id)
+        }
         if (!reportJobConflict(error)) notify({ key: 'notice.history.saveFailed', tone: 'warn' })
         return
       }
@@ -2350,18 +2361,50 @@ async function replayHistory(direction) {
     const entry = step?.entry
     if (!entry) return
     const side = direction === 'undo' ? entry.before : entry.after
-    // The two ops there are: a clean of a detection the backend recorded,
-    // replayed by asking for the side's state, and an edit this window
+    // The three ops there are: an edit of a page's detections, which the
+    // backend replayed already; a clean of a detection the backend recorded,
+    // replayed by asking for the side's state; and an edit this window
     // recorded, replayed by putting the side's region back.
+    if (entry.op === 'detection-state') {
+      await showReplayedPages(step, chapter.id)
+      return
+    }
     if (entry.op === 'clean-state') {
       await applyCleanDelta(entry.regionId, side, chapter.id)
       return
     }
     if (entry.op !== 'region-state') return
-    await applyRegionDelta(entry.regionId, side, chapter.id)
+    // One edit of several regions: every one goes back, the step is one.
+    const parts = entry.parts?.length ? entry.parts : [{ regionId: entry.regionId, before: entry.before, after: entry.after }]
+    for (const part of parts) {
+      await applyRegionDelta(part.regionId, direction === 'undo' ? part.before : part.after, chapter.id)
+    }
   } finally {
     history._busy = false
   }
+}
+
+/**
+ * Show a `detection-state` step the backend replayed in `historyMove`: read
+ * its pages again, and let go of a selection or hover whose region the step
+ * took off the page. A step over a page that changed since it was recorded
+ * (`history_stale`) wrote nothing, and is said so.
+ *
+ * @param {{pages?: number[], refused?: string}} step
+ * @param {string} chapterId
+ */
+async function showReplayedPages(step, chapterId) {
+  if (step.refused) {
+    notify({ key: 'notice.history.stale', tone: 'warn' })
+    return
+  }
+  if (editor.chapter?.id !== chapterId) return
+  const resident = new Set(residentIndices())
+  await Promise.all((step.pages ?? []).filter((index) => resident.has(index)).map((index) =>
+    reloadPage(index).catch((error) => console.error('the page could not be read again after an undo', error))))
+  if (editor.chapter?.id !== chapterId) return
+  if (editor.selectionId !== null && !holdsRegion(editor.selectionId)) select(null)
+  if (editor.hoverId !== null && !holdsRegion(editor.hoverId)) hover(null)
 }
 
 export function undo() {
@@ -2492,7 +2535,7 @@ export function refreshHistory(chapterId) {
 export function adoptBackendHistory(chapterId, view) {
   if (!chapterId || editor.chapter?.id !== chapterId) return
   const history = editor.history
-  if (view && !history._busy) {
+  if (view && !historyBusy(history)) {
     adoptHistory(history, view)
     return
   }

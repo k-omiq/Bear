@@ -1040,12 +1040,11 @@ describe('the Text cleanup panel', () => {
     expect(picksNote(all)?.textContent).toBe(t('tools.picks.local'))
   })
 
-  // Detect & clean is the one-press run and asks nothing about the padding;
-  // Detect and Clean keep the slider and its Apply (`tools.js`).
-  it('draws Mask padding for Detect and for Clean, never for Detect & clean', () => {
+  // Every step keeps the slider and its Apply (`tools.js`).
+  it('draws Mask padding for Detect, Clean and Detect & clean', () => {
     /** @param {import('@testing-library/svelte').RenderResult} view */
     const padding = (view) => view.container.querySelector('[data-run-row="maskPadding"]')
-    for (const [step, shown] of /** @type {const} */ ([['auto', false], ['detect', true], ['clean', true]])) {
+    for (const [step, shown] of /** @type {const} */ ([['auto', true], ['detect', true], ['clean', true]])) {
       const { view } = mountTool(textCleanup, { step })
       expect(padding(view) !== null, step).toBe(shown)
       expect(view.queryByRole('slider', { name: t('tools.param.maskPadding') }) !== null, step).toBe(shown)
@@ -1256,10 +1255,10 @@ describe('the Text cleanup panel from the keyboard', () => {
     const kinds = stops.slice(2).map((node) => node.getAttribute('role') ?? node.tagName.toLowerCase())
     // Mode, Scope, Detect on and the Cloud settings press under its reason
     // (the endpoint's offer is still being read here), Clean on, Solid
-    // bubbles only, Text, Outside bubbles, the models toggle, the two
-    // engines, the fill colour's swatch, then the action. Detect & clean
-    // draws no Mask padding.
-    expect(kinds).toEqual(['radio', 'radio', 'select', 'button', 'select', 'input', 'radio', 'radio', 'button', 'select', 'select', 'button', 'button'])
+    // bubbles only, Text, Outside bubbles, Mask padding and its Apply, the
+    // models toggle, the two engines, the fill colour's swatch, then the
+    // action.
+    expect(kinds).toEqual(['radio', 'radio', 'select', 'button', 'select', 'input', 'radio', 'radio', 'input', 'button', 'button', 'select', 'select', 'button', 'button'])
     expect(stops.at(-1)).toBe(runAction(view))
     // The name takes focus from script, never from Tab.
     expect(view.getByRole('heading', { name: 'Text cleanup' }).getAttribute('tabindex')).toBe('-1')

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   adopt,
+  busy,
   canRedo,
   canUndo,
   createHistory,
+  enqueue,
   push,
   redo,
   redoLabel,
@@ -184,5 +186,37 @@ describe('history', () => {
     expect(h.cursor).toBe(1)
     adopt(h, { cursor: -4, entries: [{ seq: 1, label: 'a' }] })
     expect(h.cursor).toBe(0)
+  })
+})
+
+describe('the one queue', () => {
+  it('starts a task at once when idle, and queues the rest in order', async () => {
+    const h = createHistory()
+    const log = []
+    let release = () => {}
+    enqueue(h, () => new Promise((resolve) => { log.push('push'); release = resolve }))
+    // Started in the caller's turn: nothing was ahead of it.
+    expect(log).toEqual(['push'])
+    expect(busy(h)).toBe(true)
+    push(h, { seq: 1, label: 'a' })
+    undo(h, (direction) => { log.push(direction) })
+    enqueue(h, () => { log.push('read') })
+    await Promise.resolve()
+    expect(log).toEqual(['push'])
+    release()
+    await settled(h)
+    expect(log).toEqual(['push', 'undo', 'read'])
+    expect(busy(h)).toBe(false)
+  })
+
+  it('keeps a failure and goes on with the tasks behind it', async () => {
+    const h = createHistory()
+    const log = []
+    enqueue(h, () => { throw new Error('first') })
+    enqueue(h, () => { log.push('second') })
+    await settled(h)
+    expect(log).toEqual(['second'])
+    expect(h.error).toBeInstanceOf(Error)
+    expect(h.pending).toBe(0)
   })
 })

@@ -97,9 +97,8 @@ computer or Cloud GPU, set independently, each disabled with the reason when the
 starts a local clean on: Fill and LaMa by default, or Solid colour) and **Outside bubbles** (Hold for
 review, the default, or Clean anyway; hidden under All text, which cleans outside bubbles regardless). **Mask padding**
 (0 to 32 px, 0 by default) grows every mask a run fits by that many page pixels, so more of the area around the
-letters is cleaned. The slider is shown for Detect and for Clean. Detect and clean is the one-press run and shows no
-padding control; it still grows its masks by the value the slider holds, so the two steps and the one pass leave the
-same masks. Its **Apply** button re-pads the masks already detected on the page (or, for Chapter and Project,
+letters is cleaned. The slider is shown for every step, Detect and clean included, and every step grows its masks by
+the value it holds, so the two steps and the one pass leave the same masks. Its **Apply** button re-pads the masks already detected on the page (or, for Chapter and Project,
 the open chapter) to the slider's value. Each one is grown from its unpadded mask, so going back to 0 gives the
 detected mask back exactly; a mask edit made over a padded mask is kept through later paddings. Cleaned layers never
 change. FLUX and the
@@ -230,7 +229,7 @@ defaulting to white.
 ### Text cleanup
 
 Options: mode, scope, detect on, clean on, solid bubbles only, text, speech bubble engine, outside-bubble engine,
-outside bubbles, mask padding with its Apply (Detect and Clean only), and the run button, all described above. It acts on the page rather than on a stroke, so there is nothing to draw.
+outside bubbles, mask padding with its Apply, and the run button, all described above. It acts on the page rather than on a stroke, so there is nothing to draw.
 
 ### Brush
 
@@ -321,16 +320,19 @@ provider, endpoint, job and attempt, recipe and model revision, and cost only wh
 Each row can be re-run: **Try again** with the same setting, **Clean with** a different engine, or reopened in the tool
 that made it with the mask intact. **Delete** removes the mask, brings the original text back, and takes the row off the
 list, leaving no empty placeholder. **Dismiss** takes a flagged region off the list and leaves the page as it is, and
-**Show on page** scrolls to a region and selects it. **Reject result**, on a result cleaned from detected text, takes
-the result off and puts the region back as detected with its mask, ready to clean again; Undo after any clean of
-detected text does the same, and Redo puts the same result back without rendering it again. A result cleaned before
-the app kept the detected mask has none to restore and says so. Everything here is undoable. Clean with offers Cloud when a cloud
+**Show on page** scrolls to a region and selects it. **Restore mask**, on any result a cleaner made (Fill, LaMa, FLUX,
+the cloud, a hand mask included), takes the result off and puts the region back as detected with its mask, ready to
+pad, edit or clean again. A result cleaned from detected text gets that detected mask back; any other result, such as
+one an older build cleaned, gets the mask the clean wrote through. Undo after any clean of detected text does the same,
+and Redo puts the same result back without rendering it again. A paint or clone stroke, a region copy or a text-shape
+result has no cleaner's mask and says so. Everything here is undoable. Clean with offers Cloud when a cloud
 GPU is ready, and Try again on a cloud region asks for confirmation again, as every cloud render does. Clicking a region
 on the page selects it under every tool, lights its outline and scrolls the matching row into view. A right click, or
 Shift+F10 from the keyboard, selects the region and offers the same three things the row does. On a region that is
 detected and not yet cleaned, the menu also offers **Text type**: Speech bubble text or Text outside bubbles, with the
 current one checked. Changing it sets which engine pick a later Clean starts the region on and the color its mask is
-drawn in. It is not undoable; pick the other type to change it back.
+drawn in. The menu also has that detection's **Mask padding** slider, the same one its Layers row has: each release
+re-pads that one mask and the menu stays open. Both are undoable, like every edit of a detected mask.
 
 **Needs review** is a filter at the top of the panel with a count, and it is the review surface. A region is flagged
 when fitting failed and a model reconstructed the area; when the region is unusually large for the page; when every
@@ -341,6 +343,9 @@ regions carry a **Clean anyway** action. Declined regions carry a marker on the 
 case where nothing visibly happened. The bottom bar's up and down arrows step through the filtered set without entering
 the panel. Undo and redo are global across every tool and are **written to the project folder**, capped at 500 entries,
 so a chapter reopened tomorrow can still take back what was done today. Their tooltips name the edit they will reverse.
+Every kind of edit is a step: layers and masks drawn, cleaned, re-run, moved or deleted, and also detected masks deleted,
+brushed, padded or retyped, held regions approved or dismissed, and a whole Detect run, which is one step. A step that
+cannot be put back because the page changed in a way the history does not know about says so and changes nothing.
 
 ## Long-strip mode
 

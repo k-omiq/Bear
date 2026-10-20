@@ -6,6 +6,7 @@
   import { checkForUpdate } from '../updater.js'
   import UpdateDialog from './UpdateDialog.svelte'
   import JobsIndicator from '../shell/JobsIndicator.svelte'
+  import Wordmark from './Wordmark.svelte'
 
   /**
    * Home's header, and the whole of it: the wordmark, update badge if available,
@@ -38,7 +39,7 @@
 </script>
 
 <header class="bar">
-  <h1 class="wordmark">{t('app.name.mangaCleaner')}</h1>
+  <h1 class="wordmark"><Wordmark label={t('app.name.mangaCleaner')} /></h1>
 
   <div class="spacer"></div>
 
@@ -76,11 +77,7 @@
 
   .wordmark {
     margin: 0;
-    font-size: 12.5px;
-    font-weight: 600;
-    letter-spacing: .3em;
-    text-transform: uppercase;
-    white-space: nowrap;
+    line-height: 0;
   }
 
   .update-dot {

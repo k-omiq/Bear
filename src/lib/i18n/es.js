@@ -1168,6 +1168,7 @@ export const es = {
     command: {
       applyTool: 'la herramienta aplicada a una región',
       drawMask: 'una máscara dibujada a mano',
+      erasePaint: 'pintura de pincel borrada',
     },
   },
   pages: {
@@ -1965,7 +1966,7 @@ export const es = {
       retryBlocked: 'Reintentar no está disponible para trazos de pintura y clonado. Pinta encima o elimínalo.',
       retryWider: 'Reintentar más amplio',
       retryWiderHint: 'Limpiar de nuevo con el mismo motor sobre un área algo mayor. Cada pulsación la amplía un poco más.',
-      rejectResult: 'Rechazar resultado',
+      rejectResult: 'Restaurar máscara',
       engine: 'Limpiar con',
       engineHint: 'Reemplazar esta capa usando otro motor, desde las capas inferiores',
       textType: 'Tipo de texto',
@@ -2020,13 +2021,20 @@ export const es = {
       layerMove: 'el movimiento de la capa',
       layerRotate: 'el giro de la capa',
       cleanRegion: 'una región limpiada',
-      rejectResult: 'un resultado rechazado',
+      rejectResult: 'una máscara restaurada',
+      deleteDetection: 'una máscara detectada eliminada',
+      editDetection: 'una máscara detectada editada',
+      detectionPadding: 'un margen de máscara cambiado',
+      detectionType: 'un tipo de texto cambiado',
+      approveMask: 'una máscara retenida aprobada',
+      detectPages: 'páginas detectadas',
     },
   },
   tools: {
     name: {
       autoClean: 'Limpieza de texto',
       brush: 'Pincel',
+      eraser: 'Borrador',
       shapes: 'Formas',
       aiMaskBrush: 'Pincel de máscara con IA',
       contentAwareFill: 'Relleno según el contenido',
@@ -2036,6 +2044,7 @@ export const es = {
     hint: {
       autoClean: 'Enter para ejecutar',
       brush: 'arrastra para pintar',
+      eraser: 'arrastra para borrar la pintura del pincel',
       shapes: 'arrastra sobre la página',
       aiMaskBrush: 'pasa el trazo sobre el texto',
       cloneStamp: '{cloneSourceModifier}+clic en un origen',
@@ -2339,6 +2348,7 @@ export const es = {
     },
     history: {
       saveFailed: 'No se pudo guardar el historial de deshacer. Puede que Deshacer no funcione después de reiniciar.',
+      stale: 'No se pudo deshacer ni rehacer ese paso, porque la página cambió desde entonces. No se cambió nada.',
     },
     job: {
       resumed: 'Reanudando en la página {page}.',
@@ -2452,7 +2462,7 @@ export const es = {
       paddingRefreshFailed: 'Se guardó el margen de la máscara, pero no se pudo actualizar la página. Vuelve a abrir el capítulo para ver la máscara actualizada.',
       typeFailed: 'No se pudo cambiar el tipo de texto. La región está como estaba.',
       approveFailed: 'No se pudo aprobar la máscara. La región está como estaba.',
-      rejectNoMask: 'Este resultado no tiene una máscara guardada, así que no se puede rechazar. Elimínalo para recuperar el original.',
+      rejectNoMask: 'Esta capa no la hizo un limpiador, así que no tiene máscara que restaurar. Elimínala para recuperar el original.',
       rejectFailed: 'No se pudo rechazar el resultado. La página está como estaba.',
       reapplyFailed: 'No se pudo restaurar el resultado. La página está como estaba.',
     },
@@ -2968,7 +2978,7 @@ export const es = {
         scopeProject: 'La detección en la nube no puede ejecutarse sobre un proyecto entero: cada capítulo se planifica por separado. Ejecuta un capítulo a la vez o elige Este equipo en Detectar en, dentro de Limpieza de texto.',
         tooMany: 'Este capítulo tiene más páginas de las que puede enviar una sola ejecución en la nube. No se envió nada. Ejecútalo página por página o elige Este equipo en Detectar en, dentro de Limpieza de texto.',
         tooLargeChapter: 'Este capítulo tiene más píxeles de los que puede enviar una sola ejecución en la nube. No se envió nada. Ejecútalo página por página o elige Este equipo en Detectar en, dentro de Limpieza de texto.',
-        nothing: 'Todas las páginas del alcance ya están limpias. No se envió nada.',
+        nothing: 'Tu GPU en la nube ya detectó todas las páginas del alcance. No se envió nada. Para enviar una página otra vez, detecta solo esa página.',
         stopped: 'La detección en la nube se detuvo después de la página {page} ({code}). Las páginas siguientes no se enviaron y quedan para una ejecución posterior.',
         consentLost: 'El consentimiento para la nube ya no coincide con esta ejecución. No se envió nada. Vuelve a iniciar la ejecución.',
         expired: 'El consentimiento para la nube caducó antes de que empezara la ejecución. No se envió nada. Vuelve a iniciar la ejecución.',

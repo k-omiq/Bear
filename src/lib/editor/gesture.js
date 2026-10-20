@@ -174,22 +174,25 @@ export function brushRadius(sizePx, pageWidth, pageHeight) {
 }
 
 /**
- * Whether a brush should lay down another stamp here. `spacing` is a
- * percentage of the brush's own size, which is what every raster editor means
- * by it: a wide brush at 12% steps further than a narrow one.
+ * Where a stroke's end is pulled to as the pointer moves: the lazy-brush rope
+ * (`dulnan/lazy-brush`, Krita's lazy mouse). The end stays put while the
+ * pointer is within `slack` of it and is then dragged along behind it at that
+ * distance, so the shake of a hand and the stair steps of a mouse moving one
+ * whole pixel at a time are taken out while the line still goes where the
+ * pointer goes. Client pixels in and out, so the feel is the same at every zoom.
  *
- * @param {Point|null} last - the last stamp, or null for the first
- * @param {Point} next
- * @param {{rx: number, ry: number}} radius
- * @param {number} spacing - the `spacing` parameter, 1..50
- * @returns {boolean}
+ * @param {{x: number, y: number}} end - where the stroke's end is
+ * @param {{x: number, y: number}} pointer
+ * @param {number} slack
+ * @returns {{x: number, y: number}|null} the end's new place, or null where it stays
  */
-export function shouldStamp(last, next, radius, spacing) {
-  if (!last) return true
-  const step = (Math.max(radius.rx, radius.ry) * 2 * Math.max(1, spacing)) / PAGE_SPAN
-  const dx = next.x - last.x
-  const dy = next.y - last.y
-  return Math.hypot(dx, dy) >= Math.max(step, 0.05)
+export function pullRope(end, pointer, slack) {
+  const dx = pointer.x - end.x
+  const dy = pointer.y - end.y
+  const distance = Math.hypot(dx, dy)
+  if (!(distance > slack)) return null
+  const pulled = (distance - slack) / distance
+  return { x: end.x + dx * pulled, y: end.y + dy * pulled }
 }
 
 /**

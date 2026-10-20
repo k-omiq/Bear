@@ -6,6 +6,7 @@ import { tileUrl } from '../api/tile.js'
 import { editor, goToPage, reloadPage, replaceRegion, syncPageWindow } from '../state/editor.svelte.js'
 import { beginDraft, resetDraftState } from './draft.svelte.js'
 import CanvasStage from './CanvasStage.svelte'
+import { stripMetrics } from './strip.js'
 
 afterEach(() => {
   cleanup()
@@ -94,15 +95,18 @@ describe('longstrip scrolling', () => {
     await tick()
     await tick()
     observer.disconnect()
-    // Page 40 is in view; 39 and 41 are within a screen of it, 38 and 42 are
-    // the overscan beyond that.
-    expect(mounted.length).toBeLessThanOrEqual(5)
+    // Page 40 is in view and the warm range keeps five pages either side of
+    // it; the viewport band (38 to 42) is inside that.
+    expect(mounted.length).toBeLessThanOrEqual(11)
     expect([...view.container.querySelectorAll('.slot')].map((slot) => slot.getAttribute('data-strip-index')))
-      .toEqual(['38', '39', '40', '41', '42'])
+      .toEqual(['35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45'])
     expect(loadPages).toHaveBeenCalledTimes(1)
     // The mounted band and a neighbour either side, so every mounted sheet
     // has its patch layers before it scrolls into view.
-    expect(loadPages).toHaveBeenCalledWith({ chapterId: 'scroll-chapter', indices: [37, 38, 39, 40, 41, 42, 43] })
+    expect(loadPages).toHaveBeenCalledWith({
+      chapterId: 'scroll-chapter',
+      indices: [34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46],
+    })
   })
 
   it('retains a focused sheet and its resident data without widening the band', async () => {
@@ -114,12 +118,12 @@ describe('longstrip scrolling', () => {
     box.dispatchEvent(new Event('scroll'))
     await tick()
     expect(document.activeElement).toBe(button)
-    expect(view.container.querySelectorAll('.slot')).toHaveLength(6)
+    expect(view.container.querySelectorAll('.slot')).toHaveLength(12)
     expect(editor.chapter.pages[0].resident).toBe(true)
     expect(editor.stripScope).toEqual([40])
     button.blur()
     await tick()
-    expect(view.container.querySelectorAll('.slot')).toHaveLength(5)
+    expect(view.container.querySelectorAll('.slot')).toHaveLength(11)
     expect(editor.chapter.pages[0].resident).toBe(false)
   })
 
@@ -180,6 +184,68 @@ describe('longstrip scrolling', () => {
     await waitFor(() => expect(box.scrollTop).toBeCloseTo(ROOM + 47.3))
     expect(box.scrollLeft).toBeCloseTo(SIDE - 33.44)
     expect(rect).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('longstrip zoom', () => {
+  /** Slot indices removed from the stage while `act` runs. */
+  async function removedDuring(view, act) {
+    const removed = []
+    const observer = new MutationObserver((records) => {
+      for (const record of records) for (const node of record.removedNodes) {
+        if (node instanceof HTMLElement && node.matches('.slot')) removed.push(Number(node.getAttribute('data-strip-index')))
+      }
+    })
+    observer.observe(view.container.querySelector('.stage'), { childList: true })
+    await act()
+    observer.disconnect()
+    return removed
+  }
+
+  /** The scroller position that puts page 40 at the top, plus `extra`. */
+  async function atPage40(box, extra = 100) {
+    box.scrollTop = ROOM + 40070 + extra
+    box.dispatchEvent(new Event('scroll'))
+    await tick()
+    await tick()
+  }
+
+  it('keeps the pages under a pinch mounted and the point under the pointer still', async () => {
+    const { box, view } = scrollFixture()
+    await tick()
+    await atPage40(box)
+    const pages = editor.chapter.pages
+    const removed = await removedDuring(view, async () => {
+      for (const zoom of [1.11, 1.22]) {
+        box.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, ctrlKey: true, cancelable: true, clientX: 500, clientY: 300 }))
+        await waitFor(() => expect(editor.zoom).toBe(zoom))
+        await tick()
+      }
+    })
+    // Pages 38 to 42 were the viewport's band before and after; none of them
+    // may leave the document on any frame of the gesture.
+    expect(removed.filter((index) => index >= 38 && index <= 42)).toEqual([])
+    // The content under the pointer (300px into the scroller, 40% down page
+    // 40) is still under it at the new scale.
+    const after = stripMetrics({ pages, scale: editor.zoom })
+    const columnTop = 300 - (after.offsets[40] + 0.4 * after.units[40])
+    expect(box.scrollTop).toBeCloseTo(70 + ROOM - columnTop, 0)
+    expect(editor.pageIndex).toBe(40)
+  })
+
+  it('keeps the centre page when the zoom changes without a pointer', async () => {
+    const { box, view } = scrollFixture()
+    await tick()
+    await atPage40(box)
+    const removed = await removedDuring(view, async () => {
+      editor.zoom = 1.5
+      await tick()
+      await tick()
+    })
+    expect(removed.filter((index) => index >= 38 && index <= 42)).toEqual([])
+    expect(editor.pageIndex).toBe(40)
+    const after = stripMetrics({ pages: editor.chapter.pages, scale: 1.5 })
+    expect(box.scrollTop).toBeCloseTo(70 + ROOM - (300 - (after.offsets[40] + 0.4 * after.units[40])), 0)
   })
 })
 
@@ -465,7 +531,7 @@ describe('preloading', () => {
 })
 
 describe('longstrip mask visibility', () => {
-  it('draws no line where one position meets the next, and keeps a spanning draft above the next page', async () => {
+  it('draws no line where one position meets the next, and lifts no page over another for a spanning draft', async () => {
     const first = {
       id: 'c1-p001', index: 0, number: 1, width: 800, height: 1000,
       status: 'unclean', regions: [],
@@ -493,7 +559,15 @@ describe('longstrip mask visibility', () => {
       points: [{ x: 20, y: 95 }], bbox: { x: 20, y: 95, w: 40, h: 17 },
       mode: 'add', keyboard: false, moved: true,
     })
-    await waitFor(() => expect(slots[0].classList.contains('gesture-origin')).toBe(true))
-    expect(slots[1].classList.contains('gesture-origin')).toBe(false)
+    await waitFor(() => expect(slots[0].querySelector('.preview')).not.toBeNull())
+    // No page lifts itself over its neighbour any more: the sheets make no
+    // stacking context, and every page's layers share the one z-index scale
+    // (`PageSheet.svelte`), so the draft hangs over the next page's artwork
+    // with nothing to switch on.
+    for (const slot of slots) {
+      expect(slot.className).toBe(slot.className.split(' ').filter((name) => !name.endsWith('-origin')).join(' '))
+      expect(/** @type {HTMLElement} */ (slot).style.zIndex).toBe('')
+    }
+    expect(/** @type {HTMLElement} */ (slots[0].querySelector('.sheet')).style.getPropertyValue('--sheet-w')).toBe('800px')
   })
 })

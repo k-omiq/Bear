@@ -115,6 +115,7 @@ function backend() {
     cleanAnyway: vi.fn(() => answer.promise),
     deleteMask: vi.fn(() => answer.promise),
     restoreRegion: vi.fn(() => answer.promise),
+    dismissRegion: vi.fn(() => answer.promise),
     keepDependencyResult: vi.fn(() => answer.promise),
   }
   setBackend(/** @type {any} */ (adapter))
@@ -152,7 +153,7 @@ it('reports a busy chapter when delete and Keep are refused, without recording e
   const adapter = backend()
   const busy = new Error('job_busy')
   adapter.deleteMask.mockRejectedValue(busy)
-  adapter.restoreRegion.mockRejectedValue(busy)
+  adapter.dismissRegion.mockRejectedValue(busy)
   adapter.keepDependencyResult.mockRejectedValue(busy)
   const masked = /** @type {any} */ (region('c1'))
   const bare = { ...masked, mask: null }
@@ -241,7 +242,8 @@ describe('an edit answered after its chapter was closed', () => {
     await vi.waitFor(() => expect(
       adapter.applyTool.mock.calls.length + adapter.rerunMask.mock.calls.length +
       adapter.cleanAnyway.mock.calls.length + adapter.deleteMask.mock.calls.length +
-      adapter.restoreRegion.mock.calls.length + adapter.keepDependencyResult.mock.calls.length,
+      adapter.restoreRegion.mock.calls.length + adapter.dismissRegion.mock.calls.length +
+      adapter.keepDependencyResult.mock.calls.length,
     ).toBe(1))
     // What opening a chapter resets (`openEditorChapter`): its own history,
     // and no selection carried over from the last one.
@@ -290,13 +292,13 @@ describe('an edit answered after its chapter was closed', () => {
     expect(removal.after.region).toBe(null)
   })
 
-  // A region with no mask is removed through the same applier undo uses, and
-  // that applier touched whatever chapter was open when the backend answered.
+  // A region with no mask is dismissed by the backend, which records the
+  // step itself, so the interface records nothing and touches only the
+  // chapter the row was on.
   it('removes a warning row on its own chapter, and leaves the open one alone', async () => {
     const warning = { ...region('c1'), mask: null }
-    const removal = await acrossASwitch(() => deleteRow(/** @type {any} */ (warning)), null)
-    expect(removal.label).toBe('masks.command.deleteRegion')
-    expect(removal.after.region).toBe(null)
+    const adapter = await acrossASwitch(() => deleteRow(/** @type {any} */ (warning)), { region: null, pageStatus: 'unclean' }, 0)
+    expect(adapter).toBe(null)
   })
 
   // Not an undoable edit, so no entry: only the open chapter to leave alone.

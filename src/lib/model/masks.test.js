@@ -149,10 +149,10 @@ describe('regionMenuSections', () => {
   it('offers a detection the model list a cleaned region has, none checked, and no Clean shortcuts', () => {
     const region = { id: 'c1-p001-d0', outcome: 'detected', pick: 'lama', mask: masked('lama').mask }
     expect(ids(regionMenuSections(region, { engines: { flux: true }, cloud: true }))).toEqual([
-      'engine:fill', 'engine:lama', 'engine:flux', 'engine:cloud', 'type:inside', 'type:outside', 'delete',
+      'engine:fill', 'engine:lama', 'engine:flux', 'engine:cloud', 'type:inside', 'type:outside', 'padding', 'delete',
     ])
     expect(ids(regionMenuSections(region, { engines: { flux: false }, cloud: false }))).toEqual([
-      'engine:fill', 'engine:lama', 'type:inside', 'type:outside', 'delete',
+      'engine:fill', 'engine:lama', 'type:inside', 'type:outside', 'padding', 'delete',
     ])
     const engine = regionMenuSections(region, { cloud: true }).find((section) => section.id === 'engine')
     expect(engine?.labelKey).toBe('masks.action.engine')
@@ -170,7 +170,7 @@ describe('regionMenuSections', () => {
 
     it('sits between Clean with and Delete, named as Text cleanup names the two kinds', () => {
       const sections = regionMenuSections(detection(true), { engines: { flux: false } })
-      expect(sections.map((section) => section.id)).toEqual(['engine', 'type', 'remove'])
+      expect(sections.map((section) => section.id)).toEqual(['engine', 'type', 'padding', 'remove'])
       const type = typeOf(detection(true))
       expect(type.labelKey).toBe('masks.action.textType')
       expect(type.items.map((item) => [item.id, item.labelKey])).toEqual([
@@ -396,14 +396,13 @@ describe('Reject result', () => {
     expect(rejectable({ ...cleaned(), id: 'c1-p001-r2' })).toBe(true)
   })
 
-  it('is not offered for a hand-drawn or tool-made mask', () => {
+  // Restore mask makes a hand mask's result a detection from its own mask.
+  it('is offered for a hand-drawn mask, and never for a paint or clone stroke', () => {
     const hand = { ...cleaned(), id: 'c1-p001-h1', source: 'hand' }
-    expect(rejectable(hand)).toBe(false)
+    expect(rejectable(hand)).toBe(true)
     expect(ids(regionMenuSections(hand, { engines: { flux: false } }))).toEqual([
-      'retry', 'retryWider', 'engine:fill', 'engine:lama', 'delete',
+      'retry', 'retryWider', 'reject', 'engine:fill', 'engine:lama', 'delete',
     ])
-    // A hand tool applied over a cleaned detection: the mask is the user's now.
-    expect(rejectable({ ...cleaned(), source: 'hand' })).toBe(false)
     for (const engine of ['paint', 'clone']) {
       expect(rejectable({ ...cleaned(engine), source: 'auto' })).toBe(false)
       expect(ids(regionMenuSections({ ...cleaned(engine), source: 'auto' }))).not.toContain('reject')

@@ -6,71 +6,113 @@ import { join } from 'node:path'
 import PaintLayer from './PaintLayer.svelte'
 import { clearDraft, draft, markCommitted, resetDraftState } from './draft.svelte.js'
 import { editor } from '../state/editor.svelte.js'
-import { setBackend } from '../api/backend.js'
 import { pageVersion } from '../api/tile.js'
 import { flushPaintPreview } from './paintpreview.js'
+import { eraseMasks } from './erasepreview.svelte.js'
 
 const page = (index = 0) => ({ id: `page-${index}`, chapterId: 'c', index, width: 100, height: 100, regions: [] })
-const stroke = (id) => ({ pageId: id, kind: 'stroke', tool: 'brush', points: [{ x: 25, y: 25, p: 1 }] })
-const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
-const result = spec => ({ ...spec, png: [1, 2], bounds: { x: 20, y: 20, w: 10, h: 10 } })
-const bitmap = (width = 4, height = 3) => ({ width, height, close: vi.fn() })
+// Both strokes are drawn in the layer. A clone stroke shows the cleaned tiles
+// through its coverage; a Brush stroke shows its colour.
+const stroke = (id, offset = { x: 15, y: 15 }) => ({ pageId: id, kind: 'stroke', tool: 'cloneStamp', points: [{ x: 25, y: 25, p: 1 }],
+  clone: { source: { x: 25 + offset.x, y: 25 + offset.y }, offset } })
+const brushStroke = (id) => ({ pageId: id, kind: 'stroke', tool: 'brush', points: [{ x: 25, y: 25, p: 1 }] })
 /** A canvas's size and place: what has to change in the same step as its pixels. */
 const placed = canvas => [canvas.width, canvas.height, canvas.style.left, canvas.style.top, canvas.style.width, canvas.style.height]
-/** Past every microtask: whatever an answer already given sets off has happened. */
-const settled = () => new Promise(resolve => setTimeout(resolve))
+/** Every box is the sheet's: 100 by 100 at the origin. */
+const box = { left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }
 
-/** Every picture decoded, in order. */
-let bitmaps = []
-/** Every draw onto a canvas, with the size and place the canvas had at that moment. */
+/** Every picture drawn onto a canvas, with the size and place the canvas had and the compositing then. */
 let draws = []
+/** Every coverage tile put onto a canvas, the same way. */
+let puts = []
 
-async function setup(request) {
+/** A cleaned tile on the sheet, loaded and on screen. */
+function cleanedTile(host) {
+  const stack = document.createElement('div'); stack.dataset.artwork = 'cleaned'; host.append(stack)
+  const tile = document.createElement('img'); stack.append(tile)
+  Object.defineProperty(tile, 'complete', { value: true })
+  Object.defineProperty(tile, 'naturalWidth', { value: 100 })
+  return tile
+}
+
+async function setup(props = {}) {
   editor.chapter = { id: 'c' }
   editor.toolParams.brush = { mode: 'paint', size: 10, color: '#123456' }
-  setBackend({ previewPaint: request })
+  editor.toolParams.cloneStamp = { size: 10, hardness: 100 }
+  editor.toolParams.eraser = { size: 10, hardness: 100, opacity: 100 }
   const host = document.createElement('div'); host.className = 'sheet'; document.body.append(host)
-  return { host, ...render(PaintLayer, { target: host, props: { page: page() } }) }
+  return { host, ...render(PaintLayer, { target: host, props: { page: page(), ...props } }) }
 }
 beforeEach(() => {
-  bitmaps = []; draws = []
-  // The context can draw a picture and nothing else: a fill would throw.
+  draws = []; puts = []
+  vi.stubGlobal('ImageData', class { constructor(data, width, height) { Object.assign(this, { data, width, height }) } })
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(/** @type {any} */ (box))
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(/** @type {any} */ (function () {
     const canvas = this
-    return { drawImage: (image, x, y) => draws.push({ image, x, y, canvas, at: placed(canvas) }) }
+    const context = {
+      globalAlpha: 1,
+      globalCompositeOperation: 'source-over',
+      clearRect: () => {},
+      drawImage: (image, x, y, w, h) => draws.push({ image, x, y, w, h, canvas, op: context.globalCompositeOperation, at: placed(canvas) }),
+      putImageData: (image, x, y) => puts.push({ image, x, y, canvas, at: placed(canvas) }),
+    }
+    return context
   }))
-  vi.stubGlobal('createImageBitmap', vi.fn(async () => { const made = bitmap(); bitmaps.push(made); return made }))
 })
-afterEach(() => { cleanup(); resetDraftState(); editor.chapter = null; setBackend(null); vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.innerHTML = '' })
+afterEach(() => { cleanup(); resetDraftState(); editor.chapter = null; vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.innerHTML = '' })
 
-describe('mounted authoritative preview lifecycle', () => {
-  it('renders the first frame and discards canceled late frames', async () => {
-    const late = deferred(), request = vi.fn().mockImplementationOnce(async s => result(s)).mockReturnValueOnce(late.promise)
-    const { host } = await setup(request)
+describe('a clone stroke, drawn in the layer', () => {
+  it('draws the cleaned tiles, moved by the offset, through the stroke\'s coverage', async () => {
+    const { host } = await setup()
+    const tile = cleanedTile(host)
     draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
-    expect(host.querySelector('.paint')).not.toBeNull()
-    draft.active.points.push({ x: 30, y: 30 }); await tick()
-    draft.active = null; await tick()
-    late.resolve(result(request.mock.calls[1][0])); await flushPaintPreview('page-0'); await tick()
-    expect(host.querySelector('.paint')).toBeNull()
-    // The late frame was decoded before it was discarded, and nothing drew it.
-    expect(bitmaps).toHaveLength(2)
-    expect(draws.map(({ image }) => image)).toEqual([bitmaps[0]])
+    const canvas = host.querySelector('.paint')
+    // One 10 px dab at 25% of a 100 px page: the first 128 px coverage tile.
+    expect(placed(canvas)).toEqual([128, 128, '0%', '0%', '128%', '128%'])
+    // The page is drawn 15 px up and left, so canvas pixel 25 shows page
+    // pixel 40, and then kept only where the coverage is.
+    const onCanvas = draws.filter(draw => draw.canvas === canvas)
+    expect(onCanvas.map(({ image, x, y, w, h, op, at }) => [image, x, y, w, h, op, at])).toEqual([
+      [tile, -15, -15, 100, 100, 'source-over', placed(canvas)],
+      [expect.any(HTMLCanvasElement), 0, 0, undefined, undefined, 'destination-in', placed(canvas)],
+    ])
+    // The coverage went onto that other canvas, opaque in the dab's middle.
+    const mask = onCanvas[1].image
+    expect(puts.every(put => put.canvas === mask)).toBe(true)
+    const middle = (25 * 128 + 25) * 4
+    expect(puts[0].image.data[middle + 3]).toBe(255)
+
+    draft.active.points.push({ x: 40, y: 25, p: 1 }); await tick(); await flushPaintPreview('page-0'); await tick()
+    expect(host.querySelector('.paint')).toBe(canvas)
+    expect(draws.filter(draw => draw.canvas === canvas)).toHaveLength(4)
   })
-  it('rejects a response after the mounted page changes', async () => {
-    const late = deferred(), request = vi.fn(() => late.promise)
-    const { host, rerender } = await setup(request)
-    draft.active = stroke('page-0'); await tick()
-    await rerender({ page: page(1) })
-    late.resolve(result(request.mock.calls[0][0])); await settled(); await tick()
-    expect(bitmaps).toHaveLength(1)
+  it('moves by whole page pixels, rounded as the commit rounds them', async () => {
+    const { host } = await setup()
+    const tile = cleanedTile(host)
+    draft.active = stroke('page-0', { x: 15.5, y: -2.5 }); await tick(); await flushPaintPreview('page-0'); await tick()
+    const first = draws.find(draw => draw.image === tile)
+    expect([first.x, first.y]).toEqual([-16, 3])
+  })
+  it('draws nothing before it has a source', async () => {
+    const { host } = await setup()
+    draft.active = { ...stroke('page-0'), clone: null }; await tick(); await flushPaintPreview('page-0'); await tick()
     expect(host.querySelector('.paint')).toBeNull()
   })
+  it('leaves out a tile that has not loaded, or is hidden for its replacement', async () => {
+    const { host } = await setup()
+    const shown = cleanedTile(host)
+    const hidden = cleanedTile(host); hidden.style.visibility = 'hidden'
+    const stack = host.querySelector('[data-artwork="cleaned"]')
+    const loading = document.createElement('img'); stack.append(loading)
+    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    expect(draws.filter(draw => draw.image instanceof HTMLImageElement).map(draw => draw.image)).toEqual([shown])
+  })
+})
+
+describe('mounted preview lifecycle', () => {
   it('holds final pixels until all affected tiles load the committed revision', async () => {
-    const { host, rerender } = await setup(vi.fn(async s => result(s)))
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, right: 100, bottom: 100 })
-    const stack = document.createElement('div'); stack.dataset.artwork = 'cleaned'; host.append(stack)
-    const tile = document.createElement('img'); stack.append(tile)
+    const { host, rerender } = await setup()
+    const tile = cleanedTile(host)
     draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
     markCommitted(); clearDraft(); await tick()
     const committed = { ...page(), tileRevision: 1 }
@@ -80,16 +122,13 @@ describe('mounted authoritative preview lifecycle', () => {
     tile.dataset.loadedVersion = pageVersion(page(), 'cleaned')
     document.dispatchEvent(new CustomEvent('paint-tile-loaded', { detail: { pageId: 'page-0' } })); await tick()
     expect(host.querySelector('.paint')).not.toBeNull()
-    expect(bitmaps[0].close).not.toHaveBeenCalled()
     tile.dataset.loadedVersion = pageVersion(committed, 'cleaned')
     document.dispatchEvent(new CustomEvent('paint-tile-loaded', { detail: { pageId: 'page-0' } })); await tick()
     expect(host.querySelector('.paint')).toBeNull()
-    expect(bitmaps[0].close).toHaveBeenCalledTimes(1)
   })
   it('waits for affected neighboring-page tiles as well as the anchor', async () => {
-    const { host, rerender } = await setup(vi.fn(async s => result(s)))
+    const { host, rerender } = await setup()
     const stage = document.createElement('div'); stage.className = 'stage'; host.replaceWith(stage); stage.append(host)
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, right: 100, bottom: 100 })
     const stack = document.createElement('div'); stack.dataset.artwork = 'cleaned'; stage.append(stack)
     const first = document.createElement('img'), neighbor = document.createElement('img'); stack.append(first, neighbor)
     first.dataset.paintKey = 'page-0:0'; neighbor.dataset.paintKey = 'page-1:0'
@@ -110,7 +149,7 @@ describe('mounted authoritative preview lifecycle', () => {
     expect(host.querySelector('.paint')).toBeNull()
   })
   it('clears a held overlay when commit fails', async () => {
-    const { host, rerender } = await setup(vi.fn(async s => result(s)))
+    const { host, rerender } = await setup()
     draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
     markCommitted(); clearDraft(); await tick()
     expect(host.querySelector('.paint')).not.toBeNull()
@@ -118,23 +157,31 @@ describe('mounted authoritative preview lifecycle', () => {
     expect(host.querySelector('.paint')).toBeNull()
   })
   it('drops the frame of a stroke that was abandoned, not committed', async () => {
-    const { host } = await setup(vi.fn(async s => result(s)))
+    const { host } = await setup()
     draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
     clearDraft(); await tick()
     expect(host.querySelector('.paint')).toBeNull()
   })
+  it('keeps the live frame\'s canvas, not drawn again, when the frame is held', async () => {
+    const { host } = await setup()
+    cleanedTile(host)
+    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    const canvas = host.querySelector('.paint')
+    const before = draws.length
+    markCommitted(); clearDraft(); await tick()
+    expect(host.querySelectorAll('.paint')).toHaveLength(1)
+    expect(host.querySelector('.paint')).toBe(canvas)
+    // The tiles under a held clone may already be the committed ones, and a
+    // redraw would read the stroke's own pixels back.
+    document.dispatchEvent(new CustomEvent('paint-tile-loaded')); await new Promise(requestAnimationFrame); await tick()
+    expect(draws).toHaveLength(before)
+  })
   // The stamp is used in quick taps. Each tap is a commit of its own, and the
   // next one starts before the tiles of the last have caught up.
   it('keeps a held frame while the next stroke is drawn and committed', async () => {
-    setBackend({ previewPaint: vi.fn(async s => result(s)) })
-    editor.chapter = { id: 'c' }
-    editor.toolParams.brush = { mode: 'paint', size: 10, color: '#123456' }
-    const host = document.createElement('div'); host.className = 'sheet'; document.body.append(host)
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, right: 100, bottom: 100 })
-    const stack = document.createElement('div'); stack.dataset.artwork = 'cleaned'; host.append(stack)
-    const tile = document.createElement('img'); stack.append(tile)
+    const { host, rerender } = await setup({ busy: 0 })
+    const tile = cleanedTile(host)
     tile.dataset.version = tile.dataset.loadedVersion = pageVersion(page(), 'cleaned')
-    const { rerender } = render(PaintLayer, { target: host, props: { page: page(), busy: 0 } })
 
     draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
     await rerender({ page: page(), busy: 1 }); markCommitted(); clearDraft(); await tick()
@@ -163,7 +210,7 @@ describe('mounted authoritative preview lifecycle', () => {
     expect(host.querySelectorAll('.paint')).toHaveLength(0)
   })
   it('keeps the frames when one commit changes nothing while another is in flight', async () => {
-    const { host, rerender } = await setup(vi.fn(async s => result(s)))
+    const { host, rerender } = await setup()
     draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
     await rerender({ page: page(), busy: 2 }); markCommitted(); clearDraft(); await tick()
     await rerender({ page: page(), busy: 1, dropped: 1 })
@@ -171,147 +218,100 @@ describe('mounted authoritative preview lifecycle', () => {
     await rerender({ page: page(), busy: 0, dropped: 2 })
     expect(host.querySelector('.paint')).toBeNull()
   })
-})
-
-// The preview is a see-through layer of the painted pixels alone. It used to
-// be an opaque crop of the stroke's whole box over a paper background, which
-// redrew the untouched art inside the box at another scale.
-describe('a paint frame on its canvas', () => {
   it('lays nothing opaque over the page', async () => {
-    const { host } = await setup(vi.fn(async s => result(s)))
+    const { host } = await setup()
     draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
     markCommitted(); clearDraft(); await tick()
-    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    draft.active = brushStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
     // A held frame and a live one. Each is a canvas, which is see-through
     // wherever nothing was drawn on it, and nothing gives one a background.
     const layer = host.querySelector('.paints')
     const nodes = [...layer.querySelectorAll('*')]
     expect(nodes.map(node => node.tagName)).toEqual(['CANVAS', 'CANVAS'])
     for (const node of [layer, ...nodes]) expect([node.style.background, node.style.backgroundColor]).toEqual(['', ''])
-    // All that goes onto one is the renderer's own picture, once.
-    expect(draws.map(({ image, x, y, canvas }) => [image, x, y, canvas])).toEqual([[bitmaps[0], 0, 0, nodes[0]], [bitmaps[1], 0, 0, nodes[1]]])
     // From the project root: under jsdom `import.meta.url` is not a file URL.
     const source = readFileSync(join(process.cwd(), 'src/lib/editor/PaintLayer.svelte'), 'utf8')
     const css = source.slice(source.indexOf('<style>'))
     expect(css).toMatch(/\.paint\s*\{/)
     expect(css).not.toMatch(/background/)
   })
-  it('changes its size, place and pixels together, and only once the frame has decoded', async () => {
-    const decodes = []
-    vi.stubGlobal('createImageBitmap', vi.fn(() => { const next = deferred(); decodes.push(next); return next.promise }))
-    const boxes = [{ x: 20, y: 20, w: 10, h: 10 }, { x: 15, y: 18, w: 20, h: 14 }]
-    let asked = 0
-    const { host } = await setup(vi.fn(async s => ({ ...result(s), bounds: boxes[asked++] })))
+})
 
-    // Answered, and still decoding: nothing is on the sheet yet.
-    draft.active = stroke('page-0'); await tick()
-    await vi.waitFor(() => expect(decodes).toHaveLength(1)); await settled(); await tick()
+describe('a Brush stroke, drawn in the layer', () => {
+  it('draws as the points arrive, with no native round trip', async () => {
+    const { host } = await setup()
+    draft.active = brushStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    const canvas = host.querySelector('.paint')
+    expect(canvas).not.toBeNull()
+    expect(puts.length).toBeGreaterThan(0)
+    expect(puts.every(put => put.canvas === canvas)).toBe(true)
+    // One dab of a 10 px brush on a 100 px page, at 25%: the canvas covers
+    // the first 128 px tile, which is past the page's own edge.
+    expect(placed(canvas)).toEqual([128, 128, '0%', '0%', '128%', '128%'])
+    // A paint pixel in the dab's middle carries the brush colour, opaque.
+    const tile = puts[0].image
+    const middle = (25 * 128 + 25) * 4
+    expect([...tile.data.slice(middle, middle + 4)]).toEqual([0x12, 0x34, 0x56, 255])
+
+    const before = puts.length
+    draft.active.points.push({ x: 40, y: 25, p: 1 }); await tick(); await flushPaintPreview('page-0'); await tick()
+    expect(host.querySelector('.paint')).toBe(canvas)
+    expect(puts.length).toBe(before + 1)
+  })
+  it('holds the stroke\'s canvas once committed and lets it go when the tiles show it', async () => {
+    const { host, rerender } = await setup()
+    const tile = cleanedTile(host)
+    draft.active = brushStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    const canvas = host.querySelector('.paint')
+    markCommitted(); clearDraft(); await tick()
+    expect(host.querySelector('.paint')).toBe(canvas)
+    const committed = { ...page(), tileRevision: 1 }
+    tile.dataset.version = tile.dataset.loadedVersion = pageVersion(committed, 'cleaned')
+    await rerender({ page: committed })
+    document.dispatchEvent(new CustomEvent('paint-tile-loaded')); await tick()
     expect(host.querySelector('.paint')).toBeNull()
-    const first = bitmap(40, 30)
-    decodes[0].resolve(first); await flushPaintPreview('page-0'); await tick()
-    const canvas = host.querySelector('.paint')
-    expect(placed(canvas)).toEqual([40, 30, '20%', '20%', '10%', '10%'])
-    expect(draws).toEqual([{ image: first, x: 0, y: 0, canvas, at: [40, 30, '20%', '20%', '10%', '10%'] }])
-
-    // The stroke moves on. Its next frame is another size in another place,
-    // and until that has decoded the canvas is exactly what it was.
-    draft.active.points.push({ x: 30, y: 30 }); await tick()
-    await vi.waitFor(() => expect(decodes).toHaveLength(2)); await settled(); await tick()
-    expect(host.querySelector('.paint')).toBe(canvas)
-    expect(placed(canvas)).toEqual([40, 30, '20%', '20%', '10%', '10%'])
-    expect(draws).toHaveLength(1)
-
-    // Nothing below waits on a timer or forces a render, so the canvas is whole
-    // again within the task the decode finished in. The draw saw the new size
-    // and place.
-    const second = bitmap(80, 56)
-    decodes[1].resolve(second); await flushPaintPreview('page-0')
-    expect(host.querySelectorAll('.paint')).toHaveLength(1)
-    expect(host.querySelector('.paint')).toBe(canvas)
-    expect(placed(canvas)).toEqual([80, 56, '15%', '18%', '20%', '14%'])
-    expect(draws).toHaveLength(2)
-    expect(draws[1]).toEqual({ image: second, x: 0, y: 0, canvas, at: [80, 56, '15%', '18%', '20%', '14%'] })
   })
-  it('does not finish a flush until the final frame has decoded and is there to hold', async () => {
-    const decoding = deferred()
-    vi.stubGlobal('createImageBitmap', vi.fn(() => decoding.promise))
-    const { host } = await setup(vi.fn(async s => result(s)))
-    draft.active = stroke('page-0'); await tick()
-    let flushed = false
-    const flush = flushPaintPreview('page-0').then(() => { flushed = true })
-    await vi.waitFor(() => expect(globalThis.createImageBitmap).toHaveBeenCalledTimes(1)); await settled()
-    expect(flushed).toBe(false)
-    decoding.resolve(bitmap()); await flush
-    // The commit seam drops the draft straight after the flush, with no wait.
-    markCommitted(); clearDraft(); await tick()
-    expect(host.querySelectorAll('.paint')).toHaveLength(1)
-    expect(draws).toHaveLength(1)
-  })
-  it('keeps the live frame\'s canvas, untouched, when the frame is held', async () => {
-    const { host } = await setup(vi.fn(async s => result(s)))
-    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
-    const canvas = host.querySelector('.paint')
-    expect(draws).toHaveLength(1)
-    markCommitted(); clearDraft(); await tick()
-    expect(host.querySelectorAll('.paint')).toHaveLength(1)
-    expect(host.querySelector('.paint')).toBe(canvas)
-    // Not drawn again either: a redraw sets the size, which clears a canvas.
-    expect(draws).toHaveLength(1)
-    expect(bitmaps[0].close).not.toHaveBeenCalled()
+  it('drops an abandoned stroke', async () => {
+    const { host } = await setup()
+    draft.active = brushStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    clearDraft(); await tick()
+    expect(host.querySelector('.paint')).toBeNull()
   })
 })
 
-describe('a decoded frame is closed when it is let go', () => {
-  it('replaced by the next frame, dropped while held, or abandoned', async () => {
-    const { rerender } = await setup(vi.fn(async s => result(s)))
-    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
-    draft.active.points.push({ x: 30, y: 30 }); await tick(); await flushPaintPreview('page-0'); await tick()
-    expect(bitmaps).toHaveLength(2)
-    expect(bitmaps[0].close).toHaveBeenCalledTimes(1)
-    expect(bitmaps[1].close).not.toHaveBeenCalled()
+describe('an eraser stroke', () => {
+  const eraserStroke = (id) => ({ pageId: id, kind: 'stroke', tool: 'eraser', points: [{ x: 25, y: 25, p: 1 }] })
 
+  it('draws its coverage on a canvas that is never shown, for the Brush layers to take off', async () => {
+    const { host } = await setup()
+    draft.active = eraserStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    const canvas = host.querySelector('.paint')
+    expect(canvas.classList.contains('erase')).toBe(true)
+    const [mask] = eraseMasks.get('page-0')
+    expect(mask.canvas).toBe(canvas)
+    expect(mask.box).toEqual({ x: 0, y: 0, w: 128, h: 128 })
+    // Coverage, opaque in the dab's middle.
+    const middle = (25 * 128 + 25) * 4
+    expect(puts[0].image.data[middle + 3]).toBe(255)
+
+    draft.active.points.push({ x: 40, y: 25, p: 1 }); await tick(); await flushPaintPreview('page-0'); await tick()
+    expect(eraseMasks.get('page-0')[0].tick).toBeGreaterThan(mask.tick)
+  })
+
+  it('is held only while its commit is in flight', async () => {
+    const { host, rerender } = await setup({ busy: 1 })
+    draft.active = eraserStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
     markCommitted(); clearDraft(); await tick()
-    expect(bitmaps[1].close).not.toHaveBeenCalled()
-    await rerender({ page: page(), dropped: 1 })
-    expect(bitmaps[1].close).toHaveBeenCalledTimes(1)
+    expect(eraseMasks.get('page-0')).toHaveLength(1)
+    await rerender({ busy: 0 }); await tick()
+    expect(host.querySelector('.paint')).toBeNull()
+    expect(eraseMasks.has('page-0')).toBe(false)
+  })
 
-    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
-    expect(bitmaps[2].close).not.toHaveBeenCalled()
+  it('drops an abandoned stroke', async () => {
+    await setup()
+    draft.active = eraserStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
     clearDraft(); await tick()
-    expect(bitmaps.map(made => made.close.mock.calls.length)).toEqual([1, 1, 1])
-  })
-  it('superseded while it was on its way', async () => {
-    const first = deferred()
-    const request = vi.fn().mockReturnValueOnce(first.promise).mockImplementation(async s => result(s))
-    await setup(request)
-    draft.active = stroke('page-0'); await tick()
-    draft.active.points.push({ x: 30, y: 30 }); await tick()
-    first.resolve(result(request.mock.calls[0][0])); await flushPaintPreview('page-0'); await tick()
-    expect(request).toHaveBeenCalledTimes(2)
-    expect(bitmaps.map(made => made.close.mock.calls.length)).toEqual([1, 0])
-    expect(draws.map(({ image }) => image)).toEqual([bitmaps[1]])
-  })
-  it('canceled while it was on its way, as soon as it has decoded', async () => {
-    const late = deferred(), request = vi.fn(() => late.promise)
-    const { unmount } = await setup(request)
-    draft.active = stroke('page-0'); await tick()
-    clearDraft(); await tick()
-    late.resolve(result(request.mock.calls[0][0])); await settled()
-    // The layer is still mounted and no other frame is asked for: nothing
-    // later would have closed it.
-    expect(bitmaps).toHaveLength(1)
-    expect(bitmaps[0].close).toHaveBeenCalledTimes(1)
-    expect(draws).toHaveLength(0)
-    unmount()
-    expect(bitmaps[0].close).toHaveBeenCalledTimes(1)
-  })
-  it('decoded after the layer is gone', async () => {
-    const late = deferred(), request = vi.fn(() => late.promise)
-    const { unmount } = await setup(request)
-    draft.active = stroke('page-0'); await tick()
-    unmount()
-    late.resolve(result(request.mock.calls[0][0])); await settled()
-    expect(bitmaps).toHaveLength(1)
-    expect(bitmaps[0].close).toHaveBeenCalledTimes(1)
+    expect(eraseMasks.has('page-0')).toBe(false)
   })
 })

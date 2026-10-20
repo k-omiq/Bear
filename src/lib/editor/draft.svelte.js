@@ -41,6 +41,46 @@ export const draft = $state({
 })
 
 /**
+ * The drawing surface of each mounted page, by page id, for the one gesture
+ * that is made of separate clicks: a polygon. In a longstrip a polygon
+ * started on one page goes on across the join, and its next click lands on
+ * the next page's surface, which has no draft of its own. That surface hands
+ * the event to the page the draft belongs to (`forwardToDraft`), which reads
+ * it against its own sheet, so the polygon stays one draft on one page.
+ *
+ * Plain, not state: nothing draws from it.
+ *
+ * @type {Map<string, (kind: 'vertex'|'move'|'close', event: PointerEvent|MouseEvent) => void>}
+ */
+const hosts = new Map()
+
+/**
+ * @param {string} pageId
+ * @param {(kind: 'vertex'|'move'|'close', event: PointerEvent|MouseEvent) => void} handler
+ * @returns {() => void} what unregisters it
+ */
+export function registerDraftHost(pageId, handler) {
+  hosts.set(pageId, handler)
+  return () => {
+    if (hosts.get(pageId) === handler) hosts.delete(pageId)
+  }
+}
+
+/**
+ * Hand a click, a move or a double-click to the page the active draft is on.
+ *
+ * @param {'vertex'|'move'|'close'} kind
+ * @param {PointerEvent|MouseEvent} event
+ * @returns {boolean} whether a host took it
+ */
+export function forwardToDraft(kind, event) {
+  const handler = draft.active ? hosts.get(draft.active.pageId) : undefined
+  if (!handler) return false
+  handler(kind, event)
+  return true
+}
+
+/**
  * @param {Draft} spec
  * @returns {Draft}
  */

@@ -139,34 +139,40 @@ function dabAt(brush, x, y, pressure) {
  * @returns {PlannedDab[]}
  */
 export function planStroke(points, brush) {
-  /** @type {PlannedDab[]} */
-  const dabs = []
-  const path = (points ?? []).filter(
-    (point) => point && Number.isFinite(point.x) && Number.isFinite(point.y),
-  )
-  const first = path[0]
-  if (!first) return dabs
+  const next = strokePlanner(brush)
+  return (points ?? []).flatMap(next)
+}
 
-  dabs.push(dabAt(brush, first.x, first.y, pressureOf(first)))
-  if (path.length === 1) return dabs
-
+/**
+ * The same walk, fed one point at a time: each call answers the dabs that
+ * point adds. `planStroke` is this run over the whole polyline, so a live
+ * stroke planned point by point lands exactly the dabs the commit plans.
+ *
+ * @param {BrushSpec} brush
+ * @returns {(point: {x: number, y: number, p?: number}) => PlannedDab[]}
+ */
+export function strokePlanner(brush) {
   const step = spacingPx(brush)
+  /** @type {{x: number, y: number, p?: number}|null} */
+  let last = null
   // How far past the last emitted dab the walk has travelled. A segment
   // shorter than what is left over contributes its length and no dab, which is
   // what keeps spacing uniform *across* segment joins rather than restarting at
   // every pointer sample.
   let carried = 0
-
-  for (let index = 0; index + 1 < path.length; index += 1) {
-    const a = path[index]
-    const b = path[index + 1]
-    const dx = b.x - a.x
-    const dy = b.y - a.y
+  return (point) => {
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return []
+    const a = last
+    last = point
+    if (!a) return [dabAt(brush, point.x, point.y, pressureOf(point))]
+    const dx = point.x - a.x
+    const dy = point.y - a.y
     const length = Math.hypot(dx, dy)
-    if (!Number.isFinite(length) || length <= 0) continue
-
+    if (!Number.isFinite(length) || length <= 0) return []
+    /** @type {PlannedDab[]} */
+    const dabs = []
     const ap = pressureOf(a)
-    const bp = pressureOf(b)
+    const bp = pressureOf(point)
     let travelled = step - carried
     while (travelled <= length) {
       const t = travelled / length
@@ -174,9 +180,8 @@ export function planStroke(points, brush) {
       travelled += step
     }
     carried = length - (travelled - step)
+    return dabs
   }
-
-  return dabs
 }
 
 /**

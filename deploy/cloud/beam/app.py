@@ -109,7 +109,7 @@ if ANALYSIS_SAM in SETTINGS.analysis_models:
 analysis_gpu_image = (
     beam.Image(python_version=PYTHON_VERSION)
     .add_commands([TORCH_INSTALL])
-    .add_python_packages(["onnxruntime-gpu==1.23.2", "numpy==2.4.6", "pillow==12.3.0"])
+    .add_python_packages(["onnxruntime-gpu==1.23.2", "numpy==2.4.6", "pillow==12.3.0", "scipy==1.18.1"])
     .with_envs({"HF_HUB_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1"})
 )
 gateway_image = beam.Image(python_version=PYTHON_VERSION)

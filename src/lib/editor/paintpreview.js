@@ -1,38 +1,8 @@
-/** One backend request in flight, with only the newest pending stroke retained. */
-export function previewQueue(request, present, unavailable = () => {}) {
-  let generation = 0
-  let serial = 0
-  let pending = null
-  let running = false
-  let waiters = []
-  async function pump() {
-    if (running) return
-    running = true
-    while (pending) {
-      const spec = pending
-      pending = null
-      const current = generation
-      try {
-        const result = await request(spec)
-        if (current === generation && !pending && result?.requestId === spec.requestId &&
-            result.revision === spec.revision && result.chapterId === spec.chapterId && result.pageIndex === spec.pageIndex) {
-          present(result)
-        } else if (current === generation && !pending && !result) {
-          unavailable()
-        }
-      } catch { if (current === generation && !pending) unavailable() }
-    }
-    running = false
-    const done = waiters
-    waiters = []
-    done.forEach(resolve => resolve())
-  }
-  return {
-    submit(spec) { pending = { ...spec, requestId: ++serial }; void pump() },
-    flush() { return running || pending ? new Promise(resolve => waiters.push(resolve)) : Promise.resolve() },
-    cancel() { generation++; pending = null },
-  }
-}
+/**
+ * The live paint preview's two pieces of shared plumbing: the commit seam's
+ * way to have a page's preview catch up before the draft is dropped, and the
+ * cleaned tiles a clone preview is drawn from.
+ */
 
 const flushers = new Map()
 export function registerPaintPreview(pageId, flush) {
@@ -40,3 +10,31 @@ export function registerPaintPreview(pageId, flush) {
   return () => { if (flushers.get(pageId) === flush) flushers.delete(pageId) }
 }
 export async function flushPaintPreview(pageId) { await flushers.get(pageId)?.() }
+
+/**
+ * The cleaned tiles on a sheet, each with its place in fractions of the
+ * sheet: what `paintrender.js#renderCloneTiles` draws. This is the page the
+ * clone stamp reads (`paint/mod.rs#render_clone`), as it stood before the
+ * stroke.
+ *
+ * @param {Element|null|undefined} sheet
+ * @returns {Array<{image: HTMLImageElement, left: number, top: number, width: number, height: number}>}
+ */
+export function cleanedTiles(sheet) {
+  const box = sheet?.getBoundingClientRect()
+  if (!sheet || !box || !(box.width > 0) || !(box.height > 0)) return []
+  return [...sheet.querySelectorAll('[data-artwork="cleaned"] img')]
+    // A tile still loading its replacement is in the document twice; the
+    // one on screen is the one that is not hidden.
+    .filter((image) => image.complete && image.naturalWidth > 0 && image.style.visibility !== 'hidden')
+    .map((image) => {
+      const tile = image.getBoundingClientRect()
+      return {
+        image,
+        left: (tile.left - box.left) / box.width,
+        top: (tile.top - box.top) / box.height,
+        width: tile.width / box.width,
+        height: tile.height / box.height,
+      }
+    })
+}

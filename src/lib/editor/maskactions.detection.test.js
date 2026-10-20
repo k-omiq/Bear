@@ -328,8 +328,9 @@ describe('Reject result on a cleaned detection', () => {
     expect(current(detection.id).mask).toEqual(detection.mask)
     // The backend's own two steps, and none of this side's.
     expect(push).not.toHaveBeenCalled()
-    expect(editor.history.cursor).toBe(2)
-    expect(editor.history.entries.map((entry) => entry.label)).toEqual(['masks.command.cleanRegion', 'masks.command.rejectResult'])
+    expect(editor.history.cursor).toBe(3)
+    expect(editor.history.entries.map((entry) => entry.label))
+      .toEqual(['masks.command.detectPages', 'masks.command.cleanRegion', 'masks.command.rejectResult'])
     expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
 
     // Undo of the reject is the same result, with no new render.
@@ -348,7 +349,7 @@ describe('Reject result on a cleaned detection', () => {
     expect(push).not.toHaveBeenCalled()
   })
 
-  it('says a result with no saved mask cannot be rejected, and leaves it as it was', async () => {
+  it('restores the mask of a result an older build cleaned, and Undo takes it back', async () => {
     // A fixture chapter cleaned from the start, as an older build left one.
     const OLD = 'wandering-moon-ch12'
     const backend = createMockBackend({ timing: ZERO })
@@ -357,14 +358,23 @@ describe('Reject result on a cleaned detection', () => {
     editor.history = createHistory()
     const region = editor.chapter.pages[0].regions.find((/** @type {any} */ candidate) => candidate.outcome === 'cleaned' && candidate.mask)
     const before = plain(region)
-    vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    expect(await runRegionMenuItem('reject', region)).toBe(false)
+    expect(await runRegionMenuItem('reject', region)).toBe(true)
+    expect(current(region.id)).toMatchObject({ outcome: 'detected', mask: before.mask })
+    expect(editor.history.entries.map((entry) => entry.label)).toEqual(['masks.command.rejectResult'])
+    expect(app.notices).toEqual([])
+  })
+
+  it('says a layer no cleaner made has no mask to restore, and leaves it as it was', async () => {
+    const region = { id: 'p0-d1', pageId: 'p0', source: 'auto', outcome: 'cleaned', mask: { id: 'p0-d1-m1', provenance: { engine: 'fill' } } }
+    editor.chapter = /** @type {any} */ ({ id: 'c', review: [], pages: [{ id: 'p0', index: 0, status: 'cleaned', resident: true, regions: [region] }] })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    setBackend(/** @type {any} */ ({ rejectResult: vi.fn().mockRejectedValue(
+      new Error('clean_not_restorable: no detection was kept for region p0-d1; its mask cannot be put back')) }))
+    expect(await runRegionMenuItem('reject', current('p0-d1'))).toBe(false)
     expect(app.notices.map((notice) => notice.key)).toEqual(['notice.mask.rejectNoMask'])
     expect(app.notices[0].tone).toBe('warn')
-    expect(plain(current(region.id))).toEqual(before)
-    expect(editor.history.entries).toEqual([])
-    expect((await backend.loadPages({ chapterId: OLD, indices: [0] }))[0].regions.find((candidate) => candidate.id === region.id)).toEqual(before)
+    expect(plain(current('p0-d1'))).toEqual(plain(region))
   })
 
   it('says any other refusal in one sentence, and a page a run holds in its own words', async () => {
@@ -468,9 +478,11 @@ describe('clean, undo, redo and reject in an open chapter', () => {
     await finished
     stop()
     await reloadPage(0)
+    await quiet()
     const detection = plain(editor.chapter.pages[0].regions.find((/** @type {any} */ region) => region.outcome === 'detected'))
     expect(detection, 'a detection on the first page').toBeTruthy()
-    expect(undoAvailable()).toBe(false)
+    // The Detect run is a step of its own, which the backend recorded.
+    expect(undoLabelKey()).toBe('masks.command.detectPages')
 
     // Clean: the backend's step arrives as `history-changed`.
     expect(await runRegionMenuItem('engine:fill', current(detection.id))).toBe(true)
@@ -482,7 +494,7 @@ describe('clean, undo, redo and reject in an open chapter', () => {
     undo()
     await quiet()
     expect(plain(current(detection.id))).toEqual(detection)
-    expect(undoAvailable()).toBe(false)
+    expect(undoLabelKey()).toBe('masks.command.detectPages')
     expect(redoLabelKey()).toBe('masks.command.cleanRegion')
 
     redo()
@@ -493,12 +505,81 @@ describe('clean, undo, redo and reject in an open chapter', () => {
     await quiet()
     expect(plain(current(detection.id))).toEqual(detection)
     expect(undoLabelKey()).toBe('masks.command.rejectResult')
-    expect(editor.history.entries).toHaveLength(2)
+    expect(editor.history.entries).toHaveLength(3)
 
     undo()
     await quiet()
     expect(plain(current(detection.id))).toEqual(result)
     expect(undoLabelKey()).toBe('masks.command.cleanRegion')
+
+    // Back past the clean and the Detect run: the page holds no detection.
+    // (The mock keeps the region's id where the native side mints one, so
+    // the row is still there, as it was before Detect.)
+    undo()
+    await quiet()
+    undo()
+    await quiet()
+    expect(current(detection.id)?.outcome).not.toBe('detected')
+    expect(editor.chapter.pages[0].regions.some((/** @type {any} */ region) => region.outcome === 'detected')).toBe(false)
+    expect(undoAvailable()).toBe(false)
+    // And forward again: the same detection, mask and all.
+    redo()
+    await quiet()
+    expect(plain(current(detection.id))).toEqual(detection)
+    expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
+  })
+
+  it('takes back a deleted detection, a text type and a dismissed warning', async () => {
+    const backend = createMockBackend({ timing: ZERO })
+    setBackend(backend)
+    const project = (await backend.listProjects()).find((candidate) => candidate.chapters.some((chapter) => chapter.id === CHAPTER))
+    expect(await openEditorChapter(project.id, CHAPTER)).toBe(true)
+    const plain = (/** @type {any} */ value) => JSON.parse(JSON.stringify(value))
+    const quiet = async () => {
+      await settled(editor.history)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await settled(editor.history)
+    }
+    let done = () => {}
+    const finished = new Promise((resolve) => { done = /** @type {any} */ (resolve) })
+    const stop = backend.subscribe((event) => { if (event.type === 'run-finished') done() })
+    await backend.runClean({ scope: 'page', chapterId: CHAPTER, pageIndex: 0, mode: 'detect' })
+    await finished
+    stop()
+    await reloadPage(0)
+    await quiet()
+    const regions = () => plain(editor.chapter.pages[0].regions)
+    const detection = regions().find((/** @type {any} */ region) => region.outcome === 'detected')
+    expect(detection).toBeTruthy()
+
+    // A text type, then a delete: two steps, each undone exactly.
+    expect(await runRegionMenuItem(detection.insideBubble ? 'type:outside' : 'type:inside', current(detection.id))).toBe(true)
+    await quiet()
+    expect(undoLabelKey()).toBe('masks.command.detectionType')
+    expect(await runRegionMenuItem('delete', current(detection.id))).toBe(true)
+    await quiet()
+    expect(current(detection.id)).toBeFalsy()
+    expect(undoLabelKey()).toBe('masks.command.deleteDetection')
+    undo()
+    await quiet()
+    expect(current(detection.id)).toBeTruthy()
+    undo()
+    await quiet()
+    expect(plain(current(detection.id))).toEqual(detection)
+
+    // A warning row, dismissed and taken back.
+    const page = (await backend.loadPages({ chapterId: CHAPTER, indices: [1] }))[0]
+    const warning = page?.regions.find((/** @type {any} */ region) => !region.mask)
+    expect(warning, 'a row with no mask on the second page').toBeTruthy()
+    await reloadPage(1)
+    expect(await runRegionMenuItem('delete', current(warning.id))).toBe(true)
+    await quiet()
+    expect(current(warning.id)).toBeFalsy()
+    expect(undoLabelKey()).toBe('masks.command.deleteRegion')
+    undo()
+    await quiet()
+    await reloadPage(1)
+    expect(plain(current(warning.id))).toEqual(plain(warning))
     expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
   })
 })

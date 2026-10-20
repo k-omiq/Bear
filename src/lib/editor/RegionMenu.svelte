@@ -4,7 +4,7 @@
   import { cloud, cloudEntries, cloudUsable, pickCloudChoice } from '../state/cloud.svelte.js'
   import { session } from '../state/session.svelte.js'
   import { cloudProfileLabel, currentCloudModelId, engineModelLabel } from '../model/model-names.js'
-  import { runRegionMenuItem } from './maskactions.svelte.js'
+  import { regionPageBusy, runRegionMenuItem, setDetectedMaskPadding } from './maskactions.svelte.js'
   import { ContextMenu } from '../ui/index.js'
   import { t } from '../i18n/index.js'
 
@@ -20,6 +20,11 @@
    * pure and tested; what an entry *does* is
    * `maskactions.svelte.js#runRegionMenuItem`, which is the row's own controls
    * and no second implementation of them.
+   *
+   * A detection's Mask padding is a slider in the menu. Each release is the
+   * Layers row's own padding change (`setDetectedMaskPadding`), one undo step,
+   * and the menu stays open. A change made while one is saving waits for it,
+   * and only the last value waiting is sent.
    *
    * Cloud is among the engines while a cloud endpoint is ready
    * (`state/cloud.svelte.js#cloudUsable`), and left out otherwise. Picking it,
@@ -52,6 +57,7 @@
                 : t(item.labelKey),
               icon: item.icon,
               selected: item.selected,
+              ...(item.range ? { range: item.range, disabled: regionPageBusy(at.region) } : {}),
             }
             // Every cloud profile's model: picking another one makes its
             // profile the default before the clean (`pick`).
@@ -68,6 +74,31 @@
         }))
       : [],
   )
+
+  let savingPadding = false
+  /** @type {number|null} */
+  let waitingPadding = null
+
+  /**
+   * @param {string} id
+   * @param {number} value
+   */
+  async function range(id, value) {
+    const region = at?.region
+    if (id !== 'padding' || !region) return
+    waitingPadding = value
+    if (savingPadding) return
+    savingPadding = true
+    try {
+      while (waitingPadding !== null) {
+        const next = waitingPadding
+        waitingPadding = null
+        await setDetectedMaskPadding(region, next)
+      }
+    } finally {
+      savingPadding = false
+    }
+  }
 
   /** @param {string} id */
   function pick(id) {
@@ -91,6 +122,7 @@
     label={t('masks.menu.label')}
     {sections}
     onselect={pick}
+    onrange={range}
     {onclose}
   />
 {/if}

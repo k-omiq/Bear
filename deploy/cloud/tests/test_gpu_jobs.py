@@ -26,13 +26,17 @@ from deploy.cloud.common.analysis_seed import AnalysisUnavailable
 from deploy.cloud.common.api import CloudGateway
 from deploy.cloud.common.capacity import MODAL_WEB_REDIRECT_SECONDS, SYNC_GPU_WAIT_SECONDS
 from deploy.cloud.common.contract import (
+    ANALYSIS_BATCH_CANVAS_OPERATION,
+    ANALYSIS_BATCH_MAX_CANVAS_PIXELS,
     ANALYSIS_BATCH_MAX_REQUESTS,
     ANALYSIS_RT,
     ANALYSIS_SAM,
     ANALYSIS_VERSION,
     GPU_JOB_OPERATIONS,
     analysis_batch_digest,
+    analysis_canonical_tile_png,
     analysis_request_digest,
+    analysis_tile_plan,
     gpu_job_handle,
     valid_gpu_job_attempt,
     valid_gpu_job_handle,
@@ -700,6 +704,168 @@ class AnalysisBatchTest(unittest.TestCase):
         }
         for name, body in cases.items():
             status, answer = self.call("POST", "/mc/analysis/v1/batches", body)
+            self.assertEqual((status, answer["error_code"]), (400, "invalid_request"), name)
+        self.assertEqual(self.modal.spawned, [])
+
+
+class AnalysisCanvasBatchTest(unittest.TestCase):
+    """A batch whose tiles travel as one canvas (`analysis.batch_canvas`)."""
+
+    WIDTH, HEIGHT = 1500, 256
+
+    def setUp(self) -> None:
+        self.modal = FakeModal()
+        jobs = ModalGpuJobs(ModalDictStore(FakeModalDict()), self.modal.from_id, ModalErrors, clock=Clock())
+        self.gateway = CloudGateway("modal", trust_edge_auth=True,
+                                    analysis_worker=Proxy(jobs, "analysis", self.modal.spawn))
+        y, x = np.mgrid[0:self.HEIGHT, 0:self.WIDTH]
+        self.page = np.stack([(7 * x + 3 * y) % 256, (5 * x + 11 * y) % 256, (13 * x + y) % 256], axis=-1).astype(np.uint8)
+        self.plan = analysis_tile_plan(self.WIDTH, self.HEIGHT)
+        self.assertEqual(len(self.plan), 2)
+        self.tiles = [self.canonical(entry["tile"]) for entry in self.plan]
+
+    def canonical(self, rect: Dict[str, int]) -> bytes:
+        cut = self.page[rect["y"]:rect["y"] + rect["height"], rect["x"]:rect["x"] + rect["width"]]
+        return analysis_canonical_tile_png(cut.tobytes(), rect["width"], rect["height"])
+
+    def requests(self, indices=(0, 1)) -> List[Dict[str, Any]]:
+        requests = []
+        for index in indices:
+            entry = self.plan[index]
+            for capability in (ANALYSIS_SAM, ANALYSIS_RT):
+                request = {
+                    "protocol_version": ANALYSIS_VERSION, "capability": capability,
+                    "graph_sha256s": ["a" * 64, "b" * 64] if capability == ANALYSIS_SAM else ["d" * 64],
+                    "model_revision": "c" * 40, "tile_id": f"tile_{index}", "tile_rect": entry["tile"],
+                    "tile_png_sha256": hashlib.sha256(self.tiles[index]).hexdigest(),
+                    "source_page_sha256": "e" * 64, "page_width": self.WIDTH, "page_height": self.HEIGHT,
+                    "tile_core": entry["core"],
+                }
+                request["request_digest"] = analysis_request_digest(request)[1]
+                requests.append(request)
+        return requests
+
+    def canvas_png(self, pixels: np.ndarray, mode: str = "RGB") -> bytes:
+        out = io.BytesIO()
+        Image.fromarray(pixels).convert(mode).save(out, format="PNG")
+        return out.getvalue()
+
+    def body(self, canvas: bytes, rect: Dict[str, int], requests=None) -> Dict[str, Any]:
+        requests = self.requests() if requests is None else requests
+        return {"metadata": {"protocol_version": ANALYSIS_VERSION, "requests": requests,
+                             "request_digest": analysis_batch_digest([r["request_digest"] for r in requests])},
+                "canvas_png_b64": base64.b64encode(canvas).decode(), "canvas_rect": rect, "attempt_id": ATTEMPT}
+
+    def post(self, body: Dict[str, Any]):
+        status, _, raw = self.gateway.handle_http_request(
+            "POST", "/mc/analysis/v1/batches", {"Content-Type": "application/json"}, json.dumps(body).encode())
+        return status, json.loads(raw)
+
+    def page_rect(self) -> Dict[str, int]:
+        return {"x": 0, "y": 0, "width": self.WIDTH, "height": self.HEIGHT}
+
+    def test_canonical_tiles_match_the_desktop(self) -> None:
+        # The same vectors are asserted in cleaner_core::cloud_analysis_wire.
+        with open("deploy/cloud/fixtures/analysis_v1/canonical_tiles.json") as source:
+            cases = json.load(source)["cases"]
+        for case in cases:
+            width, height = case["width"], case["height"]
+            y, x = np.mgrid[0:height, 0:width]
+            if case["pattern"] == "gray":
+                value = (3 * x + 5 * y) % 256
+                pixels = np.stack([value] * 3, axis=-1)
+            else:
+                pixels = np.stack([(7 * x + 3 * y) % 256, (5 * x + 11 * y) % 256, (13 * x + y) % 256], axis=-1)
+            png = analysis_canonical_tile_png(pixels.astype(np.uint8).tobytes(), width, height)
+            self.assertEqual((len(png), hashlib.sha256(png).hexdigest()), (case["png_bytes"], case["png_sha256"]))
+            with Image.open(io.BytesIO(png)) as image:
+                self.assertEqual(np.asarray(image.convert("RGB")).tobytes(), pixels.astype(np.uint8).tobytes())
+
+    def test_capabilities_list_the_canvas_only_with_batches(self) -> None:
+        _, _, raw = self.gateway.handle_http_request("GET", "/mc/v1/capabilities", {}, b"")
+        self.assertIn(ANALYSIS_BATCH_CANVAS_OPERATION, json.loads(raw)["operations"])
+        tiles_only = Proxy(None, "analysis", self.modal.spawn)  # type: ignore[arg-type]
+        tiles_only.submit_batch_job = None
+        _, _, raw = CloudGateway("modal", trust_edge_auth=True, analysis_worker=tiles_only).handle_http_request(
+            "GET", "/mc/v1/capabilities", {}, b"")
+        self.assertNotIn(ANALYSIS_BATCH_CANVAS_OPERATION, json.loads(raw)["operations"])
+
+    def test_a_canvas_reaches_the_gpu_as_the_tiles_it_stands_for(self) -> None:
+        for mode in ("RGB", "L"):
+            if mode == "L":
+                grey = self.page[..., 0]
+                self.page = np.stack([grey] * 3, axis=-1)
+                self.tiles = [self.canonical(entry["tile"]) for entry in self.plan]
+            self.modal.spawned.clear()
+            body = self.body(self.canvas_png(self.page, mode), self.page_rect())
+            body["attempt_id"] = ATTEMPT[:-1] + ("a" if mode == "RGB" else "b")
+            status, accepted = self.post(body)
+            self.assertEqual(status, 202, accepted)
+            metadata, pairs = self.modal.spawned[0]
+            self.assertEqual(metadata, body["metadata"])
+            self.assertEqual([png for _, png in pairs], [self.tiles[0]] * 2 + [self.tiles[1]] * 2)
+            self.assertEqual([request for request, _ in pairs], body["metadata"]["requests"])
+
+    def test_a_partial_canvas_holds_only_its_tiles(self) -> None:
+        tile = self.plan[0]["tile"]
+        canvas = self.canvas_png(self.page[0:tile["height"], 0:tile["width"]])
+        status, _ = self.post(self.body(canvas, tile, self.requests((0,))))
+        self.assertEqual(status, 202)
+        self.assertEqual([png for _, png in self.modal.spawned[0][1]], [self.tiles[0]] * 2)
+        # The second tile reaches past that canvas.
+        status, answer = self.post(self.body(canvas, tile, self.requests((0, 1))))
+        self.assertEqual((status, answer["error_code"]), (400, "invalid_request"))
+
+    def test_two_places_of_one_blank_tile_both_get_cut(self) -> None:
+        self.page = np.full_like(self.page, 255)
+        self.tiles = [self.canonical(entry["tile"]) for entry in self.plan]
+        self.assertEqual(self.tiles[0], self.tiles[1])
+        status, accepted = self.post(self.body(self.canvas_png(self.page), self.page_rect()))
+        self.assertEqual(status, 202, accepted)
+        self.assertEqual([png for _, png in self.modal.spawned[0][1]], [self.tiles[0]] * 4)
+
+    def repeated_digest(self) -> List[Dict[str, Any]]:
+        # The second tile names the first tile's pixels, at a place the canvas does not hold.
+        first, second = self.requests((0,))[0], dict(self.requests((1,))[0])
+        second["tile_png_sha256"] = first["tile_png_sha256"]
+        second["request_digest"] = analysis_request_digest(second)[1]
+        return [first, second]
+
+    @staticmethod
+    def bomb() -> bytes:
+        # A PNG header naming more pixels than Pillow opens: 20000 x 20000.
+        import struct
+        import zlib
+        header = struct.pack(">IIBBBBB", 20000, 20000, 8, 0, 0, 0, 0)
+        def chunk(kind: bytes, data: bytes) -> bytes:
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(b"")) + chunk(b"IEND", b"")
+
+    def test_malformed_canvases_never_reach_the_gpu(self) -> None:
+        rect = self.page_rect()
+        tampered = self.page.copy()
+        tampered[5, 600, 1] ^= 1
+        rgba = io.BytesIO()
+        Image.fromarray(self.page).convert("RGBA").save(rgba, format="PNG")
+        both = self.body(self.canvas_png(self.page), rect)
+        both["tiles_png_b64"] = [base64.b64encode(self.tiles[0]).decode()]
+        cases = {
+            "a changed pixel": self.body(self.canvas_png(tampered), rect),
+            "wrong size": self.body(self.canvas_png(self.page), {**rect, "width": self.WIDTH - 1}),
+            "moved": self.body(self.canvas_png(self.page), {**rect, "x": 1}),
+            "rgba": self.body(rgba.getvalue(), rect),
+            "too large": self.body(self.canvas_png(self.page), {"x": 0, "y": 0, "width": 4097,
+                                                                "height": ANALYSIS_BATCH_MAX_CANVAS_PIXELS // 4096}),
+            "not a png": self.body(b"not a png", rect),
+            "tiles and canvas": both,
+            "decompression bomb": self.body(self.bomb(), {"x": 0, "y": 0, "width": 16, "height": 16}),
+            "a repeated digest outside the canvas": self.body(
+                self.canvas_png(self.page[0:self.HEIGHT, 0:1024]), self.plan[0]["tile"], self.repeated_digest()),
+            "a repeated digest inside the canvas": self.body(
+                self.canvas_png(self.page), rect, self.repeated_digest()),
+        }
+        for name, body in cases.items():
+            status, answer = self.post(body)
             self.assertEqual((status, answer["error_code"]), (400, "invalid_request"), name)
         self.assertEqual(self.modal.spawned, [])
 

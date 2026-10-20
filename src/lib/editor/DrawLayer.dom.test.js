@@ -84,7 +84,11 @@ describe('brush pressure on a mounted surface', () => {
       await fireEvent.pointerUp(surface, { pointerId: 1, pointerType, pressure: 0, button: 0, clientX: 60, clientY: 20 })
       await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(1))
       const { paint } = createRegion.mock.calls[0][0].params
-      expect(paint.points.map((point) => point.p)).toEqual([downExpected, moveExpected])
+      // The rope leaves the move's point 3 px short of the pointer, and the
+      // release ends the stroke where the pointer let go, at the pressure it
+      // was drawn with: a pen lifts at 0.
+      expect(paint.points.map((point) => point.x)).toEqual([20, 57, 60])
+      expect(paint.points.map((point) => point.p)).toEqual([downExpected, moveExpected, moveExpected])
       expect(radiusAt(paint, paint.points[0].p)).toBe(footprintRadius * downExpected)
       expect(radiusAt(paint, paint.points[1].p)).toBe(footprintRadius * moveExpected)
       await editor.history.running
@@ -215,11 +219,8 @@ describe('a stroke while a run is going', () => {
  * 100 by 100 client pixels, so a client coordinate is a page percent.
  */
 describe('the clone stamp on a mounted surface', () => {
-  /**
-   * @param {Record<string, unknown>} [params]
-   * @param {(spec: any) => Promise<any>} [previewPaint]
-   */
-  function mount(params = {}, previewPaint = async () => null) {
+  /** @param {Record<string, unknown>} [params] */
+  function mount(params = {}) {
     const only = page('c1-p001', 0)
     editor.chapter = { id: 'c1', review: [], pages: [only] }
     editor.project = /** @type {any} */ ({ mode: 'single' })
@@ -240,7 +241,6 @@ describe('the clone stamp on a mounted surface', () => {
     })
     setBackend(/** @type {any} */ ({
       createRegion,
-      previewPaint,
       historyPush: vi.fn().mockResolvedValue({ cursor: 1, entries: [] }),
     }))
     // These tests check what is sent; the pixels need a real canvas.
@@ -349,7 +349,8 @@ describe('the clone stamp on a mounted surface', () => {
     expect(cross.style.top).toBe('50%')
     await fireEvent.pointerUp(surface, { pointerId: 1, button: 0, clientX: 40, clientY: 30 })
     await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(1))
-    expect(sent(0).params.paint.points.map((point) => point.x)).toEqual([20, 40])
+    // The rope trails the pointer by 3 px; the release brings the end home.
+    expect(sent(0).params.paint.points.map((point) => point.x)).toEqual([20, 37, 40])
     expect(sent(0).params.cloneOffset).toEqual({ x: 30, y: 20 })
     await editor.history.running
   })
@@ -379,25 +380,14 @@ describe('the clone stamp on a mounted surface', () => {
     await editor.history.running
   })
 
-  // A stamp is used in quick taps. The first tap is still waiting on its last
-  // preview frame when the second lands, and it used to be thrown away.
-  it('sends a tap that the next tap overtakes', async () => {
-    /** @type {Array<() => void>} */
-    const waiting = []
-    let open = false
-    const previewPaint = () => new Promise((resolve) => {
-      if (open) resolve(null)
-      else waiting.push(() => resolve(null))
-    })
-    const { click, createRegion, sent } = mount({}, previewPaint)
+  // A stamp is used in quick taps. Its preview is drawn in the page, so a tap
+  // is sent when it ends, with no wait on a native frame.
+  it('sends each quick tap when it ends', async () => {
+    const { click, createRegion, sent } = mount()
     await click(50, 50, { altKey: true })
     await click(20, 30)
-    expect(createRegion).not.toHaveBeenCalled()
-    // The second press sends the first, frame or no frame.
-    await click(60, 60)
     await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(1))
-    open = true
-    waiting.forEach((release) => release())
+    await click(60, 60)
     await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(2))
     expect(sent(0).params.paint.points[0]).toMatchObject({ x: 20, y: 30 })
     expect(sent(1).params.paint.points[0]).toMatchObject({ x: 60, y: 60 })
@@ -579,6 +569,83 @@ describe('a mounted long-strip drawing surface', () => {
     await waitFor(() => expect(restoreRegion).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(drawnOn()).toEqual([[], []]))
     vi.unstubAllGlobals()
+  })
+})
+
+describe('a polygon and a tap across a long-strip join', () => {
+  /** Two pages' surfaces, stacked: the first at 0..100px, the second at 100..200px. */
+  function mountPair(tool, toolParams, firstRegions = []) {
+    const first = { ...page('c1-p001', 0), regions: firstRegions }
+    const second = page('c1-p002', 1)
+    editor.chapter = { id: 'c1', review: [], pages: [first, second] }
+    editor.project = /** @type {any} */ ({ mode: 'longstrip' })
+    editor.history = createHistory()
+    editor.pageIndex = 0
+    editor.tool = tool
+    editor.toolParams = toolParams
+    editor.selectionId = null
+    resetDraftState()
+    setBackend(/** @type {any} */ ({ createRegion: vi.fn(async () => null) }))
+    const surfaces = [first, second].map((sheet, index) => {
+      const view = render(DrawLayer, {
+        props: {
+          page: sheet,
+          strip: true,
+          stripMinY: index === 0 ? 0 : -100,
+          stripMaxY: index === 0 ? 200 : 100,
+        },
+      })
+      const surface = /** @type {HTMLElement} */ (view.container.querySelector('.surface'))
+      const top = index * 100
+      surface.getBoundingClientRect = () => /** @type {DOMRect} */ ({
+        x: 0, y: top, left: 0, top, right: 100, bottom: top + 100, width: 100, height: 100, toJSON() {},
+      })
+      surface.setPointerCapture = vi.fn()
+      surface.releasePointerCapture = vi.fn()
+      return surface
+    })
+    return { first, second, surfaces }
+  }
+
+  it('keeps a clicked polygon one draft on its first page when a click lands on the next', async () => {
+    const { first, surfaces } = mountPair('shapes', {
+      shapes: { shape: 'polygon', mode: 'solid', feather: 0, color: '#ffffff', opacity: 100 },
+    })
+    await fireEvent.pointerDown(surfaces[0], { pointerId: 1, button: 0, clientX: 20, clientY: 80 })
+    await fireEvent.pointerDown(surfaces[1], { pointerId: 1, button: 0, clientX: 60, clientY: 130 })
+    await fireEvent.pointerDown(surfaces[1], { pointerId: 1, button: 0, clientX: 20, clientY: 150 })
+    expect(draft.active?.pageId).toBe(first.id)
+    // Read against the first sheet: 130px is 130% of the first page, across the join.
+    expect(draft.active?.points.map((point) => [point.x, point.y])).toEqual([[20, 80], [60, 130], [20, 150]])
+  })
+
+  it('closes a polygon by a double-click on the next page and commits it from its first page', async () => {
+    const { surfaces } = mountPair('shapes', {
+      shapes: { shape: 'polygon', mode: 'solid', feather: 0, color: '#ffffff', opacity: 100 },
+    })
+    const createRegion = vi.fn(async () => null)
+    setBackend(/** @type {any} */ ({ createRegion }))
+    await fireEvent.pointerDown(surfaces[0], { pointerId: 1, button: 0, clientX: 20, clientY: 80 })
+    await fireEvent.pointerDown(surfaces[1], { pointerId: 1, button: 0, clientX: 60, clientY: 130 })
+    await fireEvent.pointerDown(surfaces[1], { pointerId: 1, button: 0, clientX: 20, clientY: 150 })
+    await fireEvent.dblClick(surfaces[1], { clientX: 20, clientY: 150 })
+    await waitFor(() => expect(createRegion).toHaveBeenCalledTimes(1))
+    const request = createRegion.mock.calls[0][0]
+    expect(request.pageIndex).toBe(0)
+    expect(request.params.painted.kind).toBe('polygon')
+    expect(request.params.painted.points.map((point) => [point.x, point.y])).toEqual([[20, 80], [60, 130], [20, 150]])
+    expect(request.bbox.y + request.bbox.h).toBeCloseTo(150)
+  })
+
+  it('selects a region of the page above by its part that hangs across the join', async () => {
+    const hanging = { id: 'c1-p001-d1', pageId: 'c1-p001', bbox: { x: 10, y: 90, w: 30, h: 30 }, source: 'detect', outcome: 'detected' }
+    const { surfaces } = mountPair('shapes', {
+      shapes: { shape: 'rect', mode: 'solid', feather: 0, color: '#ffffff', opacity: 100 },
+    }, [hanging])
+    // 110px down is 10% into the second page, and 110% of the first.
+    await fireEvent.pointerDown(surfaces[1], { pointerId: 2, button: 0, clientX: 20, clientY: 110 })
+    await fireEvent.pointerUp(surfaces[1], { pointerId: 2, button: 0, clientX: 20, clientY: 110 })
+    expect(editor.selectionId).toBe(hanging.id)
   })
 })
 

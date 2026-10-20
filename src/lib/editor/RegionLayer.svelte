@@ -12,6 +12,7 @@
   import { updateLayer } from './maskactions.svelte.js'
   import {
     canTransform,
+    isBrushLayer,
     layerCapabilities,
     layerFrame,
     layerOf,
@@ -186,7 +187,8 @@
 
   const selectedRegion = $derived(regionById(editor.selectionId))
   const frameRegion = $derived(
-    selectedRegion && layerCapabilities(selectedRegion).transform === 'movable' ? selectedRegion : null,
+    selectedRegion && !isBrushLayer(selectedRegion) && layerCapabilities(selectedRegion).transform === 'movable'
+      ? selectedRegion : null,
   )
   const frameLocked = $derived(!!frameRegion && layerOf(frameRegion).locked)
 
@@ -548,7 +550,9 @@
   }
 
   const marksVisible = $derived(editor.maskOverlay || editor.reviewFilter)
-  const ordered = $derived(readingOrder(page.regions ?? [], readingDirection()))
+  // A Brush layer is paint and nothing on the canvas picks it or boxes it
+  // (`model/layers.js#isBrushLayer`): it is chosen in the Layers panel.
+  const ordered = $derived(readingOrder((page.regions ?? []).filter((region) => !isBrushLayer(region)), readingDirection()))
   const markers = $derived(ordered.map((region) => ({
     ...regionMarker(region, { marksVisible }),
     movable: canTransform(region),
@@ -795,8 +799,12 @@
      keeps its tab stop, its name and its activation. */
   .regions.inert { pointer-events: none }
 
+  /* No z-index on `.regions` itself: its children take their places on the
+     strip's one scale (`PageSheet.svelte`), so a region that hangs across a
+     join is above the next page's clear button, not under it. */
   .clear {
     position: absolute;
+    z-index: var(--z-clear);
     inset: 0;
     padding: 0;
     border: 0;
@@ -806,6 +814,7 @@
 
   .region {
     position: absolute;
+    z-index: var(--z-region);
     padding: 0;
     border: 0;
     background: transparent;
@@ -840,6 +849,7 @@
      white --page-halo: the blue carries itself over black ink, and it is pale
      panels and white gutters that need the rim. */
   .region.lit {
+    z-index: var(--z-selected);
     outline-width: 2px;
     box-shadow: 0 0 0 1px var(--page-mark-halo);
   }
@@ -910,6 +920,7 @@
      grabs. */
   .frame {
     position: absolute;
+    z-index: var(--z-selected);
     box-sizing: border-box;
     border: 1.5px dashed var(--page-mark);
     box-shadow: 0 0 0 1px var(--page-mark-halo);

@@ -145,12 +145,14 @@ describe('the four shapes are all drawable', () => {
 
   it('samples a lasso freehand and closes a polygon three ways', () => {
     const text = source()
-    // The freehand path: every sample that clears the spacing test is a vertex.
-    expect(text).toMatch(/shouldStamp\(active\.points\.at\(-1\)/)
+    // The freehand path: every coalesced sample pulls the rope, and each step
+    // the rope's end takes is a vertex.
+    expect(text).toMatch(/getCoalescedEvents/)
+    expect(text).toMatch(/pullRope\(rope, sample, ROPE_PX\)/)
     // Click back on the first vertex…
     expect(text).toMatch(/Math\.hypot\(point\.x - first\.x, point\.y - first\.y\) <= CLOSE_WITHIN/)
     // …double-click…
-    expect(text).toMatch(/ondblclick=\{\(\) => committable\(\) && commit\(\)\}/)
+    expect(text).toMatch(/ondblclick=\{\(event\) => \(forwarding \? forwardToDraft\('close', event\) : committable\(\) && commit\(\)\)\}/)
     // …or Enter, which `draftKeyIntent` reads as a commit.
     expect(text).toMatch(/intent\.kind === 'commit'/)
     // And three vertices before any of the three is allowed to finish it.

@@ -40,12 +40,13 @@
   const active = $derived(draft.active?.pageId === pageId ? draft.active : null)
   const bbox = $derived(active?.bbox ?? null)
   /**
-   * Paint and the clone stamp preview as **pixels** now (`PaintLayer.svelte`), so
+   * Paint, the eraser and the clone stamp preview as **pixels** now
+   * (`PaintLayer.svelte`; the eraser thins the Brush layers themselves), so
    * the tinted capsule that stood in for them would only sit on top of the real
    * thing and mute it. The dashed cursor ring is `DrawLayer`'s and stays: it
    * says where the next stamp lands, which the painted pixels behind it cannot.
    */
-  const livePixels = $derived((active?.tool === 'cloneStamp' && editor.toolParams.cloneStamp?.mode !== 'region') || active?.tool === 'brush')
+  const livePixels = $derived((active?.tool === 'cloneStamp' && editor.toolParams.cloneStamp?.mode !== 'region') || active?.tool === 'brush' || active?.tool === 'eraser')
 
   /**
    * The **path the pointer took**, drawn as a hairline over the shape it
@@ -364,8 +365,9 @@
 
 <!-- The gesture's size in words as well as in pixels, and the one number on
      the sheet that changes while a gesture runs. Polite rather than assertive:
-     it should not interrupt, and a drag produces a great many of them. -->
-{#if bbox}
+     it should not interrupt, and a drag produces a great many of them. A
+     brush stroke has no box to measure, so it draws none: only the paint. -->
+{#if bbox && active?.kind !== 'stroke'}
   <p class="readout" aria-live="polite">
     {t('canvas.draft.size', { w: Math.round(bbox.w), h: Math.round(bbox.h) })}
   </p>
@@ -374,6 +376,7 @@
 <style>
   .preview {
     position: absolute;
+    z-index: var(--z-draw);
     inset: 0;
     width: 100%;
     height: 100%;
@@ -431,6 +434,7 @@
 
   .readout {
     position: absolute;
+    z-index: var(--z-draw);
     right: 6px;
     bottom: 5px;
     margin: 0;
@@ -440,7 +444,7 @@
     border: 1px solid var(--page-line);
     color: var(--page-ink);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: max(8px, 2.15cqw);
+    font-size: max(8px, calc(var(--sheet-w) * 0.0215));
     line-height: 1.5;
     pointer-events: none;
     animation: mcFade var(--dur-fast) var(--ease);

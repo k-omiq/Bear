@@ -2079,12 +2079,12 @@ fn a_history_step_onto_the_runs_page_is_refused_and_leaves_the_cursor() {
     let mut journal = crate::history::load(&job_path);
     for page in [1, 0] {
         journal.push(crate::history::NewDelta {
+            parts: Vec::new(),
             label: "masks.command.deleteMask".into(),
             op: "region-state".into(),
             region_id: format!("{}-h1", library::page_id(&chapter_id, page)),
             before: side(true),
-            after: side(false),
-        }, crate::history::UNDO_LIMIT_DEFAULT);
+            after: side(false), ..Default::default() }, crate::history::UNDO_LIMIT_DEFAULT);
     }
     // Page 1's edit is the past and page 0's the future: undo steps onto
     // page 1, redo onto page 0.
@@ -5617,7 +5617,9 @@ mod cloud_stages {
             &recorder.cancel, &recorder.sink());
         drop(pipeline);
         assert_eq!((summary.regions_detected, summary.errored), (4, 0));
-        assert_eq!(*gateway.seen.lock().unwrap(), shas, "each page once, in the run's order");
+        let mut seen = gateway.seen.lock().unwrap().clone();
+        seen.sort();
+        assert_eq!(seen, { let mut all = shas.clone(); all.sort(); all }, "each page once");
         let job = Job::open(&entries[0].job_path).unwrap();
         assert!(job.project.detections.iter().all(|row| row.detector == "cloud"));
         assert!(job.project.examined.is_empty());
@@ -5669,12 +5671,21 @@ mod cloud_stages {
             assert!(pipeline.answers_below > 0, "{mode:?}: no window read across a join");
             drop(pipeline);
             // One upload per tile: a tall page is several, and each page's
-            // tiles go once, together, in the run's order.
+            // tiles go once. Ahead of the run several pages are out at once;
+            // inline, each page's tiles go together, in the run's order.
             let mut seen = gateway.seen.lock().unwrap().clone();
             let tiles = seen.iter().filter(|sha| **sha == shas[0]).count();
             assert_eq!(seen.len(), tiles * shas.len(), "{mode:?}: a page was sent twice");
-            seen.dedup();
-            assert_eq!(seen, shas, "{mode:?}: each page once, in order");
+            assert!(shas.iter().all(|sha| seen.iter().filter(|seen| *seen == sha).count() == tiles),
+                "{mode:?}: a page was sent twice");
+            if prefetch {
+                seen.sort();
+                seen.dedup();
+                assert_eq!(seen, { let mut all = shas.clone(); all.sort(); all }, "{mode:?}: each page once");
+            } else {
+                seen.dedup();
+                assert_eq!(seen, shas, "{mode:?}: each page once, in order");
+            }
         }
     }
 
@@ -5727,7 +5738,9 @@ mod cloud_stages {
         assert_eq!(notices_by_page(&events), vec![(2, "cloud.analysis.run.pageFailed".into(),
             serde_json::json!({ "page": 3, "code": "cloud_analysis_failed" }))]);
         assert_eq!((summary.pages_cleaned, summary.errored, summary.reason), (3, 1, "completed"));
-        assert_eq!(*gateway.seen.lock().unwrap(), shas, "each page once, in the run's order");
+        let mut seen = gateway.seen.lock().unwrap().clone();
+        seen.sort();
+        assert_eq!(seen, { let mut all = shas.clone(); all.sort(); all }, "each page once");
     }
 
     /// A failure that withdraws the run's authority ends the run at its page
@@ -5743,7 +5756,12 @@ mod cloud_stages {
             (1, "cloud.analysis.run.stopped".into(), serde_json::json!({ "page": 2, "code": "gateway_unauthorized" })),
         ]);
         assert_eq!((summary.pages_cleaned, summary.errored), (1, 1));
-        assert_eq!(*gateway.seen.lock().unwrap(), shas[..2].to_vec());
+        // The pages out beside the refused one may have been sent; none
+        // twice, and none started after the refusal came back
+        // (`run_analysis` tests hold the gateway to show that).
+        let seen = gateway.seen.lock().unwrap().clone();
+        assert!(seen.contains(&shas[0]) && seen.contains(&shas[1]));
+        assert!(shas.iter().all(|sha| seen.iter().filter(|seen| *seen == sha).count() <= 1));
     }
 }
 
@@ -7853,9 +7871,16 @@ mod grouped {
 /// Exercise the cloud upload and the real detector/manifest path together.
 fn repeat_cloud_detect(scratch: &Scratch, library: &Library, chapter_id: &str, prefetch: bool)
     -> (Summary, Vec<Raster>) {
+    repeat_cloud_detect_in(scratch, library, chapter_id, prefetch, "chapter")
+}
+
+/// [`repeat_cloud_detect`] over `scope`: `"page"` sends page 0 again, as a
+/// person does who detects that page alone.
+fn repeat_cloud_detect_in(scratch: &Scratch, library: &Library, chapter_id: &str, prefetch: bool, scope: &str)
+    -> (Summary, Vec<Raster>) {
     use crate::inference::run_analysis::{fake, RemoteDetection};
     use cleaner_core::cloud_analysis_wire::SAM;
-    let entries = plan_cloud_detection(library, "chapter", chapter_id, None).unwrap();
+    let entries = plan_cloud_detection(library, scope, chapter_id, Some(0)).unwrap();
     let gateway = fake::gateway();
     let remote = RemoteDetection::new(Box::new(gateway.clone()),
         fake::scope("modal-repeat-detection", &[0], &[SAM]));
@@ -7913,6 +7938,26 @@ fn repeat_cloud_detection_on_a_cleaned_page_uploads_visible_edits() {
 }
 
 #[test]
+fn a_finished_cloud_pass_leaves_the_chapter_queue_and_a_local_detect_puts_it_back() {
+    let _exclusive = exclusively();
+    let scratch = Scratch::new("repeat-cloud-resume");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 1);
+    let (summary, uploads) = repeat_cloud_detect(&scratch, &library, &chapter_id, true);
+    assert_eq!((summary.pages_queued, summary.errored, uploads.len()), (1, 0, 1));
+    assert_eq!(only_job(&library, &chapter_id).project.cloud_detected, vec![0]);
+    assert!(plan_cloud_detection(&library, "chapter", &chapter_id, None).unwrap().is_empty(),
+        "a chapter run resumes past pages the cloud finished");
+    assert_eq!(plan_cloud_detection(&library, "page", &chapter_id, Some(0)).unwrap().len(), 1,
+        "a page asked for alone is sent again");
+    // A local Detect replaces what the cloud stored, so the cloud may look again.
+    let mut job = only_job(&library, &chapter_id);
+    let page_id = library::page_id(&chapter_id, 0);
+    job.replace_page_detection_results(0, &page_id, Vec::new(), Vec::<RegionUntouched>::new()).unwrap();
+    assert!(job.project.cloud_detected.is_empty());
+    assert_eq!(plan_cloud_detection(&library, "chapter", &chapter_id, None).unwrap().len(), 1);
+}
+
+#[test]
 fn repeat_cloud_detection_after_deleting_all_masks_uploads_the_original() {
     let _exclusive = exclusively();
     let scratch = Scratch::new("repeat-cloud-deleted");
@@ -7964,15 +8009,17 @@ fn repeat_cloud_detection_preserves_existing_masks_edits_and_undo_history() {
     let masks: Vec<_> = detections.iter().map(|row| job.load_detection(&row.id).unwrap().unwrap().mask).collect();
     let path = library.resolve_chapter(&chapter_id).unwrap();
     let mut journal = Journal::default();
-    journal.push(NewDelta {
-        label: "masks.command.rerunMask".into(), op: "region-state".into(), region_id: patches[0].id.clone(),
-        before: Side { present: true, page_status: Some("cleaned".into()), region: None },
-        after: Side { present: true, page_status: Some("cleaned".into()), region: None },
-    }, crate::history::UNDO_LIMIT_DEFAULT);
-    journal.undo(); // Preserve the redo stack as well as existing entries.
+    for label in ["masks.command.rerunMask", "masks.command.layerStyle"] {
+        journal.push(NewDelta {
+            label: label.into(), op: "region-state".into(), region_id: patches[0].id.clone(),
+            before: Side { present: true, page_status: Some("cleaned".into()), region: None },
+            after: Side { present: true, page_status: Some("cleaned".into()), region: None }, ..Default::default() },
+            crate::history::UNDO_LIMIT_DEFAULT);
+    }
+    journal.undo(); // One step in the past, one in the redo stack.
     crate::history::save(&path, &journal).unwrap();
-    let history_before = std::fs::read(crate::history::journal_path(&path)).unwrap();
-    let (second, _) = repeat_cloud_detect(&scratch, &library, &chapter_id, true);
+    // The page alone: a chapter run passes over a page the cloud finished.
+    let (second, _) = repeat_cloud_detect_in(&scratch, &library, &chapter_id, true, "page");
     assert_eq!((second.regions_detected, second.errored), (2, 0));
     let after = only_job(&library, &chapter_id);
     assert_eq!(after.project.patches, patches);
@@ -7985,7 +8032,13 @@ fn repeat_cloud_detection_preserves_existing_masks_edits_and_undo_history() {
     }
     let ids: std::collections::HashSet<_> = after.project.detections.iter().map(|row| &row.id).collect();
     assert_eq!(ids.len(), after.project.detections.len());
-    assert_eq!(std::fs::read(crate::history::journal_path(&path)).unwrap(), history_before);
+    // The run is one new step on top of the past it found. A new step drops
+    // the redo stack, as every push does.
+    let journal = crate::history::load(&path);
+    let labels: Vec<_> = journal.entries.iter().map(|entry| entry.label.as_str()).collect();
+    assert_eq!(labels, ["masks.command.rerunMask", crate::history::DETECT_LABEL]);
+    assert_eq!(journal.cursor, 2);
+    assert_eq!(journal.entries[0].seq, 1);
 }
 
 #[test]

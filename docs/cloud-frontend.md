@@ -111,7 +111,7 @@ Qwen Clean asks for the lettering type and an optional description, such as "Big
 
 **Results are applied at once.** A Qwen result goes onto the page like any other cloud result. Nobody is asked first, so nothing waits and nothing times out. A live render and the recovery sweep both attach it ([cloud-journal.md](cloud-journal.md) section 4.4). Attachment still revalidates the source, revision, crop, hint and underlay. Every Qwen result carries the review flag `review.reason.checkGeneratedTexture`, unless its region already carried another review reason, which it keeps.
 
-**Reject result.** The user takes a result back with Reject result (`reject_result` in `src-tauri/src/library.rs`). It puts the region back as detected, with its mask, and is one undo step. A rejected or undone patch is set aside in the manifest's `withdrawn_patches`.
+**Restore mask.** The user takes a result back with Restore mask (`reject_result` in `src-tauri/src/library.rs`). It puts the region back as detected, with its mask, and is one undo step. A rejected or undone patch is set aside in the manifest's `withdrawn_patches`.
 
 **Redoing a Qwen result with a new description** takes two steps: reject the result, then clean the region again. That is another paid request. On a gateway that lists `jobs.retry_seed` it carries a new seed ([cloud-journal.md](cloud-journal.md) section 4.5). A journal record keeps an old `review_accepted` field that nothing reads.
 

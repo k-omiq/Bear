@@ -73,6 +73,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
+    # The desktop passes the pinned table so every platform exports the same
+    # head bytes. The cloud seed omits it and keeps its own Linux pin.
+    parser.add_argument("--dense-pe", type=Path)
     arguments = parser.parse_args()
     root = arguments.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -93,6 +96,7 @@ def main() -> None:
         "--hi-sam-root", str(architecture),
         "--output-dir", str(proof),
         "--phase", "export",
+        *(["--dense-pe", str(arguments.dense_pe)] if arguments.dense_pe else []),
     ], check=True)
 
 
