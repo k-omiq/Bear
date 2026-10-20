@@ -256,6 +256,29 @@ jobs:
           $config | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $configPath -Encoding utf8
           Write-Host "Signing with certificate $($cert.Thumbprint), timestamped by $timestampUrl"
 
+      # The AppImage must load the desktop's own libwayland-client. A copy
+      # bundled from this Ubuntu 22.04 runner is older than the Mesa on Fedora
+      # and Arch, and WebKit then aborts at launch with "Could not create
+      # default EGL display: EGL_BAD_PARAMETER". Tauri pins a linuxdeploy that
+      # cannot leave a library out; it uses whatever file sits in its cache, so
+      # a newer, checksum-verified release is put there first. That release reads
+      # LINUXDEPLOY_EXCLUDED_LIBRARIES (semicolon-separated globs).
+      - name: Use a linuxdeploy that leaves out libwayland-client
+        if: startsWith(matrix.platform, 'linux-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage'
+          sha='c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d'
+          cache="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+          mkdir -p "$cache"
+          tmp=$(mktemp)
+          curl --fail --silent --show-error --location --max-time 120 --retry 3 "$url" --output "$tmp"
+          echo "$sha  $tmp" | sha256sum --check --quiet
+          mv "$tmp" "$cache/linuxdeploy-x86_64.AppImage"
+          chmod +x "$cache/linuxdeploy-x86_64.AppImage"
+          echo 'LINUXDEPLOY_EXCLUDED_LIBRARIES=libwayland-client.so*' >> "$GITHUB_ENV"
+
       # The macOS certificate is handed to this step only, under names Tauri
       # does not read, and exported under the names it does read only when it
       # is present: Tauri treats a set-but-empty APPLE_CERTIFICATE as a
@@ -424,6 +447,9 @@ jobs:
           trap 'rm -rf "$VERIFY_DIR"' EXIT
           dpkg-deb -x "$DEB" "$VERIFY_DIR/deb"
           (cd "$VERIFY_DIR" && "$APPIMAGE" --appimage-extract >/dev/null)
+          if find "$VERIFY_DIR/squashfs-root" -name 'libwayland-client.so*' | grep -q .; then
+            echo "the AppImage bundles libwayland-client; it must use the desktop's own" >&2; exit 1
+          fi
           for package in "$VERIFY_DIR/deb" "$VERIFY_DIR/squashfs-root"; do
             for helper in manga-cleaner-provisioner manga-cleaner-uv; do
               test -n "$(find "$package" -type f -name "$helper" -perm /111 -print -quit)" || {
@@ -491,18 +517,18 @@ jobs:
   # Opens the built Linux packages on clean distribution images, which is the
   # closest CI gets to a new computer: the .deb must pull its own dependencies,
   # and the AppImage must run with what a desktop already has. The app checks
-  # itself (src-tauri/src/smoke.rs) and exits non-zero on a failure. The .deb
-  # legs gate publishing. The AppImage legs report without gating until they
-  # have passed once, because a bare container lacks libraries a desktop has
-  # and the list is not settled. They run through APPIMAGE_EXTRACT_AND_RUN,
-  # because Ubuntu 24.04 and Arch ship no libfuse2 (docs/windows-linux-audit-2026-09-29.md).
+  # itself (src-tauri/src/smoke.rs) and exits non-zero on a failure. Every leg
+  # gates publishing: the AppImage legs only reported for a while, and the
+  # AppImage then shipped crashing at launch on Fedora and Arch. A bare
+  # container lacks libraries every desktop has, so each AppImage leg installs
+  # those (GLES with Mesa). They run through APPIMAGE_EXTRACT_AND_RUN, because
+  # Ubuntu 24.04 and Arch ship no libfuse2 (docs/windows-linux-audit-2026-09-29.md).
   smoke-linux:
     name: Launch smoke (${{ matrix.id }})
     needs: build
     runs-on: ubuntu-latest
     container: ${{ matrix.image }}
     timeout-minutes: 30
-    continue-on-error: ${{ matrix.package == 'appimage' }}
     strategy:
       fail-fast: false
       matrix:
@@ -518,7 +544,7 @@ jobs:
           - id: ubuntu-24.04-appimage
             image: ubuntu:24.04
             package: appimage
-            setup: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb dbus imagemagick ca-certificates fonts-dejavu-core libegl1 libgl1 libgbm1
+            setup: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb dbus imagemagick ca-certificates fonts-dejavu-core libegl1 libgl1 libgles2 libgbm1
           - id: fedora-40-appimage
             image: fedora:40
             package: appimage

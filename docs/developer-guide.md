@@ -293,7 +293,7 @@ Drop `--dry-run` to publish. `ship.sh` checks `gh` authentication, a clean tree,
 [release.yml](../.github/workflows/release.yml) runs on a `v*` tag, or by hand with `notes` and `validate_only` inputs:
 
 1. **Build**, on macOS Apple Silicon, Windows x64 and Ubuntu 22.04. Each leg freezes and smoke tests the helper, stages `uv`, runs `npx tauri build --target`, and checks the helper is inside the package. Windows also runs a launch check from a non-ASCII path. A validation run adds the online Modal check and a Windows install and reinstall test. Artefacts are renamed `MangaCleaner_<version>_<platform>.<ext>`.
-2. **Launch smoke**, on clean Ubuntu images for the `.deb`, and on Ubuntu, Fedora and Arch for the AppImage. The `.deb` legs gate publishing. The AppImage legs only report.
+2. **Launch smoke**, on clean Ubuntu images for the `.deb`, and on Ubuntu, Fedora and Arch for the AppImage. Every leg gates publishing. The Linux build swaps in a pinned linuxdeploy so the AppImage leaves out `libwayland-client` and loads the desktop's own; the bundled copy crashed WebKit at launch on Fedora and Arch.
 3. **Publish**, skipped on a validation run. It refuses a tag that does not match the `tauri.conf.json` version. It builds `latest.json`, uploads each artefact, then uploads `latest.json` last, all by authenticated `PUT` to the publish worker.
 
 `scripts/release.sh "notes"` is the other path. It builds and publishes from your own machine, for that platform only, and merges its entry into the existing `latest.json`. It reads the updater key and publish token from `~/.tauri/`. Prefer `ship.sh`.
