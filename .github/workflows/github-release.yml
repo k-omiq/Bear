@@ -1,0 +1,66 @@
+name: GitHub release
+
+# Mirrors a published release onto the repository's Releases page. The
+# Release workflow publishes to https://cleaner.komiq.cc, which is what the
+# in-app updater reads; this only copies the same installers and their
+# signatures to GitHub, from that run's artifacts, so nothing is rebuilt.
+#
+# Runs after every successful tag push of Release. To mirror an earlier run
+# (its artifacts are kept 3 days), start it by hand with that run's id.
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Id of a successful Release run"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  mirror:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+    steps:
+      - name: Resolve the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" --jq .head_branch)
+          [[ "$TAG" == v* ]] || { echo "run $RUN_ID is not a tag push ($TAG)" >&2; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.RUN_ID }}
+          github-token: ${{ github.token }}
+          path: artifacts
+      - name: Create the release
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Installers, update bundles and their signatures; not the launch
+          # smoke reports that share the run.
+          mapfile -t FILES < <(find artifacts -path 'artifacts/launch-smoke-*' -prune -o -type f \
+            \( -name '*.dmg' -o -name '*.tar.gz' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.sig' \) -print | sort)
+          [ "${#FILES[@]}" -gt 0 ] || { echo "no installers in run $RUN_ID" >&2; exit 1; }
+          git init -q . && git remote add origin "https://github.com/${{ github.repository }}"
+          git fetch -q --depth=1 origin "+refs/tags/$TAG:refs/tags/$TAG"
+          NOTES=$(git tag -l --format='%(contents)' "$TAG")
+          PRERELEASE=()
+          [[ "$TAG" == *-* ]] && PRERELEASE=(--prerelease)
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "$TAG" "${FILES[@]}" --repo "${{ github.repository }}" \
+              --title "Manga Cleaner $TAG" --notes "$NOTES" --verify-tag "${PRERELEASE[@]}"
+          fi
