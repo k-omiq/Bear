@@ -83,9 +83,11 @@
 
   // The first item takes focus as the menu appears: a menu opened from the
   // keyboard is unusable otherwise, and one opened by the pointer needs the
-  // focus anyway for Escape to return it where it came from.
+  // focus anyway for Escape to return it where it came from. Without
+  // scrolling: the panel is fixed and on screen, but a region's menu is
+  // mounted inside the canvas scroller, and WebKit scrolled that to it.
   $effect(() => {
-    itemEls[at]?.focus()
+    itemEls[at]?.focus({ preventScroll: true })
   })
 
   // Clamped after it is measured, not before: the panel's height depends on

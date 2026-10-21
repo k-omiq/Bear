@@ -103,8 +103,10 @@
     // against it lands wherever the placeholder ends. The restore waits for
     // the pages, and `onscroll` records nothing until they are there.
     if (editor.loading) return
-    const target = untrack(() => editor.scroll)
-    adoptScroll(target.top, target.left)
+    // Untracked as a whole: `adoptScroll` reads the scroll room before its
+    // first `await`, and a tracked room re-ran this on every resize and wrote
+    // the last settled position over the one the canvas had just corrected.
+    untrack(() => adoptScroll(editor.scroll.top, editor.scroll.left))
   })
 
   /**

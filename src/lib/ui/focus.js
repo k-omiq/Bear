@@ -65,6 +65,12 @@ export function cycleTab(e, root) {
  * `fallback` (or its first focusable descendant) if provided, or the
  * previous element's nearest surviving ancestor.
  *
+ * **Restoring never scrolls.** The element is where the reader left it, and
+ * `focus()` scrolls every scrollable ancestor to show it. WebKit does so even
+ * for an element already partly on screen, so handing focus back to a page's
+ * drawing surface or region after a region menu could move the canvas to the
+ * top of that page.
+ *
  * @param {HTMLElement | (() => HTMLElement | null | undefined) | null} [fallback]
  * @returns {(override?: HTMLElement | (() => HTMLElement | null | undefined) | null) => void} restore
  */
@@ -73,20 +79,20 @@ export function captureFocus(fallback) {
   const parent = previous?.parentElement ?? null
   return (override) => {
     if (previous && document.contains(previous)) {
-      previous.focus()
+      previous.focus({ preventScroll: true })
       return
     }
     const target = override !== undefined ? override : fallback
     const node = typeof target === 'function' ? target() : target
     if (node && document.contains(node)) {
       const first = focusable(node)[0]
-      ;(first ?? node).focus?.()
+      ;(first ?? node).focus?.({ preventScroll: true })
       return
     }
     if (parent && document.contains(parent)) {
       const first = focusable(parent)[0]
       if (first) {
-        first.focus()
+        first.focus({ preventScroll: true })
         return
       }
     }

@@ -21,7 +21,7 @@ import {
   pageStatusOf,
   recordBackgroundRegionEdit,
   recordRegionEdit,
-  reloadPage,
+  reloadRegionPages,
   replaceRegion,
   select,
 } from '../state/editor.svelte.js'
@@ -247,7 +247,7 @@ function landApplied(result, regionId, before, label = 'canvas.command.applyTool
         })
       }
       const pageIndex = locateRegion(regionId)?.pageIndex
-      if (pageIndex !== undefined) void reloadPage(pageIndex).catch(() => {})
+      if (pageIndex !== undefined) void reloadRegionPages(pageIndex, [before?.region, result.region])
       return true
     }
     // `'blocked'` is a path the gate above did not recognise, and the adapter

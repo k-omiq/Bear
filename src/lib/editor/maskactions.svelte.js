@@ -58,6 +58,7 @@ import {
   replaceRegion,
   pageStatusOf,
   reloadPage,
+  reloadRegionPages,
   reportJobConflict,
   select,
   setTool,
@@ -153,8 +154,15 @@ function stillOpen(chapterId) {
   return chapterId !== null && editor.chapter?.id === chapterId
 }
 
-function refreshPage(index) {
-  if (index !== null) void reloadPage(index).catch(() => {})
+/**
+ * Read the region's page again, and in a longstrip every page its layer
+ * reaches across a join before or after the edit (`reloadRegionPages`).
+ *
+ * @param {number|null} index
+ * @param {...(import('../api/backend.js').ApiRegion|null|undefined)} regions - the region before and after
+ */
+function refreshPage(index, ...regions) {
+  if (index !== null) void reloadRegionPages(index, regions)
 }
 
 /**
@@ -197,7 +205,7 @@ export async function deleteMask(region) {
   // (`history.rs#record_pages`); it reaches this window's index as a
   // `history-changed` event. A patch is soft-deleted, and recorded here.
   if (region.outcome !== 'detected') recordEdit('masks.command.deleteMask', region.id, before, after, chapterId)
-  if (stillOpen(chapterId)) refreshPage(pageIndex)
+  if (stillOpen(chapterId)) refreshPage(pageIndex, before.region)
   return true
 }
 
@@ -271,7 +279,7 @@ export async function duplicateRegion(region) {
       select(copied.id)
     }
     recordEdit('regionCopy.duplicateUndo', copied.id, before, result, chapterId)
-    if (stillOpen(chapterId)) refreshPage(pageIndex)
+    if (stillOpen(chapterId)) refreshPage(pageIndex, copied)
     return true
   } catch (error) {
     return reportRegionEditFailure(error)
@@ -297,7 +305,7 @@ export async function keepDependencyResult(region) {
   if (!result) return false
   if (!stillOpen(chapterId)) return true
   if (!replaceRegion(result)) return false
-  refreshPage(pageIndexOf(region.id))
+  refreshPage(pageIndexOf(region.id), region, result)
   return true
 }
 
@@ -327,12 +335,38 @@ export async function rerunMask(region, kind, engine) {
   // Wider is a local re-run with a grown hole; a cloud render has no local
   // hole to grow, so it is not offered there (`retryWidens`).
   if (kind === 'retryWider' && !retryWidens(region.mask)) return false
+  // A second press while the first is rendering is not a second render. It
+  // queued on the page lock behind the first and snapshot the region the
+  // first was about to replace, so its undo step put back a stale mask.
+  // Reopen in tool edits nothing, and a run does not hold it back.
+  if (rerunning.has(region.id)) return false
+  if (kind !== 'reopenInTool' && !claimPageEdit(pageIndexOf(region.id))) return false
+  rerunning.add(region.id)
+  try {
+    return await rerunLocally(region, kind, engine)
+  } finally {
+    rerunning.delete(region.id)
+  }
+}
+
+/** The regions a local re-run is in flight for, by id. */
+const rerunning = new Set()
+
+/**
+ * `rerunMask` once it is known to run here.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @param {'stronger'|'simpler'|'cycleFill'|'reopenInTool'|'retry'|'retryWider'|'engine'} kind
+ * @param {string} [engine]
+ * @returns {Promise<boolean>}
+ */
+async function rerunLocally(region, kind, engine) {
   const chapterId = editor.chapter?.id ?? null
   const before = snapshot(region)
   /** @type {any} */
   let result
   try {
-    result = await getBackend().rerunMask({ maskId: region.mask.id, kind, engine })
+    result = await getBackend().rerunMask({ maskId: /** @type {any} */ (region.mask).id, kind, engine })
   } catch (error) {
     return reportRegionEditFailure(error)
   }
@@ -357,7 +391,7 @@ export async function rerunMask(region, kind, engine) {
     region: result.region,
     pageStatus: result.pageStatus,
   }, chapterId)
-  if (open) refreshPage(pageIndexOf(region.id))
+  if (open) refreshPage(pageIndexOf(region.id), before.region, result.region)
   return true
 }
 
@@ -418,7 +452,7 @@ export async function cleanAnyway(region, chosenEngine) {
     region: result.region,
     pageStatus: result.pageStatus,
   }, chapterId)
-  if (open) refreshPage(pageIndexOf(region.id))
+  if (open) refreshPage(pageIndexOf(region.id), before.region, result.region)
   return true
 }
 
@@ -523,7 +557,7 @@ export async function cleanDetected(region, engine) {
     if (result?.status !== 'applied' || !result.region) return false
     if (!stillOpen(chapterId)) return true
     if (result.region.id === region.id) replaceRegion(result.region, result.pageStatus)
-    refreshPage(pageIndex)
+    refreshPage(pageIndex, region, result.region)
     return true
   } finally {
     cleaning.delete(region.id)
@@ -566,7 +600,7 @@ export async function cleanDetectedOnCloud(region) {
   if (result?.status !== 'applied' || !result.region) return false
   if (!stillOpen(chapterId)) return true
   if (result.region.id === region.id) replaceRegion(result.region, result.pageStatus)
-  refreshPage(pageIndex)
+  refreshPage(pageIndex, region, result.region)
   return true
 }
 
@@ -610,7 +644,7 @@ export async function rejectResult(region) {
     if (!stillOpen(chapterId)) return true
     replaceRegion(result.region, result.pageStatus)
     adoptBackendHistory(chapterId, result.history)
-    refreshPage(pageIndex)
+    refreshPage(pageIndex, region, result.region)
     return true
   } finally {
     rejecting.delete(region.id)
@@ -653,7 +687,7 @@ export async function setDetectionType(region, inside) {
   if (!result) return false
   if (!stillOpen(chapterId)) return true
   replaceRegion(result)
-  refreshPage(pageIndex)
+  refreshPage(pageIndex, region, result)
   return true
 }
 
@@ -894,7 +928,7 @@ export function openLayerEdit(region, labelKey = 'masks.command.layerStyle', cha
         if (!landed || !before || !start || sameLayer(sanitizeLayer(layerOf(landed)), start)) return false
         if (deleted()) return false
         recordEdit(labelKey, regionId, before, { region: landed, pageStatus: before.pageStatus }, chapterId)
-        if (stillOpen(chapterId)) refreshPage(pageIndexOf(regionId))
+        if (stillOpen(chapterId)) refreshPage(pageIndexOf(regionId), before.region, landed)
         return true
       })().finally(forget)
       return ending
@@ -987,7 +1021,7 @@ async function renderInCloud(region, intent, call, label) {
   const open = stillOpen(chapterId)
   if (open) replaceRegion(result.region, result.pageStatus)
   recordEdit(label, region.id, before, { region: result.region, pageStatus: result.pageStatus }, chapterId)
-  if (open) refreshPage(pageIndex)
+  if (open) refreshPage(pageIndex, before.region, result.region)
   return true
 }
 

@@ -34,6 +34,7 @@ import { runDetection, unifyAnalysisTargets } from '../model/pipelines.js'
 import { recountPage } from '../model/status.js'
 import { toolSpec } from '../editor/tools.js'
 import { MAX_MASK_PADDING } from '../model/masks.js'
+import { displayBbox, pagesReached } from '../model/layers.js'
 import { evictRegions, slideWindow, windowIndices } from './pagewindow.svelte.js'
 import { pageNavControls, defaultReadingDirection } from '../model/paging.js'
 import { clearCloneSource, clearDraft, resetDraftState } from '../editor/draft.svelte.js'
@@ -710,6 +711,48 @@ export async function reloadPage(index) {
 }
 
 /**
+ * The pages an edit of one region shows on: the page holding it, and in a
+ * longstrip every resident page its layer reaches across a join, on either
+ * side of the edit (`model/layers.js#pagesReached`). Pages the window is not
+ * holding are read whole when they enter it.
+ *
+ * @param {number|null|undefined} pageIndex - the page the region belongs to
+ * @param {ReadonlyArray<import('../api/backend.js').ApiRegion|null|undefined>} regions - the region before and after
+ * @returns {number[]}
+ */
+export function regionPages(pageIndex, regions) {
+  if (!Number.isInteger(pageIndex)) return []
+  const list = pages()
+  const anchor = list[/** @type {number} */ (pageIndex)]
+  if (editor.project?.mode !== 'longstrip' || !anchor) return [/** @type {number} */ (pageIndex)]
+  const boxes = regions.flatMap((region) => (region?.bbox
+    ? [region.bbox, displayBbox(region.bbox, region.mask?.layer ?? {}, anchor)]
+    : []))
+  const resident = new Set(residentIndices())
+  const reached = pagesReached(list.map((page) => Number(page.height)), /** @type {number} */ (pageIndex), boxes)
+    .filter((index) => resident.has(index))
+  return [...new Set([/** @type {number} */ (pageIndex), ...reached])]
+}
+
+/**
+ * Read again every page an edit of one region shows on (`regionPages`).
+ *
+ * **Not the anchor alone.** A neighbour draws the part of a patch that hangs
+ * across a join from its own composite, whose digest only a read of that page
+ * moves. Reading the anchor alone left the other half of a bubble cleaned
+ * across a join on the last result until the page next entered the window.
+ *
+ * @param {number|null|undefined} pageIndex
+ * @param {ReadonlyArray<import('../api/backend.js').ApiRegion|null|undefined>} regions
+ * @returns {Promise<void>}
+ */
+export async function reloadRegionPages(pageIndex, regions) {
+  await Promise.all(regionPages(pageIndex, regions).map((index) => reloadPage(index).catch((error) => {
+    console.error('a page could not be read again after a region edit', error)
+  })))
+}
+
+/**
  * Recompute one page's entries in the chapter's review index.
  *
  * Only ever called for a page whose regions are in hand, which is the only kind
@@ -1002,6 +1045,10 @@ export async function openEditorChapter(projectId, chapterId, options = {}) {
   const convert = options.convert === true
   const reload = options.reload === true
   if (!convert && !reload && editor.chapter?.id === chapterId && editor.project?.id === projectId) return true
+  // A reload restores the reader's place from the position record, which is
+  // written a debounce behind the scroller: write it now, or the chapter comes
+  // back where the reader was a moment ago.
+  if (reload && editor.chapter?.id === chapterId) saveAutosave()
   subscribeOnce()
   editor.loading = true
   let result
@@ -2083,9 +2130,24 @@ export async function applyRegionDelta(regionId, side, chapterId = editor.chapte
     notify({ key: 'notice.history.stale', tone: 'warn' })
     return
   }
+  const was = regionNamed(regionId)
   applyRegionState(regionId, side?.present ? result : null, pageStatus)
   const page = pageHolding(regionId)
-  if (page) await reloadPage(page.index).catch(() => {})
+  if (page) await reloadRegionPages(page.index, [was, side?.present ? result : null])
+}
+
+/**
+ * The region the open chapter holds under this id, or null.
+ *
+ * @param {string} regionId
+ * @returns {import('../api/backend.js').ApiRegion|null}
+ */
+function regionNamed(regionId) {
+  for (const page of pages()) {
+    const found = page.regions.find((candidate) => candidate.id === regionId)
+    if (found) return $state.snapshot(found)
+  }
+  return null
 }
 
 /**
@@ -2141,9 +2203,10 @@ export async function applyCleanDelta(regionId, side, chapterId = editor.chapter
   }
   if (!result?.region) return false
   if (!chapterId || editor.chapter?.id !== chapterId) return true
+  const was = regionNamed(regionId)
   applyRegionState(regionId, result.region, result.pageStatus ?? undefined)
   const page = pageHolding(regionId)
-  if (page) await reloadPage(page.index).catch(() => {})
+  if (page) await reloadRegionPages(page.index, [was, result.region])
   return true
 }
 

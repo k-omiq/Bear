@@ -16,7 +16,9 @@ import {
   redo,
   recordRegionEdit,
   reloadPage,
+  regionPages,
   reportJobConflict,
+  residentIndices,
   select,
   selectedRegion,
   setToolBySlot,
@@ -1634,5 +1636,78 @@ describe('a clean the backend recorded', () => {
     expect(api.historyMove).toHaveBeenCalledTimes(1)
     expect(editor.history.cursor).toBe(0)
     expect(shown()).toMatchObject({ outcome: 'detected' })
+  })
+})
+
+describe('regionPages', () => {
+  /** Twelve 1000 px pages, the window (radius 5) on page 0, so pages 0 to 5 are resident. */
+  function strip(mode = 'longstrip') {
+    editor.project = /** @type {any} */ ({ id: 'pr', mode })
+    editor.pageIndex = 0
+    editor.stripScope = []
+    editor.stripFocus = -1
+    editor.stripMounted = []
+    editor.chapter = /** @type {any} */ ({
+      id: 'ch',
+      review: [],
+      pages: Array.from({ length: 12 }, (_, index) => ({
+        id: `p${index}`, index, width: 700, height: 1000, resident: true, regions: [],
+      })),
+    })
+  }
+
+  /**
+   * @param {object} bbox
+   * @param {object} [layer]
+   */
+  const region = (bbox, layer = {}) => /** @type {any} */ ({ id: 'r', bbox, mask: { id: 'm', layer } })
+
+  afterEach(() => {
+    editor.chapter = null
+    editor.project = null
+    editor.pageIndex = 0
+  })
+
+  it('is the page alone in a single-page project, whatever the box', () => {
+    strip('single')
+    expect(regionPages(1, [region({ x: 10, y: 90, w: 20, h: 40 })])).toEqual([1])
+  })
+
+  it('is the page alone for a region inside it', () => {
+    strip()
+    expect(regionPages(1, [region({ x: 10, y: 10, w: 20, h: 30 })])).toEqual([1])
+    expect(regionPages(1, [])).toEqual([1])
+  })
+
+  it('adds the next page when the box hangs past the bottom, if that page is resident', () => {
+    strip()
+    expect(regionPages(1, [region({ x: 10, y: 80, w: 20, h: 40 })])).toEqual([1, 2])
+  })
+
+  it('leaves out a reached page the window is not holding', () => {
+    strip()
+    expect(residentIndices()).not.toContain(6)
+    expect(regionPages(5, [region({ x: 10, y: 80, w: 20, h: 40 })])).toEqual([5])
+  })
+
+  it('counts a layer offset that moves the region across a join, up or down', () => {
+    strip()
+    const inside = { x: 10, y: 70, w: 20, h: 20 }
+    expect(regionPages(1, [region(inside)])).toEqual([1])
+    expect(regionPages(1, [region(inside, { offsetY: 200 })])).toEqual([1, 2])
+    expect(regionPages(2, [region({ x: 10, y: 10, w: 20, h: 20 }, { offsetY: -200 })]).sort()).toEqual([1, 2])
+  })
+
+  it('counts both the region before and the region after an edit', () => {
+    strip()
+    const before = region({ x: 10, y: 10, w: 20, h: 20 })
+    const after = region({ x: 10, y: 10, w: 20, h: 20 }, { offsetY: 2500 })
+    expect(regionPages(1, [before, null])).toEqual([1])
+    expect(regionPages(1, [before, after])).toEqual([1, 3])
+  })
+
+  it('names no page for a region with no page', () => {
+    strip()
+    expect(regionPages(null, [region({ x: 0, y: 0, w: 10, h: 10 })])).toEqual([])
   })
 })
