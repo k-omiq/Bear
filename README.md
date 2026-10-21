@@ -54,6 +54,43 @@ The rule is simple: use the lightest engine that does the job.
 
 A heavier model on a simple balloon is slower and often worse, because it can hallucinate marks where there was only paper. The video shows a chapter Detect run, then text over diagonal hatching cleaned with manga-LaMa from the right-click menu ("Clean with"). LaMa rebuilds the hatching lines behind the text instead of painting flat paper.
 
+## Cloud Qwen: before and after
+
+Regions from real chapters, cleaned with Qwen-Image-Edit-2511 on a cloud GPU. In each pair the left side is before and the right side is after. Qwen redraws the art under large sound effects, where there is no flat paper to fill.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/media/qwen/skeleton.jpg" alt="Before and after: a sound effect removed from a skeleton and speed lines" width="400"><br>
+      <sub>A sound effect over a skeleton and speed lines.</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/media/qwen/blade.jpg" alt="Before and after: a sound effect removed from a swinging blade" width="400"><br>
+      <sub>A sound effect over a swinging blade.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/media/qwen/shout.jpg" alt="Before and after: a long vertical shout removed from speed lines" width="400"><br>
+      <sub>A long vertical shout over speed lines.</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/media/qwen/sword.jpg" alt="Before and after: a sound effect removed from hatching and a raised sword" width="400"><br>
+      <sub>A sound effect over hatching and a raised sword.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/media/qwen/skull.jpg" alt="Before and after: a sound effect removed from a skull" width="400"><br>
+      <sub>A sound effect over a skull.</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/media/qwen/webtoon.jpg" alt="Before and after: Korean text removed from a patterned wallpaper in a colour webtoon" width="400"><br>
+      <sub>Korean text over wallpaper in a colour webtoon.</sub>
+    </td>
+  </tr>
+</table>
+
 ## How it works
 
 ```mermaid
