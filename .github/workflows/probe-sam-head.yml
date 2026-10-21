@@ -28,7 +28,32 @@ jobs:
           uv venv --clear --python "$PYM" $ROOT/venv
           if [ -f $ROOT/venv/Scripts/python.exe ]; then PY=$ROOT/venv/Scripts/python.exe; else PY=$ROOT/venv/bin/python; fi
           uv pip sync --torch-backend cpu --python $PY $SRC/environment.txt
-          $PY $SRC/bootstrap.py --root $ROOT --source $SRC --dense-pe $SRC/dense_pe.f32.xz
+          $PY sam-bootstrap/test_bootstrap.py -v
+          # A partial checkpoint, as a dropped download leaves it: the
+          # bootstrap must continue from byte 104857600, not start again.
+          mkdir -p $ROOT/checkpoint
+          curl -sSfL -r 0-104857599 -o $ROOT/checkpoint/model.safetensors.part \
+            https://huggingface.co/mayocream/koharu-text-sam-ts-l/resolve/5dd97423e0fbf2404264979136d47e8101144046/model.safetensors
+          set -o pipefail
+          $PY $SRC/bootstrap.py --root $ROOT --source $SRC --dense-pe $SRC/dense_pe.f32.xz | tee progress.log
+          $PY - <<'PY'
+          import json
+          lines = []
+          for line in open("progress.log"):
+              try:
+                  value = json.loads(line)
+              except ValueError:
+                  continue
+              if isinstance(value, dict) and "step" in value:
+                  lines.append(value)
+          weights = [line for line in lines if line["step"] == "weights"]
+          print("progress lines:", len(lines), "weights lines:", len(weights))
+          print("first weights:", weights[0], "last weights:", weights[-1])
+          assert weights[0]["done"] > 104857600, "the partial file was not resumed"
+          assert weights[-1]["done"] == weights[-1]["total"] == 1355824988
+          assert len(weights) >= 90
+          assert [line["step"] for line in lines if line["step"] != "weights"] == ["source", "export"]
+          PY
           ls -l $ROOT/proof/*.onnx
           $PY - <<'PY'
           import hashlib, pathlib
