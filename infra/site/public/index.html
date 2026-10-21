@@ -152,10 +152,11 @@
 <p class="meta">macOS on apple silicon, windows x64 · models downloaded on first launch · linux builds from source</p>
 
 <div class="shot">
-  <video src="/media/engine-choice.mp4" muted loop playsinline autoplay preload="metadata" aria-label="Engine selection and region re-running in Manga Cleaner"></video>
+  <video src="/media/lama-demo.mp4" muted loop playsinline autoplay preload="metadata" aria-label="Manga-LaMa cleaning text over hatching in Manga Cleaner"></video>
 </div>
 
-<p class="meta">use the lightest engine that does the job: planar fill for flat paper, denoise for noisy scans, and manga-LaMa for screentone and line art. any region can be re-run from the layer menu.</p>
+<p class="meta">demo: understand how lama works. a chapter detect run, then text over diagonal hatching cleaned with manga-LaMa from the right-click menu ("clean with"). LaMa rebuilds the hatching lines behind the text instead of painting flat paper.</p>
+<p class="meta">use the lightest engine that does the job: fill for flat paper, manga-LaMa (the default) for screentone, halftone and line art, FLUX.2 Klein for the rare region nothing else can reconstruct, and cloud on your own GPU account, per region, when you choose it.</p>
 
 <ul class="features">
   <li>automatic cleaning pipeline: detect speech bubbles and free text, gate to Japanese script, fit masks, route to an engine, and composite</li>

@@ -39,11 +39,11 @@ Manga Cleaner is a standalone desktop app. It detects speech bubbles and free te
 
 A chapter Detect run in the real app. Text inside speech bubbles is tinted blue and text outside bubbles is tinted orange. The Text cleanup panel is on the left, and a right-click on a region offers "Clean with".
 
-## Demo: pick the right engine
+## Demo: understand how LaMa works
 
-![Choosing the right engine](infra/site/public/media/engine-choice.gif)
+![Manga-LaMa cleaning text over hatching](infra/site/public/media/lama-demo.gif)
 
-[Full quality video](infra/site/public/media/engine-choice.mp4)
+[Full quality video](infra/site/public/media/lama-demo.mp4) (the preview above plays at 4x speed)
 
 The rule is simple: use the lightest engine that does the job.
 
@@ -52,7 +52,7 @@ The rule is simple: use the lightest engine that does the job.
 - **FLUX.2 Klein** (optional sidecar) is for the rare region nothing else can reconstruct. It needs its own process and several gigabytes of memory.
 - **Cloud** runs on your own GPU account, per region, when you choose it.
 
-A heavier model on a simple balloon is slower and often worse, because it can hallucinate marks where there was only paper. The video shows a FLUX layer being re-run with manga-LaMa from the layer context menu ("Clean with"), and the Shapes tool with its Mode set per region.
+A heavier model on a simple balloon is slower and often worse, because it can hallucinate marks where there was only paper. The video shows a chapter Detect run, then text over diagonal hatching cleaned with manga-LaMa from the right-click menu ("Clean with"). LaMa rebuilds the hatching lines behind the text instead of painting flat paper.
 
 ## How it works
 
