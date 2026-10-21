@@ -1460,7 +1460,7 @@ export const en = {
       // already named in the Layers row this entry came from.
       applyTool: 'the tool applied to a region',
       drawMask: 'a mask drawn by hand',
-      erasePaint: 'erased brush paint',
+      erasePaint: 'an eraser stroke',
     },
   },
 
@@ -2692,7 +2692,7 @@ export const en = {
     hint: {
       autoClean: 'Enter to run',
       brush: 'drag to paint',
-      eraser: 'drag to erase brush paint',
+      eraser: 'drag to erase paint or a cleaned area',
       shapes: 'drag on the page',
       aiMaskBrush: 'stroke over text',
       // `{cloneSourceModifier}` is a context param, not one this call site

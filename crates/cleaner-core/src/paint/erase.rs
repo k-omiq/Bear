@@ -72,8 +72,11 @@ pub fn erase_coverage(points: &[StrokePoint], spec: &BrushSpec) -> Option<Mask> 
 /// layer that was moved or turned is erased where it shows, by running
 /// [`Patch::presented`]'s placement backwards for each of its pixels.
 ///
-/// Answers whether any coverage came off. Lettering (`ink`) goes with the
-/// coverage where none is left.
+/// Answers whether any coverage came off. Lettering (`ink`) goes where less
+/// than half the coverage is left: `ink` is the hole a Try again cleans
+/// (`Preprocessing::hole`), and a pixel kept in it would be cleaned back over
+/// the page the eraser showed. Under half is the binary hole's nearest answer
+/// to a part-way erase.
 pub fn erase_patch(patch: &mut Patch, erase: &Mask) -> bool {
     let style = patch.layer_style();
     let source = patch.mask.bounds;
@@ -105,7 +108,7 @@ pub fn erase_patch(patch: &mut Patch, erase: &Mask) -> bool {
             }
             let left = (u32::from(old) * (255 - u32::from(taken)) + 127) / 255;
             patch.mask.set_coverage(x, y, left as u8);
-            if left == 0 {
+            if left < 128 {
                 patch.ink.set(x, y, false);
             }
             changed = true;
@@ -189,7 +192,13 @@ mod tests {
         let soft = erase_coverage(&[point(55.0, 55.0)], &spec(10.0, 100.0, 50.0)).unwrap();
         assert!(erase_patch(&mut half, &soft));
         assert_eq!(half.mask.coverage(55, 55), 127);
-        assert!(half.ink.contains(55, 55));
+        assert!(!half.ink.contains(55, 55), "under half left, out of the hole");
+
+        let mut most = painted(Rect::new(40, 40, 30, 30), serde_json::Value::Null);
+        let light = erase_coverage(&[point(55.0, 55.0)], &spec(10.0, 100.0, 40.0)).unwrap();
+        assert!(erase_patch(&mut most, &light));
+        assert_eq!(most.mask.coverage(55, 55), 153);
+        assert!(most.ink.contains(55, 55), "more than half left, still in the hole");
     }
 
     #[test]

@@ -42,6 +42,7 @@ import {
   recordRegionEdit,
   recordRegionEdits,
   reloadPage,
+  reloadRegionPages,
   reportJobConflict,
   scopePageIndices,
   select,
@@ -427,12 +428,17 @@ async function createMask(spec, extraParams) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Take an eraser stroke off the page's Brush layers (`erasePaint`).
+ * Take an eraser stroke off the layers under it (`erasePaint`): Brush paint
+ * and cleaned regions alike (`model/layers.js#isErasableLayer`).
  *
  * Every layer the stroke changed comes back with its region before and after,
  * and the whole stroke is **one** undo step however many layers it crossed
  * (`recordRegionEdits`). A layer left with nothing on it goes off the page and
  * out of the Layers panel, and its undo brings it back.
+ *
+ * In a longstrip a layer can belong to the page above or below, hanging
+ * across the join: it is answered with its own page and that page's status,
+ * and every page it shows on is read again (`reloadRegionPages`).
  *
  * @param {CommitSpec} spec
  * @returns {Promise<boolean>} whether any paint came off
@@ -445,7 +451,7 @@ async function eraseDrawn(spec) {
   if (points.length === 0) return false
   const percent = (/** @type {unknown} */ value, /** @type {number} */ fallback) =>
     Math.max(0, Math.min(100, Number(value ?? fallback)))
-  const before = page.status
+  const statusBefore = new Map((chapter.pages ?? []).map((candidate) => [candidate.index, candidate.status]))
   const result = await getBackend().erasePaint({
     chapterId: spec.chapterId,
     pageIndex: spec.pageIndex,
@@ -457,19 +463,26 @@ async function eraseDrawn(spec) {
     hardness: percent(spec.params.hardness, 100),
     opacity: percent(spec.params.opacity, 100),
   })
-  const erased = result?.erased ?? []
+  const erased = (result?.erased ?? []).map((layer) => ({
+    ...layer,
+    pageIndex: layer.pageIndex ?? spec.pageIndex,
+    pageStatus: layer.pageStatus ?? result.pageStatus,
+  }))
   if (erased.length === 0) return false
-  const parts = erased.map(({ regionId, before: was, after }) => ({
+  const parts = erased.map(({ regionId, before: was, after, pageIndex, pageStatus }) => ({
     regionId,
-    before: { region: was, pageStatus: before },
-    after: { region: after, pageStatus: result.pageStatus },
+    before: { region: was, pageStatus: statusBefore.get(pageIndex) ?? page.status },
+    after: { region: after, pageStatus },
   }))
   if (editor.chapter?.id === spec.chapterId) {
-    for (const { regionId, after } of erased) {
+    /** @type {Map<number, any[]>} each owning page's regions, before and after */
+    const owners = new Map()
+    for (const { regionId, before: was, after, pageIndex, pageStatus } of erased) {
       if (!after && editor.selectionId === regionId) select(null)
-      applyRegionState(regionId, after, result.pageStatus)
+      applyRegionState(regionId, after, pageStatus)
+      owners.set(pageIndex, [...(owners.get(pageIndex) ?? []), was, after])
     }
-    void reloadPage(spec.pageIndex).catch(() => {})
+    for (const [pageIndex, regions] of owners) void reloadRegionPages(pageIndex, regions)
   }
   recordRegionEdits('canvas.command.erasePaint', parts, spec.chapterId)
   return true

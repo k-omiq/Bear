@@ -15,7 +15,7 @@
  */
 
 import { createJournal, pushEntry, redoEntry, undoEntry, viewOf } from '../model/journal.js'
-import { displayBbox, editedLayer, isBrushLayer, isRegionCopy, layerCapabilities, layerOf, sanitizeLayer } from '../model/layers.js'
+import { displayBbox, editedLayer, isErasableLayer, isRegionCopy, layerCapabilities, layerOf, sanitizeLayer } from '../model/layers.js'
 import { regionState, reviewReason } from '../model/review.js'
 import { aboutInfo, buildChapter, buildFixtures, buildProject, defaultSettings } from './fixtures.js'
 import { cloudAttemptId, sha256Hex } from './attempt.js'
@@ -3146,11 +3146,13 @@ export function createMockBackend(options = {}) {
      * top row, as natively. Every page written is answered in `pages`.
      */
     /**
-     * An eraser stroke over the page's Brush layers, as `region.rs`
-     * `erase_paint` takes it. The mock keeps no pixels, so it works on boxes:
-     * a Brush layer the stroke's swept box covers whole goes off the page, and
-     * one it only crosses is answered as changed, with a new revision for an
-     * undo to name. Anything that is not Brush paint is left alone.
+     * An eraser stroke over the layers under it, as `region.rs`
+     * `erase_paint` takes it: every layer `isErasableLayer` names, and in a
+     * longstrip a neighbour's hanging across the join (`maskEditFrame`). The
+     * mock keeps no pixels, so it works on boxes: a layer the stroke's swept
+     * box covers whole goes off the page, and one it only crosses is answered
+     * as changed, with a new revision for an undo to name. Each is answered
+     * with the page that owns it.
      */
     async erasePaint({ chapterId, pageIndex, points, size } = {}) {
       await delay(timing.method)
@@ -3169,22 +3171,28 @@ export function createMockBackend(options = {}) {
         y1: Math.max(...path.map((point) => point.y)) + ry,
       }
       const erased = []
-      for (const region of [...page.regions]) {
-        if (!isBrushLayer(region)) continue
-        const box = region.bbox
-        const crosses = box.x < swept.x1 && box.x + box.w > swept.x0 && box.y < swept.y1 && box.y + box.h > swept.y0
-        if (!crosses) continue
-        const before = snapshot(region)
-        const covered = box.x >= swept.x0 && box.x + box.w <= swept.x1 && box.y >= swept.y0 && box.y + box.h <= swept.y1
-        if (covered) {
-          page.regions.splice(page.regions.indexOf(region), 1)
-          erased.push({ regionId: region.id, before, after: null })
-          continue
+      for (const entry of maskEditFrame(found, page)) {
+        const owner = entry.page
+        const changed = []
+        for (const region of [...owner.regions]) {
+          if (!isErasableLayer(region)) continue
+          const box = toAnchor(entry, region.bbox)
+          const crosses = box.x < swept.x1 && box.x + box.w > swept.x0 && box.y < swept.y1 && box.y + box.h > swept.y0
+          if (!crosses) continue
+          const before = snapshot(region)
+          const covered = box.x >= swept.x0 && box.x + box.w <= swept.x1 && box.y >= swept.y0 && box.y + box.h <= swept.y1
+          if (covered) {
+            owner.regions.splice(owner.regions.indexOf(region), 1)
+            changed.push({ regionId: region.id, pageIndex: owner.index, before, after: null })
+            continue
+          }
+          region.mask.legacyPatchRevision = `${region.id}-erase-${(mockEraseCount += 1)}`
+          changed.push({ regionId: region.id, pageIndex: owner.index, before, after: snapshot(region) })
         }
-        region.mask.legacyPatchRevision = `${region.id}-erase-${(mockEraseCount += 1)}`
-        erased.push({ regionId: region.id, before, after: snapshot(region) })
+        if (changed.length === 0) continue
+        if (owner.status === 'cleaned' && owner.regions.every((candidate) => !candidate.mask)) owner.status = 'unclean'
+        erased.push(...changed.map((layer) => ({ ...layer, pageStatus: owner.status })))
       }
-      if (page.status === 'cleaned' && page.regions.every((candidate) => !candidate.mask)) page.status = 'unclean'
       return { erased, pageStatus: page.status }
     },
 

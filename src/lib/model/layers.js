@@ -78,6 +78,20 @@ export function isBrushLayer(region) {
   return provenance?.params_snapshot?.tool === 'brush' && currentRung(provenance?.engine) === 'paint'
 }
 
+/**
+ * A layer the eraser takes coverage off: any cleaned patch, painted or made
+ * by an engine, as `region.rs#erasable_record` rules. Two keep their mask
+ * whole: an approved review component, which is insertion-only, and a
+ * text-shaped patch, which renders through its accepted plan.
+ *
+ * @param {{id?: string, outcome?: string, mask?: any}|null|undefined} region
+ */
+export function isErasableLayer(region) {
+  const mask = region?.mask
+  if (!mask?.provenance || region?.outcome !== 'cleaned') return false
+  return mask.geometryPolicy !== 'text_shape' && !String(region?.id ?? '').includes('-hreview-sam-')
+}
+
 /** Independent regional copies are paint layers whose pixels came from artwork. */
 export function isRegionCopy(region) {
   return region?.mask?.provenance?.params_snapshot?.mode === 'region-copy'

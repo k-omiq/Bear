@@ -266,6 +266,20 @@ describe('editing the detected masks', () => {
     expect((await firstPage(mock)).regions.find((region) => region.id === first.id)).toEqual(cleaned)
   })
 
+  it('leaves the eraser a cleaned layer to take off, and answers it with its page', async () => {
+    const mock = makeMock()
+    await ranToEnd(mock, () => mock.runClean(runOn('detect')))
+    const [first] = (await firstPage(mock)).regions.filter((region) => region.outcome === 'detected')
+    await mock.applyTool({ tool: 'autoClean', chapterId: CHAPTER, pageIndex: 0, regionId: first.id, params: {} })
+    const cleaned = (await firstPage(mock)).regions.find((region) => region.id === first.id)
+    const at = centre(cleaned.bbox)
+    const answer = await mock.erasePaint({ chapterId: CHAPTER, pageIndex: 0, points: [{ ...at, p: 1 }], size: 4,
+      hardness: 100, opacity: 100 })
+    const layer = answer.erased.find((candidate) => candidate.regionId === first.id)
+    expect(layer).toMatchObject({ pageIndex: 0, before: { id: first.id } })
+    expect(layer.after?.mask.legacyPatchRevision).not.toBe(cleaned.mask.legacyPatchRevision)
+  })
+
   it('reaches one page each way on a longstrip and keeps each detection on the page of its top row', async () => {
     const STRIP = 'neon-alley-ch4'
     const mock = makeMock()

@@ -1143,7 +1143,7 @@ export const ja = {
     command: {
       applyTool: '領域へのツール適用',
       drawMask: '手描きのマスク',
-      erasePaint: 'ブラシの塗りの消去',
+      erasePaint: '消しゴムでの消去',
     },
   },
   pages: {
@@ -2002,7 +2002,7 @@ export const ja = {
     hint: {
       autoClean: 'Enter で実行',
       brush: 'ドラッグで描画',
-      eraser: 'ドラッグしてブラシの塗りを消す',
+      eraser: 'ドラッグして塗りやクリーン済みの部分を消す',
       shapes: 'ページ上でドラッグ',
       aiMaskBrush: '文字の上をなぞる',
       cloneStamp: '{cloneSourceModifier}+クリックでコピー元を指定',

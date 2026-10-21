@@ -1,9 +1,9 @@
 <script>
   import { tileOrigin, pageVersion } from '../api/tile.js'
-  import { editor } from '../state/editor.svelte.js'
+  import { editor, pages } from '../state/editor.svelte.js'
   import { pageRatio } from './zoom.js'
   import { isDrawingTool } from './tools.js'
-  import { isBrushLayer, isRegionCopy } from '../model/layers.js'
+  import { isRegionCopy } from '../model/layers.js'
   import DetectionMasks from './DetectionMasks.svelte'
   import DrawLayer from './DrawLayer.svelte'
   import PageArtwork from './PageArtwork.svelte'
@@ -11,6 +11,7 @@
   import RegionLayer from './RegionLayer.svelte'
   import { layerPreviews } from './layerpreview.svelte.js'
   import { eraseMasks } from './erasepreview.svelte.js'
+  import { drawsErasable } from './patchlayers.svelte.js'
 
   /**
    * One page: the `--paper` sheet, its shadow, its aspect ratio, and the stack
@@ -132,9 +133,11 @@
   let previewLayersReady = $state(/** @type {string|null} */ (null))
   const previewing = $derived(layered && previewPage === page.id)
   const previewReady = $derived(previewSourceReady === page.id && previewLayersReady === page.id)
-  // The eraser works on the same canvases: a Brush layer can only be seen
-  // thinning over the page without it, which the composite tiles cannot show.
-  const eraserReady = $derived(editor.tool === 'eraser' && (page.regions ?? []).some(isBrushLayer))
+  // The eraser works on the same canvases: a layer can only be seen thinning
+  // over the page without it, which the composite tiles cannot show. Its own
+  // layers count, and in a longstrip a neighbour's reaching across a join.
+  const eraserReady = $derived(editor.tool === 'eraser'
+    && drawsErasable(page, editor.project?.mode === 'longstrip' ? pages() : [page]))
   const erasing = $derived(eraseMasks.has(page.id))
   // Prepare independent canvases when a copy is selected or the eraser is
   // picked. Show them during manipulation or a stroke and until the

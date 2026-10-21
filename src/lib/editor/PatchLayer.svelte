@@ -18,8 +18,9 @@
    * its pixels, rather than through reactive style bindings, so a moved patch
    * never shows its new pixels at its old place for a frame.
    *
-   * A Brush layer is drawn with the eraser strokes on its page taken off
-   * (`erasepreview.svelte.js`), each only off the picture it first reached.
+   * A layer the eraser takes coverage off is drawn with the eraser strokes on
+   * its page taken off (`erasepreview.svelte.js`), each only off the picture
+   * it first reached.
    *
    * @type {{
    *   layer: import('./patchlayers.svelte.js').PageLayer,
@@ -42,7 +43,7 @@
   let shownUrl = /** @type {string|null} */ (null)
   /** The picture each eraser stroke first reached, by stroke id. */
   const reached = new Map()
-  const masks = $derived(layer.brush ? (eraseMasks.get(pageId) ?? []) : [])
+  const masks = $derived(layer.erasable ? (eraseMasks.get(pageId) ?? []) : [])
   const movement = $derived(`translate(${sheetShare(placement.offsetX - drawnStyle.offsetX)}, ${sheetShare(placement.offsetY - drawnStyle.offsetY)}) rotate(${placement.rotation - drawnStyle.rotation}deg)`)
 
   /**

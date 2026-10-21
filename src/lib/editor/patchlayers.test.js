@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   LAYER_BOUNDS_HEADER,
   cachedLayer,
+  drawsErasable,
   forgetLayerImages,
   loadLayer,
   pageLayers,
@@ -68,6 +69,28 @@ describe('the layers a page draws', () => {
     expect(layers.map((layer) => [layer.id, layer.own])).toEqual([['own', true], ['spans', false]])
     expect(layers.find((layer) => layer.id === 'spans')?.url).toMatch(/\/c\/1\/layer\/spans\?v=/)
     expect(pageLayers(page(2), [first, second, page(2)])).toEqual([])
+  })
+
+  it('flag the layers the eraser takes coverage off, a neighbour\'s across the join among them', () => {
+    const made = (id, engine, extra = {}) => {
+      const made = region(id, extra)
+      made.mask.provenance = { engine, params_snapshot: {} }
+      return made
+    }
+    const shaped = made('shaped', 'lama', { y: 50 })
+    shaped.mask.geometryPolicy = 'text_shape'
+    const first = page(0, [made('spans', 'lama', { y: 95, h: 10 }), made('stays', 'fill', { y: 10 })])
+    const second = page(1, [made('own', 'fill', { y: 50 }), shaped])
+    const layers = pageLayers(second, [first, second])
+    expect(layers.map((layer) => [layer.id, layer.erasable])).toEqual([['own', true], ['shaped', false], ['spans', true]])
+    expect(drawsErasable(second, [first, second])).toBe(true)
+    // A page whose only layers are kept whole, with nothing reaching it.
+    const third = page(2, [shaped])
+    expect(drawsErasable(third, [first, second, third])).toBe(false)
+    // One reaching it across a join is enough, as is one of its own.
+    const below = page(1, [])
+    expect(drawsErasable(below, [first, below])).toBe(true)
+    expect(drawsErasable(below, [below])).toBe(false)
   })
 
   it('are none outside a Tauri window, where the mock draws its stand-in', () => {

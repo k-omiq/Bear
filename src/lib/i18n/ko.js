@@ -1140,7 +1140,7 @@ export const ko = {
     command: {
       applyTool: '영역에 도구 적용',
       drawMask: '직접 그린 마스크',
-      erasePaint: '브러시 칠 지우기',
+      erasePaint: '지우개로 지우기',
     },
   },
   pages: {
@@ -1999,7 +1999,7 @@ export const ko = {
     hint: {
       autoClean: 'Enter로 실행',
       brush: '드래그해 칠하기',
-      eraser: '드래그해서 브러시 칠을 지우기',
+      eraser: '드래그해서 칠이나 클린한 부분을 지우기',
       shapes: '페이지에서 드래그',
       aiMaskBrush: '텍스트 위로 긋기',
       cloneStamp: '{cloneSourceModifier}+클릭으로 소스 지정',

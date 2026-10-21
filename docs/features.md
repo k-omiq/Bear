@@ -235,7 +235,7 @@ outside bubbles, mask padding with its Apply, and the run button, all described 
 
 Options: size, hardness, spacing, colour, opacity and flow. The brush paints flat colour and does nothing else. To
 shape a mask that an engine then cleans, use the AI Mask Brush; to remove a mask, use its Layers row or the region
-menu.
+menu, and to take part of one off, use the Eraser.
 
 A stroke is the union of the round dabs the brush sweeps along your path, and only that shape is painted, not the
 rectangle around it. Opacity is the most one stroke can cover, however many times it crosses itself. Flow is how
@@ -267,6 +267,19 @@ Key `6`. It adds to or removes from the area Clean erases, or detects text in an
 lasso or a rectangle: `S` steps the shape and `X` swaps add for remove. There is no separate Content-Aware Fill tool.
 Its old id opens the AI Mask Brush, and the fill choices it offered (Fill or a redraw engine, local or cloud) are the
 engine pick on the AI Mask Brush and on each Layers row and region menu. Every cloud render asks first in one dialog.
+
+### Eraser
+
+Key `7`. Options: size, hardness and opacity. Drag over the page to take layers back off it, and the original page
+shows again where you erase. It erases Brush paint, shapes, clone stamp strokes and cleaned regions alike, whatever
+engine cleaned them. It does not touch the detected masks (use Selection for those), approved review components, or
+text-shaped regions. You do not pick a layer first: every layer under the stroke is erased.
+
+One stroke is one undo step, however many layers it crossed. A layer erased to nothing leaves the page, and Undo
+brings it back. Erased lettering stays shown after Try again: where a stroke leaves less than half of a cleaned
+pixel, Try again leaves the original page there, and where it leaves more, Try again cleans it fully again. Try again
+wider grows the cleaned area on purpose, so it can reach back into a small erased spot. In a long strip, a stroke over
+a join also erases the part of a layer that hangs across it from the page above or below.
 
 ### Clone stamp
 
@@ -604,6 +617,7 @@ chapter is open.
 | `4` | AI mask brush |
 | `5` | Clone stamp |
 | `6` | Selection: add to or remove from the detected masks, or detect text in a drawn rectangle |
+| `7` | Eraser: take paint or a cleaned area back off the page |
 | `O` (held) | Show the original while held |
 | `Shift`+`O` | Pin the original on |
 | `M` | Mask overlay |

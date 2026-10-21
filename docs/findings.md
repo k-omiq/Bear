@@ -3180,3 +3180,23 @@ no L40S free. Nothing in the app or the deployed code was at fault.
   request digest from its job, so it needs a fresh attempt per retry; not built. The lock is
   deployed on `mc-acb01f` only: other profiles that serve analysis (`mc-b6qtpr`, `mc-ab3xgz`) still
   run without it, and three-page Detect on the lock is not yet measured.
+
+**Longstrip re-runs across a join, the scroll jump, and the Eraser on cleaned layers (2026-10-21):
+not driven in the real app.** Three faults the user saw. A Try again or Try again wider on a region
+hanging across a join read again only the region's own page, so the neighbour kept drawing the old
+half of the bubble until it left the window and came back; every region edit and its undo now reads
+again each resident page the layer reaches, before and after the edit
+(`state/editor.svelte.js#reloadRegionPages`). A second press while a re-run was still rendering
+sent a second render with a stale undo snapshot; it is now refused (`maskactions.svelte.js`). The
+scroll jump: picking an entry in a region's menu on the canvas handed focus back to the region with
+a plain `focus()`, which scrolls the canvas to the top of a region whose top is off screen. In the
+Vite mock in Chromium this took the scroller from 6000 to 5666 px after Try again wider on such a
+region; with `preventScroll` on every focus restore and on the menu's first item it stays at 6000.
+The scroll restore after a chapter is opened no longer re-runs on a change of the scroll room, and a
+reload after `job_stale` writes the position record first. The Eraser now takes coverage off every
+cleaned layer as well as Brush paint, across a join too, and a pixel left under half covered leaves
+the stored lettering so Try again does not clean it back. Measured by unit, DOM and Rust tests and in
+the Vite mock. Not measured: any of it in the shipped WKWebView, where a click does not focus a
+button and the jump may come from another focus path; a re-run of a real crossing region with real
+models (Try again wider across a join has no Rust test, only plain Try again with Fill does); the
+Eraser's live preview over a neighbour's overhang in the tile path, which the mock does not draw.

@@ -1684,7 +1684,54 @@ describe('the eraser stroke', () => {
     expect(revisions()).toEqual({ 'c1-p001-h1': 'c1-p001-h1-v2' })
   })
 
-  it('records nothing when the stroke crossed no Brush paint', async () => {
+  it('answers a layer the page above owns with that page, and reads the pages it shows on again', async () => {
+    const chapter = twoPages()
+    const hanging = { ...brushLayer('c1-p001-h1'), bbox: { x: 10, y: 95, w: 20, h: 10 } }
+    hanging.mask.provenance = { engine: 'lama', params_snapshot: {} }
+    chapter.pages[0].regions = [hanging]
+    chapter.pages[0].status = 'cleaned'
+    editor.chapter = chapter
+    const project = editor.project
+    editor.project = /** @type {any} */ ({ mode: 'longstrip' })
+    try {
+      /** @type {any[]} */
+      const pushed = []
+      const adapter = backend({
+        historyPush: vi.fn(async ({ entry }) => {
+          pushed.push(structuredClone(entry))
+          return { cursor: 1, entries: [{ seq: 1, label: entry.label }] }
+        }),
+        loadPages: vi.fn(async () => []),
+        erasePaint: vi.fn(async () => ({
+          erased: [{ regionId: 'c1-p001-h1', pageIndex: 0, pageStatus: 'unclean', before: hanging, after: null }],
+          pageStatus: 'unclean',
+        })),
+      })
+      setBackend(/** @type {any} */ (adapter))
+      beginDraft({
+        tool: 'eraser',
+        kind: 'stroke',
+        pageId: 'c1-p002',
+        points: [{ x: 20, y: 2, p: 1 }],
+        bbox: { x: 18, y: 1, w: 4, h: 2 },
+        mode: 'erase',
+        keyboard: false,
+        moved: true,
+      })
+      expect(await commitDraft()).toBe(true)
+      await settled(editor.history)
+      expect(adapter.erasePaint.mock.calls[0][0].pageIndex).toBe(1)
+      expect(editor.chapter.pages[0].regions).toEqual([])
+      expect(editor.chapter.pages[0].status).toBe('unclean')
+      const part = pushed[0]
+      expect([part.before.pageStatus, part.after.pageStatus]).toEqual(['cleaned', 'unclean'])
+      await vi.waitFor(() => expect(adapter.loadPages.mock.calls.map(([spec]) => spec.indices).flat()).toContain(0))
+    } finally {
+      editor.project = project
+    }
+  })
+
+  it('records nothing when the stroke crossed no layer', async () => {
     const { adapter } = erase()
     adapter.erasePaint.mockResolvedValue({ erased: [], pageStatus: 'cleaned' })
     expect(await commitDraft()).toBe(false)

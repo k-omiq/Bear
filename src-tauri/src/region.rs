@@ -4722,13 +4722,18 @@ pub struct ErasePoint {
     pub p: Option<f64>,
 }
 
-/// One Brush layer an eraser stroke changed: the region before and after,
-/// which an undo puts back. `after` is `None` for a layer left with nothing
-/// on it, which goes off the page as a deleted one does.
+/// One layer an eraser stroke changed: the region before and after, which an
+/// undo puts back, and the page that owns it with that page's status after.
+/// On a longstrip chapter that can be the page above or below the one the
+/// stroke was drawn on, for a layer hanging across the join. `after` is
+/// `None` for a layer left with nothing on it, which goes off the page as a
+/// deleted one does.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErasedLayer {
     pub region_id: String,
+    pub page_index: u32,
+    pub page_status: String,
     pub before: ApiRegion,
     pub after: Option<ApiRegion>,
 }
@@ -4740,18 +4745,18 @@ pub struct PaintErase {
     pub page_status: String,
 }
 
-/// `erasePaint` - take an eraser stroke off every Brush layer on the page.
+/// `erasePaint` - take an eraser stroke off every layer under it.
 ///
 /// Each layer's coverage under the stroke is cut by the stroke's own
-/// (`cleaner_core::paint::erase`), and nothing that is not Brush paint is
-/// touched: no clean, no detection, no clone or shape paint. Brush layers are
+/// (`cleaner_core::paint::erase`), so the page under it shows again there:
+/// Brush paint, shapes, clones and cleaned regions alike, but never a
+/// detection, and never a layer [`erasable_record`] keeps whole. Layers are
 /// not picked on the canvas, so the eraser does not wait for one to be chosen.
 ///
 /// Answers every layer that changed, before and after, for the interface to
-/// record as one undo step; an empty list when the stroke crossed no paint.
+/// record as one undo step; an empty list when the stroke crossed no layer.
 /// `None` for a page that is not there or a source that moved under the
-/// interface. A layer saved as native parts (a chapter with a turned page) is
-/// left alone: its pixels are not in the page's own coordinates.
+/// interface.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn erase_paint(
@@ -4789,13 +4794,30 @@ pub async fn erase_paint(
     .await
 }
 
-/// Whether a stored layer is a Brush stroke's: paint, made by the Brush.
-fn is_brush_record(record: &PatchRecord) -> bool {
-    record.engine == Engine::Paint
-        && record.provenance.params_snapshot.get("tool").and_then(|tool| tool.as_str()) == Some("brush")
+/// Whether the eraser may take coverage off a stored layer: any visible
+/// patch, but three whose mask stays as it is.
+///
+/// An approved review component is insertion-only, as a re-run of it is
+/// refused ([`is_approved_component_region`]). A text-shaped patch renders
+/// through its accepted plan: a Try again cleans the plan's support whole,
+/// so an erase would come back, and a rewrite of its record would drop the
+/// plan identity the re-run checks. A layer saved as native parts (a
+/// chapter with a turned page) does not hold its pixels in the page's own
+/// coordinates.
+fn erasable_record(record: &PatchRecord) -> bool {
+    record.visible
+        && record.native_parts.is_empty()
+        && record.geometry_policy != GeometryPolicy::TextShape
+        && !is_approved_component_region(&record.id)
 }
 
 /// [`erase_paint`]'s body, on a page already located.
+///
+/// The stroke is measured on the page it was drawn on and moved into each
+/// page [`mask_edit_pages`] names, so on a longstrip chapter it also reaches
+/// a layer the page above or below owns where that layer hangs across the
+/// join. The lock is the stroked page's, as [`edit_detection_mask_at`] takes
+/// it: a run on either neighbour refuses it too.
 fn erase_paint_at(
     located: &Located,
     expected_source: Option<&(usize, String)>,
@@ -4824,33 +4846,43 @@ fn erase_paint_at(
             p: point.p.filter(|p| p.is_finite() && *p > 0.0).map_or(0.5, |p| p.min(1.0)),
         })
         .collect();
-    let status_now = |job: &Job| crate::library::page_of(&located.chapter_id, &job.project, located.page_index)
+    let status_of = |job: &Job, position: usize| crate::library::page_of(&located.chapter_id, &job.project, position)
         .map(|page| page.status.to_owned())
         .unwrap_or_default();
-    let nothing = |job: &Job| Ok(Some(PaintErase { erased: Vec::new(), page_status: status_now(job) }));
+    let nothing = |job: &Job| Ok(Some(PaintErase { erased: Vec::new(), page_status: status_of(job, located.page_index) }));
     if stroke.is_empty() || stroke.len() > 8192 {
         return nothing(&job);
     }
     let Some(eraser) = erase::erase_coverage(&stroke, spec) else {
         return nothing(&job);
     };
+    let pages = mask_edit_pages(&job.project, located.page_index, (width, height));
+    let Some(anchor) = pages.first().map(|page| page.placement) else {
+        return nothing(&job);
+    };
 
-    let targets: Vec<PatchRecord> = job.project.patches.iter()
-        .filter(|record| record.source_idx == source_idx && record.visible && is_brush_record(record))
-        .filter(|record| record.native_parts.is_empty())
-        .filter(|record| {
-            let drawn = record.display_bbox().intersection(eraser.bounds);
-            drawn.w > 0 && drawn.h > 0
+    // Each candidate with the stroke in its own page's pixels.
+    let targets: Vec<(MaskEditPage, Mask, PatchRecord)> = pages.iter()
+        .flat_map(|page| {
+            let shift = (anchor.x_offset - page.placement.x_offset, anchor.y_offset - page.placement.y_offset);
+            let here = translated_mask(&eraser, shift);
+            job.project.patches.iter()
+                .filter(|record| record.source_idx == page.source_idx && erasable_record(record))
+                .filter(|record| {
+                    let drawn = record.display_bbox().intersection(here.bounds);
+                    drawn.w > 0 && drawn.h > 0
+                })
+                .map(|record| (*page, here.clone(), record.clone()))
+                .collect::<Vec<_>>()
         })
-        .cloned()
         .collect();
     let mut erased = Vec::new();
-    for record in targets {
-        let Some((before, _)) = crate::library::region_and_status(&located.chapter_id, &job.project, source_idx, &record.id) else {
+    for (page, here, record) in targets {
+        let Some((before, _)) = crate::library::region_and_status(&located.chapter_id, &job.project, page.source_idx, &record.id) else {
             continue;
         };
         let mut patch = job.load_display_patch(&record).map_err(|e| e.to_string())?;
-        if !erase::erase_patch(&mut patch, &eraser) {
+        if !erase::erase_patch(&mut patch, &here) {
             continue;
         }
         if patch.mask.is_empty() {
@@ -4863,19 +4895,25 @@ fn erase_paint_at(
             job.flush().map_err(|e| e.to_string())?;
         } else {
             patch.provenance.mask_sha256 = run::mask_digest(&patch.mask);
-            job.complete_display_region(source_idx, &patch, record.review_state.clone())
+            job.complete_display_region(page.source_idx, &patch, record.review_state.clone())
                 .map_err(|e| e.to_string())?;
         }
         crate::underlay::refresh_dependencies(&mut job, &record.id)?;
-        let after = crate::library::region_and_status(&located.chapter_id, &job.project, source_idx, &record.id)
+        let after = crate::library::region_and_status(&located.chapter_id, &job.project, page.source_idx, &record.id)
             .map(|(region, _)| region)
             .filter(|_| job.project.patches.iter().any(|row| row.id == record.id && row.visible));
-        erased.push(ErasedLayer { region_id: record.id.clone(), before, after });
+        erased.push(ErasedLayer {
+            region_id: record.id.clone(),
+            page_index: page.position as u32,
+            page_status: status_of(&job, page.position),
+            before,
+            after,
+        });
     }
     if !erased.is_empty() {
         crate::library::invalidate_manifest_cache(&located.job_path);
     }
-    Ok(Some(PaintErase { erased, page_status: status_now(&job) }))
+    Ok(Some(PaintErase { erased, page_status: status_of(&job, located.page_index) }))
 }
 
 /// One page a mask edit may reach: its position in `strip.order`, its source,
@@ -7173,8 +7211,8 @@ mod tests {
     /// A Brush layer made through the real commit, then erased: part way
     /// leaves less coverage under a new revision, all the way takes the layer
     /// off the page with its last coverage kept, and the revision before the
-    /// erase still puts the stroke back. Paint that is not the Brush's is
-    /// never touched.
+    /// erase still puts the stroke back. A shape under the same stroke is
+    /// erased with it, in the same answer.
     #[test]
     fn the_eraser_takes_brush_paint_off_and_leaves_a_way_back() {
         let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
@@ -7201,9 +7239,10 @@ mod tests {
 
         // Across the middle of the stroke only.
         let first = erase_paint_at(&located, None, &[point(30.0)], &spec(8.0)).unwrap().unwrap();
-        assert_eq!(first.erased.len(), 1, "only the Brush layer");
+        let ids: Vec<&str> = first.erased.iter().map(|layer| layer.region_id.as_str()).collect();
+        assert_eq!(ids, ["stroke", "shape"], "every layer under the stroke");
+        assert!(first.erased.iter().all(|layer| layer.page_index == 0 && layer.page_status == first.page_status));
         let layer = &first.erased[0];
-        assert_eq!(layer.region_id, "stroke");
         let after = layer.after.as_ref().expect("still on the page");
         let revision = |region: &ApiRegion| region.mask.as_ref().unwrap().legacy_patch_revision.clone().unwrap();
         assert_ne!(revision(&layer.before), revision(after));
@@ -7213,13 +7252,13 @@ mod tests {
         assert_eq!(patch.mask.coverage(38, 64), 0);
         assert_eq!(patch.mask.coverage(30, 64), 255);
         let shape = job.project.patches.iter().find(|r| r.id == "shape").unwrap();
-        assert!(job.load_display_patch(shape).unwrap().mask.coverage(38, 64) > 0, "a shape is not Brush paint");
+        assert_eq!(job.load_display_patch(shape).unwrap().mask.coverage(38, 64), 0, "the shape is erased too");
         drop(job);
 
         // Over all of it.
         let second = erase_paint_at(&located, None, &[point(10.0), point(50.0)], &spec(60.0)).unwrap().unwrap();
-        assert_eq!(second.erased.len(), 1);
-        assert!(second.erased[0].after.is_none(), "nothing left, off the page");
+        assert_eq!(second.erased.len(), 2);
+        assert!(second.erased.iter().all(|layer| layer.after.is_none()), "nothing left, off the page");
         let mut job = Job::open(&located.job_path).unwrap();
         assert!(!job.project.patches.iter().find(|r| r.id == "stroke").unwrap().visible);
 
@@ -7232,6 +7271,146 @@ mod tests {
         let none = erase_paint_at(&located, None, &[point(95.0)], &spec(4.0)).unwrap().unwrap();
         assert!(none.erased.is_empty());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A 128 px page of white paper with dark lettering over `lettering`.
+    fn lettered_page(lettering: Rect) -> Raster {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128;
+        raw.height = 128;
+        raw.data = (0..128 * 128)
+            .map(|at: usize| if lettering.contains((at % 128) as i64, (at / 128) as i64) { 20 } else { 255 })
+            .collect();
+        raw
+    }
+
+    /// A cleaned layer as a LaMa run leaves one: white over the lettering
+    /// grown by the isolation radius, with the lettering as its hole.
+    fn cleaned_layer(id: &str, raw: &Raster, lettering: Rect) -> Patch {
+        let mask = Mask::filled(lettering).dilated(cleaner_core::constants::ISOLATION_RADIUS, raw.width, raw.height);
+        let mut pixels = raw.clone();
+        pixels.width = mask.bounds.w;
+        pixels.height = mask.bounds.h;
+        pixels.data = vec![255; (mask.bounds.w * mask.bounds.h) as usize];
+        Patch {
+            id: id.into(), mask, ink: Mask::filled(lettering), pixels, order: 0, visible: true,
+            provenance: Provenance {
+                engine: Engine::Lama, engine_version: "fixture".into(), model_sha256: None,
+                execution_provider: "cpu".into(), params_snapshot: serde_json::json!({}),
+                mask_sha256: String::new(), source_sha256: String::new(), cloud: None, created: 0,
+            },
+        }
+    }
+
+    fn eraser(size: f64, opacity: f64) -> cleaner_core::paint::BrushSpec {
+        cleaner_core::paint::BrushSpec { size, hardness: 100.0, opacity, flow: 100.0,
+            ..cleaner_core::paint::BrushSpec::default() }
+    }
+
+    /// An eraser point at page pixel `(x, y)` of a 128 px page.
+    fn erase_at(x: f64, y: f64) -> ErasePoint {
+        ErasePoint { x: x / 128.0 * 100.0, y: y / 128.0 * 100.0, p: Some(1.0) }
+    }
+
+    /// A cleaned layer erased part way, then Try again: the re-run's hole is
+    /// the stored lettering less what the eraser took, so the spot the eraser
+    /// showed stays the source page, and the lettering it missed is cleaned
+    /// as before.
+    #[test]
+    fn try_again_after_an_erase_leaves_the_erased_lettering_showing() {
+        let lettering = Rect::new(40, 40, 48, 20);
+        let raw = lettered_page(lettering);
+        let (root, library, located) = command_fixture("erase-then-retry", &raw);
+        let region_id = format!("{}-p001-h1", located.chapter_id);
+        Job::open(&located.job_path).unwrap()
+            .complete_region(0, &cleaned_layer(&region_id, &raw, lettering), None).unwrap();
+        let stored = || {
+            let job = Job::open(&located.job_path).unwrap();
+            let record = job.project.patches.iter().find(|r| r.id == region_id).unwrap().clone();
+            job.load_display_patch(&record).unwrap()
+        };
+
+        // At 60% the spot keeps 102 of 255, under half, so it leaves the hole.
+        let erased = erase_paint_at(&located, None, &[erase_at(56.0, 50.0)], &eraser(16.0, 60.0)).unwrap().unwrap();
+        assert_eq!(erased.erased.len(), 1, "a cleaned layer is erasable");
+        let patch = stored();
+        assert_eq!(patch.mask.coverage(56, 50), 102);
+        assert!(!patch.ink.contains(56, 50) && patch.ink.contains(80, 50));
+
+        let mut bench = test_bench(&root);
+        let mut renderer = |image: &Raster, fitted: &Fitted| {
+            // Written as a model rung writes: the hole grown by the isolation radius.
+            let mask = cleaner_core::engines::model::applied_mask(fitted, image.width, image.height);
+            let mut pixels = image.clone();
+            pixels.width = mask.bounds.w;
+            pixels.height = mask.bounds.h;
+            pixels.data = vec![255; (mask.bounds.w * mask.bounds.h) as usize];
+            run::Made {
+                engine: Engine::Lama, mask, ink: fitted.ink.clone(), pixels,
+                provider: None, model_sha256: None,
+                pad: cleaner_core::strip::EdgePad::None, tiles: None,
+            }
+        };
+        let rerun = rerun_mask_at(&library, None, &region_id, "retry", None, serde_json::Value::Null, |located, plan| {
+            assert!(matches!(plan.geometry, Geometry::Stored));
+            edit_with_bench_render(&mut bench, Engine::Lama, located, plan, Some(&mut renderer))
+        }).unwrap();
+        assert!(rerun.is_some(), "the re-run committed");
+        let patch = stored();
+        assert_eq!(patch.mask.coverage(56, 50), 0, "Try again cleaned the erased spot again");
+        assert_eq!(patch.mask.coverage(80, 50), 255, "the lettering the eraser missed is cleaned");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The undo of an erase is `restore_region`'s: the revision the region
+    /// from before the stroke names puts the mask, the lettering and the
+    /// pixels back exactly, whether the stroke thinned the layer or took it
+    /// off the page.
+    #[test]
+    fn an_erased_cleaned_layer_undoes_to_the_exact_patch() {
+        let lettering = Rect::new(40, 40, 48, 20);
+        let raw = lettered_page(lettering);
+        let (root, library, located) = command_fixture("erase-undo", &raw);
+        let region_id = format!("{}-p001-h1", located.chapter_id);
+        Job::open(&located.job_path).unwrap()
+            .complete_region(0, &cleaned_layer(&region_id, &raw, lettering), None).unwrap();
+        let stored = || {
+            let job = Job::open(&located.job_path).unwrap();
+            let record = job.project.patches.iter().find(|r| r.id == region_id).unwrap().clone();
+            (record.visible, job.load_display_patch(&record).unwrap())
+        };
+        let exact = |patch: &Patch| (patch.mask.clone(), patch.ink.clone(), patch.pixels.data.clone());
+        let (_, original) = stored();
+        let revision = |region: &ApiRegion| region.mask.as_ref().unwrap().legacy_patch_revision.clone().unwrap();
+        for (size, gone) in [(12.0, false), (240.0, true)] {
+            let erased = erase_paint_at(&located, None, &[erase_at(60.0, 50.0)], &eraser(size, 100.0)).unwrap().unwrap();
+            let [layer] = erased.erased.as_slice() else { panic!("one layer, got {:?}", erased.erased) };
+            assert_eq!(layer.after.is_none(), gone, "size {size}");
+            let (visible, now) = stored();
+            assert_eq!(visible, !gone);
+            if !gone {
+                assert_ne!(exact(&now), exact(&original));
+            }
+            assert!(library.restore_legacy_mask(&region_id, &revision(&layer.before)).unwrap().is_some());
+            let (visible, back) = stored();
+            assert!(visible, "size {size}");
+            assert!(exact(&back) == exact(&original), "size {size}: the undo did not give the patch back");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Layers the eraser keeps whole: an approved review component, which
+    /// is insertion-only, and a text-shaped patch, which renders through its
+    /// accepted plan, and one already off the page.
+    #[test]
+    fn the_eraser_leaves_approved_components_and_text_shaped_patches_whole() {
+        let lettering = Rect::new(40, 40, 48, 20);
+        let raw = lettered_page(lettering);
+        let record = |id: &str| PatchRecord::of(0, &cleaned_layer(id, &raw, lettering), None);
+        assert!(erasable_record(&record("c-p001-h1")));
+        assert!(!erasable_record(&record("c-p001-hreview-sam-1")));
+        assert!(!erasable_record(&PatchRecord { geometry_policy: GeometryPolicy::TextShape, ..record("c-p001-h2") }));
+        assert!(!erasable_record(&PatchRecord { visible: false, ..record("c-p001-h3") }));
     }
 
     #[test]
@@ -10950,6 +11129,61 @@ mod mask_edit_tests {
         let stored = Job::open(&located.job_path).unwrap().load_detection(&id).unwrap().unwrap();
         assert!(stored.mask.contains(22, 416), "the add on the page below was lost");
         assert!(Job::open(&located.job_path).unwrap().project.detections.iter().all(|row| row.source_idx == 0));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// An eraser stroke reaches the layer hanging across a join from the
+    /// other side: drawn on page two over page one's overhang, and drawn on
+    /// page one past its foot over a layer page two owns. Each is erased in
+    /// its own page's pixels and answered with its own page.
+    #[test]
+    fn an_eraser_stroke_across_a_join_erases_the_layer_the_other_page_owns() {
+        let (root, located) = strip_edit_fixture("erase-join");
+        let layer = |position: usize, bounds: Rect| {
+            let mut job = Job::open(&located.job_path).unwrap();
+            let source_idx = Library::resolve_page(&job.project, position).unwrap();
+            let id = format!("{}-h1", crate::library::page_id(&located.chapter_id, position));
+            let mut pixels = cleaner_core::image::fixtures::by_name("l8").raster;
+            pixels.width = bounds.w;
+            pixels.height = bounds.h;
+            pixels.data = vec![255; (bounds.w * bounds.h) as usize];
+            let mask = Mask::filled(bounds);
+            job.complete_region(source_idx, &Patch {
+                id: id.clone(), mask: mask.clone(), ink: mask, pixels, order: 0, visible: true,
+                provenance: Provenance {
+                    engine: Engine::Fill, engine_version: "fixture".into(), model_sha256: None,
+                    execution_provider: "cpu".into(), params_snapshot: serde_json::json!({}),
+                    mask_sha256: String::new(), source_sha256: String::new(), cloud: None, created: 0,
+                },
+            }, None).unwrap();
+            id
+        };
+        // Rows 380 to 420 of page one: its last 20 rows hang onto page two.
+        let above = layer(0, Rect::new(10, 380, 20, 40));
+        let below = layer(1, Rect::new(40, 2, 16, 20));
+        let coverage = |id: &str, x: i64, y: i64| {
+            let job = Job::open(&located.job_path).unwrap();
+            let record = job.project.patches.iter().find(|r| r.id == id).unwrap().clone();
+            job.load_display_patch(&record).unwrap().mask.coverage(x, y)
+        };
+        let spec = cleaner_core::paint::BrushSpec { size: 8.0, hardness: 100.0, opacity: 100.0, flow: 100.0,
+            ..cleaner_core::paint::BrushSpec::default() };
+        let at = |x: f64, y: f64| ErasePoint { x: x / 64.0 * 100.0, y: y / 400.0 * 100.0, p: Some(1.0) };
+
+        // On page two at (20, 10): page one's (20, 410).
+        let lower = erase_paint_at(&strip_page(&located, 1), None, &[at(20.0, 10.0)], &spec).unwrap().unwrap();
+        let [erased] = lower.erased.as_slice() else { panic!("one layer, got {:?}", lower.erased) };
+        assert_eq!((erased.region_id.as_str(), erased.page_index), (above.as_str(), 0));
+        assert_eq!(coverage(&above, 20, 410), 0, "the overhang is erased");
+        assert_eq!(coverage(&above, 20, 385), 255, "above the join is not");
+        assert_eq!(coverage(&below, 44, 10), 255);
+
+        // On page one at (48, 410): page two's (48, 10).
+        let upper = erase_paint_at(&located, None, &[at(48.0, 410.0)], &spec).unwrap().unwrap();
+        let [erased] = upper.erased.as_slice() else { panic!("one layer, got {:?}", upper.erased) };
+        assert_eq!((erased.region_id.as_str(), erased.page_index), (below.as_str(), 1));
+        assert_eq!(coverage(&below, 48, 10), 0, "page two's layer is erased");
+        assert_eq!(coverage(&below, 41, 20), 255);
         let _ = std::fs::remove_dir_all(root);
     }
 

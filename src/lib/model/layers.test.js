@@ -12,6 +12,7 @@ import {
   canTransform,
   displayBbox,
   editedLayer,
+  isErasableLayer,
   layerCapabilities,
   layerFrame,
   normalizeAngle,
@@ -131,5 +132,21 @@ describe('the longstrip pages a layer reaches', () => {
 
   it('are every page when a height is unknown', () => {
     expect(pagesReached([1000, 0, 1000], 0, [{ x: 0, y: 10, w: 10, h: 10 }])).toEqual([0, 1, 2])
+  })
+})
+
+describe('the layers the eraser takes coverage off', () => {
+  it('are cleaned layers of any engine, painted or not', () => {
+    for (const engine of ['paint', 'clone', 'fill', 'lama', 'flux', 'cloud']) {
+      expect(isErasableLayer({ id: 'c1-p001-h1', ...region(engine) }), engine).toBe(true)
+    }
+  })
+
+  it('leave detections, approved review components and text-shaped patches whole', () => {
+    expect(isErasableLayer({ id: 'c1-p001-d1', ...region('lama'), outcome: 'detected' })).toBe(false)
+    expect(isErasableLayer({ id: 'c1-p001-hreview-sam-1', ...region('lama') })).toBe(false)
+    expect(isErasableLayer({ id: 'c1-p001-h2', ...region('lama', { geometryPolicy: 'text_shape' }) })).toBe(false)
+    expect(isErasableLayer({ id: 'c1-p001-h3', outcome: 'cleaned', mask: { id: 'm' } })).toBe(false)
+    expect(isErasableLayer(null)).toBe(false)
   })
 })

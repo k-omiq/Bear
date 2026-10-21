@@ -1168,7 +1168,7 @@ export const es = {
     command: {
       applyTool: 'la herramienta aplicada a una región',
       drawMask: 'una máscara dibujada a mano',
-      erasePaint: 'pintura de pincel borrada',
+      erasePaint: 'un trazo del borrador',
     },
   },
   pages: {
@@ -2044,7 +2044,7 @@ export const es = {
     hint: {
       autoClean: 'Enter para ejecutar',
       brush: 'arrastra para pintar',
-      eraser: 'arrastra para borrar la pintura del pincel',
+      eraser: 'arrastra para borrar pintura o una zona limpia',
       shapes: 'arrastra sobre la página',
       aiMaskBrush: 'pasa el trazo sobre el texto',
       cloneStamp: '{cloneSourceModifier}+clic en un origen',

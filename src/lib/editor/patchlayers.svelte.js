@@ -24,7 +24,7 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { ImageCache, loadBoundedImage } from '../api/boundedimage.js'
 import { layerUrl } from '../api/tile.js'
-import { isBrushLayer } from '../model/layers.js'
+import { isErasableLayer } from '../model/layers.js'
 
 /**
  * Bytes of decoded layers kept. Layers are proxy-sized crops of single
@@ -104,7 +104,7 @@ export function loadLayer(url, options = {}) {
  * @property {number} pageWidth
  * @property {number} opacity - `0..1`, drawn by the canvas
  * @property {boolean} own - whether the patch belongs to this page, rather than reaching it across a join
- * @property {boolean} brush - a Brush stroke of this page's own: what the eraser takes paint off
+ * @property {boolean} erasable - a layer the eraser takes coverage off (`model/layers.js#isErasableLayer`), this page's own or one reaching it across a join
  * @property {{x: number, y: number, w: number, h: number}} bbox - page percent of the page it belongs to
  */
 
@@ -145,7 +145,7 @@ export function pageLayers(page, list) {
         order: Number(region.mask.order ?? 0),
         opacity: Math.min(Math.max(Number(region.mask.layer?.opacity ?? 100), 0), 100) / 100,
         own,
-        brush: own && isBrushLayer(region),
+        erasable: isErasableLayer(region),
         bbox: region.bbox,
         style: { offsetX: 0, offsetY: 0, rotation: 0, ...(region.mask.layer ?? {}) },
         pageWidth: Number(page.width) || 1,
@@ -153,6 +153,29 @@ export function pageLayers(page, list) {
     }
   })
   return layers.sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+}
+
+/**
+ * Whether page `page` draws a layer the eraser can take coverage off: one of
+ * its own, or in a longstrip a neighbour's reaching it across a join, the
+ * same layers `pageLayers` draws.
+ *
+ * @param {import('../api/backend.js').ApiPage} page
+ * @param {ReadonlyArray<import('../api/backend.js').ApiPage>} list
+ * @returns {boolean}
+ */
+export function drawsErasable(page, list) {
+  const at = list.indexOf(page)
+  const heights = list.map((candidate) => Number(candidate.height))
+  const offsets = []
+  let top = 0
+  for (const height of heights) {
+    offsets.push(top)
+    top += height
+  }
+  const known = heights.every((height) => height > 0)
+  return list.some((anchor, index) => (anchor.regions ?? []).some((region) => isErasableLayer(region)
+    && (anchor === page || (known && reaches(offsets, heights, index, at, region.bbox)))))
 }
 
 /**

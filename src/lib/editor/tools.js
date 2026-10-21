@@ -459,11 +459,12 @@ export const TOOL_SPECS = [
     shell: 'pill',
   },
   {
-    // Takes Brush paint back off the page, as a raster editor's eraser takes
-    // it off a layer: every Brush layer under the stroke loses what the stroke
-    // covers, and nothing else is touched (`drawing.svelte.js#eraseDrawn`).
-    // Brush layers are not picked on the canvas, so the eraser does not wait
-    // for one to be chosen. It sits beside the Brush, on the next free slot.
+    // Takes layers back off the page, as a raster editor's eraser takes paint
+    // off a layer: every Brush or cleaned layer under the stroke loses what the
+    // stroke covers, so the page under it shows again
+    // (`model/layers.js#isErasableLayer`, `drawing.svelte.js#eraseDrawn`).
+    // It does not wait for a layer to be chosen. It sits beside the Brush, on
+    // the next free slot.
     id: 'eraser',
     slot: 7,
     nameKey: 'tools.name.eraser',

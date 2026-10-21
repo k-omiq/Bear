@@ -1,13 +1,15 @@
 /**
- * The eraser's live preview: Brush layers thinning under the stroke, before
- * the committed layers load.
+ * The eraser's live preview: layers thinning under the stroke, before the
+ * committed layers load. Every layer the eraser takes coverage off
+ * (`model/layers.js#isErasableLayer`), Brush paint and cleaned regions alike.
  *
  * The eraser's coverage is drawn by `PaintLayer.svelte` on a surface like the
  * Brush's (`brushsurface.js`: same dab plan, same tip, no build-up, capped at
- * the opacity), onto a canvas that is never shown. Each Brush layer of the
- * page (`PatchLayer.svelte`) draws its own picture again and takes that
- * coverage off it with `destination-out`, which scales its alpha by
- * `1 - coverage`: `paint/erase.rs#erase_patch`'s `old * (255 - e) / 255`.
+ * the opacity), onto a canvas that is never shown. Each such layer the page
+ * draws (`PatchLayer.svelte`), a neighbour's reaching across a join among
+ * them, draws its own picture again and takes that coverage off it with
+ * `destination-out`, which scales its alpha by `1 - coverage`:
+ * `paint/erase.rs#erase_patch`'s `old * (255 - e) / 255`.
  *
  * **A stroke is kept per layer picture.** A layer remembers the picture it
  * had when a stroke first reached it, and takes that stroke off only that
