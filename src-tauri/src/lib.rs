@@ -186,6 +186,8 @@ pub fn run() {
             inference::cloud_clean::confirm_cloud_clean,
             inference::cloud_clean::start_cloud_clean,
             inference::cloud_clean::cancel_cloud_clean,
+            inference::cloud_clean::prepare_cloud_clean_stream,
+            inference::cloud_clean::confirm_cloud_clean_stream,
             inference::cloud_denoise::prepare_cloud_denoise,
             inference::cloud_denoise::confirm_cloud_denoise,
             inference::cloud_denoise::start_cloud_denoise,

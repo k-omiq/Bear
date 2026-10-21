@@ -29,6 +29,7 @@ import FormatConversionDialog from './FormatConversionDialog.svelte'
 import CloudConsentDialog from './CloudConsentDialog.svelte'
 import CloudRunConsentDialog from './CloudRunConsentDialog.svelte'
 import CloudCleanConsentDialog from './CloudCleanConsentDialog.svelte'
+import CloudCleanStreamConsentDialog from './CloudCleanStreamConsentDialog.svelte'
 import WorkflowReviewDialog from './WorkflowReviewDialog.svelte'
 import DenoiseDialog from './DenoiseDialog.svelte'
 import DenoiseCompareDialog from './DenoiseCompareDialog.svelte'
@@ -47,6 +48,7 @@ const DIALOGS = Object.assign(Object.create(null), homeDialogs, {
   cloudConsent: CloudConsentDialog,
   cloudRunConsent: CloudRunConsentDialog,
   cloudCleanConsent: CloudCleanConsentDialog,
+  cloudCleanStreamConsent: CloudCleanStreamConsentDialog,
   workflowReview: WorkflowReviewDialog,
   denoise: DenoiseDialog,
   denoiseCompare: DenoiseCompareDialog,

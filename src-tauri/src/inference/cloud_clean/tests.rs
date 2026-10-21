@@ -411,7 +411,7 @@ fn proposal_capacity_refuses_before_the_gateway_is_asked() {
     let cache = Mutex::new(HashMap::new());
     let expires_at_ms = analysis::now_ms() + 60_000;
     for n in 0..MAX_OPEN_PROPOSALS {
-        cache.lock().unwrap().insert(n.to_string(), StoredProposal { expires_at_ms, scope: scope.clone() });
+        cache.lock().unwrap().insert(n.to_string(), StoredProposal { expires_at_ms, scope: scope.clone(), stream: None });
     }
     let gateway = Gateway::priced();
     assert_eq!(prepare_with_cache(&path, asked("chapter", true), destination("modal-prof-limit"),
@@ -607,7 +607,7 @@ fn confirmed_grant_capacity_refuses_a_seventeenth_live_grant() {
     let mut store = HashMap::new();
     for n in 0..MAX_OPEN_GRANTS {
         assert!(grant_has_capacity(&store));
-        store.insert(n.to_string(), StoredGrant { scope: scope.clone(), expires_at_ms: u64::MAX });
+        store.insert(n.to_string(), StoredGrant { scope: scope.clone(), stream: None, expires_at_ms: u64::MAX });
     }
     assert!(!grant_has_capacity(&store));
 }
@@ -2239,4 +2239,269 @@ fn a_region_whose_attempt_the_sweep_ended_is_planned_by_the_next_prepare() {
     let freed = plan();
     assert!(freed.unresolved_ids.is_empty());
     assert!(freed.region_ids.contains(&ids[2]), "the region is planned again");
+}
+
+/* ------------------------------------------------------------------ */
+/* Streaming                                                           */
+/* ------------------------------------------------------------------ */
+
+fn streamed(scope: &str, pages: Option<Vec<u32>>) -> StreamRequest {
+    StreamRequest {
+        chapter_id: "chapter".into(), scope: scope.into(), page_indices: pages, local_first: false, picks: None,
+        qwen_edit: None,
+    }
+}
+
+/// The scope a spent streaming grant holds: the destination and price, no regions.
+fn stream_scope(grants: &GrantService, profile: &str) -> CleanGrantScope {
+    CleanGrantScope {
+        chapter_id: "chapter".into(),
+        regions: Vec::new(),
+        provider: CloudProvider::Modal,
+        profile_id: profile.into(),
+        endpoint_fingerprint: FINGERPRINT.clone(),
+        profile_epoch: grants.get_profile_epoch(CloudProvider::Modal, profile),
+        recipe: recipe(),
+        execution: CleanExecution::Cloud,
+        chunk_regions: CHUNK_REGIONS,
+        estimate: Estimate::default(),
+        price: l4(),
+        cost: None,
+        plan_digest: "s".repeat(64),
+    }
+}
+
+fn terms(pages: u32, cap_usd: f64) -> StreamTerms {
+    StreamTerms { pages: (0..pages).collect(), cap_usd, picks: None }
+}
+
+/// Run a stream whose pages `feed` hands on, from a thread of its own, as a
+/// detection would: it stores each page's detections, then sends the page.
+#[allow(clippy::too_many_arguments)]
+fn run_streamed(scope: &CleanGrantScope, terms: &StreamTerms, path: &Path, grants: &Arc<GrantService>,
+    renderer: &Renderer, cancel: &AtomicBool, harness: &Harness<'_>,
+    feed: impl FnOnce(&mpsc::Sender<(u32, bool)>) + Send) -> (Summary, Vec<Event>) {
+    let batch = Batch {
+        scope, job_path: path, grants, allowed: harness.allowed, unresolved: harness.unresolved,
+        local_pass: harness.local_pass, read: harness.read,
+    };
+    let events = RefCell::new(Vec::new());
+    let (tx, rx) = mpsc::channel();
+    let summary = std::thread::scope(|threads| {
+        threads.spawn(move || feed(&tx));
+        run_stream(&batch, renderer, terms, "run-stream", &rx, &|item: &(u32, bool)| *item, cancel,
+            &|event| events.borrow_mut().push(event))
+    });
+    (summary, events.into_inner())
+}
+
+fn wait_for(what: &str, reached: impl Fn() -> bool) {
+    assert!(wait_until(Duration::from_secs(10), reached), "{what}");
+}
+
+/// A page's regions go to the cloud GPU as soon as the page is handed on:
+/// the feed does not detect page 2 until page 1's region has rendered, which
+/// a clean that waited for detection to end would never let happen. Every
+/// region is cleaned, each page finished once, the GPU released once.
+#[test]
+fn a_stream_cleans_each_page_while_later_pages_are_still_detecting() {
+    let path = chapter("stream-overlap", 3, StripMode::Single);
+    let grants = Arc::new(GrantService::new());
+    let mut renderer = Renderer::new(&path, &grants);
+    renderer.delay = Duration::from_millis(5);
+    let rendered = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen = Arc::clone(&rendered);
+    renderer.on_render = Box::new(move |id| seen.lock().unwrap().push(id.to_owned()));
+    let scope = stream_scope(&grants, "modal-prof-stream-overlap");
+    let feed_path = path.clone();
+    let (summary, events) = run_streamed(&scope, &terms(3, MAX_STREAM_CAP_USD), &path, &grants, &renderer,
+        &AtomicBool::new(false), &OPEN, |tx| {
+            for page in 0..3usize {
+                let id = {
+                    // Under the job's lock, as a detection writes, since renders commit meanwhile.
+                    let _lock = run::lock_job(&feed_path).unwrap();
+                    detect(&feed_path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)
+                };
+                tx.send((page as u32, true)).unwrap();
+                wait_for("the handed page was rendered before detection went on",
+                    || rendered.lock().unwrap().contains(&id));
+            }
+        });
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.pages_cleaned, summary.next_page_index),
+        ("completed", 3, 3, None));
+    // Detection announced each page; the stream finishes each once.
+    assert_eq!((of_type(&events, "page-started"), of_type(&events, "page-done")), (0, 3));
+    assert!(detection_ids(&path).is_empty());
+    assert_eq!(renderer.releases.load(Ordering::SeqCst), 1);
+    // The deployment is checked again before each page, as before each chunk.
+    assert_eq!(renderer.rendered_at_deployment.lock().unwrap().len(), 3);
+}
+
+/// The cap counts each region at its high bound as it is queued, the fixed
+/// cost with the first. The region that would pass it is not queued, nor any
+/// after it: they stay detected, said once, and detection's later pages are
+/// finished as they come. Nothing past the cap reaches the renderer.
+#[test]
+fn the_cap_stops_queueing_and_leaves_the_rest_detected() {
+    let path = chapter("stream-cap", 3, StripMode::Single);
+    let ids: Vec<String> = (0..3).flat_map(|page| [
+        detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0),
+        detect(&path, page, Rect::new(150, 150, 30, 20), REMOTE_PICK, 1),
+    ]).collect();
+    let Bound { regions, .. } = bind(&path, &ids, recipe_preprocessing(&recipe()).unwrap()).unwrap();
+    let budget = Budget::new(&recipe(), CloudProvider::Modal, 0.8, 0.0);
+    let three = budget.fixed_usd + regions[..3].iter().map(|region| budget.job_usd(region.crop)).sum::<f64>();
+    let cap = three + budget.job_usd(regions[3].crop) / 2.0;
+
+    let grants = Arc::new(GrantService::new());
+    let renderer = Renderer::new(&path, &grants);
+    let scope = stream_scope(&grants, "modal-prof-stream-cap");
+    let (summary, events) = run_streamed(&scope, &terms(3, cap), &path, &grants, &renderer,
+        &AtomicBool::new(false), &OPEN, |tx| {
+            for page in 0..3 { tx.send((page, true)).unwrap(); }
+        });
+    let mut rendered = renderer.rendered();
+    rendered.sort();
+    let mut first = ids[..3].to_vec();
+    first.sort();
+    assert_eq!(rendered, first);
+    assert_eq!(detection_ids(&path), ids[3..].to_vec());
+    let capped = notices(&events, "notice.cloudClean.capReached");
+    assert_eq!((capped.len(), capped[0]["page"].as_u64()), (1, Some(2)));
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.next_page_index), ("completed", 3, None));
+    assert_eq!(of_type(&events, "page-done"), 3);
+    // Only the pages before the cap were checked against the deployment.
+    assert_eq!(renderer.rendered_at_deployment.lock().unwrap().len(), 2);
+}
+
+/// A deployment whose GPU or price moved stops the stream at the next page,
+/// as it stops a plan at the next chunk: what was queued finishes, nothing
+/// more is sent, and the pages detection hands on after are left detected.
+#[test]
+fn a_changed_price_stops_the_stream_at_the_next_page() {
+    let path = chapter("stream-price", 3, StripMode::Single);
+    let ids: Vec<String> = (0..3).map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
+    let grants = Arc::new(GrantService::new());
+    let mut renderer = Renderer::new(&path, &grants);
+    renderer.deployed = vec![(recipe(), l4()), (recipe(), Some(("L4".into(), 1.6)))];
+    let scope = stream_scope(&grants, "modal-prof-stream-price");
+    let (summary, events) = run_streamed(&scope, &terms(3, MAX_STREAM_CAP_USD), &path, &grants, &renderer,
+        &AtomicBool::new(false), &OPEN, |tx| {
+            for page in 0..3 { tx.send((page, true)).unwrap(); }
+        });
+    assert_eq!(renderer.rendered(), vec![ids[0].clone()]);
+    assert_eq!(detection_ids(&path), ids[1..].to_vec());
+    let stopped = notices(&events, "notice.cloudClean.stopped");
+    assert_eq!((stopped.len(), stopped[0]["code"].as_str()), (1, Some("cloud_clean_gpu_changed")));
+    assert_eq!((summary.reason, summary.regions_cleaned), ("completed", 1));
+    assert_eq!(of_type(&events, "page-done"), 3);
+    // A changed deployment is not a lost authority: the GPU it woke is released.
+    assert_eq!(renderer.releases.load(Ordering::SeqCst), 1);
+}
+
+/// A cancel stops the renders in flight and every page handed on after it.
+/// The first page not finished is where a resume picks up, and every region
+/// stays detected.
+#[test]
+fn a_cancel_mid_stream_leaves_the_handed_pages_for_a_resume() {
+    let path = chapter("stream-cancel", 3, StripMode::Single);
+    let ids: Vec<String> = (0..3).map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
+    let grants = Arc::new(GrantService::new());
+    let mut renderer = Renderer::new(&path, &grants);
+    renderer.hold = true;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&started);
+    renderer.on_render = Box::new(move |_| { seen.fetch_add(1, Ordering::SeqCst); });
+    let scope = stream_scope(&grants, "modal-prof-stream-cancel");
+    let stop = Arc::clone(&cancel);
+    let (summary, events) = run_streamed(&scope, &terms(3, MAX_STREAM_CAP_USD), &path, &grants, &renderer,
+        &cancel, &OPEN, |tx| {
+            tx.send((0, true)).unwrap();
+            wait_for("page 1's render started", || started.load(Ordering::SeqCst) == 1);
+            stop.store(true, Ordering::SeqCst);
+            tx.send((1, true)).unwrap();
+            tx.send((2, false)).unwrap();
+        });
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.next_page_index), ("cancelled", 0, Some(0)));
+    assert_eq!(detection_ids(&path), ids);
+    assert_eq!(renderer.rendered(), vec![ids[0].clone()]);
+    // Page 3 was not detected by the run, so nothing announced it to finish.
+    assert_eq!(of_type(&events, "page-done"), 2);
+}
+
+/// A region with an unresolved earlier request is not sent, with the notice a
+/// plan gives it; a page the consent did not name sends nothing at all.
+#[test]
+fn a_stream_skips_unresolved_regions_and_pages_it_was_not_given() {
+    let path = chapter("stream-skips", 3, StripMode::Single);
+    let ids: Vec<String> = (0..3).map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
+    let held = ids[0].clone();
+    let unresolved = move |_: u32, id: &str| id == held;
+    let grants = Arc::new(GrantService::new());
+    let renderer = Renderer::new(&path, &grants);
+    let scope = stream_scope(&grants, "modal-prof-stream-skips");
+    let given = StreamTerms { pages: [0, 1].into(), cap_usd: MAX_STREAM_CAP_USD, picks: None };
+    let (summary, events) = run_streamed(&scope, &given, &path, &grants, &renderer, &AtomicBool::new(false),
+        &Harness { unresolved: &unresolved, ..OPEN }, |tx| {
+            for page in 0..3 { tx.send((page, true)).unwrap(); }
+        });
+    assert_eq!(renderer.rendered(), vec![ids[1].clone()]);
+    let skipped = notices(&events, "notice.cloudClean.regionSkipped");
+    assert_eq!((skipped.len(), skipped[0]["reason"].as_str()), (1, Some("unresolved")));
+    assert_eq!(summary.regions_cleaned, 1);
+    assert_eq!(detection_ids(&path), vec![ids[0].clone(), ids[2].clone()]);
+}
+
+/// Streaming consent: a proposal needs a stated price; its digest binds the
+/// pages; the cap is answered at confirm, within the fixed cost and the
+/// maximum; and a stream's proposal and grant are never a plan's, nor the
+/// reverse.
+#[test]
+fn a_stream_is_consented_with_a_cap_and_never_spent_as_a_plan() {
+    let path = chapter("stream-consent", 3, StripMode::Single);
+    let profile = "modal-prof-stream-consent";
+    let unpriced = Gateway { price: None, ..Gateway::priced() };
+    assert_eq!(prepare_stream(&path, streamed("chapter", None), destination(profile), &unpriced).unwrap_err(),
+        "cloud_clean_stream_unpriced");
+    assert_eq!(prepare_stream(&path, streamed("page", Some(vec![3])), destination(profile), &Gateway::priced())
+        .unwrap_err(), "cloud_clean_page_not_found");
+    assert_eq!(prepare_stream(&path, streamed("regions", None), destination(profile), &Gateway::priced())
+        .unwrap_err(), "cloud_clean_scope_unsupported");
+
+    let proposal = prepare_stream(&path, streamed("chapter", None), destination(profile), &Gateway::priced()).unwrap();
+    assert_eq!((proposal.pages, proposal.page_indices.clone(), proposal.gpu.as_str()), (3, vec![0, 1, 2], "L4"));
+    assert!(proposal.fixed_cost_usd > 0.0 && proposal.region_cost_usd > 0.0);
+    assert!(proposal.suggested_cap_usd >= proposal.fixed_cost_usd && proposal.suggested_cap_usd <= MAX_STREAM_CAP_USD);
+    let one = prepare_stream(&path, streamed("page", Some(vec![1])), destination(profile), &Gateway::priced()).unwrap();
+    assert_ne!(one.stream_digest, proposal.stream_digest, "the digest binds the pages");
+    assert!(discard(&one.proposal_id).unwrap());
+    assert!(Job::open(&path).unwrap().project.detections.is_empty(), "preparing writes nothing");
+
+    let id = proposal.proposal_id.clone();
+    // A plan's confirm does not take a stream, and spends it.
+    assert_eq!(confirm(&id, &proposal.stream_digest, true, true).unwrap_err(), "cloud_clean_plan_mismatch");
+    for cap in [proposal.fixed_cost_usd / 2.0, MAX_STREAM_CAP_USD + 1.0, f64::NAN] {
+        let again = prepare_stream(&path, streamed("chapter", None), destination(profile), &Gateway::priced()).unwrap();
+        assert_eq!(confirm_stream(&again.proposal_id, &again.stream_digest, cap, true, true).unwrap_err(),
+            "cloud_clean_cap_invalid");
+    }
+    let again = prepare_stream(&path, streamed("chapter", None), destination(profile), &Gateway::priced()).unwrap();
+    assert_eq!(confirm_stream(&again.proposal_id, &again.stream_digest, 1.0, false, true).unwrap_err(),
+        "rights_attestation_required");
+    let grant = confirm_stream(&again.proposal_id, &again.stream_digest, 1.0, true, true).unwrap();
+    assert_eq!(consume_grant(&grant.grant_id, &request(profile, &recipe())).unwrap_err(),
+        "cloud_clean_grant_mismatch: stream");
+    let again = prepare_stream(&path, streamed("chapter", None), destination(profile), &Gateway::priced()).unwrap();
+    let grant = confirm_stream(&again.proposal_id, &again.stream_digest, 1.0, true, true).unwrap();
+    let (scope, terms) = consume_stream_grant(&grant.grant_id, &request(profile, &recipe())).unwrap();
+    assert_eq!((terms.pages, terms.cap_usd, scope.regions.len()), ([0, 1, 2].into(), 1.0, 0));
+    assert_eq!(scope.plan_digest, again.stream_digest);
+
+    // A plan's grant is not a stream's.
+    detect(&path, 0, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0);
+    let plan = proposed(&path, profile);
+    let grant = agree(&plan, true, true).unwrap();
+    assert_eq!(consume_stream_grant(&grant.grant_id, &request(profile, &recipe())).unwrap_err(),
+        "cloud_clean_grant_mismatch: stream");
 }

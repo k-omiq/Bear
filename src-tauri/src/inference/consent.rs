@@ -1306,6 +1306,35 @@ pub(crate) fn compute_clean_plan_digest(terms: &CleanPlanTerms<'_>) -> Result<St
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// Everything one streaming cloud clean consent covers: the destination and
+/// model, the pages whose detections it may send as each page is detected,
+/// where they are cleaned, and the GPU and list price its spending cap is
+/// counted at. The cap is the person's answer, held by the grant beside the
+/// digest, not a term of the proposal they were shown.
+#[derive(Debug, Serialize)]
+pub(crate) struct CleanStreamTerms<'a> {
+    pub chapter_id: &'a str,
+    pub provider: CloudProvider,
+    pub profile_id: &'a str,
+    pub endpoint_fingerprint: &'a str,
+    pub recipe: &'a RenderRecipe,
+    pub execution: &'a str,
+    pub page_indices: &'a [u32],
+    pub gpu: &'a str,
+    pub gpu_micro_usd_per_hour: u64,
+}
+
+/// The digest a streaming cloud clean consent is given for. Its own domain, so
+/// a stream digest is never a plan digest.
+pub(crate) fn compute_clean_stream_digest(terms: &CleanStreamTerms<'_>) -> Result<String, ConsentError> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"domain:cloud_clean_stream_v1:");
+    hasher.update(serde_json::to_vec(terms).map_err(|e| {
+        ConsentError::Internal(format!("failed to serialize clean stream: {e}"))
+    })?);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 /// How many chunks the rule makes of a plan of `total` regions.
 pub(crate) fn chunk_count(total: usize, chunk_regions: usize) -> usize {
     if chunk_regions == 0 { 0 } else { total.div_ceil(chunk_regions) }

@@ -607,12 +607,13 @@ pub fn denoise(
 /* The session                                                         */
 /* ------------------------------------------------------------------ */
 
-struct OrtTile<'a>(&'a mut ort::session::Session);
+struct OrtTile<'a>(&'a mut accel::Model);
 
 impl TileModel for OrtTile<'_> {
     fn run(&mut self, tile: Vec<f32>, side: usize) -> Result<Vec<f32>, Error> {
         let input = ort::value::Tensor::from_array(([1usize, 3, side, side], tile))
             .map_err(|e| Error::Run(e.to_string()))?;
+        let _turn = self.0.turn();
         let outputs = self.0.run(ort::inputs![input]).map_err(|e| Error::Run(e.to_string()))?;
         let (_, data) = outputs[0].try_extract_tensor::<f32>().map_err(|e| Error::Run(e.to_string()))?;
         Ok(data.to_vec())
@@ -664,7 +665,7 @@ pub fn seam_filter(helper: &Path, model: Waifu2xModel) -> Result<Vec<f32>, Error
 
 /// An open page denoise model: its session, where it landed, and its seam map.
 pub struct Waifu2x {
-    session: ort::session::Session,
+    session: crate::accel::Model,
     selection: Selection,
     model: Waifu2xModel,
     filter: Vec<f32>,

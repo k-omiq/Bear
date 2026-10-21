@@ -72,6 +72,8 @@ const IMPLEMENTED = Object.freeze({
   confirmCloudClean: 'confirm_cloud_clean',
   startCloudClean: 'start_cloud_clean',
   cancelCloudClean: 'cancel_cloud_clean',
+  prepareCloudCleanStream: 'prepare_cloud_clean_stream',
+  confirmCloudCleanStream: 'confirm_cloud_clean_stream',
   denoisePresets: 'denoise_presets',
   benchmarkDenoiseLocal: 'benchmark_denoise_local',
   denoiseChapterLocal: 'denoise_chapter_local',
@@ -228,6 +230,8 @@ export const SEAM_METHODS = Object.freeze([
   'confirmCloudClean',
   'startCloudClean',
   'cancelCloudClean',
+  'prepareCloudCleanStream',
+  'confirmCloudCleanStream',
   'denoisePresets',
   'benchmarkDenoiseLocal',
   'denoiseChapterLocal',
@@ -453,6 +457,17 @@ export function createTauriBackend({ fallback, invoke, listen }) {
       call(IMPLEMENTED.confirmCloudClean, { proposalId, planDigest, rightsAttested, retentionAcknowledged }),
     startCloudClean: ({ grantId }) => call(IMPLEMENTED.startCloudClean, { grantId }),
     cancelCloudClean: ({ proposalId }) => call(IMPLEMENTED.cancelCloudClean, { proposalId }),
+    // The streaming clean: the pages a Detect and clean run cleans on the
+    // cloud as it detects them, and the cap the consent set. `runClean`
+    // spends the grant as `cloudCleanGrant`; `cancelCloudClean` discards an
+    // unconfirmed proposal.
+    prepareCloudCleanStream: ({ chapterId, scope, pageIndices = null, localFirst = false, bubbleEngine = null,
+      outsideEngine = null, qwenEdit }) =>
+      call(IMPLEMENTED.prepareCloudCleanStream, { chapterId, scope, pageIndices, localFirst, bubbleEngine,
+        outsideEngine, ...(qwenEdit ? { qwenEdit } : {}) }),
+    confirmCloudCleanStream: ({ proposalId, streamDigest, capUsd, rightsAttested, retentionAcknowledged }) =>
+      call(IMPLEMENTED.confirmCloudCleanStream, { proposalId, streamDigest, capUsd, rightsAttested,
+        retentionAcknowledged }),
     // Page denoise. Named arguments for the same reason as the clean above:
     // the cloud three spend money, and the local one writes files.
     denoisePresets: () => call(IMPLEMENTED.denoisePresets),

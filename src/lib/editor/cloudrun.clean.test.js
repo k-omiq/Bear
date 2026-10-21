@@ -1,6 +1,9 @@
 /**
- * Clean on the cloud GPU: the run detects, and only once it has finished is
- * the plan prepared, shown and confirmed. Nothing is sent before the consent,
+ * Clean on the cloud GPU. Detect and clean streams: one consent with a cap
+ * before the run, and the run cleans each page on the cloud as it detects
+ * it. With an endpoint that states no price, and with Step set to Clean, the
+ * run detects, and only once it has finished is the plan prepared, shown and
+ * confirmed. Nothing is sent before the consent,
  * a declined proposal is dropped, and nothing falls back to a local clean.
  * The cloud means the cloud: `localFirst` is false unless the tool's mixed
  * choice is on, and one consent covers a plan of any number of batches.
@@ -32,6 +35,12 @@ const PROPOSAL = { proposalId: 'clean-prop', chapterId: 'c1', regionIds: ['c1-p0
   planDigest: 'a'.repeat(64), expiresAtMs: Date.now() + 300000 }
 // As the clean consent dialog answers Confirm: the statements and the plan it showed.
 const ANSWER = { rightsAttested: true, retentionAcknowledged: true, planDigest: PROPOSAL.planDigest }
+const STREAM = { proposalId: 'stream-prop', chapterId: 'c1', pages: 1, pageIndices: [0], execution: 'cloud', gpu: 'L4',
+  gpuUsdPerHour: 0.8, fixedCostUsd: 0.16, regionCostUsd: 0.002, suggestedCapUsd: 0.2, maxCapUsd: 100,
+  provider: 'modal', profileName: 'Studio A100', streamDigest: 's'.repeat(64), expiresAtMs: Date.now() + 300000,
+  standing: false }
+// As the stream consent dialog answers Start: the statements, the digest it showed and the cap.
+const STREAM_ANSWER = { rightsAttested: true, retentionAcknowledged: true, streamDigest: STREAM.streamDigest, capUsd: 1.5 }
 
 /** The end of the detection run, released by the test. */
 let finish = /** @type {(event: any) => void} */ (() => {})
@@ -52,6 +61,9 @@ function backend() {
     confirmCloudClean: vi.fn(async () => ({ grantId: 'clean-grant', expiresAtMs: Date.now() + 120000 })),
     startCloudClean: vi.fn(async () => ({ runId: 'run-2', pages: [{ index: 0 }] })),
     cancelCloudClean: vi.fn(async () => true),
+    // An endpoint with no price unless a test streams: the clean then follows detection.
+    prepareCloudCleanStream: vi.fn(async () => { throw new Error('cloud_clean_stream_unpriced') }),
+    confirmCloudCleanStream: vi.fn(async () => ({ grantId: 'stream-grant', expiresAtMs: Date.now() + 120000 })),
     reloadPage: vi.fn(async () => null),
   }
   setBackend(/** @type {any} */ (api))
@@ -105,7 +117,104 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-it('detects here, then prepares, asks and starts the cloud clean only after the run has finished', async () => {
+it('streams the clean: one consent with a cap before the run, which cleans each page as it detects it', async () => {
+  const api = backend()
+  api.prepareCloudCleanStream.mockResolvedValueOnce(STREAM)
+  const started = startCleanRun('page', /** @type {any} */ (api))
+  const consent = await dialog('cloudCleanStreamConsent')
+  expect(api.prepareCloudCleanStream).toHaveBeenCalledWith({ chapterId: 'c1', scope: 'page', pageIndices: [0],
+    localFirst: false, bubbleEngine: 'fill', outsideEngine: 'lama' })
+  expect(consent.blocking).toBe(true)
+  expect(consent.props).toEqual({ proposal: STREAM, endpoint: 'https://studio.modal.run/' })
+  expect(api.runClean).not.toHaveBeenCalled()
+  expect(api.confirmCloudCleanStream).not.toHaveBeenCalled()
+
+  closeModal(STREAM_ANSWER)
+  expect(await started).toBe('run-1')
+  expect(api.confirmCloudCleanStream).toHaveBeenCalledWith({ proposalId: 'stream-prop', ...STREAM_ANSWER })
+  // One run detects and cleans: the clean on the cloud, nothing on this computer.
+  expect(api.runClean).toHaveBeenCalledWith(expect.objectContaining({ scope: 'page', mode: 'auto',
+    cloudCleanGrant: 'stream-grant' }))
+  expect(api.runClean.mock.calls[0][0].solidBubblesOnly).toBeUndefined()
+  expect(editor.run).toMatchObject({ active: true, runId: 'run-1', mode: 'auto' })
+  // No second consent, no plan, no second run when detection ends.
+  detectionEnds()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(api.prepareCloudClean).not.toHaveBeenCalled()
+  expect(api.startCloudClean).not.toHaveBeenCalled()
+  expect(app.modals).toEqual([])
+})
+
+it('with detection on the cloud too, asks the stream first, then detection, and mints both grants last', async () => {
+  const api = backend()
+  api.prepareCloudCleanStream.mockResolvedValueOnce(STREAM)
+  setDetectorModels(['samTs'])
+  setAnalysisTarget('rtFull', 'cloud')
+  setAnalysisTarget('samTs', 'cloud')
+  const started = startCleanRun('page', /** @type {any} */ (api))
+  await dialog('cloudCleanStreamConsent')
+  closeModal(STREAM_ANSWER)
+  const run = await dialog('cloudRunConsent')
+  // The detection consent says the clean was agreed already and goes page by page.
+  expect(run.props).toMatchObject({ scope: 'page', cleanFollows: true, cleanStreams: true })
+  expect(api.confirmCloudCleanStream).not.toHaveBeenCalled()
+  closeModal(ANSWER)
+  expect(await started).toBe('run-1')
+  expect(api.confirmRunAnalysis.mock.invocationCallOrder[0])
+    .toBeLessThan(api.confirmCloudCleanStream.mock.invocationCallOrder[0])
+  expect(api.runClean).toHaveBeenCalledWith(expect.objectContaining({ mode: 'auto', cloudGrant: 'run-grant',
+    cloudCleanGrant: 'stream-grant' }))
+})
+
+it('drops the stream and detects nothing when either consent is declined', async () => {
+  const api = backend()
+  api.prepareCloudCleanStream.mockResolvedValue(STREAM)
+  const declined = startCleanRun('page', /** @type {any} */ (api))
+  await dialog('cloudCleanStreamConsent')
+  closeModal('cancel')
+  expect(await declined).toBeNull()
+  expect(api.cancelCloudClean).toHaveBeenCalledWith({ proposalId: 'stream-prop' })
+  expect(app.notices.at(-1)?.key).toBe('cloud.clean.stream.declined')
+
+  setDetectorModels(['samTs'])
+  setAnalysisTarget('rtFull', 'cloud')
+  setAnalysisTarget('samTs', 'cloud')
+  const detectionDeclined = startCleanRun('page', /** @type {any} */ (api))
+  await dialog('cloudCleanStreamConsent')
+  closeModal(STREAM_ANSWER)
+  await dialog('cloudRunConsent')
+  closeModal('cancel')
+  expect(await detectionDeclined).toBeNull()
+  expect(api.cancelCloudClean).toHaveBeenCalledTimes(2)
+  expect(api.confirmCloudCleanStream).not.toHaveBeenCalled()
+  expect(api.runClean).not.toHaveBeenCalled()
+})
+
+it('asks a standing project for the cap, and answers no statement for the user', async () => {
+  const api = backend()
+  api.prepareCloudCleanStream.mockResolvedValueOnce({ ...STREAM, standing: true })
+  const started = startCleanRun('page', /** @type {any} */ (api))
+  const consent = await dialog('cloudCleanStreamConsent')
+  expect(consent.props.proposal.standing).toBe(true)
+  closeModal({ ...STREAM_ANSWER, rightsAttested: false, retentionAcknowledged: false })
+  expect(await started).toBe('run-1')
+  expect(api.confirmCloudCleanStream).toHaveBeenCalledWith({ proposalId: 'stream-prop', ...STREAM_ANSWER,
+    rightsAttested: false, retentionAcknowledged: false })
+})
+
+it('names a refused cap and starts nothing', async () => {
+  const api = backend()
+  api.prepareCloudCleanStream.mockResolvedValueOnce(STREAM)
+  api.confirmCloudCleanStream.mockRejectedValueOnce(new Error('cloud_clean_cap_invalid'))
+  const started = startCleanRun('page', /** @type {any} */ (api))
+  await dialog('cloudCleanStreamConsent')
+  closeModal(STREAM_ANSWER)
+  expect(await started).toBeNull()
+  expect(app.notices.at(-1)).toMatchObject({ key: 'cloud.clean.stream.capInvalid', tone: 'warn' })
+  expect(api.runClean).not.toHaveBeenCalled()
+})
+
+it('with no price to cap, detects here, then prepares, asks and starts the cloud clean after the run', async () => {
   const api = backend()
   expect(await startCleanRun('page', /** @type {any} */ (api))).toBe('run-1')
   // Detection only: nothing is cleaned here that is to be cleaned there.
@@ -364,9 +473,10 @@ describe('the cloud clean refusals, in plain words', () => {
       'gateway_error', 'gateway_protocol', 'job_busy: another Manga Cleaner process is using /x'],
     confirm: ['rights_attestation_required', 'retention_acknowledgement_required', 'cloud_clean_proposal_missing',
       'cloud_clean_proposal_expired', 'cloud_clean_profile_changed', 'cloud_clean_grant_limit',
-      'cloud_clean_plan_mismatch'],
+      'cloud_clean_plan_mismatch', 'cloud_clean_cap_invalid'],
     start: ['cloud_clean_grant_missing', 'cloud_clean_grant_expired', 'cloud_clean_grant_mismatch: profile',
-      'cloud_clean_grant_mismatch: endpoint', 'cloud_clean_grant_mismatch: recipe', 'cloud_clean_profile_changed'],
+      'cloud_clean_grant_mismatch: endpoint', 'cloud_clean_grant_mismatch: recipe', 'cloud_clean_profile_changed',
+      'cloud_clean_grant_mismatch: stream', 'cloud_clean_stream_unsupported'],
   }
 
   it('gives every native code a sentence of its own, not the step\'s fallback', () => {

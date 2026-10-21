@@ -56,7 +56,7 @@ pub struct LineScript {
 }
 
 pub struct Osd {
-    session: ort::session::Session,
+    session: crate::accel::Model,
     labels: Vec<String>,
     selection: crate::accel::Selection,
     /// This session's row in [`crate::registry`]. See
@@ -121,6 +121,7 @@ impl Osd {
 
         let input = ort::value::Tensor::from_array(([1usize, 1, STRIP_HEIGHT, width], strip))
             .map_err(|e| OsdError::Inference(e.to_string()))?;
+        let _turn = self.session.turn();
         let outputs = self
             .session
             .run(ort::inputs![input])

@@ -12,7 +12,7 @@ const INPUT: usize = 640;
 const SCORE: f32 = 0.35;
 
 pub struct FullRegions {
-    session: ort::session::Session,
+    session: crate::accel::Model,
     lease: crate::registry::Lease,
     selection: crate::accel::Selection,
 }
@@ -95,6 +95,7 @@ impl FullRegions {
                 vec![page.width as i64, tile_height as i64],
             ))
             .map_err(|e| e.to_string())?;
+            let _turn = self.session.turn();
             let output = self
                 .session
                 .run_with_options(ort::inputs!["images" => images, "orig_target_sizes" => sizes], &options)

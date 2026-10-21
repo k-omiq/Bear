@@ -20,8 +20,18 @@
  *    shows it. Confirm mints a single-use grant the run spends and throws
  *    away; the run carries that consent to its last page, and no other run
  *    can.
- * 3. **Cleaning asks once, for the exact regions.** With Clean on the cloud,
- *    the run only detects. When it has finished, `prepareCloudClean`
+ * 3. **Detect and clean streams, under a cap.** With Clean on the cloud and
+ *    the step Detect and clean, `prepareCloudCleanStream` describes the
+ *    pages and the price, and the stream consent dialog asks once, before
+ *    the run, for the two statements and a spending cap. Only then is
+ *    detection's own consent asked, if it is on the cloud too, and both
+ *    grants are minted together, so neither expires while the other is read.
+ *    The run cleans each page on the cloud GPU as soon as it is detected and
+ *    stops sending when the app's estimate reaches the cap. An endpoint that
+ *    states no GPU price cannot be capped: the run then only detects and the
+ *    clean follows on a plan of its own, as below.
+ * 4. **Cleaning asks once, for the exact regions.** Otherwise, with Clean on
+ *    the cloud, the run only detects. When it has finished, `prepareCloudClean`
  *    describes the plan and cleans nothing: every region in order, the
  *    batches it is sent in, the pages, the GPU time and cost range from each
  *    region's own crop, and any region left out because an earlier cloud
@@ -29,7 +39,7 @@
  *    once for the whole plan, however many batches it takes, and only its
  *    answer mints the grant `startCloudClean` spends. Clean alone skips the
  *    detection half and goes straight to the proposal.
- * 4. **The cloud means the cloud.** With Clean on set to Cloud GPU every
+ * 5. **The cloud means the cloud.** With Clean on set to Cloud GPU every
  *    region is cleaned on the cloud GPU, a LaMa pick included: no region is
  *    cleaned by LaMa on this computer (`localFirst: false`), unless
  *    the Text cleanup panel's "Clean flat colours on this computer first"
@@ -201,10 +211,12 @@ const CLEAN_ERROR_KEYS = Object.freeze({
   cloud_clean_profile_changed: 'cloud.clean.profileChanged',
   cloud_clean_grant_limit: 'cloud.clean.error.proposalLimit',
   cloud_clean_plan_mismatch: 'cloud.clean.error.planChanged',
+  cloud_clean_cap_invalid: 'cloud.clean.stream.capInvalid',
   // start
   cloud_clean_grant_missing: 'cloud.clean.error.consentGone',
   cloud_clean_grant_expired: 'cloud.clean.expired',
   cloud_clean_grant_mismatch: 'cloud.clean.profileChanged',
+  cloud_clean_stream_unsupported: 'cloud.clean.error.scope',
   cloud_run_profile_changed: 'cloud.clean.profileChanged',
 })
 
@@ -228,10 +240,11 @@ function errorText(cause) {
  * @param {any} proposal
  * @param {'page'|'chapter'} scope
  * @param {boolean} cleanFollows - Clean is on the cloud too: its consent comes later
+ * @param {boolean} [cleanStreams] - Clean is on the cloud too, already consented, page by page
  * @returns {Promise<{rightsAttested: boolean, retentionAcknowledged: boolean}|string|null>}
  *   the two answers on Send, or the id of the button that dismissed it
  */
-function askRunConsent(proposal, scope, cleanFollows) {
+function askRunConsent(proposal, scope, cleanFollows, cleanStreams = false) {
   return new Promise((resolve) => {
     pushModal({
       kind: 'cloudRunConsent',
@@ -239,7 +252,7 @@ function askRunConsent(proposal, scope, cleanFollows) {
       // As with every cloud consent: a stray backdrop click is not a decision
       // to send a page. Escape still means Cancel.
       blocking: true,
-      props: { proposal, scope, cleanFollows },
+      props: { proposal, scope, cleanFollows, cleanStreams },
       actions: [
         { id: 'cancel', labelKey: 'cloud.analysis.consent.cancel' },
         { id: 'confirm', labelKey: 'cloud.analysis.run.confirm', variant: 'primary' },
@@ -265,6 +278,28 @@ function askCleanConsent(proposal, endpoint) {
       actions: [
         { id: 'cancel', labelKey: 'cloud.analysis.consent.cancel' },
         { id: 'confirm', labelKey: 'cloud.clean.confirm', variant: 'primary' },
+      ],
+      onresolve: resolve,
+    })
+  })
+}
+
+/**
+ * @param {import('../api/backend.js').CloudCleanStreamProposal} proposal
+ * @param {string|null} endpoint - the endpoint address, as readiness read it
+ * @returns {Promise<{rightsAttested: boolean, retentionAcknowledged: boolean, streamDigest: string, capUsd: number}|string|null>}
+ *   the answers, the digest shown and the cap set, on Start
+ */
+function askStreamConsent(proposal, endpoint) {
+  return new Promise((resolve) => {
+    pushModal({
+      kind: 'cloudCleanStreamConsent',
+      titleKey: 'cloud.clean.stream.title',
+      blocking: true,
+      props: { proposal, endpoint },
+      actions: [
+        { id: 'cancel', labelKey: 'cloud.analysis.consent.cancel' },
+        { id: 'confirm', labelKey: 'cloud.clean.stream.confirm', variant: 'primary' },
       ],
       onresolve: resolve,
     })
@@ -355,26 +390,51 @@ export async function startCleanRun(scope = 'page', backend = getBackend()) {
     }
     if (step === 'clean') return await cleanOnCloud(where, backend)
 
+    // Detect and clean with Clean on the cloud: its consent and cap first.
+    // An endpoint with no price cannot be capped, and cleans after detection.
+    const stream = parts.clean ? await askStream(where, readiness, backend) : null
+    if (parts.clean && stream === null) return null
+    const streams = stream !== null && stream !== 'fallback'
     /** @type {string|null} */
     let cloudGrant = null
     if (parts.detect) {
-      cloudGrant = await detectionGrant(where.scope, chapter, pageIndex, readiness, backend, parts.clean)
-      if (!cloudGrant) return null
+      cloudGrant = await detectionGrant(where.scope, chapter, pageIndex, readiness, backend, parts.clean,
+        { cleanStreams: streams })
+      if (!cloudGrant) {
+        if (streams) await backend.cancelCloudClean({ proposalId: stream.proposal.proposalId }).catch(() => {})
+        return null
+      }
+    }
+    /** @type {string|null} */
+    let cloudCleanGrant = null
+    if (streams) {
+      cloudCleanGrant = await streamGrant(stream, where, backend)
+      if (!cloudCleanGrant) return null
     }
     /** @type {string|null} */
     let runId
     try {
-      // With the Clean half on the cloud this run only detects: nothing is
-      // cleaned here that the user chose to clean there.
-      runId = await startRun(scope, { ...(cloudGrant ? { cloudGrant } : {}), mode: parts.clean ? 'detect' : step, pendingToken: token })
+      // With the Clean half on the cloud and no stream this run only detects:
+      // nothing is cleaned here that the user chose to clean there.
+      runId = await startRun(scope, {
+        ...(cloudGrant ? { cloudGrant } : {}),
+        ...(cloudCleanGrant ? { cloudCleanGrant } : {}),
+        mode: parts.clean && !streams ? 'detect' : step,
+        pendingToken: token,
+      })
     } catch (cause) {
       // A failed page already said so in its own notice.
       const text = errorText(cause)
-      if (!text.startsWith('cloud_analysis_failed')) notify({ key: cloudRunErrorKey(cause), tone: 'warn' })
+      if (!text.startsWith('cloud_analysis_failed')) {
+        notify({ key: text.startsWith('cloud_clean_') ? cloudCleanErrorKey(cause, 'cloud.clean.failure.start') : cloudRunErrorKey(cause), tone: 'warn' })
+      }
       return null
     }
-    if (runId && parts.detect) trackCloudRun(runId, 'analysis', backend, { provider: readiness.target.type, profileId: readiness.target.profile_id })
-    if (runId && parts.clean) void cleanAfter(runId, where, backend)
+    const target = { provider: readiness.target.type, profileId: readiness.target.profile_id }
+    // One GPU row per run: a streamed run's is the render's, which it wakes and releases.
+    if (runId && streams) trackCloudRun(runId, 'render', backend, target)
+    else if (runId && parts.detect) trackCloudRun(runId, 'analysis', backend, target)
+    if (runId && parts.clean && !streams) void cleanAfter(runId, where, backend)
     return runId
   } finally {
     releaseRunStart(token)
@@ -434,6 +494,95 @@ export async function detectArea(pageIndex, area, backend = getBackend()) {
 }
 
 /**
+ * Detect and clean with Clean on the cloud: prepare the stream and ask its
+ * consent and cap, before the run. Answers the proposal and the answer;
+ * `'fallback'` when the endpoint states no GPU price (the run then only
+ * detects, and the clean follows on a plan of its own); null when nothing
+ * should start, with its notice said and a declined proposal cancelled.
+ *
+ * @param {{chapterId: string, chapter: any, scope: 'page'|'chapter', pageIndices: number[]|null, localFirst?: boolean, picks?: {bubbleEngine?: string, outsideEngine?: string}|null}} where
+ * @param {any} readiness
+ * @param {import('../api/backend.js').Backend} backend
+ * @returns {Promise<{proposal: import('../api/backend.js').CloudCleanStreamProposal, answer: {rightsAttested: boolean, retentionAcknowledged: boolean, streamDigest: string, capUsd: number}}|'fallback'|null>}
+ */
+async function askStream(where, readiness, backend) {
+  const { chapterId, chapter, scope, pageIndices = null, picks = null } = where
+  if (!cloudCleanAvailable()) {
+    notify({ key: cloudCleanMissingKey(), tone: 'warn' })
+    return null
+  }
+  const configKey = configurationKey(readiness)
+  /** @type {import('../api/backend.js').CloudCleanStreamProposal} */
+  let proposal
+  try {
+    const model = await backend.getCloudModelInfo({ provider: readiness.target.type, profileId: readiness.target.profile_id })
+    let qwenEdit
+    if (isQwen(model?.pinnedModelId)) {
+      if (!qwenSupported(model)) return null
+      qwenEdit = await askQwenEdit({ batch: true })
+      if (!qwenEdit) return null
+    }
+    proposal = await backend.prepareCloudCleanStream({ chapterId, scope, pageIndices, localFirst: where.localFirst === true,
+      ...(picks ?? {}), ...(qwenEdit ? { qwenEdit } : {}) })
+  } catch (cause) {
+    if (errorText(cause).startsWith('cloud_clean_stream_unpriced')) return 'fallback'
+    await configurationFailed(backend, configKey, 'clean', cause)
+    notify({ key: cloudCleanErrorKey(cause, 'cloud.clean.failure.prepare'), tone: 'warn' })
+    return null
+  }
+  const moved = () => editor.chapter !== chapter || (scope === 'page' && editor.pageIndex !== pageIndices?.[0])
+  if (moved()) {
+    await backend.cancelCloudClean({ proposalId: proposal.proposalId }).catch(() => {})
+    notify({ key: 'cloud.clean.consentLost', tone: 'warn' })
+    return null
+  }
+  // A standing project skips the statements, never the cap: the dialog is
+  // asked either way, and shows only the cap then.
+  const answer = await askStreamConsent(proposal, endpointHost(readiness))
+  if (!answer || typeof answer !== 'object' || moved()) {
+    Promise.resolve()
+      .then(() => backend.cancelCloudClean({ proposalId: proposal.proposalId }))
+      .catch(() => {})
+    notify(answer && typeof answer === 'object'
+      ? { key: 'cloud.clean.consentLost', tone: 'warn' }
+      : { key: 'cloud.clean.stream.declined' })
+    return null
+  }
+  return { proposal, answer }
+}
+
+/**
+ * Mint the stream's grant from the answer its dialog gave, just before the
+ * run spends it. The grant id, or null with its notice said.
+ *
+ * @param {{proposal: import('../api/backend.js').CloudCleanStreamProposal, answer: {rightsAttested: boolean, retentionAcknowledged: boolean, streamDigest: string, capUsd: number}}} stream
+ * @param {{chapter: any, scope: 'page'|'chapter', pageIndices: number[]|null}} where
+ * @param {import('../api/backend.js').Backend} backend
+ * @returns {Promise<string|null>}
+ */
+async function streamGrant({ proposal, answer }, where, backend) {
+  /** @type {import('../api/backend.js').CloudCleanGrant} */
+  let grant
+  try {
+    grant = await backend.confirmCloudCleanStream({
+      proposalId: proposal.proposalId,
+      streamDigest: answer.streamDigest,
+      capUsd: answer.capUsd,
+      rightsAttested: answer.rightsAttested === true,
+      retentionAcknowledged: answer.retentionAcknowledged === true,
+    })
+  } catch (cause) {
+    notify({ key: cloudCleanErrorKey(cause, 'cloud.clean.failure.confirm'), tone: 'warn' })
+    return null
+  }
+  if (editor.chapter !== where.chapter || (where.scope === 'page' && editor.pageIndex !== where.pageIndices?.[0])) {
+    notify({ key: 'cloud.clean.consentLost', tone: 'warn' })
+    return null
+  }
+  return grant.grantId
+}
+
+/**
  * The detection half's consent: propose, ask, confirm. The grant id, or null
  * when anything stopped it - with its notice said, and a declined proposal
  * cancelled.
@@ -444,10 +593,12 @@ export async function detectArea(pageIndex, area, backend = getBackend()) {
  * @param {any} readiness
  * @param {import('../api/backend.js').Backend} backend
  * @param {boolean} cleanFollows
- * @param {{followPage?: boolean}} [options] - selections keep their captured page after navigation
+ * @param {{followPage?: boolean, cleanStreams?: boolean}} [options] - selections keep their captured page after
+ *   navigation; `cleanStreams` says the clean was consented already and goes page by page
  * @returns {Promise<string|null>}
  */
-async function detectionGrant(scope, chapter, pageIndex, readiness, backend, cleanFollows, { followPage = true } = {}) {
+async function detectionGrant(scope, chapter, pageIndex, readiness, backend, cleanFollows,
+  { followPage = true, cleanStreams = false } = {}) {
   const chapterId = chapter.id
   /** @type {any} */
   let proposal
@@ -476,7 +627,7 @@ async function detectionGrant(scope, chapter, pageIndex, readiness, backend, cle
   // ones that consent was given with, and none is answered here for the user.
   const answer = proposal.standing === true
     ? { rightsAttested: false, retentionAcknowledged: false }
-    : await askRunConsent(proposal, scope, cleanFollows)
+    : await askRunConsent(proposal, scope, cleanFollows, cleanStreams)
   if (!answer || typeof answer !== 'object') {
     Promise.resolve()
       .then(() => backend.cancelRunAnalysis({ proposalId: proposal.proposalId }))

@@ -294,8 +294,8 @@ pub fn infer_cpu_cancellable(
 /// Pinned graph SHA-256 checks belong to the caller's installation boundary;
 /// a run should perform those once before opening this session.
 pub struct SamTsSession {
-    encoder: ort::session::Session,
-    head: ort::session::Session,
+    encoder: crate::accel::Model,
+    head: crate::accel::Model,
     first_load: Option<Duration>,
     lease: crate::registry::Lease,
     backend: crate::accel::Accelerator,
@@ -330,13 +330,14 @@ impl SamTsSession {
         let started = Instant::now();
         let profiles = (backend == crate::accel::Accelerator::WebGpu)
             .then(|| ProfileCleanup([profile_prefix("encoder"), profile_prefix("head")]));
-        let open = |path: &Path, index: usize| -> Result<ort::session::Session, String> {
+        let open = |path: &Path, index: usize| -> Result<crate::accel::Model, String> {
             if let Some(profiles) = profiles.as_ref() {
                 webgpu_session(path, &profiles.0[index])
             } else {
                 ort::session::Session::builder().map_err(|e| e.to_string())?
                     .with_intra_threads(4).map_err(|e| e.to_string())?
                     .commit_from_file(path).map_err(|e| e.to_string())
+                    .map(|session| crate::accel::Model::new(session, backend))
             }
         };
         let encoder = open(&graph_dir.join(ENCODER), 0)
@@ -386,6 +387,7 @@ impl SamTsSession {
         let input = ort::value::Tensor::from_array(([1usize, 3, SIDE, SIDE], prepared.chw.clone()))
             .map_err(|e| e.to_string())?;
         let started = Instant::now();
+        let _turn = self.encoder.turn();
         let embedding = self
             .encoder
             .run_with_options(ort::inputs!["prepared_rgb" => input], &options)
@@ -410,6 +412,7 @@ impl SamTsSession {
         let input = ort::value::Tensor::from_array(([1usize, 256, 64, 64], embedding_values))
             .map_err(|e| e.to_string())?;
         let started = Instant::now();
+        let _turn = self.head.turn();
         let output = self
             .head
             .run_with_options(ort::inputs!["embedding" => input], &options)
@@ -593,7 +596,7 @@ pub fn measured_m5_host() -> bool {
     false
 }
 
-fn webgpu_session(model: &Path, profile: &Path) -> Result<ort::session::Session, String> {
+fn webgpu_session(model: &Path, profile: &Path) -> Result<crate::accel::Model, String> {
     let env = ort::environment::Environment::current().map_err(|e| e.to_string())?;
     let devices: Vec<_> = env
         .devices()
@@ -614,8 +617,10 @@ fn webgpu_session(model: &Path, profile: &Path) -> Result<ort::session::Session,
         .map_err(|e| e.to_string())?
         .with_devices(devices, None)
         .map_err(|e| e.to_string())?;
+    let _turn = crate::accel::device_turn(crate::accel::Accelerator::WebGpu);
     builder
         .commit_from_file(model)
+        .map(|session| crate::accel::Model::new(session, crate::accel::Accelerator::WebGpu))
         .map_err(|e| format!("SAM-TS-L WebGPU session {}: {e}", model.display()))
 }
 
@@ -832,6 +837,7 @@ pub fn infer_webgpu_cancellable(page: &Raster, graph_dir: &Path, cancel: &Cancel
     let input = ort::value::Tensor::from_array(([1usize, 3, SIDE, SIDE], prepared.chw.clone()))
         .map_err(|e| e.to_string())?;
     let started = Instant::now();
+    let _turn = encoder.turn();
     let embedding = encoder
         .run_with_options(ort::inputs!["prepared_rgb" => input], &options)
         .map_err(|e| if cancel.check().is_err() { "analysis cancelled".into() } else { format!("SAM-TS-L WebGPU encoder inference: {e}") })?;
@@ -848,6 +854,7 @@ pub fn infer_webgpu_cancellable(page: &Raster, graph_dir: &Path, cancel: &Cancel
     let input = ort::value::Tensor::from_array(([1usize, 256, 64, 64], embedding_values))
         .map_err(|e| e.to_string())?;
     let started = Instant::now();
+    let _turn = head.turn();
     let output = head
         .run_with_options(ort::inputs!["embedding" => input], &options)
         .map_err(|e| if cancel.check().is_err() { "analysis cancelled".into() } else { format!("SAM-TS-L WebGPU text-head inference: {e}") })?;

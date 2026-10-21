@@ -1764,7 +1764,7 @@ fn a_panicking_pipeline_still_finishes_the_run_and_frees_the_scheduler() {
 
     let recorder = Recorder::new();
     let worker = a_worker(&chapter_id, &recorder);
-    let summary = quietly(|| worker.run(&entries, &mut stub, Engine::Flux, &recorder.sink()));
+    let summary = quietly(|| worker.run(&entries, Walk::One(&mut stub), Engine::Flux, &recorder.sink()));
 
     let finished = recorder.kinds().iter().filter(|kind| **kind == "run-finished").count();
     assert_eq!(finished, 1, "a panicked run emitted {finished} run-finished events");
@@ -1813,7 +1813,7 @@ fn a_panic_on_the_way_out_still_hands_the_scheduler_back() {
 
     let panicked = quietly(|| {
         std::panic::catch_unwind(AssertUnwindSafe(|| {
-            worker.run(&entries, &mut Stub::new(1, 0), Engine::Flux, &|event| {
+            worker.run(&entries, Walk::One(&mut Stub::new(1, 0)), Engine::Flux, &|event| {
                 assert_ne!(kind_of(&event), "run-finished", "a sink that throws on the way out");
             })
         }))
@@ -3259,7 +3259,7 @@ fn a_run_id_cannot_collide_with_the_mocks() {
 #[test]
 fn every_command_is_async_and_so_never_runs_on_the_invoke_handlers_thread() {
     #[allow(clippy::type_complexity)]
-    fn check<A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, V, R: std::future::Future>(_: fn(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, V) -> R) {}
+    fn check<A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, V, W, R: std::future::Future>(_: fn(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, V, W) -> R) {}
     fn check1<A, R: std::future::Future>(_: fn(A) -> R) {}
     fn check3<A, B, C, R: std::future::Future>(_: fn(A, B, C) -> R) {}
     check(run_clean);
@@ -6118,6 +6118,330 @@ fn detect_then_clean_leaves_what_one_pass_leaves() {
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Detection ahead of cleaning                                         */
+/* ------------------------------------------------------------------ */
+
+/// A pipeline with a say in when each half of a page's work goes ahead: the
+/// hooks are called with the page's placement before its detection or its
+/// clean starts.
+struct Hooked<'h> {
+    inner: Pipeline,
+    before_detect: &'h (dyn Fn(usize) + Sync),
+    before_clean: &'h (dyn Fn(usize) + Sync),
+}
+
+impl<'h> Hooked<'h> {
+    fn new(inner: Pipeline, before_detect: &'h (dyn Fn(usize) + Sync), before_clean: &'h (dyn Fn(usize) + Sync))
+        -> Self {
+        Hooked { inner, before_detect, before_clean }
+    }
+}
+
+impl Cleaner for Hooked<'_> {
+    fn clean_page(&mut self, page_id: &str, bytes: &[u8], ceiling: Engine, context: &PageContext)
+        -> Result<PageOutcome, String> {
+        self.inner.clean_page(page_id, bytes, ceiling, context)
+    }
+
+    fn detect_current_page(&mut self, page_id: &str, bytes: &[u8], ceiling: Engine, context: &PageContext,
+        job: &Job) -> Result<PageOutcome, String> {
+        (self.before_detect)(context.placement);
+        self.inner.detect_current_page(page_id, bytes, ceiling, context, job)
+    }
+
+    fn clean_detections(&mut self, page_id: &str, bytes: &[u8], ceiling: Engine, context: &PageContext,
+        detections: &[LoadedDetection]) -> Result<DetectionsOutcome, String> {
+        (self.before_clean)(context.placement);
+        self.inner.clean_detections(page_id, bytes, ceiling, context, detections)
+    }
+
+    fn solid_bubbles_only(&self) -> bool { self.inner.solid_bubbles_only() }
+
+    fn last_fault(&self) -> Option<EngineFault> { self.inner.last_fault() }
+
+    fn stop_reason(&self) -> Option<String> { self.inner.stop_reason() }
+}
+
+/// A latch one thread opens and another waits on, for a while.
+#[derive(Default)]
+struct Latch(Mutex<bool>, Condvar);
+
+impl Latch {
+    fn open(&self) {
+        *self.0.lock().unwrap() = true;
+        self.1.notify_all();
+    }
+
+    /// Whether it opened within the wait.
+    fn wait(&self) -> bool {
+        let guard = self.0.lock().unwrap();
+        let (guard, _) = self.1.wait_timeout_while(guard, Duration::from_secs(30), |open| !*open).unwrap();
+        *guard
+    }
+}
+
+/// An overlapped Auto run over a lettered chapter: the lettered pipeline
+/// detects, a pipeline with no model at all cleans.
+fn run_overlapped(scratch: &Scratch, library: &Library, chapter_id: &str, recorder: &Recorder,
+    detector: &mut dyn Cleaner) -> Summary {
+    let entries = plan(library, "chapter", chapter_id, None).unwrap();
+    let mut cleaner = cleaning_only_pipeline(scratch);
+    execute_overlapped("run-overlapped", chapter_id, &entries, &mut cleaner, detector, Engine::Lama,
+        &recorder.cancel, &recorder.sink()).0
+}
+
+/// Detection on one thread and cleaning on another leave the manifest the
+/// one pass leaves, region for region, with the differences
+/// `detect_then_clean_leaves_what_one_pass_leaves` names: the ids and the
+/// provider of a rung with no session. Each page is announced once and
+/// finished once, every page is examined, nothing is left detected, and an
+/// Auto run's own detections leave no undo step.
+#[test]
+fn overlapped_auto_leaves_what_one_pass_leaves() {
+    let one = Scratch::new("overlap-one-pass");
+    let (one_library, one_chapter) = a_lettered_chapter(&one, 3);
+    let entries = plan(&one_library, "chapter", &one_chapter, None).unwrap();
+    let recorder = Recorder::new();
+    let mut pipeline = lettered_pipeline(&one).with_mask_padding(4);
+    let auto = execute_as(RunMode::Auto, "run-1", &one_chapter, &entries, &mut pipeline, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+
+    let two = Scratch::new("overlap-two-threads");
+    let (two_library, two_chapter) = a_lettered_chapter(&two, 3);
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(&two).with_mask_padding(4);
+    let overlapped = run_overlapped(&two, &two_library, &two_chapter, &recorder, &mut detector);
+    assert_eq!(
+        (overlapped.reason, overlapped.pages_cleaned, overlapped.regions_cleaned, overlapped.errored,
+            overlapped.next_page_index),
+        ("completed", 3, auto.regions_cleaned, 0, None),
+    );
+    assert!(auto.regions_cleaned > 0);
+    if !host_under_pressure() {
+        assert!(matches!(detector.rung2.state, Session::Unopened), "detection asked for the inpainter");
+    }
+
+    let events = recorder.events();
+    for page in 0..3u32 {
+        let count = |kind: &str| events.iter().filter(|event| kind_of(event) == kind && match event {
+            Event::PageStarted { page_index, .. } => *page_index == page,
+            Event::PageDone { page_index, .. } => *page_index == page,
+            _ => false,
+        }).count();
+        assert_eq!((count("page-started"), count("page-done")), (1, 1), "page {page}");
+    }
+    assert_eq!(recorder.kinds().last(), Some(&"run-finished"));
+
+    let one_job = only_job(&one_library, &one_chapter);
+    let two_job = only_job(&two_library, &two_chapter);
+    assert!(two_job.project.detections.is_empty());
+    assert_eq!(two_job.project.examined, vec![0, 1, 2]);
+    assert_eq!(one_job.project.examined, two_job.project.examined);
+    assert_eq!(one_job.project.counters.declined, two_job.project.counters.declined);
+    assert_eq!(one_job.project.counters.gate_dropped, two_job.project.counters.gate_dropped);
+    let rows = |job: &Job| job.project.regions_untouched.iter()
+        .map(|row| (row.source_idx, row.bbox, row.reason.clone())).collect::<Vec<_>>();
+    assert_eq!(rows(&one_job), rows(&two_job));
+    assert_eq!(one_job.project.patches.len(), two_job.project.patches.len());
+    for (a, b) in one_job.project.patches.iter().zip(&two_job.project.patches) {
+        assert!(a.id.contains("-r") && b.id.contains("-d"), "{} {}", a.id, b.id);
+        assert_eq!((a.source_idx, a.bbox, a.engine, a.order, &a.review_state),
+            (b.source_idx, b.bbox, b.engine, b.order, &b.review_state));
+        assert_eq!(a.provenance.mask_sha256, b.provenance.mask_sha256);
+        let (pa, pb) = (one_job.load_patch(a).unwrap(), two_job.load_patch(b).unwrap());
+        assert_eq!((pa.mask, pa.ink), (pb.mask, pb.ink));
+        assert_eq!(pa.pixels.data, pb.pixels.data);
+    }
+    assert!(crate::history::load(two_job.path()).entries.is_empty(), "an Auto run left an undo step");
+    assert_eq!(two_job.project.interrupted_at, None);
+    assert!(plan(&two_library, "chapter", &two_chapter, None).unwrap().is_empty());
+}
+
+/// A stand-in for the cloud clean of a streamed run: records each page as it
+/// is handed on and how many detections it held by then, cleans nothing, and
+/// at `cancel_at` cancels the run there.
+#[derive(Default)]
+struct Away {
+    handed: Vec<(usize, bool, usize)>,
+    cancel_at: Option<usize>,
+}
+
+impl HandedClean for Away {
+    fn clean(&mut self, _: &str, pages: &std::sync::mpsc::Receiver<Handed<'_>>, cancel: &AtomicBool,
+        _: &dyn Fn(Event)) -> Summary {
+        let mut summary = Progress::queued(0).summary;
+        for handed in pages.iter() {
+            let job = Job::open(&handed.entry.job_path).unwrap();
+            let stored = job.project.detections.iter().filter(|row| row.source_idx == handed.entry.source_idx).count();
+            self.handed.push((handed.entry.page_index, handed.detected, stored));
+            if self.cancel_at == Some(handed.entry.page_index) {
+                cancel.store(true, Ordering::SeqCst);
+                summary.next_page_index = Some(handed.entry.page_index as u32);
+                break;
+            }
+        }
+        summary
+    }
+}
+
+/// A streamed run hands every page on in order once its detections are
+/// stored, cleans nothing here, announces each page once, and ends with no
+/// resume point.
+#[test]
+fn a_streamed_run_hands_each_detected_page_on_and_cleans_nothing_here() {
+    let scratch = Scratch::new("stream-hand-on");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 3);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(&scratch);
+    let mut away = Away::default();
+    let (summary, _) = execute_streamed("run-stream", &chapter_id, &entries, &mut detector, &mut away,
+        Engine::Lama, &recorder.cancel, &recorder.sink());
+    assert_eq!(away.handed.iter().map(|&(page, detected, _)| (page, detected)).collect::<Vec<_>>(),
+        vec![(0, true), (1, true), (2, true)]);
+    assert!(away.handed.iter().all(|&(_, _, stored)| stored > 0), "a page was handed on before it was stored");
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.next_page_index), ("completed", 0, None));
+    let job = only_job(&library, &chapter_id);
+    assert!(job.project.patches.is_empty(), "a streamed run cleaned here");
+    assert!(!job.project.detections.is_empty());
+    assert_eq!(job.project.interrupted_at, None);
+    assert_eq!(recorder.kinds().iter().filter(|kind| **kind == "page-started").count(), 3);
+    assert_eq!(recorder.kinds().last(), Some(&"run-finished"));
+}
+
+/// A cancel in the cloud clean ends the run where that clean stopped: detection
+/// stops at its next hand-off, and the job records the page for a resume.
+#[test]
+fn a_cancel_in_a_streamed_clean_resumes_at_its_page() {
+    let scratch = Scratch::new("stream-cancel");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 3);
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(&scratch);
+    let mut away = Away { cancel_at: Some(1), ..Away::default() };
+    let (summary, _) = execute_streamed("run-stream-cancel", &chapter_id, &entries, &mut detector, &mut away,
+        Engine::Lama, &recorder.cancel, &recorder.sink());
+    assert_eq!((summary.reason, summary.next_page_index), ("cancelled", Some(1)));
+    assert_eq!(away.handed.len(), 2);
+    assert_eq!(only_job(&library, &chapter_id).project.interrupted_at, Some(1));
+}
+
+/// With solid bubbles only, the overlapped run leaves exactly what the
+/// one-thread run leaves, id for id: both detect, store, and clean from what
+/// was stored.
+#[test]
+fn overlapped_solid_bubbles_only_leaves_what_one_thread_leaves() {
+    let one = Scratch::new("overlap-solid-one");
+    let (one_library, one_chapter) = a_lettered_chapter(&one, 2);
+    let entries = plan(&one_library, "chapter", &one_chapter, None).unwrap();
+    let recorder = Recorder::new();
+    let mut pipeline = lettered_pipeline(&one).with_mask_padding(4).with_solid_bubbles_only(true);
+    let (sequential, kept) = execute_with_kept(RunMode::Auto, "run-1", &one_chapter, &entries, &mut pipeline,
+        Engine::Lama, &recorder.cancel, &recorder.sink());
+
+    let two = Scratch::new("overlap-solid-two");
+    let (two_library, two_chapter) = a_lettered_chapter(&two, 2);
+    let entries = plan(&two_library, "chapter", &two_chapter, None).unwrap();
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(&two).with_mask_padding(4).with_solid_bubbles_only(true);
+    let mut cleaner = cleaning_only_pipeline(&two).with_solid_bubbles_only(true);
+    let (overlapped, overlapped_kept) = execute_overlapped("run-2", &two_chapter, &entries, &mut cleaner,
+        &mut detector, Engine::Lama, &recorder.cancel, &recorder.sink());
+    assert_eq!((overlapped.regions_cleaned, overlapped.pages_cleaned, overlapped_kept),
+        (sequential.regions_cleaned, sequential.pages_cleaned, kept));
+    assert_eq!(left_on(&only_job(&one_library, &one_chapter)), left_on(&only_job(&two_library, &two_chapter)));
+}
+
+/// Page 2 is detected while page 1 is cleaned: page 1's clean waits for page
+/// 2's detection to start, which a walk that took one page at a time would
+/// never let happen.
+#[test]
+fn the_next_page_is_detected_while_this_one_is_cleaned() {
+    let scratch = Scratch::new("overlap-concurrent");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 2);
+    let second_detecting = Latch::default();
+    let overlapped = AtomicBool::new(false);
+    let before_detect = |placement: usize| if placement == 1 { second_detecting.open() };
+    let before_clean = |placement: usize| if placement == 0 && second_detecting.wait() {
+        overlapped.store(true, Ordering::SeqCst);
+    };
+    let mut detector = Hooked::new(lettered_pipeline(&scratch), &before_detect, &|_| {});
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let recorder = Recorder::new();
+    let mut cleaner = Hooked::new(cleaning_only_pipeline(&scratch), &|_| {}, &before_clean);
+    let summary = execute_overlapped("run-concurrent", &chapter_id, &entries, &mut cleaner, &mut detector,
+        Engine::Lama, &recorder.cancel, &recorder.sink()).0;
+    assert!(overlapped.load(Ordering::SeqCst), "page 2 was not detected while page 1 was cleaned");
+    assert_eq!((summary.reason, summary.pages_cleaned, summary.errored), ("completed", 2, 0));
+}
+
+/// A cancel while page 1 is cleaned, with page 2 already being detected,
+/// resumes from page 1: it is left detected and not examined, nothing of page
+/// 2's detection is written, and a resumed run finishes the chapter as one
+/// run would have.
+#[test]
+fn a_cancel_while_cleaning_resumes_at_the_page_being_cleaned() {
+    let scratch = Scratch::new("overlap-cancel");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 3);
+    let recorder = Recorder::new();
+    let (second_detecting, cancelled) = (Latch::default(), Latch::default());
+    // Page 2's detection is under way when the cancel comes, and finishes
+    // after it.
+    let before_detect = |placement: usize| if placement == 1 {
+        second_detecting.open();
+        assert!(cancelled.wait());
+    };
+    let before_clean = |placement: usize| if placement == 0 {
+        assert!(second_detecting.wait());
+        recorder.cancel.store(true, Ordering::SeqCst);
+        cancelled.open();
+    };
+    let mut detector = Hooked::new(lettered_pipeline(&scratch), &before_detect, &|_| {});
+    let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
+    let mut cleaner = Hooked::new(cleaning_only_pipeline(&scratch), &|_| {}, &before_clean);
+    let summary = execute_overlapped("run-cancel", &chapter_id, &entries, &mut cleaner, &mut detector,
+        Engine::Lama, &recorder.cancel, &recorder.sink()).0;
+    assert_eq!((summary.reason, summary.next_page_index, summary.pages_cleaned), ("cancelled", Some(0), 0));
+    let job = only_job(&library, &chapter_id);
+    assert_eq!(job.project.interrupted_at, Some(0));
+    assert!(job.project.examined.is_empty());
+    assert!(job.project.detections.iter().all(|row| row.source_idx == 0), "{:?}", job.project.detections);
+    assert!(job.project.detections.iter().any(|row| row.source_idx == 0));
+    assert!(job.project.patches.is_empty());
+    let run_finished = recorder.events().into_iter().find_map(|event| match event {
+        Event::RunFinished { next_page_index, .. } => Some(next_page_index),
+        _ => None,
+    });
+    assert_eq!(run_finished, Some(Some(0)));
+
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(&scratch);
+    let resumed = run_overlapped(&scratch, &library, &chapter_id, &recorder, &mut detector);
+    assert_eq!((resumed.reason, resumed.pages_cleaned, resumed.errored), ("completed", 3, 0));
+    let job = only_job(&library, &chapter_id);
+    assert_eq!(job.project.examined, vec![0, 1, 2]);
+    assert!(job.project.detections.is_empty());
+    assert_eq!(job.project.interrupted_at, None);
+}
+
+/// A panic in detection ends the run at the page detection was on, after the
+/// pages it had already handed on are cleaned.
+#[test]
+fn a_panic_in_detection_ends_the_run_at_its_page() {
+    let scratch = Scratch::new("overlap-panic");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 3);
+    let before_detect = |placement: usize| assert!(placement != 1, "the detector panicked on page 2");
+    let mut detector = Hooked::new(lettered_pipeline(&scratch), &before_detect, &|_| {});
+    let recorder = Recorder::new();
+    let summary = quietly(|| run_overlapped(&scratch, &library, &chapter_id, &recorder, &mut detector));
+    assert_eq!((summary.reason, summary.next_page_index, summary.pages_cleaned), ("cancelled", Some(1), 1));
+    let job = only_job(&library, &chapter_id);
+    assert_eq!(job.project.examined, vec![0]);
+    assert_eq!(job.project.interrupted_at, Some(1));
+    assert_eq!(recorder.kinds().last(), Some(&"run-finished"));
+}
+
 /// Detect again replaces what it stored and the untouched rows with them, keeps
 /// every patch, and does not store text a patch has already cleaned.
 #[test]
@@ -7087,7 +7411,7 @@ fn a_solid_bubbles_run_ends_on_what_it_cleaned_and_what_it_kept() {
     let closing = |pipeline: &mut Pipeline| {
         let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
         let recorder = Recorder::new();
-        a_worker(&chapter_id, &recorder).run(&entries, pipeline, Engine::Lama, &recorder.sink());
+        a_worker(&chapter_id, &recorder).run(&entries, Walk::One(pipeline), Engine::Lama, &recorder.sink());
         run_notices(&recorder)
     };
     let solid_only = |cleaned: u32, kept: u32| vec![

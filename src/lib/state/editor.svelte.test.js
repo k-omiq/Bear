@@ -24,6 +24,7 @@ import {
   setToolBySlot,
   startRun,
   runFinished,
+  runningPage,
   TOOLS,
   toggleMaskSelectMode,
   undo,
@@ -509,6 +510,8 @@ describe('a run over pages the window is not holding', () => {
     emit({ type: 'page-started', chapterId: 'ch1', runId: 'r-busy', pageIndex: 1 })
     emit({ type: 'page-started', chapterId: 'ch1', runId: 'r-busy', pageIndex: 3 })
     expect([0, 1, 2, 3].map(pageBusy)).toEqual([false, true, false, true])
+    // Detection runs ahead of the clean: the status names the earliest page.
+    expect(runningPage()?.index).toBe(1)
     // An edit of a free page is the caller's, and says nothing.
     expect(claimPageEdit(0)).toBe(true)
     expect(app.notices).toEqual([])
@@ -517,6 +520,7 @@ describe('a run over pages the window is not holding', () => {
 
     emit({ type: 'page-done', chapterId: 'ch1', runId: 'r-busy', page: { ...header(1), status: 'cleaned' } })
     expect([0, 1, 2, 3].map(pageBusy)).toEqual([false, false, false, true])
+    expect(runningPage()?.index).toBe(3)
 
     emit({ type: 'run-finished', chapterId: 'ch1', runId: 'r-busy', reason: 'cancelled', nextPageIndex: 3 })
     expect([0, 1, 2, 3].map(pageBusy)).toEqual([false, false, false, false])

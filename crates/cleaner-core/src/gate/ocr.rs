@@ -95,8 +95,8 @@ pub struct Reading {
 }
 
 pub struct Ocr {
-    encoder: ort::session::Session,
-    decoder: ort::session::Session,
+    encoder: crate::accel::Model,
+    decoder: crate::accel::Model,
     vocab: Vec<String>,
     selection: crate::accel::Selection,
     /// This session's row in [`crate::registry`] - one row for both sessions.
@@ -166,6 +166,7 @@ impl Ocr {
             pixels,
         ))
         .map_err(|e| OcrError::Inference(e.to_string()))?;
+        let _turn = self.encoder.turn();
         let outputs = self
             .encoder
             .run(ort::inputs![input])
@@ -197,6 +198,7 @@ impl Ocr {
         while steps < MAX_TOKENS {
             let ids = ort::value::Tensor::from_array(([1usize, tokens.len()], tokens.clone()))
                 .map_err(|e| OcrError::Inference(e.to_string()))?;
+            let _turn = self.decoder.turn();
             let outputs = self
                 .decoder
                 .run(ort::inputs![

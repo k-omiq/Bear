@@ -252,7 +252,7 @@ pub fn model_hole(fitted: &Fitted) -> Mask {
 pub const RESIDENT_BYTES: u64 = 510 * 1024 * 1024;
 
 pub struct Inpainter {
-    session: ort::session::Session,
+    session: crate::accel::Model,
     selection: Selection,
     /// This session's row in [`crate::registry`], which goes when the session
     /// does. Read through [`Inpainter::spent`].
@@ -487,6 +487,7 @@ impl Inpainter {
             .map_err(|e| Error::Run(e.to_string()))?;
         let mask = ort::value::Tensor::from_array(([1usize, 1, side, side], mask))
             .map_err(|e| Error::Run(e.to_string()))?;
+        let _turn = self.session.turn();
         let outputs =
             self.session.run(ort::inputs![image, mask]).map_err(|e| Error::Run(e.to_string()))?;
         let (_, data) =

@@ -533,6 +533,47 @@ describe('cloud clean', () => {
     await expect(mock.startCloudClean({ grantId: grant.grantId })).rejects.toThrow('cloud_clean_grant_missing')
   })
 
+  it('streams a Detect and clean: one grant with a cap, each region detected then cleaned on the cloud', async () => {
+    const mock = await readyMock()
+    const pending = (await firstPage(mock)).regions.filter((region) => region.outcome === 'pending').map((r) => r.id)
+    expect(pending.length).toBeGreaterThan(1)
+    const proposal = await mock.prepareCloudCleanStream({ chapterId: CHAPTER, scope: 'page', pageIndices: [0] })
+    expect(proposal).toMatchObject({ chapterId: CHAPTER, pages: 1, pageIndices: [0], execution: 'cloud', gpu: 'L4' })
+    expect(proposal.suggestedCapUsd).toBeGreaterThanOrEqual(proposal.fixedCostUsd)
+    // A plan's confirm does not take a stream, and spends it.
+    await expect(mock.confirmCloudClean({ proposalId: proposal.proposalId, planDigest: proposal.streamDigest, ...ANSWER }))
+      .rejects.toThrow('cloud_clean_plan_mismatch')
+
+    const capped = await mock.prepareCloudCleanStream({ chapterId: CHAPTER, scope: 'page', pageIndices: [0] })
+    await expect(mock.confirmCloudCleanStream({ proposalId: capped.proposalId, streamDigest: capped.streamDigest,
+      capUsd: capped.fixedCostUsd / 2, ...ANSWER })).rejects.toThrow('cloud_clean_cap_invalid')
+
+    // A cap with room for one region: the first is cleaned on the cloud, the rest stay detected.
+    const once = await mock.prepareCloudCleanStream({ chapterId: CHAPTER, scope: 'page', pageIndices: [0] })
+    const grant = await mock.confirmCloudCleanStream({ proposalId: once.proposalId, streamDigest: once.streamDigest,
+      capUsd: once.fixedCostUsd + once.regionCostUsd * 1.5, ...ANSWER })
+    await expect(mock.startCloudClean({ grantId: grant.grantId })).rejects.toThrow('cloud_clean_grant_mismatch: stream')
+    const again = await mock.prepareCloudCleanStream({ chapterId: CHAPTER, scope: 'page', pageIndices: [0] })
+    const stream = await mock.confirmCloudCleanStream({ proposalId: again.proposalId, streamDigest: again.streamDigest,
+      capUsd: again.fixedCostUsd + again.regionCostUsd * 1.5, ...ANSWER })
+    const { events } = await ranToEnd(mock, () => mock.runClean({ ...runOn('auto'), cloudCleanGrant: stream.grantId }))
+    const page = await firstPage(mock)
+    const cleaned = page.regions.filter((region) => region.outcome === 'cleaned')
+    expect(cleaned).toHaveLength(1)
+    expect(cleaned[0].mask.provenance.cloud).toBeTruthy()
+    expect(page.regions.filter((region) => region.outcome === 'detected')).toHaveLength(pending.length - 1)
+    expect(events.filter((event) => event.type === 'notice' && event.key === 'notice.cloudClean.capReached')).toHaveLength(1)
+    // A grant is spent once.
+    await expect(mock.runClean({ ...runOn('auto'), cloudCleanGrant: stream.grantId })).rejects.toThrow('cloud_clean_grant_missing')
+    await expect(mock.runClean({ ...runOn('detect'), cloudCleanGrant: 'x' })).rejects.toThrow('cloud_clean_stream_unsupported')
+  })
+
+  it('refuses a stream when the endpoint states no price', async () => {
+    const mock = await readyMock({ cloudCleanScenario: 'unpriced' })
+    await expect(mock.prepareCloudCleanStream({ chapterId: CHAPTER, scope: 'chapter' }))
+      .rejects.toThrow('cloud_clean_stream_unpriced')
+  })
+
   it('describes mixed execution at prepare and cleans flat colours here only once the run starts', async () => {
     const mock = await readyMock()
     await ranToEnd(mock, () => mock.runClean(runOn('detect')))

@@ -208,8 +208,8 @@ const LATIN_SHARE: f32 = 0.8;
 const LETTERING_FLOOR: f32 = 0.25;
 
 pub struct Hayai {
-    vision: ort::session::Session,
-    decoder: ort::session::Session,
+    vision: crate::accel::Model,
+    decoder: crate::accel::Model,
     /// Both graphs' files, kept to reopen them on the CPU when a provider
     /// that built a session fails at run time ([`Hayai::read`]).
     paths: (std::path::PathBuf, std::path::PathBuf),
@@ -308,6 +308,7 @@ impl Hayai {
         let err = |e: ort::Error| HayaiError::Inference(e.to_string());
         let grid = ort::value::Tensor::from_array(([2usize], vec![rows as i64, cols as i64])).map_err(err)?;
         let values = ort::value::Tensor::from_array(([1usize, rows * cols, PATCH_LEN], patches)).map_err(err)?;
+        let _turn = self.vision.turn();
         let outputs = self.vision.run(ort::inputs!["p_grid" => grid, "pixel_values" => values]).map_err(err)?;
         let (_, features) = outputs["features"].try_extract_tensor::<f32>().map_err(err)?;
         let (vision, h, w) = unshuffle(features, rows, cols);
@@ -380,6 +381,7 @@ impl Hayai {
             "mask" => ort::value::Tensor::from_array(([1usize, 1, s, past_len + s], mask)).map_err(err)?,
             "past" => ort::value::Tensor::from_array(([CACHE_ROWS, 1, KV_HEADS, past_len, HEAD_DIM], past)).map_err(err)?,
         ];
+        let _turn = self.decoder.turn();
         let outputs = self.decoder.run(inputs).map_err(err)?;
         let (_, logits) = outputs["logits"].try_extract_tensor::<f32>().map_err(err)?;
         let (shape, present) = outputs["present"].try_extract_tensor::<f32>().map_err(err)?;

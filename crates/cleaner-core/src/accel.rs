@@ -1080,7 +1080,7 @@ pub fn open_session(
     profile: &ModelProfile,
     preference: Preference,
     intra_threads: Option<usize>,
-) -> Result<(Session, Selection), SessionError> {
+) -> Result<(Model, Selection), SessionError> {
     // The one call that consults the machine. Everything else in this module
     // takes the room and the platform as arguments, so the policy is testable
     // and only the session that is actually about to be built pays for a
@@ -1114,7 +1114,7 @@ pub fn open_session(
     }
 
     match build(model, selection.accelerator, intra_threads, strict_placement(profile, preference, selection.accelerator)) {
-        Ok(session) => Ok((session, selection)),
+        Ok(session) => Ok((Model::new(session, selection.accelerator), selection)),
         Err(detail) if selection.accelerator != Accelerator::Cpu && !matches!(preference, Preference::Force(_)) => {
             let wanted = selection.accelerator;
             selection = Selection {
@@ -1125,7 +1125,7 @@ pub fn open_session(
             let session = build(model, Accelerator::Cpu, intra_threads, false)
                 .map_err(|detail| SessionError::Build { model: profile.name, accelerator: Accelerator::Cpu, detail })?;
             let _ = detail;
-            Ok((session, selection))
+            Ok((Model::new(session, Accelerator::Cpu), selection))
         }
         Err(detail) => Err(SessionError::Build { model: profile.name, accelerator: selection.accelerator, detail }),
     }
@@ -1138,7 +1138,69 @@ fn strict_placement(profile: &ModelProfile, preference: Preference, accelerator:
     matches!(preference, Preference::Force(_)) && !profile.partitioned_on.contains(&accelerator)
 }
 
+/// A turn on the device a session runs on, held for one run of it, or for
+/// building or dropping it. `None` where the provider needs none.
+///
+/// ONNX Runtime's WebGPU provider keeps one device context per process, which
+/// every WebGPU session shares, and nothing in it is safe to drive from two
+/// threads at once: a LaMa render on one thread while the text detector ran on
+/// another aborted in Metal (`dawn::native::metal::CommandRecordingContext::
+/// EnsureBlit`, 2026-10-21, on an Auto run that detects and cleans on two
+/// threads). So every WebGPU session takes this turn, and the two threads'
+/// GPU work goes one call at a time while their CPU work runs side by side.
+/// Every other provider runs free.
+pub fn device_turn(accelerator: Accelerator) -> Option<std::sync::MutexGuard<'static, ()>> {
+    static WEBGPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    (accelerator == Accelerator::WebGpu).then(|| WEBGPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+}
+
+/// A session that runs, and goes, under its device's turn ([`device_turn`]).
+///
+/// Dropping a WebGPU session frees its buffers through the shared device
+/// context, so a session parked, reaped or surrendered on one thread while
+/// another runs on the GPU needs the turn as much as a run does. Every engine
+/// holds its sessions as these, and takes [`Model::turn`] around each run.
+pub struct Model {
+    /// `Some` until the model drops.
+    session: Option<Session>,
+    accelerator: Accelerator,
+}
+
+impl Model {
+    pub fn new(session: Session, accelerator: Accelerator) -> Model {
+        Model { session: Some(session), accelerator }
+    }
+
+    /// The turn a run of this session holds while it runs and while its
+    /// outputs are read.
+    pub fn turn(&self) -> Option<std::sync::MutexGuard<'static, ()>> {
+        device_turn(self.accelerator)
+    }
+}
+
+impl std::ops::Deref for Model {
+    type Target = Session;
+
+    fn deref(&self) -> &Session {
+        self.session.as_ref().expect("a model holds its session until it drops")
+    }
+}
+
+impl std::ops::DerefMut for Model {
+    fn deref_mut(&mut self) -> &mut Session {
+        self.session.as_mut().expect("a model holds its session until it drops")
+    }
+}
+
+impl Drop for Model {
+    fn drop(&mut self) {
+        let _turn = self.turn();
+        drop(self.session.take());
+    }
+}
+
 fn build(model: &Path, accelerator: Accelerator, intra_threads: Option<usize>, strict: bool) -> Result<Session, String> {
+    let _turn = device_turn(accelerator);
     let mut builder = Session::builder().map_err(|e| e.to_string())?;
     if let Some(threads) = intra_threads {
         builder = builder.with_intra_threads(threads).map_err(|e| e.to_string())?;

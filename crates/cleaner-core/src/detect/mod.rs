@@ -140,7 +140,7 @@ pub enum DetectError {
 }
 
 pub struct Detector {
-    session: ort::session::Session,
+    session: crate::accel::Model,
     selection: crate::accel::Selection,
     /// This session's row in [`crate::registry`], which goes when the session
     /// does. It is read by [`Detector::spent`] and by nothing else here.
@@ -200,6 +200,7 @@ impl Detector {
 
         let input = ort::value::Tensor::from_array(([1usize, 3, side, side], tensor))
             .map_err(|e| DetectError::Inference(e.to_string()))?;
+        let _turn = self.session.turn();
         let outputs = self
             .session
             .run(ort::inputs![input])

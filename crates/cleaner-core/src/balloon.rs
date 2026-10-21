@@ -152,7 +152,7 @@ pub enum BalloonError {
 }
 
 pub struct BalloonDetector {
-    session: ort::session::Session,
+    session: crate::accel::Model,
     selection: crate::accel::Selection,
     /// This session's row in [`crate::registry`]. See
     /// [`crate::detect::Detector`], which carries the same field for the same
@@ -232,6 +232,7 @@ impl BalloonDetector {
         ))
         .map_err(|e| BalloonError::Inference(e.to_string()))?;
 
+        let _turn = self.session.turn();
         let outputs = self
             .session
             .run(ort::inputs![images, sizes])

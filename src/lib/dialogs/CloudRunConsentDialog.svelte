@@ -14,7 +14,8 @@
    * Every value is the proposal's own (`propose_run_analysis`), fixed when the
    * dialog mounts. With Clean on the cloud too (`cleanFollows`), it says that
    * the cleaning that follows detection goes to the cloud GPU under the same
-   * consent.
+   * consent, or with a stream already consented (`cleanStreams`), that each
+   * page is cleaned there as soon as it is detected.
    */
   import { untrack } from 'svelte'
   import { Button, Modal } from '../ui/index.js'
@@ -32,6 +33,7 @@
   const titleKey = untrack(() => spec?.titleKey ?? 'cloud.analysis.run.title')
   const chapterRun = untrack(() => spec?.props?.scope === 'chapter')
   const cleanFollows = untrack(() => spec?.props?.cleanFollows === true)
+  const cleanStreams = untrack(() => spec?.props?.cleanStreams === true)
   const actions = untrack(() => spec?.actions ?? [])
 
   let rights = $state(false)
@@ -130,7 +132,9 @@
       <div class="fact">
         <dt>{t('cloud.analysis.run.result')}</dt>
         <dd>
-          {#if cleanFollows}
+          {#if cleanStreams}
+            <span data-fact="clean-streams">{t('cloud.clean.stream.withDetection')}</span>
+          {:else if cleanFollows}
             <span data-fact="clean-follows">{t('cloud.clean.asksAfterDetection')}</span>
           {:else}
             <span>{t('cloud.analysis.run.resultValue')}</span>

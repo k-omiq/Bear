@@ -170,6 +170,8 @@ fn main() {
             "confirm_cloud_clean",
             "start_cloud_clean",
             "cancel_cloud_clean",
+            "prepare_cloud_clean_stream",
+            "confirm_cloud_clean_stream",
             "prepare_cloud_denoise",
             "confirm_cloud_denoise",
             "start_cloud_denoise",

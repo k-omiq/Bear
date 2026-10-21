@@ -344,6 +344,7 @@ async fn detect(
         None,
         Some(targets.to_value()),
         Some(grant.grant_id),
+        None,
         Some("detect".into()),
         None,
         None,

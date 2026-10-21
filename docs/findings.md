@@ -686,6 +686,60 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Detection ahead of cleaning (2026-10-21): local gain measured, cloud gain not.** An Auto run now
+detects page N+1 while it cleans page N, on two threads with a pipeline each (`walk_overlapped` in
+`src-tauri/src/run.rs`). On 8 pages of the user's chapter c32 (1136x1601), local models, outside
+text cleaned so LaMa ran on 62 regions, three back-to-back pairs on an idle M-series Mac took 91.0 s
+one thread and 88.2 s two threads, the same 62 patches and 26 untouched rows each time. The gain is
+small because detection was about 18 s of the 91 and both halves run on the one GPU, where their
+model calls take turns. Measured before that lock existed: a LaMa render on one thread while the
+text detector ran on another aborted the process in Metal
+(`dawn::native::metal::CommandRecordingContext::EnsureBlit`), twice in two runs. ONNX Runtime's
+WebGPU provider shares one device context per process, so every WebGPU session now builds, runs and
+drops under `accel::device_turn` (sessions are held as `accel::Model`). Any other path that ran two
+WebGPU sessions at once, such as a hand clean during a run, had the same exposure; whether one did
+was not checked. Not measured: an Auto run with cloud detection, where detection now runs ahead
+through the prefetch and the gain should be the cloud wait (needs a Modal run and a grant). Not
+built: cleaning on the cloud GPU while detection goes on; the cloud clean consent names an exact
+region count and cost, which a stream of pages still being detected cannot give, so it needs a
+consent decision first. Not checked: the in-app status line with two pages busy, beyond the unit
+test (`runningPage` names the earliest busy page). Seen while testing it and left open: the cloud
+clean test `forty_qwen_regions_are_all_sent_and_committed_with_sixteen_at_most_in_flight` counts 39
+flagged results of 40 in about two full parallel `cargo test --lib` runs of three, on an untouched
+`main` as well, and passes alone; not investigated.
+
+**Streaming cloud clean (2026-10-21): one real run, two pages.** An Auto run with a stream
+grant sends each page's cleans to the cloud GPU as soon as the page is detected, under one consent
+with a cap (docs/detect-clean.md, Cloud clean while detecting). One headless run drove the real
+stream code (prepare, confirm with a cap, the detection thread, `run_stream`, the render path) on two
+copied pages of Nokaze vol. 1 ch. 5 (1136x1600), local CTD and the small RT-DETR, profile
+DETECT+QWEN KOM (k-omiq, Qwen-Image-Edit-2511 on an L40S at $1.95 an hour), cap $1.00. The
+proposal's fixed cost was $0.478 and its per-region high bound $0.032, so 13 regions were counted
+at about $0.89 and the cap did not stop the run. Detection of both pages was done at 7.8 s; the
+first result came back at 128 s (cold start); the 13 regions were all committed by 366 s, none
+failed, and the run released the render GPU. The renders came back about one every 26 to 40 s,
+which is the deployment's one pipeline, not the 16 places the run can hold, so on this profile the
+stream is bounded by the GPU, not by detection. Every Qwen result painted a halftone texture over
+the whole crop; cut back to the display set, the lettering shows as dotted ghost letters
+(`review.reason.checkGeneratedTexture` flags each one). That is the Qwen deployment's output, the
+same through a plan, and not a fault of the stream. Not measured: a run that reaches the cap, a
+cancel or a price change against the real gateway, and a Klein deployment. Modal billed $0.24 for
+the hour of the run, against the $0.89 the cap counted. What is left open:
+
+- The cap counts the estimate's high bound (each region's job with its retry, plus one cold start
+  and the 600 s idle window), not the provider's bill. The per-region rates are the unmeasured Klein
+  constants of the plan estimate, so the cap is as good as they are.
+- Each handed page checks authority again with two gateway reads (model and GPU). On a slow link
+  (Dhaka to us-east-1) that delay is per page and has not been timed.
+- The stream consent is asked before the detection consent. A user who declines detection has
+  already read a cost; the stream proposal is dropped and nothing is sent.
+- In mixed execution the local pass of the flat picks runs on the stream's own thread, so new pages
+  wait behind it. Not measured on a page with many local candidates.
+- A project with standing consent still shows the stream dialog for the cap; only the two
+  statements are hidden.
+- A deployment that states no GPU price cannot stream and falls back to detect, then plan. Whether
+  every saved profile's deployment states one has not been checked.
+
 **Longstrip zoom, warm pages and overhangs (2026-10-19): left open.** Three faults the user saw on a
 long strip. A zoom deep in a chapter built the mounted band from the new scale at the old scroll
 position for one pass (66 pages of 690x1600 at page 40, 0.5 to 0.55: pages 34 to 40 instead of 37

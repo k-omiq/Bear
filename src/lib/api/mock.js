@@ -258,6 +258,9 @@ export function createMockBackend(options = {}) {
   /** The cloud clean's consent: open proposals, and grants not yet spent. */
   const cleanProposals = new Map()
   const cleanGrants = new Map()
+  /** A stream's start-up and idle window, and one region, at an L4's list price. */
+  const MOCK_STREAM_FIXED_USD = 0.15
+  const MOCK_STREAM_REGION_USD = 0.002
   /** Page denoise's cloud consent: open proposals, and grants not yet spent. */
   const denoiseProposals = new Map()
   const denoiseGrants = new Map()
@@ -1303,6 +1306,7 @@ export function createMockBackend(options = {}) {
     detector = 'local',
     solidBubblesOnly = false,
     area = null,
+    cloudClean = null,
   }) => {
     // One run per chapter, and a cap on all of them, as `run.rs` answers: the
     // chapter's own run back, or no run at all when the cap is reached.
@@ -1381,6 +1385,33 @@ export function createMockBackend(options = {}) {
       }
       steps.clean = { ...steps.clean, ...solid }
       steps.auto = { ...steps.auto, ...solid }
+    }
+    // A streaming cloud clean (`cloud_clean.rs#run_stream`): each region is
+    // detected, then rendered on the cloud GPU while the estimate of what was
+    // sent stays within the cap. The region that would pass it, and every one
+    // after, stays detected, said once.
+    if (cloudClean) {
+      let spent = 0
+      let capped = false
+      steps.auto = {
+        ...steps.auto,
+        apply: (region, page, ctx) => {
+          if (!isDetection(region)) detectRegion(region, page, ctx, detector, maskPaddingPx)
+          const next = spent + (spent === 0 ? MOCK_STREAM_FIXED_USD : 0) + MOCK_STREAM_REGION_USD
+          if (!capped && next > cloudClean.capUsd) {
+            capped = true
+            notify('notice.cloudClean.capReached', { page: page.index + 1, cap: cloudClean.capUsd }, 'warn')
+          }
+          if (capped) return false
+          spent = next
+          commitCloudResult({ region, page }, cloudRecordFor(cloudAttemptId(`${cloudClean.grantId}:${region.id}`), cloudClean.target))
+          delete region.pick
+          delete region.detector
+          delete region.insideBubble
+          return true
+        },
+        pageStatus: settledStatus,
+      }
     }
     const handle = runner.start(queue, {
       ...(steps[mode] ?? steps.auto),
@@ -2954,12 +2985,16 @@ export function createMockBackend(options = {}) {
       ocrRescue,
       analysisTargets,
       cloudGrant,
+      cloudCleanGrant,
       mode = 'auto',
       area = null,
       solidBubblesOnly = false,
     }) {
       await delay(timing.method)
       if (!['auto', 'detect', 'clean'].includes(mode)) throw new Error('invalid_request: mode')
+      if (cloudCleanGrant && (mode !== 'auto' || area || !['page', 'chapter'].includes(scope))) {
+        throw new Error('cloud_clean_stream_unsupported')
+      }
       // The native side holds the Detect to the area and adds what it finds.
       // The mock has no detector to point anywhere, so it checks the request
       // as the native side does and detects the page.
@@ -3001,6 +3036,24 @@ export function createMockBackend(options = {}) {
           throw new Error('cloud_analysis_failed: gateway_unreachable')
         }
       }
+      // As `open_stream` in `cloud_clean.rs`: spent before the run starts,
+      // and only for the pages its consent named.
+      /** @type {any} */
+      let cloudClean = null
+      if (cloudCleanGrant) {
+        const grant = cleanGrants.get(cloudCleanGrant)
+        if (!grant) throw new Error('cloud_clean_grant_missing')
+        if (grant.chapterId !== chapterId) throw new Error('cloud_clean_grant_mismatch: chapter')
+        cleanGrants.delete(cloudCleanGrant)
+        if (Date.now() >= grant.expiresAtMs) throw new Error('cloud_clean_grant_expired')
+        if (!grant.stream) throw new Error('cloud_clean_grant_mismatch: stream')
+        if (!profileOf(grant.target.type, grant.target.profile_id)) throw new Error('cloud_clean_profile_not_active')
+        if (state.settings.cloudEngines !== 'allowed') throw new Error('cloud_disabled')
+        const pages = queueFor({ scope, chapterId, pageIndex, outsideBubbles, mode }).map((entry) => entry.page.index)
+        if (pages.some((index) => !grant.pageIndices.includes(index))) throw new Error('cloud_clean_grant_mismatch: pages')
+        cloudClean = { grantId: cloudCleanGrant, capUsd: grant.capUsd, target: grant.target }
+        solidBubblesOnly = false
+      }
       return startRun({
         scope,
         chapterId,
@@ -3020,6 +3073,7 @@ export function createMockBackend(options = {}) {
         detector: capabilities.length ? 'cloud' : 'local',
         area,
         solidBubblesOnly,
+        cloudClean,
       })
     },
 
@@ -4810,8 +4864,9 @@ export function createMockBackend(options = {}) {
       cleanProposals.delete(proposalId)
       if (!proposal) throw new Error('cloud_clean_proposal_missing')
       if (Date.now() >= proposal.expiresAtMs) throw new Error('cloud_clean_proposal_expired')
-      // As `confirm` in `cloud_clean.rs`: consent is for the plan it showed.
-      if (planDigest !== proposal.planDigest) throw new Error('cloud_clean_plan_mismatch')
+      // As `confirm` in `cloud_clean.rs`: consent is for the plan it showed,
+      // and a stream is not a plan.
+      if (proposal.stream || planDigest !== proposal.planDigest) throw new Error('cloud_clean_plan_mismatch')
       if (!profileOf(proposal.target.type, proposal.target.profile_id)) throw new Error('cloud_clean_profile_changed')
       const grant = { grantId: sha256Hex(`cloud-clean-grant:${proposalId}`).slice(0, 32), expiresAtMs: Date.now() + 120000 }
       cleanGrants.set(grant.grantId, { ...grant, chapterId: proposal.chapterId, regionIds: proposal.regionIds, regionPages: proposal.regionPages, target: proposal.target, execution: proposal.execution })
@@ -4843,6 +4898,7 @@ export function createMockBackend(options = {}) {
       cleanGrants.delete(grantId)
       if (!grant) throw new Error('cloud_clean_grant_missing')
       if (Date.now() >= grant.expiresAtMs) throw new Error('cloud_clean_grant_expired')
+      if (grant.stream) throw new Error('cloud_clean_grant_mismatch: stream')
       // As `start` in `cloud_clean.rs`: the grant's profile, selected now or not.
       if (!profileOf(grant.target.type, grant.target.profile_id)) throw new Error('cloud_clean_profile_not_active')
       const found = findChapter(grant.chapterId)
@@ -4905,6 +4961,82 @@ export function createMockBackend(options = {}) {
 
     async cancelCloudClean({ proposalId }) {
       return cleanProposals.delete(proposalId)
+    },
+
+    /**
+     * A streaming cloud clean (`cloud_clean.rs#prepare_stream`): the pages a
+     * Detect and clean run would clean on the cloud GPU as it detects each,
+     * the price, and what a cap must at least be. Nothing is cleaned, written
+     * or sent. `?cloudClean=unpriced` answers as a gateway with no price.
+     */
+    async prepareCloudCleanStream({ chapterId, scope, pageIndices = null, localFirst = false }) {
+      await delay(timing.method)
+      if (state.settings.cloudEngines !== 'allowed') throw new Error('cloud_disabled')
+      const target = state.inferenceConfig.selectedTarget
+      if (!target || target.type === 'local' || !profileOf(target.type, target.profile_id)) {
+        throw new Error('cloud_clean_profile_not_active')
+      }
+      if (runner.runFor(chapterId)) throw new Error('cloud_clean_run_active')
+      const found = findChapter(chapterId)
+      if (!found) throw new Error('chapter_not_found')
+      let indices
+      if (scope === 'chapter') indices = found.chapter.pages.map((page) => page.index)
+      else if (scope === 'page') {
+        if (!pageIndices?.length) throw new Error('cloud_clean_no_pages')
+        if (pageIndices.some((index) => !found.chapter.pages.some((page) => page.index === index))) {
+          throw new Error('cloud_clean_page_not_found')
+        }
+        indices = [...new Set(pageIndices)].sort((a, b) => a - b)
+      } else throw new Error('cloud_clean_scope_unsupported')
+      if (!indices.length) throw new Error('cloud_clean_no_pages')
+      if (cloudCleanScenario() === 'unpriced') throw new Error('cloud_clean_stream_unpriced')
+      if (cleanProposals.size >= 16) throw new Error('cloud_clean_proposal_limit')
+      const profile = profileOf(target.type, target.profile_id)
+      const execution = localFirst ? 'mixed' : 'cloud'
+      const issuedAtMs = Date.now()
+      const suggested = MOCK_STREAM_FIXED_USD + indices.length * 8 * MOCK_STREAM_REGION_USD
+      const proposal = {
+        proposalId: sha256Hex(`cloud-clean-stream:${chapterId}:${indices.join(',')}:${issuedAtMs}:${cleanProposals.size}`).slice(0, 32),
+        chapterId,
+        pages: indices.length,
+        pageIndices: indices,
+        execution,
+        gpu: profile?.gpu ?? 'L4',
+        gpuUsdPerHour: 0.8,
+        fixedCostUsd: MOCK_STREAM_FIXED_USD,
+        regionCostUsd: MOCK_STREAM_REGION_USD,
+        suggestedCapUsd: Math.min(100, Math.ceil(suggested * 10) / 10),
+        maxCapUsd: 100,
+        provider: target.type,
+        profileName: profile?.name ?? target.profile_id,
+        streamDigest: sha256Hex(`cloud-clean-stream:${chapterId}:${execution}:${indices.join(',')}`),
+        expiresAtMs: issuedAtMs + 300000,
+        standing: standingFor(chapterId, target.type, target.profile_id, profile?.canonicalOriginFingerprint ?? ''),
+      }
+      cleanProposals.set(proposal.proposalId, { ...proposal, stream: true, target: { ...target } })
+      return structuredClone(proposal)
+    },
+
+    async confirmCloudCleanStream({ proposalId, streamDigest, capUsd, rightsAttested, retentionAcknowledged }) {
+      if (state.settings.cloudEngines !== 'allowed') throw new Error('cloud_disabled')
+      const open = cleanProposals.get(proposalId)
+      const fingerprint = open ? profileOf(open.target.type, open.target.profile_id)?.canonicalOriginFingerprint ?? '' : ''
+      requireStatements(!!open && standingFor(open.chapterId, open.target.type, open.target.profile_id, fingerprint),
+        rightsAttested, retentionAcknowledged)
+      cleanProposals.delete(proposalId)
+      if (!open) throw new Error('cloud_clean_proposal_missing')
+      if (Date.now() >= open.expiresAtMs) throw new Error('cloud_clean_proposal_expired')
+      if (!open.stream || streamDigest !== open.streamDigest) throw new Error('cloud_clean_plan_mismatch')
+      if (!Number.isFinite(capUsd) || capUsd < open.fixedCostUsd || capUsd > open.maxCapUsd) {
+        throw new Error('cloud_clean_cap_invalid')
+      }
+      if (!profileOf(open.target.type, open.target.profile_id)) throw new Error('cloud_clean_profile_changed')
+      const grant = { grantId: sha256Hex(`cloud-clean-stream-grant:${proposalId}`).slice(0, 32), expiresAtMs: Date.now() + 120000 }
+      cleanGrants.set(grant.grantId, { ...grant, stream: true, chapterId: open.chapterId, pageIndices: open.pageIndices,
+        capUsd, target: open.target, execution: open.execution })
+      recordStanding(open.chapterId, open.target.type, open.target.profile_id, fingerprint,
+        rightsAttested === true && retentionAcknowledged === true)
+      return structuredClone(grant)
     },
 
     /* ---------- page denoise ---------- */

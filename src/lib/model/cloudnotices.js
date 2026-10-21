@@ -113,6 +113,7 @@ const SKIPPED = Object.freeze({
   changed: 'notice.cloudClean.regionSkippedChanged',
   gone: 'notice.cloudClean.regionSkippedGone',
   unresolved: 'notice.cloudClean.regionSkippedUnresolved',
+  tooLarge: 'notice.cloudClean.regionSkippedTooLarge',
 })
 
 /**

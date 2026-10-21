@@ -112,9 +112,9 @@ use crate::events::{self, Event};
 use crate::inference::analysis;
 use crate::inference::commands::{app_inference_service, build_client_for_profile, BuildClientError};
 use crate::inference::consent::{
-    chunk_count, chunk_range, compute_clean_plan_digest, compute_operation_digest, issue_chunk_grant,
-    load_cloud_region, verify_chunk_grant, ChunkGrant, CleanPlanTerms, CloudRegionKind, ConsentError,
-    OperationIntent, PlanEstimateTerms, PlanRegionTerms,
+    chunk_count, chunk_range, compute_clean_plan_digest, compute_clean_stream_digest, compute_operation_digest,
+    issue_chunk_grant, load_cloud_region, verify_chunk_grant, ChunkGrant, CleanPlanTerms, CleanStreamTerms,
+    CloudRegionKind, ConsentError, OperationIntent, PlanEstimateTerms, PlanRegionTerms,
 };
 use crate::inference::gpu::{self, GpuRole, GpuStatusWire};
 use crate::inference::http::CloudHttpClient;
@@ -403,17 +403,28 @@ impl Estimate {
     fn of(regions: &[GrantedRegion], rate: RenderRate) -> Self {
         let empty = Self { cold_start_seconds: rate.cold_start_seconds, ..Self::default() };
         regions.iter().fold(empty, |mut total, region| {
-            let crop = region.crop;
-            let (w, h) = rate.working_size(crop.w, crop.h);
-            let work = u64::from(w) * u64::from(h);
-            total.crop_pixels += u64::from(crop.w) * u64::from(crop.h);
-            total.work_pixels += work;
-            let render_seconds = work as f64 / 1e6 * rate.seconds_per_work_megapixel;
-            total.gpu_seconds += JOB_OVERHEAD_SECONDS + render_seconds;
-            // Qwen can try two more seeds. High includes all three renders.
-            if rate.qwen { total.retry_gpu_seconds += 2.0 * render_seconds; }
+            let job = Self::job(region.crop, rate);
+            total.crop_pixels += job.crop_pixels;
+            total.work_pixels += job.work_pixels;
+            total.gpu_seconds += job.gpu_seconds;
+            total.retry_gpu_seconds += job.retry_gpu_seconds;
             total
         })
+    }
+
+    /// One job's share, without the cold start the plan pays once.
+    fn job(crop: Rect, rate: RenderRate) -> Self {
+        let (w, h) = rate.working_size(crop.w, crop.h);
+        let work = u64::from(w) * u64::from(h);
+        let render_seconds = work as f64 / 1e6 * rate.seconds_per_work_megapixel;
+        Self {
+            crop_pixels: u64::from(crop.w) * u64::from(crop.h),
+            work_pixels: work,
+            gpu_seconds: JOB_OVERHEAD_SECONDS + render_seconds,
+            // Qwen can try two more seeds. High includes all three renders.
+            retry_gpu_seconds: if rate.qwen { 2.0 * render_seconds } else { 0.0 },
+            cold_start_seconds: 0.0,
+        }
     }
 
     fn seconds(&self) -> CostRange {
@@ -500,11 +511,34 @@ pub(crate) struct CleanGrantRequest<'a> {
 struct StoredProposal {
     expires_at_ms: u64,
     scope: CleanGrantScope,
+    /// A streaming proposal's own terms ([`prepare_stream`]); `None` for a plan.
+    stream: Option<StreamOffer>,
 }
 
 struct StoredGrant {
     scope: CleanGrantScope,
+    /// A streaming grant's pages and cap; `None` for a plan's.
+    stream: Option<StreamTerms>,
     expires_at_ms: u64,
+}
+
+/// What a streaming proposal holds beside its scope, until the cap is answered.
+struct StreamOffer {
+    pages: BTreeSet<u32>,
+    picks: Option<run::Repick>,
+    /// The least a cap may be: the start-up and idle window paid once.
+    fixed_usd: f64,
+}
+
+/// What a streaming grant lets its run send beyond the destination: each
+/// detection of these pages, as the run detects the page, while the estimate
+/// of what it has sent stays within `cap_usd`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct StreamTerms {
+    pub pages: BTreeSet<u32>,
+    pub cap_usd: f64,
+    /// Text cleanup's picks, saved onto each page's detections before they are bound.
+    pub picks: Option<run::Repick>,
 }
 
 fn proposals() -> &'static Mutex<HashMap<String, StoredProposal>> {
@@ -628,17 +662,7 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
         (None, Bound::default())
     } else {
         open(&mut *proposals.lock().map_err(|e| e.to_string())?)?;
-        let mut recipe = gateway.recipe()?;
-        // A guided recipe always carries guidance, Auto with no description when
-        // the clean asked none; an older Qwen deployment cannot take it at all.
-        if recipe.takes_guidance() {
-            recipe.qwen_edit = Some(request.qwen_edit.clone().unwrap_or(cleaner_core::engines::render::QwenEdit {
-                target: cleaner_core::engines::render::QwenTarget::Auto, description: String::new(),
-            }));
-        } else if recipe.model_id.starts_with(QWEN_MODEL_PREFIX) {
-            return Err("qwen_update_required".into());
-        } else if request.qwen_edit.is_some() { return Err("cloud_clean_recipe_changed".into()); }
-        cleaner_core::cloud_wire::validate_recipe(&recipe.clone().into()).map_err(|_| "invalid_request".to_string())?;
+        let recipe = deployed_recipe(gateway, request.qwen_edit.as_ref())?;
         let bound = bind(job_path, &ids, recipe_preprocessing(&recipe)?)?;
         (Some(recipe), bound)
     };
@@ -706,8 +730,25 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
     proposal.proposal_id = Some(proposal_id.clone());
     proposal.expires_at_ms = analysis::now_ms().saturating_add(
         crate::inference::consent::DEFAULT_PROPOSAL_TTL.as_millis() as u64);
-    cache.insert(proposal_id, StoredProposal { expires_at_ms: proposal.expires_at_ms, scope });
+    cache.insert(proposal_id, StoredProposal { expires_at_ms: proposal.expires_at_ms, scope, stream: None });
     Ok(proposal)
+}
+
+/// The recipe the deployment serves now, with the guidance this clean asks
+/// for. A guided recipe always carries guidance, Auto with no description
+/// when the clean asked none; an older Qwen deployment cannot take it at all.
+fn deployed_recipe<G: CleanGateway + ?Sized>(gateway: &G, qwen_edit: Option<&cleaner_core::engines::render::QwenEdit>)
+    -> Result<RenderRecipe, String> {
+    let mut recipe = gateway.recipe()?;
+    if recipe.takes_guidance() {
+        recipe.qwen_edit = Some(qwen_edit.cloned().unwrap_or(cleaner_core::engines::render::QwenEdit {
+            target: cleaner_core::engines::render::QwenTarget::Auto, description: String::new(),
+        }));
+    } else if recipe.model_id.starts_with(QWEN_MODEL_PREFIX) {
+        return Err("qwen_update_required".into());
+    } else if qwen_edit.is_some() { return Err("cloud_clean_recipe_changed".into()); }
+    cleaner_core::cloud_wire::validate_recipe(&recipe.clone().into()).map_err(|_| "invalid_request".to_string())?;
+    Ok(recipe)
 }
 
 /// The preprocessing a recipe names, which sizes every crop a plan under it
@@ -848,15 +889,20 @@ fn working_size(w: u32, h: u32) -> (u32, u32) {
 
 /// The cost range of `gpu_seconds` of rendering at `gpu_usd_per_hour`.
 fn cost(gpu_seconds: f64, gpu_usd_per_hour: f64, recipe: &RenderRecipe, provider: CloudProvider) -> CostRange {
-    // The worker's memory follows the model and the provider (`memory=` on
-    // the render class).
     let rate = RenderRate::of(recipe);
-    let per_second = gpu_usd_per_hour / 3600.0 + CPU_CORES * CPU_USD_PER_CORE_SECOND
-        + rate.memory_gib(provider) * MEMORY_USD_PER_GIB_SECOND;
+    let per_second = usd_per_second(gpu_usd_per_hour, recipe, provider);
     CostRange {
         low: gpu_seconds * per_second,
         high: (gpu_seconds + rate.cold_start_seconds + IDLE_WINDOW_SECONDS) * per_second,
     }
+}
+
+/// What one second of the render worker costs at `gpu_usd_per_hour`: the GPU,
+/// its CPU, and its memory, which follows the model and the provider
+/// (`memory=` on the render class).
+fn usd_per_second(gpu_usd_per_hour: f64, recipe: &RenderRecipe, provider: CloudProvider) -> f64 {
+    gpu_usd_per_hour / 3600.0 + CPU_CORES * CPU_USD_PER_CORE_SECOND
+        + RenderRate::of(recipe).memory_gib(provider) * MEMORY_USD_PER_GIB_SECOND
 }
 
 /// Turn a proposal the user confirmed into a clean grant. `plan_digest` is
@@ -866,13 +912,39 @@ fn cost(gpu_seconds: f64, gpu_usd_per_hour: f64, recipe: &RenderRecipe, provider
 /// other answer, a mismatched plan included, spends it.
 pub(crate) fn confirm(proposal_id: &str, plan_digest: &str, rights_attested: bool, retention_acknowledged: bool)
     -> Result<CloudCleanGrant, String> {
+    confirm_with(proposal_id, plan_digest, None, rights_attested, retention_acknowledged)
+}
+
+/// [`confirm`] for a streaming proposal: `stream_digest` is the one the
+/// consent dialog showed, `cap_usd` the spending cap the person set there. A
+/// cap below the proposal's fixed cost, or above [`MAX_STREAM_CAP_USD`], is
+/// refused and spends the proposal like any other wrong answer.
+pub(crate) fn confirm_stream(proposal_id: &str, stream_digest: &str, cap_usd: f64, rights_attested: bool,
+    retention_acknowledged: bool) -> Result<CloudCleanGrant, String> {
+    confirm_with(proposal_id, stream_digest, Some(cap_usd), rights_attested, retention_acknowledged)
+}
+
+/// A plan is confirmed without a cap and a stream only with one: a stream
+/// proposal presented as a plan, or a plan as a stream, is a mismatch.
+fn confirm_with(proposal_id: &str, digest: &str, cap_usd: Option<f64>, rights_attested: bool,
+    retention_acknowledged: bool) -> Result<CloudCleanGrant, String> {
     analysis::require_consent(rights_attested, retention_acknowledged).map_err(|e| e.to_string())?;
     let stored = proposals().lock().map_err(|e| e.to_string())?
         .remove(proposal_id).ok_or("cloud_clean_proposal_missing")?;
     let now = analysis::now_ms();
     if now >= stored.expires_at_ms { return Err("cloud_clean_proposal_expired".into()); }
     let scope = stored.scope;
-    if plan_digest != scope.plan_digest { return Err("cloud_clean_plan_mismatch".into()); }
+    if digest != scope.plan_digest { return Err("cloud_clean_plan_mismatch".into()); }
+    let stream = match (stored.stream, cap_usd) {
+        (None, None) => None,
+        (Some(offer), Some(cap_usd)) => {
+            if !cap_usd.is_finite() || cap_usd < offer.fixed_usd || cap_usd > MAX_STREAM_CAP_USD {
+                return Err("cloud_clean_cap_invalid".into());
+            }
+            Some(StreamTerms { pages: offer.pages, cap_usd, picks: offer.picks })
+        }
+        _ => return Err("cloud_clean_plan_mismatch".into()),
+    };
     if GrantService::global().get_profile_epoch(scope.provider, &scope.profile_id) != scope.profile_epoch {
         return Err("cloud_clean_profile_changed".into());
     }
@@ -883,7 +955,7 @@ pub(crate) fn confirm(proposal_id: &str, plan_digest: &str, rights_attested: boo
     let mut store = grants().lock().map_err(|e| e.to_string())?;
     store.retain(|_, entry| entry.expires_at_ms > now);
     if !grant_has_capacity(&store) { return Err("cloud_clean_grant_limit".into()); }
-    store.insert(grant.grant_id.clone(), StoredGrant { scope, expires_at_ms: grant.expires_at_ms });
+    store.insert(grant.grant_id.clone(), StoredGrant { scope, stream, expires_at_ms: grant.expires_at_ms });
     Ok(grant)
 }
 
@@ -911,13 +983,30 @@ pub(crate) fn proposal_destination(proposal_id: &str) -> Option<(String, CloudPr
 /// answer that ticked both is recorded to stand.
 pub(crate) fn confirm_in_project(library: Option<&Library>, proposal_id: &str, plan_digest: &str,
     rights_attested: bool, retention_acknowledged: bool) -> Result<CloudCleanGrant, String> {
+    confirm_with_standing(library, proposal_id, None, plan_digest, rights_attested, retention_acknowledged)
+}
+
+/// [`confirm_stream`] for a proposal in `library`'s projects, as
+/// [`confirm_in_project`]. The cap is asked every time: a standing consent
+/// covers the statements, not what a run may spend.
+pub(crate) fn confirm_stream_in_project(library: Option<&Library>, proposal_id: &str, stream_digest: &str,
+    cap_usd: f64, rights_attested: bool, retention_acknowledged: bool) -> Result<CloudCleanGrant, String> {
+    confirm_with_standing(library, proposal_id, Some(cap_usd), stream_digest, rights_attested, retention_acknowledged)
+}
+
+fn confirm_with_standing(library: Option<&Library>, proposal_id: &str, cap_usd: Option<f64>, digest: &str,
+    rights_attested: bool, retention_acknowledged: bool) -> Result<CloudCleanGrant, String> {
     let destination = proposal_destination(proposal_id);
     let standing = match (&destination, library) {
         (Some((chapter_id, provider, profile_id, endpoint)), Some(library)) =>
             library.cloud_consent_covers(chapter_id, *provider, profile_id, endpoint),
         _ => false,
     };
-    let grant = confirm(proposal_id, plan_digest, rights_attested || standing, retention_acknowledged || standing)?;
+    let (rights, retention) = (rights_attested || standing, retention_acknowledged || standing);
+    let grant = match cap_usd {
+        None => confirm(proposal_id, digest, rights, retention)?,
+        Some(cap_usd) => confirm_stream(proposal_id, digest, cap_usd, rights, retention)?,
+    };
     // The first consent in a project stands for the rest of it.
     if let (Some((chapter_id, provider, profile_id, endpoint)), Some(library)) = (destination, library) {
         library.record_cloud_consent(&chapter_id, provider, &profile_id, &endpoint,
@@ -934,10 +1023,27 @@ pub(crate) fn discard(proposal_id: &str) -> Result<bool, String> {
 /// Spend a clean grant. It is gone after the first presentation, matched or
 /// not, so a refused grant cannot be tried again with other arguments.
 pub(crate) fn consume_grant(grant_id: &str, request: &CleanGrantRequest<'_>) -> Result<CleanGrantScope, String> {
+    match consume(grant_id, request)? {
+        (scope, None) => Ok(scope),
+        (_, Some(_)) => Err("cloud_clean_grant_mismatch: stream".into()),
+    }
+}
+
+/// [`consume_grant`] for a streaming grant: its scope, which binds no region,
+/// and its pages and cap.
+pub(crate) fn consume_stream_grant(grant_id: &str, request: &CleanGrantRequest<'_>)
+    -> Result<(CleanGrantScope, StreamTerms), String> {
+    match consume(grant_id, request)? {
+        (scope, Some(stream)) => Ok((scope, stream)),
+        (_, None) => Err("cloud_clean_grant_mismatch: stream".into()),
+    }
+}
+
+fn consume(grant_id: &str, request: &CleanGrantRequest<'_>) -> Result<(CleanGrantScope, Option<StreamTerms>), String> {
     let stored = grants().lock().map_err(|e| e.to_string())?
         .remove(grant_id).ok_or("cloud_clean_grant_missing")?;
     if analysis::now_ms() >= stored.expires_at_ms { return Err("cloud_clean_grant_expired".into()); }
-    let scope = stored.scope;
+    let (scope, stream) = (stored.scope, stored.stream);
     if scope.provider != request.provider || scope.profile_id != request.profile_id {
         return Err("cloud_clean_grant_mismatch: profile".into());
     }
@@ -948,7 +1054,203 @@ pub(crate) fn consume_grant(grant_id: &str, request: &CleanGrantRequest<'_>) -> 
         return Err("cloud_clean_grant_mismatch: recipe".into());
     }
     if scope.profile_epoch != request.profile_epoch { return Err("cloud_clean_profile_changed".into()); }
-    Ok(scope)
+    Ok((scope, stream))
+}
+
+/* ------------------------------------------------------------------ */
+/* Streaming: each page as it is detected, up to a cap                 */
+/* ------------------------------------------------------------------ */
+
+/// The most a streaming consent may let one run spend, by the app's estimate.
+pub const MAX_STREAM_CAP_USD: f64 = 100.0;
+/// Regions a page is assumed to hold when the cap is first suggested.
+const SUGGESTED_REGIONS_PER_PAGE: f64 = 8.0;
+
+/// What a streaming cloud clean would send: every detection of these pages,
+/// each page as soon as Detect and clean has detected it, while the app's
+/// estimate of what it has sent stays within a cap the person sets. Nothing is
+/// known of the regions yet, so the consent is given for the pages, the
+/// destination, the price, and the cap, never for a list of regions.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudCleanStreamProposal {
+    pub proposal_id: String,
+    pub chapter_id: String,
+    pub pages: u32,
+    pub page_indices: Vec<u32>,
+    pub execution: CleanExecution,
+    pub gpu: String,
+    pub gpu_usd_per_hour: f64,
+    /// The cold start and the idle window, counted once at the first region
+    /// sent, as a plan's high bound counts them. The least a cap may be.
+    pub fixed_cost_usd: f64,
+    /// One region at the size the worker edits a typical crop at, retries included.
+    pub region_cost_usd: f64,
+    /// The fixed cost and [`SUGGESTED_REGIONS_PER_PAGE`] such regions a page,
+    /// rounded up to ten cents and held to [`MAX_STREAM_CAP_USD`].
+    pub suggested_cap_usd: f64,
+    pub max_cap_usd: f64,
+    pub provider: CloudProvider,
+    pub profile_name: String,
+    /// The digest the consent is given for ([`compute_clean_stream_digest`]).
+    pub stream_digest: String,
+    pub expires_at_ms: u64,
+    /// The project's standing consent covers the statements; the cap is still asked.
+    pub standing: bool,
+}
+
+/// What the caller asked to stream.
+pub(crate) struct StreamRequest {
+    pub chapter_id: String,
+    /// `page` or `chapter`.
+    pub scope: String,
+    pub page_indices: Option<Vec<u32>>,
+    pub local_first: bool,
+    pub picks: Option<run::Repick>,
+    pub qwen_edit: Option<cleaner_core::engines::render::QwenEdit>,
+}
+
+/// State what a streaming cloud clean would send. Nothing is cleaned, written
+/// or sent. A gateway that states no GPU price is refused
+/// (`cloud_clean_stream_unpriced`): a cap is counted in dollars, and the
+/// interface then cleans after detection on a plan of its own instead.
+pub(crate) fn prepare_stream<G: CleanGateway + ?Sized>(
+    job_path: &Path,
+    request: StreamRequest,
+    destination: Destination,
+    gateway: &G,
+) -> Result<CloudCleanStreamProposal, String> {
+    prepare_stream_with_cache(job_path, request, destination, gateway, proposals())
+}
+
+fn prepare_stream_with_cache<G: CleanGateway + ?Sized>(
+    job_path: &Path,
+    request: StreamRequest,
+    destination: Destination,
+    gateway: &G,
+    proposals: &Mutex<HashMap<String, StoredProposal>>,
+) -> Result<CloudCleanStreamProposal, String> {
+    let pages: BTreeSet<u32> = {
+        let job = Job::open(job_path).map_err(|e| e.to_string())?;
+        let count = job.project.strip.order.len() as u32;
+        match request.scope.as_str() {
+            "page" => {
+                let pages = request.page_indices.as_deref().filter(|pages| !pages.is_empty())
+                    .ok_or("cloud_clean_no_pages")?;
+                if pages.iter().any(|&page| page >= count) { return Err("cloud_clean_page_not_found".into()); }
+                pages.iter().copied().collect()
+            }
+            "chapter" => (0..count).collect(),
+            _ => return Err("cloud_clean_scope_unsupported".into()),
+        }
+    };
+    if pages.is_empty() { return Err("cloud_clean_no_pages".into()); }
+    let open = |cache: &mut HashMap<String, StoredProposal>| {
+        cache.retain(|_, stored| stored.expires_at_ms > analysis::now_ms());
+        if cache.len() >= MAX_OPEN_PROPOSALS { Err("cloud_clean_proposal_limit".to_string()) } else { Ok(()) }
+    };
+    open(&mut *proposals.lock().map_err(|e| e.to_string())?)?;
+    let recipe = deployed_recipe(gateway, request.qwen_edit.as_ref())?;
+    recipe_preprocessing(&recipe)?;
+    let (gpu, per_hour) = gateway.gpu_price().ok_or("cloud_clean_stream_unpriced")?;
+    let execution = if request.local_first { CleanExecution::Mixed } else { CleanExecution::Cloud };
+    let page_indices: Vec<u32> = pages.iter().copied().collect();
+    let budget = Budget::new(&recipe, destination.provider, per_hour, 0.0);
+    let region_cost_usd = budget.job_usd(Rect::new(0, 0, WORK_LONG_SIDE, WORK_LONG_SIDE));
+    let suggested = budget.fixed_usd + page_indices.len() as f64 * SUGGESTED_REGIONS_PER_PAGE * region_cost_usd;
+    let suggested_cap_usd = ((suggested * 10.0).ceil() / 10.0).min(MAX_STREAM_CAP_USD).max(budget.fixed_usd);
+    let mut cache = proposals.lock().map_err(|e| e.to_string())?;
+    open(&mut cache)?;
+    let proposal_id = analysis::random_id()?;
+    let mut scope = CleanGrantScope {
+        chapter_id: request.chapter_id,
+        regions: Vec::new(),
+        provider: destination.provider,
+        profile_epoch: GrantService::global().get_profile_epoch(destination.provider, &destination.profile_id),
+        profile_id: destination.profile_id,
+        endpoint_fingerprint: destination.endpoint_fingerprint,
+        recipe,
+        execution,
+        chunk_regions: CHUNK_REGIONS,
+        estimate: Estimate::default(),
+        price: Some((gpu.clone(), per_hour)),
+        cost: None,
+        plan_digest: String::new(),
+    };
+    scope.plan_digest = compute_clean_stream_digest(&CleanStreamTerms {
+        chapter_id: &scope.chapter_id,
+        provider: scope.provider,
+        profile_id: &scope.profile_id,
+        endpoint_fingerprint: &scope.endpoint_fingerprint,
+        recipe: &scope.recipe,
+        execution: execution.key(),
+        page_indices: &page_indices,
+        gpu: &gpu,
+        gpu_micro_usd_per_hour: (per_hour * 1e6).round() as u64,
+    }).map_err(|e| e.to_string())?;
+    let proposal = CloudCleanStreamProposal {
+        proposal_id: proposal_id.clone(),
+        chapter_id: scope.chapter_id.clone(),
+        pages: page_indices.len() as u32,
+        page_indices,
+        execution,
+        gpu,
+        gpu_usd_per_hour: per_hour,
+        fixed_cost_usd: budget.fixed_usd,
+        region_cost_usd,
+        suggested_cap_usd,
+        max_cap_usd: MAX_STREAM_CAP_USD,
+        provider: destination.provider,
+        profile_name: destination.profile_name,
+        stream_digest: scope.plan_digest.clone(),
+        expires_at_ms: analysis::now_ms().saturating_add(
+            crate::inference::consent::DEFAULT_PROPOSAL_TTL.as_millis() as u64),
+        standing: false,
+    };
+    cache.insert(proposal_id, StoredProposal {
+        expires_at_ms: proposal.expires_at_ms,
+        scope,
+        stream: Some(StreamOffer { pages, picks: request.picks, fixed_usd: budget.fixed_usd }),
+    });
+    Ok(proposal)
+}
+
+/// The app's running estimate of what a stream has sent, in dollars, against
+/// its cap. Each region is counted at its high bound as it is queued (its job,
+/// and for Qwen both retries), and the first one also carries the fixed cost.
+/// The provider bills what the GPU actually ran, which this only estimates.
+#[derive(Debug, Clone, Copy)]
+struct Budget {
+    rate: RenderRate,
+    per_second: f64,
+    fixed_usd: f64,
+    cap_usd: f64,
+    spent_usd: f64,
+}
+
+impl Budget {
+    fn new(recipe: &RenderRecipe, provider: CloudProvider, gpu_usd_per_hour: f64, cap_usd: f64) -> Self {
+        let rate = RenderRate::of(recipe);
+        let per_second = usd_per_second(gpu_usd_per_hour, recipe, provider);
+        Self { rate, per_second, fixed_usd: (rate.cold_start_seconds + IDLE_WINDOW_SECONDS) * per_second,
+            cap_usd, spent_usd: 0.0 }
+    }
+
+    /// One job's high bound.
+    fn job_usd(&self, crop: Rect) -> f64 {
+        let job = Estimate::job(crop, self.rate);
+        (job.gpu_seconds + job.retry_gpu_seconds) * self.per_second
+    }
+
+    /// Count `crop`'s job, or answer `false` and count nothing when it would
+    /// take the estimate past the cap.
+    fn take(&mut self, crop: Rect) -> bool {
+        let fixed = if self.spent_usd == 0.0 { self.fixed_usd } else { 0.0 };
+        let next = self.spent_usd + fixed + self.job_usd(crop);
+        if next > self.cap_usd { return false; }
+        self.spent_usd = next;
+        true
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1062,6 +1364,9 @@ enum Slot {
 }
 
 struct Schedule {
+    /// What each slot renders: a plan's regions, or a stream's as its pages
+    /// come in.
+    regions: Vec<GrantedRegion>,
     slots: Vec<Slot>,
     /// Preparations or uploads not yet accepted by the gateway.
     preparing: usize,
@@ -1069,6 +1374,10 @@ struct Schedule {
     stop: bool,
     /// The attempt each region in flight renders under.
     attempts: HashMap<usize, String>,
+    /// More regions may still be queued: a worker with nothing ready waits
+    /// rather than ends. A plan's chunk is never open; a stream is until its
+    /// detection has handed on every page.
+    open: bool,
 }
 
 struct Shared {
@@ -1081,6 +1390,12 @@ impl Shared {
     /// panicked has already given up its region.
     fn lock(&self) -> MutexGuard<'_, Schedule> {
         self.schedule.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// No region will be queued after these: workers end once they are done.
+    fn close(&self) {
+        self.lock().open = false;
+        self.changed.notify_all();
     }
 
     /// Start nothing more, and cancel what is in flight.
@@ -1174,14 +1489,44 @@ struct Progress<'a> {
 
 impl<'a> Progress<'a> {
     fn new(scope: &'a CleanGrantScope, job_path: &'a Path, run_id: &'a str, emit: &'a dyn Fn(Event)) -> Self {
-        let mut remaining = BTreeMap::new();
+        let mut progress = Self::streaming(scope, job_path, run_id, emit);
         for page in scope.regions.iter().map(|region| region.page_index) {
-            *remaining.entry(page).or_default() += 1;
+            *progress.remaining.entry(page).or_default() += 1;
         }
+        progress
+    }
+
+    /// A stream's account, which learns its pages as they are handed on.
+    fn streaming(scope: &'a CleanGrantScope, job_path: &'a Path, run_id: &'a str, emit: &'a dyn Fn(Event)) -> Self {
         Self {
-            run_id, chapter_id: &scope.chapter_id, job_path, emit, remaining,
+            run_id, chapter_id: &scope.chapter_id, job_path, emit, remaining: BTreeMap::new(),
             started: BTreeSet::new(), cleaned_pages: BTreeSet::new(), failed_pages: BTreeSet::new(),
             unfinished: BTreeSet::new(), regions_cleaned: 0, sent: false, stopped: false, authority_lost: false,
+        }
+    }
+
+    /// A page detection handed on. One the run detected was announced by its
+    /// detection, so it is not announced again.
+    fn handed(&mut self, page: u32, detected: bool) {
+        if detected { self.started.insert(page); }
+    }
+
+    /// `regions` of `page` are queued: the page is done once they settle, or
+    /// now when there are none.
+    fn expect(&mut self, page: u32, regions: usize) {
+        self.start(page);
+        if regions == 0 {
+            (self.emit)(run::page_done_after_clean(self.run_id, self.chapter_id, self.job_path, page));
+        } else {
+            *self.remaining.entry(page).or_default() += regions;
+        }
+    }
+
+    /// A page the run's cancel left untouched: where a resume picks up.
+    fn left(&mut self, page: u32) {
+        self.unfinished.insert(page);
+        if self.started.contains(&page) {
+            (self.emit)(run::page_done_after_clean(self.run_id, self.chapter_id, self.job_path, page));
         }
     }
 
@@ -1323,6 +1668,226 @@ pub(crate) fn run_plan(
     progress.finish(cancelled)
 }
 
+/// Clean each page a Detect and clean run hands on, as it is handed on, under
+/// a streaming grant (`docs/detect-clean.md` §3). `pages` closes when
+/// detection has handed on its last page; `page_of` reads each item's page
+/// and whether the run detected it. The caller's thread emits every event;
+/// the renders run on [`MAX_IN_FLIGHT`] workers of their own, which take
+/// regions from every page queued so far, as a plan's chunk does.
+///
+/// Before each page the run checks its authority and the deployment again
+/// ([`Batch::revalidate`]), as a plan does before each chunk. It then reads
+/// the page's detections, binds them as [`prepare`] would (leaving out any
+/// with an unresolved earlier request and any too large to send, each with a
+/// notice), and under mixed execution tries the page's fill and solid picks
+/// here first. Each region left is counted against the cap at its high
+/// bound ([`Budget`]) as it is queued. The first one that would pass the cap
+/// is not queued, and neither is anything after it: those regions stay
+/// detected, with one notice.
+///
+/// Every region queued goes through [`attempt`] like a plan's: read again,
+/// matched against the revision bound here, its own grant, the one render
+/// path. A failure that withdraws the run's authority cancels what is in
+/// flight, as in a plan; a page refused by the check before it stops only
+/// what would come after, as a refused chunk does. Detection keeps going
+/// after a stop or the cap; its pages are finished as they come, detected.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_stream<T>(
+    batch: &Batch<'_>,
+    renderer: &dyn RegionRenderer,
+    terms: &StreamTerms,
+    run_id: &str,
+    pages: &mpsc::Receiver<T>,
+    page_of: &dyn Fn(&T) -> (u32, bool),
+    cancel: &AtomicBool,
+    emit: &dyn Fn(Event),
+) -> Summary {
+    let scope = batch.scope;
+    let mut progress = Progress::streaming(scope, batch.job_path, run_id, emit);
+    let per_hour = scope.price.as_ref().map_or(f64::INFINITY, |(_, per_hour)| *per_hour);
+    let mut budget = Budget::new(&scope.recipe, scope.provider, per_hour, terms.cap_usd);
+    let mut capped = false;
+    let shared = Shared {
+        schedule: Mutex::new(Schedule { regions: Vec::new(), slots: Vec::new(), preparing: 0, stop: false,
+            attempts: HashMap::new(), open: true }),
+        changed: Condvar::new(),
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|threads| {
+        for _ in 0..MAX_IN_FLIGHT {
+            let tx = tx.clone();
+            let shared = &shared;
+            threads.spawn(move || work(batch, renderer, shared, cancel, &tx));
+        }
+        drop(tx);
+        let (mut closed, mut workers_done, mut halting) = (false, false, false);
+        loop {
+            // Every page handed on so far. With no worker left there is
+            // nothing else to wait on, so the wait is on the next page.
+            loop {
+                let next = if workers_done {
+                    match pages.recv_timeout(TICK) {
+                        Ok(item) => Some(item),
+                        Err(mpsc::RecvTimeoutError::Timeout) => break,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => None,
+                    }
+                } else {
+                    match pages.try_recv() {
+                        Ok(item) => Some(item),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => None,
+                    }
+                };
+                let Some(item) = next else {
+                    closed = true;
+                    shared.close();
+                    break;
+                };
+                let (page, detected) = page_of(&item);
+                drop(item);
+                progress.handed(page, detected);
+                if cancel.load(Ordering::SeqCst) {
+                    progress.left(page);
+                } else if halting || capped || progress.stopped || !terms.pages.contains(&page) {
+                    progress.expect(page, 0);
+                } else if let Err(code) = admit(batch, renderer, terms, page, &shared, &mut progress,
+                    &mut budget, &mut capped, cancel) {
+                    // As a plan stops before its next chunk: what is queued
+                    // goes on, each region still asking its own authority.
+                    progress.stop(page, &code);
+                    progress.expect(page, 0);
+                }
+            }
+            halting |= cancel.load(Ordering::SeqCst);
+            if halting {
+                shared.halt(renderer);
+            }
+            if workers_done && closed { break; }
+            match rx.recv_timeout(TICK) {
+                Ok(Message::Started(_)) => {}
+                Ok(Message::Finished { index, outcome, reached, stops }) => {
+                    progress.sent |= reached;
+                    let region = shared.lock().regions[index].clone();
+                    match outcome {
+                        Outcome::Cleaned(api) => progress.cleaned(region.page_index, Some(api)),
+                        Outcome::Skipped(reason) => progress.skipped(&region.id, region.page_index, reason),
+                        Outcome::Failed(code) if stops => {
+                            progress.stop(region.page_index, &code);
+                            halting = true;
+                        }
+                        Outcome::Failed(code) => progress.failed(&region, &code),
+                        Outcome::Left => {
+                            progress.unfinished.insert(region.page_index);
+                        }
+                    }
+                    progress.settle(region.page_index);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => workers_done = true,
+            }
+        }
+    });
+    let cancelled = cancel.load(Ordering::SeqCst);
+    if progress.sent && !progress.authority_lost && !batch.lost_authority() {
+        renderer.release_idle();
+    }
+    progress.finish(cancelled)
+}
+
+/// Queue one handed page's detections ([`run_stream`]). `Err` is the stop
+/// code of a run whose authority or deployment moved.
+#[allow(clippy::too_many_arguments)]
+fn admit(
+    batch: &Batch<'_>,
+    renderer: &dyn RegionRenderer,
+    terms: &StreamTerms,
+    page: u32,
+    shared: &Shared,
+    progress: &mut Progress<'_>,
+    budget: &mut Budget,
+    capped: &mut bool,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let scope = batch.scope;
+    batch.revalidate(renderer)?;
+    let preprocessing = recipe_preprocessing(&scope.recipe)?;
+    let bound = page_detections(batch.job_path, &scope.chapter_id, page).and_then(|ids| {
+        if let Some(repick) = terms.picks {
+            run::repick_detections(batch.job_path, &ids, repick)?;
+        }
+        let (pending, held): (Vec<String>, Vec<String>) =
+            ids.into_iter().partition(|id| !(batch.unresolved)(page, id));
+        for id in &held {
+            progress.skipped(id, page, "unresolved");
+        }
+        bind(batch.job_path, &pending, preprocessing)
+    });
+    let Bound { mut regions, too_large } = match bound {
+        Ok(bound) => bound,
+        Err(error) => {
+            // The page stays detected for a later clean; the run goes on.
+            eprintln!("manga-cleaner: cloud clean could not read page {}: {error}", page + 1);
+            progress.failed_pages.insert(page);
+            progress.expect(page, 0);
+            return Ok(());
+        }
+    };
+    for id in &too_large {
+        progress.skipped(id, page, "tooLarge");
+    }
+    if scope.execution == CleanExecution::Mixed {
+        if let Some(pass) = batch.local_pass {
+            let ids: Vec<String> = regions.iter().filter(|region| region.local_candidate)
+                .map(|region| region.id.clone()).collect();
+            if !ids.is_empty() && !cancel.load(Ordering::SeqCst) {
+                progress.start(page);
+                let (mut cleaned, _) = pass_page(batch, pass, "mixed clean's local pass", page, &ids);
+                regions.retain(|region| match cleaned.remove(&region.id) {
+                    Some(found) => {
+                        progress.cleaned(page, found.map(Box::new));
+                        false
+                    }
+                    None => true,
+                });
+            }
+        }
+    }
+    let mut queued = Vec::with_capacity(regions.len());
+    for region in regions {
+        if *capped { break; }
+        if !budget.take(region.crop) {
+            *capped = true;
+            (progress.emit)(events::notice_event(
+                "notice.cloudClean.capReached",
+                serde_json::json!({ "page": page + 1, "cap": terms.cap_usd }),
+                "warn",
+            ));
+            break;
+        }
+        queued.push(region);
+    }
+    progress.expect(page, queued.len());
+    if !queued.is_empty() {
+        let mut schedule = shared.lock();
+        schedule.slots.extend(std::iter::repeat_n(Slot::Queued, queued.len()));
+        schedule.regions.extend(queued);
+        drop(schedule);
+        shared.changed.notify_all();
+    }
+    Ok(())
+}
+
+/// The detections of `page`, in reading order.
+fn page_detections(job_path: &Path, chapter_id: &str, page: u32) -> Result<Vec<String>, String> {
+    let _lock = run::lock_job(job_path)?;
+    let job = Job::open(job_path).map_err(|e| e.to_string())?;
+    let request = PrepareRequest {
+        chapter_id: chapter_id.to_owned(), scope: "page".into(), page_indices: Some(vec![page]),
+        region_ids: None, local_first: false, picks: None, qwen_edit: None,
+    };
+    Ok(detections_in_scope(&job, &request)?.into_iter().map(|(_, id)| id).collect())
+}
+
 /// A stop after which the run no longer speaks for the endpoint: cloud engines
 /// off, another or an edited profile, a refused or missing key.
 fn withdraws_authority(code: &str) -> bool {
@@ -1420,8 +1985,8 @@ fn run_chunk(
         slots[position] = Slot::Queued;
     }
     let shared = Shared {
-        schedule: Mutex::new(Schedule { slots: std::mem::take(slots), preparing: 0,
-            stop: false, attempts: HashMap::new() }),
+        schedule: Mutex::new(Schedule { regions: regions.clone(), slots: std::mem::take(slots), preparing: 0,
+            stop: false, attempts: HashMap::new(), open: false }),
         changed: Condvar::new(),
     };
     let mut halting = progress.stopped;
@@ -1472,23 +2037,23 @@ fn run_chunk(
 fn work(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared, cancel: &AtomicBool,
     tx: &mpsc::Sender<Message>) {
     loop {
-        let index = {
+        let (index, region) = {
             let mut schedule = shared.lock();
             loop {
                 if schedule.stop || cancel.load(Ordering::SeqCst) { return; }
                 if let Some(index) = (schedule.preparing < MAX_PREPARING)
-                    .then(|| next_ready(&schedule.slots, &batch.scope.regions)).flatten() {
+                    .then(|| next_ready(&schedule.slots, &schedule.regions)).flatten() {
                     schedule.slots[index] = Slot::InFlight;
                     schedule.preparing += 1;
-                    break index;
+                    break (index, schedule.regions[index].clone());
                 }
-                if !schedule.slots.contains(&Slot::Queued) { return; }
+                if !schedule.open && !schedule.slots.contains(&Slot::Queued) { return; }
                 schedule = shared.changed.wait(schedule).unwrap_or_else(|poisoned| poisoned.into_inner());
             }
         };
         let preparing = Preparing { shared, released: AtomicBool::new(false) };
         let _ = tx.send(Message::Started(index));
-        let (outcome, reached) = attempt(batch, renderer, shared, cancel, index, &|| preparing.release());
+        let (outcome, reached) = attempt(batch, renderer, shared, cancel, index, &region, &|| preparing.release());
         let stops = matches!(&outcome, Outcome::Failed(code) if stops_run(code) || batch.lost_authority());
         {
             // Stopped here, under the lock the next pick takes, and not when
@@ -1508,9 +2073,8 @@ fn work(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared, cance
 /// One region: re-check it against the grant, mint and spend its own grant,
 /// render. Answers whether it reached the renderer.
 fn attempt(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared,
-    cancel: &AtomicBool, index: usize, submitted: &dyn Fn()) -> (Outcome, bool) {
+    cancel: &AtomicBool, index: usize, region: &GrantedRegion, submitted: &dyn Fn()) -> (Outcome, bool) {
     let scope = batch.scope;
-    let region = &scope.regions[index];
     if let Err(code) = (batch.allowed)() {
         return (Outcome::Failed(code.to_owned()), false);
     }
@@ -1833,6 +2397,131 @@ fn start(app: &tauri::AppHandle, grant_id: &str) -> Result<RunHandle, String> {
         };
         run_plan(&batch, &renderer, run_id, cancel, emit)
     }))
+}
+
+/// A streaming grant spent for one Detect and clean run: what the run's pages
+/// are cleaned with as they are detected ([`run_stream`]).
+pub(crate) struct Stream {
+    app: tauri::AppHandle,
+    scope: CleanGrantScope,
+    terms: StreamTerms,
+    job_path: PathBuf,
+    renderer: ServiceRenderer,
+    journal: crate::inference::journal::AttemptJournal,
+}
+
+/// Spend the streaming grant `grant_id` for a run on `chapter_id` over
+/// `entries`, as `start_cloud_clean` spends a plan's: answered as a mismatch
+/// unless every page the run walks is one the consent named.
+pub(crate) fn open_stream(app: &tauri::AppHandle, chapter_id: &str, grant_id: &str, entries: &[run::PlanEntry])
+    -> Result<Stream, String> {
+    if grant_chapter(grant_id).ok_or("cloud_clean_grant_missing")? != chapter_id {
+        return Err("cloud_clean_grant_mismatch: chapter".into());
+    }
+    // The profile the grant was given for, not the one selected now.
+    let (provider, profile_id) = grant_profile(grant_id).ok_or("cloud_clean_grant_missing")?;
+    let selected = configured(app, provider, profile_id)?;
+    if !crate::inference::cloud_allowed(app) { return Err("cloud_disabled".into()); }
+    let client = client_for(&selected)?;
+    let recipe = CleanGateway::recipe(&client)?;
+    let (scope, terms) = consume_stream_grant(grant_id, &CleanGrantRequest {
+        provider: selected.provider,
+        profile_id: &selected.profile_id,
+        endpoint_fingerprint: &selected.endpoint_fingerprint,
+        profile_epoch: GrantService::global().get_profile_epoch(selected.provider, &selected.profile_id),
+        recipe: &recipe,
+    })?;
+    if entries.iter().any(|entry| entry.chapter_id != scope.chapter_id
+        || !terms.pages.contains(&(entry.page_index as u32))) {
+        return Err("cloud_clean_grant_mismatch: pages".into());
+    }
+    let library = Library::for_app(app).map_err(|e| e.to_string())?;
+    let job_path = library.resolve_chapter(&scope.chapter_id).map_err(|e| e.to_string())?;
+    let service = app_inference_service(app)?.with_custom_client(client.clone());
+    let journal = service.journal().clone();
+    let renderer = ServiceRenderer {
+        app: app.clone(),
+        service,
+        job_path: job_path.clone(),
+        target: selected.target,
+        config: selected.config,
+        client,
+    };
+    Ok(Stream { app: app.clone(), scope, terms, job_path, renderer, journal })
+}
+
+impl run::HandedClean for Stream {
+    fn clean(&mut self, run_id: &str, pages: &mpsc::Receiver<run::Handed<'_>>, cancel: &AtomicBool,
+        emit: &dyn Fn(Event)) -> Summary {
+        let (app, provider, profile_id) = (&self.app, self.scope.provider, self.scope.profile_id.as_str());
+        let allowed = || in_service(app, provider, profile_id);
+        let job_path = self.job_path.as_path();
+        let unresolved = journal_unresolved(self.journal.clone(), job_path);
+        let local_pass = |ids: &[String]| run::clean_fill_rung_first(job_path, ids, cancel);
+        let batch = Batch {
+            scope: &self.scope, job_path, grants: GrantService::global(), allowed: &allowed,
+            unresolved: &unresolved, local_pass: Some(&local_pass), read: &read_render_input,
+        };
+        run_stream(&batch, &self.renderer, &self.terms, run_id, pages,
+            &|handed| (handed.entry.page_index as u32, handed.detected), cancel, emit)
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_cloud_clean_stream(
+    app: tauri::AppHandle,
+    chapter_id: String,
+    scope: String,
+    page_indices: Option<Vec<u32>>,
+    local_first: Option<bool>,
+    bubble_engine: Option<String>,
+    outside_engine: Option<String>,
+    qwen_edit: Option<cleaner_core::engines::render::QwenEdit>,
+) -> Result<CloudCleanStreamProposal, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let selected = selected(&app)?;
+        if run::chapter_run(&chapter_id).is_some() { return Err("cloud_clean_run_active".to_string()); }
+        let gateway = LazyGateway {
+            selected: &selected, cloud_allowed: crate::inference::cloud_allowed(&app), client: OnceLock::new(),
+        };
+        let library = Library::for_app(&app).map_err(|e| e.to_string())?;
+        let path = library.resolve_chapter(&chapter_id).map_err(|e| e.to_string())?;
+        // As before a plan: a region is held back only for a request still
+        // in flight or unknown, not one that is over.
+        if crate::inference::cloud_allowed(&app) {
+            crate::inference::commands::end_unresolved_before_clean(&app);
+        }
+        let standing = library.cloud_consent_covers(&chapter_id, selected.provider,
+            &selected.profile_id, &selected.endpoint_fingerprint);
+        let settings = crate::settings::read(&app).unwrap_or(serde_json::Value::Null);
+        let stored = settings.get("engineCeiling").and_then(|value| value.as_str());
+        let picks = run::Repick::from_args(bubble_engine.as_deref(), outside_engine.as_deref(),
+            run::effective_ceiling(None, stored));
+        let mut proposal = prepare_stream(&path, StreamRequest {
+            chapter_id, scope, page_indices, local_first: local_first.unwrap_or(false), picks, qwen_edit,
+        }, Destination {
+            provider: selected.provider,
+            profile_id: selected.profile_id.clone(),
+            profile_name: selected.profile_name.clone(),
+            endpoint_fingerprint: selected.endpoint_fingerprint.clone(),
+        }, &gateway)?;
+        proposal.standing = standing;
+        Ok(proposal)
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn confirm_cloud_clean_stream(
+    app: tauri::AppHandle, proposal_id: String, stream_digest: String, cap_usd: f64, rights_attested: bool,
+    retention_acknowledged: bool,
+) -> Result<CloudCleanGrant, String> {
+    if !crate::inference::cloud_allowed(&app) {
+        return Err("cloud_disabled".into());
+    }
+    let library = Library::for_app(&app).ok();
+    confirm_stream_in_project(library.as_ref(), &proposal_id, &stream_digest, cap_usd, rights_attested,
+        retention_acknowledged)
 }
 
 #[cfg(test)]

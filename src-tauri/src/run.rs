@@ -5167,22 +5167,60 @@ fn execute_with_kept(
     cancel: &AtomicBool,
     emit: &dyn Fn(Event),
 ) -> (Summary, u32) {
-    let mut progress = Progress {
-        summary: Summary {
-            reason: "completed",
-            pages_queued: entries.len() as u32,
-            pages_cleaned: 0,
-            regions_cleaned: 0,
-            next_page_index: None,
-            errored: 0,
-            regions_detected: 0,
-        },
-        in_flight: None,
-        kept: 0,
-    };
+    execute_walk(run_id, chapter_id, entries, cleaner, emit, |cleaner, progress| {
+        walk(mode, run_id, entries, cleaner, ceiling, cancel, emit, progress);
+    })
+}
+
+/// [`execute_with_kept`] for an Auto run whose detection has a [`Cleaner`] of
+/// its own, on a thread of its own ([`walk_overlapped`]).
+#[allow(clippy::too_many_arguments)]
+fn execute_overlapped(
+    run_id: &str,
+    chapter_id: &str,
+    entries: &[PlanEntry],
+    cleaner: &mut dyn Cleaner,
+    detector: &mut dyn Cleaner,
+    ceiling: Engine,
+    cancel: &AtomicBool,
+    emit: &(dyn Fn(Event) + Sync),
+) -> (Summary, u32) {
+    execute_walk(run_id, chapter_id, entries, cleaner, emit, |cleaner, progress| {
+        walk_overlapped(run_id, entries, cleaner, detector, ceiling, cancel, emit, progress);
+    })
+}
+
+/// [`execute_with_kept`] for an Auto run whose pages are cleaned elsewhere as
+/// `detector` detects them ([`walk_streamed`]).
+#[allow(clippy::too_many_arguments)]
+fn execute_streamed(
+    run_id: &str,
+    chapter_id: &str,
+    entries: &[PlanEntry],
+    detector: &mut dyn Cleaner,
+    away: &mut dyn HandedClean,
+    ceiling: Engine,
+    cancel: &AtomicBool,
+    emit: &(dyn Fn(Event) + Sync),
+) -> (Summary, u32) {
+    execute_walk(run_id, chapter_id, entries, detector, emit, |detector, progress| {
+        walk_streamed(run_id, entries, away, detector, ceiling, cancel, emit, progress);
+    })
+}
+
+/// A walk, contained, and the one `run-finished` it ends on.
+fn execute_walk(
+    run_id: &str,
+    chapter_id: &str,
+    entries: &[PlanEntry],
+    cleaner: &mut dyn Cleaner,
+    emit: &dyn Fn(Event),
+    walk: impl FnOnce(&mut dyn Cleaner, &mut Progress),
+) -> (Summary, u32) {
+    let mut progress = Progress::queued(entries.len());
 
     let walked = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        walk(mode, run_id, entries, cleaner, ceiling, cancel, emit, &mut progress);
+        walk(&mut *cleaner, &mut progress);
     }));
 
     let mut summary = progress.summary;
@@ -5224,6 +5262,24 @@ struct Progress {
     /// Regions a solid-bubbles run left detected, over the pages it finished
     /// cleaning. See [`execute_with_kept`].
     kept: u32,
+}
+
+impl Progress {
+    fn queued(pages: usize) -> Progress {
+        Progress {
+            summary: Summary {
+                reason: "completed",
+                pages_queued: pages as u32,
+                pages_cleaned: 0,
+                regions_cleaned: 0,
+                next_page_index: None,
+                errored: 0,
+                regions_detected: 0,
+            },
+            in_flight: None,
+            kept: 0,
+        }
+    }
 }
 
 /// What one page of a walk does, from the run's mode and what the page holds.
@@ -5281,6 +5337,15 @@ type PageWorked = (Vec<(Option<String>, RegionOutcome, Option<Rect>)>, Vec<&'sta
 /// finished once, and a cancel between the two leaves it detected, where a
 /// resume finds it. A page the clean left a detection on is not examined, as
 /// after any clean.
+///
+/// **An Auto run's detections are its own.** Its Detect visit resets the page
+/// as the one pass does, counts the regions it holds back as the one pass
+/// does, and records no undo step, and its Clean visit records none for the
+/// detections the run itself stored: a page an Auto run finishes reads the
+/// same however it was split. Detections that were waiting before the run are
+/// the user's, and their cleans are undoable as in any Clean.
+///
+/// [`walk_overlapped`] is the same two visits on two threads.
 #[allow(clippy::too_many_arguments)]
 fn walk(
     mode: RunMode,
@@ -5292,25 +5357,7 @@ fn walk(
     emit: &dyn Fn(Event),
     progress: &mut Progress,
 ) {
-    let summary = &mut progress.summary;
-    // The chapter the walk is in, and its strip.
-    let mut open: Option<(PathBuf, JobStrip)> = None;
-    // The job as the last page's write left it, kept for one question: whether
-    // a save from it was refused as stale. The chapter's strip is surveyed
-    // again after one that was.
-    let mut written: Option<Job> = None;
-    let mut resurvey = false;
-    /* Which model faults this run has already told the user about, by the pair
-     * of keys the notice is built from. A dead device fails *every* page of the
-     * chapter, and three hundred copies of one sentence on the notice stack is
-     * not three hundred pieces of information - it is one, said in a way that
-     * buries everything else the run had to say. The stderr line below is not
-     * deduplicated for the opposite reason: it names the page, so each one is a
-     * different fact. */
-    let mut announced: HashSet<(&'static str, &'static str)> = HashSet::new();
-    let mut busy: HashSet<PathBuf> = HashSet::new();
-    // Detect alone cleans nothing, so the option is never its.
-    let solid_only = mode != RunMode::Detect && cleaner.solid_bubbles_only();
+    let mut walker = Walker::new(mode, Part::Whole, run_id, ceiling, cancel, emit, &*cleaner);
     let mut queue = entries.iter();
     // The page a solid-bubbles run has just stored detections on, which it
     // cleans before it moves on. See the doc comment.
@@ -5318,9 +5365,302 @@ fn walk(
 
     while let Some(entry) = detected_here.or_else(|| queue.next()) {
         let second_visit = detected_here.take().is_some();
+        match walker.visit(entry, second_visit, None, cleaner, progress) {
+            Visited::Next | Visited::Waiting => {}
+            Visited::Stopped => break,
+            Visited::Detected => detected_here = Some(entry),
+        }
+    }
+    walker.finish(cleaner, progress);
+}
+
+/// An Auto run with **detection and cleaning on two threads**, each with its
+/// own [`Cleaner`]: `detector` runs every page's Detect visit, in order, and
+/// hands the page on; `cleaner` runs its Clean visit, in the same order, on
+/// this thread. So page N+1 is detected while page N is cleaned, and where the
+/// two are on different devices (the cloud detects, this computer cleans)
+/// detection keeps going and the cleans queue behind it.
+///
+/// The queue between them is the manifest: what a Detect visit found is stored
+/// before the page is handed on, so the queue costs no memory however far
+/// detection gets ahead, and a run stopped between the two leaves the page
+/// detected, where a resume cleans it. The channel carries only which page is
+/// next, and its chapter's strip, so the chapter is surveyed once.
+///
+/// Every rule of [`walk`] holds for each page: the page is announced once, by
+/// whichever visit reaches it first, and finished once. A page with
+/// detections waiting before the run is not detected; it is handed on to be
+/// cleaned. Pages finish in order, except one detection found no text on,
+/// which is finished as soon as it is detected, as [`walk`] would.
+///
+/// A cancel stops both. The resume point is the first page not finished: the
+/// clean visit's when it stopped, and otherwise the page detection stopped at.
+/// A panic in detection is the run's, as in [`execute`]: the pages already
+/// handed on are cleaned, and the run ends cancelled at the page it was on.
+#[allow(clippy::too_many_arguments)]
+fn walk_overlapped(
+    run_id: &str,
+    entries: &[PlanEntry],
+    cleaner: &mut dyn Cleaner,
+    detector: &mut dyn Cleaner,
+    ceiling: Engine,
+    cancel: &AtomicBool,
+    emit: &(dyn Fn(Event) + Sync),
+    progress: &mut Progress,
+) {
+    let mut walker = Walker::new(RunMode::Auto, Part::Cleans, run_id, ceiling, cancel, emit, &*cleaner);
+    let (ahead, stopped_at) = detect_ahead(run_id, entries, detector, ceiling, cancel, emit, |handed| {
+        for Handed { entry, detected, strip } in handed.iter() {
+            if let Visited::Stopped = walker.visit(entry, detected, Some(strip), cleaner, progress) {
+                break;
+            }
+        }
+    });
+    // The clean visit is behind detection, so the page it stopped at comes
+    // first; only when it ran out of pages is detection's the resume point.
+    if let Some((job_path, index)) = merge_ahead(progress, ahead, stopped_at) {
+        if walker.open.as_ref().is_none_or(|(path, _)| *path != job_path) {
+            close_for(&job_path, Some(index), cleaner);
+        }
+    }
+    walker.finish(cleaner, progress);
+}
+
+/// [`walk_overlapped`] with the pages cleaned **on the cloud GPU** rather
+/// than here: `away` takes each page as detection hands it on
+/// ([`crate::inference::cloud_clean::run_stream`]), and detection keeps going
+/// while the cloud cleans. Every rule of [`walk_overlapped`] holds, except
+/// that pages finish as their cloud renders do. A cancel stops both, and the
+/// resume point is the first page `away` did not finish, or else the page
+/// detection stopped at.
+///
+/// Only a page or chapter run streams, so one job is closed at the end.
+#[allow(clippy::too_many_arguments)]
+fn walk_streamed(
+    run_id: &str,
+    entries: &[PlanEntry],
+    away: &mut dyn HandedClean,
+    detector: &mut dyn Cleaner,
+    ceiling: Engine,
+    cancel: &AtomicBool,
+    emit: &(dyn Fn(Event) + Sync),
+    progress: &mut Progress,
+) {
+    let (ahead, stopped_at) = detect_ahead(run_id, entries, detector, ceiling, cancel, emit, |handed| {
+        let cleaned = away.clean(run_id, handed, cancel, emit);
+        let summary = &mut progress.summary;
+        summary.pages_cleaned += cleaned.pages_cleaned;
+        summary.regions_cleaned += cleaned.regions_cleaned;
+        summary.errored += cleaned.errored;
+        summary.next_page_index = cleaned.next_page_index;
+    });
+    merge_ahead(progress, ahead, stopped_at);
+    let summary = &mut progress.summary;
+    if summary.next_page_index.is_some() {
+        summary.reason = "cancelled";
+    }
+    if let Some(entry) = entries.first() {
+        close_for(&entry.job_path, summary.next_page_index, detector);
+    }
+}
+
+/// Run `detector`'s Detect visits on a thread of their own, handing each page
+/// on, while `clean` takes them on this one ([`walk_overlapped`]). Once
+/// `clean` returns, detection stops at its next hand-off rather than
+/// detecting pages nothing will clean. Answers detection's own progress, and
+/// the page it stopped at when that is a resume point.
+#[allow(clippy::too_many_arguments)]
+fn detect_ahead<'e>(
+    run_id: &str,
+    entries: &'e [PlanEntry],
+    detector: &mut dyn Cleaner,
+    ceiling: Engine,
+    cancel: &AtomicBool,
+    emit: &(dyn Fn(Event) + Sync),
+    clean: impl FnOnce(&std::sync::mpsc::Receiver<Handed<'e>>),
+) -> (Progress, Option<(PathBuf, u32)>) {
+    let (hand, handed) = std::sync::mpsc::channel::<Handed<'e>>();
+    std::thread::scope(|scope| {
+        let detecting = scope.spawn(move || {
+            let mut ahead = Progress::queued(0);
+            // The page detection is on, and so where it stopped if it stops.
+            let mut at: Option<&PlanEntry> = None;
+            let walked = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let mut walker = Walker::new(RunMode::Auto, Part::Detects, run_id, ceiling, cancel, emit, &*detector);
+                for entry in entries {
+                    at = Some(entry);
+                    let detected = match walker.visit(entry, false, None, detector, &mut ahead) {
+                        Visited::Next => continue,
+                        Visited::Stopped => return,
+                        Visited::Detected => true,
+                        Visited::Waiting => false,
+                    };
+                    // The page is the clean side's from here.
+                    ahead.in_flight = None;
+                    let Some(strip) = walker.strip() else { continue };
+                    // The clean side has gone, a cancel or a panic: nothing
+                    // more is handed to it, and it says where it stopped.
+                    if hand.send(Handed { entry, detected, strip }).is_err() {
+                        at = None;
+                        return;
+                    }
+                }
+                at = None;
+            }));
+            // A stop with no resume point (a cloud failure that withdrew the
+            // run's authority) is not one; a panic always is.
+            let stopped = at.filter(|_| walked.is_err() || ahead.summary.next_page_index.is_some())
+                .map(|entry| (entry.job_path.clone(), entry.page_index as u32));
+            (ahead, stopped)
+        });
+        clean(&handed);
+        drop(handed);
+        detecting.join().unwrap_or_else(|_| (Progress::queued(0), None))
+    })
+}
+
+/// Add detection's progress to the clean side's. Where the clean side left no
+/// resume point, detection's stop is the run's: answered so the caller can
+/// close its job.
+fn merge_ahead(progress: &mut Progress, ahead: Progress, stopped_at: Option<(PathBuf, u32)>)
+    -> Option<(PathBuf, u32)> {
+    let summary = &mut progress.summary;
+    summary.pages_cleaned += ahead.summary.pages_cleaned;
+    summary.regions_cleaned += ahead.summary.regions_cleaned;
+    summary.errored += ahead.summary.errored;
+    progress.kept += ahead.kept;
+    if summary.next_page_index.is_some() { return None; }
+    let (job_path, index) = stopped_at?;
+    summary.next_page_index = Some(index);
+    Some((job_path, index))
+}
+
+/// Cleans the pages an Auto run's detection hands on somewhere other than
+/// this computer ([`walk_streamed`]): the cloud GPU, under a streaming grant
+/// ([`crate::inference::cloud_clean::Stream`]).
+pub(crate) trait HandedClean: Send {
+    /// Clean each page `pages` hands on, until it closes or a cancel. Every
+    /// event goes through `emit`, on this thread. The summary counts what was
+    /// cleaned and the pages that failed, and after a cancel names the first
+    /// page left unfinished.
+    fn clean(&mut self, run_id: &str, pages: &std::sync::mpsc::Receiver<Handed<'_>>, cancel: &AtomicBool,
+        emit: &dyn Fn(Event)) -> Summary;
+}
+
+/// One page handed from detection to cleaning ([`walk_overlapped`]).
+pub(crate) struct Handed<'e> {
+    pub(crate) entry: &'e PlanEntry,
+    /// Whether the run detected it: its clean visit is the page's second, and
+    /// its detections are the run's own.
+    pub(crate) detected: bool,
+    strip: Arc<JobStrip>,
+}
+
+/// Which visits a walker makes to an Auto page.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Part {
+    /// Every visit the page needs, one after another ([`walk`]).
+    Whole,
+    /// Its Detect visit, or none when detections wait ([`walk_overlapped`]).
+    Detects,
+    /// Its Clean visit ([`walk_overlapped`]).
+    Cleans,
+}
+
+/// How a page's visit ended.
+enum Visited {
+    /// The walk goes on to the next page.
+    Next,
+    /// The walk ends here.
+    Stopped,
+    /// Auto's Detect visit stored detections; the page's Clean visit is next.
+    Detected,
+    /// [`Part::Detects`]: the page has detections waiting and was left as it
+    /// was, for its Clean visit.
+    Waiting,
+}
+
+/// What a walk carries from page to page. See [`walk`].
+struct Walker<'w> {
+    mode: RunMode,
+    part: Part,
+    run_id: &'w str,
+    ceiling: Engine,
+    cancel: &'w AtomicBool,
+    emit: &'w dyn Fn(Event),
+    /// The chapter the walk is in, and its strip.
+    open: Option<(PathBuf, Arc<JobStrip>)>,
+    /// The job as the last page's write left it, kept for one question: whether
+    /// a save from it was refused as stale. The chapter's strip is surveyed
+    /// again after one that was.
+    written: Option<Job>,
+    resurvey: bool,
+    /* Which model faults this run has already told the user about, by the pair
+     * of keys the notice is built from. A dead device fails *every* page of the
+     * chapter, and three hundred copies of one sentence on the notice stack is
+     * not three hundred pieces of information - it is one, said in a way that
+     * buries everything else the run had to say. The stderr line below is not
+     * deduplicated for the opposite reason: it names the page, so each one is a
+     * different fact. */
+    announced: HashSet<(&'static str, &'static str)>,
+    busy: HashSet<PathBuf>,
+    // Detect alone cleans nothing, so the option is never its.
+    solid_only: bool,
+}
+
+impl<'w> Walker<'w> {
+    fn new(
+        mode: RunMode,
+        part: Part,
+        run_id: &'w str,
+        ceiling: Engine,
+        cancel: &'w AtomicBool,
+        emit: &'w dyn Fn(Event),
+        cleaner: &dyn Cleaner,
+    ) -> Self {
+        Walker {
+            mode, part, run_id, ceiling, cancel, emit,
+            open: None,
+            written: None,
+            resurvey: false,
+            announced: HashSet::new(),
+            busy: HashSet::new(),
+            solid_only: mode != RunMode::Detect && cleaner.solid_bubbles_only(),
+        }
+    }
+
+    /// The strip of the chapter the walk is in.
+    fn strip(&self) -> Option<Arc<JobStrip>> {
+        self.open.as_ref().map(|(_, strip)| Arc::clone(strip))
+    }
+
+    /// Record how the walk ended on the chapter it is in.
+    fn finish(mut self, cleaner: &dyn Cleaner, progress: &mut Progress) {
+        let summary = &mut progress.summary;
+        if summary.next_page_index.is_some() {
+            summary.reason = "cancelled";
+        }
+        if let Some((path, _)) = self.open.take() {
+            close_for(&path, summary.next_page_index, cleaner);
+        }
+    }
+
+    /// One visit to one page. `second_visit` is a page whose Detect visit this
+    /// run has made; `handed` is its chapter's strip, as the visit before it
+    /// surveyed it.
+    fn visit(
+        &mut self,
+        entry: &PlanEntry,
+        second_visit: bool,
+        handed: Option<Arc<JobStrip>>,
+        cleaner: &mut dyn Cleaner,
+        progress: &mut Progress,
+    ) -> Visited {
+        let (mode, run_id, ceiling, cancel, emit) = (self.mode, self.run_id, self.ceiling, self.cancel, self.emit);
+        let summary = &mut progress.summary;
         if cancel.load(Ordering::SeqCst) {
             summary.next_page_index = Some(entry.page_index as u32);
-            break;
+            return Visited::Stopped;
         }
 
         // A save refused as stale means another writer saved the manifest
@@ -5328,23 +5668,26 @@ fn walk(
         // Nothing of the run's is written over it: the page that failed is
         // left for a later run, and this one goes on from what that writer
         // saved, its strip surveyed again.
-        if written.take().is_some_and(|job| job.went_stale()) {
+        if self.written.take().is_some_and(|job| job.went_stale()) {
             eprintln!("manga-cleaner: {} changed under the run; reading it again", entry.job_path.display());
-            resurvey = true;
+            self.resurvey = true;
         }
 
         // One chapter at a time. A `'project'` run walks chapters in order, so
-        // each is closed as the walk leaves it.
-        if open.as_ref().is_some_and(|(path, _)| *path != entry.job_path) {
-            if let Some((path, _)) = open.take() {
-                close_for(&path, None, cleaner);
+        // each is closed as the walk leaves it - by the walk that finishes its
+        // pages, which detection running ahead does not.
+        if self.open.as_ref().is_some_and(|(path, _)| *path != entry.job_path) {
+            if let Some((path, _)) = self.open.take() {
+                if self.part != Part::Detects {
+                    close_for(&path, None, cleaner);
+                }
             }
         }
         // A chapter another process is using is waited on once, not once per
         // page: its pages are left for a later run.
-        if busy.contains(&entry.job_path) {
+        if self.busy.contains(&entry.job_path) {
             summary.errored += 1;
-            continue;
+            return Visited::Next;
         }
 
         // **The page's first hold on its job**, for as long as it takes to
@@ -5358,46 +5701,57 @@ fn walk(
             Ok(lock) => lock,
             Err(LockError::Stopped { .. }) => {
                 summary.next_page_index = Some(entry.page_index as u32);
-                break;
+                return Visited::Stopped;
             }
             Err(LockError::Busy { .. }) => {
                 emit(events::notice_event("notice.job.busy", serde_json::json!({}), "warn"));
-                busy.insert(entry.job_path.clone());
+                self.busy.insert(entry.job_path.clone());
                 summary.errored += 1;
-                continue;
+                return Visited::Next;
             }
         };
         let Ok(mut read) = Job::open(&entry.job_path) else {
             summary.errored += 1;
-            continue;
+            return Visited::Next;
         };
         let job = &mut read;
         // The strip is surveyed once per chapter and kept across its pages:
         // rules 1 to 3 are properties of the chapter and not of the page, and
         // a survey per page would decode the chapter once per page. Nothing
         // moves it under a run, because a write to the whole chapter is
-        // refused for as long as the chapter has one ([`lock_chapter`]).
-        if resurvey || open.is_none() {
-            open = Some((entry.job_path.clone(), survey_job(job, emit)));
-            resurvey = false;
+        // refused for as long as the chapter has one ([`lock_chapter`]). A
+        // strip handed on by the visit before this one is that survey.
+        if self.resurvey || self.open.is_none() {
+            let strip = match handed {
+                Some(strip) if !self.resurvey => strip,
+                _ => Arc::new(survey_job(job, emit)),
+            };
+            self.open = Some((entry.job_path.clone(), strip));
+            self.resurvey = false;
         }
-        let Some((_, geometry)) = open.as_ref() else { continue };
+        let Some(geometry) = self.strip() else { return Visited::Next };
 
         let page_id = library::page_id(&entry.chapter_id, entry.page_index);
         let repeat_cloud = mode == RunMode::Detect && cleaner.cloud_detection();
         let area_only = mode == RunMode::Detect && cleaner.area_only();
         let waiting = has_detections(&job.project, entry.source_idx);
-        let work = match mode {
-            RunMode::Detect => PageWork::Detect,
-            RunMode::Clean => PageWork::Clean,
-            RunMode::Auto if waiting || second_visit => PageWork::Clean,
+        let work = match (mode, self.part) {
+            (RunMode::Detect, _) => PageWork::Detect,
+            (RunMode::Clean, _) | (RunMode::Auto, Part::Cleans) => PageWork::Clean,
+            // Left as it is, announced by its Clean visit.
+            (RunMode::Auto, Part::Detects) if waiting => return Visited::Waiting,
+            (RunMode::Auto, Part::Detects) => PageWork::Detect,
+            (RunMode::Auto, Part::Whole) if waiting || second_visit => PageWork::Clean,
             // Stored first, then cleaned from what was stored on the visit
             // that follows.
-            RunMode::Auto if solid_only => PageWork::Detect,
-            RunMode::Auto => PageWork::Both,
+            (RunMode::Auto, Part::Whole) if self.solid_only => PageWork::Detect,
+            (RunMode::Auto, Part::Whole) => PageWork::Both,
         };
         let reset = match work {
             PageWork::Both => reset_page(job, entry.source_idx, &page_id),
+            // Auto's Detect visit is the first half of its one pass, and
+            // starts from the slate the one pass would.
+            PageWork::Detect if mode == RunMode::Auto => reset_page(job, entry.source_idx, &page_id),
             PageWork::Detect => Ok(()),
             // Nothing a clean owns is reset: the detections are its input, and
             // every patch and untouched row on the page is someone's result.
@@ -5411,12 +5765,13 @@ fn walk(
         // saved. The page is left for a later run.
         if reset.is_err() || job.went_stale() {
             summary.errored += 1;
-            written = Some(read);
-            continue;
+            self.written = Some(read);
+            return Visited::Next;
         }
         // A page's detections are one part of the run's undo step, taken
-        // back to what the page held before the run reached it.
-        let detect_before = if work == PageWork::Detect {
+        // back to what the page held before the run reached it. An Auto run's
+        // are not: see [`walk`].
+        let detect_before = if work == PageWork::Detect && mode != RunMode::Auto {
             crate::history::capture_pages(job, &[entry.source_idx])
         } else {
             Vec::new()
@@ -5452,7 +5807,7 @@ fn walk(
         if work == PageWork::Clean && !waiting {
             emit_page_done(emit, run_id, entry, &page_id, job);
             progress.in_flight = None;
-            continue;
+            return Visited::Next;
         }
 
         let bytes = job
@@ -5515,7 +5870,7 @@ fn walk(
         // page is where a resume picks up.
         if cancel.load(Ordering::SeqCst) {
             summary.next_page_index = Some(entry.page_index as u32);
-            break;
+            return Visited::Stopped;
         }
 
         // **The page's second hold on its job**, to write what the models
@@ -5532,24 +5887,24 @@ fn walk(
             // picks up.
             Err(LockError::Stopped { .. }) => {
                 summary.next_page_index = Some(entry.page_index as u32);
-                break;
+                return Visited::Stopped;
             }
             Err(LockError::Busy { .. }) => {
                 emit(events::notice_event("notice.job.busy", serde_json::json!({}), "warn"));
-                busy.insert(entry.job_path.clone());
+                self.busy.insert(entry.job_path.clone());
                 summary.errored += 1;
                 emit_page_done(emit, run_id, entry, &page_id, &read);
                 progress.in_flight = None;
-                continue;
+                return Visited::Next;
             }
         };
         let job = match Job::open(&entry.job_path) {
-            Ok(fresh) => written.insert(fresh),
+            Ok(fresh) => self.written.insert(fresh),
             Err(_) => {
                 summary.errored += 1;
                 emit_page_done(emit, run_id, entry, &page_id, &read);
                 progress.in_flight = None;
-                continue;
+                return Visited::Next;
             }
         };
         // The results are for the source the models read, at the place the
@@ -5563,8 +5918,8 @@ fn walk(
             summary.errored += 1;
             emit_page_done(emit, run_id, entry, &page_id, job);
             progress.in_flight = None;
-            resurvey = true;
-            continue;
+            self.resurvey = true;
+            return Visited::Next;
         }
         let (regions, pressure, evidence) = match worked {
             Ok(outcome) => outcome,
@@ -5585,7 +5940,7 @@ fn walk(
                 // provider string they cannot act on.
                 eprintln!("manga-cleaner: {page_id} could not be cleaned: {detail}");
                 if let Some(fault) = cleaner.last_fault() {
-                    if announced.insert((fault.model_key, fault.accel_key)) {
+                    if self.announced.insert((fault.model_key, fault.accel_key)) {
                         emit(events::notice_event(
                             "notice.run.engineFault",
                             serde_json::json!({
@@ -5606,9 +5961,9 @@ fn walk(
                         serde_json::json!({ "page": entry.page_index + 1, "code": code }),
                         "warn",
                     ));
-                    break;
+                    return Visited::Stopped;
                 }
-                continue;
+                return Visited::Next;
             }
         };
 
@@ -5648,8 +6003,9 @@ fn walk(
                     // in this build removes one from a page a run is on, but
                     // the manifest is the truth - still gets its patch.
                     // A clean of a stored detection is one undo step, written
-                    // with the commit (`history::record_clean`).
-                    let before = replaces.as_deref()
+                    // with the commit (`history::record_clean`), unless the run
+                    // stored it itself.
+                    let before = replaces.as_deref().filter(|_| !second_visit)
                         .and_then(|id| crate::history::side_now(&entry.chapter_id, &job.project, entry.source_idx, id));
                     let written = written.and_then(|()| match replaces.as_deref() {
                         Some(id) => job.complete_detection(id, &patch, review_state.clone())
@@ -5692,6 +6048,16 @@ fn walk(
                     pending_untouched.push(held_candidate_row(entry.source_idx, bbox, reason, inside_bubble, lettering));
                 }
                 RegionOutcome::Untouched { bbox, reason, lettering } => {
+                    // Counted where the run that leaves it is finishing the
+                    // page: a one pass, and Auto's Detect visit, its first
+                    // half. Detect alone stores it with the page's detections.
+                    if work != PageWork::Detect || mode == RunMode::Auto {
+                        if is_gate_skip(&reason) {
+                            job.project.counters.gate_dropped += 1;
+                        } else {
+                            job.project.counters.declined += 1;
+                        }
+                    }
                     if work == PageWork::Detect {
                         pending_untouched.push(PendingUntouched {
                             row: RegionUntouched {
@@ -5700,11 +6066,6 @@ fn walk(
                             lettering,
                         });
                         continue;
-                    }
-                    if is_gate_skip(&reason) {
-                        job.project.counters.gate_dropped += 1;
-                    } else {
-                        job.project.counters.declined += 1;
                     }
                     // A stored detection declines in its own write; a page's
                     // other untouched rows are written together below, not
@@ -5761,12 +6122,12 @@ fn walk(
         }
         if cancelled_here {
             summary.next_page_index = Some(entry.page_index as u32);
-            break;
+            return Visited::Stopped;
         }
         if failed_here {
             fail_page(emit, run_id, entry, &page_id, job, summary);
             progress.in_flight = None;
-            continue;
+            return Visited::Next;
         }
         if area_only {
             // Text the page holds already is not stored again, by pixel: see
@@ -5777,7 +6138,7 @@ fn walk(
             let Some((held, size)) = held else {
                 fail_page(emit, run_id, entry, &page_id, job, summary);
                 progress.in_flight = None;
-                continue;
+                return Visited::Next;
             };
             pending_detections = pending_detections.into_iter()
                 .filter_map(|found| crate::region::area_detection_less_held(found, &held, size))
@@ -5805,11 +6166,11 @@ fn walk(
             let Ok(stored) = stored else {
                 fail_page(emit, run_id, entry, &page_id, job, summary);
                 progress.in_flight = None;
-                continue;
+                return Visited::Next;
             };
             crate::history::record_pages(job, &entry.chapter_id, crate::history::DETECT_LABEL, Some(run_id), detect_before);
-            // A Detect run's count. What a solid-bubbles Auto run stores here
-            // it cleans or leaves on its next visit, and counts there.
+            // A Detect run's count. What an Auto run stores here it cleans or
+            // leaves on its next visit, and counts there.
             if mode == RunMode::Detect {
                 summary.regions_detected += stored as u32;
             }
@@ -5825,15 +6186,14 @@ fn walk(
             PageWork::Detect if area_only => false,
             PageWork::Detect | PageWork::Clean => !has_detections(&job.project, entry.source_idx),
         };
-        // A solid-bubbles Auto page with text found on it is half done: its
-        // clean is the next visit, and that one ends the page.
+        // An Auto page with text found on it is half done: its clean is the
+        // next visit, and that one ends the page.
         if mode == RunMode::Auto && work == PageWork::Detect && !finished {
-            detected_here = Some(entry);
-            continue;
+            return Visited::Detected;
         }
         // Every result of a solid-bubbles clean replaced its detection, so
         // what the page still holds is what the clean left on purpose.
-        if solid_only && work == PageWork::Clean {
+        if self.solid_only && work == PageWork::Clean {
             progress.kept += job.project.detections.iter()
                 .filter(|row| row.source_idx == entry.source_idx)
                 .count() as u32;
@@ -5844,13 +6204,7 @@ fn walk(
         emit_page_done(emit, run_id, entry, &page_id, job);
         summary.pages_cleaned += 1;
         progress.in_flight = None;
-    }
-
-    if summary.next_page_index.is_some() {
-        summary.reason = "cancelled";
-    }
-    if let Some((path, _)) = open.take() {
-        close_for(&path, summary.next_page_index, cleaner);
+        Visited::Next
     }
 }
 
@@ -6767,6 +7121,9 @@ fn pages_to_detect(entries: &[PlanEntry], mode: RunMode) -> Vec<PlanEntry> {
 pub(crate) struct CloudStages {
     pub targets: crate::inference::run_analysis::AnalysisTargets,
     pub grant: Option<String>,
+    /// A streaming cloud clean grant: an Auto run's pages are cleaned on the
+    /// cloud GPU as each is detected ([`walk_streamed`]), not on this computer.
+    pub clean_grant: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6796,6 +7153,13 @@ fn start_with_models(
     if let Some(refusal) = cloud_detect_refusal(mode, cloud.targets, detection_models) {
         return Err(refusal.into());
     }
+    // A stream cleans what Detect and clean detects, one chapter's pages at a
+    // time: its consent names that chapter's pages.
+    if cloud.clean_grant.is_some() && (mode != RunMode::Auto || area.is_some() || !matches!(scope, "page" | "chapter")) {
+        return Err("cloud_clean_stream_unsupported".into());
+    }
+    // An option about what this computer cleans: a stream cleans nothing here.
+    let solid_bubbles_only = solid_bubbles_only && cloud.clean_grant.is_none();
     // A clean detects nothing, so it has no cloud stage to consent to whatever
     // the targets say, and a grant handed to one is refused as a grant for a
     // run that will not send.
@@ -6866,6 +7230,12 @@ fn start_with_models(
         let pages: Vec<u32> = to_detect.iter().map(|entry| entry.page_index as u32).collect();
         Some(crate::inference::run_analysis::open_for_run(
             app, chapter_id, &pages, &cloud_capabilities, cloud.grant.as_deref())?)
+    };
+    // A streaming cloud clean's grant is spent here too, before a model loads,
+    // and only for this run's own pages.
+    let mut away = match cloud.clean_grant.as_deref() {
+        Some(grant) => Some(crate::inference::cloud_clean::open_stream(app, chapter_id, grant, &entries)?),
+        None => None,
     };
 
     // The ONNX Runtime is downloaded after install, so "is it there" is a
@@ -6943,21 +7313,32 @@ fn start_with_models(
         Pipeline::open_selected(&models, preference_from(&settings), detection_models, all_text,
             app_data.clone())
     };
-    let pipeline = match opened {
-        Ok(pipeline) => pipeline.with_remote(remote).with_model_preferences(&settings)?
+    // The run's choices, the same on each of its pipelines.
+    let configured = |pipeline: Pipeline| -> Result<Pipeline, String> {
+        Ok(pipeline.with_model_preferences(&settings)?
             .with_picks(picks)
             .with_outside(if all_text { OutsideText::Clean } else { outside })
             .with_selection(selection)
             .with_bubble_color(bubble_color)
             .with_mask_padding(mask_padding)
-            .with_area(area)
             // An option about what a run cleans. Detect alone cleans nothing,
             // so it stores and holds exactly what it would without it.
-            .with_solid_bubbles_only(solid_bubbles_only && mode != RunMode::Detect),
+            .with_solid_bubbles_only(solid_bubbles_only && mode != RunMode::Detect))
+    };
+    let pipeline = match opened {
+        Ok(pipeline) => configured(pipeline.with_remote(remote))?.with_area(area),
         Err(OpenError::MissingModel { .. }) => {
             events::notice("notice.run.modelsMissing", serde_json::json!({}), "warn");
             return Ok(RunHandle::default());
         }
+    };
+    // An Auto run cleans on a pipeline of its own while `pipeline` detects
+    // the pages after ([`walk_overlapped`]). Each opens only the sessions its
+    // half asks for, so the two hold what one pipeline doing both would.
+    let cleaning = if mode == RunMode::Auto && away.is_none() {
+        Some(configured(Pipeline::open_for_cleaning(&models, preference_from(&settings), app_data.clone()))?)
+    } else {
+        None
     };
     // A reader asked for and not there is said, never dropped quietly. A
     // clean reads nothing, so it is not told.
@@ -6978,8 +7359,12 @@ fn start_with_models(
     let worker = Worker { run_id, chapter_id: chapter_id.to_owned(), mode,
         cancel: Arc::clone(&reservation.cancel), finished: Arc::clone(&reservation.finished),
         outcome: Arc::clone(&reservation.outcome) };
+    // A streamed run is recorded as the Detect it is on this computer: a
+    // resume detects what is left and sends nothing, since a cloud clean
+    // needs a consent of its own.
     let settings_snapshot = run_settings_snapshot(
-        &settings, detection_snapshot, &pipeline, engine_ceiling.as_deref(), scope, page_index, mode,
+        &settings, detection_snapshot, &pipeline, engine_ceiling.as_deref(), scope, page_index,
+        if away.is_some() { RunMode::Detect } else { mode },
     );
     // Which exact models this run detects with, for anyone reading the log:
     // SAM-TS-L by checkpoint and revision, never a bare "SAM" or "Koharu".
@@ -7015,18 +7400,28 @@ fn start_with_models(
         // Before the walk, so the cloud GPU starts on page one while the run
         // opens its first job and its local models. Only the pages the walk
         // will detect: a page it cleans from stored detections never takes an
-        // answer, and one sent for it would be analysis nobody reads.
-        // Detect always uses its cloud answer, so it can prefetch. Auto's work
-        // depends on the manifest when the walk reaches each page; analyzing
-        // it there prevents a newly stored detection from wasting an upload.
-        if mode == RunMode::Detect { cleaner.prefetch_remote(&to_detect); }
+        // answer, and one sent for it would be analysis nobody reads. An Auto
+        // run's detection runs ahead of its cleaning anyway, so its pages are
+        // analyzed as fast as the GPU takes them; a page that gains a
+        // detection after the run started is cleaned from it, and its answer
+        // is the one upload wasted.
+        cleaner.prefetch_remote(&to_detect);
         let _processing = RunProcessing::acquire(&worker.cancel);
-        worker.run(&entries, &mut cleaner, ceiling, &|event| {
+        let mut cleaning = cleaning;
+        let emit = |event: Event| {
             progress.observe(&event);
             events::emit(&event);
-        });
+        };
+        let walk = match (cleaning.as_mut(), away.as_mut()) {
+            (_, Some(away)) => Walk::Streamed { detector: &mut cleaner, away },
+            (Some(cleaning), None) => Walk::Overlapped { cleaner: cleaning, detector: &mut cleaner },
+            (None, None) => Walk::One(&mut cleaner),
+        };
+        worker.run(&entries, walk, ceiling, &emit);
         // Release/park local sessions before another selection may open its
         // CTD/OCR pipeline under the processing permit.
+        drop(cleaning);
+        drop(away);
         drop(cleaner);
     });
     Ok(handle)
@@ -7115,24 +7510,32 @@ impl Worker {
     /// later `runClean` would answer `alreadyRunning` for a run that has
     /// stopped, and every `cancelRun` would wait the full [`CANCEL_WAIT`] and
     /// then name it.
+    ///
+    /// How the pages are walked is `walk`'s: one cleaner, or an Auto run's
+    /// detection on a thread of its own ahead of its cleaning ([`Walk`]).
     fn run(
         &self,
         entries: &[PlanEntry],
-        cleaner: &mut dyn Cleaner,
+        walk: Walk<'_>,
         ceiling: Engine,
-        emit: &dyn Fn(Event),
+        emit: &(dyn Fn(Event) + Sync),
     ) -> Summary {
         let _release = Release { run_id: self.run_id.clone(), finished: Arc::clone(&self.finished) };
-        let (summary, kept) = execute_with_kept(
-            self.mode,
-            &self.run_id,
-            &self.chapter_id,
-            entries,
-            cleaner,
-            ceiling,
-            &self.cancel,
-            emit,
-        );
+        let auto = self.mode == RunMode::Auto;
+        let ((summary, kept), cleaner): ((Summary, u32), &dyn Cleaner) = match walk {
+            Walk::Overlapped { cleaner, detector } if auto => (execute_overlapped(
+                &self.run_id, &self.chapter_id, entries, cleaner, detector, ceiling, &self.cancel, emit,
+            ), cleaner),
+            Walk::Streamed { detector, away } if auto => (execute_streamed(
+                &self.run_id, &self.chapter_id, entries, detector, away, ceiling, &self.cancel, emit,
+            ), detector),
+            Walk::One(cleaner) | Walk::Overlapped { cleaner, .. } | Walk::Streamed { detector: cleaner, .. } => (
+                execute_with_kept(
+                    self.mode, &self.run_id, &self.chapter_id, entries, cleaner, ceiling, &self.cancel, emit,
+                ),
+                cleaner,
+            ),
+        };
         // Recorded before the slot is released, so a `cancelRun` woken by the
         // release finds the reason the run actually ended on.
         if let Ok(mut recorded) = self.outcome.lock() {
@@ -7151,6 +7554,17 @@ impl Worker {
         }
         summary
     }
+}
+
+/// Which cleaners walk a run's pages ([`Worker::run`]). Only an Auto run
+/// overlaps; any other takes the cleaner that would clean.
+enum Walk<'w> {
+    /// One cleaner makes every visit ([`walk`]).
+    One(&'w mut dyn Cleaner),
+    /// `detector` runs ahead of `cleaner` ([`walk_overlapped`]).
+    Overlapped { cleaner: &'w mut dyn Cleaner, detector: &'w mut dyn Cleaner },
+    /// `detector` runs ahead of a clean on the cloud GPU ([`walk_streamed`]).
+    Streamed { detector: &'w mut dyn Cleaner, away: &'w mut dyn HandedClean },
 }
 
 /// Hands the run's slot back when it goes. See [`Worker::run`].
@@ -7376,6 +7790,7 @@ pub async fn run_clean(
     clean_latin: Option<bool>,
     analysis_targets: Option<serde_json::Value>,
     cloud_grant: Option<String>,
+    cloud_clean_grant: Option<String>,
     mode: Option<String>,
     area: Option<serde_json::Value>,
     solid_bubbles_only: Option<bool>,
@@ -7426,7 +7841,7 @@ pub async fn run_clean(
             detection,
             selected_models,
             all_text,
-            CloudStages { targets, grant: cloud_grant },
+            CloudStages { targets, grant: cloud_grant, clean_grant: cloud_clean_grant },
             mode,
             area,
             solid_bubbles_only.unwrap_or(false),
@@ -7586,7 +8001,7 @@ pub async fn resume_job(
             // A resume has no consent of its own: a run that sent pages to the
             // cloud is refused here (`cloud_run_grant_required`) and started
             // again from the editor, where the consent is asked.
-            CloudStages { targets: policy.analysis_targets, grant: None },
+            CloudStages { targets: policy.analysis_targets, grant: None, clean_grant: None },
             policy.mode,
             policy.area,
             policy.solid_bubbles_only,
