@@ -678,6 +678,17 @@ export const en = {
         // otherwise the button reads as "delete something I might need".
         partial: '{bytes:memory} downloaded. Download continues from there.',
       },
+      // A running SAM-TS-L install: the stage, then the whole install's percent.
+      samSetup: {
+        progress: '{stage} · {percent}%',
+        python: 'Getting Python',
+        environment: 'Preparing setup',
+        dependencies: 'Installing Python packages',
+        weights: 'Downloading the model',
+        source: 'Downloading the model code',
+        export: 'Converting the model',
+        verify: 'Checking the files',
+      },
       action: {
         download: 'Download',
         install: 'Install automatically',

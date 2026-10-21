@@ -8,14 +8,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
+import json
+import os
 import subprocess
 import sys
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
 
 MODEL_REVISION = "5dd97423e0fbf2404264979136d47e8101144046"
 MODEL_SHA256 = "bcd9525291677f467f0603509a0ca3df35711b4e3417cefce8da6bfc97164f45"
+MODEL_BYTES = 1355824988
+MODEL_URL = f"https://huggingface.co/mayocream/koharu-text-sam-ts-l/resolve/{MODEL_REVISION}/model.safetensors"
+DOWNLOAD_ATTEMPTS = 6
 HI_SAM_REVISION = "69009434d4dba5541f228d8f5acb0754c333d417"
 HI_SAM_ARCHIVE_SHA256 = "f18fb049813f9b9319ac074449f4539fbe5b58f4e3f450ce331578d74bc3e327"
 
@@ -26,6 +33,52 @@ def digest(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def progress(step: str, **fields: int) -> None:
+    """One JSON line on stdout; the desktop turns these into its progress bar."""
+    print(json.dumps({"step": step, **fields}), flush=True)
+
+
+def checkpoint(root: Path) -> Path:
+    """Download the pinned checkpoint, resuming a partial file across retries."""
+    target = root / "checkpoint" / "model.safetensors"
+    if target.is_file() and target.stat().st_size == MODEL_BYTES and digest(target) == MODEL_SHA256:
+        progress("weights", done=MODEL_BYTES, total=MODEL_BYTES)
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(target.name + ".part")
+    for attempt in range(DOWNLOAD_ATTEMPTS):
+        have = partial.stat().st_size if partial.is_file() else 0
+        if have > MODEL_BYTES:
+            partial.unlink()
+            have = 0
+        if have == MODEL_BYTES:
+            break
+        request = urllib.request.Request(MODEL_URL, headers={"Range": f"bytes={have}-"} if have else {})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                # A server that ignores the range sends the whole file again.
+                if have and response.status != 206:
+                    have = 0
+                with partial.open("ab" if have else "wb") as output:
+                    shown = -1
+                    while chunk := response.read(1024 * 1024):
+                        output.write(chunk)
+                        have += len(chunk)
+                        percent = have * 100 // MODEL_BYTES
+                        if percent != shown:
+                            shown = percent
+                            progress("weights", done=have, total=MODEL_BYTES)
+        except (OSError, http.client.HTTPException) as error:
+            if attempt + 1 == DOWNLOAD_ATTEMPTS:
+                raise RuntimeError(f"Koharu checkpoint download failed: {error}") from error
+            time.sleep(min(30, 2 ** attempt))
+    if not partial.is_file() or partial.stat().st_size != MODEL_BYTES or digest(partial) != MODEL_SHA256:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError("Koharu checkpoint SHA-256 mismatch")
+    os.replace(partial, target)
+    return target
 
 
 def extract_hi_sam_archive(archive: Path, source: Path) -> None:
@@ -69,7 +122,6 @@ def hi_sam(root: Path) -> Path:
 
 
 def main() -> None:
-    from huggingface_hub import hf_hub_download
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
@@ -79,20 +131,15 @@ def main() -> None:
     arguments = parser.parse_args()
     root = arguments.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    checkpoint = Path(hf_hub_download(
-        repo_id="mayocream/koharu-text-sam-ts-l",
-        filename="model.safetensors",
-        revision=MODEL_REVISION,
-        local_dir=root / "checkpoint",
-    ))
-    if digest(checkpoint) != MODEL_SHA256:
-        raise RuntimeError("Koharu checkpoint SHA-256 mismatch")
+    weights = checkpoint(root)
+    progress("source")
     architecture = hi_sam(root)
+    progress("export")
     proof = root / "proof"
     subprocess.run([
         sys.executable, str(arguments.source / "export_mask.py"),
         "--input", str(arguments.source / "synthetic_page.png"),
-        "--weights", str(checkpoint),
+        "--weights", str(weights),
         "--hi-sam-root", str(architecture),
         "--output-dir", str(proof),
         "--phase", "export",

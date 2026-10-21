@@ -686,6 +686,21 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**SAM-TS-L install on Windows (2026-10-21): fixed in code, not run on a Windows desktop.** A user's
+Windows install showed an empty black console window instead of progress. Every console program the
+app starts now goes through `cleaner_core::process::command`, which sets `CREATE_NO_WINDOW` on
+Windows; before, only the cloud helper had it, so the SAM install's uv and Python, the FLUX install,
+the FLUX sidecar and the `nvidia-smi` probe each could open one (closing it killed the step). The
+install also reports progress now: `bootstrap.py` downloads the 1.36 GB checkpoint itself, resuming a
+`.part` file with a `Range` request (checked against Hugging Face's redirect: 206), and prints JSON
+lines that `install_sam_ts` turns into `sam-install://progress`. Checked: the flag compiles for
+`x86_64-pc-windows-msvc`, unit tests, and the Settings row in the Vite mock. `probe-sam-head.yml`
+run 39683617086 passed on `windows-latest` and Ubuntu: from a seeded 100 MB `.part` file the
+download resumed (first report 105906176 bytes), sent 94 progress lines to 1355824988, and the
+exported graphs matched both pins. Not checked: a Windows GUI run showing no window. The frozen
+cloud helper bundles `bootstrap.py`: the release workflow freezes its own, a local release build
+needs `npm run helpers` first.
+
 **Detection ahead of cleaning (2026-10-21): local gain measured, cloud gain not.** An Auto run now
 detects page N+1 while it cleans page N, on two threads with a pipeline each (`walk_overlapped` in
 `src-tauri/src/run.rs`). On 8 pages of the user's chapter c32 (1136x1601), local models, outside

@@ -561,6 +561,8 @@ export function createMockBackend(options = {}) {
   const denoiseRuns = new Map()
   /** `app://quit-requested` listeners. @type {Set<(payload: Object) => void>} */
   const quitListeners = new Set()
+  /** `sam-install://progress` listeners. @type {Set<(payload: Object) => void>} */
+  const samInstallListeners = new Set()
   const emitTo = (listeners, payload) => {
     for (const listener of listeners) listener(structuredClone(payload))
   }
@@ -2656,6 +2658,10 @@ export function createMockBackend(options = {}) {
       return listenOn(quitListeners, handler)
     },
 
+    onSamInstallProgress(handler) {
+      return listenOn(samInstallListeners, handler)
+    },
+
     /**
      * What `list_jobs` answers: the runs and the denoises going now. The
      * mock's runs are its own pool (`runner.js#createRunnerPool`).
@@ -4044,7 +4050,11 @@ export function createMockBackend(options = {}) {
       return true
     },
     async installSamTs() {
-      await delay(timing.method)
+      // The native stages in order, the checkpoint moving within its span.
+      for (const [step, percent] of [['python', 0], ['environment', 5], ['dependencies', 8], ['weights', 30], ['weights', 57], ['weights', 85], ['source', 86], ['export', 88], ['verify', 95]]) {
+        emitTo(samInstallListeners, { step, percent })
+        await delay(timing.method)
+      }
       review.models.sam = true
       return true
     },

@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -292,7 +292,7 @@ fn find_python(root: &Path) -> Option<PathBuf> {
 
 /// Run a short Python probe, bounded so a wedged interpreter cannot stall discovery.
 fn python_succeeds(python: &Path, args: &[&str]) -> bool {
-    let Ok(mut child) = Command::new(python)
+    let Ok(mut child) = cleaner_core::process::command(python)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -610,7 +610,7 @@ pub fn execute_helper_subprocess(
     let request_id = run.request_id;
     let mut command = match run.command {
         HelperCommand::Executable(bin) => {
-            let mut c = Command::new(bin);
+            let mut c = cleaner_core::process::command(bin);
             c.arg("--journal-root").arg(run.journal_root);
             c
         }
@@ -618,7 +618,7 @@ pub fn execute_helper_subprocess(
             python_bin,
             workdir,
         } => {
-            let mut c = Command::new(python_bin);
+            let mut c = cleaner_core::process::command(python_bin);
             c.current_dir(workdir);
             c.args(["-m", "provisioner", "--journal-root"])
                 .arg(run.journal_root);
@@ -642,13 +642,6 @@ pub fn execute_helper_subprocess(
         // helper started: the PyInstaller one-file bootloader runs the real
         // helper as a child, and provider SDKs start processes of their own.
         command.process_group(0);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW. The helper is a console program; a windowed app
-        // that starts one without this flag opens a console window for it.
-        command.creation_flags(0x0800_0000);
     }
 
     if run.stop.load(Ordering::SeqCst) {

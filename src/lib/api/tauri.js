@@ -258,6 +258,7 @@ export const SEAM_METHODS = Object.freeze([
   'onRemoteAnalysis',
   'onDenoiseProgress',
   'onDenoiseRecorded',
+  'onSamInstallProgress',
   'about',
   'diagnostics',
   'listLoadedModels',
@@ -302,7 +303,7 @@ export const SEAM_METHODS = Object.freeze([
  * and each answers with a promise of its unlisten function, the shape Tauri's
  * own `listen` has. None of them is a command, so none is in `IMPLEMENTED`.
  */
-export const EVENT_METHODS = Object.freeze(['subscribe', 'onProvisionProgress', 'onCloudAttempt', 'onRemoteAnalysis', 'onDenoiseProgress', 'onDenoiseRecorded', 'onQuitRequested'])
+export const EVENT_METHODS = Object.freeze(['subscribe', 'onProvisionProgress', 'onCloudAttempt', 'onRemoteAnalysis', 'onDenoiseProgress', 'onDenoiseRecorded', 'onSamInstallProgress', 'onQuitRequested'])
 
 /** The event names the listeners attach to. */
 export const CLOUD_EVENTS = Object.freeze({
@@ -317,9 +318,12 @@ export const CLOUD_EVENTS = Object.freeze({
  * The application's own events. `app://quit-requested` is the quit guard in
  * `src-tauri/src/jobs.rs`: a close, the tray's Quit or Cmd+Q while jobs run,
  * held until the interface answers with `confirmQuit` or `hideToTray`.
+ * `sam-install://progress` is `install_sam_ts` in
+ * `src-tauri/src/model_workflows.rs`, moving its one progress bar.
  */
 export const APP_EVENTS = Object.freeze({
   quitRequested: 'app://quit-requested',
+  samInstallProgress: 'sam-install://progress',
 })
 
 /** Whether this page is running inside a Tauri window. */
@@ -747,6 +751,7 @@ export function createTauriBackend({ fallback, invoke, listen }) {
   backend.onRemoteAnalysis = (handler) => on(CLOUD_EVENTS.remoteAnalysis, handler)
   backend.onDenoiseProgress = (handler) => on(CLOUD_EVENTS.denoiseProgress, handler)
   backend.onDenoiseRecorded = (handler) => on(CLOUD_EVENTS.denoiseRecorded, handler)
+  backend.onSamInstallProgress = (handler) => on(APP_EVENTS.samInstallProgress, handler)
   backend.onQuitRequested = (handler) => on(APP_EVENTS.quitRequested, handler)
 
   return /** @type {import('./backend.js').Backend} */ (backend)

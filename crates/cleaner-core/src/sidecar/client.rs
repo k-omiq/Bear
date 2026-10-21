@@ -48,7 +48,7 @@
 
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::engines::model::{Decline, Error};
@@ -395,7 +395,7 @@ impl Sidecar {
         let port = free_port()?;
         let addr: SocketAddr = ([127, 0, 0, 1], port).into();
 
-        let mut command = Command::new(&install.python);
+        let mut command = crate::process::command(&install.python);
         let weights_dir = std::env::var_os("MC_SIDECAR_WEIGHTS_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| match backend {

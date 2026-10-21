@@ -544,6 +544,17 @@ export const ko = {
         readOnly: '다른 곳에 설치됨',
         partial: '{bytes:memory} 다운로드됨. 거기서부터 이어서 다운로드합니다.',
       },
+      // A running SAM-TS-L install: the stage, then the whole install's percent.
+      samSetup: {
+        progress: '{stage} · {percent}%',
+        python: 'Python 받는 중',
+        environment: '설치 준비 중',
+        dependencies: 'Python 패키지 설치 중',
+        weights: '모델 다운로드 중',
+        source: '모델 코드 다운로드 중',
+        export: '모델 변환 중',
+        verify: '파일 확인 중',
+      },
       action: {
         download: '다운로드',
         install: '자동 설치',

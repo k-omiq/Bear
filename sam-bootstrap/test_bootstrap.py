@@ -54,5 +54,73 @@ class SourceArchiveTest(unittest.TestCase):
         self.assertFalse((self.root / "Hi-SAM").exists())
 
 
+class Response(io.BytesIO):
+    def __init__(self, body: bytes, status: int) -> None:
+        super().__init__(body)
+        self.status = status
+
+
+class CheckpointDownloadTest(unittest.TestCase):
+    BODY = bytes(range(256)) * 40
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        pins = {"MODEL_BYTES": len(self.BODY), "MODEL_SHA256": hashlib.sha256(self.BODY).hexdigest()}
+        for name, value in pins.items():
+            patcher = patch.object(bootstrap, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.requests: list[str | None] = []
+
+    def serve(self, *, honour_range: bool, fail_first_after: int | None = None):
+        def urlopen(request, timeout):
+            ranged = request.get_header("Range")
+            self.requests.append(ranged)
+            if fail_first_after is not None and len(self.requests) == 1:
+                class Broken(Response):
+                    def read(inner, size=-1):
+                        if inner.tell() >= fail_first_after:
+                            raise ConnectionResetError("dropped")
+                        return super().read(min(size, fail_first_after - inner.tell()))
+                return Broken(self.BODY, 200)
+            if ranged and honour_range:
+                start = int(ranged.removeprefix("bytes=").removesuffix("-"))
+                return Response(self.BODY[start:], 206)
+            return Response(self.BODY, 200)
+        return patch.object(bootstrap.urllib.request, "urlopen", side_effect=urlopen)
+
+    def test_a_dropped_download_resumes_from_its_partial_file(self) -> None:
+        with self.serve(honour_range=True, fail_first_after=4096), patch.object(bootstrap.time, "sleep"):
+            target = bootstrap.checkpoint(self.root)
+        self.assertEqual(target.read_bytes(), self.BODY)
+        self.assertEqual(self.requests, [None, "bytes=4096-"])
+        self.assertFalse(target.with_name("model.safetensors.part").exists())
+
+    def test_a_server_that_ignores_the_range_restarts_the_file(self) -> None:
+        part = self.root / "checkpoint" / "model.safetensors.part"
+        part.parent.mkdir(parents=True)
+        part.write_bytes(self.BODY[:100])
+        with self.serve(honour_range=False):
+            target = bootstrap.checkpoint(self.root)
+        self.assertEqual(target.read_bytes(), self.BODY)
+
+    def test_a_verified_checkpoint_is_not_downloaded_again(self) -> None:
+        target = self.root / "checkpoint" / "model.safetensors"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(self.BODY)
+        with self.serve(honour_range=True):
+            bootstrap.checkpoint(self.root)
+        self.assertEqual(self.requests, [])
+
+    def test_wrong_bytes_are_refused_and_not_kept(self) -> None:
+        with patch.object(bootstrap, "MODEL_SHA256", "0" * 64), self.serve(honour_range=True), \
+                self.assertRaisesRegex(RuntimeError, "SHA-256 mismatch"):
+            bootstrap.checkpoint(self.root)
+        self.assertFalse((self.root / "checkpoint" / "model.safetensors.part").exists())
+        self.assertFalse((self.root / "checkpoint" / "model.safetensors").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

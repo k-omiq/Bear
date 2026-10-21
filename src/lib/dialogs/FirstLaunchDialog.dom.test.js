@@ -504,6 +504,31 @@ describe('the pipelines', () => {
     await waitFor(() => expect(firstLaunch.status.samTs).toBe('done'))
   })
 
+  it('moves the SAM-TS-L row with the install\'s stage and percent, and clears it after', async () => {
+    /** @type {(progress: {step: string, percent: number}) => void} */
+    let report = () => {}
+    let finish = () => {}
+    const off = vi.fn()
+    backend.onSamInstallProgress = vi.fn(async (handler) => { report = handler; return off })
+    backend.installSamTs = vi.fn(() => new Promise((resolve) => { finish = () => resolve(true) }))
+    setDetectorModels(['samTs'])
+    setTextPolicy('all_text')
+    const rendered = open('detection', view({ runtimeInstalled: true }))
+    firstLaunch.cleaners = { 'lama-manga': false }
+    startFirstLaunchDownloads()
+    await waitFor(() => expect(backend.installSamTs).toHaveBeenCalledTimes(1))
+    report({ step: 'weights', percent: 57 })
+    expect(firstLaunch.progress.samTs).toEqual({ downloaded: 57, total: 100, step: 'weights' })
+    setFirstLaunchStep('downloads')
+    await waitFor(() => expect(rendered.getByText(t('settings.models.samSetup.progress', {
+      stage: t('settings.models.samSetup.weights'), percent: 57,
+    }))).toBeTruthy())
+    finish()
+    await waitFor(() => expect(firstLaunch.status.samTs).toBe('done'))
+    expect(firstLaunch.progress.samTs).toBeUndefined()
+    expect(off).toHaveBeenCalledOnce()
+  })
+
   it('draw cleaners that cannot be fetched as disabled, and FLUX as the helper\'s', async () => {
     const rendered = open('cleaning')
     expect(/** @type {HTMLInputElement} */ (rendered.getByLabelText(/Qwen-Image-Edit-2511/)).disabled).toBe(true)

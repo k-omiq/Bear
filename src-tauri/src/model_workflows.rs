@@ -762,18 +762,57 @@ fn sam_uv() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("uv"))
 }
 
-fn sam_step(app: &tauri::AppHandle, name: &'static str, mut command: Command, root: &Path) -> Result<(), String> {
-    let _ = app.emit("sam-install://progress", serde_json::json!({"step": name, "state": "start"}));
+/// One move of the SAM-TS-L install's single progress bar, `percent` of the
+/// whole install. `step` names the stage for the status line.
+fn sam_progress(app: &tauri::AppHandle, step: &str, percent: u64) {
+    let _ = app.emit("sam-install://progress", serde_json::json!({"step": step, "percent": percent}));
+}
+
+/// A `bootstrap.py` progress line as its stage and percent of the whole
+/// install. The 1.36 GB checkpoint is most of the wait on a slow link, so it
+/// has the widest span and is the one stage that moves within itself.
+fn sam_bootstrap_progress(line: &str) -> Option<(&'static str, u64)> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    match value["step"].as_str()? {
+        "weights" => {
+            let total = value["total"].as_u64().filter(|total| *total > 0)?;
+            let done = value["done"].as_u64()?.min(total);
+            Some(("weights", 30 + done * 55 / total))
+        }
+        "source" => Some(("source", 86)),
+        "export" => Some(("export", 88)),
+        _ => None,
+    }
+}
+
+fn sam_step(
+    app: &tauri::AppHandle,
+    name: &'static str,
+    (stage, percent): (&'static str, u64),
+    mut command: Command,
+    root: &Path,
+) -> Result<(), String> {
+    sam_progress(app, stage, percent);
     let log = root.join(format!("{name}.log"));
     let output = std::fs::File::create(&log).map_err(|e| e.to_string())?;
-    let mut child = command.stdin(Stdio::null()).stdout(Stdio::null())
+    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped())
         .stderr(Stdio::from(output)).spawn()
         .map_err(|e| format!("The SAM-TS-L lettering mask {name} could not start: {e}"))?;
+    let stdout = child.stdout.take().ok_or("The SAM-TS-L lettering mask output is unavailable")?;
+    let reporter = app.clone();
+    // Drained to the end whatever it says: a full pipe would stall the child.
+    let reader = std::thread::spawn(move || {
+        for line in std::io::BufRead::lines(std::io::BufReader::new(stdout)).map_while(Result::ok) {
+            if let Some((stage, percent)) = sam_bootstrap_progress(&line) {
+                sam_progress(&reporter, stage, percent);
+            }
+        }
+    });
     let deadline = Instant::now() + Duration::from_secs(2 * 60 * 60);
     loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            let _ = reader.join();
             if status.success() {
-                let _ = app.emit("sam-install://progress", serde_json::json!({"step": name, "state": "done"}));
                 return Ok(());
             }
             let detail = std::fs::read_to_string(&log).unwrap_or_default();
@@ -800,29 +839,30 @@ pub async fn install_sam_ts(app: tauri::AppHandle) -> Result<bool, String> {
             let _install = SAM_INSTALL.lock().map_err(|e| e.to_string())?;
             let root = app_data.join("models/.sam-ts-l-bootstrap");
             std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+            sam_progress(&app, "python", 0);
             let (managed, prefix) = crate::flux_install::managed_python(&app, &root, "3.12")?;
             let uv = sam_uv();
             let venv = root.join("venv");
-            let mut setup = Command::new(&uv);
+            let mut setup = cleaner_core::process::command(&uv);
             // A retry after any later failure finds the previous attempt's
             // environment; uv refuses to reuse it without --clear.
             setup.args(["venv", "--clear", "--python", &managed]).arg(&venv).env("UV_NO_CONFIG", "1");
-            sam_step(&app, "environment", setup, &root)?;
+            sam_step(&app, "environment", ("environment", 5), setup, &root)?;
             let python = if cfg!(windows) { venv.join("Scripts/python.exe") } else { venv.join("bin/python") };
-            let mut dependencies = Command::new(&uv);
+            let mut dependencies = cleaner_core::process::command(&uv);
             // The export runs on the CPU. Without a backend, Linux gets the
             // CUDA torch wheel, whose NVIDIA libraries pip sync never installs.
             dependencies.args(["pip", "sync", "--torch-backend", "cpu", "--python"]).arg(&python).arg(source.join("environment.txt"))
                 .env("UV_NO_CONFIG", "1");
-            sam_step(&app, "dependencies", dependencies, &root)?;
-            let mut bootstrap = Command::new(&python);
+            sam_step(&app, "dependencies", ("dependencies", 8), dependencies, &root)?;
+            let mut bootstrap = cleaner_core::process::command(&python);
             bootstrap.args(prefix).arg(source.join("bootstrap.py"))
                 .arg("--root").arg(&root).arg("--source").arg(&source)
                 .arg("--dense-pe").arg(source.join("dense_pe.f32.xz"));
-            sam_step(&app, "sources-export", bootstrap, &root)?;
+            sam_step(&app, "sources-export", ("weights", 30), bootstrap, &root)?;
             let proof = root.join("proof");
+            sam_progress(&app, "verify", 95);
             verify_graphs(&proof)?;
-            let _ = app.emit("sam-install://progress", serde_json::json!({"step": "verify", "state": "done"}));
             Ok(proof)
         }
     }).await.map_err(|e| e.to_string())??;
@@ -2165,6 +2205,18 @@ pub async fn analyze_chapter_page(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bootstrap_lines_move_the_install_bar_and_others_are_ignored() {
+        let progress = super::sam_bootstrap_progress;
+        assert_eq!(progress(r#"{"step": "weights", "done": 0, "total": 100}"#), Some(("weights", 30)));
+        assert_eq!(progress(r#"{"step": "weights", "done": 50, "total": 100}"#), Some(("weights", 57)));
+        assert_eq!(progress(r#"{"step": "weights", "done": 900, "total": 100}"#), Some(("weights", 85)));
+        assert_eq!(progress(r#"{"step": "weights", "done": 1, "total": 0}"#), None);
+        assert_eq!(progress(r#"{"step": "export"}"#), Some(("export", 88)));
+        assert_eq!(progress("Exporting encoder to ONNX"), None);
+        assert_eq!(progress(r#"{"step": "other"}"#), None);
+    }
+
     #[test]
     fn local_cpu_detection_is_available_without_preview_write_qualification() {
         let rows = super::sam_backends(true, true, false, false);

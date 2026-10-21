@@ -547,6 +547,17 @@ export const ja = {
         readOnly: '別の場所にインストール済み',
         partial: '{bytes:memory} ダウンロード済み。続きからダウンロードします。',
       },
+      // A running SAM-TS-L install: the stage, then the whole install's percent.
+      samSetup: {
+        progress: '{stage} · {percent}%',
+        python: 'Python を取得中',
+        environment: 'セットアップを準備中',
+        dependencies: 'Python パッケージをインストール中',
+        weights: 'モデルをダウンロード中',
+        source: 'モデルのコードをダウンロード中',
+        export: 'モデルを変換中',
+        verify: 'ファイルを確認中',
+      },
       action: {
         download: 'ダウンロード',
         install: '自動インストール',

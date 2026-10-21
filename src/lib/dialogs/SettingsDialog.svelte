@@ -1,5 +1,6 @@
 <script module>
   import { MODELS as PIPELINE_MODELS } from '../model/pipelines.js'
+  import { samSetupState } from '../model/samsetup.js'
 
   /**
    * Whether a `model-progress` event is about a row this dialog does not know
@@ -868,7 +869,8 @@
     const verified = installed && (sam ? samVerified === true : true)
     /** @type {{key: string, params?: Object}} */
     let state
-    if (importBusy[entry.id]) state = { key: 'settings.models.status.checking' }
+    if (sam && samInstall) state = samSetupState(t, samInstall)
+    else if (importBusy[entry.id]) state = { key: 'settings.models.status.checking' }
     else if (!installed) state = { key: 'settings.models.status.importToEnable' }
     else if (sam && samVerified === false) state = { key: 'settings.models.status.mismatch' }
     else state = { key: 'settings.models.status.imported' }
@@ -1156,17 +1158,26 @@
     }
   }
 
+  /** The running SAM-TS-L install's stage and percent, for its row. @type {{step: string, percent: number}|null} */
+  let samInstall = $state(null)
+
   async function installSamTs() {
     importBusy = { ...importBusy, samTs: true }
     importFailures = without(importFailures, 'samTs')
+    const backend = getBackend()
+    const off = await backend.onSamInstallProgress?.((progress) => { samInstall = progress })
     try {
-      await getBackend().installSamTs()
+      await backend.installSamTs()
       samVerified = true
     } catch (error) {
       importFailures = { ...importFailures, samTs: String(error) }
     } finally {
-      importBusy = { ...importBusy, samTs: false }
+      off?.()
+      // Read the new state first, so the row never flashes "Import to enable"
+      // between the last stage and "Imported".
       await refreshWorkflowCaps()
+      samInstall = null
+      importBusy = { ...importBusy, samTs: false }
     }
   }
 

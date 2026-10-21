@@ -551,6 +551,17 @@ export const es = {
         readOnly: 'instalado en otra ubicación',
         partial: '{bytes:memory} descargados. La descarga continúa desde ahí.',
       },
+      // A running SAM-TS-L install: the stage, then the whole install's percent.
+      samSetup: {
+        progress: '{stage} · {percent}%',
+        python: 'Obteniendo Python',
+        environment: 'Preparando la instalación',
+        dependencies: 'Instalando paquetes de Python',
+        weights: 'Descargando el modelo',
+        source: 'Descargando el código del modelo',
+        export: 'Convirtiendo el modelo',
+        verify: 'Comprobando los archivos',
+      },
       action: {
         download: 'Descargar',
         install: 'Instalar automáticamente',

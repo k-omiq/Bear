@@ -54,7 +54,7 @@ export const firstLaunch = $state({
   queue: [],
   /** @type {Record<string, FileStatus>} */
   status: {},
-  /** @type {Record<string, {downloaded: number, total: number|null}>} */
+  /** `step` is SAM-TS-L's install stage; its bar is percent of 100. @type {Record<string, {downloaded: number, total: number|null, step?: string}>} */
   progress: {},
   /** @type {Record<string, string>} */
   errors: {},
@@ -435,14 +435,8 @@ async function run() {
       } else setStatus(id, 'active')
       try {
         if (groupId && groupMembers) await fetchGroup(backend, groupId, groupMembers)
-        else if (id === 'samTs') {
-          try {
-            await backend.installSamTs()
-            setStatus(id, 'done')
-          } catch (error) {
-            fail(id, String(error))
-          }
-        } else await fetchOne(backend, id)
+        else if (id === 'samTs') await installSam(backend)
+        else await fetchOne(backend, id)
       } finally {
         for (const member of groupMembers ?? [id]) pauseRequested.delete(member)
       }
@@ -458,6 +452,29 @@ async function run() {
     // Re-read after the await: a resume in that gap started a new run, and
     // the channel is its channel now.
     if (!firstLaunch.open && !firstLaunch.running) stopListening()
+  }
+}
+
+/**
+ * SAM-TS-L: one install that downloads and converts, so its bar is the
+ * install's own percent and its stage, not a file's bytes. It has no pause.
+ *
+ * @param {import('../api/backend.js').Backend} backend
+ */
+async function installSam(backend) {
+  const off = await backend.onSamInstallProgress?.(({ step, percent }) => {
+    if (firstLaunch.status.samTs !== 'active') return
+    firstLaunch.progress = { ...firstLaunch.progress, samTs: { downloaded: percent, total: 100, step } }
+  })
+  try {
+    await backend.installSamTs()
+    setStatus('samTs', 'done')
+  } catch (error) {
+    fail('samTs', String(error))
+  } finally {
+    off?.()
+    const { samTs: _gone, ...rest } = firstLaunch.progress
+    firstLaunch.progress = rest
   }
 }
 

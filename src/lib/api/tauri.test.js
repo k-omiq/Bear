@@ -1006,7 +1006,10 @@ describe('the Tauri adapter', () => {
 
       expect(await backend.onQuitRequested(onQuit)).toBe(unlisten)
       expect(listen).toHaveBeenCalledWith(APP_EVENTS.quitRequested, onQuit)
-      expect(APP_EVENTS).toEqual({ quitRequested: 'app://quit-requested' })
+      const onSam = () => {}
+      expect(await backend.onSamInstallProgress(onSam)).toBe(unlisten)
+      expect(listen).toHaveBeenCalledWith(APP_EVENTS.samInstallProgress, onSam)
+      expect(APP_EVENTS).toEqual({ quitRequested: 'app://quit-requested', samInstallProgress: 'sam-install://progress' })
 
       await backend.confirmQuit()
       await backend.hideToTray()

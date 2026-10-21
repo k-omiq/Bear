@@ -28,6 +28,7 @@ pub mod memory;
 pub mod page_denoise;
 pub mod paint;
 pub mod patch;
+pub mod process;
 pub mod project;
 pub mod quality;
 pub mod registry;

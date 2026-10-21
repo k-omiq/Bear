@@ -3,7 +3,7 @@
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -38,7 +38,7 @@ fn system_python() -> Option<(String, Vec<String>)> {
         }
     }
     candidates.into_iter().find(|(name, prefix)| {
-        Command::new(name)
+        cleaner_core::process::command(name)
             .args(prefix)
             .args(["-c", "import sys; assert (3,10) <= sys.version_info[:2] < (3,13)"])
             .stdin(Stdio::null())
@@ -59,7 +59,7 @@ pub(crate) fn managed_python(app: &tauri::AppHandle, root: &Path, version: &str)
     let python_dir = root.join("python");
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let _ = app.emit("flux-install://progress", json!({"step": "environment", "state": "start"}));
-    let mut child = Command::new(&uv)
+    let mut child = cleaner_core::process::command(&uv)
         .args(["python", "install", version, "--install-dir"])
         .arg(&python_dir)
         .env("UV_PYTHON_INSTALL_DIR", &python_dir)
@@ -81,7 +81,7 @@ pub(crate) fn managed_python(app: &tauri::AppHandle, root: &Path, version: &str)
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    let found = Command::new(&uv)
+    let found = cleaner_core::process::command(&uv)
         .args(["python", "find", version, "--managed-python", "--system"])
         .env("UV_PYTHON_INSTALL_DIR", &python_dir)
         .env("UV_NO_CONFIG", "1")
@@ -108,7 +108,7 @@ fn install(app: &tauri::AppHandle, backend: &str, accelerator: &str) -> Result<V
         Some(existing) => existing,
         None => managed_python(app, &root, "3.11")?,
     };
-    let mut child = Command::new(python)
+    let mut child = cleaner_core::process::command(python)
         .args(prefix)
         .arg(source.join("bootstrap.py"))
         .args(["--root", root.to_str().ok_or("Invalid FLUX install path")?])

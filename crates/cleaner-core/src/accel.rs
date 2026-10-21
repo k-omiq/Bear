@@ -536,7 +536,7 @@ pub fn cuda_runtime_present() -> bool {
 /// Ask the NVIDIA driver for a real adapter. A CUDA EP compiled into ORT and
 /// libraries on disk still do not establish that a GPU is connected.
 fn cuda_device_present() -> bool {
-    std::process::Command::new("nvidia-smi")
+    crate::process::command("nvidia-smi")
         .arg("--list-gpus")
         .output()
         .is_ok_and(|output| output.status.success() && output.stdout.windows(4).any(|part| part == b"GPU "))

@@ -11,6 +11,7 @@
   import { hasKey, t } from '../../i18n/index.js'
   import { runtimeNotice } from '../firstlaunch.js'
   import { firstLaunch, pauseFile, resumeFile } from '../firstlaunch.svelte.js'
+  import { samSetupState } from '../../model/samsetup.js'
 
   const STATUS_KEYS = {
     waiting: 'onboarding.downloads.status.waiting',
@@ -46,6 +47,12 @@
   function statusText(id) {
     const status = firstLaunch.status[id] ?? 'waiting'
     if (status === 'active') {
+      // SAM-TS-L's `downloaded` is already the install's percent.
+      const { step, downloaded } = firstLaunch.progress[id] ?? {}
+      if (step) {
+        const sam = samSetupState(t, { step, percent: downloaded })
+        return t(sam.key, sam.params)
+      }
       return firstLaunch.progress[id]?.total
         ? t('onboarding.downloads.status.active', { percent: percentOf(id) })
         : t('onboarding.downloads.status.starting')
