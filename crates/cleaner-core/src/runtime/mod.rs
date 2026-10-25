@@ -43,6 +43,7 @@ pub mod package;
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::SystemTime;
 
 /// The file name the runtime must keep. On macOS the dylib's own
 /// `LC_LOAD_DYLIB` names `@rpath/libonnxruntime.1.dylib`, so a copy saved under
@@ -204,8 +205,84 @@ pub fn load(path: &Path) -> Result<(), LoadError> {
         })?
         .with_name("manga-cleaner")
         .commit();
+    LOADED.get_or_init(|| Loaded { path: path.to_path_buf(), build: build_of(path), file: file_stamp(path) });
+    // The CUDA major wanted is read off this load, so a report taken before
+    // the load is about no build at all.
+    crate::cuda::rescan();
     WEBGPU_PLUGIN.get_or_init(|| register_webgpu_plugin(path));
     Ok(())
+}
+
+/// What the first successful [`load`] mapped, as it was at that moment.
+struct Loaded {
+    path: PathBuf,
+    build: Option<Build>,
+    file: Option<(u64, SystemTime)>,
+}
+
+static LOADED: OnceLock<Loaded> = OnceLock::new();
+
+/// The record the app writes beside a runtime it unpacked: which build and
+/// version that is. A dot-file, because `<app_data>/runtimes` is a directory a
+/// user is invited to fill by hand.
+pub const INSTALLED_FILE: &str = ".installed.json";
+
+/// A runtime build, as its install record names it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Build {
+    /// `stock`, `directml`, `cuda12` or `cuda13`.
+    pub flavour: String,
+    pub version: String,
+}
+
+/// The build the record beside `library` names, or `None` for **unknown**: a
+/// runtime placed by hand, or one unpacked before the record existed. The
+/// shipped packages all unpack to the same file name, so the path alone never
+/// says which build it is.
+pub fn build_of(library: &Path) -> Option<Build> {
+    let record = library.parent()?.join(INSTALLED_FILE);
+    serde_json::from_slice(&std::fs::read(record).ok()?).ok()
+}
+
+fn file_stamp(library: &Path) -> Option<(u64, SystemTime)> {
+    let meta = std::fs::metadata(library).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// The library the first successful [`load`] mapped. A process loads one
+/// runtime for its whole life, so this never changes once set. `None` before
+/// any load.
+pub fn loaded() -> Option<&'static Path> {
+    LOADED.get().map(|loaded| loaded.path.as_path())
+}
+
+/// The build the loaded library is, read when it was loaded. [`crate::cuda`]
+/// reads it to learn which CUDA major the build was compiled against, which no
+/// API of the runtime itself reports.
+pub fn loaded_build() -> Option<&'static Build> {
+    LOADED.get()?.build.as_ref()
+}
+
+/// What tells this loaded library apart from another at the same path: its
+/// build and version where the record names them, and its size and time
+/// written either way, so a hand-placed library swapped for another is a
+/// different one too.
+pub fn loaded_identity() -> Option<String> {
+    let loaded = LOADED.get()?;
+    let build = loaded.build.as_ref().map_or_else(|| "build unknown".to_owned(), |b| format!("build {} {}", b.flavour, b.version));
+    let file = loaded.file.map_or_else(String::new, |(len, time)| {
+        let secs = time.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        format!(" file {len} {secs}")
+    });
+    Some(format!("{build}{file}"))
+}
+
+/// Whether the file at the loaded path is no longer the library this process
+/// mapped: a download of another build replaced it. Until a restart the
+/// process still runs the old one, so anything timed now is about a build the
+/// next launch will not have.
+pub fn replaced_since_load() -> bool {
+    LOADED.get().is_some_and(|loaded| file_stamp(&loaded.path) != loaded.file || build_of(&loaded.path) != loaded.build)
 }
 
 /// What became of the WebGPU plugin beside the loaded runtime.

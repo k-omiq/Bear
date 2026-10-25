@@ -1,0 +1,103 @@
+name: Probe CUDA builds
+
+# The CUDA builds against a machine with CUDA 12 and CUDA 13 installed side by
+# side, each with its own cuDNN 9: the setup on which the CUDA 12 build used to
+# load CUDA 13's libraries and fail. The runners have no NVIDIA card, so a
+# stand-in `nvidia-smi` answers for one, and what the probe checks is what the
+# process loads: the CUDA provider, and every toolkit and cuDNN library from
+# the install of the build's own major. A wrong file name, a search path NVIDIA
+# moved, or a version picked by loader order fails here, before a user's
+# machine finds it. Timing on a real card is not covered.
+#
+# The toolkits come from NVIDIA's own installers (the Windows network installer,
+# the Ubuntu packages), so their directory layout is the one users get. The rest
+# is `.github/scripts/cuda-probe.py`.
+
+on:
+  pull_request:
+    paths:
+      - crates/cleaner-core/src/cuda.rs
+      - crates/cleaner-core/src/accel.rs
+      - crates/cleaner-core/src/runtime/**
+      - crates/cleaner-core/src/measure.rs
+      - .github/scripts/cuda-probe.py
+      - .github/workflows/probe-cuda.yml
+  push:
+    # `probe-cuda` runs it before the change is in a pull request, the way
+    # `probe-sam-head` does for the SAM export.
+    branches: [main, probe-cuda]
+    paths:
+      - crates/cleaner-core/src/cuda.rs
+      - crates/cleaner-core/src/accel.rs
+      - crates/cleaner-core/src/runtime/**
+      - crates/cleaner-core/src/measure.rs
+      - .github/scripts/cuda-probe.py
+      - .github/workflows/probe-cuda.yml
+  # NVIDIA moves files between releases (CUDA 13 put its DLLs in `bin\x64`),
+  # and nothing in this repository changes when it does.
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: probe-cuda-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: CUDA 12 and 13 side by side (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cuda-probe
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install onnx (builds the one-node probe graph)
+        run: python -m pip install onnx==1.19.1
+
+      # Only the libraries the CUDA provider links: the runtime, cuBLAS,
+      # cuFFT and cuRAND. Subpackage names as NVIDIA's installation guide
+      # lists them.
+      - name: Install CUDA 12.6 and 13.0 (Windows network installers)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($release in @('12.6.3', '13.0.2')) {
+            $short = ($release -split '\.')[0..1] -join '.'
+            $installer = "$env:RUNNER_TEMP\cuda_$release.exe"
+            Invoke-WebRequest "https://developer.download.nvidia.com/compute/cuda/$release/network_installers/cuda_${release}_windows_network.exe" -OutFile $installer
+            $packages = @("cudart_$short", "cublas_$short", "cufft_$short", "curand_$short")
+            $process = Start-Process -FilePath $installer -ArgumentList (@('-s') + $packages) -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "CUDA $release installer exited with $($process.ExitCode)" }
+            Write-Host "CUDA $release installed"
+          }
+
+      - name: Install CUDA 12.6 and 13.0 (Ubuntu packages)
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cuda-cudart-12-6 libcublas-12-6 libcufft-12-6 libcurand-12-6 \
+            cuda-cudart-13-0 libcublas-13-0 libcufft-13-0 libcurand-13-0
+          # cuDNN goes into each toolkit's library directory, as NVIDIA's tar
+          # install instructions say; the setup step copies it there.
+          sudo chown -R "$USER" /usr/local/cuda-12.6/targets/x86_64-linux/lib /usr/local/cuda-13.0/targets/x86_64-linux/lib
+
+      - name: cuDNN, both runtime builds, the probe graph, the stand-in nvidia-smi
+        run: python .github/scripts/cuda-probe.py setup
+
+      - name: Probe each build with the other CUDA first on the loader path
+        run: python .github/scripts/cuda-probe.py probe

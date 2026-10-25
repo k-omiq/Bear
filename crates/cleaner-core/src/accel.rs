@@ -92,7 +92,8 @@
 //! as before.
 //!
 //! CUDA also needs components this application does not ship - the CUDA runtime
-//! and cuDNN 9 - which no other provider here does. [`Accelerator::availability`]
+//! and cuDNN 9 - which no other provider here does. [`crate::cuda`] finds them,
+//! of the CUDA major the loaded build wants, and [`Accelerator::availability`]
 //! answers `Unavailable::MissingDependency` when they are not on the machine, so
 //! a user who selects CUDA without installing it is told which of the two things
 //! is missing rather than watching a session fail.
@@ -209,7 +210,7 @@
 //! Windows machine with `spike-onnx-probe`, which is where the row for
 //! DirectML in the table above comes from too.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ort::session::Session;
 
@@ -307,11 +308,15 @@ impl Accelerator {
         if !self.in_runtime() {
             return Err(Unavailable::NotInRuntime);
         }
-        if self.needs_cuda_runtime() && !cuda_runtime_present() {
-            return Err(Unavailable::MissingDependency);
-        }
-        if self.needs_cuda_runtime() && !cuda_device_present() {
-            return Err(Unavailable::NoDevice);
+        if self.needs_cuda_runtime() {
+            match crate::cuda::report().verdict() {
+                crate::cuda::Verdict::Ready { .. } => {}
+                crate::cuda::Verdict::NoGpu => return Err(Unavailable::NoDevice),
+                crate::cuda::Verdict::DriverTooOld { .. } => return Err(Unavailable::DriverTooOld),
+                crate::cuda::Verdict::NoToolkit | crate::cuda::Verdict::NoCudnn => {
+                    return Err(Unavailable::MissingDependency);
+                }
+            }
         }
         if self.publishes_devices() && !device_present(self) {
             return Err(Unavailable::NoDevice);
@@ -487,6 +492,9 @@ pub enum Unavailable {
     /// the Vulkan loader the WebGPU plugin opens adapters through; on Windows,
     /// a machine with no Direct3D 12 adapter for DirectML to sit on.
     NoDevice,
+    /// There is a device, and its driver is older than the build's CUDA major
+    /// runs on. A driver update, not a toolkit install.
+    DriverTooOld,
 }
 
 impl Unavailable {
@@ -496,6 +504,7 @@ impl Unavailable {
             Unavailable::NotInRuntime => "accel.declined.unavailable",
             Unavailable::MissingDependency => "accel.declined.missingRuntime",
             Unavailable::NoDevice => "accel.declined.noDevice",
+            Unavailable::DriverTooOld => "accel.declined.driverTooOld",
         }
     }
 }
@@ -519,102 +528,6 @@ pub const KNOWN: [Accelerator; 9] = [
 /// reach. Used to populate the setting and the diagnostics panel.
 pub fn available() -> Vec<Accelerator> {
     KNOWN.into_iter().filter(|a| a.is_available()).collect()
-}
-
-/// Whether CUDA and cuDNN libraries this machine would need are installed.
-///
-/// Asked of the filesystem rather than of ONNX Runtime, because ONNX Runtime's
-/// own answer is the wrong one: `GetAvailableProviders` lists
-/// `CUDAExecutionProvider` because the build has it, and the first anyone hears
-/// about a missing `cudart` is a session that fails to build several seconds
-/// later. The cost of asking is one `read_dir` per candidate directory, once
-/// per call, and only on a build that carries CUDA at all.
-pub fn cuda_runtime_present() -> bool {
-    cuda_runtime_in(&cuda_search_dirs())
-}
-
-/// Ask the NVIDIA driver for a real adapter. A CUDA EP compiled into ORT and
-/// libraries on disk still do not establish that a GPU is connected.
-fn cuda_device_present() -> bool {
-    crate::process::command("nvidia-smi")
-        .arg("--list-gpus")
-        .output()
-        .is_ok_and(|output| output.status.success() && output.stdout.windows(4).any(|part| part == b"GPU "))
-}
-
-/// Where a CUDA install puts its runtime library, on this machine.
-///
-/// The loader's own search path first - a working CUDA install is on it, by
-/// construction, because that is how every other program finds it - then
-/// `CUDA_PATH`, which NVIDIA's Windows installer sets, then the two fixed
-/// places a Linux install lands.
-fn cuda_search_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-
-    let loader_path = if cfg!(target_os = "windows") { "PATH" } else { "LD_LIBRARY_PATH" };
-    if let Ok(value) = std::env::var(loader_path) {
-        dirs.extend(std::env::split_paths(&value));
-    }
-
-    if let Ok(root) = std::env::var("CUDA_PATH") {
-        let root = PathBuf::from(root);
-        dirs.push(root.join(if cfg!(target_os = "windows") { "bin" } else { "lib64" }));
-    }
-
-    if cfg!(target_os = "linux") {
-        dirs.push(PathBuf::from("/usr/lib/x86_64-linux-gnu"));
-        dirs.push(PathBuf::from("/usr/lib64"));
-        // `/usr/local/cuda` is the symlink a normal install leaves, and
-        // `/usr/local/cuda-13.0` is what it points at. Both are listed because
-        // a machine with two toolkits has only the versioned ones.
-        if let Ok(entries) = std::fs::read_dir("/usr/local") {
-            for entry in entries.flatten() {
-                if entry.file_name().to_string_lossy().starts_with("cuda") {
-                    dirs.push(entry.path().join("lib64"));
-                }
-            }
-        }
-    }
-
-    dirs
-}
-
-/// The same question, against a list of directories. Split out for
-/// [`choose_within`]'s reason: the rule is testable without a CUDA install.
-pub fn cuda_runtime_in(dirs: &[PathBuf]) -> bool {
-    let mut cuda = false;
-    let mut cudnn = false;
-    for dir in dirs {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                cuda |= is_cuda_runtime_library(&name);
-                cudnn |= is_cudnn_runtime_library(&name);
-            }
-        }
-    }
-    cuda && cudnn
-}
-
-/// The shipped CUDA EP targets cuDNN 9. A cuDNN 8 install is a missing
-/// dependency for this build even if the CUDA toolkit itself is present.
-pub fn is_cudnn_runtime_library(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name == "cudnn64_9.dll" || name == "libcudnn.so.9" || name.starts_with("libcudnn.so.9.")
-}
-
-/// Whether one filename is the CUDA runtime library.
-///
-/// `cudart64_12.dll` and `cudart64_13.dll` on Windows, `libcudart.so.12` and
-/// `libcudart.so.13` on Linux. The major version is deliberately not matched:
-/// this answers "is CUDA installed at all", and a toolkit whose major does not
-/// match the build fails at session creation with a message that says so, which
-/// is a better answer than this function pretending to know which majors a
-/// given `onnxruntime_providers_cuda.dll` accepts.
-pub fn is_cuda_runtime_library(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    (name.starts_with("cudart64") && name.ends_with(".dll")) || name.starts_with("libcudart.so")
 }
 
 /// What the user asked for. `Automatic` is the default and is the only value
@@ -734,7 +647,7 @@ pub const BALLOON: ModelProfile = ModelProfile {
 /// GPU must commit the entire graph there or fail.
 pub const FULL_RT: ModelProfile = ModelProfile {
     name: "rt-full",
-    label_key: "models.kind.balloonDetector",
+    label_key: "models.kind.fullRt",
     cpu_islands_on: &[],
     measured_better: &[],
     unmeasured_candidates: &[],
@@ -905,8 +818,44 @@ impl Selection {
     /// Whether this choice rests on a measurement for this model on this
     /// hardware. The interface shows the difference.
     pub fn is_measured(&self) -> bool {
-        self.note.is_none()
+        self.note.is_none() || self.note == Some(MEASURED_HERE)
     }
+}
+
+/// The note on an automatic choice that rests on this machine's own
+/// measurement ([`crate::measure`]) rather than on the table below.
+pub const MEASURED_HERE: &str = "accel.chosen.measuredHere";
+
+/// The winners this machine measured, by [`ModelProfile::name`], with the
+/// [`crate::measure::setup`] they were measured under. Set by the application
+/// from its saved measurement; read only while the setup is still the one in
+/// use, so a new driver or another runtime build puts `Automatic` back on the
+/// table until the user measures again.
+static MEASURED: std::sync::Mutex<Option<Measured>> = std::sync::Mutex::new(None);
+
+/// A setup fingerprint, and the winner per profile name measured under it.
+pub type Measured = (String, Vec<(String, Accelerator)>);
+
+/// Replace every measured winner. `None` puts `Automatic` back on the table
+/// alone.
+pub fn set_measured_winners(measured: Option<Measured>) {
+    *MEASURED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = measured;
+}
+
+/// Whether Automatic may place the model `profile` names on `accelerator`. A
+/// provider it refuses (one that would leave islands of the graph on the
+/// CPU) is no winner to register, however fast it timed.
+pub fn automatic_may_use(profile: &str, accelerator: Accelerator) -> bool {
+    PROFILES.iter().find(|candidate| candidate.name == profile).is_none_or(|p| !p.cpu_islands_on.contains(&accelerator))
+}
+
+pub fn measured_winner(profile: &str) -> Option<Accelerator> {
+    let measured = MEASURED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (setup, winners) = measured.as_ref()?;
+    if crate::measure::setup().as_deref() != Some(setup.as_str()) {
+        return None;
+    }
+    winners.iter().find(|(name, _)| name == profile).map(|(_, accelerator)| *accelerator)
 }
 
 /// Pick a provider for one model, without a memory answer.
@@ -952,6 +901,30 @@ pub fn choose_on(
     room: Option<u64>,
     host: Option<Platform>,
 ) -> Selection {
+    choose_measured(profile, preference, available, room, host, measured_winner(profile.name))
+}
+
+/// [`choose_on`] with this machine's measured winner passed in, so the rule
+/// is testable without the process-wide table.
+///
+/// **A measurement taken here outranks every table**, under `Automatic` only:
+/// it is the one figure that was timed on this hardware. It must still be a
+/// provider `Automatic` could pick - present, and not one that splits the
+/// graph - or the table decides as before. A forced provider and `CpuOnly`
+/// are untouched.
+pub fn choose_measured(
+    profile: &ModelProfile,
+    preference: Preference,
+    available: &[Accelerator],
+    room: Option<u64>,
+    host: Option<Platform>,
+    measured: Option<Accelerator>,
+) -> Selection {
+    if preference == Preference::Automatic {
+        if let Some(accelerator) = measured.filter(|a| usable_automatically(profile, available, *a)) {
+            return Selection { accelerator, declined: None, note: Some(MEASURED_HERE) };
+        }
+    }
     if host.map(|platform| platform.os) == Some(MEASURED_ON) {
         return choose_within(profile, preference, available, room);
     }
@@ -1131,6 +1104,14 @@ pub fn open_session(
     }
 }
 
+/// Build one session on exactly this provider, with the CPU fallback kept for
+/// the nodes it cannot hold - the placement `Automatic` gets - and no retry
+/// elsewhere. What [`crate::measure`] times, so a failure is that provider's
+/// answer rather than the CPU's.
+pub fn open_on(model: &Path, accelerator: Accelerator, intra_threads: Option<usize>) -> Result<Model, String> {
+    build(model, accelerator, intra_threads, false).map(|session| Model::new(session, accelerator))
+}
+
 /// Whether a session must hold the whole graph on its provider. A forced
 /// provider must, unless the measurement this profile rests on was itself a
 /// partition on that provider - [`ModelProfile::partitioned_on`].
@@ -1201,6 +1182,9 @@ impl Drop for Model {
 
 fn build(model: &Path, accelerator: Accelerator, intra_threads: Option<usize>, strict: bool) -> Result<Session, String> {
     let _turn = device_turn(accelerator);
+    if accelerator.needs_cuda_runtime() {
+        crate::cuda::prepare()?;
+    }
     let mut builder = Session::builder().map_err(|e| e.to_string())?;
     if let Some(threads) = intra_threads {
         builder = builder.with_intra_threads(threads).map_err(|e| e.to_string())?;
@@ -1322,6 +1306,31 @@ mod tests {
             assert!(!quiet.publishes_devices(), "{quiet:?}");
         }
         assert!(Accelerator::WebGpu.publishes_devices());
+    }
+
+    /// A winner timed on this machine outranks the table under `Automatic`,
+    /// and nowhere else; one `Automatic` could not pick is ignored.
+    #[test]
+    fn a_winner_measured_here_outranks_the_table_under_automatic_only() {
+        let windows = Some(Platform { os: Os::Windows, arch: Arch::X86_64 });
+        let gpus = [Accelerator::DirectMl, Accelerator::WebGpu];
+        let chosen = choose_measured(&LAMA, Preference::Automatic, &gpus, None, windows, Some(Accelerator::WebGpu));
+        assert_eq!((chosen.accelerator, chosen.note), (Accelerator::WebGpu, Some(MEASURED_HERE)));
+        assert!(chosen.is_measured());
+        // The CPU can win a measurement too.
+        let cpu = choose_measured(&DETECTOR, Preference::Automatic, &gpus, None, windows, Some(Accelerator::Cpu));
+        assert_eq!(cpu.accelerator, Accelerator::Cpu);
+        // Not present, or a graph splitter: the table decides.
+        let absent = choose_measured(&LAMA, Preference::Automatic, &gpus, None, windows, Some(Accelerator::Cuda));
+        assert_eq!((absent.accelerator, absent.note), (Accelerator::DirectMl, Some("accel.chosen.unmeasured")));
+        let mac = Some(Platform { os: Os::MacOs, arch: Arch::Aarch64 });
+        let islands = choose_measured(&LAMA, Preference::Automatic, &[Accelerator::CoreMl, Accelerator::WebGpu], None, mac, Some(Accelerator::CoreMl));
+        assert_eq!(islands.accelerator, Accelerator::WebGpu);
+        // A forced provider and CpuOnly are what they are.
+        let forced = choose_measured(&LAMA, Preference::Force(Accelerator::DirectMl), &gpus, None, windows, Some(Accelerator::WebGpu));
+        assert_eq!(forced.accelerator, Accelerator::DirectMl);
+        let cpu_only = choose_measured(&LAMA, Preference::CpuOnly, &gpus, None, windows, Some(Accelerator::WebGpu));
+        assert_eq!(cpu_only.accelerator, Accelerator::Cpu);
     }
 
     #[test]
@@ -1540,37 +1549,6 @@ mod tests {
         assert!(KNOWN.contains(&Accelerator::Cpu));
     }
 
-    /// The filename rule, which is the whole of the CUDA-install probe.
-    #[test]
-    fn the_cuda_probe_recognises_the_runtime_library_and_nothing_else() {
-        for name in ["cudart64_12.dll", "cudart64_13.dll", "CUDART64_12.DLL", "libcudart.so", "libcudart.so.13"] {
-            assert!(is_cuda_runtime_library(name), "{name}");
-        }
-        for name in ["cudnn64_9.dll", "onnxruntime_providers_cuda.dll", "libcuda.so.1", "cudart64_12.lib"] {
-            assert!(!is_cuda_runtime_library(name), "{name}");
-        }
-        for name in ["cudnn64_9.dll", "libcudnn.so.9", "libcudnn.so.9.10.2"] {
-            assert!(is_cudnn_runtime_library(name), "{name}");
-        }
-        for name in ["cudnn64_8.dll", "libcudnn.so.8", "libcudnn.so", "libcudart.so.13"] {
-            assert!(!is_cudnn_runtime_library(name), "{name}");
-        }
-
-        // A directory list with nothing in it, and one that does not exist, are
-        // both "no CUDA here" rather than a panic.
-        assert!(!cuda_runtime_in(&[]));
-        assert!(!cuda_runtime_in(&[PathBuf::from("/definitely/not/here")]));
-        assert!(!cuda_runtime_in(&[PathBuf::from(env!("CARGO_MANIFEST_DIR"))]));
-        let dir = std::env::temp_dir().join(format!("manga-cleaner-cuda-probe-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("libcudart.so.13"), []).unwrap();
-        assert!(!cuda_runtime_in(std::slice::from_ref(&dir)), "cudart alone is insufficient");
-        std::fs::write(dir.join("libcudnn.so.9"), []).unwrap();
-        assert!(cuda_runtime_in(std::slice::from_ref(&dir)));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
     #[test]
     fn the_inpainter_goes_to_the_measured_gpu_and_never_to_coreml() {
         // Measured 1311 ms against 2540 ms. CoreML splits the graph, so a Mac
@@ -1744,5 +1722,87 @@ mod tests {
         let found = available();
         assert!(found.contains(&Accelerator::Cpu));
         eprintln!("available: {found:?}");
+    }
+
+    /// Where the process mapped a library from, by its file name: the
+    /// Windows module of that name, or on Linux the mapping whose file starts
+    /// with that soname (`libcudart.so.12` is mapped as `libcudart.so.12.6.77`).
+    #[cfg(windows)]
+    fn mapped_from(name: &str) -> Option<std::path::PathBuf> {
+        use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
+        let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+        // SAFETY: a NUL-terminated name, and a buffer whose length is passed.
+        let module = unsafe { GetModuleHandleW(wide.as_ptr()) };
+        if module.is_null() {
+            return None;
+        }
+        let mut buffer = vec![0u16; 32_768];
+        let len = unsafe { GetModuleFileNameW(module, buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+        (len > 0).then(|| std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..len])))
+    }
+
+    #[cfg(not(windows))]
+    fn mapped_from(name: &str) -> Option<std::path::PathBuf> {
+        let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
+        maps.lines()
+            .filter_map(|line| line.split_whitespace().nth(5))
+            .find(|path| Path::new(path).file_name().is_some_and(|file| file.to_string_lossy().starts_with(name)))
+            .map(std::path::PathBuf::from)
+    }
+
+    fn same_file(a: &Path, b: &Path) -> bool {
+        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            (Ok(a), Ok(b)) => a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()),
+            _ => false,
+        }
+    }
+
+    /// **A CUDA build loads its own CUDA, on a machine that has two.** Run by
+    /// `.github/workflows/probe-cuda.yml` on a runner with CUDA 12 and 13 and a
+    /// cuDNN for each installed side by side, the other major's directories
+    /// first on the loader path (the order that broke CUDA 12 for users), and
+    /// a stand-in `nvidia-smi` for the card the runner does not have. One
+    /// build per process, as in the app:
+    ///
+    /// - `CUDA_PROBE_RUNTIME`: the build's `onnxruntime` library, with the
+    ///   app's install record (`.installed.json`) beside it naming the build.
+    /// - `CUDA_PROBE_MODEL`: any small graph; a session is opened on CUDA so
+    ///   the provider library and everything it links are loaded.
+    ///
+    /// With no card the session itself fails, so what is checked is what the
+    /// process loaded: the provider, and every toolkit and cuDNN library from
+    /// the install of this build's major and not the other.
+    #[test]
+    #[ignore = "needs a CUDA build of ONNX Runtime and CUDA installed; run by probe-cuda.yml"]
+    fn a_cuda_build_loads_the_toolkit_and_cudnn_of_its_own_major() {
+        let runtime = std::path::PathBuf::from(std::env::var_os("CUDA_PROBE_RUNTIME").expect("CUDA_PROBE_RUNTIME"));
+        let model = std::path::PathBuf::from(std::env::var_os("CUDA_PROBE_MODEL").expect("CUDA_PROBE_MODEL"));
+        crate::runtime::load(&runtime).expect("the runtime loads");
+
+        let report = crate::cuda::report();
+        eprintln!("{report:#?}");
+        let wanted = report.wanted.expect("the install record names a CUDA build");
+        assert!(!report.gpus.is_empty(), "nvidia-smi answered nothing");
+        let verdict = report.verdict();
+        let crate::cuda::Verdict::Ready { toolkit, cudnn } = verdict else { panic!("not ready: {verdict:?}") };
+        assert_eq!(toolkit.major, wanted, "the toolkit of another major was chosen");
+        assert_eq!(cudnn.cuda_major, Some(wanted), "a cuDNN for another major was chosen: {}", cudnn.dir.display());
+        assert_eq!(Accelerator::Cuda.availability(), Ok(()));
+
+        let outcome = build(&model, Accelerator::Cuda, None, true);
+        eprintln!("a session on CUDA: {:?}", outcome.as_ref().map(|_| "built"));
+
+        let provider = if cfg!(windows) { "onnxruntime_providers_cuda.dll" } else { "libonnxruntime_providers_cuda.so" };
+        let provider_path = mapped_from(provider);
+        assert!(provider_path.is_some(), "{provider} did not load: a library it links was not found");
+        for library in toolkit.libraries.iter().chain(&cudnn.libraries) {
+            let name = library.file_name().unwrap().to_string_lossy().into_owned();
+            let mapped = mapped_from(&name).unwrap_or_else(|| panic!("{name} was not loaded"));
+            assert!(same_file(&mapped, library), "{name} came from {}, not {}", mapped.display(), library.display());
+        }
+        let other = if wanted == 12 { 13 } else { 12 };
+        let other_cudart = if cfg!(windows) { format!("cudart64_{other}.dll") } else { format!("libcudart.so.{other}") };
+        assert_eq!(mapped_from(&other_cudart), None, "CUDA {other}'s runtime was loaded too");
+        eprintln!("CUDA {wanted}: {} and every library from {} and {}", provider_path.unwrap().display(), toolkit.dir.display(), cudnn.dir.display());
     }
 }
