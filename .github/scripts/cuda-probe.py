@@ -166,6 +166,19 @@ def setup_stand_in() -> None:
     subprocess.run(["rustc", "-O", "-o", str(out), str(source)], check=True)
     with open(os.environ["GITHUB_PATH"], "a") as github_path:
         github_path.write(f"{out.parent}\n")
+    if not WINDOWS:
+        # The Linux CUDA provider links the driver's `libcuda.so.1`, which a
+        # machine with no driver lacks. NVIDIA's stub of it (every call
+        # answers "stub library") lets the provider load.
+        (stub,) = Path("/usr/local").glob("cuda-12.*/targets/x86_64-linux/lib/stubs/libcuda.so")
+        shutil.copy2(stub, driver_dir() / "libcuda.so.1")
+
+
+def driver_dir() -> Path:
+    """Where the stand-in driver library is, on Linux."""
+    path = WORK / "fakegpu" / "driver"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def report_layout() -> None:
@@ -192,16 +205,35 @@ def unresolved(library: Path, env: dict) -> None:
         return
     import pefile
 
-    image = pefile.PE(str(library), fast_load=True)
-    image.parse_data_directories([pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
+    # What the loader itself says: 126 is a library not found (here or in
+    # what a library links), 127 a function a library does not export.
+    load = f"import ctypes; ctypes.WinDLL(r'{library}', winmode=0); print('  it loads on its own')"
+    subprocess.run([sys.executable, "-c", load], env=env)
     places = [library.parent, Path(os.environ["SystemRoot"]) / "System32"]
     places += [Path(p) for p in env["PATH"].split(os.pathsep) if p]
-    for entry in image.DIRECTORY_ENTRY_IMPORT:
+    image = pefile.PE(str(library), fast_load=True)
+    image.parse_data_directories(
+        [pefile.DIRECTORY_ENTRY[d] for d in ("IMAGE_DIRECTORY_ENTRY_IMPORT", "IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT")]
+    )
+    entries = [(entry, "") for entry in getattr(image, "DIRECTORY_ENTRY_IMPORT", [])]
+    entries += [(entry, " (delay loaded)") for entry in getattr(image, "DIRECTORY_ENTRY_DELAY_IMPORT", [])]
+    for entry, how in entries:
         name = entry.dll.decode()
         if name.lower().startswith(("api-ms-", "ext-ms-")):
             continue
         found = next((place / name for place in places if (place / name).is_file()), None)
-        print(f"  {name}: {found or 'NOT FOUND'}", flush=True)
+        print(f"  {name}{how}: {found or 'NOT FOUND'}", flush=True)
+        if found is None or found.parent == Path(os.environ["SystemRoot"]) / "System32":
+            continue
+        # A file of the right name from too old a release: the loader finds
+        # it and then fails on a function it does not export.
+        exporter = pefile.PE(str(found), fast_load=True)
+        exporter.parse_data_directories([pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXPORT"]])
+        exports = getattr(exporter, "DIRECTORY_ENTRY_EXPORT", None)
+        exported = {symbol.name for symbol in exports.symbols if symbol.name} if exports else set()
+        absent = sorted(i.name.decode() for i in entry.imports if i.name and i.name not in exported)
+        if absent:
+            print(f"    does not export: {', '.join(absent)}", flush=True)
 
 
 def probe() -> int:
@@ -216,6 +248,8 @@ def probe() -> int:
         # The other major first, then this one: discovery has to pick by
         # version, not by the order the loader would search.
         trap = [str(d) for d in library_dirs(other) + library_dirs(major)]
+        if not WINDOWS:
+            trap.append(str(driver_dir()))
         env[loader] = os.pathsep.join(trap + ([env[loader]] if env.get(loader) else []))
         env["CUDA_PROBE_RUNTIME"] = str(runtime_dir(major) / ("onnxruntime.dll" if WINDOWS else "libonnxruntime.so"))
         env["CUDA_PROBE_MODEL"] = str(WORK / "probe.onnx")

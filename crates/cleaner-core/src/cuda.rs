@@ -441,9 +441,15 @@ fn candidate_dirs() -> Vec<PathBuf> {
         }
         dirs.extend(["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib"].map(PathBuf::from));
     }
+    // One entry per real directory: `/usr/local/cuda`, `cuda-13` and
+    // `cuda-13.0/lib64` are often the same one, and each would be listed as
+    // another install. The first spelling found is kept.
     let mut unique = Vec::new();
+    let mut seen = Vec::new();
     for dir in dirs {
-        if !unique.contains(&dir) {
+        let real = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if !seen.contains(&real) {
+            seen.push(real);
             unique.push(dir);
         }
     }

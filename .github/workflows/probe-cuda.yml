@@ -91,7 +91,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cuda-cudart-12-6 libcublas-12-6 libcufft-12-6 libcurand-12-6 \
-            cuda-cudart-13-0 libcublas-13-0 libcufft-13-0 libcurand-13-0
+            cuda-cudart-13-0 libcublas-13-0 libcufft-13-0 libcurand-13-0 \
+            cuda-driver-dev-12-6
+          # cuda-driver-dev carries the stub of the driver's libcuda.so.1,
+          # which the stand-in GPU needs; see setup_stand_in.
           # cuDNN goes into each toolkit's library directory, as NVIDIA's tar
           # install instructions say; the setup step copies it there.
           sudo chown -R "$USER" /usr/local/cuda-12.6/targets/x86_64-linux/lib /usr/local/cuda-13.0/targets/x86_64-linux/lib
