@@ -61,8 +61,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install onnx (builds the one-node probe graph)
-        run: python -m pip install onnx==1.19.1
+      - name: Install onnx (builds the one-node probe graph) and pefile (names a missing DLL)
+        run: python -m pip install onnx==1.19.1 pefile==2024.8.26
 
       # Only the libraries the CUDA provider links: the runtime, cuBLAS,
       # cuFFT and cuRAND. Subpackage names as NVIDIA's installation guide

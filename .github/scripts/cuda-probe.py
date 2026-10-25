@@ -179,6 +179,31 @@ def report_layout() -> None:
             print(f"CUDA {major}: {root}\n  " + "\n  ".join(names[:80]), flush=True)
 
 
+def unresolved(library: Path, env: dict) -> None:
+    """Print each library `library` links that the loader cannot find.
+
+    ONNX Runtime only says the CUDA provider did not register; this says why.
+    Linux asks `ldd` with the probe's loader path. Windows reads the import
+    table and looks where the loader would: beside the library, System32, PATH.
+    """
+    print(f"what {library.name} links:", flush=True)
+    if not WINDOWS:
+        subprocess.run(["ldd", str(library)], env=env)
+        return
+    import pefile
+
+    image = pefile.PE(str(library), fast_load=True)
+    image.parse_data_directories([pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
+    places = [library.parent, Path(os.environ["SystemRoot"]) / "System32"]
+    places += [Path(p) for p in env["PATH"].split(os.pathsep) if p]
+    for entry in image.DIRECTORY_ENTRY_IMPORT:
+        name = entry.dll.decode()
+        if name.lower().startswith(("api-ms-", "ext-ms-")):
+            continue
+        found = next((place / name for place in places if (place / name).is_file()), None)
+        print(f"  {name}: {found or 'NOT FOUND'}", flush=True)
+
+
 def probe() -> int:
     test = "accel::tests::a_cuda_build_loads_the_toolkit_and_cudnn_of_its_own_major"
     cargo = ["cargo", "test", "-p", "cleaner-core", "--lib", test, "--", "--ignored", "--exact", "--nocapture"]
@@ -197,6 +222,8 @@ def probe() -> int:
         print(f"\n=== CUDA {major} build, CUDA {other} first on {loader} ===", flush=True)
         if subprocess.run(cargo, env=env).returncode != 0:
             failed.append(major)
+            provider = "onnxruntime_providers_cuda.dll" if WINDOWS else "libonnxruntime_providers_cuda.so"
+            unresolved(runtime_dir(major) / provider, env)
     if failed:
         print(f"\nThe CUDA probe failed for the CUDA {', '.join(map(str, failed))} build.", flush=True)
         return 1
