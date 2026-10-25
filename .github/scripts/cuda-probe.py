@@ -37,17 +37,19 @@ CUDNN_REDIST = "https://developer.download.nvidia.com/compute/cudnn/redist/"
 # (525 for CUDA 12, 580 for CUDA 13), so the verdict turns on the install.
 STAND_IN = "NVIDIA GeForce RTX 4070 (CI stand-in), 581.42"
 
-# Where each major's toolkit and cuDNN end up.
+# Where each major's toolkit and cuDNN end up. CUDA 12.6 is installed too and
+# is not listed: too old for the CUDA 12 build, it must never be the one used.
+OLD_12 = Path(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin") if WINDOWS else Path("/usr/local/cuda-12.6/targets/x86_64-linux/lib")
 if WINDOWS:
     TOOLKIT_ROOT = Path(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA")
     CUDNN_ROOT = Path(r"C:\Program Files\NVIDIA\CUDNN") / f"v{'.'.join(CUDNN_VERSION.split('.')[:2])}" / "bin"
     BUILDS = {
-        12: {"toolkit": TOOLKIT_ROOT / "v12.6", "cudnn": CUDNN_ROOT / "12.9"},
+        12: {"toolkit": TOOLKIT_ROOT / "v12.9", "cudnn": CUDNN_ROOT / "12.9"},
         13: {"toolkit": TOOLKIT_ROOT / "v13.0", "cudnn": CUDNN_ROOT / "13.0"},
     }
 else:
     BUILDS = {
-        12: {"toolkit": Path("/usr/local/cuda-12.6"), "cudnn": Path("/usr/local/cuda-12.6/targets/x86_64-linux/lib")},
+        12: {"toolkit": Path("/usr/local/cuda-12.9"), "cudnn": Path("/usr/local/cuda-12.9/targets/x86_64-linux/lib")},
         13: {"toolkit": Path("/usr/local/cuda-13.0"), "cudnn": Path("/usr/local/cuda-13.0/targets/x86_64-linux/lib")},
     }
 
@@ -247,7 +249,7 @@ def probe() -> int:
         env = dict(os.environ)
         # The other major first, then this one: discovery has to pick by
         # version, not by the order the loader would search.
-        trap = [str(d) for d in library_dirs(other) + library_dirs(major)]
+        trap = [str(d) for d in library_dirs(other) + [OLD_12] + library_dirs(major)]
         if not WINDOWS:
             trap.append(str(driver_dir()))
         env[loader] = os.pathsep.join(trap + ([env[loader]] if env.get(loader) else []))

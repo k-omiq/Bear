@@ -40,6 +40,10 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct Toolkit {
     pub major: u32,
+    /// The minor release, where the install says it: the versioned file
+    /// `libcudart.so.12.6.77` links to on Linux, the `v12.6` directory
+    /// NVIDIA's Windows installer makes. `None` where neither says.
+    pub minor: Option<u32>,
     /// Where its `cudart` is. The other libraries may sit elsewhere on Linux,
     /// where a distribution package splits them across directories.
     pub dir: PathBuf,
@@ -92,6 +96,9 @@ pub enum Verdict {
     NoGpu,
     /// The driver is older than the build's CUDA major needs.
     DriverTooOld { have: u32, need: u32 },
+    /// The wanted major is installed, but every complete install of it is a
+    /// minor release older than the build links against (`12.6`, `12.8`).
+    ToolkitTooOld { have: String, need: String },
     /// No complete toolkit of the wanted major.
     NoToolkit,
     /// No complete cuDNN 9 for the wanted major.
@@ -105,6 +112,7 @@ impl Verdict {
             Verdict::Ready { .. } => "accel.cudaCheck.ready",
             Verdict::NoGpu => "accel.cudaCheck.noGpu",
             Verdict::DriverTooOld { .. } => "accel.cudaCheck.driverTooOld",
+            Verdict::ToolkitTooOld { .. } => "accel.cudaCheck.toolkitTooOld",
             Verdict::NoToolkit => "accel.cudaCheck.noToolkit",
             Verdict::NoCudnn => "accel.cudaCheck.noCudnn",
         }
@@ -122,6 +130,37 @@ fn driver_floor(cuda_major: u32) -> Option<u32> {
     }
 }
 
+/// The oldest minor release of each CUDA major the app's builds run on. ONNX
+/// Runtime 1.28's CUDA 12 build calls `cudaLibraryLoadData` and three more
+/// functions the CUDA 12.6 runtime does not export; NVIDIA released no 12.7,
+/// so 12.8 is the floor. Found by `.github/workflows/probe-cuda.yml`, which
+/// loads the build against an older toolkit; move it with the runtime version.
+fn minor_floor(cuda_major: u32) -> Option<u32> {
+    match cuda_major {
+        12 => Some(8),
+        _ => None,
+    }
+}
+
+impl Toolkit {
+    fn version(&self) -> String {
+        match self.minor {
+            Some(minor) => format!("{}.{minor}", self.major),
+            None => self.major.to_string(),
+        }
+    }
+
+    /// New enough for a build of its major. A minor release that cannot be
+    /// read is let through: refusing it would refuse a working install, and
+    /// the session itself still reports a real mismatch.
+    fn new_enough(&self) -> bool {
+        match (self.minor, minor_floor(self.major)) {
+            (Some(minor), Some(floor)) => minor >= floor,
+            _ => true,
+        }
+    }
+}
+
 impl Report {
     pub fn verdict(&self) -> Verdict {
         if self.gpus.is_empty() {
@@ -133,12 +172,19 @@ impl Report {
                 return Verdict::DriverTooOld { have, need };
             }
         }
-        let toolkit = self
+        let mut complete = self
             .toolkits
             .iter()
             .filter(|toolkit| toolkit.missing.is_empty())
-            .find(|toolkit| self.wanted.is_none_or(|wanted| toolkit.major == wanted));
-        let Some(toolkit) = toolkit else { return Verdict::NoToolkit };
+            .filter(|toolkit| self.wanted.is_none_or(|wanted| toolkit.major == wanted))
+            .peekable();
+        // The newest is first (`toolkits_in` sorts them), so it is the one to
+        // name when none is new enough.
+        let Some(newest) = complete.peek().copied() else { return Verdict::NoToolkit };
+        let Some(toolkit) = complete.find(|toolkit| toolkit.new_enough()) else {
+            let need = format!("{}.{}", newest.major, minor_floor(newest.major).unwrap_or(0));
+            return Verdict::ToolkitTooOld { have: newest.version(), need };
+        };
         // A build of unknown CUDA (a runtime placed by hand) is held to the
         // floor of the toolkit it would use.
         if self.wanted.is_none() {
@@ -298,26 +344,32 @@ fn find_in(dir: &Path, name: &str) -> Option<PathBuf> {
 /// Every CUDA major with a `cudart` somewhere in `dirs`, its other libraries
 /// looked for beside it first and then anywhere else in `dirs`.
 pub fn toolkits_in(dirs: &[PathBuf]) -> Vec<Toolkit> {
-    let mut found: Vec<(u32, PathBuf)> = Vec::new();
+    let mut found: Vec<(u32, PathBuf, PathBuf)> = Vec::new();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else { continue };
         for entry in entries.flatten() {
             if let Some(major) = cudart_major(&entry.file_name().to_string_lossy()) {
-                if !found.iter().any(|(m, d)| *m == major && d == dir) {
-                    found.push((major, dir.clone()));
+                if !found.iter().any(|(m, d, _)| *m == major && d == dir) {
+                    found.push((major, dir.clone(), entry.path()));
                 }
             }
         }
     }
     let mut toolkits: Vec<Toolkit> = found
         .into_iter()
-        .map(|(major, dir)| {
+        .map(|(major, dir, cudart)| {
             let (libraries, missing) = resolve(&toolkit_libraries(major), &dir, dirs);
-            Toolkit { major, dir, libraries, missing }
+            let minor = cudart_minor(&cudart, major).or_else(|| match cuda_version_hint(&dir) {
+                Some((hinted, minor)) if hinted == major => minor,
+                _ => None,
+            });
+            Toolkit { major, minor, dir, libraries, missing }
         })
         .collect();
-    // A complete install before a partial one, then the newer major.
-    toolkits.sort_by_key(|toolkit| (!toolkit.missing.is_empty(), std::cmp::Reverse(toolkit.major)));
+    // A complete install before a partial one, then the newer release.
+    toolkits.sort_by_key(|toolkit| {
+        (!toolkit.missing.is_empty(), std::cmp::Reverse(toolkit.major), std::cmp::Reverse(toolkit.minor))
+    });
     toolkits
 }
 
@@ -356,16 +408,35 @@ fn resolve(names: &[String], home: &Path, dirs: &[PathBuf]) -> (Vec<PathBuf>, Ve
 /// and `v12.6` as NVIDIA's Windows installers lay them out, `cuda-13.0` and
 /// `cuda12` as Linux ones do.
 pub fn cuda_major_hint(dir: &Path) -> Option<u32> {
+    cuda_version_hint(dir).map(|(major, _)| major)
+}
+
+/// [`cuda_major_hint`], and the minor release where the path names one
+/// (`v12.6`, not `cuda12`).
+fn cuda_version_hint(dir: &Path) -> Option<(u32, Option<u32>)> {
     // Split by hand rather than by `components`, so a Windows path reads the
     // same in a test run on any platform.
     let text = dir.to_string_lossy().to_ascii_lowercase();
     text.rsplit(['/', '\\']).find_map(|part| {
         let part = part.strip_prefix("cuda").map(|rest| rest.trim_start_matches(['-', '_'])).unwrap_or(part);
         let part = part.strip_prefix('v').unwrap_or(part);
-        let (major, minor) = part.split_once('.').unwrap_or((part, "0"));
+        let (major, minor) = match part.split_once('.') {
+            Some((major, minor)) => (major, Some(minor.parse::<u32>().ok()?)),
+            None => (part, None),
+        };
         let major: u32 = major.parse().ok()?;
-        (minor.chars().all(|c| c.is_ascii_digit()) && (10..=20).contains(&major)).then_some(major)
+        (10..=20).contains(&major).then_some((major, minor))
     })
+}
+
+/// The minor release of a Linux `cudart`, from the versioned file its soname
+/// links to: `libcudart.so.12` is `libcudart.so.12.6.77`. Windows names the
+/// DLL by major only, and a pip wheel ships the soname as the file itself.
+fn cudart_minor(cudart: &Path, major: u32) -> Option<u32> {
+    let real = std::fs::canonicalize(cudart).ok()?;
+    let name = real.file_name()?.to_string_lossy().into_owned();
+    let rest = name.strip_prefix(&format!("libcudart.so.{major}."))?;
+    rest.split('.').next()?.parse().ok()
 }
 
 fn driver_major(version: &str) -> Option<u32> {
@@ -528,7 +599,7 @@ mod tests {
     #[test]
     fn two_toolkits_side_by_side_resolve_to_the_builds_own_major() {
         let root = scratch("side-by-side");
-        let (v12, v13) = (root.join("v12.6/bin"), root.join("v13.0/bin"));
+        let (v12, v13) = (root.join("v12.9/bin"), root.join("v13.0/bin"));
         touch(&v12, &toolkit_libraries(12));
         touch(&v13, &toolkit_libraries(13));
         let (dnn12, dnn13) = (root.join("CUDNN/v9.8/bin/12.8"), root.join("CUDNN/v9.8/bin/13.0"));
@@ -566,7 +637,7 @@ mod tests {
     #[test]
     fn a_cudnn_built_for_another_cuda_is_no_cudnn() {
         let root = scratch("wrong-cudnn");
-        let (v12, dnn13) = (root.join("v12.6/bin"), root.join("CUDNN/v9.8/bin/13.0"));
+        let (v12, dnn13) = (root.join("v12.9/bin"), root.join("CUDNN/v9.8/bin/13.0"));
         touch(&v12, &toolkit_libraries(12));
         touch(&dnn13, &cudnn_libraries());
         let dirs = vec![v12, dnn13];
@@ -625,6 +696,64 @@ mod tests {
         assert_eq!(report.verdict(), Verdict::DriverTooOld { have: 560, need: 580 });
         report.gpus = vec![gpu("581.42")];
         assert!(matches!(report.verdict(), Verdict::Ready { .. }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CUDA 12.6 lacks functions the CUDA 12 build calls, so a machine with
+    /// only 12.6 is told to update, and one with 12.6 and 12.9 gets 12.9
+    /// whatever the order on the path.
+    #[test]
+    fn a_cuda_12_older_than_the_build_is_too_old_and_the_newest_is_chosen() {
+        let root = scratch("minor");
+        let (old, new) = (root.join("v12.6/bin"), root.join("v12.9/bin"));
+        touch(&old, &toolkit_libraries(12));
+        touch(&old, &cudnn_libraries());
+        let report = |dirs: &[PathBuf]| Report {
+            wanted: Some(12),
+            toolkits: toolkits_in(dirs),
+            cudnn: cudnn_in(dirs),
+            gpus: vec![gpu("566.36")],
+        };
+        assert_eq!(
+            report(std::slice::from_ref(&old)).verdict(),
+            Verdict::ToolkitTooOld { have: "12.6".to_owned(), need: "12.8".to_owned() }
+        );
+        touch(&new, &toolkit_libraries(12));
+        let Verdict::Ready { toolkit, .. } = report(&[old, new.clone()]).verdict() else { panic!("CUDA 12.9 is installed") };
+        assert_eq!((toolkit.minor, toolkit.dir), (Some(9), new));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A directory that names no minor release is not refused for it.
+    #[test]
+    fn a_cuda_12_of_unknown_minor_is_let_through() {
+        let root = scratch("no-minor");
+        let lib = root.join("site-packages/nvidia/lib");
+        touch(&lib, &toolkit_libraries(12));
+        touch(&lib, &cudnn_libraries());
+        let dirs = vec![lib];
+        let report = Report { wanted: Some(12), toolkits: toolkits_in(&dirs), cudnn: cudnn_in(&dirs), gpus: vec![gpu("566.36")] };
+        assert!(matches!(report.verdict(), Verdict::Ready { toolkit: Toolkit { minor: None, .. }, .. }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_path_names_its_minor_release_where_it_has_one() {
+        assert_eq!(cuda_version_hint(Path::new(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin")), Some((12, Some(6))));
+        assert_eq!(cuda_version_hint(Path::new("/usr/local/cuda-12.9/targets/x86_64-linux/lib")), Some((12, Some(9))));
+        assert_eq!(cuda_version_hint(Path::new("/opt/cuda12/lib64")), Some((12, None)));
+    }
+
+    /// Linux names the minor release in the file `libcudart.so.12` links to.
+    #[cfg(unix)]
+    #[test]
+    fn a_linux_cudart_reads_its_minor_from_the_file_it_links_to() {
+        let root = scratch("cudart-link");
+        let lib = root.join("lib");
+        touch(&lib, &["libcudart.so.12.8.90".to_owned()]);
+        std::os::unix::fs::symlink("libcudart.so.12.8.90", lib.join("libcudart.so.12")).unwrap();
+        assert_eq!(cudart_minor(&lib.join("libcudart.so.12"), 12), Some(8));
+        assert_eq!(cudart_minor(&lib.join("libcudart.so.12.8.90"), 13), None);
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -12,6 +12,9 @@ name: Probe CUDA builds
 # The toolkits come from NVIDIA's own installers (the Windows network installer,
 # the Ubuntu packages), so their directory layout is the one users get. The rest
 # is `.github/scripts/cuda-probe.py`.
+#
+# This probe found that the CUDA 12 build needs CUDA 12.8 or newer
+# (`cuda::minor_floor`); CUDA 12.6 stays installed to keep that checked.
 
 on:
   pull_request:
@@ -66,13 +69,15 @@ jobs:
 
       # Only the libraries the CUDA provider links: the runtime, cuBLAS,
       # cuFFT and cuRAND. Subpackage names as NVIDIA's installation guide
-      # lists them.
-      - name: Install CUDA 12.6 and 13.0 (Windows network installers)
+      # lists them. CUDA 12.6 is older than the CUDA 12 build runs on (it
+      # lacks functions the build calls), and is installed beside 12.9 so the
+      # newer one must be the one chosen.
+      - name: Install CUDA 12.6, 12.9 and 13.0 (Windows network installers)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($release in @('12.6.3', '13.0.2')) {
+          foreach ($release in @('12.6.3', '12.9.1', '13.0.2')) {
             $short = ($release -split '\.')[0..1] -join '.'
             $installer = "$env:RUNNER_TEMP\cuda_$release.exe"
             Invoke-WebRequest "https://developer.download.nvidia.com/compute/cuda/$release/network_installers/cuda_${release}_windows_network.exe" -OutFile $installer
@@ -82,7 +87,7 @@ jobs:
             Write-Host "CUDA $release installed"
           }
 
-      - name: Install CUDA 12.6 and 13.0 (Ubuntu packages)
+      - name: Install CUDA 12.6, 12.9 and 13.0 (Ubuntu packages)
         if: runner.os == 'Linux'
         run: |
           set -e
@@ -91,13 +96,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cuda-cudart-12-6 libcublas-12-6 libcufft-12-6 libcurand-12-6 \
+            cuda-cudart-12-9 libcublas-12-9 libcufft-12-9 libcurand-12-9 \
             cuda-cudart-13-0 libcublas-13-0 libcufft-13-0 libcurand-13-0 \
             cuda-driver-dev-12-6
           # cuda-driver-dev carries the stub of the driver's libcuda.so.1,
           # which the stand-in GPU needs; see setup_stand_in.
           # cuDNN goes into each toolkit's library directory, as NVIDIA's tar
           # install instructions say; the setup step copies it there.
-          sudo chown -R "$USER" /usr/local/cuda-12.6/targets/x86_64-linux/lib /usr/local/cuda-13.0/targets/x86_64-linux/lib
+          sudo chown -R "$USER" /usr/local/cuda-12.9/targets/x86_64-linux/lib /usr/local/cuda-13.0/targets/x86_64-linux/lib
 
       - name: cuDNN, both runtime builds, the probe graph, the stand-in nvidia-smi
         run: python .github/scripts/cuda-probe.py setup

@@ -196,7 +196,7 @@ pub enum Flavour {
     /// nothing for the user to install.
     DirectMl,
     /// NVIDIA, built against CUDA 12.x. Needs a CUDA install this application
-    /// does not ship.
+    /// does not ship, of 12.8 or later (`cuda::minor_floor`).
     Cuda12,
     /// The same, built against CUDA 13.x.
     Cuda13,
@@ -389,7 +389,7 @@ pub const PACKAGES: &[Package] = &[
             "TensorrtExecutionProvider",
             "WebGpuExecutionProvider",
         ],
-        user_installed: &["CUDA 12.x", "cuDNN 9.x"],
+        user_installed: &["CUDA 12.8+", "cuDNN 9.x"],
     },
     Package {
         platform: Platform { os: Os::Windows, arch: Arch::X86_64 },
@@ -479,7 +479,7 @@ pub const PACKAGES: &[Package] = &[
             "TensorrtExecutionProvider",
             "WebGpuExecutionProvider",
         ],
-        user_installed: &["CUDA 12.x", "cuDNN 9.x"],
+        user_installed: &["CUDA 12.8+", "cuDNN 9.x"],
     },
     Package {
         platform: Platform { os: Os::Linux, arch: Arch::X86_64 },

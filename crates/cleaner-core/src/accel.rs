@@ -313,7 +313,9 @@ impl Accelerator {
                 crate::cuda::Verdict::Ready { .. } => {}
                 crate::cuda::Verdict::NoGpu => return Err(Unavailable::NoDevice),
                 crate::cuda::Verdict::DriverTooOld { .. } => return Err(Unavailable::DriverTooOld),
-                crate::cuda::Verdict::NoToolkit | crate::cuda::Verdict::NoCudnn => {
+                crate::cuda::Verdict::NoToolkit
+                | crate::cuda::Verdict::ToolkitTooOld { .. }
+                | crate::cuda::Verdict::NoCudnn => {
                     return Err(Unavailable::MissingDependency);
                 }
             }
