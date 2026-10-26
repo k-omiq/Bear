@@ -1469,6 +1469,23 @@ fn edit_with_bench_render(
         }
     }
 
+    // A model rung here shares the processor or the GPU with a speed
+    // measurement, so the two never run together (`measurement::begin_work`).
+    let loads_model = test_renderer.is_none()
+        && plan.fill_mode != Some("solid")
+        && match plan.choice {
+            Choice::Exact(engine) => matches!(engine, Engine::Lama | Engine::Flux),
+            Choice::Ladder(_) => matches!(ceiling, Engine::Lama | Engine::Flux | Engine::Cloud),
+        };
+    let _work = if loads_model {
+        match crate::measurement::begin_work() {
+            Some(work) => Some(work),
+            None => return Ok(Outcome::Refused("decline.reason.measuring")),
+        }
+    } else {
+        None
+    };
+
     let started = Instant::now();
     // What local FLUX aligned its answer's tone by, recorded as a cloud
     // render's attach records it.

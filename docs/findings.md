@@ -715,31 +715,10 @@ package in `/usr/lib/x86_64-linux-gnu`, or one copied beside no toolkit) is acce
 so a cuDNN built for CUDA 12 next to a CUDA 13 toolkit reads Ready and fails when the provider loads;
 reading the library's own dependencies would settle it. cuDNN installed as a Python wheel
 (`nvidia-cudnn-cu12` in a site-packages folder) is not searched. While a measurement runs, every
-clean waits, cloud runs included, though a cloud run would not share this computer's GPU. The
-reverse is not guarded: a hand clean of one region on a model rung (the region menu, a Layers row,
-Clean anyway) and the SAM preview in the capability check are not jobs, so a measurement started
-beside them, or one they start beside, times under their load and saves those timings. Registering
-region edits as jobs, or a counter the measurement checks, would close it.
-
-Left open after the review of 2026-10-26: a run whose detectors include SAM-TS-L without CTD (the
-backend accepts the pair, though neither mode sends it) masks nothing when the lettering mask fails, yet the `notice.run.samFallback`
-notice says CTD took over.
-
-Small interface gaps from the same review, left open: in Settings the arrow keys on the mode cards
-choose a mode, and choosing downloads what it lacks, so Right then Left starts both downloads. A
-refused build choice in setup leaves its radio drawn as chosen, and choosing a build while the
-runtime downloads says the save failed rather than to wait. Setup gives no reason when moving off
-the cloud for detection fails to save. The Runtime step does not reload the paths after a build is
-chosen away and back. A Stop on a measurement this window did not start stays disabled if reading
-the result after it fails.
-
-Editor gaps from the same review, left open: a wheel or arrow change on a tool bar slider still
-waiting (250 ms) when another tool is picked is written to the new tool. A press inside a Gradient
-selection away from its handles drops the line already set, and so does one refused because a run
-is on the page. Escape from a bar control reached with `\` drops the held selection and leaves the
-focus on the control. A `;` / `'` run is lost without a notice when the chapter changes or the page
-is busy before it saves, and a page-wide run still saving can land after a row's own padding change
-and overwrite it.
+clean waits, cloud runs included, though a cloud run would not share this computer's GPU.  A hand
+clean of one region on a model rung and the review's analysis are not jobs, so they are counted
+apart (`measurement::begin_work`): a measurement refuses to start beside one, and one refuses while a
+measurement runs.
 
 **CUDA probe in CI (2026-10-26): `.github/workflows/probe-cuda.yml` loads both CUDA builds on
 GitHub's Windows and Linux runners, with CUDA 12.6, 12.9 and 13.0 and a cuDNN per major installed

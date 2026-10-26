@@ -22,7 +22,7 @@
 import { runtimeState } from '../model/pipelines.js'
 
 /**
- * @typedef {'cancelled'|'unavailable'|'modelMissing'|'modelFailed'|'memory'|'sourceLimit'
+ * @typedef {'cancelled'|'unavailable'|'modelMissing'|'modelFailed'|'memory'|'measuring'|'sourceLimit'
  *   |'undiscovered'|'held'|'declined'|'needsCorrection'|'stale'|'expired'
  *   |'badReconstruction'|'applied'|'failed'|'notReady'
  *   |'invalidRequest'|'wrongModel'|'sourceUnreadable'|'exhausted'|'existingGeometry'|'unconfirmed'|'system'
@@ -100,6 +100,7 @@ const RULES = [
   [/has \d+ bytes; expected \d+|SHA-256 mismatch/i, (phase) => (phase === 'models' ? WRONG_MODEL : MODEL_MISSING)],
   [/not installed|failed SHA-256|failed verification|graphs are missing/i, MODEL_MISSING],
   [/10 GB|memory room/i, { kind: 'memory' }],
+  [/speed measurement runs/i, { kind: 'measuring' }],
   [/source geometry changed/i, { kind: 'sourceLimit', reason: 'geometry' }],
   [/tile PNG exceeds transfer limit/i, { kind: 'sourceLimit', reason: 'tile' }],
   [/20 MB|24 megapixel|review-preview limit|preview format is unsupported/i, { kind: 'sourceLimit' }],
@@ -173,6 +174,7 @@ const TITLES = {
   notReady: 'workflow.outcome.notReady',
   modelFailed: 'workflow.outcome.modelFailed',
   memory: 'workflow.outcome.memory',
+  measuring: 'workflow.outcome.measuring',
   sourceLimit: 'workflow.outcome.sourceLimit',
   undiscovered: 'workflow.outcome.undiscovered',
   held: 'workflow.outcome.held',
@@ -209,6 +211,7 @@ const BODIES = {
   modelMissing: 'workflow.explain.modelMissing',
   modelFailed: 'workflow.explain.modelFailed',
   memory: 'workflow.explain.memory',
+  measuring: 'workflow.explain.measuring',
   sourceLimit: 'workflow.explain.sourceLimit',
   undiscovered: 'workflow.explain.undiscovered',
   held: 'workflow.explain.held',

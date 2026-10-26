@@ -1746,6 +1746,7 @@ export const en = {
       paintUnsupportedColor: 'this file’s color description cannot be used for managed painting',
       paintUnsupportedMode: 'this file’s colour mode cannot hold a painted or cloned result',
       noSmoothSurround: 'the area around the selection is not one smooth gradient',
+      measuring: 'a speed measurement is running, so try again when it finishes',
       unrepresentableDepth: 'this file has one bit per sample, which an inpainted result cannot hold',
       // Rung 3a only, and a narrower fact than `unrepresentableDepth` above:
       // the file's samples are perfectly representable, and it is that one
@@ -3302,6 +3303,7 @@ export const en = {
       // The lettering mask would not load at all, so the rest of the run was
       // masked the Normal way and cleaned anyway. Said once per run.
       samFallback: 'The lettering mask could not load, so this run used Normal masks. Sound effects may remain.',
+      samLost: 'The lettering mask could not load, and this run has no CTD to mask from instead, so the rest of it has no lettering mask.',
     },
 
     // Downloading or replacing the engine runtime itself. Both of these are
@@ -3853,6 +3855,7 @@ export const en = {
       notReady: 'Not ready to analyze',
       modelFailed: 'Model failed',
       memory: 'Not enough memory',
+      measuring: 'A speed measurement is running',
       sourceLimit: 'Page cannot be analyzed',
       undiscovered: 'Nothing found',
       held: 'Held by policy',
@@ -3878,6 +3881,7 @@ export const en = {
       modelMissing: 'A required model is missing or failed its checksum. Open Models and backends to import or verify it.',
       modelFailed: 'The model stopped before finishing this page. Nothing was written. Try again, or analyze on the CPU.',
       memory: 'SAM-TS-L lettering mask needs about 10 GB of free memory. Close other apps, then analyze again.',
+      measuring: 'Analysis waits while the Runtime screen measures this computer. Try again when it finishes.',
       sourceLimit: 'Review previews are limited to 20 MB and 24 megapixels, in PNG, JPEG, GIF, WebP or BMP.',
       longstrip: 'Text-shaped review needs a paginated chapter. Long strips are not supported yet.',
       undiscovered: 'No lettering components or detector boxes on this page. Nothing will be written.',

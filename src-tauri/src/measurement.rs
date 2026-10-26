@@ -34,6 +34,10 @@ const VERSION: u32 = 1;
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static CANCEL: AtomicBool = AtomicBool::new(false);
+/// Local model work outside any job: a hand clean of one region on a model
+/// rung, or the review's analysis. A measurement refuses to start while any
+/// is in flight, and none starts while a measurement runs ([`begin_work`]).
+static WORK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 /// SAM's own stop, for the wait on its process-wide permit and a run in flight.
 static SAM_CANCEL: std::sync::Mutex<Option<std::sync::Arc<cleaner_core::sam_ts::Cancellation>>> = std::sync::Mutex::new(None);
 
@@ -360,7 +364,7 @@ pub async fn measure_backends(app: tauri::AppHandle) -> Result<MeasurementView, 
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Err("notice.measure.running".to_owned());
     }
-    if crate::jobs::running() > 0 {
+    if crate::jobs::running() > 0 || WORK.load(Ordering::SeqCst) > 0 {
         settle();
         return Err("notice.measure.busy".to_owned());
     }
@@ -418,6 +422,31 @@ fn settle() {
     CANCEL.store(false, Ordering::SeqCst);
 }
 
+/// Held while local model work that is not a job runs; dropping it ends it.
+pub(crate) struct Work(());
+
+impl Drop for Work {
+    fn drop(&mut self) {
+        WORK.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Claim local model work outside a job, or `None` while a measurement runs.
+/// Counted before the flag is read, and the measurement reads the count after
+/// claiming its flag, so whichever comes second sees the other.
+pub(crate) fn begin_work() -> Option<Work> {
+    claim_work(&WORK, &RUNNING).then_some(Work(()))
+}
+
+fn claim_work(work: &std::sync::atomic::AtomicUsize, running: &AtomicBool) -> bool {
+    work.fetch_add(1, Ordering::SeqCst);
+    if running.load(Ordering::SeqCst) {
+        work.fetch_sub(1, Ordering::SeqCst);
+        return false;
+    }
+    true
+}
+
 /// Whether a measurement is running, which a clean waits for.
 pub(crate) fn running() -> bool {
     RUNNING.load(Ordering::SeqCst)
@@ -456,6 +485,16 @@ pub async fn forget_measurement(app: tauri::AppHandle) -> Result<MeasurementView
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn work_is_refused_while_measuring_and_leaves_no_count() {
+        let (work, running) = (std::sync::atomic::AtomicUsize::new(0), AtomicBool::new(false));
+        assert!(claim_work(&work, &running));
+        assert_eq!(work.load(Ordering::SeqCst), 1);
+        running.store(true, Ordering::SeqCst);
+        assert!(!claim_work(&work, &running));
+        assert_eq!(work.load(Ordering::SeqCst), 1);
+    }
 
     fn saved(winner: Option<&str>) -> Saved {
         Saved {

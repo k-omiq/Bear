@@ -2626,14 +2626,16 @@ impl Pipeline {
 
     /// The lettering mask failed this run, opening or on a page. Its session
     /// is dropped, which gives its memory back, and every later page is masked
-    /// from CTD's segmentation. The notice says so once. No engine fault is
-    /// left behind: the page goes on, and a fault in the slot would name the
-    /// mask if the page later failed on something else.
+    /// from CTD's segmentation, or, in a run without CTD, has no lettering
+    /// mask at all. The notice says which, once. No engine fault is left
+    /// behind: the page goes on, and a fault in the slot would name the mask
+    /// if the page later failed on something else.
     fn give_up_sam(&mut self, detail: &str) {
-        eprintln!("manga-cleaner: the SAM-TS-L lettering mask failed, masking from CTD: {detail}");
+        eprintln!("manga-cleaner: the SAM-TS-L lettering mask failed: {detail}");
         self.sam = None;
         self.sam_unavailable = true;
-        crate::events::notice("notice.run.samFallback", serde_json::json!({}), "warn");
+        let key = if self.detection_models.ctd { "notice.run.samFallback" } else { "notice.run.samLost" };
+        crate::events::notice(key, serde_json::json!({}), "warn");
     }
 
     /// Group one segment's evidence and encode its evidence file. `scope`

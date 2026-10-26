@@ -1923,8 +1923,12 @@ pub async fn analyze_capabilities(
         _ => "ort-cpu".to_owned(),
     };
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    // The review's models share the processor or the GPU with a speed
+    // measurement, so the two never run together.
+    let work = crate::measurement::begin_work().ok_or("Analysis waits while a speed measurement runs")?;
     let (active_guard, cancel) = begin_analysis(request_id)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _work = work;
         let _active_guard = active_guard;
         cancel.check()?;
         let _guard = SAM_FILES.lock().map_err(|e| e.to_string())?;
