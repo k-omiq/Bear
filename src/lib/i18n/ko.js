@@ -1840,6 +1840,7 @@ export const ko = {
   ladder: {
     rung: {
       fill: '채우기',
+      screentone: '스크린톤',
       lama: 'LaMa Manga',
       flux: 'FLUX',
       cloud: '클라우드',
@@ -1917,6 +1918,7 @@ export const ko = {
     },
     engineChoice: {
       fill: '채우기',
+      screentone: '스크린톤',
       lama: 'LaMa Manga',
       flux: 'FLUX',
       cloud: '클라우드',

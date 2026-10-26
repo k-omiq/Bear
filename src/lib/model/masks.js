@@ -113,7 +113,7 @@ export function provenanceFacts(mask) {
  *
  * @type {ReadonlyArray<string>}
  */
-export const ROW_ENGINES = Object.freeze(['fill', 'lama', 'flux'])
+export const ROW_ENGINES = Object.freeze(['fill', 'screentone', 'lama', 'flux'])
 
 /**
  * The engine a row or the region menu offers for rendering on the user's own

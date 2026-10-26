@@ -1277,6 +1277,53 @@ fn rung_3a_is_not_reachable_from_an_automatic_run() {
     }
 }
 
+/// The screentone fill renders by hand and is never on an automatic ladder:
+/// routing a region to it is a separate step, measured before it is switched
+/// on. On a dot screen with lettering it makes a patch whose applied mask
+/// covers the ink, recorded as itself.
+#[test]
+fn screentone_renders_by_hand_and_is_never_automatic() {
+    let page = gray_page(|x, y| {
+        let letter = (70..90).contains(&x) && (60..140).contains(&y);
+        if letter { 255 } else if tone(x, y) { 40 } else { 235 }
+    });
+    for start in [Engine::Fill, Engine::Lama] {
+        for ceiling in [Engine::Fill, Engine::Screentone, Engine::Lama] {
+            assert!(!ladder_from(start, ceiling, &page).contains(&Engine::Screentone));
+        }
+    }
+    let fitted = fitted_over(&page, Rect::new(70, 60, 20, 80));
+    match render_rung(&mut no_rung_two(), Engine::Screentone, &page, &fitted).unwrap() {
+        Rendered::Made(made) => {
+            assert_eq!(made.engine, Engine::Screentone);
+            assert_eq!((made.pixels.width, made.pixels.height), (made.mask.bounds.w, made.mask.bounds.h));
+            for y in 60..140 {
+                for x in 70..90 {
+                    if fitted.ink.contains(x, y) {
+                        assert!(made.mask.contains(x, y), "ink pixel ({x},{y}) not covered");
+                    }
+                }
+            }
+            // the white letter is gone: no pure white left inside it
+            let b = made.mask.bounds;
+            let white = (60..140)
+                .flat_map(|y| (70..90).map(move |x| (x, y)))
+                .filter(|&(x, y)| made.mask.contains(x, y))
+                .filter(|&(x, y)| made.pixels.sample((x - b.x) as u32, (y - b.y) as u32, 0) == 255)
+                .count();
+            assert_eq!(white, 0);
+        }
+        Rendered::Refused(key) => panic!("refused: {key}"),
+    }
+    // the model rungs' refusals: a palette cannot carry continuous tone
+    let indexed = fixtures::by_name("indexed-p").raster;
+    let fitted = fitted_over(&indexed, Rect::new(2, 2, 4, 4));
+    assert!(matches!(
+        render_rung(&mut no_rung_two(), Engine::Screentone, &indexed, &fitted).unwrap(),
+        Rendered::Refused(_)
+    ));
+}
+
 /// The ceiling the scheduler is given is the ceiling the cleaner sees, on every
 /// page. A run that lifted it after the first page would be the same defect
 /// with a longer fuse.

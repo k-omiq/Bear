@@ -21,6 +21,11 @@ pub enum Engine {
     /// project saved before that still names it.
     #[serde(alias = "denoise")]
     Fill,
+    /// The screentone fill: lettering on a halftone dot screen, cleaned with
+    /// the page's own dots kept in phase and the screen's brightness carried
+    /// across the hole ([`crate::engines::screentone`]). Arithmetic over the
+    /// page, like rung 0, but it reads what was under the mask from around it.
+    Screentone,
     Lama,
     Flux,
     Cloud,
@@ -43,6 +48,7 @@ impl Engine {
     pub fn rung_key(self) -> &'static str {
         match self {
             Engine::Fill => "ladder.rung.fill",
+            Engine::Screentone => "ladder.rung.screentone",
             Engine::Lama => "ladder.rung.lama",
             Engine::Flux => "ladder.rung.flux",
             Engine::Cloud => "ladder.rung.cloud",
@@ -81,7 +87,7 @@ impl Engine {
                 lock: true,
                 opacity: true,
             },
-            Engine::Lama | Engine::Flux | Engine::Cloud | Engine::Clone => {
+            Engine::Screentone | Engine::Lama | Engine::Flux | Engine::Cloud | Engine::Clone => {
                 LayerCapabilities { transform: LayerPlacement::Fixed, lock: false, opacity: true }
             }
         }

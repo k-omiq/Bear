@@ -1885,6 +1885,7 @@ export const es = {
   ladder: {
     rung: {
       fill: 'Relleno',
+      screentone: 'Trama',
       lama: 'LaMa Manga',
       flux: 'FLUX',
       cloud: 'Nube',
@@ -1962,6 +1963,7 @@ export const es = {
     },
     engineChoice: {
       fill: 'Relleno',
+      screentone: 'Trama',
       lama: 'LaMa Manga',
       flux: 'FLUX',
       cloud: 'Nube',

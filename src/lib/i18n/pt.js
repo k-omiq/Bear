@@ -1885,6 +1885,7 @@ export const pt = {
   ladder: {
     rung: {
       fill: 'Preencher',
+      screentone: 'Retícula',
       lama: 'LaMa Manga',
       flux: 'FLUX',
       cloud: 'Nuvem',
@@ -1962,6 +1963,7 @@ export const pt = {
     },
     engineChoice: {
       fill: 'Preencher',
+      screentone: 'Retícula',
       lama: 'LaMa Manga',
       flux: 'FLUX',
       cloud: 'Nuvem',

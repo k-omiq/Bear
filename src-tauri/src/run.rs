@@ -168,8 +168,11 @@ use crate::library::{self, ApiChapter, ApiPage, ApiProject, Library, LibraryErro
 pub(crate) fn rung(engine: Engine) -> u8 {
     match engine {
         Engine::Fill => 0,
-        // 1 is vacant too. It was Denoise fill's, removed once pages were
-        // denoised whole, and left empty for the reason given below.
+        // 1 was Denoise fill's, removed once pages were denoised whole. The
+        // screentone fill took it: arithmetic like rung 0, weaker than the
+        // inpainter on anything that is not a screen. No stored ceiling ever
+        // named it, so taking the number reorders nothing.
+        Engine::Screentone => 1,
         Engine::Lama => 2,
         // 3 is vacant. It was MI-GAN's, and the removal left the number where
         // it was rather than sliding rung 3a and rung 4 down into it: every
@@ -237,6 +240,7 @@ pub(crate) fn parse_rung(name: &str) -> Option<Engine> {
         // A stored `"denoise"` ceiling means the fill: rung 1 is gone, and a
         // ceiling at it allowed no model, which is what rung 0 still says.
         "fill" | "denoise" => Some(Engine::Fill),
+        "screentone" => Some(Engine::Screentone),
         "lama" => Some(Engine::Lama),
         // **A stored `"migan"` still means something, and it means LaMa.**
         // MI-GAN was rung 3 and is gone, but a ceiling is a *setting*, written
@@ -737,6 +741,12 @@ fn ladder_from(start: Engine, ceiling: Engine, page: &Raster) -> Vec<Engine> {
             // The model rung answers for itself - a source it cannot carry is
             // a source it drops off the ladder rather than one it faults on.
             Engine::Lama => lama::applies(page),
+            // Not on the automatic ladder yet: routing a region to it when the
+            // ring is a screen is a separate step, measured on library chapters
+            // before it is switched on (docs/patch-gradient-plan.md). The array
+            // above does not name it; this arm is written out so it cannot start
+            // answering by accident.
+            Engine::Screentone => false,
             // Already gone, by the filter above. Written out rather than left
             // to a wildcard so that this match cannot silently start answering
             // for a rung it has no business answering for.
@@ -4292,6 +4302,21 @@ pub(crate) fn render_rung_with_color(
         Engine::Paint | Engine::Clone => {
             Ok(Rendered::Refused("decline.reason.rungUnavailable"))
         }
+        // Rung 1, picked by hand. A decline is the model rungs' own (indexed,
+        // CMYK, one-bit, too large): the fill writes continuous tone.
+        Engine::Screentone => match cleaner_core::engines::screentone::render(crop, fitted) {
+            Ok((mask, pixels)) => Ok(Rendered::Made(Box::new(Made {
+                engine,
+                mask,
+                ink: fitted.ink.clone(),
+                pixels,
+                provider: None,
+                model_sha256: None,
+                pad: strip::EdgePad::None,
+                tiles: None,
+            }))),
+            Err(decline) => Ok(Rendered::Refused(decline.reason_key())),
+        },
         // Rung 0. A fill is the answer that cannot be wrong for a region that
         // got here.
         Engine::Fill => {

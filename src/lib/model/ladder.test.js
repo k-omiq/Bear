@@ -13,11 +13,13 @@ describe('engine ladder clamping', () => {
   })
 
   it('steps exactly one rung at a time in between', () => {
-    expect(RUNGS).toEqual(['fill', 'lama', 'flux'])
-    expect(stronger('fill')).toBe('lama')
+    expect(RUNGS).toEqual(['fill', 'screentone', 'lama', 'flux'])
+    expect(stronger('fill')).toBe('screentone')
+    expect(stronger('screentone')).toBe('lama')
     expect(stronger('lama')).toBe('flux')
     expect(simpler('flux')).toBe('lama')
-    expect(simpler('lama')).toBe('fill')
+    expect(simpler('lama')).toBe('screentone')
+    expect(simpler('screentone')).toBe('fill')
   })
 
   // Denoise fill was rung 1 and is gone. A patch, a pick or a ceiling saved
@@ -27,7 +29,7 @@ describe('engine ladder clamping', () => {
     expect(currentRung('denoise')).toBe('fill')
     expect(currentRung('lama')).toBe('lama')
     expect(currentRung('cloud')).toBe('cloud')
-    expect(stronger('denoise')).toBe('lama')
+    expect(stronger('denoise')).toBe('screentone')
     expect(simpler('denoise')).toBe('fill')
     expect(rungLabel('denoise')).toBe('ladder.rung.fill')
   })
@@ -48,6 +50,7 @@ describe('engine ladder clamping', () => {
 describe('rungLabel', () => {
   it('returns the i18n key for known rungs including flux, legacy cloud, paint, and clone', () => {
     expect(rungLabel('fill')).toBe('ladder.rung.fill')
+    expect(rungLabel('screentone')).toBe('ladder.rung.screentone')
     expect(rungLabel('lama')).toBe('ladder.rung.lama')
     expect(rungLabel('flux')).toBe('ladder.rung.flux')
     expect(rungLabel('cloud')).toBe('ladder.rung.cloud')

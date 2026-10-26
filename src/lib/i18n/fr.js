@@ -1885,6 +1885,7 @@ export const fr = {
   ladder: {
     rung: {
       fill: 'Remplissage',
+      screentone: 'Trame',
       lama: 'LaMa Manga',
       flux: 'FLUX',
       cloud: 'Cloud',
@@ -1962,6 +1963,7 @@ export const fr = {
     },
     engineChoice: {
       fill: 'Remplissage',
+      screentone: 'Trame',
       lama: 'LaMa Manga',
       flux: 'FLUX',
       cloud: 'Cloud',

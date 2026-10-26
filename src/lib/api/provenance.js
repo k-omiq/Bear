@@ -29,6 +29,15 @@ export const ENGINE_INFO = Object.freeze({
     elapsed: [2, 14],
     fillMode: 'match-surround',
   },
+  // Rung 1, the screentone fill (`engines/screentone.rs`): phase-locked
+  // copy of the page's own dots at a membrane tone field. Picked by hand.
+  screentone: {
+    version: 'screentone-fill 1',
+    modelSha: null,
+    provider: 'cpu',
+    elapsed: [100, 600],
+    fillMode: 'reconstruct',
+  },
   lama: {
     version: 'lama-manga onnx opset 17',
     modelSha: 'lama',

@@ -1175,7 +1175,7 @@ fn fill_mode(engine: Engine, params: &serde_json::Value) -> &'static str {
     }
     match engine {
         Engine::Fill => "match-surround",
-        Engine::Lama | Engine::Flux | Engine::Cloud => "reconstruct",
+        Engine::Screentone | Engine::Lama | Engine::Flux | Engine::Cloud => "reconstruct",
         // **Neither word fits a hand tool, and `solid` is the closest of the
         // three.** The seam's `fillMode` is a closed union of `match-surround`,
         // `reconstruct` and `solid` (`src/lib/model/types.js`), and a painted

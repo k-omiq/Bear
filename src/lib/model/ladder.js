@@ -1,6 +1,7 @@
 /**
- * The engine ladder: fill → manga-LaMa → FLUX, ordered weakest/cheapest to
- * strongest/most expensive. `stronger`/`simpler` step along it and clamp at
+ * The engine ladder: fill → screentone → manga-LaMa → FLUX, ordered
+ * weakest/cheapest to strongest/most expensive. Screentone is arithmetic like
+ * fill, made for lettering on a halftone dot screen; picked by hand only. `stronger`/`simpler` step along it and clamp at
  * both ends - there is no engine below fill or above FLUX.
  *
  * `decline` is a terminal pipeline outcome, not a
@@ -8,10 +9,11 @@
  */
 
 /** @type {ReadonlyArray<string>} */
-export const RUNGS = Object.freeze(['fill', 'lama', 'flux'])
+export const RUNGS = Object.freeze(['fill', 'screentone', 'lama', 'flux'])
 
 const LABEL_KEYS = Object.freeze({
   fill: 'ladder.rung.fill',
+  screentone: 'ladder.rung.screentone',
   lama: 'ladder.rung.lama',
   flux: 'ladder.rung.flux',
   cloud: 'ladder.rung.cloud',

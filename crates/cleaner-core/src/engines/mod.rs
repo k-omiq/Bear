@@ -30,6 +30,8 @@
 //! rather than about how many engines look through it, and rung 3a
 //! ([`flux`]) reads the same module.
 
+/// The Gradient tool's Auto type: the surface all round a selection, blended in.
+pub mod autogradient;
 pub mod fill;
 /// Rung 3a, the out-of-process one. It is here because it is a rung and it
 /// keeps the rungs' shape - [`flux::applies`], [`flux::declines`],
@@ -38,8 +40,20 @@ pub mod fill;
 /// gate are [`crate::sidecar`], and this is the part that turns a region into a
 /// crop and a reply into a patch.
 pub mod flux;
+/// The Gradient tool: evaluate, fit to the surroundings, dither.
+pub mod gradient;
+/// Grids and image operations for the arithmetic fills below.
+pub mod grid;
 pub mod lama;
 pub mod model;
+/// Multiscale PatchMatch completion: the Patch tool's Content-Aware mode.
+pub mod patchmatch;
+/// The Patch tool's proposed source: the offset whose surroundings match.
+pub mod patchsource;
+/// Membrane and Poisson solves: the Patch tool's Normal mode and Smooth.
+pub mod poisson;
 pub mod render;
+/// The screentone fill: lettering on a halftone screen, dots kept in phase.
+pub mod screentone;
 
 pub use render::{CloudProvider, ExecutionTarget, GeneratedCrop, PreparedRender, RenderRecipe};

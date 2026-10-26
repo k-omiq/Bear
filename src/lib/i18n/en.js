@@ -2453,6 +2453,7 @@ export const en = {
   ladder: {
     rung: {
       fill: 'Fill',
+      screentone: 'Screentone',
       lama: 'LaMa Manga',
       // The optional rung 3a. Never bundled, never
       // on the default path - but a patch it produced still names it, so a
@@ -2558,6 +2559,7 @@ export const en = {
     // both have room for them.
     engineChoice: {
       fill: 'Fill',
+      screentone: 'Screentone',
       lama: 'LaMa Manga',
       // Rung 3a, offered only where the sidecar is
       // actually installed - `rowEngines` in `src/lib/model/masks.js`.

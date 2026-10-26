@@ -200,12 +200,13 @@ each model is in the [model rights decision](model-rights-decision.md).
 
 ## The engine ladder
 
-Every clean is done by one of four engines, and the app uses the lightest one that does the job: a heavier model on a
+Every clean is done by one of five engines, and the app uses the lightest one that does the job: a heavier model on a
 flat balloon is slower and often worse, because it can invent marks where there was only paper.
 
 | Engine | Good for | Notes |
 |---|---|---|
 | **Fill** | Text on flat paper, the common case | Paints one flat colour exactly on the masked area: the median of a thin ring of paper (4 px) just outside the mask. No gradient, no model, always available. |
+| **Screentone** | Lettering printed over a halftone dot screen, including a screen whose brightness ramps | Picked by hand on a Layers row, in the region menu or on the AI mask brush; an automatic run does not choose it yet. Copies the page's own dots from around the hole so they stay in step with the screen, at a brightness carried smoothly across the hole, so a blob that is darker above and lighter below stays that way. First grows the mask over leftover letter outlines and glows that a tight mask (3 px) left behind, up to 12 px out. Where the area is not a screen it fills with PatchMatch. No model; fractions of a second a region. Declines where LaMa declines (indexed, CMYK, one-bit pages). |
 | **LaMa** | Screentone, halftone, line art behind the text | The default redraw engine, and the top of an automatic run. About 0.6 s a region on a GPU, 1.5 s on the CPU. |
 | **FLUX** | The rare region nothing else reconstructs | Optional helper app you install yourself. Gigabytes of memory, around 20 s a region. Per region only. |
 | **Cloud** | Complex art on a weak machine | Off by default, opt in, your own Modal or Beam account, confirmed per render. Per region only. |

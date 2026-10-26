@@ -43,6 +43,8 @@ import { session } from './session.svelte.js'
  */
 const ALWAYS_AVAILABLE = Object.freeze({
   fill: true,
+  // Arithmetic over the page, like fill: nothing to download.
+  screentone: true,
   lama: true,
   flux: false,
 })

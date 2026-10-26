@@ -1,0 +1,35 @@
+// Paste at the end of src-tauri/src/run/tests.rs, run, then remove. Never commit it.
+// PROBE_PAGE=<page.png> PROBE_OUT=<scratch dir> PROBE_MODELS='["ctd","rtFull","samTs"]' PROBE_PAD=3 \
+//   cargo test -p manga-cleaner --lib probe_detect_real_page -- --ignored --nocapture
+// Outside-bubble text is set to Clean so held lettering gets a fitted, padded mask too.
+#[test]
+#[ignore]
+fn probe_detect_real_page() {
+    let page = PathBuf::from(std::env::var("PROBE_PAGE").unwrap());
+    let out = PathBuf::from(std::env::var("PROBE_OUT").unwrap());
+    let models_arg: serde_json::Value = serde_json::from_str(&std::env::var("PROBE_MODELS").unwrap()).unwrap();
+    let padding: u32 = std::env::var("PROBE_PAD").unwrap().parse().unwrap();
+    let app_data = PathBuf::from(std::env::var("HOME").unwrap())
+        .join("Library/Application Support/com.mangacleaner.studio");
+    let dylib = cleaner_core::runtime::find(Some(&app_data)).unwrap();
+    cleaner_core::runtime::load(&dylib).unwrap();
+    let raws = out.join("raws");
+    std::fs::create_dir_all(&raws).unwrap();
+    std::fs::copy(&page, raws.join("001.png")).unwrap();
+    let library = Library::at(out.join("library"));
+    let project = library.create_project("probe", StripMode::Single, Some(raws), None).unwrap();
+    let chapter = library.create_chapter(&project.id, "c", None, None).unwrap().created().unwrap();
+    let detection_models = DetectorModels::from_args(Some(&models_arg)).unwrap();
+    let models = selected_model_dir(Some(&app_data), detection_models, false).unwrap();
+    let entries = plan_for(&library, "chapter", &chapter.id, None, RunMode::Detect).unwrap();
+    let mut pipeline = Pipeline::open_selected(&models, Preference::Automatic, detection_models, false, Some(app_data.clone()))
+        .unwrap()
+        .with_model_preferences(&serde_json::Value::Null).unwrap()
+        .with_mask_padding(padding)
+        .with_outside(cleaner_core::gate::OutsideText::Clean);
+    let recorder = Recorder::new();
+    let summary = execute_as(RunMode::Detect, "probe", &chapter.id, &entries, &mut pipeline, HIGHEST_LOCAL,
+        &recorder.cancel, &recorder.sink());
+    eprintln!("summary {summary:?}");
+    eprintln!("job {}", entries[0].job_path.display());
+}

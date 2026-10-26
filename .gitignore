@@ -100,3 +100,9 @@ design/icon-explore/
 
 # Wrangler and Miniflare local state.
 .wrangler/
+
+# Screentone fill research: copyrighted corpus pages, harness output and comparison sheets.
+spikes/screentone-fill/corpus/
+spikes/screentone-fill/out/
+docs/research/patch-gradient-*/
+spikes/screentone-fill/.venv/

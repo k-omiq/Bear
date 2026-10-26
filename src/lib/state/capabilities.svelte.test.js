@@ -122,6 +122,7 @@ describe('loadCapabilities', () => {
     )
     expect(capabilities.engines).toEqual({
       fill: true,
+      screentone: true,
       lama: false,
       flux: false,
     })
@@ -167,6 +168,7 @@ describe('loadCapabilities', () => {
     )
     expect(capabilities.engines).toEqual({
       fill: true,
+      screentone: true,
       lama: true,
       flux: false,
     })

@@ -3969,7 +3969,7 @@ fn engine_for_fill_mode(mode: &str) -> Engine {
 /// The cloud is not among them and neither is anything above rung 3a: this is
 /// the list `stronger` and `simpler` step along, and every rung in it is one
 /// this build can actually run.
-const MANUAL_RUNGS: [Engine; 3] = [Engine::Fill, Engine::Lama, Engine::Flux];
+const MANUAL_RUNGS: [Engine; 4] = [Engine::Fill, Engine::Screentone, Engine::Lama, Engine::Flux];
 
 fn step(current: Engine, up: bool) -> Engine {
     let at = MANUAL_RUNGS.iter().position(|engine| *engine == current);
@@ -9552,7 +9552,9 @@ mod tests {
     #[test]
     fn the_manual_ladder_ends_at_rung_3a_and_never_reaches_the_cloud() {
         assert_eq!(step(Engine::Fill, false), Engine::Fill);
-        assert_eq!(step(Engine::Fill, true), Engine::Lama);
+        assert_eq!(step(Engine::Fill, true), Engine::Screentone);
+        assert_eq!(step(Engine::Screentone, true), Engine::Lama);
+        assert_eq!(step(Engine::Lama, false), Engine::Screentone);
         assert_eq!(step(Engine::Lama, true), Engine::Flux);
         assert_eq!(step(Engine::Flux, true), Engine::Flux);
         assert_eq!(step(Engine::Flux, false), Engine::Lama);

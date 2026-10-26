@@ -1843,6 +1843,7 @@ export const ja = {
   ladder: {
     rung: {
       fill: '塗りつぶし',
+      screentone: 'スクリーントーン',
       lama: 'LaMa Manga',
       flux: 'FLUX',
       cloud: 'クラウド',
@@ -1920,6 +1921,7 @@ export const ja = {
     },
     engineChoice: {
       fill: '塗りつぶし',
+      screentone: 'スクリーントーン',
       lama: 'LaMa Manga',
       flux: 'FLUX',
       cloud: 'クラウド',
