@@ -41,6 +41,7 @@ it('shows the native model capability matrix and persists a backend choice for t
   setBackend(/** @type {any} */ ({
     listModels: vi.fn(async () => null),
     listAccelerators: vi.fn(async () => structuredClone(accelerators)),
+    readMeasurement: vi.fn(async () => ({ saved: null, current: null, running: false })),
     listSidecarModels: vi.fn(async () => []),
     sidecarAvailable: vi.fn(async () => ({ available: false, reasonKey: null })),
     about: vi.fn(async () => ({ appVersion: 'test', facts: [] })),
@@ -50,7 +51,7 @@ it('shows the native model capability matrix and persists a backend choice for t
   }))
 
   const rendered = render(SettingsDialog, { props: { spec: SPEC } })
-  await fireEvent.click(rendered.getByRole('tab', { name: 'Performance' }))
+  await fireEvent.click(rendered.getByRole('tab', { name: 'Runtime' }))
   // Collapsed until asked for: one summary line with how many models it holds.
   const summary = await rendered.findByRole('button', { name: /Model execution/ })
   expect(summary.getAttribute('aria-expanded')).toBe('false')

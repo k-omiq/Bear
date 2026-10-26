@@ -50,7 +50,7 @@ import {
 import { hexOnCommit } from '../ui/color.js'
 
 import { localSeconds, normalizeDenoiseTarget } from '../model/denoise.js'
-import { ANALYSIS_TARGETS, CLOUD_STAGES, DEFAULT_DETECTOR, DEFAULT_DETECTOR_MODELS, DETECTOR_MODEL_IDS, LANGUAGES, defaultAnalysisTargets, migrateDetectorChoice, normalizeAnalysisTargets, normalizeDetectorModels, unifyAnalysisTargets } from '../model/pipelines.js'
+import { ANALYSIS_TARGETS, CLOUD_STAGES, DEFAULT_DETECTOR, DEFAULT_DETECTOR_MODELS, DETECTION_MODES, DETECTION_MODE_IDS, DETECTOR_MODEL_IDS, LANGUAGES, defaultAnalysisTargets, detectionModeOf, detectsOnCloud, migrateDetectorChoice, normalizeAnalysisTargets, unifyAnalysisTargets } from '../model/pipelines.js'
 
 const STORAGE_KEY = 'session.v1'
 
@@ -190,7 +190,8 @@ function viewport() {
  * @property {boolean} firstLaunchOffered - whether the first-launch download offer has been made on this machine
  * @property {boolean} closeToTray - close control hides the window and keeps downloads running
  * @property {Record<string, string|null>} detection - the detector each source language uses, by language id; null skips the language
- * @property {string[]} detectorModels - the detection models selected, by stored id: `ctd`, one Ogkalu profile (`rtFull` or `rtSmall`), `samTs`
+ * @property {'normal'|'advanced'} detectionMode - the one detection choice; it fixes `detectorModels` and `textPolicy` (`pipelines.js#DETECTION_MODES`)
+ * @property {string[]} detectorModels - the mode's detection models, by stored id; derived, never stored
  * @property {{rtFull: 'local'|'cloud', samTs: 'local'|'cloud'}} analysisTargets - where the two cloud-capable detection stages run; `cloud` needs consent per run
  * @property {'local'|'cloud'} cleanTarget - where Auto clean cleans stored detections; `cloud` needs consent per batch (docs/detect-clean.md)
  * @property {boolean} cleanLocalFirst - whether cloud clean tries saved flat-colour picks here first
@@ -198,7 +199,7 @@ function viewport() {
  * @property {'local'|'cloud'|'off'} denoiseTarget - where page denoise runs; `cloud` still asks for consent per chapter
  * @property {string} denoisePreset - the preset id last chosen; `model/denoise.js#validPreset` resolves it against the target
  * @property {number|null} denoiseLocalSecondsPerPage - what `benchmark_denoise_local` measured on this computer, or null before it has run
- * @property {'legacy_gate'|'all_text'} textPolicy - whether to use the legacy script gate or open no-recognition text-shaped review
+ * @property {'legacy_gate'|'all_text'} textPolicy - the mode's text policy: the legacy script gate, or all text; derived, never stored
  * @property {boolean} ocrRescue - whether the optional Japanese OCR rescue may run after an uncertain script decision
  * @property {boolean} cleanLatinText - whether a run cleans text the reader reads as English (Latin letters); off leaves it on the page as a held region
  * @property {Record<string, import('../shortcuts.js').Chord|null>} shortcuts - rebindings, by shortcut id; only the differences from the defaults
@@ -230,6 +231,7 @@ function defaults() {
     firstLaunchOffered: false,
     closeToTray: false,
     detection: defaultDetection(),
+    detectionMode: 'normal',
     detectorModels: [...DEFAULT_DETECTOR_MODELS],
     analysisTargets: defaultAnalysisTargets(),
     cleanTarget: 'local',
@@ -340,7 +342,11 @@ export function sanitizeSession(raw) {
     firstLaunchOffered: boolOr(record.firstLaunchOffered, base.firstLaunchOffered),
     closeToTray: boolOr(record.closeToTray, base.closeToTray),
     detection: sanitizeDetection(record.detection),
-    detectorModels: normalizeDetectorModels(record.detectorModels),
+    // The mode, or for a record written before modes the mode its
+    // combination reached for. The models and the policy are the mode's,
+    // whatever the record held: a hand-built combination is how a run ended
+    // up asking for a lettering mask the user never set up.
+    ...modeFields(storedMode(record)),
     // Anything unreadable is local: a damaged record may only keep pages here.
     // Two stages stored apart settle on this computer too: Detect on is one
     // place, and a migration never sends a model the user kept here.
@@ -354,9 +360,6 @@ export function sanitizeSession(raw) {
     denoiseTarget: normalizeDenoiseTarget(record.denoiseTarget),
     denoisePreset: typeof record.denoisePreset === 'string' ? record.denoisePreset : base.denoisePreset,
     denoiseLocalSecondsPerPage: localSeconds(record.denoiseLocalSecondsPerPage),
-    textPolicy: /** @type {'legacy_gate'|'all_text'} */ (
-      oneOf(record.textPolicy, TEXT_POLICIES, base.textPolicy)
-    ),
     // A retired `ctd-rtdetr-ocr` row meant "rescue Japanese with OCR". It
     // reads back as the plain detector (above) with the rescue on, so the
     // intent survives the row. The first save then stores the migrated pair.
@@ -417,7 +420,7 @@ setShortcutOverrides(session.shortcuts)
 
 /**
  * The subset that goes to disk. Hand-picked, so no derived value can leak in.
- * @returns {PersistedSession}
+ * @returns {Omit<PersistedSession, 'detectorModels'|'textPolicy'>}
  */
 function persistable() {
   /** @type {Record<string, WindowState>} */
@@ -441,7 +444,7 @@ function persistable() {
     firstLaunchOffered: session.firstLaunchOffered,
     closeToTray: session.closeToTray,
     detection: { ...session.detection },
-    detectorModels: [...session.detectorModels],
+    detectionMode: session.detectionMode,
     analysisTargets: { ...session.analysisTargets },
     cleanTarget: session.cleanTarget,
     cleanLocalFirst: session.cleanLocalFirst,
@@ -449,7 +452,6 @@ function persistable() {
     denoiseTarget: session.denoiseTarget,
     denoisePreset: session.denoisePreset,
     denoiseLocalSecondsPerPage: session.denoiseLocalSecondsPerPage,
-    textPolicy: session.textPolicy,
     ocrRescue: session.ocrRescue,
     cleanLatinText: session.cleanLatinText,
     shortcuts: shortcutOverrides(),
@@ -604,9 +606,48 @@ export function setDetection(language, detectorId) {
   save()
 }
 
-/** @param {string[]} models */
-export function setDetectorModels(models) {
-  session.detectorModels = normalizeDetectorModels(models)
+/**
+ * The mode a stored record is in. Detection on the cloud GPU is always
+ * Advanced, so a record whose targets are on the cloud is Advanced whatever
+ * else it says: a record written before modes could pair the cloud with
+ * Normal's models, and that pair would run the cloud's models under the
+ * script gate while every screen said Normal.
+ *
+ * @param {Record<string, unknown>} record
+ * @returns {'normal'|'advanced'}
+ */
+function storedMode(record) {
+  if (detectsOnCloud(record.analysisTargets)) return 'advanced'
+  return DETECTION_MODE_IDS.includes(/** @type {any} */ (record.detectionMode))
+    ? /** @type {'normal'|'advanced'} */ (record.detectionMode)
+    : detectionModeOf(record)
+}
+
+/**
+ * The fields a detection mode fixes.
+ *
+ * @param {'normal'|'advanced'} mode
+ */
+function modeFields(mode) {
+  const preset = DETECTION_MODES[mode]
+  return { detectionMode: mode, detectorModels: [...preset.detectorModels], textPolicy: preset.textPolicy }
+}
+
+/**
+ * Choose Normal or Advanced. A change also sets the text reader to the mode's
+ * default (on for Advanced); it stays switchable under More options. Where
+ * detection runs is `cloudtargets.svelte.js#chooseDetectionMode`'s, which
+ * calls this.
+ *
+ * @param {string} mode - `normal` or `advanced`
+ */
+export function setDetectionMode(mode) {
+  if (!DETECTION_MODE_IDS.includes(/** @type {any} */ (mode)) || mode === session.detectionMode) return
+  const fields = modeFields(/** @type {'normal'|'advanced'} */ (mode))
+  session.detectionMode = fields.detectionMode
+  session.detectorModels = fields.detectorModels
+  session.textPolicy = fields.textPolicy
+  session.ocrRescue = DETECTION_MODES[fields.detectionMode].reads
   save()
 }
 
@@ -674,14 +715,6 @@ export function setDenoisePreset(id) {
 /** @param {unknown} seconds - seconds per page measured on this computer; anything else clears it */
 export function setDenoiseLocalSeconds(seconds) {
   session.denoiseLocalSecondsPerPage = localSeconds(seconds)
-  save()
-}
-
-/** @param {'legacy_gate'|'all_text'} policy */
-export function setTextPolicy(policy) {
-  session.textPolicy = /** @type {'legacy_gate'|'all_text'} */ (
-    oneOf(policy, TEXT_POLICIES, session.textPolicy)
-  )
   save()
 }
 
@@ -1116,6 +1149,9 @@ export function adoptBackendSettings(settings) {
   }
   if (record.analysisTargets !== undefined) {
     session.analysisTargets = unifyAnalysisTargets(record.analysisTargets)
+    // Detection on the cloud GPU is Advanced (`storedMode`). The reader is
+    // left as it is: a cloud run reads anyway, and it is the user's here.
+    if (detectsOnCloud(session.analysisTargets)) Object.assign(session, modeFields('advanced'))
     save()
   }
   if (record.cleanTarget !== undefined) setCleanTarget(record.cleanTarget === 'cloud' ? 'cloud' : 'local')

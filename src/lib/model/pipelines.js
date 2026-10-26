@@ -164,14 +164,53 @@ export const DEFAULT_DETECTOR = 'ctd-rtdetr'
 export const DETECTOR_MODEL_IDS = Object.freeze(['ctd', 'rtSmall', 'rtFull', 'samTs'])
 export const DEFAULT_DETECTOR_MODELS = Object.freeze(['ctd', 'rtSmall'])
 
-/** The complete detector combination available on this computer. The text reader remains optional. */
-export const FULL_LOCAL_DETECTOR_MODELS = Object.freeze(['ctd', 'rtFull', 'samTs'])
+/**
+ * The two detection modes, the only detection choice setup, Settings and the
+ * Text cleanup panel offer. Each fixes the models and the text policy a run
+ * uses, so no screen builds a combination by hand:
+ *
+ * - **Normal:** CTD and the Small Ogkalu profile, with the script gate. Text
+ *   in speech bubbles, in the chosen languages, is cleaned; text outside
+ *   them, sound effects included, is held for review.
+ * - **Advanced:** CTD, the Full profile and the SAM-TS-L lettering mask under
+ *   the all-text policy, so text outside bubbles and sound effects are
+ *   cleaned too. The same models a cloud GPU run uses (`CLOUD_DETECTOR_MODELS`).
+ *
+ * `reads` is the text reader's default when the mode is chosen; the reader
+ * stays the user's to switch under More options.
+ */
+export const DETECTION_MODES = Object.freeze({
+  normal: Object.freeze({ detectorModels: DEFAULT_DETECTOR_MODELS, textPolicy: LEGACY_POLICY, reads: false }),
+  advanced: Object.freeze({ detectorModels: Object.freeze(['ctd', 'rtFull', 'samTs']), textPolicy: ALL_TEXT_POLICY, reads: true }),
+})
+export const DETECTION_MODE_IDS = /** @type {const} */ (['normal', 'advanced'])
+
+/**
+ * The SAM-TS-L graph pair on disk, as `src-tauri/src/model_workflows.rs` pins
+ * it (encoder plus text head). SAM is installed rather than downloaded, so no
+ * catalogue row carries its size; setup and the mode cards count it with this.
+ */
+export const SAM_GRAPH_BYTES = 1_335_305_985 + 22_704_641
+
+/** Free memory the lettering mask wants, as `cleaner-core/src/sam_ts.rs#MIN_ROOM_BYTES` measures it. */
+export const SAM_ROOM_BYTES = 10_000_000_000
+
+/**
+ * The mode a stored combination belongs to. Anything that asked for more than
+ * Normal (the Full profile, the lettering mask, or all text) was a user
+ * reaching for Advanced, so it reads as Advanced; everything else, damaged
+ * records included, is Normal.
+ *
+ * @param {{detectorModels?: unknown, textPolicy?: unknown}} stored
+ * @returns {'normal'|'advanced'}
+ */
+export function detectionModeOf({ detectorModels, textPolicy } = {}) {
+  const models = Array.isArray(detectorModels) ? detectorModels : []
+  return models.includes('rtFull') || models.includes('samTs') || textPolicy === ALL_TEXT_POLICY ? 'advanced' : 'normal'
+}
 
 /** The detection choices as Settings and setup list them: CTD, Full, Small, SAM-TS-L. */
 export const DETECTOR_CHOICES = Object.freeze(['ctd', 'rtFull', 'rtSmall', 'samTs'])
-
-/** The profile a selected one excludes. */
-const EXCLUDES = Object.freeze({ rtFull: 'rtSmall', rtSmall: 'rtFull' })
 
 /**
  * Validate a persisted or incoming combination without silently enabling models.
@@ -188,24 +227,6 @@ export function normalizeDetectorModels(value) {
   if (selected.has('rtSmall') && selected.has('rtFull')) selected.delete('rtFull')
   if (!selected.size) return [...DEFAULT_DETECTOR_MODELS]
   return DETECTOR_MODEL_IDS.filter((id) => selected.has(id))
-}
-
-/**
- * Tick or untick one detection model. Choosing one Ogkalu profile clears the
- * other; a change that would leave nothing selected is refused, because a run
- * needs at least one model.
- *
- * @param {unknown} current - the selection now
- * @param {string} id
- * @param {boolean} checked
- * @returns {string[]} the new selection, in stored order
- */
-export function toggleDetectorModel(current, id, checked) {
-  const selected = normalizeDetectorModels(current)
-  if (!DETECTOR_MODEL_IDS.includes(id)) return selected
-  let next = selected.filter((entry) => entry !== id)
-  if (checked) next = [...next.filter((entry) => entry !== EXCLUDES[id]), id]
-  return next.length ? DETECTOR_MODEL_IDS.filter((entry) => next.includes(entry)) : selected
 }
 
 /**

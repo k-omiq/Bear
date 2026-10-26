@@ -121,6 +121,18 @@ pub enum Event {
         done: bool,
         error: Option<String>,
     },
+    /// The Runtime screen's measurement is timing one model on one backend
+    /// (`crate::measurement`). `step` counts from 1 to `total`; **exactly one
+    /// event per measurement carries `done`**, whatever happened, and its other
+    /// fields are empty.
+    #[serde(rename_all = "camelCase")]
+    MeasureProgress {
+        model: String,
+        backend: String,
+        step: u32,
+        total: u32,
+        done: bool,
+    },
     /// The backend recorded an undo step of its own on this chapter: a
     /// result committed, a detected region was cleaned, a result was
     /// rejected (`history::record_step`). The interface reads the chapter's

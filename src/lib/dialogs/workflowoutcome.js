@@ -428,7 +428,8 @@ export function readinessKeyOf(capabilities, preset, { rtProfile, rtBackend, sam
   if (preset.needs.includes('sam')) {
     if (!capabilities.samInstalled) return 'workflow.ready.sam'
     if (verified !== true) return 'workflow.ready.samUnverified'
-    if (!capabilities.samMemoryReady) return 'workflow.ready.memory'
+    // Short memory room is not a missing piece: SAM loads with less, slower,
+    // and the backend no longer refuses the review for it.
     if (samBackend !== 'auto' && !capabilities.samBackends?.some((entry) => entry.id === samBackend && entry.selectable)) return 'workflow.ready.backend'
   }
   return null

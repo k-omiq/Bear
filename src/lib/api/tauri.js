@@ -135,6 +135,11 @@ const IMPLEMENTED = Object.freeze({
   listLoadedModels: 'list_loaded_models',
   unloadModel: 'unload_model',
   listAccelerators: 'list_accelerators',
+  runtimeReport: 'runtime_report',
+  readMeasurement: 'read_measurement',
+  measureBackends: 'measure_backends',
+  cancelMeasurement: 'cancel_measurement',
+  forgetMeasurement: 'forget_measurement',
   listModels: 'list_models',
   downloadModel: 'download_model',
   downloadModelGroup: 'download_model_group',
@@ -264,6 +269,11 @@ export const SEAM_METHODS = Object.freeze([
   'listLoadedModels',
   'unloadModel',
   'listAccelerators',
+  'runtimeReport',
+  'readMeasurement',
+  'measureBackends',
+  'cancelMeasurement',
+  'forgetMeasurement',
   'listModels',
   'downloadModel',
   'downloadModelGroup',
@@ -660,6 +670,16 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // was refused - because the earlier complaint was that the core
     // decided all of that and told nobody.
     listAccelerators: () => call(IMPLEMENTED.listAccelerators),
+
+    // The Runtime screen. `runtimeReport` reads the disk and the NVIDIA driver,
+    // never the runtime, so it is safe before and during a runtime download.
+    // A measurement reports on the event channel (`measure-progress`) and
+    // resolves with what it saved.
+    runtimeReport: ({ flavour = null, rescan = false } = {}) => call(IMPLEMENTED.runtimeReport, { flavour, rescan }),
+    readMeasurement: () => call(IMPLEMENTED.readMeasurement),
+    measureBackends: () => call(IMPLEMENTED.measureBackends),
+    cancelMeasurement: () => call(IMPLEMENTED.cancelMeasurement),
+    forgetMeasurement: () => call(IMPLEMENTED.forgetMeasurement),
 
     // The model catalogue. `listModels` is the cheap one - a
     // `metadata` call per search path per weight and no digests, because a

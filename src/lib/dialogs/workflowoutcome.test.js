@@ -262,6 +262,8 @@ describe('readinessKeyOf', () => {
   it('is null when the workflow can run', () => {
     expect(readinessKeyOf(caps, both, choice)).toBeNull()
     expect(readinessKeyOf(caps, both, { ...choice, rtBackend: 'auto', samBackend: 'auto' })).toBeNull()
+    // Low memory room is a warning elsewhere, never a hold.
+    expect(readinessKeyOf({ ...caps, samMemoryReady: false }, both, choice)).toBeNull()
   })
 
   it('names the missing piece', () => {
@@ -269,7 +271,6 @@ describe('readinessKeyOf', () => {
     expect(readinessKeyOf(caps, both, { ...choice, rtProfile: 'small-whole' })).toBe('workflow.ready.rt')
     expect(readinessKeyOf({ ...caps, samInstalled: false }, both, choice)).toBe('workflow.ready.sam')
     expect(readinessKeyOf(caps, both, { ...choice, verified: false })).toBe('workflow.ready.samUnverified')
-    expect(readinessKeyOf({ ...caps, samMemoryReady: false }, both, choice)).toBe('workflow.ready.memory')
     expect(readinessKeyOf(caps, both, { ...choice, samBackend: 'ort-webgpu' })).toBe('workflow.ready.backend')
   })
 

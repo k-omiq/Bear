@@ -28,6 +28,11 @@ export const RUNTIME_LABEL_KEY = 'settings.models.runtime.label'
  * The setup's steps, in order, one decision each. `cloud` sits after
  * `cleaning` because what it sets up is a place to run AI redraw, and
  * `denoise` after `cloud` because whether Cloud GPU is offered depends on it.
+ *
+ * The Runtime screen is split around the downloads, because its two halves
+ * need opposite things: `runtime` picks the build before it is downloaded
+ * (a second build is a second download of hundreds of MB), and `measure`
+ * times the models once they are here.
  */
 export const FIRST_LAUNCH_STEPS = Object.freeze([
   'welcome',
@@ -39,8 +44,10 @@ export const FIRST_LAUNCH_STEPS = Object.freeze([
   'denoise',
   'cloud',
   'community',
+  'runtime',
   'dependencies',
   'downloads',
+  'measure',
 ])
 
 /**
@@ -55,7 +62,7 @@ export const FIRST_LAUNCH_STEPS = Object.freeze([
  * @typedef {Object} FirstLaunchPlan
  * @property {Record<string, PlanRow>} files - every catalogue row, by id, plus the runtime when this platform publishes one
  * @property {boolean} runtimeUnavailable - this platform publishes no runtime, so local models cannot run until one is placed by hand
- * @property {{version: string|null, flavour: string|null, needs: string[]}} runtime - the build that would be fetched, and what it needs installed by hand first (a CUDA toolkit, say)
+ * @property {{version: string|null, flavour: string|null, needs: string[], flavours: Array<{id: string, bytes: number, isDefault: boolean, userInstalled: string[]}>}} runtime - the build that would be fetched, what it needs installed by hand first (a CUDA toolkit, say), and every build this platform publishes
  * @property {string|null} platform - `macos-arm64` and the like, from the backend; null when it did not say
  * @property {boolean} hasToken - a Hugging Face token is already stored
  * @property {string[]} denoise - the catalogue ids local page denoise downloads (required by `pageDenoise`)
@@ -76,8 +83,11 @@ export function firstLaunchPlan(view) {
   // An unavailable runtime - an Intel Mac, where nothing is published - is
   // left out rather than listed as a row no download can satisfy.
   // One placed by hand on such a platform is still installed, and says so.
+  // A different build on disk from the one chosen is not the chosen one
+  // installed: the setup downloads the chosen build over it.
   if (runtime && (runtime.available !== false || runtime.installed === true)) {
-    files[RUNTIME_ID] = rowOf(RUNTIME_ID, RUNTIME_LABEL_KEY, runtime.bytes, runtime.installed)
+    const other = typeof runtime.installedFlavour === 'string' && runtime.installedFlavour !== runtime.flavour
+    files[RUNTIME_ID] = rowOf(RUNTIME_ID, RUNTIME_LABEL_KEY, runtime.bytes, runtime.installed === true && !other)
   }
   return {
     files,
@@ -86,6 +96,7 @@ export function firstLaunchPlan(view) {
       version: runtime?.version ?? null,
       flavour: runtime?.flavour ?? null,
       needs: runtimeNeeds(runtime),
+      flavours: runtimeFlavours(runtime),
     },
     platform: typeof runtime?.platform === 'string' ? runtime.platform : null,
     hasToken: view?.hasToken === true,
@@ -201,6 +212,23 @@ export function labelKeyFor(plan, id) {
 function runtimeNeeds(runtime) {
   const chosen = runtime?.flavours?.find((flavour) => flavour.id === runtime.flavour)
   return Array.isArray(chosen?.userInstalled) ? chosen.userInstalled.filter((item) => typeof item === 'string') : []
+}
+
+/**
+ * Every build the platform publishes, as the build choice draws them.
+ *
+ * @param {import('../api/backend.js').ModelsView['runtime']|undefined} runtime
+ */
+function runtimeFlavours(runtime) {
+  const rows = Array.isArray(runtime?.flavours) ? runtime.flavours : []
+  return rows
+    .filter((row) => typeof row?.id === 'string')
+    .map((row) => ({
+      id: row.id,
+      bytes: typeof row.bytes === 'number' && row.bytes > 0 ? row.bytes : 0,
+      isDefault: row.isDefault === true,
+      userInstalled: Array.isArray(row.userInstalled) ? row.userInstalled.filter((item) => typeof item === 'string') : [],
+    }))
 }
 
 /**

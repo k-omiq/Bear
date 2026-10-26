@@ -19,6 +19,7 @@ mod jobs;
 mod library;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
+mod measurement;
 mod models;
 mod model_workflows;
 mod page_denoise;
@@ -70,6 +71,7 @@ pub fn run() {
                 smoke::begin(app.handle());
             }
             webview_lock::install(app.handle());
+            measurement::restore(app.handle());
             // Regions whose cloud work needs a look (a committed result gone
             // missing, one never applied), read from the attempt journal at
             // every start whether or not the cloud is allowed. Page reads wait
@@ -266,6 +268,11 @@ pub fn run() {
             models::list_loaded_models,
             models::unload_model,
             models::list_accelerators,
+            measurement::runtime_report,
+            measurement::read_measurement,
+            measurement::measure_backends,
+            measurement::cancel_measurement,
+            measurement::forget_measurement,
             model_workflows::list_workflow_capabilities,
             model_workflows::import_full_rt,
             model_workflows::remove_full_rt,

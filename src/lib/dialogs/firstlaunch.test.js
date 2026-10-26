@@ -126,9 +126,9 @@ describe('what the choices need', () => {
 })
 
 describe('the setup around the plan', () => {
-  it('walks eleven steps, with denoise right before cloud, then the community, and downloads last', () => {
+  it('walks thirteen steps: the runtime build before the downloads, and its measurement after them', () => {
     expect(FIRST_LAUNCH_STEPS).toEqual([
-      'welcome', 'theme', 'token', 'background', 'detection', 'cleaning', 'denoise', 'cloud', 'community', 'dependencies', 'downloads',
+      'welcome', 'theme', 'token', 'background', 'detection', 'cleaning', 'denoise', 'cloud', 'community', 'runtime', 'dependencies', 'downloads', 'measure',
     ])
   })
 

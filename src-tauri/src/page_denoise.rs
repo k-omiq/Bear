@@ -292,6 +292,11 @@ fn run_chapter(
 ) -> Result<CloudDenoiseReport, String> {
     // First, so a Stop pressed while the model opens is already heard.
     let registered = Registered::new(run_id, DenoiseKind::Local, chapter_id)?;
+    // After registering, so a measurement that claims its flag next sees
+    // this job, and one that claimed it first is seen here.
+    if crate::measurement::running() {
+        return Err("notice.measure.cleanWaits".to_owned());
+    }
     let step = local_preset(preset_id, output_scale)?;
     if !out_dir.is_absolute() { return Err("denoise_out_dir_invalid".into()); }
     std::fs::create_dir_all(out_dir).map_err(|_| "denoise_out_dir_unwritable")?;

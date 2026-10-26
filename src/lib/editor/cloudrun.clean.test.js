@@ -19,7 +19,7 @@ import { hasKey } from '../i18n/index.js'
 import { stopCloud } from '../state/cloud.svelte.js'
 import { stopCloudGpuWatch } from '../state/cloudgpu.svelte.js'
 import { editor, runFinished } from '../state/editor.svelte.js'
-import { setAnalysisTarget, setCleanLocalFirst, setCleanTarget, setCloudAllowed, setDetectorModels } from '../state/session.svelte.js'
+import { setAnalysisTarget, setCleanLocalFirst, setCleanTarget, setCloudAllowed, setDetectionMode } from '../state/session.svelte.js'
 import { cleanLocalFirst, cloudCleanErrorKey, startCleanRun } from './cloudrun.js'
 
 vi.mock('../state/editor.svelte.js', async (importOriginal) => ({
@@ -90,7 +90,7 @@ beforeEach(() => {
   editor.chapter = /** @type {any} */ ({ id: 'c1', pages: [{ index: 0, number: 1, regions: [] }], review: [] })
   editor.pageIndex = 0
   editor.toolParams = { ...editor.toolParams, autoClean: { ...(editor.toolParams.autoClean ?? {}), step: 'auto' } }
-  setDetectorModels(['ctd', 'rtSmall'])
+  setDetectionMode('normal')
   setAnalysisTarget('rtFull', 'local')
   setAnalysisTarget('samTs', 'local')
   setCleanTarget('cloud')
@@ -109,7 +109,7 @@ afterEach(async () => {
   setCleanTarget('local')
   setAnalysisTarget('rtFull', 'local')
   setAnalysisTarget('samTs', 'local')
-  setDetectorModels(['ctd', 'rtSmall'])
+  setDetectionMode('normal')
   setCloudAllowed(false)
   stopCloud()
   stopCloudGpuWatch()
@@ -148,7 +148,7 @@ it('streams the clean: one consent with a cap before the run, which cleans each 
 it('with detection on the cloud too, asks the stream first, then detection, and mints both grants last', async () => {
   const api = backend()
   api.prepareCloudCleanStream.mockResolvedValueOnce(STREAM)
-  setDetectorModels(['samTs'])
+  setDetectionMode('advanced')
   setAnalysisTarget('rtFull', 'cloud')
   setAnalysisTarget('samTs', 'cloud')
   const started = startCleanRun('page', /** @type {any} */ (api))
@@ -176,7 +176,7 @@ it('drops the stream and detects nothing when either consent is declined', async
   expect(api.cancelCloudClean).toHaveBeenCalledWith({ proposalId: 'stream-prop' })
   expect(app.notices.at(-1)?.key).toBe('cloud.clean.stream.declined')
 
-  setDetectorModels(['samTs'])
+  setDetectionMode('advanced')
   setAnalysisTarget('rtFull', 'cloud')
   setAnalysisTarget('samTs', 'cloud')
   const detectionDeclined = startCleanRun('page', /** @type {any} */ (api))
@@ -240,7 +240,7 @@ it('with no price to cap, detects here, then prepares, asks and starts the cloud
 
 it('asks for the detection consent before anything is sent, then the clean consent after', async () => {
   const api = backend()
-  setDetectorModels(['samTs'])
+  setDetectionMode('advanced')
   setAnalysisTarget('rtFull', 'cloud')
   setAnalysisTarget('samTs', 'cloud')
   const started = startCleanRun('page', /** @type {any} */ (api))

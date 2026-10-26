@@ -294,6 +294,21 @@ import { createTauriBackend, isTauri } from './tauri.js'
  */
 
 /**
+ * The Runtime screen's measurement is timing one model (`model`, a Settings
+ * row id) on one backend (`backend`, a provider id). `step` counts from 1 to
+ * `total`. **Exactly one event per measurement carries `done`**, whatever
+ * happened, and its other fields are empty.
+ *
+ * @typedef {Object} MeasureProgressEvent
+ * @property {'measure-progress'} type
+ * @property {string} model
+ * @property {string} backend
+ * @property {number} step
+ * @property {number} total
+ * @property {boolean} done
+ */
+
+/**
  * The backend wrote an entry into a chapter's undo journal by itself: a stored
  * detection was cleaned (`masks.command.cleanRegion`, one entry for each
  * region, whoever started the clean), or a result was rejected
@@ -310,7 +325,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  */
 
 /**
- * @typedef {PageStartedEvent|RegionDoneEvent|PageDoneEvent|RunFinishedEvent|NoticeEvent|ModelProgressEvent|HistoryChangedEvent} BackendEvent
+ * @typedef {PageStartedEvent|RegionDoneEvent|PageDoneEvent|RunFinishedEvent|NoticeEvent|ModelProgressEvent|HistoryChangedEvent|MeasureProgressEvent} BackendEvent
  */
 
 /* ------------------------------------------------------------------ */
@@ -449,6 +464,11 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {() => Promise<LoadedModel[]>} listLoadedModels - what is in memory **right now**. A poll, not a subscription: the answer changes with the work rather than with an event, and an empty array is the ordinary state of an application that is not cleaning anything
  * @property {(spec: {id: number}) => Promise<boolean>} unloadModel - ask for one back. `true` means the request is recorded, **not** that the memory is free: a backend drops the session at its next safe point, and anything the work still needs loads again
  * @property {() => Promise<Accelerators>} listAccelerators - what this machine can run models on, which provider each model will land on under the current setting, and why. Not a poll: the answer moves when the runtime is downloaded or the `accelerator` setting is written
+ * @property {(spec?: {flavour?: string|null, rescan?: boolean}) => Promise<RuntimeReport>} runtimeReport - what this machine has for CUDA, judged for the runtime build `flavour` (the one being chosen, which need not be loaded). Reads the disk and the NVIDIA driver, never the runtime, so it is safe during a runtime download. `rescan` reads them again
+ * @property {() => Promise<MeasurementView>} readMeasurement - the saved measurement, and whether it was taken on the setup in use
+ * @property {() => Promise<MeasurementView>} measureBackends - time every installed model on every backend available to it, keep the fastest, save it. Rejects with `notice.measure.busy` while a run goes and `notice.measure.running` while one is measuring. Progress arrives as `measure-progress`
+ * @property {() => Promise<boolean>} cancelMeasurement - stop at the next run boundary; the measurement rejects with `notice.measure.cancelled` and saves nothing
+ * @property {() => Promise<MeasurementView>} forgetMeasurement - drop the saved measurement; Automatic goes back to the built-in table
  * @property {(spec?: {retryStore?: boolean}) => Promise<ModelsView>} listModels - the model catalogue and what of it is on this machine. Cheap by construction - presence and size, never a digest. `retryStore` is "Settings › Models has just been opened" and nothing else: it lets the once-per-process token migration be attempted again, for a keychain unlocked since launch. A refresh or a poll must not pass it
  * @property {(spec: {id: string}) => Promise<DownloadStart>} downloadModel - start one. `'alreadyRunning'` and `'alreadyInstalled'` say why one did not start, which is what a second window's stale row needs to hear. Progress arrives as `model-progress`, never as this promise
  * @property {(spec: {id: 'scriptGate'|'mangaOcr'|'hayaiOcr'}) => Promise<DownloadStart>} downloadModelGroup - start a logical multi-file language gate or Japanese OCR group
@@ -930,6 +950,48 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {string} preference - `auto`, `cpu`, or a provider id
  * @property {Array<{id: string, labelKey: string, available: boolean, reasonKey: string|null, measured: boolean, active: boolean, selected: boolean}>} providers
  * @property {Array<{id: string, modelName: string, modelKey: string, preference: string, supportedIds: string[], backendStatus: Array<{id: string, supported: boolean, installed: boolean, available: boolean, verified: boolean, reasonKey: string|null}>, acceleratorId: string, labelKey: string, noteKey: string|null, declinedKey: string|null, declinedId: string|null, neededBytes: number|null, roomBytes: number|null}>} models
+ */
+
+/**
+ * The CUDA side of the Runtime screen (`cleaner_core::cuda`). `wanted` is the
+ * CUDA major of the build asked about, `null` for a build that is not CUDA.
+ * `verdictKey` is `accel.cudaCheck.*` for that build; `recommended` is a CUDA
+ * build id this machine is ready for, newest first, or null. Paths are data,
+ * shown as they are.
+ *
+ * @typedef {Object} RuntimeReport
+ * @property {number|null} wanted
+ * @property {Array<{major: number, minor: number|null, dir: string, missing: string[]}>} toolkits
+ * @property {Array<{cudaMajor: number|null, dir: string, missing: string[]}>} cudnn
+ * @property {Array<{name: string, driver: string}>} gpus
+ * @property {string|null} verdictKey
+ * @property {string|null} verdictHave
+ * @property {string|null} verdictNeed
+ * @property {string|null} recommended
+ */
+
+/**
+ * One backend's timing for one model, in milliseconds, or the reason there is
+ * none (`error`: an `accel.declined.*` key, or the runtime's own words).
+ *
+ * @typedef {Object} MeasuredBackend
+ * @property {string} backend
+ * @property {number|null} loadMs
+ * @property {number|null} firstMs
+ * @property {number|null} medianMs
+ * @property {number|null} runs
+ * @property {string|null} error
+ */
+
+/**
+ * The saved measurement. `current` is whether it was taken on the setup in
+ * use (runtime build, devices, driver): only then does Automatic follow it.
+ * `null` while no runtime is loaded, which reading this never does.
+ *
+ * @typedef {Object} MeasurementView
+ * @property {{version: number, measuredAt: number, setup: string, models: Array<{id: string, winner: string|null, results: MeasuredBackend[]}>}|null} saved
+ * @property {boolean|null} current
+ * @property {boolean} running
  */
 
 /**

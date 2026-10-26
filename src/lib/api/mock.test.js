@@ -1095,7 +1095,7 @@ describe('the model catalogue', () => {
     const { backend } = makeBackend()
     const view = await settle(backend.listModels())
 
-    expect(view.models).toHaveLength(13)
+    expect(view.models).toHaveLength(14)
     for (const model of view.models) {
       expect(model.kindKey).toMatch(/^models\.kind\./)
       expect(model.bytes).toBeGreaterThan(0)

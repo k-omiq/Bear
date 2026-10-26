@@ -21,13 +21,12 @@ import {
   setCloudAllowed,
   setDetection,
   setFluxModel,
-  setOcrRescue,
 } from '../state/session.svelte.js'
 import { setDialogOutsideStack } from '../shortcuts.js'
 import { capabilities, loadCapabilities } from '../state/capabilities.svelte.js'
 import { cloud } from '../state/cloud.svelte.js'
-import { chooseDetectTarget, detectTarget, targets as detectTargets } from '../state/cloudtargets.svelte.js'
-import { HAYAI_FILES, LANGUAGES, OCR_FILES, SCRIPT_GATE_FILES, localDetectorModels } from '../model/pipelines.js'
+import { chooseDetectTarget, chooseDetectionMode, detectTarget, targets as detectTargets } from '../state/cloudtargets.svelte.js'
+import { DETECTION_MODES, HAYAI_FILES, LANGUAGES, OCR_FILES, SAM_GRAPH_BYTES, SAM_ROOM_BYTES, SCRIPT_GATE_FILES, defaultAnalysisTargets, localDetectorModels } from '../model/pipelines.js'
 import {
   RUNTIME_ID,
   FIRST_LAUNCH_STEPS,
@@ -48,6 +47,10 @@ export const firstLaunch = $state({
   plan: null,
   /** Language id → detector id, or null to skip the language. @type {Record<string, string|null>} */
   detection: {},
+  /** This computer's memory, as the backend measured it when setup opened. @type {{totalBytes: number|null, roomBytes: number|null}|null} */
+  memory: null,
+  /** Whether the user picked a mode in this setup; the memory preselect never overrides a pick. */
+  modePicked: false,
   /** Cleaner id → wanted. @type {Record<string, boolean>} */
   cleaners: {},
   /** The files the run is fetching, in order. @type {string[]} */
@@ -125,10 +128,21 @@ export function offerFirstLaunch(view, { force = false } = {}) {
   if (!force && session.firstLaunchOffered) return false
   firstLaunch.plan = firstLaunchPlan(view)
   firstLaunch.plan.files.samTs = {
-    id: 'samTs', labelKey: 'settings.detection.model.samTs', bytes: 0, installed: false,
+    id: 'samTs', labelKey: 'settings.detection.model.samTs', bytes: SAM_GRAPH_BYTES, installed: false,
   }
+  firstLaunch.memory = null
+  firstLaunch.modePicked = false
+  // A first setup starts on the mode this computer can run comfortably:
+  // Advanced with the free memory the lettering mask wants, Normal without.
+  // A replay keeps what was chosen since.
+  const firstOffer = !session.firstLaunchOffered
   Promise.resolve(getBackend().listWorkflowCapabilities?.()).then((caps) => {
     if (firstLaunch.plan) firstLaunch.plan.files.samTs.installed = caps?.samInstalled === true
+    const memory = { totalBytes: numberOrNull(caps?.totalBytes), roomBytes: numberOrNull(caps?.roomBytes) }
+    firstLaunch.memory = memory
+    if (firstOffer && firstLaunch.open && !firstLaunch.modePicked && memory.roomBytes !== null && memory.roomBytes >= SAM_ROOM_BYTES) {
+      void chooseDetectionMode('advanced')
+    }
   }).catch(() => {})
   firstLaunch.step = FIRST_LAUNCH_STEPS[0]
   firstLaunch.tokenDraft = ''
@@ -193,33 +207,49 @@ export function dismissFirstLaunch() {
   if (!firstLaunch.running) stopListening()
 }
 
-/**
- * Choose a language's detector, or `null` to skip it. Stored at once, as
- * Settings stores it: a setup whose files are all here never reaches a
- * Download press, and the choice must not wait for one.
- *
- * @param {string} language
- * @param {string|null} detectorId
- */
-export function chooseDetector(language, detectorId) {
-  firstLaunch.detection = { ...firstLaunch.detection, [language]: detectorId }
-  setDetection(language, detectorId)
-}
-
 /** @param {string} id @param {boolean} wanted */
 export function chooseCleaner(id, wanted) {
   firstLaunch.cleaners = { ...firstLaunch.cleaners, [id]: wanted }
 }
 
 /**
- * Opt in to, or out of, the optional Japanese OCR rescue. Stored at once, for
- * `chooseDetector`'s reason: it is the same switch Settings > Models shows,
- * and the run reads it from the session.
+ * The Detection step's choice. Marked as the user's, so a memory reading
+ * that arrives after it does not switch the mode back.
  *
- * @param {boolean} enabled
+ * @param {'normal'|'advanced'} mode
  */
-export function chooseOcrRescue(enabled) {
-  setOcrRescue(enabled === true)
+export function pickDetectionMode(mode) {
+  firstLaunch.modePicked = true
+  return chooseDetectionMode(mode)
+}
+
+/** @param {unknown} value */
+function numberOrNull(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * What one mode's detection files still cost here, the runtime aside (both
+ * modes need it), or null before the catalogue is read. Advanced counts the
+ * lettering mask's graphs when it runs on this computer.
+ *
+ * @param {'normal'|'advanced'} mode
+ * @returns {number|null}
+ */
+export function modeBytes(mode) {
+  const plan = firstLaunch.plan
+  if (!plan) return null
+  const preset = DETECTION_MODES[mode]
+  const choices = {
+    textPolicy: preset.textPolicy,
+    ocrRescue: preset.reads,
+    detectorModels: [...preset.detectorModels],
+    // Normal runs only here (`chooseDetectionMode`).
+    analysisTargets: mode === 'normal' ? defaultAnalysisTargets() : session.analysisTargets,
+  }
+  const ids = neededFiles(plan, firstLaunch.detection, {}, choices).filter((id) => id !== RUNTIME_ID)
+  if (localDetectorModels(choices).includes('samTs')) ids.push('samTs')
+  return missingBytes(plan, ids, doneMap())
 }
 
 /**
@@ -642,6 +672,44 @@ export async function loadFirstLaunchAccelerators() {
     firstLaunch.accelerators = null
     firstLaunch.acceleratorsFailed = true
   }
+}
+
+/**
+ * Choose the runtime build the downloads will fetch, and read the plan's
+ * runtime half again: its size, what it needs installed, and whether the
+ * build on disk is that one. The rest of the plan is the setup's own and is
+ * kept. Returns whether the choice was saved.
+ *
+ * @param {string} id - a `flavours` row's id
+ */
+export async function chooseFirstLaunchFlavour(id) {
+  if (runtimeDownloading()) return false
+  try {
+    await writeSettingsSerialized(getBackend(), { runtimeFlavour: id })
+    const fresh = firstLaunchPlan(await getBackend().listModels())
+    if (firstLaunch.plan) {
+      firstLaunch.plan.runtime = fresh.runtime
+      if (fresh.files[RUNTIME_ID]) firstLaunch.plan.files[RUNTIME_ID] = fresh.files[RUNTIME_ID]
+    }
+    // A build this setup already fetched is not the one chosen now: forget
+    // that it was done, so the price counts the new one and Download fetches it.
+    if (!fresh.files[RUNTIME_ID]?.installed) {
+      delete firstLaunch.status[RUNTIME_ID]
+      delete firstLaunch.progress[RUNTIME_ID]
+      delete firstLaunch.errors[RUNTIME_ID]
+    }
+    // The paths were the old build's answer.
+    firstLaunch.accelerators = null
+    firstLaunch.acceleratorsFailed = false
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Whether the runtime is being fetched now, when the build must not change under it. */
+export function runtimeDownloading() {
+  return firstLaunch.current === RUNTIME_ID || firstLaunch.status[RUNTIME_ID] === 'active'
 }
 
 /**

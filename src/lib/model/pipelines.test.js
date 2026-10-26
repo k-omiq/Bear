@@ -37,7 +37,9 @@ import {
   groupOfModel,
   normalizeDetectorModels,
   runsOnCloud,
-  toggleDetectorModel,
+  DETECTION_MODES,
+  DETECTION_MODE_IDS,
+  detectionModeOf,
   unifyAnalysisTargets,
 } from './pipelines.js'
 import { DETECTOR_MODEL_NAMES } from './model-names.js'
@@ -302,25 +304,22 @@ describe('the selection a run uses', () => {
   })
 })
 
-describe('choosing detection models', () => {
-  it('keeps Full and Small apart: choosing one clears the other', () => {
-    expect(toggleDetectorModel(['ctd', 'rtSmall'], 'rtFull', true)).toEqual(['ctd', 'rtFull'])
-    expect(toggleDetectorModel(['ctd', 'rtFull', 'samTs'], 'rtSmall', true)).toEqual(['ctd', 'rtSmall', 'samTs'])
+describe('the two detection modes', () => {
+  it('fix the models, the text policy and the reader default', () => {
+    expect(DETECTION_MODE_IDS).toEqual(['normal', 'advanced'])
+    expect(DETECTION_MODES.normal).toEqual({ detectorModels: ['ctd', 'rtSmall'], textPolicy: LEGACY_POLICY, reads: false })
+    expect(DETECTION_MODES.advanced).toEqual({ detectorModels: ['ctd', 'rtFull', 'samTs'], textPolicy: ALL_TEXT_POLICY, reads: true })
+    expect(DETECTION_MODES.advanced.detectorModels).toEqual([...CLOUD_DETECTOR_MODELS])
   })
 
-  it('combines CTD and the lettering mask with either profile', () => {
-    expect(toggleDetectorModel(['rtFull'], 'ctd', true)).toEqual(['ctd', 'rtFull'])
-    expect(toggleDetectorModel(['ctd', 'rtFull'], 'samTs', true)).toEqual(['ctd', 'rtFull', 'samTs'])
-    expect(toggleDetectorModel(['ctd', 'rtSmall', 'samTs'], 'ctd', false)).toEqual(['rtSmall', 'samTs'])
-  })
-
-  it('refuses to clear the last model, and ignores an id it does not know', () => {
-    expect(toggleDetectorModel(['samTs'], 'samTs', false)).toEqual(['samTs'])
-    expect(toggleDetectorModel(['ctd'], 'coo', true)).toEqual(['ctd'])
-  })
-
-  it('stores the selection in wire order, whatever order it was ticked in', () => {
-    expect(toggleDetectorModel(['samTs'], 'ctd', true)).toEqual(['ctd', 'samTs'])
+  it('read a stored combination as Advanced when it reached past Normal, and anything else as Normal', () => {
+    expect(detectionModeOf({ detectorModels: ['ctd', 'rtFull'] })).toBe('advanced')
+    expect(detectionModeOf({ detectorModels: ['ctd', 'rtSmall', 'samTs'] })).toBe('advanced')
+    expect(detectionModeOf({ detectorModels: ['ctd', 'rtSmall'], textPolicy: ALL_TEXT_POLICY })).toBe('advanced')
+    expect(detectionModeOf({ detectorModels: ['ctd', 'rtSmall'], textPolicy: LEGACY_POLICY })).toBe('normal')
+    expect(detectionModeOf({ detectorModels: 'rtFull' })).toBe('normal')
+    expect(detectionModeOf({})).toBe('normal')
+    expect(detectionModeOf()).toBe('normal')
   })
 })
 

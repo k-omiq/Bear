@@ -36,6 +36,7 @@
   import { t } from './lib/i18n/index.js'
   import HomeScreen from './lib/home/HomeScreen.svelte'
   import EditorScreen from './lib/editor/EditorScreen.svelte'
+  import { cancelRun } from './lib/state/editor.svelte.js'
   import KeyboardLayer from './lib/shell/KeyboardLayer.svelte'
   import ModalHost from './lib/shell/ModalHost.svelte'
   import FirstLaunchDialog from './lib/dialogs/FirstLaunchDialog.svelte'
@@ -143,8 +144,10 @@
   // whose name ends in `Key` carries a key, which `t()` resolves.
   // A notice whose remedy is in Settings carries a button that opens it there.
   // An engine fault points at Performance's runtime row: re-downloading the
-  // runtime, or choosing CPU, is what fixes one.
-  /** @type {Record<string, {labelKey: string, open: (notice: {params?: Record<string, unknown>}) => void}>} */
+  // runtime, or choosing CPU, is what fixes one. Its CPU twin has no button:
+  // choosing the CPU is no remedy there. Advanced's low-memory warning stays
+  // until closed, and its button stops the run it is about.
+  /** @type {Record<string, {labelKey: string, open: (notice: {params?: Record<string, unknown>}) => void, sticky?: boolean}>} */
   const NOTICE_ACTIONS = {
     'notice.run.modelsMissing': {
       labelKey: 'tools.target.chooseModels',
@@ -153,6 +156,16 @@
     'notice.run.engineFault': {
       labelKey: 'settings.section.performance',
       open: () => openModelSettings('runtime'),
+    },
+    'notice.run.lowMemory': {
+      labelKey: 'notice.run.lowMemoryStop',
+      // The run the notice names, never whichever run is open when it is
+      // pressed; an old notice with no run named stops nothing.
+      open: (notice) => {
+        const runId = notice.params?.runId
+        if (typeof runId === 'string') void cancelRun(runId)
+      },
+      sticky: true,
     },
   }
   const notices = $derived(
@@ -163,7 +176,7 @@
         text: t(notice.key, notice.params),
         tone: notice.tone,
         icon: notice.icon,
-        duration: notice.duration,
+        duration: action?.sticky ? Infinity : notice.duration,
         actionLabel: action ? t(action.labelKey) : undefined,
         onaction: action ? () => { action.open(notice); dismissNotice(notice.id) } : undefined,
       }

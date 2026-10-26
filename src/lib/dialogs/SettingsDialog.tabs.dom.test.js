@@ -82,6 +82,7 @@ beforeEach(() => {
     /** @type {any} */ ({
       listModels: vi.fn(async () => null),
       listAccelerators: vi.fn(async () => ({ providers: [], models: [] })),
+      readMeasurement: vi.fn(async () => ({ saved: null, current: null, running: false })),
       listSidecarModels: vi.fn(async () => []),
       sidecarAvailable: vi.fn(async () => ({ available: false, reasonKey: null })),
       about: vi.fn(async () => ({ appVersion: '0.0.0-test', facts: [] })),

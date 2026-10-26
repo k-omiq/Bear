@@ -548,6 +548,8 @@ fn kind_of(event: &Event) -> &'static str {
         // The backend's own undo step. It goes to the window's channel, not
         // through a run's sink.
         Event::HistoryChanged { .. } => "history-changed",
+        // A backend speed measurement's progress. Never emitted by a run.
+        Event::MeasureProgress { .. } => "measure-progress",
     }
 }
 
@@ -8554,4 +8556,23 @@ fn installed_local_detection_pipeline_runs_full_page_and_selection() {
         eprintln!("local {} persistence: {} detections with matching masks, ink and local model evidence",
             if index == 0 { "full page" } else { "selection" }, reopened.project.detections.len());
     }
+}
+
+/// A fault on the CPU is not told to "choose CPU": that remedy is the GPU
+/// notice's alone. Every other provider keeps it.
+#[test]
+fn a_cpu_fault_is_not_told_to_choose_the_cpu() {
+    assert_eq!(fault_notice_key(accel::Accelerator::Cpu.label_key()), "notice.run.engineFaultCpu");
+    assert_eq!(fault_notice_key(accel::Accelerator::CoreMl.label_key()), "notice.run.engineFault");
+    assert_eq!(fault_notice_key(accel::Accelerator::WebGpu.label_key()), "notice.run.engineFault");
+}
+
+/// The lettering mask is named as itself when it fails, not as CTD: the
+/// fault used to borrow the text detector's key and send users to the wrong
+/// model.
+#[test]
+fn the_lettering_mask_has_its_own_name() {
+    assert_eq!(sam_ts::LABEL_KEY, "models.kind.samTs");
+    assert_ne!(sam_ts::LABEL_KEY, accel::DETECTOR.label_key);
+    assert_eq!(accel::FULL_RT.label_key, "models.kind.fullRt");
 }

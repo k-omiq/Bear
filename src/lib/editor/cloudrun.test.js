@@ -10,7 +10,7 @@ import { app, closeModal } from '../state/app.svelte.js'
 import { stopCloud } from '../state/cloud.svelte.js'
 import { stopCloudGpuWatch } from '../state/cloudgpu.svelte.js'
 import { closeEditorChapter, editor } from '../state/editor.svelte.js'
-import { setAnalysisTarget, setCloudAllowed, setDetectorModels } from '../state/session.svelte.js'
+import { setAnalysisTarget, setCloudAllowed, setDetectionMode } from '../state/session.svelte.js'
 import { cloudRunErrorKey, cloudScopeRefusal, detectArea, startCleanRun } from './cloudrun.js'
 import { applyActiveToolToRegion } from './toolapply.svelte.js'
 import { cleanDetected } from './maskactions.svelte.js'
@@ -49,9 +49,10 @@ beforeEach(() => {
   editor.project = /** @type {any} */ ({ id: 'p', mode: 'paginated' })
   editor.chapter = /** @type {any} */ ({ id: 'c1', pages: [{ index: 0, number: 1 }], review: [] })
   editor.pageIndex = 0
-  // This computer's own choice is deliberately not the cloud combination: a
-  // cloud run uses CTD + Full + SAM-TS-L + the reader whatever it holds.
-  setDetectorModels(['samTs'])
+  // This computer's own choice is deliberately Normal, not the cloud
+  // combination: a cloud run uses CTD + Full + SAM-TS-L + the reader whatever
+  // it holds.
+  setDetectionMode('normal')
   setAnalysisTarget('rtFull', 'cloud')
   setAnalysisTarget('samTs', 'cloud')
 })
@@ -65,7 +66,7 @@ afterEach(() => {
   editor.project = null
   setAnalysisTarget('rtFull', 'local')
   setAnalysisTarget('samTs', 'local')
-  setDetectorModels(['ctd', 'rtSmall'])
+  setDetectionMode('normal')
   setCloudAllowed(false)
   stopCloud()
   stopCloudGpuWatch()
@@ -134,7 +135,6 @@ it('skips the question for a project that already consented, and still spends a 
 })
 
 it('runs a cloud Detect with CTD and the reader here whatever this computer selected, Small included', async () => {
-  setDetectorModels(['ctd', 'rtSmall'])
   const api = backend()
   const started = startCleanRun('page', /** @type {any} */ (api))
   await consent()
@@ -239,7 +239,7 @@ it('starts a run with every stage local exactly as before, with no consent', asy
   expect(api.proposeRunAnalysis).not.toHaveBeenCalled()
   expect(api.runClean.mock.calls[0][0]).not.toHaveProperty('cloudGrant')
   // This computer's own combination and reader switch, as stored.
-  expect(api.runClean.mock.calls[0][0]).toMatchObject({ detectorModels: ['samTs'], ocrRescue: false })
+  expect(api.runClean.mock.calls[0][0]).toMatchObject({ detectorModels: ['ctd', 'rtSmall'], ocrRescue: false })
   expect(app.modals).toEqual([])
 })
 

@@ -35,6 +35,7 @@ export const NAMESPACES = Object.freeze([
   'cloud',
   'decline',
   'denoise',
+  'detectionMode',
   'diagnostics',
   'editor',
   'export',

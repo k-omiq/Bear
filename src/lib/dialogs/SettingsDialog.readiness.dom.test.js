@@ -4,8 +4,9 @@
  * - **Readiness counts the runtime.** A native run refuses to start without
  *   ONNX Runtime, so a workflow with every file here is not complete while
  *   the runtime is missing, and the row names it rather than going green.
- * - **Language filtering says whether it runs** under the text policy the
- *   Text cleanup panel sets, and holds its language choices while it does.
+ * - **Language filtering says whether it runs** under the detection mode
+ *   (Normal filters, Advanced takes all text), and holds its language
+ *   choices while it does. It sits behind More options with the model rows.
  * - **A single-file model keeps per-file Check and Delete in File details**,
  *   like a group, except that the shared speech bubble finder's own Delete is
  *   held while the selected workflow uses it, with the reason beside it.
@@ -21,7 +22,7 @@ import { setBackend } from '../api/backend.js'
 import { downloadFailureShown } from '../api/model-download-notices.js'
 import { t } from '../i18n/index.js'
 import { DEFAULT_DETECTOR } from '../model/pipelines.js'
-import { session, setDetection, setOcrRescue, setTextPolicy } from '../state/session.svelte.js'
+import { session, setDetection, setDetectionMode, setOcrRescue } from '../state/session.svelte.js'
 import SettingsDialog from './SettingsDialog.svelte'
 import { resetFirstLaunch } from './firstlaunch.svelte.js'
 
@@ -151,6 +152,7 @@ async function openDetection(answer, load = async () => diagnosed(), { caps = {}
       verifySamTs: vi.fn(verifySam),
       verifyModel: (/** @type {any} */ spec) => verifyModel(spec),
       deleteModel: (/** @type {any} */ spec) => deleteModel(spec),
+      readMeasurement: vi.fn(async () => ({ saved: null, current: null, running: false })),
     }),
   )
   const rendered = render(SettingsDialog, { props: { spec: SPEC } })
@@ -165,13 +167,28 @@ async function openDetection(answer, load = async () => diagnosed(), { caps = {}
 /** @param {HTMLElement} panel */
 const readiness = (panel) => /** @type {HTMLElement} */ (panel.querySelector('.readiness'))
 
+/** Open More options under the mode cards: the model rows, the reader and the filtering. @param {HTMLElement} panel */
+async function openMore(panel) {
+  const summary = /** @type {HTMLElement} */ (panel.querySelector('[data-settings-anchor="detection-more"] button[aria-expanded]'))
+  if (summary.getAttribute('aria-expanded') !== 'true') await fireEvent.click(summary)
+}
+
+/**
+ * Advanced, with the reader it switches on put back off: this file's
+ * catalogue carries no reader files, and the rules here are about the rest.
+ */
+function chooseAdvanced() {
+  setDetectionMode('advanced')
+  setOcrRescue(false)
+}
+
 afterEach(() => {
   cleanup()
   resetFirstLaunch()
   setBackend(null)
   for (const language of ['ja', 'zh', 'ko']) setDetection(language, DEFAULT_DETECTOR)
+  setDetectionMode('normal')
   setOcrRescue(false)
-  setTextPolicy('legacy_gate')
   vi.clearAllMocks()
 })
 
@@ -214,8 +231,8 @@ describe('workflow readiness', () => {
     expect(within(readiness(unavailable.panel)).queryByRole('button')).toBe(null)
   })
 
-  it('holds all-text review to the same rule', async () => {
-    setTextPolicy('all_text')
+  it('holds Advanced to the same rule', async () => {
+    chooseAdvanced()
     const ready = await openDetection(() => catalogue())
     await waitFor(() => expect(readiness(ready.panel).textContent).toContain(t('settings.detection.ready.allText')))
     await waitFor(() => expect(readiness(ready.panel).classList.contains('complete')).toBe(true))
@@ -288,10 +305,11 @@ describe('workflow readiness', () => {
   // machine has not the memory for (`readinessKeyOf`); the summary has to
   // say so rather than call the workflow ready. A graph not checked yet does
   // not hold it back: the review checks it itself.
-  it('holds all-text review to a failed SAM checksum and says so', async () => {
-    setTextPolicy('all_text')
+  it('holds Advanced to a failed SAM checksum and says so', async () => {
+    chooseAdvanced()
     const { panel } = await openDetection(() => catalogue(), undefined, { verifySam: async () => false })
     await waitFor(() => expect(readiness(panel).classList.contains('complete')).toBe(true))
+    await openMore(panel)
     const row = /** @type {HTMLElement} */ (await waitFor(() => panel.querySelector('[data-model="samTs"]')))
     await fireEvent.click(within(row).getByRole('button', { name: t('settings.models.action.verify') }))
     await waitFor(() => expect(readiness(panel).textContent).toContain(t('settings.detection.ready.allTextSamMismatch')))
@@ -299,11 +317,13 @@ describe('workflow readiness', () => {
     expect(readiness(panel).textContent).not.toContain(t('settings.detection.ready.allText'))
   })
 
-  it('names short memory for all-text review, and what to do about it', async () => {
-    setTextPolicy('all_text')
+  // Short memory slows the lettering mask down but does not stop it: the run
+  // warns when it starts, so here it is a line and never a hold.
+  it('names short memory for Advanced, and what to do about it, without holding it back', async () => {
+    chooseAdvanced()
     const { panel } = await openDetection(() => catalogue(), undefined, { caps: { samMemoryReady: false } })
     await waitFor(() => expect(readiness(panel).textContent).toContain(t('settings.detection.ready.allTextMemory')))
-    expect(readiness(panel).classList.contains('complete')).toBe(false)
+    await waitFor(() => expect(readiness(panel).classList.contains('complete')).toBe(true))
     expect(t('settings.detection.ready.allTextMemory')).toMatch(/Close other apps/)
   })
 
@@ -320,7 +340,8 @@ describe('language filtering', () => {
   const summary = (scoped) => scoped.getByRole('button', { name: new RegExp(t('settings.detection.capability.japanese')) })
 
   it('is collapsed, and says in its summary whether it runs', async () => {
-    const { scoped } = await openDetection(() => catalogue())
+    const { scoped, panel } = await openDetection(() => catalogue())
+    await openMore(panel)
     expect(summary(scoped).getAttribute('aria-expanded')).toBe('false')
     expect(summary(scoped).textContent).toContain(t('settings.detection.filtering.on'))
     // The language pickers wait behind the fold.
@@ -330,9 +351,10 @@ describe('language filtering', () => {
     expect(scoped.getByRole('combobox', { name: t('pipelines.detectorFor', { language: t('pipelines.language.ja') }) })).toBeTruthy()
   })
 
-  it('leaves the text policy to Text cleanup, and says filtering is off under all text', async () => {
-    setTextPolicy('all_text')
-    const { scoped, rendered } = await openDetection(() => catalogue())
+  it('follows the detection mode, and says filtering is off under Advanced', async () => {
+    chooseAdvanced()
+    const { scoped, rendered, panel } = await openDetection(() => catalogue())
+    await openMore(panel)
     expect(summary(scoped).textContent).toContain(t('settings.detection.filtering.off'))
     await fireEvent.click(summary(scoped))
     expect(scoped.getByText(t('settings.detection.languagesAllText'))).toBeTruthy()
@@ -355,6 +377,7 @@ describe('File details for a single-file model', () => {
 
   it('offers the file its own Check and Delete, and Delete asks first', async () => {
     const { panel } = await openDetection(() => catalogue())
+    await openMore(panel)
     const row = await waitFor(() => modelRow(panel, 'ctd'))
     const line = await details(row)
     expect(line.textContent).toContain('comictextdetector.onnx')
@@ -373,6 +396,7 @@ describe('File details for a single-file model', () => {
 
   it('holds the shared speech bubble finder’s own Delete while the selected workflow uses it, and says why', async () => {
     const { panel } = await openDetection(() => catalogue())
+    await openMore(panel)
     const row = await waitFor(() => modelRow(panel, 'rtSmall'))
     const line = await details(row)
     const remove = within(line).getByRole('button', { name: t('settings.models.action.delete') })
@@ -398,6 +422,7 @@ describe('File details for a single-file model', () => {
   it('lets the shared file go from the details once no selected workflow reads it', async () => {
     for (const language of ['ja', 'zh', 'ko']) setDetection(language, null)
     const { panel } = await openDetection(() => catalogue())
+    await openMore(panel)
     const row = await waitFor(() => modelRow(panel, 'rtSmall'))
     const line = await details(row)
     const remove = within(line).getByRole('button', { name: t('settings.models.action.delete') })

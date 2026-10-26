@@ -73,10 +73,10 @@
    * than either half used to be.
    *
    * Detect on, Clean on, the run's scope and engine are in the editor's Text
-   * cleanup panel. Models also offers a complete local detection preset,
-   * switching Detect on to this computer and installing its missing models.
-   * While detection uses the cloud GPU, its fixed combination and placement
-   * stay visible (`pipelines.js#runDetection`, `#detectionPlacement`).
+   * cleanup panel. Detection is one choice, Normal or Advanced
+   * (`DetectionModeChoice`); choosing one downloads what it is missing at
+   * once. The model files, the text reader, English text, the language
+   * filter and the review wait under More options.
    *
    * **Older ids still open the right place** (`settingslinks.js`): Detection
    * and Cleaning land on their group in Models, `inference` on Cloud. A
@@ -120,7 +120,7 @@
   import { resolveSettingsLink, SETTINGS_SECTIONS } from './settingslinks.js'
   import { LOCALES, hasKey, t } from '../i18n/index.js'
   import { capabilities, loadCapabilities } from '../state/capabilities.svelte.js'
-  import { resetCloudOffer, syncCloudOffer } from '../state/cloudtargets.svelte.js'
+  import { chooseDetectionMode, resetCloudOffer, syncCloudOffer, targets as detectTargets } from '../state/cloudtargets.svelte.js'
   import {
     THEMES,
     THEME_LABEL_KEYS,
@@ -130,7 +130,6 @@
     setModelAccelerator,
     setCloseToTray,
     setDetection,
-    setDetectorModels,
     setAnalysisTarget,
     setFluxBackend,
     setFluxModel,
@@ -156,24 +155,28 @@
     ALL_TEXT_POLICY,
     CAPABILITIES,
     CLEANERS,
-    FULL_LOCAL_DETECTOR_MODELS,
+    DETECTION_MODES,
     LANGUAGES,
-    detectionPlacement,
+    defaultAnalysisTargets,
     groupOfModel,
     model as pipelineModel,
     modelOfFile,
     runDetection,
     runsOnCloud,
     runtimeState,
-    toggleDetectorModel,
+    SAM_GRAPH_BYTES,
     usedNow,
     workflowNeeds,
     workflowForDetectorModels,
   } from '../model/pipelines.js'
   import WorkflowAnalysis from './WorkflowAnalysis.svelte'
+  import DetectionModeChoice from './DetectionModeChoice.svelte'
   import ShortcutSheet from './ShortcutSheet.svelte'
   import AboutSection from './AboutSection.svelte'
   import InferenceSettings from './InferenceSettings.svelte'
+  import MachineCheck from './runtime/MachineCheck.svelte'
+  import Measurement from './runtime/Measurement.svelte'
+  import { flavourName } from './runtime/runtime.js'
   import DenoiseSettings from './denoise/DenoiseSettings.svelte'
   import { PAGE_DENOISE_FEATURE } from '../model/denoise.js'
   import { offerFirstLaunch } from './firstlaunch.svelte.js'
@@ -883,95 +886,55 @@
   /** The logical models the selected workflow needs. */
   const needs = $derived(workflowNeeds(choices))
 
-  let localSetupBusy = $state(false)
-  let localSetupFailed = $state(false)
-  let localInstallFailed = $state(false)
-  const fullLocalSelected = $derived(runSelection.target === 'local' &&
-    session.detectorModels.join() === FULL_LOCAL_DETECTOR_MODELS.join())
-
-  /** Switch routing only after the backend saves it; model and reader choices are session preferences. */
-  async function useFullLocalDetection() {
-    if (localSetupBusy) return
-    localSetupBusy = true
-    localSetupFailed = false
-    try {
-      await writeSettingsSerialized(getBackend(), { analysisTargets: { rtFull: 'local', samTs: 'local' } })
-      setAnalysisTarget('rtFull', 'local')
-      setAnalysisTarget('samTs', 'local')
-      setDetectorModels([...FULL_LOCAL_DETECTOR_MODELS])
-      await loadCapabilities()
-      await refreshWorkflowCaps()
-    } catch {
-      localSetupFailed = true
-    } finally {
-      localSetupBusy = false
-    }
-  }
-
-  /** Installation follows the exact local combination and preserves optional reader/filtering preferences. */
-  const fullLocalInstall = $derived.by(() => {
-    if (!catalogue || !workflowCaps || !fullLocalSelected) return null
-    const fullNeeds = [...new Set([...FULL_LOCAL_DETECTOR_MODELS, ...needs])]
-    const missing = fullNeeds.filter((id) => {
-      const entry = pipelineModel(id)
-      if (!entry) return false
-      const view = viewOf(entry)
-      return view.known && !view.installed && !view.downloading
-    })
-    return {
-      missing,
-      runtime: catalogue.runtime.available && !catalogue.runtime.installed && !catalogue.runtime.downloading,
-    }
-  })
-
-  const fullLocalReady = $derived(Boolean(fullLocalSelected && catalogue?.runtime.installed &&
-    runtimeLoad.state === 'loaded' && workflowCaps?.fullRtInstalled && workflowCaps?.samInstalled &&
-    workflowCaps?.samMemoryReady && workflowCaps?.localDetectionReady !== false && samVerified !== false &&
-    accelerators && !accelFailure && FULL_LOCAL_DETECTOR_MODELS.every((id) => {
+  /**
+   * What one mode's models still cost here, or null before the catalogue is
+   * read. The lettering mask is installed rather than downloaded, so its
+   * graphs are counted at their pinned size (`SAM_GRAPH_BYTES`).
+   *
+   * @param {'normal'|'advanced'} mode
+   * @returns {number|null}
+   */
+  function modeBytes(mode) {
+    if (!catalogue) return null
+    const preset = DETECTION_MODES[mode]
+    // Normal runs only here (`chooseDetectionMode`), so its card counts what
+    // this computer needs, wherever detection runs now.
+    const modeNeeds = workflowNeeds({ ...choices, textPolicy: preset.textPolicy, ocrRescue: preset.reads, detectorModels: [...preset.detectorModels],
+      ...(mode === 'normal' ? { analysisTargets: defaultAnalysisTargets() } : {}) })
+    let bytes = 0
+    for (const id of modeNeeds) {
+      if (id === 'samTs') {
+        if (workflowCaps?.samInstalled !== true) bytes += SAM_GRAPH_BYTES
+        continue
+      }
       const entry = pipelineModel(id)
       const view = entry ? viewOf(entry) : null
-      return view?.known && view.installed && view.files?.every((file) => file.sha256Ok !== false)
-    }) && readiness?.complete))
-
-  async function installFullLocalDetection() {
-    if (localSetupBusy || !fullLocalInstall) return
-    const plan = fullLocalInstall
-    localSetupBusy = true
-    localInstallFailed = false
-    try {
-      if (plan.runtime) {
-        await download(RUNTIME_ID)
-        if (failures[RUNTIME_ID]) {
-          localInstallFailed = true
-          return
-        }
-      }
-      for (const id of plan.missing) {
-        const entry = pipelineModel(id)
-        if (!entry) continue
-        if (id === 'samTs') {
-          await installSamTs()
-        } else if (entry.group) {
-          const group = groupById(entry.group)
-          if (group) await downloadGroup(group)
-        } else {
-          for (const file of filesOf(entry)) if (!file.installed) await download(file.id)
-        }
-        // Row helpers keep their concrete error beside the failed model. The
-        // combined setup stops and stays incomplete until that model is retried.
-        if (importFailures[id] || (entry.group && groupFailures[entry.group]) ||
-          filesOf(entry).some((file) => failures[file.id])) {
-          localInstallFailed = true
-          return
-        }
-      }
-    } finally {
-      localSetupBusy = false
-      await refreshCatalogue()
-      await refreshWorkflowCaps()
-      await loadCapabilities()
+      if (entry?.source === 'download' && view?.known && !view.installed) bytes += view.missingBytes ?? 0
     }
+    return bytes
   }
+  const modeSizes = $derived({ normal: modeBytes('normal'), advanced: modeBytes('advanced') })
+
+  /**
+   * Choose a mode, then fetch what it is missing straight away: the readiness
+   * box above shows the progress, and nothing else has to be pressed.
+   *
+   * @param {'normal'|'advanced'} mode
+   */
+  async function chooseMode(mode) {
+    if (mode === session.detectionMode) return
+    // Normal brings detection back from the cloud GPU; a refused save of that
+    // is put back and said under the cards.
+    modeSaveFailed = !(await chooseDetectionMode(mode)) && detectTargets.detectSaveFailed
+    await loadCapabilities()
+    await refreshWorkflowCaps()
+    await downloadNeeded()
+  }
+
+  let modeSaveFailed = $state(false)
+
+  /** Whether More options is open. Deep links to a model or the review open it. */
+  let moreOpen = $state(false)
 
   /**
    * Whether a missing model is one the selected workflow needs now. The
@@ -1032,14 +995,16 @@
     let bytes = 0
     let fetching = false
     const samHere = (allText || needs.includes('samTs')) && workflowCaps?.samInstalled === true
-    let samHeld = samHere && (samVerified === false || workflowCaps?.samMemoryReady === false)
+    // Low free memory slows the lettering mask down but does not stop it:
+    // the run warns when it starts (`notice.run.lowMemory`), so it is a line
+    // here, never a hold.
+    let samHeld = samHere && samVerified === false
     let importMissing = false
     for (const id of needs) {
-      // On this computer the text reader is an extra: cleaning runs without
-      // it, and its switch says what is missing and offers the download on its
-      // own line. Under Cloud GPU it is one of the four the run uses, and Text
-      // cleanup will not start without it, so it counts like the rest.
-      if (!neededNow(id) || (id === 'hayaiOcr' && runDetection(session).target !== 'cloud')) continue
+      // The text reader is in `needs` only while it is switched on, which
+      // Advanced does by default, so it counts like the rest: the mode card,
+      // this line and the Download press agree on what is missing.
+      if (!neededNow(id)) continue
       const entry = pipelineModel(id)
       if (!entry) continue
       const view = viewOf(entry)
@@ -1052,9 +1017,8 @@
     }
     if (!allText && needs.length === 0) lines.push(t('settings.detection.ready.nothing'))
     else if (!allText) {
-      lines.push(bytes > 0
-        ? t('settings.detection.ready.legacyMissing', { bytes })
-        : t('settings.detection.ready.legacy'))
+      if (bytes > 0) lines.push(t('settings.detection.ready.legacyMissing', { bytes }))
+      else if (!fetching) lines.push(t('settings.detection.ready.legacy'))
       if (importMissing) lines.push(t('settings.detection.ready.allTextImport'))
     } else {
       // The review refuses SAM graphs that failed their checksum, and SAM on
@@ -1063,8 +1027,12 @@
       // checks them itself when it opens.
       if (importMissing) lines.push(t('settings.detection.ready.allTextImport'))
       if (bytes > 0) lines.push(t('settings.detection.ready.allTextMissing', { bytes }))
-      if (!importMissing && bytes === 0 && workflowCaps && !samHeld) lines.push(t('settings.detection.ready.allText'))
+      if (!importMissing && bytes === 0 && workflowCaps && !samHeld && !fetching) lines.push(t('settings.detection.ready.allText'))
     }
+    // A download in flight is not a model that is here: choosing a mode
+    // starts one, and "ready" while it runs would send the user to a run the
+    // toolbar still refuses.
+    if (fetching) lines.push(t('settings.detection.ready.fetching'))
     if (samHere && samVerified === false) lines.push(t('settings.detection.ready.allTextSamMismatch'))
     if (samHere && workflowCaps?.samMemoryReady === false) lines.push(t('settings.detection.ready.allTextMemory'))
     // A live progress event is a download the catalogue snapshot may not know
@@ -1093,8 +1061,7 @@
       }))
     }
     const missing = toDownload.reduce((sum, entry) => sum + (viewOf(entry).missingBytes ?? 0), 0)
-    const fullModelsReady = !needs.includes('rtFull') || !needs.includes('samTs') || workflowCaps?.localDetectionReady !== false
-    const complete = bytes === 0 && !importMissing && !samHeld && !backendBlocked && fullModelsReady && (!allText || Boolean(workflowCaps)) && runtimeReady
+    const complete = bytes === 0 && !fetching && !importMissing && !samHeld && !backendBlocked && (!allText || Boolean(workflowCaps)) && runtimeReady
     return { lines, toDownload, missing, fetching, complete, runtime }
   })
 
@@ -1162,6 +1129,9 @@
   let samInstall = $state(null)
 
   async function installSamTs() {
+    // One install at a time: choosing a mode starts one, and the Install
+    // press or a second mode change must not queue a second whole bootstrap.
+    if (importBusy.samTs) return
     importBusy = { ...importBusy, samTs: true }
     importFailures = without(importFailures, 'samTs')
     const backend = getBackend()
@@ -1292,8 +1262,8 @@
     return lines
   })
 
-  /** Whether the review panel is open. Open by default only under all-text. */
-  let reviewOpen = $state(untrack(() => session.textPolicy === ALL_TEXT_POLICY))
+  /** Whether the review panel is open. Shut until asked for, like the rest of More options. */
+  let reviewOpen = $state(false)
 
   /** @param {boolean} open */
   function toggleReview(open) {
@@ -1304,36 +1274,12 @@
   }
 
   /**
-   * Tick or untick one detection model. Full and Small are one model's two
-   * profiles, so choosing one clears the other; the last model selected
-   * cannot be cleared (`toggleDetectorModel`).
-   *
-   * @param {string} id
-   * @param {boolean} checked
-   * @param {HTMLInputElement} input
-   */
-  function chooseDetectorModel(id, checked, input) {
-    // On the cloud GPU the combination is fixed; the boxes are drawn disabled.
-    if (cloudFixed) {
-      input.checked = runSelection.detectorModels.includes(id)
-      return
-    }
-    const next = toggleDetectorModel(session.detectorModels, id, checked)
-    // A refused change leaves the box as the selection says.
-    input.checked = next.includes(id)
-    if (next.join() === session.detectorModels.join()) return
-    setDetectorModels(next)
-    void loadCapabilities()
-  }
-
-  /**
    * The selection a run uses (`pipelines.js#runDetection`) and where each of
    * its models runs, as Detect on routes it. On the cloud GPU the combination is fixed to the best one,
    * so the boxes show it checked and cannot be changed; the user's own
    * combination and reader switch wait in the session for This computer.
    */
   const runSelection = $derived(runDetection(session))
-  const placement = $derived(detectionPlacement(session))
   const cloudFixed = $derived(runSelection.target === 'cloud')
 
   // The editor's Detect on asks the endpoint what it offers and keeps the
@@ -2034,6 +1980,8 @@
    */
   async function reveal(anchor) {
     const group = groupOfModel(anchor) ?? anchor
+    // Model rows, the filter and the review sit under More options.
+    if (group === 'filtering' || (group === 'detection' && anchor !== 'detection')) moreOpen = true
     if (group === 'filtering') filteringOpen = true
     if (anchor === 'flux') fluxOpen = true
     await tick()
@@ -2252,56 +2200,18 @@
      that apply to the whole of it, and its component files in the details
      below. A multi-file model installs, checks and deletes as one unit; the
      details keep per-file Check and Delete for troubleshooting. -->
-{#snippet modelRow(/** @type {import('../model/pipelines.js').LogicalModel} */ entry, /** @type {boolean} */ choice = false)}
+{#snippet modelRow(/** @type {import('../model/pipelines.js').LogicalModel} */ entry)}
   {@const view = /** @type {any} */ (viewOf(entry))}
   {@const group = entry.group ? groupById(entry.group) : null}
   {@const single = entry.source === 'download' && !entry.group ? view.files?.[0] : null}
   {@const needed = view.known && !view.installed && neededNow(entry.id)}
   {@const deleteId = `${rowId(entry.id)}-delete`}
-  {@const selected = choice && runSelection.detectorModels.includes(entry.id)}
-  {@const onCloud = placement.cloud.includes(entry.id)}
-  <li class="row model" class:choice id={rowId(entry.id)} data-model={entry.id} data-settings-anchor={entry.id} tabindex="-1">
-    {#if choice}
-      <!-- The model's own choice leads its row: one list for choosing and
-           installing, rather than a checklist above and the same names again
-           below it. The last model selected cannot be cleared, and on the
-           cloud GPU none can: that run's combination is fixed. -->
-      <input
-        id="{rowId(entry.id)}-choice"
-        class="check"
-        type="checkbox"
-        data-anchor-focus
-        checked={selected}
-        disabled={cloudFixed || (selected && session.detectorModels.length === 1)}
-        aria-describedby={cloudFixed ? `${rowId(entry.id)}-where ${uid}-cloud-combo` : `${rowId(entry.id)}-where`}
-        onchange={(event) => chooseDetectorModel(entry.id, event.currentTarget.checked, event.currentTarget)}
-      />
-    {/if}
+  <li class="row model" id={rowId(entry.id)} data-model={entry.id} data-settings-anchor={entry.id} tabindex="-1">
     <div class="row-text">
-      {#if choice}
-        <label class="row-name" for="{rowId(entry.id)}-choice">{entry.product ?? t(entry.nameKey)}</label>
-      {:else}
-        <span class="row-name">{entry.product ?? t(entry.nameKey)}</span>
-      {/if}
+      <span class="row-name">{entry.product ?? t(entry.nameKey)}</span>
       <span class="row-meta">
         {#if view.known}{metaOf(view)}{/if}{#if needed}<span class="needed">{` · ${t('settings.models.status.neededNow')}`}</span>{/if}
       </span>
-      {#if choice}
-        <!-- Where it can run, in words: the two with a cloud version and the
-             two that always run here. While detection is on the cloud GPU,
-             where each model of that run's fixed combination runs. -->
-        <span class="row-where" id="{rowId(entry.id)}-where">
-          {#if cloudFixed && onCloud}
-            {t('settings.models.where.onCloud')}
-          {:else if cloudFixed && selected}
-            {t('settings.models.where.cloudLocal')}
-          {:else if cloudFixed}
-            {t('settings.models.where.cloudUnused')}
-          {:else}
-            {t(runsOnCloud(entry.id) ? 'settings.models.where.either' : 'settings.models.where.localOnly')}
-          {/if}
-        </span>
-      {/if}
       <span class="row-role">{t(entry.roleKey)}</span>
       {#if entry.id === 'samTs' && view.installed && workflowCaps && !workflowCaps.samMemoryReady}
         <span class="row-role">{t('settings.detection.sam.memory')}</span>
@@ -2471,9 +2381,7 @@
         id="settings-ocr-rescue"
         class="check"
         type="checkbox"
-        aria-describedby={cloudFixed
-          ? `settings-ocr-rescue-description ${uid}-cloud-combo settings-ocr-rescue-status`
-          : 'settings-ocr-rescue-description settings-ocr-rescue-status'}
+        aria-describedby="settings-ocr-rescue-description settings-ocr-rescue-status"
         checked={runSelection.ocrRescue}
         disabled={cloudFixed}
         onchange={(event) => setOcrRescue(event.currentTarget.checked)}
@@ -2926,43 +2834,37 @@
              and the language filtering, both collapsed. -->
         <section class="group" aria-labelledby="{uid}-group-detection" data-settings-anchor="detection">
           <h3 class="sub" id="{uid}-group-detection" tabindex="-1" data-anchor-focus>{t('pipelines.detection')}</h3>
-          <div class="local-detection">
-            <p class="line">{t('settings.detection.localFull.note')}</p>
-            <div class="inline">
-              <Button size="sm" disabled={localSetupBusy || fullLocalSelected} onclick={useFullLocalDetection}>
-                {t('settings.detection.localFull.use')}
-              </Button>
-              {#if fullLocalInstall && (fullLocalInstall.missing.length > 0 || fullLocalInstall.runtime)}
-                <Button size="sm" disabled={localSetupBusy} onclick={installFullLocalDetection}>
-                  {t('settings.detection.localFull.install')}
-                </Button>
-              {/if}
-              <Button size="sm" variant="soft" onclick={() => select('performance', { focus: true })}>
-                {t('settings.detection.localFull.backends')}
-              </Button>
-            </div>
-            {#if localSetupFailed}<p class="line failed" role="alert">{t('settings.detection.localFull.saveFailed')}</p>{/if}
-            {#if localInstallFailed}<p class="line failed" role="alert">{t('settings.detection.localFull.installFailed')}</p>{/if}
-            {#if fullLocalSelected}
-              <p class="line" role="status" data-local-detection-status>
-                {t(fullLocalReady ? 'settings.detection.localFull.ready' : 'settings.detection.localFull.pending')}
-              </p>
-            {/if}
-          </div>
-          <fieldset class="choices" aria-describedby={cloudFixed ? `${uid}-cloud-combo ${uid}-choices-note` : `${uid}-choices-note`}>
-            <legend class="sr">{t('settings.detection.modelsLegend')}</legend>
-            <ul class="rows">
-              {#each detectEntries as entry (entry.id)}
-                {@render modelRow(entry, true)}
-              {/each}
-            </ul>
-          </fieldset>
-          {@render rescueOption()}
-          {@render latinOption()}
-          {#if cloudFixed}<p class="line" id="{uid}-cloud-combo" data-cloud-combo>{t('pipelines.cloudCombo')}</p>{/if}
-          <p class="line" id="{uid}-choices-note">{t('settings.detection.profiles')}</p>
-          {@render review()}
-          {@render filtering()}
+          <DetectionModeChoice
+            value={session.detectionMode}
+            onchange={chooseMode}
+            sizes={modeSizes}
+            memory={workflowCaps ? { totalBytes: workflowCaps.totalBytes ?? null, roomBytes: workflowCaps.roomBytes ?? null } : null}
+            label={t('pipelines.detection')}
+          />
+          {#if modeSaveFailed}<p class="line failed" role="alert">{t('tools.target.detectSaveFailed')}</p>{/if}
+          <!-- Everything else about detection, shut by default: the model
+               files themselves (status, install, remove), the text reader,
+               English text, the language filter and the page review. -->
+          <section class="advanced" data-settings-anchor="detection-more">
+            <Disclosure variant="plain" open={moreOpen} ontoggle={(open) => (moreOpen = open)}>
+              {#snippet summary()}
+                <span class="adv-summary">
+                  <span class="adv-title">{t('settings.detection.more')}</span>
+                </span>
+              {/snippet}
+              <div class="adv-body">
+                <ul class="rows">
+                  {#each detectEntries as entry (entry.id)}
+                    {@render modelRow(entry)}
+                  {/each}
+                </ul>
+                {@render rescueOption()}
+                {@render latinOption()}
+                {@render review()}
+                {@render filtering()}
+              </div>
+            </Disclosure>
+          </section>
         </section>
 
         <!-- Cleaning: the redraw weight, and the FLUX helper collapsed. -->
@@ -3070,6 +2972,7 @@
       <div class="column">
         <h2>{t('settings.section.performance')}</h2>
 
+        <h3 class="sub first">{t('settings.runtime.heading.build')}</h3>
         {#if catalogue}
           <!-- The runtime is an archive that gets unpacked, not a catalogue
                row. The build named is the one a Download would fetch. -->
@@ -3158,7 +3061,7 @@
                   fit
                   options={catalogue.runtime.flavours.map((build) => ({
                     value: build.id,
-                    label: `${build.id} · ${build.ortVersion} · ${t('models.value.size', { bytes: build.bytes })}`,
+                    label: `${flavourName(build.id)} · ${build.ortVersion} · ${t('models.value.size', { bytes: build.bytes })}`,
                   }))}
                   value={catalogue.runtime.flavour}
                   onchange={chooseFlavour}
@@ -3177,6 +3080,23 @@
           <p class="note">{t('settings.models.unavailable')}</p>
         {/if}
 
+        <!-- What this computer has for each path, judged for the build the
+             picker above names, and the measurement Automatic follows. -->
+        <h3 class="sub">{t('settings.runtime.heading.machine')}</h3>
+        <MachineCheck
+          flavour={catalogue?.runtime.flavour ?? null}
+          flavours={catalogue?.runtime.flavours ?? []}
+          platform={catalogue?.runtime.platform ?? null}
+          {accelerators}
+          pathsPending={runtimeLoad.state !== 'loaded'}
+          onchooseflavour={chooseFlavour}
+          onrecheck={refreshAccelerators}
+        />
+
+        <h3 class="sub">{t('settings.runtime.heading.measure')}</h3>
+        <Measurement {accelerators} ready={runtimeLoad.state === 'loaded' && Boolean(accelerators)} onmeasured={refreshAccelerators} />
+
+        <h3 class="sub">{t('settings.runtime.heading.backends')}</h3>
         <div class="accel">
           <Field label={t('settings.accel.label')} layout="row" controlId="settings-accelerator">
             {#snippet children()}
@@ -3404,9 +3324,6 @@
      download access, each under its own heading and hairline. */
   .group { margin-top: var(--s-8) }
   .group > .sub { margin-top: 0 }
-  .local-detection { margin-bottom: var(--s-4) }
-  .local-detection .inline { flex-wrap: wrap }
-  .local-detection .inline :global(> *:first-child) { flex: initial; min-width: initial }
 
   .sr {
     position: absolute;
@@ -3564,33 +3481,14 @@
   }
   .readiness :global(.btn) { flex: none; margin-top: -2px }
 
-  /* The four detection choices: a plain fieldset, its legend for screen
-     readers only, since the group heading above already says it. */
-  .choices {
-    margin: 0;
-    padding: 0;
-    border: none;
-    min-width: 0;
-  }
-
   /* A model row wraps so the confirmation and the details can take the
      full width under the name and the buttons. */
   .row.model { flex-wrap: wrap; align-items: flex-start }
   .row.model .row-actions { padding-top: 1px }
-  /* A choice row leads with its checkbox, aligned to the name's first line. */
-  .row.choice > .check { flex: none; margin-top: 1px }
-  .row.choice .row-name { cursor: pointer }
   /* A row a deep link lands on shows where focus went; a pointer never
      focuses it. */
   .row:focus { outline: none }
   .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-chip) }
-  /* Where a choice runs, in words; while detection is on the cloud GPU,
-     where each model of that run's fixed combination runs. */
-  .row-where {
-    font-size: 11px;
-    line-height: 1.4;
-    color: var(--t3);
-  }
   .row-role {
     font-size: 11px;
     line-height: 1.4;

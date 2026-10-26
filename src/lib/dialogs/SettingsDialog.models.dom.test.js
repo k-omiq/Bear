@@ -43,10 +43,10 @@ import { capabilities } from '../state/capabilities.svelte.js'
 import {
   session,
   setDetection,
+  setDetectionMode,
   setFluxModel,
   setOcrRescue,
   setSidecarPath,
-  setTextPolicy,
 } from '../state/session.svelte.js'
 import SettingsDialog from './SettingsDialog.svelte'
 import { resetFirstLaunch } from './firstlaunch.svelte.js'
@@ -121,6 +121,7 @@ let downloadModel
 let verifyModel
 let deleteModel
 let verifySamTs
+let installSamTs
 
 /** The speech bubble finder and the three OCR files, as the catalogue sizes them. */
 const BALLOON_BYTES = 11_380_294
@@ -167,6 +168,7 @@ function stub(answer) {
   verifyModel = vi.fn(async () => true)
   deleteModel = vi.fn(async () => 'deleted')
   verifySamTs = vi.fn(async () => true)
+  installSamTs = vi.fn(async () => true)
   setBackend(
     /** @type {any} */ ({
       listModels: (/** @type {any} */ options) => listModels(options),
@@ -189,6 +191,8 @@ function stub(answer) {
       importFullRt: vi.fn(async () => ({})),
       removeSamTs: vi.fn(async () => true),
       removeFullRt: vi.fn(async () => true),
+      installSamTs: (/** @type {any} */ spec) => installSamTs(spec),
+      readMeasurement: vi.fn(async () => ({ saved: null, current: null, running: false })),
     }),
   )
 }
@@ -391,8 +395,22 @@ describe('the two pipelines', () => {
     const summary = rendered.getByRole('button', { name: new RegExp(t(titleKey).replace(/[()]/g, '\\$&')) })
     if (summary.getAttribute('aria-expanded') !== 'true') await fireEvent.click(summary)
   }
+  /**
+   * Open More options under the mode cards: the model rows, the reader, the
+   * review and the filtering wait there.
+   *
+   * @param {any} rendered
+   */
+  async function more(rendered) {
+    const summary = /** @type {HTMLElement} */ (
+      rendered.container.querySelector('[data-settings-anchor="detection-more"] button[aria-expanded]'))
+    if (summary.getAttribute('aria-expanded') !== 'true') await fireEvent.click(summary)
+  }
   /** @param {any} rendered */
-  const filtering = (rendered) => expand(rendered, 'settings.detection.capability.japanese')
+  const filtering = async (rendered) => {
+    await more(rendered)
+    await expand(rendered, 'settings.detection.capability.japanese')
+  }
   /** @param {any} rendered */
   const flux = (rendered) => expand(rendered, 'settings.sidecar.heading')
   /** @param {any} rendered @param {string} anchor */
@@ -401,8 +419,8 @@ describe('the two pipelines', () => {
 
   afterEach(() => {
     for (const language of ['ja', 'zh', 'ko']) setDetection(language, DEFAULT_DETECTOR)
+    setDetectionMode('normal')
     setOcrRescue(false)
-    setTextPolicy('legacy_gate')
     workflowCapabilities = CAPS
     capabilities.sidecar = false
     helperModels = []
@@ -412,12 +430,13 @@ describe('the two pipelines', () => {
 
   it('manage each model in the group whose pipeline needs it', async () => {
     const models = await open(() => withModelGroups())
+    await more(models)
     await waitFor(() => expect(group(models, 'detection').querySelector('[data-model="ctd"]')).toBeTruthy())
     expect(group(models, 'detection').querySelector('[data-model="lama"]')).toBe(null)
     await waitFor(() => expect(group(models, 'cleaning').querySelector('[data-model="lama"]')).toBeTruthy())
     expect(group(models, 'cleaning').querySelector('[data-model="ctd"]')).toBe(null)
-    // The Hayai reader's switch sits in Detection itself, named, not behind
-    // the collapsed filtering; the script gate and the files wait in there.
+    // The Hayai reader's switch sits in More options itself, named, not
+    // behind the collapsed filtering; the script gate and the files wait in there.
     expect(group(models, 'filtering').contains(rescueBox(models))).toBe(false)
     expect(rescueBox(models).labels?.[0]?.textContent).toContain('Hayai OCR')
     expect(modelRow(models, 'scriptGate')).toBe(null)
@@ -458,11 +477,13 @@ describe('the two pipelines', () => {
     expect(languagePicker(detection, 'ja').value).toBe('ctd-rtdetr')
   })
 
-  it('show the selected choices and each model’s download state, once, with no summary line repeating them', async () => {
+  it('show the selected mode and each model’s download state, once, with no summary line repeating them', async () => {
     const detection = await open(both)
+    await more(detection)
     await waitFor(() => expect(modelRow(detection, 'ctd').textContent).toContain(t('settings.models.status.missing')))
-    expect(/** @type {HTMLInputElement} */ (detection.getByRole('checkbox', { name: 'Comic Text Detector (CTD)' })).checked).toBe(true)
-    expect(/** @type {HTMLInputElement} */ (detection.getByRole('checkbox', { name: 'Ogkalu comic text & bubble detector (Small)' })).checked).toBe(true)
+    // The rows carry status and install or remove; the mode cards are the choice.
+    expect(detection.container.querySelector('[data-model] input[type="checkbox"]')).toBe(null)
+    expect(detection.getByRole('radio', { name: new RegExp(t('detectionMode.normal.name')) }).getAttribute('aria-checked')).toBe('true')
     expect(detection.container.textContent).not.toContain('RT-DETR')
     // No engine roadmap: a choice that cannot run is not drawn as an engine.
     expect(detection.queryByRole('table')).toBe(null)
@@ -502,37 +523,43 @@ describe('the two pipelines', () => {
     expect(status.textContent).toBe(t('settings.detection.rescue.missing'))
   })
 
-  it('download what the selected workflow needs: the readiness line never asks for OCR, all-text never for the gate', async () => {
+  // The text reader is in the needs while it is switched on, on this
+  // computer too, so the line and the press count it with the rest.
+  it('download what the selected workflow needs: never the old OCR, Advanced never the gate, the switched-on reader always', async () => {
     setOcrRescue(true)
     const detection = await open(() => withModelGroups())
     const readiness = () => /** @type {HTMLElement} */ (detection.container.querySelector('.readiness'))
-    const legacyBytes = 94_669_756 + BALLOON_BYTES + 3_722_314 + 1_163
+    const legacyBytes = 94_669_756 + BALLOON_BYTES + 3_722_314 + 1_163 + HAYAI_BYTES
     await waitFor(() => expect(readiness().textContent).toContain(t('settings.detection.ready.legacyMissing', { bytes: legacyBytes })))
     await fireEvent.click(within(readiness()).getByRole('button', { name: t('settings.detection.download', { bytes: legacyBytes }) }))
-    await waitFor(() => expect(downloadModelGroup).toHaveBeenCalledWith({ id: 'scriptGate' }))
+    await waitFor(() => expect(downloadModelGroup).toHaveBeenCalledWith({ id: 'hayaiOcr' }))
+    expect(downloadModelGroup).toHaveBeenCalledWith({ id: 'scriptGate' })
+    expect(downloadModelGroup).not.toHaveBeenCalledWith({ id: 'mangaOcr' })
     expect(downloadModel.mock.calls.map(([spec]) => spec.id)).toEqual(['textDetector', 'balloonDetector'])
-    expect(downloadModelGroup).not.toHaveBeenCalledWith({ id: 'hayaiOcr' })
-    downloadModel.mockClear()
-    downloadModelGroup.mockClear()
+    cleanup()
 
-    // The policy is the Text cleanup panel's; Settings follows it.
-    setTextPolicy('all_text')
-    await waitFor(() => expect(readiness().textContent).toContain(t('settings.detection.ready.allTextMissing', { bytes: BALLOON_BYTES + 94_669_756 })))
-    await fireEvent.click(within(readiness()).getByRole('button', { name: t('settings.detection.download', { bytes: BALLOON_BYTES + 94_669_756 }) }))
-    await waitFor(() => expect(downloadModel).toHaveBeenCalledWith({ id: 'balloonDetector' }))
-    expect(downloadModel).toHaveBeenCalledWith({ id: 'textDetector' })
-    expect(downloadModel).toHaveBeenCalledTimes(2)
-    expect(downloadModelGroup).not.toHaveBeenCalled()
+    // The mode is chosen once; Settings follows it. A fresh open, so the
+    // downloads started above are not still on their way.
+    setDetectionMode('advanced')
+    const advanced = await open(() => withModelGroups())
+    const advancedReadiness = () => /** @type {HTMLElement} */ (advanced.container.querySelector('.readiness'))
+    const advancedBytes = 94_669_756 + 168_481_531 + HAYAI_BYTES
+    await waitFor(() => expect(advancedReadiness().textContent).toContain(t('settings.detection.ready.allTextMissing', { bytes: advancedBytes })))
+    await fireEvent.click(within(advancedReadiness()).getByRole('button', { name: t('settings.detection.download', { bytes: advancedBytes }) }))
+    await waitFor(() => expect(installSamTs).toHaveBeenCalledOnce())
+    expect(downloadModel.mock.calls.map(([spec]) => spec.id)).toEqual(['textDetector', 'fullRt'])
+    expect(downloadModelGroup.mock.calls.map(([spec]) => spec.id)).toEqual(['hayaiOcr'])
 
-    // All-text reads no language, so no picker is drawn; the reader runs under both policies.
-    await filtering(detection)
-    expect(detection.queryByRole('combobox', { name: t('pipelines.detectorFor', { language: t('pipelines.language.ja') }) })).toBe(null)
-    expect(rescueBox(detection).checked).toBe(true)
-    expect(detection.getByText(t('settings.detection.languagesAllText'))).toBeTruthy()
+    // Advanced reads no language, so no picker is drawn; the reader runs under both modes.
+    await filtering(advanced)
+    expect(advanced.queryByRole('combobox', { name: t('pipelines.detectorFor', { language: t('pipelines.language.ja') }) })).toBe(null)
+    expect(rescueBox(advanced).checked).toBe(true)
+    expect(advanced.getByText(t('settings.detection.languagesAllText'))).toBeTruthy()
   })
 
   it('offers the SAM-TS-L lettering mask import and the Full detector download', async () => {
     const detection = await open(() => withModelGroups())
+    await more(detection)
     await waitFor(() => expect(modelRow(detection, 'samTs').textContent).toContain(t('settings.models.status.importToEnable')))
     expect(within(modelRow(detection, 'samTs')).getByRole('button', { name: t('settings.models.action.import') })).toBeTruthy()
     await waitFor(() => expect(within(modelRow(detection, 'rtFull')).getByRole('button', { name: t('settings.models.action.download') })).toBeTruthy())
@@ -540,6 +567,7 @@ describe('the two pipelines', () => {
 
     workflowCapabilities = { ...CAPS, samInstalled: true, samManaged: true, fullRtInstalled: true, fullRtManaged: true, fullRtRevision: 'abc123' }
     const imported = await open(() => withModelGroups())
+    await more(imported)
     await waitFor(() => expect(modelRow(imported, 'samTs').textContent).toContain(t('settings.models.status.imported')))
     const sam = within(modelRow(imported, 'samTs'))
     await fireEvent.click(sam.getByRole('button', { name: t('settings.models.action.verify') }))
@@ -577,6 +605,7 @@ describe('the two pipelines', () => {
 
   it('name what a removal stops before it happens; Keep and Escape change nothing', async () => {
     const detection = await open(() => withModelGroups({ installed: true }))
+    await more(detection)
     const element = modelRow(detection, 'rtSmall')
     const row = within(element)
     const deleteButton = await waitFor(() => row.getByRole('button', { name: t('settings.models.action.delete') }))
@@ -622,8 +651,9 @@ describe('the two pipelines', () => {
     expect(deleteModelGroup).not.toHaveBeenCalledWith({ id: 'scriptGate' })
   })
 
-  it('keep the text-shaped review collapsed and optional under legacy, inside Detection', async () => {
+  it('keep the text-shaped review collapsed and optional under either mode, inside Detection', async () => {
     const detection = await open(both)
+    await more(detection)
     const review = /** @type {HTMLElement} */ (detection.container.querySelector('.review'))
     expect(group(detection, 'detection').contains(review)).toBe(true)
     expect(review.textContent).toContain(t('settings.detection.review.optional'))
@@ -634,9 +664,13 @@ describe('the two pipelines', () => {
     await waitFor(() => expect(detection.getByText('Independent model analysis')).toBeTruthy())
     cleanup()
 
-    setTextPolicy('all_text')
+    // Advanced no longer opens it: it is shut until asked for, like the rest of More options.
+    setDetectionMode('advanced')
     const allText = await open(both)
-    await waitFor(() => expect(allText.getByText('Independent model analysis')).toBeTruthy())
+    await more(allText)
+    const shut = /** @type {HTMLElement} */ (allText.container.querySelector('.review'))
+    expect(within(shut).getByRole('button', { name: new RegExp(t('settings.detection.review.summary')) }).getAttribute('aria-expanded')).toBe('false')
+    expect(allText.queryByText('Independent model analysis')).toBe(null)
   })
 
   it.each(['', '/opt/flux'])('reports the available FLUX helper with folder %j and writes the model it offers', async (path) => {

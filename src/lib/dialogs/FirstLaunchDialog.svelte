@@ -3,7 +3,7 @@
    * The setup a first launch opens, and Settings' "Run setup again", as a
    * full-window screen.
    *
-   * Eleven steps, one choice each (`FIRST_LAUNCH_STEPS`). This file is the frame
+   * Thirteen steps, one choice each (`FIRST_LAUNCH_STEPS`). This file is the frame
    * around them: the progress bar, the step heading, Back, at most one button
    * beside the primary, the quiet Skip setup, and the keyboard. What a step
    * shows is its own component in `onboarding/`, and everything that has to
@@ -47,8 +47,10 @@
   import CloudStep from './onboarding/CloudStep.svelte'
   import DenoiseStep from './onboarding/DenoiseStep.svelte'
   import DiscordInvite from './DiscordInvite.svelte'
+  import RuntimeStep from './onboarding/RuntimeStep.svelte'
   import DependenciesStep from './onboarding/DependenciesStep.svelte'
   import DownloadsStep from './onboarding/DownloadsStep.svelte'
+  import MeasureStep from './onboarding/MeasureStep.svelte'
 
   /** Whole keys chosen between, never built, so the catalogue test sees each one. */
   const HEADINGS = {
@@ -61,12 +63,14 @@
     cloud: 'onboarding.cloud.heading',
     denoise: 'onboarding.denoise.heading',
     community: 'onboarding.community.heading',
+    runtime: 'onboarding.runtime.heading',
     dependencies: 'onboarding.dependencies.heading',
     downloads: 'onboarding.downloads.heading',
+    measure: 'onboarding.measure.heading',
   }
 
   /** Steps that hold a table, and so get the wider column. */
-  const WIDE = ['detection', 'cleaning', 'denoise', 'dependencies', 'downloads']
+  const WIDE = ['detection', 'cleaning', 'denoise', 'runtime', 'dependencies', 'downloads', 'measure']
 
   const step = $derived(firstLaunch.step)
   /** Welcome is the cover, not a step, so the bar counts from the one after it. */
@@ -172,13 +176,19 @@
             ? { label: t('onboarding.downloads.resumeAll'), run: resumeAll, icon: 'play' }
             : null,
         primary: allDone
-          ? { label: t('home.action.newProject'), run: startProject, enter: true }
+          ? next
           : {
               label: firstLaunch.running ? t('onboarding.downloads.later') : t('onboarding.downloads.close'),
               run: dismissFirstLaunch,
               enter: true,
             },
       }
+    }
+    if (step === 'measure') {
+      // The last step: measuring is offered, never required, so New project
+      // is the way out whether or not it ran. Not on Enter: the press that
+      // brought the user here from Downloads must not also leave.
+      return { back: true, secondary: null, primary: { label: t('home.action.newProject'), run: startProject, enter: false } }
     }
     return { back: true, secondary: null, primary: next }
   })
@@ -286,10 +296,14 @@
           <DenoiseStep />
         {:else if step === 'community'}
           <DiscordInvite />
+        {:else if step === 'runtime'}
+          <RuntimeStep />
         {:else if step === 'dependencies'}
           <DependenciesStep />
-        {:else}
+        {:else if step === 'downloads'}
           <DownloadsStep />
+        {:else}
+          <MeasureStep />
         {/if}
       </section>
     {/key}
@@ -383,7 +397,7 @@
      control, and a ring around it would read as one. */
   .heading:focus { outline: none }
 
-  /* The steps' shared type, set here so the ten read as one piece. Each step
+  /* The steps' shared type, set here so they read as one piece. Each step
      uses these classes rather than restating them. */
   .step :global(.lead) {
     margin: calc(-1 * var(--s-3)) 0 var(--s-7);

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { setBackend } from '../api/backend.js'
 import { cloud } from './cloud.svelte.js'
-import { chooseCleanTarget, chooseDetectTarget, cloudTargetKey, syncCloudOffer, targets } from './cloudtargets.svelte.js'
-import { backendSettingsPatch, session, setAnalysisTarget, setCleanTarget, setCloudAllowed, setDetectorModels } from './session.svelte.js'
+import { chooseCleanTarget, chooseDetectTarget, chooseDetectionMode, cloudTargetKey, syncCloudOffer, targets } from './cloudtargets.svelte.js'
+import { backendSettingsPatch, session, setAnalysisTarget, setCleanTarget, setCloudAllowed, setDetectionMode, setOcrRescue } from './session.svelte.js'
 import { writeSettingsSerialized } from './settingswrite.js'
 
 function deferred() {
@@ -23,7 +23,7 @@ afterEach(() => {
   setCleanTarget('local')
   setAnalysisTarget('rtFull', 'local')
   setAnalysisTarget('samTs', 'local')
-  setDetectorModels(['ctd', 'rtSmall'])
+  setDetectionMode('normal')
   setCloudAllowed(false)
   cloud.checked = false
   targets.offer = null
@@ -83,7 +83,7 @@ it('does not roll back a newer detection choice when an earlier save fails', asy
 
 it('asks again when the endpoint URL changes under one profile id', async () => {
   setCloudAllowed(true)
-  setDetectorModels(['ctd', 'samTs'])
+  setDetectionMode('advanced')
   cloud.checked = true
   cloud.readiness = { ...cloud.readiness, configured: true, target: { type: 'modal', profile_id: 'p1' },
     profile: { endpointUrl: 'https://first.example/api' } }
@@ -96,4 +96,57 @@ it('asks again when the endpoint URL changes under one profile id', async () => 
   expect(cloudTargetKey()).not.toBe(firstKey)
   syncCloudOffer()
   await vi.waitFor(() => expect(api.listRemoteAnalysisCapabilities).toHaveBeenCalledTimes(2))
+})
+
+it('chooses Advanced along with the cloud GPU, and leaves the mode alone when detection comes back here', async () => {
+  const api = { writeSettings: vi.fn(async () => {}) }
+  setBackend(/** @type {any} */ (api))
+  expect(session.detectionMode).toBe('normal')
+  expect(await chooseDetectTarget('cloud')).toBe(true)
+  expect(session.detectionMode).toBe('advanced')
+  expect(session.detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
+  expect(session.analysisTargets).toEqual({ rtFull: 'cloud', samTs: 'cloud' })
+  expect(await chooseDetectTarget('local')).toBe(true)
+  expect(session.detectionMode).toBe('advanced')
+  expect(session.analysisTargets).toEqual({ rtFull: 'local', samTs: 'local' })
+})
+
+it('brings detection back to this computer when Normal is chosen, and saves where it runs', async () => {
+  const api = { writeSettings: vi.fn(async () => {}) }
+  setBackend(/** @type {any} */ (api))
+  await chooseDetectTarget('cloud')
+  api.writeSettings.mockClear()
+  expect(await chooseDetectionMode('normal')).toBe(true)
+  expect(session.detectionMode).toBe('normal')
+  expect(session.detectorModels).toEqual(['ctd', 'rtSmall'])
+  expect(session.textPolicy).toBe('legacy_gate')
+  expect(session.analysisTargets).toEqual({ rtFull: 'local', samTs: 'local' })
+  expect(api.writeSettings).toHaveBeenCalledWith(expect.objectContaining({ analysisTargets: { rtFull: 'local', samTs: 'local' } }))
+})
+
+it('keeps detection where it is when Advanced is chosen, and saves no place', async () => {
+  const api = { writeSettings: vi.fn(async () => {}) }
+  setBackend(/** @type {any} */ (api))
+  expect(await chooseDetectionMode('advanced')).toBe(false)
+  expect(session.detectionMode).toBe('advanced')
+  expect(session.analysisTargets).toEqual({ rtFull: 'local', samTs: 'local' })
+  expect(api.writeSettings).not.toHaveBeenCalled()
+})
+
+it('puts the mode back with the place when a save of where detection runs is refused', async () => {
+  const api = { writeSettings: vi.fn(async () => { throw new Error('disk') }) }
+  setBackend(/** @type {any} */ (api))
+  expect(await chooseDetectTarget('cloud')).toBe(false)
+  expect(session.analysisTargets).toEqual({ rtFull: 'local', samTs: 'local' })
+  expect(session.detectionMode).toBe('normal')
+
+  // Normal cannot stay on the cloud GPU: a refused move back keeps Advanced.
+  api.writeSettings.mockImplementation(async () => {})
+  await chooseDetectTarget('cloud')
+  setOcrRescue(false)
+  api.writeSettings.mockImplementation(async () => { throw new Error('disk') })
+  expect(await chooseDetectionMode('normal')).toBe(false)
+  expect(targets.detectSaveFailed).toBe(true)
+  expect(session.analysisTargets).toEqual({ rtFull: 'cloud', samTs: 'cloud' })
+  expect(session).toMatchObject({ detectionMode: 'advanced', textPolicy: 'all_text', ocrRescue: false })
 })

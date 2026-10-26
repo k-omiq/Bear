@@ -686,6 +686,73 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Detection modes and the SAM-TS-L memory warning (2026-10-25): checked by tests, not by a real
+low-memory run.** The 10 GB room check on the lettering mask is now a warning, never a refusal: a run
+with less says so at its start (`notice.run.lowMemory`), and a mask that fails to open or fails on a
+page drops its session and masks the rest of the run from CTD (`notice.run.samFallback`). Left open:
+an Auto run detects on one pipeline while the other cleans, so the CPU mask (8.55 GB measured peak)
+can load beside a live LaMa session. On a 16 GB machine that may swap, or macOS may end the app for
+memory, where the old refusal would have stopped it. Only one pipeline ever opens the mask. Not
+measured on a machine below 10 GB of room. Also by choice: a record from before modes that asked for
+the Full profile or all text, without the mask, reads as Advanced and needs the mask downloaded
+before its next run.
+
+**Runtime screen and measurement (2026-10-25): built; checked by tests, the Vite mock and a headless
+run on this Mac, not on Windows or Linux.** CUDA discovery now reads each toolkit and cuDNN 9 install
+with its CUDA major (`crates/cleaner-core/src/cuda.rs`) and preloads the matching libraries by
+absolute path, so a machine with CUDA 12 and 13 side by side, or a cuDNN built for the other major
+first on PATH, gets the right files or a named reason. None of that has met a real NVIDIA machine:
+the folder layouts are from NVIDIA's installers as documented, and the tests use fake directories.
+The measurement times each installed model on every path the loaded runtime offers
+(`crates/cleaner-core/src/measure.rs`), with synthetic inputs at one fixed size per model. Not
+measured: one build against another, since a process loads one runtime library, so a CUDA build is
+never timed beside the DirectML build in the same pass; TensorRT, which the app does not offer; and
+whether the winner on synthetic inputs stays the winner on real chapter pages of other sizes. The
+screen itself was not opened in the desktop app.
+
+Left open after the review round of 2026-10-25: a cuDNN whose folder names no CUDA major (a distro
+package in `/usr/lib/x86_64-linux-gnu`, or one copied beside no toolkit) is accepted for either major,
+so a cuDNN built for CUDA 12 next to a CUDA 13 toolkit reads Ready and fails when the provider loads;
+reading the library's own dependencies would settle it. cuDNN installed as a Python wheel
+(`nvidia-cudnn-cu12` in a site-packages folder) is not searched. While a measurement runs, every
+clean waits, cloud runs included, though a cloud run would not share this computer's GPU. The
+reverse is not guarded: a hand clean of one region on a model rung (the region menu, a Layers row,
+Clean anyway) and the SAM preview in the capability check are not jobs, so a measurement started
+beside them, or one they start beside, times under their load and saves those timings. Registering
+region edits as jobs, or a counter the measurement checks, would close it.
+
+Left open after the review of 2026-10-26: a run whose detectors include SAM-TS-L without CTD (the
+backend accepts the pair, though neither mode sends it) masks nothing when the lettering mask fails, yet the `notice.run.samFallback`
+notice says CTD took over.
+
+Small interface gaps from the same review, left open: in Settings the arrow keys on the mode cards
+choose a mode, and choosing downloads what it lacks, so Right then Left starts both downloads. A
+refused build choice in setup leaves its radio drawn as chosen, and choosing a build while the
+runtime downloads says the save failed rather than to wait. Setup gives no reason when moving off
+the cloud for detection fails to save. The Runtime step does not reload the paths after a build is
+chosen away and back. A Stop on a measurement this window did not start stays disabled if reading
+the result after it fails.
+
+**CUDA probe in CI (2026-10-26): `.github/workflows/probe-cuda.yml` loads both CUDA builds on
+GitHub's Windows and Linux runners, with CUDA 12.6, 12.9 and 13.0 and a cuDNN per major installed
+side by side, and no GPU.** A stand-in `nvidia-smi` reports a card, and on Linux NVIDIA's stub of the
+driver's `libcuda.so.1` lets the provider load. Its first runs found that ONNX Runtime 1.28's CUDA 12
+build calls `cudaLibraryLoadData` and three more functions that CUDA 12.6's runtime does not export,
+so it cannot load against anything older than 12.8, and the machine check had called 12.6 Ready. The
+check now reads each toolkit's minor release (the `v12.6` folder on Windows, the versioned
+`libcudart.so.12.6.77` on Linux), prefers the newest, and says a toolkit below 12.8 is too old. A
+toolkit whose minor release cannot be read is let through. Not covered by the probe: a session that
+runs on a real card, so timing, the driver floors and the cuDNN kernels are untested.
+
+**Detection modes (2026-10-25): built; checked by tests and the Vite mock, not in the desktop app.**
+Normal and Advanced replace the four detector checkboxes. The hardware lines on the mode cards are
+the two measured peaks (2.45 GB for a Normal run with LaMa, 8.55 GB for SAM-TS-L on the CPU) rounded
+up to 8 GB total, and 16 GB total with 10 GB free. Not measured: the whole-run peak of Advanced with
+CTD, Full, SAM-TS-L, the Hayai reader and LaMa loaded together; SAM-TS-L memory and VRAM on WebGPU;
+the disk the SAM setup's Python environment takes; and how much slower Advanced runs below 10 GB free
+now that the memory check warns instead of refusing. The editor's missing-model button still opens
+Settings rather than downloading in place.
+
 **SAM-TS-L install on Windows (2026-10-21): fixed in code, not run on a Windows desktop.** A user's
 Windows install showed an empty black console window instead of progress. Every console program the
 app starts now goes through `cleaner_core::process::command`, which sets `CREATE_NO_WINDOW` on

@@ -485,9 +485,8 @@ export const en = {
     // same choice.
     detection: {
       languagesAllText: 'Text cleanup takes all text, so language filtering is off. Set Text to Chosen languages in Text cleanup to use it.',
-      // Under the four choices.
-      profiles: 'Full and Small are two sizes of one detector: choose one. CTD and the SAM-TS-L lettering mask combine with either.',
-      selectedModels: 'Selected combination: {models}',
+      // The fold under the Normal / Advanced cards.
+      more: 'More options',
       download: 'Download {bytes:memory}',
       capability: {
         detect: 'Detection models',
@@ -514,19 +513,18 @@ export const en = {
       // Under the OCR rescue switch, only while it is on and cannot run.
       rescue: {
         missing: 'The text reader files are not installed, so the reader will not run.',
-        size: 'Adds a {bytes:memory} download.',
       },
       // One line under the policy: whether the selected workflow can run.
       ready: {
-        nothing: 'Every language is skipped, so legacy cleaning removes nothing.',
-        legacy: 'Legacy cleaning has every model it needs.',
-        legacyMissing: 'Legacy cleaning needs {bytes:memory} of downloads before it can run.',
-        allText: 'All-text automatic cleaning has every selected detection model it needs.',
-        allTextMissing: 'All-text cleaning needs {bytes:memory} of downloads.',
-        allTextImport: 'All-text cleaning needs the SAM-TS-L lettering mask graphs. Install them on its row below.',
-        allTextSamMismatch: 'The SAM-TS-L lettering mask graphs failed their checksum. Install them again on its row below.',
+        nothing: 'Every language is skipped, so Normal cleans nothing.',
+        legacy: 'Normal is ready.',
+        legacyMissing: 'Normal needs {bytes:memory} of downloads.',
+        allText: 'Advanced is ready.',
+        allTextMissing: 'Advanced needs {bytes:memory} of downloads.',
+        allTextImport: 'Advanced needs the SAM-TS-L lettering mask. Install it under More options.',
+        allTextSamMismatch: 'The SAM-TS-L lettering mask failed its check. Install it again under More options.',
         // Free memory changes, so this says what to do rather than what is missing.
-        allTextMemory: 'SAM-TS-L lettering mask needs about 10 GB of free memory, and this computer has less free right now. Close other apps before cleaning or reviewing.',
+        allTextMemory: 'Less than 10 GB of memory is free, so Advanced will be slow. Close other apps for a faster run.',
         // After the line above, so "it" is the workflow that line names. A
         // native run refuses to start without the runtime, so the row is not
         // complete while one of these shows.
@@ -539,6 +537,7 @@ export const en = {
         runtimeUnloadable: 'It cannot run until the engine runtime loads. {reasonKey}.',
         runtimeChecking: 'Checking that the engine runtime, ONNX Runtime, loads on this computer.',
         runtimeUnchecked: 'Whether the engine runtime, ONNX Runtime, loads on this computer could not be checked. Reopen Settings to check again.',
+        fetching: 'Downloading…',
         openPerformance: 'Open Performance',
       },
       review: {
@@ -547,25 +546,12 @@ export const en = {
         note: 'Analyses one page with the selected detection models. Any component write still needs explicit approval and qualified write support.',
       },
       sam: {
-        memory: 'Needs about 10 GB of free memory to run.',
+        memory: 'Runs slowly with less than 10 GB of free memory.',
         chooserTitle: 'Folder with both SAM-TS-L lettering mask graphs',
       },
       rtFull: {
         chooserTitle: 'The pinned Ogkalu comic text & bubble detector (Full) detector.onnx',
       },
-      // Setup's detection step.
-      setupReview: 'The selected models can also check one page at a time from the editor’s review, before anything is erased.',
-      localFull: {
-        note: "Run CTD, Ogkalu Full and SAM-TS-L on this computer. SAM needs about 10 GB of free memory. CPU is supported; available GPU backends are listed in Performance.",
-        use: "Use full pipeline locally",
-        install: "Install missing local models",
-        backends: "Choose CPU or GPU",
-        saveFailed: "Could not save local detection. Your detection settings were kept.",
-        installFailed: "Some local models could not be installed. Check the model errors below and retry.",
-        ready: "Full detection is ready on this computer.",
-        pending: "Install or check the models below before running full detection on this computer.",
-      },
-      modelsLegend: 'Detection models',
       // Why Text cleanup's Detect on cannot be Cloud GPU, and what a cloud
       // choice means for a model's backend. Detect on itself is the Text
       // cleanup panel's; region edits and drawn boxes stay on this computer.
@@ -577,7 +563,6 @@ export const en = {
         checking: 'Checking which models your cloud GPU offers…',
         performance: '☁ Runs on your cloud GPU while Text cleanup detects there, so this backend is not used.',
       },
-      setupAllText: 'Automatic cleaning will use this model combination across the page, without source-language filtering.',
     },
     cleaning: {
       capability: {
@@ -595,18 +580,6 @@ export const en = {
       // Over catalogue rows no capability claims: a weight the backend added
       // before the capability table knew it still has a place to be managed.
       heading: 'Other files',
-      // Where a detection choice runs, under its name. While Text cleanup
-      // detects on the cloud GPU the combination is fixed
-      // (`pipelines.js#runDetection`): Full and SAM-TS-L run there
-      // (`onCloud`), CTD here beside them (`cloudLocal`), Small not at all
-      // (`cloudUnused`).
-      where: {
-        either: 'Runs on this computer or your cloud GPU',
-        localOnly: 'Runs on this computer only',
-        onCloud: '☁ Runs on your cloud GPU while Text cleanup detects there',
-        cloudLocal: 'Runs on this computer beside the cloud GPU while Text cleanup detects there',
-        cloudUnused: 'Not used while Text cleanup detects on the cloud GPU: Full replaces it',
-      },
       // Every model downloads from Hugging Face, so the token has its own
       // group rather than living under either pipeline.
       access: {
@@ -972,11 +945,71 @@ export const en = {
     },
     // The sidebar's sections. Models' two groups, Detection and Cleaning,
     // take their names from `pipelines.*`, which onboarding shares.
+    runtime: {
+      heading: {
+        build: 'Runtime build',
+        machine: 'This computer',
+        measure: 'Measurement',
+        backends: 'Backends',
+      },
+      build: {
+        standard: 'Standard',
+        recommended: 'Ready on this computer',
+        default: 'Default',
+        aboutDirectml: 'Any graphics card on Windows: NVIDIA, AMD or Intel. Nothing else to install.',
+        aboutCuda: 'NVIDIA only. Uses the CUDA toolkit and cuDNN you install from NVIDIA.',
+        aboutStandard: 'The build made for this platform.',
+      },
+      machine: {
+        gpu: 'Graphics card',
+        gpuLine: '{name} · driver {driver}',
+        noNvidia: 'No NVIDIA graphics card found',
+        unreadable: 'Could not be read',
+        checking: 'Checking…',
+        toolkits: 'CUDA toolkits',
+        cudnn: 'cuDNN 9',
+        none: 'None found',
+        cudnnFor: 'for CUDA {major}',
+        cudnnAny: 'CUDA version not in its folder name',
+        missing: 'missing {files}',
+        recommend: 'This computer is ready for the {build} build.',
+        useBuild: 'Use {build}',
+        paths: 'Paths in this runtime',
+        pathReady: 'ready',
+        pathsLater: 'Checked once the runtime is downloaded.',
+        recheck: 'Check again',
+      },
+      measure: {
+        body: 'Times each installed model on every path it can use here, then Automatic uses the fastest. It takes a minute or two. A backend you pick for a model still wins.',
+        start: 'Measure',
+        again: 'Measure again',
+        stop: 'Stop',
+        forget: 'Clear',
+        preparing: 'Getting ready…',
+        progress: 'Timing {model} on {backend} · {step} of {total}',
+        needsRuntime: 'Measuring needs the runtime and at least one model downloaded.',
+        when: 'Measured {when}',
+        none: 'Not measured yet. Automatic uses the built-in choices.',
+        stale: 'This was measured on a different setup (runtime build, graphics card or driver). Automatic uses the built-in choices until you measure again.',
+        fastest: 'Fastest',
+        failed: 'Could not run here',
+        load: 'load {time}',
+        ms: '{value} ms',
+        seconds: '{value} s',
+        autoUses: 'Automatic uses {backend} now',
+        chosenUses: 'You chose {backend}',
+        col: {
+          backend: 'Backend',
+          run: 'Per run',
+          load: 'Load',
+        },
+      },
+    },
     section: {
       general: 'General',
       models: 'Models',
       cloud: 'Cloud',
-      performance: 'Performance',
+      performance: 'Runtime',
       shortcuts: 'Shortcuts',
       about: 'About',
       denoise: 'Denoise',
@@ -1816,12 +1849,22 @@ export const en = {
       // the Vulkan loader, `libvulkan.so.1`, which every GPU driver package
       // carries; on Windows a working graphics driver.
       noDevice: 'it found no graphics device, so install your graphics driver (on Linux, the Vulkan loader)',
+      driverTooOld: 'the NVIDIA driver is too old for this build, so update your graphics driver',
     },
     chosen: {
       // The second tier. A guess stated as a guess: the alternative is
       // writing a guess down as a measurement, which is the error the log
       // otherwise records.
       unmeasured: 'chosen without a measurement on this hardware',
+      measuredHere: 'fastest when measured on this computer',
+    },
+    cudaCheck: {
+      ready: 'Ready. The CUDA toolkit and cuDNN this build needs are installed.',
+      noGpu: 'No NVIDIA graphics card or driver found, so this build cannot use the GPU.',
+      driverTooOld: 'The NVIDIA driver ({have}) is too old for this build. Update it to {need} or newer.',
+      noToolkit: 'No complete CUDA {major} toolkit found. Install CUDA {major}.x from NVIDIA, or pick the build that matches the toolkit you have.',
+      toolkitTooOld: 'CUDA {have} is too old for this build. Install CUDA {need} or newer from NVIDIA.',
+      noCudnn: 'No cuDNN 9 for CUDA {major} found. Install the cuDNN 9 package made for CUDA {major}.',
     },
   },
 
@@ -1907,13 +1950,33 @@ export const en = {
   // reused where a row is the same setting, so one setting has one name.
   // The pipelines a page goes through (`model/pipelines.js`). Engine names are
   // product names and are not here; what is here is what each one does.
+  // The Normal / Advanced cards, in setup and Settings > Models
+  // (`dialogs/DetectionModeChoice.svelte`). Memory is the measured need:
+  // Normal peaks near 2.5 GB, Advanced's lettering mask wants 10 GB free.
+  detectionMode: {
+    normal: {
+      name: 'Normal',
+      about: 'Cleans text in speech bubbles. Leaves sound effects and text outside bubbles for you to check.',
+      needs: 'Needs 8 GB of memory.',
+    },
+    advanced: {
+      name: 'Advanced',
+      about: 'Cleans all text, sound effects included. Slower.',
+      needs: 'Needs 16 GB of memory, 10 GB of it free.',
+    },
+    download: '{bytes:memory} to download',
+    ready: 'Downloaded',
+    noGpu: 'Neither needs a graphics card.',
+    // This computer, as the backend measured it.
+    machine: 'This computer has {total:memory} of memory, {free:memory} free now.',
+  },
   pipelines: {
     detection: 'Detection',
     cleaning: 'Cleaning',
     clean: 'Clean',
     // Wherever the detection models are shown while Text cleanup detects on
     // the cloud GPU: that run's combination is fixed (`pipelines.js#runDetection`).
-    cloudCombo: 'Cloud GPU uses all four models for the best result: CTD, Ogkalu Full, SAM-TS-L and the Hayai OCR text reader. CTD and Hayai OCR run on this computer.',
+    cloudCombo: 'The cloud GPU always runs Advanced.',
     language: {
       ja: 'Japanese',
       zh: 'Chinese',
@@ -2000,10 +2063,8 @@ export const en = {
     },
     detection: {
       heading: 'Detection',
-      body: 'Choose where detection runs and which models it uses, then which source languages to clean. Skip a language to leave it untouched.',
-      // Under the fixed four while setup's Detect on is Cloud GPU, and under
-      // Detect on while Cloud GPU cannot be offered yet (`DetectOnChoice`).
-      cloudNow: 'Setup downloads only what runs on this computer: CTD and the Hayai OCR text reader. Your own choice of models is kept for This computer.',
+      body: 'How much should a run clean? You can change this later in Settings.',
+      // Under Detect on while Cloud GPU cannot be offered yet (`DetectOnChoice`).
       cloudLater: 'Cloud GPU can be chosen once a cloud GPU is set up, in the Cloud step or later in Settings > Cloud.',
     },
     cleaning: {
@@ -2041,14 +2102,19 @@ export const en = {
       join: 'Join our Discord server',
       external: 'Opens in your browser',
     },
+    runtime: {
+      heading: 'Runtime',
+      body: 'The runtime runs the models on this computer. Pick the build that fits your graphics card before it downloads. You can change it later in Settings, Runtime.',
+      only: 'This computer gets the {build} build, ONNX Runtime {version}.',
+    },
+    measure: {
+      heading: 'Measure speed',
+      body: 'Find the fastest path for each model on this computer. You can skip this and measure later in Settings, Runtime.',
+    },
     dependencies: {
       heading: 'Dependencies',
       body: 'Checked on {platform}.',
       runtime: 'Engine runtime',
-      acceleration: 'Graphics acceleration',
-      cpuOnly: 'CPU only',
-      afterRuntime: 'Checked after the runtime installs',
-      unreadable: 'Could not be read',
       unavailable: 'Not published for this computer. Install it by hand to run local models.',
       needs: 'Needs {items}, installed by you',
       helper: 'FLUX helper (optional)',
@@ -2742,7 +2808,7 @@ export const en = {
       // this is a caller out of step, and trying again sends the right one.
       cloudSmallRefused: 'Cloud detection uses Ogkalu Full, not Small. Try again, or Detect on This computer.',
       cleanSaveFailed: 'Could not save where cleaning runs. Try again.',
-      chooseModels: 'Choose models',
+      chooseModels: 'Get models',
       // Beside `editor.state.detectModelsCloud`: sets Detect on to Cloud GPU.
       useCloud: 'Detect on cloud GPU',
       // Under the mixed-execution checkbox (`cloud.clean.mixed.label`), shown
@@ -2783,9 +2849,8 @@ export const en = {
       detectOn: 'Detect on',
       cleanOn: 'Clean on',
       scope: 'Scope',
-      // Which text a run takes: the languages chosen in Settings, or every
-      // text it finds (`session.textPolicy`).
-      textPolicy: 'Text',
+      // Normal or Advanced (`session.detectionMode`).
+      detectionMode: 'Detection',
       bubbleText: 'Speech bubble text',
       bubbleColor: 'Solid fill color',
       maskPadding: 'Mask padding',
@@ -2856,9 +2921,6 @@ export const en = {
       outsideReview: 'Hold for review',
       outsideClean: 'Clean anyway',
       scopeProject: 'Project',
-      // `session.textPolicy`: `legacy_gate` and `all_text`.
-      policyLegacy: 'Chosen languages',
-      policyAll: 'All text',
       // Shapes' `mode` row offers this beside the cleaning rungs, one of
       // which is called *Fill* - rung 0, which measures the paper just outside
       // the mask and paints that one colour on it. This one covers
@@ -3003,6 +3065,14 @@ export const en = {
   /* something that already happened.                                    */
   /* ================================================================== */
   notice: {
+    measure: {
+      busy: 'Measuring waits until the running clean finishes.',
+      running: 'A measurement is already running.',
+      cancelled: 'Measurement stopped. Nothing was saved.',
+      cleanWaits: 'A clean waits until the measurement finishes.',
+      nothing: 'Nothing could be measured: download a model first. The earlier measurement is kept.',
+      restart: 'The runtime build changed since Manga Cleaner started. Restart it, then measure.',
+    },
     // The cloud clean batch's own notices (`inference/cloud_clean.rs`). A
     // failure or a stop is always said with its cause, `code.generic` for a
     // code the catalogue has no words for (`model/cloudnotices.js`); the
@@ -3115,6 +3185,16 @@ export const en = {
       // dropped, and that is what "unloaded" is reporting.
       engineFault:
         'The {modelKey} stopped answering on {accelKey}, so it was unloaded. The next run builds it again. If it keeps happening, choose CPU in Settings › Performance.',
+      // The same fault on the CPU, where switching to the CPU is no remedy.
+      engineFaultCpu: 'The {modelKey} failed on this computer, so it was unloaded. The next run loads it again.',
+      // Advanced, started with less free memory than the lettering mask
+      // wants. The run goes on; the notice stays until closed and its button
+      // stops the run. `free` is bytes.
+      lowMemory: 'Advanced works best with 10 GB of free memory. {free:memory} is free now, so this run may be slow. Close other apps, or stop and switch to Normal.',
+      lowMemoryStop: 'Stop run',
+      // The lettering mask would not load at all, so the rest of the run was
+      // masked the Normal way and cleaned anyway. Said once per run.
+      samFallback: 'The lettering mask could not load, so this run used Normal masks. Sound effects may remain.',
     },
 
     // Downloading or replacing the engine runtime itself. Both of these are
@@ -3744,7 +3824,6 @@ export const en = {
       ctd: 'Comic Text Detector (CTD) is not installed. Download it in Settings > Models.',
       sam: 'SAM-TS-L lettering mask is not installed. Import both graphs under Models and backends.',
       samUnverified: 'SAM-TS-L lettering mask is not verified yet. Verify it under Models and backends.',
-      memory: 'SAM-TS-L lettering mask needs about 10 GB of free memory.',
       backend: 'The selected backend is not available on this computer.',
       cloud: 'The cloud GPU is not ready. Choose another backend, or set it up in Settings > Cloud.',
     },

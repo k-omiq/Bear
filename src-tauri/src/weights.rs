@@ -2564,7 +2564,7 @@ struct InstalledRuntime {
 /// A dot-file, beside `.staging` and `.downloads`, for the same reason
 /// [`VERIFIED_FILE`] is one: `<app_data>/runtimes` is a directory
 /// a user is invited to populate by hand.
-const INSTALLED_FILE: &str = ".installed.json";
+const INSTALLED_FILE: &str = cleaner_core::runtime::INSTALLED_FILE;
 
 /// What was installed here, or `None` for **unknown**.
 ///

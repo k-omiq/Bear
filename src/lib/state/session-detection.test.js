@@ -4,7 +4,20 @@
  * and the text policy keeps its name and values for the code that reads it.
  */
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// Capture what reaches disk, so the persisted record's shape can be read.
+const written = vi.hoisted(() => ({ records: [] }))
+vi.mock('./persist.js', async (importOriginal) => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    writeRecord: (key, value) => {
+      written.records.push({ key, value })
+      return true
+    },
+  }
+})
 import {
   TEXT_POLICIES,
   sanitizeSession,
@@ -14,14 +27,14 @@ import {
   setAnalysisTarget,
   setDetection,
   setModelAccelerator,
+  setDetectionMode,
   setOcrRescue,
-  setTextPolicy,
 } from './session.svelte.js'
 
 afterEach(() => {
   for (const language of ['ja', 'zh', 'ko']) setDetection(language, 'ctd-rtdetr')
+  setDetectionMode('normal')
   setOcrRescue(false)
-  setTextPolicy('legacy_gate')
   for (const id of ['ctd', 'rtSmall', 'rtFull', 'samTs', 'inpainter']) setModelAccelerator(id, 'inherit')
   setAnalysisTarget('rtFull', 'local')
   setAnalysisTarget('samTs', 'local')
@@ -70,10 +83,63 @@ describe('setDetection', () => {
 describe('the text policy', () => {
   it('keeps its field name and two values stable', () => {
     expect(TEXT_POLICIES).toEqual(['legacy_gate', 'all_text'])
-    setTextPolicy('all_text')
-    expect(session.textPolicy).toBe('all_text')
     expect(sanitizeSession({ textPolicy: 'all_text' }).textPolicy).toBe('all_text')
     expect(sanitizeSession({ textPolicy: 'other' }).textPolicy).toBe('legacy_gate')
+  })
+})
+
+describe('the detection mode', () => {
+  it('reads a record written before modes as the mode its combination reached for', () => {
+    expect(sanitizeSession({ detectorModels: ['ctd', 'rtFull'] }).detectionMode).toBe('advanced')
+    expect(sanitizeSession({ detectorModels: ['ctd', 'rtSmall'] }).detectionMode).toBe('normal')
+    expect(sanitizeSession({ textPolicy: 'all_text' }).detectionMode).toBe('advanced')
+    expect(sanitizeSession({ detectorModels: 'rtFull', textPolicy: 7 }).detectionMode).toBe('normal')
+    expect(sanitizeSession({}).detectionMode).toBe('normal')
+  })
+
+  it('reads detection on the cloud GPU as Advanced, whatever else the record says', () => {
+    const old = sanitizeSession({ detectorModels: ['ctd', 'rtSmall'], textPolicy: 'legacy_gate', analysisTargets: { rtFull: 'cloud', samTs: 'cloud' } })
+    expect(old).toMatchObject({ detectionMode: 'advanced', textPolicy: 'all_text', analysisTargets: { rtFull: 'cloud', samTs: 'cloud' } })
+    expect(sanitizeSession({ detectionMode: 'normal', analysisTargets: { rtFull: 'cloud', samTs: 'cloud' } }).detectionMode).toBe('advanced')
+  })
+
+  it('lets a stored mode win over whatever combination the record also holds', () => {
+    const normal = sanitizeSession({ detectionMode: 'normal', detectorModels: ['ctd', 'rtFull', 'samTs'], textPolicy: 'all_text' })
+    expect(normal).toMatchObject({ detectionMode: 'normal', detectorModels: ['ctd', 'rtSmall'], textPolicy: 'legacy_gate' })
+    const advanced = sanitizeSession({ detectionMode: 'advanced', detectorModels: ['ctd'] })
+    expect(advanced).toMatchObject({ detectionMode: 'advanced', detectorModels: ['ctd', 'rtFull', 'samTs'], textPolicy: 'all_text' })
+    expect(sanitizeSession({ detectionMode: 'turbo', detectorModels: ['ctd', 'rtFull'] }).detectionMode).toBe('advanced')
+  })
+
+  it('derives the models and the policy from the mode, whatever combination a record held', () => {
+    expect(sanitizeSession({ detectorModels: ['ctd', 'rtSmall', 'samTs'] }).detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
+    expect(sanitizeSession({ detectorModels: ['ctd'] }).detectorModels).toEqual(['ctd', 'rtSmall'])
+  })
+
+  it('sets the models, the policy and the reader together, and only on a change', () => {
+    setDetectionMode('advanced')
+    expect(session.detectionMode).toBe('advanced')
+    expect(session.detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
+    expect(session.textPolicy).toBe('all_text')
+    expect(session.ocrRescue).toBe(true)
+    // The reader stays the user's: choosing the same mode again leaves it alone.
+    setOcrRescue(false)
+    setDetectionMode('advanced')
+    expect(session.ocrRescue).toBe(false)
+    setDetectionMode('normal')
+    expect(session).toMatchObject({ detectionMode: 'normal', detectorModels: ['ctd', 'rtSmall'], textPolicy: 'legacy_gate', ocrRescue: false })
+    setDetectionMode('turbo')
+    expect(session.detectionMode).toBe('normal')
+  })
+
+  it('stores the mode, and never the models or the policy it derives', () => {
+    written.records.length = 0
+    setDetectionMode('advanced')
+    const record = written.records.at(-1)?.value
+    expect(record.detectionMode).toBe('advanced')
+    expect(record).not.toHaveProperty('detectorModels')
+    expect(record).not.toHaveProperty('textPolicy')
+    expect(sanitizeSession(JSON.parse(JSON.stringify(record))).detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
   })
 })
 
@@ -117,11 +183,6 @@ describe('where the cloud-capable detection stages run', () => {
     adoptBackendSettings({ analysisTargets: { rtFull: 'local', samTs: 'cloud' } })
     expect(session.analysisTargets).toEqual({ rtFull: 'local', samTs: 'local' })
     expect(backendSettingsPatch().analysisTargets).toEqual({ rtFull: 'local', samTs: 'local' })
-  })
-
-  it('reads a record holding both detector profiles as Small with the rest of its choices', () => {
-    expect(sanitizeSession({ detectorModels: ['ctd', 'rtSmall', 'rtFull', 'samTs'] }).detectorModels).toEqual(['ctd', 'rtSmall', 'samTs'])
-    expect(sanitizeSession({ detectorModels: ['coo', 'samTs'] }).detectorModels).toEqual(['samTs'])
   })
 
   it('changes one stage at a time, refuses unknown stages and places, and reaches the settings patch', () => {

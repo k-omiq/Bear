@@ -52,9 +52,6 @@ const FULL_RT_NAME: &str = "detector.onnx";
 const FULL_RT_BYTES: u64 = 168_481_531;
 const FULL_RT_SHA256: &str = "065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195";
 const FULL_RT_REVISION: &str = cleaner_core::text_groups::OGKALU_FULL_REVISION;
-// Measured native CPU chapter peak RSS was 8,547,975,168 bytes on Apple M5. Leave room
-// for the editor and decoded page; an unknown reading fails closed.
-const SAM_MIN_ROOM_BYTES: u64 = sam_ts::MIN_ROOM_BYTES;
 static SAM_FILES: Mutex<()> = Mutex::new(());
 static SAM_INSTALL: Mutex<()> = Mutex::new(());
 
@@ -364,6 +361,10 @@ pub struct WorkflowCapabilities {
     full_rt_file: ManifestFile,
     sam_installed: bool,
     sam_memory_ready: bool,
+    /// What a process may reach for now, as `memory::room` measures it, and
+    /// physical memory: the mode cards say what this computer has.
+    room_bytes: Option<u64>,
+    total_bytes: Option<u64>,
     local_detection_ready: bool,
     local_detection_note: &'static str,
     sam_managed: bool,
@@ -395,9 +396,10 @@ struct Backend {
     note: &'static str,
 }
 
+/// The lettering mask's backends. Memory room is not among the conditions:
+/// short of it SAM loads, slower, and says so (`sam_memory_ready`).
 fn sam_backends(
     runtime_installed: bool,
-    memory_ready: bool,
     webgpu_ready: bool,
     webgpu_qualified: bool,
 ) -> Vec<Backend> {
@@ -405,15 +407,15 @@ fn sam_backends(
         id: "ort-cpu",
         platform: "all",
         qualified: false,
-        available: runtime_installed && memory_ready,
-        selectable: runtime_installed && memory_ready,
-        note: "Local detection on CPU, including chapter and selection runs. Automatic uses CPU. Saved parity measurements are from macOS; other platforms are not measured. Requires 10 GB of memory room; one SAM pipeline loads at a time.",
+        available: runtime_installed,
+        selectable: runtime_installed,
+        note: "Local detection on CPU, including chapter and selection runs. Automatic uses CPU. Saved parity measurements are from macOS; other platforms are not measured. Runs slowly with less than 10 GB of memory room; one SAM pipeline loads at a time.",
     }];
     if cfg!(target_os = "macos") {
         rows.extend([
             Backend { id: "ort-webgpu", platform: "macOS", qualified: webgpu_qualified,
-                available: runtime_installed && memory_ready && webgpu_ready,
-                selectable: runtime_installed && memory_ready && webgpu_ready,
+                available: runtime_installed && webgpu_ready,
+                selectable: runtime_installed && webgpu_ready,
                 note: "Local detection on Apple WebGPU with strict graph placement and no CPU fallback. Saved parity measurements are from Mac17,3 M5 with pinned ORT 1.28.0; other Macs are not measured. CPU remains the default. Preview component writes have separate qualification requirements." },
             Backend { id: "ort-coreml", platform: "macOS", qualified: false, available: false, selectable: false, note: "Head was tested in a spike; full native path is unqualified." },
             Backend { id: "torch-mps", platform: "macOS", qualified: false, available: false, selectable: false, note: "PyTorch spike measured on Apple M5; no shipped PyTorch runtime." },
@@ -587,9 +589,9 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
     let webgpu_ready = cfg!(target_os = "macos")
         && runtime_ready
         && sam_ts::built_in_webgpu_available();
-    // Readiness requires measured room; an idle session's mere presence
-    // cannot promise enough memory. Loading evicts idle models and checks
-    // again. Reading status never evicts anything.
+    // Whether there is measured room for the lettering mask to run at full
+    // speed; an idle session's mere presence cannot promise it. A warning
+    // only: SAM loads with less, slower. Reading status never evicts anything.
     let sam_memory_ready = sam_ts::ensure_memory_room(room).is_ok();
     let webgpu_qualified = webgpu_ready
         && sam_ts::measured_m5_host()
@@ -602,7 +604,7 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
     let full_rt_installed = full_rt_path_with(app_data, |path, bytes, sha| {
         cache.verified(path, bytes, sha)
     }).is_some();
-    let local_detection_ready = runtime_ready && full_rt_installed && sam_installed && sam_memory_ready;
+    let local_detection_ready = runtime_ready && full_rt_installed && sam_installed;
     WorkflowCapabilities {
         runtime_installed,
         runtime_ready,
@@ -624,10 +626,12 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
             sha256: FULL_RT_SHA256,
         },
         sam_memory_ready,
+        room_bytes: room,
+        total_bytes: cleaner_core::memory::machine().physical,
         local_detection_ready,
         local_detection_note: if !runtime_ready { "Install or repair the local ONNX Runtime." }
             else if !full_rt_installed || !sam_installed { "Install the SAM-TS-L and Ogkalu Full models for the local detection pipeline." }
-            else if !sam_memory_ready { "SAM-TS-L needs 10 GB of memory room after releasing idle model sessions." }
+            else if !sam_memory_ready { "SAM-TS-L runs slowly with less than 10 GB of memory room." }
             else { "SAM-TS-L and Ogkalu Full are ready for local detection. Additional selected models have their own installation checks." },
         sam_managed: sam
             .as_ref()
@@ -645,7 +649,6 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
         rt_backends: rt_backends(runtime_ready),
         sam_backends: sam_backends(
             runtime_ready,
-            sam_memory_ready,
             webgpu_ready,
             webgpu_qualified,
         ),
@@ -2003,12 +2006,6 @@ pub async fn analyze_capabilities(
         let mask = if mode.sam() {
             cleaner_core::residency::evict_for_sam();
             cancel.check()?;
-            if cleaner_core::memory::room().is_none_or(|bytes| bytes < SAM_MIN_ROOM_BYTES) {
-                return Err(
-                    "The SAM-TS-L lettering mask needs at least 10 GB of measured process memory room"
-                        .into(),
-                );
-            }
             let dir = graph_dir(&app_data).ok_or("The SAM-TS-L lettering mask graphs are not installed")?;
             verify_graphs(&dir)?;
             cancel.check()?;
@@ -2219,12 +2216,11 @@ mod tests {
 
     #[test]
     fn local_cpu_detection_is_available_without_preview_write_qualification() {
-        let rows = super::sam_backends(true, true, false, false);
+        let rows = super::sam_backends(true, false, false);
         let cpu = rows.iter().find(|row| row.id == "ort-cpu").unwrap();
         assert!(cpu.available && cpu.selectable);
         assert!(!cpu.qualified);
-        assert!(!super::sam_backends(true, false, false, false)[0].available);
-        assert!(!super::sam_backends(false, true, false, false)[0].available);
+        assert!(!super::sam_backends(false, false, false)[0].available);
     }
 
     #[test]

@@ -20,8 +20,14 @@ pub const ENCODER: &str = "koharu_samts_encoder.onnx";
 pub const HEAD: &str = "koharu_samts_text_head.onnx";
 
 /// The measured CPU path peaked at 8.55 GB. Reserve room for its tensors,
-/// decoded page and editor before loading either graph.
+/// decoded page and editor before loading either graph. Below it the mask
+/// still loads, slower, and the run says so when it starts; it is a warning,
+/// never a refusal.
 pub const MIN_ROOM_BYTES: u64 = 10_000_000_000;
+
+/// The `models.kind.*` key the interface names this model under, in notices
+/// and the loaded-models tab alike.
+pub const LABEL_KEY: &str = "models.kind.samTs";
 
 /// A single SAM graph pair can consume most of a desktop's available memory.
 /// Runs and review previews share this permit for the whole session lifetime;
@@ -326,7 +332,6 @@ impl SamTsSession {
         let permit = SessionPermit::acquire(cancel)?;
         crate::residency::evict_for_sam();
         cancel.check()?;
-        ensure_memory_room(crate::memory::room())?;
         let started = Instant::now();
         let profiles = (backend == crate::accel::Accelerator::WebGpu)
             .then(|| ProfileCleanup([profile_prefix("encoder"), profile_prefix("head")]));
@@ -822,7 +827,6 @@ pub fn infer_webgpu_cancellable(page: &Raster, graph_dir: &Path, cancel: &Cancel
     let _permit = SessionPermit::acquire(cancel)?;
     crate::residency::evict_for_sam();
     cancel.check()?;
-    ensure_memory_room(crate::memory::room())?;
     let sampler = MetalSampler::start();
     let profiles = ProfileCleanup([profile_prefix("encoder"), profile_prefix("head")]);
     let started = Instant::now();

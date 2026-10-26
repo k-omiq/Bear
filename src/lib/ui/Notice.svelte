@@ -38,7 +38,9 @@
 
   function start() {
     const left = duration - elapsed
-    if (timer !== undefined || left <= 0) return
+    // An endless duration is a notice that stays until closed. setTimeout
+    // would read Infinity as 0 and close it at once.
+    if (timer !== undefined || left <= 0 || !Number.isFinite(left)) return
     startedAt = Date.now()
     timer = setTimeout(onclose, left)
   }

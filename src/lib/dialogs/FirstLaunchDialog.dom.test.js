@@ -29,17 +29,17 @@ import {
   setCloudAllowed,
   setDetection,
   setDenoiseTarget,
-  setDetectorModels,
+  setDetectionMode,
   setFluxModel,
   setOcrRescue,
   setSidecarPath,
-  setTextPolicy,
   setTheme,
 } from '../state/session.svelte.js'
 import { resetDenoiseState } from '../state/denoise.svelte.js'
 import FirstLaunchDialog from './FirstLaunchDialog.svelte'
 import SettingsDialog from './SettingsDialog.svelte'
 import { DEFAULT_FLUX_MODEL, FIRST_LAUNCH_STEPS, RUNTIME_ID } from './firstlaunch.js'
+import { SAM_GRAPH_BYTES } from '../model/pipelines.js'
 import {
   configureFirstLaunchCloud,
   dismissFirstLaunch,
@@ -181,6 +181,8 @@ function makeBackend() {
     sidecarAvailable: vi.fn(async () => ({ available: false, reasonKey: null })),
     about: vi.fn(async () => ({ appVersion: '0.0.0-test', facts: [] })),
     discardPartial: vi.fn(async () => true),
+    readMeasurement: vi.fn(async () => ({ saved: null, current: null, running: false })),
+    measureBackends: vi.fn(async () => ({ saved: null, current: null, running: false })),
   }
 }
 
@@ -198,9 +200,8 @@ beforeEach(() => {
   setFluxModel('')
   setSidecarPath('')
   for (const language of ['ja', 'zh', 'ko']) setDetection(language, 'ctd-rtdetr')
+  setDetectionMode('normal')
   setOcrRescue(false)
-  setTextPolicy('legacy_gate')
-  setDetectorModels(['ctd', 'rtSmall'])
   setAnalysisTarget('rtFull', 'local')
   setAnalysisTarget('samTs', 'local')
   session.firstLaunchOffered = false
@@ -250,14 +251,14 @@ function finishGroup(id, error = null) {
   backend.emit({ type: 'model-progress', id, downloaded: 0, total: null, done: true, error })
 }
 
-describe('the ten steps', () => {
-  it('offers the Discord invite after cloud, then continues to dependencies', async () => {
+describe('the steps', () => {
+  it('offers the Discord invite after cloud, then continues to the runtime', async () => {
     const rendered = open('community')
     const invite = rendered.getByRole('link', { name: t('onboarding.community.join') })
     expect(invite.getAttribute('href')).toBe('https://discord.gg/3ueKc9PaX7')
     expect(invite.getAttribute('target')).toBe('_blank')
     await press(rendered, t('onboarding.action.next'))
-    expect(firstLaunch.step).toBe('dependencies')
+    expect(firstLaunch.step).toBe('runtime')
   })
 
   it('come in order, forward and back, and walking through changes nothing', async () => {
@@ -275,7 +276,7 @@ describe('the ten steps', () => {
     expect(firstLaunch.step).toBe('welcome')
     await press(rendered, t('onboarding.action.start'))
 
-    // theme, token (skipped), background, detection, cleaning, denoise, cloud (not now), community, dependencies
+    // theme, token (skipped), background, detection, cleaning, denoise, cloud (not now), community, runtime, dependencies
     for (const action of [
       'onboarding.action.next',
       'onboarding.action.skipStep',
@@ -284,6 +285,7 @@ describe('the ten steps', () => {
       'onboarding.action.next',
       'onboarding.action.next',
       'onboarding.action.notNow',
+      'onboarding.action.next',
       'onboarding.action.next',
     ]) {
       seen.push(heading(rendered).textContent?.trim())
@@ -294,8 +296,12 @@ describe('the ten steps', () => {
     setFirstLaunchStep('downloads')
     await waitFor(() => expect(heading(rendered).textContent?.trim()).toBe(t('onboarding.downloads.heading')))
     seen.push(heading(rendered).textContent?.trim())
+    setFirstLaunchStep('measure')
+    await waitFor(() => expect(heading(rendered).textContent?.trim()).toBe(t('onboarding.measure.heading')))
+    seen.push(heading(rendered).textContent?.trim())
 
     expect(seen).toEqual(HEADINGS.map((key) => t(key)))
+    expect(backend.measureBackends).not.toHaveBeenCalled()
     expect(backend.downloadRuntime).not.toHaveBeenCalled()
     expect(backend.downloadModel).not.toHaveBeenCalled()
     expect(backend.writeSettings).not.toHaveBeenCalled()
@@ -387,117 +393,132 @@ describe('the setting steps', () => {
 })
 
 describe('the pipelines', () => {
-  it('drop a skipped language, and every detection file once all three are skipped', async () => {
-    const rendered = open('detection')
-    expect(rendered.queryByText('RT-DETR v2 + COO + SAM-TS')).toBeNull()
-    for (const language of ['Japanese', 'Chinese', 'Korean']) {
-      await fireEvent.change(rendered.getByLabelText(t('pipelines.detectorFor', { language })), { target: { value: '' } })
+  /** The Normal and Advanced cards. @param {ReturnType<typeof render>} rendered @param {'normal'|'advanced'} mode */
+  const card = (rendered, mode) => /** @type {HTMLElement} */ (rendered.container.querySelector(`[data-detection-mode] [data-mode="${mode}"]`))
+
+  /** The catalogue with everything Advanced downloads already here, so only the lettering mask is left. */
+  function advancedFilesHere() {
+    const answer = view({ runtimeInstalled: true })
+    for (const model of answer.models) {
+      if (['textDetector', 'hayaiVision', 'hayaiDecoder', 'hayaiTokenizer'].includes(model.id)) {
+        Object.assign(model, { installed: true, path: `/app-data/models/${model.fileName}`, sha256Ok: true })
+      }
     }
-    setFirstLaunchStep('dependencies')
-    // The runtime and the cleaner; no detection file.
-    await waitFor(() =>
-      expect(rendered.getByText(t('onboarding.dependencies.total', { count: 2, bytes: RUNTIME_BYTES + REDRAW_BYTES }))).toBeTruthy(),
-    )
+    return answer
+  }
+
+  it('ask only Normal or Advanced: no languages, no reader, no model boxes', () => {
+    const rendered = open('detection')
+    const group = rendered.getByRole('radiogroup', { name: t('pipelines.detection') })
+    expect([...group.querySelectorAll('[role="radio"]')].map((radio) => /** @type {HTMLElement} */ (radio).dataset.mode))
+      .toEqual(['normal', 'advanced'])
+    expect(card(rendered, 'normal').getAttribute('aria-checked')).toBe('true')
+    expect(rendered.queryByLabelText(t('pipelines.detectorFor', { language: 'Japanese' }))).toBeNull()
+    expect(rendered.queryByRole('checkbox', { name: t('pipelines.workflow.ocrRescue') })).toBeNull()
+    expect(rendered.queryByRole('checkbox', { name: 'Comic Text Detector (CTD)' })).toBeNull()
+    expect(rendered.queryByText(t('pipelines.cloudCombo'))).toBeNull()
+    // Where it runs is Advanced's question, and only once a cloud GPU can be used.
+    expect(rendered.container.querySelector('[data-detect-on]')).toBeNull()
   })
 
-  it('offer the text reader as an opt-in switch, not a detector, and fetch it only when ticked', async () => {
+  it('say on each card what it still downloads, the lettering mask counted for Advanced', () => {
     const rendered = open('detection')
-    for (const language of ['Japanese', 'Chinese', 'Korean']) {
-      const select = /** @type {HTMLSelectElement} */ (rendered.getByLabelText(t('pipelines.detectorFor', { language })))
-      expect([...select.options].map((option) => option.value)).toEqual(['ctd-rtdetr', ''])
-    }
-    const rescue = /** @type {HTMLInputElement} */ (rendered.getByRole('checkbox', { name: t('pipelines.workflow.ocrRescue') }))
-    expect(rescue.checked).toBe(false)
-    // The cost is said before the box is ticked, and read with it.
-    const cost = t('settings.detection.rescue.size', { bytes: HAYAI_BYTES })
-    expect(rendered.getByText(cost)).toBeTruthy()
-    expect(rescue.getAttribute('aria-describedby')?.split(' ').map((id) => document.getElementById(id)?.textContent))
-      .toEqual([t('pipelines.workflow.ocrRescueDescription'), cost])
+    expect(card(rendered, 'normal').textContent).toContain(t('detectionMode.download', { bytes: DETECTION_BYTES }))
+    expect(card(rendered, 'advanced').textContent)
+      .toContain(t('detectionMode.download', { bytes: 95 + HAYAI_BYTES + SAM_GRAPH_BYTES }))
+  })
 
-    await fireEvent.click(rescue)
+  it('say what this computer has under the cards, from the backend’s memory figures', async () => {
+    backend.listWorkflowCapabilities.mockResolvedValue({ samInstalled: false, totalBytes: 16e9, roomBytes: 6e9 })
+    const rendered = open('detection')
+    const machine = t('detectionMode.machine', { total: 16e9, free: 6e9 })
+    await waitFor(() => expect(rendered.container.querySelector('.hardware')?.textContent).toContain(machine))
+    // Too little room for the lettering mask: a first setup stays on Normal.
+    expect(session.detectionMode).toBe('normal')
+  })
+
+  it('start a first setup on Advanced only when the free memory allows the lettering mask', async () => {
+    backend.listWorkflowCapabilities.mockResolvedValue({ samInstalled: false, totalBytes: 32e9, roomBytes: 10e9 })
+    const rendered = open('detection')
+    await waitFor(() => expect(session.detectionMode).toBe('advanced'))
+    expect(card(rendered, 'advanced').getAttribute('aria-checked')).toBe('true')
+    cleanup()
+    resetFirstLaunch()
+    setDetectionMode('normal')
+
+    // Just under the line, Normal.
+    session.firstLaunchOffered = false
+    backend.listWorkflowCapabilities.mockResolvedValue({ samInstalled: false, totalBytes: 32e9, roomBytes: 10e9 - 1 })
+    open('detection')
+    await waitFor(() => expect(firstLaunch.memory?.roomBytes).toBe(10e9 - 1))
+    expect(session.detectionMode).toBe('normal')
+    cleanup()
+    resetFirstLaunch()
+
+    // A replay keeps what was chosen since, whatever the memory.
+    session.firstLaunchOffered = true
+    backend.listWorkflowCapabilities.mockResolvedValue({ samInstalled: false, totalBytes: 32e9, roomBytes: 12e9 })
+    expect(offerFirstLaunch(view(), { force: true })).toBe(true)
+    render(FirstLaunchDialog)
+    await waitFor(() => expect(firstLaunch.memory?.roomBytes).toBe(12e9))
+    expect(session.detectionMode).toBe('normal')
+  })
+
+  it('store a chosen mode at once, the reader with it, and fetch what that mode needs', async () => {
+    const rendered = open('detection')
+    await fireEvent.click(card(rendered, 'advanced'))
+    expect(session.detectionMode).toBe('advanced')
+    expect(session.detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
+    expect(session.textPolicy).toBe('all_text')
     expect(session.ocrRescue).toBe(true)
     setFirstLaunchStep('dependencies')
-    await waitFor(() =>
-      expect(rendered.getByText(t('onboarding.dependencies.total', { count: 9, bytes: PRICE + HAYAI_BYTES }))).toBeTruthy(),
-    )
-  })
+    // The runtime, CTD, the reader's three files, the lettering mask and the
+    // redraw; Advanced takes all text, so no script gate.
+    await waitFor(() => expect(rendered.getByText(t('onboarding.dependencies.total', {
+      count: 7, bytes: RUNTIME_BYTES + 95 + HAYAI_BYTES + SAM_GRAPH_BYTES + REDRAW_BYTES,
+    }))).toBeTruthy())
 
-  it('keep the text reader once Japanese is skipped, since it reads Chinese and Korean too', async () => {
-    setOcrRescue(true)
-    const rendered = open('detection')
-    await fireEvent.change(rendered.getByLabelText(t('pipelines.detectorFor', { language: 'Japanese' })), { target: { value: '' } })
+    setFirstLaunchStep('detection')
+    await waitFor(() => expect(card(rendered, 'normal')).toBeTruthy())
+    await fireEvent.click(card(rendered, 'normal'))
+    expect(session.detectorModels).toEqual(['ctd', 'rtSmall'])
+    expect(session.ocrRescue).toBe(false)
     setFirstLaunchStep('dependencies')
-    // Chinese and Korean still need the detector pair, the script gate and the reader.
-    await waitFor(() => expect(rendered.getByText(t('onboarding.dependencies.total', { count: 9, bytes: PRICE + HAYAI_BYTES }))).toBeTruthy())
+    await waitFor(() => expect(rendered.getByText(t('onboarding.dependencies.total', { count: 6, bytes: PRICE }))).toBeTruthy())
   })
 
-  it('fetch the text reader but not the script gate when a replay finds all-text review chosen', async () => {
-    setTextPolicy('all_text')
-    setOcrRescue(true)
-    const rendered = open('detection')
-    expect(rendered.getByText(t('settings.detection.setupAllText'))).toBeTruthy()
-    setFirstLaunchStep('dependencies')
-    // The stored CTD + small RT choice remains selected; all-text omits the gate, not the reader.
-    await waitFor(() =>
-      expect(rendered.getByText(t('onboarding.dependencies.total', { count: 7, bytes: RUNTIME_BYTES + 95 + 11 + REDRAW_BYTES + HAYAI_BYTES }))).toBeTruthy(),
-    )
-  })
-
-  // The boxes and the reader are this computer's choice; a cloud GPU always
-  // uses all four, and one line says so.
-  it('say that the cloud GPU uses all four models, beside this computer’s own choice', async () => {
-    const rendered = open('detection')
-    expect(rendered.getByText(t('pipelines.cloudCombo'))).toBeTruthy()
-    expect(rendered.queryByText(t('onboarding.detection.cloudNow'))).toBeNull()
-    expect(rendered.getByRole('checkbox', { name: 'Comic Text Detector (CTD)' }).checked).toBe(true)
-    expect(rendered.getByRole('checkbox', { name: 'SAM-TS-L lettering mask' }).checked).toBe(false)
-    expect(rendered.getByRole('checkbox', { name: t('pipelines.workflow.ocrRescue') }).checked).toBe(false)
-  })
-
-  // A replay with Detect on already Cloud GPU shows that choice, the fixed
-  // four in place of the picker, and downloads what that run needs here: CTD,
-  // the script gate under legacy, and the text reader, never Small or a cloud
-  // stage, and installs no SAM-TS-L. The stored local choice is kept.
+  // A replay with Detect on already Cloud GPU shows that choice and downloads
+  // what that run needs here: CTD and the text reader, never Small, the gate
+  // (Advanced takes all text) or a cloud stage, and installs no SAM-TS-L.
   it('fetch only CTD and the text reader when a replay finds detection on the cloud GPU', async () => {
-    setDetectorModels(['rtSmall', 'samTs'])
+    setDetectionMode('advanced')
+    setOcrRescue(false)
     setAnalysisTarget('rtFull', 'cloud')
     setAnalysisTarget('samTs', 'cloud')
     const rendered = open('detection')
     expect(/** @type {HTMLInputElement} */ (rendered.getByRole('radio', { name: t('tools.option.onCloud') })).checked).toBe(true)
-    expect(rendered.getByText(t('onboarding.detection.cloudNow'))).toBeTruthy()
-    for (const name of ['Comic Text Detector (CTD)', 'Ogkalu comic text & bubble detector (Full)', 'SAM-TS-L lettering mask', t('pipelines.workflow.ocrRescue')]) {
-      const box = /** @type {HTMLInputElement} */ (rendered.getByRole('checkbox', { name }))
-      expect(box.checked, name).toBe(true)
-      expect(box.disabled, name).toBe(true)
-    }
-    expect(rendered.queryByRole('checkbox', { name: 'Ogkalu comic text & bubble detector (Small)' })).toBeNull()
     setFirstLaunchStep('dependencies')
-    // The runtime, CTD, the gate pair, the reader's three files and the redraw.
+    // The runtime, CTD, the reader's three files and the redraw.
     await waitFor(() => expect(rendered.getByText(t('onboarding.dependencies.total', {
-      count: 8, bytes: RUNTIME_BYTES + 95 + 4 + 1 + HAYAI_BYTES + REDRAW_BYTES,
+      count: 6, bytes: RUNTIME_BYTES + 95 + HAYAI_BYTES + REDRAW_BYTES,
     }))).toBeTruthy())
     startFirstLaunchDownloads()
-    expect(firstLaunch.queue).toEqual([RUNTIME_ID, 'textDetector', 'scriptGate', 'scriptGateLabels',
-      'hayaiVision', 'hayaiDecoder', 'hayaiTokenizer', 'inpainter'])
+    expect(firstLaunch.queue).toEqual([RUNTIME_ID, 'textDetector', 'hayaiVision', 'hayaiDecoder', 'hayaiTokenizer', 'inpainter'])
     expect(backend.installSamTs).not.toHaveBeenCalled()
-    expect(session.detectorModels).toEqual(['rtSmall', 'samTs'])
+    expect(session.detectionMode).toBe('advanced')
     expect(session.ocrRescue).toBe(false)
   })
 
-  it('show the optional page review and provisional cleaner ratings', async () => {
-    const rendered = open('detection')
-    expect(rendered.getByText(t('settings.detection.setupReview'))).toBeTruthy()
-    expect(rendered.queryByText(t('settings.detection.setupAllText'))).toBeNull()
-    setFirstLaunchStep('cleaning')
+  it('show provisional cleaner ratings', async () => {
+    const rendered = open('cleaning')
     await waitFor(() => expect(rendered.getByRole('heading', { level: 1 }).textContent).toBe(t('onboarding.cleaning.heading')))
     expect(rendered.getByText(t('pipelines.workflow.ratingsNote'))).toBeTruthy()
   })
 
-  it('installs a selected SAM-TS-L model during onboarding', async () => {
-    setDetectorModels(['samTs'])
-    setTextPolicy('all_text')
-    const rendered = open('detection', view({ runtimeInstalled: true }))
-    expect(rendered.getByRole('checkbox', { name: 'SAM-TS-L lettering mask' }).checked).toBe(true)
+  it('installs the lettering mask Advanced needs during onboarding', async () => {
+    setDetectionMode('advanced')
+    const rendered = open('detection', advancedFilesHere())
+    expect(card(rendered, 'advanced').getAttribute('aria-checked')).toBe('true')
     firstLaunch.cleaners = { 'lama-manga': false }
     startFirstLaunchDownloads()
     await waitFor(() => expect(backend.installSamTs).toHaveBeenCalledTimes(1))
@@ -511,9 +532,8 @@ describe('the pipelines', () => {
     const off = vi.fn()
     backend.onSamInstallProgress = vi.fn(async (handler) => { report = handler; return off })
     backend.installSamTs = vi.fn(() => new Promise((resolve) => { finish = () => resolve(true) }))
-    setDetectorModels(['samTs'])
-    setTextPolicy('all_text')
-    const rendered = open('detection', view({ runtimeInstalled: true }))
+    setDetectionMode('advanced')
+    const rendered = open('detection', advancedFilesHere())
     firstLaunch.cleaners = { 'lama-manga': false }
     startFirstLaunchDownloads()
     await waitFor(() => expect(backend.installSamTs).toHaveBeenCalledTimes(1))
@@ -552,7 +572,6 @@ describe('the dependencies step', () => {
     const rendered = open('dependencies')
     expect(rendered.getByText(t('onboarding.dependencies.body', { platform: t('onboarding.dependencies.platform.macArm') }))).toBeTruthy()
     expect(rendered.getByText('1.28.0')).toBeTruthy()
-    expect(rendered.getByText(t('onboarding.dependencies.afterRuntime'))).toBeTruthy()
     expect(rendered.getByText(t('onboarding.dependencies.total', { count: 6, bytes: PRICE }))).toBeTruthy()
     // Download is the primary action and names its price.
     expect(rendered.getByRole('button', { name: new RegExp(t('onboarding.dependencies.start')) })).toBeTruthy()
@@ -566,12 +585,89 @@ describe('the dependencies step', () => {
     expect(rendered.getByText(t('onboarding.dependencies.needs', { items: 'CUDA 12, cuDNN 9' }))).toBeTruthy()
   })
 
-  it('asks the runtime for its graphics acceleration once it is installed', async () => {
-    const rendered = open('dependencies', view({ runtimeInstalled: true }))
-    await waitFor(() => expect(backend.listAccelerators).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(rendered.getByText(t('onboarding.dependencies.cpuOnly'))).toBeTruthy())
+})
+
+describe('the runtime step', () => {
+  it('names the one build a platform gets, and leaves the paths until the runtime is here', async () => {
+    const rendered = open('runtime')
+    expect(rendered.getByText(t('onboarding.runtime.only', { build: t('settings.runtime.build.standard'), version: '1.28.0' }))).toBeTruthy()
+    expect(rendered.getByText(t('settings.runtime.machine.pathsLater'))).toBeTruthy()
+    expect(backend.listAccelerators).not.toHaveBeenCalled()
   })
 
+  it('asks an installed runtime which paths it can use, and lists only those in its build', async () => {
+    const rendered = open('runtime', view({ runtimeInstalled: true }))
+    await waitFor(() => expect(backend.listAccelerators).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(rendered.getByText(t('accel.cpu'))).toBeTruthy())
+    expect(rendered.getByText(t('settings.runtime.machine.pathReady'))).toBeTruthy()
+    // CoreML is not in this build: no row says so.
+    expect(rendered.queryByText(t('accel.coreml'))).toBeNull()
+  })
+
+  it('offers a choice of build where there is more than one, and keeps the one picked', async () => {
+    const answer = view()
+    answer.runtime.platform = 'windows-x64'
+    answer.runtime.flavour = 'directml'
+    answer.runtime.flavours = [
+      { id: 'directml', ortVersion: '1.28.0', bytes: 1, isDefault: true, userInstalled: [] },
+      { id: 'cuda12', ortVersion: '1.28.0', bytes: 1, isDefault: false, userInstalled: ['CUDA 12', 'cuDNN 9'] },
+    ]
+    backend.runtimeReport = vi.fn(async () => ({ wanted: null, toolkits: [], cudnn: [], gpus: [], verdictKey: null, verdictHave: null, verdictNeed: null, recommended: null }))
+    const chosen = structuredClone(answer)
+    chosen.runtime.flavour = 'cuda12'
+    chosen.runtime.bytes = 455
+    backend.listModels.mockImplementation(async () => chosen)
+    const rendered = open('runtime', answer)
+    await waitFor(() => expect(backend.runtimeReport).toHaveBeenCalled())
+    await fireEvent.click(rendered.getByRole('radio', { name: /CUDA 12/ }))
+    await waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith(expect.objectContaining({ runtimeFlavour: 'cuda12' })))
+    await waitFor(() => expect(firstLaunch.plan?.runtime.flavour).toBe('cuda12'))
+    expect(firstLaunch.plan?.files[RUNTIME_ID].bytes).toBe(455)
+  })
+
+  it('fetches the new build when the one this setup already fetched is changed', async () => {
+    const answer = view()
+    answer.runtime.platform = 'windows-x64'
+    answer.runtime.flavour = 'directml'
+    answer.runtime.flavours = [
+      { id: 'directml', ortVersion: '1.28.0', bytes: 1, isDefault: true, userInstalled: [] },
+      { id: 'cuda12', ortVersion: '1.28.0', bytes: 1, isDefault: false, userInstalled: [] },
+    ]
+    backend.runtimeReport = vi.fn(async () => ({ wanted: null, toolkits: [], cudnn: [], gpus: [], verdictKey: null, verdictHave: null, verdictNeed: null, recommended: null }))
+    // DirectML is on disk now; the catalogue says so, and says it is not CUDA 12.
+    const after = structuredClone(answer)
+    after.runtime.flavour = 'cuda12'
+    after.runtime.installed = true
+    after.runtime.installedFlavour = 'directml'
+    backend.listModels.mockImplementation(async () => after)
+    const rendered = open('runtime', answer)
+    firstLaunch.status = { [RUNTIME_ID]: 'done' }
+    firstLaunch.accelerators = accelerators('auto')
+    await fireEvent.click(rendered.getByRole('radio', { name: /CUDA 12/ }))
+    await waitFor(() => expect(firstLaunch.plan?.runtime.flavour).toBe('cuda12'))
+    expect(firstLaunch.status[RUNTIME_ID]).toBeUndefined()
+    expect(firstLaunch.plan?.files[RUNTIME_ID].installed).toBe(false)
+    // The paths were the old build's answer.
+    expect(firstLaunch.accelerators).toBeNull()
+  })
+
+  it('holds the build still while the runtime is downloading', async () => {
+    const answer = view()
+    answer.runtime.platform = 'windows-x64'
+    answer.runtime.flavour = 'directml'
+    answer.runtime.flavours = [
+      { id: 'directml', ortVersion: '1.28.0', bytes: 1, isDefault: true, userInstalled: [] },
+      { id: 'cuda12', ortVersion: '1.28.0', bytes: 1, isDefault: false, userInstalled: [] },
+    ]
+    backend.runtimeReport = vi.fn(async () => ({ wanted: null, toolkits: [], cudnn: [], gpus: [], verdictKey: null, verdictHave: null, verdictNeed: null, recommended: null }))
+    const rendered = open('runtime', answer)
+    firstLaunch.current = RUNTIME_ID
+    await waitFor(() => expect(/** @type {HTMLInputElement} */ (rendered.getByRole('radio', { name: /CUDA 12/ })).disabled).toBe(true))
+    expect(backend.writeSettings).not.toHaveBeenCalled()
+  })
+})
+
+describe('the measure step', () => {
   it('offers the Hayai reader a provider only when the run reads', async () => {
     const answer = accelerators('auto')
     answer.models = [
@@ -582,13 +678,13 @@ describe('the dependencies step', () => {
     backend.listAccelerators.mockImplementation(async () => answer)
     const label = t('settings.accel.modelLabel', { model: 'Hayai OCR v2.5 Nova' })
 
-    const off = open('dependencies', view({ runtimeInstalled: true }))
+    const off = open('measure', view({ runtimeInstalled: true }))
     await waitFor(() => expect(off.getByText('Comic Text Detector (CTD)')).toBeTruthy())
     expect(off.queryByText('Hayai OCR v2.5 Nova')).toBeNull()
     cleanup()
 
     setOcrRescue(true)
-    const on = open('dependencies', view({ runtimeInstalled: true }))
+    const on = open('measure', view({ runtimeInstalled: true }))
     await waitFor(() => expect(on.getByText('Hayai OCR v2.5 Nova')).toBeTruthy())
     expect(on.getByLabelText(label)).toBeTruthy()
   })
@@ -624,6 +720,9 @@ describe('the downloads', () => {
     await waitFor(() => expect(firstLaunch.running).toBe(false))
     expect(Object.values(firstLaunch.status).every((status) => status === 'done')).toBe(true)
 
+    // The measurement comes after the downloads, and New project is the way out of it.
+    await press(rendered, t('onboarding.action.next'))
+    expect(firstLaunch.step).toBe('measure')
     await press(rendered, t('home.action.newProject'))
     expect(firstLaunch.open).toBe(false)
     await waitFor(() => expect(app.modals.map((modal) => modal.kind)).toEqual(['newProject']))
@@ -690,8 +789,10 @@ describe('the downloads', () => {
 
   it('store a detection choice at once, with nothing to download', async () => {
     const rendered = open('detection')
-    await fireEvent.change(rendered.getByLabelText(t('pipelines.detectorFor', { language: 'Korean' })), { target: { value: '' } })
-    expect(session.detection.ko).toBeNull()
+    await fireEvent.click(/** @type {HTMLElement} */ (rendered.container.querySelector('[data-detection-mode] [data-mode="advanced"]')))
+    expect(session.detectionMode).toBe('advanced')
+    expect(backend.downloadModel).not.toHaveBeenCalled()
+    expect(backend.installSamTs).not.toHaveBeenCalled()
   })
 
   it('never fetch a file that arrived through Settings before the press', async () => {
@@ -746,43 +847,40 @@ describe('Detect on in setup', () => {
   const places = (rendered) => [...rendered.container.querySelectorAll('[data-detect-on] input[type="radio"]')]
     .map((input) => /** @type {HTMLInputElement} */ (input).value)
 
-  it('offers This computer only until a cloud GPU can be used, and says where to set one up', () => {
+  it('asks Detect on only for Advanced, and only once a cloud GPU can be used', async () => {
     const rendered = open('detection')
-    expect(places(rendered)).toEqual(['local'])
+    expect(rendered.container.querySelector('[data-detect-on]')).toBeNull()
+    await fireEvent.click(/** @type {HTMLElement} */ (rendered.container.querySelector('[data-detection-mode] [data-mode="advanced"]')))
+    expect(rendered.container.querySelector('[data-detect-on]')).toBeNull()
+    setCloudAllowed(true)
+    await waitFor(() => expect(places(rendered)).toEqual(['local', 'cloud']))
     expect(/** @type {HTMLInputElement} */ (rendered.getByRole('radio', { name: t('tools.option.onLocal') })).checked).toBe(true)
-    const later = rendered.getByText(t('onboarding.detection.cloudLater'))
-    expect(rendered.container.querySelector('[data-detect-on]')?.getAttribute('aria-describedby')).toBe(later.id)
   })
 
-  it('swaps the picker for the fixed four on Cloud GPU, counts its downloads, and gives the own choice back', async () => {
+  it('counts a cloud run’s downloads on Cloud GPU, and brings detection back with Normal', async () => {
     setCloudAllowed(true)
+    setDetectionMode('advanced')
     setOcrRescue(false)
     const rendered = open('detection')
     expect(places(rendered)).toEqual(['local', 'cloud'])
-    expect(rendered.queryByText(t('onboarding.detection.cloudLater'))).toBeNull()
 
     await fireEvent.click(rendered.getByRole('radio', { name: t('tools.option.onCloud') }))
     await waitFor(() => expect(session.analysisTargets).toEqual({ rtFull: 'cloud', samTs: 'cloud' }))
     expect(backend.writeSettings).toHaveBeenCalledWith({ analysisTargets: { rtFull: 'cloud', samTs: 'cloud' } })
-    expect(rendered.queryByRole('checkbox', { name: 'Ogkalu comic text & bubble detector (Small)' })).toBeNull()
-    const sam = /** @type {HTMLInputElement} */ (rendered.getByRole('checkbox', { name: 'SAM-TS-L lettering mask' }))
-    expect(sam.checked && sam.disabled).toBe(true)
-    const reader = /** @type {HTMLInputElement} */ (rendered.getByRole('checkbox', { name: t('pipelines.workflow.ocrRescue') }))
-    expect(reader.checked && reader.disabled).toBe(true)
-    expect(rendered.getByText(t('pipelines.cloudCombo'))).toBeTruthy()
 
     setFirstLaunchStep('dependencies')
+    // The runtime, CTD, the reader the cloud run uses and the redraw.
     await waitFor(() => expect(rendered.getByText(t('onboarding.dependencies.total', {
-      count: 8, bytes: RUNTIME_BYTES + 95 + 4 + 1 + HAYAI_BYTES + REDRAW_BYTES,
+      count: 6, bytes: RUNTIME_BYTES + 95 + HAYAI_BYTES + REDRAW_BYTES,
     }))).toBeTruthy())
 
+    // Normal runs only here, so choosing it brings detection back.
     setFirstLaunchStep('detection')
-    await waitFor(() => expect(rendered.getByRole('radio', { name: t('tools.option.onLocal') })).toBeTruthy())
-    await fireEvent.click(rendered.getByRole('radio', { name: t('tools.option.onLocal') }))
+    await waitFor(() => expect(rendered.container.querySelector('[data-detection-mode] [data-mode="normal"]')).toBeTruthy())
+    await fireEvent.click(/** @type {HTMLElement} */ (rendered.container.querySelector('[data-detection-mode] [data-mode="normal"]')))
     await waitFor(() => expect(session.analysisTargets).toEqual({ rtFull: 'local', samTs: 'local' }))
-    expect(/** @type {HTMLInputElement} */ (rendered.getByRole('checkbox', { name: 'Ogkalu comic text & bubble detector (Small)' })).checked).toBe(true)
-    expect(/** @type {HTMLInputElement} */ (rendered.getByRole('checkbox', { name: t('pipelines.workflow.ocrRescue') })).checked).toBe(false)
     expect(session.detectorModels).toEqual(['ctd', 'rtSmall'])
+    expect(rendered.container.querySelector('[data-detect-on]')).toBeNull()
   })
 
   // The Cloud step comes after Detection, so a first-run user who sets up a
@@ -797,14 +895,17 @@ describe('Detect on in setup', () => {
     expect(places(rendered)).toEqual(['local', 'cloud'])
     await fireEvent.click(rendered.getByRole('radio', { name: t('tools.option.onCloud') }))
     await waitFor(() => expect(session.analysisTargets).toEqual({ rtFull: 'cloud', samTs: 'cloud' }))
+    // A cloud run is Advanced: all text, so no script gate, and the reader.
+    expect(session.detectionMode).toBe('advanced')
     setFirstLaunchStep('dependencies')
     await waitFor(() => expect(rendered.getByText(t('onboarding.dependencies.total', {
-      count: 8, bytes: RUNTIME_BYTES + 95 + 4 + 1 + HAYAI_BYTES + REDRAW_BYTES,
+      count: 6, bytes: RUNTIME_BYTES + 95 + HAYAI_BYTES + REDRAW_BYTES,
     }))).toBeTruthy())
   })
 
   it('puts a refused choice back and says so', async () => {
     setCloudAllowed(true)
+    setDetectionMode('advanced')
     backend.writeSettings.mockRejectedValue(new Error('disk'))
     const rendered = open('detection')
     await fireEvent.click(rendered.getByRole('radio', { name: t('tools.option.onCloud') }))

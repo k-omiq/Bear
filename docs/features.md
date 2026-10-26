@@ -164,15 +164,22 @@ region it reads with confidence as English, or another language in Latin letters
 cleaned, under either text policy. You can still clean a held region by hand. The choice is captured when a run
 starts, so a resumed run keeps it. Without the reader nothing reads the text, and the setting does nothing.
 
-### Detection model combinations and page review
+### Detection modes and page review
 
-Settings and first-launch setup let you select Comic Text Detector (CTD), one RT-DETR v2 profile (small or full),
-SAM-TS-L, or any combination of these. The selected models drive Text cleanup. Under **All text**, a run cleans found
-text across the page without the script checker or Japanese OCR reader; under **Legacy script filtering**, the source
-language Clean/Skip choices still apply. RT-only detection can produce broad region masks, so inspect results before
-export. The full RT-DETR graph is a managed download. SAM-TS-L setup downloads its pinned checkpoint and source,
-exports the two ONNX graphs locally, and verifies their hashes before installation. A local graph import remains
-available if automatic setup fails. COO SFX detection is not part of this version.
+Detection is one choice, asked in first-launch setup and changeable in Settings > Models and in the Text cleanup panel:
+
+- **Normal** runs Comic Text Detector (CTD) and the small RT-DETR v2 profile with the script checker. It cleans text in
+  speech bubbles in the chosen languages and holds text outside bubbles, sound effects included, for review. Needs about
+  8 GB of memory; a run peaks near 2.5 GB.
+- **Advanced** runs CTD, the full RT-DETR v2 profile and the SAM-TS-L lettering mask, with the Hayai OCR text reader on,
+  and cleans all text, sound effects included, without the script checker. Needs about 16 GB of memory with 10 GB free.
+  With less free memory it still runs, slower, and a notice that stays until closed offers to stop the run. A cloud GPU
+  run is always Advanced.
+
+Neither needs a graphics card. Each card shows what is still to download, and choosing a mode downloads what it is
+missing at once. SAM-TS-L setup downloads its pinned checkpoint and source, exports the two ONNX graphs locally, and
+verifies their hashes before installation. The model files, the text reader, Clean English text, the language filter
+and the text-shaped review are under **More options**. COO SFX detection is not part of this version.
 
 Text cleanup, with the legacy script filter and optional Japanese OCR rescue above, stays the default for every
 project. **Text-shaped review** is a separate, optional mode on the current page of a library chapter.

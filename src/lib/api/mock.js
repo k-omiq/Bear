@@ -522,6 +522,11 @@ export function createMockBackend(options = {}) {
     // nothing requires, so a browser that showed it installed would never draw
     // an optional row with something to download.
     missingModels: new Set(['inpainter', 'ocrEncoder', 'ocrDecoder', 'ocrVocab', 'hayaiVision', 'hayaiDecoder', 'hayaiTokenizer', 'pageDenoiseModel', 'pageDenoiseSeams']),
+    /**
+     * Free memory the native side would measure, in bytes. Under the 10 GB the
+     * lettering mask wants, so Advanced runs show their low-memory warning.
+     */
+    memoryRoomBytes: 6 * 1024 ** 3,
     /** What `verifyModel` has digested this session. @type {Map<string, boolean>} */
     verifiedModels: new Map(),
     /** Downloads in flight, by id, holding the timer that advances each one. @type {Map<string, any>} */
@@ -1726,6 +1731,7 @@ export function createMockBackend(options = {}) {
     { id: 'scriptGate', fileName: 'image-script-identification-osd_lstm.onnx', bytes: 3_722_314, sha256: 'b18e0c1479d9eb67394993098f7e1079c9a93ef6f7b0416ee333fccb865c6e72', kindKey: 'models.kind.scriptGate', requiredBy: ['autoClean'] },
     { id: 'scriptGateLabels', fileName: 'image-script-identification-osd_labels.json', bytes: 1_163, sha256: 'a1888156b005065039c356e13a7bbef1ec454b45bf6aaf18c11f4a59b1ee35c5', kindKey: 'models.kind.scriptGateLabels', requiredBy: ['autoClean'] },
     { id: 'balloonDetector', fileName: 'comic-text-and-bubble-detector-detector-v4-s_int8.onnx', bytes: 11_120_765, sha256: '5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79', kindKey: 'models.kind.balloonDetector', requiredBy: ['autoClean'] },
+    { id: 'fullRt', fileName: 'detector.onnx', bytes: 168_481_531, sha256: '065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195', kindKey: 'models.kind.fullRt', requiredBy: ['review'] },
     // The gate's rescue reader. `requiredBy` is empty in the real table too,
     // and that is the row's whole character: it is downloadable and nothing
     // needs it, so it belongs in Settings and not in the first-launch offer.
@@ -1768,12 +1774,172 @@ export function createMockBackend(options = {}) {
    * recognise.
    */
   function runtimeFlavour() {
+    if (MOCK_MACHINE === 'windows-nvidia') {
+      const chosen = MOCK_WINDOWS_FLAVOURS.find((row) => row.id === state.settings.runtimeFlavour) ?? MOCK_WINDOWS_FLAVOURS[0]
+      return { version: chosen.ortVersion, flavour: chosen.id, bytes: chosen.bytes }
+    }
     return { version: '1.28.0', flavour: 'stock', bytes: MOCK_RUNTIME_BYTES }
   }
 
   const MOCK_MODELS_DIR = '/Users/you/Library/Application Support/manga-cleaner/models'
   const MOCK_RUNTIME_DIR = '/Users/you/Library/Application Support/manga-cleaner/runtimes'
   const MOCK_RUNTIME_ID = 'runtime'
+
+  // FIXTURE KNOB: `?machine=windows-nvidia` is a Windows PC with an NVIDIA
+  // card and two CUDA toolkits, 12.6 and 13.0, but cuDNN for 13.0 only - the
+  // side-by-side case the Runtime screen exists to explain. The CUDA 12 build
+  // then reads "no cuDNN for CUDA 12" and the CUDA 13 build is recommended.
+  // Without it the machine is the Apple one `listModels` reports, which has no
+  // CUDA at all. Inert inside a Tauri window, which asks the machine.
+  const MOCK_MACHINE = new URLSearchParams(globalThis.location?.search ?? '').get('machine') === 'windows-nvidia'
+    ? 'windows-nvidia'
+    : 'mac'
+
+  /** The Windows builds, with the real archive sizes from `runtime/package.rs`. */
+  const MOCK_WINDOWS_FLAVOURS = [
+    { id: 'directml', ortVersion: '1.28.0', bytes: 215_000_000, isDefault: true, userInstalled: [] },
+    { id: 'cuda12', ortVersion: '1.28.0', bytes: 455_000_000, isDefault: false, userInstalled: ['CUDA 12.8+', 'cuDNN 9.x'] },
+    { id: 'cuda13', ortVersion: '1.28.0', bytes: 366_000_000, isDefault: false, userInstalled: ['CUDA 13.x', 'cuDNN 9.x'] },
+  ]
+
+  /**
+   * `runtimeReport`'s answer for a wanted CUDA major, worked out the way
+   * `cuda::Report::verdict` does: an adapter, a driver new enough, a complete
+   * toolkit of that major, a cuDNN that names it or names none.
+   *
+   * @param {number|null} wanted
+   */
+  function mockCudaReport(wanted) {
+    const nvidia = MOCK_MACHINE === 'windows-nvidia'
+    const gpus = nvidia ? [{ name: 'NVIDIA GeForce RTX 4070', driver: '581.42' }] : []
+    const toolkits = nvidia
+      ? [
+          { major: 13, minor: 0, dir: 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.0\\bin\\x64', missing: [] },
+          // Older than the CUDA 12 build's floor (12.8), so that build reads as
+          // too old here.
+          { major: 12, minor: 6, dir: 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.6\\bin', missing: [] },
+        ]
+      : []
+    const cudnn = nvidia ? [{ cudaMajor: 13, dir: 'C:\\Program Files\\NVIDIA\\CUDNN\\v9.14\\bin\\13.0\\x64', missing: [] }] : []
+    // `cuda::minor_floor`.
+    const MINOR_FLOOR = { 12: 8 }
+    const newEnough = (toolkit) => MINOR_FLOOR[toolkit.major] === undefined || toolkit.minor === null || toolkit.minor >= MINOR_FLOOR[toolkit.major]
+    const verdict = (major) => {
+      if (!gpus.length) return 'accel.cudaCheck.noGpu'
+      const complete = toolkits.filter((toolkit) => toolkit.major === major && !toolkit.missing.length)
+      if (!complete.length) return 'accel.cudaCheck.noToolkit'
+      if (!complete.some(newEnough)) return 'accel.cudaCheck.toolkitTooOld'
+      if (!cudnn.some((install) => !install.missing.length && (install.cudaMajor === null || install.cudaMajor === major))) return 'accel.cudaCheck.noCudnn'
+      return 'accel.cudaCheck.ready'
+    }
+    const verdictKey = wanted === null ? null : verdict(wanted)
+    const tooOld = verdictKey === 'accel.cudaCheck.toolkitTooOld'
+    const newest = toolkits.find((toolkit) => toolkit.major === wanted)
+    return {
+      wanted,
+      toolkits,
+      cudnn,
+      gpus,
+      verdictKey,
+      verdictHave: tooOld ? `${newest.major}.${newest.minor}` : null,
+      verdictNeed: tooOld ? `${wanted}.${MINOR_FLOOR[wanted]}` : null,
+      recommended: [['cuda13', 13], ['cuda12', 12]].find(([, major]) => verdict(major) === 'accel.cudaCheck.ready')?.[0] ?? null,
+    }
+  }
+
+  /**
+   * The six rows `models.rs` places, with the backends each can take on the
+   * Windows machine `listAccelerators` reports. `table` is where Automatic
+   * lands without a measurement, and `timings` is what a measurement here
+   * finds: `[backend, run ms, load ms]`, or `[backend, null, null, reason]`
+   * for one that fails.
+   */
+  const MOCK_PLACED_MODELS = [
+    { id: 'ctd', modelName: 'Comic Text Detector (CTD)', modelKey: 'models.kind.textDetector', supported: ['cpu', 'directml', 'cuda', 'webgpu'], table: 'directml',
+      timings: [['cpu', 412, 90], ['directml', 118, 1450], ['webgpu', 171, 820]] },
+    { id: 'rtSmall', modelName: 'Ogkalu comic text & bubble detector (Small)', modelKey: 'models.kind.balloonDetector', supported: ['cpu', 'directml', 'cuda'], table: 'cpu',
+      timings: [['cpu', 81, 85], ['directml', 64, 1210]] },
+    { id: 'rtFull', modelName: 'Ogkalu comic text & bubble detector (Full)', modelKey: 'models.kind.fullRt', supported: ['cpu', 'directml', 'cuda'], table: 'cpu',
+      timings: [['cpu', 236, 240], ['directml', 74, 1630]] },
+    { id: 'samTs', modelName: 'SAM-TS-L lettering mask', modelKey: 'models.kind.samTs', supported: ['cpu'], table: 'cpu',
+      timings: [['cpu', 5120, 3900]] },
+    { id: 'inpainter', modelName: 'LaMa Manga', modelKey: 'models.kind.inpainter', supported: ['cpu', 'directml', 'cuda', 'webgpu'], table: 'directml',
+      timings: [['cpu', 2310, 1700], ['directml', 402, 2900], ['webgpu', null, null, 'accel.declined.failed']] },
+    { id: 'hayai', modelName: 'Hayai OCR v2.5 Nova', modelKey: 'models.kind.hayai', supported: ['cpu', 'cuda'], table: 'cpu',
+      timings: [['cpu', 188, 350]] },
+  ]
+
+  /** The saved measurement, as `measurements.json` would hold it. */
+  let mockMeasurement = null
+  let mockMeasuring = null
+
+  /**
+   * One model's row, as `accelerators_configured` builds it.
+   *
+   * @param {typeof MOCK_PLACED_MODELS[number]} model
+   * @param {string} preference - the whole-app setting
+   * @param {Array<[string, boolean, boolean, boolean, string|null]>} providers
+   */
+  function placeMockModel(model, preference, providers) {
+    const requested = state.settings.modelAccelerators?.[model.id] ?? preference
+    const available = (id) => providers.some(([provider, ok]) => provider === id && ok)
+    const backendStatus = providers.map(([id, ok, , , reasonKey]) => {
+      const supported = model.supported.includes(id)
+      return {
+        id,
+        supported,
+        installed: id === 'cpu' || ok || reasonKey === 'accel.declined.missingRuntime',
+        available: supported && (id === 'cpu' || ok),
+        verified: false,
+        reasonKey: supported && !(id === 'cpu' || ok) ? reasonKey : null,
+      }
+    })
+    const winner = mockMeasurement?.models.find((row) => row.id === model.id)?.winner ?? null
+    let acceleratorId = model.table
+    let noteKey = model.table === 'cpu' ? null : 'accel.chosen.unmeasured'
+    let declinedKey = null
+    let declinedId = null
+    let neededBytes = null
+    let roomBytes = null
+    if (requested === 'auto' && winner) {
+      acceleratorId = winner
+      noteKey = 'accel.chosen.measuredHere'
+    } else if (requested === 'cpu') {
+      acceleratorId = 'cpu'
+      noteKey = null
+    } else if (requested !== 'auto') {
+      noteKey = null
+      if (!model.supported.includes(requested) || !available(requested)) {
+        acceleratorId = 'cpu'
+        declinedKey = 'accel.declined.unavailable'
+        declinedId = requested
+      } else if (model.id === 'inpainter' && requested === 'directml') {
+        // The memory decline, with the two figures the sentence cannot carry.
+        acceleratorId = 'cpu'
+        declinedKey = 'accel.declined.memory'
+        declinedId = 'directml'
+        neededBytes = 6_034_997_248
+        roomBytes = 3_221_225_472
+      } else {
+        acceleratorId = requested
+      }
+    }
+    return {
+      id: model.id,
+      modelName: model.modelName,
+      modelKey: model.modelKey,
+      preference: requested,
+      supportedIds: model.supported,
+      backendStatus,
+      acceleratorId,
+      labelKey: `accel.${acceleratorId}`,
+      noteKey,
+      declinedKey,
+      declinedId,
+      neededBytes,
+      roomBytes,
+    }
+  }
 
   // FIXTURE KNOB: `?firstLaunch=1` empties this machine, which is the only way
   // to see the first-launch offer in a browser - the fixture above is a
@@ -3060,7 +3226,12 @@ export function createMockBackend(options = {}) {
         cloudClean = { grantId: cloudCleanGrant, capUsd: grant.capUsd, target: grant.target }
         solidBubblesOnly = false
       }
-      return startRun({
+      // As the native run start does: a local lettering mask with less free
+      // memory than it wants warns and runs anyway.
+      // The notice names its run, so its Stop button stops that one.
+      const localSam = Array.isArray(detectorModels) && detectorModels.includes('samTs') && !capabilities.length
+      const lowMemory = localSam && mode !== 'clean' && state.memoryRoomBytes < 10_000_000_000
+      const handle = await startRun({
         scope,
         chapterId,
         pageIndex,
@@ -3081,6 +3252,10 @@ export function createMockBackend(options = {}) {
         solidBubblesOnly,
         cloudClean,
       })
+      if (lowMemory && handle?.runId && !handle.alreadyRunning) {
+        notify('notice.run.lowMemory', { free: state.memoryRoomBytes, runId: handle.runId }, 'warn')
+      }
+      return handle
     },
 
     async cancelRun({ runId } = {}) {
@@ -3763,7 +3938,7 @@ export function createMockBackend(options = {}) {
       // A user who went looking for the graphics card, which is what makes the
       // declines below reachable: a decline is a *forced* provider not being
       // used, and `auto` forces nothing.
-      const preference = 'directml'
+      const preference = typeof state.settings.accelerator === 'string' ? state.settings.accelerator : 'directml'
       return {
         preference,
         providers: providers.map(([id, available, measured, active, reasonKey]) => ({
@@ -3775,60 +3950,7 @@ export function createMockBackend(options = {}) {
           active,
           selected: id === preference,
         })),
-        models: [
-          ['models.kind.textDetector', 'directml', 'accel.chosen.unmeasured'],
-          ['models.kind.balloonDetector', 'directml', 'accel.chosen.unmeasured'],
-          // Declined for its shape rather than for the machine's size: a
-          // provider with no kernel for one of the graph's operators splits the
-          // model instead of failing, and the split runs slower than the CPU
-          // does whole.
-          [
-            'models.kind.scriptGate',
-            'cpu',
-            null,
-            'accel.declined.partitioned',
-            'directml',
-            null,
-            null,
-          ],
-          // The memory decline, with the two figures the sentence cannot carry.
-          // 5.62 GB is what this rung was measured to need; 3 GB is what this
-          // machine had room for.
-          [
-            'models.kind.inpainter',
-            'cpu',
-            'accel.chosen.unmeasured',
-            'accel.declined.memory',
-            'directml',
-            6_034_997_248,
-            3_221_225_472,
-          ],
-          // The rescue reader. On the CPU wherever it runs - a graphics
-          // provider builds both its graphs and is still the wrong answer, see
-          // `accel::OCR` - so it is not a decline and carries no note. It is
-          // listed whether or not the weights are installed, because the panel
-          // answers "where would each model run", not "what is loaded".
-          ['models.kind.ocr', 'cpu'],
-        ].map(
-          ([
-            modelKey,
-            id,
-            noteKey = null,
-            declinedKey = null,
-            declinedId = null,
-            neededBytes = null,
-            roomBytes = null,
-          ]) => ({
-            modelKey,
-            acceleratorId: id,
-            labelKey: `accel.${id}`,
-            noteKey,
-            declinedKey,
-            declinedId,
-            neededBytes,
-            roomBytes,
-          }),
-        ),
+        models: MOCK_PLACED_MODELS.map((model) => placeMockModel(model, preference, providers)),
       }
     },
 
@@ -3876,8 +3998,9 @@ export function createMockBackend(options = {}) {
           readOnly: false,
           downloading: state.downloads.has(MOCK_RUNTIME_ID),
           partialBytes: state.partials.get(MOCK_RUNTIME_ID) ?? null,
-          // The machine the mock reports is an Apple silicon one.
-          platform: 'macos-arm64',
+          // The machine the mock reports is an Apple silicon one, unless the
+          // `machine` knob says otherwise.
+          platform: MOCK_MACHINE === 'windows-nvidia' ? 'windows-x64' : 'macos-arm64',
           ...runtimeFlavour(),
           // What is *installed*, which the native side reads from a record the
           // install writes beside the libraries. The mock has
@@ -3886,13 +4009,13 @@ export function createMockBackend(options = {}) {
           // honesty as the flavour picker below.
           ...(state.missingModels.has(MOCK_RUNTIME_ID)
             ? { installedFlavour: null, installedVersion: null }
-            : { installedFlavour: 'stock', installedVersion: '1.28.0' }),
+            : { installedFlavour: MOCK_MACHINE === 'windows-nvidia' ? 'directml' : 'stock', installedVersion: '1.28.0' }),
           // One flavour, because the machine the mock reports is an Apple one
           // and macOS publishes one build. The picker is therefore *not* drawn
           // in a browser, which is the honest thing: a Windows-only control
           // faked here would be a control nobody could check against a real
           // answer.
-          flavours: [
+          flavours: MOCK_MACHINE === 'windows-nvidia' ? MOCK_WINDOWS_FLAVOURS : [
             {
               id: 'stock',
               ortVersion: '1.28.0',
@@ -3918,6 +4041,74 @@ export function createMockBackend(options = {}) {
         // `null` is what the native side answers for both other locations too.
         tokenStoreReason: null,
       }
+    },
+
+    /**
+     * The CUDA picture for one build, from `mockCudaReport`. `rescan` reads
+     * the same fixed machine again, because there is no disk here to change.
+     */
+    async runtimeReport({ flavour = null, rescan = false } = {}) {
+      void rescan
+      await delay(timing.method)
+      const major = typeof flavour === 'string' && flavour.startsWith('cuda') ? Number(flavour.slice(4)) : null
+      return mockCudaReport(Number.isFinite(major) ? major : null)
+    },
+
+    async readMeasurement() {
+      await delay(timing.method)
+      return { saved: structuredClone(mockMeasurement), current: mockMeasurement ? true : null, running: mockMeasuring !== null }
+    },
+
+    /**
+     * A measurement as a chain of timers: one `measure-progress` per backend
+     * timed, then exactly one carrying `done`, then the saved answer - the
+     * order `measurement::measure_backends` keeps. Models that are not
+     * installed are skipped, as the native side skips them.
+     */
+    async measureBackends() {
+      if (mockMeasuring) throw new Error('notice.measure.running')
+      if (runner.isRunning()) throw new Error('notice.measure.busy')
+      const plan = MOCK_PLACED_MODELS.filter((model) => model.id !== 'inpainter' || !state.missingModels.has('inpainter'))
+      const total = plan.reduce((sum, model) => sum + model.timings.length, 0)
+      const run = { cancelled: false }
+      mockMeasuring = run
+      let step = 0
+      try {
+        const models = []
+        for (const model of plan) {
+          const results = []
+          for (const [backend, medianMs, loadMs, error] of model.timings) {
+            if (run.cancelled) throw new Error('notice.measure.cancelled')
+            step += 1
+            emit({ type: 'measure-progress', model: model.id, backend, step, total, done: false })
+            await delay(Math.max(1, Math.round(480 / speed)))
+            results.push(medianMs === null
+              ? { backend, loadMs: null, firstMs: null, medianMs: null, runs: null, error }
+              : { backend, loadMs, firstMs: Math.round(medianMs * 1.4), medianMs, runs: medianMs > 1500 ? 3 : 10, error: null })
+          }
+          const timed = results.filter((row) => row.medianMs !== null)
+          const best = Math.min(...timed.map((row) => row.medianMs))
+          const winner = timed.filter((row) => row.medianMs <= best * 1.05).sort((a, b) => a.loadMs - b.loadMs)[0]?.backend ?? null
+          models.push({ id: model.id, winner, results })
+        }
+        mockMeasurement = { version: 1, measuredAt: Date.now(), setup: 'mock', models }
+        return { saved: structuredClone(mockMeasurement), current: true, running: false }
+      } finally {
+        mockMeasuring = null
+        emit({ type: 'measure-progress', model: '', backend: '', step: 0, total: 0, done: true })
+      }
+    },
+
+    async cancelMeasurement() {
+      if (!mockMeasuring || mockMeasuring.cancelled) return false
+      mockMeasuring.cancelled = true
+      return true
+    },
+
+    async forgetMeasurement() {
+      await delay(timing.method)
+      mockMeasurement = null
+      return { saved: null, current: null, running: mockMeasuring !== null }
     },
 
     /**
@@ -4015,7 +4206,9 @@ export function createMockBackend(options = {}) {
         ctdInstalled: !state.missingModels.has('textDetector'), rtInstalled: !state.missingModels.has('balloonDetector'), fullRtInstalled: fullRt,
         fullRtManaged: fullRt, fullRtRevision: '16e8a622f91fabc6b5b65c96d32d1183f8843546',
         fullRtFile: { name: 'detector.onnx', bytes: 168481531, sha256: '065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195' },
-        samInstalled: sam, samMemoryReady: true, samManaged: sam,
+        samInstalled: sam, samMemoryReady: state.memoryRoomBytes >= 10_000_000_000, samManaged: sam,
+        // This computer's memory, as the native side measures it.
+        totalBytes: 16 * 1024 ** 3, roomBytes: state.memoryRoomBytes,
         samRevision: '5dd97423e0fbf2404264979136d47e8101144046',
         samFiles: sam ? [
           { name: 'koharu_samts_encoder.onnx', bytes: 1_335_305_985, sha256: '9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe' },

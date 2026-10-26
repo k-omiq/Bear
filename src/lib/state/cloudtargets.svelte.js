@@ -28,7 +28,7 @@ import { untrack } from 'svelte'
 import { getBackend } from '../api/backend.js'
 import { CLOUD_STAGES, detectsOnCloud } from '../model/pipelines.js'
 import { cloud, cloudCleanAvailable, cloudCleanMissingKey, cloudUsable, refreshCloudReadiness } from './cloud.svelte.js'
-import { session, setAnalysisTarget, setCleanTarget } from './session.svelte.js'
+import { session, setAnalysisTarget, setCleanTarget, setDetectionMode, setOcrRescue } from './session.svelte.js'
 import { savedSetting, writeSettingsSerialized } from './settingswrite.js'
 
 export const targets = $state({
@@ -191,16 +191,54 @@ export async function chooseStageTarget(stageId, target) {
 /**
  * Where detection runs, from the tool: both cloud-capable models at once,
  * selected or not, so a model selected later does not quietly run elsewhere.
+ * A cloud GPU run is always Advanced (`pipelines.js#runDetection`), so
+ * choosing the cloud chooses Advanced too.
  *
  * @param {string} target - `local` or `cloud`
  * @returns {Promise<boolean>} whether anything was saved
  */
 export async function chooseDetectTarget(target) {
   if (target !== 'local' && target !== 'cloud') return false
+  const before = modeNow()
+  if (target === 'cloud') setDetectionMode('advanced')
   const previous = { ...session.analysisTargets }
   if (CLOUD_STAGES.every((stage) => previous[/** @type {'rtFull'|'samTs'} */ (stage.id)] === target)) return false
   for (const stage of CLOUD_STAGES) setAnalysisTarget(stage.id, target)
-  return saveAnalysisTargets(previous)
+  const saved = await saveAnalysisTargets(previous)
+  // A refused save put detection back on this computer; the mode the cloud
+  // chose goes back with it.
+  if (!saved && target === 'cloud' && targets.detectSaveFailed) putModeBack(before)
+  return saved
+}
+
+/**
+ * Normal or Advanced, from setup, Settings or the tool. Normal runs only on
+ * this computer, so choosing it brings detection back from the cloud GPU.
+ *
+ * @param {string} mode - `normal` or `advanced`
+ * @returns {Promise<boolean>} whether where detection runs was saved; the mode itself always is
+ */
+export async function chooseDetectionMode(mode) {
+  targets.detectSaveFailed = false
+  const before = modeNow()
+  setDetectionMode(mode)
+  if (session.detectionMode !== 'normal') return false
+  const saved = await chooseDetectTarget('local')
+  // Normal cannot stay on the cloud GPU: a refused move back to this
+  // computer keeps the mode that was chosen before.
+  if (!saved && targets.detectSaveFailed && detectsOnCloud(session.analysisTargets)) putModeBack(before)
+  return saved
+}
+
+/** The mode and the text reader now, which a refused save puts back. */
+function modeNow() {
+  return { mode: session.detectionMode, reads: session.ocrRescue }
+}
+
+/** @param {{mode: string, reads: boolean}} before */
+function putModeBack({ mode, reads }) {
+  setDetectionMode(mode)
+  setOcrRescue(reads)
 }
 
 /**

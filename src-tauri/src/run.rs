@@ -1189,6 +1189,12 @@ pub trait Cleaner: Send {
     }
 }
 
+/// The notice an engine fault is said with. On the CPU already, "choose CPU"
+/// is no remedy, so that sentence and its Performance button are left out.
+fn fault_notice_key(accel_key: &str) -> &'static str {
+    if accel_key == accel::Accelerator::Cpu.label_key() { "notice.run.engineFaultCpu" } else { "notice.run.engineFault" }
+}
+
 /// What a page failed on when it failed on a **model** rather than on the page.
 ///
 /// Windows is the machine this exists for. A Direct3D device can be reset by
@@ -1679,6 +1685,10 @@ pub struct Pipeline {
     app_data: Option<PathBuf>,
     full_rt: Option<FullRegions>,
     sam: Option<sam_ts::SamTsSession>,
+    /// The lettering mask failed to open this run. Every later page is masked
+    /// from CTD's segmentation instead, as Normal does, rather than failing:
+    /// a page cleaned without the sound effects beats a page left queued.
+    sam_unavailable: bool,
     analysis_cancel: Arc<sam_ts::Cancellation>,
     full_rt_preference: Preference,
     sam_preference: Preference,
@@ -2225,6 +2235,7 @@ impl Pipeline {
             app_data,
             full_rt: None,
             sam: None,
+            sam_unavailable: false,
             analysis_cancel: Arc::new(sam_ts::Cancellation::default()),
             full_rt_preference: preference,
             sam_preference: preference,
@@ -2567,20 +2578,62 @@ impl Pipeline {
         } else if self.detection_models.sam {
             let backend = match self.sam_preference {
                 Preference::Force(accel::Accelerator::WebGpu) => accel::Accelerator::WebGpu,
-                Preference::Automatic | Preference::CpuOnly | Preference::Force(accel::Accelerator::Cpu) => accel::Accelerator::Cpu,
+                // Automatic stays on the CPU unless this machine measured
+                // WebGPU faster (`crate::measurement`).
+                Preference::Automatic => accel::measured_winner(crate::models::SAM_PROFILE_NAME)
+                    .filter(|winner| *winner == accel::Accelerator::WebGpu)
+                    .unwrap_or(accel::Accelerator::Cpu),
+                Preference::CpuOnly | Preference::Force(accel::Accelerator::Cpu) => accel::Accelerator::Cpu,
                 _ => return Err(format!("The SAM-TS-L lettering mask does not support the requested backend {:?}", self.sam_preference)),
             };
-            if self.sam.is_none() {
+            if self.sam.is_none() && !self.sam_unavailable {
                 let app_data = self.app_data.as_deref().ok_or("App model directory unavailable")?;
                 let dir = crate::model_workflows::graph_dir(app_data).ok_or("The SAM-TS-L lettering mask graphs are not installed")?;
-                self.sam = Some(sam_ts::SamTsSession::open_on(&dir, backend, &self.analysis_cancel).inspect_err(|detail| {
-                    self.fault = Some(EngineFault { model_key: accel::DETECTOR.label_key,
-                        accel_key: backend.label_key(), detail: detail.clone() });
-                })?);
+                // A measured WebGPU that will not open today goes back to the
+                // CPU Automatic used before it was measured, rather than
+                // masking the whole run from CTD.
+                let measured = self.sam_preference == Preference::Automatic && backend == accel::Accelerator::WebGpu;
+                let opened = sam_ts::SamTsSession::open_on(&dir, backend, &self.analysis_cancel).or_else(|detail| {
+                    if !measured || self.analysis_cancel.check().is_err() {
+                        return Err(detail);
+                    }
+                    eprintln!("manga-cleaner: SAM-TS-L did not open on the measured WebGPU, using the CPU: {detail}");
+                    sam_ts::SamTsSession::open_on(&dir, accel::Accelerator::Cpu, &self.analysis_cancel)
+                });
+                match opened {
+                    Ok(session) => self.sam = Some(session),
+                    // A cancel is the run stopping, not the mask failing.
+                    Err(detail) if self.analysis_cancel.check().is_err() => return Err(detail),
+                    Err(detail) => self.give_up_sam(&detail),
+                }
             }
-            Some(self.sam.as_mut().unwrap().infer(crop, &self.analysis_cancel)?.mask)
+            // A session that opened short of memory can still fail on a page.
+            // That is the same fault as one that would not open, and is met the
+            // same way, rather than failing this page and every page after it.
+            let inferred = self.sam.as_mut().map(|sam| sam.infer(crop, &self.analysis_cancel));
+            match inferred {
+                Some(Ok(inference)) => Some(inference.mask),
+                Some(Err(detail)) if self.analysis_cancel.check().is_err() => return Err(detail),
+                Some(Err(detail)) => {
+                    self.give_up_sam(&detail);
+                    None
+                }
+                None => None,
+            }
         } else { None };
         Ok((balloons, detection, lettering))
+    }
+
+    /// The lettering mask failed this run, opening or on a page. Its session
+    /// is dropped, which gives its memory back, and every later page is masked
+    /// from CTD's segmentation. The notice says so once. No engine fault is
+    /// left behind: the page goes on, and a fault in the slot would name the
+    /// mask if the page later failed on something else.
+    fn give_up_sam(&mut self, detail: &str) {
+        eprintln!("manga-cleaner: the SAM-TS-L lettering mask failed, masking from CTD: {detail}");
+        self.sam = None;
+        self.sam_unavailable = true;
+        crate::events::notice("notice.run.samFallback", serde_json::json!({}), "warn");
     }
 
     /// Group one segment's evidence and encode its evidence file. `scope`
@@ -5967,7 +6020,7 @@ impl<'w> Walker<'w> {
                 if let Some(fault) = cleaner.last_fault() {
                     if self.announced.insert((fault.model_key, fault.accel_key)) {
                         emit(events::notice_event(
-                            "notice.run.engineFault",
+                            fault_notice_key(fault.accel_key),
                             serde_json::json!({
                                 "modelKey": fault.model_key,
                                 "accelKey": fault.accel_key,
@@ -7245,6 +7298,15 @@ fn start_with_models(
             slot.area_page_index = entries.first().map(|entry| entry.page_index as u32);
         }
     }
+    // A measurement times the models on this machine for a minute or two; a
+    // run beside it would share the processor or the GPU, slow both, and save
+    // timings taken under that load as the winners. Checked
+    // before any cloud grant is spent, so a refused run costs no consent.
+    if crate::measurement::running() {
+        events::notice("notice.measure.cleanWaits", serde_json::json!({}), "warn");
+        return Ok(RunHandle::default());
+    }
+
     // The pages this run will read with a detector. An Auto page with
     // detections waiting is cleaned from them and never sent anywhere.
     let to_detect = pages_to_detect(&entries, mode);
@@ -7322,6 +7384,17 @@ fn start_with_models(
         .is_none_or(|dir| crate::model_workflows::verify_graphs(&dir).is_err()) {
         events::notice("notice.run.modelsMissing", serde_json::json!({ "model": crate::models::SAM_TS_NAME }), "warn");
         return Ok(RunHandle::default());
+    }
+    // Advanced with less free memory than the lettering mask wants still
+    // runs, slower; the user is told once, at the start, and may stop it.
+    // No answer from the platform is not low memory, so it says nothing then.
+    if mode != RunMode::Clean && detection_models.sam && !cloud.targets.sam {
+        if let Some(free) = memory::room().filter(|bytes| *bytes < sam_ts::MIN_ROOM_BYTES) {
+            // The run it is about, so its Stop button stops that run and the
+            // notice can be closed when that run ends.
+            events::notice("notice.run.lowMemory",
+                serde_json::json!({ "free": free, "runId": reservation.run_id }), "warn");
+        }
     }
     // Read before the pipeline is opened, because the pipeline's sessions are
     // built here and the accelerator is a property of a session rather than of

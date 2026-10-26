@@ -48,6 +48,9 @@ pub(crate) const RT_FULL_NAME: &str = "Ogkalu comic text & bubble detector (Full
 pub(crate) const SAM_TS_NAME: &str = "SAM-TS-L lettering mask";
 /// The text reader (`hayai`), named as its download is.
 pub(crate) const HAYAI_NAME: &str = "Hayai OCR v2.5 Nova";
+/// The lettering mask's selector profile name, which a saved measurement's
+/// winner is registered under (`crate::measurement`).
+pub(crate) const SAM_PROFILE_NAME: &str = "sam-ts-l";
 
 /// One loaded thing.
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -137,7 +140,7 @@ pub fn unload_model(id: u64) -> bool {
 
 /// The `accel.` prefix is how the catalogue namespaces a provider; the setting
 /// stores what is left, so `accel.webgpu` is written down as `webgpu`.
-fn accelerator_id(accelerator: Accelerator) -> &'static str {
+pub(crate) fn accelerator_id(accelerator: Accelerator) -> &'static str {
     accelerator.label_key().strip_prefix("accel.").unwrap_or(accelerator.label_key())
 }
 
@@ -273,20 +276,19 @@ pub fn list_accelerators(app: tauri::AppHandle) -> Accelerators {
             }
         }
     }
+    // Low memory room is the lettering mask's warning, never a refusal: it
+    // loads with less, slower, and the run says so when it starts. A backend
+    // stays available, and the placement's `declined_key` carries the figure.
     for model in &mut view.models {
-        let memory_ready = model.id != "samTs"
-            || cleaner_core::sam_ts::ensure_memory_room(cleaner_core::memory::room()).is_ok();
         for status in &mut model.backend_status {
             let accelerator = accel::KNOWN.into_iter().find(|a| accelerator_id(*a) == status.id).unwrap();
             status.installed = runtime_loaded && (accelerator == Accelerator::Cpu || accelerator.is_installed());
             status.verified &= verified_runtime;
-            status.available = status.supported && runtime_loaded && memory_ready && accelerator.is_available()
+            status.available = status.supported && runtime_loaded && accelerator.is_available()
                 && (model.id != "samTs" || accelerator != Accelerator::WebGpu
                     || cleaner_core::sam_ts::built_in_webgpu_available());
             if status.supported && !status.available {
-                status.reason_key = if runtime_loaded && !memory_ready {
-                    Some("accel.declined.memory")
-                } else if runtime_loaded {
+                status.reason_key = if runtime_loaded {
                     accelerator.availability().err().map(accel::Unavailable::reason_key)
                         .or(Some("accel.declined.noDevice"))
                 } else { Some("accel.declined.unavailable") };
@@ -378,7 +380,7 @@ fn accelerators_configured(
     // SAM's automatic route deliberately uses CPU. Its model category and
     // memory requirement differ from the much smaller RT-DETR graph.
     const SAM_PROFILE: accel::ModelProfile = accel::ModelProfile {
-        name: "sam-ts-l", label_key: "models.kind.textDetector", cpu_islands_on: &[],
+        name: SAM_PROFILE_NAME, label_key: cleaner_core::sam_ts::LABEL_KEY, cpu_islands_on: &[],
         measured_better: &[], unmeasured_candidates: &[],
         measured_peak_rss: &[(Accelerator::Cpu, 8_547_975_168)], partitioned_on: &[],
     };
@@ -418,13 +420,11 @@ fn accelerators_configured(
             let backend_status = accel::KNOWN.into_iter().map(|accelerator| {
                 let supported = supports_model(id, accelerator, host);
                 let installed = accelerator == Accelerator::Cpu || available.contains(&accelerator);
-                let available = supported && installed && sam_memory_ready;
+                let available = supported && installed;
                 ModelBackendStatus {
                     id: accelerator_id(accelerator), supported, installed, available,
                     verified: verified_model(id, accelerator, verified_here),
-                    reason_key: (supported && !available).then_some(if !sam_memory_ready {
-                        "accel.declined.memory"
-                    } else { "accel.declined.unavailable" }),
+                    reason_key: (supported && !available).then_some("accel.declined.unavailable"),
                 }
             }).collect::<Vec<_>>();
             (
@@ -697,14 +697,15 @@ mod tests {
             Some(cleaner_core::sam_ts::MIN_ROOM_BYTES), Some(WINDOWS));
         let sam = view.models.iter().find(|row| row.id == "samTs").unwrap();
         assert_eq!(sam.accelerator_id, "cpu");
-        assert_eq!(sam.model_key, "models.kind.textDetector");
+        assert_eq!(sam.model_key, "models.kind.samTs");
         let cpu = sam.backend_status.iter().find(|row| row.id == "cpu").unwrap();
         assert!(cpu.available && cpu.supported);
         assert!(!cpu.verified);
 
         let short = accelerators(accel::Preference::Automatic, &[Accelerator::WebGpu], Some(1), Some(MAC));
         let sam = short.models.iter().find(|row| row.id == "samTs").unwrap();
-        assert!(sam.backend_status.iter().all(|row| !row.available));
+        // Short of room is said, never refused: the CPU stays available.
+        assert!(sam.backend_status.iter().find(|row| row.id == "cpu").unwrap().available);
         assert_eq!(sam.declined_key, Some("accel.declined.memory"));
         assert_eq!(sam.needed_bytes, Some(cleaner_core::sam_ts::MIN_ROOM_BYTES));
     }
