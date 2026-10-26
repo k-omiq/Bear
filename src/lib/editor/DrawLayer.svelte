@@ -241,9 +241,12 @@
   const heldSelection = $derived(draft.selection?.pageId === page.id && draft.selection.tool === tool ? draft.selection : null)
   /**
    * A press that adjusts the held selection rather than drawing one: the
-   * ghost, a new line, or one of its ends, and where the press began.
+   * ghost, a new line, or one of its ends, and where the press began. A new
+   * line (`fresh`) waits for the press to travel `TAP_SLOP` from `down` before
+   * it replaces the line held, so a tap leaves that line as it was; `drawn`
+   * says it has.
    *
-   * @type {{kind: 'ghost'|'start'|'end', from: {x: number, y: number}, offset: {x: number, y: number}, fresh?: boolean}|null}
+   * @type {{kind: 'ghost'|'start'|'end', from: {x: number, y: number}, offset: {x: number, y: number}, fresh?: boolean, drawn?: boolean, down?: {x: number, y: number}}|null}
    */
   let adjusting = null
   /** How close, in client pixels, a press must land to a line's end to take it. */
@@ -461,7 +464,7 @@
 
     // A held selection is adjusted from inside it, and replaced from outside.
     if (heldSelection && !active) {
-      const grip = adjustment(point)
+      const grip = adjustment(point, event)
       if (grip) {
         if (!claimGesture()) {
           event.preventDefault()
@@ -594,9 +597,10 @@
    * starts a new one.
    *
    * @param {{x: number, y: number}} point
+   * @param {PointerEvent} event
    * @returns {typeof adjusting}
    */
-  function adjustment(point) {
+  function adjustment(point, event) {
     if (!heldSelection) return null
     const inside = (/** @type {{x: number, y: number, w: number, h: number}} */ box) =>
       point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h
@@ -613,8 +617,8 @@
     if (near(heldSelection.end)) return { kind: 'end', from: point, offset: none }
     if (near(heldSelection.start)) return { kind: 'start', from: point, offset: none }
     if (!inside(heldSelection.bbox)) return null
-    setLine(point, point)
-    return { kind: 'end', from: point, offset: none, fresh: true }
+    // Nothing changes yet: the press may be refused, or be a tap.
+    return { kind: 'end', from: point, offset: none, fresh: true, down: { x: event.clientX, y: event.clientY } }
   }
 
   /**
@@ -628,6 +632,12 @@
     if (adjusting.kind === 'ghost') {
       moveGhost({ x: adjusting.offset.x + point.x - adjusting.from.x, y: adjusting.offset.y + point.y - adjusting.from.y })
       return
+    }
+    if (adjusting.fresh && !adjusting.drawn) {
+      const down = adjusting.down ?? { x: event.clientX, y: event.clientY }
+      if (Math.hypot(event.clientX - down.x, event.clientY - down.y) <= TAP_SLOP) return
+      adjusting.drawn = true
+      setLine(adjusting.from, adjusting.from)
     }
     const fixed = adjusting.kind === 'end' ? heldSelection.start : heldSelection.end
     if (!fixed) return
@@ -728,9 +738,10 @@
     if (adjusting) {
       const point = at(event)
       if (point) adjust(point, event)
-      // A tap inside the selection is not a line: there is no direction in it.
+      // A tap inside the selection never drew a line, and keeps the one held.
+      // A drag that came back to where it began has no direction in it.
       const selection = draft.selection
-      if (adjusting.fresh && selection?.start && selection.end
+      if (adjusting.drawn && selection?.start && selection.end
         && selection.start.x === selection.end.x && selection.start.y === selection.end.y) {
         selection.start = null
         selection.end = null

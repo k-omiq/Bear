@@ -1588,6 +1588,25 @@ describe('the Brush tool in paint mode draws and writes color, opacity, and flow
     await fireEvent.input(flow, { target: { value: '60' } })
     expect(stores.setToolParam).toHaveBeenCalledWith('brush', 'flow', 60)
   })
+
+  it('settles an Opacity run cut short by a tool switch on the Brush, not on the next tool', async () => {
+    const brush = toolSpec('brush')
+    const { view } = mountTool(brush, { opacity: 50 })
+    await openAdjustments(view)
+    const opacity = view.getByLabelText(t('tools.param.opacity'))
+    await fireEvent.keyDown(opacity, { key: 'ArrowRight' })
+    const stepped = stores.setToolParam.mock.calls.at(-1)
+    expect(stepped?.slice(0, 2)).toEqual(['brush', 'opacity'])
+    stores.setToolParam.mockClear()
+
+    // Inside the 250 ms the run waits to settle.
+    stores.editor.tool = 'cloneStamp'
+    stores.editor.toolParams = { ...stores.editor.toolParams, cloneStamp: startingValues(toolSpec('cloneStamp')) }
+    await tick()
+
+    expect(stores.setToolParam).toHaveBeenCalledWith('brush', 'opacity', stepped?.[2])
+    expect(stores.setToolParam.mock.calls.filter(([tool]) => tool === 'cloneStamp')).toEqual([])
+  })
 })
 
 describe('toolbar gestures and window controls', () => {

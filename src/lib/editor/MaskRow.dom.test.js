@@ -893,6 +893,88 @@ describe('padding on an individual detected mask', () => {
     expect(sent.mock.calls.map(([spec]) => [spec.regionId ?? 'page', spec.paddingPx])).toEqual([['page', 3], [detected.id, 9]])
   })
 
+  it('lands a page save before sending one of its detections\' own, so that value is the last written', async () => {
+    const { backend, detected } = await detection(2)
+    /** @type {Array<() => void>} */
+    const pages = []
+    const sent = vi.spyOn(backend, 'setDetectionPadding').mockImplementation((spec) => spec.regionId
+      ? Promise.resolve({ changed: [spec.regionId], removed: [], pages: [] })
+      : new Promise((resolve) => { pages.push(() => resolve({ changed: [], removed: [], pages: [] })) }))
+    select(null)
+    const at = editor.pageIndex
+    editor.pageIndex = editor.chapter.pages.find((page) => page.regions.some((entry) => entry.id === detected.id)).index
+    try {
+      // A waiting run, flushed by the row's value.
+      stepMaskPadding(1)
+      const row = requestDetectedMaskPadding(detected, 9)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(sent.mock.calls.map(([spec]) => spec.regionId ?? 'page')).toEqual(['page'])
+      pages.shift()?.()
+      await row
+      expect(sent.mock.calls.map(([spec]) => [spec.regionId ?? 'page', spec.paddingPx])).toEqual([['page', 3], [detected.id, 9]])
+
+      // A page save already on its way when the row's value comes.
+      sent.mockClear()
+      // The page read back from the mock has it cleaned: a detection again.
+      replaceRegion({ ...current(detected.id), outcome: 'detected', detected: true, paddingPx: 9 })
+      stepMaskPadding(1)
+      await waitFor(() => expect(pages).toHaveLength(1))
+      const again = requestDetectedMaskPadding(detected, 11)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(sent.mock.calls.map(([spec]) => spec.regionId ?? 'page')).toEqual(['page'])
+      pages.shift()?.()
+      await again
+      expect(sent.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ regionId: detected.id, paddingPx: 11 }))
+    } finally {
+      editor.pageIndex = at
+    }
+  })
+
+  it('refuses a page run of presses while a run holds the page, and leaves the panel as the page is', async () => {
+    const { backend, detected } = await detection(2)
+    const sent = vi.spyOn(backend, 'setDetectionPadding')
+    select(null)
+    const at = editor.pageIndex
+    editor.pageIndex = editor.chapter.pages.find((page) => page.regions.some((entry) => entry.id === detected.id)).index
+    editor.toolParams.autoClean = { ...(editor.toolParams.autoClean ?? {}), maskPadding: 2 }
+    try {
+      editor.run.active = true
+      editor.run.busyPages = [editor.pageIndex]
+      stepMaskPadding(1)
+      expect(editor.toolParams.autoClean.maskPadding).toBe(2)
+      expect(app.notices.at(-1)?.key).toBe('notice.run.pageBusy')
+
+      // A run that takes the page while the presses wait: the same refusal,
+      // and the panel back where the page still is.
+      clearNotices()
+      editor.run.active = false
+      editor.run.busyPages = []
+      stepMaskPadding(1)
+      expect(editor.toolParams.autoClean.maskPadding).toBe(3)
+      editor.run.active = true
+      editor.run.busyPages = [editor.pageIndex]
+      await waitFor(() => expect(app.notices.at(-1)?.key).toBe('notice.run.pageBusy'))
+      expect(editor.toolParams.autoClean.maskPadding).toBe(2)
+      expect(sent).not.toHaveBeenCalled()
+    } finally {
+      editor.run.active = false
+      editor.run.busyPages = []
+      editor.pageIndex = at
+    }
+  })
+
+  it('saves a run of presses on a detection to the chapter it began in, after a switch', async () => {
+    const { backend, detected } = await detection(3)
+    const sent = vi.spyOn(backend, 'setDetectionPadding').mockResolvedValue({ changed: [detected.id], removed: [], pages: [] })
+    const pageIndex = editor.chapter.pages.find((page) => page.regions.some((entry) => entry.id === detected.id)).index
+    select(detected.id)
+    stepMaskPadding(1)
+    select(null)
+    editor.chapter = /** @type {any} */ ({ id: 'another-chapter', review: [], pages: [] })
+    await waitFor(() => expect(sent).toHaveBeenCalledTimes(1))
+    expect(sent).toHaveBeenCalledWith(expect.objectContaining({ chapterId: CHAPTER, pageIndex, regionId: detected.id, paddingPx: 4 }))
+  })
+
   it('saves a run of presses still waiting at once when Redo is pressed', async () => {
     const { redo: realRedo } = /** @type {any} */ (await vi.importActual('../state/editor.svelte.js'))
     const { backend, detected } = await detection(3)

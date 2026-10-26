@@ -131,6 +131,25 @@ describe('the keyboard layer', () => {
     expect(document.activeElement?.id).toBe('a')
   })
 
+  it('takes the focus out of a tool bar slider or box on Escape, and keeps the held selection', () => {
+    editor.tool = 'gradient'
+    const held = /** @type {any} */ ({ tool: 'gradient', pageId: 'p1', start: { x: 1, y: 1 }, end: { x: 9, y: 9 } })
+    draft.selection = held
+    const bar = document.createElement('section')
+    bar.dataset.shell = 'panel'
+    bar.innerHTML = '<div data-range-field><input type="range" id="a"></div><input type="checkbox" id="d">'
+    document.body.append(bar)
+    for (const id of ['a', 'd']) {
+      /** @type {HTMLElement} */ (document.getElementById(id)).focus()
+      press('Escape')
+      expect(document.activeElement?.id).not.toBe(id)
+      expect(draft.selection).toEqual(held)
+    }
+    // With the focus out, Escape is the editor's again.
+    press('Escape')
+    expect(draft.selection).toBeNull()
+  })
+
   it('steps a region copy\'s own opacity on I while one is being placed, and the tool\'s otherwise', () => {
     editor.tool = 'cloneStamp'
     editor.toolParams.cloneStamp = { ...(editor.toolParams.cloneStamp ?? {}), mode: 'region', opacity: 100 }

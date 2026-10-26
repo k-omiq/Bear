@@ -710,8 +710,16 @@
   /**
    * @param {string} key
    * @param {unknown} value
+   * @param {string} [tool] - the tool the control was drawn for. A slider's
+   *   run of steps settles as it goes, after the `{#key spec.id}` below has
+   *   already switched to the next tool: that value is the old tool's, and is
+   *   stored there and nowhere else, with none of the armed tool's side effects.
    */
-  function set(key, value) {
+  function set(key, value, tool = spec.id) {
+    if (tool !== spec.id) {
+      setToolParam(tool, key, value)
+      return
+    }
     if (selectedCopy && ['feather', 'edgeOpacity', 'opacity', 'rotation'].includes(key)) {
       if (!blendEdit || blendEdit.closed) blendEdit = openLayerEdit(selectedCopy)
       blendDraft = { id: selectedCopy.id, changes: { ...(blendDraft?.id === selectedCopy.id ? blendDraft.changes : {}), [key]: value } }
@@ -734,6 +742,18 @@
       return
     }
     setToolParam(spec.id, key, value)
+  }
+
+  /**
+   * A control's setter bound to the tool it is drawn for, read when the prop
+   * is: `RangeField` keeps the one a run began under, so the run settles on
+   * that tool after a switch.
+   *
+   * @param {string} tool
+   * @param {string} key
+   */
+  function setFor(tool, key) {
+    return (/** @type {unknown} */ value) => set(key, value, tool)
   }
 
   /**
@@ -1219,8 +1239,8 @@
     scale={entry.scale ?? 'linear'}
     stepper={entry.key === 'size' ? sizeStep : undefined}
     hint={RANGE_KEYS[entry.key] ? shortcutHint(RANGE_KEYS[entry.key]) : undefined}
-    oninput={(value) => set(entry.key, value)}
-    onchange={(value) => set(entry.key, value)}
+    oninput={setFor(spec.id, entry.key)}
+    onchange={setFor(spec.id, entry.key)}
   />
 {/snippet}
 

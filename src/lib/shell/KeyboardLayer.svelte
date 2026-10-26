@@ -87,8 +87,10 @@
     // blurs them and must not reach the editor, where it would drop a draft
     // or a selection. `isTextEntry` no longer counts a `<select>` (so digit
     // shortcuts reach the rail past a focused picker), so the picker is
-    // named here on its own.
-    if (isTextEntry(active) || active?.tagName === 'SELECT') {
+    // named here on its own. So is every tool bar control `\` reaches: a
+    // slider left focused keeps stepping on the arrows, and the held Patch or
+    // Gradient selection it was tuning must not go with it.
+    if (isTextEntry(active) || active?.tagName === 'SELECT' || active?.matches?.(BAR_CONTROLS)) {
       /** @type {HTMLElement} */ (active).blur()
       return
     }

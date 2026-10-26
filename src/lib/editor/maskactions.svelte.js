@@ -722,15 +722,22 @@ function reportDetectionTypeFailure(error) {
  * in reading order is the one kept, so this row can be the one that goes: the
  * change is saved all the same, and the page read again shows what is left.
  *
+ * A caller that waited before saving (the `;` and `'` keys) passes the
+ * chapter and page the region was on when it began (`at`), so a chapter
+ * switch while it waited does not lose the save.
+ *
  * @param {import('../api/backend.js').ApiRegion} region
  * @param {number} paddingPx
+ * @param {{chapterId: string|null, pageIndex: number|null}} [at] - where the region is, instead of where the open chapter has it now
  * @returns {Promise<boolean>}
  */
-export async function setDetectedMaskPadding(region, paddingPx) {
+export async function setDetectedMaskPadding(region, paddingPx, at) {
   if (!isDetected(region) || !Number.isInteger(paddingPx) || paddingPx < 0 || paddingPx > MAX_MASK_PADDING) return false
-  const chapterId = editor.chapter?.id ?? null
-  const pageIndex = pageIndexOf(region.id)
-  if (!chapterId || pageIndex === null || !claimPageEdit(pageIndex)) return false
+  const chapterId = at ? at.chapterId : editor.chapter?.id ?? null
+  const pageIndex = at ? at.pageIndex : pageIndexOf(region.id)
+  // Only the open chapter's run is known here; one on a chapter left since
+  // is the native side's to refuse, and is said as any refusal is.
+  if (!chapterId || pageIndex === null || (stillOpen(chapterId) && !claimPageEdit(pageIndex))) return false
   try {
     const result = await getBackend().setDetectionPadding({ chapterId, pageIndex, regionId: region.id, paddingPx })
     const taken = result?.removed?.includes(region.id) ?? false
@@ -784,29 +791,39 @@ export function shownMaskPadding(region) {
  *
  * @param {import('../api/backend.js').ApiRegion} region
  * @param {number} paddingPx
+ * @param {{chapterId: string|null, pageIndex: number|null}} [at] - where the region was when the request began (`setDetectedMaskPadding`); now, when not given
  * @returns {Promise<void>}
  */
-export async function requestDetectedMaskPadding(region, paddingPx) {
+export async function requestDetectedMaskPadding(region, paddingPx, at) {
   const value = Math.round(Math.min(MAX_MASK_PADDING, Math.max(0, paddingPx)))
+  const where = at ?? { chapterId: editor.chapter?.id ?? null, pageIndex: pageIndexOf(region.id) }
+  const page = `page:${where.chapterId}:${where.pageIndex}`
   // A value set by a slider or the box replaces a run of key presses still
   // waiting on the same detection, which would otherwise land after it.
   if (paddingKeyRun?.target === region.id) {
     clearTimeout(paddingKeyRun.timer)
     paddingKeyRun = null
-  } else if (paddingKeyRun?.target === `page:${editor.chapter?.id}:${pageIndexOf(region.id)}`) {
-    // A run on the whole page goes first, so this one region ends up as set.
+  } else if (paddingKeyRun?.target === page) {
     flushPaddingKeys()
   }
+  // A save of the whole page goes first, and lands before this one region's
+  // is sent: the two in flight together could land in either order, and the
+  // page's landing second would undo this region's.
+  const pageFirst = pagePaddingSaving.get(page)?.done
   paddingTarget.set(region.id, value)
   paddingWaiting.set(region.id, value)
   if (paddingSending.has(region.id)) return
   let sent = value
   try {
+    if (pageFirst) {
+      paddingSending.set(region.id, value)
+      await pageFirst
+    }
     while (paddingWaiting.has(region.id)) {
       sent = /** @type {number} */ (paddingWaiting.get(region.id))
       paddingWaiting.delete(region.id)
       paddingSending.set(region.id, sent)
-      await setDetectedMaskPadding(region, sent)
+      await setDetectedMaskPadding(region, sent, where)
     }
   } finally {
     paddingSending.delete(region.id)
@@ -828,6 +845,7 @@ const PADDING_KEY_SETTLE_MS = 250
  * @property {number} value
  * @property {(value: number) => void} save
  * @property {() => void} revert
+ * @property {{chapterId: string|null, pageIndex: number|null}} [at] - a detection's run: where the region was at its first press
  * @property {ReturnType<typeof setTimeout>} timer
  */
 /** @type {PaddingKeyRun|null} */
@@ -867,6 +885,10 @@ function pagePadding(pageIndex) {
  * it. The value moves at once: the region menu, the Layers row and the panel
  * all show it while it waits. The run saves to the page it started on.
  *
+ * A page a run holds refuses the key, as it refuses any edit, before the
+ * panel's value moves: a padding the panel showed and the page never got
+ * would be one the next Detect used and the masks did not have.
+ *
  * @param {number} direction - below zero for less
  */
 export function stepMaskPadding(direction) {
@@ -877,13 +899,16 @@ export function stepMaskPadding(direction) {
     const id = region.id
     const before = paddingTarget.get(id)
     const value = clamp(shownMaskPadding(region) + step)
+    // Where the run began: a chapter switched while it waits still gets it.
+    const at = paddingKeyRun?.target === id && paddingKeyRun.at ? paddingKeyRun.at
+      : { chapterId: editor.chapter?.id ?? null, pageIndex: pageIndexOf(id) }
     paddingTarget.set(id, value)
-    settlePaddingKeys(id, value, (px) => void requestDetectedMaskPadding(region, px), () => {
+    settlePaddingKeys(id, value, (px) => void requestDetectedMaskPadding(region, px, at), () => {
       // What it showed before is still right only while a save of it is
       // under way; once that save landed, the region holds the value itself.
       if (before !== undefined && (paddingSending.has(id) || paddingWaiting.has(id))) paddingTarget.set(id, before)
       else paddingTarget.delete(id)
-    })
+    }, at)
     return
   }
   const chapterId = editor.chapter?.id
@@ -895,10 +920,11 @@ export function stepMaskPadding(direction) {
   const panel = paddingOf(params)
   // A save of this page still on its way is where the next press starts:
   // the page's detections only show it once the page is read again.
-  const value = clamp((running ?? pagePaddingSaving.get(target) ?? pagePadding(pageIndex) ?? panel) + step)
+  const value = clamp((running ?? pagePaddingSaving.get(target)?.px ?? pagePadding(pageIndex) ?? panel) + step)
   const before = params.maskPadding
-  setToolParam('autoClean', 'maskPadding', value)
   const ids = (editor.chapter?.pages[pageIndex]?.regions ?? []).filter(isDetected).map((detection) => detection.id)
+  if (ids.length && !claimPageEdit(pageIndex)) return
+  setToolParam('autoClean', 'maskPadding', value)
   // A page with nothing detected keeps the value for its next Detect, and
   // has no masks to save it into. A run waiting elsewhere is saved now, so
   // an Undo here cannot reach back to it.
@@ -912,24 +938,32 @@ export function stepMaskPadding(direction) {
   const settled = (/** @type {number} */ px) => {
     for (const id of ids) if (paddingTarget.get(id) === px) paddingTarget.delete(id)
   }
+  // What the run's first press found, for Undo and for a refused save alike.
+  const revert = running !== null && paddingKeyRun ? paddingKeyRun.revert : () => {
+    setToolParam('autoClean', 'maskPadding', before ?? 0)
+    for (const [id, shown] of shownBefore) {
+      if (shown === undefined) paddingTarget.delete(id)
+      else paddingTarget.set(id, shown)
+    }
+  }
   settlePaddingKeys(target, value, (px) => {
     // The run saves into the chapter it was pressed in, or nowhere.
     if (editor.chapter?.id !== chapterId) {
       settled(px)
       return
     }
-    pagePaddingSaving.set(target, px)
-    void applyDetectionPadding('page', { pageIndex, paddingPx: px }).finally(() => {
-      if (pagePaddingSaving.get(target) === px) pagePaddingSaving.delete(target)
+    // A run that took the page while the presses waited refuses the save,
+    // and the panel goes back to what the page still has.
+    if (!claimPageEdit(pageIndex)) {
+      revert()
+      return
+    }
+    const done = applyDetectionPadding('page', { pageIndex, paddingPx: px }).finally(() => {
+      if (pagePaddingSaving.get(target)?.done === done) pagePaddingSaving.delete(target)
       settled(px)
     })
-  }, () => {
-    setToolParam('autoClean', 'maskPadding', before ?? 0)
-    for (const [id, shown] of shownBefore) {
-      if (shown === undefined) paddingTarget.delete(id)
-      else paddingTarget.set(id, shown)
-    }
-  })
+    pagePaddingSaving.set(target, { px, done })
+  }, revert)
 }
 
 /** Save a waiting run of padding key presses now. */
@@ -941,7 +975,12 @@ function flushPaddingKeys() {
   run.save(run.value)
 }
 
-/** Per `page:<chapter>:<index>`, the padding a page save is sending. @type {Map<string, number>} */
+/**
+ * Per `page:<chapter>:<index>`, the padding a page save is sending, and the
+ * save, which a single detection's waits for (`requestDetectedMaskPadding`).
+ *
+ * @type {Map<string, {px: number, done: Promise<unknown>}>}
+ */
 const pagePaddingSaving = new Map()
 
 /**
@@ -949,8 +988,9 @@ const pagePaddingSaving = new Map()
  * @param {number} value
  * @param {(value: number) => void} save
  * @param {() => void} revert - puts back what was shown before the run's first press
+ * @param {{chapterId: string|null, pageIndex: number|null}} [at] - a detection's run: where the region was at its first press
  */
-function settlePaddingKeys(target, value, save, revert) {
+function settlePaddingKeys(target, value, save, revert, at) {
   const run = paddingKeyRun
   if (run) clearTimeout(run.timer)
   // A press on another target saves the first one's run straight away.
@@ -960,6 +1000,7 @@ function settlePaddingKeys(target, value, save, revert) {
     value,
     save,
     revert: run?.target === target ? run.revert : revert,
+    at,
     timer: setTimeout(() => {
       const pending = paddingKeyRun
       paddingKeyRun = null

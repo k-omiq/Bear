@@ -93,6 +93,15 @@
 
   /** The value while it moves, before it settles; null when it is the prop's. */
   let draft = $state(/** @type {number|null} */ (null))
+  /**
+   * The `onchange` the draft began under, which is the one it settles
+   * through: a parent whose callback is bound to what the control was drawn
+   * for (the tool bar's tool) hears a run that outlives that owner on the
+   * owner, not on whatever replaced it.
+   *
+   * @type {((value: number) => void)|null}
+   */
+  let draftChange = null
   /** What the box holds while it is being typed in; null when it shows the value. */
   let typed = $state(/** @type {string|null} */ (null))
   /** @type {ReturnType<typeof setTimeout>|null} */
@@ -149,6 +158,7 @@
     if (settleTimer) clearTimeout(settleTimer)
     settleTimer = null
     if (next === shown) return
+    if (draft === null) draftChange = onchange
     draft = next
     oninput?.(next)
   }
@@ -164,8 +174,10 @@
     if (settleTimer) clearTimeout(settleTimer)
     settleTimer = null
     const moved = draft !== null
+    const change = (moved && draftChange) || onchange
     draft = null
-    if (moved || next !== value) onchange(next)
+    draftChange = null
+    if (moved || next !== value) change(next)
   }
 
   /** @param {number} direction */
@@ -282,6 +294,7 @@
         if (settleTimer) clearTimeout(settleTimer)
         settleTimer = null
         draft = null
+        draftChange = null
       }
     })
   })
@@ -292,7 +305,7 @@
     if (settleTimer) clearTimeout(settleTimer)
     settleTimer = null
     if (typed !== null) commitTyped()
-    else if (draft !== null) onchange(draft)
+    else if (draft !== null) (draftChange ?? onchange)(draft)
   })
 </script>
 

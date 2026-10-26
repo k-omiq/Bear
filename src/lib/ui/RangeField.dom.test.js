@@ -81,6 +81,18 @@ describe('a range field', () => {
     expect(onchange).toHaveBeenCalledWith(19)
   })
 
+  it('settles a run of steps through the onchange it began under, though the parent has passed another since', async () => {
+    vi.useFakeTimers()
+    const { view, slider, onchange } = field({ min: 0, max: 100 })
+    await fireEvent.keyDown(slider, { key: 'ArrowLeft' })
+    // The tool bar's next tool: its setter arrives before this control goes.
+    const next = vi.fn()
+    await view.rerender({ onchange: next })
+    view.unmount()
+    expect(onchange).toHaveBeenCalledWith(19)
+    expect(next).not.toHaveBeenCalled()
+  })
+
   it('leaves Up and Down in its box to a menu it is an item of', async () => {
     const { box, onchange } = field({ listItem: true })
     const down = new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })

@@ -755,3 +755,71 @@ describe('the selection tool on a mounted surface', () => {
     expect(Number(ring?.getAttribute('ry'))).toBeCloseTo(8)
   })
 })
+
+/**
+ * **The Gradient's line, inside a held selection.** A drag draws a new line,
+ * and only a drag: a tap, or a press a run on the page refuses, leaves the
+ * line held as it was. The sheet is 100 by 100 client pixels, so a client
+ * coordinate is a page percent.
+ */
+describe('the Gradient line on a mounted surface', () => {
+  function mount() {
+    const only = page('c1-p001', 0)
+    editor.chapter = { id: 'c1', review: [], pages: [only] }
+    editor.project = /** @type {any} */ ({ mode: 'single' })
+    editor.history = createHistory()
+    editor.pageIndex = 0
+    editor.tool = 'gradient'
+    editor.toolParams = { gradient: { shape: 'rect', kind: 'linear' } }
+    resetDraftState()
+    draft.selection = /** @type {any} */ ({
+      tool: 'gradient', pageId: only.id, chapterId: 'c1', pageIndex: 0, sourceIndex: null, sourceSha: null,
+      bbox: { x: 10, y: 10, w: 60, h: 60 }, painted: null, stroke: null, offset: null, proposed: false, proposing: false,
+      start: { x: 20, y: 20 }, end: { x: 60, y: 60 }, regionId: null,
+    })
+    const view = render(DrawLayer, { props: { page: only } })
+    const surface = view.getByRole('button')
+    surface.getBoundingClientRect = () => /** @type {DOMRect} */ ({
+      x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, toJSON() {},
+    })
+    surface.setPointerCapture = vi.fn()
+    surface.releasePointerCapture = vi.fn()
+    return { surface }
+  }
+
+  /** @param {HTMLElement} surface @param {number} x @param {number} y @param {number} toX @param {number} toY */
+  async function press(surface, x, y, toX, toY) {
+    await fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: x, clientY: y })
+    if (toX !== x || toY !== y) await fireEvent.pointerMove(surface, { pointerId: 1, buttons: 1, clientX: toX, clientY: toY })
+    await fireEvent.pointerUp(surface, { pointerId: 1, button: 0, clientX: toX, clientY: toY })
+  }
+
+  it('keeps the line held on a tap inside the selection, away from its ends', async () => {
+    const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    try {
+      const { surface } = mount()
+      await press(surface, 40, 30, 40, 30)
+      expect(draft.selection).toMatchObject({ start: { x: 20, y: 20 }, end: { x: 60, y: 60 } })
+      await press(surface, 30, 40, 50, 40)
+      expect(draft.selection).toMatchObject({ start: { x: 30, y: 40 }, end: { x: 50, y: 40 } })
+    } finally {
+      canvas.mockRestore()
+    }
+  })
+
+  it('keeps the line held when a run on the page refuses the press', async () => {
+    const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    try {
+      const { surface } = mount()
+      editor.run.active = true
+      editor.run.busyPages = [0]
+      await press(surface, 30, 40, 50, 40)
+      expect(app.notices.at(-1)?.key).toBe('notice.run.pageBusy')
+      expect(draft.selection).toMatchObject({ start: { x: 20, y: 20 }, end: { x: 60, y: 60 } })
+    } finally {
+      canvas.mockRestore()
+      editor.run.active = false
+      editor.run.busyPages = []
+    }
+  })
+})
