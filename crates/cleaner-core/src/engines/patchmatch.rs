@@ -288,7 +288,7 @@ pub fn complete(img: &Image, hole: &Mask, region: Option<&Mask>, opt: Options) -
     }
     let levels = imgs.len();
     let mut cur: Option<Image> = None;
-    let mut prev: Option<(Field, usize)> = None;
+    let mut prev: Option<Field> = None;
     for lv in (0..levels).rev() {
         let mut im = imgs[lv].clone();
         let ho = &holes[lv];
@@ -314,13 +314,16 @@ pub fn complete(img: &Image, hole: &Mask, region: Option<&Mask>, opt: Options) -
                 }
             }
             Some(coarse) => {
-                if let Some((pf, pw)) = &prev {
+                if let Some(pf) = &prev {
+                    // Keyed by position, not by a flat index: an odd width
+                    // floors when halved, so the last column's parent is past
+                    // the coarse row and a flat index would land on the next.
                     let mut pidx = std::collections::HashMap::with_capacity(pf.targets.len());
-                    for (j, &(x, y)) in pf.targets.iter().enumerate() {
-                        pidx.insert(y * pw + x, j);
+                    for (j, &xy) in pf.targets.iter().enumerate() {
+                        pidx.insert(xy, j);
                     }
                     for (i, &(tx, ty)) in targets.iter().enumerate() {
-                        if let Some(&j) = pidx.get(&((ty / 2) * pw + tx / 2)) {
+                        if let Some(&j) = pidx.get(&(tx / 2, ty / 2)) {
                             let cx = pf.nnf[j].0 * 2 + (tx - 2 * (tx / 2));
                             let cy = pf.nnf[j].1 * 2 + (ty - 2 * (ty / 2));
                             if cx < w && cy < h && valid.at(cx, cy) {
@@ -346,7 +349,7 @@ pub fn complete(img: &Image, hole: &Mask, region: Option<&Mask>, opt: Options) -
             im = vote(&im, ho, &field, r);
         }
         cur = Some(im);
-        prev = Some((field, w));
+        prev = Some(field);
     }
     cur
 }
