@@ -426,29 +426,6 @@ describe('the clone stamp on a mounted surface', () => {
     expect(overlay.style.height).toBe('8%')
   })
 
-  it('steps the brush on the bracket keys and keeps the keys from paging', async () => {
-    const { surface } = mount({ size: 20, hardness: 50 })
-    const paged = vi.fn()
-    window.addEventListener('keydown', paged)
-    try {
-      await fireEvent.keyDown(surface, { key: ']' })
-      expect(editor.toolParams.cloneStamp.size).toBe(30)
-      await fireEvent.keyDown(surface, { key: '[' })
-      await fireEvent.keyDown(surface, { key: '[' })
-      expect(editor.toolParams.cloneStamp.size).toBe(18)
-      await fireEvent.keyDown(surface, { key: '}', shiftKey: true })
-      expect(editor.toolParams.cloneStamp.hardness).toBe(75)
-      await fireEvent.keyDown(surface, { key: '}', shiftKey: true })
-      await fireEvent.keyDown(surface, { key: '}', shiftKey: true })
-      expect(editor.toolParams.cloneStamp.hardness).toBe(100)
-      await fireEvent.keyDown(surface, { key: '{', shiftKey: true })
-      expect(editor.toolParams.cloneStamp.hardness).toBe(75)
-      expect(paged).not.toHaveBeenCalled()
-    } finally {
-      window.removeEventListener('keydown', paged)
-    }
-  })
-
   it('stamps from the keyboard: S samples, Enter opens a dab, arrows move it, Enter stamps', async () => {
     const { surface, createRegion, sent } = mount()
     await fireEvent.keyDown(surface, { key: 's' })

@@ -37,6 +37,7 @@
  * a failed edit says the same thing whichever control started it.
  */
 
+import { SvelteMap } from 'svelte/reactivity'
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
 import { CLOUD_ENGINE, MAX_MASK_PADDING, isCloudMask, isDetected, reRunnable, rejectable, retryWidens } from '../model/masks.js'
@@ -46,6 +47,7 @@ import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.sv
 import { notify } from '../state/app.svelte.js'
 import {
   adoptBackendHistory,
+  applyDetectionPadding,
   applyRegionState,
   claimPageEdit,
   cleanRefusalKey,
@@ -53,6 +55,7 @@ import {
   pageBusy,
   holdsRegion,
   hover,
+  onPendingEdit,
   paddingOf,
   recordRegionEdit,
   replaceRegion,
@@ -61,6 +64,8 @@ import {
   reloadRegionPages,
   reportJobConflict,
   select,
+  selectedRegion,
+  setToolParam,
   setTool,
 } from '../state/editor.svelte.js'
 
@@ -747,6 +752,222 @@ export async function setDetectedMaskPadding(region, paddingPx) {
   }
 }
 
+/**
+ * The padding each detection is on its way to, by region id, from the first
+ * request until the last one is saved. Every control that moves a padding -
+ * the Layers row's slider, the region menu's, the `;` and `'` keys - asks
+ * through `requestDetectedMaskPadding`, so none of them can drop a change made
+ * while another is saving, and each shows the value it is going to.
+ *
+ * @type {Map<string, number>}
+ */
+const paddingTarget = new SvelteMap()
+/** @type {Map<string, number>} */
+const paddingWaiting = new Map()
+/** The value each region's save in flight is sending. @type {Map<string, number>} */
+const paddingSending = new Map()
+
+/**
+ * The padding a detection shows: the one it is on its way to, else its own.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @returns {number}
+ */
+export function shownMaskPadding(region) {
+  return paddingTarget.get(region.id) ?? region.paddingPx ?? 0
+}
+
+/**
+ * Move a detection's padding, last request wins: a request made while one is
+ * saving waits for it, and only the newest waiting value is sent. Each save
+ * is one undo step (`setDetectedMaskPadding`).
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @param {number} paddingPx
+ * @returns {Promise<void>}
+ */
+export async function requestDetectedMaskPadding(region, paddingPx) {
+  const value = Math.round(Math.min(MAX_MASK_PADDING, Math.max(0, paddingPx)))
+  // A value set by a slider or the box replaces a run of key presses still
+  // waiting on the same detection, which would otherwise land after it.
+  if (paddingKeyRun?.target === region.id) {
+    clearTimeout(paddingKeyRun.timer)
+    paddingKeyRun = null
+  } else if (paddingKeyRun?.target === `page:${editor.chapter?.id}:${pageIndexOf(region.id)}`) {
+    // A run on the whole page goes first, so this one region ends up as set.
+    flushPaddingKeys()
+  }
+  paddingTarget.set(region.id, value)
+  paddingWaiting.set(region.id, value)
+  if (paddingSending.has(region.id)) return
+  let sent = value
+  try {
+    while (paddingWaiting.has(region.id)) {
+      sent = /** @type {number} */ (paddingWaiting.get(region.id))
+      paddingWaiting.delete(region.id)
+      paddingSending.set(region.id, sent)
+      await setDetectedMaskPadding(region, sent)
+    }
+  } finally {
+    paddingSending.delete(region.id)
+    // A run of key presses still waiting to be sent keeps showing its value.
+    if (paddingTarget.get(region.id) === sent) paddingTarget.delete(region.id)
+  }
+}
+
+/** How long a run of padding key presses waits before it is saved. */
+const PADDING_KEY_SETTLE_MS = 250
+
+/**
+ * The run of padding key presses waiting to be saved: what it pads (a region
+ * id, or `page:<index>`), the value it is at, how to save it, and how to put
+ * the shown value back when Undo drops it.
+ *
+ * @typedef {Object} PaddingKeyRun
+ * @property {string} target
+ * @property {number} value
+ * @property {(value: number) => void} save
+ * @property {() => void} revert
+ * @property {ReturnType<typeof setTimeout>} timer
+ */
+/** @type {PaddingKeyRun|null} */
+let paddingKeyRun = null
+
+onPendingEdit((direction) => {
+  const run = paddingKeyRun
+  if (!run) return false
+  clearTimeout(run.timer)
+  paddingKeyRun = null
+  if (direction === 'undo') run.revert()
+  else run.save(run.value)
+  return true
+})
+
+/**
+ * The padding every detection on a page shares, or null when they differ or
+ * there are none.
+ *
+ * @param {number} pageIndex
+ * @returns {number|null}
+ */
+function pagePadding(pageIndex) {
+  const shown = new Set((editor.chapter?.pages[pageIndex]?.regions ?? []).filter(isDetected).map(shownMaskPadding))
+  return shown.size === 1 ? /** @type {number} */ ([...shown][0]) : null
+}
+
+/**
+ * `;` and `'`: one pixel less or more mask padding. On the selected detection
+ * when one is selected; otherwise on every detection of the page, and as the
+ * Text cleanup panel's Mask padding, which the next Detect uses too. The page
+ * steps from the padding its detections share, so a page padded at 6 goes to
+ * 7 even while the panel says 0.
+ *
+ * A held key or a quick run of presses is saved once, when the presses stop,
+ * so it is one undo step rather than one a pixel; Undo while it waits drops
+ * it. The value moves at once: the region menu, the Layers row and the panel
+ * all show it while it waits. The run saves to the page it started on.
+ *
+ * @param {number} direction - below zero for less
+ */
+export function stepMaskPadding(direction) {
+  const step = direction < 0 ? -1 : 1
+  const clamp = (/** @type {number} */ n) => Math.min(MAX_MASK_PADDING, Math.max(0, n))
+  const region = selectedRegion()
+  if (region && isDetected(region)) {
+    const id = region.id
+    const before = paddingTarget.get(id)
+    const value = clamp(shownMaskPadding(region) + step)
+    paddingTarget.set(id, value)
+    settlePaddingKeys(id, value, (px) => void requestDetectedMaskPadding(region, px), () => {
+      // What it showed before is still right only while a save of it is
+      // under way; once that save landed, the region holds the value itself.
+      if (before !== undefined && (paddingSending.has(id) || paddingWaiting.has(id))) paddingTarget.set(id, before)
+      else paddingTarget.delete(id)
+    })
+    return
+  }
+  const chapterId = editor.chapter?.id
+  if (!chapterId) return
+  const pageIndex = editor.pageIndex
+  const target = `page:${chapterId}:${pageIndex}`
+  const running = paddingKeyRun?.target === target ? paddingKeyRun.value : null
+  const params = editor.toolParams.autoClean ?? {}
+  const panel = paddingOf(params)
+  // A save of this page still on its way is where the next press starts:
+  // the page's detections only show it once the page is read again.
+  const value = clamp((running ?? pagePaddingSaving.get(target) ?? pagePadding(pageIndex) ?? panel) + step)
+  const before = params.maskPadding
+  setToolParam('autoClean', 'maskPadding', value)
+  const ids = (editor.chapter?.pages[pageIndex]?.regions ?? []).filter(isDetected).map((detection) => detection.id)
+  // A page with nothing detected keeps the value for its next Detect, and
+  // has no masks to save it into. A run waiting elsewhere is saved now, so
+  // an Undo here cannot reach back to it.
+  if (!ids.length) {
+    flushPaddingKeys()
+    return
+  }
+  // Every row and menu of the page shows the value while it waits.
+  const shownBefore = new Map(ids.map((id) => [id, paddingTarget.get(id)]))
+  for (const id of ids) paddingTarget.set(id, value)
+  const settled = (/** @type {number} */ px) => {
+    for (const id of ids) if (paddingTarget.get(id) === px) paddingTarget.delete(id)
+  }
+  settlePaddingKeys(target, value, (px) => {
+    // The run saves into the chapter it was pressed in, or nowhere.
+    if (editor.chapter?.id !== chapterId) {
+      settled(px)
+      return
+    }
+    pagePaddingSaving.set(target, px)
+    void applyDetectionPadding('page', { pageIndex, paddingPx: px }).finally(() => {
+      if (pagePaddingSaving.get(target) === px) pagePaddingSaving.delete(target)
+      settled(px)
+    })
+  }, () => {
+    setToolParam('autoClean', 'maskPadding', before ?? 0)
+    for (const [id, shown] of shownBefore) {
+      if (shown === undefined) paddingTarget.delete(id)
+      else paddingTarget.set(id, shown)
+    }
+  })
+}
+
+/** Save a waiting run of padding key presses now. */
+function flushPaddingKeys() {
+  const run = paddingKeyRun
+  if (!run) return
+  clearTimeout(run.timer)
+  paddingKeyRun = null
+  run.save(run.value)
+}
+
+/** Per `page:<chapter>:<index>`, the padding a page save is sending. @type {Map<string, number>} */
+const pagePaddingSaving = new Map()
+
+/**
+ * @param {string} target
+ * @param {number} value
+ * @param {(value: number) => void} save
+ * @param {() => void} revert - puts back what was shown before the run's first press
+ */
+function settlePaddingKeys(target, value, save, revert) {
+  const run = paddingKeyRun
+  if (run) clearTimeout(run.timer)
+  // A press on another target saves the first one's run straight away.
+  if (run && run.target !== target) run.save(run.value)
+  paddingKeyRun = {
+    target,
+    value,
+    save,
+    revert: run?.target === target ? run.revert : revert,
+    timer: setTimeout(() => {
+      const pending = paddingKeyRun
+      paddingKeyRun = null
+      pending?.save(pending.value)
+    }, PADDING_KEY_SETTLE_MS),
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Layer appearance: opacity, position, rotation, lock                 */
 /* ------------------------------------------------------------------ */
@@ -962,6 +1183,52 @@ export function openLayerEdit(region, labelKey = 'masks.command.layerStyle', cha
 export function updateLayer(region, changes, labelKey, chapterId = editor.chapter?.id ?? null) {
   if (!region?.mask) return Promise.resolve(false)
   return openLayerEdit(region, labelKey, chapterId).commit(changes)
+}
+
+/** How long a run of opacity key presses on a layer waits before it is one undo step. */
+const OPACITY_KEY_SETTLE_MS = 400
+/** @type {{id: string, edit: LayerEdit, opacity: number, timer: ReturnType<typeof setTimeout>}|null} */
+let opacityKeyRun = null
+
+onPendingEdit((direction) => {
+  const run = opacityKeyRun
+  if (!run) return false
+  clearTimeout(run.timer)
+  opacityKeyRun = null
+  if (direction === 'undo') void run.edit.cancel()
+  else void run.edit.commit()
+  return true
+})
+
+/**
+ * `I` and `Shift+I` on a region copy being placed: its own opacity ten
+ * percent less or more, which is what the bar's Opacity row shows then.
+ * Each press previews; the run is committed once, when the presses stop.
+ * Undo while it waits puts the layer back; Redo commits it now.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @param {number} direction - below zero for less
+ */
+export function stepLayerOpacity(region, direction) {
+  let run = opacityKeyRun
+  if (run) clearTimeout(run.timer)
+  if (run && (run.id !== region.id || run.edit.closed)) {
+    if (!run.edit.closed) void run.edit.commit()
+    run = null
+  }
+  const now = run?.opacity ?? layerOf(region).opacity
+  const opacity = Math.min(100, Math.max(0, direction < 0 ? (Math.ceil(now / 10) - 1) * 10 : (Math.floor(now / 10) + 1) * 10))
+  const edit = run?.edit ?? openLayerEdit(region)
+  edit.preview({ opacity })
+  opacityKeyRun = {
+    id: region.id,
+    edit,
+    opacity,
+    timer: setTimeout(() => {
+      opacityKeyRun = null
+      void edit.commit()
+    }, OPACITY_KEY_SETTLE_MS),
+  }
 }
 
 /* ------------------------------------------------------------------ */

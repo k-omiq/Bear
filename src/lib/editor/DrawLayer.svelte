@@ -1,5 +1,6 @@
 <script>
-  import { claimPageEdit, editor, hover, pages, select, setToolParam } from '../state/editor.svelte.js'
+  import { untrack } from 'svelte'
+  import { claimPageEdit, editor, hover, pages, select } from '../state/editor.svelte.js'
   import { notify } from '../state/app.svelte.js'
   import { session } from '../state/session.svelte.js'
   import { modifierHeld } from '../shortcuts.js'
@@ -8,6 +9,7 @@
     addPoint,
     beginDraft,
     clearDraft,
+    clearSelection,
     forwardToDraft,
     markMoved,
     registerDraftHost,
@@ -34,10 +36,12 @@
     regionAt,
     resizeBbox,
     pullRope,
-    steppedSize,
   } from './gesture.js'
   import { commitDraft } from './drawing.svelte.js'
-  import { draftShape, toolSpec } from './tools.js'
+  import { draftShape, selectsArea, toolSpec } from './tools.js'
+  import { applySelection, moveGhost, retouch, sampleEyedrop, setLine } from './retouch.svelte.js'
+  import { snapped } from './gradient.js'
+  import SelectionOverlay from './SelectionOverlay.svelte'
   import { pageVersion } from '../api/tile.js'
   import { t } from '../i18n/index.js'
   import CloneSource from './CloneSource.svelte'
@@ -89,6 +93,17 @@
    * modifier, `[` and `]` step the brush's size and, with `Shift`, its
    * hardness; `Enter` opens one dab that the arrows move and `Enter` stamps,
    * which is the stamp without a pointer.
+   *
+   * **The Patch tool and the Gradient tool** draw Region copy's selections,
+   * and the selection is then held rather than committed
+   * (`retouch.svelte.js`). While one is held on this page, a press inside it
+   * adjusts it instead of starting another: for Patch's Normal mode a drag
+   * inside the selection or its ghost moves the ghost, which is the source;
+   * for the Gradient a drag inside the selection draws the line, `Shift`
+   * turning it in 15 degree steps, and a press on either end handle moves that
+   * end. A press outside starts a new selection. `Enter` applies, `Escape`
+   * abandons. With a Gradient stop's eyedropper armed, a click samples the
+   * page's colour and does nothing else.
    */
 
   /**
@@ -221,7 +236,18 @@
    * somewhere else; for both of them a tinted capsule says nothing about what
    * the commit will actually look like.
    */
-  const regional = $derived(tool === 'cloneStamp' && params.mode === 'region')
+  const regional = $derived(selectsArea(tool, params))
+  /** The Patch or Gradient selection held on this page for the armed tool. */
+  const heldSelection = $derived(draft.selection?.pageId === page.id && draft.selection.tool === tool ? draft.selection : null)
+  /**
+   * A press that adjusts the held selection rather than drawing one: the
+   * ghost, a new line, or one of its ends, and where the press began.
+   *
+   * @type {{kind: 'ghost'|'start'|'end', from: {x: number, y: number}, offset: {x: number, y: number}, fresh?: boolean}|null}
+   */
+  let adjusting = null
+  /** How close, in client pixels, a press must land to a line's end to take it. */
+  const HANDLE_REACH = 10
   const magnetic = $derived(regional && params.shape === 'magnetic')
   let magnetMap = null
   let fixedPoints = []
@@ -426,6 +452,30 @@
     if (!point) return
     surfaceEl?.focus({ preventScroll: true })
 
+    // The Gradient's eyedropper: this click is a colour, not a gesture.
+    if (tool === 'gradient' && retouch.eyedrop !== null) {
+      void sampleEyedrop(surfaceEl?.closest('.sheet'), event.clientX, event.clientY)
+      event.preventDefault()
+      return
+    }
+
+    // A held selection is adjusted from inside it, and replaced from outside.
+    if (heldSelection && !active) {
+      const grip = adjustment(point)
+      if (grip) {
+        if (!claimGesture()) {
+          event.preventDefault()
+          return
+        }
+        adjusting = grip
+        surfaceEl?.setPointerCapture(event.pointerId)
+        pointerId = event.pointerId
+        event.preventDefault()
+        return
+      }
+      clearSelection()
+    }
+
     // The clone stamp samples where it will read from. The modifier is the
     // user's (Settings › Shortcuts) because the design's `Alt` is a name no
     // Apple keyboard prints; `S` on this surface is its sticky equivalent and
@@ -539,10 +589,61 @@
     return lock.axis === 'x' ? { ...point, y: lock.at.y } : { ...point, x: lock.at.x }
   }
 
+  /**
+   * What a press at `point` adjusts on the held selection, or null where it
+   * starts a new one.
+   *
+   * @param {{x: number, y: number}} point
+   * @returns {typeof adjusting}
+   */
+  function adjustment(point) {
+    if (!heldSelection) return null
+    const inside = (/** @type {{x: number, y: number, w: number, h: number}} */ box) =>
+      point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h
+    if (heldSelection.tool === 'patch') {
+      if (params.mode !== 'normal' || !heldSelection.offset) return null
+      const offset = { ...heldSelection.offset }
+      const ghost = { ...heldSelection.bbox, x: heldSelection.bbox.x + offset.x, y: heldSelection.bbox.y + offset.y }
+      return inside(heldSelection.bbox) || inside(ghost) ? { kind: 'ghost', from: point, offset } : null
+    }
+    const rect = sheetRect()
+    const near = (/** @type {{x: number, y: number}|null} */ end) => !!end && !!rect &&
+      Math.hypot(((end.x - point.x) / 100) * rect.width, ((end.y - point.y) / 100) * rect.height) <= HANDLE_REACH
+    const none = { x: 0, y: 0 }
+    if (near(heldSelection.end)) return { kind: 'end', from: point, offset: none }
+    if (near(heldSelection.start)) return { kind: 'start', from: point, offset: none }
+    if (!inside(heldSelection.bbox)) return null
+    setLine(point, point)
+    return { kind: 'end', from: point, offset: none, fresh: true }
+  }
+
+  /**
+   * One move of an adjustment.
+   *
+   * @param {{x: number, y: number}} point
+   * @param {PointerEvent} event
+   */
+  function adjust(point, event) {
+    if (!adjusting || !heldSelection) return
+    if (adjusting.kind === 'ghost') {
+      moveGhost({ x: adjusting.offset.x + point.x - adjusting.from.x, y: adjusting.offset.y + point.y - adjusting.from.y })
+      return
+    }
+    const fixed = adjusting.kind === 'end' ? heldSelection.start : heldSelection.end
+    if (!fixed) return
+    const moved = event.shiftKey ? snapped(fixed, point, page.width ?? 1600, page.height ?? 2400) : point
+    if (adjusting.kind === 'end') setLine(fixed, moved)
+    else setLine(moved, fixed)
+  }
+
   /** @param {PointerEvent} event */
   function onpointermove(event) {
     const point = at(event)
     if (!point) return
+    if (adjusting) {
+      adjust(point, event)
+      return
+    }
     cursorAt = round ? point : null
     if (stamping) sampling = modifierHeld(event, session.cloneSourceModifier)
 
@@ -624,6 +725,20 @@
   /** @param {PointerEvent} event */
   function onpointerup(event) {
     if (pointerId === null) return
+    if (adjusting) {
+      const point = at(event)
+      if (point) adjust(point, event)
+      // A tap inside the selection is not a line: there is no direction in it.
+      const selection = draft.selection
+      if (adjusting.fresh && selection?.start && selection.end
+        && selection.start.x === selection.end.x && selection.start.y === selection.end.y) {
+        selection.start = null
+        selection.end = null
+      }
+      adjusting = null
+      releasePointer()
+      return
+    }
     const point = at(event)
     if (point && regional && active && ['rect', 'ellipse', 'line'].includes(active.kind)) {
       setDraftBbox(event.shiftKey ? squareBetween(active.points[0], point)
@@ -655,6 +770,7 @@
   }
 
   function onpointercancel() {
+    adjusting = null
     releasePointer()
     clearDraft()
   }
@@ -850,6 +966,12 @@
 
   /** @param {KeyboardEvent} event */
   function onkeydown(event) {
+    if (heldSelection && !active && event.key === 'Enter') {
+      void applySelection()
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
     if (polygonal && active && !active.keyboard && event.key === 'Backspace') {
       if (magnetic) {
         magneticAnchors.pop()
@@ -882,8 +1004,6 @@
       else if (committable() && claimGesture()) commit()
     } else if (intent.kind === 'sample') {
       sample(keyPoint())
-    } else if (intent.kind === 'size' || intent.kind === 'hardness') {
-      stepBrush(intent.kind, intent.direction)
     } else if (stamping) {
       moveStamp(intent.dx, intent.dy, intent.kind === 'resize')
     } else if (active?.bbox) {
@@ -931,24 +1051,15 @@
     keyAt = point
   }
 
-  /**
-   * One press of `[` or `]`: the brush's size, or with `Shift` its hardness a
-   * quarter at a time, inside the range the tool's own row allows.
-   *
-   * @param {'size'|'hardness'} key
-   * @param {number} direction
-   */
-  function stepBrush(key, direction) {
-    const row = toolSpec(tool).params.find((param) => param.key === key)
-    if (row?.kind !== 'range') return
-    const now = Number(params[key] ?? row.min)
-    const next = key === 'size'
-      ? steppedSize(now, direction, row.min, row.max)
-      : Math.min(row.max, Math.max(row.min, now + Math.sign(direction) * 25))
-    setToolParam(tool, key, next)
-    // The keyboard's stamp is drawn at the brush's size, so its box follows.
-    if (active?.keyboard && stamping) setDraftBbox(strokeBounds(active.points))
-  }
+  // The keyboard's stamp is drawn at the brush's size, so its box follows a
+  // size change, whichever key or control made it (`[` and `]` are the
+  // shortcut table's now, not this surface's).
+  $effect(() => {
+    radius
+    untrack(() => {
+      if (active?.keyboard && stamping) setDraftBbox(strokeBounds(active.points))
+    })
+  })
 
   function openKeyboardDraft() {
     if (stamping) {
@@ -1038,6 +1149,12 @@
 {/if}
 
 <DraftPreview pageId={page.id} pageWidth={page.width ?? 1600} pageHeight={page.height ?? 2400} regions={page.regions ?? []} />
+
+<!-- The held Patch or Gradient selection: its outline, the ghost or the line
+     and its handles, and the gradient's live preview. -->
+{#if heldSelection}
+  <SelectionOverlay held={heldSelection} {params} pageWidth={page.width ?? 1600} pageHeight={page.height ?? 2400} />
+{/if}
 
 <style>
   .surface {

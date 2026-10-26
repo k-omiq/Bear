@@ -61,13 +61,19 @@ function capture(element, pointerId, on) {
  * the compiler says so (`state_referenced_locally`). It costs one call per
  * gesture and it is honest about where the id lives.
  *
+ * `width` is for a window whose box is a measurement rather than a choice -
+ * the tool panel (`model/windows.js#CONTENT_SIZED`). Its corner sizes the one
+ * thing the user does choose, a width kept apart from the box, and only that:
+ * the arrows up and down do nothing on it, and a drag reads only `dx`.
+ *
  * @param {{
  *   id: () => string,
  *   measuredHeight: () => number,
  *   foldable?: boolean,
+ *   width?: {get: () => number, set: (w: number) => void},
  * }} options
  */
-export function windowGesture({ id: windowId, measuredHeight, foldable = false }) {
+export function windowGesture({ id: windowId, measuredHeight, foldable = false, width }) {
   /** @type {{mode: 'move'|'size', pointerId: number, target: HTMLElement, x: number, y: number, box: {x: number, y: number, w: number, h: number}}|null} */
   let gesture = null
 
@@ -89,7 +95,7 @@ export function windowGesture({ id: windowId, measuredHeight, foldable = false }
       target: event.currentTarget,
       x: event.clientX,
       y: event.clientY,
-      box: { x: win.x, y: win.y, w: win.w, h: win.h ?? measuredHeight() },
+      box: { x: win.x, y: win.y, w: mode === 'size' && width ? width.get() : win.w, h: win.h ?? measuredHeight() },
     }
     capture(event.currentTarget, event.pointerId, true)
   }
@@ -100,7 +106,9 @@ export function windowGesture({ id: windowId, measuredHeight, foldable = false }
     const id = windowId()
     const dx = event.clientX - gesture.x
     const dy = event.clientY - gesture.y
-    if (gesture.mode === 'size') {
+    if (gesture.mode === 'size' && width) {
+      width.set(gesture.box.w + dx)
+    } else if (gesture.mode === 'size') {
       setWindowBox(id, { w: gesture.box.w + dx, h: gesture.box.h + dy })
     } else {
       setWindowBox(id, { x: gesture.box.x + dx, y: gesture.box.y + dy })
@@ -154,10 +162,12 @@ export function windowGesture({ id: windowId, measuredHeight, foldable = false }
       return
     }
     const delta = deltas[event.key]
-    if (!delta) return
+    if (!delta || (mode === 'size' && width && !delta[0])) return
     event.preventDefault()
     event.stopPropagation()
-    if (mode === 'size') {
+    if (mode === 'size' && width) {
+      width.set(width.get() + delta[0])
+    } else if (mode === 'size') {
       setWindowBox(id, { w: win.w + delta[0], h: (win.h ?? measuredHeight()) + delta[1] })
     } else {
       setWindowBox(id, { x: win.x + delta[0], y: win.y + delta[1] })

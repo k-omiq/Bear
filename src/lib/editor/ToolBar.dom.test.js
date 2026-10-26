@@ -60,6 +60,8 @@ const stores = vi.hoisted(() => ({
     cleanLocalFirst: false,
     cleanSolidOnly: false,
     analysisTargets: { rtFull: 'local', samTs: 'local' },
+    /** @type {'normal'|'advanced'} */
+    detectionMode: 'normal',
     /** @type {string[]} */
     detectorModels: ['ctd', 'rtSmall'],
     /** @type {'legacy_gate'|'all_text'|undefined} */
@@ -67,6 +69,8 @@ const stores = vi.hoisted(() => ({
     /** @type {Record<string, {x: number, y: number, w: number, h: number|null, open: boolean, fold: boolean}>} */
     windows: { tool: { x: 16, y: 62, w: 560, h: null, open: true, fold: false } },
     stacking: { tool: 1 },
+    /** @type {number|null} */
+    toolPanelWidth: null,
   },
   capabilities: {
     /** @type {Record<string, boolean>} */
@@ -92,15 +96,23 @@ const stores = vi.hoisted(() => ({
   setWindowBox: vi.fn(),
   setWindowOpen: vi.fn(),
   commitWindows: vi.fn(),
-  setTextPolicy: vi.fn(),
+  // The session's own rule, small: the mode fixes the models and the policy.
+  setDetectionMode: vi.fn((/** @type {string} */ mode) => {
+    if (mode !== 'normal' && mode !== 'advanced') return
+    stores.session.detectionMode = mode
+    stores.session.detectorModels = mode === 'advanced' ? ['ctd', 'rtFull', 'samTs'] : ['ctd', 'rtSmall']
+    stores.session.textPolicy = mode === 'advanced' ? 'all_text' : 'legacy_gate'
+  }),
   setCleanLocalFirst: vi.fn(),
   setCleanSolidOnly: vi.fn(),
+  setToolPanelWidth: vi.fn((/** @type {number} */ w) => { stores.session.toolPanelWidth = Math.max(360, Math.min(560, Math.round(w))) }),
 }))
 
 stores.editor = editor
 
 vi.mock('../state/editor.svelte.js', () => ({
   editor,
+  onPendingEdit: () => () => {},
   select,
   setToolParam: stores.setToolParam,
   startRun: stores.startRun,
@@ -123,14 +135,16 @@ vi.mock('../state/session.svelte.js', () => ({
   resetWindowBox: vi.fn(),
   setAnalysisTarget: (stage, target) => { stores.session.analysisTargets[stage] = target },
   setCleanTarget: (target) => { stores.session.cleanTarget = target },
-  setTextPolicy: stores.setTextPolicy,
+  setDetectionMode: stores.setDetectionMode,
   setCleanLocalFirst: stores.setCleanLocalFirst,
   setCleanSolidOnly: stores.setCleanSolidOnly,
+  setToolPanelWidth: stores.setToolPanelWidth,
 }))
 
 vi.mock('../state/capabilities.svelte.js', () => ({
   capabilities: stores.capabilities,
   currentWorkflowAvailable: () => stores.capabilities.autoClean,
+  loadCapabilities: vi.fn(async () => {}),
   // Asked with `{analysisTargets}` it answers for Detect on set the other way.
   currentWorkflowMissing: (/** @type {any} */ overrides) => overrides?.analysisTargets
     ? stores.cloudMissing ?? []
@@ -338,10 +352,24 @@ describe('a change on any pill control writes that parameter, once', () => {
         const control = controlFor(view, param, values)
 
         if (param.kind === 'range') {
-          const next = Math.min(param.max, param.min + param.step)
-          await fireEvent.input(control, { target: { value: String(next) } })
+          // A log track's positions are not its values: its middle is the
+          // geometric mean of the ends.
+          const position = param.scale === 'log' ? 2000 : Math.min(param.max, param.min + param.step)
+          const next = param.scale === 'log'
+            ? Math.round(Math.sqrt(param.min * param.max))
+            : position
+          await fireEvent.input(control, { target: { value: String(position) } })
           expect(stores.setToolParam).toHaveBeenCalledTimes(1)
           expect(stores.setToolParam).toHaveBeenCalledWith(spec.id, param.key, next)
+
+          // The box beside it takes the exact number, on Enter.
+          stores.setToolParam.mockClear()
+          const box = view.getByLabelText(t('tools.param.exactValue', { name: t(param.labelKey) }))
+          await fireEvent.input(box, { target: { value: String(param.max) } })
+          expect(stores.setToolParam).not.toHaveBeenCalled()
+          await fireEvent.keyDown(box, { key: 'Enter' })
+          expect(stores.setToolParam).toHaveBeenCalledTimes(1)
+          expect(stores.setToolParam).toHaveBeenCalledWith(spec.id, param.key, param.max)
         } else if (param.kind === 'color') {
           await fireEvent.click(control)
           const hexInput = within(control.closest('.anchor')).getByLabelText(t('tools.color.hex'))
@@ -771,7 +799,7 @@ describe('the run action', () => {
  * Detect on, Clean on, which text it takes, what it does outside bubbles, and
  * the two per-run engine picks. Detect on and Clean on are the two settings
  * the run reads (`analysisTargets`, `cleanTarget`), with Cloud GPU disabled
- * for the reason Settings gives; the text policy is `session.textPolicy`. A
+ * for the reason Settings gives; Normal or Advanced is `session.detectionMode`. A
  * row that cannot change what the chosen mode does is absent.
  */
 describe('the Text cleanup panel', () => {
@@ -787,8 +815,10 @@ describe('the Text cleanup panel', () => {
     stores.session.cloudAllowed = true
     stores.session.cleanTarget = 'local'
     stores.session.analysisTargets = { rtFull: 'local', samTs: 'local' }
+    stores.session.detectionMode = 'normal'
     stores.session.detectorModels = ['ctd', 'rtSmall']
     stores.session.textPolicy = undefined
+    stores.setDetectionMode.mockClear()
     resetCloudOffer()
     setBackend(null)
   })
@@ -808,13 +838,59 @@ describe('the Text cleanup panel', () => {
     }
   })
 
-  it('reaches every run choice: mode, scope, both places, the text taken and the outside-bubble opt-in', async () => {
+  it('draws the Gradient as a panel: its rows, its stops swatch and Apply under them', () => {
+    const { view } = mountTool(toolSpec('gradient'))
+    const bar = shell(view)
+    expect(bar.dataset.shell).toBe('panel')
+    expect(view.getByRole('heading', { name: t('tools.name.gradient') })).not.toBeNull()
+    expect(view.getByLabelText(t('tools.param.shape')).tagName).toBe('SELECT')
+    expect(view.getByLabelText(t('retouch.gradient.kind')).tagName).toBe('SELECT')
+    expect(view.getByLabelText(t('tools.param.opacity')).getAttribute('type')).toBe('range')
+    expect(view.getByRole('button', { name: t('retouch.gradient.stops') })).not.toBeNull()
+    expect(bar.querySelector('.rows')).not.toBeNull()
+    expect(bar.querySelector('.action')?.textContent).toContain(t('retouch.apply'))
+    // No Adjustments popover: a panel has room for every slider.
+    expect(view.queryByLabelText(t('tools.action.adjustments'))).toBeNull()
+  })
+
+  // The panel's corner sizes its width and nothing else, and the pill has none.
+  it('drags a panel wider by its corner, sideways only, and keeps the width for the next panel', async () => {
+    stores.session.toolPanelWidth = null
+    try {
+      const { view } = mountTool(toolSpec('gradient'))
+      const corner = view.getByLabelText(t('editor.window.resize', { windowName: t('tools.name.gradient') }))
+      expect(shell(view).style.getPropertyValue('--panel-width')).toBe(`${PANEL_WIDTH}px`)
+      await fireEvent.pointerDown(corner, { button: 0, pointerId: 1, clientX: 400, clientY: 300 })
+      await fireEvent.pointerMove(corner, { pointerId: 1, clientX: 460, clientY: 500 })
+      await fireEvent.pointerUp(corner, { pointerId: 1, clientX: 460, clientY: 500 })
+      expect(stores.setToolPanelWidth).toHaveBeenLastCalledWith(PANEL_WIDTH + 60)
+      expect(stores.commitWindows).toHaveBeenCalled()
+      // The arrows left and right size it; up and down are not a width.
+      stores.setToolPanelWidth.mockClear()
+      await fireEvent.keyDown(corner, { key: 'ArrowDown' })
+      expect(stores.setToolPanelWidth).not.toHaveBeenCalled()
+      stores.session.toolPanelWidth = PANEL_WIDTH + 60
+      cleanup()
+      const { view: textCleanupView } = mountTool(textCleanup)
+      expect(shell(textCleanupView).style.getPropertyValue('--panel-width')).toBe(`${PANEL_WIDTH + 60}px`)
+      const textCorner = textCleanupView.getByLabelText(t('editor.window.resize', { windowName: 'Text cleanup' }))
+      await fireEvent.keyDown(textCorner, { key: 'ArrowLeft' })
+      expect(stores.setToolPanelWidth).toHaveBeenLastCalledWith(PANEL_WIDTH + 52)
+      cleanup()
+      const { view: pill } = mountTool(toolSpec('brush'))
+      expect(pill.queryByLabelText(t('editor.window.resize', { windowName: t('tools.name.brush') }))).toBeNull()
+    } finally {
+      stores.session.toolPanelWidth = null
+    }
+  })
+
+  it('reaches every run choice: mode, scope, detection mode, both places and the outside-bubble opt-in', async () => {
     const { view } = mountTool(textCleanup)
     expect(radios(view, t('tools.param.step'))).toEqual(['Detect', 'Clean', 'Detect & clean'])
     expect(radios(view, t('tools.param.scope'))).toEqual(['Page', 'Chapter', 'Project'])
     expect(view.getByLabelText(t('tools.param.detectOn')).tagName).toBe('SELECT')
     expect(view.getByLabelText(t('tools.param.cleanOn')).tagName).toBe('SELECT')
-    expect(radios(view, t('tools.param.textPolicy'))).toEqual([t('tools.option.policyLegacy'), t('tools.option.policyAll')])
+    expect(radios(view, t('tools.param.detectionMode'))).toEqual([t('detectionMode.normal.name'), t('detectionMode.advanced.name')])
     expect(radios(view, t('tools.param.outsideBubbles'))).toEqual([t('tools.option.outsideReview'), t('tools.option.outsideClean')])
     // The engine picks are collapsed, and say what they hold without opening.
     const more = view.getByRole('button', { name: new RegExp(t('tools.action.advanced')) })
@@ -846,15 +922,19 @@ describe('the Text cleanup panel', () => {
     }
   })
 
-  it('sets the text policy where the run reads it, and drops the outside-bubble row under all text', async () => {
+  it('switches the detection mode where the run reads it, and drops the outside-bubble row under Advanced', async () => {
     const { view } = mountTool(textCleanup)
-    await fireEvent.click(view.getByRole('radio', { name: t('tools.option.policyAll') }))
-    expect(stores.setTextPolicy).toHaveBeenCalledWith('all_text')
+    const normal = view.getByRole('radio', { name: t('detectionMode.normal.name') })
+    expect(normal.getAttribute('aria-checked')).toBe('true')
+    await fireEvent.click(view.getByRole('radio', { name: t('detectionMode.advanced.name') }))
+    await tick()
+    expect(stores.setDetectionMode).toHaveBeenCalledWith('advanced')
+    expect(stores.session.detectionMode).toBe('advanced')
+    expect(stores.session.detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
     cleanup()
 
-    stores.session.textPolicy = 'all_text'
     const { view: all } = mountTool(textCleanup)
-    expect(all.getByRole('radio', { name: t('tools.option.policyAll') }).getAttribute('aria-checked')).toBe('true')
+    expect(all.getByRole('radio', { name: t('detectionMode.advanced.name') }).getAttribute('aria-checked')).toBe('true')
     // The all-text run cleans outside bubbles regardless (`run.rs`).
     expect(all.queryByRole('radiogroup', { name: t('tools.param.outsideBubbles') })).toBeNull()
   })
@@ -863,24 +943,23 @@ describe('the Text cleanup panel', () => {
     const { view: detect } = mountTool(textCleanup, { step: 'detect' })
     expect(place(detect, 'detect')).not.toBeNull()
     expect(place(detect, 'clean')).toBeNull()
-    // Which text is cleaned is Detect & clean's question: Detect alone finds
-    // all text for the review.
-    expect(detect.queryByRole('radiogroup', { name: t('tools.param.textPolicy') })).toBeNull()
+    // Normal or Advanced decides what Detect finds, so it is drawn there too.
+    expect(detect.queryByRole('radiogroup', { name: t('tools.param.detectionMode') })).not.toBeNull()
     expect(detect.queryByRole('radiogroup', { name: t('tools.param.outsideBubbles') })).toBeNull()
     cleanup()
 
     const { view: auto } = mountTool(textCleanup, { step: 'auto' })
     expect(place(auto, 'detect')).not.toBeNull()
     expect(place(auto, 'clean')).not.toBeNull()
-    expect(auto.queryByRole('radiogroup', { name: t('tools.param.textPolicy') })).not.toBeNull()
+    expect(auto.queryByRole('radiogroup', { name: t('tools.param.detectionMode') })).not.toBeNull()
     expect(auto.queryByRole('radiogroup', { name: t('tools.param.outsideBubbles') })).not.toBeNull()
     cleanup()
 
     const { view: clean } = mountTool(textCleanup, { step: 'clean' })
     expect(place(clean, 'detect')).toBeNull()
     expect(place(clean, 'clean')).not.toBeNull()
-    // Clean detects nothing, so neither the text taken nor the opt-in apply.
-    expect(clean.queryByRole('radiogroup', { name: t('tools.param.textPolicy') })).toBeNull()
+    // Clean detects nothing, so neither the detection mode nor the opt-in apply.
+    expect(clean.queryByRole('radiogroup', { name: t('tools.param.detectionMode') })).toBeNull()
     expect(clean.queryByRole('radiogroup', { name: t('tools.param.outsideBubbles') })).toBeNull()
   })
 
@@ -1018,7 +1097,7 @@ describe('the Text cleanup panel', () => {
   // LaMa pick reads as the Fill the run makes of it.
   it('draws only the picks a Solid bubbles only run reads', async () => {
     const { view } = mountTool(textCleanup, { step: 'auto', solidOnly: true, bubbleEngine: 'lama', outsideEngine: 'lama' })
-    expect(view.queryByRole('radiogroup', { name: t('tools.param.textPolicy') })).not.toBeNull()
+    expect(view.queryByRole('radiogroup', { name: t('tools.param.detectionMode') })).not.toBeNull()
     expect(view.queryByRole('radiogroup', { name: t('tools.param.outsideBubbles') })).toBeNull()
     const more = view.getByRole('button', { name: new RegExp(t('tools.action.advanced')) })
     expect(more.textContent).not.toContain('LaMa')
@@ -1232,8 +1311,8 @@ describe('the Text cleanup panel', () => {
 })
 
 /**
- * Keyboard use of the panel: Tab walks the controls in reading order and ends
- * on the one action; Enter or Space on that action is the browser's own
+ * Keyboard use of the panel: Tab walks the controls in reading order to the
+ * one action, then its width corner; Enter or Space on that action is the browser's own
  * activation of a native button; Escape closes a popover inside the panel and
  * leaves the panel alone.
  */
@@ -1244,7 +1323,7 @@ describe('the Text cleanup panel from the keyboard', () => {
       .filter((node) => !(/** @type {any} */ (node).disabled) && node.getAttribute('tabindex') !== '-1')
   }
 
-  it('tabs through header, choices and engines, and ends on the action', async () => {
+  it('tabs through header, choices and engines, to the action and then the width corner', async () => {
     const { view } = mountTool(textCleanup)
     await openAdvanced(view)
     const names = tabStops(shell(view)).map((node) => node.getAttribute('aria-label') ?? node.id ?? '')
@@ -1253,13 +1332,14 @@ describe('the Text cleanup panel from the keyboard', () => {
     expect(names[1]).toBe(t('editor.window.close', { windowName: 'Text cleanup' }))
     // One stop per radio group (roving tabindex), then the selects, in rows.
     const kinds = stops.slice(2).map((node) => node.getAttribute('role') ?? node.tagName.toLowerCase())
-    // Mode, Scope, Detect on and the Cloud settings press under its reason
+    // Mode, Scope, Normal or Advanced, Detect on and the Cloud settings press under its reason
     // (the endpoint's offer is still being read here), Clean on, Solid
-    // bubbles only, Text, Outside bubbles, Mask padding and its Apply, the
-    // models toggle, the two engines, the fill colour's swatch, then the
-    // action.
-    expect(kinds).toEqual(['radio', 'radio', 'select', 'button', 'select', 'input', 'radio', 'radio', 'input', 'button', 'button', 'select', 'select', 'button', 'button'])
-    expect(stops.at(-1)).toBe(runAction(view))
+    // bubbles only, Outside bubbles, Mask padding's two inputs and its Apply,
+    // the models toggle, the two engines, the fill colour's swatch, the
+    // action, and last the width corner, where a window's resize corner also is.
+    expect(kinds).toEqual(['radio', 'radio', 'radio', 'select', 'button', 'select', 'input', 'radio', 'input', 'input', 'button', 'button', 'select', 'select', 'button', 'button', 'button'])
+    expect(stops.at(-2)).toBe(runAction(view))
+    expect(names.at(-1)).toBe(t('editor.window.resize', { windowName: 'Text cleanup' }))
     // The name takes focus from script, never from Tab.
     expect(view.getByRole('heading', { name: 'Text cleanup' }).getAttribute('tabindex')).toBe('-1')
   })

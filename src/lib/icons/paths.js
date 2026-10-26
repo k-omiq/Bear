@@ -154,6 +154,24 @@ export const icons = {
     'M3.4 13.3h9.2',
   ],
 
+  // The Patch tool: a sticking plaster laid across the page, its pad between
+  // two creases and a dot at its middle.
+  'patch': [
+    'M10.26 2.48 13.52 5.74 5.74 13.52 2.48 10.26Z',
+    'M7.97 4.77 11.23 8.03M4.77 7.97 8.03 11.23',
+    'M8 8h.01',
+  ],
+
+  // The Gradient tool: a frame filling solid at the left, thinning to dots
+  // and then to nothing at the right.
+  'gradient': {
+    paths: [
+      'M3.5 2.5h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z',
+      'M8 5.5h.01M8 8h.01M8 10.5h.01M10.5 6.75h.01M10.5 9.25h.01',
+    ],
+    filled: ['M3.25 3.25H6.5v9.5H3.25Z'],
+  },
+
   /* ---- zoom / history --------------------------------------------------- */
 
   'zoom-fit': [

@@ -35,7 +35,7 @@ describe('the session’s shortcut overrides', () => {
   it('drops on load what this build cannot honour', () => {
     const record = sanitizeSession({
       shortcuts: {
-        'view.maskOverlay': { key: 'K' }, //     kept, normalized
+        'view.maskOverlay': { key: '9' }, //     kept, normalized
         'edit.redo': null, //                    kept: cleared on purpose
         'tool.retouch': { key: 'k' }, //         an id this build does not have
         'edit.undo': { key: 'Tab' }, //          a key that cannot carry a binding
@@ -44,7 +44,7 @@ describe('the session’s shortcut overrides', () => {
       },
     })
     expect(record.shortcuts).toEqual({
-      'view.maskOverlay': { key: 'k', shift: false, accel: false },
+      'view.maskOverlay': { key: '9', shift: false, accel: false },
       'edit.redo': null,
     })
   })
@@ -57,11 +57,11 @@ describe('the session’s shortcut overrides', () => {
   })
 
   it('moves the table and the session together on a rebinding', () => {
-    expect(setShortcutBinding('view.maskOverlay', { key: 'k' })).toEqual({ ok: true })
+    expect(setShortcutBinding('view.maskOverlay', { key: '9' })).toEqual({ ok: true })
     expect(session.shortcuts).toEqual({
-      'view.maskOverlay': { key: 'k', shift: false, accel: false },
+      'view.maskOverlay': { key: '9', shift: false, accel: false },
     })
-    expect(matchShortcut(press('k'), editor)?.id).toBe('view.maskOverlay')
+    expect(matchShortcut(press('9'), editor)?.id).toBe('view.maskOverlay')
   })
 
   it('leaves both untouched when a rebinding is refused', () => {
@@ -82,9 +82,9 @@ describe('the session’s shortcut overrides', () => {
 
   it('sends the differences to the backend, and only those', () => {
     expect(backendSettingsPatch().shortcuts).toEqual({})
-    setShortcutBinding('view.maskOverlay', { key: 'k' })
+    setShortcutBinding('view.maskOverlay', { key: '9' })
     expect(backendSettingsPatch().shortcuts).toEqual({
-      'view.maskOverlay': { key: 'k', shift: false, accel: false },
+      'view.maskOverlay': { key: '9', shift: false, accel: false },
     })
     // JSON is the only shape the seam carries, and the patch must survive it.
     const round = JSON.parse(JSON.stringify(backendSettingsPatch().shortcuts))
@@ -93,18 +93,18 @@ describe('the session’s shortcut overrides', () => {
 
   it('adopts the backend’s snapshot, dropping what it cannot honour', () => {
     adoptBackendSettings({
-      shortcuts: { 'edit.undo': { key: 'y' }, 'tool.retouch': { key: 'k' } },
+      shortcuts: { 'edit.undo': { key: '8' }, 'tool.retouch': { key: 'k' } },
     })
-    expect(session.shortcuts).toEqual({ 'edit.undo': { key: 'y', shift: false, accel: false } })
-    expect(matchShortcut(press('y'), editor)?.id).toBe('edit.undo')
+    expect(session.shortcuts).toEqual({ 'edit.undo': { key: '8', shift: false, accel: false } })
+    expect(matchShortcut(press('8'), editor)?.id).toBe('edit.undo')
     expect(matchShortcut(press('u'), editor)).toBe(null)
   })
 
   it('leaves the bindings alone when the backend says nothing about them', () => {
-    setShortcutBinding('view.maskOverlay', { key: 'k' })
+    setShortcutBinding('view.maskOverlay', { key: '9' })
     adoptBackendSettings({ theme: 'dark' })
     expect(session.shortcuts).toEqual({
-      'view.maskOverlay': { key: 'k', shift: false, accel: false },
+      'view.maskOverlay': { key: '9', shift: false, accel: false },
     })
   })
 })

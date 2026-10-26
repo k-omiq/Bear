@@ -265,16 +265,11 @@ describe('draftKeyIntent', () => {
     expect(draftKeyIntent({ key: 's' }, drafting)).toBeNull()
   })
 
-  // The bracket keys page the chapter everywhere else, so only the stamp's
-  // own surface reads them as the brush.
-  it('steps the brush on the bracket keys, for the clone stamp only', () => {
+  // Size and hardness are the shortcut table's, for every brush.
+  it('leaves the bracket keys to the shortcut table', () => {
     const stamp = { hasDraft: false, cloneCapable: true }
-    expect(draftKeyIntent({ key: '[' }, stamp)).toEqual({ kind: 'size', direction: -1 })
-    expect(draftKeyIntent({ key: ']' }, stamp)).toEqual({ kind: 'size', direction: 1 })
-    expect(draftKeyIntent({ key: '{', shiftKey: true }, stamp)).toEqual({ kind: 'hardness', direction: -1 })
-    expect(draftKeyIntent({ key: '}', shiftKey: true }, stamp)).toEqual({ kind: 'hardness', direction: 1 })
-    expect(draftKeyIntent({ key: '[' }, open)).toBeNull()
-    expect(draftKeyIntent({ key: ']' }, drafting)).toBeNull()
+    expect(draftKeyIntent({ key: '[' }, stamp)).toBeNull()
+    expect(draftKeyIntent({ key: '}', shiftKey: true }, stamp)).toBeNull()
   })
 
   it('leaves every platform chord alone', () => {
@@ -290,27 +285,37 @@ describe('draftKeyIntent', () => {
 })
 
 describe('steppedSize', () => {
-  it('moves a small brush finely and a large one coarsely', () => {
-    expect(steppedSize(10, 1, 4, 300)).toBe(12)
-    expect(steppedSize(40, 1, 4, 300)).toBe(50)
-    expect(steppedSize(140, 1, 4, 300)).toBe(160)
-    expect(steppedSize(10, -1, 4, 300)).toBe(8)
-    expect(steppedSize(40, -1, 4, 300)).toBe(30)
-    expect(steppedSize(140, -1, 4, 300)).toBe(120)
+  it('moves a brush by about a tenth, and a small one by a pixel', () => {
+    expect(steppedSize(3, 1, 1, 500)).toBe(4)
+    expect(steppedSize(10, 1, 1, 500)).toBe(11)
+    expect(steppedSize(40, 1, 1, 500)).toBe(44)
+    expect(steppedSize(200, 1, 1, 500)).toBe(220)
+    expect(steppedSize(4, -1, 1, 500)).toBe(3)
+    expect(steppedSize(44, -1, 1, 500)).toBe(40)
+    expect(steppedSize(220, -1, 1, 500)).toBe(200)
   })
 
-  it('comes back down the way it went up', () => {
-    expect(steppedSize(steppedSize(20, 1, 4, 300), -1, 4, 300)).toBe(20)
-    expect(steppedSize(20, -1, 4, 300)).toBe(18)
-    expect(steppedSize(steppedSize(100, 1, 4, 300), -1, 4, 300)).toBe(100)
-    expect(steppedSize(100, -1, 4, 300)).toBe(90)
+  it('comes back down the way it went up, at every size', () => {
+    for (let size = 1; size < 500; size += 1) {
+      const up = steppedSize(size, 1, 1, 500)
+      if (up < 500) expect(steppedSize(up, -1, 1, 500)).toBe(size)
+    }
+  })
+
+  it('crosses the whole range in about fifty presses', () => {
+    let size = 1
+    let presses = 0
+    while (size < 500) {
+      size = steppedSize(size, 1, 1, 500)
+      presses += 1
+    }
+    expect(presses).toBeLessThanOrEqual(55)
   })
 
   it('stays inside the range the tool allows', () => {
-    expect(steppedSize(4, -1, 4, 300)).toBe(4)
-    expect(steppedSize(5, -1, 4, 300)).toBe(4)
-    expect(steppedSize(300, 1, 4, 300)).toBe(300)
-    expect(steppedSize(290, 1, 4, 300)).toBe(300)
+    expect(steppedSize(1, -1, 1, 500)).toBe(1)
+    expect(steppedSize(500, 1, 1, 500)).toBe(500)
+    expect(steppedSize(490, 1, 1, 500)).toBe(500)
   })
 })
 

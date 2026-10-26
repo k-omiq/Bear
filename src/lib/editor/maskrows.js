@@ -269,7 +269,12 @@ function candidateRow(region) {
  * @returns {string}
  */
 function titleKeyFor(region, mask) {
-  if (mask?.provenance?.params_snapshot?.mode === 'region-copy') return 'regionCopy.name'
+  const mode = mask?.provenance?.params_snapshot?.mode
+  if (mode === 'region-copy') return 'regionCopy.name'
+  // The two selection tools name their layers after themselves rather than
+  // after the clone and paint engines they record under.
+  if (mode === 'patch') return 'tools.name.patch'
+  if (mode === 'gradient') return 'tools.name.gradient'
   if (mask) return rungLabel(maskEngine(mask) ?? '')
   if (region.outcome === 'declined') return 'masks.title.declined'
   if (region.outcome === 'gate-skipped') return 'masks.title.gateSkipped'

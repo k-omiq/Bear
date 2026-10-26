@@ -29,9 +29,34 @@
  * @property {boolean} [committed] - sent through the seam rather than abandoned
  */
 
+/**
+ * A Patch or Gradient selection that has been drawn and not yet applied
+ * (`retouch.svelte.js`). The gesture is over, so it is not `active`; nothing
+ * has crossed the seam, so it is not an edit either.
+ *
+ * @typedef {Object} HeldSelection
+ * @property {'patch'|'gradient'} tool
+ * @property {string} pageId
+ * @property {string|null} chapterId
+ * @property {number|null} pageIndex
+ * @property {number|null} sourceIndex
+ * @property {string|null} sourceSha
+ * @property {import('./gesture.js').Bbox} bbox - page percent
+ * @property {{kind: string, points: Array<{x: number, y: number}>, feather: number}|null} painted - the area, as `drawing.svelte.js#paintedShape` sends it
+ * @property {{points: Array<{x: number, y: number}>, radius: number}|null} stroke - a brush selection's path instead
+ * @property {{x: number, y: number}|null} offset - Patch: to the source (or the destination), page percent
+ * @property {boolean} proposed - Patch: the offset is the proposal, not a drag
+ * @property {boolean} proposing - Patch: the proposal has been asked for and has not come back
+ * @property {{x: number, y: number}|null} start - Gradient: the line, page percent
+ * @property {{x: number, y: number}|null} end
+ * @property {string|null} regionId - Gradient: the layer being edited again, or null for a new one
+ */
+
 export const draft = $state({
   /** @type {Draft|null} */
   active: null,
+  /** @type {HeldSelection|null} */
+  selection: null,
   /** @type {{pageId: string, x: number, y: number}|null} the clone stamp's sampled source */
   cloneSource: null,
   /** @type {{x: number, y: number}|null} the aligned offset, once a stroke has established it */
@@ -140,11 +165,29 @@ export function clearCloneSource() {
 }
 
 /**
+ * Hold a drawn Patch or Gradient selection until Apply.
+ *
+ * @param {HeldSelection} selection
+ */
+export function holdSelection(selection) {
+  draft.selection = selection
+  return selection
+}
+
+/** @returns {boolean} whether there was a held selection to drop */
+export function clearSelection() {
+  if (!draft.selection) return false
+  draft.selection = null
+  return true
+}
+
+/**
  * Drop everything, including the sampled clone source - a new chapter is a new
  * page under the stamp.
  */
 export function resetDraftState() {
   draft.active = null
+  draft.selection = null
   draft.cloneSource = null
   draft.cloneOffset = null
   draft.cloneLast = null

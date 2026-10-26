@@ -217,6 +217,8 @@ fn main() {
             "create_region",
             "edit_detection_mask",
             "erase_paint",
+            "propose_patch_source",
+            "fit_gradient",
             "set_detection_padding",
             "rerun_mask",
             "clean_anyway",

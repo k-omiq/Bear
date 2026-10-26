@@ -104,16 +104,56 @@ describe('matchShortcut', () => {
     expect(matchShortcut(press('6'), home)).toBe(null)
   })
 
-  it('gives the selection tool S for its shape and X for add or remove', () => {
+  it('steps the shape on S and the mode on Q, back with Shift', () => {
     const calls = []
     const commands = /** @type {any} */ ({
-      cycleMaskSelectShape: () => calls.push('shape'),
-      toggleMaskSelectMode: () => calls.push('mode'),
+      cycleShape: (direction) => calls.push(['shape', direction]),
+      cycleMode: (direction) => calls.push(['mode', direction]),
     })
     matchShortcut(press('s'), editor)?.run(commands)
-    matchShortcut(press('x'), editor)?.run(commands)
-    expect(calls).toEqual(['shape', 'mode'])
+    matchShortcut(press('S', { shiftKey: true }), editor)?.run(commands)
+    matchShortcut(press('q'), editor)?.run(commands)
+    matchShortcut(press('Q', { shiftKey: true }), editor)?.run(commands)
+    expect(calls).toEqual([['shape', 1], ['shape', -1], ['mode', 1], ['mode', -1]])
     expect(matchShortcut(press('s'), home)).toBe(null)
+  })
+
+  it('arms each selection mode on its own key, and the clone stamp on C', () => {
+    const calls = []
+    const commands = /** @type {any} */ ({
+      setMaskSelectMode: (mode) => calls.push(mode),
+      cycleCloneStamp: (key) => calls.push(`clone:${key}`),
+    })
+    for (const key of ['a', 'x', 'd']) matchShortcut(press(key), editor)?.run(commands)
+    matchShortcut(press('c'), editor)?.run(commands)
+    matchShortcut(press('C', { shiftKey: true }), editor)?.run(commands)
+    expect(calls).toEqual(['add', 'remove', 'detect', 'clone:mode', 'clone:alignment'])
+    // ⌘D is still Duplicate.
+    expect(matchShortcut(press('d', { metaKey: true }), editor)?.id).toBe('layers.duplicateSelected')
+  })
+
+  it('steps the brush on the brackets, its hardness with Shift, its opacity on I, and the padding on ; and \'', () => {
+    const calls = []
+    const commands = /** @type {any} */ ({
+      stepBrush: (key, direction) => calls.push([key, direction]),
+      stepMaskPadding: (direction) => calls.push(['padding', direction]),
+    })
+    for (const event of [
+      press('['), press(']'), press('{', { shiftKey: true }), press('}', { shiftKey: true }),
+      press('i'), press('I', { shiftKey: true }), press(';'), press("'"),
+    ]) matchShortcut(event, editor)?.run(commands)
+    expect(calls).toEqual([
+      ['size', -1], ['size', 1], ['hardness', -1], ['hardness', 1],
+      ['opacity', -1], ['opacity', 1], ['padding', -1], ['padding', 1],
+    ])
+    for (const key of ['[', ']', ';', "'"]) expect(matchShortcut(press(key), editor)?.repeatable, key).toBe(true)
+  })
+
+  it('runs Text cleanup on ⌘↵ and never on a bare Enter', () => {
+    expect(matchShortcut(press('Enter', { metaKey: true }), editor)?.id).toBe('tool.runCleanup')
+    expect(matchShortcut(press('Enter', { ctrlKey: true }), editor)?.id).toBe('tool.runCleanup')
+    expect(matchShortcut(press('Enter'), editor)).toBe(null)
+    expect(matchShortcut({ ...press('Enter', { metaKey: true }), target: { tagName: 'INPUT', type: 'text' } }, editor)).toBe(null)
   })
 
   it('separates N by scope - new project at home, next issue in the editor', () => {
@@ -148,6 +188,27 @@ describe('matchShortcut', () => {
     expect(matchShortcut(press('e', { ctrlKey: true }), editor)).toBe(null)
     expect(matchShortcut(press('e', { altKey: true }), editor)).toBe(null)
     expect(matchShortcut(press('Escape', { metaKey: true }), editor)).toBe(null)
+  })
+
+  // German and many other layouts type the brackets with Option (Mac) or
+  // AltGr (Windows, reported as Ctrl and Alt).
+  it('takes a bracket typed with Option or AltGr, and nothing else with Alt', () => {
+    expect(matchShortcut(press('[', { altKey: true }), editor)?.id).toBe('brush.sizeDown')
+    expect(matchShortcut(press(']', { altKey: true }), editor)?.id).toBe('brush.sizeUp')
+    expect(matchShortcut(press('{', { altKey: true, ctrlKey: true }), editor)?.id).toBe('brush.hardnessDown')
+    expect(matchShortcut(press('}', { altKey: true, ctrlKey: true }), editor)?.id).toBe('brush.hardnessUp')
+    expect(matchShortcut(press('[', { altKey: true, metaKey: true }), editor)).toBe(null)
+    expect(matchShortcut(press('i', { altKey: true }), editor)).toBe(null)
+    expect(matchShortcut(press('u', { altKey: true, ctrlKey: true }), editor)).toBe(null)
+  })
+
+  it('binds the scope, the run\'s cancel and the selected layer\'s clean', () => {
+    expect(matchShortcut(press('v'), editor)?.id).toBe('tool.cleanScope.next')
+    expect(matchShortcut(press('V', { shiftKey: true }), editor)?.id).toBe('tool.cleanScope.prev')
+    expect(matchShortcut(press('.', { metaKey: true }), editor)?.id).toBe('tool.cancelRun')
+    expect(matchShortcut(press('.', { ctrlKey: true }), editor)?.id).toBe('tool.cancelRun')
+    expect(matchShortcut(press('.'), editor)).toBe(null)
+    expect(matchShortcut(press('b'), editor)?.id).toBe('layers.cleanSelected')
   })
 
   it('fires nothing but Escape while a dialog is open', () => {
@@ -190,8 +251,11 @@ describe('matchShortcut', () => {
 
   it('accepts the alternate keys the prototype bound', () => {
     expect(matchShortcut(press('='), editor)?.id).toBe('zoom.in')
-    expect(matchShortcut(press('['), editor)?.id).toBe('page.left')
-    expect(matchShortcut(press(']'), editor)?.id).toBe('page.right')
+  })
+
+  it('pages to the first and last page on Home and End', () => {
+    expect(matchShortcut(press('Home'), editor)?.id).toBe('page.first')
+    expect(matchShortcut(press('End'), editor)?.id).toBe('page.last')
   })
 
   it('runs global entries in both scopes', () => {
@@ -260,7 +324,7 @@ describe('matchShortcut', () => {
   })
 
   it('returns null for an unbound key and for a malformed event', () => {
-    expect(matchShortcut(press('q'), editor)).toBe(null)
+    expect(matchShortcut(press('9'), editor)).toBe(null)
     expect(matchShortcut(null, editor)).toBe(null)
     expect(matchShortcut({}, editor)).toBe(null)
   })
@@ -565,15 +629,15 @@ describe('rebinding', () => {
     })
 
     it('answers the new chord and no longer the old one', () => {
-      setShortcutOverrides({ 'view.maskOverlay': { key: 'k', shift: false, accel: false } })
-      expect(matchShortcut(press('k'), editor)?.id).toBe('view.maskOverlay')
+      setShortcutOverrides({ 'view.maskOverlay': { key: '9', shift: false, accel: false } })
+      expect(matchShortcut(press('9'), editor)?.id).toBe('view.maskOverlay')
       expect(matchShortcut(press('m'), editor)).toBe(null)
     })
 
     it('narrows a rebound entry to exactly the combination recorded', () => {
-      setShortcutOverrides({ 'view.maskOverlay': { key: 'k', shift: false, accel: false } })
+      setShortcutOverrides({ 'view.maskOverlay': { key: '9', shift: false, accel: false } })
       // The default `m` matched either Shift state; `k` was recorded Shift-up.
-      expect(matchShortcut(press('K', { shiftKey: true }), editor)).toBe(null)
+      expect(matchShortcut(press('9', { shiftKey: true }), editor)).toBe(null)
     })
 
     it('carries an accel chord through', () => {
@@ -600,12 +664,12 @@ describe('rebinding', () => {
     })
 
     it('leaves the table sound, and says so', () => {
-      setShortcutOverrides({ 'view.maskOverlay': { key: 'k', shift: false, accel: false } })
+      setShortcutOverrides({ 'view.maskOverlay': { key: '9', shift: false, accel: false } })
       expect(shortcutConflicts()).toEqual([])
     })
 
     it('does not mutate the defaults', () => {
-      setShortcutOverrides({ 'view.maskOverlay': { key: 'k', shift: false, accel: false } })
+      setShortcutOverrides({ 'view.maskOverlay': { key: '9', shift: false, accel: false } })
       expect(SHORTCUTS.find((s) => s.id === 'view.maskOverlay').keys).toEqual(['m'])
     })
   })
@@ -643,9 +707,9 @@ describe('rebinding', () => {
 
   describe('rebindShortcut', () => {
     it('binds, and reports the differences and nothing else', () => {
-      expect(rebindShortcut('view.maskOverlay', { key: 'K' })).toEqual({ ok: true })
+      expect(rebindShortcut('view.maskOverlay', { key: '9' })).toEqual({ ok: true })
       expect(shortcutOverrides()).toEqual({
-        'view.maskOverlay': { key: 'k', shift: false, accel: false },
+        'view.maskOverlay': { key: '9', shift: false, accel: false },
       })
       expect(isRebound('view.maskOverlay')).toBe(true)
       expect(isRebound('edit.undo')).toBe(false)
@@ -669,7 +733,7 @@ describe('rebinding', () => {
     })
 
     it('refuses an id this build does not have, and a chord it cannot use', () => {
-      expect(rebindShortcut('tool.retouch', { key: 'k' }).reasonKey).toBe(
+      expect(rebindShortcut('tool.retouch', { key: '9' }).reasonKey).toBe(
         'shortcuts.rebind.refusedUnknown'
       )
       expect(rebindShortcut('edit.undo', { key: 'Tab' }).reasonKey).toBe(
@@ -683,10 +747,10 @@ describe('rebinding', () => {
     })
 
     it('frees the key it moved off, so two entries can be swapped by hand', () => {
-      expect(rebindShortcut('view.maskOverlay', { key: 'k' }).ok).toBe(true)
+      expect(rebindShortcut('view.maskOverlay', { key: '9' }).ok).toBe(true)
       expect(rebindShortcut('view.reviewFilter', { key: 'm' }).ok).toBe(true)
       expect(matchShortcut(press('m'), editor)?.id).toBe('view.reviewFilter')
-      expect(matchShortcut(press('k'), editor)?.id).toBe('view.maskOverlay')
+      expect(matchShortcut(press('9'), editor)?.id).toBe('view.maskOverlay')
       expect(matchShortcut(press('r'), editor)).toBe(null)
     })
   })
@@ -702,7 +766,7 @@ describe('rebinding', () => {
     })
 
     it('gives every entry back at once', () => {
-      rebindShortcut('view.maskOverlay', { key: 'k' })
+      rebindShortcut('view.maskOverlay', { key: '9' })
       unbindShortcut('edit.redo')
       expect(Object.keys(shortcutOverrides())).toHaveLength(2)
       resetAllShortcuts()
@@ -712,7 +776,7 @@ describe('rebinding', () => {
 
     it('moves the revision on every change, so a sheet knows to redraw', () => {
       const before = shortcutsRevision()
-      rebindShortcut('view.maskOverlay', { key: 'k' })
+      rebindShortcut('view.maskOverlay', { key: '9' })
       expect(shortcutsRevision()).toBeGreaterThan(before)
     })
   })
@@ -725,16 +789,16 @@ describe('rebinding', () => {
       // modifier state has become.
       expect(releasesHoldOriginal(press('o', { shiftKey: true }))).toBe(true)
       expect(releasesHoldOriginal(press('o', { metaKey: true }))).toBe(false)
-      expect(releasesHoldOriginal(press('k'))).toBe(false)
+      expect(releasesHoldOriginal(press('9'))).toBe(false)
     })
 
     it('moves with a rebinding and stops with an unbinding', () => {
-      setShortcutOverrides({ 'view.holdOriginal': { key: 'k', shift: false, accel: false } })
-      expect(releasesHoldOriginal(press('k'))).toBe(true)
+      setShortcutOverrides({ 'view.holdOriginal': { key: '9', shift: false, accel: false } })
+      expect(releasesHoldOriginal(press('9'))).toBe(true)
       expect(releasesHoldOriginal(press('o'))).toBe(false)
       setShortcutOverrides({ 'view.holdOriginal': null })
       expect(releasesHoldOriginal(press('o'))).toBe(false)
-      expect(releasesHoldOriginal(press('k'))).toBe(false)
+      expect(releasesHoldOriginal(press('9'))).toBe(false)
     })
   })
 })
@@ -822,5 +886,39 @@ describe('the modifier a pointer gesture carries', () => {
       expect(modifierCap(id, { apple: true })).toBeTruthy()
       expect(modifierCap(id, { apple: false })).toBeTruthy()
     }
+  })
+})
+
+// The two tools past the digits take letters, Photoshop's: J for the Patch
+// tool (the healing group's key) and G for the Gradient.
+describe('the Patch and Gradient keys', () => {
+  it('arm slots 8 and 9 from J and G in the editor', () => {
+    const slots = []
+    const context = { selectToolSlot: (/** @type {number} */ slot) => slots.push(slot) }
+    const patch = matchShortcut(press('j'), editor)
+    const gradient = matchShortcut(press('g'), editor)
+    expect(patch?.id).toBe('tool.patch')
+    expect(gradient?.id).toBe('tool.gradient')
+    patch?.run(/** @type {any} */ (context))
+    gradient?.run(/** @type {any} */ (context))
+    expect(slots).toEqual([8, 9])
+    expect(shortcutChord(/** @type {any} */ (patch))).toEqual(['J'])
+    expect(shortcutChord(/** @type {any} */ (gradient))).toEqual(['G'])
+  })
+
+  it('arm the Gradient with its Auto type from Shift+G, and G alone stays the tool', () => {
+    const calls = []
+    const context = { armAutoGradient: () => calls.push('auto'), selectToolSlot: (/** @type {number} */ slot) => calls.push(slot) }
+    const auto = matchShortcut(press('G', { shiftKey: true }), editor)
+    expect(auto?.id).toBe('tool.gradientAuto')
+    auto?.run(/** @type {any} */ (context))
+    matchShortcut(press('g'), editor)?.run(/** @type {any} */ (context))
+    expect(calls).toEqual(['auto', 9])
+    expect(shortcutChord(/** @type {any} */ (auto))).toEqual(['Shift', 'G'])
+  })
+
+  it('do nothing on the home screen or while typing', () => {
+    expect(matchShortcut(press('j'), home)).toBeNull()
+    expect(matchShortcut(press('g', { target: { tagName: 'INPUT', type: 'text' } }), editor)).toBeNull()
   })
 })

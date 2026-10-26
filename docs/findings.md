@@ -733,6 +733,14 @@ the cloud for detection fails to save. The Runtime step does not reload the path
 chosen away and back. A Stop on a measurement this window did not start stays disabled if reading
 the result after it fails.
 
+Editor gaps from the same review, left open: a wheel or arrow change on a tool bar slider still
+waiting (250 ms) when another tool is picked is written to the new tool. A press inside a Gradient
+selection away from its handles drops the line already set, and so does one refused because a run
+is on the page. Escape from a bar control reached with `\` drops the held selection and leaves the
+focus on the control. A `;` / `'` run is lost without a notice when the chapter changes or the page
+is busy before it saves, and a page-wide run still saving can land after a row's own padding change
+and overwrite it.
+
 **CUDA probe in CI (2026-10-26): `.github/workflows/probe-cuda.yml` loads both CUDA builds on
 GitHub's Windows and Linux runners, with CUDA 12.6, 12.9 and 13.0 and a cuDNN per major installed
 side by side, and no GPU.** A stand-in `nvidia-smi` reports a card, and on Linux NVIDIA's stub of the
@@ -752,6 +760,36 @@ CTD, Full, SAM-TS-L, the Hayai reader and LaMa loaded together; SAM-TS-L memory 
 the disk the SAM setup's Python environment takes; and how much slower Advanced runs below 10 GB free
 now that the memory check warns instead of refusing. The editor's missing-model button still opens
 Settings rather than downloading in place.
+
+**Gradient tool, Auto type (2026-10-25): built; checked on one real page, not in the desktop app.**
+`crates/cleaner-core/src/engines/autogradient.rs` fits a robust cubic surface to the ring round a
+selection, takes the lettering's off-surface pieces past it, keeps the page's own pieces, and blends
+the edge with a fading membrane. Checked by unit tests and, through the real render path, on one
+red-to-black glowing bubble (two lassos, one cutting through letters; four rectangles and ellipses
+through the cleaner-core example `autogradient_fill`): no lettering or glow left, outline and rim
+glow untouched, no visible seam at 2.5x brightness. Not measured: gray and screentone pages (it
+refuses a ring whose robust spread is past 24 levels, so a screen should refuse, unverified on real
+scans), bubbles whose gradient is not smooth over the ring (a hard light edge), lettering glow that
+touches the bubble's rim glow (they merge into one piece and the text is kept), long-strip windows,
+and a selection that covers a whole bubble with its outline (refused on the sample, by the same
+spread rule). The layer cannot be reopened with Edit gradient: it records no line or stops.
+
+**Screentone fill, Patch tool and Gradient tool (2026-10-22): built; checked by tests and the Vite
+mock, not in the desktop app; sheets not yet approved.** The Patch tool (`J`) and Gradient tool (`G`)
+are described in [features.md](features.md); what they leave open (no pixel preview for a patch
+source, an inert Content-Aware Color option, anchor-page-only reads in long-strip mode, no
+comparison with Photoshop's own output) is listed in the plan. Plain PatchMatch fails on halftone: blurry dots and blotches of the wrong
+tone. The screentone fill that replaced it (`crates/cleaner-core/src/engines/screentone.rs`, engine
+`screentone`) copies the page's own dots through the screen's repeat offsets at a membrane tone
+field, after growing the mask over leftover outlines, and on the six-case corpus it leaves no
+lettering at 3 px or 6 px padding. Measured against the prototype on that corpus, not on whole
+chapters. Not measured or deferred: automatic routing of Detect and clean to it (it is a manual pick
+only), passing other detected regions as no-copy areas from the app, a faint grain along the
+letters' shape on dark ramps (the copy order), the `blackjack-bars` case where Detect masks only bits
+of the letters, the Line tool for speed lines, colour and multi-angle screens, and whether the
+default mask padding should change. The corpus is copyrighted and git-ignored, so the Rust to Python
+parity check is a manual harness run, not a CI test. Plan and results log:
+[patch-gradient-plan.md](patch-gradient-plan.md).
 
 **SAM-TS-L install on Windows (2026-10-21): fixed in code, not run on a Windows desktop.** A user's
 Windows install showed an empty black console window instead of progress. Every console program the
@@ -1504,8 +1542,8 @@ Not measured, or deferred:
 - The stamp reads the cleaned page under the new layer, always. There is no choice of the original
   scan, of one layer, or of another page as the source.
 - No rotate, scale or flip of the source, no saved sources, and no blend modes.
-- The digit keys pick tools, so they do not set the opacity. `[` and `]` turn pages everywhere but
-  on the focused page surface, so they step the brush only there.
+- The digit keys pick tools, so they do not set the opacity; `I` and `Shift`+`I` step it by ten
+  instead. `[` and `]` no longer turn pages: they size every round brush, and the arrows page.
 - Holding the brush still adds nothing (no airbrush build-up), and the dab is always round.
 - The live preview is refused for a stroke whose two windows, the target and the source, are over
   the preview limit. The commit is not limited. How often a real stroke meets the limit was not

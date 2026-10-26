@@ -6,6 +6,9 @@ import {
   raisedOrder,
   minWidthFor,
   contentSized,
+  clampPanelWidth,
+  PANEL_MIN_WIDTH,
+  PANEL_MAX_WIDTH,
   WINDOW_IDS,
   CONTENT_SIZED,
   DEFAULT_MIN_WIDTH,
@@ -199,6 +202,16 @@ describe('clampSize', () => {
     // Every other window still keeps the number it was given, clamped.
     expect(clampSize({ w: 306, h: 420 }, 900, 'pages').h).toBe(420)
     expect(clampSize({ w: 306, h: 10 }, 900, 'pages').h).toBe(MIN_HEIGHT)
+  })
+})
+
+describe('clampPanelWidth', () => {
+  it('holds a dragged panel width between Text cleanup\'s floor and the window ceiling', () => {
+    expect(PANEL_MIN_WIDTH).toBe(360)
+    expect(PANEL_MAX_WIDTH).toBe(MAX_WIDTH)
+    expect(clampPanelWidth(100)).toBe(PANEL_MIN_WIDTH)
+    expect(clampPanelWidth(9999)).toBe(PANEL_MAX_WIDTH)
+    expect(clampPanelWidth(430.6)).toBe(431)
   })
 })
 

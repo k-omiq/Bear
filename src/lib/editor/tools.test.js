@@ -21,6 +21,8 @@ import {
   isSolidFill,
   paramGroups,
   segmentedTabStop,
+  selectsArea,
+  toolKey,
   toolShell,
   toolSpec,
   toolSpendsCloud,
@@ -32,8 +34,8 @@ import { iconNames } from '../icons/paths.js'
 import { hexToRgb, hsbToHex, hsbToRgb, rgbToHex, rgbToHsb } from '../ui/color.js'
 
 describe('isDrawingTool', () => {
-  it('is the six tools whose gesture is a drag', () => {
-    expect([...DRAWING_TOOLS]).toEqual(['brush', 'eraser', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect'])
+  it('is the eight tools whose gesture is a drag', () => {
+    expect([...DRAWING_TOOLS]).toEqual(['brush', 'eraser', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect', 'patch', 'gradient'])
   })
 
   it('excludes the two that act on a region that already exists', () => {
@@ -188,10 +190,10 @@ describe('the Shapes tool', () => {
     ])
   })
 
-  it('offers a solid colour and the two redraw models', () => {
+  it('offers a solid colour, the screentone fill and the two redraw models', () => {
     const mode = param('mode')
     expect(mode?.kind).toBe('choice')
-    expect(mode?.options.map((option) => option.value)).toEqual([SOLID, 'lama', 'flux'])
+    expect(mode?.options.map((option) => option.value)).toEqual([SOLID, 'lama', 'flux', 'screentone'])
     // The AI mask brush has the stronger two local models only.
     const brushEngines = toolSpec('aiMaskBrush').params.find((p) => p.key === 'engine')
     for (const rung of ROW_ENGINES) {
@@ -315,8 +317,9 @@ describe('the selection tool', () => {
     expect(spec.runnable).toBe(false)
     expect(spec.nameKey).toBe('tools.name.maskSelect')
     expect(t(spec.hintKey)).not.toBe('')
-    // The eraser sits beside the Brush on the rail and takes the next free slot.
-    expect(TOOL_SPECS.map((entry) => entry.slot)).toEqual([1, 2, 7, 3, 4, 5, 6])
+    // The eraser sits beside the Brush on the rail and takes the next free
+    // slot; Patch and Gradient follow, armed by J and G rather than a digit.
+    expect(TOOL_SPECS.map((entry) => entry.slot)).toEqual([1, 2, 7, 3, 4, 5, 6, 8, 9])
     expect(isDrawingTool('maskSelect')).toBe(true)
   })
 
@@ -390,14 +393,15 @@ describe('draftShape', () => {
  * the component draws whatever it is handed.
  */
 /**
- * The shape of the tool shell per tool: Text cleanup is a compact panel of
- * rows, and every drawing tool keeps the one-row pill.
+ * The shape of the tool shell per tool: Text cleanup and the Gradient are
+ * compact panels of rows, and every other drawing tool keeps the one-row pill.
  */
 describe('toolShell', () => {
-  it('is the panel for Text cleanup and the pill for every drawing tool', () => {
+  it('is the panel for Text cleanup and the Gradient, and the pill for every other drawing tool', () => {
     expect(toolShell('autoClean')).toBe('panel')
-    for (const id of DRAWING_TOOLS) expect(toolShell(id), id).toBe('pill')
-    expect(TOOL_SPECS.filter((spec) => spec.shell === 'panel').map((spec) => spec.id)).toEqual(['autoClean'])
+    expect(toolShell('gradient')).toBe('panel')
+    for (const id of DRAWING_TOOLS.filter((id) => id !== 'gradient')) expect(toolShell(id), id).toBe('pill')
+    expect(TOOL_SPECS.filter((spec) => spec.shell === 'panel').map((spec) => spec.id)).toEqual(['autoClean', 'gradient'])
   })
 
   it('is the pill for a tool it does not know, which cannot outgrow a small window', () => {
@@ -716,5 +720,44 @@ describe('the icons and the short labels the bar draws a choice with', () => {
         expect(param.shortKey, `${id}.${param.key}`).toBeUndefined()
       }
     }
+  })
+})
+
+describe('the Patch and Gradient tools', () => {
+  const patch = /** @type {import('./tools.js').ToolSpec} */ (toolSpec('patch'))
+  const gradient = /** @type {import('./tools.js').ToolSpec} */ (toolSpec('gradient'))
+
+  it('are a pill and a panel armed by J and G, drawn as selections and applied rather than run', () => {
+    for (const [spec, key, slot, shell] of /** @type {const} */ ([[patch, 'J', 8, 'pill'], [gradient, 'G', 9, 'panel']])) {
+      expect(spec.slot).toBe(slot)
+      expect(toolKey(spec)).toBe(key)
+      expect(spec.shell).toBe(shell)
+      expect(spec.runnable).toBe(false)
+      expect(isDrawingTool(spec.id)).toBe(true)
+      expect(selectsArea(spec.id)).toBe(true)
+      expect(t(spec.nameKey)).not.toBe('')
+      expect(t(spec.hintKey)).not.toBe('')
+      expect(draftShape(spec.id, { shape: 'rect' })).toBe('rect')
+    }
+    // The other tools still print their number.
+    expect(toolKey(/** @type {any} */ (toolSpec('brush')))).toBe('2')
+    expect(selectsArea('cloneStamp', { mode: 'region' })).toBe(true)
+    expect(selectsArea('cloneStamp', { mode: 'stamp' })).toBe(false)
+  })
+
+  it('shows Direction and Diffusion for Normal, Structure and Color for Content-Aware', () => {
+    const keys = (/** @type {Record<string, unknown>} */ values) => activeParams(patch, values).map((param) => param.key)
+    expect(keys({ mode: 'auto', shape: 'lasso' })).toEqual(['shape', 'mode'])
+    expect(keys({ mode: 'normal', shape: 'lasso' })).toEqual(['shape', 'mode', 'direction', 'diffusion'])
+    expect(keys({ mode: 'contentAware', shape: 'brush' })).toEqual(['shape', 'size', 'mode', 'structure', 'color'])
+    expect(keys({ mode: 'smooth', shape: 'rect' })).toEqual(['shape', 'mode'])
+    const diffusion = patch.params.flatMap((param) => ('params' in param ? param.params : [param])).find((param) => param.key === 'diffusion')
+    expect(diffusion).toMatchObject({ min: 1, max: 7 })
+  })
+
+  it('offers the five gradient types, Photoshop\'s, then Auto, with opacity and feather', () => {
+    const kind = activeParams(gradient, { shape: 'lasso' }).find((param) => param.key === 'kind')
+    expect(kind?.options.map((option) => option.value)).toEqual(['linear', 'radial', 'angle', 'reflected', 'diamond', 'auto'])
+    expect(activeParams(gradient, { shape: 'lasso' }).map((param) => param.key)).toEqual(['shape', 'kind', 'opacity', 'feather'])
   })
 })

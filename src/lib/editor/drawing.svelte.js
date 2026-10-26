@@ -16,6 +16,10 @@
  * - **Content-aware fill** never reaches here. It fills an existing mask,
  *   which is a click on a region and therefore
  *   `toolapply.svelte.js`'s.
+ * - **The Patch tool and the Gradient tool** do not commit here at all. Their
+ *   gesture is a selection, held until Apply while the source or the line is
+ *   set on the page (`retouch.svelte.js`), so the draft becomes a held
+ *   selection and nothing crosses the seam yet.
  * - **The selection tool** creates no layer. It adds its gesture to the
  *   page's detected masks or takes it away from them - `editDetectionMask` -
  *   and those masks are what Clean erases later. A detection has no pixels to
@@ -56,7 +60,8 @@ import { AI_STROKE_PX, detectAreaIn, paintedStroke } from './gesture.js'
 import { paintParamsOf, paintPointsOf } from './paint.js'
 import { renderRegionInCloud } from './toolapply.svelte.js'
 import { reportRegionEditFailure } from './maskactions.svelte.js'
-import { SOLID, TOOL_SPECS, toolSpendsCloud } from './tools.js'
+import { holdDrawn } from './retouch.svelte.js'
+import { SELECTION_TOOLS, SOLID, TOOL_SPECS, selectsArea, toolSpendsCloud } from './tools.js'
 
 export { paintParamsOf }
 
@@ -100,6 +105,7 @@ export async function commitDraft() {
   markCommitted()
   clearDraft()
   if (!spec.chapterId || spec.pageIndex === null) return false
+  if (SELECTION_TOOLS.includes(/** @type {any} */ (spec.tool))) return holdDrawn(spec, paintedShape(spec), strokeOf(spec))
   const key = `${spec.chapterId}:${spec.pageId}`
   const run = () => {
     switch (spec.tool) {
@@ -208,7 +214,7 @@ function strokeOf(spec) {
  * @returns {{kind: 'rect'|'ellipse'|'polygon', points: Array<{x: number, y: number}>, feather: number}|null}
  */
 export function paintedShape(spec) {
-  if (spec.tool !== 'shapes' && spec.tool !== 'maskSelect' && !(spec.tool === 'cloneStamp' && spec.params?.mode === 'region')) return null
+  if (spec.tool !== 'shapes' && spec.tool !== 'maskSelect' && !selectsArea(spec.tool, spec.params)) return null
   if (spec.kind === 'stroke') return null
   const box = spec.bbox
   if (!box) return null

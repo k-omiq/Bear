@@ -40,6 +40,8 @@ export const DEFAULT_MIN_WIDTH = 198
  * It used to have the **widest** floor of the three instead, computed from the
  * label / control / readout grid every row in it was drawn on. There are no
  * rows and no grid now, and a bar has no resize corner to defend against.
+ * The panel's corner sizes a width kept apart from this box
+ * (`session.toolPanelWidth`, `clampPanelWidth`), and the box measures the result.
  */
 export const CONTENT_SIZED = /** @type {const} */ (['tool'])
 
@@ -59,6 +61,22 @@ export function contentSized(id) {
  */
 export function minWidthFor(id) {
   return contentSized(id) ? 0 : DEFAULT_MIN_WIDTH
+}
+
+/**
+ * How wide the user may drag a tool panel (Text cleanup, the Gradient): no
+ * narrower than Text cleanup's "Detect & clean" chip still fits in, and no
+ * wider than any other window. The pill has no width to choose.
+ */
+export const PANEL_MIN_WIDTH = 360
+export const PANEL_MAX_WIDTH = MAX_WIDTH
+
+/**
+ * @param {number} w
+ * @returns {number} a panel width the user may have
+ */
+export function clampPanelWidth(w) {
+  return clamp(Math.round(w), PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
 }
 
 /**

@@ -32,13 +32,15 @@ import {
 import { reviewList, reviewReason, stepIssue } from '../model/review.js'
 import { runDetection, unifyAnalysisTargets } from '../model/pipelines.js'
 import { recountPage } from '../model/status.js'
-import { toolSpec } from '../editor/tools.js'
+import { activeParams, toolSpec } from '../editor/tools.js'
+import { steppedSize } from '../editor/gesture.js'
+import { capabilities } from './capabilities.svelte.js'
 import { MAX_MASK_PADDING } from '../model/masks.js'
 import { displayBbox, pagesReached } from '../model/layers.js'
 import { evictRegions, slideWindow, windowIndices } from './pagewindow.svelte.js'
 import { pageNavControls, defaultReadingDirection } from '../model/paging.js'
-import { clearCloneSource, clearDraft, resetDraftState } from '../editor/draft.svelte.js'
-import { notify, pushModal } from './app.svelte.js'
+import { clearCloneSource, clearDraft, clearSelection, resetDraftState } from '../editor/draft.svelte.js'
+import { app, dismissNotice, notify, pushModal } from './app.svelte.js'
 import { session, openWindow } from './session.svelte.js'
 import { loadAutosave, storeAutosave } from './autosave.js'
 import { numberIn } from './persist.js'
@@ -49,7 +51,10 @@ const AUTOSAVE_DEBOUNCE_MS = 250
 const HISTORY_RETRY_MS = 50
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Tool ids, in the order of the `1` to `7` shortcuts (`slot` in `tools.js`). */
+/**
+ * Tool ids, in slot order (`slot` in `tools.js`): the `1` to `7` shortcuts,
+ * then the Patch tool and the Gradient tool, which `J` and `G` select.
+ */
 export const TOOLS = /** @type {const} */ ([
   'autoClean',
   'brush',
@@ -58,6 +63,8 @@ export const TOOLS = /** @type {const} */ ([
   'cloneStamp',
   'maskSelect',
   'eraser',
+  'patch',
+  'gradient',
 ])
 
 /**
@@ -149,6 +156,23 @@ function defaultToolParams() {
     // The selection tool edits the detected masks Clean erases: it adds by
     // default, with a round brush.
     maskSelect: { mode: 'add', shape: 'brush', size: 32 },
+    // Photoshop's own defaults where it has one: Normal-style Diffusion 5,
+    // Structure 4, Color 0. Auto first, because it needs no source.
+    patch: { shape: 'lasso', size: 32, mode: 'auto', direction: 'source', diffusion: 5, structure: 4, color: 0 },
+    // Two stops, black to white until a preset or an eyedrop says otherwise
+    // (`gradient.js#defaultStops`), dithered as Photoshop's default is.
+    gradient: {
+      shape: 'lasso',
+      size: 32,
+      kind: 'linear',
+      opacity: 100,
+      feather: 0,
+      colors: [{ at: 0, color: '#000000' }, { at: 1, color: '#ffffff' }],
+      opacities: [{ at: 0, opacity: 100 }, { at: 1, opacity: 100 }],
+      reverse: false,
+      dither: true,
+      asScreentone: false,
+    },
   }
 }
 
@@ -1200,6 +1224,9 @@ export function goToPage(index) {
   // The strip is one continuous scroll: resetting it to the top here would
   // undo the scroll the request above is about to make.
   if (!longstrip) editor.scroll = { top: 0, left: 0 }
+  // A held Patch or Gradient selection is drawn on the page it was made on;
+  // turned away from, it would still Apply onto a page no longer shown.
+  if (!longstrip) clearSelection()
   clearHighlight()
   // The window follows the reader. Not awaited: a page turn is
   // synchronous and the regions filling in a frame later is the whole of the
@@ -1407,14 +1434,22 @@ export function reportFitScale(scale) {
 export function setTool(tool) {
   if (tool === 'contentAwareFill') tool = 'aiMaskBrush'
   if (!TOOLS.includes(/** @type {any} */ (tool))) return
+  // A held Patch or Gradient selection belongs to the tool that drew it.
+  if (editor.tool !== tool) clearSelection()
   editor.tool = tool
   openWindow('tool')
 }
 
-/** @param {number} slot - 1..6, as the number-key shortcuts number them */
+/** @param {number} slot - 1..9: the number keys, then `J` (8) and `G` (9) */
 export function setToolBySlot(slot) {
   const tool = TOOLS[slot - 1]
   if (tool) setTool(tool)
+}
+
+/** `Shift+G`: the Gradient tool with its type Auto, so a selection fills at once. */
+export function armAutoGradient() {
+  setTool('gradient')
+  setToolParam('gradient', 'kind', 'auto')
 }
 
 /**
@@ -1428,27 +1463,130 @@ export function setToolParam(tool, key, value) {
 }
 
 /**
- * The selection tool's keys, `S` and `X`. Pressed while another tool is
- * active, either one arms the selection tool as it was left and changes
- * nothing else: a key that switched tool *and* changed a setting the user
- * cannot see yet would land them in a state they did not choose. Pressed with
- * the selection tool already active, `S` steps to the next shape in the tool
- * bar's order and `X` swaps add for remove, the way a mask painter swaps its
- * two colours.
+ * The active tool's row for `key` while it is live for the tool's values, or
+ * null: a key that steps a row the bar is not showing would change something
+ * the user cannot see.
+ *
+ * @param {string} tool
+ * @param {string} key
+ * @param {'range'|'choice'} kind
  */
-export function cycleMaskSelectShape() {
-  if (editor.tool !== 'maskSelect') return setTool('maskSelect')
-  const shapes = toolSpec('maskSelect').params.find((param) => param.key === 'shape')
-  const values = shapes?.kind === 'choice' ? shapes.options.map((option) => option.value) : []
-  if (values.length === 0) return
-  const at = values.indexOf(String(editor.toolParams.maskSelect?.shape ?? values[0]))
-  setToolParam('maskSelect', 'shape', values[(at + 1) % values.length])
+function liveRow(tool, key, kind) {
+  const row = activeParams(toolSpec(tool), editor.toolParams[tool] ?? {}).find((param) => param.key === key)
+  return row?.kind === kind ? /** @type {any} */ (row) : null
 }
 
-/** @see cycleMaskSelectShape */
-export function toggleMaskSelectMode() {
-  if (editor.tool !== 'maskSelect') return setTool('maskSelect')
-  setToolParam('maskSelect', 'mode', editor.toolParams.maskSelect?.mode === 'remove' ? 'add' : 'remove')
+/** How far one press moves a percentage row (hardness, opacity), in its own units. */
+const PERCENT_STEP = 10
+
+/** How far one press moves Spacing, whose whole range is 1 to 50. */
+const SPACING_STEP = 5
+
+/**
+ * One press of a brush key: the active tool's `size` (`[` and `]`), `hardness`
+ * (with Shift), `opacity` (`I`), `flow` (`K`) or `spacing` (`Y`), one step
+ * either way. Size steps by about a tenth (`gesture.js#steppedSize`), the
+ * percentages by ten and Spacing by five, each onto a multiple of its step. A
+ * tool with no such row live ignores the key.
+ *
+ * @param {'size'|'hardness'|'opacity'|'flow'|'spacing'} key
+ * @param {number} direction - below zero for less
+ * @returns {boolean} whether the value changed
+ */
+export function stepToolParam(key, direction) {
+  const tool = editor.tool
+  const row = liveRow(tool, key, 'range')
+  if (!row) return false
+  const now = Number(editor.toolParams[tool]?.[key] ?? row.min)
+  const by = key === 'spacing' ? SPACING_STEP : PERCENT_STEP
+  const next = key === 'size'
+    ? steppedSize(now, direction, row.min, row.max)
+    // Onto the next multiple of the step that way: 12 goes to 10 or 15.
+    : Math.min(row.max, Math.max(row.min, direction < 0 ? (Math.ceil(now / by) - 1) * by : (Math.floor(now / by) + 1) * by))
+  if (next === now) return false
+  setToolParam(tool, key, next)
+  return true
+}
+
+/**
+ * Step a choice row of a tool to its next (or previous) option, skipping the
+ * ones the bar would not let it pick: a cloud option, whose consent and
+ * endpoint a key press cannot answer, and an engine this machine has not got.
+ *
+ * @param {string} tool
+ * @param {string} key
+ * @param {number} direction
+ * @returns {boolean} whether the row is live
+ */
+function cycleChoice(tool, key, direction) {
+  const row = liveRow(tool, key, 'choice')
+  if (!row) return false
+  const values = row.options
+    .filter((/** @type {any} */ option) => !option.cloud && !(option.engine && capabilities.engines[option.engine] === false))
+    .map((/** @type {any} */ option) => option.value)
+  if (values.length === 0) return true
+  const at = values.indexOf(String(editor.toolParams[tool]?.[key] ?? values[0]))
+  // A value the list skipped (a cloud option picked in the bar) steps onto
+  // either end.
+  const next = at === -1 ? (direction < 0 ? values.length - 1 : 0) : (at + (direction < 0 ? values.length - 1 : 1)) % values.length
+  setToolParam(tool, key, values[next])
+  // A region copy being placed belongs to the mode and shape that drew it.
+  if (tool === 'cloneStamp' && (key === 'mode' || key === 'shape')) select(null)
+  return true
+}
+
+/** The row `Q` steps, per tool: the first of these each tool has live. */
+const MODE_KEYS = ['step', 'mode', 'kind', 'engine']
+
+/**
+ * `S`: the active tool's next shape - rectangle, ellipse, lasso and so on,
+ * in the bar's order - and `Shift+S` the one before. A tool without a shape
+ * arms the selection tool as it was left, which is what `S` always did.
+ *
+ * @param {number} [direction]
+ */
+export function cycleToolShape(direction = 1) {
+  if (!cycleChoice(editor.tool, 'shape', direction) && editor.tool !== 'maskSelect') setTool('maskSelect')
+}
+
+/**
+ * `Q`: the active tool's mode one step on - Text cleanup's Detect, Clean or
+ * both; the selection's add, remove or Detect; the clone stamp's Stamp or
+ * Region copy; the Shape's fill; the Patch's mode; the Gradient's type; the AI
+ * mask brush's engine. `Shift+Q` steps back.
+ *
+ * @param {number} [direction]
+ */
+export function cycleToolMode(direction = 1) {
+  for (const key of MODE_KEYS) if (cycleChoice(editor.tool, key, direction)) return
+}
+
+/**
+ * The selection tool in one mode, from anywhere: `A` adds to the detected
+ * masks, `X` removes from them, `D` asks the detector to look inside a
+ * rectangle. Pressed again while that mode is already armed, `X` and `D` go
+ * back to add, so `X` still swaps the two the way a mask painter swaps its
+ * colours.
+ *
+ * @param {'add'|'remove'|'detect'} mode
+ */
+export function setMaskSelectMode(mode) {
+  const again = editor.tool === 'maskSelect' && editor.toolParams.maskSelect?.mode === mode
+  setTool('maskSelect')
+  setToolParam('maskSelect', 'mode', again && mode !== 'add' ? 'add' : mode)
+}
+
+/**
+ * The clone stamp's two keys. Pressed while another tool is active, either one
+ * arms the clone stamp as it was left and changes nothing else, as `S` and
+ * `X` arm the selection tool; with it armed, `C` swaps Stamp for Region copy
+ * and `Shift+C` swaps aligned for non-aligned.
+ *
+ * @param {'mode'|'alignment'} key
+ */
+export function cycleCloneStamp(key) {
+  if (editor.tool !== 'cloneStamp') return setTool('cloneStamp')
+  cycleChoice('cloneStamp', key, 1)
 }
 
 /*
@@ -1566,6 +1704,15 @@ export function togglePinOriginal() {
  */
 export function setWipe(value) {
   editor.wipe = numberIn(Math.round(value), { min: 0, max: 100, fallback: editor.wipe })
+}
+
+/**
+ * `W` and `Shift+W`: the original's wipe ten percent less or more.
+ *
+ * @param {number} direction
+ */
+export function stepWipe(direction) {
+  setWipe(editor.wipe + Math.sign(direction) * 10)
 }
 
 /* ------------------------------------------------------------------ */
@@ -1775,21 +1922,26 @@ export function solidOnlyOf(params = editor.toolParams.autoClean ?? {}) {
  * The resident pages it changed are read again, which moves each changed
  * detection's mask URL; a page outside the window is read when it comes in.
  *
+ * A caller that waited before saving (the `;` and `'` keys) passes the page
+ * and padding it meant, so a page turn while it waited does not move the save.
+ *
  * @param {'page'|'chapter'} scope
+ * @param {{pageIndex?: number, paddingPx?: number}} [at] - the open chapter's page and padding to use instead of the current ones
  * @returns {Promise<boolean>} whether any mask changed
  */
-export async function applyDetectionPadding(scope) {
+export async function applyDetectionPadding(scope, at = {}) {
   const chapter = editor.chapter
   if (!chapter) return false
+  const pageIndex = at.pageIndex ?? editor.pageIndex
   // A chapter's worth of masks waits for the run to leave the chapter; one
   // page's waits only while the run is on that page.
-  if (scope === 'page' ? pageBusy(editor.pageIndex) : editor.run.active) return false
-  const paddingPx = paddingOf(editor.toolParams.autoClean ?? {})
+  if (scope === 'page' ? pageBusy(pageIndex) : editor.run.active) return false
+  const paddingPx = at.paddingPx ?? paddingOf(editor.toolParams.autoClean ?? {})
   let result
   try {
     result = await getBackend().setDetectionPadding({
       chapterId: chapter.id,
-      ...(scope === 'page' ? { pageIndex: editor.pageIndex } : {}),
+      ...(scope === 'page' ? { pageIndex } : {}),
       paddingPx,
     })
   } catch (error) {
@@ -1930,6 +2082,11 @@ const finishedRuns = new Map()
 
 /** @param {import('../api/backend.js').RunFinishedEvent} event */
 function settleRun(event) {
+  // A notice that stays until closed and is about this run closes with it, so
+  // its Stop button never outlives the run (`App.svelte#NOTICE_ACTIONS`).
+  for (const notice of [...app.notices]) {
+    if (notice.key === 'notice.run.lowMemory' && notice.params?.runId === event.runId) dismissNotice(notice.id)
+  }
   const waiting = runWaiters.get(event.runId)
   runWaiters.delete(event.runId)
   if (waiting) for (const resolve of waiting) resolve(event)
@@ -1963,9 +2120,10 @@ export function runFinished(runId) {
 }
 
 /** @returns {Promise<string|null>} the cancelled run's id */
-export async function cancelRun() {
-  if (!editor.run.runId) return null
-  return getBackend().cancelRun({ runId: editor.run.runId })
+/** @param {string|null} [runId] - the run to stop; the editor's own when not named */
+export async function cancelRun(runId = editor.run.runId) {
+  if (!runId) return null
+  return getBackend().cancelRun({ runId })
 }
 
 /* ------------------------------------------------------------------ */
@@ -2486,7 +2644,33 @@ async function showReplayedPages(step, chapterId) {
   if (editor.hoverId !== null && !holdsRegion(editor.hoverId)) hover(null)
 }
 
+/**
+ * Edits that wait before they are recorded (a run of padding key presses),
+ * asked first by Undo and Redo. One that answers true took the press: Undo
+ * drops the waiting edit, Redo saves it, and the history is left alone. Kept
+ * here as a list because those edits live in modules that import this one.
+ *
+ * @type {Set<(direction: 'undo'|'redo') => boolean>}
+ */
+const pendingEdits = new Set()
+
+/**
+ * @param {(direction: 'undo'|'redo') => boolean} handler
+ * @returns {() => void} removes it
+ */
+export function onPendingEdit(handler) {
+  pendingEdits.add(handler)
+  return () => pendingEdits.delete(handler)
+}
+
+/** @param {'undo'|'redo'} direction */
+function pendingEditTook(direction) {
+  for (const handler of pendingEdits) if (handler(direction)) return true
+  return false
+}
+
 export function undo() {
+  if (pendingEditTook('undo')) return
   undoHistory(editor.history, replayHistory)
 }
 
@@ -2538,6 +2722,7 @@ export function reportJobConflict(error) {
 }
 
 export function redo() {
+  if (pendingEditTook('redo')) return
   redoHistory(editor.history, replayHistory)
 }
 
@@ -2637,6 +2822,9 @@ export function cancelInteraction() {
   // A gesture in progress goes first and on its own: abandoning a half-drawn
   // shape must not also drop the selection the user was working against.
   if (clearDraft()) return true
+  // Then a Patch or Gradient selection waiting for Apply: Escape abandons it,
+  // as it abandons a half-drawn shape, and leaves the page as it was.
+  if (clearSelection()) return true
   // Then the stamp's sampled source, and only while the stamp is the armed
   // tool: nothing else could clear it, and for every other tool Escape has to
   // go on meaning "drop what is selected". The source marker vanishing from

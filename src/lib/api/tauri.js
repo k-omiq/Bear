@@ -122,6 +122,8 @@ const IMPLEMENTED = Object.freeze({
   createRegion: 'create_region',
   editDetectionMask: 'edit_detection_mask',
   erasePaint: 'erase_paint',
+  proposePatchSource: 'propose_patch_source',
+  fitGradient: 'fit_gradient',
   setDetectionPadding: 'set_detection_padding',
   rerunMask: 'rerun_mask',
   cleanAnyway: 'clean_anyway',
@@ -191,6 +193,8 @@ export const SEAM_METHODS = Object.freeze([
   'createRegion',
   'editDetectionMask',
   'erasePaint',
+  'proposePatchSource',
+  'fitGradient',
   'setDetectionPadding',
   'deleteMask',
   'duplicateRegion',
@@ -625,6 +629,27 @@ export function createTauriBackend({ fallback, invoke, listen }) {
         size,
         hardness,
         opacity,
+      }),
+    // The Patch tool's proposed source and the Gradient tool's Match
+    // surroundings: read-only, bound to the source the selection was drawn
+    // over as `createRegion` is, with the one gesture sent and the other null.
+    proposePatchSource: ({ chapterId, pageIndex, sourceIndex, sourceSha, painted, stroke }) =>
+      call(IMPLEMENTED.proposePatchSource, {
+        chapterId,
+        pageIndex,
+        expectedSourceIdx: sourceIndex ?? null,
+        expectedSourceSha: sourceSha ?? null,
+        painted: painted ?? null,
+        stroke: stroke ?? null,
+      }),
+    fitGradient: ({ chapterId, pageIndex, sourceIndex, sourceSha, painted, stroke }) =>
+      call(IMPLEMENTED.fitGradient, {
+        chapterId,
+        pageIndex,
+        expectedSourceIdx: sourceIndex ?? null,
+        expectedSourceSha: sourceSha ?? null,
+        painted: painted ?? null,
+        stroke: stroke ?? null,
       }),
     // `pageIndex` crosses as `null` for the whole chapter, so the command's
     // optional parameter is always named.

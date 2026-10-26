@@ -3,7 +3,9 @@ import {
   applyRegionState,
   adoptRun,
   consumeResume,
-  cycleMaskSelectShape,
+  cycleCloneStamp,
+  cycleToolMode,
+  cycleToolShape,
   requestResume,
   replaceRegion,
   closeEditorChapter,
@@ -26,7 +28,10 @@ import {
   runFinished,
   runningPage,
   TOOLS,
-  toggleMaskSelectMode,
+  setMaskSelectMode,
+  stepToolParam,
+  stepWipe,
+  onPendingEdit,
   undo,
 } from './editor.svelte.js'
 import { app } from './app.svelte.js'
@@ -1238,38 +1243,176 @@ describe('the tool slots', () => {
     editor.tool = 'autoClean'
   })
 
-  it('numbers the seven tools by slot, the eraser last', () => {
-    expect([...TOOLS]).toEqual(['autoClean', 'brush', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect', 'eraser'])
+  it('numbers the nine tools by slot, the eraser seventh, Patch and Gradient after it', () => {
+    expect([...TOOLS]).toEqual(['autoClean', 'brush', 'shapes', 'aiMaskBrush', 'cloneStamp', 'maskSelect', 'eraser', 'patch', 'gradient'])
   })
 
-  it('arms the selection tool from slot 6, the eraser from 7, and nothing from a slot past it', () => {
+  it('arms the selection tool from slot 6, the eraser from 7, Patch and Gradient from 8 and 9, and nothing past them', () => {
     setToolBySlot(6)
     expect(editor.tool).toBe('maskSelect')
     setToolBySlot(7)
     expect(editor.tool).toBe('eraser')
     setToolBySlot(8)
-    expect(editor.tool).toBe('eraser')
+    expect(editor.tool).toBe('patch')
+    setToolBySlot(9)
+    expect(editor.tool).toBe('gradient')
+    setToolBySlot(10)
+    expect(editor.tool).toBe('gradient')
   })
 
-  it('arms the selection tool on S or X first, then steps its shape and swaps its mode', () => {
+  it('steps the shape of the tool that has one, and arms the selection tool from one that has none', () => {
     editor.toolParams.maskSelect = { mode: 'add', shape: 'brush', size: 32 }
-    cycleMaskSelectShape()
-    expect(editor.tool).toBe('maskSelect')
-    expect(editor.toolParams.maskSelect.shape).toBe('brush')
-    cycleMaskSelectShape()
-    cycleMaskSelectShape()
-    expect(editor.toolParams.maskSelect.shape).toBe('rect')
-    cycleMaskSelectShape()
-    expect(editor.toolParams.maskSelect.shape).toBe('brush')
-
     editor.tool = 'brush'
-    toggleMaskSelectMode()
+    cycleToolShape(1)
     expect(editor.tool).toBe('maskSelect')
-    expect(editor.toolParams.maskSelect.mode).toBe('add')
-    toggleMaskSelectMode()
+    expect(editor.toolParams.maskSelect.shape).toBe('brush')
+    cycleToolShape(1)
+    cycleToolShape(1)
+    expect(editor.toolParams.maskSelect.shape).toBe('rect')
+    cycleToolShape(1)
+    expect(editor.toolParams.maskSelect.shape).toBe('brush')
+    cycleToolShape(-1)
+    expect(editor.toolParams.maskSelect.shape).toBe('rect')
+
+    editor.tool = 'shapes'
+    editor.toolParams.shapes = { ...editor.toolParams.shapes, shape: 'rect' }
+    cycleToolShape(1)
+    expect(editor.tool).toBe('shapes')
+    expect(editor.toolParams.shapes.shape).toBe('ellipse')
+  })
+
+  it('arms each selection mode from any tool, and X or D again goes back to add', () => {
+    editor.toolParams.maskSelect = { mode: 'add', shape: 'brush', size: 32 }
+    editor.tool = 'brush'
+    setMaskSelectMode('remove')
+    expect(editor.tool).toBe('maskSelect')
     expect(editor.toolParams.maskSelect.mode).toBe('remove')
-    toggleMaskSelectMode()
+    setMaskSelectMode('remove')
     expect(editor.toolParams.maskSelect.mode).toBe('add')
+    setMaskSelectMode('detect')
+    expect(editor.toolParams.maskSelect.mode).toBe('detect')
+    setMaskSelectMode('detect')
+    expect(editor.toolParams.maskSelect.mode).toBe('add')
+    setMaskSelectMode('add')
+    expect(editor.toolParams.maskSelect.mode).toBe('add')
+  })
+
+  it('steps the active tool\'s mode on Q, skipping the cloud', () => {
+    editor.tool = 'cloneStamp'
+    editor.toolParams.cloneStamp = { ...editor.toolParams.cloneStamp, mode: 'stamp' }
+    cycleToolMode(1)
+    expect(editor.toolParams.cloneStamp.mode).toBe('region')
+    cycleToolMode(1)
+    expect(editor.toolParams.cloneStamp.mode).toBe('stamp')
+
+    editor.tool = 'aiMaskBrush'
+    for (let i = 0; i < 12; i += 1) {
+      cycleToolMode(1)
+      expect(editor.toolParams.aiMaskBrush.engine).not.toBe('cloud')
+    }
+
+    // A tool with no mode ignores the key.
+    editor.tool = 'eraser'
+    const before = JSON.stringify(editor.toolParams.eraser)
+    cycleToolMode(1)
+    expect(JSON.stringify(editor.toolParams.eraser)).toBe(before)
+  })
+
+  it('steps a picked cloud engine onto either end of the list, not one past it', () => {
+    editor.tool = 'aiMaskBrush'
+    editor.toolParams.aiMaskBrush = { ...editor.toolParams.aiMaskBrush, engine: 'cloud' }
+    cycleToolMode(1)
+    const first = editor.toolParams.aiMaskBrush.engine
+    editor.toolParams.aiMaskBrush.engine = 'cloud'
+    cycleToolMode(-1)
+    const last = editor.toolParams.aiMaskBrush.engine
+    expect(first).not.toBe('cloud')
+    expect(last).not.toBe('cloud')
+    expect(first).not.toBe(last)
+  })
+
+  it('steps flow by ten and spacing by five, on a tool that has them', () => {
+    editor.tool = 'brush'
+    editor.toolParams.brush = { ...editor.toolParams.brush, flow: 100, spacing: 12 }
+    expect(stepToolParam('flow', -1)).toBe(true)
+    expect(editor.toolParams.brush.flow).toBe(90)
+    expect(stepToolParam('spacing', 1)).toBe(true)
+    expect(editor.toolParams.brush.spacing).toBe(15)
+    editor.toolParams.brush.spacing = 12
+    expect(stepToolParam('spacing', -1)).toBe(true)
+    expect(editor.toolParams.brush.spacing).toBe(10)
+    editor.toolParams.brush.flow = 74
+    stepToolParam('flow', -1)
+    expect(editor.toolParams.brush.flow).toBe(70)
+    editor.tool = 'eraser'
+    const before = JSON.stringify(editor.toolParams.eraser)
+    expect(stepToolParam('spacing', 1)).toBe(false)
+    expect(JSON.stringify(editor.toolParams.eraser)).toBe(before)
+  })
+
+  it('steps the original wipe by ten, within 0 to 100', () => {
+    editor.wipe = 95
+    stepWipe(1)
+    expect(editor.wipe).toBe(100)
+    stepWipe(-1)
+    expect(editor.wipe).toBe(90)
+  })
+
+  it('lets an edit still waiting take Undo and Redo before the history does', () => {
+    editor.history = createHistory()
+    push(editor.history, { seq: 1, label: 'masks.command.layerOpacity' })
+    const seen = []
+    const off = onPendingEdit((direction) => {
+      seen.push(direction)
+      return true
+    })
+    try {
+      undo()
+      redo()
+      expect(seen).toEqual(['undo', 'redo'])
+      expect(editor.history.cursor).toBe(1)
+    } finally {
+      off()
+    }
+  })
+
+  it('arms the clone stamp on C first, then swaps its mode, and its alignment with Shift', () => {
+    editor.toolParams.cloneStamp = { ...editor.toolParams.cloneStamp, mode: 'stamp', alignment: 'aligned' }
+    editor.tool = 'brush'
+    cycleCloneStamp('mode')
+    expect(editor.tool).toBe('cloneStamp')
+    expect(editor.toolParams.cloneStamp.mode).toBe('stamp')
+    cycleCloneStamp('alignment')
+    expect(editor.toolParams.cloneStamp.alignment).toBe('nonAligned')
+    cycleCloneStamp('mode')
+    expect(editor.toolParams.cloneStamp.mode).toBe('region')
+    // Alignment means nothing to a region copy, so it is left alone.
+    cycleCloneStamp('alignment')
+    expect(editor.toolParams.cloneStamp.alignment).toBe('nonAligned')
+  })
+
+  it('steps every brush\'s size by about a tenth, and its hardness and opacity by ten', () => {
+    for (const tool of ['brush', 'eraser', 'aiMaskBrush', 'cloneStamp']) {
+      editor.tool = tool
+      editor.toolParams[tool] = { ...editor.toolParams[tool], mode: tool === 'cloneStamp' ? 'stamp' : editor.toolParams[tool]?.mode, size: 40 }
+      expect(stepToolParam('size', 1)).toBe(true)
+      expect(editor.toolParams[tool].size, tool).toBe(44)
+      stepToolParam('size', -1)
+      expect(editor.toolParams[tool].size, tool).toBe(40)
+    }
+    editor.tool = 'brush'
+    editor.toolParams.brush = { ...editor.toolParams.brush, hardness: 95, opacity: 100 }
+    stepToolParam('hardness', -1)
+    expect(editor.toolParams.brush.hardness).toBe(90)
+    expect(stepToolParam('opacity', 1)).toBe(false)
+    stepToolParam('opacity', -1)
+    expect(editor.toolParams.brush.opacity).toBe(90)
+
+    // No size on the bar, nothing to step.
+    editor.tool = 'maskSelect'
+    editor.toolParams.maskSelect = { mode: 'add', shape: 'lasso', size: 32 }
+    expect(stepToolParam('size', 1)).toBe(false)
+    expect(editor.toolParams.maskSelect.size).toBe(32)
   })
 })
 

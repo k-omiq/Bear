@@ -328,22 +328,19 @@ export function centredBbox(w, h) {
  * absent - abandoning a gesture is the editor's own `cancelInteraction`, and
  * routing it here would give it two owners.
  *
- * The clone stamp has four keys of its own: `S` samples the source, `[` and
- * `]` step the brush's size, and with Shift they step its hardness.
+ * The clone stamp has one key of its own: `S` samples the source. The size
+ * and hardness keys (`[`, `]` and their Shift forms) are the shortcut table's,
+ * for every brush (`shortcuts.js`), so they are not read here.
  *
  * @param {{key: string, shiftKey?: boolean, metaKey?: boolean, ctrlKey?: boolean}} event
  * @param {{hasDraft: boolean, cloneCapable?: boolean, step?: number}} context
- * @returns {{kind: 'open'|'commit'|'sample'}|{kind: 'size'|'hardness', direction: number}|{kind: 'move'|'resize', dx: number, dy: number}|null}
+ * @returns {{kind: 'open'|'commit'|'sample'}|{kind: 'move'|'resize', dx: number, dy: number}|null}
  */
 export function draftKeyIntent(event, context) {
   if (!event || event.metaKey || event.ctrlKey) return null
   const key = event.key
   if (key === 'Enter' || key === ' ') return { kind: context.hasDraft ? 'commit' : 'open' }
-  if (context.cloneCapable) {
-    if (key === 's' || key === 'S') return { kind: 'sample' }
-    if (key === '[' || key === ']') return { kind: 'size', direction: key === '[' ? -1 : 1 }
-    if (key === '{' || key === '}') return { kind: 'hardness', direction: key === '{' ? -1 : 1 }
-  }
+  if (context.cloneCapable && (key === 's' || key === 'S')) return { kind: 'sample' }
   if (!context.hasDraft) return null
 
   const step = context.step ?? 1
@@ -361,9 +358,14 @@ const ARROWS = {
 }
 
 /**
- * The brush size one press of `[` or `]` away. The step grows with the brush,
- * as it does in every raster editor: a small brush moves by 2 px and a large
- * one by 20, so the same key is useful at both ends of the range.
+ * The brush size one press of `[` or `]` away: about a tenth bigger or
+ * smaller, and never less than a pixel. A step that grows with the brush is
+ * what makes one key useful at both ends of the range - 3 px goes to 4, 200
+ * to 220 - and it is the step the size slider's logarithmic track takes too,
+ * so a key press and an arrow on the slider move the brush the same amount.
+ *
+ * Down undoes up: the step down from a size is the one that size was stepped
+ * up from, so `]` then `[` comes back to where it started.
  *
  * @param {number} size - a diameter in page pixels
  * @param {number} direction - below zero for smaller, anything else for larger
@@ -372,10 +374,11 @@ const ARROWS = {
  * @returns {number}
  */
 export function steppedSize(size, direction, min, max) {
-  const down = direction < 0
-  // Going down, the boundary belongs to the finer band: 20 steps to 18.
-  const step = (down ? size <= 20 : size < 20) ? 2 : (down ? size <= 100 : size < 100) ? 10 : 20
-  return clamp(size + (down ? -step : step), min, max)
+  const now = Math.round(size)
+  const next = direction < 0
+    ? now - Math.max(1, Math.round(now / 11))
+    : now + Math.max(1, Math.round(now / 10))
+  return clamp(next, min, max)
 }
 
 /**

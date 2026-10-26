@@ -55,6 +55,7 @@ export const NAMESPACES = Object.freeze([
   'project',
   'qwen',
   'regionCopy',
+  'retouch',
   'review',
   'settings',
   'shell',

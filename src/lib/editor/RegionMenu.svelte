@@ -4,7 +4,9 @@
   import { cloud, cloudEntries, cloudUsable, pickCloudChoice } from '../state/cloud.svelte.js'
   import { session } from '../state/session.svelte.js'
   import { cloudProfileLabel, currentCloudModelId, engineModelLabel } from '../model/model-names.js'
-  import { regionPageBusy, runRegionMenuItem, setDetectedMaskPadding } from './maskactions.svelte.js'
+  import { regionPageBusy, requestDetectedMaskPadding, runRegionMenuItem, shownMaskPadding } from './maskactions.svelte.js'
+  import { editor } from '../state/editor.svelte.js'
+  import { shortcutHint } from '../shortcuts.js'
   import { ContextMenu } from '../ui/index.js'
   import { t } from '../i18n/index.js'
 
@@ -21,10 +23,11 @@
    * `maskactions.svelte.js#runRegionMenuItem`, which is the row's own controls
    * and no second implementation of them.
    *
-   * A detection's Mask padding is a slider in the menu. Each release is the
-   * Layers row's own padding change (`setDetectedMaskPadding`), one undo step,
-   * and the menu stays open. A change made while one is saving waits for it,
-   * and only the last value waiting is sent.
+   * A detection's Mask padding is a slider in the menu, with a box to type it
+   * and `;` / `'` to step it. The value it settles on is the Layers row's own
+   * padding change (`requestDetectedMaskPadding`), one undo step, and the menu
+   * stays open. It shows the region as it is now, not as it was when the menu
+   * opened, so a change saved behind it is never shown stale.
    *
    * Cloud is among the engines while a cloud endpoint is ready
    * (`state/cloud.svelte.js#cloudUsable`), and left out otherwise. Picking it,
@@ -39,6 +42,11 @@
    * }}
    */
   let { at, onclose } = $props()
+
+  /** The menu's region as the editor holds it now, if it is still on a page. */
+  const live = $derived(at
+    ? editor.chapter?.pages.flatMap((page) => page.regions ?? []).find((region) => region.id === at.region.id) ?? null
+    : null)
 
   const sections = $derived(
     at
@@ -57,7 +65,11 @@
                 : t(item.labelKey),
               icon: item.icon,
               selected: item.selected,
-              ...(item.range ? { range: item.range, disabled: regionPageBusy(at.region) } : {}),
+              ...(item.range ? {
+                range: { ...item.range, value: live ? shownMaskPadding(live) : item.range.value, hint: shortcutHint(['mask.paddingDown', 'mask.paddingUp']),
+                  boxLabel: t('tools.param.exactValue', { name: t(item.labelKey) }) },
+                disabled: regionPageBusy(at.region),
+              } : {}),
             }
             // Every cloud profile's model: picking another one makes its
             // profile the default before the clean (`pick`).
@@ -75,36 +87,45 @@
       : [],
   )
 
-  let savingPadding = false
-  /** @type {number|null} */
-  let waitingPadding = null
+  /**
+   * The region the menu was last opened on. A slider's last value can arrive
+   * as the menu closes (`RangeField` settles a pending run of steps when it
+   * goes), after the host has already cleared `at`.
+   *
+   * @type {import('../api/backend.js').ApiRegion|null}
+   */
+  let opened = null
+  $effect(() => {
+    if (at) opened = at.region
+  })
 
   /**
    * @param {string} id
    * @param {number} value
    */
-  async function range(id, value) {
-    const region = at?.region
-    if (id !== 'padding' || !region) return
-    waitingPadding = value
-    if (savingPadding) return
-    savingPadding = true
-    try {
-      while (waitingPadding !== null) {
-        const next = waitingPadding
-        waitingPadding = null
-        await setDetectedMaskPadding(region, next)
-      }
-    } finally {
-      savingPadding = false
-    }
+  function range(id, value) {
+    const region = live ?? at?.region ?? (opened
+      ? editor.chapter?.pages.flatMap((page) => page.regions ?? []).find((entry) => entry.id === opened?.id) ?? opened
+      : null)
+    if (id === 'padding' && region) paddingSave = requestDetectedMaskPadding(region, value)
   }
 
+  /** The menu's last padding save, which an entry picked after it waits for. */
+  /** @type {Promise<void>|null} */
+  let paddingSave = null
+
   /** @param {string} id */
-  function pick(id) {
-    // Read the region off the open menu before the host clears it.
-    const region = at?.region
+  async function pick(id) {
+    // Read the region off the open menu before the host clears it, as the
+    // editor holds it now: the menu's own padding row may have moved it.
+    let region = live ?? at?.region
     if (!region) return
+    // A padding the row just set is saved before the entry runs on the mask.
+    if (paddingSave) {
+      const regionId = region.id
+      await paddingSave.catch(() => {})
+      region = editor.chapter?.pages.flatMap((page) => page.regions ?? []).find((entry) => entry.id === regionId) ?? region
+    }
     if (id.startsWith('engine:cloud@')) {
       void pickCloudChoice(id.slice('engine:'.length)).then((switched) => {
         if (switched) runRegionMenuItem('engine:cloud', region)

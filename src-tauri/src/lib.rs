@@ -253,6 +253,8 @@ pub fn run() {
             region::create_region,
             region::edit_detection_mask,
             region::erase_paint,
+            region::retouch::propose_patch_source,
+            region::retouch::fit_gradient,
             region::set_detection_padding,
             region::rerun_mask,
             region::clean_anyway,

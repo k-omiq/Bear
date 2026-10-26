@@ -478,6 +478,15 @@ describe('the AI mask brush stroke', () => {
     expect(editor.selectionId).toBe('c1-p001-h2')
   })
 
+  // A held Patch or Gradient selection would otherwise Apply onto a page the
+  // reader has turned away from.
+  it('drops a held selection on a page turn', () => {
+    editor.chapter = twoPages()
+    draft.selection = /** @type {any} */ ({ tool: 'patch', pageId: 'c1-p001', pageIndex: 0 })
+    goToPage(1)
+    expect(draft.selection).toBe(null)
+  })
+
   // A page turn, not a chapter switch: the chapter is the same one, both pages
   // are in hand, and the result must still land on the page the stroke was
   // drawn on. A stroke queued behind it on the same page follows it there.

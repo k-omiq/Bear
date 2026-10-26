@@ -13,6 +13,8 @@ import {
   displayBbox,
   editedLayer,
   isErasableLayer,
+  isGradientLayer,
+  isPatchLayer,
   layerCapabilities,
   layerFrame,
   normalizeAngle,
@@ -148,5 +150,25 @@ describe('the layers the eraser takes coverage off', () => {
     expect(isErasableLayer({ id: 'c1-p001-h2', ...region('lama', { geometryPolicy: 'text_shape' }) })).toBe(false)
     expect(isErasableLayer({ id: 'c1-p001-h3', outcome: 'cleaned', mask: { id: 'm' } })).toBe(false)
     expect(isErasableLayer(null)).toBe(false)
+  })
+})
+
+describe('the selection tools\' layers', () => {
+  const snap = (/** @type {string} */ engine, /** @type {string} */ mode) => ({ mask: { provenance: { engine, params_snapshot: { mode } } } })
+
+  it('are told apart by the mode the snapshot records, not by the engine', () => {
+    expect(isPatchLayer(snap('clone', 'patch'))).toBe(true)
+    expect(isGradientLayer(snap('paint', 'gradient'))).toBe(true)
+    expect(isPatchLayer(snap('clone', 'region-copy'))).toBe(false)
+    expect(isGradientLayer(snap('paint', 'patch'))).toBe(false)
+    expect(isPatchLayer(null)).toBe(false)
+    expect(isGradientLayer(undefined)).toBe(false)
+  })
+
+  // A patch is read from the page where it sits, as a clone stamp is, so it
+  // stays put; a gradient's pixels are given, so it moves like any paint.
+  it('keep the engine\'s rules: a patch stays put, a gradient moves', () => {
+    expect(layerCapabilities({ outcome: 'cleaned', ...snap('clone', 'patch') }).transform).toBe('fixed')
+    expect(layerCapabilities({ outcome: 'cleaned', ...snap('paint', 'gradient') })).toEqual({ transform: 'movable', lock: true, opacity: true })
   })
 })

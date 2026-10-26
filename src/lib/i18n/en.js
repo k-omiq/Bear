@@ -41,6 +41,72 @@ export const en = {
     "drawingHelp": "Draw an area. Enter closes a polygon; Backspace removes an anchor.",
     "placingHelp": "Drag to move. Use the top handle to rotate."
 },
+  // The Patch tool (J) and the Gradient tool (G): their options, the bar's
+  // help line, their notices and their undo labels.
+  retouch: {
+    apply: "Apply",
+    patch: {
+      mode: "Patch",
+      auto: "Auto",
+      normal: "Normal",
+      contentAware: "Content-Aware",
+      smooth: "Smooth",
+      direction: "Direction",
+      source: "Source",
+      destination: "Destination",
+      diffusion: "Diffusion",
+      structure: "Structure",
+      color: "Colour",
+    },
+    gradient: {
+      kind: "Type",
+      linear: "Linear",
+      radial: "Radial",
+      angle: "Angle",
+      reflected: "Reflected",
+      diamond: "Diamond",
+      auto: "Auto",
+      stops: "Gradient stops",
+      toBackground: "Foreground to background",
+      toTransparent: "Foreground to transparent",
+      colorStops: "Colour stops",
+      opacityStops: "Opacity stops",
+      stopColor: "Colour stop {n}",
+      eyedrop: "Pick colour stop {n} from the page",
+      at: "Position",
+      removeStop: "Remove stop",
+      addColor: "Add colour stop",
+      addOpacity: "Add opacity stop",
+      reverse: "Reverse",
+      dither: "Dither",
+      asScreentone: "As screentone",
+      match: "Match surroundings",
+      edit: "Edit gradient",
+    },
+    help: {
+      patchDraw: "Select the area to fix.",
+      patchApply: "Apply fills the selection from around it.",
+      patchFinding: "Finding a clean source…",
+      patchGhost: "Drag the dotted outline to choose the source, then Apply.",
+      eyedrop: "Click the page to pick the stop colour.",
+      gradientDraw: "Select the area to fill.",
+      gradientAuto: "Select the text on the gradient. It fills from all sides at once.",
+      gradientLine: "Drag inside the selection to set the gradient, or Match surroundings.",
+      gradientHandles: "Drag the handles to adjust; Shift turns by 15°. Then Apply.",
+    },
+    notice: {
+      noSource: "No clean source was found nearby. Drag the dotted outline to one.",
+      drawLine: "Drag inside the selection to set the gradient first.",
+      selectFirst: "Select an area first.",
+      noFit: "The surroundings could not be matched. Set the stops by hand.",
+      noColor: "No colour could be read there.",
+      noScreen: "There is no screentone around the selection, so a plain gradient was drawn.",
+    },
+    command: {
+      patch: "a patch",
+      gradient: "a gradient",
+    },
+  },
   qwen: {
     "prompt": {
         "title": "Describe what to erase",
@@ -1679,6 +1745,7 @@ export const en = {
       cloneSourceOutside: 'the clone source is outside the page',
       paintUnsupportedColor: 'this file’s color description cannot be used for managed painting',
       paintUnsupportedMode: 'this file’s colour mode cannot hold a painted or cloned result',
+      noSmoothSurround: 'the area around the selection is not one smooth gradient',
       unrepresentableDepth: 'this file has one bit per sample, which an inpainted result cannot hold',
       // Rung 3a only, and a narrower fact than `unrepresentableDepth` above:
       // the file's samples are perfectly representable, and it is that one
@@ -2689,7 +2756,6 @@ export const en = {
       fixedNote: 'Redrawn from what was under it, so it stays where it was cleaned.',
       resetPosition: 'Reset position',
       resetPositionHint: 'Put this layer back where it was made, upright',
-      opacityValue: '{percent} percent',
     },
     // The turn handle on a selected movable layer. It is a slider to a
     // screen reader, so its value reads in degrees.
@@ -2762,6 +2828,8 @@ export const en = {
       cloneStamp: 'Clone stamp',
       // Edits the detected area Clean will erase, after a Detect.
       maskSelect: 'Selection',
+      patch: "Patch",
+      gradient: "Gradient",
     },
     // The tooltip on the tool's own name at the left of the bar. It used to be
     // the window header's right-aligned meta; a bar has no room for a second
@@ -2779,6 +2847,8 @@ export const en = {
       // table chose, and the modifier is a preference. See `provideContextParam`.
       cloneStamp: '{cloneSourceModifier}-click a source',
       maskSelect: 'add to or remove from the area Clean erases, or detect text in an area you draw',
+      patch: "select what to fix, then Apply",
+      gradient: "select an area, then drag inside it",
     },
     // There is no `note` family. Every tool used to carry a sentence or two
     // above its parameters explaining itself; the bar shows labels and controls
@@ -2854,6 +2924,7 @@ export const en = {
       bubbleText: 'Speech bubble text',
       bubbleColor: 'Solid fill color',
       maskPadding: 'Mask padding',
+      exactValue: '{name} (type a value)',
       outsideText: 'Text outside bubbles',
       // Whether Text cleanup touches text outside bubbles at all. The row above
       // names the engine; this one is the opt-in the pipeline design always described
@@ -2959,6 +3030,7 @@ export const en = {
   shortcuts: {
     group: {
       tools: 'Tools',
+      brush: 'Brush & padding',
       view: 'View',
       edit: 'Edit',
       zoom: 'Zoom',
@@ -2992,19 +3064,52 @@ export const en = {
       refusedUnknown: 'This build has no such shortcut.',
     },
     tool: {
-      maskSelectShape: 'Selection: next shape',
-      maskSelectMode: 'Selection: swap add and remove',
+      runCleanup: 'Run Text cleanup, or apply the held selection',
+      cleanScopeNext: 'Text cleanup: next scope',
+      cleanScopePrev: 'Text cleanup: previous scope',
+      focusOptions: "Next control on the tool's bar",
+      cancelRun: 'Cancel run',
+      shapeNext: 'Next shape',
+      shapePrev: 'Previous shape',
+      modeNext: 'Next mode, type or engine',
+      modePrev: 'Previous mode, type or engine',
+      maskAdd: 'Selection: add to masks',
+      maskRemove: 'Selection: remove from masks (again: add)',
+      maskDetect: 'Selection: detect in an area (again: add)',
+      cloneMode: 'Clone stamp: Stamp or Region copy',
+      cloneAlignment: 'Clone stamp: aligned or not',
+      gradientAuto: 'Gradient: Auto',
+    },
+    brush: {
+      sizeDown: 'Smaller brush',
+      sizeUp: 'Bigger brush',
+      hardnessDown: 'Softer brush',
+      hardnessUp: 'Harder brush',
+      opacityDown: 'Less opacity',
+      opacityUp: 'More opacity',
+      flowDown: 'Less flow',
+      flowUp: 'More flow',
+      spacingDown: 'Less spacing',
+      spacingUp: 'More spacing',
+    },
+    mask: {
+      paddingDown: 'Less mask padding (the selected mask, else the page)',
+      paddingUp: 'More mask padding (the selected mask, else the page)',
     },
     view: {
       holdOriginal: 'Hold to show the original',
       pinOriginal: 'Pin the original',
       maskOverlay: 'Mask overlay',
       reviewFilter: 'Needs-review filter',
+      wipeDown: 'Original wipe: less',
+      wipeUp: 'Original wipe: more',
     },
     edit: {
       undo: 'Undo',
       redo: 'Redo',
       duplicateRegion: "Duplicate selected region",
+      cleanSelected: 'Clean the selected mask, or try it again',
+      retryWider: 'Try the selected mask again, wider',
       deleteLayer: 'Delete the selected layer',
     },
     zoom: {
@@ -3016,6 +3121,8 @@ export const en = {
     page: {
       left: 'Page left',
       right: 'Page right',
+      first: 'First page',
+      last: 'Last page',
     },
     review: {
       next: 'Next region needing review',

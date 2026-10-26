@@ -11,7 +11,7 @@
    * when the tool window is closed (see `FloatingWindow.svelte`).
    */
   import { editor, setTool } from '../state/editor.svelte.js'
-  import { TOOL_SPECS, TOOL_ICONS } from './tools.js'
+  import { TOOL_SPECS, TOOL_ICONS, toolKey } from './tools.js'
   import { IconButton } from '../ui/index.js'
   import { t } from '../i18n/index.js'
 
@@ -69,7 +69,7 @@
       <IconButton
         icon={TOOL_ICONS[spec.id]}
         label={t(spec.nameKey)}
-        shortcut={String(spec.slot)}
+        shortcut={toolKey(spec)}
         size={34}
         active={spec.id === editor.tool}
         role="radio"

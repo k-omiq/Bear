@@ -1,15 +1,16 @@
 <script>
   import { editor, isHighlighted, hover, select, undo, undoAvailable, undoLabelKey } from '../state/editor.svelte.js'
   import { MAX_MASK_PADDING, rowEngines, engineChoiceLabel, retryWidens } from '../model/masks.js'
+  import { shortcutHint } from '../shortcuts.js'
   import { capabilities } from '../state/capabilities.svelte.js'
   import { cloud, cloudEntries, cloudUsable, pickCloudChoice } from '../state/cloud.svelte.js'
   import { session } from '../state/session.svelte.js'
   import { cloudProfileLabel, currentCloudModelId, engineModelLabel } from '../model/model-names.js'
   import { actionHint } from './maskrows.js'
   import { menuPoint } from './gesture.js'
-  import { cleanDetected, deleteRow, keepDependencyResult, openLayerEdit, regionPageBusy, rerunMask, runMaskAction, setDetectedMaskPadding, updateLayer } from './maskactions.svelte.js'
+  import { cleanDetected, deleteRow, keepDependencyResult, openLayerEdit, regionPageBusy, requestDetectedMaskPadding, rerunMask, runMaskAction, shownMaskPadding, updateLayer } from './maskactions.svelte.js'
   import { layerCapabilities, layerOf } from '../model/layers.js'
-  import { Button, Disclosure, IconButton, Select } from '../ui/index.js'
+  import { Button, Disclosure, IconButton, RangeField, Select } from '../ui/index.js'
   import { t } from '../i18n/index.js'
   import MaskFacts from './MaskFacts.svelte'
   import RegionMenu from './RegionMenu.svelte'
@@ -69,29 +70,11 @@
     ? row.actions.filter((action) => action.id !== 'cleanDetectedCloud')
     : row.actions)
 
-  /** @type {number|null} */
-  let paddingDraft = $state(null)
-  let savingPadding = $state(false)
-  const maskPadding = $derived(paddingDraft ?? region.paddingPx ?? 0)
-  // The slider waits only while a run is on this row's own page.
+  // The padding control waits only while a run is on this row's own page.
+  // A change made while another is saving is not dropped: it waits its turn
+  // (`maskactions.svelte.js#requestDetectedMaskPadding`), and the control
+  // shows the value it is going to.
   const pageHeld = $derived(regionPageBusy(region))
-
-  /** @param {Event & {currentTarget: HTMLInputElement}} event */
-  async function changePadding(event) {
-    if (savingPadding || pageHeld) {
-      paddingDraft = null
-      return
-    }
-    const value = Number(event.currentTarget.value)
-    paddingDraft = value
-    savingPadding = true
-    try {
-      await setDetectedMaskPadding(region, value)
-    } finally {
-      paddingDraft = null
-      savingPadding = false
-    }
-  }
 
   // Try again replaces this layer from the layers below it; a paint or clone
   // stroke has no cleaning to redo, so its row keeps the control in place,
@@ -121,50 +104,36 @@
    * under way, and the one edit they all belong to.
    *
    * A drag across it previews through real, coalesced writes and commits one
-   * undo entry on release (`openLayerEdit`). Arrow keys commit the same way
-   * once the presses stop, so holding a key down is one step of history, not
-   * one per percent.
+   * undo entry on release (`openLayerEdit`). Arrow keys and the wheel commit
+   * the same way once the presses stop (`RangeField`), so holding a key down
+   * is one step of history, not one per percent.
    */
   /** @type {number|null} */
   let opacityDraft = $state(null)
   /** @type {import('./maskactions.svelte.js').LayerEdit|null} */
   let opacityEdit = null
-  /** @type {ReturnType<typeof setTimeout>|null} */
-  let opacityTimer = null
-  const OPACITY_SETTLE_MS = 400
 
-  /** @param {Event & {currentTarget: HTMLInputElement}} event */
-  function onOpacityInput(event) {
-    const value = Number(event.currentTarget.value)
+  /** @param {number} value */
+  function previewOpacity(value) {
     opacityDraft = value
     if (!opacityEdit || opacityEdit.closed) opacityEdit = openLayerEdit(region, 'masks.command.layerOpacity')
     opacityEdit.preview({ opacity: value })
-    if (opacityTimer) {
-      // A key press that is still arriving keeps its burst open.
-      clearTimeout(opacityTimer)
-      opacityTimer = setTimeout(() => settleOpacity(true), OPACITY_SETTLE_MS)
-    }
   }
 
-  /** @param {boolean} now - on release or blur; otherwise once the presses stop */
-  function settleOpacity(now) {
-    if (opacityTimer) clearTimeout(opacityTimer)
-    opacityTimer = null
-    if (!opacityEdit) return
-    if (!now) {
-      opacityTimer = setTimeout(() => settleOpacity(true), OPACITY_SETTLE_MS)
-      return
-    }
-    const edit = opacityEdit
-    const value = opacityDraft
+  /** @param {number} value */
+  function commitOpacity(value) {
+    const edit = opacityEdit && !opacityEdit.closed ? opacityEdit : openLayerEdit(region, 'masks.command.layerOpacity')
     opacityEdit = null
-    void edit.commit(value === null ? undefined : { opacity: value }).finally(() => {
+    opacityDraft = value
+    void edit.commit({ opacity: value }).finally(() => {
       if (!opacityEdit) opacityDraft = null
     })
   }
 
   // A row collapsed or removed mid-edit still writes what was chosen.
-  $effect(() => () => settleOpacity(true))
+  $effect(() => () => {
+    if (opacityEdit && !opacityEdit.closed) void opacityEdit.commit()
+  })
 
   // What this machine can clean with now, and Cloud last while a cloud
   // endpoint is ready and allowed: left out otherwise, like a rung whose
@@ -361,30 +330,40 @@
     <MaskFacts facts={row.facts} />
 
     {#if detected}
-      <div class="mask-padding" data-detection-padding aria-busy={savingPadding}>
-        <label>{t('tools.param.maskPadding')} <output>{maskPadding} px</output>
-          <input type="range" min="0" max={MAX_MASK_PADDING} step="1" value={maskPadding}
-            aria-label={t('tools.param.maskPadding')}
-            aria-valuetext={`${maskPadding} px`}
-            disabled={savingPadding || pageHeld}
-            oninput={(event) => (paddingDraft = Number(event.currentTarget.value))}
-            onchange={changePadding} />
-        </label>
+      <div class="mask-padding" data-detection-padding>
+        <RangeField
+          label={t('tools.param.maskPadding')}
+          boxLabel={t('tools.param.exactValue', { name: t('tools.param.maskPadding') })}
+          value={shownMaskPadding(region)}
+          min={0}
+          max={MAX_MASK_PADDING}
+          unit="px"
+          layout="stacked"
+          wheel="focused"
+          hint={shortcutHint(['mask.paddingDown', 'mask.paddingUp'])}
+          disabled={pageHeld}
+          onchange={(value) => void requestDetectedMaskPadding(region, value)}
+        />
       </div>
     {/if}
 
     {#if region.mask && (layerCaps.opacity || layerCaps.lock)}
       <div class="layer-style" data-layer-style={layerCaps.transform}>
         {#if layerCaps.opacity}
-          <label>{t('masks.action.opacity')} <output>{opacityDraft ?? layer.opacity}%</output>
-            <input type="range" min="0" max="100" step="1" value={opacityDraft ?? layer.opacity}
-              aria-valuetext={t('masks.layer.opacityValue', { percent: opacityDraft ?? layer.opacity })}
-              oninput={onOpacityInput}
-              onchange={() => settleOpacity(false)}
-              onpointerup={() => settleOpacity(true)}
-              onpointercancel={() => settleOpacity(true)}
-              onblur={() => settleOpacity(true)} />
-          </label>
+          <RangeField
+            layout="stacked"
+            wheel="focused"
+            label={t('masks.action.opacity')}
+            boxLabel={t('tools.param.exactValue', { name: t('masks.action.opacity') })}
+            value={opacityDraft ?? layer.opacity}
+            min={0}
+            max={100}
+            step={1}
+            stepper={(from, direction) => from + Math.sign(direction) * 5}
+            unit="%"
+            oninput={previewOpacity}
+            onchange={commitOpacity}
+          />
         {/if}
         {#if layerCaps.lock}
           <label class="lock"><input type="checkbox" checked={layer.locked}
@@ -520,9 +499,6 @@
   }
 
   .layer-style, .mask-padding { display: grid; gap: 7px; margin-top: 8px; font-size: 10.5px; color: var(--t3) }
-  .layer-style label, .mask-padding label { display: grid; gap: 3px }
-  .layer-style output, .mask-padding output { color: var(--t2) }
-  .layer-style input[type='range'], .mask-padding input[type='range'] { width: 100% }
   .layer-style .lock { display: flex; align-items: center; gap: 6px }
   .layer-style .note,
   .layer-style .acts { margin-top: 0 }

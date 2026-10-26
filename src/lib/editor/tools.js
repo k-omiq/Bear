@@ -34,6 +34,8 @@ import { MAX_MASK_PADDING, ROW_ENGINES, engineChoiceLabel } from '../model/masks
  * @property {number} max
  * @property {number} step
  * @property {'px'|'%'|'°'} [unit]
+ * @property {'log'} [scale] - the slider's track is logarithmic: a doubling is
+ *   the same distance at 4 px as at 200
  * @property {string} [group] - the group this parameter belongs to
  * @property {(values: Record<string, unknown>) => boolean} [when] - live only while this holds
  */
@@ -77,7 +79,10 @@ import { MAX_MASK_PADDING, ROW_ENGINES, engineChoiceLabel } from '../model/masks
 /**
  * @typedef {Object} ToolSpec
  * @property {string} id
- * @property {number} slot - the number key that selects it
+ * @property {number} slot - its place on the rail, and the number key that
+ *   selects it where it has no letter of its own
+ * @property {string} [key] - the letter that selects it, where it has one
+ *   (`J`, `G`): the rail prints this rather than the slot
  * @property {string} nameKey
  * @property {string} hintKey - the bar's tooltip on the tool's own name
  * @property {Array<RangeParam|ChoiceParam|ColorParam>} params
@@ -188,6 +193,22 @@ function range(key, labelKey, min, max, step, unit) {
 }
 
 /**
+ * Every round brush's diameter in page pixels, one range for all of them.
+ *
+ * It used to be four ranges (4-120, 8-160, 4-160, 4-300) on a linear 88 px
+ * track, which put three pixels of brush under every pixel of slider and made
+ * a small brush a matter of luck. One range, a logarithmic track, a number
+ * field beside it and `[` / `]` (`shortcuts.js`) are the whole control now,
+ * and a brush keeps its size when the tool changes its range never did.
+ */
+export const BRUSH_SIZE = /** @type {const} */ ({ min: 1, max: 500 })
+
+/** @returns {RangeParam} */
+function brushSize() {
+  return { ...range('size', 'tools.param.size', BRUSH_SIZE.min, BRUSH_SIZE.max, 1, 'px'), scale: 'log' }
+}
+
+/**
  * @param {string} key
  * @param {string} labelKey
  * @param {ChoiceOption[]} options
@@ -234,7 +255,9 @@ export function color(key, labelKey, defaultValue = '#ffffff') {
  * patch, so picking `fill` for a bubble that turns out to be screentone still
  * ends on the inpainter rather than on a hole.
  */
-const ENGINES = ROW_ENGINES.filter((rung) => rung !== 'flux').map((rung) => ({
+// Screentone is a rung named by hand, never a start: `run.rs#parse_pick` does
+// not read it, because an automatic run does not route to it yet.
+const ENGINES = ROW_ENGINES.filter((rung) => rung !== 'flux' && rung !== 'screentone').map((rung) => ({
   value: rung,
   labelKey: engineChoiceLabel(rung),
   // Which rung this option *is*, so `ToolBar#optionsFor` can drop the ones
@@ -310,8 +333,30 @@ export function isSolidFill(values) {
  * offer LaMa Manga and available FLUX alongside Solid; Fill is not a useful
  * mode for a drawn shape.
  */
-const BRUSH_ENGINES = MASK_ENGINES.filter((option) => option.value !== 'fill')
+// The screentone fill goes last: it is a specialist for lettering on a dot
+// screen, and the first entry is what a brush or shape falls back to.
+const BRUSH_ENGINES = [
+  ...MASK_ENGINES.filter((option) => option.value !== 'fill' && option.value !== 'screentone'),
+  ...MASK_ENGINES.filter((option) => option.value === 'screentone'),
+]
 const SHAPE_MODES = [{ value: SOLID, labelKey: 'tools.option.modeSolid' }, ...BRUSH_ENGINES]
+
+/**
+ * The selection shapes Region copy, the Patch tool and the Gradient tool
+ * share: a round brush, the four areas, and the magnetic lasso, which is a
+ * polygon whose edges follow the artwork (`magneticlasso.js`).
+ */
+const SELECTION_SHAPES = [
+  { value: 'brush', labelKey: 'tools.option.brush' },
+  { value: 'rect', labelKey: 'tools.option.rect' },
+  { value: 'ellipse', labelKey: 'tools.option.ellipse' },
+  { value: 'lasso', labelKey: 'tools.option.lasso' },
+  { value: 'polygon', labelKey: 'tools.option.polygon' },
+  { value: 'magnetic', labelKey: 'regionCopy.magnetic' },
+]
+
+/** @param {Record<string, unknown>} values */
+const contentAware = (values) => values.mode === 'contentAware'
 
 /** @type {ToolSpec[]} */
 export const TOOL_SPECS = [
@@ -435,7 +480,7 @@ export const TOOL_SPECS = [
     hintKey: 'tools.hint.brush',
     params: [
       ...section('brush', [
-        range('size', 'tools.param.size', 4, 120, 2, 'px'),
+        brushSize(),
         range('hardness', 'tools.param.hardness', 0, 100, 5, '%'),
         range('spacing', 'tools.param.spacing', 1, 50, 1, '%'),
       ]),
@@ -471,7 +516,7 @@ export const TOOL_SPECS = [
     hintKey: 'tools.hint.eraser',
     params: [
       ...section('brush', [
-        range('size', 'tools.param.size', 4, 120, 2, 'px'),
+        brushSize(),
         range('hardness', 'tools.param.hardness', 0, 100, 5, '%'),
         range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
       ]),
@@ -536,7 +581,7 @@ export const TOOL_SPECS = [
           { value: 'cloud', labelKey: 'tools.option.engineCloud', cloud: true },
         ], 'tools.short.cleanWith'),
       ]),
-      ...section('brush', [range('size', 'tools.param.size', 8, 160, 4, 'px')]),
+      ...section('brush', [brushSize()]),
     ],
     runnable: false,
     shell: 'pill',
@@ -553,16 +598,9 @@ export const TOOL_SPECS = [
         { value: 'stamp', labelKey: 'regionCopy.stamp' },
         { value: 'region', labelKey: 'regionCopy.name' },
       ]),
-      onlyWhen(choice('shape', 'tools.param.shape', [
-        { value: 'brush', labelKey: 'tools.option.brush' },
-        { value: 'rect', labelKey: 'tools.option.rect' },
-        { value: 'ellipse', labelKey: 'tools.option.ellipse' },
-        { value: 'lasso', labelKey: 'tools.option.lasso' },
-        { value: 'polygon', labelKey: 'tools.option.polygon' },
-        { value: 'magnetic', labelKey: 'regionCopy.magnetic' },
-      ]), (values) => values.mode === 'region')]),
+      onlyWhen(choice('shape', 'tools.param.shape', SELECTION_SHAPES), (values) => values.mode === 'region')]),
       ...section('brush', [
-        onlyWhen(range('size', 'tools.param.size', 4, 300, 2, 'px'), (values) => values.mode !== 'region' || values.shape === 'brush'),
+        onlyWhen(brushSize(), (values) => values.mode !== 'region' || values.shape === 'brush'),
         onlyWhen(range('hardness', 'tools.param.hardness', 0, 100, 5, '%'), (values) => values.mode !== 'region'),
         onlyWhen(range('spacing', 'tools.param.spacing', 1, 50, 1, '%'), (values) => values.mode !== 'region'),
         range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
@@ -614,7 +652,7 @@ export const TOOL_SPECS = [
           { value: 'rect', labelKey: 'tools.option.rect', icon: 'shape-rect' },
         ]), (values) => values.mode !== 'detect'),
         onlyWhen(
-          range('size', 'tools.param.size', 4, 160, 2, 'px'),
+          brushSize(),
           (values) => values.mode !== 'detect' && (values.shape ?? 'brush') === 'brush',
         ),
       ]),
@@ -622,7 +660,108 @@ export const TOOL_SPECS = [
     runnable: false,
     shell: 'pill',
   },
+  {
+    // Photoshop's Patch tool, made easier (docs/patch-gradient-plan.md,
+    // feature 2). A selection drawn with Region copy's shapes is held, its
+    // source is proposed and drawn as a ghost the drag overrides, and Apply
+    // commits it as one layer (`retouch.svelte.js`). Normal blends a source
+    // in; Content-Aware, Smooth and Auto read no source at all.
+    id: 'patch',
+    slot: 8,
+    key: 'J',
+    nameKey: 'tools.name.patch',
+    hintKey: 'tools.hint.patch',
+    params: [
+      ...section('selection', [
+        choice('shape', 'tools.param.shape', SELECTION_SHAPES),
+        onlyWhen(brushSize(), (values) => values.shape === 'brush'),
+      ]),
+      ...section('patch', [
+        choice('mode', 'retouch.patch.mode', [
+          { value: 'auto', labelKey: 'retouch.patch.auto' },
+          { value: 'normal', labelKey: 'retouch.patch.normal' },
+          { value: 'contentAware', labelKey: 'retouch.patch.contentAware' },
+          { value: 'smooth', labelKey: 'retouch.patch.smooth' },
+        ]),
+        onlyWhen(choice('direction', 'retouch.patch.direction', [
+          { value: 'source', labelKey: 'retouch.patch.source' },
+          { value: 'destination', labelKey: 'retouch.patch.destination' },
+        ]), (values) => values.mode === 'normal'),
+        onlyWhen(range('diffusion', 'retouch.patch.diffusion', 1, 7, 1), (values) => values.mode === 'normal'),
+        onlyWhen(range('structure', 'retouch.patch.structure', 1, 7, 1), contentAware),
+        onlyWhen(range('color', 'retouch.patch.color', 0, 10, 1), contentAware),
+      ]),
+    ],
+    runnable: false,
+    shell: 'pill',
+  },
+  {
+    // Photoshop's Gradient tool inside a selection (feature 3): a drag sets
+    // the line, its two handles stay editable, and the stops, the presets,
+    // Match surroundings and As screentone are in the tool's panel, with no
+    // dialog (`RetouchOptions.svelte`). A panel rather than a pill: on one row
+    // its controls made a bar a thousand pixels long. The stops are not rows
+    // here: they are a list, kept in `editor.toolParams.gradient` beside these.
+    id: 'gradient',
+    slot: 9,
+    key: 'G',
+    nameKey: 'tools.name.gradient',
+    hintKey: 'tools.hint.gradient',
+    params: [
+      ...section('selection', [
+        choice('shape', 'tools.param.shape', SELECTION_SHAPES),
+        onlyWhen(brushSize(), (values) => values.shape === 'brush'),
+      ]),
+      ...section('gradient', [
+        // Photoshop's five types, `gradient.rs#Kind` as serde names them,
+        // then Auto: no line and no stops, the surface all round the
+        // selection (`autogradient.rs`), which `Shift+G` arms.
+        choice('kind', 'retouch.gradient.kind', [
+          { value: 'linear', labelKey: 'retouch.gradient.linear' },
+          { value: 'radial', labelKey: 'retouch.gradient.radial' },
+          { value: 'angle', labelKey: 'retouch.gradient.angle' },
+          { value: 'reflected', labelKey: 'retouch.gradient.reflected' },
+          { value: 'diamond', labelKey: 'retouch.gradient.diamond' },
+          { value: 'auto', labelKey: 'retouch.gradient.auto' },
+        ]),
+        range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
+        range('feather', 'tools.param.feather', 0, 20, 1, 'px'),
+      ]),
+    ],
+    runnable: false,
+    shell: 'panel',
+  },
 ]
+
+/**
+ * The tools whose gesture is a **held selection** rather than a commit: the
+ * drag draws an area, and Apply (or `Enter`) commits it after the source or
+ * the line has been set (`retouch.svelte.js`).
+ */
+export const SELECTION_TOOLS = /** @type {const} */ (['patch', 'gradient'])
+
+/**
+ * Whether a drag with this tool draws one of the shared selection shapes:
+ * Region copy, the Patch tool and the Gradient tool.
+ *
+ * @param {string} tool
+ * @param {Record<string, unknown>} [params]
+ * @returns {boolean}
+ */
+export function selectsArea(tool, params = {}) {
+  return (tool === 'cloneStamp' && params?.mode === 'region') || SELECTION_TOOLS.includes(/** @type {any} */ (tool))
+}
+
+/**
+ * What the rail prints beside a tool: its letter where it has one, else its
+ * number.
+ *
+ * @param {ToolSpec} spec
+ * @returns {string}
+ */
+export function toolKey(spec) {
+  return spec.key ?? String(spec.slot)
+}
 
 /** The rail's icon per tool, in `TOOL_SPECS` order. */
 export const TOOL_ICONS = /** @type {Record<string, string>} */ ({
@@ -633,6 +772,8 @@ export const TOOL_ICONS = /** @type {Record<string, string>} */ ({
   aiMaskBrush: 'wand',
   cloneStamp: 'stamp',
   maskSelect: 'selection',
+  patch: 'patch',
+  gradient: 'gradient',
 })
 
 /**
@@ -679,6 +820,8 @@ export const DRAWING_TOOLS = /** @type {const} */ ([
   'aiMaskBrush',
   'cloneStamp',
   'maskSelect',
+  'patch',
+  'gradient',
 ])
 
 /**
@@ -689,14 +832,16 @@ export const DRAWING_TOOLS = /** @type {const} */ ([
  * tool is a brush or an area by its own `shape` row: `brush` strokes, and
  * `lasso` and `rect` draw what Shapes draws under the same names, through the
  * same gestures. Its Detect mode is a rectangle whatever the row says: the
- * row is away, and a Detect is held to a box. Every other drawing tool strokes.
+ * row is away, and a Detect is held to a box. Region copy, the Patch tool and
+ * the Gradient tool draw the shared selection shapes, a magnetic lasso being a
+ * polygon. Every other drawing tool strokes.
  *
  * @param {string} tool
  * @param {Record<string, unknown>} [params]
  * @returns {'rect'|'ellipse'|'lasso'|'polygon'|'line'|null}
  */
 export function draftShape(tool, params = {}) {
-  if (tool === 'cloneStamp' && params.mode === 'region') {
+  if (selectsArea(tool, params)) {
     const shape = String(params.shape ?? 'rect')
     return shape === 'brush' ? null : shape === 'magnetic' ? 'polygon' : /** @type {any} */ (shape)
   }

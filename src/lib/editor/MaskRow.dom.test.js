@@ -36,6 +36,7 @@ vi.mock('./maskactions.svelte.js', async (importOriginal) => {
     ...actual,
     keepDependencyResult: vi.fn(actual.keepDependencyResult),
     setDetectedMaskPadding: vi.fn(actual.setDetectedMaskPadding),
+    requestDetectedMaskPadding: vi.fn(actual.requestDetectedMaskPadding),
     rerunMask: vi.fn(actual.rerunMask),
   }
 })
@@ -45,11 +46,11 @@ import { createMockBackend } from '../api/mock.js'
 import { t } from '../i18n/index.js'
 import { app, clearNotices, closeAllModals, closeModal } from '../state/app.svelte.js'
 import { refreshCloudReadiness, stopCloud } from '../state/cloud.svelte.js'
-import { applyRegionDelta, applyRegionState, editor, recordRegionEdit, replaceRegion, undo } from '../state/editor.svelte.js'
+import { applyRegionDelta, applyRegionState, editor, recordRegionEdit, replaceRegion, select, undo } from '../state/editor.svelte.js'
 import { pageVersion } from '../api/tile.js'
 import { setCloudAllowed } from '../state/session.svelte.js'
 import MaskRow from './MaskRow.svelte'
-import { keepDependencyResult, rerunMask, setDetectedMaskPadding } from './maskactions.svelte.js'
+import { keepDependencyResult, requestDetectedMaskPadding, rerunMask, stepMaskPadding } from './maskactions.svelte.js'
 import { maskRow } from './maskrows.js'
 
 const ZERO = { method: 0, openChapter: 0, export: 0, cloud: 0, provision: 0, region: 0, pageTail: 0, noticeStagger: 0 }
@@ -182,14 +183,14 @@ describe('the engine picker on a Layers row', () => {
   it('offers Cloud last while a cloud endpoint is ready and allowed', async () => {
     const { region } = await opened()
     show(region)
-    expect(offered()).toEqual(['fill', 'lama', 'cloud'])
+    expect(offered()).toEqual(['fill', 'screentone', 'lama', 'cloud'])
     expect(picker().value).toBe('fill')
   })
 
   it('leaves Cloud out while the cloud is off', async () => {
     const { region } = await opened({ allowed: false })
     show(region)
-    expect(offered()).toEqual(['fill', 'lama'])
+    expect(offered()).toEqual(['fill', 'screentone', 'lama'])
   })
 
   // Denoise fill is gone. A patch saved by it reads as Fill, so the picker
@@ -197,7 +198,7 @@ describe('the engine picker on a Layers row', () => {
   it('shows a patch saved as the retired denoise rung as Fill', async () => {
     const { region } = await opened({ allowed: false })
     show(strokeBy(region, 'denoise'))
-    expect(offered()).toEqual(['fill', 'lama'])
+    expect(offered()).toEqual(['fill', 'screentone', 'lama'])
     expect(picker().value).toBe('fill')
     expect(document.body.textContent).not.toContain('denoise')
   })
@@ -217,7 +218,7 @@ describe('the engine picker on a Layers row', () => {
     }
     show(cloudPatch)
     expect(screen.getByText('☁ FLUX.2 Klein 9B · Cloud', { selector: '.title' })).toBeTruthy()
-    expect(offered()).toEqual(['cloud', 'fill', 'lama'])
+    expect(offered()).toEqual(['cloud', 'fill', 'screentone', 'lama'])
     expect(picker().value).toBe('cloud')
   })
 
@@ -555,7 +556,7 @@ describe('the layer controls on a row', () => {
   const slider = () => {
     const found = document.querySelector('[data-layer-style] input[type="range"]')
     if (!found) throw new Error('no opacity slider')
-    expect(found.closest('label')?.textContent).toContain(t('masks.action.opacity'))
+    expect(found).toBe(screen.getByRole('slider', { name: t('masks.action.opacity') }))
     return /** @type {HTMLInputElement} */ (found)
   }
 
@@ -622,16 +623,24 @@ describe('the layer controls on a row', () => {
     expect(pageVersion(pageOf(), 'cleaned')).toBe(faded)
   })
 
-  it('commits arrow-key steps on the slider once the presses stop', async () => {
+  it('commits arrow-key steps on the slider once the presses stop, five percent a press', async () => {
     const { region } = await opened({ allowed: false })
     show(region)
-    for (const value of ['99', '98', '97']) {
-      await fireEvent.input(slider(), { target: { value } })
-      await fireEvent.change(slider(), { target: { value } })
-    }
+    for (let i = 0; i < 3; i += 1) await fireEvent.keyDown(slider(), { key: 'ArrowLeft' })
+    expect(slider().value).toBe('85')
     expect(recordRegionEdit).not.toHaveBeenCalled()
     await waitFor(() => expect(recordRegionEdit).toHaveBeenCalledTimes(1))
-    expect(/** @type {any} */ (recordRegionEdit).mock.calls[0][3].region.mask.layer.opacity).toBe(97)
+    expect(/** @type {any} */ (recordRegionEdit).mock.calls[0][3].region.mask.layer.opacity).toBe(85)
+  })
+
+  it('commits a typed opacity as one undo entry', async () => {
+    const { region } = await opened({ allowed: false })
+    show(region)
+    const box = screen.getByLabelText(t('tools.param.exactValue', { name: t('masks.action.opacity') }))
+    await fireEvent.input(box, { target: { value: '30' } })
+    await fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(recordRegionEdit).toHaveBeenCalledTimes(1))
+    expect(/** @type {any} */ (recordRegionEdit).mock.calls[0][3].region.mask.layer.opacity).toBe(30)
   })
 
   it('locks a movable layer, and puts a moved one back where it was made', async () => {
@@ -691,79 +700,87 @@ describe('the layer controls on a row', () => {
 
 
 describe('padding on an individual detected mask', () => {
+  /** The opened chapter's region as a detection with `paddingPx`, held by the editor too. */
+  async function detection(paddingPx) {
+    const opening = await opened({ allowed: false })
+    const detected = { ...opening.region, outcome: 'detected', detected: true, paddingPx }
+    replaceRegion(detected)
+    return { ...opening, detected: current(detected.id) }
+  }
+  const slider = (/** @type {any} */ root = screen) =>
+    /** @type {HTMLInputElement} */ (root.getByRole('slider', { name: t('tools.param.maskPadding') }))
+  const box = (/** @type {any} */ root = screen) =>
+    /** @type {HTMLInputElement} */ (root.getByLabelText(t('tools.param.exactValue', { name: t('tools.param.maskPadding') })))
+  const request = () => vi.mocked(requestDetectedMaskPadding).mockResolvedValue(undefined)
+
   // The region menu's slider is the row's: the same call, the menu left open.
   it('offers the same padding in the region menu, and keeps the menu open', async () => {
-    const { region } = await opened({ allowed: false })
-    const detected = { ...region, outcome: 'detected', detected: true, paddingPx: 3 }
-    const save = vi.mocked(setDetectedMaskPadding).mockResolvedValue(true)
+    const { detected } = await detection(3)
+    const save = request()
     const view = show(detected)
     await fireEvent.contextMenu(/** @type {HTMLElement} */ (view.container.querySelector('[data-mask-row]')), { clientX: 20, clientY: 20 })
-    const menu = screen.getByRole('menu', { name: t('masks.menu.label') })
-    const slider = /** @type {HTMLInputElement} */ (within(menu).getByRole('slider', { name: t('tools.param.maskPadding') }))
-    expect(slider.value).toBe('3')
-    await fireEvent.input(slider, { target: { value: '9' } })
-    expect(slider.getAttribute('aria-valuetext')).toBe('9 px')
+    const menu = within(screen.getByRole('menu', { name: t('masks.menu.label') }))
+    expect(slider(menu).value).toBe('3')
+    await fireEvent.input(slider(menu), { target: { value: '9' } })
+    expect(slider(menu).getAttribute('aria-valuetext')).toBe('9 px')
     expect(save).not.toHaveBeenCalled()
-    await fireEvent.change(slider, { target: { value: '9' } })
-    await waitFor(() => expect(save).toHaveBeenCalledWith(detected, 9))
+    await fireEvent.change(slider(menu), { target: { value: '9' } })
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: detected.id }), 9)
+    // The box takes a typed value, and the menu stays open for another.
+    await fireEvent.input(box(menu), { target: { value: '14' } })
+    await fireEvent.keyDown(box(menu), { key: 'Enter' })
+    expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ id: detected.id }), 14)
     expect(screen.getByRole('menu', { name: t('masks.menu.label') })).toBeTruthy()
   })
 
-  it('shows the saved padding and saves only this row when the slider is released', async () => {
-    const { region } = await opened({ allowed: false })
-    const detected = { ...region, outcome: 'detected', detected: true, paddingPx: 3 }
-    const save = vi.mocked(setDetectedMaskPadding).mockResolvedValue(false)
+  it('shows the saved padding and saves this row when the slider is released or a value typed', async () => {
+    const { detected } = await detection(3)
+    const save = request()
     show(detected)
-    const slider = /** @type {HTMLInputElement} */ (screen.getByRole('slider', { name: t('tools.param.maskPadding') }))
-    expect(slider.value).toBe('3')
-    expect(slider.max).toBe('32')
-    await fireEvent.input(slider, { target: { value: '6' } })
-    expect(slider.getAttribute('aria-valuetext')).toBe('6 px')
+    expect(slider().value).toBe('3')
+    expect(slider().max).toBe('32')
+    await fireEvent.input(slider(), { target: { value: '6' } })
+    expect(slider().getAttribute('aria-valuetext')).toBe('6 px')
     expect(save).not.toHaveBeenCalled()
-    await fireEvent.change(slider, { target: { value: '6' } })
+    await fireEvent.change(slider(), { target: { value: '6' } })
     expect(save).toHaveBeenCalledWith(detected, 6)
-    // A refused edit returns to the saved value, not a value only the UI has.
-    await waitFor(() => expect(slider.value).toBe('3'))
-    await fireEvent.input(slider, { target: { value: '0' } })
-    await fireEvent.change(slider, { target: { value: '0' } })
-    expect(save).toHaveBeenLastCalledWith(detected, 0)
+    // Past the end is the end.
+    await fireEvent.input(box(), { target: { value: '99' } })
+    await fireEvent.blur(box())
+    expect(save).toHaveBeenLastCalledWith(detected, 32)
   })
 
-  it('discards a slider draft if a run reaches the page before it can be saved', async () => {
-    const { region } = await opened({ allowed: false })
-    const save = vi.mocked(setDetectedMaskPadding).mockResolvedValue(false)
-    show({ ...region, outcome: 'detected', detected: true, paddingPx: 2 })
-    const slider = /** @type {HTMLInputElement} */ (screen.getByRole('slider', { name: t('tools.param.maskPadding') }))
-    const pageIndex = editor.chapter.pages.find((page) => page.regions.some((entry) => entry.id === region.id)).index
-    await fireEvent.input(slider, { target: { value: '6' } })
-    editor.run.active = true
-    editor.run.busyPages = [pageIndex]
-    try {
-      await fireEvent.change(slider, { target: { value: '6' } })
-      expect(save).not.toHaveBeenCalled()
-      expect(slider.value).toBe('2')
-      expect(slider.disabled).toBe(true)
-    } finally {
-      editor.run.active = false
-      editor.run.busyPages = []
-    }
+  it('saves a change made while another is saving, and only the newest one waiting', async () => {
+    const { backend, detected } = await detection(2)
+    /** @type {Array<() => void>} */
+    const pending = []
+    const sent = vi.spyOn(backend, 'setDetectionPadding').mockImplementation((spec) => new Promise((resolve) => {
+      pending.push(() => resolve({ changed: [spec.regionId], removed: [], pages: [] }))
+    }))
+    const first = requestDetectedMaskPadding(detected, 4)
+    void requestDetectedMaskPadding(detected, 5)
+    void requestDetectedMaskPadding(detected, 7)
+    await waitFor(() => expect(pending).toHaveLength(1))
+    pending.shift()?.()
+    await waitFor(() => expect(pending).toHaveLength(1))
+    pending.shift()?.()
+    await first
+    expect(sent.mock.calls.map(([spec]) => spec.paddingPx)).toEqual([4, 7])
   })
 
-  // A run holds the page it is on and no other (`editor.svelte.js#pageBusy`):
-  // the row of a page the run has left, or not reached, keeps its slider.
-  it('keeps the slider while a run is on another page', async () => {
-    const { region } = await opened({ allowed: false })
-    const save = vi.mocked(setDetectedMaskPadding).mockResolvedValue(true)
-    show({ ...region, outcome: 'detected', detected: true, paddingPx: 2 })
-    const slider = /** @type {HTMLInputElement} */ (screen.getByRole('slider', { name: t('tools.param.maskPadding') }))
-    const pageIndex = editor.chapter.pages.find((page) => page.regions.some((entry) => entry.id === region.id)).index
+  it('holds the control while a run is on the page, and keeps it while the run is on another', async () => {
+    const { detected } = await detection(2)
+    const save = request()
+    show(detected)
+    const pageIndex = editor.chapter.pages.find((page) => page.regions.some((entry) => entry.id === detected.id)).index
     editor.run.active = true
-    editor.run.busyPages = [pageIndex + 1]
     try {
-      await fireEvent.input(slider, { target: { value: '6' } })
-      expect(slider.disabled).toBe(false)
-      await fireEvent.change(slider, { target: { value: '6' } })
-      expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: region.id }), 6)
+      editor.run.busyPages = [pageIndex]
+      await waitFor(() => expect(slider().disabled).toBe(true))
+      editor.run.busyPages = [pageIndex + 1]
+      await waitFor(() => expect(slider().disabled).toBe(false))
+      await fireEvent.change(slider(), { target: { value: '6' } })
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: detected.id }), 6)
     } finally {
       editor.run.active = false
       editor.run.busyPages = []
@@ -776,15 +793,134 @@ describe('padding on an individual detected mask', () => {
     expect(screen.queryByRole('slider', { name: t('tools.param.maskPadding') })).toBeNull()
   })
 
-  it('disables the slider while the padding write is pending', async () => {
-    const { region } = await opened({ allowed: false })
-    let finish
-    vi.mocked(setDetectedMaskPadding).mockImplementation(() => new Promise((resolve) => { finish = resolve }))
-    show({ ...region, outcome: 'detected', detected: true, paddingPx: 2 })
-    const slider = /** @type {HTMLInputElement} */ (screen.getByRole('slider', { name: t('tools.param.maskPadding') }))
-    await fireEvent.change(slider, { target: { value: '4' } })
-    expect(slider.disabled).toBe(true)
-    finish(false)
-    await waitFor(() => expect(slider.disabled).toBe(false))
+  // `;` and `'`: a run of presses shows at once and is saved once.
+  it('steps the selected detection a pixel a press, and saves the run of presses once', async () => {
+    const { backend, detected } = await detection(3)
+    const sent = vi.spyOn(backend, 'setDetectionPadding').mockResolvedValue({ changed: [detected.id], removed: [], pages: [] })
+    show(detected)
+    select(detected.id)
+    try {
+      stepMaskPadding(1)
+      stepMaskPadding(1)
+      stepMaskPadding(1)
+      stepMaskPadding(-1)
+      await waitFor(() => expect(slider().value).toBe('5'))
+      expect(sent).not.toHaveBeenCalled()
+      await waitFor(() => expect(sent).toHaveBeenCalledTimes(1))
+      expect(sent).toHaveBeenCalledWith(expect.objectContaining({ regionId: detected.id, paddingPx: 5 }))
+    } finally {
+      select(null)
+    }
+  })
+
+  it('steps the page\'s padding when no detection is selected', async () => {
+    const { backend } = await detection(0)
+    const applied = vi.spyOn(backend, 'setDetectionPadding')
+    select(null)
+    const before = Number(editor.toolParams.autoClean?.maskPadding ?? 0)
+    stepMaskPadding(1)
+    stepMaskPadding(1)
+    expect(editor.toolParams.autoClean.maskPadding).toBe(before + 2)
+    await waitFor(() => expect(applied).toHaveBeenCalledTimes(1))
+    expect(applied).toHaveBeenCalledWith(expect.objectContaining({ paddingPx: before + 2 }))
+    expect(applied.mock.calls[0][0].regionId).toBeUndefined()
+  })
+
+  it('steps the page from the padding its detections share, not the panel\'s', async () => {
+    const { backend } = await detection(6)
+    const applied = vi.spyOn(backend, 'setDetectionPadding')
+    select(null)
+    editor.toolParams.autoClean = { ...(editor.toolParams.autoClean ?? {}), maskPadding: 0 }
+    stepMaskPadding(1)
+    expect(editor.toolParams.autoClean.maskPadding).toBe(7)
+    await waitFor(() => expect(applied).toHaveBeenCalledTimes(1))
+    expect(applied).toHaveBeenCalledWith(expect.objectContaining({ paddingPx: 7 }))
+  })
+
+  it('saves a run of page presses to the page it started on', async () => {
+    const { backend } = await detection(2)
+    const applied = vi.spyOn(backend, 'setDetectionPadding')
+    select(null)
+    const start = editor.pageIndex
+    stepMaskPadding(1)
+    editor.pageIndex = start + 1
+    try {
+      await waitFor(() => expect(applied).toHaveBeenCalledTimes(1))
+      expect(applied).toHaveBeenCalledWith(expect.objectContaining({ pageIndex: start, paddingPx: 3 }))
+    } finally {
+      editor.pageIndex = start
+    }
+  })
+
+  it('drops a run of presses still waiting when Undo is pressed', async () => {
+    const { undo: realUndo } = /** @type {any} */ (await vi.importActual('../state/editor.svelte.js'))
+    const { backend, detected } = await detection(3)
+    const sent = vi.spyOn(backend, 'setDetectionPadding')
+    show(detected)
+    select(detected.id)
+    try {
+      stepMaskPadding(1)
+      stepMaskPadding(1)
+      await waitFor(() => expect(slider().value).toBe('5'))
+      realUndo()
+      await waitFor(() => expect(slider().value).toBe('3'))
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(sent).not.toHaveBeenCalled()
+    } finally {
+      select(null)
+    }
+  })
+
+  it('shows a page run of presses on the page\'s rows while it waits', async () => {
+    const { backend, detected } = await detection(4)
+    vi.spyOn(backend, 'setDetectionPadding').mockResolvedValue({ changed: [], removed: [], pages: [] })
+    select(null)
+    show(detected)
+    stepMaskPadding(1)
+    stepMaskPadding(1)
+    await waitFor(() => expect(slider().value).toBe('6'))
+    // Saved and read back, the rows show the page's own value again.
+    await waitFor(() => expect(slider().value).toBe('4'))
+  })
+
+  it('saves a waiting page run before a value set on one of its detections, so that value stands', async () => {
+    const { backend, detected } = await detection(2)
+    const sent = vi.spyOn(backend, 'setDetectionPadding').mockResolvedValue({ changed: [detected.id], removed: [], pages: [] })
+    select(null)
+    stepMaskPadding(1)
+    await requestDetectedMaskPadding(detected, 9)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(sent.mock.calls.map(([spec]) => [spec.regionId ?? 'page', spec.paddingPx])).toEqual([['page', 3], [detected.id, 9]])
+  })
+
+  it('saves a run of presses still waiting at once when Redo is pressed', async () => {
+    const { redo: realRedo } = /** @type {any} */ (await vi.importActual('../state/editor.svelte.js'))
+    const { backend, detected } = await detection(3)
+    const sent = vi.spyOn(backend, 'setDetectionPadding').mockResolvedValue({ changed: [detected.id], removed: [], pages: [] })
+    select(detected.id)
+    try {
+      stepMaskPadding(1)
+      realRedo()
+      await waitFor(() => expect(sent).toHaveBeenCalledTimes(1))
+      expect(sent).toHaveBeenCalledWith(expect.objectContaining({ regionId: detected.id, paddingPx: 4 }))
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(sent).toHaveBeenCalledTimes(1)
+    } finally {
+      select(null)
+    }
+  })
+
+  it('lets a value set on the slider replace a run of presses still waiting', async () => {
+    const { backend, detected } = await detection(3)
+    const sent = vi.spyOn(backend, 'setDetectionPadding').mockResolvedValue({ changed: [detected.id], removed: [], pages: [] })
+    select(detected.id)
+    try {
+      stepMaskPadding(1)
+      await requestDetectedMaskPadding(detected, 10)
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(sent.mock.calls.map(([spec]) => spec.paddingPx)).toEqual([10])
+    } finally {
+      select(null)
+    }
   })
 })

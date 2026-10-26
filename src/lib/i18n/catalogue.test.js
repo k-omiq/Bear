@@ -169,9 +169,12 @@ describe('the catalogue is complete', () => {
       expect(key, `"${key}" is not a whole key`).toMatch(/^[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+$/)
       expect(key).not.toContain('*')
     }
-    // The whole runtime list stays small enough to read. If it grows, the app
-    // has started assembling keys where it should be choosing between them.
-    expect(RUNTIME_KEYS.length).toBeLessThan(30)
+    // The runtime list stays small enough to read. If it grows, the app has
+    // started assembling keys where it should be choosing between them. The
+    // sheet's group headings are left out of the count: there is one per
+    // `SHORTCUT_GROUPS` entry by construction, and a new group is a section of
+    // the sheet, not a key assembled where a choice belonged.
+    expect(RUNTIME_KEYS.length - GROUP_KEYS.length).toBeLessThan(30)
   })
 })
 

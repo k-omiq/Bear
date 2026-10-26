@@ -97,7 +97,8 @@ computer or Cloud GPU, set independently, each disabled with the reason when the
 starts a local clean on: Fill and LaMa by default, or Solid colour) and **Outside bubbles** (Hold for
 review, the default, or Clean anyway; hidden under All text, which cleans outside bubbles regardless). **Mask padding**
 (0 to 32 px, 0 by default) grows every mask a run fits by that many page pixels, so more of the area around the
-letters is cleaned. The slider is shown for every step, Detect and clean included, and every step grows its masks by
+letters is cleaned. From the keyboard, `;` and `'` step it, `Q` steps the Mode, `V` the Scope, `Cmd`/`Ctrl`+`Enter`
+presses the run button and `Cmd`/`Ctrl`+`.` cancels the run. The slider is shown for every step, Detect and clean included, and every step grows its masks by
 the value it holds, so the two steps and the one pass leave the same masks. Its **Apply** button re-pads the masks already detected on the page (or, for Chapter and Project,
 the open chapter) to the slider's value. Each one is grown from its unpadded mask, so going back to 0 gives the
 detected mask back exactly; a mask edit made over a padded mask is kept through later paddings. Cleaned layers never
@@ -227,7 +228,7 @@ or change the ink separations. A one-bit page cannot hold an inpainted result at
 
 ## Manual tools
 
-Six tools sit in a rail on the right, selected with the keys `1` to `6`. Each has a dropdown of parameters; the
+Nine tools sit in a rail on the right, selected with the keys `1` to `7`, `J` (Patch) and `G` (Gradient). Each has a dropdown of parameters; the
 dropdown does not have to be open for the tool to work. Masks you draw by hand and masks the automatic pass made are
 identical in kind: same row, same actions, same provenance, same export treatment. A hand-drawn mask is
 **authoritative**: no detector runs on your gesture and no mask snaps onto a nearby region, so what you painted is
@@ -241,7 +242,12 @@ outside bubbles, mask padding with its Apply, and the run button, all described 
 
 ### Brush
 
-Options: size, hardness, spacing, colour, opacity and flow. The brush paints flat colour and does nothing else. To
+Options: size, hardness, spacing, colour, opacity and flow. The brush paints flat colour and does nothing else.
+
+Size is the same control on every round brush (Brush, Eraser, AI Mask Brush, Clone stamp, and the brush shape of
+Selection, Patch and Gradient): 1 to 500 pixels on a log slider, so small sizes get as much of the track as large
+ones, a box beside it to type the exact size, the wheel over it, and `[` / `]` from anywhere in the editor, about a
+tenth a press. Every number a tool takes has the same slider and box. To
 shape a mask that an engine then cleans, use the AI Mask Brush; to remove a mask, use its Layers row or the region
 menu, and to take part of one off, use the Eraser.
 
@@ -272,7 +278,8 @@ LaMa gets LaMa. The list is the same four engines a Layers row offers, under the
 ### Selection
 
 Key `6`. It adds to or removes from the area Clean erases, or detects text in an area you draw. Draw with a brush, a
-lasso or a rectangle: `S` steps the shape and `X` swaps add for remove. There is no separate Content-Aware Fill tool.
+lasso or a rectangle: `S` steps the shape. `A` adds, `X` removes and `D` detects, from any tool; `X` or `D` pressed
+again goes back to adding. There is no separate Content-Aware Fill tool.
 Its old id opens the AI Mask Brush, and the fill choices it offered (Fill or a redraw engine, local or cloud) are the
 engine pick on the AI Mask Brush and on each Layers row and region menu. Every cloud render asks first in one dialog.
 
@@ -310,8 +317,9 @@ at 100, aligned.
   nothing to copy is declined.
 - **Straight lines.** `Shift`-click draws a line from where the last stroke ended. `Shift` held during a drag keeps
   the stroke horizontal or vertical.
-- **Keys, with the page focused.** `[` and `]` make the brush smaller and larger, and `Shift`+`[` and `Shift`+`]`
-  step the hardness by 25. `S` samples under the pointer. `Enter` opens one dab, the arrows move it (five steps with
+- **Keys.** `[` and `]` make the brush smaller and larger, and `Shift`+`[` and `Shift`+`]` step the hardness by 10,
+  as they do for every brush. `C` swaps Stamp for Region copy and `Shift`+`C` swaps aligned for non-aligned. With the
+  page focused, `S` samples under the pointer. `Enter` opens one dab, the arrows move it (five steps with
   `Shift`), and `Enter` stamps it. `Escape` drops an open stroke, and pressed again it clears the source.
 
 Each stroke is one layer and one undo step. A project saved when the tool was Clone / Heal keeps its layers, and they
@@ -330,6 +338,62 @@ Right-click a copied region on the canvas or its Layers row and choose **Duplica
   original selection at its destination, preserving the captured pixels and the opaque interior.
 - **New selection** starts another copy. Copies, placement, rotation, and adjustment bursts use the normal layer
   history and persist with the project. Export uses the same native masks and transforms as the committed canvas.
+
+### Patch
+
+Key `J`. The Patch tool fixes an area from what is around it, the way the patch tool in a raster editor does, with
+less to set up. Select the area with the same shapes as Region copy (Brush, Rectangle, Ellipse, Lasso, Polygon or
+Magnetic lasso, Lasso by default). The selection is held rather than committed, and nothing changes until you press
+**Apply** on the bar or `Enter` on the page. Escape drops the selection, and a press outside it starts a new one.
+
+- **Auto**, the default, needs no source. Where the selection sits on a halftone dot screen it continues the dots,
+  as the Screentone rung does; elsewhere it fills as Content-Aware. The layer records which of the two ran.
+- **Normal** copies a source into the selection and matches it to the edge. The source is proposed as soon as the
+  selection is held, from the nearby area whose surroundings match best, and drawn as a dotted ghost of the
+  selection. Drag inside the selection or the ghost to move it. Where nothing nearby fits, the ghost starts one
+  selection-width to the side and the bar says so. **Direction** Source fills the selection from the ghost;
+  Destination copies the selection to the ghost instead. **Diffusion**, 1 to 7 (5 by default), is how far the edge
+  colour carries in: 1 keeps the source's own values a few pixels in from the edge, 7 blends it fully. A source off
+  the page, or exactly on top of the selection, is declined.
+- **Content-Aware** fills the selection with patches taken from around it. **Structure**, 1 to 7, is the patch size:
+  higher keeps larger shapes together. **Color**, 0 to 10, is recorded with the layer; the fill already matches the
+  page's colour exactly, so in this version it changes nothing.
+- **Smooth** fills the selection with the smoothest surface that meets its edge, for flat paper and soft tone.
+
+Each Apply is one layer and one undo step, named Patch in the Layers window, with its options recorded. A patch is
+read from the page where it sits, so it cannot be moved afterwards; its opacity can still change. Indexed, CMYK and
+one-bit pages are refused, as they are for the Brush.
+
+### Gradient
+
+Key `G`. The Gradient tool fills a selection with a gradient. Select the area with the Region copy shapes, then drag
+inside it to set where the gradient starts and ends; `Shift` turns the line in steps of 15 degrees. The two ends stay
+on the page as handles, and the selection shows a live preview of the gradient while you move them. **Apply** or
+`Enter` draws it, and Escape drops it.
+
+- **Type**: Linear, Radial, Angle, Reflected, Diamond or Auto.
+- **Auto** (`Shift`+`G` arms the tool with it) needs no line and no stops. Lasso the lettering on a shaded bubble
+  and it fills as soon as the selection closes, with the gradient the page has on every side of it, so a ramp that
+  eases or bends still meets the page all round. Glow or letters the lasso cut through are taken too, up to 48 px
+  past it, and the bubble's outline, its rim glow and the paper beyond are never painted, even inside the
+  selection. Where the ring around the selection is no one smooth surface (a screen, a busy drawing) it refuses
+  and the page is left as it was; use the Patch tool there.
+- **Stops.** The swatch on the bar opens the colour and opacity stops: add, move or remove each one, pick a colour
+  stop's colour with the picker or from the page with its eyedropper. Two presets fill them in: Foreground to
+  background and Foreground to transparent, where foreground is the Brush's colour.
+- **Reverse** flips the gradient. **Dither**, on by default, adds a little noise so a slow ramp shows no bands.
+  **Opacity** is the layer's, and **Feather**, up to 20 px, softens the selection's edge.
+- **Match surroundings** reads the ring of page around the selection and sets the type, the line and the stops to
+  continue it, for a soft shadow or a sky that a letter sat across.
+- **As screentone** draws the gradient as the page's own dot screen, its dots growing and shrinking with the tone,
+  on a gray page with a screen around the selection. The dots are copied from the screen around the selection, so
+  only tones the screen already has nearby come out as dots; a gradient that runs far lighter or darker than its
+  surroundings is filled from patches there instead. Where there is no screen, or on a colour page, a plain gradient
+  is drawn and the app says so.
+
+The gradient is kept with the layer. Select a gradient layer with the tool armed and **Edit gradient** brings back
+its line, stops and options; Apply then redraws that layer in place. Each Apply is one undo step, and a gradient
+layer can be moved, locked and faded like any paint layer. Indexed, CMYK and one-bit pages are refused.
 
 ## Layers and history
 
@@ -352,8 +416,14 @@ on the page selects it under every tool, lights its outline and scrolls the matc
 Shift+F10 from the keyboard, selects the region and offers the same three things the row does. On a region that is
 detected and not yet cleaned, the menu also offers **Text type**: Speech bubble text or Text outside bubbles, with the
 current one checked. Changing it sets which engine pick a later Clean starts the region on and the color its mask is
-drawn in. The menu also has that detection's **Mask padding** slider, the same one its Layers row has: each release
-re-pads that one mask and the menu stays open. Both are undoable, like every edit of a detected mask.
+drawn in. The menu also has that detection's **Mask padding** slider, the same one its Layers row has, with a box
+to type the value and the wheel to step it once it has the focus (so the wheel still scrolls the menu): the value it
+settles on re-pads that one mask and the menu stays open. An entry picked right after a padding change waits for that
+change to be saved.
+`;` and `'` step the selected detection's padding a pixel at a time. With none selected they step every detection on
+the page, from the padding they share (the panel's Mask padding when they differ), and set the panel's value too. A
+run of presses is saved as one undo step, to the page it started on, and Undo while the run is still waiting drops it.
+Both are undoable, like every edit of a detected mask.
 
 **Needs review** is a filter at the top of the panel with a count, and it is the review surface. A region is flagged
 when fitting failed and a model reconstructed the area; when the region is unusually large for the page; when every
@@ -613,8 +683,10 @@ launch, never sent anywhere without an explicit action.
 
 ## Keyboard shortcuts
 
-Every tool and every bottom-bar action has a key, the editor is fully operable without a pointer, and every binding
-but Escape can be changed or cleared in Settings, Shortcuts. Tool, view, zoom, navigation and panel keys work while a
+Every tool, and every option a tool's bar shows, is reachable from the keyboard: the common ones have a key each, and
+`\` moves focus to the bar's next slider, dropdown or box for the rest. Every binding but Escape can be changed or cleared in Settings,
+Shortcuts. A letter bound without Shift also answers with Shift held, unless the table gives it a Shift binding of its
+own. The brackets and braces also match with Option or AltGr held, which is how many layouts type them. Tool, view, zoom, navigation and panel keys work while a
 chapter is open.
 
 | Key | Does |
@@ -626,25 +698,46 @@ chapter is open.
 | `5` | Clone stamp |
 | `6` | Selection: add to or remove from the detected masks, or detect text in a drawn rectangle |
 | `7` | Eraser: take paint or a cleaned area back off the page |
+| `J` | Patch: fix a selected area from what is around it |
+| `G` | Gradient: fill a selected area with a gradient |
+| `Shift`+`G` | Gradient, Auto type: fill a selection over a shaded bubble from all round it |
+| `Cmd`/`Ctrl`+`Enter` | Apply the held Patch or Gradient selection; otherwise press Text cleanup's run button (the first press opens Text cleanup when it is not showing) |
+| `Cmd`/`Ctrl`+`.` | Cancel the run |
+| `V` / `Shift`+`V` | Text cleanup scope: next / previous (the first press opens Text cleanup) |
+| `S` / `Shift`+`S` | Next / previous shape of the tool (the Selection tool when the tool has no shape); with the canvas focused, the clone stamp samples its source instead |
+| `Q` / `Shift`+`Q` | Next / previous mode, type or engine of the tool |
+| `A` / `X` / `D` | Selection: add, remove, detect in an area (`X` or `D` again: add) |
+| `C` / `Shift`+`C` | Clone stamp: Stamp or Region copy / aligned or not |
+| `[` / `]` | Smaller / bigger brush, about a tenth a press, for every round brush |
+| `Shift`+`[` / `Shift`+`]` | Softer / harder brush |
+| `I` / `Shift`+`I` | Less / more opacity (a region copy being placed: its own opacity) |
+| `K` / `Shift`+`K` | Less / more flow |
+| `Y` / `Shift`+`Y` | Less / more spacing |
+| `\` | Focus the tool bar's next slider, dropdown or box (then the arrows, the wheel, Space or a typed value) |
+| `;` / `'` | Less / more mask padding: the selected detection, else every detection on the page |
 | `O` (held) | Show the original while held |
 | `Shift`+`O` | Pin the original on |
 | `M` | Mask overlay |
 | `R` | Show only the regions that need review |
+| `W` / `Shift`+`W` | Less / more of the original's wipe |
 | `U` | Undo |
 | `Shift`+`U` | Redo |
 | `Cmd`/`Ctrl`+`Backspace` | Delete the selected layer |
+| `Cmd`/`Ctrl`+`D` | Duplicate the selected region |
+| `B` | Clean the selected detection, or try the selected cleaned region again |
+| `Shift`+`B` | Try the selected cleaned region again, wider |
 | `0` | Fit the page |
 | `+` (or `=`) | Zoom in |
 | `-` | Zoom out |
 | `Z` | Actual size, 1:1 |
-| `←` / `[` | Page left |
-| `→` / `]` | Page right |
+| `←` | Page left |
+| `→` | Page right |
+| `Home` / `End` | First / last page |
 | `N` | Next region needing review |
 | `P` | Previous region needing review |
 | `F` | Pages window |
 | `L` | Layers & review window |
 | `T` | Tool options window |
-| `F1` | Help window |
 | `E` | Export |
 | `N` (library) | New project |
 | `Cmd`/`Ctrl`+`O` (library) | Open project |

@@ -1,5 +1,6 @@
 <script>
   import Icon from '../icons/Icon.svelte'
+  import RangeField from './RangeField.svelte'
   import { captureFocus } from './focus.js'
 
   /**
@@ -17,10 +18,11 @@
    * without one is a plain run of `menuitem`s; a hairline separates them. Every
    * item keeps the mark column, so the labels of a mixed menu start at one x.
    *
-   * An item with a `range` is a slider rather than an entry: it takes the
-   * arrows' place in the focus order like any item, Left and Right move it,
-   * and a release (or a key) hands its value to `onrange`. The menu stays open,
-   * so the change can be seen and changed again.
+   * An item with a `range` is a `RangeField` rather than an entry: it takes
+   * its place in the arrows' focus order like any item, Left and Right and the
+   * wheel step it, its box takes a typed value, and the value it settles on -
+   * the thumb let go, Enter, a run of steps once it stops - goes to `onrange`.
+   * The menu stays open, so the change can be seen and changed again.
    *
    * No state, no strings: every label arrives translated, like the rest of the
    * vocabulary.
@@ -34,7 +36,7 @@
    *     label?: string | null,
    *     items: Array<{
    *       id: string, label: string, icon?: string, disabled?: boolean, selected?: boolean,
-   *       range?: { min: number, max: number, step?: number, value: number, unit?: string },
+   *       range?: { min: number, max: number, step?: number, value: number, unit?: string, hint?: string, boxLabel?: string },
    *     }>,
    *   }>,
    *   onselect: (id: string) => void,
@@ -49,15 +51,8 @@
 
   /** @type {HTMLElement | undefined} */
   let root = $state()
-  /** @type {HTMLElement[]} */
+  /** @type {Array<{focus: (options?: FocusOptions) => void}>} */
   let itemEls = $state([])
-  /**
-   * A slider's value while it is dragged, by item id: the readout follows the
-   * thumb before the host has the value.
-   *
-   * @type {Record<string, number>}
-   */
-  let drafts = $state({})
   let at = $state(0)
   /**
    * Where the panel ended up once it had a size to clamp against - null until
@@ -115,13 +110,20 @@
       if (root && !root.contains(/** @type {Node} */ (event.target))) dismiss({ refocus: false })
     }
     const away = () => dismiss()
+    // A typed value longer than its box scrolls the box itself: that is not
+    // the page moving out from under the menu.
+    /** @param {Event} event */
+    const scrolled = (event) => {
+      if (root && event.target instanceof Node && root.contains(event.target)) return
+      dismiss()
+    }
     document.addEventListener('pointerdown', outside, true)
-    globalThis.addEventListener('scroll', away, true)
+    globalThis.addEventListener('scroll', scrolled, true)
     globalThis.addEventListener('resize', away)
     globalThis.addEventListener('blur', away)
     return () => {
       document.removeEventListener('pointerdown', outside, true)
-      globalThis.removeEventListener('scroll', away, true)
+      globalThis.removeEventListener('scroll', scrolled, true)
       globalThis.removeEventListener('resize', away)
       globalThis.removeEventListener('blur', away)
     }
@@ -143,6 +145,11 @@
 
   /** @param {KeyboardEvent} event */
   function onkeydown(event) {
+    // A slider or its box answered the key itself.
+    if (event.defaultPrevented && event.key !== 'Escape') return
+    // Home and End move the caret in a typed value, not the menu's focus.
+    const typing = /** @type {any} */ (event.target)?.type === 'text'
+    if (typing && (event.key === 'Home' || event.key === 'End')) return
     switch (event.key) {
       case 'Escape':
         dismiss()
@@ -159,10 +166,16 @@
       case 'End':
         at = enabled[enabled.length - 1]?.index ?? 0
         break
-      case 'Tab':
+      case 'Tab': {
+        // Inside a range item, Tab goes between its slider and the box beside
+        // it, which has no other way in from the keyboard.
+        const field = /** @type {Element|null} */ (event.target instanceof Element ? event.target.closest('.range') : null)
+        const typing = /** @type {any} */ (event.target)?.type === 'text'
+        if (field && typing === event.shiftKey) return
         // Tabbing away is a dismissal, but focus must land where Tab sent it.
         dismiss({ refocus: false })
         return
+      }
       default:
         return
     }
@@ -180,6 +193,9 @@
    */
   function pick(id) {
     restore()
+    // A range row still settling a step or a typed value hands it over first,
+    // so the entry acts on the value the menu shows.
+    for (const item of itemEls) if (item && typeof (/** @type {any} */ (item)).flush === 'function') (/** @type {any} */ (item)).flush()
     onselect(id)
     onclose()
   }
@@ -206,24 +222,24 @@
       {#each section.items as item (item.id)}
         {@const index = flat.findIndex((entry) => entry.id === item.id)}
         {#if item.range}
-          {@const shown = `${drafts[item.id] ?? item.range.value}${item.range.unit ?? ''}`}
-          <label class="range">
-            <span class="range-head"><span class="item-label">{item.label}</span><output>{shown}</output></span>
-            <input
+          <div class="range">
+            <RangeField
               bind:this={itemEls[index]}
-              type="range"
-              tabindex="-1"
+              label={item.label}
+              boxLabel={item.range.boxLabel}
+              value={item.range.value}
               min={item.range.min}
               max={item.range.max}
               step={item.range.step ?? 1}
-              value={drafts[item.id] ?? item.range.value}
+              unit={item.range.unit ?? ''}
+              hint={item.range.hint}
+              layout="stacked"
+              listItem
+              wheel="focused"
               disabled={item.disabled}
-              aria-label={item.label}
-              aria-valuetext={shown}
-              oninput={(event) => (drafts[item.id] = Number(event.currentTarget.value))}
-              onchange={(event) => onrange?.(item.id, Number(event.currentTarget.value))}
+              onchange={(value) => onrange?.(item.id, value)}
             />
-          </label>
+          </div>
         {:else}
         <button
           bind:this={itemEls[index]}
@@ -309,16 +325,8 @@
   }
 
   .range {
-    display: grid;
-    gap: 2px;
     padding: 4px var(--s-3) 6px calc(var(--s-3) + 14px + var(--s-3));
-    color: var(--t2);
-    font-size: 12px;
   }
-  .range-head { display: flex; gap: var(--s-2) }
-  .range output { color: var(--t3); font-variant-numeric: tabular-nums }
-  .range input { width: 100%; margin: 0 }
-  .range input:disabled { opacity: .4 }
 
   .sep {
     height: 1px;

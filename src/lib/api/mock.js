@@ -3431,6 +3431,53 @@ export function createMockBackend(options = {}) {
       return { erased, pageStatus: page.status }
     },
 
+    /**
+     * The Patch tool's proposed source, as `retouch.rs#propose_at` answers it.
+     * The mock has no pixels to match, so its stand-in is the nearest place
+     * the selection fits beside itself: one selection-width to the right,
+     * else to the left, else below, else above. `null` where none fits, as
+     * natively for a selection with no room.
+     */
+    async proposePatchSource({ chapterId, pageIndex, sourceIndex, sourceSha, painted, stroke } = {}) {
+      await delay(timing.method)
+      const found = findChapter(chapterId)
+      const page = found?.chapter.pages.find((candidate) => candidate.index === pageIndex)
+      if (!page) return null
+      if (sourceIndex !== undefined && page.sourceIndex !== sourceIndex) return null
+      if (sourceSha !== undefined && page.sourceSha !== sourceSha) return null
+      const box = gestureBox(page, stroke, painted, [{ page, top: 0, height: 100, left: 0, width: 100 }])
+      if (!box) return null
+      const fits = (dx, dy) => box.x + dx >= 0 && box.y + dy >= 0 && box.x + box.w + dx <= 100 && box.y + box.h + dy <= 100
+      const offset = [[box.w, 0], [-box.w, 0], [0, box.h], [0, -box.h]].find(([dx, dy]) => fits(dx, dy))
+      return offset ? { offset: { x: offset[0], y: offset[1] } } : null
+    },
+
+    /**
+     * The Gradient tool's Match surroundings, as `retouch.rs#fit_at` answers
+     * it. The stand-in fit is a linear dark-to-light gradient straight down
+     * the selection, which is the shape of video 2 in the plan.
+     */
+    async fitGradient({ chapterId, pageIndex, sourceIndex, sourceSha, painted, stroke } = {}) {
+      await delay(timing.method)
+      const found = findChapter(chapterId)
+      const page = found?.chapter.pages.find((candidate) => candidate.index === pageIndex)
+      if (!page) return null
+      if (sourceIndex !== undefined && page.sourceIndex !== sourceIndex) return null
+      if (sourceSha !== undefined && page.sourceSha !== sourceSha) return null
+      const box = gestureBox(page, stroke, painted, [{ page, top: 0, height: 100, left: 0, width: 100 }])
+      if (!box) return null
+      const x = box.x + box.w / 2
+      return {
+        kind: 'linear',
+        start: [x, box.y],
+        end: [x, box.y + box.h],
+        colors: [{ at: 0, color: [40, 30, 30] }, { at: 1, color: [225, 225, 225] }],
+        opacities: [{ at: 0, opacity: 1 }, { at: 1, opacity: 1 }],
+        reverse: false,
+        dither: true,
+      }
+    },
+
     async editDetectionMask({ chapterId, pageIndex, sourceIndex, sourceSha, mode, stroke, painted } = {}) {
       await delay(timing.method)
       if (mode !== 'add' && mode !== 'remove') throw new Error('mask_edit_mode_invalid')
@@ -3955,6 +4002,74 @@ export function createMockBackend(options = {}) {
     },
 
     /**
+     * The CUDA picture for one build, from `mockCudaReport`. `rescan` reads
+     * the same fixed machine again, because there is no disk here to change.
+     */
+    async runtimeReport({ flavour = null, rescan = false } = {}) {
+      void rescan
+      await delay(timing.method)
+      const major = typeof flavour === 'string' && flavour.startsWith('cuda') ? Number(flavour.slice(4)) : null
+      return mockCudaReport(Number.isFinite(major) ? major : null)
+    },
+
+    async readMeasurement() {
+      await delay(timing.method)
+      return { saved: structuredClone(mockMeasurement), current: mockMeasurement ? true : null, running: mockMeasuring !== null }
+    },
+
+    /**
+     * A measurement as a chain of timers: one `measure-progress` per backend
+     * timed, then exactly one carrying `done`, then the saved answer - the
+     * order `measurement::measure_backends` keeps. Models that are not
+     * installed are skipped, as the native side skips them.
+     */
+    async measureBackends() {
+      if (mockMeasuring) throw new Error('notice.measure.running')
+      if (runner.isRunning()) throw new Error('notice.measure.busy')
+      const plan = MOCK_PLACED_MODELS.filter((model) => model.id !== 'inpainter' || !state.missingModels.has('inpainter'))
+      const total = plan.reduce((sum, model) => sum + model.timings.length, 0)
+      const run = { cancelled: false }
+      mockMeasuring = run
+      let step = 0
+      try {
+        const models = []
+        for (const model of plan) {
+          const results = []
+          for (const [backend, medianMs, loadMs, error] of model.timings) {
+            if (run.cancelled) throw new Error('notice.measure.cancelled')
+            step += 1
+            emit({ type: 'measure-progress', model: model.id, backend, step, total, done: false })
+            await delay(Math.max(1, Math.round(480 / speed)))
+            results.push(medianMs === null
+              ? { backend, loadMs: null, firstMs: null, medianMs: null, runs: null, error }
+              : { backend, loadMs, firstMs: Math.round(medianMs * 1.4), medianMs, runs: medianMs > 1500 ? 3 : 10, error: null })
+          }
+          const timed = results.filter((row) => row.medianMs !== null)
+          const best = Math.min(...timed.map((row) => row.medianMs))
+          const winner = timed.filter((row) => row.medianMs <= best * 1.05).sort((a, b) => a.loadMs - b.loadMs)[0]?.backend ?? null
+          models.push({ id: model.id, winner, results })
+        }
+        mockMeasurement = { version: 1, measuredAt: Date.now(), setup: 'mock', models }
+        return { saved: structuredClone(mockMeasurement), current: true, running: false }
+      } finally {
+        mockMeasuring = null
+        emit({ type: 'measure-progress', model: '', backend: '', step: 0, total: 0, done: true })
+      }
+    },
+
+    async cancelMeasurement() {
+      if (!mockMeasuring || mockMeasuring.cancelled) return false
+      mockMeasuring.cancelled = true
+      return true
+    },
+
+    async forgetMeasurement() {
+      await delay(timing.method)
+      mockMeasurement = null
+      return { saved: null, current: null, running: mockMeasuring !== null }
+    },
+
+    /**
      * The model catalogue, on a machine that has almost everything.
      *
      * **One row is deliberately missing**, and it is the redraw model. The
@@ -4041,74 +4156,6 @@ export function createMockBackend(options = {}) {
         // `null` is what the native side answers for both other locations too.
         tokenStoreReason: null,
       }
-    },
-
-    /**
-     * The CUDA picture for one build, from `mockCudaReport`. `rescan` reads
-     * the same fixed machine again, because there is no disk here to change.
-     */
-    async runtimeReport({ flavour = null, rescan = false } = {}) {
-      void rescan
-      await delay(timing.method)
-      const major = typeof flavour === 'string' && flavour.startsWith('cuda') ? Number(flavour.slice(4)) : null
-      return mockCudaReport(Number.isFinite(major) ? major : null)
-    },
-
-    async readMeasurement() {
-      await delay(timing.method)
-      return { saved: structuredClone(mockMeasurement), current: mockMeasurement ? true : null, running: mockMeasuring !== null }
-    },
-
-    /**
-     * A measurement as a chain of timers: one `measure-progress` per backend
-     * timed, then exactly one carrying `done`, then the saved answer - the
-     * order `measurement::measure_backends` keeps. Models that are not
-     * installed are skipped, as the native side skips them.
-     */
-    async measureBackends() {
-      if (mockMeasuring) throw new Error('notice.measure.running')
-      if (runner.isRunning()) throw new Error('notice.measure.busy')
-      const plan = MOCK_PLACED_MODELS.filter((model) => model.id !== 'inpainter' || !state.missingModels.has('inpainter'))
-      const total = plan.reduce((sum, model) => sum + model.timings.length, 0)
-      const run = { cancelled: false }
-      mockMeasuring = run
-      let step = 0
-      try {
-        const models = []
-        for (const model of plan) {
-          const results = []
-          for (const [backend, medianMs, loadMs, error] of model.timings) {
-            if (run.cancelled) throw new Error('notice.measure.cancelled')
-            step += 1
-            emit({ type: 'measure-progress', model: model.id, backend, step, total, done: false })
-            await delay(Math.max(1, Math.round(480 / speed)))
-            results.push(medianMs === null
-              ? { backend, loadMs: null, firstMs: null, medianMs: null, runs: null, error }
-              : { backend, loadMs, firstMs: Math.round(medianMs * 1.4), medianMs, runs: medianMs > 1500 ? 3 : 10, error: null })
-          }
-          const timed = results.filter((row) => row.medianMs !== null)
-          const best = Math.min(...timed.map((row) => row.medianMs))
-          const winner = timed.filter((row) => row.medianMs <= best * 1.05).sort((a, b) => a.loadMs - b.loadMs)[0]?.backend ?? null
-          models.push({ id: model.id, winner, results })
-        }
-        mockMeasurement = { version: 1, measuredAt: Date.now(), setup: 'mock', models }
-        return { saved: structuredClone(mockMeasurement), current: true, running: false }
-      } finally {
-        mockMeasuring = null
-        emit({ type: 'measure-progress', model: '', backend: '', step: 0, total: 0, done: true })
-      }
-    },
-
-    async cancelMeasurement() {
-      if (!mockMeasuring || mockMeasuring.cancelled) return false
-      mockMeasuring.cancelled = true
-      return true
-    },
-
-    async forgetMeasurement() {
-      await delay(timing.method)
-      mockMeasurement = null
-      return { saved: null, current: null, running: mockMeasuring !== null }
     },
 
     /**

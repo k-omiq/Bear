@@ -6,8 +6,10 @@
    * **Two shapes, one shell.** Every drawing tool gets a **pill**: one row,
    * forty-four pixels tall, `width: max-content`, as long as the tool needs it
    * to be. Text cleanup (internally still `autoClean`) gets a compact **panel**:
-   * `PANEL_WIDTH` wide, a header with the name and the grip, and one labelled
-   * row per run choice. Which one a tool gets is its spec's `shell`
+   * `PANEL_WIDTH` wide until the user drags its corner sideways
+   * (`session.toolPanelWidth`), a header with the name and the grip, and one
+   * labelled row per run choice. The Gradient gets the same panel, with its parameters
+   * as labelled rows over its stops and its Apply (`RetouchOptions.svelte`). Which one a tool gets is its spec's `shell`
    * (`tools.js`). The pill could not hold a run's choices: they were squeezed
    * into a popover behind a trigger reading the step, which left Detect on,
    * Clean on and the text choices two presses from the button they decide.
@@ -56,15 +58,15 @@
    * The Pages window shows the progress too and grows no second cancel.
    *
    * **Text cleanup is the single home of a run's choices.** Mode, scope,
-   * *Detect on*, *Clean on*, which text is taken (`session.textPolicy`) and
-   * what happens outside bubbles, and the two per-run engine picks behind a
+   * Normal or Advanced detection (`session.detectionMode`), *Detect on*,
+   * *Clean on*, what happens outside bubbles, and the two per-run engine picks behind a
    * disclosure. *Detect on* and *Clean on* are not tool parameters but the
    * settings the native run reads (`analysisTargets`, `cleanTarget`), so they
    * are drawn from `state/cloudtargets.svelte.js` rather than from the spec,
    * and a Cloud GPU entry that cannot be chosen is disabled with its reason.
    * A row that cannot change what the chosen mode does is absent, not
-   * disabled: Detect cleans nothing, Clean detects nothing, the all-text
-   * policy cleans outside bubbles regardless, a cloud clean reads no local
+   * disabled: Detect cleans nothing, Clean detects nothing, Advanced cleans
+   * outside bubbles regardless, a cloud clean reads no local
    * engine pick, and Solid bubbles only cleans nothing outside a bubble.
    */
   import { untrack } from 'svelte'
@@ -72,15 +74,16 @@
     session,
     raiseWindow,
     setWindowBox,
-    setTextPolicy,
+    setToolPanelWidth,
     setCleanLocalFirst,
     setCleanSolidOnly,
   } from '../state/session.svelte.js'
-  import { capabilities, currentWorkflowMissing } from '../state/capabilities.svelte.js'
+  import { capabilities, currentWorkflowMissing, loadCapabilities } from '../state/capabilities.svelte.js'
   import { cloud, cloudEntries, cloudUsable, cloudCleanAvailable, cloudCleanMissingKey, openCloudSettings, pickCloudChoice } from '../state/cloud.svelte.js'
   import {
     chooseCleanTarget,
     chooseDetectTarget,
+    chooseDetectionMode,
     cleanReasonKey,
     detectReasonKey,
     detectTarget,
@@ -100,6 +103,7 @@
     solidOnlyOf,
   } from '../state/editor.svelte.js'
   import {
+    BRUSH_SIZE,
     PANEL_WIDTH,
     SOLID,
     TOOL_ICONS,
@@ -117,9 +121,9 @@
     IconButton,
     Menu,
     Popover,
+    RangeField,
     Segmented,
     Select,
-    Slider,
   } from '../ui/index.js'
   import Icon from '../icons/Icon.svelte'
   import { t } from '../i18n/index.js'
@@ -129,6 +133,9 @@
   import { isRegionCopy, layerOf } from '../model/layers.js'
   import { openLayerEdit } from './maskactions.svelte.js'
   import { layerPreviews } from './layerpreview.svelte.js'
+  import RetouchOptions from './RetouchOptions.svelte'
+  import { steppedSize } from './gesture.js'
+  import { shortcutHint } from '../shortcuts.js'
 
   const spec = $derived(toolSpec(editor.tool))
   const selectedCopy = $derived(spec.id === 'cloneStamp' && editor.toolParams.cloneStamp?.mode === 'region'
@@ -198,6 +205,18 @@
       if (onBar.length) groups.push({ key: group.key, params: onBar })
     }
     return { groups, behind }
+  })
+
+  /** One `[` or `]` press, which is what an arrow on the size control takes too. */
+  const sizeStep = (/** @type {number} */ value, /** @type {number} */ direction) =>
+    steppedSize(value, direction, BRUSH_SIZE.min, BRUSH_SIZE.max)
+
+  /** The shortcuts that step a row, named in its tooltip. */
+  const RANGE_KEYS = /** @type {Record<string, string[]>} */ ({
+    size: ['brush.sizeDown', 'brush.sizeUp'],
+    hardness: ['brush.hardnessDown', 'brush.hardnessUp'],
+    opacity: ['brush.opacityDown', 'brush.opacityUp'],
+    maskPadding: ['mask.paddingDown', 'mask.paddingUp'],
   })
 
   /** Whether the Adjustments button has anything to open. */
@@ -388,11 +407,11 @@
       .map((/** @type {any} */ option) => ({ value: option.value, label: t(option.labelKey) })),
   )
 
-  /** Which text a run takes, `session.textPolicy`. */
+  /** Normal or Advanced; Advanced takes all text (`pipelines.js#DETECTION_MODES`). */
   const allText = $derived(session.textPolicy === 'all_text')
-  const policyOptions = $derived([
-    { value: 'legacy_gate', label: t('tools.option.policyLegacy') },
-    { value: 'all_text', label: t('tools.option.policyAll') },
+  const modeOptions = $derived([
+    { value: 'normal', label: t('detectionMode.normal.name') },
+    { value: 'advanced', label: t('detectionMode.advanced.name') },
   ])
 
   /**
@@ -655,9 +674,12 @@
     }
   }
 
-  /** @param {string} policy */
-  function choosePolicy(policy) {
-    if (policy === 'legacy_gate' || policy === 'all_text') setTextPolicy(policy)
+  /** @param {string} mode */
+  async function chooseMode(mode) {
+    if (!(await chooseDetectionMode(mode)) && targets.detectSaveFailed) {
+      notify({ key: 'tools.target.detectSaveFailed', tone: 'warn' })
+    }
+    void loadCapabilities()
   }
 
   // Detect on's Cloud GPU entry needs to know what the endpoint offers, which
@@ -741,9 +763,13 @@
   /** @type {HTMLElement|undefined} */
   let root = $state()
 
+  /** The panel's width: the one the user dragged its corner to, or its own. */
+  const panelWidth = $derived(session.toolPanelWidth ?? PANEL_WIDTH)
+
   const { onGestureStart, onGestureMove, onGestureEnd, onGestureKey, destroy: endGesture } = windowGesture({
     id: () => 'tool',
     measuredHeight: () => root?.offsetHeight ?? 44,
+    width: { get: () => panelWidth, set: setToolPanelWidth },
   })
 
   /**
@@ -1177,6 +1203,58 @@
   <div class="row-note"><p class="gate" id={picksNoteId} data-picks-note>{t(picksNoteKey)}</p></div>
 {/snippet}
 
+<!-- Every number a tool takes, on the bar, in the panel and behind
+     Adjustments: a slider, a box to type it, and its keys in the tooltip. A
+     size steps the way `[` and `]` do. -->
+{#snippet rangeControl(entry, layout)}
+  <RangeField
+    {layout}
+    label={t(entry.labelKey)}
+    boxLabel={t('tools.param.exactValue', { name: t(entry.labelKey) })}
+    value={Number(values[entry.key] ?? entry.min)}
+    min={entry.min}
+    max={entry.max}
+    step={entry.step}
+    unit={entry.unit ?? ''}
+    scale={entry.scale ?? 'linear'}
+    stepper={entry.key === 'size' ? sizeStep : undefined}
+    hint={RANGE_KEYS[entry.key] ? shortcutHint(RANGE_KEYS[entry.key]) : undefined}
+    oninput={(value) => set(entry.key, value)}
+    onchange={(value) => set(entry.key, value)}
+  />
+{/snippet}
+
+<!-- One parameter of a panel tool that is not a run, on the label column the
+     sliders share (`--field-label`): a slider is its own label and track, a
+     choice of words a native select, a choice of pictures a row of cells. -->
+{#snippet fieldRow(entry)}
+  {#if entry.kind === 'range'}
+    {@render rangeControl(entry, 'row')}
+  {:else if entry.kind === 'color'}
+    <div class="field">
+      <span class="row-label">{t(entry.labelKey)}</span>
+      <ColorPicker
+        value={String(values[entry.key] ?? entry.default ?? '#ffffff')}
+        label={t(entry.labelKey)}
+        onchange={(hex) => set(entry.key, hex)}
+      />
+    </div>
+  {:else}
+    {@const opts = optionsFor(entry)}
+    {@const value = effectiveChoice(entry, opts, values[entry.key])}
+    {@const fieldId = `${uid}-field-${entry.key}`}
+    <div class="field">
+      {#if iconChoice(entry)}
+        <span class="row-label" id={fieldId}>{t(entry.labelKey)}</span>
+        <Segmented options={opts} {value} block labelledBy={fieldId} onchange={(next) => set(entry.key, next)} />
+      {:else}
+        <label class="row-label" for={fieldId}>{t(entry.labelKey)}</label>
+        <Select id={fieldId} options={opts} {value} onchange={(next) => set(entry.key, next)} />
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 <section
   bind:this={root}
   class="bar"
@@ -1186,7 +1264,7 @@
   style:left="{win.x}px"
   style:top="{win.y}px"
   style:z-index={20 + rank}
-  style:--panel-width="{PANEL_WIDTH}px"
+  style:--panel-width="{panelWidth}px"
   data-shell={isPanel ? 'panel' : 'pill'}
   onpointerdown={onBarPointerDown}
   onpointermove={onGestureMove}
@@ -1204,6 +1282,7 @@
           {@render closeButton()}
         </header>
 
+        {#if spec.runnable}
         <div class="rows">
           <!-- What the run does and over what: the two choices every run
                makes, as full-width chips with their label above. -->
@@ -1232,6 +1311,7 @@
                mode reads: Detect has nothing to clean, Clean nothing to find. -->
           <div class="grid">
             {#if step !== 'clean'}
+              {@render chipRow('detectionMode', 'tools.param.detectionMode', modeOptions, session.detectionMode, chooseMode)}
               {@render placeRow('detect', 'tools.param.detectOn', detectOn, detectReason, setDetectOn)}
             {/if}
             {#if step !== 'detect'}
@@ -1279,11 +1359,9 @@
               </div>
               <div class="row-note"><p class="gate" id={solidHintId}>{t('tools.target.solidOnlyHint')}</p></div>
             {/if}
-            <!-- Which text is cleaned: a choice about cleaning, so only Detect &
-                 clean asks it. Detect alone finds all text for review, and Clean
-                 cleans what the review kept. -->
+            <!-- What Normal does with text outside bubbles: a choice about
+                 cleaning, so only Detect & clean asks it. Advanced cleans it. -->
             {#if step === 'auto'}
-              {@render chipRow('textPolicy', 'tools.param.textPolicy', policyOptions, allText ? 'all_text' : 'legacy_gate', choosePolicy)}
               {#if !allText && !solidOnly && param.outsideBubbles}
                 {@const opts = optionsFor(param.outsideBubbles)}
                 {@render chipRow(
@@ -1301,15 +1379,7 @@
                Apply what the masks already detected are re-padded to. -->
           {#if param.maskPadding}
             <div class="block padding" data-run-row="maskPadding">
-              <Slider
-                label={t(param.maskPadding.labelKey)}
-                value={Number(values.maskPadding ?? 0)}
-                min={param.maskPadding.min}
-                max={param.maskPadding.max}
-                step={param.maskPadding.step}
-                unit={param.maskPadding.unit ?? ''}
-                onchange={(value) => set('maskPadding', value)}
-              />
+              {@render rangeControl(param.maskPadding, 'row')}
               <p class="gate wide" id={paddingHintId}>{t('tools.padding.hint')}</p>
               <Button
                 size="sm"
@@ -1403,6 +1473,32 @@
             </Button>
           {/if}
         </div>
+        {:else}
+          <!-- A tool that is not a run: its parameters as labelled rows, then
+               the Gradient's own controls and its Apply (`RetouchOptions`),
+               which own the rows and the action below them. -->
+          <RetouchOptions tool={/** @type {'gradient'} */ (spec.id)} panel>
+            {#snippet params()}
+              {#each activeParams(spec, values) as entry (entry.key)}
+                {@render fieldRow(entry)}
+              {/each}
+            {/snippet}
+          </RetouchOptions>
+        {/if}
+        <!-- The panel's width, and only that: its height is its rows'. -->
+        <button
+          type="button"
+          class="corner"
+          title={t('editor.window.resize', { windowName: t(spec.nameKey) })}
+          aria-label={t('editor.window.resize', { windowName: t(spec.nameKey) })}
+          onpointerdown={(e) => onGestureStart(e, 'size')}
+          onpointermove={onGestureMove}
+          onpointerup={onGestureEnd}
+          onpointercancel={onGestureEnd}
+          onkeydown={(e) => onGestureKey(e, 'size')}
+        >
+          <Icon name="resize-corner" size={13} />
+        </button>
       </div>
     {:else}
       <div class="face pill-face">
@@ -1414,16 +1510,7 @@
           <div class="group">
             {#each group.params as entry (entry.key)}
               {#if entry.kind === 'range'}
-                <Slider
-                  compact
-                  label={t(entry.labelKey)}
-                  value={Number(values[entry.key] ?? entry.min)}
-                  min={entry.min}
-                  max={entry.max}
-                  step={entry.step}
-                  unit={entry.unit ?? ''}
-                  onchange={(value) => set(entry.key, value)}
-                />
+                {@render rangeControl(entry, 'compact')}
               {:else if entry.kind === 'color'}
                 <ColorPicker
                   value={String(values[entry.key] ?? entry.default ?? '#ffffff')}
@@ -1474,6 +1561,10 @@
           </div>
         {/each}
 
+        {#if spec.id === 'patch'}
+          <RetouchOptions tool={spec.id} />
+        {/if}
+
         {#if spec.id === 'cloneStamp' && values.mode === 'region'}
           <span class="rule" role="separator" aria-orientation="vertical"></span>
           {#if selectedCopy}
@@ -1494,21 +1585,14 @@
                 size={28}
                 iconSize={15}
                 onclick={toggle}
+                data-adjustments
                 {...triggerProps}
               />
             {/snippet}
 
             <div class="adjust">
               {#each layout.behind as entry (entry.key)}
-                <Slider
-                  label={t(entry.labelKey)}
-                  value={Number(values[entry.key] ?? entry.min)}
-                  min={entry.min}
-                  max={entry.max}
-                  step={entry.step}
-                  unit={entry.unit ?? ''}
-                  onchange={(value) => set(entry.key, value)}
-                />
+                {@render rangeControl(entry, 'row')}
               {/each}
             </div>
           </Popover>
@@ -1569,6 +1653,30 @@
   .panel-face {
     display: flex;
     flex-direction: column;
+  }
+
+  /* `FloatingWindow.svelte`'s resize corner, dragging sideways only. */
+  .corner {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    width: 17px;
+    height: 17px;
+    padding: 3px;
+    border: none;
+    background: transparent;
+    color: var(--t3);
+    cursor: ew-resize;
+    touch-action: none;
+  }
+  .corner:hover { color: var(--t2) }
+  .corner:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    border-radius: var(--r-sm);
   }
 
   .grip {
@@ -1660,12 +1768,12 @@
   /* The popover's own body, which is the panel grid the tool window used to
      be: a fixed label column, the control filling what is left, and a readout
      slot at the right, so a column of sliders starts and ends its tracks at one
-     x. `ui/Slider.svelte` reads both widths. */
+     x. `ui/RangeField.svelte` reads both widths. */
   .adjust {
     display: grid;
     gap: var(--s-2);
     --field-label: 84px;
-    --field-readout: 40px;
+    --field-readout: 52px;
   }
 
   /* ---- the panel ------------------------------------------------------ */
@@ -1710,6 +1818,15 @@
   }
   .grid:empty { display: none }
   .row-control { min-width: 0 }
+  /* A parameter row of a panel tool that is not a run: the slider's own label
+     column and the control beside it, so a select and a slider line up. */
+  .field {
+    display: grid;
+    grid-template-columns: var(--field-label, 84px) minmax(0, 1fr);
+    align-items: center;
+    column-gap: var(--s-3);
+    min-height: 28px;
+  }
   /* A checkbox under the place it qualifies, in the control column. */
   .mixed { grid-column: 2 }
   .check-row {
@@ -1848,9 +1965,11 @@
   /* Taller than the window: the rows scroll, between a header and an action
      that stay. The 8px is `MIN_TOP` above and below. */
   .bar.tight .panel-face { max-height: calc(100vh - 66px) }
+  /* Global: a panel tool that is not a run has its rows and its action drawn
+     by `RetouchOptions`, under the same two class names. */
   .bar.tight .head,
-  .bar.tight .action { flex: none }
-  .bar.tight .rows {
+  .bar.tight :global(.action) { flex: none }
+  .bar.tight :global(.rows) {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;

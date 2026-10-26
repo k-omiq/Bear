@@ -41,6 +41,9 @@ export const TOOLS = Object.freeze({
     fillMode: 'match-surround',
   },
   cloneStamp: { labelKey: 'tools.name.cloneStamp', engine: 'clone', fillMode: 'match-surround' },
+  // Read from the page, as the stamp is; given pixels, as the Brush is.
+  patch: { labelKey: 'tools.name.patch', engine: 'clone', fillMode: 'match-surround' },
+  gradient: { labelKey: 'tools.name.gradient', engine: 'paint', fillMode: 'match-surround' },
 })
 
 /**
@@ -151,11 +154,16 @@ export function applyToolToRegion(region, page, ctx, options) {
   // in `region.rs#paint_plan`, and it is refused on the same colour modes.
   const regionalCopy = options.tool === 'cloneStamp' && params.mode === 'region'
   const solidShape = options.tool === 'shapes' && params.mode === 'solid'
+  // The Patch tool and the Gradient tool (`region/retouch.rs`): paint, and
+  // refused on the same colour modes, 16-bit gray and RGB besides.
+  const retouching = options.tool === 'patch' || options.tool === 'gradient'
   const isPaint =
     (options.tool === 'brush' && params.mode === 'paint') ||
     options.tool === 'cloneStamp' ||
-    solidShape
-  if (isPaint && !regionalCopy && page.colorMode && !['Gray8', 'GrayAlpha8', 'RGB8', 'RGBA8'].includes(page.colorMode)) {
+    solidShape ||
+    retouching
+  const paintModes = ['Gray8', 'GrayAlpha8', 'RGB8', 'RGBA8', ...(retouching ? ['Gray16', 'GrayAlpha16', 'RGB16', 'RGBA16'] : [])]
+  if (isPaint && !regionalCopy && page.colorMode && !paintModes.includes(page.colorMode)) {
     region.outcome = 'declined'
     region.declineReason = 'decline.reason.paintUnsupportedMode'
     region.mask = null
@@ -172,9 +180,9 @@ export function applyToolToRegion(region, page, ctx, options) {
   }
 
   let engine = reconstructing ? 'lama' : (tool.engine ?? 'fill')
-  if ((options.tool === 'brush' && params.mode === 'paint') || solidShape || regionalCopy) {
+  if ((options.tool === 'brush' && params.mode === 'paint') || solidShape || regionalCopy || options.tool === 'gradient') {
     engine = 'paint'
-  } else if (options.tool === 'cloneStamp') {
+  } else if (options.tool === 'cloneStamp' || options.tool === 'patch') {
     engine = 'clone'
   } else if (
     (options.tool === 'aiMaskBrush' || options.tool === 'shapes') &&
@@ -202,6 +210,35 @@ export function applyToolToRegion(region, page, ctx, options) {
   // region the auto pass missed becomes queueable again if its mask is later
   // deleted (`isQueueable`), which is right: the exclusion is for text nothing
   // has ever found. Pinned by a test in `mock.test.js`.
+  // What the native snapshot records for the two selection tools
+  // (`region.rs#paint_snapshot`), so a layer reads, and reopens, the same way.
+  if (options.tool === 'patch') {
+    const snapshot = mask.provenance.params_snapshot
+    snapshot.mode = 'patch'
+    snapshot.patch = {
+      mode: ['normal', 'contentAware', 'smooth'].includes(params.mode) ? params.mode : 'auto',
+      direction: params.direction === 'destination' ? 'destination' : 'source',
+      diffusion: Number(params.diffusion ?? 5),
+      structure: Number(params.structure ?? 4),
+      color: Number(params.color ?? 0),
+      offset: { x: Number(params.offset?.x ?? 0), y: Number(params.offset?.y ?? 0) },
+    }
+    if (params.painted) snapshot.painted = params.painted
+    if (params.stroke) snapshot.stroke = params.stroke
+  }
+  if (options.tool === 'gradient') {
+    const snapshot = mask.provenance.params_snapshot
+    snapshot.mode = 'gradient'
+    const auto = params.kind === 'auto'
+    snapshot.gradient = auto ? null : params.gradient ?? null
+    snapshot.asScreentone = !auto && params.asScreentone === true
+    if (auto) snapshot.auto = true
+    snapshot.feather = Number(params.painted?.feather ?? params.feather ?? 0)
+    snapshot.layer = { opacity: Number(params.opacity ?? 100) }
+    if (params.painted) snapshot.painted = params.painted
+    if (params.stroke) snapshot.stroke = params.stroke
+    mask.layer = { opacity: Number(params.opacity ?? 100), offsetX: 0, offsetY: 0, rotation: 0, locked: false }
+  }
   if (regionalCopy) {
     mask.provenance.params_snapshot.mode = 'region-copy'
     mask.layer = { opacity: Number(params.opacity ?? 100), offsetX: 0, offsetY: 0, rotation: 0, locked: false, feather: Number(params.feather ?? 0), edgeOpacity: Number(params.edgeOpacity ?? 100) }

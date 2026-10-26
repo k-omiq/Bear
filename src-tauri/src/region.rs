@@ -90,6 +90,9 @@ use crate::inference::service::{
 use crate::library::{ApiMask, ApiRegion, Bbox, Library, LibraryError};
 use crate::run::{self, EnginePick, Picks};
 
+/// The Patch tool and the Gradient tool, on the paint branch.
+pub(crate) mod retouch;
+
 /* ------------------------------------------------------------------ */
 /* The shapes the seam carries                                         */
 /* ------------------------------------------------------------------ */
@@ -1278,11 +1281,16 @@ fn edit_with_bench_render(
                     anchor.map_or(0, |p| p.y_offset) + patch_shift.1,
                 ),
             });
-        let (mut made, dabs, read_window) =
-            match paint_patch(&job, source_idx, page, paint, order, paint_context) {
-                Ok(pair) => pair,
-                Err(reason) => return Ok(Outcome::Refused(reason)),
-            };
+        let rendered = match paint.kind {
+            PaintKind::Patch { .. } => retouch::patch(&job, source_idx, page, paint, order, paint_context),
+            PaintKind::Gradient { .. } => retouch::gradient(&job, source_idx, page, paint, order, paint_context),
+            _ => paint_patch(&job, source_idx, page, paint, order, paint_context)
+                .map(|(made, dabs, read)| (made, dabs, read, serde_json::Value::Null)),
+        };
+        let (mut made, dabs, read_window, rendered_notes) = match rendered {
+            Ok(rendered) => rendered,
+            Err(reason) => return Ok(Outcome::Refused(reason)),
+        };
         let strip_space = paint_context.map(|context| crate::underlay::StripSpace {
             strip: context.strip,
             origin: context.origin,
@@ -1292,6 +1300,11 @@ fn edit_with_bench_render(
         )?;
         translate_made(&mut made, patch_shift);
         let mut snapshot = paint_snapshot(&plan, paint, made.engine, dabs, started.elapsed());
+        // What only the render knew: which fill Auto chose, whether As
+        // screentone found a screen.
+        for (key, value) in rendered_notes.as_object().into_iter().flatten() {
+            snapshot[key.as_str()] = value.clone();
+        }
         // Brush, clone and shape all composite a surface, including opaque
         // strokes that preserve existing alpha. Their footprint is never unknown.
         snapshot["input_provenance"] = serde_json::json!({
@@ -1655,6 +1668,24 @@ impl GestureFrame {
             PaintKind::Clone { offset, .. } => {
                 offset.0 = offset.0 * self.anchor.width as f64 / self.frame.w as f64;
                 offset.1 = offset.1 * self.anchor.height as f64 / self.frame.h as f64;
+            }
+            PaintKind::Patch { shape, options, .. } => {
+                if let Some(shape) = shape {
+                    self.shape(shape);
+                }
+                options.offset.0 = options.offset.0 * self.anchor.width as f64 / self.frame.w as f64;
+                options.offset.1 = options.offset.1 * self.anchor.height as f64 / self.frame.h as f64;
+            }
+            PaintKind::Gradient { shape, options, .. } => {
+                if let Some(shape) = shape {
+                    self.shape(shape);
+                }
+                if let Some(gradient) = options.gradient.as_mut() {
+                    let (sx, sy) = self.point(gradient.start[0], gradient.start[1]);
+                    let (ex, ey) = self.point(gradient.end[0], gradient.end[1]);
+                    gradient.start = [sx, sy];
+                    gradient.end = [ex, ey];
+                }
             }
             PaintKind::Brush { .. } | PaintKind::RegionCopy { shape: None, .. } => {}
         }
@@ -2075,12 +2106,11 @@ fn manual_requested(
     paint: Option<&PaintPlan>,
     anchor: Option<cleaner_core::strip::Placement>,
 ) -> Rect {
-    let Some(PaintPlan {
-        kind: PaintKind::Clone { offset, .. },
-        ..
-    }) = paint
-    else {
-        return target;
+    // The stamp reads from `target - offset`, a patch from `target + offset`.
+    let offset = match paint.map(|plan| &plan.kind) {
+        Some(PaintKind::Clone { offset, .. }) => *offset,
+        Some(PaintKind::Patch { options, .. }) => (-options.offset.0, -options.offset.1),
+        _ => return target,
     };
     let Some(anchor) = anchor else { return target };
     let dx = (offset.0 / 100.0 * anchor.width as f64).round() as i64;
@@ -2574,6 +2604,10 @@ fn paint_patch(
 ) -> Result<(run::Made, usize, Rect), &'static str> {
     use cleaner_core::paint::{self, PaintError, StrokePoint};
 
+    // The two selection tools render in `retouch`, which `edit` calls itself.
+    if matches!(paint.kind, PaintKind::Patch { .. } | PaintKind::Gradient { .. }) {
+        return Err("decline.reason.rungUnavailable");
+    }
     if let PaintKind::RegionCopy { shape, .. } = &paint.kind {
         let mask = if let Some(shape) = shape {
             let mut shape = shape.clone();
@@ -2633,6 +2667,7 @@ fn paint_patch(
         // rather than caught by a wildcard so that a fourth kind of paint
         // cannot be added without this function being read.
         PaintKind::Brush { .. } | PaintKind::Shape { .. } | PaintKind::RegionCopy { .. } => (0.0, 0.0),
+        PaintKind::Patch { .. } | PaintKind::Gradient { .. } => (0.0, 0.0),
         PaintKind::Clone { offset, .. } => (offset.0 / 100.0 * width, offset.1 / 100.0 * height),
     };
 
@@ -2655,6 +2690,7 @@ fn paint_patch(
             paint::render_clone(page, &under, Some(order), &points, &paint.spec, offset)
         }
         PaintKind::RegionCopy { .. } => unreachable!("regional copy returned above"),
+        PaintKind::Patch { .. } | PaintKind::Gradient { .. } => unreachable!("the selection tools returned above"),
     };
 
     let painted = match painted {
@@ -2676,7 +2712,8 @@ fn paint_patch(
         run::Made {
             engine: match paint.kind {
                 PaintKind::Brush { .. } | PaintKind::Shape { .. } | PaintKind::RegionCopy { .. } => Engine::Paint,
-                PaintKind::Clone { .. } => Engine::Clone,
+                PaintKind::Gradient { .. } => Engine::Paint,
+                PaintKind::Clone { .. } | PaintKind::Patch { .. } => Engine::Clone,
             },
             // A stroke is its own lettering: the user said where the paint
             // goes, and that is also the whole of what the edit covers.
@@ -3254,6 +3291,22 @@ fn paint_snapshot(
                 "feather": feather, "edgeOpacity": edge_opacity,
             });
         }
+        PaintKind::Patch { ref shape, ref recorded, .. } | PaintKind::Gradient { ref shape, ref recorded, .. } => {
+            let gradient = matches!(paint.kind, PaintKind::Gradient { .. });
+            snapshot["mode"] = serde_json::json!(if gradient { "gradient" } else { "patch" });
+            snapshot["shape"] = serde_json::json!(shape.as_ref().map_or("brush", |shape| match shape.kind {
+                ShapeKind::Rect => "rect", ShapeKind::Ellipse => "ellipse", ShapeKind::Polygon => "polygon", ShapeKind::Line => "line",
+            }));
+            for (key, value) in recorded.as_object().into_iter().flatten() {
+                snapshot[key.as_str()] = value.clone();
+            }
+            if gradient {
+                snapshot["feather"] = serde_json::json!(shape.as_ref().map_or(0.0, |shape| shape.feather.clamp(0.0, MAX_FEATHER_PX)));
+            }
+            snapshot["layer"] = serde_json::json!({
+                "opacity": spec.opacity.round().clamp(0.0, 100.0) as u8,
+            });
+        }
         PaintKind::Brush { color } => {
             snapshot["mode"] = serde_json::json!("paint");
             snapshot["color"] =
@@ -3667,6 +3720,13 @@ enum PaintKind {
     /// what its dabs swept, a shape covers its own outline - so the shape
     /// rides here instead of a dab list.
     Shape { color: [u8; 3], shape: PaintedShape, outline: Option<([u8; 3], f64)> },
+    /// The Patch tool: the selection filled from the page ([`retouch::patch`]).
+    /// `recorded` is the payload as it arrived, in the anchor page's percent,
+    /// for the snapshot; a strip window moves `shape` and `options` only.
+    Patch { shape: Option<PaintedShape>, options: retouch::PatchOptions, recorded: serde_json::Value },
+    /// The Gradient tool: the selection filled with a gradient
+    /// ([`retouch::gradient`]). `recorded` as for [`PaintKind::Patch`].
+    Gradient { shape: Option<PaintedShape>, options: retouch::GradientOptions, recorded: serde_json::Value },
 }
 
 /// The paint half of a [`Plan`].
@@ -3779,6 +3839,10 @@ fn paint_plan(tool: &str, params: &serde_json::Value) -> Option<PaintPlan> {
             feather: number(params, "feather").unwrap_or(0.0).clamp(0.0, 64.0),
             edge_opacity: number(params, "edgeOpacity").unwrap_or(100.0).clamp(0.0, 100.0).round() as u8,
         },
+        // The two selection tools: every payload is theirs, so neither ever
+        // falls to the ladder (`retouch::patch_kind`).
+        "patch" => retouch::patch_kind(params, params.get("painted").map(|value| serde_json::from_value::<PaintedShape>(value.clone())).transpose().ok()?),
+        "gradient" => retouch::gradient_kind(params, params.get("painted").map(|value| serde_json::from_value::<PaintedShape>(value.clone())).transpose().ok()?),
         "brush" if mode == Some("paint") => PaintKind::Brush {
             color: colour_of(
                 paint
@@ -3823,7 +3887,7 @@ fn paint_plan(tool: &str, params: &serde_json::Value) -> Option<PaintPlan> {
     // drag delivers one pointer sample and the keyboard route delivers none,
     // and both describe an area perfectly well. Every other kind is its
     // points, and no points is no stroke.
-    if points.is_empty() && !matches!(kind, PaintKind::Shape { .. } | PaintKind::RegionCopy { shape: Some(_), .. }) {
+    if points.is_empty() && !matches!(kind, PaintKind::Shape { .. } | PaintKind::RegionCopy { shape: Some(_), .. } | PaintKind::Patch { .. } | PaintKind::Gradient { .. }) {
         return None;
     }
 
@@ -6243,6 +6307,8 @@ fn rerun_mask_at(
                 "brush" => "brush",
                 "shapes" => "shapes",
                 "aiMaskBrush" => "aiMaskBrush",
+                "patch" => "patch",
+                "gradient" => "gradient",
                 // A project saved before the stamp lost its heal mode.
                 "cloneStamp" | "cloneHeal" => "cloneStamp",
                 _ => "aiMaskBrush",
@@ -6377,6 +6443,8 @@ fn tool_label_key(tool: &str) -> &'static str {
         "brush" => "tools.name.brush",
         "shapes" => "tools.name.shapes",
         "aiMaskBrush" => "tools.name.aiMaskBrush",
+        "patch" => "tools.name.patch",
+        "gradient" => "tools.name.gradient",
         // `cloneHeal` is what the stamp was called in projects saved before it
         // lost its heal mode; their strokes are still clone strokes.
         "cloneStamp" | "cloneHeal" => "tools.name.cloneStamp",
@@ -6644,7 +6712,7 @@ mod tests {
         (root, library, located)
     }
 
-    fn edit_fixture(name: &str, raw: &Raster) -> (PathBuf, Located) {
+    pub(super) fn edit_fixture(name: &str, raw: &Raster) -> (PathBuf, Located) {
         use cleaner_core::image::{encode, Format};
         use cleaner_core::ingest::source_ref;
         use cleaner_core::project::{Project, StripMode};
@@ -6662,7 +6730,7 @@ mod tests {
         (root, Located { chapter_id: "chapter".into(), job_path: manifest, page_index: 0 })
     }
 
-    fn fixture_plan(id: &str, geometry: Geometry, engine: Engine, bounds: Rect) -> Plan {
+    pub(super) fn fixture_plan(id: &str, geometry: Geometry, engine: Engine, bounds: Rect) -> Plan {
         Plan {
             expected_source: None,
             region_id: id.into(),

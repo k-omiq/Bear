@@ -51,9 +51,21 @@ import { pageNavControls } from './model/paging.js'
  * uses exactly one of them.
  *
  * @typedef {Object} ShortcutCommands
- * @property {(slot: number) => void} selectToolSlot - 1..6
- * @property {() => void} cycleMaskSelectShape
- * @property {() => void} toggleMaskSelectMode
+ * @property {(slot: number) => void} selectToolSlot - 1..9, `J` and `G` being 8 and 9
+ * @property {() => void} armAutoGradient - the Gradient tool, its type Auto
+ * @property {(direction: number) => void} cycleShape - the active tool's shape, or the selection tool when it has none
+ * @property {(direction: number) => void} cycleMode - the active tool's mode, type or engine
+ * @property {(mode: 'add'|'remove'|'detect') => void} setMaskSelectMode
+ * @property {(key: 'mode'|'alignment') => void} cycleCloneStamp
+ * @property {(key: 'size'|'hardness'|'opacity'|'flow'|'spacing', direction: number) => void} stepBrush
+ * @property {() => void} focusNextOption - the tool bar's next slider
+ * @property {(direction: number) => void} stepWipe - the original's wipe
+ * @property {() => void} retrySelectedWider
+ * @property {(direction: number) => void} stepMaskPadding - the selected detection's, else the page's
+ * @property {() => void} runTextCleanup - the held Patch or Gradient selection applied, else Text cleanup's run as its panel has it set
+ * @property {(direction: number) => void} cycleCleanScope - Text cleanup's scope
+ * @property {() => void} cancelRun
+ * @property {() => void} cleanSelectedRegion - clean the selected detection, or try the selected cleaned region again
  * @property {(held: boolean) => void} holdOriginal
  * @property {() => void} togglePinOriginal
  * @property {() => void} toggleMaskOverlay
@@ -67,6 +79,7 @@ import { pageNavControls } from './model/paging.js'
  * @property {() => void} zoomOut
  * @property {() => void} zoomActual
  * @property {(side: 'left'|'right') => void} pageByArrow
+ * @property {(end: 'first'|'last') => void} pageToEnd
  * @property {(direction: 'next'|'prev') => void} stepReview
  * @property {(panel: 'pages'|'masks'|'tools') => void} togglePanel
  * @property {(kind: string) => void} openModal
@@ -89,6 +102,7 @@ import { pageNavControls } from './model/paging.js'
  * @property {boolean} [allowInModal] - fires even with a dialog open
  * @property {boolean} [skipInTextEntry] - never fires while a text field has focus, chord or not
  * @property {boolean} [repeatable] - may fire on auto-repeat while the key is held
+ * @property {boolean} [altTyped] - also matches with Option or AltGr held, for a character some layouts only type that way
  * @property {boolean} [fixed] - the chord is not the user's to change (Escape)
  * @property {boolean} [rebound] - set by `applyShortcutOverrides`: this entry carries an override
  * @property {boolean} [unbound] - set by `applyShortcutOverrides`: the user cleared its chord
@@ -114,6 +128,7 @@ import { pageNavControls } from './model/paging.js'
 /** Sheet sections, in display order. Each has an i18n key of the same name. */
 export const SHORTCUT_GROUPS = /** @type {const} */ ([
   'tools',
+  'brush',
   'view',
   'edit',
   'zoom',
@@ -130,7 +145,7 @@ export const HOLD_ORIGINAL_ID = 'view.holdOriginal'
 
 /** @type {Shortcut[]} */
 export const SHORTCUTS = [
-  /* ---- tools: 1–6, in tool-rail order, then the selection tool's own -- */
+  /* ---- tools: 1-7 in rail order, J and G, then the selection tool's own */
   {
     id: 'tool.autoClean',
     group: 'tools',
@@ -195,26 +210,347 @@ export const SHORTCUTS = [
     run: (c) => c.selectToolSlot(7),
   },
   {
-    // The selection tool's own two keys. Each arms the tool first; once it is
-    // armed, `S` steps its shape (brush, lasso, rectangle) and `X` swaps add
-    // for remove (`cycleMaskSelectShape` in the editor state). Not Photoshop's
-    // `L` and `M`: those are the Layers panel and the mask overlay here.
-    id: 'tool.maskSelect.shape',
+    // Photoshop's own letters for the two tools it is copied from. Neither
+    // takes a number: `8` and `9` would be one more thing to learn, and `J`
+    // and `G` are what a hand that knows Photoshop already reaches for.
+    id: 'tool.patch',
     group: 'tools',
-    labelKey: 'shortcuts.tool.maskSelectShape',
-    keys: ['s'],
-    chord: ['S'],
+    labelKey: 'tools.name.patch',
+    keys: ['j'],
+    chord: ['J'],
     scope: 'editor',
-    run: (c) => c.cycleMaskSelectShape(),
+    run: (c) => c.selectToolSlot(8),
   },
   {
-    id: 'tool.maskSelect.mode',
+    id: 'tool.gradient',
     group: 'tools',
-    labelKey: 'shortcuts.tool.maskSelectMode',
+    labelKey: 'tools.name.gradient',
+    keys: ['g'],
+    shift: false,
+    chord: ['G'],
+    scope: 'editor',
+    run: (c) => c.selectToolSlot(9),
+  },
+  {
+    // The Gradient tool's Auto type in one key: a selection over a shaded
+    // bubble's lettering fills from all round it as soon as it is drawn.
+    id: 'tool.gradientAuto',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.gradientAuto',
+    keys: ['g'],
+    shift: true,
+    chord: ['Shift', 'G'],
+    scope: 'editor',
+    run: (c) => c.armAutoGradient(),
+  },
+  {
+    // Run Text cleanup as its panel is set - step, scope and all - from any
+    // tool. A chord, because a bare key that starts a run over a chapter is
+    // one a fumbled keystroke starts too.
+    id: 'tool.runCleanup',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.runCleanup',
+    keys: ['Enter'],
+    accel: true,
+    skipInTextEntry: true,
+    chord: ['Cmd', 'Enter'],
+    chordFor: ({ apple }) => (apple ? ['⌘', '↵'] : ['Ctrl', '↵']),
+    scope: 'editor',
+    run: (c) => c.runTextCleanup(),
+  },
+  {
+    // The Text cleanup panel's scope, Page, Chapter and Project, Project only
+    // while the run is all on this computer, as in the panel. Pressed with
+    // another tool active it opens Text cleanup first, so the change is seen.
+    id: 'tool.cleanScope.next',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.cleanScopeNext',
+    keys: ['v'],
+    shift: false,
+    chord: ['V'],
+    scope: 'editor',
+    run: (c) => c.cycleCleanScope(1),
+  },
+  {
+    id: 'tool.cleanScope.prev',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.cleanScopePrev',
+    keys: ['v'],
+    shift: true,
+    chord: ['Shift', 'V'],
+    scope: 'editor',
+    run: (c) => c.cycleCleanScope(-1),
+  },
+  {
+    // The run button's other half: what Cancel beside the progress does.
+    id: 'tool.cancelRun',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.cancelRun',
+    keys: ['.'],
+    accel: true,
+    chord: ['Cmd', '.'],
+    chordFor: ({ apple }) => (apple ? ['⌘', '.'] : ['Ctrl', '.']),
+    scope: 'editor',
+    run: (c) => c.cancelRun(),
+  },
+  {
+    // The active tool's shape - rectangle, ellipse, lasso, brush - in the
+    // bar's order, for every tool that has one. A tool without a shape arms
+    // the selection tool, which is what `S` did before any other tool had one.
+    id: 'tool.shape.next',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.shapeNext',
+    keys: ['s'],
+    shift: false,
+    chord: ['S'],
+    scope: 'editor',
+    run: (c) => c.cycleShape(1),
+  },
+  {
+    id: 'tool.shape.prev',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.shapePrev',
+    keys: ['s'],
+    shift: true,
+    chord: ['Shift', 'S'],
+    scope: 'editor',
+    run: (c) => c.cycleShape(-1),
+  },
+  {
+    // The active tool's one big choice: Text cleanup's step, the selection's
+    // add, remove or Detect, the stamp's Stamp or Region copy, the Shape's
+    // fill, the Patch's mode, the Gradient's type, the AI brush's engine.
+    id: 'tool.mode.next',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.modeNext',
+    keys: ['q'],
+    shift: false,
+    chord: ['Q'],
+    scope: 'editor',
+    run: (c) => c.cycleMode(1),
+  },
+  {
+    id: 'tool.mode.prev',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.modePrev',
+    keys: ['q'],
+    shift: true,
+    chord: ['Shift', 'Q'],
+    scope: 'editor',
+    run: (c) => c.cycleMode(-1),
+  },
+  {
+    // The selection tool in each of its three modes, from any tool. `X` again
+    // while removing goes back to adding, so it still swaps the two; so does
+    // `D` while detecting. Not Photoshop's `L` and `M`: those are the Layers
+    // panel and the mask overlay here.
+    id: 'tool.maskSelect.add',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.maskAdd',
+    keys: ['a'],
+    chord: ['A'],
+    scope: 'editor',
+    run: (c) => c.setMaskSelectMode('add'),
+  },
+  {
+    id: 'tool.maskSelect.remove',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.maskRemove',
     keys: ['x'],
     chord: ['X'],
     scope: 'editor',
-    run: (c) => c.toggleMaskSelectMode(),
+    run: (c) => c.setMaskSelectMode('remove'),
+  },
+  {
+    // A bare `D`: `⌘D` is Duplicate, and a chord and a bare key are two presses.
+    id: 'tool.maskSelect.detect',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.maskDetect',
+    keys: ['d'],
+    chord: ['D'],
+    scope: 'editor',
+    run: (c) => c.setMaskSelectMode('detect'),
+  },
+  {
+    // Arms the clone stamp as it was left; with it armed, swaps Stamp for
+    // Region copy, and with Shift aligned for non-aligned.
+    id: 'tool.cloneStamp.mode',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.cloneMode',
+    keys: ['c'],
+    shift: false,
+    chord: ['C'],
+    scope: 'editor',
+    run: (c) => c.cycleCloneStamp('mode'),
+  },
+  {
+    id: 'tool.cloneStamp.alignment',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.cloneAlignment',
+    keys: ['c'],
+    shift: true,
+    chord: ['Shift', 'C'],
+    scope: 'editor',
+    run: (c) => c.cycleCloneStamp('alignment'),
+  },
+
+  /* ---- brush: every round brush, and the detected masks' padding ------ */
+  {
+    // Photoshop's keys, for every tool with a round brush: Brush, Eraser, AI
+    // mask brush, Clone stamp, and the selection, Patch and Gradient brushes.
+    // About a tenth a press (`gesture.js#steppedSize`), so one key is fine at
+    // 3 px and quick at 300. `[` and `]` used to page the chapter as well as
+    // the arrows; the arrows still do.
+    // Many layouts type the brackets with Option or AltGr (German: Option+5
+    // and Option+6 on a Mac), so these match with it held (`altTyped`).
+    id: 'brush.sizeDown',
+    group: 'brush',
+    labelKey: 'shortcuts.brush.sizeDown',
+    keys: ['['],
+    chord: ['['],
+    scope: 'editor',
+    repeatable: true,
+    altTyped: true,
+    run: (c) => c.stepBrush('size', -1),
+  },
+  {
+    id: 'brush.sizeUp',
+    group: 'brush',
+    labelKey: 'shortcuts.brush.sizeUp',
+    keys: [']'],
+    chord: [']'],
+    scope: 'editor',
+    repeatable: true,
+    altTyped: true,
+    run: (c) => c.stepBrush('size', 1),
+  },
+  {
+    // Shift with the brackets, as in Photoshop. Matched on the character the
+    // press makes, `{` and `}`, which is what Shift turns a bracket into.
+    id: 'brush.hardnessDown',
+    group: 'brush',
+    labelKey: 'shortcuts.brush.hardnessDown',
+    keys: ['{'],
+    chord: ['Shift', '['],
+    scope: 'editor',
+    repeatable: true,
+    altTyped: true,
+    run: (c) => c.stepBrush('hardness', -1),
+  },
+  {
+    id: 'brush.hardnessUp',
+    group: 'brush',
+    labelKey: 'shortcuts.brush.hardnessUp',
+    keys: ['}'],
+    chord: ['Shift', ']'],
+    scope: 'editor',
+    repeatable: true,
+    altTyped: true,
+    run: (c) => c.stepBrush('hardness', 1),
+  },
+  {
+    // Photoshop sets opacity with the digits, which are the tools here.
+    id: 'brush.opacityDown',
+    group: 'brush',
+    labelKey: 'shortcuts.brush.opacityDown',
+    keys: ['i'],
+    shift: false,
+    chord: ['I'],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.stepBrush('opacity', -1),
+  },
+  {
+    id: 'brush.opacityUp',
+    group: 'brush',
+    labelKey: 'shortcuts.brush.opacityUp',
+    keys: ['i'],
+    shift: true,
+    chord: ['Shift', 'I'],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.stepBrush('opacity', 1),
+  },
+  {
+    // Flow and spacing, for the brushes that have them (Brush, Clone stamp).
+    id: 'brush.flowDown',
+    group: 'brush',
+    labelKey: 'shortcuts.brush.flowDown',
+    keys: ['k'],
+    shift: false,
+    chord: ['K'],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.stepBrush('flow', -1),
+  },
+  {
+    id: 'brush.flowUp',
+    group: 'brush',
+    labelKey: 'shortcuts.brush.flowUp',
+    keys: ['k'],
+    shift: true,
+    chord: ['Shift', 'K'],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.stepBrush('flow', 1),
+  },
+  {
+    id: 'brush.spacingDown',
+    group: 'brush',
+    labelKey: 'shortcuts.brush.spacingDown',
+    keys: ['y'],
+    shift: false,
+    chord: ['Y'],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.stepBrush('spacing', -1),
+  },
+  {
+    id: 'brush.spacingUp',
+    group: 'brush',
+    labelKey: 'shortcuts.brush.spacingUp',
+    keys: ['y'],
+    shift: true,
+    chord: ['Shift', 'Y'],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.stepBrush('spacing', 1),
+  },
+  {
+    // Every other option on the tool's bar - feather, outline, rotation, the
+    // Patch's rows, Detect on and Clean on - is one press away: focus moves to
+    // the bar's next slider, dropdown or box, where the arrows, the wheel,
+    // Space and the typed box all work.
+    id: 'tool.focusOptions',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.focusOptions',
+    keys: ['\\'],
+    chord: ['\\'],
+    scope: 'editor',
+    run: (c) => c.focusNextOption(),
+  },
+  {
+    // A pixel a press, on the selected detection, or on every detection of
+    // the page when none is selected. A held key is saved once, as one undo
+    // step, when it is let go (`maskactions.svelte.js#stepMaskPadding`).
+    id: 'mask.paddingDown',
+    group: 'brush',
+    labelKey: 'shortcuts.mask.paddingDown',
+    keys: [';'],
+    chord: [';'],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.stepMaskPadding(-1),
+  },
+  {
+    id: 'mask.paddingUp',
+    group: 'brush',
+    labelKey: 'shortcuts.mask.paddingUp',
+    keys: ["'"],
+    chord: ["'"],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.stepMaskPadding(1),
   },
 
   /* ---- view ------------------------------------------------------------ */
@@ -257,6 +593,29 @@ export const SHORTCUTS = [
     chord: ['R'],
     scope: 'editor',
     run: (c) => c.toggleReviewFilter(),
+  },
+  {
+    // The original's wipe beside the eye, ten percent a press.
+    id: 'view.wipeDown',
+    group: 'view',
+    labelKey: 'shortcuts.view.wipeDown',
+    keys: ['w'],
+    shift: false,
+    chord: ['W'],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.stepWipe(-1),
+  },
+  {
+    id: 'view.wipeUp',
+    group: 'view',
+    labelKey: 'shortcuts.view.wipeUp',
+    keys: ['w'],
+    shift: true,
+    chord: ['Shift', 'W'],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.stepWipe(1),
   },
 
   /* ---- edit ------------------------------------------------------------ */
@@ -322,6 +681,30 @@ export const SHORTCUTS = [
     scope: 'editor',
     run: (c) => c.duplicateSelectedRegion(),
   },
+  {
+    // The selected layer's own next step: a detection is cleaned with the
+    // panel's engines, as its row's Clean does; a cleaned region is tried
+    // again with the engine that cleaned it, as the region menu's Try again.
+    id: 'layers.cleanSelected',
+    group: 'edit',
+    labelKey: 'shortcuts.edit.cleanSelected',
+    keys: ['b'],
+    shift: false,
+    chord: ['B'],
+    scope: 'editor',
+    run: (c) => c.cleanSelectedRegion(),
+  },
+  {
+    // The region menu's Try again wider, on a cleaned region whose mask can grow.
+    id: 'layers.retryWider',
+    group: 'edit',
+    labelKey: 'shortcuts.edit.retryWider',
+    keys: ['b'],
+    shift: true,
+    chord: ['Shift', 'B'],
+    scope: 'editor',
+    run: (c) => c.retrySelectedWider(),
+  },
 
   /* ---- zoom ------------------------------------------------------------ */
   {
@@ -373,7 +756,7 @@ export const SHORTCUTS = [
     group: 'navigation',
     labelKey: 'shortcuts.page.left',
     labelKeyFor: (ctx) => pageNavControls(ctx.readingDirection ?? 'rtl').left.tooltipKey,
-    keys: ['ArrowLeft', '['],
+    keys: ['ArrowLeft'],
     chord: ['←'],
     scope: 'editor',
     repeatable: true,
@@ -384,11 +767,29 @@ export const SHORTCUTS = [
     group: 'navigation',
     labelKey: 'shortcuts.page.right',
     labelKeyFor: (ctx) => pageNavControls(ctx.readingDirection ?? 'rtl').right.tooltipKey,
-    keys: ['ArrowRight', ']'],
+    keys: ['ArrowRight'],
     chord: ['→'],
     scope: 'editor',
     repeatable: true,
     run: (c) => c.pageByArrow('right'),
+  },
+  {
+    id: 'page.first',
+    group: 'navigation',
+    labelKey: 'shortcuts.page.first',
+    keys: ['Home'],
+    chord: ['Home'],
+    scope: 'editor',
+    run: (c) => c.pageToEnd('first'),
+  },
+  {
+    id: 'page.last',
+    group: 'navigation',
+    labelKey: 'shortcuts.page.last',
+    keys: ['End'],
+    chord: ['End'],
+    scope: 'editor',
+    run: (c) => c.pageToEnd('last'),
   },
   {
     id: 'review.next',
@@ -992,7 +1393,11 @@ let revision = 0
  *
  * @type {Record<string, string>}
  */
-const RENAMED_IDS = { 'tool.cloneHeal': 'tool.cloneStamp' }
+const RENAMED_IDS = {
+  'tool.cloneHeal': 'tool.cloneStamp',
+  'tool.maskSelect.shape': 'tool.shape.next',
+  'tool.maskSelect.mode': 'tool.maskSelect.remove',
+}
 
 /**
  * Drop everything that is not a binding this build can honour: an id the table
@@ -1248,9 +1653,12 @@ export function isDialogOutsideStackOpen() {
  */
 export function matchShortcut(event, context) {
   if (!event || typeof event.key !== 'string') return null
-  if (event.altKey) return null
+  // Option on a Mac, and AltGr elsewhere (which reports Ctrl and Alt), type a
+  // character on many layouts; only an entry for such a character takes it.
+  const altTyped = event.altKey === true && event.metaKey !== true
+  if (event.altKey && !altTyped) return null
 
-  const accel = event.metaKey === true || event.ctrlKey === true
+  const accel = event.metaKey === true || (event.ctrlKey === true && !altTyped)
   const escape = event.key === 'Escape'
   // A dialog beside the stack takes the whole table, **Escape included**. The
   // stack's own dialogs let Escape through because the layer defers to the
@@ -1269,6 +1677,7 @@ export function matchShortcut(event, context) {
   const shift = event.shiftKey === true
   for (const shortcut of shortcuts()) {
     if (!shortcut.keys.includes(key)) continue
+    if (altTyped && shortcut.altTyped !== true) continue
     if ((shortcut.accel === true) !== accel) continue
     if (textEntry && shortcut.skipInTextEntry === true) continue
     if (shortcut.shift !== undefined && shortcut.shift !== shift) continue
@@ -1303,6 +1712,24 @@ export function shortcutLabelKey(shortcut, context = {}) {
  */
 export function shortcutChord(shortcut, context = {}) {
   return shortcut.chordFor ? shortcut.chordFor(context) : shortcut.chord
+}
+
+/**
+ * The keys that run these entries, the way a tooltip writes them - `[ / ]` -
+ * read from the table in force, so a key the user rebound is the one named
+ * and one they cleared is left out. Empty when none is bound.
+ *
+ * @param {string[]} ids
+ * @param {{apple?: boolean}} [context]
+ * @returns {string}
+ */
+export function shortcutHint(ids, context = { apple: isApplePlatform() }) {
+  const table = shortcuts()
+  return ids
+    .map((id) => table.find((shortcut) => shortcut.id === id))
+    .filter((entry) => entry && entry.keys.length > 0)
+    .map((entry) => shortcutChord(/** @type {Shortcut} */ (entry), context).join('+'))
+    .join(' / ')
 }
 
 /**

@@ -29,6 +29,8 @@ const REQUIRED = [
   'selection', 'mask-add', 'mask-remove',
   // The language picker.
   'globe',
+  // The Patch and Gradient tools on the rail.
+  'patch', 'gradient',
 ]
 
 describe('icon set', () => {
@@ -64,7 +66,8 @@ describe('icon set', () => {
   it('exposes filled sub-paths only where a solid form is wanted', () => {
     const withFill = Object.keys(icons).filter((n) => glyph(n).filled.length > 0)
     expect(withFill.sort()).toEqual(
-      ['dot', 'eye', 'eye-off', 'mask-overlay', 'more-horizontal', 'star-filled'].sort()
+      // `gradient` fills its dark end so the glyph reads as a ramp at 16 px.
+      ['dot', 'eye', 'eye-off', 'gradient', 'mask-overlay', 'more-horizontal', 'star-filled'].sort()
     )
   })
 })

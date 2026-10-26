@@ -123,6 +123,15 @@ describe('capEntries', () => {
 })
 
 describe('sanitizeSession', () => {
+  it('keeps a dragged tool panel width inside its bounds, and anything else as the panel\'s own', async () => {
+    const { sanitizeSession } = await import('./session.svelte.js')
+    expect(sanitizeSession({}).toolPanelWidth).toBeNull()
+    expect(sanitizeSession({ toolPanelWidth: null }).toolPanelWidth).toBeNull()
+    expect(sanitizeSession({ toolPanelWidth: '460' }).toolPanelWidth).toBeNull()
+    expect(sanitizeSession({ toolPanelWidth: 460.4 }).toolPanelWidth).toBe(460)
+    expect(sanitizeSession({ toolPanelWidth: 100 }).toolPanelWidth).toBe(360)
+    expect(sanitizeSession({ toolPanelWidth: 9000 }).toolPanelWidth).toBe(560)
+  })
   it('retains an explicit mixed cloud clean choice', async () => {
     const { sanitizeSession } = await import('./session.svelte.js')
     expect(sanitizeSession({ cleanLocalFirst: true }).cleanLocalFirst).toBe(true)

@@ -46,6 +46,7 @@ import {
   contentSized,
   MAX_WIDTH,
   MIN_HEIGHT,
+  clampPanelWidth,
 } from '../model/windows.js'
 import { hexOnCommit } from '../ui/color.js'
 
@@ -207,6 +208,7 @@ function viewport() {
  * @property {string} outsideMaskColor - the colour the canvas draws a mask over text outside speech bubbles in, `#rrggbb`
  * @property {number} maskOpacity - how strong either mask's fill is, a whole percent from 0 to 100
  * @property {Record<string, WindowState>} windows
+ * @property {number|null} toolPanelWidth - the width the user dragged the tool panel to, or null for its own (`tools.js#PANEL_WIDTH`)
  */
 
 /** @returns {PersistedSession} */
@@ -248,6 +250,7 @@ function defaults() {
     outsideMaskColor: DEFAULT_OUTSIDE_MASK_COLOR,
     maskOpacity: DEFAULT_MASK_OPACITY,
     windows,
+    toolPanelWidth: null,
   }
 }
 
@@ -377,6 +380,10 @@ export function sanitizeSession(raw) {
     outsideMaskColor: maskColorOr(record.outsideMaskColor, base.outsideMaskColor),
     maskOpacity: maskOpacityOr(record.maskOpacity, base.maskOpacity),
     windows,
+    // Null is "the panel's own width", and anything unreadable is that too.
+    toolPanelWidth: typeof record.toolPanelWidth === 'number' && Number.isFinite(record.toolPanelWidth)
+      ? clampPanelWidth(record.toolPanelWidth)
+      : null,
   }
 }
 
@@ -459,6 +466,7 @@ function persistable() {
     outsideMaskColor: session.outsideMaskColor,
     maskOpacity: session.maskOpacity,
     windows,
+    toolPanelWidth: session.toolPanelWidth,
   }
 }
 
@@ -925,6 +933,17 @@ export function setWindowBox(id, patch) {
   win.y = position.y
   win.w = size.w
   win.h = size.h
+}
+
+/**
+ * The tool panel's width, from its resize corner. Written live like a window's
+ * box, and persisted by `commitWindows` on release.
+ *
+ * @param {number} w
+ */
+export function setToolPanelWidth(w) {
+  if (!Number.isFinite(w)) return
+  session.toolPanelWidth = clampPanelWidth(w)
 }
 
 /** Persist whatever the last drag or resize left behind. */

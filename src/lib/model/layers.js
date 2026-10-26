@@ -98,6 +98,27 @@ export function isRegionCopy(region) {
 }
 
 /**
+ * A Patch tool layer: recorded under the clone engine, as its pixels are read
+ * from the page, with `mode: "patch"` and the patch's own options
+ * (`region/retouch.rs`).
+ *
+ * @param {{mask?: any}|null|undefined} region
+ */
+export function isPatchLayer(region) {
+  return region?.mask?.provenance?.params_snapshot?.mode === 'patch'
+}
+
+/**
+ * A Gradient tool layer: recorded under the paint engine, as its pixels are
+ * given, with `mode: "gradient"` and the gradient, so the tool can reopen it.
+ *
+ * @param {{mask?: any}|null|undefined} region
+ */
+export function isGradientLayer(region) {
+  return region?.mask?.provenance?.params_snapshot?.mode === 'gradient'
+}
+
+/**
  * Whether a drag or a turn may start on this layer now.
  *
  * @param {{outcome?: string, mask?: any}|null|undefined} region
