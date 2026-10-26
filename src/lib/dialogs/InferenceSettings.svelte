@@ -84,6 +84,15 @@
    * 5. **Set up with Modal or Beam**: the provisioner, inline.
    * 6. **Connect an existing endpoint**, collapsed: the manual form, for an
    *    endpoint deployed some other way.
+   * 7. **Generation**: which parts of a FLUX 3 edit the worker builds the
+   *    reference tool's way (`render.rs#Flux3Generation`): its prompt, the
+   *    magenta marker, its time shift, its one-megapixel size. Each is sent
+   *    with the request, so a worker deployed before them refuses it.
+   * 8. **Finishing**: how a FLUX 3 answer is matched to the page before it
+   *    is written (`postprocess.rs#Finishing`), every version the bench
+   *    measured and the reference tool's, and whether a colour answer is made
+   *    grey first. Saved with the other settings; the backend freezes it on
+   *    each cloud attempt, so a change applies to the next clean.
    *
    * **Tokens.** A token typed here goes to the system keychain through
    * `storeCloudSecret`, and the field is wiped as soon as that call returns,
@@ -92,12 +101,13 @@
    */
   import { onMount, tick, untrack } from 'svelte'
   import Icon from '../icons/Icon.svelte'
-  import { Button, Disclosure, Field, Segmented, TextInput } from '../ui/index.js'
+  import { Button, Disclosure, Field, Segmented, Select, TextInput } from '../ui/index.js'
   import CloudProvisioner from './CloudProvisioner.svelte'
   import { getBackend } from '../api/backend.js'
   import { notify } from '../state/app.svelte.js'
   import { session } from '../state/session.svelte.js'
-  import { cloud, dismissRecovered, abandonRecovered, retryCloudRecovery, refreshCloudReadiness, recheckCloudConfiguration, setCloudPermission } from '../state/cloud.svelte.js'
+  import { cloud, dismissRecovered, abandonRecovered, retryCloudRecovery, refreshCloudReadiness, recheckCloudConfiguration, saveCloudFinishing, saveCloudFlux3Generation, setCloudPermission } from '../state/cloud.svelte.js'
+  import { FINISHINGS, FLUX3_GENERATION_PARTS, finishingKey } from '../model/model-names.js'
   import { cloudGpu } from '../state/cloudgpu.svelte.js'
   import { endpointAccount, forgetUnfinished, healthKey, providerPaused, removeEndpoint, setup } from './provisioning.svelte.js'
   import { t } from '../i18n/index.js'
@@ -123,7 +133,15 @@
     url: `${uid}-url`,
     manualTokenId: `${uid}-manual-token-id`,
     manualSecret: `${uid}-manual-secret`,
+    finishing: `${uid}-finishing`,
+    finishingPick: `${uid}-finishing-pick`,
+    finishingHint: `${uid}-finishing-hint`,
+    grayscale: `${uid}-grayscale`,
+    grayscaleHint: `${uid}-grayscale-hint`,
+    generation: `${uid}-generation`,
   }
+
+  const finishingOptions = FINISHINGS.map((name) => ({ value: name, label: t(finishingKey('option', name)) }))
 
   const permissionOptions = [
     { value: 'off', label: t('settings.inference.permission.off') },
@@ -1214,6 +1232,54 @@
     </div>
   </section>
 
+  <section class="finishing" aria-labelledby={ids.generation} data-settings-anchor="generation">
+    <h3 class="title" id={ids.generation}>{t('settings.inference.generation.title')}</h3>
+    <p class="note">{t('settings.inference.generation.description')}</p>
+    {#each FLUX3_GENERATION_PARTS as part (part)}
+      <div class="grey-row">
+        <input
+          id={`${ids.generation}-${part}`}
+          class="check"
+          type="checkbox"
+          aria-describedby={`${ids.generation}-${part}-hint`}
+          checked={session.cloudFlux3Generation[part]}
+          onchange={(event) => void saveCloudFlux3Generation({ ...session.cloudFlux3Generation, [part]: event.currentTarget.checked }, backend)}
+        />
+        <label for={`${ids.generation}-${part}`}>{t(`settings.inference.generation.${part}`)}</label>
+      </div>
+      <p class="note" id={`${ids.generation}-${part}-hint`}>{t(`settings.inference.generation.${part}Hint`)}</p>
+    {/each}
+  </section>
+
+  <section class="finishing" aria-labelledby={ids.finishing} data-settings-anchor="finishing">
+    <h3 class="title" id={ids.finishing}>{t('settings.inference.finishing.title')}</h3>
+    <p class="note">{t('settings.inference.finishing.description')}</p>
+    <Field label={t('settings.inference.finishing.label')} controlId={ids.finishingPick}>
+      {#snippet children()}
+        <Select
+          id={ids.finishingPick}
+          options={finishingOptions}
+          value={session.cloudFinishing}
+          describedBy={ids.finishingHint}
+          onchange={(next) => void saveCloudFinishing(/** @type {any} */ (next), session.cloudFinishingGrayscale, backend)}
+        />
+      {/snippet}
+    </Field>
+    <p class="note" id={ids.finishingHint} data-finishing-hint>{t(finishingKey('hint', session.cloudFinishing))}</p>
+    <div class="grey-row">
+      <input
+        id={ids.grayscale}
+        class="check"
+        type="checkbox"
+        aria-describedby={ids.grayscaleHint}
+        checked={session.cloudFinishingGrayscale}
+        onchange={(event) => void saveCloudFinishing(session.cloudFinishing, event.currentTarget.checked, backend)}
+      />
+      <label for={ids.grayscale}>{t('settings.inference.finishing.grayscale')}</label>
+    </div>
+    <p class="note" id={ids.grayscaleHint}>{t('settings.inference.finishing.grayscaleHint')}</p>
+  </section>
+
   <Disclosure
     variant="plain"
     open={manualOpen}
@@ -1363,6 +1429,26 @@
   .error { color: var(--warn) }
   .result { color: var(--t2) }
   .result.bad { color: var(--warn) }
+
+  .finishing {
+    display: grid;
+    gap: var(--s-2);
+    min-width: 0;
+  }
+  .grey-row {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    font-size: 12px;
+    color: var(--t2);
+  }
+  .check {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
 
   .actions {
     display: flex;

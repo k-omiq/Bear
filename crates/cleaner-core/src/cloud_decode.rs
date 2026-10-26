@@ -419,6 +419,8 @@ mod tests {
             model_id: "test-flux-schnell".into(),
             model_revision: "0123456789abcdef0123456789abcdef01234567".into(),
             native_mask_conditioning: false,
+            work_long_side: None,
+            flux3_generation: None,
         };
 
         let mut req = JobRequestMetadata {

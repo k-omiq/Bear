@@ -429,6 +429,11 @@ pub struct CreateAttemptIntent {
     pub model_revision: String,
     pub native_mask_conditioning: bool,
     pub qwen_edit: Option<cleaner_core::engines::render::QwenEdit>,
+    pub work_long_side: Option<u32>,
+    pub flux3_generation: Option<cleaner_core::engines::render::Flux3Generation>,
+    /// The client's finishing, frozen with the attempt: a result recovered
+    /// later is finished as it was asked for.
+    pub finishing: Option<cleaner_core::engines::postprocess::Choice>,
     pub width: u32,
     pub height: u32,
     pub seed: u64,
@@ -530,6 +535,12 @@ pub struct AttemptRecord {
     pub native_mask_conditioning: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qwen_edit: Option<cleaner_core::engines::render::QwenEdit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_long_side: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flux3_generation: Option<cleaner_core::engines::render::Flux3Generation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finishing: Option<cleaner_core::engines::postprocess::Choice>,
     /// Written by builds that asked a person before a Qwen result was
     /// applied. Nothing reads it: a result is applied at once. Kept because
     /// records on disk carry it and unknown fields are refused.
@@ -582,6 +593,8 @@ impl AttemptRecord {
             attempt_id: self.attempt_id.clone(),
             recipe: WireRenderRecipe {
                 qwen_edit: self.qwen_edit.clone(),
+                work_long_side: self.work_long_side,
+                flux3_generation: self.flux3_generation,
                 recipe_id: self.recipe_id.clone(),
                 preprocessing_version: self.preprocessing_version.clone(),
                 model_id: self.model_id.clone(),
@@ -834,6 +847,9 @@ impl AttemptJournal {
             model_revision: intent.model_revision,
             native_mask_conditioning: intent.native_mask_conditioning,
             qwen_edit: intent.qwen_edit,
+            work_long_side: intent.work_long_side,
+            flux3_generation: intent.flux3_generation,
+            finishing: intent.finishing,
             review_accepted: false,
             source_image_hash: intent.source_image_hash,
             region_id: intent.region_id,
@@ -2187,6 +2203,9 @@ mod tests {
             request_digest: req.request_digest,
             chapter_id: None,
             page_index: None,
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         }
     }
 

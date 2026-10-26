@@ -313,6 +313,18 @@ describe('sanitizeSession', () => {
     expect(backendSettingsPatch().fluxBackend).toBe('auto')
   })
 
+  it('carries the FLUX 3 working size down to the backend, one of the measured sizes', async () => {
+    const { backendSettingsPatch, setCloudWorkLongSide, adoptBackendSettings } = await import('./session.svelte.js')
+    expect(backendSettingsPatch().cloudWorkLongSide).toBe(768)
+    setCloudWorkLongSide(1280)
+    expect(backendSettingsPatch().cloudWorkLongSide).toBe(1280)
+    for (const bad of [1100, '1024', null]) setCloudWorkLongSide(bad)
+    expect(backendSettingsPatch().cloudWorkLongSide).toBe(1280)
+    adoptBackendSettings({ cloudWorkLongSide: 1024 })
+    expect(backendSettingsPatch().cloudWorkLongSide).toBe(1024)
+    setCloudWorkLongSide(768)
+  })
+
   it('carries fluxModel down to the backend settings patch', async () => {
     const { backendSettingsPatch, setFluxModel } = await import('./session.svelte.js')
     setFluxModel('flux2-klein-4b')

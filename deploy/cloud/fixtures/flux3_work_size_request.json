@@ -1,0 +1,25 @@
+{
+  "protocol_version": "1.0.0",
+  "job_id": "job-test-001",
+  "attempt_id": "attempt-test-001",
+  "recipe": {
+    "recipe_id": "mc-flux3-klein-bf16-edit-v1",
+    "preprocessing_version": "3.0.0",
+    "model_id": "unsloth/flux-3-image-klein",
+    "model_revision": "67662613c10c92a1364cb3da8c6f7447977c7ce9",
+    "native_mask_conditioning": false,
+    "qwen_edit": {
+      "target": "sound_effect",
+      "description": "A dot screen behind the letters. 網点。"
+    },
+    "work_long_side": 1280
+  },
+  "width": 16,
+  "height": 16,
+  "seed": 1,
+  "steps": 16,
+  "guidance_scaled": 100,
+  "image_sha256": "2e0a9a2d5f28563463f634d5b81ec2ef90d91afe472a0c6e2c6ef4082f93ec5f",
+  "hint_sha256": "3552bb8bf493ba63896f7abfb3ee3d899bf7312cd0b3d87691a639344b051238",
+  "request_digest": "4f9ef4c52d4217369c5c599cc81c96ee73d32f799431ccd10d8b7a0084efc83c"
+}

@@ -478,7 +478,7 @@ impl Inpainter {
             }
         }
 
-        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran, tone })
+        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran, tone, matched: None })
     }
 
     fn run(&mut self, image: Vec<f32>, mask: Vec<f32>) -> Result<Vec<f32>, Error> {

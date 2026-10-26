@@ -102,6 +102,21 @@ GPU_REQUIREMENTS = (
     # FLUX fills the hole with the manga LaMa graph first (common/flux.py LamaFill).
     "onnxruntime-gpu==1.23.2",
 )
+# FLUX 3 Image Klein needs Modular Diffusers 0.42 and a newer SDNQ than the pins above,
+# so its worker gets its own set (common/flux3.py); the other models keep theirs.
+FLUX3_GPU_REQUIREMENTS = (
+    "diffusers==0.42.0",
+    "sdnq==0.2.8",
+    "transformers==5.15.0",
+    "accelerate==1.14.0",
+    "safetensors==0.8.0",
+    "huggingface-hub==1.33.0",
+    "pillow==12.3.0",
+    "numpy==2.4.6",
+)
+RENDER_REQUIREMENTS = (FLUX3_GPU_REQUIREMENTS
+                       if SETTINGS.render and production_model(SETTINGS.model_id).runner == "flux3"
+                       else GPU_REQUIREMENTS)
 SEED_REQUIREMENTS = ("huggingface-hub==1.24.0",)
 SAM_EXPORT_REQUIREMENTS = (
     "onnx==1.19.0", "onnx-ir==1.0.0", "onnxscript==0.5.6",
@@ -150,7 +165,7 @@ if ANALYSIS_SAM in SETTINGS.analysis_models:
 gpu_image = _finish(
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
     .pip_install(TORCH_REQUIREMENT, TORCHVISION_REQUIREMENT, index_url=TORCH_INDEX_URL)
-    .pip_install(*GPU_REQUIREMENTS),
+    .pip_install(*RENDER_REQUIREMENTS),
     {"HF_HUB_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1"},
 )
 _analysis_base = modal.Image.debian_slim(python_version=PYTHON_VERSION)

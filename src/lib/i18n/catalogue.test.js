@@ -8,6 +8,7 @@ import { keyUses } from './keyscan.js'
 import { SHORTCUT_GROUPS } from '../shortcuts.js'
 import { ROW_ENGINES, engineChoiceLabel, reviewEntryActions } from '../model/masks.js'
 import { RUNGS } from '../model/ladder.js'
+import { FINISHINGS, FLUX3_GENERATION_PARTS, finishingKey } from '../model/model-names.js'
 
 /**
  * The catalogue and the source must agree in **both** directions:
@@ -103,7 +104,17 @@ const HINT_KEYS = reviewEntryActions({ outcome: 'gate-skipped' }).map(
  */
 const ENGINE_CHOICE_KEYS = [...new Set([...RUNGS, ...ROW_ENGINES, 'cloud'])].map(engineChoiceLabel)
 
-const RUNTIME_KEYS = [...DYNAMIC_KEYS, ...GROUP_KEYS, ...HINT_KEYS, ...ENGINE_CHOICE_KEYS]
+/**
+ * `src/lib/dialogs/InferenceSettings.svelte#finishingKey` - the Finishing
+ * picker's label and hint per version, over `FINISHINGS`.
+ */
+const FINISHING_KEYS = [
+  ...FINISHINGS.flatMap((name) => [finishingKey('option', name), finishingKey('hint', name)]),
+  // The Generation switches' label and hint, over `FLUX3_GENERATION_PARTS`.
+  ...FLUX3_GENERATION_PARTS.flatMap((part) => [`settings.inference.generation.${part}`, `settings.inference.generation.${part}Hint`]),
+]
+
+const RUNTIME_KEYS = [...DYNAMIC_KEYS, ...GROUP_KEYS, ...HINT_KEYS, ...ENGINE_CHOICE_KEYS, ...FINISHING_KEYS]
 
 /** Every source file the app ships, in either language. The catalogue's own directory and JS tests excluded. */
 function sourceFiles(dir, out = []) {
@@ -173,8 +184,10 @@ describe('the catalogue is complete', () => {
     // started assembling keys where it should be choosing between them. The
     // sheet's group headings are left out of the count: there is one per
     // `SHORTCUT_GROUPS` entry by construction, and a new group is a section of
-    // the sheet, not a key assembled where a choice belonged.
-    expect(RUNTIME_KEYS.length - GROUP_KEYS.length).toBeLessThan(30)
+    // the sheet, not a key assembled where a choice belonged. The finishing
+    // and generation keys likewise: two per `FINISHINGS` and
+    // `FLUX3_GENERATION_PARTS` entry.
+    expect(RUNTIME_KEYS.length - GROUP_KEYS.length - FINISHING_KEYS.length).toBeLessThan(30)
   })
 })
 

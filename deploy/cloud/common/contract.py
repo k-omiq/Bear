@@ -172,7 +172,18 @@ GUIDED_RECIPE_IDS = frozenset({
     "mc-qwen-image-edit-2511-v4",
     "mc-flux2-klein-inpaint-v2",
     "mc-flux2-klein-9b-inpaint-v2",
+    "mc-flux3-klein-edit-v1",
+    "mc-flux3-klein-bf16-edit-v1",
 })
+
+# Recipes whose worker edits at a working size the request may name (`work_long_side`),
+# and the sizes it may name. The first is manifest.WORK_LONG_SIDE, the size a request that
+# names none is edited at; bench 5 (docs/research/flux3-klein-5_6b.md) measured all three.
+SIZED_RECIPE_IDS = frozenset({
+    "mc-flux3-klein-edit-v1",
+    "mc-flux3-klein-bf16-edit-v1",
+})
+WORK_LONG_SIDES = (768, 1024, 1280)
 
 
 @dataclass(frozen=True)
@@ -197,6 +208,41 @@ class QwenEdit:
 
 
 @dataclass(frozen=True)
+class Flux3Generation:
+    """Which parts of a FLUX 3 edit are built the reference tool's way.
+
+    The same record as `Flux3Generation` in crates/cleaner-core/src/engines/render.rs.
+    Taken by the recipes that take a working size (SIZED_RECIPE_IDS). A request sends
+    none for this app's way, so an all-false record is refused: it would hash apart
+    from the same request without it.
+    """
+
+    reference_prompt: bool = False
+    marker: bool = False
+    reference_shift: bool = False
+    megapixel_size: bool = False
+
+    FIELDS = ("reference_prompt", "marker", "reference_shift", "megapixel_size")
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> Flux3Generation:
+        if type(d) is not dict:
+            raise ContractValidationError("flux3_generation must be a dict")
+        _assert_no_extra_keys(d, set(cls.FIELDS))
+        parts = {name: _check_exact_bool(d[name], name) for name in cls.FIELDS if name in d}
+        generation = cls(**parts)
+        if not any(getattr(generation, name) for name in cls.FIELDS):
+            raise ContractValidationError("flux3_generation names no part; send none instead")
+        return generation
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {name: getattr(self, name) for name in self.FIELDS}
+
+    def canonical(self) -> list:
+        return [getattr(self, name) for name in self.FIELDS]
+
+
+@dataclass(frozen=True)
 class RenderRecipe:
     recipe_id: str
     preprocessing_version: str
@@ -204,6 +250,10 @@ class RenderRecipe:
     model_revision: str
     native_mask_conditioning: bool
     qwen_edit: Optional[QwenEdit] = None
+    # The long side a smaller crop is edited at; None is the worker's own (WORK_LONG_SIDES[0]).
+    work_long_side: Optional[int] = None
+    # Which parts of a FLUX 3 edit are the reference tool's; None is this app's way.
+    flux3_generation: Optional[Flux3Generation] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -216,13 +266,17 @@ class RenderRecipe:
 
         if self.qwen_edit is not None:
             result["qwen_edit"] = dataclasses.asdict(self.qwen_edit)
+        if self.work_long_side is not None:
+            result["work_long_side"] = self.work_long_side
+        if self.flux3_generation is not None:
+            result["flux3_generation"] = self.flux3_generation.to_dict()
         return result
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> RenderRecipe:
         if type(d) is not dict:
             raise ContractValidationError("RenderRecipe must be a dict")
-        _assert_no_extra_keys(d, {"recipe_id", "preprocessing_version", "model_id", "model_revision", "native_mask_conditioning", "qwen_edit"})
+        _assert_no_extra_keys(d, {"recipe_id", "preprocessing_version", "model_id", "model_revision", "native_mask_conditioning", "qwen_edit", "work_long_side", "flux3_generation"})
         recipe_id = _check_exact_str(d.get("recipe_id"), "recipe_id")
         preprocessing_version = _check_exact_str(d.get("preprocessing_version"), "preprocessing_version")
         model_id = _check_exact_str(d.get("model_id"), "model_id")
@@ -232,8 +286,24 @@ class RenderRecipe:
         edit = QwenEdit.from_dict(d["qwen_edit"]) if "qwen_edit" in d else None
         if edit is not None and recipe_id not in GUIDED_RECIPE_IDS:
             raise ContractValidationError("This recipe does not support guidance")
+        work_long_side = None
+        if "work_long_side" in d:
+            work_long_side = _check_exact_int(d["work_long_side"], "work_long_side")
+            if recipe_id not in SIZED_RECIPE_IDS:
+                raise ContractValidationError("This recipe does not take a working size")
+            if work_long_side not in WORK_LONG_SIDES:
+                raise ContractValidationError(f"Working size {work_long_side} is not one of {WORK_LONG_SIDES}")
+        generation = None
+        if "flux3_generation" in d:
+            generation = Flux3Generation.from_dict(d["flux3_generation"])
+            if recipe_id not in SIZED_RECIPE_IDS:
+                raise ContractValidationError("This recipe does not take a generation choice")
+            if generation.megapixel_size and work_long_side is not None:
+                raise ContractValidationError("A one-megapixel request names no working size")
         return cls(
             qwen_edit=edit,
+            work_long_side=work_long_side,
+            flux3_generation=generation,
             recipe_id=recipe_id,
             preprocessing_version=preprocessing_version,
             model_id=model_id,
@@ -952,6 +1022,10 @@ def compute_canonical_json_array(meta: JobRequestMetadata) -> str:
     ]
     if meta.recipe.qwen_edit is not None:
         canonical_list.append([meta.recipe.qwen_edit.target, meta.recipe.qwen_edit.description])
+    if meta.recipe.work_long_side is not None:
+        canonical_list.append(meta.recipe.work_long_side)
+    if meta.recipe.flux3_generation is not None:
+        canonical_list.append(meta.recipe.flux3_generation.canonical())
     return json.dumps(canonical_list, separators=(",", ":"), ensure_ascii=False)
 
 

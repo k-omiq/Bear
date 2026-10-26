@@ -870,6 +870,51 @@ export const en = {
     // Settings > Cloud. The tab's id stays `inference` (the modal spec and the
     // tests name it); what it says is Cloud.
     inference: {
+      generation: {
+        title: 'Generation',
+        description: 'Build parts of a FLUX 3 edit the reference tool\'s way. Each is off by default. A cloud setup made before this release refuses them: update its cloud code first.',
+        referencePrompt: 'Reference prompt',
+        referencePromptHint: 'Use the reference tool\'s wording for what to remove and keep.',
+        marker: 'Magenta marker',
+        markerHint: 'Paint the lettering magenta before the model sees it, and say so in the prompt. A result that keeps the paint fails; try another seed.',
+        referenceShift: 'Reference time shift',
+        referenceShiftHint: 'Sample with time shift 6.93, as the reference tool does, instead of 16.',
+        megapixelSize: 'One megapixel size',
+        megapixelSizeHint: 'Edit every crop at about one megapixel, larger or smaller, instead of the FLUX 3 working size.',
+      },
+      finishing: {
+        title: 'Finishing',
+        description: 'How a FLUX 3 result is matched to the page before it is written. A change applies to the next cloud clean.',
+        label: 'Finishing version',
+        grayscale: 'Make colour results grey',
+        grayscaleHint: 'On a colour page, the result is made grey before it is finished. A grey page is grey already.',
+        option: {
+          copy: 'Copy page dots (default)',
+          copyHops: 'Copy page dots, reach deeper',
+          redraw: 'Redraw dots',
+          redrawSharpContours: 'Redraw dots, sharp lines',
+          repeatOffsets: 'Repeat offsets (first version)',
+          toneOnly: 'Tone only',
+          referenceOff: 'Reference: off',
+          referenceGlobal: 'Reference: global tone',
+          referenceLocal: 'Reference: local tone',
+          referencePoisson: 'Reference: Poisson',
+          referenceRaster: 'Reference: raster',
+        },
+        hint: {
+          copy: 'Matches tone and light, then copies the page\'s own screentone dots into the patch, in step with the page. The sharpest dots.',
+          copyHops: 'As the default, then copies on from copied dots into the middle of a wide patch. It can draw streaks there.',
+          redraw: 'Matches tone and light, then draws new dots from a model of the page\'s screentone. The dots are softer than copied ones.',
+          redrawSharpContours: 'The redraw, with lines found in the result before its dots are blurred away. The result\'s own dot pattern can stop the fix.',
+          repeatOffsets: 'The first version: copies dots by repeat offsets found in the page. It fills less of a patch.',
+          toneOnly: 'Matches tone and light only. The result keeps its own dots.',
+          referenceOff: 'The reference tool with no tone match: the result as it came.',
+          referenceGlobal: 'The reference tool: one brightness and contrast fix from the page around the patch.',
+          referenceLocal: 'The reference tool: the global fix, then a smooth local fix that follows the page.',
+          referencePoisson: 'The reference tool\'s default: the local fix, then the light blended across the edge. Drawn lines are kept.',
+          referenceRaster: 'The reference tool: copies the page\'s screentone over the result where it finds one.',
+        },
+      },
       status: {
         off: 'Cloud GPU is off. Nothing from your pages is sent.',
         checking: 'Checking…',
@@ -2112,6 +2157,7 @@ export const en = {
       flux: 'AI redraw through the FLUX helper',
       fluxCloud: 'AI redraw on your cloud GPU',
       qwen: 'Strongest AI redraw on your cloud GPU, best on sound effects over art',
+      flux3: 'AI edit on your cloud GPU that keeps bubbles and art as drawn',
     },
     column: {
       engine: 'Engine',
@@ -2927,6 +2973,7 @@ export const en = {
       // Under the mixed-execution checkbox (`cloud.clean.mixed.label`), shown
       // while Clean on is Cloud GPU. Off by default: the cloud cleans it all.
       mixedHint: 'Regions set to Fill or Solid colour are tried here first; any that fail the quality check go to the cloud GPU. Off, every region goes to the cloud GPU.',
+      workLongSideHint: 'Small crops are scaled up to this size before FLUX 3 edits them. Larger keeps more detail and costs more: 1280 takes about 3.5 times as long per crop as 768.',
       // The checkbox under Clean on while it is This computer, and its hint
       // (`run.rs`, the solid-bubbles-only run).
       solidOnly: 'Solid bubbles only',
@@ -2961,6 +3008,7 @@ export const en = {
       step: 'Mode',
       detectOn: 'Detect on',
       cleanOn: 'Clean on',
+      workLongSide: 'FLUX 3 working size',
       scope: 'Scope',
       // Normal or Advanced (`session.detectionMode`).
       detectionMode: 'Detection',
@@ -3485,6 +3533,9 @@ export const en = {
       notReady: 'No cloud GPU is ready. Nothing was sent. Set one up in Settings, Cloud.',
       consentFailed: 'The cloud request could not be prepared. Nothing was sent.',
       permissionFailed: 'The cloud setting could not be saved. It is unchanged.',
+      workSizeFailed: 'The FLUX 3 working size could not be saved. It is unchanged.',
+      finishingFailed: 'The finishing could not be saved. It is unchanged.',
+      generationFailed: 'The generation choice could not be saved. It is unchanged.',
       // How a render ended: exactly one of these per render.
       finished: 'Cloud render finished in {seconds} s.',
       cancelled: 'Cloud render cancelled.',

@@ -303,6 +303,426 @@ crop). Peak VRAM, Klein 9B 13.1 GiB, FLUX 3 17.9 GiB with both encoders held. Sp
 
 Not measured: other seeds, black-and-white balloons, FLUX 3 at 8 steps on colour, an L4.
 
-## Go or no-go
+## Go or no-go (2026-10-19)
 
 No-go for now: on the first bench FLUX 3 matched Klein 9B but did not beat it. Worth one more bench (balloons, colour, an L4, 4 to 8 steps) only if the lower VRAM matters.
+
+## What benches 1 and 2 got wrong
+
+Both benches measured LaMa, not FLUX 3:
+- **The reference was the LaMa-filled crop.** FLUX 3 is an edit model. With the lettering already
+  gone from its reference and every token outside the hole held to that reference, it could only
+  sharpen LaMa's guess. That is why every arm looked "the same as `k9`".
+- **The time shift was 6.93.** BFL changed its reference sampler to 16.0 on 2026-10-17. Diffusers
+  0.42.0 still builds the scheduler with 6.93, so the benches sampled a schedule BFL no longer uses.
+
+## Bench 3 (2026-10-26): the edit recipe, 17 real regions, Modal L40S
+
+The recipe now in `deploy/cloud/common/flux3.py`: the real crop, lettering included, as the
+reference; a prompt that says where the lettering is; BFL's sampling (16 steps, shift 16.0, noise
+drawn as CPU tokens and cast to bf16, the autoencoder in float32); no LaMa, no prompt upsampler.
+The prompt is the one the user brought from another manga tool on 2026-10-26, with `{location}`
+filled from the hint ("upper right").
+
+Input: 17 regions the app's Detect run would send to the cloud from pages 182, 185 and 187 of the
+real chapter (`spike-cloud-crops export`, preprocessing 2.0.0): 15 balloons and narration
+boxes, and one sound effect over speed lines. The gate held the other sound effects back.
+Profile aizendazai46, throwaway app `mc-f3edit-bench`, one L40S. The live Qwen v4 recipe on the
+same crops is the baseline.
+
+| Arm | Change | s/crop (median) | Peak VRAM (torch) | Black or grey fill in a white balloon |
+|---|---|---|---|---|
+| `words_s1` | user's prompt as given, seed 1 | 5.6 | 8.4 GiB | 2 of 17 (182_00, 182_03 painted black) |
+| `plain_s1`, `plain_s2` | without ", including black or shaded fills", seeds 1 and 2 | 5.6 | 8.4 GiB | 0 of 34 |
+| `plain_hold` | as `plain_s1`, tokens outside the grown hint held | 5.8 | 8.4 GiB | 0 of 17 |
+| `plain_box` | the place as a FLUX 3 target box instead of words | 5.7 | 8.4 GiB | 3 of 17 |
+| `plain8` | as `plain_s1`, 8 steps | 3.0 | 8.4 GiB | 0 of 17 |
+| `qwen4` | live Qwen v4 recipe | 16.2 | 21.4 GiB | not comparable: see below |
+
+An earlier probe on 3 crops and 4 seeds gave the same picture: the user's sentence painted one
+balloon black in 12 renders, no fill sentence left grey blotches in 4 of 12, and the shortened
+sentence none in 12. So the recipe drops that clause: 0 of 80 renders across seeds 1 to 4.
+
+By eye:
+- **FLUX 3 keeps every balloon and its outline and removes only the lettering.** Furigana,
+  small kana and the one sound effect came out clean. Lettering outside the hint (a `キッ`
+  beside a balloon) was left alone, as the prompt asks.
+- **Qwen v4 erased whole balloons** on 8 of the 17 crops and drew art where they were (a figure,
+  a tree, clouds, a wall). The app writes only inside the lettering's mask, so on the page that
+  shows as patches of new art inside a white balloon.
+- **The hold hurts.** On 185_00 the hint did not cover all the lettering, and the hold kept what
+  it missed. Off by default.
+- **The target box hurts.** It painted three balloons grey or black.
+- **8 steps look the same as 16** at full size on these crops. The recipe keeps BFL's 16: the cost
+  is about half a cent a crop.
+
+Speed: 11.4 s per working megapixel at 16 steps (11.8 at most), 6.2 at 8; Qwen 40. Load 14 to
+26 s. Spend: about $0.70 for the seed download, a smoke run, two probes and this bench (estimated from GPU time).
+
+Not measured: host memory and nvidia-smi VRAM (so one copy per container, 24 GiB, the bench's
+size), a black or shaded balloon, colour pages, Beam, an L4.
+
+## Bench 3b (2026-10-26): post-processing against truth
+
+The other tool's post-processing (grayscale, global then local tone, Poisson lighting, the page's
+own screentone, contour protection, the write mask), prototyped in Python and then ported to
+`crates/cleaner-core/src/engines/postprocess.rs` as preprocessing 3.0.0. Real lettering has no
+truth under it, so outlined katakana sound effects were drawn over real pages (black fill, white
+outline, rotated) and FLUX 3 removed them (the recipe above, seed 1). Scores inside the write mask
+against the page as it was: mean absolute error, the same after a 2.5 px blur (tone), and the
+correlation of the 1.5 px detail (1 = dots in phase).
+
+| Set | Raw composite | Rust 3.0.0 |
+|---|---|---|
+| 15 crops, five halftone pages (`spikes/screentone-fill/corpus`) | 31.0 / 11.2 / 0.48 | 27.2 / 7.7 / 0.57 |
+| 16 crops, pages 180 to 188 (hand-drawn texture) | 34.7 / 17.4 / 0.44 | 34.3 / 16.2 / 0.44 |
+
+- The screen step ran on 5 of the 15 halftone crops and none of the others: the hand-drawn
+  texture never repeats at 0.8. Where FLUX 3 painted a flat grey blob over a dot screen
+  (wizard2-21), error went from 42.6 to 18.3 and the dots came back in phase.
+- Two crops got worse, by under one tone level; none by more.
+- FLUX 3 itself was the larger error on the hard crops: it erased black strokes under the lettering
+  and a strand of hair, which no post-processing restores.
+
+## Bench 4 (2026-10-26): the official bf16 weights against the 4 bit copy
+
+The other tool needs about 19 GB at its lowest setting. That matches the official bf16 set, not
+the 4 bit copy the recipe pins. Same recipe, prompt, seed and crops as bench 3b; only the snapshot
+differs: `black-forest-labs/flux-3-image-klein` at `337337621b8526e120f2275d250242f4a6bedd75`,
+the transformer, text encoder and VAE folders (20.3 GB; gated, licence accepted on the user's
+Hugging Face account). One L40S per arm, in parallel, profile aizendazai46. The 4 bit arm gave
+bench 3b's answers again bit for bit. Scores as in bench 3b (mae / tone / screen).
+
+| Set | 4 bit raw | bf16 raw | 4 bit, Rust 3.0.0 | bf16, Rust 3.0.0 |
+|---|---|---|---|---|
+| 15 halftone crops | 31.0 / 11.2 / 0.48 | 28.4 / 9.3 / 0.55 | 27.2 / 7.7 / 0.57 | 25.7 / 6.7 / 0.60 |
+| 16 chapter crops (180 to 188) | 34.7 / 17.4 / 0.44 | 34.2 / 16.8 / 0.47 | 34.3 / 16.2 / 0.44 | 33.9 / 16.0 / 0.47 |
+
+- Halftone: bf16 had the lower error on 13 of 15 crops raw and the higher on none (0.3 level
+  margin); 10 and 1 after the 3.0.0 post-processing. It keeps more of the dot screen under the
+  lettering (wizard2-21_s0 screen 0.01 to 0.38 raw). Chapter pages: 8 better, 3 worse.
+- 17 real balloon crops (pages 182, 185, 187): both clean. Faint ghosts of the letters stay in the
+  white balloons, 1 to 2 levels darker on average inside the lettering, except 182_04 (4 bit 11.3,
+  bf16 3.8). Neither redraws what FLUX 3 drops: sample_s1's third circle is missing in both.
+- At these sizes (working long side 768): bf16 5.6 s mean, 7.3 s max, 21.1 GiB peak, 19.0 GiB
+  after load; 4 bit 6.6 s mean, 15.3 s max, 8.4 GiB peak. bf16 is not slower on an L40S. Its
+  21.1 GiB peak is close to an L4's 24 GB, which was not tried.
+- Spend: $0.53 (Modal billing report), test volume deleted.
+
+bf16 is better, most on screentone, but by a few levels, not by a wide margin. It does not on its
+own explain a much better result in the other tool.
+
+Tone. FLUX 3 (bf16) moves the brightness of the page it redraws: away from the mask, the 4 px
+low-pass of its answer is off the page's by under 4 levels at the median but 10 to 20 levels
+brighter in the brightest tenth on most crops. The resize to and from the working size accounts
+for under 1 level of that (3 on blackjack1-016). The 3.0.0 post-processing takes the error inside
+the mask from 9.3 to 6.7 levels on halftone; it is worst on sample_s0 and sample_s1, where the gain
+and offset both hit their bounds (1.15, -32) and sample_s1 ends 10 levels too dark. A prototype that
+pulled each background region's tone inside the mask to a membrane of the page's own tone in that
+region, after 3.0.0, was worse on 14 of 31 crops and better on 5, and was dropped.
+
+## Bench 5 (2026-10-26): the screen step redrawn, working size and prompt arms
+
+The other tool's results on real pages keep the screentone under removed lettering; ours left
+flat grey patches. The 3.0.0 screen step (repeat offsets at a correlation of 0.8, then a copy)
+ran on 5 of 15 halftone crops. The test pages' screens are fine: dots 2 to 4 px apart, most at 45
+degrees, so their frequency is past half the sample rate along the diagonal, and integer repeat
+offsets miss them by a third of a cycle.
+
+The screen step is now `crates/cleaner-core/src/engines/halftone.rs` (prototyped in Python first).
+Per background region next to the mask: the strongest spectral peaks of the page's fine detail,
+each refined by the turn of its demodulated phase; the page's local phase at each, carried into
+the mask from coarse to fine; for each pair, a table of the page's value by place in the dot cell
+and tone, built on alternate 16 px blocks and scored on the others; the best pair redraws the
+mask at the answer's tone if it scores 0.5. Same crops, seed and scores as bench 3b (mae / tone /
+screen), bf16 answers at the 768 working size:
+
+| Set | 3.0.0 as it was | screen step redrawn |
+|---|---|---|
+| 15 halftone crops | 25.7 / 6.7 / 0.60 | 19.2 / 6.9 / 0.73 (14 better, 0 worse) |
+| 16 chapter crops (180 to 188) | 33.9 / 16.0 / 0.47 | 31.9 / 16.0 / 0.54 (7 better, 0 worse) |
+
+The 4 bit answers gain the same (halftone 27.2 to 19.5, 14 better; chapter 34.3 to 32.2, 7
+better; none worse). The chapter pages have screens after all: the old step never found them. A
+held-out score of 0.8 left 5 halftone crops untouched that 0.5 improves; 0.4 changes nothing more.
+Run time in a release build: 0.5 s mean, 0.9 s worst per 448 px crop (whole post-processing).
+
+FLUX 3 arms through the new post-processing, bf16, one seed, each against the 768 working size
+(mae, crops better / worse at a 0.3 level margin, median change over all 31):
+
+| Arm | Halftone | Chapter | Median |
+|---|---|---|---|
+| working long side 1280 | 17.1, 11 / 4 | 30.9, 10 / 3 | -1.8 |
+| 1024 | 19.1, 6 / 9 | 26.7, 6 / 9 | +0.7 |
+| 1024, screentone sentence | 19.3, 6 / 8 | 32.8, 5 / 11 | +1.1 |
+| 768, screentone sentence | 19.4, 5 / 5 | 34.0, 1 / 6 | +0.1 |
+| 768, rewritten prompt | 19.1, 6 / 4 | 27.9, 3 / 6 | +0.1 |
+| 4 bit, 768 | 19.5, 2 / 6 | 32.2, 4 / 6 | +0.3 |
+
+- The sentence asking for the screen to continue ("never as flat grey") made it worse. The
+  rewritten prompt moved two outliers and little else. The user's prompt stays.
+- 1280 is the only arm better on both sets. 1024 is worse, so it is not a smooth trend; one seed.
+  At 1280 a 448 px crop takes 20.1 s on an L40S (768: 5.6 s) and peaks at 24.9 GiB in bf16.
+- Neither the model arms nor the post-processing draw what the lettering hid completely
+  (sample_s1's third circle).
+- Spend: $1.32 (Modal billing report; estimated $1 beforehand), test volume deleted.
+
+## Choices left to the user (2026-10-26)
+
+Benches 4 and 5 found two better arms, each by a margin that depends on the page: the bf16
+weights and a 1280 working long side. Neither is pinned in place of the old answer; both are
+choices.
+
+- Weights: setup lists FLUX 3 Image Klein (bf16) beside the 4 bit model, recipe
+  `mc-flux3-klein-bf16-edit-v1`, otherwise the same recipe. BFL's repository is gated, so the seed
+  reads `unsloth/flux-3-image-klein` at `67662613c10c92a1364cb3da8c6f7447977c7ce9` instead: its
+  transformer, text encoder and VAE folders and licence, 23 files, 20.3 GB, each with the same
+  SHA-256 as BFL's repository at `337337621b8526e120f2275d250242f4a6bedd75` (read from both Hub trees,
+  the gated one with the user's token). The rest of that repository (a single-file checkpoint, fp8
+  and nvfp4 variants, images; 23 GB) is not downloaded. L40S on Modal, RTX5090 on Beam: 21.1 GiB
+  peak at 768 is too close to an L4's 24 GB.
+- Working size: Auto clean offers 768, 1024 or 1280 for a FLUX 3 profile. The request carries it
+  as `work_long_side` in the recipe, like the guidance text, and it is in the request digest; the
+  worker refuses any other value and any other recipe. 768 is sent as nothing, so its requests
+  are the ones a worker without the option takes; no FLUX 3 worker was deployed before it.
+
+Live check (2026-10-26, profile aizendazai46): a throwaway installation of the bf16 model set up
+by the real provisioner (plan, apply, cleanup), L40S, 60 s idle window, then 7 real crops sent
+through its gateway one at a time. Spend $0.14 (Modal billing report); every resource deleted by
+the provisioner's own cleanup.
+
+- Setup, the 20 GB seed from unsloth's copy included, took about 4 minutes and passed every step
+  (file sizes, health, model info naming `mc-flux3-klein-bf16-edit-v1`).
+- At the default size the 4 answers (182_00, 182_04, 185_03, 187_00) are bit for bit bench 4's bf16
+  answers from BFL's own repository: same weights, same recipe, same worker.
+- Wall time per crop through the gateway, submit to completed: 47 s for the first (cold start and
+  load), about 10 s warm at 768 (one 768 crop took 22 s), 16 s at 1024, 23 s at 1280.
+- A requested size reached the worker: 1024 and 1280 gave other answers. On 182_04 the 768 answer
+  also erased a hand-drawn sound effect outside the hint, and the 1280 answer left it; the mean
+  change outside the hint was 14.7 levels at 768 and 5.7 at 1280 (187_00: 8.7 and 4.7). The client
+  writes only inside the mask, so this is how faithful the answer is, not what reaches the page.
+- Found and fixed: the plan's note said a cold start loads 5.5 GB of weights for every model; it
+  now states the chosen model's size (20.3 GB here).
+
+## Bench 6 (2026-10-26): 3.0.0 on local LaMa and cloud Qwen v4
+
+Whether the 3.0.0 post-processing (`postprocess::settle`) helps the two other cleaning models.
+Same 31 synthetic crops, scores and 0.3 level margin as benches 3b and 5 (mae / tone / screen
+inside alpha > 0). Every arm is written through the same `alpha.png` in 8-bit space, and every
+answer is read as the app reads a grey page's answer (the mean of R, G and B). A temporary ignored
+test in `engines/lama.rs` ran the app's own code; the file was restored from its backup and
+matches it byte for byte. Re-run this way, FLUX 3 bf16 gives bench 5's numbers to 0.1 level, so
+its rows below are the reference.
+
+**LaMa** ran through the rung's own steps: the region's `Fitted::ink` (here the hint, fitted as a
+manual mask so that the app's write weight is `alpha.png`; the app's ramp matched it on every
+pixel of all 31 crops), one 512 tile cut from the whole lettered page, the hole zeroed, and the
+provider `Automatic` picks on this Mac (WebGPU, 0.6 to 0.9 s a crop). The rung does not write its
+raw answer today: each tile goes through 2.0.0's tone curve first (`ToneSite` in
+`Inpainter::render`). That is the "today" row; the app's own `Inpainter::render` matched it to 0.5
+level on every crop. L2 is `screentone::render` on the same hole, written through its own mask
+with no ramp, as the app writes it.
+
+**Qwen** ran on a throwaway installation made by the real provisioner (profile aizendazai46, one
+L40S, 60 s idle window): `Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32`, recipe
+`mc-qwen-image-edit-2511-v4`, 8 steps, seed 1, `qwen_edit` target auto, each crop with its
+`hint.png`. Q2 is 2.0.0's tone curve (`ToneSite::measure` and `ToneReport::corrected`) measured on
+the 448 crop the model was shown. The app measures it on the V2 crop, 128 px wider a side, which
+Qwen was not shown here; the ring it reads (6 to 18 px outside the applied mask) lies inside the
+448 crop on every one of these.
+
+| Arm | Halftone (15) | better / worse | median | Chapter (16) | better / worse | median |
+|---|---|---|---|---|---|---|
+| L0 LaMa raw | 16.0 / 6.8 / 0.84 | | | 24.5 / 10.6 / 0.65 | | |
+| LaMa today (2.0.0 curve) | 15.7 / 6.2 / 0.84 | 5 / 0 | -0.24 | 24.3 / 10.3 / 0.65 | 4 / 0 | -0.14 |
+| L1 LaMa, 3.0.0 | 14.5 / 6.1 / 0.85 | 10 / 2 | -1.52 | 24.1 / 10.5 / 0.65 | 7 / 2 | -0.23 |
+| L1, 3.0.0 on the hole only | 14.7 / 7.1 / 0.85 | 11 / 2 | -1.47 | 23.9 / 10.5 / 0.66 | 7 / 2 | -0.10 |
+| L2 Screentone engine | 27.3 / 15.5 / 0.65 | 0 / 14 | +10.21 | 36.1 / 23.8 / 0.47 | 2 / 14 | +7.34 |
+| Q0 Qwen raw | 31.1 / 5.6 / 0.52 | | | 30.4 / 15.1 / 0.57 | | |
+| Q2 Qwen, 2.0.0 (today) | 31.2 / 5.5 / 0.52 | 1 / 2 | +0.07 | 30.4 / 15.1 / 0.57 | 0 / 0 | 0.00 |
+| Q1 Qwen, 3.0.0 | 17.5 / 5.0 / 0.76 | 14 / 0 | -14.46 | 28.4 / 15.1 / 0.64 | 8 / 0 | -0.35 |
+| FLUX 3 bf16 raw | 28.4 / 9.4 / 0.55 | | | 34.1 / 16.8 / 0.47 | | |
+| FLUX 3 bf16, 3.0.0 (reference) | 19.3 / 6.9 / 0.73 | 14 / 0 | -6.45 | 32.0 / 16.0 / 0.54 | 9 / 0 | -0.49 |
+
+Each model's rows count against its own raw arm. Against today's LaMa path, L1 is 10 better and
+2 worse on halftone (median -1.12) and 5 and 2 on the chapter pages (median -0.06).
+
+Mean error rewards blur, so detail strength was read too: the std of the 1.5 px detail inside the
+mask over the truth's (1 = as crisp as the page). Halftone: LaMa 1.00 raw, 0.92 after 3.0.0; Qwen
+1.04 and 0.89; FLUX 3 0.97 and 0.97. Chapter: LaMa 0.97 and 0.94; Qwen 0.86 and 0.88. At 4x
+nearest-neighbour zooms Qwen's raw screen is grey mush and the settled one is crisp dots in phase,
+so its gain is real. LaMa's dots are crisp and in phase before and after, a little lower in
+contrast after, and a line through the hole a little softer: part of LaMa's halftone gain may be
+the softening that mean error rewards.
+
+LaMa:
+- As expected, tone and lighting do little: the fitted gain stays within 0.96 to 1.02; the offset
+  is up to 10 levels (LaMa returns some crops darker), which 2.0.0's curve also corrects. The
+  screen step is the gain. It ran on 14 of 15 halftone crops and 9 of 16 chapter crops.
+- The settle costs where LaMa was already right. LaMa keeps the page outside its hole, so in the
+  5 px ramp band its answer is the page to within a few levels (mae 6.0 halftone, 5.0 chapter), and
+  the screen step redraws that band too (6.8 and 5.7). Settling only the hole keeps the band (5.9,
+  4.8) but loses the tone gain inside the hole (7.4 to 8.6 halftone); the totals come out the
+  same.
+- Worse at 0.3: blackjack1-016_s1 (15.9 to 16.5), wizard2-21_s1 (16.6 to 17.0), 181_s0 (70.4 to
+  70.8) and 185_s1 (27.2 to 29.2, the screen redrawn over a grey LaMa painted where the page is
+  black and white).
+
+Qwen:
+- Qwen keeps the page's tone (tone 5.6 on halftone, the best of the three raw) and loses its dots
+  (screen 0.52); 3.0.0 puts them back in phase. On doratama-18_s0 Qwen drew a coarse dot screen of
+  its own and the settle replaced it (35.8 to 7.6). Q2 changes almost nothing: Qwen's tone is not
+  what is wrong.
+- Drift guard. Two crops changed the drawing near the lettering: 185_s1 (46% of the page within
+  64 px of the mask moved by more than 24 levels after the 2.5 px blur; Qwen painted black strokes
+  white) and 184_s0 (29%; it carried a balloon's white into the grey). On 185_s1 the fit stayed at
+  gain 1.0, offset +0.2, and the crop did not get worse. On 184_s0 the fit ran to both bounds (gain
+  1.15, offset -23.9) and the crop still scored better (43.3 to 38.2), though the settle darkened a
+  blotch Qwen had invented. No Qwen crop got worse.
+- Bench 3's 17 real balloon crops with their Qwen v4 answers (no truth, so by eye and by how far
+  the settle moved the patch): where Qwen drew art inside a white balloon (182_00, 185_01, 185_04,
+  185_05, 187_00, 187_03, 187_04), the settled patch is still that art. The guard kept the tone fit
+  near no change on five of them (gain 1.00 to 1.03, offset -6.5 to 0), and on four of those the
+  settle moved the patch by under 3 levels: 3.0.0 neither hides nor worsens the failure. Three moved by 16 to 17 levels inside the mask: 185_05 (offset +20.8, the
+  drawn shape lightened toward the balloon's white), 187_04 (gain 1.08, offset -10, the shape
+  darkened) and 182_00 (the screen step put dots into the drawn art). The faint letter ghosts
+  Qwen leaves in clean balloons stay.
+
+Side by side:
+- On these crops LaMa raw is better than either cloud model after 3.0.0 (halftone 16.0 against
+  17.5 and 19.3; chapter 24.5 against 28.4 and 32.0), inside the hole as well (halftone 19.5
+  against Qwen 20.1 and FLUX 3 21.7). LaMa reads 512 px of the real page around the lettering and
+  redraws only the hole. It drew sample_s1's third circle, which neither cloud model does.
+- The Screentone engine was worse than LaMa on 28 of 31 crops and better on 2 (180_s0, 181_s0).
+  On these large holes (64 to 96 px glyphs
+  with 4 to 7 px outlines) its copy took sources from black panel borders (sample_s1,
+  blackjack1-016_s2), and on the chapter pages it filled white paper with dots (183_s0).
+
+Settle time, release build, per 448 px crop on this Mac: LaMa answers 0.47 s mean, 0.73 s worst;
+Qwen 0.46 and 0.72; FLUX 3 0.48 and 0.79. For LaMa that is close to the model run itself.
+
+Qwen run: 22.7 s median per crop through the gateway, submit to result (24.0 s at most), and 91 s
+for the first with the cold start. No job ran long enough for a second seed, so each crop took one
+render. Setup took about 2 minutes. Spend $0.63 (Modal billing report for the app; estimated $0.50,
+$1.25 at most beforehand). The provisioner's own cleanup deleted the app, dict, volume and token,
+and the endpoint key file was deleted.
+
+What a change would be (neither made):
+- Qwen: `RECIPE_PROD_QWEN`'s `RenderRecipe` in `deploy/cloud/common/manifest.py` takes
+  `PROD_EDIT_PREPROCESSING_VERSION`; `deploy/cloud/tests/test_recipe_parity.py` names the recipes
+  on 3.0.0; the deployed Qwen profiles are redeployed so their gateways advertise it. The request
+  does not change (V3 crops as V2), only the client's composite. Results prepared under 2.0.0 keep
+  2.0.0. Whether the recipe id moves to a v5 depends on whether a deployed v4 gateway must keep
+  advertising 2.0.0 to older clients.
+- LaMa: in `Inpainter::render` (`crates/cleaner-core/src/engines/lama.rs`), per tile, in place of
+  the `ToneSite` measure and `corrected` call: `postprocess::settle` on the tile crop as the model
+  saw it, its answer, the pixels this tile writes (applied mask, alpha above 0) as the mask, and
+  the in-page opaque pixels as the page; commit the settled values through the same ramp, and set
+  `Rendered::matched`. `run::Made` drops the tone report today, so the provenance record needs
+  carrying too. A per-tile settle on tiled regions (above 512 px) was not measured.
+
+Sheets (crop, truth, raw, settled, Screentone, FLUX 3) are in the session scratchpad only; the
+crops are copyrighted pages.
+
+## Bench 7 (2026-10-26): the screen step copies the page's own dots
+
+The user saw bench 5's redrawn screens as blurry: the pattern right, the dots soft. Bench 5's redraw
+looked each mask pixel up in a table of the page's value by place in the dot cell and tone, an
+average of many dots, and mean error rewards that average. The other tool's step 4 copies original
+pixels through a phase-preserving shift and adjusts their brightness. The screen step now does that
+(`engines/halftone.rs`):
+
+- Shifts: every whole-pixel shift up to 64 px whose phase error on both screen frequencies is at
+  most 0.05 cycle; the 16 closest in phase in each of four bands of length are tried, and kept
+  where the page's detail one shift away correlates with itself by 0.8.
+- Sources: page pixels of the region whose 5 x 5 patch matches the patch one shift away (mean
+  difference at most 30 levels) for at least half the shifts. Without this check the copy took
+  pieces of the page's own lettering, grid lines and hair edges.
+- Copy: each mask pixel takes the source one shift away closest to the answer's tone, within 16
+  levels, plus that tone difference. A pixel no shift reaches from a source keeps bench 5's table
+  redraw.
+- A second pass that hopped from copied pixels into the middle of wide masks drew faint streaks and
+  dots in black areas by eye, so it was dropped.
+
+A bug found on the way: the answer's contours inside the mask included FLUX 3's own moire stripes
+(24% of the mask on wizard2-21_s0, which has no drawn line there), and every step fades out near a
+contour, so the old redraw was held off most of that patch. The answer's contours are now found
+under a 1.5 px blur (`DESCREEN_SIGMA` in `engines/postprocess.rs`).
+
+Same 31 synthetic crops, bf16 answers at 768 (mae / tone / screen / sharp, where sharp is the std of
+the 1.5 px detail inside the mask core over the truth's, 1 = as crisp as the page):
+
+| Arm | Halftone (15) | Chapter (16) |
+|---|---|---|
+| Bench 5 redraw | 19.2 / 6.9 / 0.73 / 0.96 | 31.9 / 16.0 / 0.54 / 0.90 |
+| Bench 5 redraw, contour fix | 17.7 / 6.9 / 0.76 / 0.96 | 31.5 / 16.0 / 0.56 / 0.91 |
+| Copy, contour fix (shipped) | 18.3 / 6.8 / 0.76 / 1.01 | 31.6 / 16.0 / 0.56 / 0.92 |
+
+- Against the old redraw: 7 halftone crops better, 5 worse; chapter 5 and 1. The 4 bit answers:
+  19.5 to 19.0 (6 and 5), 32.2 to 31.8.
+- Against the redraw with the same contour fix, the copy has 0.6 level more mean error and the same
+  phase (0.76): crisp dots half a pixel off cost more than an average. On the blurriest crops sharp
+  rises from the fixed redraw to the copy: blackjack1-016_s2 0.82 to 0.94, wizard2-21_s0 0.84 to
+  0.98. By eye at 4x the copied dots match the page's contrast and size; the redraw's are fainter.
+- Worst crop by error: wizard2-21_s2, 10.8 to 16.9 against the redraw with the fix, by eye clean
+  dots with a small band where the copy changes source.
+- Run time of the whole post-processing in a release build: 0.66 s mean, 1.19 s worst per 448 px
+  crop (was 0.5 and 0.9).
+- Bench 6's LaMa and Qwen rows used bench 5's redraw and were not re-run.
+
+Not measured: real lettering, colour pages, 2048 px crops, a second seed, LaMa and Qwen through the
+copy.
+
+## Bench 8 (2026-10-26): every finishing, and the reference tool's generation, as settings
+
+Every post-processing version measured so far is a choice again (`Finishing` in
+`crates/cleaner-core/src/engines/postprocess.rs`, Settings > Cloud > Finishing; the default is
+bench 7's). The reference tool's finishing v2 is ported to Rust (`engines/finishing.rs`) and is a
+choice too. Its four generation parts are switches sent to the worker (`flux3_generation`,
+docs/cloud-contract.md section 9). Local only, no cloud spend.
+
+**Port check.** The port was run on the reference tool's own two examples (its original crop,
+raw answer at source size and mask) against its shipped outputs, inside the mask:
+
+| example | off, global, local | poisson | raster |
+|---|---|---|---|
+| screentone | equal | mean 0.14, max 1 | mean 0.96, max 52 |
+| redrawing | equal | mean 0.02, max 1 | equal (declines, same reason) |
+
+Poisson's 1 level is OpenCV's float32 solve and byte truncation. Raster finds the same
+frequencies (within 1.1e-4), pixel count (27596) and regions; the rest is numpy's random
+sampler, which the port replaces with a seeded one of the same counts. With the port's sampler
+patched into the Python, the two differ at 6 pixels by 1 level.
+
+**Fake lettering, bf16 answers** (mean of 15 halftone crops; mae, tone, screen correlation,
+sharpness; old table redraw first for scale):
+
+| finishing | halftone | chapter pages (mae) |
+|---|---|---|
+| redraw-sharp-contours (bench 5) | 19.2 / 6.9 / 0.73 / 0.96 | 31.9 |
+| copy (bench 7, default) | 18.3 / 6.8 / 0.76 / 1.01 | 31.6 |
+| copy-hops | 19.4 / 7.3 / 0.74 / 1.03 | 31.7 |
+| redraw | 17.7 / 6.9 / 0.76 / 0.96 | 31.5 |
+| repeat-offsets (bench 3b) | 25.7 / 6.7 / 0.60 / 0.97 | 33.9 |
+| tone-only | 27.5 / 6.7 / 0.56 / 0.96 | 33.9 |
+| reference-off | 28.5 / 10.0 / 0.55 / 0.96 | 34.1 |
+| reference-global | 27.9 / 7.9 / 0.55 / 1.00 | 34.1 |
+| reference-local | 28.6 / 8.6 / 0.55 / 0.98 | 33.2 |
+| reference-poisson | 28.6 / 8.7 / 0.55 / 0.98 | 33.1 |
+| reference-raster | 26.7 / 12.1 / 0.65 / 1.05 | 33.8 |
+
+The two old versions reproduce their own benches exactly (19.2 and 18.3), so nothing was lost
+in bringing them back. The reference finishing does little on these answers: our FLUX 3 answers
+lose the page's dots, and only its raster step puts any back; raster also matches no tone, so
+its tone error is the worst. Copy-hops is sharper than copy and worse in mean error, as bench 7
+saw (streaks deep in wide masks).
+
+**The reference tool's own examples, by eye** (3x crops of each version over its raw answer):
+its answers already carry the page's screen in phase, so on the screentone example every version
+looks alike and copy is as crisp as the page. On its line-art example our copy and redraw add
+faint grey specks and one dark smudge to white paper near hatching, which its Poisson and
+raster do not: the screen step takes hatching next to the mask for a screen. Not fixed.
+
+The generation switches are covered by worker tests with a fake pipeline and by a shared request
+fixture; no GPU render has used them yet.
+

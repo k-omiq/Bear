@@ -116,10 +116,15 @@ def begin_run(store: Any, handle: str, clock: Callable[[], float] = time.time) -
 
 def runner_for(model_id: str) -> Callable[[str], Any]:
     """The runner class that renders a production model's recipe."""
-    if production_model(model_id).runner == "qwen":
+    runner = production_model(model_id).runner
+    if runner == "qwen":
         from deploy.cloud.common.qwen import QwenEditRunner
 
         return QwenEditRunner
+    if runner == "flux3":
+        from deploy.cloud.common.flux3 import Flux3EditRunner
+
+        return Flux3EditRunner
     return SdnqFluxRunner
 
 

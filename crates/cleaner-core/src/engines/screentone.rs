@@ -239,7 +239,10 @@ fn confidence(hp: &Grid, known: &GridMask, offs: &[(i64, i64, f64)]) -> Grid {
     }
 }
 
-fn sources(raw: &Grid, hole: &GridMask, avoid: &GridMask, offs: &[(i64, i64, f64)]) -> GridMask {
+/// Known pixels (not `hole`, not `avoid`) whose fine detail repeats one
+/// offset away: the pixels a copy may take. Also the screen step of
+/// [`super::postprocess`] ([`super::halftone`]).
+pub(super) fn sources(raw: &Grid, hole: &GridMask, avoid: &GridMask, offs: &[(i64, i64, f64)]) -> GridMask {
     let known = hole.dilate(2).not().and_not(avoid);
     let hp = detail(raw, &known);
     let conf = confidence(&hp, &known, offs);
@@ -390,6 +393,83 @@ pub fn fill_with(gray: &Grid, hole: &GridMask, avoid: &GridMask, tone_override: 
     }
     Filled { used, gray: out, from: copy.from, correction, screen: true }
 }
+
+
+/// The first screen step of [`super::postprocess`] (bench 3b, kept as the
+/// [`super::postprocess::Finishing::RepeatOffsets`] choice): the page's own
+/// dots, in phase, for the pixels of `mask` an edit model redrew with a screen
+/// of its own.
+///
+/// `page` is the crop as the model was shown it, `answer` its answer after the
+/// tone steps, both grey. The screen is measured on the page within
+/// [`RESTORE_RING`] px of the mask, not over the whole crop, where art farther
+/// out would dilute a screen that holds right up to the lettering; its
+/// repeat offsets count only at a correlation of `min_corr`. A mask pixel is
+/// restored when the background region it lies in (`protected` contours are
+/// its walls) holds enough screen outside the mask, and it copies only from
+/// that screen, aiming at the answer's own blurred tone. Returns the copy and
+/// the weight to blend it at (the local screen confidence; zero where nothing
+/// was copied), or `None` where the page shows no screen to restore.
+pub(crate) fn restore(
+    page: &Grid,
+    answer: &Grid,
+    mask: &GridMask,
+    protected: &GridMask,
+    inside: &GridMask,
+    min_corr: f64,
+) -> Option<(Grid, Grid)> {
+    /// Screen sources a region needs before its mask pixels are restored, and
+    /// in all.
+    const REGION_SOURCES: usize = 150;
+    const SOURCES: usize = 200;
+    /// A source's own repeat confidence, and the window the weight is read in.
+    const SOURCE_CONFIDENCE: f64 = 0.6;
+    const WEIGHT_SIGMA: f64 = 8.0;
+    const FAR: usize = 100;
+    let n = page.data.len();
+    let known = mask.dilate(2).not().and(inside);
+    let hp = detail(page, &known);
+    let from_mask = distance_to(mask);
+    let near = GridMask { w: page.w, h: page.h, data: (0..n).map(|i| known.data[i] && from_mask.data[i] <= RESTORE_RING).collect() };
+    let ac = autocorr(&hp.keep(&near, 0.0), &near, FAR);
+    let offs: Vec<_> = peaks(&ac, FAR, 16, 0.55, 0.2, None).into_iter().filter(|p| p.2 >= min_corr).collect();
+    let best = offs.first()?.2;
+    let conf = confidence(&hp, &known, &offs);
+    let src = GridMask { w: page.w, h: page.h, data: (0..n).map(|i| known.data[i] && !protected.data[i] && conf.data[i] >= SOURCE_CONFIDENCE).collect() };
+    if src.count() < SOURCES {
+        return None;
+    }
+    let (label, _) = components(&protected.not());
+    let mut support = vec![0usize; label.iter().max().map_or(1, |m| m + 1)];
+    for i in 0..n {
+        if src.data[i] {
+            support[label[i]] += 1;
+        }
+    }
+    let target = GridMask {
+        w: page.w,
+        h: page.h,
+        data: (0..n).map(|i| mask.data[i] && !protected.data[i] && support[label[i]] >= REGION_SOURCES).collect(),
+    };
+    if !target.any() {
+        return None;
+    }
+    let far = peaks(&ac, FAR, FAR, 0.6, min_corr.max(0.3), Some(best));
+    let mut all: Vec<(i64, i64)> = offs.iter().chain(&far).map(|p| (p.0, p.1)).collect();
+    all.sort();
+    all.dedup();
+    let copy = onion(&page.keep(&mask.not(), 0.0), &target, &src, &gaussian(answer, 2.0), &all);
+    let (strength, _) = masked_blur(&conf, &known, WEIGHT_SIGMA);
+    let weight = Grid {
+        w: page.w,
+        h: page.h,
+        data: (0..n).map(|i| if target.data[i] && copy.done.data[i] { strength.data[i].clamp(0.0, 1.0) } else { 0.0 }).collect(),
+    };
+    Some((copy.out, weight))
+}
+
+/// How far from the mask [`restore`] measures the page's screen, in px.
+pub const RESTORE_RING: f64 = 48.0;
 
 /// The app engine: the screentone fill over one fitted region of a page.
 ///

@@ -15,6 +15,7 @@ from deploy.cloud.common import weights
 from deploy.cloud.common.jobs import MemoryStore
 from deploy.cloud.common.manifest import (
     MODEL_PROD_FLUX,
+    MODEL_PROD_FLUX3_BF16,
     PROD_SNAPSHOT_FILES,
     PROD_SNAPSHOT_TOTAL_BYTES,
     REVISION_PROD_FLUX,
@@ -108,6 +109,22 @@ class SeedSnapshotTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
+
+    def test_a_partial_repo_downloads_only_its_pinned_files(self) -> None:
+        model = PRODUCTION_MODELS[MODEL_PROD_FLUX3_BF16]
+        calls: List[Dict[str, Any]] = []
+
+        def download(**kwargs: Any) -> str:
+            calls.append(kwargs)
+            write_sparse(Path(kwargs["local_dir"]), model.files)
+            return kwargs["local_dir"]
+
+        result = weights.seed_snapshot(self.root, download, model_id=MODEL_PROD_FLUX3_BF16)
+        self.assertEqual(result["status"], "seeded")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["allow_patterns"], [path for path, _size in model.files])
+        self.assertNotIn("model.safetensors", calls[0]["allow_patterns"])
+        self.assertEqual(sum(size for _path, size in model.files), model.total_bytes)
 
     def test_seed_downloads_the_pin_verifies_marks_and_commits(self) -> None:
         download = FakeDownload()

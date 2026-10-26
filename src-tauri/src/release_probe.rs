@@ -289,6 +289,9 @@ pub fn main() -> Result<(), String> {
         request_digest: request.request_digest.clone(),
         chapter_id: Some(chapter_id.clone()),
         page_index: Some(page_index),
+        work_long_side: None,
+        flux3_generation: None,
+        finishing: None,
     };
     let (_, guard) = journal
         .create_intent(intent_record)

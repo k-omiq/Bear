@@ -317,6 +317,10 @@ pub struct WireRenderRecipe {
     pub native_mask_conditioning: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qwen_edit: Option<crate::engines::render::QwenEdit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_long_side: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flux3_generation: Option<crate::engines::render::Flux3Generation>,
 }
 
 impl From<RenderRecipe> for WireRenderRecipe {
@@ -328,6 +332,8 @@ impl From<RenderRecipe> for WireRenderRecipe {
             model_revision: r.model_revision,
             native_mask_conditioning: r.native_mask_conditioning,
             qwen_edit: r.qwen_edit,
+            work_long_side: r.work_long_side,
+            flux3_generation: r.flux3_generation,
         }
     }
 }
@@ -341,6 +347,9 @@ impl From<WireRenderRecipe> for RenderRecipe {
             model_revision: w.model_revision,
             native_mask_conditioning: w.native_mask_conditioning,
             qwen_edit: w.qwen_edit,
+            work_long_side: w.work_long_side,
+            flux3_generation: w.flux3_generation,
+            finishing: None,
         }
     }
 }
@@ -366,6 +375,21 @@ pub fn validate_recipe(recipe: &WireRenderRecipe) -> Result<(), WireValidationEr
         }
         if edit.description.chars().count() > 500 || edit.description.chars().any(|c| c.is_control()) {
             return Err(WireValidationError::UnsupportedCapability("qwen_description"));
+        }
+    }
+    if let Some(side) = recipe.work_long_side {
+        if !crate::engines::render::takes_work_size(&recipe.recipe_id, &recipe.model_id)
+            || !crate::engines::render::WORK_LONG_SIDES.contains(&side) {
+            return Err(WireValidationError::UnsupportedCapability("work_long_side"));
+        }
+    }
+    if let Some(generation) = recipe.flux3_generation {
+        // Absent is this app's way: an all-own record would hash apart from
+        // the same request without it.
+        if !crate::engines::render::takes_work_size(&recipe.recipe_id, &recipe.model_id)
+            || generation.is_own()
+            || (generation.megapixel_size && recipe.work_long_side.is_some()) {
+            return Err(WireValidationError::UnsupportedCapability("flux3_generation"));
         }
     }
     Ok(())
@@ -735,6 +759,13 @@ pub fn compute_canonical_json_array(meta: &JobRequestMetadata) -> String {
     ]);
     if let Some(edit) = &meta.recipe.qwen_edit {
         canonical_array.as_array_mut().unwrap().push(serde_json::json!([edit.target, edit.description]));
+    }
+    if let Some(side) = meta.recipe.work_long_side {
+        canonical_array.as_array_mut().unwrap().push(serde_json::json!(side));
+    }
+    if let Some(g) = meta.recipe.flux3_generation {
+        canonical_array.as_array_mut().unwrap()
+            .push(serde_json::json!([g.reference_prompt, g.marker, g.reference_shift, g.megapixel_size]));
     }
     serde_json::to_string(&canonical_array).expect("valid JSON array serialization")
 }
@@ -1382,6 +1413,56 @@ mod tests {
     }
 
     #[test]
+    fn a_working_size_matches_python_and_only_flux3_takes_it() {
+        let mut meta: JobRequestMetadata = serde_json::from_str(include_str!("../../../deploy/cloud/fixtures/flux3_work_size_request.json")).unwrap();
+        validate_job_request_metadata(&meta).unwrap();
+        assert_eq!(RenderRecipe::from(meta.recipe.clone()).sampling().steps, 16);
+        assert_eq!(compute_request_digest(&meta), meta.request_digest);
+        let initial = meta.request_digest.clone();
+        meta.recipe.work_long_side = Some(1024);
+        assert_ne!(compute_request_digest(&meta), initial);
+        meta.recipe.work_long_side = None;
+        assert_ne!(compute_request_digest(&meta), initial);
+        meta.recipe.work_long_side = Some(1100);
+        assert!(validate_recipe(&meta.recipe).is_err(), "a size off the list");
+        meta.recipe.work_long_side = Some(1280);
+        meta.recipe.recipe_id = "mc-flux2-klein-inpaint-v2".into();
+        meta.recipe.model_id = "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic".into();
+        assert!(validate_recipe(&meta.recipe).is_err(), "Klein takes no working size");
+        meta.recipe.recipe_id = "mc-flux3-klein-edit-v1".into();
+        assert!(validate_recipe(&meta.recipe).is_err(), "FLUX 3's recipe on Klein");
+        meta.recipe.model_id = "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit".into();
+        assert_eq!(validate_recipe(&meta.recipe), Ok(()));
+    }
+
+    #[test]
+    fn a_generation_choice_matches_python_and_is_flux3_only_and_never_empty() {
+        use crate::engines::render::{megapixel_size, Flux3Generation};
+        let mut meta: JobRequestMetadata = serde_json::from_str(include_str!("../../../deploy/cloud/fixtures/flux3_generation_request.json")).unwrap();
+        validate_job_request_metadata(&meta).unwrap();
+        assert_eq!(meta.recipe.flux3_generation, Some(Flux3Generation { reference_prompt: true, marker: true, reference_shift: false, megapixel_size: true }));
+        assert_eq!(compute_request_digest(&meta), meta.request_digest);
+        let initial = meta.request_digest.clone();
+        meta.recipe.flux3_generation = None;
+        assert_ne!(compute_request_digest(&meta), initial);
+        meta.recipe.flux3_generation = Some(Flux3Generation::default());
+        assert!(validate_recipe(&meta.recipe).is_err(), "an empty choice is sent as none");
+        meta.recipe.flux3_generation = Some(Flux3Generation { megapixel_size: true, ..Flux3Generation::default() });
+        meta.recipe.work_long_side = Some(1280);
+        assert!(validate_recipe(&meta.recipe).is_err(), "one megapixel names no working size");
+        meta.recipe.flux3_generation = Some(Flux3Generation { marker: true, ..Flux3Generation::default() });
+        assert_eq!(validate_recipe(&meta.recipe), Ok(()));
+        meta.recipe.recipe_id = "mc-flux2-klein-inpaint-v2".into();
+        meta.recipe.model_id = "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic".into();
+        meta.recipe.work_long_side = None;
+        assert!(validate_recipe(&meta.recipe).is_err(), "Klein takes no generation choice");
+        // deploy/cloud/common/flux.py megapixel_size, the reference tool's work_size.
+        assert_eq!(megapixel_size(300, 200), (1248, 832));
+        assert_eq!(megapixel_size(2000, 3000), (832, 1248));
+        assert_eq!(megapixel_size(16, 16), (1024, 1024));
+    }
+
+    #[test]
     fn klein_v2_takes_guidance_and_v1_or_another_family_does_not() {
         use crate::engines::render::{QwenEdit, QwenTarget};
         let edit = QwenEdit { target: QwenTarget::SoundEffect, description: "a brick wall".into() };
@@ -1393,6 +1474,8 @@ mod tests {
                 recipe_id: id.into(), preprocessing_version: "2.0.0".into(), model_id: model.into(),
                 model_revision: "45e9cc76cb70f84473ce5c6c2e2282d0ef3c6ecd".into(),
                 native_mask_conditioning: false, qwen_edit: Some(edit.clone()),
+                work_long_side: None,
+                flux3_generation: None,
             };
             assert_eq!(validate_recipe(&recipe), Ok(()), "{id}");
             recipe.recipe_id = id.replace("-v2", "-v1");
@@ -1401,6 +1484,17 @@ mod tests {
             recipe.model_id = "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32".into();
             assert!(validate_recipe(&recipe).is_err(), "{id} on Qwen");
         }
+        let mut flux3 = WireRenderRecipe {
+            recipe_id: "mc-flux3-klein-edit-v1".into(), preprocessing_version: "2.0.0".into(),
+            model_id: "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit".into(),
+            model_revision: "bf0af016a936bfe422eec96557aee058c3a6174e".into(),
+            native_mask_conditioning: false, qwen_edit: Some(edit.clone()),
+            work_long_side: None,
+            flux3_generation: None,
+        };
+        assert_eq!(validate_recipe(&flux3), Ok(()));
+        flux3.model_id = "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic".into();
+        assert!(validate_recipe(&flux3).is_err(), "FLUX 3's recipe on Klein");
     }
 
     const HEALTH_FIXTURE: &str = include_str!("../../../deploy/cloud/fixtures/health_response.json");

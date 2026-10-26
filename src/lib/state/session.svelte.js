@@ -52,6 +52,7 @@ import {
 import { hexOnCommit } from '../ui/color.js'
 
 import { localSeconds, normalizeDenoiseTarget } from '../model/denoise.js'
+import { FINISHINGS, FLUX3_GENERATION_PARTS, WORK_LONG_SIDES } from '../model/model-names.js'
 import { ANALYSIS_TARGETS, CLOUD_STAGES, DEFAULT_DETECTOR, DEFAULT_DETECTOR_MODELS, DETECTION_MODES, DETECTION_MODE_IDS, DETECTOR_MODEL_IDS, LANGUAGES, defaultAnalysisTargets, detectionModeOf, detectsOnCloud, migrateDetectorChoice, normalizeAnalysisTargets, unifyAnalysisTargets } from '../model/pipelines.js'
 
 const STORAGE_KEY = 'session.v1'
@@ -205,6 +206,10 @@ function viewport() {
  * @property {'local'|'cloud'} cleanTarget - where Auto clean cleans stored detections; `cloud` needs consent per batch (docs/detect-clean.md)
  * @property {boolean} cleanLocalFirst - whether cloud clean tries saved flat-colour picks here first
  * @property {boolean} cleanSolidOnly - whether a clean on this computer takes only speech bubbles on flat paper and leaves the rest detected
+ * @property {768|1024|1280} cloudWorkLongSide - the long side a cloud FLUX 3 clean edits a smaller crop at; larger is slower and costs more per crop
+ * @property {typeof FINISHINGS[number]} cloudFinishing - how a cloud FLUX 3 answer is finished before it is written
+ * @property {boolean} cloudFinishingGrayscale - whether a colour cloud FLUX 3 answer is made grey first
+ * @property {Record<typeof FLUX3_GENERATION_PARTS[number], boolean>} cloudFlux3Generation - which parts of a cloud FLUX 3 edit are built the reference tool's way
  * @property {'local'|'cloud'|'off'} denoiseTarget - where page denoise runs; `cloud` still asks for consent per chapter
  * @property {string} denoisePreset - the preset id last chosen; `model/denoise.js#validPreset` resolves it against the target
  * @property {number|null} denoiseLocalSecondsPerPage - what `benchmark_denoise_local` measured on this computer, or null before it has run
@@ -251,6 +256,10 @@ function defaults() {
     cleanTarget: 'local',
     cleanLocalFirst: false,
     cleanSolidOnly: false,
+    cloudWorkLongSide: WORK_LONG_SIDES[0],
+    cloudFinishing: FINISHINGS[0],
+    cloudFinishingGrayscale: false,
+    cloudFlux3Generation: generationOr(null),
     denoiseTarget: 'off',
     denoisePreset: '',
     denoiseLocalSecondsPerPage: null,
@@ -376,6 +385,10 @@ export function sanitizeSession(raw) {
     cleanTarget: record.cleanTarget === 'cloud' ? 'cloud' : 'local',
     cleanLocalFirst: boolOr(record.cleanLocalFirst, base.cleanLocalFirst),
     cleanSolidOnly: boolOr(record.cleanSolidOnly, base.cleanSolidOnly),
+    cloudWorkLongSide: workLongSideOr(record.cloudWorkLongSide, base.cloudWorkLongSide),
+    cloudFinishing: finishingOr(record.cloudFinishing, base.cloudFinishing),
+    cloudFinishingGrayscale: boolOr(record.cloudFinishingGrayscale, base.cloudFinishingGrayscale),
+    cloudFlux3Generation: generationOr(record.cloudFlux3Generation),
     // As strict as the native setting: anything unreadable is off, so a
     // damaged record never sends a page anywhere.
     denoiseTarget: normalizeDenoiseTarget(record.denoiseTarget),
@@ -478,6 +491,10 @@ function persistable() {
     cleanTarget: session.cleanTarget,
     cleanLocalFirst: session.cleanLocalFirst,
     cleanSolidOnly: session.cleanSolidOnly,
+    cloudWorkLongSide: session.cloudWorkLongSide,
+    cloudFinishing: session.cloudFinishing,
+    cloudFinishingGrayscale: session.cloudFinishingGrayscale,
+    cloudFlux3Generation: { ...session.cloudFlux3Generation },
     denoiseTarget: session.denoiseTarget,
     denoisePreset: session.denoisePreset,
     denoiseLocalSecondsPerPage: session.denoiseLocalSecondsPerPage,
@@ -739,6 +756,72 @@ export function setCleanLocalFirst(enabled) {
 export function setCleanSolidOnly(enabled) {
   if (typeof enabled !== 'boolean') return
   session.cleanSolidOnly = enabled
+  save()
+}
+
+/**
+ * @param {unknown} value
+ * @param {768|1024|1280} fallback
+ * @returns {768|1024|1280}
+ */
+function workLongSideOr(value, fallback) {
+  return WORK_LONG_SIDES.find((side) => side === value) ?? fallback
+}
+
+/**
+ * The working size a cloud FLUX 3 clean asks for. The backend reads it when
+ * it plans a clean, so it reaches the backend with the other settings
+ * (`cloud.svelte.js#saveCloudWorkLongSide`).
+ *
+ * @param {unknown} side - one of `WORK_LONG_SIDES`
+ */
+export function setCloudWorkLongSide(side) {
+  session.cloudWorkLongSide = workLongSideOr(side, session.cloudWorkLongSide)
+  save()
+}
+
+/**
+ * Every part of a FLUX 3 generation choice, off where the value does not say on.
+ *
+ * @param {unknown} value
+ * @returns {Record<typeof FLUX3_GENERATION_PARTS[number], boolean>}
+ */
+function generationOr(value) {
+  const record = value && typeof value === 'object' ? /** @type {Record<string, unknown>} */ (value) : {}
+  return /** @type {any} */ (Object.fromEntries(FLUX3_GENERATION_PARTS.map((part) => [part, record[part] === true])))
+}
+
+/**
+ * Which parts of a cloud FLUX 3 edit are built the reference tool's way. The
+ * backend reads it when it plans a clean (`cloud.svelte.js#saveCloudFlux3Generation`).
+ *
+ * @param {unknown} generation - `{ referencePrompt, marker, referenceShift, megapixelSize }`
+ */
+export function setCloudFlux3Generation(generation) {
+  session.cloudFlux3Generation = generationOr(generation)
+  save()
+}
+
+/**
+ * @param {unknown} value
+ * @param {typeof FINISHINGS[number]} fallback
+ * @returns {typeof FINISHINGS[number]}
+ */
+function finishingOr(value, fallback) {
+  return FINISHINGS.find((name) => name === value) ?? fallback
+}
+
+/**
+ * How a cloud FLUX 3 answer is finished, and whether a colour one is made
+ * grey first. The backend reads both when it plans a clean, so they reach it
+ * with the other settings (`cloud.svelte.js#saveCloudFinishing`).
+ *
+ * @param {unknown} finishing - one of `FINISHINGS`
+ * @param {unknown} [grayscale]
+ */
+export function setCloudFinishing(finishing, grayscale = session.cloudFinishingGrayscale) {
+  session.cloudFinishing = finishingOr(finishing, session.cloudFinishing)
+  if (typeof grayscale === 'boolean') session.cloudFinishingGrayscale = grayscale
   save()
 }
 
@@ -1196,6 +1279,11 @@ export function adoptBackendSettings(settings) {
   if (record.exportPsdCompression !== undefined) setExportPsdCompression(/** @type {any} */ (record.exportPsdCompression))
   if (record.exportPsdLetteringLayer !== undefined) setExportPsdLetteringLayer(record.exportPsdLetteringLayer === true)
   if (record.exportTone !== undefined) setExportTone(/** @type {any} */ (record.exportTone))
+  if (record.cloudWorkLongSide !== undefined) setCloudWorkLongSide(record.cloudWorkLongSide)
+  if (record.cloudFlux3Generation !== undefined) setCloudFlux3Generation(record.cloudFlux3Generation)
+  if (record.cloudFinishing !== undefined || record.cloudFinishingGrayscale !== undefined) {
+    setCloudFinishing(record.cloudFinishing ?? session.cloudFinishing, record.cloudFinishingGrayscale ?? session.cloudFinishingGrayscale)
+  }
   if (record.theme !== undefined) setTheme(/** @type {any} */ (record.theme))
   if (record.readingDirection !== undefined) {
     setReadingDirection(/** @type {any} */ (record.readingDirection))
@@ -1273,6 +1361,10 @@ export function backendSettingsPatch() {
     modelAccelerators: { ...session.modelAccelerators },
     analysisTargets: { ...session.analysisTargets },
     cleanTarget: session.cleanTarget,
+    cloudWorkLongSide: session.cloudWorkLongSide,
+    cloudFinishing: session.cloudFinishing,
+    cloudFinishingGrayscale: session.cloudFinishingGrayscale,
+    cloudFlux3Generation: { ...session.cloudFlux3Generation },
     denoiseTarget: session.denoiseTarget,
     ...(session.denoisePreset ? { denoisePreset: session.denoisePreset } : {}),
     // Left out until measured: absent is "not measured", and a null would

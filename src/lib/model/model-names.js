@@ -26,6 +26,8 @@ const MODEL_NAMES = Object.freeze({
     'flux2-klein-4b': 'FLUX.2 Klein 4B',
     'flux2-klein-9b': 'FLUX.2 Klein 9B',
     'qwen-image-edit-2511': 'Qwen-Image-Edit-2511',
+    'flux3-image-klein': 'FLUX 3 Image Klein',
+    'flux3-image-klein-bf16': 'FLUX 3 Image Klein (bf16)',
     'flux1-schnell': 'FLUX.1 [schnell]',
     'flux1-dev': 'FLUX.1 [dev]',
     'lama-manga': 'LaMa Manga',
@@ -34,6 +36,8 @@ const MODEL_NAMES = Object.freeze({
     'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic': 'FLUX.2 Klein 4B',
     'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32': 'FLUX.2 Klein 9B',
     'Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32': 'Qwen-Image-Edit-2511',
+    'OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit': 'FLUX 3 Image Klein',
+    'unsloth/flux-3-image-klein': 'FLUX 3 Image Klein (bf16)',
   })
 
 /**
@@ -58,6 +62,65 @@ export function detectorModelName(id) {
 export function analysisCapabilityName(capability) {
   const models = /** @type {Record<string, string>} */ (ANALYSIS_CAPABILITY_MODELS)
   return typeof capability === 'string' && Object.hasOwn(models, capability) ? detectorModelName(models[capability]) : null
+}
+
+/**
+ * The long sides a cloud FLUX 3 clean may edit a smaller crop at
+ * (`render.rs#WORK_LONG_SIDES`). The first is the worker's own.
+ */
+export const WORK_LONG_SIDES = /** @type {const} */ ([768, 1024, 1280])
+
+/**
+ * How the app finishes a cloud FLUX 3 answer before it is written
+ * (`postprocess.rs#Finishing`, the `cloudFinishing` setting). The first is
+ * the default. The `reference-` ones are the reference tool's finishing v2.
+ */
+export const FINISHINGS = /** @type {const} */ ([
+  'copy',
+  'copy-hops',
+  'redraw',
+  'redraw-sharp-contours',
+  'repeat-offsets',
+  'tone-only',
+  'reference-off',
+  'reference-global',
+  'reference-local',
+  'reference-poisson',
+  'reference-raster',
+])
+
+/**
+ * The parts of a cloud FLUX 3 edit that can be built the reference tool's way
+ * (`render.rs#Flux3Generation`, the `cloudFlux3Generation` setting). Each is
+ * off by default.
+ */
+export const FLUX3_GENERATION_PARTS = /** @type {const} */ (['referencePrompt', 'marker', 'referenceShift', 'megapixelSize'])
+
+/**
+ * The Finishing picker's text for a version: its `option` label or its
+ * `hint`, under a camelCase key.
+ *
+ * @param {'option'|'hint'} part
+ * @param {string} name - one of `FINISHINGS`
+ */
+export function finishingKey(part, name) {
+  return `settings.inference.finishing.${part}.${name.replace(/-(\w)/g, (_, c) => c.toUpperCase())}`
+}
+
+/**
+ * The model families whose cloud clean takes a working size
+ * (`render.rs#SIZED_RECIPES`): FLUX 3, by its cloud id or its weights' id.
+ */
+const SIZED_MODEL_PREFIXES = Object.freeze(['flux3-image-klein', 'OzzyGT/Flux_3_Image_Klein', 'unsloth/flux-3-image-klein'])
+
+/**
+ * Whether a cloud clean on this model reads the working size.
+ *
+ * @param {unknown} id
+ * @returns {boolean}
+ */
+export function takesWorkSize(id) {
+  return typeof id === 'string' && SIZED_MODEL_PREFIXES.some((prefix) => id.startsWith(prefix))
 }
 
 /** Unknown IDs do not get a guessed product name in a user-facing engine choice. */

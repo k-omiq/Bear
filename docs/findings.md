@@ -64,6 +64,30 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## Engines and quality
 
+- **FLUX 3 Image Klein is an edit model, and fed as one it keeps balloons that Qwen erases
+  (2026-10-26).** Shown the real crop with its lettering, told where the lettering is, and sampled
+  BFL's way (16 steps, time shift 16.0, CPU noise tokens), it removed the lettering and kept every
+  balloon and outline on 17 real regions; the live Qwen v4 recipe erased whole balloons on 8 of
+  them and drew art in their place. 5.6 s a crop on an L40S against Qwen's 16.2, 8.4 GiB of VRAM
+  against 21.4. The prompt the user brought from another tool painted 2 white balloons black until
+  ", including black or shaded fills" came out (0 of 80 renders after). Holding the tokens outside
+  the hint kept lettering the hint missed, and a FLUX 3 target box greyed three balloons; both are
+  off. The earlier benches measured LaMa, not FLUX 3: they gave it the LaMa-filled crop as its
+  reference. Recipe `mc-flux3-klein-edit-v1`, full record in docs/research/flux3-klein-5_6b.md.
+- **An edit model's whole redrawn crop needs matching to the page, and screentone is where it
+  pays (2026-10-26).** Preprocessing 3.0.0 (`engines/postprocess.rs`, the FLUX 3 recipe only):
+  contours from the answer inside the mask and the page outside it; gain and offset then a
+  multi-scale normalised-Gaussian correction from the page around the mask; a membrane on the
+  low-frequency edge difference; and on a grey page with a dot screen that repeats at 0.8 or more
+  next to the mask, the page's own dots copied in phase. Scored against truth on synthetic
+  outlined lettering over real pages (FLUX 3's answers, inside the write mask): on 15 crops of
+  five halftone pages, mean error 31.0 to 27.2 and low-pass error 11.2 to 7.7, with one crop where
+  FLUX 3 had drawn a flat grey blob over the screen going from 42.6 to 18.3; on 16 crops of the
+  hand-textured chapter, 34.7 to 34.3 and 17.4 to 16.2, where no screen qualified. A screen gate of
+  0.6 instead of 0.8 gave the same mean and a worse worst case. The first version greyed a white
+  patch where FLUX 3 had erased a black stroke beside the mask; tone evidence now has to be page
+  the answer still shows (low-pass difference within 24 levels). Through the app's compositor the
+  17 real balloon crops moved by under one level on average against 2.0.0.
 - **Re-measured through the application's own engines, every level moved.** LaMa at 512², median
   of eleven: 629 ms WebGPU, 1486 ms CPU provider, 1856 ms warm CoreML, session built in 2.1 s,
   against the probe harness's 1311 and 2540 ms on the same machine. The ordering is identical,
@@ -689,6 +713,34 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Every finishing and the reference generation as settings (2026-10-26): local only.** Bench 8 in
+`docs/research/flux3-klein-5_6b.md`. Settings > Cloud now picks the finishing (eleven versions:
+ours from benches 3b, 5 and 7, the steps without a screen, and the reference tool's finishing v2
+ported to Rust) and four generation switches (its prompt, magenta marker with residue refusal,
+time shift 6.93, one-megapixel size). Not measured: any generation switch on a GPU (it needs the
+current cloud code deployed to a profile, and a bench costs money); real lettering with truth for
+any finishing; colour pages; the `page` restriction in the reference finishing (both examples are
+all page). Not ported: the reference tool's crop context (half the lettering per side, 64 to 512
+px; ours is per preprocessing version), its FLUX 3 prompt upsampler (bench 1 measured 10 to 14 s
+and 18.8 GB per crop and two misreadings), its INT8 ConvRot weights, and numpy's exact random
+stream in its raster step. Known defect: on the reference line-art example our copy and redraw
+steps put grey specks into white paper beside hatching.
+
+**3.0.0 on LaMa and Qwen v4 (2026-10-26): benched, not adopted.** Bench 6 in
+`docs/research/flux3-klein-5_6b.md`: the 31 synthetic crops through local LaMa (the app's own
+engine) and a throwaway Qwen v4 installation (profile aizendazai46, $0.63, deleted after). 3.0.0
+helped Qwen a lot (halftone mae 31.1 to 17.5, none worse) and LaMa a little (15.7 today to 14.5 on
+halftone, about even on the chapter pages, and part of that may be softening, which mean error
+rewards); neither path was changed. Not measured: real lettering
+with truth (bench 3's real Qwen crops were judged by eye only); Qwen on V2 crops, which carry 128 px
+of context a side where these were 448 px windows, and 2.0.0's curve measured on that wider crop;
+Qwen's second and third seeds (no crop needed them); LaMa tiled regions above 512 px, a per-tile
+settle, other providers than WebGPU, and the app's real fitted hole (here the hint itself, as a
+manual mask); colour pages; settle time on 2048 px crops. The Screentone engine was worse than LaMa
+on 28 of 31 of these crops, whose holes are much larger than ordinary lettering; why, and whether
+it holds on real dotted regions, was not looked into. On these synthetic crops raw LaMa also beat
+both cloud models after 3.0.0; that was not checked on real pages.
+
 **Grayscale export of gray RGB pages (2026-10-26): checked by tests and by a headless export of
 real chapters, not in the built app.** Import keeps every page's own type. A Python tally of the
 real library found 722 pages that look gray but are stored as RGB or RGBA and 35 stored as gray;
@@ -914,6 +966,37 @@ is the hit target over page 2's clear button, z 4 over 3). Not measured: any of 
 WKWebView or on the installed app; the warm range's real memory on c94; a zoom on the mock, whose
 longstrip has six pages and is never virtual; a region hanging upward, which `regionAt` reaches but
 no chapter has.
+
+**FLUX 3 Image Klein in the cloud (2026-10-26): benched, not deployed.** Measured on a throwaway
+Modal app (profile aizendazai46, one L40S, about $0.85 in all, estimated from GPU time); recipe, worker, Modal and Beam
+images, provisioner option and client registration are in the code with unit tests. Not measured:
+any live deploy or setup through the app (the frozen cloud helper needs `npm run helpers` first);
+Beam at all; host memory and nvidia-smi VRAM, so the worker holds one copy in the bench's 24 GiB;
+an L4; colour pages; a black or shaded balloon; seeds past 4. The 3.0.0 post-processing was
+measured on synthetic lettering over real pages, not on real lettering, and its gain or offset hit
+a bound on 3 of 31 crops (none got worse). Its run time: about 0.5 s per 448 px crop in
+a release build, not measured on the 2048 px crops the service allows. The official bf16 weights
+were benched against the pinned 4 bit copy (bench 4, $0.53 more): better on halftone by a few
+levels, not deployed. The worker, manifest and provisioner still pin the 4 bit copy; bf16 on an
+L4, its host memory and its cold start were not measured. Bench 5 ($1.32 more) replaced the screen
+step with a phase-locked redraw (`engines/halftone.rs`), measured on the same synthetic crops only:
+its run time on 2048 px crops, colour pages and real lettering were not measured. A 1280 working
+long side beat 768 on both synthetic sets with one seed. Both are now user choices rather than
+one pinned answer: setup offers the bf16 weights as their own model (`mc-flux3-klein-bf16-edit-v1`,
+seeded from unsloth's ungated copy, whose 23 pinned files have the official repository's SHA-256),
+and Auto clean offers a FLUX 3 working size of 768, 1024 or 1280 (`cloudWorkLongSide`, sent per
+request as `work_long_side`; 768 stays the default). A live check through the real provisioner
+($0.14, deleted after) set the bf16 model up, seeded it from the copy and rendered 7 real crops,
+the default-size ones bit for bit bench 4's (research doc, "Choices left to the user"). Not
+measured: setup through the app's own window (the frozen helper needs `npm run helpers`), its host
+memory (the worker is given the 40 GiB bench 5 ran in), Beam's RTX5090 for it; the 4 bit model at
+1024 or 1280 (its time per megapixel at those sizes is assumed to be its 768 rate); 1024 and 1280
+scored against truth with more than one seed. Bench 7 (no spend) made the screen step copy the
+page's own pixels through phase-preserving shifts instead of redrawing them from an averaged table,
+which the user saw as blurry, and found the answer's moire read as contours (now found under a
+1.5 px blur): crisper dots (detail 0.96 to 1.01 of the truth's), mean error 19.2 to 18.3 on halftone
+crops. Not measured for the copy: real lettering, colour pages, 2048 px crops, a second seed, LaMa
+and Qwen (bench 6 used the old redraw).
 
 **Qwen Lanczos resize (2026-10-19): left open.** 12 real crops, black and white only, one seed.
 Not done: no live deploy (the three Qwen profiles still run bicubic in, box out until the user

@@ -101,11 +101,13 @@ use std::sync::{mpsc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use cleaner_core::engines::render::{
-    CloudProvider, ExecutionTarget, Preprocessing, RenderRecipe, CONTEXT_WIDE, LATENT_STRIDE,
+    CloudProvider, ExecutionTarget, Preprocessing, RenderRecipe, CONTEXT_WIDE, LATENT_STRIDE, WORK_LONG_SIDES,
 };
 use cleaner_core::ingest::sha256_hex;
 use cleaner_core::mask::Rect;
 use cleaner_core::project::{Job, StripMode};
+use cleaner_core::engines::postprocess::{Choice, Finishing};
+use cleaner_core::engines::render::Flux3Generation;
 use serde::Serialize;
 
 use crate::events::{self, Event};
@@ -181,6 +183,10 @@ pub const SECONDS_PER_WORK_MEGAPIXEL: f64 = 10.0;
 pub const COLD_START_SECONDS: f64 = 55.0;
 /// The Qwen-Image-Edit model family (deploy/cloud/common/qwen.py).
 pub(crate) const QWEN_MODEL_PREFIX: &str = "Disty0/Qwen-Image-Edit";
+/// The FLUX 3 Image Klein model family (deploy/cloud/common/flux3.py), in
+/// 4 bit and in BFL's own bf16 weights.
+const FLUX3_MODEL_PREFIX: &str = "OzzyGT/Flux_3_Image_Klein";
+const FLUX3_BF16_MODEL_PREFIX: &str = "unsloth/flux-3-image-klein";
 /// The reference area the Qwen pipeline edits every crop at, on a 32 px grid.
 const QWEN_WORK_AREA: f64 = 1024.0 * 1024.0;
 const QWEN_GRID: f64 = 32.0;
@@ -191,6 +197,12 @@ const QWEN_GRID: f64 = 32.0;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct RenderRate {
     qwen: bool,
+    /// The long side a smaller crop is edited at: the recipe's
+    /// `work_long_side`, else [`WORK_LONG_SIDE`].
+    work_long_side: u32,
+    /// The reference tool's one-megapixel size in place of the long side
+    /// ([`cleaner_core::engines::render::Flux3Generation::megapixel_size`]).
+    megapixel: bool,
     seconds_per_work_megapixel: f64,
     cold_start_seconds: f64,
     /// The render container's host memory on Modal and on Beam
@@ -204,18 +216,33 @@ impl RenderRate {
     /// the same process (12 GiB plus a measured 7 GiB), Beam runs it as a
     /// second 12 GiB worker. The 9B and Qwen hold two only on an L40S, which is
     /// the GPU Modal pins them to (24 GiB plus 24, 32 plus 24); on Beam's RTX5090
-    /// they hold one.
+    /// they hold one. FLUX 3 holds one everywhere, in 24 GiB.
     ///
     /// The seconds are unchanged by the second copy. They are GPU seconds
     /// summed over the plan, and two renders at once share one GPU's compute;
     /// how much the overlap saves is not measured.
     pub(crate) fn of(recipe: &RenderRecipe) -> Self {
+        let work_long_side = recipe.work_long_side.unwrap_or(WORK_LONG_SIDE);
+        let megapixel = recipe.flux3_generation.is_some_and(|g| g.megapixel_size);
         if recipe.model_id.starts_with(QWEN_MODEL_PREFIX) {
             // Eight steps: a linear estimate from the measured four-step rate.
-            return Self { qwen: true, seconds_per_work_megapixel: 14.0, cold_start_seconds: 90.0, memory_gib: (56.0, 32.0) };
+            return Self { qwen: true, work_long_side, megapixel, seconds_per_work_megapixel: 14.0, cold_start_seconds: 90.0,
+                memory_gib: (56.0, 32.0) };
+        }
+        if recipe.model_id.starts_with(FLUX3_MODEL_PREFIX) {
+            // Sixteen steps on an L40S, 17 real crops (2026-10-26): 11.4 s per working
+            // megapixel overall, 11.8 at most.
+            return Self { qwen: false, work_long_side, megapixel, seconds_per_work_megapixel: 12.0,
+                cold_start_seconds: COLD_START_SECONDS, memory_gib: (24.0, 24.0) };
+        }
+        if recipe.model_id.starts_with(FLUX3_BF16_MODEL_PREFIX) {
+            // Bench 5 on an L40S (2026-10-26): 20.1 s for a crop worked at 1280 by 1280,
+            // 12.3 s per working megapixel; 5.6 s at 768, 9.5. The container is 40 GiB.
+            return Self { qwen: false, work_long_side, megapixel, seconds_per_work_megapixel: 12.5,
+                cold_start_seconds: COLD_START_SECONDS, memory_gib: (40.0, 40.0) };
         }
         let memory_gib = if recipe.model_id.contains("9B") { (48.0, 24.0) } else { (19.0, 24.0) };
-        Self { qwen: false, seconds_per_work_megapixel: SECONDS_PER_WORK_MEGAPIXEL,
+        Self { qwen: false, work_long_side, megapixel, seconds_per_work_megapixel: SECONDS_PER_WORK_MEGAPIXEL,
             cold_start_seconds: COLD_START_SECONDS, memory_gib }
     }
 
@@ -229,7 +256,8 @@ impl RenderRate {
 
     /// The size the worker edits a `w` by `h` crop at.
     pub(crate) fn working_size(&self, w: u32, h: u32) -> (u32, u32) {
-        if !self.qwen { return working_size(w, h); }
+        if self.megapixel { return cleaner_core::engines::render::megapixel_size(w, h); }
+        if !self.qwen { return working_size(w, h, self.work_long_side); }
         // calculate_dimensions in diffusers' Qwen edit pipeline.
         let ratio = f64::from(w.max(1)) / f64::from(h.max(1));
         let width = (QWEN_WORK_AREA * ratio).sqrt();
@@ -262,6 +290,103 @@ pub enum CleanTarget {
 }
 
 pub const CLEAN_TARGET_KEY: &str = "cleanTarget";
+
+/// The `cloudWorkLongSide` setting: the long side a recipe that takes one
+/// ([`RenderRecipe::takes_work_size`], FLUX 3) edits a smaller crop at. One of
+/// [`WORK_LONG_SIDES`]; absent or null is the worker's own [`WORK_LONG_SIDE`].
+/// A larger side costs more GPU time per crop.
+pub const WORK_LONG_SIDE_KEY: &str = "cloudWorkLongSide";
+
+/// Strict: null, or a whole number on [`WORK_LONG_SIDES`].
+pub fn work_long_side_from_value(value: Option<&serde_json::Value>) -> Result<Option<u32>, String> {
+    match value.filter(|value| !value.is_null()) {
+        None => Ok(None),
+        Some(value) => value.as_u64().and_then(|side| u32::try_from(side).ok())
+            .filter(|side| WORK_LONG_SIDES.contains(side)).map(Some)
+            .ok_or_else(|| format!("{WORK_LONG_SIDE_KEY} must be one of {WORK_LONG_SIDES:?}")),
+    }
+}
+
+/// The setting on a recipe about to be sent: a recipe that takes a working
+/// size carries it when it is not the worker's own; on any other recipe the
+/// setting does nothing. Every cloud clean, of a batch or of one region,
+/// reads it here.
+pub(crate) fn apply_work_long_side(recipe: &mut RenderRecipe, work_long_side: Option<u32>) {
+    recipe.work_long_side = if recipe.takes_work_size() {
+        work_long_side.filter(|&side| side != WORK_LONG_SIDE)
+    } else {
+        None
+    };
+}
+
+/// The `cloudFinishing` setting: how the client finishes a 3.0.0 answer
+/// before it is written ([`cleaner_core::engines::postprocess::Finishing`],
+/// kebab-case), and `cloudFinishingGrayscale`, whether a colour answer is made
+/// grey first. Absent or null is the default. Nothing of it is sent.
+pub const FINISHING_KEY: &str = "cloudFinishing";
+pub const FINISHING_GRAYSCALE_KEY: &str = "cloudFinishingGrayscale";
+
+/// The `cloudFlux3Generation` setting: which parts of a FLUX 3 edit are built
+/// the reference tool's way, as `{referencePrompt, marker, referenceShift,
+/// megapixelSize}` booleans. Absent, null or all false is this app's way.
+pub const FLUX3_GENERATION_KEY: &str = "cloudFlux3Generation";
+
+/// Strict: null, or an object of exactly those four booleans (each may be
+/// left out, as false).
+pub fn flux3_generation_from_settings(settings: &serde_json::Value) -> Result<Option<Flux3Generation>, String> {
+    let refused = || format!("{FLUX3_GENERATION_KEY} must be an object of referencePrompt, marker, referenceShift and megapixelSize, each true or false");
+    let Some(value) = settings.get(FLUX3_GENERATION_KEY).filter(|value| !value.is_null()) else { return Ok(None) };
+    let object = value.as_object().ok_or_else(refused)?;
+    let mut generation = Flux3Generation::default();
+    for (key, part) in object {
+        let on = part.as_bool().ok_or_else(refused)?;
+        match key.as_str() {
+            "referencePrompt" => generation.reference_prompt = on,
+            "marker" => generation.marker = on,
+            "referenceShift" => generation.reference_shift = on,
+            "megapixelSize" => generation.megapixel_size = on,
+            _ => return Err(refused()),
+        }
+    }
+    Ok((!generation.is_own()).then_some(generation))
+}
+
+/// The setting on a recipe about to be sent: only a recipe that takes a
+/// working size (FLUX 3) takes it, and the one-megapixel size replaces the
+/// working size. Applied after [`apply_work_long_side`].
+pub(crate) fn apply_flux3_generation(recipe: &mut RenderRecipe, generation: Option<Flux3Generation>) {
+    recipe.flux3_generation = generation.filter(|_| recipe.takes_work_size());
+    if recipe.flux3_generation.is_some_and(|g| g.megapixel_size) {
+        recipe.work_long_side = None;
+    }
+}
+
+/// Strict: each key null or of its type, the version one the client has.
+pub fn finishing_from_settings(settings: &serde_json::Value) -> Result<Option<Choice>, String> {
+    let finishing = match settings.get(FINISHING_KEY).filter(|value| !value.is_null()) {
+        None => Finishing::default(),
+        Some(value) => serde_json::from_value(value.clone()).map_err(|_| {
+            let names: Vec<String> = Finishing::ALL.iter().map(|f| serde_json::json!(f).as_str().unwrap_or_default().to_owned()).collect();
+            format!("{FINISHING_KEY} must be one of {names:?}")
+        })?,
+    };
+    let grayscale = match settings.get(FINISHING_GRAYSCALE_KEY).filter(|value| !value.is_null()) {
+        None => false,
+        Some(value) => value.as_bool().ok_or_else(|| format!("{FINISHING_GRAYSCALE_KEY} must be true or false"))?,
+    };
+    let choice = Choice { finishing, grayscale };
+    Ok((choice != Choice::default()).then_some(choice))
+}
+
+/// The setting on a recipe about to be sent: only a 3.0.0 recipe finishes,
+/// so on any other the setting does nothing. Every cloud clean, of a batch or
+/// of one region, reads it here.
+pub(crate) fn apply_finishing(recipe: &mut RenderRecipe, finishing: Option<Choice>) {
+    recipe.finishing = finishing.filter(|_| {
+        cleaner_core::engines::render::Preprocessing::of(&recipe.preprocessing_version)
+            .is_ok_and(|version| version == cleaner_core::engines::render::Preprocessing::V3)
+    });
+}
 
 impl CleanTarget {
     /// Strict: `"local"` or `"cloud"`. Absent or null is local. Anything else
@@ -600,6 +725,12 @@ pub(crate) struct PrepareRequest {
     /// Solid bubble pick; a side not sent keeps each region's saved pick.
     pub picks: Option<run::Repick>,
     pub qwen_edit: Option<cleaner_core::engines::render::QwenEdit>,
+    /// The `cloudWorkLongSide` setting.
+    pub work_long_side: Option<u32>,
+    /// The `cloudFinishing` settings.
+    pub finishing: Option<Choice>,
+    /// The `cloudFlux3Generation` setting.
+    pub flux3_generation: Option<Flux3Generation>,
 }
 
 /// Where the batch would go: the selected profile.
@@ -662,7 +793,9 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
         (None, Bound::default())
     } else {
         open(&mut *proposals.lock().map_err(|e| e.to_string())?)?;
-        let recipe = deployed_recipe(gateway, request.qwen_edit.as_ref())?;
+        let mut recipe = deployed_recipe(gateway, request.qwen_edit.as_ref(), request.work_long_side)?;
+        apply_finishing(&mut recipe, request.finishing);
+        apply_flux3_generation(&mut recipe, request.flux3_generation);
         let bound = bind(job_path, &ids, recipe_preprocessing(&recipe)?)?;
         (Some(recipe), bound)
     };
@@ -737,9 +870,11 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
 /// The recipe the deployment serves now, with the guidance this clean asks
 /// for. A guided recipe always carries guidance, Auto with no description
 /// when the clean asked none; an older Qwen deployment cannot take it at all.
-fn deployed_recipe<G: CleanGateway + ?Sized>(gateway: &G, qwen_edit: Option<&cleaner_core::engines::render::QwenEdit>)
-    -> Result<RenderRecipe, String> {
+/// It carries the working size setting ([`apply_work_long_side`]).
+fn deployed_recipe<G: CleanGateway + ?Sized>(gateway: &G, qwen_edit: Option<&cleaner_core::engines::render::QwenEdit>,
+    work_long_side: Option<u32>) -> Result<RenderRecipe, String> {
     let mut recipe = gateway.recipe()?;
+    apply_work_long_side(&mut recipe, work_long_side);
     if recipe.takes_guidance() {
         recipe.qwen_edit = Some(qwen_edit.cloned().unwrap_or(cleaner_core::engines::render::QwenEdit {
             target: cleaner_core::engines::render::QwenTarget::Auto, description: String::new(),
@@ -874,12 +1009,12 @@ struct Bound {
 }
 
 /// The size the worker edits a `w` by `h` crop at: upscaled so its long side
-/// is [`WORK_LONG_SIDE`] and snapped down to the latent stride, never
+/// is `work_long_side` and snapped down to the latent stride, never
 /// downscaled (`working_size`, deploy/cloud/common/flux.py).
-fn working_size(w: u32, h: u32) -> (u32, u32) {
+fn working_size(w: u32, h: u32, work_long_side: u32) -> (u32, u32) {
     let long = w.max(h).max(1);
-    if long >= WORK_LONG_SIDE { return (w, h); }
-    let scale = f64::from(WORK_LONG_SIDE) / f64::from(long);
+    if long >= work_long_side { return (w, h); }
+    let scale = f64::from(work_long_side) / f64::from(long);
     let snap = |extent: u32| {
         let scaled = (f64::from(extent) * scale).round() as u32;
         (scaled - scaled % LATENT_STRIDE).max(LATENT_STRIDE)
@@ -1108,6 +1243,12 @@ pub(crate) struct StreamRequest {
     pub local_first: bool,
     pub picks: Option<run::Repick>,
     pub qwen_edit: Option<cleaner_core::engines::render::QwenEdit>,
+    /// The `cloudWorkLongSide` setting.
+    pub work_long_side: Option<u32>,
+    /// The `cloudFinishing` settings.
+    pub finishing: Option<Choice>,
+    /// The `cloudFlux3Generation` setting.
+    pub flux3_generation: Option<Flux3Generation>,
 }
 
 /// State what a streaming cloud clean would send. Nothing is cleaned, written
@@ -1150,13 +1291,16 @@ fn prepare_stream_with_cache<G: CleanGateway + ?Sized>(
         if cache.len() >= MAX_OPEN_PROPOSALS { Err("cloud_clean_proposal_limit".to_string()) } else { Ok(()) }
     };
     open(&mut *proposals.lock().map_err(|e| e.to_string())?)?;
-    let recipe = deployed_recipe(gateway, request.qwen_edit.as_ref())?;
+    let mut recipe = deployed_recipe(gateway, request.qwen_edit.as_ref(), request.work_long_side)?;
+    apply_finishing(&mut recipe, request.finishing);
+    apply_flux3_generation(&mut recipe, request.flux3_generation);
     recipe_preprocessing(&recipe)?;
     let (gpu, per_hour) = gateway.gpu_price().ok_or("cloud_clean_stream_unpriced")?;
     let execution = if request.local_first { CleanExecution::Mixed } else { CleanExecution::Cloud };
     let page_indices: Vec<u32> = pages.iter().copied().collect();
     let budget = Budget::new(&recipe, destination.provider, per_hour, 0.0);
-    let region_cost_usd = budget.job_usd(Rect::new(0, 0, WORK_LONG_SIDE, WORK_LONG_SIDE));
+    let side = budget.rate.work_long_side;
+    let region_cost_usd = budget.job_usd(Rect::new(0, 0, side, side));
     let suggested = budget.fixed_usd + page_indices.len() as f64 * SUGGESTED_REGIONS_PER_PAGE * region_cost_usd;
     let suggested_cap_usd = ((suggested * 10.0).ceil() / 10.0).min(MAX_STREAM_CAP_USD).max(budget.fixed_usd);
     let mut cache = proposals.lock().map_err(|e| e.to_string())?;
@@ -1884,6 +2028,9 @@ fn page_detections(job_path: &Path, chapter_id: &str, page: u32) -> Result<Vec<S
     let request = PrepareRequest {
         chapter_id: chapter_id.to_owned(), scope: "page".into(), page_indices: Some(vec![page]),
         region_ids: None, local_first: false, picks: None, qwen_edit: None,
+        work_long_side: None,
+        flux3_generation: None,
+        finishing: None,
     };
     Ok(detections_in_scope(&job, &request)?.into_iter().map(|(_, id)| id).collect())
 }
@@ -2303,9 +2450,13 @@ pub async fn prepare_cloud_clean(
         let stored = settings.get("engineCeiling").and_then(|value| value.as_str());
         let picks = run::Repick::from_args(bubble_engine.as_deref(), outside_engine.as_deref(),
             run::effective_ceiling(None, stored));
+        let work_long_side = work_long_side_from_value(settings.get(WORK_LONG_SIDE_KEY))?;
+        let finishing = finishing_from_settings(&settings)?;
+        let flux3_generation = flux3_generation_from_settings(&settings)?;
         let mut proposal = prepare(&path, PrepareRequest {
             // Strictly the cloud unless mixed is asked for by name.
             chapter_id, scope, page_indices, region_ids, local_first: local_first.unwrap_or(false), picks, qwen_edit,
+            work_long_side, finishing, flux3_generation,
         }, Destination {
             provider: selected.provider,
             profile_id: selected.profile_id.clone(),
@@ -2498,8 +2649,12 @@ pub async fn prepare_cloud_clean_stream(
         let stored = settings.get("engineCeiling").and_then(|value| value.as_str());
         let picks = run::Repick::from_args(bubble_engine.as_deref(), outside_engine.as_deref(),
             run::effective_ceiling(None, stored));
+        let work_long_side = work_long_side_from_value(settings.get(WORK_LONG_SIDE_KEY))?;
+        let finishing = finishing_from_settings(&settings)?;
+        let flux3_generation = flux3_generation_from_settings(&settings)?;
         let mut proposal = prepare_stream(&path, StreamRequest {
             chapter_id, scope, page_indices, local_first: local_first.unwrap_or(false), picks, qwen_edit,
+            work_long_side, finishing, flux3_generation,
         }, Destination {
             provider: selected.provider,
             profile_id: selected.profile_id.clone(),

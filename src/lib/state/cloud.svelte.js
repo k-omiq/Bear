@@ -25,7 +25,7 @@ import { untrack } from 'svelte'
 import { getBackend, readCloudReadiness } from '../api/backend.js'
 import { notify, pushModal } from './app.svelte.js'
 import { editor, replaceRegion } from './editor.svelte.js'
-import { backendSettingsPatch, session, setCloudAllowed } from './session.svelte.js'
+import { backendSettingsPatch, session, setCloudAllowed, setCloudFinishing, setCloudFlux3Generation, setCloudWorkLongSide } from './session.svelte.js'
 import { writeSettingsSerialized } from './settingswrite.js'
 import { cloudErrorKey } from '../model/cloudnotices.js'
 import { currentCloudModelId } from '../model/model-names.js'
@@ -445,6 +445,71 @@ export async function setCloudPermission(allowed, backend = getBackend()) {
   }
   await refreshCloudReadiness(backend)
   return true
+}
+
+/**
+ * The working size a cloud FLUX 3 clean asks for, saved where the backend
+ * reads it when it plans the clean. Put back when the save fails.
+ *
+ * @param {768|1024|1280} side
+ * @param {import('../api/backend.js').Backend} [backend]
+ * @returns {Promise<boolean>} whether it was saved
+ */
+export async function saveCloudWorkLongSide(side, backend = getBackend()) {
+  const previous = session.cloudWorkLongSide
+  setCloudWorkLongSide(side)
+  try {
+    await writeSettingsSerialized(backend, () => backendSettingsPatch())
+    return true
+  } catch {
+    setCloudWorkLongSide(previous)
+    notify({ key: 'notice.cloud.workSizeFailed', tone: 'warn' })
+    return false
+  }
+}
+
+/**
+ * How a cloud FLUX 3 answer is finished, saved where the backend reads it
+ * when it plans the clean. Put back when the save fails.
+ *
+ * @param {typeof import('../model/model-names.js').FINISHINGS[number]} finishing
+ * @param {boolean} grayscale
+ * @param {import('../api/backend.js').Backend} [backend]
+ * @returns {Promise<boolean>} whether it was saved
+ */
+export async function saveCloudFinishing(finishing, grayscale, backend = getBackend()) {
+  const previous = [session.cloudFinishing, session.cloudFinishingGrayscale]
+  setCloudFinishing(finishing, grayscale)
+  try {
+    await writeSettingsSerialized(backend, () => backendSettingsPatch())
+    return true
+  } catch {
+    setCloudFinishing(...previous)
+    notify({ key: 'notice.cloud.finishingFailed', tone: 'warn' })
+    return false
+  }
+}
+
+/**
+ * Which parts of a cloud FLUX 3 edit are built the reference tool's way,
+ * saved where the backend reads it when it plans the clean. Put back when the
+ * save fails.
+ *
+ * @param {Record<string, boolean>} generation
+ * @param {import('../api/backend.js').Backend} [backend]
+ * @returns {Promise<boolean>} whether it was saved
+ */
+export async function saveCloudFlux3Generation(generation, backend = getBackend()) {
+  const previous = { ...session.cloudFlux3Generation }
+  setCloudFlux3Generation(generation)
+  try {
+    await writeSettingsSerialized(backend, () => backendSettingsPatch())
+    return true
+  } catch {
+    setCloudFlux3Generation(previous)
+    notify({ key: 'notice.cloud.generationFailed', tone: 'warn' })
+    return false
+  }
 }
 
 /** Settings, opened on its Cloud tab. */

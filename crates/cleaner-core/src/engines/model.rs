@@ -331,6 +331,9 @@ pub struct Rendered {
     /// (the one whose ring held the most samples). `None` for an answer
     /// blended as it came back.
     pub tone: Option<crate::engines::render::ToneReport>,
+    /// What a [`crate::engines::render::Preprocessing::V3`] composite did to
+    /// match the answer to the page; `None` under any other version.
+    pub matched: Option<crate::engines::postprocess::Report>,
 }
 
 /// One model run's geometry: what it reads, and what it is allowed to keep.

@@ -150,6 +150,9 @@ fn asked(scope: &str, local_first: bool) -> PrepareRequest {
         qwen_edit: None,
         chapter_id: "chapter".into(), scope: scope.into(), page_indices: None, region_ids: None, local_first,
         picks: None,
+        work_long_side: None,
+        flux3_generation: None,
+        finishing: None,
     }
 }
 
@@ -541,10 +544,10 @@ fn a_region_too_large_to_send_is_held_out_before_consent() {
 fn the_estimate_follows_each_jobs_crop_not_a_count() {
     // Smaller crops are upscaled to a 768 px long side, snapped down to the
     // stride; larger ones are edited at their own size.
-    assert_eq!(working_size(96, 48), (768, 384));
-    assert_eq!(working_size(100, 60), (768, 448));
-    assert_eq!(working_size(1024, 512), (1024, 512));
-    assert_eq!(working_size(16, 16), (768, 768));
+    assert_eq!(working_size(96, 48, WORK_LONG_SIDE), (768, 384));
+    assert_eq!(working_size(100, 60, WORK_LONG_SIDE), (768, 448));
+    assert_eq!(working_size(1024, 512, WORK_LONG_SIDE), (1024, 512));
+    assert_eq!(working_size(16, 16, WORK_LONG_SIDE), (768, 768));
 
     let region = |w: u32, h: u32| GrantedRegion {
         id: format!("{w}x{h}"), page_index: 0, order: 0, bbox: Rect::new(0, 0, w, h), space: 0, revision_hash: String::new(),
@@ -556,7 +559,7 @@ fn the_estimate_follows_each_jobs_crop_not_a_count() {
     assert!(large.gpu_seconds > small.gpu_seconds, "{small:?} {large:?}");
     let crop = cleaner_core::engines::render::crop_for(Rect::new(0, 0, 20, 10)).unwrap();
     assert_eq!(small.crop_pixels, 2 * u64::from(crop.w) * u64::from(crop.h));
-    let (w, h) = working_size(crop.w, crop.h);
+    let (w, h) = working_size(crop.w, crop.h, WORK_LONG_SIDE);
     let per_job = JOB_OVERHEAD_SECONDS + f64::from(w * h) / 1e6 * SECONDS_PER_WORK_MEGAPIXEL;
     assert!((small.gpu_seconds - 2.0 * per_job).abs() < 1e-9);
     assert_eq!(small.seconds().high, small.gpu_seconds + COLD_START_SECONDS + IDLE_WINDOW_SECONDS);
@@ -574,6 +577,43 @@ fn the_estimate_follows_each_jobs_crop_not_a_count() {
     assert_eq!(RenderRate::of(&nine).memory_gib(CloudProvider::Modal), 48.0, "the 9B holds two copies on the Modal L40S");
     assert_eq!(RenderRate::of(&nine).memory_gib(CloudProvider::Beam), 24.0, "and one on the Beam RTX5090");
     assert!(cost(80.0, 3.6, &nine, CloudProvider::Modal).low > priced.low, "the 9B worker has more memory");
+    let flux3 = RenderRecipe { model_id: "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit".into(), ..recipe() };
+    let rate = RenderRate::of(&flux3);
+    assert_eq!((rate.memory_gib(CloudProvider::Modal), rate.memory_gib(CloudProvider::Beam)), (24.0, 24.0),
+        "FLUX 3 holds one copy in 24 GiB on both");
+    assert_eq!(rate.working_size(96, 48), working_size(96, 48, WORK_LONG_SIDE), "FLUX 3 works at Klein's size");
+}
+
+/// The `cloudWorkLongSide` setting reaches a FLUX 3 recipe, which the worker
+/// and the estimate both read; the worker's own size travels as none, and a
+/// recipe that takes no size leaves the setting unread.
+#[test]
+fn the_working_size_setting_reaches_a_flux3_recipe_and_its_estimate() {
+    let flux3 = RenderRecipe::new("mc-flux3-klein-bf16-edit-v1", "3.0.0", "unsloth/flux-3-image-klein",
+        "67662613c10c92a1364cb3da8c6f7447977c7ce9", false);
+    let gateway = Gateway { recipe: flux3.clone(), ..Gateway::priced() };
+    let sized = deployed_recipe(&gateway, None, Some(1280)).unwrap();
+    assert_eq!(sized.work_long_side, Some(1280));
+    assert!(sized.same_deployment(&flux3), "a working size is request-local");
+    assert_eq!(deployed_recipe(&gateway, None, Some(WORK_LONG_SIDE)).unwrap().work_long_side, None);
+    assert_eq!(deployed_recipe(&gateway, None, None).unwrap().work_long_side, None);
+    assert_eq!(deployed_recipe(&Gateway::priced(), None, Some(1280)).unwrap().work_long_side, None,
+        "Klein takes no working size");
+
+    let rate = RenderRate::of(&sized);
+    assert_eq!(rate.working_size(96, 48), (1280, 640));
+    assert_eq!(rate.working_size(1400, 700), (1400, 700), "never scaled down");
+    assert_eq!((rate.memory_gib(CloudProvider::Modal), rate.memory_gib(CloudProvider::Beam)), (40.0, 40.0),
+        "the bf16 worker is 40 GiB");
+    let own_size = RenderRate::of(&deployed_recipe(&gateway, None, None).unwrap());
+    let crop = Rect::new(0, 0, 96, 48);
+    assert!(Estimate::job(crop, rate).gpu_seconds > 2.0 * Estimate::job(crop, own_size).gpu_seconds);
+
+    for (value, side) in [(serde_json::Value::Null, None), (serde_json::json!(1024), Some(1024))] {
+        assert_eq!(work_long_side_from_value(Some(&value)), Ok(side));
+    }
+    assert_eq!(work_long_side_from_value(None), Ok(None));
+    assert!(work_long_side_from_value(Some(&serde_json::json!(1100))).is_err());
 }
 
 /// Qwen edits every crop at about one megapixel on a 32 px grid, whatever its
@@ -585,7 +625,7 @@ fn the_qwen_estimate_uses_its_own_grid_and_rates() {
     assert_eq!(rate.working_size(64, 64), (1024, 1024));
     assert_eq!(rate.working_size(320, 848), (640, 1664));
     assert_eq!(rate.working_size(1080, 1536), (864, 1216));
-    assert_eq!(RenderRate::of(&recipe()).working_size(96, 48), working_size(96, 48));
+    assert_eq!(RenderRate::of(&recipe()).working_size(96, 48), working_size(96, 48, WORK_LONG_SIDE));
     let region = GrantedRegion {
         id: "r".into(), page_index: 0, order: 0, bbox: Rect::new(0, 0, 20, 10), space: 0, revision_hash: String::new(),
         crop: cleaner_core::engines::render::crop_for(Rect::new(0, 0, 20, 10)).unwrap(), group_id: None,
@@ -596,6 +636,55 @@ fn the_qwen_estimate_uses_its_own_grid_and_rates() {
     assert!(estimate.retry_gpu_seconds > 0.0);
     assert!(cost(80.0, 3.6, &qwen, CloudProvider::Modal).low > cost(80.0, 3.6, &recipe(), CloudProvider::Modal).low,
         "the Qwen worker has more memory");
+}
+
+/// The finishing rides on a 3.0.0 recipe only, and the default rides on none:
+/// a recipe's identity does not change until someone picks another finishing.
+#[test]
+fn the_finishing_setting_rides_on_a_3_0_0_recipe_only() {
+    use cleaner_core::engines::postprocess::{Choice, Finishing};
+    let picked = serde_json::json!({"cloudFinishing": "reference-raster", "cloudFinishingGrayscale": true});
+    let choice = Choice { finishing: Finishing::ReferenceRaster, grayscale: true };
+    assert_eq!(finishing_from_settings(&picked), Ok(Some(choice)));
+    assert_eq!(finishing_from_settings(&serde_json::json!({"cloudFinishing": "copy"})), Ok(None));
+    assert_eq!(finishing_from_settings(&serde_json::Value::Null), Ok(None));
+    assert!(finishing_from_settings(&serde_json::json!({"cloudFinishing": "blur"})).is_err());
+    let mut current = RenderRecipe { preprocessing_version: "3.0.0".into(), ..recipe() };
+    apply_finishing(&mut current, Some(choice));
+    assert_eq!(current.finishing, Some(choice));
+    assert!(current.same_deployment(&RenderRecipe { finishing: None, ..current.clone() }));
+    let wire: cleaner_core::cloud_wire::WireRenderRecipe = current.clone().into();
+    assert!(!serde_json::to_string(&wire).unwrap().contains("raster"), "the worker never sees it");
+    let mut older = RenderRecipe { preprocessing_version: "2.0.0".into(), ..recipe() };
+    apply_finishing(&mut older, Some(choice));
+    assert_eq!(older.finishing, None);
+}
+
+/// The generation choice rides on a FLUX 3 recipe only, all-own rides on
+/// none, and the one-megapixel size replaces the working size, in the request
+/// and in the price.
+#[test]
+fn the_generation_setting_rides_on_flux3_only_and_megapixel_replaces_the_working_size() {
+    use cleaner_core::engines::render::{megapixel_size, Flux3Generation};
+    let picked = serde_json::json!({"cloudFlux3Generation": {"marker": true, "megapixelSize": true}});
+    let generation = Flux3Generation { marker: true, megapixel_size: true, ..Flux3Generation::default() };
+    assert_eq!(flux3_generation_from_settings(&picked), Ok(Some(generation)));
+    assert_eq!(flux3_generation_from_settings(&serde_json::json!({"cloudFlux3Generation": {"marker": false}})), Ok(None));
+    assert_eq!(flux3_generation_from_settings(&serde_json::Value::Null), Ok(None));
+    for bad in [serde_json::json!({"marker": "yes"}), serde_json::json!({"colour": true}), serde_json::json!(true)] {
+        assert!(flux3_generation_from_settings(&serde_json::json!({"cloudFlux3Generation": bad})).is_err(), "{bad}");
+    }
+    let flux3 = RenderRecipe::new("mc-flux3-klein-bf16-edit-v1", "3.0.0", "unsloth/flux-3-image-klein",
+        "67662613c10c92a1364cb3da8c6f7447977c7ce9", false);
+    let gateway = Gateway { recipe: flux3, ..Gateway::priced() };
+    let mut sized = deployed_recipe(&gateway, None, Some(1280)).unwrap();
+    assert_eq!(sized.work_long_side, Some(1280));
+    apply_flux3_generation(&mut sized, Some(generation));
+    assert_eq!((sized.work_long_side, sized.flux3_generation), (None, Some(generation)));
+    assert_eq!(RenderRate::of(&sized).working_size(300, 200), megapixel_size(300, 200));
+    let mut klein = deployed_recipe(&Gateway::priced(), None, None).unwrap();
+    apply_flux3_generation(&mut klein, Some(generation));
+    assert_eq!(klein.flux3_generation, None);
 }
 
 #[test]
@@ -2176,6 +2265,9 @@ fn the_journal_answers_which_regions_are_unresolved() {
         predecessors_sha256: None, crop_sha256: request.image_sha256.clone(), hint_sha256: request.hint_sha256.clone(),
         request_digest: cleaner_core::cloud_wire::compute_request_digest(&request),
         chapter_id: Some("chapter".into()), page_index: Some(1),
+        work_long_side: None,
+        flux3_generation: None,
+        finishing: None,
     };
     let (_, guard) = journal.create_intent(intent).unwrap();
     let _permit = journal.mark_dispatching(&guard).unwrap();
@@ -2212,6 +2304,9 @@ fn a_region_whose_attempt_the_sweep_ended_is_planned_by_the_next_prepare() {
         predecessors_sha256: None, crop_sha256: request.image_sha256.clone(), hint_sha256: request.hint_sha256.clone(),
         request_digest: cleaner_core::cloud_wire::compute_request_digest(&request),
         chapter_id: Some("chapter".into()), page_index: Some(1),
+        work_long_side: None,
+        flux3_generation: None,
+        finishing: None,
     };
     let (_, guard) = journal.create_intent(intent).unwrap();
     journal.mark_dispatching(&guard).unwrap();
@@ -2249,6 +2344,9 @@ fn streamed(scope: &str, pages: Option<Vec<u32>>) -> StreamRequest {
     StreamRequest {
         chapter_id: "chapter".into(), scope: scope.into(), page_indices: pages, local_first: false, picks: None,
         qwen_edit: None,
+        work_long_side: None,
+        flux3_generation: None,
+        finishing: None,
     }
 }
 

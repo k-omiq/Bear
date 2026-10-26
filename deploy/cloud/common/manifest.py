@@ -31,6 +31,11 @@ DEFAULT_PREPROCESSING_VERSION: str = "1.0.0"
 # the page around the edit. deploy/cloud/tests/
 # test_recipe_parity.py holds this equal to the Rust constant.
 PROD_PREPROCESSING_VERSION: str = "2.0.0"
+# 3.0.0: 2.0.0's crop and hint, and a composite that matches an edit model's whole
+# redrawn crop to the page (tone, lighting, the page's own screentone) before it is
+# written (engines/postprocess.rs, EDIT_PREPROCESSING_VERSION there). The FLUX 3 edit
+# recipe pins it; the recipes already deployed keep 2.0.0.
+PROD_EDIT_PREPROCESSING_VERSION: str = "3.0.0"
 
 # Standard test/fixture IDs
 RECIPE_TEST_SDNQ: str = "test-sdnq-v1"
@@ -67,6 +72,20 @@ RECIPE_PROD_SDNQ_9B: str = "mc-flux2-klein-9b-inpaint-v2"
 RECIPE_PROD_QWEN: str = "mc-qwen-image-edit-2511-v4"
 MODEL_PROD_QWEN: str = "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32"
 REVISION_PROD_QWEN: str = "a285fceef1439d72d60533e83cb6d8921748a666"
+# FLUX 3 Image Klein (BFL, 2026-10-15), cloud only: OzzyGT's ungated 4-bit SDNQ build of the
+# step-distilled model, with its Qwen3-VL-4B text encoder in 4 bit too. An edit of the crop
+# with its lettering in it, not an inpaint (common/flux3.py); its own GPU image
+# (deploy/cloud/modal/app.py), because it needs Diffusers 0.42.
+RECIPE_PROD_FLUX3: str = "mc-flux3-klein-edit-v1"
+MODEL_PROD_FLUX3: str = "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit"
+REVISION_PROD_FLUX3: str = "bf0af016a936bfe422eec96557aee058c3a6174e"
+# The same model in BFL's own bf16 weights, the recipe otherwise unchanged. BFL's repository
+# is gated; unsloth's copy is not, and at this revision every file pinned below has the same
+# SHA-256 as black-forest-labs/flux-3-image-klein at 337337621b8526e120f2275d250242f4a6bedd75
+# (checked on the Hub, 2026-10-26). Bench 4 (docs/research/flux3-klein-5_6b.md) measured it.
+RECIPE_PROD_FLUX3_BF16: str = "mc-flux3-klein-bf16-edit-v1"
+MODEL_PROD_FLUX3_BF16: str = "unsloth/flux-3-image-klein"
+REVISION_PROD_FLUX3_BF16: str = "67662613c10c92a1364cb3da8c6f7447977c7ce9"
 LIGHTNING_REPO: str = "lightx2v/Qwen-Image-Edit-2511-Lightning"
 LIGHTNING_REVISION: str = "d74eba145674fd7e31b949324e148e21e7118abd"
 LIGHTNING_FILE: str = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
@@ -101,6 +120,40 @@ QWEN_PROMPT: str = (
     "effect lettering. Keep the speech bubbles and their outlines. Do not alter the character's line "
     "art, facial expression, or pose in any way."
 )
+# FLUX 3 Image Klein edits the crop with its lettering in it (common/flux3.py), so the
+# prompt says where the lettering is: {location} is the hint's place in the crop in words
+# (flux.hint_location). The wording is the one the user brought from another manga tool
+# on 2026-10-26, less ", including black or shaded fills" after "the original flat fill":
+# with it, FLUX 3 painted white balloons black (2 of 17 crops at seed 1, and 1 of 12 on an
+# earlier probe); without it, none of 80 renders on four seeds did
+# (docs/research/flux3-klein-5_6b.md, bench 3).
+FLUX3_PROMPT: str = (
+    "Remove all text in the {location} target area of this manga crop, including small Japanese "
+    "characters, furigana, hand-drawn sound effects and onomatopoeia. Remove every lettering stroke, "
+    "outline and text shadow so the target is completely free of writing. Preserve character line "
+    "art, screentones, panel borders and surrounding background details exactly as they appear. "
+    "Reconstruct only the background hidden behind the removed lettering, continuing existing lines "
+    "and textures. Inside speech bubbles, restore the original flat fill. Match the original "
+    "contrast, shading, grain and line weight. Preserve the crop framing and text outside the target "
+    "area. Add no lettering, symbols, objects or colours to monochrome artwork."
+)
+# The reference tool's prompt ("Manga Cleaner Reproduction", domain.py DEFAULT_PROMPT),
+# for a request whose flux3_generation asks for it. Its {location} says "centre".
+REFERENCE_FLUX3_PROMPT: str = (
+    "Remove the selected lettering in the {location} area, including hand-drawn sound effects, "
+    "every black or white stroke, outline and shadow. The selected bold shapes are lettering, "
+    "not objects or character artwork. Reconstruct only the background hidden by this lettering, "
+    "continuing existing contours and matching the surrounding fills, shading and fine grain. "
+    "Keep flat areas flat; reproduce screentones only where they already exist. Preserve all "
+    "unselected artwork, panel borders, text and crop framing. Add no objects, lettering or new textures."
+)
+# Its marker sentence (inference.py prepare_job), added to either prompt when the
+# lettering is painted magenta.
+REFERENCE_MARKER_PROMPT: str = (
+    " The solid magenta paint marks the exact edit selection. Remove the painted shapes "
+    "and repair their background; no magenta or lettering may remain there. "
+    "Preserve all unmarked text and artwork."
+)
 # Crops whose long side is below this are upscaled before inference, as locally.
 WORK_LONG_SIDE: int = 768
 
@@ -120,6 +173,9 @@ PINNED_SAMPLING: Dict[str, PinnedSampling] = {
     RECIPE_PROD_SDNQ_9B: PinnedSampling(seed=1, steps=4, guidance_scaled=100),
     # Lightning runs without CFG: guidance 1.0 is true_cfg_scale 1.0.
     RECIPE_PROD_QWEN: PinnedSampling(seed=1, steps=8, guidance_scaled=100),
+    # The distilled flow map at BFL's 16 steps; it samples without CFG.
+    RECIPE_PROD_FLUX3: PinnedSampling(seed=1, steps=16, guidance_scaled=100),
+    RECIPE_PROD_FLUX3_BF16: PinnedSampling(seed=1, steps=16, guidance_scaled=100),
 }
 
 # Files of the pinned snapshot, exactly as the Hub lists them at REVISION_PROD_FLUX.
@@ -226,6 +282,62 @@ PROD_SNAPSHOT_QWEN_FILES: Tuple[Tuple[str, int], ...] = PROD_SNAPSHOT_QWEN_REPO_
 )
 PROD_SNAPSHOT_QWEN_TOTAL_BYTES: int = 17294421877 + LIGHTNING_BYTES + FUKIDASHI_BYTES
 
+# Pinned from the Hugging Face repository tree at REVISION_PROD_FLUX3. Diffusers reads the
+# components from modular_model_index.json; there is no model_index.json.
+PROD_SNAPSHOT_FLUX3_FILES: Tuple[Tuple[str, int], ...] = (
+    (".gitattributes", 1519),
+    ("LICENSE.md", 19593),
+    ("NOTICE.md", 330),
+    ("README.md", 5666),
+    ("modular_model_index.json", 1472),
+    ("text_encoder/LICENSE", 11357),
+    ("text_encoder/chat_template.json", 5502),
+    ("text_encoder/config.json", 37011),
+    ("text_encoder/generation_config.json", 242),
+    ("text_encoder/merges.txt", 1671839),
+    ("text_encoder/model.safetensors", 3062045040),
+    ("text_encoder/preprocessor_config.json", 390),
+    ("text_encoder/tokenizer.json", 7032403),
+    ("text_encoder/tokenizer_config.json", 10868),
+    ("text_encoder/video_preprocessor_config.json", 385),
+    ("text_encoder/vocab.json", 2776833),
+    ("transformer/config.json", 17232),
+    ("transformer/diffusion_pytorch_model.safetensors", 3240545888),
+    ("vae/config.json", 808),
+    ("vae/diffusion_pytorch_model.safetensors", 336213556),
+)
+PROD_SNAPSHOT_FLUX3_TOTAL_BYTES: int = 6650397934
+
+# Pinned from the Hugging Face repository tree at REVISION_PROD_FLUX3_BF16: the folders the
+# pipeline loads and the licence. The repository also holds a single-file checkpoint, an
+# fp8 and an nvfp4 variant and images (23 GB more), which the seed does not download.
+PROD_SNAPSHOT_FLUX3_BF16_FILES: Tuple[Tuple[str, int], ...] = (
+    ("LICENSE.md", 19593),
+    ("NOTICE.md", 330),
+    ("modular_model_index.json", 2115),
+    ("text_encoder/LICENSE", 11357),
+    ("text_encoder/README.md", 7133),
+    ("text_encoder/chat_template.json", 5502),
+    ("text_encoder/config.json", 1505),
+    ("text_encoder/generation_config.json", 269),
+    ("text_encoder/merges.txt", 1671839),
+    ("text_encoder/model-00001-of-00002.safetensors", 4967229296),
+    ("text_encoder/model-00002-of-00002.safetensors", 3908490048),
+    ("text_encoder/model.safetensors.index.json", 64742),
+    ("text_encoder/preprocessor_config.json", 390),
+    ("text_encoder/tokenizer.json", 7032403),
+    ("text_encoder/tokenizer_config.json", 10868),
+    ("text_encoder/video_preprocessor_config.json", 385),
+    ("text_encoder/vocab.json", 2776833),
+    ("transformer/config.json", 436),
+    ("transformer/diffusion_pytorch_model-00001-of-00002.safetensors", 9907529352),
+    ("transformer/diffusion_pytorch_model-00002-of-00002.safetensors", 1189878064),
+    ("transformer/diffusion_pytorch_model.safetensors.index.json", 37951),
+    ("vae/config.json", 808),
+    ("vae/diffusion_pytorch_model.safetensors", 336213556),
+)
+PROD_SNAPSHOT_FLUX3_BF16_TOTAL_BYTES: int = 20320984775
+
 
 @dataclass(frozen=True)
 class PinnedAdapter:
@@ -248,7 +360,8 @@ class ProductionModel:
     total_bytes: int
     license: str
     label: str
-    # "flux" (FLUX.2 Klein, the local sdnq recipe) or "qwen" (Qwen-Image-Edit + Lightning).
+    # "flux" (FLUX.2 Klein, the local sdnq recipe), "qwen" (Qwen-Image-Edit + Lightning) or
+    # "flux3" (FLUX 3 Image Klein, with its own GPU image).
     runner: str = "flux"
     # GPU a deployment of this model must use, per provider; absent means any allowed GPU.
     required_gpu: Tuple[Tuple[str, str], ...] = ()
@@ -264,6 +377,8 @@ class ProductionModel:
     # GPUs on which this model may hold more than one render copy; empty lets the VRAM
     # budget decide on any GPU (common/capacity.py render_copies).
     multi_copy_gpus: Tuple[str, ...] = ()
+    # The pinned files are part of the repository, and the seed downloads only them.
+    partial_repo: bool = False
 
     def required_gpu_for(self, provider: str) -> Optional[str]:
         return dict(self.required_gpu).get(provider)
@@ -306,6 +421,22 @@ PRODUCTION_MODELS: Dict[str, ProductionModel] = {
                                                               LIGHTNING_FILE, LIGHTNING_BYTES),
                                                 PinnedAdapter(FUKIDASHI_REPO, FUKIDASHI_REVISION,
                                                               FUKIDASHI_FILE, FUKIDASHI_BYTES))),
+    # Bench on an L40S, 2026-10-26 (docs/research/flux3-klein-5_6b.md): 8.4 GiB peak allocated
+    # by torch on 17 real crops, in a 24 GiB container. Neither nvidia-smi nor the host's peak
+    # memory was read, so one copy per container, with the bench's 24 GiB.
+    MODEL_PROD_FLUX3: ProductionModel(MODEL_PROD_FLUX3, REVISION_PROD_FLUX3, RECIPE_PROD_FLUX3,
+                                       PROD_SNAPSHOT_FLUX3_FILES, PROD_SNAPSHOT_FLUX3_TOTAL_BYTES,
+                                       "FLUX Kommunity", label="FLUX 3 Image Klein (4-bit)",
+                                       runner="flux3", worker_memory_gib=24),
+    # Bench 4 and 5 on an L40S, 2026-10-26: 21.1 GiB peak allocated by torch at the 768
+    # working size, 24.9 GiB at 1280, 19.0 GiB after load; too close to an L4's 24 GB and
+    # over it at 1280. Bench 5 ran in a 40 GiB container; the host's peak was not read.
+    MODEL_PROD_FLUX3_BF16: ProductionModel(MODEL_PROD_FLUX3_BF16, REVISION_PROD_FLUX3_BF16,
+                                            RECIPE_PROD_FLUX3_BF16, PROD_SNAPSHOT_FLUX3_BF16_FILES,
+                                            PROD_SNAPSHOT_FLUX3_BF16_TOTAL_BYTES, "FLUX Kommunity",
+                                            label="FLUX 3 Image Klein (bf16)", runner="flux3",
+                                            required_gpu=(("modal", "L40S"), ("beam", "RTX5090")),
+                                            worker_memory_gib=40, partial_repo=True),
 }
 
 
@@ -414,6 +545,22 @@ PINNED_RECIPES: Dict[str, RenderRecipe] = {
         preprocessing_version=PROD_PREPROCESSING_VERSION,
         model_id=MODEL_PROD_QWEN,
         model_revision=REVISION_PROD_QWEN,
+        native_mask_conditioning=False,
+    ),
+    # Same client preprocessing again: the worker scales the crop up to the working size and
+    # back, and the client writes the answer only inside the region's applied mask.
+    RECIPE_PROD_FLUX3: RenderRecipe(
+        recipe_id=RECIPE_PROD_FLUX3,
+        preprocessing_version=PROD_EDIT_PREPROCESSING_VERSION,
+        model_id=MODEL_PROD_FLUX3,
+        model_revision=REVISION_PROD_FLUX3,
+        native_mask_conditioning=False,
+    ),
+    RECIPE_PROD_FLUX3_BF16: RenderRecipe(
+        recipe_id=RECIPE_PROD_FLUX3_BF16,
+        preprocessing_version=PROD_EDIT_PREPROCESSING_VERSION,
+        model_id=MODEL_PROD_FLUX3_BF16,
+        model_revision=REVISION_PROD_FLUX3_BF16,
         native_mask_conditioning=False,
     ),
 }

@@ -79,7 +79,7 @@
     setCleanSolidOnly,
   } from '../state/session.svelte.js'
   import { capabilities, currentWorkflowMissing, loadCapabilities } from '../state/capabilities.svelte.js'
-  import { cloud, cloudEntries, cloudUsable, cloudCleanAvailable, cloudCleanMissingKey, openCloudSettings, pickCloudChoice } from '../state/cloud.svelte.js'
+  import { cloud, cloudEntries, cloudUsable, cloudCleanAvailable, cloudCleanMissingKey, openCloudSettings, pickCloudChoice, saveCloudWorkLongSide } from '../state/cloud.svelte.js'
   import {
     chooseCleanTarget,
     chooseDetectTarget,
@@ -127,7 +127,7 @@
   } from '../ui/index.js'
   import Icon from '../icons/Icon.svelte'
   import { t } from '../i18n/index.js'
-  import { cloudProfileLabel, currentCloudModelId, engineModelLabel } from '../model/model-names.js'
+  import { cloudProfileLabel, currentCloudModelId, engineModelLabel, takesWorkSize, WORK_LONG_SIDES } from '../model/model-names.js'
   import { model as pipelineModel } from '../model/pipelines.js'
   import { openSettings } from '../dialogs/settingslinks.js'
   import { isRegionCopy, layerOf } from '../model/layers.js'
@@ -554,6 +554,16 @@
    */
   const localFirst = $derived(cleanLocalFirst(values))
   const mixedHintId = `${uid}-mixed-hint`
+
+  /**
+   * The working size a cloud FLUX 3 clean edits a smaller crop at
+   * (`session.cloudWorkLongSide`), offered while the clean goes to a FLUX 3
+   * profile. A setting rather than a run value: the backend reads it for
+   * every cloud clean, the region menu's included.
+   */
+  const workSizeOffered = $derived(parts.clean && takesWorkSize(currentCloudModelId(cloud)))
+  const workSizeOptions = WORK_LONG_SIDES.map((side) => ({ value: String(side), label: `${side} px` }))
+  const workSizeHintId = `${uid}-work-size-hint`
 
   /**
    * Solid bubbles only (`editor.svelte.js#solidOnlyOf`): a clean on this
@@ -1352,6 +1362,11 @@
                 </label>
               </div>
               <div class="row-note"><p class="gate" id={mixedHintId}>{t('tools.target.mixedHint')}</p></div>
+            {/if}
+            {#if workSizeOffered}
+              {@render chipRow('workLongSide', 'tools.param.workLongSide', workSizeOptions,
+                String(session.cloudWorkLongSide), (next) => void saveCloudWorkLongSide(/** @type {any} */ (Number(next))))}
+              <div class="row-note"><p class="gate" id={workSizeHintId}>{t('tools.target.workLongSideHint')}</p></div>
             {/if}
             {#if cloudOff}
               <div class="row-note">

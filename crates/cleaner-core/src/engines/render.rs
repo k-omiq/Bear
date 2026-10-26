@@ -107,17 +107,80 @@ pub enum QwenTarget { Auto, Dialogue, SoundEffect, Other }
 
 /// The recipes whose worker takes [`QwenEdit`] guidance, each with the model
 /// family it must name. Qwen edits the whole crop; Klein v2 inpaints a
-/// LaMa-filled hole and reads the description as what the lettering covers.
+/// LaMa-filled hole and reads the description as what the lettering covers;
+/// FLUX 3 edits the whole crop and reads it as Klein v2 does.
 /// deploy/cloud/common/contract.py GUIDED_RECIPE_IDS is the same set.
-pub const GUIDED_RECIPES: [(&str, &str); 3] = [
+pub const GUIDED_RECIPES: [(&str, &str); 5] = [
     ("mc-qwen-image-edit-2511-v4", "Disty0/Qwen-Image-Edit"),
     ("mc-flux2-klein-inpaint-v2", "Disty0/FLUX.2-klein-4B"),
     ("mc-flux2-klein-9b-inpaint-v2", "Disty0/FLUX.2-klein-9B"),
+    ("mc-flux3-klein-edit-v1", "OzzyGT/Flux_3_Image_Klein"),
+    ("mc-flux3-klein-bf16-edit-v1", "unsloth/flux-3-image-klein"),
 ];
 
 /// Whether the worker for this recipe and model reads `qwen_edit`.
 pub fn takes_guidance(recipe_id: &str, model_id: &str) -> bool {
     GUIDED_RECIPES.iter().any(|(id, model)| recipe_id == *id && model_id.starts_with(model))
+}
+
+/// The recipes whose worker edits at a working size the request may name, each
+/// with the model family it must name: FLUX 3, in either set of weights.
+/// deploy/cloud/common/contract.py SIZED_RECIPE_IDS is the same set.
+pub const SIZED_RECIPES: [(&str, &str); 2] = [
+    ("mc-flux3-klein-edit-v1", "OzzyGT/Flux_3_Image_Klein"),
+    ("mc-flux3-klein-bf16-edit-v1", "unsloth/flux-3-image-klein"),
+];
+
+/// The working long sides a sized recipe's request may name. The first is the
+/// worker's own, which a request naming none is edited at; bench 5
+/// (docs/research/flux3-klein-5_6b.md) measured all three.
+/// deploy/cloud/common/contract.py WORK_LONG_SIDES is the same list.
+pub const WORK_LONG_SIDES: [u32; 3] = [768, 1024, 1280];
+
+/// Whether the worker for this recipe and model reads `work_long_side`.
+pub fn takes_work_size(recipe_id: &str, model_id: &str) -> bool {
+    SIZED_RECIPES.iter().any(|(id, model)| recipe_id == *id && model_id.starts_with(model))
+}
+
+/// How a FLUX 3 worker builds its edit, part by part this app's way or the
+/// reference tool's ("Manga Cleaner Reproduction", generation v2). The same
+/// recipes take it as take a working size ([`SIZED_RECIPES`]). Request-local
+/// like the working size: none, or every part false, is this app's way, and
+/// the app sends none then. deploy/cloud/common/contract.py Flux3Generation is
+/// the same record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Flux3Generation {
+    /// The reference tool's prompt template in place of this app's.
+    #[serde(default)]
+    pub reference_prompt: bool,
+    /// The lettering painted magenta into the image the model edits and named
+    /// in the prompt; a result that kept the paint is refused.
+    #[serde(default)]
+    pub marker: bool,
+    /// BFL's earlier time shift, 6.93 (`mu` 1.93586), in place of 16.
+    #[serde(default)]
+    pub reference_shift: bool,
+    /// One megapixel on a 32 px grid, scaled up or down, in place of the
+    /// working long side. A request that sets it names no `work_long_side`.
+    #[serde(default)]
+    pub megapixel_size: bool,
+}
+
+impl Flux3Generation {
+    /// Whether every part is this app's own: a request then carries none.
+    pub fn is_own(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The size the reference tool edits a `w` by `h` crop at: one megapixel,
+/// each side rounded to the nearest multiple of 32 and at least 32
+/// (`work_size` in its imaging.py, Python's round-half-even).
+pub fn megapixel_size(w: u32, h: u32) -> (u32, u32) {
+    let scale = (1024.0 * 1024.0 / (f64::from(w.max(1)) * f64::from(h.max(1)))).sqrt();
+    let side = |v: u32| 32 * ((f64::from(v) * scale / 32.0).round_ties_even() as u32).max(1);
+    (side(w), side(h))
 }
 
 /// Model and recipe identity contract for diffusion rendering.
@@ -130,12 +193,31 @@ pub struct RenderRecipe {
     pub native_mask_conditioning: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qwen_edit: Option<QwenEdit>,
+    /// The long side the worker edits a smaller crop at, one of
+    /// [`WORK_LONG_SIDES`]; none is the worker's own. Request-local, like
+    /// `qwen_edit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_long_side: Option<u32>,
+    /// How a FLUX 3 worker builds its edit; none is this app's way.
+    /// Request-local, like `work_long_side`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flux3_generation: Option<Flux3Generation>,
+    /// The client's finishing of a 3.0.0 answer; none is the default. Never
+    /// sent: the worker does not finish, and the request digest does not
+    /// cover it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finishing: Option<super::postprocess::Choice>,
 }
 
 impl RenderRecipe {
     pub fn sampling(&self) -> super::flux::WireSampling {
         let mut sampling = super::flux::wire_sampling();
-        if self.recipe_id == "mc-qwen-image-edit-2511-v4" { sampling.steps = 8; }
+        // deploy/cloud/common/manifest.py PINNED_SAMPLING: the worker refuses other steps.
+        match self.recipe_id.as_str() {
+            "mc-qwen-image-edit-2511-v4" => sampling.steps = 8,
+            "mc-flux3-klein-edit-v1" | "mc-flux3-klein-bf16-edit-v1" => sampling.steps = 16,
+            _ => {}
+        }
         sampling
     }
 
@@ -148,11 +230,17 @@ impl RenderRecipe {
 
     pub fn takes_guidance(&self) -> bool { takes_guidance(&self.recipe_id, &self.model_id) }
 
-    /// Deployment identity excludes request-local guidance. Grant equality
-    /// still compares the complete recipe, including that guidance.
+    pub fn takes_work_size(&self) -> bool { takes_work_size(&self.recipe_id, &self.model_id) }
+
+    /// Deployment identity excludes request-local guidance, working size,
+    /// generation and finishing. Grant equality still compares the complete recipe.
     pub fn same_deployment(&self, other: &Self) -> bool {
         let mut a = self.clone(); let mut b = other.clone();
-        a.qwen_edit = None; b.qwen_edit = None; a == b
+        a.qwen_edit = None; b.qwen_edit = None;
+        a.work_long_side = None; b.work_long_side = None;
+        a.flux3_generation = None; b.flux3_generation = None;
+        a.finishing = None; b.finishing = None;
+        a == b
     }
 
     pub fn new(
@@ -169,6 +257,9 @@ impl RenderRecipe {
             model_revision: model_revision.into(),
             native_mask_conditioning,
             qwen_edit: None,
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         }
     }
 }
@@ -216,6 +307,11 @@ const _: () = assert!(MAX_CROP_PIXELS == MAX_CROP_SIDE as u64 * MAX_CROP_SIDE as
 /// `deploy/cloud/tests/test_recipe_parity.py` holds the two equal.
 pub const PREPROCESSING_VERSION: &str = "2.0.0";
 
+/// [`Preprocessing::V3`]'s version, which an edit recipe pins
+/// (`PROD_EDIT_PREPROCESSING_VERSION` in deploy/cloud/common/manifest.py,
+/// held equal by the same parity test).
+pub const EDIT_PREPROCESSING_VERSION: &str = "3.0.0";
+
 /// How a region becomes the crop a model is shown, and how its answer is
 /// written back. A render is prepared and composited under one version, which
 /// its recipe names, so a result that was in flight when the version changed
@@ -230,6 +326,12 @@ pub enum Preprocessing {
     /// the context is [`CONTEXT_WIDE`], and the answer's tone is aligned to the
     /// page around the edit before it is blended ([`ToneReport`]).
     V2,
+    /// `3.0.0`. V2's hole and context; the answer, an edit model's whole
+    /// redrawn crop, is matched to the page by [`super::postprocess`] (tone,
+    /// lighting and the page's own screentone, away from the drawing's
+    /// contours) before it is blended. New renders are not prepared under it
+    /// unless their recipe names it.
+    V3,
 }
 
 /// A preprocessing version this build cannot prepare or composite.
@@ -248,6 +350,7 @@ impl Preprocessing {
         match version {
             "1.0.0" => Ok(Preprocessing::V1),
             PREPROCESSING_VERSION => Ok(Preprocessing::V2),
+            EDIT_PREPROCESSING_VERSION => Ok(Preprocessing::V3),
             other => Err(UnsupportedPreprocessing(other.to_owned())),
         }
     }
@@ -256,6 +359,7 @@ impl Preprocessing {
         match self {
             Preprocessing::V1 => "1.0.0",
             Preprocessing::V2 => PREPROCESSING_VERSION,
+            Preprocessing::V3 => EDIT_PREPROCESSING_VERSION,
         }
     }
 
@@ -269,7 +373,7 @@ impl Preprocessing {
     /// record that never stored lettering falls back to its mask.
     pub fn hole<'a>(self, mask: &'a Mask, ink: &'a Mask) -> &'a Mask {
         match self {
-            Preprocessing::V2 if !ink.is_empty() => ink,
+            Preprocessing::V2 | Preprocessing::V3 if !ink.is_empty() => ink,
             _ => mask,
         }
     }
@@ -286,7 +390,7 @@ impl Preprocessing {
     pub fn context_for(self, bounds: Rect) -> u32 {
         match self {
             Preprocessing::V1 => (bounds.w.max(bounds.h) / 2).clamp(CONTEXT_MIN, CONTEXT_MAX),
-            Preprocessing::V2 => {
+            Preprocessing::V2 | Preprocessing::V3 => {
                 let fits = |context: u32| match (crop_side(bounds.w, context), crop_side(bounds.h, context)) {
                     (Some(w), Some(h)) => fits_service(w, h),
                     _ => false,
@@ -476,6 +580,8 @@ pub struct PreparedRender {
     reading: ColorMode,
     depth: BitDepth,
     ceiling: f64,
+    /// The V3 composite's finishing ([`super::postprocess::settle_with`]).
+    finishing: super::postprocess::Choice,
 }
 
 /// A generated diffusion crop returned by an inpainter or inference engine.
@@ -573,7 +679,14 @@ impl PreparedRender {
             reading: answer_mode(page),
             depth: page.depth,
             ceiling,
+            finishing: super::postprocess::Choice::default(),
         })
+    }
+
+    /// Finish the answer by `finishing` under preprocessing V3; earlier
+    /// versions have no finishing to choose.
+    pub fn set_finishing(&mut self, finishing: super::postprocess::Choice) {
+        self.finishing = finishing;
     }
 
     pub fn preprocessing(&self) -> Preprocessing {
@@ -637,7 +750,7 @@ impl PreparedRender {
 
     /// Composite the generated crop back onto the captured source patch, the
     /// way this preparation's version does: as it came back under V1, tone
-    /// aligned under V2.
+    /// aligned under V2, matched to the page under V3.
     ///
     /// Clones the captured bounded patch and evaluates the captured AlphaRamp without requiring
     /// the source page to be passed again, preventing caller desynchronization by construction.
@@ -664,11 +777,49 @@ impl PreparedRender {
     }
 
     pub fn composite(&self, generated: &GeneratedCrop<'_>) -> Result<Rendered, Error> {
-        let tone = match self.preprocessing {
-            Preprocessing::V1 => None,
-            Preprocessing::V2 => Some(self.tone(generated)?),
+        match self.preprocessing {
+            Preprocessing::V1 => self.blend(generated, None),
+            Preprocessing::V2 => self.blend(generated, Some(self.tone(generated)?)),
+            Preprocessing::V3 => {
+                let (settled, report) = self.settle(generated)?;
+                let mut rendered = self.blend(&GeneratedCrop::new(self.crop.w, self.crop.h, &settled), None)?;
+                rendered.matched = Some(report);
+                Ok(rendered)
+            }
+        }
+    }
+
+    /// V3: the answer matched to the page ([`super::postprocess`]), as a
+    /// crop-sized RGB8 answer the blend reads as it reads the model's. It is
+    /// the model's answer wherever the applied mask does not write.
+    fn settle(&self, generated: &GeneratedCrop<'_>) -> Result<(Vec<u8>, super::postprocess::Report), Error> {
+        use super::grid::{Grid, Mask as GridMask};
+        self.validate_generated(generated)?;
+        let (w, h) = (self.crop.w as usize, self.crop.h as usize);
+        let channels = tone_channels(self.reading);
+        let read = |rgb8: &[u8]| -> Vec<Grid> {
+            (0..channels)
+                .map(|channel| Grid { w, h, data: (0..w * h).map(|i| returned_sample(rgb8, self.reading, channel, i * 3) * 255.0).collect() })
+                .collect()
         };
-        self.blend(generated, tone)
+        let (shown, answer) = (read(&self.image_rgb8), read(generated.rgb8));
+        let (mut mask, mut page) = (GridMask::new(w, h, false), GridMask::new(w, h, false));
+        for cy in 0..h {
+            for cx in 0..w {
+                let (x, y, i) = (self.crop.x + cx as i64, self.crop.y + cy as i64, cy * w + cx);
+                mask.data[i] = self.alpha(x, y) > 0.0;
+                page.data[i] = self.extent.contains(x, y) && self.opaque.as_ref().is_none_or(|opaque| opaque[i]);
+            }
+        }
+        let crop = super::postprocess::Crop { shown: &shown, answer: &answer, mask: &mask, page: &page };
+        let (settled, report) = super::postprocess::settle_with(&crop, self.finishing);
+        let mut rgb8 = generated.rgb8.to_vec();
+        for i in (0..w * h).filter(|&i| mask.data[i]) {
+            for channel in 0..3 {
+                rgb8[i * 3 + channel] = settled[channel.min(channels - 1)].data[i].round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        Ok((rgb8, report))
     }
 
     /// How far the model's answer drifted from the page around the edit,
@@ -779,6 +930,7 @@ impl PreparedRender {
             pad: self.pad,
             tiles: 1,
             tone,
+            matched: None,
         })
     }
 }
@@ -2421,7 +2573,9 @@ mod tests {
         assert_eq!(Preprocessing::of("1.0.0"), Ok(Preprocessing::V1));
         assert_eq!(Preprocessing::of(PREPROCESSING_VERSION), Ok(Preprocessing::CURRENT));
         assert_eq!(Preprocessing::CURRENT.version(), PREPROCESSING_VERSION);
-        for unknown in ["", "3.0.0", "cleaner-crop-v1", "2.0"] {
+        assert_eq!(Preprocessing::of(EDIT_PREPROCESSING_VERSION), Ok(Preprocessing::V3));
+        assert_eq!(Preprocessing::V3.version(), "3.0.0");
+        for unknown in ["", "4.0.0", "cleaner-crop-v1", "2.0"] {
             assert_eq!(Preprocessing::of(unknown), Err(UnsupportedPreprocessing(unknown.to_owned())));
         }
         let (mask, ink) = (Mask::filled(Rect::new(0, 0, 9, 9)), Mask::filled(Rect::new(2, 2, 3, 3)));
@@ -2429,5 +2583,31 @@ mod tests {
         assert_eq!(Preprocessing::V2.hole(&mask, &ink), &ink);
         let unrecorded = Mask::empty(Rect::new(0, 0, 0, 0));
         assert_eq!(Preprocessing::V2.hole(&mask, &unrecorded), &mask);
+        assert_eq!(Preprocessing::V3.hole(&mask, &ink), &ink);
+        let bounds = Rect::new(40, 40, 300, 120);
+        assert_eq!(Preprocessing::V3.crop_for(bounds), Preprocessing::V2.crop_for(bounds), "V3 crops as V2 does");
+    }
+
+    /// **V3 matches a drifted answer to the page and records what it did.**
+    /// The edit post-processing brings the same drift V2 aligns back to the
+    /// page on every background, writes nothing outside the applied mask, and
+    /// keeps its report rather than a V2 tone record.
+    #[test]
+    fn a_v3_composite_matches_a_drifted_answer_to_the_page() {
+        for scene in scenes() {
+            let fitted = manual_fit(&scene);
+            let drift = match scene.name {
+                "clipped sky beside art" => [8, 5, 17],
+                _ if scene.page.mode == ColorMode::Rgb => [18, 14, 10],
+                _ => [14; 3],
+            };
+            let v3 = PreparedRender::prepare_as(&scene.page, &fitted, Preprocessing::V3).unwrap();
+            let answer = drifted(&v3, &scene.clean, drift);
+            let rendered = v3.composite(&GeneratedCrop::new(v3.crop().w, v3.crop().h, &answer)).unwrap();
+            assert!(rendered.tone.is_none(), "{}", scene.name);
+            let report = rendered.matched.clone().expect("V3 reports its matching");
+            assert_eq!(report.provenance()["preprocessing_version"], "3.0.0");
+            assert!(residual(&scene, &rendered) <= 4, "{}: residual {}, {report:?}", scene.name, residual(&scene, &rendered));
+        }
     }
 }

@@ -130,6 +130,9 @@ class RecipeParityTest(unittest.TestCase):
         self.assertEqual(manifest.PROD_PREPROCESSING_VERSION, rust)
         for recipe_id in (manifest.RECIPE_PROD_SDNQ, manifest.RECIPE_PROD_SDNQ_9B):
             self.assertEqual(manifest.PINNED_RECIPES[recipe_id].preprocessing_version, rust)
+        edit = _rust_const(self.render_rs, "EDIT_PREPROCESSING_VERSION", "&str", r'"([^"]*)"')
+        self.assertEqual(manifest.PROD_EDIT_PREPROCESSING_VERSION, edit)
+        self.assertEqual(manifest.PINNED_RECIPES[manifest.RECIPE_PROD_FLUX3].preprocessing_version, edit)
 
     def test_crop_limits_match_render_rs(self) -> None:
         # render.rs sizes every crop's context to fit these; a gateway that
@@ -187,6 +190,17 @@ class RecipeParityTest(unittest.TestCase):
         self.assertEqual(set(rust), contract.GUIDED_RECIPE_IDS)
         for recipe_id, family in rust.items():
             self.assertTrue(manifest.PINNED_RECIPES[recipe_id].model_id.startswith(family), recipe_id)
+
+    def test_sized_recipes_match_render_rs(self) -> None:
+        table = re.search(r"pub const SIZED_RECIPES: \[\(&str, &str\); \d+\] = \[(.*?)\];", self.render_rs, re.S)
+        self.assertIsNotNone(table, "SIZED_RECIPES not found in render.rs")
+        rust = dict(re.findall(r'\("([^"]+)", "([^"]+)"\)', table.group(1)))
+        self.assertEqual(set(rust), contract.SIZED_RECIPE_IDS)
+        for recipe_id, family in rust.items():
+            self.assertTrue(manifest.PINNED_RECIPES[recipe_id].model_id.startswith(family), recipe_id)
+        sides = re.search(r"pub const WORK_LONG_SIDES: \[u32; \d+\] = \[([0-9, ]+)\];", self.render_rs)
+        self.assertIsNotNone(sides, "WORK_LONG_SIDES not found in render.rs")
+        self.assertEqual(tuple(int(side) for side in sides.group(1).split(",")), contract.WORK_LONG_SIDES)
 
     def test_generator_is_seeded_on_the_host(self) -> None:
         needle = 'torch.Generator(device="cpu").manual_seed(int(seed))'

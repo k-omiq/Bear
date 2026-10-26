@@ -1106,6 +1106,9 @@ impl InferenceService {
 
         let create_intent = CreateAttemptIntent {
             qwen_edit: recipe.qwen_edit.clone(),
+            work_long_side: recipe.work_long_side,
+            flux3_generation: recipe.flux3_generation,
+            finishing: recipe.finishing,
             attempt_id: attempt_id.to_string(),
             job_id: job_id.clone(),
             provider,
@@ -1511,6 +1514,9 @@ impl InferenceService {
         let mut recipe = RenderRecipe::new(&record.recipe_id, &record.preprocessing_version,
             &record.model_id, &record.model_revision, record.native_mask_conditioning);
         recipe.qwen_edit = record.qwen_edit.clone();
+        recipe.work_long_side = record.work_long_side;
+        recipe.flux3_generation = record.flux3_generation;
+        recipe.finishing = record.finishing;
         let region = self.attach_patch_to_project(
             job_path,
             source_idx,
@@ -1748,9 +1754,10 @@ impl InferenceService {
         let preprocessing = Preprocessing::of(&recipe.preprocessing_version).map_err(|e| {
             InferenceServiceError::StaleAttachment(e.to_string())
         })?;
-        let cloud = cur
+        let mut cloud = cur
             .prepare(&job, &page, preprocessing)
             .map_err(|e| InferenceServiceError::Consent(ConsentError::RenderPrepareFailed(e)))?;
+        cloud.prepared.set_finishing(recipe.finishing.unwrap_or_default());
         if snapshot
             .input_sha256
             .as_deref()
@@ -1819,6 +1826,7 @@ impl InferenceService {
             "reach_sha256": cloud.reach_digest,
         });
         let tone = rendered.tone.as_ref().map(|tone| tone.provenance());
+        let matched = rendered.matched.as_ref().map(|matched| matched.provenance());
         // The detected region as it stands before its result replaces it: one
         // side of the undo step the commit records below.
         let mut clean_before = None;
@@ -1842,6 +1850,10 @@ impl InferenceService {
                 params["input_provenance"] = input_provenance;
                 if let Some(edit) = &recipe.qwen_edit { params["qwen_edit"] = serde_json::json!(edit); }
                 else if let Some(params) = params.as_object_mut() { params.remove("qwen_edit"); }
+                if let Some(side) = recipe.work_long_side { params["work_long_side"] = serde_json::json!(side); }
+                else if let Some(params) = params.as_object_mut() { params.remove("work_long_side"); }
+                if let Some(generation) = recipe.flux3_generation { params["flux3_generation"] = serde_json::json!(generation); }
+                else if let Some(params) = params.as_object_mut() { params.remove("flux3_generation"); }
                 // The record of the alignment these pixels had: a render
                 // that aligned nothing (1.0.0) takes the earlier one away.
                 match tone {
@@ -1849,6 +1861,15 @@ impl InferenceService {
                     None => {
                         if let Some(params) = params.as_object_mut() {
                             params.remove("tone");
+                        }
+                    }
+                }
+                // Likewise the post-processing a 3.0.0 render matched them by.
+                match matched {
+                    Some(matched) => params["postprocess"] = matched,
+                    None => {
+                        if let Some(params) = params.as_object_mut() {
+                            params.remove("postprocess");
                         }
                     }
                 }
@@ -1870,8 +1891,13 @@ impl InferenceService {
                     "input_provenance": input_provenance,
                 });
                 if let Some(edit) = &recipe.qwen_edit { params_snapshot["qwen_edit"] = serde_json::json!(edit); }
+                if let Some(side) = recipe.work_long_side { params_snapshot["work_long_side"] = serde_json::json!(side); }
+                if let Some(generation) = recipe.flux3_generation { params_snapshot["flux3_generation"] = serde_json::json!(generation); }
                 if let Some(tone) = tone {
                     params_snapshot["tone"] = tone;
+                }
+                if let Some(matched) = matched {
+                    params_snapshot["postprocess"] = matched;
                 }
                 // The detection's text group travels onto its patch, as a
                 // local clean carries it: mask, group, request, output.
@@ -2993,6 +3019,8 @@ pub(crate) mod tests {
                 model_id: "flux-schnell".into(),
                 model_revision: "0123456789abcdef0123456789abcdef01234567".into(),
                 native_mask_conditioning: false,
+                work_long_side: None,
+                flux3_generation: None,
             },
             width: crop_bounds.w,
             height: crop_bounds.h,
@@ -3116,6 +3144,9 @@ pub(crate) mod tests {
             request_digest: request_digest.clone(),
             chapter_id: Some("chapter-1".into()),
             page_index: Some(0),
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         };
 
         let (_rec, guard) = service.journal.create_intent(create_intent).unwrap();
@@ -3244,6 +3275,8 @@ pub(crate) mod tests {
                 model_id: "flux-schnell".into(),
                 model_revision: "0123456789abcdef0123456789abcdef01234567".into(),
                 native_mask_conditioning: false,
+                work_long_side: None,
+                flux3_generation: None,
             },
             width: crop_bounds.w,
             height: crop_bounds.h,
@@ -3286,6 +3319,9 @@ pub(crate) mod tests {
             request_digest: request_digest.clone(),
             chapter_id: Some("chapter-1".into()),
             page_index: Some(0),
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         };
 
         let (_rec, guard) = service.journal.create_intent(create_intent).unwrap();
@@ -3390,6 +3426,8 @@ pub(crate) mod tests {
                 model_id: "flux-schnell".into(),
                 model_revision: "0123456789abcdef0123456789abcdef01234567".into(),
                 native_mask_conditioning: false,
+                work_long_side: None,
+                flux3_generation: None,
             },
             width: crop_bounds.w,
             height: crop_bounds.h,
@@ -3432,6 +3470,9 @@ pub(crate) mod tests {
             request_digest: request_digest.clone(),
             chapter_id: Some("chapter-1".into()),
             page_index: Some(0),
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         };
 
         let (_rec, guard) = service.journal.create_intent(create_intent).unwrap();
@@ -3858,6 +3899,33 @@ pub(crate) mod tests {
         assert_eq!(second.crop_bounds, first.crop_bounds);
         assert_eq!(second.hint_sha256, first.hint_sha256);
         assert_eq!(second.mask_hash, first.mask_hash);
+    }
+
+    /// **A 3.0.0 render records its post-processing, not a tone curve**, and a
+    /// later 2.0.0 render of the same patch swaps one record for the other.
+    #[test]
+    fn an_edit_render_records_its_post_processing_and_a_rerender_replaces_it() {
+        let scratch = test_scratch("edit-postprocess");
+        let (manifest, _) = setup_test_job(&scratch, "reg-1");
+        let bbox = Rect::new(30, 30, 24, 16);
+        store_test_detection(&manifest, "p-d0", bbox);
+        let service = isolated_service(&scratch);
+        let snapshot = |manifest: &Path| {
+            let job = Job::open(manifest).unwrap();
+            job.project.patches.iter().find(|r| r.id == "p-d0").unwrap().provenance.params_snapshot.clone()
+        };
+        let v3 = recipe_at(cleaner_core::engines::render::EDIT_PREPROCESSING_VERSION);
+        attach_white(&service, &manifest, "p-d0", &v3, &v3).expect("a 3.0.0 detection result attaches");
+        let first = snapshot(&manifest);
+        assert_eq!(first["postprocess"]["preprocessing_version"], "3.0.0", "{first}");
+        assert!(first["postprocess"]["gain"].is_array(), "{first}");
+        assert!(first.get("tone").is_none(), "{first}");
+
+        let v2 = recipe_at(cleaner_core::engines::render::PREPROCESSING_VERSION);
+        attach_white(&service, &manifest, "p-d0", &v2, &v2).expect("a 2.0.0 re-render attaches");
+        let second = snapshot(&manifest);
+        assert!(second.get("postprocess").is_none(), "a 2.0.0 render kept the 3.0.0 record: {second}");
+        assert_eq!(second["tone"]["preprocessing_version"], "2.0.0");
     }
 
     /// **A tone record describes the render that made the pixels.** A patch
@@ -5068,6 +5136,9 @@ pub(crate) mod tests {
             input_sha256: Some(input.input_sha256), predecessors_sha256: Some(input.predecessors_sha256),
             crop_sha256: input.crop_sha256, hint_sha256: input.hint_sha256,
             request_digest: request.request_digest.clone(), chapter_id: Some("chapter".into()), page_index: Some(0),
+            work_long_side: request.recipe.work_long_side,
+            flux3_generation: request.recipe.flux3_generation,
+            finishing: fixture.recipe.finishing,
         };
         let (_, guard) = service.journal.create_intent(intent).unwrap();
         service.journal.mark_dispatching(&guard).unwrap();
@@ -5114,6 +5185,49 @@ pub(crate) mod tests {
         let (fixture, service) = qwen_cached_fixture("qwen-sweep-unreviewed");
         let (report, _) = crate::inference::commands::recover_all_attempts(&service, &|_| Some(fixture.manifest.clone()));
         assert_eq!((report.attached.len(), report.needs_attention.len()), (1, 0));
+    }
+
+    /// A FLUX 3 render at a working size of its own keeps that size through the
+    /// journal, so recovery rebuilds the request it sent, and its patch says so.
+    #[test]
+    fn a_working_size_survives_recovery_and_is_recorded_on_the_patch() {
+        let mut fixture = RenderFixture::new("flux3-work-size");
+        fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v1".into();
+        fixture.recipe.model_id = "unsloth/flux-3-image-klein".into();
+        fixture.recipe.work_long_side = Some(1280);
+        let service = cached_fixture(&fixture);
+        assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(),
+            RecoveryDecision::AlreadyCommitted { .. }));
+        let record = service.journal.get_record(&fixture.attempt_id()).unwrap();
+        assert_eq!(record.work_long_side, Some(1280));
+        assert_eq!(compute_request_digest(&record.to_request_metadata()), record.request_digest);
+        assert_eq!(fixture.committed_patch().provenance.params_snapshot["work_long_side"], 1280);
+    }
+
+    /// A 3.0.0 render's finishing is the client's, not the worker's: it keeps
+    /// through the journal without touching the request it sent, and the
+    /// patch's post-processing record names it. Its generation choice is the
+    /// worker's, kept with the request it was sent in.
+    #[test]
+    fn a_finishing_survives_recovery_and_is_recorded_on_the_patch() {
+        use cleaner_core::engines::postprocess::{Choice, Finishing};
+        let mut fixture = RenderFixture::new("flux3-finishing");
+        fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v1".into();
+        fixture.recipe.model_id = "unsloth/flux-3-image-klein".into();
+        fixture.recipe.preprocessing_version = "3.0.0".into();
+        let choice = Choice { finishing: Finishing::ReferencePoisson, grayscale: true };
+        fixture.recipe.finishing = Some(choice);
+        let generation = cleaner_core::engines::render::Flux3Generation { marker: true, ..Default::default() };
+        fixture.recipe.flux3_generation = Some(generation);
+        let service = cached_fixture(&fixture);
+        assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(),
+            RecoveryDecision::AlreadyCommitted { .. }));
+        let record = service.journal.get_record(&fixture.attempt_id()).unwrap();
+        assert_eq!((record.finishing, record.flux3_generation), (Some(choice), Some(generation)));
+        assert_eq!(compute_request_digest(&record.to_request_metadata()), record.request_digest);
+        let postprocess = &fixture.committed_patch().provenance.params_snapshot["postprocess"];
+        assert_eq!((&postprocess["finishing"], &postprocess["grayscale"]), (&serde_json::json!("reference-poisson"), &serde_json::json!(true)));
+        assert_eq!(fixture.committed_patch().provenance.params_snapshot["flux3_generation"]["marker"], true);
     }
 
     /// A record an older build left waiting for a review, or marked reviewed,

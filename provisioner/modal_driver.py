@@ -594,7 +594,8 @@ class ModalDriver(BaseProviderDriver):
             cost=cost,
             notes=[
                 f"The weights download on a seed container (2 CPU, {seed_memory} GiB, up to {seed_timeout // 3600} h per attempt); setup waits for it. Failed attempts can incur additional cost.",
-            ] + (["A render starts the GPU worker; a cold start loads 5.5 GB of weights first."] if model else []),
+            ] + ([f"A render starts the GPU worker; a cold start loads {model.total_bytes / 1e9:.1f} GB of weights first."]
+                 if model else []),
             cleanup_summary=[
                 "Delete the proxy auth token",
                 f"Stop the Modal app {s.app_name}",

@@ -1396,6 +1396,19 @@ pub async fn prepare_cloud_consent(
             .resolve_chapter(ch_id)
             .map_err(|_| "failed to resolve chapter".to_string())?;
 
+        // The working size, generation and finishing are the settings', as for a batch clean.
+        let settings = crate::settings::read(&app).unwrap_or(serde_json::Value::Null);
+        let work_long_side = crate::inference::cloud_clean::work_long_side_from_value(
+            settings.get(crate::inference::cloud_clean::WORK_LONG_SIDE_KEY))?;
+        let finishing = crate::inference::cloud_clean::finishing_from_settings(&settings)?;
+        let flux3_generation = crate::inference::cloud_clean::flux3_generation_from_settings(&settings)?;
+        let recipe = recipe.map(|mut recipe| {
+            crate::inference::cloud_clean::apply_work_long_side(&mut recipe, work_long_side);
+            crate::inference::cloud_clean::apply_flux3_generation(&mut recipe, flux3_generation);
+            crate::inference::cloud_clean::apply_finishing(&mut recipe, finishing);
+            recipe
+        });
+
         let proposal = prepare_cloud_consent_inner(
             cloud_allowed,
             &config,
@@ -1795,6 +1808,9 @@ pub fn submit_cloud_attempt_inner(
 
     let create_intent = CreateAttemptIntent {
         qwen_edit: proposal.recipe.qwen_edit.clone(),
+        work_long_side: proposal.recipe.work_long_side,
+        flux3_generation: proposal.recipe.flux3_generation,
+        finishing: proposal.recipe.finishing,
         attempt_id: derived_attempt_id.clone(),
         job_id,
         provider: proposal.provider,
@@ -3360,6 +3376,8 @@ mod tests {
                 model_id: intent.model_id.clone(),
                 model_revision: intent.model_revision.clone(),
                 native_mask_conditioning: intent.native_mask_conditioning,
+                work_long_side: None,
+                flux3_generation: None,
             },
             width: intent.width,
             height: intent.height,
@@ -4218,6 +4236,9 @@ mod tests {
                 .into(),
             chapter_id: Some("chap-1".into()),
             page_index: Some(0),
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         };
 
         let req_meta = cleaner_core::cloud_wire::JobRequestMetadata {
@@ -4231,6 +4252,8 @@ mod tests {
                 model_id: intent.model_id.clone(),
                 model_revision: intent.model_revision.clone(),
                 native_mask_conditioning: intent.native_mask_conditioning,
+                work_long_side: None,
+                flux3_generation: None,
             },
             width: intent.width,
             height: intent.height,
@@ -4298,6 +4321,9 @@ mod tests {
                 request_digest: String::new(),
                 chapter_id: Some("chap-1".into()),
                 page_index: Some(0),
+                work_long_side: None,
+                flux3_generation: None,
+                finishing: None,
             };
             intent.request_digest = compute_intent_request_digest(&intent);
             intent
@@ -4389,6 +4415,9 @@ mod tests {
             request_digest: String::new(),
             chapter_id: Some("chap-1".into()),
             page_index: Some(0),
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         };
         intent.request_digest = compute_intent_request_digest(&intent);
 
@@ -4446,6 +4475,9 @@ mod tests {
             request_digest: String::new(),
             chapter_id: Some("non-existent-chap".into()),
             page_index: Some(0),
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         };
         intent.request_digest = compute_intent_request_digest(&intent);
 
@@ -4818,6 +4850,9 @@ mod tests {
                 request_digest: String::new(),
                 chapter_id: Some("chap-1".into()),
                 page_index: Some(0),
+                work_long_side: None,
+                flux3_generation: None,
+                finishing: None,
             };
             intent.request_digest = compute_intent_request_digest(&intent);
             intent
@@ -4970,6 +5005,9 @@ mod tests {
                 cached_png_bytes: 100,
                 reported_cost_usd: None,
             },
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         };
 
         let rev_json = serde_json::json!(5);
@@ -5144,6 +5182,9 @@ mod tests {
                 cached_png_bytes: 100,
                 reported_cost_usd: None,
             },
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         };
 
         // 1. Record has chapter_id = None -> fails closed (stale)
@@ -5220,6 +5261,9 @@ mod tests {
                 cached_png_bytes: 100,
                 reported_cost_usd: None,
             },
+            work_long_side: None,
+            flux3_generation: None,
+            finishing: None,
         };
         assert!(!is_project_recovery_stale(&library, &record));
 
@@ -5836,6 +5880,9 @@ mod tests {
                 request_digest: String::new(),
                 chapter_id: Some("chap-1".into()),
                 page_index: Some(0),
+                work_long_side: None,
+                flux3_generation: None,
+                finishing: None,
             };
             intent.request_digest = compute_intent_request_digest(&intent);
             intent

@@ -34,6 +34,7 @@ from deploy.cloud.common.flux import (
     WorkerRenderError,
     filter_call_kwargs,
     guidance_from_scaled,
+    hint_location,
     looks_like_memory,
 )
 from deploy.cloud.common.contract import QwenEdit
@@ -85,14 +86,9 @@ def build_prompt(edit: Optional[QwenEdit], lettering: Any = None, np: Any = None
     """
     edit = edit or QwenEdit()
     location = "in this crop"
-    if lettering is not None and np is not None:
-        ys, xs = np.nonzero(lettering)
-        if len(xs):
-            cy = (float(ys.min()) + float(ys.max())) / 2 / lettering.shape[0]
-            cx = (float(xs.min()) + float(xs.max())) / 2 / lettering.shape[1]
-            row = "upper" if cy < 1/3 else "lower" if cy > 2/3 else "middle"
-            col = "left" if cx < 1/3 else "right" if cx > 2/3 else "center"
-            location = f"in the {row} {col} area of this crop"
+    where = hint_location(lettering, np) if lettering is not None and np is not None else None
+    if where is not None:
+        location = f"in the {where} area of this crop"
     action = {
         "auto": "Remove the text and lettering",
         "dialogue": "Remove the dialogue lettering inside the speech bubble",

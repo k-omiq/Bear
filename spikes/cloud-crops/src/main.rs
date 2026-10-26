@@ -118,7 +118,7 @@ fn prepare_page(pipeline: &mut Pipeline, detector: &mut Detector, stem: &str, by
             fitted.best_deviation = stored.best_deviation;
         }
         let route = format!("{:?}", fitted.route);
-        match PreparedRender::prepare_as(page, &fitted, Preprocessing::V2) {
+        match PreparedRender::prepare_as(page, &fitted, version()) {
             Ok(prepared) => out.push((prepared, route)),
             Err(e) => println!("  {stem}: region at {:?} not renderable: {e}", found.record.bbox),
         }
@@ -142,7 +142,7 @@ fn prepare_page(pipeline: &mut Pipeline, detector: &mut Detector, stem: &str, by
             }
             let fitted = fit::fit(page, &seed, detection.segmentation.proxy_scale(), noise, &edges, false);
             let route = format!("held:{:?}", fitted.route);
-            match PreparedRender::prepare_as(page, &fitted, Preprocessing::V2) {
+            match PreparedRender::prepare_as(page, &fitted, version()) {
                 Ok(prepared) => out.push((prepared, route)),
                 Err(e) => println!("  {stem}: held-back box {bbox:?} not renderable: {e}"),
             }
@@ -189,13 +189,19 @@ fn prepare_page(pipeline: &mut Pipeline, detector: &mut Detector, stem: &str, by
                 None => (fit::fit(page, &seed, 1.0, noise, &edges, true), "hand"),
             };
             let route = format!("{kind}:{:?}", fitted.route);
-            match PreparedRender::prepare_as(page, &fitted, Preprocessing::V2) {
+            match PreparedRender::prepare_as(page, &fitted, version()) {
                 Ok(prepared) => out.push((prepared, route)),
                 Err(e) => println!("  {stem}: hand mask {} not renderable: {e}", file.display()),
             }
         }
     }
     Ok(out)
+}
+
+/// The preprocessing crops are prepared and composited under: `MC_PREPROCESSING`
+/// (`3.0.0` composites through the edit post-processing), 2.0.0 by default.
+fn version() -> Preprocessing {
+    Preprocessing::of(&std::env::var("MC_PREPROCESSING").unwrap_or_else(|_| "2.0.0".into())).expect("a known preprocessing version")
 }
 
 fn overlap(a: Rect, b: Rect) -> u64 {
@@ -221,7 +227,7 @@ fn export(dir: &Path, prepared: &PreparedRender, route: &str, stem: &str, page: 
         "crop": rect_json(crop),
         "bounds": rect_json(prepared.bounds()),
         "route": route,
-        "preprocessing": "2.0.0",
+        "preprocessing": version().version(),
         "page_size": [page.width, page.height],
     });
     std::fs::write(dir.join("meta.json"), serde_json::to_vec_pretty(&meta)?)?;

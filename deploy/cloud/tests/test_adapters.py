@@ -398,8 +398,10 @@ class BeamAppImportTest(unittest.TestCase):
         self.assertIn(("shell", self.module.GPU_TORCH_INSTALL), steps)
         self.assertIn("torch==2.13.0 torchvision==0.28.0", self.module.GPU_TORCH_INSTALL)
         self.assertIn("https://download.pytorch.org/whl/cu129", self.module.GPU_TORCH_INSTALL)
-        for requirement in self.module.GPU_REQUIREMENTS:
+        for requirement in self.module.RENDER_REQUIREMENTS:
             self.assertIn(("pip", requirement), steps)
+        # FLUX.2 Klein (the fixture's model) keeps the shared pins, not FLUX 3's.
+        self.assertIs(self.module.RENDER_REQUIREMENTS, self.module.GPU_REQUIREMENTS)
 
 
 if __name__ == "__main__":

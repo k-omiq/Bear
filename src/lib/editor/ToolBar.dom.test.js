@@ -59,6 +59,7 @@ const stores = vi.hoisted(() => ({
     cleanTarget: 'local',
     cleanLocalFirst: false,
     cleanSolidOnly: false,
+    cloudWorkLongSide: 768,
     analysisTargets: { rtFull: 'local', samTs: 'local' },
     /** @type {'normal'|'advanced'} */
     detectionMode: 'normal',
@@ -85,8 +86,10 @@ const stores = vi.hoisted(() => ({
   missing: undefined,
   /** @type {string[]|undefined} What a cloud run would miss here (CTD, the reader), when a test says. */
   cloudMissing: undefined,
+  /** @type {{checked: boolean, configured: boolean, readiness: any}} */
   cloud: { checked: true, configured: true, readiness: null },
   openCloudSettings: vi.fn(),
+  saveCloudWorkLongSide: vi.fn(async () => true),
   /** @type {Array<{value: string, choice: any}>|null} Every profile's cloud entry, when a test lists them. */
   cloudEntries: null,
   pickCloudChoice: vi.fn(async () => true),
@@ -159,6 +162,7 @@ vi.mock('../state/cloud.svelte.js', () => ({
   refreshCloudReadiness: vi.fn(async () => null),
   cloudEntries: () => stores.cloudEntries,
   pickCloudChoice: stores.pickCloudChoice,
+  saveCloudWorkLongSide: stores.saveCloudWorkLongSide,
 }))
 
 // Imported after the mocks so the component picks the stubs up.
@@ -1046,6 +1050,38 @@ describe('the Text cleanup panel', () => {
     await fireEvent.click(/** @type {HTMLInputElement} */ (box(ticked)))
     expect(stores.setToolParam).toHaveBeenCalledWith('autoClean', 'localFirst', false)
     expect(stores.setCleanLocalFirst).toHaveBeenCalledWith(false)
+  })
+
+  // The working size is FLUX 3's (`model-names.js#takesWorkSize`): offered
+  // only while the clean goes to a FLUX 3 profile, and saved as a setting.
+  it('offers the FLUX 3 working size only while a FLUX 3 profile cleans', async () => {
+    const row = (/** @type {import('@testing-library/svelte').RenderResult} */ view) =>
+      view.container.querySelector('[data-run-row="workLongSide"]')
+    try {
+      stores.session.cleanTarget = 'cloud'
+      for (const modelId of [null, 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic']) {
+        stores.cloud.readiness = modelId ? { profile: { modelId } } : null
+        const { view } = mountTool(textCleanup, { step: 'clean' })
+        expect(row(view), String(modelId)).toBeNull()
+        cleanup()
+      }
+      stores.cloud.readiness = { profile: { modelId: 'unsloth/flux-3-image-klein' } }
+      stores.session.cleanTarget = 'local'
+      const { view: here } = mountTool(textCleanup, { step: 'clean' })
+      expect(row(here), 'a clean on this computer').toBeNull()
+      cleanup()
+
+      stores.session.cleanTarget = 'cloud'
+      const { view } = mountTool(textCleanup, { step: 'clean' })
+      const group = within(/** @type {HTMLElement} */ (row(view)))
+      expect(view.getByText(t('tools.param.workLongSide'))).toBeTruthy()
+      expect(view.getByText(t('tools.target.workLongSideHint'))).toBeTruthy()
+      await fireEvent.click(group.getByText('1280 px'))
+      expect(stores.saveCloudWorkLongSide).toHaveBeenCalledWith(1280)
+    } finally {
+      stores.cloud.readiness = null
+      stores.session.cleanTarget = 'local'
+    }
   })
 
   /** @param {import('@testing-library/svelte').RenderResult} view */

@@ -222,6 +222,7 @@ def seed_snapshot(
             repo_id=model.model_id,
             revision=model.revision,
             local_dir=str(target),
+            **({"allow_patterns": [path for path, _size in model.files]} if model.partial_repo else {}),
         )
         for adapter in model.adapters:
             download(

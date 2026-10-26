@@ -3,12 +3,14 @@ import dataclasses
 import json
 from pathlib import Path
 import unittest
-from deploy.cloud.common.contract import GUIDED_RECIPE_IDS, ContractValidationError, JobRequestMetadata, QwenEdit, RenderRecipe, compute_request_digest, validate_job_request_metadata
-from deploy.cloud.common.manifest import RECIPE_PROD_QWEN, RECIPE_PROD_SDNQ, RECIPE_PROD_SDNQ_9B, get_pinned_recipe
+from deploy.cloud.common.contract import GUIDED_RECIPE_IDS, SIZED_RECIPE_IDS, WORK_LONG_SIDES, ContractValidationError, Flux3Generation, JobRequestMetadata, QwenEdit, RenderRecipe, compute_request_digest, validate_job_request_metadata
+from deploy.cloud.common.manifest import RECIPE_PROD_FLUX3, RECIPE_PROD_FLUX3_BF16, RECIPE_PROD_QWEN, WORK_LONG_SIDE, RECIPE_PROD_SDNQ, RECIPE_PROD_SDNQ_9B, get_pinned_recipe
 from deploy.cloud.common.qwen import build_prompt, QwenEditRunner
 from deploy.cloud.tests.test_qwen import qwen_modules
 
 FIXTURE = Path(__file__).resolve().parents[1] / 'fixtures/qwen_guidance_request.json'
+SIZED_FIXTURE = FIXTURE.parent / 'flux3_work_size_request.json'
+GENERATION_FIXTURE = FIXTURE.parent / 'flux3_generation_request.json'
 
 class GuidanceTest(unittest.TestCase):
     def test_blank_description_has_useful_scoped_instructions(self):
@@ -59,7 +61,7 @@ class GuidanceTest(unittest.TestCase):
                 RenderRecipe.from_dict({**recipe, 'recipe_id': recipe_id.replace('-v2', '-v1'), 'qwen_edit': edit})
 
     def test_every_guided_recipe_is_pinned(self):
-        self.assertEqual(GUIDED_RECIPE_IDS, {RECIPE_PROD_QWEN, RECIPE_PROD_SDNQ, RECIPE_PROD_SDNQ_9B})
+        self.assertEqual(GUIDED_RECIPE_IDS, {RECIPE_PROD_QWEN, RECIPE_PROD_SDNQ, RECIPE_PROD_SDNQ_9B, RECIPE_PROD_FLUX3, RECIPE_PROD_FLUX3_BF16})
         for recipe_id in GUIDED_RECIPE_IDS:
             self.assertIsNotNone(get_pinned_recipe(recipe_id), recipe_id)
 
@@ -86,5 +88,75 @@ class GuidanceTest(unittest.TestCase):
         for edit in [QwenEdit('dialogue', meta.recipe.qwen_edit.description), QwenEdit('sound_effect', '')]:
             changed = dataclasses.replace(meta, recipe=dataclasses.replace(meta.recipe, qwen_edit=edit))
             self.assertNotEqual(compute_request_digest(changed), meta.request_digest)
+
+    def test_working_size_is_flux3_only_on_the_list_and_in_the_digest(self):
+        self.assertEqual(SIZED_RECIPE_IDS, {RECIPE_PROD_FLUX3, RECIPE_PROD_FLUX3_BF16})
+        self.assertEqual(WORK_LONG_SIDES[0], WORK_LONG_SIDE)
+        meta = JobRequestMetadata.from_dict(json.loads(SIZED_FIXTURE.read_text()))
+        self.assertEqual(meta.recipe.work_long_side, 1280)
+        self.assertEqual(meta.request_digest, compute_request_digest(meta))
+        self.assertEqual(JobRequestMetadata.from_dict(meta.to_dict()), meta)
+        for side in (None, 1024):
+            changed = dataclasses.replace(meta, recipe=dataclasses.replace(meta.recipe, work_long_side=side))
+            self.assertNotEqual(compute_request_digest(changed), meta.request_digest)
+        recipe = get_pinned_recipe(RECIPE_PROD_FLUX3).to_dict()
+        for side in WORK_LONG_SIDES:
+            self.assertEqual(RenderRecipe.from_dict({**recipe, 'work_long_side': side}).work_long_side, side)
+        for side in (1100, 2048, True, '1280'):
+            with self.assertRaises(ContractValidationError):
+                RenderRecipe.from_dict({**recipe, 'work_long_side': side})
+        with self.assertRaises(ContractValidationError):
+            RenderRecipe.from_dict({**get_pinned_recipe(RECIPE_PROD_SDNQ).to_dict(), 'work_long_side': 1280})
+
+    def test_validated_job_forwards_the_working_size_to_the_runner(self):
+        from deploy.cloud.common.flux import render_job
+        from deploy.cloud.common.contract import provisional_fixture_limits
+        meta = JobRequestMetadata.from_dict(json.loads(SIZED_FIXTURE.read_text()))
+        image = (FIXTURE.parent / 'tiny_image.png').read_bytes()
+        hint = (FIXTURE.parent / 'tiny_hint.png').read_bytes()
+        class RecordingRunner:
+            def render_png(inner, *args, **kwargs):
+                inner.kwargs = kwargs
+                return image
+        runner = RecordingRunner()
+        render_job(runner, meta, image, hint, provisional_fixture_limits())
+        self.assertEqual(runner.kwargs['work_long_side'], 1280)
+        unsized = dataclasses.replace(meta, recipe=dataclasses.replace(meta.recipe, work_long_side=None))
+        unsized = dataclasses.replace(unsized, request_digest=compute_request_digest(unsized))
+        render_job(runner, unsized, image, hint, provisional_fixture_limits())
+        self.assertNotIn('work_long_side', runner.kwargs)
+
+    def test_a_generation_choice_is_flux3_only_never_empty_and_in_the_digest(self):
+        meta = JobRequestMetadata.from_dict(json.loads(GENERATION_FIXTURE.read_text()))
+        self.assertEqual(meta.recipe.flux3_generation, Flux3Generation(reference_prompt=True, marker=True, megapixel_size=True))
+        self.assertEqual(meta.request_digest, compute_request_digest(meta))
+        self.assertEqual(JobRequestMetadata.from_dict(meta.to_dict()), meta)
+        for other in (None, Flux3Generation(reference_prompt=True, marker=True, reference_shift=True, megapixel_size=True)):
+            changed = dataclasses.replace(meta, recipe=dataclasses.replace(meta.recipe, flux3_generation=other))
+            self.assertNotEqual(compute_request_digest(changed), meta.request_digest)
+        recipe = get_pinned_recipe(RECIPE_PROD_FLUX3).to_dict()
+        for bad in ({}, {'reference_prompt': False}, {'marker': 1}, {'colour': True}, [True]):
+            with self.assertRaises(ContractValidationError):
+                RenderRecipe.from_dict({**recipe, 'flux3_generation': bad})
+        with self.assertRaises(ContractValidationError):
+            RenderRecipe.from_dict({**recipe, 'work_long_side': 1280, 'flux3_generation': {'megapixel_size': True}})
+        self.assertEqual(RenderRecipe.from_dict({**recipe, 'work_long_side': 1280, 'flux3_generation': {'marker': True}}).work_long_side, 1280)
+        with self.assertRaises(ContractValidationError):
+            RenderRecipe.from_dict({**get_pinned_recipe(RECIPE_PROD_SDNQ).to_dict(), 'flux3_generation': {'marker': True}})
+
+    def test_validated_job_forwards_the_generation_choice_to_the_runner(self):
+        from deploy.cloud.common.flux import render_job
+        from deploy.cloud.common.contract import provisional_fixture_limits
+        meta = JobRequestMetadata.from_dict(json.loads(GENERATION_FIXTURE.read_text()))
+        image = (FIXTURE.parent / 'tiny_image.png').read_bytes()
+        hint = (FIXTURE.parent / 'tiny_hint.png').read_bytes()
+        class RecordingRunner:
+            def render_png(inner, *args, **kwargs):
+                inner.kwargs = kwargs
+                return image
+        runner = RecordingRunner()
+        render_job(runner, meta, image, hint, provisional_fixture_limits())
+        self.assertEqual(runner.kwargs['flux3_generation'], meta.recipe.flux3_generation)
+        self.assertNotIn('work_long_side', runner.kwargs)
 
 if __name__ == '__main__': unittest.main()

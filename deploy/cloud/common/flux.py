@@ -61,13 +61,23 @@ def snap_stride(value: int) -> int:
     return max(LATENT_STRIDE, value - (value % LATENT_STRIDE))
 
 
-def working_size(width: int, height: int) -> Tuple[int, int]:
+def working_size(width: int, height: int, work_long_side: int = WORK_LONG_SIDE) -> Tuple[int, int]:
     """Resolution a crop is edited at: upscale only, snapped down to the latent stride."""
     long_side = max(int(width), int(height))
-    if long_side >= WORK_LONG_SIDE:
+    if long_side >= work_long_side:
         return int(width), int(height)
-    scale = WORK_LONG_SIDE / long_side
+    scale = work_long_side / long_side
     return snap_stride(round(width * scale)), snap_stride(round(height * scale))
+
+
+def megapixel_size(width: int, height: int) -> Tuple[int, int]:
+    """The reference tool's working size: one megapixel, each side the nearest multiple of 32.
+
+    Its imaging.py work_size, scaled up or down; Python's round is half-to-even, as there.
+    crates/cleaner-core/src/engines/render.rs megapixel_size is the same arithmetic.
+    """
+    scale = (1024 * 1024 / (int(width) * int(height))) ** 0.5
+    return max(32, round(int(width) * scale / 32) * 32), max(32, round(int(height) * scale / 32) * 32)
 
 
 def guidance_from_scaled(guidance_scaled: int) -> float:
@@ -110,6 +120,22 @@ def flux_prompt(edit: Optional[QwenEdit]) -> str:
             + " Preserve character line art, screentones, panel borders, and background"
             + " details exactly as they appear. Match the original contrast, line weight and shading."
             + " Add no new text or symbols.")
+
+
+def hint_location(lettering: Any, np: Any) -> Optional[str]:
+    """Where the lettering sits in its crop, in words ("middle center"), or None for none.
+
+    The middle of the hint's bounding box, in thirds of the crop. Edit models that take
+    no mask read the area to clean from the prompt; this is all the hint tells them.
+    """
+    ys, xs = np.nonzero(lettering)
+    if not len(xs):
+        return None
+    cy = (float(ys.min()) + float(ys.max())) / 2 / lettering.shape[0]
+    cx = (float(xs.min()) + float(xs.max())) / 2 / lettering.shape[1]
+    row = "upper" if cy < 1/3 else "lower" if cy > 2/3 else "middle"
+    col = "left" if cx < 1/3 else "right" if cx > 2/3 else "center"
+    return f"{row} {col}"
 
 
 def recipe_mismatch(meta: JobRequestMetadata) -> Optional[str]:
@@ -426,8 +452,10 @@ def render_job(
         meta.seed,
         meta.steps,
         meta.guidance_scaled,
-        # The contract admits guidance only on a recipe whose runner takes it.
+        # The contract admits guidance and a working size only on a recipe whose runner takes them.
         **({"qwen_edit": meta.recipe.qwen_edit} if meta.recipe.qwen_edit is not None else {}),
+        **({"work_long_side": meta.recipe.work_long_side} if meta.recipe.work_long_side is not None else {}),
+        **({"flux3_generation": meta.recipe.flux3_generation} if meta.recipe.flux3_generation is not None else {}),
     )
     digest = hashlib.sha256(png).hexdigest()
     try:
@@ -559,6 +587,7 @@ __all__ = [
     "filter_call_kwargs",
     "flux_prompt",
     "guidance_from_scaled",
+    "hint_location",
     "recipe_mismatch",
     "render_job",
     "sampling_mismatch",

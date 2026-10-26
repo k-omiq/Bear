@@ -460,6 +460,13 @@ fn fft2_in_place(a: &mut [C], pw: usize, ph: usize, inverse: bool) {
     }
 }
 
+/// The power spectrum of `g` zero-padded to `size x size` (a power of two at
+/// least as large as either side): `|F|^2` indexed `[ky * size + kx]`, where
+/// index `k` is `k / size` cycles per px, less one past the middle.
+pub fn power_spectrum(g: &Grid, size: usize) -> Vec<f64> {
+    fft2(g, size, size).into_iter().map(|c| c.re * c.re + c.im * c.im).collect()
+}
+
 /// Circular cross-correlation `out[d] = sum_p f(p + d) g(p)` of two transforms,
 /// as a `ph x pw` real grid indexed with wrap-around.
 fn correlate(f: &[C], g: &[C], pw: usize, ph: usize) -> Vec<f64> {

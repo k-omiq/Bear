@@ -33,6 +33,8 @@
 /// The Gradient tool's Auto type: the surface all round a selection, blended in.
 pub mod autogradient;
 pub mod fill;
+/// The reference tool's finishing v2, ported: a [`postprocess::Finishing`] choice.
+pub mod finishing;
 /// Rung 3a, the out-of-process one. It is here because it is a rung and it
 /// keeps the rungs' shape - [`flux::applies`], [`flux::declines`],
 /// `Inpainter::render`, a [`model::Rendered`] - but almost none of it is in
@@ -44,6 +46,8 @@ pub mod flux;
 pub mod gradient;
 /// Grids and image operations for the arithmetic fills below.
 pub mod grid;
+/// Preprocessing 3.0.0's screen step: a dot screen redrawn in phase.
+pub mod halftone;
 pub mod lama;
 pub mod model;
 /// Multiscale PatchMatch completion: the Patch tool's Content-Aware mode.
@@ -52,6 +56,8 @@ pub mod patchmatch;
 pub mod patchsource;
 /// Membrane and Poisson solves: the Patch tool's Normal mode and Smooth.
 pub mod poisson;
+/// Preprocessing 3.0.0's composite: an edit model's answer matched to the page.
+pub mod postprocess;
 pub mod render;
 /// The screentone fill: lettering on a halftone screen, dots kept in phase.
 pub mod screentone;
