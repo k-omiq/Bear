@@ -129,6 +129,9 @@
     setAccelerator,
     setModelAccelerator,
     setCloseToTray,
+    setExportPsdCompression,
+    setExportPsdLetteringLayer,
+    setExportTone,
     setDetection,
     setAnalysisTarget,
     setFluxBackend,
@@ -231,6 +234,27 @@
     } catch {
       backgroundError = true
       input.checked = session.closeToTray
+    }
+  }
+
+  /* ---------- Export ---------- */
+
+  let exportError = $state(false)
+
+  /**
+   * One Settings > Export choice. The backend reads the PSD keys at export
+   * time, so the session takes a value only once the file holds it.
+   *
+   * @param {Record<string, unknown>} patch
+   * @param {() => void} apply
+   */
+  async function updateExport(patch, apply) {
+    exportError = false
+    try {
+      await writeSettingsSerialized(getBackend(), patch)
+      apply()
+    } catch {
+      exportError = true
     }
   }
 
@@ -1884,6 +1908,15 @@
     { value: 'hold', label: t('settings.originalView.hold') },
     { value: 'pinned', label: t('settings.originalView.pinned') },
   ]
+  const psdCompressions = [
+    { value: 'rle', label: t('settings.export.compression.rle') },
+    { value: 'raw', label: t('settings.export.compression.raw') },
+  ]
+  // The Export dialog's own words, so the choice reads the same in both.
+  const exportTones = [
+    { value: 'source', label: t('export.tone.source') },
+    { value: 'grayscale', label: t('export.tone.grayscale') },
+  ]
   /**
    * Which sidecar backend the AI redraw rung asks for.
    *
@@ -1954,6 +1987,7 @@
     models: { labelKey: 'settings.section.models', icon: 'search' },
     cloud: { labelKey: 'settings.section.cloud', icon: 'cloud' },
     denoise: { labelKey: 'settings.section.denoise', icon: 'wand' },
+    export: { labelKey: 'settings.section.export', icon: 'export' },
     performance: { labelKey: 'settings.section.performance', icon: 'cpu' },
     shortcuts: { labelKey: 'settings.section.shortcuts', icon: 'keyboard' },
     about: { labelKey: 'settings.section.about', icon: 'info' },
@@ -2953,6 +2987,83 @@
       <div class="column">
         <h2>{t('settings.section.denoise')}</h2>
         <DenoiseSettings view={catalogue} refresh={refreshCatalogue} active={active === 'denoise'} />
+      </div>
+    </div>
+
+    <!-- Export: how PSD files are written, and the tone the Export dialog
+         starts on. It ends in the tone choice. -->
+    <div
+      class="panel"
+      role="tabpanel"
+      id={panelId('export')}
+      aria-labelledby={tabId('export')}
+      hidden={active !== 'export'}
+    >
+      <div class="column">
+        <h2>{t('settings.section.export')}</h2>
+
+        <h3 class="sub">{t('settings.export.psd')}</h3>
+        <Field
+          label={t('settings.export.compression.label')}
+          description={t('settings.export.compression.description')}
+          layout="row"
+        >
+          {#snippet children({ labelId, descriptionId })}
+            <Segmented
+              options={psdCompressions}
+              value={session.exportPsdCompression}
+              labelledBy={labelId}
+              describedBy={descriptionId}
+              onchange={(value) => updateExport(
+                { exportPsdCompression: value },
+                () => setExportPsdCompression(/** @type {any} */ (value)),
+              )}
+            />
+          {/snippet}
+        </Field>
+
+        <Field
+          label={t('settings.export.lettering.label')}
+          description={t('settings.export.lettering.description')}
+          layout="row"
+          controlId="settings-export-lettering"
+        >
+          {#snippet children({ descriptionId })}
+            <input
+              id="settings-export-lettering"
+              class="check"
+              type="checkbox"
+              aria-describedby={descriptionId}
+              checked={session.exportPsdLetteringLayer}
+              onchange={(event) => {
+                const input = /** @type {HTMLInputElement} */ (event.currentTarget)
+                const enabled = input.checked
+                // Back to what the session holds until the write lands.
+                input.checked = session.exportPsdLetteringLayer
+                updateExport({ exportPsdLetteringLayer: enabled }, () => setExportPsdLetteringLayer(enabled))
+              }}
+            />
+          {/snippet}
+        </Field>
+
+        <h3 class="sub">{t('settings.export.general')}</h3>
+        <Field
+          label={t('export.tone.label')}
+          description={t('settings.export.toneDescription')}
+          layout="row"
+        >
+          {#snippet children({ labelId, descriptionId })}
+            <Segmented
+              options={exportTones}
+              value={session.exportTone}
+              labelledBy={labelId}
+              describedBy={descriptionId}
+              onchange={(value) => updateExport({ exportTone: value }, () => setExportTone(/** @type {any} */ (value)))}
+            />
+          {/snippet}
+        </Field>
+
+        {#if exportError}<p class="error" role="alert">{t('settings.export.saveFailed')}</p>{/if}
       </div>
     </div>
 

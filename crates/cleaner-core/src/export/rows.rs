@@ -261,6 +261,7 @@ where
     if let Some(icc) = &canvas.icc {
         image.encoder().write_tag(TAG_ICC_PROFILE, icc.as_slice()).map_err(ImageError::from)?;
     }
+    crate::image::tiff_io::write_resolution(&mut image, &canvas.color);
 
     let stride = canvas.stride();
     let mut buffer = canvas.row_buffer();

@@ -1,155 +1,32 @@
-//! `exportChapter` - [`export_page`](cleaner_core::export::export_page),
-//! [`export_stitched`](cleaner_core::export::export_stitched), the
-//! [`Cbz`](cleaner_core::export::Cbz) container and
-//! [`Job::output_refusal`](cleaner_core::project::Job::output_refusal), wired
-//! to a chapter id.
+//! `planExportChapter` and `exportChapter`.
 //!
-//! The seam fixes the return
-//! shape as `{status, fileCount, path, reasonKey, gutterPixels}`, and
-//! [`ExportResult`] serialises to exactly that JSON (`#[serde(rename_all =
-//! "camelCase")]`), so `src/lib/api/tauri.js` needs no mapping layer - the
-//! command's answer *is* the seam's answer.
+//! **The plan reads headers and the manifest, never pixels.** It decides the
+//! container, the destination, every refusal, each output's name and format,
+//! and what the export must declare, and it stamps all of that with a
+//! [`revision`]. The export plans again (cheap), checks the revision, writes
+//! every file into a hidden staging folder beside the destination, checks the
+//! revision once more and only then moves the files in. A page that fails to
+//! decode part way publishes nothing.
 //!
-//! ## Every "no" is a refusal with a reason
+//! Every "no" is `status: 'refused'` with a `reasonKey` the catalogue has a
+//! sentence for. Written: PNG and TIFF per page (with an optional
+//! `<page>_mask.png` beside each), CBZ (those per-page files in one stored
+//! zip), one stitched file for a longstrip chapter, and PSD per page (layered
+//! or flattened). Lossy formats and PSB are refused by name; output never
+//! overwrites input ([`Job::output_refusal`]).
 //!
-//! There are twelve things this command will not do, and all twelve come back
-//! the same way: `status: 'refused'` and a `reasonKey` the catalogue has a
-//! sentence for. **One of them was always here** - writing over the source
-//! folder, which is [`Job::output_refusal`]'s decision and not this module's
-//! (output never overwrites input), reported under
-//! `notice.export.refusedOverwrite`. The last is a family of five keys rather
-//! than one, because five different disagreements between pages can stop a
-//! strip being written as one file:
+//! `pages` picks positions in `strip.order`, the interface's page index; none
+//! means every page. A stitched file is always the whole strip.
 //!
-//! | Asked for | Refused with |
-//! |---|---|
-//! | JPEG, or any other lossy encoder | `notice.export.refusedLossyFormat` |
-//! | PSB | `notice.export.refusedLayeredFormat` |
-//! | a format string this build does not know | `notice.export.refusedUnknownFormat` |
-//! | `masks: 'separate-layer'` into a CBZ | `notice.export.refusedMaskLayers` |
-//! | a destination that is neither sentinel nor an absolute path | `notice.export.refusedDestination` |
-//! | a destination that cannot be created or written, such as a folder on a drive that is not connected | `notice.export.destinationUnavailable` |
-//! | a stitched export of a paginated project | `notice.export.refusedStitchPaginated` |
-//! | a stitched export into a CBZ | `notice.export.refusedStitchedArchive` |
-//! | a stitched export as PSD | `notice.export.refusedStitchedLayered` |
-//! | a PSD of an indexed or sub-8-bit page | `notice.export.refusedLayeredMode` |
-//! | a PSD of a page over 30 000 px a side | `notice.export.refusedLayeredSize` |
-//! | a strip whose pages disagree | [`StitchRefusal::reason_key`](cleaner_core::export::StitchRefusal::reason_key) |
-//!
-//! **This is what replaced the silent downgrade**, and the half that was true
-//! about it is worth keeping straight. Until now `target_for` mapped anything
-//! it did not recognise to [`Target::SameAsSource`], so a user who chose JPEG
-//! got PNG and was told the export succeeded. Half of the old argument holds:
-//! the fallback never produced *lossy* output, so that contract was never
-//! violated by it. The other half does not: it produced
-//! a **different container than the one that was asked for**, which is
-//! "the UI never silently downgrades" failing on the word *silently* rather
-//! than on the word *downgrade*. A format this build cannot write is now named
-//! and refused before anything is opened.
-//!
-//! ## What it does write
-//!
-//! **PNG and TIFF**, per page, which is the default and what this command
-//! always did. TIFF is now offered rather than merely accepted: it is the
-//! only format here that carries CMYK, named for stitched longstrip.
-//!
-//! **CBZ**, which is not a picture format at all: it is those same per-page
-//! files, unaltered, inside one zip. The pages keep their own lossless format
-//! rather than being converted to the container's - a CBZ names an archive and
-//! not a codec, and keeping the page's format is what keeps the byte-for-byte
-//! passthrough available *inside* the archive. `cleaner_core::export::cbz` is
-//! the writer and carries the memory argument for the one buffer it needs.
-//!
-//! **Stitched**, one file for the whole strip, through
-//! [`export_stitched`](cleaner_core::export::export_stitched) - which was built
-//! and tested and had no caller at all. Reaching it took the seam
-//! parameter needed: `layout`, `'per-page' | 'stitched'`.
-//! Offered for a longstrip project and refused for a paginated one, because a
-//! paginated chapter has no strip - its pages are separate images that happen
-//! to be listed in an order, and stacking them into one tall file would invent
-//! a document nobody has.
-//!
-//! An interface offering stitched output **states the gutter
-//! count before it runs**. `ExportDialog.svelte` computes it from the page
-//! dimensions it already holds and says so under the control; this command
-//! reports what was actually written back on `gutterPixels`, and the finished
-//! notice says that too. The two are the same arithmetic from the two ends.
-//!
-//! **PSD**, per page, through
-//! [`export_page_psd_to`](cleaner_core::export::export_page_psd_to). This is
-//! where `masks` finally branches, and it means two different things by
-//! format:
-//!
-//! - **PSD**: `'separate-layer'` is the layered shape - the untouched source as
-//!   the `Background`, one layer per region with a layer mask, inside a
-//!   `Cleaned` group. `'flattened'` is one `Background` layer holding the
-//!   composite.
-//! - **PNG and TIFF**, per page or stitched: `'separate-layer'` writes a
-//!   **mask file beside each image** - `001.png` and `001_mask.png`, an 8-bit
-//!   grayscale PNG that is white where the lettering the page's edits removed
-//!   was (the union of their [`Patch::ink`](cleaner_core::patch::Patch::ink)
-//!   masks, not of the areas they painted) - through
-//!   [`export_mask_to`](cleaner_core::export::export_mask_to).
-//!   `'flattened'` is the image alone, which is what every export was.
-//! - **CBZ**: refused. A mask file inside the archive would be read as a page.
-//!
-//! Which pages a PSD can be is decided from the **manifest**, before a
-//! directory is created: `psd::refusal` over every source's mode, depth and
-//! dimensions, so a chapter with one indexed page refuses whole rather than
-//! writing nine files and failing on the tenth. A stitched PSD is refused too  - 
-//! a layered file holds its whole page as the background, and a strip may never
-//! be resident whole.
-//!
-//! ## What it still refuses, and why
-//!
-//! JPEG is a lossy encoder, and lossy formats sit "behind the
-//! acknowledgement" - the acknowledgement being a written statement of what
-//! will change, shown and agreed to before the write, which for a lossy format
-//! is a statement that the fidelity contract does not hold at all. That flow
-//! does not exist, and an encoder in front of a missing acknowledgement would
-//! be the silent downgrade again with more steps. PSB is not written. Both
-//! refuse by name.
-//!
-//! ## Rule 8, per page
-//!
-//! Each source is exported at its own dimensions, one page resident at a time,
-//! encoded straight into the file rather than into a buffer the command then
-//! writes ([`export_page_to`]).
-//!
-//! For a longstrip job the patch set is a **global** one in strip coordinates,
-//! and which patches a page gets is decided by **intersection**:
-//!
-//! > In longstrip, "zero applied patches" is decided by per-page
-//! > **intersection** with the global patch set, not by patch ownership, since
-//! > a patch may span a join.
-//!
-//! [`patches_on_page`] is that intersection, and it is reached through
-//! [`intersecting_records`], which does the selection from the manifest's
-//! `bbox` fields alone. That ordering is the memory rule rather than an
-//! optimisation: loading the whole patch set to ask which parts of it touch
-//! page 7 would put every patch in the chapter in RAM at once, which is what
-//! keeping them on disk avoids. The stitched path cannot do that -
-//! `export_stitched` takes the global
-//! set as a slice, so [`global_patches`] builds all of it - and that is the one
-//! place in this file where that discipline is not honoured.
-//!
-//! ## Merge point
-//!
-//! `resolve_chapter` and `LibraryError` live in `src-tauri/src/library.rs`.
-//! This module is coded against
-//!
-//! ```ignore
-//! pub fn resolve_chapter(app: &tauri::AppHandle, chapter_id: &str) -> Result<std::path::PathBuf, library::LibraryError>;
-//! ```
-//!
-//! and against `LibraryError: std::fmt::Display` (every other error type in
-//! this crate gets to a `String` the same way).
+//! `grayscale` writes a grey page stored as RGB or RGBA as grayscale
+//! ([`Tone`]); by default every page keeps its own colour type.
 
 use std::path::{Path, PathBuf};
 
 use cleaner_core::export::{
-    Cbz, PageSource, StripPatch, Target, export_mask_to, export_page, export_page_psd_to,
-    export_page_to, export_stitched, planned_stitched_format, psd,
+    Cbz, ExportError, PageSource, StripPatch, Target, Tone, export_mask_to,
+    export_page_psd_to, export_page_to, export_stitched, plan_page, plan_stitched,
+    preflight_page_psd, psd, psd_declarations,
 };
 #[cfg(test)]
 use cleaner_core::export::patches_on_page;
@@ -165,7 +42,7 @@ use cleaner_core::strip::Strip;
 
 use crate::library;
 
-/// The seam's own shape for `exportChapter`'s resolved value, verbatim.
+/// The seam's shape for both commands, serialised as is.
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportResult {
@@ -176,9 +53,8 @@ pub struct ExportResult {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason_key: Option<&'static str>,
-    /// How many pixels of the written file no source page had,
-    /// and `Some` on a stitched export alone. A per-page export has no gutter
-    /// and nothing to say, which is not the same fact as a gutter of zero.
+    /// Pixels of a stitched file no source page had. `None` for per-page
+    /// output, which has no gutter at all.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gutter_pixels: Option<u64>,
     pub actual_formats: Vec<String>,
@@ -191,15 +67,23 @@ pub struct ExportResult {
 }
 
 impl ExportResult {
-    fn refused(reason_key: &'static str, path: Option<String>) -> ExportResult {
+    fn with_status(status: &'static str, reason_key: Option<&'static str>, path: Option<String>) -> ExportResult {
         ExportResult {
-            status: "refused",
+            status,
             file_count: None,
             path,
-            reason_key: Some(reason_key),
+            reason_key,
             gutter_pixels: None,
-            actual_formats: Vec::new(), declared: Vec::new(), outputs: Vec::new(), revision: None, detail: None,
+            actual_formats: Vec::new(),
+            declared: Vec::new(),
+            outputs: Vec::new(),
+            revision: None,
+            detail: None,
         }
+    }
+
+    fn refused(reason_key: &'static str, path: Option<String>) -> ExportResult {
+        ExportResult::with_status("refused", Some(reason_key), path)
     }
 }
 
@@ -235,160 +119,64 @@ fn format_label(format: Format) -> &'static str {
     match format { Format::Png => "PNG", Format::Tiff => "TIFF", Format::Jpeg => "JPEG" }
 }
 
-/// Seekable validation sink; TIFF may revisit directory offsets. No encoded image is retained.
-#[derive(Default)]
-struct ValidationSink { position: u64, length: u64 }
-impl std::io::Write for ValidationSink {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.position += bytes.len() as u64;
-        self.length = self.length.max(self.position);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+/// What the caller asked for, with the seam's defaults filled in.
+#[derive(Debug, Clone, Copy)]
+struct Choices<'a> {
+    format: &'a str,
+    destination: &'a str,
+    masks: &'a str,
+    layout: &'a str,
+    pages: Option<&'a [usize]>,
+    tone: Tone,
+    /// Settings > Export, read when the command arrives, so a plan made
+    /// under other PSD choices is stale.
+    psd: psd::PsdOptions,
 }
-impl std::io::Seek for ValidationSink {
-    fn seek(&mut self, from: std::io::SeekFrom) -> std::io::Result<u64> {
-        let next = match from {
-            std::io::SeekFrom::Start(n) => i128::from(n),
-            std::io::SeekFrom::Current(n) => i128::from(self.position) + i128::from(n),
-            std::io::SeekFrom::End(n) => i128::from(self.length) + i128::from(n),
-        };
-        self.position = u64::try_from(next).map_err(|_| std::io::Error::other("invalid validation seek"))?;
-        Ok(self.position)
+
+impl<'a> Choices<'a> {
+    fn from_seam(
+        format: &'a Option<String>,
+        destination: &'a Option<String>,
+        masks: &'a Option<String>,
+        layout: &'a Option<String>,
+        pages: &'a Option<Vec<usize>>,
+        grayscale: Option<bool>,
+        settings: &serde_json::Value,
+    ) -> Choices<'a> {
+        Choices {
+            format: format.as_deref().unwrap_or("PNG"),
+            destination: destination.as_deref().unwrap_or("new-folder"),
+            masks: masks.as_deref().unwrap_or("flattened"),
+            layout: layout.as_deref().unwrap_or("per-page"),
+            pages: pages.as_deref(),
+            tone: if grayscale.unwrap_or(false) { Tone::Grayscale } else { Tone::Source },
+            psd: crate::settings::psd_options(settings),
+        }
     }
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn plan_export_chapter(
     app: tauri::AppHandle, chapter_id: String, format: Option<String>,
     destination: Option<String>, masks: Option<String>, layout: Option<String>,
+    pages: Option<Vec<usize>>, grayscale: Option<bool>,
 ) -> Result<ExportResult, String> {
     library::blocking(move || {
         let path = library::resolve_chapter(&app, &chapter_id).map_err(|e| e.to_string())?;
         let _lock = crate::run::lock_job(&path)?;
         let job = Job::open(&path).map_err(|e| e.to_string())?;
-        plan_open_job(&job, format.as_deref().unwrap_or("PNG"), destination.as_deref().unwrap_or("new-folder"),
-            masks.as_deref().unwrap_or("flattened"), layout.as_deref().unwrap_or("per-page"))
+        let settings = crate::settings::read(&app).unwrap_or(serde_json::Value::Null);
+        let choices = Choices::from_seam(&format, &destination, &masks, &layout, &pages, grayscale, &settings);
+        Ok(plan(&job, &choices)?.into_result())
     }).await
 }
 
-/// Hash current source bytes and patch buffers as well as manifest state. A visibility,
-/// order, source, mask, or pixel edit invalidates an approved plan.
-fn revision(job: &Job, choices: [&str; 4]) -> Result<String, String> {
-    use sha2::{Digest, Sha256};
-    let mut hash = Sha256::new();
-    hash.update(serde_json::to_vec(&job.project).map_err(|e| e.to_string())?);
-    hash.update(std::fs::read(job.path()).map_err(|e| e.to_string())?);
-    hash.update(serde_json::to_vec(&choices).map_err(|e| e.to_string())?);
-    for index in &job.project.strip.order {
-        let path = job.source_path(*index).ok_or("missing source")?;
-        hash.update(std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?);
-    }
-    for position in 0..job.project.strip.order.len() {
-        for patch in job.native_patches_on_page(position).map_err(|e| e.to_string())? {
-            hash.update(&patch.pixels.data); hash.update(&patch.mask.bits); hash.update(&patch.ink.bits);
-        }
-    }
-    Ok(format!("{:x}", hash.finalize()))
-}
-
-fn plan_open_job(job: &Job, format: &str, destination: &str, masks: &str, layout: &str) -> Result<ExportResult, String> {
-    let requested = match requested_format(format) { Ok(v) => v, Err(key) => return Ok(ExportResult::refused(key, None)) };
-    let longstrip = job.project.strip.mode == StripMode::Longstrip;
-    let container = match container_for(requested, layout, mask_files(masks), longstrip) {
-        Ok(v) => v, Err(key) => return Ok(ExportResult::refused(key, None)),
-    };
-    let dir = match destination_dir(destination, &source_directory(job)) {
-        Ok(v) => v, Err(key) => return Ok(ExportResult::refused(key, None)),
-    };
-    if let Some(refusal) = job.output_refusal(&dir) {
-        return Ok(ExportResult::refused(refusal.reason_key(), Some(dir.display().to_string())));
-    }
-    if !destination_available(&dir) {
-        return Ok(ExportResult::refused("notice.export.destinationUnavailable", Some(dir.display().to_string())));
-    }
-    if let Container::Layered { .. } = container {
-        for source in &job.project.sources {
-            if let Some(refusal) = psd::refusal(source.w, source.h, source.mode, source.bit_depth) {
-                return Ok(ExportResult::refused(refusal.reason_key(), None));
-            }
-        }
-    }
-    let mut result = ExportResult::refused("notice.export.invalidSource", None);
-    result.status = "planned"; result.reason_key = None;
-    result.path = Some(dir.display().to_string());
-    let strip = strip_of(job);
-    let validate = (|| -> Result<(), String> {
-        if let Container::Stitched { target, .. } = container {
-            let global = global_patches(job, &strip)?;
-            let written = export_stitched(&strip, &global, &mut JobPages { job }, target, &mut ValidationSink::default())
-                .map_err(|e| {
-                    if let cleaner_core::export::ExportError::NotStitchable(ref refusal) = e { result.reason_key = Some(refusal.reason_key()); }
-                    e.to_string()
-                })?;
-            result.declared.extend(declarations(0, &written.declared));
-            result.outputs.push(PlannedOutput { page: 0, filename: format!("{}.{}", chapter_stem(job), extension(written.format)), format: format_label(written.format).into() });
-            result.gutter_pixels = Some(written.gutter_pixels);
-        } else {
-            for (position, &index) in job.project.strip.order.iter().enumerate() {
-                let source = job.project.sources.get(index).ok_or("missing source")?;
-                let path = job.source_path(index).ok_or("missing source")?;
-                let bytes = std::fs::read(&path).map_err(|e| format!("page {}: {e}", position + 1))?;
-                let patches = page_patches_for(job, &strip, longstrip, position, index)?;
-                let used = match container {
-                    Container::Layered { layered } => {
-                        export_page_psd_to(&bytes, &patches, layered, &mut ValidationSink::default()).map_err(|e| format!("page {}: {e}", position + 1))?;
-                        result.declared.extend(declarations(position, &cleaner_core::export::psd_declarations(&bytes, &patches).map_err(|e| e.to_string())?));
-                        "PSD".to_owned()
-                    }
-                    _ => {
-                        let target = match container { Container::Pages { target, .. } => target, _ => Target::SameAsSource };
-                        let summary = export_page_to(&bytes, &patches, target, &mut ValidationSink::default()).map_err(|e| format!("page {}: {e}", position + 1))?;
-                        result.declared.extend(declarations(position, &summary.declared));
-                        format_label(summary.format).to_owned()
-                    }
-                };
-                let ext = if used == "JPEG" { "jpg".into() } else { used.to_lowercase() };
-                result.outputs.push(PlannedOutput { page: position, filename: output_filename(source, &ext), format: used });
-            }
-        }
-        Ok(())
-    })();
-    if let Err(error) = validate {
-        result.status = "refused"; result.reason_key.get_or_insert("notice.export.invalidSource"); result.detail = Some(error);
-        return Ok(result);
-    }
-    let mut names = std::collections::HashSet::new();
-    let mut output_names: Vec<_> = result.outputs.iter().map(|output| (output.page, output.filename.clone())).collect();
-    if matches!(container, Container::Pages { masks: MaskFiles::Beside, .. }) {
-        output_names.extend(job.project.strip.order.iter().enumerate().filter_map(|(page, index)| job.project.sources.get(*index).map(|source| (page, mask_filename(source)))));
-    }
-    for (page, filename) in output_names {
-        if !names.insert(filename.to_lowercase()) {
-            result.status = "refused";
-            result.reason_key = Some("notice.export.invalidSource");
-            result.detail = Some(format!("Page {} would overwrite another output named {filename}; rename the conflicting source page before exporting", page + 1));
-            return Ok(result);
-        }
-    }
-    result.actual_formats = result.outputs.iter().map(|p| p.format.clone()).collect();
-    result.actual_formats.sort(); result.actual_formats.dedup();
-    result.file_count = Some(result.outputs.len() as u32);
-    result.revision = Some(revision(job, [format, destination, masks, layout])?);
-    Ok(result)
-}
-
-/// `async`, and the body on the blocking executor - see
-/// [`library::blocking`](crate::library::blocking) for why. This command
-/// composites and writes every page of a chapter, and it is the one the
-/// interface draws a busy spinner over: run inline on the invoke handler's
-/// thread, it would hold the webview for the whole export and the spinner would
-/// never paint.
-///
-/// Refused with `run_in_progress` while the chapter has a run: the run lets
-/// go of the job between its pages, and an export taken then would publish a
-/// chapter half of whose pages are cleaned.
+/// On the blocking executor, so the dialog's spinner can paint. Refused while
+/// the chapter has a run: an export taken between a run's pages would publish
+/// a half-cleaned chapter.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn export_chapter(
     app: tauri::AppHandle,
     chapter_id: String,
@@ -396,6 +184,8 @@ pub async fn export_chapter(
     destination: Option<String>,
     masks: Option<String>,
     layout: Option<String>,
+    pages: Option<Vec<usize>>,
+    grayscale: Option<bool>,
     plan_revision: Option<String>,
 ) -> Result<ExportResult, String> {
     let declared = format.clone().unwrap_or_else(|| "PNG".into());
@@ -403,46 +193,22 @@ pub async fn export_chapter(
         let job_path = library::resolve_chapter(&app, &chapter_id).map_err(|e| e.to_string())?;
         let _lock = crate::run::lock_chapter(&job_path)?;
         let job = Job::open(&job_path).map_err(|e| e.to_string())?;
-        export_reviewed_job(
-            &job,
-            format.as_deref().unwrap_or("PNG"),
-            destination.as_deref().unwrap_or("new-folder"),
-            masks.as_deref().unwrap_or("flattened"),
-            layout.as_deref().unwrap_or("per-page"),
-            plan_revision.as_deref(),
-        )
+        let settings = crate::settings::read(&app).unwrap_or(serde_json::Value::Null);
+        let choices = Choices::from_seam(&format, &destination, &masks, &layout, &pages, grayscale, &settings);
+        export_reviewed_job(&job, &choices, plan_revision.as_deref())
     })
     .await?;
 
-    // The seam carries the outcome as a return value *and* the interface
-    // expects the notice stack to say so - `library.svelte.js` states that the
-    // backend announces and the screen does not repeat. Until the channel
-    // existed, inside a Tauri window it announced nothing.
+    // The backend announces the outcome; the interface does not repeat it.
     if let Some((key, params, tone)) = announcement(&result, &declared) {
         crate::events::notice(key, params, tone);
     }
     Ok(result)
 }
 
-/// What an export result says on the notice stack, if anything.
-///
-/// **Both statuses are matched by name.** `status` is one of two words today
-/// and the arm for the second used to be `_`, which is correct exactly while
-/// there are two: a third - a partial write, a cancelled export - would have
-/// announced *"Exported N files"* over it, in the confident voice of a thing
-/// that finished. An unrecognised status announces nothing instead, and the
-/// return value still carries it to the caller.
-///
-/// **A refusal announces its own reason**, which it did not use to: the arm was
-/// written when the overwrite was the only refusal there was and named
-/// `notice.export.refusedOverwrite` outright. Seven more refusals later that
-/// would have told a user who asked for JPEG that the export would have
-/// replaced their source files. A refusal with no key announces nothing rather
-/// than picking one.
-///
-/// A stitched export gets a sentence of its own, because the gutter count
-/// is in it and *"Exported 1 page"* is not a true summary of a file that
-/// holds the chapter.
+/// What an export result says on the notice stack, if anything. Statuses are
+/// matched by name, so a status added later announces nothing until it is
+/// given a sentence.
 fn announcement(
     result: &ExportResult,
     declared: &str,
@@ -474,15 +240,328 @@ fn announcement(
     }
 }
 
-/// What the caller's three strings resolve to, once they have been read.
+/* ------------------------------------------------------------------ */
+/* Plan                                                               */
+/* ------------------------------------------------------------------ */
+
+/// An export that can go ahead: where, in what shape, and the seam's answer.
+struct Plan {
+    container: Container,
+    dir: PathBuf,
+    result: ExportResult,
+}
+
+enum Planned {
+    Ready(Plan),
+    Refused(ExportResult),
+}
+
+impl Planned {
+    fn into_result(self) -> ExportResult {
+        match self {
+            Planned::Ready(plan) => plan.result,
+            Planned::Refused(result) => result,
+        }
+    }
+}
+
+/// Why planning one output stopped.
+enum Stop {
+    /// A refusal the catalogue has its own sentence for.
+    Refused(&'static str),
+    /// A page that cannot be read or represented.
+    Invalid(String),
+}
+
+fn refuse(reason_key: &'static str, path: Option<&Path>) -> Result<Planned, String> {
+    Ok(Planned::Refused(ExportResult::refused(reason_key, path.map(|p| p.display().to_string()))))
+}
+
+/// Everything an export will do, decided before anything is created.
+fn plan(job: &Job, choices: &Choices) -> Result<Planned, String> {
+    let requested = match requested_format(choices.format) {
+        Ok(requested) => requested,
+        Err(key) => return refuse(key, None),
+    };
+    let order = &job.project.strip.order;
+    let longstrip = job.project.strip.mode == StripMode::Longstrip;
+    let container = match container_for(requested, choices.layout, mask_files(choices.masks), longstrip) {
+        Ok(container) => container,
+        Err(key) => return refuse(key, None),
+    };
+    let Some(positions) = selected_pages(choices.pages, order.len()) else {
+        return refuse("notice.export.refusedPageSelection", None);
+    };
+    // A stitched file and a CBZ are one file for the whole chapter: one made
+    // of some pages would replace the whole chapter's file under its name.
+    if matches!(container, Container::Stitched { .. } | Container::Archive) && positions.len() != order.len() {
+        return refuse("notice.export.refusedPageSelection", None);
+    }
+    let dir = match destination_dir(choices.destination, &source_directory(job)) {
+        Ok(dir) => dir,
+        Err(key) => return refuse(key, None),
+    };
+    if let Some(refusal) = job.output_refusal(&dir) {
+        // The notice names the directory it would have replaced.
+        return refuse(refusal.reason_key(), Some(&dir));
+    }
+    if !destination_available(&dir) {
+        return refuse("notice.export.destinationUnavailable", Some(&dir));
+    }
+
+    let mut result = ExportResult::with_status("planned", None, Some(dir.display().to_string()));
+    let checked = match container {
+        Container::Stitched { target, .. } => plan_strip(job, target, choices.tone, &mut result),
+        _ => positions.iter().try_for_each(|&position| plan_output(job, container, position, choices, &mut result)),
+    };
+    if let Err(stop) = checked {
+        let (key, detail) = match stop {
+            Stop::Refused(key) => (key, None),
+            Stop::Invalid(detail) => ("notice.export.invalidSource", Some(detail)),
+        };
+        let mut refused = ExportResult::refused(key, result.path);
+        refused.detail = detail;
+        return Ok(Planned::Refused(refused));
+    }
+
+    let mut names = std::collections::HashSet::new();
+    let mut output_names: Vec<(usize, String)> =
+        result.outputs.iter().map(|output| (output.page, output.filename.clone())).collect();
+    if matches!(container, Container::Pages { masks: MaskFiles::Beside, .. }) {
+        output_names.extend(positions.iter().filter_map(|&position| {
+            job.project.sources.get(order[position]).map(|source| (position, mask_filename(source)))
+        }));
+    }
+    for (page, filename) in output_names {
+        if !names.insert(filename.to_lowercase()) {
+            let mut refused = ExportResult::refused("notice.export.invalidSource", result.path);
+            refused.detail = Some(format!("Page {} would overwrite another output named {filename}; rename the conflicting source page before exporting", page + 1));
+            return Ok(Planned::Refused(refused));
+        }
+    }
+    result.actual_formats = result.outputs.iter().map(|output| output.format.clone()).collect();
+    result.actual_formats.sort();
+    result.actual_formats.dedup();
+    result.file_count = Some(result.outputs.len() as u32);
+    result.revision = Some(revision(job, choices)?);
+    Ok(Planned::Ready(Plan { container, dir, result }))
+}
+
+/// The strip positions an export covers, sorted and once each: every page
+/// when none were named, `None` when a named one is not in the chapter.
+fn selected_pages(pages: Option<&[usize]>, count: usize) -> Option<Vec<usize>> {
+    let Some(pages) = pages else { return Some((0..count).collect()) };
+    let mut positions = pages.to_vec();
+    positions.sort_unstable();
+    positions.dedup();
+    (!positions.is_empty() && positions.iter().all(|&position| position < count)).then_some(positions)
+}
+
+/// One stitched file, from page headers.
+fn plan_strip(job: &Job, target: Target, tone: Tone, result: &mut ExportResult) -> Result<(), Stop> {
+    let applied = job.project.patches.iter().any(|record| record.visible);
+    let planned = plan_stitched(&strip_of(job), &mut JobPages { job }, target, applied, tone).map_err(|error| match error {
+        ExportError::NotStitchable(refusal) => Stop::Refused(refusal.reason_key()),
+        other => Stop::Invalid(other.to_string()),
+    })?;
+    result.declared.extend(declarations(0, &planned.declared));
+    result.outputs.push(PlannedOutput {
+        page: 0,
+        filename: format!("{}.{}", chapter_stem(job), extension(planned.format)),
+        format: format_label(planned.format).into(),
+    });
+    result.gutter_pixels = Some(planned.gutter_pixels);
+    Ok(())
+}
+
+/// One page's file, from its header and its patches.
+fn plan_output(
+    job: &Job,
+    container: Container,
+    position: usize,
+    choices: &Choices,
+    result: &mut ExportResult,
+) -> Result<(), Stop> {
+    let invalid = |error: String| Stop::Invalid(format!("page {}: {error}", position + 1));
+    let (source, bytes, patches) = page_inputs(job, position).map_err(invalid)?;
+    let (format, declared) = match container {
+        Container::Layered { layered } => {
+            if let Some(refusal) = psd::refusal(source.w, source.h, source.mode, source.bit_depth) {
+                return Err(Stop::Refused(refusal.reason_key()));
+            }
+            preflight_page_psd(&bytes, &patches, layered, &choices.psd).map_err(|error| match error {
+                ExportError::NotLayerable(refusal) => Stop::Refused(refusal.reason_key()),
+                other => invalid(other.to_string()),
+            })?;
+            ("PSD", psd_declarations(&bytes, &patches, choices.tone).map_err(|e| invalid(e.to_string()))?)
+        }
+        _ => {
+            let target = match container { Container::Pages { target, .. } => target, _ => Target::SameAsSource };
+            let planned = plan_page(&bytes, &patches, target, choices.tone).map_err(|e| invalid(e.to_string()))?;
+            (format_label(planned.format), planned.declared)
+        }
+    };
+    result.declared.extend(declarations(position, &declared));
+    let ext = if format == "JPEG" { "jpg".to_owned() } else { format.to_lowercase() };
+    result.outputs.push(PlannedOutput { page: position, filename: output_filename(source, &ext), format: format.to_owned() });
+    Ok(())
+}
+
+/// Moves whenever anything the export reads moves: the manifest, the choices,
+/// and the size or modification time of every source and patch file. Stat
+/// calls only, so planning stays cheap on a long chapter.
+fn revision(job: &Job, choices: &Choices) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(serde_json::to_vec(&job.project).map_err(|e| e.to_string())?);
+    hash.update(std::fs::read(job.path()).map_err(|e| e.to_string())?);
+    hash.update(format!("{choices:?}"));
+    let mut stamp = |path: &Path| {
+        let meta = std::fs::metadata(path).ok();
+        let len = meta.as_ref().map(std::fs::Metadata::len);
+        let modified = meta.and_then(|meta| meta.modified().ok());
+        hash.update(format!("{}|{len:?}|{modified:?}\n", path.display()));
+    };
+    for &index in &job.project.strip.order {
+        stamp(&job.source_path(index).ok_or("missing source")?);
+    }
+    for record in &job.project.patches {
+        let mut refs = vec![record.buffer_ref.clone(), record.mask_ref.clone(), record.ink_ref()];
+        for part in &record.native_parts {
+            refs.extend([part.buffer_ref.clone(), part.mask_ref.clone(), part.ink_ref.clone()]);
+        }
+        for name in refs {
+            stamp(&job.sidecar().join(name));
+        }
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+/* ------------------------------------------------------------------ */
+/* Export                                                             */
+/* ------------------------------------------------------------------ */
+
+/// The command's body, without the `AppHandle`.
+#[cfg(test)]
+fn export_open_job(job: &Job, format: &str, destination: &str, masks: &str, layout: &str) -> Result<ExportResult, String> {
+    let choices = Choices { format, destination, masks, layout, pages: None, tone: Tone::Source, psd: Default::default() };
+    export_reviewed_job(job, &choices, None)
+}
+
+fn export_reviewed_job(job: &Job, choices: &Choices, expected: Option<&str>) -> Result<ExportResult, String> {
+    let plan = match plan(job, choices)? {
+        Planned::Ready(plan) => plan,
+        Planned::Refused(result) => return Ok(result),
+    };
+    if expected.is_some_and(|expected| plan.result.revision.as_deref() != Some(expected)) {
+        return Ok(ExportResult::refused("notice.export.stalePlan", None));
+    }
+    std::fs::create_dir_all(&plan.dir).map_err(|e| format!("{}: {e}", plan.dir.display()))?;
+    let dir = plan.dir.canonicalize().map_err(|e| format!("{}: {e}", plan.dir.display()))?;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let stage = dir.join(format!(".export-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    std::fs::create_dir(&stage).map_err(|e| format!("{}: {e}", stage.display()))?;
+    let outcome = publish(job, choices, plan, &dir, &stage);
+    let _ = std::fs::remove_dir_all(&stage);
+    outcome
+}
+
+/// Write into `stage`, check nothing changed underneath, then move each file
+/// into `dir`.
+fn publish(job: &Job, choices: &Choices, plan: Plan, dir: &Path, stage: &Path) -> Result<ExportResult, String> {
+    if let Err(error) = write(job, &plan, choices, stage) {
+        let mut result = ExportResult::with_status("partial", Some("notice.export.partial"), Some(dir.display().to_string()));
+        result.file_count = Some(0);
+        result.detail = Some(format!("No files published: {error}"));
+        return Ok(result);
+    }
+    // External edits can bypass the in-process job lock.
+    if Some(revision(job, choices)?) != plan.result.revision {
+        return Ok(ExportResult::refused("notice.export.stalePlan", None));
+    }
+    let mut files = std::fs::read_dir(stage).map_err(|e| e.to_string())?
+        .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
+    files.sort();
+    let mut result = plan.result;
+    result.status = "exported";
+    result.path = Some(match plan.container {
+        Container::Archive => dir.join(format!("{}.cbz", chapter_stem(job))),
+        Container::Stitched { .. } => dir.join(&result.outputs[0].filename),
+        _ => dir.to_path_buf(),
+    }.display().to_string());
+    let mut completed = Vec::new();
+    for file in files {
+        let target = dir.join(file.file_name().ok_or("missing output filename")?);
+        if let Err(error) = std::fs::rename(&file, &target) {
+            result.status = "partial";
+            result.reason_key = Some("notice.export.partial");
+            result.file_count = Some(completed.len() as u32);
+            result.detail = Some(format!("{}: {error}; completed: {}", target.display(), completed.join(", ")));
+            result.outputs.retain(|output| completed.iter().any(|path: &String| Path::new(path).file_name().is_some_and(|name| name == output.filename.as_str())));
+            result.actual_formats = result.outputs.iter().map(|output| output.format.clone()).collect();
+            result.actual_formats.sort();
+            result.actual_formats.dedup();
+            break;
+        }
+        completed.push(target.display().to_string());
+    }
+    Ok(result)
+}
+
+/// Every file the plan names, into `stage`.
+fn write(job: &Job, plan: &Plan, choices: &Choices, stage: &Path) -> Result<(), String> {
+    let outputs = &plan.result.outputs;
+    let tone = choices.tone;
+    match plan.container {
+        Container::Pages { target, masks } => {
+            for output in outputs {
+                let (source, bytes, patches) = page_inputs(job, output.page)?;
+                let summary = write_file(&stage.join(&output.filename), |file| {
+                    export_page_to(&bytes, &patches, target, tone, file).map_err(|e| format!("{}: {e}", output.filename))
+                })?;
+                debug_assert_eq!(format_label(summary.format), output.format, "the file was named for another format");
+                if masks == MaskFiles::Beside {
+                    let orientation = cleaner_core::image::orientation::from_bytes(&bytes);
+                    let (width, height) = orientation.size(source.w, source.h);
+                    let oriented: Vec<Patch> = patches.iter().map(|p| orientation.patch(p, source.w, source.h)).collect();
+                    write_mask_file(&stage.join(mask_filename(source)), &oriented, width, height)?;
+                }
+            }
+            Ok(())
+        }
+        Container::Layered { layered } => {
+            for output in outputs {
+                let (_, bytes, patches) = page_inputs(job, output.page)?;
+                write_file(&stage.join(&output.filename), |file| {
+                    export_page_psd_to(&bytes, &patches, layered, tone, &choices.psd, file).map_err(|e| format!("{}: {e}", output.filename))
+                })?;
+            }
+            Ok(())
+        }
+        Container::Archive => write_archive(job, outputs, tone, &stage.join(format!("{}.cbz", chapter_stem(job)))),
+        Container::Stitched { target, masks } => write_stitched(job, target, tone, masks, &stage.join(&outputs[0].filename), stage),
+    }
+}
+
+/// One page's source record, file bytes and patches, by strip position.
+fn page_inputs(job: &Job, position: usize) -> Result<(&ProjectSource, Vec<u8>, Vec<Patch>), String> {
+    let missing = || format!("page {}: missing source", position + 1);
+    let index = *job.project.strip.order.get(position).ok_or_else(missing)?;
+    let source = job.project.sources.get(index).ok_or_else(missing)?;
+    let path = job.source_path(index).ok_or_else(missing)?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let patches = page_patches_for(job, position)?;
+    Ok((source, bytes, patches))
+}
+
+/// The resolved format, layout and mask choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Container {
-    /// One file per page, in this target's format, with or without a mask
-    /// file beside each.
+    /// One file per page, with or without a mask file beside each.
     Pages { target: Target, masks: MaskFiles },
     /// One `.cbz` holding one file per page.
     Archive,
-    /// One file for the whole strip, with or without its mask file beside it.
+    /// One file for the whole strip, with or without its mask file.
     Stitched { target: Target, masks: MaskFiles },
     /// One `.psd` per page: layered, or one flattened layer.
     Layered { layered: bool },
@@ -495,240 +574,15 @@ enum MaskFiles {
     Beside,
 }
 
-/// The command's body, split out from the Tauri boundary so it can be tested
-/// against a real [`Job`] on disk without an `AppHandle`.
-///
-/// **Every refusal is decided before anything is created.** An export writes a
-/// set, and "some files were written and then we changed our minds" is not a
-/// state to leave a chapter in - which is the argument `Job::output_refusal`
-/// was already made under, extended to the other seven.
-#[cfg(test)]
-fn export_open_job(job: &Job, format: &str, destination: &str, masks: &str, layout: &str) -> Result<ExportResult, String> {
-    export_reviewed_job(job, format, destination, masks, layout, None)
-}
-
-fn export_reviewed_job(job: &Job, format: &str, destination: &str, masks: &str, layout: &str, expected: Option<&str>) -> Result<ExportResult, String> {
-    if let Some(expected) = expected {
-        if revision(job, [format, destination, masks, layout])? != expected {
-            return Ok(ExportResult::refused("notice.export.stalePlan", None));
-        }
-    }
-    let plan = plan_open_job(job, format, destination, masks, layout)?;
-    if plan.status != "planned" { return Ok(plan); }
-    let destination_dir = destination_dir(destination, &source_directory(job)).map_err(str::to_owned)?;
-    std::fs::create_dir_all(&destination_dir).map_err(|e| format!("{}: {e}", destination_dir.display()))?;
-    let destination_dir = destination_dir.canonicalize().map_err(|e| format!("{}: {e}", destination_dir.display()))?;
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let stage = destination_dir.join(format!(".export-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
-    std::fs::create_dir(&stage).map_err(|e| format!("{}: {e}", stage.display()))?;
-    let outcome = (|| {
-        let mut result = match write_open_job(job, format, &stage.to_string_lossy(), masks, layout) {
-            Ok(result) => result,
-            Err(error) => {
-                let mut result = ExportResult::refused("notice.export.partial", Some(destination_dir.display().to_string()));
-                result.status = "partial"; result.file_count = Some(0);
-                result.detail = Some(format!("No files published: {error}"));
-                return Ok(result);
-            }
-        };
-        if result.status != "exported" { return Ok(result); }
-        // Recheck before publishing: external edits can bypass the in-process job lock.
-        if Some(revision(job, [format, destination, masks, layout])?) != plan.revision {
-            return Ok(ExportResult::refused("notice.export.stalePlan", None));
-        }
-        let mut files = std::fs::read_dir(&stage).map_err(|e| e.to_string())?
-            .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
-        files.sort();
-        let mut completed = Vec::new();
-        for file in files {
-            let target = destination_dir.join(file.file_name().ok_or("missing output filename")?);
-            if let Err(error) = std::fs::rename(&file, &target) {
-                result.status = "partial"; result.reason_key = Some("notice.export.partial");
-                result.file_count = Some(completed.len() as u32);
-                result.detail = Some(format!("{}: {error}; completed: {}", target.display(), completed.join(", ")));
-                break;
-            }
-            completed.push(target.display().to_string());
-        }
-        result.path = Some(if format.eq_ignore_ascii_case("CBZ") {
-            destination_dir.join(format!("{}.cbz", chapter_stem(job))).display().to_string()
-        } else if layout == "stitched" {
-            destination_dir.join(&plan.outputs[0].filename).display().to_string()
-        } else { destination_dir.display().to_string() });
-        result.actual_formats = plan.actual_formats; result.declared = plan.declared;
-        result.outputs = plan.outputs; result.revision = plan.revision;
-        if result.status == "partial" {
-            result.outputs.retain(|output| completed.iter().any(|path| Path::new(path).file_name().is_some_and(|name| name == output.filename.as_str())));
-            result.actual_formats = result.outputs.iter().map(|output| output.format.clone()).collect();
-            result.actual_formats.sort(); result.actual_formats.dedup();
-        }
-        Ok(result)
-    })();
-    let _ = std::fs::remove_dir_all(&stage);
-    outcome
-}
-
-fn write_open_job(
-    job: &Job,
-    format: &str,
-    destination: &str,
-    masks: &str,
-    layout: &str,
-) -> Result<ExportResult, String> {
-    let requested = match requested_format(format) {
-        Ok(requested) => requested,
-        Err(reason) => return Ok(ExportResult::refused(reason, None)),
-    };
-    let longstrip = job.project.strip.mode == StripMode::Longstrip;
-    let container = match container_for(requested, layout, mask_files(masks), longstrip) {
-        Ok(container) => container,
-        Err(reason) => return Ok(ExportResult::refused(reason, None)),
-    };
-    if let Container::Layered { .. } = container {
-        // Every page, from the manifest: a chapter with one page PSD cannot
-        // carry refuses whole rather than writing nine files and failing on
-        // the tenth.
-        for &source_idx in &job.project.strip.order {
-            let Some(source) = job.project.sources.get(source_idx) else { continue };
-            if let Some(refusal) = psd::refusal(source.w, source.h, source.mode, source.bit_depth) {
-                return Ok(ExportResult::refused(refusal.reason_key(), None));
-            }
-        }
-    }
-
-    let source_dir = source_directory(job);
-    let destination_dir = match destination_dir(destination, &source_dir) {
-        Ok(dir) => dir,
-        Err(reason) => return Ok(ExportResult::refused(reason, None)),
-    };
-
-    // The refusal is Job::output_refusal's decision, made once, before
-    // anything is written.
-    if let Some(refusal) = job.output_refusal(&destination_dir) {
-        return Ok(ExportResult::refused(
-            refusal.reason_key(),
-            // The directory that was refused, because the notice names it:
-            // *"Export refused - it would replace the files in {path}"*. A
-            // refusal with no path in it produces that sentence with a hole
-            // where the only actionable word was.
-            Some(destination_dir.display().to_string()),
-        ));
-    }
-
-    // Validate every visible patch before creating an output directory or file.
-    // load_patch rechecks text-shaped sidecars against their stored write plan.
-    for record in job.project.patches.iter().filter(|record| record.visible) {
-        job.load_patch(record).map_err(|error| format!("{}: {error}", record.id))?;
-    }
-
-    if let Container::Layered { layered } = container {
-        let strip = strip_of(job);
-        for (position, &source_idx) in job.project.strip.order.iter().enumerate() {
-            let Some(source_path) = job.source_path(source_idx) else { continue };
-            let bytes = std::fs::read(&source_path)
-                .map_err(|error| format!("{}: {error}", source_path.display()))?;
-            let header = cleaner_core::image::header(&bytes)
-                .map_err(|error| format!("{}: {error}", source_path.display()))?;
-            let page = Raster {
-                width: header.width,
-                height: header.height,
-                mode: header.mode,
-                depth: header.depth,
-                icc: header.icc,
-                palette: header.palette,
-                trns: header.trns,
-                srgb_intent: header.srgb_intent,
-                color: header.color,
-                data: Vec::new(),
-            };
-            let patches = page_patches_for(job, &strip, longstrip, position, source_idx)?;
-            let regions: Vec<&Patch> = if layered {
-                patches
-                    .iter()
-                    .filter(|patch| patch.visible && !patch.mask.is_empty())
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let document = psd::Document {
-                background: &page,
-                regions: &regions,
-                merged: &page,
-            };
-            match psd::preflight_document(&document) {
-                Ok(()) => {}
-                Err(cleaner_core::export::ExportError::NotLayerable(refusal)) => {
-                    return Ok(ExportResult::refused(refusal.reason_key(), None));
-                }
-                Err(error) => return Err(format!("{}: {error}", source_path.display())),
-            }
-        }
-    }
-
-    std::fs::create_dir_all(&destination_dir)
-        .map_err(|e| format!("{}: {e}", destination_dir.display()))?;
-    // `default_output_dir` builds a path lexically (a `parent()`/`file_name()`
-    // pair), so a job whose manifest sits under a different tree than its
-    // sources can hand back something like `.../out/../raws_cleaned`. Now
-    // that the directory exists, canonicalising it is what makes the `path`
-    // this command returns the one a user would recognise.
-    let destination_dir = destination_dir.canonicalize().unwrap_or(destination_dir);
-
-    match container {
-        Container::Pages { target, masks } => {
-            let file_count = write_pages(job, target, masks, &destination_dir)?;
-            Ok(ExportResult {
-                status: "exported",
-                file_count: Some(file_count),
-                path: Some(destination_dir.display().to_string()),
-                reason_key: None,
-                gutter_pixels: None,
-            actual_formats: Vec::new(), declared: Vec::new(), outputs: Vec::new(), revision: None, detail: None,
-            })
-        }
-        Container::Layered { layered } => {
-            let file_count = write_layered(job, layered, &destination_dir)?;
-            Ok(ExportResult {
-                status: "exported",
-                file_count: Some(file_count),
-                path: Some(destination_dir.display().to_string()),
-                reason_key: None,
-                gutter_pixels: None,
-            actual_formats: Vec::new(), declared: Vec::new(), outputs: Vec::new(), revision: None, detail: None,
-            })
-        }
-        Container::Archive => {
-            let path = destination_dir.join(format!("{}.cbz", chapter_stem(job)));
-            let file_count = write_archive(job, &path)?;
-            Ok(ExportResult {
-                status: "exported",
-                file_count: Some(file_count),
-                path: Some(path.display().to_string()),
-                reason_key: None,
-                gutter_pixels: None,
-            actual_formats: Vec::new(), declared: Vec::new(), outputs: Vec::new(), revision: None, detail: None,
-            })
-        }
-        Container::Stitched { target, masks } => write_stitched(job, target, masks, &destination_dir),
-    }
-}
-
-/// A format this build can produce, from the string the seam carried.
-///
-/// The four it knows are the four [`Container`] has a writer for. Everything
-/// else is named rather than approximated - see the module doc's table.
 fn requested_format(format: &str) -> Result<Requested, &'static str> {
     match format.to_ascii_uppercase().as_str() {
         "PNG" => Ok(Requested::Png),
         "TIFF" | "TIF" => Ok(Requested::Tiff),
         "CBZ" => Ok(Requested::Cbz),
         "PSD" => Ok(Requested::Psd),
-        // Lossy, and lossy formats sit behind the acknowledgement. WebP is
-        // here rather than under "unknown" because lossless WebP is the same
-        // line and refusing it as unrecognised would be a less true sentence.
+        // Lossy formats need an acknowledgement flow that does not exist.
+        // Lossless WebP is refused on the same line.
         "JPEG" | "JPG" | "WEBP" => Err("notice.export.refusedLossyFormat"),
-        // The large-document variant. Not written, and named apart from
-        // "unknown" because the sentence can say which format is.
         "PSB" => Err("notice.export.refusedLayeredFormat"),
         _ => Err("notice.export.refusedUnknownFormat"),
     }
@@ -742,14 +596,7 @@ enum Requested {
     Psd,
 }
 
-/// The format, the layout and the mask choice together.
-///
-/// **An unrecognised layout is per-page**, which is rule 8's own default and
-/// the only one of the two that is always available. That is the opposite
-/// treatment from an unrecognised *format*, and deliberately: a format this
-/// build cannot write has no safe substitute, while "one file per page" is what
-/// every export did before the parameter existed. [`mask_files`] treats an
-/// unrecognised `masks` the same way, for the same reason.
+/// An unrecognised layout is per-page, which every chapter can do.
 fn container_for(
     requested: Requested,
     layout: &str,
@@ -758,9 +605,9 @@ fn container_for(
 ) -> Result<Container, &'static str> {
     let stitched = layout == "stitched";
     if requested == Requested::Psd {
+        // A PSD holds its whole page as the Background, and the strip is never
+        // resident whole.
         if stitched {
-            // A layered file holds its whole page as the background, and the
-            // strip is the one page that never exists.
             return Err("notice.export.refusedStitchedLayered");
         }
         return Ok(Container::Layered { layered: masks == MaskFiles::Beside });
@@ -768,27 +615,19 @@ fn container_for(
     let target = match requested {
         Requested::Png => Target::Explicit(Format::Png),
         Requested::Tiff => Target::Explicit(Format::Tiff),
-        // A CBZ names an archive, not a codec: the pages inside keep their own
-        // lossless format, which is what leaves byte-for-byte passthrough
-        // reachable through the container.
+        // A CBZ's pages keep their own lossless format, so an untouched page
+        // goes in byte for byte.
         Requested::Cbz | Requested::Psd => Target::SameAsSource,
     };
     if !stitched {
-        return Ok(match requested {
-            Requested::Cbz if masks == MaskFiles::Beside => {
-                // A reader app shows every file in the archive as a page, so
-                // a mask file inside it would be read as one.
-                return Err("notice.export.refusedMaskLayers");
-            }
-            Requested::Cbz => Container::Archive,
-            _ => Container::Pages { target, masks },
-        });
+        return match requested {
+            // A reader app would show a mask file inside the archive as a page.
+            Requested::Cbz if masks == MaskFiles::Beside => Err("notice.export.refusedMaskLayers"),
+            Requested::Cbz => Ok(Container::Archive),
+            _ => Ok(Container::Pages { target, masks }),
+        };
     }
     if requested == Requested::Cbz {
-        // A stitched file inside an archive of one entry is a shape nobody
-        // asked for, and packing it would mean holding the whole strip's
-        // encoded file to compute the entry's CRC - the same prohibition,
-        // through the back door.
         return Err("notice.export.refusedStitchedArchive");
     }
     if !longstrip {
@@ -797,10 +636,8 @@ fn container_for(
     Ok(Container::Stitched { target, masks })
 }
 
-/// The seam's `masks`: `'separate-layer'` asks for the masks as their own
-/// thing - a file beside each raster image, a layer per region in a PSD - and
-/// `'flattened'` is the image alone. Anything else is the image alone, which
-/// is what every export did before the parameter was branched on.
+/// `'separate-layer'` asks for masks as their own thing; anything else is the
+/// image alone.
 fn mask_files(masks: &str) -> MaskFiles {
     match masks {
         "separate-layer" => MaskFiles::Beside,
@@ -808,21 +645,8 @@ fn mask_files(masks: &str) -> MaskFiles {
     }
 }
 
-/// Where the export writes.
-///
-/// Two sentinels and an **absolute path**: the seam takes a path when it is
-/// absolute and nothing else. `'new-folder'` resolves to
-/// [`default_output_dir`], the sibling `<input>_cleaned/`.
-///
-/// **A relative path is refused rather than resolved.** There is no directory
-/// for it to be relative *to* that both ends of the seam would agree on - the
-/// backend's working directory is wherever the bundle was launched from, which
-/// is not a place any user chose - so resolving one would write the chapter
-/// somewhere neither side named. This used to fall back to `'new-folder'`,
-/// which was safe and silent; silent is the thing this file no longer does.
-///
-/// Whatever this returns is still put to [`Job::output_refusal`], so an
-/// absolute path that *is* a source directory is refused like any other.
+/// Two sentinels or an absolute path. A relative path has nothing both sides
+/// of the seam would agree it is relative to, so it is refused.
 fn destination_dir(destination: &str, source_dir: &Path) -> Result<PathBuf, &'static str> {
     match destination {
         "new-folder" => Ok(default_output_dir(source_dir)),
@@ -832,26 +656,15 @@ fn destination_dir(destination: &str, source_dir: &Path) -> Result<PathBuf, &'st
     }
 }
 
-/// Whether an export could create `dir` and write into it, decided without
-/// writing anything: the nearest ancestor that exists must be a directory this
-/// process may write to.
-///
-/// The default destination is a sibling of the chapter's scan folder, and the
-/// scan folder is a path from the manifest, not a place that was checked. The
-/// application keeps its own copy of every page, so a chapter imported from an
-/// external drive opens and cleans with the drive unplugged. Its export then
-/// asked `create_dir_all` to recreate the mount point, which on macOS means a
-/// directory inside `/Volumes`, and the answer was a bare `Permission denied
-/// (os error 13)`. Nothing here names `/Volumes`: a missing mount point on
-/// Linux and a missing drive letter on Windows end at an ancestor that cannot
-/// be written, or at no ancestor at all, in the same way.
+/// Whether `dir` could be created and written, without writing: the nearest
+/// existing ancestor must be a writable directory. A chapter imported from a
+/// drive that is now unplugged otherwise fails with a bare `Permission
+/// denied` from inside `/Volumes`.
 fn destination_available(dir: &Path) -> bool {
     dir.ancestors().find(|path| path.exists()).is_some_and(|existing| existing.is_dir() && writable(existing))
 }
 
-/// `access(2)` and not the permission bits: the bits of `/Volumes` say its
-/// owner may write, and the owner is root. It also answers for a volume that
-/// is mounted read-only.
+/// `access(2)`, not the permission bits, so a read-only mount answers too.
 #[cfg(unix)]
 fn writable(dir: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
@@ -860,105 +673,21 @@ fn writable(dir: &Path) -> bool {
     unsafe { libc::access(name.as_ptr(), libc::W_OK | libc::X_OK) == 0 }
 }
 
-/// Windows decides this from an access control list, and the read-only
-/// attribute on a directory does not stop a file being created in it. A
-/// directory that exists is taken as writable; the write itself reports the
-/// rest, with the path.
+/// Windows decides this from an ACL; the write itself reports the rest.
 #[cfg(not(unix))]
 fn writable(_dir: &Path) -> bool {
     true
 }
 
-/// One file per page, streamed, and a mask file beside each when asked for.
-/// Returns how many pages were written.
-fn write_pages(
-    job: &Job,
-    target: Target,
-    masks: MaskFiles,
-    destination_dir: &Path,
-) -> Result<u32, String> {
-    let strip = strip_of(job);
-    let longstrip = job.project.strip.mode == StripMode::Longstrip;
-
-    let mut file_count = 0u32;
-    for (position, &source_idx) in job.project.strip.order.iter().enumerate() {
-        let Some(source) = job.project.sources.get(source_idx) else { continue };
-        let Some(source_path) = job.source_path(source_idx) else { continue };
-        let bytes =
-            std::fs::read(&source_path).map_err(|e| format!("{}: {e}", source_path.display()))?;
-        let patches = page_patches_for(job, &strip, longstrip, position, source_idx)?;
-
-        // Streaming means the file is opened before the export decides
-        // anything, so the name has to be settled first. `planned_format` is
-        // the export's own decision reached from a header read rather than a
-        // second copy of the rule - the one thing that could change it is a
-        // mode the target format cannot carry, which a header knows.
-        let planned = cleaner_core::export::planned_format(&bytes, &patches, target)
-            .map_err(|e| format!("{}: {e}", source_path.display()))?;
-        let out_path = destination_dir.join(output_filename(source, extension(planned)));
-        let summary = write_file(&out_path, |file| {
-            export_page_to(&bytes, &patches, target, file)
-                .map_err(|e| format!("{}: {e}", source_path.display()))
-        })?;
-        debug_assert_eq!(summary.format, planned, "the file was named for another format");
-
-        if masks == MaskFiles::Beside {
-            let orientation = cleaner_core::image::orientation::from_bytes(&bytes);
-            let (width, height) = orientation.size(source.w, source.h);
-            let oriented: Vec<Patch> = patches.iter().map(|p| orientation.patch(p, source.w, source.h)).collect();
-            write_mask_file(&destination_dir.join(mask_filename(source)), &oriented, width, height)?;
-        }
-        file_count += 1;
-    }
-    Ok(file_count)
-}
-
-/// One `.psd` per page. Returns how many were written.
-///
-/// No passthrough and no format to predict: a PSD is a PSD, and a page nothing
-/// touched still becomes one because that is what was asked for.
-fn write_layered(job: &Job, layered: bool, destination_dir: &Path) -> Result<u32, String> {
-    let strip = strip_of(job);
-    let longstrip = job.project.strip.mode == StripMode::Longstrip;
-
-    let mut file_count = 0u32;
-    for (position, &source_idx) in job.project.strip.order.iter().enumerate() {
-        let Some(source) = job.project.sources.get(source_idx) else { continue };
-        let Some(source_path) = job.source_path(source_idx) else { continue };
-        let bytes =
-            std::fs::read(&source_path).map_err(|e| format!("{}: {e}", source_path.display()))?;
-        let patches = page_patches_for(job, &strip, longstrip, position, source_idx)?;
-        let out_path = destination_dir.join(output_filename(source, "psd"));
-        write_file(&out_path, |file| {
-            export_page_psd_to(&bytes, &patches, layered, file)
-                .map_err(|e| format!("{}: {e}", source_path.display()))
-        })?;
-        file_count += 1;
-    }
-    Ok(file_count)
-}
-
-/// `<stem>_mask.png`: legacy exports describe lettering; text-shaped exports
-/// describe the exact approved write support shown by their preview.
-fn exported_mask(patch: &Patch) -> &Mask {
-    if patch.provenance.params_snapshot.get("geometry_policy").and_then(|v| v.as_str())
-        == Some("text_shape") { &patch.mask } else { &patch.ink }
-}
-
 fn write_mask_file(path: &Path, patches: &[Patch], width: u32, height: u32) -> Result<(), String> {
-    let masks: Vec<&Mask> = patches.iter().filter(|p| p.visible).map(exported_mask).collect();
+    let masks: Vec<&Mask> = patches.iter().filter(|p| p.visible).map(Patch::lettering).collect();
     write_file(path, |file| {
         export_mask_to(&masks, width, height, file).map_err(|e| format!("{}: {e}", path.display()))
     })
     .map(|_| ())
 }
 
-/// Create `path`, run `write` into it, flush - and remove the file if either
-/// fails.
-///
-/// A failure has already created the file. An export that stops partway
-/// leaves the pages it finished, which it always did; what it must not leave
-/// is a *truncated* page, which looks like a cleaned one until it is opened.
+/// Create `path`, run `write` into it and flush.
 fn write_file<T>(
     path: &Path,
     write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> Result<T, String>,
@@ -966,159 +695,61 @@ fn write_file<T>(
     let mut file = std::io::BufWriter::new(
         std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?,
     );
-    let written = write(&mut file).and_then(|value| {
-        std::io::Write::flush(&mut file)
-            .map(|()| value)
-            .map_err(|e| format!("{}: {e}", path.display()))
-    });
-    if written.is_err() {
-        drop(file);
-        let _ = std::fs::remove_file(path);
-    }
-    written
+    let value = write(&mut file)?;
+    std::io::Write::flush(&mut file).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(value)
 }
 
-/// The same per-page files, inside one zip. Returns how many pages went in.
-///
-/// This is the one export that buffers a page's encoded file, because a stored
-/// zip entry carries its own CRC-32 and length ahead of its data and both are
-/// facts about the finished file. One page at a time - the entry is added and
-/// the buffer dropped before the next source is read - so the resident cost is
-/// a page, which is the unit the memory budget is stated in.
-fn write_archive(job: &Job, path: &Path) -> Result<u32, String> {
-    let strip = strip_of(job);
-    let longstrip = job.project.strip.mode == StripMode::Longstrip;
-
+/// The per-page files, inside one stored zip. A zip entry carries its CRC
+/// ahead of its data, so each page's file is buffered, one page at a time.
+fn write_archive(job: &Job, outputs: &[PlannedOutput], tone: Tone, path: &Path) -> Result<(), String> {
     let file = std::io::BufWriter::new(
         std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?,
     );
     let mut archive = Cbz::new(file);
-    let mut file_count = 0u32;
-
-    let packed = (|| -> Result<u32, String> {
-        for (position, &source_idx) in job.project.strip.order.iter().enumerate() {
-            let Some(source) = job.project.sources.get(source_idx) else { continue };
-            let Some(source_path) = job.source_path(source_idx) else { continue };
-            let bytes = std::fs::read(&source_path)
-                .map_err(|e| format!("{}: {e}", source_path.display()))?;
-            let patches = page_patches_for(job, &strip, longstrip, position, source_idx)?;
-            let page = export_page(&bytes, &patches, Target::SameAsSource)
-                .map_err(|e| format!("{}: {e}", source_path.display()))?;
-            archive
-                .add(&output_filename(source, extension(page.format)), &page.bytes)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-            file_count += 1;
-        }
-        Ok(file_count)
-    })();
-
-    match packed {
-        // A zip is not a zip until its central directory is written, so a
-        // half-packed archive is not a file with some pages missing - it is a
-        // file nothing can open. Removing it is the honest outcome.
-        Err(error) => {
-            let _ = std::fs::remove_file(path);
-            Err(error)
-        }
-        Ok(count) => {
-            archive.finish().map_err(|e| format!("{}: {e}", path.display()))?;
-            Ok(count)
-        }
+    for output in outputs {
+        let (_, bytes, patches) = page_inputs(job, output.page)?;
+        let mut page = std::io::Cursor::new(Vec::new());
+        export_page_to(&bytes, &patches, Target::SameAsSource, tone, &mut page)
+            .map_err(|e| format!("{}: {e}", output.filename))?;
+        archive.add(&output.filename, page.get_ref()).map_err(|e| format!("{}: {e}", path.display()))?;
     }
+    archive.finish().map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(())
 }
 
-/// One file for the whole strip, rows at a time, one page resident - and its
-/// mask file beside it when asked for, from the same global patch set in the
-/// same strip coordinates.
-fn write_stitched(
-    job: &Job,
-    target: Target,
-    masks: MaskFiles,
-    destination_dir: &Path,
-) -> Result<ExportResult, String> {
+/// One file for the whole strip, rows at a time with one page resident, and
+/// its mask file beside it when asked for.
+fn write_stitched(job: &Job, target: Target, tone: Tone, masks: MaskFiles, path: &Path, stage: &Path) -> Result<(), String> {
     let strip = strip_of(job);
-    if strip.pages().is_empty() {
-        return Ok(ExportResult::refused(
-            cleaner_core::export::StitchRefusal::NoPages.reason_key(),
-            None,
-        ));
-    }
-
-    let mut pages = JobPages { job };
-    // Page 0's header names the file, and it is also the first thing
-    // `export_stitched` reads: every other page has to agree with it or the
-    // strip is refused. Read here rather than predicted, for the same reason
-    // the per-page path calls `planned_format`.
-    let first = match pages.header(0) {
-        Ok(header) => header,
-        Err(error) => return Err(error.to_string()),
-    };
-    let planned = planned_stitched_format(&first, target);
-    let out_path = destination_dir.join(format!("{}.{}", chapter_stem(job), extension(planned)));
-
     let global = global_patches(job, &strip)?;
-    let mut file = std::io::BufWriter::new(
-        std::fs::File::create(&out_path).map_err(|e| format!("{}: {e}", out_path.display()))?,
-    );
-    let written = export_stitched(&strip, &global, &mut pages, target, &mut file)
-        .and_then(|stitched| {
-            std::io::Write::flush(&mut file)
-                .map(|()| stitched)
-                .map_err(cleaner_core::export::ExportError::from)
-        });
-
-    match written {
-        Ok(stitched) => {
-            debug_assert_eq!(stitched.format, planned, "the file was named for another format");
-            if masks == MaskFiles::Beside {
-                let strip_masks: Vec<&Mask> = global
-                    .iter()
-                    .map(StripPatch::in_strip_coordinates)
-                    .filter(|p| p.visible)
-                    .map(exported_mask)
-                    .collect();
-                let mask_path = destination_dir.join(format!("{}_mask.png", chapter_stem(job)));
-                write_file(&mask_path, |file| {
-                    export_mask_to(&strip_masks, strip.width(), strip.height(), file)
-                        .map_err(|e| format!("{}: {e}", mask_path.display()))
-                })?;
-            }
-            Ok(ExportResult {
-                status: "exported",
-                file_count: Some(1),
-                path: Some(out_path.display().to_string()),
-                reason_key: None,
-                gutter_pixels: Some(stitched.gutter_pixels),
-                actual_formats: Vec::new(), declared: Vec::new(), outputs: Vec::new(), revision: None, detail: None,
-            })
-        }
-        Err(error) => {
-            // `export_stitched` decides every refusal from headers before it
-            // writes a byte, so the file this removes is the empty one
-            // `File::create` just made.
-            let _ = std::fs::remove_file(&out_path);
-            match error {
-                cleaner_core::export::ExportError::NotStitchable(refusal) => {
-                    Ok(ExportResult::refused(refusal.reason_key(), None))
-                }
-                other => Err(other.to_string()),
-            }
-        }
+    write_file(path, |file| {
+        export_stitched(&strip, &global, &mut JobPages { job }, target, tone, file).map_err(|e| e.to_string())
+    })?;
+    if masks == MaskFiles::Beside {
+        let strip_masks: Vec<&Mask> = global
+            .iter()
+            .map(StripPatch::in_strip_coordinates)
+            .filter(|p| p.visible)
+            .map(Patch::lettering)
+            .collect();
+        let mask_path = stage.join(format!("{}_mask.png", chapter_stem(job)));
+        write_file(&mask_path, |file| {
+            export_mask_to(&strip_masks, strip.width(), strip.height(), file)
+                .map_err(|e| format!("{}: {e}", mask_path.display()))
+        })?;
     }
+    Ok(())
 }
 
-/// The job's pages, read off disk one at a time.
-///
-/// The in-memory implementation of the same trait is in `export::stitched`'s
-/// own tests; this is the one that goes to files, and it holds nothing between
-/// calls, which is the whole point of the trait having two methods.
+/// The job's pages, read off disk one at a time and held between no calls.
 struct JobPages<'a> {
     job: &'a Job,
 }
 
 impl JobPages<'_> {
-    fn bytes(&self, position: usize) -> Result<Vec<u8>, cleaner_core::export::ExportError> {
-        let sink = |message: String| cleaner_core::export::ExportError::Sink(message);
+    fn bytes(&self, position: usize) -> Result<Vec<u8>, ExportError> {
+        let sink = |message: String| ExportError::Sink(message);
         let source_idx = *self
             .job
             .project
@@ -1135,7 +766,7 @@ impl JobPages<'_> {
 }
 
 impl PageSource for JobPages<'_> {
-    fn header(&mut self, position: usize) -> Result<Header, cleaner_core::export::ExportError> {
+    fn header(&mut self, position: usize) -> Result<Header, ExportError> {
         let bytes = self.bytes(position)?;
         let format = Format::sniff(&bytes)
             .ok_or(cleaner_core::image::ImageError::UnknownFormat)?;
@@ -1148,21 +779,15 @@ impl PageSource for JobPages<'_> {
         Ok(header)
     }
 
-    fn page(&mut self, position: usize) -> Result<Raster, cleaner_core::export::ExportError> {
+    fn page(&mut self, position: usize) -> Result<Raster, ExportError> {
         let bytes = self.bytes(position)?;
         Ok(cleaner_core::image::orientation::from_bytes(&bytes).raster(&decode(&bytes)?))
     }
 }
 
-/// The whole patch set, lifted into strip coordinates.
-///
-/// **This is the one place the on-disk discipline gives way**, and it is
-/// worth being plain about rather than leaving as an accident of the signature.
-/// `export_stitched` takes the global set as a slice, so every patch buffer in
-/// the chapter is resident while the strip is written - where the per-page path
-/// selects from `bbox` fields and loads only what it needs. The pixels the rule
-/// is really about are still one page at a time; what is held is the patch set,
-/// which for a heavily cleaned 200-page chapter is not nothing.
+/// The whole patch set, lifted into strip coordinates. `export_stitched`
+/// takes it as one slice, so every visible patch in the chapter is resident
+/// while the strip is written; the page pixels are still one at a time.
 fn global_patches(job: &Job, strip: &Strip) -> Result<Vec<StripPatch>, String> {
     let mut global = Vec::new();
     for position in 0..job.project.strip.order.len() {
@@ -1174,29 +799,13 @@ fn global_patches(job: &Job, strip: &Strip) -> Result<Vec<StripPatch>, String> {
     Ok(global)
 }
 
-/// Which patches one page's file gets: the intersection for a longstrip job,
-/// ownership for a paginated one. Shared by the per-page and the archive
-/// writers, which differ in where the encoded file goes and in nothing else.
-fn page_patches_for(
-    job: &Job,
-    strip: &Strip,
-    longstrip: bool,
-    position: usize,
-    source_idx: usize,
-) -> Result<Vec<Patch>, String> {
-    let _ = (strip, longstrip, source_idx);
+/// The patches one page's file gets, in that page's own coordinates.
+fn page_patches_for(job: &Job, position: usize) -> Result<Vec<Patch>, String> {
     job.native_patches_on_page(position).map_err(|e| e.to_string())
 }
 
-/// The strip's coordinate system, from the manifest's `sources` and
-/// `strip.order`.
-///
-/// Rebuilt here rather than persisted, which is what
-/// [`cleaner_core::strip::Strip`]'s own doc says to do: the manifest holds the
-/// order and the page dimensions, and the placements follow from them. The
-/// placement at position `k` is the page `strip.order[k]` names - the two
-/// indices differ whenever a user has reordered pages, and everything below
-/// takes the position, never the source index.
+/// The strip's coordinate system, rebuilt from the manifest's sources and
+/// order. Everything takes the strip position, never the source index.
 fn strip_of(job: &Job) -> Strip {
     cleaner_core::project::orientation::strip(&job.project, true)
 }
@@ -1331,6 +940,14 @@ mod tests {
     use cleaner_core::patch::{Engine, Provenance};
     use cleaner_core::project::Project;
     use cleaner_core::text_shape::{MaskPlan, MaskQualityState, MASK_PLAN_VERSION};
+
+    fn choices<'a>(format: &'a str, destination: &'a str, masks: &'a str, layout: &'a str) -> Choices<'a> {
+        Choices { format, destination, masks, layout, pages: None, tone: Tone::Source, psd: Default::default() }
+    }
+
+    fn plan_open_job(job: &Job, format: &str, destination: &str, masks: &str, layout: &str) -> Result<ExportResult, String> {
+        Ok(plan(job, &choices(format, destination, masks, layout))?.into_result())
+    }
 
     struct Scratch(PathBuf);
 
@@ -1540,7 +1157,7 @@ mod tests {
         let path = job.source_path(0).unwrap();
         let mut bytes = std::fs::read(&path).unwrap(); bytes.push(0);
         std::fs::write(path, bytes).unwrap();
-        assert_ne!(before.unwrap(), revision(&job, ["PNG", &out.to_string_lossy(), "flattened", "per-page"]).unwrap());
+        assert_ne!(before.unwrap(), revision(&job, &choices("PNG", &out.to_string_lossy(), "flattened", "per-page")).unwrap());
     }
 
     #[test]
@@ -1550,9 +1167,117 @@ mod tests {
         let out = scratch.join("export");
         let plan = plan_open_job(&job, "PNG", out.to_str().unwrap(), "flattened", "per-page").unwrap();
         fill_page(&mut job, 0, Rect::new(1, 1, 2, 2), 42);
-        let result = export_reviewed_job(&job, "PNG", out.to_str().unwrap(), "flattened", "per-page", plan.revision.as_deref()).unwrap();
+        let result = export_reviewed_job(&job, &choices("PNG", out.to_str().unwrap(), "flattened", "per-page"), plan.revision.as_deref()).unwrap();
         assert_eq!(result.status, "refused");
         assert_eq!(result.reason_key, Some("notice.export.stalePlan"));
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn a_page_selection_exports_those_pages_alone() {
+        let scratch = Scratch::new("one-page");
+        let job = a_strip_job(&scratch, StripMode::Single);
+        let out = scratch.join("export");
+        for format in ["PNG", "PSD"] {
+            let dir = out.join(format);
+            let choices = Choices { pages: Some(&[1]), ..choices(format, dir.to_str().unwrap(), "flattened", "per-page") };
+            let result = export_reviewed_job(&job, &choices, None).unwrap();
+            assert_eq!(result.status, "exported", "{format}: {:?}", result.detail);
+            assert_eq!(result.file_count, Some(1));
+            assert_eq!(result.outputs.iter().map(|o| o.page).collect::<Vec<_>>(), [1]);
+            let written: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+            assert_eq!(written.len(), 1, "{format} wrote {written:?}");
+        }
+    }
+
+    /// Three grey pages stored as RGB, in a longstrip so every container is
+    /// open to them.
+    fn a_grey_rgb_strip_job(scratch: &Scratch) -> Job {
+        let raws = scratch.join("raws");
+        std::fs::create_dir_all(&raws).unwrap();
+        let sources: Vec<SourceRef> = (0..3)
+            .map(|n| {
+                let mut page = fixtures::by_name("rgb8").raster;
+                for y in 0..page.height {
+                    for x in 0..page.width {
+                        let v = page.sample(x, y, 0);
+                        page.set_sample(x, y, 1, v);
+                        page.set_sample(x, y, 2, v);
+                    }
+                }
+                let bytes = encode(&page, Format::Png).unwrap();
+                let path = raws.join(format!("{n:03}.png"));
+                std::fs::write(&path, &bytes).unwrap();
+                cleaner_core::ingest::source_ref(&path, &bytes).unwrap()
+            })
+            .collect();
+        let manifest = scratch.join("out/chapter.mtclean");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        let project = Project::new(manifest.parent().unwrap(), "0.1.0", StripMode::Longstrip, &sources);
+        Job::create(&manifest, project).unwrap()
+    }
+
+    #[test]
+    fn grayscale_writes_grey_rgb_pages_gray_in_every_container() {
+        use cleaner_core::image::ColorMode;
+        let scratch = Scratch::new("grayscale");
+        let mut job = a_grey_rgb_strip_job(&scratch);
+        let bounds = Rect::new(10, 20, 20, 16);
+        let mut pixels = fixtures::by_name("rgb8").raster;
+        (pixels.width, pixels.height) = (bounds.w, bounds.h);
+        pixels.data = vec![200; (bounds.w * bounds.h * 3) as usize];
+        let patch = Patch {
+            id: "grey-fill".into(),
+            mask: Mask::filled(bounds),
+            ink: Mask::filled(bounds),
+            pixels,
+            order: 0,
+            visible: true,
+            provenance: provenance(),
+        };
+        job.complete_region(0, &patch, None).unwrap();
+        let out = scratch.join("export");
+        let mode = |bytes: &[u8]| cleaner_core::image::decode(bytes).unwrap().mode;
+        for (tone, expected, psd_mode) in [(Tone::Source, ColorMode::Rgb, 3), (Tone::Grayscale, ColorMode::Gray, 1)] {
+            let dir = out.join(format!("{tone:?}"));
+            for (format, layout) in [("PNG", "per-page"), ("TIFF", "per-page"), ("CBZ", "per-page"), ("PNG", "stitched"), ("PSD", "per-page")] {
+                let dest = dir.join(format!("{format}-{layout}"));
+                let choices = Choices { tone, ..choices(format, dest.to_str().unwrap(), "flattened", layout) };
+                let result = export_reviewed_job(&job, &choices, None).unwrap();
+                assert_eq!(result.status, "exported", "{tone:?} {format} {layout}: {:?}", result.detail);
+                let files: Vec<PathBuf> = std::fs::read_dir(&dest).unwrap().map(|e| e.unwrap().path()).collect();
+                for file in files {
+                    let bytes = std::fs::read(&file).unwrap();
+                    match format {
+                        "CBZ" => for (name, entry) in unzip(&bytes) {
+                            assert_eq!(mode(&entry), expected, "{tone:?} {name} in the archive");
+                        },
+                        "PSD" => assert_eq!(psd_header(&bytes).4, psd_mode, "{tone:?} {}", file.display()),
+                        _ => assert_eq!(mode(&bytes), expected, "{tone:?} {}", file.display()),
+                    }
+                }
+            }
+        }
+        let source = choices("PNG", out.to_str().unwrap(), "flattened", "per-page");
+        let gray = Choices { tone: Tone::Grayscale, ..source };
+        assert_ne!(revision(&job, &source).unwrap(), revision(&job, &gray).unwrap(), "a plan for one tone is stale for the other");
+    }
+
+    #[test]
+    fn a_page_selection_outside_the_chapter_or_of_a_strip_is_refused() {
+        let scratch = Scratch::new("bad-pages");
+        let job = a_strip_job(&scratch, StripMode::Longstrip);
+        let out = scratch.join("export");
+        let dest = out.to_str().unwrap();
+        for (layout, pages) in [("per-page", &[3][..]), ("per-page", &[][..]), ("stitched", &[0][..])] {
+            let choices = Choices { pages: Some(pages), ..choices("PNG", dest, "flattened", layout) };
+            let result = plan(&job, &choices).unwrap().into_result();
+            assert_eq!(result.reason_key, Some("notice.export.refusedPageSelection"), "{layout} {pages:?}");
+        }
+        let cbz = Choices { pages: Some(&[1]), ..choices("CBZ", dest, "flattened", "per-page") };
+        assert_eq!(plan(&job, &cbz).unwrap().into_result().reason_key, Some("notice.export.refusedPageSelection"));
+        let every = Choices { pages: Some(&[2, 0, 1, 1]), ..choices("PNG", dest, "flattened", "stitched") };
+        assert_eq!(plan(&job, &every).unwrap().into_result().status, "planned");
         assert!(!out.exists());
     }
 
@@ -2038,6 +1763,41 @@ mod tests {
             export_open_job(&strip_job, "PSD", "new-folder", "flattened", "stitched").unwrap();
         assert_eq!(stitched.status, "refused");
         assert_eq!(stitched.reason_key, Some("notice.export.refusedStitchedLayered"));
+    }
+
+    /// Settings > Export reaches the file: raw channels make it bigger, and
+    /// the Lettering layer is in it. A plan made under other PSD settings is
+    /// stale.
+    #[test]
+    fn psd_settings_reach_the_file_and_the_plan_revision() {
+        let scratch = Scratch::new("psd-settings");
+        let mut job = a_strip_job(&scratch, StripMode::Single);
+        overhanging_fill(&mut job, 1, Rect::new(10, 10, 8, 8), 200);
+        let chosen = psd::PsdOptions { compression: psd::Compression::Raw, lettering_layer: true };
+        let mut files = Vec::new();
+        let mut revisions = Vec::new();
+        for (name, options) in [("default", psd::PsdOptions::default()), ("chosen", chosen)] {
+            let dir = scratch.join(name);
+            let choices = Choices { psd: options, ..choices("PSD", dir.to_str().unwrap(), "separate-layer", "per-page") };
+            revisions.push(plan(&job, &choices).unwrap().into_result().revision.unwrap());
+            let result = export_reviewed_job(&job, &choices, None).unwrap();
+            assert_eq!(result.status, "exported", "{name}: {:?}", result.detail);
+            let output = result.outputs.iter().find(|o| o.page == 1).unwrap();
+            files.push(std::fs::read(dir.join(&output.filename)).unwrap());
+        }
+        let has_lettering = |bytes: &[u8]| bytes.windows(9).any(|w| w == psd::LETTERING_LAYER.as_bytes());
+        assert!(!has_lettering(&files[0]));
+        assert!(has_lettering(&files[1]));
+        assert!(files[1].len() > files[0].len(), "raw channels are bigger");
+        assert_ne!(revisions[0], revisions[1]);
+
+        let dir = scratch.join("stale");
+        let first = Choices { psd: chosen, ..choices("PSD", dir.to_str().unwrap(), "separate-layer", "per-page") };
+        let planned = plan(&job, &first).unwrap().into_result().revision.unwrap();
+        let now = Choices { psd: psd::PsdOptions::default(), ..first };
+        let result = export_reviewed_job(&job, &now, Some(&planned)).unwrap();
+        assert_eq!(result.reason_key, Some("notice.export.stalePlan"));
+        assert!(!dir.exists());
     }
 
     #[test]
@@ -2787,7 +2547,7 @@ mod tests {
         assert_eq!(ids(2), ["on-page-2"], "a patch two pages away was loaded for this one");
         let distant = job.project.patches.iter().find(|record| record.id == "on-page-2").unwrap();
         std::fs::remove_file(job.sidecar().join(&distant.buffer_ref)).unwrap();
-        let patches = page_patches_for(&job, &strip, true, 0, 0).unwrap();
+        let patches = page_patches_for(&job, 0).unwrap();
         assert_eq!(patches.len(), 1, "per-page export loaded a distant sidecar");
     }
 
@@ -2799,8 +2559,7 @@ mod tests {
             overhanging_fill(&mut job, 0, Rect::new(10, 10, 20, 10), 200);
             job.project.patches[0].provenance.params_snapshot["layer"] =
                 serde_json::json!({"offsetY": 40, "rotation": angle});
-            let strip = strip_of(&job);
-            let patches = page_patches_for(&job, &strip, true, 1, 1).unwrap();
+            let patches = page_patches_for(&job, 1).unwrap();
             assert_eq!(patches.len(), 1, "angle {angle} was skipped by export selection");
             assert!(patches[0].mask.contains(20, 5));
             let bounds = patches[0].mask.bounds;

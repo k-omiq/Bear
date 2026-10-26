@@ -7354,9 +7354,8 @@ mod tests {
         answers_a_future!(open_chapter, A, B, C, D);
         answers_a_future!(create_project, A, B, C, D, E);
         answers_a_future!(crate::model_workflows::list_workflow_capabilities, A);
-        // Six, since `layout` joined the seam.
-        answers_a_future!(crate::exporting::export_chapter, A, B, C, D, E, F, G);
-        answers_a_future!(crate::exporting::plan_export_chapter, A, B, C, D, E, F);
+        answers_a_future!(crate::exporting::export_chapter, A, B, C, D, E, F, G, H, I);
+        answers_a_future!(crate::exporting::plan_export_chapter, A, B, C, D, E, F, G, H);
     }
 
     /// And `async` alone is not the whole of it: the body has to leave the

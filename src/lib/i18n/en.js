@@ -1079,9 +1079,28 @@ export const en = {
       shortcuts: 'Shortcuts',
       about: 'About',
       denoise: 'Denoise',
+      export: 'Export',
     },
     tabs: {
       label: 'Settings sections',
+    },
+    // Settings > Export: how PSD files are written, and the tone the Export
+    // dialog starts on.
+    export: {
+      psd: 'PSD files',
+      compression: {
+        label: 'Channel data',
+        description: 'Compressed files are smaller. Uncompressed files open in more apps. 16-bit pages are always uncompressed.',
+        rle: 'Compressed',
+        raw: 'Uncompressed',
+      },
+      lettering: {
+        label: 'Lettering layer',
+        description: 'Adds a hidden top layer that marks where the text was. Show it in your editor to check the clean.',
+      },
+      general: 'Every export',
+      toneDescription: 'The choice the Export dialog starts on. A page that is all gray can be written as grayscale; pages with any color stay color.',
+      saveFailed: 'The setting could not be saved. Try again.',
     },
     // Settings > Denoise: where page denoise runs, the preset, the local
     // model and its measured time.
@@ -1146,11 +1165,20 @@ export const en = {
       tiff: 'TIFF',
       psd: 'PSD',
       cbz: 'CBZ',
+      pngHint: 'Lossless, opens anywhere',
+      tiffHint: 'Lossless, for print',
+      psdHint: 'Layers for Photoshop',
+      cbzHint: 'One archive for readers',
     },
     layout: {
       label: 'Layout',
       perPage: 'One file per page',
       stitched: 'One file for the chapter',
+    },
+    pages: {
+      label: 'Pages',
+      chapter: 'Whole chapter',
+      current: 'This page ({page})',
     },
     destination: {
       label: 'Destination',
@@ -1166,8 +1194,22 @@ export const en = {
       flattened: 'Flattened',
       separateLayer: 'Separate layer',
     },
+    tone: {
+      label: 'Color',
+      source: 'Keep original',
+      grayscale: 'Gray pages as grayscale',
+      sourceDescription: 'Every page keeps its own color type. A gray page stored as RGB stays RGB.',
+      grayscaleDescription: 'A page that is all gray is written as grayscale. Pages with any color stay color.',
+    },
+    summary: {
+      label: 'Export summary',
+      files: {
+        one: '1 {formats} file',
+        other: '{count} {formats} files',
+      },
+      masks: { one: 'Plus 1 PNG mask file', other: 'Plus {count} PNG mask files' },
+    },
     note: {
-      actualFormats: 'Output files: {formats}.',
       // Pages narrower than the strip get columns beside them
       // that no source file has a pixel for, and an interface offering
       // stitched output states the count *before* it runs - the same standard
@@ -3048,6 +3090,22 @@ export const en = {
     // Rebinding. Every refusal names what it refused and what to do instead;
     // `refusedConflict` quotes the shortcut already holding the combination,
     // because "that key is taken" without saying by what is a dead end.
+    // How a mouse moves the canvas: the rows under the clone source.
+    navigation: {
+      preset: 'Moving the canvas',
+      trackpad: 'Trackpad',
+      mouse: 'Mouse',
+      custom: 'Custom',
+      wheel: 'Mouse wheel',
+      scroll: 'Scroll',
+      zoom: 'Zoom',
+      middle: 'Middle button drag',
+      empty: 'Drag on empty canvas',
+      pan: 'Pan',
+      off: 'Off',
+      hintScroll: 'The wheel scrolls, and zooms with {accel} held.',
+      hintZoom: 'The wheel zooms, and scrolls with Shift or {alt} held. A trackpad scroll zooms too.',
+    },
     rebind: {
       change: 'Change the shortcut for {name}',
       reset: 'Reset {name} to its default',
@@ -3124,6 +3182,7 @@ export const en = {
       right: 'Page right',
       first: 'First page',
       last: 'Last page',
+      holdPan: 'Hold and drag to move the canvas',
     },
     review: {
       next: 'Next region needing review',
@@ -3562,6 +3621,7 @@ export const en = {
         'This build cannot write {format}. Nothing was written. The formats it can write are PNG, TIFF, PSD and CBZ.',
       refusedMaskLayers:
         'A CBZ is read page by page, so a mask file inside it would show as a page. Nothing was written. Export PNG or TIFF for a mask file beside each page, or PSD for a layer mask on each region.',
+      refusedPageSelection: 'Choose pages that are in this chapter. A file for the whole chapter always holds every page. Nothing was written.',
       refusedStitchedLayered:
         'A PSD holds one whole page as its Background, and this build never holds the whole chapter as one image. Nothing was written. Export PSD per page, or one PNG or TIFF for the chapter.',
       refusedLayeredMode:
@@ -3591,6 +3651,8 @@ export const en = {
           'These pages are not all the same bit depth, and one file has one bit depth. Nothing was written. Export per page instead.',
         mixedProfile:
           'These pages do not all carry the same colour profile, and one file has one profile. Nothing was written. Export per page instead.',
+        mixedDescription:
+          'These pages do not all describe their colour or transparency the same way, and one file has one description. Nothing was written. Export per page instead.',
         indexed:
           'These pages use indexed colour, and one file would need one palette across all of them. Nothing was written. Reconciling the palettes would shift colours, so export per page instead.',
       },

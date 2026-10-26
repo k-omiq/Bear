@@ -51,6 +51,7 @@
 //! is where the reasoning for it lives.
 
 pub mod cbz;
+pub mod gray;
 pub mod psd;
 pub mod rows;
 pub mod split;
@@ -59,16 +60,17 @@ pub mod stitched;
 use std::io::{Seek, Write};
 
 use crate::composite::{CompositeError, composite, ordered_visible};
-use crate::image::{BitDepth, ColorMode, Format, ImageError, decode};
+use crate::image::{BitDepth, ColorMode, Format, ImageError, Raster, decode};
 use crate::mask::Mask;
 use crate::patch::Patch;
 
 pub use cbz::Cbz;
+pub use gray::Tone;
 pub use psd::{PSD_MAX_DIMENSION, PsdRefusal};
 pub use rows::Canvas;
 pub use split::{StripPatch, patches_on_page};
 pub use stitched::{
-    PageSource, StitchRefusal, Stitched, export_stitched, planned_stitched_format,
+    PageSource, StitchPlan, StitchRefusal, Stitched, export_stitched, plan_stitched,
 };
 
 /// What the caller asked for.
@@ -156,7 +158,7 @@ impl From<std::io::Error> for ExportError {
 /// nothing touched, being the same file is the point.
 pub fn export_page(source_bytes: &[u8], patches: &[Patch], target: Target) -> Result<Export, ExportError> {
     let mut bytes = std::io::Cursor::new(Vec::new());
-    let summary = export_page_to(source_bytes, patches, target, &mut bytes)?;
+    let summary = export_page_to(source_bytes, patches, target, Tone::Source, &mut bytes)?;
     Ok(Export {
         bytes: bytes.into_inner(),
         format: summary.format,
@@ -179,15 +181,22 @@ pub fn export_page(source_bytes: &[u8], patches: &[Patch], target: Target) -> Re
 /// `to_vec()` on the way. §5's byte-for-byte copy is the strongest form of the
 /// contract and copying is all it should cost.
 ///
+/// `tone` can write a grey RGB page as grayscale ([`gray`]). Under
+/// [`Tone::Grayscale`] an untouched RGB or RGBA PNG or TIFF is re-encoded
+/// rather than copied, grey or not, so what the plan declared is what is
+/// written; an untouched JPEG is still copied, because a JPEG is never
+/// re-encoded.
+///
 /// `Seek` is required by the TIFF encoder, which writes its directory after the
 /// data. A `File` and a `Cursor` both satisfy it.
 pub fn export_page_to<W: Write + Seek>(
     source_bytes: &[u8],
     patches: &[Patch],
     target: Target,
+    tone: Tone,
     sink: &mut W,
 ) -> Result<ExportSummary, ExportError> {
-    let plan = plan_page(source_bytes, patches, target)?;
+    let plan = plan_page(source_bytes, patches, target, tone)?;
     if plan.passthrough {
         sink.write_all(source_bytes)?;
         return Ok(ExportSummary {
@@ -202,6 +211,7 @@ pub fn export_page_to<W: Write + Seek>(
     let composited = composite(&page, patches)?;
     let composited = crate::image::orientation::from_bytes(source_bytes).raster(&composited);
     drop(page);
+    let composited = tone.apply(&composited).unwrap_or(composited);
 
     let PagePlan { format, declared, .. } = plan;
 
@@ -235,10 +245,19 @@ pub fn export_page_to<W: Write + Seek>(
 /// PSD cannot carry is refused from the header rather than converted
 /// ([`PsdRefusal`]), which the adapter decides from the manifest before it
 /// creates a directory.
+///
+/// `tone` writes a grey page as a grayscale document. Flattened, that is the
+/// composite alone. Layered, the untouched page and every region layer
+/// (where its mask is set) must be grey too, so the layers always share the
+/// document's mode. `options` are the user's Settings > Export choices:
+/// raw or packed channels, and a hidden Lettering layer marking what the
+/// mask file marks.
 pub fn export_page_psd_to<W: Write>(
     source_bytes: &[u8],
     patches: &[Patch],
     layered: bool,
+    tone: Tone,
+    options: &psd::PsdOptions,
     sink: &mut W,
 ) -> Result<u64, ExportError> {
     let native = decode(source_bytes)?;
@@ -255,8 +274,88 @@ pub fn export_page_psd_to<W: Write>(
     } else {
         Vec::new()
     };
+    let lettering = psd_lettering(options, patches, &page);
+    let extras = psd::Extras { compression: options.compression, lettering: lettering.as_ref() };
+    if let Some((background, composited, regions)) = gray_document(tone, layered, &page, &composited, &regions) {
+        let regions: Vec<&Patch> = regions.iter().collect();
+        let background = background.as_ref().unwrap_or(&composited);
+        return psd::write_psd_with(sink, &psd::Document { background, regions: &regions, merged: &composited }, &extras);
+    }
     let background = if layered { &page } else { &composited };
-    psd::write_psd(sink, &psd::Document { background, regions: &regions, merged: &composited })
+    psd::write_psd_with(sink, &psd::Document { background, regions: &regions, merged: &composited }, &extras)
+}
+
+/// The Lettering layer's mask, when the user asked for one: the visible
+/// patches' lettering, on the oriented page.
+fn psd_lettering(options: &psd::PsdOptions, patches: &[Patch], page: &Raster) -> Option<Mask> {
+    if !options.lettering_layer {
+        return None;
+    }
+    let masks: Vec<&Mask> = ordered_visible(patches, None).into_iter().map(Patch::lettering).collect();
+    Some(Mask::union(&masks, page.width, page.height))
+}
+
+/// The document as grayscale, or `None` unless every part of it is grey: the
+/// layered Background (`None` when flattened, where the composite is the
+/// Background), the composite, and the region layers. A region's pixels are
+/// read with the page's own colour description, which is the one they are in.
+fn gray_document(tone: Tone, layered: bool, page: &Raster, composited: &Raster, regions: &[&Patch]) -> Option<(Option<Raster>, Raster, Vec<Patch>)> {
+    if !tone.may_convert(page.mode) {
+        return None;
+    }
+    let gray_composite = tone.apply(composited)?;
+    if !layered {
+        return Some((None, gray_composite, Vec::new()));
+    }
+    let gray_page = tone.apply(page)?;
+    let gray_regions = regions
+        .iter()
+        .map(|region| {
+            let described = Raster {
+                icc: page.icc.clone(),
+                srgb_intent: page.srgb_intent,
+                color: page.color.clone(),
+                ..region.pixels.clone()
+            };
+            let pixels = tone.apply_within(&described, &region.mask)?;
+            Some(Patch { pixels, ..(*region).clone() })
+        })
+        .collect::<Option<Vec<Patch>>>()?;
+    Some((Some(gray_page), gray_composite, gray_regions))
+}
+
+/// Every refusal [`export_page_psd_to`] makes about the document's layout,
+/// from the header alone: no page is decoded.
+pub fn preflight_page_psd(
+    source_bytes: &[u8],
+    patches: &[Patch],
+    layered: bool,
+    options: &psd::PsdOptions,
+) -> Result<(), ExportError> {
+    let header = crate::image::header(source_bytes)?;
+    let orientation = crate::image::orientation::from_bytes(source_bytes);
+    let (width, height) = orientation.size(header.width, header.height);
+    let page = Raster {
+        width,
+        height,
+        mode: header.mode,
+        depth: header.depth,
+        icc: header.icc,
+        palette: header.palette,
+        trns: header.trns,
+        srgb_intent: header.srgb_intent,
+        color: header.color,
+        data: Vec::new(),
+    };
+    let oriented: Vec<Patch> = patches.iter().map(|p| orientation.patch(p, header.width, header.height)).collect();
+    let regions: Vec<&Patch> = if layered {
+        ordered_visible(&oriented, None).into_iter().filter(|p| !p.mask.is_empty()).collect()
+    } else {
+        Vec::new()
+    };
+    let lettering = psd_lettering(options, &oriented, &page);
+    let extras = psd::Extras { compression: options.compression, lettering: lettering.as_ref() };
+    psd::preflight_document_with(&psd::Document { background: &page, regions: &regions, merged: &page }, &extras)
 }
 
 /// **The mask file**: an 8-bit grayscale PNG of `width × height`, 255 wherever
@@ -321,7 +420,8 @@ pub fn planned_format(
     patches: &[Patch],
     target: Target,
 ) -> Result<Format, ExportError> {
-    Ok(plan_page(source_bytes, patches, target)?.format)
+    // The format never depends on the tone.
+    Ok(plan_page(source_bytes, patches, target, Tone::Source)?.format)
 }
 
 /// The shared, read-only decision consumed by both naming and execution.
@@ -332,7 +432,7 @@ pub struct PagePlan {
     pub declared: Vec<Declaration>,
 }
 
-pub fn plan_page(source_bytes: &[u8], patches: &[Patch], target: Target) -> Result<PagePlan, ExportError> {
+pub fn plan_page(source_bytes: &[u8], patches: &[Patch], target: Target, tone: Tone) -> Result<PagePlan, ExportError> {
     let source_format = Format::sniff(source_bytes).ok_or(ImageError::UnknownFormat)?;
     let applied = patches.iter().any(|p| p.visible && !p.mask.is_empty());
     let wanted = match target {
@@ -340,14 +440,23 @@ pub fn plan_page(source_bytes: &[u8], patches: &[Patch], target: Target) -> Resu
         Target::Explicit(format) => format,
     };
     if !applied && wanted == source_format {
-        return Ok(PagePlan { format: source_format, passthrough: true, declared: Vec::new() });
+        // A tone that may convert the page re-encodes it, except a JPEG.
+        let toned = tone == Tone::Grayscale
+            && source_format != Format::Jpeg
+            && tone.may_convert(crate::image::header(source_bytes)?.mode);
+        if !toned {
+            return Ok(PagePlan { format: source_format, passthrough: true, declared: Vec::new() });
+        }
     }
     let header = crate::image::header(source_bytes)?;
     crate::image::metadata::validate_profile(header.icc.as_deref(), header.mode)?;
     let (format, mut declared) = if header.color.associated_alpha && wanted != Format::Tiff {
         (Format::Tiff, vec![Declaration::FormatChanged { requested: wanted, used: Format::Tiff, mode: header.mode }])
     } else { decide(wanted, header.mode, header.depth) };
-    declared.extend(metadata_declarations(&header, applied, format == Format::Tiff));
+    declared.extend(metadata_declarations(&header, applied, Writer::of(format)));
+    if tone == Tone::Grayscale {
+        declared.extend(gray::declarations(&header));
+    }
     if crate::image::foreign::assumes_unmarked_cmyk(source_bytes) {
         declared.push(Declaration::AssumedInterpretation { interpretation: "four-channel JPEG without Adobe marker interpreted as non-inverted CMYK; markerless YCCK cannot be identified reliably".into() });
     }
@@ -361,10 +470,13 @@ pub fn plan_page(source_bytes: &[u8], patches: &[Patch], target: Target) -> Resu
 }
 
 /// Metadata decisions for PSD, whose format is fixed but color declarations still matter.
-pub fn psd_declarations(source_bytes: &[u8], patches: &[Patch]) -> Result<Vec<Declaration>, ExportError> {
+pub fn psd_declarations(source_bytes: &[u8], patches: &[Patch], tone: Tone) -> Result<Vec<Declaration>, ExportError> {
     let header = crate::image::header(source_bytes)?;
     crate::image::metadata::validate_profile(header.icc.as_deref(), header.mode)?;
-    let mut declared = metadata_declarations(&header, patches.iter().any(|p| p.visible && !p.mask.is_empty()), true);
+    let mut declared = metadata_declarations(&header, patches.iter().any(|p| p.visible && !p.mask.is_empty()), Writer::Psd);
+    if tone == Tone::Grayscale {
+        declared.extend(gray::declarations(&header));
+    }
     if crate::image::foreign::assumes_unmarked_cmyk(source_bytes) {
         declared.push(Declaration::AssumedInterpretation { interpretation: "four-channel JPEG without Adobe marker interpreted as non-inverted CMYK; markerless YCCK cannot be identified reliably".into() });
     }
@@ -377,7 +489,24 @@ pub fn psd_declarations(source_bytes: &[u8], patches: &[Patch]) -> Result<Vec<De
     Ok(declared)
 }
 
-pub(crate) fn metadata_declarations(header: &crate::image::Header, applied: bool, equivalent_icc: bool) -> Vec<Declaration> {
+/// The writer a declaration is for: what PNG description it can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Writer {
+    Png,
+    /// An equivalent ICC profile, and the `pHYs` resolution.
+    Tiff,
+    /// An equivalent ICC profile.
+    Psd,
+}
+
+impl Writer {
+    pub(crate) fn of(format: Format) -> Writer {
+        if format == Format::Tiff { Writer::Tiff } else { Writer::Png }
+    }
+}
+
+pub(crate) fn metadata_declarations(header: &crate::image::Header, applied: bool, writer: Writer) -> Vec<Declaration> {
+    let equivalent_icc = writer != Writer::Png;
     let mut declared = Vec::new();
     if header.icc.is_some() && header.srgb_intent.is_some() {
         declared.push(Declaration::MetadataNormalized { field: "sRGB".into(), reason: "the higher-priority color description is authoritative".into() });
@@ -407,7 +536,8 @@ pub(crate) fn metadata_declarations(header: &crate::image::Header, applied: bool
         if header.color.mastering_display.is_some() { omitted.push("mDCV".to_owned()); }
         if !applied && header.color.content_light.is_some() { omitted.push("cLLI".to_owned()); }
         if !applied && header.color.significant_bits.is_some() { omitted.push("sBIT".to_owned()); }
-        omitted.extend(header.color.safe_ancillary.iter().map(|chunk| String::from_utf8_lossy(&chunk.name).into_owned()));
+        let carried = |chunk: &&crate::image::metadata::AncillaryChunk| writer == Writer::Tiff && chunk.name == *b"pHYs";
+        omitted.extend(header.color.safe_ancillary.iter().filter(|chunk| !carried(chunk)).map(|chunk| String::from_utf8_lossy(&chunk.name).into_owned()));
         for field in omitted {
             declared.push(Declaration::MetadataNormalized { field, reason: "this PNG ancillary field has no representation in the selected output; retained in original".into() });
         }
@@ -673,7 +803,7 @@ mod tests {
                 let buffered = export_page(&source_bytes, &patches, Target::SameAsSource).unwrap();
                 let mut sink = std::io::Cursor::new(Vec::new());
                 let summary =
-                    export_page_to(&source_bytes, &patches, Target::SameAsSource, &mut sink)
+                    export_page_to(&source_bytes, &patches, Target::SameAsSource, Tone::Source, &mut sink)
                         .unwrap();
                 let streamed = sink.into_inner();
                 assert_eq!(streamed, buffered.bytes, "{}", fixture.name);
@@ -727,5 +857,118 @@ mod tests {
         export_mask_to(&[], page.width, page.height, &mut empty).unwrap();
         let blank = decode(&empty.into_inner()).unwrap();
         assert!(blank.data.iter().all(|b| *b == 0), "a page with no masks is all black");
+    }
+
+    /// A fixture with every colour channel set to its first: grey stored as
+    /// RGB or RGBA.
+    fn grey(name: &str) -> Raster {
+        let mut page = fixtures::by_name(name).raster;
+        for y in 0..page.height {
+            for x in 0..page.width {
+                let v = page.sample(x, y, 0);
+                page.set_sample(x, y, 1, v);
+                page.set_sample(x, y, 2, v);
+            }
+        }
+        page
+    }
+
+    #[test]
+    fn grayscale_tone_writes_a_grey_page_gray_and_leaves_colour_alone() {
+        for name in ["rgb8", "rgba8", "rgb16"] {
+            let page = grey(name);
+            let source = encode(&page, Format::Png).unwrap();
+            let edits = vec![patch_over(&page, Rect::new(8, 8, 24, 20))];
+            for patches in [&[][..], edits.as_slice()] {
+                for target in [Target::SameAsSource, Target::Explicit(Format::Tiff)] {
+                    let mut sink = std::io::Cursor::new(Vec::new());
+                    let summary = export_page_to(&source, patches, target, Tone::Grayscale, &mut sink).unwrap();
+                    assert!(!summary.passthrough, "{name}");
+                    let written = decode(&sink.into_inner()).unwrap();
+                    let expected = composite(&page, patches).unwrap();
+                    assert_eq!(written.mode.samples(), page.mode.samples() - 2, "{name}");
+                    assert_eq!(written.depth, page.depth, "{name}");
+                    for y in 0..page.height {
+                        for x in 0..page.width {
+                            assert_eq!(written.sample(x, y, 0), expected.sample(x, y, 0), "{name} at {x},{y}");
+                            if let Some(alpha) = page.mode.alpha_channel() {
+                                assert_eq!(written.sample(x, y, 1), expected.sample(x, y, alpha), "{name} alpha");
+                            }
+                        }
+                    }
+                }
+                // Source tone is the default and keeps RGB, untouched bytes included.
+                let output = export_page(&source, patches, Target::SameAsSource).unwrap();
+                assert_eq!(decode(&output.bytes).unwrap().mode, page.mode, "{name}");
+                assert_eq!(output.passthrough, patches.is_empty(), "{name}");
+            }
+        }
+        // A colour page is re-encoded, as its plan said, and keeps its pixels.
+        let page = fixtures::by_name("rgb8").raster;
+        let colour = encode(&page, Format::Png).unwrap();
+        assert!(!plan_page(&colour, &[], Target::SameAsSource, Tone::Grayscale).unwrap().passthrough);
+        let mut sink = std::io::Cursor::new(Vec::new());
+        let summary = export_page_to(&colour, &[], Target::SameAsSource, Tone::Grayscale, &mut sink).unwrap();
+        assert!(!summary.passthrough);
+        let written = decode(&sink.into_inner()).unwrap();
+        assert_eq!((written.mode, written.data), (page.mode, page.data));
+        assert!(plan_page(&colour, &[], Target::SameAsSource, Tone::Source).unwrap().passthrough);
+    }
+
+    #[test]
+    fn grayscale_tone_declares_what_a_toned_untouched_page_loses() {
+        let mut page = grey("rgb8");
+        page.color.significant_bits = Some(vec![8, 8, 8]);
+        let source = encode(&page, Format::Png).unwrap();
+        let plan = plan_page(&source, &[], Target::SameAsSource, Tone::Grayscale).unwrap();
+        assert!(!plan.passthrough);
+        assert!(plan.declared.iter().any(|d| matches!(d, Declaration::MetadataNormalized { field, .. } if field == "sBIT")), "{:?}", plan.declared);
+        let mut sink = std::io::Cursor::new(Vec::new());
+        let summary = export_page_to(&source, &[], Target::SameAsSource, Tone::Grayscale, &mut sink).unwrap();
+        assert_eq!(summary.declared, plan.declared, "the write declares what the plan did");
+        assert!(psd_declarations(&source, &[], Tone::Grayscale).unwrap().iter().any(|d| matches!(d, Declaration::MetadataNormalized { field, .. } if field == "sBIT")));
+    }
+
+    #[test]
+    fn grayscale_tone_makes_a_gray_psd_only_when_every_layer_is_grey() {
+        // PSD header: channels at byte 12, colour mode at byte 24 (1 gray, 3 RGB).
+        let header = |bytes: &[u8]| (u16::from_be_bytes([bytes[12], bytes[13]]), u16::from_be_bytes([bytes[24], bytes[25]]));
+        let page = grey("rgba8");
+        let source = encode(&page, Format::Png).unwrap();
+        let patches = vec![patch_over(&page, Rect::new(8, 8, 24, 20))];
+        for layered in [false, true] {
+            let mut gray = Vec::new();
+            export_page_psd_to(&source, &patches, layered, Tone::Grayscale, &Default::default(), &mut gray).unwrap();
+            assert_eq!(header(&gray), (2, 1), "gray with alpha");
+            let mut kept = Vec::new();
+            export_page_psd_to(&source, &patches, layered, Tone::Source, &Default::default(), &mut kept).unwrap();
+            assert_eq!(header(&kept), (4, 3));
+        }
+        let mut coloured = patches.clone();
+        coloured[0].pixels.set_sample(10, 10, 0, 0);
+        coloured[0].pixels.set_sample(10, 10, 1, 255);
+        let mut psd = Vec::new();
+        export_page_psd_to(&source, &coloured, true, Tone::Grayscale, &Default::default(), &mut psd).unwrap();
+        assert_eq!(header(&psd), (4, 3), "a colour edit keeps the document RGB");
+
+        // Colour a region hides outside its mask never shows, so it is no reason to keep RGB.
+        let mut hidden = patches.clone();
+        hidden[0].pixels.set_sample(0, 0, 0, 0);
+        hidden[0].pixels.set_sample(0, 0, 1, 255);
+        let mut psd = Vec::new();
+        export_page_psd_to(&source, &hidden, true, Tone::Grayscale, &Default::default(), &mut psd).unwrap();
+        assert_eq!(header(&psd), (2, 1), "colour outside the mask");
+
+        // Colour the cleaning covered: a flattened document is gray, a layered
+        // one keeps it in its Background and stays RGB.
+        let mut stained = page.clone();
+        stained.set_sample(10, 10, 0, 0);
+        stained.set_sample(10, 10, 1, 255);
+        let stained = encode(&stained, Format::Png).unwrap();
+        for (layered, expected) in [(false, (2, 1)), (true, (4, 3))] {
+            let mut psd = Vec::new();
+            export_page_psd_to(&stained, &patches, layered, Tone::Grayscale, &Default::default(), &mut psd).unwrap();
+            assert_eq!(header(&psd), expected, "layered {layered}");
+        }
     }
 }

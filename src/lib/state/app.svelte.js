@@ -167,7 +167,7 @@ export function back() {
  */
 const MODAL_WIDTHS = {
   // No `settings`: Settings is a full-window `Screen`, not a `Modal`.
-  export: 460,
+  export: 540,
   shortcuts: 460,
   newProject: 440,
 }

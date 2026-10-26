@@ -36,6 +36,7 @@ import {
   unbindShortcut,
 } from '../shortcuts.js'
 import { CATALOGUES, matchLocale, provideContextParam, provideLocale } from '../i18n/index.js'
+import { defaultNavigation, normalizeNavigation } from '../editor/navigation.js'
 import {
   WINDOW_IDS,
   defaultGeometry,
@@ -73,6 +74,9 @@ export const THEME_LABEL_KEYS = Object.freeze({
 export const READING_DIRECTIONS = /** @type {const} */ (['rtl', 'ltr'])
 export const ORIGINAL_VIEW_MODES = /** @type {const} */ (['hold', 'pinned'])
 export const TEXT_POLICIES = /** @type {const} */ (['legacy_gate', 'all_text'])
+/** Settings › Export: how a PSD stores its channels, and the tone an export starts on. */
+export const PSD_COMPRESSIONS = /** @type {const} */ (['rle', 'raw'])
+export const EXPORT_TONES = /** @type {const} */ (['source', 'grayscale'])
 
 /**
  * The colour a detected region's mask is drawn in until somebody picks
@@ -188,8 +192,12 @@ function viewport() {
  * @property {string} accelerator - `auto`, `cpu`, or an execution provider id; see `setAccelerator`
  * @property {Record<string, string>} modelAccelerators - local per-model overrides; absent models inherit `accelerator`
  * @property {'alt'|'meta'|'control'|'shift'} cloneSourceModifier - held while clicking to set the clone stamp's source; see `setCloneSourceModifier`
+ * @property {import('../editor/navigation.js').Navigation} navigation - what the wheel, the middle button and a drag on empty canvas do; see `setNavigation`
  * @property {boolean} firstLaunchOffered - whether the first-launch download offer has been made on this machine
  * @property {boolean} closeToTray - close control hides the window and keeps downloads running
+ * @property {'rle'|'raw'} exportPsdCompression - how a PSD stores 8-bit channels: packed, or raw for readers that cannot unpack
+ * @property {boolean} exportPsdLetteringLayer - whether a layered PSD carries a hidden layer marking where the lettering was
+ * @property {'source'|'grayscale'} exportTone - the tone the Export dialog starts on; the dialog's choice is what an export uses
  * @property {Record<string, string|null>} detection - the detector each source language uses, by language id; null skips the language
  * @property {'normal'|'advanced'} detectionMode - the one detection choice; it fixes `detectorModels` and `textPolicy` (`pipelines.js#DETECTION_MODES`)
  * @property {string[]} detectorModels - the mode's detection models, by stored id; derived, never stored
@@ -230,8 +238,12 @@ function defaults() {
     accelerator: 'auto',
     modelAccelerators: {},
     cloneSourceModifier: DEFAULT_POINTER_MODIFIER,
+    navigation: defaultNavigation(),
     firstLaunchOffered: false,
     closeToTray: false,
+    exportPsdCompression: 'rle',
+    exportPsdLetteringLayer: false,
+    exportTone: 'source',
     detection: defaultDetection(),
     detectionMode: 'normal',
     detectorModels: [...DEFAULT_DETECTOR_MODELS],
@@ -338,12 +350,18 @@ export function sanitizeSession(raw) {
     // one: anything that is not one of the four modifiers a pointer event can
     // carry falls back to the modifier this gesture has always used.
     cloneSourceModifier: normalizePointerModifier(record.cloneSourceModifier),
+    navigation: normalizeNavigation(record.navigation),
     // False is the safe default in both directions: a record written before
     // this flag existed offers the download once, which is the whole point of
     // the offer, and a machine that has already been asked carries a `true` it
     // wrote itself.
     firstLaunchOffered: boolOr(record.firstLaunchOffered, base.firstLaunchOffered),
     closeToTray: boolOr(record.closeToTray, base.closeToTray),
+    exportPsdCompression: /** @type {'rle'|'raw'} */ (
+      oneOf(record.exportPsdCompression, PSD_COMPRESSIONS, base.exportPsdCompression)
+    ),
+    exportPsdLetteringLayer: boolOr(record.exportPsdLetteringLayer, base.exportPsdLetteringLayer),
+    exportTone: /** @type {'source'|'grayscale'} */ (oneOf(record.exportTone, EXPORT_TONES, base.exportTone)),
     detection: sanitizeDetection(record.detection),
     // The mode, or for a record written before modes the mode its
     // combination reached for. The models and the policy are the mode's,
@@ -448,8 +466,12 @@ function persistable() {
     accelerator: session.accelerator,
     modelAccelerators: { ...session.modelAccelerators },
     cloneSourceModifier: session.cloneSourceModifier,
+    navigation: { ...session.navigation },
     firstLaunchOffered: session.firstLaunchOffered,
     closeToTray: session.closeToTray,
+    exportPsdCompression: session.exportPsdCompression,
+    exportPsdLetteringLayer: session.exportPsdLetteringLayer,
+    exportTone: session.exportTone,
     detection: { ...session.detection },
     detectionMode: session.detectionMode,
     analysisTargets: { ...session.analysisTargets },
@@ -558,6 +580,26 @@ export function setTheme(theme) {
 /** @param {boolean} enabled */
 export function setCloseToTray(enabled) {
   session.closeToTray = boolOr(enabled, session.closeToTray)
+  save()
+}
+
+/** @param {'rle'|'raw'} compression */
+export function setExportPsdCompression(compression) {
+  session.exportPsdCompression = /** @type {'rle'|'raw'} */ (
+    oneOf(compression, PSD_COMPRESSIONS, session.exportPsdCompression)
+  )
+  save()
+}
+
+/** @param {boolean} enabled */
+export function setExportPsdLetteringLayer(enabled) {
+  session.exportPsdLetteringLayer = boolOr(enabled, session.exportPsdLetteringLayer)
+  save()
+}
+
+/** @param {'source'|'grayscale'} tone */
+export function setExportTone(tone) {
+  session.exportTone = /** @type {'source'|'grayscale'} */ (oneOf(tone, EXPORT_TONES, session.exportTone))
   save()
 }
 
@@ -889,6 +931,19 @@ export function setCloneSourceModifier(modifier) {
 }
 
 /**
+ * How a mouse moves the canvas (`editor/navigation.js`). A patch: the sheet
+ * changes one row at a time, and a preset changes all three.
+ *
+ * Not a backend setting either, for the same reason as the clone source.
+ *
+ * @param {Partial<import('../editor/navigation.js').Navigation>} patch
+ */
+export function setNavigation(patch) {
+  session.navigation = normalizeNavigation({ ...session.navigation, ...patch })
+  save()
+}
+
+/**
  * And the same value as a keycap, for the one string whose call site cannot
  * pass it: `tools.hint.cloneStamp` is rendered by the tool bar as
  * `t(spec.hintKey)`, over a key the tool table chose.
@@ -1138,6 +1193,9 @@ export function resetAllShortcutBindings() {
 export function adoptBackendSettings(settings) {
   const record = plainObject(settings)
   if (record.closeToTray !== undefined) setCloseToTray(record.closeToTray === true)
+  if (record.exportPsdCompression !== undefined) setExportPsdCompression(/** @type {any} */ (record.exportPsdCompression))
+  if (record.exportPsdLetteringLayer !== undefined) setExportPsdLetteringLayer(record.exportPsdLetteringLayer === true)
+  if (record.exportTone !== undefined) setExportTone(/** @type {any} */ (record.exportTone))
   if (record.theme !== undefined) setTheme(/** @type {any} */ (record.theme))
   if (record.readingDirection !== undefined) {
     setReadingDirection(/** @type {any} */ (record.readingDirection))
@@ -1201,6 +1259,9 @@ export function adoptBackendSettings(settings) {
 export function backendSettingsPatch() {
   return {
     closeToTray: session.closeToTray,
+    exportPsdCompression: session.exportPsdCompression,
+    exportPsdLetteringLayer: session.exportPsdLetteringLayer,
+    exportTone: session.exportTone,
     theme: session.theme,
     readingDirection: session.readingDirection,
     cloudEngines: session.cloudAllowed ? 'allowed' : 'blocked',

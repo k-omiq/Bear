@@ -4523,6 +4523,8 @@ export function createMockBackend(options = {}) {
       destination = 'new-folder',
       masks = 'flattened',
       layout = 'per-page',
+      pages,
+      grayscale = false,
       planning = false,
       planRevision,
     }) {
@@ -4561,6 +4563,12 @@ export function createMockBackend(options = {}) {
         return refuse('notice.export.refusedStitchPaginated')
       }
 
+      const count = found.chapter.pages.length
+      const selected = pages ? [...new Set(pages)].sort((a, b) => a - b) : null
+      if (selected && (!selected.length || selected.some((index) => !Number.isInteger(index) || index < 0 || index >= count) || ((stitched || container === 'cbz') && selected.length !== count))) {
+        return refuse('notice.export.refusedPageSelection')
+      }
+
       // Two sentinels and an absolute path; a relative one has no directory
       // both ends of the seam would agree it is relative *to*.
       if (destination === 'source-folder') {
@@ -4573,21 +4581,24 @@ export function createMockBackend(options = {}) {
         return refuse('notice.export.destinationUnavailable', { path: `${found.project.sourcePath}_cleaned` })
       }
 
-      const revision = JSON.stringify([found.chapter, format, destination, masks, layout])
+      const revision = JSON.stringify([found.chapter, format, destination, masks, layout, selected, grayscale])
       if (planRevision && planRevision !== revision) return refuse('notice.export.stalePlan')
       if (!planning) await delay(timing.export)
       const folder =
         destination === 'new-folder'
           ? `${found.project.sourcePath}_cleaned/ch${found.chapter.number}`
           : destination
-      const written = found.chapter.pages.filter((page) => page.status !== 'skipped')
+      // Chapter positions, as the backend reports them, not places in the filtered list.
+      const written = found.chapter.pages
+        .map((page, position) => ({ page, position }))
+        .filter(({ page, position }) => page.status !== 'skipped' && (!selected || selected.includes(position)))
 
       const actualFormats = [format === 'CBZ' ? 'PNG' : format]
-      const outputs = written.map((page, index) => ({ page: index, filename: `${page.fileName ?? String(index + 1).padStart(3, '0')}.${actualFormats[0].toLowerCase()}`, format: actualFormats[0] }))
+      const outputs = written.map(({ page, position }) => ({ page: position, filename: `${page.fileName ?? String(position + 1).padStart(3, '0')}.${actualFormats[0].toLowerCase()}`, format: actualFormats[0] }))
       const details = { actualFormats, declared: [], outputs, revision }
       if (stitched) {
         const path = `${folder}/ch${found.chapter.number}.${container}`
-        const count = gutterPixels(written)
+        const count = gutterPixels(written.map(({ page }) => page))
         if (!planning) notify('notice.export.stitched', { count, format: actualFormats.join(' / '), path })
         return { status: planning ? 'planned' : 'exported', fileCount: 1, path, gutterPixels: count, ...details }
       }

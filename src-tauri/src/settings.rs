@@ -148,7 +148,8 @@ fn check_known_shapes(patch: &Value) -> Result<(), String> {
         DenoiseTarget::from_value(Some(target))?;
     }
     check_undo_limit(patch)?;
-    check_denoise_defaults(patch)
+    check_denoise_defaults(patch)?;
+    check_export_defaults(patch)
 }
 
 /// A whole number inside the bounds `history` sets. Null clears it, which is
@@ -180,6 +181,40 @@ fn check_denoise_defaults(patch: &Value) -> Result<(), String> {
 
 pub const DENOISE_PRESET_KEY: &str = "denoisePreset";
 pub const DENOISE_SECONDS_KEY: &str = "denoiseLocalSecondsPerPage";
+
+/// Settings > Export. The PSD keys shape every PSD the exporter writes; the
+/// tone is only where the Export dialog's own tone choice starts.
+pub const EXPORT_PSD_COMPRESSION_KEY: &str = "exportPsdCompression";
+pub const EXPORT_PSD_LETTERING_KEY: &str = "exportPsdLetteringLayer";
+pub const EXPORT_TONE_KEY: &str = "exportTone";
+
+/// Each export key holds one of its own values. Null clears it.
+fn check_export_defaults(patch: &Value) -> Result<(), String> {
+    let one_of = |key: &str, allowed: &[&str]| match patch.get(key) {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(value)) if allowed.contains(&value.as_str()) => Ok(()),
+        Some(_) => Err(format!("{key} must be one of {}", allowed.join(", "))),
+    };
+    one_of(EXPORT_PSD_COMPRESSION_KEY, &["rle", "raw"])?;
+    one_of(EXPORT_TONE_KEY, &["source", "grayscale"])?;
+    match patch.get(EXPORT_PSD_LETTERING_KEY) {
+        None | Some(Value::Null | Value::Bool(_)) => Ok(()),
+        Some(_) => Err(format!("{EXPORT_PSD_LETTERING_KEY} must be true or false")),
+    }
+}
+
+/// The PSD choices a settings snapshot holds. A missing or unknown value is
+/// the default, so a hand-edited file still exports.
+pub fn psd_options(settings: &Value) -> cleaner_core::export::psd::PsdOptions {
+    use cleaner_core::export::psd::{Compression, PsdOptions};
+    PsdOptions {
+        compression: match settings.get(EXPORT_PSD_COMPRESSION_KEY).and_then(Value::as_str) {
+            Some("raw") => Compression::Raw,
+            _ => Compression::Rle,
+        },
+        lettering_layer: settings.get(EXPORT_PSD_LETTERING_KEY).and_then(Value::as_bool).unwrap_or(false),
+    }
+}
 
 /// Merge a patch and return the whole snapshot.
 pub fn write(app: &tauri::AppHandle, patch: Value) -> Result<Value, String> {
@@ -716,6 +751,37 @@ mod tests {
         assert_eq!(read_file(&path).unwrap()["undoLimit"], UNDO_LIMIT_MAX, "a refused patch writes nothing");
         assert!(write_patch(&path, serde_json::json!({"undoLimit": null})).is_ok());
         assert_eq!(crate::history::limit_from(&read_file(&path).unwrap()), crate::history::UNDO_LIMIT_DEFAULT);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_defaults_are_validated_on_write_and_read_with_defaults() {
+        use cleaner_core::export::psd::{Compression, PsdOptions};
+        let dir = std::env::temp_dir().join(format!("mc-settings-export-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        assert_eq!(psd_options(&read_file(&path).unwrap()), PsdOptions::default());
+        let good = serde_json::json!({
+            "exportPsdCompression": "raw",
+            "exportPsdLetteringLayer": true,
+            "exportTone": "grayscale",
+        });
+        let snapshot = write_patch(&path, good).unwrap();
+        assert_eq!(psd_options(&snapshot), PsdOptions { compression: Compression::Raw, lettering_layer: true });
+        for bad in [
+            serde_json::json!({"exportPsdCompression": "zip"}),
+            serde_json::json!({"exportPsdCompression": 1}),
+            serde_json::json!({"exportPsdLetteringLayer": "yes"}),
+            serde_json::json!({"exportTone": "sepia"}),
+        ] {
+            assert!(write_patch(&path, bad.clone()).is_err(), "{bad}");
+        }
+        assert_eq!(read_file(&path).unwrap()["exportTone"], "grayscale", "a refused patch writes nothing");
+        assert_eq!(
+            psd_options(&serde_json::json!({"exportPsdCompression": "zip", "exportPsdLetteringLayer": 3})),
+            PsdOptions::default(),
+            "a hand-edited value falls back to the default"
+        );
+        assert!(write_patch(&path, serde_json::json!({"exportPsdCompression": null, "exportTone": null})).is_ok());
         std::fs::remove_dir_all(&dir).ok();
     }
 

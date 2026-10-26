@@ -228,10 +228,14 @@ describe('draftKeyIntent', () => {
   const open = { hasDraft: false }
   const drafting = { hasDraft: true }
 
-  it('activates to open a draft and again to commit it', () => {
+  it('opens a draft on Enter and commits it on the next', () => {
     expect(draftKeyIntent({ key: 'Enter' }, open)).toEqual({ kind: 'open' })
-    expect(draftKeyIntent({ key: ' ' }, open)).toEqual({ kind: 'open' })
     expect(draftKeyIntent({ key: 'Enter' }, drafting)).toEqual({ kind: 'commit' })
+  })
+
+  it('leaves Space to the pan key', () => {
+    expect(draftKeyIntent({ key: ' ' }, open)).toBeNull()
+    expect(draftKeyIntent({ key: ' ' }, drafting)).toBeNull()
   })
 
   it('moves on an arrow and resizes on Shift-arrow', () => {

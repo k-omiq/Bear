@@ -51,7 +51,7 @@ fn owned_original_reopen_edit_and_lossless_export_matrix() {
         let job=Job::open(&manifest).unwrap();let patch=job.load_patch(&job.project.patches[0]).unwrap();
         let buffered=export::export_page(&stored,std::slice::from_ref(&patch),Target::SameAsSource).unwrap();
         let mut stream=Cursor::new(Vec::new());
-        let summary=export::export_page_to(&stored,std::slice::from_ref(&patch),Target::SameAsSource,&mut stream).unwrap();
+        let summary=export::export_page_to(&stored,std::slice::from_ref(&patch),Target::SameAsSource,export::Tone::Source,&mut stream).unwrap();
         assert_eq!(summary.format,buffered.format);assert_eq!(summary.declared,buffered.declared);
         let orientation=image::orientation::from_bytes(&stored);
         let size=orientation.size(source.width,source.height);

@@ -12,8 +12,8 @@
 use std::io::{Cursor, Seek, Write};
 
 use tiff::decoder::{Decoder, DecodingResult};
-use tiff::encoder::{TiffEncoder, colortype};
-use tiff::tags::Tag;
+use tiff::encoder::{Rational, TiffEncoder, colortype};
+use tiff::tags::{ResolutionUnit, Tag};
 
 use super::{BitDepth, ColorMode, Format, Header, ImageError, Raster};
 
@@ -47,7 +47,59 @@ fn description(decoder: &mut Decoder<Cursor<&[u8]>>, has_icc: bool) -> Result<su
             if decoder.find_tag(Tag::Unknown(tag))?.is_some() { color.unsupported_tiff_color.push(tag); }
         }
     }
+    color.safe_ancillary.extend(resolution(decoder)?);
     Ok(color)
+}
+
+/// The page's resolution as a PNG `pHYs` chunk, the form every writer reads,
+/// as EXIF travels as `eXIf`. Only a physical unit is kept: a TIFF with
+/// `ResolutionUnit` none names an aspect ratio, not a size. A malformed
+/// resolution is no resolution, never a page that will not open.
+fn resolution(decoder: &mut Decoder<Cursor<&[u8]>>) -> Result<Option<super::metadata::AncillaryChunk>, ImageError> {
+    let ratio = |value: Option<tiff::decoder::ifd::Value>| match value.map(|value| value.into_u32_vec()) {
+        Some(Ok(pair)) if pair.len() == 2 && pair[1] != 0 => Some(f64::from(pair[0]) / f64::from(pair[1])),
+        _ => None,
+    };
+    let (Some(x), Some(y)) = (ratio(decoder.find_tag(Tag::XResolution)?), ratio(decoder.find_tag(Tag::YResolution)?)) else {
+        return Ok(None);
+    };
+    // The TIFF default unit is the inch.
+    let per_meter = match decoder.find_tag(Tag::ResolutionUnit)?.map(|value| value.into_u16()) {
+        None | Some(Ok(2)) => 1.0 / 0.0254,
+        Some(Ok(3)) => 100.0,
+        _ => return Ok(None),
+    };
+    let (x, y) = ((x * per_meter).round(), (y * per_meter).round());
+    if !(1.0..=f64::from(u32::MAX)).contains(&x) || !(1.0..=f64::from(u32::MAX)).contains(&y) {
+        return Ok(None);
+    }
+    let mut data = Vec::with_capacity(9);
+    data.extend_from_slice(&(x as u32).to_be_bytes());
+    data.extend_from_slice(&(y as u32).to_be_bytes());
+    data.push(1);
+    Ok(Some(super::metadata::AncillaryChunk { name: *b"pHYs", data, after_data: false }))
+}
+
+/// A `pHYs` resolution in pixels per metre, written back as whole dots per
+/// inch when that is what it was, else as pixels per centimetre.
+pub(crate) fn write_resolution<W: Write + Seek, C: colortype::ColorType>(
+    image: &mut tiff::encoder::ImageEncoder<'_, W, C, tiff::encoder::TiffKindStandard>,
+    color: &super::ColorDescription,
+) {
+    let Some(chunk) = color.safe_ancillary.iter().find(|chunk| chunk.name == *b"pHYs" && chunk.data.len() == 9 && chunk.data[8] == 1) else {
+        return;
+    };
+    let per_meter = [0, 4].map(|at| u32::from_be_bytes(chunk.data[at..at + 4].try_into().unwrap()));
+    let dpi = per_meter.map(|value| (f64::from(value) * 0.0254).round());
+    if dpi.iter().zip(per_meter).all(|(&dpi, value)| (dpi / 0.0254).round() == f64::from(value)) {
+        image.resolution_unit(ResolutionUnit::Inch);
+        image.x_resolution(Rational { n: dpi[0] as u32, d: 1 });
+        image.y_resolution(Rational { n: dpi[1] as u32, d: 1 });
+    } else {
+        image.resolution_unit(ResolutionUnit::Centimeter);
+        image.x_resolution(Rational { n: per_meter[0], d: 100 });
+        image.y_resolution(Rational { n: per_meter[1], d: 100 });
+    }
 }
 
 fn decoder_mode_and_depth(decoder: &mut Decoder<Cursor<&[u8]>>) -> Result<(ColorMode, BitDepth), ImageError> {
@@ -178,6 +230,7 @@ where
     if let Some(icc) = &raster.icc {
         image.encoder().write_tag(TAG_ICC_PROFILE, icc.as_slice())?;
     }
+    write_resolution(&mut image, &raster.color);
     let samples = C::Inner::from_be_bytes(&raster.data);
     image.write_data(&samples)?;
     Ok(())
@@ -231,14 +284,57 @@ mod tests {
             }
             if associated {
                 assert!(crate::image::encode(&page, Format::Png).unwrap_err().to_string().contains("associated-alpha"));
-                let plan = export::plan_page(&bytes, &[], Target::Explicit(Format::Png)).unwrap();
+                let plan = export::plan_page(&bytes, &[], Target::Explicit(Format::Png), export::Tone::Source).unwrap();
                 assert_eq!(plan.format, Format::Tiff);
                 assert!(!plan.declared.is_empty());
                 let mut psd = Vec::new();
-                assert!(export::export_page_psd_to(&bytes, &[], false, &mut psd).is_err());
+                assert!(export::export_page_psd_to(&bytes, &[], false, export::Tone::Source, &Default::default(), &mut psd).is_err());
                 assert!(psd.is_empty());
             }
         }
+    }
+    #[test]
+    fn resolution_survives_a_re_encode_in_every_writer() {
+        let phys = |x: u32, y: u32| {
+            let mut data = x.to_be_bytes().to_vec();
+            data.extend_from_slice(&y.to_be_bytes());
+            data.push(1);
+            crate::image::metadata::AncillaryChunk { name: *b"pHYs", data, after_data: false }
+        };
+        let tags = |bytes: &[u8]| {
+            let mut decoder = Decoder::new(Cursor::new(bytes)).unwrap();
+            let rational = |value: tiff::decoder::ifd::Value| value.into_u32_vec().unwrap();
+            (
+                rational(decoder.get_tag(Tag::XResolution).unwrap()),
+                rational(decoder.get_tag(Tag::YResolution).unwrap()),
+                decoder.get_tag(Tag::ResolutionUnit).unwrap().into_u16().unwrap(),
+            )
+        };
+        let mut page = crate::image::fixtures::by_name("rgb8").raster;
+        // 600 dpi is written back as 600 dpi; 23700 px/m is no whole dpi, so it
+        // is written per centimetre.
+        for (chunk, expected) in [(phys(23622, 23622), (vec![600, 1], vec![600, 1], 2)), (phys(23700, 11811), (vec![23700, 100], vec![11811, 100], 3))] {
+            page.color.safe_ancillary = vec![chunk.clone()];
+            let buffered = encode(&page).unwrap();
+            let mut streaming = Cursor::new(Vec::new());
+            export::rows::write_rows(&mut streaming, &export::Canvas::of(&page), Format::Tiff, &mut |y, row| {
+                let start = y as usize * page.stride(); row.data.copy_from_slice(&page.data[start..start+page.stride()]); Ok(())
+            }).unwrap();
+            for tiff in [&buffered, streaming.get_ref()] {
+                assert_eq!(tags(tiff), expected);
+                assert_eq!(header(Cursor::new(tiff)).unwrap().color.safe_ancillary, std::slice::from_ref(&chunk), "read back as the same pHYs");
+                let edited = export::export_page(tiff, &[], Target::Explicit(Format::Png)).unwrap();
+                assert!(!edited.declared.iter().any(|d| matches!(d, export::Declaration::MetadataNormalized { field, .. } if field == "pHYs")));
+                assert_eq!(crate::image::decode(&edited.bytes).unwrap().color.safe_ancillary, std::slice::from_ref(&chunk), "TIFF to PNG");
+            }
+            let png = crate::image::encode(&page, Format::Png).unwrap();
+            let tiff = export::export_page(&png, &[], Target::Explicit(Format::Tiff)).unwrap();
+            assert_eq!(tags(&tiff.bytes), expected, "PNG to TIFF");
+            assert!(!tiff.declared.iter().any(|d| matches!(d, export::Declaration::MetadataNormalized { field, .. } if field == "pHYs")));
+        }
+        // An aspect ratio with no unit is not a resolution.
+        page.color.safe_ancillary.clear();
+        assert!(header(Cursor::new(&encode(&page).unwrap())).unwrap().color.safe_ancillary.is_empty());
     }
     #[test]
     fn associated_preview_matches_independent_pillow_rgba_without_rewriting_native_samples() {
@@ -264,7 +360,7 @@ mod tests {
             assert!(crate::image::encode(&page, Format::Png).is_err());
             assert!(encode(&page).is_err());
             let mut psd = Vec::new();
-            assert!(export::export_page_psd_to(&bytes, &[], false, &mut psd).is_err());
+            assert!(export::export_page_psd_to(&bytes, &[], false, export::Tone::Source, &Default::default(), &mut psd).is_err());
             assert!(psd.is_empty());
         }
     }

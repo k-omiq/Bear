@@ -3,7 +3,7 @@
  *
  * Settings is a full-window `Screen` with a vertical tab list down the left.
  * What is asserted here is what makes that list a real WAI-ARIA tab list
- * rather than seven buttons that look like one: one tab stop, Up / Down /
+ * rather than eight buttons that look like one: one tab stop, Up / Down /
  * Home / End, selection that follows focus, every tab wired to a mounted
  * panel, and a heading outline that survives (h1 screen, h2 section, h3
  * below). Also here: the ids older callers still open it with, the anchor a
@@ -56,6 +56,7 @@ const LABELS = {
   models: 'settings.section.models',
   cloud: 'settings.section.cloud',
   denoise: 'settings.section.denoise',
+  export: 'settings.section.export',
   performance: 'settings.section.performance',
   shortcuts: 'settings.section.shortcuts',
   about: 'settings.section.about',
@@ -118,6 +119,42 @@ function open(props = {}) {
   const selected = () => TABS.find((id) => tab(id).getAttribute('aria-selected') === 'true')
   return { rendered, tab, panel, selected }
 }
+
+describe('Settings › Export', () => {
+  afterEach(() => {
+    session.exportPsdCompression = 'rle'
+    session.exportPsdLetteringLayer = false
+    session.exportTone = 'source'
+  })
+
+  it('saves each choice, and keeps the old one when the write fails', async () => {
+    const { rendered, tab } = open()
+    await fireEvent.click(tab('export'))
+    await fireEvent.click(rendered.getByRole('radio', { name: t('settings.export.compression.raw') }))
+    await waitFor(() => expect(session.exportPsdCompression).toBe('raw'))
+    expect(writeSettings).toHaveBeenCalledWith({ exportPsdCompression: 'raw' })
+    for (const group of rendered.getAllByRole('radiogroup').filter((g) => g.closest('#' + tab('export').getAttribute('aria-controls')))) {
+      expect(document.getElementById(group.getAttribute('aria-describedby') ?? '')?.textContent).toBeTruthy()
+    }
+
+    const lettering = /** @type {HTMLInputElement} */ (rendered.container.querySelector('#settings-export-lettering'))
+    await fireEvent.click(lettering)
+    await waitFor(() => expect(session.exportPsdLetteringLayer).toBe(true))
+    expect(lettering.checked).toBe(true)
+    expect(writeSettings).toHaveBeenCalledWith({ exportPsdLetteringLayer: true })
+
+    writeSettings.mockRejectedValueOnce(new Error('disk full'))
+    await fireEvent.click(rendered.getByRole('radio', { name: t('export.tone.grayscale') }))
+    await waitFor(() => expect(rendered.getByRole('alert').textContent).toBe(t('settings.export.saveFailed')))
+    expect(session.exportTone).toBe('source')
+
+    writeSettings.mockRejectedValueOnce(new Error('disk full'))
+    await fireEvent.click(lettering)
+    await waitFor(() => expect(rendered.getByRole('alert')).toBeTruthy())
+    expect(session.exportPsdLetteringLayer).toBe(true)
+    expect(lettering.checked).toBe(true)
+  })
+})
 
 describe('the tab list', () => {
   it('changes existing RTL projects to LTR through Settings and saves the preference', async () => {

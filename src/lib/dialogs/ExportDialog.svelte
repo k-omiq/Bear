@@ -1,67 +1,21 @@
 <script>
   /**
-   * Export - format, layout, destination, masks, and the things the user needs
-   * to know before the button is pressed.
+   * Export: format, pages, layout, colour, masks and destination, and what
+   * the user needs to know before pressing the button.
    *
-   * **The note is not decoration.** "Masks drawn by hand and masks made
-   * automatically export identically" is the answer to the
-   * question the Masks row raises, and the flagged count is the answer to a
-   * question nothing else on screen asks: exporting with regions still flagged
-   * is legal, and a user is owed the figure before they do it rather than
-   * after.
+   * The format is the one big choice, so it is a row of cards that say what
+   * each format is for. The rest are short closed lists, laid out as one
+   * aligned grid, and everything the plan says sits in one summary panel
+   * above the buttons.
    *
-   * **The gutter statement is an obligation.**
-   * A strip whose pages are not all the same width has columns beside the
-   * narrow ones that no source file has a pixel for, and "an interface offering
-   * stitched output states the count before it runs, exactly as
-   * it requires of every other change
-   * the user did not ask for". `gutterPixels` below is that count, computed
-   * from the page dimensions this screen already holds; the backend reports
-   * what it actually wrote back on `gutterPixels`, and the two are the same
-   * arithmetic from the two ends.
+   * Every change asks the backend for a plan. The plan reads page headers and
+   * the manifest only, so it is quick; it names the output formats, what the
+   * export declares, and a revision the export must still match.
    *
-   * **What the format row does not offer.** JPEG is gone from it. It is lossy,
-   * the export contract puts lossy output below the fidelity line and the build
-   * plan puts it behind an acknowledgement flow that does not exist - so the
-   * backend refuses it, and a button whose only outcome is a refusal is worse
-   * than no button. TIFF took its place: it is the one format here that carries
-   * CMYK, and the contract names it for stitched longstrip. PSD is the contract's
-   * layered file, per page only.
-   *
-   * **The Masks row means two things, and says which.** For PNG and TIFF,
-   * "Separate layer" is a mask file beside each page - `001.png` and
-   * `001_mask.png`. For PSD it is the layered document: the untouched page as
-   * the Background, one masked layer per region. The row's description
-   * follows the format. For CBZ the row is not shown at all, because a mask
-   * file inside a reader's archive would be read as a page and the backend
-   * refuses the pair; the seam is sent `'flattened'` for it.
-   *
-   * **The overwrite refusal, and the ones that are not it.**
-   * `backend.exportChapter` answers `status: 'refused'` for twelve different
-   * reasons now, and only two of them have a way out this dialog can offer.
-   * `notice.export.refusedOverwrite` (output never
-   * overwrites input) is pushed *on top of* this dialog with `dismissable:
-   * false` - no Escape, no backdrop - and exactly one action, "Choose another
-   * folder…", because the doc's way out of a refusal is a named choice and not
-   * a dismissal. Every other refusal is answered by changing what was asked
-   * for, so the adapter's notice says why and this dialog simply stays open
-   * with the choices still in it. Branching on `status` alone would push the
-   * overwrite modal over a user who asked for JPEG.
-   *
-   * **The folder that is not there.** The default destination is beside the
-   * chapter's scan folder, and a chapter imported from an external drive
-   * still opens and cleans with the drive unplugged. Its plan then comes back
-   * refused with `notice.export.destinationUnavailable` and the path. The
-   * sentence is shown with the other plan refusals, and the way out is
-   * offered under it: "Choose another folder…" moves the destination to a
-   * folder the user names and opens the chooser. The export never picks a
-   * folder for them.
-   *
-   * **The draft lives in `spec.props`, not in this component.** Pushing the
-   * refusal unmounts this dialog - the host mounts only the top of the stack -
-   * and `{#key spec.id}` makes the return a fresh mount. Component state would
-   * be gone by then, and the user would find the format they chose reset along
-   * with the destination. The spec survives on the stack, so the draft does.
+   * Only the overwrite refusal opens its own modal ("Choose another
+   * folder…"). Every other refusal is fixed by changing a choice here, so the
+   * dialog stays open with the sentence under it. The draft lives in
+   * `spec.props`, so it survives that modal unmounting this one.
    */
   import { untrack } from 'svelte'
   import { Button, Field, Modal, Segmented } from '../ui/index.js'
@@ -70,6 +24,7 @@
   import { closeModal, modalWidth, notify, pushModal } from '../state/app.svelte.js'
   import { editor, pageCount, pages, reportJobConflict, reviewEntries } from '../state/editor.svelte.js'
   import { getBackend } from '../api/backend.js'
+  import { session } from '../state/session.svelte.js'
   import { t } from '../i18n/index.js'
 
   /** @type {{ spec: import('../state/app.svelte.js').ModalSpec }} */
@@ -83,6 +38,10 @@
   if (draft.masks === undefined) draft.masks = 'flattened'
   if (draft.layout === undefined) draft.layout = 'per-page'
   if (draft.path === undefined) draft.path = ''
+  if (draft.scope === undefined) draft.scope = 'chapter'
+  // Settings > Export chooses where the colour choice starts; this export's
+  // choice is never written back.
+  if (draft.tone === undefined) draft.tone = session.exportTone
 
   let busy = $state(false)
   let plan = $state(null)
@@ -91,11 +50,16 @@
   let refresh = $state(0)
 
   const formats = [
-    { value: 'PNG', label: t('export.format.png') },
-    { value: 'TIFF', label: t('export.format.tiff') },
-    { value: 'PSD', label: t('export.format.psd') },
-    { value: 'CBZ', label: t('export.format.cbz') },
+    { value: 'PNG', label: t('export.format.png'), hint: t('export.format.pngHint') },
+    { value: 'TIFF', label: t('export.format.tiff'), hint: t('export.format.tiffHint') },
+    { value: 'PSD', label: t('export.format.psd'), hint: t('export.format.psdHint') },
+    { value: 'CBZ', label: t('export.format.cbz'), hint: t('export.format.cbzHint') },
   ]
+  const tones = [
+    { value: 'source', label: t('export.tone.source') },
+    { value: 'grayscale', label: t('export.tone.grayscale') },
+  ]
+  const uid = $props.id()
   const layouts = [
     { value: 'per-page', label: t('export.layout.perPage') },
     { value: 'stitched', label: t('export.layout.stitched') },
@@ -105,13 +69,16 @@
     { value: 'source-folder', label: t('export.destination.sourceFolder') },
     { value: 'custom', label: t('export.destination.customFolder') },
   ]
+  const scopes = $derived([
+    { value: 'chapter', label: t('export.pages.chapter') },
+    { value: 'page', label: t('export.pages.current', { page: editor.pageIndex + 1 }) },
+  ])
   const maskModes = [
     { value: 'flattened', label: t('export.masks.flattened') },
     { value: 'separate-layer', label: t('export.masks.separateLayer') },
   ]
 
   const pageList = $derived(pages())
-  const flagged = $derived(reviewEntries().length)
 
   /**
    * One file for the chapter only makes sense for a chapter that *is* one
@@ -125,6 +92,19 @@
   const longstrip = $derived(editor.project?.mode === 'longstrip')
   const stitchable = $derived(longstrip && draft.format !== 'CBZ' && draft.format !== 'PSD')
   const layout = $derived(stitchable && draft.layout === 'stitched' ? 'stitched' : 'per-page')
+
+  /**
+   * A stitched file and a CBZ are each one file for the whole chapter, so
+   * they always hold every page; the backend refuses a part of one.
+   */
+  const pageable = $derived(layout !== 'stitched' && draft.format !== 'CBZ')
+  const onePage = $derived(pageable && draft.scope === 'page')
+  const selection = $derived(onePage ? [editor.pageIndex] : undefined)
+
+  /** Flags on the pages this export writes. */
+  const flagged = $derived(
+    onePage ? reviewEntries().filter((entry) => entry.pageIndex === editor.pageIndex).length : reviewEntries().length,
+  )
 
   /** The mask choice the seam is sent: a CBZ has no room for one. */
   const maskable = $derived(draft.format !== 'CBZ')
@@ -146,14 +126,32 @@
   )
   const ready = $derived(draft.destination !== 'custom' || destination !== '')
 
+  /**
+   * The files the plan writes. A CBZ is one archive whatever it holds, and
+   * a mask file goes beside each raster file when masks are separate (a
+   * PSD keeps them as layer masks instead).
+   */
+  const summary = $derived.by(() => {
+    if (plan?.status !== 'planned') return { count: 0, formats: '', masks: 0 }
+    if (draft.format === 'CBZ') return { count: 1, formats: 'CBZ', masks: 0 }
+    const count = plan.fileCount ?? plan.outputs?.length ?? 0
+    return { count, formats: plan.actualFormats.join(' / '), masks: masks === 'separate-layer' && draft.format !== 'PSD' ? count : 0 }
+  })
+
+  /** The colour choice the seam is sent: a grey page as grayscale, or as it is. */
+  const grayscale = $derived(draft.tone === 'grayscale')
+
   $effect(() => {
     const chapterId = editor.chapter?.id
-    const options = { chapterId, format: draft.format, destination, masks, layout }
+    const options = { chapterId, format: draft.format, destination, masks, layout, pages: selection, grayscale }
     void refresh
     let cancelled = false
     plan = null
     planError = ''
-    if (!chapterId || !ready) return
+    if (!chapterId || !ready) {
+      planning = false
+      return
+    }
     planning = true
     getBackend().planExportChapter(options).then((value) => {
       if (!cancelled) { plan = value; planning = false }
@@ -174,6 +172,8 @@
         destination,
         masks,
         layout,
+        pages: selection,
+        grayscale,
         planRevision: plan.revision,
       })
     } catch (error) {
@@ -258,95 +258,125 @@
   width={modalWidth(spec.kind)}
   onclose={() => closeModal(null)}
 >
-  <div class="rows">
-    <Field label={t('export.format.label')} layout="row">
-      {#snippet children({ labelId })}
-        <Segmented
-          options={formats}
-          value={draft.format}
-          labelledBy={labelId}
-          disabled={busy}
-          onchange={(value) => (draft.format = value)}
-        />
-      {/snippet}
-    </Field>
-
-    {#if longstrip}
-      <Field label={t('export.layout.label')} layout="row">
-        {#snippet children({ labelId })}
-          <Segmented
-            options={layouts}
-            value={layout}
-            labelledBy={labelId}
-            disabled={busy || !stitchable}
-            onchange={(value) => (draft.layout = value)}
+  <fieldset class="formats" disabled={busy}>
+    <legend class="heading">{t('export.format.label')}</legend>
+    <div class="cards">
+      {#each formats as format (format.value)}
+        <label class="format" class:chosen={draft.format === format.value}>
+          <input
+            type="radio"
+            name="{uid}-format"
+            value={format.value}
+            checked={draft.format === format.value}
+            aria-labelledby="{uid}-{format.value}"
+            aria-describedby="{uid}-{format.value}-hint"
+            onchange={() => (draft.format = format.value)}
           />
-        {/snippet}
-      </Field>
-    {/if}
+          <span class="name" id="{uid}-{format.value}">{format.label}</span>
+          <span class="hint" id="{uid}-{format.value}-hint">{format.hint}</span>
+        </label>
+      {/each}
+    </div>
+  </fieldset>
 
-    <Field label={t('export.destination.label')} layout="row">
-      {#snippet children({ labelId })}
-        <Segmented
-          options={destinations}
-          value={draft.destination}
-          labelledBy={labelId}
-          disabled={busy}
-          onchange={(value) => (draft.destination = value)}
-        />
-      {/snippet}
-    </Field>
-
-    {#if draft.destination === 'custom'}
-      <SourceFolderField
-        value={draft.path}
-        onchange={(value) => (draft.path = value)}
-        label={t('export.destination.pathLabel')}
-        placeholder={t('export.destination.pathPlaceholder')}
-        browseLabel={t('shell.action.chooseFolder')}
-        chooserTitle={t('export.destination.chooserTitle')}
-        disabled={busy}
+  <div class="options">
+    {#if longstrip}
+      <span class="heading" id="{uid}-layout">{t('export.layout.label')}</span>
+      <Segmented
+        block
+        options={layouts}
+        value={layout}
+        labelledBy="{uid}-layout"
+        disabled={busy || !stitchable}
+        onchange={(value) => (draft.layout = value)}
       />
     {/if}
 
+    <span class="heading" id="{uid}-pages">{t('export.pages.label')}</span>
+    <Segmented
+      block
+      options={scopes}
+      value={onePage ? 'page' : 'chapter'}
+      labelledBy="{uid}-pages"
+      disabled={busy || !pageable}
+      onchange={(value) => (draft.scope = value)}
+    />
+
+    <span class="heading" id="{uid}-tone">{t('export.tone.label')}</span>
+    <div class="control">
+      <Segmented
+        block
+        options={tones}
+        value={draft.tone}
+        labelledBy="{uid}-tone"
+        describedBy="{uid}-tone-description"
+        disabled={busy}
+        onchange={(value) => (draft.tone = value)}
+      />
+      <p class="description" id="{uid}-tone-description">
+        {t(grayscale ? 'export.tone.grayscaleDescription' : 'export.tone.sourceDescription')}
+      </p>
+    </div>
+
     {#if maskable}
-      <Field label={t('export.masks.label')} layout="row">
-        {#snippet children({ labelId })}
-          <Segmented
-            options={maskModes}
-            value={draft.masks}
-            labelledBy={labelId}
-            disabled={busy}
-            onchange={(value) => (draft.masks = value)}
-          />
-        {/snippet}
-      </Field>
+      <span class="heading" id="{uid}-masks">{t('export.masks.label')}</span>
+      <Segmented
+        block
+        options={maskModes}
+        value={draft.masks}
+        labelledBy="{uid}-masks"
+        disabled={busy}
+        onchange={(value) => (draft.masks = value)}
+      />
     {/if}
+
+    <span class="heading" id="{uid}-destination">{t('export.destination.label')}</span>
+    <div class="control">
+      <Segmented
+        block
+        options={destinations}
+        value={draft.destination}
+        labelledBy="{uid}-destination"
+        disabled={busy}
+        onchange={(value) => (draft.destination = value)}
+      />
+      {#if draft.destination === 'custom'}
+        <div class="path">
+          <SourceFolderField
+            value={draft.path}
+            onchange={(value) => (draft.path = value)}
+            label={t('export.destination.pathLabel')}
+            placeholder={t('export.destination.pathPlaceholder')}
+            browseLabel={t('shell.action.chooseFolder')}
+            chooserTitle={t('export.destination.chooserTitle')}
+            disabled={busy}
+          />
+        </div>
+      {/if}
+    </div>
   </div>
 
-  <p class="note">
-    {t('export.note.flagged', { count: flagged })}
-    {#if layout === 'stitched'}
-      {t('export.note.gutter', { count: gutter })}
+  <section class="summary" aria-live="polite" aria-label={t('export.summary.label')}>
+    {#if planning}
+      <p class="quiet">{t('export.state.planning')}</p>
+    {:else if plan?.status === 'planned'}
+      <p class="files">{t('export.summary.files', summary)}</p>
+      {#if summary.masks}<p class="quiet">{t('export.summary.masks', { count: summary.masks })}</p>{/if}
+      {#if plan.path}<p class="where" title={plan.path}>{plan.path}</p>{/if}
+      {#each plan.declared as declaration}
+        <p class="quiet">{t(declaration.key, declaration.params)}</p>
+      {/each}
     {/if}
-  </p>
-
-  <div aria-live="polite" class="note">
-    {#if planning}<p>{t('export.state.planning')}</p>{/if}
-    {#if planError}<p role="alert">{planError}</p>{/if}
+    {#if planError}<p class="problem" role="alert">{planError}</p>{/if}
     {#if plan?.status === 'refused'}
-      <p role="alert">{t(plan.reasonKey, { format: draft.format, path: plan.path ?? '' })} {plan.detail ?? ''}</p>
+      <p class="problem" role="alert">{t(plan.reasonKey, { format: draft.format, path: plan.path ?? '' })} {plan.detail ?? ''}</p>
       {#if plan.reasonKey === UNAVAILABLE}
         <p><Button disabled={busy || choosing} onclick={chooseAnotherFolder}>{t('export.action.chooseAnotherFolder')}</Button></p>
       {/if}
     {/if}
-    {#if plan?.status === 'planned'}
-      <p>{t('export.note.actualFormats', { formats: plan.actualFormats.join(' / ') })}</p>
-      {#each plan.declared as declaration}
-        <p>{t(declaration.key, declaration.params)}</p>
-      {/each}
-    {/if}
-  </div>
+    {#if layout === 'stitched'}<p class="quiet">{t('export.note.gutter', { count: gutter })}</p>{/if}
+    <p class:quiet={!flagged} class:flagged={flagged > 0}>{t('export.note.flagged', { count: flagged })}</p>
+  </section>
 
   {#snippet buttons()}
     <Button disabled={busy} onclick={() => closeModal(null)}>{t('shell.action.cancel')}</Button>
@@ -357,12 +387,93 @@
 </Modal>
 
 <style>
-  .rows { margin-top: 16px }
-
-  .note {
-    margin: 12px 0 0;
-    font-size: 11px;
-    line-height: 1.6;
+  .heading {
+    font-size: 10.5px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
     color: var(--t3);
   }
+
+  /* ---- format cards ------------------------------------------------------ */
+  .formats {
+    min-width: 0;
+    margin: var(--s-6) 0 0;
+    padding: 0;
+    border: 0;
+  }
+  .formats legend { margin-bottom: var(--s-3); padding: 0 }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--s-3);
+  }
+  .format {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 10px 11px 11px;
+    border: 1px solid var(--line2);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  }
+  .format:hover { border-color: var(--tintline) }
+  .format.chosen {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .format:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px }
+  .formats:disabled .format { cursor: default; opacity: .6 }
+  .format input {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    opacity: 0;
+    cursor: inherit;
+  }
+  .name { font-size: 13px; font-weight: 600; color: var(--text) }
+  .hint { font-size: 10.5px; line-height: 1.35; color: var(--t3) }
+
+  /* ---- option grid ------------------------------------------------------- */
+  .options {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    align-items: start;
+    gap: var(--s-4) var(--s-5);
+    margin-top: var(--s-6);
+  }
+  .options > .heading { padding-top: 7px }
+  .control { display: flex; flex-direction: column; gap: var(--s-2); min-width: 0 }
+  .description { margin: 0; font-size: 10.5px; line-height: 1.5; color: var(--t3) }
+  .path { margin-top: var(--s-1) }
+
+  /* ---- summary ----------------------------------------------------------- */
+  .summary {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: var(--s-6);
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--t2);
+  }
+  .summary p { margin: 0 }
+  .files { font-size: 12px; font-weight: 600; color: var(--text) }
+  .where {
+    overflow: hidden;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    color: var(--t3);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .quiet { color: var(--t3) }
+  .flagged, .problem { color: var(--warn) }
 </style>

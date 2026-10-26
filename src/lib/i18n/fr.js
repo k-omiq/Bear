@@ -884,9 +884,26 @@ export const fr = {
       shortcuts: 'Raccourcis',
       about: 'À propos',
       denoise: 'Débruitage',
+      export: 'Export',
     },
     tabs: {
       label: 'Sections des réglages',
+    },
+    export: {
+      psd: 'Fichiers PSD',
+      compression: {
+        label: 'Données des couches',
+        description: 'Les fichiers compressés sont plus petits. Les fichiers non compressés s’ouvrent dans plus d’applications. Les pages 16 bits ne sont jamais compressées.',
+        rle: 'Compressé',
+        raw: 'Non compressé',
+      },
+      lettering: {
+        label: 'Calque du lettrage',
+        description: 'Ajoute un calque masqué en haut qui marque l’emplacement du texte. Affichez-le dans votre éditeur pour vérifier le nettoyage.',
+      },
+      general: 'Tous les exports',
+      toneDescription: 'Le choix proposé à l’ouverture de la fenêtre Exporter. Une page entièrement grise peut être enregistrée en niveaux de gris ; les pages en couleur restent en couleur.',
+      saveFailed: 'Le réglage n’a pas pu être enregistré. Réessayez.',
     },
     denoise: {
       intro: 'Le débruitage retire le grain de scan et le bruit JPEG de pages entières et les enregistre comme nouveaux fichiers. Lancez-le depuis le menu d’un chapitre.',
@@ -929,11 +946,20 @@ export const fr = {
       tiff: 'TIFF',
       psd: 'PSD',
       cbz: 'CBZ',
+      pngHint: 'Sans perte, s’ouvre partout',
+      tiffHint: 'Sans perte, pour l’impression',
+      psdHint: 'Calques pour Photoshop',
+      cbzHint: 'Une archive pour liseuses',
     },
     layout: {
       label: 'Disposition',
       perPage: 'Un fichier par page',
       stitched: 'Un fichier pour le chapitre',
+    },
+    pages: {
+      label: 'Pages',
+      chapter: 'Chapitre entier',
+      current: 'Cette page ({page})',
     },
     destination: {
       label: 'Destination',
@@ -949,8 +975,22 @@ export const fr = {
       flattened: 'Aplatis',
       separateLayer: 'Calque séparé',
     },
+    tone: {
+      label: 'Couleur',
+      source: 'Garder l’original',
+      grayscale: 'Pages grises en niveaux de gris',
+      sourceDescription: 'Chaque page garde son type de couleur. Une page grise enregistrée en RVB reste en RVB.',
+      grayscaleDescription: 'Une page entièrement grise est écrite en niveaux de gris. Les pages avec de la couleur restent en couleur.',
+    },
+    summary: {
+      label: 'Résumé de l’export',
+      files: {
+        one: '1 fichier {formats}',
+        other: '{count} fichiers {formats}',
+      },
+      masks: { one: 'Plus 1 fichier de masque PNG', other: 'Plus {count} fichiers de masque PNG' },
+    },
     note: {
-      actualFormats: "Fichiers de sortie : {formats}.",
       gutter: {
         zero: 'Toutes les pages ont la largeur complète du chapitre, le fichier unique n’invente donc aucun pixel.',
         one: '{count} pixel de blanc papier sera écrit à côté des pages plus étroites. Aucun fichier source n’a de pixel à cet endroit.',
@@ -2314,6 +2354,21 @@ export const fr = {
       app: 'Application',
       pointer: 'Pointeur',
     },
+    navigation: {
+      preset: 'Déplacer le canevas',
+      trackpad: 'Pavé tactile',
+      mouse: 'Souris',
+      custom: 'Personnalisé',
+      wheel: 'Molette de la souris',
+      scroll: 'Défiler',
+      zoom: 'Zoom',
+      middle: 'Glisser avec le bouton du milieu',
+      empty: 'Glisser sur une zone vide',
+      pan: 'Déplacer',
+      off: 'Non',
+      hintScroll: 'La molette fait défiler, et zoome avec {accel} enfoncé.',
+      hintZoom: 'La molette zoome, et fait défiler avec Maj ou {alt} enfoncé. Le défilement du pavé tactile zoome aussi.',
+    },
     rebind: {
       change: 'Modifier le raccourci de {name}',
       reset: 'Rétablir {name} par défaut',
@@ -2388,6 +2443,7 @@ export const fr = {
       right: 'Page de droite',
       first: 'Première page',
       last: 'Dernière page',
+      holdPan: 'Maintenir et glisser pour déplacer le canevas',
     },
     review: {
       next: 'Zone à vérifier suivante',
@@ -2690,6 +2746,7 @@ export const fr = {
       refusedLayeredFormat: 'Cette version n’écrit pas le {format}. Rien n’a été écrit. Exportez en PSD, qui porte les mêmes calques pour des pages jusqu’à 30 000 pixels de côté.',
       refusedUnknownFormat: 'Cette version ne peut pas écrire le {format}. Rien n’a été écrit. Les formats qu’elle peut écrire sont PNG, TIFF, PSD et CBZ.',
       refusedMaskLayers: 'Un CBZ se lit page par page, un fichier de masque à l’intérieur s’afficherait donc comme une page. Rien n’a été écrit. Exportez en PNG ou TIFF pour un fichier de masque à côté de chaque page, ou en PSD pour un masque de calque sur chaque zone.',
+      refusedPageSelection: 'Choisissez des pages de ce chapitre. Un fichier pour le chapitre entier contient toujours toutes les pages. Rien n’a été écrit.',
       refusedStitchedLayered: 'Un PSD contient une page entière comme arrière-plan, et cette version ne traite jamais le chapitre entier comme une seule image. Rien n’a été écrit. Exportez en PSD page par page, ou en un seul PNG ou TIFF pour le chapitre.',
       refusedLayeredMode: 'Le PSD ne peut pas contenir une page en couleurs indexées ou de moins de 8 bits, et une conversion modifierait des pixels sans que vous l’ayez demandé. Rien n’a été écrit. Exportez en PNG, qui les conserve tels quels.',
       refusedLayeredSize: 'Une page dépasse ici 30 000 pixels de côté, ce qu’un PSD ne peut pas contenir. Rien n’a été écrit. Exportez en PNG ou TIFF, qui n’ont pas cette limite.',
@@ -2704,6 +2761,7 @@ export const fr = {
         mixedMode: 'Ces pages ne sont pas toutes dans le même mode colorimétrique, et un fichier n’a qu’un seul mode colorimétrique. Rien n’a été écrit. Les convertir modifierait des pixels sans que vous l’ayez demandé. Exportez plutôt page par page.',
         mixedDepth: 'Ces pages n’ont pas toutes la même profondeur de bits, et un fichier n’en a qu’une seule. Rien n’a été écrit. Exportez plutôt page par page.',
         mixedProfile: 'Ces pages n’ont pas toutes le même profil colorimétrique, et un fichier n’a qu’un seul profil. Rien n’a été écrit. Exportez plutôt page par page.',
+        mixedDescription: 'Ces pages ne décrivent pas toutes leur couleur ou leur transparence de la même façon, et un fichier n’a qu’une seule description. Rien n’a été écrit. Exportez plutôt page par page.',
         indexed: 'Ces pages utilisent des couleurs indexées, et un fichier unique nécessiterait une seule palette pour toutes. Rien n’a été écrit. Harmoniser les palettes décalerait les couleurs, exportez donc plutôt page par page.',
       },
     },

@@ -276,6 +276,8 @@ export const editor = $state({
   /** true while the original is shown - held (`O`) or pinned (`⇧O`) */
   originalVisible: false,
   originalPinned: false,
+  /** true while the pan key (Space) is held: a left drag moves the canvas */
+  panHeld: false,
   /** The wipe between original (0) and cleaned (100). */
   wipe: 100,
 
@@ -1130,6 +1132,7 @@ function resetSessionState() {
   editor.hoverId = null
   editor.originalVisible = false
   editor.originalPinned = false
+  editor.panHeld = false
   editor.wipe = 100
   editor.maskOverlay = false
   editor.stripScope = []
@@ -1688,6 +1691,18 @@ export function holdOriginal(held) {
   }
   if (editor.originalPinned) return
   editor.originalVisible = held
+}
+
+/**
+ * The held pan key. While it is down a left drag on the canvas moves it,
+ * whatever tool is armed (`CanvasStage`). There is no sticky form, and none
+ * is needed: a middle drag, a drag on empty canvas and the scroll keys all
+ * move the canvas without holding anything.
+ *
+ * @param {boolean} held
+ */
+export function holdPan(held) {
+  editor.panHeld = held
 }
 
 export function togglePinOriginal() {

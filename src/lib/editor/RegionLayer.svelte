@@ -699,6 +699,7 @@
   <button
     type="button"
     class="clear"
+    data-canvas-empty
     tabindex="-1"
     aria-hidden="true"
     aria-label={t('canvas.action.clearSelection')}

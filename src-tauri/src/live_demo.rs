@@ -557,6 +557,8 @@ async fn export(
         Some("flattened".into()),
         Some("per-page".into()),
         None,
+        None,
+        None,
     )
     .await?;
     if result.status != "exported" {

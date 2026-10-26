@@ -59,7 +59,8 @@ Export. **Hold O** to see the original scan under your edits, or **Shift+O** to 
 between the two. **M** toggles the mask overlay, which outlines every region at once. With the overlay off, a region
 is outlined only while you point at it, focus it or select it. The bottom bar carries zoom (fit, a percentage, and
 1:1), undo and redo, previous and next page, and previous and next region needing review; pinch and modifier-scroll
-zoom as well. Page order is right-to-left by default and is set per project. A card in the corner lists the models
+zoom as well. **Hold Space and drag** to move the canvas with any tool, or drag with the middle mouse button. Settings,
+Shortcuts can also make a plain mouse wheel zoom and a drag on empty canvas pan. Page order is right-to-left by default and is set per project. A card in the corner lists the models
 currently holding memory, with a button per row to free one; anything still needed loads again by itself. Notices
 about skipped files, cloud rejections and memory pressure stack in the bottom-left corner, never over the image. The
 editor autosaves, and reopening a chapter restores the page, scroll position, zoom and the pending review set.
@@ -459,13 +460,32 @@ A project created in longstrip mode treats a chapter as one continuous strip rat
 
 Export is on the Settings menu in the top bar, and on **E**.
 
+The dialog leads with the format, as four cards that say what each is for. Layout, pages, color, masks and
+destination follow as one aligned list, and a summary above the buttons names the files, the folder, what the
+export declares and any region still flagged for review.
+
 **Formats.** PNG (the default), TIFF (also the right choice for a stitched longstrip, and the only one that carries
 CMYK among raster choices), **PSD**, and CBZ, which is a zip of the per-page files stored rather than deflated. JPEG and WebP are refused
 rather than approximated, and the refusal says what would work instead. PSB is not written.
 
+**Pages.** The whole chapter, or the page on screen. One file for the chapter always holds every page, and so does a
+CBZ: one page into the chapter's `.cbz` would replace the whole archive, so a page selection is refused for it.
+
 **Layout.** One file per page, or one file for the chapter. Stitching a paginated project is refused, as is stitching
 into a CBZ or into a PSD. Stitched pages must agree on mode, depth, profile, gamma/chromaticities, cICP and
-transparency; indexed stitching is refused. Validation occurs before outputs are published.
+transparency; indexed stitching is refused. The plan shown in the dialog is read from page headers, so it is quick;
+files are written to a hidden folder and moved in only when every one is written.
+
+**Color.** Import and export keep every page's own color type: a gray page stored as RGB is imported as RGB and,
+by default, exported as RGB. **Gray pages as grayscale** writes such a page as grayscale instead (RGBA becomes gray
+with alpha), in PNG, TIFF, CBZ, PSD and a stitched file. A page is gray when every pixel of the cleaned page has its
+three channels within 1.5 of 255 levels, read in sRGB, so a color edit on a gray page keeps it color; each gray
+sample is the mean of the three. A profiled page is read through its profile and written as sRGB gray, because an RGB
+profile cannot describe a gray image. A flattened PSD becomes grayscale when the cleaned page is gray; a layered one
+only when the original page and every region layer (where its mask shows) are gray too. A stitched file becomes
+grayscale only when every page is. With this choice an untouched RGB PNG or TIFF is written again rather than copied,
+gray or not, so the plan's notes are what the file gets; an untouched JPEG is still copied byte for byte, so it stays
+RGB. Settings > Export picks the choice the dialog starts on.
 
 **Masks.** Flattened is the image alone. Asked for separately, a PNG or TIFF export writes **a mask file beside each
 page**, `001.png` and `001_mask.png`, an 8-bit grayscale PNG that is white where the lettering the page's edits
@@ -476,14 +496,18 @@ layer per region in a Cleaned group, and a layer's own mask stays the area it co
 masks, because a reader shows every file in the archive as a page.
 
 **PSD.** Per page, in the source's own mode and depth: grayscale, gray with alpha, RGB, RGBA and CMYK at 8 and
-16 bits, with the embedded profile carried through. Flattened, it is one Background layer holding the cleaned page.
+16 bits, with the embedded profile carried through. 8-bit channels are RLE-compressed, as Photoshop writes them,
+unless Settings > Export asks for uncompressed channels, which more readers open; 16-bit channels are always raw.
+Flattened, it is one Background layer holding the cleaned page. Settings > Export can also add a hidden Lettering
+layer on top, flattened or layered: white where the lettering was and transparent elsewhere, a guide the user shows to
+check the clean.
 Either way the merged image the file carries is the composite, so a reader that ignores layers still sees the cleaned
 page, and a hidden region is a hidden layer that is still in the file. An indexed or sub-8-bit page, and a page over
 30 000 px on a side, are refused for PSD rather than converted, decided from the chapter's own record before a folder
 is made; the refusal names PNG, which carries them as they are.
 
 **Destination.** A new sibling folder (the default), the source folder, or a folder you type or choose as a full path.
-The source folder is never written to: choosing it gets you a refusal, and the dialog says so under the row rather
+The source folder is never written to: choosing it gets you a refusal, and the dialog says so in its summary rather
 than letting you find out by pressing Export.
 
 **Before you press Export** the dialog validates every page, displays actual output formats and explains format
@@ -499,7 +523,9 @@ and edited CMYK/YCCK JPEGs use TIFF. JPEG recompression is not offered.
 PNG writers share one metadata policy: exact gAMA/cHRM/sBIT/cICP/mDCV/cLLI declarations and safe ancillary chunks
 are retained where valid. Edits remove stale significant-bit/content-light summaries; precedence conflicts are
 normalized and disclosed. TIFF/PSD use equivalent supported ICC descriptions where possible and otherwise refuse.
-General EXIF thumbnails and geometry are omitted on re-encode; imported originals retain them. Invalid profiles and
+General EXIF thumbnails and geometry are omitted on re-encode; imported originals retain them. Resolution travels
+between formats: a TIFF's resolution in inches or centimetres becomes a PNG `pHYs`, and a `pHYs` is written to TIFF
+(PSD does not carry it). Invalid profiles and
 unsupported HDR preview/paint transforms fail explicitly. These guarantees do not claim every ancillary field survives.
 
 Previews transform supported Gray/RGB/CMYK profiles and SDR declarations to tagged sRGB. Untagged RGB and grayscale
@@ -606,7 +632,11 @@ another shortcut already answers is refused, not swapped, and the refusal names 
 combinations belong to the operating system and are not intercepted. A rebound row grows a Reset control, and the foot
 of the sheet carries Reset all to defaults. The sheet also carries a **Pointer** group, which holds the clone stamp's
 source modifier: Option, Command, Control or Shift, drawn as the keycaps of the machine you are on, because Alt is not
-a key every keyboard prints. Escape is the one binding that cannot be changed. Only your differences
+a key every keyboard prints. Below it sit the ways a mouse moves the canvas: what the wheel does (Scroll, or Zoom with
+Shift or Option held to scroll), whether a middle button drag pans, and whether a left drag on empty canvas pans. The
+Trackpad and Mouse presets set all three at once; a mix of your own reads as Custom. Trackpad is the default. A drag
+that starts on a region, a handle or a drawing tool's surface stays that control's drag. The pan key itself (Space)
+is an ordinary row under Navigation. Escape is the one binding that cannot be changed. Only your differences
 from the defaults are stored, so a binding survives a build that renames a default chord.
 
 ### Cloud
@@ -730,6 +760,7 @@ chapter is open.
 | `+` (or `=`) | Zoom in |
 | `-` | Zoom out |
 | `Z` | Actual size, 1:1 |
+| `Space` (held) | Drag to move the canvas |
 | `←` | Page left |
 | `→` | Page right |
 | `Home` / `End` | First / last page |

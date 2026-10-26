@@ -217,7 +217,38 @@ impl ManagedColor {
                 ),
             ),
         };
-        Ok(Self { forward, reverse })
+        let managed = Self { forward, reverse };
+        // Most tagged pages are tagged sRGB, which needs no transform. Taking
+        // the identity path skips a call into LCMS for every pixel.
+        if managed.is_identity(page.mode, page.depth) {
+            return Ok(Self { forward: Forward::Srgb, reverse: Reverse::Srgb });
+        }
+        Ok(managed)
+    }
+
+    /// Whether the forward transform leaves every sample within one code of
+    /// where it was, at the page's depth: an sRGB profile, embedded or built
+    /// from the PNG's `sRGB` chunk. A real sRGB ICC misses the built-in one by
+    /// up to half an 8-bit code at the saturated primaries, from the profile's
+    /// own fixed-point rounding, and by far less on grays. Checked on a
+    /// 17-step grid of every channel and every 8-bit gray, once per profile.
+    fn is_identity(&self, mode: ColorMode, depth: super::BitDepth) -> bool {
+        if !matches!(self.forward, Forward::Gray(_) | Forward::Rgb(_)) {
+            return false;
+        }
+        // One code at the page's depth, but never coarser than 8-bit: a 1-bit
+        // page's whole range is one code, and a profile on it still matters.
+        let tolerance = 1.0 / ((1u32 << depth.bits().max(8)) - 1) as f32;
+        let close = |input: [f32; 3]| {
+            let out = self.to_srgb([input[0], input[1], input[2], 0.0]);
+            out.iter().zip(input).all(|(a, b)| (a - b).abs() <= tolerance)
+        };
+        let grays = (0..=255).map(|code| code as f32 / 255.0).all(|v| close([v, v, v]));
+        if matches!(mode, ColorMode::Gray | ColorMode::GrayAlpha) {
+            return grays;
+        }
+        let steps: Vec<f32> = (0..=16).map(|i| i as f32 / 16.0).collect();
+        grays && steps.iter().all(|&r| steps.iter().all(|&g| steps.iter().all(|&b| close([r, g, b]))))
     }
     /// Normalized native channels -> encoded sRGB, retaining source precision.
     pub fn to_srgb(&self, v: [f32; 4]) -> [f32; 3] {
@@ -526,6 +557,25 @@ mod tests {
             .to_string()
             .contains("HDR"));
     }
+    /// A page declared sRGB skips LCMS; a page declared otherwise does not.
+    #[test]
+    fn an_srgb_declaration_takes_the_identity_path() {
+        let mut page = fixtures::by_name("rgb8").raster;
+        page.icc = None;
+        page.srgb_intent = Some(0);
+        assert!(matches!(ManagedColor::for_raster(&page).unwrap().forward, Forward::Srgb));
+        page.srgb_intent = None;
+        page.color.gamma = Some(100_000);
+        assert!(matches!(ManagedColor::for_raster(&page).unwrap().forward, Forward::Rgb(_)));
+
+        // A 1-bit page is one code wide; its gamma still has to be honoured.
+        let mut bitonal = fixtures::by_name("bitonal").raster;
+        bitonal.icc = None;
+        bitonal.srgb_intent = None;
+        bitonal.color.gamma = Some(100_000);
+        assert!(matches!(ManagedColor::for_raster(&bitonal).unwrap().forward, Forward::Gray(_)));
+    }
+
     #[test]
     fn cache_is_bounded_and_reuses_identical_interpretations() {
         let mut source = fixtures::by_name("rgb8").raster;

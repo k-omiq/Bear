@@ -1,5 +1,5 @@
 /**
- * Where Settings opens: the seven sections, the ids callers used before the
+ * Where Settings opens: the eight sections, the ids callers used before the
  * restructure, and the anchor a missing-model notice sends the reader to.
  * The mounted half, focus landing on the anchor, is in
  * `SettingsDialog.tabs.dom.test.js`.
@@ -13,8 +13,8 @@ import { SETTINGS_SECTIONS, openModelSettings, openSettings, resolveSettingsLink
 vi.mock('../state/app.svelte.js', () => ({ pushModal: vi.fn() }))
 
 describe('the section a request resolves to', () => {
-  it('offers seven sections, in the sidebar’s order', () => {
-    expect(SETTINGS_SECTIONS).toEqual(['general', 'models', 'cloud', 'denoise', 'performance', 'shortcuts', 'about'])
+  it('offers eight sections, in the sidebar’s order', () => {
+    expect(SETTINGS_SECTIONS).toEqual(['general', 'models', 'cloud', 'denoise', 'export', 'performance', 'shortcuts', 'about'])
     for (const id of SETTINGS_SECTIONS) expect(resolveSettingsLink(id)).toEqual({ section: id, anchor: null })
   })
 

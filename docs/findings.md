@@ -453,9 +453,12 @@ Windows or Linux, and a one-machine number is never written as though it were ge
   that is not Photoshop would not have caught either: a 16-bit document keeps its layer records
   under the `Lr16` additional-info block with the standard layer info empty, and CMYK is stored
   inverted. An independent reader opens every fixture the writer produces, layered and flat, at 8
-  and 16 bits, with the mode, depth, layer tree, layer masks and merged pixels expected. The files
-  are larger than Photoshop's own, roughly the uncompressed page per layer, which is the price of
-  the property that makes every length computable.
+  and 16 bits, with the mode, depth, layer tree, layer masks and merged pixels expected. Raw
+  channels made a layered page 10 to 25 MB on real chapters, so since 2026-10-26 8-bit channels
+  are PackBits RLE, as Photoshop writes them: each channel is packed once to measure it and again
+  to write it, so lengths are still known before the first byte and no more than one packed
+  channel is held. On real pages that is a quarter to three quarters of the raw size, least on
+  noisy JPEG scans. 16-bit channels stay raw.
 - **The mask file is made of the ink, not of what an engine painted.** The union of each patch's
   ink mask, the lettering the edit removed, rather than the union of the applied masks: on a flat
   fill the applied mask is the whole grown balloon, and a file made of those is a page of white
@@ -685,6 +688,59 @@ Windows or Linux, and a one-machine number is never written as though it were ge
   beside every Windows and Linux x64 runtime.
 
 ## What has not been measured
+
+**Grayscale export of gray RGB pages (2026-10-26): checked by tests and by a headless export of
+real chapters, not in the built app.** Import keeps every page's own type. A Python tally of the
+real library found 722 pages that look gray but are stored as RGB or RGBA and 35 stored as gray;
+it averaged 2x2 blocks first, so it overcounts. Export now offers "Gray pages as grayscale"
+(`grayscale` on the seam, `export::Tone`); the default keeps the source's type. A headless export
+of copies of three real chapters (debug build) gave: a cleaned RGB PNG chapter (24 pages) went all
+gray, PNG 68.5 to 30.0 MB, TIFF 169 to 56 MB, PSD 200 to 67 MB; a cleaned opaque RGBA chapter (28
+pages) went all gray with alpha, PNG 36.8 to 31.0 MB, TIFF 186 to 93 MB, PSD 178 to 60 MB; an
+untouched RGB JPEG longstrip (66 pages) had only 2 pages gray to the level per pixel, so its
+stitched file stayed RGB. A bug sweep (one Opus reviewer, three Gemini reviewers) then fixed: a
+flattened PSD kept RGB when only covered pixels of the original had colour; colour a region layer
+hides outside its mask kept a layered PSD RGB; an untouched page the choice converted was planned as
+a copy with no notes, then written with lost metadata (now planned and written the same way); a
+`gAMA` page lost its gamma and moved levels; a stitched plan left out the grayscale notes; a TIFF's
+resolution was lost on every re-encode, not only here, and is now carried both ways through `pHYs`;
+and a stitch refused for a differing colour description said "profile". Known gaps: an all-opaque
+alpha channel is kept, which is most of why the RGBA chapter's PNG shrank only 16%; an untouched RGB
+JPEG in a CBZ is copied as RGB; a stitched grayscale export decodes and composites every page once
+more to decide; a page with a `tRNS` colour key or associated alpha stays RGB; a TIFF resolution
+with no unit is dropped, and PSD writes no resolution at all. Not measured again on the real
+chapters after the fixes; the unit tests cover each one.
+
+**Settings > Export PSD choices (2026-10-26): checked by tests, psd-tools and 9 real pages, not
+in Photoshop or the built app.** Uncompressed channels and the hidden Lettering layer were written
+for 9 real cleaned pages of two chapters (45 files) and read back with psd-tools: raw and RLE
+files hold the same pixels, raw is 1.29 to 1.79 times larger, and the Lettering layer's
+transparency equals the mask file exactly while the merged image is unchanged. Not covered: a
+text-shaped patch (none in the library), a gray, 16-bit or EXIF-rotated page with the Lettering
+layer, and any reader other than psd-tools. Known gaps from the bug sweep, left as they are: a 16-bit
+page with an embedded sRGB profile misses the sRGB identity shortcut (one 16-bit code is tighter
+than the profile's own rounding), so it stays on the slower per-pixel transform; and display tiles
+in the chapter folder are stored by page position, so reordering pages draws them again.
+
+**Hand pan and mouse wheel zoom (2026-10-26): checked by tests and in the Vite mock, not in the
+built app.** Space held with a left drag, a middle button drag, and (with the Mouse preset) a left
+drag on empty canvas all move the canvas; a plain wheel zooms in Zoom mode. Not tried: the middle
+button in a real WKWebView or WebView2, where Windows autoscroll and Linux paste are refused by
+`preventDefault` on `mousedown` and `auxclick` and nothing has confirmed that holds; and Space over a
+clicked toolbar button in WebView2, which relies on `:focus-visible` to tell a click from the
+keyboard. A trackpad cannot be told from a mouse, so the Zoom wheel also turns a two-finger scroll
+into a zoom; the sheet says so.
+
+**Export and page display speed (2026-10-26): checked by tests and timed on real library pages,
+not in the running app.** The export plan now reads page headers and the manifest only; before, it
+encoded every page into nothing on each option change, and export did it twice more. A page that
+decodes badly past its header is now caught by the real write, which publishes nothing. Export can
+take one page (`pages`). Page tiles are stored in `<chapter>.mtclean.d/display-v1/`, at most two
+sets per page (source and latest cleaned), about 0.5 to 1.5 MB a set at default PNG compression;
+nothing prunes a whole chapter's store, and deleting the chapter removes it. A page whose profile
+is within one code of sRGB (469 real JPEGs carry an "sRGB" ICC) skips LCMS: 1008x1433 went from
+344 ms to 74 ms for its tiles. Other profiles, such as Display P3, still call LCMS once per pixel;
+batching a row per call is not done. Gray pages are still stored as RGB tiles.
 
 **Detection modes and the SAM-TS-L memory warning (2026-10-25): checked by tests, not by a real
 low-memory run.** The 10 GB room check on the lettering mask is now a warning, never a refusal: a run

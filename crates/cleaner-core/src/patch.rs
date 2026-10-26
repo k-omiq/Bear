@@ -238,6 +238,17 @@ pub struct Patch {
 }
 
 impl Patch {
+    /// Where the lettering was, as an export marks it: the mask file beside a
+    /// page and a PSD's Lettering layer. [`Patch::ink`] for most patches; a
+    /// text-shaped one marks the exact write support its preview showed.
+    pub fn lettering(&self) -> &Mask {
+        if self.provenance.params_snapshot.get("geometry_policy").and_then(|v| v.as_str()) == Some("text_shape") {
+            &self.mask
+        } else {
+            &self.ink
+        }
+    }
+
     /// Whether the patch's pixel buffer actually covers its mask.
     pub fn is_well_formed(&self) -> bool {
         self.pixels.width == self.mask.bounds.w && self.pixels.height == self.mask.bounds.h

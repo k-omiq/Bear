@@ -884,9 +884,26 @@ export const es = {
       shortcuts: 'Atajos',
       about: 'Acerca de',
       denoise: 'Reducción de ruido',
+      export: 'Exportar',
     },
     tabs: {
       label: 'Secciones de ajustes',
+    },
+    export: {
+      psd: 'Archivos PSD',
+      compression: {
+        label: 'Datos de canal',
+        description: 'Los archivos comprimidos ocupan menos. Los archivos sin comprimir se abren en más aplicaciones. Las páginas de 16 bits nunca se comprimen.',
+        rle: 'Comprimido',
+        raw: 'Sin comprimir',
+      },
+      lettering: {
+        label: 'Capa de rotulación',
+        description: 'Añade una capa superior oculta que marca dónde estaba el texto. Muéstrala en tu editor para revisar la limpieza.',
+      },
+      general: 'Todas las exportaciones',
+      toneDescription: 'La opción con la que empieza el diálogo Exportar. Una página toda gris puede guardarse en escala de grises; las páginas con color siguen en color.',
+      saveFailed: 'No se pudo guardar el ajuste. Inténtalo de nuevo.',
     },
     denoise: {
       intro: 'La reducción de ruido quita el grano del escaneo y el ruido JPEG de páginas completas y las guarda como archivos nuevos. Ejecútala desde el menú de un capítulo.',
@@ -929,11 +946,20 @@ export const es = {
       tiff: 'TIFF',
       psd: 'PSD',
       cbz: 'CBZ',
+      pngHint: 'Sin pérdida, se abre en todas partes',
+      tiffHint: 'Sin pérdida, para imprenta',
+      psdHint: 'Capas para Photoshop',
+      cbzHint: 'Un archivo para lectores',
     },
     layout: {
       label: 'Disposición',
       perPage: 'Un archivo por página',
       stitched: 'Un archivo para el capítulo',
+    },
+    pages: {
+      label: 'Páginas',
+      chapter: 'Capítulo entero',
+      current: 'Esta página ({page})',
     },
     destination: {
       label: 'Destino',
@@ -949,8 +975,22 @@ export const es = {
       flattened: 'Acopladas',
       separateLayer: 'Capa separada',
     },
+    tone: {
+      label: 'Color',
+      source: 'Mantener original',
+      grayscale: 'Páginas grises en escala de grises',
+      sourceDescription: 'Cada página conserva su tipo de color. Una página gris guardada como RGB sigue siendo RGB.',
+      grayscaleDescription: 'Una página toda gris se guarda en escala de grises. Las páginas con algo de color siguen en color.',
+    },
+    summary: {
+      label: 'Resumen de exportación',
+      files: {
+        one: '1 archivo {formats}',
+        other: '{count} archivos {formats}',
+      },
+      masks: { one: 'Más 1 archivo de máscara PNG', other: 'Más {count} archivos de máscara PNG' },
+    },
     note: {
-      actualFormats: "Archivos de salida: {formats}.",
       gutter: {
         zero: 'Todas las páginas tienen el ancho completo del capítulo, así que el archivo único no inventa ningún píxel.',
         one: 'Se escribirá 1 píxel de blanco papel junto a las páginas más estrechas. Ningún archivo de origen tiene un píxel ahí.',
@@ -2314,6 +2354,21 @@ export const es = {
       app: 'Aplicación',
       pointer: 'Puntero',
     },
+    navigation: {
+      preset: 'Mover el lienzo',
+      trackpad: 'Trackpad',
+      mouse: 'Ratón',
+      custom: 'Personalizado',
+      wheel: 'Rueda del ratón',
+      scroll: 'Desplazar',
+      zoom: 'Zoom',
+      middle: 'Arrastrar con el botón central',
+      empty: 'Arrastrar en un área vacía',
+      pan: 'Mover',
+      off: 'No',
+      hintScroll: 'La rueda desplaza, y hace zoom con {accel} pulsado.',
+      hintZoom: 'La rueda hace zoom, y desplaza con Mayús o {alt} pulsado. El desplazamiento del trackpad también hace zoom.',
+    },
     rebind: {
       change: 'Cambiar el atajo de {name}',
       reset: 'Restablecer {name} a su valor predeterminado',
@@ -2388,6 +2443,7 @@ export const es = {
       right: 'Página a la derecha',
       first: 'Primera página',
       last: 'Última página',
+      holdPan: 'Mantén y arrastra para mover el lienzo',
     },
     review: {
       next: 'Siguiente región por revisar',
@@ -2690,6 +2746,7 @@ export const es = {
       refusedLayeredFormat: 'Esta versión no escribe {format}. No se escribió nada. Exporta en PSD, que lleva las mismas capas para páginas de hasta 30 000 píxeles por lado.',
       refusedUnknownFormat: 'Esta versión no puede escribir {format}. No se escribió nada. Los formatos que puede escribir son PNG, TIFF, PSD y CBZ.',
       refusedMaskLayers: 'Un CBZ se lee página por página, así que un archivo de máscara dentro de él aparecería como una página. No se escribió nada. Exporta en PNG o TIFF para tener un archivo de máscara junto a cada página, o en PSD para tener una máscara de capa en cada región.',
+      refusedPageSelection: 'Elige páginas que estén en este capítulo. Un archivo para el capítulo entero siempre contiene todas las páginas. No se escribió nada.',
       refusedStitchedLayered: 'Un PSD guarda una página entera como su fondo, y esta versión nunca guarda el capítulo entero como una sola imagen. No se escribió nada. Exporta en PSD por página, o en un único PNG o TIFF para el capítulo.',
       refusedLayeredMode: 'PSD no admite una página en color indexado ni una de menos de 8 bits, y convertirla cambiaría píxeles que no pediste cambiar. No se escribió nada. Exporta en PNG, que las conserva tal como están.',
       refusedLayeredSize: 'Una página aquí supera los 30 000 píxeles por lado, más de lo que admite un PSD. No se escribió nada. Exporta en PNG o TIFF, que no tienen ese límite.',
@@ -2704,6 +2761,7 @@ export const es = {
         mixedMode: 'Estas páginas no están todas en el mismo modo de color, y un archivo tiene un solo modo de color. No se escribió nada. Convertirlas cambiaría píxeles que no pediste cambiar. Exporta por página.',
         mixedDepth: 'Estas páginas no tienen todas la misma profundidad de bits, y un archivo tiene una sola profundidad de bits. No se escribió nada. Exporta por página.',
         mixedProfile: 'Estas páginas no llevan todas el mismo perfil de color, y un archivo tiene un solo perfil. No se escribió nada. Exporta por página.',
+        mixedDescription: 'Estas páginas no describen todas su color o su transparencia de la misma forma, y un archivo tiene una sola descripción. No se escribió nada. Exporta por página.',
         indexed: 'Estas páginas usan color indexado, y un único archivo necesitaría una sola paleta para todas. No se escribió nada. Unificar las paletas alteraría los colores, así que exporta por página.',
       },
     },

@@ -54,7 +54,7 @@ use crate::strip::Strip;
 
 use super::rows::{Canvas, write_rows};
 use super::split::{StripPatch, patches_on_page};
-use super::{Declaration, ExportError, Target};
+use super::{Declaration, ExportError, Target, Tone};
 
 /// Where the writer gets pages from.
 ///
@@ -112,7 +112,7 @@ impl StitchRefusal {
             StitchRefusal::MixedMode { .. } => "notice.export.stitchRefused.mixedMode",
             StitchRefusal::MixedDepth { .. } => "notice.export.stitchRefused.mixedDepth",
             StitchRefusal::MixedProfile { .. } => "notice.export.stitchRefused.mixedProfile",
-            StitchRefusal::MixedDescription { .. } => "notice.export.stitchRefused.mixedProfile",
+            StitchRefusal::MixedDescription { .. } => "notice.export.stitchRefused.mixedDescription",
             StitchRefusal::Indexed => "notice.export.stitchRefused.indexed",
         }
     }
@@ -137,14 +137,94 @@ pub struct Stitched {
 /// taken from it by [`patches_on_page`] - the same intersection the per-page
 /// path uses, so a patch spanning a join lands in the stitched file exactly
 /// where it lands in the two per-page files.
+///
+/// One file has one mode, so [`Tone::Grayscale`] writes the strip as
+/// grayscale only when every cleaned page is grey. Finding that out decodes
+/// every page once more before the header, one page at a time.
 pub fn export_stitched<W: Write + Seek>(
     strip: &Strip,
     global: &[StripPatch],
     pages: &mut dyn PageSource,
     target: Target,
+    tone: Tone,
     sink: &mut W,
 ) -> Result<Stitched, ExportError> {
     let placements = strip.pages().to_vec();
+    let StitchPlan { first, format, declared, .. } = plan_stitched(strip, pages, target, !global.is_empty(), tone)?;
+    let mut tone = if tone.may_convert(first.mode) { tone } else { Tone::Source };
+    for position in 0..placements.len() {
+        if tone == Tone::Source {
+            break;
+        }
+        if tone.apply(&Resident::load(strip, global, pages, position, Tone::Source)?.page).is_none() {
+            tone = Tone::Source;
+        }
+    }
+    // Page 0 is decoded before the header is written, for the one piece of
+    // metadata a header read does not carry: the `sRGB` rendering intent. It is
+    // also the page the first rows need, so nothing is decoded twice.
+    let mut resident = Resident::load(strip, global, pages, 0, tone)?;
+
+    let canvas = if tone == Tone::Source {
+        Canvas {
+            width: strip.width(),
+            height: strip.height(),
+            mode: first.mode,
+            depth: first.depth,
+            icc: first.icc.clone(),
+            palette: None,
+            trns: first.trns.clone(),
+            srgb_intent: resident.page.srgb_intent,
+            color: if global.is_empty() && strip.pages().len() == 1 { first.color.clone() } else { first.color.after_edit() },
+        }
+    } else {
+        // The grayscale page carries its own description, the same for every
+        // page because every page had the same one.
+        Canvas { width: strip.width(), height: strip.height(), ..Canvas::of(&resident.page) }
+    };
+
+    let blank = blank_row(&canvas);
+    let mut gutter_pixels = 0u64;
+
+    write_rows(sink, &canvas, format, &mut |y, row| {
+        let position = strip.page_at(y as i64).expect("a strip row belongs to a page");
+        if position != resident.position {
+            resident = Resident::load(strip, global, pages, position, tone)?;
+        }
+        let placement = placements[position];
+        gutter_pixels += (canvas.width - placement.width) as u64;
+        fill_row(row, &blank, &resident.page, placement.rect(), y);
+        Ok(())
+    })?;
+
+    Ok(Stitched {
+        format,
+        width: canvas.width,
+        height: canvas.height,
+        gutter_pixels,
+        declared,
+    })
+}
+
+/// What a stitched export will write, from page headers alone.
+#[derive(Debug, Clone)]
+pub struct StitchPlan {
+    pub first: Header,
+    pub format: Format,
+    pub declared: Vec<Declaration>,
+    pub gutter_pixels: u64,
+}
+
+/// Every refusal and declaration [`export_stitched`] makes, without decoding a
+/// page. `applied` is whether any patch reaches the strip.
+pub fn plan_stitched(
+    strip: &Strip,
+    pages: &mut dyn PageSource,
+    target: Target,
+    applied: bool,
+    tone: Tone,
+) -> Result<StitchPlan, ExportError> {
+    let placements = strip.pages();
     if placements.is_empty() {
         return Err(StitchRefusal::NoPages.into());
     }
@@ -181,61 +261,14 @@ pub fn export_stitched<W: Write + Seek>(
     }
 
     crate::image::metadata::validate_profile(first.icc.as_deref(), first.mode)?;
-    // Page 0 is decoded before the header is written, for the one piece of
-    // metadata a header read does not carry: the `sRGB` rendering intent. It is
-    // also the page the first rows need, so nothing is decoded twice.
-    let mut resident = Resident::load(strip, global, pages, 0)?;
-
-    let canvas = Canvas {
-        width: strip.width(),
-        height: strip.height(),
-        mode: first.mode,
-        depth: first.depth,
-        icc: first.icc.clone(),
-        palette: None,
-        trns: first.trns.clone(),
-        srgb_intent: resident.page.srgb_intent,
-        color: if global.is_empty() && strip.pages().len() == 1 { first.color.clone() } else { first.color.after_edit() },
-    };
-
     let (format, mut declared) = decide_stitched(&first, target);
-    declared.extend(super::metadata_declarations(&first, !global.is_empty() || strip.pages().len() > 1, format == Format::Tiff));
-
-    let blank = blank_row(&canvas);
-    let mut gutter_pixels = 0u64;
-
-    write_rows(sink, &canvas, format, &mut |y, row| {
-        let position = strip.page_at(y as i64).expect("a strip row belongs to a page");
-        if position != resident.position {
-            resident = Resident::load(strip, global, pages, position)?;
-        }
-        let placement = placements[position];
-        gutter_pixels += (canvas.width - placement.width) as u64;
-        fill_row(row, &blank, &resident.page, placement.rect(), y);
-        Ok(())
-    })?;
-
-    Ok(Stitched {
-        format,
-        width: canvas.width,
-        height: canvas.height,
-        gutter_pixels,
-        declared,
-    })
-}
-
-/// **Which format a stitched export will produce, without producing it.**
-///
-/// The per-page sibling of this is [`super::planned_format`], and it exists for
-/// the same reason: a caller writing to a file has to name the file - extension
-/// and all - before it opens it, and predicting the answer with a second copy
-/// of the rule is how the two start to disagree. `export_stitched` calls this
-/// rather than deciding again, so the prediction is not a prediction.
-///
-/// `first` is page 0's header, which is also the strip's: every other page has
-/// already been refused if it disagrees.
-pub fn planned_stitched_format(first: &Header, target: Target) -> Format {
-    decide_stitched(first, target).0
+    declared.extend(super::metadata_declarations(&first, applied || placements.len() > 1, super::Writer::of(format)));
+    if tone == Tone::Grayscale {
+        declared.extend(super::gray::declarations(&first));
+    }
+    let width = u64::from(strip.width());
+    let gutter_pixels = placements.iter().map(|p| (width - u64::from(p.width)) * u64::from(p.height)).sum();
+    Ok(StitchPlan { first, format, declared, gutter_pixels })
 }
 
 /// "Same as source" has no single source file here, so it means the format that
@@ -264,10 +297,18 @@ impl Resident {
         global: &[StripPatch],
         pages: &mut dyn PageSource,
         position: usize,
+        tone: Tone,
     ) -> Result<Resident, ExportError> {
         let page = pages.page(position)?;
         let patches = patches_on_page(strip, position, global);
-        Ok(Resident { position, page: composite(&page, &patches)? })
+        let page = composite(&page, &patches)?;
+        let page = match tone {
+            Tone::Source => page,
+            Tone::Grayscale => tone.apply(&page).ok_or_else(|| {
+                ExportError::Sink(format!("page {} changed while the strip was written", position + 1))
+            })?,
+        };
+        Ok(Resident { position, page })
     }
 }
 
@@ -374,6 +415,59 @@ mod tests {
             .collect()
     }
 
+    /// Three grey pages stored as RGB, one channel's values copied to all.
+    fn grey_pages() -> Vec<Raster> {
+        let mut pages = three_pages("rgb8");
+        for page in &mut pages {
+            for y in 0..page.height {
+                for x in 0..page.width {
+                    let v = page.sample(x, y, 0);
+                    page.set_sample(x, y, 1, v);
+                    page.set_sample(x, y, 2, v);
+                }
+            }
+        }
+        pages
+    }
+
+    #[test]
+    fn a_grey_strip_is_written_gray_only_when_every_page_is_grey() {
+        let pages = grey_pages();
+        let strip = strip_of(&pages);
+        let mut source = InMemory::new(pages.clone());
+        let mut out = std::io::Cursor::new(Vec::new());
+        export_stitched(&strip, &[], &mut source, Target::SameAsSource, Tone::Grayscale, &mut out).unwrap();
+        let back = decode(&out.into_inner()).unwrap();
+        assert_eq!(back.mode, ColorMode::Gray);
+        for (position, page) in pages.iter().enumerate() {
+            let top = strip.pages()[position].y_offset as u32;
+            for x in 0..page.width {
+                assert_eq!(back.sample(x, top, 0), page.sample(x, 0, 0));
+            }
+        }
+
+        let mut mixed = grey_pages();
+        mixed[2].set_sample(3, 3, 0, 200);
+        mixed[2].set_sample(3, 3, 1, 10);
+        let mut source = InMemory::new(mixed.clone());
+        let mut out = std::io::Cursor::new(Vec::new());
+        export_stitched(&strip_of(&mixed), &[], &mut source, Target::SameAsSource, Tone::Grayscale, &mut out).unwrap();
+        assert_eq!(decode(&out.into_inner()).unwrap().mode, ColorMode::Rgb, "one colour page keeps the strip RGB");
+
+        let mut marked = grey_pages();
+        marked[0].color.significant_bits = Some(vec![8, 8, 8]);
+        for page in &mut marked[1..] {
+            page.color.significant_bits = Some(vec![8, 8, 8]);
+        }
+        let strip = strip_of(&marked);
+        let mut source = InMemory::new(marked);
+        let plan = plan_stitched(&strip, &mut source, Target::SameAsSource, false, Tone::Grayscale).unwrap();
+        let mut out = std::io::Cursor::new(Vec::new());
+        let written = export_stitched(&strip, &[], &mut source, Target::SameAsSource, Tone::Grayscale, &mut out).unwrap();
+        assert_eq!(written.declared, plan.declared);
+        assert!(plan.declared.iter().any(|d| matches!(d, Declaration::MetadataNormalized { reason, .. } if reason.starts_with("if the page is gray"))));
+    }
+
     #[test]
     fn unedited_stitch_drops_page_local_precision_and_luminance_summaries() {
         let mut pages = three_pages("l8");
@@ -383,7 +477,7 @@ mod tests {
         let strip = strip_of(&pages);
         let mut source = InMemory::new(pages);
         let mut out = std::io::Cursor::new(Vec::new());
-        let result = export_stitched(&strip, &[], &mut source, Target::SameAsSource, &mut out).unwrap();
+        let result = export_stitched(&strip, &[], &mut source, Target::SameAsSource, Tone::Source, &mut out).unwrap();
         for expected in ["sBIT", "cLLI"] {
             assert!(result.declared.iter().any(|value| matches!(value, Declaration::MetadataNormalized { field, .. } if field == expected)));
         }
@@ -404,7 +498,7 @@ mod tests {
         let mut out = std::io::Cursor::new(Vec::new());
 
         let stitched =
-            export_stitched(&strip, &[], &mut source, Target::SameAsSource, &mut out).unwrap();
+            export_stitched(&strip, &[], &mut source, Target::SameAsSource, Tone::Source, &mut out).unwrap();
         assert_eq!(stitched.format, Format::Png);
         assert_eq!((stitched.width, stitched.height), (strip.width(), strip.height()));
         assert_eq!(stitched.gutter_pixels, 0, "three pages of equal width have no gutter");
@@ -438,7 +532,7 @@ mod tests {
         let mut source = InMemory::new(pages);
         let mut out = std::io::Cursor::new(Vec::new());
 
-        export_stitched(&strip, &[], &mut source, Target::SameAsSource, &mut out).unwrap();
+        export_stitched(&strip, &[], &mut source, Target::SameAsSource, Tone::Source, &mut out).unwrap();
         assert_eq!(source.decoded, 3, "a page was decoded more than once");
     }
 
@@ -459,7 +553,7 @@ mod tests {
         let mut source = InMemory::new(pages.clone());
         let mut out = std::io::Cursor::new(Vec::new());
         let stitched =
-            export_stitched(&strip, &[], &mut source, Target::SameAsSource, &mut out).unwrap();
+            export_stitched(&strip, &[], &mut source, Target::SameAsSource, Tone::Source, &mut out).unwrap();
         assert_eq!(stitched.gutter_pixels, (64 - 40) * u64::from(pages[1].height));
 
         let back = decode(&out.into_inner()).unwrap();
@@ -482,7 +576,7 @@ mod tests {
         let mut source = InMemory::new(pages);
         let mut out = std::io::Cursor::new(Vec::new());
         let stitched =
-            export_stitched(&strip, &[], &mut source, Target::SameAsSource, &mut out).unwrap();
+            export_stitched(&strip, &[], &mut source, Target::SameAsSource, Tone::Source, &mut out).unwrap();
         assert_eq!(stitched.format, Format::Tiff);
 
         let back = decode(&out.into_inner()).unwrap();
@@ -501,7 +595,7 @@ mod tests {
         let strip = strip_of(&pages);
         let mut source = InMemory::new(pages);
         let mut out = std::io::Cursor::new(Vec::new());
-        let error = export_stitched(&strip, &[], &mut source, Target::SameAsSource, &mut out)
+        let error = export_stitched(&strip, &[], &mut source, Target::SameAsSource, Tone::Source, &mut out)
             .expect_err("a mixed strip was stitched");
         assert!(out.into_inner().is_empty(), "a refused stitch wrote bytes");
         assert_eq!(source.decoded, 0, "a refused stitch decoded a page");
@@ -546,6 +640,7 @@ mod tests {
             .reason_key(),
             StitchRefusal::MixedDepth { position: 1, first: 8, found: 16 }.reason_key(),
             StitchRefusal::MixedProfile { position: 1 }.reason_key(),
+            StitchRefusal::MixedDescription { position: 1 }.reason_key(),
             StitchRefusal::Indexed.reason_key(),
         ];
         let mut unique = keys.to_vec();
@@ -564,7 +659,7 @@ mod tests {
         let mut source = InMemory::new(pages);
         let mut out = std::io::Cursor::new(Vec::new());
         assert!(matches!(
-            export_stitched(&strip, &[], &mut source, Target::SameAsSource, &mut out),
+            export_stitched(&strip, &[], &mut source, Target::SameAsSource, Tone::Source, &mut out),
             Err(ExportError::NotStitchable(StitchRefusal::Indexed))
         ));
 
@@ -575,6 +670,7 @@ mod tests {
                 &[],
                 &mut empty,
                 Target::SameAsSource,
+                Tone::Source,
                 &mut std::io::Cursor::new(Vec::new())
             ),
             Err(ExportError::NotStitchable(StitchRefusal::NoPages))
@@ -590,7 +686,7 @@ mod tests {
         let mut source = InMemory::new(pages.clone());
         let mut out = std::io::Cursor::new(Vec::new());
 
-        export_stitched(&strip, &[], &mut source, Target::SameAsSource, &mut out).unwrap();
+        export_stitched(&strip, &[], &mut source, Target::SameAsSource, Tone::Source, &mut out).unwrap();
         let back = decode(&out.into_inner()).unwrap();
         assert_eq!(back.depth, BitDepth::One);
         for y in 0..pages[0].height {

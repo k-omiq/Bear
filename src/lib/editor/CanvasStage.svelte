@@ -34,6 +34,9 @@
     stripWindow,
     visibleIndices,
   } from './strip.js'
+  import { panStart, wheelZooms } from './navigation.js'
+  import { TAP_SLOP } from './gesture.js'
+  import { session } from '../state/session.svelte.js'
   import { Empty } from '../ui/index.js'
   import { t } from '../i18n/index.js'
   import PageSheet from './PageSheet.svelte'
@@ -55,7 +58,11 @@
    *   on, the computed scale goes to `editor.fitScale` through
    *   `reportFitScale` and `displayZoom()` answers for both cases.
    * - **Pinch and modifier-scroll**, anchored under the pointer. A plain wheel
-   *   is left alone and keeps scrolling.
+   *   is left alone and keeps scrolling, unless the user has the wheel zoom
+   *   (`session.navigation`, `navigation.js#wheelZooms`).
+   * - **The hand.** A drag that pans: with the middle button, with the left
+   *   one while the pan key is held, or on empty canvas, as the user has
+   *   chosen (`navigation.js#panStart`).
    * - **The longstrip column**: a virtual window over the pages, the position
    *   readout following the viewport's centre, and the scroll request
    *   `goToPage` leaves for it.
@@ -417,7 +424,8 @@
 
   /**
    * A `wheel` with `ctrlKey` is both a trackpad pinch and a Ctrl/⌘-scroll, and
-   * both mean zoom. Anything else is a scroll and is left alone - which is why
+   * both mean zoom; with the wheel set to zoom, so does a plain turn
+   * (`wheelZooms`). Anything else is a scroll and is left alone - which is why
    * `preventDefault` is on the zooming path only, and why the listener is
    * registered `{ passive: false }` (a passive listener may not prevent).
    *
@@ -433,7 +441,7 @@
    * @param {WheelEvent} event
    */
   function onwheel(event) {
-    if (!event.ctrlKey && !event.metaKey) return
+    if (!wheelZooms(event, session.navigation)) return
     event.preventDefault()
     if (!scroller() || !stageEl) return
 
@@ -484,12 +492,135 @@
     readScroll()
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Pan                                                               */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * The drag in progress: the pointer, where it went down, and where the
+   * scroller was then. The scroller follows the pointer one for one, so the
+   * point grabbed stays under it.
+   *
+   * `grab` says the press was taken from the control under it: the click that
+   * follows the release is the pan's too, or Space and a click on a region
+   * would select it. A pan on empty canvas gives its click back unless it
+   * moved, so a click there still clears the selection.
+   *
+   * @type {{pointerId: number, x: number, y: number, left: number, top: number, grab: boolean, moved: boolean}|null}
+   */
+  let pan = $state(null)
+  let swallowClick = false
+
+  /**
+   * Two listeners, one decision. The middle button and the held pan key take
+   * the press in the **capture** phase, before the drawing surface or a
+   * region under the pointer can start a stroke or a move with it. A drag on
+   * empty canvas is asked in the bubble phase instead: it pans only where
+   * nothing under the pointer is a control (`panStart`), and a control that
+   * took the press has said so by then.
+   *
+   * @param {PointerEvent} event
+   */
+  function onpancapture(event) {
+    // A click follows its own release before any other press, so a press
+    // means the last pan's click, if it was ever coming, has been and gone.
+    swallowClick = false
+    if (panStart(event, { navigation: session.navigation, held: editor.panHeld }) !== 'grab') return
+    event.preventDefault()
+    event.stopPropagation()
+    beginPan(event, true)
+  }
+
+  /** @param {PointerEvent} event */
+  function onpanbubble(event) {
+    if (pan || event.defaultPrevented) return
+    if (panStart(event, { navigation: session.navigation, held: false }) === 'empty') beginPan(event, false)
+  }
+
+  /**
+   * @param {PointerEvent} event
+   * @param {boolean} grab
+   */
+  function beginPan(event, grab) {
+    const box = scroller()
+    if (!box) return
+    pan = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: box.scrollLeft, top: box.scrollTop, grab, moved: false }
+    box.setPointerCapture?.(event.pointerId)
+  }
+
+  /** @param {PointerEvent} event */
+  function onpanmove(event) {
+    const box = scroller()
+    if (!pan || event.pointerId !== pan.pointerId || !box) return
+    const dx = event.clientX - pan.x
+    const dy = event.clientY - pan.y
+    if (Math.hypot(dx, dy) > TAP_SLOP) pan.moved = true
+    box.scrollLeft = pan.left - dx
+    box.scrollTop = pan.top - dy
+  }
+
+  /** @param {PointerEvent} event */
+  function onpanend(event) {
+    if (pan?.pointerId !== event.pointerId) return
+    // Only the left button clicks; the middle one's `auxclick` is `onmiddle`'s.
+    swallowClick = event.button === 0 && (pan.grab || pan.moved)
+    pan = null
+  }
+
+  /** @param {MouseEvent} event */
+  function onpanclick(event) {
+    if (!swallowClick) return
+    swallowClick = false
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  /**
+   * A middle press that is not stopped scrolls by itself on Windows and
+   * pastes on Linux. Both are the press's default, so it is refused whenever
+   * the middle button pans.
+   *
+   * @param {MouseEvent} event
+   */
+  function onmiddle(event) {
+    if (event.button === 1 && session.navigation.middlePan) event.preventDefault()
+  }
+
+  // The cursor says the hand is there: open while the key is held, closed
+  // while dragging. On the scroller, which every layer of the page sits in.
+  $effect(() => {
+    const box = scroller()
+    if (!box) return
+    const state = pan ? 'grabbing' : editor.panHeld ? 'grab' : ''
+    if (state) box.dataset.pan = state
+    else delete box.dataset.pan
+  })
+
   $effect(() => {
     const box = scroller()
     if (!box) return
     box.addEventListener('wheel', onwheel, { passive: false })
+    box.addEventListener('pointerdown', onpancapture, { capture: true })
+    box.addEventListener('pointerdown', onpanbubble)
+    box.addEventListener('pointermove', onpanmove)
+    box.addEventListener('pointerup', onpanend)
+    box.addEventListener('pointercancel', onpanend)
+    box.addEventListener('lostpointercapture', onpanend)
+    box.addEventListener('mousedown', onmiddle)
+    box.addEventListener('auxclick', onmiddle)
+    box.addEventListener('click', onpanclick, { capture: true })
     return () => {
       box.removeEventListener('wheel', onwheel)
+      box.removeEventListener('pointerdown', onpancapture, { capture: true })
+      box.removeEventListener('pointerdown', onpanbubble)
+      box.removeEventListener('pointermove', onpanmove)
+      box.removeEventListener('pointerup', onpanend)
+      box.removeEventListener('pointercancel', onpanend)
+      box.removeEventListener('lostpointercapture', onpanend)
+      box.removeEventListener('mousedown', onmiddle)
+      box.removeEventListener('auxclick', onmiddle)
+      box.removeEventListener('click', onpanclick, { capture: true })
+      delete box.dataset.pan
       if (pinchFrame) cancelAnimationFrame(pinchFrame)
       pinchFrame = 0
       clearTimeout(holdTimer)
@@ -579,6 +710,10 @@
   .slot {
     position: absolute;
   }
+
+  /* The hand wins over every tool's own cursor while it is there. */
+  :global([data-pan='grab']), :global([data-pan='grab'] *) { cursor: grab !important }
+  :global([data-pan='grabbing']), :global([data-pan='grabbing'] *) { cursor: grabbing !important }
 
 
 </style>

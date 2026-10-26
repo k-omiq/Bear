@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use cleaner_core::composite::{changed_pixels, permitted_region};
 use cleaner_core::export::{
-    ExportError, PageSource, StripPatch, Target, export_page_to, export_stitched, patches_on_page,
+    ExportError, PageSource, StripPatch, Target, Tone, export_page_to, export_stitched, patches_on_page,
 };
 use cleaner_core::image::{
     BitDepth, ColorMode, Format, Header, Raster, decode, encode, fixtures, png_header,
@@ -170,7 +170,7 @@ fn export_pages(scratch: &Scratch, sources: &[PathBuf], strip: &Strip, global: &
             let patches = patches_on_page(strip, position, global);
             let out = scratch.join(&format!("out-{position:03}.png"));
             let mut file = std::fs::File::create(&out).unwrap();
-            export_page_to(&bytes, &patches, Target::SameAsSource, &mut file).unwrap();
+            export_page_to(&bytes, &patches, Target::SameAsSource, Tone::Source, &mut file).unwrap();
             out
         })
         .collect()
@@ -321,7 +321,7 @@ fn the_stitched_file_agrees_with_the_per_page_files_everywhere_but_the_gutter() 
     let out = scratch.join("stitched.png");
     let mut file = std::fs::File::create(&out).unwrap();
     let stitched =
-        export_stitched(&strip, &global, &mut Files(sources.clone()), Target::SameAsSource, &mut file)
+        export_stitched(&strip, &global, &mut Files(sources.clone()), Target::SameAsSource, Tone::Source, &mut file)
             .unwrap();
     drop(file);
 

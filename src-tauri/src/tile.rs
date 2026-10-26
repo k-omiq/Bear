@@ -43,8 +43,10 @@
 //!
 //! The whole page is decoded to produce any one tile, so a page's tiles are
 //! cut together and kept, encoded, in a bounded cache keyed by the same
-//! identity the URL's version names ([`TileCache`]). The *page* is the unit
-//! here - never the strip, which is the distinction rule 1 draws.
+//! identity the URL's version names ([`TileCache`]), and on disk in the
+//! chapter's own folder ([`stored_tiles`]) so a page is drawn once, not once
+//! per launch. The *page* is the unit here - never the strip, which is the
+//! distinction rule 1 draws.
 //!
 //! **`v` is read by nobody here, on purpose.** It is a cache-busting token the
 //! interface derives from the page's appearance digest, [`page_appearance`],
@@ -358,16 +360,11 @@ fn render_job(
 
 /// Every proxy tile of one page, from **one** decode.
 ///
-/// A page is decoded and composited whole whichever tile is asked for, so
-/// asking tile by tile decoded a 20 000 px segment once per tile - ten times
-/// for its source and ten more for its cleaned image. Cut together, the page
-/// costs one decode per variant and the rest of its tiles are already waiting
-/// in [`TILES`] when the webview asks for them. They are encoded at the PNG
-/// encoder's fast setting: lossless all the same, drawn once and never kept.
-///
-/// The passthrough survives where the proxy *is* the page: one tile of a page
-/// small enough not to be reduced and not to be cut. The header is read for
-/// the dimensions rather than the whole file being decoded to find them.
+/// A page is decoded and composited whole whichever tile is asked for, so the
+/// page's tiles are cut together and the rest are already waiting in
+/// [`TILES`] when the webview asks for them. They are encoded at the PNG
+/// encoder's default setting, about half the size of its fast one, because
+/// they are kept on disk ([`stored_tiles`]) and drawn once.
 fn render_tiles(
     job: &Job,
     job_path: &Path,
@@ -386,7 +383,7 @@ fn render_tiles(
                 tile: index,
                 tiles: count,
             })?;
-            Ok(encode_png_preview(&drawn)?)
+            Ok(encode(&drawn, Format::Png)?)
         })
         .collect()
 }
@@ -804,7 +801,14 @@ pub fn serve_request(
                 variant: request.variant,
                 identity,
             };
-            TILES.tile(key, tile, || render_tiles(&job, job_path, request.page_index, request.variant))?
+            // A page nothing is drawn on has the same appearance in both
+            // variants, so its source and cleaned tiles are one stored set.
+            TILES.tile(key, tile, || {
+                let drawn = current.clone().unwrap_or_else(|| source_appearance(&job.project, request.page_index));
+                stored_tiles(&job, request.page_index, &drawn, || {
+                    render_tiles(&job, job_path, request.page_index, request.variant)
+                })
+            })?
         }
         None => render_job(&job, job_path, request.page_index, request.variant, None)?,
     };
@@ -994,6 +998,98 @@ fn source_header(job: &Job, job_path: &Path, source_idx: usize) -> Result<cleane
     }
     profiles.insert(sha, header.clone());
     Ok(header)
+}
+
+/* ------------------------------------------------------------------ */
+/* Tiles on disk                                                       */
+/* ------------------------------------------------------------------ */
+
+/// Bump when tiles are drawn differently, so a store from an older build is
+/// never served.
+const STORE_VERSION: &str = "display-v1";
+
+/// A page's tiles as PNG files in the chapter's own folder, so each page is
+/// decoded, colour-managed and encoded once rather than once per launch.
+///
+/// `display-v1/<position>/<appearance>/` holds `0.png`, `1.png`, ... and a
+/// `count`. The appearance folds the source's hash and every patch drawn on
+/// the page, so a stored set is never stale. A page keeps at most two sets,
+/// its source and its latest cleaned look; writing a new one removes the
+/// rest. Storing is best effort: a read-only or full disk still serves the
+/// tiles just drawn.
+fn stored_tiles(
+    job: &Job,
+    position: usize,
+    appearance: &str,
+    render: impl FnOnce() -> Result<Vec<Vec<u8>>, TileError>,
+) -> Result<Vec<Vec<u8>>, TileError> {
+    let page_dir = job.sidecar().join(STORE_VERSION).join(position.to_string());
+    if appearance.is_empty() {
+        return render();
+    }
+    if let Some(tiles) = read_stored(&page_dir.join(appearance)) {
+        return Ok(tiles);
+    }
+    let tiles = render()?;
+    // The source look, the page's current look and this one: viewing the
+    // original must not drop the cleaned set the editor goes back to.
+    let keep = [appearance.to_owned(), source_appearance(&job.project, position), page_appearance(&job.project, position)];
+    let _ = store(&page_dir, appearance, &tiles, &keep);
+    Ok(tiles)
+}
+
+/// A stored set, or `None` when any part of it is missing or is not a PNG.
+fn read_stored(dir: &Path) -> Option<Vec<Vec<u8>>> {
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
+    let count: usize = std::fs::read_to_string(dir.join("count")).ok()?.trim().parse().ok()?;
+    (0..count)
+        .map(|index| std::fs::read(dir.join(format!("{index}.png"))).ok().filter(|tile| tile.starts_with(PNG)))
+        .collect()
+}
+
+/// A staging folder this old was left by a write that never finished.
+const ABANDONED: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Write into a hidden folder, then rename it into place, so a reader never
+/// sees half a set. Then drop every other set of this page except `keep`.
+fn store(page_dir: &Path, appearance: &str, tiles: &[Vec<u8>], keep: &[String]) -> std::io::Result<()> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let staging = page_dir.join(format!(
+        ".{appearance}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&staging)?;
+    let written = (|| {
+        for (index, tile) in tiles.iter().enumerate() {
+            std::fs::write(staging.join(format!("{index}.png")), tile)?;
+        }
+        std::fs::write(staging.join("count"), tiles.len().to_string())?;
+        // A set already there was unreadable, or `read_stored` would have
+        // served it; a rename cannot replace a folder that has files in it.
+        let target = page_dir.join(appearance);
+        if target.exists() {
+            std::fs::remove_dir_all(&target)?;
+        }
+        std::fs::rename(&staging, target)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return written;
+    }
+    for entry in std::fs::read_dir(page_dir)?.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let drop = if name.starts_with('.') {
+            entry.metadata().and_then(|m| m.modified()).is_ok_and(|at| at.elapsed().is_ok_and(|age| age > ABANDONED))
+        } else {
+            !keep.iter().any(|kept| *kept == name)
+        };
+        if drop {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+    Ok(())
 }
 
 /* ------------------------------------------------------------------ */
@@ -1287,6 +1383,37 @@ mod tests {
         let project =
             Project::new(manifest.parent().unwrap(), "0.1.0", StripMode::Single, &[reference]);
         Job::create(&manifest, project).unwrap()
+    }
+
+    /// A page is drawn once and read from the chapter's folder after that,
+    /// and a new look replaces the old one without touching the source set.
+    /// A set that is not whole PNGs is drawn again and replaced.
+    #[test]
+    fn a_page_is_drawn_once_and_kept_in_the_chapter_folder() {
+        let png = |tag: &[u8]| [b"\x89PNG\r\n\x1a\n".as_slice(), tag].concat();
+        let scratch = Scratch::new("stored");
+        let job = a_job(&scratch, "rgb8");
+        let source = source_appearance(&job.project, 0);
+        let drawn = || Ok(vec![png(b"0"), png(b"1")]);
+        assert_eq!(stored_tiles(&job, 0, &source, drawn).unwrap().len(), 2);
+        let again = stored_tiles(&job, 0, &source, || panic!("a stored page was drawn again")).unwrap();
+        assert_eq!(again, [png(b"0"), png(b"1")]);
+
+        let page_dir = job.sidecar().join(STORE_VERSION).join("0");
+        stored_tiles(&job, 0, "cleaned-a", || Ok(vec![png(b"a")])).unwrap();
+        stored_tiles(&job, 0, "cleaned-b", || Ok(vec![png(b"b")])).unwrap();
+        let mut kept: Vec<String> = std::fs::read_dir(&page_dir).unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        kept.sort();
+        let mut expected = vec!["cleaned-b".to_owned(), source];
+        expected.sort();
+        assert_eq!(kept, expected);
+
+        std::fs::write(page_dir.join("cleaned-b").join("0.png"), b"").unwrap();
+        let redrawn = stored_tiles(&job, 0, "cleaned-b", || Ok(vec![png(b"again")])).unwrap();
+        assert_eq!(redrawn, [png(b"again")]);
+        let read = stored_tiles(&job, 0, "cleaned-b", || panic!("the replaced set was drawn again")).unwrap();
+        assert_eq!(read, [png(b"again")]);
     }
 
     /// A job over `count` distinct pages, whose `strip.order` is whatever the

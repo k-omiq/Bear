@@ -323,8 +323,10 @@ export function centredBbox(w, h) {
  * What a key means to the drawing surface.
  *
  * The keyboard route to a mask, as one table rather than as a branch tree in
- * the component: activate to open a draft or to commit the one that is open,
- * arrows to move it and Shift-arrows to resize it. `Escape` is deliberately
+ * the component: Enter to open a draft or to commit the one that is open,
+ * arrows to move it and Shift-arrows to resize it. Not Space, which is the
+ * pan key everywhere on the canvas (`shortcuts.js#HOLD_PAN_ID`): a Space held
+ * to move the page must not open a draft too. `Escape` is deliberately
  * absent - abandoning a gesture is the editor's own `cancelInteraction`, and
  * routing it here would give it two owners.
  *
@@ -339,7 +341,7 @@ export function centredBbox(w, h) {
 export function draftKeyIntent(event, context) {
   if (!event || event.metaKey || event.ctrlKey) return null
   const key = event.key
-  if (key === 'Enter' || key === ' ') return { kind: context.hasDraft ? 'commit' : 'open' }
+  if (key === 'Enter') return { kind: context.hasDraft ? 'commit' : 'open' }
   if (context.cloneCapable && (key === 's' || key === 'S')) return { kind: 'sample' }
   if (!context.hasDraft) return null
 

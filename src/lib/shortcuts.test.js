@@ -5,6 +5,8 @@ import {
   normalizeKey,
   isTextEntry,
   handlesKeyNatively,
+  HOLD_ORIGINAL_ID,
+  HOLD_PAN_ID,
   shortcutLabelKey,
   shortcutChord,
   shortcutConflicts,
@@ -22,7 +24,7 @@ import {
   isRebound,
   parseChord,
   rebindShortcut,
-  releasesHoldOriginal,
+  releasesHold,
   resetAllShortcuts,
   resetShortcut,
   sanitizeShortcutOverrides,
@@ -363,6 +365,28 @@ describe('isTextEntry', () => {
 
 describe('handlesKeyNatively', () => {
   const range = { tagName: 'INPUT', type: 'range' }
+
+  describe('Space', () => {
+    /** @param {Object} fields @param {{visible?: boolean, canvas?: boolean}} [state] */
+    const control = (fields, { visible = true, canvas = false } = {}) => ({
+      getAttribute: () => null,
+      ...fields,
+      matches: (selector) => selector === ':focus-visible' && visible,
+      closest: (selector) => (selector === '[data-canvas-viewport]' && canvas ? {} : null),
+    })
+
+    it('is a keyboard-focused control\'s own press', () => {
+      expect(handlesKeyNatively(control({ tagName: 'BUTTON' }), ' ')).toBe(true)
+      expect(handlesKeyNatively(control({ tagName: 'INPUT', type: 'checkbox' }), ' ')).toBe(true)
+      expect(handlesKeyNatively(control({ tagName: 'DIV', getAttribute: () => 'radio' }), ' ')).toBe(true)
+    })
+
+    it('pans over a control that was only clicked, and on the canvas', () => {
+      expect(handlesKeyNatively(control({ tagName: 'BUTTON' }, { visible: false }), ' ')).toBe(false)
+      expect(handlesKeyNatively(control({ tagName: 'BUTTON' }, { canvas: true }), ' ')).toBe(false)
+      expect(handlesKeyNatively(control({ tagName: 'DIV' }), ' ')).toBe(false)
+    })
+  })
 
   it('gives a range input its own arrows, Home and End', () => {
     expect(handlesKeyNatively(range, 'ArrowLeft')).toBe(true)
@@ -781,24 +805,32 @@ describe('rebinding', () => {
     })
   })
 
-  describe('releasesHoldOriginal', () => {
+  describe('releasesHold', () => {
     it('follows the entry, not the default key', () => {
-      expect(releasesHoldOriginal(press('o'))).toBe(true)
-      expect(releasesHoldOriginal(press('O'))).toBe(true)
+      expect(releasesHold(press('o'), HOLD_ORIGINAL_ID)).toBe(true)
+      expect(releasesHold(press('O'), HOLD_ORIGINAL_ID)).toBe(true)
       // Shift is not compared: a release must be honoured whatever the
       // modifier state has become.
-      expect(releasesHoldOriginal(press('o', { shiftKey: true }))).toBe(true)
-      expect(releasesHoldOriginal(press('o', { metaKey: true }))).toBe(false)
-      expect(releasesHoldOriginal(press('9'))).toBe(false)
+      expect(releasesHold(press('o', { shiftKey: true }), HOLD_ORIGINAL_ID)).toBe(true)
+      expect(releasesHold(press('o', { metaKey: true }), HOLD_ORIGINAL_ID)).toBe(false)
+      expect(releasesHold(press('9'), HOLD_ORIGINAL_ID)).toBe(false)
     })
 
     it('moves with a rebinding and stops with an unbinding', () => {
       setShortcutOverrides({ 'view.holdOriginal': { key: '9', shift: false, accel: false } })
-      expect(releasesHoldOriginal(press('9'))).toBe(true)
-      expect(releasesHoldOriginal(press('o'))).toBe(false)
+      expect(releasesHold(press('9'), HOLD_ORIGINAL_ID)).toBe(true)
+      expect(releasesHold(press('o'), HOLD_ORIGINAL_ID)).toBe(false)
       setShortcutOverrides({ 'view.holdOriginal': null })
-      expect(releasesHoldOriginal(press('o'))).toBe(false)
-      expect(releasesHoldOriginal(press('9'))).toBe(false)
+      expect(releasesHold(press('o'), HOLD_ORIGINAL_ID)).toBe(false)
+      expect(releasesHold(press('9'), HOLD_ORIGINAL_ID)).toBe(false)
+    })
+
+    it('ends the pan on Space, or on the key it was moved to', () => {
+      expect(releasesHold(press(' '), HOLD_PAN_ID)).toBe(true)
+      expect(releasesHold(press('o'), HOLD_PAN_ID)).toBe(false)
+      setShortcutOverrides({ [HOLD_PAN_ID]: { key: 'h', shift: true, accel: false } })
+      expect(releasesHold(press('h'), HOLD_PAN_ID)).toBe(true)
+      expect(releasesHold(press(' '), HOLD_PAN_ID)).toBe(false)
     })
   })
 })

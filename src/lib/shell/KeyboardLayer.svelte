@@ -8,7 +8,9 @@
    */
   import {
     matchShortcut,
-    releasesHoldOriginal,
+    releasesHold,
+    HOLD_ORIGINAL_ID,
+    HOLD_PAN_ID,
     isTextEntry,
     shortcutConflicts,
   } from '../shortcuts.js'
@@ -50,6 +52,7 @@
     stepWipe: (direction) => editorState.stepWipe(direction),
     focusNextOption: () => void focusNextOption(),
     holdOriginal: (held) => editorState.holdOriginal(held),
+    holdPan: (held) => editorState.holdPan(held),
     togglePinOriginal: () => editorState.togglePinOriginal(),
     toggleMaskOverlay: () => editorState.toggleMaskOverlay(),
     toggleReviewFilter: () => editorState.toggleReviewFilter(),
@@ -246,16 +249,28 @@
   }
 
   /**
-   * The only key with a release behaviour: `O` shows the original while held -
-   * or whatever the user has rebound it to, which is why the question is asked
-   * of the table rather than of a constant. Unconditional - if the key went
-   * down, its release must be honoured even if a dialog opened in between, or
-   * the original would stay stuck on.
+   * The two keys with a release behaviour: `O` shows the original while held,
+   * and Space pans - or whatever the user has rebound them to, which is why
+   * the question is asked of the table rather than of a constant.
+   * Unconditional - if the key went down, its release must be honoured even
+   * if a dialog opened in between, or the hold would stay stuck on.
+   *
+   * The pan's release is also taken: a button that had the focus when Space
+   * went down presses itself on the release, and the press was the pan's.
    *
    * @param {KeyboardEvent} event
    */
   function onkeyup(event) {
-    if (releasesHoldOriginal(event)) commands.holdOriginal(false)
+    if (releasesHold(event, HOLD_ORIGINAL_ID)) commands.holdOriginal(false)
+    if (releasesHold(event, HOLD_PAN_ID) && editorState.editor.panHeld) {
+      event.preventDefault()
+      commands.holdPan(false)
+    }
+  }
+
+  /** A key let go in another window never sends its keyup here. */
+  function onblur() {
+    commands.holdPan(false)
   }
 
   // The table is hand-maintained; two entries claiming one key in overlapping
@@ -267,4 +282,4 @@
   }
 </script>
 
-<svelte:window onkeydown={onkeydown} onkeyup={onkeyup} />
+<svelte:window onkeydown={onkeydown} onkeyup={onkeyup} onblur={onblur} />

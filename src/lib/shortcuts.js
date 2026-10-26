@@ -67,6 +67,7 @@ import { pageNavControls } from './model/paging.js'
  * @property {() => void} cancelRun
  * @property {() => void} cleanSelectedRegion - clean the selected detection, or try the selected cleaned region again
  * @property {(held: boolean) => void} holdOriginal
+ * @property {(held: boolean) => void} holdPan - a left drag moves the canvas while held
  * @property {() => void} togglePinOriginal
  * @property {() => void} toggleMaskOverlay
  * @property {() => void} toggleReviewFilter
@@ -142,6 +143,9 @@ export const HOLD_ORIGINAL_KEY = 'o'
 
 /** The entry whose key, whatever it is bound to, shows the original while held. */
 export const HOLD_ORIGINAL_ID = 'view.holdOriginal'
+
+/** The entry whose key, whatever it is bound to, turns a left drag into a pan while held. */
+export const HOLD_PAN_ID = 'nav.holdPan'
 
 /** @type {Shortcut[]} */
 export const SHORTCUTS = [
@@ -751,6 +755,20 @@ export const SHORTCUTS = [
 
   /* ---- navigation ------------------------------------------------------ */
   {
+    // Held, like `O`: a left drag moves the canvas while it is down, whatever
+    // tool is armed - the hand every image editor gives Space. Repeatable,
+    // because a held Space auto-repeats and each repeat must be taken too, or
+    // the viewport it is let through to scrolls a screen down.
+    id: HOLD_PAN_ID,
+    group: 'navigation',
+    labelKey: 'shortcuts.page.holdPan',
+    keys: [' '],
+    chord: ['Space'],
+    scope: 'editor',
+    repeatable: true,
+    run: (c) => c.holdPan(true),
+  },
+  {
     // Reading-direction aware: in RTL (the default) ← is *next*.
     id: 'page.left',
     group: 'navigation',
@@ -1040,7 +1058,8 @@ export function isTextEntry(target) {
  *
  * Two controls have an answer here: a range input, whose arrows move the value
  * rather than the page, and a `<select>`, whose list is `SELECT_KEYS` plus a
- * letter of type-ahead.
+ * letter of type-ahead. Space is the third case, on every control that is
+ * pressed with it (`pressesWithSpace`).
  *
  * Duck-typed, like `isTextEntry`.
  *
@@ -1051,11 +1070,43 @@ export function isTextEntry(target) {
 export function handlesKeyNatively(target, key) {
   if (!target) return false
   if (target.disabled === true) return false
+  if (key === ' ') return pressesWithSpace(target)
   const tag = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : ''
   if (tag === 'SELECT') return SELECT_KEYS.has(key) || /^[a-z]$/.test(key)
   if (tag !== 'INPUT') return false
   const type = typeof target.type === 'string' ? target.type.toLowerCase() : 'text'
   return type === 'range' && RANGE_KEYS.has(key)
+}
+
+/** The roles whose control a keyboard presses, or ticks, with Space. */
+const SPACE_ROLES = new Set(['button', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option'])
+
+/**
+ * Space presses a focused button, ticks a box and picks a radio, and those
+ * are the control's while the user is driving it from the keyboard. Two
+ * exceptions, both because Space is the pan key:
+ *
+ * - the canvas, whose regions and drawing surface are buttons too. Enter
+ *   still presses them.
+ * - a control that has the focus only because it was clicked. Chromium
+ *   focuses a clicked button, so the tool just picked in the rail would
+ *   otherwise eat the Space that pans with it. `:focus-visible` is the
+ *   browser's own answer to "was this focused from the keyboard".
+ *
+ * @param {any} target
+ * @returns {boolean}
+ */
+function pressesWithSpace(target) {
+  if (typeof target.closest === 'function' && target.closest('[data-canvas-viewport]')) return false
+  const tag = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : ''
+  const role = typeof target.getAttribute === 'function' ? target.getAttribute('role') : null
+  const control = tag === 'BUTTON' || tag === 'SELECT' || tag === 'SUMMARY' || tag === 'INPUT' || SPACE_ROLES.has(String(role))
+  if (!control) return false
+  try {
+    return typeof target.matches === 'function' ? target.matches(':focus-visible') : true
+  } catch {
+    return true
+  }
 }
 
 /**
@@ -1796,22 +1847,24 @@ export function chordConflict(id, chord, table = shortcuts()) {
 }
 
 /**
- * Does this keyup release the key that shows the original while held?
+ * Does this keyup release a held entry - the original (`HOLD_ORIGINAL_ID`) or
+ * the pan (`HOLD_PAN_ID`)?
  *
  * Asked of the table rather than of a constant, because the entry is
  * rebindable: a hold that started on the user's own key must end on it, and an
  * *unbound* hold must never end on the default one.
  *
  * Shift is deliberately not compared - a release must be honoured whatever the
- * modifier state has become since the press, or the original stays stuck on.
+ * modifier state has become since the press, or the hold stays stuck on.
  *
  * @param {{key: string, metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean}} event
+ * @param {string} id
  * @param {Shortcut[]} [table]
  * @returns {boolean}
  */
-export function releasesHoldOriginal(event, table = shortcuts()) {
+export function releasesHold(event, id, table = shortcuts()) {
   if (!event || typeof event.key !== 'string') return false
-  const entry = table.find((shortcut) => shortcut.id === HOLD_ORIGINAL_ID)
+  const entry = table.find((shortcut) => shortcut.id === id)
   if (!entry || entry.keys.length === 0) return false
   if (event.altKey === true) return false
   // A chord that happens to end in the same letter (`⌘O`) is a different press

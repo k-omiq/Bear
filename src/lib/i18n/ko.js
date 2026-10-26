@@ -876,9 +876,26 @@ export const ko = {
       shortcuts: '단축키',
       about: '정보',
       denoise: '노이즈 제거',
+      export: '내보내기',
     },
     tabs: {
       label: '설정 섹션',
+    },
+    export: {
+      psd: 'PSD 파일',
+      compression: {
+        label: '채널 데이터',
+        description: '압축하면 파일이 작아집니다. 압축하지 않은 파일은 더 많은 앱에서 열립니다. 16비트 페이지는 항상 압축하지 않습니다.',
+        rle: '압축',
+        raw: '압축 안 함',
+      },
+      lettering: {
+        label: '식자 레이어',
+        description: '글자가 있던 곳을 표시하는 숨긴 레이어를 맨 위에 추가합니다. 편집기에서 켜서 지운 결과를 확인하세요.',
+      },
+      general: '모든 내보내기',
+      toneDescription: '내보내기 창이 처음 여는 선택입니다. 전부 회색인 페이지는 그레이스케일로 저장할 수 있습니다. 색이 있는 페이지는 컬러로 남습니다.',
+      saveFailed: '설정을 저장하지 못했습니다. 다시 시도하세요.',
     },
     denoise: {
       intro: '노이즈 제거는 페이지 전체에서 스캔 입자와 JPEG 노이즈를 없애고 새 파일로 저장합니다. 챕터 메뉴에서 실행하세요.',
@@ -920,11 +937,20 @@ export const ko = {
       tiff: 'TIFF',
       psd: 'PSD',
       cbz: 'CBZ',
+      pngHint: '무손실, 어디서나 열림',
+      tiffHint: '무손실, 인쇄용',
+      psdHint: 'Photoshop용 레이어',
+      cbzHint: '리더용 단일 아카이브',
     },
     layout: {
       label: '레이아웃',
       perPage: '페이지마다 파일 하나',
       stitched: '챕터 전체를 파일 하나로',
+    },
+    pages: {
+      label: '페이지',
+      chapter: '챕터 전체',
+      current: '이 페이지 ({page})',
     },
     destination: {
       label: '저장 위치',
@@ -940,8 +966,22 @@ export const ko = {
       flattened: '병합',
       separateLayer: '별도 레이어',
     },
+    tone: {
+      label: '색상',
+      source: '원본 유지',
+      grayscale: '회색 페이지를 그레이스케일로',
+      sourceDescription: '모든 페이지가 원래 색상 형식을 유지합니다. RGB로 저장된 회색 페이지는 RGB로 남습니다.',
+      grayscaleDescription: '전부 회색인 페이지는 그레이스케일로 저장됩니다. 색이 있는 페이지는 컬러로 남습니다.',
+    },
+    summary: {
+      label: '내보내기 요약',
+      files: {
+        one: '{formats} 파일 {count}개',
+        other: '{formats} 파일 {count}개',
+      },
+      masks: { one: 'PNG 마스크 파일 {count}개 추가', other: 'PNG 마스크 파일 {count}개 추가' },
+    },
     note: {
-      actualFormats: "출력 파일: {formats}.",
       gutter: {
         zero: '모든 페이지가 챕터 전체 너비와 같아 하나의 파일로 만들어도 새로 생기는 픽셀이 없습니다.',
         other: '더 좁은 페이지 옆에 종이 흰색 픽셀 {count}개가 기록됩니다. 원본 파일에는 그 자리에 픽셀이 없습니다.',
@@ -2269,6 +2309,21 @@ export const ko = {
       app: '앱',
       pointer: '포인터',
     },
+    navigation: {
+      preset: '캔버스 이동',
+      trackpad: '트랙패드',
+      mouse: '마우스',
+      custom: '사용자 지정',
+      wheel: '마우스 휠',
+      scroll: '스크롤',
+      zoom: '확대/축소',
+      middle: '가운데 버튼 드래그',
+      empty: '빈 곳에서 드래그',
+      pan: '이동',
+      off: '끔',
+      hintScroll: '휠은 스크롤합니다. {accel} 키를 누르면 확대/축소합니다.',
+      hintZoom: '휠은 확대/축소합니다. Shift 또는 {alt} 키를 누르면 스크롤합니다. 트랙패드 스크롤도 확대/축소가 됩니다.',
+    },
     rebind: {
       change: '{name} 단축키 변경',
       reset: '{name}을(를) 기본값으로 초기화',
@@ -2343,6 +2398,7 @@ export const ko = {
       right: '오른쪽 페이지',
       first: '첫 페이지',
       last: '마지막 페이지',
+      holdPan: '누른 채 드래그해 캔버스 이동',
     },
     review: {
       next: '검토가 필요한 다음 영역',
@@ -2633,6 +2689,7 @@ export const ko = {
       refusedLayeredFormat: '이 빌드는 {format}을(를) 기록하지 않습니다. 아무것도 기록하지 않았습니다. 한 변이 30 000 픽셀 이하인 페이지에 같은 레이어를 담을 수 있는 PSD로 내보내세요.',
       refusedUnknownFormat: '이 빌드는 {format}을(를) 기록할 수 없습니다. 아무것도 기록하지 않았습니다. 기록할 수 있는 형식은 PNG, TIFF, PSD, CBZ입니다.',
       refusedMaskLayers: 'CBZ는 페이지 단위로 읽히므로 안에 든 마스크 파일이 페이지로 표시됩니다. 아무것도 기록하지 않았습니다. 페이지마다 옆에 마스크 파일을 두려면 PNG나 TIFF로, 영역마다 레이어 마스크를 두려면 PSD로 내보내세요.',
+      refusedPageSelection: '이 챕터에 있는 페이지를 고르세요. 챕터 전체를 파일 하나로 내보내면 항상 모든 페이지가 들어갑니다. 아무것도 기록하지 않았습니다.',
       refusedStitchedLayered: 'PSD는 페이지 하나 전체를 배경으로 담는데, 이 빌드는 챕터 전체를 하나의 이미지로 다루지 않습니다. 아무것도 기록하지 않았습니다. PSD를 페이지별로 내보내거나 챕터를 PNG 또는 TIFF 하나로 내보내세요.',
       refusedLayeredMode: 'PSD는 인덱스 색상 페이지나 8비트 미만 페이지를 담을 수 없고, 변환하면 요청하지 않은 픽셀이 바뀝니다. 아무것도 기록하지 않았습니다. 있는 그대로 담을 수 있는 PNG로 내보내세요.',
       refusedLayeredSize: '한 변이 30 000 픽셀을 넘는 페이지가 있어 PSD에 담을 수 없습니다. 아무것도 기록하지 않았습니다. 이런 제한이 없는 PNG나 TIFF로 내보내세요.',
@@ -2647,6 +2704,7 @@ export const ko = {
         mixedMode: '페이지의 색상 모드가 모두 같지 않은데, 파일 하나에는 색상 모드가 하나뿐입니다. 아무것도 기록하지 않았습니다. 변환하면 요청하지 않은 픽셀이 바뀝니다. 대신 페이지별로 내보내세요.',
         mixedDepth: '페이지의 비트 심도가 모두 같지 않은데, 파일 하나에는 비트 심도가 하나뿐입니다. 아무것도 기록하지 않았습니다. 대신 페이지별로 내보내세요.',
         mixedProfile: '페이지의 색상 프로필이 모두 같지 않은데, 파일 하나에는 프로필이 하나뿐입니다. 아무것도 기록하지 않았습니다. 대신 페이지별로 내보내세요.',
+        mixedDescription: '페이지의 색상 또는 투명도 설명이 모두 같지 않은데, 파일 하나에는 설명이 하나뿐입니다. 아무것도 기록하지 않았습니다. 대신 페이지별로 내보내세요.',
         indexed: '이 페이지들은 인덱스 색상을 쓰는데, 파일 하나로 만들면 모든 페이지에 팔레트 하나를 써야 합니다. 아무것도 기록하지 않았습니다. 팔레트를 맞추면 색이 바뀌므로 대신 페이지별로 내보내세요.',
       },
     },

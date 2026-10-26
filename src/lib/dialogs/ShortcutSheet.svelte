@@ -56,8 +56,10 @@
     resetShortcutBinding,
     session,
     setCloneSourceModifier,
+    setNavigation,
     setShortcutBinding,
   } from '../state/session.svelte.js'
+  import { NAVIGATION_PRESETS, navigationPreset } from '../editor/navigation.js'
   import { t } from '../i18n/index.js'
 
   /**
@@ -99,11 +101,39 @@
     })),
   )
 
+  /**
+   * How a mouse moves the canvas, under the clone source: the wheel, the
+   * middle button and a drag on empty canvas, plus the two presets that set
+   * all three. The held pan key is a chord, so it is a row of the table above
+   * (Navigation) and is rebound there like any other.
+   *
+   * A preset that no longer matches reads as Custom, which cannot itself be
+   * picked: it is what the three rows below it say.
+   */
+  const presetOptions = $derived([
+    { value: 'trackpad', label: t('shortcuts.navigation.trackpad') },
+    { value: 'mouse', label: t('shortcuts.navigation.mouse') },
+    { value: 'custom', label: t('shortcuts.navigation.custom'), disabled: true },
+  ])
+  const preset = $derived(navigationPreset(session.navigation) ?? 'custom')
+  const wheelOptions = $derived([
+    { value: 'scroll', label: t('shortcuts.navigation.scroll') },
+    { value: 'zoom', label: t('shortcuts.navigation.zoom') },
+  ])
+  const panOptions = $derived([
+    { value: 'on', label: t('shortcuts.navigation.pan') },
+    { value: 'off', label: t('shortcuts.navigation.off') },
+  ])
+
   /** The id whose chord is being recorded, or `null`. */
   let recording = $state(/** @type {string|null} */ (null))
 
-  /** The pointer row's label, for the radio group to point at. */
+  /** The pointer rows' labels, for their radio groups to point at. */
   const cloneModifierLabelId = $props.id()
+  const presetLabelId = `${cloneModifierLabelId}-preset`
+  const wheelLabelId = `${cloneModifierLabelId}-wheel`
+  const middleLabelId = `${cloneModifierLabelId}-middle`
+  const emptyLabelId = `${cloneModifierLabelId}-empty`
 
   /** The last refusal, shown under the list until the next attempt. */
   let message = $state(/** @type {{key: string, params?: Record<string, unknown>}|null} */ (null))
@@ -285,6 +315,50 @@
         onchange={(value) => setCloneSourceModifier(value)}
       />
     </div>
+    <div class="pointer-row">
+      <span class="label" id={presetLabelId}>{t('shortcuts.navigation.preset')}</span>
+      <Segmented
+        options={presetOptions}
+        value={preset}
+        labelledBy={presetLabelId}
+        onchange={(value) => {
+          if (value === 'trackpad' || value === 'mouse') setNavigation(NAVIGATION_PRESETS[value])
+        }}
+      />
+    </div>
+    <div class="pointer-row">
+      <span class="label" id={wheelLabelId}>{t('shortcuts.navigation.wheel')}</span>
+      <Segmented
+        options={wheelOptions}
+        value={session.navigation.wheel}
+        labelledBy={wheelLabelId}
+        onchange={(value) => setNavigation({ wheel: value === 'zoom' ? 'zoom' : 'scroll' })}
+      />
+    </div>
+    <div class="pointer-row">
+      <span class="label" id={middleLabelId}>{t('shortcuts.navigation.middle')}</span>
+      <Segmented
+        options={panOptions}
+        value={session.navigation.middlePan ? 'on' : 'off'}
+        labelledBy={middleLabelId}
+        onchange={(value) => setNavigation({ middlePan: value === 'on' })}
+      />
+    </div>
+    <div class="pointer-row">
+      <span class="label" id={emptyLabelId}>{t('shortcuts.navigation.empty')}</span>
+      <Segmented
+        options={panOptions}
+        value={session.navigation.emptyPan ? 'on' : 'off'}
+        labelledBy={emptyLabelId}
+        onchange={(value) => setNavigation({ emptyPan: value === 'on' })}
+      />
+    </div>
+    <p class="note">
+      {t(
+        session.navigation.wheel === 'zoom' ? 'shortcuts.navigation.hintZoom' : 'shortcuts.navigation.hintScroll',
+        { accel: apple ? '⌘' : 'Ctrl', alt: modifierCap('alt', { apple }) },
+      )}
+    </p>
   </section>
 
   <p
@@ -406,6 +480,15 @@
     justify-content: space-between;
     gap: 12px;
     min-height: 23px;
+  }
+
+  .pointer-row + .pointer-row { margin-top: 3px }
+
+  .note {
+    margin: 6px 0 0;
+    font-size: 10.5px;
+    line-height: 1.4;
+    color: var(--t3);
   }
 
   /* Sticky to the foot of the dialog's own scroller while it has anything to

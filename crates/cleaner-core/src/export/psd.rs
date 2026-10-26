@@ -31,11 +31,14 @@
 //!
 //! ## What it writes
 //!
-//! - **Raw channel data everywhere** (compression 0). RLE would shrink 8-bit
-//!   files and is the one thing `ag-psd` got wrong in a way that hid; raw has
-//!   nothing to get wrong, and every length in the file is arithmetic on the
-//!   dimensions, so nothing is buffered to be measured. The 2 GB ceiling is
-//!   checked before any bytes are written.
+//! - **RLE (PackBits) for 8-bit channels**, the compression Photoshop itself
+//!   writes and every PSD reader opens. A manga page is mostly flat paper, so
+//!   this cuts a layered page to between a quarter and three quarters of its
+//!   raw size. 16-bit channels stay raw (compression 0): PackBits works on
+//!   bytes and gains little on 16-bit samples. Lengths come from packing each
+//!   channel once to measure it and again to write it, so nothing larger than
+//!   one packed channel is held. The 2 GB ceiling is checked against the
+//!   worst case PackBits can produce, before any bytes are written.
 //! - **16-bit layers under `Lr16`.** Photoshop stores a 16-bit document's layer
 //!   records in the `Lr16` additional-info block and leaves the standard layer
 //!   info empty; an 8-bit document uses the standard block. Both are written
@@ -75,6 +78,7 @@ const RESOURCE_ICC_PROFILE: u16 = 1039;
 const CHANNEL_ALPHA: i16 = -1;
 const CHANNEL_USER_MASK: i16 = -2;
 const COMPRESSION_RAW: u16 = 0;
+const COMPRESSION_RLE: u16 = 1;
 /// Bit 3: "Photoshop 5.0 and later, tells if bit 4 has useful information".
 const FLAG_HAS_BIT4: u8 = 0x08;
 const FLAG_HIDDEN: u8 = 0x02;
@@ -85,6 +89,7 @@ const SECTION_DIVIDER: u32 = 3;
 
 pub const BACKGROUND_LAYER: &str = "Background";
 pub const CLEANED_GROUP: &str = "Cleaned";
+pub const LETTERING_LAYER: &str = "Lettering";
 /// Photoshop's own name for the hidden layer that closes a group.
 const DIVIDER_LAYER: &str = "</Layer group>";
 
@@ -123,13 +128,16 @@ pub fn refusal(width: u32, height: u32, mode: ColorMode, depth: BitDepth) -> Opt
     if width > PSD_MAX_DIMENSION || height > PSD_MAX_DIMENSION {
         return Some(PsdRefusal::TooLarge { width, height });
     }
-    let minimum_bytes = u64::from(width)
+    // The page twice (a layer and the merged image), uncompressed: RLE could
+    // shrink it, but a header cannot say by how much, so the limit holds the
+    // raw size.
+    let uncompressed = u64::from(width)
         * u64::from(height)
         * mode.samples() as u64
         * u64::from(depth.bits() / 8)
         * 2;
-    if minimum_bytes > PSD_MAX_FILE_BYTES {
-        return Some(PsdRefusal::FileTooLarge { bytes: minimum_bytes });
+    if uncompressed > PSD_MAX_FILE_BYTES {
+        return Some(PsdRefusal::FileTooLarge { bytes: uncompressed });
     }
     None
 }
@@ -147,28 +155,60 @@ pub struct Document<'a> {
     pub merged: &'a Raster,
 }
 
+/// How channel data is stored. The user's choice, in Settings > Export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Compression {
+    /// PackBits on 8-bit channels; 16-bit channels stay raw.
+    #[default]
+    Rle,
+    /// Every channel raw: the largest file, and the one every reader opens.
+    Raw,
+}
+
+/// The user's PSD choices, as Settings > Export stores them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PsdOptions {
+    pub compression: Compression,
+    /// Add a hidden `Lettering` layer: white where the lettering was.
+    pub lettering_layer: bool,
+}
+
+/// What a write adds to a [`Document`]: how to store it, and the lettering
+/// mask to draw as a hidden top layer, if any.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Extras<'a> {
+    pub compression: Compression,
+    pub lettering: Option<&'a Mask>,
+}
+
 /// Check the complete PSD layout without writing any channel data.
 pub fn preflight_document(doc: &Document) -> Result<(), ExportError> {
+    preflight_document_with(doc, &Extras::default())
+}
+
+/// [`preflight_document`] for a document written with `extras`.
+pub fn preflight_document_with(doc: &Document, extras: &Extras) -> Result<(), ExportError> {
     let page = doc.merged;
     if let Some(refusal) = refusal(page.width, page.height, page.mode, page.depth) {
         return Err(refusal.into());
     }
-    let layers = layers_of(doc);
-    let records: Vec<Vec<u8>> = layers
-        .iter()
-        .map(|layer| record(layer, page.depth))
-        .collect::<Result<_, _>>()?;
+    let layers = layers_of(doc, lettering_of(page, extras)?);
     let profile = resolved_profile(page)?;
-    check_layout(page, &layers, &records, profile.as_deref())?;
+    check_layout(page, &layers, &Sizes::bound(page, &layers, extras.compression), profile.as_deref())?;
     Ok(())
+}
+
+/// Write the document with the default [`Extras`]. Returns the bytes written.
+pub fn write_psd<W: Write>(sink: &mut W, doc: &Document) -> Result<u64, ExportError> {
+    write_psd_with(sink, doc, &Extras::default())
 }
 
 /// Write the document. Returns the bytes written.
 ///
-/// Every length in the file is computed before the first byte goes out, so the
+/// Every length in the file is measured before the first byte goes out, so the
 /// sink needs no `Seek`, and nothing larger than one channel plane of one
-/// layer is ever built in memory.
-pub fn write_psd<W: Write>(sink: &mut W, doc: &Document) -> Result<u64, ExportError> {
+/// layer, raw and packed, is ever built in memory.
+pub fn write_psd_with<W: Write>(sink: &mut W, doc: &Document, extras: &Extras) -> Result<u64, ExportError> {
     let page = doc.merged;
     if let Some(refusal) = refusal(page.width, page.height, page.mode, page.depth) {
         return Err(refusal.into());
@@ -199,15 +239,36 @@ pub fn write_psd<W: Write>(sink: &mut W, doc: &Document) -> Result<u64, ExportEr
         }
     }
 
+    let lettering = lettering_of(page, extras)?;
     let profile = resolved_profile(page)?;
-    let layers = layers_of(doc);
+    let layers = layers_of(doc, lettering);
     let depth = page.depth;
+    let invert = page.mode == ColorMode::Cmyk;
+    let compression = extras.compression;
+    check_layout(page, &layers, &Sizes::bound(page, &layers, compression), profile.as_deref())?;
+    let merged_planes: Vec<Plane> = (0..page.mode.samples())
+        .map(|channel| Plane::Pixels { raster: page, channel })
+        .collect();
+    let merged_rows: Option<Vec<u16>> = merged_planes[0].rle(depth, compression).then(|| {
+        merged_planes.iter().flat_map(|plane| plane.packed_rows(invert)).collect()
+    });
+    let sizes = Sizes {
+        channels: layers
+            .iter()
+            .map(|layer| layer.channels.iter().map(|c| c.plane.encoded_len(depth, invert, compression)).collect())
+            .collect(),
+        merged: match &merged_rows {
+            Some(rows) => 2 + rows.len() as u64 * 2 + rows.iter().map(|&n| u64::from(n)).sum::<u64>(),
+            None => 2 + merged_planes.iter().map(|plane| plane.raw_len(depth)).sum::<u64>(),
+        },
+    };
     let records: Vec<Vec<u8>> = layers
         .iter()
-        .map(|layer| record(layer, depth))
+        .zip(&sizes.channels)
+        .map(|(layer, lens)| record(layer, lens))
         .collect::<Result<_, _>>()?;
     let (file_bytes, count, resources_len, body_len, body_padded, section_len) =
-        check_layout(page, &layers, &records, profile.as_deref())?;
+        check_layout(page, &layers, &sizes, profile.as_deref())?;
     let sixteen = depth == BitDepth::Sixteen;
     let resources_len_field = psd_u32(resources_len)?;
     let section_len_field = psd_u32(section_len)?;
@@ -257,10 +318,7 @@ pub fn write_psd<W: Write>(sink: &mut W, doc: &Document) -> Result<u64, ExportEr
     }
     for layer in &layers {
         for channel in &layer.channels {
-            out.be16(COMPRESSION_RAW)?;
-            channel
-                .plane
-                .write(&mut out, depth, page.mode == ColorMode::Cmyk)?;
+            channel.plane.write(&mut out, depth, invert, compression)?;
         }
     }
     out.zeros(body_padded - body_len)?;
@@ -268,14 +326,23 @@ pub fn write_psd<W: Write>(sink: &mut W, doc: &Document) -> Result<u64, ExportEr
         out.be32(0)?; // global layer mask info
     }
 
-    /* Merged image data ------------------------------------------------ */
-    out.be16(COMPRESSION_RAW)?;
-    for channel in 0..page.mode.samples() {
-        Plane::Pixels {
-            raster: page,
-            channel,
+    /* Merged image data: one compression word, then every row count ---- */
+    match &merged_rows {
+        Some(rows) => {
+            out.be16(COMPRESSION_RLE)?;
+            for &row in rows {
+                out.be16(row)?;
+            }
+            for plane in &merged_planes {
+                out.bytes(&plane.packed(invert).1)?;
+            }
         }
-        .write(&mut out, depth, page.mode == ColorMode::Cmyk)?;
+        None => {
+            out.be16(COMPRESSION_RAW)?;
+            for plane in &merged_planes {
+                out.bytes(&plane.raw(depth, invert))?;
+            }
+        }
     }
 
     out.sink.flush()?;
@@ -290,22 +357,44 @@ fn resolved_profile(page: &Raster) -> Result<Option<Vec<u8>>, ExportError> {
     Ok(profile)
 }
 
+/// Bytes on disk of every layer channel, compression word included, and of
+/// the merged image data.
+struct Sizes {
+    channels: Vec<Vec<u64>>,
+    merged: u64,
+}
+
+impl Sizes {
+    /// The most the document can take, from dimensions alone.
+    fn bound(page: &Raster, layers: &[Layer<'_>], compression: Compression) -> Sizes {
+        let merged = Plane::Pixels { raster: page, channel: 0 };
+        Sizes {
+            channels: layers
+                .iter()
+                .map(|layer| layer.channels.iter().map(|c| c.plane.bound(page.depth, compression)).collect())
+                .collect(),
+            merged: 2 + (merged.bound(page.depth, compression) - 2) * page.mode.samples() as u64,
+        }
+    }
+}
+
 fn check_layout(
     page: &Raster,
     layers: &[Layer<'_>],
-    records: &[Vec<u8>],
+    sizes: &Sizes,
     profile: Option<&[u8]>,
 ) -> Result<(u64, i16, u64, u64, u64, u64), ExportError> {
     let depth = page.depth;
     let resources_len = profile.map_or(0, |profile| {
         12 + profile.len() as u64 + (profile.len() % 2) as u64
     });
-    let channel_bytes: u64 = layers
+    let channel_bytes: u64 = sizes.channels.iter().flatten().sum();
+    let records_len: u64 = layers
         .iter()
-        .flat_map(|layer| layer.channels.iter())
-        .map(|channel| channel.data_len(depth))
-        .sum();
-    let body_len = 2 + records.iter().map(|r| r.len() as u64).sum::<u64>() + channel_bytes;
+        .zip(&sizes.channels)
+        .map(|(layer, lens)| record(layer, lens).map(|r| r.len() as u64))
+        .sum::<Result<u64, _>>()?;
+    let body_len = 2 + records_len + channel_bytes;
     let sixteen = depth == BitDepth::Sixteen;
     let body_padded = pad_to(body_len, if sixteen { 4 } else { 2 });
     let section_len = if sixteen {
@@ -314,11 +403,7 @@ fn check_layout(
     } else {
         4 + body_padded + 4
     };
-    let merged_bytes = u64::from(page.width)
-        * u64::from(page.height)
-        * page.mode.samples() as u64
-        * u64::from(depth.bits() / 8);
-    let file_bytes = 26 + 4 + 4 + resources_len + 4 + section_len + 2 + merged_bytes;
+    let file_bytes = 26 + 4 + 4 + resources_len + 4 + section_len + sizes.merged;
     if file_bytes > PSD_MAX_FILE_BYTES {
         return Err(PsdRefusal::FileTooLarge { bytes: file_bytes }.into());
     }
@@ -377,37 +462,135 @@ enum Plane<'a> {
         channel: usize,
     },
     Mask(&'a Mask),
+    /// Every sample at full scale: white in RGB and gray, no ink in CMYK
+    /// (stored inverted), opaque as alpha.
+    Full { width: u32, height: u32 },
     /// A group or divider layer: the channel exists, with no samples.
     Empty,
 }
 
 impl Plane<'_> {
-    fn samples(&self) -> u64 {
+    /// Bytes per row at `depth`, and rows.
+    fn shape(&self, depth: BitDepth) -> (usize, usize) {
+        let per_sample = usize::from(depth.bits()) / 8;
         match self {
-            Plane::Pixels { raster, .. } => u64::from(raster.width) * u64::from(raster.height),
-            Plane::Mask(mask) => u64::from(mask.bounds.w) * u64::from(mask.bounds.h),
-            Plane::Empty => 0,
+            Plane::Pixels { raster, .. } => (raster.width as usize * per_sample, raster.height as usize),
+            Plane::Mask(mask) => (mask.bounds.w as usize * per_sample, mask.bounds.h as usize),
+            Plane::Full { width, height } => (*width as usize * per_sample, *height as usize),
+            Plane::Empty => (0, 0),
         }
     }
 
-    /// One plane, in row-major order, big-endian at 16 bits. Built one plane
-    /// at a time and dropped, which bounds what this module holds to one
-    /// channel of one layer.
-    fn write<W: Write>(
-        &self,
-        out: &mut Counted<W>,
-        depth: BitDepth,
-        invert: bool,
-    ) -> Result<(), ExportError> {
-        let bytes = match self {
+    fn raw_len(&self, depth: BitDepth) -> u64 {
+        let (row, rows) = self.shape(depth);
+        (row * rows) as u64
+    }
+
+    /// The samples, row-major, big-endian at 16 bits. One plane at a time.
+    fn raw(&self, depth: BitDepth, invert: bool) -> Vec<u8> {
+        match self {
             Plane::Pixels { raster, channel } => plane_of(raster, *channel, invert),
             Plane::Mask(mask) => match depth {
                 BitDepth::Sixteen => mask.bits.iter().flat_map(|&b| [b, b]).collect(),
                 _ => mask.bits.clone(),
             },
+            Plane::Full { .. } => vec![0xFF; self.raw_len(depth) as usize],
             Plane::Empty => Vec::new(),
-        };
-        out.bytes(&bytes)
+        }
+    }
+
+    /// Whether this channel is packed: 8-bit samples that exist, when the
+    /// user has not asked for raw channels.
+    fn rle(&self, depth: BitDepth, compression: Compression) -> bool {
+        compression == Compression::Rle && depth == BitDepth::Eight && !matches!(self, Plane::Empty)
+    }
+
+    /// Each row's packed length, and the packed rows end to end. 8-bit only.
+    fn packed(&self, invert: bool) -> (Vec<u16>, Vec<u8>) {
+        let raw = self.raw(BitDepth::Eight, invert);
+        let (row, _) = self.shape(BitDepth::Eight);
+        let mut lens = Vec::new();
+        let mut data = Vec::with_capacity(raw.len() / 2);
+        for line in raw.chunks(row.max(1)) {
+            let before = data.len();
+            packbits(line, &mut data);
+            // A row of 30 000 bytes packs to at most 30 235, under `u16::MAX`.
+            lens.push((data.len() - before) as u16);
+        }
+        (lens, data)
+    }
+
+    fn packed_rows(&self, invert: bool) -> Vec<u16> {
+        self.packed(invert).0
+    }
+
+    /// The channel as stored: compression word, then the samples or the row
+    /// counts and packed rows.
+    fn encoded_len(&self, depth: BitDepth, invert: bool, compression: Compression) -> u64 {
+        if self.rle(depth, compression) {
+            let (lens, data) = self.packed(invert);
+            2 + lens.len() as u64 * 2 + data.len() as u64
+        } else {
+            2 + self.raw_len(depth)
+        }
+    }
+
+    /// The most [`Plane::encoded_len`] can be: PackBits adds a byte per 128.
+    fn bound(&self, depth: BitDepth, compression: Compression) -> u64 {
+        let (row, rows) = self.shape(depth);
+        if self.rle(depth, compression) {
+            2 + (rows * (2 + row + row.div_ceil(128))) as u64
+        } else {
+            2 + (row * rows) as u64
+        }
+    }
+
+    fn write<W: Write>(
+        &self,
+        out: &mut Counted<W>,
+        depth: BitDepth,
+        invert: bool,
+        compression: Compression,
+    ) -> Result<(), ExportError> {
+        if self.rle(depth, compression) {
+            let (lens, data) = self.packed(invert);
+            out.be16(COMPRESSION_RLE)?;
+            for len in lens {
+                out.be16(len)?;
+            }
+            out.bytes(&data)
+        } else {
+            out.be16(COMPRESSION_RAW)?;
+            out.bytes(&self.raw(depth, invert))
+        }
+    }
+}
+
+/// PackBits, as PSD's RLE uses it: a header byte `n` then `n + 1` literal
+/// bytes for `n` in `0..=127`, or `1 - n` copies of the next byte for `n` in
+/// `-127..=-1`. Runs of two stay literal unless they open a literal span.
+fn packbits(row: &[u8], out: &mut Vec<u8>) {
+    let mut at = 0;
+    while at < row.len() {
+        let mut run = 1;
+        while at + run < row.len() && run < 128 && row[at + run] == row[at] {
+            run += 1;
+        }
+        if run >= 3 || (run == 2 && at + 2 == row.len()) {
+            out.push((1 - run as i16) as u8);
+            out.push(row[at]);
+            at += run;
+            continue;
+        }
+        let start = at;
+        while at < row.len() && at - start < 128 {
+            if at + 2 < row.len() && row[at] == row[at + 1] && row[at] == row[at + 2] {
+                break;
+            }
+            at += 1;
+        }
+        out.push((at - start - 1) as u8);
+        out.extend_from_slice(&row[start..at]);
     }
 }
 
@@ -433,13 +616,6 @@ struct Channel<'a> {
     plane: Plane<'a>,
 }
 
-impl Channel<'_> {
-    /// The compression word plus the samples.
-    fn data_len(&self, depth: BitDepth) -> u64 {
-        2 + self.plane.samples() * u64::from(depth.bits() / 8)
-    }
-}
-
 #[derive(Debug, Clone)]
 struct Layer<'a> {
     name: String,
@@ -453,8 +629,30 @@ struct Layer<'a> {
 }
 
 /// Bottom to top: the background, then the group's divider, its regions and
-/// the group itself, which is how Photoshop lists a folder.
-fn layers_of<'a>(doc: &Document<'a>) -> Vec<Layer<'a>> {
+/// the group itself, which is how Photoshop lists a folder. The lettering
+/// layer, when asked for, goes on top.
+fn layers_of<'a>(doc: &Document<'a>, lettering: Option<&'a Mask>) -> Vec<Layer<'a>> {
+    let mut layers = page_layers(doc);
+    if let Some(mask) = lettering {
+        layers.push(lettering_layer(mask, doc.merged.mode));
+    }
+    layers
+}
+
+/// The lettering mask to draw, if it marks anything; one that runs off the
+/// page is a caller's mistake, refused rather than clipped.
+fn lettering_of<'a>(page: &Raster, extras: &Extras<'a>) -> Result<Option<&'a Mask>, ExportError> {
+    let Some(mask) = extras.lettering.filter(|mask| !mask.is_empty()) else {
+        return Ok(None);
+    };
+    let on_page = Rect::new(0, 0, page.width, page.height);
+    if mask.bounds.intersection(on_page) != mask.bounds {
+        return Err(ExportError::Sink("the lettering mask runs off the page".into()));
+    }
+    Ok(Some(mask))
+}
+
+fn page_layers<'a>(doc: &Document<'a>) -> Vec<Layer<'a>> {
     let page = doc.merged;
     let mut layers = vec![pixel_layer(
         BACKGROUND_LAYER.to_owned(),
@@ -537,6 +735,37 @@ fn pixel_layer<'a>(
     }
 }
 
+/// White where the lettering was, transparent elsewhere, hidden: a guide the
+/// user turns on to see what was removed. The mask is the layer's
+/// transparency, so the layer covers only the mask's bounds.
+fn lettering_layer<'a>(mask: &'a Mask, mode: ColorMode) -> Layer<'a> {
+    let (width, height) = (mask.bounds.w, mask.bounds.h);
+    let mut channels: Vec<Channel<'a>> = channel_ids(mode)
+        .into_iter()
+        .filter(|&id| id != CHANNEL_ALPHA)
+        .map(|id| Channel {
+            id,
+            plane: Plane::Full { width, height },
+        })
+        .collect();
+    channels.insert(
+        0,
+        Channel {
+            id: CHANNEL_ALPHA,
+            plane: Plane::Mask(mask),
+        },
+    );
+    Layer {
+        name: LETTERING_LAYER.to_owned(),
+        rect: mask.bounds,
+        channels,
+        mask: None,
+        hidden: true,
+        opacity: 255,
+        section: None,
+    }
+}
+
 /// A group or divider: no pixels, every channel present and empty, which is
 /// how Photoshop writes its own.
 fn empty_layer<'a>(name: String, mode: ColorMode, section: u32) -> Layer<'a> {
@@ -562,13 +791,14 @@ fn empty_layer<'a>(name: String, mode: ColorMode, section: u32) -> Layer<'a> {
 }
 
 /// One layer record, whole. Small - a few dozen bytes plus the name.
-fn record(layer: &Layer, depth: BitDepth) -> Result<Vec<u8>, ExportError> {
+/// `lens` is each channel's stored length, in channel order.
+fn record(layer: &Layer, lens: &[u64]) -> Result<Vec<u8>, ExportError> {
     let mut r = Vec::new();
     push_rect(&mut r, layer.rect);
     r.extend_from_slice(&(layer.channels.len() as u16).to_be_bytes());
-    for channel in &layer.channels {
+    for (channel, &len) in layer.channels.iter().zip(lens) {
         r.extend_from_slice(&channel.id.to_be_bytes());
-        r.extend_from_slice(&psd_u32(channel.data_len(depth))?.to_be_bytes());
+        r.extend_from_slice(&psd_u32(len)?.to_be_bytes());
     }
     r.extend_from_slice(b"8BIM");
     r.extend_from_slice(if layer.section.is_some() {
@@ -761,6 +991,28 @@ pub(crate) mod tests {
         }
     }
 
+    /// `planes` blocks of `rows` row counts, then the packed rows, unpacked.
+    fn unpack_rows(c: &mut Cursor, rows: usize, planes: usize) -> Vec<u8> {
+        let lens: Vec<usize> = (0..rows * planes).map(|_| c.u16() as usize).collect();
+        let mut out = Vec::new();
+        for len in lens {
+            let row = c.take(len);
+            let mut at = 0;
+            while at < row.len() {
+                let n = row[at] as i8;
+                at += 1;
+                if n >= 0 {
+                    out.extend_from_slice(&row[at..at + n as usize + 1]);
+                    at += n as usize + 1;
+                } else if n != -128 {
+                    out.extend(std::iter::repeat_n(row[at], (1 - i16::from(n)) as usize));
+                    at += 1;
+                }
+            }
+        }
+        out
+    }
+
     pub fn parse(bytes: &[u8]) -> Parsed {
         let mut c = Cursor { bytes, at: 0 };
         assert_eq!(c.take(4), b"8BPS");
@@ -880,8 +1132,15 @@ pub(crate) mod tests {
             for (rect, ids, blend, flags, mask_rect, name, unicode_name, section) in records {
                 let mut channels = Vec::new();
                 for (id, len) in ids {
-                    assert_eq!(c.u16(), 0, "compression");
-                    channels.push((id, c.take(len - 2).to_vec()));
+                    let start = c.at;
+                    let rows = if id == CHANNEL_USER_MASK { mask_rect.unwrap().h } else { rect.h };
+                    let samples = match c.u16() {
+                        0 => c.take(len - 2).to_vec(),
+                        1 => unpack_rows(&mut c, rows as usize, 1),
+                        other => panic!("compression {other}"),
+                    };
+                    assert_eq!(c.at - start, len, "channel length");
+                    channels.push((id, samples));
                 }
                 layers.push(ParsedLayer {
                     name,
@@ -906,10 +1165,16 @@ pub(crate) mod tests {
             "layer and mask section overran its length"
         );
 
-        assert_eq!(c.u16(), 0, "merged compression");
         let per_sample = depth as usize / 8;
         let plane = width as usize * height as usize * per_sample;
-        let merged = (0..channels).map(|_| c.take(plane).to_vec()).collect();
+        let merged = match c.u16() {
+            0 => (0..channels).map(|_| c.take(plane).to_vec()).collect(),
+            1 => {
+                let all = unpack_rows(&mut c, height as usize, channels as usize);
+                all.chunks(plane).map(<[u8]>::to_vec).collect()
+            }
+            other => panic!("merged compression {other}"),
+        };
         assert_eq!(c.at, bytes.len(), "trailing bytes");
 
         Parsed {
@@ -992,18 +1257,20 @@ pub(crate) mod tests {
     }
 
     fn layered(page: &Raster, regions: &[&Patch]) -> Vec<u8> {
+        layered_with(page, regions, &Extras::default())
+    }
+
+    fn layered_with(page: &Raster, regions: &[&Patch], extras: &Extras) -> Vec<u8> {
         let owned: Vec<Patch> = regions.iter().map(|p| (*p).clone()).collect();
         let merged = composite(page, &owned).unwrap();
+        let doc = Document {
+            background: page,
+            regions,
+            merged: &merged,
+        };
+        preflight_document_with(&doc, extras).unwrap();
         let mut out = Vec::new();
-        let written = write_psd(
-            &mut out,
-            &Document {
-                background: page,
-                regions,
-                merged: &merged,
-            },
-        )
-        .unwrap();
+        let written = write_psd_with(&mut out, &doc, extras).unwrap();
         assert_eq!(written, out.len() as u64, "the count is the file");
         out
     }
@@ -1324,10 +1591,10 @@ pub(crate) mod tests {
         let a = patch_over(&page, Rect::new(4, 4, 12, 10), "a", 0);
         let b = patch_over(&page, Rect::new(30, 20, 20, 16), "b", 1);
         let bytes = layered(&page, &[&a, &b]);
-        assert_eq!(bytes.len(), 20_938);
+        assert_eq!(bytes.len(), 14_218);
         assert_eq!(
             format!("{:x}", Sha256::digest(&bytes)),
-            "ce1662a0dd10f3eef5e033607dc187e429c6b4c341c1127192579b9d6bff4a5c"
+            "0e1b8683d4b7d63e2835affc3d022d975e5e025eea364a0c6623256fe9a8cf13"
         );
     }
 
@@ -1380,8 +1647,123 @@ pub(crate) mod tests {
                 expected.extend(plane_of(&merged, channel, false));
             }
             std::fs::write(dir.join(format!("{}.merged", fixture.name)), expected).unwrap();
+            let raw = Extras { compression: Compression::Raw, lettering: None };
+            std::fs::write(dir.join(format!("{}-raw.psd", fixture.name)), layered_with(page, &[&a, &b], &raw))
+                .unwrap();
+            let lettering = Extras { compression: Compression::Rle, lettering: Some(&a.mask) };
+            std::fs::write(
+                dir.join(format!("{}-lettering.psd", fixture.name)),
+                layered_with(page, &[&a, &b], &lettering),
+            )
+            .unwrap();
             std::fs::write(dir.join(format!("{}.mask-a", fixture.name)), &a.mask.bits).unwrap();
         }
+    }
+
+    /// Raw channels hold the same samples as packed ones, in a bigger file,
+    /// and a 16-bit page is raw either way.
+    #[test]
+    fn raw_compression_reads_back_the_same_samples() {
+        for fixture in fixtures::all() {
+            let page = &fixture.raster;
+            if refusal(page.width, page.height, page.mode, page.depth).is_some() {
+                continue;
+            }
+            let a = patch_over(page, Rect::new(4, 4, 12, 10), "a", 0);
+            let packed = layered(page, &[&a]);
+            let raw = layered_with(page, &[&a], &Extras { compression: Compression::Raw, lettering: None });
+            let (p, r) = (parse(&packed), parse(&raw));
+            assert_eq!(p.merged, r.merged, "{}", fixture.name);
+            for (lp, lr) in p.layers.iter().zip(&r.layers) {
+                assert_eq!(lp.channels, lr.channels, "{}: {}", fixture.name, lp.name);
+            }
+            if page.depth == BitDepth::Sixteen {
+                assert_eq!(packed, raw, "{}: 16-bit is raw already", fixture.name);
+            } else {
+                assert!(raw.len() > packed.len(), "{}", fixture.name);
+            }
+        }
+    }
+
+    /// The lettering layer is the top layer, hidden, over the mask's bounds:
+    /// white in every colour channel and the mask as its transparency. The
+    /// merged image does not see it.
+    #[test]
+    fn the_lettering_layer_is_hidden_white_over_the_mask() {
+        for fixture in fixtures::all() {
+            let page = &fixture.raster;
+            if refusal(page.width, page.height, page.mode, page.depth).is_some() {
+                continue;
+            }
+            let a = patch_over(page, Rect::new(4, 4, 12, 10), "a", 0);
+            let plain = parse(&layered(page, &[&a]));
+            let extras = Extras { compression: Compression::Rle, lettering: Some(&a.mask) };
+            let psd = parse(&layered_with(page, &[&a], &extras));
+            assert_eq!(psd.merged, plain.merged, "{}", fixture.name);
+            assert_eq!(psd.layers.len(), plain.layers.len() + 1, "{}", fixture.name);
+            let top = psd.layers.last().unwrap();
+            assert_eq!(top.name, LETTERING_LAYER, "{}", fixture.name);
+            assert!(top.hidden, "{}", fixture.name);
+            assert_eq!(top.rect, a.mask.bounds, "{}", fixture.name);
+            assert_eq!(top.mask_rect, None, "{}", fixture.name);
+            let bytes = usize::from(page.depth.bits()) / 8;
+            for (id, samples) in &top.channels {
+                if *id == CHANNEL_ALPHA {
+                    let expected: Vec<u8> =
+                        a.mask.bits.iter().flat_map(|&b| std::iter::repeat_n(b, bytes)).collect();
+                    assert_eq!(samples, &expected, "{}: alpha", fixture.name);
+                } else {
+                    assert!(samples.iter().all(|&s| s == 0xFF), "{}: channel {id}", fixture.name);
+                }
+            }
+            let ids: Vec<i16> = top.channels.iter().map(|(id, _)| *id).collect();
+            assert_eq!(ids.iter().filter(|&&id| id == CHANNEL_ALPHA).count(), 1, "{}", fixture.name);
+            assert_eq!(ids.len(), page.mode.samples() + usize::from(page.mode.alpha_channel().is_none()));
+        }
+    }
+
+    /// An empty lettering mask adds no layer; one off the page is refused.
+    #[test]
+    fn an_empty_lettering_mask_adds_nothing_and_one_off_the_page_is_refused() {
+        let page = fixtures::by_name("rgb8").raster;
+        let a = patch_over(&page, Rect::new(4, 4, 12, 10), "a", 0);
+        let empty = Mask::empty(Rect::new(0, 0, 0, 0));
+        let extras = Extras { compression: Compression::Rle, lettering: Some(&empty) };
+        assert_eq!(layered_with(&page, &[&a], &extras), layered(&page, &[&a]));
+
+        let mut off = Mask::empty(Rect::new(i64::from(page.width) - 2, 0, 4, 4));
+        off.set(i64::from(page.width) - 1, 0, true);
+        let merged = composite(&page, std::slice::from_ref(&a)).unwrap();
+        let regions = [&a];
+        let doc = Document { background: &page, regions: &regions, merged: &merged };
+        let extras = Extras { compression: Compression::Rle, lettering: Some(&off) };
+        assert!(preflight_document_with(&doc, &extras).is_err());
+        assert!(write_psd_with(&mut Vec::new(), &doc, &extras).is_err());
+    }
+
+    /// PackBits round-trips every shape of row: empty, literal spans past 128,
+    /// runs past 128, runs of two inside and at the end of a literal span.
+    #[test]
+    fn packbits_round_trips_and_packs_flat_rows() {
+        let rows: Vec<Vec<u8>> = vec![
+            vec![],
+            vec![7],
+            vec![1, 1],
+            vec![1, 2, 2, 3],
+            (0..300).map(|i| (i % 251) as u8).collect(),
+            vec![255; 300],
+            [vec![0; 130], (0..140).map(|i| i as u8).collect(), vec![9, 9]].concat(),
+        ];
+        for row in rows {
+            let mut packed = Vec::new();
+            packbits(&row, &mut packed);
+            assert!(packed.len() <= row.len() + row.len().div_ceil(128), "{} packed to {}", row.len(), packed.len());
+            let mut c = Cursor { bytes: &[&(packed.len() as u16).to_be_bytes()[..], &packed].concat(), at: 0 };
+            assert_eq!(unpack_rows(&mut c, 1, 1), row);
+        }
+        let mut flat = Vec::new();
+        packbits(&[255; 1000], &mut flat);
+        assert_eq!(flat.len(), 16, "a white row of 1000 is eight runs");
     }
 
     /// The name block rules: a Pascal name pads to four, a Unicode name to two.

@@ -67,7 +67,14 @@ def check(path):
         expect(names == ["Background"], f"{path.name}: layers {names}")
         return
 
-    expect(names == ["Background", "Cleaned", "region-0001", "region-0002"], f"{path.name}: layers {names}")
+    tree = ["Background", "Cleaned", "region-0001", "region-0002"]
+    if path.stem.endswith("-lettering"):
+        expect(names == tree + ["Lettering"], f"{path.name}: layers {names}")
+        lettering = psd[2]
+        expect(not lettering.visible, f"{path.name}: Lettering is visible")
+        expect(lettering.bbox == (4, 4, 16, 14), f"{path.name}: Lettering bbox {lettering.bbox}")
+    else:
+        expect(names == tree, f"{path.name}: layers {names}")
     group = psd[1]
     expect(group.is_group(), f"{path.name}: Cleaned is not a group")
     region = group[0]

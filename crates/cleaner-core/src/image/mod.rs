@@ -20,7 +20,7 @@ mod convert;
 pub mod color;
 pub mod exif;
 mod png_io;
-mod tiff_io;
+pub(crate) mod tiff_io;
 
 pub mod metadata;
 pub use metadata::ColorDescription;

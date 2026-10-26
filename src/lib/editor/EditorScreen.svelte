@@ -178,6 +178,7 @@
   <div
     bind:this={viewport}
     class="viewport"
+    data-canvas-viewport
     role="region"
     tabindex="0"
     aria-label={t('editor.region.canvas')}
