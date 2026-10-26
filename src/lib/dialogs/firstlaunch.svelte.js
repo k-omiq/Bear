@@ -214,13 +214,19 @@ export function chooseCleaner(id, wanted) {
 
 /**
  * The Detection step's choice. Marked as the user's, so a memory reading
- * that arrives after it does not switch the mode back.
+ * that arrives after it does not switch the mode back. Normal brings
+ * detection back from the cloud GPU; a refused save of that keeps Advanced
+ * (`chooseDetectionMode`) and is said on the step, as Settings says it.
  *
  * @param {'normal'|'advanced'} mode
+ * @returns {Promise<boolean>} whether where detection runs was saved
  */
-export function pickDetectionMode(mode) {
+export async function pickDetectionMode(mode) {
   firstLaunch.modePicked = true
-  return chooseDetectionMode(mode)
+  firstLaunch.detectSaveFailed = false
+  const saved = await chooseDetectionMode(mode)
+  if (!saved && detectTargets.detectSaveFailed) firstLaunch.detectSaveFailed = true
+  return saved
 }
 
 /** @param {unknown} value */

@@ -25,16 +25,24 @@
   let saveFailed = $state(false)
 
   // A runtime already here (a replayed setup) can say which paths it has.
+  // Asked once each time it becomes ready: choosing another build clears the
+  // paths and readiness with them, and choosing the installed one back makes
+  // it ready again, with paths to ask for again.
   let asked = false
   $effect(() => {
-    if (!ready || asked || firstLaunch.accelerators) return
+    if (!ready) {
+      asked = false
+      return
+    }
+    if (asked || firstLaunch.accelerators) return
     asked = true
     loadFirstLaunchAccelerators()
   })
 
   /** @param {string} id */
   async function choose(id) {
-    if (saving || id === plan?.runtime.flavour) return
+    // The build holds still while it downloads; that is a wait, not a failure.
+    if (saving || runtimeDownloading() || id === plan?.runtime.flavour) return
     saving = true
     saveFailed = !(await chooseFirstLaunchFlavour(id))
     saving = false
@@ -61,6 +69,7 @@
   accelerators={firstLaunch.accelerators}
   pathsPending={!ready}
   onchooseflavour={choose}
+  chooseDisabled={saving || runtimeDownloading()}
   onrecheck={loadFirstLaunchAccelerators}
   bind:found
 />

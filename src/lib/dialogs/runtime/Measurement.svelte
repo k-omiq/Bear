@@ -71,7 +71,12 @@
       progress = null
       // A run this mount did not start (Settings closed and opened again while
       // it ran) has no promise here to settle it: the done event is the sign.
-      if (!mine) refresh().then(() => onmeasured?.())
+      // It is over whether or not the read after it answers, so Measure comes
+      // back even when that read fails.
+      if (mine) return
+      running = false
+      stopping = false
+      refresh().then(() => onmeasured?.())
     })
   })
 

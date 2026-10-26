@@ -48,7 +48,17 @@
   )
 
   /**
-   * Arrow keys move the choice, as in any radio group.
+   * The card keyboard focus is on, while it is inside the group: it holds the
+   * one tab stop, and leaving the group hands it back to the chosen card.
+   *
+   * @type {'normal'|'advanced'|null}
+   */
+  let focused = $state(null)
+
+  /**
+   * Arrow keys move focus between the cards, never the choice: in Settings a
+   * choice starts that mode's download, so passing over a card on the way to
+   * another must not fetch it. Space, Enter or a click chooses.
    *
    * @param {KeyboardEvent & {currentTarget: HTMLElement}} event
    * @param {number} index
@@ -63,13 +73,17 @@
     if (next === null) return
     event.preventDefault()
     event.stopPropagation()
-    onchange(DETECTION_MODE_IDS[next])
     const card = event.currentTarget.parentElement?.children[next]
     if (card instanceof HTMLElement) card.focus()
   }
+
+  /** @param {FocusEvent & {currentTarget: HTMLElement}} event */
+  function onfocusout(event) {
+    if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) focused = null
+  }
 </script>
 
-<div class="modes" role="radiogroup" aria-label={label} aria-describedby="{uid}-hardware" data-detection-mode>
+<div class="modes" role="radiogroup" aria-label={label} aria-describedby="{uid}-hardware" data-detection-mode {onfocusout}>
   {#each DETECTION_MODE_IDS as mode, index (mode)}
     <button
       type="button"
@@ -77,8 +91,9 @@
       class="mode"
       class:on={value === mode}
       aria-checked={value === mode}
-      tabindex={value === mode ? 0 : -1}
+      tabindex={(focused ?? value) === mode ? 0 : -1}
       data-mode={mode}
+      onfocus={() => (focused = mode)}
       onclick={() => onchange(mode)}
       onkeydown={(event) => onkeydown(event, index)}
     >

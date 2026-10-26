@@ -665,6 +665,65 @@ describe('the runtime step', () => {
     await waitFor(() => expect(/** @type {HTMLInputElement} */ (rendered.getByRole('radio', { name: /CUDA 12/ })).disabled).toBe(true))
     expect(backend.writeSettings).not.toHaveBeenCalled()
   })
+
+  // The machine check's Use build is the same choice, held the same way: a
+  // wait for the download, never a "could not save".
+  it('holds Use build still while the runtime is downloading', async () => {
+    const answer = view()
+    answer.runtime.platform = 'windows-x64'
+    answer.runtime.flavour = 'directml'
+    answer.runtime.flavours = [
+      { id: 'directml', ortVersion: '1.28.0', bytes: 1, isDefault: true, userInstalled: [] },
+      { id: 'cuda12', ortVersion: '1.28.0', bytes: 1, isDefault: false, userInstalled: [] },
+    ]
+    backend.runtimeReport = vi.fn(async () => ({ wanted: null, toolkits: [], cudnn: [], gpus: [], verdictKey: null, verdictHave: null, verdictNeed: null, recommended: 'cuda12' }))
+    const rendered = open('runtime', answer)
+    const useBuild = () => /** @type {HTMLButtonElement} */ (rendered.getByRole('button', { name: t('settings.runtime.machine.useBuild', { build: 'CUDA 12' }) }))
+    await waitFor(() => expect(useBuild().disabled).toBe(false))
+    firstLaunch.current = RUNTIME_ID
+    await waitFor(() => expect(useBuild().disabled).toBe(true))
+    await fireEvent.click(useBuild())
+    expect(backend.writeSettings).not.toHaveBeenCalled()
+    expect(rendered.queryByText(t('onboarding.saveFailed'))).toBeNull()
+  })
+
+  // A replay with the runtime here: another build clears the paths, and
+  // choosing the installed one back asks for them again, not only once.
+  it('asks the paths again when the installed build is chosen back', async () => {
+    const answer = view({ runtimeInstalled: true })
+    answer.runtime.platform = 'windows-x64'
+    answer.runtime.flavour = 'directml'
+    answer.runtime.installedFlavour = 'directml'
+    answer.runtime.flavours = [
+      { id: 'directml', ortVersion: '1.28.0', bytes: 1, isDefault: true, userInstalled: [] },
+      { id: 'cuda12', ortVersion: '1.28.0', bytes: 1, isDefault: false, userInstalled: [] },
+    ]
+    backend.runtimeReport = vi.fn(async () => ({ wanted: null, toolkits: [], cudnn: [], gpus: [], verdictKey: null, verdictHave: null, verdictNeed: null, recommended: null }))
+    // The catalogue as the last saved build makes it: DirectML is the one on disk.
+    let flavour = 'directml'
+    backend.writeSettings.mockImplementation(async (patch) => {
+      if (patch.runtimeFlavour) flavour = patch.runtimeFlavour
+      return {}
+    })
+    backend.listModels.mockImplementation(async () => {
+      const now = structuredClone(answer)
+      now.runtime.flavour = flavour
+      return now
+    })
+    const rendered = open('runtime', answer)
+    await waitFor(() => expect(rendered.getByText(t('accel.cpu'))).toBeTruthy())
+    expect(backend.listAccelerators).toHaveBeenCalledTimes(1)
+
+    await fireEvent.click(rendered.getByRole('radio', { name: /CUDA 12/ }))
+    await waitFor(() => expect(firstLaunch.plan?.runtime.flavour).toBe('cuda12'))
+    expect(firstLaunch.accelerators).toBeNull()
+
+    await fireEvent.click(rendered.getByRole('radio', { name: /DirectML/ }))
+    await waitFor(() => expect(firstLaunch.plan?.runtime.flavour).toBe('directml'))
+    await waitFor(() => expect(backend.listAccelerators).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(rendered.getByText(t('accel.cpu'))).toBeTruthy())
+    expect(rendered.queryByText(t('settings.accel.unreadable'))).toBeNull()
+  })
 })
 
 describe('the measure step', () => {
@@ -901,6 +960,22 @@ describe('Detect on in setup', () => {
     await waitFor(() => expect(rendered.getByText(t('onboarding.dependencies.total', {
       count: 6, bytes: RUNTIME_BYTES + 95 + HAYAI_BYTES + REDRAW_BYTES,
     }))).toBeTruthy())
+  })
+
+  // Normal cannot stay on the cloud GPU; a refused move back keeps Advanced,
+  // and the step says why the card did not move, as Settings does.
+  it('says so when Normal cannot bring detection back from the cloud GPU', async () => {
+    setCloudAllowed(true)
+    setDetectionMode('advanced')
+    setAnalysisTarget('rtFull', 'cloud')
+    setAnalysisTarget('samTs', 'cloud')
+    backend.writeSettings.mockRejectedValue(new Error('disk'))
+    const rendered = open('detection')
+    await fireEvent.click(/** @type {HTMLElement} */ (rendered.container.querySelector('[data-detection-mode] [data-mode="normal"]')))
+    await waitFor(() => expect(rendered.getByRole('alert').textContent).toBe(t('tools.target.detectSaveFailed')))
+    expect(session.detectionMode).toBe('advanced')
+    expect(session.analysisTargets).toEqual({ rtFull: 'cloud', samTs: 'cloud' })
+    expect(firstLaunch.detectSaveFailed).toBe(true)
   })
 
   it('puts a refused choice back and says so', async () => {

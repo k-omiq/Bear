@@ -21,6 +21,8 @@
 
   let { flavours, value, recommended = null, disabled = false, onchoose } = $props()
   const uid = $props.id()
+  /** @type {HTMLElement|undefined} */
+  let group = $state()
 
   /** @param {string} id */
   function about(id) {
@@ -30,9 +32,21 @@
       cuda13: 'settings.runtime.build.aboutCuda',
     }[id] ?? 'settings.runtime.build.aboutStandard'
   }
+
+  /**
+   * The drawn build is always `value`, never the click: the click is put back
+   * at once, and a saved choice moves the mark when `value` follows it. A
+   * refused or failed choice leaves `value` where it was, and with it the mark.
+   *
+   * @param {string} id
+   */
+  function pick(id) {
+    for (const input of group?.querySelectorAll('input') ?? []) input.checked = input.value === value
+    onchoose(id)
+  }
 </script>
 
-<div class="builds" role="radiogroup" aria-label={t('settings.runtime.heading.build')}>
+<div class="builds" role="radiogroup" bind:this={group} aria-label={t('settings.runtime.heading.build')}>
   {#each flavours as build (build.id)}
     <label class="build" class:chosen={build.id === value} for="{uid}-{build.id}">
       <input
@@ -42,7 +56,7 @@
         value={build.id}
         checked={build.id === value}
         {disabled}
-        onchange={() => onchoose(build.id)}
+        onchange={() => pick(build.id)}
       />
       <span class="text">
         <span class="name">

@@ -14,6 +14,7 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setBackend } from '../../api/backend.js'
 import { t } from '../../i18n/index.js'
+import BuildChoice from './BuildChoice.svelte'
 import MachineCheck from './MachineCheck.svelte'
 import Measurement from './Measurement.svelte'
 
@@ -151,6 +152,30 @@ describe('This computer', () => {
   })
 })
 
+describe('Build', () => {
+  const BUILDS = [
+    { id: 'directml', bytes: 1, isDefault: true, userInstalled: [] },
+    { id: 'cuda12', bytes: 1, isDefault: false, userInstalled: [] },
+  ]
+  /** @param {ReturnType<typeof render>} rendered @param {string} name */
+  const radio = (rendered, name) => /** @type {HTMLInputElement} */ (rendered.getByRole('radio', { name: new RegExp(name) }))
+
+  it('draws the saved build, never a click the choice did not keep', async () => {
+    const onchoose = vi.fn()
+    const rendered = render(BuildChoice, { flavours: BUILDS, value: 'directml', onchoose })
+    await fireEvent.click(radio(rendered, 'CUDA 12'))
+    expect(onchoose).toHaveBeenCalledWith('cuda12')
+    // Refused or failed: `value` did not move, and neither does the mark.
+    expect(radio(rendered, 'DirectML').checked).toBe(true)
+    expect(radio(rendered, 'CUDA 12').checked).toBe(false)
+
+    // Saved: the mark follows `value`.
+    await rendered.rerender({ flavours: BUILDS, value: 'cuda12', onchoose })
+    expect(radio(rendered, 'CUDA 12').checked).toBe(true)
+    expect(radio(rendered, 'DirectML').checked).toBe(false)
+  })
+})
+
 /** @param {Partial<import('../../api/backend.js').MeasurementView>} [patch] */
 function saved(patch = {}) {
   return {
@@ -229,6 +254,22 @@ describe('Measurement', () => {
     await waitFor(() => expect(rendered.getByRole('button', { name: t('settings.runtime.measure.again') })).toBeTruthy())
     expect(rendered.getByText('LaMa Manga')).toBeTruthy()
     expect(onmeasured).toHaveBeenCalledTimes(1)
+  })
+
+  it('brings Measure back after a Stop on a run this screen did not start, though the read after it fails', async () => {
+    const backend = fake({
+      readMeasurement: vi.fn(async () => ({ saved: null, current: null, running: true })),
+      cancelMeasurement: vi.fn(async () => true),
+    })
+    const rendered = render(Measurement, { accelerators: PLACED, ready: true })
+    await waitFor(() => expect(rendered.getByRole('button', { name: t('settings.runtime.measure.stop') })).toBeTruthy())
+    await fireEvent.click(rendered.getByRole('button', { name: t('settings.runtime.measure.stop') }))
+    await waitFor(() => expect(/** @type {HTMLButtonElement} */ (rendered.getByRole('button', { name: t('settings.runtime.measure.stop') })).disabled).toBe(true))
+
+    backend.readMeasurement.mockImplementation(async () => Promise.reject(new Error('io')))
+    backend.emit({ type: 'measure-progress', model: '', backend: '', step: 1, total: 3, done: true })
+    await waitFor(() => expect(/** @type {HTMLButtonElement} */ (rendered.getByRole('button', { name: t('settings.runtime.measure.start') })).disabled).toBe(false))
+    expect(backend.readMeasurement).toHaveBeenCalledTimes(2)
   })
 
   it('says a Stop plainly, not as a failure, and keeps the earlier result', async () => {

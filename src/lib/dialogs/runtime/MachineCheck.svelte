@@ -26,12 +26,15 @@
    *   accelerators: import('../../api/backend.js').Accelerators|null,
    *   pathsPending?: boolean,
    *   onchooseflavour?: (id: string) => void,
+   *   chooseDisabled?: boolean,
    *   onrecheck?: () => (void|Promise<void>),
    *   found?: string|null,
    * }}
    *
    * `found` is bound out: the CUDA build this machine is ready for, so a
    * build choice beside this can mark it without asking the driver twice.
+   * `chooseDisabled` holds Use build still while the build cannot change
+   * (its download is running), as the build choice beside it is held.
    */
   import { t } from '../../i18n/index.js'
   import { Button } from '../../ui/index.js'
@@ -45,6 +48,7 @@
     accelerators,
     pathsPending = false,
     onchooseflavour,
+    chooseDisabled = false,
     onrecheck,
     found = $bindable(null),
   } = $props()
@@ -173,7 +177,7 @@
       <div class="recommend">
         <p>{t('settings.runtime.machine.recommend', { build: flavourName(recommended) })}</p>
         {#if onchooseflavour}
-          <Button size="sm" variant="soft" onclick={() => onchooseflavour(recommended)}>
+          <Button size="sm" variant="soft" disabled={chooseDisabled} onclick={() => onchooseflavour(recommended)}>
             {t('settings.runtime.machine.useBuild', { build: flavourName(recommended) })}
           </Button>
         {/if}
