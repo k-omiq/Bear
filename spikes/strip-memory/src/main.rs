@@ -651,6 +651,7 @@ fn draw(options: &Options) -> Result<Vec<PathBuf>> {
                 palette: None,
                 trns: None,
                 srgb_intent: None,
+                color: Default::default(),
                 data,
             };
             std::fs::write(&path, encode(&raster, Format::Png).map_err(|e| anyhow!("{e}"))?)?;
