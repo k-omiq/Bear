@@ -22,6 +22,7 @@ from deploy.cloud.common.contract import (
     ANALYSIS_MAX_RESPONSE_BYTES,
     ANALYSIS_VERSION,
     ANALYSIS_BATCH_CANVAS_OPERATION,
+    ANALYSIS_BATCH_CANVAS_WEBP_OPERATION,
     ANALYSIS_GRAY_TILES_OPERATION,
     GPU_JOB_OPERATIONS,
     PROTOCOL_VERSION,
@@ -43,6 +44,7 @@ from deploy.cloud.common.contract import (
     provisional_fixture_limits,
     validate_crop_payload,
     analysis_canvas_tiles,
+    analysis_webp_canvas_supported,
     validate_analysis_batch,
     validate_analysis_request,
     validate_gpu_status_response,
@@ -348,6 +350,8 @@ class CloudGateway:
                 # A batch may carry one canvas in place of its tile PNGs (contract.py).
                 if self._serves_gpu_jobs(self.analysis_worker, "analysis_batch"):
                     operations.append(ANALYSIS_BATCH_CANVAS_OPERATION)
+                    if analysis_webp_canvas_supported():
+                        operations.append(ANALYSIS_BATCH_CANVAS_WEBP_OPERATION)
                 if self._serves_denoise_results():
                     operations.append("denoise.results")
                 advertised: Dict[str, Any] = {
@@ -475,9 +479,10 @@ class CloudGateway:
         self, headers: Dict[str, str], body: bytes,
     ) -> Union[Tuple[int, Dict[str, str], bytes], Tuple[Dict[str, Any], list, str]]:
         """A batch body {metadata, tiles_png_b64, attempt_id}, or {metadata,
-        canvas_png_b64, canvas_rect, attempt_id} whose tiles are cut out of the
-        canvas (contract.py `analysis_canvas_tiles`), as (metadata, its (request,
-        tile PNG) pairs, attempt id), or the error answer."""
+        canvas_png_b64 or canvas_webp_b64, canvas_rect, attempt_id} whose tiles
+        are cut out of the canvas (contract.py `analysis_canvas_tiles`), as
+        (metadata, its (request, tile PNG) pairs, attempt id), or the error
+        answer."""
         content_type = {key.lower(): value for key, value in headers.items()}.get("content-type", "")
         if len(body) > ANALYSIS_BATCH_MAX_BODY_BYTES:
             return self._analysis_error(413, "payload_too_large", "Analysis JSON must be bounded")
@@ -486,7 +491,8 @@ class CloudGateway:
         metadata = None
         try:
             payload = json.loads(body)
-            canvas = type(payload) is dict and set(payload) == {"metadata", "canvas_png_b64", "canvas_rect", "attempt_id"}
+            canvas = next((key for key, _ in (("canvas_png_b64", "PNG"), ("canvas_webp_b64", "WEBP"))
+                           if type(payload) is dict and set(payload) == {"metadata", key, "canvas_rect", "attempt_id"}), None)
             if not canvas and (type(payload) is not dict or set(payload) != {"metadata", "tiles_png_b64", "attempt_id"}):
                 raise ContractValidationError("invalid analysis batch envelope")
             metadata = payload["metadata"]
@@ -494,10 +500,11 @@ class CloudGateway:
             if not valid_gpu_job_attempt(attempt_id):
                 raise ContractValidationError("invalid attempt id")
             if canvas:
-                if type(payload["canvas_png_b64"]) is not str:
+                if type(payload[canvas]) is not str:
                     raise ContractValidationError("invalid analysis canvas encoding")
                 tiles = analysis_canvas_tiles(metadata, payload["canvas_rect"],
-                                              base64.b64decode(payload["canvas_png_b64"], validate=True))
+                                              base64.b64decode(payload[canvas], validate=True),
+                                              "PNG" if canvas == "canvas_png_b64" else "WEBP")
             else:
                 encoded = payload["tiles_png_b64"]
                 if type(encoded) is not list or any(type(tile) is not str for tile in encoded):

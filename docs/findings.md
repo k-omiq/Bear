@@ -3324,6 +3324,38 @@ to the earlier prompt.
   effect. History: analysis protocol 1.0.0 sent tiles that did not overlap; 1.1.0 overlapped them
   for mask quality at seams ("Overlapping cloud SAM tiles now have a five-page live comparison"
   above) and put the overlap on the wire.
+- **Cloud Detect can send the canvas as a lossless WebP (2026-10-27).** The PNG canvas was 2.11 MB
+  a page on `p19/c23`, and base64 in the JSON body made it 2.82 MB on the wire. The scans are
+  RGB but nearly grey, and PNG compresses each channel on its own; WebP lossless subtracts green
+  from red and blue first, so most of the colour cost goes. Measured on copies of the 28 pages
+  (1080x1536, whole page as one canvas): PNG 2.11 MB, PNG at maximum effort 2.11 MB, WebP from
+  the app's own encoder (`image-webp` 0.2.4, already a `cleaner-core` dependency) 1.23 MB (1.01
+  to 1.43 MB) in about 11 ms a page, WebP from libwebp at method 6 0.88 MB. On the one fully grey
+  page WebP was 1.25 MB against 1.23 MB for PNG. A gateway that lists `analysis.batch_canvas` now
+  also lists `analysis.batch_canvas_webp` when its Pillow decodes WebP, and the app then sends
+  `canvas_webp_b64` in place of `canvas_png_b64`; a canvas with a side over 16383 (the WebP
+  limit) still goes as a PNG. The gateway cuts the same canonical tiles out of either and
+  checks their digests, so the requests, the review's tile digests, the journal and the worker
+  are unchanged, and a lossy or tampered WebP is refused there. Proof: on all 28 pages Pillow
+  decoded the app's WebP to the exact page pixels, and the gateway's `analysis_canvas_tiles` cut
+  it back into the four canonical tiles whose digests the requests name, in at most 0.04 s a
+  page. A shared fixture (`fixtures/analysis_v1/canvas_webp.json`) holds desktop-made WebP canvases
+  that both sides decode. The review states the WebP size, and a review made for one canvas
+  format is refused on a gateway that now takes the other (`gateway upload format changed`).
+  Wire bytes a page: 2.82 MB before, 1.64 MB now. Not done: libwebp would save another 0.35 MB a
+  page but needs a C dependency; sending the canvas as binary rather than base64 would save a
+  further quarter but changes the job envelope. Deployed the same day, code only, to the four
+  saved profiles (`mc-acb01f`, `mc-unbswc`, `mc-ab3xgz`, `mc-j4avmb`); all four now list
+  `analysis.batch_canvas_webp` with one code digest. Live on `mc-acb01f` (yarafiq1971, L4,
+  ap-south), one page at a time, each page sent as a PNG canvas and then as a WebP canvas
+  through the app's own `run_tiles` (debug test build, warm GPU after page 1): masks and boxes
+  identical on all four pages (1, 2, 3 and the grey page 14). Pages 2 and 3 took 7.14 and
+  7.82 s as PNG, 6.52 and 6.40 s as WebP; the debug build's canvas encode was 1.1 s for PNG and
+  0.5 s for WebP of that, so the transfer itself saved about 0.3 s a page on this route, inside
+  the noise of two pages. The rest of the roughly 6 s a page is gateway, GPU and polling, not
+  upload. The grey page took 5.95 s both ways. Not measured: a us-east route on the slow link
+  (`mc-ab3xgz`), where the upload is likely a larger share. Needs an app build to take effect;
+  an older app keeps the PNG canvas.
 - **The run consent shows no cost and no encoded size.** `costEstimateUsd` is always null, and
   `sourceBytes` is estimated from the source file, not the PNG tiles actually sent.
 - **Cloud detection on a long strip is proven offline only.** A run sends each page once and a

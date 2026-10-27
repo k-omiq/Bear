@@ -1571,10 +1571,10 @@ mod tests {
             use cleaner_core::cloud_analysis_wire::{canvas_tiles, AnalysisBatchResult, BatchUpload};
             let pngs = match upload {
                 BatchUpload::Tiles(tiles) => tiles.iter().map(|png| png.to_vec()).collect(),
-                BatchUpload::Canvas { rect, png } => {
+                BatchUpload::Canvas { rect, format, image } => {
                     let mut rects: Vec<TileRect> = batch.requests.iter().map(|request| request.tile_rect).collect();
                     rects.dedup();
-                    canvas_tiles(*rect, png, &rects)?
+                    canvas_tiles(*rect, *format, image, &rects)?
                 }
             };
             self.1.lock().unwrap().push(matches!(upload, BatchUpload::Canvas { .. }));

@@ -51,7 +51,7 @@ use cleaner_core::engines::render::CloudProvider;
 use cleaner_core::cloud_job_wire::{self as job_wire, JobEnvelope, JobKind, JobStatus};
 use cleaner_core::cloud_analysis_wire::{
     AnalysisBatch, AnalysisBatchResult, AnalysisCapabilities, AnalysisError, AnalysisRequest, AnalysisResult,
-    BatchUpload, BATCH_MAX_BODY_BYTES, BATCH_MAX_RESPONSE_BYTES, MAX_RESPONSE_BYTES,
+    BatchUpload, CanvasFormat, BATCH_MAX_BODY_BYTES, BATCH_MAX_RESPONSE_BYTES, MAX_RESPONSE_BYTES,
 };
 use cleaner_core::cloud_denoise_wire::{
     DenoiseCapabilities, DenoiseMetadata, DenoiseRejection, DenoiseResult,
@@ -1094,9 +1094,9 @@ impl CloudHttpClient {
                 "tiles_png_b64": tiles.iter().map(|png| base64(png)).collect::<Vec<_>>(),
                 "attempt_id": attempt_id,
             }),
-            BatchUpload::Canvas { rect, png } => serde_json::json!({
+            BatchUpload::Canvas { rect, format, image } => serde_json::json!({
                 "metadata": batch,
-                "canvas_png_b64": base64(png),
+                (match format { CanvasFormat::Png => "canvas_png_b64", CanvasFormat::Webp => "canvas_webp_b64" }): base64(image),
                 "canvas_rect": rect,
                 "attempt_id": attempt_id,
             }),
@@ -2924,7 +2924,7 @@ mod tests {
         assert!(!log.iter().any(|(_, path, _)| path.starts_with("/mc/analysis/v1/jobs")));
         drop(log);
         // A canvas goes in place of the tile PNGs, with its place on the page.
-        let canvas = BatchUpload::Canvas { rect, png: tile.to_vec() };
+        let canvas = BatchUpload::Canvas { rect, format: CanvasFormat::Png, image: tile.to_vec() };
         client.submit_analysis_batch(&batch, &canvas, &AtomicBool::new(false)).unwrap();
         let log = log_handle.lock().unwrap();
         let last: serde_json::Value = log.iter().rev()
@@ -2934,6 +2934,16 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(keys, ["attempt_id", "canvas_png_b64", "canvas_rect", "metadata"]);
         assert_eq!(last["canvas_rect"], serde_json::json!({"x": 0, "y": 0, "width": 16, "height": 16}));
+        drop(log);
+        // A WebP canvas goes under its own key.
+        let webp = BatchUpload::Canvas { rect, format: CanvasFormat::Webp, image: vec![1, 2, 3] };
+        client.submit_analysis_batch(&batch, &webp, &AtomicBool::new(false)).unwrap();
+        let log = log_handle.lock().unwrap();
+        let last: serde_json::Value = log.iter().rev()
+            .find(|(method, path, _)| method == "POST" && path == "/mc/analysis/v1/batches")
+            .map(|(_, _, body)| serde_json::from_slice(body).unwrap()).unwrap();
+        assert_eq!(last["canvas_webp_b64"], "AQID");
+        assert!(last.get("canvas_png_b64").is_none());
     }
 
     /// A redirect on a status read is refused as everywhere in this client, and

@@ -1841,6 +1841,18 @@ def validate_analysis_batch(metadata: Any, tiles: list) -> list:
 # both are checked against fixtures/analysis_v1/canonical_tiles.json.
 ANALYSIS_BATCH_CANVAS_OPERATION = "analysis.batch_canvas"
 ANALYSIS_BATCH_MAX_CANVAS_PIXELS = 16 * 1024 * 1024
+# Listed beside it when the canvas may also be a lossless WebP
+# (`canvas_webp_b64`). Noisy, nearly grey scans compress to about 0.6 of the
+# PNG, since WebP takes out what the colour channels share. The tiles are cut
+# out of either the same way, and their digests catch any pixel that differs.
+# Mirrors `cleaner_core::cloud_analysis_wire::BATCH_CANVAS_WEBP_OPERATION`.
+ANALYSIS_BATCH_CANVAS_WEBP_OPERATION = "analysis.batch_canvas_webp"
+
+
+def analysis_webp_canvas_supported() -> bool:
+    """Whether this Pillow decodes WebP, so the gateway may list the WebP canvas."""
+    from PIL import features
+    return bool(features.check_module("webp"))
 
 
 def _png_chunk(kind: bytes, data: bytes) -> bytes:
@@ -1873,13 +1885,15 @@ def analysis_canonical_tile_png(rgb: bytes, width: int, height: int) -> bytes:
     return png
 
 
-def analysis_canvas_tiles(metadata: Any, canvas_rect: Any, canvas_png: bytes) -> list:
+def analysis_canvas_tiles(metadata: Any, canvas_rect: Any, canvas_png: bytes, image_format: str = "PNG") -> list:
     """The distinct tile PNGs a canvas batch stands for, in request order, for
     `validate_analysis_batch`: each request's tile cut out of the canvas as its
     canonical PNG. Each place is cut once and must give the digest its requests
     name; places with one digest yield one PNG. Raises on a canvas that is too
-    large, not an 8-bit grey or RGB PNG of `canvas_rect`'s size, or that does not
-    hold a request's tile."""
+    large, not an 8-bit grey or RGB image in `image_format` ("PNG" or "WEBP")
+    of `canvas_rect`'s size, or that does not hold a request's tile."""
+    if image_format not in ("PNG", "WEBP"):
+        raise ContractValidationError("unsupported analysis canvas format")
     if type(metadata) is not dict or type(metadata.get("requests")) is not list \
             or not 1 <= len(metadata["requests"]) <= ANALYSIS_BATCH_MAX_REQUESTS:
         raise ContractValidationError("analysis batch request count out of range")
@@ -1903,12 +1917,13 @@ def analysis_canvas_tiles(metadata: Any, canvas_rect: Any, canvas_png: bytes) ->
     from io import BytesIO
     try:
         with Image.open(BytesIO(canvas_png)) as image:
-            if image.format != "PNG" or image.mode not in ("RGB", "L") or image.size != (rect["width"], rect["height"]):
+            if image.format != image_format or image.mode not in ("RGB", "L") \
+                    or image.size != (rect["width"], rect["height"]):
                 raise ContractValidationError("analysis canvas geometry or format mismatch")
             image.load()
             canvas = image.convert("RGB")
     except (OSError, ValueError, Image.DecompressionBombError) as exc:
-        raise ContractValidationError("invalid analysis canvas PNG") from exc
+        raise ContractValidationError("invalid analysis canvas image") from exc
     tiles: Dict[str, bytes] = {}
     for (x, y, width, height), sha in wanted.items():
         left, top = x - rect["x"], y - rect["y"]

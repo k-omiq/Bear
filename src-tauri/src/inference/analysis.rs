@@ -15,7 +15,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use cleaner_core::balloon::{BalloonBox, BalloonClass};
 use cleaner_core::cloud_analysis_wire::{
     self, AnalysisBatch, AnalysisBatchResult, AnalysisCapabilities, AnalysisRequest, AnalysisResult, BatchUpload,
-    TileRect, RT, SAM, VERSION,
+    CanvasFormat, TileRect, RT, SAM, VERSION,
 };
 use cleaner_core::cloud_job_wire::JobKind;
 use cleaner_core::cloud_decode::decode_analysis_mask;
@@ -110,6 +110,13 @@ pub(crate) trait AnalysisGateway {
         Ok(false)
     }
 
+    /// Whether that canvas may be a lossless WebP
+    /// ([`cleaner_core::cloud_analysis_wire::BATCH_CANVAS_WEBP_OPERATION`]).
+    /// Not by default (an older gateway): the canvas is then a PNG.
+    fn accepts_canvas_webp(&self) -> Result<bool, String> {
+        Ok(false)
+    }
+
     /// One batch of a page's requests in one call ([`AnalysisBatch`]), with its
     /// distinct tile PNGs or the canvas they are cut from, given up once
     /// `cancel` is set while it is out.
@@ -128,14 +135,15 @@ pub(crate) enum TileEncoding {
     /// `gray` and every pixel of the tile is grey.
     Png { gray: bool },
     /// Each tile is its [`cloud_analysis_wire::canonical_tile_png`], and a
-    /// batch carries the tiles as one canvas the gateway cuts them from, so
-    /// pixels where tiles overlap travel once.
-    Canvas,
+    /// batch carries the tiles as one canvas in this format that the gateway
+    /// cuts them from, so pixels where tiles overlap travel once.
+    Canvas(CanvasFormat),
 }
 
 pub(crate) fn tile_encoding<G: AnalysisGateway + ?Sized>(client: &G) -> Result<TileEncoding, String> {
     if client.serves_batches()? && client.accepts_batch_canvas()? {
-        return Ok(TileEncoding::Canvas);
+        let format = if client.accepts_canvas_webp()? { CanvasFormat::Webp } else { CanvasFormat::Png };
+        return Ok(TileEncoding::Canvas(format));
     }
     Ok(TileEncoding::Png { gray: client.accepts_gray_tiles()? })
 }
@@ -171,6 +179,11 @@ impl AnalysisGateway for CloudHttpClient {
 
     fn accepts_batch_canvas(&self) -> Result<bool, String> {
         self.serves_operation(cleaner_core::cloud_analysis_wire::BATCH_CANVAS_OPERATION)
+            .map_err(|e| e.to_string())
+    }
+
+    fn accepts_canvas_webp(&self) -> Result<bool, String> {
+        self.serves_operation(cleaner_core::cloud_analysis_wire::BATCH_CANVAS_WEBP_OPERATION)
             .map_err(|e| e.to_string())
     }
 
@@ -452,11 +465,11 @@ pub(crate) fn propose<G: AnalysisGateway>(
     let (source, page_width, page_height, tiles) =
         prepared_tiles(&job_path, page_index, TileChoice::Regions(&regions), encoding)?;
     // What the batches will carry: under a canvas, each pixel once.
-    let total_encoded_bytes = if encoding == TileEncoding::Canvas {
+    let total_encoded_bytes = if let TileEncoding::Canvas(format) = encoding {
         let uploads: Vec<TileUpload<'_>> = tiles.iter()
             .map(|(tile, png)| (tile.rect, tile.png_sha256.as_str(), png.as_slice())).collect();
         let steps = page_steps(&models, &hex(&source), &uploads, page_width, page_height)?;
-        page_batches(&steps, true)?.iter().map(|(_, upload)| upload.bytes() as u64).sum()
+        page_batches(&steps, Some(format))?.iter().map(|(_, upload)| upload.bytes() as u64).sum()
     } else {
         tiles.iter().map(|(tile, _)| tile.encoded_bytes as u64).sum()
     };
@@ -585,10 +598,10 @@ fn page_steps<'a>(models: &[RemoteModel], source_page_sha256: &str, tiles: &[Til
 
 /// The batches a batching gateway gets for `steps`
 /// ([`cloud_analysis_wire::batches`]), each with what it carries: its distinct
-/// tile PNGs, or under `canvas` one canvas over every tile when that is
-/// smaller ([`cloud_analysis_wire::batch_upload`]). A tile's requests are next
-/// to each other, so each tile is taken once by its place on the page.
-fn page_batches<'a>(steps: &[(AnalysisRequest, &'a [u8])], canvas: bool)
+/// tile PNGs, or under `canvas` one canvas in that format over every tile when
+/// that is smaller ([`cloud_analysis_wire::batch_upload`]). A tile's requests
+/// are next to each other, so each tile is taken once by its place on the page.
+fn page_batches<'a>(steps: &[(AnalysisRequest, &'a [u8])], canvas: Option<CanvasFormat>)
     -> Result<Vec<(std::ops::Range<usize>, BatchUpload<'a>)>, String> {
     let planned: Vec<(&AnalysisRequest, &[u8])> = steps.iter().map(|(request, png)| (request, *png)).collect();
     cloud_analysis_wire::batches(&planned).into_iter().map(|range| {
@@ -641,7 +654,10 @@ pub(crate) fn run_tiles<G: AnalysisGateway + ?Sized>(
         if cancel.load(Ordering::SeqCst) { AnalysisFlowError::Cancelled } else { AnalysisFlowError::Other(error) }
     };
     if client.serves_batches().map_err(AnalysisFlowError::Other)? {
-        let canvas = encoding == TileEncoding::Canvas && client.accepts_batch_canvas().map_err(AnalysisFlowError::Other)?;
+        let canvas = match encoding {
+            TileEncoding::Canvas(format) if client.accepts_batch_canvas().map_err(AnalysisFlowError::Other)? => Some(format),
+            _ => None,
+        };
         for (range, upload) in page_batches(&steps, canvas)? {
             for step in range.clone() { before(step)?; }
             let batch = AnalysisBatch::new(steps[range.clone()].iter().map(|(request, _)| request.clone()).collect());
@@ -687,7 +703,7 @@ pub(crate) fn encode_tile(page: &Raster, rect: TileRect, encoding: TileEncoding)
         }
     }
     let gray_tiles = match encoding {
-        TileEncoding::Canvas => {
+        TileEncoding::Canvas(_) => {
             let png = cloud_analysis_wire::canonical_tile_png(&rgb, rect.width, rect.height)?;
             return Ok((hex(&png), png));
         }
@@ -1250,8 +1266,10 @@ mod tests {
     /// goes through [`FakeGateway::analyze`], which checks its PNG digest.
     struct CanvasBatching {
         inner: FakeGateway,
-        /// Each batch's canvas rectangle and PNG size, or `None` for tile PNGs.
-        sent: Mutex<Vec<Option<(TileRect, usize)>>>,
+        /// Whether it lists the WebP canvas.
+        webp: bool,
+        /// Each batch's canvas rectangle, format and size, or `None` for tile PNGs.
+        sent: Mutex<Vec<Option<(TileRect, CanvasFormat, usize)>>>,
     }
 
     impl AnalysisGateway for CanvasBatching {
@@ -1261,6 +1279,7 @@ mod tests {
         }
         fn serves_batches(&self) -> Result<bool, String> { Ok(true) }
         fn accepts_batch_canvas(&self) -> Result<bool, String> { Ok(true) }
+        fn accepts_canvas_webp(&self) -> Result<bool, String> { Ok(self.webp) }
         fn analyze_batch(&self, batch: &AnalysisBatch, upload: &BatchUpload<'_>, _: &AtomicBool)
             -> Result<AnalysisBatchResult, String> {
             let pngs: Vec<Vec<u8>> = match upload {
@@ -1268,11 +1287,11 @@ mod tests {
                     self.sent.lock().unwrap().push(None);
                     tiles.iter().map(|png| png.to_vec()).collect()
                 }
-                BatchUpload::Canvas { rect, png } => {
-                    self.sent.lock().unwrap().push(Some((*rect, png.len())));
+                BatchUpload::Canvas { rect, format, image } => {
+                    self.sent.lock().unwrap().push(Some((*rect, *format, image.len())));
                     let mut rects: Vec<TileRect> = batch.requests.iter().map(|request| request.tile_rect).collect();
                     rects.dedup();
-                    cloud_analysis_wire::canvas_tiles(*rect, png, &rects)?
+                    cloud_analysis_wire::canvas_tiles(*rect, *format, image, &rects)?
                 }
             };
             let results = batch.requests.iter().map(|request| {
@@ -1289,35 +1308,41 @@ mod tests {
     /// gateway rebuilds from it.
     #[test]
     fn a_canvas_gateway_gets_each_pixel_once_and_the_review_states_its_size() {
-        let (path, journal) = fixture_with_width("canvas", 1600);
-        let tiles_only = proposal(path.clone(), &journal, &fake_gateway());
-        let gateway = CanvasBatching { inner: fake_gateway(), sent: Mutex::new(Vec::new()) };
-        let proposed = propose(path, "chapter".into(), 0, CloudProvider::Modal, "modal-prof-1".into(),
-            "Modal".into(), "a".repeat(64), SAM.into(), None, vec![], &gateway, &journal).unwrap();
-        assert_eq!(proposed.tiles.len(), 2);
-        // Each disclosed tile is its canonical PNG, not the compressed one.
-        assert!(proposed.tiles.iter().zip(&tiles_only.tiles).all(|(canvas, png)|
-            canvas.rect == png.rect && canvas.png_sha256 != png.png_sha256 && canvas.input_sha256 == png.input_sha256));
-        confirm_and_run(&proposed.proposal_id, true, true, &gateway, &journal, |_| {}).unwrap();
-        let sent = gateway.sent.lock().unwrap().clone();
-        assert_eq!(sent, vec![Some((TileRect { x: 0, y: 0, width: 1600, height: 256 }, proposed.total_encoded_bytes as usize))]);
-        assert!(proposed.total_encoded_bytes < tiles_only.total_encoded_bytes);
-        assert_eq!(gateway.inner.submissions.load(Ordering::SeqCst), 2);
-        assert!(matches!(journal.read(&proposed.proposal_id).unwrap().phase, AnalysisPhase::AttachedEvidence));
+        let mut canvas_bytes = Vec::new();
+        for (name, webp, format) in [("canvas", false, CanvasFormat::Png), ("canvas-webp", true, CanvasFormat::Webp)] {
+            let (path, journal) = fixture_with_width(name, 1600);
+            let tiles_only = proposal(path.clone(), &journal, &fake_gateway());
+            let gateway = CanvasBatching { inner: fake_gateway(), webp, sent: Mutex::new(Vec::new()) };
+            let proposed = propose(path, "chapter".into(), 0, CloudProvider::Modal, "modal-prof-1".into(),
+                "Modal".into(), "a".repeat(64), SAM.into(), None, vec![], &gateway, &journal).unwrap();
+            assert_eq!(proposed.tiles.len(), 2);
+            // Each disclosed tile is its canonical PNG, not the compressed one.
+            assert!(proposed.tiles.iter().zip(&tiles_only.tiles).all(|(canvas, png)|
+                canvas.rect == png.rect && canvas.png_sha256 != png.png_sha256 && canvas.input_sha256 == png.input_sha256));
+            confirm_and_run(&proposed.proposal_id, true, true, &gateway, &journal, |_| {}).unwrap();
+            let sent = gateway.sent.lock().unwrap().clone();
+            assert_eq!(sent, vec![Some((TileRect { x: 0, y: 0, width: 1600, height: 256 }, format,
+                proposed.total_encoded_bytes as usize))]);
+            assert!(proposed.total_encoded_bytes < tiles_only.total_encoded_bytes);
+            assert_eq!(gateway.inner.submissions.load(Ordering::SeqCst), 2);
+            assert!(matches!(journal.read(&proposed.proposal_id).unwrap().phase, AnalysisPhase::AttachedEvidence));
+            canvas_bytes.push(proposed.total_encoded_bytes);
+        }
+        assert!(canvas_bytes[1] < canvas_bytes[0], "the WebP canvas is smaller: {canvas_bytes:?}");
     }
 
     /// A partial review's canvas covers the approved tile and nothing past it.
     #[test]
     fn a_partial_selection_sends_a_canvas_of_the_approved_tiles_only() {
         let (path, journal) = fixture_with_width("canvas-partial", 1600);
-        let gateway = CanvasBatching { inner: fake_gateway(), sent: Mutex::new(Vec::new()) };
+        let gateway = CanvasBatching { inner: fake_gateway(), webp: true, sent: Mutex::new(Vec::new()) };
         let region = TileRect { x: 10, y: 10, width: 50, height: 50 };
         let proposed = propose(path, "chapter".into(), 0, CloudProvider::Modal, "modal-prof-1".into(),
             "Modal".into(), "a".repeat(64), SAM.into(), None, vec![region], &gateway, &journal).unwrap();
         let approved = TileRect { x: 0, y: 0, width: 1024, height: 256 };
         assert_eq!(proposed.tiles.iter().map(|t| t.rect).collect::<Vec<_>>(), vec![approved]);
         confirm_and_run(&proposed.proposal_id, true, true, &gateway, &journal, |_| {}).unwrap();
-        assert_eq!(gateway.sent.lock().unwrap().iter().map(|sent| sent.map(|(rect, _)| rect)).collect::<Vec<_>>(),
+        assert_eq!(gateway.sent.lock().unwrap().iter().map(|sent| sent.map(|(rect, _, _)| rect)).collect::<Vec<_>>(),
             vec![Some(approved)]);
     }
 
@@ -1326,7 +1351,7 @@ mod tests {
     #[test]
     fn a_canvas_review_does_not_run_on_a_gateway_that_lost_the_canvas() {
         let (path, journal) = fixture_with_width("canvas-lost", 1600);
-        let gateway = CanvasBatching { inner: fake_gateway(), sent: Mutex::new(Vec::new()) };
+        let gateway = CanvasBatching { inner: fake_gateway(), webp: false, sent: Mutex::new(Vec::new()) };
         let proposed = propose(path, "chapter".into(), 0, CloudProvider::Modal, "modal-prof-1".into(),
             "Modal".into(), "a".repeat(64), SAM.into(), None, vec![TileRect { x: 10, y: 10, width: 50, height: 50 }],
             &gateway, &journal).unwrap();
@@ -1334,6 +1359,14 @@ mod tests {
         let refused = confirm_and_run(&proposed.proposal_id, true, true, &older, &journal, |_| {});
         assert!(refused.err().is_some_and(|error| error.contains("gateway upload format changed")));
         assert_eq!(older.submissions.load(Ordering::SeqCst), 0);
+        // A review that disclosed a WebP canvas is not sent as a PNG one either.
+        let (path, journal) = fixture_with_width("canvas-webp-lost", 1600);
+        let webp = CanvasBatching { inner: fake_gateway(), webp: true, sent: Mutex::new(Vec::new()) };
+        let proposed = propose(path, "chapter".into(), 0, CloudProvider::Modal, "modal-prof-1".into(),
+            "Modal".into(), "a".repeat(64), SAM.into(), None, vec![], &webp, &journal).unwrap();
+        let refused = confirm_and_run(&proposed.proposal_id, true, true, &gateway, &journal, |_| {});
+        assert!(refused.err().is_some_and(|error| error.contains("gateway upload format changed")));
+        assert!(gateway.sent.lock().unwrap().is_empty());
     }
 
     fn fake_gateway() -> FakeGateway {

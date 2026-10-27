@@ -401,6 +401,13 @@ pub fn batches(steps: &[(&AnalysisRequest, &[u8])]) -> Vec<std::ops::Range<usize
 /// their digests and the models' input are those of the tiles. Without the
 /// operation every tile PNG is sent, as before.
 pub const BATCH_CANVAS_OPERATION: &str = "analysis.batch_canvas";
+/// Listed beside [`BATCH_CANVAS_OPERATION`] when the canvas may also be a
+/// lossless WebP (`canvas_webp_b64`, `contract.py`
+/// `ANALYSIS_BATCH_CANVAS_WEBP_OPERATION`). Scans are noisy and nearly grey:
+/// WebP takes out what the colour channels share, which PNG cannot, so a
+/// 1080x1536 page of `p19/c23` fell from 2.11 MB to 1.23 MB. The gateway cuts
+/// the same canonical tiles out of either, so nothing past it changes.
+pub const BATCH_CANVAS_WEBP_OPERATION: &str = "analysis.batch_canvas_webp";
 /// The largest canvas, in pixels, a gateway decodes.
 pub const BATCH_MAX_CANVAS_PIXELS: u64 = 16 * 1024 * 1024;
 
@@ -465,12 +472,22 @@ pub fn canonical_tile_png(rgb: &[u8], width: u32, height: u32) -> Result<Vec<u8>
     Ok(png)
 }
 
+/// The container of a batch canvas: a PNG (`canvas_png_b64`), or a lossless
+/// WebP (`canvas_webp_b64`) for a gateway that lists
+/// [`BATCH_CANVAS_WEBP_OPERATION`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasFormat {
+    Png,
+    Webp,
+}
+
 /// What one batch sends besides its metadata: the distinct tile PNGs
-/// (`tiles_png_b64`), or one canvas (`canvas_png_b64` and `canvas_rect`).
+/// (`tiles_png_b64`), or one canvas (`canvas_png_b64` or `canvas_webp_b64`,
+/// and `canvas_rect`).
 #[derive(Debug, Clone)]
 pub enum BatchUpload<'a> {
     Tiles(Vec<&'a [u8]>),
-    Canvas { rect: TileRect, png: Vec<u8> },
+    Canvas { rect: TileRect, format: CanvasFormat, image: Vec<u8> },
 }
 
 impl BatchUpload<'_> {
@@ -478,9 +495,25 @@ impl BatchUpload<'_> {
     pub fn bytes(&self) -> usize {
         match self {
             Self::Tiles(pngs) => pngs.iter().map(|png| png.len()).sum(),
-            Self::Canvas { png, .. } => png.len(),
+            Self::Canvas { image, .. } => image.len(),
         }
     }
+}
+
+/// A canvas of `rect`'s size, grey or RGB with no alpha, as RGB pixels.
+fn canvas_pixels(image: &[u8], format: CanvasFormat, rect: TileRect) -> Result<Vec<u8>, String> {
+    if format == CanvasFormat::Png {
+        return rgb_pixels(image, rect, BATCH_MAX_CANVAS_PIXELS);
+    }
+    let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(image)).map_err(|e| e.to_string())?;
+    if decoder.dimensions() != (rect.width, rect.height) || decoder.has_alpha()
+        || u64::from(rect.width) * u64::from(rect.height) > BATCH_MAX_CANVAS_PIXELS
+    {
+        return Err("analysis canvas geometry mismatch".into());
+    }
+    let mut buffer = vec![0; decoder.output_buffer_size().ok_or("WebP output too large")?];
+    decoder.read_image(&mut buffer).map_err(|e| e.to_string())?;
+    Ok(buffer)
 }
 
 /// A PNG of `rect`'s size, grey or RGB, as RGB pixels.
@@ -521,15 +554,17 @@ fn cut(canvas: &[u8], canvas_rect: TileRect, tile: TileRect) -> Option<Vec<u8>> 
 }
 
 /// What a batch of `tiles` (each tile's place on the page and its
-/// [`canonical_tile_png`]) sends: one canvas over their bounding box, every
-/// pixel outside the tiles white so nothing the tiles do not hold is sent, or
-/// the tile PNGs when that canvas would be larger or `canvas` is false. Tiles
+/// [`canonical_tile_png`]) sends: one canvas in `canvas`'s format over their
+/// bounding box, every pixel outside the tiles white so nothing the tiles do
+/// not hold is sent, or the tile PNGs when that canvas would be larger or
+/// `canvas` is `None`. A canvas WebP cannot hold (a side over 16383) goes as
+/// a PNG, which every canvas gateway takes. Tiles
 /// at two places can hold the same pixels (a blank margin); the canvas holds
 /// both places and the tile PNGs name that PNG once, as the gateway requires.
 /// Refused when a tile is not canonical or two tiles disagree where they
 /// overlap, since the gateway would then cut other pixels than the requests
 /// name.
-pub fn batch_upload<'a>(tiles: &[(TileRect, &'a [u8])], canvas: bool) -> Result<BatchUpload<'a>, String> {
+pub fn batch_upload<'a>(tiles: &[(TileRect, &'a [u8])], canvas: Option<CanvasFormat>) -> Result<BatchUpload<'a>, String> {
     let pngs = || {
         let mut distinct: Vec<&'a [u8]> = Vec::new();
         for (_, png) in tiles {
@@ -542,9 +577,8 @@ pub fn batch_upload<'a>(tiles: &[(TileRect, &'a [u8])], canvas: bool) -> Result<
     let right = tiles.iter().map(|(r, _)| r.x + r.width).max().unwrap_or(left);
     let bottom = tiles.iter().map(|(r, _)| r.y + r.height).max().unwrap_or(top);
     let rect = TileRect { x: left, y: top, width: right - left, height: bottom - top };
-    if !canvas || u64::from(rect.width) * u64::from(rect.height) > BATCH_MAX_CANVAS_PIXELS {
-        return Ok(pngs());
-    }
+    let Some(format) = canvas.filter(|_| u64::from(rect.width) * u64::from(rect.height) <= BATCH_MAX_CANVAS_PIXELS)
+    else { return Ok(pngs()) };
     let stride = rect.width as usize * 3;
     let mut pixels = vec![255u8; stride * rect.height as usize];
     let mut decoded = Vec::with_capacity(tiles.len());
@@ -565,26 +599,36 @@ pub fn batch_upload<'a>(tiles: &[(TileRect, &'a [u8])], canvas: bool) -> Result<
         }
     }
     let gray = pixels.chunks_exact(3).all(|p| p[0] == p[1] && p[1] == p[2]);
-    let raster = crate::image::Raster {
-        width: rect.width, height: rect.height,
-        mode: if gray { crate::image::ColorMode::Gray } else { crate::image::ColorMode::Rgb },
-        depth: crate::image::BitDepth::Eight, icc: None, palette: None, trns: None,
-        srgb_intent: Some(1), color: Default::default(),
-        data: if gray { pixels.chunks_exact(3).map(|p| p[0]).collect() } else { pixels },
+    let data: Vec<u8> = if gray { pixels.chunks_exact(3).map(|p| p[0]).collect() } else { pixels };
+    let webp = (format == CanvasFormat::Webp).then(|| {
+        let mut webp = Vec::new();
+        let color = if gray { image_webp::ColorType::L8 } else { image_webp::ColorType::Rgb8 };
+        image_webp::WebPEncoder::new(&mut webp).encode(&data, rect.width, rect.height, color).ok().map(|()| webp)
+    }).flatten();
+    let upload = match webp {
+        Some(image) => BatchUpload::Canvas { rect, format: CanvasFormat::Webp, image },
+        None => {
+            let raster = crate::image::Raster {
+                width: rect.width, height: rect.height,
+                mode: if gray { crate::image::ColorMode::Gray } else { crate::image::ColorMode::Rgb },
+                depth: crate::image::BitDepth::Eight, icc: None, palette: None, trns: None,
+                srgb_intent: Some(1), color: Default::default(), data,
+            };
+            let image = crate::image::encode(&raster, crate::image::Format::Png).map_err(|e| e.to_string())?;
+            BatchUpload::Canvas { rect, format: CanvasFormat::Png, image }
+        }
     };
-    let png = crate::image::encode(&raster, crate::image::Format::Png).map_err(|e| e.to_string())?;
-    let upload = BatchUpload::Canvas { rect, png };
     Ok(if upload.bytes() < pngs().bytes() { upload } else { pngs() })
 }
 
 /// The gateway's side of a canvas: each of `tiles` cut out of it as its
 /// [`canonical_tile_png`]. Mirrors `contract.py` `analysis_canvas_tiles`; the
 /// app uses it in tests, standing in for the gateway.
-pub fn canvas_tiles(rect: TileRect, png: &[u8], tiles: &[TileRect]) -> Result<Vec<Vec<u8>>, String> {
-    if rect.width == 0 || rect.height == 0 || png.len() > BATCH_MAX_TILE_BYTES {
+pub fn canvas_tiles(rect: TileRect, format: CanvasFormat, image: &[u8], tiles: &[TileRect]) -> Result<Vec<Vec<u8>>, String> {
+    if rect.width == 0 || rect.height == 0 || image.len() > BATCH_MAX_TILE_BYTES {
         return Err("invalid analysis canvas".into());
     }
-    let pixels = rgb_pixels(png, rect, BATCH_MAX_CANVAS_PIXELS)?;
+    let pixels = canvas_pixels(image, format, rect)?;
     tiles.iter().map(|tile| {
         let rgb = cut(&pixels, rect, *tile).ok_or("analysis tile outside its canvas")?;
         canonical_tile_png(&rgb, tile.width, tile.height)
@@ -682,13 +726,28 @@ mod tests {
         assert!(canonical_tile_png(&[0; 3], 1, 2).is_err());
     }
 
+    /// The WebP canvases in this fixture are what this encoder made; the
+    /// gateway test decodes the same bytes with Pillow to the same pixels.
+    #[test]
+    fn cloud_webp_canvas_fixture_decodes_on_both_sides() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../deploy/cloud/fixtures/analysis_v1/canvas_webp.json")).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let (width, height) = (case["width"].as_u64().unwrap() as u32, case["height"].as_u64().unwrap() as u32);
+            let hex = case["webp_hex"].as_str().unwrap();
+            let webp: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+            let rect = TileRect { x: 0, y: 0, width, height };
+            assert_eq!(canvas_pixels(&webp, CanvasFormat::Webp, rect).unwrap(), pattern(width, height, case["pattern"] == "gray"));
+        }
+    }
+
     fn tile_of(page: &[u8], page_width: u32, rect: TileRect) -> Vec<u8> {
         cut(page, TileRect { x: 0, y: 0, width: page_width, height: (page.len() / 3 / page_width as usize) as u32 }, rect).unwrap()
     }
 
     #[test]
     fn cloud_canvas_carries_each_tile_once_and_blanks_what_was_not_approved() {
-        for gray in [false, true] {
+        for (gray, format) in [false, true].into_iter().flat_map(|gray| [(gray, CanvasFormat::Png), (gray, CanvasFormat::Webp)]) {
             let (width, height) = (1080, 1536);
             let page = pattern(width, height, gray);
             let plan = crate::cloud_tiles::planned(width, height).unwrap();
@@ -697,17 +756,21 @@ mod tests {
                 .map(|t| canonical_tile_png(&tile_of(&page, width, t.tile), t.tile.width, t.tile.height).unwrap()).collect();
             // The whole page: one canvas of the page, cut back into the same tiles.
             let all: Vec<(TileRect, &[u8])> = plan.iter().zip(&pngs).map(|(t, png)| (t.tile, png.as_slice())).collect();
-            let BatchUpload::Canvas { rect, png } = batch_upload(&all, true).unwrap() else { panic!("tiles sent") };
-            assert_eq!(rect, TileRect { x: 0, y: 0, width, height });
-            assert!(png.len() < pngs.iter().map(Vec::len).sum::<usize>());
+            let BatchUpload::Canvas { rect, format: sent_as, image } = batch_upload(&all, Some(format)).unwrap()
+                else { panic!("tiles sent") };
+            assert_eq!((rect, sent_as), (TileRect { x: 0, y: 0, width, height }, format));
+            assert!(image.len() < pngs.iter().map(Vec::len).sum::<usize>());
             let tiles: Vec<TileRect> = plan.iter().map(|t| t.tile).collect();
-            assert_eq!(canvas_tiles(rect, &png, &tiles).unwrap(), pngs);
+            assert_eq!(canvas_tiles(rect, format, &image, &tiles).unwrap(), pngs);
+            // The gateway reads the container the body names, never another.
+            let other = if format == CanvasFormat::Png { CanvasFormat::Webp } else { CanvasFormat::Png };
+            assert!(canvas_tiles(rect, other, &image, &tiles).is_err());
             // A partial review of two diagonal tiles: their bounding box is the
             // page, and every pixel outside both tiles is white.
             let chosen = [all[0], all[3]];
-            let BatchUpload::Canvas { rect, png } = batch_upload(&chosen, true).unwrap() else { panic!("tiles sent") };
-            assert_eq!(canvas_tiles(rect, &png, &[plan[0].tile, plan[3].tile]).unwrap(), vec![pngs[0].clone(), pngs[3].clone()]);
-            let sent = rgb_pixels(&png, rect, BATCH_MAX_CANVAS_PIXELS).unwrap();
+            let BatchUpload::Canvas { rect, image, .. } = batch_upload(&chosen, Some(format)).unwrap() else { panic!("tiles sent") };
+            assert_eq!(canvas_tiles(rect, format, &image, &[plan[0].tile, plan[3].tile]).unwrap(), vec![pngs[0].clone(), pngs[3].clone()]);
+            let sent = canvas_pixels(&image, format, rect).unwrap();
             let inside = |x: u32, y: u32, r: TileRect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
             let mut blank = 0;
             for y in 0..height {
@@ -726,8 +789,21 @@ mod tests {
             // this pattern repeats every 512 rows, so each lower tile is the
             // PNG of the tile above it.
             assert_eq!((&pngs[0], &pngs[1]), (&pngs[2], &pngs[3]));
-            assert!(matches!(batch_upload(&all, false).unwrap(), BatchUpload::Tiles(p) if p.len() == 2));
+            assert!(matches!(batch_upload(&all, None).unwrap(), BatchUpload::Tiles(p) if p.len() == 2));
         }
+    }
+
+    /// WebP holds at most 16383 pixels a side; a wider canvas goes as a PNG.
+    #[test]
+    fn cloud_canvas_wider_than_webp_goes_as_png() {
+        let png = canonical_tile_png(&[255; 1024 * 3], 1024, 1).unwrap();
+        let tiles: Vec<(TileRect, &[u8])> =
+            (0..17).map(|i| (TileRect { x: i * 1024, y: 0, width: 1024, height: 1 }, png.as_slice())).collect();
+        let BatchUpload::Canvas { rect, format, image } = batch_upload(&tiles, Some(CanvasFormat::Webp)).unwrap()
+            else { panic!("tiles sent") };
+        assert_eq!((rect.width, format), (17 * 1024, CanvasFormat::Png));
+        let places: Vec<TileRect> = tiles.iter().map(|(rect, _)| *rect).collect();
+        assert_eq!(canvas_tiles(rect, format, &image, &places).unwrap(), vec![png; 17]);
     }
 
     /// Two tiles of a blank page hold the same pixels: the canvas still holds
@@ -737,10 +813,11 @@ mod tests {
         let plan = crate::cloud_tiles::planned(1500, 256).unwrap();
         let png = canonical_tile_png(&vec![255; 1024 * 256 * 3], 1024, 256).unwrap();
         let tiles = [(plan[0].tile, png.as_slice()), (plan[1].tile, png.as_slice())];
-        let BatchUpload::Canvas { rect, png: canvas } = batch_upload(&tiles, true).unwrap() else { panic!("tiles sent") };
+        let BatchUpload::Canvas { rect, format, image } = batch_upload(&tiles, Some(CanvasFormat::Webp)).unwrap()
+            else { panic!("tiles sent") };
         assert_eq!(rect, TileRect { x: 0, y: 0, width: 1500, height: 256 });
-        assert_eq!(canvas_tiles(rect, &canvas, &[plan[0].tile, plan[1].tile]).unwrap(), vec![png.clone(), png.clone()]);
-        assert!(matches!(batch_upload(&tiles, false).unwrap(), BatchUpload::Tiles(p) if p.len() == 1));
+        assert_eq!(canvas_tiles(rect, format, &image, &[plan[0].tile, plan[1].tile]).unwrap(), vec![png.clone(), png.clone()]);
+        assert!(matches!(batch_upload(&tiles, None).unwrap(), BatchUpload::Tiles(p) if p.len() == 1));
     }
 
     #[test]
@@ -755,16 +832,16 @@ mod tests {
             icc: None, palette: None, trns: None, srgb_intent: Some(1), color: Default::default(), data: first.clone(),
         };
         let compressed = crate::image::encode(&raster, crate::image::Format::Png).unwrap();
-        assert!(batch_upload(&[(plan[0].tile, &compressed)], true).is_err());
+        assert!(batch_upload(&[(plan[0].tile, &compressed)], Some(CanvasFormat::Png)).is_err());
         // Two tiles that disagree where they overlap.
         let mut other = tile_of(&page, width, plan[1].tile);
         other[0] ^= 1;
         let (a, b) = (canonical_tile_png(&first, 1024, 1024).unwrap(), canonical_tile_png(&other, 1024, 1024).unwrap());
-        assert!(batch_upload(&[(plan[0].tile, &a), (plan[1].tile, &b)], true).is_err());
+        assert!(batch_upload(&[(plan[0].tile, &a), (plan[1].tile, &b)], Some(CanvasFormat::Webp)).is_err());
         // The gateway refuses a tile outside the canvas.
-        let BatchUpload::Canvas { rect, png } = batch_upload(&[(plan[0].tile, &a)], true).unwrap()
+        let BatchUpload::Canvas { rect, format, image } = batch_upload(&[(plan[0].tile, &a)], Some(CanvasFormat::Webp)).unwrap()
             else { panic!("tile sent") };
-        assert!(canvas_tiles(rect, &png, &[plan[3].tile]).is_err());
+        assert!(canvas_tiles(rect, format, &image, &[plan[3].tile]).is_err());
     }
 
     #[test]

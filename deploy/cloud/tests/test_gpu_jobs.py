@@ -12,9 +12,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import itertools
 import json
 import time
 import unittest
+from unittest import mock
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +29,7 @@ from deploy.cloud.common.api import CloudGateway
 from deploy.cloud.common.capacity import MODAL_WEB_REDIRECT_SECONDS, SYNC_GPU_WAIT_SECONDS
 from deploy.cloud.common.contract import (
     ANALYSIS_BATCH_CANVAS_OPERATION,
+    ANALYSIS_BATCH_CANVAS_WEBP_OPERATION,
     ANALYSIS_BATCH_MAX_CANVAS_PIXELS,
     ANALYSIS_BATCH_MAX_REQUESTS,
     ANALYSIS_RT,
@@ -750,11 +753,16 @@ class AnalysisCanvasBatchTest(unittest.TestCase):
         Image.fromarray(pixels).convert(mode).save(out, format="PNG")
         return out.getvalue()
 
-    def body(self, canvas: bytes, rect: Dict[str, int], requests=None) -> Dict[str, Any]:
+    def canvas_webp(self, pixels: np.ndarray, mode: str = "RGB", **options: Any) -> bytes:
+        out = io.BytesIO()
+        Image.fromarray(pixels).convert(mode).save(out, format="WEBP", **({"lossless": True} | options))
+        return out.getvalue()
+
+    def body(self, canvas: bytes, rect: Dict[str, int], requests=None, key: str = "canvas_png_b64") -> Dict[str, Any]:
         requests = self.requests() if requests is None else requests
         return {"metadata": {"protocol_version": ANALYSIS_VERSION, "requests": requests,
                              "request_digest": analysis_batch_digest([r["request_digest"] for r in requests])},
-                "canvas_png_b64": base64.b64encode(canvas).decode(), "canvas_rect": rect, "attempt_id": ATTEMPT}
+                key: base64.b64encode(canvas).decode(), "canvas_rect": rect, "attempt_id": ATTEMPT}
 
     def post(self, body: Dict[str, Any]):
         status, _, raw = self.gateway.handle_http_request(
@@ -784,21 +792,44 @@ class AnalysisCanvasBatchTest(unittest.TestCase):
     def test_capabilities_list_the_canvas_only_with_batches(self) -> None:
         _, _, raw = self.gateway.handle_http_request("GET", "/mc/v1/capabilities", {}, b"")
         self.assertIn(ANALYSIS_BATCH_CANVAS_OPERATION, json.loads(raw)["operations"])
+        self.assertIn(ANALYSIS_BATCH_CANVAS_WEBP_OPERATION, json.loads(raw)["operations"])
         tiles_only = Proxy(None, "analysis", self.modal.spawn)  # type: ignore[arg-type]
         tiles_only.submit_batch_job = None
         _, _, raw = CloudGateway("modal", trust_edge_auth=True, analysis_worker=tiles_only).handle_http_request(
             "GET", "/mc/v1/capabilities", {}, b"")
         self.assertNotIn(ANALYSIS_BATCH_CANVAS_OPERATION, json.loads(raw)["operations"])
+        self.assertNotIn(ANALYSIS_BATCH_CANVAS_WEBP_OPERATION, json.loads(raw)["operations"])
+        # A Pillow without WebP does not list it.
+        with mock.patch("deploy.cloud.common.api.analysis_webp_canvas_supported", return_value=False):
+            _, _, raw = self.gateway.handle_http_request("GET", "/mc/v1/capabilities", {}, b"")
+        self.assertIn(ANALYSIS_BATCH_CANVAS_OPERATION, json.loads(raw)["operations"])
+        self.assertNotIn(ANALYSIS_BATCH_CANVAS_WEBP_OPERATION, json.loads(raw)["operations"])
+
+    def test_the_desktop_webp_canvases_decode_to_their_pixels(self) -> None:
+        # The same bytes are decoded in cleaner_core::cloud_analysis_wire.
+        with open("deploy/cloud/fixtures/analysis_v1/canvas_webp.json") as source:
+            cases = json.load(source)["cases"]
+        for case in cases:
+            width, height = case["width"], case["height"]
+            y, x = np.mgrid[0:height, 0:width]
+            if case["pattern"] == "gray":
+                pixels = np.stack([(3 * x + 5 * y) % 256] * 3, axis=-1)
+            else:
+                pixels = np.stack([(7 * x + 3 * y) % 256, (5 * x + 11 * y) % 256, (13 * x + y) % 256], axis=-1)
+            with Image.open(io.BytesIO(bytes.fromhex(case["webp_hex"]))) as image:
+                self.assertEqual((image.format, image.mode in ("RGB", "L")), ("WEBP", True))
+                self.assertEqual(np.asarray(image.convert("RGB")).tobytes(), pixels.astype(np.uint8).tobytes())
 
     def test_a_canvas_reaches_the_gpu_as_the_tiles_it_stands_for(self) -> None:
-        for mode in ("RGB", "L"):
+        for attempt, (mode, key) in enumerate(itertools.product(("RGB", "L"), ("canvas_png_b64", "canvas_webp_b64"))):
             if mode == "L":
                 grey = self.page[..., 0]
                 self.page = np.stack([grey] * 3, axis=-1)
                 self.tiles = [self.canonical(entry["tile"]) for entry in self.plan]
             self.modal.spawned.clear()
-            body = self.body(self.canvas_png(self.page, mode), self.page_rect())
-            body["attempt_id"] = ATTEMPT[:-1] + ("a" if mode == "RGB" else "b")
+            encode = self.canvas_png if key == "canvas_png_b64" else self.canvas_webp
+            body = self.body(encode(self.page, mode), self.page_rect(), key=key)
+            body["attempt_id"] = ATTEMPT[:-1] + "abcd"[attempt]
             status, accepted = self.post(body)
             self.assertEqual(status, 202, accepted)
             metadata, pairs = self.modal.spawned[0]
@@ -847,6 +878,9 @@ class AnalysisCanvasBatchTest(unittest.TestCase):
         tampered[5, 600, 1] ^= 1
         rgba = io.BytesIO()
         Image.fromarray(self.page).convert("RGBA").save(rgba, format="PNG")
+        # libwebp drops an alpha channel that is opaque everywhere, so one pixel is not.
+        translucent = np.dstack([self.page, np.full(self.page.shape[:2], 255, np.uint8)])
+        translucent[0, 0, 3] = 254
         both = self.body(self.canvas_png(self.page), rect)
         both["tiles_png_b64"] = [base64.b64encode(self.tiles[0]).decode()]
         cases = {
@@ -857,6 +891,12 @@ class AnalysisCanvasBatchTest(unittest.TestCase):
             "too large": self.body(self.canvas_png(self.page), {"x": 0, "y": 0, "width": 4097,
                                                                 "height": ANALYSIS_BATCH_MAX_CANVAS_PIXELS // 4096}),
             "not a png": self.body(b"not a png", rect),
+            "a webp named a png": self.body(self.canvas_webp(self.page), rect),
+            "a png named a webp": self.body(self.canvas_png(self.page), rect, key="canvas_webp_b64"),
+            "a lossy webp": self.body(self.canvas_webp(self.page, lossless=False, quality=90), rect, key="canvas_webp_b64"),
+            "a webp with alpha": self.body(self.canvas_webp(translucent, "RGBA"), rect, key="canvas_webp_b64"),
+            "two canvases": {**self.body(self.canvas_png(self.page), rect),
+                             "canvas_webp_b64": base64.b64encode(self.canvas_webp(self.page)).decode()},
             "tiles and canvas": both,
             "decompression bomb": self.body(self.bomb(), {"x": 0, "y": 0, "width": 16, "height": 16}),
             "a repeated digest outside the canvas": self.body(
