@@ -606,10 +606,10 @@ fn local_phase(detail: &Grid, known: &Mask, f: [f64; 2]) -> Grid {
             small.clone().map(|g| resize_linear(&gaussian(&g, rest), w, h))
         };
         let [sr, si, sd] = scale;
-        for i in 0..n {
+        for (i, z) in z.iter_mut().enumerate() {
             let s = (sd.data[i] / FULL_SUPPORT).clamp(0.0, 1.0);
             let d = sd.data[i].max(1e-9);
-            z[i] = (z[i].0 * (1.0 - s) + sr.data[i] / d * s, z[i].1 * (1.0 - s) + si.data[i] / d * s);
+            *z = (z.0 * (1.0 - s) + sr.data[i] / d * s, z.1 * (1.0 - s) + si.data[i] / d * s);
         }
     }
     Grid {

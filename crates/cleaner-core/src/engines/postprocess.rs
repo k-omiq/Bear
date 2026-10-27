@@ -340,13 +340,13 @@ fn tone(shown: &Grid, answer: &Grid, near: &Mask, fade: &Grid) -> (Grid, Option<
     let mut correction = vec![0.0; n];
     for sigma in LOCAL_SIGMAS {
         let (estimate, support) = masked_blur(&residual, &valid, sigma);
-        for i in 0..n {
+        for (i, correction) in correction.iter_mut().enumerate() {
             let weight = (support.data[i] / FULL_SUPPORT).clamp(0.0, 1.0);
-            correction[i] = correction[i] * (1.0 - weight) + estimate.data[i] * weight;
+            *correction = *correction * (1.0 - weight) + estimate.data[i] * weight;
         }
     }
-    for i in 0..n {
-        out.data[i] += correction[i].clamp(-LOCAL_CAP, LOCAL_CAP) * fade.data[i];
+    for (i, correction) in correction.iter().enumerate() {
+        out.data[i] += correction.clamp(-LOCAL_CAP, LOCAL_CAP) * fade.data[i];
     }
     (out, Some((gain, offset)), count)
 }
