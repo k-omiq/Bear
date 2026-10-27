@@ -139,7 +139,7 @@ fn check_no_cloud_secrets(key_path: &str, value: &Value) -> Result<(), String> {
 /// is written to disk on every edit, and [`crate::history`] owns its bounds.
 fn check_known_shapes(patch: &Value) -> Result<(), String> {
     use crate::inference::cloud_clean::{finishing_from_settings, flux3_generation_from_settings, work_long_side_from_value,
-        CleanTarget, CLEAN_TARGET_KEY, FINISHING_GRAYSCALE_KEY, FINISHING_KEY, FLUX3_GENERATION_KEY, WORK_LONG_SIDE_KEY};
+        CleanTarget, CLEAN_TARGET_KEY, FINISHING_EVERY_MODEL_KEY, FINISHING_GRAYSCALE_KEY, FINISHING_KEY, FLUX3_GENERATION_KEY, WORK_LONG_SIDE_KEY};
     use crate::inference::cloud_denoise::{DenoiseTarget, DENOISE_TARGET_KEY};
     use crate::inference::run_analysis::{AnalysisTargets, ANALYSIS_TARGETS_KEY};
     if let Some(targets) = patch.get(ANALYSIS_TARGETS_KEY) {
@@ -154,7 +154,7 @@ fn check_known_shapes(patch: &Value) -> Result<(), String> {
     if let Some(side) = patch.get(WORK_LONG_SIDE_KEY) {
         work_long_side_from_value(Some(side))?;
     }
-    if patch.get(FINISHING_KEY).is_some() || patch.get(FINISHING_GRAYSCALE_KEY).is_some() {
+    if [FINISHING_KEY, FINISHING_GRAYSCALE_KEY, FINISHING_EVERY_MODEL_KEY].iter().any(|key| patch.get(key).is_some()) {
         finishing_from_settings(patch)?;
     }
     if patch.get(FLUX3_GENERATION_KEY).is_some() {
@@ -741,8 +741,10 @@ mod tests {
             assert!(write_patch(&path, serde_json::json!({"cloudFinishing": bad})).is_err(), "{bad}");
         }
         assert!(write_patch(&path, serde_json::json!({"cloudFinishingGrayscale": "yes"})).is_err());
+        assert_eq!(write_patch(&path, serde_json::json!({"finishingEveryModel": true})).unwrap()["finishingEveryModel"], true);
+        assert!(write_patch(&path, serde_json::json!({"finishingEveryModel": 1})).is_err());
         assert_eq!(read_file(&path).unwrap()["cloudFinishing"], "reference-raster", "a refused patch writes nothing");
-        assert!(write_patch(&path, serde_json::json!({"cloudFinishing": null, "cloudFinishingGrayscale": null})).is_ok());
+        assert!(write_patch(&path, serde_json::json!({"cloudFinishing": null, "cloudFinishingGrayscale": null, "finishingEveryModel": null})).is_ok());
         std::fs::remove_dir_all(&dir).ok();
     }
 

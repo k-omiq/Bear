@@ -71,8 +71,9 @@ export function analysisCapabilityName(capability) {
 export const WORK_LONG_SIDES = /** @type {const} */ ([768, 1024, 1280])
 
 /**
- * How the app finishes a cloud FLUX 3 answer before it is written
- * (`postprocess.rs#Finishing`, the `cloudFinishing` setting). The first is
+ * How the app finishes an answer before it is written
+ * (`postprocess.rs#Finishing`, the `cloudFinishing` setting): a cloud FLUX 3
+ * one always, the others when `finishingEveryModel` is on. The first is
  * the default. The `reference-` ones are the reference tool's finishing v2.
  */
 export const FINISHINGS = /** @type {const} */ ([

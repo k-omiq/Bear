@@ -126,7 +126,7 @@ fn offline_plan(path: &Path, chapter_id: &str) -> Result<cloud_clean::CloudClean
         region_ids: None, local_first: false, picks: None,
         work_long_side: None,
         flux3_generation: None,
-        finishing: None,
+        finishing: Default::default(),
     }, Destination {
         provider: CloudProvider::Modal, profile_id: "fixture-offline".into(),
         profile_name: "Fixture offline".into(), endpoint_fingerprint: "f".repeat(64),

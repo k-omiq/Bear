@@ -66,6 +66,10 @@ export const CLOUD_FAILURES = Object.freeze({
   // Only a cloud setup deployed before the worker stopped rejecting results
   // sends this: it returned no image when its own edit check failed.
   edit_not_applied: { words: 'notice.cloudClean.code.editNotApplied', sentence: 'notice.cloud.error.editNotApplied' },
+  // The gateway could not read a request naming a field newer than its cloud code (`http.rs#submit_rejection`).
+  worker_outdated: { words: 'notice.cloudClean.code.workerOutdated', sentence: 'notice.cloud.error.workerOutdated' },
+  // FLUX 3 with the magenta marker on: the model kept the paint. A retry renders another seed.
+  marker_remained: { words: 'notice.cloudClean.code.markerRemained', sentence: 'notice.cloud.error.markerRemained' },
   remote_failed: { words: 'notice.cloudClean.code.remoteFailed', sentence: 'notice.cloud.error.remote' },
   weights_unavailable: { words: 'notice.cloudClean.code.weights', sentence: 'notice.cloud.error.weights' },
   remote_cancelled: { words: 'notice.cloudClean.code.remoteCancelled', sentence: 'notice.cloud.error.remoteCancelled' },

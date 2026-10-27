@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   readRecord,
   writeRecord,
@@ -323,6 +323,65 @@ describe('sanitizeSession', () => {
     adoptBackendSettings({ cloudWorkLongSide: 1024 })
     expect(backendSettingsPatch().cloudWorkLongSide).toBe(1024)
     setCloudWorkLongSide(768)
+  })
+
+  it('keeps the finishing and generation choices, and the defaults for anything else', async () => {
+    const { sanitizeSession } = await import('./session.svelte.js')
+    const off = { referencePrompt: false, marker: false, referenceShift: false, megapixelSize: false }
+    const finishing = (/** @type {any} */ read) => [read.cloudFinishing, read.cloudFinishingGrayscale, read.finishingEveryModel]
+    expect(finishing(sanitizeSession({}))).toEqual(['copy', false, false])
+    expect(sanitizeSession({}).cloudFlux3Generation).toEqual(off)
+    const kept = sanitizeSession({ cloudFinishing: 'reference-raster', cloudFinishingGrayscale: true, finishingEveryModel: true,
+      cloudFlux3Generation: { marker: true, megapixelSize: true } })
+    expect(finishing(kept)).toEqual(['reference-raster', true, true])
+    expect(kept.cloudFlux3Generation).toEqual({ ...off, marker: true, megapixelSize: true })
+    for (const bad of [1, 'true', null, {}, ['copy']]) {
+      const read = sanitizeSession({ cloudFinishing: bad, cloudFinishingGrayscale: bad, finishingEveryModel: bad, cloudFlux3Generation: bad })
+      expect(finishing(read), JSON.stringify(bad)).toEqual(['copy', false, false])
+      expect(read.cloudFlux3Generation).toEqual(off)
+    }
+    expect(sanitizeSession({ cloudFinishing: 'reference' }).cloudFinishing).toBe('copy')
+    expect(sanitizeSession({ cloudFlux3Generation: { marker: 1, referenceShift: 'true', other: true } }).cloudFlux3Generation).toEqual(off)
+  })
+
+  it('stores the finishing and generation choices, reads them back, and sends them to the backend', async () => {
+    const store = fakeStorage()
+    vi.stubGlobal('localStorage', store)
+    const { backendSettingsPatch, sanitizeSession, setCloudFinishing, setCloudFlux3Generation } = await import('./session.svelte.js')
+    try {
+      setCloudFinishing('redraw', true, true)
+      setCloudFlux3Generation({ referencePrompt: true, marker: false, referenceShift: true, megapixelSize: false })
+      const read = sanitizeSession(JSON.parse(store.map.get(`${STORAGE_PREFIX}session.v1`)))
+      const wanted = {
+        cloudFinishing: 'redraw', cloudFinishingGrayscale: true, finishingEveryModel: true,
+        cloudFlux3Generation: { referencePrompt: true, marker: false, referenceShift: true, megapixelSize: false },
+      }
+      expect(read).toMatchObject(wanted)
+      expect(backendSettingsPatch()).toMatchObject(wanted)
+    } finally {
+      setCloudFinishing('copy', false, false)
+      setCloudFlux3Generation(null)
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('adopts one finishing key from the backend and keeps the other two', async () => {
+    const { adoptBackendSettings, session, setCloudFinishing, setCloudFlux3Generation } = await import('./session.svelte.js')
+    const finishing = () => [session.cloudFinishing, session.cloudFinishingGrayscale, session.finishingEveryModel]
+    try {
+      setCloudFinishing('tone-only', true, false)
+      adoptBackendSettings({ finishingEveryModel: true })
+      expect(finishing()).toEqual(['tone-only', true, true])
+      adoptBackendSettings({ cloudFinishing: 'reference-local' })
+      expect(finishing()).toEqual(['reference-local', true, true])
+      adoptBackendSettings({ finishingEveryModel: 1, cloudFinishingGrayscale: false })
+      expect(finishing()).toEqual(['reference-local', false, true])
+      adoptBackendSettings({ cloudFlux3Generation: { marker: true } })
+      expect(session.cloudFlux3Generation).toEqual({ referencePrompt: false, marker: true, referenceShift: false, megapixelSize: false })
+    } finally {
+      setCloudFinishing('copy', false, false)
+      setCloudFlux3Generation(null)
+    }
   })
 
   it('carries fluxModel down to the backend settings patch', async () => {

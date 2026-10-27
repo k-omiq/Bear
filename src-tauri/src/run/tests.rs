@@ -8576,3 +8576,25 @@ fn the_lettering_mask_has_its_own_name() {
     assert_ne!(sam_ts::LABEL_KEY, accel::DETECTOR.label_key);
     assert_eq!(accel::FULL_RT.label_key, "models.kind.fullRt");
 }
+
+/// **The LaMa rung's finishing is read only when every model is finished.**
+/// On, the run's rung takes the choice and a malformed one refuses the run, as
+/// a malformed accelerator does. Off, nothing finishes it and a malformed
+/// cloud choice, which a local run never uses, does not stop the run.
+#[test]
+fn a_run_reads_the_finishing_only_when_every_model_is_finished() {
+    use cleaner_core::engines::postprocess::{Choice, Finishing};
+    let pipeline = || Pipeline::open_for_cleaning(Path::new("no-weights-live-here"), Preference::CpuOnly, None);
+    let on = serde_json::json!({"cloudFinishing": "reference-local", "finishingEveryModel": true});
+    let opened = pipeline().with_model_preferences(&on).unwrap();
+    assert_eq!(opened.rung2.finishing, Some(Choice { finishing: Finishing::ReferenceLocal, grayscale: false }));
+    assert_eq!(pipeline().with_model_preferences(&serde_json::json!({"cloudFinishing": "copy"})).unwrap().rung2.finishing, None);
+    let unread = serde_json::json!({"cloudFinishing": "blur", "cloudFinishingGrayscale": "yes"});
+    assert_eq!(pipeline().with_model_preferences(&unread).unwrap().rung2.finishing, None, "off: the cloud choice is not read");
+    for bad in [
+        serde_json::json!({"cloudFinishing": "blur", "finishingEveryModel": true}),
+        serde_json::json!({"finishingEveryModel": "yes"}),
+    ] {
+        assert!(pipeline().with_model_preferences(&bad).is_err(), "{bad}");
+    }
+}

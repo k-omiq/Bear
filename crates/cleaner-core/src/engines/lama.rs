@@ -144,7 +144,8 @@ pub use crate::engines::model::{
     TILE_STRIDE, applied_mask, plan, tile_origins, write_bound,
 };
 use crate::engines::model::{AlphaRamp, answer_mode, ceiling_for, dither_at, page_crop, commit_srgb, tiles};
-use crate::engines::render::{Preprocessing, ToneReport, ToneSite, crop_opacity, crop_samples};
+use crate::engines::postprocess::{Choice, Report};
+use crate::engines::render::{Preprocessing, ToneReport, ToneSite, crop_opacity, crop_samples, tone_grids};
 use crate::mask::Rect;
 use crate::strip::window::EdgePad;
 
@@ -320,6 +321,13 @@ impl Inpainter {
     /// rule 6, and Phase 3's
     /// memory exit.
     pub fn render(&mut self, page: &Raster, fitted: &Fitted) -> Result<Rendered, Error> {
+        self.render_with(page, fitted, None)
+    }
+
+    /// [`Inpainter::render`], with each tile's answer finished by `finishing`
+    /// ([`crate::engines::postprocess::settle_with`]) in place of the tone
+    /// alignment. `None` aligns tone, as [`Inpainter::render`] does.
+    pub fn render_with(&mut self, page: &Raster, fitted: &Fitted, finishing: Option<Choice>) -> Result<Rendered, Error> {
         self.lease.touch();
         if let Some(decline) = declines(page, fitted) {
             return Err(decline.into());
@@ -353,6 +361,9 @@ impl Inpainter {
         // The best-evidenced tile's alignment: the one whose ring held the
         // most samples of the page.
         let mut tone: Option<ToneReport> = None;
+        // With a finishing picked: the report of the tile that finished the
+        // most pixels, and how many that was.
+        let mut matched: Option<(usize, Report)> = None;
 
         for tile in tiles(bounds) {
             let (crop, commit) = (tile.crop, tile.commit);
@@ -444,6 +455,40 @@ impl Inpainter {
             let aligned = site.measure(&answer);
             let written = commit.intersection(bounds);
             let levels = site.box_levels(&answer, written);
+            // The pixels this tile writes, finished as one crop against the
+            // page. The rest of the applied mask is no evidence: the page
+            // there is the lettering, both in the hand-off band a later tile
+            // writes and where an earlier tile wrote, as V2's ring leaves it
+            // out. Read as floats, so a 16-bit page keeps its levels.
+            let writes = |px: i64, py: i64| {
+                commit.contains(px, py) && applied.contains(px, py) && !done.contains(px, py) && ramp.at(px, py) > 0.0
+            };
+            let finished = finishing.map(|finishing| {
+                let (w, h) = (crop.w as usize, crop.h as usize);
+                let mut mask = crate::engines::grid::Mask::new(w, h, false);
+                let mut on_page = crate::engines::grid::Mask::new(w, h, false);
+                let mut page_rgb = vec![[0f32; 3]; w * h];
+                for cy in 0..h {
+                    for cx in 0..w {
+                        let (px, py, i) = (crop.x + cx as i64, crop.y + cy as i64, cy * w + cx);
+                        mask.data[i] = writes(px, py);
+                        on_page.data[i] = page_rect.contains(px, py)
+                            && opaque.as_ref().is_none_or(|opaque| opaque[i])
+                            && (mask.data[i] || !applied.contains(px, py));
+                        let (sx, sy) = (px.clamp(0, page.width as i64 - 1), py.clamp(0, page.height as i64 - 1));
+                        page_rgb[i] = managed.pixel(page, sx as u32, sy as u32);
+                    }
+                }
+                let shown = tone_grids(w, h, reading, |i, c| f64::from(page_rgb[i][c]));
+                let answer = tone_grids(w, h, reading, |i, c| f64::from(out[c * plane + i]));
+                let evidence = crate::engines::postprocess::Crop { shown: &shown, answer: &answer, mask: &mask, page: &on_page };
+                let (settled, report) = crate::engines::postprocess::settle_with(&evidence, finishing);
+                let count = mask.data.iter().filter(|&&on| on).count();
+                if matched.as_ref().is_none_or(|(most, _)| count > *most) {
+                    matched = Some((count, report));
+                }
+                settled
+            });
 
             for y in 0..MODEL_INPUT as i64 {
                 for x in 0..MODEL_INPUT as i64 {
@@ -458,13 +503,20 @@ impl Inpainter {
                     let (lx, ly) = ((px - bounds.x) as u32, (py - bounds.y) as u32);
                     let at = (y * MODEL_INPUT as i64 + x) as usize;
                     let dither = dither_at(page.depth, alpha, px, py, ceiling);
-                    let mut rgb = [out[at], out[plane + at], out[2 * plane + at]];
-                    if matches!(reading, ColorMode::Gray | ColorMode::GrayAlpha) { rgb = [rgb.iter().sum::<f32>() / 3.0; 3]; }
-                    let mean_at = ((py - written.y) * written.w as i64 + (px - written.x)) as usize;
-                    for (channel, value) in rgb.iter_mut().enumerate() {
-                        let mean = levels[channel.min(levels.len() - 1)][mean_at];
-                        *value = aligned.corrected(channel, f64::from(*value), mean) as f32;
-                    }
+                    let rgb = match &finished {
+                        // One grid on a grey page, so grey there.
+                        Some(settled) => [0, 1, 2].map(|c| (settled[c.min(settled.len() - 1)].data[at] / 255.0) as f32),
+                        None => {
+                            let mut rgb = [out[at], out[plane + at], out[2 * plane + at]];
+                            if matches!(reading, ColorMode::Gray | ColorMode::GrayAlpha) { rgb = [rgb.iter().sum::<f32>() / 3.0; 3]; }
+                            let mean_at = ((py - written.y) * written.w as i64 + (px - written.x)) as usize;
+                            for (channel, value) in rgb.iter_mut().enumerate() {
+                                let mean = levels[channel.min(levels.len() - 1)][mean_at];
+                                *value = aligned.corrected(channel, f64::from(*value), mean) as f32;
+                            }
+                            rgb
+                        }
+                    };
                     commit_srgb(&managed, &mut patch, lx, ly, rgb, alpha, dither)?;
                     done.set(px, py, true);
                 }
@@ -473,12 +525,12 @@ impl Inpainter {
             // output goes before the next tile's input is built, so the peak is
             // one tile and not two.
             drop(out);
-            if tone.as_ref().is_none_or(|best| aligned.samples > best.samples) {
+            if finishing.is_none() && tone.as_ref().is_none_or(|best| aligned.samples > best.samples) {
                 tone = Some(aligned);
             }
         }
 
-        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran, tone, matched: None })
+        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran, tone, matched: matched.map(|(_, report)| report) })
     }
 
     fn run(&mut self, image: Vec<f32>, mask: Vec<f32>) -> Result<Vec<f32>, Error> {
@@ -768,6 +820,102 @@ mod tests {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/pages/page-screentone.png");
         let bytes = std::fs::read(path).ok()?;
         crate::image::decode(&bytes).ok()
+    }
+
+    /// **A picked finishing takes the place of each tile's tone alignment.**
+    /// The patch is still written only through the applied mask, and the
+    /// report names the finishing that ran.
+    #[test]
+    fn a_picked_finishing_replaces_the_tone_alignment() {
+        use crate::engines::postprocess::{Choice, Finishing};
+        let Some(held) = inpainter() else { return };
+        let Some(page) = screentone_page() else { return };
+        let mut held = held.lock().unwrap();
+        let fitted = fitted_over(&page, Rect::new(600, 800, 160, 90));
+        let aligned = held.render(&page, &fitted).expect("the region rendered");
+        let choice = Choice { finishing: Finishing::Copy, grayscale: false };
+        let finished = held.render_with(&page, &fitted, Some(choice)).expect("the region rendered");
+        assert!(aligned.tone.is_some() && aligned.matched.is_none());
+        assert!(finished.tone.is_none());
+        assert_eq!(finished.matched.as_ref().map(|report| report.choice), Some(choice));
+        assert_eq!(finished.mask, aligned.mask);
+        let b = finished.mask.bounds;
+        for y in b.y..b.bottom() {
+            for x in b.x..b.right() {
+                if !finished.mask.contains(x, y) {
+                    let (lx, ly) = ((x - b.x) as u32, (y - b.y) as u32);
+                    assert_eq!(finished.pixels.sample8(lx, ly, 0), page.sample8(x as u32, y as u32, 0), "({x}, {y}) is outside the mask");
+                }
+            }
+        }
+    }
+
+    /// **A tiled region's lettering is no evidence of its page.** Paper with
+    /// solid black lettering across three tiles: each tile's crop holds the
+    /// lettering a later tile writes and the page under what an earlier tile
+    /// wrote. Read as page, it pulls the finished fill towards black; left out,
+    /// the fill is paper, as the tone alignment's is. Both this module's
+    /// finishing and the reference tool's local tone, which has no guard of
+    /// its own against a drawing change.
+    #[test]
+    fn a_tiled_region_is_finished_against_the_page_and_not_its_lettering() {
+        use crate::engines::postprocess::{Choice, Finishing};
+        let Some(held) = inpainter() else { return };
+        let mut held = held.lock().unwrap();
+        const PAPER: u8 = 228;
+        let page = gray_page(1500, 800, |x, y| {
+            let glyph = (120..1380).contains(&x) && (x - 120) % 80 < 48 && (340..460).contains(&y);
+            if glyph { 18 } else { PAPER }
+        });
+        let seed = Rect::new(100, 300, 1300, 200);
+        let fitted = fitted_over(&page, seed);
+        let off = |rendered: &Rendered| {
+            let b = rendered.mask.bounds;
+            let (mut sum, mut n, mut worst) = (0u64, 0u64, 0u8);
+            for y in seed.y + 8..seed.bottom() - 8 {
+                for x in seed.x + 8..seed.right() - 8 {
+                    let d = rendered.pixels.sample8((x - b.x) as u32, (y - b.y) as u32, 0).abs_diff(PAPER);
+                    (sum, n, worst) = (sum + u64::from(d), n + 1, worst.max(d));
+                }
+            }
+            (sum as f64 / n as f64, worst)
+        };
+        let aligned = held.render(&page, &fitted).expect("the region rendered");
+        assert!(aligned.tiles >= 3, "{} tiles", aligned.tiles);
+        let (aligned_mean, _) = off(&aligned);
+        for finishing in [Finishing::Copy, Finishing::ReferenceLocal] {
+            let finished = held.render_with(&page, &fitted, Some(Choice { finishing, grayscale: false })).expect("the region rendered");
+            let (mean, worst) = off(&finished);
+            eprintln!("{finishing:?}: mean {mean:.2}, worst {worst}; aligned mean {aligned_mean:.2}");
+            assert!(mean <= aligned_mean + 1.0 && worst <= 24, "{finishing:?}: mean {mean:.2}, worst {worst}, aligned {aligned_mean:.2}");
+        }
+    }
+
+    /// **A 16-bit page keeps its levels under a finishing.** The answer is
+    /// finished as floats, so where it is written whole it is not cut to the
+    /// 256 levels of 8 bits (multiples of 257).
+    #[test]
+    fn a_finished_16_bit_patch_keeps_more_than_8_bits() {
+        use crate::engines::postprocess::Choice;
+        let Some(held) = inpainter() else { return };
+        let mut held = held.lock().unwrap();
+        let (w, h) = (900u32, 700u32);
+        let level = |x: u32, y: u32| -> u16 {
+            if (300..420).contains(&x) && (320..380).contains(&y) { 3000 } else { 52000 + (y * 7 + x * 3) as u16 % 900 }
+        };
+        let data = (0..h).flat_map(|y| (0..w).flat_map(move |x| level(x, y).to_be_bytes())).collect();
+        let page = Raster { depth: BitDepth::Sixteen, data, ..gray_page(w, h, |_, _| 0) };
+        let seed = Rect::new(280, 300, 160, 100);
+        let fitted = fitted_over(&page, seed);
+        let finished = held.render_with(&page, &fitted, Some(Choice::default())).expect("the region rendered");
+        assert_eq!(finished.pixels.depth, BitDepth::Sixteen);
+        let b = finished.mask.bounds;
+        let core: Vec<u16> = (seed.y + 12..seed.bottom() - 12)
+            .flat_map(|y| (seed.x + 12..seed.right() - 12).map(move |x| (x, y)))
+            .map(|(x, y)| finished.pixels.sample((x - b.x) as u32, (y - b.y) as u32, 0))
+            .collect();
+        let finer = core.iter().filter(|&&v| v % 257 != 0).count();
+        assert!(finer * 2 > core.len(), "{finer} of {} core samples are off the 8-bit grid", core.len());
     }
 
     #[test]

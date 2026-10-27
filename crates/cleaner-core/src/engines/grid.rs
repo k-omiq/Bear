@@ -148,7 +148,7 @@ impl Mask {
     }
 }
 
-fn reflect101(i: isize, n: usize) -> usize {
+pub(crate) fn reflect101(i: isize, n: usize) -> usize {
     if n == 1 {
         return 0;
     }
@@ -165,7 +165,7 @@ fn reflect101(i: isize, n: usize) -> usize {
     i as usize
 }
 
-fn gaussian_kernel(sigma: f64) -> Vec<f64> {
+pub(crate) fn gaussian_kernel(sigma: f64) -> Vec<f64> {
     // OpenCV's size for float images: round(sigma * 8 + 1), made odd
     let size = ((sigma * 8.0 + 1.0).round() as usize) | 1;
     let r = (size / 2) as isize;
@@ -175,33 +175,58 @@ fn gaussian_kernel(sigma: f64) -> Vec<f64> {
     k
 }
 
+/// Runs `f(row, out_row)` over the rows of `out`, on every core when `work`
+/// (multiply-adds) makes that worth it. Each row is computed alone, so the
+/// result does not depend on how the rows are shared out.
+pub(crate) fn par_rows<F: Fn(usize, &mut [f64]) + Sync>(out: &mut [f64], row_len: usize, work: usize, f: F) {
+    if row_len == 0 || out.is_empty() {
+        return;
+    }
+    let rows = out.len() / row_len;
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(rows);
+    if threads < 2 || work < 1 << 21 {
+        out.chunks_mut(row_len).enumerate().for_each(|(i, r)| f(i, r));
+        return;
+    }
+    let per = rows.div_ceil(threads);
+    std::thread::scope(|s| {
+        for (c, chunk) in out.chunks_mut(per * row_len).enumerate() {
+            let f = &f;
+            s.spawn(move || chunk.chunks_mut(row_len).enumerate().for_each(|(i, r)| f(c * per + i, r)));
+        }
+    });
+}
+
 /// Separable Gaussian blur, edges reflected without repeating the edge pixel.
 pub fn gaussian(g: &Grid, sigma: f64) -> Grid {
+    let (w, h) = (g.w, g.h);
+    if w == 0 || h == 0 {
+        return g.clone();
+    }
     let k = gaussian_kernel(sigma);
     let r = (k.len() / 2) as isize;
-    let (w, h) = (g.w, g.h);
+    // the reflected source of every tap, read in the same order as before
+    let xs: Vec<usize> = (0..w + 2 * r as usize).map(|t| reflect101(t as isize - r, w)).collect();
+    let ys: Vec<usize> = (0..h + 2 * r as usize).map(|t| reflect101(t as isize - r, h)).collect();
     let mut tmp = vec![0.0; w * h];
-    for y in 0..h {
+    par_rows(&mut tmp, w, w * h * k.len(), |y, out| {
         let row = &g.data[y * w..(y + 1) * w];
-        for x in 0..w {
+        for (x, o) in out.iter_mut().enumerate() {
             let mut s = 0.0;
-            for (j, kv) in k.iter().enumerate() {
-                s += kv * row[reflect101(x as isize + j as isize - r, w)];
+            for (kv, &sx) in k.iter().zip(&xs[x..x + k.len()]) {
+                s += kv * row[sx];
             }
-            tmp[y * w + x] = s;
+            *o = s;
         }
-    }
+    });
     let mut out = vec![0.0; w * h];
-    for y in 0..h {
-        for (j, kv) in k.iter().enumerate() {
-            let sy = reflect101(y as isize + j as isize - r, h);
-            let src = &tmp[sy * w..(sy + 1) * w];
-            let dst = &mut out[y * w..(y + 1) * w];
-            for x in 0..w {
-                dst[x] += kv * src[x];
+    par_rows(&mut out, w, w * h * k.len(), |y, dst| {
+        for (kv, &sy) in k.iter().zip(&ys[y..y + k.len()]) {
+            for (d, s) in dst.iter_mut().zip(&tmp[sy * w..(sy + 1) * w]) {
+                *d += kv * s;
             }
         }
-    }
+    });
     Grid { w, h, data: out }
 }
 

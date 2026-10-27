@@ -197,6 +197,15 @@ pub fn settle(crop: &Crop<'_>) -> (Vec<Grid>, Report) {
 /// The answer, matched to the page: one grid per tone channel. Outside
 /// `mask` it is the answer unchanged; the caller writes only inside it.
 pub fn settle_with(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
+    // The tone fit and the reference finishing work on the whole crop; only
+    // the mask keeps what they made.
+    let (finished, report) = finish(crop, choice);
+    let kept = finished.iter().zip(crop.answer).map(|(finished, answer)| finished.select(crop.mask, answer)).collect();
+    (kept, report)
+}
+
+/// [`settle_with`] over the whole crop.
+fn finish(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
     let Choice { finishing, grayscale } = choice;
     let mask = crop.mask;
     let (w, h) = (mask.w, mask.h);
@@ -278,10 +287,13 @@ pub fn settle_with(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
 }
 
 impl Report {
-    /// The record a patch's provenance keeps, with the version that made it.
+    /// The record a patch's provenance keeps, with the version of this
+    /// post-processing that made it. A Qwen (2.0.0) or LaMa patch finished
+    /// here carries it too, so it names the post-processing and not the
+    /// crop's preprocessing.
     pub fn provenance(&self) -> serde_json::Value {
         let mut record = serde_json::json!(self);
-        record["preprocessing_version"] = serde_json::json!(super::render::EDIT_PREPROCESSING_VERSION);
+        record["postprocess_version"] = serde_json::json!(super::render::EDIT_PREPROCESSING_VERSION);
         record
     }
 }
@@ -547,5 +559,114 @@ mod tests {
         let (out, report) = settle_one(&shown, &answer, &all);
         assert_eq!(out, answer, "no page outside the mask: nothing to match");
         assert_eq!(report.gain, vec![None]);
+    }
+
+    /// A dot screen with a square hole the model filled with the screen's
+    /// flat tone: the page, the answer and the mask.
+    fn flat_hole_on_a_screen(mask: Mask) -> (Grid, Grid, Mask) {
+        let (w, h) = (mask.w, mask.h);
+        let period = std::f64::consts::TAU / 6.0;
+        let page = Grid {
+            w,
+            h,
+            data: (0..w * h).map(|i| 128.0 + 80.0 * ((i % w) as f64 * period).cos() * ((i / w) as f64 * period).cos()).collect(),
+        };
+        let answer = page.select(&mask.not(), &Grid::new(w, h, 128.0));
+        (page, answer, mask)
+    }
+
+    fn settle_as(shown: &[Grid], answer: &[Grid], mask: &Mask, page: &Mask, finishing: Finishing, grayscale: bool) -> (Vec<Grid>, Report) {
+        settle_with(&Crop { shown, answer, mask, page }, Choice { finishing, grayscale })
+    }
+
+    /// **Every finishing writes only the mask and says which one ran.**
+    /// Outside the mask the answer comes back as it was, the reference ones
+    /// included, and a reference finishing reports its method.
+    #[test]
+    fn every_finishing_keeps_the_answer_outside_the_mask() {
+        let (w, h) = (160, 160);
+        let (page, answer, mask) = flat_hole_on_a_screen(square(w, h, 50, 50, 110, 110));
+        let all = Mask::new(w, h, true);
+        for finishing in Finishing::ALL {
+            let (out, report) = settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, finishing, false);
+            assert!((0..w * h).all(|i| mask.data[i] || out[0].data[i] == answer.data[i]), "{finishing:?} wrote outside the mask");
+            assert_eq!(report.choice.finishing, finishing);
+            let name = serde_json::json!(finishing);
+            let method = report.reference.as_ref().map(|details| details["method"].clone());
+            assert_eq!(method, name.as_str().and_then(|n| n.strip_prefix("reference-")).map(|m| serde_json::json!(m)), "{finishing:?}");
+        }
+    }
+
+    /// **Every screen finishing gets the dots back.** The default's
+    /// neighbours, the repeat offsets and the reference raster each bring the
+    /// page's screen back into a hole the model filled flat.
+    #[test]
+    fn every_screen_finishing_gets_the_pages_dots_back() {
+        let (w, h) = (160, 160);
+        let (page, answer, mask) = flat_hole_on_a_screen(square(w, h, 50, 50, 110, 110));
+        let all = Mask::new(w, h, true);
+        let core = square(w, h, 56, 56, 104, 104);
+        let error = |g: &Grid| (0..w * h).filter(|&i| core.data[i]).map(|i| (g.data[i] - page.data[i]).abs()).sum::<f64>() / core.count() as f64;
+        let screens = [Finishing::CopyHops, Finishing::Redraw, Finishing::RedrawSharpContours, Finishing::RepeatOffsets, Finishing::ReferenceRaster];
+        for finishing in screens {
+            let (out, report) = settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, finishing, false);
+            assert!(error(&out[0]) < 0.3 * error(&answer), "{finishing:?}: {} against {}", error(&out[0]), error(&answer));
+            if finishing.reference().is_none() {
+                assert!(report.screen > 0, "{finishing:?}: {report:?}");
+            }
+        }
+    }
+
+    /// **Off the page is no evidence.** A black band the crop holds beyond the
+    /// page, 6 px from the mask, does not darken a patch of paper under any
+    /// reference finishing, the Poisson boundary included.
+    #[test]
+    fn what_lies_off_the_page_does_not_pull_the_reference_finishings() {
+        let (w, h) = (256, 256);
+        let mask = square(w, h, 36, 96, 220, 160);
+        let off = square(w, h, 226, 0, w, h);
+        let shown = Grid { w, h, data: (0..w * h).map(|i| if off.data[i] { 0.0 } else if mask.data[i] && (i % w / 6) % 2 == 0 { 20.0 } else { 235.0 }).collect() };
+        let answer = Grid::new(w, h, 235.0);
+        for finishing in [Finishing::ReferenceGlobal, Finishing::ReferenceLocal, Finishing::ReferencePoisson] {
+            let (out, _) = settle_as(std::slice::from_ref(&shown), std::slice::from_ref(&answer), &mask, &off.not(), finishing, false);
+            let worst = (0..w * h).filter(|&i| mask.data[i]).map(|i| (out[0].data[i] - 235.0).abs()).fold(0.0, f64::max);
+            assert!(worst == 0.0, "{finishing:?}: {worst} levels off the paper");
+        }
+    }
+
+    /// **A mask on the crop's edge.** The screen is still copied back and the
+    /// reference Poisson still solves, padded past the edge.
+    #[test]
+    fn a_mask_on_the_crops_edge_is_finished() {
+        let (w, h) = (160, 160);
+        let (page, answer, mask) = flat_hole_on_a_screen(square(w, h, 0, 50, 40, 110));
+        let all = Mask::new(w, h, true);
+        let core = square(w, h, 0, 56, 34, 104);
+        let error = |g: &Grid| (0..w * h).filter(|&i| core.data[i]).map(|i| (g.data[i] - page.data[i]).abs()).sum::<f64>() / core.count() as f64;
+        let (out, _) = settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, Finishing::Copy, false);
+        assert!(error(&out[0]) < 0.3 * error(&answer), "{} against {}", error(&out[0]), error(&answer));
+        let (out, report) = settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, Finishing::ReferencePoisson, false);
+        assert!(out[0].data.iter().all(|v| (0.0..=255.0).contains(v)), "{report:?}");
+    }
+
+    /// **A colour crop made grey.** Three channels with grayscale on are
+    /// finished as one grey channel, screen step included, and every channel
+    /// of the mask gets the same value.
+    #[test]
+    fn a_colour_crop_made_grey_gets_one_grey_finish() {
+        let (w, h) = (160, 160);
+        let (page, answer, mask) = flat_hole_on_a_screen(square(w, h, 50, 50, 110, 110));
+        let tint = |g: &Grid, d: f64| Grid { w, h, data: g.data.iter().map(|v| (v + d).clamp(0.0, 255.0)).collect() };
+        let shown = [tint(&page, 6.0), page.clone(), tint(&page, -6.0)];
+        let answers = [tint(&answer, 6.0), answer.clone(), tint(&answer, -6.0)];
+        let all = Mask::new(w, h, true);
+        for finishing in [Finishing::Copy, Finishing::ReferencePoisson] {
+            let (out, report) = settle_as(&shown, &answers, &mask, &all, finishing, true);
+            assert_eq!(out.len(), 3);
+            assert!((0..w * h).filter(|&i| mask.data[i]).all(|i| out[0].data[i] == out[1].data[i] && out[1].data[i] == out[2].data[i]), "{finishing:?}");
+            if finishing == Finishing::Copy {
+                assert!(report.screen > 0, "{report:?}");
+            }
+        }
     }
 }

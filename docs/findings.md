@@ -75,7 +75,9 @@ Windows or Linux, and a one-machine number is never written as though it were ge
   off. The earlier benches measured LaMa, not FLUX 3: they gave it the LaMa-filled crop as its
   reference. Recipe `mc-flux3-klein-edit-v1`, full record in docs/research/flux3-klein-5_6b.md.
 - **An edit model's whole redrawn crop needs matching to the page, and screentone is where it
-  pays (2026-10-26).** Preprocessing 3.0.0 (`engines/postprocess.rs`, the FLUX 3 recipe only):
+  pays (2026-10-26).** Preprocessing 3.0.0 (`engines/postprocess.rs`; the FLUX 3 recipes by default, and since
+  2026-10-27 Qwen's, FLUX.2 Klein's and LaMa's answers too when **Also finish Qwen, FLUX.2
+  Klein and LaMa results** is on):
   contours from the answer inside the mask and the page outside it; gain and offset then a
   multi-scale normalised-Gaussian correction from the page around the mask; a membrane on the
   low-frequency edge difference; and on a grey page with a dot screen that repeats at 0.8 or more
@@ -713,25 +715,101 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
-**Every finishing and the reference generation as settings (2026-10-26): local only.** Bench 8 in
-`docs/research/flux3-klein-5_6b.md`. Settings > Cloud now picks the finishing (eleven versions:
-ours from benches 3b, 5 and 7, the steps without a screen, and the reference tool's finishing v2
-ported to Rust) and four generation switches (its prompt, magenta marker with residue refusal,
-time shift 6.93, one-megapixel size). Not measured: any generation switch on a GPU (it needs the
-current cloud code deployed to a profile, and a bench costs money); real lettering with truth for
-any finishing; colour pages; the `page` restriction in the reference finishing (both examples are
+**Review fixes for finishing and the FLUX 3 settings (2026-10-27): tests and synthetic probes
+only.** A code review of the finishing, generation and working-size work found these, and they
+are fixed. Fixed:
+- One-region cloud cleans were refused with a recipe mismatch whenever a working size, a
+  generation switch or a finishing rode on the recipe (FLUX 3 since c63fe7f; Qwen and FLUX.2 Klein
+  with the every-model switch): the client sent the bare recipe, not the one the consent grant
+  was minted for. A replayed attempt is now also checked against its full recipe
+  (docs/cloud-contract.md section 9).
+- The Qwen batch cost estimate's high bound now includes the retry renders its GPU seconds
+  already counted.
+- The magenta marker check no longer counts pixels that were magenta before the paint, so pink
+  art the model draws back is not refused on every seed. `marker_remained` and `worker_outdated`
+  (an old cloud setup that cannot read `work_long_side` or `flux3_generation`) have their own
+  notices. The seed is a `u64` on both sides; a larger one is refused before enqueue. A shared
+  fixture (`flux3_sized_generation_request.json`) checks a working size and a generation choice
+  hashed together.
+- Settings rollback after a failed save puts back only what that save changed, to the last
+  saved value.
+- Finishing: see the research doc's "Review fixes to finishing" and the two entries below.
+Not measured or not done:
+- Nothing here ran on a real chapter or a GPU. The one-region fix was not tested end to end
+  against a live gateway, and the pink-art fix only on synthetic crops.
+- The worker changes (pink-art check, seed limit, and sizing a render that must run alone by the
+  size its request names) need each cloud profile to update its cloud code; profiles keep the old
+  check until then. The client changes work against any worker.
+- `worker_outdated` covers only `work_long_side` and `flux3_generation`; a later request-local
+  field needs the same check, and a gateway that refuses for another reason in the same shape
+  still shows the generic error.
+- The paint check still runs over the grown hint (ink plus 8 px), as the reference tool's does,
+  so paint left outside the applied mask but inside the grown hint refuses a result the client
+  would not write there. The cost estimate adds no retry margin for a FLUX 3 marker refusal.
+- Our own finishings still read off-page pixels through the low-pass in their tone and lighting
+  steps (13.4 levels off in a synthetic off-page band). Grey Copy on a 1200 px mask in a 2048 px
+  crop still takes about 24 s (timed on a loaded machine).
+- A gray page's answer is read as the mean of R, G and B, not luma (app-wide, pre-existing).
+- `setCloudPermission` keeps the old rollback, which can drop a second click after a failed
+  save. A click before a fresh install's first settings read can be overwritten by it.
+- No Rust test checks that a run fills LaMa's finishing from the switch. A malformed hand-edited
+  `finishingEveryModel` fails a run but not a hand edit, which then finishes nothing.
+
+**Finishing for Qwen, FLUX.2 Klein and LaMa (2026-10-27): a setting, not measured as shipped.**
+"Finishing for Qwen, FLUX.2 Klein and LaMa", the section after bench 9 in
+`docs/research/flux3-klein-5_6b.md`. The finishing setting now reaches every 2.0.0 cloud answer
+(Qwen and FLUX.2 Klein 4B and 9B) and every LaMa tile when **Also finish Qwen, FLUX.2 Klein and
+LaMa results** is on (off by default, so nothing changes until it is picked). Review fixes
+(2026-10-27, research doc "Review fixes to finishing"): a tiled LaMa region's finishing no longer
+reads its lettering as page (synthetic 3-tile test, Reference: local tone 23 levels off paper,
+worst 213, now 0.5, worst 2); LaMa finishing keeps 16-bit levels; a malformed cloud finishing
+setting no longer stops a local run unless this switch is on. Not measured: the copy step on
+Qwen or LaMa (bench 6 used bench 5's redraw), FLUX.2 Klein answers through any finishing (never
+benched), Qwen's wider V2 crop, LaMa on regions large enough to tile (the tile fix is checked on a
+synthetic page and on fixture pages with rectangle masks only, not on a real chapter with real
+masks or against truth on screentone), V2's tone measure on 16-bit pages (`ToneSite` still reads
+8-bit samples), and the Screentone engine, which is still unfinished. The synthetic sets, scorer and bf16 answers lived in session scratchpads
+that are gone; a re-run needs them rebuilt and a paid GPU run for the cloud answers.
+
+**Every finishing and the reference generation as settings (2026-10-26): bench 8 local, bench 9 on
+a throwaway GPU app.** Benches 8 and 9 in `docs/research/flux3-klein-5_6b.md`. Settings > Cloud
+now picks the finishing (eleven versions: ours from benches 3b, 5 and 7, the steps without a
+screen, and the reference tool's finishing v2 ported to Rust) and four generation switches (its
+prompt, magenta marker with residue refusal, time shift 6.93, one-megapixel size). Bench 9
+rendered the switches on a GPU in a throwaway app (aizendazai46, three L40S containers, about
+$1.49; app and weights volume deleted): the marker makes answers worse, prompt and shift do
+nothing, megapixel size is mixed; defaults stay off. Not measured: the switches through a deployed
+profile end to end (the only live install, on aizendazai46, is Qwen, where they do not apply);
+any bench 9 arm with a seed other than 1; prompt, shift and megapixel size on their own on real
+lettering (the 17 real crops ran own, marker and all four, judged by eye); megapixel size on more
+large chapter crops, and its 22.8 GiB peak on an L4; colour pages with any switch or finishing;
+real lettering with truth for any finishing; the `page` restriction in the reference finishing (both examples are
 all page). Not ported: the reference tool's crop context (half the lettering per side, 64 to 512
 px; ours is per preprocessing version), its FLUX 3 prompt upsampler (bench 1 measured 10 to 14 s
 and 18.8 GB per crop and two misreadings), its INT8 ConvRot weights, and numpy's exact random
-stream in its raster step. Known defect: on the reference line-art example our copy and redraw
-steps put grey specks into white paper beside hatching.
+stream in its raster step. One departure was added: the ported Poisson step takes the answer, not
+the crop, as its boundary off the page (2026-10-27; `finishing.py` has no page mask). A defect
+found here is fixed (2026-10-27): on the reference line-art example our copy and redraw steps put
+grey specks and a smudge into white paper beside hatching, because the hatching fitted a screen
+model at 0.51. The screen step now also needs screen evidence like the reference tool's (256 page
+pixels of a region showing both frequencies at once; the reference's floor and counts differ, see
+bench 8); the hatching has none, the screentone example 44180 and an unchanged output. Since the
+review it tries every pair that fits at `MIN_FIT` or better, best first, so a better-fitting
+hatching pair no longer hides a real screen; that is checked by a unit test only, and the counts
+above predate it. Not measured for that fix: the
+synthetic-truth bench. Every copy and redraw number before it predates it: bench 8's and bench
+9's copy rows (halftone 18.3, chapter 31.6) and bench 6's LaMa and Qwen rows; whether the new
+test wrongly declines a real screen is not known. Its sets and bf16 answers were
+lost with old scratchpads and need a GPU run to rebuild; the fix was checked on the two reference
+examples and by unit tests only.
 
 **3.0.0 on LaMa and Qwen v4 (2026-10-26): benched, not adopted.** Bench 6 in
 `docs/research/flux3-klein-5_6b.md`: the 31 synthetic crops through local LaMa (the app's own
 engine) and a throwaway Qwen v4 installation (profile aizendazai46, $0.63, deleted after). 3.0.0
 helped Qwen a lot (halftone mae 31.1 to 17.5, none worse) and LaMa a little (15.7 today to 14.5 on
 halftone, about even on the chapter pages, and part of that may be softening, which mean error
-rewards); neither path was changed. Not measured: real lettering
+rewards); neither path was made the default (both are an off-by-default setting since
+2026-10-27, "Finishing for Qwen, FLUX.2 Klein and LaMa" above). Not measured: real lettering
 with truth (bench 3's real Qwen crops were judged by eye only); Qwen on V2 crops, which carry 128 px
 of context a side where these were 448 px windows, and 2.0.0's curve measured on that wider crop;
 Qwen's second and third seeds (no crop needed them); LaMa tiled regions above 512 px, a per-tile
@@ -968,16 +1046,18 @@ longstrip has six pages and is never virtual; a region hanging upward, which `re
 no chapter has.
 
 **FLUX 3 Image Klein in the cloud (2026-10-26): benched, not deployed.** Measured on a throwaway
-Modal app (profile aizendazai46, one L40S, about $0.85 in all, estimated from GPU time); recipe, worker, Modal and Beam
+Modal app (profile aizendazai46, one L40S, about $0.70 for bench 3, its seed download and probes,
+estimated from GPU time; an earlier total here said $0.85 with no breakdown); recipe, worker, Modal and Beam
 images, provisioner option and client registration are in the code with unit tests. Not measured:
 any live deploy or setup through the app (the frozen cloud helper needs `npm run helpers` first);
 Beam at all; host memory and nvidia-smi VRAM, so the worker holds one copy in the bench's 24 GiB;
 an L4; colour pages; a black or shaded balloon; seeds past 4. The 3.0.0 post-processing was
 measured on synthetic lettering over real pages, not on real lettering, and its gain or offset hit
 a bound on 3 of 31 crops (none got worse). Its run time: about 0.5 s per 448 px crop in
-a release build, not measured on the 2048 px crops the service allows. The official bf16 weights
+a release build (0.66 s mean, 1.19 s worst with bench 7's copy), not measured on the 2048 px crops the service allows. The official bf16 weights
 were benched against the pinned 4 bit copy (bench 4, $0.53 more): better on halftone by a few
-levels, not deployed. The worker, manifest and provisioner still pin the 4 bit copy; bf16 on an
+levels. The 4 bit model still pins the 4 bit copy; bf16 is now a second model (below), not
+deployed on a kept profile. bf16 on an
 L4, its host memory and its cold start were not measured. Bench 5 ($1.32 more) replaced the screen
 step with a phase-locked redraw (`engines/halftone.rs`), measured on the same synthetic crops only:
 its run time on 2048 px crops, colour pages and real lettering were not measured. A 1280 working

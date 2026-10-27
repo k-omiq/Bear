@@ -320,6 +320,7 @@ fn made(engine: Engine, mask: Mask, pixels: Raster) -> run::Made {
         model_sha256: None,
         pad: cleaner_core::strip::EdgePad::None,
         tiles: None,
+        matched: None,
     }
 }
 

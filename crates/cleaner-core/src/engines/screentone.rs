@@ -617,4 +617,34 @@ mod tests {
         assert!(!f.screen);
         assert!((0..w * h).filter(|&i| hole.data[i]).all(|i| (f.gray.data[i] - 240.0).abs() < 1.0));
     }
+
+    /// **`restore` copies the page's dots back where a model drew its own.**
+    /// The answer holds a softened screen under the lettering; the copy brings
+    /// the page's crisp dots back in phase, and nothing outside the mask gets
+    /// a weight.
+    #[test]
+    fn restore_copies_the_pages_dots_over_a_softened_screen() {
+        let (w, h) = (220, 300);
+        let page = screen_page(w, h);
+        let mask = letters(w, h);
+        let answer = gaussian(&page, 2.0).select(&mask, &page);
+        let none = GridMask::new(w, h, false);
+        let all = GridMask::new(w, h, true);
+        let (copy, weight) = restore(&page, &answer, &mask, &none, &all, 0.8).expect("a screen to restore");
+        assert!((0..w * h).all(|i| mask.data[i] || weight.data[i] == 0.0), "a weight outside the mask");
+        let out = Grid { w, h, data: (0..w * h).map(|i| answer.data[i] * (1.0 - weight.data[i]) + copy.data[i] * weight.data[i]).collect() };
+        let error = |g: &Grid| (0..w * h).filter(|&i| mask.data[i]).map(|i| (g.data[i] - page.data[i]).abs()).sum::<f64>() / mask.count() as f64;
+        assert!(error(&out) < 0.5 * error(&answer), "{} against {}", error(&out), error(&answer));
+    }
+
+    /// **No screen, nothing restored.** Flat paper around the lettering.
+    #[test]
+    fn restore_declines_flat_paper() {
+        let (w, h) = (220, 300);
+        let page = Grid::new(w, h, 240.0);
+        let mask = letters(w, h);
+        let none = GridMask::new(w, h, false);
+        let all = GridMask::new(w, h, true);
+        assert!(restore(&page, &page, &mask, &none, &all, 0.8).is_none());
+    }
 }

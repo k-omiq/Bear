@@ -325,8 +325,10 @@ The prompt is the one the user brought from another manga tool on 2026-10-26, wi
 filled from the hint ("upper right").
 
 Input: 17 regions the app's Detect run would send to the cloud from pages 182, 185 and 187 of the
-real chapter (`spike-cloud-crops export`, preprocessing 2.0.0): 15 balloons and narration
-boxes, and one sound effect over speed lines. The gate held the other sound effects back.
+real chapter (`spike-cloud-crops export`, preprocessing 2.0.0): balloons and narration boxes,
+and one sound effect over speed lines. The gate held the other sound effects back. (An earlier
+count here, 15 balloons and boxes, left one of the 17 unnamed; the crop list is gone, so only the
+17 stands.)
 Profile aizendazai46, throwaway app `mc-f3edit-bench`, one L40S. The live Qwen v4 recipe on the
 same crops is the baseline.
 
@@ -461,7 +463,9 @@ FLUX 3 arms through the new post-processing, bf16, one seed, each against the 76
 
 - The sentence asking for the screen to continue ("never as flat grey") made it worse. The
   rewritten prompt moved two outliers and little else. The user's prompt stays.
-- 1280 is the only arm better on both sets. 1024 is worse, so it is not a smooth trend; one seed.
+- 1280 is the only arm with more crops better than worse on both sets (11 / 4 and 10 / 3) and a
+  lower median. By mean alone, 1024 and the rewritten prompt are also below 768 on both sets, but
+  1024 is worse on more crops than it is better, so it is not a smooth trend; one seed.
   At 1280 a 448 px crop takes 20.1 s on an L40S (768: 5.6 s) and peaks at 24.9 GiB in bf16.
 - Neither the model arms nor the post-processing draw what the lettering hid completely
   (sample_s1's third circle).
@@ -542,7 +546,7 @@ Qwen was not shown here; the ring it reads (6 to 18 px outside the applied mask)
 | Q2 Qwen, 2.0.0 (today) | 31.2 / 5.5 / 0.52 | 1 / 2 | +0.07 | 30.4 / 15.1 / 0.57 | 0 / 0 | 0.00 |
 | Q1 Qwen, 3.0.0 | 17.5 / 5.0 / 0.76 | 14 / 0 | -14.46 | 28.4 / 15.1 / 0.64 | 8 / 0 | -0.35 |
 | FLUX 3 bf16 raw | 28.4 / 9.4 / 0.55 | | | 34.1 / 16.8 / 0.47 | | |
-| FLUX 3 bf16, 3.0.0 (reference) | 19.3 / 6.9 / 0.73 | 14 / 0 | -6.45 | 32.0 / 16.0 / 0.54 | 9 / 0 | -0.49 |
+| FLUX 3 bf16, 3.0.0 with bench 5's redraw (reference) | 19.3 / 6.9 / 0.73 | 14 / 0 | -6.45 | 32.0 / 16.0 / 0.54 | 9 / 0 | -0.49 |
 
 Each model's rows count against its own raw arm. Against today's LaMa path, L1 is 10 better and
 2 worse on halftone (median -1.12) and 5 and 2 on the chapter pages (median -0.06).
@@ -581,7 +585,8 @@ Qwen:
   blotch Qwen had invented. No Qwen crop got worse.
 - Bench 3's 17 real balloon crops with their Qwen v4 answers (no truth, so by eye and by how far
   the settle moved the patch): where Qwen drew art inside a white balloon (182_00, 185_01, 185_04,
-  185_05, 187_00, 187_03, 187_04), the settled patch is still that art. The guard kept the tone fit
+  185_05, 187_00, 187_03, 187_04; bench 3 counted 8 such crops, and the eighth is not named in
+  what is left of either bench), the settled patch is still that art. The guard kept the tone fit
   near no change on five of them (gain 1.00 to 1.03, offset -6.5 to 0), and on four of those the
   settle moved the patch by under 3 levels: 3.0.0 neither hides nor worsens the failure. Three moved by 16 to 17 levels inside the mask: 185_05 (offset +20.8, the
   drawn shape lightened toward the balloon's white), 187_04 (gain 1.08, offset -10, the shape
@@ -607,7 +612,8 @@ render. Setup took about 2 minutes. Spend $0.63 (Modal billing report for the ap
 $1.25 at most beforehand). The provisioner's own cleanup deleted the app, dict, volume and token,
 and the endpoint key file was deleted.
 
-What a change would be (neither made):
+What a change would be (neither made as a default; both are a setting since 2026-10-27, see "Finishing for Qwen, FLUX.2 Klein and LaMa" after
+bench 9; the setting took neither path below):
 - Qwen: `RECIPE_PROD_QWEN`'s `RenderRecipe` in `deploy/cloud/common/manifest.py` takes
   `PROD_EDIT_PREPROCESSING_VERSION`; `deploy/cloud/tests/test_recipe_parity.py` names the recipes
   on 3.0.0; the deployed Qwen profiles are redeployed so their gateways advertise it. The request
@@ -692,7 +698,12 @@ raw answer at source size and mask) against its shipped outputs, inside the mask
 Poisson's 1 level is OpenCV's float32 solve and byte truncation. Raster finds the same
 frequencies (within 1.1e-4), pixel count (27596) and regions; the rest is numpy's random
 sampler, which the port replaces with a seeded one of the same counts. With the port's sampler
-patched into the Python, the two differ at 6 pixels by 1 level.
+patched into the Python, the two differ at 6 pixels by 1 level. One departure was added on
+2026-10-27, after this check: the ported Poisson step takes the page mask, and where the crop is
+off the page (transparent pixels, the unwritten part of a LaMa hole) the answer, not the crop, is
+the clone's boundary; `finishing.py` has no page mask. Both examples are all page, so the table
+above is unchanged by it. Besides the random sampler and float precision, that is the one place
+the port departs from `finishing.py`.
 
 **Fake lettering, bf16 answers** (mean of 15 halftone crops; mae, tone, screen correlation,
 sharpness; old table redraw first for scale):
@@ -711,7 +722,8 @@ sharpness; old table redraw first for scale):
 | reference-poisson | 28.6 / 8.7 / 0.55 / 0.98 | 33.1 |
 | reference-raster | 26.7 / 12.1 / 0.65 / 1.05 | 33.8 |
 
-The two old versions reproduce their own benches exactly (19.2 and 18.3), so nothing was lost
+The versions brought back reproduce their own benches exactly (redraw-sharp-contours 19.2 as in
+bench 5, repeat-offsets 25.7 as in bench 4), and copy gives bench 7's 18.3, so nothing was lost
 in bringing them back. The reference finishing does little on these answers: our FLUX 3 answers
 lose the page's dots, and only its raster step puts any back; raster also matches no tone, so
 its tone error is the worst. Copy-hops is sharper than copy and worse in mean error, as bench 7
@@ -721,8 +733,146 @@ saw (streaks deep in wide masks).
 its answers already carry the page's screen in phase, so on the screentone example every version
 looks alike and copy is as crisp as the page. On its line-art example our copy and redraw add
 faint grey specks and one dark smudge to white paper near hatching, which its Poisson and
-raster do not: the screen step takes hatching next to the mask for a screen. Not fixed.
+raster do not: the screen step takes hatching next to the mask for a screen.
+
+**Hatching fix (2026-10-27).** The hatching's region fitted a screen model at 0.507, just over
+`MIN_FIT` 0.5, with two frequencies from leaves hatched in different directions. The reference
+raster declines there because almost no page pixel shows both frequencies at once
+(`_screen_evidence`). `halftone::Screen::fit` now applies the same kind of test (5 px window,
+detail over `MIN_DETAIL`, 35 % of it at the pair and 6 % at each) and needs 256 such pixels. Its
+floor and count differ from the reference's: 2 levels RMS of this module's detail and 256 pixels
+per region, where the reference uses power 36 of a 2 px high-pass, 256 pixels per crop and 128
+per region. Since the 2026-10-27 review it tries every frequency pair that fits at `MIN_FIT` or
+better, best fit first, and takes the first the page shows both of; before, only the best-fit
+pair was tested, so a hatching pair that fitted better hid a real screen (unit test: hatching at
+0.73 beside a faint screen at 0.72, and the screen is still found). The counts and the table
+below were taken before that change. On the
+line-art example the region has 0, the screentone example's has 44180 of 67301. Inside the mask,
+against the reference's Poisson output, with pixels where Poisson is white paper (235 or more):
+
+| finishing | mae | paper px 12+ darker | paper px 40+ darker |
+|---|---|---|---|
+| copy, redraw before | 3.60 | 181 | 56 |
+| copy, redraw after | 1.56 | 0 | 0 |
+| tone-only (for scale) | 1.56 | 0 | 0 |
+
+Copy and redraw on the screentone example are byte for byte unchanged. Unit tests: hatching in
+two directions beside a mask (fits 0.69, no evidence) gets no screen, and a dot screen beside
+hatched paper in the same region is still copied. The synthetic-truth bench was not rerun: its
+sets and bf16 answers were lost with old scratchpads (docs/findings.md, What has not been
+measured). So every copy and redraw number in benches 6 to 9, the table above and bench 9's
+copy columns included, predates this fix.
 
 The generation switches are covered by worker tests with a fake pipeline and by a shared request
-fixture; no GPU render has used them yet.
+fixture. Bench 9, below, rendered them on a GPU on 2026-10-26, before the hatching fix.
+
+## Bench 9 (2026-10-26): the generation switches on a GPU
+
+The current worker code (`Flux3EditRunner`, 16 steps, seed 1) on the official bf16 snapshot, in
+a throwaway Modal app on the aizendazai46 profile (three L40S containers, about $1.49; the app
+and its weights volume are deleted). The live install there is Qwen, so it was not redeployed:
+the switches only act on FLUX 3. Each arm changes only its `flux3_generation`. A kept marker
+was recorded instead of refused, so every arm returned an image.
+
+**Fake lettering** (mean of 15 halftone crops; mae / tone / screen / sharp; chapter pages are
+16 crops, mae only):
+
+| arm | raw, halftone | raw, chapter | copy finishing, halftone | copy, chapter |
+|---|---|---|---|---|
+| own (no switch) | 28.4 / 9.3 / 0.55 / 0.98 | 34.2 | 18.3 / 6.8 / 0.76 / 1.01 | 31.6 |
+| prompt | 27.3 / 9.7 / 0.59 / 1.04 | 33.7 | 17.8 / 6.4 / 0.76 / 0.99 | 31.4 |
+| marker | 39.4 / 12.6 / 0.31 / 0.99 | 39.4 | 24.5 / 10.1 / 0.64 / 1.04 | 36.6 |
+| shift | 27.9 / 9.2 / 0.57 / 1.00 | 34.4 | 18.3 / 6.9 / 0.76 / 1.00 | 31.8 |
+| megapixel size | 33.7 / 10.9 / 0.49 / 1.11 | 29.3 | 18.2 / 6.6 / 0.77 / 1.03 | 26.1 |
+| all four | 43.8 / 13.6 / 0.25 / 1.10 | 41.4 | 24.7 / 11.0 / 0.65 / 1.05 | 37.8 |
+
+- **Marker hurts.** It is worse on 14 to 15 of 15 halftone crops and 15 of 16 chapter crops
+  (median +6 to +9.5 mae). By eye (4x zooms) the model redraws the covered area from nothing: it
+  moves contours (a hair edge shifts several pixels) and draws a wavy moiré in the dots. Our own
+  hint keeps a faint view of the page under the lettering; the marker takes that away. The
+  residue check never fired: 0 of 96 marker renders kept any magenta.
+- **Prompt and shift are noise.** After copy finishing both are within 0.5 mae of own. Raw, shift
+  is within 0.5 too, and the prompt is 1.1 lower on halftone (27.3 against 28.4) and 0.5 lower on
+  the chapter pages; copy finishing takes that gap to 0.5.
+- **Megapixel size is mixed.** On halftone it is worse raw (+2.4 median) and equal after copy
+  finishing. On chapter pages the mean drops by 5.5, but crop by crop it is better on 7 and
+  worse on 9 (median +0.6): a few large crops carry the mean. It takes about twice the time
+  (11.6 s against 6.2 s per crop) and 22.8 GiB peak against 21.1.
+- **All four together** carries the marker's loss and is the worst arm.
+
+**Real lettering, 17 crops from chapters 182 to 187** (own, marker, all; no truth, 3x zooms of six):
+every arm removes the lettering cleanly on white bubbles, and the three look alike there. On one
+crop (182_04) "all" kept a small dark piece of art at the bubble edge that own and marker painted
+white. Time per crop: own 4.9 s, marker 5.0 s, all 11.5 s. Prompt, shift and megapixel size on
+their own were not run on real lettering, and every arm of bench 9 used seed 1 only.
+
+Verdict: keep the defaults (all switches off). The switches stay as settings. Do not turn on the
+marker for FLUX 3 on our hints. Megapixel size is the only one worth a second look, on larger
+chapter crops.
+
+## Finishing for Qwen, FLUX.2 Klein and LaMa (2026-10-27): a setting, off by default
+
+Bench 6 found the 3.0.0 post-processing better on Qwen's answers (halftone 31.2 to 17.5) and on
+LaMa's (15.7 to 14.5). Settings > Cloud > Finishing now has **Also finish Qwen, FLUX.2 Klein and
+LaMa results** (`finishingEveryModel`). Off, nothing changes: a 2.0.0 answer keeps its tone alignment and so
+does each LaMa tile. On, the picked finishing (the default copy too) takes the place of that
+alignment:
+- Every cloud recipe that is not 3.0.0: Qwen and both FLUX.2 Klein recipes (4B and 9B) are 2.0.0.
+  The recipe carries the choice outside the request digest (`cloud_clean::apply_finishing`), the
+  default included, where a 3.0.0 recipe carries one only when it is not the default; and
+  `PreparedRender::composite` finishes the V2 crop as it finishes a V3 one. The request does not
+  change, so no worker is redeployed.
+- LaMa: each tile's answer is finished on the tile as the model saw it, over the pixels that
+  tile writes (`Inpainter::render_with`), as bench 6's L1 arm did. Page runs and hand edits both
+  read the setting; the patch records the report under `postprocess`, stamped
+  `postprocess_version` (3.0.0). A malformed finishing setting stops a run only when the switch
+  is on; a hand edit then finishes nothing.
+
+Not measured: the shipped copy step on Qwen and LaMa answers (bench 6 used bench 5's redraw),
+Qwen's V2 crop (128 px wider a side than the 448 px crops bench 6 used), regions large enough
+for LaMa to tile, and FLUX.2 Klein answers through any finishing (never benched). The synthetic
+sets and their answers were in session scratchpads that are gone.
+
+## Review fixes to finishing (2026-10-27): synthetic probes only
+
+A review of the code above found these and they are fixed. Every check is a unit test or a
+synthetic probe; nothing ran on a real chapter or a GPU.
+
+- **LaMa tiles read lettering as page.** A tile's page evidence included the hand-off band and
+  pixels earlier tiles had not written yet, where the lettering still is. It is now page, opaque,
+  and either written by this tile or outside the applied mask, as V2's ring already treats them.
+  On a synthetic 3-tile region (flat paper, solid lettering), the error off paper went from 0.87
+  mean (worst 11) to 0.57 (worst 3) with Copy, and from 23.11 (worst 213) to 0.47 (worst 2) with
+  Reference: local tone; the tone-aligned render is 0.67. On fixture pages with 4-tile 700 px
+  regions and the default finishing, the change moved the patch by 16.8 levels on page-sfx, 8.8
+  on page-crowded and 4.1 on page-screentone; there is no truth there, so that is the size of the
+  change, not which is better.
+- **LaMa finishing kept 8 bits.** It now finishes from the model's float answer and the page's
+  float pixels and writes the float result, so a 16-bit page keeps its levels.
+- **Poisson pulled toward off-page pixels.** See the port check in bench 8: off-page pixels now
+  take the answer as the boundary. Probe with a black off-page band 6 px from the mask: 82 levels
+  off paper, now 0. In the LaMa tile probe, Reference: Poisson went from 114 off to 0 and
+  Reference: local tone from 91 to 0 (the tile fix alone does the second).
+- **Pixels outside the mask changed.** `postprocess::settle_with` now keeps the answer outside the
+  mask for every finishing. Before, Reference: global tone changed 7513 such pixels in a probe,
+  local tone and Poisson 11, and our own finishings some; now 0 for all 11.
+- **Screen evidence tried one pair.** See the hatching fix in bench 8.
+- **Speed.** The shared Gaussian blur runs on every core with precomputed edge indices; results
+  are bit for bit the old ones (49 size and sigma pairs hashed), and `settle_with` gave bit for bit
+  the old output in 528 cases before the outside-mask change. Times at opt-level 2 on a machine
+  loaded by other sessions (load average 16 to 42), so read them as upper bounds:
+
+| Case | Before | After |
+|---|---|---|
+| blur 2048 x 2048, sigma 2 / 16 / 48 | 0.14 / 0.95 / 2.69 s | 0.02 / 0.18 / 0.65 s |
+| 120 x 60 mask, 1024 crop, Copy / tone only | 5.9 / 4.3 s | 1.4 / 0.9 s |
+| 120 x 60 mask, 2048 crop, Copy / tone only | 18.3 / 11.9 s | 5.2 / 4.9 s |
+| 1200 x 1200 mask, 2048 crop, Copy, grey / colour | 72.6 / 60.5 s | 24.4 / 16.3 s |
+| 1200 x 1200 mask, 2048 crop, Reference: Poisson, grey / colour | not measured | 2.9 / 6.3 s |
+
+Still open: our own finishings read off-page pixels through the low-pass in their tone and
+lighting steps (13.4 levels off in the off-page band probe; a masked blur over the page would fix
+it and changes results on pages with transparency); grey Copy on a 1200 px mask still takes about
+24 s, mostly the halftone phase and demodulation blurs over the whole window; and V2's tone
+measure (`ToneSite`) still reads 8-bit page samples.
 

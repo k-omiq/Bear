@@ -207,8 +207,9 @@ function viewport() {
  * @property {boolean} cleanLocalFirst - whether cloud clean tries saved flat-colour picks here first
  * @property {boolean} cleanSolidOnly - whether a clean on this computer takes only speech bubbles on flat paper and leaves the rest detected
  * @property {768|1024|1280} cloudWorkLongSide - the long side a cloud FLUX 3 clean edits a smaller crop at; larger is slower and costs more per crop
- * @property {typeof FINISHINGS[number]} cloudFinishing - how a cloud FLUX 3 answer is finished before it is written
- * @property {boolean} cloudFinishingGrayscale - whether a colour cloud FLUX 3 answer is made grey first
+ * @property {typeof FINISHINGS[number]} cloudFinishing - how an answer is finished before it is written: a cloud FLUX 3 one always, the others when `finishingEveryModel` is on
+ * @property {boolean} cloudFinishingGrayscale - whether a colour answer is made grey before it is finished
+ * @property {boolean} finishingEveryModel - whether that finishing also takes the place of the tone fix on every other model's answer (Qwen, FLUX.2 Klein, LaMa)
  * @property {Record<typeof FLUX3_GENERATION_PARTS[number], boolean>} cloudFlux3Generation - which parts of a cloud FLUX 3 edit are built the reference tool's way
  * @property {'local'|'cloud'|'off'} denoiseTarget - where page denoise runs; `cloud` still asks for consent per chapter
  * @property {string} denoisePreset - the preset id last chosen; `model/denoise.js#validPreset` resolves it against the target
@@ -259,6 +260,7 @@ function defaults() {
     cloudWorkLongSide: WORK_LONG_SIDES[0],
     cloudFinishing: FINISHINGS[0],
     cloudFinishingGrayscale: false,
+    finishingEveryModel: false,
     cloudFlux3Generation: generationOr(null),
     denoiseTarget: 'off',
     denoisePreset: '',
@@ -388,6 +390,7 @@ export function sanitizeSession(raw) {
     cloudWorkLongSide: workLongSideOr(record.cloudWorkLongSide, base.cloudWorkLongSide),
     cloudFinishing: finishingOr(record.cloudFinishing, base.cloudFinishing),
     cloudFinishingGrayscale: boolOr(record.cloudFinishingGrayscale, base.cloudFinishingGrayscale),
+    finishingEveryModel: boolOr(record.finishingEveryModel, base.finishingEveryModel),
     cloudFlux3Generation: generationOr(record.cloudFlux3Generation),
     // As strict as the native setting: anything unreadable is off, so a
     // damaged record never sends a page anywhere.
@@ -494,6 +497,7 @@ function persistable() {
     cloudWorkLongSide: session.cloudWorkLongSide,
     cloudFinishing: session.cloudFinishing,
     cloudFinishingGrayscale: session.cloudFinishingGrayscale,
+    finishingEveryModel: session.finishingEveryModel,
     cloudFlux3Generation: { ...session.cloudFlux3Generation },
     denoiseTarget: session.denoiseTarget,
     denoisePreset: session.denoisePreset,
@@ -812,16 +816,20 @@ function finishingOr(value, fallback) {
 }
 
 /**
- * How a cloud FLUX 3 answer is finished, and whether a colour one is made
- * grey first. The backend reads both when it plans a clean, so they reach it
- * with the other settings (`cloud.svelte.js#saveCloudFinishing`).
+ * How an answer is finished, whether a colour one is made grey first, and
+ * whether the answers of every other model (Qwen, FLUX.2 Klein, LaMa) are
+ * finished the same way in place of their tone fix. The backend reads all three when it plans a clean
+ * or opens a run, so they reach it with the other settings
+ * (`cloud.svelte.js#saveCloudFinishing`).
  *
  * @param {unknown} finishing - one of `FINISHINGS`
  * @param {unknown} [grayscale]
+ * @param {unknown} [everyModel]
  */
-export function setCloudFinishing(finishing, grayscale = session.cloudFinishingGrayscale) {
+export function setCloudFinishing(finishing, grayscale = session.cloudFinishingGrayscale, everyModel = session.finishingEveryModel) {
   session.cloudFinishing = finishingOr(finishing, session.cloudFinishing)
   if (typeof grayscale === 'boolean') session.cloudFinishingGrayscale = grayscale
+  if (typeof everyModel === 'boolean') session.finishingEveryModel = everyModel
   save()
 }
 
@@ -1281,8 +1289,9 @@ export function adoptBackendSettings(settings) {
   if (record.exportTone !== undefined) setExportTone(/** @type {any} */ (record.exportTone))
   if (record.cloudWorkLongSide !== undefined) setCloudWorkLongSide(record.cloudWorkLongSide)
   if (record.cloudFlux3Generation !== undefined) setCloudFlux3Generation(record.cloudFlux3Generation)
-  if (record.cloudFinishing !== undefined || record.cloudFinishingGrayscale !== undefined) {
-    setCloudFinishing(record.cloudFinishing ?? session.cloudFinishing, record.cloudFinishingGrayscale ?? session.cloudFinishingGrayscale)
+  if (record.cloudFinishing !== undefined || record.cloudFinishingGrayscale !== undefined || record.finishingEveryModel !== undefined) {
+    setCloudFinishing(record.cloudFinishing ?? session.cloudFinishing, record.cloudFinishingGrayscale ?? session.cloudFinishingGrayscale,
+      record.finishingEveryModel ?? session.finishingEveryModel)
   }
   if (record.theme !== undefined) setTheme(/** @type {any} */ (record.theme))
   if (record.readingDirection !== undefined) {
@@ -1364,6 +1373,7 @@ export function backendSettingsPatch() {
     cloudWorkLongSide: session.cloudWorkLongSide,
     cloudFinishing: session.cloudFinishing,
     cloudFinishingGrayscale: session.cloudFinishingGrayscale,
+    finishingEveryModel: session.finishingEveryModel,
     cloudFlux3Generation: { ...session.cloudFlux3Generation },
     denoiseTarget: session.denoiseTarget,
     ...(session.denoisePreset ? { denoisePreset: session.denoisePreset } : {}),

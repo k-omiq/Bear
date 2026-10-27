@@ -52,7 +52,7 @@
 
 use serde_json::{Value, json};
 
-use super::grid::{Grid, Mask, components};
+use super::grid::{Grid, Mask, components, gaussian_kernel, par_rows, reflect101};
 use super::postprocess::Crop;
 
 /// The reference tool's tone method.
@@ -89,8 +89,10 @@ impl Method {
 /// tone_match=method != Off, tone_method=method)`. A grey colour crop is
 /// finished as one channel and written to every channel: every step is per
 /// channel or reads the grey of equal channels, so that is exact. Pixels
-/// outside `crop.page` are no context: they never join a ring, a residual or
-/// the screen evidence.
+/// outside `crop.page` are no context: they never join a ring, a residual,
+/// the Poisson boundary or the screen evidence. Like `finishing.py` it
+/// returns the whole crop finished, outside the mask too; the caller keeps
+/// what it writes.
 pub fn finish(crop: &Crop<'_>, method: Method, grayscale: bool) -> (Vec<Grid>, Value) {
     let channels = crop.answer.len();
     let (mask, page) = (crop.mask, crop.page);
@@ -120,7 +122,7 @@ pub fn finish(crop: &Crop<'_>, method: Method, grayscale: bool) -> (Vec<Grid>, V
             let (mut result, fitted, correction) = match_local_tone(&reference, &generated, mask, page);
             details["local"] = json!({ "affine": affine_json(&fitted, copies), "local_max_correction": single(correction) });
             if method == Method::Poisson {
-                result = seamless_boundary(&reference, &result, mask);
+                result = seamless_boundary(&reference, &result, mask, page);
             }
             let (result, protected) = protect_drawing(&generated, &result, mask);
             details["protected_pixels"] = json!(protected);
@@ -209,56 +211,12 @@ fn bounds(w: usize, h: usize, pick: impl Fn(usize) -> bool) -> Option<Rect> {
     (r.x1 > r.x0).then_some(r)
 }
 
-/// OpenCV's `BORDER_REFLECT_101`, repeated for kernels wider than the grid.
-fn reflect101(i: isize, n: usize) -> usize {
-    if n == 1 {
-        return 0;
-    }
-    let n = n as isize;
-    let mut i = i;
-    while i < 0 || i >= n {
-        i = if i < 0 { -i } else { 2 * n - 2 - i };
-    }
-    i as usize
-}
-
-/// `cv2.getGaussianKernel` at the size `GaussianBlur` picks for a float
-/// image: `round(sigma * 8 + 1)`, made odd.
-fn kernel(sigma: f64) -> Vec<f64> {
-    let size = ((sigma * 8.0 + 1.0).round() as usize) | 1;
-    let r = (size / 2) as isize;
-    let k: Vec<f64> = (-r..=r).map(|i| (-(i * i) as f64 / (2.0 * sigma * sigma)).exp()).collect();
-    let s: f64 = k.iter().sum();
-    k.into_iter().map(|v| v / s).collect()
-}
-
-/// Runs `f(row, out_row)` over the rows of `out`, on every core when `work`
-/// (multiply-adds) makes that worth it.
-fn par_rows<F: Fn(usize, &mut [f64]) + Sync>(out: &mut [f64], row_len: usize, work: usize, f: F) {
-    if row_len == 0 || out.is_empty() {
-        return;
-    }
-    let rows = out.len() / row_len;
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(rows);
-    if threads < 2 || work < 1 << 21 {
-        out.chunks_mut(row_len).enumerate().for_each(|(i, r)| f(i, r));
-        return;
-    }
-    let per = rows.div_ceil(threads);
-    std::thread::scope(|s| {
-        for (c, chunk) in out.chunks_mut(per * row_len).enumerate() {
-            let f = &f;
-            s.spawn(move || chunk.chunks_mut(row_len).enumerate().for_each(|(i, r)| f(c * per + i, r)));
-        }
-    });
-}
-
 /// `cv2.GaussianBlur(g, (0, 0), sigma)` of every grid in `inputs` (each
 /// `w x h`), evaluated inside `rect` only: each output is the rectangle's
 /// size. The context fields read their largest scales in a small part of the
 /// crop, and a 96 px blur is a 769-tap kernel.
 fn blur_in(inputs: &[&[f64]], w: usize, h: usize, sigma: f64, rect: Rect) -> Vec<Vec<f64>> {
-    let k = kernel(sigma);
+    let k = gaussian_kernel(sigma);
     let r = k.len() / 2;
     let (bw, bh) = (rect.x1 - rect.x0, rect.y1 - rect.y0);
     let xs: Vec<usize> = (0..bw + 2 * r).map(|t| reflect101(rect.x0 as isize + t as isize - r as isize, w)).collect();
@@ -671,7 +629,11 @@ fn match_local_tone(source: &[Grid], generated: &[Grid], mask: &Mask, page: &Mas
 /// (the page with the answer inside the mask, blurred the same) by
 /// `seamlessClone`, padded 32 px so a mask at the crop's edge still solves,
 /// over the mask grown 8 px. The answer keeps its own detail on top.
-fn seamless_boundary(source: &[Grid], generated: &[Grid], mask: &Mask) -> Vec<Grid> {
+///
+/// Off `page` the destination is the answer too, as inside the mask: what the
+/// crop holds there is no page, and as the clone's boundary it would pull the
+/// patch toward it.
+fn seamless_boundary(source: &[Grid], generated: &[Grid], mask: &Mask, page: &Mask) -> Vec<Grid> {
     const PAD: usize = 32;
     let (w, h) = (mask.w, mask.h);
     if !mask.any() || w.min(h) < 3 {
@@ -681,11 +643,12 @@ fn seamless_boundary(source: &[Grid], generated: &[Grid], mask: &Mask) -> Vec<Gr
     let alpha = Mask { w: padded.w, h: padded.h, data: padded.data.iter().map(|&v| v > 0.0).collect() }.dilate(8);
     let Some(r) = bounds(alpha.w, alpha.h, |i| alpha.data[i]) else { return generated.to_vec() };
     let center = (r.x0 + (r.x1 - r.x0) / 2, r.y0 + (r.y1 - r.y0) / 2);
+    let answered = mask.or(&page.not());
     generated
         .iter()
         .zip(source)
-        .map(|(edited, page)| {
-            let destination = edited.select(mask, page);
+        .map(|(edited, shown)| {
+            let destination = edited.select(&answered, shown);
             let lighting = blur(edited, 3.0);
             let destination = blur(&destination, 3.0);
             let cloned = seamless_clone(&pad(&image(&lighting), PAD), &pad(&image(&destination), PAD), &alpha, center);

@@ -224,8 +224,12 @@ export async function requestCloudConsent(request, backend = getBackend()) {
     notify({ key: 'notice.cloud.consentFailed', tone: 'warn' })
     return null
   }
+  // The recipe the grant was minted for: the proposal's, which carries the
+  // settings the native side put on it (working size, generation,
+  // finishing). The one built here has none of them, and the render is
+  // refused when the two differ.
   return {
-    params: { grantNonce: grant.nonce, executionTarget: target, recipe, intent: request.intent },
+    params: { grantNonce: grant.nonce, executionTarget: target, recipe: proposal.recipe ?? recipe, intent: request.intent },
     attemptId: cloudAttemptId(grant.nonce),
   }
 }

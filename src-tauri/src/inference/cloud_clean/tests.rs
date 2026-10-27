@@ -152,7 +152,7 @@ fn asked(scope: &str, local_first: bool) -> PrepareRequest {
         picks: None,
         work_long_side: None,
         flux3_generation: None,
-        finishing: None,
+        finishing: Default::default(),
     }
 }
 
@@ -568,15 +568,15 @@ fn the_estimate_follows_each_jobs_crop_not_a_count() {
     // FLUX 4B holds two pipeline copies (deploy/cloud/common/capacity.py):
     // 12 + 7 GiB in one Modal process, two 12 GiB Beam workers.
     let per_second = |memory: f64| 3.6 / 3600.0 + CPU_CORES * CPU_USD_PER_CORE_SECOND + memory * MEMORY_USD_PER_GIB_SECOND;
-    let priced = cost(80.0, 3.6, &recipe(), CloudProvider::Modal);
+    let priced = cost(80.0, 0.0, 3.6, &recipe(), CloudProvider::Modal);
     assert!((priced.low - 80.0 * per_second(19.0)).abs() < 1e-12);
     assert!((priced.high - (80.0 + COLD_START_SECONDS + IDLE_WINDOW_SECONDS) * per_second(19.0)).abs() < 1e-12);
-    let beam = cost(80.0, 3.6, &recipe(), CloudProvider::Beam);
+    let beam = cost(80.0, 0.0, 3.6, &recipe(), CloudProvider::Beam);
     assert!((beam.low - 80.0 * per_second(24.0)).abs() < 1e-12);
     let nine = RenderRecipe { model_id: "Disty0/FLUX.2-klein-9B-SDNQ".into(), ..recipe() };
     assert_eq!(RenderRate::of(&nine).memory_gib(CloudProvider::Modal), 48.0, "the 9B holds two copies on the Modal L40S");
     assert_eq!(RenderRate::of(&nine).memory_gib(CloudProvider::Beam), 24.0, "and one on the Beam RTX5090");
-    assert!(cost(80.0, 3.6, &nine, CloudProvider::Modal).low > priced.low, "the 9B worker has more memory");
+    assert!(cost(80.0, 0.0, 3.6, &nine, CloudProvider::Modal).low > priced.low, "the 9B worker has more memory");
     let flux3 = RenderRecipe { model_id: "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit".into(), ..recipe() };
     let rate = RenderRate::of(&flux3);
     assert_eq!((rate.memory_gib(CloudProvider::Modal), rate.memory_gib(CloudProvider::Beam)), (24.0, 24.0),
@@ -634,30 +634,61 @@ fn the_qwen_estimate_uses_its_own_grid_and_rates() {
     let estimate = Estimate::of(std::slice::from_ref(&region), rate);
     assert!((estimate.seconds().high - estimate.gpu_seconds - estimate.retry_gpu_seconds - 90.0 - IDLE_WINDOW_SECONDS).abs() < 1e-9);
     assert!(estimate.retry_gpu_seconds > 0.0);
-    assert!(cost(80.0, 3.6, &qwen, CloudProvider::Modal).low > cost(80.0, 3.6, &recipe(), CloudProvider::Modal).low,
+    // The dollars cover what the seconds do, the retries too.
+    let per_second = cost(1.0, 0.0, 3.6, &qwen, CloudProvider::Modal).low;
+    let priced = cost(estimate.gpu_seconds, estimate.retry_gpu_seconds, 3.6, &qwen, CloudProvider::Modal);
+    assert!((priced.high - estimate.seconds().high * per_second).abs() < 1e-9, "{priced:?}");
+    assert!(cost(80.0, 0.0, 3.6, &qwen, CloudProvider::Modal).low > cost(80.0, 0.0, 3.6, &recipe(), CloudProvider::Modal).low,
         "the Qwen worker has more memory");
 }
 
-/// The finishing rides on a 3.0.0 recipe only, and the default rides on none:
-/// a recipe's identity does not change until someone picks another finishing.
+/// A 3.0.0 recipe carries a picked finishing and never the default: its
+/// identity does not change until someone picks another. A 2.0.0 recipe
+/// (Qwen) carries one, the default too, only when every model is finished.
 #[test]
-fn the_finishing_setting_rides_on_a_3_0_0_recipe_only() {
+fn the_finishing_setting_rides_on_a_3_0_0_recipe_and_on_others_when_every_model_is_finished() {
     use cleaner_core::engines::postprocess::{Choice, Finishing};
     let picked = serde_json::json!({"cloudFinishing": "reference-raster", "cloudFinishingGrayscale": true});
     let choice = Choice { finishing: Finishing::ReferenceRaster, grayscale: true };
-    assert_eq!(finishing_from_settings(&picked), Ok(Some(choice)));
-    assert_eq!(finishing_from_settings(&serde_json::json!({"cloudFinishing": "copy"})), Ok(None));
-    assert_eq!(finishing_from_settings(&serde_json::Value::Null), Ok(None));
+    let setting = finishing_from_settings(&picked).unwrap();
+    assert_eq!(setting, FinishingSetting { choice, every_model: false });
+    assert_eq!(finishing_from_settings(&serde_json::Value::Null), Ok(FinishingSetting::default()));
     assert!(finishing_from_settings(&serde_json::json!({"cloudFinishing": "blur"})).is_err());
+    assert!(finishing_from_settings(&serde_json::json!({"finishingEveryModel": "yes"})).is_err());
+
     let mut current = RenderRecipe { preprocessing_version: "3.0.0".into(), ..recipe() };
-    apply_finishing(&mut current, Some(choice));
+    apply_finishing(&mut current, setting);
     assert_eq!(current.finishing, Some(choice));
     assert!(current.same_deployment(&RenderRecipe { finishing: None, ..current.clone() }));
     let wire: cleaner_core::cloud_wire::WireRenderRecipe = current.clone().into();
     assert!(!serde_json::to_string(&wire).unwrap().contains("raster"), "the worker never sees it");
+    apply_finishing(&mut current, FinishingSetting { every_model: true, ..Default::default() });
+    assert_eq!(current.finishing, None, "the default is what 3.0.0 does anyway");
+
     let mut older = RenderRecipe { preprocessing_version: "2.0.0".into(), ..recipe() };
-    apply_finishing(&mut older, Some(choice));
-    assert_eq!(older.finishing, None);
+    apply_finishing(&mut older, setting);
+    assert_eq!(older.finishing, None, "2.0.0 keeps its tone alignment");
+    let every = finishing_from_settings(&serde_json::json!({"finishingEveryModel": true})).unwrap();
+    assert_eq!(every.for_others(), Some(Choice::default()));
+    apply_finishing(&mut older, every);
+    assert_eq!(older.finishing, Some(Choice::default()));
+    assert_eq!(FinishingSetting { choice, every_model: false }.for_others(), None);
+}
+
+/// A one-region clean's grant is minted for the proposal's recipe, and the
+/// render is checked against it in full (`GrantService::validate_and_consume`).
+/// The interface sends the proposal's recipe back (`cloudflow.svelte.js`), so
+/// the finishing a 2.0.0 recipe carries with every model finished must come
+/// back as it went out, and a recipe without it must not pass for it.
+#[test]
+fn a_2_0_0_recipe_carrying_a_finishing_round_trips_through_the_interface() {
+    let mut granted = RenderRecipe { preprocessing_version: "2.0.0".into(), ..recipe() };
+    apply_finishing(&mut granted, finishing_from_settings(&serde_json::json!({"finishingEveryModel": true})).unwrap());
+    assert!(granted.finishing.is_some());
+    let sent: RenderRecipe = serde_json::from_value(serde_json::to_value(&granted).unwrap()).unwrap();
+    assert_eq!(sent, granted, "the recipe the interface returns is the one granted");
+    let bare = RenderRecipe { finishing: None, ..granted.clone() };
+    assert_ne!(bare, granted, "the recipe built in the interface would be refused");
 }
 
 /// The generation choice rides on a FLUX 3 recipe only, all-own rides on
@@ -1081,7 +1112,7 @@ fn plan_with(path: &Path, ids: &[String], grants: &GrantService, chunk_regions: 
         chunk_regions,
         estimate,
         price: l4(),
-        cost: Some(cost(estimate.gpu_seconds, 0.8, recipe, CloudProvider::Modal)),
+        cost: Some(cost(estimate.gpu_seconds, estimate.retry_gpu_seconds, 0.8, recipe, CloudProvider::Modal)),
         plan_digest: String::new(),
     };
     scope.plan_digest = scope.digest().unwrap();
@@ -2346,7 +2377,7 @@ fn streamed(scope: &str, pages: Option<Vec<u32>>) -> StreamRequest {
         qwen_edit: None,
         work_long_side: None,
         flux3_generation: None,
-        finishing: None,
+        finishing: Default::default(),
     }
 }
 

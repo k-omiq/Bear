@@ -24,7 +24,7 @@ noised to each step's level, the way Klein's inpaint pipeline holds its latents.
 A request's `flux3_generation` builds any part the reference tool's way ("Manga Cleaner
 Reproduction", generation v2): its prompt (`REFERENCE_FLUX3_PROMPT`), the lettering
 painted magenta into the crop and named in the prompt, with a result that kept the paint
-refused (`marker_remaining`), its time shift 6.93 (`REFERENCE_TIME_SHIFT`), and its
+refused as `marker_remained` (`marker_remaining`), its time shift 6.93 (`REFERENCE_TIME_SHIFT`), and its
 one-megapixel working size (`megapixel_size`).
 
 The worker returns the whole edited crop. The client writes it only inside the region's
@@ -48,8 +48,7 @@ from deploy.cloud.common.flux import (
     WorkerRenderError,
     hint_location,
     looks_like_memory,
-    megapixel_size,
-    working_size,
+    request_work_size,
 )
 from deploy.cloud.common.manifest import (
     FLUX3_PROMPT,
@@ -83,16 +82,24 @@ def reference_location(lettering: Any, np: Any) -> str:
     return f"{row} {col}"
 
 
-def marker_remaining(samples: Any, lettering: Any, np: Any) -> bool:
-    """Whether an RGB result kept the magenta marker in the lettering.
-
-    More than max(16, 1 % of the lettering) pixels with red and blue above 160 and each
-    more than 90 above green.
-    """
+def magenta_pixels(samples: Any, np: Any) -> Any:
+    """Where an RGB image reads as the marker: red and blue above 160, each more than 90 above green."""
     pixels = samples.astype(np.int16)
     magenta = (pixels[:, :, 0] > 160) & (pixels[:, :, 2] > 160)
-    magenta &= (pixels[:, :, 0] - pixels[:, :, 1] > 90) & (pixels[:, :, 2] - pixels[:, :, 1] > 90)
-    return int(np.count_nonzero(magenta & lettering)) > max(16, int(np.count_nonzero(lettering)) * 0.01)
+    return magenta & (pixels[:, :, 0] - pixels[:, :, 1] > 90) & (pixels[:, :, 2] - pixels[:, :, 1] > 90)
+
+
+def marker_remaining(samples: Any, lettering: Any, np: Any, unpainted: Any = None) -> bool:
+    """Whether an RGB result kept the magenta marker in the lettering.
+
+    More than max(16, 1 % of the lettering) magenta pixels (`magenta_pixels`). A pixel
+    already magenta in the `unpainted` crop is not counted: pink art in the grown hint
+    the model drew back is not paint left behind.
+    """
+    kept = magenta_pixels(samples, np) & lettering
+    if unpainted is not None:
+        kept &= ~magenta_pixels(unpainted, np)
+    return int(np.count_nonzero(kept)) > max(16, int(np.count_nonzero(lettering)) * 0.01)
 
 
 def flux3_prompt(edit: Optional[QwenEdit], location: Optional[str]) -> str:
@@ -290,14 +297,13 @@ class Flux3EditRunner:
         if crop.size != (width, height) or hint.size != (width, height):
             raise WorkerRenderError("invalid_image", "Image geometry differs from the request")
 
-        if generation.megapixel_size:
-            work_w, work_h = megapixel_size(width, height)
-        else:
-            work_w, work_h = working_size(width, height, work_long_side)
+        work_w, work_h = request_work_size(width, height, work_long_side, generation)
         grown = hint.point(lambda v: 255 if v else 0).filter(m.ImageFilter.MaxFilter(2 * HOLE_GROWTH + 1))
         lettering = np.asarray(grown) > 0
+        unpainted = None
         if generation.marker:
             # Painted before the resize, as the reference tool does.
+            unpainted = np.asarray(crop)
             painted = np.array(crop)
             painted[lettering] = MARKER
             crop = Image.fromarray(painted)
@@ -341,7 +347,7 @@ class Flux3EditRunner:
         result = images[0].convert("RGB")
         if result.size != (width, height):
             result = result.resize((width, height), Image.Resampling.LANCZOS)
-        if generation.marker and marker_remaining(np.asarray(result), lettering, np):
+        if generation.marker and marker_remaining(np.asarray(result), lettering, np, unpainted):
             raise WorkerRenderError("marker_remained",
                                     "The model left the magenta marker in the lettering; try another seed.")
         buffer = io.BytesIO()
@@ -350,5 +356,5 @@ class Flux3EditRunner:
         return buffer.getvalue()
 
 
-__all__ = ["Flux3EditRunner", "LatentHold", "REFERENCE_TIME_SHIFT", "TIME_SHIFT", "flux3_prompt",
+__all__ = ["Flux3EditRunner", "LatentHold", "REFERENCE_TIME_SHIFT", "TIME_SHIFT", "flux3_prompt", "magenta_pixels",
            "marker_remaining", "reference_location"]

@@ -114,6 +114,11 @@ pub enum HttpTransportError {
     NotEnqueued { reason: Box<HttpTransportError>, retryable: bool },
     #[error("cloud render weights need repair")]
     RenderWeightsUnavailable,
+    /// The gateway could not read a request that names a field its contract
+    /// is too old for (`work_long_side`, `flux3_generation`): its cloud code
+    /// is older than this app.
+    #[error("the cloud setup is older than this app")]
+    WorkerOutdated,
     /// The deployment was set up without a cleaning model.
     #[error("capability_unavailable: gateway render is not configured")]
     RenderNotConfigured,
@@ -225,8 +230,14 @@ fn submit_rejection(status: u16, body: &[u8], request: &JobRequestMetadata) -> H
         let unparsed = rejection.job_id == "unknown" && rejection.attempt_id == "unknown"
             && rejection.request_digest == "0".repeat(64) && matches!(status, 400 | 413);
         if (bound || unparsed) && cleaner_core::cloud_wire::validate_pre_enqueue_rejection(&rejection).is_ok() {
+            // A gateway from before a request-local field refuses it while it
+            // reads the metadata, so it cannot name the job.
+            let outdated = unparsed && status == 400 && rejection.error_code == "unknown_protocol_version"
+                && (request.recipe.work_long_side.is_some() || request.recipe.flux3_generation.is_some());
             let reason = if bound && matches!(rejection.error_code.as_str(), "weights_missing" | "weights_corrupt") {
                 HttpTransportError::RenderWeightsUnavailable
+            } else if outdated {
+                HttpTransportError::WorkerOutdated
             } else { error };
             return HttpTransportError::NotEnqueued { reason: Box::new(reason), retryable: rejection.retryable };
         }
@@ -1825,6 +1836,26 @@ mod tests {
         }
         body["request_digest"] = "0".repeat(64).into();
         assert!(!submit_rejection(503, &serde_json::to_vec(&body).unwrap(), &request).definitely_not_enqueued());
+    }
+
+    /// deploy/cloud/common/api.py: a gateway whose contract does not know a
+    /// recipe field fails to parse the metadata and names no job.
+    #[test]
+    fn an_unread_request_with_a_newer_field_is_an_outdated_worker() {
+        let sized: JobRequestMetadata = serde_json::from_str(include_str!("../../../deploy/cloud/fixtures/flux3_sized_generation_request.json")).unwrap();
+        let plain: JobRequestMetadata = serde_json::from_str(include_str!("../../../deploy/cloud/fixtures/job_request_metadata.json")).unwrap();
+        let unread = |code: &str| serde_json::to_vec(&serde_json::json!({ "enqueued": false, "error_code": code,
+            "message": "Unknown or unexpected fields present: ['flux3_generation']", "job_id": "unknown",
+            "attempt_id": "unknown", "request_digest": "0".repeat(64), "retryable": false })).unwrap();
+        let reason = |error: HttpTransportError| match error {
+            HttpTransportError::NotEnqueued { reason, retryable: false } => *reason,
+            other => panic!("not a pre-enqueue refusal: {other}"),
+        };
+        assert_eq!(reason(submit_rejection(400, &unread("unknown_protocol_version"), &sized)), HttpTransportError::WorkerOutdated);
+        // A request with nothing new in it, another code or another status stays a plain refusal.
+        assert_eq!(reason(submit_rejection(400, &unread("unknown_protocol_version"), &plain)), HttpTransportError::UnexpectedStatus { status: 400 });
+        assert_eq!(reason(submit_rejection(400, &unread("forbidden_fields"), &sized)), HttpTransportError::UnexpectedStatus { status: 400 });
+        assert_eq!(reason(submit_rejection(413, &unread("unknown_protocol_version"), &sized)), HttpTransportError::UnexpectedStatus { status: 413 });
     }
 
     #[test]

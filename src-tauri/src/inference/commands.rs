@@ -276,7 +276,7 @@ fn sanitize_http_transport_error(err: &HttpTransportError) -> String {
         HttpTransportError::DenoiseStorage => err.to_string(),
         HttpTransportError::NotEnqueued { reason, .. } => sanitize_http_transport_error(reason),
         HttpTransportError::RenderWeightsUnavailable => "cloud render weights need repair".to_string(),
-        HttpTransportError::RenderNotConfigured => err.to_string(),
+        HttpTransportError::RenderNotConfigured | HttpTransportError::WorkerOutdated => err.to_string(),
         HttpTransportError::ProviderPaused => "provider_paused: this provider is paused in this version".to_string(),
         HttpTransportError::UnexpectedStatus { status } if *status == 401 || *status == 403 => {
             format!("gateway authorization failure (status {status})")
@@ -815,6 +815,7 @@ fn connection_failure(err: &HttpTransportError) -> (&'static str, String) {
         HttpTransportError::RenderWeightsUnavailable => ("weights_unavailable", "cloud render weights need repair".to_string()),
         // Only the model-info read answers this, and `verify_cloud_profile` passes it.
         HttpTransportError::RenderNotConfigured => ("http_error", "this deployment has no cleaning model".to_string()),
+        HttpTransportError::WorkerOutdated => ("worker_outdated", err.to_string()),
         HttpTransportError::ProviderPaused => (
             "provider_paused",
             "this provider is paused in this version".to_string(),
@@ -1645,15 +1646,10 @@ pub fn submit_cloud_attempt_inner(
                 return Err("caller target does not match existing attempt record".to_string());
             }
         }
-        if let Some(caller_recipe) = recipe {
-            if caller_recipe.recipe_id != rec.recipe_id
-                || caller_recipe.preprocessing_version != rec.preprocessing_version
-                || caller_recipe.model_id != rec.model_id
-                || caller_recipe.model_revision != rec.model_revision
-                || caller_recipe.native_mask_conditioning != rec.native_mask_conditioning
-            {
-                return Err("caller recipe does not match existing attempt record".to_string());
-            }
+        // In full, as the grant compared it: a replay with another finishing,
+        // guidance or working size is not this attempt.
+        if recipe.is_some_and(|caller_recipe| *caller_recipe != rec.recipe()) {
+            return Err("caller recipe does not match existing attempt record".to_string());
         }
         if let Some(snap_json) = snapshot {
             let snap = serde_json::from_value::<ProjectRegionSnapshot>(snap_json.clone())
@@ -5977,6 +5973,24 @@ mod tests {
             cancel_cloud_attempt_inner(&journal, Some(&config), "att-disp-test", None);
         assert!(cancel_disp.is_err());
         assert!(cancel_disp.unwrap_err().contains("currently dispatching"));
+
+        // 7b. A replay's recipe is compared in full: the same identity with
+        // another finishing is not this attempt.
+        let replay_nonce = "replay-nonce-1";
+        let replay_id = attempt_id_for_nonce(replay_nonce);
+        let mut replayed = make_intent(&replay_id);
+        replayed.finishing = Some(cleaner_core::engines::postprocess::Choice::default());
+        replayed.region_id = "reg-replay".into();
+        replayed.request_digest = compute_intent_request_digest(&replayed);
+        let (record, guard3) = journal.create_intent(replayed).unwrap();
+        drop(guard3);
+        let replay = |recipe: &RenderRecipe| submit_cloud_attempt_inner(
+            true, &config, &journal, &replay_id, replay_nonce, None, None, Some(recipe), None, None);
+        let bare = RenderRecipe { finishing: None, ..record.recipe() };
+        assert!(replay(&bare).unwrap_err().contains("caller recipe does not match"));
+        if let Err(error) = replay(&record.recipe()) {
+            assert!(!error.contains("caller recipe"), "{error}");
+        }
 
         // 8. reconcile_cloud_recovery_inner: empty journal returns terminal
         let empty_journal = AttemptJournal::new(scratch.join("empty_journal"), limits);

@@ -1463,6 +1463,17 @@ mod tests {
     }
 
     #[test]
+    fn a_working_size_and_a_generation_choice_hash_side_by_side_as_in_python() {
+        use crate::engines::render::Flux3Generation;
+        let meta: JobRequestMetadata = serde_json::from_str(include_str!("../../../deploy/cloud/fixtures/flux3_sized_generation_request.json")).unwrap();
+        validate_job_request_metadata(&meta).unwrap();
+        assert_eq!(meta.recipe.work_long_side, Some(1280));
+        assert_eq!(meta.recipe.flux3_generation, Some(Flux3Generation { reference_prompt: true, reference_shift: true, ..Flux3Generation::default() }));
+        assert!(compute_canonical_json_array(&meta).ends_with(",1280,[true,false,true,false]]"));
+        assert_eq!(compute_request_digest(&meta), meta.request_digest);
+    }
+
+    #[test]
     fn klein_v2_takes_guidance_and_v1_or_another_family_does_not() {
         use crate::engines::render::{QwenEdit, QwenTarget};
         let edit = QwenEdit { target: QwenTarget::SoundEffect, description: "a brick wall".into() };

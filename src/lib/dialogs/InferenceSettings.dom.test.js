@@ -301,7 +301,7 @@ describe('the status line and the permission switch', () => {
 })
 
 describe('the finishing', () => {
-  beforeEach(() => setCloudFinishing('copy', false))
+  beforeEach(() => setCloudFinishing('copy', false, false))
 
   it('saves the version and the grey switch, and says what the version does', async () => {
     const backend = await seeded({ allowed: true })
@@ -318,6 +318,13 @@ describe('the finishing', () => {
     await fireEvent.click(screen.getByLabelText(t('settings.inference.finishing.grayscale')))
     await waitFor(() => expect(session.cloudFinishingGrayscale).toBe(true))
     await waitFor(() => expect(write).toHaveBeenLastCalledWith(expect.objectContaining({ cloudFinishing: 'reference-raster', cloudFinishingGrayscale: true })))
+
+    const every = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('settings.inference.finishing.everyModel')))
+    expect(every.checked).toBe(false)
+    await fireEvent.click(every)
+    await waitFor(() => expect(session.finishingEveryModel).toBe(true))
+    await waitFor(() => expect(write).toHaveBeenLastCalledWith(expect.objectContaining({
+      cloudFinishing: 'reference-raster', cloudFinishingGrayscale: true, finishingEveryModel: true })))
   })
 
   it('puts the version back when it cannot be saved', async () => {
@@ -328,6 +335,56 @@ describe('the finishing', () => {
     await fireEvent.change(pick, { target: { value: 'tone-only' } })
     await waitFor(() => expect(app.notices.some((notice) => notice.key === 'notice.cloud.finishingFailed')).toBe(true))
     expect(session.cloudFinishing).toBe('copy')
+  })
+
+  it('unticks the grey and every-model switches when they cannot be saved', async () => {
+    const backend = await seeded({ allowed: true })
+    vi.spyOn(backend, 'writeSettings').mockRejectedValue(new Error('disk full'))
+    show(backend)
+    for (const key of ['settings.inference.finishing.grayscale', 'settings.inference.finishing.everyModel']) {
+      clearNotices()
+      const box = /** @type {HTMLInputElement} */ (await screen.findByLabelText(t(key)))
+      await fireEvent.click(box)
+      await waitFor(() => expect(app.notices.some((notice) => notice.key === 'notice.cloud.finishingFailed')).toBe(true))
+      await waitFor(() => expect(box.checked).toBe(false))
+    }
+    expect([session.cloudFinishing, session.cloudFinishingGrayscale, session.finishingEveryModel]).toEqual(['copy', false, false])
+  })
+
+  it('keeps a second switch clicked while the first one was failing to save', async () => {
+    const backend = await seeded({ allowed: true })
+    /** @type {(error: Error) => void} */
+    let fail = () => {}
+    const write = vi.spyOn(backend, 'writeSettings')
+      .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
+    show(backend)
+    const grey = /** @type {HTMLInputElement} */ (await screen.findByLabelText(t('settings.inference.finishing.grayscale')))
+    const every = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('settings.inference.finishing.everyModel')))
+    await fireEvent.click(grey)
+    await fireEvent.click(every)
+    fail(new Error('disk full'))
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(grey.checked).toBe(false))
+    expect(every.checked).toBe(true)
+    expect([session.cloudFinishingGrayscale, session.finishingEveryModel]).toEqual([false, true])
+    expect(write).toHaveBeenLastCalledWith(expect.objectContaining({ cloudFinishingGrayscale: false, finishingEveryModel: true }))
+  })
+
+  it('shows what was last saved when two clicks both fail to save', async () => {
+    const backend = await seeded({ allowed: true })
+    /** @type {(error: Error) => void} */
+    let fail = () => {}
+    vi.spyOn(backend, 'writeSettings')
+      .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
+      .mockRejectedValueOnce(new Error('disk full'))
+    show(backend)
+    const grey = /** @type {HTMLInputElement} */ (await screen.findByLabelText(t('settings.inference.finishing.grayscale')))
+    await fireEvent.click(grey)
+    await fireEvent.click(grey)
+    fail(new Error('disk full'))
+    await waitFor(() => expect(app.notices.filter((notice) => notice.key === 'notice.cloud.finishingFailed').length).toBeGreaterThan(0))
+    await waitFor(() => expect(session.cloudFinishingGrayscale).toBe(false))
+    expect(grey.checked).toBe(false)
   })
 })
 
@@ -358,6 +415,28 @@ describe('the generation switches', () => {
     await fireEvent.click(await screen.findByLabelText(t('settings.inference.generation.referenceShift')))
     await waitFor(() => expect(app.notices.some((notice) => notice.key === 'notice.cloud.generationFailed')).toBe(true))
     expect(session.cloudFlux3Generation.referenceShift).toBe(false)
+    expect(/** @type {HTMLInputElement} */ (screen.getByLabelText(t('settings.inference.generation.referenceShift'))).checked).toBe(false)
+  })
+
+  it('keeps a second part clicked while the first one was failing to save', async () => {
+    const backend = await seeded({ allowed: true })
+    /** @type {(error: Error) => void} */
+    let fail = () => {}
+    const write = vi.spyOn(backend, 'writeSettings')
+      .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
+    show(backend)
+    const marker = /** @type {HTMLInputElement} */ (await screen.findByLabelText(t('settings.inference.generation.marker')))
+    const shift = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('settings.inference.generation.referenceShift')))
+    await fireEvent.click(marker)
+    await fireEvent.click(shift)
+    fail(new Error('disk full'))
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(marker.checked).toBe(false))
+    expect(shift.checked).toBe(true)
+    expect(session.cloudFlux3Generation).toEqual({ referencePrompt: false, marker: false, referenceShift: true, megapixelSize: false })
+    expect(write).toHaveBeenLastCalledWith(expect.objectContaining({
+      cloudFlux3Generation: { referencePrompt: false, marker: false, referenceShift: true, megapixelSize: false },
+    }))
   })
 })
 

@@ -884,10 +884,12 @@ export const en = {
       },
       finishing: {
         title: 'Finishing',
-        description: 'How a FLUX 3 result is matched to the page before it is written. A change applies to the next cloud clean.',
+        description: 'How a result is matched to the page before it is written: a FLUX 3 result always, other models\' results when the switch below is on. A change applies to the next clean.',
         label: 'Finishing version',
         grayscale: 'Make colour results grey',
         grayscaleHint: 'On a colour page, the result is made grey before it is finished. A grey page is grey already.',
+        everyModel: 'Also finish Qwen, FLUX.2 Klein and LaMa results',
+        everyModelHint: 'Off: Qwen, FLUX.2 Klein and LaMa keep their own tone fix, and only FLUX 3 is finished. On: this version finishes their results too, in place of that fix, and the grey switch makes their colour results grey as well. LaMa runs on this computer, so this works with Cloud GPU off too.',
         option: {
           copy: 'Copy page dots (default)',
           copyHops: 'Copy page dots, reach deeper',
@@ -3328,6 +3330,8 @@ export const en = {
         // Only a cloud setup from before results stopped being rejected by
         // the worker can send this (`edit_not_applied`).
         editNotApplied: 'your cloud setup is out of date and returned no result (update it in Settings, Cloud)',
+        markerRemained: 'the model left the marker paint',
+        workerOutdated: 'your cloud setup is older than this app (update it in Settings, Cloud)',
         weights: 'your cloud setup is missing required model files',
         remoteCancelled: 'the provider cancelled it',
         cancelled: 'it was cancelled',
@@ -3586,6 +3590,8 @@ export const en = {
         timeout: 'The render took too long and was stopped.',
         providerPaused: 'This cloud provider is paused in this version. Choose another endpoint in Settings, Cloud.',
         editNotApplied: 'This cloud setup is out of date and returned no result. Update it in Settings, Cloud, to get a result every time.',
+        markerRemained: 'The model left the magenta marker in the result. Try again for a new seed, or turn the marker off in Settings, Cloud.',
+        workerOutdated: 'This cloud setup is older than this app and cannot read the request. Update it in Settings, Cloud, then try again.',
         generic: 'The app was given no reason it has words for.',
       },
       // The status element, bottom left, while renders are in flight.

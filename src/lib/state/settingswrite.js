@@ -2,18 +2,28 @@
  * Settings writes share one native record. A full snapshot is read when its
  * turn arrives, after earlier targeted writes have settled. Callers that save
  * one choice pass a fixed patch so a later optimistic choice cannot rewrite
- * the earlier request.
+ * the earlier request. Callers that send a snapshot pass `undo`, which puts a
+ * failed choice back before the next write in the queue reads its snapshot.
  */
 
 const queues = new WeakMap()
 const saved = new WeakMap()
 
-/** @param {any} backend @param {Record<string, any>|(() => Record<string, any>)} patch */
-export function writeSettingsSerialized(backend, patch) {
+/**
+ * @param {any} backend
+ * @param {Record<string, any>|(() => Record<string, any>)} patch
+ * @param {() => void} [undo] - run when this write fails, before a later one starts
+ */
+export function writeSettingsSerialized(backend, patch, undo) {
   const previous = queues.get(backend) ?? Promise.resolve()
   const writing = previous.then(async () => {
     const value = typeof patch === 'function' ? patch() : patch
-    await backend.writeSettings(value)
+    try {
+      await backend.writeSettings(value)
+    } catch (error) {
+      undo?.()
+      throw error
+    }
     saved.set(backend, { ...(saved.get(backend) ?? {}), ...value })
     return value
   })

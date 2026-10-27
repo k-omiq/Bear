@@ -54,7 +54,7 @@ A recipe that carries `qwen_edit` (section 7) appends one more element, `["<targ
 
 A recipe that carries `work_long_side` (section 8) appends one more element after that, the bare integer. The fixture `deploy/cloud/fixtures/flux3_work_size_request.json` checks both implementations.
 
-A recipe that carries `flux3_generation` (section 9) appends one more element after that, its four booleans in order: `[reference_prompt, marker, reference_shift, megapixel_size]`. The fixture `deploy/cloud/fixtures/flux3_generation_request.json` checks both implementations.
+A recipe that carries `flux3_generation` (section 9) appends one more element after that, its four booleans in order: `[reference_prompt, marker, reference_shift, megapixel_size]`. The fixture `deploy/cloud/fixtures/flux3_generation_request.json` checks both implementations, and `deploy/cloud/fixtures/flux3_sized_generation_request.json` checks a working size and a generation choice together (its canonical tail is `...,1280,[true,false,true,false]]`).
 
 The request digest is the lowercase hexadecimal SHA-256 of the UTF-8 bytes of that array:
 
@@ -282,7 +282,7 @@ A missing required operation or an older endpoint produces "Gateway out of date.
 
 ## 5. The seed of a retry
 
-A first attempt for a region carries the recipe's pinned seed. A retry carries a higher one, so it is a new render and not the same image again. A gateway takes a seed above the pinned one only when its capabilities list `jobs.retry_seed`. An older gateway refuses any seed but the pinned one (`flux.sampling_mismatch`), and the app sends it the pinned seed. How the app computes the seed is in [cloud-journal.md](cloud-journal.md) section 4.5.
+A first attempt for a region carries the recipe's pinned seed. A retry carries a higher one, so it is a new render and not the same image again. A gateway takes a seed above the pinned one only when its capabilities list `jobs.retry_seed`. An older gateway refuses any seed but the pinned one (`flux.sampling_mismatch`), and the app sends it the pinned seed. How the app computes the seed is in [cloud-journal.md](cloud-journal.md) section 4.5. The seed is an unsigned 64-bit integer on both sides (`u64` in `cloud_wire.rs`, at most `(1 << 64) - 1` in `deploy/cloud/common/contract.py`); a larger one is refused before enqueue.
 
 ---
 
@@ -333,7 +333,7 @@ The batch estimate for Qwen uses a linear eight-step extrapolation from an earli
 
 The FLUX 3 edit recipes (`mc-flux3-klein-edit-v1`, the 4 bit weights, and `mc-flux3-klein-bf16-edit-v1`) may carry `work_long_side`: 768, 1024 or 1280. The worker scales the crop up until its long side is that size, renders, and scales the answer back (`working_size` in `deploy/cloud/common/flux.py`). A crop already larger is edited at its own size. A request without the field is edited at 768. The app sends nothing for 768, so a request at the default hashes as it did before the field existed.
 
-The recipes and the sizes live twice and a test ties them: `SIZED_RECIPES` and `WORK_LONG_SIDES` in `crates/cleaner-core/src/engines/render.rs`, `SIZED_RECIPE_IDS` and `WORK_LONG_SIDES` in `deploy/cloud/common/contract.py`. Any other recipe or size is rejected on both sides, and a worker from before the field rejects any request that names it.
+The recipes and the sizes live twice and a test ties them: `SIZED_RECIPES` and `WORK_LONG_SIDES` in `crates/cleaner-core/src/engines/render.rs`, `SIZED_RECIPE_IDS` and `WORK_LONG_SIDES` in `deploy/cloud/common/contract.py`. Any other recipe or size is rejected on both sides, and a worker from before the field rejects any request that names it. The app reads that refusal (a 400 with `job_id` "unknown" and error code `unknown_protocol_version`, for a request that carries `work_long_side` or `flux3_generation`) as `worker_outdated` and tells the user to update the cloud setup in Settings, Cloud, in place of a generic gateway error. Only these two fields are checked this way.
 
 The size is a choice per request, not part of the deployment: deployment equality ignores it. The request digest, the durable attempt record and the patch's provenance carry it, and the cost estimate uses it. The app reads it from the `cloudWorkLongSide` setting.
 
@@ -342,15 +342,17 @@ The size is a choice per request, not part of the deployment: deployment equalit
 The same recipes may carry `flux3_generation`, four booleans that each build one part of the edit the way the reference tool ("Manga Cleaner Reproduction", generation v2) builds it (`Flux3EditRunner` in `deploy/cloud/common/flux3.py`):
 
 - `reference_prompt`: its prompt (`REFERENCE_FLUX3_PROMPT` in `deploy/cloud/common/manifest.py`), with its own words for where the lettering is ("upper centre") and a description as " Target description: ...".
-- `marker`: the grown hint painted magenta (255, 0, 255) into the crop before it is resized, and its marker sentence added to the prompt. A result with more than max(16, 1 %) magenta pixels in the grown hint fails with `marker_remained`; another seed may pass.
+- `marker`: the grown hint painted magenta (255, 0, 255) into the crop before it is resized, and its marker sentence added to the prompt. A result with more than max(16, 1 %) magenta pixels in the grown hint fails with `marker_remained`; another seed may pass, and the app shows its own notice for it (try again for a new seed, or turn the marker off). A pixel already magenta in the crop before it is painted is not counted, so pink art the model draws back is not taken for paint left behind. The check runs over the grown hint, as the reference tool's does, not over the applied mask.
 - `reference_shift`: time shift 6.93 (its `mu` 1.93586) in place of 16.
 - `megapixel_size`: one megapixel, each side the nearest multiple of 32, scaled up or down (`megapixel_size` in `deploy/cloud/common/flux.py` and `crates/cleaner-core/src/engines/render.rs`), in place of the working size. A request that sets it carries no `work_long_side`.
 
-A record with every part false is refused: a request for this app's own way carries none, and hashes as it did before the field existed. Any other recipe, an unknown key or a non-boolean is refused on both sides, and a worker from before the field refuses any request that names it, so a profile must run the current cloud code first. Deployment equality ignores the field; the request digest, the attempt record, the patch's provenance and the cost estimate (`RenderRate::working_size`) carry it. The app reads it from the `cloudFlux3Generation` setting.
+A record with every part false is refused: a request for this app's own way carries none, and hashes as it did before the field existed. Any other recipe, an unknown key or a non-boolean is refused on both sides, and a worker from before the field refuses any request that names it, so a profile must run the current cloud code first; the app shows that refusal as `worker_outdated` (section 8). The worker changes of 2026-10-27 (the pink-art rule above, the seed limit in section 5, and sizing a render that must run alone by the size its request names) also take effect only after a profile updates its cloud code; the client changes work against any worker. Deployment equality ignores the field; the request digest, the attempt record, the patch's provenance and the cost estimate (`RenderRate::working_size`) carry it. The app reads it from the `cloudFlux3Generation` setting.
 
 The reference tool's crop context (half the lettering's size per side, 64 to 512 px), its prompt upsampler and its INT8 weights are not part of the field: see "What has not been measured" in [findings.md](findings.md).
 
-The client's finishing of the answer (`cloudFinishing`, `crates/cleaner-core/src/engines/postprocess.rs` `Finishing`) is never sent: it rides on the recipe, the attempt record and the patch's `postprocess` record, outside the request digest.
+The client's finishing of the answer (`cloudFinishing`, `crates/cleaner-core/src/engines/postprocess.rs` `Finishing`) is never sent: it rides on the recipe, the attempt record and the patch's `postprocess` record, outside the request digest. A 3.0.0 recipe carries it when it is not the default. A 2.0.0 recipe (Qwen, FLUX.2 Klein 4B and 9B) carries it only when `finishingEveryModel` is on, the default choice included, and is then finished in place of its tone alignment. The patch's `postprocess` record names the post-processing as `postprocess_version` (3.0.0), not as the crop's `preprocessing_version`.
+
+Because the working size, the generation and the finishing ride on the recipe, the consent grant is minted for the full recipe. A one-region clean sends back the recipe the consent proposal returned, so its render carries the same request-local fields the grant names; before 2026-10-27 it sent the bare recipe and was refused with a recipe mismatch whenever one of those fields was set. A replayed attempt is checked against the full recipe of its durable record (`AttemptRecord::recipe`: `qwen_edit`, working size, generation and finishing), not only its identity fields.
 
 ---
 

@@ -17,8 +17,9 @@
 //!    the page's value by position in the dot cell and by tone, built on half
 //!    the region's page (alternate [`BLOCK`] px blocks) and scored on the other
 //!    half by the correlation of predicted and actual detail. The best pair is
-//!    the screen if it scores at least [`MIN_FIT`]; hand-drawn texture and flat
-//!    paper do not.
+//!    the screen if it scores at least [`MIN_FIT`] and enough of the page shows
+//!    both frequencies at once ([`MIN_EVIDENCE`]); hand-drawn texture, hatching
+//!    and flat paper do not.
 //! 4. **Shifts.** Whole-pixel displacements, up to [`MAX_SHIFT`] px, that keep
 //!    the phase of both frequencies within [`PHASE_TOL`] of a cycle, kept where
 //!    the page's detail one shift away correlates with itself by [`MIN_COPY`].
@@ -51,7 +52,7 @@ pub const MIN_FIT: f64 = 0.5;
 /// Tone this many levels outside what a region's page shows fades the redraw
 /// out.
 pub const TONE_MARGIN: f64 = 12.0;
-/// The longest shift a copy takes, per axis, in px.
+/// The longest shift a copy takes, in px.
 pub const MAX_SHIFT: i64 = 64;
 /// The phase error, in cycles, a shift may make on either frequency.
 pub const PHASE_TOL: f64 = 0.05;
@@ -89,6 +90,19 @@ const BINS_PER_PX: f64 = 4.0;
 const TONE_BINS: usize = 12;
 /// The fine detail a region's page needs, RMS in levels: paper has none.
 const MIN_DETAIL: f64 = 2.0;
+/// A page pixel shows the screen where, within this many px, its detail
+/// passes [`MIN_DETAIL`] and the share of it at the two frequencies together
+/// is [`EVIDENCE_SHARE`] and at each [`EVIDENCE_EACH`]; a region needs
+/// [`MIN_EVIDENCE`] such pixels. Line-art hatching fits a screen model
+/// passably and fails this, so it never gets dots. Built on the reference
+/// tool's `_screen_evidence`, with the same window and shares but not the
+/// same floor or count: that test asks a power over 36 (6 levels RMS of a
+/// 2 px high-pass) and 256 pixels over the whole crop, 128 per region; this
+/// one asks 2 levels RMS of this module's detail and 256 pixels per region.
+const EVIDENCE_SIGMA: f64 = 5.0;
+const EVIDENCE_SHARE: f64 = 0.35;
+const EVIDENCE_EACH: f64 = 0.06;
+const MIN_EVIDENCE: usize = 256;
 /// The side of the blocks the screen model is built on and scored on.
 const BLOCK: usize = 16;
 /// Demodulation scales, fine to coarse, in px. The fine one runs at full
@@ -221,7 +235,7 @@ impl Screen {
         let phases: Vec<Grid> = freqs.iter().map(|&f| local_phase(&detail, known, f)).collect();
         let pixels: Vec<usize> = (0..n).filter(|&i| known.data[i]).collect();
         let (train, test): (Vec<usize>, Vec<usize>) = pixels.iter().partition(|&&i| ((i / page.w) / BLOCK + (i % page.w) / BLOCK) % 2 == 0);
-        let mut best: Option<(f64, usize, usize, f64)> = None;
+        let mut pairs: Vec<(f64, usize, usize, f64)> = Vec::new();
         for a in 0..freqs.len() {
             for b in a + 1..freqs.len() {
                 let (f, g) = (freqs[a], freqs[b]);
@@ -239,15 +253,17 @@ impl Screen {
                 let predicted: Vec<f64> = test.iter().map(|&i| table.at(phases[a].data[i], phases[b].data[i], tone.data[i]) - tone.data[i]).collect();
                 let actual: Vec<f64> = test.iter().map(|&i| page.data[i] - tone.data[i]).collect();
                 let fit = correlation(&predicted, &actual);
-                if best.is_none_or(|(q, ..)| fit > q) {
-                    best = Some((fit, a, b, period));
+                if fit >= MIN_FIT {
+                    pairs.push((fit, a, b, period));
                 }
             }
         }
-        let (fit, a, b, period) = best?;
-        if fit < MIN_FIT {
-            return None;
-        }
+        // Best fit first, ties in the order found; the first pair the page
+        // shows both of at once is the screen, so a hatching pair that fits a
+        // little better does not hide it.
+        pairs.sort_by(|p, q| q.0.total_cmp(&p.0));
+        let window = evidence_window(&detail, known);
+        let (_, a, b, period) = pairs.into_iter().find(|&(_, a, b, _)| evidence(&detail, known, &window, freqs[a], freqs[b]) >= MIN_EVIDENCE)?;
         let tone_sigma = period.max(2.0);
         let tone = masked_blur(page, known, tone_sigma).0;
         let table = Table::build(&pixels, &phases[a], &phases[b], &tone, page, bins(period));
@@ -356,7 +372,8 @@ impl Screen {
                         continue;
                     }
                     let mut cost = (target.data[s] - target.data[p]).abs() + LENGTH_COST * ((dy * dy + dx * dx) as f64).sqrt();
-                    if [p.wrapping_sub(1), p + 1, p.wrapping_sub(w as usize), p + w as usize].iter().any(|&q| q < used.len() && used[q] == k) {
+                    let beside = [(y, x - 1), (y, x + 1), (y - 1, x), (y + 1, x)];
+                    if beside.iter().any(|&(ny, nx)| inside(ny, nx) && used[(ny * w + nx) as usize] == k) {
                         cost -= KEEP_BONUS;
                     }
                     if best.is_none_or(|(c, ..)| cost < c) {
@@ -380,7 +397,8 @@ impl Screen {
         let mut close: Vec<(f64, i64, i64)> = Vec::new();
         for dy in -MAX_SHIFT..=MAX_SHIFT {
             for dx in -MAX_SHIFT..=MAX_SHIFT {
-                if dy * dy + dx * dx < 4 {
+                // past MAX_SHIFT in length a shift falls in no band below
+                if dy * dy + dx * dx < 4 || dy * dy + dx * dx > MAX_SHIFT * MAX_SHIFT {
                     continue;
                 }
                 let (y, x) = (dy as f64, dx as f64);
@@ -416,6 +434,32 @@ impl Screen {
         kept.sort_by(|a, b| b.2.total_cmp(&a.2));
         kept
     }
+}
+
+/// How many `known` pixels show a screen at `f` and `g`: their neighbourhood
+/// has detail, most of it at the two frequencies together and some at each.
+/// Hatching shows one direction at a time and has none. `window` is
+/// [`evidence_window`] of the same detail, shared by every pair tried.
+fn evidence(detail: &Grid, known: &Mask, window: &(Grid, Grid), f: [f64; 2], g: [f64; 2]) -> usize {
+    let (den, power) = window;
+    let energy = |f: [f64; 2]| {
+        let (re, im) = quadrature(detail, known, f, EVIDENCE_SIGMA);
+        Grid { w: detail.w, h: detail.h, data: (0..re.data.len()).map(|i| 2.0 * (re.data[i].powi(2) + im.data[i].powi(2)) / den.data[i].max(1e-6).powi(2)).collect() }
+    };
+    let (ef, eg) = (energy(f), energy(g));
+    (0..detail.data.len())
+        .filter(|&i| {
+            let p = power.data[i] / den.data[i].max(1e-6);
+            let (a, b) = (ef.data[i], eg.data[i]);
+            known.data[i] && p > MIN_DETAIL * MIN_DETAIL && a + b > EVIDENCE_SHARE * p && a.min(b) > EVIDENCE_EACH * p
+        })
+        .count()
+}
+
+/// The evidence window's weight of known pixels and of detail power.
+fn evidence_window(detail: &Grid, known: &Mask) -> (Grid, Grid) {
+    let power = Grid { w: detail.w, h: detail.h, data: detail.data.iter().map(|v| v * v).collect() };
+    (gaussian(&known.as_grid(), EVIDENCE_SIGMA), gaussian(&power, EVIDENCE_SIGMA))
 }
 
 fn bins(period: f64) -> usize {
@@ -486,6 +530,12 @@ fn peaks(detail: &Grid, known: &Mask) -> Vec<[f64; 2]> {
 /// `detail` over `known` demodulated at `f` and blurred: the unnormalised
 /// real and imaginary parts and the blurred weight of `known`.
 fn demodulate(detail: &Grid, known: &Mask, f: [f64; 2], sigma: f64) -> (Grid, Grid, Grid) {
+    let (re, im) = quadrature(detail, known, f, sigma);
+    (re, im, gaussian(&known.as_grid(), sigma))
+}
+
+/// [`demodulate`] without the weight.
+fn quadrature(detail: &Grid, known: &Mask, f: [f64; 2], sigma: f64) -> (Grid, Grid) {
     let (w, h) = (detail.w, detail.h);
     let mut re = Grid::new(w, h, 0.0);
     let mut im = Grid::new(w, h, 0.0);
@@ -499,7 +549,7 @@ fn demodulate(detail: &Grid, known: &Mask, f: [f64; 2], sigma: f64) -> (Grid, Gr
             }
         }
     }
-    (gaussian(&re, sigma), gaussian(&im, sigma), gaussian(&known.as_grid(), sigma))
+    (gaussian(&re, sigma), gaussian(&im, sigma))
 }
 
 /// `f` corrected three times by the mean turn, per px down and across, of the
@@ -745,6 +795,58 @@ mod tests {
         }
     }
 
+    /// White paper with patches of line-art hatching drawn into it, each
+    /// patch parallel lines of its own angle and spacing.
+    fn hatched_paper(w: usize, h: usize, patches: &[(usize, usize, usize, usize, f64, f64)]) -> Grid {
+        let mut page = Grid::new(w, h, 250.0);
+        for &(x0, y0, x1, y1, angle, period) in patches {
+            let (s, c) = angle.to_radians().sin_cos();
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    if (x as f64 * c + y as f64 * s).rem_euclid(period) < 1.6 {
+                        page.data[y * w + x] = 30.0;
+                    }
+                }
+            }
+        }
+        page
+    }
+
+    #[test]
+    fn hatching_beside_the_mask_is_not_a_screen() {
+        let (w, h) = (192, 192);
+        let page = hatched_paper(w, h, &[(8, 8, 72, 68, 45.0, 7.0), (120, 8, 184, 68, -45.0, 7.0), (8, 124, 72, 184, -45.0, 7.0), (120, 124, 184, 184, 45.0, 7.0)]);
+        let mask = square(w, h, 72, 72, 120, 120);
+        // Two directions of hatching in separate patches fit a screen model
+        // (0.69 against MIN_FIT 0.5) and never show both at one place.
+        // The model painted the lettering out to paper.
+        let answer = page.select(&mask.not(), &Grid::new(w, h, 250.0));
+        let none = Mask::new(w, h, false);
+        let all = Mask::new(w, h, true);
+        for reach in [Reach::Table, Reach::Copy, Reach::Hops] {
+            assert!(redraw(&page, &answer, &mask, &none, &all, &Grid::new(w, h, 1.0), reach).is_none(), "{reach:?}");
+        }
+    }
+
+    #[test]
+    fn a_screen_beside_hatching_is_still_copied() {
+        let (w, h) = (192, 192);
+        // A dot screen on the left, hatched paper on the right, one region.
+        let screen = ramp_screen(w, h);
+        let hatched = hatched_paper(w, h, &[(120, 16, 184, 90, 45.0, 7.0), (120, 100, 184, 176, -20.0, 6.0)]);
+        let left = square(w, h, 0, 0, 112, h);
+        let page = hatched.select(&left.not(), &screen);
+        let mask = square(w, h, 30, 60, 100, 132);
+        let answer = page.select(&mask.not(), &gaussian(&page, 3.0));
+        let none = Mask::new(w, h, false);
+        let all = Mask::new(w, h, true);
+        let (value, weight) = redraw(&page, &answer, &mask, &none, &all, &Grid::new(w, h, 1.0), Reach::Copy).expect("a screen");
+        let out = Grid { w, h, data: (0..w * h).map(|i| answer.data[i] * (1.0 - weight.data[i]) + value.data[i] * weight.data[i]).collect() };
+        let core = square(w, h, 36, 66, 94, 126);
+        let error = |g: &Grid| (0..w * h).filter(|&i| core.data[i]).map(|i| (g.data[i] - page.data[i]).abs()).sum::<f64>() / core.count() as f64;
+        assert!(error(&out) < 0.3 * error(&answer), "{} against {}", error(&out), error(&answer));
+    }
+
     #[test]
     fn flat_paper_and_hand_drawn_noise_are_not_a_screen() {
         let (w, h) = (128, 128);
@@ -767,5 +869,31 @@ mod tests {
                 .collect(),
         };
         assert!(redraw(&noise, &noise, &mask, &none, &all, &fade, Reach::Copy).is_none());
+    }
+
+    /// **A region needs 256 pixels of screen evidence.** On a clean screen
+    /// every known pixel shows both frequencies, so a 16 x 16 region passes and
+    /// a 15 x 17 one, a pixel short, does not.
+    #[test]
+    fn a_region_needs_256_pixels_of_screen_evidence() {
+        let (w, h) = (96, 96);
+        let page = ramp_screen(w, h);
+        assert!(Screen::fit(&page, &square(w, h, 30, 30, 46, 46)).is_some(), "256 pixels");
+        assert!(Screen::fit(&page, &square(w, h, 30, 30, 45, 47)).is_none(), "255 pixels");
+    }
+
+    /// **A hatching pair that fits better does not hide a screen.** A faint
+    /// screen beside strong hatching: the hatching's pair fits the page a
+    /// little better (0.73 against 0.72, measured) and shows no evidence, so
+    /// the screen's pair, next in fit, is the screen.
+    #[test]
+    fn a_better_fitting_hatching_pair_does_not_hide_a_faint_screen() {
+        let (w, h) = (192, 192);
+        let faint = Grid { w, h, data: ramp_screen(w, h).data.iter().map(|v| 128.0 + (v - 128.0) * 0.2).collect() };
+        let hatched = hatched_paper(w, h, &[(96, 0, w, h / 2, 45.0, 7.0), (96, h / 2, w, h, -45.0, 7.0)]);
+        let page = hatched.select(&square(w, h, 96, 0, w, h), &faint);
+        let screen = Screen::fit(&page, &Mask::new(w, h, true)).expect("the faint screen");
+        let period = (screen.f[0] * screen.g[1] - screen.f[1] * screen.g[0]).abs().recip().sqrt();
+        assert!((period - 2.36).abs() < 0.1, "period {period}, the hatching's is 7");
     }
 }

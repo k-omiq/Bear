@@ -26,7 +26,7 @@ import { getBackend, readCloudReadiness } from '../api/backend.js'
 import { notify, pushModal } from './app.svelte.js'
 import { editor, replaceRegion } from './editor.svelte.js'
 import { backendSettingsPatch, session, setCloudAllowed, setCloudFinishing, setCloudFlux3Generation, setCloudWorkLongSide } from './session.svelte.js'
-import { writeSettingsSerialized } from './settingswrite.js'
+import { savedSetting, writeSettingsSerialized } from './settingswrite.js'
 import { cloudErrorKey } from '../model/cloudnotices.js'
 import { currentCloudModelId } from '../model/model-names.js'
 import { providerPaused } from '../model/providers.js'
@@ -448,6 +448,51 @@ export async function setCloudPermission(allowed, backend = getBackend()) {
 }
 
 /**
+ * Each setting's value when this session first changed it, per backend: what
+ * a failed save goes back to while no write has confirmed one yet.
+ */
+const firstValues = new WeakMap()
+
+/**
+ * One optimistic change to the settings the backend reads, saved with the
+ * rest of them. When the save fails, each changed value is put back only if
+ * the session still holds what this call set, so a newer choice made while it
+ * was in flight stays; and it goes back to the last value a write confirmed,
+ * never to an earlier choice whose own save failed.
+ *
+ * @param {import('../api/backend.js').Backend} backend
+ * @param {{key: string, part?: string, before: unknown, after: unknown, current: () => unknown, put: (value: any) => void}[]} changes -
+ *   each setting by its key (and its part, inside a record), its value before and after, and how to read and write it
+ * @param {string} notice - the warning when the save fails
+ * @returns {Promise<boolean>} whether it was saved
+ */
+async function saveChanges(backend, changes, notice) {
+  const firsts = firstValues.get(backend) ?? new Map()
+  firstValues.set(backend, firsts)
+  const id = (/** @type {{key: string, part?: string}} */ change) => change.part ? `${change.key}.${change.part}` : change.key
+  for (const change of changes) {
+    if (!firsts.has(id(change))) firsts.set(id(change), change.before)
+    change.put(change.after)
+  }
+  // Inside the queue, so the next write's snapshot already has it back.
+  const undo = () => {
+    for (const change of changes) {
+      if (change.current() !== change.after) continue
+      const saved = savedSetting(backend, change.key, undefined)
+      const confirmed = saved === undefined ? undefined : change.part ? saved?.[change.part] : saved
+      change.put(confirmed === undefined ? firsts.get(id(change)) : confirmed)
+    }
+  }
+  try {
+    await writeSettingsSerialized(backend, () => backendSettingsPatch(), undo)
+    return true
+  } catch {
+    notify({ key: notice, tone: 'warn' })
+    return false
+  }
+}
+
+/**
  * The working size a cloud FLUX 3 clean asks for, saved where the backend
  * reads it when it plans the clean. Put back when the save fails.
  *
@@ -456,60 +501,50 @@ export async function setCloudPermission(allowed, backend = getBackend()) {
  * @returns {Promise<boolean>} whether it was saved
  */
 export async function saveCloudWorkLongSide(side, backend = getBackend()) {
-  const previous = session.cloudWorkLongSide
-  setCloudWorkLongSide(side)
-  try {
-    await writeSettingsSerialized(backend, () => backendSettingsPatch())
-    return true
-  } catch {
-    setCloudWorkLongSide(previous)
-    notify({ key: 'notice.cloud.workSizeFailed', tone: 'warn' })
-    return false
-  }
+  return saveChanges(backend, [{
+    key: 'cloudWorkLongSide', before: session.cloudWorkLongSide, after: side,
+    current: () => session.cloudWorkLongSide, put: setCloudWorkLongSide,
+  }], 'notice.cloud.workSizeFailed')
 }
 
 /**
- * How a cloud FLUX 3 answer is finished, saved where the backend reads it
- * when it plans the clean. Put back when the save fails.
+ * How an answer is finished, saved where the backend reads it when it plans
+ * a clean or opens a run. What changed is put back when the save fails.
  *
- * @param {typeof import('../model/model-names.js').FINISHINGS[number]} finishing
- * @param {boolean} grayscale
+ * @param {{finishing?: typeof import('../model/model-names.js').FINISHINGS[number], grayscale?: boolean, everyModel?: boolean}} change - what changed; the rest stays
  * @param {import('../api/backend.js').Backend} [backend]
  * @returns {Promise<boolean>} whether it was saved
  */
-export async function saveCloudFinishing(finishing, grayscale, backend = getBackend()) {
-  const previous = [session.cloudFinishing, session.cloudFinishingGrayscale]
-  setCloudFinishing(finishing, grayscale)
-  try {
-    await writeSettingsSerialized(backend, () => backendSettingsPatch())
-    return true
-  } catch {
-    setCloudFinishing(...previous)
-    notify({ key: 'notice.cloud.finishingFailed', tone: 'warn' })
-    return false
-  }
+export async function saveCloudFinishing(change, backend = getBackend()) {
+  const parts = [
+    { key: 'cloudFinishing', after: change.finishing, current: () => session.cloudFinishing,
+      put: (/** @type {any} */ value) => setCloudFinishing(value) },
+    { key: 'cloudFinishingGrayscale', after: change.grayscale, current: () => session.cloudFinishingGrayscale,
+      put: (/** @type {any} */ value) => setCloudFinishing(session.cloudFinishing, value) },
+    { key: 'finishingEveryModel', after: change.everyModel, current: () => session.finishingEveryModel,
+      put: (/** @type {any} */ value) => setCloudFinishing(session.cloudFinishing, session.cloudFinishingGrayscale, value) },
+  ]
+  return saveChanges(backend, parts.filter((part) => part.after !== undefined).map((part) => ({ ...part, before: part.current() })),
+    'notice.cloud.finishingFailed')
 }
 
 /**
  * Which parts of a cloud FLUX 3 edit are built the reference tool's way,
- * saved where the backend reads it when it plans the clean. Put back when the
- * save fails.
+ * saved where the backend reads it when it plans the clean. The parts that
+ * changed are put back when the save fails.
  *
  * @param {Record<string, boolean>} generation
  * @param {import('../api/backend.js').Backend} [backend]
  * @returns {Promise<boolean>} whether it was saved
  */
 export async function saveCloudFlux3Generation(generation, backend = getBackend()) {
-  const previous = { ...session.cloudFlux3Generation }
-  setCloudFlux3Generation(generation)
-  try {
-    await writeSettingsSerialized(backend, () => backendSettingsPatch())
-    return true
-  } catch {
-    setCloudFlux3Generation(previous)
-    notify({ key: 'notice.cloud.generationFailed', tone: 'warn' })
-    return false
-  }
+  const current = /** @type {Record<string, boolean>} */ (session.cloudFlux3Generation)
+  const changes = Object.keys(current).filter((part) => (generation[part] === true) !== current[part]).map((part) => ({
+    key: 'cloudFlux3Generation', part, before: current[part], after: generation[part] === true,
+    current: () => /** @type {Record<string, boolean>} */ (session.cloudFlux3Generation)[part],
+    put: (/** @type {boolean} */ value) => setCloudFlux3Generation({ ...session.cloudFlux3Generation, [part]: value }),
+  }))
+  return saveChanges(backend, changes, 'notice.cloud.generationFailed')
 }
 
 /** Settings, opened on its Cloud tab. */

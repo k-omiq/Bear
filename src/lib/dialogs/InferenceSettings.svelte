@@ -88,11 +88,14 @@
    *    reference tool's way (`render.rs#Flux3Generation`): its prompt, the
    *    magenta marker, its time shift, its one-megapixel size. Each is sent
    *    with the request, so a worker deployed before them refuses it.
-   * 8. **Finishing**: how a FLUX 3 answer is matched to the page before it
-   *    is written (`postprocess.rs#Finishing`), every version the bench
-   *    measured and the reference tool's, and whether a colour answer is made
-   *    grey first. Saved with the other settings; the backend freezes it on
-   *    each cloud attempt, so a change applies to the next clean.
+   * 8. **Finishing**: how an answer is matched to the page before it is
+   *    written (`postprocess.rs#Finishing`), every version the bench
+   *    measured and the reference tool's, whether a colour answer is made
+   *    grey first, and whether the answers of every other model (Qwen,
+   *    FLUX.2 Klein, LaMa) are finished the same way in place of their tone
+   *    fix; a FLUX 3 answer is always finished. Saved with the other settings; the
+   *    backend freezes it on each cloud attempt and reads it when a run opens,
+   *    so a change applies to the next clean.
    *
    * **Tokens.** A token typed here goes to the system keychain through
    * `storeCloudSecret`, and the field is wiped as soon as that call returns,
@@ -138,6 +141,8 @@
     finishingHint: `${uid}-finishing-hint`,
     grayscale: `${uid}-grayscale`,
     grayscaleHint: `${uid}-grayscale-hint`,
+    everyModel: `${uid}-every-model`,
+    everyModelHint: `${uid}-every-model-hint`,
     generation: `${uid}-generation`,
   }
 
@@ -1233,7 +1238,7 @@
   </section>
 
   <section class="finishing" aria-labelledby={ids.generation} data-settings-anchor="generation">
-    <h3 class="title" id={ids.generation}>{t('settings.inference.generation.title')}</h3>
+    <h3 class="title" id={ids.generation} tabindex="-1" data-anchor-focus>{t('settings.inference.generation.title')}</h3>
     <p class="note">{t('settings.inference.generation.description')}</p>
     {#each FLUX3_GENERATION_PARTS as part (part)}
       <div class="grey-row">
@@ -1252,7 +1257,7 @@
   </section>
 
   <section class="finishing" aria-labelledby={ids.finishing} data-settings-anchor="finishing">
-    <h3 class="title" id={ids.finishing}>{t('settings.inference.finishing.title')}</h3>
+    <h3 class="title" id={ids.finishing} tabindex="-1" data-anchor-focus>{t('settings.inference.finishing.title')}</h3>
     <p class="note">{t('settings.inference.finishing.description')}</p>
     <Field label={t('settings.inference.finishing.label')} controlId={ids.finishingPick}>
       {#snippet children()}
@@ -1261,7 +1266,7 @@
           options={finishingOptions}
           value={session.cloudFinishing}
           describedBy={ids.finishingHint}
-          onchange={(next) => void saveCloudFinishing(/** @type {any} */ (next), session.cloudFinishingGrayscale, backend)}
+          onchange={(next) => void saveCloudFinishing({ finishing: /** @type {any} */ (next) }, backend)}
         />
       {/snippet}
     </Field>
@@ -1273,11 +1278,23 @@
         type="checkbox"
         aria-describedby={ids.grayscaleHint}
         checked={session.cloudFinishingGrayscale}
-        onchange={(event) => void saveCloudFinishing(session.cloudFinishing, event.currentTarget.checked, backend)}
+        onchange={(event) => void saveCloudFinishing({ grayscale: event.currentTarget.checked }, backend)}
       />
       <label for={ids.grayscale}>{t('settings.inference.finishing.grayscale')}</label>
     </div>
     <p class="note" id={ids.grayscaleHint}>{t('settings.inference.finishing.grayscaleHint')}</p>
+    <div class="grey-row">
+      <input
+        id={ids.everyModel}
+        class="check"
+        type="checkbox"
+        aria-describedby={ids.everyModelHint}
+        checked={session.finishingEveryModel}
+        onchange={(event) => void saveCloudFinishing({ everyModel: event.currentTarget.checked }, backend)}
+      />
+      <label for={ids.everyModel}>{t('settings.inference.finishing.everyModel')}</label>
+    </div>
+    <p class="note" id={ids.everyModelHint}>{t('settings.inference.finishing.everyModelHint')}</p>
   </section>
 
   <Disclosure

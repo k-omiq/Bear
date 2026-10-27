@@ -528,7 +528,7 @@ pub fn run(config: &Config) -> Result<usize, String> {
                 chosen = Some((label, cloud, crop_ok, hint_ok));
             }
         }
-        let Some((basis, cloud, crop_ok, hint_ok)) = chosen else {
+        let Some((basis, mut cloud, crop_ok, hint_ok)) = chosen else {
             summary.push(json!({ "region": region_id, "skipped": "preparation failed" }));
             continue;
         };
@@ -537,6 +537,9 @@ pub fn run(config: &Config) -> Result<usize, String> {
             summary.push(json!({ "region": region_id, "skipped": "result is not RGB8" }));
             continue;
         }
+        // Finished as the attempt was: its frozen finishing, which a record
+        // written before it existed does not carry.
+        cloud.prepared.set_finishing(serde_json::from_value(journal["finishing"].clone()).ok().flatten());
         let prepared = &cloud.prepared;
         let crop = prepared.crop();
         let generated = GeneratedCrop::new(decoded.width, decoded.height, &decoded.data);

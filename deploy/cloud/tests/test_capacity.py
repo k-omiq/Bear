@@ -3,6 +3,7 @@ count and the analysis and denoise caches under concurrent inputs. All offline."
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import sys
 import tempfile
@@ -23,6 +24,7 @@ from deploy.cloud.common.capacity import (
     render_copies,
     render_worker_memory_gib,
 )
+from deploy.cloud.common.contract import compute_request_digest
 from deploy.cloud.common.flux import WorkerRenderError
 from deploy.cloud.common.gpu import GpuHeartbeat, heartbeat_key
 from deploy.cloud.common.jobs import MemoryStore
@@ -30,6 +32,7 @@ from deploy.cloud.common.manifest import (
     MODEL_PROD_FLUX,
     MODEL_PROD_FLUX_9B,
     MODEL_PROD_QWEN,
+    RECIPE_PROD_FLUX3,
     production_model,
 )
 from deploy.cloud.common.worker import RunnerPool, WorkerRuntime
@@ -275,6 +278,29 @@ class WorkerPoolRuntimeTest(unittest.TestCase):
         large = make_job(width=1040, height=1024)
         self.assertTrue(runtime.render(metadata_json(small[0]), small[1], small[2])["ok"])
         self.assertTrue(runtime.render(metadata_json(large[0]), large[1], large[2])["ok"])
+        self.assertEqual(seen, [False, True])
+
+    def test_a_render_runs_alone_by_the_size_its_request_names(self) -> None:
+        class Sized(GatedRunner):
+            def render_png(self, *args: Any, **kwargs: Any) -> bytes:
+                return super().render_png(*args)
+
+        runtime = WorkerRuntime(str(self.root), copies=2, runner_factory=Sized)
+        runtime.load()
+        seen: List[bool] = []
+        original = runtime._render_on
+
+        def recording(pool: Any, exclusive: bool, *args: Any) -> Any:
+            seen.append(exclusive)
+            return original(pool, exclusive, *args)
+
+        runtime._render_on = recording  # type: ignore[method-assign]
+        # 32 x 32 is 768 x 768 at the worker's own size, 1280 x 1280 at the one it names.
+        own, image, hint = make_job(steps=16, recipe_id=RECIPE_PROD_FLUX3)
+        sized = dataclasses.replace(own, recipe=dataclasses.replace(own.recipe, work_long_side=1280))
+        sized = dataclasses.replace(sized, request_digest=compute_request_digest(sized))
+        for meta in (own, sized):
+            self.assertTrue(runtime.render(metadata_json(meta), image, hint)["ok"])
         self.assertEqual(seen, [False, True])
 
     def test_out_of_memory_beside_another_render_retries_alone(self) -> None:

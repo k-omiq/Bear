@@ -400,6 +400,23 @@ describe('Qwen descriptions before consent', () => {
     expect(app.modals.length).toBe(0)
   })
 
+  it('renders with the recipe the grant was minted for, settings and all', async () => {
+    const { backend, regionId } = await opened()
+    vi.spyOn(backend, 'getCloudModelInfo').mockResolvedValue(model)
+    // What the native side returns with "Also finish Qwen and LaMa results"
+    // on: the default finishing rides on the 2.0.0 recipe.
+    const prepared = { recipe_id: model.pinnedRecipeId, preprocessing_version: '2.0.0', model_id: model.pinnedModelId,
+      model_revision: model.pinnedModelRevision, native_mask_conditioning: false,
+      qwen_edit: { target: 'sound_effect', description: 'A brick wall' }, finishing: { finishing: 'copy', grayscale: false } }
+    vi.spyOn(backend, 'prepareCloudConsent').mockResolvedValue({ proposalId: 'qwen-prop', standing: true, recipe: prepared })
+    vi.spyOn(backend, 'confirmCloudConsent').mockResolvedValue({ nonce: 'qwen-grant' })
+    const work = requestCloudConsent({ chapterId: CHAPTER, pageIndex: 0, regionId, intent: { action: 'cleanAnyway' } }, backend)
+    await vi.waitFor(() => expect(app.modals.at(-1)?.kind).toBe('qwenPrompt'))
+    closeModal({ target: 'sound_effect', description: 'A brick wall' })
+    const grant = await work
+    expect(grant?.params.recipe).toEqual(prepared)
+  })
+
   it('cancel sends no crop and creates no consent proposal', async () => {
     const { backend, regionId } = await opened()
     vi.spyOn(backend, 'getCloudModelInfo').mockResolvedValue(model)

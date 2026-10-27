@@ -319,12 +319,32 @@ pub(crate) fn apply_work_long_side(recipe: &mut RenderRecipe, work_long_side: Op
     };
 }
 
-/// The `cloudFinishing` setting: how the client finishes a 3.0.0 answer
-/// before it is written ([`cleaner_core::engines::postprocess::Finishing`],
+/// The `cloudFinishing` setting: how the client finishes a 3.0.0 answer, and
+/// with [`FINISHING_EVERY_MODEL_KEY`] every other model's, before it is written ([`cleaner_core::engines::postprocess::Finishing`],
 /// kebab-case), and `cloudFinishingGrayscale`, whether a colour answer is made
 /// grey first. Absent or null is the default. Nothing of it is sent.
 pub const FINISHING_KEY: &str = "cloudFinishing";
 pub const FINISHING_GRAYSCALE_KEY: &str = "cloudFinishingGrayscale";
+/// `finishingEveryModel`: whether that finishing also takes the place of the
+/// tone alignment on every other model's answer, a 2.0.0 cloud answer (Qwen)
+/// and the LaMa rung's. Absent, null or false: only a 3.0.0 answer is
+/// finished, and the others keep their tone alignment.
+pub const FINISHING_EVERY_MODEL_KEY: &str = "finishingEveryModel";
+
+/// The three finishing settings, read together.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FinishingSetting {
+    pub choice: Choice,
+    pub every_model: bool,
+}
+
+impl FinishingSetting {
+    /// What a model without its own finishing (the LaMa rung, a 2.0.0
+    /// recipe) is finished by: the choice when every model takes it.
+    pub fn for_others(self) -> Option<Choice> {
+        self.every_model.then_some(self.choice)
+    }
+}
 
 /// The `cloudFlux3Generation` setting: which parts of a FLUX 3 edit are built
 /// the reference tool's way, as `{referencePrompt, marker, referenceShift,
@@ -362,7 +382,7 @@ pub(crate) fn apply_flux3_generation(recipe: &mut RenderRecipe, generation: Opti
 }
 
 /// Strict: each key null or of its type, the version one the client has.
-pub fn finishing_from_settings(settings: &serde_json::Value) -> Result<Option<Choice>, String> {
+pub fn finishing_from_settings(settings: &serde_json::Value) -> Result<FinishingSetting, String> {
     let finishing = match settings.get(FINISHING_KEY).filter(|value| !value.is_null()) {
         None => Finishing::default(),
         Some(value) => serde_json::from_value(value.clone()).map_err(|_| {
@@ -374,18 +394,41 @@ pub fn finishing_from_settings(settings: &serde_json::Value) -> Result<Option<Ch
         None => false,
         Some(value) => value.as_bool().ok_or_else(|| format!("{FINISHING_GRAYSCALE_KEY} must be true or false"))?,
     };
-    let choice = Choice { finishing, grayscale };
-    Ok((choice != Choice::default()).then_some(choice))
+    Ok(FinishingSetting { choice: Choice { finishing, grayscale }, every_model: every_model_from_settings(settings)? })
 }
 
-/// The setting on a recipe about to be sent: only a 3.0.0 recipe finishes,
-/// so on any other the setting does nothing. Every cloud clean, of a batch or
-/// of one region, reads it here.
-pub(crate) fn apply_finishing(recipe: &mut RenderRecipe, finishing: Option<Choice>) {
-    recipe.finishing = finishing.filter(|_| {
-        cleaner_core::engines::render::Preprocessing::of(&recipe.preprocessing_version)
-            .is_ok_and(|version| version == cleaner_core::engines::render::Preprocessing::V3)
-    });
+/// Strict: `finishingEveryModel` null or a boolean.
+fn every_model_from_settings(settings: &serde_json::Value) -> Result<bool, String> {
+    match settings.get(FINISHING_EVERY_MODEL_KEY).filter(|value| !value.is_null()) {
+        None => Ok(false),
+        Some(value) => value.as_bool().ok_or_else(|| format!("{FINISHING_EVERY_MODEL_KEY} must be true or false")),
+    }
+}
+
+/// What this computer's models (the LaMa rung) are finished by, read when a
+/// run or a hand edit opens: none unless every model is finished, and only
+/// then is the choice read at all, so a cloud choice a local run never uses
+/// cannot stop it. Strict where it is read, as [`finishing_from_settings`].
+pub fn local_finishing_from_settings(settings: &serde_json::Value) -> Result<Option<Choice>, String> {
+    if !every_model_from_settings(settings)? {
+        return Ok(None);
+    }
+    finishing_from_settings(settings).map(FinishingSetting::for_others)
+}
+
+/// The setting on a recipe about to be sent. A 3.0.0 recipe finishes anyway,
+/// so it carries a choice only when it is not the default: its identity does
+/// not change until someone picks another. Any other recipe carries one only
+/// when every model is finished, and is then finished in place of its tone
+/// alignment. Every cloud clean, of a batch or of one region, reads it here.
+pub(crate) fn apply_finishing(recipe: &mut RenderRecipe, setting: FinishingSetting) {
+    let current = cleaner_core::engines::render::Preprocessing::of(&recipe.preprocessing_version)
+        .is_ok_and(|version| version == cleaner_core::engines::render::Preprocessing::V3);
+    recipe.finishing = if current {
+        (setting.choice != Choice::default()).then_some(setting.choice)
+    } else {
+        setting.for_others()
+    };
 }
 
 impl CleanTarget {
@@ -728,7 +771,7 @@ pub(crate) struct PrepareRequest {
     /// The `cloudWorkLongSide` setting.
     pub work_long_side: Option<u32>,
     /// The `cloudFinishing` settings.
-    pub finishing: Option<Choice>,
+    pub finishing: FinishingSetting,
     /// The `cloudFlux3Generation` setting.
     pub flux3_generation: Option<Flux3Generation>,
 }
@@ -839,7 +882,7 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
     let mut cache = proposals.lock().map_err(|e| e.to_string())?;
     open(&mut cache)?;
     let proposal_id = analysis::random_id()?;
-    let cost = price.as_ref().map(|(_, per_hour)| cost(estimate.gpu_seconds, *per_hour, &recipe, destination.provider));
+    let cost = price.as_ref().map(|(_, per_hour)| cost(estimate.gpu_seconds, estimate.retry_gpu_seconds, *per_hour, &recipe, destination.provider));
     let mut scope = CleanGrantScope {
         chapter_id: proposal.chapter_id.clone(),
         regions,
@@ -1022,13 +1065,15 @@ fn working_size(w: u32, h: u32, work_long_side: u32) -> (u32, u32) {
     (snap(w), snap(h))
 }
 
-/// The cost range of `gpu_seconds` of rendering at `gpu_usd_per_hour`.
-fn cost(gpu_seconds: f64, gpu_usd_per_hour: f64, recipe: &RenderRecipe, provider: CloudProvider) -> CostRange {
+/// The cost range of `gpu_seconds` of rendering at `gpu_usd_per_hour`. The
+/// high end also pays `retry_gpu_seconds`, the renders a retry may add, as
+/// [`Estimate::seconds`] counts them.
+fn cost(gpu_seconds: f64, retry_gpu_seconds: f64, gpu_usd_per_hour: f64, recipe: &RenderRecipe, provider: CloudProvider) -> CostRange {
     let rate = RenderRate::of(recipe);
     let per_second = usd_per_second(gpu_usd_per_hour, recipe, provider);
     CostRange {
         low: gpu_seconds * per_second,
-        high: (gpu_seconds + rate.cold_start_seconds + IDLE_WINDOW_SECONDS) * per_second,
+        high: (gpu_seconds + retry_gpu_seconds + rate.cold_start_seconds + IDLE_WINDOW_SECONDS) * per_second,
     }
 }
 
@@ -1246,7 +1291,7 @@ pub(crate) struct StreamRequest {
     /// The `cloudWorkLongSide` setting.
     pub work_long_side: Option<u32>,
     /// The `cloudFinishing` settings.
-    pub finishing: Option<Choice>,
+    pub finishing: FinishingSetting,
     /// The `cloudFlux3Generation` setting.
     pub flux3_generation: Option<Flux3Generation>,
 }
@@ -2030,7 +2075,7 @@ fn page_detections(job_path: &Path, chapter_id: &str, page: u32) -> Result<Vec<S
         region_ids: None, local_first: false, picks: None, qwen_edit: None,
         work_long_side: None,
         flux3_generation: None,
-        finishing: None,
+        finishing: Default::default(),
     };
     Ok(detections_in_scope(&job, &request)?.into_iter().map(|(_, id)| id).collect())
 }

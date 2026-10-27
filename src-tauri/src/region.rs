@@ -689,8 +689,15 @@ impl Bench {
         let inpainter_preference = settings.as_ref()
             .and_then(|settings| run::model_preference_from(settings, "inpainter").ok())
             .unwrap_or(default_preference);
+        let mut rung2 = run::Rung2::new(&models, inpainter_preference);
+        // The same finishing a run reads. A run refuses an unreadable one; an
+        // edit finishes nothing by it, as it falls back on an unreadable
+        // accelerator above.
+        rung2.finishing = settings.as_ref()
+            .and_then(|settings| crate::inference::cloud_clean::local_finishing_from_settings(settings).ok())
+            .flatten();
         Bench {
-            rung2: run::Rung2::new(&models, inpainter_preference),
+            rung2,
             detector: run::detector_on_demand(&models, detector_preference),
             flux: None,
             flux_key: None,
@@ -850,6 +857,7 @@ impl Bench {
             model_sha256: None,
             pad: rendered.pad,
             tiles: Some(rendered.tiles),
+            matched: rendered.matched,
         };
         let verdict = quality::assess(page, &made.mask, &made.pixels, fit::page_noise_sigma(page));
         Ok((made, verdict, tone))
@@ -1508,6 +1516,7 @@ fn edit_with_bench_render(
             model_sha256: None,
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
+            matched: None,
         };
         let verdict = quality::assess(page, &made.mask, &made.pixels, noise);
         (made, verdict)
@@ -1586,6 +1595,9 @@ fn edit_with_bench_render(
     }
     if let Some(tone) = tone.as_ref() {
         snapshot["tone"] = tone.provenance();
+    }
+    if let Some(matched) = made.matched.as_ref() {
+        snapshot["postprocess"] = matched.provenance();
     }
     snapshot["source"] = serde_json::json!(plan.source);
     snapshot["input_provenance"] = serde_json::json!({
@@ -2261,6 +2273,7 @@ mod text_shape_boundary_tests {
                     model_sha256: None,
                     pad: cleaner_core::strip::EdgePad::None,
                     tiles: None,
+                    matched: None,
                 };
                 let bounded =
                     bound_text_shape_output(&below, made, &support, &support, None).unwrap();
@@ -2318,6 +2331,7 @@ mod text_shape_boundary_tests {
             model_sha256: None,
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
+            matched: None,
         };
         assert!(bound_text_shape_output(&below, made, &support, &support, None).is_err());
     }
@@ -2432,6 +2446,7 @@ mod text_shape_boundary_tests {
             model_sha256: None,
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
+            matched: None,
         };
         assert!(matches!(
             edit_with_bench_render(
@@ -2645,6 +2660,7 @@ fn paint_patch(
         return Ok((run::Made {
             engine: Engine::Paint, ink: mask.clone(), mask, pixels,
             provider: None, model_sha256: None, pad: cleaner_core::strip::EdgePad::None, tiles: None,
+            matched: None,
         }, 0, bounds));
     }
 
@@ -2744,6 +2760,7 @@ fn paint_patch(
             model_sha256: None,
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
+            matched: None,
         },
         painted.dabs,
         painted.read_window,
@@ -2841,6 +2858,7 @@ fn shape_patch(
             model_sha256: None,
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
+            matched: None,
         },
         // No dabs: nothing was walked. The provenance says how many vertices
         // there were instead ([`paint_snapshot`]).
@@ -6804,6 +6822,7 @@ mod tests {
                 pixels: cleaner_core::engines::fill::render(image, fitted),
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
+                matched: None,
             }
         };
         assert!(matches!(edit_with_bench_render(&mut bench, Engine::Fill, &located,
@@ -6901,6 +6920,7 @@ mod tests {
                 pixels: cleaner_core::engines::fill::render(image, fitted),
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
+                matched: None,
             }
         };
         let Outcome::Cleaned(edited) = edit_with_bench_render(&mut bench, Engine::Fill, &located,
@@ -7050,6 +7070,7 @@ mod tests {
                 pixels: cleaner_core::engines::fill::render(image, fitted),
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
+                matched: None,
             }
         };
         assert!(clean_anyway_at(&library, None, &region_id, Some("fill"),
@@ -7102,6 +7123,7 @@ mod tests {
                 pixels: cleaner_core::engines::fill::render(image, fitted),
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
+                matched: None,
             }
         };
         assert!(clean_anyway_at(&library, None, &region_id, Some("fill"),
@@ -7434,6 +7456,7 @@ mod tests {
                 engine: Engine::Lama, mask, ink: fitted.ink.clone(), pixels,
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
+                matched: None,
             }
         };
         let rerun = rerun_mask_at(&library, None, &region_id, "retry", None, serde_json::Value::Null, |located, plan| {
@@ -7673,6 +7696,7 @@ mod tests {
                 pixels: cleaner_core::engines::fill::render(image, fitted),
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
+                matched: None,
             }
         };
         assert!(matches!(edit_with_bench_render(&mut bench, Engine::Fill, &located,
@@ -7811,6 +7835,7 @@ mod tests {
                     pixels: cleaner_core::engines::fill::render(image, fitted),
                     provider: None, model_sha256: None,
                     pad: cleaner_core::strip::EdgePad::None, tiles: None,
+                    matched: None,
                 }
             };
             assert!(matches!(edit_with_bench_render(&mut test_bench(&root), Engine::Fill,
@@ -7846,6 +7871,7 @@ mod tests {
                 pixels: cleaner_core::engines::fill::render(image, fitted),
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
+                matched: None,
             };
             assert!(matches!(edit_with_bench_render(&mut bench, engine, &located,
                 fixture_plan("moved", Geometry::Stored, engine, bounds), Some(&mut render)).unwrap(),
@@ -7923,6 +7949,7 @@ mod tests {
                     engine, pixels: cleaner_core::engines::model::page_crop(image, mask.bounds), mask,
                     ink: fitted.ink.clone(), provider: None, model_sha256: None,
                     pad: cleaner_core::strip::EdgePad::None, tiles: Some(1),
+                    matched: None,
                 }
             };
             assert!(matches!(edit_with_bench_render(&mut bench, engine, located,
@@ -7993,6 +8020,7 @@ mod tests {
                     engine: Engine::Lama, pixels: cleaner_core::engines::model::page_crop(image, mask.bounds), mask,
                     ink: fitted.ink.clone(), provider: None, model_sha256: None,
                     pad: cleaner_core::strip::EdgePad::None, tiles: Some(1),
+                    matched: None,
                 }
             };
             assert!(matches!(edit_with_bench_render(&mut bench, Engine::Lama, located,
@@ -8161,6 +8189,7 @@ mod tests {
                 model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: None,
+                matched: None,
             }
         };
         assert!(matches!(
@@ -8199,6 +8228,7 @@ mod tests {
                 model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: None,
+                matched: None,
             }
         };
         assert!(matches!(
@@ -8257,6 +8287,7 @@ mod tests {
                 model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: None,
+                matched: None,
             }
         };
         assert!(matches!(
@@ -8376,6 +8407,7 @@ mod tests {
                 model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: None,
+                matched: None,
             }
         };
         assert!(matches!(
@@ -8609,6 +8641,7 @@ mod tests {
             model_sha256: None,
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
+            matched: None,
         };
         let plan = Plan {
             expected_source: None,
@@ -8869,6 +8902,7 @@ mod tests {
                 model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: None,
+                matched: None,
             }
         };
         assert!(matches!(
@@ -9379,6 +9413,7 @@ mod tests {
             model_sha256: None,
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
+            matched: None,
         };
 
         translate_made(&mut made, (-7, 95));
@@ -11392,6 +11427,7 @@ mod mask_edit_tests {
                 pixels: cleaner_core::engines::fill::render(image, fitted),
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
+                matched: None,
             }
         };
         assert!(matches!(edit_with_bench_render(&mut bench, Engine::Fill, &located, plan, Some(&mut fake)).unwrap(),

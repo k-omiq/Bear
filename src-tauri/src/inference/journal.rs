@@ -586,6 +586,17 @@ impl AttemptRecord {
     pub fn is_retryable(&self) -> bool {
         false
     }
+    /// The recipe the attempt was granted and sent under, request-local and
+    /// client-only parts included: what a replay of it must match in full.
+    pub fn recipe(&self) -> cleaner_core::engines::render::RenderRecipe {
+        let mut recipe = cleaner_core::engines::render::RenderRecipe::new(&self.recipe_id, &self.preprocessing_version,
+            &self.model_id, &self.model_revision, self.native_mask_conditioning);
+        recipe.qwen_edit = self.qwen_edit.clone();
+        recipe.work_long_side = self.work_long_side;
+        recipe.flux3_generation = self.flux3_generation;
+        recipe.finishing = self.finishing;
+        recipe
+    }
     pub fn to_request_metadata(&self) -> JobRequestMetadata {
         JobRequestMetadata {
             protocol_version: PROTOCOL_VERSION.to_string(),

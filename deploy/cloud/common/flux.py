@@ -32,6 +32,7 @@ from typing import Any, Dict, Optional, Tuple
 from deploy.cloud.common.contract import (
     LATENT_STRIDE,
     ContractValidationError,
+    Flux3Generation,
     JobRequestMetadata,
     QwenEdit,
     ServiceLimits,
@@ -78,6 +79,15 @@ def megapixel_size(width: int, height: int) -> Tuple[int, int]:
     """
     scale = (1024 * 1024 / (int(width) * int(height))) ** 0.5
     return max(32, round(int(width) * scale / 32) * 32), max(32, round(int(height) * scale / 32) * 32)
+
+
+def request_work_size(width: int, height: int, work_long_side: Optional[int] = None,
+                      generation: Optional[Flux3Generation] = None) -> Tuple[int, int]:
+    """The size a request's crop is edited at: one megapixel when its generation asks for
+    the reference tool's size, else its working long side, else the worker's own."""
+    if generation is not None and generation.megapixel_size:
+        return megapixel_size(width, height)
+    return working_size(width, height, work_long_side or WORK_LONG_SIDE)
 
 
 def guidance_from_scaled(guidance_scaled: int) -> float:

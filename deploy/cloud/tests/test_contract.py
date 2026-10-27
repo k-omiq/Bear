@@ -1,5 +1,6 @@
 """Unit tests for Python cloud wire contract, JSON fixtures, and invariants."""
 
+import dataclasses
 import json
 import math
 import os
@@ -51,6 +52,17 @@ from deploy.cloud.common.contract import (
     validate_result_bytes,
     validate_png_header,
     validate_worker_result,
+    Flux3Generation,
+    QwenEdit,
+    SIZED_RECIPE_IDS,
+    WORK_LONG_SIDES,
+)
+from deploy.cloud.common.manifest import (
+    RECIPE_PROD_FLUX3,
+    RECIPE_PROD_FLUX3_BF16,
+    RECIPE_PROD_SDNQ,
+    WORK_LONG_SIDE,
+    get_pinned_recipe,
 )
 
 
@@ -777,6 +789,80 @@ class TestCloudContract(unittest.TestCase):
         oversized_png = self.tiny_image_bytes[:33] + oversized_idat_chunk + self.tiny_image_bytes[61:]
         with self.assertRaises(ContractValidationError):
             validate_png_header(oversized_png, 16, 16, 2)
+
+
+FIXTURE = FIXTURES_DIR / "qwen_guidance_request.json"
+SIZED_FIXTURE = FIXTURES_DIR / "flux3_work_size_request.json"
+GENERATION_FIXTURE = FIXTURES_DIR / "flux3_generation_request.json"
+SIZED_GENERATION_FIXTURE = FIXTURES_DIR / "flux3_sized_generation_request.json"
+
+
+class RequestLocalRecipeFieldsTest(unittest.TestCase):
+    """Guidance, working size and generation choice: refused where they do not belong,
+    and each in the digest as crates/cleaner-core/src/cloud_wire.rs puts it there."""
+
+    def test_shared_digest_and_edit_identity(self):
+        meta = JobRequestMetadata.from_dict(json.loads(FIXTURE.read_text()))
+        self.assertEqual(meta.request_digest, compute_request_digest(meta))
+        self.assertEqual(JobRequestMetadata.from_dict(meta.to_dict()), meta)
+        for edit in [QwenEdit('dialogue', meta.recipe.qwen_edit.description), QwenEdit('sound_effect', '')]:
+            changed = dataclasses.replace(meta, recipe=dataclasses.replace(meta.recipe, qwen_edit=edit))
+            self.assertNotEqual(compute_request_digest(changed), meta.request_digest)
+
+    def test_working_size_is_flux3_only_on_the_list_and_in_the_digest(self):
+        self.assertEqual(SIZED_RECIPE_IDS, {RECIPE_PROD_FLUX3, RECIPE_PROD_FLUX3_BF16})
+        self.assertEqual(WORK_LONG_SIDES[0], WORK_LONG_SIDE)
+        meta = JobRequestMetadata.from_dict(json.loads(SIZED_FIXTURE.read_text()))
+        self.assertEqual(meta.recipe.work_long_side, 1280)
+        self.assertEqual(meta.request_digest, compute_request_digest(meta))
+        self.assertEqual(JobRequestMetadata.from_dict(meta.to_dict()), meta)
+        for side in (None, 1024):
+            changed = dataclasses.replace(meta, recipe=dataclasses.replace(meta.recipe, work_long_side=side))
+            self.assertNotEqual(compute_request_digest(changed), meta.request_digest)
+        recipe = get_pinned_recipe(RECIPE_PROD_FLUX3).to_dict()
+        for side in WORK_LONG_SIDES:
+            self.assertEqual(RenderRecipe.from_dict({**recipe, 'work_long_side': side}).work_long_side, side)
+        for side in (1100, 2048, True, '1280'):
+            with self.assertRaises(ContractValidationError):
+                RenderRecipe.from_dict({**recipe, 'work_long_side': side})
+        with self.assertRaises(ContractValidationError):
+            RenderRecipe.from_dict({**get_pinned_recipe(RECIPE_PROD_SDNQ).to_dict(), 'work_long_side': 1280})
+
+    def test_a_generation_choice_is_flux3_only_never_empty_and_in_the_digest(self):
+        meta = JobRequestMetadata.from_dict(json.loads(GENERATION_FIXTURE.read_text()))
+        self.assertEqual(meta.recipe.flux3_generation, Flux3Generation(reference_prompt=True, marker=True, megapixel_size=True))
+        self.assertEqual(meta.request_digest, compute_request_digest(meta))
+        self.assertEqual(JobRequestMetadata.from_dict(meta.to_dict()), meta)
+        for other in (None, Flux3Generation(reference_prompt=True, marker=True, reference_shift=True, megapixel_size=True)):
+            changed = dataclasses.replace(meta, recipe=dataclasses.replace(meta.recipe, flux3_generation=other))
+            self.assertNotEqual(compute_request_digest(changed), meta.request_digest)
+        recipe = get_pinned_recipe(RECIPE_PROD_FLUX3).to_dict()
+        for bad in ({}, {'reference_prompt': False}, {'marker': 1}, {'colour': True}, [True]):
+            with self.assertRaises(ContractValidationError):
+                RenderRecipe.from_dict({**recipe, 'flux3_generation': bad})
+        with self.assertRaises(ContractValidationError):
+            RenderRecipe.from_dict({**recipe, 'work_long_side': 1280, 'flux3_generation': {'megapixel_size': True}})
+        self.assertEqual(RenderRecipe.from_dict({**recipe, 'work_long_side': 1280, 'flux3_generation': {'marker': True}}).work_long_side, 1280)
+        with self.assertRaises(ContractValidationError):
+            RenderRecipe.from_dict({**get_pinned_recipe(RECIPE_PROD_SDNQ).to_dict(), 'flux3_generation': {'marker': True}})
+
+    def test_a_working_size_and_a_generation_choice_hash_side_by_side(self):
+        # crates/cleaner-core/src/cloud_wire.rs reads the same fixture.
+        meta = JobRequestMetadata.from_dict(json.loads(SIZED_GENERATION_FIXTURE.read_text()))
+        self.assertEqual(meta.recipe.work_long_side, 1280)
+        self.assertEqual(meta.recipe.flux3_generation, Flux3Generation(reference_prompt=True, reference_shift=True))
+        self.assertEqual(meta.request_digest, compute_request_digest(meta))
+        self.assertTrue(compute_canonical_json_array(meta).endswith(',1280,[true,false,true,false]]'))
+        for side, generation in ((None, meta.recipe.flux3_generation), (1280, None)):
+            changed = dataclasses.replace(meta, recipe=dataclasses.replace(meta.recipe, work_long_side=side, flux3_generation=generation))
+            self.assertNotEqual(compute_request_digest(changed), meta.request_digest)
+
+    def test_a_seed_is_a_u64_as_in_rust(self):
+        draft = json.loads(SIZED_GENERATION_FIXTURE.read_text())
+        self.assertEqual(JobRequestMetadata.from_dict({**draft, 'seed': (1 << 64) - 1}).seed, (1 << 64) - 1)
+        for seed in (1 << 64, -1):
+            with self.assertRaises(ContractValidationError):
+                JobRequestMetadata.from_dict({**draft, 'seed': seed})
 
 
 if __name__ == "__main__":

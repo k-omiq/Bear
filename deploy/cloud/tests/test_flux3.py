@@ -119,6 +119,8 @@ class FakePipeline:
         self.error = error
         # True answers each call with the image it was given, as a model that changed nothing.
         self.echo = False
+        # An image answers every call with it, as a model that drew exactly that.
+        self.answer: Any = None
         self.dtype: Any = None
         self.scheduler: Any = None
         self.device: Optional[str] = None
@@ -140,6 +142,8 @@ class FakePipeline:
             raise self.error
         if self.echo:
             return [kwargs["image"].copy()]
+        if self.answer is not None:
+            return [self.answer.copy()]
         return [Image.new("RGB", (kwargs["width"], kwargs["height"]), (128, 128, 128))]
 
 
@@ -259,6 +263,39 @@ class Flux3EditRunnerTest(unittest.TestCase):
         self.assertEqual(caught.exception.error_code, "marker_remained")
         # Without the marker the same answer is fine.
         runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100)
+
+    def test_the_marker_limit_is_more_than_max_16_or_1_percent(self) -> None:
+        from deploy.cloud.common.flux3 import MARKER, marker_remaining
+
+        def kept(lettering_px: int, painted_px: int) -> bool:
+            lettering = np.zeros((100, 100), dtype=bool)
+            lettering.flat[:lettering_px] = True
+            result = np.full((100, 100, 3), 255, dtype=np.uint8)
+            result.reshape(-1, 3)[:painted_px] = MARKER
+            return marker_remaining(result, lettering, np)
+
+        self.assertFalse(kept(300, 16))
+        self.assertTrue(kept(300, 17))
+        self.assertFalse(kept(5000, 50))
+        self.assertTrue(kept(5000, 51))
+
+    def test_pink_art_the_model_drew_back_is_not_the_marker(self) -> None:
+        mods = flux3_modules()
+        runner = self.Runner("/weights/snap", modules=mods)
+        # Pink hair in the ring the hint grows into, which the marker paints over too.
+        page = Image.new("RGB", (300, 200), (255, 255, 255))
+        page.paste((220, 100, 210), (212, 2, 298, 58))
+        hint = Image.new("L", (300, 200), 0)
+        hint.paste(255, (220, 10, 290, 50))
+        page_png = png(page)
+        # A model that took the paint off and drew the hair back: the unpainted crop.
+        mods.pipeline.answer = page
+        runner.render_png(page_png, png(hint), 300, 200, seed=1, steps=16, guidance_scaled=100,
+                          flux3_generation=Flux3Generation(marker=True))
+        from deploy.cloud.common.flux3 import marker_remaining
+        lettering = np.asarray(hint.filter(ImageFilter.MaxFilter(17))) > 0
+        self.assertTrue(marker_remaining(np.asarray(page), lettering, np), "the colour test alone would refuse it")
+        self.assertFalse(marker_remaining(np.asarray(page), lettering, np, np.asarray(page)))
 
     def test_load_drops_the_upsampler_adds_the_hold_and_sets_bfl_sampling(self) -> None:
         from deploy.cloud.common.flux3 import TIME_SHIFT

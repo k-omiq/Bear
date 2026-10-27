@@ -623,7 +623,7 @@ class JobRequestMetadata:
         recipe = RenderRecipe.from_dict(d.get("recipe"))
         width = _check_exact_int(d.get("width"), "width", min_val=1)
         height = _check_exact_int(d.get("height"), "height", min_val=1)
-        seed = _check_exact_int(d.get("seed"), "seed", min_val=0)
+        seed = _check_exact_int(d.get("seed"), "seed", min_val=0, max_val=(1 << 64) - 1)  # a u64, as in cloud_wire.rs
         steps = _check_exact_int(d.get("steps"), "steps", min_val=1, max_val=100)
         guidance_scaled = _check_exact_int(d.get("guidance_scaled"), "guidance_scaled", min_val=0, max_val=5000)
         image_sha256 = _validate_lowercase_hex_hash(d.get("image_sha256"), "image_sha256", 64)

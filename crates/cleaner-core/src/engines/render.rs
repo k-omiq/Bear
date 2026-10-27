@@ -202,9 +202,10 @@ pub struct RenderRecipe {
     /// Request-local, like `work_long_side`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flux3_generation: Option<Flux3Generation>,
-    /// The client's finishing of a 3.0.0 answer; none is the default. Never
-    /// sent: the worker does not finish, and the request digest does not
-    /// cover it.
+    /// The client's finishing of the answer: on a 3.0.0 recipe none is the
+    /// default finishing, on an earlier one none is its own composite and a
+    /// finishing replaces it ([`PreparedRender::set_finishing`]). Never sent:
+    /// the worker does not finish, and the request digest does not cover it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finishing: Option<super::postprocess::Choice>,
 }
@@ -580,8 +581,10 @@ pub struct PreparedRender {
     reading: ColorMode,
     depth: BitDepth,
     ceiling: f64,
-    /// The V3 composite's finishing ([`super::postprocess::settle_with`]).
-    finishing: super::postprocess::Choice,
+    /// The finishing picked for this render ([`super::postprocess::settle_with`]):
+    /// V3 finishes by the default when none was picked, V1 and V2 only when
+    /// one was.
+    finishing: Option<super::postprocess::Choice>,
 }
 
 /// A generated diffusion crop returned by an inpainter or inference engine.
@@ -679,13 +682,14 @@ impl PreparedRender {
             reading: answer_mode(page),
             depth: page.depth,
             ceiling,
-            finishing: super::postprocess::Choice::default(),
+            finishing: None,
         })
     }
 
-    /// Finish the answer by `finishing` under preprocessing V3; earlier
-    /// versions have no finishing to choose.
-    pub fn set_finishing(&mut self, finishing: super::postprocess::Choice) {
+    /// Finish the answer by `finishing`. `None` is the version's own
+    /// composite: V3 finishes by the default, V2 aligns tone, V1 writes the
+    /// answer as it came back. A picked finishing replaces V1's and V2's.
+    pub fn set_finishing(&mut self, finishing: Option<super::postprocess::Choice>) {
         self.finishing = finishing;
     }
 
@@ -750,7 +754,8 @@ impl PreparedRender {
 
     /// Composite the generated crop back onto the captured source patch, the
     /// way this preparation's version does: as it came back under V1, tone
-    /// aligned under V2, matched to the page under V3.
+    /// aligned under V2, matched to the page under V3, or by the finishing
+    /// picked ([`PreparedRender::set_finishing`]).
     ///
     /// Clones the captured bounded patch and evaluates the captured AlphaRamp without requiring
     /// the source page to be passed again, preventing caller desynchronization by construction.
@@ -777,32 +782,28 @@ impl PreparedRender {
     }
 
     pub fn composite(&self, generated: &GeneratedCrop<'_>) -> Result<Rendered, Error> {
-        match self.preprocessing {
-            Preprocessing::V1 => self.blend(generated, None),
-            Preprocessing::V2 => self.blend(generated, Some(self.tone(generated)?)),
-            Preprocessing::V3 => {
-                let (settled, report) = self.settle(generated)?;
-                let mut rendered = self.blend(&GeneratedCrop::new(self.crop.w, self.crop.h, &settled), None)?;
-                rendered.matched = Some(report);
-                Ok(rendered)
-            }
-        }
+        let finishing = match (self.preprocessing, self.finishing) {
+            (_, Some(finishing)) => finishing,
+            (Preprocessing::V3, None) => super::postprocess::Choice::default(),
+            (Preprocessing::V2, None) => return self.blend(generated, Some(self.tone(generated)?)),
+            (Preprocessing::V1, None) => return self.blend(generated, None),
+        };
+        let (settled, report) = self.settle(generated, finishing)?;
+        let mut rendered = self.blend(&GeneratedCrop::new(self.crop.w, self.crop.h, &settled), None)?;
+        rendered.matched = Some(report);
+        Ok(rendered)
     }
 
-    /// V3: the answer matched to the page ([`super::postprocess`]), as a
-    /// crop-sized RGB8 answer the blend reads as it reads the model's. It is
-    /// the model's answer wherever the applied mask does not write.
-    fn settle(&self, generated: &GeneratedCrop<'_>) -> Result<(Vec<u8>, super::postprocess::Report), Error> {
-        use super::grid::{Grid, Mask as GridMask};
+    /// The answer matched to the page by `finishing` ([`finish`]), as a
+    /// crop-sized RGB8 answer the blend reads as it reads the model's.
+    fn settle(
+        &self,
+        generated: &GeneratedCrop<'_>,
+        finishing: super::postprocess::Choice,
+    ) -> Result<(Vec<u8>, super::postprocess::Report), Error> {
+        use super::grid::Mask as GridMask;
         self.validate_generated(generated)?;
         let (w, h) = (self.crop.w as usize, self.crop.h as usize);
-        let channels = tone_channels(self.reading);
-        let read = |rgb8: &[u8]| -> Vec<Grid> {
-            (0..channels)
-                .map(|channel| Grid { w, h, data: (0..w * h).map(|i| returned_sample(rgb8, self.reading, channel, i * 3) * 255.0).collect() })
-                .collect()
-        };
-        let (shown, answer) = (read(&self.image_rgb8), read(generated.rgb8));
         let (mut mask, mut page) = (GridMask::new(w, h, false), GridMask::new(w, h, false));
         for cy in 0..h {
             for cx in 0..w {
@@ -811,15 +812,7 @@ impl PreparedRender {
                 page.data[i] = self.extent.contains(x, y) && self.opaque.as_ref().is_none_or(|opaque| opaque[i]);
             }
         }
-        let crop = super::postprocess::Crop { shown: &shown, answer: &answer, mask: &mask, page: &page };
-        let (settled, report) = super::postprocess::settle_with(&crop, self.finishing);
-        let mut rgb8 = generated.rgb8.to_vec();
-        for i in (0..w * h).filter(|&i| mask.data[i]) {
-            for channel in 0..3 {
-                rgb8[i * 3 + channel] = settled[channel.min(channels - 1)].data[i].round().clamp(0.0, 255.0) as u8;
-            }
-        }
-        Ok((rgb8, report))
+        Ok(finish(&self.image_rgb8, generated.rgb8, self.reading, &mask, &page, finishing))
     }
 
     /// How far the model's answer drifted from the page around the edit,
@@ -1338,6 +1331,54 @@ impl ColourIndex {
         }
         found
     }
+}
+
+/// A `w` by `h` crop as the finishing reads it ([`super::postprocess::Crop`]):
+/// one grid per tone channel in 8-bit levels, and one on a grey page, the
+/// mean of the three. `rgb` gives pixel `i`'s channel `c` on 0 to 1, so a
+/// caller holding more than 8 bits (the LaMa rung's float answer) keeps them.
+pub(crate) fn tone_grids(w: usize, h: usize, reading: ColorMode, rgb: impl Fn(usize, usize) -> f64) -> Vec<super::grid::Grid> {
+    (0..tone_channels(reading))
+        .map(|channel| super::grid::Grid {
+            w,
+            h,
+            data: (0..w * h)
+                .map(|i| match reading {
+                    ColorMode::Gray | ColorMode::GrayAlpha => (rgb(i, 0) + rgb(i, 1) + rgb(i, 2)) / 3.0 * 255.0,
+                    _ => rgb(i, channel) * 255.0,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// Finish a crop-sized RGB8 `answer` against the crop as the model was
+/// `shown` it ([`super::postprocess::settle_with`]): the answer, with every
+/// pixel `mask` marks replaced by its finished value. `page` marks the crop's
+/// opaque page pixels, the only evidence. A generated render finishes its one
+/// crop ([`PreparedRender::composite`]); the LaMa rung finishes each tile from
+/// its float answer ([`tone_grids`]).
+fn finish(
+    shown: &[u8],
+    answer: &[u8],
+    reading: ColorMode,
+    mask: &super::grid::Mask,
+    page: &super::grid::Mask,
+    finishing: super::postprocess::Choice,
+) -> (Vec<u8>, super::postprocess::Report) {
+    let (w, h) = (mask.w, mask.h);
+    let channels = tone_channels(reading);
+    let read = |rgb8: &[u8]| tone_grids(w, h, reading, |i, c| f64::from(rgb8[i * 3 + c]) / 255.0);
+    let (shown_grids, answer_grids) = (read(shown), read(answer));
+    let crop = super::postprocess::Crop { shown: &shown_grids, answer: &answer_grids, mask, page };
+    let (settled, report) = super::postprocess::settle_with(&crop, finishing);
+    let mut rgb8 = answer.to_vec();
+    for i in (0..w * h).filter(|&i| mask.data[i]) {
+        for channel in 0..3 {
+            rgb8[i * 3 + channel] = settled[channel.min(channels - 1)].data[i].round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    (rgb8, report)
 }
 
 /// How many channels a tone offset is measured for: one on a grey page, whose
@@ -2606,8 +2647,31 @@ mod tests {
             let rendered = v3.composite(&GeneratedCrop::new(v3.crop().w, v3.crop().h, &answer)).unwrap();
             assert!(rendered.tone.is_none(), "{}", scene.name);
             let report = rendered.matched.clone().expect("V3 reports its matching");
-            assert_eq!(report.provenance()["preprocessing_version"], "3.0.0");
+            assert_eq!(report.provenance()["postprocess_version"], "3.0.0");
             assert!(residual(&scene, &rendered) <= 4, "{}: residual {}, {report:?}", scene.name, residual(&scene, &rendered));
+        }
+    }
+    /// **A picked finishing takes the place of V2's tone alignment.** Unpicked,
+    /// a V2 composite aligns tone as it always has; picked, it is finished as a
+    /// V3 one is, and the report says which finishing ran.
+    #[test]
+    fn a_v2_composite_is_finished_only_when_a_finishing_is_picked() {
+        use super::super::postprocess::{Choice, Finishing};
+        for scene in scenes() {
+            let fitted = manual_fit(&scene);
+            let mut v2 = PreparedRender::prepare_as(&scene.page, &fitted, Preprocessing::V2).unwrap();
+            let answer = drifted(&v2, &scene.clean, [14; 3]);
+            let generated = GeneratedCrop::new(v2.crop().w, v2.crop().h, &answer);
+            let aligned = v2.composite(&generated).unwrap();
+            assert!(aligned.tone.is_some() && aligned.matched.is_none(), "{}", scene.name);
+
+            let choice = Choice { finishing: Finishing::ToneOnly, grayscale: false };
+            v2.set_finishing(Some(choice));
+            let finished = v2.composite(&generated).unwrap();
+            assert!(finished.tone.is_none(), "{}", scene.name);
+            assert_eq!(finished.matched.as_ref().map(|report| report.choice), Some(choice), "{}", scene.name);
+            assert!(residual(&scene, &finished) <= 4, "{}: residual {}", scene.name, residual(&scene, &finished));
+            assert_eq!(finished.mask, aligned.mask, "{}: written through the same mask", scene.name);
         }
     }
 }

@@ -180,6 +180,8 @@ impl InferenceServiceError {
             Self::Decode(_) => "result_invalid",
             Self::RemoteJobFailed { error_code, .. } if matches!(error_code.as_str(), "weights_missing" | "weights_corrupt") => "weights_unavailable",
             Self::RemoteJobFailed { error_code, .. } if error_code == "edit_not_applied" => "edit_not_applied",
+            // FLUX 3 with `flux3_generation.marker`: the model kept the paint, and a retry is another seed.
+            Self::RemoteJobFailed { error_code, .. } if error_code == "marker_remained" => "marker_remained",
             Self::RemoteJobFailed { .. } => "remote_failed",
             Self::RemoteJobCancelled(_) => "remote_cancelled",
             Self::Cancelled => "cancelled",
@@ -246,6 +248,7 @@ fn http_code(err: &HttpTransportError) -> &'static str {
         // No cleaning model on the deployment reads as its weights not being there.
         HttpTransportError::RenderWeightsUnavailable | HttpTransportError::RenderNotConfigured => "weights_unavailable",
         HttpTransportError::ProviderPaused => "provider_paused",
+        HttpTransportError::WorkerOutdated => "worker_outdated",
         HttpTransportError::UnexpectedStatus { status: 401 | 403 } => "gateway_unauthorized",
         HttpTransportError::UnexpectedStatus { .. } => "gateway_error",
         HttpTransportError::ConnectionError
@@ -1757,7 +1760,7 @@ impl InferenceService {
         let mut cloud = cur
             .prepare(&job, &page, preprocessing)
             .map_err(|e| InferenceServiceError::Consent(ConsentError::RenderPrepareFailed(e)))?;
-        cloud.prepared.set_finishing(recipe.finishing.unwrap_or_default());
+        cloud.prepared.set_finishing(recipe.finishing);
         if snapshot
             .input_sha256
             .as_deref()
@@ -2411,6 +2414,19 @@ pub(crate) mod tests {
         GrantService::global().invalidate_profile(CloudProvider::Modal, profile);
         let error = service.dispatch_authorized(CloudProvider::Modal, profile, epoch).unwrap_err();
         assert_eq!(error.code(), "cloud_run_profile_changed");
+    }
+
+    /// The worker codes the interface has words of its own for keep their code;
+    /// any other worker code reads as a remote failure.
+    #[test]
+    fn worker_codes_with_words_of_their_own_keep_them() {
+        let failed = |code: &str| InferenceServiceError::RemoteJobFailed { error_code: code.into(), message: String::new() }.code();
+        assert_eq!(failed("marker_remained"), "marker_remained");
+        assert_eq!(failed("edit_not_applied"), "edit_not_applied");
+        assert_eq!(failed("weights_corrupt"), "weights_unavailable");
+        assert_eq!(failed("inference_failed"), "remote_failed");
+        let outdated = HttpTransportError::NotEnqueued { reason: Box::new(HttpTransportError::WorkerOutdated), retryable: false };
+        assert_eq!(InferenceServiceError::Http(outdated).code(), "worker_outdated");
     }
     use crate::inference::config::validate_https_endpoint;
     use cleaner_core::cloud_decode::decode_result_crop;
@@ -3917,7 +3933,7 @@ pub(crate) mod tests {
         let v3 = recipe_at(cleaner_core::engines::render::EDIT_PREPROCESSING_VERSION);
         attach_white(&service, &manifest, "p-d0", &v3, &v3).expect("a 3.0.0 detection result attaches");
         let first = snapshot(&manifest);
-        assert_eq!(first["postprocess"]["preprocessing_version"], "3.0.0", "{first}");
+        assert_eq!(first["postprocess"]["postprocess_version"], "3.0.0", "{first}");
         assert!(first["postprocess"]["gain"].is_array(), "{first}");
         assert!(first.get("tone").is_none(), "{first}");
 
@@ -5228,6 +5244,28 @@ pub(crate) mod tests {
         let postprocess = &fixture.committed_patch().provenance.params_snapshot["postprocess"];
         assert_eq!((&postprocess["finishing"], &postprocess["grayscale"]), (&serde_json::json!("reference-poisson"), &serde_json::json!(true)));
         assert_eq!(fixture.committed_patch().provenance.params_snapshot["flux3_generation"]["marker"], true);
+    }
+
+    /// With `finishingEveryModel` on, a 2.0.0 (Qwen) render carries a finishing
+    /// too: it keeps through the journal outside the request digest, and the
+    /// patch's post-processing record names it.
+    #[test]
+    fn a_qwen_finishing_survives_recovery_and_is_recorded_on_the_patch() {
+        use cleaner_core::engines::postprocess::{Choice, Finishing};
+        let mut fixture = RenderFixture::new("qwen-finishing");
+        fixture.recipe.recipe_id = "mc-qwen-image-edit-2511-v4".into();
+        fixture.recipe.model_id = "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32".into();
+        fixture.recipe.preprocessing_version = "2.0.0".into();
+        let choice = Choice { finishing: Finishing::ReferencePoisson, grayscale: false };
+        fixture.recipe.finishing = Some(choice);
+        let service = cached_fixture(&fixture);
+        assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(),
+            RecoveryDecision::AlreadyCommitted { .. }));
+        let record = service.journal.get_record(&fixture.attempt_id()).unwrap();
+        assert_eq!(record.finishing, Some(choice));
+        assert_eq!(compute_request_digest(&record.to_request_metadata()), record.request_digest);
+        let postprocess = &fixture.committed_patch().provenance.params_snapshot["postprocess"];
+        assert_eq!((&postprocess["finishing"], &postprocess["grayscale"]), (&serde_json::json!("reference-poisson"), &serde_json::json!(false)));
     }
 
     /// A record an older build left waiting for a review, or marked reviewed,

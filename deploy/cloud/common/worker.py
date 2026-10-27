@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from deploy.cloud.common.capacity import exclusive_render
 from deploy.cloud.common.contract import ContractValidationError, JobRequestMetadata, ServiceLimits
-from deploy.cloud.common.flux import SdnqFluxRunner, WorkerRenderError, render_job, working_size
+from deploy.cloud.common.flux import SdnqFluxRunner, WorkerRenderError, render_job, request_work_size
 from deploy.cloud.common.jobs import WorkerOutcome, job_key, run_key
 from deploy.cloud.common.manifest import MODEL_PROD_FLUX, production_limits, production_model
 from deploy.cloud.common.redact import redact_text
@@ -315,7 +315,8 @@ class WorkerRuntime:
             code, message = self.load_error or ("model_load_failed", "Model not loaded")
             return failure(code, message)
         pool = self.pool or RunnerPool([self.runner])
-        exclusive = pool.size > 1 and exclusive_render(*working_size(meta.width, meta.height))
+        exclusive = pool.size > 1 and exclusive_render(*request_work_size(
+            meta.width, meta.height, meta.recipe.work_long_side, meta.recipe.flux3_generation))
         try:
             rendered = self._render_on(pool, exclusive, meta, image_png, hint_png)
         except WorkerRenderError as exc:

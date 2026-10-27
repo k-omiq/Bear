@@ -1929,6 +1929,9 @@ pub(crate) struct Rung2 {
     /// it.
     key: residency::Key,
     state: Session<lama::Inpainter>,
+    /// The finishing that takes the place of the tile's tone alignment, when
+    /// every model is finished ([`crate::inference::cloud_clean::FinishingSetting`]).
+    pub(crate) finishing: Option<cleaner_core::engines::postprocess::Choice>,
 }
 
 /// What a lazily-opened rung's session currently is.
@@ -1967,6 +1970,7 @@ impl Rung2 {
             preference,
             key: session_key(registry::Kind::Inpainter, models, preference),
             state: Session::Unopened,
+            finishing: None,
         }
     }
 
@@ -2387,6 +2391,7 @@ impl Pipeline {
         self.sam_preference = model_preference_from(settings, "samTs")?;
         self.rung2.preference = model_preference_from(settings, "inpainter")?;
         self.rung2.key = session_key(registry::Kind::Inpainter, &self.rung2.models, self.rung2.preference);
+        self.rung2.finishing = crate::inference::cloud_clean::local_finishing_from_settings(settings)?;
         let host = cleaner_core::runtime::package::Platform::host();
         self.reader.preference = reader_preference(settings, host)?;
         self.reader.key = session_key(registry::Kind::Ocr, &self.reader.models, self.reader.preference);
@@ -3826,6 +3831,9 @@ impl Pipeline {
         let mut snapshot = params_snapshot(
             made.engine, &fitted, started.elapsed(), pad, made.tiles, &verdict,
         );
+        if let Some(matched) = made.matched.as_ref() {
+            snapshot["postprocess"] = matched.provenance();
+        }
         if let Some(record) = group_record.as_ref() {
             snapshot["group"] = record.snapshot();
             if !at.outcome.evidence.iter().any(|blob| blob.sha256 == segment_evidence.sha256) {
@@ -4056,6 +4064,9 @@ impl Pipeline {
                 made.tiles,
                 &verdict,
             );
+            if let Some(matched) = made.matched.as_ref() {
+                snapshot["postprocess"] = matched.provenance();
+            }
             // The detection's group travels onto its patch.
             if let Some(group) = record.group.as_ref() {
                 snapshot["group"] = group.snapshot();
@@ -4155,6 +4166,9 @@ pub(crate) struct Made {
     /// are no tiles because there is no model - not zero, which would read as a
     /// model that ran nothing.
     pub(crate) tiles: Option<u32>,
+    /// The finishing the rung's answer was matched to the page by, where one
+    /// was picked for it (`params_snapshot["postprocess"]`).
+    pub(crate) matched: Option<cleaner_core::engines::postprocess::Report>,
 }
 
 /// What one rung answered, before it was scored.
@@ -4287,17 +4301,19 @@ pub(crate) fn render_rung_with_color(
             model_sha256: None,
             pad: strip::EdgePad::None,
             tiles: None,
+            matched: None,
         }))
     };
     match engine {
         Engine::Lama => {
+            let finishing = rung2.finishing;
             let Some(held) = rung2.held()? else {
                 return Ok(Rendered::Refused("decline.reason.rungUnavailable"));
             };
             // Bound rather than matched on directly, because the arms below
             // need the session again and a scrutinee's borrow of it would still
             // be alive there.
-            let rendered = held.inpainter.render(crop, fitted);
+            let rendered = held.inpainter.render_with(crop, fitted, finishing);
             match rendered {
                 Ok(rendered) => Ok(Rendered::Made(Box::new(Made {
                     engine,
@@ -4308,6 +4324,7 @@ pub(crate) fn render_rung_with_color(
                     model_sha256: held.model_sha256.clone(),
                     pad: rendered.pad,
                     tiles: Some(rendered.tiles),
+                    matched: rendered.matched,
                 }))),
                 Err(lama::Error::Declined(declined)) => {
                     Ok(Rendered::Refused(declined.reason_key()))
@@ -4369,6 +4386,7 @@ pub(crate) fn render_rung_with_color(
                 model_sha256: None,
                 pad: strip::EdgePad::None,
                 tiles: None,
+                matched: None,
             }))),
             Err(decline) => Ok(Rendered::Refused(decline.reason_key())),
         },
