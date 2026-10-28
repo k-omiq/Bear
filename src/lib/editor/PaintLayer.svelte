@@ -200,7 +200,11 @@
         const mask = document.createElement('canvas')
         const shift = { x: whole((active.clone.offset.x / 100) * width), y: whole((active.clone.offset.y / 100) * height) }
         paint = (node) => surface.paintClone(node, { mask, tiles: cleanedTiles(root?.closest('.sheet')), shift })
+        // A change of parameters mid stroke starts a new mask on the same
+        // canvas (`live.id` is kept), so it empties the earlier ones too.
+        const earlier = stroking?.dispose
         dispose = () => {
+          earlier?.()
           mask.width = 0
           mask.height = 0
         }
