@@ -1132,9 +1132,49 @@ fn strict_placement(profile: &ModelProfile, preference: Preference, accelerator:
 /// threads). So every WebGPU session takes this turn, and the two threads'
 /// GPU work goes one call at a time while their CPU work runs side by side.
 /// Every other provider runs free.
-pub fn device_turn(accelerator: Accelerator) -> Option<std::sync::MutexGuard<'static, ()>> {
-    static WEBGPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    (accelerator == Accelerator::WebGpu).then(|| WEBGPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+///
+/// **A thread that holds the turn may take it again.** A two-graph model holds
+/// its first graph's turn while it reads that graph's outputs and runs the
+/// second (SAM-TS-L's encoder then head, the OCR readers' encoder then
+/// decoder). With a plain mutex that second take waited on itself forever,
+/// which is the SAM-TS-L WebGPU measurement that hung with Stop unable to
+/// reach it (2026-10-27). The lock is let go when the outermost turn drops.
+pub fn device_turn(accelerator: Accelerator) -> Option<DeviceTurn> {
+    (accelerator == Accelerator::WebGpu).then(DeviceTurn::take)
+}
+
+static WEBGPU_DEVICE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+std::thread_local! {
+    /// This thread's turns on the WebGPU device, and the lock while it has any.
+    static WEBGPU_TURNS: std::cell::RefCell<(usize, Option<std::sync::MutexGuard<'static, ()>>)> =
+        const { std::cell::RefCell::new((0, None)) };
+}
+
+/// One hold of [`device_turn`]. Not `Send`: the lock is the taking thread's.
+pub struct DeviceTurn(std::marker::PhantomData<*const ()>);
+
+impl DeviceTurn {
+    fn take() -> DeviceTurn {
+        WEBGPU_TURNS.with_borrow_mut(|(depth, guard)| {
+            if *depth == 0 {
+                *guard = Some(WEBGPU_DEVICE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+            }
+            *depth += 1;
+        });
+        DeviceTurn(std::marker::PhantomData)
+    }
+}
+
+impl Drop for DeviceTurn {
+    fn drop(&mut self) {
+        WEBGPU_TURNS.with_borrow_mut(|(depth, guard)| {
+            *depth -= 1;
+            if *depth == 0 {
+                guard.take();
+            }
+        });
+    }
 }
 
 /// A session that runs, and goes, under its device's turn ([`device_turn`]).
@@ -1156,7 +1196,7 @@ impl Model {
 
     /// The turn a run of this session holds while it runs and while its
     /// outputs are read.
-    pub fn turn(&self) -> Option<std::sync::MutexGuard<'static, ()>> {
+    pub fn turn(&self) -> Option<DeviceTurn> {
         device_turn(self.accelerator)
     }
 }
@@ -1706,6 +1746,26 @@ mod tests {
             "{}",
             LAMA.name
         );
+    }
+
+    #[test]
+    fn a_thread_holding_the_webgpu_turn_takes_it_again_and_others_wait() {
+        assert!(device_turn(Accelerator::Cpu).is_none());
+        let outer = device_turn(Accelerator::WebGpu);
+        // The SAM-TS-L head after its encoder: this used to wait forever.
+        let inner = device_turn(Accelerator::WebGpu);
+        let (taken, rx) = std::sync::mpsc::channel();
+        let other = std::thread::spawn(move || {
+            let _turn = device_turn(Accelerator::WebGpu);
+            taken.send(()).unwrap();
+        });
+        drop(outer);
+        // The inner turn still holds the device, whichever order they drop in.
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(200)).is_err());
+        drop(inner);
+        // Long enough for another test's WebGPU run to finish with the device.
+        rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the other thread never got its turn");
+        other.join().unwrap();
     }
 
     #[test]

@@ -88,9 +88,21 @@
     found = report?.recommended ?? null
   })
 
+  /**
+   * Check again: both halves. Its own flag, because on a Mac there is no
+   * NVIDIA half, and a button whose only work was the paths half showed
+   * nothing at all while it ran - the "Check does not respond" report.
+   */
+  let rechecking = $state(false)
+
   async function recheck() {
-    if (checking) return
-    await Promise.all([cudaPlatform ? read(true) : null, onrecheck?.()])
+    if (checking || rechecking) return
+    rechecking = true
+    try {
+      await Promise.all([cudaPlatform ? read(true) : null, onrecheck?.()])
+    } finally {
+      rechecking = false
+    }
   }
 
   const paths = $derived(
@@ -203,8 +215,8 @@
   </div>
 
   <div class="recheck">
-    <Button size="sm" aria-disabled={checking} onclick={recheck}>
-      {checking ? t('settings.runtime.machine.checking') : t('settings.runtime.machine.recheck')}
+    <Button size="sm" aria-disabled={checking || rechecking} onclick={recheck}>
+      {checking || rechecking ? t('settings.runtime.machine.checking') : t('settings.runtime.machine.recheck')}
     </Button>
   </div>
 </div>

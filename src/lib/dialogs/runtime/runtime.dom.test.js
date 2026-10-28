@@ -150,6 +150,22 @@ describe('This computer', () => {
     expect(rendered.queryByText(t('settings.runtime.machine.gpu'))).toBeNull()
     expect(backend.runtimeReport).not.toHaveBeenCalled()
   })
+
+  it('shows Check again working on a Mac too, where only the paths are read', async () => {
+    const backend = fake({ runtimeReport: vi.fn(async () => REPORT) })
+    /** @type {() => void} */
+    let finish = () => {}
+    const onrecheck = vi.fn(() => new Promise((resolve) => (finish = () => resolve(undefined))))
+    const rendered = render(MachineCheck, { flavour: 'stock', platform: 'macos-arm64', accelerators: null, onrecheck })
+    await fireEvent.click(rendered.getByRole('button', { name: t('settings.runtime.machine.recheck') }))
+    await waitFor(() => expect(rendered.getByRole('button', { name: t('settings.runtime.machine.checking') })).toBeTruthy())
+    // A second press while it reads asks nothing twice.
+    await fireEvent.click(rendered.getByRole('button', { name: t('settings.runtime.machine.checking') }))
+    expect(onrecheck).toHaveBeenCalledTimes(1)
+    finish()
+    await waitFor(() => expect(rendered.getByRole('button', { name: t('settings.runtime.machine.recheck') })).toBeTruthy())
+    expect(backend.runtimeReport).not.toHaveBeenCalled()
+  })
 })
 
 describe('Build', () => {

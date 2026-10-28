@@ -238,7 +238,11 @@ pub struct Accelerators {
 /// A failure is not an error - it is a machine with the CPU and nothing else,
 /// which is exactly what the rows then say. `diagnostics.runtime.*` is where
 /// the remedy for that lives.
-#[tauri::command]
+///
+/// Off the main thread (`async`): it hashes the runtime library and, the first
+/// time, asks `system_profiler` about the GPU, and on the main thread that
+/// held every click in the window, Check and Stop among them.
+#[tauri::command(async)]
 pub fn list_accelerators(app: tauri::AppHandle) -> Accelerators {
     let app_data = {
         use tauri::Manager;
