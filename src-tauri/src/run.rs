@@ -2718,6 +2718,12 @@ impl Pipeline {
         inputs.ctd = ctd;
         inputs.models = self.model_uses();
         inputs.seams = self.segment_seams(crop, page_offset);
+        // Without SAM-TS-L (Normal), only what Ogkalu calls text is cleaned, in
+        // a balloon or outside one, under either text policy (Detect sends All
+        // text): CTD's pixels and boxes alone found art as often as text. SAM
+        // is chosen to find the lettering boxes miss, so a run with it keeps it.
+        inputs.text_boxes_only = !self.detection_models.sam
+            && (self.detection_models.rt_small || self.detection_models.rt_full);
         let mut readings = UnitReadings::new();
         let grouping = if self.reads {
             let latin = self.selection.latin();

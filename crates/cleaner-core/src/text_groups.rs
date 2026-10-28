@@ -60,7 +60,8 @@
 //!    review flag ([`GroupRecord::review_key`]). It is outside text unless
 //!    [`crate::balloon::in_bubble`] puts it in one (a balloon box holds it,
 //!    or closed paper surrounds it), so the run's outside-text choice and the gate decide
-//!    whether it is cleaned, as they do for a `text_free` box. A [`Disposition::Candidate`] group is a box too weak to clean on its
+//!    whether it is cleaned, as they do for a `text_free` box. Under
+//!    [`Inputs::text_boxes_only`] it is evidence only and forms no group. A [`Disposition::Candidate`] group is a box too weak to clean on its
 //!    say alone: listed (a held, untouched row with its reason), never
 //!    cleaned automatically.
 //! 7. **Unusually large groups are split only to meet a model limit**
@@ -84,7 +85,10 @@
 //!   is its ink estimate.
 //! - **Grouping anchors**: Ogkalu `text_bubble` / `text_free` boxes first,
 //!   then CTD boxes. A CTD box that duplicates an Ogkalu text box joins it; a
-//!   CTD box Ogkalu missed anchors its own group. Anchors that overlap by more
+//!   CTD box Ogkalu missed anchors its own group. With
+//!   [`Inputs::text_boxes_only`] (Normal: Ogkalu without SAM-TS-L) only Ogkalu text
+//!   boxes anchor, no layout group forms, and lettering no Ogkalu text box
+//!   claims is evidence only, never a cleaning group. Anchors that overlap by more
 //!   than half the smaller box, that were cut by a model tile seam, or that sit
 //!   close together in one balloon become one group.
 //! - **Walls**: Ogkalu `bubble` boxes at or above [`BUBBLE_SCORE`]. Anchors in
@@ -589,6 +593,11 @@ pub struct Inputs<'a> {
     pub models: Vec<ModelUse>,
     pub seams: Vec<Seam>,
     pub max_side: u32,
+    /// Lettering is cleaned only where an Ogkalu `text_bubble` or `text_free`
+    /// box claims it: CTD boxes anchor no group and no layout group forms, so
+    /// mask pixels no Ogkalu text box holds stay evidence only. A run sets it
+    /// when an Ogkalu profile ran and SAM-TS-L did not (Normal).
+    pub text_boxes_only: bool,
     /// What page this raster is of (the source's SHA-256 and the page), so
     /// group ids from different pages never collide. Empty when unknown.
     pub scope: String,
@@ -609,6 +618,7 @@ impl<'a> Inputs<'a> {
             models: Vec::new(),
             seams: Vec::new(),
             max_side: MAX_GROUP_SIDE,
+            text_boxes_only: false,
             scope: String::new(),
         }
     }
@@ -1004,11 +1014,15 @@ pub fn group_checked(
             .map(|(k, _)| wall_of[k])
     };
 
-    // Anchors: Ogkalu text boxes, then CTD boxes.
+    // Anchors: Ogkalu text boxes, then CTD boxes unless only text boxes count.
     let anchors: Vec<Anchor> = order
         .iter()
         .copied()
-        .filter(|&i| matches!(boxes[i].kind, BoxKind::TextBubble | BoxKind::TextFree | BoxKind::CtdText))
+        .filter(|&i| match boxes[i].kind {
+            BoxKind::TextBubble | BoxKind::TextFree => true,
+            BoxKind::CtdText => !inputs.text_boxes_only,
+            BoxKind::Bubble => false,
+        })
         .map(|i| {
             let rect = boxes[i].rect;
             let (cx, cy) = centre(&rect);
@@ -1207,8 +1221,9 @@ pub fn group_checked(
     // Adjacency needs a vertical gap of at most [`LAYOUT_GAP_MAX`], so with
     // the components sorted by top edge each is compared only with those
     // starting within that reach of its bottom.
+    // With only text boxes counting, what no box claimed stays evidence.
     let mut loose: Vec<usize> = (0..components.len())
-        .filter(|&i| owner[i].is_none() && components[i].1 >= SPECK_PIXELS)
+        .filter(|&i| !inputs.text_boxes_only && owner[i].is_none() && components[i].1 >= SPECK_PIXELS)
         .collect();
     loose.sort_by_key(|&i| (components[i].0.y, i));
     let mut layout = Partition::new(loose.len());

@@ -233,6 +233,36 @@ fn many_glyphs_land_in_their_intended_groups() {
 }
 
 #[test]
+fn text_boxes_only_cleans_what_ogkalu_calls_text_and_nothing_else() {
+    let f = fixture();
+    let mut inputs = Inputs::new(W, H, Some(&f.mask));
+    inputs.rt = &f.rt;
+    inputs.ctd = &f.ctd;
+    inputs.models = models();
+    inputs.seams = vec![Seam::Vertical(1024), Seam::Horizontal(1024)];
+    inputs.text_boxes_only = true;
+    let g = group(&inputs).unwrap();
+
+    // Ogkalu's groups keep their lettering, punctuation included; the CTD box
+    // that duplicates balloon A's is evidence, not part of its group.
+    let a = with_box(&g, "rt-0001");
+    assert_eq!(a.component_ids.len(), 8 + 2 + 2 + 1);
+    assert_eq!(a.box_ids, vec!["rt-0001".to_owned()]);
+    assert_eq!(group_at(&g, f.bang).map(|x| &x.id), Some(&a.id));
+    assert_eq!(with_box(&g, "rt-0004").component_ids.len(), 8);
+
+    // What only CTD saw, by box or by pixel, and art the mask took for text
+    // form no group at all.
+    assert!(g.groups.iter().all(|group| group.origin == GroupOrigin::TextBox), "{:?}",
+        g.groups.iter().map(|group| group.origin).collect::<Vec<_>>());
+    assert!(group_at(&g, (811, 156)).is_none(), "CTD-only line");
+    assert!(group_at(&g, (101, 901)).is_none(), "text no Ogkalu box claimed");
+    assert!(group_at(&g, f.art).is_none());
+    assert!(g.boxes.iter().any(|b| b.id == "ctd-0001"), "raw CTD boxes stay in the evidence");
+    assert_eq!(g.cleaning().count(), 5);
+}
+
+#[test]
 fn lettering_is_the_exact_glyph_union_and_never_touches_protected_pixels() {
     let f = fixture();
     let g = run(&f, &f.rt, &f.ctd);

@@ -5976,12 +5976,21 @@ fn lettered_detect(crop: &Raster, _: usize) -> cleaner_core::detect::Detection {
     }
 }
 
+/// Ogkalu calls the first block balloon text and the second outside text: a
+/// Normal run cleans only what an Ogkalu text box claims.
 fn lettered_balloons(_: &Raster, _: usize) -> Vec<cleaner_core::balloon::BalloonBox> {
-    vec![cleaner_core::balloon::BalloonBox {
-        rect: Rect::new(25, 40, 65, 60),
-        class: BalloonClass::TextInBubble,
-        score: 0.9,
-    }]
+    vec![
+        cleaner_core::balloon::BalloonBox {
+            rect: Rect::new(25, 40, 65, 60),
+            class: BalloonClass::TextInBubble,
+            score: 0.9,
+        },
+        cleaner_core::balloon::BalloonBox {
+            rect: Rect::new(146, 51, 36, 36),
+            class: BalloonClass::TextFree,
+            score: 0.9,
+        },
+    ]
 }
 
 fn lettered_judge(_: &cleaner_core::detect::Region) -> Verdict {
@@ -6571,18 +6580,12 @@ fn dark_detect(crop: &Raster, _: usize) -> cleaner_core::detect::Detection {
     AREA_CROPS.lock().unwrap().push((crop.width, crop.height));
     let width = crop.width as usize;
     let mut levels = vec![0; width * crop.height as usize];
-    let mut blocks: Vec<(i64, i64, i64, i64)> = Vec::new();
     for (at, _) in crop.data.iter().enumerate().filter(|(_, value)| **value < 60) {
         levels[at] = 255;
-        let (x, y) = ((at % width) as i64, (at / width) as i64);
-        match blocks.iter_mut().find(|b| x >= b.0 - 8 && x <= b.2 + 8 && y >= b.1 - 8 && y <= b.3 + 8) {
-            Some(block) => *block = (block.0.min(x), block.1.min(y), block.2.max(x), block.3.max(y)),
-            None => blocks.push((x, y, x, y)),
-        }
     }
     Detection {
-        boxes: blocks.into_iter().map(|(x0, y0, x1, y1)| DetBox {
-            rect: Rect::new(x0, y0, (x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32),
+        boxes: dark_blocks(crop).into_iter().map(|rect| DetBox {
+            rect,
             confidence: 0.95,
             language: DetectedLanguage::Japanese,
         }).collect(),
@@ -6593,6 +6596,27 @@ fn dark_detect(crop: &Raster, _: usize) -> cleaner_core::detect::Detection {
             fit: Letterbox::fit(crop.width, crop.height),
         },
     }
+}
+
+/// The dark blocks of `crop`, each one bounding box.
+fn dark_blocks(crop: &Raster) -> Vec<Rect> {
+    let width = crop.width as usize;
+    let mut blocks: Vec<(i64, i64, i64, i64)> = Vec::new();
+    for (at, _) in crop.data.iter().enumerate().filter(|(_, value)| **value < 60) {
+        let (x, y) = ((at % width) as i64, (at / width) as i64);
+        match blocks.iter_mut().find(|b| x >= b.0 - 8 && x <= b.2 + 8 && y >= b.1 - 8 && y <= b.3 + 8) {
+            Some(block) => *block = (block.0.min(x), block.1.min(y), block.2.max(x), block.3.max(y)),
+            None => blocks.push((x, y, x, y)),
+        }
+    }
+    blocks.into_iter().map(|(x0, y0, x1, y1)| Rect::new(x0, y0, (x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32)).collect()
+}
+
+/// Ogkalu's reading of [`dark_detect`]'s page: each dark block is outside text.
+fn dark_balloons(crop: &Raster, _: usize) -> Vec<cleaner_core::balloon::BalloonBox> {
+    dark_blocks(crop).into_iter()
+        .map(|rect| cleaner_core::balloon::BalloonBox { rect, class: BalloonClass::TextFree, score: 0.9 })
+        .collect()
 }
 
 /// A Detect held to an area reads a window around it at the page's own
@@ -6636,7 +6660,7 @@ fn an_area_detect_adds_what_it_finds_there_and_keeps_the_rest() {
             .with_area(area);
         pipeline.test_vision = Some(TestVision {
             detect: dark_detect,
-            balloons: |_, _| Vec::new(),
+            balloons: dark_balloons,
             judge: lettered_judge,
         });
         let entries = plan_cloud_detection(&library, "page", &chapter_id, Some(0)).unwrap();
@@ -7860,6 +7884,8 @@ mod grouped {
         let mut pipeline = lettered_pipeline(&scratch).with_outside(OutsideText::Clean);
         pipeline.all_text = true;
         pipeline.test_vision = Some(TestVision { detect: lettered_detect, balloons: no_boxes, judge: lettered_judge });
+        // CTD alone: with Ogkalu in the run, only its text boxes are cleaned.
+        pipeline.detection_models = DetectorModels { ctd: true, rt_small: false, rt_full: false, sam: false };
         let page = lettered_page(1);
         let bytes = encode(&page, Format::Png).unwrap();
         let strip = Strip::of_sizes(&[(page.width, page.height)]);
