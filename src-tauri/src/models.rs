@@ -284,9 +284,7 @@ pub fn list_accelerators(app: tauri::AppHandle) -> Accelerators {
             let accelerator = accel::KNOWN.into_iter().find(|a| accelerator_id(*a) == status.id).unwrap();
             status.installed = runtime_loaded && (accelerator == Accelerator::Cpu || accelerator.is_installed());
             status.verified &= verified_runtime;
-            status.available = status.supported && runtime_loaded && accelerator.is_available()
-                && (model.id != "samTs" || accelerator != Accelerator::WebGpu
-                    || cleaner_core::sam_ts::built_in_webgpu_available());
+            status.available = status.supported && runtime_loaded && accelerator.is_available();
             if status.supported && !status.available {
                 status.reason_key = if runtime_loaded {
                     accelerator.availability().err().map(accel::Unavailable::reason_key)
@@ -337,7 +335,15 @@ pub(crate) fn supports_model(id: &str, accelerator: Accelerator, host: Option<cl
         },
         "rtSmall" => (accelerator == Accelerator::DirectMl && host.is_some_and(|h| h.os == Os::Windows))
             || (accelerator == Accelerator::Cuda && host.is_some_and(|h| matches!(h.os, Os::Windows | Os::Linux))),
-        "samTs" => accelerator == Accelerator::WebGpu && host.is_some_and(|h| h.os == Os::MacOs),
+        // WebGPU wherever the runtime has it: built in on macOS, the plugin on
+        // Windows and Linux x64. CUDA with TF32 off (`sam_ts::cuda_session`).
+        // The session refuses a CPU fallback on WebGPU, so a GPU that cannot
+        // hold the graph fails to open rather than running half on the CPU.
+        "samTs" => match accelerator {
+            Accelerator::WebGpu => true,
+            Accelerator::Cuda => host.is_some_and(|h| matches!(h.os, Os::Windows | Os::Linux)),
+            _ => false,
+        },
         // CUDA only: it ran the reader on a cloud L4. WebGPU fails its vision
         // graph at the first read and CoreML its decoder, and DirectML is
         // untested (`accel::HAYAI`).
@@ -708,6 +714,44 @@ mod tests {
         assert!(sam.backend_status.iter().find(|row| row.id == "cpu").unwrap().available);
         assert_eq!(sam.declined_key, Some("accel.declined.memory"));
         assert_eq!(sam.needed_bytes, Some(cleaner_core::sam_ts::MIN_ROOM_BYTES));
+    }
+
+    /// SAM is offered WebGPU everywhere (built in on the Mac, the plugin on
+    /// Windows and Linux) and CUDA where CUDA exists. Automatic still stays on
+    /// the CPU with both present: only a measurement on the machine moves it.
+    #[test]
+    fn sam_is_offered_webgpu_and_cuda_but_automatic_stays_on_the_cpu() {
+        const LINUX: Platform = Platform { os: Os::Linux, arch: Arch::X86_64 };
+        let gpus = [Accelerator::Cuda, Accelerator::WebGpu];
+        for (host, offered) in [
+            (MAC, &[Accelerator::Cpu, Accelerator::WebGpu][..]),
+            (WINDOWS, &[Accelerator::Cpu, Accelerator::Cuda, Accelerator::WebGpu][..]),
+            (LINUX, &[Accelerator::Cpu, Accelerator::Cuda, Accelerator::WebGpu][..]),
+        ] {
+            let view = accelerators(accel::Preference::Automatic, &gpus,
+                Some(cleaner_core::sam_ts::MIN_ROOM_BYTES), Some(host));
+            let sam = view.models.iter().find(|row| row.id == "samTs").unwrap();
+            let ids: Vec<&str> = offered.iter().map(|a| accelerator_id(*a)).collect();
+            assert_eq!(sam.supported_ids, ids, "{host:?}");
+            assert_eq!(sam.accelerator_id, "cpu", "{host:?}");
+            assert_eq!(sam.declined_key, None, "{host:?}");
+        }
+        for backend in ["cuda", "webgpu"] {
+            let settings = serde_json::json!({"modelAccelerators": {"samTs": backend}});
+            let view = accelerators_configured(accel::Preference::Automatic, Some(&settings), &gpus,
+                Some(cleaner_core::sam_ts::MIN_ROOM_BYTES), Some(WINDOWS));
+            let sam = view.models.iter().find(|row| row.id == "samTs").unwrap();
+            assert_eq!(sam.accelerator_id, backend);
+            assert_eq!(sam.declined_key, None);
+            // Not verified: no Windows GPU has run it.
+            assert!(!sam.backend_status.iter().find(|row| row.id == backend).unwrap().verified);
+        }
+        let settings = serde_json::json!({"modelAccelerators": {"samTs": "cuda"}});
+        let view = accelerators_configured(accel::Preference::Automatic, Some(&settings), &gpus,
+            Some(cleaner_core::sam_ts::MIN_ROOM_BYTES), Some(MAC));
+        let sam = view.models.iter().find(|row| row.id == "samTs").unwrap();
+        assert_eq!(sam.accelerator_id, "cpu");
+        assert_eq!(sam.declined_id, Some("cuda"));
     }
 
     /// LaMa is offered every GPU provider the platform has but CoreML, because
