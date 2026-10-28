@@ -390,14 +390,111 @@ describe('updating a setup', () => {
     }
   })
 
-  it('every setup-made Modal endpoint has Update, which opens its update', async () => {
+  it('a setup-made Modal endpoint whose code is not known to be current has Update, which opens its update', async () => {
     const backend = await seeded({ endpoints: [MADE, MANUAL], selected: { type: 'modal', profile_id: MADE.id } })
+    backend.checkCloudRelease = vi.fn(async () => { throw new Error('unreachable') })
     show(backend)
     await waitFor(() => expect(within(row(MADE.name)).getByText(t('settings.inference.token.saved'))).toBeTruthy())
     expect(within(row(MANUAL.name)).queryByRole('button', { name: t('settings.inference.endpoints.update') })).toBeNull()
     await fireEvent.click(within(row(MADE.name)).getByRole('button', { name: t('settings.inference.endpoints.update') }))
     expect(await screen.findByText(t('settings.cloud.setup.update.optionsNote'))).toBeTruthy()
   })
+})
+
+describe('Update all', () => {
+  // Each waits on the whole list being read, its tokens and its code checks.
+  const SLOW = { timeout: 5000 }
+  /** The four setups of `?cloudSetups=demo`, all but the one with no token running older code. */
+  async function demo() {
+    const backend = createMockBackend({ timing: ZERO, cloudSetupsScenario: 'demo', releaseScenario: 'old' })
+    setCloudAllowed(true)
+    setBackend(backend)
+    return backend
+  }
+  const updateAllButton = () => screen.queryByRole('button', { name: t('settings.inference.updateAll.action') })
+  const rowUpdate = (/** @type {string} */ name) =>
+    within(row(name)).queryByRole('button', { name: t('settings.inference.endpoints.update') })
+
+  afterEach(() => {
+    setup.updateAll = null
+  })
+
+  it('is offered only when a setup runs older code, and leaves out one that could not be checked', async () => {
+    const backend = await demo()
+    show(backend)
+    await waitFor(() => expect(updateAllButton()).toBeTruthy(), SLOW)
+    expect(screen.getByText(t('settings.inference.updateAll.lead', { count: 3 }), { exact: false })).toBeTruthy()
+    expect(screen.getByText(t('settings.inference.updateAll.unchecked', { count: 1 }), { exact: false })).toBeTruthy()
+    expect(within(row('Old laptop')).getByText(t('settings.inference.code.unknown'))).toBeTruthy()
+    expect(within(row('Studio A')).getByText(t('settings.inference.code.older'))).toBeTruthy()
+    // Not known to be current: each keeps its own Update.
+    for (const name of ['Studio A', 'Studio B', 'Home', 'Old laptop']) expect(rowUpdate(name)).toBeTruthy()
+  })
+
+  it('is not offered, and a current setup offers Change options instead of Update, when every checked setup is current', async () => {
+    const backend = createMockBackend({ timing: ZERO, cloudSetupsScenario: 'demo' })
+    setCloudAllowed(true)
+    setBackend(backend)
+    show(backend)
+    await waitFor(() => expect(within(row('Studio A')).getByText(t('settings.inference.code.current'))).toBeTruthy(), SLOW)
+    expect(updateAllButton()).toBeNull()
+    expect(rowUpdate('Studio A')).toBeNull()
+    expect(rowUpdate('Home')).toBeNull()
+    expect(rowUpdate('Old laptop')).toBeTruthy()
+    const options = within(row('Studio A')).getByRole('button', { name: t('settings.cloud.setup.update.options') })
+    await fireEvent.click(options)
+    expect(await screen.findByText(t('settings.cloud.setup.update.optionsNote'))).toBeTruthy()
+  })
+
+  it('updates each older setup in turn, says how each came out, and keeps the default', async () => {
+    const backend = await demo()
+    const run = vi.spyOn(backend, 'runCloudProvisioner')
+    show(backend)
+    await waitFor(() => expect(updateAllButton()).toBeTruthy(), SLOW)
+    await fireEvent.click(/** @type {HTMLElement} */ (updateAllButton()))
+    await waitFor(() => expect(screen.getByRole('button', { name: t('settings.inference.updateAll.dismiss') })).toBeTruthy(), SLOW)
+
+    const item = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.querySelector(`[data-update-all-item="${id}"]`))
+    expect(item('mc-team01').dataset.state).toBe('updated')
+    expect(item('mc-team02').dataset.state).toBe('failed')
+    expect(item('mc-team02').textContent).toContain(t('settings.inference.updateAll.failed', { reasonKey: 'settings.cloud.setup.error.failed' }))
+    expect(item('mc-team03').dataset.state).toBe('skipped')
+    expect(item('mc-team03').textContent).toContain(t('settings.inference.updateAll.noSavedKey'))
+    expect(item('mc-team04')).toBeNull()
+    expect(screen.getByText(t('settings.inference.updateAll.finished', { updated: 1, failed: 1, skipped: 1 }))).toBeTruthy()
+    expect(run.mock.calls.map(([spec]) => spec.params?.installation_id)).toEqual(['mc-team01', 'mc-team02'])
+
+    expect((await backend.readInferenceConfig()).selectedTarget).toEqual({ type: 'modal', profile_id: 'mc-team03' })
+    // The list is read again: the updated setup is current and has no Update now.
+    await waitFor(() => expect(within(row('Studio A')).getByText(t('settings.inference.code.current'))).toBeTruthy(), SLOW)
+    expect(rowUpdate('Studio A')).toBeNull()
+    expect(within(row('Studio A')).getByRole('button', { name: t('settings.cloud.setup.update.options') })).toBeTruthy()
+    expect(rowUpdate('Studio B')).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: t('settings.inference.updateAll.dismiss') }))
+    await waitFor(() => expect(updateAllButton()).toBeTruthy(), SLOW)
+    expect(screen.getByText(t('settings.inference.updateAll.lead', { count: 2 }), { exact: false })).toBeTruthy()
+  }, 15_000)
+
+  it('Stop ends the setup running now and starts no other', async () => {
+    const backend = createMockBackend({
+      timing: { ...ZERO, provision: 150 },
+      cloudSetupsScenario: 'demo',
+      releaseScenario: 'old',
+    })
+    setCloudAllowed(true)
+    setBackend(backend)
+    show(backend)
+    await waitFor(() => expect(updateAllButton()).toBeTruthy(), SLOW)
+    await fireEvent.click(/** @type {HTMLElement} */ (updateAllButton()))
+    const stop = await screen.findByRole('button', { name: t('settings.cloud.setup.running.stop') }, SLOW)
+    await waitFor(() => expect(setup.run?.status).toBe('running'), SLOW)
+    await fireEvent.click(stop)
+    await waitFor(() => expect(screen.getByRole('button', { name: t('settings.inference.updateAll.dismiss') })).toBeTruthy(), SLOW)
+    const states = [...document.querySelectorAll('[data-update-all-item]')].map((el) => /** @type {HTMLElement} */ (el).dataset.state)
+    expect(states).toEqual(['failed', 'skipped', 'skipped'])
+    expect(document.querySelector('[data-update-all-item="mc-team01"]')?.textContent).toContain(t('settings.cloud.setup.error.cancelled'))
+  }, 15_000)
 })
 
 describe('the endpoint list', () => {

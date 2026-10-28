@@ -881,12 +881,15 @@ pub(crate) struct Installer<'a> {
     /// The Modal setup key to keep for later updates ([`take_setup_key`]).
     /// `None` removes any the profile had.
     pub setup_key: Option<&'a SecretValue>,
+    /// Leave the default target as it is ([`take_keep_selected_target`]).
+    /// Otherwise the saved profile becomes the default.
+    pub keep_selected_target: bool,
 }
 
 /// Finish a successful `apply` or `resume` (IC-1): keyring, profile, default
 /// target, health check. The envelope that comes back never carries the
 /// runtime credential; on success its `data` gains `profile`, `health` and
-/// `selected`.
+/// `selected`, which says whether the profile is the default now.
 pub(crate) fn complete_installation(
     mut response: Value,
     provider: CloudProvider,
@@ -1011,7 +1014,7 @@ fn save_installation(
             updated_at_ms: now,
         },
     );
-    inference.selected_target = match provider {
+    let target = match provider {
         CloudProvider::Beam => ExecutionTarget::Beam {
             profile_id: profile_id.to_string(),
         },
@@ -1019,6 +1022,10 @@ fn save_installation(
             profile_id: profile_id.to_string(),
         },
     };
+    if !installer.keep_selected_target {
+        inference.selected_target = target.clone();
+    }
+    let selected = inference.selected_target == target;
     let Ok(written) = write_inference_config_at(path, inference) else {
         // A new installation's credential would be left with no profile
         // pointing at it; the resume the error asks for stores it again. A
@@ -1055,7 +1062,7 @@ fn save_installation(
         "health".into(),
         json!({ "ok": health.ok, "status": health.status, "latency_ms": health.latency_ms }),
     );
-    additions.insert("selected".into(), Value::Bool(true));
+    additions.insert("selected".into(), Value::Bool(selected));
     Ok(additions)
 }
 
@@ -1124,6 +1131,16 @@ fn take_setup_key(
         fields.insert("forget_setup_credential".into(), Value::Bool(keep.is_none()));
     }
     Ok(keep)
+}
+
+/// Take `keep_selected_target` out of a request: the helper never sees it.
+/// True keeps the default target where it is when the run saves its profile,
+/// so Update all can redeploy several setups without moving the default.
+fn take_keep_selected_target(params: &mut Value) -> bool {
+    params
+        .as_object_mut()
+        .and_then(|fields| fields.remove("keep_selected_target"))
+        == Some(Value::Bool(true))
 }
 
 // ============================================================================
@@ -1227,6 +1244,8 @@ pub(crate) fn run_provisioner(
         }
     };
 
+    let keep_selected_target = take_keep_selected_target(&mut params_val);
+
     // 4. Assemble JSON envelope
     let envelope = serde_json::json!({
         "protocol_version": HELPER_PROTOCOL_VERSION,
@@ -1310,6 +1329,7 @@ pub(crate) fn run_provisioner(
                 secrets: SecretManager::global(),
                 verify: &verify_cloud_profile,
                 setup_key: setup_key.as_ref(),
+                keep_selected_target,
             },
         )
     } else {
@@ -1988,6 +2008,7 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
             secrets: &secrets,
             verify: &reachable,
             setup_key: None,
+            keep_selected_target: false,
         };
 
         let out = complete_installation(
@@ -2040,6 +2061,63 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn an_update_that_keeps_the_default_saves_the_profile_and_leaves_the_default() {
+        let dir = scratch("ic1-keep-default");
+        let path = dir.join("inference.json");
+        let secrets = SecretManager::new_in_memory();
+        let installer = Installer {
+            config_path: Some(&path),
+            secrets: &secrets,
+            verify: &reachable,
+            setup_key: None,
+            keep_selected_target: false,
+        };
+        let first = complete_installation(
+            installed("modal", "mc-first1", MODAL_ENDPOINT, modal_credential()),
+            CloudProvider::Modal,
+            &installer,
+        );
+        assert_eq!(first["data"]["selected"], true, "{first}");
+
+        // The field is the app's: it never reaches the helper.
+        let mut params = json!({"installation_id": "mc-other2", "keep_selected_target": true});
+        let keep = take_keep_selected_target(&mut params);
+        assert!(keep);
+        assert_eq!(params, json!({"installation_id": "mc-other2"}));
+        assert!(!take_keep_selected_target(&mut json!({"keep_selected_target": "yes"})));
+
+        let other = "https://ws--mc-other2-gateway.modal.run/mc/v1";
+        let out = complete_installation(
+            installed("modal", "mc-other2", other, modal_credential()),
+            CloudProvider::Modal,
+            &Installer { keep_selected_target: keep, ..installer },
+        );
+        assert_eq!(out["success"], true, "{out}");
+        assert_eq!(out["data"]["selected"], false);
+        let saved = config::read_inference_config_from_path(&path).unwrap();
+        assert_eq!(
+            saved.selected_target,
+            ExecutionTarget::Modal {
+                profile_id: "mc-first1".into()
+            }
+        );
+        assert_eq!(saved.modal_profiles["mc-other2"].endpoint_url, other);
+        assert!(secrets
+            .get_secret(&runtime_key(CloudProvider::Modal, "mc-other2", other))
+            .unwrap()
+            .is_some());
+
+        // The default itself, updated the same way, is still the default.
+        let again = complete_installation(
+            installed("modal", "mc-first1", MODAL_ENDPOINT, modal_credential()),
+            CloudProvider::Modal,
+            &Installer { keep_selected_target: true, ..installer },
+        );
+        assert_eq!(again["data"]["selected"], true, "{again}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn setup_key_of(id: &str, endpoint: &str) -> SecretKey {
         let (_, fingerprint) = config::validate_https_endpoint(endpoint).unwrap();
         SecretKey::new(CloudProvider::Modal, id.to_string(), fingerprint, SecretRole::Setup)
@@ -2062,6 +2140,7 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
             secrets: &secrets,
             verify: &reachable,
             setup_key: keep.as_ref(),
+            keep_selected_target: false,
         };
         let out = complete_installation(
             installed("modal", "mc-ab12cd", MODAL_ENDPOINT, modal_credential()),
@@ -2109,6 +2188,7 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
             secrets: &secrets,
             verify: &reachable,
             setup_key: None,
+            keep_selected_target: false,
         };
         let out = complete_installation(
             installed("modal", "mc-ab12cd", MODAL_ENDPOINT, modal_credential()),
@@ -2150,6 +2230,7 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
             secrets: &secrets,
             verify: &reachable,
             setup_key: None,
+            keep_selected_target: false,
         };
         let first = complete_installation(
             installed("modal", "mc-ab12cd", MODAL_ENDPOINT, modal_credential()),
@@ -2224,6 +2305,7 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
             secrets: &secrets,
             verify: &unreachable,
             setup_key: None,
+            keep_selected_target: false,
         };
 
         let out = complete_installation(
@@ -2297,6 +2379,7 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
             secrets: &secrets,
             verify: &reachable,
             setup_key: None,
+            keep_selected_target: false,
         };
 
         let out = complete_installation(
@@ -2328,6 +2411,7 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
             secrets: &secrets,
             verify: &reachable,
             setup_key: None,
+            keep_selected_target: false,
         };
 
         let out = complete_installation(
@@ -2365,6 +2449,7 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
             secrets: &secrets,
             verify: &reachable,
             setup_key: None,
+            keep_selected_target: false,
         };
 
         let out = complete_installation(
@@ -2397,6 +2482,7 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
             secrets: &secrets,
             verify: &reachable,
             setup_key: None,
+            keep_selected_target: false,
         };
         let cases = [
             // Beam credential for a Modal installation
@@ -2612,6 +2698,7 @@ echo '{"protocol_version":"1.0.0","request_id":"req-other","success":true,"data"
             secrets: &secrets,
             verify: &reachable,
             setup_key: None,
+            keep_selected_target: false,
         };
         let mut failed = installed("modal", "mc-ab12cd", MODAL_ENDPOINT, modal_credential());
         failed["success"] = json!(false);

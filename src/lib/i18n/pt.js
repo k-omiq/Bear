@@ -727,6 +727,35 @@ export const pt = {
         beam: 'Beam',
         beamPaused: 'Beam (pausado)',
       },
+      // Settings > Cloud: redeploy every setup that runs older cloud code, one at a time.
+      updateAll: {
+        action: 'Atualizar tudo',
+        lead: {
+          one: 'Uma configuração executa código de nuvem mais antigo que esta versão do Manga Cleaner.',
+          other: '{count} configurações executam código de nuvem mais antigo que esta versão do Manga Cleaner.',
+        },
+        unchecked: {
+          one: 'Outra não pôde ser verificada e fica de fora. Use o botão Atualizar dela.',
+          other: 'Outras {count} não puderam ser verificadas e ficam de fora. Use o botão Atualizar de cada uma.',
+        },
+        progress: 'Atualizando o código de nuvem, uma configuração por vez: {done} de {count} prontas.',
+        stopping: 'Parando: {done} de {count} prontas.',
+        finished: 'Atualizar tudo terminou: {updated} atualizadas, {failed} com falha, {skipped} ignoradas.',
+        waiting: 'Aguardando',
+        running: 'Atualizando. Etapa: {stepKey}',
+        updated: 'Atualizada',
+        failed: 'Não foi atualizada. {reasonKey}',
+        skipped: 'Ignorada. {reasonKey}',
+        noSavedKey: 'Nenhuma chave do Modal está salva para ela neste computador. Use o botão Atualizar dela para digitar uma.',
+        notStarted: 'Atualizar tudo foi parado antes de chegar a ela.',
+        dismiss: 'Fechar',
+      },
+      // Which cloud code a setup-made Modal endpoint runs, beside its token.
+      code: {
+        current: 'Executa o código de nuvem atual',
+        older: 'Executa código de nuvem mais antigo',
+        unknown: 'Não foi possível verificar o código de nuvem',
+      },
       endpoints: {
         title: 'Endpoints',
         empty: 'Nenhum endpoint na nuvem ainda.',
@@ -2713,6 +2742,7 @@ export const pt = {
       },
       setupDone: 'Sua GPU na nuvem está configurada e selecionada.',
       setupFailed: 'A configuração da nuvem não terminou. Abra Configurações, Nuvem, para retomar ou limpar.',
+      updateAllDone: 'Atualizar tudo terminou: {updated} atualizadas, {failed} com falha, {skipped} ignoradas. Configurações, Nuvem, diz por quê.',
       cleanupDone: 'Recursos na nuvem excluídos.',
       cleanupFailed: 'Alguns recursos na nuvem não puderam ser excluídos. Abra Configurações, Nuvem, para tentar de novo.',
       endpointRemoved: '{name} removido deste computador.',

@@ -2552,20 +2552,23 @@ export function createMockBackend(options = {}) {
    * keep a Modal setup token for billing, save and select the profile, check
    * its health.
    */
-  const finishInstallation = (installation) => {
+  const finishInstallation = (installation, keepSelected = false) => {
     const { provider, installationId } = installation
-    const endpointUrl =
+    // A resume answers with the address the setup already has.
+    const endpointUrl = installation.endpointUrl ?? (
       provider === 'modal'
         ? `https://mock-workspace--mc-${installationId}-gateway.modal.run/mc/v1`
-        : `https://mc-${installationId}-gateway.app.beam.cloud/mc/v1`
+        : `https://mc-${installationId}-gateway.app.beam.cloud/mc/v1`)
     const origin = new URL(endpointUrl).origin
-    const name = `${provider === 'modal' ? 'Modal' : 'Beam'} (${installationId})`
     const now = timers.now()
     const mapKey = provider === 'modal' ? 'modalProfiles' : 'beamProfiles'
     const previous = state.inferenceConfig[mapKey]?.[installationId]
+    // A resume keeps the name the person gave it, as `save_installation` does.
+    const name = previous?.name ?? `${provider === 'modal' ? 'Modal' : 'Beam'} (${installationId})`
+    const selectedTarget = keepSelected ? state.inferenceConfig.selectedTarget : { type: provider, profile_id: installationId }
     replaceInferenceConfig({
       ...state.inferenceConfig,
-      selectedTarget: { type: provider, profile_id: installationId },
+      selectedTarget,
       [mapKey]: {
         ...(state.inferenceConfig[mapKey] ?? {}),
         [installationId]: {
@@ -2605,7 +2608,7 @@ export function createMockBackend(options = {}) {
       setup_credential_forgotten: true,
       profile: { provider, profile_id: installationId, name, endpoint_url: endpointUrl },
       health: { ok: true, status: 'reachable', latency_ms: 42 },
-      selected: true,
+      selected: selectedTarget?.type === provider && selectedTarget.profile_id === installationId,
     }
   }
 
@@ -2623,7 +2626,8 @@ export function createMockBackend(options = {}) {
     try {
       const failAt =
         params.simulate_fail_step ??
-        (setupFailKnob && !installation.failedOnce ? setupFailKnob : null)
+        (setupFailKnob && !installation.failedOnce ? setupFailKnob : null) ??
+        (installation.failOnceAt && !installation.failedOnce ? installation.failOnceAt : null)
       const reissue = installation.stage === 'completed'
       const skip = reissue
         ? new Set(PROVISION_APPLY_STEPS.filter((step) => step !== 'token' && step !== 'health'))
@@ -2643,7 +2647,7 @@ export function createMockBackend(options = {}) {
         const code = knobCode && /^ERR_[A-Z_]{1,48}$/.test(knobCode) ? knobCode : 'ERR_EXECUTION_FAILED'
         return helperFailure(op, params.request_id, code, `The ${outcome} step failed.`)
       }
-      return helperSuccess(op, params.request_id, finishInstallation(installation))
+      return helperSuccess(op, params.request_id, finishInstallation(installation, params.keep_selected_target === true))
     } finally {
       if (state.provisionRun === run) state.provisionRun = null
     }
@@ -2709,6 +2713,39 @@ export function createMockBackend(options = {}) {
     if (['idle', 'busy', 'starting'].includes(cloudGpuKnob)) {
       cloudGpu.roles.set('render', { state: cloudGpuKnob, since: timers.now() - 95_000, lastActive: timers.now() - 20_000 })
     }
+  }
+  // FIXTURE KNOB: `?cloudSetups=demo` allows cloud and saves four Modal setups
+  // made on this computer, in three accounts, so Update all can be seen in a
+  // browser. Studio A and B have a saved Modal key; B fails its first update
+  // at the token step. Home has no saved key, so Update all skips it. Old
+  // laptop has no access token, so its cloud code cannot be checked. Home is
+  // the default. Add `release=old` for every checked setup to run older code.
+  const cloudSetupsKnob =
+    options.cloudSetupsScenario ?? new URLSearchParams(globalThis.location?.search ?? '').get('cloudSetups')
+  if (cloudSetupsKnob === 'demo') {
+    const seeds = [
+      { id: 'mc-team01', name: 'Studio A', workspace: 'studio-a', token: true, setupKey: true },
+      { id: 'mc-team02', name: 'Studio B', workspace: 'studio-b', token: true, setupKey: true, failOnceAt: 'token' },
+      { id: 'mc-team03', name: 'Home', workspace: 'home', token: true, setupKey: false },
+      { id: 'mc-team04', name: 'Old laptop', workspace: 'home', token: false, setupKey: false },
+    ]
+    const modalProfiles = { ...(state.inferenceConfig.modalProfiles ?? {}) }
+    for (const [index, seed] of seeds.entries()) {
+      const endpointUrl = `https://${seed.workspace}--mc-${seed.id}-gateway.modal.run/mc/v1`
+      const origin = new URL(endpointUrl).origin
+      modalProfiles[seed.id] = {
+        id: seed.id, name: seed.name, endpointUrl, canonicalOrigin: origin,
+        canonicalOriginFingerprint: sha256Hex(origin), createdAtMs: index + 1, updatedAtMs: index + 1,
+      }
+      state.installations.set(installationKey('modal', seed.id), {
+        provider: 'modal', installationId: seed.id, plan: planFor('modal', seed.id, {}).plan, stage: 'completed',
+        done: new Set(), failedOnce: false, failOnceAt: seed.failOnceAt ?? null, endpointUrl,
+      })
+      if (seed.token) state.secrets.add(secretKey('modal', seed.id, 'runtime'))
+      if (seed.setupKey) state.secrets.add(secretKey('modal', seed.id, 'setup'))
+    }
+    state.settings.cloudEngines = 'allowed'
+    replaceInferenceConfig({ ...state.inferenceConfig, selectedTarget: { type: 'modal', profile_id: 'mc-team03' }, modalProfiles })
   }
   const MOCK_GPU_IDLE_MS = 120_000
 
@@ -6052,7 +6089,15 @@ export function createMockBackend(options = {}) {
       if (provider !== 'modal' && provider !== 'beam') {
         return helperFailure(op, requestId, 'ERR_UNSUPPORTED_PROVIDER', `Unsupported provider '${provider}'`)
       }
-      const credentials = params.credentials ?? {}
+      // `saved_setup_credential` names a profile whose Modal key this computer
+      // kept (`take_setup_key` in `provision.rs`): it stands in for a paste.
+      const saved = params.saved_setup_credential
+      if (saved !== undefined) {
+        if (provider !== 'modal' || params.credentials || typeof saved !== 'string' || !state.secrets.has(secretKey('modal', saved, 'setup'))) {
+          return helperFailure(op, requestId, 'ERR_VALIDATION_ERROR', 'No saved Modal key for this setup on this computer.')
+        }
+      }
+      const credentials = saved !== undefined ? { token_id: 'saved-id', token_secret: 'saved-secret' } : params.credentials ?? {}
       const installationId = params.installation_id
       const needsCredentials = ['inspect', 'plan', 'apply', 'resume', 'cleanup_apply'].includes(op)
       if (needsCredentials && !credentialsPresent(provider, credentials)) {
@@ -6123,6 +6168,11 @@ export function createMockBackend(options = {}) {
           }
           const answer = await runInstallation(op, provider, params, installation)
           if (answer?.success && op === 'resume') state.updatedReleases.add(key)
+          if (answer?.success && provider === 'modal') {
+            const setupKey = secretKey('modal', installationId, 'setup')
+            if (saved !== undefined || params.remember_setup_credential === true) state.secrets.add(setupKey)
+            else state.secrets.delete(setupKey)
+          }
           return answer
         }
         case 'cleanup_plan': {

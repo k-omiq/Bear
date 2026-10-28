@@ -719,6 +719,35 @@ export const ko = {
         beam: 'Beam',
         beamPaused: 'Beam (일시 중지)',
       },
+      // Settings > Cloud: redeploy every setup that runs older cloud code, one at a time.
+      updateAll: {
+        action: '모두 업데이트',
+        lead: {
+          one: '구성 1개가 이 버전의 Manga Cleaner보다 오래된 클라우드 코드를 실행합니다.',
+          other: '구성 {count}개가 이 버전의 Manga Cleaner보다 오래된 클라우드 코드를 실행합니다.',
+        },
+        unchecked: {
+          one: '1개는 확인할 수 없어 제외됩니다. 해당 항목의 업데이트를 사용하세요.',
+          other: '{count}개는 확인할 수 없어 제외됩니다. 각 항목의 업데이트를 사용하세요.',
+        },
+        progress: '클라우드 코드를 하나씩 업데이트하는 중: {count}개 중 {done}개 완료.',
+        stopping: '중지하는 중: {count}개 중 {done}개 완료.',
+        finished: '모두 업데이트 완료: 업데이트 {updated}개, 실패 {failed}개, 건너뜀 {skipped}개.',
+        waiting: '대기 중',
+        running: '업데이트 중. 현재: {stepKey}',
+        updated: '업데이트됨',
+        failed: '업데이트되지 않았습니다. {reasonKey}',
+        skipped: '건너뛰었습니다. {reasonKey}',
+        noSavedKey: '이 컴퓨터에 이 구성의 Modal 키가 저장되어 있지 않습니다. 해당 항목의 업데이트에서 키를 입력하세요.',
+        notStarted: '시작하기 전에 모두 업데이트가 중지되었습니다.',
+        dismiss: '닫기',
+      },
+      // Which cloud code a setup-made Modal endpoint runs, beside its token.
+      code: {
+        current: '최신 클라우드 코드 실행 중',
+        older: '오래된 클라우드 코드 실행 중',
+        unknown: '클라우드 코드를 확인할 수 없음',
+      },
       endpoints: {
         title: '엔드포인트',
         empty: '아직 클라우드 엔드포인트가 없습니다.',
@@ -2657,6 +2686,7 @@ export const ko = {
       },
       setupDone: '클라우드 GPU가 구성되어 선택되었습니다.',
       setupFailed: '클라우드 구성이 끝나지 않았습니다. 설정, 클라우드를 열어 재개하거나 정리하세요.',
+      updateAllDone: '모두 업데이트 완료: 업데이트 {updated}개, 실패 {failed}개, 건너뜀 {skipped}개. 이유는 설정, 클라우드에서 볼 수 있습니다.',
       cleanupDone: '클라우드 리소스를 삭제했습니다.',
       cleanupFailed: '일부 클라우드 리소스를 삭제하지 못했습니다. 설정, 클라우드를 열어 다시 시도하세요.',
       endpointRemoved: '이 컴퓨터에서 {name}을(를) 제거했습니다.',

@@ -722,6 +722,35 @@ export const ja = {
         beam: 'Beam',
         beamPaused: 'Beam（一時停止中）',
       },
+      // Settings > Cloud: redeploy every setup that runs older cloud code, one at a time.
+      updateAll: {
+        action: 'すべて更新',
+        lead: {
+          one: '1 件のセットアップが、このバージョンの Manga Cleaner より古いクラウドコードで動いています。',
+          other: '{count} 件のセットアップが、このバージョンの Manga Cleaner より古いクラウドコードで動いています。',
+        },
+        unchecked: {
+          one: 'ほかに 1 件は確認できなかったため対象外です。その行の「更新」を使ってください。',
+          other: 'ほかに {count} 件は確認できなかったため対象外です。それぞれの行の「更新」を使ってください。',
+        },
+        progress: 'クラウドコードを 1 件ずつ更新しています: {count} 件中 {done} 件完了。',
+        stopping: '停止しています: {count} 件中 {done} 件完了。',
+        finished: 'すべて更新が終わりました: 更新 {updated} 件、失敗 {failed} 件、スキップ {skipped} 件。',
+        waiting: '待機中',
+        running: '更新中。現在: {stepKey}',
+        updated: '更新済み',
+        failed: '更新できませんでした。{reasonKey}',
+        skipped: 'スキップしました。{reasonKey}',
+        noSavedKey: 'このコンピューターにはこのセットアップの Modal キーが保存されていません。その行の「更新」でキーを入力してください。',
+        notStarted: '開始する前に「すべて更新」が停止されました。',
+        dismiss: '閉じる',
+      },
+      // Which cloud code a setup-made Modal endpoint runs, beside its token.
+      code: {
+        current: '最新のクラウドコードで動作中',
+        older: '古いクラウドコードで動作中',
+        unknown: 'クラウドコードを確認できませんでした',
+      },
       endpoints: {
         title: 'エンドポイント',
         empty: 'クラウドのエンドポイントはまだありません。',
@@ -2661,6 +2690,7 @@ export const ja = {
       },
       setupDone: 'クラウド GPU のセットアップが完了し、選択されました。',
       setupFailed: 'クラウドのセットアップが完了しませんでした。設定 > クラウドを開き、再開またはクリーンアップしてください。',
+      updateAllDone: 'すべて更新が終わりました: 更新 {updated} 件、失敗 {failed} 件、スキップ {skipped} 件。理由は設定 > クラウドで確認できます。',
       cleanupDone: 'クラウドリソースを削除しました。',
       cleanupFailed: '一部のクラウドリソースを削除できませんでした。設定 > クラウドを開いて、もう一度お試しください。',
       endpointRemoved: '{name} をこのコンピューターから削除しました。',

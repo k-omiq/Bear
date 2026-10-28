@@ -727,6 +727,35 @@ export const es = {
         beam: 'Beam',
         beamPaused: 'Beam (en pausa)',
       },
+      // Settings > Cloud: redeploy every setup that runs older cloud code, one at a time.
+      updateAll: {
+        action: 'Actualizar todo',
+        lead: {
+          one: 'Una configuración ejecuta código de nube más antiguo que esta versión de Manga Cleaner.',
+          other: '{count} configuraciones ejecutan código de nube más antiguo que esta versión de Manga Cleaner.',
+        },
+        unchecked: {
+          one: 'Otra no se pudo comprobar y queda fuera. Usa su propio botón Actualizar.',
+          other: 'Otras {count} no se pudieron comprobar y quedan fuera. Usa el botón Actualizar de cada una.',
+        },
+        progress: 'Actualizando el código de nube, una configuración a la vez: {done} de {count} listas.',
+        stopping: 'Deteniendo: {done} de {count} listas.',
+        finished: 'Actualizar todo terminó: {updated} actualizadas, {failed} con error, {skipped} omitidas.',
+        waiting: 'En espera',
+        running: 'Actualizando. Paso: {stepKey}',
+        updated: 'Actualizada',
+        failed: 'No se actualizó. {reasonKey}',
+        skipped: 'Omitida. {reasonKey}',
+        noSavedKey: 'No hay una clave de Modal guardada para ella en este equipo. Usa su botón Actualizar para escribir una.',
+        notStarted: 'Actualizar todo se detuvo antes de llegar a ella.',
+        dismiss: 'Cerrar',
+      },
+      // Which cloud code a setup-made Modal endpoint runs, beside its token.
+      code: {
+        current: 'Ejecuta el código de nube actual',
+        older: 'Ejecuta código de nube más antiguo',
+        unknown: 'No se pudo comprobar el código de nube',
+      },
       endpoints: {
         title: 'Endpoints',
         empty: 'Todavía no hay endpoints en la nube.',
@@ -2713,6 +2742,7 @@ export const es = {
       },
       setupDone: 'Tu GPU en la nube está configurada y seleccionada.',
       setupFailed: 'La configuración de la nube no terminó. Abre Ajustes, Nube, para reanudar o limpiar.',
+      updateAllDone: 'Actualizar todo terminó: {updated} actualizadas, {failed} con error, {skipped} omitidas. Ajustes, Nube, dice por qué.',
       cleanupDone: 'Recursos en la nube eliminados.',
       cleanupFailed: 'Algunos recursos en la nube no se pudieron eliminar. Abre Ajustes, Nube, para intentarlo de nuevo.',
       endpointRemoved: 'Se quitó {name} de este equipo.',
