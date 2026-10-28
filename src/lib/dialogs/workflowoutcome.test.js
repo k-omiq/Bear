@@ -28,7 +28,7 @@ const LOCAL = [
   ['The SAM-TS-L lettering mask graphs are not installed', 'analyze', { kind: 'modelMissing' }],
   ['The Ogkalu comic text & bubble detector (Full) graph is not installed or failed SHA-256', 'analyze', { kind: 'modelMissing' }],
   ['The Ogkalu comic text & bubble detector (Small) graph is not installed or failed SHA-256', 'analyze', { kind: 'modelMissing' }],
-  ['The SAM-TS-L lettering mask needs at least 10 GB of measured process memory room', 'analyze', { kind: 'memory' }],
+  ['The SAM-TS-L lettering mask needs at least 5 GB of measured process memory room', 'analyze', { kind: 'memory' }],
   ['Analysis waits while a speed measurement runs', 'analyze', { kind: 'measuring' }],
   ['The Ogkalu comic text & bubble detector (Full) graph size or SHA-256 does not match the pinned manifest', 'models', { kind: 'wrongModel' }],
   ['The copied Ogkalu comic text & bubble detector (Full) graph failed verification', 'models', { kind: 'wrongModel' }],

@@ -523,10 +523,10 @@ export function createMockBackend(options = {}) {
     // an optional row with something to download.
     missingModels: new Set(['inpainter', 'ocrEncoder', 'ocrDecoder', 'ocrVocab', 'hayaiVision', 'hayaiDecoder', 'hayaiTokenizer', 'pageDenoiseModel', 'pageDenoiseSeams']),
     /**
-     * Free memory the native side would measure, in bytes. Under the 10 GB the
+     * Free memory the native side would measure, in bytes. Under the 5 GB the
      * lettering mask wants, so Advanced runs show their low-memory warning.
      */
-    memoryRoomBytes: 6 * 1024 ** 3,
+    memoryRoomBytes: 4 * 1024 ** 3,
     /** What `verifyModel` has digested this session. @type {Map<string, boolean>} */
     verifiedModels: new Map(),
     /** Downloads in flight, by id, holding the timer that advances each one. @type {Map<string, any>} */
@@ -3230,7 +3230,7 @@ export function createMockBackend(options = {}) {
       // memory than it wants warns and runs anyway.
       // The notice names its run, so its Stop button stops that one.
       const localSam = Array.isArray(detectorModels) && detectorModels.includes('samTs') && !capabilities.length
-      const lowMemory = localSam && mode !== 'clean' && state.memoryRoomBytes < 10_000_000_000
+      const lowMemory = localSam && mode !== 'clean' && state.memoryRoomBytes < 5_000_000_000
       const handle = await startRun({
         scope,
         chapterId,
@@ -4253,13 +4253,14 @@ export function createMockBackend(options = {}) {
         ctdInstalled: !state.missingModels.has('textDetector'), rtInstalled: !state.missingModels.has('balloonDetector'), fullRtInstalled: fullRt,
         fullRtManaged: fullRt, fullRtRevision: '16e8a622f91fabc6b5b65c96d32d1183f8843546',
         fullRtFile: { name: 'detector.onnx', bytes: 168481531, sha256: '065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195' },
-        samInstalled: sam, samMemoryReady: state.memoryRoomBytes >= 10_000_000_000, samManaged: sam,
+        samInstalled: sam, samMemoryReady: state.memoryRoomBytes >= 5_000_000_000, samManaged: sam,
         // This computer's memory, as the native side measures it.
         totalBytes: 16 * 1024 ** 3, roomBytes: state.memoryRoomBytes,
         samRevision: '5dd97423e0fbf2404264979136d47e8101144046',
         samFiles: sam ? [
-          { name: 'koharu_samts_encoder.onnx', bytes: 1_335_305_985, sha256: '9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe' },
+          { name: 'koharu_samts_encoder.onnx', bytes: 1_448_391, sha256: 'c7b1cc85d2316886db1dfd22886c1988c71c317d4bcd869beca07e8b6c822141' },
           { name: 'koharu_samts_text_head.onnx', bytes: 22_704_641, sha256: 'a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281' },
+          { name: 'koharu_samts_encoder.onnx.data', bytes: 1_334_022_144, sha256: 'ff610b34dcde10353f39d2499db7ca669d5f1874c64a9b89587222484dcdebc7' },
         ] : [],
         cooStatus: 'Rights unresolved. No bundled model, download, or desktop execution.',
         samWriteQualified: runtimeInstalled && sam,

@@ -1,0 +1,13 @@
+[package]
+name = "samprobe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-22", "webgpu"] }
+
+[profile.release]
+opt-level = 3
+
+# Standalone: build with its own CARGO_TARGET_DIR.
+[workspace]

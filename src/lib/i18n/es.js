@@ -505,7 +505,7 @@ export const es = {
         allTextMissing: 'Avanzado necesita {bytes:memory} de descargas.',
         allTextImport: 'Avanzado necesita la máscara de rotulación SAM-TS-L. Instálala en Más opciones.',
         allTextSamMismatch: 'La máscara de rotulación SAM-TS-L no superó su comprobación. Vuelve a instalarla en Más opciones.',
-        allTextMemory: 'Hay menos de 10 GB de memoria libre, así que Avanzado irá lento. Cierra otras aplicaciones para una ejecución más rápida.',
+        allTextMemory: 'Hay menos de 5 GB de memoria libre, así que Avanzado irá lento. Cierra otras aplicaciones para una ejecución más rápida.',
         runtime: 'No puede ejecutarse hasta que se instale el entorno de ejecución del motor, ONNX Runtime. Descárgalo en Rendimiento.',
         runtimeDownloading: 'Podrá ejecutarse cuando el entorno de ejecución del motor, ONNX Runtime, termine de descargarse.',
         runtimeUnavailable: 'No puede ejecutarse aquí: el entorno de ejecución del motor, ONNX Runtime, no tiene una versión para este equipo.',
@@ -521,7 +521,7 @@ export const es = {
         note: 'Analiza una página con los modelos de detección seleccionados. Cualquier escritura de componentes sigue necesitando aprobación explícita y compatibilidad de escritura validada.',
       },
       sam: {
-        memory: 'Va lento con menos de 10 GB de memoria libre.',
+        memory: 'Va lento con menos de 5 GB de memoria libre.',
         chooserTitle: 'Carpeta con los dos grafos de la máscara de rotulación SAM-TS-L',
       },
       rtFull: {
@@ -1587,7 +1587,7 @@ export const es = {
     advanced: {
       name: 'Avanzado',
       about: 'Limpia todo el texto, incluidos los efectos de sonido. Más lento.',
-      needs: 'Necesita 16 GB de memoria, 10 GB de ellos libres.',
+      needs: 'Necesita 16 GB de memoria, 5 GB de ellos libres.',
     },
     download: '{bytes:memory} por descargar',
     ready: 'Descargado',
@@ -2617,7 +2617,7 @@ export const es = {
       },
       engineFault: '{modelKey} dejó de responder en {accelKey}, así que se descargó de la memoria. La siguiente ejecución lo vuelve a crear. Si sigue pasando, elige CPU en Ajustes › Rendimiento.',
       engineFaultCpu: '{modelKey} falló en este equipo, así que se descargó de la memoria. La siguiente ejecución lo vuelve a cargar.',
-      lowMemory: 'Avanzado funciona mejor con 10 GB de memoria libre. Ahora hay {free:memory} libres, así que esta ejecución puede ir lenta. Cierra otras aplicaciones, o detén la ejecución y cambia a Normal.',
+      lowMemory: 'Avanzado funciona mejor con 5 GB de memoria libre. Ahora hay {free:memory} libres, así que esta ejecución puede ir lenta. Cierra otras aplicaciones, o detén la ejecución y cambia a Normal.',
       lowMemoryStop: 'Detener ejecución',
       samFallback: 'La máscara de rotulación no se pudo cargar, así que esta ejecución usó máscaras Normal. Pueden quedar efectos de sonido.',
       samLost: 'La máscara de rotulación no se pudo cargar y esta ejecución no tiene CTD para sustituirla, así que el resto no tiene máscara de rotulación.',
@@ -2972,7 +2972,7 @@ export const es = {
       unverified: 'Verificación pendiente o fallida',
       samMissing: 'Faltan los grafos',
       memoryReady: 'Memoria disponible',
-      memoryShort: 'Necesita 10 GB de memoria de proceso',
+      memoryShort: 'Necesita 5 GB de memoria de proceso',
     },
     detail: {
       rtIdentity: 'Identidad y archivo de Ogkalu comic text & bubble detector (Full)',
@@ -3116,7 +3116,7 @@ export const es = {
       unavailable: 'La revisión con modelos solo funciona en la aplicación de escritorio.',
       modelMissing: 'Falta un modelo necesario o no superó su suma de verificación. Abre Modelos y backends para importarlo o verificarlo.',
       modelFailed: 'El modelo se detuvo antes de terminar esta página. No se escribió nada. Inténtalo de nuevo o analiza en la CPU.',
-      memory: 'La máscara de rotulación SAM-TS-L necesita unos 10 GB de memoria libre. Cierra otras aplicaciones y vuelve a analizar.',
+      memory: 'La máscara de rotulación SAM-TS-L necesita unos 5 GB de memoria libre. Cierra otras aplicaciones y vuelve a analizar.',
       measuring: 'El análisis espera mientras la pantalla Runtime mide este equipo. Inténtalo de nuevo cuando termine.',
       sourceLimit: 'Las vistas previas de revisión están limitadas a 20 MB y 24 megapíxeles, en PNG, JPEG, GIF, WebP o BMP.',
       longstrip: 'La revisión por forma de texto necesita un capítulo paginado. Las tiras largas todavía no son compatibles.',

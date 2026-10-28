@@ -499,7 +499,7 @@ export const ko = {
         allTextMissing: '고급에는 {bytes:memory} 다운로드가 필요합니다.',
         allTextImport: '고급에는 SAM-TS-L 레터링 마스크가 필요합니다. 추가 옵션에서 설치하세요.',
         allTextSamMismatch: 'SAM-TS-L 레터링 마스크가 검사에 실패했습니다. 추가 옵션에서 다시 설치하세요.',
-        allTextMemory: '여유 메모리가 10 GB 미만이라 고급은 느려집니다. 다른 앱을 닫으면 더 빨라집니다.',
+        allTextMemory: '여유 메모리가 5 GB 미만이라 고급은 느려집니다. 다른 앱을 닫으면 더 빨라집니다.',
         runtime: '엔진 런타임인 ONNX Runtime이 설치되어야 실행할 수 있습니다. 성능에서 다운로드하세요.',
         runtimeDownloading: '엔진 런타임인 ONNX Runtime의 다운로드가 끝나면 실행할 수 있습니다.',
         runtimeUnavailable: '여기서는 실행할 수 없습니다: 엔진 런타임인 ONNX Runtime에 이 컴퓨터용 빌드가 없습니다.',
@@ -515,7 +515,7 @@ export const ko = {
         note: '선택한 감지 모델로 페이지 하나를 분석합니다. 구성 요소를 기록하려면 여전히 명시적 승인과 적격한 기록 지원이 필요합니다.',
       },
       sam: {
-        memory: '여유 메모리가 10 GB 미만이면 느리게 실행됩니다.',
+        memory: '여유 메모리가 5 GB 미만이면 느리게 실행됩니다.',
         chooserTitle: 'SAM-TS-L 레터링 마스크 그래프 두 개가 모두 있는 폴더',
       },
       rtFull: {
@@ -1556,7 +1556,7 @@ export const ko = {
     advanced: {
       name: '고급',
       about: '효과음을 포함한 모든 텍스트를 클린합니다. 더 느립니다.',
-      needs: '메모리 16 GB가 필요하며, 그중 10 GB는 비어 있어야 합니다.',
+      needs: '메모리 16 GB가 필요하며, 그중 5 GB는 비어 있어야 합니다.',
     },
     download: '{bytes:memory} 다운로드 필요',
     ready: '다운로드됨',
@@ -2566,7 +2566,7 @@ export const ko = {
       },
       engineFault: '{modelKey}이(가) {accelKey}에서 응답을 멈춰 언로드했습니다. 다음 실행에서 다시 만듭니다. 계속 발생하면 설정 › 성능에서 CPU를 선택하세요.',
       engineFaultCpu: '{modelKey}이(가) 이 컴퓨터에서 실패해 언로드했습니다. 다음 실행에서 다시 로드합니다.',
-      lowMemory: '고급은 여유 메모리가 10 GB일 때 가장 잘 동작합니다. 지금 여유는 {free:memory}라서 이번 실행이 느릴 수 있습니다. 다른 앱을 닫거나, 실행을 중지하고 일반으로 바꾸세요.',
+      lowMemory: '고급은 여유 메모리가 5 GB일 때 가장 잘 동작합니다. 지금 여유는 {free:memory}라서 이번 실행이 느릴 수 있습니다. 다른 앱을 닫거나, 실행을 중지하고 일반으로 바꾸세요.',
       lowMemoryStop: '실행 중지',
       samFallback: '레터링 마스크를 로드하지 못해 이번 실행은 일반 마스크를 사용했습니다. 효과음이 남아 있을 수 있습니다.',
       samLost: '레터링 마스크를 로드하지 못했고 대신 쓸 CTD도 이번 실행에 없어, 나머지는 레터링 마스크 없이 처리합니다.',
@@ -2915,7 +2915,7 @@ export const ko = {
       unverified: '확인 대기 중 또는 실패',
       samMissing: '그래프 없음',
       memoryReady: '메모리 충분',
-      memoryShort: '프로세스 메모리 10 GB 필요',
+      memoryShort: '프로세스 메모리 5 GB 필요',
     },
     detail: {
       rtIdentity: 'Ogkalu comic text & bubble detector (Full) 식별 정보와 파일',
@@ -3053,7 +3053,7 @@ export const ko = {
       unavailable: '모델 검토는 데스크톱 앱에서만 실행됩니다.',
       modelMissing: '필요한 모델이 없거나 체크섬 검사에 실패했습니다. 모델과 백엔드를 열어 가져오거나 확인하세요.',
       modelFailed: '모델이 이 페이지를 끝내기 전에 멈췄습니다. 아무것도 기록하지 않았습니다. 다시 시도하거나 CPU로 분석하세요.',
-      memory: 'SAM-TS-L 레터링 마스크는 약 10 GB의 여유 메모리가 필요합니다. 다른 앱을 닫은 뒤 다시 분석하세요.',
+      memory: 'SAM-TS-L 레터링 마스크는 약 5 GB의 여유 메모리가 필요합니다. 다른 앱을 닫은 뒤 다시 분석하세요.',
       measuring: '런타임 화면이 이 컴퓨터를 측정하는 동안 분석은 기다립니다. 끝난 뒤 다시 시도하세요.',
       sourceLimit: '검토 미리보기는 PNG, JPEG, GIF, WebP, BMP 형식으로 20 MB, 24메가픽셀까지만 지원합니다.',
       longstrip: '텍스트 형태 검토에는 페이지 단위 챕터가 필요합니다. 세로 스크롤은 아직 지원하지 않습니다.',

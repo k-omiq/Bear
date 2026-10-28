@@ -715,6 +715,17 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**SAM-TS-L memory cuts (2026-10-28): measured with the probe, not in the app.** The CPU session
+runs without the arena and memory pattern, and the encoder runs its four global-attention blocks
+one head at a time with its weights in a side file. On the M5, three real pages: CPU peak 11.85 to
+3.01 GiB, WebGPU 6.60 to 2.93 GiB, logits bit-identical (`docs/ram-analysis-2026-10-28.md`). The
+room warning is now 5 GB. Not done: a real install through the app with the new pins, a whole
+Advanced run with the cuts (the mode card keeps its 16 GB total until then), any host other than
+the M5, and the cloud worker, which keeps its own single-file pin. Old installs show SAM-TS-L as not
+installed and rebuild it with the install button; there is no in-place migration. Also fixed:
+`SamTsSession::infer` on WebGPU took the head's device turn while still holding the encoder's, so
+a run with SAM on WebGPU hung on its first page (found by the ignored WebGPU session test).
+
 **Review fixes for finishing and the FLUX 3 settings (2026-10-27): tests and synthetic probes
 only.** A code review of the finishing, generation and working-size work found these, and they
 are fixed. Fixed:
