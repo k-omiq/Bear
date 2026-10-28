@@ -339,15 +339,22 @@ pub(crate) fn supports_model(id: &str, accelerator: Accelerator, host: Option<cl
         },
         "rtSmall" => (accelerator == Accelerator::DirectMl && host.is_some_and(|h| h.os == Os::Windows))
             || (accelerator == Accelerator::Cuda && host.is_some_and(|h| matches!(h.os, Os::Windows | Os::Linux))),
-        // WebGPU wherever the runtime has it: built in on macOS, the plugin on
-        // Windows and Linux x64. CUDA with TF32 off (`sam_ts::cuda_session`).
+        // WebGPU wherever a published runtime has it: built in on macOS, the
+        // plugin on Windows and Linux x64, none on Linux arm64. CUDA with TF32
+        // off (`sam_ts::cuda_session`), where a CUDA build is published.
         // The session refuses a CPU fallback on WebGPU, so a GPU that cannot
         // hold the graph fails to open rather than running half on the CPU.
-        "samTs" => match accelerator {
-            Accelerator::WebGpu => true,
-            Accelerator::Cuda => host.is_some_and(|h| matches!(h.os, Os::Windows | Os::Linux)),
-            _ => false,
-        },
+        "samTs" => {
+            let published = |provider: &str| host.is_none_or(|h| {
+                cleaner_core::runtime::package::flavours(h).iter().any(|p| p.advertised.contains(&provider))
+            });
+            match accelerator {
+                Accelerator::WebGpu => published("WebGpuExecutionProvider"),
+                Accelerator::Cuda => host.is_some_and(|h| matches!(h.os, Os::Windows | Os::Linux))
+                    && published("CUDAExecutionProvider"),
+                _ => false,
+            }
+        }
         // CUDA only: it ran the reader on a cloud L4. WebGPU fails its vision
         // graph at the first read and CoreML its decoder, and DirectML is
         // untested (`accel::HAYAI`).
@@ -726,11 +733,17 @@ mod tests {
     #[test]
     fn sam_is_offered_webgpu_and_cuda_but_automatic_stays_on_the_cpu() {
         const LINUX: Platform = Platform { os: Os::Linux, arch: Arch::X86_64 };
+        // No published build for these has CUDA, and none for Linux arm64 has
+        // WebGPU, so neither is offered where it could never load.
+        const WINDOWS_ARM: Platform = Platform { os: Os::Windows, arch: Arch::Aarch64 };
+        const LINUX_ARM: Platform = Platform { os: Os::Linux, arch: Arch::Aarch64 };
         let gpus = [Accelerator::Cuda, Accelerator::WebGpu];
         for (host, offered) in [
             (MAC, &[Accelerator::Cpu, Accelerator::WebGpu][..]),
             (WINDOWS, &[Accelerator::Cpu, Accelerator::Cuda, Accelerator::WebGpu][..]),
             (LINUX, &[Accelerator::Cpu, Accelerator::Cuda, Accelerator::WebGpu][..]),
+            (WINDOWS_ARM, &[Accelerator::Cpu, Accelerator::WebGpu][..]),
+            (LINUX_ARM, &[Accelerator::Cpu][..]),
         ] {
             let view = accelerators(accel::Preference::Automatic, &gpus,
                 Some(cleaner_core::sam_ts::MIN_ROOM_BYTES), Some(host));
