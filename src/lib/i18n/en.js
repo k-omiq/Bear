@@ -752,6 +752,8 @@ export const en = {
         // graphics card, CUDA for NVIDIA - and a Mac does not, so this row is
         // not drawn there.
         flavour: 'Runtime build',
+        // A build kept from before a switch: choosing it again downloads nothing.
+        kept: 'Downloaded',
         // The build names are ids and the versions are data, so neither is
         // translated; what needs saying is that one of the choices asks the
         // user to install something first.

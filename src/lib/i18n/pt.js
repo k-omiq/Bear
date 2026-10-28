@@ -618,6 +618,7 @@ export const pt = {
         label: 'Runtime do motor',
         unavailable: 'Indisponível para este computador',
         flavour: 'Versão do runtime',
+        kept: 'Já baixada',
         flavourNeeds: 'Esta versão precisa de {items} instalado neste computador antes de poder usar a placa de vídeo.',
         installedDiffers: 'Instalado: {installed} {installedVersion}. Escolhido: {chosen} {chosenVersion}. Clique em Baixar para substituir.',
       },

@@ -3191,7 +3191,7 @@
                   fit
                   options={catalogue.runtime.flavours.map((build) => ({
                     value: build.id,
-                    label: `${flavourName(build.id)} · ${build.ortVersion} · ${t('models.value.size', { bytes: build.bytes })}`,
+                    label: `${flavourName(build.id)} · ${build.ortVersion} · ${build.kept ? t('settings.models.runtime.kept') : t('models.value.size', { bytes: build.bytes })}`,
                   }))}
                   value={catalogue.runtime.flavour}
                   onchange={chooseFlavour}

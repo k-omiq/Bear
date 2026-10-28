@@ -611,6 +611,7 @@ export const ko = {
         label: '엔진 런타임',
         unavailable: '이 컴퓨터에서는 사용할 수 없음',
         flavour: '런타임 빌드',
+        kept: '다운로드됨',
         flavourNeeds: '이 빌드가 그래픽 카드를 사용하려면 이 컴퓨터에 {items}이(가) 설치되어 있어야 합니다.',
         installedDiffers: '설치됨: {installed} {installedVersion}. 선택함: {chosen} {chosenVersion}. 교체하려면 다운로드를 누르세요.',
       },

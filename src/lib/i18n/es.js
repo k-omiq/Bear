@@ -618,6 +618,7 @@ export const es = {
         label: 'Entorno de ejecución del motor',
         unavailable: 'No disponible para este equipo',
         flavour: 'Versión del entorno de ejecución',
+        kept: 'Ya descargada',
         flavourNeeds: 'Esta versión necesita {items} instalado en este equipo antes de poder usar la tarjeta gráfica.',
         installedDiffers: 'Instalado: {installed} {installedVersion}. Elegido: {chosen} {chosenVersion}. Pulsa Descargar para reemplazarlo.',
       },

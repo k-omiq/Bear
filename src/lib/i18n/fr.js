@@ -618,6 +618,7 @@ export const fr = {
         label: 'Runtime du moteur',
         unavailable: 'Indisponible pour cet ordinateur',
         flavour: 'Version du runtime',
+        kept: 'Déjà téléchargée',
         flavourNeeds: 'Cette version nécessite que {items} soit installé sur cet ordinateur avant de pouvoir utiliser la carte graphique.',
         installedDiffers: 'Installé : {installed} {installedVersion}. Choisi : {chosen} {chosenVersion}. Appuyez sur Télécharger pour le remplacer.',
       },

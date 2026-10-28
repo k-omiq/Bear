@@ -127,6 +127,12 @@
 //! build removes whatever the previous stamp named that the new archive did not
 //! bring, so no foreign library is left beside the one that will be loaded.
 //!
+//! The build being replaced is not thrown away: it is copied to
+//! `<app_data>/runtimes/.kept/<flavour>/` first ([`keep_installed`]), and a
+//! Download press for a flavour kept there moves it back instead of fetching it
+//! again. A kept build the catalogue no longer publishes at that version is
+//! swept by [`runtime_row`]; Delete takes the whole directory, kept builds too.
+//!
 //! ## Replacing a runtime on Windows
 //!
 //! Everything above was written and measured on macOS, and one of its
@@ -1003,6 +1009,9 @@ pub struct FlavourRow {
     /// What the **user** must install by hand first, as version strings. Empty
     /// for every flavour but CUDA, which is the argument for the default.
     pub user_installed: &'static [&'static str],
+    /// A whole copy of this build is kept from before a switch, so choosing it
+    /// again downloads nothing.
+    pub kept: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1162,6 +1171,7 @@ fn runtime_row(app: &tauri::AppHandle, data: Option<&Path>) -> RuntimeRow {
     // for why they exist and why a later launch is when they go.
     if let Some(dir) = writable.as_deref() {
         sweep_replaced(dir);
+        sweep_kept(dir);
     }
     let found = runtime::find(data).ok();
     let read_only = match (&found, &writable) {
@@ -1197,6 +1207,9 @@ fn runtime_row(app: &tauri::AppHandle, data: Option<&Path>) -> RuntimeRow {
                 bytes: package.bytes(),
                 is_default: package.default_flavour,
                 user_installed: package.user_installed,
+                kept: writable
+                    .as_deref()
+                    .is_some_and(|dir| kept_build(dir, package.flavour.id(), package.ort_version).is_some()),
             })
             .collect(),
         available: host.is_some(),
@@ -1688,8 +1701,9 @@ pub fn download_runtime(app: tauri::AppHandle) -> Result<DownloadStart, String> 
     let dir = writable_runtime_dir(&app)?;
     let auth = token(&app);
     // Not `AlreadyInstalled`: an installed runtime is the *only* thing the
-    // picker can be acted on with - switching flavour is a re-download over the
-    // top of one that is already there - so the press has to be honoured.
+    // picker can be acted on with - switching flavour replaces the one that is
+    // already there, from a kept copy where there is one and a download where
+    // there is not - so the press has to be honoured.
     let Some(cancel) = claim(RUNTIME_ID) else { return Ok(DownloadStart::AlreadyRunning) };
 
     std::thread::spawn(move || {
@@ -1708,7 +1722,33 @@ pub fn download_runtime(app: tauri::AppHandle) -> Result<DownloadStart, String> 
         // zero.
         let staging = runtime_staging(&dir);
         let downloads = runtime_downloads(&dir);
+        let flavour = host.flavour.id();
         let result = (|| -> Result<(), String> {
+            // **Switching back costs nothing.** The outgoing build is copied
+            // aside before any switch ([`keep_installed`]), so a build that was
+            // here before is moved back in rather than fetched again.
+            let previous = read_installed(&dir).filter(|stamp| stamp.flavour != flavour);
+            // A switch that was refused leaves the previous build installed, and
+            // a kept copy of what is installed is only disk.
+            let replace = |move_in: &dyn Fn() -> Result<Vec<String>, MoveFailed>| {
+                if let Some(previous) = &previous {
+                    keep_installed(&dir, previous);
+                }
+                let installed = install_stamped(&dir, flavour, host.ort_version, move_in);
+                if installed.is_err() {
+                    if let Some(kept) = previous.as_ref().and_then(keepable) {
+                        forget_kept(&dir, kept);
+                    }
+                }
+                installed
+            };
+            if kept_build(&dir, flavour, host.ort_version).is_some() {
+                let kept = kept_files(&dir, flavour);
+                replace(&|| move_staged(&kept, &dir))?;
+                forget_kept(&dir, flavour);
+                return Ok(());
+            }
+
             let _ = std::fs::remove_dir_all(&staging);
             std::fs::create_dir_all(&staging).map_err(|e| format!("{}: {e}", staging.display()))?;
 
@@ -1767,9 +1807,9 @@ pub fn download_runtime(app: tauri::AppHandle) -> Result<DownloadStart, String> 
             }
             // The move, the sweep of the previous build's leftovers and the new
             // record, in the one order a crash between them can survive.
-            install_stamped(&dir, host.flavour.id(), host.ort_version, || {
-                move_staged(&staging, &dir)
-            })?;
+            replace(&|| move_staged(&staging, &dir))?;
+            // A stale copy of this same flavour is nothing to switch back to now.
+            forget_kept(&dir, flavour);
             Ok(())
         })();
         let _ = std::fs::remove_dir_all(&staging);
@@ -2698,6 +2738,141 @@ fn install_stamped(
         },
     );
     Ok(())
+}
+
+/* ------------------------------------------------------------------ */
+/* Builds kept for switching back                                      */
+/* ------------------------------------------------------------------ */
+
+/// Where a build the user switched away from is kept, so that switching back
+/// is a move rather than a second download of up to 455 MB.
+///
+/// `<runtimes>/.kept/<flavour>/` holds the libraries and
+/// `<runtimes>/.kept/<flavour>.json` the stamp they were installed under. The
+/// stamp sits **beside** the files rather than among them because a restore
+/// hands the whole directory to [`move_staged`], and everything in it becomes
+/// part of the installed build.
+fn runtime_kept(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join(".kept")
+}
+
+fn kept_files(runtime_dir: &Path, flavour: &str) -> PathBuf {
+    runtime_kept(runtime_dir).join(flavour)
+}
+
+fn kept_stamp(runtime_dir: &Path, flavour: &str) -> PathBuf {
+    runtime_kept(runtime_dir).join(format!("{flavour}.json"))
+}
+
+/// The catalogue's id for a stamp's build, where the catalogue still publishes
+/// exactly that flavour at exactly that version for this machine.
+///
+/// The `&'static str` is the point: it is the only thing joined onto a path
+/// below, so a stamp edited to name `../models` names nothing.
+fn keepable(stamp: &InstalledRuntime) -> Option<&'static str> {
+    cleaner_core::runtime::package::host_flavours()
+        .into_iter()
+        .find(|package| package.flavour.id() == stamp.flavour && package.ort_version == stamp.version)
+        .map(|package| package.flavour.id())
+}
+
+/// Copy the installed build aside before another one replaces it.
+///
+/// A copy rather than a move, because the libraries being copied are the ones
+/// this process has loaded: Windows will not delete them, and until the new
+/// build is in place they are the only runtime there is. The copy is the
+/// expensive half only on disk, and the replacement takes the originals' names
+/// a moment later.
+///
+/// **Best effort.** A copy that fails is removed and the switch goes on: what
+/// is lost is the shortcut back, never the switch. The stamp is written last,
+/// so a half-copied build has no stamp and is never restored.
+fn keep_installed(dir: &Path, previous: &InstalledRuntime) {
+    let Some(flavour) = keepable(previous) else { return };
+    let files = kept_files(dir, flavour);
+    let stamp = kept_stamp(dir, flavour);
+    let _ = std::fs::remove_file(&stamp);
+    let _ = std::fs::remove_dir_all(&files);
+    let copied = (|| -> std::io::Result<()> {
+        std::fs::create_dir_all(&files)?;
+        for name in previous.files.iter().filter(|name| is_plain_file_name(name)) {
+            copy_entry(&dir.join(name), &files.join(name))?;
+        }
+        Ok(())
+    })();
+    if copied.is_err() {
+        let _ = std::fs::remove_dir_all(&files);
+        return;
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(previous) {
+        let _ = cleaner_core::project::buffers::write_atomic(&stamp, &bytes);
+    }
+}
+
+/// A Linux archive brings `libonnxruntime.so` as a link to the versioned
+/// library, and a copy that followed it would keep the library twice.
+#[cfg(unix)]
+fn copy_entry(from: &Path, to: &Path) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(from)?.file_type().is_symlink() {
+        std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
+    } else {
+        std::fs::copy(from, to).map(|_| ())
+    }
+}
+
+#[cfg(windows)]
+fn copy_entry(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::copy(from, to).map(|_| ())
+}
+
+/// The kept build of `flavour` at `version`, if one is whole: its stamp names
+/// that build, and every file the stamp lists is there.
+fn kept_build(dir: &Path, flavour: &str, version: &str) -> Option<InstalledRuntime> {
+    let stamp: InstalledRuntime = std::fs::read(kept_stamp(dir, flavour))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())?;
+    let files = kept_files(dir, flavour);
+    let whole = stamp.flavour == flavour
+        && stamp.version == version
+        && !stamp.files.is_empty()
+        && stamp
+            .files
+            .iter()
+            .all(|name| is_plain_file_name(name) && std::fs::symlink_metadata(files.join(name)).is_ok());
+    whole.then_some(stamp)
+}
+
+fn forget_kept(dir: &Path, flavour: &str) {
+    let _ = std::fs::remove_file(kept_stamp(dir, flavour));
+    let _ = std::fs::remove_dir_all(kept_files(dir, flavour));
+}
+
+/// Remove every kept build nothing can restore any more: a flavour this
+/// machine no longer publishes, a version an update has moved past, or a copy
+/// that never finished. Only `.kept` is walked, and it holds nothing else.
+fn sweep_kept(dir: &Path) {
+    let kept = runtime_kept(dir);
+    let Ok(entries) = std::fs::read_dir(&kept) else { return };
+    let live: Vec<&str> = cleaner_core::runtime::package::host_flavours()
+        .into_iter()
+        .filter(|package| kept_build(dir, package.flavour.id(), package.ort_version).is_some())
+        .map(|package| package.flavour.id())
+        .collect();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let flavour = name.strip_suffix(".json").unwrap_or(&name);
+        if live.contains(&flavour) {
+            continue;
+        }
+        let path = entry.path();
+        let _ = if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+    }
+    let _ = std::fs::remove_dir(&kept);
 }
 
 /// What the server's answer to a `Range` request means for the bytes already on
@@ -5226,6 +5401,88 @@ mod tests {
             "the CUDA provider the previous stamp named is gone"
         );
         assert_eq!(read_installed(&dir).unwrap().flavour, "directml");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A build switched away from comes back without a download.** The kept
+    /// copy is whole, moves back under the same names, and leaves nothing in
+    /// `.kept` once it is installed again.
+    #[test]
+    fn a_kept_build_is_restored_without_a_download() {
+        let dir = std::env::temp_dir().join(format!("mc-kept-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let host = cleaner_core::runtime::package::host_flavours()[0];
+        let flavour = host.flavour.id();
+
+        std::fs::write(dir.join("libonnxruntime.1.dylib"), b"the library").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("libonnxruntime.1.dylib", dir.join("libonnxruntime.dylib")).unwrap();
+        #[cfg(windows)]
+        std::fs::write(dir.join("libonnxruntime.dylib"), b"the library").unwrap();
+        let installed = InstalledRuntime {
+            flavour: flavour.to_owned(),
+            version: host.ort_version.to_owned(),
+            files: vec!["libonnxruntime.1.dylib".to_owned(), "libonnxruntime.dylib".to_owned()],
+        };
+
+        keep_installed(&dir, &installed);
+        assert_eq!(kept_build(&dir, flavour, host.ort_version).as_ref(), Some(&installed));
+        assert_eq!(kept_build(&dir, flavour, "0.0.0"), None, "only the version the catalogue names");
+        assert!(dir.join("libonnxruntime.1.dylib").exists(), "a copy: the installed build stays");
+
+        // What the switch to another build does to the names.
+        for name in &installed.files {
+            std::fs::remove_file(dir.join(name)).unwrap();
+        }
+
+        let kept = kept_files(&dir, flavour);
+        install_stamped(&dir, flavour, host.ort_version, || move_staged(&kept, &dir)).expect("restored");
+        forget_kept(&dir, flavour);
+        assert_eq!(std::fs::read(dir.join("libonnxruntime.dylib")).unwrap(), b"the library");
+        #[cfg(unix)]
+        assert!(std::fs::symlink_metadata(dir.join("libonnxruntime.dylib")).unwrap().file_type().is_symlink());
+        assert_eq!(read_installed(&dir).unwrap().files.len(), 2);
+        sweep_kept(&dir);
+        assert!(!runtime_kept(&dir).exists(), "nothing left to switch back to");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A stamp is a file on the user's disk. A flavour this machine does not
+    /// publish is not kept, a kept copy missing a file is not restored, and the
+    /// sweep removes both.
+    #[test]
+    fn only_a_whole_published_build_is_kept() {
+        let dir = std::env::temp_dir().join(format!("mc-kept-refused-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let host = cleaner_core::runtime::package::host_flavours()[0];
+        let flavour = host.flavour.id();
+        std::fs::write(dir.join("onnxruntime.dll"), b"the library").unwrap();
+        std::fs::write(dir.join("DirectML.dll"), b"the device").unwrap();
+
+        let foreign = InstalledRuntime {
+            flavour: "../models".to_owned(),
+            version: host.ort_version.to_owned(),
+            files: vec!["onnxruntime.dll".to_owned()],
+        };
+        keep_installed(&dir, &foreign);
+        assert!(!runtime_kept(&dir).exists());
+
+        let installed = InstalledRuntime {
+            flavour: flavour.to_owned(),
+            version: host.ort_version.to_owned(),
+            files: vec!["onnxruntime.dll".to_owned(), "DirectML.dll".to_owned()],
+        };
+        keep_installed(&dir, &installed);
+        std::fs::remove_file(kept_files(&dir, flavour).join("DirectML.dll")).unwrap();
+        assert_eq!(kept_build(&dir, flavour, host.ort_version), None);
+
+        sweep_kept(&dir);
+        assert!(!runtime_kept(&dir).exists());
+        assert!(dir.join("onnxruntime.dll").exists(), "the sweep stays inside .kept");
 
         std::fs::remove_dir_all(&dir).ok();
     }

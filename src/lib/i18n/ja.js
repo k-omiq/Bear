@@ -614,6 +614,7 @@ export const ja = {
         label: 'エンジンのランタイム',
         unavailable: 'このコンピューターでは利用できません',
         flavour: 'ランタイムのビルド',
+        kept: 'ダウンロード済み',
         flavourNeeds: 'このビルドでグラフィックカードを使うには、このコンピューターに {items} をインストールする必要があります。',
         installedDiffers: 'インストール済み：{installed} {installedVersion}。選択中：{chosen} {chosenVersion}。置き換えるには「ダウンロード」を押してください。',
       },
