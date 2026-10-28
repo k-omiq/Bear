@@ -913,6 +913,35 @@ export const en = {
         beam: 'Beam',
         beamPaused: 'Beam (paused)',
       },
+      // Settings > Cloud: redeploy every setup that runs older cloud code, one at a time.
+      updateAll: {
+        action: 'Update all',
+        lead: {
+          one: 'One setup runs older cloud code than this version of Manga Cleaner.',
+          other: '{count} setups run older cloud code than this version of Manga Cleaner.',
+        },
+        unchecked: {
+          one: 'One more could not be checked, so it is left out. Use its own Update.',
+          other: '{count} more could not be checked, so they are left out. Use their own Update.',
+        },
+        progress: 'Updating cloud code, one setup at a time: {done} of {count} done.',
+        stopping: 'Stopping: {done} of {count} done.',
+        finished: 'Update all finished: {updated} updated, {failed} failed, {skipped} skipped.',
+        waiting: 'Waiting',
+        running: 'Updating. Now: {stepKey}',
+        updated: 'Updated',
+        failed: 'Not updated. {reasonKey}',
+        skipped: 'Skipped. {reasonKey}',
+        noSavedKey: 'No Modal key is saved for it on this computer. Use its Update to enter one.',
+        notStarted: 'Update all was stopped before it started.',
+        dismiss: 'Dismiss',
+      },
+      // Which cloud code a setup-made Modal endpoint runs, beside its token.
+      code: {
+        current: 'Runs current cloud code',
+        older: 'Runs older cloud code',
+        unknown: 'Cloud code could not be checked',
+      },
       endpoints: {
         title: 'Endpoints',
         empty: 'No cloud endpoints yet.',
@@ -3561,6 +3590,7 @@ export const en = {
       },
       setupDone: 'Your cloud GPU is set up and selected.',
       setupFailed: 'Cloud setup did not finish. Open Settings, Cloud, to resume or clean up.',
+      updateAllDone: 'Update all finished: {updated} updated, {failed} failed, {skipped} skipped. Settings, Cloud, says why.',
       cleanupDone: 'Cloud resources deleted.',
       cleanupFailed: 'Some cloud resources could not be deleted. Open Settings, Cloud, to try again.',
       endpointRemoved: 'Removed {name} from this computer.',

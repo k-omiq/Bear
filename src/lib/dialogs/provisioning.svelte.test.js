@@ -154,3 +154,130 @@ describe('installations that already exist', () => {
     expect(endpointAccount('beam', 'https://ws--mc-ab12cd-gateway.modal.run/mc/v1')).toBeNull()
   })
 })
+
+describe('Update all', () => {
+  const targets = [
+    { provider: /** @type {const} */ ('modal'), installationId: 'mc-team01', name: 'Studio A' },
+    { provider: /** @type {const} */ ('modal'), installationId: 'mc-team02', name: 'Studio B' },
+    { provider: /** @type {const} */ ('modal'), installationId: 'mc-team03', name: 'Home' },
+  ]
+
+  /**
+   * A backend whose keychain holds a setup key for `saved`, and a runner that
+   * answers each resume as `answers` says, one helper at a time.
+   *
+   * @param {{saved?: string[], answers?: Record<string, string|null>}} [spec]
+   */
+  function fakes({ saved = ['mc-team01', 'mc-team02', 'mc-team03'], answers = {} } = {}) {
+    let running = 0
+    /** @type {any[]} */
+    const runs = []
+    /** @type {(() => void)|null} */
+    let cancel = null
+    const api = {
+      getCloudSecretSummary: vi.fn(async ({ profileId, role }) => ({ present: role === 'setup' && saved.includes(profileId) })),
+      cancelCloudProvisioner: vi.fn(async () => {
+        if (!cancel) return { cancelled: false }
+        cancel()
+        return { cancelled: true }
+      }),
+    }
+    const runner = vi.fn(async (/** @type {any} */ spec) => {
+      running += 1
+      expect(running).toBe(1)
+      runs.push(spec)
+      const code = answers[spec.params.installation_id] ?? null
+      const result = await new Promise((resolve) => {
+        cancel = () => resolve('ERR_CANCELLED')
+        // `wait` answers only when it is stopped.
+        if (code !== 'wait') setTimeout(() => resolve(code), 0)
+      })
+      cancel = null
+      running -= 1
+      return result
+        ? { success: false, error: { code: result } }
+        : { success: true, data: { installation_id: spec.params.installation_id } }
+    })
+    return { api, runner, runs }
+  }
+
+  it('updates every setup one at a time from its saved key, keeping the default', async () => {
+    const { setup, updateAll } = await import('./provisioning.svelte.js')
+    const { api, runner, runs } = fakes()
+    const run = await updateAll(targets, runner, /** @type {any} */ (api))
+    expect(runs.map((spec) => spec.params.installation_id)).toEqual(['mc-team01', 'mc-team02', 'mc-team03'])
+    for (const spec of runs) {
+      expect(spec).toEqual({
+        op: 'resume',
+        provider: 'modal',
+        params: {
+          saved_setup_credential: spec.params.installation_id,
+          installation_id: spec.params.installation_id,
+          options: {},
+          remember_setup_credential: true,
+          keep_selected_target: true,
+        },
+      })
+    }
+    expect(run?.status).toBe('done')
+    expect(run?.items.map((item) => item.state)).toEqual(['updated', 'updated', 'updated'])
+    expect(setup.unfinished).toBeNull()
+  })
+
+  it('goes on past a failure, skips a setup with no saved key, and keeps the failed one to resume', async () => {
+    const { setup, updateAll } = await import('./provisioning.svelte.js')
+    const { api, runner, runs } = fakes({ saved: ['mc-team01', 'mc-team03'], answers: { 'mc-team01': 'ERR_EXECUTION_FAILED' } })
+    const run = await updateAll(targets, runner, /** @type {any} */ (api))
+    expect(runs.map((spec) => spec.params.installation_id)).toEqual(['mc-team01', 'mc-team03'])
+    expect(run?.items).toMatchObject([
+      { installationId: 'mc-team01', state: 'failed', reasonKey: 'settings.cloud.setup.error.failed' },
+      { installationId: 'mc-team02', state: 'skipped', reasonKey: 'settings.inference.updateAll.noSavedKey' },
+      { installationId: 'mc-team03', state: 'updated', reasonKey: null },
+    ])
+    // The later success does not take away the Resume the failure left.
+    expect(setup.unfinished).toMatchObject({ provider: 'modal', installationId: 'mc-team01' })
+  })
+
+  it('a refused key is a failure with its reason, and leaves nothing to resume', async () => {
+    const { setup, updateAll, forgetUnfinished } = await import('./provisioning.svelte.js')
+    forgetUnfinished()
+    const { api, runner } = fakes({ answers: { 'mc-team02': 'ERR_UNAPPROVED_PLAN' } })
+    const run = await updateAll(targets, runner, /** @type {any} */ (api))
+    expect(run?.items[1]).toMatchObject({ state: 'failed', reasonKey: 'settings.cloud.setup.error.wrongAccount' })
+    expect(setup.unfinished).toBeNull()
+  })
+
+  it('Stop cancels the running setup as a single Stop does and starts no other', async () => {
+    const { setup, stopUpdateAll, updateAll, forgetUnfinished } = await import('./provisioning.svelte.js')
+    forgetUnfinished()
+    const { api, runner, runs } = fakes({ answers: { 'mc-team01': 'wait' } })
+    const pending = updateAll(targets, runner, /** @type {any} */ (api))
+    await vi.waitFor(() => expect(setup.run?.status).toBe('running'))
+    await stopUpdateAll(/** @type {any} */ (api))
+    const run = await pending
+    expect(api.cancelCloudProvisioner).toHaveBeenCalledTimes(1)
+    expect(runs).toHaveLength(1)
+    expect(run?.items).toMatchObject([
+      { state: 'failed', reasonKey: 'settings.cloud.setup.error.cancelled' },
+      { state: 'skipped', reasonKey: 'settings.inference.updateAll.notStarted' },
+      { state: 'skipped', reasonKey: 'settings.inference.updateAll.notStarted' },
+    ])
+    expect(setup.unfinished).toMatchObject({ installationId: 'mc-team01' })
+  })
+
+  it('starts nothing while a setup runs, and says how it ended when no Settings watches', async () => {
+    const { setup, updateAll, clearUpdateAll } = await import('./provisioning.svelte.js')
+    const { app, clearNotices } = await import('../state/app.svelte.js')
+    clearNotices()
+    const { api, runner } = fakes()
+    setup.run = /** @type {any} */ ({ id: -1, status: 'running' })
+    expect(await updateAll(targets, runner, /** @type {any} */ (api))).toBeNull()
+    expect(runner).not.toHaveBeenCalled()
+    setup.run = null
+    await updateAll(targets, runner, /** @type {any} */ (api))
+    expect(app.notices.filter((notice) => notice.key.startsWith('notice.cloud.setup'))).toEqual([])
+    expect(app.notices.at(-1)).toMatchObject({ key: 'notice.cloud.updateAllDone', params: { updated: 3, failed: 0, skipped: 0 } })
+    clearUpdateAll()
+    expect(setup.updateAll).toBeNull()
+  })
+})

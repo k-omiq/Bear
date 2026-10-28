@@ -108,7 +108,20 @@
   import { cloud, dismissRecovered, abandonRecovered, retryCloudRecovery, refreshCloudReadiness, recheckCloudConfiguration, saveCloudFlux3Generation, setCloudPermission } from '../state/cloud.svelte.js'
   import { FLUX3_GENERATION_PARTS } from '../model/model-names.js'
   import { cloudGpu } from '../state/cloudgpu.svelte.js'
-  import { endpointAccount, forgetUnfinished, healthKey, providerPaused, removeEndpoint, setup } from './provisioning.svelte.js'
+  import {
+    backendRunner,
+    clearUpdateAll,
+    endpointAccount,
+    forgetUnfinished,
+    healthKey,
+    providerPaused,
+    removeEndpoint,
+    setup,
+    setupStepKey,
+    stopUpdateAll,
+    updateAll,
+    watchUpdateAll,
+  } from './provisioning.svelte.js'
   import { t } from '../i18n/index.js'
   import { recoveryActions } from '../model/cloudnotices.js'
 
@@ -133,6 +146,7 @@
     manualTokenId: `${uid}-manual-token-id`,
     manualSecret: `${uid}-manual-secret`,
     generation: `${uid}-generation`,
+    updateAll: `${uid}-update-all`,
   }
 
   const permissionOptions = [
@@ -164,6 +178,8 @@
    * @type {Record<string, boolean>}
    */
   let current = $state({})
+  /** Whether `current` has been read at least once, so an absent endpoint is one that could not answer. */
+  let currentRead = $state(false)
   /**
    * The last connection test of each endpoint.
    *
@@ -305,7 +321,9 @@
     return { tone: 'attention', text: t('settings.inference.status.attention', { reasonKey }) }
   })
 
-  const setupRunning = $derived(setup.run?.status === 'running')
+  const updatingAll = $derived(setup.updateAll?.status === 'running')
+  // Between two setups of an Update all no helper runs, but nothing else may start.
+  const setupRunning = $derived(setup.run?.status === 'running' || updatingAll)
   const unfinished = $derived(!task && !setupRunning ? setup.unfinished : null)
   const missingToken = $derived(selectedEndpoint && tokens[selectedEndpoint.key] === false ? selectedEndpoint : null)
   // A Modal installation deployed by an older release answers without the GPU
@@ -317,6 +335,23 @@
       (cloudGpu.unsupported === 'outdated' || current[selectedEndpoint.key] === false)
       ? selectedEndpoint
       : null,
+  )
+  /**
+   * Whether a setup-made Modal endpoint runs older cloud code than this app
+   * (true), this app's (false), or no one could tell (null: no token, not
+   * reachable, or not asked yet). Null is never taken for current.
+   *
+   * @param {{provider: 'modal'|'beam', id: string, key: string}} ep
+   * @returns {boolean|null}
+   */
+  function runsOlder(ep) {
+    if (ep.provider !== 'modal' || !madeBySetup(ep)) return null
+    if (ep.key === selectedKey && cloudGpu.unsupported === 'outdated') return true
+    return Object.hasOwn(current, ep.key) ? !current[ep.key] : null
+  }
+  const olderEndpoints = $derived(endpoints.filter((ep) => runsOlder(ep) === true))
+  const uncheckedEndpoints = $derived(
+    currentRead ? endpoints.filter((ep) => ep.provider === 'modal' && madeBySetup(ep) && runsOlder(ep) === null) : [],
   )
   const attempts = $derived([...(cloud.recovery?.needsAttention ?? []), ...(cloud.recovery?.stillRunning ?? [])])
   /** @type {string|null} */
@@ -417,7 +452,10 @@
         }
       }),
     )
-    if (alive && mine === loadSeq) current = runs
+    if (alive && mine === loadSeq) {
+      current = runs
+      currentRead = true
+    }
   }
 
   /** After anything that changes an endpoint or its token. */
@@ -433,13 +471,16 @@
     void Promise.resolve(backend.forgetCloudSecretDenials?.()).catch(() => {})
     void load()
     void refreshCloudReadiness(backend)
-    // Settings was closed while a setup ran: show its checklist again.
-    if (setup.run?.status === 'running') {
+    const unwatch = watchUpdateAll()
+    // Settings was closed while a setup ran: show its checklist again. One
+    // that is part of an Update all shows in its list instead.
+    if (setup.run?.status === 'running' && !updatingAll) {
       task = { action: 'setup' }
       taskOpener = ['data-setup', 'open']
     }
     return () => {
       alive = false
+      unwatch()
       wipeTokenForm()
       wipeManualSecrets()
     }
@@ -771,6 +812,58 @@
     void focusSoon(() => (opener && byData(opener[0], opener[1])) || document.getElementById(ids.endpoints))
   }
 
+  /* ---------- update all ---------- */
+
+  /** Every endpoint that runs older cloud code, one at a time (`updateAll`). */
+  async function startUpdateAll() {
+    if (task || setupRunning || olderEndpoints.length === 0) return
+    const targets = olderEndpoints.map((ep) => ({ provider: ep.provider, installationId: ep.id, name: ep.name }))
+    const pending = updateAll(targets, backendRunner(backend), backend)
+    void focusSoon(() => document.getElementById(ids.updateAll))
+    await pending
+    if (!alive) return
+    await reload()
+    void focusSoon(() => document.getElementById(ids.updateAll))
+  }
+
+  function dismissUpdateAll() {
+    clearUpdateAll()
+    void focusSoon(() => byData('data-update-all', 'open') || document.getElementById(ids.endpoints))
+  }
+
+  /** @param {import('./provisioning.svelte.js').UpdateAllItem} item */
+  function updateAllItemText(item) {
+    switch (item.state) {
+      case 'waiting':
+        return t('settings.inference.updateAll.waiting')
+      case 'running': {
+        const step = setup.run?.installationId === item.installationId
+          ? setup.run.steps.findLast((candidate) => candidate.state === 'running')
+          : null
+        return t('settings.inference.updateAll.running', { stepKey: setupStepKey(step?.id ?? '') })
+      }
+      case 'updated':
+        return t('settings.inference.updateAll.updated')
+      case 'failed':
+        return t('settings.inference.updateAll.failed', { reasonKey: item.reasonKey ?? 'settings.cloud.setup.error.generic' })
+      default:
+        return t('settings.inference.updateAll.skipped', { reasonKey: item.reasonKey ?? 'settings.inference.updateAll.notStarted' })
+    }
+  }
+
+  /** @param {import('./provisioning.svelte.js').UpdateAllRun} run */
+  function updateAllSummary(run) {
+    const count = (/** @type {string} */ state) => run.items.filter((item) => item.state === state).length
+    if (run.status === 'running') {
+      const done = run.items.filter((item) => item.state !== 'waiting' && item.state !== 'running').length
+      return t(run.stopping ? 'settings.inference.updateAll.stopping' : 'settings.inference.updateAll.progress', {
+        done,
+        count: run.items.length,
+      })
+    }
+    return t('settings.inference.updateAll.finished', { updated: count('updated'), failed: count('failed'), skipped: count('skipped') })
+  }
+
   /** @param {NonNullable<typeof unfinished>} marker */
   function resumeUnfinished(marker) {
     void openTask({ action: 'resume', provider: marker.provider, installationId: marker.installationId }, [
@@ -1037,6 +1130,41 @@
       <p class="empty">{t('settings.inference.endpoints.empty')}</p>
     {:else if endpoints.length > 0}
       {#if endpoints.length > 1}<p class="note switch">{t('settings.inference.endpoints.switchNote')}</p>{/if}
+      {#if setup.updateAll}
+        {@const run = setup.updateAll}
+        <div class="update-all" data-update-all-run={run.status}>
+          <p class="update-all-status" id={ids.updateAll} tabindex="-1" role="status">{updateAllSummary(run)}</p>
+          <ul class="update-all-list">
+            {#each run.items as item (item.installationId)}
+              <li data-update-all-item={item.installationId} data-state={item.state} class:bad={item.state === 'failed'}>
+                <span class="update-all-name">{item.name}</span>
+                <span>{updateAllItemText(item)}</span>
+              </li>
+            {/each}
+          </ul>
+          <div class="actions">
+            {#if run.status === 'running'}
+              <Button size="sm" disabled={run.stopping} onclick={() => void stopUpdateAll(backend)}>
+                {run.stopping ? t('settings.cloud.setup.running.stopping') : t('settings.cloud.setup.running.stop')}
+              </Button>
+            {:else}
+              <Button size="sm" data-update-all-dismiss onclick={dismissUpdateAll}>{t('settings.inference.updateAll.dismiss')}</Button>
+            {/if}
+          </div>
+        </div>
+      {:else if olderEndpoints.length > 0 && !task && !setupRunning}
+        <div class="update-all">
+          <p class="note">
+            {t('settings.inference.updateAll.lead', { count: olderEndpoints.length })}
+            {#if uncheckedEndpoints.length > 0}{t('settings.inference.updateAll.unchecked', { count: uncheckedEndpoints.length })}{/if}
+          </p>
+          <div class="actions">
+            <Button size="sm" variant="soft" data-update-all="open" onclick={() => void startUpdateAll()}>
+              {t('settings.inference.updateAll.action')}
+            </Button>
+          </div>
+        </div>
+      {/if}
       <ul class="list">
         {#each endpoints as ep, index (ep.key)}
           {@const test = tests[ep.key]}
@@ -1070,6 +1198,12 @@
                 </div>
                 <div class="facts">
                   <span class="token" class:missing={tokens[ep.key] === false}>{tokenText(ep.key)}</span>
+                  {#if ep.provider === 'modal' && madeBySetup(ep) && currentRead}
+                    {@const older = runsOlder(ep)}
+                    <span class="code" class:missing={older === true} data-code={ep.key}>
+                      {t(older === true ? 'settings.inference.code.older' : older === false ? 'settings.inference.code.current' : 'settings.inference.code.unknown')}
+                    </span>
+                  {/if}
                   <button type="button" class="link" data-token={ep.key} onclick={() => openTokenForm(ep)}>
                     {tokens[ep.key] === true ? t('settings.inference.token.replace') : t('settings.inference.token.add')}
                   </button>
@@ -1086,9 +1220,11 @@
                 </p>
               </div>
               <div class="row-actions">
-                {#if ep.provider === 'modal' && madeBySetup(ep) && !task && !setupRunning}
-                  <!-- Always here: redeploy this version's code, or change the
-                       setup's options (page denoise, GPU, idle time). -->
+                {#if ep.provider === 'modal' && madeBySetup(ep) && runsOlder(ep) !== false && !task && !setupRunning}
+                  <!-- Redeploy this version's code, or change the setup's
+                       options (page denoise, GPU, idle time). Gone once the
+                       setup is known to run this version's code; Set up
+                       still reaches its options. -->
                   <Button
                     size="sm"
                     data-update-row={ep.key}
@@ -1565,8 +1701,33 @@
     align-items: baseline;
     font-size: 11.5px;
   }
-  .token { color: var(--t2) }
-  .token.missing { color: var(--warn) }
+  .token,
+  .code { color: var(--t2) }
+  .token.missing,
+  .code.missing { color: var(--warn) }
+  .update-all {
+    display: grid;
+    gap: var(--s-2);
+    margin-bottom: var(--s-3);
+  }
+  .update-all-status { margin: 0; font-size: 12px; color: var(--text) }
+  .update-all-status:focus { outline: none }
+  .update-all-list {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 11.5px;
+    color: var(--t2);
+  }
+  .update-all-list li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--s-2);
+  }
+  .update-all-list li.bad { color: var(--warn) }
+  .update-all-name { color: var(--text); overflow-wrap: anywhere }
   .link {
     padding: 0;
     border: 0;

@@ -727,6 +727,35 @@ export const fr = {
         beam: 'Beam',
         beamPaused: 'Beam (en pause)',
       },
+      // Settings > Cloud: redeploy every setup that runs older cloud code, one at a time.
+      updateAll: {
+        action: 'Tout mettre à jour',
+        lead: {
+          one: 'Une configuration exécute un code cloud plus ancien que cette version de Manga Cleaner.',
+          other: '{count} configurations exécutent un code cloud plus ancien que cette version de Manga Cleaner.',
+        },
+        unchecked: {
+          one: 'Une autre n’a pas pu être vérifiée et reste à part. Utilisez son propre bouton Mettre à jour.',
+          other: '{count} autres n’ont pas pu être vérifiées et restent à part. Utilisez leur propre bouton Mettre à jour.',
+        },
+        progress: 'Mise à jour du code cloud, une configuration à la fois : {done} sur {count} terminées.',
+        stopping: 'Arrêt en cours : {done} sur {count} terminées.',
+        finished: 'Mise à jour terminée : {updated} à jour, {failed} en échec, {skipped} ignorées.',
+        waiting: 'En attente',
+        running: 'Mise à jour. Étape : {stepKey}',
+        updated: 'À jour',
+        failed: 'Pas mise à jour. {reasonKey}',
+        skipped: 'Ignorée. {reasonKey}',
+        noSavedKey: 'Aucune clé Modal n’est enregistrée pour elle sur cet ordinateur. Utilisez son bouton Mettre à jour pour en saisir une.',
+        notStarted: 'Tout mettre à jour a été arrêté avant son tour.',
+        dismiss: 'Fermer',
+      },
+      // Which cloud code a setup-made Modal endpoint runs, beside its token.
+      code: {
+        current: 'Exécute le code cloud actuel',
+        older: 'Exécute un code cloud plus ancien',
+        unknown: 'Le code cloud n’a pas pu être vérifié',
+      },
       endpoints: {
         title: 'Endpoints',
         empty: 'Aucun endpoint cloud pour l’instant.',
@@ -2713,6 +2742,7 @@ export const fr = {
       },
       setupDone: 'Votre GPU cloud est configuré et sélectionné.',
       setupFailed: 'La configuration cloud n’a pas abouti. Ouvrez Réglages, Cloud, pour reprendre ou faire le ménage.',
+      updateAllDone: 'Mise à jour terminée : {updated} à jour, {failed} en échec, {skipped} ignorées. Réglages, Cloud, indique pourquoi.',
       cleanupDone: 'Ressources cloud supprimées.',
       cleanupFailed: 'Certaines ressources cloud n’ont pas pu être supprimées. Ouvrez Réglages, Cloud, pour réessayer.',
       endpointRemoved: '{name} retiré de cet ordinateur.',

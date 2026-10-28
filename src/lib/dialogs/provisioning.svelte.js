@@ -158,6 +158,15 @@ export const setup = $state({
   unfinished: readUnfinished(),
   /** How many provisioners are on screen, so a run nobody watches can say how it ended. */
   watchers: 0,
+  /**
+   * The last Update all, kept once it ends so Settings can show how each
+   * setup came out; `clearUpdateAll` drops it.
+   *
+   * @type {UpdateAllRun|null}
+   */
+  updateAll: null,
+  /** How many Cloud settings are on screen, so an Update all nobody watches can say how it ended. */
+  updateAllWatchers: 0,
 })
 
 /* ------------------------------------------------------------------ */
@@ -702,6 +711,162 @@ export async function stopSetup(backend = getBackend()) {
     return /** @type {any} */ (answer)?.cancelled === true
   } catch {
     return false
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Update all                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One setup in an Update all.
+ *
+ * @typedef {Object} UpdateAllItem
+ * @property {'modal'|'beam'} provider
+ * @property {string} installationId
+ * @property {string} name
+ * @property {'waiting'|'running'|'updated'|'failed'|'skipped'} state
+ * @property {string|null} reasonKey - why it failed or was skipped
+ */
+
+/**
+ * @typedef {Object} UpdateAllRun
+ * @property {'running'|'done'} status
+ * @property {boolean} stopping - Stop was pressed: no further setup starts
+ * @property {UpdateAllItem[]} items - in the order they run
+ */
+
+/**
+ * Update every setup in `targets`, one after another, each with the `resume`
+ * a single Update runs from its saved Modal key. One at a time because there
+ * is one helper run (`runSetup` refuses a second), its progress events do not
+ * say which setup they are for, and Stop cancels whatever helper is running.
+ * Each run also reads one setup key from the keychain, so any prompt for it
+ * comes alone.
+ *
+ * A setup with no saved key is skipped: its own Update asks for one. A
+ * failure is recorded and the next setup starts; it leaves its setup where a
+ * single failed Update would, with its Resume. Stop cancels the running setup
+ * as a single Stop does and starts no other. The default endpoint stays the
+ * default (`keep_selected_target`).
+ *
+ * @param {Array<{provider: 'modal'|'beam', installationId: string, name: string}>} targets
+ * @param {Runner} runner
+ * @param {import('../api/backend.js').Backend} [backend]
+ * @returns {Promise<UpdateAllRun|null>} null when a setup or another Update all was already running
+ */
+export async function updateAll(targets, runner, backend = getBackend()) {
+  if (setup.run?.status === 'running' || setup.updateAll?.status === 'running') return null
+  setup.updateAll = {
+    status: 'running',
+    stopping: false,
+    items: targets.map((target) => ({ ...target, state: 'waiting', reasonKey: null })),
+  }
+  const batch = setup.updateAll
+  const before = setup.unfinished
+  /** @type {UnfinishedSetup|null} */
+  let left = null
+  const updated = new Set()
+  /** @param {number} index @param {Partial<UpdateAllItem>} patch */
+  const mark = (index, patch) => {
+    batch.items[index] = { ...batch.items[index], ...patch }
+  }
+  // The batch says how it ended, once; the runs in it do not each say so.
+  setup.watchers += 1
+  try {
+    for (const [index, item] of batch.items.entries()) {
+      if (batch.stopping) {
+        mark(index, { state: 'skipped', reasonKey: 'settings.inference.updateAll.notStarted' })
+        continue
+      }
+      let saved = false
+      try {
+        const summary = await backend.getCloudSecretSummary?.({ provider: item.provider, profileId: item.installationId, role: 'setup' })
+        saved = item.provider === 'modal' && summary?.present === true
+      } catch {
+        saved = false
+      }
+      if (!saved || batch.stopping) {
+        mark(index, { state: 'skipped', reasonKey: saved ? 'settings.inference.updateAll.notStarted' : 'settings.inference.updateAll.noSavedKey' })
+        continue
+      }
+      mark(index, { state: 'running' })
+      const id = item.installationId
+      const outcome = await runSetup(
+        {
+          op: 'resume',
+          provider: item.provider,
+          installationId: id,
+          params: {
+            saved_setup_credential: id,
+            installation_id: id,
+            // As a single Update does: the choices of a setup that did not finish, else the ones it recorded.
+            options: before?.installationId === id ? before.options : {},
+            remember_setup_credential: true,
+            keep_selected_target: true,
+          },
+        },
+        runner,
+        backend,
+      )
+      if (outcome.ok) {
+        updated.add(id)
+        mark(index, { state: 'updated' })
+      } else {
+        mark(index, { state: 'failed', reasonKey: setupErrorKey(outcome.errorCode, 'resume') })
+        if (setup.unfinished?.installationId === id) left = setup.unfinished
+      }
+    }
+  } finally {
+    setup.watchers = Math.max(0, setup.watchers - 1)
+  }
+  // Each run replaces the one marker of an unfinished setup. Keep the last
+  // update that did not finish, else what was there before unless it was
+  // finished here.
+  setUnfinished(left ?? (before && !updated.has(before.installationId) ? before : null))
+  batch.status = 'done'
+  if (setup.updateAllWatchers === 0) {
+    const count = (/** @type {UpdateAllItem['state']} */ state) => batch.items.filter((item) => item.state === state).length
+    const failed = count('failed')
+    notify({
+      key: 'notice.cloud.updateAllDone',
+      params: { updated: count('updated'), failed, skipped: count('skipped') },
+      ...(failed > 0 ? { tone: 'warn' } : {}),
+    })
+  }
+  return batch
+}
+
+const STOP_RETRY_MS = 250
+
+/**
+ * Stop an Update all: the setup running now is cancelled as a single Stop
+ * cancels it, and no other starts.
+ *
+ * @param {import('../api/backend.js').Backend} [backend]
+ */
+export async function stopUpdateAll(backend = getBackend()) {
+  const batch = setup.updateAll
+  if (batch?.status !== 'running' || batch.stopping) return
+  batch.stopping = true
+  // A run that has not reached its helper yet cannot take the stop: ask
+  // again until it has, or until the run is over.
+  while (setup.run?.status === 'running' && !(await stopSetup(backend))) {
+    await new Promise((resolve) => setTimeout(resolve, STOP_RETRY_MS))
+  }
+}
+
+/** Drop a finished Update all's results. */
+export function clearUpdateAll() {
+  if (setup.updateAll?.status === 'running') return
+  setup.updateAll = null
+}
+
+/** Cloud settings came on screen; it shows how an Update all ended from now on. */
+export function watchUpdateAll() {
+  setup.updateAllWatchers += 1
+  return () => {
+    setup.updateAllWatchers = Math.max(0, setup.updateAllWatchers - 1)
   }
 }
 
