@@ -1220,17 +1220,17 @@
                 </p>
               </div>
               <div class="row-actions">
-                {#if ep.provider === 'modal' && madeBySetup(ep) && runsOlder(ep) !== false && !task && !setupRunning}
-                  <!-- Redeploy this version's code, or change the setup's
-                       options (page denoise, GPU, idle time). Gone once the
-                       setup is known to run this version's code; Set up
-                       still reaches its options. -->
+                {#if ep.provider === 'modal' && madeBySetup(ep) && !task && !setupRunning}
+                  <!-- Both open the same screen: redeploy this version's code,
+                       or change the setup's options (page denoise, GPU, idle
+                       time). A setup known to run this version's code has
+                       nothing to update, so it is named for its options. -->
                   <Button
                     size="sm"
                     data-update-row={ep.key}
                     onclick={() => openTask({ action: 'resume', provider: ep.provider, installationId: ep.id }, ['data-update-row', ep.key])}
                   >
-                    {t('settings.inference.endpoints.update')}
+                    {runsOlder(ep) === false ? t('settings.cloud.setup.update.options') : t('settings.inference.endpoints.update')}
                   </Button>
                 {/if}
                 <Button size="sm" disabled={providerPaused(ep.provider)} onclick={() => testEndpoint(ep)}>{t('settings.inference.endpoints.test')}</Button>

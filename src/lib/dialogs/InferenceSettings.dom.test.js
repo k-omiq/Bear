@@ -431,7 +431,7 @@ describe('Update all', () => {
     for (const name of ['Studio A', 'Studio B', 'Home', 'Old laptop']) expect(rowUpdate(name)).toBeTruthy()
   })
 
-  it('is not offered, and a current setup has no Update, when every checked setup is current', async () => {
+  it('is not offered, and a current setup offers Change options instead of Update, when every checked setup is current', async () => {
     const backend = createMockBackend({ timing: ZERO, cloudSetupsScenario: 'demo' })
     setCloudAllowed(true)
     setBackend(backend)
@@ -441,6 +441,9 @@ describe('Update all', () => {
     expect(rowUpdate('Studio A')).toBeNull()
     expect(rowUpdate('Home')).toBeNull()
     expect(rowUpdate('Old laptop')).toBeTruthy()
+    const options = within(row('Studio A')).getByRole('button', { name: t('settings.cloud.setup.update.options') })
+    await fireEvent.click(options)
+    expect(await screen.findByText(t('settings.cloud.setup.update.optionsNote'))).toBeTruthy()
   })
 
   it('updates each older setup in turn, says how each came out, and keeps the default', async () => {
@@ -465,6 +468,7 @@ describe('Update all', () => {
     // The list is read again: the updated setup is current and has no Update now.
     await waitFor(() => expect(within(row('Studio A')).getByText(t('settings.inference.code.current'))).toBeTruthy(), SLOW)
     expect(rowUpdate('Studio A')).toBeNull()
+    expect(within(row('Studio A')).getByRole('button', { name: t('settings.cloud.setup.update.options') })).toBeTruthy()
     expect(rowUpdate('Studio B')).toBeTruthy()
 
     await fireEvent.click(screen.getByRole('button', { name: t('settings.inference.updateAll.dismiss') }))
