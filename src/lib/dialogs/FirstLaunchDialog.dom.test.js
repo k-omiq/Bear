@@ -429,16 +429,16 @@ describe('the pipelines', () => {
   })
 
   it('say what this computer has under the cards, from the backend’s memory figures', async () => {
-    backend.listWorkflowCapabilities.mockResolvedValue({ samInstalled: false, totalBytes: 16e9, roomBytes: 6e9 })
+    backend.listWorkflowCapabilities.mockResolvedValue({ samInstalled: false, totalBytes: 16e9, roomBytes: 4e9 })
     const rendered = open('detection')
-    const machine = t('detectionMode.machine', { total: 16e9, free: 6e9 })
+    const machine = t('detectionMode.machine', { total: 16e9, free: 4e9 })
     await waitFor(() => expect(rendered.container.querySelector('.hardware')?.textContent).toContain(machine))
     // Too little room for the lettering mask: a first setup stays on Normal.
     expect(session.detectionMode).toBe('normal')
   })
 
   it('start a first setup on Advanced only when the free memory allows the lettering mask', async () => {
-    backend.listWorkflowCapabilities.mockResolvedValue({ samInstalled: false, totalBytes: 32e9, roomBytes: 10e9 })
+    backend.listWorkflowCapabilities.mockResolvedValue({ samInstalled: false, totalBytes: 32e9, roomBytes: 5e9 })
     const rendered = open('detection')
     await waitFor(() => expect(session.detectionMode).toBe('advanced'))
     expect(card(rendered, 'advanced').getAttribute('aria-checked')).toBe('true')
@@ -448,9 +448,9 @@ describe('the pipelines', () => {
 
     // Just under the line, Normal.
     session.firstLaunchOffered = false
-    backend.listWorkflowCapabilities.mockResolvedValue({ samInstalled: false, totalBytes: 32e9, roomBytes: 10e9 - 1 })
+    backend.listWorkflowCapabilities.mockResolvedValue({ samInstalled: false, totalBytes: 32e9, roomBytes: 5e9 - 1 })
     open('detection')
-    await waitFor(() => expect(firstLaunch.memory?.roomBytes).toBe(10e9 - 1))
+    await waitFor(() => expect(firstLaunch.memory?.roomBytes).toBe(5e9 - 1))
     expect(session.detectionMode).toBe('normal')
     cleanup()
     resetFirstLaunch()

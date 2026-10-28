@@ -7,7 +7,7 @@
    *
    * The memory figures are the measured ones: a Normal run peaks at about
    * 2.5 GB with LaMa, and the SAM-TS-L lettering mask Advanced adds needs
-   * about 10 GB free (`cleaner-core/src/sam_ts.rs#MIN_ROOM_BYTES`). Neither
+   * about 5 GB free (`cleaner-core/src/sam_ts.rs#MIN_ROOM_BYTES`). Neither
    * needs a graphics card. When the backend says what this computer has, one
    * line under the cards says so; Advanced with less free memory still runs,
    * slower, and the run says so when it starts.

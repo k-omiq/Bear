@@ -17,13 +17,17 @@ use crate::image::Raster;
 
 pub const SIDE: usize = 1024;
 pub const ENCODER: &str = "koharu_samts_encoder.onnx";
+/// The encoder's weights, beside it as ONNX external data so the runtime maps
+/// them instead of copying them out of the graph file.
+pub const ENCODER_DATA: &str = "koharu_samts_encoder.onnx.data";
 pub const HEAD: &str = "koharu_samts_text_head.onnx";
 
-/// The measured CPU path peaked at 8.55 GB. Reserve room for its tensors,
-/// decoded page and editor before loading either graph. Below it the mask
-/// still loads, slower, and the run says so when it starts; it is a warning,
-/// never a refusal.
-pub const MIN_ROOM_BYTES: u64 = 10_000_000_000;
+/// The measured CPU path peaked at 3.01 GiB (3.23 GB) over three real pages
+/// with the per-head graph and no arena (docs/ram-analysis-2026-10-28.md).
+/// Reserve room for its tensors, decoded page and editor before loading
+/// either graph. Below it the mask still loads, slower, and the run says so
+/// when it starts; it is a warning, never a refusal.
+pub const MIN_ROOM_BYTES: u64 = 5_000_000_000;
 
 /// The `models.kind.*` key the interface names this model under, in notices
 /// and the loaded-models tab alike.
@@ -66,7 +70,7 @@ impl Drop for SessionPermit {
 
 pub fn ensure_memory_room(room: Option<u64>) -> Result<(), String> {
     if room.is_some_and(|bytes| bytes >= MIN_ROOM_BYTES) { Ok(()) } else {
-        Err("The SAM-TS-L lettering mask needs at least 10 GB of measured process memory room".into())
+        Err("The SAM-TS-L lettering mask needs at least 5 GB of measured process memory room".into())
     }
 }
 
@@ -339,8 +343,15 @@ impl SamTsSession {
             if let Some(profiles) = profiles.as_ref() {
                 webgpu_session(path, &profiles.0[index])
             } else {
+                // The CPU arena keeps every block it grew and peaked at
+                // 11.8 GiB across two pages; without it and the memory
+                // pattern, freed attention temporaries go back to the OS.
+                // Logits are bit-identical either way.
                 ort::session::Session::builder().map_err(|e| e.to_string())?
                     .with_intra_threads(4).map_err(|e| e.to_string())?
+                    .with_memory_pattern(false).map_err(|e| e.to_string())?
+                    .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
+                    .map_err(|e| e.to_string())?
                     .commit_from_file(path).map_err(|e| e.to_string())
                     .map(|session| crate::accel::Model::new(session, backend))
             }
@@ -356,6 +367,7 @@ impl SamTsSession {
             crate::registry::Kind::TextDetector,
             crate::registry::Footprint::weights_of(&[
                 &graph_dir.join(ENCODER),
+                &graph_dir.join(ENCODER_DATA),
                 &graph_dir.join(HEAD),
             ]),
             crate::registry::Device::accelerator(backend),
@@ -392,7 +404,7 @@ impl SamTsSession {
         let input = ort::value::Tensor::from_array(([1usize, 3, SIDE, SIDE], prepared.chw.clone()))
             .map_err(|e| e.to_string())?;
         let started = Instant::now();
-        let _turn = self.encoder.turn();
+        let encoder_turn = self.encoder.turn();
         let embedding = self
             .encoder
             .run_with_options(ort::inputs!["prepared_rgb" => input], &options)
@@ -413,6 +425,9 @@ impl SamTsSession {
         let embedding_values = values.to_vec();
         let encoder_time = started.elapsed();
         drop(embedding);
+        // Both graphs share the WebGPU turn, which is not reentrant: the head
+        // waited on it forever while the shadowed encoder guard still held it.
+        drop(encoder_turn);
         cancel.check()?;
         let input = ort::value::Tensor::from_array(([1usize, 256, 64, 64], embedding_values))
             .map_err(|e| e.to_string())?;

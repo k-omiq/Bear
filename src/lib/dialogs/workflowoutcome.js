@@ -99,7 +99,7 @@ const RULES = [
   [/does not match the pinned manifest|copied .*graph failed verification/i, WRONG_MODEL],
   [/has \d+ bytes; expected \d+|SHA-256 mismatch/i, (phase) => (phase === 'models' ? WRONG_MODEL : MODEL_MISSING)],
   [/not installed|failed SHA-256|failed verification|graphs are missing/i, MODEL_MISSING],
-  [/10 GB|memory room/i, { kind: 'memory' }],
+  [/5 GB|memory room/i, { kind: 'memory' }],
   [/speed measurement runs/i, { kind: 'measuring' }],
   [/source geometry changed/i, { kind: 'sourceLimit', reason: 'geometry' }],
   [/tile PNG exceeds transfer limit/i, { kind: 'sourceLimit', reason: 'tile' }],

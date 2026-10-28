@@ -505,7 +505,7 @@ export const fr = {
         allTextMissing: 'Avancé nécessite {bytes:memory} de téléchargements.',
         allTextImport: 'Avancé nécessite le masque de lettrage SAM-TS-L. Installez-le sous Plus d’options.',
         allTextSamMismatch: 'Le masque de lettrage SAM-TS-L n’a pas passé sa vérification. Réinstallez-le sous Plus d’options.',
-        allTextMemory: 'Moins de 10 Go de mémoire sont libres, Avancé sera donc lent. Fermez d’autres applications pour une exécution plus rapide.',
+        allTextMemory: 'Moins de 5 Go de mémoire sont libres, Avancé sera donc lent. Fermez d’autres applications pour une exécution plus rapide.',
         runtime: 'Il ne peut pas s’exécuter tant que le runtime du moteur, ONNX Runtime, n’est pas installé. Téléchargez-le dans Performances.',
         runtimeDownloading: 'Il pourra s’exécuter une fois le téléchargement du runtime du moteur, ONNX Runtime, terminé.',
         runtimeUnavailable: 'Il ne peut pas s’exécuter ici : le runtime du moteur, ONNX Runtime, n’a pas de version pour cet ordinateur.',
@@ -521,7 +521,7 @@ export const fr = {
         note: 'Analyse une page avec les modèles de détection sélectionnés. Toute écriture de composant nécessite toujours une approbation explicite et une prise en charge qualifiée de l’écriture.',
       },
       sam: {
-        memory: 'Tourne lentement avec moins de 10 Go de mémoire libre.',
+        memory: 'Tourne lentement avec moins de 5 Go de mémoire libre.',
         chooserTitle: 'Dossier contenant les deux graphes du masque de lettrage SAM-TS-L',
       },
       rtFull: {
@@ -1587,7 +1587,7 @@ export const fr = {
     advanced: {
       name: 'Avancé',
       about: 'Nettoie tout le texte, effets sonores compris. Plus lent.',
-      needs: 'Nécessite 16 Go de mémoire, dont 10 Go libres.',
+      needs: 'Nécessite 16 Go de mémoire, dont 5 Go libres.',
     },
     download: '{bytes:memory} à télécharger',
     ready: 'Téléchargé',
@@ -2617,7 +2617,7 @@ export const fr = {
       },
       engineFault: '{modelKey} a cessé de répondre sur {accelKey}, il a donc été déchargé. La prochaine exécution le recharge. Si cela se reproduit, choisissez CPU dans Réglages › Performances.',
       engineFaultCpu: '{modelKey} a échoué sur cet ordinateur, il a donc été déchargé. La prochaine exécution le recharge.',
-      lowMemory: 'Avancé fonctionne mieux avec 10 Go de mémoire libre. {free:memory} sont libres actuellement, cette exécution peut donc être lente. Fermez d’autres applications, ou arrêtez l’exécution et passez à Normal.',
+      lowMemory: 'Avancé fonctionne mieux avec 5 Go de mémoire libre. {free:memory} sont libres actuellement, cette exécution peut donc être lente. Fermez d’autres applications, ou arrêtez l’exécution et passez à Normal.',
       lowMemoryStop: 'Arrêter l’exécution',
       samFallback: 'Le masque de lettrage n’a pas pu se charger, donc ce passage a utilisé les masques Normal. Des effets sonores peuvent rester.',
       samLost: 'Le masque de lettrage n’a pas pu se charger et ce passage n’a pas de CTD pour le remplacer, donc la suite n’a pas de masque de lettrage.',
@@ -2972,7 +2972,7 @@ export const fr = {
       unverified: 'Vérification en attente ou en échec',
       samMissing: 'Graphes manquants',
       memoryReady: 'Mémoire disponible',
-      memoryShort: 'Nécessite 10 Go de mémoire de processus',
+      memoryShort: 'Nécessite 5 Go de mémoire de processus',
     },
     detail: {
       rtIdentity: 'Identité et fichier de Ogkalu comic text & bubble detector (Full)',
@@ -3116,7 +3116,7 @@ export const fr = {
       unavailable: 'La vérification par modèle ne fonctionne que dans l’application de bureau.',
       modelMissing: 'Un modèle requis est manquant ou a échoué à la vérification de somme de contrôle. Ouvrez Modèles et backends pour l’importer ou le vérifier.',
       modelFailed: 'Le modèle s’est arrêté avant de terminer cette page. Rien n’a été écrit. Réessayez, ou analysez sur le CPU.',
-      memory: 'Le masque de lettrage SAM-TS-L nécessite environ 10 Go de mémoire libre. Fermez d’autres applications, puis relancez l’analyse.',
+      memory: 'Le masque de lettrage SAM-TS-L nécessite environ 5 Go de mémoire libre. Fermez d’autres applications, puis relancez l’analyse.',
       measuring: 'L’analyse attend pendant que l’écran Runtime mesure cet ordinateur. Réessayez quand elle sera finie.',
       sourceLimit: 'Les aperçus de vérification sont limités à 20 Mo et 24 mégapixels, en PNG, JPEG, GIF, WebP ou BMP.',
       longstrip: 'La vérification par forme de texte nécessite un chapitre paginé. Le défilement vertical n’est pas encore pris en charge.',

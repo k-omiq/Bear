@@ -188,14 +188,15 @@ export const DETECTION_MODES = Object.freeze({
 export const DETECTION_MODE_IDS = /** @type {const} */ (['normal', 'advanced'])
 
 /**
- * The SAM-TS-L graph pair on disk, as `src-tauri/src/model_workflows.rs` pins
- * it (encoder plus text head). SAM is installed rather than downloaded, so no
- * catalogue row carries its size; setup and the mode cards count it with this.
+ * The SAM-TS-L graphs on disk, as `src-tauri/src/model_workflows.rs` pins
+ * them (encoder, its weights file, text head). SAM is installed rather than
+ * downloaded, so no catalogue row carries its size; setup and the mode cards
+ * count it with this.
  */
-export const SAM_GRAPH_BYTES = 1_335_305_985 + 22_704_641
+export const SAM_GRAPH_BYTES = 1_448_391 + 1_334_022_144 + 22_704_641
 
 /** Free memory the lettering mask wants, as `cleaner-core/src/sam_ts.rs#MIN_ROOM_BYTES` measures it. */
-export const SAM_ROOM_BYTES = 10_000_000_000
+export const SAM_ROOM_BYTES = 5_000_000_000
 
 /**
  * The mode a stored combination belongs to. Anything that asked for more than

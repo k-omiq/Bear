@@ -505,7 +505,7 @@ export const pt = {
         allTextMissing: 'O Avançado precisa de {bytes:memory} de downloads.',
         allTextImport: 'O Avançado precisa da máscara de letras SAM-TS-L. Instale-a em Mais opções.',
         allTextSamMismatch: 'A máscara de letras SAM-TS-L falhou na verificação. Instale-a de novo em Mais opções.',
-        allTextMemory: 'Há menos de 10 GB de memória livre, então o Avançado ficará lento. Feche outros apps para uma execução mais rápida.',
+        allTextMemory: 'Há menos de 5 GB de memória livre, então o Avançado ficará lento. Feche outros apps para uma execução mais rápida.',
         runtime: 'Não pode rodar até que o runtime do motor, ONNX Runtime, seja instalado. Baixe-o em Desempenho.',
         runtimeDownloading: 'Pode rodar assim que o runtime do motor, ONNX Runtime, terminar de baixar.',
         runtimeUnavailable: 'Não pode rodar aqui: o runtime do motor, ONNX Runtime, não tem versão para este computador.',
@@ -521,7 +521,7 @@ export const pt = {
         note: 'Analisa uma página com os modelos de detecção selecionados. Qualquer gravação de componente ainda exige aprovação explícita e suporte qualificado de gravação.',
       },
       sam: {
-        memory: 'Roda devagar com menos de 10 GB de memória livre.',
+        memory: 'Roda devagar com menos de 5 GB de memória livre.',
         chooserTitle: 'Pasta com os dois grafos da máscara de letras SAM-TS-L',
       },
       rtFull: {
@@ -1587,7 +1587,7 @@ export const pt = {
     advanced: {
       name: 'Avançado',
       about: 'Limpa todo o texto, inclusive os efeitos sonoros. Mais lento.',
-      needs: 'Precisa de 16 GB de memória, 10 GB deles livres.',
+      needs: 'Precisa de 16 GB de memória, 5 GB deles livres.',
     },
     download: '{bytes:memory} para baixar',
     ready: 'Baixado',
@@ -2617,7 +2617,7 @@ export const pt = {
       },
       engineFault: '{modelKey} parou de responder em {accelKey}, então foi descarregado. A próxima execução o carrega de novo. Se continuar acontecendo, escolha CPU em Configurações › Desempenho.',
       engineFaultCpu: '{modelKey} falhou neste computador, então foi descarregado. A próxima execução o carrega de novo.',
-      lowMemory: 'O Avançado funciona melhor com 10 GB de memória livre. Agora há {free:memory} livres, então esta execução pode ficar lenta. Feche outros apps, ou pare a execução e mude para Normal.',
+      lowMemory: 'O Avançado funciona melhor com 5 GB de memória livre. Agora há {free:memory} livres, então esta execução pode ficar lenta. Feche outros apps, ou pare a execução e mude para Normal.',
       lowMemoryStop: 'Parar execução',
       samFallback: 'A máscara de letras não carregou, então esta execução usou máscaras Normal. Podem sobrar efeitos sonoros.',
       samLost: 'A máscara de letras não carregou e esta execução não tem CTD para substituí-la, então o restante fica sem máscara de letras.',
@@ -2972,7 +2972,7 @@ export const pt = {
       unverified: 'Verificação pendente ou com falha',
       samMissing: 'Grafos ausentes',
       memoryReady: 'Memória disponível',
-      memoryShort: 'Precisa de 10 GB de memória de processo',
+      memoryShort: 'Precisa de 5 GB de memória de processo',
     },
     detail: {
       rtIdentity: 'Identidade e arquivo do Ogkalu comic text & bubble detector (Full)',
@@ -3116,7 +3116,7 @@ export const pt = {
       unavailable: 'A revisão por modelo só roda no app para desktop.',
       modelMissing: 'Um modelo necessário está faltando ou falhou no checksum. Abra Modelos e backends para importá-lo ou verificá-lo.',
       modelFailed: 'O modelo parou antes de terminar esta página. Nada foi gravado. Tente de novo ou analise na CPU.',
-      memory: 'A máscara de letras SAM-TS-L precisa de cerca de 10 GB de memória livre. Feche outros apps e analise de novo.',
+      memory: 'A máscara de letras SAM-TS-L precisa de cerca de 5 GB de memória livre. Feche outros apps e analise de novo.',
       measuring: 'A análise espera enquanto a tela Runtime mede este computador. Tente de novo quando terminar.',
       sourceLimit: 'As prévias de revisão são limitadas a 20 MB e 24 megapixels, em PNG, JPEG, GIF, WebP ou BMP.',
       longstrip: 'A revisão por formato de texto precisa de um capítulo paginado. Tiras longas ainda não são compatíveis.',

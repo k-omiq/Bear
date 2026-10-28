@@ -590,7 +590,7 @@ export const en = {
         allTextImport: 'Advanced needs the SAM-TS-L lettering mask. Install it under More options.',
         allTextSamMismatch: 'The SAM-TS-L lettering mask failed its check. Install it again under More options.',
         // Free memory changes, so this says what to do rather than what is missing.
-        allTextMemory: 'Less than 10 GB of memory is free, so Advanced will be slow. Close other apps for a faster run.',
+        allTextMemory: 'Less than 5 GB of memory is free, so Advanced will be slow. Close other apps for a faster run.',
         // After the line above, so "it" is the workflow that line names. A
         // native run refuses to start without the runtime, so the row is not
         // complete while one of these shows.
@@ -612,7 +612,7 @@ export const en = {
         note: 'Analyses one page with the selected detection models. Any component write still needs explicit approval and qualified write support.',
       },
       sam: {
-        memory: 'Runs slowly with less than 10 GB of free memory.',
+        memory: 'Runs slowly with less than 5 GB of free memory.',
         chooserTitle: 'Folder with both SAM-TS-L lettering mask graphs',
       },
       rtFull: {
@@ -2109,7 +2109,7 @@ export const en = {
   // product names and are not here; what is here is what each one does.
   // The Normal / Advanced cards, in setup and Settings > Models
   // (`dialogs/DetectionModeChoice.svelte`). Memory is the measured need:
-  // Normal peaks near 2.5 GB, Advanced's lettering mask wants 10 GB free.
+  // Normal peaks near 2.5 GB, Advanced's lettering mask wants 5 GB free.
   detectionMode: {
     normal: {
       name: 'Normal',
@@ -2119,7 +2119,7 @@ export const en = {
     advanced: {
       name: 'Advanced',
       about: 'Cleans all text, sound effects included. Slower.',
-      needs: 'Needs 16 GB of memory, 10 GB of it free.',
+      needs: 'Needs 16 GB of memory, 5 GB of it free.',
     },
     download: '{bytes:memory} to download',
     ready: 'Downloaded',
@@ -3409,7 +3409,7 @@ export const en = {
       // Advanced, started with less free memory than the lettering mask
       // wants. The run goes on; the notice stays until closed and its button
       // stops the run. `free` is bytes.
-      lowMemory: 'Advanced works best with 10 GB of free memory. {free:memory} is free now, so this run may be slow. Close other apps, or stop and switch to Normal.',
+      lowMemory: 'Advanced works best with 5 GB of free memory. {free:memory} is free now, so this run may be slow. Close other apps, or stop and switch to Normal.',
       lowMemoryStop: 'Stop run',
       // The lettering mask would not load at all, so the rest of the run was
       // masked the Normal way and cleaned anyway. Said once per run.
@@ -3877,7 +3877,7 @@ export const en = {
       unverified: 'Verification pending or failed',
       samMissing: 'Graphs missing',
       memoryReady: 'Memory available',
-      memoryShort: 'Needs 10 GB of process memory',
+      memoryShort: 'Needs 5 GB of process memory',
     },
     detail: {
       rtIdentity: 'Ogkalu comic text & bubble detector (Full) identity and file',
@@ -3999,7 +3999,7 @@ export const en = {
       unavailable: 'Model review runs only in the desktop app.',
       modelMissing: 'A required model is missing or failed its checksum. Open Models and backends to import or verify it.',
       modelFailed: 'The model stopped before finishing this page. Nothing was written. Try again, or analyze on the CPU.',
-      memory: 'SAM-TS-L lettering mask needs about 10 GB of free memory. Close other apps, then analyze again.',
+      memory: 'SAM-TS-L lettering mask needs about 5 GB of free memory. Close other apps, then analyze again.',
       measuring: 'Analysis waits while the Runtime screen measures this computer. Try again when it finishes.',
       sourceLimit: 'Review previews are limited to 20 MB and 24 megapixels, in PNG, JPEG, GIF, WebP or BMP.',
       longstrip: 'Text-shaped review needs a paginated chapter. Long strips are not supported yet.',

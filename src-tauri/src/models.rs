@@ -382,7 +382,7 @@ fn accelerators_configured(
     const SAM_PROFILE: accel::ModelProfile = accel::ModelProfile {
         name: SAM_PROFILE_NAME, label_key: cleaner_core::sam_ts::LABEL_KEY, cpu_islands_on: &[],
         measured_better: &[], unmeasured_candidates: &[],
-        measured_peak_rss: &[(Accelerator::Cpu, 8_547_975_168)], partitioned_on: &[],
+        measured_peak_rss: &[(Accelerator::Cpu, 3_232_000_000)], partitioned_on: &[],
     };
     let specs: [(&str, &str, &accel::ModelProfile); 6] = [
         ("ctd", CTD_NAME, &accel::DETECTOR),

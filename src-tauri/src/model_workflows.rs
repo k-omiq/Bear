@@ -33,16 +33,25 @@ struct Graph {
     sha256: &'static str,
 }
 
-const GRAPHS: [Graph; 2] = [
+// The encoder is the bootstrap's per-head-attention rewrite with its weights
+// in a side file (`sam-bootstrap/bootstrap.py`). An install from before it
+// has the single-file encoder (SHA-256 9b3a32f9...) and no side file, so it
+// is not found and the install button rebuilds it from the kept checkpoint.
+const GRAPHS: [Graph; 3] = [
     Graph {
         name: sam_ts::ENCODER,
-        bytes: 1_335_305_985,
-        sha256: "9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe",
+        bytes: 1_448_391,
+        sha256: "c7b1cc85d2316886db1dfd22886c1988c71c317d4bcd869beca07e8b6c822141",
     },
     Graph {
         name: sam_ts::HEAD,
         bytes: 22_704_641,
         sha256: "a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281",
+    },
+    Graph {
+        name: sam_ts::ENCODER_DATA,
+        bytes: 1_334_022_144,
+        sha256: "ff610b34dcde10353f39d2499db7ca669d5f1874c64a9b89587222484dcdebc7",
     },
 ];
 const SAM_REVISION: &str = cleaner_core::text_groups::SAM_TS_L_REVISION;
@@ -409,7 +418,7 @@ fn sam_backends(
         qualified: false,
         available: runtime_installed,
         selectable: runtime_installed,
-        note: "Local detection on CPU, including chapter and selection runs. Automatic uses CPU. Saved parity measurements are from macOS; other platforms are not measured. Runs slowly with less than 10 GB of memory room; one SAM pipeline loads at a time.",
+        note: "Local detection on CPU, including chapter and selection runs. Automatic uses CPU. Saved parity measurements are from macOS; other platforms are not measured. Runs slowly with less than 5 GB of memory room; one SAM pipeline loads at a time.",
     }];
     if cfg!(target_os = "macos") {
         rows.extend([
@@ -631,7 +640,7 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
         local_detection_ready,
         local_detection_note: if !runtime_ready { "Install or repair the local ONNX Runtime." }
             else if !full_rt_installed || !sam_installed { "Install the SAM-TS-L and Ogkalu Full models for the local detection pipeline." }
-            else if !sam_memory_ready { "SAM-TS-L runs slowly with less than 10 GB of memory room." }
+            else if !sam_memory_ready { "SAM-TS-L runs slowly with less than 5 GB of memory room." }
             else { "SAM-TS-L and Ogkalu Full are ready for local detection. Additional selected models have their own installation checks." },
         sam_managed: sam
             .as_ref()
@@ -861,7 +870,8 @@ pub async fn install_sam_ts(app: tauri::AppHandle) -> Result<bool, String> {
             let mut bootstrap = cleaner_core::process::command(&python);
             bootstrap.args(prefix).arg(source.join("bootstrap.py"))
                 .arg("--root").arg(&root).arg("--source").arg(&source)
-                .arg("--dense-pe").arg(source.join("dense_pe.f32.xz"));
+                .arg("--dense-pe").arg(source.join("dense_pe.f32.xz"))
+                .arg("--per-head-attention");
             sam_step(&app, "sources-export", ("weights", 30), bootstrap, &root)?;
             let proof = root.join("proof");
             sam_progress(&app, "verify", 95);

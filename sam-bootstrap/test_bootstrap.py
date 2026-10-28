@@ -122,5 +122,98 @@ class CheckpointDownloadTest(unittest.TestCase):
         self.assertFalse((self.root / "checkpoint" / "model.safetensors").exists())
 
 
+try:
+    import numpy as np
+    import onnx
+    import onnxruntime
+    from onnx import TensorProto, helper, numpy_helper
+except ImportError:
+    onnx = None
+
+
+@unittest.skipIf(onnx is None, "needs the bootstrap environment's onnx and onnxruntime")
+class PerHeadAttentionTest(unittest.TestCase):
+    """A two-head miniature: two global blocks around a windowed one."""
+
+    HEADS, SIDE, CHANNELS = 2, 4, 16
+
+    def model(self):
+        heads, side, channels = self.HEADS, self.SIDE, self.CHANNELS
+        tokens = side * side
+        rng = np.random.default_rng(7)
+        initializers = [
+            numpy_helper.from_array(rng.standard_normal((heads, tokens, channels)).astype(np.float32), "q_bias"),
+            numpy_helper.from_array(np.asarray([heads, side, side, side, side], np.int64), "shape5"),
+            numpy_helper.from_array(np.asarray([heads, tokens, tokens], np.int64), "shape3"),
+            numpy_helper.from_array(np.zeros(6, np.int64), "pads"),
+        ]
+        nodes = [helper.make_node("Add", ["x", "q_bias"], ["q0"], name="/image_encoder/patch_embed/Add")]
+        # Two global blocks around a windowed one, the encoder's order.
+        for block, query in ((0, "q0"), (2, "q2")):
+            attn = f"/image_encoder/blocks.{block}/attn/"
+            nodes += [
+                helper.make_node("MatMul", [query, "kt"], [attn + "scores"], name=attn + "MatMul"),
+                helper.make_node("Reshape", [attn + "scores", "shape5"], [attn + "scores5"], name=attn + "Reshape_3"),
+                helper.make_node("Add", [attn + "scores5", "rh"], [attn + "with_h"], name=attn + "Add_2"),
+                helper.make_node("Add", [attn + "with_h", "rw"], [attn + "with_w"], name=attn + "Add_3"),
+                helper.make_node("Reshape", [attn + "with_w", "shape3"], [attn + "flat"], name=attn + "Reshape_4"),
+                helper.make_node("Softmax", [attn + "flat"], [attn + "weights"], name=attn + "Softmax", axis=-1),
+                helper.make_node("MatMul", [attn + "weights", "v"], [attn + "attended"], name=attn + "MatMul_1"),
+            ]
+            if block == 0:
+                nodes.append(helper.make_node("Pad", [attn + "attended", "pads"], ["q2"],
+                                              name="/image_encoder/blocks.1/Pad"))
+        nodes[-1].output[0] = "y"
+        inputs = [helper.make_tensor_value_info(name, TensorProto.FLOAT, shape) for name, shape in (
+            ("x", [heads, tokens, channels]), ("kt", [heads, channels, tokens]),
+            ("v", [heads, tokens, channels]), ("rh", [heads, side, side, side, 1]),
+            ("rw", [heads, side, side, 1, side]))]
+        output = helper.make_tensor_value_info("y", TensorProto.FLOAT, [heads, tokens, channels])
+        graph = helper.make_graph(nodes, "mini", inputs, [output], initializers)
+        return helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)], ir_version=8)
+
+    def feeds(self):
+        rng = np.random.default_rng(11)
+        session_inputs = self.model().graph.input
+        return {value.name: rng.standard_normal(
+            [dimension.dim_value for dimension in value.type.tensor_type.shape.dim]).astype(np.float32)
+            for value in session_inputs}
+
+    @staticmethod
+    def run_model(path: Path, feeds):
+        session = onnxruntime.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+        return session.run(None, feeds)[0]
+
+    def test_rewrite_is_bit_identical_and_saves_the_weights_beside_the_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            proof = Path(temporary)
+            onnx.save(self.model(), str(proof / bootstrap.ENCODER))
+            feeds = self.feeds()
+            before = self.run_model(proof / bootstrap.ENCODER, feeds)
+            (proof / (bootstrap.ENCODER + ".data")).write_bytes(b"stale side file from an earlier run")
+            with patch.object(bootstrap, "ATTENTION_HEADS", self.HEADS), \
+                    patch.object(bootstrap, "ATTENTION_SIDE", self.SIDE):
+                bootstrap.per_head_encoder(proof)
+            rewritten = onnx.load(str(proof / bootstrap.ENCODER), load_external_data=False)
+            operators = [node.op_type for node in rewritten.graph.node]
+            self.assertEqual(operators.count("Softmax"), 2 * self.HEADS)
+            self.assertEqual(operators.count("Slice"), 2 * 5 * self.HEADS)
+            self.assertIn("Pad", operators)
+            self.assertTrue(any(entry.key == "location" and entry.value == bootstrap.ENCODER + ".data"
+                                for tensor in rewritten.graph.initializer for entry in tensor.external_data))
+            self.assertEqual(sorted(path.name for path in proof.iterdir()),
+                             [bootstrap.ENCODER, bootstrap.ENCODER + ".data"])
+            after = self.run_model(proof / bootstrap.ENCODER, feeds)
+            self.assertEqual(before.tobytes(), after.tobytes())
+
+    def test_an_unexpected_attention_layout_is_refused(self) -> None:
+        model = self.model()
+        for node in model.graph.node:
+            if node.name.endswith("/Add_3"):
+                node.name += "_renamed"
+        with self.assertRaisesRegex(RuntimeError, "Unexpected SAM-TS-L attention layout"):
+            bootstrap.split_global_attention(model, self.HEADS, self.SIDE)
+
+
 if __name__ == "__main__":
     unittest.main()
