@@ -122,9 +122,14 @@ class RecoveryContractTest(unittest.TestCase):
         self.assertIn(analysis_seed.SAM_HEAD_SHA256_MAC, source)
         for capability in [analysis_seed.ANALYSIS_SAM, analysis_seed.ANALYSIS_RT]:
             # The SAM head has explicitly separate macOS and Linux export hashes.
+            # The desktop encoder is the bootstrap's per-head-attention rewrite with
+            # a side file; the cloud seed keeps the single-file export and its pin.
             for name, _, digest in analysis_seed.GRAPH_FILES[capability]:
-                if name != "koharu_samts_text_head.onnx":
+                if name not in ("koharu_samts_text_head.onnx", "koharu_samts_encoder.onnx"):
                     self.assertIn(digest, source)
+        bootstrap = (ROOT / "sam-bootstrap/bootstrap.py").read_text()
+        self.assertIn("--per-head-attention", bootstrap)
+        self.assertNotIn("--per-head-attention", (ROOT / "deploy/cloud/common/analysis_seed.py").read_text())
 
     def test_client_captures_advertised_recipe_and_mock_pins_match_production(self):
         source = (ROOT / "src-tauri/src/inference/cloud_clean.rs").read_text()
