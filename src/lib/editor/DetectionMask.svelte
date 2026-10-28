@@ -4,7 +4,7 @@
   import { session } from '../state/session.svelte.js'
   import { maskColorFor } from '../model/masks.js'
   import { hexToRgb } from '../ui/color.js'
-  import { backingScale, loadDetectionMask, paintMask } from './detectionmasks.svelte.js'
+  import { backingScale, holdMaskImage, loadDetectionMask, paintMask, releaseMaskImage } from './detectionmasks.svelte.js'
 
   /**
    * One detected region's mask, drawn where it sits on the page.
@@ -110,6 +110,26 @@
     return () => {
       alive = false
       controller?.abort()
+    }
+  })
+
+  // The mask on the canvas is drawn again on every zoom, so the cache must
+  // not close it while it is shown.
+  $effect(() => {
+    const entry = loaded
+    if (!entry) return
+    holdMaskImage(entry)
+    return () => releaseMaskImage(entry)
+  })
+
+  // A canvas let go keeps its backing store until it is collected, which
+  // WebKit does late; emptying it frees the pixels now.
+  $effect(() => {
+    const node = canvasEl
+    if (!node) return
+    return () => {
+      node.width = 0
+      node.height = 0
     }
   })
 

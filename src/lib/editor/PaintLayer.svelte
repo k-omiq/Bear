@@ -68,8 +68,9 @@
    * more to show.
    *
    * `erase` is an eraser stroke's mask id: its canvas is coverage, not paint.
+   * `dispose` frees what the stroke drew through, once its canvas is gone.
    *
-   * @typedef {{id: number, paint: (node: HTMLCanvasElement) => void, tick: number, x: number, y: number, w: number, h: number, revision: string, erase?: number}} Frame
+   * @typedef {{id: number, paint: (node: HTMLCanvasElement) => void, tick: number, x: number, y: number, w: number, h: number, revision: string, erase?: number, dispose?: () => void}} Frame
    */
 
   let root = $state()
@@ -95,7 +96,7 @@
    * started for, how many of the draft's points it has taken, and how it is
    * put on a canvas.
    *
-   * @type {{surface: ReturnType<typeof brushSurface>, draft: object, key: string, taken: number, paint: Frame['paint'], mask: number|undefined}|null}
+   * @type {{surface: ReturnType<typeof brushSurface>, draft: object, key: string, taken: number, paint: Frame['paint'], mask: number|undefined, dispose?: () => void}|null}
    */
   let stroking = null
   let strokeFrame = 0
@@ -129,19 +130,31 @@
    * Bring a canvas up to date with its frame. A frame it already shows - one
    * that has just been held - is left alone.
    *
+   * A canvas let go keeps its backing store until it is collected, which
+   * WebKit does late, so it is emptied when its frame goes.
+   *
    * @param {HTMLCanvasElement} node
    * @param {Frame} frame
    */
   function draw(node, frame) {
     let shown = -1
+    let current = frame
     /** @param {Frame} next */
     const put = (next) => {
+      current = next
       if (next.tick === shown) return
       shown = next.tick
       next.paint(node)
     }
     put(frame)
-    return { update: put }
+    return {
+      update: put,
+      destroy() {
+        node.width = 0
+        node.height = 0
+        current.dispose?.()
+      },
+    }
   }
 
   /**
@@ -173,6 +186,7 @@
         pageWidth: width, pageHeight: height, clipY: clone || !strip, buildUp: clone })
       let paint = (/** @type {HTMLCanvasElement} */ node) => surface.paint(node)
       let mask = undefined
+      let dispose = undefined
       if (erase) {
         const id = mask = (erasures += 1)
         let tick = 0
@@ -186,8 +200,12 @@
         const mask = document.createElement('canvas')
         const shift = { x: whole((active.clone.offset.x / 100) * width), y: whole((active.clone.offset.y / 100) * height) }
         paint = (node) => surface.paintClone(node, { mask, tiles: cleanedTiles(root?.closest('.sheet')), shift })
+        dispose = () => {
+          mask.width = 0
+          mask.height = 0
+        }
       }
-      stroking = { surface, draft: active, key, taken: 0, paint, mask }
+      stroking = { surface, draft: active, key, taken: 0, paint, mask, dispose }
     }
     const fresh = active.points.slice(stroking.taken)
     if (fresh.length === 0) return
@@ -202,7 +220,7 @@
     strokeFrame = 0
     const bounds = stroking?.surface.bounds()
     if (!stroking || !bounds) return
-    live = { id: live?.id ?? (strokes += 1), paint: stroking.paint, tick: (live?.tick ?? 0) + 1, ...bounds, revision: version, erase: stroking.mask }
+    live = { id: live?.id ?? (strokes += 1), paint: stroking.paint, tick: (live?.tick ?? 0) + 1, ...bounds, revision: version, erase: stroking.mask, dispose: stroking.dispose }
   }
 
   $effect(() => {

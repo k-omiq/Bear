@@ -64,6 +64,22 @@ export function forgetLayerImages() {
 }
 
 /**
+ * A layer a canvas shows and draws again under an eraser stroke: kept open
+ * until released, even after the cache lets it go
+ * (`api/boundedimage.js#ImageCache`).
+ *
+ * @param {import('../api/boundedimage.js').BoundedImage} entry
+ */
+export function holdLayer(entry) {
+  cache.hold(entry)
+}
+
+/** @param {import('../api/boundedimage.js').BoundedImage} entry */
+export function releaseLayer(entry) {
+  cache.release(entry)
+}
+
+/**
  * A layer already decoded, or `undefined`: read synchronously, so a sheet
  * mounted again draws what it had in the same frame.
  *

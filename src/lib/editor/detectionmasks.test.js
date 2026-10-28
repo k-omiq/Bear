@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  MASK_CACHE_BYTES,
   MASK_CACHE_LIMIT,
   MAX_CANVAS_PIXELS,
   backingScale,
@@ -66,6 +67,16 @@ describe('loading a mask', () => {
     expect(fetcher).toHaveBeenCalledTimes(3)
   })
 
+  it('keeps no more bytes than its budget, however few masks that is', async () => {
+    // A tall sound effect: four of these are past the budget.
+    const side = Math.ceil(Math.sqrt(MASK_CACHE_BYTES / 4 / 3.5))
+    const fetcher = vi.fn(async () => response(`0,0,${side},${side}`))
+    for (let index = 0; index < 4; index += 1) {
+      await loadDetectionMask(`big${index}`, { fetcher, decode })
+    }
+    expect(cachedMaskCount()).toBe(3)
+  })
+
   it('keeps no more than its limit, dropping the least recently drawn', async () => {
     const fetcher = vi.fn(async () => response())
     for (let index = 0; index <= MASK_CACHE_LIMIT; index += 1) {
@@ -92,8 +103,12 @@ describe('loading a mask', () => {
       controller.abort()
       return response()
     })
-    await expect(loadDetectionMask('c', { fetcher, decode, signal: controller.signal })).rejects.toThrow('aborted')
+    const close = vi.fn()
+    const decodeOpen = async () => ({ close })
+    await expect(loadDetectionMask('c', { fetcher, decode: decodeOpen, signal: controller.signal })).rejects.toThrow('aborted')
     expect(cachedMaskCount()).toBe(0)
+    // Nothing will draw it, so it is closed rather than left to the collector.
+    expect(close).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -160,6 +175,7 @@ describe('colouring a mask', () => {
     expect(ring.calls).toContainEqual(['drawImage', 'destination-out', 1, image, 3, 3, 34, 24])
     expect(ring.calls.at(-1)).toEqual(['fillRect', 'source-in', '#ff0000', 0, 0, 40, 30])
     expect(main.calls.at(-1)).toEqual(['drawImage', 'source-over', 1, scratch, 0, 0])
-    expect(scratch).toMatchObject({ width: 40, height: 30 })
+    // The scratch canvas is emptied once its ring is laid over.
+    expect(scratch).toMatchObject({ width: 0, height: 0 })
   })
 })

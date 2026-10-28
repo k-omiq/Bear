@@ -72,6 +72,9 @@ export function drawErased(context, image, masks, bounds, plan) {
   if (masks.length === 0) return
   context.globalCompositeOperation = 'destination-out'
   for (const { canvas, box } of masks) {
+    // A stroke whose frame has just gone has an emptied canvas, which
+    // `drawImage` refuses; it takes nothing off.
+    if (!(canvas.width > 0) || !(canvas.height > 0)) continue
     context.drawImage(
       canvas,
       (box.x / 100) * plan.width - bounds.x,
