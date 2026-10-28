@@ -679,15 +679,15 @@ the 1.5 px detail inside the mask core over the truth's, 1 = as crisp as the pag
 Not measured: real lettering, colour pages, 2048 px crops, a second seed, LaMa and Qwen through the
 copy.
 
-## Bench 8 (2026-10-26): every finishing, and the reference tool's generation, as settings
+## Bench 8 (2026-10-26): every finishing, and the FLUX 3 generation options, as settings
 
 Every post-processing version measured so far is a choice again (`Finishing` in
-`crates/cleaner-core/src/engines/postprocess.rs`, Settings > Cloud > Finishing; the default is
-bench 7's). The reference tool's finishing v2 is ported to Rust (`engines/finishing.rs`) and is a
-choice too. Its four generation parts are switches sent to the worker (`flux3_generation`,
-docs/cloud-contract.md section 9). Local only, no cloud spend.
+`crates/cleaner-core/src/engines/postprocess.rs`, Settings > Post-processing; the default is
+bench 7's). Manga Cleaner Reproduction's finishing v2 is ported to Rust (`engines/finishing.rs`) and is a
+choice too. Four FLUX 3 generation options are switches sent to the worker (`flux3_generation`,
+docs/cloud-contract.md section 9; Settings > Cloud). Local only, no cloud spend.
 
-**Port check.** The port was run on the reference tool's own two examples (its original crop,
+**Port check.** The port was run on Manga Cleaner Reproduction's own two examples (its original crop,
 raw answer at source size and mask) against its shipped outputs, inside the mask:
 
 | example | off, global, local | poisson | raster |
@@ -716,39 +716,39 @@ sharpness; old table redraw first for scale):
 | redraw | 17.7 / 6.9 / 0.76 / 0.96 | 31.5 |
 | repeat-offsets (bench 3b) | 25.7 / 6.7 / 0.60 / 0.97 | 33.9 |
 | tone-only | 27.5 / 6.7 / 0.56 / 0.96 | 33.9 |
-| reference-off | 28.5 / 10.0 / 0.55 / 0.96 | 34.1 |
-| reference-global | 27.9 / 7.9 / 0.55 / 1.00 | 34.1 |
-| reference-local | 28.6 / 8.6 / 0.55 / 0.98 | 33.2 |
-| reference-poisson | 28.6 / 8.7 / 0.55 / 0.98 | 33.1 |
-| reference-raster | 26.7 / 12.1 / 0.65 / 1.05 | 33.8 |
+| as-is | 28.5 / 10.0 / 0.55 / 0.96 | 34.1 |
+| global-tone | 27.9 / 7.9 / 0.55 / 1.00 | 34.1 |
+| local-tone | 28.6 / 8.6 / 0.55 / 0.98 | 33.2 |
+| poisson | 28.6 / 8.7 / 0.55 / 0.98 | 33.1 |
+| dots-only | 26.7 / 12.1 / 0.65 / 1.05 | 33.8 |
 
 The versions brought back reproduce their own benches exactly (redraw-sharp-contours 19.2 as in
 bench 5, repeat-offsets 25.7 as in bench 4), and copy gives bench 7's 18.3, so nothing was lost
-in bringing them back. The reference finishing does little on these answers: our FLUX 3 answers
-lose the page's dots, and only its raster step puts any back; raster also matches no tone, so
+in bringing them back. The ported finishing does little on these answers: our FLUX 3 answers
+lose the page's dots, and only its dots-only step puts any back; dots-only also matches no tone, so
 its tone error is the worst. Copy-hops is sharper than copy and worse in mean error, as bench 7
 saw (streaks deep in wide masks).
 
-**The reference tool's own examples, by eye** (3x crops of each version over its raw answer):
+**Manga Cleaner Reproduction's own examples, by eye** (3x crops of each version over its raw answer):
 its answers already carry the page's screen in phase, so on the screentone example every version
 looks alike and copy is as crisp as the page. On its line-art example our copy and redraw add
-faint grey specks and one dark smudge to white paper near hatching, which its Poisson and
-raster do not: the screen step takes hatching next to the mask for a screen.
+faint grey specks and one dark smudge to white paper near hatching, which Poisson and
+dots-only do not: the screen step takes hatching next to the mask for a screen.
 
 **Hatching fix (2026-10-27).** The hatching's region fitted a screen model at 0.507, just over
-`MIN_FIT` 0.5, with two frequencies from leaves hatched in different directions. The reference
-raster declines there because almost no page pixel shows both frequencies at once
+`MIN_FIT` 0.5, with two frequencies from leaves hatched in different directions. In Manga Cleaner
+Reproduction, the raster step declines there because almost no page pixel shows both frequencies at once
 (`_screen_evidence`). `halftone::Screen::fit` now applies the same kind of test (5 px window,
 detail over `MIN_DETAIL`, 35 % of it at the pair and 6 % at each) and needs 256 such pixels. Its
-floor and count differ from the reference's: 2 levels RMS of this module's detail and 256 pixels
-per region, where the reference uses power 36 of a 2 px high-pass, 256 pixels per crop and 128
+floor and count differ from that code: 2 levels RMS of this module's detail and 256 pixels
+per region, where the original uses power 36 of a 2 px high-pass, 256 pixels per crop and 128
 per region. Since the 2026-10-27 review it tries every frequency pair that fits at `MIN_FIT` or
 better, best fit first, and takes the first the page shows both of; before, only the best-fit
 pair was tested, so a hatching pair that fitted better hid a real screen (unit test: hatching at
 0.73 beside a faint screen at 0.72, and the screen is still found). The counts and the table
 below were taken before that change. On the
 line-art example the region has 0, the screentone example's has 44180 of 67301. Inside the mask,
-against the reference's Poisson output, with pixels where Poisson is white paper (235 or more):
+against the ported Poisson output, with pixels where Poisson is white paper (235 or more):
 
 | finishing | mae | paper px 12+ darker | paper px 40+ darker |
 |---|---|---|---|
@@ -813,7 +813,7 @@ chapter crops.
 ## Finishing for Qwen, FLUX.2 Klein and LaMa (2026-10-27): a setting, off by default
 
 Bench 6 found the 3.0.0 post-processing better on Qwen's answers (halftone 31.2 to 17.5) and on
-LaMa's (15.7 to 14.5). Settings > Cloud > Finishing now has **Also finish Qwen, FLUX.2 Klein and
+LaMa's (15.7 to 14.5). Settings > Post-processing now has **Also finish Qwen, FLUX.2 Klein and
 LaMa results** (`finishingEveryModel`). Off, nothing changes: a 2.0.0 answer keeps its tone alignment and so
 does each LaMa tile. On, the picked finishing (the default copy too) takes the place of that
 alignment:
@@ -843,7 +843,7 @@ synthetic probe; nothing ran on a real chapter or a GPU.
   and either written by this tile or outside the applied mask, as V2's ring already treats them.
   On a synthetic 3-tile region (flat paper, solid lettering), the error off paper went from 0.87
   mean (worst 11) to 0.57 (worst 3) with Copy, and from 23.11 (worst 213) to 0.47 (worst 2) with
-  Reference: local tone; the tone-aligned render is 0.67. On fixture pages with 4-tile 700 px
+  Local tone match; the tone-aligned render is 0.67. On fixture pages with 4-tile 700 px
   regions and the default finishing, the change moved the patch by 16.8 levels on page-sfx, 8.8
   on page-crowded and 4.1 on page-screentone; there is no truth there, so that is the size of the
   change, not which is better.
@@ -851,11 +851,11 @@ synthetic probe; nothing ran on a real chapter or a GPU.
   float pixels and writes the float result, so a 16-bit page keeps its levels.
 - **Poisson pulled toward off-page pixels.** See the port check in bench 8: off-page pixels now
   take the answer as the boundary. Probe with a black off-page band 6 px from the mask: 82 levels
-  off paper, now 0. In the LaMa tile probe, Reference: Poisson went from 114 off to 0 and
-  Reference: local tone from 91 to 0 (the tile fix alone does the second).
+  off paper, now 0. In the LaMa tile probe, Blend edges went from 114 off to 0 and
+  Local tone match from 91 to 0 (the tile fix alone does the second).
 - **Pixels outside the mask changed.** `postprocess::settle_with` now keeps the answer outside the
-  mask for every finishing. Before, Reference: global tone changed 7513 such pixels in a probe,
-  local tone and Poisson 11, and our own finishings some; now 0 for all 11.
+  mask for every finishing. Before, Simple tone match changed 7513 such pixels in a probe,
+  Local tone match and Blend edges 11, and our own finishings some; now 0 for all 11.
 - **Screen evidence tried one pair.** See the hatching fix in bench 8.
 - **Speed.** The shared Gaussian blur runs on every core with precomputed edge indices; results
   are bit for bit the old ones (49 size and sigma pairs hashed), and `settle_with` gave bit for bit
@@ -868,7 +868,7 @@ synthetic probe; nothing ran on a real chapter or a GPU.
 | 120 x 60 mask, 1024 crop, Copy / tone only | 5.9 / 4.3 s | 1.4 / 0.9 s |
 | 120 x 60 mask, 2048 crop, Copy / tone only | 18.3 / 11.9 s | 5.2 / 4.9 s |
 | 1200 x 1200 mask, 2048 crop, Copy, grey / colour | 72.6 / 60.5 s | 24.4 / 16.3 s |
-| 1200 x 1200 mask, 2048 crop, Reference: Poisson, grey / colour | not measured | 2.9 / 6.3 s |
+| 1200 x 1200 mask, 2048 crop, Blend edges, grey / colour | not measured | 2.9 / 6.3 s |
 
 Still open: our own finishings read off-page pixels through the low-pass in their tone and
 lighting steps (13.4 levels off in the off-page band probe; a masked blur over the page would fix

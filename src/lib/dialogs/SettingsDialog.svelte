@@ -53,12 +53,14 @@
    * a sidebar with the way back and a vertical tab list, and one scrolling
    * column per section.
    *
-   * **Seven sections, in the order a visit needs them.** General holds the
+   * **Nine sections, in the order a visit needs them.** General holds the
    * app's own preferences and the setup replay. Models is what a page is
    * detected and cleaned with: the detection choices, each model's files
    * beside the choice that made them necessary, the language filtering and
    * the FLUX helper collapsed until asked for, and the download token under
-   * Download access. Cloud holds `InferenceSettings`. Denoise is page
+   * Download access. Cloud holds `InferenceSettings`. Post-processing is how
+   * a cleaned patch is matched to the page (`PostProcessingSettings`), apart
+   * from Cloud because it finishes LaMa results on this computer too. Denoise is page
    * denoise's target, preset and local model (`denoise/DenoiseSettings`).
    * Performance is what the
    * engines run on: the runtime, its build, where downloads go, the
@@ -181,6 +183,7 @@
   import Measurement from './runtime/Measurement.svelte'
   import { flavourName } from './runtime/runtime.js'
   import DenoiseSettings from './denoise/DenoiseSettings.svelte'
+  import PostProcessingSettings from './PostProcessingSettings.svelte'
   import { PAGE_DENOISE_FEATURE } from '../model/denoise.js'
   import { offerFirstLaunch } from './firstlaunch.svelte.js'
 
@@ -1986,6 +1989,7 @@
     general: { labelKey: 'settings.section.general', icon: 'sliders' },
     models: { labelKey: 'settings.section.models', icon: 'search' },
     cloud: { labelKey: 'settings.section.cloud', icon: 'cloud' },
+    postprocessing: { labelKey: 'settings.section.postprocessing', icon: 'sparkle' },
     denoise: { labelKey: 'settings.section.denoise', icon: 'wand' },
     export: { labelKey: 'settings.section.export', icon: 'export' },
     performance: { labelKey: 'settings.section.performance', icon: 'cpu' },
@@ -2972,6 +2976,21 @@
       <div class="column">
         <h2>{t('settings.section.cloud')}</h2>
         <InferenceSettings />
+      </div>
+    </div>
+
+    <!-- Post-processing: how a cleaned patch is matched to the page. It ends
+         in the grey switch. -->
+    <div
+      class="panel"
+      role="tabpanel"
+      id={panelId('postprocessing')}
+      aria-labelledby={tabId('postprocessing')}
+      hidden={active !== 'postprocessing'}
+    >
+      <div class="column">
+        <h2>{t('settings.section.postprocessing')}</h2>
+        <PostProcessingSettings />
       </div>
     </div>
 

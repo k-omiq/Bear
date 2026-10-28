@@ -18,8 +18,8 @@ from deploy.cloud.common.contract import LATENT_STRIDE, Flux3Generation, QwenEdi
 from deploy.cloud.common.flux import WorkerRenderError, megapixel_size, working_size
 from deploy.cloud.common.manifest import (
     FLUX3_PROMPT,
-    REFERENCE_FLUX3_PROMPT,
-    REFERENCE_MARKER_PROMPT,
+    LOCATION_FLUX3_PROMPT,
+    MARKER_FLUX3_PROMPT,
     MODEL_PROD_FLUX3,
     MODEL_PROD_FLUX3_BF16,
     RECIPE_PROD_FLUX3,
@@ -222,32 +222,32 @@ class Flux3EditRunnerTest(unittest.TestCase):
         self.assertEqual((call["width"], call["height"]), working_size(300, 200, 1280))
         self.assertEqual((call["width"], call["height"]), (1280, 848))
 
-    def test_the_reference_generation_builds_each_part_its_way(self) -> None:
-        from deploy.cloud.common.flux3 import REFERENCE_TIME_SHIFT, TIME_SHIFT
+    def test_the_ported_generation_builds_each_part_its_way(self) -> None:
+        from deploy.cloud.common.flux3 import LOW_TIME_SHIFT, TIME_SHIFT
 
         mods = flux3_modules()
         runner = self.Runner("/weights/snap", modules=mods)
         crop, hint = crop_and_hint(300, 200, (220, 10, 290, 50))
-        every = Flux3Generation(reference_prompt=True, marker=True, reference_shift=True, megapixel_size=True)
+        every = Flux3Generation(location_prompt=True, marker=True, low_shift=True, megapixel_size=True)
         runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100,
                           qwen_edit=QwenEdit("auto", "a brick wall"), flux3_generation=every)
         call = mods.pipeline.calls[0]
-        self.assertEqual(call["prompt"], REFERENCE_FLUX3_PROMPT.replace("{location}", "upper right")
-                         + " Target description: a brick wall" + REFERENCE_MARKER_PROMPT)
+        self.assertEqual(call["prompt"], LOCATION_FLUX3_PROMPT.replace("{location}", "upper right")
+                         + " Target description: a brick wall" + MARKER_FLUX3_PROMPT)
         self.assertEqual((call["width"], call["height"]), megapixel_size(300, 200))
         self.assertEqual(megapixel_size(300, 200), (1248, 832))
         # The grown lettering is magenta in the image the model edits, the page round it is not.
         painted = np.asarray(call["image"].resize((300, 200), Image.Resampling.NEAREST))
         self.assertEqual(tuple(painted[30, 255]), (255, 0, 255))
         self.assertEqual(tuple(painted[150, 50]), (255, 255, 255))
-        self.assertAlmostEqual(REFERENCE_TIME_SHIFT, 6.93, places=2)
-        self.assertEqual(mods.pipeline.scheduler, ("scheduler", REFERENCE_TIME_SHIFT))
+        self.assertAlmostEqual(LOW_TIME_SHIFT, 6.93, places=2)
+        self.assertEqual(mods.pipeline.scheduler, ("scheduler", LOW_TIME_SHIFT))
 
         # Each part alone; the shift goes back for a request that does not ask.
         runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100,
-                          flux3_generation=Flux3Generation(reference_prompt=True))
+                          flux3_generation=Flux3Generation(location_prompt=True))
         call = mods.pipeline.calls[1]
-        self.assertEqual(call["prompt"], REFERENCE_FLUX3_PROMPT.replace("{location}", "upper right"))
+        self.assertEqual(call["prompt"], LOCATION_FLUX3_PROMPT.replace("{location}", "upper right"))
         self.assertEqual((call["width"], call["height"]), working_size(300, 200))
         self.assertEqual(tuple(np.asarray(call["image"])[30, 600]), (255, 255, 255))
         self.assertEqual(mods.pipeline.scheduler, ("scheduler", TIME_SHIFT))

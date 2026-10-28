@@ -33,7 +33,7 @@
 /// The Gradient tool's Auto type: the surface all round a selection, blended in.
 pub mod autogradient;
 pub mod fill;
-/// The reference tool's finishing v2, ported: a [`postprocess::Finishing`] choice.
+/// Manga Cleaner Reproduction's finishing v2, ported: a [`postprocess::Finishing`] choice.
 pub mod finishing;
 /// Rung 3a, the out-of-process one. It is here because it is a rung and it
 /// keeps the rungs' shape - [`flux::applies`], [`flux::declines`],

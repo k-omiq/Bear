@@ -830,14 +830,16 @@ class RequestLocalRecipeFieldsTest(unittest.TestCase):
 
     def test_a_generation_choice_is_flux3_only_never_empty_and_in_the_digest(self):
         meta = JobRequestMetadata.from_dict(json.loads(GENERATION_FIXTURE.read_text()))
-        self.assertEqual(meta.recipe.flux3_generation, Flux3Generation(reference_prompt=True, marker=True, megapixel_size=True))
+        self.assertEqual(meta.recipe.flux3_generation, Flux3Generation(location_prompt=True, marker=True, megapixel_size=True))
         self.assertEqual(meta.request_digest, compute_request_digest(meta))
         self.assertEqual(JobRequestMetadata.from_dict(meta.to_dict()), meta)
-        for other in (None, Flux3Generation(reference_prompt=True, marker=True, reference_shift=True, megapixel_size=True)):
+        for other in (None, Flux3Generation(location_prompt=True, marker=True, low_shift=True, megapixel_size=True)):
             changed = dataclasses.replace(meta, recipe=dataclasses.replace(meta.recipe, flux3_generation=other))
             self.assertNotEqual(compute_request_digest(changed), meta.request_digest)
         recipe = get_pinned_recipe(RECIPE_PROD_FLUX3).to_dict()
-        for bad in ({}, {'reference_prompt': False}, {'marker': 1}, {'colour': True}, [True]):
+        # The names before the rename are refused: the worker takes only the new ones.
+        for bad in ({}, {'location_prompt': False}, {'marker': 1}, {'colour': True}, [True],
+                    {'reference_prompt': True}, {'reference_shift': True}):
             with self.assertRaises(ContractValidationError):
                 RenderRecipe.from_dict({**recipe, 'flux3_generation': bad})
         with self.assertRaises(ContractValidationError):
@@ -850,7 +852,7 @@ class RequestLocalRecipeFieldsTest(unittest.TestCase):
         # crates/cleaner-core/src/cloud_wire.rs reads the same fixture.
         meta = JobRequestMetadata.from_dict(json.loads(SIZED_GENERATION_FIXTURE.read_text()))
         self.assertEqual(meta.recipe.work_long_side, 1280)
-        self.assertEqual(meta.recipe.flux3_generation, Flux3Generation(reference_prompt=True, reference_shift=True))
+        self.assertEqual(meta.recipe.flux3_generation, Flux3Generation(location_prompt=True, low_shift=True))
         self.assertEqual(meta.request_digest, compute_request_digest(meta))
         self.assertTrue(compute_canonical_json_array(meta).endswith(',1280,[true,false,true,false]]'))
         for side, generation in ((None, meta.recipe.flux3_generation), (1280, None)):

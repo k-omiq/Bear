@@ -52,7 +52,7 @@ import {
 import { hexOnCommit } from '../ui/color.js'
 
 import { localSeconds, normalizeDenoiseTarget } from '../model/denoise.js'
-import { FINISHINGS, FLUX3_GENERATION_PARTS, WORK_LONG_SIDES } from '../model/model-names.js'
+import { FINISHINGS, FINISHING_ALIASES, FLUX3_GENERATION_ALIASES, FLUX3_GENERATION_PARTS, WORK_LONG_SIDES } from '../model/model-names.js'
 import { ANALYSIS_TARGETS, CLOUD_STAGES, DEFAULT_DETECTOR, DEFAULT_DETECTOR_MODELS, DETECTION_MODES, DETECTION_MODE_IDS, DETECTOR_MODEL_IDS, LANGUAGES, defaultAnalysisTargets, detectionModeOf, detectsOnCloud, migrateDetectorChoice, normalizeAnalysisTargets, unifyAnalysisTargets } from '../model/pipelines.js'
 
 const STORAGE_KEY = 'session.v1'
@@ -210,7 +210,7 @@ function viewport() {
  * @property {typeof FINISHINGS[number]} cloudFinishing - how an answer is finished before it is written: a cloud FLUX 3 one always, the others when `finishingEveryModel` is on
  * @property {boolean} cloudFinishingGrayscale - whether a colour answer is made grey before it is finished
  * @property {boolean} finishingEveryModel - whether that finishing also takes the place of the tone fix on every other model's answer (Qwen, FLUX.2 Klein, LaMa)
- * @property {Record<typeof FLUX3_GENERATION_PARTS[number], boolean>} cloudFlux3Generation - which parts of a cloud FLUX 3 edit are built the reference tool's way
+ * @property {Record<typeof FLUX3_GENERATION_PARTS[number], boolean>} cloudFlux3Generation - which parts of a cloud FLUX 3 edit are built differently
  * @property {'local'|'cloud'|'off'} denoiseTarget - where page denoise runs; `cloud` still asks for consent per chapter
  * @property {string} denoisePreset - the preset id last chosen; `model/denoise.js#validPreset` resolves it against the target
  * @property {number|null} denoiseLocalSecondsPerPage - what `benchmark_denoise_local` measured on this computer, or null before it has run
@@ -792,14 +792,15 @@ export function setCloudWorkLongSide(side) {
  */
 function generationOr(value) {
   const record = value && typeof value === 'object' ? /** @type {Record<string, unknown>} */ (value) : {}
-  return /** @type {any} */ (Object.fromEntries(FLUX3_GENERATION_PARTS.map((part) => [part, record[part] === true])))
+  const old = Object.fromEntries(Object.entries(FLUX3_GENERATION_ALIASES).map(([name, part]) => [part, name]))
+  return /** @type {any} */ (Object.fromEntries(FLUX3_GENERATION_PARTS.map((part) => [part, record[part] === true || (part in old && record[old[part]] === true)])))
 }
 
 /**
- * Which parts of a cloud FLUX 3 edit are built the reference tool's way. The
+ * Which parts of a cloud FLUX 3 edit are built differently. The
  * backend reads it when it plans a clean (`cloud.svelte.js#saveCloudFlux3Generation`).
  *
- * @param {unknown} generation - `{ referencePrompt, marker, referenceShift, megapixelSize }`
+ * @param {unknown} generation - `{ locationPrompt, marker, lowShift, megapixelSize }`
  */
 export function setCloudFlux3Generation(generation) {
   session.cloudFlux3Generation = generationOr(generation)
@@ -812,7 +813,8 @@ export function setCloudFlux3Generation(generation) {
  * @returns {typeof FINISHINGS[number]}
  */
 function finishingOr(value, fallback) {
-  return FINISHINGS.find((name) => name === value) ?? fallback
+  const name = typeof value === 'string' && Object.hasOwn(FINISHING_ALIASES, value) ? /** @type {Record<string, string>} */ (FINISHING_ALIASES)[value] : value
+  return FINISHINGS.find((known) => known === name) ?? fallback
 }
 
 /**

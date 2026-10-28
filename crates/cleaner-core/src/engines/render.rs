@@ -142,8 +142,8 @@ pub fn takes_work_size(recipe_id: &str, model_id: &str) -> bool {
     SIZED_RECIPES.iter().any(|(id, model)| recipe_id == *id && model_id.starts_with(model))
 }
 
-/// How a FLUX 3 worker builds its edit, part by part this app's way or the
-/// reference tool's ("Manga Cleaner Reproduction", generation v2). The same
+/// How a FLUX 3 worker builds its edit, part by part this app's way or Manga
+/// Cleaner Reproduction's (its generation v2). The same
 /// recipes take it as take a working size ([`SIZED_RECIPES`]). Request-local
 /// like the working size: none, or every part false, is this app's way, and
 /// the app sends none then. deploy/cloud/common/contract.py Flux3Generation is
@@ -151,16 +151,19 @@ pub fn takes_work_size(recipe_id: &str, model_id: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Flux3Generation {
-    /// The reference tool's prompt template in place of this app's.
-    #[serde(default)]
-    pub reference_prompt: bool,
+    /// Manga Cleaner Reproduction's prompt template in place of this app's:
+    /// it names where the lettering sits ("upper centre"). Journals written
+    /// before the rename call it `reference_prompt`.
+    #[serde(default, alias = "reference_prompt")]
+    pub location_prompt: bool,
     /// The lettering painted magenta into the image the model edits and named
     /// in the prompt; a result that kept the paint is refused.
     #[serde(default)]
     pub marker: bool,
     /// BFL's earlier time shift, 6.93 (`mu` 1.93586), in place of 16.
-    #[serde(default)]
-    pub reference_shift: bool,
+    /// Journals written before the rename call it `reference_shift`.
+    #[serde(default, alias = "reference_shift")]
+    pub low_shift: bool,
     /// One megapixel on a 32 px grid, scaled up or down, in place of the
     /// working long side. A request that sets it names no `work_long_side`.
     #[serde(default)]
@@ -174,7 +177,7 @@ impl Flux3Generation {
     }
 }
 
-/// The size the reference tool edits a `w` by `h` crop at: one megapixel,
+/// The size Manga Cleaner Reproduction edits a `w` by `h` crop at: one megapixel,
 /// each side rounded to the nearest multiple of 32 and at least 32
 /// (`work_size` in its imaging.py, Python's round-half-even).
 pub fn megapixel_size(w: u32, h: u32) -> (u32, u32) {

@@ -13,7 +13,7 @@ import ModalHost from '../shell/ModalHost.svelte'
 import { app, clearNotices, closeAllModals, pushModal } from '../state/app.svelte.js'
 import { cloud, openCloudSettings, stopCloud } from '../state/cloud.svelte.js'
 import { cloudGpu } from '../state/cloudgpu.svelte.js'
-import { session, setCloudAllowed, setCloudFinishing, setCloudFlux3Generation } from '../state/session.svelte.js'
+import { session, setCloudAllowed, setCloudFlux3Generation } from '../state/session.svelte.js'
 import InferenceSettings, { isValidEndpointUrl, isValidProfileName } from './InferenceSettings.svelte'
 import { forgetUnfinished, setup } from './provisioning.svelte.js'
 
@@ -300,122 +300,46 @@ describe('the status line and the permission switch', () => {
   })
 })
 
-describe('the finishing', () => {
-  beforeEach(() => setCloudFinishing('copy', false, false))
-
-  it('saves the version and the grey switch, and says what the version does', async () => {
-    const backend = await seeded({ allowed: true })
-    const write = vi.spyOn(backend, 'writeSettings')
-    show(backend)
-    const pick = /** @type {HTMLSelectElement} */ (await screen.findByLabelText(t('settings.inference.finishing.label')))
-    expect(pick.value).toBe('copy')
-    expect(pick.options).toHaveLength(11)
-    await fireEvent.change(pick, { target: { value: 'reference-raster' } })
-    await waitFor(() => expect(session.cloudFinishing).toBe('reference-raster'))
-    await waitFor(() => expect(write).toHaveBeenLastCalledWith(expect.objectContaining({ cloudFinishing: 'reference-raster', cloudFinishingGrayscale: false })))
-    expect(screen.getByText(t('settings.inference.finishing.hint.referenceRaster'))).toBeTruthy()
-
-    await fireEvent.click(screen.getByLabelText(t('settings.inference.finishing.grayscale')))
-    await waitFor(() => expect(session.cloudFinishingGrayscale).toBe(true))
-    await waitFor(() => expect(write).toHaveBeenLastCalledWith(expect.objectContaining({ cloudFinishing: 'reference-raster', cloudFinishingGrayscale: true })))
-
-    const every = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('settings.inference.finishing.everyModel')))
-    expect(every.checked).toBe(false)
-    await fireEvent.click(every)
-    await waitFor(() => expect(session.finishingEveryModel).toBe(true))
-    await waitFor(() => expect(write).toHaveBeenLastCalledWith(expect.objectContaining({
-      cloudFinishing: 'reference-raster', cloudFinishingGrayscale: true, finishingEveryModel: true })))
-  })
-
-  it('puts the version back when it cannot be saved', async () => {
-    const backend = await seeded({ allowed: true })
-    vi.spyOn(backend, 'writeSettings').mockRejectedValueOnce(new Error('disk full'))
-    show(backend)
-    const pick = /** @type {HTMLSelectElement} */ (await screen.findByLabelText(t('settings.inference.finishing.label')))
-    await fireEvent.change(pick, { target: { value: 'tone-only' } })
-    await waitFor(() => expect(app.notices.some((notice) => notice.key === 'notice.cloud.finishingFailed')).toBe(true))
-    expect(session.cloudFinishing).toBe('copy')
-  })
-
-  it('unticks the grey and every-model switches when they cannot be saved', async () => {
-    const backend = await seeded({ allowed: true })
-    vi.spyOn(backend, 'writeSettings').mockRejectedValue(new Error('disk full'))
-    show(backend)
-    for (const key of ['settings.inference.finishing.grayscale', 'settings.inference.finishing.everyModel']) {
-      clearNotices()
-      const box = /** @type {HTMLInputElement} */ (await screen.findByLabelText(t(key)))
-      await fireEvent.click(box)
-      await waitFor(() => expect(app.notices.some((notice) => notice.key === 'notice.cloud.finishingFailed')).toBe(true))
-      await waitFor(() => expect(box.checked).toBe(false))
-    }
-    expect([session.cloudFinishing, session.cloudFinishingGrayscale, session.finishingEveryModel]).toEqual(['copy', false, false])
-  })
-
-  it('keeps a second switch clicked while the first one was failing to save', async () => {
-    const backend = await seeded({ allowed: true })
-    /** @type {(error: Error) => void} */
-    let fail = () => {}
-    const write = vi.spyOn(backend, 'writeSettings')
-      .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
-    show(backend)
-    const grey = /** @type {HTMLInputElement} */ (await screen.findByLabelText(t('settings.inference.finishing.grayscale')))
-    const every = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('settings.inference.finishing.everyModel')))
-    await fireEvent.click(grey)
-    await fireEvent.click(every)
-    fail(new Error('disk full'))
-    await waitFor(() => expect(write).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(grey.checked).toBe(false))
-    expect(every.checked).toBe(true)
-    expect([session.cloudFinishingGrayscale, session.finishingEveryModel]).toEqual([false, true])
-    expect(write).toHaveBeenLastCalledWith(expect.objectContaining({ cloudFinishingGrayscale: false, finishingEveryModel: true }))
-  })
-
-  it('shows what was last saved when two clicks both fail to save', async () => {
-    const backend = await seeded({ allowed: true })
-    /** @type {(error: Error) => void} */
-    let fail = () => {}
-    vi.spyOn(backend, 'writeSettings')
-      .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
-      .mockRejectedValueOnce(new Error('disk full'))
-    show(backend)
-    const grey = /** @type {HTMLInputElement} */ (await screen.findByLabelText(t('settings.inference.finishing.grayscale')))
-    await fireEvent.click(grey)
-    await fireEvent.click(grey)
-    fail(new Error('disk full'))
-    await waitFor(() => expect(app.notices.filter((notice) => notice.key === 'notice.cloud.finishingFailed').length).toBeGreaterThan(0))
-    await waitFor(() => expect(session.cloudFinishingGrayscale).toBe(false))
-    expect(grey.checked).toBe(false)
-  })
-})
-
-describe('the generation switches', () => {
+describe('the FLUX 3 options', () => {
   beforeEach(() => setCloudFlux3Generation(null))
+
+  /** Settings > Cloud with the collapsed FLUX 3 options opened. @param {import('../api/backend.js').Backend} backend */
+  async function showOptions(backend) {
+    show(backend)
+    await fireEvent.click(await screen.findByRole('button', { name: t('settings.inference.generation.title') }))
+  }
+
+  it('keeps them collapsed until asked for', async () => {
+    show(await seeded({ allowed: true }))
+    await screen.findByRole('button', { name: t('settings.inference.generation.title') })
+    expect(screen.queryByLabelText(t('settings.inference.generation.marker'))).toBeNull()
+  })
 
   it('saves each part on its own, all off at first', async () => {
     const backend = await seeded({ allowed: true })
     const write = vi.spyOn(backend, 'writeSettings')
-    show(backend)
+    await showOptions(backend)
     const marker = /** @type {HTMLInputElement} */ (await screen.findByLabelText(t('settings.inference.generation.marker')))
-    for (const part of ['referencePrompt', 'marker', 'referenceShift', 'megapixelSize']) {
+    for (const part of ['locationPrompt', 'marker', 'lowShift', 'megapixelSize']) {
       expect(/** @type {HTMLInputElement} */ (screen.getByLabelText(t(`settings.inference.generation.${part}`))).checked).toBe(false)
     }
     await fireEvent.click(marker)
     await waitFor(() => expect(session.cloudFlux3Generation.marker).toBe(true))
     await waitFor(() => expect(write).toHaveBeenLastCalledWith(expect.objectContaining({
-      cloudFlux3Generation: { referencePrompt: false, marker: true, referenceShift: false, megapixelSize: false },
+      cloudFlux3Generation: { locationPrompt: false, marker: true, lowShift: false, megapixelSize: false },
     })))
     await fireEvent.click(screen.getByLabelText(t('settings.inference.generation.megapixelSize')))
-    await waitFor(() => expect(session.cloudFlux3Generation).toEqual({ referencePrompt: false, marker: true, referenceShift: false, megapixelSize: true }))
+    await waitFor(() => expect(session.cloudFlux3Generation).toEqual({ locationPrompt: false, marker: true, lowShift: false, megapixelSize: true }))
   })
 
   it('puts the part back when it cannot be saved', async () => {
     const backend = await seeded({ allowed: true })
     vi.spyOn(backend, 'writeSettings').mockRejectedValueOnce(new Error('disk full'))
-    show(backend)
-    await fireEvent.click(await screen.findByLabelText(t('settings.inference.generation.referenceShift')))
+    await showOptions(backend)
+    await fireEvent.click(await screen.findByLabelText(t('settings.inference.generation.lowShift')))
     await waitFor(() => expect(app.notices.some((notice) => notice.key === 'notice.cloud.generationFailed')).toBe(true))
-    expect(session.cloudFlux3Generation.referenceShift).toBe(false)
-    expect(/** @type {HTMLInputElement} */ (screen.getByLabelText(t('settings.inference.generation.referenceShift'))).checked).toBe(false)
+    expect(session.cloudFlux3Generation.lowShift).toBe(false)
+    expect(/** @type {HTMLInputElement} */ (screen.getByLabelText(t('settings.inference.generation.lowShift'))).checked).toBe(false)
   })
 
   it('keeps a second part clicked while the first one was failing to save', async () => {
@@ -424,18 +348,18 @@ describe('the generation switches', () => {
     let fail = () => {}
     const write = vi.spyOn(backend, 'writeSettings')
       .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
-    show(backend)
+    await showOptions(backend)
     const marker = /** @type {HTMLInputElement} */ (await screen.findByLabelText(t('settings.inference.generation.marker')))
-    const shift = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('settings.inference.generation.referenceShift')))
+    const shift = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('settings.inference.generation.lowShift')))
     await fireEvent.click(marker)
     await fireEvent.click(shift)
     fail(new Error('disk full'))
     await waitFor(() => expect(write).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(marker.checked).toBe(false))
     expect(shift.checked).toBe(true)
-    expect(session.cloudFlux3Generation).toEqual({ referencePrompt: false, marker: false, referenceShift: true, megapixelSize: false })
+    expect(session.cloudFlux3Generation).toEqual({ locationPrompt: false, marker: false, lowShift: true, megapixelSize: false })
     expect(write).toHaveBeenLastCalledWith(expect.objectContaining({
-      cloudFlux3Generation: { referencePrompt: false, marker: false, referenceShift: true, megapixelSize: false },
+      cloudFlux3Generation: { locationPrompt: false, marker: false, lowShift: true, megapixelSize: false },
     }))
   })
 })

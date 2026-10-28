@@ -648,8 +648,8 @@ fn the_qwen_estimate_uses_its_own_grid_and_rates() {
 #[test]
 fn the_finishing_setting_rides_on_a_3_0_0_recipe_and_on_others_when_every_model_is_finished() {
     use cleaner_core::engines::postprocess::{Choice, Finishing};
-    let picked = serde_json::json!({"cloudFinishing": "reference-raster", "cloudFinishingGrayscale": true});
-    let choice = Choice { finishing: Finishing::ReferenceRaster, grayscale: true };
+    let picked = serde_json::json!({"cloudFinishing": "dots-only", "cloudFinishingGrayscale": true});
+    let choice = Choice { finishing: Finishing::DotsOnly, grayscale: true };
     let setting = finishing_from_settings(&picked).unwrap();
     assert_eq!(setting, FinishingSetting { choice, every_model: false });
     assert_eq!(finishing_from_settings(&serde_json::Value::Null), Ok(FinishingSetting::default()));
@@ -702,6 +702,8 @@ fn the_generation_setting_rides_on_flux3_only_and_megapixel_replaces_the_working
     assert_eq!(flux3_generation_from_settings(&picked), Ok(Some(generation)));
     assert_eq!(flux3_generation_from_settings(&serde_json::json!({"cloudFlux3Generation": {"marker": false}})), Ok(None));
     assert_eq!(flux3_generation_from_settings(&serde_json::Value::Null), Ok(None));
+    let every = serde_json::json!({"cloudFlux3Generation": {"locationPrompt": true, "lowShift": true}});
+    assert_eq!(flux3_generation_from_settings(&every), Ok(Some(Flux3Generation { location_prompt: true, low_shift: true, ..Flux3Generation::default() })));
     for bad in [serde_json::json!({"marker": "yes"}), serde_json::json!({"colour": true}), serde_json::json!(true)] {
         assert!(flux3_generation_from_settings(&serde_json::json!({"cloudFlux3Generation": bad})).is_err(), "{bad}");
     }

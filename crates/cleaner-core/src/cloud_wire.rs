@@ -765,7 +765,7 @@ pub fn compute_canonical_json_array(meta: &JobRequestMetadata) -> String {
     }
     if let Some(g) = meta.recipe.flux3_generation {
         canonical_array.as_array_mut().unwrap()
-            .push(serde_json::json!([g.reference_prompt, g.marker, g.reference_shift, g.megapixel_size]));
+            .push(serde_json::json!([g.location_prompt, g.marker, g.low_shift, g.megapixel_size]));
     }
     serde_json::to_string(&canonical_array).expect("valid JSON array serialization")
 }
@@ -1440,7 +1440,7 @@ mod tests {
         use crate::engines::render::{megapixel_size, Flux3Generation};
         let mut meta: JobRequestMetadata = serde_json::from_str(include_str!("../../../deploy/cloud/fixtures/flux3_generation_request.json")).unwrap();
         validate_job_request_metadata(&meta).unwrap();
-        assert_eq!(meta.recipe.flux3_generation, Some(Flux3Generation { reference_prompt: true, marker: true, reference_shift: false, megapixel_size: true }));
+        assert_eq!(meta.recipe.flux3_generation, Some(Flux3Generation { location_prompt: true, marker: true, low_shift: false, megapixel_size: true }));
         assert_eq!(compute_request_digest(&meta), meta.request_digest);
         let initial = meta.request_digest.clone();
         meta.recipe.flux3_generation = None;
@@ -1456,10 +1456,21 @@ mod tests {
         meta.recipe.model_id = "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic".into();
         meta.recipe.work_long_side = None;
         assert!(validate_recipe(&meta.recipe).is_err(), "Klein takes no generation choice");
-        // deploy/cloud/common/flux.py megapixel_size, the reference tool's work_size.
+        // deploy/cloud/common/flux.py megapixel_size, Manga Cleaner Reproduction's work_size.
         assert_eq!(megapixel_size(300, 200), (1248, 832));
         assert_eq!(megapixel_size(2000, 3000), (832, 1248));
         assert_eq!(megapixel_size(16, 16), (1024, 1024));
+    }
+
+    /// A journal written before the first and third parts were renamed
+    /// replays: `reference_prompt` and `reference_shift` read as
+    /// `location_prompt` and `low_shift`, and the new names are written.
+    #[test]
+    fn a_generation_choice_reads_under_its_old_part_names() {
+        use crate::engines::render::Flux3Generation;
+        let old: Flux3Generation = serde_json::from_value(serde_json::json!({"reference_prompt": true, "marker": false, "reference_shift": true})).unwrap();
+        assert_eq!(old, Flux3Generation { location_prompt: true, low_shift: true, ..Flux3Generation::default() });
+        assert_eq!(serde_json::json!(old), serde_json::json!({"location_prompt": true, "marker": false, "low_shift": true, "megapixel_size": false}));
     }
 
     #[test]
@@ -1468,7 +1479,7 @@ mod tests {
         let meta: JobRequestMetadata = serde_json::from_str(include_str!("../../../deploy/cloud/fixtures/flux3_sized_generation_request.json")).unwrap();
         validate_job_request_metadata(&meta).unwrap();
         assert_eq!(meta.recipe.work_long_side, Some(1280));
-        assert_eq!(meta.recipe.flux3_generation, Some(Flux3Generation { reference_prompt: true, reference_shift: true, ..Flux3Generation::default() }));
+        assert_eq!(meta.recipe.flux3_generation, Some(Flux3Generation { location_prompt: true, low_shift: true, ..Flux3Generation::default() }));
         assert!(compute_canonical_json_array(&meta).ends_with(",1280,[true,false,true,false]]"));
         assert_eq!(compute_request_digest(&meta), meta.request_digest);
     }

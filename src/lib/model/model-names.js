@@ -74,7 +74,8 @@ export const WORK_LONG_SIDES = /** @type {const} */ ([768, 1024, 1280])
  * How the app finishes an answer before it is written
  * (`postprocess.rs#Finishing`, the `cloudFinishing` setting): a cloud FLUX 3
  * one always, the others when `finishingEveryModel` is on. The first is
- * the default. The `reference-` ones are the reference tool's finishing v2.
+ * the default. The four tone ones and `dots-only` are ported from Manga
+ * Cleaner Reproduction's finishing v2.
  */
 export const FINISHINGS = /** @type {const} */ ([
   'copy',
@@ -83,29 +84,45 @@ export const FINISHINGS = /** @type {const} */ ([
   'redraw-sharp-contours',
   'repeat-offsets',
   'tone-only',
-  'reference-off',
-  'reference-global',
-  'reference-local',
-  'reference-poisson',
-  'reference-raster',
+  'global-tone',
+  'local-tone',
+  'poisson',
+  'dots-only',
+  'as-is',
 ])
 
 /**
- * The parts of a cloud FLUX 3 edit that can be built the reference tool's way
+ * Names older settings files saved for a finishing, and the one each is now.
+ * `session.svelte.js` reads them; `postprocess.rs#Finishing` has the same
+ * aliases.
+ */
+export const FINISHING_ALIASES = Object.freeze({
+  'reference-off': 'as-is',
+  'reference-global': 'global-tone',
+  'reference-local': 'local-tone',
+  'reference-poisson': 'poisson',
+  'reference-raster': 'dots-only',
+})
+
+/**
+ * The parts of a cloud FLUX 3 edit that can be built differently
  * (`render.rs#Flux3Generation`, the `cloudFlux3Generation` setting). Each is
  * off by default.
  */
-export const FLUX3_GENERATION_PARTS = /** @type {const} */ (['referencePrompt', 'marker', 'referenceShift', 'megapixelSize'])
+export const FLUX3_GENERATION_PARTS = /** @type {const} */ (['locationPrompt', 'marker', 'lowShift', 'megapixelSize'])
+
+/** Older names of two generation parts, and the part each is now. */
+export const FLUX3_GENERATION_ALIASES = Object.freeze({ referencePrompt: 'locationPrompt', referenceShift: 'lowShift' })
 
 /**
- * The Finishing picker's text for a version: its `option` label or its
+ * The Post-processing picker's text for a method: its `option` label or its
  * `hint`, under a camelCase key.
  *
  * @param {'option'|'hint'} part
  * @param {string} name - one of `FINISHINGS`
  */
 export function finishingKey(part, name) {
-  return `settings.inference.finishing.${part}.${name.replace(/-(\w)/g, (_, c) => c.toUpperCase())}`
+  return `settings.postprocessing.${part}.${name.replace(/-(\w)/g, (_, c) => c.toUpperCase())}`
 }
 
 /**

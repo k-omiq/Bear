@@ -1,8 +1,8 @@
 /**
  * Where Settings opens, and the ids older callers still ask for.
  *
- * Settings has eight sections: General, Models, Cloud, Denoise, Export,
- * Performance, Shortcuts and About. Detection and Cleaning became two groups inside Models, and the
+ * Settings has nine sections: General, Models, Cloud, Post-processing,
+ * Denoise, Export, Performance, Shortcuts and About. Detection and Cleaning became two groups inside Models, and the
  * Cloud section's id is `cloud` now. A caller written before either change
  * still lands on the rows it meant: `detection` and `cleaning` open Models at
  * their group, `inference` opens Cloud, `acceleration` opens Performance.
@@ -22,7 +22,7 @@ import { CAPABILITIES, groupOfModel, model, modelOfFile } from '../model/pipelin
 import { DETECTOR_MODEL_NAMES } from '../model/model-names.js'
 
 /** The sections, in the order the sidebar offers them. */
-export const SETTINGS_SECTIONS = Object.freeze(['general', 'models', 'cloud', 'denoise', 'export', 'performance', 'shortcuts', 'about'])
+export const SETTINGS_SECTIONS = Object.freeze(['general', 'models', 'cloud', 'postprocessing', 'denoise', 'export', 'performance', 'shortcuts', 'about'])
 
 /** Ids from before the restructure, and where their rows went. */
 const ALIASES = Object.freeze({

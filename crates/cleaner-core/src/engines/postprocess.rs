@@ -33,8 +33,8 @@
 //!    the answer.
 //!
 //! [`Finishing`] picks the version: every screen step the bench measured, the
-//! steps without the screen, or the reference tool's own finishing
-//! ([`super::finishing`]) in place of all four. The default is bench 7's.
+//! steps without the screen, or a port of Manga Cleaner Reproduction's
+//! finishing ([`super::finishing`]) in place of all four. The default is bench 7's.
 //!
 //! Prototyped in Python on the FLUX 3 bench (docs/research/flux3-klein-5_6b.md,
 //! bench 3) and measured against synthetic lettering over real pages.
@@ -87,8 +87,10 @@ const TENSOR_SIGMA: f64 = 2.0;
 const MIN_COHERENCE: f64 = 0.35;
 
 /// The finishing an answer gets before it is written. The first six are this
-/// module's steps with one screen step or none; the `Reference` ones are the
-/// reference tool's finishing v2 ([`super::finishing::Method`]) instead.
+/// module's steps with one screen step or none; the last five are Manga
+/// Cleaner Reproduction's finishing v2, ported ([`super::finishing::Method`]),
+/// instead. Each of those still reads under the name it was first saved
+/// with, a serde alias.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Finishing {
@@ -108,11 +110,23 @@ pub enum Finishing {
     RepeatOffsets,
     /// Contours, tone and lighting; no screen step.
     ToneOnly,
-    ReferenceOff,
-    ReferenceGlobal,
-    ReferenceLocal,
-    ReferencePoisson,
-    ReferenceRaster,
+    /// The answer as it came, grey if asked (ported `off`).
+    #[serde(alias = "reference-off")]
+    AsIs,
+    /// One gain and offset per channel from a ring round the mask (ported
+    /// `global`).
+    #[serde(alias = "reference-global")]
+    GlobalTone,
+    /// The global match, then a field of the residual (ported `local`).
+    #[serde(alias = "reference-local")]
+    LocalTone,
+    /// The local match, then the lighting solved by Poisson (ported
+    /// `poisson`).
+    #[serde(alias = "reference-poisson")]
+    Poisson,
+    /// The page's own dots copied in phase, nothing else (ported `raster`).
+    #[serde(alias = "reference-raster")]
+    DotsOnly,
 }
 
 impl Finishing {
@@ -123,22 +137,22 @@ impl Finishing {
         Finishing::RedrawSharpContours,
         Finishing::RepeatOffsets,
         Finishing::ToneOnly,
-        Finishing::ReferenceOff,
-        Finishing::ReferenceGlobal,
-        Finishing::ReferenceLocal,
-        Finishing::ReferencePoisson,
-        Finishing::ReferenceRaster,
+        Finishing::AsIs,
+        Finishing::GlobalTone,
+        Finishing::LocalTone,
+        Finishing::Poisson,
+        Finishing::DotsOnly,
     ];
 
-    /// The reference tool's method, for the `Reference` versions.
-    pub fn reference(self) -> Option<super::finishing::Method> {
+    /// The ported method, for the five Manga Cleaner Reproduction versions.
+    pub fn ported_method(self) -> Option<super::finishing::Method> {
         use super::finishing::Method;
         match self {
-            Finishing::ReferenceOff => Some(Method::Off),
-            Finishing::ReferenceGlobal => Some(Method::Global),
-            Finishing::ReferenceLocal => Some(Method::Local),
-            Finishing::ReferencePoisson => Some(Method::Poisson),
-            Finishing::ReferenceRaster => Some(Method::Raster),
+            Finishing::AsIs => Some(Method::Off),
+            Finishing::GlobalTone => Some(Method::Global),
+            Finishing::LocalTone => Some(Method::Local),
+            Finishing::Poisson => Some(Method::Poisson),
+            Finishing::DotsOnly => Some(Method::Raster),
             _ => None,
         }
     }
@@ -146,7 +160,8 @@ impl Finishing {
 
 /// A finishing as the `cloudFinishing` settings and a cloud recipe keep it:
 /// the version, and whether a colour answer is made grey first (the
-/// reference tool's `force_grayscale`; a grey page's answer is grey already).
+/// `force_grayscale` of Manga Cleaner Reproduction; a grey page's answer is
+/// grey already).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Choice {
@@ -172,9 +187,10 @@ pub struct Report {
     /// The version that ran, and whether it made the patch grey.
     #[serde(flatten)]
     pub choice: Choice,
-    /// The reference finishing's own report, for the `Reference` versions.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reference: Option<serde_json::Value>,
+    /// The ported finishing's own details record, for the five ported
+    /// versions.
+    #[serde(rename = "ported", skip_serializing_if = "Option::is_none")]
+    pub method_report: Option<serde_json::Value>,
 }
 
 /// The crop as the model was shown it and as it answered, one grid per tone
@@ -197,7 +213,7 @@ pub fn settle(crop: &Crop<'_>) -> (Vec<Grid>, Report) {
 /// The answer, matched to the page: one grid per tone channel. Outside
 /// `mask` it is the answer unchanged; the caller writes only inside it.
 pub fn settle_with(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
-    // The tone fit and the reference finishing work on the whole crop; only
+    // The tone fit and the ported finishing work on the whole crop; only
     // the mask keeps what they made.
     let (finished, report) = finish(crop, choice);
     let kept = finished.iter().zip(crop.answer).map(|(finished, answer)| finished.select(crop.mask, answer)).collect();
@@ -209,10 +225,10 @@ fn finish(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
     let Choice { finishing, grayscale } = choice;
     let mask = crop.mask;
     let (w, h) = (mask.w, mask.h);
-    let mut report = Report { gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0, choice, reference: None };
-    if let Some(method) = finishing.reference() {
+    let mut report = Report { gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0, choice, method_report: None };
+    if let Some(method) = finishing.ported_method() {
         let (finished, details) = super::finishing::finish(crop, method, grayscale);
-        report.reference = Some(details);
+        report.method_report = Some(details);
         return (finished, report);
     }
     // A colour crop made grey is finished as one grey channel, then written
@@ -580,8 +596,8 @@ mod tests {
     }
 
     /// **Every finishing writes only the mask and says which one ran.**
-    /// Outside the mask the answer comes back as it was, the reference ones
-    /// included, and a reference finishing reports its method.
+    /// Outside the mask the answer comes back as it was, the ported ones
+    /// included, and a ported finishing reports its method.
     #[test]
     fn every_finishing_keeps_the_answer_outside_the_mask() {
         let (w, h) = (160, 160);
@@ -591,14 +607,28 @@ mod tests {
             let (out, report) = settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, finishing, false);
             assert!((0..w * h).all(|i| mask.data[i] || out[0].data[i] == answer.data[i]), "{finishing:?} wrote outside the mask");
             assert_eq!(report.choice.finishing, finishing);
-            let name = serde_json::json!(finishing);
-            let method = report.reference.as_ref().map(|details| details["method"].clone());
-            assert_eq!(method, name.as_str().and_then(|n| n.strip_prefix("reference-")).map(|m| serde_json::json!(m)), "{finishing:?}");
+            let method = report.method_report.as_ref().map(|details| details["method"].clone());
+            assert_eq!(method, finishing.ported_method().map(|m| serde_json::json!(m.name())), "{finishing:?}");
         }
     }
 
+    /// **Old names still load.** A settings file or journal written before the
+    /// five ported versions were renamed reads as the new version, and the
+    /// new name is what is written back.
+    #[test]
+    fn the_ported_versions_read_under_their_old_names() {
+        let old = [("reference-off", Finishing::AsIs), ("reference-global", Finishing::GlobalTone), ("reference-local", Finishing::LocalTone), ("reference-poisson", Finishing::Poisson), ("reference-raster", Finishing::DotsOnly)];
+        for (name, finishing) in old {
+            assert_eq!(serde_json::from_value::<Finishing>(serde_json::json!(name)).unwrap(), finishing);
+        }
+        let names: Vec<_> = Finishing::ALL[6..].iter().map(|f| serde_json::json!(f)).collect();
+        assert_eq!(names, ["as-is", "global-tone", "local-tone", "poisson", "dots-only"].map(|n| serde_json::json!(n)));
+        let choice: Choice = serde_json::from_value(serde_json::json!({"finishing": "reference-poisson", "grayscale": true})).unwrap();
+        assert_eq!(choice, Choice { finishing: Finishing::Poisson, grayscale: true });
+    }
+
     /// **Every screen finishing gets the dots back.** The default's
-    /// neighbours, the repeat offsets and the reference raster each bring the
+    /// neighbours, the repeat offsets and the ported raster each bring the
     /// page's screen back into a hole the model filled flat.
     #[test]
     fn every_screen_finishing_gets_the_pages_dots_back() {
@@ -607,11 +637,11 @@ mod tests {
         let all = Mask::new(w, h, true);
         let core = square(w, h, 56, 56, 104, 104);
         let error = |g: &Grid| (0..w * h).filter(|&i| core.data[i]).map(|i| (g.data[i] - page.data[i]).abs()).sum::<f64>() / core.count() as f64;
-        let screens = [Finishing::CopyHops, Finishing::Redraw, Finishing::RedrawSharpContours, Finishing::RepeatOffsets, Finishing::ReferenceRaster];
+        let screens = [Finishing::CopyHops, Finishing::Redraw, Finishing::RedrawSharpContours, Finishing::RepeatOffsets, Finishing::DotsOnly];
         for finishing in screens {
             let (out, report) = settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, finishing, false);
             assert!(error(&out[0]) < 0.3 * error(&answer), "{finishing:?}: {} against {}", error(&out[0]), error(&answer));
-            if finishing.reference().is_none() {
+            if finishing.ported_method().is_none() {
                 assert!(report.screen > 0, "{finishing:?}: {report:?}");
             }
         }
@@ -619,15 +649,15 @@ mod tests {
 
     /// **Off the page is no evidence.** A black band the crop holds beyond the
     /// page, 6 px from the mask, does not darken a patch of paper under any
-    /// reference finishing, the Poisson boundary included.
+    /// ported finishing, the Poisson boundary included.
     #[test]
-    fn what_lies_off_the_page_does_not_pull_the_reference_finishings() {
+    fn what_lies_off_the_page_does_not_pull_the_ported_finishings() {
         let (w, h) = (256, 256);
         let mask = square(w, h, 36, 96, 220, 160);
         let off = square(w, h, 226, 0, w, h);
         let shown = Grid { w, h, data: (0..w * h).map(|i| if off.data[i] { 0.0 } else if mask.data[i] && (i % w / 6) % 2 == 0 { 20.0 } else { 235.0 }).collect() };
         let answer = Grid::new(w, h, 235.0);
-        for finishing in [Finishing::ReferenceGlobal, Finishing::ReferenceLocal, Finishing::ReferencePoisson] {
+        for finishing in [Finishing::GlobalTone, Finishing::LocalTone, Finishing::Poisson] {
             let (out, _) = settle_as(std::slice::from_ref(&shown), std::slice::from_ref(&answer), &mask, &off.not(), finishing, false);
             let worst = (0..w * h).filter(|&i| mask.data[i]).map(|i| (out[0].data[i] - 235.0).abs()).fold(0.0, f64::max);
             assert!(worst == 0.0, "{finishing:?}: {worst} levels off the paper");
@@ -635,7 +665,7 @@ mod tests {
     }
 
     /// **A mask on the crop's edge.** The screen is still copied back and the
-    /// reference Poisson still solves, padded past the edge.
+    /// ported Poisson still solves, padded past the edge.
     #[test]
     fn a_mask_on_the_crops_edge_is_finished() {
         let (w, h) = (160, 160);
@@ -645,7 +675,7 @@ mod tests {
         let error = |g: &Grid| (0..w * h).filter(|&i| core.data[i]).map(|i| (g.data[i] - page.data[i]).abs()).sum::<f64>() / core.count() as f64;
         let (out, _) = settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, Finishing::Copy, false);
         assert!(error(&out[0]) < 0.3 * error(&answer), "{} against {}", error(&out[0]), error(&answer));
-        let (out, report) = settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, Finishing::ReferencePoisson, false);
+        let (out, report) = settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, Finishing::Poisson, false);
         assert!(out[0].data.iter().all(|v| (0.0..=255.0).contains(v)), "{report:?}");
     }
 
@@ -660,7 +690,7 @@ mod tests {
         let shown = [tint(&page, 6.0), page.clone(), tint(&page, -6.0)];
         let answers = [tint(&answer, 6.0), answer.clone(), tint(&answer, -6.0)];
         let all = Mask::new(w, h, true);
-        for finishing in [Finishing::Copy, Finishing::ReferencePoisson] {
+        for finishing in [Finishing::Copy, Finishing::Poisson] {
             let (out, report) = settle_as(&shown, &answers, &mask, &all, finishing, true);
             assert_eq!(out.len(), 3);
             assert!((0..w * h).filter(|&i| mask.data[i]).all(|i| out[0].data[i] == out[1].data[i] && out[1].data[i] == out[2].data[i]), "{finishing:?}");

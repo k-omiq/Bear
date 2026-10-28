@@ -1,6 +1,6 @@
 <script>
   import { untrack } from 'svelte'
-  import { cachedLayer, loadLayer, noteLayerDrawn } from './patchlayers.svelte.js'
+  import { cachedLayer, holdLayer, loadLayer, noteLayerDrawn, releaseLayer } from './patchlayers.svelte.js'
   import { layerPreviews } from './layerpreview.svelte.js'
   import { drawErased, eraseMasks } from './erasepreview.svelte.js'
 
@@ -72,6 +72,10 @@
       const context = node.getContext('2d')
       if (context) drawErased(context, image, erasing(bounds), bounds, plan)
     }
+    if (shown !== entry) {
+      holdLayer(entry)
+      if (shown) releaseLayer(shown)
+    }
     shown = entry
     shownUrl = layer.url
     noteLayerDrawn(pageId)
@@ -121,6 +125,20 @@
       context.clearRect(0, 0, node.width, node.height)
       drawErased(context, image, list, bounds, plan)
     })
+  })
+
+  // A canvas let go keeps its backing store until it is collected, which
+  // WebKit does late: empty it, and let the cache close its picture.
+  $effect(() => {
+    const node = canvasEl
+    if (!node) return
+    return () => {
+      node.width = 0
+      node.height = 0
+      if (shown) releaseLayer(shown)
+      shown = null
+      shownUrl = null
+    }
   })
 
   $effect(() => {

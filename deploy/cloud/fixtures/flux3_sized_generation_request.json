@@ -14,9 +14,9 @@
     },
     "work_long_side": 1280,
     "flux3_generation": {
-      "reference_prompt": true,
+      "location_prompt": true,
       "marker": false,
-      "reference_shift": true,
+      "low_shift": true,
       "megapixel_size": false
     }
   },

@@ -55,6 +55,7 @@ const LABELS = {
   general: 'settings.section.general',
   models: 'settings.section.models',
   cloud: 'settings.section.cloud',
+  postprocessing: 'settings.section.postprocessing',
   denoise: 'settings.section.denoise',
   export: 'settings.section.export',
   performance: 'settings.section.performance',

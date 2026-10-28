@@ -5231,7 +5231,7 @@ pub(crate) mod tests {
         fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v1".into();
         fixture.recipe.model_id = "unsloth/flux-3-image-klein".into();
         fixture.recipe.preprocessing_version = "3.0.0".into();
-        let choice = Choice { finishing: Finishing::ReferencePoisson, grayscale: true };
+        let choice = Choice { finishing: Finishing::Poisson, grayscale: true };
         fixture.recipe.finishing = Some(choice);
         let generation = cleaner_core::engines::render::Flux3Generation { marker: true, ..Default::default() };
         fixture.recipe.flux3_generation = Some(generation);
@@ -5242,7 +5242,7 @@ pub(crate) mod tests {
         assert_eq!((record.finishing, record.flux3_generation), (Some(choice), Some(generation)));
         assert_eq!(compute_request_digest(&record.to_request_metadata()), record.request_digest);
         let postprocess = &fixture.committed_patch().provenance.params_snapshot["postprocess"];
-        assert_eq!((&postprocess["finishing"], &postprocess["grayscale"]), (&serde_json::json!("reference-poisson"), &serde_json::json!(true)));
+        assert_eq!((&postprocess["finishing"], &postprocess["grayscale"]), (&serde_json::json!("poisson"), &serde_json::json!(true)));
         assert_eq!(fixture.committed_patch().provenance.params_snapshot["flux3_generation"]["marker"], true);
     }
 
@@ -5256,7 +5256,7 @@ pub(crate) mod tests {
         fixture.recipe.recipe_id = "mc-qwen-image-edit-2511-v4".into();
         fixture.recipe.model_id = "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32".into();
         fixture.recipe.preprocessing_version = "2.0.0".into();
-        let choice = Choice { finishing: Finishing::ReferencePoisson, grayscale: false };
+        let choice = Choice { finishing: Finishing::Poisson, grayscale: false };
         fixture.recipe.finishing = Some(choice);
         let service = cached_fixture(&fixture);
         assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(),
@@ -5265,7 +5265,7 @@ pub(crate) mod tests {
         assert_eq!(record.finishing, Some(choice));
         assert_eq!(compute_request_digest(&record.to_request_metadata()), record.request_digest);
         let postprocess = &fixture.committed_patch().provenance.params_snapshot["postprocess"];
-        assert_eq!((&postprocess["finishing"], &postprocess["grayscale"]), (&serde_json::json!("reference-poisson"), &serde_json::json!(false)));
+        assert_eq!((&postprocess["finishing"], &postprocess["grayscale"]), (&serde_json::json!("poisson"), &serde_json::json!(false)));
     }
 
     /// A record an older build left waiting for a review, or marked reviewed,

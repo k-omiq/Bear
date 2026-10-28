@@ -66,7 +66,12 @@ fn read_file(path: &std::path::Path) -> Result<Value, String> {
         // own defaults are the right answer.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Value::Object(Map::new())),
         Err(err) => Err(format!("{}: {err}", path.display())),
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display())),
+        Ok(bytes) => {
+            let mut settings = serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+            // Settings written before a rename read under the new names.
+            crate::inference::cloud_clean::migrate_settings(&mut settings);
+            Ok(settings)
+        }
     }
 }
 
@@ -743,7 +748,7 @@ mod tests {
         assert!(write_patch(&path, serde_json::json!({"cloudFinishingGrayscale": "yes"})).is_err());
         assert_eq!(write_patch(&path, serde_json::json!({"finishingEveryModel": true})).unwrap()["finishingEveryModel"], true);
         assert!(write_patch(&path, serde_json::json!({"finishingEveryModel": 1})).is_err());
-        assert_eq!(read_file(&path).unwrap()["cloudFinishing"], "reference-raster", "a refused patch writes nothing");
+        assert_eq!(read_file(&path).unwrap()["cloudFinishing"], "dots-only", "a refused patch writes nothing");
         assert!(write_patch(&path, serde_json::json!({"cloudFinishing": null, "cloudFinishingGrayscale": null, "finishingEveryModel": null})).is_ok());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -752,13 +757,46 @@ mod tests {
     fn cloud_flux3_generation_is_four_switches() {
         let dir = std::env::temp_dir().join(format!("mc-settings-generation-{}", std::process::id()));
         let path = dir.join("settings.json");
-        let every = serde_json::json!({"referencePrompt": true, "marker": true, "referenceShift": true, "megapixelSize": true});
+        let every = serde_json::json!({"locationPrompt": true, "marker": true, "lowShift": true, "megapixelSize": true});
         assert_eq!(write_patch(&path, serde_json::json!({"cloudFlux3Generation": every})).unwrap()["cloudFlux3Generation"], every);
-        for bad in [serde_json::json!({"marker": 1}), serde_json::json!({"steps": true}), serde_json::json!("reference")] {
+        // A patch takes only the new part names; an old file is read through them.
+        let old_names = serde_json::json!({"referencePrompt": true});
+        for bad in [serde_json::json!({"marker": 1}), serde_json::json!({"steps": true}), serde_json::json!("ported"), old_names] {
             assert!(write_patch(&path, serde_json::json!({"cloudFlux3Generation": bad})).is_err(), "{bad}");
         }
         assert_eq!(read_file(&path).unwrap()["cloudFlux3Generation"], every, "a refused patch writes nothing");
         assert!(write_patch(&path, serde_json::json!({"cloudFlux3Generation": null})).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A settings file written before the rename keeps the user's choice.**
+    /// `reference-raster` and the two old FLUX 3 part names read as dots-only,
+    /// `locationPrompt` and `lowShift`, every reader takes them, and the next
+    /// write stores the new names.
+    #[test]
+    fn an_old_settings_file_reads_under_the_new_names() {
+        use crate::inference::cloud_clean::{finishing_from_settings, flux3_generation_from_settings};
+        use cleaner_core::engines::postprocess::Finishing;
+        use cleaner_core::engines::render::Flux3Generation;
+        let dir = std::env::temp_dir().join(format!("mc-settings-renamed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let old = serde_json::json!({
+            "cloudFinishing": "reference-raster",
+            "cloudFinishingGrayscale": true,
+            "cloudFlux3Generation": {"referencePrompt": true, "marker": false, "referenceShift": true},
+        });
+        std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+        let read = read_file(&path).unwrap();
+        assert_eq!(read["cloudFinishing"], "dots-only", "{read}");
+        assert_eq!(read["cloudFlux3Generation"], serde_json::json!({"locationPrompt": true, "marker": false, "lowShift": true}), "{read}");
+        let finishing = finishing_from_settings(&read).unwrap().choice;
+        assert_eq!((finishing.finishing, finishing.grayscale), (Finishing::DotsOnly, true));
+        assert_eq!(flux3_generation_from_settings(&read).unwrap(),
+            Some(Flux3Generation { location_prompt: true, low_shift: true, ..Flux3Generation::default() }));
+        write_patch(&path, serde_json::json!({"undoLimit": null})).unwrap();
+        let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!((&stored["cloudFinishing"], &stored["cloudFlux3Generation"]), (&read["cloudFinishing"], &read["cloudFlux3Generation"]));
         std::fs::remove_dir_all(&dir).ok();
     }
 
