@@ -482,7 +482,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {() => Promise<Object>} listWorkflowCapabilities - independent RT, SAM, COO and backend states; `runtimeReady` means the runtime loaded, `localDetectionReady` covers verified local Full + SAM and SAM memory, while `samWriteQualified` applies only to direct preview writes. CTD, filtering, optional reader and chosen backend readiness are checked separately
  * @property {(spec: {sourcePath: string}) => Promise<boolean>} importFullRt
  * @property {() => Promise<boolean>} removeFullRt
- * @property {(spec: {sourceDir: string}) => Promise<boolean>} importSamTs - install verified local ONNX graphs as a logical pair
+ * @property {(spec: {sourceDir: string}) => Promise<boolean>} importSamTs - install the verified local SAM-TS-L files as one group
  * @property {() => Promise<boolean>} installSamTs - download pinned upstream weights and export verified SAM-TS-L graphs locally. Progress arrives on `onSamInstallProgress`, never as this promise
  * @property {(handler: (progress: {step: 'python'|'environment'|'dependencies'|'weights'|'source'|'export'|'verify', percent: number}) => void) => Promise<() => void>} onSamInstallProgress - `sam-install://progress`: the running `installSamTs`'s stage and percent of the whole install. Only the checkpoint download moves within its stage
  * @property {() => Promise<boolean>} removeSamTs

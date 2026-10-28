@@ -282,6 +282,15 @@ pub(crate) fn qualified_webgpu_write_environment(app_data: &Path) -> bool {
 }
 
 pub(crate) fn verify_graphs(dir: &Path) -> Result<(), String> {
+    // A folder from before the per-head rewrite has the encoder with its
+    // weights inside and no side file. Name that rather than the missing file.
+    if dir.join(sam_ts::ENCODER).is_file() && !dir.join(sam_ts::ENCODER_DATA).exists() {
+        return Err(format!(
+            "{} has the old single-file SAM-TS-L encoder and no {}. Use Install to rebuild it.",
+            dir.display(),
+            sam_ts::ENCODER_DATA
+        ));
+    }
     for graph in GRAPHS {
         let path = dir.join(graph.name);
         let size = std::fs::metadata(&path)
@@ -306,16 +315,29 @@ pub(crate) fn graph_dir(app_data: &Path) -> Option<PathBuf> {
     // An explicit developer path is read-only and never removed by the UI.
     if let Ok(path) = std::env::var("MANGA_CLEANER_SAM_TS") {
         let path = PathBuf::from(path);
-        if GRAPHS.iter().all(|graph| path.join(graph.name).is_file()) {
+        let missing = missing_graphs(&path);
+        if missing.is_empty() {
             return Some(path);
+        }
+        // An old single-file encoder folder would otherwise be skipped
+        // silently. Said once: every status read comes through here.
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("manga-cleaner: MANGA_CLEANER_SAM_TS {} lacks {}; using the app's SAM-TS-L graphs",
+                path.display(), missing.join(", "));
         }
     }
     graph_dir_in(crate::run::model_search_paths(Some(app_data)))
 }
 
+/// The pinned SAM-TS-L files absent from `dir`, by name.
+fn missing_graphs(dir: &Path) -> Vec<&'static str> {
+    GRAPHS.iter().filter(|graph| !dir.join(graph.name).is_file()).map(|graph| graph.name).collect()
+}
+
 fn graph_dir_in(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
     paths.into_iter().map(|path| path.join("sam-ts-l"))
-        .find(|path| GRAPHS.iter().all(|graph| path.join(graph.name).is_file()))
+        .find(|path| missing_graphs(path).is_empty())
 }
 
 fn rt_path_with(
@@ -2266,6 +2288,25 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// An import from a folder made before the per-head rewrite says it is the
+    /// old layout and to use Install, not that a file is missing.
+    #[test]
+    fn old_single_file_encoder_folder_is_named_as_such() {
+        let root = std::env::temp_dir().join(format!("mc-sam-old-{}-{:?}", std::process::id(), std::thread::current().id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(cleaner_core::sam_ts::ENCODER), b"encoder").unwrap();
+        std::fs::write(root.join(cleaner_core::sam_ts::HEAD), b"head").unwrap();
+        assert_eq!(super::missing_graphs(&root), [cleaner_core::sam_ts::ENCODER_DATA]);
+        let error = super::verify_graphs(&root).unwrap_err();
+        assert!(error.contains("old single-file SAM-TS-L encoder") && error.contains("Use Install"), "{error}");
+        // With the side file present the usual pin check speaks instead.
+        std::fs::write(root.join(cleaner_core::sam_ts::ENCODER_DATA), b"weights").unwrap();
+        assert!(super::missing_graphs(&root).is_empty());
+        let error = super::verify_graphs(&root).unwrap_err();
+        assert!(error.contains("bytes; expected"), "{error}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn review_source_preview_is_managed_srgb_and_oriented_once() {
         use base64::Engine as _;
@@ -2628,7 +2669,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires local SAM graphs, app ORT WebGPU runtime, and measured M5 host"]
+    #[ignore = "requires pinned SAM graphs in MANGA_CLEANER_SAM_TS, app ORT WebGPU runtime, and measured M5 host"]
     fn real_webgpu_mask_commits_only_approved_support() {
         let _store = store_serial();
         use cleaner_core::composite::changed_pixels;
@@ -2637,10 +2678,14 @@ mod tests {
 
         let runtime = std::env::var("SAM_TS_RUNTIME").expect("SAM_TS_RUNTIME is required");
         cleaner_core::runtime::load(Path::new(&runtime)).unwrap();
+        // The pinned per-head graphs, so the model_sha256 recorded below names
+        // the graphs that made the mask. The spike's proof is the old encoder.
+        let graphs = PathBuf::from(std::env::var("MANGA_CLEANER_SAM_TS").expect("MANGA_CLEANER_SAM_TS is required"));
+        verify_graphs(&graphs).unwrap();
         let spike = Path::new(env!("CARGO_MANIFEST_DIR")).join("../spikes/sam-ts-l");
         let source_bytes = std::fs::read(spike.join("fixtures/synthetic_page.png")).unwrap();
         let page = decode(&source_bytes).unwrap();
-        let inference = sam_ts::infer_webgpu(&page, &spike.join("artifacts/proof")).unwrap();
+        let inference = sam_ts::infer_webgpu(&page, &graphs).unwrap();
         assert_eq!(inference.cpu_fallback_nodes, Some((0, 0)));
         let evidence = cleaner_core::fusion::fuse(
             page.width,

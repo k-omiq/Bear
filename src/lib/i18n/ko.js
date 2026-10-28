@@ -516,7 +516,7 @@ export const ko = {
       },
       sam: {
         memory: '여유 메모리가 5 GB 미만이면 느리게 실행됩니다.',
-        chooserTitle: 'SAM-TS-L 레터링 마스크 그래프 두 개가 모두 있는 폴더',
+        chooserTitle: 'SAM-TS-L 레터링 마스크 파일 세 개가 모두 있는 폴더',
       },
       rtFull: {
         chooserTitle: '고정된 Ogkalu comic text & bubble detector (Full)의 detector.onnx',
