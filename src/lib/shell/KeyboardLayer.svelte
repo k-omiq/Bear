@@ -275,12 +275,17 @@
    * nothing, so a focused text field does not stop it the way it stops a
    * bare letter.
    *
-   * @param {PointerEvent} event
+   * Every release is cancelled, bound or not: on macOS the web view goes back
+   * or forward in the page history on an uncancelled `mouseup` of those two
+   * buttons, and the app has no history to walk.
+   *
+   * @param {MouseEvent} event
    */
   function onpointer(event) {
     const press = extraButtonPress(event)
     if (!press) return
     if (!press.down) {
+      event.preventDefault()
       if (releasesHold(press, HOLD_ORIGINAL_ID)) commands.holdOriginal(false)
       if (releasesHold(press, HOLD_PAN_ID) && editorState.editor.panHeld) commands.holdPan(false)
       return
@@ -315,6 +320,7 @@
   onkeyup={onkeyup}
   onblur={onblur}
   onpointerdown={onpointer}
-  onpointermove={onpointer}
   onpointerup={onpointer}
+  onmousedown={onpointer}
+  onmouseup={onpointer}
 />

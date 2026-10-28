@@ -838,7 +838,7 @@ describe('rebinding', () => {
   describe('extra mouse buttons', () => {
     /** @param {string} type @param {number} button @param {Object} [extra] */
     function pointer(type, button, extra = {}) {
-      return { type, button, buttons: 0, target: null, ...extra }
+      return { type, button, target: null, ...extra }
     }
 
     it('reads back and forward as keys, and nothing else', () => {
@@ -848,10 +848,10 @@ describe('rebinding', () => {
       expect(extraButtonPress(pointer('click', 3))).toBe(null)
     })
 
-    it('reads a press made while another button is down', () => {
-      expect(extraButtonPress(pointer('pointermove', 3, { buttons: 1 | 8 }))?.down).toBe(true)
-      expect(extraButtonPress(pointer('pointermove', 3, { buttons: 1 }))?.down).toBe(false)
-      expect(extraButtonPress(pointer('pointermove', -1, { buttons: 8 }))).toBe(null)
+    it("reads the mouse events macOS's web view sends in their place", () => {
+      expect(extraButtonPress(pointer('mousedown', 3))).toMatchObject({ key: 'Mouse4', down: true })
+      expect(extraButtonPress(pointer('mouseup', 4))).toMatchObject({ key: 'Mouse5', down: false })
+      expect(extraButtonPress(pointer('pointermove', 3))).toBe(null)
     })
 
     it('records, draws and matches like any key', () => {

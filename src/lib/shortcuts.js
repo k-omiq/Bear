@@ -1257,24 +1257,30 @@ export function chordFromEvent(event) {
 /**
  * A press or release of an extra mouse button, in the shape of a key event -
  * `key` is the button's chord key - so `matchShortcut`, `chordFromEvent` and
- * `releasesHold` take it unchanged. `null` for any other pointer event.
+ * `releasesHold` take it unchanged. `null` for any other event.
  *
- * A pointer event rather than a mouse one: a page that cancels `pointerdown`
- * also cancels the `mousedown` behind it. A second button pressed while one is
- * already down sends no `pointerdown` at all, only a `pointermove` whose
- * `button` names it, so that is read too - `buttons` then says which way it
- * went.
+ * Both a pointer and a mouse event, and a listener needs both:
  *
- * @param {{type?: string, button?: number, buttons?: number, shiftKey?: boolean, metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean, target?: any}} event
+ * - On macOS the web view (wry's `WryWebView`) takes back and forward before
+ *   WebKit sees them and dispatches a script-made `mousedown` and `mouseup` in
+ *   their place. No pointer event is ever sent for them.
+ * - Elsewhere a page that cancels `pointerdown` cancels the `mousedown` behind
+ *   it, so the pointer event is the one sure to arrive. A listener that acts on
+ *   a `pointerdown` cancels it, and that is what keeps the `mousedown` from
+ *   acting a second time.
+ *
+ * `mousedown` also fires for a button pressed while another is held, which
+ * `pointerdown` does not.
+ *
+ * @param {{type?: string, button?: number, shiftKey?: boolean, metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean, target?: any}} event
  * @returns {{key: string, down: boolean, shiftKey: boolean, metaKey: boolean, ctrlKey: boolean, altKey: boolean, target: any}|null}
  */
 export function extraButtonPress(event) {
   const button = event?.button
   if (typeof button !== 'number' || button < FIRST_EXTRA_BUTTON || button >= FIRST_EXTRA_BUTTON + EXTRA_BUTTONS) return null
   let down
-  if (event.type === 'pointerdown') down = true
-  else if (event.type === 'pointerup') down = false
-  else if (event.type === 'pointermove') down = ((event.buttons ?? 0) & (1 << button)) !== 0
+  if (event.type === 'pointerdown' || event.type === 'mousedown') down = true
+  else if (event.type === 'pointerup' || event.type === 'mouseup') down = false
   else return null
   return {
     key: mouseButtonKey(button),

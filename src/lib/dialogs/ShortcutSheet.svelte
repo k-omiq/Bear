@@ -237,7 +237,10 @@
    * whatever modifiers are held. Left, middle and right still click, so a click
    * elsewhere ends the recording the way it always has.
    *
-   * @param {PointerEvent} event
+   * Cancelling the `pointerdown` keeps its `mousedown` from recording twice.
+   * On macOS only the `mousedown` arrives (see `extraButtonPress`).
+   *
+   * @param {MouseEvent} event
    */
   function onpointerdown(event) {
     if (recording === null) return
@@ -272,7 +275,7 @@
   }
 </script>
 
-<svelte:window onkeydowncapture={onkeydown} onpointerdowncapture={onpointerdown} onpointermovecapture={onpointerdown} />
+<svelte:window onkeydowncapture={onkeydown} onpointerdowncapture={onpointerdown} onmousedowncapture={onpointerdown} />
 
 <div class="sheet">
   {#each sections as section (section.group)}
