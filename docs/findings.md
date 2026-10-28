@@ -715,6 +715,19 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Tone only, fill lost dots (2026-10-28): real page 13 and a blurred stand-in only.** A new
+finishing (`tone-fill-dots`, `postprocess.rs#plain_grey`) runs Tone only, then draws the table's
+dots only where the answer is plain grey inside the mask (detail under 25 squared levels, tone 20
+to 235, both measured on mask pixels only; measured across the mask's edge, the page's dots left a
+band of grey inside it). On page 13 of the Apocalypse chapter 111 copy (5 regions, FLUX 3 bf16 and
+Qwen, cached answers) both models drew dots everywhere: the output is pixel for pixel Tone only's.
+With the answers blurred inside the mask by hand, it put the page's dots back over the grey as
+Redraw dots does, kept flat black, and drew dots where blurred drawn texture had become plain
+grey. Not measured: a model that really loses dots (Klein 4B, LaMa), a synthetic-truth score, and
+colour pages, where the screen step never runs. On the same page Redraw dots and Copy page dots
+grey hand-drawn texture and black hair, and no chain of two or three finishings beat Tone only or
+Blend edges by eye (sheets in the untracked `page13-finishing/` folder).
+
 **SAM-TS-L on the WebGPU plugin and CUDA (2026-10-28): plugin measured on the Mac only, CUDA
 never run in the app.** Settings and the local review now offer SAM WebGPU on every OS (built in on
 macOS, the plugin on Windows and Linux x64) and CUDA on Windows and Linux; component writes stay

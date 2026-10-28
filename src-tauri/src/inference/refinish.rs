@@ -30,7 +30,7 @@ use crate::inference::journal::{AttemptJournal, AttemptPhase, JournalError};
 use crate::library::{ApiRegion, Library};
 
 /// The long side of a preview, in pixels: enough to tell the finishings
-/// apart in the panel's grid, small enough that eleven of them cross the
+/// apart in the panel's grid, small enough that all of them cross the
 /// seam as one answer.
 pub const PREVIEW_LONG_SIDE: u32 = 256;
 

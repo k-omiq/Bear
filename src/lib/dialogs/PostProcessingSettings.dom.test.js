@@ -61,7 +61,7 @@ describe('the post-processing settings', () => {
     show(backend)
     const pick = /** @type {HTMLSelectElement} */ (await screen.findByLabelText(t('settings.postprocessing.method')))
     expect(pick.value).toBe('copy')
-    expect(pick.options).toHaveLength(11)
+    expect(pick.options).toHaveLength(12)
     await fireEvent.change(pick, { target: { value: 'dots-only' } })
     await waitFor(() => expect(session.cloudFinishing).toBe('dots-only'))
     await waitFor(() => expect(write).toHaveBeenLastCalledWith(expect.objectContaining({ cloudFinishing: 'dots-only', cloudFinishingGrayscale: false })))

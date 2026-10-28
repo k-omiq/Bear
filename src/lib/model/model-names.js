@@ -84,6 +84,7 @@ export const FINISHINGS = /** @type {const} */ ([
   'redraw-sharp-contours',
   'repeat-offsets',
   'tone-only',
+  'tone-fill-dots',
   'global-tone',
   'local-tone',
   'poisson',
