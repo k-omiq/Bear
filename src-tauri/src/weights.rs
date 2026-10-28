@@ -1171,7 +1171,7 @@ fn runtime_row(app: &tauri::AppHandle, data: Option<&Path>) -> RuntimeRow {
     // for why they exist and why a later launch is when they go.
     if let Some(dir) = writable.as_deref() {
         sweep_replaced(dir);
-        sweep_kept(dir);
+        sweep_kept_when_idle(dir);
     }
     let found = runtime::find(data).ok();
     let read_only = match (&found, &writable) {
@@ -1728,19 +1728,8 @@ pub fn download_runtime(app: tauri::AppHandle) -> Result<DownloadStart, String> 
             // aside before any switch ([`keep_installed`]), so a build that was
             // here before is moved back in rather than fetched again.
             let previous = read_installed(&dir).filter(|stamp| stamp.flavour != flavour);
-            // A switch that was refused leaves the previous build installed, and
-            // a kept copy of what is installed is only disk.
             let replace = |move_in: &dyn Fn() -> Result<Vec<String>, MoveFailed>| {
-                if let Some(previous) = &previous {
-                    keep_installed(&dir, previous);
-                }
-                let installed = install_stamped(&dir, flavour, host.ort_version, move_in);
-                if installed.is_err() {
-                    if let Some(kept) = previous.as_ref().and_then(keepable) {
-                        forget_kept(&dir, kept);
-                    }
-                }
-                installed
+                replace_installed(&dir, flavour, host.ort_version, previous.as_ref(), move_in)
             };
             if kept_build(&dir, flavour, host.ort_version).is_some() {
                 let kept = kept_files(&dir, flavour);
@@ -2807,6 +2796,43 @@ fn keep_installed(dir: &Path, previous: &InstalledRuntime) {
     if let Ok(bytes) = serde_json::to_vec_pretty(previous) {
         let _ = cleaner_core::project::buffers::write_atomic(&stamp, &bytes);
     }
+}
+
+/// [`install_stamped`], with the outgoing build kept first.
+///
+/// A switch that was refused before it moved anything leaves the previous build
+/// installed, and a kept copy of what is installed is only disk, so it goes. A
+/// switch that failed part way has overwritten some of the previous build, and
+/// its kept copy is then the only whole one: that copy stays.
+fn replace_installed(
+    dir: &Path,
+    flavour: &str,
+    version: &str,
+    previous: Option<&InstalledRuntime>,
+    move_in: impl FnOnce() -> Result<Vec<String>, MoveFailed>,
+) -> Result<(), String> {
+    if let Some(previous) = previous {
+        keep_installed(dir, previous);
+    }
+    let installed = install_stamped(dir, flavour, version, move_in);
+    if installed.is_err() {
+        // `install_stamped` leaves the stamp alone exactly when nothing moved.
+        if let Some(previous) = previous.filter(|previous| read_installed(dir).as_ref() == Some(*previous)) {
+            if let Some(kept) = keepable(previous) {
+                forget_kept(dir, kept);
+            }
+        }
+    }
+    installed
+}
+
+/// [`sweep_kept`], unless the runtime is downloading. A restore moves files out
+/// of `.kept` one by one and a switch copies them in one by one, and a sweep in
+/// between reads a half-moved or half-copied build as one to delete. The
+/// registry lock is held across the sweep, so a Download press cannot start
+/// half way through it either.
+fn sweep_kept_when_idle(dir: &Path) {
+    while_not_downloading(RUNTIME_ID, (), || sweep_kept(dir));
 }
 
 /// A Linux archive brings `libonnxruntime.so` as a link to the versioned
@@ -5483,6 +5509,63 @@ mod tests {
         sweep_kept(&dir);
         assert!(!runtime_kept(&dir).exists());
         assert!(dir.join("onnxruntime.dll").exists(), "the sweep stays inside .kept");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A sweep never runs while the runtime downloads.** A half-copied keep
+    /// has no stamp yet and a half-moved restore is missing files; both read as
+    /// broken, and deleting the second mid-move breaks the installed runtime.
+    #[test]
+    fn a_kept_build_is_not_swept_during_a_runtime_download() {
+        let dir = std::env::temp_dir().join(format!("mc-kept-busy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let half_copied = kept_files(&dir, "stock");
+        std::fs::create_dir_all(&half_copied).unwrap();
+        std::fs::write(half_copied.join("libonnxruntime.dylib"), b"half").unwrap();
+
+        let _claim = claim(RUNTIME_ID).expect("no runtime download in the tests");
+        sweep_kept_when_idle(&dir);
+        release(RUNTIME_ID);
+        assert!(half_copied.join("libonnxruntime.dylib").exists(), "left alone while downloading");
+
+        sweep_kept_when_idle(&dir);
+        assert!(!runtime_kept(&dir).exists(), "and swept once idle");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A refused switch drops the copy of what is still installed. A switch that
+    /// broke off part way keeps it: it is the only whole copy left.
+    #[test]
+    fn a_failed_switch_keeps_the_copy_only_when_it_is_the_last_whole_one() {
+        let dir = std::env::temp_dir().join(format!("mc-kept-failed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let host = cleaner_core::runtime::package::host_flavours()[0];
+        let flavour = host.flavour.id();
+        std::fs::write(dir.join("onnxruntime.dll"), b"the old build").unwrap();
+        let previous = InstalledRuntime {
+            flavour: flavour.to_owned(),
+            version: host.ort_version.to_owned(),
+            files: vec!["onnxruntime.dll".to_owned()],
+        };
+        write_installed(&dir, &previous);
+
+        let refused = replace_installed(&dir, "other", "1.0.0", Some(&previous), || {
+            Err(MoveFailed { moved: Vec::new(), error: NOTICE_IN_USE.to_owned() })
+        });
+        assert!(refused.is_err());
+        assert_eq!(kept_build(&dir, flavour, host.ort_version), None, "still installed, so not kept");
+
+        let partial = replace_installed(&dir, "other", "1.0.0", Some(&previous), || {
+            std::fs::write(dir.join("onnxruntime.dll"), b"half the new build").unwrap();
+            Err(MoveFailed { moved: vec!["onnxruntime.dll".to_owned()], error: "no space left".to_owned() })
+        });
+        assert!(partial.is_err());
+        let kept = kept_build(&dir, flavour, host.ort_version).expect("the only whole copy stays");
+        assert_eq!(kept, previous);
+        assert_eq!(std::fs::read(kept_files(&dir, flavour).join("onnxruntime.dll")).unwrap(), b"the old build");
 
         std::fs::remove_dir_all(&dir).ok();
     }
