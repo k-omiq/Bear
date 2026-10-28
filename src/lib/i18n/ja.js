@@ -519,7 +519,7 @@ export const ja = {
       },
       sam: {
         memory: '空きメモリが 5 GB 未満だと、動作が遅くなります。',
-        chooserTitle: 'SAM-TS-L 文字マスクの両方のグラフを含むフォルダー',
+        chooserTitle: 'SAM-TS-L 文字マスクの 3 つのファイルを含むフォルダー',
       },
       rtFull: {
         chooserTitle: '固定版 Ogkalu comic text & bubble detector (Full) の detector.onnx',

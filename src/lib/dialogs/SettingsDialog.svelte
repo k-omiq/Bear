@@ -1139,7 +1139,7 @@
     try {
       if (sam) {
         await getBackend().importSamTs({ sourceDir: path })
-        // The import verifies both graphs against the pinned manifest.
+        // The import verifies all three files against the pinned manifest.
         samVerified = true
       } else {
         await getBackend().importFullRt({ sourcePath: path })

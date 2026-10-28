@@ -780,7 +780,7 @@ export function createMockBackend(options = {}) {
       sourceSha256,
       rtModelSha256: rt ? (rtProfile === 'full-halves' ? '065744e91c0594ad8663aa8b870ce3fb27222942eded5a3cc388ce23421bd195'
         : '5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79') : null,
-      samEncoderSha256: sam ? '9b3a32f9018008cfd2c7a5b1a7eb6e20822ba43eab58918863f74ac62ecbafbe' : null,
+      samEncoderSha256: sam ? 'c7b1cc85d2316886db1dfd22886c1988c71c317d4bcd869beca07e8b6c822141' : null,
       samHeadSha256: sam ? 'a2c63ccf54e2e692a281cffd4dcda648f252ae6649dc7d23d0203e5868685281' : null,
       maskSha256: sam ? sha256Hex(`review-mask:${target.key}`) : null,
       workflow,

@@ -613,7 +613,7 @@ export const en = {
       },
       sam: {
         memory: 'Runs slowly with less than 5 GB of free memory.',
-        chooserTitle: 'Folder with both SAM-TS-L lettering mask graphs',
+        chooserTitle: 'Folder with the three SAM-TS-L lettering mask files',
       },
       rtFull: {
         chooserTitle: 'The pinned Ogkalu comic text & bubble detector (Full) detector.onnx',

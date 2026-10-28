@@ -522,7 +522,7 @@ export const fr = {
       },
       sam: {
         memory: 'Tourne lentement avec moins de 5 Go de mémoire libre.',
-        chooserTitle: 'Dossier contenant les deux graphes du masque de lettrage SAM-TS-L',
+        chooserTitle: 'Dossier contenant les trois fichiers du masque de lettrage SAM-TS-L',
       },
       rtFull: {
         chooserTitle: 'Le fichier detector.onnx épinglé de Ogkalu comic text & bubble detector (Full)',

@@ -975,3 +975,14 @@ describe('a clean kept, and taken back', () => {
     expect(await mock.historyLoad({ chapterId: CHAPTER })).toMatchObject({ cursor: 0, entries: [] })
   })
 })
+
+describe('mock model review', () => {
+  it('names the SAM-TS-L graphs it reports as installed', async () => {
+    const mock = makeMock({ timing: { method: 0, analysis: 0 } })
+    const capabilities = await mock.listWorkflowCapabilities()
+    const pinned = Object.fromEntries(capabilities.samFiles.map((file) => [file.name, file.sha256]))
+    const analysis = await mock.analyzeCapabilities({ sourcePath: 'page.png', workflow: 'mask', samBackend: 'ort-cpu' })
+    expect(analysis.samEncoderSha256).toBe(pinned['koharu_samts_encoder.onnx'])
+    expect(analysis.samHeadSha256).toBe(pinned['koharu_samts_text_head.onnx'])
+  })
+})
