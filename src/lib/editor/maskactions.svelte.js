@@ -660,6 +660,93 @@ export async function rejectResult(region) {
 const rejecting = new Set()
 
 /**
+ * Whether a layer is a cleaned result whose post-processing the Layers row
+ * offers to change: a mask an engine made, not a detection, a paint stroke or
+ * a clone. Whether it can be changed is the backend's answer
+ * (`regionFinishingPreviews`): only a cloud result kept its answer, and the
+ * panel says so for the rest.
+ *
+ * @param {import('../api/backend.js').ApiRegion|null|undefined} region
+ * @returns {boolean}
+ */
+export function offersFinishing(region) {
+  if (!region?.mask || isDetected(region)) return false
+  return !['paint', 'clone'].includes(region.mask.provenance?.engine ?? '')
+}
+
+/**
+ * The finishing a layer's record says its pixels were made by
+ * (`params_snapshot.postprocess`), or null when it names none.
+ *
+ * @param {import('../api/backend.js').ApiRegion|null|undefined} region
+ * @returns {{finishing: string, grayscale: boolean}|null}
+ */
+export function recordedFinishing(region) {
+  const postprocess = /** @type {any} */ (region?.mask?.provenance?.params_snapshot)?.postprocess
+  if (typeof postprocess?.finishing !== 'string') return null
+  return { finishing: postprocess.finishing, grayscale: postprocess.grayscale === true }
+}
+
+/**
+ * The notice for a refused change of finishing, by the code that leads the
+ * backend's message (`refinish.rs#Unavailable`).
+ *
+ * @param {unknown} error
+ * @returns {string}
+ */
+export function finishingRefusalKey(error) {
+  const text = error instanceof Error ? error.message : String(error ?? '')
+  if (/\brefinish_not_cloud\b/.test(text)) return 'masks.finishing.unavailable.notCloud'
+  if (/\brefinish_no_result\b/.test(text)) return 'masks.finishing.unavailable.noResult'
+  if (/\brefinish_page_changed\b/.test(text)) return 'masks.finishing.unavailable.pageChanged'
+  if (/\brefinish_unsupported\b/.test(text)) return 'masks.finishing.unavailable.unsupported'
+  return 'masks.finishing.applyFailed'
+}
+
+/**
+ * Finish a cloud result again by another post-processing method, from the
+ * answer its attempt kept: no request, no GPU.
+ *
+ * **Nothing is recorded here.** The backend replaces the patch and writes the
+ * undo step under one lock (`refinish.rs#apply_at`), as `rejectResult` does,
+ * and answers with the chapter's index after it, which is adopted. Undo puts
+ * the patch's earlier revision back (`restoreRegion`).
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @param {{finishing: string, grayscale: boolean}} choice
+ * @returns {Promise<boolean>} whether the result was finished again
+ */
+export async function setRegionFinishing(region, choice) {
+  const chapterId = editor.chapter?.id ?? null
+  const pageIndex = pageIndexOf(region.id)
+  if (!chapterId || pageIndex === null) return false
+  if (refinishing.has(region.id) || !claimPageEdit(pageIndex)) return false
+  refinishing.add(region.id)
+  try {
+    /** @type {Awaited<ReturnType<import('../api/backend.js').Backend['setRegionFinishing']>>} */
+    let result
+    try {
+      result = await getBackend().setRegionFinishing({ regionId: region.id, ...choice })
+    } catch (error) {
+      console.error('a result could not be finished again', error)
+      if (!reportJobConflict(error)) notify({ key: finishingRefusalKey(error), tone: 'warn' })
+      return false
+    }
+    if (!result?.region) return false
+    if (!stillOpen(chapterId)) return true
+    replaceRegion(result.region, result.pageStatus)
+    if (result.history) adoptBackendHistory(chapterId, result.history)
+    refreshPage(pageIndex, region, result.region)
+    return true
+  } finally {
+    refinishing.delete(region.id)
+  }
+}
+
+/** The results a change of finishing is in flight for, by region id. */
+const refinishing = new Set()
+
+/**
  * Set a detected region's text type: speech bubble text (`inside: true`) or
  * text outside bubbles. It is the kind a later Clean starts the region as, by
  * Text cleanup's row for that kind, and the colour its mask is drawn in

@@ -11,6 +11,7 @@ pub mod gpu_jobs;
 pub mod http;
 pub mod journal;
 pub mod policy;
+pub mod refinish;
 pub mod run_analysis;
 pub mod secrets;
 pub mod service;

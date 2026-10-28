@@ -29,6 +29,8 @@ commands.allow = [
     "set_detection_type",
     "set_region_cleaned",
     "reject_result",
+    "region_finishing_previews",
+    "set_region_finishing",
     "apply_tool",
     "create_region",
     "edit_detection_mask",

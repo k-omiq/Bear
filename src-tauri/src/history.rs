@@ -162,12 +162,45 @@ pub(crate) fn record_step(
     before: Side,
     after: Side,
 ) -> Result<HistoryView, String> {
+    push_step(job, chapter_id, CLEAN_OP, label, region_id, before, after)
+}
+
+/// The verb of an edit that puts a region back as one side shows it
+/// (`library::restore_region`). The interface writes most of them; a change
+/// of a cloud result's finishing (`inference::refinish`) is written here,
+/// under the lock of its manifest write, and replays like any other: the
+/// side's patch revision is put back.
+pub const REGION_OP: &str = "region-state";
+/// The Undo tooltip of a change of a result's finishing.
+pub const FINISHING_LABEL: &str = "masks.finishing.command";
+
+/// [`record_step`] for a [`REGION_OP`] edit the backend made itself.
+pub(crate) fn record_region_step(
+    job: &Path,
+    chapter_id: &str,
+    label: &str,
+    region_id: &str,
+    before: Side,
+    after: Side,
+) -> Result<HistoryView, String> {
+    push_step(job, chapter_id, REGION_OP, label, region_id, before, after)
+}
+
+fn push_step(
+    job: &Path,
+    chapter_id: &str,
+    op: &str,
+    label: &str,
+    region_id: &str,
+    before: Side,
+    after: Side,
+) -> Result<HistoryView, String> {
     let limit = LAST_LIMIT.load(std::sync::atomic::Ordering::Relaxed);
     let mut journal = load(job);
     journal.push(
         NewDelta {
             label: label.to_owned(),
-            op: CLEAN_OP.to_owned(),
+            op: op.to_owned(),
             region_id: region_id.to_owned(),
             before,
             after,

@@ -249,6 +249,8 @@ pub fn run() {
             library::set_detection_type,
             library::set_region_cleaned,
             library::reject_result,
+            inference::refinish::region_finishing_previews,
+            inference::refinish::set_region_finishing,
             region::apply_tool,
             region::create_region,
             region::edit_detection_mask,

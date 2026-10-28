@@ -26,6 +26,7 @@ import { createRunnerPool } from './runner.js'
 import { DENOISE_PRESETS, outputScalesFor, presetById, recipeAt } from '../model/denoise.js'
 import { currentRung } from '../model/ladder.js'
 import { MAX_MASK_PADDING } from '../model/masks.js'
+import { FINISHINGS } from '../model/model-names.js'
 import {
   applyToolToRegion,
   cleanRegionAnyway,
@@ -1005,6 +1006,8 @@ export function createMockBackend(options = {}) {
   /** The Undo tooltip of a clean the backend recorded, and of a reject (`history.rs`). */
   const CLEAN_LABEL = 'masks.command.cleanRegion'
   const REJECT_LABEL = 'masks.command.rejectResult'
+  /** The Undo tooltip of a cloud result finished again (`history.rs#FINISHING_LABEL`). */
+  const FINISHING_LABEL = 'masks.finishing.command'
 
   const chapterOfPage = (page) =>
     state.projects.flatMap((project) => project.chapters).find((chapter) => chapter.pages.includes(page)) ?? null
@@ -1028,6 +1031,36 @@ export function createMockBackend(options = {}) {
     pushEntry(journal, { label, op: 'clean-state', regionId, before, after }, undoLimitValue())
     emit({ type: 'history-changed', chapterId })
     return snapshot(viewOf(journal, undoLimitValue()))
+  }
+
+  /**
+   * Write one `region-state` step the backend made itself, as
+   * `history.rs#record_region_step` does. Its replay is `restoreRegion`, like
+   * any other. Answers the index after it.
+   */
+  const recordRegionStep = (chapterId, label, regionId, before, after) => {
+    const journal = journalFor(chapterId)
+    pushEntry(journal, { label, op: 'region-state', regionId, before, after }, undoLimitValue())
+    emit({ type: 'history-changed', chapterId })
+    return snapshot(viewOf(journal, undoLimitValue()))
+  }
+
+  /**
+   * A stand-in preview of a result finished one way: the mock keeps no
+   * answer, so each method is a tone and a dot screen of its own, enough to
+   * tell the tiles apart.
+   *
+   * @param {number} index
+   */
+  const finishingPreviewUrl = (index) => {
+    const shade = 150 + ((index * 37) % 90)
+    const dot = 1 + (index % 4)
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120" viewBox="0 0 160 120">`
+      + `<defs><pattern id="d" width="8" height="8" patternUnits="userSpaceOnUse"><circle cx="4" cy="4" r="${dot}" fill="rgb(60,60,60)"/></pattern></defs>`
+      + `<rect width="160" height="120" fill="rgb(${shade},${shade},${shade})"/>`
+      + `<rect x="${20 + index * 3}" y="30" width="80" height="60" rx="10" fill="url(#d)" opacity="${0.3 + (index % 5) * 0.12}"/>`
+      + `<ellipse cx="110" cy="62" rx="36" ry="28" fill="white" stroke="black" stroke-width="2"/></svg>`
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
   }
 
   /**
@@ -3816,6 +3849,68 @@ export function createMockBackend(options = {}) {
       const after = { present: true, pageStatus: moved.page.status, region: snapshot(moved.region) }
       const history = recordCleanStep(moved.chapter.id, REJECT_LABEL, regionId, before, after)
       return { region: snapshot(moved.region), pageStatus: moved.page.status, history }
+    },
+
+    /**
+     * A cloud result's finishing previews, as `refinish.rs#previews_at` makes
+     * them: one per method, from the answer the attempt kept. A layer with no
+     * cloud attempt answers `notCloud` and no previews; an attempt id that
+     * starts `att-gone` stands in for one whose answer was dropped.
+     */
+    async regionFinishingPreviews({ regionId }) {
+      await delay(timing.method)
+      const found = findRegion(regionId)
+      if (!found?.region?.mask || isDetection(found.region)) {
+        throw new Error(`refinish_no_patch: region ${regionId} has no cleaned result`)
+      }
+      const provenance = found.region.mask.provenance ?? {}
+      const attemptId = provenance.cloud?.attempt_id
+      const none = (unavailable) => ({ regionId, unavailable, current: null, grayscale: false, previews: [] })
+      if (!attemptId) return none('notCloud')
+      if (attemptId.startsWith('att-gone')) return none('noResult')
+      const postprocess = provenance.params_snapshot?.postprocess
+      const current = typeof postprocess?.finishing === 'string'
+        ? { finishing: postprocess.finishing, grayscale: postprocess.grayscale === true }
+        : null
+      return {
+        regionId,
+        unavailable: null,
+        current,
+        grayscale: current?.grayscale ?? false,
+        previews: FINISHINGS.map((finishing, index) => ({ finishing, url: finishingPreviewUrl(index) })),
+      }
+    },
+
+    /**
+     * Finish a cloud result again, as `refinish.rs#apply_at` does: its
+     * post-processing record changes, everything else of it is kept, and the
+     * change is one `region-state` undo step this side records itself. The
+     * finishing it has already writes nothing.
+     */
+    async setRegionFinishing({ regionId, finishing, grayscale }) {
+      await delay(timing.method)
+      const found = findRegion(regionId)
+      if (!found?.region?.mask || isDetection(found.region)) {
+        throw new Error(`refinish_no_patch: region ${regionId} has no cleaned result`)
+      }
+      refuseBusyPage(found.chapter.id, found.page.index)
+      if (!FINISHINGS.includes(finishing)) throw new Error(`unknown finishing ${finishing}`)
+      const provenance = found.region.mask.provenance
+      const attemptId = provenance?.cloud?.attempt_id
+      if (!attemptId) throw new Error('refinish_not_cloud: the region was not cleaned in the cloud')
+      if (attemptId.startsWith('att-gone')) throw new Error('refinish_no_result: the saved cloud answer is gone')
+      const was = provenance.params_snapshot?.postprocess
+      if (was?.finishing === finishing && (was?.grayscale === true) === (grayscale === true)) {
+        return { region: snapshot(found.region), pageStatus: found.page.status, history: null }
+      }
+      const before = { present: true, pageStatus: found.page.status, region: snapshot(found.region) }
+      provenance.params_snapshot = {
+        ...(provenance.params_snapshot ?? {}),
+        postprocess: { ...(was ?? {}), finishing, grayscale: grayscale === true },
+      }
+      const after = { present: true, pageStatus: found.page.status, region: snapshot(found.region) }
+      const history = recordRegionStep(found.chapter.id, FINISHING_LABEL, regionId, before, after)
+      return { region: snapshot(found.region), pageStatus: found.page.status, history }
     },
 
     /**

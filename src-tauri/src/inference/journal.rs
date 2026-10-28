@@ -597,6 +597,19 @@ impl AttemptRecord {
         recipe.finishing = self.finishing;
         recipe
     }
+    /// The region as the attempt captured it, which an attach of its answer
+    /// is checked against.
+    pub fn snapshot(&self) -> ProjectRegionSnapshot {
+        ProjectRegionSnapshot {
+            source_image_hash: self.source_image_hash.clone(),
+            region_id: self.region_id.clone(),
+            region_revision: self.region_revision,
+            input_sha256: self.input_sha256.clone(),
+            predecessors_sha256: self.predecessors_sha256.clone(),
+            crop_sha256: self.crop_sha256.clone(),
+            hint_sha256: self.hint_sha256.clone(),
+        }
+    }
     pub fn to_request_metadata(&self) -> JobRequestMetadata {
         JobRequestMetadata {
             protocol_version: PROTOCOL_VERSION.to_string(),

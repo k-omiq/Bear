@@ -5,13 +5,14 @@
   import { capabilities } from '../state/capabilities.svelte.js'
   import { cloud, cloudEntries, cloudUsable, pickCloudChoice } from '../state/cloud.svelte.js'
   import { session } from '../state/session.svelte.js'
-  import { cloudProfileLabel, currentCloudModelId, engineModelLabel } from '../model/model-names.js'
+  import { cloudProfileLabel, currentCloudModelId, engineModelLabel, finishingKey } from '../model/model-names.js'
   import { actionHint } from './maskrows.js'
   import { menuPoint } from './gesture.js'
-  import { cleanDetected, deleteRow, keepDependencyResult, openLayerEdit, regionPageBusy, requestDetectedMaskPadding, rerunMask, runMaskAction, shownMaskPadding, updateLayer } from './maskactions.svelte.js'
+  import { cleanDetected, deleteRow, keepDependencyResult, offersFinishing, openLayerEdit, recordedFinishing, regionPageBusy, requestDetectedMaskPadding, rerunMask, runMaskAction, shownMaskPadding, updateLayer } from './maskactions.svelte.js'
   import { layerCapabilities, layerOf } from '../model/layers.js'
   import { Button, Disclosure, IconButton, RangeField, Select } from '../ui/index.js'
-  import { t } from '../i18n/index.js'
+  import { hasKey, t } from '../i18n/index.js'
+  import FinishingPanel from './FinishingPanel.svelte'
   import MaskFacts from './MaskFacts.svelte'
   import RegionMenu from './RegionMenu.svelte'
 
@@ -209,6 +210,20 @@
       if (mine === pickSeq) picking = null
     }
   }
+
+  // Post-processing, picked again from previews of the saved cloud answer
+  // (`FinishingPanel`). Offered on every cleaned layer: the panel says when
+  // the layer kept no answer to finish again. The button names the method
+  // the layer's pixels were made by, when its record names one.
+  const finishing = $derived(offersFinishing(region))
+  const finishingName = $derived.by(() => {
+    const name = recordedFinishing(region)?.finishing
+    const key = name ? finishingKey('option', name) : null
+    return key && hasKey(key) ? t(key) : t('masks.finishing.open')
+  })
+  let finishingOpen = $state(false)
+  /** @type {HTMLElement|undefined} */
+  let finishingAnchor = $state()
 
   /**
    * The open context menu: `{x, y, region}` in client pixels, or null.
@@ -425,6 +440,28 @@
       <p class="note">{t('masks.action.rerunNote')}</p>
     {:else if retryBlocked}
       <p class="note">{t('masks.action.retryBlocked')}</p>
+    {/if}
+
+    {#if finishing}
+      <div class="pick" data-finishing-row>
+        <span class="pick-label">{t('masks.finishing.label')}</span>
+        <span class="pick-control" bind:this={finishingAnchor}>
+          <Button
+            size="sm"
+            variant="soft"
+            title={t('masks.finishing.openHint')}
+            aria-haspopup="dialog"
+            aria-expanded={finishingOpen}
+            data-finishing-open
+            onclick={() => (finishingOpen = !finishingOpen)}
+          >
+            {finishingName}
+          </Button>
+        </span>
+      </div>
+      {#if finishingOpen}
+        <FinishingPanel {region} anchor={finishingAnchor} onclose={() => (finishingOpen = false)} />
+      {/if}
     {/if}
 
     {#if actions.length > 0}

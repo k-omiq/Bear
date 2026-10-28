@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { ANALYSIS_PROTOCOL_VERSION, CLOUD_ANALYSIS_SPATIAL, cloudTilePlan, createMockBackend } from './mock.js'
 import { maskRows } from '../editor/maskrows.js'
+import { FINISHINGS } from '../model/model-names.js'
 
 const TIMING = { method: 0, openChapter: 0, export: 0, region: 100, pageTail: 100, noticeStagger: 0 }
 
@@ -1812,5 +1813,46 @@ describe('the denoise history of a chapter, in the mock', () => {
       .rejects.toThrow('denoise_run_missing')
     await expect(settle(backend.denoiseCompareImage({ chapterId: CHAPTER, pageIndex: 0, run: run.created, side: '/etc/passwd' })))
       .rejects.toThrow('denoise_side_invalid')
+  })
+})
+
+describe('a cloud result finished again', () => {
+  /** A local Fill result, and the same result put back with a cloud record. */
+  async function results() {
+    const { backend } = makeBackend()
+    const pages = await settle(backend.loadPages({ chapterId: CHAPTER, indices: [0, 1, 2, 3, 4, 5] }))
+    const page = pages.find((candidate) => candidate.regions.length > 0)
+    const applied = await settle(backend.applyTool({
+      tool: 'contentAwareFill', params: { engine: 'local' }, chapterId: CHAPTER, pageIndex: page.index, regionId: page.regions[0].id,
+    }))
+    const region = structuredClone(applied.region)
+    region.mask.provenance.cloud = { provider: 'modal', request_id: 'req-1', attempt_id: 'att-0123456789abcdef01234567', model: 'm', cost: null }
+    region.mask.provenance.params_snapshot = { ...region.mask.provenance.params_snapshot, postprocess: { finishing: 'copy', grayscale: true } }
+    return { backend, local: applied.region, cloud: await settle(backend.restoreRegion({ regionId: region.id, region })) }
+  }
+
+  it('previews every method for a cloud result, and says a local one kept no answer', async () => {
+    const { backend, cloud } = await results()
+    const previews = await settle(backend.regionFinishingPreviews({ regionId: cloud.id }))
+    expect(previews).toMatchObject({ unavailable: null, current: { finishing: 'copy', grayscale: true }, grayscale: true })
+    expect(previews.previews.map((preview) => preview.finishing)).toEqual([...FINISHINGS])
+    const other = await results()
+    await settle(other.backend.restoreRegion({ regionId: other.local.id, region: other.local }))
+    expect(await settle(other.backend.regionFinishingPreviews({ regionId: other.local.id })))
+      .toMatchObject({ unavailable: 'notCloud', previews: [] })
+    await expect(settle(other.backend.setRegionFinishing({ regionId: other.local.id, finishing: 'poisson', grayscale: false })))
+      .rejects.toThrow(/^refinish_not_cloud: /)
+  })
+
+  it('records one region-state step whose undo puts the earlier finishing back', async () => {
+    const { backend, cloud } = await results()
+    const changed = await settle(backend.setRegionFinishing({ regionId: cloud.id, finishing: 'poisson', grayscale: true }))
+    expect(changed.region.mask.provenance.params_snapshot.postprocess).toMatchObject({ finishing: 'poisson', grayscale: true })
+    expect(changed.history.entries.at(-1)).toMatchObject({ label: 'masks.finishing.command' })
+    expect((await settle(backend.setRegionFinishing({ regionId: cloud.id, finishing: 'poisson', grayscale: true }))).history).toBeNull()
+    const step = await settle(backend.historyMove({ chapterId: CHAPTER, direction: 'undo' }))
+    expect(step.entry).toMatchObject({ op: 'region-state', regionId: cloud.id })
+    const back = await settle(backend.restoreRegion({ regionId: cloud.id, region: step.entry.before.region }))
+    expect(back.mask.provenance.params_snapshot.postprocess.finishing).toBe('copy')
   })
 })

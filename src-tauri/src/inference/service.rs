@@ -388,7 +388,7 @@ fn generated_review(recipe: &RenderRecipe, complex: bool) -> Option<String> {
         .then(|| "review.reason.checkGeneratedTexture".to_owned())
 }
 
-fn chapter_id_of(job_path: &Path) -> String {
+pub(crate) fn chapter_id_of(job_path: &Path) -> String {
     job_path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -654,6 +654,47 @@ pub(crate) fn read_render_input(
         predecessors_sha256: cloud.input.predecessors,
         source_idx,
     })
+}
+
+/// Whether a region prepared again now is the input an attempt sent: the
+/// composited window and what lies under it, the crop's size, and the crop
+/// and hint as encoded. An answer is composited only onto the preparation it
+/// answered, by an attach ([`InferenceService::attach_patch_to_project`]) and
+/// by a later change of its finishing (`inference::refinish`) alike.
+pub(crate) fn check_prepared_input(
+    cloud: &crate::underlay::CloudInput,
+    snapshot: &ProjectRegionSnapshot,
+    crop_w: u32,
+    crop_h: u32,
+) -> Result<(), InferenceServiceError> {
+    if snapshot
+        .input_sha256
+        .as_deref()
+        .is_some_and(|hash| hash != cloud.input.digest)
+        || snapshot
+            .predecessors_sha256
+            .as_deref()
+            .is_some_and(|hash| hash != cloud.input.predecessors)
+        || cloud.crop_bounds.w != crop_w
+        || cloud.crop_bounds.h != crop_h
+    {
+        return Err(InferenceServiceError::StaleAttachment(
+            "composited input changed".into(),
+        ));
+    }
+    let prepared = &cloud.prepared;
+    let crop_png =
+        encode_rgb8_png(prepared.crop().w, prepared.crop().h, prepared.image_rgb8())?;
+    let hint_png =
+        encode_gray8_png(prepared.crop().w, prepared.crop().h, prepared.hint_gray8())?;
+    if sha256_hex(&crop_png) != snapshot.crop_sha256
+        || sha256_hex(&hint_png) != snapshot.hint_sha256
+    {
+        return Err(InferenceServiceError::StaleAttachment(
+            "encoded crop or hint changed".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Immutable manifest snapshot shared by all committed audits in one chapter.
@@ -1495,15 +1536,7 @@ impl InferenceService {
 
         // Taken from the record, which is what the grant and the crop were
         // bound to: the attach re-reads the project and refuses any drift.
-        let snapshot = ProjectRegionSnapshot {
-            source_image_hash: record.source_image_hash.clone(),
-            region_id: record.region_id.clone(),
-            region_revision: record.region_revision,
-            input_sha256: record.input_sha256.clone(),
-            predecessors_sha256: record.predecessors_sha256.clone(),
-            crop_sha256: record.crop_sha256.clone(),
-            hint_sha256: record.hint_sha256.clone(),
-        };
+        let snapshot = record.snapshot();
         // A no-op for an attempt already pending under this patch id.
         self.journal
             .prepare_attachment(guard, &snapshot, &patch_id)?;
@@ -1761,33 +1794,8 @@ impl InferenceService {
             .prepare(&job, &page, preprocessing)
             .map_err(|e| InferenceServiceError::Consent(ConsentError::RenderPrepareFailed(e)))?;
         cloud.prepared.set_finishing(recipe.finishing);
-        if snapshot
-            .input_sha256
-            .as_deref()
-            .is_some_and(|hash| hash != cloud.input.digest)
-            || snapshot
-                .predecessors_sha256
-                .as_deref()
-                .is_some_and(|hash| hash != cloud.input.predecessors)
-            || cloud.crop_bounds.w != _page_w
-            || cloud.crop_bounds.h != _page_h
-        {
-            return Err(InferenceServiceError::StaleAttachment(
-                "composited input changed".into(),
-            ));
-        }
+        check_prepared_input(&cloud, snapshot, _page_w, _page_h)?;
         let prepared = &cloud.prepared;
-        let crop_png =
-            encode_rgb8_png(prepared.crop().w, prepared.crop().h, prepared.image_rgb8())?;
-        let hint_png =
-            encode_gray8_png(prepared.crop().w, prepared.crop().h, prepared.hint_gray8())?;
-        if sha256_hex(&crop_png) != snapshot.crop_sha256
-            || sha256_hex(&hint_png) != snapshot.hint_sha256
-        {
-            return Err(InferenceServiceError::StaleAttachment(
-                "encoded crop or hint changed".into(),
-            ));
-        }
 
         let generated = decoded_crop.as_generated_crop();
         let mut rendered = prepared.composite(&generated).map_err(|e| {
@@ -5266,6 +5274,153 @@ pub(crate) mod tests {
         assert_eq!(compute_request_digest(&record.to_request_metadata()), record.request_digest);
         let postprocess = &fixture.committed_patch().provenance.params_snapshot["postprocess"];
         assert_eq!((&postprocess["finishing"], &postprocess["grayscale"]), (&serde_json::json!("poisson"), &serde_json::json!(false)));
+    }
+
+    /// A FLUX 3 (3.0.0) result committed by recovery, finished by the default.
+    fn committed_flux3_fixture(name: &str) -> (RenderFixture, InferenceService) {
+        let mut fixture = RenderFixture::new(name);
+        fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v1".into();
+        fixture.recipe.model_id = "unsloth/flux-3-image-klein".into();
+        fixture.recipe.preprocessing_version = "3.0.0".into();
+        let service = cached_fixture(&fixture);
+        assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(),
+            RecoveryDecision::AlreadyCommitted { .. }));
+        (fixture, service)
+    }
+
+    /// A patch no cloud clean made has no answer to finish again: the panel
+    /// is told so, and a change is refused without a write.
+    #[test]
+    fn refinish_refuses_a_patch_no_cloud_clean_made() {
+        use crate::inference::refinish::{apply_at, previews_at, Unavailable};
+        use cleaner_core::engines::postprocess::{Choice, Finishing};
+        let fixture = RenderFixture::new("refinish-local");
+        let journal = AttemptJournal::new(&fixture.journal_dir, cleaner_core::cloud_wire::provisional_fixture_limits());
+        let previews = previews_at(&journal, &fixture.manifest, "reg-1").unwrap();
+        assert_eq!(previews.unavailable, Some(Unavailable::NotCloud));
+        assert!(previews.previews.is_empty());
+        let before = std::fs::read(&fixture.manifest).unwrap();
+        let refused = apply_at(&journal, &fixture.manifest, "reg-1", Choice { finishing: Finishing::Poisson, grayscale: false })
+            .err().unwrap();
+        assert!(refused.starts_with("refinish_not_cloud"), "{refused}");
+        assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
+        assert!(crate::history::load(&fixture.manifest).entries.is_empty());
+    }
+
+    /// A committed result whose saved answer is gone says so, and nothing is
+    /// written.
+    #[test]
+    fn refinish_refuses_when_the_saved_answer_is_gone() {
+        use crate::inference::refinish::{apply_at, previews_at, Unavailable};
+        use cleaner_core::engines::postprocess::{Choice, Finishing};
+        let (fixture, service) = committed_flux3_fixture("refinish-no-result");
+        std::fs::remove_file(fixture.journal_dir.join("attempts").join(fixture.attempt_id()).join("result.png")).unwrap();
+        let previews = previews_at(service.journal(), &fixture.manifest, "reg-1").unwrap();
+        assert_eq!(previews.unavailable, Some(Unavailable::NoResult));
+        let before = std::fs::read(&fixture.manifest).unwrap();
+        let refused = apply_at(service.journal(), &fixture.manifest, "reg-1", Choice { finishing: Finishing::Poisson, grayscale: false })
+            .err().unwrap();
+        assert!(refused.starts_with("refinish_no_result"), "{refused}");
+        assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
+    }
+
+    /// A page edited under the result since it came back - its source file,
+    /// or a layer below it - would take the answer onto a page it did not
+    /// answer. Refused, with nothing written.
+    #[test]
+    fn refinish_refuses_when_the_page_changed() {
+        use crate::inference::refinish::{apply_at, previews_at, Unavailable};
+        use cleaner_core::engines::postprocess::{Choice, Finishing};
+        let poisson = Choice { finishing: Finishing::Poisson, grayscale: false };
+
+        // A layer drawn under the result.
+        let (fixture, service) = committed_flux3_fixture("refinish-layer-below");
+        let mut job = Job::open(&fixture.manifest).unwrap();
+        let mut below = fixture.committed_patch();
+        below.id = "reg-0".into();
+        below.order = 0;
+        below.provenance.cloud = None;
+        for value in below.pixels.data.iter_mut() { *value = 40; }
+        job.complete_region(0, &below, None).unwrap();
+        assert_eq!(previews_at(service.journal(), &fixture.manifest, "reg-1").unwrap().unavailable, Some(Unavailable::PageChanged));
+        let before = std::fs::read(&fixture.manifest).unwrap();
+        let refused = apply_at(service.journal(), &fixture.manifest, "reg-1", poisson).err().unwrap();
+        assert!(refused.starts_with("refinish_page_changed"), "{refused}");
+        assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
+
+        // The page file itself.
+        let (fixture, service) = committed_flux3_fixture("refinish-source-changed");
+        let job = Job::open(&fixture.manifest).unwrap();
+        let source = job.source_path(0).unwrap();
+        let mut bytes = std::fs::read(&source).unwrap();
+        bytes.extend_from_slice(b"edited");
+        std::fs::write(&source, bytes).unwrap();
+        assert_eq!(previews_at(service.journal(), &fixture.manifest, "reg-1").unwrap().unavailable, Some(Unavailable::PageChanged));
+        let refused = apply_at(service.journal(), &fixture.manifest, "reg-1", poisson).err().unwrap();
+        assert!(refused.starts_with("refinish_page_changed"), "{refused}");
+    }
+
+    /// A committed cloud result shows one small preview per finishing, its
+    /// own marked, and is finished again by another as one undo step: the
+    /// patch's pixels and its post-processing record change, its attempt and
+    /// the rest of it do not, and the step's earlier side puts it back.
+    #[test]
+    fn refinish_applies_a_finishing_and_records_one_undo_step() {
+        use crate::inference::refinish::{apply_at, previews_at, PREVIEW_LONG_SIDE};
+        use base64::Engine as _;
+        use cleaner_core::engines::postprocess::{Choice, Finishing};
+        let (fixture, service) = committed_flux3_fixture("refinish-apply");
+        let original = fixture.committed_patch();
+        assert_eq!(original.provenance.params_snapshot["postprocess"]["finishing"], "copy");
+
+        let previews = previews_at(service.journal(), &fixture.manifest, "reg-1").unwrap();
+        assert_eq!(previews.unavailable, None);
+        assert_eq!(previews.current, Some(Choice::default()));
+        assert_eq!(previews.previews.iter().map(|p| p.finishing).collect::<Vec<_>>(), Finishing::ALL.to_vec());
+        for preview in &previews.previews {
+            let url = preview.url.as_deref().unwrap_or_else(|| panic!("{:?} has no preview", preview.finishing));
+            let png = base64::engine::general_purpose::STANDARD.decode(url.strip_prefix("data:image/png;base64,").unwrap()).unwrap();
+            let raster = cleaner_core::image::decode(&png).unwrap();
+            assert!(raster.width.max(raster.height) <= PREVIEW_LONG_SIDE && raster.width > 0, "{:?}", preview.finishing);
+        }
+
+        let poisson = Choice { finishing: Finishing::Poisson, grayscale: true };
+        let change = apply_at(service.journal(), &fixture.manifest, "reg-1", poisson).unwrap();
+        assert_eq!(change.region.id, "reg-1");
+        let changed = fixture.committed_patch();
+        let postprocess = &changed.provenance.params_snapshot["postprocess"];
+        assert_eq!((&postprocess["finishing"], &postprocess["grayscale"]), (&serde_json::json!("poisson"), &serde_json::json!(true)));
+        assert_eq!(changed.provenance.cloud, original.provenance.cloud);
+        assert_eq!(changed.provenance.params_snapshot["input_provenance"], original.provenance.params_snapshot["input_provenance"]);
+        assert_eq!((changed.order, changed.visible), (original.order, original.visible));
+        assert_eq!(previews_at(service.journal(), &fixture.manifest, "reg-1").unwrap().current, Some(poisson));
+
+        // One step, a region-state one, whose sides name the two revisions.
+        let history = crate::history::load(&fixture.manifest);
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(change.history.as_ref().map(|view| view.cursor), Some(1));
+        let entry = &history.entries[0];
+        assert_eq!((entry.op.as_str(), entry.label.as_str(), entry.region_id.as_str()),
+            (crate::history::REGION_OP, crate::history::FINISHING_LABEL, "reg-1"));
+        let revision = |side: &crate::history::Side| side.region.as_ref().unwrap()
+            .pointer("/mask/legacyPatchRevision").and_then(serde_json::Value::as_str).unwrap().to_owned();
+        assert_ne!(revision(&entry.before), revision(&entry.after));
+
+        // The same finishing again writes nothing and records nothing.
+        let again = apply_at(service.journal(), &fixture.manifest, "reg-1", poisson).unwrap();
+        assert!(again.history.is_none());
+        assert_eq!(crate::history::load(&fixture.manifest).entries.len(), 1);
+
+        // The committed result still audits as this attempt's.
+        assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(),
+            RecoveryDecision::AlreadyCommitted { .. }));
+
+        // Undo is the earlier side's revision put back (`restore_region`).
+        let mut job = Job::open(&fixture.manifest).unwrap();
+        assert!(job.restore_legacy_revision("reg-1", &revision(&entry.before)).unwrap());
+        let undone = fixture.committed_patch();
+        assert_eq!(undone.provenance.params_snapshot["postprocess"]["finishing"], "copy");
+        assert_eq!(undone.pixels.data, original.pixels.data);
     }
 
     /// A record an older build left waiting for a review, or marked reviewed,

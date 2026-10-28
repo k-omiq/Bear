@@ -2742,6 +2742,29 @@ export const en = {
       rebuild: 'Rebuild from lower layers',
       undoLast: 'Undo last action',
     },
+    // A cloud result finished again from its saved answer (`FinishingPanel`).
+    // `command` is the undo step's tooltip (`history.rs#FINISHING_LABEL`).
+    finishing: {
+      applyFailed: 'The post-processing could not be changed. The layer is as it was.',
+      applying: 'Applying…',
+      command: 'Change post-processing',
+      current: 'Current',
+      failed: 'The previews could not be made.',
+      intro: 'This result finished each way, from its saved cloud answer. Nothing is sent. Pick one to use it.',
+      introGray: 'This result finished each way, from its saved cloud answer, colour made grey first as it was. Nothing is sent. Pick one to use it.',
+      label: 'Post-processing',
+      loading: 'Making previews…',
+      open: 'Choose…',
+      openHint: 'Compare post-processing methods on this result and pick another',
+      previewFailed: 'No preview',
+      title: 'Post-processing',
+      unavailable: {
+        noResult: 'The saved cloud answer for this layer is gone. Clean the region again to change its post-processing.',
+        notCloud: 'This layer was not cleaned in the cloud, so no answer was kept to finish again. Clean the region again to change its post-processing.',
+        pageChanged: 'The page under this layer changed after it was cleaned. Clean the region again to change its post-processing.',
+        unsupported: 'This layer was made by an older cloud version that cannot be finished again. Clean the region again to change its post-processing.',
+      },
+    },
     filter: {
       needsReview: 'Needs review',
       hint: 'Show only the regions that need review (R)',

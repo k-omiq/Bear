@@ -115,6 +115,8 @@ const IMPLEMENTED = Object.freeze({
   dismissRegion: 'dismiss_region',
   setRegionCleaned: 'set_region_cleaned',
   rejectResult: 'reject_result',
+  regionFinishingPreviews: 'region_finishing_previews',
+  setRegionFinishing: 'set_region_finishing',
   setLayerStyle: 'set_layer_style',
   keepDependencyResult: 'keep_dependency_result',
   setDetectionType: 'set_detection_type',
@@ -202,6 +204,8 @@ export const SEAM_METHODS = Object.freeze([
   'dismissRegion',
   'setRegionCleaned',
   'rejectResult',
+  'regionFinishingPreviews',
+  'setRegionFinishing',
   'setLayerStyle',
   'keepDependencyResult',
   'setDetectionType',
@@ -571,6 +575,11 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     setRegionCleaned: ({ regionId, cleaned }) =>
       call(IMPLEMENTED.setRegionCleaned, { regionId, cleaned }),
     rejectResult: ({ regionId }) => call(IMPLEMENTED.rejectResult, { regionId }),
+    // A cloud result finished again from its saved answer: the previews,
+    // then the pick, which records its own undo step.
+    regionFinishingPreviews: ({ regionId }) => call(IMPLEMENTED.regionFinishingPreviews, { regionId }),
+    setRegionFinishing: ({ regionId, finishing, grayscale }) =>
+      call(IMPLEMENTED.setRegionFinishing, { regionId, finishing, grayscale: Boolean(grayscale) }),
     // A deliberate layer change, judged by the layer's capabilities; history
     // replay goes through `restoreRegion` instead.
     setLayerStyle: ({ regionId, layer }) => call(IMPLEMENTED.setLayerStyle, { regionId, layer }),

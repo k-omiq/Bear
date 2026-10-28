@@ -54,6 +54,20 @@ it('swaps a cleaned detection and rejects a result through the registered comman
   await expect(backend.rejectResult({ regionId: 'c-p001-d1' })).rejects.toThrow(/^clean_not_restorable: /)
 })
 
+// A cloud result finished again: its previews, then the pick, whose grey
+// choice always crosses as a boolean.
+it('asks for finishing previews and finishes a result again through the registered commands', async () => {
+  const invoke = vi.fn().mockResolvedValue({ regionId: 'c-p001-h1', unavailable: null, current: null, grayscale: false, previews: [] })
+  const backend = createTauriBackend({ invoke, fallback: {} })
+  await backend.regionFinishingPreviews({ regionId: 'c-p001-h1' })
+  expect(invoke).toHaveBeenLastCalledWith('region_finishing_previews', { regionId: 'c-p001-h1' })
+  await backend.setRegionFinishing({ regionId: 'c-p001-h1', finishing: 'poisson' })
+  expect(invoke).toHaveBeenLastCalledWith('set_region_finishing', { regionId: 'c-p001-h1', finishing: 'poisson', grayscale: false })
+  invoke.mockRejectedValueOnce('refinish_page_changed: the page under the region changed')
+  await expect(backend.setRegionFinishing({ regionId: 'c-p001-h1', finishing: 'copy', grayscale: true }))
+    .rejects.toThrow(/^refinish_page_changed: /)
+})
+
 /** The seam methods that are commands, as opposed to event listeners. */
 const COMMAND_METHODS = SEAM_METHODS.filter((method) => !EVENT_METHODS.includes(method))
 
