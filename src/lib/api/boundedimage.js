@@ -45,6 +45,13 @@ export function parseBounds(header) {
 /**
  * Least recently used first, bounded by a total weight: a count when every
  * entry weighs one, bytes when `weigh` says so.
+ *
+ * **An image that leaves is closed, once nothing draws it.** WebKit frees a
+ * decoded `ImageBitmap` late unless it is closed, so an entry dropped from the
+ * cache is closed by hand. A canvas that still shows one and draws it again -
+ * on a zoom, an eraser stroke - `hold`s it while it does and `release`s it
+ * after. The close waits a task, so a caller whose load resolved with an entry
+ * that was then pushed out has held it before it goes.
  */
 export class ImageCache {
   /**
@@ -57,6 +64,12 @@ export class ImageCache {
     /** @type {Map<string, {entry: BoundedImage, weight: number}>} insertion order is recency order */
     this.entries = new Map()
     this.weight = 0
+    /** @type {Map<BoundedImage, number>} how many canvases are drawing each entry */
+    this.holds = new Map()
+    /** @type {Set<BoundedImage>} entries out of the cache, closed once nothing holds them */
+    this.dropped = new Set()
+    /** @type {ReturnType<typeof setTimeout>|null} */
+    this.sweep = null
   }
 
   /** @returns {number} */
@@ -85,7 +98,10 @@ export class ImageCache {
    */
   set(url, entry) {
     const old = this.entries.get(url)
-    if (old) this.weight -= old.weight
+    if (old) {
+      this.weight -= old.weight
+      if (old.entry !== entry) this.drop(old.entry)
+    }
     this.entries.delete(url)
     const weight = this.weigh(entry)
     this.entries.set(url, { entry, weight })
@@ -93,15 +109,74 @@ export class ImageCache {
     // The entry just set is never the one evicted.
     while (this.weight > this.limit && this.entries.size > 1) {
       const oldest = /** @type {string} */ (this.entries.keys().next().value)
-      this.weight -= /** @type {{weight: number}} */ (this.entries.get(oldest)).weight
+      const evicted = /** @type {{entry: BoundedImage, weight: number}} */ (this.entries.get(oldest))
+      this.weight -= evicted.weight
       this.entries.delete(oldest)
+      this.drop(evicted.entry)
     }
   }
 
   clear() {
+    for (const { entry } of this.entries.values()) this.drop(entry)
     this.entries.clear()
     this.weight = 0
   }
+
+  /**
+   * A canvas is drawing `entry` and may draw it again: it is not closed while
+   * held, even after it leaves the cache.
+   *
+   * @param {BoundedImage} entry
+   */
+  hold(entry) {
+    this.holds.set(entry, (this.holds.get(entry) ?? 0) + 1)
+  }
+
+  /**
+   * The canvas that held `entry` no longer draws it.
+   *
+   * @param {BoundedImage} entry
+   */
+  release(entry) {
+    const count = (this.holds.get(entry) ?? 0) - 1
+    if (count > 0) {
+      this.holds.set(entry, count)
+      return
+    }
+    this.holds.delete(entry)
+    if (this.dropped.has(entry)) this.schedule()
+  }
+
+  /** @param {BoundedImage} entry */
+  drop(entry) {
+    if (!entry.image) return
+    this.dropped.add(entry)
+    this.schedule()
+  }
+
+  schedule() {
+    if (this.sweep !== null) return
+    this.sweep = setTimeout(() => {
+      this.sweep = null
+      for (const entry of this.dropped) {
+        if (this.holds.has(entry)) continue
+        this.dropped.delete(entry)
+        closeImage(entry.image)
+      }
+    }, 0)
+  }
+}
+
+/**
+ * Free a decoded image now rather than at the next collection. Only an
+ * `ImageBitmap` can be; an `Image` (`decodeImage`'s older route) is left to
+ * the collector.
+ *
+ * @param {CanvasImageSource|null} image
+ */
+function closeImage(image) {
+  const bitmap = /** @type {{close?: () => void}|null} */ (image)
+  if (typeof bitmap?.close === 'function') bitmap.close()
 }
 
 /**
@@ -138,7 +213,10 @@ export async function loadBoundedImage(url, { cache, header, empty = false, sign
   const bounds = parseBounds(response.headers?.get?.(header))
   if (!bounds) throw new Error('image_bounds_missing')
   const image = await decode(await response.blob())
-  if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+  if (signal?.aborted) {
+    closeImage(image)
+    throw new DOMException('aborted', 'AbortError')
+  }
   const entry = { image, bounds }
   cache.set(url, entry)
   return entry

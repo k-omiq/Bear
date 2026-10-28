@@ -31,6 +31,14 @@ import { ImageCache, loadBoundedImage, parseBounds } from '../api/boundedimage.j
 export const MASK_CACHE_LIMIT = 96
 
 /**
+ * How many bytes of decoded masks are kept. A long sound effect is a mask of
+ * tens of megabytes, and 96 of those would be gigabytes. Each mask weighs at
+ * least this over `MASK_CACHE_LIMIT`, so one budget holds both bounds: no more
+ * than 96 masks, and no more than this many bytes.
+ */
+export const MASK_CACHE_BYTES = 64 * 1024 * 1024
+
+/**
  * The largest backing store a mask canvas is given, in device pixels. WebKit
  * refuses a canvas much past this on some machines, and a long sound effect at
  * full zoom on a 2x display would ask for several times it. Past the cap the
@@ -49,7 +57,10 @@ export const MAX_CANVAS_PIXELS = 4096 * 4096
  * @property {MaskBounds} bounds
  */
 
-const cache = new ImageCache(MASK_CACHE_LIMIT)
+const cache = new ImageCache(MASK_CACHE_BYTES, (entry) => {
+  const bounds = /** @type {MaskBounds} */ (entry.bounds)
+  return Math.max(MASK_CACHE_BYTES / MASK_CACHE_LIMIT, bounds.w * bounds.h * 4)
+})
 
 /** Drop every cached mask: for the tests, which each start from nothing. */
 export function forgetMaskImages() {
@@ -59,6 +70,21 @@ export function forgetMaskImages() {
 /** @returns {number} how many masks are cached, for the tests */
 export function cachedMaskCount() {
   return cache.size
+}
+
+/**
+ * A mask a canvas shows and draws again on a zoom: kept open until released,
+ * even after the cache lets it go (`api/boundedimage.js#ImageCache`).
+ *
+ * @param {MaskImage} entry
+ */
+export function holdMaskImage(entry) {
+  cache.hold(entry)
+}
+
+/** @param {MaskImage} entry */
+export function releaseMaskImage(entry) {
+  cache.release(entry)
 }
 
 /** The `x-mask-bounds` header, `x,y,w,h` in whole page pixels (`api/boundedimage.js#parseBounds`). */
@@ -157,5 +183,9 @@ export function paintMask(canvas, image, { inset, outline, color, fill }) {
   ringContext.fillRect(0, 0, width, height)
   ringContext.globalCompositeOperation = 'source-over'
   context.drawImage(scratch, 0, 0)
+  // Emptied after each use: it is sized to the largest mask drawn, which can
+  // be the whole canvas cap, and it is sized afresh for every mask anyway.
+  scratch.width = 0
+  scratch.height = 0
   return true
 }
