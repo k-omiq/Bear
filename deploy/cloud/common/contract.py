@@ -216,6 +216,8 @@ class Flux3Generation:
     none for this app's way, so an all-false record is refused: it would hash apart
     from the same request without it. `canonical()` is positional: FIELDS keeps its
     order, so a request hashes as it did before the first and third were renamed.
+    A client from before the rename still sends the old names (OLD_NAMES); they read
+    as the new ones, and a record naming one part both ways is refused.
     """
 
     location_prompt: bool = False
@@ -224,11 +226,16 @@ class Flux3Generation:
     megapixel_size: bool = False
 
     FIELDS = ("location_prompt", "marker", "low_shift", "megapixel_size")
+    OLD_NAMES = {"reference_prompt": "location_prompt", "reference_shift": "low_shift"}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> Flux3Generation:
         if type(d) is not dict:
             raise ContractValidationError("flux3_generation must be a dict")
+        both = sorted(old for old, new in cls.OLD_NAMES.items() if old in d and new in d)
+        if both:
+            raise ContractValidationError(f"flux3_generation names a part under its old and new name: {both}")
+        d = {cls.OLD_NAMES.get(name, name): value for name, value in d.items()}
         _assert_no_extra_keys(d, set(cls.FIELDS))
         parts = {name: _check_exact_bool(d[name], name) for name in cls.FIELDS if name in d}
         generation = cls(**parts)
