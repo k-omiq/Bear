@@ -33,7 +33,8 @@ import { app } from '../state/app.svelte.js'
 import { editor } from '../state/editor.svelte.js'
 import { draft } from '../editor/draft.svelte.js'
 import { applySelection } from '../editor/retouch.svelte.js'
-import { runMaskAction, runRegionMenuItem, stepLayerOpacity } from '../editor/maskactions.svelte.js'
+import { finishingRequest, runMaskAction, runRegionMenuItem, stepLayerOpacity } from '../editor/maskactions.svelte.js'
+import { session } from '../state/session.svelte.js'
 
 /** @param {string} key @param {Object} [extra] */
 function press(key, extra = {}) {
@@ -88,6 +89,27 @@ describe('the keyboard layer', () => {
     expect(runRegionMenuItem).toHaveBeenLastCalledWith('retry', state.region)
     press('B', { shiftKey: true })
     expect(runRegionMenuItem).toHaveBeenLastCalledWith('retryWider', state.region)
+  })
+
+  it('asks for the selected cleaned layer\'s Post-processing on Cmd+P, the Layers window opened, and for nothing else', () => {
+    finishingRequest.id = null
+    const wasOpen = session.windows.layers.open
+    session.windows.layers.open = false
+    press('p', { metaKey: true })
+    expect(finishingRequest.id).toBe(null)
+    state.region = { id: 'r1', outcome: 'detected', detected: true, mask: null }
+    press('p', { metaKey: true })
+    expect(finishingRequest.id).toBe(null)
+    state.region = { id: 'r2', outcome: 'cleaned', mask: { id: 'm2', provenance: { engine: 'paint' } } }
+    press('p', { metaKey: true })
+    expect(finishingRequest.id).toBe(null)
+    expect(session.windows.layers.open).toBe(false)
+    state.region = { id: 'r3', outcome: 'cleaned', mask: { id: 'm3', provenance: { engine: 'flux' } } }
+    press('p', { metaKey: true })
+    expect(finishingRequest.id).toBe('r3')
+    expect(session.windows.layers.open).toBe(true)
+    finishingRequest.id = null
+    session.windows.layers.open = wasOpen
   })
 
   it('applies a held selection of the tool that is out on Cmd+Enter, before anything else', () => {

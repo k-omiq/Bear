@@ -1,4 +1,5 @@
 <script>
+  import { tick } from 'svelte'
   import { editor, isHighlighted, hover, select, undo, undoAvailable, undoLabelKey } from '../state/editor.svelte.js'
   import { MAX_MASK_PADDING, rowEngines, engineChoiceLabel, retryWidens } from '../model/masks.js'
   import { shortcutHint } from '../shortcuts.js'
@@ -8,10 +9,11 @@
   import { cloudProfileLabel, currentCloudModelId, engineModelLabel, finishingKey } from '../model/model-names.js'
   import { actionHint } from './maskrows.js'
   import { menuPoint } from './gesture.js'
-  import { cleanDetected, deleteRow, keepDependencyResult, offersFinishing, openLayerEdit, recordedFinishing, regionPageBusy, requestDetectedMaskPadding, rerunMask, runMaskAction, shownMaskPadding, updateLayer } from './maskactions.svelte.js'
+  import { cleanDetected, deleteRow, finishingRequest, keepDependencyResult, offersFinishing, openLayerEdit, recordedFinishing, regionPageBusy, requestDetectedMaskPadding, rerunMask, runMaskAction, shownMaskPadding, updateLayer } from './maskactions.svelte.js'
   import { layerCapabilities, layerOf } from '../model/layers.js'
   import { Button, Disclosure, IconButton, RangeField, Select } from '../ui/index.js'
   import { hasKey, t } from '../i18n/index.js'
+  import { reveal } from '../ui/reveal.js'
   import FinishingPanel from './FinishingPanel.svelte'
   import MaskFacts from './MaskFacts.svelte'
   import RegionMenu from './RegionMenu.svelte'
@@ -223,6 +225,27 @@
   })
   let finishingOpen = $state(false)
   /** @type {HTMLElement|undefined} */
+  let rowEl = $state()
+  let mounted = true
+  $effect(() => () => {
+    mounted = false
+  })
+  // Asked for from the keyboard (`⌘P`): opened once the list has expanded
+  // this row, and the request taken. The row is brought into view first and
+  // the panel opens two frames later: the panel closes on any scroll, and a
+  // list just opened or a row just expanded scrolls on the next frame (the
+  // list's reveal of the selection, this one), which would shut it at once.
+  $effect(() => {
+    if (!open || !finishing || finishingRequest.id !== region.id) return
+    finishingRequest.id = null
+    void tick().then(() => {
+      if (rowEl) reveal(rowEl)
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (mounted) finishingOpen = true
+      }))
+    })
+  })
+  /** @type {HTMLElement|undefined} */
   let finishingAnchor = $state()
 
   /**
@@ -257,6 +280,7 @@
      has to follow a press anywhere in it - the summary, the picker, either
      icon - not only the one button that happens to carry the toggle. -->
 <div
+  bind:this={rowEl}
   class="row"
   class:highlighted
   role="listitem"

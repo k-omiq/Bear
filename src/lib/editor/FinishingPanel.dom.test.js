@@ -17,7 +17,9 @@ import { t } from '../i18n/index.js'
 import { FINISHINGS, finishingKey } from '../model/model-names.js'
 import { clearNotices } from '../state/app.svelte.js'
 import { editor } from '../state/editor.svelte.js'
+import MaskList from './MaskList.svelte'
 import MaskRow from './MaskRow.svelte'
+import { finishingRequest, requestFinishingPanel } from './maskactions.svelte.js'
 import { maskRow } from './maskrows.js'
 
 const ZERO = { method: 0, openChapter: 0, export: 0, cloud: 0, provision: 0, region: 0, pageTail: 0, noticeStagger: 0 }
@@ -41,11 +43,14 @@ function memoryStorage() {
 
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage())
+  // jsdom has no `CSS.escape`, which the list's reveal of the selection uses.
+  vi.stubGlobal('CSS', { escape: (/** @type {string} */ value) => value })
 })
 
 afterEach(() => {
   cleanup()
   clearNotices()
+  finishingRequest.id = null
   editor.chapter = null
   setBackend(null)
   vi.unstubAllGlobals()
@@ -176,6 +181,26 @@ describe('the Post-processing panel on a Layers row', () => {
     await waitFor(() => expect(panel()).toBeTruthy())
     await fireEvent.pointerDown(trigger())
     await fireEvent.click(trigger())
+    expect(panel()).toBeNull()
+  })
+
+  it('opens from the keyboard\'s request: the list expands the row and the row opens its panel', async () => {
+    const { regionId } = await opened()
+    editor.pageIndex = /** @type {any} */ (editor.chapter).pages.findIndex((/** @type {any} */ page) => page.regions.some((/** @type {any} */ r) => r.id === regionId))
+    render(MaskList)
+    expect(panel()).toBeNull()
+    requestFinishingPanel(regionId)
+    await waitFor(() => expect(panel()).toBeTruthy())
+    expect(finishingRequest.id).toBe(null)
+    await waitFor(() => expect(document.querySelectorAll('[data-finishing]').length).toBe(FINISHINGS.length))
+  })
+
+  it('drops a request for a row the list cannot show', async () => {
+    await opened()
+    editor.pageIndex = 0
+    render(MaskList)
+    requestFinishingPanel('no-such-region')
+    await waitFor(() => expect(finishingRequest.id).toBe(null))
     expect(panel()).toBeNull()
   })
 

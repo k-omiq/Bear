@@ -2533,6 +2533,7 @@ export const es = {
       duplicateRegion: "Duplicar región seleccionada",
       cleanSelected: 'Limpiar la máscara seleccionada, o volver a intentarlo',
       retryWider: 'Volver a intentar la máscara seleccionada, más ancha',
+      finishingSelected: 'Cambiar el posprocesado de la capa seleccionada',
       deleteLayer: 'Eliminar la capa seleccionada',
     },
     zoom: {

@@ -2491,6 +2491,7 @@ export const ja = {
       duplicateRegion: "選択した領域を複製",
       cleanSelected: '選択中のマスクを除去、または再試行',
       retryWider: '選択中のマスクを広げて再試行',
+      finishingSelected: '選択中のレイヤーの後処理を変更',
       deleteLayer: '選択中のレイヤーを削除',
     },
     zoom: {

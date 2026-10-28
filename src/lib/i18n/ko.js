@@ -2488,6 +2488,7 @@ export const ko = {
       duplicateRegion: "선택한 영역 복제",
       cleanSelected: '선택한 마스크 클린 또는 다시 시도',
       retryWider: '선택한 마스크를 더 넓게 다시 시도',
+      finishingSelected: '선택한 레이어의 후처리 변경',
       deleteLayer: '선택한 레이어 삭제',
     },
     zoom: {

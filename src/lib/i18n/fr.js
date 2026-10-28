@@ -2533,6 +2533,7 @@ export const fr = {
       duplicateRegion: "Dupliquer la région sélectionnée",
       cleanSelected: 'Nettoyer le masque sélectionné, ou réessayer',
       retryWider: 'Réessayer le masque sélectionné, plus large',
+      finishingSelected: 'Changer le post-traitement du calque sélectionné',
       deleteLayer: 'Supprimer le calque sélectionné',
     },
     zoom: {

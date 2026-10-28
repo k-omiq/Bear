@@ -675,6 +675,20 @@ export function offersFinishing(region) {
 }
 
 /**
+ * A Post-processing panel asked for from outside its row (`⌘P`,
+ * `KeyboardLayer`): the region whose row opens it. The Layers list expands
+ * that row and the row opens its panel and clears this; a row the list
+ * cannot show clears it too, so a request never waits to surprise a later
+ * expand.
+ */
+export const finishingRequest = $state({ /** @type {string|null} */ id: null })
+
+/** @param {string} regionId */
+export function requestFinishingPanel(regionId) {
+  finishingRequest.id = regionId
+}
+
+/**
  * The finishing a layer's record says its pixels were made by
  * (`params_snapshot.postprocess`), or null when it names none.
  *

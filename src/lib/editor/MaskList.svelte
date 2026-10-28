@@ -10,7 +10,7 @@
   } from '../state/editor.svelte.js'
   import { flaggedCount, maskRows } from './maskrows.js'
   import { padPosition } from './pagerows.js'
-  import { deleteRow } from './maskactions.svelte.js'
+  import { deleteRow, finishingRequest } from './maskactions.svelte.js'
   import { Empty } from '../ui/index.js'
   import { focusAndReveal, reveal } from '../ui/reveal.js'
   import { t } from '../i18n/index.js'
@@ -71,6 +71,16 @@
     editor.pageIndex
     editor.reviewFilter
     expandedId = null
+  })
+
+  // A Post-processing panel asked for from the keyboard: its row expanded
+  // here, and the row opens the panel (`MaskRow`). After the reset above, so
+  // a list opened by the same request keeps the row it was asked for.
+  $effect(() => {
+    const id = finishingRequest.id
+    if (!id) return
+    if (rows.some((row) => row.id === id)) expandedId = id
+    else finishingRequest.id = null
   })
 
   // The panel follows the selection, wherever it was made: a region clicked on

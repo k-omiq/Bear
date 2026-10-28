@@ -22,6 +22,8 @@
   import {
     deleteRow,
     duplicateRegion,
+    offersFinishing,
+    requestFinishingPanel,
     runMaskAction,
     runRegionMenuItem,
     stepLayerOpacity,
@@ -50,6 +52,12 @@
     retrySelectedWider: () => {
       const region = editorState.selectedRegion()
       if (region && !isDetected(region)) void runRegionMenuItem('retryWider', region)
+    },
+    openSelectedFinishing: () => {
+      const region = editorState.selectedRegion()
+      if (!offersFinishing(region)) return
+      openWindow('layers')
+      requestFinishingPanel(/** @type {import('../api/backend.js').ApiRegion} */ (region).id)
     },
     stepWipe: (direction) => editorState.stepWipe(direction),
     focusNextOption: () => void focusNextOption(),

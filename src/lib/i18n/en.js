@@ -3280,6 +3280,7 @@ export const en = {
       duplicateRegion: "Duplicate selected region",
       cleanSelected: 'Clean the selected mask, or try it again',
       retryWider: 'Try the selected mask again, wider',
+      finishingSelected: 'Change the selected layer\'s post-processing',
       deleteLayer: 'Delete the selected layer',
     },
     zoom: {

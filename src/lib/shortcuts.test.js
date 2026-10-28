@@ -89,6 +89,21 @@ describe('matchShortcut', () => {
       expect(matchShortcut(press('d', { [modifier]: true, shiftKey: true }), editor)).toBeNull()
     }
   })
+  it('opens the selected layer\'s Post-processing with Cmd/Ctrl+P only in the editor, outside text fields and dialogs', () => {
+    for (const modifier of ['metaKey', 'ctrlKey']) {
+      const shortcut = matchShortcut(press('p', { [modifier]: true }), editor)
+      expect(shortcut?.id).toBe('layers.finishingSelected')
+      let calls = 0
+      shortcut.run({ openSelectedFinishing: () => calls++ })
+      expect(calls).toBe(1)
+      expect(matchShortcut(press('p', { [modifier]: true }), home)).toBeNull()
+      expect(matchShortcut(press('p', { [modifier]: true, target: { tagName: 'INPUT', type: 'text' } }), editor)).toBeNull()
+      expect(matchShortcut(press('p', { [modifier]: true }), { ...editor, modalOpen: true })).toBeNull()
+      expect(matchShortcut(press('p', { [modifier]: true, shiftKey: true }), editor)).toBeNull()
+    }
+    // A bare P is still the review's previous.
+    expect(matchShortcut(press('p'), editor)?.id).toBe('review.prev')
+  })
   it('matches editor keys only in the editor', () => {
     expect(matchShortcut(press('1'), editor)?.id).toBe('tool.autoClean')
     expect(matchShortcut(press('1'), home)).toBe(null)
