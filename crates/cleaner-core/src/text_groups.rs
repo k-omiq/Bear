@@ -88,7 +88,10 @@
 //!   CTD box Ogkalu missed anchors its own group. With
 //!   [`Inputs::text_boxes_only`] (Normal: Ogkalu without SAM-TS-L) only Ogkalu text
 //!   boxes anchor, no layout group forms, and lettering no Ogkalu text box
-//!   claims is evidence only, never a cleaning group. Anchors that overlap by more
+//!   claims is evidence only, never a cleaning group. Nothing joins for being
+//!   near (no proximity, no near anchors, no reach), and where CTD boxed
+//!   lines inside an Ogkalu box, a small share of lettering off those lines
+//!   is art and evidence only. Anchors that overlap by more
 //!   than half the smaller box, that were cut by a model tile seam, or that sit
 //!   close together in one balloon become one group.
 //! - **Walls**: Ogkalu `bubble` boxes at or above [`BUBBLE_SCORE`]. Anchors in
@@ -178,6 +181,15 @@ const DUPLICATE_SHARE: f64 = 0.5;
 const LOBE_SHARE: f64 = 0.3;
 /// A component belongs to the anchor holding at least half its pixels.
 const ASSIGN_SHARE: f64 = 0.5;
+/// How far past a CTD box a glyph may reach and still be on its line, under
+/// [`Inputs::text_boxes_only`]. CTD's boxes are tight to the lettering; this
+/// covers the anti-aliased edge, not a neighbour.
+const CTD_LINE_MARGIN: i64 = 4;
+/// Under [`Inputs::text_boxes_only`], lettering off CTD's lines under this
+/// share of an Ogkalu box's lettering is art; at or above it, CTD missed lines.
+/// Measured on the 15 real test pages: stray art was at most 5.7% of its box,
+/// a title CTD boxed only the top of was 74%.
+const CTD_OFF_LINE_SHARE: f64 = 0.25;
 /// This share of a component outside its balloon flags the group.
 const CROSSING_SHARE: f64 = 0.15;
 /// This share of a component inside a second balloon's anchor flags it.
@@ -595,7 +607,11 @@ pub struct Inputs<'a> {
     pub max_side: u32,
     /// Lettering is cleaned only where an Ogkalu `text_bubble` or `text_free`
     /// box claims it: CTD boxes anchor no group and no layout group forms, so
-    /// mask pixels no Ogkalu text box holds stay evidence only. A run sets it
+    /// mask pixels no Ogkalu text box holds stay evidence only. Nothing joins
+    /// for being near: no piece attaches by proximity, boxes in one balloon
+    /// join only as duplicates or across a seam, and no reach merge runs.
+    /// Where a CTD box overlaps an Ogkalu text box, a small share of lettering
+    /// off CTD's lines is art and is dropped ([`CTD_OFF_LINE_SHARE`]). A run sets it
     /// when an Ogkalu profile ran and SAM-TS-L did not (Normal).
     pub text_boxes_only: bool,
     /// What page this raster is of (the source's SHA-256 and the page), so
@@ -1043,7 +1059,7 @@ pub fn group_checked(
             let seam = split_by_seam(&x.rect, &y.rect, &inputs.seams);
             let (gx, gy) = gaps(&x.rect, &y.rect);
             let short = x.rect.w.min(x.rect.h).min(y.rect.w.min(y.rect.h)) as i64;
-            let near = x.bubble.is_some() && gx.max(gy) <= (short / 2).max(12);
+            let near = !inputs.text_boxes_only && x.bubble.is_some() && gx.max(gy) <= (short / 2).max(12);
             if duplicate || seam || near {
                 joined.union(a, b);
             }
@@ -1152,6 +1168,51 @@ pub fn group_checked(
             component_reasons[index].insert(ReviewReason::CrossesBalloon);
         }
     }
+    // With only text boxes counting, an Ogkalu box is a region and CTD's boxes
+    // say where its lines are. Where a CTD box overlaps the Ogkalu box, a
+    // component at least half outside every such CTD box (grown by
+    // [`CTD_LINE_MARGIN`]) is off the lines. When that is under
+    // [`CTD_OFF_LINE_SHARE`] of the box's lettering it is art in the region's
+    // corner (a stray stroke, an anger mark) and stays evidence only; more
+    // than that is CTD missing lines the Ogkalu box holds, and all of it
+    // stays. An Ogkalu box no CTD box overlaps keeps everything it holds.
+    if inputs.text_boxes_only {
+        let lines: Vec<Rect> = boxes
+            .iter()
+            .filter(|b| b.kind == BoxKind::CtdText)
+            .map(|b| grown_by(&b.rect, CTD_LINE_MARGIN, width, height))
+            .collect();
+        let held: Vec<Vec<Rect>> = drafts
+            .iter()
+            .map(|draft| {
+                lines.iter().copied().filter(|line| draft.anchors.iter().any(|anchor| intersection(anchor, line) > 0)).collect()
+            })
+            .collect();
+        let off_line: Vec<bool> = (0..components.len())
+            .map(|index| {
+                let Some((d, _)) = owner[index] else { return false };
+                let bounds = &components[index].0;
+                let inside = held[d].iter().map(|line| intersection(bounds, line)).max();
+                inside.is_some_and(|inside| (inside as f64) < ASSIGN_SHARE * area(bounds) as f64)
+            })
+            .collect();
+        let mut pixels = vec![(0u64, 0u64); drafts.len()];
+        for (index, slot) in owner.iter().enumerate() {
+            if let Some((d, _)) = slot {
+                pixels[*d].0 += u64::from(components[index].1);
+                if off_line[index] {
+                    pixels[*d].1 += u64::from(components[index].1);
+                }
+            }
+        }
+        for (index, slot) in owner.iter_mut().enumerate() {
+            let Some((d, _)) = *slot else { continue };
+            let (all, off) = pixels[d];
+            if off_line[index] && (off as f64) < CTD_OFF_LINE_SHARE * all as f64 {
+                *slot = None;
+            }
+        }
+    }
     for (index, slot) in owner.iter().enumerate() {
         if let Some((d, _)) = slot {
             drafts[*d].members.push(index);
@@ -1207,8 +1268,11 @@ pub fn group_checked(
 
     // Proximity: punctuation and strokes just outside an anchor, same balloon.
     // With a reader only specks attach here: a larger piece no box claimed is
-    // read, in its layout unit, before it may join the box's lettering.
-    attach_by_proximity(&mut drafts, &mut owner, &components, &here_of, check.is_some());
+    // read, in its layout unit, before it may join the box's lettering. With
+    // only text boxes counting, nothing joins a box for being near it.
+    if !inputs.text_boxes_only {
+        attach_by_proximity(&mut drafts, &mut owner, &components, &here_of, check.is_some());
+    }
 
     // Detector-only anchors: a text box with no lettering under it.
     if inputs.mask.is_some() {
@@ -1272,7 +1336,9 @@ pub fn group_checked(
     }
     // Specks beside a layout group (an ellipsis, a dakuten) are its lettering
     // too, as they are beside an anchored group.
-    attach_by_proximity(&mut drafts, &mut owner, &components, &here_of, false);
+    if !inputs.text_boxes_only {
+        attach_by_proximity(&mut drafts, &mut owner, &components, &here_of, false);
+    }
 
     // Crossing flags: a component's is its group's too, and a group whose
     // lettering lies in two balloons (an unconfined box took both) is flagged.
@@ -1359,9 +1425,13 @@ pub fn group_checked(
     // lettering with it. The reach only decides the grouping: no pixel is
     // added to the lettering here. Lettering that joined a box's group is
     // claimed by it and loses its reason.
-    let cleaning: Vec<bool> = drafts.iter().map(|draft| draft.disposition == Disposition::Clean).collect();
-    let into = within_reach(&drafts, &cleaning, &owner, &components, &labels, &boxes, width, height);
-    drafts = fold(drafts, &into, &mut owner, &boxes);
+    // With only text boxes counting, each box's text stays its own job: a
+    // group joined for being near would be judged as text with its neighbour.
+    if !inputs.text_boxes_only {
+        let cleaning: Vec<bool> = drafts.iter().map(|draft| draft.disposition == Disposition::Clean).collect();
+        let into = within_reach(&drafts, &cleaning, &owner, &components, &labels, &boxes, width, height);
+        drafts = fold(drafts, &into, &mut owner, &boxes);
+    }
     for (index, slot) in owner.iter_mut().enumerate() {
         let Some((d, via)) = slot else { continue };
         if *via == Assignment::Layout && drafts[*d].origin != GroupOrigin::MaskLayout {

@@ -243,12 +243,14 @@ fn text_boxes_only_cleans_what_ogkalu_calls_text_and_nothing_else() {
     inputs.text_boxes_only = true;
     let g = group(&inputs).unwrap();
 
-    // Ogkalu's groups keep their lettering, punctuation included; the CTD box
-    // that duplicates balloon A's is evidence, not part of its group.
+    // Ogkalu's groups keep the lettering their boxes hold; the CTD box that
+    // duplicates balloon A's is evidence, not part of its group. Nothing joins
+    // for being near: the "!" and the period just outside A's box stay out.
     let a = with_box(&g, "rt-0001");
-    assert_eq!(a.component_ids.len(), 8 + 2 + 2 + 1);
+    assert_eq!(a.component_ids.len(), 8 + 2);
     assert_eq!(a.box_ids, vec!["rt-0001".to_owned()]);
-    assert_eq!(group_at(&g, f.bang).map(|x| &x.id), Some(&a.id));
+    assert!(group_at(&g, f.bang).is_none() && group_at(&g, f.period).is_none());
+    assert!(g.components.iter().all(|c| c.via != Some(Assignment::Proximity)));
     assert_eq!(with_box(&g, "rt-0004").component_ids.len(), 8);
 
     // What only CTD saw, by box or by pixel, and art the mask took for text
@@ -259,7 +261,65 @@ fn text_boxes_only_cleans_what_ogkalu_calls_text_and_nothing_else() {
     assert!(group_at(&g, (101, 901)).is_none(), "text no Ogkalu box claimed");
     assert!(group_at(&g, f.art).is_none());
     assert!(g.boxes.iter().any(|b| b.id == "ctd-0001"), "raw CTD boxes stay in the evidence");
+    // One text cut by a tile seam is still one group.
+    assert_eq!(with_box(&g, "rt-0007").box_ids, vec!["rt-0007".to_owned(), "rt-0008".to_owned()]);
     assert_eq!(g.cleaning().count(), 5);
+
+    // Two text boxes close together in one balloon stay two jobs: neither the
+    // near-anchor rule nor the reach joins them.
+    let mut mask = vec![0u8; (W * H) as usize];
+    for y in [110, 140] {
+        ring(&mut mask, 120, y, 24);
+        ring(&mut mask, 160, y, 24);
+    }
+    let rt = [
+        rt(60, 60, 200, 200, BalloonClass::Bubble, 0.9),
+        rt(105, 95, 30, 75, BalloonClass::TextInBubble, 0.9),
+        rt(145, 95, 30, 75, BalloonClass::TextInBubble, 0.9),
+    ];
+    let mut inputs = Inputs::new(W, H, Some(&mask));
+    inputs.rt = &rt;
+    inputs.models = models();
+    let joined = group(&inputs).unwrap();
+    assert_eq!(joined.cleaning().count(), 1, "the default joins near boxes in one balloon");
+    inputs.text_boxes_only = true;
+    let apart = group(&inputs).unwrap();
+    assert_eq!(apart.cleaning().count(), 2);
+}
+
+#[test]
+fn text_boxes_only_keeps_art_in_a_loose_box_corner_out_where_ctd_boxed_the_lines() {
+    let mut mask = vec![0u8; (W * H) as usize];
+    for y in [130, 160, 190] {
+        ring(&mut mask, 150, y, 24);
+    }
+    fill(&mut mask, Rect::new(104, 236, 6, 6));
+    let rt = [
+        rt(60, 60, 220, 220, BalloonClass::Bubble, 0.9),
+        rt(100, 100, 100, 150, BalloonClass::TextInBubble, 0.9),
+    ];
+    let lines = [ctd(136, 116, 28, 88)];
+    let mut inputs = Inputs::new(W, H, Some(&mask));
+    inputs.rt = &rt;
+    inputs.ctd = &lines;
+    inputs.models = models();
+    inputs.text_boxes_only = true;
+    let g = group(&inputs).unwrap();
+    let text = with_box(&g, "rt-0001");
+    assert_eq!(text.component_ids.len(), 3, "the three glyphs on CTD's line");
+    assert!(group_at(&g, (105, 237)).is_none(), "the corner piece is off every CTD line");
+
+    // CTD boxed only the first glyph: most of the box's lettering is off its
+    // line, so CTD missed lines and the Ogkalu box keeps everything.
+    let partial = [ctd(136, 116, 28, 28)];
+    inputs.ctd = &partial;
+    let g = group(&inputs).unwrap();
+    assert_eq!(with_box(&g, "rt-0001").component_ids.len(), 4);
+
+    // With no CTD box over it, the Ogkalu box keeps everything it holds.
+    inputs.ctd = &[];
+    let g = group(&inputs).unwrap();
+    assert_eq!(with_box(&g, "rt-0001").component_ids.len(), 4);
 }
 
 #[test]
