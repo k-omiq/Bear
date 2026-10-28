@@ -3196,9 +3196,9 @@ export const en = {
       change: 'Change the shortcut for {name}',
       reset: 'Reset {name} to its default',
       resetAll: 'Reset all to defaults',
-      listening: 'Press a key…',
+      listening: 'Press a key or mouse button…',
       unbound: 'Unbound',
-      hint: 'Press the combination to use. Escape cancels, Backspace clears the shortcut.',
+      hint: 'Press the combination or extra mouse button to use. Escape cancels, Backspace clears the shortcut.',
       fixedHint: 'Escape always cancels, and cannot be changed.',
       refusedAlt:
         'Alt combinations belong to the operating system and are never intercepted here. Choose another combination.',

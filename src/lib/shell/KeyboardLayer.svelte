@@ -1,12 +1,14 @@
 <script>
   import { tick } from 'svelte'
   /**
-   * The keyboard layer: one `keydown` listener, one `keyup` listener, and the
-   * `ShortcutCommands` implementation `src/lib/shortcuts.js` calls into.
+   * The keyboard layer: one `keydown` listener, one `keyup` listener, the
+   * pointer listeners that let an extra mouse button stand in for a key, and
+   * the `ShortcutCommands` implementation `src/lib/shortcuts.js` calls into.
    *
    * It renders nothing. Every binding lives in the table, not here.
    */
   import {
+    extraButtonPress,
     matchShortcut,
     releasesHold,
     HOLD_ORIGINAL_ID,
@@ -268,6 +270,32 @@
     }
   }
 
+  /**
+   * An extra mouse button, matched as the key it is bound as. It types
+   * nothing, so a focused text field does not stop it the way it stops a
+   * bare letter.
+   *
+   * @param {PointerEvent} event
+   */
+  function onpointer(event) {
+    const press = extraButtonPress(event)
+    if (!press) return
+    if (!press.down) {
+      if (releasesHold(press, HOLD_ORIGINAL_ID)) commands.holdOriginal(false)
+      if (releasesHold(press, HOLD_PAN_ID) && editorState.editor.panHeld) commands.holdPan(false)
+      return
+    }
+    if (event.defaultPrevented) return
+    const shortcut = matchShortcut(press, {
+      scope: app.route.name === 'editor' ? 'editor' : 'home',
+      modalOpen: isModalOpen(),
+      textEntry: false,
+    })
+    if (!shortcut) return
+    event.preventDefault()
+    shortcut.run(commands)
+  }
+
   /** A key let go in another window never sends its keyup here. */
   function onblur() {
     commands.holdPan(false)
@@ -282,4 +310,11 @@
   }
 </script>
 
-<svelte:window onkeydown={onkeydown} onkeyup={onkeyup} onblur={onblur} />
+<svelte:window
+  onkeydown={onkeydown}
+  onkeyup={onkeyup}
+  onblur={onblur}
+  onpointerdown={onpointer}
+  onpointermove={onpointer}
+  onpointerup={onpointer}
+/>

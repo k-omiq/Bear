@@ -17,7 +17,8 @@
    *   is named `⌘` or `Ctrl` depending on the platform (`shortcutChord`).
    *
    * **The sheet is also where a shortcut is rebound.** A chord is a button:
-   * click it and the next combination pressed becomes the binding, Escape
+   * click it and the next combination pressed - or an extra mouse button,
+   * back or forward - becomes the binding, Escape
    * cancels, Backspace or Delete clears it. That is deliberately the same list
    * rather than a second editor screen - the thing a user wants to change is
    * the row they are already reading, and a separate editor would have to
@@ -39,6 +40,7 @@
   import {
     pointerModifiersFor,
     chordFromEvent,
+    extraButtonPress,
     defaultShortcut,
     groupedShortcuts,
     isApplePlatform,
@@ -227,7 +229,30 @@
       report(clearShortcutBinding(id))
       return
     }
-    const { chord, reasonKey } = chordFromEvent(event)
+    take(id, chordFromEvent(event))
+  }
+
+  /**
+   * An extra mouse button pressed while a row is listening is its chord, with
+   * whatever modifiers are held. Left, middle and right still click, so a click
+   * elsewhere ends the recording the way it always has.
+   *
+   * @param {PointerEvent} event
+   */
+  function onpointerdown(event) {
+    if (recording === null) return
+    const press = extraButtonPress(event)
+    if (!press?.down) return
+    event.preventDefault()
+    event.stopPropagation()
+    take(recording, chordFromEvent(press))
+  }
+
+  /**
+   * @param {string} id
+   * @param {{chord: import('../shortcuts.js').Chord|null, reasonKey: string|null}} recorded
+   */
+  function take(id, { chord, reasonKey }) {
     if (reasonKey) {
       recording = null
       message = { key: reasonKey }
@@ -247,7 +272,7 @@
   }
 </script>
 
-<svelte:window onkeydowncapture={onkeydown} />
+<svelte:window onkeydowncapture={onkeydown} onpointerdowncapture={onpointerdown} onpointermovecapture={onpointerdown} />
 
 <div class="sheet">
   {#each sections as section (section.group)}

@@ -1127,7 +1127,29 @@ export function normalizeKey(key) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Named keys a chord may use, beside any single character.
+ * The first `event.button` past left, middle and right: a mouse's back button.
+ * Forward is the next, and a few mice report more beyond it.
+ */
+const FIRST_EXTRA_BUTTON = 3
+
+/** How many extra buttons a chord may name, from `FIRST_EXTRA_BUTTON` on. */
+const EXTRA_BUTTONS = 5
+
+/**
+ * The key a chord stores for a mouse button - `Mouse4` for back, `Mouse5` for
+ * forward, numbered the way mouse software numbers them. Left, middle and right
+ * are never one: they click, pan and open menus.
+ *
+ * @param {number} button - an `event.button`
+ * @returns {string}
+ */
+function mouseButtonKey(button) {
+  return `Mouse${button + 1}`
+}
+
+/**
+ * Named keys a chord may use, beside any single character. The extra mouse
+ * buttons are among them, so a chord can be one of those too.
  *
  * A short list rather than "anything `event.key` reports", because most of
  * what it reports cannot be a shortcut and letting it through would store a
@@ -1151,6 +1173,7 @@ export const NAMED_CHORD_KEYS = new Set([
   'Enter',
   'Insert',
   ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`),
+  ...Array.from({ length: EXTRA_BUTTONS }, (_, i) => mouseButtonKey(FIRST_EXTRA_BUTTON + i)),
 ])
 
 /** Keys that are a modifier and nothing else: pressing one records nothing. */
@@ -1231,8 +1254,44 @@ export function chordFromEvent(event) {
   }
 }
 
+/**
+ * A press or release of an extra mouse button, in the shape of a key event -
+ * `key` is the button's chord key - so `matchShortcut`, `chordFromEvent` and
+ * `releasesHold` take it unchanged. `null` for any other pointer event.
+ *
+ * A pointer event rather than a mouse one: a page that cancels `pointerdown`
+ * also cancels the `mousedown` behind it. A second button pressed while one is
+ * already down sends no `pointerdown` at all, only a `pointermove` whose
+ * `button` names it, so that is read too - `buttons` then says which way it
+ * went.
+ *
+ * @param {{type?: string, button?: number, buttons?: number, shiftKey?: boolean, metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean, target?: any}} event
+ * @returns {{key: string, down: boolean, shiftKey: boolean, metaKey: boolean, ctrlKey: boolean, altKey: boolean, target: any}|null}
+ */
+export function extraButtonPress(event) {
+  const button = event?.button
+  if (typeof button !== 'number' || button < FIRST_EXTRA_BUTTON || button >= FIRST_EXTRA_BUTTON + EXTRA_BUTTONS) return null
+  let down
+  if (event.type === 'pointerdown') down = true
+  else if (event.type === 'pointerup') down = false
+  else if (event.type === 'pointermove') down = ((event.buttons ?? 0) & (1 << button)) !== 0
+  else return null
+  return {
+    key: mouseButtonKey(button),
+    down,
+    shiftKey: event.shiftKey === true,
+    metaKey: event.metaKey === true,
+    ctrlKey: event.ctrlKey === true,
+    altKey: event.altKey === true,
+    target: event.target,
+  }
+}
+
 /** Named keys whose keycap is not their `event.key`. */
 const KEY_CAPS = /** @type {Record<string, string>} */ ({
+  ...Object.fromEntries(
+    Array.from({ length: EXTRA_BUTTONS }, (_, i) => [mouseButtonKey(FIRST_EXTRA_BUTTON + i), `Mouse ${FIRST_EXTRA_BUTTON + i + 1}`])
+  ),
   ArrowLeft: '←',
   ArrowRight: '→',
   ArrowUp: '↑',

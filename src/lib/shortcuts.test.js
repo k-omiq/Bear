@@ -21,6 +21,7 @@ import {
   pointerModifiersFor,
   normalizePointerModifier,
   chordFromEvent,
+  extraButtonPress,
   isRebound,
   parseChord,
   rebindShortcut,
@@ -831,6 +832,44 @@ describe('rebinding', () => {
       setShortcutOverrides({ [HOLD_PAN_ID]: { key: 'h', shift: true, accel: false } })
       expect(releasesHold(press('h'), HOLD_PAN_ID)).toBe(true)
       expect(releasesHold(press(' '), HOLD_PAN_ID)).toBe(false)
+    })
+  })
+
+  describe('extra mouse buttons', () => {
+    /** @param {string} type @param {number} button @param {Object} [extra] */
+    function pointer(type, button, extra = {}) {
+      return { type, button, buttons: 0, target: null, ...extra }
+    }
+
+    it('reads back and forward as keys, and nothing else', () => {
+      expect(extraButtonPress(pointer('pointerdown', 3))).toMatchObject({ key: 'Mouse4', down: true })
+      expect(extraButtonPress(pointer('pointerup', 4))).toMatchObject({ key: 'Mouse5', down: false })
+      for (const button of [-1, 0, 1, 2]) expect(extraButtonPress(pointer('pointerdown', button))).toBe(null)
+      expect(extraButtonPress(pointer('click', 3))).toBe(null)
+    })
+
+    it('reads a press made while another button is down', () => {
+      expect(extraButtonPress(pointer('pointermove', 3, { buttons: 1 | 8 }))?.down).toBe(true)
+      expect(extraButtonPress(pointer('pointermove', 3, { buttons: 1 }))?.down).toBe(false)
+      expect(extraButtonPress(pointer('pointermove', -1, { buttons: 8 }))).toBe(null)
+    })
+
+    it('records, draws and matches like any key', () => {
+      const press = /** @type {any} */ (extraButtonPress(pointer('pointerdown', 4, { shiftKey: true })))
+      const { chord } = chordFromEvent(press)
+      expect(chord).toEqual({ key: 'Mouse5', shift: true, accel: false })
+      expect(parseChord(chord)).toEqual(chord)
+      expect(chordCaps(chord)).toEqual(['Shift', 'Mouse 5'])
+      expect(rebindShortcut('view.maskOverlay', chord).ok).toBe(true)
+      expect(matchShortcut(press, { ...editor, textEntry: false })?.id).toBe('view.maskOverlay')
+    })
+
+    it('holds and lets go on the button', () => {
+      setShortcutOverrides({ [HOLD_ORIGINAL_ID]: { key: 'Mouse4', shift: false, accel: false } })
+      const down = /** @type {any} */ (extraButtonPress(pointer('pointerdown', 3)))
+      const up = /** @type {any} */ (extraButtonPress(pointer('pointerup', 3)))
+      expect(matchShortcut(down, editor)?.id).toBe(HOLD_ORIGINAL_ID)
+      expect(releasesHold(up, HOLD_ORIGINAL_ID)).toBe(true)
     })
   })
 })
