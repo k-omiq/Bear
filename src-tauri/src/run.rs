@@ -338,6 +338,25 @@ pub(crate) fn reader_preference(settings: &serde_json::Value, host: Option<clean
     }
 }
 
+/// The SAM-TS-L lettering mask's provider, and whether a GPU it is on may give
+/// way to the CPU. A choice made for it is honoured or refused as every
+/// model's is, and a forced GPU that fails drops the mask for the run. One it
+/// only inherits from the whole-app setting is not an order: where SAM cannot
+/// run there it is Automatic, as the reader's is, and a GPU it can run on that
+/// will not open or fails a page goes back to the CPU, as a measured one under
+/// Automatic does, rather than losing the mask for a choice made for LaMa.
+pub(crate) fn sam_preference(settings: &serde_json::Value, host: Option<cleaner_core::runtime::package::Platform>)
+    -> Result<(Preference, bool), String> {
+    let chosen = settings.get("modelAccelerators").and_then(|v| v.get("samTs")).is_some();
+    match model_preference_from(settings, "samTs")? {
+        Preference::Force(accelerator) if !chosen && !crate::models::supports_model("samTs", accelerator, host) => {
+            Ok((Preference::Automatic, true))
+        }
+        Preference::Force(accelerator) => Ok((Preference::Force(accelerator), !chosen)),
+        other => Ok((other, true)),
+    }
+}
+
 /// The same, from the bare name. Split out so the mapping is testable without a
 /// settings document.
 pub fn accelerator_preference(name: &str) -> Preference {
@@ -1704,6 +1723,10 @@ pub struct Pipeline {
     analysis_cancel: Arc<sam_ts::Cancellation>,
     full_rt_preference: Preference,
     sam_preference: Preference,
+    /// A GPU the lettering mask runs on goes back to the CPU when it will not
+    /// open or fails a page: under Automatic (a measured GPU), or a whole-app
+    /// choice it only inherits ([`sam_preference`]). Not for one made for it.
+    sam_cpu_fallback: bool,
     engine_version: &'static str,
     rung2: Rung2,
     /// The pressure ladder, latched for the life of the pipeline. See
@@ -2255,6 +2278,7 @@ impl Pipeline {
             analysis_cancel: Arc::new(sam_ts::Cancellation::default()),
             full_rt_preference: preference,
             sam_preference: preference,
+            sam_cpu_fallback: true,
             engine_version: env!("CARGO_PKG_VERSION"),
             rung2: Rung2::new(models, preference),
             ladder: memory::Ladder::new(),
@@ -2400,11 +2424,11 @@ impl Pipeline {
         self.balloons.preference = model_preference_from(settings, "rtSmall")?;
         self.balloons.key = session_key(registry::Kind::BalloonDetector, &self.balloons.models, self.balloons.preference);
         self.full_rt_preference = model_preference_from(settings, "rtFull")?;
-        self.sam_preference = model_preference_from(settings, "samTs")?;
+        let host = cleaner_core::runtime::package::Platform::host();
+        (self.sam_preference, self.sam_cpu_fallback) = sam_preference(settings, host)?;
         self.rung2.preference = model_preference_from(settings, "inpainter")?;
         self.rung2.key = session_key(registry::Kind::Inpainter, &self.rung2.models, self.rung2.preference);
         self.rung2.finishing = crate::inference::cloud_clean::local_finishing_from_settings(settings)?;
-        let host = cleaner_core::runtime::package::Platform::host();
         self.reader.preference = reader_preference(settings, host)?;
         self.reader.key = session_key(registry::Kind::Ocr, &self.reader.models, self.reader.preference);
         for (id, enabled, preference) in [
@@ -2598,15 +2622,14 @@ impl Pipeline {
             if self.sam.is_none() && !self.sam_unavailable {
                 let app_data = self.app_data.as_deref().ok_or("App model directory unavailable")?;
                 let dir = crate::model_workflows::graph_dir(app_data).ok_or("The SAM-TS-L lettering mask graphs are not installed")?;
-                // A measured GPU that will not open today goes back to the
-                // CPU Automatic used before it was measured, rather than
-                // masking the whole run from CTD.
-                let measured = self.sam_preference == Preference::Automatic && backend != accel::Accelerator::Cpu;
+                // A measured or inherited GPU that will not open today goes
+                // back to the CPU, rather than masking the whole run from CTD.
+                let falls_back = self.sam_cpu_fallback && backend != accel::Accelerator::Cpu;
                 let opened = sam_ts::SamTsSession::open_on(&dir, backend, &self.analysis_cancel).or_else(|detail| {
-                    if !measured || self.analysis_cancel.check().is_err() {
+                    if !falls_back || self.analysis_cancel.check().is_err() {
                         return Err(detail);
                     }
-                    eprintln!("manga-cleaner: SAM-TS-L did not open on the measured {backend:?}, using the CPU: {detail}");
+                    eprintln!("manga-cleaner: SAM-TS-L did not open on {backend:?}, using the CPU: {detail}");
                     sam_ts::SamTsSession::open_on(&dir, accel::Accelerator::Cpu, &self.analysis_cancel)
                 });
                 match opened {
@@ -2619,7 +2642,26 @@ impl Pipeline {
             // A session that opened short of memory can still fail on a page.
             // That is the same fault as one that would not open, and is met the
             // same way, rather than failing this page and every page after it.
-            let inferred = self.sam.as_mut().map(|sam| sam.infer(crop, &self.analysis_cancel));
+            let mut inferred = self.sam.as_mut().map(|sam| sam.infer(crop, &self.analysis_cancel));
+            // A GPU that may give way fails a page (out of video memory, a
+            // driver reset): this page, and the rest, go to the CPU once.
+            let on_gpu = self.sam.as_ref().is_some_and(|sam| sam.backend() != accel::Accelerator::Cpu);
+            if matches!(inferred, Some(Err(_))) && on_gpu && self.sam_cpu_fallback
+                && self.analysis_cancel.check().is_ok() {
+                if let Some(Err(detail)) = &inferred {
+                    eprintln!("manga-cleaner: SAM-TS-L failed a page on the GPU, using the CPU: {detail}");
+                }
+                // The GPU session goes first: the permit is one per process.
+                self.sam = None;
+                let app_data = self.app_data.as_deref().ok_or("App model directory unavailable")?;
+                let dir = crate::model_workflows::graph_dir(app_data).ok_or("The SAM-TS-L lettering mask graphs are not installed")?;
+                inferred = Some(sam_ts::SamTsSession::open_on(&dir, accel::Accelerator::Cpu, &self.analysis_cancel)
+                    .and_then(|mut cpu| {
+                        let inference = cpu.infer(crop, &self.analysis_cancel);
+                        self.sam = Some(cpu);
+                        inference
+                    }));
+            }
             match inferred {
                 Some(Ok(inference)) => Some(inference.mask),
                 Some(Err(detail)) if self.analysis_cancel.check().is_err() => return Err(detail),

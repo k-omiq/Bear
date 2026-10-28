@@ -335,6 +335,13 @@ impl SamTsSession {
         if backend == Accelerator::WebGpu && !Accelerator::WebGpu.is_available() {
             return Err("SAM-TS-L WebGPU needs a WebGPU runtime with a GPU device".into());
         }
+        // Before the permit and the eviction below: a CUDA that is not there
+        // must not cost the parked sessions their place.
+        if backend == Accelerator::Cuda {
+            if let Err(reason) = Accelerator::Cuda.availability() {
+                return Err(format!("SAM-TS-L CUDA is not available on this machine ({})", reason.reason_key()));
+            }
+        }
         let permit = SessionPermit::acquire(cancel)?;
         crate::residency::evict_for_sam();
         cancel.check()?;
@@ -429,8 +436,8 @@ impl SamTsSession {
         let embedding_values = values.to_vec();
         let encoder_time = started.elapsed();
         drop(embedding);
-        // Both graphs share the WebGPU turn, which is not reentrant: the head
-        // waited on it forever while the shadowed encoder guard still held it.
+        // The head takes its own turn; the encoder's goes now so another
+        // thread's WebGPU work can run in between.
         drop(encoder_turn);
         cancel.check()?;
         let input = ort::value::Tensor::from_array(([1usize, 256, 64, 64], embedding_values))
@@ -877,6 +884,7 @@ pub fn infer_webgpu_cancellable(page: &Raster, graph_dir: &Path, cancel: &Cancel
     let profiles = ProfileCleanup([profile_prefix("encoder"), profile_prefix("head")]);
     let started = Instant::now();
     let mut encoder = webgpu_session(&graph_dir.join(ENCODER), &profiles.0[0])?;
+    cancel.check()?;
     let mut head = webgpu_session(&graph_dir.join(HEAD), &profiles.0[1])?;
     let load = started.elapsed();
     let started = Instant::now();
@@ -887,7 +895,7 @@ pub fn infer_webgpu_cancellable(page: &Raster, graph_dir: &Path, cancel: &Cancel
     let input = ort::value::Tensor::from_array(([1usize, 3, SIDE, SIDE], prepared.chw.clone()))
         .map_err(|e| e.to_string())?;
     let started = Instant::now();
-    let _turn = encoder.turn();
+    let encoder_turn = encoder.turn();
     let embedding = encoder
         .run_with_options(ort::inputs!["prepared_rgb" => input], &options)
         .map_err(|e| if cancel.check().is_err() { "analysis cancelled".into() } else { format!("SAM-TS-L WebGPU encoder inference: {e}") })?;
@@ -901,10 +909,12 @@ pub fn infer_webgpu_cancellable(page: &Raster, graph_dir: &Path, cancel: &Cancel
     let embedding_values = values.to_vec();
     let encoder_time = started.elapsed();
     drop(embedding);
+    drop(encoder_turn);
+    cancel.check()?;
     let input = ort::value::Tensor::from_array(([1usize, 256, 64, 64], embedding_values))
         .map_err(|e| e.to_string())?;
     let started = Instant::now();
-    let _turn = head.turn();
+    let head_turn = head.turn();
     let output = head
         .run_with_options(ort::inputs!["embedding" => input], &options)
         .map_err(|e| if cancel.check().is_err() { "analysis cancelled".into() } else { format!("SAM-TS-L WebGPU text-head inference: {e}") })?;
@@ -920,6 +930,7 @@ pub fn infer_webgpu_cancellable(page: &Raster, graph_dir: &Path, cancel: &Cancel
     drop(output);
     let encoder_nodes = verified_webgpu_nodes(&mut encoder, "encoder")?;
     let head_nodes = verified_webgpu_nodes(&mut head, "head")?;
+    drop(head_turn);
     let process_high_water_bytes = process_high_water_bytes();
     let process_phys_footprint_bytes = process_phys_footprint_bytes();
     let sampled_metal_high_water_bytes = sampler.finish();
@@ -947,6 +958,37 @@ mod tests {
         assert!(ensure_memory_room(None).is_err());
         assert!(ensure_memory_room(Some(MIN_ROOM_BYTES - 1)).is_err());
         assert!(ensure_memory_room(Some(MIN_ROOM_BYTES)).is_ok());
+    }
+
+    /// A CUDA that is not there is refused before the permit and the eviction:
+    /// with the permit held elsewhere, the open still answers at once.
+    #[test]
+    fn a_missing_cuda_is_refused_before_the_permit_and_the_eviction() {
+        let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../runtimes/onnxruntime-osx-arm64-1.28.0/lib")
+            .join(crate::runtime::DYLIB_NAME);
+        if !dev.exists() {
+            eprintln!("skipped: no runtime - run scripts/fetch-runtime.sh");
+            return;
+        }
+        crate::runtime::load(&dev).expect("the runtime loads");
+        if crate::accel::Accelerator::Cuda.is_available() {
+            return;
+        }
+        let held = SessionPermit::acquire(&Cancellation::default()).unwrap();
+        let cancel = Arc::new(Cancellation::default());
+        let (done, result) = std::sync::mpsc::channel();
+        let opening = cancel.clone();
+        let worker = std::thread::spawn(move || {
+            let opened = SamTsSession::open_on(Path::new("no-graphs-here"), crate::accel::Accelerator::Cuda, &opening);
+            done.send(opened.err()).unwrap();
+        });
+        let answer = result.recv_timeout(Duration::from_secs(5));
+        cancel.cancel();
+        drop(held);
+        worker.join().unwrap();
+        let answer = answer.expect("the CUDA open waited on the permit").unwrap();
+        assert!(answer.starts_with("SAM-TS-L CUDA is not available"), "{answer}");
     }
 
     #[test]

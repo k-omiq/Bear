@@ -8616,3 +8616,43 @@ fn a_run_reads_the_finishing_only_when_every_model_is_finished() {
         assert!(pipeline().with_model_preferences(&bad).is_err(), "{bad}");
     }
 }
+
+/// The SAM-TS-L mask takes a whole-app accelerator it only inherits as a wish,
+/// as the reader does: one it cannot run on is Automatic rather than a refused
+/// run, and a GPU it can run on keeps the CPU to fall back to. A choice made
+/// for it is honoured or refused as before, with no fallback.
+#[test]
+fn sam_takes_an_inherited_accelerator_as_a_wish_and_its_own_as_an_order() {
+    use accel::Accelerator::{CoreMl, Cuda, WebGpu};
+    use cleaner_core::runtime::package::{Arch, Os, Platform};
+    let pipeline = || Pipeline::unchecked(Path::new("no-weights-live-here"), Preference::Automatic,
+        DetectorModels { ctd: true, rt_small: false, rt_full: false, sam: true }, false, None);
+    let others_auto = |whole_app: &str| serde_json::json!({
+        "accelerator": whole_app,
+        "modelAccelerators": {"ctd": "auto", "rtSmall": "auto", "rtFull": "auto", "inpainter": "auto"}
+    });
+    let windows = Some(Platform { os: Os::Windows, arch: Arch::X86_64 });
+    let mac = Some(Platform { os: Os::MacOs, arch: Arch::Aarch64 });
+    // Inherited and unsupported: Automatic, so the run goes on.
+    assert_eq!(sam_preference(&others_auto("directml"), windows), Ok((Preference::Automatic, true)));
+    assert_eq!(sam_preference(&others_auto("coreml"), mac), Ok((Preference::Automatic, true)));
+    if cfg!(target_os = "macos") {
+        let opened = pipeline().with_model_preferences(&others_auto("coreml")).unwrap();
+        assert_eq!((opened.sam_preference, opened.sam_cpu_fallback), (Preference::Automatic, true));
+    }
+    // Inherited and supported: that GPU, with the CPU behind it.
+    assert_eq!(sam_preference(&serde_json::json!({"accelerator": "cuda"}), windows), Ok((Preference::Force(Cuda), true)));
+    let opened = pipeline().with_model_preferences(&serde_json::json!({"accelerator": "webgpu"})).unwrap();
+    assert_eq!((opened.sam_preference, opened.sam_cpu_fallback), (Preference::Force(WebGpu), true));
+    // Chosen for SAM: honoured without a fallback, or refused.
+    let chosen = |backend: &str| serde_json::json!({"accelerator": "cpu", "modelAccelerators": {"samTs": backend}});
+    assert_eq!(sam_preference(&chosen("webgpu"), windows), Ok((Preference::Force(WebGpu), false)));
+    assert_eq!(sam_preference(&chosen("auto"), windows), Ok((Preference::Automatic, true)));
+    assert_eq!(sam_preference(&chosen("coreml"), mac), Ok((Preference::Force(CoreMl), false)));
+    let refused = pipeline().with_model_preferences(&serde_json::json!({
+        "modelAccelerators": {"ctd": "auto", "rtSmall": "auto", "rtFull": "auto", "inpainter": "auto", "samTs": "directml"}
+    })).err();
+    assert_eq!(refused.as_deref(), Some("samTs does not support DirectMl on this platform"));
+    assert_eq!(sam_preference(&serde_json::json!({"modelAccelerators": {"samTs": 4}}), windows).map(|_| ()),
+        Err("samTs backend must be a string".to_owned()));
+}
