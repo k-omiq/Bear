@@ -855,8 +855,8 @@ mod tests {
     /// lettering a later tile writes and the page under what an earlier tile
     /// wrote. Read as page, it pulls the finished fill towards black; left out,
     /// the fill is paper, as the tone alignment's is. Both this module's
-    /// finishing and the reference tool's local tone, which has no guard of
-    /// its own against a drawing change.
+    /// finishing and the ported local tone (Manga Cleaner Reproduction's),
+    /// which has no guard of its own against a drawing change.
     #[test]
     fn a_tiled_region_is_finished_against_the_page_and_not_its_lettering() {
         use crate::engines::postprocess::{Choice, Finishing};
@@ -883,7 +883,7 @@ mod tests {
         let aligned = held.render(&page, &fitted).expect("the region rendered");
         assert!(aligned.tiles >= 3, "{} tiles", aligned.tiles);
         let (aligned_mean, _) = off(&aligned);
-        for finishing in [Finishing::Copy, Finishing::ReferenceLocal] {
+        for finishing in [Finishing::Copy, Finishing::LocalTone] {
             let finished = held.render_with(&page, &fitted, Some(Choice { finishing, grayscale: false })).expect("the region rendered");
             let (mean, worst) = off(&finished);
             eprintln!("{finishing:?}: mean {mean:.2}, worst {worst}; aligned mean {aligned_mean:.2}");

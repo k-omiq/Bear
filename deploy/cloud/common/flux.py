@@ -72,7 +72,7 @@ def working_size(width: int, height: int, work_long_side: int = WORK_LONG_SIDE) 
 
 
 def megapixel_size(width: int, height: int) -> Tuple[int, int]:
-    """The reference tool's working size: one megapixel, each side the nearest multiple of 32.
+    """Manga Cleaner Reproduction's working size: one megapixel, each side the nearest multiple of 32.
 
     Its imaging.py work_size, scaled up or down; Python's round is half-to-even, as there.
     crates/cleaner-core/src/engines/render.rs megapixel_size is the same arithmetic.
@@ -84,7 +84,7 @@ def megapixel_size(width: int, height: int) -> Tuple[int, int]:
 def request_work_size(width: int, height: int, work_long_side: Optional[int] = None,
                       generation: Optional[Flux3Generation] = None) -> Tuple[int, int]:
     """The size a request's crop is edited at: one megapixel when its generation asks for
-    the reference tool's size, else its working long side, else the worker's own."""
+    Manga Cleaner Reproduction's size, else its working long side, else the worker's own."""
     if generation is not None and generation.megapixel_size:
         return megapixel_size(width, height)
     return working_size(width, height, work_long_side or WORK_LONG_SIDE)

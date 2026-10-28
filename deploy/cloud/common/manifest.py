@@ -137,9 +137,9 @@ FLUX3_PROMPT: str = (
     "contrast, shading, grain and line weight. Preserve the crop framing and text outside the target "
     "area. Add no lettering, symbols, objects or colours to monochrome artwork."
 )
-# The reference tool's prompt ("Manga Cleaner Reproduction", domain.py DEFAULT_PROMPT),
-# for a request whose flux3_generation asks for it. Its {location} says "centre".
-REFERENCE_FLUX3_PROMPT: str = (
+# Manga Cleaner Reproduction's prompt (domain.py DEFAULT_PROMPT), for a request whose
+# flux3_generation asks for location_prompt. Its {location} says "centre".
+LOCATION_FLUX3_PROMPT: str = (
     "Remove the selected lettering in the {location} area, including hand-drawn sound effects, "
     "every black or white stroke, outline and shadow. The selected bold shapes are lettering, "
     "not objects or character artwork. Reconstruct only the background hidden by this lettering, "
@@ -149,7 +149,7 @@ REFERENCE_FLUX3_PROMPT: str = (
 )
 # Its marker sentence (inference.py prepare_job), added to either prompt when the
 # lettering is painted magenta.
-REFERENCE_MARKER_PROMPT: str = (
+MARKER_FLUX3_PROMPT: str = (
     " The solid magenta paint marks the exact edit selection. Remove the painted shapes "
     "and repair their background; no magenta or lettering may remain there. "
     "Preserve all unmarked text and artwork."

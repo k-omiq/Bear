@@ -209,20 +209,21 @@ class QwenEdit:
 
 @dataclass(frozen=True)
 class Flux3Generation:
-    """Which parts of a FLUX 3 edit are built the reference tool's way.
+    """Which parts of a FLUX 3 edit are built Manga Cleaner Reproduction's way.
 
     The same record as `Flux3Generation` in crates/cleaner-core/src/engines/render.rs.
     Taken by the recipes that take a working size (SIZED_RECIPE_IDS). A request sends
     none for this app's way, so an all-false record is refused: it would hash apart
-    from the same request without it.
+    from the same request without it. `canonical()` is positional: FIELDS keeps its
+    order, so a request hashes as it did before the first and third were renamed.
     """
 
-    reference_prompt: bool = False
+    location_prompt: bool = False
     marker: bool = False
-    reference_shift: bool = False
+    low_shift: bool = False
     megapixel_size: bool = False
 
-    FIELDS = ("reference_prompt", "marker", "reference_shift", "megapixel_size")
+    FIELDS = ("location_prompt", "marker", "low_shift", "megapixel_size")
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> Flux3Generation:
@@ -252,7 +253,7 @@ class RenderRecipe:
     qwen_edit: Optional[QwenEdit] = None
     # The long side a smaller crop is edited at; None is the worker's own (WORK_LONG_SIDES[0]).
     work_long_side: Optional[int] = None
-    # Which parts of a FLUX 3 edit are the reference tool's; None is this app's way.
+    # Which parts of a FLUX 3 edit are Manga Cleaner Reproduction's; None is this app's way.
     flux3_generation: Optional[Flux3Generation] = None
 
     def to_dict(self) -> Dict[str, Any]:

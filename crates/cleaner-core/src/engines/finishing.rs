@@ -1,8 +1,7 @@
-//! The reference tool's finishing v2 (`finishing.py`, "Manga Cleaner
-//! Reproduction"), ported for the [`super::postprocess::Finishing`]
-//! `Reference` versions. It runs on the answer at the page's resolution, per
-//! tone channel, in place of this crate's own steps; the caller still writes
-//! only through the applied mask.
+//! Manga Cleaner Reproduction's finishing v2 (`finishing.py`), ported for the
+//! last five [`super::postprocess::Finishing`] versions. It runs on the answer
+//! at the page's resolution, per tone channel, in place of this crate's own
+//! steps; the caller still writes only through the applied mask.
 //!
 //! `finish_generation` is the entry point there and [`finish`] here. It reads
 //! the answer in the page's mode (grey first when `force_grayscale` asks), then
@@ -55,7 +54,7 @@ use serde_json::{Value, json};
 use super::grid::{Grid, Mask, components, gaussian_kernel, par_rows, reflect101};
 use super::postprocess::Crop;
 
-/// The reference tool's tone method.
+/// Manga Cleaner Reproduction's tone method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     /// No tone match: the answer as it came, grey if asked.
@@ -71,7 +70,8 @@ pub enum Method {
 }
 
 impl Method {
-    fn name(self) -> &'static str {
+    /// The method as the details record names it.
+    pub fn name(self) -> &'static str {
         match self {
             Method::Off => "off",
             Method::Global => "global",
@@ -82,8 +82,8 @@ impl Method {
     }
 }
 
-/// The answer finished by `method`, one grid per tone channel, and the
-/// reference tool's details record.
+/// The answer finished by `method`, one grid per tone channel, and
+/// `finishing.py`'s details record.
 ///
 /// `finish_generation(source, generated, mask, force_grayscale=grayscale,
 /// tone_match=method != Off, tone_method=method)`. A grey colour crop is

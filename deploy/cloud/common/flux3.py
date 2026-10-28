@@ -21,11 +21,12 @@ The prompt upsampler is not loaded: on the 2026-10-19 bench it added 10 to 14 s 
 `hold`, off by default, holds the image tokens outside the grown hint to the crop's own,
 noised to each step's level, the way Klein's inpaint pipeline holds its latents.
 
-A request's `flux3_generation` builds any part the reference tool's way ("Manga Cleaner
-Reproduction", generation v2): its prompt (`REFERENCE_FLUX3_PROMPT`), the lettering
-painted magenta into the crop and named in the prompt, with a result that kept the paint
-refused as `marker_remained` (`marker_remaining`), its time shift 6.93 (`REFERENCE_TIME_SHIFT`), and its
-one-megapixel working size (`megapixel_size`).
+A request's `flux3_generation` builds any part Manga Cleaner Reproduction's way (its
+generation v2): its prompt, which names where the lettering sits (`location_prompt`,
+`LOCATION_FLUX3_PROMPT`), the lettering painted magenta into the crop and named in the
+prompt (`marker`, `MARKER_FLUX3_PROMPT`), with a result that kept the paint refused as
+`marker_remained` (`marker_remaining`), its time shift 6.93 (`low_shift`, `LOW_TIME_SHIFT`),
+and its one-megapixel working size (`megapixel_size`).
 
 The worker returns the whole edited crop. The client writes it only inside the region's
 applied mask and aligns its tone to the page (crates/cleaner-core/src/engines/render.rs).
@@ -52,23 +53,23 @@ from deploy.cloud.common.flux import (
 )
 from deploy.cloud.common.manifest import (
     FLUX3_PROMPT,
-    REFERENCE_FLUX3_PROMPT,
-    REFERENCE_MARKER_PROMPT,
+    LOCATION_FLUX3_PROMPT,
+    MARKER_FLUX3_PROMPT,
     WORK_LONG_SIDE,
 )
 
 # BFL's `alpha` (src/flux3/pipeline.py generate) since 2026-10-17.
 TIME_SHIFT = 16.0
-# Its earlier one, which the reference tool samples with: `mu` 1.93586 in its
+# Its earlier one, which Manga Cleaner Reproduction samples with: `mu` 1.93586 in its
 # sampling_schedules.json, a shift of e**mu.
-REFERENCE_TIME_SHIFT = math.exp(1.93586)
+LOW_TIME_SHIFT = math.exp(1.93586)
 # The marker colour, and how much of it left in the lettering refuses a result
-# (the reference tool's imaging.py selection_marker_remaining).
+# (Manga Cleaner Reproduction's imaging.py selection_marker_remaining).
 MARKER = (255, 0, 255)
 
 
-def reference_location(lettering: Any, np: Any) -> str:
-    """The reference tool's words for where the lettering sits ("upper centre").
+def lettering_location(lettering: Any, np: Any) -> str:
+    """Manga Cleaner Reproduction's words for where the lettering sits ("upper centre").
 
     Its prepare_job: the middle of the lettering's bounding box, end exclusive, in thirds.
     """
@@ -256,14 +257,14 @@ class Flux3EditRunner:
     def prompt(self, edit: Optional[QwenEdit], lettering: Any, generation: Optional[Flux3Generation] = None) -> str:
         """The prompt for one crop; `lettering` is the grown hint at crop size."""
         np = self._mods().np
-        if generation is not None and generation.reference_prompt:
-            prompt = REFERENCE_FLUX3_PROMPT.replace("{location}", reference_location(lettering, np))
+        if generation is not None and generation.location_prompt:
+            prompt = LOCATION_FLUX3_PROMPT.replace("{location}", lettering_location(lettering, np))
             if edit is not None and edit.description.strip():
                 prompt += " Target description: " + edit.description.strip()
         else:
             prompt = flux3_prompt(edit, hint_location(lettering, np))
         if generation is not None and generation.marker:
-            prompt += REFERENCE_MARKER_PROMPT
+            prompt += MARKER_FLUX3_PROMPT
         return prompt
 
     def render_png(
@@ -283,7 +284,7 @@ class Flux3EditRunner:
 
         The distilled model takes no guidance scale; the recipe pins it at 1.0. A crop whose
         long side is below `work_long_side` is edited scaled up to it, or at one megapixel
-        when `flux3_generation` asks for the reference tool's size.
+        when `flux3_generation` asks for Manga Cleaner Reproduction's size.
         """
         generation = flux3_generation or Flux3Generation()
         pipeline = self.load()
@@ -302,7 +303,7 @@ class Flux3EditRunner:
         lettering = np.asarray(grown) > 0
         unpainted = None
         if generation.marker:
-            # Painted before the resize, as the reference tool does.
+            # Painted before the resize, as Manga Cleaner Reproduction does.
             unpainted = np.asarray(crop)
             painted = np.array(crop)
             painted[lettering] = MARKER
@@ -325,7 +326,7 @@ class Flux3EditRunner:
             keep = torch.from_numpy((~tokens).reshape(1, rows * cols, 1).astype(np.float32)).to(self.device)
             hold = LatentHold(keep=keep, noise=noise[None].to(self.device))
 
-        self.use_shift(REFERENCE_TIME_SHIFT if generation.reference_shift else TIME_SHIFT)
+        self.use_shift(LOW_TIME_SHIFT if generation.low_shift else TIME_SHIFT)
         try:
             with torch.inference_mode():
                 images = pipeline(
@@ -356,5 +357,5 @@ class Flux3EditRunner:
         return buffer.getvalue()
 
 
-__all__ = ["Flux3EditRunner", "LatentHold", "REFERENCE_TIME_SHIFT", "TIME_SHIFT", "flux3_prompt", "magenta_pixels",
-           "marker_remaining", "reference_location"]
+__all__ = ["Flux3EditRunner", "LatentHold", "LOW_TIME_SHIFT", "TIME_SHIFT", "flux3_prompt", "lettering_location",
+           "magenta_pixels", "marker_remaining"]

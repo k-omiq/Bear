@@ -8585,9 +8585,9 @@ fn the_lettering_mask_has_its_own_name() {
 fn a_run_reads_the_finishing_only_when_every_model_is_finished() {
     use cleaner_core::engines::postprocess::{Choice, Finishing};
     let pipeline = || Pipeline::open_for_cleaning(Path::new("no-weights-live-here"), Preference::CpuOnly, None);
-    let on = serde_json::json!({"cloudFinishing": "reference-local", "finishingEveryModel": true});
+    let on = serde_json::json!({"cloudFinishing": "local-tone", "finishingEveryModel": true});
     let opened = pipeline().with_model_preferences(&on).unwrap();
-    assert_eq!(opened.rung2.finishing, Some(Choice { finishing: Finishing::ReferenceLocal, grayscale: false }));
+    assert_eq!(opened.rung2.finishing, Some(Choice { finishing: Finishing::LocalTone, grayscale: false }));
     assert_eq!(pipeline().with_model_preferences(&serde_json::json!({"cloudFinishing": "copy"})).unwrap().rung2.finishing, None);
     let unread = serde_json::json!({"cloudFinishing": "blur", "cloudFinishingGrayscale": "yes"});
     assert_eq!(pipeline().with_model_preferences(&unread).unwrap().rung2.finishing, None, "off: the cloud choice is not read");

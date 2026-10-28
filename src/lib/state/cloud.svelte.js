@@ -529,7 +529,7 @@ export async function saveCloudFinishing(change, backend = getBackend()) {
 }
 
 /**
- * Which parts of a cloud FLUX 3 edit are built the reference tool's way,
+ * Which parts of a cloud FLUX 3 edit are built differently,
  * saved where the backend reads it when it plans the clean. The parts that
  * changed are put back when the save fails.
  *

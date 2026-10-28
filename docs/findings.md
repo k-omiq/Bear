@@ -743,7 +743,7 @@ Not measured or not done:
 - `worker_outdated` covers only `work_long_side` and `flux3_generation`; a later request-local
   field needs the same check, and a gateway that refuses for another reason in the same shape
   still shows the generic error.
-- The paint check still runs over the grown hint (ink plus 8 px), as the reference tool's does,
+- The paint check still runs over the grown hint (ink plus 8 px), as Manga Cleaner Reproduction does,
   so paint left outside the applied mask but inside the grown hint refuses a result the client
   would not write there. The cost estimate adds no retry margin for a FLUX 3 marker refusal.
 - Our own finishings still read off-page pixels through the low-pass in their tone and lighting
@@ -761,7 +761,7 @@ Not measured or not done:
 (Qwen and FLUX.2 Klein 4B and 9B) and every LaMa tile when **Also finish Qwen, FLUX.2 Klein and
 LaMa results** is on (off by default, so nothing changes until it is picked). Review fixes
 (2026-10-27, research doc "Review fixes to finishing"): a tiled LaMa region's finishing no longer
-reads its lettering as page (synthetic 3-tile test, Reference: local tone 23 levels off paper,
+reads its lettering as page (synthetic 3-tile test, Local tone match 23 levels off paper,
 worst 213, now 0.5, worst 2); LaMa finishing keeps 16-bit levels; a malformed cloud finishing
 setting no longer stops a local run unless this switch is on. Not measured: the copy step on
 Qwen or LaMa (bench 6 used bench 5's redraw), FLUX.2 Klein answers through any finishing (never
@@ -771,28 +771,28 @@ masks or against truth on screentone), V2's tone measure on 16-bit pages (`ToneS
 8-bit samples), and the Screentone engine, which is still unfinished. The synthetic sets, scorer and bf16 answers lived in session scratchpads
 that are gone; a re-run needs them rebuilt and a paid GPU run for the cloud answers.
 
-**Every finishing and the reference generation as settings (2026-10-26): bench 8 local, bench 9 on
-a throwaway GPU app.** Benches 8 and 9 in `docs/research/flux3-klein-5_6b.md`. Settings > Cloud
-now picks the finishing (eleven versions: ours from benches 3b, 5 and 7, the steps without a
-screen, and the reference tool's finishing v2 ported to Rust) and four generation switches (its
-prompt, magenta marker with residue refusal, time shift 6.93, one-megapixel size). Bench 9
-rendered the switches on a GPU in a throwaway app (aizendazai46, three L40S containers, about
-$1.49; app and weights volume deleted): the marker makes answers worse, prompt and shift do
-nothing, megapixel size is mixed; defaults stay off. Not measured: the switches through a deployed
+**Every finishing and the FLUX 3 generation options as settings (2026-10-26): bench 8 local, bench 9 on
+a throwaway GPU app.** Benches 8 and 9 in `docs/research/flux3-klein-5_6b.md`. Settings >
+Post-processing picks the finishing (eleven versions: ours from benches 3b, 5 and 7, the steps without
+a screen, and Manga Cleaner Reproduction's finishing v2 ported to Rust) and Settings > Cloud has four
+generation switches (location prompt, magenta marker with residue refusal, lower time shift 6.93,
+one-megapixel size). Bench 9 rendered the switches on a GPU in a throwaway app (aizendazai46, three
+L40S containers, about $1.49; app and weights volume deleted): the marker makes answers worse, prompt
+and shift do nothing, megapixel size is mixed; defaults stay off. Not measured: the switches through a deployed
 profile end to end (the only live install, on aizendazai46, is Qwen, where they do not apply);
 any bench 9 arm with a seed other than 1; prompt, shift and megapixel size on their own on real
 lettering (the 17 real crops ran own, marker and all four, judged by eye); megapixel size on more
 large chapter crops, and its 22.8 GiB peak on an L4; colour pages with any switch or finishing;
-real lettering with truth for any finishing; the `page` restriction in the reference finishing (both examples are
-all page). Not ported: the reference tool's crop context (half the lettering per side, 64 to 512
+real lettering with truth for any finishing; the `page` restriction in the ported finishing (both examples are
+all page). Not ported: Manga Cleaner Reproduction's crop context (half the lettering per side, 64 to 512
 px; ours is per preprocessing version), its FLUX 3 prompt upsampler (bench 1 measured 10 to 14 s
 and 18.8 GB per crop and two misreadings), its INT8 ConvRot weights, and numpy's exact random
 stream in its raster step. One departure was added: the ported Poisson step takes the answer, not
 the crop, as its boundary off the page (2026-10-27; `finishing.py` has no page mask). A defect
-found here is fixed (2026-10-27): on the reference line-art example our copy and redraw steps put
+found here is fixed (2026-10-27): on the line-art example our copy and redraw steps put
 grey specks and a smudge into white paper beside hatching, because the hatching fitted a screen
-model at 0.51. The screen step now also needs screen evidence like the reference tool's (256 page
-pixels of a region showing both frequencies at once; the reference's floor and counts differ, see
+model at 0.51. The screen step now also needs screen evidence like the ported method's (256 page
+pixels of a region showing both frequencies at once; that method's floor and counts differ, see
 bench 8); the hatching has none, the screentone example 44180 and an unchanged output. Since the
 review it tries every pair that fits at `MIN_FIT` or better, best first, so a better-fitting
 hatching pair no longer hides a real screen; that is checked by a unit test only, and the counts
@@ -800,7 +800,7 @@ above predate it. Not measured for that fix: the
 synthetic-truth bench. Every copy and redraw number before it predates it: bench 8's and bench
 9's copy rows (halftone 18.3, chapter 31.6) and bench 6's LaMa and Qwen rows; whether the new
 test wrongly declines a real screen is not known. Its sets and bf16 answers were
-lost with old scratchpads and need a GPU run to rebuild; the fix was checked on the two reference
+lost with old scratchpads and need a GPU run to rebuild; the fix was checked on the two test
 examples and by unit tests only.
 
 **3.0.0 on LaMa and Qwen v4 (2026-10-26): benched, not adopted.** Bench 6 in

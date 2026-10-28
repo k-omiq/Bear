@@ -13,9 +13,9 @@
       "description": "A dot screen behind the letters. 網点。"
     },
     "flux3_generation": {
-      "reference_prompt": true,
+      "location_prompt": true,
       "marker": true,
-      "reference_shift": false,
+      "low_shift": false,
       "megapixel_size": true
     }
   },

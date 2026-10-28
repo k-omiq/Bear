@@ -105,8 +105,8 @@ const HINT_KEYS = reviewEntryActions({ outcome: 'gate-skipped' }).map(
 const ENGINE_CHOICE_KEYS = [...new Set([...RUNGS, ...ROW_ENGINES, 'cloud'])].map(engineChoiceLabel)
 
 /**
- * `src/lib/dialogs/InferenceSettings.svelte#finishingKey` - the Finishing
- * picker's label and hint per version, over `FINISHINGS`.
+ * `src/lib/model/model-names.js#finishingKey` - the Post-processing
+ * picker's label and hint per method, over `FINISHINGS`.
  */
 const FINISHING_KEYS = [
   ...FINISHINGS.flatMap((name) => [finishingKey('option', name), finishingKey('hint', name)]),

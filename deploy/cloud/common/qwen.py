@@ -48,7 +48,7 @@ EDIT_RETRIES = 2
 MIN_EDIT_RATIO = 2.0
 
 # The pipeline's VAE reference area (VAE_IMAGE_SIZE in pipeline_qwenimage_edit_plus.py).
-REFERENCE_AREA = 1024 * 1024
+VAE_IMAGE_AREA = 1024 * 1024
 GRID = 32
 
 # Scheduler the Lightning LoRA was distilled with (lightx2v model card).
@@ -73,7 +73,7 @@ LIGHTNING_SCHEDULER: Dict[str, Any] = {
 def work_size(width: int, height: int) -> Tuple[int, int]:
     """The size the pipeline gives its reference for this aspect ratio (calculate_dimensions)."""
     ratio = int(width) / int(height)
-    w = math.sqrt(REFERENCE_AREA * ratio)
+    w = math.sqrt(VAE_IMAGE_AREA * ratio)
     h = w / ratio
     return round(w / GRID) * GRID, round(h / GRID) * GRID
 

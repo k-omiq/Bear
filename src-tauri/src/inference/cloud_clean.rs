@@ -200,7 +200,7 @@ pub(crate) struct RenderRate {
     /// The long side a smaller crop is edited at: the recipe's
     /// `work_long_side`, else [`WORK_LONG_SIDE`].
     work_long_side: u32,
-    /// The reference tool's one-megapixel size in place of the long side
+    /// Manga Cleaner Reproduction's one-megapixel size in place of the long side
     /// ([`cleaner_core::engines::render::Flux3Generation::megapixel_size`]).
     megapixel: bool,
     seconds_per_work_megapixel: f64,
@@ -347,23 +347,48 @@ impl FinishingSetting {
 }
 
 /// The `cloudFlux3Generation` setting: which parts of a FLUX 3 edit are built
-/// the reference tool's way, as `{referencePrompt, marker, referenceShift,
+/// Manga Cleaner Reproduction's way, as `{locationPrompt, marker, lowShift,
 /// megapixelSize}` booleans. Absent, null or all false is this app's way.
 pub const FLUX3_GENERATION_KEY: &str = "cloudFlux3Generation";
 
+/// The names a settings file written before the rename used, and the names
+/// they are read as: two `cloudFlux3Generation` parts here, and the five
+/// ported `cloudFinishing` versions through [`Finishing`]'s serde aliases.
+const RENAMED_FLUX3_PARTS: [(&str, &str); 2] = [("referencePrompt", "locationPrompt"), ("referenceShift", "lowShift")];
+
+/// A settings file as it is read: the old names of the FLUX 3 parts and of
+/// the finishing versions rewritten to the new ones, so the interface and
+/// every reader see the user's choice under the name it now has, and the
+/// next write stores it so. A part already under its new name wins.
+pub fn migrate_settings(settings: &mut serde_json::Value) {
+    if let Some(name) = settings.get(FINISHING_KEY).and_then(|value| value.as_str()) {
+        if let Ok(finishing) = serde_json::from_value::<Finishing>(serde_json::json!(name)) {
+            settings[FINISHING_KEY] = serde_json::json!(finishing);
+        }
+    }
+    if let Some(parts) = settings.get_mut(FLUX3_GENERATION_KEY).and_then(|value| value.as_object_mut()) {
+        for (old, new) in RENAMED_FLUX3_PARTS {
+            if let Some(on) = parts.remove(old) {
+                parts.entry(new).or_insert(on);
+            }
+        }
+    }
+}
+
 /// Strict: null, or an object of exactly those four booleans (each may be
-/// left out, as false).
+/// left out, as false). The old part names are not taken here: a file that
+/// has them is read through [`migrate_settings`] first.
 pub fn flux3_generation_from_settings(settings: &serde_json::Value) -> Result<Option<Flux3Generation>, String> {
-    let refused = || format!("{FLUX3_GENERATION_KEY} must be an object of referencePrompt, marker, referenceShift and megapixelSize, each true or false");
+    let refused = || format!("{FLUX3_GENERATION_KEY} must be an object of locationPrompt, marker, lowShift and megapixelSize, each true or false");
     let Some(value) = settings.get(FLUX3_GENERATION_KEY).filter(|value| !value.is_null()) else { return Ok(None) };
     let object = value.as_object().ok_or_else(refused)?;
     let mut generation = Flux3Generation::default();
     for (key, part) in object {
         let on = part.as_bool().ok_or_else(refused)?;
         match key.as_str() {
-            "referencePrompt" => generation.reference_prompt = on,
+            "locationPrompt" => generation.location_prompt = on,
             "marker" => generation.marker = on,
-            "referenceShift" => generation.reference_shift = on,
+            "lowShift" => generation.low_shift = on,
             "megapixelSize" => generation.megapixel_size = on,
             _ => return Err(refused()),
         }

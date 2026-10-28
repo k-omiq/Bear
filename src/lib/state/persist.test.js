@@ -327,13 +327,13 @@ describe('sanitizeSession', () => {
 
   it('keeps the finishing and generation choices, and the defaults for anything else', async () => {
     const { sanitizeSession } = await import('./session.svelte.js')
-    const off = { referencePrompt: false, marker: false, referenceShift: false, megapixelSize: false }
+    const off = { locationPrompt: false, marker: false, lowShift: false, megapixelSize: false }
     const finishing = (/** @type {any} */ read) => [read.cloudFinishing, read.cloudFinishingGrayscale, read.finishingEveryModel]
     expect(finishing(sanitizeSession({}))).toEqual(['copy', false, false])
     expect(sanitizeSession({}).cloudFlux3Generation).toEqual(off)
-    const kept = sanitizeSession({ cloudFinishing: 'reference-raster', cloudFinishingGrayscale: true, finishingEveryModel: true,
+    const kept = sanitizeSession({ cloudFinishing: 'dots-only', cloudFinishingGrayscale: true, finishingEveryModel: true,
       cloudFlux3Generation: { marker: true, megapixelSize: true } })
-    expect(finishing(kept)).toEqual(['reference-raster', true, true])
+    expect(finishing(kept)).toEqual(['dots-only', true, true])
     expect(kept.cloudFlux3Generation).toEqual({ ...off, marker: true, megapixelSize: true })
     for (const bad of [1, 'true', null, {}, ['copy']]) {
       const read = sanitizeSession({ cloudFinishing: bad, cloudFinishingGrayscale: bad, finishingEveryModel: bad, cloudFlux3Generation: bad })
@@ -341,7 +341,12 @@ describe('sanitizeSession', () => {
       expect(read.cloudFlux3Generation).toEqual(off)
     }
     expect(sanitizeSession({ cloudFinishing: 'reference' }).cloudFinishing).toBe('copy')
-    expect(sanitizeSession({ cloudFlux3Generation: { marker: 1, referenceShift: 'true', other: true } }).cloudFlux3Generation).toEqual(off)
+    // Names an older version saved still read as the method they became.
+    expect(sanitizeSession({ cloudFinishing: 'reference-poisson' }).cloudFinishing).toBe('poisson')
+    expect(sanitizeSession({ cloudFinishing: 'reference-off' }).cloudFinishing).toBe('as-is')
+    expect(sanitizeSession({ cloudFlux3Generation: { referencePrompt: true, referenceShift: true } }).cloudFlux3Generation)
+      .toEqual({ ...off, locationPrompt: true, lowShift: true })
+    expect(sanitizeSession({ cloudFlux3Generation: { marker: 1, lowShift: 'true', other: true } }).cloudFlux3Generation).toEqual(off)
   })
 
   it('stores the finishing and generation choices, reads them back, and sends them to the backend', async () => {
@@ -350,11 +355,11 @@ describe('sanitizeSession', () => {
     const { backendSettingsPatch, sanitizeSession, setCloudFinishing, setCloudFlux3Generation } = await import('./session.svelte.js')
     try {
       setCloudFinishing('redraw', true, true)
-      setCloudFlux3Generation({ referencePrompt: true, marker: false, referenceShift: true, megapixelSize: false })
+      setCloudFlux3Generation({ locationPrompt: true, marker: false, lowShift: true, megapixelSize: false })
       const read = sanitizeSession(JSON.parse(store.map.get(`${STORAGE_PREFIX}session.v1`)))
       const wanted = {
         cloudFinishing: 'redraw', cloudFinishingGrayscale: true, finishingEveryModel: true,
-        cloudFlux3Generation: { referencePrompt: true, marker: false, referenceShift: true, megapixelSize: false },
+        cloudFlux3Generation: { locationPrompt: true, marker: false, lowShift: true, megapixelSize: false },
       }
       expect(read).toMatchObject(wanted)
       expect(backendSettingsPatch()).toMatchObject(wanted)
@@ -372,12 +377,12 @@ describe('sanitizeSession', () => {
       setCloudFinishing('tone-only', true, false)
       adoptBackendSettings({ finishingEveryModel: true })
       expect(finishing()).toEqual(['tone-only', true, true])
-      adoptBackendSettings({ cloudFinishing: 'reference-local' })
-      expect(finishing()).toEqual(['reference-local', true, true])
+      adoptBackendSettings({ cloudFinishing: 'local-tone' })
+      expect(finishing()).toEqual(['local-tone', true, true])
       adoptBackendSettings({ finishingEveryModel: 1, cloudFinishingGrayscale: false })
-      expect(finishing()).toEqual(['reference-local', false, true])
+      expect(finishing()).toEqual(['local-tone', false, true])
       adoptBackendSettings({ cloudFlux3Generation: { marker: true } })
-      expect(session.cloudFlux3Generation).toEqual({ referencePrompt: false, marker: true, referenceShift: false, megapixelSize: false })
+      expect(session.cloudFlux3Generation).toEqual({ locationPrompt: false, marker: true, lowShift: false, megapixelSize: false })
     } finally {
       setCloudFinishing('copy', false, false)
       setCloudFlux3Generation(null)

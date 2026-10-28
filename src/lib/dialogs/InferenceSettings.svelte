@@ -84,18 +84,14 @@
    * 5. **Set up with Modal or Beam**: the provisioner, inline.
    * 6. **Connect an existing endpoint**, collapsed: the manual form, for an
    *    endpoint deployed some other way.
-   * 7. **Generation**: which parts of a FLUX 3 edit the worker builds the
-   *    reference tool's way (`render.rs#Flux3Generation`): its prompt, the
-   *    magenta marker, its time shift, its one-megapixel size. Each is sent
-   *    with the request, so a worker deployed before them refuses it.
-   * 8. **Finishing**: how an answer is matched to the page before it is
-   *    written (`postprocess.rs#Finishing`), every version the bench
-   *    measured and the reference tool's, whether a colour answer is made
-   *    grey first, and whether the answers of every other model (Qwen,
-   *    FLUX.2 Klein, LaMa) are finished the same way in place of their tone
-   *    fix; a FLUX 3 answer is always finished. Saved with the other settings; the
-   *    backend freezes it on each cloud attempt and reads it when a run opens,
-   *    so a change applies to the next clean.
+   * 7. **FLUX 3 options**, collapsed: which parts of a FLUX 3 edit are built
+   *    differently (`render.rs#Flux3Generation`): a prompt that names where
+   *    the lettering sits, the magenta marker, the lower time shift, the
+   *    one-megapixel size. Each is sent with the request, so a worker
+   *    deployed before them refuses it.
+   *
+   * How a result is matched to the page is not here: it applies to LaMa on
+   * this computer too, so it has its own section (`PostProcessingSettings`).
    *
    * **Tokens.** A token typed here goes to the system keychain through
    * `storeCloudSecret`, and the field is wiped as soon as that call returns,
@@ -109,8 +105,8 @@
   import { getBackend } from '../api/backend.js'
   import { notify } from '../state/app.svelte.js'
   import { session } from '../state/session.svelte.js'
-  import { cloud, dismissRecovered, abandonRecovered, retryCloudRecovery, refreshCloudReadiness, recheckCloudConfiguration, saveCloudFinishing, saveCloudFlux3Generation, setCloudPermission } from '../state/cloud.svelte.js'
-  import { FINISHINGS, FLUX3_GENERATION_PARTS, finishingKey } from '../model/model-names.js'
+  import { cloud, dismissRecovered, abandonRecovered, retryCloudRecovery, refreshCloudReadiness, recheckCloudConfiguration, saveCloudFlux3Generation, setCloudPermission } from '../state/cloud.svelte.js'
+  import { FLUX3_GENERATION_PARTS } from '../model/model-names.js'
   import { cloudGpu } from '../state/cloudgpu.svelte.js'
   import { endpointAccount, forgetUnfinished, healthKey, providerPaused, removeEndpoint, setup } from './provisioning.svelte.js'
   import { t } from '../i18n/index.js'
@@ -136,17 +132,8 @@
     url: `${uid}-url`,
     manualTokenId: `${uid}-manual-token-id`,
     manualSecret: `${uid}-manual-secret`,
-    finishing: `${uid}-finishing`,
-    finishingPick: `${uid}-finishing-pick`,
-    finishingHint: `${uid}-finishing-hint`,
-    grayscale: `${uid}-grayscale`,
-    grayscaleHint: `${uid}-grayscale-hint`,
-    everyModel: `${uid}-every-model`,
-    everyModelHint: `${uid}-every-model-hint`,
     generation: `${uid}-generation`,
   }
-
-  const finishingOptions = FINISHINGS.map((name) => ({ value: name, label: t(finishingKey('option', name)) }))
 
   const permissionOptions = [
     { value: 'off', label: t('settings.inference.permission.off') },
@@ -345,6 +332,7 @@
   // Interrupted renders are a log, not a problem to fix: most are regions
   // edited after they were sent. They sit behind "Cloud logs", closed.
   let logsOpen = $state(false)
+  let generationOpen = $state(false)
   async function dismissAllAttempts() {
     const attemptIds = (cloud.recovery?.needsAttention ?? []).map((entry) => entry.attemptId)
     await recoveryAction(async () => { for (const id of attemptIds) await dismissRecovered(id, backend) })
@@ -1237,65 +1225,26 @@
     </div>
   </section>
 
-  <section class="finishing" aria-labelledby={ids.generation} data-settings-anchor="generation">
-    <h3 class="title" id={ids.generation} tabindex="-1" data-anchor-focus>{t('settings.inference.generation.title')}</h3>
-    <p class="note">{t('settings.inference.generation.description')}</p>
-    {#each FLUX3_GENERATION_PARTS as part (part)}
-      <div class="grey-row">
-        <input
-          id={`${ids.generation}-${part}`}
-          class="check"
-          type="checkbox"
-          aria-describedby={`${ids.generation}-${part}-hint`}
-          checked={session.cloudFlux3Generation[part]}
-          onchange={(event) => void saveCloudFlux3Generation({ ...session.cloudFlux3Generation, [part]: event.currentTarget.checked }, backend)}
-        />
-        <label for={`${ids.generation}-${part}`}>{t(`settings.inference.generation.${part}`)}</label>
-      </div>
-      <p class="note" id={`${ids.generation}-${part}-hint`}>{t(`settings.inference.generation.${part}Hint`)}</p>
-    {/each}
-  </section>
-
-  <section class="finishing" aria-labelledby={ids.finishing} data-settings-anchor="finishing">
-    <h3 class="title" id={ids.finishing} tabindex="-1" data-anchor-focus>{t('settings.inference.finishing.title')}</h3>
-    <p class="note">{t('settings.inference.finishing.description')}</p>
-    <Field label={t('settings.inference.finishing.label')} controlId={ids.finishingPick}>
-      {#snippet children()}
-        <Select
-          id={ids.finishingPick}
-          options={finishingOptions}
-          value={session.cloudFinishing}
-          describedBy={ids.finishingHint}
-          onchange={(next) => void saveCloudFinishing({ finishing: /** @type {any} */ (next) }, backend)}
-        />
-      {/snippet}
-    </Field>
-    <p class="note" id={ids.finishingHint} data-finishing-hint>{t(finishingKey('hint', session.cloudFinishing))}</p>
-    <div class="grey-row">
-      <input
-        id={ids.grayscale}
-        class="check"
-        type="checkbox"
-        aria-describedby={ids.grayscaleHint}
-        checked={session.cloudFinishingGrayscale}
-        onchange={(event) => void saveCloudFinishing({ grayscale: event.currentTarget.checked }, backend)}
-      />
-      <label for={ids.grayscale}>{t('settings.inference.finishing.grayscale')}</label>
+  <Disclosure variant="plain" open={generationOpen} ontoggle={(/** @type {boolean} */ open) => (generationOpen = open)}>
+    {#snippet summary()}{t('settings.inference.generation.title')}{/snippet}
+    <div class="generation">
+      <p class="note">{t('settings.inference.generation.description')}</p>
+      {#each FLUX3_GENERATION_PARTS as part (part)}
+        <div class="part">
+          <input
+            id={`${ids.generation}-${part}`}
+            class="check"
+            type="checkbox"
+            aria-describedby={`${ids.generation}-${part}-hint`}
+            checked={session.cloudFlux3Generation[part]}
+            onchange={(event) => void saveCloudFlux3Generation({ ...session.cloudFlux3Generation, [part]: event.currentTarget.checked }, backend)}
+          />
+          <label for={`${ids.generation}-${part}`}>{t(`settings.inference.generation.${part}`)}</label>
+          <p class="note" id={`${ids.generation}-${part}-hint`}>{t(`settings.inference.generation.${part}Hint`)}</p>
+        </div>
+      {/each}
     </div>
-    <p class="note" id={ids.grayscaleHint}>{t('settings.inference.finishing.grayscaleHint')}</p>
-    <div class="grey-row">
-      <input
-        id={ids.everyModel}
-        class="check"
-        type="checkbox"
-        aria-describedby={ids.everyModelHint}
-        checked={session.finishingEveryModel}
-        onchange={(event) => void saveCloudFinishing({ everyModel: event.currentTarget.checked }, backend)}
-      />
-      <label for={ids.everyModel}>{t('settings.inference.finishing.everyModel')}</label>
-    </div>
-    <p class="note" id={ids.everyModelHint}>{t('settings.inference.finishing.everyModelHint')}</p>
-  </section>
+  </Disclosure>
 
   <Disclosure
     variant="plain"
@@ -1447,18 +1396,21 @@
   .result { color: var(--t2) }
   .result.bad { color: var(--warn) }
 
-  .finishing {
+  .generation {
     display: grid;
-    gap: var(--s-2);
+    gap: var(--s-3);
     min-width: 0;
   }
-  .grey-row {
-    display: flex;
+  .part {
+    display: grid;
+    grid-template-columns: auto 1fr;
     align-items: center;
-    gap: var(--s-2);
+    column-gap: var(--s-2);
+    row-gap: 2px;
     font-size: 12px;
     color: var(--t2);
   }
+  .part .note { grid-column: 2 }
   .check {
     width: 15px;
     height: 15px;
