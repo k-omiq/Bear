@@ -64,6 +64,7 @@ from deploy.cloud.common.manifest import (
     WORK_LONG_SIDE,
     get_pinned_recipe,
 )
+from deploy.cloud.common.worker import parse_metadata
 
 
 class TestCloudContract(unittest.TestCase):
@@ -794,6 +795,7 @@ class TestCloudContract(unittest.TestCase):
 FIXTURE = FIXTURES_DIR / "qwen_guidance_request.json"
 SIZED_FIXTURE = FIXTURES_DIR / "flux3_work_size_request.json"
 GENERATION_FIXTURE = FIXTURES_DIR / "flux3_generation_request.json"
+OLD_NAMES_GENERATION_FIXTURE = FIXTURES_DIR / "flux3_generation_request_old_names.json"
 SIZED_GENERATION_FIXTURE = FIXTURES_DIR / "flux3_sized_generation_request.json"
 
 
@@ -837,9 +839,10 @@ class RequestLocalRecipeFieldsTest(unittest.TestCase):
             changed = dataclasses.replace(meta, recipe=dataclasses.replace(meta.recipe, flux3_generation=other))
             self.assertNotEqual(compute_request_digest(changed), meta.request_digest)
         recipe = get_pinned_recipe(RECIPE_PROD_FLUX3).to_dict()
-        # The names before the rename are refused: the worker takes only the new ones.
+        # A part named both before and after the rename is refused.
         for bad in ({}, {'location_prompt': False}, {'marker': 1}, {'colour': True}, [True],
-                    {'reference_prompt': True}, {'reference_shift': True}):
+                    {'reference_prompt': True, 'location_prompt': True}, {'reference_shift': False, 'low_shift': True},
+                    {'reference_prompt': 1}):
             with self.assertRaises(ContractValidationError):
                 RenderRecipe.from_dict({**recipe, 'flux3_generation': bad})
         with self.assertRaises(ContractValidationError):
@@ -847,6 +850,21 @@ class RequestLocalRecipeFieldsTest(unittest.TestCase):
         self.assertEqual(RenderRecipe.from_dict({**recipe, 'work_long_side': 1280, 'flux3_generation': {'marker': True}}).work_long_side, 1280)
         with self.assertRaises(ContractValidationError):
             RenderRecipe.from_dict({**get_pinned_recipe(RECIPE_PROD_SDNQ).to_dict(), 'flux3_generation': {'marker': True}})
+
+    def test_a_request_from_before_the_rename_reads_under_the_new_names(self):
+        # An app from before reference_prompt and reference_shift were renamed sends
+        # the old names, and a job its gateway queued carries them to the worker
+        # (worker.parse_metadata). Both read as the same request, under the same digest.
+        old = JobRequestMetadata.from_dict(json.loads(OLD_NAMES_GENERATION_FIXTURE.read_text()))
+        new = JobRequestMetadata.from_dict(json.loads(GENERATION_FIXTURE.read_text()))
+        self.assertEqual(old, new)
+        self.assertEqual(old.request_digest, compute_request_digest(old))
+        self.assertEqual(parse_metadata(OLD_NAMES_GENERATION_FIXTURE.read_text()), new)
+        self.assertEqual(old.recipe.flux3_generation.to_dict(),
+                         {'location_prompt': True, 'marker': True, 'low_shift': False, 'megapixel_size': True})
+        recipe = get_pinned_recipe(RECIPE_PROD_FLUX3).to_dict()
+        self.assertEqual(RenderRecipe.from_dict({**recipe, 'flux3_generation': {'reference_shift': True}}).flux3_generation,
+                         Flux3Generation(low_shift=True))
 
     def test_a_working_size_and_a_generation_choice_hash_side_by_side(self):
         # crates/cleaner-core/src/cloud_wire.rs reads the same fixture.

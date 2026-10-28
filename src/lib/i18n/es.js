@@ -522,7 +522,7 @@ export const es = {
       },
       sam: {
         memory: 'Va lento con menos de 5 GB de memoria libre.',
-        chooserTitle: 'Carpeta con los dos grafos de la máscara de rotulación SAM-TS-L',
+        chooserTitle: 'Carpeta con los tres archivos de la máscara de rotulación SAM-TS-L',
       },
       rtFull: {
         chooserTitle: 'El detector.onnx fijado de Ogkalu comic text & bubble detector (Full)',

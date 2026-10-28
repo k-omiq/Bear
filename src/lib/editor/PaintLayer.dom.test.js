@@ -98,6 +98,26 @@ describe('a clone stroke, drawn in the layer', () => {
     draft.active = { ...stroke('page-0'), clone: null }; await tick(); await flushPaintPreview('page-0'); await tick()
     expect(host.querySelector('.paint')).toBeNull()
   })
+  it('empties every mask canvas of a stroke whose parameters changed mid-stroke', async () => {
+    const { host } = await setup()
+    cleanedTile(host)
+    draft.active = stroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    const canvas = host.querySelector('.paint')
+    const masksOf = () => [...new Set(draws.filter(draw => draw.canvas === canvas && draw.op === 'destination-in').map(draw => draw.image))]
+    const [first] = masksOf()
+    expect(first.width).toBeGreaterThan(0)
+    // A `[` mid-stroke resizes the stroke: a new mask, drawn on the same canvas.
+    editor.toolParams.cloneStamp = { size: 20, hardness: 100 }
+    await tick(); await flushPaintPreview('page-0'); await tick()
+    expect(host.querySelector('.paint')).toBe(canvas)
+    const masks = masksOf()
+    expect(masks).toHaveLength(2)
+    expect(masks.every(mask => mask.width > 0)).toBe(true)
+
+    clearDraft(); await tick()
+    expect(host.querySelector('.paint')).toBeNull()
+    expect(masks.map(mask => [mask.width, mask.height])).toEqual([[0, 0], [0, 0]])
+  })
   it('leaves out a tile that has not loaded, or is hidden for its replacement', async () => {
     const { host } = await setup()
     const shown = cleanedTile(host)

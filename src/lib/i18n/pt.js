@@ -522,7 +522,7 @@ export const pt = {
       },
       sam: {
         memory: 'Roda devagar com menos de 5 GB de memória livre.',
-        chooserTitle: 'Pasta com os dois grafos da máscara de letras SAM-TS-L',
+        chooserTitle: 'Pasta com os três arquivos da máscara de letras SAM-TS-L',
       },
       rtFull: {
         chooserTitle: 'O detector.onnx fixado do Ogkalu comic text & bubble detector (Full)',
