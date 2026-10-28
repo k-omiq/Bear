@@ -360,6 +360,18 @@ fn requested_accel_key(preference: Preference) -> &'static str {
     }
 }
 
+/// Where the SAM-TS-L lettering mask opens. Automatic stays on the CPU unless
+/// this machine measured a GPU backend faster (`crate::measurement`).
+fn sam_backend(preference: Preference, measured: Option<accel::Accelerator>) -> Result<accel::Accelerator, String> {
+    use accel::Accelerator::{Cpu, Cuda, WebGpu};
+    match preference {
+        Preference::Force(backend @ (WebGpu | Cuda)) => Ok(backend),
+        Preference::Automatic => Ok(measured.filter(|winner| matches!(winner, WebGpu | Cuda)).unwrap_or(Cpu)),
+        Preference::CpuOnly | Preference::Force(Cpu) => Ok(Cpu),
+        _ => Err(format!("The SAM-TS-L lettering mask does not support the requested backend {preference:?}")),
+    }
+}
+
 /// The rung that will actually run for a route, under a ceiling.
 ///
 /// `None` is a decline. Rung 0 is always available - it is the bottom of the
@@ -2581,28 +2593,20 @@ impl Pipeline {
         let lettering = if self.detection_models.sam && self.remote_sam() {
             Some(remote.and_then(|(_, mask)| mask).ok_or("cloud analysis mask missing for this page")?)
         } else if self.detection_models.sam {
-            let backend = match self.sam_preference {
-                Preference::Force(accel::Accelerator::WebGpu) => accel::Accelerator::WebGpu,
-                // Automatic stays on the CPU unless this machine measured
-                // WebGPU faster (`crate::measurement`).
-                Preference::Automatic => accel::measured_winner(crate::models::SAM_PROFILE_NAME)
-                    .filter(|winner| *winner == accel::Accelerator::WebGpu)
-                    .unwrap_or(accel::Accelerator::Cpu),
-                Preference::CpuOnly | Preference::Force(accel::Accelerator::Cpu) => accel::Accelerator::Cpu,
-                _ => return Err(format!("The SAM-TS-L lettering mask does not support the requested backend {:?}", self.sam_preference)),
-            };
+            let backend = sam_backend(
+                self.sam_preference, accel::measured_winner(crate::models::SAM_PROFILE_NAME))?;
             if self.sam.is_none() && !self.sam_unavailable {
                 let app_data = self.app_data.as_deref().ok_or("App model directory unavailable")?;
                 let dir = crate::model_workflows::graph_dir(app_data).ok_or("The SAM-TS-L lettering mask graphs are not installed")?;
-                // A measured WebGPU that will not open today goes back to the
+                // A measured GPU that will not open today goes back to the
                 // CPU Automatic used before it was measured, rather than
                 // masking the whole run from CTD.
-                let measured = self.sam_preference == Preference::Automatic && backend == accel::Accelerator::WebGpu;
+                let measured = self.sam_preference == Preference::Automatic && backend != accel::Accelerator::Cpu;
                 let opened = sam_ts::SamTsSession::open_on(&dir, backend, &self.analysis_cancel).or_else(|detail| {
                     if !measured || self.analysis_cancel.check().is_err() {
                         return Err(detail);
                     }
-                    eprintln!("manga-cleaner: SAM-TS-L did not open on the measured WebGPU, using the CPU: {detail}");
+                    eprintln!("manga-cleaner: SAM-TS-L did not open on the measured {backend:?}, using the CPU: {detail}");
                     sam_ts::SamTsSession::open_on(&dir, accel::Accelerator::Cpu, &self.analysis_cancel)
                 });
                 match opened {

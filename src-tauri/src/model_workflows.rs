@@ -410,8 +410,11 @@ struct Backend {
 fn sam_backends(
     runtime_installed: bool,
     webgpu_ready: bool,
+    cuda_ready: bool,
     webgpu_qualified: bool,
 ) -> Vec<Backend> {
+    let webgpu = runtime_installed && webgpu_ready;
+    let cuda = runtime_installed && cuda_ready;
     let mut rows = vec![Backend {
         id: "ort-cpu",
         platform: "all",
@@ -423,8 +426,8 @@ fn sam_backends(
     if cfg!(target_os = "macos") {
         rows.extend([
             Backend { id: "ort-webgpu", platform: "macOS", qualified: webgpu_qualified,
-                available: runtime_installed && webgpu_ready,
-                selectable: runtime_installed && webgpu_ready,
+                available: webgpu,
+                selectable: webgpu,
                 note: "Local detection on Apple WebGPU with strict graph placement and no CPU fallback. Saved parity measurements are from Mac17,3 M5 with pinned ORT 1.28.0; other Macs are not measured. CPU remains the default. Preview component writes have separate qualification requirements." },
             Backend { id: "ort-coreml", platform: "macOS", qualified: false, available: false, selectable: false, note: "Head was tested in a spike; full native path is unqualified." },
             Backend { id: "torch-mps", platform: "macOS", qualified: false, available: false, selectable: false, note: "PyTorch spike measured on Apple M5; no shipped PyTorch runtime." },
@@ -448,17 +451,17 @@ fn sam_backends(
                 id: "ort-cuda",
                 platform: "Windows",
                 qualified: false,
-                available: false,
-                selectable: false,
-                note: "Provider and SAM-TS-L graph require matching NVIDIA hardware validation.",
+                available: cuda,
+                selectable: cuda,
+                note: "CUDA with TF32 off, which matched the CPU mask on a cloud L4 under Linux. Not yet run on Windows hardware.",
             },
             Backend {
                 id: "ort-webgpu",
                 platform: "Windows",
                 qualified: false,
-                available: false,
-                selectable: false,
-                note: "Provider and SAM-TS-L graph require a Windows GPU qualification run.",
+                available: webgpu,
+                selectable: webgpu,
+                note: "WebGPU plugin with strict graph placement and no CPU fallback. Matched the CPU mask through the plugin on macOS; not yet run on Windows hardware.",
             },
             Backend {
                 id: "torch-cuda",
@@ -479,17 +482,17 @@ fn sam_backends(
                 id: "ort-cuda",
                 platform: "Linux",
                 qualified: false,
-                available: false,
-                selectable: false,
-                note: "Provider and SAM-TS-L graph require matching NVIDIA hardware validation.",
+                available: cuda,
+                selectable: cuda,
+                note: "CUDA with TF32 off, which matched the CPU mask on a cloud L4. Not yet run in the app.",
             },
             Backend {
                 id: "ort-webgpu",
                 platform: "Linux",
                 qualified: false,
-                available: false,
-                selectable: false,
-                note: "Provider and SAM-TS-L graph require matching GPU validation.",
+                available: webgpu,
+                selectable: webgpu,
+                note: "WebGPU plugin with strict graph placement and no CPU fallback. Matched the CPU mask through the plugin on macOS; not yet run on a Linux GPU.",
             },
             Backend {
                 id: "ort-migraphx",
@@ -595,9 +598,9 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
     let runtime = cleaner_core::runtime::find(Some(app_data)).ok();
     let runtime_installed = runtime.is_some();
     let runtime_ready = runtime.as_ref().is_some_and(|path| cleaner_core::runtime::load(path).is_ok());
-    let webgpu_ready = cfg!(target_os = "macos")
-        && runtime_ready
-        && sam_ts::built_in_webgpu_available();
+    // Built in on macOS, the plugin on Windows and Linux x64.
+    let webgpu_ready = runtime_ready && cleaner_core::accel::Accelerator::WebGpu.is_available();
+    let cuda_ready = runtime_ready && cleaner_core::accel::Accelerator::Cuda.is_available();
     // Whether there is measured room for the lettering mask to run at full
     // speed; an idle session's mere presence cannot promise it. A warning
     // only: SAM loads with less, slower. Reading status never evicts anything.
@@ -659,6 +662,7 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
         sam_backends: sam_backends(
             runtime_ready,
             webgpu_ready,
+            cuda_ready,
             webgpu_qualified,
         ),
         sam_write_qualified: webgpu_qualified && sam_memory_ready && sam_installed,
@@ -1879,6 +1883,15 @@ fn review_preference(id: &str) -> Result<Preference, String> {
     }
 }
 
+/// The SAM backend a review reports, from the one it ran on.
+fn review_sam_backend(id: &str) -> &'static str {
+    match id {
+        "ort-webgpu" => "ort-webgpu",
+        "ort-cuda" => "ort-cuda",
+        _ => "ort-cpu",
+    }
+}
+
 fn review_backend_id(accelerator: Accelerator) -> &'static str {
     match accelerator {
         Accelerator::Cpu => "ort-cpu",
@@ -1928,8 +1941,9 @@ pub async fn analyze_capabilities(
     }
     let sam_backend = match sam_preference {
         Preference::Force(Accelerator::WebGpu) => "ort-webgpu".to_owned(),
+        Preference::Force(Accelerator::Cuda) => "ort-cuda".to_owned(),
         Preference::Automatic | Preference::CpuOnly | Preference::Force(Accelerator::Cpu) => "ort-cpu".to_owned(),
-        _ if mode.sam() => return Err("The SAM-TS-L lettering mask runs on CPU or Apple WebGPU in local review".into()),
+        _ if mode.sam() => return Err("The SAM-TS-L lettering mask runs on CPU, WebGPU or CUDA in local review".into()),
         _ => "ort-cpu".to_owned(),
     };
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -2026,6 +2040,7 @@ pub async fn analyze_capabilities(
             let result = match sam_backend.as_str() {
                 "ort-cpu" => sam_ts::infer_cpu_cancellable(&page, &dir, &cancel)?,
                 "ort-webgpu" => sam_ts::infer_webgpu_cancellable(&page, &dir, &cancel)?,
+                "ort-cuda" => sam_ts::SamTsSession::open_on(&dir, Accelerator::Cuda, &cancel)?.infer(&page, &cancel)?,
                 _ => return Err("Unsupported SAM backend".into()),
             };
             sam_webgpu_nodes = result.webgpu_nodes;
@@ -2096,11 +2111,7 @@ pub async fn analyze_capabilities(
             );
             commit_analysis(&_active_guard, &cancel, StoredAnalysis {
                 id: id.clone(),
-                sam_backend: if sam_backend == "ort-webgpu" {
-                    "ort-webgpu"
-                } else {
-                    "ort-cpu"
-                },
+                sam_backend: review_sam_backend(&sam_backend),
                 write_eligible: sam_write_eligible,
                 runtime_sha256: sam_write_eligible.then_some(SAM_WEBGPU_RUNTIME_SHA256),
                 source_sha256: source_sha256.clone(),
@@ -2126,11 +2137,7 @@ pub async fn analyze_capabilities(
             cancel.finish();
         }
         let rt_backend = mode.rt().then_some(effective_rt_backend);
-        let sam_backend = mode.sam().then_some(if sam_backend == "ort-webgpu" {
-            "ort-webgpu"
-        } else {
-            "ort-cpu"
-        });
+        let sam_backend = mode.sam().then_some(review_sam_backend(&sam_backend));
         Ok(Analysis {
             analysis_id,
             source_sha256,
@@ -2230,11 +2237,20 @@ mod tests {
 
     #[test]
     fn local_cpu_detection_is_available_without_preview_write_qualification() {
-        let rows = super::sam_backends(true, false, false);
+        let rows = super::sam_backends(true, false, false, false);
         let cpu = rows.iter().find(|row| row.id == "ort-cpu").unwrap();
         assert!(cpu.available && cpu.selectable);
         assert!(!cpu.qualified);
-        assert!(!super::sam_backends(false, false, false)[0].available);
+        assert!(!super::sam_backends(false, false, false, false)[0].available);
+        // A GPU the runtime has is offered, never qualified, and needs the runtime.
+        let rows = super::sam_backends(true, true, true, false);
+        let webgpu = rows.iter().find(|row| row.id == "ort-webgpu").unwrap();
+        assert!(webgpu.available && webgpu.selectable && !webgpu.qualified);
+        if !cfg!(target_os = "macos") {
+            let cuda = rows.iter().find(|row| row.id == "ort-cuda").unwrap();
+            assert!(cuda.available && cuda.selectable && !cuda.qualified);
+        }
+        assert!(super::sam_backends(false, true, true, false).iter().all(|row| !row.available));
     }
 
     #[test]

@@ -326,12 +326,14 @@ impl SamTsSession {
 
     pub fn open_on(graph_dir: &Path, backend: crate::accel::Accelerator, cancel: &Cancellation) -> Result<Self, String> {
         cancel.check()?;
-        if !matches!(backend, crate::accel::Accelerator::Cpu | crate::accel::Accelerator::WebGpu) {
+        use crate::accel::Accelerator;
+        if !matches!(backend, Accelerator::Cpu | Accelerator::WebGpu | Accelerator::Cuda) {
             return Err(format!("SAM-TS-L does not support {backend:?}"));
         }
-        if backend == crate::accel::Accelerator::WebGpu
-            && (!cfg!(target_os = "macos") || !built_in_webgpu_available()) {
-            return Err("SAM-TS-L WebGPU needs the built-in Apple WebGPU runtime and device".into());
+        // The built-in Apple EP and the Windows/Linux plugin publish the same
+        // provider and devices; either is fine as long as it found a GPU.
+        if backend == Accelerator::WebGpu && !Accelerator::WebGpu.is_available() {
+            return Err("SAM-TS-L WebGPU needs a WebGPU runtime with a GPU device".into());
         }
         let permit = SessionPermit::acquire(cancel)?;
         crate::residency::evict_for_sam();
@@ -342,6 +344,8 @@ impl SamTsSession {
         let open = |path: &Path, index: usize| -> Result<crate::accel::Model, String> {
             if let Some(profiles) = profiles.as_ref() {
                 webgpu_session(path, &profiles.0[index])
+            } else if backend == crate::accel::Accelerator::Cuda {
+                cuda_session(path)
             } else {
                 // The CPU arena keeps every block it grew and peaked at
                 // 11.8 GiB across two pages; without it and the memory
@@ -644,6 +648,32 @@ fn webgpu_session(model: &Path, profile: &Path) -> Result<crate::accel::Model, S
         .map_err(|e| format!("SAM-TS-L WebGPU session {}: {e}", model.display()))
 }
 
+/// CUDA with the options the L4 measurement matched the CPU mask with
+/// (`docs/sam-gpu-backends-2026-10-28.md`). TF32, on by default, rounds MatMul
+/// inputs on Ampere and newer and changed up to 42 mask pixels a page. The CPU
+/// fallback stays on, as measured: CUDA leaves a few shape nodes to the CPU.
+fn cuda_session(model: &Path) -> Result<crate::accel::Model, String> {
+    use ort::ep::{cuda::ConvAlgorithmSearch, ArenaExtendStrategy, CUDA};
+    crate::cuda::prepare()?;
+    let provider = CUDA::default()
+        .with_tf32(false)
+        .with_arena_extend_strategy(ArenaExtendStrategy::SameAsRequested)
+        .with_conv_algorithm_search(ConvAlgorithmSearch::Heuristic)
+        .build()
+        // Without this a provider that fails to register leaves a CPU session
+        // labelled CUDA.
+        .error_on_failure();
+    ort::session::Session::builder()
+        .map_err(|e| e.to_string())?
+        .with_intra_threads(4)
+        .map_err(|e| e.to_string())?
+        .with_execution_providers([provider])
+        .map_err(|e| e.to_string())?
+        .commit_from_file(model)
+        .map(|session| crate::accel::Model::new(session, crate::accel::Accelerator::Cuda))
+        .map_err(|e| format!("SAM-TS-L CUDA session {}: {e}", model.display()))
+}
+
 fn verified_webgpu_nodes(session: &mut ort::session::Session, graph: &str) -> Result<u64, String> {
     let path = PathBuf::from(session.end_profiling().map_err(|e| e.to_string())?);
     let result = (|| {
@@ -827,16 +857,17 @@ fn process_phys_footprint_bytes() -> Option<u64> {
     None
 }
 
-/// Explicit Apple WebGPU review path. The installed runtime must expose a
-/// WebGPU device, both graphs must commit without CPU fallback, and runtime
-/// profiles must show every executed node on WebGPU. Any violation is an error.
+/// Explicit WebGPU review path, built in or plugin. The installed runtime must
+/// expose a WebGPU device, both graphs must commit without CPU fallback, and
+/// runtime profiles must show every executed node on WebGPU. Any violation is
+/// an error.
 pub fn infer_webgpu(page: &Raster, graph_dir: &Path) -> Result<Inference, String> {
     infer_webgpu_cancellable(page, graph_dir, &Cancellation::default())
 }
 
 pub fn infer_webgpu_cancellable(page: &Raster, graph_dir: &Path, cancel: &Cancellation) -> Result<Inference, String> {
     cancel.check()?;
-    if !built_in_webgpu_available() {
+    if !crate::accel::Accelerator::WebGpu.is_available() {
         return Err("SAM-TS-L WebGPU is absent from the installed runtime or has no device".into());
     }
     let _permit = SessionPermit::acquire(cancel)?;
@@ -1151,6 +1182,40 @@ mod tests {
             result.process_high_water_bytes,
             result.sampled_metal_high_water_bytes
         );
+    }
+
+    /// The Windows/Linux route on a Mac: a runtime without built-in WebGPU and
+    /// the osx-arm64 build of the plugin beside it, registered by
+    /// `runtime::load` as the app does. `SAM_TS_PLUGIN_RUNTIME` is that
+    /// runtime (the onnxruntime 1.28.0 wheel's dylib works), `SAM_TS_GRAPHS`
+    /// the low-memory graphs, `SAM_TS_PAGE` an optional page.
+    #[test]
+    #[ignore = "requires a runtime with the WebGPU plugin beside it and local SAM graphs"]
+    fn native_plugin_webgpu_matches_the_cpu_mask() {
+        let runtime = std::env::var("SAM_TS_PLUGIN_RUNTIME").expect("SAM_TS_PLUGIN_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        assert_eq!(crate::runtime::webgpu_plugin(), crate::runtime::Plugin::Registered);
+        let graphs = PathBuf::from(std::env::var("SAM_TS_GRAPHS").expect("SAM_TS_GRAPHS"));
+        let page = std::env::var("SAM_TS_PAGE").map(PathBuf::from).unwrap_or_else(|_| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spikes/sam-ts-l/fixtures/synthetic_page.png")
+        });
+        let page = crate::image::decode(&std::fs::read(page).unwrap()).unwrap();
+        let cancel = Cancellation::default();
+        let mut session = SamTsSession::open_on(&graphs, crate::accel::Accelerator::WebGpu, &cancel).unwrap();
+        let first = session.infer(&page, &cancel).unwrap();
+        let second = session.infer(&page, &cancel).unwrap();
+        drop(session);
+        assert!(first.webgpu_nodes.is_some_and(|(encoder, head)| encoder > 0 && head > 0));
+        assert_eq!(first.cpu_fallback_nodes, Some((0, 0)));
+        assert_eq!(first.mask, second.mask);
+        let cpu = SamTsSession::open_on(&graphs, crate::accel::Accelerator::Cpu, &cancel).unwrap()
+            .infer(&page, &cancel).unwrap();
+        let changed = first.mask.iter().zip(&cpu.mask).filter(|(a, b)| a != b).count();
+        eprintln!(
+            "plugin WebGPU nodes {:?}, load {:?}, encoder {:?} then {:?}, {changed} mask pixels differ from the CPU",
+            first.webgpu_nodes, first.load, first.encoder, second.encoder
+        );
+        assert_eq!(changed, 0);
     }
 
     #[test]

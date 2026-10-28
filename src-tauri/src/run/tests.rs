@@ -31,6 +31,24 @@ fn model_backend_overrides_inherit_and_reject_unknown_values() {
 }
 
 #[test]
+fn sam_backend_takes_a_forced_gpu_and_only_a_measured_one_under_automatic() {
+    use accel::Accelerator::{CoreMl, Cpu, Cuda, DirectMl, WebGpu};
+    assert_eq!(sam_backend(Preference::Force(WebGpu), None), Ok(WebGpu));
+    assert_eq!(sam_backend(Preference::Force(Cuda), Some(WebGpu)), Ok(Cuda));
+    assert_eq!(sam_backend(Preference::Force(Cpu), Some(Cuda)), Ok(Cpu));
+    assert_eq!(sam_backend(Preference::CpuOnly, Some(Cuda)), Ok(Cpu));
+    // Unmeasured, Automatic is the CPU on every machine.
+    assert_eq!(sam_backend(Preference::Automatic, None), Ok(Cpu));
+    assert_eq!(sam_backend(Preference::Automatic, Some(Cuda)), Ok(Cuda));
+    assert_eq!(sam_backend(Preference::Automatic, Some(WebGpu)), Ok(WebGpu));
+    assert_eq!(sam_backend(Preference::Automatic, Some(Cpu)), Ok(Cpu));
+    // A winner SAM cannot open on is ignored rather than tried.
+    assert_eq!(sam_backend(Preference::Automatic, Some(DirectMl)), Ok(Cpu));
+    assert!(sam_backend(Preference::Force(CoreMl), None).is_err());
+    assert!(sam_backend(Preference::Force(DirectMl), None).is_err());
+}
+
+#[test]
 fn run_slot_is_reserved_before_a_grant_and_released_on_pre_start_error() {
     let _exclusive = exclusively();
     let reservation = reserve_run("chapter-r", &[], RunKind::CloudClean).unwrap().unwrap();

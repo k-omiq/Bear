@@ -715,6 +715,20 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**SAM-TS-L on the WebGPU plugin and CUDA (2026-10-28): plugin measured on the Mac only, CUDA
+never run in the app.** Settings and the local review now offer SAM WebGPU on every OS (built in on
+macOS, the plugin on Windows and Linux x64) and CUDA on Windows and Linux; component writes stay
+qualified for the measured Mac only. CUDA opens with TF32 off,
+`kSameAsRequested` and heuristic conv search, the options that matched the CPU mask on a cloud L4
+(`docs/sam-gpu-backends-2026-10-28.md`). Automatic stays on the CPU unless the machine's own
+measurement picked a GPU; a measured GPU that will not open falls back to the CPU. Measured: the
+plugin route (`runtime::load` registering the osx-arm64 build of plugins 0.3.0 and 0.4.0 beside a
+runtime without built-in WebGPU) put every node on WebGPU, CPU fallback off, and its mask matched
+the CPU's exactly on a real page and the synthetic page (ignored test
+`native_plugin_webgpu_matches_the_cpu_mask`). Not done: the plugin on any Windows or Linux GPU
+(D3D12, Vulkan), CUDA through the app on any machine, CUDA on Windows or on pre-Ampere cards, and
+DirectML, which SAM is not offered.
+
 **SAM-TS-L memory cuts (2026-10-28): measured with the probe, not in the app.** The CPU session
 runs without the arena and memory pattern, and the encoder runs its four global-attention blocks
 one head at a time with its weights in a side file. On the M5, three real pages: CPU peak 11.85 to
