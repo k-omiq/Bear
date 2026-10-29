@@ -48,7 +48,7 @@ import { app, clearNotices, closeAllModals, closeModal } from '../state/app.svel
 import { refreshCloudReadiness, stopCloud } from '../state/cloud.svelte.js'
 import { applyRegionDelta, applyRegionState, editor, recordRegionEdit, replaceRegion, select, undo } from '../state/editor.svelte.js'
 import { pageVersion } from '../api/tile.js'
-import { setCloudAllowed } from '../state/session.svelte.js'
+import { session, setBetaTools, setCloudAllowed } from '../state/session.svelte.js'
 import MaskRow from './MaskRow.svelte'
 import { keepDependencyResult, requestDetectedMaskPadding, rerunMask, stepMaskPadding } from './maskactions.svelte.js'
 import { maskRow } from './maskrows.js'
@@ -183,14 +183,14 @@ describe('the engine picker on a Layers row', () => {
   it('offers Cloud last while a cloud endpoint is ready and allowed', async () => {
     const { region } = await opened()
     show(region)
-    expect(offered()).toEqual(['fill', 'screentone', 'lama', 'cloud'])
+    expect(offered()).toEqual(['fill', 'lama', 'cloud'])
     expect(picker().value).toBe('fill')
   })
 
   it('leaves Cloud out while the cloud is off', async () => {
     const { region } = await opened({ allowed: false })
     show(region)
-    expect(offered()).toEqual(['fill', 'screentone', 'lama'])
+    expect(offered()).toEqual(['fill', 'lama'])
   })
 
   // Denoise fill is gone. A patch saved by it reads as Fill, so the picker
@@ -198,7 +198,7 @@ describe('the engine picker on a Layers row', () => {
   it('shows a patch saved as the retired denoise rung as Fill', async () => {
     const { region } = await opened({ allowed: false })
     show(strokeBy(region, 'denoise'))
-    expect(offered()).toEqual(['fill', 'screentone', 'lama'])
+    expect(offered()).toEqual(['fill', 'lama'])
     expect(picker().value).toBe('fill')
     expect(document.body.textContent).not.toContain('denoise')
   })
@@ -218,8 +218,41 @@ describe('the engine picker on a Layers row', () => {
     }
     show(cloudPatch)
     expect(screen.getByText('☁ FLUX.2 Klein 9B · Cloud', { selector: '.title' })).toBeTruthy()
-    expect(offered()).toEqual(['cloud', 'fill', 'screentone', 'lama'])
+    expect(offered()).toEqual(['cloud', 'fill', 'lama'])
     expect(picker().value).toBe('cloud')
+  })
+
+  it('offers the Screentone fill only while Settings > Beta has it on, and still names it on a layer it made', async () => {
+    const { region } = await opened({ allowed: false })
+    setBetaTools(true)
+    try {
+      const view = show(region)
+      expect(offered()).toEqual(['fill', 'screentone', 'lama'])
+      view.unmount()
+      setBetaTools(false)
+      show(strokeBy(region, 'screentone'))
+      expect(offered()).toEqual(['screentone', 'fill', 'lama'])
+      expect(picker().value).toBe('screentone')
+    } finally {
+      setBetaTools(false)
+    }
+  })
+
+  it('opens the Post-processing window on its layer from the row\'s button', async () => {
+    const { region } = await opened({ allowed: false })
+    const wasOpen = session.windows.postprocessing.open
+    session.windows.postprocessing.open = false
+    try {
+      show(region)
+      const button = /** @type {HTMLButtonElement} */ (document.querySelector('[data-finishing-open]'))
+      await fireEvent.click(button)
+      expect(session.windows.postprocessing.open).toBe(true)
+      expect(editor.selectionId).toBe(region.id)
+      // The row hosts no panel of its own any more.
+      expect(document.querySelector('[data-finishing-panel]')).toBeNull()
+    } finally {
+      session.windows.postprocessing.open = wasOpen
+    }
   })
 
   it('goes back to the engine the mask has when the cloud consent is cancelled', async () => {

@@ -402,6 +402,14 @@ export const icons = {
     'M5.5 3V6M10.5 6.5V9.5M7.5 10V13',
   ],
 
+  // Lab flask, Settings > Beta: a neck with a rim, a body that widens to a
+  // flat foot, and the line of what is in it.
+  'flask': [
+    'M6 2.5h4',
+    'M7 2.5v4L3.2 12.1a1 1 0 0 0 .9 1.4h7.8a1 1 0 0 0 .9-1.4L9 6.5v-4',
+    'M4.6 10h6.8',
+  ],
+
   // Play button: right-pointing triangle.
   'play': [
     'M4 4a1 1 0 0 1 1.5-.9l7.5 4.1a1 1 0 0 1 0 1.7L5.5 13A1 1 0 0 1 4 12.1Z',

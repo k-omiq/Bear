@@ -13,8 +13,8 @@ import { SETTINGS_SECTIONS, openModelSettings, openSettings, resolveSettingsLink
 vi.mock('../state/app.svelte.js', () => ({ pushModal: vi.fn() }))
 
 describe('the section a request resolves to', () => {
-  it('offers eight sections, in the sidebar’s order', () => {
-    expect(SETTINGS_SECTIONS).toEqual(['general', 'models', 'cloud', 'postprocessing', 'denoise', 'export', 'performance', 'shortcuts', 'about'])
+  it('offers ten sections, in the sidebar’s order', () => {
+    expect(SETTINGS_SECTIONS).toEqual(['general', 'models', 'cloud', 'postprocessing', 'denoise', 'export', 'performance', 'shortcuts', 'beta', 'about'])
     for (const id of SETTINGS_SECTIONS) expect(resolveSettingsLink(id)).toEqual({ section: id, anchor: null })
   })
 

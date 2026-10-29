@@ -53,7 +53,7 @@
    * a sidebar with the way back and a vertical tab list, and one scrolling
    * column per section.
    *
-   * **Nine sections, in the order a visit needs them.** General holds the
+   * **Ten sections, in the order a visit needs them.** General holds the
    * app's own preferences and the setup replay. Models is what a page is
    * detected and cleaned with: the detection choices, each model's files
    * beside the choice that made them necessary, the language filtering and
@@ -64,8 +64,10 @@
    * denoise's target, preset and local model (`denoise/DenoiseSettings`).
    * Performance is what the
    * engines run on: the runtime, its build, where downloads go, the
-   * accelerator, and per-model backends collapsed. Shortcuts and About close
-   * the list; About is a GPL-3.0 obligation, this screen is its only route,
+   * accelerator, and per-model backends collapsed. Shortcuts, Beta and About
+   * close the list. Beta offers the tools still being tuned, the Patch tool
+   * and the Screentone fill, off until asked for (`BetaSettings`). About is a
+   * GPL-3.0 obligation, this screen is its only route,
    * and it carries the community invite.
    *
    * Detection and Cleaning were two sections. As two groups of one, with the
@@ -184,6 +186,7 @@
   import { flavourName } from './runtime/runtime.js'
   import DenoiseSettings from './denoise/DenoiseSettings.svelte'
   import PostProcessingSettings from './PostProcessingSettings.svelte'
+  import BetaSettings from './BetaSettings.svelte'
   import { PAGE_DENOISE_FEATURE } from '../model/denoise.js'
   import { offerFirstLaunch } from './firstlaunch.svelte.js'
 
@@ -1994,6 +1997,7 @@
     export: { labelKey: 'settings.section.export', icon: 'export' },
     performance: { labelKey: 'settings.section.performance', icon: 'cpu' },
     shortcuts: { labelKey: 'settings.section.shortcuts', icon: 'keyboard' },
+    beta: { labelKey: 'settings.section.beta', icon: 'flask' },
     about: { labelKey: 'settings.section.about', icon: 'info' },
   })
   const TABS = SETTINGS_SECTIONS.map((id) => ({ id, ...TAB_META[id] }))
@@ -3310,6 +3314,21 @@
       <div class="column">
         <h2>{t('settings.section.shortcuts')}</h2>
         <ShortcutSheet headingLevel="h3" />
+      </div>
+    </div>
+
+    <!-- Beta: tools still being tuned, off until asked for. It ends in a
+         checkbox, so the scroller needs no tab stop of its own. -->
+    <div
+      class="panel"
+      role="tabpanel"
+      id={panelId('beta')}
+      aria-labelledby={tabId('beta')}
+      hidden={active !== 'beta'}
+    >
+      <div class="column">
+        <h2>{t('settings.section.beta')}</h2>
+        <BetaSettings />
       </div>
     </div>
 

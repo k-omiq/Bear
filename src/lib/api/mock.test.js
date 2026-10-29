@@ -1844,6 +1844,20 @@ describe('a cloud result finished again', () => {
       .rejects.toThrow(/^refinish_not_cloud: /)
   })
 
+  it('previews and finishes a LaMa result made on this computer', async () => {
+    const { backend, local } = await results()
+    const lama = structuredClone(local)
+    lama.mask.provenance.engine = 'lama'
+    lama.mask.provenance.cloud = null
+    await settle(backend.restoreRegion({ regionId: lama.id, region: lama }))
+    const previews = await settle(backend.regionFinishingPreviews({ regionId: lama.id }))
+    expect(previews).toMatchObject({ unavailable: null, current: null })
+    expect(previews.previews).toHaveLength(FINISHINGS.length)
+    const changed = await settle(backend.setRegionFinishing({ regionId: lama.id, finishing: 'tone-only', grayscale: false }))
+    expect(changed.region.mask.provenance.params_snapshot.postprocess.finishing).toBe('tone-only')
+    expect(changed.history.entries.at(-1)).toMatchObject({ label: 'masks.finishing.command' })
+  })
+
   it('records one region-state step whose undo puts the earlier finishing back', async () => {
     const { backend, cloud } = await results()
     const changed = await settle(backend.setRegionFinishing({ regionId: cloud.id, finishing: 'poisson', grayscale: true }))

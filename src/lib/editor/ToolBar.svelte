@@ -109,6 +109,7 @@
     TOOL_ICONS,
     activeParams,
     effectiveChoice,
+    optionOffered,
     paramGroups,
     toolSpec,
   } from './tools.js'
@@ -239,6 +240,10 @@
    */
   function optionsFor(param) {
     return param.options
+      // A beta rung (the Screentone fill) is not drawn at all while Settings
+      // > Beta is off, even when it is the stored value: the effect below
+      // then moves the stored value onto what the row does show.
+      .filter((option) => optionOffered(option, session.betaTools))
       // A cloud option is shown disabled and says why - the user should be able
       // to see what the setting is costing them. A **missing engine** is the
       // opposite case and §4a's own rule: rung 3a needs a sidecar the

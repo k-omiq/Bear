@@ -2,7 +2,7 @@
  * Session preferences - the things that survive a relaunch and are not part of
  * any one project: theme, the default reading direction for new projects,
  * whether cloud engines are allowed, how the original-view control behaves,
- * and where the editor's three floating windows sit.
+ * and where the editor's floating windows sit.
  *
  * Shape of the module: a single rune-backed object plus free functions that
  * mutate it. Not a class with getters over hidden mutables - consumers read
@@ -47,6 +47,7 @@ import {
   contentSized,
   MAX_WIDTH,
   MIN_HEIGHT,
+  CLOSED_AT_START,
   clampPanelWidth,
 } from '../model/windows.js'
 import { hexOnCommit } from '../ui/color.js'
@@ -221,6 +222,7 @@ function viewport() {
  * @property {string} maskColor - the colour the canvas draws a mask over speech bubble text in, `#rrggbb`; also every region whose place is unknown. The key the single mask colour was stored under, so a saved pick carries over as this one
  * @property {string} outsideMaskColor - the colour the canvas draws a mask over text outside speech bubbles in, `#rrggbb`
  * @property {number} maskOpacity - how strong either mask's fill is, a whole percent from 0 to 100
+ * @property {boolean} betaTools - whether the tools still in beta are offered: the Patch tool and the Screentone fill engine (`editor/tools.js#BETA_TOOLS`, `model/masks.js#BETA_ENGINES`). Off hides them; layers they already made stay as they are
  * @property {Record<string, WindowState>} windows
  * @property {number|null} toolPanelWidth - the width the user dragged the tool panel to, or null for its own (`tools.js#PANEL_WIDTH`)
  */
@@ -231,7 +233,9 @@ function defaults() {
   const geometry = defaultGeometry(vw, vh)
   /** @type {Record<string, WindowState>} */
   const windows = {}
-  for (const id of WINDOW_IDS) windows[id] = { ...geometry[id], open: true, fold: false }
+  for (const id of WINDOW_IDS) {
+    windows[id] = { ...geometry[id], open: !(/** @type {readonly string[]} */ (CLOSED_AT_START)).includes(id), fold: false }
+  }
   return {
     theme: 'system',
     language: matchLocale(globalThis.navigator?.languages),
@@ -272,6 +276,7 @@ function defaults() {
     maskColor: DEFAULT_MASK_COLOR,
     outsideMaskColor: DEFAULT_OUTSIDE_MASK_COLOR,
     maskOpacity: DEFAULT_MASK_OPACITY,
+    betaTools: false,
     windows,
     toolPanelWidth: null,
   }
@@ -413,6 +418,9 @@ export function sanitizeSession(raw) {
     maskColor: maskColorOr(record.maskColor, base.maskColor),
     outsideMaskColor: maskColorOr(record.outsideMaskColor, base.outsideMaskColor),
     maskOpacity: maskOpacityOr(record.maskOpacity, base.maskOpacity),
+    // Off for a record written before the setting existed: the beta tools
+    // are shown only to someone who asked for them.
+    betaTools: boolOr(record.betaTools, base.betaTools),
     windows,
     // Null is "the panel's own width", and anything unreadable is that too.
     toolPanelWidth: typeof record.toolPanelWidth === 'number' && Number.isFinite(record.toolPanelWidth)
@@ -508,6 +516,7 @@ function persistable() {
     maskColor: session.maskColor,
     outsideMaskColor: session.outsideMaskColor,
     maskOpacity: session.maskOpacity,
+    betaTools: session.betaTools,
     windows,
     toolPanelWidth: session.toolPanelWidth,
   }
@@ -867,6 +876,20 @@ export function setOcrRescue(enabled) {
   save()
 }
 
+/**
+ * Settings > Beta: offer the Patch tool and the Screentone fill engine, or
+ * hide them. Only what is offered changes. A layer either one already made
+ * keeps drawing and keeps its engine's name on its Layers row; the editor
+ * moves off the Patch tool when it is the tool out
+ * (`state/editor.svelte.js#retireBetaTools`).
+ *
+ * @param {boolean} enabled
+ */
+export function setBetaTools(enabled) {
+  session.betaTools = boolOr(enabled, session.betaTools)
+  save()
+}
+
 /** @param {boolean} enabled */
 export function setCleanLatinText(enabled) {
   session.cleanLatinText = boolOr(enabled, session.cleanLatinText)
@@ -1100,7 +1123,7 @@ export function commitWindows() {
 }
 
 /**
- * Bring a window to the front of the other two. Not persisted - which window
+ * Bring a window to the front of the others. Not persisted - which window
  * was on top last is worth less than a disk write per click.
  *
  * @param {string} id
@@ -1133,6 +1156,22 @@ export function openWindow(id) {
 export function toggleWindow(id) {
   if (!session.windows[id]) return
   setWindowOpen(id, !session.windows[id].open)
+}
+
+/**
+ * A shortcut's toggle for a window that may be open behind the others: a
+ * closed window opens, an open one under another comes to the front, and
+ * only the one already in front closes. A press that hid a window the user
+ * could not see was there would read as a press that did nothing.
+ *
+ * @param {string} id
+ */
+export function toggleWindowRaised(id) {
+  const win = session.windows[id]
+  if (!win) return
+  if (!win.open) setWindowOpen(id, true)
+  else if (session.stacking[id] !== WINDOW_IDS.length) raiseWindow(id)
+  else setWindowOpen(id, false)
 }
 
 /** @param {string} id */
@@ -1330,6 +1369,7 @@ export function adoptBackendSettings(settings) {
     if (detectsOnCloud(session.analysisTargets)) Object.assign(session, modeFields('advanced'))
     save()
   }
+  if (record.betaTools !== undefined) setBetaTools(record.betaTools === true)
   if (record.cleanTarget !== undefined) setCleanTarget(record.cleanTarget === 'cloud' ? 'cloud' : 'local')
   if (record.denoiseTarget !== undefined) setDenoiseTarget(normalizeDenoiseTarget(record.denoiseTarget))
   if (typeof record.denoisePreset === 'string') setDenoisePreset(record.denoisePreset)
@@ -1377,6 +1417,9 @@ export function backendSettingsPatch() {
     cloudFinishingGrayscale: session.cloudFinishingGrayscale,
     finishingEveryModel: session.finishingEveryModel,
     cloudFlux3Generation: { ...session.cloudFlux3Generation },
+    // A preference of this window's only. The settings file keeps a key it
+    // does not know as it came, so it travels with the rest.
+    betaTools: session.betaTools,
     denoiseTarget: session.denoiseTarget,
     ...(session.denoisePreset ? { denoisePreset: session.denoisePreset } : {}),
     // Left out until measured: absent is "not measured", and a null would

@@ -4,12 +4,14 @@
    * before it is written (`postprocess.rs#Finishing`).
    *
    * Three rows: the method, whether it also takes the place of the tone fix
-   * on Qwen, FLUX.2 Klein and LaMa results (a FLUX 3 result is always
-   * finished), and whether a colour result is made grey first. Each change
+   * on other models' results (Qwen, FLUX.2 Klein, LaMa, and FLUX run on this
+   * computer; a FLUX 3 result is always finished), and whether a colour
+   * result is made grey first. Each change
    * is saved at once through `saveCloudFinishing`; the backend freezes the
    * values on each cloud attempt and reads them when a run opens, so a change
-   * applies to the next clean. LaMa runs on this computer, so none of this
-   * needs Cloud GPU on.
+   * applies to the next clean. A layer already cleaned is changed from its
+   * own previews instead, in the Post-processing window. LaMa and local FLUX
+   * run on this computer, so none of this needs Cloud GPU on.
    *
    * @type {{ backend?: import('../api/backend.js').Backend }}
    */

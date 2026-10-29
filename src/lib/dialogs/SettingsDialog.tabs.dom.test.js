@@ -60,6 +60,7 @@ const LABELS = {
   export: 'settings.section.export',
   performance: 'settings.section.performance',
   shortcuts: 'settings.section.shortcuts',
+  beta: 'settings.section.beta',
   about: 'settings.section.about',
 }
 const TABS = Object.keys(LABELS)

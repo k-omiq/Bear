@@ -86,16 +86,6 @@ const CANNY_HIGH: f64 = 90.0;
 const TENSOR_SIGMA: f64 = 2.0;
 const MIN_COHERENCE: f64 = 0.35;
 
-/// [`plain_grey`]: the low-pass the detail is measured against and the
-/// window it is summed over, in px; the most detail plain grey has, in
-/// squared levels; the tones between flat black and paper; and the blur that
-/// softens its edge, in px.
-const PLAIN_SIGMA: f64 = 3.0;
-const PLAIN_WINDOW: f64 = 4.0;
-const PLAIN_DETAIL: f64 = 25.0;
-const PLAIN_TONE: std::ops::Range<f64> = 20.0..235.0;
-const PLAIN_SOFTEN: f64 = 1.5;
-
 /// The finishing an answer gets before it is written. The first seven are
 /// this module's steps with one screen step or none; the last five are Manga
 /// Cleaner Reproduction's finishing v2, ported ([`super::finishing::Method`]),
@@ -120,9 +110,11 @@ pub enum Finishing {
     RepeatOffsets,
     /// Contours, tone and lighting; no screen step.
     ToneOnly,
-    /// Tone only, then the table's dots where the answer is plain grey, a
-    /// screen the model smoothed away ([`plain_grey`]). Its own dots, its
-    /// drawing and flat black or paper stay as they came.
+    /// Tone only, then the page's dots redrawn in phase at the answer's tone
+    /// wherever the answer is a screen of its own or plain grey
+    /// ([`super::halftone::Over::Screen`]): a model's dots are fuzzy, out of
+    /// phase or smoothed away, and its tone is right. Its drawing, flat
+    /// black and paper stay as they came.
     ToneFillDots,
     /// The answer as it came, grey if asked (ported `off`).
     #[serde(alias = "reference-off")]
@@ -286,15 +278,12 @@ fn finish(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
         settled.push(lighting(shown, &toned, mask, &edge, &fade));
     }
     if let ([shown], [answer]) = (crop.shown, settled.as_mut_slice()) {
-        use super::halftone::{Reach, redraw};
+        use super::halftone::{Over, Reach, redraw};
         let screen = match finishing {
-            Finishing::Copy => redraw(shown, answer, mask, &protected, crop.page, &fade, Reach::Copy),
-            Finishing::CopyHops => redraw(shown, answer, mask, &protected, crop.page, &fade, Reach::Hops),
-            Finishing::Redraw | Finishing::RedrawSharpContours => redraw(shown, answer, mask, &protected, crop.page, &fade, Reach::Table),
-            Finishing::ToneFillDots => redraw(shown, answer, mask, &protected, crop.page, &fade, Reach::Table).map(|(screen, weight)| {
-                let plain = plain_grey(answer, mask);
-                (screen, Grid { w, h, data: (0..w * h).map(|i| weight.data[i] * plain.data[i]).collect() })
-            }),
+            Finishing::Copy => redraw(shown, answer, mask, &protected, crop.page, &fade, Reach::Copy, Over::All),
+            Finishing::CopyHops => redraw(shown, answer, mask, &protected, crop.page, &fade, Reach::Hops, Over::All),
+            Finishing::Redraw | Finishing::RedrawSharpContours => redraw(shown, answer, mask, &protected, crop.page, &fade, Reach::Table, Over::All),
+            Finishing::ToneFillDots => redraw(shown, answer, mask, &protected, crop.page, &fade, Reach::Table, Over::Screen),
             // Restored pixels fade near a contour like every other correction.
             Finishing::RepeatOffsets => super::screentone::restore(shown, answer, mask, &protected, crop.page, REPEAT_CORR).map(|(copy, strength)| {
                 let weight = Grid { w, h, data: (0..w * h).map(|i| strength.data[i] * fade.data[i]).collect() };
@@ -337,27 +326,6 @@ fn luma(channels: &[Grid]) -> Grid {
     let n = channels.len().max(1) as f64;
     let (w, h) = (channels[0].w, channels[0].h);
     Grid { w, h, data: (0..w * h).map(|i| channels.iter().map(|c| c.data[i]).sum::<f64>() / n).collect() }
-}
-
-/// Where `answer` is plain grey inside `mask`, as a weight: a mid tone with
-/// almost no fine detail ([`PLAIN_DETAIL`]), which is what a model leaves of
-/// a screen it smoothed away. Dots, hatching and drawn texture have detail;
-/// flat black and paper are outside [`PLAIN_TONE`]. Both are measured on the
-/// mask's pixels only, or the page's own dots across its edge would leave a
-/// band of the answer's grey inside it. Page 13 of a real chapter (FLUX 3 and
-/// Qwen, 2026-10-28) had none: both models drew dots everywhere.
-fn plain_grey(answer: &Grid, mask: &Mask) -> Grid {
-    let (low, _) = masked_blur(answer, mask, PLAIN_SIGMA);
-    let detail = Grid { w: answer.w, h: answer.h, data: answer.data.iter().zip(&low.data).map(|(a, l)| (a - l).powi(2)).collect() };
-    let (energy, _) = masked_blur(&detail, mask, PLAIN_WINDOW);
-    let plain = Grid {
-        w: answer.w,
-        h: answer.h,
-        data: (0..answer.data.len())
-            .map(|i| if mask.data[i] && energy.data[i] < PLAIN_DETAIL && PLAIN_TONE.contains(&low.data[i]) { 1.0 } else { 0.0 })
-            .collect(),
-    };
-    gaussian(&plain, PLAIN_SOFTEN)
 }
 
 fn fade(distance: &Grid) -> Grid {
@@ -687,20 +655,59 @@ mod tests {
         }
     }
 
-    /// **Filling lost dots keeps the model's own.** An answer that drew dots of
-    /// its own in the hole, half a cycle out of phase, has no plain grey: the
-    /// fill leaves it as Tone only does, where Redraw dots replaces them.
+    /// **Filling lost dots puts the model's own dots in phase, at its tone.**
+    /// An answer that drew dots of its own in the hole, half a cycle out of
+    /// phase and 6 levels dark, gets the page's dots back in phase, and their
+    /// mean over the hole is the answer's tone (Tone only's), not the table's.
     #[test]
-    fn filling_lost_dots_keeps_dots_the_model_drew() {
+    fn filling_lost_dots_redraws_the_models_dots_in_phase_at_its_tone() {
         let (w, h) = (160, 160);
         let (page, _, mask) = flat_hole_on_a_screen(square(w, h, 50, 50, 110, 110));
-        let shifted = Grid { w, h, data: (0..w * h).map(|i| page.data[(i / w) * w + (i % w + 3) % w]).collect() };
+        let shifted = Grid { w, h, data: (0..w * h).map(|i| page.data[(i / w) * w + (i % w + 3) % w] - 6.0).collect() };
         let answer = page.select(&mask.not(), &shifted);
         let all = Mask::new(w, h, true);
         let finish = |finishing| settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, finishing, false);
-        let ((filled, _), (toned, _), (redrawn, _)) = (finish(Finishing::ToneFillDots), finish(Finishing::ToneOnly), finish(Finishing::Redraw));
-        assert_eq!(filled[0].data, toned[0].data);
-        assert_ne!(redrawn[0].data, toned[0].data, "the fixture must be one a screen step changes");
+        let ((filled, report), (toned, _)) = (finish(Finishing::ToneFillDots), finish(Finishing::ToneOnly));
+        assert!(report.screen > 0, "{report:?}");
+        let core = square(w, h, 62, 62, 98, 98);
+        let mean = |g: &Grid| (0..w * h).filter(|&i| core.data[i]).map(|i| g.data[i]).sum::<f64>() / core.count() as f64;
+        let phase = |g: &Grid| (0..w * h).filter(|&i| core.data[i]).map(|i| (g.data[i] - mean(g) - (page.data[i] - 128.0)).abs()).sum::<f64>() / core.count() as f64;
+        assert!(phase(&filled[0]) < 0.3 * phase(&toned[0]), "{} against {}", phase(&filled[0]), phase(&toned[0]));
+        assert!((mean(&filled[0]) - mean(&toned[0])).abs() < 1.0, "{} against {}", mean(&filled[0]), mean(&toned[0]));
+    }
+
+    /// **Filling lost dots leaves the model's drawing.** Flat black hair and
+    /// stipple the model drew over a screen stay as Tone only left them;
+    /// plain grey beside them gets the page's dots.
+    #[test]
+    fn filling_lost_dots_keeps_flat_black_and_drawn_texture() {
+        let (w, h) = (200, 160);
+        let (page, _, mask) = flat_hole_on_a_screen(square(w, h, 40, 50, 160, 110));
+        let (black, stippled) = (square(w, h, 40, 50, 80, 110), square(w, h, 120, 50, 160, 110));
+        let answer = Grid {
+            w,
+            h,
+            data: (0..w * h)
+                .map(|i| match () {
+                    _ if black.data[i] => 0.0,
+                    // Drawn stipple at the page's mean tone: no lines to
+                    // protect, and no screen at its two frequencies.
+                    _ if stippled.data[i] => 128.0 + 60.0 * (((i as u64).wrapping_mul(2654435761) >> 7) % 1000) as f64 / 500.0 - 60.0,
+                    _ if mask.data[i] => 128.0,
+                    _ => page.data[i],
+                })
+                .collect(),
+        };
+        let all = Mask::new(w, h, true);
+        let finish = |finishing| settle_as(std::slice::from_ref(&page), std::slice::from_ref(&answer), &mask, &all, finishing, false);
+        let ((filled, _), (toned, _)) = (finish(Finishing::ToneFillDots), finish(Finishing::ToneOnly));
+        for (name, part) in [("black", square(w, h, 46, 56, 74, 104)), ("stipple", square(w, h, 126, 56, 154, 104))] {
+            let moved = (0..w * h).filter(|&i| part.data[i]).map(|i| (filled[0].data[i] - toned[0].data[i]).abs()).sum::<f64>() / part.count() as f64;
+            assert!(moved < 0.5, "{name} moved {moved} levels on average");
+        }
+        let grey = square(w, h, 90, 60, 110, 100);
+        let swing = (0..w * h).filter(|&i| grey.data[i]).map(|i| (filled[0].data[i] - 128.0).abs()).sum::<f64>() / grey.count() as f64;
+        assert!(swing > 20.0, "the plain grey got no dots: {swing}");
     }
 
     /// **Off the page is no evidence.** A black band the crop holds beyond the

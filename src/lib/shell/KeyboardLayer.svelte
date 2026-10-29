@@ -17,13 +17,11 @@
     shortcutConflicts,
   } from '../shortcuts.js'
   import { app, goLibrary, pushModal, isModalOpen } from '../state/app.svelte.js'
-  import { openWindow, togglePanel } from '../state/session.svelte.js'
+  import { openWindow, togglePanel, toggleWindowRaised } from '../state/session.svelte.js'
   import * as editorState from '../state/editor.svelte.js'
   import {
     deleteRow,
     duplicateRegion,
-    offersFinishing,
-    requestFinishingPanel,
     runMaskAction,
     runRegionMenuItem,
     stepLayerOpacity,
@@ -53,12 +51,10 @@
       const region = editorState.selectedRegion()
       if (region && !isDetected(region)) void runRegionMenuItem('retryWider', region)
     },
-    openSelectedFinishing: () => {
-      const region = editorState.selectedRegion()
-      if (!offersFinishing(region)) return
-      openWindow('layers')
-      requestFinishingPanel(/** @type {import('../api/backend.js').ApiRegion} */ (region).id)
-    },
+    // The Post-processing window, which follows the selection and says
+    // when there is nothing selected to finish again: opened, brought to the
+    // front, or closed when it is already in front.
+    toggleFinishingWindow: () => toggleWindowRaised('postprocessing'),
     stepWipe: (direction) => editorState.stepWipe(direction),
     focusNextOption: () => void focusNextOption(),
     holdOriginal: (held) => editorState.holdOriginal(held),

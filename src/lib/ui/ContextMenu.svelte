@@ -24,6 +24,9 @@
    * the thumb let go, Enter, a run of steps once it stops - goes to `onrange`.
    * The menu stays open, so the change can be seen and changed again.
    *
+   * An entry with a `hint` prints it at its end, quieter than its label: the
+   * chord of the shortcut that does the same thing, as the user has it bound.
+   *
    * No state, no strings: every label arrives translated, like the rest of the
    * vocabulary.
    *
@@ -35,7 +38,7 @@
    *     id: string,
    *     label?: string | null,
    *     items: Array<{
-   *       id: string, label: string, icon?: string, disabled?: boolean, selected?: boolean,
+   *       id: string, label: string, icon?: string, disabled?: boolean, selected?: boolean, hint?: string,
    *       range?: { min: number, max: number, step?: number, value: number, unit?: string, hint?: string, boxLabel?: string },
    *     }>,
    *   }>,
@@ -256,6 +259,7 @@
             {#if item.icon && !item.selected}<Icon name={item.icon} size={13} />{/if}
           </span>
           <span class="item-label">{item.label}</span>
+          {#if item.hint}<span class="item-hint" aria-hidden="true">{item.hint}</span>{/if}
         </button>
         {/if}
       {/each}
@@ -312,6 +316,11 @@
   .item:disabled { opacity: .4; cursor: default }
 
   .item-label { flex: 1; overflow: hidden; text-overflow: ellipsis }
+  .item-hint {
+    flex: none;
+    color: var(--t3);
+    font-size: 10.5px;
+  }
 
   /* One column for both the check and an item's own icon: an engine list and
      three plain actions share a menu, and their labels have to start at one x. */

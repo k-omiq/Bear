@@ -143,7 +143,7 @@ pub use crate::engines::model::{
     Decline, Error, ISOLATION_FEATHER, MAX_BOX, MODEL_INPUT, Rendered, TILE_HANDOFF, TILE_OVERLAP,
     TILE_STRIDE, applied_mask, plan, tile_origins, write_bound,
 };
-use crate::engines::model::{AlphaRamp, answer_mode, ceiling_for, dither_at, page_crop, commit_srgb, tiles};
+use crate::engines::model::{AlphaRamp, AnswerMemo, answer_mode, ceiling_for, dither_at, f32_bytes, input_digest, page_crop, commit_srgb, tiles};
 use crate::engines::postprocess::{Choice, Report};
 use crate::engines::render::{Preprocessing, ToneReport, ToneSite, crop_opacity, crop_samples, tone_grids};
 use crate::mask::Rect;
@@ -258,6 +258,9 @@ pub struct Inpainter {
     /// This session's row in [`crate::registry`], which goes when the session
     /// does. Read through [`Inpainter::spent`].
     lease: crate::registry::Lease,
+    /// The last few tiles' answers, by their input: a change of a result's
+    /// finishing renders the region again without running the model again.
+    answers: AnswerMemo<Vec<f32>>,
 }
 
 impl Inpainter {
@@ -271,7 +274,7 @@ impl Inpainter {
             crate::registry::Device::accelerator(selection.accelerator),
             Some("LaMa Manga".into()),
         );
-        Ok(Inpainter { session, selection, lease })
+        Ok(Inpainter { session, selection, lease, answers: AnswerMemo::new() })
     }
 
     /// Whether the holder should give this session back at its next safe
@@ -428,7 +431,7 @@ impl Inpainter {
                 }
             }
 
-            let out = self.run(image, model_mask)?;
+            let out = self.answer(image, model_mask)?;
             ran += 1;
 
             // The answer's drift, learned on the ring outside the applied mask
@@ -531,6 +534,18 @@ impl Inpainter {
         }
 
         Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran, tone, matched: matched.map(|(_, report)| report) })
+    }
+
+    /// The model's answer to one tile: the one it gave this same input
+    /// before, or a run.
+    fn answer(&mut self, image: Vec<f32>, mask: Vec<f32>) -> Result<Vec<f32>, Error> {
+        let key = input_digest(&[&f32_bytes(&image), &f32_bytes(&mask)]);
+        if let Some(out) = self.answers.get(&key) {
+            return Ok(out);
+        }
+        let out = self.run(image, mask)?;
+        self.answers.put(key, out.clone());
+        Ok(out)
     }
 
     fn run(&mut self, image: Vec<f32>, mask: Vec<f32>) -> Result<Vec<f32>, Error> {

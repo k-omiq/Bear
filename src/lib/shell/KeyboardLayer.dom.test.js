@@ -33,8 +33,8 @@ import { app } from '../state/app.svelte.js'
 import { editor } from '../state/editor.svelte.js'
 import { draft } from '../editor/draft.svelte.js'
 import { applySelection } from '../editor/retouch.svelte.js'
-import { finishingRequest, runMaskAction, runRegionMenuItem, stepLayerOpacity } from '../editor/maskactions.svelte.js'
-import { session } from '../state/session.svelte.js'
+import { runMaskAction, runRegionMenuItem, stepLayerOpacity } from '../editor/maskactions.svelte.js'
+import { raiseWindow, session } from '../state/session.svelte.js'
 
 /** @param {string} key @param {Object} [extra] */
 function press(key, extra = {}) {
@@ -91,25 +91,30 @@ describe('the keyboard layer', () => {
     expect(runRegionMenuItem).toHaveBeenLastCalledWith('retryWider', state.region)
   })
 
-  it('asks for the selected cleaned layer\'s Post-processing on Cmd+P, the Layers window opened, and for nothing else', () => {
-    finishingRequest.id = null
-    const wasOpen = session.windows.layers.open
-    session.windows.layers.open = false
-    press('p', { metaKey: true })
-    expect(finishingRequest.id).toBe(null)
-    state.region = { id: 'r1', outcome: 'detected', detected: true, mask: null }
-    press('p', { metaKey: true })
-    expect(finishingRequest.id).toBe(null)
-    state.region = { id: 'r2', outcome: 'cleaned', mask: { id: 'm2', provenance: { engine: 'paint' } } }
-    press('p', { metaKey: true })
-    expect(finishingRequest.id).toBe(null)
-    expect(session.windows.layers.open).toBe(false)
-    state.region = { id: 'r3', outcome: 'cleaned', mask: { id: 'm3', provenance: { engine: 'flux' } } }
-    press('p', { metaKey: true })
-    expect(finishingRequest.id).toBe('r3')
-    expect(session.windows.layers.open).toBe(true)
-    finishingRequest.id = null
-    session.windows.layers.open = wasOpen
+  it('opens the Post-processing window on Cmd+P with or without a layer, brings it forward, and closes it when in front', () => {
+    const was = { open: session.windows.postprocessing.open, stacking: { ...session.stacking } }
+    try {
+      session.windows.postprocessing.open = false
+      press('p', { metaKey: true })
+      expect(session.windows.postprocessing.open).toBe(true)
+      expect(session.stacking.postprocessing).toBe(Math.max(...Object.values(session.stacking)))
+      // Another window raised over it: the chord brings it forward, open.
+      raiseWindow('layers')
+      press('p', { metaKey: true })
+      expect(session.windows.postprocessing.open).toBe(true)
+      expect(session.stacking.postprocessing).toBe(Math.max(...Object.values(session.stacking)))
+      // In front: the chord closes it.
+      press('p', { metaKey: true })
+      expect(session.windows.postprocessing.open).toBe(false)
+      // No row action runs for it, selected layer or not.
+      state.region = { id: 'r3', outcome: 'cleaned', mask: { id: 'm3', provenance: { engine: 'flux' } } }
+      press('p', { metaKey: true })
+      expect(session.windows.postprocessing.open).toBe(true)
+      expect(runRegionMenuItem).not.toHaveBeenCalled()
+    } finally {
+      session.windows.postprocessing.open = was.open
+      session.stacking = was.stacking
+    }
   })
 
   it('applies a held selection of the tool that is out on Cmd+Enter, before anything else', () => {

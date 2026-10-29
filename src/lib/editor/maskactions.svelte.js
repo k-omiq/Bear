@@ -45,6 +45,7 @@ import { isRegionCopy, layerOf, sameLayer, sanitizeLayer } from '../model/layers
 import { heldStartsOutside } from '../model/review.js'
 import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
 import { notify } from '../state/app.svelte.js'
+import { openWindow } from '../state/session.svelte.js'
 import {
   adoptBackendHistory,
   applyDetectionPadding,
@@ -660,11 +661,17 @@ export async function rejectResult(region) {
 const rejecting = new Set()
 
 /**
- * Whether a layer is a cleaned result whose post-processing the Layers row
- * offers to change: a mask an engine made, not a detection, a paint stroke or
- * a clone. Whether it can be changed is the backend's answer
- * (`regionFinishingPreviews`): only a cloud result kept its answer, and the
- * panel says so for the rest.
+ * Whether a layer is a cleaned result whose post-processing is offered to be
+ * changed (its Layers row's button, the region menu's Post-processing…): a
+ * mask an engine made, not a detection, a paint stroke or a clone. Whether
+ * it can be changed is the backend's answer (`regionFinishingPreviews`). A
+ * cloud result is finished again from the answer its attempt kept. A LaMa
+ * or FLUX result cleaned on this computer gets previews too: the backend
+ * runs the model again from a short in-memory cache of its answer, so the
+ * first previews of such a layer can take a model run (a few seconds for
+ * LaMa, longer for FLUX). Fills and anything the backend cannot finish
+ * again get a line in the Post-processing window saying why
+ * (`FinishingPanel`).
  *
  * @param {import('../api/backend.js').ApiRegion|null|undefined} region
  * @returns {boolean}
@@ -675,17 +682,17 @@ export function offersFinishing(region) {
 }
 
 /**
- * A Post-processing panel asked for from outside its row (`⌘P`,
- * `KeyboardLayer`): the region whose row opens it. The Layers list expands
- * that row and the row opens its panel and clears this; a row the list
- * cannot show clears it too, so a request never waits to surprise a later
- * expand.
+ * Show a layer's post-processing: select it, and open the Post-processing
+ * window, which follows the selection (`PostProcessingWindow`), and bring it
+ * to the front. The route of the Layers row's button and of the region
+ * menu's Post-processing…; the shortcut toggles the window instead
+ * (`KeyboardLayer`).
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
  */
-export const finishingRequest = $state({ /** @type {string|null} */ id: null })
-
-/** @param {string} regionId */
-export function requestFinishingPanel(regionId) {
-  finishingRequest.id = regionId
+export function openFinishingWindow(region) {
+  select(region.id)
+  openWindow('postprocessing')
 }
 
 /**
@@ -714,12 +721,14 @@ export function finishingRefusalKey(error) {
   if (/\brefinish_no_result\b/.test(text)) return 'masks.finishing.unavailable.noResult'
   if (/\brefinish_page_changed\b/.test(text)) return 'masks.finishing.unavailable.pageChanged'
   if (/\brefinish_unsupported\b/.test(text)) return 'masks.finishing.unavailable.unsupported'
+  if (/\brefinish_model_changed\b/.test(text)) return 'masks.finishing.unavailable.modelChanged'
   return 'masks.finishing.applyFailed'
 }
 
 /**
- * Finish a cloud result again by another post-processing method, from the
- * answer its attempt kept: no request, no GPU.
+ * Finish a result again by another post-processing method, from the answer
+ * the backend kept: a cloud attempt's saved answer (no request, no GPU), or
+ * a local model's cached one.
  *
  * **Nothing is recorded here.** The backend replaces the patch and writes the
  * undo step under one lock (`refinish.rs#apply_at`), as `rejectResult` does,
@@ -1476,6 +1485,9 @@ export function showOnPage(region) {
  * controls, and it takes exactly the same calls they do. A menu that grew its
  * own idea of what Delete means is the defect `deleteRow` exists to prevent.
  *
+ * Post-processing… opens the Post-processing window on the layer, as the
+ * row's own button does (`openFinishingWindow`).
+ *
  * Clean with on a detected region cleans it for the first time, with the
  * model picked: a local one here, Cloud on the cloud GPU. On a cleaned one it
  * replaces the layer, as the row's picker does. Text type is a detected
@@ -1492,6 +1504,10 @@ export async function runRegionMenuItem(id, region) {
   if (id === 'retry') return rerunMask(region, 'retry')
   if (id === 'retryWider') return rerunMask(region, 'retryWider')
   if (id === 'reject') return rejectResult(region)
+  if (id === 'finishing') {
+    openFinishingWindow(region)
+    return true
+  }
   if (id === 'delete') return deleteRow(region)
   if (id === 'duplicate') return duplicateRegion(region)
   if (id === 'approveMask') return approveHeldMask(region)

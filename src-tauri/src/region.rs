@@ -796,11 +796,14 @@ impl Bench {
     ///
     /// The tone report is the one the composite aligned the answer by
     /// (`PreparedRender::composite`), for the patch's provenance, which
-    /// records it the way a cloud render's attach does.
+    /// records it the way a cloud render's attach does. With a `finishing`
+    /// the answer is finished by it instead, as a LaMa tile's is, and the
+    /// report is in the made patch's `matched`.
     fn flux(
         &mut self,
         page: &Raster,
         fitted: &Fitted,
+        finishing: Option<cleaner_core::engines::postprocess::Choice>,
     ) -> Result<(run::Made, quality::Assessment, Option<ToneReport>), &'static str> {
         let env_var = std::env::var("MANGA_CLEANER_SIDECAR").ok();
         let explicit = self
@@ -843,7 +846,7 @@ impl Bench {
             self.flux_key = Some(key);
         }
         let inpainter = self.flux.as_mut().expect("just opened");
-        let rendered = inpainter.render(page, fitted).map_err(flux_reason)?;
+        let rendered = inpainter.render_with(page, fitted, finishing).map_err(flux_reason)?;
         let tone = rendered.tone;
         let made = run::Made {
             engine: Engine::Flux,
@@ -881,6 +884,53 @@ impl Drop for Bench {
         // reading goes back (nothing here can interrupt the edit that is
         // running).
         cleaner_core::residency::sweep();
+    }
+}
+
+/// This computer's models, opened as an edit opens them, for a change of a
+/// local result's finishing (`inference::refinish`): the region rendered again
+/// by the model that made it and finished by the method picked. Each session
+/// keeps what it answered last ([`cleaner_core::engines::model::AnswerMemo`]),
+/// so a preview of every finishing costs one model run, and the pick after it
+/// none, while the session stays loaded.
+pub(crate) struct LocalModels(Bench);
+
+impl LocalModels {
+    pub(crate) fn open(app: &tauri::AppHandle) -> LocalModels {
+        LocalModels(Bench::open(app))
+    }
+
+    /// The model a FLUX render on this computer runs now, as [`Bench::flux`]
+    /// picks it.
+    pub(crate) fn flux_model(&self) -> &str {
+        self.0.flux_model.as_deref().filter(|s| !s.is_empty()).unwrap_or(FLUX_MODEL)
+    }
+
+    /// `fitted` on `page` rendered by `engine`, LaMa or FLUX on this computer,
+    /// and finished by `finishing`. A refusal is a `decline.reason.*` key, as
+    /// an edit's is.
+    pub(crate) fn render(
+        &mut self,
+        engine: Engine,
+        page: &Raster,
+        fitted: &Fitted,
+        finishing: cleaner_core::engines::postprocess::Choice,
+    ) -> Result<run::Made, &'static str> {
+        match engine {
+            Engine::Flux => self.0.flux(page, fitted, Some(finishing)).map(|(made, _, _)| made),
+            Engine::Lama => {
+                if !cleaner_core::engines::lama::applies(page) {
+                    return Err("decline.reason.rungUnavailable");
+                }
+                self.0.rung2.finishing = Some(finishing);
+                match run::render_rung(&mut self.0.rung2, Engine::Lama, page, fitted) {
+                    Ok(run::Rendered::Made(made)) => Ok(*made),
+                    Ok(run::Rendered::Refused(reason)) => Err(reason),
+                    Err(detail) => Err(engine_fault(&detail)),
+                }
+            }
+            _ => Err("decline.reason.rungUnavailable"),
+        }
     }
 }
 
@@ -1532,7 +1582,9 @@ fn edit_with_bench_render(
                     Err(detail) => return Ok(Outcome::Refused(engine_fault(&detail))),
                 }
             }
-            Choice::Exact(Engine::Flux) => match bench.flux(page, &fitted) {
+            // The finishing a run gives this computer's models: FLUX here is
+            // finished as LaMa is.
+            Choice::Exact(Engine::Flux) => match bench.flux(page, &fitted, bench.rung2.finishing) {
                 Ok((made, verdict, aligned)) => {
                     tone = aligned;
                     (made, verdict)

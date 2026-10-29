@@ -75,7 +75,8 @@
 //! job. Everything else about the page's mode, depth, palette and profile
 //! never leaves this process.
 
-use crate::engines::model::{Decline, Error, Rendered};
+use crate::engines::model::{AnswerMemo, Decline, Error, Rendered, input_digest};
+use crate::engines::postprocess::Choice;
 use crate::fit::Fitted;
 use crate::image::Raster;
 use crate::sidecar::hardware::{self, Budget, Demand, Verdict};
@@ -197,6 +198,10 @@ pub use crate::engines::render::{
 pub struct Inpainter {
     sidecar: Sidecar,
     model: String,
+    /// The last few answers, by the crop and hint they were asked for: a
+    /// change of a result's finishing renders it again without a request.
+    /// Its width, height and RGB8 samples.
+    answers: AnswerMemo<(u32, u32, Vec<u8>)>,
 }
 
 impl Inpainter {
@@ -244,6 +249,7 @@ impl Inpainter {
         Ok(Inpainter {
             sidecar,
             model: model.to_owned(),
+            answers: AnswerMemo::new(),
         })
     }
 
@@ -256,6 +262,7 @@ impl Inpainter {
         Inpainter {
             sidecar,
             model: model.to_owned(),
+            answers: AnswerMemo::new(),
         }
     }
 
@@ -291,7 +298,24 @@ impl Inpainter {
     /// it asks of the process at the other end is
     /// [`crate::sidecar::Floor`]'s to record.
     pub fn render(&mut self, page: &Raster, fitted: &Fitted) -> Result<Rendered, Error> {
-        let prepared = PreparedRender::prepare(page, fitted)?;
+        self.render_with(page, fitted, None)
+    }
+
+    /// [`Inpainter::render`], with the answer finished by `finishing`
+    /// ([`PreparedRender::set_finishing`]) in place of the tone alignment.
+    /// `None` aligns tone, as [`Inpainter::render`] does.
+    ///
+    /// The same crop and hint asked again get the answer they got before
+    /// ([`AnswerMemo`]), with no request: the model and its sampling are this
+    /// session's and fixed, so the input is the whole of what it answered.
+    pub fn render_with(&mut self, page: &Raster, fitted: &Fitted, finishing: Option<Choice>) -> Result<Rendered, Error> {
+        let mut prepared = PreparedRender::prepare(page, fitted)?;
+        prepared.set_finishing(finishing);
+        let (w, h) = (prepared.crop().w, prepared.crop().h);
+        let key = input_digest(&[&w.to_le_bytes(), &h.to_le_bytes(), prepared.image_rgb8(), prepared.hint_gray8()]);
+        if let Some((width, height, edited)) = self.answers.get(&key) {
+            return prepared.composite(&GeneratedCrop::new(width, height, &edited));
+        }
 
         let request = RenderRequest {
             region: format!(
@@ -328,8 +352,9 @@ impl Inpainter {
             .ok_or_else(|| Error::Run("the sidecar's reply does not decode".to_owned()))?;
         drop(request);
 
-        let generated = GeneratedCrop::new(reply.image.width, reply.image.height, &edited);
-        prepared.composite(&generated)
+        let rendered = prepared.composite(&GeneratedCrop::new(reply.image.width, reply.image.height, &edited))?;
+        self.answers.put(key, (reply.image.width, reply.image.height, edited));
+        Ok(rendered)
     }
 }
 
@@ -874,8 +899,9 @@ mod tests {
 
         let mut second: Inpainter =
             crate::residency::checkout(&key).expect("the child was killed with the click");
+        // Another region: the same one again is answered from the memo.
         second
-            .render(&page, &fitted)
+            .render(&page, &fitted_over(&page, Rect::new(60, 80, 50, 30)))
             .expect("the second edit declined");
         assert_eq!(
             fake.opens.load(Ordering::Relaxed),
@@ -898,10 +924,35 @@ mod tests {
         let fitted = fitted_over(&page, Rect::new(240, 300, 60, 40));
         let mut inpainter = fake.inpainter(generous());
         inpainter.render(&page, &fitted).unwrap();
-        inpainter.render(&page, &fitted).unwrap();
+        inpainter.render(&page, &fitted_over(&page, Rect::new(60, 80, 50, 30))).unwrap();
         let floor = inpainter.floor();
         assert_eq!(floor.regions, 2);
         assert_eq!(floor.ratchet(), Some(0), "a flat sidecar does not ratchet");
+    }
+
+    /// **The same crop asked again is answered without a request**, finished
+    /// by whatever finishing the second asks for: what a change of a local
+    /// result's finishing previews every method with. Another crop is a
+    /// request of its own.
+    #[test]
+    fn the_same_crop_asked_again_sends_no_second_request() {
+        use crate::engines::postprocess::Finishing;
+        let fake = Fake::start(Behaviour::Blacken);
+        let page = gray_page(600, 700, 200);
+        let fitted = fitted_over(&page, Rect::new(240, 300, 60, 40));
+        let mut inpainter = fake.inpainter(generous());
+        let first = inpainter.render(&page, &fitted).unwrap();
+        let sent = fake.requests.load(Ordering::Relaxed);
+        let again = inpainter.render(&page, &fitted).unwrap();
+        assert_eq!(fake.requests.load(Ordering::Relaxed), sent, "the same crop was sent twice");
+        assert_eq!((first.pixels.data, first.tone.is_some()), (again.pixels.data, again.tone.is_some()));
+        let choice = Choice { finishing: Finishing::AsIs, grayscale: false };
+        let finished = inpainter.render_with(&page, &fitted, Some(choice)).unwrap();
+        assert_eq!(fake.requests.load(Ordering::Relaxed), sent);
+        assert_eq!(finished.matched.map(|report| report.choice), Some(choice));
+        assert!(finished.tone.is_none(), "a finishing takes the place of the tone alignment");
+        inpainter.render(&page, &fitted_over(&page, Rect::new(60, 80, 50, 30))).unwrap();
+        assert_eq!(fake.requests.load(Ordering::Relaxed), sent + 1);
     }
 
     /* -- the shared vocabulary ----------------------------------------- */

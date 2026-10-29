@@ -39,6 +39,10 @@
 //! [`Reach`] picks how far step 5 goes: off (bench 5's table alone), the
 //! direct copy (bench 7, the default), or the copy and then hops from copied
 //! pixels deeper into a wide mask (bench 7's chain, which drew streaks there).
+//! [`Over`] picks which mask pixels it takes: all of them, or only where the
+//! answer is a screen or plain grey, its drawing kept, with the redraw's mean
+//! and dot strength matched to the answer's tone and the page's dots
+//! (Tone only, fill lost dots).
 //!
 //! Measured against synthetic lettering over real halftone pages
 //! (docs/research/flux3-klein-5_6b.md, benches 5 and 7).
@@ -61,6 +65,28 @@ pub const PHASE_TOL: f64 = 0.05;
 pub const MIN_COPY: f64 = 0.8;
 /// A copy takes no source whose tone is further than this from the answer's.
 pub const MAX_TONE_GAP: f64 = 16.0;
+/// [`Over::Screen`]: the answer is drawing, and stays, where its fine detail
+/// is under [`MIN_DETAIL`] RMS and its tone outside this range (flat black or
+/// paper), or where it has detail and less than [`SCREEN_SHARE`] of it is at
+/// the page's two frequencies within [`SCREEN_SIGMA`] px (hatching, drawn
+/// texture). A model's own dots break phase every few cells (Qwen on a real
+/// page: a tenth of them under 0.37 at 3 px), and the window and share are
+/// looser than the page's [`EVIDENCE_SHARE`] for it.
+const FLAT_TONE: std::ops::Range<f64> = 10.0..245.0;
+const SCREEN_SIGMA: f64 = 3.0;
+const SCREEN_SHARE: f64 = 0.2;
+/// Drawing kept is at least twice this wide, in px.
+const MIN_DRAWING: usize = 3;
+/// [`Over::Screen`] matches the redraw's mean to the answer's tone over this
+/// many times the screen's tone blur.
+const CALIBRATE: f64 = 2.0;
+/// ... and its swing about that mean to the page's at the same tone, by up to
+/// this gain: phase carried into a hole is a little off, and the table's dots
+/// come out soft there. The page's swing is measured in this many bands of
+/// tone, each on at least this many pixels.
+const MAX_SWING_GAIN: f64 = 3.0;
+const SPREAD_BINS: usize = 16;
+const MIN_SPREAD_PIXELS: f64 = 64.0;
 /// Shifts tried, the closest in phase in each of [`SHIFT_BANDS`] bands of
 /// length.
 const SHIFTS_TRIED: usize = 64;
@@ -125,10 +151,25 @@ pub(crate) enum Reach {
     Hops,
 }
 
+/// Which of a screen region's mask pixels the redraw takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Over {
+    /// Every one (benches 5 and 7).
+    All,
+    /// Those where the answer is a screen of its own or plain grey: a
+    /// model's dots are fuzzy and out of phase, and its tone is right. Flat
+    /// black, paper and drawn texture in the answer stay as they came, and
+    /// the redraw's dots average the answer's tone exactly
+    /// ([`CALIBRATE`]): the table's mean at a tone is a few levels off it,
+    /// which shows the mask's outline.
+    Screen,
+}
+
 /// The redrawn screen over the crop and the weight to blend it at (zero where
 /// nothing was redrawn), or `None` where no region of the mask lies on a
 /// screen. `fade` is the contour fade every post-processing step uses.
-pub(crate) fn redraw(page: &Grid, answer: &Grid, mask: &Mask, protected: &Mask, inside: &Mask, fade: &Grid, reach: Reach) -> Option<(Grid, Grid)> {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn redraw(page: &Grid, answer: &Grid, mask: &Mask, protected: &Mask, inside: &Mask, fade: &Grid, reach: Reach, over: Over) -> Option<(Grid, Grid)> {
     let (w, h) = (page.w, page.h);
     let n = w * h;
     let grown = mask.dilate(2);
@@ -156,7 +197,28 @@ pub(crate) fn redraw(page: &Grid, answer: &Grid, mask: &Mask, protected: &Mask, 
         };
         let tone = masked_blur(&win.grid(answer), &region, screen.tone_sigma).0;
         let hole = win.mask(|i| label[i] == r && mask.data[i]);
+        let kept = match over {
+            Over::All => Grid::new(win.w, win.h, 1.0),
+            Over::Screen => screen.redrawable(&win.grid(answer), &hole, &tone),
+        };
         let copied = if reach == Reach::Table { None } else { screen.copy(&shown, &known, &hole, &tone, reach == Reach::Hops) };
+        // The table's dots at the target tone, over the hole.
+        let mut drawn = Grid::new(win.w, win.h, 0.0);
+        for j in (0..win.w * win.h).filter(|&j| hole.data[j]) {
+            drawn.data[j] = screen.table.at(screen.u.data[j], screen.v.data[j], tone.data[j]);
+        }
+        if over == Over::Screen {
+            let sigma = CALIBRATE * screen.tone_sigma;
+            let mean = masked_blur(&drawn, &hole, sigma).0;
+            let want = masked_blur(&tone, &hole, sigma).0;
+            let spread = screen.spread(&shown, &known, sigma);
+            let swing = Grid { w: win.w, h: win.h, data: drawn.data.iter().zip(&mean.data).map(|(d, m)| (d - m) * (d - m)).collect() };
+            let swing = masked_blur(&swing, &hole, sigma).0;
+            for j in (0..win.w * win.h).filter(|&j| hole.data[j]) {
+                let gain = (spread(want.data[j]) / swing.data[j].sqrt().max(1e-6)).clamp(1.0, MAX_SWING_GAIN);
+                drawn.data[j] = want.data[j] + (drawn.data[j] - mean.data[j]) * gain;
+            }
+        }
         for y in 0..win.h {
             for x in 0..win.w {
                 let (j, i) = (y * win.w + x, (y + win.y0) * w + x + win.x0);
@@ -164,17 +226,17 @@ pub(crate) fn redraw(page: &Grid, answer: &Grid, mask: &Mask, protected: &Mask, 
                     continue;
                 }
                 if let Some((copy, done)) = &copied {
-                    if done.data[j] && fade.data[i] > 0.0 {
+                    if done.data[j] && fade.data[i] * kept.data[j] > 0.0 {
                         value.data[i] = copy.data[j];
-                        weight.data[i] = fade.data[i];
+                        weight.data[i] = fade.data[i] * kept.data[j];
                         continue;
                     }
                 }
                 let t = tone.data[j];
                 let off = (screen.table.t0 - t).max(t - screen.table.t1).max(0.0);
-                let s = (1.0 - off / TONE_MARGIN).clamp(0.0, 1.0) * fade.data[i];
+                let s = (1.0 - off / TONE_MARGIN).clamp(0.0, 1.0) * kept.data[j] * fade.data[i];
                 if s > 0.0 {
-                    value.data[i] = screen.table.at(screen.u.data[j], screen.v.data[j], t);
+                    value.data[i] = drawn.data[j];
                     weight.data[i] = s;
                 }
             }
@@ -268,6 +330,63 @@ impl Screen {
         let tone = masked_blur(page, known, tone_sigma).0;
         let table = Table::build(&pixels, &phases[a], &phases[b], &tone, page, bins(period));
         Some(Screen { f: freqs[a], g: freqs[b], u: phases[a].clone(), v: phases[b].clone(), table, tone_sigma, detail })
+    }
+
+    /// The page's swing about its local mean (over `sigma`) on `known`, RMS,
+    /// as a function of that mean: how strong this screen's dots are at a
+    /// tone.
+    fn spread(&self, page: &Grid, known: &Mask, sigma: f64) -> impl Fn(f64) -> f64 {
+        let mean = masked_blur(page, known, sigma).0;
+        let (mut sum, mut count) = ([0.0; SPREAD_BINS], [0.0; SPREAD_BINS]);
+        let bin = |t: f64| ((t / 256.0 * SPREAD_BINS as f64) as usize).min(SPREAD_BINS - 1);
+        for i in (0..page.data.len()).filter(|&i| known.data[i]) {
+            let b = bin(mean.data[i]);
+            sum[b] += (page.data[i] - mean.data[i]).powi(2);
+            count[b] += 1.0;
+        }
+        let rms: Vec<Option<f64>> = (0..SPREAD_BINS).map(|b| (count[b] >= MIN_SPREAD_PIXELS).then(|| (sum[b] / count[b]).sqrt())).collect();
+        move |t: f64| {
+            // Linear between bin centres; a tone no bin saw has no target, and
+            // the gain stays 1.
+            let x = (t / 256.0 * SPREAD_BINS as f64 - 0.5).clamp(0.0, (SPREAD_BINS - 1) as f64);
+            let (b, f) = (x.floor() as usize, x - x.floor());
+            match (rms[b], rms[(b + 1).min(SPREAD_BINS - 1)]) {
+                (Some(a), Some(c)) => a * (1.0 - f) + c * f,
+                (Some(a), None) if f < 0.5 => a,
+                (None, Some(c)) if f >= 0.5 => c,
+                _ => 0.0,
+            }
+        }
+    }
+
+    /// [`Over::Screen`]'s weight over `hole`: 1 where `answer` (at `tone`)
+    /// is plain grey or a screen at this one's frequencies, 0 where it is
+    /// flat black, paper or drawing, softened at the edge.
+    fn redrawable(&self, answer: &Grid, hole: &Mask, tone: &Grid) -> Grid {
+        let (w, h) = (answer.w, answer.h);
+        let base = masked_blur(answer, hole, 1.5).0;
+        let detail = Grid { w, h, data: (0..w * h).map(|i| if hole.data[i] { answer.data[i] - base.data[i] } else { 0.0 }).collect() };
+        let power = Grid { w, h, data: detail.data.iter().map(|v| v * v).collect() };
+        let (den, power) = (gaussian(&hole.as_grid(), SCREEN_SIGMA), gaussian(&power, SCREEN_SIGMA));
+        let energy = |f: [f64; 2]| {
+            let (re, im) = quadrature(&detail, hole, f, SCREEN_SIGMA);
+            (0..w * h).map(|i| 2.0 * (re.data[i].powi(2) + im.data[i].powi(2)) / den.data[i].max(1e-6).powi(2)).collect::<Vec<f64>>()
+        };
+        let (ef, eg) = (energy(self.f), energy(self.g));
+        let drawing = Mask {
+            w,
+            h,
+            data: (0..w * h)
+                .map(|i| {
+                    let p = power.data[i] / den.data[i].max(1e-6);
+                    hole.data[i] && if p <= MIN_DETAIL * MIN_DETAIL { !FLAT_TONE.contains(&tone.data[i]) } else { ef[i] + eg[i] < SCREEN_SHARE * p }
+                })
+                .collect(),
+        };
+        // Drawing thinner than this is a smear the model left, a line it
+        // meant is a contour and protected already.
+        let drawing = drawing.erode(MIN_DRAWING).dilate(MIN_DRAWING);
+        gaussian(&drawing.not().as_grid(), 1.5)
     }
 
     /// Steps 4 and 5 over the region's `hole`: the page's pixels copied in,
@@ -784,7 +903,7 @@ mod tests {
             (d.iter().map(|v| v * v).sum::<f64>() / d.len() as f64).sqrt()
         };
         for reach in [Reach::Table, Reach::Copy, Reach::Hops] {
-            let (value, weight) = redraw(&page, &answer, &mask, &none, &all, &Grid::new(w, h, 1.0), reach).expect("a screen");
+            let (value, weight) = redraw(&page, &answer, &mask, &none, &all, &Grid::new(w, h, 1.0), reach, Over::All).expect("a screen");
             let out = Grid { w, h, data: (0..w * h).map(|i| answer.data[i] * (1.0 - weight.data[i]) + value.data[i] * weight.data[i]).collect() };
             assert!(error(&out) < 0.3 * error(&answer), "{reach:?}: {} against {}", error(&out), error(&answer));
             // The page's own dots, copied: as crisp as the page's, not an
@@ -824,7 +943,7 @@ mod tests {
         let none = Mask::new(w, h, false);
         let all = Mask::new(w, h, true);
         for reach in [Reach::Table, Reach::Copy, Reach::Hops] {
-            assert!(redraw(&page, &answer, &mask, &none, &all, &Grid::new(w, h, 1.0), reach).is_none(), "{reach:?}");
+            assert!(redraw(&page, &answer, &mask, &none, &all, &Grid::new(w, h, 1.0), reach, Over::All).is_none(), "{reach:?}");
         }
     }
 
@@ -840,7 +959,7 @@ mod tests {
         let answer = page.select(&mask.not(), &gaussian(&page, 3.0));
         let none = Mask::new(w, h, false);
         let all = Mask::new(w, h, true);
-        let (value, weight) = redraw(&page, &answer, &mask, &none, &all, &Grid::new(w, h, 1.0), Reach::Copy).expect("a screen");
+        let (value, weight) = redraw(&page, &answer, &mask, &none, &all, &Grid::new(w, h, 1.0), Reach::Copy, Over::All).expect("a screen");
         let out = Grid { w, h, data: (0..w * h).map(|i| answer.data[i] * (1.0 - weight.data[i]) + value.data[i] * weight.data[i]).collect() };
         let core = square(w, h, 36, 66, 94, 126);
         let error = |g: &Grid| (0..w * h).filter(|&i| core.data[i]).map(|i| (g.data[i] - page.data[i]).abs()).sum::<f64>() / core.count() as f64;
@@ -855,7 +974,7 @@ mod tests {
         let all = Mask::new(w, h, true);
         let fade = Grid::new(w, h, 1.0);
         let paper = Grid::new(w, h, 250.0);
-        assert!(redraw(&paper, &paper, &mask, &none, &all, &fade, Reach::Copy).is_none());
+        assert!(redraw(&paper, &paper, &mask, &none, &all, &fade, Reach::Copy, Over::All).is_none());
         // Deterministic noise: no lattice in it.
         let mut seed = 12345u64;
         let noise = Grid {
@@ -868,7 +987,7 @@ mod tests {
                 })
                 .collect(),
         };
-        assert!(redraw(&noise, &noise, &mask, &none, &all, &fade, Reach::Copy).is_none());
+        assert!(redraw(&noise, &noise, &mask, &none, &all, &fade, Reach::Copy, Over::All).is_none());
     }
 
     /// **A region needs 256 pixels of screen evidence.** On a clean screen

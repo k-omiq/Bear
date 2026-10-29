@@ -4,7 +4,7 @@
   import { cloud, cloudEntries, cloudUsable, pickCloudChoice } from '../state/cloud.svelte.js'
   import { session } from '../state/session.svelte.js'
   import { cloudProfileLabel, currentCloudModelId, engineModelLabel } from '../model/model-names.js'
-  import { regionPageBusy, requestDetectedMaskPadding, runRegionMenuItem, shownMaskPadding } from './maskactions.svelte.js'
+  import { offersFinishing, regionPageBusy, requestDetectedMaskPadding, runRegionMenuItem, shownMaskPadding } from './maskactions.svelte.js'
   import { editor } from '../state/editor.svelte.js'
   import { shortcutHint } from '../shortcuts.js'
   import { ContextMenu } from '../ui/index.js'
@@ -29,6 +29,11 @@
    * stays open. It shows the region as it is now, not as it was when the menu
    * opened, so a change saved behind it is never shown stale.
    *
+   * A cleaned layer a model made gets Post-processing…, which selects it and
+   * opens the Post-processing window on it, with the chord that does the
+   * same printed beside it as the user has it bound. The Screentone fill is
+   * among the engines only while Settings > Beta offers it.
+   *
    * Cloud is among the engines while a cloud endpoint is ready
    * (`state/cloud.svelte.js#cloudUsable`), and left out otherwise. Picking it,
    * or Try again on a cloud mask, asks for consent before anything is sent.
@@ -50,7 +55,12 @@
 
   const sections = $derived(
     at
-      ? regionMenuSections(at.region, { engines: capabilities.engines, cloud: cloudUsable() }).map((section) => ({
+      ? regionMenuSections(at.region, {
+        engines: capabilities.engines,
+        cloud: cloudUsable(),
+        beta: session.betaTools,
+        finishing: offersFinishing(at.region),
+      }).map((section) => ({
           id: section.id,
           label: section.labelKey ? t(section.labelKey) : null,
           items: section.items.flatMap((item) => {
@@ -65,6 +75,8 @@
                 : t(item.labelKey),
               icon: item.icon,
               selected: item.selected,
+              // Read through `session.shortcuts` so a rebinding redraws it.
+              hint: item.shortcut && session.shortcuts ? shortcutHint([item.shortcut]) || undefined : undefined,
               ...(item.range ? {
                 range: { ...item.range, value: live ? shownMaskPadding(live) : item.range.value, hint: shortcutHint(['mask.paddingDown', 'mask.paddingUp']),
                   boxLabel: t('tools.param.exactValue', { name: t(item.labelKey) }) },

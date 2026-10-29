@@ -7,6 +7,7 @@
     openEditorChapter,
     closeEditorChapter,
     consumeResume,
+    retireBetaTools,
     setScroll,
   } from '../state/editor.svelte.js'
   import { t } from '../i18n/index.js'
@@ -18,6 +19,7 @@
   import NavPill from './NavPill.svelte'
   import PagesWindow from './PagesWindow.svelte'
   import LayersWindow from './LayersWindow.svelte'
+  import PostProcessingWindow from './PostProcessingWindow.svelte'
   import ToolBar from './ToolBar.svelte'
 
   /**
@@ -25,7 +27,7 @@
    *
    * The canvas viewport is the only scroll container in the screen. The two
    * clusters, the tool rail and the two bottom pills are fixed at `z-index:40`;
-   * the two windows and the tool bar sit at `20 + rank`, so a raised one
+   * the windows and the tool bar sit at `20 + rank`, so a raised one
    * comes forward of the others but can never cover a fixed control.
    *
    * **DOM order is the tab order**, and it is deliberately not the visual
@@ -77,6 +79,13 @@
     const onresize = () => clampWindowsToViewport()
     globalThis.addEventListener?.('resize', onresize)
     return () => globalThis.removeEventListener?.('resize', onresize)
+  })
+
+  // Settings > Beta off, whether turned off just now or found off as the
+  // editor opens: the Patch tool is put away if it is out
+  // (`retireBetaTools`). Only the setting is tracked.
+  $effect(() => {
+    if (!session.betaTools) untrack(() => retireBetaTools())
   })
 
   // Teardown only: flush autosave and release the backend subscription.
@@ -164,6 +173,7 @@
 
   {#if session.windows.pages.open}<PagesWindow />{/if}
   {#if session.windows.layers.open}<LayersWindow />{/if}
+  {#if session.windows.postprocessing.open}<PostProcessingWindow />{/if}
   {#if session.windows.tool.open}<ToolBar />{/if}
 
   <ToolRail />

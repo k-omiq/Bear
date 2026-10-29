@@ -150,6 +150,29 @@ describe('sanitizeSession', () => {
     expect(sanitizeSession({}).cleanLatinText).toBe(false)
     expect(sanitizeSession({ cleanLatinText: 'true' }).cleanLatinText).toBe(false)
   })
+  it('keeps the beta tools off unless the record turned them on', async () => {
+    const { sanitizeSession } = await import('./session.svelte.js')
+    expect(sanitizeSession({}).betaTools).toBe(false)
+    expect(sanitizeSession({ betaTools: true }).betaTools).toBe(true)
+    expect(sanitizeSession({ betaTools: 'yes' }).betaTools).toBe(false)
+  })
+  it('reads a record from before the Post-processing window with it closed at its default place', async () => {
+    const { sanitizeSession } = await import('./session.svelte.js')
+    const old = {
+      windows: {
+        pages: { x: 16, y: 62, w: 248, h: 300, open: true, fold: false },
+        layers: { x: 16, y: 380, w: 248, h: 300, open: false, fold: true },
+        tool: { x: 400, y: 62, w: 560, h: null, open: true, fold: false },
+      },
+    }
+    const read = sanitizeSession(old)
+    expect(read.windows.layers).toMatchObject({ open: false, fold: true })
+    expect(read.windows.postprocessing).toMatchObject({ open: false, fold: false, w: 400 })
+    expect(typeof read.windows.postprocessing.x).toBe('number')
+    // Saved once it exists, it reads back as saved.
+    const saved = sanitizeSession({ windows: { ...old.windows, postprocessing: { x: 500, y: 90, w: 520, h: 600, open: true, fold: false } } })
+    expect(saved.windows.postprocessing).toEqual({ x: 500, y: 90, w: 520, h: 600, open: true, fold: false })
+  })
   it('preserves sidecarPath from stored session', async () => {
     const { sanitizeSession } = await import('./session.svelte.js')
     const session = sanitizeSession({ sidecarPath: '/path/to/flux' })

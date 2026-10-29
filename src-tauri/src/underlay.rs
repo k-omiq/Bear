@@ -598,6 +598,10 @@ pub(crate) fn require_footprint(
 
 pub(crate) struct CloudInput {
     pub input: Input,
+    /// The region as the preparation fitted it on `input.image`: what a model
+    /// on this computer renders from when a local result is finished again
+    /// (`inference::refinish`).
+    pub fitted: fit::Fitted,
     pub prepared: PreparedRender,
     pub crop_bounds: Rect,
     /// Map coordinates in the decoded strip window back to the anchor source.
@@ -775,6 +779,7 @@ pub(crate) fn prepare_cloud_seed(
     );
     Ok(CloudInput {
         input,
+        fitted,
         prepared,
         crop_bounds,
         source_shift,

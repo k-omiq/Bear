@@ -49,6 +49,7 @@
     shortcutLabelKey,
   } from '../shortcuts.js'
   import { writeSettingsSerialized } from '../state/settingswrite.js'
+  import { BETA_SHORTCUTS } from '../editor/tools.js'
   import { getBackend } from '../api/backend.js'
   import { readingDirection } from '../state/editor.svelte.js'
   import {
@@ -144,10 +145,12 @@
     // The bindings in force are `groupedShortcuts()`'s to know; this read is
     // what makes the sheet redraw when they change.
     void session.shortcuts
+    // A beta tool's key is listed only while Settings > Beta offers the tool.
+    const listed = (/** @type {{id: string}} */ shortcut) => session.betaTools || !BETA_SHORTCUTS.includes(shortcut.id)
     return groupedShortcuts().map((section) => ({
       group: section.group,
       headingKey: `shortcuts.group.${section.group}`,
-      rows: section.shortcuts.map((shortcut) => ({
+      rows: section.shortcuts.filter(listed).map((shortcut) => ({
         id: shortcut.id,
         label: t(shortcutLabelKey(shortcut, { readingDirection: readingDirection() })),
         keys: shortcutChord(shortcut, { apple }),

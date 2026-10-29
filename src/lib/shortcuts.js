@@ -61,7 +61,7 @@ import { pageNavControls } from './model/paging.js'
  * @property {() => void} focusNextOption - the tool bar's next slider
  * @property {(direction: number) => void} stepWipe - the original's wipe
  * @property {() => void} retrySelectedWider
- * @property {() => void} openSelectedFinishing - the selected cleaned layer's Post-processing previews, in its Layers row
+ * @property {() => void} toggleFinishingWindow - the Post-processing window, on the selected layer: opened, raised, or closed when in front
  * @property {(direction: number) => void} stepMaskPadding - the selected detection's, else the page's
  * @property {() => void} runTextCleanup - the held Patch or Gradient selection applied, else Text cleanup's run as its panel has it set
  * @property {(direction: number) => void} cycleCleanScope - Text cleanup's scope
@@ -711,10 +711,13 @@ export const SHORTCUTS = [
     run: (c) => c.retrySelectedWider(),
   },
   {
-    // The selected cleaned layer's Post-processing previews (`FinishingPanel`),
-    // opened in its Layers row as the row's own button opens them, the Layers
-    // window opened first when it is closed. A chord for the same reason as
-    // ⌘D, and ⌘P because nothing in the app prints.
+    // The Post-processing window (`PostProcessingWindow`), which shows the
+    // selected layer's previews and follows the selection: opened when it is
+    // closed, brought forward when another window covers it, and closed when
+    // it is already in front. It opens with nothing to finish selected too,
+    // and says so. A chord for the same reason as ⌘D, and ⌘P because nothing
+    // in the app prints. The id is older than the window and stays, so a
+    // rebinding the user saved still holds.
     id: 'layers.finishingSelected',
     group: 'edit',
     labelKey: 'shortcuts.edit.finishingSelected',
@@ -725,7 +728,7 @@ export const SHORTCUTS = [
     chord: ['Cmd', 'P'],
     chordFor: ({ apple }) => (apple ? ['⌘', 'P'] : ['Ctrl', 'P']),
     scope: 'editor',
-    run: (c) => c.openSelectedFinishing(),
+    run: (c) => c.toggleFinishingWindow(),
   },
 
   /* ---- zoom ------------------------------------------------------------ */

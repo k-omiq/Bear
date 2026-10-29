@@ -9,22 +9,27 @@
    * tool the control that reopens the tool window, which has no toggle in the
    * clusters - hence `data-window-toggle` on it, which is where focus goes
    * when the tool window is closed (see `FloatingWindow.svelte`).
+   *
+   * A beta tool (`tools.js#BETA_TOOLS`, the Patch tool) is on the rail only
+   * while Settings > Beta has it on, and the arrows skip what is not drawn.
    */
   import { editor, setTool } from '../state/editor.svelte.js'
-  import { TOOL_SPECS, TOOL_ICONS, toolKey } from './tools.js'
+  import { TOOL_SPECS, TOOL_ICONS, toolKey, toolOffered } from './tools.js'
+  import { session } from '../state/session.svelte.js'
   import { IconButton } from '../ui/index.js'
   import { t } from '../i18n/index.js'
 
   /** @type {HTMLElement|undefined} */
   let rail = $state()
 
-  const selected = $derived(TOOL_SPECS.findIndex((spec) => spec.id === editor.tool))
+  const specs = $derived(TOOL_SPECS.filter((spec) => toolOffered(spec.id, session.betaTools)))
+  const selected = $derived(specs.findIndex((spec) => spec.id === editor.tool))
 
   /** @param {number} index */
   function focusAt(index) {
-    const count = TOOL_SPECS.length
+    const count = specs.length
     const next = ((index % count) + count) % count
-    setTool(TOOL_SPECS[next].id)
+    setTool(specs[next].id)
     /** @type {HTMLElement[]} */
     const buttons = rail ? [...rail.querySelectorAll('button')] : []
     buttons[next]?.focus()
@@ -45,7 +50,7 @@
       case 'Home':
         claim(event); focusAt(0); break
       case 'End':
-        claim(event); focusAt(TOOL_SPECS.length - 1); break
+        claim(event); focusAt(specs.length - 1); break
       default:
     }
   }
@@ -65,7 +70,7 @@
 
 <div class="rail" aria-label={t('editor.region.tools')}>
   <div bind:this={rail} class="tools" role="radiogroup" aria-label={t('editor.region.tools')}>
-    {#each TOOL_SPECS as spec, index (spec.id)}
+    {#each specs as spec, index (spec.id)}
       <IconButton
         icon={TOOL_ICONS[spec.id]}
         label={t(spec.nameKey)}

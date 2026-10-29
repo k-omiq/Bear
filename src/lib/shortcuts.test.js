@@ -89,12 +89,13 @@ describe('matchShortcut', () => {
       expect(matchShortcut(press('d', { [modifier]: true, shiftKey: true }), editor)).toBeNull()
     }
   })
-  it('opens the selected layer\'s Post-processing with Cmd/Ctrl+P only in the editor, outside text fields and dialogs', () => {
+  it('toggles the Post-processing window with Cmd/Ctrl+P only in the editor, outside text fields and dialogs', () => {
     for (const modifier of ['metaKey', 'ctrlKey']) {
       const shortcut = matchShortcut(press('p', { [modifier]: true }), editor)
       expect(shortcut?.id).toBe('layers.finishingSelected')
+      expect(shortcut?.labelKey).toBe('shortcuts.edit.finishingSelected')
       let calls = 0
-      shortcut.run({ openSelectedFinishing: () => calls++ })
+      shortcut.run({ toggleFinishingWindow: () => calls++ })
       expect(calls).toBe(1)
       expect(matchShortcut(press('p', { [modifier]: true }), home)).toBeNull()
       expect(matchShortcut(press('p', { [modifier]: true, target: { tagName: 'INPUT', type: 'text' } }), editor)).toBeNull()

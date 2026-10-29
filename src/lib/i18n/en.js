@@ -1116,14 +1116,22 @@ export const en = {
         },
       },
     },
+    // Settings > Beta: tools still being tuned, off until turned on
+    // (`session.betaTools`, `dialogs/BetaSettings.svelte`).
+    beta: {
+      description: 'Tools that work but are still being tuned. They stay off until you turn them on here.',
+      tag: 'Beta',
+      tools: 'Patch tool and Screentone fill',
+      toolsHint: 'Shows the Patch tool on the tool rail and the Screentone fill among the engines. Off hides them; layers they already made stay as they are.',
+    },
     // Settings > Post-processing: how a cleaned patch is matched to the page
     // (`postprocess.rs#Finishing`). `option` and `hint` are keyed by
     // `model-names.js#finishingKey`.
     postprocessing: {
       description: 'How a cleaned patch is matched to the page before it is written. Changes apply to the next clean.',
       method: 'Method',
-      everyModel: 'Use for every model',
-      everyModelHint: 'Also finish Qwen, FLUX.2 Klein and LaMa results, in place of their own tone fix. Off: only FLUX 3 results are finished.',
+      everyModel: 'Use for other models too',
+      everyModelHint: 'Also finish other models\' results (Qwen, FLUX.2 Klein, LaMa, FLUX on this computer), in place of their own tone fix. Off: only FLUX 3 results are finished.',
       grayscale: 'Make colour results grey',
       grayscaleHint: 'On a colour page, the result is made grey before it is finished.',
       option: {
@@ -1162,6 +1170,7 @@ export const en = {
       postprocessing: 'Post-processing',
       performance: 'Runtime',
       shortcuts: 'Shortcuts',
+      beta: 'Beta',
       about: 'About',
       denoise: 'Denoise',
       export: 'Export',
@@ -1558,6 +1567,7 @@ export const en = {
       // the meta, which rendered `no masks` as `no ma…` and `2 flagged` as
       // `2 flag…`.
       layers: 'Layers',
+      postprocessing: 'Post-processing',
     },
     meta: {
       pagesCleaned: '{done} of {total} cleaned',
@@ -2752,19 +2762,32 @@ export const en = {
       command: 'Change post-processing',
       current: 'Current',
       failed: 'The previews could not be made.',
-      intro: 'This result finished each way, from its saved cloud answer. Nothing is sent. Pick one to use it.',
-      introGray: 'This result finished each way, from its saved cloud answer, colour made grey first as it was. Nothing is sent. Pick one to use it.',
+      intro: 'Each preview is this result finished one way. They are made here, and nothing is sent to the cloud. Pick one to use it on this layer.',
+      introGray: 'Each preview is this result finished one way, colour made grey first as it was. They are made here, and nothing is sent to the cloud. Pick one to use it on this layer.',
       label: 'Post-processing',
       loading: 'Making previews…',
+      loadingLocal: 'Making previews… A layer cleaned on this computer runs its model again for its first previews, which can take a moment.',
+      menu: 'Post-processing…',
       open: 'Choose…',
-      openHint: 'Compare post-processing methods on this result and pick another',
+      openHint: 'Compare post-processing methods on this layer in the Post-processing window',
       previewFailed: 'No preview',
       title: 'Post-processing',
       unavailable: {
+        modelChanged: 'The FLUX model on this computer was switched after this layer was cleaned, so it cannot be finished again the same way. Clean the region again to change its post-processing.',
         noResult: 'The saved cloud answer for this layer is gone. Clean the region again to change its post-processing.',
-        notCloud: 'This layer was not cleaned in the cloud, so no answer was kept to finish again. Clean the region again to change its post-processing.',
+        notCloud: 'Only a result cleaned by a model (LaMa, FLUX on this computer, or a cloud model) can change its post-processing. Fills, paint, clone, Patch and Gradient layers cannot. Clean the region again with a model to change it.',
         pageChanged: 'The page under this layer changed after it was cleaned. Clean the region again to change its post-processing.',
         unsupported: 'This layer was made by an older cloud version that cannot be finished again. Clean the region again to change its post-processing.',
+      },
+      window: {
+        defaults: 'Defaults…',
+        defaultsHint: 'Open Settings > Post-processing, where the method new cleans use is chosen',
+        defaultsNote: 'A pick here changes this layer only.',
+        noLayer: 'No layer selected',
+        noLayerBody: 'Select a cleaned layer on the page or in Layers to compare its post-processing.',
+        notOffered: 'No post-processing to change',
+        notOfferedBody: 'Post-processing belongs to layers a model cleaned. A detection, a paint stroke, a copy, or a Patch or Gradient layer has none.',
+        page: 'Page {page}',
       },
     },
     filter: {
@@ -3280,7 +3303,7 @@ export const en = {
       duplicateRegion: "Duplicate selected region",
       cleanSelected: 'Clean the selected mask, or try it again',
       retryWider: 'Try the selected mask again, wider',
-      finishingSelected: 'Change the selected layer\'s post-processing',
+      finishingSelected: 'Post-processing window',
       deleteLayer: 'Delete the selected layer',
     },
     zoom: {

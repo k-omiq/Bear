@@ -1064,6 +1064,21 @@ export function createMockBackend(options = {}) {
   }
 
   /**
+   * Why a layer's finishing cannot be changed (`refinish.rs#Unavailable`),
+   * or null when it can: a cloud result with its answer kept, or a LaMa or
+   * FLUX result from this computer, whose model is asked again.
+   *
+   * @param {any} provenance
+   * @returns {string|null}
+   */
+  const unfinishable = (provenance) => {
+    const attemptId = provenance.cloud?.attempt_id
+    if (attemptId) return attemptId.startsWith('att-gone') ? 'noResult' : null
+    if (provenance.cloud || !['lama', 'flux'].includes(provenance.engine)) return 'notCloud'
+    return null
+  }
+
+  /**
    * Run `clean` on a region and, when the region was a stored detection and
    * the clean left a result, keep the detection it replaced and record the
    * step, as `Job::complete_detection` and `history.rs` do for every cleaner
@@ -3852,10 +3867,11 @@ export function createMockBackend(options = {}) {
     },
 
     /**
-     * A cloud result's finishing previews, as `refinish.rs#previews_at` makes
-     * them: one per method, from the answer the attempt kept. A layer with no
-     * cloud attempt answers `notCloud` and no previews; an attempt id that
-     * starts `att-gone` stands in for one whose answer was dropped.
+     * A model result's finishing previews, as `refinish.rs#previews_at` makes
+     * them: one per method, from the answer a cloud attempt kept or a LaMa or
+     * FLUX result's model asked again. Any other layer answers `notCloud` and
+     * no previews; an attempt id that starts `att-gone` stands in for one
+     * whose answer was dropped.
      */
     async regionFinishingPreviews({ regionId }) {
       await delay(timing.method)
@@ -3864,10 +3880,9 @@ export function createMockBackend(options = {}) {
         throw new Error(`refinish_no_patch: region ${regionId} has no cleaned result`)
       }
       const provenance = found.region.mask.provenance ?? {}
-      const attemptId = provenance.cloud?.attempt_id
       const none = (unavailable) => ({ regionId, unavailable, current: null, grayscale: false, previews: [] })
-      if (!attemptId) return none('notCloud')
-      if (attemptId.startsWith('att-gone')) return none('noResult')
+      const unavailable = unfinishable(provenance)
+      if (unavailable) return none(unavailable)
       const postprocess = provenance.params_snapshot?.postprocess
       const current = typeof postprocess?.finishing === 'string'
         ? { finishing: postprocess.finishing, grayscale: postprocess.grayscale === true }
@@ -3882,7 +3897,7 @@ export function createMockBackend(options = {}) {
     },
 
     /**
-     * Finish a cloud result again, as `refinish.rs#apply_at` does: its
+     * Finish a model result again, as `refinish.rs#apply_at` does: its
      * post-processing record changes, everything else of it is kept, and the
      * change is one `region-state` undo step this side records itself. The
      * finishing it has already writes nothing.
@@ -3896,9 +3911,9 @@ export function createMockBackend(options = {}) {
       refuseBusyPage(found.chapter.id, found.page.index)
       if (!FINISHINGS.includes(finishing)) throw new Error(`unknown finishing ${finishing}`)
       const provenance = found.region.mask.provenance
-      const attemptId = provenance?.cloud?.attempt_id
-      if (!attemptId) throw new Error('refinish_not_cloud: the region was not cleaned in the cloud')
-      if (attemptId.startsWith('att-gone')) throw new Error('refinish_no_result: the saved cloud answer is gone')
+      const unavailable = unfinishable(provenance ?? {})
+      if (unavailable === 'notCloud') throw new Error('refinish_not_cloud: the region is not a model\'s result')
+      if (unavailable === 'noResult') throw new Error('refinish_no_result: the saved cloud answer is gone')
       const was = provenance.params_snapshot?.postprocess
       if (was?.finishing === finishing && (was?.grayscale === true) === (grayscale === true)) {
         return { region: snapshot(found.region), pageStatus: found.page.status, history: null }

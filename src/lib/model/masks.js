@@ -116,6 +116,18 @@ export function provenanceFacts(mask) {
 export const ROW_ENGINES = Object.freeze(['fill', 'screentone', 'lama', 'flux'])
 
 /**
+ * The rungs still in beta, offered only while Settings > Beta has them on
+ * (`session.betaTools`). The Screentone fill copies the dot screen around
+ * the lettering phase-locked into the hole (`engines/screentone.rs`), and it
+ * is still a specialist being tuned. Off, it is left out of every picker the
+ * way a rung with missing weights is; a layer it already made keeps naming
+ * it, because the engine in use always leads its own list.
+ *
+ * @type {ReadonlyArray<string>}
+ */
+export const BETA_ENGINES = Object.freeze(['screentone'])
+
+/**
  * The engine a row or the region menu offers for rendering on the user's own
  * cloud GPU. Not a rung: it runs whatever model the endpoint serves, and only
  * after one consent per request (`editor/cloudflow.svelte.js`).
@@ -148,13 +160,17 @@ export const CLOUD_ENGINE = 'cloud'
  * the machine yet, the answer is `UNANSWERED`: every rung that ships with the
  * application, and not rung 3a, which never does.
  *
+ * A rung in `BETA_ENGINES` is offered only when `options.beta` is true, and
+ * left out the same way otherwise.
+ *
  * @param {Record<string, boolean>} [available] - which rungs have what they need
- * @param {{cloud?: boolean}} [options] - `cloud`: whether a cloud endpoint is ready
+ * @param {{cloud?: boolean, beta?: boolean}} [options] - `cloud`: whether a cloud endpoint is ready; `beta`: whether Settings > Beta offers the beta rungs
  * @returns {ReadonlyArray<string>}
  */
 export function rowEngines(available, options = {}) {
   const known = available ?? UNANSWERED
-  const local = ROW_ENGINES.filter((rung) => (known[rung] ?? true) !== false)
+  const local = ROW_ENGINES.filter((rung) => (known[rung] ?? true) !== false &&
+    (options.beta === true || !BETA_ENGINES.includes(rung)))
   return options.cloud === true ? [...local, CLOUD_ENGINE] : local
 }
 
@@ -369,13 +385,14 @@ export function detectedActions(options = {}) {
 
 /**
  * @typedef {Object} RegionMenuItem
- * @property {string} id - `retry`, `retryWider`, `reject`, `delete`,
+ * @property {string} id - `retry`, `retryWider`, `reject`, `finishing`, `delete`,
  *   `engine:<rung>`, `type:inside` / `type:outside` (a detected region's text
  *   type), `padding` (a detected region's Mask padding), or, on a held region,
  *   `approveMask`, `approve` and `approve:<rung>`
  * @property {string} labelKey
  * @property {string} [icon]
  * @property {boolean} [selected] - present only on the engine and text type choices
+ * @property {string} [shortcut] - the id of the shortcut that does the same, whose chord the menu prints beside the entry
  * @property {{min: number, max: number, step: number, value: number, unit: string}} [range] - a slider, not an entry: only `padding`
  *
  * @typedef {Object} RegionMenuSection
@@ -422,14 +439,21 @@ export function detectedActions(options = {}) {
  * weights still names that rung. Cloud, and Try again on a cloud mask, both
  * ask for consent before anything is sent.
  *
+ * A cleaned layer whose post-processing can be changed (`options.finishing`,
+ * which `maskactions.svelte.js#offersFinishing` answers) gets
+ * **Post-processing…**, which selects it and opens the Post-processing
+ * window on it.
+ *
  * Delete is on every menu: for a region with no mask it is the region itself
  * that goes - which is how a warning the user has read and decided about
  * leaves the list.
  *
  * @param {import('./types.js').Region} region
- * @param {{engines?: Record<string, boolean>, cloud?: boolean}} [options] -
- *   `capabilities.engines` (absent offers every shipped rung) and whether a
- *   cloud endpoint is ready
+ * @param {{engines?: Record<string, boolean>, cloud?: boolean, beta?: boolean, finishing?: boolean}} [options] -
+ *   `capabilities.engines` (absent offers every shipped rung), whether a
+ *   cloud endpoint is ready, whether the beta rungs are offered
+ *   (`session.betaTools`), and whether the layer's post-processing can be
+ *   changed
  * @returns {RegionMenuSection[]}
  */
 export function regionMenuSections(region, options = {}) {
@@ -445,7 +469,7 @@ export function regionMenuSections(region, options = {}) {
       {
         id: 'engine',
         labelKey: 'masks.action.engine',
-        items: rowEngines(options.engines, { cloud: options.cloud })
+        items: rowEngines(options.engines, { cloud: options.cloud, beta: options.beta })
           .map((rung) => ({ id: `engine:${rung}`, labelKey: engineChoiceLabel(rung), selected: false })),
       },
       {
@@ -493,7 +517,7 @@ export function regionMenuSections(region, options = {}) {
         ] })
     }
     sections.push({ id: 'engine', labelKey: 'masks.action.engine',
-      items: rowEngines(options.engines, { cloud: false })
+      items: rowEngines(options.engines, { cloud: false, beta: options.beta })
         .map((rung) => ({ id: `approve:${rung}`, labelKey: engineChoiceLabel(rung) })) })
   }
   if (reRunnable(mask)) {
@@ -510,7 +534,7 @@ export function regionMenuSections(region, options = {}) {
     // does not offer it, exactly as the row's `<select>` does it: a menu
     // showing nothing checked would be a menu claiming the region has no engine.
     const current = /** @type {string} */ (maskEngine(mask))
-    const offered = rowEngines(options.engines, { cloud: options.cloud })
+    const offered = rowEngines(options.engines, { cloud: options.cloud, beta: options.beta })
     const rungs = offered.includes(current) ? offered : [current, ...offered]
     sections.push({
       id: 'engine',
@@ -521,6 +545,11 @@ export function regionMenuSections(region, options = {}) {
         selected: rung === current,
       })),
     })
+  }
+
+  if (mask && options.finishing === true) {
+    sections.push({ id: 'finishing', labelKey: null,
+      items: [{ id: 'finishing', labelKey: 'masks.finishing.menu', icon: 'sparkle', shortcut: 'layers.finishingSelected' }] })
   }
 
   sections.push({

@@ -10,8 +10,20 @@
  * the initial `win` state) by way of `.superpowers/sdd/frontend/editor-chrome-spec.md`.
  */
 
-/** The floating windows, in their initial stacking order (lowest first). */
-export const WINDOW_IDS = /** @type {const} */ (['pages', 'layers', 'tool'])
+/**
+ * The floating windows, in their initial stacking order (lowest first).
+ * Post-processing sits below the tool bar: it is opened on purpose, and the
+ * bar is what a raise of anything else must not bury on a fresh layout.
+ */
+export const WINDOW_IDS = /** @type {const} */ (['pages', 'layers', 'postprocessing', 'tool'])
+
+/**
+ * The windows a fresh install starts with closed. Post-processing has nothing
+ * to show until a cleaned layer is picked, and it is opened from the layer
+ * (`Layer > Post-processing`, its Layers row, or the shortcut). A record
+ * saved before the window existed reads it as this default too.
+ */
+export const CLOSED_AT_START = /** @type {const} */ (['postprocessing'])
 
 /** Resize bounds. `h` is additionally capped against the viewport. */
 export const MAX_WIDTH = 560
@@ -124,9 +136,19 @@ export const FINE_STEP = 1
  */
 export function defaultGeometry(vw, vh) {
   const pagesHeight = Math.max(200, Math.round(vh * 0.32))
+  // Post-processing opens on the right, clear of the tool rail and under the
+  // right-hand cluster, wide enough for two columns of previews and as tall
+  // as the window allows a grid of nine to be seen without much scrolling.
+  const postWidth = 400
   return {
     pages: { x: 16, y: 62, w: 248, h: pagesHeight },
     layers: { x: 16, y: 74 + pagesHeight, w: 248, h: Math.max(180, Math.round(vh * 0.34)) },
+    postprocessing: {
+      x: Math.max(16, vw - 112 - postWidth),
+      y: 120,
+      w: postWidth,
+      h: Math.max(MIN_HEIGHT, Math.min(640, vh - 200)),
+    },
     tool: { x: Math.max(16, Math.round(vw / 2 - 280)), y: 62, w: 560, h: null },
   }
 }

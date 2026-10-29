@@ -527,9 +527,96 @@ pub fn ceiling_for(depth: BitDepth) -> f64 {
     }
 }
 
+/// A model's answers to its last few inputs, by the input's digest.
+///
+/// A change of a local result's finishing (`inference::refinish`) renders the
+/// region again once per finishing it previews and once more for the one
+/// picked, and a model asked the same input gives the same answer: here it
+/// is kept rather than asked for again. The same input is the whole of the
+/// key, so a page or a mask changed under the region misses and runs the
+/// model, and nothing here has to know what changed.
+///
+/// Held by the session it caches, in memory, and gone with it: a LaMa tile's
+/// answer is 3 MB, so [`ANSWER_MEMO_ENTRIES`] of them is all a session keeps.
+#[derive(Debug)]
+pub struct AnswerMemo<V> {
+    entries: std::collections::VecDeque<([u8; 32], V)>,
+}
+
+/// How many answers an [`AnswerMemo`] keeps: a few tiled regions' worth of
+/// LaMa tiles, or the last few FLUX crops.
+pub const ANSWER_MEMO_ENTRIES: usize = 8;
+
+impl<V: Clone> AnswerMemo<V> {
+    pub fn new() -> Self {
+        AnswerMemo { entries: std::collections::VecDeque::new() }
+    }
+
+    /// The kept answer to `key`, made the most recent.
+    pub fn get(&mut self, key: &[u8; 32]) -> Option<V> {
+        let at = self.entries.iter().position(|(k, _)| k == key)?;
+        let entry = self.entries.remove(at)?;
+        let value = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(value)
+    }
+
+    /// Keep `value` as the answer to `key`, giving up the oldest past
+    /// [`ANSWER_MEMO_ENTRIES`].
+    pub fn put(&mut self, key: [u8; 32], value: V) {
+        self.entries.retain(|(k, _)| *k != key);
+        if self.entries.len() >= ANSWER_MEMO_ENTRIES {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((key, value));
+    }
+}
+
+impl<V: Clone> Default for AnswerMemo<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The SHA-256 of a model input given in parts: each part's length goes in
+/// before it, so two splits of the same bytes are two keys.
+pub fn input_digest(parts: &[&[u8]]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
+/// A float tensor's bytes, as [`input_digest`] reads them.
+pub fn f32_bytes(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|value| value.to_bits().to_le_bytes()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **An answer memo keeps the most recently used, and a key is its whole
+    /// input.** A hit moves to the back, the oldest goes past the cap, and two
+    /// splits of the same bytes are different inputs.
+    #[test]
+    fn an_answer_memo_keeps_the_most_recent_answers_by_their_whole_input() {
+        let mut memo = AnswerMemo::new();
+        let key = |n: u8| input_digest(&[&[n]]);
+        for n in 0..ANSWER_MEMO_ENTRIES as u8 {
+            memo.put(key(n), n);
+        }
+        assert_eq!(memo.get(&key(0)), Some(0), "a hit is kept and made the newest");
+        memo.put(key(100), 100);
+        assert_eq!(memo.get(&key(1)), None, "the oldest went past the cap");
+        assert_eq!(memo.get(&key(0)), Some(0));
+        assert_eq!(memo.get(&key(100)), Some(100));
+        assert_ne!(input_digest(&[b"ab", b"c"]), input_digest(&[b"a", b"bc"]));
+        assert_eq!(f32_bytes(&[1.0]), 1.0f32.to_bits().to_le_bytes().to_vec());
+    }
 
     #[test]
     fn a_grey_page_stored_as_rgb_reads_its_answer_as_grey() {

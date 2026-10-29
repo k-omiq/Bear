@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  BETA_ENGINES,
   CLOUD_ENGINE,
   FILL_MODES,
   ROW_ENGINES,
@@ -51,7 +52,7 @@ describe('the fill-mode cycle', () => {
 
 describe('rowEngines', () => {
   it('offers rung 3a only where the sidecar is installed', () => {
-    expect(rowEngines({ flux: true })).toEqual([...ROW_ENGINES])
+    expect(rowEngines({ flux: true })).toEqual(ROW_ENGINES.filter((rung) => rung !== 'screentone'))
     expect(rowEngines({ flux: false })).not.toContain('flux')
     expect(rowEngines({ flux: false })).toContain('lama')
   })
@@ -63,7 +64,7 @@ describe('rowEngines', () => {
   it('drops a rung whose weights are not on this machine', () => {
     const offered = rowEngines({ flux: false, lama: false })
     // the two arithmetic rungs need no weights
-    expect(offered).toEqual(['fill', 'screentone'])
+    expect(offered).toEqual(['fill'])
   })
 
   it('offers a rung the map says nothing about', () => {
@@ -73,14 +74,23 @@ describe('rowEngines', () => {
   })
 
   it('withholds only rung 3a before anything has asked the machine', () => {
-    expect(rowEngines()).toEqual(['fill', 'screentone', 'lama'])
+    expect(rowEngines()).toEqual(['fill', 'lama'])
   })
 
   it('offers the cloud last, and only when an endpoint is ready', () => {
     expect(rowEngines({ flux: true })).not.toContain(CLOUD_ENGINE)
     expect(rowEngines({ flux: true }, { cloud: false })).not.toContain(CLOUD_ENGINE)
-    expect(rowEngines({ flux: true }, { cloud: true })).toEqual([...ROW_ENGINES, CLOUD_ENGINE])
-    expect(rowEngines(undefined, { cloud: true })).toEqual(['fill', 'screentone', 'lama', CLOUD_ENGINE])
+    expect(rowEngines({ flux: true }, { cloud: true, beta: true })).toEqual([...ROW_ENGINES, CLOUD_ENGINE])
+    expect(rowEngines(undefined, { cloud: true })).toEqual(['fill', 'lama', CLOUD_ENGINE])
+  })
+
+  it('offers the Screentone fill only while Settings > Beta has it on', () => {
+    expect(BETA_ENGINES).toEqual(['screentone'])
+    expect(rowEngines({ flux: true })).not.toContain('screentone')
+    expect(rowEngines({ flux: true }, { beta: false })).not.toContain('screentone')
+    expect(rowEngines({ flux: true }, { beta: true })).toEqual([...ROW_ENGINES])
+    // A beta rung whose weights are missing stays out with the setting on.
+    expect(rowEngines({ screentone: false }, { beta: true })).not.toContain('screentone')
   })
 
   it('keeps the cloud out of the shared rung list, which automatic runs read', () => {
@@ -116,7 +126,7 @@ describe('cloud masks', () => {
     expect(maskEngine(legacy)).toBe('fill')
     expect(ROW_ENGINES).not.toContain('denoise')
     const engine = regionMenuSections(masked('denoise')).find((section) => section.id === 'engine')
-    expect(engine?.items.map((item) => item.id)).toEqual(['engine:fill', 'engine:screentone', 'engine:lama'])
+    expect(engine?.items.map((item) => item.id)).toEqual(['engine:fill', 'engine:lama'])
     expect(engine?.items.find((item) => item.selected)?.labelKey).toBe('masks.engineChoice.fill')
   })
 
@@ -128,14 +138,14 @@ describe('cloud masks', () => {
 
   it('keep Cloud checked in the menu, leading the list while the cloud is not ready', () => {
     const sections = regionMenuSections(remote, { engines: { flux: false } })
-    expect(ids(sections)).toEqual(['retry', 'reject', 'engine:cloud', 'engine:fill', 'engine:screentone', 'engine:lama', 'delete'])
+    expect(ids(sections)).toEqual(['retry', 'reject', 'engine:cloud', 'engine:fill', 'engine:lama', 'delete'])
     const engines = sections.find((section) => section.id === 'engine')
     expect(engines.items.filter((item) => item.selected).map((item) => item.id)).toEqual(['engine:cloud'])
   })
 
   it('take Cloud in its own place once the cloud is ready', () => {
     const sections = regionMenuSections(remote, { engines: { flux: false }, cloud: true })
-    expect(ids(sections)).toEqual(['retry', 'reject', 'engine:fill', 'engine:screentone', 'engine:lama', 'engine:cloud', 'delete'])
+    expect(ids(sections)).toEqual(['retry', 'reject', 'engine:fill', 'engine:lama', 'engine:cloud', 'delete'])
   })
 })
 
@@ -150,10 +160,10 @@ describe('regionMenuSections', () => {
   it('offers a detection the model list a cleaned region has, none checked, and no Clean shortcuts', () => {
     const region = { id: 'c1-p001-d0', outcome: 'detected', pick: 'lama', mask: masked('lama').mask }
     expect(ids(regionMenuSections(region, { engines: { flux: true }, cloud: true }))).toEqual([
-      'engine:fill', 'engine:screentone', 'engine:lama', 'engine:flux', 'engine:cloud', 'type:inside', 'type:outside', 'padding', 'delete',
+      'engine:fill', 'engine:lama', 'engine:flux', 'engine:cloud', 'type:inside', 'type:outside', 'padding', 'delete',
     ])
     expect(ids(regionMenuSections(region, { engines: { flux: false }, cloud: false }))).toEqual([
-      'engine:fill', 'engine:screentone', 'engine:lama', 'type:inside', 'type:outside', 'padding', 'delete',
+      'engine:fill', 'engine:lama', 'type:inside', 'type:outside', 'padding', 'delete',
     ])
     const engine = regionMenuSections(region, { cloud: true }).find((section) => section.id === 'engine')
     expect(engine?.labelKey).toBe('masks.action.engine')
@@ -216,14 +226,14 @@ describe('regionMenuSections', () => {
     const region = { id: 'c1-p001-r1', outcome: 'declined', declineReason: 'decline.reason.histogram', mask: null }
     // Nor Approve mask: nothing held it, an engine failed on it.
     expect(ids(regionMenuSections(region, { engines: { flux: false }, cloud: true }))).toEqual([
-      'approve:fill', 'approve:screentone', 'approve:lama', 'delete',
+      'approve:fill', 'approve:lama', 'delete',
     ])
   })
 
   it('offers both approvals and available local models for a gated review item', () => {
     const region = { id: 'c1-p001-r1', outcome: 'gate-skipped', mask: null }
     expect(ids(regionMenuSections(region, { engines: { flux: false }, cloud: true }))).toEqual([
-      'approveMask', 'approve', 'approve:fill', 'approve:screentone', 'approve:lama', 'delete',
+      'approveMask', 'approve', 'approve:fill', 'approve:lama', 'delete',
     ])
   })
 
@@ -260,7 +270,6 @@ describe('regionMenuSections', () => {
       'retryWider',
       'reject',
       'engine:fill',
-      'engine:screentone',
       'engine:lama',
       'delete',
     ])
@@ -304,7 +313,6 @@ describe('regionMenuSections', () => {
       'reject',
       'engine:lama',
       'engine:fill',
-      'engine:screentone',
       'delete',
     ])
   })
@@ -314,6 +322,25 @@ describe('regionMenuSections', () => {
     const sections = regionMenuSections(masked('retired'), { engines: { flux: false } })
     const engines = sections.find((section) => section.id === 'engine')
     expect(engines.items[0]).toMatchObject({ id: 'engine:retired', selected: true })
+  })
+
+  it('still names and checks the Screentone fill on a layer it made, with the setting off', () => {
+    const engines = regionMenuSections(masked('screentone'), { engines: { flux: false } })
+      .find((section) => section.id === 'engine')
+    expect(engines.items.map((item) => item.id)).toEqual(['engine:screentone', 'engine:fill', 'engine:lama'])
+    expect(engines.items[0].selected).toBe(true)
+    const on = regionMenuSections(masked('lama'), { engines: { flux: false }, beta: true })
+    expect(ids(on)).toContain('engine:screentone')
+  })
+
+  it('offers Post-processing… on a layer whose post-processing can change, with its shortcut', () => {
+    const sections = regionMenuSections(masked('lama'), { engines: { flux: false }, finishing: true })
+    expect(ids(sections)).toEqual(['retry', 'retryWider', 'reject', 'engine:fill', 'engine:lama', 'finishing', 'delete'])
+    const item = sections.find((section) => section.id === 'finishing').items[0]
+    expect(item).toMatchObject({ labelKey: 'masks.finishing.menu', shortcut: 'layers.finishingSelected' })
+    expect(ids(regionMenuSections(masked('lama'), { engines: { flux: false } }))).not.toContain('finishing')
+    // No mask, nothing to finish, whatever the caller says.
+    expect(ids(regionMenuSections({ id: 'c1-p001-r1', mask: null }, { finishing: true }))).toEqual(['delete'])
   })
 
   it('offers Delete alone for a region with no mask, and names the region', () => {
@@ -328,7 +355,6 @@ describe('regionMenuSections', () => {
       'retryWider',
       'reject',
       'engine:fill',
-      'engine:screentone',
       'engine:lama',
       'engine:cloud',
       'delete',
@@ -405,7 +431,7 @@ describe('Reject result', () => {
     const hand = { ...cleaned(), id: 'c1-p001-h1', source: 'hand' }
     expect(rejectable(hand)).toBe(true)
     expect(ids(regionMenuSections(hand, { engines: { flux: false } }))).toEqual([
-      'retry', 'retryWider', 'reject', 'engine:fill', 'engine:screentone', 'engine:lama', 'delete',
+      'retry', 'retryWider', 'reject', 'engine:fill', 'engine:lama', 'delete',
     ])
     for (const engine of ['paint', 'clone']) {
       expect(rejectable({ ...cleaned(engine), source: 'auto' })).toBe(false)

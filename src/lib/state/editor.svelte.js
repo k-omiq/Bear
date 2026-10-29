@@ -32,7 +32,7 @@ import {
 import { reviewList, reviewReason, stepIssue } from '../model/review.js'
 import { runDetection, unifyAnalysisTargets } from '../model/pipelines.js'
 import { recountPage } from '../model/status.js'
-import { activeParams, toolSpec } from '../editor/tools.js'
+import { BETA_TOOLS, activeParams, optionOffered, toolOffered, toolSpec } from '../editor/tools.js'
 import { steppedSize } from '../editor/gesture.js'
 import { capabilities } from './capabilities.svelte.js'
 import { MAX_MASK_PADDING } from '../model/masks.js'
@@ -1437,10 +1437,39 @@ export function reportFitScale(scale) {
 export function setTool(tool) {
   if (tool === 'contentAwareFill') tool = 'aiMaskBrush'
   if (!TOOLS.includes(/** @type {any} */ (tool))) return
+  // A beta tool is not there while Settings > Beta is off: its key, like
+  // its rail button, does nothing (`tools.js#BETA_TOOLS`).
+  if (!toolOffered(tool, session.betaTools)) return
   // A held Patch or Gradient selection belongs to the tool that drew it.
   if (editor.tool !== tool) clearSelection()
   editor.tool = tool
   openWindow('tool')
+}
+
+/**
+ * Settings > Beta turned off, or found off when the editor opens: the Patch
+ * tool, if it is the tool out, gives way to Text cleanup, the tool a chapter
+ * opens on, with the selection it held dropped; and a beta rung a drawing
+ * tool was left set to (the Screentone fill) is forgotten, so the row falls
+ * back to its first option as it does for a rung whose weights went missing.
+ * Nothing on a page changes. The tool window is left as it was: this is the
+ * setting's doing, not a tool the user chose.
+ */
+export function retireBetaTools() {
+  if (session.betaTools) return
+  if (BETA_TOOLS.includes(editor.tool)) {
+    clearSelection()
+    editor.tool = 'autoClean'
+  }
+  for (const spec of TOOLS.map((id) => toolSpec(id))) {
+    const values = editor.toolParams[spec.id]
+    if (!values) continue
+    for (const param of spec.params) {
+      if (param.kind !== 'choice') continue
+      const stored = param.options.find((option) => option.value === values[param.key])
+      if (stored && !optionOffered(stored, false)) delete values[param.key]
+    }
+  }
 }
 
 /** @param {number} slot - 1..9: the number keys, then `J` (8) and `G` (9) */
@@ -1525,7 +1554,8 @@ function cycleChoice(tool, key, direction) {
   const row = liveRow(tool, key, 'choice')
   if (!row) return false
   const values = row.options
-    .filter((/** @type {any} */ option) => !option.cloud && !(option.engine && capabilities.engines[option.engine] === false))
+    .filter((/** @type {any} */ option) => !option.cloud && !(option.engine && capabilities.engines[option.engine] === false) &&
+      optionOffered(option, session.betaTools))
     .map((/** @type {any} */ option) => option.value)
   if (values.length === 0) return true
   const at = values.indexOf(String(editor.toolParams[tool]?.[key] ?? values[0]))

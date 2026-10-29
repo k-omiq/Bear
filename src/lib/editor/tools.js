@@ -23,7 +23,7 @@
  * it stays.
  */
 
-import { MAX_MASK_PADDING, ROW_ENGINES, engineChoiceLabel } from '../model/masks.js'
+import { BETA_ENGINES, MAX_MASK_PADDING, ROW_ENGINES, engineChoiceLabel } from '../model/masks.js'
 
 /**
  * @typedef {Object} RangeParam
@@ -732,6 +732,42 @@ export const TOOL_SPECS = [
     shell: 'panel',
   },
 ]
+
+/**
+ * The tools still in beta, on the rail only while Settings > Beta has them on
+ * (`session.betaTools`). The Patch tool's Content-Aware mode is PatchMatch,
+ * which still smears a dot screen it should copy, so it waits behind the
+ * setting with the Screentone fill (`model/masks.js#BETA_ENGINES`). Off, the
+ * rail leaves it out, its key does nothing (`state/editor.svelte.js#setTool`)
+ * and the shortcut sheet does not list it (`BETA_SHORTCUTS`). A patch layer
+ * already on a page is a layer like any other and keeps drawing.
+ */
+export const BETA_TOOLS = Object.freeze(['patch'])
+
+/** The shortcuts of the beta tools, which the sheet lists only while they are offered. */
+export const BETA_SHORTCUTS = Object.freeze(['tool.patch'])
+
+/**
+ * @param {string} id - a tool id
+ * @param {boolean} beta - `session.betaTools`
+ * @returns {boolean} whether the rail offers the tool
+ */
+export function toolOffered(id, beta) {
+  return beta === true || !BETA_TOOLS.includes(id)
+}
+
+/**
+ * Whether a choice row offers an option: anything but a beta rung, and a beta
+ * rung too while Settings > Beta is on. The Shapes mode and the AI mask
+ * brush's Clean with both list the Screentone fill.
+ *
+ * @param {{engine?: string}} option
+ * @param {boolean} beta - `session.betaTools`
+ * @returns {boolean}
+ */
+export function optionOffered(option, beta) {
+  return beta === true || !option?.engine || !BETA_ENGINES.includes(option.engine)
+}
 
 /**
  * The tools whose gesture is a **held selection** rather than a commit: the

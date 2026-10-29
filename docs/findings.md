@@ -715,18 +715,44 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
-**Tone only, fill lost dots (2026-10-28): real page 13 and a blurred stand-in only.** A new
-finishing (`tone-fill-dots`, `postprocess.rs#plain_grey`) runs Tone only, then draws the table's
-dots only where the answer is plain grey inside the mask (detail under 25 squared levels, tone 20
-to 235, both measured on mask pixels only; measured across the mask's edge, the page's dots left a
-band of grey inside it). On page 13 of the Apocalypse chapter 111 copy (5 regions, FLUX 3 bf16 and
-Qwen, cached answers) both models drew dots everywhere: the output is pixel for pixel Tone only's.
-With the answers blurred inside the mask by hand, it put the page's dots back over the grey as
-Redraw dots does, kept flat black, and drew dots where blurred drawn texture had become plain
-grey. Not measured: a model that really loses dots (Klein 4B, LaMa), a synthetic-truth score, and
-colour pages, where the screen step never runs. On the same page Redraw dots and Copy page dots
-grey hand-drawn texture and black hair, and no chain of two or three finishings beat Tone only or
-Blend edges by eye (sheets in the untracked `page13-finishing/` folder).
+**Post-processing of local results (2026-10-28): unit tests and a stand-in model only.** A LaMa
+or FLUX result made on this computer can now change its post-processing from previews, as a cloud
+result can (`inference/refinish.rs`). No answer is saved to disk for it: the region is prepared
+again from the page under it (the cloud refinish's preparation, `underlay::prepare_cloud`) and
+rendered again by the model that made it, finished by each method. Each model session keeps its
+last 8 answers by their exact input (`engines/model.rs#AnswerMemo`), so the twelve previews cost
+one model run and the pick none while the session stays loaded. FLUX on this computer now also
+honours **Also finish other models' results** (`finishingEveryModel`), as LaMa already did. Not
+measured: the real LaMa and FLUX sessions through this path (the tests use a stand-in model and
+the FLUX sidecar fake), the time twelve LaMa finishings take on a large tiled region (they run one
+after another on one session, under no lock for the previews but under the page lock for the
+pick), and whether a re-render from the patch's stored lettering matches the first render's
+pixels: a result a page run made read the page without later layers, and its re-render reads the
+page under it now, so the model may answer differently (as Try again does). A FLUX result whose
+local model was switched since is refused (`modelChanged`); its answer is gone once the sidecar
+session is unloaded (two minutes idle), and then the previews run FLUX again.
+
+**Tone only, fill lost dots (2026-10-28, second version): two real regions and a grey stand-in,
+by eye.** The first version drew the table's dots only where the answer was plain grey; FLUX 3 and
+Qwen drew dots everywhere, so it changed nothing. On test_pages page 13's middle panel and page
+15's top panel those dots are the visible fault: fuzzy, out of phase, moiré at 3x, while Tone
+only's tone matched the page (Gaussian 3 px tone maps). The second version
+(`halftone::Over::Screen`) redraws the page's screen in phase at the answer's tone over every mask
+pixel of a screen region where the answer is a screen of its own (at least 0.2 of its detail at
+the page's two frequencies, 3 px window: Qwen's broken dots had a tenth of their pixels under
+0.37) or plain grey, and keeps flat black under 10, paper over 245 and drawn texture, dropping
+kept drawing under 6 px wide (model smears). The redraw's local mean is set to the answer's tone,
+and its swing about it to the page's at that tone (up to 3x): uncorrected, Redraw dots came out a
+few levels dark, showing the mask's outline, and soft on dark tones. Measured on 4 FLUX 3 bf16
+answers and 1 Qwen answer of page 13 d63 (chapter c113 copy), 1 FLUX 3 bf16 answer of page 15
+d67, and a membrane-grey stand-in for page 15's left text: crisp page dots, no outline, flat black
+kept. Tried and dropped: taking the tone from the page around the hole (membrane, isophote lines,
+local planes); the region holds black hair and dark sky as one region, and every variant drew
+streaks or blobs the answer's own tone did not have. Not measured: page 15's sound effect (no
+model answer; the grey stand-in smears its black tendrils, which no finishing can redraw), LaMa
+and Klein 4B answers, a synthetic-truth score, hatching on a real page, and colour pages, where
+the screen step never runs. Probe: an untracked `cleaner-core/examples/finish_probe.rs` over
+cached answers, deleted after.
 
 **SAM-TS-L on the WebGPU plugin and CUDA (2026-10-28): plugin measured on the Mac only, CUDA
 never run in the app.** Settings and the local review now offer SAM WebGPU on every OS (built in on

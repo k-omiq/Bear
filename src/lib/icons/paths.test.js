@@ -31,6 +31,8 @@ const REQUIRED = [
   'globe',
   // The Patch and Gradient tools on the rail.
   'patch', 'gradient',
+  // Settings > Beta.
+  'flask',
 ]
 
 describe('icon set', () => {

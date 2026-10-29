@@ -23,6 +23,8 @@ import {
   residentIndices,
   select,
   selectedRegion,
+  retireBetaTools,
+  setTool,
   setToolBySlot,
   startRun,
   runFinished,
@@ -1241,6 +1243,7 @@ describe('a chapter write refused for another writer', () => {
 describe('the tool slots', () => {
   afterEach(() => {
     editor.tool = 'autoClean'
+    session.betaTools = false
   })
 
   it('numbers the nine tools by slot, the eraser seventh, Patch and Gradient after it', () => {
@@ -1248,6 +1251,7 @@ describe('the tool slots', () => {
   })
 
   it('arms the selection tool from slot 6, the eraser from 7, Patch and Gradient from 8 and 9, and nothing past them', () => {
+    session.betaTools = true
     setToolBySlot(6)
     expect(editor.tool).toBe('maskSelect')
     setToolBySlot(7)
@@ -1318,7 +1322,37 @@ describe('the tool slots', () => {
     expect(JSON.stringify(editor.toolParams.eraser)).toBe(before)
   })
 
+  it('leaves the Patch tool alone while Settings > Beta is off: its slot does nothing', () => {
+    setToolBySlot(9)
+    expect(editor.tool).toBe('gradient')
+    setToolBySlot(8)
+    expect(editor.tool).toBe('gradient')
+    setTool('patch')
+    expect(editor.tool).toBe('gradient')
+  })
+
+  it('puts the Patch tool away and forgets a Screentone pick when Beta turns off', () => {
+    session.betaTools = true
+    setTool('patch')
+    editor.toolParams.aiMaskBrush = { ...editor.toolParams.aiMaskBrush, engine: 'screentone' }
+    editor.toolParams.shapes = { ...editor.toolParams.shapes, mode: 'screentone' }
+    retireBetaTools()
+    expect(editor.tool).toBe('patch')
+    session.betaTools = false
+    retireBetaTools()
+    expect(editor.tool).toBe('autoClean')
+    expect(editor.toolParams.aiMaskBrush.engine).toBeUndefined()
+    expect(editor.toolParams.shapes.mode).toBeUndefined()
+    // Q no longer steps onto it either.
+    editor.tool = 'aiMaskBrush'
+    for (let i = 0; i < 8; i += 1) {
+      cycleToolMode(1)
+      expect(editor.toolParams.aiMaskBrush.engine).not.toBe('screentone')
+    }
+  })
+
   it('steps a picked cloud engine onto either end of the list, not one past it', () => {
+    session.betaTools = true
     editor.tool = 'aiMaskBrush'
     editor.toolParams.aiMaskBrush = { ...editor.toolParams.aiMaskBrush, engine: 'cloud' }
     cycleToolMode(1)

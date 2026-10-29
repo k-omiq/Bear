@@ -1,5 +1,4 @@
 <script>
-  import { tick } from 'svelte'
   import { editor, isHighlighted, hover, select, undo, undoAvailable, undoLabelKey } from '../state/editor.svelte.js'
   import { MAX_MASK_PADDING, rowEngines, engineChoiceLabel, retryWidens } from '../model/masks.js'
   import { shortcutHint } from '../shortcuts.js'
@@ -9,12 +8,10 @@
   import { cloudProfileLabel, currentCloudModelId, engineModelLabel, finishingKey } from '../model/model-names.js'
   import { actionHint } from './maskrows.js'
   import { menuPoint } from './gesture.js'
-  import { cleanDetected, deleteRow, finishingRequest, keepDependencyResult, offersFinishing, openLayerEdit, recordedFinishing, regionPageBusy, requestDetectedMaskPadding, rerunMask, runMaskAction, shownMaskPadding, updateLayer } from './maskactions.svelte.js'
+  import { cleanDetected, deleteRow, keepDependencyResult, offersFinishing, openFinishingWindow, openLayerEdit, recordedFinishing, regionPageBusy, requestDetectedMaskPadding, rerunMask, runMaskAction, shownMaskPadding, updateLayer } from './maskactions.svelte.js'
   import { layerCapabilities, layerOf } from '../model/layers.js'
   import { Button, Disclosure, IconButton, RangeField, Select } from '../ui/index.js'
   import { hasKey, t } from '../i18n/index.js'
-  import { reveal } from '../ui/reveal.js'
-  import FinishingPanel from './FinishingPanel.svelte'
   import MaskFacts from './MaskFacts.svelte'
   import RegionMenu from './RegionMenu.svelte'
 
@@ -146,7 +143,9 @@
   // wrong entry as selected would be worse than one that is not shown at
   // all, which is what `row.reRunnable` decides; and a mask cleaned with FLUX
   // on another machine still has to read as FLUX here.
-  const offered = $derived(rowEngines(capabilities.engines, { cloud: cloudUsable() }))
+  // The Screentone fill is offered only while Settings > Beta has it on; a
+  // layer it made still leads with it, by the rule above.
+  const offered = $derived(rowEngines(capabilities.engines, { cloud: cloudUsable(), beta: session.betaTools }))
   const engineOptions = $derived(
     (row.engine && !offered.includes(row.engine) ? [row.engine, ...offered] : offered).flatMap(
       (rung) => {
@@ -213,40 +212,17 @@
     }
   }
 
-  // Post-processing, picked again from previews of the saved cloud answer
-  // (`FinishingPanel`). Offered on every cleaned layer: the panel says when
-  // the layer kept no answer to finish again. The button names the method
-  // the layer's pixels were made by, when its record names one.
+  // Post-processing, picked again from previews in its own window
+  // (`PostProcessingWindow`). Offered on every cleaned layer a model made:
+  // the window says when the layer cannot be finished again. The button
+  // names the method the layer's pixels were made by, when its record names
+  // one, and opens the window on this layer.
   const finishing = $derived(offersFinishing(region))
   const finishingName = $derived.by(() => {
     const name = recordedFinishing(region)?.finishing
     const key = name ? finishingKey('option', name) : null
     return key && hasKey(key) ? t(key) : t('masks.finishing.open')
   })
-  let finishingOpen = $state(false)
-  /** @type {HTMLElement|undefined} */
-  let rowEl = $state()
-  let mounted = true
-  $effect(() => () => {
-    mounted = false
-  })
-  // Asked for from the keyboard (`⌘P`): opened once the list has expanded
-  // this row, and the request taken. The row is brought into view first and
-  // the panel opens two frames later: the panel closes on any scroll, and a
-  // list just opened or a row just expanded scrolls on the next frame (the
-  // list's reveal of the selection, this one), which would shut it at once.
-  $effect(() => {
-    if (!open || !finishing || finishingRequest.id !== region.id) return
-    finishingRequest.id = null
-    void tick().then(() => {
-      if (rowEl) reveal(rowEl)
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        if (mounted) finishingOpen = true
-      }))
-    })
-  })
-  /** @type {HTMLElement|undefined} */
-  let finishingAnchor = $state()
 
   /**
    * The open context menu: `{x, y, region}` in client pixels, or null.
@@ -280,7 +256,6 @@
      has to follow a press anywhere in it - the summary, the picker, either
      icon - not only the one button that happens to carry the toggle. -->
 <div
-  bind:this={rowEl}
   class="row"
   class:highlighted
   role="listitem"
@@ -469,23 +444,18 @@
     {#if finishing}
       <div class="pick" data-finishing-row>
         <span class="pick-label">{t('masks.finishing.label')}</span>
-        <span class="pick-control" bind:this={finishingAnchor}>
+        <span class="pick-control">
           <Button
             size="sm"
             variant="soft"
             title={t('masks.finishing.openHint')}
-            aria-haspopup="dialog"
-            aria-expanded={finishingOpen}
             data-finishing-open
-            onclick={() => (finishingOpen = !finishingOpen)}
+            onclick={() => openFinishingWindow(region)}
           >
             {finishingName}
           </Button>
         </span>
       </div>
-      {#if finishingOpen}
-        <FinishingPanel {region} anchor={finishingAnchor} onclose={() => (finishingOpen = false)} />
-      {/if}
     {/if}
 
     {#if actions.length > 0}

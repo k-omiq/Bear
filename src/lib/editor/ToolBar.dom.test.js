@@ -55,6 +55,9 @@ const { editor, pageBusy, solidOnlyOf, select } = await vi.importActual('../stat
 const stores = vi.hoisted(() => ({
   session: {
     cloudAllowed: true,
+    // On, so every engine a choice row lists is drawn; the off case is
+    // its own test below.
+    betaTools: true,
     /** @type {'local'|'cloud'} */
     cleanTarget: 'local',
     cleanLocalFirst: false,
@@ -339,6 +342,28 @@ describe('every pill tool draws the control each of its parameters asks for', ()
           // The short label is what is drawn, where the spec asked for one.
           expect(control.textContent).toContain(t(param.shortKey ?? param.labelKey))
         }
+      }
+    })
+  }
+})
+
+describe('the Screentone fill on the engine rows', () => {
+  for (const id of ['shapes', 'aiMaskBrush']) {
+    it(`is left out of ${id}'s row while Settings > Beta is off, and the row shows its first option over a stored pick of it`, async () => {
+      const spec = toolSpec(id)
+      const key = id === 'shapes' ? 'mode' : 'engine'
+      stores.session.betaTools = false
+      try {
+        const { view } = mountTool(spec, { [key]: 'screentone' })
+        const param = activeParams(spec, stores.editor.toolParams[id]).find((entry) => entry.key === key)
+        // The row shows its first option in place of the hidden one.
+        const control = controlFor(view, param, { ...stores.editor.toolParams[id], [key]: param.options[0].value })
+        await fireEvent.click(control)
+        const items = [...view.container.querySelectorAll('[role="menuitemradio"]')].map((item) => item.textContent?.trim())
+        expect(items).not.toContain(t('masks.engineChoice.screentone'))
+        expect(items.length).toBe(param.options.length - 1)
+      } finally {
+        stores.session.betaTools = true
       }
     })
   }
