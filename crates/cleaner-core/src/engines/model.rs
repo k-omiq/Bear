@@ -455,8 +455,16 @@ pub fn source_channel(mode: ColorMode, channel: usize) -> usize {
     if matches!(mode, ColorMode::Gray | ColorMode::GrayAlpha) { 0 } else { channel }
 }
 
+/// How far apart, in levels of 255, the channels of a page read as grey
+/// ([`answer_mode`]) may be. Wider than [`Raster::is_neutral`]'s 1.5: page
+/// 15 of a real chapter, an RGBA grey scan, had 13 pixels 2 levels apart, so
+/// it was read as colour and post-processing's screen step, which runs on
+/// grey only, did nothing there. A colour page is tens of levels apart.
+pub const GREY_PAGE_LEVELS: f32 = 4.5;
+
 /// The mode a model's three-channel answer is read back in: grey for a grey
-/// page, including one stored as RGB or RGBA ([`Raster::is_neutral`]).
+/// page, including one stored as RGB or RGBA whose channels agree within
+/// [`GREY_PAGE_LEVELS`] ([`Raster::is_neutral_within`]).
 ///
 /// Both model rungs are colour models and neither returns exact grey. On an
 /// RGBA grey scan (Deli Health chapter 11) the 54 LaMa patches read per
@@ -466,7 +474,7 @@ pub fn source_channel(mode: ColorMode, channel: usize) -> usize {
 /// patch takes the mean of the model's three, as on a page stored grey.
 pub fn answer_mode(page: &Raster) -> ColorMode {
     match page.mode {
-        ColorMode::Rgb | ColorMode::Rgba if page.is_neutral() => ColorMode::Gray,
+        ColorMode::Rgb | ColorMode::Rgba if page.is_neutral_within(GREY_PAGE_LEVELS) => ColorMode::Gray,
         mode => mode,
     }
 }
@@ -626,11 +634,12 @@ mod tests {
         };
         assert_eq!(answer_mode(&rgba(0)), ColorMode::Gray);
         assert_eq!(answer_mode(&rgba(1)), ColorMode::Gray, "one level apart is still grey");
-        assert_eq!(answer_mode(&rgba(2)), ColorMode::Rgba);
+        assert_eq!(answer_mode(&rgba(4)), ColorMode::Gray, "a scan's colour noise is still grey");
+        assert_eq!(answer_mode(&rgba(5)), ColorMode::Rgba);
         let mut sixteen = rgba(0);
         sixteen.depth = BitDepth::Sixteen;
-        sixteen.data = [30_000u16, 30_000, 30_400, 65_535].repeat(6).iter().flat_map(|v| v.to_be_bytes()).collect();
-        assert_eq!(answer_mode(&sixteen), ColorMode::Rgba, "400 of 65535 is past 1.5 of 255");
+        sixteen.data = [30_000u16, 30_000, 31_200, 65_535].repeat(6).iter().flat_map(|v| v.to_be_bytes()).collect();
+        assert_eq!(answer_mode(&sixteen), ColorMode::Rgba, "1200 of 65535 is past 4.5 of 255");
         let gray = Raster { mode: ColorMode::GrayAlpha, data: vec![9; 12], ..rgba(0) };
         assert_eq!(answer_mode(&gray), ColorMode::GrayAlpha);
     }

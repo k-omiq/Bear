@@ -754,6 +754,18 @@ and Klein 4B answers, a synthetic-truth score, hatching on a real page, and colo
 the screen step never runs. Probe: an untracked `cleaner-core/examples/finish_probe.rs` over
 cached answers, deleted after.
 
+**A near-grey page read as colour (2026-10-29): one real page.** In the app, changing a page 15
+layer's post-processing (d67 FLUX 3, d75 Qwen) left it almost as it was: every screen finishing
+recorded `screen: 0`, and Copy, Redraw and Tone only, fill lost dots wrote Tone only's pixels. The
+page is an RGBA grey scan with 13 pixels whose channels are 2 levels apart, past
+`Raster::is_neutral`'s 1.5, so `answer_mode` read it as colour and the screen step, which runs on
+grey only, never ran. Page 13 (at most 1 level apart) was not affected. `answer_mode` now reads a
+page as grey when its channels agree within `GREY_PAGE_LEVELS` (4.5); `is_neutral` and the page
+denoise engines keep 1.5. Measured by `refinish::apply_at` over copies of the chapter and of d75's
+attempt (a temporary ignored test): the screen step now covers 18,293 of d75's 18,343 mask pixels
+under Tone only, fill lost dots, and its dots are crisp by eye. Not measured: a real scan whose
+noise is past 4.5 levels, and other chapters' pages.
+
 **SAM-TS-L on the WebGPU plugin and CUDA (2026-10-28): plugin measured on the Mac only, CUDA
 never run in the app.** Settings and the local review now offer SAM WebGPU on every OS (built in on
 macOS, the plugin on Windows and Linux x64) and CUDA on Windows and Linux; component writes stay

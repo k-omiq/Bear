@@ -122,11 +122,17 @@ impl Raster {
     /// tolerance is the one both page denoise engines use
     /// (`crate::page_denoise`, `deploy/cloud/common/denoise.py`).
     pub fn is_neutral(&self) -> bool {
+        self.is_neutral_within(1.5)
+    }
+
+    /// [`Raster::is_neutral`] with the channels agreeing within `levels` of
+    /// 255 instead.
+    pub fn is_neutral_within(&self, levels: f32) -> bool {
         match self.mode {
             ColorMode::Gray | ColorMode::GrayAlpha => true,
             ColorMode::Rgb | ColorMode::Rgba => {
                 let top = ((1u32 << self.depth.bits()) - 1) as f32;
-                let tolerance = 1.5 / 255.0;
+                let tolerance = levels / 255.0;
                 (0..self.height).all(|y| {
                     (0..self.width).all(|x| {
                         let [r, g, b] = [0, 1, 2].map(|c| self.sample(x, y, c) as f32 / top);
