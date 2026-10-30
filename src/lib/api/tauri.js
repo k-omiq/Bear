@@ -132,6 +132,7 @@ const IMPLEMENTED = Object.freeze({
   approveHeldMask: 'approve_held_mask',
   sidecarAvailable: 'sidecar_available',
   listSidecarModels: 'list_sidecar_models',
+  listLocalModels: 'list_local_models',
   installFluxHelper: 'install_flux_helper',
   runClean: 'run_clean',
   cancelRun: 'cancel_run',
@@ -216,6 +217,7 @@ export const SEAM_METHODS = Object.freeze([
   'planExportChapter',
   'sidecarAvailable',
   'listSidecarModels',
+  'listLocalModels',
   'installFluxHelper',
   'readSettings',
   'writeSettings',
@@ -685,8 +687,9 @@ export function createTauriBackend({ fallback, invoke, listen }) {
       call(IMPLEMENTED.approveHeldMask, { regionId, paddingPx: paddingPx ?? null }),
     sidecarAvailable: () => call(IMPLEMENTED.sidecarAvailable),
     listSidecarModels: () => call(IMPLEMENTED.listSidecarModels),
-    installFluxHelper: ({ backend, accelerator }) =>
-      call(IMPLEMENTED.installFluxHelper, { backend, accelerator }),
+    listLocalModels: () => call(IMPLEMENTED.listLocalModels),
+    installFluxHelper: ({ model, backend, accelerator }) =>
+      call(IMPLEMENTED.installFluxHelper, { model, backend, accelerator }),
 
     // The loaded-models tab. `listLoadedModels` is a **poll**, so it takes no
     // argument and is deliberately the cheapest command in this table: it walks

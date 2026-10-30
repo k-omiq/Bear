@@ -146,8 +146,6 @@ export const CLEANERS = Object.freeze([
   { id: 'flux2-klein-4b', name: 'FLUX.2 Klein 4B', noteKey: 'pipelines.cleaner.flux', files: [], sidecar: 'flux2-klein-4b', ready: false, rating: { efficiency: 3, light: 2 } },
   { id: 'flux2-klein-4b-cloud', name: '☁ FLUX.2 Klein 4B', noteKey: 'pipelines.cleaner.fluxCloud', files: [], cloudModel: 'flux2-klein-4b', ready: false, rating: { efficiency: 3, light: 2 } },
   { id: 'flux2-klein-9b', name: '☁ FLUX.2 Klein 9B', noteKey: 'pipelines.cleaner.fluxCloud', files: [], cloudModel: 'flux2-klein-9b', ready: false, rating: { efficiency: 2, light: 1 } },
-  { id: 'flux1-schnell', name: 'FLUX.1 [schnell]', noteKey: 'pipelines.cleaner.flux', files: [], sidecar: 'flux1-schnell', ready: false, rating: { efficiency: 3, light: 1 } },
-  { id: 'flux1-dev', name: 'FLUX.1 [dev]', noteKey: 'pipelines.cleaner.flux', files: [], sidecar: 'flux1-dev', ready: false, rating: { efficiency: 2, light: 1 } },
   { id: 'qwen-image-edit-2511', name: '☁ Qwen-Image-Edit-2511', noteKey: 'pipelines.cleaner.qwen', files: [], cloudModel: 'qwen-image-edit-2511', ready: false, rating: { efficiency: 2, light: 1 } },
   { id: 'flux3-image-klein', name: '☁ FLUX 3 Image Klein', noteKey: 'pipelines.cleaner.flux3', files: [], cloudModel: 'flux3-image-klein', ready: false, rating: { efficiency: 3, light: 2 } },
   { id: 'flux3-image-klein-bf16', name: '☁ FLUX 3 Image Klein (bf16)', noteKey: 'pipelines.cleaner.flux3', files: [], cloudModel: 'flux3-image-klein-bf16', ready: false, rating: { efficiency: 2, light: 1 } },

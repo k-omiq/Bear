@@ -227,6 +227,7 @@ fn main() {
             "approve_held_mask",
             "sidecar_available",
             "list_sidecar_models",
+            "list_local_models",
             "pick_screen_color",
             "install_flux_helper",
             "export_chapter",

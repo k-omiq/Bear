@@ -508,19 +508,18 @@ export const en = {
     language: {
       label: 'Language',
     },
-    // Inside Models > Cleaning's collapsed "AI redraw (FLUX)", so the labels
+    // Inside Models > Cleaning's collapsed "Local AI models", so the labels
     // do not repeat it. The summary uses the backend's helper availability.
     sidecar: {
-      heading: 'AI redraw (FLUX)',
+      heading: 'Local AI models',
       ready: 'Set up',
       notSetUp: 'Not set up',
       label: 'Folder',
       automaticFolder: 'Find automatically',
-      chooserTitle: 'AI redraw (FLUX) folder',
+      chooserTitle: 'Local AI models folder',
       notFound: 'No engine found in this folder.',
-      install: 'Install FLUX helper and 4B model',
-      installing: 'Installing FLUX…',
-      installFailed: 'FLUX setup failed: {detail}',
+      installing: 'Downloading…',
+      installFailed: 'Download failed: {detail}',
       accelerator: 'GPU runtime for installation',
       acceleratorAuto: 'Automatic',
       mlxAutomatic: 'MLX uses the Apple GPU automatically.',
@@ -529,6 +528,18 @@ export const en = {
         dependencies: 'Installing the model runtime…',
         weights: 'Downloading model weights…',
         ready: 'Finishing setup…',
+      },
+    },
+    localModels: {
+      use: 'Use',
+      inUse: 'In use',
+      legacy: 'Legacy',
+      advanced: 'Advanced',
+      note: {
+        klein4b: 'Fast, and needs the least memory.',
+        flux3: 'Keeps bubbles and art as drawn. Can leave large title lettering. Runs on the GPU through torch.',
+        qwen: 'The slowest. Needs about 23 GB of computer memory, so it does not run on a 32 GB Mac.',
+        klein9b: 'Older and larger. Kept for projects that use it.',
       },
     },
     fluxBackend: {
@@ -540,8 +551,6 @@ export const en = {
       sdnq: 'SDNQ (CUDA, Intel XPU, or Apple Metal)',
     },
     sidecarModel: {
-      label: 'Model',
-      noneFound: 'No models found in weights folder.',
       // The stored model, when the helper no longer lists it. Drawn as an
       // option so the picker does not show a different model than the one set.
       missing: '{id} (not found)',
@@ -2277,6 +2286,7 @@ export const en = {
       heading: 'Cleaning',
       body: 'Choose the models that redraw the art under removed text.',
       helper: 'FLUX helper (optional)',
+      helperInstall: 'Download FLUX.2 Klein 4B',
       helperNote: 'Only for AI redraw on this computer. Skip it to clean with LaMa Manga, or run FLUX on your cloud GPU instead. Choose its folder if it is installed.',
       helperMissing: 'No helper was found in that folder.',
     },

@@ -36,7 +36,7 @@
     saveFailed = false
     installError = ''
     try {
-      await getBackend().installFluxHelper({ backend: 'auto', accelerator: 'auto' })
+      await getBackend().installFluxHelper({ model: 'flux2-klein-4b', backend: 'auto', accelerator: 'auto' })
       await loadCapabilities()
       await loadFirstLaunchSidecarModels()
     } catch (error) {
@@ -106,7 +106,7 @@
       <span class="about">{t('onboarding.cleaning.helperNote')}</span>
     </div>
     <Button size="sm" disabled={installing} onclick={installFlux}>
-      {installing ? t('settings.sidecar.installing') : t('settings.sidecar.install')}
+      {installing ? t('settings.sidecar.installing') : t('onboarding.cleaning.helperInstall')}
     </Button>
     <Button size="sm" disabled={choosing || installing} onclick={browse}>{t('shell.action.chooseFolder')}</Button>
   </div>

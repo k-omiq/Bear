@@ -38,6 +38,15 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * mock's values are fixture data, chosen by hand; that is a property of the
  * mock, not of this contract.
  *
+ * @typedef {Object} LocalModel
+ * @property {string} id
+ * @property {string} label
+ * @property {boolean} legacy - folded under Legacy in Settings
+ * @property {number|null} bytes - its download's size, null for a folder placed by hand
+ * @property {boolean} installed - whether its weights for the backend set now are on disk
+ */
+
+/**
  * @typedef {Object} RelativeTime
  * @property {string} key - i18n key, e.g. `time.relative.hoursAgo`
  * @property {Object} params - e.g. `{ count: 2 }`
@@ -477,7 +486,8 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec?: { apply?: boolean, action?: 'abandon'|'acknowledge', acceptDuplicateRisk?: boolean, attemptId?: string, chapterId?: string, pageIndex?: number, regionId?: string, regionRevision?: number|string, sourceImageHash?: string, simulateStale?: boolean }) => Promise<import('../model/types.js').CloudRecoveryDecision|CloudRecoveryReport>} reconcileCloudRecovery - evaluate crash discovery against the local project. With `apply: true` it recovers - resumes accepted attempts, attaches cached results, never resubmits an unknown one - and answers a `CloudRecoveryReport`
  * @property {() => Promise<{available: boolean, reasonKey: string|null}>} sidecarAvailable - whether rung 3a (the FLUX sidecar) can be offered on this machine. `reasonKey` is null when there is nothing to say, which is the ordinary case of nothing installed
  * @property {() => Promise<Array<{id: string, label: string}>>} listSidecarModels - list available model directories discovered under the sidecar weights root
- * @property {(spec: {backend: 'auto'|'mflux'|'sdnq', accelerator: 'auto'|'cuda'|'xpu'|'mps'}) => Promise<{backend: string, accelerator: string, model: string, root: string}>} installFluxHelper - install the optional local FLUX process and pinned 4B weights
+ * @property {() => Promise<LocalModel[]>} listLocalModels - every model Settings can offer and which of them are on disk (`cleaner_core::sidecar::models`), then any folder placed by hand
+ * @property {(spec: {model: string, backend: 'auto'|'mflux'|'sdnq', accelerator: 'auto'|'cuda'|'xpu'|'mps'}) => Promise<{backend: string, accelerator: string, model: string, root: string}>} installFluxHelper - download one model, and the local helper it runs in if that is missing. Klein 4B follows `backend`; the others always run on torch
  * @property {() => Promise<{appVersion: string, facts: Array<{labelKey: string, value: string}>}>} about
  * @property {() => Promise<{appVersion: string, components: Array<{name: string, available: boolean, detail: string|null, reasonKey: string|null}>}>} diagnostics - whether each component is usable **now**, found by trying: the `onnxruntime` row loads the runtime the way a run does, so an installed runtime that will not load says so here and nowhere else. `reasonKey` is a `diagnostics.runtime.*` key when it is not usable; `detail` is the loader's own words, for a log and never for the screen
  * @property {() => Promise<LoadedModel[]>} listLoadedModels - what is in memory **right now**. A poll, not a subscription: the answer changes with the work rather than with an event, and an empty array is the ordinary state of an application that is not cleaning anything

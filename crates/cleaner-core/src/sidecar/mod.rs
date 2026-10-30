@@ -160,8 +160,9 @@
 //! model is loaded**, from the selection in the environment, because the
 //! hardware gate runs on them and the whole point of the gate is to refuse
 //! before anything large is read. `weights_bytes` is what is on disk;
-//! `working_set_bytes` is everything the parameter count does not predict -
-//! latents, reference tokens, the VAE's peak, whatever the allocator keeps.
+//! `working_set_bytes` is the process's peak: the resident weights, and everything
+//! the parameter count does not predict - latents, reference tokens, the VAE's
+//! peak, whatever the allocator keeps.
 //! Omitting `working_set_bytes` means *unbounded*, and an unbounded backend is
 //! refused ([`hardware`]). A `working_set_bytes` below `weights_bytes` is
 //! refused too, as a field that was misunderstood rather than a machine that is
@@ -318,6 +319,7 @@ pub mod backend;
 pub mod client;
 pub mod hardware;
 pub mod http;
+pub mod models;
 pub mod wire;
 
 use std::path::{Path, PathBuf};

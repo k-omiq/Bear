@@ -12,13 +12,17 @@
 # measured at (the versions in brackets), taken from the reference
 # implementation's environment plus this repository's own:
 #
-#   torch 2.13.0 · diffusers 0.39.0 · sdnq 0.2.4 · transformers 5.15.0
-#   accelerate 1.14.0 · safetensors 0.8.0 · huggingface-hub 1.24.0
+#   torch 2.13.0 · torchvision 0.28.0 · diffusers 0.42.0 · sdnq 0.2.8
+#   transformers 5.15.0 · accelerate 1.14.0 · safetensors 0.8.0
+#   huggingface-hub 1.33.0 · peft 0.21.1
 #
-# Two of the floors are load-bearing rather than conservative:
-#   * diffusers >= 0.37 is where `Flux2KleinPipeline` exists at all.
+# Four of the floors are load-bearing rather than conservative:
+#   * diffusers >= 0.42 and sdnq >= 0.2.8 are what FLUX 3's modular pipeline needs.
 #   * transformers >= 5.0 is where `Qwen3ForCausalLM` - Klein's text encoder,
 #     named in the checkpoint's own model_index.json - exists.
+#   * peft is what keeps Qwen's Lightning and FukidashiErase LoRAs as adapters.
+#   * torchvision is what FLUX 3's `Qwen3VLProcessor` needs. It has to match torch,
+#     so a torch installed first from another index brings its own (`bootstrap.py`).
 #
 # **The torch wheel is the platform's, and pip's default may be the wrong one.**
 # On Linux with an NVIDIA GPU, install torch from the CUDA index *first*; the
@@ -27,11 +31,13 @@
 # sidecar/README.md §2.
 
 torch>=2.2.0
-diffusers>=0.37.0
-sdnq>=0.1.3
+torchvision>=0.17.0
+diffusers>=0.42.0
+sdnq>=0.2.8
+peft>=0.21.0
 transformers>=5.0.0
 accelerate>=1.0.0
 safetensors>=0.4.0
-huggingface-hub>=0.24.0
+huggingface-hub>=1.33.0
 Pillow>=10.0.0
 numpy>=1.24.0

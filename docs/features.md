@@ -708,7 +708,8 @@ revision, and cost only when reported) and can be re-run after asking for consen
 Three rows appear for the optional FLUX helper app: the folder it is installed in, which runtime to load it through
 (Automatic, MLX on Apple hardware, or SDNQ on any GPU), and which of the models in its weights folder to use. Only
 models actually present are offered. A machine without the memory, without a GPU, or without the chosen runtime's
-packages is told which of those it is.
+packages is told which of those it is. Settings downloads FLUX.2 Klein 4B, FLUX 3 Image Klein and Qwen-Image-Edit-2511,
+with FLUX.2 Klein 9B under Legacy. Qwen needs about 23 GB of computer memory, so a 32 GB Mac is refused.
 
 ## Updates
 

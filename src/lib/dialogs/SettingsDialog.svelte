@@ -193,33 +193,30 @@
   /** @type {{ spec: import('../state/app.svelte.js').ModalSpec }} */
   let { spec } = $props()
 
-  let sidecarModels = $state(/** @type {Array<{id: string, label: string}>} */ ([]))
+  let localModels = $state(/** @type {Array<import('../api/backend.js').LocalModel>} */ ([]))
 
   async function loadModels() {
-    if (capabilities.sidecar) {
-      try {
-        sidecarModels = await getBackend().listSidecarModels()
-        if (!session.fluxModel && sidecarModels.length > 0) {
-          const defaultModel = sidecarModels.some((m) => m.id === 'flux2-klein-4b')
-            ? 'flux2-klein-4b'
-            : sidecarModels[0].id
-          setFluxModel(defaultModel)
+    try {
+      localModels = await getBackend().listLocalModels()
+      if (capabilities.sidecar && !session.fluxModel) {
+        const installed = localModels.filter((model) => model.installed)
+        if (installed.length > 0) {
+          setFluxModel(installed[0].id)
           // Written straight away, like every other change here. Not `push()`:
           // that calls back into this function.
           await writeSettingsSerialized(getBackend(), () => backendSettingsPatch())
         }
-      } catch {
-        sidecarModels = []
       }
-    } else {
-      sidecarModels = []
+    } catch {
+      localModels = []
     }
   }
 
+  // The list offers downloads before there is a helper, and a found helper can
+  // change which of them are on disk.
   $effect(() => {
-    if (capabilities.sidecar) {
-      loadModels()
-    }
+    void capabilities.sidecar
+    loadModels()
   })
 
   /** Push the session's values down to the backend after any change. */
@@ -1829,6 +1826,10 @@
   let sidecarDraft = $state(null)
   let installingFlux = $state(false)
   let fluxInstallStage = $state('')
+  /** The model being downloaded, or `''`. @type {string} */
+  let installingModel = $state('')
+  let legacyOpen = $state(false)
+  let localAdvancedOpen = $state(false)
   let fluxInstallError = $state('')
   let fluxAccelerator = $state('auto')
   const fluxStageKey = $derived({
@@ -1838,9 +1839,11 @@
     ready: 'settings.sidecar.stage.ready',
   }[fluxInstallStage] ?? 'settings.sidecar.stage.environment')
 
-  async function installFlux() {
+  /** @param {string} model */
+  async function installFlux(model) {
     if (installingFlux) return
     installingFlux = true
+    installingModel = model
     fluxInstallStage = 'environment'
     fluxInstallError = ''
     let unlisten = /** @type {null|(() => void)} */ (null)
@@ -1852,8 +1855,8 @@
           if (['environment', 'dependencies', 'weights', 'ready'].includes(step)) fluxInstallStage = step
         })
       }
-      await getBackend().installFluxHelper({ backend: session.fluxBackend, accelerator: fluxUsesMlx ? 'auto' : fluxAccelerator })
-      setFluxModel('flux2-klein-4b')
+      await getBackend().installFluxHelper({ model, backend: session.fluxBackend, accelerator: fluxUsesMlx ? 'auto' : fluxAccelerator })
+      setFluxModel(model)
       await writeSettingsSerialized(getBackend(), () => backendSettingsPatch())
       await loadCapabilities()
       await loadModels()
@@ -1862,7 +1865,14 @@
     } finally {
       unlisten?.()
       installingFlux = false
+      installingModel = ''
     }
+  }
+
+  /** @param {string} model */
+  function useLocalModel(model) {
+    setFluxModel(model)
+    push()
   }
 
   function commitSidecar() {
@@ -1892,18 +1902,19 @@
     }
   }
 
-  /**
-   * The helper's models as options. A stored model the helper does not list
-   * is drawn as itself, for the reason `acceleratorChoices` gives; an empty
-   * list with nothing stored is one disabled line saying so.
-   */
-  const sidecarChoices = $derived.by(() => {
-    const rows = sidecarModels.map((model) => ({ value: model.id, label: model.label }))
-    if (session.fluxModel && !rows.some((row) => row.value === session.fluxModel)) {
-      rows.push({ value: session.fluxModel, label: t('settings.sidecarModel.missing', { id: session.fluxModel }) })
-    }
-    return rows.length > 0 ? rows : [{ value: '', label: t('settings.sidecarModel.noneFound') }]
-  })
+  /** @type {Record<string, string>} */
+  const LOCAL_MODEL_NOTES = {
+    'flux2-klein-4b': 'settings.localModels.note.klein4b',
+    'flux3-image-klein': 'settings.localModels.note.flux3',
+    'qwen-image-edit-2511': 'settings.localModels.note.qwen',
+    'flux2-klein-9b': 'settings.localModels.note.klein9b',
+  }
+
+  // The stored model, when it is not on disk any more: said in words, so the
+  // list does not look as if another model were in use.
+  const localModelMissing = $derived(
+    !!session.fluxModel && localModels.length > 0 && !localModels.some((model) => model.id === session.fluxModel && model.installed),
+  )
 
   const themes = THEMES.map((value) => ({ value, label: t(THEME_LABEL_KEYS[value]) }))
   const directions = [
@@ -2510,8 +2521,35 @@
   </section>
 {/snippet}
 
-<!-- The FLUX helper, collapsed: an external install the redraw can run
-     through, its backend, and which of its models. -->
+<!-- Local AI models, collapsed: one Download or Use per model, 9B folded under
+     Legacy, and the helper's folder and runtime folded under Advanced. -->
+{#snippet localModelRow(/** @type {import('../api/backend.js').LocalModel} */ model)}
+  <div class="local-model" data-local-model={model.id}>
+    <span class="local-text">
+      <span class="local-name">{model.label}</span>
+      {#if LOCAL_MODEL_NOTES[model.id]}
+        <span class="local-note">{t(LOCAL_MODEL_NOTES[model.id])}</span>
+      {/if}
+    </span>
+    {#if model.installed}
+      <Button
+        size="sm"
+        variant={session.fluxModel === model.id ? 'soft' : undefined}
+        disabled={session.fluxModel === model.id}
+        onclick={() => useLocalModel(model.id)}
+      >
+        {t(session.fluxModel === model.id ? 'settings.localModels.inUse' : 'settings.localModels.use')}
+      </Button>
+    {:else}
+      <Button size="sm" disabled={installingFlux || !fluxAcceleratorAllowed} onclick={() => installFlux(model.id)}>
+        {installingModel === model.id
+          ? t('settings.sidecar.installing')
+          : t('settings.detection.download', { bytes: model.bytes ?? 0 })}
+      </Button>
+    {/if}
+  </div>
+{/snippet}
+
 {#snippet fluxHelper()}
   <section class="advanced" aria-labelledby="{uid}-flux" data-settings-anchor="flux">
     <Disclosure variant="plain" open={fluxOpen} ontoggle={(open) => (fluxOpen = open)}>
@@ -2522,83 +2560,81 @@
         </span>
       {/snippet}
       <div class="adv-body">
-        <Field label={t('settings.sidecar.label')} controlId="settings-sidecar-path">
-          {#snippet children()}
-            <div class="inline">
-              <TextInput
-                id="settings-sidecar-path"
-                value={sidecarDraft ?? session.sidecarPath}
-                placeholder={t('settings.sidecar.automaticFolder')}
-                onchange={(value) => (sidecarDraft = value)}
-                onblur={commitSidecar}
-                onkeydown={(/** @type {KeyboardEvent} */ event) => {
-                  if (event.key === 'Enter') commitSidecar()
-                }}
-              />
-              <Button onclick={browseSidecar} disabled={choosing}>
-                {t('shell.action.chooseFolder')}
-              </Button>
-            </div>
-            {#if session.sidecarPath && !capabilities.sidecar}
-              <p class="line">{t('settings.sidecar.notFound')}</p>
-            {/if}
-          {/snippet}
-        </Field>
-
-        <Field label={t('settings.fluxBackend.label')} layout="row">
-          {#snippet children({ labelId })}
-            <Segmented
-              options={fluxBackends}
-              value={session.fluxBackend}
-              labelledBy={labelId}
-              onchange={(value) => {
-                setFluxBackend(/** @type {any} */ (value))
-                push()
-              }}
-            />
-          {/snippet}
-        </Field>
-        {#if session.fluxBackend === 'mflux' && fluxPlatform !== 'macos-arm64'}
-          <p class="line">{t('settings.fluxBackend.mfluxReason')}</p>
-        {/if}
-
-        <Field label={t('settings.sidecar.accelerator')} layout="row" controlId="settings-flux-accelerator">
-          {#snippet children()}
-            <Select
-              id="settings-flux-accelerator"
-              options={fluxAcceleratorChoices}
-              value={fluxUsesMlx ? 'auto' : fluxAccelerator}
-              disabled={installingFlux || fluxUsesMlx}
-              onchange={(value) => (fluxAccelerator = value)}
-            />
-          {/snippet}
-        </Field>
-        {#if fluxUsesMlx}<p class="line">{t('settings.sidecar.mlxAutomatic')}</p>{/if}
-        <div class="inline install">
-          <Button onclick={installFlux} disabled={installingFlux || !fluxAcceleratorAllowed || (session.fluxBackend === 'mflux' && fluxPlatform !== 'macos-arm64')}>
-            {installingFlux ? t('settings.sidecar.installing') : t('settings.sidecar.install')}
-          </Button>
-          {#if installingFlux}<span role="status">{t(fluxStageKey)}</span>{/if}
-        </div>
+        {#each localModels.filter((model) => !model.legacy) as model (model.id)}
+          {@render localModelRow(model)}
+        {/each}
+        {#if installingFlux}<p class="line" role="status">{t(fluxStageKey)}</p>{/if}
         {#if fluxInstallError}<p class="line" role="alert">{t('settings.sidecar.installFailed', { detail: fluxInstallError })}</p>{/if}
+        {#if localModelMissing}<p class="line">{t('settings.sidecarModel.missing', { id: session.fluxModel })}</p>{/if}
 
-        {#if capabilities.sidecar}
-          <Field label={t('settings.sidecarModel.label')} layout="row" controlId="settings-sidecar-model">
-            {#snippet children()}
-              <Select
-                id="settings-sidecar-model"
-                fit
-                disabled={sidecarModels.length === 0}
-                options={sidecarChoices}
-                value={session.fluxModel || sidecarChoices[0].value}
-                onchange={(value) => {
-                  setFluxModel(value)
-                  push()
-                }}
-              />
-            {/snippet}
-          </Field>
+        {#if localModels.some((model) => model.legacy)}
+          <Disclosure variant="plain" open={legacyOpen} ontoggle={(open) => (legacyOpen = open)}>
+            {#snippet summary()}<span class="adv-title">{t('settings.localModels.legacy')}</span>{/snippet}
+            <div class="adv-body">
+              {#each localModels.filter((model) => model.legacy) as model (model.id)}
+                {@render localModelRow(model)}
+              {/each}
+            </div>
+          </Disclosure>
         {/if}
+
+        <Disclosure variant="plain" open={localAdvancedOpen} ontoggle={(open) => (localAdvancedOpen = open)}>
+          {#snippet summary()}<span class="adv-title">{t('settings.localModels.advanced')}</span>{/snippet}
+          <div class="adv-body">
+            <Field label={t('settings.sidecar.label')} controlId="settings-sidecar-path">
+              {#snippet children()}
+                <div class="inline">
+                  <TextInput
+                    id="settings-sidecar-path"
+                    value={sidecarDraft ?? session.sidecarPath}
+                    placeholder={t('settings.sidecar.automaticFolder')}
+                    onchange={(value) => (sidecarDraft = value)}
+                    onblur={commitSidecar}
+                    onkeydown={(/** @type {KeyboardEvent} */ event) => {
+                      if (event.key === 'Enter') commitSidecar()
+                    }}
+                  />
+                  <Button onclick={browseSidecar} disabled={choosing}>
+                    {t('shell.action.chooseFolder')}
+                  </Button>
+                </div>
+                {#if session.sidecarPath && !capabilities.sidecar}
+                  <p class="line">{t('settings.sidecar.notFound')}</p>
+                {/if}
+              {/snippet}
+            </Field>
+
+            <Field label={t('settings.fluxBackend.label')} layout="row">
+              {#snippet children({ labelId })}
+                <Segmented
+                  options={fluxBackends}
+                  value={session.fluxBackend}
+                  labelledBy={labelId}
+                  onchange={(value) => {
+                    setFluxBackend(/** @type {any} */ (value))
+                    push()
+                  }}
+                />
+              {/snippet}
+            </Field>
+            {#if session.fluxBackend === 'mflux' && fluxPlatform !== 'macos-arm64'}
+              <p class="line">{t('settings.fluxBackend.mfluxReason')}</p>
+            {/if}
+
+            <Field label={t('settings.sidecar.accelerator')} layout="row" controlId="settings-flux-accelerator">
+              {#snippet children()}
+                <Select
+                  id="settings-flux-accelerator"
+                  options={fluxAcceleratorChoices}
+                  value={fluxUsesMlx ? 'auto' : fluxAccelerator}
+                  disabled={installingFlux || fluxUsesMlx}
+                  onchange={(value) => (fluxAccelerator = value)}
+                />
+              {/snippet}
+            </Field>
+            {#if fluxUsesMlx}<p class="line">{t('settings.sidecar.mlxAutomatic')}</p>{/if}
+          </div>
+        </Disclosure>
       </div>
     </Disclosure>
   </section>
@@ -3763,6 +3799,16 @@
   .adv-title { font-weight: 600 }
   .adv-note { font-size: 11px; color: var(--t3) }
   .adv-body > :global(:first-child) { margin-top: 0 }
+  .local-model {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-6);
+    padding: var(--s-2) 0;
+  }
+  .local-text { display: flex; flex-direction: column; min-width: 0; }
+  .local-name { font-size: 12.5px; color: var(--text); }
+  .local-note { font-size: 11px; line-height: 1.45; color: var(--t3); }
 
   .note,
   .line {

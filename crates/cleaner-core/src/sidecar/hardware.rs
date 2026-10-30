@@ -53,10 +53,11 @@
 //! gate on the floor, which §4a says in as many words will "admit machines that
 //! then thrash".
 //!
-//! The gate also refuses a declared working set *below* the weights. A model
-//! cannot hold its own parameters and less than its own parameters at once, so
-//! such a declaration is a sidecar that has not understood the field, and the
-//! remedy is not to believe it.
+//! The gate also refuses a declared working set *below* the weights. The working
+//! set is the process's peak with the weights inside it, so such a declaration is
+//! a sidecar that has not understood the field, and the remedy is not to believe it.
+//! The gate compares the peak alone with the room: it added the weights on top until
+//! 2026-10-30, which counted them twice and called Klein 4B's 5.4 GiB peak 15 GiB.
 //!
 //! ## A backend with no render path here is declined first, and for that reason
 //!
@@ -214,15 +215,16 @@ impl Budget {
 
 /// What a model and a backend will cost, resident, if this machine runs them.
 ///
-/// Two fields and no sum, because rule 9's fourth guard is that they are not
-/// interchangeable: "what is on disk is what the model's parameters cost. What
-/// decides whether it runs is that plus activations, plus the VAE's untiled
-/// peak, plus whatever the runtime keeps."
+/// Two fields, because rule 9's fourth guard is that they are not interchangeable:
+/// "what is on disk is what the model's parameters cost. What decides whether it
+/// runs is that plus activations, plus the VAE's untiled peak, plus whatever the
+/// runtime keeps."
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Demand {
     /// The quantized weights. The **floor**.
     pub weights: u64,
-    /// Everything the parameter count does not predict.
+    /// The process's peak: the resident weights, and everything the parameter
+    /// count does not predict.
     pub working_set: u64,
     /// Whether the sidecar measured `working_set` or declared it. Carried into
     /// the provenance, never collapsed into the number.
@@ -230,8 +232,9 @@ pub struct Demand {
 }
 
 impl Demand {
+    /// What the machine must have room for. The peak, which holds the weights.
     pub fn total(&self) -> u64 {
-        self.weights.saturating_add(self.working_set)
+        self.working_set
     }
 
     /// A demand assembled from what `GET /v1/health` reported, or `None` when
@@ -419,13 +422,23 @@ mod tests {
         // The figure observed does not, and the refusal carries both
         // numbers so the user is told what was found rather than that
         // something was.
-        match gate_for(true, demand(weights, 25 * GIB - weights), Some(room)) {
+        match gate_for(true, demand(weights, 25 * GIB), Some(room)) {
             Verdict::Declined(Decline::SidecarMachine { needed, room }) => {
                 assert_eq!(needed, 25 * GIB);
                 assert!(room < needed);
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The weights are inside the peak, so a model is not charged for them twice.
+    /// Klein 4B on SDNQ: 5.47 GB on disk, a peak of 5.43 GiB on an L4.
+    #[test]
+    fn the_peak_alone_is_what_a_machine_needs_room_for() {
+        let want = demand(5476 * MIB, 8 * GIB).unwrap();
+        assert_eq!(want.total(), 8 * GIB);
+        let room = 8 * GIB + RESIDENT_CLEANER;
+        assert!(matches!(gate_for(true, Some(want), Some(room)), Verdict::Admitted(_)));
     }
 
     /// A backend that will not say what its working set is cannot be bounded,

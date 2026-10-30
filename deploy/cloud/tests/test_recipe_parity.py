@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 import textwrap
 import unittest
 from pathlib import Path
@@ -73,6 +74,13 @@ def _dict_shape(node: ast.Dict, source: str) -> Dict[str, str]:
     for key, value in zip(node.keys, node.values):
         shape[ast.literal_eval(key)] = ast.get_source_segment(source, value)
     return shape
+
+
+def _rust_str(source: str, name: str) -> str:
+    """A `pub const NAME: &str = "...";` from Rust source."""
+    found = re.search(rf'pub const {name}: &str = "(.*?)";', source, re.S)
+    assert found is not None, name
+    return found.group(1)
 
 
 class RecipeParityTest(unittest.TestCase):
@@ -172,7 +180,9 @@ class RecipeParityTest(unittest.TestCase):
     def test_pipeline_call_matches_sdnq_py(self) -> None:
         local = _dict_shape(_call_dict(self.sdnq_tree, "_call_kwargs"), self.sdnq_source)
         cloud = _dict_shape(_call_dict(self.flux_tree, "filter_call_kwargs"), self.flux_source)
-        self.assertEqual(sorted(local), sorted(cloud))
+        # The sidecar sends the prompt's embedding, so it holds no text encoder.
+        self.assertEqual(sorted(local), sorted(set(cloud) - {"prompt"}))
+        self.assertIn('kwargs["prompt_embeds"] = self._prompt_embeds(str(prompt))', self.sdnq_source)
         # Values that must be literally identical; the rest differ only in where the
         # number comes from (the recipe instead of a request argument).
         for key in ("image", "width", "height", "generator", "output_type", "max_area"):
@@ -182,6 +192,47 @@ class RecipeParityTest(unittest.TestCase):
         self.assertEqual(flux.flux_prompt(None), manifest.RECIPE_PROMPT)
         self.assertEqual(cloud["num_inference_steps"], "int(steps)")
         self.assertIn("guidance_from_scaled(guidance_scaled)", cloud["guidance_scale"])
+
+    def test_local_edit_models_match_the_worker(self) -> None:
+        sys.path.insert(0, str(REPO_ROOT / "sidecar"))
+        from manga_cleaner_sidecar.backend import edit
+
+        from deploy.cloud.common import flux3, qwen
+
+        for name in ("EDIT_RETRIES", "MIN_EDIT_RATIO", "LIGHTNING_SCHEDULER", "VAE_IMAGE_AREA", "GRID"):
+            self.assertEqual(getattr(edit, name), getattr(qwen, name), name)
+        self.assertEqual(edit.TIME_SHIFT, flux3.TIME_SHIFT)
+        self.assertEqual(edit.FLUX3_STRIDE, contract.LATENT_STRIDE)
+        self.assertEqual(edit.FLUX3_WORK_LONG_SIDE, manifest.WORK_LONG_SIDE)
+        self.assertEqual(edit.ADAPTER_DIR, manifest.ADAPTER_DIR)
+        self.assertEqual(edit.LIGHTNING_FILE, manifest.LIGHTNING_FILE)
+        self.assertEqual(edit.FUKIDASHI_FILE, manifest.FUKIDASHI_FILE)
+        for size in ((336, 416), (77, 1024), (1024, 77), (640, 640)):
+            self.assertEqual(edit.qwen_work_size(*size), qwen.work_size(*size), size)
+            self.assertEqual(edit.flux3_work_size(*size), flux.working_size(*size), size)
+
+    def test_local_models_match_the_cloud_pins(self) -> None:
+        models_rs = (REPO_ROOT / "crates" / "cleaner-core" / "src" / "sidecar" / "models.rs").read_text()
+        for name, model, revision, steps in (
+            ("FLUX 3", manifest.MODEL_PROD_FLUX3, manifest.REVISION_PROD_FLUX3, manifest.PINNED_SAMPLING[manifest.RECIPE_PROD_FLUX3].steps),
+            ("Qwen", manifest.MODEL_PROD_QWEN, manifest.REVISION_PROD_QWEN, manifest.PINNED_SAMPLING[manifest.RECIPE_PROD_QWEN].steps),
+        ):
+            self.assertIn(f'repo: "{model}"', models_rs, name)
+            self.assertIn(f'revision: "{revision}"', models_rs, name)
+            self.assertIn(f"steps: {steps},", models_rs, name)
+        for adapter in (manifest.LIGHTNING_REPO, manifest.LIGHTNING_REVISION, manifest.LIGHTNING_FILE,
+                        manifest.FUKIDASHI_REPO, manifest.FUKIDASHI_REVISION, manifest.FUKIDASHI_FILE):
+            self.assertIn(f'"{adapter}"', models_rs)
+        self.assertIn(f'revision: "{manifest.REVISION_PROD_FLUX_9B}"', models_rs)
+        self.assertEqual(_rust_str(models_rs, "FLUX3_PROMPT"), manifest.FLUX3_PROMPT)
+        import numpy
+
+        from deploy.cloud.common import qwen
+
+        hint = numpy.zeros((9, 9), dtype=bool)
+        hint[4, 4] = True
+        self.assertEqual(_rust_str(models_rs, "QWEN_PROMPT").replace("{location}", "middle center"),
+                         qwen.build_prompt(None, hint, numpy))
 
     def test_guided_recipes_match_render_rs(self) -> None:
         table = re.search(r"pub const GUIDED_RECIPES: \[\(&str, &str\); \d+\] = \[(.*?)\];", self.render_rs, re.S)

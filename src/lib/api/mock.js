@@ -4043,8 +4043,18 @@ export function createMockBackend(options = {}) {
       return []
     },
 
+    async listLocalModels() {
+      await delay(timing.method)
+      return [
+        { id: 'flux2-klein-4b', label: 'FLUX.2 Klein 4B', legacy: false, bytes: 4_620_000_000, installed: false },
+        { id: 'flux3-image-klein', label: 'FLUX 3 Image Klein', legacy: false, bytes: 6_650_397_934, installed: false },
+        { id: 'qwen-image-edit-2511', label: 'Qwen-Image-Edit-2511', legacy: false, bytes: 18_162_784_045, installed: false },
+        { id: 'flux2-klein-9b', label: 'FLUX.2 Klein 9B', legacy: true, bytes: 12_606_105_778, installed: false },
+      ]
+    },
+
     async installFluxHelper() {
-      throw new Error('Installing the FLUX helper requires the desktop app')
+      throw new Error('Downloading a local model requires the desktop app')
     },
 
     /**

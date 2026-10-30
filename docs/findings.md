@@ -715,6 +715,38 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Local FLUX 3, Qwen and Klein 9B, and their memory (2026-10-30): one cloud L4 only, three real
+crops.** Each model went through the real installer and `SdnqBackend`, under a 19 GB budget. Every
+model removed the speech lettering. FLUX 3 left the large title lettering on the 1360x688 crop.
+
+| Model | Seconds a crop | Host peak | GPU reserved |
+|---|---|---|---|
+| Klein 4B | 8 to 14 | 5.43 GiB | 5.54 GiB |
+| FLUX 3 Image Klein | 22 to 40 | 5.78 GiB | 10.17 GiB |
+| Klein 9B | 17 to 29 | 8.35 GiB | 10.50 GiB |
+| Qwen-Image-Edit-2511 | 67 to 80 | 21.32 GiB | 13.57 GiB |
+
+Three changes made these numbers. SDNQ compiled Triton kernels for each new crop size while
+rendering, so `SDNQ_USE_TORCH_COMPILE` is now off (Klein 4B 75 s to 10 s, FLUX 3 217 s to 41 s).
+Klein and FLUX 3 now load their text encoder only for a prompt not seen and free it straight after;
+the host peaks with the encoder held were 9.08 (4B), 5.82 (FLUX 3) and 15.85 GiB (9B). `malloc_trim`
+after each render stopped Qwen's host peak climbing from 20 to 27 GiB. It keeps its encoder, which
+reads the crop. The Qwen row came from a run that called `malloc_trim` from the test, not from
+`_empty_cache`; the other three rows ran the code as committed.
+
+The hardware gate used to add the weights to the working set, which already holds them, and so
+counted Klein 4B's 5.48 GB of weights plus a declared 10 GiB as 16.2 GB. It now compares the working
+set alone with the room, and `sdnq` declares a peak per model (`DECLARED_WORKING_SET`). This admits
+machines the gate refused before, on figures not measured on them.
+
+Not measured: anything on Metal or on a real Windows or Linux machine, including the Mac's shared
+pool, which the declared peaks only estimate. A second prompt was tested on FLUX 3 only; Klein's
+prompt does not change. `malloc_trim` is Linux only, so Qwen on Windows may climb as it did here.
+MLX Klein 4B still holds its encoder and declares 10 GiB. Local FLUX 3 is the raw recipe, without
+the retry from a LaMa fill that is on the `inpaint-models` branch, so the title lettering above
+stays. Skipping offload where the whole model fits on the GPU would cut host memory further on a
+discrete GPU; it needs a change to the `cpu_offload` guard and was not tried.
+
 **Post-processing of local results (2026-10-28): unit tests and a stand-in model only.** A LaMa
 or FLUX result made on this computer can now change its post-processing from previews, as a cloud
 result can (`inference/refinish.rs`). No answer is saved to disk for it: the region is prepared

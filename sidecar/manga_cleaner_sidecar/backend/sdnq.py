@@ -1,4 +1,8 @@
-"""SDNQ / torch + diffusers backend for FLUX.2 Klein inpainting.
+"""SDNQ / torch + diffusers backend: FLUX.2 Klein inpainting, and the edit models.
+
+FLUX 3 Image Klein and Qwen-Image-Edit-2511 load and render through `edit.py`, under
+the same allocator cap and offload as Klein. The rest of this file says Klein where a
+number or an argument is Klein's.
 
 **Why this file exists.** `backend/mflux.py` is MLX, and MLX is Apple Silicon.
 Rung 3a reopened for the machine with a discrete GPU, and that machine cannot
@@ -55,14 +59,22 @@ in their runtime and not in their framing of the problem.
 
 from __future__ import annotations
 
+import ctypes
 import gc
 import os
+import sys
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..memory import get_peak_phys_footprint_bytes, get_peak_rss_bytes
 from ..protocol import Basis, ErrorKind, ImageBuffer, ModelMetadata, SidecarError
+from . import edit
 from .base import BackendBase, hole_for
+
+# SDNQ builds Triton kernels for each layer and shape while it renders, so nearly every
+# new crop size pays for a compile. It reads this when it is imported. Measured on one L4,
+# 2026-10-30, Klein 4B on a 336x432 crop: 75 s with it, 10 s without. FLUX 3: 217 s, 41 s.
+os.environ["SDNQ_USE_TORCH_COMPILE"] = "0"
 
 #: The weights root a model id is resolved inside when nothing points elsewhere.
 #:
@@ -73,20 +85,27 @@ from .base import BackendBase, hole_for
 #: name a directory this file can find.
 DEFAULT_WEIGHTS_ROOT = "weights"
 
-#: Declared working set, 10 GiB - the same figure `mflux.py` declares, and for
-#: the same reason rather than by copying: what a 4-bit Klein 4B costs is the
-#: weights it holds resident plus one denoising step's activations plus the VAE's
-#: decode, and the runtime underneath does not change that arithmetic much.
-#:
-#: **Declared, and on this arm not yet measured on the hardware that matters.**
-#: The rule is that understating this is the one direction that is not safe,
-#: because it is what the hardware gate admits the process onto a machine with.
-#: The figure is above the MPS measurement this repository has and above the
-#: weights on disk by a wide margin; what nobody here has run is a CUDA machine,
-#: where model CPU offload keeps a host-side copy of the weights *and* a VRAM
-#: working set, and only the host side is what this number is about. Recorded as
-#: a deferral.
+#: The models the app downloads (`crates/cleaner-core/src/sidecar/models.rs`).
+KNOWN_MODELS = ("flux2-klein-4b", "flux2-klein-9b", "flux3-image-klein", "qwen-image-edit-2511")
+
+#: Declared peak for a model this table does not name.
 DEFAULT_DECLARED_WORKING_SET = 10_737_418_240
+
+#: Declared peak per model, what the hardware gate admits the process onto a machine
+#: with. Understating this is the one direction that is not safe.
+#:
+#: Measured on a 23 GB L4, 2026-10-30, three crops up to 1360x688, as GiB of host peak
+#: and of GPU memory reserved: Klein 4B 5.43 and 5.54, FLUX 3 5.78 and 10.17, Klein 9B
+#: 8.35 and 10.5, Qwen 21.32 and 13.57. A Mac has one pool for both, and the GPU's share
+#: of it was not measured for these (docs/findings.md), so each figure is the larger of
+#: the host peak and the GPU reserve plus about 1.5 GiB of process and host-side weights,
+#: rounded up. Klein 4B on Metal peaked at 7.00 GB with its text encoder held.
+DECLARED_WORKING_SET = {
+    "flux2-klein-4b": 8_053_063_680,  # 7.5 GiB
+    "flux3-image-klein": 12_884_901_888,  # 12 GiB
+    "flux2-klein-9b": 12_884_901_888,  # 12 GiB
+    "qwen-image-edit-2511": 24_696_061_952,  # 23 GiB
+}
 
 #: Long side a small crop is upscaled to before the edit. `mflux.py`'s constant,
 #: swept there and not re-swept here: 512 smudges, 1024 invents
@@ -114,8 +133,11 @@ def _snap_stride(value: int) -> int:
 
 
 def _is_pipeline_dir(path: str) -> bool:
-    """Whether ``path`` is a `diffusers` snapshot: it has a `model_index.json`."""
-    return os.path.isfile(os.path.join(path, "model_index.json"))
+    """Whether ``path`` is a `diffusers` snapshot: it has a model index.
+
+    FLUX 3 is a modular pipeline, whose index has its own name.
+    """
+    return any(os.path.isfile(os.path.join(path, name)) for name in ("model_index.json", "modular_model_index.json"))
 
 
 def _newest_snapshot(path: str) -> Optional[str]:
@@ -171,6 +193,12 @@ def resolve_pipeline_dir(path: str) -> Optional[str]:
     return None
 
 
+def _names_another_model(path: str, model_id: str) -> bool:
+    """Whether a folder's name is one of the app's other models'."""
+    lowered = path.lower().replace("_", "-").replace(".", "")
+    return any(known in lowered for known in KNOWN_MODELS if known != model_id)
+
+
 def find_weights_dir(model_id: str, override: Optional[str] = None) -> Optional[str]:
     """Where this model's weights are, or ``None``.
 
@@ -182,9 +210,8 @@ def find_weights_dir(model_id: str, override: Optional[str] = None) -> Optional[
     """
     roots: List[str] = []
     if override:
-        direct = resolve_pipeline_dir(override)
-        if direct is not None:
-            return direct
+        if _is_pipeline_dir(override) or _newest_snapshot(override) is not None:
+            return resolve_pipeline_dir(override)
         roots.append(override)
     roots.append(os.environ.get("MC_SIDECAR_WEIGHTS_ROOT") or DEFAULT_WEIGHTS_ROOT)
 
@@ -212,9 +239,11 @@ def find_weights_dir(model_id: str, override: Optional[str] = None) -> Optional[
                 found = resolve_pipeline_dir(os.path.join(root, name))
                 if found is not None:
                     return found
-        # And last, the root itself or a single candidate inside it.
+        # And last, the root itself or a single candidate inside it, unless its
+        # name says it is another model: asked for Klein 4B with only FLUX 3 on
+        # disk, loading FLUX 3 under Klein's pipeline helps nobody.
         found = resolve_pipeline_dir(root)
-        if found is not None:
+        if found is not None and not _names_another_model(found, model_id):
             return found
     return None
 
@@ -248,6 +277,18 @@ def weights_bytes_of(path: Optional[str]) -> Optional[int]:
     return total or None
 
 
+def largest_component_bytes(path: Optional[str]) -> Optional[int]:
+    """Bytes of the largest folder in a snapshot: its transformer, usually."""
+    if not path or not os.path.isdir(path):
+        return None
+    sizes = [
+        weights_bytes_of(os.path.join(path, name))
+        for name in os.listdir(path)
+        if name != "adapters" and not name.startswith(".") and os.path.isdir(os.path.join(path, name))
+    ]
+    return max((size for size in sizes if size), default=None)
+
+
 class SdnqBackend(BackendBase):
     """`torch` + `diffusers` + `sdnq`, on CUDA, XPU or Metal."""
 
@@ -256,7 +297,7 @@ class SdnqBackend(BackendBase):
     # offload hook is installed at open and stays installed, and the fraction
     # is a property of the allocator rather than of a call site. A guard that
     # cannot be promised for every render must not be echoed, and
-    # neither `vae_tiling` nor `text_encoder_eviction` clears that bar here -
+    # neither `vae_tiling` nor `text_encoder_eviction` is one of them here -
     # see `get_applied_guards`.
     CANONICAL_GUARDS = [CPU_OFFLOAD, MEMORY_FRACTION]
 
@@ -279,7 +320,10 @@ class SdnqBackend(BackendBase):
             self.active_model_id, self.weights_dir_override
         )
         self.pipeline: Optional[Any] = None
+        self.family: str = edit.family_of(self.active_model_id)
         self.device: Optional[str] = None
+        self.dtype: Any = None
+        self.prompt_embeds: Dict[str, Any] = {}
         self.basis_state: Basis = Basis.DECLARED
         self.measured_working_set: Optional[int] = None
         self.applied_guards_set: Set[str] = set()
@@ -371,6 +415,13 @@ class SdnqBackend(BackendBase):
                 torch.xpu.empty_cache()
         except Exception:
             pass
+        # glibc keeps what offload frees: Qwen's host peak climbed from 20 to 27 GiB over
+        # three renders on an L4, and stayed at 21 with this. Only Linux has it.
+        if sys.platform == "linux":
+            try:
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except OSError:
+                pass
 
     # -- reporting -------------------------------------------------------
 
@@ -395,9 +446,12 @@ class SdnqBackend(BackendBase):
     def get_working_set_bytes(self) -> Optional[int]:
         if self.basis_state == Basis.MEASURED and self.measured_working_set is not None:
             return self.measured_working_set
+        declared = DECLARED_WORKING_SET.get(self.active_model_id)
+        if declared is not None:
+            return declared
         weights = self.get_weights_bytes()
         if weights is not None:
-            # The gate refuses a working set below the weights it sits on top of.
+            # The gate refuses a working set below the weights it holds.
             return max(DEFAULT_DECLARED_WORKING_SET, weights + 1_932_735_284)
         return DEFAULT_DECLARED_WORKING_SET
 
@@ -412,10 +466,9 @@ class SdnqBackend(BackendBase):
         which is under :data:`WORK_LONG_SIDE` - so switching it on would seam
         exactly the resolution a small crop was upscaled into, which is the
         measurement that withdrew the same guard from the MLX arm.
-        `text_encoder_eviction` is not echoed as a *separate* guard because the
-        offload hook is what performs it: `diffusers` moves the encoder back to
-        the host after encoding and moves it out again next time, so the
-        behaviour is real but it is not a second promise - it is this one.
+        `text_encoder_eviction` is not echoed because nothing is evicted: Klein and
+        FLUX 3 load their encoder only for a new prompt (:meth:`_prompt_embeds`), and
+        Qwen keeps its own under the offload hook, for it reads every crop.
         """
         if not self.applied_guards_set:
             return []
@@ -458,7 +511,7 @@ class SdnqBackend(BackendBase):
             # quantization loader, so it must happen before `from_pretrained`
             # reads a `quantization_config.json` naming it.
             import sdnq  # noqa: F401
-            from diffusers import Flux2KleinInpaintPipeline
+            import diffusers  # noqa: F401
         except ImportError as exc:
             raise SidecarError(
                 500,
@@ -469,6 +522,10 @@ class SdnqBackend(BackendBase):
             ) from exc
 
         device, dtype = self.pick_device()
+        self.family = edit.family_of(self.active_model_id)
+        if self.family != "klein":
+            # The edit recipes are bf16 on every device, as the worker runs them.
+            dtype = torch.bfloat16
         if device == "cpu":
             # Rule 9's first guard, refused from this side rather than faked.
             # With no accelerator there is nothing to offload to and no fraction
@@ -484,6 +541,8 @@ class SdnqBackend(BackendBase):
                 "transformer is not offered.",
             )
         self.device = device
+        self.dtype = dtype
+        self.prompt_embeds = {}
 
         total_bytes = int(
             limits.get("total_bytes")
@@ -502,9 +561,11 @@ class SdnqBackend(BackendBase):
         # Sequential offload moves one *submodule* at a time and is much slower;
         # it is taken only when the accelerator plainly cannot hold a component,
         # which on a discrete GPU is a real and common case and on unified
-        # memory never happens.
+        # memory never happens. The largest component is the test, not all the
+        # weights: model offload holds one at a time. Measured on a 23 GB L4, a
+        # test on Qwen's 18 GB of weights took this path and spent 373 s on a crop.
         capacity = self._accelerator_total_bytes(device) or 0
-        weights = self.get_weights_bytes() or 0
+        weights = largest_component_bytes(self.weights_dir) or 0
         env_low = os.environ.get("MC_SIDECAR_LOW_VRAM", "").strip().lower()
         if env_low in ("1", "true", "yes"):
             self.sequential_offload = True
@@ -515,15 +576,28 @@ class SdnqBackend(BackendBase):
                 device in ("cuda", "xpu") and capacity and weights and capacity < weights * 3 // 2
             )
 
+        components_manager = None
         try:
-            # The snapshot names Flux2KleinPipeline; the inpaint pipeline takes the
-            # same modules and reads is_distilled from the same model_index.json.
-            pipeline = Flux2KleinInpaintPipeline.from_pretrained(
-                self.weights_dir,
-                torch_dtype=dtype,
-                local_files_only=True,
-                low_cpu_mem_usage=True,
-            )
+            if self.family == "qwen":
+                pipeline = edit.load_qwen(self.weights_dir, dtype)
+            elif self.family == "flux3":
+                from diffusers import ComponentsManager
+
+                components_manager = ComponentsManager()
+                pipeline = edit.load_flux3(self.weights_dir, dtype, components_manager)
+            else:
+                from diffusers import Flux2KleinInpaintPipeline
+
+                # The snapshot names Flux2KleinPipeline; the inpaint pipeline takes the
+                # same modules and reads is_distilled from the same model_index.json.
+                pipeline = Flux2KleinInpaintPipeline.from_pretrained(
+                    self.weights_dir,
+                    text_encoder=None,
+                    tokenizer=None,
+                    torch_dtype=dtype,
+                    local_files_only=True,
+                    low_cpu_mem_usage=True,
+                )
         except Exception as exc:
             detail = str(exc)
             if _looks_like_memory(detail):
@@ -538,28 +612,12 @@ class SdnqBackend(BackendBase):
                 f"Failed to load the diffusers pipeline from '{self.weights_dir}': {exc}",
             ) from exc
 
-        # Triton INT8 matmul, where there is a Triton to use. CUDA and XPU only;
-        # the reference guards it the same way and it is skipped on Metal.
         try:
-            from sdnq.common import use_torch_compile as triton_is_available
-            from sdnq.loader import apply_sdnq_options_to_model
-
-            if triton_is_available and device in ("cuda", "xpu"):
-                for name in ("transformer", "text_encoder_2", "text_encoder"):
-                    module = getattr(pipeline, name, None)
-                    if module is not None:
-                        setattr(
-                            pipeline,
-                            name,
-                            apply_sdnq_options_to_model(module, use_quantized_matmul=True),
-                        )
-        except Exception:
-            # An optimisation, not a guard. Nothing is echoed for it and a
-            # runtime without Triton simply runs eager kernels.
-            pass
-
-        try:
-            if self.sequential_offload:
+            if components_manager is not None:
+                # A modular pipeline's offload is its manager's, one component at a time.
+                components_manager.enable_auto_cpu_offload(device=device)
+                offload_call = "enable_auto_cpu_offload"
+            elif self.sequential_offload:
                 pipeline.enable_sequential_cpu_offload(device=device)
                 offload_call = "enable_sequential_cpu_offload"
             else:
@@ -643,6 +701,8 @@ class SdnqBackend(BackendBase):
         from PIL import Image as PILImage
 
         pil_crop = image.to_pil()
+        if self.family != "klein":
+            return self._render_edit(image, pil_crop, hint, prompt, steps, seed, guidance)
         work_w, work_h = self._working_size(image.width, image.height)
         work_crop = (
             pil_crop
@@ -659,7 +719,6 @@ class SdnqBackend(BackendBase):
         kwargs = self._call_kwargs(
             {
                 "image": work_crop,
-                "prompt": str(prompt),
                 "width": work_w,
                 "height": work_h,
                 "num_inference_steps": int(steps),
@@ -683,6 +742,7 @@ class SdnqBackend(BackendBase):
             # `nan_to_num_` / `clamp_` pair cannot be transcribed here. The
             # out-of-place forms cost one 768²×3 float buffer and are correct in
             # both places.
+            kwargs["prompt_embeds"] = self._prompt_embeds(str(prompt))
             with torch.inference_mode():
                 out = self.pipeline(**kwargs)
                 tensor = torch.nan_to_num(
@@ -731,6 +791,68 @@ class SdnqBackend(BackendBase):
             gc.collect()
             self._empty_cache()
 
+        return self._answer(image, result_pil, start_time)
+
+    def _prompt_embeds(self, prompt: str) -> Any:
+        """This prompt's embedding on the accelerator. Klein and FLUX 3 only.
+
+        Their text encoder is about half their weights and a prompt comes back the same
+        for every crop, so it is loaded for a prompt not seen and freed straight after,
+        rather than sitting in memory beside the transformer. Qwen's reads the crop too.
+        Evicting it in place is what broke the second render on the MLX arm
+        (docs/findings.md); here the pipeline never holds one.
+        """
+        embeds = self.prompt_embeds.get(prompt)
+        if embeds is None:
+            encode = edit.encode_flux3_prompt if self.family == "flux3" else edit.encode_klein_prompt
+            embeds = encode(self.weights_dir, self.dtype, self.device, prompt)
+            self.prompt_embeds[prompt] = embeds
+            gc.collect()
+            self._empty_cache()
+        return embeds.to(self.device)
+
+    def _render_edit(
+        self,
+        image: ImageBuffer,
+        crop: Any,
+        hint: Optional[ImageBuffer],
+        prompt: str,
+        steps: int,
+        seed: int,
+        guidance: float,
+    ) -> Tuple[ImageBuffer, int]:
+        """One crop through an edit model: the same errors and sweep as Klein's."""
+        start_time = time.time()
+        try:
+            if self.family == "qwen":
+                result = edit.render_qwen(self.pipeline, crop, hint, str(prompt), steps, seed, float(guidance))
+            else:
+                result = edit.render_flux3(self.pipeline, crop, self._prompt_embeds(str(prompt)), steps, seed)
+        except MemoryError as exc:
+            raise SidecarError(
+                507,
+                ErrorKind.OUT_OF_MEMORY,
+                f"Host allocation failure during diffusion inference: {exc}",
+            ) from exc
+        except Exception as exc:
+            if _looks_like_memory(str(exc)):
+                raise SidecarError(
+                    507,
+                    ErrorKind.OUT_OF_MEMORY,
+                    f"torch allocation cap fired during render: {exc}",
+                ) from exc
+            raise SidecarError(
+                500,
+                ErrorKind.INTERNAL,
+                f"Diffusion inference failed: {exc}",
+            ) from exc
+        finally:
+            gc.collect()
+            self._empty_cache()
+        return self._answer(image, result, start_time)
+
+    def _answer(self, image: ImageBuffer, result_pil: Any, start_time: float) -> Tuple[ImageBuffer, int]:
+        """The reply: the crop at its geometry, the time, and the memory measured."""
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         # The physical footprint and not the resident set size, for
@@ -753,6 +875,7 @@ class SdnqBackend(BackendBase):
         """Drop the pipeline and give the allocator's cache back."""
         pipeline = self.pipeline
         self.pipeline = None
+        self.prompt_embeds = {}
         self.applied_guards_set.clear()
         self.applied_calls = []
         if pipeline is not None:

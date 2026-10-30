@@ -154,8 +154,15 @@ const CAPS = Object.freeze({
 })
 /** @type {any} */
 let workflowCapabilities = CAPS
-/** What the FLUX helper lists, for the tests that turn it on. */
+/** The models on disk, for the tests that turn the helper on. */
 let helperModels = []
+/** The table, and which of it `helperModels` makes installed. */
+const localModels = () => [
+  { id: 'flux2-klein-4b', label: 'FLUX.2 Klein 4B', legacy: false, bytes: 4620000000 },
+  { id: 'flux3-image-klein', label: 'FLUX 3 Image Klein', legacy: false, bytes: 6650397934 },
+  { id: 'qwen-image-edit-2511', label: 'Qwen-Image-Edit-2511', legacy: false, bytes: 18162784045 },
+  { id: 'flux2-klein-9b', label: 'FLUX.2 Klein 9B', legacy: true, bytes: 12606105778 },
+].map((model) => ({ ...model, installed: helperModels.some((found) => found.id === model.id) }))
 
 function stub(answer) {
   listModels = vi.fn(async () => answer())
@@ -174,7 +181,7 @@ function stub(answer) {
       listModels: (/** @type {any} */ options) => listModels(options),
       discardPartial: (/** @type {any} */ spec) => discardPartial(spec),
       listAccelerators: vi.fn(async () => ({ providers: [], models: [] })),
-      listSidecarModels: vi.fn(async () => helperModels),
+      listLocalModels: vi.fn(async () => localModels()),
       sidecarAvailable: vi.fn(async () => ({ available: capabilities.sidecar, reasonKey: null })),
       about: vi.fn(async () => ({ appVersion: '0.0.0-test', facts: [] })),
       subscribe: vi.fn(() => () => {}),
@@ -685,6 +692,7 @@ describe('the two pipelines', () => {
     // The fallback model the helper chose is written, not only remembered.
     await waitFor(() => expect(writeSettings).toHaveBeenCalledWith(expect.objectContaining({ fluxModel: 'flux2-klein-4b', sidecarPath: path })))
     await flux(cleaning)
+    await expand(cleaning, 'settings.localModels.advanced')
     const folder = cleaning.getByLabelText(t('settings.sidecar.label'))
     expect(folder.value).toBe(path)
     expect(folder.placeholder).toBe(t('settings.sidecar.automaticFolder'))
@@ -703,8 +711,9 @@ describe('the two pipelines', () => {
     const cleaning = await open(both)
     expect(group(cleaning, 'flux').textContent).toContain(t('settings.sidecar.notSetUp'))
     await flux(cleaning)
+    await expand(cleaning, 'settings.localModels.advanced')
     expect(cleaning.getByText(t('settings.sidecar.notFound'))).toBeTruthy()
-    expect(cleaning.queryByLabelText(t('settings.sidecarModel.label'))).toBe(null)
+    expect(cleaning.queryByRole('button', { name: t('settings.localModels.inUse') })).toBe(null)
   })
 
   it('keeps the detected FLUX helper set up when its explicit folder is cleared', async () => {
@@ -714,6 +723,7 @@ describe('the two pipelines', () => {
     setSidecarPath('/opt/flux')
     const cleaning = await open(both)
     await flux(cleaning)
+    await expand(cleaning, 'settings.localModels.advanced')
     const field = cleaning.getByLabelText(t('settings.sidecar.label'))
 
     await fireEvent.input(field, { target: { value: '' } })
@@ -736,34 +746,59 @@ describe('the two pipelines', () => {
     })
     expect(group(cleaning, 'flux').textContent).toContain(t('settings.sidecar.notSetUp'))
 
-    await fireEvent.click(cleaning.getByRole('button', { name: t('settings.sidecar.install') }))
+    const row = () => /** @type {HTMLElement} */ (cleaning.container.querySelector('[data-local-model="flux2-klein-4b"]'))
+    await waitFor(() => expect(row()).toBeTruthy())
+    await fireEvent.click(within(row()).getByRole('button'))
     await waitFor(() => expect(capabilities.sidecar).toBe(true))
-    await waitFor(() => expect(cleaning.getByLabelText(t('settings.sidecarModel.label'))).toBeTruthy())
-    await waitFor(() => expect(cleaning.getByRole('button', { name: t('settings.sidecar.install') }).disabled).toBe(false))
-    expect(backend.installFluxHelper).toHaveBeenCalledWith({ backend: 'auto', accelerator: 'auto' })
+    await waitFor(() => expect(within(row()).getByRole('button', { name: t('settings.localModels.inUse') })).toBeTruthy())
+    expect(backend.installFluxHelper).toHaveBeenCalledWith({ model: 'flux2-klein-4b', backend: 'auto', accelerator: 'auto' })
     expect(session.sidecarPath).toBe('')
     expect(session.fluxModel).toBe('flux2-klein-4b')
     expect(group(cleaning, 'flux').textContent).toContain(t('settings.sidecar.ready'))
   })
 
-  it('draw a stored FLUX model the helper no longer lists as itself', async () => {
+  it('says so when the stored model is not on disk', async () => {
     capabilities.sidecar = true
     helperModels = [{ id: 'flux2-klein-4b', label: 'FLUX.2 Klein 4B' }]
     setFluxModel('flux1-dev')
     const cleaning = await open(both)
     await flux(cleaning)
-    const model = /** @type {HTMLSelectElement} */ (
-      await waitFor(() => cleaning.getByLabelText(t('settings.sidecarModel.label')))
-    )
-    await waitFor(() => expect(model.options).toHaveLength(2))
-    expect(model.value).toBe('flux1-dev')
-    expect(model.selectedOptions[0].textContent?.trim()).toBe(t('settings.sidecarModel.missing', { id: 'flux1-dev' }))
+    await waitFor(() => expect(cleaning.getByText(t('settings.sidecarModel.missing', { id: 'flux1-dev' }))).toBeTruthy())
     expect(session.fluxModel).toBe('flux1-dev')
+  })
+
+  it('shows 4B, FLUX 3 and Qwen, keeps 9B under Legacy, and downloads the one asked for', async () => {
+    capabilities.sidecar = true
+    helperModels = [{ id: 'flux2-klein-4b', label: 'FLUX.2 Klein 4B' }]
+    setFluxModel('flux2-klein-4b')
+    const cleaning = await open(both)
+    await flux(cleaning)
+    const row = (/** @type {string} */ id) => /** @type {HTMLElement|null} */ (cleaning.container.querySelector(`[data-local-model="${id}"]`))
+    await waitFor(() => expect(row('qwen-image-edit-2511')).toBeTruthy())
+    expect(row('flux3-image-klein')).toBeTruthy()
+    expect(within(row('flux2-klein-4b')).getByRole('button', { name: t('settings.localModels.inUse') }).disabled).toBe(true)
+    expect(row('flux2-klein-9b')).toBe(null)
+    await expand(cleaning, 'settings.localModels.legacy')
+    await waitFor(() => expect(row('flux2-klein-9b')).toBeTruthy())
+
+    const backend = getBackend()
+    backend.installFluxHelper = vi.fn(async () => {
+      helperModels = [...helperModels, { id: 'qwen-image-edit-2511', label: 'Qwen-Image-Edit-2511' }]
+      return { ready: true }
+    })
+    await fireEvent.click(within(row('qwen-image-edit-2511')).getByRole('button'))
+    await waitFor(() => expect(session.fluxModel).toBe('qwen-image-edit-2511'))
+    expect(backend.installFluxHelper).toHaveBeenCalledWith({ model: 'qwen-image-edit-2511', backend: 'auto', accelerator: 'auto' })
+    await waitFor(() => expect(within(row('qwen-image-edit-2511')).getByRole('button', { name: t('settings.localModels.inUse') })).toBeTruthy())
+
+    await fireEvent.click(within(row('flux2-klein-4b')).getByRole('button', { name: t('settings.localModels.use') }))
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledWith(expect.objectContaining({ fluxModel: 'flux2-klein-4b' })))
   })
 
   it('write the helper folder when the field is left, not on every keystroke', async () => {
     const cleaning = await open(both)
     await flux(cleaning)
+    await expand(cleaning, 'settings.localModels.advanced')
     const field = /** @type {HTMLInputElement} */ (cleaning.getByLabelText(t('settings.sidecar.label')))
     writeSettings.mockClear()
 
@@ -781,6 +816,7 @@ describe('the two pipelines', () => {
   it('keeps MLX visible with its platform requirement and disables Metal setup on Windows', async () => {
     const cleaning = await open(() => view({ runtime: { platform: 'windows-x64' } }))
     await flux(cleaning)
+    await expand(cleaning, 'settings.localModels.advanced')
     const mlx = /** @type {HTMLButtonElement} */ (cleaning.getByRole('radio', { name: t('settings.fluxBackend.mfluxUnsupported') }))
     expect(mlx.disabled).toBe(true)
     expect(mlx.title).toBe(t('settings.fluxBackend.mfluxReason'))

@@ -263,6 +263,7 @@ pub fn run() {
             region::approve_held_mask,
             region::sidecar_available,
             region::list_sidecar_models,
+            region::list_local_models,
             screen_color::pick_screen_color,
             flux_install::install_flux_helper,
             exporting::export_chapter,

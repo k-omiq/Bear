@@ -1,4 +1,4 @@
-//! Installs the optional local FLUX process and its pinned checkpoint on demand.
+//! Installs the optional local model process and one pinned checkpoint on demand.
 //! The shipped Python sources are app resources; provider credentials are not used.
 
 use std::io::{BufRead, BufReader};
@@ -7,6 +7,7 @@ use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use cleaner_core::sidecar::Backend;
 use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
 
@@ -94,10 +95,16 @@ pub(crate) fn managed_python(app: &tauri::AppHandle, root: &Path, version: &str)
     Ok((path.to_string(), Vec::new()))
 }
 
-fn install(app: &tauri::AppHandle, backend: &str, accelerator: &str) -> Result<Value, String> {
+fn install(app: &tauri::AppHandle, model: &str, backend: &str, accelerator: &str) -> Result<Value, String> {
     if !["auto", "mflux", "sdnq"].contains(&backend) {
         return Err("Choose Automatic, MLX, or SDNQ for the FLUX backend".into());
     }
+    let local = cleaner_core::sidecar::models::local_model(model)
+        .ok_or_else(|| format!("{model} is not a model this app can download"))?;
+    // The runtime this model runs on: Klein 4B follows the setting, the others
+    // have only the torch arm.
+    let resolved = local.backend(Backend::from_setting(Some(backend)).unwrap_or(Backend::Sdnq));
+    let checkpoint = serde_json::to_string(&local.checkpoint(resolved)).map_err(|e| e.to_string())?;
     if !["auto", "cuda", "xpu", "mps"].contains(&accelerator) {
         return Err("Unsupported FLUX accelerator".into());
     }
@@ -113,7 +120,8 @@ fn install(app: &tauri::AppHandle, backend: &str, accelerator: &str) -> Result<V
         .arg(source.join("bootstrap.py"))
         .args(["--root", root.to_str().ok_or("Invalid FLUX install path")?])
         .args(["--source", source.to_str().ok_or("Invalid FLUX source path")?])
-        .args(["--backend", backend, "--accelerator", accelerator])
+        .args(["--backend", resolved.id(), "--accelerator", accelerator])
+        .args(["--model", model, "--checkpoint", &checkpoint])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -162,8 +170,9 @@ fn install(app: &tauri::AppHandle, backend: &str, accelerator: &str) -> Result<V
 #[tauri::command]
 pub async fn install_flux_helper(
     app: tauri::AppHandle,
+    model: String,
     backend: String,
     accelerator: String,
 ) -> Result<Value, String> {
-    crate::library::blocking(move || install(&app, &backend, &accelerator)).await
+    crate::library::blocking(move || install(&app, &model, &backend, &accelerator)).await
 }

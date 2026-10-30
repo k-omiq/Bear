@@ -134,6 +134,29 @@ class WeightsResolution(unittest.TestCase):
         direct = _snapshot(os.path.join(self.root, "somewhere-else"))
         self.assertEqual(find_weights_dir("anything-at-all", direct), direct)
 
+    def test_a_lone_folder_of_another_model_is_not_this_model(self) -> None:
+        _snapshot(os.path.join(self.root, "flux3-image-klein-sdnq"))
+        self.assertIsNone(find_weights_dir("flux2-klein-4b", self.root))
+        self.assertIsNotNone(find_weights_dir("flux3-image-klein", self.root))
+
+    def test_a_flux3_snapshot_has_a_modular_index_and_a_download_in_progress_is_skipped(self) -> None:
+        flux3 = os.path.join(self.root, "flux3-image-klein-sdnq")
+        os.makedirs(flux3)
+        with open(os.path.join(flux3, "modular_model_index.json"), "w") as out:
+            out.write("{}")
+        _snapshot(os.path.join(self.root, ".installing-qwen-image-edit-2511-sdnq"))
+        self.assertEqual(find_weights_dir("flux3-image-klein", self.root), flux3)
+        self.assertIsNone(find_weights_dir("qwen-image-edit-2511", self.root))
+
+    def test_the_largest_component_is_one_folder_and_not_the_whole_snapshot(self) -> None:
+        from manga_cleaner_sidecar.backend.sdnq import largest_component_bytes
+
+        for folder, size in (("transformer", 300), ("text_encoder", 200), ("adapters", 900)):
+            os.makedirs(os.path.join(self.root, folder))
+            with open(os.path.join(self.root, folder, "weights"), "wb") as out:
+                out.write(b"0" * size)
+        self.assertEqual(largest_component_bytes(self.root), 300)
+
     def test_a_snapshot_of_symlinks_reports_its_real_size_once(self) -> None:
         """The reason :func:`weights_bytes_of` exists at all.
 
@@ -154,6 +177,23 @@ class WeightsResolution(unittest.TestCase):
         # every blob is reachable twice.
         entry = os.path.dirname(os.path.dirname(snapshot))
         self.assertLess(weights_bytes_of(entry) or 0, 4096 * 2 + 4096)
+
+
+class EditModels(unittest.TestCase):
+    def test_a_model_id_names_its_pipeline(self) -> None:
+        from manga_cleaner_sidecar.backend.edit import family_of
+
+        self.assertEqual(family_of("qwen-image-edit-2511"), "qwen")
+        self.assertEqual(family_of("flux3-image-klein"), "flux3")
+        self.assertEqual(family_of("flux2-klein-4b"), "klein")
+        self.assertEqual(family_of("flux2-klein-9b"), "klein")
+        self.assertEqual(family_of("somebody-elses-model"), "klein")
+
+    def test_flux3_scales_a_small_crop_up_and_only_snaps_a_large_one(self) -> None:
+        from manga_cleaner_sidecar.backend.edit import flux3_work_size
+
+        self.assertEqual(flux3_work_size(336, 416), (608, 768))
+        self.assertEqual(flux3_work_size(1024, 800), (1024, 800))
 
 
 class Contract(unittest.TestCase):
@@ -189,6 +229,9 @@ class Contract(unittest.TestCase):
         # promised.
         for foreign in ("mx.set_memory_limit", "vae_tiling", "text_encoder_eviction"):
             self.assertIsNone(backend.GUARD_ALIASES.get(foreign))
+
+    def test_sdnq_is_told_not_to_compile_kernels_before_it_can_be_imported(self) -> None:
+        self.assertEqual(os.environ.get("SDNQ_USE_TORCH_COMPILE"), "0")
 
     def test_a_render_before_an_open_is_not_open_rather_than_a_crash(self) -> None:
         backend = SdnqBackend()

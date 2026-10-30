@@ -80,6 +80,7 @@ use crate::engines::postprocess::Choice;
 use crate::fit::Fitted;
 use crate::image::Raster;
 use crate::sidecar::hardware::{self, Budget, Demand, Verdict};
+use crate::sidecar::models::{recipe_of, Recipe};
 use crate::sidecar::wire::{Encoding, Image, RenderRequest};
 use crate::sidecar::{Backend, Client, Floor, Install, Sidecar};
 
@@ -198,6 +199,8 @@ pub use crate::engines::render::{
 pub struct Inpainter {
     sidecar: Sidecar,
     model: String,
+    /// How this model is asked to clean a region.
+    recipe: Recipe,
     /// The last few answers, by the crop and hint they were asked for: a
     /// change of a result's finishing renders it again without a request.
     /// Its width, height and RGB8 samples.
@@ -242,6 +245,8 @@ impl Inpainter {
             Verdict::Admitted(_) => {}
             Verdict::Declined(decline) => return Err(decline.into()),
         }
+        let recipe = recipe_of(model);
+        sidecar.client().set_render_timeout(recipe.render_timeout);
         sidecar.client().open(model)?;
         // The open's reply carries the child's memory block, so this is the
         // first moment the loaded-models row can say what rung 3a costs.
@@ -249,6 +254,7 @@ impl Inpainter {
         Ok(Inpainter {
             sidecar,
             model: model.to_owned(),
+            recipe,
             answers: AnswerMemo::new(),
         })
     }
@@ -262,6 +268,7 @@ impl Inpainter {
         Inpainter {
             sidecar,
             model: model.to_owned(),
+            recipe: recipe_of(model),
             answers: AnswerMemo::new(),
         }
     }
@@ -309,7 +316,7 @@ impl Inpainter {
     /// ([`AnswerMemo`]), with no request: the model and its sampling are this
     /// session's and fixed, so the input is the whole of what it answered.
     pub fn render_with(&mut self, page: &Raster, fitted: &Fitted, finishing: Option<Choice>) -> Result<Rendered, Error> {
-        let mut prepared = PreparedRender::prepare(page, fitted)?;
+        let mut prepared = PreparedRender::prepare_as(page, fitted, self.recipe.preprocessing)?;
         prepared.set_finishing(finishing);
         let (w, h) = (prepared.crop().w, prepared.crop().h);
         let key = input_digest(&[&w.to_le_bytes(), &h.to_le_bytes(), prepared.image_rgb8(), prepared.hint_gray8()]);
@@ -337,11 +344,11 @@ impl Inpainter {
                 Encoding::Gray8,
                 prepared.hint_gray8(),
             ),
-            prompt: PROMPT.to_owned(),
-            steps: STEPS,
+            prompt: self.recipe.prompt_for(prepared.hint_gray8(), w, h),
+            steps: self.recipe.steps,
             seed: SEED,
-            guidance: GUIDANCE,
-            deadline_ms: crate::sidecar::client::RENDER_TIMEOUT.as_millis() as u64,
+            guidance: self.recipe.guidance,
+            deadline_ms: self.recipe.render_timeout.as_millis() as u64,
         };
 
         let reply = self.sidecar.client().render(&request)?;

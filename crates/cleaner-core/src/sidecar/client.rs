@@ -193,6 +193,10 @@ impl Client {
 
     /// Override the per-region deadline. For the tests, and for a settings
     /// panel on a machine where sixty seconds is optimistic.
+    pub fn set_render_timeout(&mut self, timeout: Duration) {
+        self.render_timeout = timeout;
+    }
+
     pub fn with_render_timeout(mut self, timeout: Duration) -> Client {
         self.render_timeout = timeout;
         self

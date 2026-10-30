@@ -451,6 +451,7 @@ pub fn list_sidecar_models_from(
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 if !name.starts_with('.') {
                     let (id, label) = parse_model_dir_name(name);
+                    let label = sidecar::models::local_model(&id).map_or(label, |model| model.label.to_owned());
                     models.push(SidecarModelInfo { id, label });
                 }
             }
@@ -458,6 +459,51 @@ pub fn list_sidecar_models_from(
     }
     models.sort_by(|a, b| a.label.cmp(&b.label));
     models
+}
+
+/// One row of Settings' local model list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalModelRow {
+    pub id: String,
+    pub label: String,
+    /// Folded under Legacy.
+    pub legacy: bool,
+    /// Its download's size, or `None` for a folder placed by hand.
+    pub bytes: Option<u64>,
+    pub installed: bool,
+}
+
+/// Every model in the table, whether it is on disk for the backend set now,
+/// and after them any other folder somebody placed by hand.
+pub fn local_models_from(
+    explicit: Option<&str>,
+    backend: Option<&str>,
+    app_data: Option<&std::path::Path>,
+) -> Vec<LocalModelRow> {
+    let env_var = std::env::var("MANGA_CLEANER_SIDECAR").ok();
+    let explicit = explicit
+        .filter(|s| !s.is_empty())
+        .or_else(|| env_var.as_deref().filter(|s| !s.is_empty()));
+    let roots = sidecar::search_paths_from(explicit, app_data);
+    let weights = sidecar::find_within(&roots).map(|install| install.root.join("weights"));
+    let preferred = flux_backend(backend);
+    let mut rows: Vec<LocalModelRow> = sidecar::models::LOCAL_MODELS
+        .iter()
+        .map(|model| LocalModelRow {
+            id: model.id.to_owned(),
+            label: model.label.to_owned(),
+            legacy: model.legacy,
+            bytes: Some(model.checkpoint(model.backend(preferred)).bytes),
+            installed: weights.as_deref().is_some_and(|dir| model.installed(preferred, dir)),
+        })
+        .collect();
+    for found in list_sidecar_models_from(explicit, app_data) {
+        if sidecar::models::local_model(&found.id).is_none() && !rows.iter().any(|row| row.id == found.id) {
+            rows.push(LocalModelRow { id: found.id, label: found.label, legacy: false, bytes: None, installed: true });
+        }
+    }
+    rows
 }
 
 /* ------------------------------------------------------------------ */
@@ -815,7 +861,12 @@ impl Bench {
         let Some(install) = sidecar::find_within(&roots) else {
             return Err("decline.reason.rungUnavailable");
         };
-        let backend = flux_backend(self.flux_backend.as_deref());
+        let model = self
+            .flux_model
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(FLUX_MODEL);
+        let backend = sidecar::models::backend_for(model, flux_backend(self.flux_backend.as_deref()));
         // Ahead of the memory question, and for the gate's own reason: a backend
         // with no rendering path here is refused whatever the machine measures.
         // Per *backend* rather than per platform since `sdnq` - the only thing
@@ -826,11 +877,6 @@ impl Bench {
         let Some(room) = memory::room() else {
             return Err("decline.reason.sidecarUnknownMachine");
         };
-        let model = self
-            .flux_model
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(FLUX_MODEL);
         let key = cleaner_core::residency::Key::new(
             cleaner_core::registry::Kind::Sidecar,
             format!("{}|{}|{model}", install.python.display(), backend.id()),
@@ -6775,6 +6821,20 @@ pub async fn list_sidecar_models(app: tauri::AppHandle) -> Result<Vec<SidecarMod
     .await
 }
 
+/// Every model Settings can offer, and which of them are on disk.
+#[tauri::command]
+pub async fn list_local_models(app: tauri::AppHandle) -> Result<Vec<LocalModelRow>, String> {
+    crate::library::blocking(move || {
+        use tauri::Manager;
+        let app_data = app.path().app_data_dir().ok();
+        let settings = crate::settings::read(&app).ok();
+        let stored_path = setting_str(settings.as_ref(), SIDECAR_PATH_KEYS);
+        let stored_backend = setting_str(settings.as_ref(), FLUX_BACKEND_KEYS);
+        Ok(local_models_from(stored_path.as_deref(), stored_backend.as_deref(), app_data.as_deref()))
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -10185,6 +10245,19 @@ mod tests {
             parse_model_dir_name("custom-model"),
             ("custom-model".to_string(), "custom-model".to_string())
         );
+    }
+
+    #[test]
+    fn with_no_install_every_model_is_offered_and_none_is_on_disk() {
+        let rows = local_models_from(
+            Some("/nonexistent/custom-sidecar-path"),
+            None,
+            Some(std::path::Path::new("/nonexistent/manga-cleaner")),
+        );
+        let ids: Vec<_> = rows.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids, ["flux2-klein-4b", "flux3-image-klein", "qwen-image-edit-2511", "flux2-klein-9b"]);
+        assert!(rows.iter().all(|row| !row.installed && row.bytes.is_some()));
+        assert_eq!(rows.iter().filter(|row| row.legacy).count(), 1);
     }
 
     #[test]
