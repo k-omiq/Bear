@@ -121,7 +121,7 @@ class SeedSnapshotTest(unittest.TestCase):
 
         result = weights.seed_snapshot(self.root, download, model_id=MODEL_PROD_FLUX3_BF16)
         self.assertEqual(result["status"], "seeded")
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 1 + len(model.adapters))
         self.assertEqual(calls[0]["allow_patterns"], [path for path, _size in model.files])
         self.assertNotIn("model.safetensors", calls[0]["allow_patterns"])
         self.assertEqual(sum(size for _path, size in model.files), model.total_bytes)

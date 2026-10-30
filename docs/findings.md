@@ -64,6 +64,14 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## Engines and quality
 
+- **FLUX 3 leaves bold lettering in place on about a quarter of hard crops, and a second edit from a
+  LaMa fill removes it (2026-10-30).** On 19 real crops, 5 came back with the lettering untouched;
+  the lettering's pixels before and after correlated at 0.77 or more, against 0.21 or less on every
+  other crop. Recipes `mc-flux3-klein-edit-v2` and `-bf16-edit-v2` check that and edit again from the
+  fill: all five clean, and the 12 synthetic crops score the same. The newest open inpaint
+  models did not beat it: Z-Image Turbo draws people into the hole, OneReward draws fake text in
+  balloons at 35 s a crop, Qwen 2.1 Turbo leaves grey stains in white balloons, and SDXL Union ProMax
+  and RORem blotch or streak. Numbers and GPU and RAM per model: docs/research/inpaint-models-2026-10.md.
 - **FLUX 3 Image Klein is an edit model, and fed as one it keeps balloons that Qwen erases
   (2026-10-26).** Shown the real crop with its lettering, told where the lettering is, and sampled
   BFL's way (16 steps, time shift 16.0, CPU noise tokens), it removed the lettering and kept every
@@ -743,9 +751,15 @@ Not measured: anything on Metal or on a real Windows or Linux machine, including
 pool, which the declared peaks only estimate. A second prompt was tested on FLUX 3 only; Klein's
 prompt does not change. `malloc_trim` is Linux only, so Qwen on Windows may climb as it did here.
 MLX Klein 4B still holds its encoder and declares 10 GiB. Local FLUX 3 is the raw recipe, without
-the retry from a LaMa fill that is on the `inpaint-models` branch, so the title lettering above
-stays. Skipping offload where the whole model fits on the GPU would cut host memory further on a
+the cloud worker's retry from a LaMa fill, so the title lettering above stays. Skipping offload where the whole model fits on the GPU would cut host memory further on a
 discrete GPU; it needs a change to the `cpu_offload` guard and was not tried.
+**Inpaint models not run (2026-10-30).** LanPaint (running its Diffusers port needs third-party code in
+the bench image, refused by the session's safety check), BrushNet, PowerPaint, Fooocus inpaint, Moebius
+and FLUX.1 Fill without OneReward (gated). FLUX 3 v2 is not on any live profile, and its 0.5 limit rests
+on 31 crops at seed 1. Only the Rust and JS groups near the change ran, in Modal containers. Host memory of
+the 4 bit recipe with LaMa is unknown. A ComfyUI connection is proposed and not built. Sheets and per-crop
+scores of 11 arms were overwritten and can be rebuilt from their saved answers. Details:
+docs/research/inpaint-models-2026-10.md.
 
 **Post-processing of local results (2026-10-28): unit tests and a stand-in model only.** A LaMa
 or FLUX result made on this computer can now change its post-processing from previews, as a cloud

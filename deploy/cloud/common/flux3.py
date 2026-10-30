@@ -1,11 +1,17 @@
 """FLUX 3 Image Klein worker: an edit of the crop as it is, sampled the way BFL samples it.
 
-Cloud only. Klein v2 (common/flux.py) inpaints a hole LaMa has already filled, so Klein
+The sidecar runs the first edit locally too (sidecar/manga_cleaner_sidecar/backend/edit.py), without
+v2's retry below. Klein v2 (common/flux.py) inpaints a hole LaMa has already filled, so Klein
 only redraws LaMa's guess. FLUX 3 is an edit model with a stream of its own for the
 reference image, so it gets the crop with its lettering and `FLUX3_PROMPT`, which names
 where the lettering is (`hint_location`), and removes the lettering itself. The first
 FLUX 3 bench (docs/research/flux3-klein-5_6b.md, 2026-10-19) gave it the LaMa-filled crop
 under a latent hold and so measured LaMa again.
+
+v2 (2026-10-30): bold lettering often comes back untouched (5 of 19 real crops in
+docs/research/inpaint-models-2026-10.md). `lettering_kept` sees it, and the same seed then
+edits the crop with its hole filled by the manga LaMa, which removed all five. A clean first
+answer is returned as it is, because it scores better against truth than an edit of the fill.
 
 Sampling follows BFL's reference code (github.com/black-forest-labs/flux-3-image-klein,
 src/flux3/pipeline.py and sampling.py), not the Diffusers defaults:
@@ -46,13 +52,16 @@ from deploy.cloud.common.contract import LATENT_STRIDE, Flux3Generation, QwenEdi
 from deploy.cloud.common.flux import (
     HOLE_GROWTH,
     WARMUP_SIDE,
+    LamaFill,
     WorkerRenderError,
     hint_location,
     looks_like_memory,
     request_work_size,
 )
 from deploy.cloud.common.manifest import (
+    ADAPTER_DIR,
     FLUX3_PROMPT,
+    LAMA_FILE,
     LOCATION_FLUX3_PROMPT,
     MARKER_FLUX3_PROMPT,
     WORK_LONG_SIDE,
@@ -66,6 +75,10 @@ LOW_TIME_SHIFT = math.exp(1.93586)
 # The marker colour, and how much of it left in the lettering refuses a result
 # (Manga Cleaner Reproduction's imaging.py selection_marker_remaining).
 MARKER = (255, 0, 255)
+# Correlation of the lettering's grey pixels before and after the edit above which the
+# lettering is still there. On 31 crops the five failures read 0.77 and up and every other
+# crop 0.21 or less (docs/research/inpaint-models-2026-10.md).
+LETTERING_KEPT_CORRELATION = 0.5
 
 
 def lettering_location(lettering: Any, np: Any) -> str:
@@ -81,6 +94,20 @@ def lettering_location(lettering: Any, np: Any) -> str:
     row = "upper" if cy < 1/3 else "lower" if cy > 2/3 else "middle"
     col = "left" if cx < 1/3 else "right" if cx > 2/3 else "centre"
     return f"{row} {col}"
+
+
+def lettering_kept(before: Any, after: Any, ink: Any, np: Any) -> bool:
+    """Whether the edit left the lettering where it was: its pixels still follow the input's.
+
+    `before` and `after` are RGB arrays, `ink` the hint as it came. A flat side has no
+    correlation to read: a flat input had nothing to remove, a flat answer removed it.
+    """
+    if not ink.any():
+        return False
+    was, now = before.mean(axis=2)[ink], after.mean(axis=2)[ink]
+    if was.std() < 1.0 or now.std() < 1.0:
+        return False
+    return float(np.corrcoef(was, now)[0, 1]) > LETTERING_KEPT_CORRELATION
 
 
 def magenta_pixels(samples: Any, np: Any) -> Any:
@@ -183,7 +210,7 @@ def _default_modules() -> SimpleNamespace:
     from PIL import Image, ImageFilter
 
     return SimpleNamespace(torch=torch, np=numpy, Image=Image, ImageFilter=ImageFilter,
-                           Modular=ModularPipeline, Scheduler=FlowMatchEulerDiscreteScheduler,
+                           Modular=ModularPipeline, Scheduler=FlowMatchEulerDiscreteScheduler, Lama=LamaFill,
                            Loop=LoopSequentialPipelineBlocks, HoldBlock=_hold_block(ModularPipelineBlocks, InputParam))
 
 
@@ -197,6 +224,7 @@ class Flux3EditRunner:
         self.device = device
         self._modules = modules
         self.pipeline: Any = None
+        self.lama: Any = None
         self.shift = TIME_SHIFT
         self.render_count = 0
 
@@ -233,11 +261,13 @@ class Flux3EditRunner:
             pipeline.update_components(scheduler=m.Scheduler(shift=TIME_SHIFT))
             # The 4-bit pipeline is about 7 GB, the bf16 one 20; it moves to the GPU once, as Klein's does.
             pipeline.to(self.device)
+            lama = m.Lama(f"{self.snapshot_path}/{ADAPTER_DIR}/{LAMA_FILE}", self.device)
         except WorkerRenderError:
             raise
         except Exception as exc:
             code = "out_of_memory" if looks_like_memory(str(exc)) else "model_load_failed"
             raise WorkerRenderError(code, f"Failed to load the pinned pipeline: {exc}") from exc
+        self.lama = lama
         self.pipeline = pipeline
         return pipeline
 
@@ -284,12 +314,13 @@ class Flux3EditRunner:
 
         The distilled model takes no guidance scale; the recipe pins it at 1.0. A crop whose
         long side is below `work_long_side` is edited scaled up to it, or at one megapixel
-        when `flux3_generation` asks for Manga Cleaner Reproduction's size.
+        when `flux3_generation` asks for Manga Cleaner Reproduction's size. Lettering the
+        edit left in place is edited again from a LaMa fill; the marker has its own check.
         """
         generation = flux3_generation or Flux3Generation()
-        pipeline = self.load()
+        self.load()
         m = self._mods()
-        torch, np, Image = m.torch, m.np, m.Image
+        np, Image = m.np, m.Image
 
         with Image.open(io.BytesIO(image_png)) as source:
             crop = source.convert("RGB")
@@ -298,7 +329,6 @@ class Flux3EditRunner:
         if crop.size != (width, height) or hint.size != (width, height):
             raise WorkerRenderError("invalid_image", "Image geometry differs from the request")
 
-        work_w, work_h = request_work_size(width, height, work_long_side, generation)
         grown = hint.point(lambda v: 255 if v else 0).filter(m.ImageFilter.MaxFilter(2 * HOLE_GROWTH + 1))
         lettering = np.asarray(grown) > 0
         unpainted = None
@@ -308,6 +338,35 @@ class Flux3EditRunner:
             painted = np.array(crop)
             painted[lettering] = MARKER
             crop = Image.fromarray(painted)
+
+        def edit(source: Any) -> Any:
+            return self._edit(source, grown, lettering, seed, steps, qwen_edit, work_long_side, generation)
+
+        result = edit(crop)
+        if generation.marker:
+            if marker_remaining(np.asarray(result), lettering, np, unpainted):
+                raise WorkerRenderError("marker_remained",
+                                        "The model left the magenta marker in the lettering; try another seed.")
+        elif lettering_kept(np.asarray(crop), np.asarray(result), np.asarray(hint) > 0, np):
+            try:
+                filled = self.lama.fill(crop, grown)
+            except Exception as exc:
+                code = "out_of_memory" if looks_like_memory(str(exc)) else "inference_failed"
+                raise WorkerRenderError(code, f"LaMa fill failed: {exc}") from exc
+            result = edit(filled)
+        buffer = io.BytesIO()
+        result.save(buffer, format="PNG")
+        self.render_count += 1
+        return buffer.getvalue()
+
+    def _edit(self, crop: Any, grown: Any, lettering: Any, seed: int, steps: int, qwen_edit: Optional[QwenEdit],
+              work_long_side: int, generation: Flux3Generation) -> Any:
+        """One sampling of the pipeline over `crop`: an RGB image at the crop's own size."""
+        pipeline = self.pipeline
+        m = self._mods()
+        torch, np, Image = m.torch, m.np, m.Image
+        width, height = crop.size
+        work_w, work_h = request_work_size(width, height, work_long_side, generation)
         # Lanczos both ways, as for Qwen: the crop is usually stretched, and bicubic in and
         # box out lost fine tone and line detail (docs/findings.md, 2026-10-19).
         work_crop = crop if crop.size == (work_w, work_h) else crop.resize((work_w, work_h), Image.Resampling.LANCZOS)
@@ -348,14 +407,9 @@ class Flux3EditRunner:
         result = images[0].convert("RGB")
         if result.size != (width, height):
             result = result.resize((width, height), Image.Resampling.LANCZOS)
-        if generation.marker and marker_remaining(np.asarray(result), lettering, np, unpainted):
-            raise WorkerRenderError("marker_remained",
-                                    "The model left the magenta marker in the lettering; try another seed.")
-        buffer = io.BytesIO()
-        result.save(buffer, format="PNG")
-        self.render_count += 1
-        return buffer.getvalue()
+        return result
 
 
-__all__ = ["Flux3EditRunner", "LatentHold", "LOW_TIME_SHIFT", "TIME_SHIFT", "flux3_prompt", "lettering_location",
+__all__ = ["Flux3EditRunner", "LETTERING_KEPT_CORRELATION", "LatentHold", "LOW_TIME_SHIFT", "TIME_SHIFT", "flux3_prompt",
+           "lettering_kept", "lettering_location",
            "magenta_pixels", "marker_remaining"]

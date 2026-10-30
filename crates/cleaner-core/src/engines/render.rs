@@ -114,8 +114,8 @@ pub const GUIDED_RECIPES: [(&str, &str); 5] = [
     ("mc-qwen-image-edit-2511-v4", "Disty0/Qwen-Image-Edit"),
     ("mc-flux2-klein-inpaint-v2", "Disty0/FLUX.2-klein-4B"),
     ("mc-flux2-klein-9b-inpaint-v2", "Disty0/FLUX.2-klein-9B"),
-    ("mc-flux3-klein-edit-v1", "OzzyGT/Flux_3_Image_Klein"),
-    ("mc-flux3-klein-bf16-edit-v1", "unsloth/flux-3-image-klein"),
+    ("mc-flux3-klein-edit-v2", "OzzyGT/Flux_3_Image_Klein"),
+    ("mc-flux3-klein-bf16-edit-v2", "unsloth/flux-3-image-klein"),
 ];
 
 /// Whether the worker for this recipe and model reads `qwen_edit`.
@@ -127,8 +127,8 @@ pub fn takes_guidance(recipe_id: &str, model_id: &str) -> bool {
 /// with the model family it must name: FLUX 3, in either set of weights.
 /// deploy/cloud/common/contract.py SIZED_RECIPE_IDS is the same set.
 pub const SIZED_RECIPES: [(&str, &str); 2] = [
-    ("mc-flux3-klein-edit-v1", "OzzyGT/Flux_3_Image_Klein"),
-    ("mc-flux3-klein-bf16-edit-v1", "unsloth/flux-3-image-klein"),
+    ("mc-flux3-klein-edit-v2", "OzzyGT/Flux_3_Image_Klein"),
+    ("mc-flux3-klein-bf16-edit-v2", "unsloth/flux-3-image-klein"),
 ];
 
 /// The working long sides a sized recipe's request may name. The first is the
@@ -219,7 +219,7 @@ impl RenderRecipe {
         // deploy/cloud/common/manifest.py PINNED_SAMPLING: the worker refuses other steps.
         match self.recipe_id.as_str() {
             "mc-qwen-image-edit-2511-v4" => sampling.steps = 8,
-            "mc-flux3-klein-edit-v1" | "mc-flux3-klein-bf16-edit-v1" => sampling.steps = 16,
+            "mc-flux3-klein-edit-v2" | "mc-flux3-klein-bf16-edit-v2" => sampling.steps = 16,
             _ => {}
         }
         sampling

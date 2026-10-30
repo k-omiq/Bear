@@ -1,6 +1,7 @@
 """Qwen-Image-Edit-2511 worker: the 4-bit SDNQ base with the Lightning and FukidashiErase LoRAs.
 
-Cloud only; there is no local twin. Loads like `SdnqFluxRunner` (diffusers + sdnq,
+The sidecar runs this recipe locally too (sidecar/manga_cleaner_sidecar/backend/edit.py).
+Loads like `SdnqFluxRunner` (diffusers + sdnq,
 everything on the GPU) and renders the same crops: the client prepares crop, hint
 and composite exactly as for Klein. Two things differ:
 

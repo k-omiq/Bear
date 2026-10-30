@@ -5216,7 +5216,7 @@ pub(crate) mod tests {
     #[test]
     fn a_working_size_survives_recovery_and_is_recorded_on_the_patch() {
         let mut fixture = RenderFixture::new("flux3-work-size");
-        fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v1".into();
+        fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v2".into();
         fixture.recipe.model_id = "unsloth/flux-3-image-klein".into();
         fixture.recipe.work_long_side = Some(1280);
         let service = cached_fixture(&fixture);
@@ -5236,7 +5236,7 @@ pub(crate) mod tests {
     fn a_finishing_survives_recovery_and_is_recorded_on_the_patch() {
         use cleaner_core::engines::postprocess::{Choice, Finishing};
         let mut fixture = RenderFixture::new("flux3-finishing");
-        fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v1".into();
+        fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v2".into();
         fixture.recipe.model_id = "unsloth/flux-3-image-klein".into();
         fixture.recipe.preprocessing_version = "3.0.0".into();
         let choice = Choice { finishing: Finishing::Poisson, grayscale: true };
@@ -5279,7 +5279,7 @@ pub(crate) mod tests {
     /// A FLUX 3 (3.0.0) result committed by recovery, finished by the default.
     fn committed_flux3_fixture(name: &str) -> (RenderFixture, InferenceService) {
         let mut fixture = RenderFixture::new(name);
-        fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v1".into();
+        fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v2".into();
         fixture.recipe.model_id = "unsloth/flux-3-image-klein".into();
         fixture.recipe.preprocessing_version = "3.0.0".into();
         let service = cached_fixture(&fixture);
