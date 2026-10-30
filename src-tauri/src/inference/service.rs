@@ -5457,11 +5457,11 @@ pub(crate) mod tests {
     }
 
     /// A page edited under the result since it came back - its source file,
-    /// or a layer below it - would take the answer onto a page it did not
-    /// answer. Refused, with nothing written.
+    /// or a layer below it - is no refusal: the answer is composited onto the
+    /// page as it is now, and the change is written.
     #[test]
-    fn refinish_refuses_when_the_page_changed() {
-        use crate::inference::refinish::{apply_at, previews_at, NoModels, Unavailable};
+    fn refinish_follows_a_page_changed_since() {
+        use crate::inference::refinish::{apply_at, previews_at, NoModels};
         use cleaner_core::engines::postprocess::{Choice, Finishing};
         let poisson = Choice { finishing: Finishing::Poisson, grayscale: false };
 
@@ -5474,11 +5474,12 @@ pub(crate) mod tests {
         below.provenance.cloud = None;
         for value in below.pixels.data.iter_mut() { *value = 40; }
         job.complete_region(0, &below, None).unwrap();
-        assert_eq!(previews_at(service.journal(), &fixture.manifest, "reg-1", &mut NoModels).unwrap().unavailable, Some(Unavailable::PageChanged));
-        let before = std::fs::read(&fixture.manifest).unwrap();
-        let refused = apply_at(service.journal(), &fixture.manifest, "reg-1", poisson, &mut NoModels).err().unwrap();
-        assert!(refused.starts_with("refinish_page_changed"), "{refused}");
-        assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
+        let previews = previews_at(service.journal(), &fixture.manifest, "reg-1", &mut NoModels).unwrap();
+        assert_eq!(previews.unavailable, None);
+        assert!(previews.previews.iter().all(|preview| preview.url.is_some()));
+        let change = apply_at(service.journal(), &fixture.manifest, "reg-1", poisson, &mut NoModels).unwrap();
+        assert!(change.history.is_some());
+        assert_eq!(fixture.committed_patch().provenance.params_snapshot["postprocess"]["finishing"], "poisson");
 
         // The page file itself.
         let (fixture, service) = committed_flux3_fixture("refinish-source-changed");
@@ -5487,9 +5488,9 @@ pub(crate) mod tests {
         let mut bytes = std::fs::read(&source).unwrap();
         bytes.extend_from_slice(b"edited");
         std::fs::write(&source, bytes).unwrap();
-        assert_eq!(previews_at(service.journal(), &fixture.manifest, "reg-1", &mut NoModels).unwrap().unavailable, Some(Unavailable::PageChanged));
-        let refused = apply_at(service.journal(), &fixture.manifest, "reg-1", poisson, &mut NoModels).err().unwrap();
-        assert!(refused.starts_with("refinish_page_changed"), "{refused}");
+        assert_eq!(previews_at(service.journal(), &fixture.manifest, "reg-1", &mut NoModels).unwrap().unavailable, None);
+        let change = apply_at(service.journal(), &fixture.manifest, "reg-1", poisson, &mut NoModels).unwrap();
+        assert!(change.history.is_some());
     }
 
     /// A committed cloud result shows one small preview per finishing, its

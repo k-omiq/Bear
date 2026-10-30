@@ -7,9 +7,10 @@
 //!
 //! - **A cloud result's saved answer.** A cloud clean keeps the model's raw
 //!   answer with its attempt (`journal.rs`, `result.png`). The region is
-//!   prepared again from the page under it, held to the input the attempt
-//!   sent ([`super::service::check_prepared_input`], the attach's own
-//!   checks), and the answer is composited again: no request and no GPU.
+//!   prepared again from the page under it as it is now, and the answer is
+//!   composited onto that: no request and no GPU. A page edited since - its
+//!   file, or a layer under the region - is no refusal, as it is none for a
+//!   local result; only a crop no longer the answer's size is.
 //! - **This computer's model, asked again.** A LaMa or local FLUX result
 //!   keeps no answer on disk. Its region is prepared again the same way, from
 //!   the page under it as it is now, and rendered again by the model that
@@ -80,8 +81,8 @@ pub enum Unavailable {
     NotCloud,
     /// The saved answer is gone, or cannot be read.
     NoResult,
-    /// The page, or a layer under the region, changed since the answer came
-    /// back: it would be composited onto a page it did not answer.
+    /// The page under a cloud result is gone, or can no longer be prepared
+    /// to a crop of the answer's size: there is nowhere to composite it.
     PageChanged,
     /// Rendered under the first cloud preparation (1.0.0), whose region is
     /// the patch's own mask and moves when the patch is written, or under one
@@ -100,7 +101,7 @@ impl Unavailable {
         match self {
             Unavailable::NotCloud => "refinish_not_cloud: the region was not cleaned in the cloud",
             Unavailable::NoResult => "refinish_no_result: the saved cloud answer is gone",
-            Unavailable::PageChanged => "refinish_page_changed: the page under the region changed",
+            Unavailable::PageChanged => "refinish_page_changed: the page under the region no longer fits its answer",
             Unavailable::Unsupported => "refinish_unsupported: the result's preparation cannot be finished again",
             Unavailable::ModelChanged => "refinish_model_changed: another local FLUX model is set now",
         }
@@ -194,31 +195,29 @@ pub(crate) fn reopen(
     };
     drop(guard);
 
-    // The page the answer was made from, read as the attach read it.
+    // The page as it is now, read as the attach read it.
     let Some(source_path) = job.source_path(record.source_idx) else {
         return Ok(Err(Unavailable::PageChanged));
     };
     let source = std::fs::read(source_path).map_err(|e| e.to_string())?;
-    if record.provenance.source_sha256 != attempt.source_image_hash || sha256_hex(&source) != attempt.source_image_hash {
-        return Ok(Err(Unavailable::PageChanged));
-    }
     let preprocessing = match Preprocessing::of(&attempt.preprocessing_version) {
         Ok(Preprocessing::V1) | Err(_) => return Ok(Err(Unavailable::Unsupported)),
         Ok(preprocessing) => preprocessing,
     };
-    let region = match load_cloud_region(job, region_id, &attempt.source_image_hash) {
+    let region = match load_cloud_region(job, region_id, &sha256_hex(&source)) {
         Ok(region) => region,
         Err(crate::inference::consent::ConsentError::RenderPrepareFailed(_)) => return Ok(Err(Unavailable::NotCloud)),
         Err(error) => return Err(error.to_string()),
     };
     let page = job.display_page(record.source_idx, &source).map_err(|e| e.to_string())?;
     // The region is a patch now, and a patch is prepared from the page under
-    // it, as a cloud re-render of it is: the same preparation the attempt
-    // sent, unless something under it changed.
+    // it, as a cloud re-render of it is. Whatever changed under it since, the
+    // answer is composited onto the page as it is; the crop must only still
+    // be the answer's size.
     let Ok(cloud) = region.prepare(job, &page, preprocessing) else {
         return Ok(Err(Unavailable::PageChanged));
     };
-    if super::service::check_prepared_input(&cloud, &attempt.snapshot(), attempt.width, attempt.height).is_err() {
+    if cloud.crop_bounds.w != attempt.width || cloud.crop_bounds.h != attempt.height {
         return Ok(Err(Unavailable::PageChanged));
     }
     let CloudRegionKind::Patch(stored) = region.kind else {
