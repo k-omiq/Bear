@@ -44,6 +44,7 @@ import { CLOUD_ENGINE, MAX_MASK_PADDING, isCloudMask, isDetected, reRunnable, re
 import { isRegionCopy, layerOf, sameLayer, sanitizeLayer } from '../model/layers.js'
 import { heldStartsOutside } from '../model/review.js'
 import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
+import { editGradientLayer } from './retouch.svelte.js'
 import { notify } from '../state/app.svelte.js'
 import { openWindow } from '../state/session.svelte.js'
 import {
@@ -1486,7 +1487,9 @@ export function showOnPage(region) {
  * own idea of what Delete means is the defect `deleteRow` exists to prevent.
  *
  * Post-processing… opens the Post-processing window on the layer, as the
- * row's own button does (`openFinishingWindow`).
+ * row's own button does (`openFinishingWindow`). Edit gradient holds a
+ * gradient layer again in the Gradient tool, as the row's button does
+ * (`retouch.svelte.js#editGradientLayer`).
  *
  * Clean with on a detected region cleans it for the first time, with the
  * model picked: a local one here, Cloud on the cloud GPU. On a cleaned one it
@@ -1508,6 +1511,7 @@ export async function runRegionMenuItem(id, region) {
     openFinishingWindow(region)
     return true
   }
+  if (id === 'editGradient') return editGradientLayer(region)
   if (id === 'delete') return deleteRow(region)
   if (id === 'duplicate') return duplicateRegion(region)
   if (id === 'approveMask') return approveHeldMask(region)

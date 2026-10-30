@@ -15,6 +15,7 @@ import { commitDraft } from './drawing.svelte.js'
 import {
   applicable,
   applySelection,
+  editGradientLayer,
   matchSurroundings,
   moveGhost,
   reopenGradient,
@@ -216,6 +217,41 @@ describe('the Gradient tool', () => {
     expect(api.createRegion).not.toHaveBeenCalled()
     expect(api.applyTool).toHaveBeenCalledTimes(1)
     expect(api.applyTool.mock.calls[0][0].params.gradient).toMatchObject({ kind: 'diamond', start: [20, 20] })
+  })
+
+  it('reopens a gradient layer from any tool, an Auto one as Linear with a fitted line', async () => {
+    const api = backend()
+    setBackend(api)
+    const region = {
+      id: 'g1',
+      pageId: 'c1-p001',
+      bbox: { x: 10, y: 10, w: 30, h: 30 },
+      outcome: 'cleaned',
+      mask: {
+        provenance: {
+          engine: 'paint',
+          params_snapshot: {
+            mode: 'gradient',
+            gradient: null,
+            auto: true,
+            painted: { kind: 'rect', points: [{ x: 10, y: 10 }, { x: 40, y: 40 }], feather: 0 },
+          },
+        },
+      },
+    }
+    editor.chapter.pages[0].regions = [region]
+    editor.chapter.pages[0].regionCount = 1
+    editor.toolParams.gradient = { ...editor.toolParams.gradient, kind: 'auto' }
+    editor.tool = 'brush'
+    expect(editGradientLayer(region)).toBe(true)
+    expect(editor.tool).toBe('gradient')
+    expect(editor.selectionId).toBe('g1')
+    expect(editor.toolParams.gradient.kind).toBe('linear')
+    expect(draft.selection).toMatchObject({ tool: 'gradient', regionId: 'g1', start: null })
+    await vi.waitFor(() => expect(draft.selection?.start).toEqual({ x: 25, y: 10 }))
+    await applySelection()
+    expect(api.createRegion).not.toHaveBeenCalled()
+    expect(api.applyTool.mock.calls[0][0].params).toMatchObject({ kind: 'linear', gradient: { kind: 'linear', start: [25, 10] } })
   })
 
   it('records no Patch fields on a gradient, and no gradient on a patch', () => {

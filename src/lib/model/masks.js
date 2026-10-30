@@ -7,7 +7,7 @@
  */
 
 import { currentRung } from './ladder.js'
-import { isRegionCopy } from './layers.js'
+import { isGradientLayer, isRegionCopy } from './layers.js'
 
 /**
  * The widest Mask padding offered, in page pixels: how far a detection's mask
@@ -444,6 +444,9 @@ export function detectedActions(options = {}) {
  * **Post-processing…**, which selects it and opens the Post-processing
  * window on it.
  *
+ * A gradient layer gets **Edit gradient**, which holds it again in the
+ * Gradient tool.
+ *
  * Delete is on every menu: for a region with no mask it is the region itself
  * that goes - which is how a warning the user has read and decided about
  * leaves the list.
@@ -545,6 +548,13 @@ export function regionMenuSections(region, options = {}) {
         selected: rung === current,
       })),
     })
+  }
+
+  // A gradient layer opens again in the Gradient tool, its line and stops
+  // editable, from whatever tool is out.
+  if (isGradientLayer(region)) {
+    sections.push({ id: 'gradient', labelKey: null,
+      items: [{ id: 'editGradient', labelKey: 'retouch.gradient.edit', icon: 'gradient' }] })
   }
 
   if (mask && options.finishing === true) {

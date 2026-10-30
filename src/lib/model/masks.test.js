@@ -343,6 +343,12 @@ describe('regionMenuSections', () => {
     expect(ids(regionMenuSections({ id: 'c1-p001-r1', mask: null }, { finishing: true }))).toEqual(['delete'])
   })
 
+  it('offers Edit gradient on a gradient layer, and on no other', () => {
+    const gradient = { id: 'g1', outcome: 'cleaned', mask: { provenance: { engine: 'paint', params_snapshot: { mode: 'gradient' } } } }
+    expect(ids(regionMenuSections(gradient))).toEqual(['editGradient', 'delete'])
+    expect(ids(regionMenuSections(masked('lama'), { engines: { flux: false } }))).not.toContain('editGradient')
+  })
+
   it('offers Delete alone for a region with no mask, and names the region', () => {
     const sections = regionMenuSections({ id: 'c1-p001-r1', mask: null })
     expect(ids(sections)).toEqual(['delete'])

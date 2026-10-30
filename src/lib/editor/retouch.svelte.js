@@ -16,7 +16,8 @@
  *   selection (`SelectionOverlay.svelte`). Match surroundings asks for the line
  *   and the stops at once (`fitGradient`). A gradient layer reopens: its
  *   recorded gradient is held again with the layer's id, and Apply re-renders
- *   that layer in place (`applyTool`) rather than adding one. The **Auto**
+ *   that layer in place (`applyTool`) rather than adding one; the region menu
+ *   and the Layers row reopen one from any tool (`editGradientLayer`). The **Auto**
  *   type (`Shift+G`) needs no line: the selection is applied as soon as it is
  *   held, and the native side fills it from all round it
  *   (`cleaner-core/src/engines/autogradient.rs`).
@@ -36,6 +37,7 @@ import {
   reloadPage,
   scopePageIndices,
   select,
+  setTool,
   setToolParam,
 } from '../state/editor.svelte.js'
 import { rgbToHex } from '../ui/color.js'
@@ -291,19 +293,22 @@ export async function matchSurroundings() {
 
 /**
  * Hold a gradient layer again: its line, its stops and its options back on
- * the bar, and Apply re-rendering that layer.
+ * the bar, and Apply re-rendering that layer. An Auto layer recorded no line:
+ * it reopens as a Linear one with Match surroundings' line and stops, to
+ * start from.
  *
  * @param {any} region
  * @returns {boolean} whether it could be reopened
  */
 export function reopenGradient(region) {
   const snapshot = region?.mask?.provenance?.params_snapshot
-  if (snapshot?.mode !== 'gradient' || !snapshot.gradient) return false
+  if (snapshot?.mode !== 'gradient' || (!snapshot.gradient && snapshot.auto !== true)) return false
   const located = locateRegion(region.id)
   const page = editor.chapter?.pages.find((candidate) => candidate.index === located?.pageIndex)
   if (!located || !page || (!snapshot.painted && !snapshot.stroke)) return false
-  const { params, start, end } = fromWire(snapshot.gradient)
-  for (const [key, value] of Object.entries(params)) setToolParam('gradient', key, value)
+  const recorded = snapshot.gradient ? fromWire(snapshot.gradient) : null
+  if (recorded) for (const [key, value] of Object.entries(recorded.params)) setToolParam('gradient', key, value)
+  else if (editor.toolParams.gradient?.kind === 'auto') setToolParam('gradient', 'kind', 'linear')
   setToolParam('gradient', 'asScreentone', snapshot.asScreentone === true)
   setToolParam('gradient', 'feather', Number(snapshot.feather ?? snapshot.painted?.feather ?? 0))
   setToolParam('gradient', 'opacity', Number(snapshot.layer?.opacity ?? 100))
@@ -321,11 +326,26 @@ export function reopenGradient(region) {
     offset: null,
     proposed: false,
     proposing: false,
-    start,
-    end,
+    start: recorded?.start ?? null,
+    end: recorded?.end ?? null,
     regionId: region.id,
   })
+  if (!recorded) void matchSurroundings()
   return true
+}
+
+/**
+ * Edit a placed gradient layer from anywhere: the Gradient tool out, the
+ * layer selected and held again (`reopenGradient`). The region menu's and the
+ * Layers row's Edit gradient.
+ *
+ * @param {any} region
+ * @returns {boolean} whether it could be reopened
+ */
+export function editGradientLayer(region) {
+  setTool('gradient')
+  select(region.id)
+  return reopenGradient(region)
 }
 
 /**

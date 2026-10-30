@@ -19,7 +19,7 @@
    * gradient itself, with the two presets and an eyedropper per colour stop;
    * Reverse, Dither and As screentone as toggles; Match surroundings; and
    * **Edit gradient** while a gradient layer is selected, which holds that
-   * layer's gradient again. Apply and the help sit under them, where the
+   * layer's gradient again (an Auto layer's too, and under the Auto type). Apply and the help sit under them, where the
    * Text cleanup panel has its run button. The **Auto** type has none of
    * these: a selection fills as soon as it is drawn, from all round it.
    *
@@ -42,8 +42,7 @@
   const auto = $derived(tool === 'gradient' && params.kind === 'auto')
   const selectedGradient = $derived(tool === 'gradient' && !held
     ? (editor.chapter?.pages ?? []).flatMap((page) => page.regions ?? [])
-      .find((region) => region.id === editor.selectionId && isGradientLayer(region)
-        && !!region.mask?.provenance?.params_snapshot?.gradient) ?? null
+      .find((region) => region.id === editor.selectionId && isGradientLayer(region)) ?? null
     : null)
 
   /** The help line: what the page is waiting for now. */
@@ -93,6 +92,14 @@
   <Button size="sm" variant={on ? 'soft' : 'ghost'} aria-pressed={on} onclick={() => set(key, !on)}>
     {t(labelKey)}
   </Button>
+{/snippet}
+
+{#snippet edit()}
+  {#if selectedGradient}
+    <Button size="sm" variant="soft" onclick={() => reopenGradient(selectedGradient)}>
+      {t('retouch.gradient.edit')}
+    </Button>
+  {/if}
 {/snippet}
 
 {#snippet apply()}
@@ -171,12 +178,10 @@
         <Button size="sm" variant="soft" disabled={!held} onclick={() => void matchSurroundings()}>
           {t('retouch.gradient.match')}
         </Button>
-        {#if selectedGradient}
-          <Button size="sm" variant="soft" onclick={() => reopenGradient(selectedGradient)}>
-            {t('retouch.gradient.edit')}
-          </Button>
-        {/if}
+        {@render edit()}
       </div>
+    {:else if selectedGradient}
+      <div class="choices">{@render edit()}</div>
     {/if}
   </div>
   <div class="action">

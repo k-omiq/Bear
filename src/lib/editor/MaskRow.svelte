@@ -8,8 +8,9 @@
   import { cloudProfileLabel, currentCloudModelId, engineModelLabel, finishingKey } from '../model/model-names.js'
   import { actionHint } from './maskrows.js'
   import { menuPoint } from './gesture.js'
+  import { editGradientLayer } from './retouch.svelte.js'
   import { cleanDetected, deleteRow, keepDependencyResult, offersFinishing, openFinishingWindow, openLayerEdit, recordedFinishing, regionPageBusy, requestDetectedMaskPadding, rerunMask, runMaskAction, shownMaskPadding, updateLayer } from './maskactions.svelte.js'
-  import { layerCapabilities, layerOf } from '../model/layers.js'
+  import { isGradientLayer, layerCapabilities, layerOf } from '../model/layers.js'
   import { Button, Disclosure, IconButton, RangeField, Select } from '../ui/index.js'
   import { hasKey, t } from '../i18n/index.js'
   import MaskFacts from './MaskFacts.svelte'
@@ -223,6 +224,9 @@
     const key = name ? finishingKey('option', name) : null
     return key && hasKey(key) ? t(key) : t('masks.finishing.open')
   })
+
+  // A gradient layer opens again in the Gradient tool, from any tool.
+  const gradientLayer = $derived(isGradientLayer(region))
 
   /**
    * The open context menu: `{x, y, region}` in client pixels, or null.
@@ -453,6 +457,17 @@
             onclick={() => openFinishingWindow(region)}
           >
             {finishingName}
+          </Button>
+        </span>
+      </div>
+    {/if}
+
+    {#if gradientLayer}
+      <div class="pick" data-gradient-row>
+        <span class="pick-label">{t('tools.name.gradient')}</span>
+        <span class="pick-control">
+          <Button size="sm" variant="soft" data-gradient-edit onclick={() => editGradientLayer(region)}>
+            {t('retouch.gradient.edit')}
           </Button>
         </span>
       </div>
