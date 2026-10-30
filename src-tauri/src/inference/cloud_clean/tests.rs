@@ -589,7 +589,7 @@ fn the_estimate_follows_each_jobs_crop_not_a_count() {
 /// recipe that takes no size leaves the setting unread.
 #[test]
 fn the_working_size_setting_reaches_a_flux3_recipe_and_its_estimate() {
-    let flux3 = RenderRecipe::new("mc-flux3-klein-bf16-edit-v1", "3.0.0", "unsloth/flux-3-image-klein",
+    let flux3 = RenderRecipe::new("mc-flux3-klein-bf16-edit-v2", "3.0.0", "unsloth/flux-3-image-klein",
         "67662613c10c92a1364cb3da8c6f7447977c7ce9", false);
     let gateway = Gateway { recipe: flux3.clone(), ..Gateway::priced() };
     let sized = deployed_recipe(&gateway, None, Some(1280)).unwrap();
@@ -707,7 +707,7 @@ fn the_generation_setting_rides_on_flux3_only_and_megapixel_replaces_the_working
     for bad in [serde_json::json!({"marker": "yes"}), serde_json::json!({"colour": true}), serde_json::json!(true)] {
         assert!(flux3_generation_from_settings(&serde_json::json!({"cloudFlux3Generation": bad})).is_err(), "{bad}");
     }
-    let flux3 = RenderRecipe::new("mc-flux3-klein-bf16-edit-v1", "3.0.0", "unsloth/flux-3-image-klein",
+    let flux3 = RenderRecipe::new("mc-flux3-klein-bf16-edit-v2", "3.0.0", "unsloth/flux-3-image-klein",
         "67662613c10c92a1364cb3da8c6f7447977c7ce9", false);
     let gateway = Gateway { recipe: flux3, ..Gateway::priced() };
     let mut sized = deployed_recipe(&gateway, None, Some(1280)).unwrap();

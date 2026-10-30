@@ -76,14 +76,16 @@ REVISION_PROD_QWEN: str = "a285fceef1439d72d60533e83cb6d8921748a666"
 # step-distilled model, with its Qwen3-VL-4B text encoder in 4 bit too. An edit of the crop
 # with its lettering in it, not an inpaint (common/flux3.py); its own GPU image
 # (deploy/cloud/modal/app.py), because it needs Diffusers 0.42.
-RECIPE_PROD_FLUX3: str = "mc-flux3-klein-edit-v1"
+# v2 (2026-10-30): lettering the edit left in place is edited again from a LaMa fill
+# (common/flux3.py), so the LaMa adapter is seeded beside the snapshot.
+RECIPE_PROD_FLUX3: str = "mc-flux3-klein-edit-v2"
 MODEL_PROD_FLUX3: str = "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit"
 REVISION_PROD_FLUX3: str = "bf0af016a936bfe422eec96557aee058c3a6174e"
 # The same model in BFL's own bf16 weights, the recipe otherwise unchanged. BFL's repository
 # is gated; unsloth's copy is not, and at this revision every file pinned below has the same
 # SHA-256 as black-forest-labs/flux-3-image-klein at 337337621b8526e120f2275d250242f4a6bedd75
 # (checked on the Hub, 2026-10-26). Bench 4 (docs/research/flux3-klein-5_6b.md) measured it.
-RECIPE_PROD_FLUX3_BF16: str = "mc-flux3-klein-bf16-edit-v1"
+RECIPE_PROD_FLUX3_BF16: str = "mc-flux3-klein-bf16-edit-v2"
 MODEL_PROD_FLUX3_BF16: str = "unsloth/flux-3-image-klein"
 REVISION_PROD_FLUX3_BF16: str = "67662613c10c92a1364cb3da8c6f7447977c7ce9"
 LIGHTNING_REPO: str = "lightx2v/Qwen-Image-Edit-2511-Lightning"
@@ -427,7 +429,7 @@ PRODUCTION_MODELS: Dict[str, ProductionModel] = {
     MODEL_PROD_FLUX3: ProductionModel(MODEL_PROD_FLUX3, REVISION_PROD_FLUX3, RECIPE_PROD_FLUX3,
                                        PROD_SNAPSHOT_FLUX3_FILES, PROD_SNAPSHOT_FLUX3_TOTAL_BYTES,
                                        "FLUX Kommunity", label="FLUX 3 Image Klein (4-bit)",
-                                       runner="flux3", worker_memory_gib=24),
+                                       runner="flux3", worker_memory_gib=24, adapters=(LAMA_ADAPTER,)),
     # Bench 4 and 5 on an L40S, 2026-10-26: 21.1 GiB peak allocated by torch at the 768
     # working size, 24.9 GiB at 1280, 19.0 GiB after load; too close to an L4's 24 GB and
     # over it at 1280. Bench 5 ran in a 40 GiB container; the host's peak was not read.
@@ -436,7 +438,7 @@ PRODUCTION_MODELS: Dict[str, ProductionModel] = {
                                             PROD_SNAPSHOT_FLUX3_BF16_TOTAL_BYTES, "FLUX Kommunity",
                                             label="FLUX 3 Image Klein (bf16)", runner="flux3",
                                             required_gpu=(("modal", "L40S"), ("beam", "RTX5090")),
-                                            worker_memory_gib=40, partial_repo=True),
+                                            worker_memory_gib=40, partial_repo=True, adapters=(LAMA_ADAPTER,)),
 }
 
 

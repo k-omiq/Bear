@@ -64,6 +64,14 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## Engines and quality
 
+- **FLUX 3 leaves bold lettering in place on about a quarter of hard crops, and a second edit from a
+  LaMa fill removes it (2026-10-30).** On 19 real crops, 5 came back with the lettering untouched;
+  the lettering's pixels before and after correlated at 0.77 or more, against 0.21 or less on every
+  other crop. Recipes `mc-flux3-klein-edit-v2` and `-bf16-edit-v2` check that and edit again from the
+  fill: all five clean, and the 12 synthetic crops score the same. The newest open inpaint
+  models did not beat it: Z-Image Turbo draws people into the hole, OneReward draws fake text in
+  balloons at 35 s a crop, Qwen 2.1 Turbo leaves grey stains in white balloons, and SDXL Union ProMax
+  and RORem blotch or streak. Numbers and GPU and RAM per model: docs/research/inpaint-models-2026-10.md.
 - **FLUX 3 Image Klein is an edit model, and fed as one it keeps balloons that Qwen erases
   (2026-10-26).** Shown the real crop with its lettering, told where the lettering is, and sampled
   BFL's way (16 steps, time shift 16.0, CPU noise tokens), it removed the lettering and kept every
@@ -714,6 +722,11 @@ Windows or Linux, and a one-machine number is never written as though it were ge
   beside every Windows and Linux x64 runtime.
 
 ## What has not been measured
+
+**Inpaint models not run (2026-10-30).** LanPaint (running its Diffusers port needs third-party code in
+the bench image, refused by the session's safety check), BrushNet, PowerPaint, Fooocus inpaint, Moebius
+and FLUX.1 Fill without OneReward (gated). FLUX 3 v2 is not on any live profile, and its 0.5 limit rests
+on 31 crops at seed 1. Details: docs/research/inpaint-models-2026-10.md.
 
 **Post-processing of local results (2026-10-28): unit tests and a stand-in model only.** A LaMa
 or FLUX result made on this computer can now change its post-processing from previews, as a cloud

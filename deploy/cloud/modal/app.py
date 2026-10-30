@@ -113,6 +113,8 @@ FLUX3_GPU_REQUIREMENTS = (
     "huggingface-hub==1.33.0",
     "pillow==12.3.0",
     "numpy==2.4.6",
+    # Lettering the edit left in place is filled with the manga LaMa graph (common/flux3.py).
+    "onnxruntime-gpu==1.23.2",
 )
 RENDER_REQUIREMENTS = (FLUX3_GPU_REQUIREMENTS
                        if SETTINGS.render and production_model(SETTINGS.model_id).runner == "flux3"

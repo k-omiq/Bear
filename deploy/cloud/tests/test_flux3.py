@@ -147,6 +147,25 @@ class FakePipeline:
         return [Image.new("RGB", (kwargs["width"], kwargs["height"]), (128, 128, 128))]
 
 
+class FakeLama:
+    """Fills the hole with mid grey and records what it was given."""
+
+    error: Optional[Exception] = None
+    opened: List[str] = []
+
+    def __init__(self, path: str, device: str):
+        FakeLama.opened.append(path)
+        self.fills = 0
+
+    def fill(self, crop: Any, hole: Any) -> Any:
+        if FakeLama.error is not None:
+            raise FakeLama.error
+        self.fills += 1
+        filled = crop.copy()
+        filled.paste((128, 128, 128), mask=hole)
+        return filled
+
+
 def flux3_modules(cuda: bool = True, load_error: Optional[Exception] = None,
                   call_error: Optional[Exception] = None, components: Optional[Dict[str, Any]] = None
                   ) -> SimpleNamespace:
@@ -174,7 +193,7 @@ def flux3_modules(cuda: bool = True, load_error: Optional[Exception] = None,
     return SimpleNamespace(
         torch=fake_torch(cuda), np=np, Image=Image, ImageFilter=ImageFilter,
         Modular=SimpleNamespace(from_pretrained=from_pretrained),
-        Scheduler=lambda shift: ("scheduler", shift), Loop=FakeLoop, HoldBlock=FakeHold,
+        Scheduler=lambda shift: ("scheduler", shift), Loop=FakeLoop, HoldBlock=FakeHold, Lama=FakeLama,
         blocks=blocks, loops=(text2img, edit), pipeline=pipeline, loads=loads,
     )
 
@@ -251,6 +270,79 @@ class Flux3EditRunnerTest(unittest.TestCase):
         self.assertEqual((call["width"], call["height"]), working_size(300, 200))
         self.assertEqual(tuple(np.asarray(call["image"])[30, 600]), (255, 255, 255))
         self.assertEqual(mods.pipeline.scheduler, ("scheduler", TIME_SHIFT))
+
+    def lettered_crop(self) -> tuple:
+        """A white crop with dark, uneven lettering in the hint."""
+        image = Image.new("RGB", (300, 200), (255, 255, 255))
+        for x in range(220, 290, 6):
+            image.paste((20, 20, 20), (x, 10, x + 3, 50))
+        hint = Image.new("L", (300, 200), 0)
+        hint.paste(255, (220, 10, 290, 50))
+        return png(image), png(hint)
+
+    def test_lettering_left_in_place_is_edited_again_from_a_lama_fill(self) -> None:
+        mods = flux3_modules()
+        mods.pipeline.echo = True
+        runner = self.Runner("/weights/snap", modules=mods)
+        crop, hint = self.lettered_crop()
+        answer = runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100)
+        self.assertEqual(runner.lama.fills, 1)
+        self.assertEqual(len(mods.pipeline.calls), 2)
+        # The second edit reads the filled crop, and its answer is the one returned.
+        work_w, work_h = mods.pipeline.calls[1]["width"], mods.pipeline.calls[1]["height"]
+        second = mods.pipeline.calls[1]["image"].convert("L")
+        self.assertEqual(second.getpixel((255 * work_w // 300, 30 * work_h // 200)), 128)
+        with Image.open(io.BytesIO(answer)) as result:
+            self.assertEqual(result.size, (300, 200))
+            self.assertEqual(result.convert("L").getpixel((255, 30)), 128)
+        self.assertEqual(runner.render_count, 1)
+
+    def test_a_clean_first_edit_is_not_edited_again(self) -> None:
+        mods = flux3_modules()
+        runner = self.Runner("/weights/snap", modules=mods)
+        crop, hint = self.lettered_crop()
+        runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100)
+        self.assertEqual(runner.lama.fills, 0)
+        self.assertEqual(len(mods.pipeline.calls), 1)
+
+    def test_the_marker_keeps_its_own_check_and_no_second_edit(self) -> None:
+        mods = flux3_modules()
+        mods.pipeline.echo = True
+        runner = self.Runner("/weights/snap", modules=mods)
+        crop, hint = self.lettered_crop()
+        with self.assertRaises(WorkerRenderError):
+            runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100,
+                              flux3_generation=Flux3Generation(marker=True))
+        self.assertEqual(runner.lama.fills, 0)
+
+    def test_a_failed_lama_fill_fails_the_render(self) -> None:
+        mods = flux3_modules()
+        mods.pipeline.echo = True
+        runner = self.Runner("/weights/snap", modules=mods)
+        crop, hint = self.lettered_crop()
+        FakeLama.error = RuntimeError("no session")
+        self.addCleanup(setattr, FakeLama, "error", None)
+        with self.assertRaises(WorkerRenderError) as caught:
+            runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100)
+        self.assertEqual(caught.exception.error_code, "inference_failed")
+
+    def test_load_opens_the_seeded_lama_graph(self) -> None:
+        FakeLama.opened.clear()
+        runner = self.Runner("/weights/snap", modules=flux3_modules())
+        runner.load()
+        self.assertEqual(FakeLama.opened, ["/weights/snap/adapters/lama-manga.onnx"])
+
+    def test_lettering_kept_reads_correlation_and_flat_sides(self) -> None:
+        from deploy.cloud.common.flux3 import lettering_kept
+
+        ink = np.ones((4, 4), bool)
+        was = np.array([[0, 255, 0, 255]] * 4, dtype=np.float32)[..., None].repeat(3, axis=2)
+        self.assertTrue(lettering_kept(was, was * 0.9 + 5, ink, np))
+        self.assertFalse(lettering_kept(was, 255 - was, ink, np))
+        flat = np.full((4, 4, 3), 200, dtype=np.float32)
+        self.assertFalse(lettering_kept(was, flat, ink, np))
+        self.assertFalse(lettering_kept(flat, was, ink, np))
+        self.assertFalse(lettering_kept(was, was, np.zeros((4, 4), bool), np))
 
     def test_a_result_that_kept_the_marker_is_refused(self) -> None:
         mods = flux3_modules()

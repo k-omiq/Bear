@@ -1429,7 +1429,7 @@ mod tests {
         meta.recipe.recipe_id = "mc-flux2-klein-inpaint-v2".into();
         meta.recipe.model_id = "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic".into();
         assert!(validate_recipe(&meta.recipe).is_err(), "Klein takes no working size");
-        meta.recipe.recipe_id = "mc-flux3-klein-edit-v1".into();
+        meta.recipe.recipe_id = "mc-flux3-klein-edit-v2".into();
         assert!(validate_recipe(&meta.recipe).is_err(), "FLUX 3's recipe on Klein");
         meta.recipe.model_id = "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit".into();
         assert_eq!(validate_recipe(&meta.recipe), Ok(()));
@@ -1507,7 +1507,7 @@ mod tests {
             assert!(validate_recipe(&recipe).is_err(), "{id} on Qwen");
         }
         let mut flux3 = WireRenderRecipe {
-            recipe_id: "mc-flux3-klein-edit-v1".into(), preprocessing_version: "2.0.0".into(),
+            recipe_id: "mc-flux3-klein-edit-v2".into(), preprocessing_version: "2.0.0".into(),
             model_id: "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit".into(),
             model_revision: "bf0af016a936bfe422eec96557aee058c3a6174e".into(),
             native_mask_conditioning: false, qwen_edit: Some(edit.clone()),

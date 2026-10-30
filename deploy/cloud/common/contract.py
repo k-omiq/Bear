@@ -172,16 +172,16 @@ GUIDED_RECIPE_IDS = frozenset({
     "mc-qwen-image-edit-2511-v4",
     "mc-flux2-klein-inpaint-v2",
     "mc-flux2-klein-9b-inpaint-v2",
-    "mc-flux3-klein-edit-v1",
-    "mc-flux3-klein-bf16-edit-v1",
+    "mc-flux3-klein-edit-v2",
+    "mc-flux3-klein-bf16-edit-v2",
 })
 
 # Recipes whose worker edits at a working size the request may name (`work_long_side`),
 # and the sizes it may name. The first is manifest.WORK_LONG_SIDE, the size a request that
 # names none is edited at; bench 5 (docs/research/flux3-klein-5_6b.md) measured all three.
 SIZED_RECIPE_IDS = frozenset({
-    "mc-flux3-klein-edit-v1",
-    "mc-flux3-klein-bf16-edit-v1",
+    "mc-flux3-klein-edit-v2",
+    "mc-flux3-klein-bf16-edit-v2",
 })
 WORK_LONG_SIDES = (768, 1024, 1280)
 
