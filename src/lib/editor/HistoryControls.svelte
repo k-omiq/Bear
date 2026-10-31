@@ -15,6 +15,7 @@
     undoLabelKey,
     redoLabelKey,
   } from '../state/editor.svelte.js'
+  import { shortcutProps } from '../state/session.svelte.js'
   import { IconButton } from '../ui/index.js'
   import { t } from '../i18n/index.js'
 
@@ -34,7 +35,7 @@
 <IconButton
   icon="undo"
   label={undoLabel}
-  shortcut="U"
+  {...shortcutProps('edit.undo')}
   size={28}
   disabled={!canUndo}
   onclick={undo}
@@ -42,7 +43,7 @@
 <IconButton
   icon="redo"
   label={redoLabel}
-  shortcut="⇧U"
+  {...shortcutProps('edit.redo')}
   size={28}
   disabled={!canRedo}
   onclick={redo}

@@ -1,4 +1,5 @@
 <script>
+  import { shortcutProps } from '../state/session.svelte.js'
   import { Button } from '../ui/index.js'
   import Icon from '../icons/Icon.svelte'
   import { t } from '../i18n/index.js'
@@ -22,7 +23,7 @@
   block
   title={t('masks.filter.hint')}
   aria-pressed={active}
-  aria-keyshortcuts="R"
+  aria-keyshortcuts={shortcutProps('view.reviewFilter').keyshortcuts || undefined}
   onclick={ontoggle}
 >
   <span class="fill">

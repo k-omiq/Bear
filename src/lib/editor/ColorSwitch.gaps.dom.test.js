@@ -20,7 +20,7 @@ vi.mock('./maskactions.svelte.js', async (importOriginal) => {
 import { t } from '../i18n/index.js'
 import { app, clearNotices } from '../state/app.svelte.js'
 import { editor, setActiveColor } from '../state/editor.svelte.js'
-import { sanitizeSession, session } from '../state/session.svelte.js'
+import { resetAllShortcutBindings, sanitizeSession, session, setShortcutBinding } from '../state/session.svelte.js'
 import { matchShortcut, setShortcutOverrides } from '../shortcuts.js'
 import KeyboardLayer from '../shell/KeyboardLayer.svelte'
 import { draft } from './draft.svelte.js'
@@ -166,6 +166,22 @@ describe('what the swatches show and say', () => {
     setShortcutOverrides({ 'tool.swapColors': { key: 'x', shift: true, accel: true } })
     render(ToolRail)
     expect(otherSwatch().getAttribute('aria-keyshortcuts')).toBe('Meta+Shift+X')
+  })
+
+  it('a tool button follows a rebinding, in its tooltip and to a screen reader', async () => {
+    cleanup()
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    render(ToolRail)
+    expect(document.querySelector('[role="radio"][aria-keyshortcuts="2"]')).toBeTruthy()
+    try {
+      setShortcutBinding('tool.brush', { key: 'b', shift: true, accel: true })
+      await settled()
+      expect(document.querySelector('[role="radio"][aria-keyshortcuts="2"]')).toBeNull()
+      const brush = /** @type {HTMLElement} */ (document.querySelector('[role="radio"][aria-keyshortcuts="Meta+Shift+B"]'))
+      expect(brush.title).toContain('⌘+Shift+B')
+    } finally {
+      resetAllShortcutBindings()
+    }
   })
 })
 

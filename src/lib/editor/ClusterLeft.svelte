@@ -8,7 +8,7 @@
    * one level up.
    */
   import { goLibrary } from '../state/app.svelte.js'
-  import { session, toggleWindow } from '../state/session.svelte.js'
+  import { session, toggleWindow, shortcutProps } from '../state/session.svelte.js'
   import { editor, readingDirection } from '../state/editor.svelte.js'
   import { IconButton } from '../ui/index.js'
   import { t } from '../i18n/index.js'
@@ -23,7 +23,7 @@
   <!-- The Home button floats on its own, so it sits on the same surface the
        pills do rather than growing a second kind of raised control. -->
   <Pill gap={0} pad="0">
-    <IconButton icon="home" label={t('editor.action.home')} shortcut="H" size={34} onclick={goLibrary} />
+    <IconButton icon="home" label={t('editor.action.home')} {...shortcutProps('app.home')} size={34} onclick={goLibrary} />
   </Pill>
 
   <Pill gap={10}>
@@ -48,7 +48,7 @@
     <IconButton
       icon="pages"
       label={t('editor.action.pagesWindow')}
-      shortcut="F"
+      {...shortcutProps('panel.pages')}
       active={session.windows.pages.open}
       pressed={session.windows.pages.open}
       data-window-toggle="pages"
@@ -57,7 +57,7 @@
     <IconButton
       icon="layers"
       label={t('editor.action.layersWindow')}
-      shortcut="L"
+      {...shortcutProps('panel.masks')}
       active={session.windows.layers.open}
       pressed={session.windows.layers.open}
       data-window-toggle="layers"

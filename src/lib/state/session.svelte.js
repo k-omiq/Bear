@@ -32,6 +32,8 @@ import {
   resetShortcut,
   sanitizeShortcutOverrides,
   setShortcutOverrides,
+  shortcutAria,
+  shortcutHint,
   shortcutOverrides,
   unbindShortcut,
 } from '../shortcuts.js'
@@ -1283,6 +1285,18 @@ export function togglePanel(panel) {
 /* ------------------------------------------------------------------ */
 /* Keyboard shortcuts                                                  */
 /* ------------------------------------------------------------------ */
+
+/**
+ * What a button shows and announces for a table entry, from the table in force.
+ * Read through `session.shortcuts`, so a rebinding redraws it.
+ *
+ * @param {string} id
+ * @returns {{shortcut: string, keyshortcuts: string}}
+ */
+export function shortcutProps(id) {
+  void session.shortcuts
+  return { shortcut: shortcutHint([id]), keyshortcuts: shortcutAria(id) }
+}
 
 /**
  * Mirror the table's overrides back onto the session and write them.

@@ -16,8 +16,8 @@
    * The two saved colours close it, outside the radio group: they are not tools.
    */
   import { editor, setTool } from '../state/editor.svelte.js'
-  import { TOOL_SPECS, TOOL_ICONS, toolKey, toolOffered } from './tools.js'
-  import { session } from '../state/session.svelte.js'
+  import { TOOL_SPECS, TOOL_ICONS, toolOffered } from './tools.js'
+  import { session, shortcutProps } from '../state/session.svelte.js'
   import { IconButton } from '../ui/index.js'
   import { t } from '../i18n/index.js'
   import ColorSwitch from './ColorSwitch.svelte'
@@ -77,7 +77,7 @@
       <IconButton
         icon={TOOL_ICONS[spec.id]}
         label={t(spec.nameKey)}
-        shortcut={toolKey(spec)}
+        {...shortcutProps(`tool.${spec.id}`)}
         size={34}
         active={spec.id === editor.tool}
         role="radio"

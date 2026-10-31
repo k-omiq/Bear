@@ -8,6 +8,7 @@
     readingDirection,
   } from '../state/editor.svelte.js'
   import { pageNavControls } from '../model/paging.js'
+  import { shortcutProps } from '../state/session.svelte.js'
   import { IconButton, Readout, TextInput } from '../ui/index.js'
   import { t } from '../i18n/index.js'
 
@@ -91,7 +92,7 @@
 <IconButton
   icon="chevron-left"
   label={t(nav.left.tooltipKey)}
-  shortcut="←"
+  {...shortcutProps('page.left')}
   size={28}
   disabled={spent(nav.left.action)}
   onclick={() => pageByArrow('left')}
@@ -125,7 +126,7 @@
 <IconButton
   icon="chevron-right"
   label={t(nav.right.tooltipKey)}
-  shortcut="→"
+  {...shortcutProps('page.right')}
   size={28}
   disabled={spent(nav.right.action)}
   onclick={() => pageByArrow('right')}

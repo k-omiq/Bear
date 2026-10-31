@@ -8,6 +8,7 @@ import {
   HOLD_ORIGINAL_ID,
   HOLD_PAN_ID,
   shortcutLabelKey,
+  shortcutAria,
   shortcutChord,
   shortcutConflicts,
   groupedShortcuts,
@@ -1007,5 +1008,24 @@ describe('the Patch and Gradient keys', () => {
   it('do nothing on the home screen or while typing', () => {
     expect(matchShortcut(press('j'), home)).toBeNull()
     expect(matchShortcut(press('g', { target: { tagName: 'INPUT', type: 'text' } }), editor)).toBeNull()
+  })
+})
+
+describe('shortcutAria', () => {
+  it('writes each key the way aria-keyshortcuts wants it', () => {
+    expect(shortcutAria('edit.redo')).toBe('Shift+U')
+    expect(shortcutAria('zoom.in')).toBe('Plus =')
+    expect(shortcutAria('page.left')).toBe('ArrowLeft')
+    expect(shortcutAria('app.settings')).toBe(',')
+    expect(shortcutAria('not.an.entry')).toBe('')
+  })
+
+  it('names the accel key by platform, with no glyph on any entry', () => {
+    const accel = SHORTCUTS.find((shortcut) => shortcut.accel && shortcut.keys.length)
+    expect(shortcutAria(accel.id, { apple: true })).toMatch(/^Meta\+/)
+    expect(shortcutAria(accel.id, { apple: false })).toMatch(/^Control\+/)
+    for (const { id } of SHORTCUTS) {
+      expect(shortcutAria(id, { apple: true })).not.toMatch(/[⌘⇧←→↑↓]|Mouse/)
+    }
   })
 })

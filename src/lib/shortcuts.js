@@ -1900,9 +1900,12 @@ export function shortcutHint(ids, context = { apple: isApplePlatform() }) {
     .join(' / ')
 }
 
+const ARIA_KEYS = /** @type {Record<string, string>} */ ({ '+': 'Plus', ' ': 'Space' })
+
 /**
  * The keys that run an entry as `aria-keyshortcuts` writes them: `Meta+Shift+X`,
- * with no glyph, and the key by its `KeyboardEvent.key` name. Empty when unbound.
+ * with no glyph, and the key by its `KeyboardEvent.key` name, `Plus` and `Space`
+ * being ARIA's own. One press per key, space-separated. Empty when unbound.
  *
  * @param {string} id
  * @param {{apple?: boolean}} [context]
@@ -1910,14 +1913,13 @@ export function shortcutHint(ids, context = { apple: isApplePlatform() }) {
  */
 export function shortcutAria(id, context = { apple: isApplePlatform() }) {
   const entry = shortcuts().find((shortcut) => shortcut.id === id)
-  const key = entry?.keys[0]
-  // ARIA has no name for an extra mouse button.
-  if (!key || /^Mouse\d+$/.test(key)) return ''
-  return [
-    entry.accel && (context.apple ? 'Meta' : 'Control'),
-    entry.shift && 'Shift',
-    key === ' ' ? 'Space' : key.length === 1 ? key.toUpperCase() : key,
-  ].filter(Boolean).join('+')
+  if (!entry) return ''
+  const modifiers = [entry.accel && (context.apple ? 'Meta' : 'Control'), entry.shift && 'Shift'].filter(Boolean)
+  return entry.keys
+    // ARIA has no name for an extra mouse button.
+    .filter((key) => !/^Mouse\d+$/.test(key))
+    .map((key) => [...modifiers, ARIA_KEYS[key] ?? (key.length === 1 ? key.toUpperCase() : key)].join('+'))
+    .join(' ')
 }
 
 /**

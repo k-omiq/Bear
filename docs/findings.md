@@ -3752,5 +3752,8 @@ the native route is chosen, and an answer, a cancel and an error all behave. Sti
 the real `NSColorSampler` (only one sampler is asked for now, the picker's button and Shift+E share
 one guard, but nothing shows what AppKit does with a second one), and real clicks and focus in WebKit.
 WebKit may also skip buttons on Tab by default, which would take the swatches and every other button
-off the keyboard. Other `aria-keyshortcuts` values still come from `shortcutHint`, so a rebound accel
-key reaches them as a glyph; only the two swatches use `shortcutAria` so far.
+off the keyboard.
+The editor's buttons now read their tooltip and `aria-keyshortcuts` from the shortcut table, so a
+rebound key shows on them. Tooltip sentences in the language files that name a key themselves, such as
+"(R)" in `masks.filter.hint`, still name the default key after a rebind. A screen reader's handling of
+these values was not tried.
