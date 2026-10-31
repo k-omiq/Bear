@@ -25,6 +25,10 @@ describe('finding keys in source', () => {
     expect([...keysIn(source, 'lib/other.js')].sort()).toEqual(['app.export', 'editor.action.export'])
   })
 
+  it('drops a shortcut id handed to shortcutProps, in any file', () => {
+    expect([...keysIn(`{...shortcutProps('app.export')} t('editor.action.export')`, 'lib/other.svelte')]).toEqual(['editor.action.export'])
+  })
+
   /**
    * A file name that begins with a namespace. The general rule this replaced -
    * "a last segment that is a file extension is not a key" - dropped

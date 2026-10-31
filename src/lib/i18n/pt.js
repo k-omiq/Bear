@@ -2224,7 +2224,8 @@ export const pt = {
     },
     filter: {
       needsReview: 'Precisa de revisão',
-      hint: 'Mostrar só as regiões que precisam de revisão (R)',
+      hint: 'Mostrar só as regiões que precisam de revisão ({shortcut})',
+      hintUnbound: 'Mostrar só as regiões que precisam de revisão',
     },
     scope: {
       viewport: 'Posições {from} a {to}',
@@ -2377,7 +2378,8 @@ export const pt = {
       gradient: "Degradê",
     },
     hint: {
-      autoClean: 'Enter para executar',
+      autoClean: '{shortcut} para executar',
+      autoCleanUnbound: 'executar a partir desta barra',
       brush: 'arraste para pintar',
       eraser: 'arraste para apagar pintura ou uma área limpa',
       shapes: 'arraste na página',

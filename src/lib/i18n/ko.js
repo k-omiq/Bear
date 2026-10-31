@@ -2179,7 +2179,8 @@ export const ko = {
     },
     filter: {
       needsReview: '검토 필요',
-      hint: '검토가 필요한 영역만 표시 (R)',
+      hint: '검토가 필요한 영역만 표시 ({shortcut})',
+      hintUnbound: '검토가 필요한 영역만 표시',
     },
     scope: {
       viewport: '위치 {from}~{to}',
@@ -2332,7 +2333,8 @@ export const ko = {
       gradient: "그레이디언트",
     },
     hint: {
-      autoClean: 'Enter로 실행',
+      autoClean: '{shortcut}(으)로 실행',
+      autoCleanUnbound: '이 막대에서 실행',
       brush: '드래그해 칠하기',
       eraser: '드래그해서 칠이나 클린한 부분을 지우기',
       shapes: '페이지에서 드래그',

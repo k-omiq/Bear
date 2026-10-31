@@ -2224,7 +2224,8 @@ export const es = {
     },
     filter: {
       needsReview: 'Por revisar',
-      hint: 'Mostrar solo las regiones por revisar (R)',
+      hint: 'Mostrar solo las regiones por revisar ({shortcut})',
+      hintUnbound: 'Mostrar solo las regiones por revisar',
     },
     scope: {
       viewport: 'Posiciones {from} a {to}',
@@ -2377,7 +2378,8 @@ export const es = {
       gradient: "Degradado",
     },
     hint: {
-      autoClean: 'Enter para ejecutar',
+      autoClean: '{shortcut} para ejecutar',
+      autoCleanUnbound: 'ejecutar desde esta barra',
       brush: 'arrastra para pintar',
       eraser: 'arrastra para borrar pintura o una zona limpia',
       shapes: 'arrastra sobre la página',

@@ -2182,7 +2182,8 @@ export const ja = {
     },
     filter: {
       needsReview: '要確認',
-      hint: '確認が必要な領域のみ表示（R）',
+      hint: '確認が必要な領域のみ表示（{shortcut}）',
+      hintUnbound: '確認が必要な領域のみ表示',
     },
     scope: {
       viewport: '位置 {from}〜{to}',
@@ -2335,7 +2336,8 @@ export const ja = {
       gradient: "グラデーション",
     },
     hint: {
-      autoClean: 'Enter で実行',
+      autoClean: '{shortcut} で実行',
+      autoCleanUnbound: 'このバーから実行',
       brush: 'ドラッグで描画',
       eraser: 'ドラッグして塗りやクリーン済みの部分を消す',
       shapes: 'ページ上でドラッグ',

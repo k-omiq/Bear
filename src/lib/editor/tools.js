@@ -85,6 +85,8 @@ import { BETA_ENGINES, MAX_MASK_PADDING, ROW_ENGINES, engineChoiceLabel } from '
  *   (`J`, `G`): the rail prints this rather than the slot
  * @property {string} nameKey
  * @property {string} hintKey - the bar's tooltip on the tool's own name
+ * @property {string} [hintShortcut] - the table entry whose key `hintKey` names as `{shortcut}`
+ * @property {string} [hintUnboundKey] - the tooltip while that entry has no key
  * @property {Array<RangeParam|ChoiceParam|ColorParam>} params
  * @property {boolean} runnable - carries the run / cancel action button
  * @property {'pill'|'panel'} shell - the shape the tool shell takes for it:
@@ -365,6 +367,8 @@ export const TOOL_SPECS = [
     slot: 1,
     nameKey: 'tools.name.autoClean',
     hintKey: 'tools.hint.autoClean',
+    hintShortcut: 'tool.runCleanup',
+    hintUnboundKey: 'tools.hint.autoCleanUnbound',
     params: [
       // What the run does, then over what. The mode names the run button
       // too ("Detect chapter", "Clean page"): Detect finds and stores the

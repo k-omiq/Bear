@@ -3754,6 +3754,5 @@ one guard, but nothing shows what AppKit does with a second one), and real click
 WebKit may also skip buttons on Tab by default, which would take the swatches and every other button
 off the keyboard.
 The editor's buttons now read their tooltip and `aria-keyshortcuts` from the shortcut table, so a
-rebound key shows on them. Tooltip sentences in the language files that name a key themselves, such as
-"(R)" in `masks.filter.hint`, still name the default key after a rebind. A screen reader's handling of
-these values was not tried.
+rebound key shows on them, and the two tooltip sentences that name a table key (`masks.filter.hint`,
+`tools.hint.autoClean`) take it as `{shortcut}`. A screen reader's handling of these values was not tried.

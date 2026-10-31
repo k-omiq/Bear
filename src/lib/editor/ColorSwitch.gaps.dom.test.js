@@ -20,12 +20,14 @@ vi.mock('./maskactions.svelte.js', async (importOriginal) => {
 import { t } from '../i18n/index.js'
 import { app, clearNotices } from '../state/app.svelte.js'
 import { editor, setActiveColor } from '../state/editor.svelte.js'
-import { resetAllShortcutBindings, sanitizeSession, session, setShortcutBinding } from '../state/session.svelte.js'
-import { matchShortcut, setShortcutOverrides } from '../shortcuts.js'
+import { clearShortcutBinding, resetAllShortcutBindings, sanitizeSession, session, setShortcutBinding } from '../state/session.svelte.js'
+import { matchShortcut, setShortcutOverrides, shortcutHint } from '../shortcuts.js'
 import KeyboardLayer from '../shell/KeyboardLayer.svelte'
 import { draft } from './draft.svelte.js'
 import { runRegionMenuItem } from './maskactions.svelte.js'
 import RetouchOptions from './RetouchOptions.svelte'
+import ReviewFilter from './ReviewFilter.svelte'
+import ToolBar from './ToolBar.svelte'
 import ToolRail from './ToolRail.svelte'
 
 /** @param {string} key @param {Object} [extra] */
@@ -179,6 +181,44 @@ describe('what the swatches show and say', () => {
       expect(document.querySelector('[role="radio"][aria-keyshortcuts="2"]')).toBeNull()
       const brush = /** @type {HTMLElement} */ (document.querySelector('[role="radio"][aria-keyshortcuts="Meta+Shift+B"]'))
       expect(brush.title).toContain('⌘+Shift+B')
+    } finally {
+      resetAllShortcutBindings()
+    }
+  })
+})
+
+describe('a tooltip sentence that names a key', () => {
+  it('the Review filter names the key in force, and no key once it is cleared', async () => {
+    render(ReviewFilter, { count: 0, active: false, ontoggle: () => {} })
+    const button = screen.getByRole('button')
+    expect(button.title).toBe(t('masks.filter.hint', { shortcut: 'R' }))
+    try {
+      setShortcutBinding('view.reviewFilter', { key: 'F2', shift: false, accel: false })
+      await settled()
+      expect(button.title).toBe(t('masks.filter.hint', { shortcut: 'F2' }))
+      expect(button.getAttribute('aria-keyshortcuts')).toBe('F2')
+      clearShortcutBinding('view.reviewFilter')
+      await settled()
+      expect(button.title).toBe(t('masks.filter.hintUnbound'))
+      expect(button.hasAttribute('aria-keyshortcuts')).toBe(false)
+    } finally {
+      resetAllShortcutBindings()
+    }
+  })
+
+  it('Text cleanup\'s hint names the key that runs it', async () => {
+    editor.tool = 'autoClean'
+    render(ToolBar)
+    const name = () => /** @type {HTMLElement} */ (document.querySelector('.ident')).title
+    expect(name()).toBe(t('tools.hint.autoClean', { shortcut: shortcutHint(['tool.runCleanup']) }))
+    expect(name()).not.toContain('{')
+    try {
+      setShortcutBinding('tool.runCleanup', { key: 'F2', shift: false, accel: false })
+      await settled()
+      expect(name()).toBe(t('tools.hint.autoClean', { shortcut: 'F2' }))
+      clearShortcutBinding('tool.runCleanup')
+      await settled()
+      expect(name()).toBe(t('tools.hint.autoCleanUnbound'))
     } finally {
       resetAllShortcutBindings()
     }

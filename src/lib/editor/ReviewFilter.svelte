@@ -16,14 +16,16 @@
    * @type {{ count: number, active: boolean, ontoggle: () => void }}
    */
   let { count, active, ontoggle } = $props()
+
+  const keys = $derived(shortcutProps('view.reviewFilter'))
 </script>
 
 <Button
   variant={active ? 'primary' : 'ghost'}
   block
-  title={t('masks.filter.hint')}
+  title={keys.shortcut ? t('masks.filter.hint', { shortcut: keys.shortcut }) : t('masks.filter.hintUnbound')}
   aria-pressed={active}
-  aria-keyshortcuts={shortcutProps('view.reviewFilter').keyshortcuts || undefined}
+  aria-keyshortcuts={keys.keyshortcuts || undefined}
   onclick={ontoggle}
 >
   <span class="fill">

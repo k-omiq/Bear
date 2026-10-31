@@ -114,6 +114,9 @@ export function stripIds(source) {
   return source.replace(/\bid:\s*(['"`])[^'"`]*\1/g, ' ')
 }
 
+/** A shortcut id handed to `shortcutProps`: a table id wherever it is written, not a key. */
+const SHORTCUT_ID_ARGUMENT = /\bshortcutProps\(\s*(['"`])[^'"`]*\1/g
+
 /**
  * A key: lower-camel segments, at least two of them, in any of the three
  * string quotes. Single quotes are this codebase's style and every key in it
@@ -162,7 +165,7 @@ const NOT_KEYS = new Set([
 export function keysIn(source, path = '') {
   const found = new Set()
   const stripped = stripComments(source)
-  const text = STRIPS_IDS.test(path) ? stripIds(stripped) : stripped
+  const text = (STRIPS_IDS.test(path) ? stripIds(stripped) : stripped).replace(SHORTCUT_ID_ARGUMENT, ' ')
   for (const match of text.matchAll(KEY)) {
     const key = match[2]
     if (!NAMESPACE_SET.has(key.slice(0, key.indexOf('.')))) continue

@@ -2224,7 +2224,8 @@ export const fr = {
     },
     filter: {
       needsReview: 'À vérifier',
-      hint: 'Afficher uniquement les zones à vérifier (R)',
+      hint: 'Afficher uniquement les zones à vérifier ({shortcut})',
+      hintUnbound: 'Afficher uniquement les zones à vérifier',
     },
     scope: {
       viewport: 'Positions {from} à {to}',
@@ -2377,7 +2378,8 @@ export const fr = {
       gradient: "Dégradé",
     },
     hint: {
-      autoClean: 'Entrée pour lancer',
+      autoClean: '{shortcut} pour lancer',
+      autoCleanUnbound: 'lancer depuis cette barre',
       brush: 'glisser pour peindre',
       eraser: 'faites glisser pour effacer la peinture ou une zone nettoyée',
       shapes: 'glisser sur la page',
