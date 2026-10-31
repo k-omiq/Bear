@@ -331,7 +331,18 @@ fn register_webgpu_plugin(runtime: &Path) -> Plugin {
     match registered {
         // The handle only exists to unregister with, and nothing ever does:
         // the plugin lives as long as the process, like the runtime it is in.
-        Ok(_handle) => Plugin::Registered,
+        Ok(_handle) => {
+            // `ort` releases the environment as Windows ends the process, which
+            // unloads the plugin. Once the plugin has compiled a shader, that
+            // faults in `dxil.dll` with exit code 0xC0000409. This reference is
+            // never dropped, so the release never happens and the system frees
+            // all of it.
+            #[cfg(windows)]
+            if let Ok(env) = ort::environment::Environment::current() {
+                std::mem::forget(env);
+            }
+            Plugin::Registered
+        }
         Err(e) => Plugin::Failed(e.to_string()),
     }
 }

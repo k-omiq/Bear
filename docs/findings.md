@@ -766,6 +766,13 @@ never run on Windows. These are not captured:
 Redaction works by shape, so a secret with no recognisable name or shape would pass. File and folder
 names below the home folder stay on purpose, and Settings says so.
 
+**Windows exit after a WebGPU shader (2026-10-31): the environment is never released.** The GPU proof
+made the launch check compile a shader, and the app then ended with 0xC0000409. A debugger run put the
+fault in `dxil.dll`, under `ort`'s exit hook, `ReleaseEnv` and the WebGPU plugin's `ReleaseEpFactory`. A
+real quit takes the same hook. `register_webgpu_plugin` now keeps one reference forever on Windows, so the
+hook does not release the environment. Only the launch check on a GitHub runner measures this, which
+has no real GPU. The other exit paths, such as an update's restart, take the same hook and did not run.
+
 **Dev log's last lines and locks (2026-10-31): proved on macOS by tests only.** Tests that end a real
 child process keep every line before an abort, an exit, a null write and a stack overflow, 20 runs of
 each. Not measured:
