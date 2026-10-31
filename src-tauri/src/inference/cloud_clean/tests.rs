@@ -1495,10 +1495,18 @@ fn forty_qwen_regions_are_all_sent_and_committed_with_sixteen_at_most_in_flight(
 
     assert_eq!(held, (true, MAX_IN_FLIGHT), "the bound is met, and no request passes it");
     // Each result is on the page with the flag the user finds it by.
-    let flagged = events.into_inner().unwrap().into_iter().filter(|event| matches!(event,
+    let events = events.into_inner().unwrap();
+    let flagged = events.iter().filter(|event| matches!(event,
         Event::RegionDone { region, .. } if region.mask.as_ref().is_some_and(|mask| mask.generated_texture_review)))
         .count();
-    assert_eq!(flagged, PAGES);
+    // A short count says what became of the rest: the run's own notices, and
+    // the journal phase of every attempt that did not commit.
+    let said: Vec<_> = ["notice.cloudClean.regionFailed", "notice.cloudClean.regionSkipped", "notice.cloudClean.stopped"]
+        .into_iter().flat_map(|key| notices(&events, key)).collect();
+    let open: Vec<_> = service.journal().list_attempt_ids().unwrap().iter()
+        .map(|id| service.journal().get_record(id).unwrap().phase)
+        .filter(|phase| !matches!(phase, AttemptPhase::Committed { .. })).collect();
+    assert_eq!(flagged, PAGES, "notices: {said:?}; attempts not committed: {open:?}");
     assert_eq!(gateway.state.most_open.load(Ordering::SeqCst), MAX_IN_FLIGHT);
     assert_eq!((summary.reason, summary.regions_cleaned as usize, summary.errored), ("completed", PAGES, 0));
     assert_eq!(gateway.accepted(), PAGES);
