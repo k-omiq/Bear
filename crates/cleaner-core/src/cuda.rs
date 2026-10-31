@@ -219,13 +219,35 @@ impl Report {
             None => Verdict::NoCudnn,
         }
     }
+
+    /// What a CUDA build would run on here, line by line, for
+    /// [`crate::measure::setup`]. Nothing for a build that is not a CUDA one,
+    /// which an install beside it does not touch.
+    pub fn install_lines(&self) -> Vec<String> {
+        if self.wanted.is_none() {
+            return Vec::new();
+        }
+        let verdict = self.verdict();
+        let Verdict::Ready { toolkit, cudnn } = verdict else { return vec![format!("cuda {}", verdict.key())] };
+        let mut lines = vec![format!("cuda {} {}", toolkit.version(), toolkit.dir.display())];
+        lines.extend(install_files(&toolkit, &cudnn).iter().map(|file| format!("cuda library {}", file.display())));
+        lines
+    }
+}
+
+/// Every file [`prepare`] loads from an install.
+fn install_files(toolkit: &Toolkit, cudnn: &Cudnn) -> Vec<PathBuf> {
+    toolkit.libraries.iter().chain(&cudnn.libraries).chain(&cudnn.extras).cloned().collect()
 }
 
 static REPORT: Mutex<Option<Report>> = Mutex::new(None);
 
+/// The files loaded into this process, once a [`prepare`] has finished.
+static PREPARED: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
+
 /// The machine's CUDA install, read once and kept. [`rescan`] forgets it, so
 /// a toolkit installed while the application is open is found on the next
-/// check without a restart.
+/// check. [`restart_needed`] says when finding it is not enough.
 pub fn report() -> Report {
     let mut cached = REPORT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     cached.get_or_insert_with(read_machine).clone()
@@ -246,17 +268,34 @@ fn read_machine() -> Report {
     Report { wanted, toolkits: toolkits_in(&dirs), cudnn: cudnn_in(&dirs), gpus: nvidia_gpus() }
 }
 
-/// Load the chosen toolkit and cuDNN into this process, once, before the
-/// first CUDA session. An error is the reason no CUDA session can be built.
+/// Load the chosen toolkit and cuDNN into this process before the first CUDA
+/// session, and again when the install has changed since. An error is the
+/// reason no CUDA session can be built.
 pub fn prepare() -> Result<(), String> {
-    static PREPARED: Mutex<bool> = Mutex::new(false);
-    let mut prepared = PREPARED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if *prepared {
-        return Ok(());
-    }
     let Verdict::Ready { toolkit, cudnn } = report().verdict() else {
         return Err("CUDA is not ready on this machine; see Settings, Runtime".to_owned());
     };
+    prepare_install(&toolkit, &cudnn)
+}
+
+/// Whether the install found now is not the one in this process. A part new to
+/// the process loads, and helps. A library a provider already holds under the
+/// same name stays until the application restarts: neither platform swaps it.
+pub fn restart_needed() -> bool {
+    let prepared = PREPARED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(loaded) = prepared.as_ref() else { return false };
+    match report().verdict() {
+        Verdict::Ready { toolkit, cudnn } => &install_files(&toolkit, &cudnn) != loaded,
+        _ => false,
+    }
+}
+
+fn prepare_install(toolkit: &Toolkit, cudnn: &Cudnn) -> Result<(), String> {
+    let mut prepared = PREPARED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let files = install_files(toolkit, cudnn);
+    if prepared.as_ref() == Some(&files) {
+        return Ok(());
+    }
     search_folders(&[&toolkit.dir, &cudnn.dir]);
     for library in &toolkit.libraries {
         ort::util::preload_dylib(library).map_err(|e| format!("could not load {}: {e}", library.display()))?;
@@ -270,7 +309,7 @@ pub fn prepare() -> Result<(), String> {
         let _ = ort::util::preload_dylib(library);
     }
     ort::util::preload_dylib(main).map_err(|e| format!("could not load {}: {e}", main.display()))?;
-    *prepared = true;
+    *prepared = Some(files);
     Ok(())
 }
 
@@ -442,21 +481,35 @@ pub fn cudnn_in(dirs: &[PathBuf]) -> Vec<Cudnn> {
 /// Every other cuDNN 9 part in `dir`, in name order so a load order repeats.
 fn cudnn_extras(dir: &Path, known: &[PathBuf]) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut extras: Vec<PathBuf> = entries
-        .flatten()
-        .filter(|entry| {
-            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            let part = if cfg!(target_os = "windows") {
-                name.starts_with("cudnn_") && name.ends_with("64_9.dll")
-            } else {
-                name.starts_with("libcudnn_") && name.ends_with(".so.9")
-            };
-            part && !known.iter().any(|library| library.file_name() == Some(&entry.file_name()))
-        })
-        .map(|entry| entry.path())
-        .collect();
+    let part_of = |path: &Path| path.file_name().and_then(|name| cudnn_part(&name.to_string_lossy()));
+    let known: Vec<String> = known.iter().filter_map(|library| part_of(library)).collect();
+    let mut extras: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    // By name, so `libcudnn_x.so.9` comes before the `libcudnn_x.so.9.23.1` it
+    // links to, and is the one of the two kept.
     extras.sort();
+    let mut seen = known;
+    extras.retain(|path| match part_of(path) {
+        Some(part) if !seen.contains(&part) => {
+            seen.push(part);
+            true
+        }
+        _ => false,
+    });
     extras
+}
+
+/// The part of cuDNN 9 a file name is, the same for its soname and its fuller
+/// version (`libcudnn_x.so.9`, `libcudnn_x.so.9.23.1`). `None` for anything else.
+fn cudnn_part(name: &str) -> Option<String> {
+    let name = name.to_ascii_lowercase();
+    if cfg!(target_os = "windows") {
+        return (name.starts_with("cudnn_") && name.ends_with("64_9.dll")).then_some(name);
+    }
+    if !name.starts_with("libcudnn_") {
+        return None;
+    }
+    let (stem, rest) = name.split_once(".so.9")?;
+    (rest.is_empty() || rest.starts_with('.')).then(|| stem.to_owned())
 }
 
 fn resolve(names: &[String], home: &Path, dirs: &[PathBuf]) -> (Vec<PathBuf>, Vec<String>) {
@@ -691,12 +744,10 @@ mod tests {
         }
     }
 
-    /// `prepare` latches, so an install the user fixes and rechecks is never
-    /// loaded: the proof runs again against the old libraries and fails again,
-    /// and nothing tells the user a restart is what it takes. Here the second
-    /// install's library does not exist, so loading it would be an error.
+    /// An install the user fixes and rechecks is loaded, not skipped because
+    /// another was loaded before it. The second install's library does not
+    /// exist, so loading it is an error, and a failed load changes nothing.
     #[test]
-    #[ignore = "BUG in 46429f8: Check again cannot load a new install, and no restart is asked for"]
     fn check_again_loads_the_install_it_found() {
         let system = Path::new(if cfg!(windows) {
             "kernel32.dll"
@@ -705,43 +756,52 @@ mod tests {
         } else {
             "libz.so.1"
         });
-        *REPORT.lock().unwrap() = Some(ready(system, "/cudnn/v9.13/bin/12.9"));
-        prepare().expect("the first install loads");
-        *REPORT.lock().unwrap() = Some(ready(Path::new("/no/such/library"), "/cudnn/v9.23/bin/12.9"));
-        assert!(prepare().is_err(), "the second install was never loaded");
+        let install = |library: &Path, cudnn: &str| {
+            let Verdict::Ready { toolkit, cudnn } = ready(library, cudnn).verdict() else { panic!("the report is ready") };
+            (toolkit, cudnn)
+        };
+        let (toolkit, cudnn) = install(system, "/cudnn/v9.13/bin/12.9");
+        prepare_install(&toolkit, &cudnn).expect("the first install loads");
+        prepare_install(&toolkit, &cudnn).expect("the same install is not loaded again");
+        let (toolkit, cudnn) = install(Path::new("/no/such/library"), "/cudnn/v9.23/bin/12.9");
+        assert!(prepare_install(&toolkit, &cudnn).is_err(), "the second install was never loaded");
     }
 
-    /// `setup` names the driver and not the toolkit or cuDNN, so a measurement
-    /// taken while CUDA failed stays current after the install is fixed, and
-    /// the same goes for one saved before 46429f8 (`VERSION` did not move).
-    /// Automatic keeps following its CPU winner, and only a new Measure tells.
-    /// `RT_RUNTIME` the runtime library.
+    /// A measurement taken while CUDA failed stops counting once the install is
+    /// fixed, and one saved before this line existed stops counting at once.
     #[test]
-    #[ignore = "BUG in 46429f8: a measurement of a broken CUDA stays in force once fixed; needs RT_RUNTIME"]
     fn a_new_cudnn_is_a_new_setup() {
-        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
-        crate::runtime::load(Path::new(&runtime)).unwrap();
         let library = Path::new("/unused");
-        *REPORT.lock().unwrap() = Some(ready(library, "/cudnn/v9.13/bin/12.9"));
-        let before = crate::measure::setup();
-        *REPORT.lock().unwrap() = Some(ready(library, "/cudnn/v9.23/bin/12.9"));
-        assert_ne!(before, crate::measure::setup());
+        let lines = |report: Report| report.install_lines();
+        let before = lines(ready(library, "/cudnn/v9.13/bin/12.9"));
+        assert_ne!(before, lines(ready(Path::new("/other/library"), "/cudnn/v9.13/bin/12.9")));
+        let mut with_a_new_part = ready(library, "/cudnn/v9.13/bin/12.9");
+        with_a_new_part.cudnn[0].extras.push(PathBuf::from("/cudnn/v9.13/bin/12.9/part"));
+        assert_ne!(before, lines(with_a_new_part));
+        let mut broken = ready(library, "/cudnn/v9.13/bin/12.9");
+        broken.cudnn[0].missing.push("part".to_owned());
+        assert_eq!(lines(broken), ["cuda accel.cudaCheck.noCudnn"]);
+        let mut not_cuda = ready(library, "/cudnn/v9.13/bin/12.9");
+        not_cuda.wanted = None;
+        assert!(lines(not_cuda).is_empty(), "an install beside another build is no change to it");
     }
 
     /// `find_in` takes a known part by its fuller version where only that is on
-    /// disk, and `cudnn_extras` does not, so an unknown part with no `.so.9`
-    /// link is the very file this commit set out to load, left unloaded.
+    /// disk, and an unknown part with no `.so.9` link is loaded the same way.
     #[cfg(unix)]
     #[test]
-    #[ignore = "BUG in 46429f8: a part with only its full version on disk is not an extra"]
     fn a_cudnn_part_with_only_its_full_version_on_disk_is_loaded() {
         let dir = scratch("extras-versioned");
-        let extra = "libcudnn_engines_tensor_ir.so.9.23.1";
+        let (extra, linked, version_of_linked) = (
+            "libcudnn_engines_tensor_ir.so.9.23.1",
+            "libcudnn_new.so.9",
+            "libcudnn_new.so.9.23.1",
+        );
         touch(&dir, &cudnn_libraries());
-        touch(&dir, &[extra.to_owned()]);
+        touch(&dir, &[extra.to_owned(), linked.to_owned(), version_of_linked.to_owned(), "libcudnn_cnn.so.9.23.1".to_owned()]);
         let found = cudnn_in(std::slice::from_ref(&dir));
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(found[0].extras, vec![dir.join(extra)]);
+        assert_eq!(found[0].extras, vec![dir.join(extra), dir.join(linked)]);
     }
 
     #[test]
