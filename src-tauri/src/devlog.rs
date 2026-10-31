@@ -328,6 +328,9 @@ pub fn clear_dev_log() -> Result<(), String> {
 }
 
 #[cfg(test)]
+mod gap_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
