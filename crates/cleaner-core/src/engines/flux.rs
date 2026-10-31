@@ -1066,15 +1066,17 @@ mod tests {
     /// A real child with an empty weights folder is declined as missing weights, not as
     /// a sidecar that "cannot say how much memory it needs".
     /// Stand-in packages for torch, diffusers and sdnq: the health check only finds them.
+    /// So is one for Pillow, which `protocol.py` imports and CI's python3 does not have.
     #[cfg(unix)]
     #[test]
     fn missing_weights_are_declined_as_missing_weights() {
         let root = std::env::temp_dir().join(format!("mc-no-weights-{}", std::process::id()));
         std::fs::create_dir_all(root.join("weights")).unwrap();
-        for module in ["torch", "diffusers", "sdnq"] {
+        for module in ["torch", "diffusers", "sdnq", "PIL"] {
             std::fs::create_dir_all(root.join(module)).unwrap();
             std::fs::write(root.join(module).join("__init__.py"), "").unwrap();
         }
+        std::fs::write(root.join("PIL").join("Image.py"), "").unwrap();
         let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sidecar/manga_cleaner_sidecar");
         std::os::unix::fs::symlink(std::fs::canonicalize(package).unwrap(), root.join("manga_cleaner_sidecar")).unwrap();
         let install = Install { python: "python3".into(), root: root.clone() };
