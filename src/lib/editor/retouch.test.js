@@ -258,4 +258,82 @@ describe('the Gradient tool', () => {
     const held = /** @type {any} */ ({ tool: 'patch', painted: { kind: 'rect', points: [], feather: 9 }, stroke: null, offset: { x: 1, y: 2 }, start: null, end: null })
     expect(selectionParams(held, { mode: 'auto' })).toEqual({ mode: 'auto', painted: { kind: 'rect', points: [], feather: 0 }, offset: { x: 1, y: 2 } })
   })
+
+  /** A placed Auto layer, as the native side records it. */
+  function autoLayer(layer = undefined) {
+    const region = {
+      id: 'g1',
+      pageId: 'c1-p001',
+      bbox: { x: 10, y: 10, w: 30, h: 30 },
+      outcome: 'cleaned',
+      mask: {
+        ...(layer ? { layer } : {}),
+        provenance: {
+          engine: 'paint',
+          params_snapshot: {
+            mode: 'gradient',
+            gradient: null,
+            auto: true,
+            painted: { kind: 'rect', points: [{ x: 10, y: 10 }, { x: 40, y: 40 }], feather: 0 },
+          },
+        },
+      },
+    }
+    editor.chapter.pages[0].regions = [region]
+    editor.chapter.pages[0].regionCount = 1
+    return region
+  }
+
+  it('keeps the Auto layer in the undo record of a reopened one, so Undo can hold it again', async () => {
+    const api = backend()
+    setBackend(api)
+    editGradientLayer(autoLayer())
+    await vi.waitFor(() => expect(draft.selection?.start).toEqual({ x: 25, y: 10 }))
+    await applySelection()
+    await settled(editor.history)
+    const entry = api.historyPush.mock.calls.at(-1)?.[0]?.entry
+    expect(entry.before.region.mask.provenance.params_snapshot.auto).toBe(true)
+    expect(entry.after.region.id).toBe('g1')
+  })
+
+  // Bug hunt, 2026-10-31.
+  it.skip('a line dragged while the fit is on its way wins, as Patch\'s ghost does (bug: matchSurroundings overwrites it)', async () => {
+    /** @type {(answer: any) => void} */
+    let answer = () => {}
+    const api = backend({ fitGradient: vi.fn(() => new Promise((resolve) => { answer = resolve })) })
+    setBackend(api)
+    editGradientLayer(autoLayer())
+    setLine({ x: 11, y: 12 }, { x: 13, y: 14 })
+    answer({ kind: 'linear', start: [25, 10], end: [25, 40], colors: [{ at: 0, color: [0, 0, 0] }], opacities: [], reverse: false, dither: true })
+    await vi.waitFor(() => expect(api.fitGradient).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve))
+    expect(draft.selection?.start).toEqual({ x: 11, y: 12 })
+  })
+
+  it.skip('a moved Auto layer fits the surroundings where it now sits (bug: the fit reads the ring round where it was made)', async () => {
+    const api = backend()
+    setBackend(api)
+    // 160 page pixels on a 1600 pixel page: ten percent to the right.
+    editGradientLayer(autoLayer({ offsetX: 160 }))
+    await vi.waitFor(() => expect(api.fitGradient).toHaveBeenCalled())
+    expect(api.fitGradient.mock.calls[0][0].painted.points[0].x).toBeCloseTo(20)
+  })
+
+  it.skip('an Auto layer reopens as Linear whatever type was on the bar (bug: only Auto is changed, so a failed fit leaves Radial)', async () => {
+    const api = backend({ fitGradient: vi.fn(async () => null) })
+    setBackend(api)
+    editor.toolParams.gradient = { ...editor.toolParams.gradient, kind: 'radial' }
+    editGradientLayer(autoLayer())
+    await vi.waitFor(() => expect(api.fitGradient).toHaveBeenCalled())
+    expect(editor.toolParams.gradient.kind).toBe('linear')
+  })
+
+  it.skip('a layer that cannot reopen leaves the tool out as it was (bug: the menu offers it, then the tool and any held work are gone)', () => {
+    setBackend(backend())
+    const region = autoLayer()
+    region.mask.provenance.params_snapshot.auto = undefined
+    editor.tool = 'brush'
+    expect(editGradientLayer(region)).toBe(false)
+    expect(editor.tool).toBe('brush')
+  })
 })

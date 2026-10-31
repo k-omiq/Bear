@@ -2677,4 +2677,17 @@ mod tests {
             assert_eq!(finished.mask, aligned.mask, "{}: written through the same mask", scene.name);
         }
     }
+
+    /// A profile deployed before beta.12 still serves `mc-flux3-klein-edit-v1`, which pins
+    /// 16 steps. 2f75dd0 renamed the arms in `sampling`, so the new app sends that worker
+    /// Klein's 4 steps and the worker refuses every job (`sampling_mismatch`).
+    #[test]
+    #[ignore = "bug: the app sends an old FLUX 3 v1 worker 4 steps, and the worker refuses them"]
+    fn a_flux3_v1_worker_is_still_sent_its_16_steps() {
+        for (id, model) in [("mc-flux3-klein-edit-v1", "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit"),
+                            ("mc-flux3-klein-bf16-edit-v1", "unsloth/flux-3-image-klein")] {
+            let recipe = RenderRecipe::new(id, "3.0.0", model, "bf0af016a936bfe422eec96557aee058c3a6174e", false);
+            assert_eq!(recipe.sampling().steps, 16, "{id}");
+        }
+    }
 }

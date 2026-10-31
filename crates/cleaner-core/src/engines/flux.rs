@@ -1028,4 +1028,49 @@ mod tests {
             "the prompt still depends on the page's mode"
         );
     }
+
+    /// A child that dies (killed, or out of memory on the host) is not `spent`, so
+    /// `region.rs#Bench` parks it and the next click takes the dead one back. Every
+    /// later FLUX region then fails until the app restarts.
+    #[test]
+    #[ignore = "bug: a killed sidecar is parked and reused, so local FLUX fails until a restart"]
+    fn a_child_that_stopped_answering_is_not_parked_again() {
+        let port = TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead = port.local_addr().unwrap();
+        drop(port);
+        let mut inpainter = Inpainter::attach(
+            Sidecar::attach(dead, "0".repeat(48), Backend::Mflux, generous()),
+            "flux2-klein-4b",
+        );
+        let page = gray_page(600, 700, 200);
+        assert!(inpainter.render(&page, &fitted_over(&page, Rect::new(240, 300, 60, 40))).is_err());
+        assert!(inpainter.spent(), "checkin would park a dead child");
+    }
+
+    /// A real child with an empty weights folder. Health reports no `weights_bytes`, the
+    /// gate reads that as a sidecar that will not say what it costs, and `/v1/open`, the
+    /// only place that says `weights_missing`, is never reached. The user is told the
+    /// sidecar "cannot say how much memory it needs" when a download is all it wants.
+    /// Stand-in packages for torch, diffusers and sdnq: the health check only finds them.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "bug: missing local weights decline as an unbounded sidecar, never as weights missing"]
+    fn missing_weights_are_declined_as_missing_weights() {
+        let root = std::env::temp_dir().join(format!("mc-no-weights-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("weights")).unwrap();
+        for module in ["torch", "diffusers", "sdnq"] {
+            std::fs::create_dir_all(root.join(module)).unwrap();
+            std::fs::write(root.join(module).join("__init__.py"), "").unwrap();
+        }
+        let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sidecar/manga_cleaner_sidecar");
+        std::os::unix::fs::symlink(std::fs::canonicalize(package).unwrap(), root.join("manga_cleaner_sidecar")).unwrap();
+        let install = Install { python: "python3".into(), root: root.clone() };
+        let opened = Inpainter::open(&install, Backend::Sdnq, "flux3-image-klein", generous());
+        std::fs::remove_dir_all(root).unwrap();
+        match opened {
+            Err(Error::Declined(decline)) => assert_eq!(decline, Decline::SidecarWeightsMissing),
+            Err(other) => panic!("{other:?}"),
+            Ok(_) => panic!("opened with no weights"),
+        }
+    }
 }

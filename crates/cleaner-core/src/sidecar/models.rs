@@ -341,4 +341,17 @@ mod tests {
         assert!(qwen.prompt_for(&hint, 90, 90).contains("in the lower right area of this crop"));
         assert_eq!(recipe_of("flux2-klein-4b").prompt_for(&hint, 90, 90), crate::engines::flux::PROMPT);
     }
+
+    /// An older installer downloaded straight into `weights/<dir>` (see
+    /// `sidecar/bootstrap.py#fetch_weights`), so a stopped download leaves a folder with a
+    /// name and no index. Settings then says Installed, and the render fails `weights_missing`.
+    #[test]
+    #[ignore = "bug: a partial download counts as installed in Settings"]
+    fn a_folder_without_the_expected_file_is_not_installed() {
+        let root = std::env::temp_dir().join(format!("mc-local-partial-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("flux3-image-klein-sdnq/transformer")).unwrap();
+        let installed = local_model("flux3-image-klein").unwrap().installed(Backend::Sdnq, &root);
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(!installed, "no modular_model_index.json: the download did not finish");
+    }
 }

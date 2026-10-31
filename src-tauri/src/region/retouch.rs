@@ -1085,4 +1085,138 @@ mod tests {
         assert!((fitted.end[1] - fitted.start[1]).abs() > 10.0 * (fitted.end[0] - fitted.start[0]).abs(), "vertical: {fitted:?}");
         let _ = std::fs::remove_dir_all(root);
     }
+
+    /// Gradient edge cases from the 2026-10-31 bug hunt.
+    fn be16(v: u16) -> Vec<u8> { v.to_be_bytes().to_vec() }
+
+    #[test]
+    fn retouch_gradient_scales_to_a_16_bit_page_in_gray_and_rgb() {
+        let painted = rect_percent(25.0, 25.0, 75.0, 75.0);
+        let g = linear([50.0, 25.0], [50.0, 75.0],
+            serde_json::json!([{"at": 0, "color": [0, 0, 0]}, {"at": 1, "color": [255, 255, 255]}]), serde_json::json!([]));
+        for (fixture, samples) in [("l16", 1usize), ("rgb16", 3)] {
+            let raw = raster(fixture, 64, 64, |_, _| be16(0x8000).repeat(samples));
+            let (outcome, made) = run_tool(&format!("gradient-16-{fixture}"), &raw, "gradient", serde_json::json!({"gradient": g, "painted": painted}));
+            assert!(matches!(outcome, Outcome::Cleaned(_)), "{fixture}");
+            let (page, _) = made.unwrap();
+            assert!(page.sample(32, 18, 0) < 8000, "{fixture}: dark end {}", page.sample(32, 18, 0));
+            assert!(page.sample(32, 46, 0) > 57000, "{fixture}: light end {}", page.sample(32, 46, 0));
+            assert_eq!(page.sample(2, 2, 0), 0x8000, "{fixture}: outside the selection");
+        }
+    }
+
+    #[test]
+    fn retouch_auto_gradient_and_the_fit_read_a_16_bit_gray_page() {
+        let ramp = |y: u32| 0x2000u16 + (y as u16) * 0x0100;
+        let raw = raster("l16", 128, 128, |x, y| {
+            be16(if (54..74).contains(&x) && (54..74).contains(&y) { 0 } else { ramp(y) })
+        });
+        let painted = rect_percent(39.0, 39.0, 61.0, 61.0);
+        let (outcome, made) = run_tool("gradient-auto-16", &raw, "gradient", serde_json::json!({"kind": "auto", "painted": painted}));
+        assert!(matches!(outcome, Outcome::Cleaned(_)), "auto on 16 bit");
+        let (page, _) = made.unwrap();
+        for y in [56u32, 64, 72] {
+            let (got, want) = (f64::from(page.sample(64, y, 0)), f64::from(ramp(y)));
+            assert!((got - want).abs() < 2000.0, "row {y}: {got} for {want}");
+        }
+        let (root, located) = edit_fixture("gradient-fit-16", &raw);
+        let fitted: Gradient = serde_json::from_value(fit_at(&located, None, Some(&painted), None).unwrap().expect("a fit")).unwrap();
+        assert_eq!(fitted.kind, gradient::Kind::Linear);
+        assert!((fitted.end[1] - fitted.start[1]).abs() > 10.0 * (fitted.end[0] - fitted.start[0]).abs(), "vertical: {fitted:?}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn retouch_gradient_with_an_empty_selection_changes_nothing_and_does_not_panic() {
+        let raw = ramp_with_lettering();
+        let g = linear([25.0, 25.0], [60.0, 60.0], serde_json::json!([{"at": 0, "color": [0, 0, 0]}]), serde_json::json!([]));
+        for (name, painted) in [
+            ("zero", rect_percent(50.0, 50.0, 50.0, 50.0)),
+            ("none", serde_json::json!({"kind": "rect", "feather": 0, "points": []})),
+            ("off", rect_percent(150.0, 150.0, 160.0, 160.0)),
+        ] {
+            for params in [serde_json::json!({"gradient": g, "painted": painted}), serde_json::json!({"kind": "auto", "painted": painted})] {
+                let (outcome, made) = run_tool(&format!("gradient-empty-{name}"), &raw, "gradient", params);
+                assert!(!matches!(outcome, Outcome::Cleaned(_)), "{name}");
+                assert!(made.is_none(), "{name}");
+            }
+            let (root, located) = edit_fixture(&format!("gradient-fit-empty-{name}"), &raw);
+            assert!(fit_at(&located, None, Some(&painted), None).unwrap().is_none(), "{name}");
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    /// Run `first` then `second` on the same layer id, and answer with the
+    /// layer as a reopened job reads it: what a saved project gives back.
+    fn re_edit(name: &str, raw: &Raster, first: serde_json::Value, second: serde_json::Value) -> Patch {
+        let (root, located) = edit_fixture(name, raw);
+        let bounds = Rect::new(0, 0, raw.width, raw.height);
+        for params in [first, second] {
+            let mut plan = fixture_plan("layer", Geometry::Given(bounds), Engine::Paint, bounds);
+            plan.tool = Some("gradient".into());
+            plan.paint = Some(paint_plan("gradient", &params).unwrap());
+            assert!(matches!(edit_with_bench(&mut test_bench(&root), Engine::Fill, &located, plan).unwrap(), Outcome::Cleaned(_)));
+        }
+        let job = Job::open(&located.job_path).unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "layer").unwrap();
+        let patch = job.load_patch(record).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+        patch
+    }
+
+    #[test]
+    fn retouch_an_auto_layer_edited_as_linear_forgets_auto_and_survives_a_reopen() {
+        let raw = ramp_with_lettering();
+        let painted = rect_percent(31.25, 31.25, 56.25, 56.25);
+        let g = linear([40.0, 31.0], [40.0, 56.0], serde_json::json!([{"at": 0, "color": [0, 0, 0]}, {"at": 1, "color": [255, 255, 255]}]), serde_json::json!([]));
+        let patch = re_edit("gradient-auto-then-linear", &raw, serde_json::json!({"kind": "auto", "painted": painted}),
+            serde_json::json!({"kind": "linear", "gradient": g, "painted": painted}));
+        let snapshot = &patch.provenance.params_snapshot;
+        assert_eq!(snapshot["mode"], "gradient");
+        assert!(snapshot.get("auto").is_none_or(|auto| auto.is_null()), "still marked Auto: {snapshot}");
+        assert!(snapshot["gradient"].is_object(), "the line was recorded: {snapshot}");
+        assert!(snapshot["painted"].is_object(), "a reopen needs the selection: {snapshot}");
+    }
+
+    #[test]
+    fn retouch_the_bar_opacity_of_a_reopened_gradient_reaches_the_layer() {
+        let raw = ramp_with_lettering();
+        let painted = rect_percent(31.25, 31.25, 56.25, 56.25);
+        let g = linear([40.0, 31.0], [40.0, 56.0], serde_json::json!([{"at": 0, "color": [0, 0, 0]}, {"at": 1, "color": [255, 255, 255]}]), serde_json::json!([]));
+        let patch = re_edit("gradient-reopen-opacity", &raw, serde_json::json!({"gradient": g, "painted": painted, "opacity": 100}),
+            serde_json::json!({"gradient": g, "painted": painted, "opacity": 40}));
+        assert_eq!(patch.provenance.params_snapshot["layer"]["opacity"], 40, "{}", patch.provenance.params_snapshot["layer"]);
+    }
+
+    /// `reopenGradient` holds `painted` as first drawn, and the re-render fills all of it.
+    /// What the eraser took off a gradient layer comes back on Edit gradient's Apply.
+    #[test]
+    #[ignore = "bug: Edit gradient brings back what the eraser took off the layer"]
+    fn retouch_editing_a_gradient_keeps_what_the_eraser_took_off() {
+        let raw = raster("l8", 128, 128, |_, _| vec![200]);
+        let painted = rect_percent(25.0, 25.0, 75.0, 75.0);
+        let g = linear([50.0, 25.0], [50.0, 75.0], serde_json::json!([{"at": 0, "color": [0, 0, 0]}, {"at": 1, "color": [40, 40, 40]}]), serde_json::json!([]));
+        let params = serde_json::json!({"gradient": g, "painted": painted});
+        let (root, located) = edit_fixture("gradient-erased-reedit", &raw);
+        let bounds = Rect::new(0, 0, 128, 128);
+        let apply = |root: &std::path::Path| {
+            let mut plan = fixture_plan("layer", Geometry::Given(bounds), Engine::Paint, bounds);
+            plan.tool = Some("gradient".into());
+            plan.paint = Some(paint_plan("gradient", &params).unwrap());
+            assert!(matches!(edit_with_bench(&mut test_bench(root), Engine::Fill, &located, plan).unwrap(), Outcome::Cleaned(_)));
+        };
+        apply(&root);
+        let spec = cleaner_core::paint::BrushSpec { size: 16.0, hardness: 100.0, opacity: 100.0, flow: 100.0, ..cleaner_core::paint::BrushSpec::default() };
+        super::super::erase_paint_at(&located, None, &[super::super::ErasePoint { x: 50.0, y: 50.0, p: Some(1.0) }], &spec).unwrap().unwrap();
+        let center = || {
+            let job = Job::open(&located.job_path).unwrap();
+            let patch = job.load_patch(job.project.patches.iter().find(|r| r.id == "layer").unwrap()).unwrap();
+            cleaner_core::composite::composite(&raw, std::slice::from_ref(&patch)).unwrap().sample(64, 64, 0)
+        };
+        assert_eq!(center(), 200, "the eraser cleared the middle");
+        apply(&root);
+        let after = center();
+        let _ = std::fs::remove_dir_all(root);
+        assert_eq!(after, 200, "the erased middle came back");
+    }
 }

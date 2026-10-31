@@ -723,6 +723,12 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Bug hunt on FLUX 3 v2, the local models and Edit gradient (2026-10-31): stand-ins only.** Not run:
+a cancel that lands during FLUX 3's second edit (needs Modal's input cancel on a real GPU call), LaMa
+beside FLUX 3 in GPU memory, `onnxruntime-gpu` in the FLUX 3 image, a redeploy of a live v1 profile, local
+FLUX 3 and Qwen on Metal, and a real OS kill of a sidecar during a render. The confirmed bugs have
+failing tests marked ignored or skipped on branch `test-hunt-recent-release`.
+
 **Dev log (2026-10-31): the capture ran on macOS only, and four sources stay out of it.** The stderr
 redirect in `src-tauri/src/devlog.rs` has a real test on macOS. The Windows branch (`SetStdHandle`) has
 never run on Windows. These are not captured:
