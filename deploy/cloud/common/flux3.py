@@ -1,7 +1,7 @@
 """FLUX 3 Image Klein worker: an edit of the crop as it is, sampled the way BFL samples it.
 
-The sidecar runs the first edit locally too (sidecar/manga_cleaner_sidecar/backend/edit.py), without
-v2's retry below. Klein v2 (common/flux.py) inpaints a hole LaMa has already filled, so Klein
+The sidecar runs the same edits locally (sidecar/manga_cleaner_sidecar/backend/edit.py), its second
+from a flat fill: it holds no LaMa. Klein v2 (common/flux.py) inpaints a hole LaMa has already filled, so Klein
 only redraws LaMa's guess. FLUX 3 is an edit model with a stream of its own for the
 reference image, so it gets the crop with its lettering and `FLUX3_PROMPT`, which names
 where the lettering is (`hint_location`), and removes the lettering itself. The first
@@ -99,12 +99,15 @@ def lettering_location(lettering: Any, np: Any) -> str:
 def lettering_kept(before: Any, after: Any, ink: Any, np: Any) -> bool:
     """Whether the edit left the lettering where it was: its pixels still follow the input's.
 
-    `before` and `after` are RGB arrays, `ink` the hint as it came. A flat side has no
-    correlation to read: a flat input had nothing to remove, a flat answer removed it.
+    `before` and `after` are RGB arrays, `ink` the hint as it came. It reads the channel
+    where the input's lettering has most contrast: the mean of coloured lettering as bright
+    as its ground is flat. A flat side has no correlation to read: a flat input had nothing
+    to remove, a flat answer removed it.
     """
     if not ink.any():
         return False
-    was, now = before.mean(axis=2)[ink], after.mean(axis=2)[ink]
+    channel = int(np.argmax([before[:, :, c][ink].std() for c in range(3)]))
+    was, now = before[:, :, channel][ink], after[:, :, channel][ink]
     if was.std() < 1.0 or now.std() < 1.0:
         return False
     return float(np.corrcoef(was, now)[0, 1]) > LETTERING_KEPT_CORRELATION

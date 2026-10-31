@@ -296,8 +296,7 @@ describe('the Gradient tool', () => {
     expect(entry.after.region.id).toBe('g1')
   })
 
-  // Bug hunt, 2026-10-31.
-  it.skip('a line dragged while the fit is on its way wins, as Patch\'s ghost does (bug: matchSurroundings overwrites it)', async () => {
+  it('a line dragged while the fit is on its way wins, as Patch\'s ghost does', async () => {
     /** @type {(answer: any) => void} */
     let answer = () => {}
     const api = backend({ fitGradient: vi.fn(() => new Promise((resolve) => { answer = resolve })) })
@@ -310,7 +309,7 @@ describe('the Gradient tool', () => {
     expect(draft.selection?.start).toEqual({ x: 11, y: 12 })
   })
 
-  it.skip('a moved Auto layer fits the surroundings where it now sits (bug: the fit reads the ring round where it was made)', async () => {
+  it('a moved Auto layer fits the surroundings where it now sits', async () => {
     const api = backend()
     setBackend(api)
     // 160 page pixels on a 1600 pixel page: ten percent to the right.
@@ -319,7 +318,7 @@ describe('the Gradient tool', () => {
     expect(api.fitGradient.mock.calls[0][0].painted.points[0].x).toBeCloseTo(20)
   })
 
-  it.skip('an Auto layer reopens as Linear whatever type was on the bar (bug: only Auto is changed, so a failed fit leaves Radial)', async () => {
+  it('an Auto layer reopens as Linear whatever type was on the bar', async () => {
     const api = backend({ fitGradient: vi.fn(async () => null) })
     setBackend(api)
     editor.toolParams.gradient = { ...editor.toolParams.gradient, kind: 'radial' }
@@ -328,7 +327,7 @@ describe('the Gradient tool', () => {
     expect(editor.toolParams.gradient.kind).toBe('linear')
   })
 
-  it.skip('a layer that cannot reopen leaves the tool out as it was (bug: the menu offers it, then the tool and any held work are gone)', () => {
+  it('a layer that cannot reopen leaves the tool out as it was', () => {
     setBackend(backend())
     const region = autoLayer()
     region.mask.provenance.params_snapshot.auto = undefined

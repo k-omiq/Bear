@@ -447,13 +447,12 @@ class SdnqBackend(BackendBase):
         if self.basis_state == Basis.MEASURED and self.measured_working_set is not None:
             return self.measured_working_set
         declared = DECLARED_WORKING_SET.get(self.active_model_id)
-        if declared is not None:
-            return declared
         weights = self.get_weights_bytes()
-        if weights is not None:
-            # The gate refuses a working set below the weights it holds.
+        # The gate refuses a working set below the weights it holds, and a folder
+        # placed by hand can be heavier than the pinned one a figure was declared for.
+        if weights is not None and (declared is None or declared < weights):
             return max(DEFAULT_DECLARED_WORKING_SET, weights + 1_932_735_284)
-        return DEFAULT_DECLARED_WORKING_SET
+        return declared if declared is not None else DEFAULT_DECLARED_WORKING_SET
 
     def get_basis(self) -> Basis:
         return self.basis_state
@@ -827,7 +826,7 @@ class SdnqBackend(BackendBase):
             if self.family == "qwen":
                 result = edit.render_qwen(self.pipeline, crop, hint, str(prompt), steps, seed, float(guidance))
             else:
-                result = edit.render_flux3(self.pipeline, crop, self._prompt_embeds(str(prompt)), steps, seed)
+                result = edit.render_flux3(self.pipeline, crop, hint, self._prompt_embeds(str(prompt)), steps, seed)
         except MemoryError as exc:
             raise SidecarError(
                 507,

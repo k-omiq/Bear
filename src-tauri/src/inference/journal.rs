@@ -2929,13 +2929,9 @@ mod tests {
     }
 
     /// An attempt beta.11 wrote for FLUX 3: recipe v1, which always carried
-    /// `qwen_edit`. 2f75dd0 took v1 out of `GUIDED_RECIPES`, so
-    /// `validate_recipe` refuses it and `get_record` with it. The sweep reports
-    /// `repair_needed` with `can_abandon: false`, and the region cannot be
-    /// cleaned again: `unresolved_region_attempt` answers its error. On a copy of
-    /// one real journal, 2026-10-31: 20 of its 22 FLUX 3 v1 attempts fail this way.
+    /// `qwen_edit`. It must keep reading, or the sweep reports `repair_needed`
+    /// with `can_abandon: false` and `unresolved_region_attempt` blocks the region.
     #[test]
-    #[ignore = "bug: FLUX 3 v1 attempts from beta.11 no longer read, and block their region"]
     fn a_flux3_v1_attempt_from_beta_11_still_reads_and_does_not_block_its_region() {
         use cleaner_core::engines::render::{QwenEdit, QwenTarget};
         let td = TestDir::new("flux3-v1-attempt");

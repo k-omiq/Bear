@@ -204,6 +204,8 @@ class RecipeParityTest(unittest.TestCase):
         self.assertEqual(edit.TIME_SHIFT, flux3.TIME_SHIFT)
         self.assertEqual(edit.FLUX3_STRIDE, contract.LATENT_STRIDE)
         self.assertEqual(edit.FLUX3_WORK_LONG_SIDE, manifest.WORK_LONG_SIDE)
+        self.assertEqual(edit.LETTERING_KEPT_CORRELATION, flux3.LETTERING_KEPT_CORRELATION)
+        self.assertEqual(edit.HOLE_GROWTH, flux.HOLE_GROWTH)
         self.assertEqual(edit.ADAPTER_DIR, manifest.ADAPTER_DIR)
         self.assertEqual(edit.LIGHTNING_FILE, manifest.LIGHTNING_FILE)
         self.assertEqual(edit.FUKIDASHI_FILE, manifest.FUKIDASHI_FILE)

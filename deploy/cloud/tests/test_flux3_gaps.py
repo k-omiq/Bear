@@ -43,7 +43,7 @@ class Flux3RetryGapsTest(unittest.TestCase):
         self.Runner("/w", modules=mods).render_png(png(page), png(hint), 300, 200, seed=1, steps=16, guidance_scaled=100)
         self.assertEqual(len(mods.pipeline.calls), 2)
 
-    @unittest.skip("gap: render_png checks only the first edit, so lettering that survives the second is returned as a success")
+    @unittest.skip("open choice: docs/cloud-contract.md says the worker never rejects a result, the user does; refusing here would break that rule")
     def test_lettering_kept_by_the_second_edit_is_not_a_success(self) -> None:
         from deploy.cloud.common.flux import WorkerRenderError
 
@@ -53,14 +53,13 @@ class Flux3RetryGapsTest(unittest.TestCase):
         with self.assertRaises(WorkerRenderError):
             self.Runner("/w", modules=mods).render_png(png(page), png(hint), 300, 200, seed=1, steps=16, guidance_scaled=100)
 
-    @unittest.skip("gap: a third of the lettering left in place reads under 0.5, so no retry; real crops: 0.35 at 30 % on real_6_00")
+    @unittest.skip("open choice: a lower limit than 0.5 catches this but pays more second edits, and 31 crops cannot set it; real crops: 0.35 at 30 % on real_6_00")
     def test_a_third_of_the_lettering_left_in_place_is_lettering_kept(self) -> None:
         page, hint = lettered()
         clean = Image.new("RGB", page.size, (255, 255, 255))
         clean.paste(page.crop((40, 60, 113, 140)), (40, 60))
         self.assertTrue(self.lettering_kept(np.asarray(page), np.asarray(clean), np.asarray(hint) > 0, np))
 
-    @unittest.skip("gap: the check reads the mean of RGB, so coloured lettering as bright as its ground reads flat and is never retried")
     def test_coloured_lettering_as_bright_as_its_ground_is_lettering_kept(self) -> None:
         page = Image.new("RGB", (300, 200), (0, 0, 200))
         for x in range(40, 260, 6):
@@ -69,7 +68,7 @@ class Flux3RetryGapsTest(unittest.TestCase):
         hint.paste(255, (40, 60, 260, 140))
         self.assertTrue(self.lettering_kept(np.asarray(page), np.asarray(page), np.asarray(hint) > 0, np))
 
-    @unittest.skip("gap: a hint that covers art beside the lettering pays a second edit for a clean first answer; real crops pass 0.5 with 10 to 40 px of padding")
+    @unittest.skip("open choice: mask padding grows the hint over art (fit_with_padding), and pixels alone cannot tell kept art from kept lettering; real crops pass 0.5 with 10 to 40 px of padding")
     def test_a_hint_over_art_with_the_lettering_removed_is_not_edited_again(self) -> None:
         # Art kept where the model should keep it, the lettering gone from the answer.
         art = Image.new("RGB", (300, 200), (255, 255, 255))
@@ -86,14 +85,12 @@ class Flux3RetryGapsTest(unittest.TestCase):
 
 
 class SnapshotAdapterGapsTest(unittest.TestCase):
-    @unittest.skip("bug: FLUX 3 v2 seeds the LaMa adapter but its file list leaves it out, so the check passes without it")
     def test_every_adapter_is_in_the_file_list_the_seed_checks(self) -> None:
         for model_id, model in PRODUCTION_MODELS.items():
             listed = {path for path, _size in model.files}
             for adapter in model.adapters:
                 self.assertIn(f"{ADAPTER_DIR}/{adapter.filename}", listed, model_id)
 
-    @unittest.skip("bug: FLUX 3 v2 passes check_snapshot_files with no LaMa graph, then every render fails model_load_failed")
     def test_a_snapshot_without_the_lama_graph_is_not_complete(self) -> None:
         model = production_model(MODEL_PROD_FLUX3)
         with tempfile.TemporaryDirectory() as root:
@@ -102,7 +99,8 @@ class SnapshotAdapterGapsTest(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with open(target, "wb") as handle:
                     handle.truncate(size)
-            self.assertFalse(os.path.exists(Path(root) / ADAPTER_DIR / model.adapters[0].filename))
+            self.assertEqual(check_snapshot_files(root, MODEL_PROD_FLUX3), [])
+            os.remove(Path(root) / ADAPTER_DIR / model.adapters[0].filename)
             self.assertNotEqual(check_snapshot_files(root, MODEL_PROD_FLUX3), [])
 
 

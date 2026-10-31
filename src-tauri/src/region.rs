@@ -882,7 +882,8 @@ impl Bench {
             format!("{}|{}|{model}", install.python.display(), backend.id()),
         );
         if self.flux.is_none() {
-            self.flux = match cleaner_core::residency::checkout::<flux::Inpainter>(&key) {
+            self.flux = match cleaner_core::residency::checkout::<flux::Inpainter>(&key)
+                .and_then(|mut held| held.answers().then_some(held)) {
                 Some(held) => Some(held),
                 None => Some(
                     flux::Inpainter::open(&install, backend, model, Budget::from_room(room))
@@ -892,7 +893,13 @@ impl Bench {
             self.flux_key = Some(key);
         }
         let inpainter = self.flux.as_mut().expect("just opened");
-        let rendered = inpainter.render_with(page, fitted, finishing).map_err(flux_reason)?;
+        let rendered = inpainter.render_with(page, fitted, finishing);
+        if inpainter.gone() {
+            // Dropped, which ends the child: the next region opens another.
+            self.flux = None;
+            self.flux_key = None;
+        }
+        let rendered = rendered.map_err(flux_reason)?;
         let tone = rendered.tone;
         let made = run::Made {
             engine: Engine::Flux,
@@ -1403,6 +1410,9 @@ fn edit_with_bench_render(
             &job, source_idx, page, read_window, order, strip_space,
         )?;
         translate_made(&mut made, patch_shift);
+        if let Some(record) = existing.as_ref() {
+            retouch::keep_erased(&job, record, paint, &mut made)?;
+        }
         let mut snapshot = paint_snapshot(&plan, paint, made.engine, dabs, started.elapsed());
         // What only the render knew: which fill Auto chose, whether As
         // screentone found a screen.

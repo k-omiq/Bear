@@ -61,6 +61,9 @@ TIME_SHIFT = 16.0
 #: One token per this many pixels a side.
 FLUX3_STRIDE = 16
 FLUX3_WORK_LONG_SIDE = 768
+#: deploy/cloud/common/flux3.py LETTERING_KEPT_CORRELATION and flux.py HOLE_GROWTH.
+LETTERING_KEPT_CORRELATION = 0.5
+HOLE_GROWTH = 8
 
 
 def family_of(model_id: str) -> str:
@@ -241,8 +244,54 @@ def render_qwen(pipeline: Any, crop: Any, hint: Optional[Any], prompt: str, step
     return best[1] if best is not None else result
 
 
-def render_flux3(pipeline: Any, crop: Any, prompt_embeds: Any, steps: int, seed: int) -> Any:
-    """Edit one crop, sampled the way BFL samples it: 16 steps, no CFG, its time shift.
+def lettering_kept(np: Any, before: Any, after: Any, lettering: Any) -> bool:
+    """Whether the edit left the lettering where it was (deploy/cloud/common/flux3.py)."""
+    was, now = np.asarray(before, dtype=np.float32), np.asarray(after, dtype=np.float32)
+    channel = int(np.argmax([was[:, :, c][lettering].std() for c in range(3)]))
+    was, now = was[:, :, channel][lettering], now[:, :, channel][lettering]
+    if was.std() < 1.0 or now.std() < 1.0:
+        return False
+    return float(np.corrcoef(was, now)[0, 1]) > LETTERING_KEPT_CORRELATION
+
+
+def flat_fill(np: Any, crop: Any, lettering: Any) -> Any:
+    """The crop with the grown lettering painted the median of the page around it.
+
+    The cloud worker fills with a manga LaMa, which this install does not hold.
+    """
+    from PIL import Image, ImageFilter
+
+    mask = Image.fromarray(np.uint8(lettering) * 255).filter(ImageFilter.MaxFilter(2 * HOLE_GROWTH + 1))
+    hole = np.asarray(mask) > 0
+    ring = np.asarray(mask.filter(ImageFilter.MaxFilter(2 * HOLE_GROWTH + 1))) > 0
+    samples = np.array(crop)
+    around = samples[ring & ~hole]
+    if not len(around):
+        return crop
+    samples[hole] = np.median(around, axis=0)
+    return Image.fromarray(samples)
+
+
+def render_flux3(pipeline: Any, crop: Any, hint: Optional[Any], prompt_embeds: Any, steps: int, seed: int) -> Any:
+    """Edit one crop. Lettering the edit left in place is edited once more from a fill.
+
+    The same second edit as the cloud worker's v2, without the check on its answer: the
+    user rejects a result, this does not. A hint that cannot tell lettering from page
+    skips the check.
+    """
+    result = _flux3_once(pipeline, crop, prompt_embeds, steps, seed)
+    lettering = _lettering(hint, crop.size)
+    if lettering is None:
+        return result
+    import numpy as np
+
+    if lettering_kept(np, crop, result, lettering):
+        result = _flux3_once(pipeline, flat_fill(np, crop, lettering), prompt_embeds, steps, seed)
+    return result
+
+
+def _flux3_once(pipeline: Any, crop: Any, prompt_embeds: Any, steps: int, seed: int) -> Any:
+    """One sampling, the way BFL samples it: 16 steps, no CFG, its time shift.
 
     The noise is drawn as image tokens on the host and cast to bf16, which reproduces
     BFL's sample for a seed on any device.

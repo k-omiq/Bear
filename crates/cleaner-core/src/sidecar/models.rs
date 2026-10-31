@@ -92,22 +92,33 @@ impl LocalModel {
     /// Whether its download for `preferred` is on disk under `weights`.
     ///
     /// The installer moves a folder here only once it is complete
-    /// (`sidecar/bootstrap.py`), so a folder is a whole download. MLX reads its
-    /// one folder. The torch arm finds a model by a folder named after its id
-    /// (`backend/sdnq.py#find_weights_dir`), so a folder somebody placed by hand
-    /// counts, and MLX's own folder, which it cannot read, does not.
+    /// (`sidecar/bootstrap.py`), but an older one downloaded straight into it,
+    /// so a folder counts only with the file the download ends with. MLX reads
+    /// its one folder. The torch arm finds a model by a folder named after its
+    /// id (`backend/sdnq.py#find_weights_dir`), so a folder somebody placed by
+    /// hand counts, and MLX's own folder, which it cannot read, does not.
     pub fn installed(&self, preferred: Backend, weights: &Path) -> bool {
         let backend = self.backend(preferred);
+        let checkpoint = self.checkpoint(backend);
         if backend == Backend::Mflux {
-            return weights.join(self.checkpoint(backend).dir).is_dir();
+            return weights.join(checkpoint.dir).join(checkpoint.expected).is_file();
         }
         std::fs::read_dir(weights).is_ok_and(|entries| {
             entries.flatten().any(|entry| {
                 let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-                name.starts_with(self.id) && !name.contains("-mflux") && entry.path().is_dir()
+                name.starts_with(self.id) && !name.contains("-mflux") && holds(&entry.path(), checkpoint.expected, 2)
             })
         })
     }
+}
+
+/// Whether `file` is in `folder` or up to `depth` levels under it: a cache entry
+/// placed by hand keeps its snapshot at `snapshots/<revision>`
+/// (`backend/sdnq.py#resolve_pipeline_dir`).
+fn holds(folder: &Path, file: &str, depth: u32) -> bool {
+    folder.join(file).is_file() || (depth > 0 && std::fs::read_dir(folder).is_ok_and(|entries| {
+        entries.flatten().any(|entry| holds(&entry.path(), file, depth - 1))
+    }))
 }
 
 /// FLUX.2 Klein: the crop with the lettering held out of it.
@@ -309,7 +320,9 @@ mod tests {
     fn a_folder_is_a_download_for_the_runtime_that_reads_it() {
         let root = std::env::temp_dir().join(format!("mc-local-models-{}", std::process::id()));
         std::fs::create_dir_all(root.join("flux2-klein-4b-sdnq")).unwrap();
-        std::fs::create_dir_all(root.join("flux3-image-klein")).unwrap();
+        std::fs::write(root.join("flux2-klein-4b-sdnq/model_index.json"), "{}").unwrap();
+        std::fs::create_dir_all(root.join("flux3-image-klein/snapshots/abc")).unwrap();
+        std::fs::write(root.join("flux3-image-klein/snapshots/abc/modular_model_index.json"), "{}").unwrap();
         std::fs::create_dir_all(root.join("flux2-klein-9b-mflux-q4")).unwrap();
         let klein = local_model("flux2-klein-4b").unwrap();
         assert!(klein.installed(Backend::Sdnq, &root));
@@ -344,9 +357,8 @@ mod tests {
 
     /// An older installer downloaded straight into `weights/<dir>` (see
     /// `sidecar/bootstrap.py#fetch_weights`), so a stopped download leaves a folder with a
-    /// name and no index. Settings then says Installed, and the render fails `weights_missing`.
+    /// name and no index.
     #[test]
-    #[ignore = "bug: a partial download counts as installed in Settings"]
     fn a_folder_without_the_expected_file_is_not_installed() {
         let root = std::env::temp_dir().join(format!("mc-local-partial-{}", std::process::id()));
         std::fs::create_dir_all(root.join("flux3-image-klein-sdnq/transformer")).unwrap();

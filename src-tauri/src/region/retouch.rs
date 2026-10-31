@@ -228,6 +228,42 @@ fn selection_of(painted: Option<&serde_json::Value>, stroke: Option<&serde_json:
     stroke_mask(&stroke, width, height)
 }
 
+/// Edit gradient's Apply over a layer the eraser has been at: the same selection
+/// renders again, so what the eraser took stays off. A selection drawn anew is a
+/// new layer's worth of coverage and keeps none of it. A lower feather keeps the
+/// softer edge the layer had: nothing here tells it from a soft erase.
+pub(super) fn keep_erased(job: &Job, record: &PatchRecord, paint: &PaintPlan, made: &mut run::Made) -> Result<(), String> {
+    let PaintKind::Gradient { recorded, .. } = &paint.kind else { return Ok(()) };
+    let old = job.load_display_patch(record).map_err(|e| e.to_string())?;
+    let snapshot = &old.provenance.params_snapshot;
+    let selected = |params: &serde_json::Value| {
+        let mut painted = params.get("painted").cloned().unwrap_or(serde_json::Value::Null);
+        if let Some(fields) = painted.as_object_mut() { fields.remove("feather"); }
+        (painted, params.get("stroke").cloned().unwrap_or(serde_json::Value::Null))
+    };
+    if snapshot.get("mode").and_then(|mode| mode.as_str()) != Some("gradient") || selected(snapshot) != selected(recorded) {
+        return Ok(());
+    }
+    let bounds = made.mask.bounds;
+    let mut kept = made.mask.clone();
+    let mut ink = made.ink.clone();
+    for y in bounds.y..bounds.bottom() {
+        for x in bounds.x..bounds.right() {
+            let left = old.mask.coverage(x, y);
+            if left < kept.coverage(x, y) {
+                kept.set_coverage(x, y, left);
+                if left < 128 { ink.set(x, y, false); }
+            }
+        }
+    }
+    // Erased to nothing, the layer is off the page and cannot be reopened.
+    if !kept.is_empty() {
+        made.mask = kept;
+        made.ink = ink;
+    }
+    Ok(())
+}
+
 /// `mask` moved by `by` and cut to the page.
 fn shifted(mask: &Mask, by: (i64, i64), width: u32, height: u32) -> Option<Mask> {
     let moved = Rect::new(mask.bounds.x + by.0, mask.bounds.y + by.1, mask.bounds.w, mask.bounds.h);
@@ -1188,10 +1224,9 @@ mod tests {
         assert_eq!(patch.provenance.params_snapshot["layer"]["opacity"], 40, "{}", patch.provenance.params_snapshot["layer"]);
     }
 
-    /// `reopenGradient` holds `painted` as first drawn, and the re-render fills all of it.
-    /// What the eraser took off a gradient layer comes back on Edit gradient's Apply.
+    /// `reopenGradient` holds `painted` as first drawn, and the re-render fills all of it,
+    /// so `keep_erased` keeps what the eraser took off the layer.
     #[test]
-    #[ignore = "bug: Edit gradient brings back what the eraser took off the layer"]
     fn retouch_editing_a_gradient_keeps_what_the_eraser_took_off() {
         let raw = raster("l8", 128, 128, |_, _| vec![200]);
         let painted = rect_percent(25.0, 25.0, 75.0, 75.0);

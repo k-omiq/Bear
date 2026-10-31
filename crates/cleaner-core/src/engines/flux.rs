@@ -239,6 +239,13 @@ impl Inpainter {
         if !crate::sidecar::reports_backend(&health.backends, backend) {
             return Err(Decline::SidecarBackendMissing.into());
         }
+        // No figure and no finished download: the remedy is the download, not
+        // "cannot say how much memory it needs". `/v1/open` says the same, but
+        // the gate below would refuse first.
+        if health.weights_bytes.is_none() && !crate::sidecar::models::local_model(model)
+            .is_none_or(|known| known.installed(backend, &install.root.join("weights"))) {
+            return Err(Decline::SidecarWeightsMissing.into());
+        }
         let demand =
             Demand::from_report(health.weights_bytes, health.working_set_bytes, health.basis);
         match hardware::gate_backend_within(backend, demand, Some(budget.room)) {
@@ -288,6 +295,17 @@ impl Inpainter {
     /// [`crate::sidecar::Sidecar::spent`] is the whole of it.
     pub fn spent(&self) -> bool {
         self.sidecar.spent()
+    }
+
+    /// Whether the child stopped answering, so a holder must open another now.
+    pub fn gone(&mut self) -> bool {
+        self.sidecar.client().is_gone()
+    }
+
+    /// Whether a parked child still answers. One killed while it waited has no
+    /// other way to say so before it costs the next region.
+    pub fn answers(&mut self) -> bool {
+        self.sidecar.client().health().is_ok()
     }
 
     pub fn client(&mut self) -> &mut Client {
@@ -1029,11 +1047,9 @@ mod tests {
         );
     }
 
-    /// A child that dies (killed, or out of memory on the host) is not `spent`, so
-    /// `region.rs#Bench` parks it and the next click takes the dead one back. Every
-    /// later FLUX region then fails until the app restarts.
+    /// A child that dies (killed, or out of memory on the host) must be `spent`, or
+    /// `region.rs#Bench` parks it and the next click takes the dead one back.
     #[test]
-    #[ignore = "bug: a killed sidecar is parked and reused, so local FLUX fails until a restart"]
     fn a_child_that_stopped_answering_is_not_parked_again() {
         let port = TcpListener::bind("127.0.0.1:0").unwrap();
         let dead = port.local_addr().unwrap();
@@ -1047,14 +1063,11 @@ mod tests {
         assert!(inpainter.spent(), "checkin would park a dead child");
     }
 
-    /// A real child with an empty weights folder. Health reports no `weights_bytes`, the
-    /// gate reads that as a sidecar that will not say what it costs, and `/v1/open`, the
-    /// only place that says `weights_missing`, is never reached. The user is told the
-    /// sidecar "cannot say how much memory it needs" when a download is all it wants.
+    /// A real child with an empty weights folder is declined as missing weights, not as
+    /// a sidecar that "cannot say how much memory it needs".
     /// Stand-in packages for torch, diffusers and sdnq: the health check only finds them.
     #[cfg(unix)]
     #[test]
-    #[ignore = "bug: missing local weights decline as an unbounded sidecar, never as weights missing"]
     fn missing_weights_are_declined_as_missing_weights() {
         let root = std::env::temp_dir().join(format!("mc-no-weights-{}", std::process::id()));
         std::fs::create_dir_all(root.join("weights")).unwrap();

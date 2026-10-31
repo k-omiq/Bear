@@ -70,7 +70,6 @@ class EchoPipeline:
 
 @unittest.skipIf(np is None, "numpy and Pillow are not installed")
 class LocalFlux3GapsTest(unittest.TestCase):
-    @unittest.skip("gap: the local FLUX 3 has no check or retry, so a crop whose lettering the model left comes back unchanged as a success")
     def test_lettering_the_edit_left_in_place_does_not_come_back_as_a_clean(self) -> None:
         page = Image.new("RGB", (768, 512), (255, 255, 255))
         for x in range(200, 560, 12):
@@ -91,7 +90,6 @@ class LocalFlux3GapsTest(unittest.TestCase):
 
 
 class WorkingSetGapsTest(unittest.TestCase):
-    @unittest.skip("gap: the declared peak is per model id, so a folder placed by hand with heavier weights declares less than it holds, and the gate refuses it as unbounded")
     def test_a_declared_peak_is_never_below_the_weights_on_disk(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             folder = os.path.join(root, "flux3-image-klein")
