@@ -1424,6 +1424,9 @@
    * application did not unpack - unknown rather than none - and an unknown
    * build is nothing to report a difference about.
    */
+  /** @type {Measurement|undefined} */
+  let measurement = $state()
+
   const chosenBuildInstalled = $derived.by(() => {
     const runtime = catalogue?.runtime
     return Boolean(
@@ -3194,7 +3197,9 @@
                 {/if}
               </div>
               <div class="row-actions">
-                {#if progress[RUNTIME_ID]}
+                <!-- The catalogue too: Settings closed and opened again during a
+                     download has seen no progress event yet. -->
+                {#if progress[RUNTIME_ID] || catalogue.runtime.downloading}
                   <Button size="sm" onclick={() => cancel(RUNTIME_ID)}>
                     {t('settings.models.action.cancel')}
                   </Button>
@@ -3213,10 +3218,11 @@
                       {t('settings.models.action.delete')}
                     </Button>
                   {/if}
-                  <!-- Over an installed runtime only where the chosen build is
-                       another one, or one this app cannot name: otherwise it
-                       would re-download what is there. -->
-                  {#if !catalogue.runtime.installed || (catalogue.runtime.flavours.length > 1 && !chosenBuildInstalled)}
+                  <!-- Over an installed runtime only where the one here will not
+                       load, where the chosen build or version is another one,
+                       or where a choice of builds meets one this app cannot
+                       name: otherwise it would re-download what is there. -->
+                  {#if !catalogue.runtime.installed || runtimeLoad.state === 'failed' || ((catalogue.runtime.flavours.length > 1 || catalogue.runtime.installedFlavour) && !chosenBuildInstalled)}
                     <Button
                       size="sm"
                       disabled={!catalogue.runtime.available}
@@ -3269,11 +3275,11 @@
           {accelerators}
           pathsPending={runtimeLoad.state !== 'loaded'}
           onchooseflavour={chooseFlavour}
-          onrecheck={refreshAccelerators}
+          onrecheck={() => Promise.all([refreshAccelerators(), measurement?.refresh()])}
         />
 
         <h3 class="sub">{t('settings.runtime.heading.measure')}</h3>
-        <Measurement {accelerators} ready={runtimeLoad.state === 'loaded' && Boolean(accelerators)} onmeasured={refreshAccelerators} />
+        <Measurement bind:this={measurement} {accelerators} ready={runtimeLoad.state === 'loaded' && Boolean(accelerators)} onmeasured={refreshAccelerators} />
 
         <h3 class="sub">{t('settings.runtime.heading.backends')}</h3>
         <div class="accel">

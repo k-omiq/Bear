@@ -900,6 +900,7 @@ export const es = {
         pathReady: 'lista',
         pathsLater: 'Se comprueba cuando se descargue el entorno de ejecución.',
         recheck: 'Volver a comprobar',
+        restartNeeded: 'Esta instalación se encontró después de cargar otra. Reinicia la aplicación para usarla.',
       },
       measure: {
         body: 'Mide cada modelo instalado en todas las rutas que puede usar aquí, y Automático usa la más rápida. Tarda uno o dos minutos. Un backend que elijas para un modelo sigue teniendo prioridad.',

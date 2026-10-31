@@ -1892,6 +1892,7 @@ export function createMockBackend(options = {}) {
       verdictHave: tooOld ? `${newest.major}.${newest.minor}` : null,
       verdictNeed: tooOld ? `${wanted}.${MINOR_FLOOR[wanted]}` : null,
       recommended: [['cuda13', 13], ['cuda12', 12]].find(([, major]) => verdict(major) === 'accel.cudaCheck.ready')?.[0] ?? null,
+      restartNeeded: false,
     }
   }
 

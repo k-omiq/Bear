@@ -999,6 +999,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {string|null} verdictHave
  * @property {string|null} verdictNeed
  * @property {string|null} recommended
+ * @property {boolean} restartNeeded - the install found is not the one already loaded in this process
  */
 
 /**

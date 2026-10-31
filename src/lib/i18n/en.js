@@ -1098,6 +1098,7 @@ export const en = {
         pathReady: 'ready',
         pathsLater: 'Checked once the runtime is downloaded.',
         recheck: 'Check again',
+        restartNeeded: 'This install was found after another one was loaded. Restart the app to use it.',
       },
       measure: {
         body: 'Times each installed model on every path it can use here, then Automatic uses the fastest. It takes a minute or two. A backend you pick for a model still wins.',

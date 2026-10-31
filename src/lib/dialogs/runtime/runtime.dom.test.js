@@ -69,9 +69,9 @@ afterEach(() => {
 })
 
 describe('This computer', () => {
-  // A failed path's words are in a tooltip here, the place 46429f8's own note
-  // blames for nobody having read them, and a keyboard or touch never sees it.
-  it.skip('BUG: says the runtime\'s own words beside a path that failed its test run', async () => {
+  // On the page, not in a tooltip: a keyboard or touch never sees one, and these
+  // are the words a bug report needs.
+  it('says the runtime\'s own words beside a path that failed its test run', async () => {
     fake({ runtimeReport: vi.fn(async () => REPORT) })
     const accelerators = {
       preference: 'auto',
@@ -84,6 +84,17 @@ describe('This computer', () => {
     const rendered = render(MachineCheck, { flavour: 'cuda12', flavours: FLAVOURS, platform: 'windows-x64', accelerators })
     await waitFor(() => expect(rendered.getByText(t('accel.declined.selfTest'))).toBeTruthy())
     expect(rendered.queryByText('Could not locate cudnn_engines_tensor_ir64_9.dll')).not.toBeNull()
+  })
+
+  it('asks for a restart only when the install found is not the one loaded', async () => {
+    fake({ runtimeReport: vi.fn(async () => ({ ...REPORT, restartNeeded: true })) })
+    const rendered = render(MachineCheck, { flavour: 'cuda12', flavours: FLAVOURS, platform: 'windows-x64', accelerators: null })
+    await waitFor(() => expect(rendered.getByText(t('settings.runtime.machine.restartNeeded'))).toBeTruthy())
+    cleanup()
+    fake({ runtimeReport: vi.fn(async () => ({ ...REPORT, restartNeeded: false })) })
+    const again = render(MachineCheck, { flavour: 'cuda12', flavours: FLAVOURS, platform: 'windows-x64', accelerators: null })
+    await waitFor(() => expect(again.getByText(t('settings.runtime.machine.toolkits'))).toBeTruthy())
+    expect(again.queryByText(t('settings.runtime.machine.restartNeeded'))).toBeNull()
   })
 
   it('judges the build being chosen against the toolkit and cuDNN of its own CUDA major', async () => {

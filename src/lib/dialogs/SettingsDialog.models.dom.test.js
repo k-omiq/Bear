@@ -941,15 +941,14 @@ describe('the two pipelines', () => {
   })
 })
 
-describe('the runtime Download button, bugs in 46429f8 and around it', () => {
+describe('the runtime Download button', () => {
   const flavours = ['cuda12', 'cuda13'].map((id) => ({ id, ortVersion: '1.28.0', bytes: 1, kept: false, userInstalled: [] }))
 
   const runtimeRow = (/** @type {any} */ rendered) =>
     within(/** @type {HTMLElement} */ (rendered.container.querySelector('[data-settings-anchor="runtime"]')))
 
-  // The readiness row sends a runtime that will not load to this row to replace
-  // it, and 46429f8 took the button away from a build named as the chosen one.
-  it.skip('BUG: offers Download for a chosen build that will not load', async () => {
+  // The readiness row sends a runtime that will not load to this row to replace it.
+  it('offers Download for a chosen build that will not load', async () => {
     const answer = () => view({ runtime: { flavours, installedFlavour: 'cuda12', installedVersion: '1.28.0' } })
     stub(answer)
     getBackend().diagnostics = vi.fn(async () => ({
@@ -962,17 +961,17 @@ describe('the runtime Download button, bugs in 46429f8 and around it', () => {
   })
 
   // Settings closed and opened again while a download runs has no progress
-  // event yet: only the catalogue says so, and the row reads `progress` alone.
-  it.skip('BUG: offers Cancel and not Download while the catalogue says a download is running', async () => {
+  // event yet: only the catalogue says so.
+  it('offers Cancel and not Download while the catalogue says a download is running', async () => {
     const rendered = await open(() => view({ runtime: { installed: false, downloading: true } }), PERFORMANCE)
     await waitFor(() => expect(rendered.getByText(t('settings.models.runtime.label'))).toBeTruthy())
     expect(runtimeRow(rendered).queryByText(t('settings.models.action.cancel'))).not.toBeNull()
     expect(runtimeRow(rendered).queryByText(t('settings.models.action.download'))).toBeNull()
   })
 
-  // The row says which version is here and which is wanted, and with one build
-  // on the platform it offers nothing but Delete. Older than 46429f8.
-  it.skip('BUG: offers Download for a version mismatch where the platform has one build', async () => {
+  // The row says which version is here and which is wanted, so it offers the
+  // wanted one, with one build on the platform as with two.
+  it('offers Download for a version mismatch where the platform has one build', async () => {
     const one = flavours.slice(0, 1)
     const rendered = await open(
       () => view({ runtime: { flavours: one, installedFlavour: 'cuda12', installedVersion: '1.24.4' } }),
@@ -982,9 +981,9 @@ describe('the runtime Download button, bugs in 46429f8 and around it', () => {
     expect(runtimeRow(rendered).queryByText(t('settings.models.action.download'))).not.toBeNull()
   })
 
-  // Check again reads the paths and the driver again, and the measurement under
-  // them stays what it was when the screen opened.
-  it.skip('BUG: Check again reads the measurement again', async () => {
+  // A fixed install makes the measurement under the paths stale, so Check again
+  // reads it too.
+  it('Check again reads the measurement again', async () => {
     const answer = () => view({ runtime: { flavours, platform: 'windows-x64' } })
     stub(answer)
     const readMeasurement = vi.fn(async () => ({ saved: null, current: null, running: false }))

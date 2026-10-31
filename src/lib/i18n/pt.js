@@ -900,6 +900,7 @@ export const pt = {
         pathReady: 'pronto',
         pathsLater: 'Verificado depois que o runtime for baixado.',
         recheck: 'Verificar de novo',
+        restartNeeded: 'Esta instalação foi encontrada depois de carregar outra. Reinicie o aplicativo para usá-la.',
       },
       measure: {
         body: 'Mede cada modelo instalado em todos os caminhos que ele pode usar aqui, e o Automático usa o mais rápido. Leva um ou dois minutos. Um backend que você escolher para um modelo continua valendo.',

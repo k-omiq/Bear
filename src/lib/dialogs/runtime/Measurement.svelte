@@ -45,8 +45,11 @@
   /** Whether this mount's own `measure()` is waiting on the run, which then settles it. */
   let mine = false
 
-  /** Read the saved result and whether a run is going, as the backend has them now. */
-  async function refresh() {
+  /**
+   * Read the saved result and whether a run is going, as the backend has them
+   * now. Exported for Check again: a fixed install makes the result stale.
+   */
+  export async function refresh() {
     try {
       const answer = await getBackend().readMeasurement()
       view = answer
