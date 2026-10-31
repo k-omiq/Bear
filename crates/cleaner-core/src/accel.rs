@@ -873,7 +873,7 @@ pub struct Declined {
 
 impl Declined {
     /// The plain shape: a refusal with no arithmetic behind it.
-    fn plain(wanted: Accelerator, reason_key: &'static str) -> Declined {
+    pub fn plain(wanted: Accelerator, reason_key: &'static str) -> Declined {
         Declined { wanted, reason_key, needed_bytes: None, room_bytes: None }
     }
 }
@@ -966,6 +966,42 @@ pub fn choose_on(
     host: Option<Platform>,
 ) -> Selection {
     choose_measured(profile, preference, available, room, host, measured_winner(profile.name))
+}
+
+/// [`choose_on`] after the GPU test runs have had their say: where a session
+/// really opens, and so what Settings names. `is_blocked` is
+/// [`Accelerator::blocked_for`] for this model, passed in so the rule is
+/// testable on a machine whose GPU passes.
+///
+/// A forced provider that failed its test run cannot serve the choice at all,
+/// so the model goes where Automatic would and the reason is reported. The
+/// choice stays saved, so it is back once the machine is fixed.
+///
+/// **A proof is asked for only where its answer can change the placement.**
+/// `CpuOnly` asks none and a force asks only its own: a proof runs GPU code, can
+/// take seconds, and nothing can stop a thread that waits on one.
+pub fn choose_unblocked(
+    profile: &ModelProfile,
+    preference: Preference,
+    available: &[Accelerator],
+    is_blocked: impl Fn(Accelerator) -> bool,
+    room: Option<u64>,
+    host: Option<Platform>,
+) -> Selection {
+    let blocked = match preference {
+        Preference::Force(wanted) if is_blocked(wanted) => Some(wanted),
+        _ => None,
+    };
+    let effective = if blocked.is_some() { Preference::Automatic } else { preference };
+    let present: Vec<Accelerator> = match effective {
+        Preference::Automatic => available.iter().copied().filter(|accelerator| !is_blocked(*accelerator)).collect(),
+        _ => available.to_vec(),
+    };
+    let mut selection = choose_on(profile, effective, &present, room, host);
+    if let Some(wanted) = blocked {
+        selection.declined = Some(Declined::plain(wanted, SELF_TEST_FAILED));
+    }
+    selection
 }
 
 /// [`choose_on`] with this machine's measured winner passed in, so the rule
@@ -1123,17 +1159,16 @@ pub fn open_session(
     // and only the session that is actually about to be built pays for a
     // sysctl.
     //
-    // A forced provider that failed its test run cannot serve the choice at
-    // all, so the model goes where Automatic would and the reason is reported.
-    // The choice stays saved, so it is back once the machine is fixed.
-    let blocked = match preference {
-        Preference::Force(wanted) if wanted.blocked_for(profile.name) => Some(wanted),
-        _ => None,
-    };
-    let preference = if blocked.is_some() { Preference::Automatic } else { preference };
-    let present: Vec<Accelerator> =
-        available().into_iter().filter(|accelerator| !accelerator.blocked_for(profile.name)).collect();
-    let mut selection = choose_on(profile, preference, &present, memory::room(), Platform::host());
+    let mut selection = choose_unblocked(
+        profile,
+        preference,
+        &available(),
+        |accelerator| accelerator.blocked_for(profile.name),
+        memory::room(),
+        Platform::host(),
+    );
+    let blocked = selection.declined.is_some_and(|declined| declined.reason_key == SELF_TEST_FAILED);
+    let preference = if blocked { Preference::Automatic } else { preference };
 
     // `choose_within` is pure: it is handed a list of what is present and can
     // only say "not in the list". The machine knows more than that - a build
@@ -1146,10 +1181,6 @@ pub fn open_session(
                 declined.reason_key = reason.reason_key();
             }
         }
-    }
-
-    if let Some(wanted) = blocked {
-        selection.declined = Some(Declined::plain(wanted, SELF_TEST_FAILED));
     }
 
     if let Preference::Force(wanted) = preference {
@@ -1166,19 +1197,25 @@ pub fn open_session(
 
     match build(model, selection.accelerator, intra_threads, strict_placement(profile, preference, selection.accelerator)) {
         Ok(session) => Ok((Model::new(session, selection.accelerator), selection)),
-        Err(detail) if selection.accelerator != Accelerator::Cpu && !matches!(preference, Preference::Force(_)) => {
+        Err(detail) => {
             let wanted = selection.accelerator;
-            selection = Selection {
-                accelerator: Accelerator::Cpu,
-                declined: Some(Declined::plain(wanted, "accel.declined.failed")),
-                note: None,
+            // A forced provider's failure is the user's to see, unless it had
+            // already failed its test run: the Hayai reader is let through a
+            // failed proof, and a provider that cannot even build it moves it
+            // to the CPU as a failed proof moves every other model.
+            let reason = match preference {
+                _ if wanted == Accelerator::Cpu => None,
+                Preference::Force(forced) => forced.proof_failure().map(|_| SELF_TEST_FAILED),
+                _ => Some("accel.declined.failed"),
             };
+            let Some(reason) = reason else {
+                return Err(SessionError::Build { model: profile.name, accelerator: wanted, detail });
+            };
+            selection = Selection { accelerator: Accelerator::Cpu, declined: Some(Declined::plain(wanted, reason)), note: None };
             let session = build(model, Accelerator::Cpu, intra_threads, false)
                 .map_err(|detail| SessionError::Build { model: profile.name, accelerator: Accelerator::Cpu, detail })?;
-            let _ = detail;
             Ok((Model::new(session, Accelerator::Cpu), selection))
         }
-        Err(detail) => Err(SessionError::Build { model: profile.name, accelerator: selection.accelerator, detail }),
     }
 }
 
@@ -1414,31 +1451,44 @@ mod tests {
         path
     }
 
-    /// `open_session` drops a blocked force before it chooses (`Automatic`,
-    /// above) and `models::accelerators_configured` keeps it (`models.rs:432`).
-    /// So a LaMa forced to a CUDA that failed its proof runs on WebGPU while
-    /// Settings says CPU. A blocked provider cannot be set up on this platform,
-    /// so this pins the two calls as written: when they become one, point
-    /// `drawn` at it.
+    /// `open_session` and `models::accelerators_configured` both choose through
+    /// `choose_unblocked`, so a LaMa forced to a CUDA that failed its proof is
+    /// named on the GPU it opens on, not on the CPU.
     #[test]
-    #[ignore = "BUG in 46429f8: Settings says CPU, the session opens on the next GPU"]
     fn settings_names_where_a_blocked_forced_model_really_runs() {
         let windows = Platform { os: Os::Windows, arch: Arch::X86_64 };
-        let present = [Accelerator::WebGpu];
+        let present = [Accelerator::Cuda, Accelerator::WebGpu];
+        let cuda_failed = |accelerator: Accelerator| accelerator == Accelerator::Cuda;
         for profile in [&LAMA, &DETECTOR] {
-            let real = choose_on(profile, Preference::Automatic, &present, None, Some(windows));
-            let drawn = choose_on(profile, Preference::Force(Accelerator::Cuda), &present, None, Some(windows));
-            assert_eq!(drawn.accelerator, real.accelerator, "{}", profile.name);
+            let forced = Preference::Force(Accelerator::Cuda);
+            let drawn = choose_unblocked(profile, forced, &present, cuda_failed, None, Some(windows));
+            assert_eq!(drawn.accelerator, Accelerator::WebGpu, "{}", profile.name);
+            assert_eq!(drawn.declined.map(|declined| declined.reason_key), Some(SELF_TEST_FAILED));
         }
     }
 
-    /// `proof_failure` promises one proof per process until Check again, but
-    /// `runtime::load` ends in `cuda::rescan`, and it is called on every
-    /// `list_accelerators`, `list_workflow_capabilities`, run start and region
-    /// re-run. So a Settings refresh during a run tests the GPU again beside it.
-    /// `RT_RUNTIME` the runtime library.
+    /// A proof runs GPU code and nothing can stop a wait on one, so it is asked
+    /// for only where its answer can change the placement.
     #[test]
-    #[ignore = "BUG in 46429f8: every runtime load forgets the proofs; needs RT_RUNTIME"]
+    fn a_proof_is_asked_only_where_it_can_change_the_placement() {
+        let present = [Accelerator::Cuda, Accelerator::WebGpu];
+        let asked = std::cell::RefCell::new(Vec::new());
+        let never_blocked = |accelerator| {
+            asked.borrow_mut().push(accelerator);
+            false
+        };
+        let cpu = choose_unblocked(&BALLOON, Preference::CpuOnly, &present, never_blocked, None, None);
+        assert_eq!(cpu.accelerator, Accelerator::Cpu);
+        assert!(asked.borrow().is_empty(), "CpuOnly asked {:?}", asked.borrow());
+        choose_unblocked(&LAMA, Preference::Force(Accelerator::WebGpu), &present, never_blocked, None, None);
+        assert_eq!(*asked.borrow(), [Accelerator::WebGpu]);
+    }
+
+    /// The proof is asked once per process until Check again, and `runtime::load`
+    /// is called on every `list_accelerators`, `list_workflow_capabilities`, run
+    /// start and region re-run. `RT_RUNTIME` the runtime library.
+    #[test]
+    #[ignore = "needs RT_RUNTIME"]
     fn loading_the_runtime_again_keeps_the_proofs() {
         let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
         crate::runtime::load(Path::new(&runtime)).unwrap();
@@ -1447,14 +1497,12 @@ mod tests {
         assert!(!PROOFS.lock().unwrap().is_empty(), "the second load forgot the proof");
     }
 
-    /// `open_session` asks every available provider for its proof before it
-    /// looks at the preference, so `CpuOnly` runs GPU code, and waits on a proof
-    /// that is running or hung. Nothing can stop that wait: Stop never reaches
-    /// a thread blocked on a lock. `RT_RUNTIME` the runtime library, on Windows
-    /// or Linux with a GPU path. macOS never runs a proof, so there this fails
-    /// only with `cfg!(target_os = "macos")` taken out of `proof_failure`.
+    /// `CpuOnly` opens while a proof runs or hangs: nothing can stop a wait on
+    /// one. `RT_RUNTIME` the runtime library, on Windows or Linux with a GPU
+    /// path, since macOS never runs a proof. The rule itself is
+    /// `a_proof_is_asked_only_where_it_can_change_the_placement`.
     #[test]
-    #[ignore = "BUG in 46429f8: CpuOnly runs and waits on GPU proofs; needs RT_RUNTIME and a GPU path"]
+    #[ignore = "needs RT_RUNTIME and a GPU path"]
     fn a_cpu_only_session_does_not_wait_on_a_proof() {
         let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
         crate::runtime::load(Path::new(&runtime)).unwrap();
@@ -1474,13 +1522,12 @@ mod tests {
     }
 
     /// `blocked_for` exempts Hayai from a failed CUDA proof whatever the proof
-    /// said, so a forced reader goes on to build on a provider that cannot even
-    /// load cuDNN or register, and the build's error turns the reader off for the
-    /// run (`run.rs:2897`). Before 46429f8's `error_on_failure` it stayed on the
-    /// CPU. Every other model moves off. `CUDA_PROBE_RUNTIME` a CUDA build of the runtime, on a
-    /// machine where the proof fails: probe-cuda.yml's runners have no card.
+    /// said, so a forced reader can reach a provider that cannot even load cuDNN
+    /// or register. It moves to the CPU, as every other model moves off.
+    /// `CUDA_PROBE_RUNTIME` a CUDA build of the runtime, on a machine where the
+    /// proof fails: probe-cuda.yml's runners have no card.
     #[test]
-    #[ignore = "BUG in 46429f8: a broken CUDA turns a forced Hayai off; needs a CUDA build and no card"]
+    #[ignore = "needs a CUDA build of the runtime and no NVIDIA card"]
     fn a_forced_reader_moves_off_a_cuda_that_will_not_build() {
         let runtime = std::env::var_os("CUDA_PROBE_RUNTIME").expect("CUDA_PROBE_RUNTIME");
         crate::runtime::load(Path::new(&runtime)).expect("the runtime loads");
