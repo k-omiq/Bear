@@ -1125,6 +1125,19 @@ export const en = {
         },
       },
     },
+    // Settings > Dev log (`dialogs/DevLogSection.svelte`).
+    devlog: {
+      intro: 'What the app wrote down while it ran, oldest first. If something goes wrong, copy this and send it to the developer.',
+      privacy: 'Keys, tokens, web addresses and the name of your home folder are hidden. File and folder names inside it stay, so read it before you share it.',
+      refresh: 'Refresh',
+      copy: 'Copy',
+      clear: 'Clear log',
+      copied: 'Copied.',
+      copyFailed: 'Could not copy. Select the text and copy it by hand.',
+      loadFailed: 'Could not read the log. Try Refresh.',
+      clearFailed: 'Could not clear the log. Try again.',
+      empty: 'Nothing logged yet.',
+    },
     // Settings > Beta: tools still being tuned, off until turned on
     // (`session.betaTools`, `dialogs/BetaSettings.svelte`).
     beta: {
@@ -1180,6 +1193,7 @@ export const en = {
       performance: 'Runtime',
       shortcuts: 'Shortcuts',
       beta: 'Beta',
+      devlog: 'Dev log',
       about: 'About',
       denoise: 'Denoise',
       export: 'Export',

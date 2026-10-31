@@ -1920,6 +1920,13 @@ export function createMockBackend(options = {}) {
   /** The saved measurement, as `measurements.json` would hold it. */
   let mockMeasurement = null
   let mockMeasuring = null
+  let devLog = [
+    '2026-10-31T09:12:03Z Manga Cleaner 1.0.0-beta.12 on windows x86_64',
+    '2026-10-31T09:12:41Z manga-cleaner: detection model: comic-text-and-bubble-detector-v2-int8',
+    '2026-10-31T09:13:02Z manga-cleaner: SAM-TS-L did not open on DirectML, using the CPU: 887A0005',
+    '2026-10-31T09:13:40Z manga-cleaner: ~/AppData/Roaming/com.mangacleaner.app/projects/a-very-long-project-name/chapter-009/job/page-0012.png changed under the run; reading it again',
+    '2026-10-31T09:14:18Z manga-cleaner: cloud clean could not read page 3: error sending request for url (https://[hidden].modal.run/[hidden])',
+  ].join('\n') + '\n'
 
   /**
    * One model's row, as `accelerators_configured` builds it.
@@ -6343,6 +6350,17 @@ export function createMockBackend(options = {}) {
     async about() {
       await delay(timing.method)
       return aboutInfo()
+    },
+
+    /** `src-tauri/src/devlog.rs` reads its file; the mock has a few lines to show. */
+    async readDevLog() {
+      await delay(timing.method)
+      return devLog
+    },
+
+    async clearDevLog() {
+      await delay(timing.method)
+      devLog = ''
     },
 
     /**

@@ -2449,6 +2449,7 @@ dependencies = [
  "objc2-app-kit",
  "ort",
  "png 0.18.1",
+ "regex",
  "reqwest",
  "security-framework 3.7.0",
  "serde",
