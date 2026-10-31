@@ -621,8 +621,11 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
     let runtime_installed = runtime.is_some();
     let runtime_ready = runtime.as_ref().is_some_and(|path| cleaner_core::runtime::load(path).is_ok());
     // Built in on macOS, the plugin on Windows and Linux x64.
-    let webgpu_ready = runtime_ready && cleaner_core::accel::Accelerator::WebGpu.is_available();
-    let cuda_ready = runtime_ready && cleaner_core::accel::Accelerator::Cuda.is_available();
+    let sam_can_use = |accelerator: cleaner_core::accel::Accelerator| {
+        accelerator.is_available() && !accelerator.blocked_for(crate::models::SAM_PROFILE_NAME)
+    };
+    let webgpu_ready = runtime_ready && sam_can_use(cleaner_core::accel::Accelerator::WebGpu);
+    let cuda_ready = runtime_ready && sam_can_use(cleaner_core::accel::Accelerator::Cuda);
     // Whether there is measured room for the lettering mask to run at full
     // speed; an idle session's mere presence cannot promise it. A warning
     // only: SAM loads with less, slower. Reading status never evicts anything.
@@ -1906,6 +1909,17 @@ fn review_preference(id: &str) -> Result<Preference, String> {
 }
 
 /// The SAM backend a review reports, from the one it ran on.
+/// Where the review opens the mask: a GPU that failed its test run cannot serve
+/// a forced choice here, as it cannot in a run (`run::sam_backend`).
+fn unblocked_sam_backend(backend: &str, is_blocked: impl Fn(Accelerator) -> bool) -> &str {
+    let accelerator = match backend {
+        "ort-webgpu" => Accelerator::WebGpu,
+        "ort-cuda" => Accelerator::Cuda,
+        _ => return backend,
+    };
+    if is_blocked(accelerator) { "ort-cpu" } else { backend }
+}
+
 fn review_sam_backend(id: &str) -> &'static str {
     match id {
         "ort-webgpu" => "ort-webgpu",
@@ -2059,7 +2073,9 @@ pub async fn analyze_capabilities(
             let dir = graph_dir(&app_data).ok_or("The SAM-TS-L lettering mask graphs are not installed")?;
             verify_graphs(&dir)?;
             cancel.check()?;
-            let result = match sam_backend.as_str() {
+            let result = match unblocked_sam_backend(&sam_backend, |accelerator| {
+                accelerator.blocked_for(crate::models::SAM_PROFILE_NAME)
+            }) {
                 "ort-cpu" => sam_ts::infer_cpu_cancellable(&page, &dir, &cancel)?,
                 "ort-webgpu" => sam_ts::infer_webgpu_cancellable(&page, &dir, &cancel)?,
                 "ort-cuda" => sam_ts::SamTsSession::open_on(&dir, Accelerator::Cuda, &cancel)?.infer(&page, &cancel)?,
@@ -3413,18 +3429,15 @@ mod tests {
 
 #[cfg(test)]
 mod gpu_proof_gaps {
-    /// The review opens the mask itself on a forced GPU (`ort-webgpu`,
-    /// `ort-cuda` above) and never asks whether that GPU failed its test run,
-    /// which `run::sam_backend` does ask, so a saved choice that a run moves to
-    /// the CPU fails the review with the provider's error instead. A failed
-    /// proof cannot be set up on macOS and the choice sits inline in the
-    /// command, so this reads the source: any fix has to ask. Replace it with a
-    /// real test once the choice is a function.
+    use super::{unblocked_sam_backend, Accelerator};
+
+    /// A saved choice a run moves to the CPU moves in the review too, rather
+    /// than failing it with the provider's error.
     #[test]
-    #[ignore = "BUG in 46429f8: the local review opens SAM on a GPU that failed its proof"]
-    fn the_review_asks_whether_a_forced_sam_gpu_failed_its_proof() {
-        let source = include_str!("model_workflows.rs");
-        let (product, _) = source.split_once("mod gpu_proof_gaps").unwrap();
-        assert!(product.contains(concat!("blocked", "_for")));
+    fn the_review_moves_a_forced_sam_off_a_gpu_that_failed_its_proof() {
+        let cuda_failed = |accelerator| accelerator == Accelerator::Cuda;
+        assert_eq!(unblocked_sam_backend("ort-cuda", cuda_failed), "ort-cpu");
+        assert_eq!(unblocked_sam_backend("ort-webgpu", cuda_failed), "ort-webgpu");
+        assert_eq!(unblocked_sam_backend("ort-cpu", |_| true), "ort-cpu");
     }
 }
