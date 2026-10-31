@@ -1667,6 +1667,15 @@ describe('text-shaped review mock', () => {
  * library to answer; the mock has nothing to load, so it answers from the
  * catalogue and a `?runtimeLoad=` knob stands in for a machine that refuses.
  */
+describe('dev log in mock backend', () => {
+  it('shows its lines until they are cleared', async () => {
+    const { backend } = makeBackend()
+    expect(await settle(backend.readDevLog())).toContain('Manga Cleaner')
+    await settle(backend.clearDevLog())
+    expect(await settle(backend.readDevLog())).toBe('')
+  })
+})
+
 describe('diagnostics in mock backend', () => {
   afterEach(() => vi.unstubAllGlobals())
 

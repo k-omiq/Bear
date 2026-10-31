@@ -144,6 +144,8 @@ fn main() {
         .app_manifest(tauri_build::AppManifest::new().commands(&[
             "diagnostics",
             "about",
+            "read_dev_log",
+            "clear_dev_log",
             "read_settings",
             "write_settings",
             "read_inference_config",

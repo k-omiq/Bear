@@ -723,6 +723,21 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Dev log (2026-10-31): the capture ran on macOS only, and four sources stay out of it.** The stderr
+redirect in `src-tauri/src/devlog.rs` has a real test on macOS. The Windows branch (`SetStdHandle`) has
+never run on Windows. These are not captured:
+
+- On Windows, native C++ libraries. ONNX Runtime writes its own warnings through its C runtime's
+  stderr, which `SetStdHandle` does not move. On macOS and Linux the same lines are captured.
+- The Python sidecar's stderr. `sidecar/client.rs` drains and drops it, because progress bars would
+  push real lines out of a 512 KiB log. Forwarding only its last lines when it exits is the next step
+  if local FLUX failures need them.
+- Errors in the webview (`console.error`, unhandled rejections).
+- Errors the app shows as a notice without also writing them to stderr, such as measurement errors.
+
+Redaction works by shape, so a secret with no recognisable name or shape would pass. File and folder
+names below the home folder stay on purpose, and Settings says so.
+
 **Local FLUX 3, Qwen and Klein 9B, and their memory (2026-10-30): one cloud L4 only, three real
 crops.** Each model went through the real installer and `SdnqBackend`, under a 19 GB budget. Every
 model removed the speech lettering. FLUX 3 left the large title lettering on the 1360x688 crop.
@@ -3744,3 +3759,9 @@ shows the runtime's words under the measurement row. Not covered: a GPU that pas
 fails on a specific model's run still ends that run; a proof that crashes the process rather than
 returning an error would now do so on opening Settings rather than on the first run; TensorRT is
 hidden and stays unoffered, since no model is routed to it and its libraries are not checked for.
+
+**Saved colour pair and its keys (2026-10-31).** The pair at the end of the tool rail, Shift+X and
+Shift+E are measured by DOM tests and in the Vite mock, with a stubbed `EyeDropper` because a script
+cannot finish the real one. Not measured: Shift+E in the shipped WKWebView, where it opens AppKit's
+sampler through `pick_screen_color`, and in WebView2. On Linux, where WebKitGTK has no sampler, the
+key opens the active colour's picker instead, and picking from the page was not built for it.

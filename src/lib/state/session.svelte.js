@@ -219,6 +219,7 @@ function viewport() {
  * @property {boolean} ocrRescue - whether the optional Japanese OCR rescue may run after an uncertain script decision
  * @property {boolean} cleanLatinText - whether a run cleans text the reader reads as English (Latin letters); off leaves it on the page as a held region
  * @property {Record<string, import('../shortcuts.js').Chord|null>} shortcuts - rebindings, by shortcut id; only the differences from the defaults
+ * @property {{active: string, other: string}} colorPair - the two saved colours at the end of the tool rail, `#rrggbb`: the one the Brush and the Shape paint with, and the one a press swaps it for
  * @property {string} maskColor - the colour the canvas draws a mask over speech bubble text in, `#rrggbb`; also every region whose place is unknown. The key the single mask colour was stored under, so a saved pick carries over as this one
  * @property {string} outsideMaskColor - the colour the canvas draws a mask over text outside speech bubbles in, `#rrggbb`
  * @property {number} maskOpacity - how strong either mask's fill is, a whole percent from 0 to 100
@@ -273,6 +274,7 @@ function defaults() {
     ocrRescue: false,
     cleanLatinText: false,
     shortcuts: {},
+    colorPair: { active: '#ffffff', other: '#000000' },
     maskColor: DEFAULT_MASK_COLOR,
     outsideMaskColor: DEFAULT_OUTSIDE_MASK_COLOR,
     maskOpacity: DEFAULT_MASK_OPACITY,
@@ -412,6 +414,10 @@ export function sanitizeSession(raw) {
     // only the default written out is dropped here rather than kept as a
     // binding nothing can run.
     shortcuts: sanitizeShortcutOverrides(record.shortcuts),
+    colorPair: {
+      active: maskColorOr(/** @type {any} */ (record.colorPair)?.active, base.colorPair.active),
+      other: maskColorOr(/** @type {any} */ (record.colorPair)?.other, base.colorPair.other),
+    },
     // One colour used to cover every mask, under `maskColor`. It stays the
     // speech bubble colour, so a record saved before the split keeps its pick
     // there, and the outside colour starts at its default.
@@ -513,6 +519,7 @@ function persistable() {
     ocrRescue: session.ocrRescue,
     cleanLatinText: session.cleanLatinText,
     shortcuts: shortcutOverrides(),
+    colorPair: { ...session.colorPair },
     maskColor: session.maskColor,
     outsideMaskColor: session.outsideMaskColor,
     maskOpacity: session.maskOpacity,
@@ -642,6 +649,20 @@ export function setExportTone(tone) {
  */
 export function setMaskColor(color) {
   session.maskColor = maskColorOr(color, session.maskColor)
+  save()
+}
+
+/**
+ * The two saved colours (`ColorSwitch.svelte`). `editor.svelte.js` holds the
+ * tools' copies of the active one, so that is the way to change it.
+ *
+ * @param {{active: string, other: string}} pair
+ */
+export function setColorPair(pair) {
+  session.colorPair = {
+    active: maskColorOr(pair.active, session.colorPair.active),
+    other: maskColorOr(pair.other, session.colorPair.other),
+  }
   save()
 }
 

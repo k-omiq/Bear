@@ -132,7 +132,7 @@ fn resized_axis(axis: usize, longest: usize) -> usize {
     let numerator = axis * SIDE;
     let whole = numerator / longest;
     let remainder = numerator % longest;
-    (whole + usize::from(remainder * 2 > longest || (remainder * 2 == longest && whole % 2 != 0)))
+    (whole + usize::from(remainder * 2 > longest || (remainder * 2 == longest && !whole.is_multiple_of(2))))
         .max(1)
 }
 

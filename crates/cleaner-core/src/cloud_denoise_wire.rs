@@ -576,7 +576,7 @@ impl DenoiseResultMetadata {
     /// recipe's output scale. `None` when the answer is no whole multiple.
     pub fn page_size(&self, request: &DenoiseMetadata) -> Option<(u32, u32)> {
         let scale = request.recipe.output_scale();
-        (self.info.width % scale == 0 && self.info.height % scale == 0)
+        (self.info.width.is_multiple_of(scale) && self.info.height.is_multiple_of(scale))
             .then(|| (self.info.width / scale, self.info.height / scale))
     }
 }

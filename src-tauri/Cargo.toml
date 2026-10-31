@@ -58,6 +58,8 @@ getrandom = "0.3"
 # Compiler-barrier memory zeroization for sensitive cloud credentials
 zeroize = { version = "1", features = ["derive"] }
 url = "2"
+# The dev log's redaction (`devlog.rs`). Already in the lockfile.
+regex = "1"
 
 # The Hugging Face token, in the operating system's own credential store rather
 # than in `settings.json`. `keyring` 3 compiles no platform
@@ -108,6 +110,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Threading",
+    # `SetStdHandle`, for the dev log's capture of stderr (`devlog.rs`).
+    "Win32_System_Console",
 ] }
 
 # `statvfs`, for the same free-space preflight on macOS and Linux. Already in

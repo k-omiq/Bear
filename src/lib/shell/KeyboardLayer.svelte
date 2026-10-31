@@ -32,6 +32,7 @@
   import { isDetected } from '../model/masks.js'
   import { isRegionCopy } from '../model/layers.js'
   import { cloudParts, runStep } from '../editor/cloudrun.js'
+  import { screenColorPicker } from '../api/screencolor.js'
 
   /** @type {import('../shortcuts.js').ShortcutCommands} */
   const commands = {
@@ -40,6 +41,8 @@
     cycleShape: (direction) => editorState.cycleToolShape(direction),
     cycleMode: (direction) => editorState.cycleToolMode(direction),
     setMaskSelectMode: (mode) => editorState.setMaskSelectMode(mode),
+    swapColors: () => editorState.swapColors(),
+    pickColor: () => void pickColor(),
     cycleCloneStamp: (key) => editorState.cycleCloneStamp(key),
     stepBrush,
     stepMaskPadding,
@@ -225,6 +228,32 @@
     if (!before.length) return
     const next = /** @type {HTMLElement} */ (before[(at + 1) % before.length])
     next.focus()
+  }
+
+  let pickingColor = false
+
+  /**
+   * `Shift+E`: the colour picker's own eyedropper, for the active saved colour.
+   * Where the platform has none (WebKitGTK) it opens that colour's picker,
+   * whose square and hex field reach the same value.
+   */
+  async function pickColor() {
+    if (pickingColor) return
+    const sample = screenColorPicker()
+    if (!sample) {
+      const swatch = document.querySelector('[data-color-switch] [aria-haspopup="dialog"]')
+      if (swatch instanceof HTMLElement && swatch.getAttribute('aria-expanded') !== 'true') swatch.click()
+      return
+    }
+    pickingColor = true
+    try {
+      const hex = await sample()
+      if (hex) editorState.setActiveColor(hex)
+    } catch {
+      /* the sampler failed to open; the colour is unchanged */
+    } finally {
+      pickingColor = false
+    }
   }
 
   /** `B`: the selected detection cleaned, or the selected cleaned region tried again. */
