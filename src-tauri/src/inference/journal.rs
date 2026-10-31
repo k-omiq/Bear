@@ -35,9 +35,11 @@
 //! 18. **Windows Durability Limitation:** Windows directory sync is unverified/unsupported via Win32 File
 //!     handles; directory entry durability relies on NTFS transaction journaling.
 
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cleaner_core::cloud_decode::{decode_result_crop, DecodedResultCrop, ResultDecodeError};
@@ -333,6 +335,31 @@ fn try_lock_file(_file: &File) -> Result<(), std::io::Error> {
 #[cfg(not(any(unix, windows)))]
 fn unlock_file(_file: &File) {}
 
+/// How long a writer waits for another process at the scope index. This
+/// process's own threads queue apart ([`index_turn`]) and are not timed.
+const INDEX_PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The scope index held, against this process's threads and then every other
+/// process. Fields drop in order: the file lock goes before the turn.
+struct IndexLock {
+    _file: AttemptLockGuard,
+    _turn: MutexGuard<'static, ()>,
+}
+
+/// This process's turn at the scope index under `root`, the same order
+/// [`cleaner_core::project::lock`] takes a job in. On the file lock alone every
+/// journal write of every render polled against one deadline, so sixteen at
+/// once on a slow disk could use up the patience meant for another process.
+/// One mutex per root, kept for the process's life; an app has one root.
+fn index_turn(root: PathBuf) -> MutexGuard<'static, ()> {
+    static TURNS: OnceLock<Mutex<HashMap<PathBuf, &'static Mutex<()>>>> = OnceLock::new();
+    let turn = *TURNS.get_or_init(Default::default).lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(root).or_insert_with(|| Box::leak(Box::default()));
+    // Poison is recovered: the mutex guards no data.
+    turn.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn durable_create_dir_all(path: &Path) -> Result<(), std::io::Error> {
     #[cfg(unix)]
     let missing: Vec<_> = path
@@ -394,7 +421,7 @@ fn atomic_write_file(target_path: &Path, bytes: &[u8]) -> Result<(), JournalErro
         return Err(JournalError::Io(e));
     }
 
-    if let Err(e) = fs::rename(&temp_path, target_path) {
+    if let Err(e) = cleaner_core::project::buffers::rename_replacing(&temp_path, target_path) {
         let _ = fs::remove_file(&temp_path);
         return Err(JournalError::Io(e));
     }
@@ -1317,12 +1344,13 @@ impl AttemptJournal {
         Ok(None)
     }
 
-    fn index_lock(&self) -> Result<AttemptLockGuard, JournalError> {
+    fn index_lock(&self) -> Result<IndexLock, JournalError> {
         let dir = self.root_dir.join("scope-index");
         durable_create_dir_all(&dir)?;
+        let turn = index_turn(self.canonical_root());
         let lock_path = dir.join("lock");
         let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&lock_path)?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + INDEX_PATIENCE;
         loop {
             match try_lock_file(&file) {
                 Ok(()) => break,
@@ -1332,7 +1360,10 @@ impl AttemptJournal {
                 Err(_) => return Err(JournalError::AttemptLocked { attempt_id: "scope-index".into() }),
             }
         }
-        Ok(AttemptLockGuard { attempt_id: "scope-index".into(), canonical_root: self.canonical_root(), file, lock_path })
+        Ok(IndexLock {
+            _file: AttemptLockGuard { attempt_id: "scope-index".into(), canonical_root: self.canonical_root(), file, lock_path },
+            _turn: turn,
+        })
     }
 
     fn scope_index_path(&self, scope: &AttemptScope) -> PathBuf {
@@ -2079,6 +2110,36 @@ mod tests {
             drop(held);
             assert!(waiter.join().unwrap().is_ok());
         });
+    }
+
+    /// Sixteen renders writing at once on a slow disk queue here for longer than
+    /// another process is given. A thread of this process waits its turn: one
+    /// that gave up failed a region whose result the chapter already held.
+    #[test]
+    fn this_process_waits_out_its_own_threads_at_the_scope_index() {
+        let scratch = TestDir::new("index_lock_own_threads");
+        let journal = AttemptJournal::new(scratch.path(), provisional_fixture_limits());
+        let held = journal.index_lock().unwrap();
+        std::thread::scope(|threads| {
+            let waiter = threads.spawn(|| journal.index_lock().map(drop));
+            std::thread::sleep(INDEX_PATIENCE + std::time::Duration::from_millis(300));
+            drop(held);
+            assert!(waiter.join().unwrap().is_ok());
+        });
+    }
+
+    /// Another process is waited for only so long. Its lock is the file's, which
+    /// a second handle here holds just as it would.
+    #[test]
+    fn another_process_at_the_scope_index_is_waited_for_only_so_long() {
+        let scratch = TestDir::new("index_lock_other_process");
+        let journal = AttemptJournal::new(scratch.path(), provisional_fixture_limits());
+        drop(journal.index_lock().unwrap());
+        let other = OpenOptions::new().read(true).write(true)
+            .open(scratch.path().join("scope-index").join("lock")).unwrap();
+        try_lock_file(&other).unwrap();
+        assert!(matches!(journal.index_lock().map(drop), Err(JournalError::AttemptLocked { .. })));
+        unlock_file(&other);
     }
 
     #[test]

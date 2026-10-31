@@ -723,6 +723,22 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Forty-region flake on Windows (2026-10-31): the cause was shown on macOS, not seen on Windows.** The
+test `forty_qwen_regions_are_all_sent_and_committed_with_sixteen_at_most_in_flight` failed once on
+Windows CI (run 41182126486, 39 of 40) and its log names no code, because the count was asserted before
+the failures were read. It did not fail on macOS under CPU load alone. With 40 ms and then 100 ms added
+to each journal write, it failed on macOS at 38 and 26 of 40, with `attempt_busy` from the journal's
+scope index lock, and passed with that lock's fix. The test now prints the notices and the phases of
+attempts not committed, so another failure says its cause. Two things stay open:
+
+- Windows has not repeated the test under load. A scanner holding a journal file would fail a region
+  the same way, as `journal_error`, and nothing here rules that out on that run. Journal writes now
+  use `rename_replacing`, as chapter files do. A test shows its retry logic with fed error codes on any
+  platform, but a real refusal from a real scanner on Windows has not been seen and retried.
+- A journal write that still fails after a commit (a disk error, another process holding the index past
+  5 seconds) leaves the patch in the chapter, the attempt at `AttachmentPending` and a failed notice in
+  place of `RegionDone`. The page's `page-done` still carries the region.
+
 **Dev log (2026-10-31): the capture ran on macOS only, and four sources stay out of it.** The stderr
 redirect in `src-tauri/src/devlog.rs` has a real test on macOS. The Windows branch (`SetStdHandle`) has
 never run on Windows. These are not captured:
