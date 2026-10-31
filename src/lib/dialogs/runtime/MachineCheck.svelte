@@ -107,7 +107,9 @@
 
   const paths = $derived(
     (accelerators?.providers ?? []).filter(
-      (provider) => provider.available || (provider.reasonKey && provider.reasonKey !== 'accel.declined.unavailable'),
+      (provider) =>
+        provider.used !== false &&
+        (provider.available || (provider.reasonKey && provider.reasonKey !== 'accel.declined.unavailable')),
     ),
   )
 
@@ -205,7 +207,7 @@
           <li class="path-row" class:down={!provider.available}>
             <span class="dot" aria-hidden="true"></span>
             <span class="path-name">{backendName(provider.id)}</span>
-            <span class="path-state">{provider.available ? t('settings.runtime.machine.pathReady') : t(provider.reasonKey ?? '')}</span>
+            <span class="path-state" title={provider.detail ?? undefined}>{provider.available ? t('settings.runtime.machine.pathReady') : t(provider.reasonKey ?? '')}</span>
           </li>
         {/each}
       </ul>

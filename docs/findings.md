@@ -3726,3 +3726,21 @@ the Vite mock. Not measured: any of it in the shipped WKWebView, where a click d
 button and the jump may come from another focus path; a re-run of a real crossing region with real
 models (Try again wider across a join has no Rust test, only plain Try again with Fill does); the
 Eraser's live preview over a neighbour's overhang in the tile path, which the mock does not draw.
+
+**GPU paths that report ready and then fail (2026-10-31): fixed in code, not run on Windows or on a
+real NVIDIA card.** On two users' Windows machines the Runtime screen said every path was ready and
+the measurement said "Could not run here" for every model with a float `Conv` on CUDA (CTD, full
+Ogkalu, SAM-TS-L, LaMa), and for all three models offered on WebGPU. Hayai (no `Conv`) timed 70 ms on
+CUDA against 313 ms on the CPU, so the provider loads; the int8 small Ogkalu timed the same as the
+CPU. A user's forced CUDA then stopped LaMa, because a forced provider that fails ends the run.
+The likely CUDA cause on cuDNN 9.23 and newer: `cudnn_engines_tensor_ir64_9.dll` was not in the
+preload list and the cuDNN folder is not on `PATH` (ONNX Runtime fixed the same gap in its own
+preload list, microsoft/onnxruntime#28787). **That does not explain the machine on cuDNN 9.13, which
+has no such file, and nothing here explains WebGPU**: the real errors were hidden in a tooltip and
+have not been read. The app now loads every cuDNN part, runs a one-`Conv` graph on CUDA and WebGPU
+before sending a model there (`accel::CONV_PROOF`, Windows and Linux only, once per process and again
+on Check again), moves a model off a path that fails it even when forced, keeps the choice saved, and
+shows the runtime's words under the measurement row. Not covered: a GPU that passes the proof and
+fails on a specific model's run still ends that run; a proof that crashes the process rather than
+returning an error would now do so on opening Settings rather than on the first run; TensorRT is
+hidden and stays unoffered, since no model is routed to it and its libraries are not checked for.

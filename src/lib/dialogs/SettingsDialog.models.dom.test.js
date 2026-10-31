@@ -296,6 +296,26 @@ describe('the runtime build that is actually installed', () => {
     await waitFor(() => expect(unknown.getByText(t('settings.models.runtime.label'))).toBeTruthy())
     expect(unknown.container.querySelectorAll('.row-partial')).toHaveLength(0)
   })
+
+  it('offers Download only for a build that is not already here', async () => {
+    const flavours = ['cuda12', 'cuda13'].map((id) => ({ id, ortVersion: '1.28.0', bytes: 1, kept: false, userInstalled: [] }))
+    const download = async (/** @type {string|null} */ installedFlavour) => {
+      const rendered = await open(
+        () => view({ runtime: { installed: true, flavours, installedFlavour, installedVersion: '1.28.0' } }),
+        PERFORMANCE,
+      )
+      await waitFor(() => expect(rendered.getByText(t('settings.models.runtime.label'))).toBeTruthy())
+      const row = /** @type {HTMLElement} */ (rendered.container.querySelector('[data-settings-anchor="runtime"]'))
+      const offered = within(row).queryByText(t('settings.models.action.download')) !== null
+      cleanup()
+      return offered
+    }
+
+    expect(await download('cuda12')).toBe(false)
+    expect(await download('cuda13')).toBe(true)
+    // A runtime this application did not unpack may not be the chosen build.
+    expect(await download(null)).toBe(true)
+  })
 })
 
 describe('a credential store that would not answer', () => {

@@ -233,7 +233,10 @@
                     </td>
                     <td class="load">{t('settings.runtime.measure.load', { time: duration(result.loadMs ?? 0) })}</td>
                   {:else}
-                    <td class="reason" colspan="2" title={result.error ?? undefined}>{failure(result.error)}</td>
+                    <td class="reason" colspan="2">
+                      {failure(result.error)}
+                      {#if result.error && !hasKey(result.error)}<span class="reason-detail">{result.error}</span>{/if}
+                    </td>
                   {/if}
                 </tr>
               {/each}
@@ -286,6 +289,14 @@
   }
   .load { width: 96px; color: var(--t3); text-align: right !important }
   .reason { color: var(--t3) }
+  .reason-detail {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+    user-select: text;
+    -webkit-user-select: text;
+  }
   .sr {
     position: absolute;
     width: 1px;

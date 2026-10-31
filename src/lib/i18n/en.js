@@ -2048,6 +2048,7 @@ export const en = {
       // makes the graph split and run slower.
       partitioned: 'it would split this model and run it slower',
       failed: 'it could not build a session for this model',
+      selfTest: 'it failed a test run on this computer',
       // Forcing CoreML costs 8.19 GB on rung 2 and 5.62 GB on
       // rung 3, and this is the one refusal that is about the machine rather
       // than about the run. The figures travel beside the key, on the

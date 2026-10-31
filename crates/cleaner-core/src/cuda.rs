@@ -29,6 +29,13 @@
 //! their libraries are loaded **by absolute path** ([`prepare`]). A library
 //! already in the process is the one the provider gets when it later asks for
 //! it by name, so what `PATH` says no longer decides which install runs.
+//!
+//! cuDNN grows new parts between releases (`cudnn_engines_tensor_ir64_9.dll`
+//! from 9.23) and opens them by name on its first convolution, not at load. So
+//! every part in the chosen folder is loaded, not only the ones known here, and
+//! on Windows both folders go on the process `PATH` for whatever else a library
+//! asks for by name. A missing part does not show at load: the provider loads,
+//! models with no convolution run, and every model with one fails.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -65,6 +72,11 @@ pub struct Cudnn {
     pub dir: PathBuf,
     #[serde(skip)]
     pub libraries: Vec<PathBuf>,
+    /// Parts in the folder that [`cudnn_libraries`] does not name: newer
+    /// releases add some. Loaded where they will load, since an older part may
+    /// be left over from another release.
+    #[serde(skip)]
+    pub extras: Vec<PathBuf>,
     pub missing: Vec<String>,
 }
 
@@ -221,6 +233,7 @@ pub fn report() -> Report {
 
 pub fn rescan() {
     *REPORT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    crate::accel::forget_proofs();
 }
 
 fn read_machine() -> Report {
@@ -244,11 +257,39 @@ pub fn prepare() -> Result<(), String> {
     let Verdict::Ready { toolkit, cudnn } = report().verdict() else {
         return Err("CUDA is not ready on this machine; see Settings, Runtime".to_owned());
     };
-    for library in toolkit.libraries.iter().chain(&cudnn.libraries) {
+    search_folders(&[&toolkit.dir, &cudnn.dir]);
+    for library in &toolkit.libraries {
         ort::util::preload_dylib(library).map_err(|e| format!("could not load {}: {e}", library.display()))?;
     }
+    // Its other parts before `cudnn64_9`, which is last in the list.
+    let (main, parts) = cudnn.libraries.split_last().ok_or("cuDNN has no libraries")?;
+    for library in parts {
+        ort::util::preload_dylib(library).map_err(|e| format!("could not load {}: {e}", library.display()))?;
+    }
+    for library in &cudnn.extras {
+        let _ = ort::util::preload_dylib(library);
+    }
+    ort::util::preload_dylib(main).map_err(|e| format!("could not load {}: {e}", main.display()))?;
     *prepared = true;
     Ok(())
+}
+
+/// Put these folders first on this process's `PATH`, where `LoadLibrary` looks
+/// for a name no loaded module answers to. `SetDllDirectoryW` holds one folder
+/// and the runtime's has it ([`crate::runtime`]). Linux reads its loader path
+/// once at start, so this would do nothing there.
+fn search_folders(folders: &[&Path]) {
+    if !cfg!(target_os = "windows") {
+        return;
+    }
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths: Vec<PathBuf> = folders.iter().map(|folder| folder.to_path_buf()).collect();
+    paths.extend(std::env::split_paths(&current).filter(|path| !folders.contains(&path.as_path())));
+    if let Ok(joined) = std::env::join_paths(paths) {
+        // Windows' environment calls take their own lock, so this is sound
+        // beside other threads there, and it runs nowhere else.
+        unsafe { std::env::set_var("PATH", joined) };
+    }
 }
 
 /// The CUDA major the loaded runtime was built against. Nothing the runtime
@@ -313,9 +354,15 @@ fn cudart_major(name: &str) -> Option<u32> {
     } else {
         name.strip_prefix("libcudart.so.")?.split('.').next()?
     };
-    // CUDA 11 named its runtime `cudart64_110.dll`.
+    // CUDA 11 named its runtime `cudart64_110.dll`. Two digits from 20 up are
+    // older still: PhysX ships CUDA 6.5's `cudart64_65.dll` on every NVIDIA
+    // machine, which is no toolkit of any build here.
     let major: u32 = digits.parse().ok()?;
-    Some(if major >= 100 { major / 10 } else { major })
+    match major {
+        100.. => Some(major / 10),
+        20.. => None,
+        _ => Some(major),
+    }
 }
 
 fn is_cudnn_main(name: &str) -> bool {
@@ -383,12 +430,33 @@ pub fn cudnn_in(dirs: &[PathBuf]) -> Vec<Cudnn> {
             continue;
         }
         let (libraries, missing) = resolve(&cudnn_libraries(), dir, std::slice::from_ref(dir));
+        let extras = cudnn_extras(dir, &libraries);
         // `/usr/local/cuda` is a link to `/usr/local/cuda-12.6`: the name the
         // link points at says the major the link's own name does not.
         let cuda_major = cuda_major_hint(dir).or_else(|| std::fs::canonicalize(dir).ok().and_then(|real| cuda_major_hint(&real)));
-        installs.push(Cudnn { cuda_major, dir: dir.clone(), libraries, missing });
+        installs.push(Cudnn { cuda_major, dir: dir.clone(), libraries, extras, missing });
     }
     installs
+}
+
+/// Every other cuDNN 9 part in `dir`, in name order so a load order repeats.
+fn cudnn_extras(dir: &Path, known: &[PathBuf]) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut extras: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            let part = if cfg!(target_os = "windows") {
+                name.starts_with("cudnn_") && name.ends_with("64_9.dll")
+            } else {
+                name.starts_with("libcudnn_") && name.ends_with(".so.9")
+            };
+            part && !known.iter().any(|library| library.file_name() == Some(&entry.file_name()))
+        })
+        .map(|entry| entry.path())
+        .collect();
+    extras.sort();
+    extras
 }
 
 fn resolve(names: &[String], home: &Path, dirs: &[PathBuf]) -> (Vec<PathBuf>, Vec<String>) {
@@ -579,6 +647,25 @@ mod tests {
         assert_eq!(cudart_major("libcudart.so"), None);
         assert_eq!(cudart_major("cudart64_12.lib"), None);
         assert_eq!(cudart_major("cudnn64_9.dll"), None);
+        // PhysX's CUDA 6.5, on every NVIDIA machine, is no toolkit.
+        assert_eq!(cudart_major("cudart64_65.dll"), None);
+    }
+
+    /// A newer cuDNN's extra part is found by looking, with no list to update.
+    #[test]
+    fn every_cudnn_part_in_the_folder_is_loaded() {
+        let dir = scratch("extras");
+        let (extra, other) = if cfg!(target_os = "windows") {
+            ("cudnn_engines_tensor_ir64_9.dll", "cudnn_notes.txt")
+        } else {
+            ("libcudnn_engines_tensor_ir.so.9", "libcudnn_notes.txt")
+        };
+        touch(&dir, &cudnn_libraries());
+        touch(&dir, &[extra.to_owned(), other.to_owned()]);
+        let found = cudnn_in(std::slice::from_ref(&dir));
+        assert_eq!(found[0].extras, vec![dir.join(extra)]);
+        assert!(found[0].missing.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -1579,6 +1579,7 @@ export const pt = {
       unavailable: 'não disponível neste runtime',
       partitioned: 'ele dividiria este modelo e o rodaria mais devagar',
       failed: 'ele não conseguiu criar uma sessão para este modelo',
+      selfTest: 'ele falhou em um teste neste computador',
       memory: 'esta máquina tem menos memória do que esse provedor precisa para este modelo',
       missingRuntime: 'ele precisa de CUDA e cuDNN instalados nesta máquina',
       noDevice: 'ele não encontrou nenhum dispositivo gráfico, então instale o driver de vídeo (no Linux, o Vulkan loader)',

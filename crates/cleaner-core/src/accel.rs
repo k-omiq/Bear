@@ -357,6 +357,37 @@ impl Accelerator {
         self == Accelerator::WebGpu || self == Accelerator::DirectMl
     }
 
+    /// Why this provider failed [`CONV_PROOF`] here, or `None` where it passed
+    /// or is not tested: a provider another check already refuses, DirectML and
+    /// CoreML, and macOS, whose built-in WebGPU is the measured path. Asked once
+    /// per process until [`forget_proofs`].
+    pub fn proof_failure(self) -> Option<String> {
+        if !matches!(self, Accelerator::Cuda | Accelerator::WebGpu)
+            || cfg!(target_os = "macos")
+            || runtime::loaded().is_none()
+            || self.availability().is_err()
+        {
+            return None;
+        }
+        let mut proofs = PROOFS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((_, answer)) = proofs.iter().find(|(accelerator, _)| *accelerator == self) {
+            return answer.clone();
+        }
+        let answer = run_proof(self).err();
+        if let Some(detail) = &answer {
+            eprintln!("manga-cleaner: {self:?} failed its test run: {detail}");
+        }
+        proofs.push((self, answer.clone()));
+        answer
+    }
+
+    /// Whether a failed [`CONV_PROOF`] rules this provider out for a model. The
+    /// Hayai reader is the one model it does not: it has no convolution, and
+    /// it was seen to run on CUDA on a machine where the others all failed.
+    pub fn blocked_for(self, profile: &str) -> bool {
+        !(self == Accelerator::Cuda && profile == HAYAI.name) && self.proof_failure().is_some()
+    }
+
     /// Whether this provider reaches the process as a **plugin library**
     /// registered by [`crate::runtime::load`] rather than as part of the
     /// runtime's own build. One does today: WebGPU on Windows and Linux. It
@@ -419,6 +450,37 @@ impl Accelerator {
             Accelerator::Xnnpack => ort::ep::xnnpack::XNNPACK::default().build(),
         }))
     }
+}
+
+/// One `Conv` over an 8x8 float image, built by hand. A provider can load and
+/// report ready with the libraries for a convolution broken: on Windows the
+/// CUDA provider opens cuDNN's parts at its first `Conv`, and a graph with none
+/// never finds out. So each GPU path runs this once before a model is sent
+/// there, with no CPU fallback to hide behind.
+const CONV_PROOF: &[u8] = include_bytes!("conv_proof.onnx");
+
+/// The key a provider's model row and refusal carry after a failed proof.
+pub const SELF_TEST_FAILED: &str = "accel.declined.selfTest";
+
+static PROOFS: std::sync::Mutex<Vec<(Accelerator, Option<String>)>> = std::sync::Mutex::new(Vec::new());
+
+/// Ask again on the next [`Accelerator::proof_failure`]: the user installed
+/// something and pressed Check again.
+pub fn forget_proofs() {
+    PROOFS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+}
+
+fn run_proof(accelerator: Accelerator) -> Result<(), String> {
+    let _turn = device_turn(accelerator);
+    let mut session = session_builder(accelerator, None, accelerator != Accelerator::Cpu)?
+        .commit_from_memory(CONV_PROOF)
+        .map_err(|e| e.to_string())?;
+    let specs = session
+        .inputs()
+        .iter()
+        .map(|outlet| crate::measure::InputSpec::resolve(outlet.name(), outlet.dtype(), &[]))
+        .collect::<Result<Vec<_>, _>>()?;
+    crate::measure::run_once(&mut session, &specs)
 }
 
 /// How a session takes a provider. A provider compiled into the runtime is
@@ -1060,8 +1122,18 @@ pub fn open_session(
     // takes the room and the platform as arguments, so the policy is testable
     // and only the session that is actually about to be built pays for a
     // sysctl.
-    let mut selection =
-        choose_on(profile, preference, &available(), memory::room(), Platform::host());
+    //
+    // A forced provider that failed its test run cannot serve the choice at
+    // all, so the model goes where Automatic would and the reason is reported.
+    // The choice stays saved, so it is back once the machine is fixed.
+    let blocked = match preference {
+        Preference::Force(wanted) if wanted.blocked_for(profile.name) => Some(wanted),
+        _ => None,
+    };
+    let preference = if blocked.is_some() { Preference::Automatic } else { preference };
+    let present: Vec<Accelerator> =
+        available().into_iter().filter(|accelerator| !accelerator.blocked_for(profile.name)).collect();
+    let mut selection = choose_on(profile, preference, &present, memory::room(), Platform::host());
 
     // `choose_within` is pure: it is handed a list of what is present and can
     // only say "not in the list". The machine knows more than that - a build
@@ -1074,6 +1146,10 @@ pub fn open_session(
                 declined.reason_key = reason.reason_key();
             }
         }
+    }
+
+    if let Some(wanted) = blocked {
+        selection.declined = Some(Declined::plain(wanted, SELF_TEST_FAILED));
     }
 
     if let Preference::Force(wanted) = preference {
@@ -1224,6 +1300,14 @@ impl Drop for Model {
 
 fn build(model: &Path, accelerator: Accelerator, intra_threads: Option<usize>, strict: bool) -> Result<Session, String> {
     let _turn = device_turn(accelerator);
+    session_builder(accelerator, intra_threads, strict)?.commit_from_file(model).map_err(|e| e.to_string())
+}
+
+fn session_builder(
+    accelerator: Accelerator,
+    intra_threads: Option<usize>,
+    strict: bool,
+) -> Result<ort::session::builder::SessionBuilder, String> {
     if accelerator.needs_cuda_runtime() {
         crate::cuda::prepare()?;
     }
@@ -1237,7 +1321,9 @@ fn build(model: &Path, accelerator: Accelerator, intra_threads: Option<usize>, s
     match accelerator.dispatch() {
         None => {}
         Some(Dispatch::BuiltIn(dispatch)) => {
-            builder = builder.with_execution_providers([dispatch]).map_err(|e| e.to_string())?;
+            // Without `error_on_failure` a provider that fails to register
+            // leaves a CPU session labelled with its name.
+            builder = builder.with_execution_providers([dispatch.error_on_failure()]).map_err(|e| e.to_string())?;
         }
         Some(Dispatch::Device(ep)) => {
             // A plugin provider is appended through the devices the runtime
@@ -1249,7 +1335,7 @@ fn build(model: &Path, accelerator: Accelerator, intra_threads: Option<usize>, s
                 .map_err(|e| e.to_string())?;
         }
     }
-    builder.commit_from_file(model).map_err(|e| e.to_string())
+    Ok(builder)
 }
 
 #[cfg(test)]
@@ -1259,6 +1345,16 @@ mod tests {
 
     const ALL: [Accelerator; 4] =
         [Accelerator::CoreMl, Accelerator::DirectMl, Accelerator::Cuda, Accelerator::WebGpu];
+
+    /// `RT_RUNTIME` the runtime library. WebGPU is run directly, as
+    /// `proof_failure` does not ask on macOS.
+    #[test]
+    #[ignore = "needs a runtime library"]
+    fn the_conv_proof_runs() {
+        crate::runtime::load(Path::new(&std::env::var("RT_RUNTIME").expect("RT_RUNTIME"))).unwrap();
+        run_proof(Accelerator::Cpu).unwrap();
+        run_proof(Accelerator::WebGpu).unwrap();
+    }
 
     #[test]
     #[ignore = "manual real graph and runtime placement check"]

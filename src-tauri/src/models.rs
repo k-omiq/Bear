@@ -157,6 +157,11 @@ pub struct AcceleratorRow {
     /// `accel.declined.unavailable` is a different **download**;
     /// `accel.declined.missingRuntime` is an **install** the user has to do.
     pub reason_key: Option<&'static str>,
+    /// The runtime's own words, where the provider failed its test run.
+    pub detail: Option<String>,
+    /// Whether any model here can be sent to it. TensorRT is in the CUDA builds
+    /// and no model is, so the Runtime screen does not list it as a path.
+    pub used: bool,
     /// Whether any model here has a timing on this provider. The difference
     /// between "WebGPU (measured)" and "DirectML (unmeasured)", and the reason
     /// this field exists rather than a badge invented in the interface.
@@ -279,17 +284,26 @@ pub fn list_accelerators(app: tauri::AppHandle) -> Accelerators {
                 row.reason_key = Some(reason.reason_key());
             }
         }
+        if let Some(detail) = accelerator.proof_failure() {
+            row.available = false;
+            row.reason_key = Some(accel::SELF_TEST_FAILED);
+            row.detail = Some(detail);
+        }
     }
     // Low memory room is the lettering mask's warning, never a refusal: it
     // loads with less, slower, and the run says so when it starts. A backend
     // stays available, and the placement's `declined_key` carries the figure.
     for model in &mut view.models {
+        let profile = crate::measurement::profile_name(model.id).unwrap_or_default();
         for status in &mut model.backend_status {
             let accelerator = accel::KNOWN.into_iter().find(|a| accelerator_id(*a) == status.id).unwrap();
             status.installed = runtime_loaded && (accelerator == Accelerator::Cpu || accelerator.is_installed());
             status.verified &= verified_runtime;
-            status.available = status.supported && runtime_loaded && accelerator.is_available();
-            if status.supported && !status.available {
+            let blocked = status.supported && runtime_loaded && accelerator.blocked_for(profile);
+            status.available = status.supported && runtime_loaded && accelerator.is_available() && !blocked;
+            if blocked {
+                status.reason_key = Some(accel::SELF_TEST_FAILED);
+            } else if status.supported && !status.available {
                 status.reason_key = if runtime_loaded {
                     accelerator.availability().err().map(accel::Unavailable::reason_key)
                         .or(Some("accel.declined.noDevice"))
@@ -413,7 +427,14 @@ fn accelerators_configured(
         .iter()
         .map(|(id, model_name, profile)| {
             let requested = settings.and_then(|s| crate::run::model_preference_from(s, id).ok()).unwrap_or(preference);
-            let mut chosen = accel::choose_on(profile, requested, available, room, host);
+            let present: Vec<Accelerator> =
+                available.iter().copied().filter(|accelerator| !accelerator.blocked_for(profile.name)).collect();
+            let mut chosen = accel::choose_on(profile, requested, &present, room, host);
+            if let (accel::Preference::Force(wanted), Some(declined)) = (requested, chosen.declined.as_mut()) {
+                if wanted.blocked_for(profile.name) {
+                    declined.reason_key = accel::SELF_TEST_FAILED;
+                }
+            }
             if !supports_model(id, chosen.accelerator, host) || matches!(requested, accel::Preference::Force(wanted) if !supports_model(id, wanted, host)) {
                 let wanted = match requested { accel::Preference::Force(wanted) => wanted, _ => chosen.accelerator };
                 chosen.accelerator = Accelerator::Cpu;
@@ -475,6 +496,8 @@ fn accelerators_configured(
                 label_key: accelerator.label_key(),
                 available: present,
                 reason_key: (!present).then_some(accel::Unavailable::NotInRuntime.reason_key()),
+                detail: None,
+                used: placements.iter().any(|(_, placement)| placement.supported_ids.contains(&accelerator_id(accelerator))),
                 // A measurement is a measurement on the machine it was made
                 // on; the same provider elsewhere is a guess, and the row
                 // says so.

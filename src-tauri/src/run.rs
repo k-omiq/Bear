@@ -384,8 +384,13 @@ fn requested_accel_key(preference: Preference) -> &'static str {
 fn sam_backend(preference: Preference, measured: Option<accel::Accelerator>) -> Result<accel::Accelerator, String> {
     use accel::Accelerator::{Cpu, Cuda, WebGpu};
     match preference {
-        Preference::Force(backend @ (WebGpu | Cuda)) => Ok(backend),
-        Preference::Automatic => Ok(measured.filter(|winner| matches!(winner, WebGpu | Cuda)).unwrap_or(Cpu)),
+        // A GPU that failed its test run cannot serve even a forced choice.
+        Preference::Force(backend @ (WebGpu | Cuda)) => {
+            Ok(if backend.blocked_for(crate::models::SAM_PROFILE_NAME) { Cpu } else { backend })
+        }
+        Preference::Automatic => Ok(measured
+            .filter(|winner| matches!(winner, WebGpu | Cuda) && !winner.blocked_for(crate::models::SAM_PROFILE_NAME))
+            .unwrap_or(Cpu)),
         Preference::CpuOnly | Preference::Force(Cpu) => Ok(Cpu),
         _ => Err(format!("The SAM-TS-L lettering mask does not support the requested backend {preference:?}")),
     }

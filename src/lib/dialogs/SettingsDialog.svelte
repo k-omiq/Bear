@@ -1422,13 +1422,18 @@
    * application did not unpack - unknown rather than none - and an unknown
    * build is nothing to report a difference about.
    */
+  const chosenBuildInstalled = $derived.by(() => {
+    const runtime = catalogue?.runtime
+    return Boolean(
+      runtime?.installed &&
+        runtime.installedFlavour === runtime.flavour &&
+        runtime.installedVersion === runtime.version,
+    )
+  })
+
   const installedNote = $derived.by(() => {
     const runtime = catalogue?.runtime
-    if (!runtime?.installed || !runtime.installedFlavour) return null
-    const same =
-      runtime.installedFlavour === runtime.flavour &&
-      runtime.installedVersion === runtime.version
-    if (same) return null
+    if (!runtime?.installed || !runtime.installedFlavour || chosenBuildInstalled) return null
     return t('settings.models.runtime.installedDiffers', {
       installed: runtime.installedFlavour,
       installedVersion: runtime.installedVersion,
@@ -3205,9 +3210,10 @@
                       {t('settings.models.action.delete')}
                     </Button>
                   {/if}
-                  <!-- Over an installed runtime only where there is a choice of
-                       build: elsewhere it would re-download what is there. -->
-                  {#if !catalogue.runtime.installed || catalogue.runtime.flavours.length > 1}
+                  <!-- Over an installed runtime only where the chosen build is
+                       another one, or one this app cannot name: otherwise it
+                       would re-download what is there. -->
+                  {#if !catalogue.runtime.installed || (catalogue.runtime.flavours.length > 1 && !chosenBuildInstalled)}
                     <Button
                       size="sm"
                       disabled={!catalogue.runtime.available}

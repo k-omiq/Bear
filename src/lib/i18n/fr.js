@@ -1579,6 +1579,7 @@ export const fr = {
       unavailable: 'indisponible dans ce runtime',
       partitioned: 'il découperait ce modèle et l’exécuterait plus lentement',
       failed: 'il n’a pas pu créer de session pour ce modèle',
+      selfTest: 'il a échoué à un test sur cet ordinateur',
       memory: 'cette machine a moins de mémoire que ce fournisseur n’en demande pour ce modèle',
       missingRuntime: 'il nécessite CUDA et cuDNN installés sur cette machine',
       noDevice: 'il n’a trouvé aucun périphérique graphique : installez votre pilote graphique (sous Linux, le chargeur Vulkan)',

@@ -1579,6 +1579,7 @@ export const es = {
       unavailable: 'no disponible en este entorno de ejecución',
       partitioned: 'dividiría este modelo y lo ejecutaría más lento',
       failed: 'no pudo crear una sesión para este modelo',
+      selfTest: 'falló una prueba en este ordenador',
       memory: 'este equipo tiene menos memoria de la que ese proveedor necesita para este modelo',
       missingRuntime: 'necesita CUDA y cuDNN instalados en este equipo',
       noDevice: 'no encontró ningún dispositivo gráfico, así que instala el controlador gráfico (en Linux, el cargador de Vulkan)',

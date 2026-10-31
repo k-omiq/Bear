@@ -97,7 +97,7 @@ fn read_saved(app_data: &Path) -> Option<Saved> {
 
 /// `cleaner_core::accel`'s name for each Settings row: the profile the
 /// row's sessions open with.
-fn profile_name(id: &str) -> Option<&'static str> {
+pub(crate) fn profile_name(id: &str) -> Option<&'static str> {
     Some(match id {
         "ctd" => accel::DETECTOR.name,
         "rtSmall" => accel::BALLOON.name,
@@ -220,8 +220,13 @@ fn measure_all(app: &tauri::AppHandle) -> Result<Saved, String> {
         .models
         .iter()
         .filter_map(|row| {
-            let backends: Vec<&'static str> =
-                row.backend_status.iter().filter(|s| s.supported && s.available).map(|s| s.id).collect();
+            // One that failed its test run stays in the list, with why.
+            let backends: Vec<&'static str> = row
+                .backend_status
+                .iter()
+                .filter(|s| s.supported && (s.available || s.reason_key == Some(accel::SELF_TEST_FAILED)))
+                .map(|s| s.id)
+                .collect();
             Some((row.id.to_owned(), subject(row.id, &app_data)?, backends))
         })
         .filter(|(_, _, backends)| !backends.is_empty())
@@ -249,7 +254,11 @@ fn measure_all(app: &tauri::AppHandle) -> Result<Saved, String> {
                 done: false,
             });
             let Some(accelerator) = accelerator(backend) else { continue };
-            let outcome = time(&subject, accelerator);
+            let outcome = if accelerator.blocked_for(profile_name(&id).unwrap_or_default()) {
+                Err(accelerator.proof_failure().unwrap_or_else(|| accel::SELF_TEST_FAILED.to_owned()))
+            } else {
+                time(&subject, accelerator)
+            };
             if CANCEL.load(Ordering::Relaxed) {
                 return Err("notice.measure.cancelled".to_owned());
             }
