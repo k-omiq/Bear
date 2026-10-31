@@ -1,7 +1,5 @@
-//! Gaps found by trying to break the dev log. Each test fails today and says
-//! what the log should do, so each is `#[ignore]` with its reason until the bug
-//! is fixed: remove the `#[ignore]` with the fix. Run them all with
-//! `cargo test -p manga-cleaner --lib devlog::gap_tests -- --ignored --test-threads=1`.
+//! Gaps found by trying to break the dev log, each one fixed. They are apart from
+//! `tests` because the ones that end a process run this binary again.
 
 use super::*;
 use std::sync::Arc;
@@ -41,7 +39,6 @@ fn logged(bytes: &[u8]) -> Vec<String> {
 /// as the end of a longer name. Modal's secrets are short enough that the
 /// opaque pattern does not catch them either.
 #[test]
-#[ignore = "bug: a known token prefix after an escaped newline or a CJK letter is not hidden"]
 fn a_token_shape_survives_after_an_escape_or_a_letter() {
     assert_hidden(&[
         (r#""upstream said:\nas-Ab3dEf7hIjKlMn0pQrStUv""#, "Ab3dEf7h"),
@@ -53,7 +50,6 @@ fn a_token_shape_survives_after_an_escape_or_a_letter() {
 
 /// `{:?}` of a string holding JSON is how a response body gets printed.
 #[test]
-#[ignore = "bug: the pair pattern stops at the backslash of an escaped quote"]
 fn a_secret_in_escaped_json_is_hidden() {
     assert_hidden(&[
         (r#"{\"token\":\"hunter2\"}"#, "hunter2"),
@@ -63,7 +59,6 @@ fn a_secret_in_escaped_json_is_hidden() {
 }
 
 #[test]
-#[ignore = "bug: only one Some( is skipped, so another wrapper leaves the value behind"]
 fn a_wrapped_value_is_hidden() {
     assert_hidden(&[
         (r#"token: Some(Secret("abc123"))"#, "abc123"),
@@ -76,7 +71,6 @@ fn a_wrapped_value_is_hidden() {
 
 /// A password is the one value free to hold any character.
 #[test]
-#[ignore = "bug: the value ends at the first space, comma, semicolon, ampersand or escaped quote"]
 fn the_whole_of_an_awkward_password_is_hidden() {
     assert_hidden(&[
         ("password=ab,cd;ef", "cd;ef"),
@@ -89,7 +83,6 @@ fn the_whole_of_an_awkward_password_is_hidden() {
 }
 
 #[test]
-#[ignore = "bug: only Bearer, Basic and Token are known as schemes, and a cookie header ends at its first semicolon"]
 fn every_part_of_an_auth_header_is_hidden() {
     assert_hidden(&[
         ("Authorization: ApiKey abc123", "abc123"),
@@ -102,7 +95,6 @@ fn every_part_of_an_auth_header_is_hidden() {
 
 /// `provisioner/redaction.py` knows `sig` and `key` in a query; this does not.
 #[test]
-#[ignore = "bug: these names are not on the list, or need a colon or equals sign"]
 fn names_that_hold_a_secret_are_known() {
     assert_hidden(&[
         ("API key: abc123", "abc123"),
@@ -123,7 +115,6 @@ fn names_that_hold_a_secret_are_known() {
 /// A long key of one case, or with no digit, is neither all hex nor a mix of
 /// every kind of character.
 #[test]
-#[ignore = "bug: looks_opaque wants a digit, an upper and a lower letter, or all hex"]
 fn a_long_key_of_one_case_is_hidden() {
     assert_hidden(&[
         ("key abcdefghij0123456789abcdefghij0123456789", "abcdefghij0123"),
@@ -133,7 +124,6 @@ fn a_long_key_of_one_case_is_hidden() {
 }
 
 #[test]
-#[ignore = "bug: the URL pattern ends at ) ] ' and a space, and the rest of the URL stays in the line"]
 fn nothing_of_a_url_survives_its_punctuation() {
     assert_hidden(&[
         ("https://x.modal.run/v1/job(1)?q=QUERYVALUE", "QUERYVALUE"),
@@ -150,7 +140,6 @@ fn nothing_of_a_url_survives_its_punctuation() {
 /// A URL with no scheme is what a TLS or DNS library names, and the code comment
 /// says a Modal host names the workspace.
 #[test]
-#[ignore = "bug: a host or query with no scheme is not seen as a URL"]
 fn a_host_with_no_scheme_is_hidden() {
     assert_hidden(&[
         ("certificate not valid for studio-ws--mc-app.modal.run", "studio-ws"),
@@ -160,7 +149,6 @@ fn a_host_with_no_scheme_is_hidden() {
 
 /// A library that colours its output, as `tracing` does on a terminal.
 #[test]
-#[ignore = "bug: escape codes between a name and its value stop the pair pattern"]
 fn colour_codes_do_not_hide_a_secret_from_the_pattern() {
     assert_hidden(&[("\x1b[3mtoken\x1b[0m\x1b[2m=\x1b[0m\"abc123\"", "abc123")]);
 }
@@ -168,7 +156,6 @@ fn colour_codes_do_not_hide_a_secret_from_the_pattern() {
 /// The cut at the line limit falls inside a quoted value: with no closing quote
 /// the pair pattern does not match, and all of the value up to the cut stays.
 #[test]
-#[ignore = "bug: redaction runs on the cut line, where a quoted value has no end"]
 fn a_secret_at_the_line_limit_is_hidden() {
     let mut bytes = vec![b'x'; MAX_LINE_BYTES as usize - 24];
     bytes.extend_from_slice(b" password=\"two words and a tail past the limit\"\n");
@@ -178,7 +165,6 @@ fn a_secret_at_the_line_limit_is_hidden() {
 
 /// Redaction sees one line at a time.
 #[test]
-#[ignore = "bug: a value on the line after its name is not linked to the name"]
 fn a_value_on_the_next_line_is_hidden() {
     let lines = logged(b"token=\nabc123\n\"password\":\n  \"hunter2\"\n");
     let text = lines.join("\n");
@@ -187,7 +173,6 @@ fn a_value_on_the_next_line_is_hidden() {
 
 /// One bad byte splits a token into parts too short for any pattern.
 #[test]
-#[ignore = "bug: a bad byte inside a token ends the match"]
 fn a_bad_byte_inside_a_token_does_not_save_it() {
     let lines = logged(b"got hf_abc\xffdefghijklmnopqrstu from it\n");
     assert!(!lines[0].contains("defghijklmnopqrstu"), "{}", lines[0]);
@@ -195,7 +180,6 @@ fn a_bad_byte_inside_a_token_does_not_save_it() {
 
 /// The doc comment says the home folder goes "since it holds a person's name".
 #[test]
-#[ignore = "bug: the home is matched by exact text, and the fallback pattern ends at a space"]
 fn the_whole_name_in_a_home_folder_goes() {
     let home = Some(r"C:\Users\Ana Maria");
     for line in [
@@ -213,7 +197,6 @@ fn the_whole_name_in_a_home_folder_goes() {
 
 /// "The rest of a path stays, because a failed read is no use without it."
 #[test]
-#[ignore = "bug: the opaque pattern takes slashes, so a mixed-case path over 32 characters is hidden"]
 fn a_path_with_capitals_and_digits_stays() {
     let line = "~/Manga/Yasai_Chapter_009/Page0012_final/mask.png could not be read";
     assert_eq!(clean(line), line);
@@ -222,7 +205,7 @@ fn a_path_with_capitals_and_digits_stays() {
 /// Runs this test binary again as a child, for the tests below that must die.
 fn run_self(test: &str, dir: &Path) {
     let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", &format!("devlog::gap_tests::{test}"), "--ignored", "--test-threads=1"])
+        .args(["--exact", &format!("devlog::gap_tests::{test}"), "--test-threads=1"])
         .env("MC_DEVLOG_GAP_DIR", dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -254,7 +237,6 @@ fn kept(dir: &Path) -> usize {
 /// The module's reason for a file: "the lines that matter most come just before
 /// a crash". What is still in the pipe dies with the process.
 #[test]
-#[ignore = "bug: lines still in the pipe when the process aborts are lost; the 100 ms drain covers panics only"]
 fn the_last_line_before_an_abort_is_kept() {
     if std::env::var_os("MC_DEVLOG_GAP_DIR").is_some() {
         burst();
@@ -267,7 +249,6 @@ fn the_last_line_before_an_abort_is_kept() {
 
 /// `jobs.rs` prints "quitting with N job(s) still stopping" and then exits.
 #[test]
-#[ignore = "bug: nothing drains the pipe at exit, so lines written just before it are lost"]
 fn the_last_line_before_an_exit_is_kept() {
     if std::env::var_os("MC_DEVLOG_GAP_DIR").is_some() {
         burst();
@@ -299,7 +280,6 @@ fn pumped_while_open(bytes: &[u8]) -> (Vec<String>, Vec<u8>, io::PipeWriter) {
 /// about to fall over. It reaches neither the file nor the terminal until a
 /// newline comes, so a crash takes it and a developer sees nothing.
 #[test]
-#[ignore = "bug: read_until holds a line with no newline until the newline or 8 KiB"]
 fn a_line_with_no_newline_is_not_held_back() {
     let (lines, terminal, _open) = pumped_while_open(b"about to fall over");
     assert!(!terminal.is_empty(), "the terminal saw nothing");
@@ -310,7 +290,6 @@ fn a_line_with_no_newline_is_not_held_back() {
 /// tail is read until its newline before the kept part is logged, so a bar that
 /// never ends is never logged, and neither is anything after it.
 #[test]
-#[ignore = "bug: the kept part of a cut line waits for the end of its tail, which may never come"]
 fn a_cut_line_is_logged_before_its_tail_ends() {
     let (lines, _, _open) = pumped_while_open(&vec![b'x'; 2 * MAX_LINE_BYTES as usize]);
     assert_eq!(lines.len(), 1, "nothing was logged");
@@ -320,7 +299,6 @@ fn a_cut_line_is_logged_before_its_tail_ends() {
 /// reading it stops the log too, and the first `eprintln!` after that hangs.
 #[cfg(unix)]
 #[test]
-#[ignore = "bug: a terminal that blocks stops the log, because pass-on runs before each append"]
 fn a_terminal_that_blocks_does_not_stop_the_log() {
     use std::os::fd::OwnedFd;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -343,7 +321,6 @@ fn a_terminal_that_blocks_does_not_stop_the_log() {
 /// scanner or a backup tool holding `dev.log` is the usual cause; a folder in
 /// the way gives the same error here.
 #[test]
-#[ignore = "bug: a failed roll is ignored and the file grows with no limit"]
 fn the_cap_holds_when_the_roll_fails() {
     let dir = folder("stuck-roll");
     fs::create_dir_all(dir.join("dev.log.1").join("in-the-way")).unwrap();
@@ -360,7 +337,6 @@ fn the_cap_holds_when_the_roll_fails() {
 /// rename puts a nearly empty file over the full `dev.log.1`. The single
 /// instance plugin stops this where it works; it is the only thing that does.
 #[test]
-#[ignore = "bug: the lock is per process, so two instances lose history in a roll"]
 fn two_instances_keep_the_older_file() {
     let dir = folder("two-rolls");
     let line = "x".repeat(200);
@@ -386,7 +362,6 @@ fn two_instances_keep_the_older_file() {
 
 /// `writeln!` on a file makes one write for the line and one for the newline.
 #[test]
-#[ignore = "bug: a line and its newline are two writes, so two instances can join lines"]
 fn two_instances_do_not_join_lines() {
     let dir = folder("two-appends");
     let line = "x".repeat(100);
@@ -411,7 +386,6 @@ fn two_instances_do_not_join_lines() {
 
 /// Page and chapter names are often Japanese.
 #[test]
-#[ignore = "bug: the 8 KiB cut counts bytes, so it can fall inside a character"]
 fn a_cut_does_not_split_a_character() {
     let mut lines = Vec::new();
     pump("あ".repeat(4000).as_bytes(), None, |line| lines.push(line.to_owned()));
@@ -419,11 +393,133 @@ fn a_cut_does_not_split_a_character() {
 }
 
 #[test]
-#[ignore = "bug: a line of exactly 8 KiB followed by its newline is marked as cut"]
 fn a_line_at_exactly_the_limit_is_not_marked_cut() {
     let mut bytes = vec![b'x'; MAX_LINE_BYTES as usize];
     bytes.push(b'\n');
     let mut lines = Vec::new();
     pump(&bytes[..], None, |line| lines.push(line.to_owned()));
     assert!(!lines[0].ends_with("[cut]"));
+}
+
+/// The reasons a process dies with no warning, each with its last words still in
+/// the pipe. The text with no newline counts too: a library about to fall over
+/// does not always finish its line.
+#[cfg(unix)]
+#[test]
+fn the_last_words_before_a_real_fault_are_kept() {
+    if std::env::var_os("MC_DEVLOG_GAP_DIR").is_some() {
+        burst();
+        write!(io::stderr(), "last words").unwrap();
+        // Safety: not safe at all. This is the fault.
+        unsafe { std::ptr::null_mut::<u8>().write_volatile(1) };
+    }
+    let dir = folder("fault");
+    run_self("the_last_words_before_a_real_fault_are_kept", &dir);
+    assert_eq!(kept(&dir), 50, "lines kept of 50");
+    assert!(read_lossy(&dir.join("dev.log")).contains("last words"));
+}
+
+/// Rust's own report comes from the handler this one hands the fault back to.
+#[cfg(unix)]
+#[test]
+fn a_stack_overflow_still_reports_itself() {
+    #[allow(unconditional_recursion)]
+    fn deeper(depth: u64) -> u64 {
+        std::hint::black_box(deeper(depth + 1)) + std::hint::black_box(depth)
+    }
+    if std::env::var_os("MC_DEVLOG_GAP_DIR").is_some() {
+        burst();
+        std::hint::black_box(deeper(0));
+    }
+    let dir = folder("overflow");
+    run_self("a_stack_overflow_still_reports_itself", &dir);
+    assert_eq!(kept(&dir), 50, "lines kept of 50");
+    assert!(read_lossy(&dir.join("dev.log")).contains("overflowed its stack"));
+}
+
+/// A stuck log and a full pipe must not turn a crash into a hang.
+#[cfg(unix)]
+#[test]
+fn a_stuck_log_does_not_stop_a_crash() {
+    if std::env::var_os("MC_DEVLOG_GAP_DIR").is_some() {
+        burst();
+        let _stuck = LOG.get().unwrap().lock.lock().unwrap();
+        while pipe_has_room() {
+            writeln!(io::stderr(), "filling the pipe").unwrap();
+        }
+        std::process::abort();
+    }
+    let dir = folder("stuck-crash");
+    let started = std::time::Instant::now();
+    run_self("a_stuck_log_does_not_stop_a_crash", &dir);
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+/// Text logged after a quiet moment must not split a secret into a hidden first
+/// part and a second part that reads as nothing special.
+#[test]
+fn a_value_written_in_two_parts_is_hidden() {
+    let dir = folder("two-parts");
+    let terminal = File::create(dir.join("terminal")).unwrap();
+    let (reader, mut writer) = io::pipe().unwrap();
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let seen = lines.clone();
+    let pumping = std::thread::spawn(move || {
+        pump(reader, Some(terminal), |line| seen.lock().unwrap().push(clean(line)));
+    });
+    write!(writer, "password=hun").unwrap();
+    std::thread::sleep(3 * QUIET);
+    writeln!(writer, "ter2 and more").unwrap();
+    drop(writer);
+    pumping.join().unwrap();
+    let text = lines.lock().unwrap().join("\n");
+    assert!(!text.contains("ter2") && !text.contains("hun"), "{text}");
+}
+
+/// The wider patterns must not eat what a report needs.
+#[test]
+fn the_wider_patterns_leave_ordinary_words() {
+    for line in [
+        "Render pass: 3 of 8",
+        "signal: 11",
+        "bypass=1",
+        "author: Ana",
+        "auth: the sign-in failed",
+        "pass-through: on",
+        "Library/Application Support/Manga Cleaner.app/Contents/MacOS/manga-cleaner",
+        "could not read tokenizer.json",
+        "the token 3 of 5 was fine",
+        "page_0012_Yasai_Chapter_009_Final_mask.png could not be read",
+        "ch1.page2.final.png",
+    ] {
+        assert_eq!(clean(line), line);
+    }
+}
+
+/// [`pump`] must not fail, and redaction runs inside it. Random mixes of what the
+/// patterns look for, cut at random, in every kind of character.
+#[test]
+fn no_mix_of_pieces_panics() {
+    const PIECES: [&str; 28] = [
+        "token", "password", "Authorization", "cookie", "--pass", "sig", "=", ":", ",", "(", ")", "[", "]", "\"",
+        "\\\"", "'", "\\", " ", "Some(", "Bearer ", "https://", "@", "/", ".modal.run", "あ", "\u{fffd}", "\x1b[3m",
+        "hf_abcdefgh",
+    ];
+    let home = Some(r"C:\Users\あ na");
+    let rounds = std::env::var("MC_DEVLOG_FUZZ_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(20_000u32);
+    let mut seed = 0x9E37_79B9_u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed as usize
+    };
+    for _ in 0..rounds {
+        let line: String = (0..next() % 24).map(|_| PIECES[next() % PIECES.len()]).collect();
+        let _ = redact(&line, home);
+        let _ = open_secret(&line);
+        let _ = hide_first_value(&line);
+        let mut lines = Vec::new();
+        pump(line.as_bytes(), None, |found| lines.push(found.to_owned()));
+    }
 }

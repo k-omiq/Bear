@@ -349,6 +349,8 @@ pub fn run() {
             // result; its journal makes a later resume safe.
             if let tauri::RunEvent::Exit = event {
                 provision::stop_helpers_for_exit();
+                // Windows has no exit handler `std::process::exit` would run.
+                devlog::drain();
             }
         });
 }

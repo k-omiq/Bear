@@ -112,6 +112,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     # `SetStdHandle`, for the dev log's capture of stderr (`devlog.rs`).
     "Win32_System_Console",
+    # The same log: its last lines at a fault, and its lock across processes.
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_IO",
+    "Win32_System_Kernel",
+    "Win32_System_Pipes",
 ] }
 
 # `statvfs`, for the same free-space preflight on macOS and Linux. Already in

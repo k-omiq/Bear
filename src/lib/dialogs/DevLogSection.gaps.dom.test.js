@@ -1,5 +1,4 @@
-// A gap found by trying to break the dev log section. The test fails today and
-// says what the section should do, so it is `it.skip` until the bug is fixed.
+// A gap found by trying to break the dev log section, now fixed.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 import { setBackend } from '../api/backend.js'
@@ -26,9 +25,9 @@ afterEach(() => {
 })
 
 describe('DevLogSection gaps', () => {
-  // Bug: `load` always sets scrollTop to the end, so a person reading an old
-  // line during a flood loses their place on every Refresh and every return.
-  it.skip('keeps the place of someone reading further up', async () => {
+  // A person reading an old line during a flood keeps their place on every
+  // Refresh and every return.
+  it('keeps the place of someone reading further up', async () => {
     render(DevLogSection, { visible: true })
     const view = /** @type {HTMLElement} */ (await screen.findByText(/first line/))
     Object.defineProperty(view, 'scrollHeight', { configurable: true, value: 5000 })
