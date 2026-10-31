@@ -2395,6 +2395,9 @@ export const ja = {
       green: '緑',
       blue: '青',
       hex: '16 進数',
+      pairGroup: '保存した 2 色',
+      pairActive: '使用中の色',
+      pairSwap: 'もう一方の色に切り替え',
       area: 'カラーエリア',
       areaValue: '彩度 {saturation}%、明度 {brightness}%',
     },
@@ -2477,6 +2480,8 @@ export const ja = {
     },
     tool: {
       runCleanup: 'テキスト除去を実行、または保持中の選択を適用',
+      swapColors: '保存したもう一方の色に切り替え',
+      pickColor: '使用中の色を画面から取得',
       cleanScopeNext: 'テキスト除去：次の範囲',
       cleanScopePrev: 'テキスト除去：前の範囲',
       focusOptions: 'ツールバーの次の項目',

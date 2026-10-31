@@ -12,12 +12,15 @@
    *
    * A beta tool (`tools.js#BETA_TOOLS`, the Patch tool) is on the rail only
    * while Settings > Beta has it on, and the arrows skip what is not drawn.
+   *
+   * The two saved colours close it, outside the radio group: they are not tools.
    */
   import { editor, setTool } from '../state/editor.svelte.js'
   import { TOOL_SPECS, TOOL_ICONS, toolKey, toolOffered } from './tools.js'
   import { session } from '../state/session.svelte.js'
   import { IconButton } from '../ui/index.js'
   import { t } from '../i18n/index.js'
+  import ColorSwitch from './ColorSwitch.svelte'
 
   /** @type {HTMLElement|undefined} */
   let rail = $state()
@@ -87,6 +90,7 @@
     {/each}
   </div>
 
+  <ColorSwitch />
 </div>
 
 <style>

@@ -2437,6 +2437,9 @@ export const pt = {
       green: 'Verde',
       blue: 'Azul',
       hex: 'Hex',
+      pairGroup: 'Duas cores salvas',
+      pairActive: 'Cor ativa',
+      pairSwap: 'Trocar para a outra cor',
       area: 'Área de cor',
       areaValue: 'Saturação {saturation}%, brilho {brightness}%',
     },
@@ -2519,6 +2522,8 @@ export const pt = {
     },
     tool: {
       runCleanup: 'Executar a limpeza de texto, ou aplicar a seleção retida',
+      swapColors: 'Trocar para a outra cor salva',
+      pickColor: 'Pegar a cor ativa da tela',
       cleanScopeNext: 'Limpeza de texto: próximo alcance',
       cleanScopePrev: 'Limpeza de texto: alcance anterior',
       focusOptions: 'Próximo controle da barra da ferramenta',

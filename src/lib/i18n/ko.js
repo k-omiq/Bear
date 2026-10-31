@@ -2392,6 +2392,9 @@ export const ko = {
       green: '초록',
       blue: '파랑',
       hex: 'Hex',
+      pairGroup: '저장된 두 색상',
+      pairActive: '활성 색상',
+      pairSwap: '다른 색상으로 전환',
       area: '색상 영역',
       areaValue: '채도 {saturation}%, 명도 {brightness}%',
     },
@@ -2474,6 +2477,8 @@ export const ko = {
     },
     tool: {
       runCleanup: '텍스트 클린 실행 또는 보류 중인 선택 영역 적용',
+      swapColors: '저장된 다른 색상으로 전환',
+      pickColor: '화면에서 활성 색상 추출',
       cleanScopeNext: '텍스트 클린: 다음 범위',
       cleanScopePrev: '텍스트 클린: 이전 범위',
       focusOptions: '도구 막대의 다음 컨트롤',
