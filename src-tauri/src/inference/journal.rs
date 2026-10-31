@@ -849,7 +849,7 @@ impl AttemptJournal {
         )?;
         validate_ascii_id(&intent.model_id, "model_id", 1, 128)?;
 
-        if intent.width % LATENT_STRIDE != 0 || intent.height % LATENT_STRIDE != 0 {
+        if !intent.width.is_multiple_of(LATENT_STRIDE) || !intent.height.is_multiple_of(LATENT_STRIDE) {
             return Err(WireValidationError::DimensionNotSnapped {
                 width: intent.width,
                 height: intent.height,

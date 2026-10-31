@@ -296,7 +296,7 @@ impl Screen {
         }
         let phases: Vec<Grid> = freqs.iter().map(|&f| local_phase(&detail, known, f)).collect();
         let pixels: Vec<usize> = (0..n).filter(|&i| known.data[i]).collect();
-        let (train, test): (Vec<usize>, Vec<usize>) = pixels.iter().partition(|&&i| ((i / page.w) / BLOCK + (i % page.w) / BLOCK) % 2 == 0);
+        let (train, test): (Vec<usize>, Vec<usize>) = pixels.iter().partition(|&&i| ((i / page.w) / BLOCK + (i % page.w) / BLOCK).is_multiple_of(2));
         let mut pairs: Vec<(f64, usize, usize, f64)> = Vec::new();
         for a in 0..freqs.len() {
             for b in a + 1..freqs.len() {
