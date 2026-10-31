@@ -504,6 +504,31 @@ describe('the cloud clean refusals, in plain words', () => {
   })
 })
 
+it.each(['mc-flux3-klein-edit-v2', 'mc-flux3-klein-bf16-edit-v2'])('%s asks before a batch plan, with Automatic chosen, as Qwen does', async (recipeId) => {
+  const api = backend()
+  api.getCloudModelInfo.mockResolvedValue({ pinnedModelId: 'black-forest-labs/FLUX.3-klein', pinnedRecipeId: recipeId })
+  api.prepareCloudClean.mockResolvedValue({ ...PROPOSAL, standing: true })
+  editor.toolParams.autoClean.step = 'clean'
+  const work = startCleanRun('page')
+  await dialog('qwenPrompt')
+  expect(app.modals.at(-1).props).toMatchObject({ batch: true, flux: true, initial: { target: 'auto' } })
+  expect(api.prepareCloudClean).not.toHaveBeenCalled()
+  closeModal({ target: 'auto', description: '' })
+  await work
+  expect(api.prepareCloudClean.mock.calls[0][0].qwenEdit).toEqual({ target: 'auto', description: '' })
+  expect(api.startCloudClean).toHaveBeenCalledWith({ grantId: 'clean-grant' })
+})
+
+it('Klein v2 batch cleans ask nothing', async () => {
+  const api = backend()
+  api.getCloudModelInfo.mockResolvedValue({ pinnedModelId: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic', pinnedRecipeId: 'mc-flux2-klein-inpaint-v2' })
+  api.prepareCloudClean.mockResolvedValue({ ...PROPOSAL, standing: true })
+  editor.toolParams.autoClean.step = 'clean'
+  await startCleanRun('page')
+  expect(api.prepareCloudClean.mock.calls[0][0].qwenEdit).toBeUndefined()
+  expect(api.startCloudClean).toHaveBeenCalledWith({ grantId: 'clean-grant' })
+})
+
 it('Qwen batch guidance is requested before a plan is prepared, even with standing consent', async () => {
   const api = backend()
   api.getCloudModelInfo.mockResolvedValue({ pinnedModelId: 'Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32', pinnedRecipeId: 'mc-qwen-image-edit-2511-v4' })

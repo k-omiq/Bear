@@ -67,7 +67,7 @@
  * for them.
  */
 
-import { askQwenEdit, isQwen, qwenSupported } from './qwenflow.js'
+import { askBatchGuidance } from './qwenflow.js'
 import { getBackend } from '../api/backend.js'
 import { outcomeCopy, outcomeOf } from '../dialogs/workflowoutcome.js'
 import { cloudCapabilitiesFor } from '../model/pipelines.js'
@@ -516,12 +516,8 @@ async function askStream(where, readiness, backend) {
   let proposal
   try {
     const model = await backend.getCloudModelInfo({ provider: readiness.target.type, profileId: readiness.target.profile_id })
-    let qwenEdit
-    if (isQwen(model?.pinnedModelId)) {
-      if (!qwenSupported(model)) return null
-      qwenEdit = await askQwenEdit({ batch: true })
-      if (!qwenEdit) return null
-    }
+    const qwenEdit = await askBatchGuidance(model)
+    if (qwenEdit === null) return null
     proposal = await backend.prepareCloudCleanStream({ chapterId, scope, pageIndices, localFirst: where.localFirst === true,
       ...(picks ?? {}), ...(qwenEdit ? { qwenEdit } : {}) })
   } catch (cause) {
@@ -723,12 +719,8 @@ async function cleanOnCloud(where, backend) {
   let proposal
   try {
     const model = await backend.getCloudModelInfo({ provider: readiness.target.type, profileId: readiness.target.profile_id })
-    let qwenEdit
-    if (isQwen(model?.pinnedModelId)) {
-      if (!qwenSupported(model)) return null
-      qwenEdit = await askQwenEdit({ batch: true })
-      if (!qwenEdit) return null
-    }
+    const qwenEdit = await askBatchGuidance(model)
+    if (qwenEdit === null) return null
     proposal = await backend.prepareCloudClean({ chapterId, scope, pageIndices, regionIds: null, localFirst,
       ...(picks ?? {}), ...(qwenEdit ? { qwenEdit } : {}) })
   } catch (cause) {

@@ -451,6 +451,21 @@ describe('Qwen descriptions before consent', () => {
     expect(app.modals).toEqual([])
   })
 
+  it.each(['mc-flux3-klein-edit-v2', 'mc-flux3-klein-bf16-edit-v2'])('%s asks on a first clean, as Qwen does', async (recipeId) => {
+    const { backend, regionId } = await opened()
+    const info = await backend.getCloudModelInfo({ provider: 'modal', profileId: PROFILE.id })
+    vi.spyOn(backend, 'getCloudModelInfo').mockResolvedValue({ ...info, pinnedRecipeId: recipeId })
+    const prepare = vi.spyOn(backend, 'prepareCloudConsent')
+    const first = runRegionMenuItem(`engine:${CLOUD_ENGINE}`, current(regionId))
+    await vi.waitFor(() => expect(app.modals.at(-1)?.kind).toBe('qwenPrompt'))
+    expect(app.modals.at(-1).props.flux).toBe(true)
+    expect(prepare).not.toHaveBeenCalled()
+    closeModal({ target: 'sound_effect', description: ' A brick wall ' })
+    await answerConsent('confirm')
+    expect(await first).toBe(true)
+    expect(prepare.mock.calls[0][0].recipe.qwen_edit).toEqual({ target: 'sound_effect', description: 'A brick wall' })
+  })
+
   it('an older Qwen worker is refused before the description can be silently ignored', async () => {
     const { backend, regionId } = await opened()
     vi.spyOn(backend, 'getCloudModelInfo').mockResolvedValue({ ...model, pinnedRecipeId: 'mc-qwen-image-edit-2511-v3' })
