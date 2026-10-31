@@ -1406,6 +1406,135 @@ mod tests {
         assert!(!strict_placement(&LAMA, Preference::CpuOnly, Accelerator::Cpu));
     }
 
+    /// A one-`Conv` graph on disk, for a test that needs a session and no
+    /// model files. The one `open_session` is handed here is never a real one.
+    fn conv_graph(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("manga-cleaner-conv-{name}-{}.onnx", std::process::id()));
+        std::fs::write(&path, CONV_PROOF).unwrap();
+        path
+    }
+
+    /// `open_session` drops a blocked force before it chooses (`Automatic`,
+    /// above) and `models::accelerators_configured` keeps it (`models.rs:432`).
+    /// So a LaMa forced to a CUDA that failed its proof runs on WebGPU while
+    /// Settings says CPU. A blocked provider cannot be set up on this platform,
+    /// so this pins the two calls as written: when they become one, point
+    /// `drawn` at it.
+    #[test]
+    #[ignore = "BUG in 46429f8: Settings says CPU, the session opens on the next GPU"]
+    fn settings_names_where_a_blocked_forced_model_really_runs() {
+        let windows = Platform { os: Os::Windows, arch: Arch::X86_64 };
+        let present = [Accelerator::WebGpu];
+        for profile in [&LAMA, &DETECTOR] {
+            let real = choose_on(profile, Preference::Automatic, &present, None, Some(windows));
+            let drawn = choose_on(profile, Preference::Force(Accelerator::Cuda), &present, None, Some(windows));
+            assert_eq!(drawn.accelerator, real.accelerator, "{}", profile.name);
+        }
+    }
+
+    /// `proof_failure` promises one proof per process until Check again, but
+    /// `runtime::load` ends in `cuda::rescan`, and it is called on every
+    /// `list_accelerators`, `list_workflow_capabilities`, run start and region
+    /// re-run. So a Settings refresh during a run tests the GPU again beside it.
+    /// `RT_RUNTIME` the runtime library.
+    #[test]
+    #[ignore = "BUG in 46429f8: every runtime load forgets the proofs; needs RT_RUNTIME"]
+    fn loading_the_runtime_again_keeps_the_proofs() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        PROOFS.lock().unwrap().push((Accelerator::WebGpu, Some("seeded".to_owned())));
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        assert!(!PROOFS.lock().unwrap().is_empty(), "the second load forgot the proof");
+    }
+
+    /// `open_session` asks every available provider for its proof before it
+    /// looks at the preference, so `CpuOnly` runs GPU code, and waits on a proof
+    /// that is running or hung. Nothing can stop that wait: Stop never reaches
+    /// a thread blocked on a lock. `RT_RUNTIME` the runtime library, on Windows
+    /// or Linux with a GPU path. macOS never runs a proof, so there this fails
+    /// only with `cfg!(target_os = "macos")` taken out of `proof_failure`.
+    #[test]
+    #[ignore = "BUG in 46429f8: CpuOnly runs and waits on GPU proofs; needs RT_RUNTIME and a GPU path"]
+    fn a_cpu_only_session_does_not_wait_on_a_proof() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        assert!(Accelerator::WebGpu.is_available() || Accelerator::Cuda.is_available(), "no GPU path here");
+        let graph = conv_graph("cpu-only");
+        let running = PROOFS.lock().unwrap();
+        let (sent, answer) = std::sync::mpsc::channel();
+        let opening = graph.clone();
+        std::thread::spawn(move || {
+            let opened = open_session(&opening, &BALLOON, Preference::CpuOnly, None);
+            let _ = sent.send(opened.map(|(_, selection)| selection.accelerator).map_err(|e| e.to_string()));
+        });
+        let outcome = answer.recv_timeout(std::time::Duration::from_secs(20));
+        drop(running);
+        let _ = std::fs::remove_file(graph);
+        assert_eq!(outcome, Ok(Ok(Accelerator::Cpu)), "a CPU session waited on a GPU proof");
+    }
+
+    /// `blocked_for` exempts Hayai from a failed CUDA proof whatever the proof
+    /// said, so a forced reader goes on to build on a provider that cannot even
+    /// load cuDNN or register, and the build's error turns the reader off for the
+    /// run (`run.rs:2897`). Before 46429f8's `error_on_failure` it stayed on the
+    /// CPU. Every other model moves off. `CUDA_PROBE_RUNTIME` a CUDA build of the runtime, on a
+    /// machine where the proof fails: probe-cuda.yml's runners have no card.
+    #[test]
+    #[ignore = "BUG in 46429f8: a broken CUDA turns a forced Hayai off; needs a CUDA build and no card"]
+    fn a_forced_reader_moves_off_a_cuda_that_will_not_build() {
+        let runtime = std::env::var_os("CUDA_PROBE_RUNTIME").expect("CUDA_PROBE_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).expect("the runtime loads");
+        assert!(Accelerator::Cuda.proof_failure().is_some(), "this machine passes the proof");
+        let graph = conv_graph("hayai");
+        let opened = open_session(&graph, &HAYAI, Preference::Force(Accelerator::Cuda), None);
+        let _ = std::fs::remove_file(graph);
+        let (_, selection) = opened.expect("the reader stays open on the CPU");
+        assert_eq!(selection.accelerator, Accelerator::Cpu);
+        assert_eq!(selection.declined.map(|d| d.reason_key), Some(SELF_TEST_FAILED));
+    }
+
+    /// What the runtime does with a forced provider today, for the question
+    /// whether `error_on_failure` broke one. Passes: a provider missing from
+    /// the build is refused before any builder, and the ones present register.
+    /// `RT_RUNTIME` the macOS runtime library.
+    #[test]
+    #[ignore = "needs RT_RUNTIME on macOS"]
+    fn error_on_failure_leaves_a_forced_provider_as_it_was() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        let graph = conv_graph("forced");
+        for missing in [Accelerator::Cuda, Accelerator::DirectMl, Accelerator::TensorRt] {
+            let error = open_session(&graph, &BALLOON, Preference::Force(missing), None).err().expect("refused");
+            assert!(error.to_string().contains("requested backend is unavailable"), "{missing:?}: {error}");
+        }
+        let (_, on_webgpu) = open_session(&graph, &DETECTOR, Preference::Force(Accelerator::WebGpu), None).unwrap();
+        assert_eq!(on_webgpu.accelerator, Accelerator::WebGpu);
+        let (_, on_coreml) = open_session(&graph, &LAMA, Preference::Force(Accelerator::CoreMl), None).unwrap();
+        assert_eq!(on_coreml.accelerator, Accelerator::CoreMl);
+        let _ = std::fs::remove_file(graph);
+    }
+
+    /// The proof, strict, through `open_session`'s own path on every GPU path a
+    /// test can reach here, so a false failure on a working GPU would show.
+    #[test]
+    #[ignore = "needs RT_RUNTIME"]
+    fn the_strict_proof_does_not_fail_a_working_gpu_while_the_turn_is_held_elsewhere() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        // A thread that holds the device turn and asks for a proof, and one
+        // that runs the proof: the two orders the two locks can be taken in.
+        let turn = device_turn(Accelerator::WebGpu);
+        let (sent, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sent.send(run_proof(Accelerator::WebGpu));
+        });
+        assert!(Accelerator::WebGpu.proof_failure().is_none());
+        assert!(answer.recv_timeout(std::time::Duration::from_secs(1)).is_err(), "the proof ignored the turn");
+        drop(turn);
+        let outcome = answer.recv_timeout(std::time::Duration::from_secs(60)).expect("the proof finished");
+        assert_eq!(outcome, Ok(()));
+    }
+
     /// The device list answers three ways, not two, and the third is the one
     /// that keeps this check from costing anybody a provider: a list with no
     /// CPU device in it is a list nobody produced - `ort` returns an empty

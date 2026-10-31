@@ -3410,3 +3410,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 }
+
+#[cfg(test)]
+mod gpu_proof_gaps {
+    /// The review opens the mask itself on a forced GPU (`ort-webgpu`,
+    /// `ort-cuda` above) and never asks whether that GPU failed its test run,
+    /// which `run::sam_backend` does ask, so a saved choice that a run moves to
+    /// the CPU fails the review with the provider's error instead. A failed
+    /// proof cannot be set up on macOS and the choice sits inline in the
+    /// command, so this reads the source: any fix has to ask. Replace it with a
+    /// real test once the choice is a function.
+    #[test]
+    #[ignore = "BUG in 46429f8: the local review opens SAM on a GPU that failed its proof"]
+    fn the_review_asks_whether_a_forced_sam_gpu_failed_its_proof() {
+        let source = include_str!("model_workflows.rs");
+        let (product, _) = source.split_once("mod gpu_proof_gaps").unwrap();
+        assert!(product.contains(concat!("blocked", "_for")));
+    }
+}

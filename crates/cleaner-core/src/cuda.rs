@@ -668,6 +668,82 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A machine that is ready, as `prepare` and `setup` read it: every library
+    /// the one named, and the cuDNN in `cudnn_dir`.
+    fn ready(library: &Path, cudnn_dir: &str) -> Report {
+        Report {
+            wanted: Some(12),
+            toolkits: vec![Toolkit {
+                major: 12,
+                minor: Some(9),
+                dir: PathBuf::from("/toolkit/v12.9/bin"),
+                libraries: vec![library.to_path_buf()],
+                missing: Vec::new(),
+            }],
+            cudnn: vec![Cudnn {
+                cuda_major: Some(12),
+                dir: PathBuf::from(cudnn_dir),
+                libraries: vec![library.to_path_buf()],
+                extras: Vec::new(),
+                missing: Vec::new(),
+            }],
+            gpus: vec![gpu("566.36")],
+        }
+    }
+
+    /// `prepare` latches, so an install the user fixes and rechecks is never
+    /// loaded: the proof runs again against the old libraries and fails again,
+    /// and nothing tells the user a restart is what it takes. Here the second
+    /// install's library does not exist, so loading it would be an error.
+    #[test]
+    #[ignore = "BUG in 46429f8: Check again cannot load a new install, and no restart is asked for"]
+    fn check_again_loads_the_install_it_found() {
+        let system = Path::new(if cfg!(windows) {
+            "kernel32.dll"
+        } else if cfg!(target_os = "macos") {
+            "/usr/lib/libz.1.dylib"
+        } else {
+            "libz.so.1"
+        });
+        *REPORT.lock().unwrap() = Some(ready(system, "/cudnn/v9.13/bin/12.9"));
+        prepare().expect("the first install loads");
+        *REPORT.lock().unwrap() = Some(ready(Path::new("/no/such/library"), "/cudnn/v9.23/bin/12.9"));
+        assert!(prepare().is_err(), "the second install was never loaded");
+    }
+
+    /// `setup` names the driver and not the toolkit or cuDNN, so a measurement
+    /// taken while CUDA failed stays current after the install is fixed, and
+    /// the same goes for one saved before 46429f8 (`VERSION` did not move).
+    /// Automatic keeps following its CPU winner, and only a new Measure tells.
+    /// `RT_RUNTIME` the runtime library.
+    #[test]
+    #[ignore = "BUG in 46429f8: a measurement of a broken CUDA stays in force once fixed; needs RT_RUNTIME"]
+    fn a_new_cudnn_is_a_new_setup() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        let library = Path::new("/unused");
+        *REPORT.lock().unwrap() = Some(ready(library, "/cudnn/v9.13/bin/12.9"));
+        let before = crate::measure::setup();
+        *REPORT.lock().unwrap() = Some(ready(library, "/cudnn/v9.23/bin/12.9"));
+        assert_ne!(before, crate::measure::setup());
+    }
+
+    /// `find_in` takes a known part by its fuller version where only that is on
+    /// disk, and `cudnn_extras` does not, so an unknown part with no `.so.9`
+    /// link is the very file this commit set out to load, left unloaded.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "BUG in 46429f8: a part with only its full version on disk is not an extra"]
+    fn a_cudnn_part_with_only_its_full_version_on_disk_is_loaded() {
+        let dir = scratch("extras-versioned");
+        let extra = "libcudnn_engines_tensor_ir.so.9.23.1";
+        touch(&dir, &cudnn_libraries());
+        touch(&dir, &[extra.to_owned()]);
+        let found = cudnn_in(std::slice::from_ref(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(found[0].extras, vec![dir.join(extra)]);
+    }
+
     #[test]
     fn a_cudnn_directory_says_which_cuda_it_is_for() {
         assert_eq!(cuda_major_hint(Path::new(r"C:\Program Files\NVIDIA\CUDNN\v9.8\bin\12.8")), Some(12));
