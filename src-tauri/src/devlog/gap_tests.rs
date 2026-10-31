@@ -265,12 +265,13 @@ fn pumped_while_open(bytes: &[u8]) -> (Vec<String>, Vec<u8>, io::PipeWriter) {
     let terminal_path = dir.join("terminal");
     let terminal = File::create(&terminal_path).unwrap();
     let (reader, mut writer) = io::pipe().unwrap();
-    writer.write_all(bytes).unwrap();
     let lines = Arc::new(Mutex::new(Vec::new()));
     let seen = lines.clone();
     std::thread::spawn(move || {
         pump(reader, Some(terminal), |line| seen.lock().unwrap().push(line.to_owned()));
     });
+    // A Windows pipe holds about 4 KB, so a longer write waits for the reader.
+    writer.write_all(bytes).unwrap();
     std::thread::sleep(Duration::from_millis(500));
     let lines = lines.lock().unwrap().clone();
     (lines, fs::read(terminal_path).unwrap(), writer)
