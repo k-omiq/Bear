@@ -354,23 +354,30 @@ impl Staged {
 /// sharing violation, though nothing is wrong with the write. It is tried
 /// again for a little over a second before the error stands. Elsewhere the
 /// rename is tried once: there a refusal does not go away by waiting.
-fn rename_replacing(from: &Path, to: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
-        const TRANSIENT: [i32; 3] = [5, 32, 33];
-        let mut wait = std::time::Duration::from_millis(10);
-        for _ in 0..7 {
-            match std::fs::rename(from, to) {
-                Err(error) if error.raw_os_error().is_some_and(|code| TRANSIENT.contains(&code)) => {
-                    std::thread::sleep(wait);
-                    wait *= 2;
-                }
-                other => return other,
+pub fn rename_replacing(from: &Path, to: &Path) -> std::io::Result<()> {
+    if cfg!(windows) {
+        retrying_windows_refusals(|| std::fs::rename(from, to))
+    } else {
+        std::fs::rename(from, to)
+    }
+}
+
+/// `replace`, tried again while it answers a Windows refusal that passes.
+/// Apart from the rename so that any platform can test it.
+fn retrying_windows_refusals(mut replace: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()> {
+    // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+    const TRANSIENT: [i32; 3] = [5, 32, 33];
+    let mut wait = std::time::Duration::from_millis(10);
+    for _ in 0..7 {
+        match replace() {
+            Err(error) if error.raw_os_error().is_some_and(|code| TRANSIENT.contains(&code)) => {
+                std::thread::sleep(wait);
+                wait *= 2;
             }
+            other => return other,
         }
     }
-    std::fs::rename(from, to)
+    replace()
 }
 
 impl Drop for Staged {
@@ -497,6 +504,38 @@ impl<'a> Reader<'a> {
 mod tests {
     use super::*;
     use crate::image::fixtures;
+
+    /// A refusal that passes is waited out, one that stays stands in the end,
+    /// and any other error is answered at once.
+    #[test]
+    fn a_windows_refusal_is_tried_again_and_other_errors_are_not() {
+        let refused = |code| std::io::Error::from_raw_os_error(code);
+        for code in [5, 32, 33] {
+            let mut tries = 0;
+            let answer = retrying_windows_refusals(|| {
+                tries += 1;
+                if tries < 3 { Err(refused(code)) } else { Ok(()) }
+            });
+            assert!(answer.is_ok());
+            assert_eq!(tries, 3);
+        }
+
+        let mut tries = 0;
+        let answer = retrying_windows_refusals(|| {
+            tries += 1;
+            Err(refused(32))
+        });
+        assert_eq!(answer.unwrap_err().raw_os_error(), Some(32));
+        assert_eq!(tries, 8);
+
+        let mut tries = 0;
+        let answer = retrying_windows_refusals(|| {
+            tries += 1;
+            Err(refused(2))
+        });
+        assert_eq!(answer.unwrap_err().raw_os_error(), Some(2));
+        assert_eq!(tries, 1);
+    }
 
     #[test]
     fn every_fixture_round_trips_through_a_patch_buffer() {

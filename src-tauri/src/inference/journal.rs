@@ -421,7 +421,7 @@ fn atomic_write_file(target_path: &Path, bytes: &[u8]) -> Result<(), JournalErro
         return Err(JournalError::Io(e));
     }
 
-    if let Err(e) = fs::rename(&temp_path, target_path) {
+    if let Err(e) = cleaner_core::project::buffers::rename_replacing(&temp_path, target_path) {
         let _ = fs::remove_file(&temp_path);
         return Err(JournalError::Io(e));
     }

@@ -731,9 +731,10 @@ to each journal write, it failed on macOS at 38 and 26 of 40, with `attempt_busy
 scope index lock, and passed with that lock's fix. The test now prints the notices and the phases of
 attempts not committed, so another failure says its cause. Two things stay open:
 
-- Windows has not repeated the test under load. `atomic_write_file` in the journal also has no retry
-  for a scanner holding the file, as `rename_replacing` has for chapter files. That would fail a region
-  the same way, as `journal_error`, and nothing here rules it out on that run.
+- Windows has not repeated the test under load. A scanner holding a journal file would fail a region
+  the same way, as `journal_error`, and nothing here rules that out on that run. Journal writes now
+  use `rename_replacing`, as chapter files do. A test shows its retry logic with fed error codes on any
+  platform, but a real refusal from a real scanner on Windows has not been seen and retried.
 - A journal write that still fails after a commit (a disk error, another process holding the index past
   5 seconds) leaves the patch in the chapter, the attempt at `AttachmentPending` and a failed notice in
   place of `RegionDone`. The page's `page-done` still carries the region.
