@@ -16,7 +16,7 @@
     isTextEntry,
     shortcutConflicts,
   } from '../shortcuts.js'
-  import { app, goLibrary, pushModal, isModalOpen } from '../state/app.svelte.js'
+  import { app, goLibrary, notify, pushModal, isModalOpen } from '../state/app.svelte.js'
   import { openWindow, togglePanel, toggleWindowRaised } from '../state/session.svelte.js'
   import * as editorState from '../state/editor.svelte.js'
   import {
@@ -29,7 +29,7 @@
   } from '../editor/maskactions.svelte.js'
   import { draft } from '../editor/draft.svelte.js'
   import { applySelection } from '../editor/retouch.svelte.js'
-  import { isDetected } from '../model/masks.js'
+  import { isDetected, retryWidens } from '../model/masks.js'
   import { isRegionCopy } from '../model/layers.js'
   import { cloudParts, runStep } from '../editor/cloudrun.js'
   import { screenColorPicker } from '../api/screencolor.js'
@@ -50,10 +50,7 @@
     cycleCleanScope,
     cancelRun: () => void editorState.cancelRun(),
     cleanSelectedRegion,
-    retrySelectedWider: () => {
-      const region = editorState.selectedRegion()
-      if (region && !isDetected(region)) void runRegionMenuItem('retryWider', region)
-    },
+    retrySelectedWider,
     // The Post-processing window, which follows the selection and says
     // when there is nothing selected to finish again: opened, brought to the
     // front, or closed when it is already in front.
@@ -230,38 +227,50 @@
     next.focus()
   }
 
-  let pickingColor = false
-
   /**
    * `Shift+E`: the colour picker's own eyedropper, for the active saved colour.
    * Where the platform has none (WebKitGTK) it opens that colour's picker,
    * whose square and hex field reach the same value.
+   *
+   * Not during a drag: the sampler would take the pointer from the stroke.
    */
   async function pickColor() {
-    if (pickingColor) return
+    if (draft.active) return
     const sample = screenColorPicker()
     if (!sample) {
       const swatch = document.querySelector('[data-color-switch] [aria-haspopup="dialog"]')
       if (swatch instanceof HTMLElement && swatch.getAttribute('aria-expanded') !== 'true') swatch.click()
       return
     }
-    pickingColor = true
     try {
       const hex = await sample()
       if (hex) editorState.setActiveColor(hex)
     } catch {
       /* the sampler failed to open; the colour is unchanged */
-    } finally {
-      pickingColor = false
     }
   }
 
-  /** `B`: the selected detection cleaned, or the selected cleaned region tried again. */
+  /**
+   * `B`: the selected detection cleaned, or the selected cleaned region tried
+   * again. Not during a drag: the render's undo step would land before the
+   * stroke's.
+   */
   function cleanSelectedRegion() {
     const region = editorState.selectedRegion()
-    if (!region) return
+    if (!region || draft.active) return
     if (isDetected(region)) void runMaskAction('cleanDetected', region)
     else void runRegionMenuItem('retry', region)
+  }
+
+  /**
+   * `Shift+B`: the selected region tried again, wider. The Layers row hides or
+   * disables this on a layer it cannot widen, so the key says why it did nothing.
+   */
+  function retrySelectedWider() {
+    const region = editorState.selectedRegion()
+    if (!region || draft.active || isDetected(region)) return
+    if (retryWidens(region.mask ?? null)) void runRegionMenuItem('retryWider', region)
+    else notify({ key: 'notice.mask.widerOff', tone: 'warn' })
   }
 
   /** @param {KeyboardEvent} event */

@@ -2870,6 +2870,7 @@ export const es = {
       rerunSimpler: 'Región repetida un nivel más simple: {rungKey}.',
       rerunAgain: 'Región limpiada de nuevo: {rungKey}.',
       rerunWider: 'Región limpiada de nuevo sobre un área mayor: {rungKey}.',
+      widerOff: 'Reintentar más amplio no funciona en esta capa. Funciona en una capa limpiada en este equipo, y no en un trazo de pintura o clon, un resultado de la nube ni un parche con forma de texto.',
       rerunEngine: 'Región limpiada de nuevo con {rungKey}.',
       fillMode: 'El modo de relleno ahora es {fillModeKey}.',
       reopened: 'Máscara conservada, reabierta en {toolKey}.',

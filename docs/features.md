@@ -383,7 +383,7 @@ on the page as handles, and the selection shows a live preview of the gradient w
   and the page is left as it was; use the Patch tool there.
 - **Stops.** The swatch on the bar opens the colour and opacity stops: add, move or remove each one, pick a colour
   stop's colour with the picker or from the page with its eyedropper. Two presets fill them in: Foreground to
-  background and Foreground to transparent, where foreground is the Brush's colour.
+  background and Foreground to transparent, where foreground and background are the two saved colours on the tool rail.
 - **Reverse** flips the gradient. **Dither**, on by default, adds a little noise so a slow ramp shows no bands.
   **Opacity** is the layer's, and **Feather**, up to 20 px, softens the selection's edge.
 - **Match surroundings** reads the ring of page around the selection and sets the type, the line and the stops to

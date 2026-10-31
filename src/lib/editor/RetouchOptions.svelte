@@ -1,5 +1,6 @@
 <script>
   import { editor, setToolParam } from '../state/editor.svelte.js'
+  import { session } from '../state/session.svelte.js'
   import { Button, ColorPicker, IconButton, Popover, RangeField } from '../ui/index.js'
   import { t } from '../i18n/index.js'
   import { isGradientLayer } from '../model/layers.js'
@@ -81,7 +82,7 @@
 
   /** @param {'foregroundToBackground'|'foregroundToTransparent'} preset */
   function usePreset(preset) {
-    const stops = presetStops(preset, String(editor.toolParams.brush?.color ?? '#000000'))
+    const stops = presetStops(preset, session.colorPair.active, session.colorPair.other)
     set('colors', stops.colors)
     set('opacities', stops.opacities)
   }

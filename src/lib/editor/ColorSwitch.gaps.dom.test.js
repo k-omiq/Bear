@@ -1,7 +1,6 @@
 /**
  * Gaps found by trying to break the saved colour pair (Shift+X, Shift+E) and
- * Shift+B. Each test states the behaviour that should hold and fails today, so
- * each is skipped with its reason in the title. Remove the `.skip` with the fix.
+ * Shift+B. Each test failed before its fix.
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -77,14 +76,14 @@ describe('a key pressed during a drag', () => {
     draft.active = /** @type {any} */ ({ kind: 'stroke', tool: 'brush', pageId: 'p1', points: [{ x: 1, y: 1 }] })
   })
 
-  it.skip('BUG: Shift+E opens the sampler over a stroke still being drawn, which takes the pointer away from it', async () => {
+  it('Shift+E opens no sampler over a stroke still being drawn, which would take the pointer from it', async () => {
     const open = stubSampler()
     press('E', { shiftKey: true })
     await settled()
     expect(open).not.toHaveBeenCalled()
   })
 
-  it.skip('BUG: Shift+B starts a re-render during a stroke, and its undo step lands before the stroke\'s', () => {
+  it('Shift+B starts no re-render during a stroke, whose undo step would land before the stroke\'s', () => {
     state.region = { id: 'r1', outcome: 'cleaned', mask: { id: 'm1', provenance: { engine: 'lama' } } }
     press('B', { shiftKey: true })
     expect(runRegionMenuItem).not.toHaveBeenCalled()
@@ -92,8 +91,11 @@ describe('a key pressed during a drag', () => {
 })
 
 describe('Shift+E', () => {
-  it.skip('BUG: opens a second sampler while the picker\'s own eyedropper is open, as the two guards are separate', async () => {
-    const open = stubSampler()
+  it('opens no second sampler while the picker\'s own eyedropper is open', async () => {
+    /** @type {(value: {sRGBHex: string}) => void} */
+    let finish = () => {}
+    const open = vi.fn(() => new Promise((resolve) => { finish = resolve }))
+    vi.stubGlobal('EyeDropper', class { open = open })
     render(KeyboardLayer)
     render(ToolRail)
     await fireEvent.click(activeSwatch())
@@ -102,11 +104,13 @@ describe('Shift+E', () => {
     press('E', { shiftKey: true })
     await settled()
     expect(open).toHaveBeenCalledTimes(1)
+    finish({ sRGBHex: '#ff8800' })
+    await vi.waitFor(() => expect(session.colorPair.active).toBe('#ff8800'))
   })
 })
 
 describe('Shift+B on a layer it cannot widen', () => {
-  it.skip('BUG: does nothing and says nothing, where the Layers row says why it is off', async () => {
+  it('says why it did nothing, as the Layers row does', async () => {
     render(KeyboardLayer)
     state.region = { id: 'r1', outcome: 'cleaned', mask: { id: 'm1', provenance: { engine: 'paint' } } }
     press('B', { shiftKey: true })
@@ -116,7 +120,7 @@ describe('Shift+B on a layer it cannot widen', () => {
 })
 
 describe('the other colours in the editor', () => {
-  it.skip('BUG: the Gradient\'s Foreground to background ignores the saved other colour and picks black or white', async () => {
+  it('the Gradient\'s Foreground to background runs from the active saved colour to the other', async () => {
     session.colorPair = { active: '#ff0000', other: '#00ff00' }
     setActiveColor('#ff0000')
     const { colors, kind } = editor.toolParams.gradient
@@ -138,25 +142,25 @@ describe('what the swatches show and say', () => {
     render(ToolRail)
   })
 
-  it.skip('BUG: the front swatch draws a colour rounded through HSB, not the one the tools paint with', async () => {
+  it('the front swatch draws the colour the tools paint with, not one rounded through HSB', async () => {
     setActiveColor('#123456')
     await settled()
     expect(activeSwatch().style.backgroundColor).toBe('rgb(18, 52, 86)')
   })
 
-  it.skip('BUG: neither swatch tells a screen reader which colour it holds', async () => {
+  it('both swatches tell a screen reader which colour they hold', async () => {
     session.colorPair = { active: '#ff0000', other: '#00ff00' }
     await settled()
     expect(activeSwatch().getAttribute('aria-label')).toContain('#ff0000')
     expect(otherSwatch().getAttribute('aria-label')).toContain('#00ff00')
   })
 
-  it.skip('BUG: nothing on the front swatch names Shift+E, by tooltip or to a screen reader', () => {
+  it('the front swatch names Shift+E, by tooltip and to a screen reader', () => {
     expect(activeSwatch().getAttribute('aria-keyshortcuts')).toBe('Shift+E')
     expect(activeSwatch().title).toContain('Shift+E')
   })
 
-  it.skip('BUG: a rebound swap key on a Mac reaches aria-keyshortcuts as a glyph, where ARIA wants Meta', async () => {
+  it('a rebound swap key on a Mac reaches aria-keyshortcuts as Meta, not as a glyph', async () => {
     cleanup()
     vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel')
     setShortcutOverrides({ 'tool.swapColors': { key: 'x', shift: true, accel: true } })
@@ -166,7 +170,7 @@ describe('what the swatches show and say', () => {
 })
 
 describe('a saved record', () => {
-  it.skip('BUG: a binding the user saved on Shift+E before this key existed stops working, with no word about it', () => {
+  it('a binding the user saved on Shift+E before this key existed keeps working', () => {
     setShortcutOverrides({
       'app.export': { key: 'F2', shift: false, accel: false },
       'panel.tools': { key: 'e', shift: true, accel: false },
@@ -174,9 +178,11 @@ describe('a saved record', () => {
     expect(matchShortcut({ key: 'E', shiftKey: true }, { scope: 'editor' })?.id).toBe('panel.tools')
   })
 
-  it.skip('BUG: a pair with one colour lost can come back as the same colour twice, and then a swap does nothing', () => {
+  it('a pair with one colour lost does not come back as the same colour twice, so a swap still works', () => {
     const { active, other } = sanitizeSession({ colorPair: { active: '#000000', other: 'lost' } }).colorPair
     expect(active).toBe('#000000')
     expect(other).not.toBe(active)
+    expect(sanitizeSession({ colorPair: { active: 'lost', other: '#ffffff' } }).colorPair).toEqual({ active: '#000000', other: '#ffffff' })
+    expect(sanitizeSession({ colorPair: { active: '#ff0000', other: '#ff0000' } }).colorPair).toEqual({ active: '#ff0000', other: '#ff0000' })
   })
 })

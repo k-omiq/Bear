@@ -2870,6 +2870,7 @@ export const fr = {
       rerunSimpler: 'Zone relancée un cran plus simple : {rungKey}.',
       rerunAgain: 'Zone nettoyée de nouveau : {rungKey}.',
       rerunWider: 'Zone nettoyée de nouveau sur une surface plus grande : {rungKey}.',
+      widerOff: 'Réessayer plus large ne fonctionne pas sur ce calque. Il fonctionne sur un calque nettoyé sur cet ordinateur, et non sur un trait de peinture ou de clonage, un résultat du cloud ou un patch en forme de texte.',
       rerunEngine: 'Zone nettoyée de nouveau avec {rungKey}.',
       fillMode: 'Le mode de remplissage est maintenant {fillModeKey}.',
       reopened: 'Masque conservé, rouvert dans {toolKey}.',

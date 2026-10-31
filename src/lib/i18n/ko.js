@@ -2814,6 +2814,7 @@ export const ko = {
       rerunSimpler: '한 단계 더 단순하게 영역을 다시 실행했습니다: {rungKey}.',
       rerunAgain: '영역을 다시 클린했습니다: {rungKey}.',
       rerunWider: '더 넓은 범위로 영역을 다시 클린했습니다: {rungKey}.',
+      widerOff: '더 넓게 다시 시도는 이 레이어에서 사용할 수 없습니다. 이 컴퓨터에서 클린한 레이어에서 사용할 수 있으며, 페인트나 복제 획, 클라우드 결과, 글자 모양 패치에서는 사용할 수 없습니다.',
       rerunEngine: '{rungKey}(으)로 영역을 다시 클린했습니다.',
       fillMode: '채우기 모드가 {fillModeKey}(으)로 바뀌었습니다.',
       reopened: '마스크를 유지하고 {toolKey}에서 다시 열었습니다.',

@@ -3729,6 +3729,7 @@ export const en = {
       // is a record of what ran.
       rerunAgain: 'Region cleaned again: {rungKey}.',
       rerunWider: 'Region cleaned again over a larger area: {rungKey}.',
+      widerOff: 'Try again wider does not work on this layer. It works on a layer cleaned on this computer, and not on a paint or clone stroke, a cloud result or a text-shaped patch.',
       rerunEngine: 'Region cleaned again with {rungKey}.',
       fillMode: 'Fill mode is now {fillModeKey}.',
       reopened: 'Mask kept, reopened in {toolKey}.',

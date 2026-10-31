@@ -2818,6 +2818,7 @@ export const ja = {
       rerunSimpler: '1 段階シンプルな方法で領域を再実行しました：{rungKey}。',
       rerunAgain: '領域をもう一度クリーンしました：{rungKey}。',
       rerunWider: '範囲を広げて領域をもう一度クリーンしました：{rungKey}。',
+      widerOff: '範囲を広げて再試行は、このレイヤーでは使えません。このコンピューターでクリーンしたレイヤーで使えます。ペイントやクローンのストローク、クラウドの結果、文字の形のパッチでは使えません。',
       rerunEngine: '{rungKey} で領域をもう一度クリーンしました。',
       fillMode: '塗りモードを {fillModeKey} にしました。',
       reopened: 'マスクを残し、{toolKey} で開き直しました。',

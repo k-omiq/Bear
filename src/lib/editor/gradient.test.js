@@ -140,6 +140,8 @@ describe('the stops', () => {
   it('builds the two presets from the brush colour', () => {
     expect(presetStops('foregroundToBackground', '#202020').colors).toEqual([{ at: 0, color: '#202020' }, { at: 1, color: '#ffffff' }])
     expect(presetStops('foregroundToBackground', '#f0f0f0').colors[1].color).toBe('#000000')
+    expect(presetStops('foregroundToBackground', '#ff0000', '#00ff00').colors[1].color).toBe('#00ff00')
+    expect(presetStops('foregroundToBackground', '#202020', '#202020').colors[1].color).toBe('#ffffff')
     expect(presetStops('foregroundToTransparent', '#202020')).toEqual({
       colors: [{ at: 0, color: '#202020' }, { at: 1, color: '#202020' }],
       opacities: [{ at: 0, opacity: 100 }, { at: 1, opacity: 0 }],

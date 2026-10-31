@@ -3747,3 +3747,10 @@ Shift+E are measured by DOM tests and in the Vite mock, with a stubbed `EyeDropp
 cannot finish the real one. Not measured: Shift+E in the shipped WKWebView, where it opens AppKit's
 sampler through `pick_screen_color`, and in WebView2. On Linux, where WebKitGTK has no sampler, the
 key opens the active colour's picker instead, and picking from the page was not built for it.
+The mock also ran in an invisible WKWebView with a stubbed `invoke`: `EyeDropper` is undefined there,
+the native route is chosen, and an answer, a cancel and an error all behave. Still not measured there:
+the real `NSColorSampler` (only one sampler is asked for now, the picker's button and Shift+E share
+one guard, but nothing shows what AppKit does with a second one), and real clicks and focus in WebKit.
+WebKit may also skip buttons on Tab by default, which would take the swatches and every other button
+off the keyboard. Other `aria-keyshortcuts` values still come from `shortcutHint`, so a rebound accel
+key reaches them as a glyph; only the two swatches use `shortcutAria` so far.

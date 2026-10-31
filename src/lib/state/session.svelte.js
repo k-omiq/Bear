@@ -120,6 +120,20 @@ export function maskColorOr(value, fallback) {
 }
 
 /**
+ * A stored colour pair. A colour lost from the record takes the default that
+ * differs from the one kept, or a swap would do nothing.
+ *
+ * @param {any} stored
+ * @param {{active: string, other: string}} fallback
+ * @returns {{active: string, other: string}}
+ */
+function colorPairOr(stored, fallback) {
+  const other = maskColorOr(stored?.other, null)
+  const active = maskColorOr(stored?.active, other === fallback.active ? fallback.other : fallback.active)
+  return { active, other: other ?? (active === fallback.other ? fallback.active : fallback.other) }
+}
+
+/**
  * A stored mask opacity as a whole percent, clamped into range like every
  * other stored number, or `fallback` when it is not a number at all.
  *
@@ -414,10 +428,7 @@ export function sanitizeSession(raw) {
     // only the default written out is dropped here rather than kept as a
     // binding nothing can run.
     shortcuts: sanitizeShortcutOverrides(record.shortcuts),
-    colorPair: {
-      active: maskColorOr(/** @type {any} */ (record.colorPair)?.active, base.colorPair.active),
-      other: maskColorOr(/** @type {any} */ (record.colorPair)?.other, base.colorPair.other),
-    },
+    colorPair: colorPairOr(record.colorPair, base.colorPair),
     // One colour used to cover every mask, under `maskColor`. It stays the
     // speech bubble colour, so a record saved before the split keeps its pick
     // there, and the outside colour starts at its default.

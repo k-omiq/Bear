@@ -210,19 +210,21 @@ export function snapped(from, to, width, height, step = 15) {
 }
 
 /**
- * The two presets. Foreground is the colour the Brush paints with, which is
- * the one paint colour the app keeps; background is white beside a dark
- * foreground and black beside a light one, so the pair is never one colour
- * twice.
+ * The two presets. Foreground is the active saved colour, which the Brush
+ * paints with, and background is the other saved colour. Where those are one
+ * colour, background is white beside a dark foreground and black beside a light
+ * one, so the pair is never one colour twice.
  *
  * @param {'foregroundToBackground'|'foregroundToTransparent'} preset
  * @param {string} [foreground]
+ * @param {string} [saved] - the other saved colour
  * @returns {{colors: ColorStop[], opacities: OpacityStop[]}}
  */
-export function presetStops(preset, foreground = '#000000') {
+export function presetStops(preset, foreground = '#000000', saved = foreground) {
   const fg = rgbToHex(...rgbOf(foreground))
   const [r, g, b] = rgbOf(fg)
-  const background = 0.299 * r + 0.587 * g + 0.114 * b < 128 ? '#ffffff' : '#000000'
+  const other = rgbToHex(...rgbOf(saved))
+  const background = other !== fg ? other : 0.299 * r + 0.587 * g + 0.114 * b < 128 ? '#ffffff' : '#000000'
   if (preset === 'foregroundToTransparent') {
     return {
       colors: [{ at: 0, color: fg }, { at: 1, color: fg }],
