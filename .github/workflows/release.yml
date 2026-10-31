@@ -421,7 +421,12 @@ jobs:
           Write-Host "app exit code: $($app.ExitCode)"
           if (-not (Test-Path $report)) { throw 'The app wrote no report' }
           Get-Content $report
-          if ($app.ExitCode -ne 0) { throw "The launch check failed with exit code $($app.ExitCode)" }
+          if ($app.ExitCode -ne 0) {
+            # A crash names its module here, and nowhere else on a runner.
+            Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-30); Id = 1000, 1001, 1026 } -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host $_.Message }
+            throw "The launch check failed with exit code $($app.ExitCode)"
+          }
       - uses: actions/upload-artifact@v4
         if: always() && startsWith(matrix.platform, 'windows-')
         with:
