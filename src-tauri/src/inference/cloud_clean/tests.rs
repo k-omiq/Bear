@@ -2644,3 +2644,26 @@ fn a_stream_is_consented_with_a_cap_and_never_spent_as_a_plan() {
     assert_eq!(consume_stream_grant(&grant.grant_id, &request(profile, &recipe())).unwrap_err(),
         "cloud_clean_grant_mismatch: stream");
 }
+
+/// FLUX 3 v2 edits a crop a second time when the lettering stays (5 of 19 real crops), and
+/// that second edit bills GPU time, so the high end of the estimate counts it. A marker
+/// request has its own check and no second edit.
+#[test]
+fn the_high_estimate_counts_the_second_flux3_edit() {
+    let flux3 = RenderRecipe::new("mc-flux3-klein-edit-v2", "3.0.0", "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit",
+        "bf0af016a936bfe422eec96557aee058c3a6174e", false);
+    let job = Estimate::job(Rect::new(0, 0, 900, 700), RenderRate::of(&flux3));
+    assert!(job.retry_gpu_seconds > 0.0, "{job:?}");
+    let marked = RenderRecipe { flux3_generation: Some(cleaner_core::engines::render::Flux3Generation { marker: true, ..Default::default() }), ..flux3 };
+    assert_eq!(Estimate::job(Rect::new(0, 0, 900, 700), RenderRate::of(&marked)).retry_gpu_seconds, 0.0);
+}
+
+/// A profile still on FLUX 3 v1 after the app moved to v2 is told to update, as Qwen's old
+/// recipe is, and no plan is made under it.
+#[test]
+fn an_outdated_flux3_profile_is_told_to_update() {
+    let old = RenderRecipe::new("mc-flux3-klein-edit-v1", "3.0.0", "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit",
+        "bf0af016a936bfe422eec96557aee058c3a6174e", false);
+    let gateway = Gateway { recipe: old, ..Gateway::priced() };
+    assert_eq!(deployed_recipe(&gateway, None, Some(1280)).unwrap_err(), "flux3_update_required");
+}

@@ -118,9 +118,27 @@ pub const GUIDED_RECIPES: [(&str, &str); 5] = [
     ("mc-flux3-klein-bf16-edit-v2", "unsloth/flux-3-image-klein"),
 ];
 
+/// FLUX 3 before v2 (beta.11 and earlier). No plan is made under one
+/// ([`is_retired_recipe`]), but attempts journalled under it must still read, and
+/// they name guidance, a working size and a generation as v2's do. Not in
+/// [`GUIDED_RECIPES`] or [`SIZED_RECIPES`], which list what a worker serves now.
+pub const RETIRED_RECIPES: [(&str, &str); 2] = [
+    ("mc-flux3-klein-edit-v1", "OzzyGT/Flux_3_Image_Klein"),
+    ("mc-flux3-klein-bf16-edit-v1", "unsloth/flux-3-image-klein"),
+];
+
+/// Whether this recipe's deployment predates the app and must be updated first.
+pub fn is_retired_recipe(recipe_id: &str) -> bool {
+    RETIRED_RECIPES.iter().any(|(id, _)| recipe_id == *id)
+}
+
+fn listed(recipes: &[(&str, &str)], recipe_id: &str, model_id: &str) -> bool {
+    recipes.iter().any(|(id, model)| recipe_id == *id && model_id.starts_with(model))
+}
+
 /// Whether the worker for this recipe and model reads `qwen_edit`.
 pub fn takes_guidance(recipe_id: &str, model_id: &str) -> bool {
-    GUIDED_RECIPES.iter().any(|(id, model)| recipe_id == *id && model_id.starts_with(model))
+    listed(&GUIDED_RECIPES, recipe_id, model_id) || listed(&RETIRED_RECIPES, recipe_id, model_id)
 }
 
 /// The recipes whose worker edits at a working size the request may name, each
@@ -139,7 +157,7 @@ pub const WORK_LONG_SIDES: [u32; 3] = [768, 1024, 1280];
 
 /// Whether the worker for this recipe and model reads `work_long_side`.
 pub fn takes_work_size(recipe_id: &str, model_id: &str) -> bool {
-    SIZED_RECIPES.iter().any(|(id, model)| recipe_id == *id && model_id.starts_with(model))
+    listed(&SIZED_RECIPES, recipe_id, model_id) || listed(&RETIRED_RECIPES, recipe_id, model_id)
 }
 
 /// How a FLUX 3 worker builds its edit, part by part this app's way or Manga
@@ -219,7 +237,8 @@ impl RenderRecipe {
         // deploy/cloud/common/manifest.py PINNED_SAMPLING: the worker refuses other steps.
         match self.recipe_id.as_str() {
             "mc-qwen-image-edit-2511-v4" => sampling.steps = 8,
-            "mc-flux3-klein-edit-v2" | "mc-flux3-klein-bf16-edit-v2" => sampling.steps = 16,
+            "mc-flux3-klein-edit-v2" | "mc-flux3-klein-bf16-edit-v2"
+            | "mc-flux3-klein-edit-v1" | "mc-flux3-klein-bf16-edit-v1" => sampling.steps = 16,
             _ => {}
         }
         sampling
@@ -2675,6 +2694,18 @@ mod tests {
             assert_eq!(finished.matched.as_ref().map(|report| report.choice), Some(choice), "{}", scene.name);
             assert!(residual(&scene, &finished) <= 4, "{}: residual {}", scene.name, residual(&scene, &finished));
             assert_eq!(finished.mask, aligned.mask, "{}: written through the same mask", scene.name);
+        }
+    }
+
+    /// A profile deployed before beta.12 still serves `mc-flux3-klein-edit-v1`, which pins
+    /// 16 steps. 2f75dd0 renamed the arms in `sampling`, so the new app sends that worker
+    /// Klein's 4 steps and the worker refuses every job (`sampling_mismatch`).
+    #[test]
+    fn a_flux3_v1_worker_is_still_sent_its_16_steps() {
+        for (id, model) in [("mc-flux3-klein-edit-v1", "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit"),
+                            ("mc-flux3-klein-bf16-edit-v1", "unsloth/flux-3-image-klein")] {
+            let recipe = RenderRecipe::new(id, "3.0.0", model, "bf0af016a936bfe422eec96557aee058c3a6174e", false);
+            assert_eq!(recipe.sampling().steps, 16, "{id}");
         }
     }
 }

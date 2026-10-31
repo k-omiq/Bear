@@ -82,7 +82,7 @@ const RENDER_CODES = ['cloud_disabled', 'cloud_run_profile_changed', 'target_inv
   'region_changed', 'region_unsupported', 'attempt_busy', 'attempt_exists', 'page_busy', 'journal_error',
   'journal_unavailable', 'recovery_required', 'provider_paused', 'project_error', 'config_unreadable',
   'invalid_request', 'result_invalid', 'gateway_protocol', 'gateway_unauthorized', 'gateway_error',
-  'gateway_unreachable', 'submission_unknown', 'edit_not_applied', 'marker_remained', 'worker_outdated','remote_failed', 'weights_unavailable',
+  'gateway_unreachable', 'submission_unknown', 'edit_not_applied', 'marker_remained', 'worker_outdated', 'qwen_update_required', 'flux3_update_required', 'remote_failed', 'weights_unavailable',
   'remote_cancelled', 'cancelled', 'poll_timeout']
 
 /** A stop between two batches of a cloud clean: never the end of one render. */

@@ -197,6 +197,10 @@ const QWEN_GRID: f64 = 32.0;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct RenderRate {
     qwen: bool,
+    /// Renders one job can run after its first: Qwen's two more seeds, FLUX 3
+    /// v2's second edit from a LaMa fill. A marker request has its own check
+    /// and no second edit.
+    retries: u8,
     /// The long side a smaller crop is edited at: the recipe's
     /// `work_long_side`, else [`WORK_LONG_SIDE`].
     work_long_side: u32,
@@ -224,25 +228,26 @@ impl RenderRate {
     pub(crate) fn of(recipe: &RenderRecipe) -> Self {
         let work_long_side = recipe.work_long_side.unwrap_or(WORK_LONG_SIDE);
         let megapixel = recipe.flux3_generation.is_some_and(|g| g.megapixel_size);
+        let flux3_retries = u8::from(!recipe.flux3_generation.is_some_and(|g| g.marker));
         if recipe.model_id.starts_with(QWEN_MODEL_PREFIX) {
             // Eight steps: a linear estimate from the measured four-step rate.
-            return Self { qwen: true, work_long_side, megapixel, seconds_per_work_megapixel: 14.0, cold_start_seconds: 90.0,
+            return Self { qwen: true, retries: 2, work_long_side, megapixel, seconds_per_work_megapixel: 14.0, cold_start_seconds: 90.0,
                 memory_gib: (56.0, 32.0) };
         }
         if recipe.model_id.starts_with(FLUX3_MODEL_PREFIX) {
             // Sixteen steps on an L40S, 17 real crops (2026-10-26): 11.4 s per working
             // megapixel overall, 11.8 at most.
-            return Self { qwen: false, work_long_side, megapixel, seconds_per_work_megapixel: 12.0,
+            return Self { qwen: false, retries: flux3_retries, work_long_side, megapixel, seconds_per_work_megapixel: 12.0,
                 cold_start_seconds: COLD_START_SECONDS, memory_gib: (24.0, 24.0) };
         }
         if recipe.model_id.starts_with(FLUX3_BF16_MODEL_PREFIX) {
             // Bench 5 on an L40S (2026-10-26): 20.1 s for a crop worked at 1280 by 1280,
             // 12.3 s per working megapixel; 5.6 s at 768, 9.5. The container is 40 GiB.
-            return Self { qwen: false, work_long_side, megapixel, seconds_per_work_megapixel: 12.5,
+            return Self { qwen: false, retries: flux3_retries, work_long_side, megapixel, seconds_per_work_megapixel: 12.5,
                 cold_start_seconds: COLD_START_SECONDS, memory_gib: (40.0, 40.0) };
         }
         let memory_gib = if recipe.model_id.contains("9B") { (48.0, 24.0) } else { (19.0, 24.0) };
-        Self { qwen: false, work_long_side, megapixel, seconds_per_work_megapixel: SECONDS_PER_WORK_MEGAPIXEL,
+        Self { qwen: false, retries: 0, work_long_side, megapixel, seconds_per_work_megapixel: SECONDS_PER_WORK_MEGAPIXEL,
             cold_start_seconds: COLD_START_SECONDS, memory_gib }
     }
 
@@ -614,8 +619,8 @@ impl Estimate {
             crop_pixels: u64::from(crop.w) * u64::from(crop.h),
             work_pixels: work,
             gpu_seconds: JOB_OVERHEAD_SECONDS + render_seconds,
-            // Qwen can try two more seeds. High includes all three renders.
-            retry_gpu_seconds: if rate.qwen { 2.0 * render_seconds } else { 0.0 },
+            // High includes every render a job can run.
+            retry_gpu_seconds: f64::from(rate.retries) * render_seconds,
             cold_start_seconds: 0.0,
         }
     }
@@ -942,6 +947,7 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
 fn deployed_recipe<G: CleanGateway + ?Sized>(gateway: &G, qwen_edit: Option<&cleaner_core::engines::render::QwenEdit>,
     work_long_side: Option<u32>) -> Result<RenderRecipe, String> {
     let mut recipe = gateway.recipe()?;
+    if cleaner_core::engines::render::is_retired_recipe(&recipe.recipe_id) { return Err("flux3_update_required".into()); }
     apply_work_long_side(&mut recipe, work_long_side);
     if recipe.takes_guidance() {
         recipe.qwen_edit = Some(qwen_edit.cloned().unwrap_or(cleaner_core::engines::render::QwenEdit {

@@ -7,7 +7,7 @@ export const QWEN_RECIPE = 'mc-qwen-image-edit-2511-v4'
 export const isQwen = (modelId) => typeof modelId === 'string' && modelId.startsWith('Disty0/Qwen-Image-Edit')
 
 /** The recipes whose worker reads guidance; render.rs GUIDED_RECIPES is the same set. */
-export const GUIDED_RECIPES = [QWEN_RECIPE, 'mc-flux2-klein-inpaint-v2', 'mc-flux2-klein-9b-inpaint-v2', 'mc-flux3-klein-edit-v2']
+export const GUIDED_RECIPES = [QWEN_RECIPE, 'mc-flux2-klein-inpaint-v2', 'mc-flux2-klein-9b-inpaint-v2', 'mc-flux3-klein-edit-v2', 'mc-flux3-klein-bf16-edit-v2']
 /** @param {any} model @returns {boolean} */
 export const takesGuidance = (model) => GUIDED_RECIPES.includes(model?.pinnedRecipeId)
 

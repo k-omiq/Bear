@@ -149,6 +149,9 @@ pub struct Client {
     /// hand another region to, and the region after it would be a second
     /// chance to take the machine.
     exhausted: bool,
+    /// Latched when a request got no answer at all: the child was killed, or
+    /// it is stuck past the deadline. It is not given another region.
+    gone: std::cell::Cell<bool>,
     opened: bool,
 }
 
@@ -162,6 +165,7 @@ impl Client {
             render_timeout: RENDER_TIMEOUT,
             floor: Floor::default(),
             exhausted: false,
+            gone: std::cell::Cell::new(false),
             opened: false,
         }
     }
@@ -189,6 +193,11 @@ impl Client {
     /// Whether the peak has already passed the budget. See `exhausted`.
     pub fn is_exhausted(&self) -> bool {
         self.exhausted
+    }
+
+    /// Whether a request has gone unanswered. See `gone`.
+    pub fn is_gone(&self) -> bool {
+        self.gone.get()
     }
 
     /// Override the per-region deadline. For the tests, and for a settings
@@ -312,7 +321,11 @@ impl Client {
     ) -> Result<Vec<u8>, Error> {
         let token = (path != "/v1/health").then_some(self.token.as_str());
         let reply = http::request(self.addr, method, path, token, body, timeout)
-            .map_err(|e| Error::Run(format!("the sidecar at {} did not answer: {e}", self.addr)))?;
+            .map_err(|e| {
+                // The health poll waits out a child still starting.
+                if path != "/v1/health" { self.gone.set(true); }
+                Error::Run(format!("the sidecar at {} did not answer: {e}", self.addr))
+            })?;
         if (200..300).contains(&reply.status) {
             return Ok(reply.body);
         }
@@ -491,10 +504,14 @@ impl Sidecar {
     /// region - so holding it between two edits would be holding gigabytes that
     /// can no longer do any work.
     ///
+    /// **So is one that stopped answering** ([`Client::is_gone`]): parked, the
+    /// next click would take the dead child back.
+    ///
     /// A sidecar this process did not spawn ([`Sidecar::attach`]) has no lease
-    /// and is never spent: it is not ours to shut down.
+    /// and is never spent by the clock: it is not ours to shut down.
     pub fn spent(&self) -> bool {
         self.client.is_exhausted()
+            || self.client.is_gone()
             || self.lease.as_ref().is_some_and(crate::registry::Lease::spent)
     }
 

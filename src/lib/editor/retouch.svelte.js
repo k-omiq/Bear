@@ -99,6 +99,24 @@ function where(held) {
 }
 
 /**
+ * `where`, with the selection moved by page percent.
+ *
+ * @param {import('./draft.svelte.js').HeldSelection} held
+ * @param {{x: number, y: number}} moved
+ */
+function movedWhere(held, moved) {
+  const place = where(held)
+  if (!moved.x && !moved.y) return place
+  /** @param {{x: number, y: number}} point */
+  const shift = (point) => ({ ...point, x: point.x + moved.x, y: point.y + moved.y })
+  return {
+    ...place,
+    ...(place.painted ? { painted: { ...place.painted, points: place.painted.points.map(shift) } } : {}),
+    ...(place.stroke ? { stroke: { ...place.stroke, points: place.stroke.points.map(shift) } } : {}),
+  }
+}
+
+/**
  * Ask for the held Patch selection's source and put the ghost there. A drag
  * that landed meanwhile wins; a selection replaced meanwhile is left alone.
  * Where no source fits, the ghost starts one selection-width to the side and
@@ -260,11 +278,14 @@ async function createLayer(held, params) {
 
 /**
  * Match surroundings: the type, the line and the stops fitted to the ring
- * around the held selection, drawn at once.
+ * around the held selection, drawn at once. A line dragged meanwhile wins.
  *
+ * @param {{x: number, y: number}} [moved] where the layer now sits, in page
+ *   percent from where the selection was drawn: the fit reads the ring there,
+ *   and the line stays in the selection's own place.
  * @returns {Promise<boolean>} whether a fit arrived
  */
-export async function matchSurroundings() {
+export async function matchSurroundings(moved = { x: 0, y: 0 }) {
   const held = draft.selection
   if (!held || held.tool !== 'gradient' || held.chapterId === null || held.pageIndex === null) {
     notify({ key: 'retouch.notice.selectFirst', tone: 'info' })
@@ -272,8 +293,9 @@ export async function matchSurroundings() {
   }
   /** @type {any} */
   let answer = null
+  const line = held.start
   try {
-    answer = await getBackend().fitGradient(where(held))
+    answer = await getBackend().fitGradient(movedWhere(held, moved))
   } catch (error) {
     console.error('the gradient could not be fitted', error)
   }
@@ -287,7 +309,9 @@ export async function matchSurroundings() {
   setToolParam('gradient', 'colors', params.colors)
   setToolParam('gradient', 'opacities', params.opacities)
   setToolParam('gradient', 'reverse', false)
-  setLine(start, end)
+  if (held.start === line) {
+    setLine({ x: start.x - moved.x, y: start.y - moved.y }, { x: end.x - moved.x, y: end.y - moved.y })
+  }
   return true
 }
 
@@ -301,14 +325,12 @@ export async function matchSurroundings() {
  * @returns {boolean} whether it could be reopened
  */
 export function reopenGradient(region) {
-  const snapshot = region?.mask?.provenance?.params_snapshot
-  if (snapshot?.mode !== 'gradient' || (!snapshot.gradient && snapshot.auto !== true)) return false
-  const located = locateRegion(region.id)
-  const page = editor.chapter?.pages.find((candidate) => candidate.index === located?.pageIndex)
-  if (!located || !page || (!snapshot.painted && !snapshot.stroke)) return false
+  const page = reopenablePage(region)
+  if (!page) return false
+  const snapshot = region.mask.provenance.params_snapshot
   const recorded = snapshot.gradient ? fromWire(snapshot.gradient) : null
   if (recorded) for (const [key, value] of Object.entries(recorded.params)) setToolParam('gradient', key, value)
-  else if (editor.toolParams.gradient?.kind === 'auto') setToolParam('gradient', 'kind', 'linear')
+  else setToolParam('gradient', 'kind', 'linear')
   setToolParam('gradient', 'asScreentone', snapshot.asScreentone === true)
   setToolParam('gradient', 'feather', Number(snapshot.feather ?? snapshot.painted?.feather ?? 0))
   setToolParam('gradient', 'opacity', Number(snapshot.layer?.opacity ?? 100))
@@ -330,19 +352,41 @@ export function reopenGradient(region) {
     end: recorded?.end ?? null,
     regionId: region.id,
   })
-  if (!recorded) void matchSurroundings()
+  if (!recorded) {
+    const layer = region.mask.layer
+    const [width, height] = [page.width, page.height]
+    void matchSurroundings({
+      x: width ? (Number(layer?.offsetX) || 0) / width * 100 : 0,
+      y: height ? (Number(layer?.offsetY) || 0) / height * 100 : 0,
+    })
+  }
   return true
+}
+
+/**
+ * The page of a gradient layer that can be held again, or null.
+ *
+ * @param {any} region
+ * @returns {any}
+ */
+function reopenablePage(region) {
+  const snapshot = region?.mask?.provenance?.params_snapshot
+  if (snapshot?.mode !== 'gradient' || (!snapshot.gradient && snapshot.auto !== true)) return null
+  if (!snapshot.painted && !snapshot.stroke) return null
+  const located = locateRegion(region.id)
+  return (located && editor.chapter?.pages.find((candidate) => candidate.index === located.pageIndex)) || null
 }
 
 /**
  * Edit a placed gradient layer from anywhere: the Gradient tool out, the
  * layer selected and held again (`reopenGradient`). The region menu's and the
- * Layers row's Edit gradient.
+ * Layers row's Edit gradient. A layer that cannot reopen leaves the tool as it is.
  *
  * @param {any} region
  * @returns {boolean} whether it could be reopened
  */
 export function editGradientLayer(region) {
+  if (!reopenablePage(region)) return false
   setTool('gradient')
   select(region.id)
   return reopenGradient(region)

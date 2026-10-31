@@ -2988,4 +2988,38 @@ mod tests {
         // Another region's attempts are not this region's.
         assert_eq!(journal.sent_attempts(scope.chapter_id.as_deref(), scope.page_index, "another-region").unwrap(), 0);
     }
+
+    /// An attempt beta.11 wrote for FLUX 3: recipe v1, which always carried
+    /// `qwen_edit`. It must keep reading, or the sweep reports `repair_needed`
+    /// with `can_abandon: false` and `unresolved_region_attempt` blocks the region.
+    #[test]
+    fn a_flux3_v1_attempt_from_beta_11_still_reads_and_does_not_block_its_region() {
+        use cleaner_core::engines::render::{QwenEdit, QwenTarget};
+        let td = TestDir::new("flux3-v1-attempt");
+        let journal = AttemptJournal::new(td.path(), provisional_fixture_limits());
+        let edit = QwenEdit { target: QwenTarget::Auto, description: String::new() };
+
+        let mut intent = test_intent();
+        let mut request: JobRequestMetadata = serde_json::from_str(JOB_REQUEST_FIXTURE).unwrap();
+        intent.recipe_id = "mc-flux3-klein-edit-v2".into();
+        request.recipe.recipe_id = intent.recipe_id.clone();
+        intent.model_id = "OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit".into();
+        request.recipe.model_id = intent.model_id.clone();
+        intent.qwen_edit = Some(edit.clone());
+        request.recipe.qwen_edit = Some(edit);
+        intent.request_digest = compute_request_digest(&request);
+        let region = intent.region_id.clone();
+        let (record, guard) = journal.create_intent(intent).unwrap();
+        drop(guard);
+
+        // The same record, as beta.11 would have left it on disk: ended and over.
+        let mut old = journal.get_record(&record.attempt_id).unwrap();
+        old.phase = AttemptPhase::Abandoned { previous: Box::new(old.phase.clone()), duplicate_risk_accepted_at_ms: 1 };
+        old.recipe_id = "mc-flux3-klein-edit-v1".into();
+        old.request_digest = compute_request_digest(&old.to_request_metadata());
+        fs::write(journal.journal_path(&old.attempt_id), serde_json::to_vec(&old).unwrap()).unwrap();
+
+        journal.get_record(&old.attempt_id).expect("an old attempt still reads");
+        assert_eq!(journal.unresolved_region_attempt(None, None, &region).unwrap(), None, "a finished attempt holds nothing");
+    }
 }

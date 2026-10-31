@@ -230,7 +230,7 @@ class Flux3EditRunnerTest(unittest.TestCase):
         self.assertEqual((bf16.required_gpu_for("modal"), bf16.required_gpu_for("beam")), ("L40S", "RTX5090"))
         self.assertTrue(bf16.partial_repo)
         folders = {path.split("/")[0] for path, _size in bf16.files if "/" in path}
-        self.assertEqual(folders, {"text_encoder", "transformer", "vae"})
+        self.assertEqual(folders, {"adapters", "text_encoder", "transformer", "vae"})
 
     def test_a_request_working_size_scales_the_crop_to_it(self) -> None:
         mods = flux3_modules()

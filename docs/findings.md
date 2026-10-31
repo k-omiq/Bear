@@ -739,6 +739,18 @@ attempts not committed, so another failure says its cause. Two things stay open:
   5 seconds) leaves the patch in the chapter, the attempt at `AttachmentPending` and a failed notice in
   place of `RegionDone`. The page's `page-done` still carries the region.
 
+**Fixes from the bug hunt on FLUX 3 v2, the local models and Edit gradient (2026-10-31): stand-ins only.**
+Not run: a cancel that lands during FLUX 3's second edit (needs Modal's input cancel on a real GPU call),
+LaMa beside FLUX 3 in GPU memory, `onnxruntime-gpu` in the FLUX 3 image, a redeploy of a live v1 profile,
+local FLUX 3 and Qwen on Metal, and a real OS kill of a sidecar during a render (the test uses a dead port).
+The local second edit starts from a flat fill, the median of the page round the grown hint, because the
+local install holds no LaMa. It has run only on a fake pipeline, so nobody has seen whether real FLUX 3
+removes bold lettering from it or leaves a flat patch. Left open, each needing a choice: lettering that survives the second edit
+comes back as a success (`docs/cloud-contract.md`: the worker never rejects a result); partial lettering
+reads under the 0.5 limit, and a hint grown over art by mask padding reads over it, and one limit on
+31 crops cannot settle both. Their tests stay skipped in `deploy/cloud/tests/test_flux3_gaps.py`. A lower
+feather on Edit gradient keeps the softer edge the layer had, where the eraser and the feather cannot be told apart.
+
 **Dev log (2026-10-31): the capture ran on macOS only, and four sources stay out of it.** The stderr
 redirect in `src-tauri/src/devlog.rs` has a real test on macOS. The Windows branch (`SetStdHandle`) has
 never run on Windows. These are not captured:
@@ -781,8 +793,8 @@ machines the gate refused before, on figures not measured on them.
 Not measured: anything on Metal or on a real Windows or Linux machine, including the Mac's shared
 pool, which the declared peaks only estimate. A second prompt was tested on FLUX 3 only; Klein's
 prompt does not change. `malloc_trim` is Linux only, so Qwen on Windows may climb as it did here.
-MLX Klein 4B still holds its encoder and declares 10 GiB. Local FLUX 3 is the raw recipe, without
-the cloud worker's retry from a LaMa fill, so the title lettering above stays. Skipping offload where the whole model fits on the GPU would cut host memory further on a
+MLX Klein 4B still holds its encoder and declares 10 GiB. Local FLUX 3 had no second edit in this
+run, so the title lettering above stayed; it now has one from a flat fill (2026-10-31, not measured). Skipping offload where the whole model fits on the GPU would cut host memory further on a
 discrete GPU; it needs a change to the `cpu_offload` guard and was not tried.
 **Inpaint models not run (2026-10-30).** LanPaint (running its Diffusers port needs third-party code in
 the bench image, refused by the session's safety check), BrushNet, PowerPaint, Fooocus inpaint, Moebius

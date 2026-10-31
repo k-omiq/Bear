@@ -307,8 +307,9 @@ PROD_SNAPSHOT_FLUX3_FILES: Tuple[Tuple[str, int], ...] = (
     ("transformer/diffusion_pytorch_model.safetensors", 3240545888),
     ("vae/config.json", 808),
     ("vae/diffusion_pytorch_model.safetensors", 336213556),
+    (f"{ADAPTER_DIR}/{LAMA_FILE}", LAMA_BYTES),
 )
-PROD_SNAPSHOT_FLUX3_TOTAL_BYTES: int = 6650397934
+PROD_SNAPSHOT_FLUX3_TOTAL_BYTES: int = 6650397934 + LAMA_BYTES
 
 # Pinned from the Hugging Face repository tree at REVISION_PROD_FLUX3_BF16: the folders the
 # pipeline loads and the licence. The repository also holds a single-file checkpoint, an
@@ -337,8 +338,9 @@ PROD_SNAPSHOT_FLUX3_BF16_FILES: Tuple[Tuple[str, int], ...] = (
     ("transformer/diffusion_pytorch_model.safetensors.index.json", 37951),
     ("vae/config.json", 808),
     ("vae/diffusion_pytorch_model.safetensors", 336213556),
+    (f"{ADAPTER_DIR}/{LAMA_FILE}", LAMA_BYTES),
 )
-PROD_SNAPSHOT_FLUX3_BF16_TOTAL_BYTES: int = 20320984775
+PROD_SNAPSHOT_FLUX3_BF16_TOTAL_BYTES: int = 20320984775 + LAMA_BYTES
 
 
 @dataclass(frozen=True)

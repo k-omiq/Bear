@@ -239,6 +239,13 @@ impl Inpainter {
         if !crate::sidecar::reports_backend(&health.backends, backend) {
             return Err(Decline::SidecarBackendMissing.into());
         }
+        // No figure and no finished download: the remedy is the download, not
+        // "cannot say how much memory it needs". `/v1/open` says the same, but
+        // the gate below would refuse first.
+        if health.weights_bytes.is_none() && !crate::sidecar::models::local_model(model)
+            .is_none_or(|known| known.installed(backend, &install.root.join("weights"))) {
+            return Err(Decline::SidecarWeightsMissing.into());
+        }
         let demand =
             Demand::from_report(health.weights_bytes, health.working_set_bytes, health.basis);
         match hardware::gate_backend_within(backend, demand, Some(budget.room)) {
@@ -288,6 +295,17 @@ impl Inpainter {
     /// [`crate::sidecar::Sidecar::spent`] is the whole of it.
     pub fn spent(&self) -> bool {
         self.sidecar.spent()
+    }
+
+    /// Whether the child stopped answering, so a holder must open another now.
+    pub fn gone(&mut self) -> bool {
+        self.sidecar.client().is_gone()
+    }
+
+    /// Whether a parked child still answers. One killed while it waited has no
+    /// other way to say so before it costs the next region.
+    pub fn answers(&mut self) -> bool {
+        self.sidecar.client().health().is_ok()
     }
 
     pub fn client(&mut self) -> &mut Client {
@@ -1027,5 +1045,45 @@ mod tests {
             sent[0], sent[1],
             "the prompt still depends on the page's mode"
         );
+    }
+
+    /// A child that dies (killed, or out of memory on the host) must be `spent`, or
+    /// `region.rs#Bench` parks it and the next click takes the dead one back.
+    #[test]
+    fn a_child_that_stopped_answering_is_not_parked_again() {
+        let port = TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead = port.local_addr().unwrap();
+        drop(port);
+        let mut inpainter = Inpainter::attach(
+            Sidecar::attach(dead, "0".repeat(48), Backend::Mflux, generous()),
+            "flux2-klein-4b",
+        );
+        let page = gray_page(600, 700, 200);
+        assert!(inpainter.render(&page, &fitted_over(&page, Rect::new(240, 300, 60, 40))).is_err());
+        assert!(inpainter.spent(), "checkin would park a dead child");
+    }
+
+    /// A real child with an empty weights folder is declined as missing weights, not as
+    /// a sidecar that "cannot say how much memory it needs".
+    /// Stand-in packages for torch, diffusers and sdnq: the health check only finds them.
+    #[cfg(unix)]
+    #[test]
+    fn missing_weights_are_declined_as_missing_weights() {
+        let root = std::env::temp_dir().join(format!("mc-no-weights-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("weights")).unwrap();
+        for module in ["torch", "diffusers", "sdnq"] {
+            std::fs::create_dir_all(root.join(module)).unwrap();
+            std::fs::write(root.join(module).join("__init__.py"), "").unwrap();
+        }
+        let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sidecar/manga_cleaner_sidecar");
+        std::os::unix::fs::symlink(std::fs::canonicalize(package).unwrap(), root.join("manga_cleaner_sidecar")).unwrap();
+        let install = Install { python: "python3".into(), root: root.clone() };
+        let opened = Inpainter::open(&install, Backend::Sdnq, "flux3-image-klein", generous());
+        std::fs::remove_dir_all(root).unwrap();
+        match opened {
+            Err(Error::Declined(decline)) => assert_eq!(decline, Decline::SidecarWeightsMissing),
+            Err(other) => panic!("{other:?}"),
+            Ok(_) => panic!("opened with no weights"),
+        }
     }
 }
