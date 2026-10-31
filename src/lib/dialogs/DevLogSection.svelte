@@ -11,7 +11,7 @@
    *
    * @type {{ visible: boolean }}
    */
-  import { tick } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import { getBackend } from '../api/backend.js'
   import { Button } from '../ui/index.js'
   import { t } from '../i18n/index.js'
@@ -26,18 +26,32 @@
   let view = $state()
   /** Only the newest read may draw: an older one can answer after it. */
   let latest = 0
+  /**
+   * Where the reader is, or null at the end. Noted while the panel shows: a
+   * hidden panel has no height and has lost its scroll offset.
+   * @type {number|null}
+   */
+  let place = null
+
+  function notePlace() {
+    if (!view || view.clientHeight === 0) return
+    const atEnd = view.scrollHeight - view.clientHeight - view.scrollTop < 40
+    place = atEnd ? null : view.scrollTop
+  }
 
   async function load() {
     const mine = ++latest
     status = ''
+    notePlace()
     try {
       const answer = await getBackend().readDevLog()
       if (mine !== latest) return
       text = answer
       loaded = true
-      // The newest lines are the ones asked about, and they are at the end.
+      // The newest lines are the ones asked about, and they are at the end,
+      // unless this person has scrolled up to read something.
       await tick()
-      if (view) view.scrollTop = view.scrollHeight
+      if (view) view.scrollTop = place ?? view.scrollHeight
     } catch {
       if (mine === latest) status = 'settings.devlog.loadFailed'
     }
@@ -57,14 +71,18 @@
     status = ''
     try {
       await getBackend().clearDevLog()
-      if (mine === latest) text = ''
+      if (mine === latest) {
+        text = ''
+        place = null
+      }
     } catch {
       if (mine === latest) status = 'settings.devlog.clearFailed'
     }
   }
 
   $effect(() => {
-    if (visible) load()
+    // Only `visible` starts a read: what `load` looks at must not.
+    if (visible) untrack(load)
   })
 </script>
 
@@ -83,7 +101,7 @@
 {#if text}
   <!-- A tab stop of its own: it scrolls, and a keyboard has to reach that. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <pre class="log" tabindex="0" aria-label={t('settings.section.devlog')} bind:this={view}>{text}</pre>
+  <pre class="log" tabindex="0" aria-label={t('settings.section.devlog')} bind:this={view} onscroll={notePlace}>{text}</pre>
 {:else if loaded}
   <p class="empty">{t('settings.devlog.empty')}</p>
 {/if}

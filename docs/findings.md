@@ -766,6 +766,26 @@ never run on Windows. These are not captured:
 Redaction works by shape, so a secret with no recognisable name or shape would pass. File and folder
 names below the home folder stay on purpose, and Settings says so.
 
+**Dev log's last lines and locks (2026-10-31): proved on macOS by tests only.** Tests that end a real
+child process keep every line before an abort, an exit, a null write and a stack overflow, 20 runs of
+each. Not measured:
+
+- The Windows code for all of this (`SetUnhandledExceptionFilter`, `PeekNamedPipe`, `WriteFile`,
+  `LockFileEx`) and the Linux code pass a type check and have never run. Rust's `abort` on Windows ends
+  the process with no handler at all, so lines still in the pipe die with it. The same goes for a C
+  `abort` there, which this does not hook. A normal quit drains from `RunEvent::Exit`.
+- A backlog on a slow Windows disk may take longer than the 500 ms limit, and the rest of it is lost.
+- `SIGKILL`, a power cut, and the system ending the process for lack of memory give no chance to drain.
+  If the crash happens with the allocator's lock held, the log thread can stick, and the lines are lost
+  when the 500 ms ends. `a_stuck_log_does_not_stop_a_crash` proves only that the process still dies.
+- The real app. Nothing here ran in the packaged app, and the keep-your-place scroll ran in the Chromium
+  mock and jsdom, not WKWebView or WebView2. Copy has not run in either webview.
+- On Linux, WebKitGTK may start web processes that inherit the pipe. Their words would then reach the log
+  through the same redaction, and the pipe would not close at exit. Neither has been seen.
+- Redaction takes a value on the next line only when its name ends the line before, and treats a secret
+  written in two parts as one only when its name came first. A token with no name, written in two parts
+  more than 100 ms apart, passes.
+
 **Local FLUX 3, Qwen and Klein 9B, and their memory (2026-10-30): one cloud L4 only, three real
 crops.** Each model went through the real installer and `SdnqBackend`, under a 19 GB budget. Every
 model removed the speech lettering. FLUX 3 left the large title lettering on the 1360x688 crop.
