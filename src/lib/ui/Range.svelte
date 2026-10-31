@@ -4,8 +4,8 @@
    * rather than in a labelled row - the editor's wipe slider in the view pill.
    * `Slider` is the row form: label left, range, readout right.
    *
-   * There is no visible label, so `label` is the accessible name and half of
-   * the `Label - K` tooltip. `valueText` is what assistive tech reads instead
+   * There is no visible label, so `label` is the accessible name and the
+   * tooltip. `valueText` is what assistive tech reads instead
    * of the bare number, and is normally the same string the cluster prints
    * beside the control.
    *
@@ -17,7 +17,6 @@
    *   step?: number,
    *   width?: number,
    *   valueText?: string,
-   *   shortcut?: string,
    *   disabled?: boolean,
    *   onchange: (value: number) => void,
    * }}
@@ -30,12 +29,10 @@
     step = 1,
     width = 92,
     valueText,
-    shortcut,
     disabled = false,
     onchange,
   } = $props()
 
-  const tooltip = $derived(shortcut ? `${label} · ${shortcut}` : label)
 </script>
 
 <input
@@ -47,10 +44,9 @@
   {value}
   {disabled}
   style:width="{width}px"
-  title={tooltip}
+  title={label}
   aria-label={label}
   aria-valuetext={valueText}
-  aria-keyshortcuts={shortcut || undefined}
   oninput={(e) => onchange(Number(e.currentTarget.value))}
 />
 

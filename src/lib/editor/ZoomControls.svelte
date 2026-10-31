@@ -20,6 +20,7 @@
     MIN_ZOOM,
     MAX_ZOOM,
   } from '../state/editor.svelte.js'
+  import { shortcutProps } from '../state/session.svelte.js'
   import { IconButton, Readout } from '../ui/index.js'
   import { t } from '../i18n/index.js'
 
@@ -39,7 +40,7 @@
 <IconButton
   icon="zoom-fit"
   label={t('editor.action.zoomFit')}
-  shortcut="0"
+  {...shortcutProps('zoom.fit')}
   size={28}
   active={editor.fit}
   pressed={editor.fit}
@@ -48,16 +49,16 @@
 <IconButton
   icon="zoom-out"
   label={t('editor.action.zoomOut')}
-  shortcut="−"
+  {...shortcutProps('zoom.out')}
   size={28}
   disabled={drawn <= MIN_ZOOM}
   onclick={zoomOut}
 />
-<Readout {text} {label} shortcut="Z" minWidth={44} onclick={zoomActual} />
+<Readout {text} {label} {...shortcutProps('zoom.actual')} minWidth={44} onclick={zoomActual} />
 <IconButton
   icon="zoom-in"
   label={t('editor.action.zoomIn')}
-  shortcut="+"
+  {...shortcutProps('zoom.in')}
   size={28}
   disabled={drawn >= MAX_ZOOM}
   onclick={zoomIn}

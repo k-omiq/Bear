@@ -2182,7 +2182,8 @@ export const ko = {
     },
     filter: {
       needsReview: '검토 필요',
-      hint: '검토가 필요한 영역만 표시 (R)',
+      hint: '검토가 필요한 영역만 표시 ({shortcut})',
+      hintUnbound: '검토가 필요한 영역만 표시',
     },
     scope: {
       viewport: '위치 {from}~{to}',
@@ -2335,7 +2336,8 @@ export const ko = {
       gradient: "그레이디언트",
     },
     hint: {
-      autoClean: 'Enter로 실행',
+      autoClean: '{shortcut}(으)로 실행',
+      autoCleanUnbound: '이 막대에서 실행',
       brush: '드래그해 칠하기',
       eraser: '드래그해서 칠이나 클린한 부분을 지우기',
       shapes: '페이지에서 드래그',
@@ -2817,6 +2819,7 @@ export const ko = {
       rerunSimpler: '한 단계 더 단순하게 영역을 다시 실행했습니다: {rungKey}.',
       rerunAgain: '영역을 다시 클린했습니다: {rungKey}.',
       rerunWider: '더 넓은 범위로 영역을 다시 클린했습니다: {rungKey}.',
+      widerOff: '더 넓게 다시 시도는 이 레이어에서 사용할 수 없습니다. 이 컴퓨터에서 클린한 레이어에서 사용할 수 있으며, 페인트나 복제 획, 클라우드 결과, 글자 모양 패치에서는 사용할 수 없습니다.',
       rerunEngine: '{rungKey}(으)로 영역을 다시 클린했습니다.',
       fillMode: '채우기 모드가 {fillModeKey}(으)로 바뀌었습니다.',
       reopened: '마스크를 유지하고 {toolKey}에서 다시 열었습니다.',

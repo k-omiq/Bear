@@ -2227,7 +2227,8 @@ export const pt = {
     },
     filter: {
       needsReview: 'Precisa de revisão',
-      hint: 'Mostrar só as regiões que precisam de revisão (R)',
+      hint: 'Mostrar só as regiões que precisam de revisão ({shortcut})',
+      hintUnbound: 'Mostrar só as regiões que precisam de revisão',
     },
     scope: {
       viewport: 'Posições {from} a {to}',
@@ -2380,7 +2381,8 @@ export const pt = {
       gradient: "Degradê",
     },
     hint: {
-      autoClean: 'Enter para executar',
+      autoClean: '{shortcut} para executar',
+      autoCleanUnbound: 'executar a partir desta barra',
       brush: 'arraste para pintar',
       eraser: 'arraste para apagar pintura ou uma área limpa',
       shapes: 'arraste na página',
@@ -2873,6 +2875,7 @@ export const pt = {
       rerunSimpler: 'Região refeita um nível mais simples: {rungKey}.',
       rerunAgain: 'Região limpa de novo: {rungKey}.',
       rerunWider: 'Região limpa de novo numa área maior: {rungKey}.',
+      widerOff: 'Tentar de novo mais amplo não funciona nesta camada. Funciona numa camada limpa neste computador, e não num traço de pintura ou clone, num resultado da nuvem nem num remendo com forma de texto.',
       rerunEngine: 'Região limpa de novo com {rungKey}.',
       fillMode: 'O modo de preenchimento agora é {fillModeKey}.',
       reopened: 'Máscara mantida, reaberta em {toolKey}.',

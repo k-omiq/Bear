@@ -1,4 +1,5 @@
 <script>
+  import { shortcutProps } from '../state/session.svelte.js'
   import { Button } from '../ui/index.js'
   import Icon from '../icons/Icon.svelte'
   import { t } from '../i18n/index.js'
@@ -15,14 +16,16 @@
    * @type {{ count: number, active: boolean, ontoggle: () => void }}
    */
   let { count, active, ontoggle } = $props()
+
+  const keys = $derived(shortcutProps('view.reviewFilter'))
 </script>
 
 <Button
   variant={active ? 'primary' : 'ghost'}
   block
-  title={t('masks.filter.hint')}
+  title={keys.shortcut ? t('masks.filter.hint', { shortcut: keys.shortcut }) : t('masks.filter.hintUnbound')}
   aria-pressed={active}
-  aria-keyshortcuts="R"
+  aria-keyshortcuts={keys.keyshortcuts || undefined}
   onclick={ontoggle}
 >
   <span class="fill">

@@ -21,6 +21,7 @@
     toggleMaskOverlay,
     setWipe,
   } from '../state/editor.svelte.js'
+  import { shortcutProps } from '../state/session.svelte.js'
   import { IconButton, Range } from '../ui/index.js'
   import { t } from '../i18n/index.js'
 
@@ -61,7 +62,7 @@
 <IconButton
   icon={editor.originalVisible ? 'eye' : 'eye-off'}
   label={t('editor.action.originalHold')}
-  shortcut="O"
+  {...shortcutProps('view.holdOriginal')}
   active={editor.originalVisible}
   pressed={editor.originalVisible}
   onpointerdown={() => holdOriginal(true)}
@@ -87,7 +88,7 @@
 <IconButton
   icon="pin"
   label={t('editor.action.originalPin')}
-  shortcut="⇧O"
+  {...shortcutProps('view.pinOriginal')}
   active={editor.originalPinned}
   pressed={editor.originalPinned}
   onclick={togglePinOriginal}
@@ -95,7 +96,7 @@
 <IconButton
   icon="mask-overlay"
   label={t('editor.action.maskOverlay')}
-  shortcut="M"
+  {...shortcutProps('view.maskOverlay')}
   active={editor.maskOverlay}
   pressed={editor.maskOverlay}
   onclick={toggleMaskOverlay}

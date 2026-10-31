@@ -16,12 +16,13 @@
    *   text: string,
    *   label: string,
    *   shortcut?: string,
+   *   keyshortcuts?: string,
    *   minWidth?: number,
    *   onclick?: (e: MouseEvent) => void,
    *   [key: string]: unknown,
    * }}
    */
-  let { text, label, shortcut, minWidth = 44, onclick, ...rest } = $props()
+  let { text, label, shortcut, keyshortcuts, minWidth = 44, onclick, ...rest } = $props()
 
   const tooltip = $derived(shortcut ? `${label} · ${shortcut}` : label)
 </script>
@@ -33,7 +34,7 @@
     style:min-width="{minWidth}px"
     title={tooltip}
     aria-label={label}
-    aria-keyshortcuts={shortcut || undefined}
+    aria-keyshortcuts={keyshortcuts || undefined}
     {onclick}
     {...rest}
   >

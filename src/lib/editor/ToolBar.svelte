@@ -139,6 +139,7 @@
   import { shortcutHint } from '../shortcuts.js'
 
   const spec = $derived(toolSpec(editor.tool))
+  const hintKeys = $derived(spec.hintShortcut && session.shortcuts ? shortcutHint([spec.hintShortcut]) : '')
   const selectedCopy = $derived(spec.id === 'cloneStamp' && editor.toolParams.cloneStamp?.mode === 'region'
     ? (editor.chapter?.pages ?? []).flatMap((page) => page.regions ?? []).find((region) => region.id === editor.selectionId && isRegionCopy(region)) ?? null
     : null)
@@ -1141,7 +1142,10 @@
      script (never from Tab) when a switch of tool took the focused control
      away with the old content. -->
 {#snippet ident()}
-  <span class="ident" title={t(spec.hintKey)}>
+  <span
+    class="ident"
+    title={spec.hintShortcut && !hintKeys ? t(spec.hintUnboundKey) : t(spec.hintKey, { shortcut: hintKeys })}
+  >
     <Icon name={TOOL_ICONS[spec.id]} size={16} />
     <h2 class="name" id={titleId} tabindex="-1" data-shell-title>{t(spec.nameKey)}</h2>
   </span>

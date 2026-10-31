@@ -15,6 +15,7 @@
    *   icon: string,
    *   label: string,
    *   shortcut?: string,
+   *   keyshortcuts?: string,
    *   active?: boolean,
    *   pressed?: boolean,
    *   disabled?: boolean,
@@ -28,6 +29,7 @@
     icon,
     label,
     shortcut,
+    keyshortcuts,
     active = false,
     pressed,
     disabled = false,
@@ -52,7 +54,7 @@
   style:height="{size}px"
   title={tooltip}
   aria-label={label}
-  aria-keyshortcuts={shortcut || undefined}
+  aria-keyshortcuts={keyshortcuts || undefined}
   aria-pressed={pressed}
   {...rest}
 >

@@ -1,5 +1,6 @@
 <script>
   import { editor, reviewEntries, stepReview } from '../state/editor.svelte.js'
+  import { shortcutProps } from '../state/session.svelte.js'
   import { IconButton, Readout } from '../ui/index.js'
   import { t } from '../i18n/index.js'
 
@@ -33,7 +34,7 @@
 <IconButton
   icon="chevrons-left"
   label={t('editor.action.prevReview')}
-  shortcut="P"
+  {...shortcutProps('review.prev')}
   size={28}
   disabled={total === 0}
   onclick={() => stepReview('prev')}
@@ -42,7 +43,7 @@
 <IconButton
   icon="chevrons-right"
   label={t('editor.action.nextReview')}
-  shortcut="N"
+  {...shortcutProps('review.next')}
   size={28}
   disabled={total === 0}
   onclick={() => stepReview('next')}

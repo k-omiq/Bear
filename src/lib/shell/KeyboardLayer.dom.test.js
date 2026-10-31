@@ -84,7 +84,7 @@ describe('the keyboard layer', () => {
     state.region = { id: 'r1', outcome: 'detected', detected: true }
     press('b')
     expect(runMaskAction).toHaveBeenCalledWith('cleanDetected', state.region)
-    state.region = { id: 'r2', outcome: 'cleaned', mask: { id: 'm2' } }
+    state.region = { id: 'r2', outcome: 'cleaned', mask: { id: 'm2', provenance: { engine: 'lama' } } }
     press('b')
     expect(runRegionMenuItem).toHaveBeenLastCalledWith('retry', state.region)
     press('B', { shiftKey: true })

@@ -2227,7 +2227,8 @@ export const fr = {
     },
     filter: {
       needsReview: 'À vérifier',
-      hint: 'Afficher uniquement les zones à vérifier (R)',
+      hint: 'Afficher uniquement les zones à vérifier ({shortcut})',
+      hintUnbound: 'Afficher uniquement les zones à vérifier',
     },
     scope: {
       viewport: 'Positions {from} à {to}',
@@ -2380,7 +2381,8 @@ export const fr = {
       gradient: "Dégradé",
     },
     hint: {
-      autoClean: 'Entrée pour lancer',
+      autoClean: '{shortcut} pour lancer',
+      autoCleanUnbound: 'lancer depuis cette barre',
       brush: 'glisser pour peindre',
       eraser: 'faites glisser pour effacer la peinture ou une zone nettoyée',
       shapes: 'glisser sur la page',
@@ -2873,6 +2875,7 @@ export const fr = {
       rerunSimpler: 'Zone relancée un cran plus simple : {rungKey}.',
       rerunAgain: 'Zone nettoyée de nouveau : {rungKey}.',
       rerunWider: 'Zone nettoyée de nouveau sur une surface plus grande : {rungKey}.',
+      widerOff: 'Réessayer plus large ne fonctionne pas sur ce calque. Il fonctionne sur un calque nettoyé sur cet ordinateur, et non sur un trait de peinture ou de clonage, un résultat du cloud ou un patch en forme de texte.',
       rerunEngine: 'Zone nettoyée de nouveau avec {rungKey}.',
       fillMode: 'Le mode de remplissage est maintenant {fillModeKey}.',
       reopened: 'Masque conservé, rouvert dans {toolKey}.',

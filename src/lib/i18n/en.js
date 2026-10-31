@@ -2819,7 +2819,8 @@ export const en = {
     },
     filter: {
       needsReview: 'Needs review',
-      hint: 'Show only the regions that need review (R)',
+      hint: 'Show only the regions that need review ({shortcut})',
+      hintUnbound: 'Show only the regions that need review',
     },
     scope: {
       viewport: 'Positions {from} to {to}',
@@ -3039,7 +3040,8 @@ export const en = {
     // is honestly enough for - it is a reminder of the gesture, not a reason
     // anything is unavailable.
     hint: {
-      autoClean: 'Enter to run',
+      autoClean: '{shortcut} to run',
+      autoCleanUnbound: 'run from this bar',
       brush: 'drag to paint',
       eraser: 'drag to erase paint or a cleaned area',
       shapes: 'drag on the page',
@@ -3732,6 +3734,7 @@ export const en = {
       // is a record of what ran.
       rerunAgain: 'Region cleaned again: {rungKey}.',
       rerunWider: 'Region cleaned again over a larger area: {rungKey}.',
+      widerOff: 'Try again wider does not work on this layer. It works on a layer cleaned on this computer, and not on a paint or clone stroke, a cloud result or a text-shaped patch.',
       rerunEngine: 'Region cleaned again with {rungKey}.',
       fillMode: 'Fill mode is now {fillModeKey}.',
       reopened: 'Mask kept, reopened in {toolKey}.',

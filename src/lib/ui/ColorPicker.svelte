@@ -32,6 +32,8 @@
    * @type {{
    *   value?: string,
    *   label?: string,
+   *   tooltip?: string,
+   *   keyshortcuts?: string,
    *   align?: 'start' | 'end',
    *   unclipped?: boolean,
    *   onchange: (hex: string) => void,
@@ -40,6 +42,8 @@
   let {
     value = '#ffffff',
     label = t('tools.param.color'),
+    tooltip,
+    keyshortcuts,
     align = 'start',
     unclipped = false,
     onchange,
@@ -122,7 +126,16 @@
     }
   })
 
-  const currentRgb = $derived(hsbToRgb(h, s, b))
+  // HSB in whole numbers cannot hold every colour, so the value itself is shown
+  // while the HSB state is still that value's own.
+  const currentRgb = $derived.by(() => {
+    const exact = hexToRgb(hexOnCommit(value) ?? '')
+    if (exact) {
+      const hsb = rgbToHsb(exact.r, exact.g, exact.b)
+      if (hsb.s === s && hsb.b === b && (hsb.s === 0 || hsb.b === 0 || hsb.h === h)) return exact
+    }
+    return hsbToRgb(h, s, b)
+  })
   const currentHex = $derived(rgbToHex(currentRgb.r, currentRgb.g, currentRgb.b))
 
   $effect(() => {
@@ -561,7 +574,9 @@
     type="button"
     class="swatch-trigger"
     style:background-color={currentHex}
+    title={tooltip}
     aria-label={label}
+    aria-keyshortcuts={keyshortcuts}
     aria-haspopup="dialog"
     aria-expanded={open}
     aria-controls={open ? panelId : undefined}

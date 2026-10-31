@@ -10,13 +10,14 @@
    * (`unclipped`): the rail is at the window's edge.
    */
   import { setActiveColor, swapColors } from '../state/editor.svelte.js'
-  import { session } from '../state/session.svelte.js'
-  import { shortcutHint } from '../shortcuts.js'
+  import { session, shortcutProps } from '../state/session.svelte.js'
   import { ColorPicker } from '../ui/index.js'
   import { t } from '../i18n/index.js'
 
-  const swapHint = $derived(session.shortcuts && shortcutHint(['tool.swapColors']))
+  const swapKeys = $derived(shortcutProps('tool.swapColors'))
   const swapLabel = $derived(t('tools.color.pairSwap'))
+  const pickKeys = $derived(shortcutProps('tool.pickColor'))
+  const activeLabel = $derived(t('tools.color.pairActive'))
 </script>
 
 <div class="pair" role="group" aria-label={t('tools.color.pairGroup')} data-color-switch>
@@ -24,15 +25,17 @@
     type="button"
     class="other"
     style:background-color={session.colorPair.other}
-    title={swapHint ? `${swapLabel} · ${swapHint}` : swapLabel}
-    aria-label={swapLabel}
-    aria-keyshortcuts={swapHint || undefined}
+    title={swapKeys.shortcut ? `${swapLabel} · ${swapKeys.shortcut}` : swapLabel}
+    aria-label={`${swapLabel} ${session.colorPair.other}`}
+    aria-keyshortcuts={swapKeys.keyshortcuts || undefined}
     onclick={swapColors}
   ></button>
   <div class="active">
     <ColorPicker
       value={session.colorPair.active}
-      label={t('tools.color.pairActive')}
+      label={`${activeLabel} ${session.colorPair.active}`}
+      tooltip={pickKeys.shortcut ? `${activeLabel} · ${t('tools.action.eyedropper')} ${pickKeys.shortcut}` : activeLabel}
+      keyshortcuts={pickKeys.keyshortcuts || undefined}
       align="end"
       unclipped
       onchange={setActiveColor}

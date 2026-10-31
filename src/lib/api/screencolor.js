@@ -14,11 +14,32 @@
  *
  * Anywhere else - WebKitGTK on Linux - there is no route, and the picker draws
  * no button: the swatch and the hex field reach the same value.
+ *
+ * One sampler at a time, whoever asks: the picker's button and `Shift+E` are
+ * two ways in, and a second ask while one is open answers as a cancel.
  */
 
 import { isTauri } from './tauri.js'
 import { isApplePlatform } from '../shortcuts.js'
 import { hexOnCommit } from '../ui/color.js'
+
+let sampling = false
+
+/**
+ * @param {() => Promise<string|null>} sample
+ * @returns {() => Promise<string|null>}
+ */
+function oneAtATime(sample) {
+  return async () => {
+    if (sampling) return null
+    sampling = true
+    try {
+      return await sample()
+    } finally {
+      sampling = false
+    }
+  }
+}
 
 /**
  * How to pick a colour off the screen here, or `null` where there is no way.
@@ -30,21 +51,21 @@ import { hexOnCommit } from '../ui/color.js'
 export function screenColorPicker() {
   const EyeDropper = /** @type {any} */ (globalThis).EyeDropper
   if (typeof EyeDropper === 'function') {
-    return async () => {
+    return oneAtATime(async () => {
       try {
         const picked = await new EyeDropper().open()
         return hexOnCommit(String(picked?.sRGBHex ?? ''))
       } catch {
         return null // Escape rejects with AbortError
       }
-    }
+    })
   }
   const invoke = globalThis.__TAURI__?.core?.invoke ?? globalThis.__TAURI_INTERNALS__?.invoke
   if (isTauri() && isApplePlatform() && typeof invoke === 'function') {
-    return async () => {
+    return oneAtATime(async () => {
       const picked = await invoke('pick_screen_color')
       return typeof picked === 'string' ? hexOnCommit(picked) : null
-    }
+    })
   }
   return null
 }

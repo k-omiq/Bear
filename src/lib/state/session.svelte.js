@@ -32,6 +32,8 @@ import {
   resetShortcut,
   sanitizeShortcutOverrides,
   setShortcutOverrides,
+  shortcutAria,
+  shortcutHint,
   shortcutOverrides,
   unbindShortcut,
 } from '../shortcuts.js'
@@ -117,6 +119,20 @@ export const DEFAULT_MASK_OPACITY = 35
  */
 export function maskColorOr(value, fallback) {
   return (typeof value === 'string' && hexOnCommit(value)) || fallback
+}
+
+/**
+ * A stored colour pair. A colour lost from the record takes the default that
+ * differs from the one kept, or a swap would do nothing.
+ *
+ * @param {any} stored
+ * @param {{active: string, other: string}} fallback
+ * @returns {{active: string, other: string}}
+ */
+function colorPairOr(stored, fallback) {
+  const other = maskColorOr(stored?.other, null)
+  const active = maskColorOr(stored?.active, other === fallback.active ? fallback.other : fallback.active)
+  return { active, other: other ?? (active === fallback.other ? fallback.active : fallback.other) }
 }
 
 /**
@@ -414,10 +430,7 @@ export function sanitizeSession(raw) {
     // only the default written out is dropped here rather than kept as a
     // binding nothing can run.
     shortcuts: sanitizeShortcutOverrides(record.shortcuts),
-    colorPair: {
-      active: maskColorOr(/** @type {any} */ (record.colorPair)?.active, base.colorPair.active),
-      other: maskColorOr(/** @type {any} */ (record.colorPair)?.other, base.colorPair.other),
-    },
+    colorPair: colorPairOr(record.colorPair, base.colorPair),
     // One colour used to cover every mask, under `maskColor`. It stays the
     // speech bubble colour, so a record saved before the split keeps its pick
     // there, and the outside colour starts at its default.
@@ -1272,6 +1285,18 @@ export function togglePanel(panel) {
 /* ------------------------------------------------------------------ */
 /* Keyboard shortcuts                                                  */
 /* ------------------------------------------------------------------ */
+
+/**
+ * What a button shows and announces for a table entry, from the table in force.
+ * Read through `session.shortcuts`, so a rebinding redraws it.
+ *
+ * @param {string} id
+ * @returns {{shortcut: string, keyshortcuts: string}}
+ */
+export function shortcutProps(id) {
+  void session.shortcuts
+  return { shortcut: shortcutHint([id]), keyshortcuts: shortcutAria(id) }
+}
 
 /**
  * Mirror the table's overrides back onto the session and write them.

@@ -30,7 +30,7 @@
    */
   import { pushModal } from '../state/app.svelte.js'
   import { editor } from '../state/editor.svelte.js'
-  import { session } from '../state/session.svelte.js'
+  import { session, shortcutProps } from '../state/session.svelte.js'
   import { cloudUsable } from '../state/cloud.svelte.js'
   import { hasJobs } from '../state/jobs.svelte.js'
   import JobsIndicator from '../shell/JobsIndicator.svelte'
@@ -71,13 +71,13 @@
     <IconButton
       icon="settings"
       label={t('editor.action.settings')}
-      shortcut=","
+      {...shortcutProps('app.settings')}
       onclick={() => pushModal({ kind: 'settings' })}
     />
     <IconButton
       icon="export"
       label={t('editor.action.export')}
-      shortcut="E"
+      {...shortcutProps('app.export')}
       active
       onclick={() => pushModal({ kind: 'export' })}
     />

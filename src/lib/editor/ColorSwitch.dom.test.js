@@ -55,7 +55,7 @@ afterEach(() => {
 
 describe('the colour switch', () => {
   it('swaps on one press of the other swatch, and the Brush and the Shape follow', async () => {
-    await fireEvent.click(screen.getByRole('button', { name: t('tools.color.pairSwap') }))
+    await fireEvent.click(screen.getByRole('button', { name: new RegExp(t('tools.color.pairSwap')) }))
     expect(session.colorPair).toEqual({ active: '#000000', other: '#ffffff' })
     expect(editor.toolParams.brush.color).toBe('#000000')
     expect(editor.toolParams.shapes.color).toBe('#000000')
@@ -99,7 +99,7 @@ describe('the colour switch', () => {
   })
 
   it('opens the picker for the active colour from the front swatch, by label', async () => {
-    const swatch = screen.getByRole('button', { name: t('tools.color.pairActive') })
+    const swatch = screen.getByRole('button', { name: new RegExp(t('tools.color.pairActive')) })
     expect(swatch.getAttribute('aria-expanded')).toBe('false')
     await fireEvent.click(swatch)
     expect(swatch.getAttribute('aria-expanded')).toBe('true')
@@ -155,7 +155,7 @@ describe('the shortcuts', () => {
   })
 
   it('opens the active colour\'s picker on Shift+E where the platform has no sampler', async () => {
-    const swatch = screen.getByRole('button', { name: t('tools.color.pairActive') })
+    const swatch = screen.getByRole('button', { name: new RegExp(t('tools.color.pairActive')) })
     press('E', { shiftKey: true })
     await vi.waitFor(() => expect(swatch.getAttribute('aria-expanded')).toBe('true'))
   })

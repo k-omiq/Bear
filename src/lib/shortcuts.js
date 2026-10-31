@@ -1809,6 +1809,8 @@ export function isDialogOutsideStackOpen() {
  *    belongs to that control. The rest of the table still matches, so `M` over
  *    a slider is still the mask overlay.
  * 5. An entry with a `shift` requirement only matches when `shiftKey` agrees.
+ * 6. A key the user bound wins over a default on the same press. A saved binding
+ *    can meet a default that a later build added, and table order would hide it.
  *
  * @param {{key: string, shiftKey?: boolean, metaKey?: boolean, ctrlKey?: boolean, altKey?: boolean, target?: any}} event
  * @param {{scope: 'home'|'editor', modalOpen?: boolean, textEntry?: boolean}} context
@@ -1838,6 +1840,8 @@ export function matchShortcut(event, context) {
 
   const key = normalizeKey(event.key)
   const shift = event.shiftKey === true
+  /** @type {Shortcut|null} */
+  let found = null
   for (const shortcut of shortcuts()) {
     if (!shortcut.keys.includes(key)) continue
     if (altTyped && shortcut.altTyped !== true) continue
@@ -1846,9 +1850,10 @@ export function matchShortcut(event, context) {
     if (shortcut.shift !== undefined && shortcut.shift !== shift) continue
     if (shortcut.scope !== 'global' && shortcut.scope !== context.scope) continue
     if (context.modalOpen && !shortcut.allowInModal) continue
-    return shortcut
+    if (shortcut.rebound) return shortcut
+    found ??= shortcut
   }
-  return null
+  return found
 }
 
 /**
@@ -1893,6 +1898,28 @@ export function shortcutHint(ids, context = { apple: isApplePlatform() }) {
     .filter((entry) => entry && entry.keys.length > 0)
     .map((entry) => shortcutChord(/** @type {Shortcut} */ (entry), context).join('+'))
     .join(' / ')
+}
+
+const ARIA_KEYS = /** @type {Record<string, string>} */ ({ '+': 'Plus', ' ': 'Space' })
+
+/**
+ * The keys that run an entry as `aria-keyshortcuts` writes them: `Meta+Shift+X`,
+ * with no glyph, and the key by its `KeyboardEvent.key` name, `Plus` and `Space`
+ * being ARIA's own. One press per key, space-separated. Empty when unbound.
+ *
+ * @param {string} id
+ * @param {{apple?: boolean}} [context]
+ * @returns {string}
+ */
+export function shortcutAria(id, context = { apple: isApplePlatform() }) {
+  const entry = shortcuts().find((shortcut) => shortcut.id === id)
+  if (!entry) return ''
+  const modifiers = [entry.accel && (context.apple ? 'Meta' : 'Control'), entry.shift && 'Shift'].filter(Boolean)
+  return entry.keys
+    // ARIA has no name for an extra mouse button.
+    .filter((key) => !/^Mouse\d+$/.test(key))
+    .map((key) => [...modifiers, ARIA_KEYS[key] ?? (key.length === 1 ? key.toUpperCase() : key)].join('+'))
+    .join(' ')
 }
 
 /**

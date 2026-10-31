@@ -2185,7 +2185,8 @@ export const ja = {
     },
     filter: {
       needsReview: '要確認',
-      hint: '確認が必要な領域のみ表示（R）',
+      hint: '確認が必要な領域のみ表示（{shortcut}）',
+      hintUnbound: '確認が必要な領域のみ表示',
     },
     scope: {
       viewport: '位置 {from}〜{to}',
@@ -2338,7 +2339,8 @@ export const ja = {
       gradient: "グラデーション",
     },
     hint: {
-      autoClean: 'Enter で実行',
+      autoClean: '{shortcut} で実行',
+      autoCleanUnbound: 'このバーから実行',
       brush: 'ドラッグで描画',
       eraser: 'ドラッグして塗りやクリーン済みの部分を消す',
       shapes: 'ページ上でドラッグ',
@@ -2821,6 +2823,7 @@ export const ja = {
       rerunSimpler: '1 段階シンプルな方法で領域を再実行しました：{rungKey}。',
       rerunAgain: '領域をもう一度クリーンしました：{rungKey}。',
       rerunWider: '範囲を広げて領域をもう一度クリーンしました：{rungKey}。',
+      widerOff: '範囲を広げて再試行は、このレイヤーでは使えません。このコンピューターでクリーンしたレイヤーで使えます。ペイントやクローンのストローク、クラウドの結果、文字の形のパッチでは使えません。',
       rerunEngine: '{rungKey} で領域をもう一度クリーンしました。',
       fillMode: '塗りモードを {fillModeKey} にしました。',
       reopened: 'マスクを残し、{toolKey} で開き直しました。',
