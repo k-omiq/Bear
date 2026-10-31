@@ -235,7 +235,9 @@ fn kept(dir: &Path) -> usize {
 }
 
 /// The module's reason for a file: "the lines that matter most come just before
-/// a crash". What is still in the pipe dies with the process.
+/// a crash". What is still in the pipe dies with the process. Unix only: Rust's
+/// `abort` on Windows runs no handler, as `drain_when_dying` says.
+#[cfg(unix)]
 #[test]
 fn the_last_line_before_an_abort_is_kept() {
     if std::env::var_os("MC_DEVLOG_GAP_DIR").is_some() {
@@ -252,6 +254,9 @@ fn the_last_line_before_an_abort_is_kept() {
 fn the_last_line_before_an_exit_is_kept() {
     if std::env::var_os("MC_DEVLOG_GAP_DIR").is_some() {
         burst();
+        // Windows has no exit handler, so the app drains at `RunEvent::Exit`.
+        #[cfg(windows)]
+        drain();
         std::process::exit(0);
     }
     let dir = folder("exit");

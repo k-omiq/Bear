@@ -773,7 +773,8 @@ each. Not measured:
 - The Windows code for all of this (`SetUnhandledExceptionFilter`, `PeekNamedPipe`, `WriteFile`,
   `LockFileEx`) and the Linux code pass a type check and have never run. Rust's `abort` on Windows ends
   the process with no handler at all, so lines still in the pipe die with it. The same goes for a C
-  `abort` there, which this does not hook. A normal quit drains from `RunEvent::Exit`.
+  `abort` there, which this does not hook, so the abort test is Unix only. A normal quit drains from
+  `RunEvent::Exit`, and on Windows the exit test calls `drain` itself as that event does.
 - A backlog on a slow Windows disk may take longer than the 500 ms limit, and the rest of it is lost.
 - `SIGKILL`, a power cut, and the system ending the process for lack of memory give no chance to drain.
   If the crash happens with the allocator's lock held, the log thread can stick, and the lines are lost
