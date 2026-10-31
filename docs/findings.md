@@ -3726,3 +3726,9 @@ the Vite mock. Not measured: any of it in the shipped WKWebView, where a click d
 button and the jump may come from another focus path; a re-run of a real crossing region with real
 models (Try again wider across a join has no Rust test, only plain Try again with Fill does); the
 Eraser's live preview over a neighbour's overhang in the tile path, which the mock does not draw.
+
+**Saved colour pair and its keys (2026-10-31).** The pair at the end of the tool rail, Shift+X and
+Shift+E are measured by DOM tests and in the Vite mock, with a stubbed `EyeDropper` because a script
+cannot finish the real one. Not measured: Shift+E in the shipped WKWebView, where it opens AppKit's
+sampler through `pick_screen_color`, and in WebView2. On Linux, where WebKitGTK has no sampler, the
+key opens the active colour's picker instead, and picking from the page was not built for it.

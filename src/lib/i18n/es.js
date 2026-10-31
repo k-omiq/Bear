@@ -2437,6 +2437,9 @@ export const es = {
       green: 'Verde',
       blue: 'Azul',
       hex: 'Hex',
+      pairGroup: 'Dos colores guardados',
+      pairActive: 'Color activo',
+      pairSwap: 'Cambiar al otro color',
       area: 'Área de color',
       areaValue: 'Saturación {saturation} %, brillo {brightness} %',
     },
@@ -2519,6 +2522,8 @@ export const es = {
     },
     tool: {
       runCleanup: 'Ejecutar la limpieza de texto, o aplicar la selección retenida',
+      swapColors: 'Cambiar al otro color guardado',
+      pickColor: 'Tomar el color activo de la pantalla',
       cleanScopeNext: 'Limpieza de texto: alcance siguiente',
       cleanScopePrev: 'Limpieza de texto: alcance anterior',
       focusOptions: 'Siguiente control de la barra de la herramienta',

@@ -41,7 +41,7 @@ import { evictRegions, slideWindow, windowIndices } from './pagewindow.svelte.js
 import { pageNavControls, defaultReadingDirection } from '../model/paging.js'
 import { clearCloneSource, clearDraft, clearSelection, resetDraftState } from '../editor/draft.svelte.js'
 import { app, dismissNotice, notify, pushModal } from './app.svelte.js'
-import { session, openWindow } from './session.svelte.js'
+import { session, openWindow, setColorPair } from './session.svelte.js'
 import { loadAutosave, storeAutosave } from './autosave.js'
 import { numberIn } from './persist.js'
 import { settleCreation } from './heldcreations.js'
@@ -130,13 +130,13 @@ function defaultToolParams() {
       hardness: 100,
       spacing: 12,
       mode: 'paint',
-      color: '#ffffff',
+      color: session.colorPair.active,
       opacity: 100,
       flow: 100,
     },
     eraser: { size: 28, hardness: 100, opacity: 100 },
     // A new shape paints with a solid colour. Its outline is optional.
-    shapes: { shape: 'rect', mode: 'solid', color: '#ffffff', opacity: 100, outlineColor: '#000000', outlineWidth: 0, feather: 0 },
+    shapes: { shape: 'rect', mode: 'solid', color: session.colorPair.active, opacity: 100, outlineColor: '#000000', outlineWidth: 0, feather: 0 },
     // The AI mask brush defaults to the local LaMa Manga model.
     aiMaskBrush: { engine: 'lama', size: 36 },
     contentAwareFill: { fillMode: 'match-surround', engine: 'local' },
@@ -1490,8 +1490,40 @@ export function armAutoGradient() {
  * @param {unknown} value
  */
 export function setToolParam(tool, key, value) {
+  if (key === 'color' && ACTIVE_COLOR_TOOLS.includes(tool)) {
+    setActiveColor(String(value))
+    return
+  }
   if (!editor.toolParams[tool]) editor.toolParams[tool] = {}
   editor.toolParams[tool][key] = value
+}
+
+/**
+ * The tools that paint with the active saved colour. Text cleanup's Solid colour
+ * is not one: a swap made for a brush stroke must not fill a chapter's bubbles.
+ */
+const ACTIVE_COLOR_TOOLS = ['brush', 'shapes']
+
+/** @param {{active: string, other: string}} pair */
+function applyColorPair(pair) {
+  setColorPair(pair)
+  for (const tool of ACTIVE_COLOR_TOOLS) editor.toolParams[tool].color = session.colorPair.active
+}
+
+/**
+ * The active saved colour, on the swatch and on every tool that paints with it.
+ * A value that is not a colour leaves the one in force.
+ *
+ * @param {string} color
+ */
+export function setActiveColor(color) {
+  applyColorPair({ ...session.colorPair, active: color })
+}
+
+/** Make the other saved colour the active one. */
+export function swapColors() {
+  const { active, other } = session.colorPair
+  applyColorPair({ active: other, other: active })
 }
 
 /**

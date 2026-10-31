@@ -3144,6 +3144,9 @@ export const en = {
       green: 'Green',
       blue: 'Blue',
       hex: 'Hex',
+      pairGroup: 'Two saved colors',
+      pairActive: 'Active color',
+      pairSwap: 'Switch to the other color',
       area: 'Color area',
       areaValue: 'Saturation {saturation}%, brightness {brightness}%',
     },
@@ -3268,6 +3271,8 @@ export const en = {
     },
     tool: {
       runCleanup: 'Run Text cleanup, or apply the held selection',
+      swapColors: 'Switch to the other saved color',
+      pickColor: 'Pick the active color from the screen',
       cleanScopeNext: 'Text cleanup: next scope',
       cleanScopePrev: 'Text cleanup: previous scope',
       focusOptions: "Next control on the tool's bar",
