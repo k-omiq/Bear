@@ -723,6 +723,21 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Dev log (2026-10-31): the capture ran on macOS only, and four sources stay out of it.** The stderr
+redirect in `src-tauri/src/devlog.rs` has a real test on macOS. The Windows branch (`SetStdHandle`) has
+never run on Windows. These are not captured:
+
+- On Windows, native C++ libraries. ONNX Runtime writes its own warnings through its C runtime's
+  stderr, which `SetStdHandle` does not move. On macOS and Linux the same lines are captured.
+- The Python sidecar's stderr. `sidecar/client.rs` drains and drops it, because progress bars would
+  push real lines out of a 512 KiB log. Forwarding only its last lines when it exits is the next step
+  if local FLUX failures need them.
+- Errors in the webview (`console.error`, unhandled rejections).
+- Errors the app shows as a notice without also writing them to stderr, such as measurement errors.
+
+Redaction works by shape, so a secret with no recognisable name or shape would pass. File and folder
+names below the home folder stay on purpose, and Settings says so.
+
 **Local FLUX 3, Qwen and Klein 9B, and their memory (2026-10-30): one cloud L4 only, three real
 crops.** Each model went through the real installer and `SdnqBackend`, under a 19 GB budget. Every
 model removed the speech lettering. FLUX 3 left the large title lettering on the 1360x688 crop.
@@ -3744,3 +3759,34 @@ shows the runtime's words under the measurement row. Not covered: a GPU that pas
 fails on a specific model's run still ends that run; a proof that crashes the process rather than
 returning an error would now do so on opening Settings rather than on the first run; TensorRT is
 hidden and stays unoffered, since no model is routed to it and its libraries are not checked for.
+
+**Gaps in that GPU proof, fixed (2026-10-31): no real NVIDIA card or Windows machine ran any of it.** A
+runtime load no longer forgets the proofs, `CpuOnly` asks none and a force asks only its own, and
+Settings, a session (`accel::choose_unblocked`), the local review and the run's notice all name the same
+place for a model on a blocked GPU. A saved measurement now covers the toolkit and cuDNN files of a CUDA
+build, so every CUDA user's saved result goes stale once on update and they must press Measure again;
+this is on purpose, for the users whose saved CPU winners came from the broken install. Check again
+reads the measurement too, loads a changed install, and asks for a restart where one was already loaded.
+Measured by unit and DOM tests, and by the real macOS runtime for the load and `CpuOnly` cases (with
+`cfg!(target_os = "macos")` patched out for `CpuOnly`). Not measured: a forced Hayai moving off a CUDA that
+cannot build (`a_forced_reader_moves_off_a_cuda_that_will_not_build` needs a CUDA build and no card, and
+stays ignored); whether a second install loaded beside the first helps or harms a session before the
+restart; a cuDNN replaced in the same folder under the same file names, which reads as no change and gets
+no restart hint; the words the failing machines' proofs will show. A proof now runs on its own thread with a
+120 s limit (`accel::PROOF_LIMIT`), and past it the path counts as failed and the session moves on. The
+limit was chosen, not measured: no slow machine has been timed, and it includes the proof's wait for the
+device turn, so a healthy WebGPU behind one GPU call longer than 120 s would read as failed until the app
+restarts. Stop still cannot reach a session during that wait, and two stuck paths cost up to 240 s once
+per process. The stuck thread keeps its WebGPU device turn, so a WebGPU session opened before the proof
+(Check again during a held session) would hang when it is dropped. A thread that holds the turn and asks
+for a proof would wait out the limit and fail a healthy path; no code does that today. A driver that hangs
+was only faked by a test: no real stuck driver has been seen.
+Only suspected, no test: a forced DirectML or LaMa that fails to register now stops the run where it used
+to run on the CPU; the strict proof may fail a working WebGPU plugin; a proof beside a busy GPU may fail
+for lack of memory and block a healthy path until Check again.
+
+**Saved colour pair and its keys (2026-10-31).** The pair at the end of the tool rail, Shift+X and
+Shift+E are measured by DOM tests and in the Vite mock, with a stubbed `EyeDropper` because a script
+cannot finish the real one. Not measured: Shift+E in the shipped WKWebView, where it opens AppKit's
+sampler through `pick_screen_color`, and in WebView2. On Linux, where WebKitGTK has no sampler, the
+key opens the active colour's picker instead, and picking from the page was not built for it.

@@ -53,7 +53,7 @@
    * a sidebar with the way back and a vertical tab list, and one scrolling
    * column per section.
    *
-   * **Ten sections, in the order a visit needs them.** General holds the
+   * **Eleven sections, in the order a visit needs them.** General holds the
    * app's own preferences and the setup replay. Models is what a page is
    * detected and cleaned with: the detection choices, each model's files
    * beside the choice that made them necessary, the language filtering and
@@ -66,7 +66,8 @@
    * engines run on: the runtime, its build, where downloads go, the
    * accelerator, and per-model backends collapsed. Shortcuts, Beta and About
    * close the list. Beta offers the tools still being tuned, the Patch tool
-   * and the Screentone fill, off until asked for (`BetaSettings`). About is a
+   * and the Screentone fill, off until asked for (`BetaSettings`). Dev log is
+   * what the app wrote down, to copy into a report (`DevLogSection`). About is a
    * GPL-3.0 obligation, this screen is its only route,
    * and it carries the community invite.
    *
@@ -187,6 +188,7 @@
   import DenoiseSettings from './denoise/DenoiseSettings.svelte'
   import PostProcessingSettings from './PostProcessingSettings.svelte'
   import BetaSettings from './BetaSettings.svelte'
+  import DevLogSection from './DevLogSection.svelte'
   import { PAGE_DENOISE_FEATURE } from '../model/denoise.js'
   import { offerFirstLaunch } from './firstlaunch.svelte.js'
 
@@ -1422,6 +1424,9 @@
    * application did not unpack - unknown rather than none - and an unknown
    * build is nothing to report a difference about.
    */
+  /** @type {Measurement|undefined} */
+  let measurement = $state()
+
   const chosenBuildInstalled = $derived.by(() => {
     const runtime = catalogue?.runtime
     return Boolean(
@@ -2014,6 +2019,7 @@
     performance: { labelKey: 'settings.section.performance', icon: 'cpu' },
     shortcuts: { labelKey: 'settings.section.shortcuts', icon: 'keyboard' },
     beta: { labelKey: 'settings.section.beta', icon: 'flask' },
+    devlog: { labelKey: 'settings.section.devlog', icon: 'file' },
     about: { labelKey: 'settings.section.about', icon: 'info' },
   })
   const TABS = SETTINGS_SECTIONS.map((id) => ({ id, ...TAB_META[id] }))
@@ -3191,7 +3197,9 @@
                 {/if}
               </div>
               <div class="row-actions">
-                {#if progress[RUNTIME_ID]}
+                <!-- The catalogue too: Settings closed and opened again during a
+                     download has seen no progress event yet. -->
+                {#if progress[RUNTIME_ID] || catalogue.runtime.downloading}
                   <Button size="sm" onclick={() => cancel(RUNTIME_ID)}>
                     {t('settings.models.action.cancel')}
                   </Button>
@@ -3210,10 +3218,11 @@
                       {t('settings.models.action.delete')}
                     </Button>
                   {/if}
-                  <!-- Over an installed runtime only where the chosen build is
-                       another one, or one this app cannot name: otherwise it
-                       would re-download what is there. -->
-                  {#if !catalogue.runtime.installed || (catalogue.runtime.flavours.length > 1 && !chosenBuildInstalled)}
+                  <!-- Over an installed runtime only where the one here will not
+                       load, where the chosen build or version is another one,
+                       or where a choice of builds meets one this app cannot
+                       name: otherwise it would re-download what is there. -->
+                  {#if !catalogue.runtime.installed || runtimeLoad.state === 'failed' || ((catalogue.runtime.flavours.length > 1 || catalogue.runtime.installedFlavour) && !chosenBuildInstalled)}
                     <Button
                       size="sm"
                       disabled={!catalogue.runtime.available}
@@ -3266,11 +3275,11 @@
           {accelerators}
           pathsPending={runtimeLoad.state !== 'loaded'}
           onchooseflavour={chooseFlavour}
-          onrecheck={refreshAccelerators}
+          onrecheck={() => Promise.all([refreshAccelerators(), measurement?.refresh()])}
         />
 
         <h3 class="sub">{t('settings.runtime.heading.measure')}</h3>
-        <Measurement {accelerators} ready={runtimeLoad.state === 'loaded' && Boolean(accelerators)} onmeasured={refreshAccelerators} />
+        <Measurement bind:this={measurement} {accelerators} ready={runtimeLoad.state === 'loaded' && Boolean(accelerators)} onmeasured={refreshAccelerators} />
 
         <h3 class="sub">{t('settings.runtime.heading.backends')}</h3>
         <div class="accel">
@@ -3371,6 +3380,21 @@
       <div class="column">
         <h2>{t('settings.section.beta')}</h2>
         <BetaSettings />
+      </div>
+    </div>
+
+    <!-- Dev log: the app's own lines, to read and copy into a report. Its log
+         is a tab stop itself, so the scroller needs none of its own. -->
+    <div
+      class="panel"
+      role="tabpanel"
+      id={panelId('devlog')}
+      aria-labelledby={tabId('devlog')}
+      hidden={active !== 'devlog'}
+    >
+      <div class="column">
+        <h2>{t('settings.section.devlog')}</h2>
+        <DevLogSection visible={active === 'devlog'} />
       </div>
     </div>
 

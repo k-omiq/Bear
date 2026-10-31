@@ -9,6 +9,7 @@
 mod about;
 mod cloud_code_digest;
 mod denoise_history;
+mod devlog;
 mod diagnostics;
 mod events;
 mod exporting;
@@ -67,8 +68,12 @@ pub fn run() {
     builder
         .on_page_load(smoke::on_page_load)
         .setup(|app| {
+            // First, so nothing the rest of the start reports is missed. A
+            // launch check keeps its stderr: its report is for whoever ran it.
             if smoke::requested() {
                 smoke::begin(app.handle());
+            } else {
+                devlog::install(app.handle());
             }
             webview_lock::install(app.handle());
             measurement::restore(app.handle());
@@ -173,6 +178,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             diagnostics::diagnostics,
             about::about,
+            devlog::read_dev_log,
+            devlog::clear_dev_log,
             settings::read_settings,
             settings::write_settings,
             inference::commands::read_inference_config,

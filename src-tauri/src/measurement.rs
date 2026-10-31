@@ -315,6 +315,8 @@ pub struct RuntimeReport {
     /// A CUDA build this machine is ready for (`cuda13`, `cuda12`), newest
     /// first. `None` with no NVIDIA adapter or no complete install.
     pub recommended: Option<&'static str>,
+    /// The install found is not the one in this process ([`cuda::restart_needed`]).
+    pub restart_needed: bool,
 }
 
 /// `flavour` is the build the screen is choosing, which may not be the one
@@ -348,7 +350,14 @@ fn report_for(flavour: Option<String>, rescan: bool) -> RuntimeReport {
         Some(cuda::Verdict::ToolkitTooOld { have, need }) => (Some(have.clone()), Some(need.clone())),
         _ => (None, None),
     };
-    RuntimeReport { verdict_key: verdict.as_ref().map(cuda::Verdict::key), verdict_have, verdict_need, recommended, cuda: report }
+    RuntimeReport {
+        verdict_key: verdict.as_ref().map(cuda::Verdict::key),
+        verdict_have,
+        verdict_need,
+        recommended,
+        restart_needed: cuda::restart_needed(),
+        cuda: report,
+    }
 }
 
 #[tauri::command]

@@ -69,6 +69,49 @@ afterEach(() => {
 })
 
 describe('This computer', () => {
+  // On the page, not in a tooltip: a keyboard or touch never sees one, and these
+  // are the words a bug report needs.
+  it('says the runtime\'s own words beside a path that failed its test run', async () => {
+    fake({ runtimeReport: vi.fn(async () => REPORT) })
+    const accelerators = {
+      preference: 'auto',
+      models: [],
+      providers: [{
+        id: 'cuda', labelKey: 'accel.cuda', available: false, reasonKey: 'accel.declined.selfTest',
+        detail: 'Could not locate cudnn_engines_tensor_ir64_9.dll', used: true, measured: false, active: false, selected: false,
+      }],
+    }
+    const rendered = render(MachineCheck, { flavour: 'cuda12', flavours: FLAVOURS, platform: 'windows-x64', accelerators })
+    await waitFor(() => expect(rendered.getByText(t('accel.declined.selfTest'))).toBeTruthy())
+    expect(rendered.queryByText('Could not locate cudnn_engines_tensor_ir64_9.dll')).not.toBeNull()
+  })
+
+  it('says in plain words that a path outlived its test run', async () => {
+    fake({ runtimeReport: vi.fn(async () => REPORT) })
+    const accelerators = {
+      preference: 'auto',
+      models: [],
+      providers: [{
+        id: 'cuda', labelKey: 'accel.cuda', available: false, reasonKey: 'accel.declined.selfTest',
+        detail: 'accel.declined.selfTestStuck', used: true, measured: false, active: false, selected: false,
+      }],
+    }
+    const rendered = render(MachineCheck, { flavour: 'cuda12', flavours: FLAVOURS, platform: 'windows-x64', accelerators })
+    await waitFor(() => expect(rendered.getByText(t('accel.declined.selfTestStuck'))).toBeTruthy())
+    expect(rendered.queryByText('accel.declined.selfTestStuck')).toBeNull()
+  })
+
+  it('asks for a restart only when the install found is not the one loaded', async () => {
+    fake({ runtimeReport: vi.fn(async () => ({ ...REPORT, restartNeeded: true })) })
+    const rendered = render(MachineCheck, { flavour: 'cuda12', flavours: FLAVOURS, platform: 'windows-x64', accelerators: null })
+    await waitFor(() => expect(rendered.getByText(t('settings.runtime.machine.restartNeeded'))).toBeTruthy())
+    cleanup()
+    fake({ runtimeReport: vi.fn(async () => ({ ...REPORT, restartNeeded: false })) })
+    const again = render(MachineCheck, { flavour: 'cuda12', flavours: FLAVOURS, platform: 'windows-x64', accelerators: null })
+    await waitFor(() => expect(again.getByText(t('settings.runtime.machine.toolkits'))).toBeTruthy())
+    expect(again.queryByText(t('settings.runtime.machine.restartNeeded'))).toBeNull()
+  })
+
   it('judges the build being chosen against the toolkit and cuDNN of its own CUDA major', async () => {
     const backend = fake({ runtimeReport: vi.fn(async () => REPORT) })
     const onchooseflavour = vi.fn()
@@ -243,7 +286,16 @@ describe('Measurement', () => {
     expect(backend.measureBackends).toHaveBeenCalledTimes(1)
   })
 
-  it('says a result from another setup is not followed, and where a hand-picked model runs', async () => {
+  it('says in plain words that a backend outlived its test run', async () => {
+    const stuck = saved()
+    stuck.saved.models[0].results.push({ backend: 'webgpu', loadMs: null, firstMs: null, medianMs: null, runs: 0, error: 'accel.declined.selfTestStuck' })
+    fake({ readMeasurement: vi.fn(async () => stuck) })
+    const rendered = render(Measurement, { accelerators: PLACED, ready: true })
+    await waitFor(() => expect(rendered.getByText(t('accel.declined.selfTestStuck'))).toBeTruthy())
+    expect(rendered.queryByText('accel.declined.selfTestStuck')).toBeNull()
+  })
+
+  it('says a result from another setup is not followed, and where a hand-picked modelruns', async () => {
     fake({ readMeasurement: vi.fn(async () => saved({ current: false })) })
     const placed = structuredClone(PLACED)
     placed.models[0].acceleratorId = 'cpu'

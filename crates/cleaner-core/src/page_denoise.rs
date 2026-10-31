@@ -113,7 +113,7 @@ impl Waifu2xModel {
 
 /// `_swin_tile`: the next size swin_unet's windows divide.
 pub fn swin_tile(mut tile: usize) -> usize {
-    while tile < 16 || (tile - 16) % 12 != 0 || (tile - 16) % 16 != 0 {
+    while tile < 16 || !(tile - 16).is_multiple_of(12) || !(tile - 16).is_multiple_of(16) {
         tile += 1;
     }
     tile

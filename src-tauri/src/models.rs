@@ -427,14 +427,14 @@ fn accelerators_configured(
         .iter()
         .map(|(id, model_name, profile)| {
             let requested = settings.and_then(|s| crate::run::model_preference_from(s, id).ok()).unwrap_or(preference);
-            let present: Vec<Accelerator> =
-                available.iter().copied().filter(|accelerator| !accelerator.blocked_for(profile.name)).collect();
-            let mut chosen = accel::choose_on(profile, requested, &present, room, host);
-            if let (accel::Preference::Force(wanted), Some(declined)) = (requested, chosen.declined.as_mut()) {
-                if wanted.blocked_for(profile.name) {
-                    declined.reason_key = accel::SELF_TEST_FAILED;
-                }
-            }
+            let mut chosen = accel::choose_unblocked(
+                profile,
+                requested,
+                available,
+                |accelerator| accelerator.blocked_for(profile.name),
+                room,
+                host,
+            );
             if !supports_model(id, chosen.accelerator, host) || matches!(requested, accel::Preference::Force(wanted) if !supports_model(id, wanted, host)) {
                 let wanted = match requested { accel::Preference::Force(wanted) => wanted, _ => chosen.accelerator };
                 chosen.accelerator = Accelerator::Cpu;

@@ -887,7 +887,7 @@ pub fn validate_crop_payload(
         });
     }
 
-    if meta.width % LATENT_STRIDE != 0 || meta.height % LATENT_STRIDE != 0 {
+    if !meta.width.is_multiple_of(LATENT_STRIDE) || !meta.height.is_multiple_of(LATENT_STRIDE) {
         return Err(WireValidationError::DimensionNotSnapped {
             width: meta.width,
             height: meta.height,
@@ -1328,7 +1328,7 @@ pub fn validate_result_bytes(
         });
     }
 
-    if result_meta.width % LATENT_STRIDE != 0 || result_meta.height % LATENT_STRIDE != 0 {
+    if !result_meta.width.is_multiple_of(LATENT_STRIDE) || !result_meta.height.is_multiple_of(LATENT_STRIDE) {
         return Err(WireValidationError::DimensionNotSnapped {
             width: result_meta.width,
             height: result_meta.height,

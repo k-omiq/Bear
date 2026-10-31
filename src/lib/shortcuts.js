@@ -56,6 +56,8 @@ import { pageNavControls } from './model/paging.js'
  * @property {(direction: number) => void} cycleShape - the active tool's shape, or the selection tool when it has none
  * @property {(direction: number) => void} cycleMode - the active tool's mode, type or engine
  * @property {(mode: 'add'|'remove'|'detect') => void} setMaskSelectMode
+ * @property {() => void} swapColors - the other saved colour becomes the active one
+ * @property {() => void} pickColor - the screen's colour becomes the active one
  * @property {(key: 'mode'|'alignment') => void} cycleCloneStamp
  * @property {(key: 'size'|'hardness'|'opacity'|'flow'|'spacing', direction: number) => void} stepBrush
  * @property {() => void} focusNextOption - the tool bar's next slider
@@ -362,6 +364,7 @@ export const SHORTCUTS = [
     group: 'tools',
     labelKey: 'shortcuts.tool.maskRemove',
     keys: ['x'],
+    shift: false,
     chord: ['X'],
     scope: 'editor',
     run: (c) => c.setMaskSelectMode('remove'),
@@ -397,6 +400,28 @@ export const SHORTCUTS = [
     chord: ['Shift', 'C'],
     scope: 'editor',
     run: (c) => c.cycleCloneStamp('alignment'),
+  },
+  {
+    // Photoshop's `X` is the selection's remove here, so it takes Shift.
+    id: 'tool.swapColors',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.swapColors',
+    keys: ['x'],
+    shift: true,
+    chord: ['Shift', 'X'],
+    scope: 'editor',
+    run: (c) => c.swapColors(),
+  },
+  {
+    // E for eyedropper. Photoshop's `I` is the brush's opacity here.
+    id: 'tool.pickColor',
+    group: 'tools',
+    labelKey: 'shortcuts.tool.pickColor',
+    keys: ['e'],
+    shift: true,
+    chord: ['Shift', 'E'],
+    scope: 'editor',
+    run: (c) => c.pickColor(),
   },
 
   /* ---- brush: every round brush, and the detected masks' padding ------ */
@@ -886,6 +911,7 @@ export const SHORTCUTS = [
     group: 'app',
     labelKey: 'shortcuts.app.export',
     keys: ['e'],
+    shift: false,
     chord: ['E'],
     scope: 'editor',
     run: (c) => c.openModal('export'),

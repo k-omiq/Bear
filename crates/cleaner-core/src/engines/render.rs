@@ -303,7 +303,7 @@ pub const MAX_CROP_SIDE: u32 = 2048;
 /// (`ServiceLimits::max_pixels`): a full square at [`MAX_CROP_SIDE`].
 pub const MAX_CROP_PIXELS: u64 = 4_194_304;
 
-const _: () = assert!(MAX_CROP_SIDE % LATENT_STRIDE == 0);
+const _: () = assert!(MAX_CROP_SIDE.is_multiple_of(LATENT_STRIDE));
 const _: () = assert!(MAX_CROP_PIXELS == MAX_CROP_SIDE as u64 * MAX_CROP_SIDE as u64);
 
 /// The preprocessing version this build prepares new renders with. The cloud

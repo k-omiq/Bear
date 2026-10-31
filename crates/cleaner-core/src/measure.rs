@@ -219,10 +219,11 @@ pub fn fastest(timings: &[(Accelerator, Timing)]) -> Option<Accelerator> {
 }
 
 /// What a measurement is a measurement *of*: the loaded runtime library, the
-/// devices it found, and the NVIDIA driver. A timing taken under one of these
-/// says nothing about another - a new driver, a second GPU, a CUDA build in
-/// place of the DirectML one - so a saved measurement counts only while this
-/// is unchanged. `None` before a runtime is loaded.
+/// devices it found, the NVIDIA driver, and for a CUDA build the toolkit and
+/// cuDNN it would use. A timing taken under one of these says nothing about
+/// another - a new driver, a second GPU, a CUDA build in place of the DirectML
+/// one, a cuDNN that now has the part it lacked - so a saved measurement counts
+/// only while this is unchanged. `None` before a runtime is loaded.
 pub fn setup() -> Option<String> {
     let runtime = crate::runtime::loaded()?;
     // The path alone is the same for every build the app installs.
@@ -239,7 +240,9 @@ pub fn setup() -> Option<String> {
         devices.sort();
         parts.extend(devices);
     }
-    parts.extend(crate::cuda::report().gpus.into_iter().map(|gpu| format!("nvidia {} {}", gpu.name, gpu.driver)));
+    let report = crate::cuda::report();
+    parts.extend(report.gpus.iter().map(|gpu| format!("nvidia {} {}", gpu.name, gpu.driver)));
+    parts.extend(report.install_lines());
     Some(parts.join("\n"))
 }
 

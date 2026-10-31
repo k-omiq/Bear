@@ -396,6 +396,18 @@ fn sam_backend(preference: Preference, measured: Option<accel::Accelerator>) -> 
     }
 }
 
+/// What to tell the run when [`sam_backend`] moved a forced mask off its GPU.
+fn sam_moved(preference: Preference, backend: accel::Accelerator) -> Option<accel::Selection> {
+    match preference {
+        Preference::Force(wanted) if wanted != backend => Some(accel::Selection {
+            accelerator: backend,
+            declined: Some(accel::Declined::plain(wanted, accel::SELF_TEST_FAILED)),
+            note: None,
+        }),
+        _ => None,
+    }
+}
+
 /// The rung that will actually run for a route, under a ceiling.
 ///
 /// `None` is a decline. Rung 0 is always available - it is the bottom of the
@@ -2625,6 +2637,9 @@ impl Pipeline {
             let backend = sam_backend(
                 self.sam_preference, accel::measured_winner(crate::models::SAM_PROFILE_NAME))?;
             if self.sam.is_none() && !self.sam_unavailable {
+                if let Some(moved) = sam_moved(self.sam_preference, backend) {
+                    report_provider(crate::models::SAM_TS_NAME, &moved);
+                }
                 let app_data = self.app_data.as_deref().ok_or("App model directory unavailable")?;
                 let dir = crate::model_workflows::graph_dir(app_data).ok_or("The SAM-TS-L lettering mask graphs are not installed")?;
                 // A measured or inherited GPU that will not open today goes

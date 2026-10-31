@@ -30,6 +30,21 @@ fn model_backend_overrides_inherit_and_reject_unknown_values() {
     assert!(model_preference_from(&serde_json::json!({"modelAccelerators": {"ctd": 4}}), "ctd").is_err());
 }
 
+/// Every other model gets `notice.run.accelFallback` when a failed test run
+/// moves it. Only a force that moved is news: Automatic chose where it went.
+#[test]
+fn a_forced_mask_moved_off_its_gpu_is_reported() {
+    use accel::Accelerator::{Cpu, Cuda};
+    let moved = sam_moved(Preference::Force(Cuda), Cpu).expect("the run is told");
+    assert_eq!(moved.accelerator, Cpu);
+    let declined = moved.declined.expect("the reason is carried");
+    assert_eq!((declined.wanted, declined.reason_key), (Cuda, accel::SELF_TEST_FAILED));
+    assert_eq!(sam_moved(Preference::Force(Cuda), Cuda), None);
+    assert_eq!(sam_moved(Preference::Force(Cpu), Cpu), None);
+    assert_eq!(sam_moved(Preference::Automatic, Cpu), None);
+    assert_eq!(sam_moved(Preference::CpuOnly, Cpu), None);
+}
+
 #[test]
 fn sam_backend_takes_a_forced_gpu_and_only_a_measured_one_under_automatic() {
     use accel::Accelerator::{CoreMl, Cpu, Cuda, DirectMl, WebGpu};

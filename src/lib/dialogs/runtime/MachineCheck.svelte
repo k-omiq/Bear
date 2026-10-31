@@ -36,7 +36,7 @@
    * `chooseDisabled` holds Use build still while the build cannot change
    * (its download is running), as the build choice beside it is held.
    */
-  import { t } from '../../i18n/index.js'
+  import { hasKey, t } from '../../i18n/index.js'
   import { Button } from '../../ui/index.js'
   import { getBackend } from '../../api/backend.js'
   import { backendName, cudaMajorOf, flavourName } from './runtime.js'
@@ -99,7 +99,10 @@
     if (checking || rechecking) return
     rechecking = true
     try {
-      await Promise.all([cudaPlatform ? read(true) : null, onrecheck?.()])
+      // In order: the paths and the measurement are judged against what the
+      // rescan finds, and answered from the old install if they run beside it.
+      if (cudaPlatform) await read(true)
+      await onrecheck?.()
     } finally {
       rechecking = false
     }
@@ -185,6 +188,9 @@
           {t(report.verdictKey, verdictParams)}
         </p>
       {/if}
+      {#if report?.restartNeeded}
+        <p class="verdict">{t('settings.runtime.machine.restartNeeded')}</p>
+      {/if}
     </div>
 
     {#if recommended}
@@ -207,7 +213,8 @@
           <li class="path-row" class:down={!provider.available}>
             <span class="dot" aria-hidden="true"></span>
             <span class="path-name">{backendName(provider.id)}</span>
-            <span class="path-state" title={provider.detail ?? undefined}>{provider.available ? t('settings.runtime.machine.pathReady') : t(provider.reasonKey ?? '')}</span>
+            <span class="path-state">{provider.available ? t('settings.runtime.machine.pathReady') : t(provider.reasonKey ?? '')}</span>
+            {#if !provider.available && provider.detail}<span class="path-detail">{hasKey(provider.detail) ? t(provider.detail) : provider.detail}</span>{/if}
           </li>
         {/each}
       </ul>
@@ -291,6 +298,15 @@
   .path-name { font-weight: 500 }
   .path-state { color: var(--t2); min-width: 0 }
   .path-row.down .path-state { color: var(--warn) }
+  /* The runtime's own words: a user reads them out in a bug report. */
+  .path-detail {
+    grid-column: 3;
+    color: var(--t3);
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
+    user-select: text;
+    -webkit-user-select: text;
+  }
   .recheck { display: flex }
 
   @media (max-width: 620px) {

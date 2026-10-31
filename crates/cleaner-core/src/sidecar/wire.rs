@@ -469,7 +469,7 @@ pub mod b64 {
         let bytes = text.as_bytes();
         // `% 4` rather than `usize::is_multiple_of`, which reads better and is
         // stable only from 1.87 - past this workspace's declared 1.82 floor.
-        if bytes.len() % 4 != 0 {
+        if !bytes.len().is_multiple_of(4) {
             return None;
         }
         let mut out = Vec::with_capacity(bytes.len() / 4 * 3);

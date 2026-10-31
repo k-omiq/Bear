@@ -58,6 +58,7 @@ const stores = vi.hoisted(() => ({
     // On, so every engine a choice row lists is drawn; the off case is
     // its own test below.
     betaTools: true,
+    colorPair: { active: '#ffffff', other: '#000000' },
     /** @type {'local'|'cloud'} */
     cleanTarget: 'local',
     cleanLocalFirst: false,

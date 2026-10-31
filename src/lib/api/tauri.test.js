@@ -273,6 +273,15 @@ describe('the Tauri adapter', () => {
     expect(served.sort()).toEqual(implementedMethods())
   })
 
+  it('reads and clears the dev log through its commands', async () => {
+    const invoke = vi.fn().mockResolvedValue('a line\n')
+    const backend = createTauriBackend({ fallback: recordingFallback(), invoke })
+    await expect(backend.readDevLog()).resolves.toBe('a line\n')
+    expect(invoke).toHaveBeenLastCalledWith('read_dev_log')
+    await backend.clearDevLog()
+    expect(invoke).toHaveBeenLastCalledWith('clear_dev_log')
+  })
+
   it('sends about straight to the command and returns what it says', async () => {
     const invoke = vi
       .fn()

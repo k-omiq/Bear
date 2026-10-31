@@ -1098,6 +1098,7 @@ export const en = {
         pathReady: 'ready',
         pathsLater: 'Checked once the runtime is downloaded.',
         recheck: 'Check again',
+        restartNeeded: 'This install was found after another one was loaded. Restart the app to use it.',
       },
       measure: {
         body: 'Times each installed model on every path it can use here, then Automatic uses the fastest. It takes a minute or two. A backend you pick for a model still wins.',
@@ -1124,6 +1125,19 @@ export const en = {
           load: 'Load',
         },
       },
+    },
+    // Settings > Dev log (`dialogs/DevLogSection.svelte`).
+    devlog: {
+      intro: 'What the app wrote down while it ran, oldest first. If something goes wrong, copy this and send it to the developer.',
+      privacy: 'Keys, tokens, web addresses and the name of your home folder are hidden. File and folder names inside it stay, so read it before you share it.',
+      refresh: 'Refresh',
+      copy: 'Copy',
+      clear: 'Clear log',
+      copied: 'Copied.',
+      copyFailed: 'Could not copy. Select the text and copy it by hand.',
+      loadFailed: 'Could not read the log. Try Refresh.',
+      clearFailed: 'Could not clear the log. Try again.',
+      empty: 'Nothing logged yet.',
     },
     // Settings > Beta: tools still being tuned, off until turned on
     // (`session.betaTools`, `dialogs/BetaSettings.svelte`).
@@ -1180,6 +1194,7 @@ export const en = {
       performance: 'Runtime',
       shortcuts: 'Shortcuts',
       beta: 'Beta',
+      devlog: 'Dev log',
       about: 'About',
       denoise: 'Denoise',
       export: 'Export',
@@ -2049,6 +2064,7 @@ export const en = {
       partitioned: 'it would split this model and run it slower',
       failed: 'it could not build a session for this model',
       selfTest: 'it failed a test run on this computer',
+      selfTestStuck: 'The test run did not finish in 2 minutes. The graphics driver may be stuck. Restart the app to test it again.',
       // Forcing CoreML costs 8.19 GB on rung 2 and 5.62 GB on
       // rung 3, and this is the one refusal that is about the machine rather
       // than about the run. The figures travel beside the key, on the
@@ -3145,6 +3161,9 @@ export const en = {
       green: 'Green',
       blue: 'Blue',
       hex: 'Hex',
+      pairGroup: 'Two saved colors',
+      pairActive: 'Active color',
+      pairSwap: 'Switch to the other color',
       area: 'Color area',
       areaValue: 'Saturation {saturation}%, brightness {brightness}%',
     },
@@ -3269,6 +3288,8 @@ export const en = {
     },
     tool: {
       runCleanup: 'Run Text cleanup, or apply the held selection',
+      swapColors: 'Switch to the other saved color',
+      pickColor: 'Pick the active color from the screen',
       cleanScopeNext: 'Text cleanup: next scope',
       cleanScopePrev: 'Text cleanup: previous scope',
       focusOptions: "Next control on the tool's bar",

@@ -360,7 +360,8 @@ impl Accelerator {
     /// Why this provider failed [`CONV_PROOF`] here, or `None` where it passed
     /// or is not tested: a provider another check already refuses, DirectML and
     /// CoreML, and macOS, whose built-in WebGPU is the measured path. Asked once
-    /// per process until [`forget_proofs`].
+    /// per process until [`forget_proofs`], and waited for no longer than
+    /// [`PROOF_LIMIT`].
     pub fn proof_failure(self) -> Option<String> {
         if !matches!(self, Accelerator::Cuda | Accelerator::WebGpu)
             || cfg!(target_os = "macos")
@@ -369,16 +370,7 @@ impl Accelerator {
         {
             return None;
         }
-        let mut proofs = PROOFS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some((_, answer)) = proofs.iter().find(|(accelerator, _)| *accelerator == self) {
-            return answer.clone();
-        }
-        let answer = run_proof(self).err();
-        if let Some(detail) = &answer {
-            eprintln!("manga-cleaner: {self:?} failed its test run: {detail}");
-        }
-        proofs.push((self, answer.clone()));
-        answer
+        PROOFS.answer(self, PROOF_LIMIT, move || run_proof(self))
     }
 
     /// Whether a failed [`CONV_PROOF`] rules this provider out for a model. The
@@ -462,12 +454,129 @@ const CONV_PROOF: &[u8] = include_bytes!("conv_proof.onnx");
 /// The key a provider's model row and refusal carry after a failed proof.
 pub const SELF_TEST_FAILED: &str = "accel.declined.selfTest";
 
-static PROOFS: std::sync::Mutex<Vec<(Accelerator, Option<String>)>> = std::sync::Mutex::new(Vec::new());
+/// The answer a proof gets when it outlives [`PROOF_LIMIT`]: an i18n key, where
+/// a failed proof's answer is the runtime's own words.
+pub const SELF_TEST_STUCK: &str = "accel.declined.selfTestStuck";
+
+/// How long a proof may take, its wait for the device turn included. Far above
+/// the one `Conv` itself: a first load reads cuDNN's 1 GB or more from a cold
+/// disk, and a laptop's graphics card has to wake. A stuck driver costs each
+/// session that asks this long once per process, not once per session.
+const PROOF_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+static PROOFS: Proofs = Proofs::new();
+
+/// One provider's proof: running, answered, or both, when it outlived its limit.
+struct ProofSlot {
+    accelerator: Accelerator,
+    started: std::time::Instant,
+    answer: Option<Option<String>>,
+    /// Its thread has not returned. A driver call cannot be cancelled, so a
+    /// stuck thread is left behind, and no second one joins it.
+    running: bool,
+    /// Check again was pressed during it: its answer is about the old install.
+    forgotten: bool,
+}
+
+/// Each provider's proof, run once on a thread of its own, with no lock held
+/// across the run: a stuck driver must not hold up a session that asks about
+/// another provider, and everybody waiting on it gives up at the same moment.
+struct Proofs {
+    slots: std::sync::Mutex<Vec<ProofSlot>>,
+    changed: std::sync::Condvar,
+}
+
+impl Proofs {
+    const fn new() -> Proofs {
+        Proofs { slots: std::sync::Mutex::new(Vec::new()), changed: std::sync::Condvar::new() }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<ProofSlot>> {
+        self.slots.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Why this provider failed, or `None` where it passed. Starts `run` if
+    /// nothing has, and waits for it no longer than `limit` from its start.
+    fn answer(
+        &'static self,
+        accelerator: Accelerator,
+        limit: std::time::Duration,
+        run: impl FnOnce() -> Result<(), String> + Clone + Send + 'static,
+    ) -> Option<String> {
+        let mut slots = self.lock();
+        loop {
+            // Gone only where nothing has started, or a forgotten proof ended.
+            let Some(slot) = slots.iter_mut().find(|slot| slot.accelerator == accelerator) else {
+                let started = self.start(accelerator, run.clone());
+                slots.push(ProofSlot {
+                    accelerator,
+                    started: std::time::Instant::now(),
+                    answer: started.as_ref().err().map(|error| Some(error.to_string())),
+                    running: started.is_ok(),
+                    forgotten: false,
+                });
+                continue;
+            };
+            if let Some(answer) = &slot.answer {
+                return answer.clone();
+            }
+            let left = (slot.started + limit).saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                eprintln!("manga-cleaner: {accelerator:?} did not finish its test run in {limit:?}");
+                slot.answer = Some(Some(SELF_TEST_STUCK.to_owned()));
+                self.changed.notify_all();
+                return Some(SELF_TEST_STUCK.to_owned());
+            }
+            slots = self.changed.wait_timeout(slots, left).unwrap_or_else(|poisoned| poisoned.into_inner()).0;
+        }
+    }
+
+    fn start(
+        &'static self,
+        accelerator: Accelerator,
+        run: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
+        std::thread::Builder::new().name("gpu-proof".to_owned()).spawn(move || {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+                .unwrap_or_else(|_| Err("the test run panicked".to_owned()));
+            if let Err(detail) = &outcome {
+                eprintln!("manga-cleaner: {accelerator:?} failed its test run: {detail}");
+            }
+            self.finish(accelerator, outcome.err());
+        })
+    }
+
+    /// A proof's thread returned. An answer the limit already gave stands, so a
+    /// path does not come back mid-session on a driver that has just shown it
+    /// can hang.
+    fn finish(&self, accelerator: Accelerator, failure: Option<String>) {
+        let mut slots = self.lock();
+        if let Some(index) = slots.iter().position(|slot| slot.accelerator == accelerator) {
+            if slots[index].forgotten {
+                slots.remove(index);
+            } else {
+                slots[index].running = false;
+                slots[index].answer.get_or_insert(failure);
+            }
+        }
+        self.changed.notify_all();
+    }
+
+    /// Ask again on the next answer. A proof still running is kept, so a stuck
+    /// one is not joined by another, and goes when it ends.
+    fn forget(&self) {
+        let mut slots = self.lock();
+        slots.retain(|slot| slot.running);
+        for slot in slots.iter_mut() {
+            slot.forgotten = true;
+        }
+    }
+}
 
 /// Ask again on the next [`Accelerator::proof_failure`]: the user installed
 /// something and pressed Check again.
 pub fn forget_proofs() {
-    PROOFS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+    PROOFS.forget();
 }
 
 fn run_proof(accelerator: Accelerator) -> Result<(), String> {
@@ -873,7 +982,7 @@ pub struct Declined {
 
 impl Declined {
     /// The plain shape: a refusal with no arithmetic behind it.
-    fn plain(wanted: Accelerator, reason_key: &'static str) -> Declined {
+    pub fn plain(wanted: Accelerator, reason_key: &'static str) -> Declined {
         Declined { wanted, reason_key, needed_bytes: None, room_bytes: None }
     }
 }
@@ -966,6 +1075,42 @@ pub fn choose_on(
     host: Option<Platform>,
 ) -> Selection {
     choose_measured(profile, preference, available, room, host, measured_winner(profile.name))
+}
+
+/// [`choose_on`] after the GPU test runs have had their say: where a session
+/// really opens, and so what Settings names. `is_blocked` is
+/// [`Accelerator::blocked_for`] for this model, passed in so the rule is
+/// testable on a machine whose GPU passes.
+///
+/// A forced provider that failed its test run cannot serve the choice at all,
+/// so the model goes where Automatic would and the reason is reported. The
+/// choice stays saved, so it is back once the machine is fixed.
+///
+/// **A proof is asked for only where its answer can change the placement.**
+/// `CpuOnly` asks none and a force asks only its own: a proof runs GPU code, can
+/// take seconds, and nothing can stop a thread that waits on one.
+pub fn choose_unblocked(
+    profile: &ModelProfile,
+    preference: Preference,
+    available: &[Accelerator],
+    is_blocked: impl Fn(Accelerator) -> bool,
+    room: Option<u64>,
+    host: Option<Platform>,
+) -> Selection {
+    let blocked = match preference {
+        Preference::Force(wanted) if is_blocked(wanted) => Some(wanted),
+        _ => None,
+    };
+    let effective = if blocked.is_some() { Preference::Automatic } else { preference };
+    let present: Vec<Accelerator> = match effective {
+        Preference::Automatic => available.iter().copied().filter(|accelerator| !is_blocked(*accelerator)).collect(),
+        _ => available.to_vec(),
+    };
+    let mut selection = choose_on(profile, effective, &present, room, host);
+    if let Some(wanted) = blocked {
+        selection.declined = Some(Declined::plain(wanted, SELF_TEST_FAILED));
+    }
+    selection
 }
 
 /// [`choose_on`] with this machine's measured winner passed in, so the rule
@@ -1123,17 +1268,16 @@ pub fn open_session(
     // and only the session that is actually about to be built pays for a
     // sysctl.
     //
-    // A forced provider that failed its test run cannot serve the choice at
-    // all, so the model goes where Automatic would and the reason is reported.
-    // The choice stays saved, so it is back once the machine is fixed.
-    let blocked = match preference {
-        Preference::Force(wanted) if wanted.blocked_for(profile.name) => Some(wanted),
-        _ => None,
-    };
-    let preference = if blocked.is_some() { Preference::Automatic } else { preference };
-    let present: Vec<Accelerator> =
-        available().into_iter().filter(|accelerator| !accelerator.blocked_for(profile.name)).collect();
-    let mut selection = choose_on(profile, preference, &present, memory::room(), Platform::host());
+    let mut selection = choose_unblocked(
+        profile,
+        preference,
+        &available(),
+        |accelerator| accelerator.blocked_for(profile.name),
+        memory::room(),
+        Platform::host(),
+    );
+    let blocked = selection.declined.is_some_and(|declined| declined.reason_key == SELF_TEST_FAILED);
+    let preference = if blocked { Preference::Automatic } else { preference };
 
     // `choose_within` is pure: it is handed a list of what is present and can
     // only say "not in the list". The machine knows more than that - a build
@@ -1146,10 +1290,6 @@ pub fn open_session(
                 declined.reason_key = reason.reason_key();
             }
         }
-    }
-
-    if let Some(wanted) = blocked {
-        selection.declined = Some(Declined::plain(wanted, SELF_TEST_FAILED));
     }
 
     if let Preference::Force(wanted) = preference {
@@ -1166,19 +1306,25 @@ pub fn open_session(
 
     match build(model, selection.accelerator, intra_threads, strict_placement(profile, preference, selection.accelerator)) {
         Ok(session) => Ok((Model::new(session, selection.accelerator), selection)),
-        Err(detail) if selection.accelerator != Accelerator::Cpu && !matches!(preference, Preference::Force(_)) => {
+        Err(detail) => {
             let wanted = selection.accelerator;
-            selection = Selection {
-                accelerator: Accelerator::Cpu,
-                declined: Some(Declined::plain(wanted, "accel.declined.failed")),
-                note: None,
+            // A forced provider's failure is the user's to see, unless it had
+            // already failed its test run: the Hayai reader is let through a
+            // failed proof, and a provider that cannot even build it moves it
+            // to the CPU as a failed proof moves every other model.
+            let reason = match preference {
+                _ if wanted == Accelerator::Cpu => None,
+                Preference::Force(forced) => forced.proof_failure().map(|_| SELF_TEST_FAILED),
+                _ => Some("accel.declined.failed"),
             };
+            let Some(reason) = reason else {
+                return Err(SessionError::Build { model: profile.name, accelerator: wanted, detail });
+            };
+            selection = Selection { accelerator: Accelerator::Cpu, declined: Some(Declined::plain(wanted, reason)), note: None };
             let session = build(model, Accelerator::Cpu, intra_threads, false)
                 .map_err(|detail| SessionError::Build { model: profile.name, accelerator: Accelerator::Cpu, detail })?;
-            let _ = detail;
             Ok((Model::new(session, Accelerator::Cpu), selection))
         }
-        Err(detail) => Err(SessionError::Build { model: profile.name, accelerator: selection.accelerator, detail }),
     }
 }
 
@@ -1404,6 +1550,254 @@ mod tests {
         // fall back from.
         assert!(!strict_placement(&DETECTOR, Preference::Automatic, Accelerator::WebGpu));
         assert!(!strict_placement(&LAMA, Preference::CpuOnly, Accelerator::Cpu));
+    }
+
+    /// A one-`Conv` graph on disk, for a test that needs a session and no
+    /// model files. The one `open_session` is handed here is never a real one.
+    fn conv_graph(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("manga-cleaner-conv-{name}-{}.onnx", std::process::id()));
+        std::fs::write(&path, CONV_PROOF).unwrap();
+        path
+    }
+
+    /// `open_session` and `models::accelerators_configured` both choose through
+    /// `choose_unblocked`, so a LaMa forced to a CUDA that failed its proof is
+    /// named on the GPU it opens on, not on the CPU.
+    #[test]
+    fn settings_names_where_a_blocked_forced_model_really_runs() {
+        let windows = Platform { os: Os::Windows, arch: Arch::X86_64 };
+        let present = [Accelerator::Cuda, Accelerator::WebGpu];
+        let cuda_failed = |accelerator: Accelerator| accelerator == Accelerator::Cuda;
+        for profile in [&LAMA, &DETECTOR] {
+            let forced = Preference::Force(Accelerator::Cuda);
+            let drawn = choose_unblocked(profile, forced, &present, cuda_failed, None, Some(windows));
+            assert_eq!(drawn.accelerator, Accelerator::WebGpu, "{}", profile.name);
+            assert_eq!(drawn.declined.map(|declined| declined.reason_key), Some(SELF_TEST_FAILED));
+        }
+    }
+
+    /// A proof runs GPU code and nothing can stop a wait on one, so it is asked
+    /// for only where its answer can change the placement.
+    #[test]
+    fn a_proof_is_asked_only_where_it_can_change_the_placement() {
+        let present = [Accelerator::Cuda, Accelerator::WebGpu];
+        let asked = std::cell::RefCell::new(Vec::new());
+        let never_blocked = |accelerator| {
+            asked.borrow_mut().push(accelerator);
+            false
+        };
+        let cpu = choose_unblocked(&BALLOON, Preference::CpuOnly, &present, never_blocked, None, None);
+        assert_eq!(cpu.accelerator, Accelerator::Cpu);
+        assert!(asked.borrow().is_empty(), "CpuOnly asked {:?}", asked.borrow());
+        choose_unblocked(&LAMA, Preference::Force(Accelerator::WebGpu), &present, never_blocked, None, None);
+        assert_eq!(*asked.borrow(), [Accelerator::WebGpu]);
+    }
+
+    /// The proof is asked once per process until Check again, and `runtime::load`
+    /// is called on every `list_accelerators`, `list_workflow_capabilities`, run
+    /// start and region re-run. `RT_RUNTIME` the runtime library.
+    #[test]
+    #[ignore = "needs RT_RUNTIME"]
+    fn loading_the_runtime_again_keeps_the_proofs() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        PROOFS.lock().push(ProofSlot {
+            accelerator: Accelerator::WebGpu,
+            started: std::time::Instant::now(),
+            answer: Some(Some("seeded".to_owned())),
+            running: false,
+            forgotten: false,
+        });
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        assert!(!PROOFS.lock().is_empty(), "the second load forgot the proof");
+    }
+
+    const SHORT: std::time::Duration = std::time::Duration::from_millis(150);
+
+    /// A table of its own for one test, so no fake proof reaches the real one.
+    fn proofs() -> &'static Proofs {
+        Box::leak(Box::new(Proofs::new()))
+    }
+
+    /// A proof that never returns, counting how many times it was started.
+    fn stuck_proof(starts: &std::sync::Arc<std::sync::atomic::AtomicUsize>) -> impl FnOnce() -> Result<(), String> + Clone + Send + 'static {
+        let starts = starts.clone();
+        move || {
+            starts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            loop {
+                std::thread::park();
+            }
+        }
+    }
+
+    /// A stuck driver costs the limit once. Everybody already waiting gives up
+    /// together, nobody after them waits, and it never starts a second time.
+    #[test]
+    fn a_proof_that_never_returns_fails_at_its_limit_and_is_not_started_again() {
+        let table = proofs();
+        let starts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let began = std::time::Instant::now();
+        let waiters: Vec<_> = (0..4)
+            .map(|_| {
+                let proof = stuck_proof(&starts);
+                std::thread::spawn(move || table.answer(Accelerator::Cuda, SHORT, proof))
+            })
+            .collect();
+        for waiter in waiters {
+            assert_eq!(waiter.join().unwrap().as_deref(), Some(SELF_TEST_STUCK));
+        }
+        assert!(began.elapsed() >= SHORT);
+        assert!(began.elapsed() < SHORT * 20, "the waiters stacked up: {:?}", began.elapsed());
+
+        let later = std::time::Instant::now();
+        assert_eq!(table.answer(Accelerator::Cuda, SHORT, stuck_proof(&starts)).as_deref(), Some(SELF_TEST_STUCK));
+        assert!(later.elapsed() < SHORT, "a later session waited again");
+        assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// No lock is held across a run, so the next path answers beside a stuck one.
+    #[test]
+    fn a_stuck_proof_does_not_hold_up_another_providers() {
+        let table = proofs();
+        let starts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let proof = stuck_proof(&starts);
+        let stuck = std::thread::spawn(move || table.answer(Accelerator::Cuda, std::time::Duration::from_secs(5), proof));
+        while starts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        let began = std::time::Instant::now();
+        assert_eq!(table.answer(Accelerator::WebGpu, std::time::Duration::from_secs(5), || Ok(())), None);
+        assert!(began.elapsed() < std::time::Duration::from_secs(4), "it waited on the stuck proof");
+        table.answer(Accelerator::Cuda, std::time::Duration::ZERO, || Ok(()));
+        assert_eq!(stuck.join().unwrap().as_deref(), Some(SELF_TEST_STUCK));
+    }
+
+    /// Check again does not add a second thread to a stuck driver. Once the old
+    /// thread has returned, the next ask tests the machine again.
+    #[test]
+    fn check_again_waits_for_a_stuck_proof_to_end_before_starting_another() {
+        let table = proofs();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let held = std::sync::Arc::new(std::sync::Mutex::new(released));
+        assert_eq!(
+            table.answer(Accelerator::Cuda, SHORT, {
+                let held = held.clone();
+                move || {
+                    let _ = held.lock().unwrap().recv();
+                    Ok(())
+                }
+            })
+            .as_deref(),
+            Some(SELF_TEST_STUCK)
+        );
+        table.forget();
+        let again = || table.answer(Accelerator::Cuda, SHORT, || Err("the new words".to_owned()));
+        assert_eq!(again().as_deref(), Some(SELF_TEST_STUCK));
+
+        drop(release);
+        let began = std::time::Instant::now();
+        while table.lock().iter().any(|slot| slot.accelerator == Accelerator::Cuda) {
+            assert!(began.elapsed() < std::time::Duration::from_secs(5), "the old thread never ended");
+            std::thread::yield_now();
+        }
+        assert_eq!(again().as_deref(), Some("the new words"));
+    }
+
+    /// An answer in time is the proof's own, asked for once, a panic included.
+    #[test]
+    fn a_proof_that_returns_in_time_gives_its_own_answer_once() {
+        let table = proofs();
+        let limit = std::time::Duration::from_secs(30);
+        assert_eq!(table.answer(Accelerator::Cuda, limit, || Err("no cuDNN".to_owned())).as_deref(), Some("no cuDNN"));
+        assert_eq!(table.answer(Accelerator::Cuda, limit, || Ok(())).as_deref(), Some("no cuDNN"));
+        assert_eq!(table.answer(Accelerator::WebGpu, limit, || Ok(())), None);
+        let panicked = table.answer(Accelerator::DirectMl, limit, || panic!("a fake proof panics"));
+        assert_eq!(panicked.as_deref(), Some("the test run panicked"));
+    }
+
+    /// `CpuOnly` opens while a proof runs or hangs: nothing can stop a wait on
+    /// one. `RT_RUNTIME` the runtime library, on Windows or Linux with a GPU
+    /// path, since macOS never runs a proof. The rule itself is
+    /// `a_proof_is_asked_only_where_it_can_change_the_placement`.
+    #[test]
+    #[ignore = "needs RT_RUNTIME and a GPU path"]
+    fn a_cpu_only_session_does_not_wait_on_a_proof() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        assert!(Accelerator::WebGpu.is_available() || Accelerator::Cuda.is_available(), "no GPU path here");
+        let graph = conv_graph("cpu-only");
+        let running = PROOFS.lock();
+        let (sent, answer) = std::sync::mpsc::channel();
+        let opening = graph.clone();
+        std::thread::spawn(move || {
+            let opened = open_session(&opening, &BALLOON, Preference::CpuOnly, None);
+            let _ = sent.send(opened.map(|(_, selection)| selection.accelerator).map_err(|e| e.to_string()));
+        });
+        let outcome = answer.recv_timeout(std::time::Duration::from_secs(20));
+        drop(running);
+        let _ = std::fs::remove_file(graph);
+        assert_eq!(outcome, Ok(Ok(Accelerator::Cpu)), "a CPU session waited on a GPU proof");
+    }
+
+    /// `blocked_for` exempts Hayai from a failed CUDA proof whatever the proof
+    /// said, so a forced reader can reach a provider that cannot even load cuDNN
+    /// or register. It moves to the CPU, as every other model moves off.
+    /// `CUDA_PROBE_RUNTIME` a CUDA build of the runtime, on a machine where the
+    /// proof fails: probe-cuda.yml's runners have no card.
+    #[test]
+    #[ignore = "needs a CUDA build of the runtime and no NVIDIA card"]
+    fn a_forced_reader_moves_off_a_cuda_that_will_not_build() {
+        let runtime = std::env::var_os("CUDA_PROBE_RUNTIME").expect("CUDA_PROBE_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).expect("the runtime loads");
+        assert!(Accelerator::Cuda.proof_failure().is_some(), "this machine passes the proof");
+        let graph = conv_graph("hayai");
+        let opened = open_session(&graph, &HAYAI, Preference::Force(Accelerator::Cuda), None);
+        let _ = std::fs::remove_file(graph);
+        let (_, selection) = opened.expect("the reader stays open on the CPU");
+        assert_eq!(selection.accelerator, Accelerator::Cpu);
+        assert_eq!(selection.declined.map(|d| d.reason_key), Some(SELF_TEST_FAILED));
+    }
+
+    /// What the runtime does with a forced provider today, for the question
+    /// whether `error_on_failure` broke one. Passes: a provider missing from
+    /// the build is refused before any builder, and the ones present register.
+    /// `RT_RUNTIME` the macOS runtime library.
+    #[test]
+    #[ignore = "needs RT_RUNTIME on macOS"]
+    fn error_on_failure_leaves_a_forced_provider_as_it_was() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        let graph = conv_graph("forced");
+        for missing in [Accelerator::Cuda, Accelerator::DirectMl, Accelerator::TensorRt] {
+            let error = open_session(&graph, &BALLOON, Preference::Force(missing), None).err().expect("refused");
+            assert!(error.to_string().contains("requested backend is unavailable"), "{missing:?}: {error}");
+        }
+        let (_, on_webgpu) = open_session(&graph, &DETECTOR, Preference::Force(Accelerator::WebGpu), None).unwrap();
+        assert_eq!(on_webgpu.accelerator, Accelerator::WebGpu);
+        let (_, on_coreml) = open_session(&graph, &LAMA, Preference::Force(Accelerator::CoreMl), None).unwrap();
+        assert_eq!(on_coreml.accelerator, Accelerator::CoreMl);
+        let _ = std::fs::remove_file(graph);
+    }
+
+    /// The proof, strict, through `open_session`'s own path on every GPU path a
+    /// test can reach here, so a false failure on a working GPU would show.
+    #[test]
+    #[ignore = "needs RT_RUNTIME"]
+    fn the_strict_proof_does_not_fail_a_working_gpu_while_the_turn_is_held_elsewhere() {
+        let runtime = std::env::var("RT_RUNTIME").expect("RT_RUNTIME");
+        crate::runtime::load(Path::new(&runtime)).unwrap();
+        // A thread that holds the device turn and asks for a proof, and one
+        // that runs the proof: the two orders the two locks can be taken in.
+        let turn = device_turn(Accelerator::WebGpu);
+        let (sent, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sent.send(run_proof(Accelerator::WebGpu));
+        });
+        assert!(Accelerator::WebGpu.proof_failure().is_none());
+        assert!(answer.recv_timeout(std::time::Duration::from_secs(1)).is_err(), "the proof ignored the turn");
+        drop(turn);
+        let outcome = answer.recv_timeout(std::time::Duration::from_secs(60)).expect("the proof finished");
+        assert_eq!(outcome, Ok(()));
     }
 
     /// The device list answers three ways, not two, and the third is the one

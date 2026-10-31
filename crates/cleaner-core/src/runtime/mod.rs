@@ -205,10 +205,15 @@ pub fn load(path: &Path) -> Result<(), LoadError> {
         })?
         .with_name("manga-cleaner")
         .commit();
+    let first = LOADED.get().is_none();
     LOADED.get_or_init(|| Loaded { path: path.to_path_buf(), build: build_of(path), file: file_stamp(path) });
-    // The CUDA major wanted is read off this load, so a report taken before
-    // the load is about no build at all.
-    crate::cuda::rescan();
+    // The CUDA major wanted is read off the first load, so a report taken
+    // before it is about no build at all. Later loads are the same library, and
+    // are asked for on every Settings refresh and run: they must not cost the
+    // GPU another test run beside a job.
+    if first {
+        crate::cuda::rescan();
+    }
     WEBGPU_PLUGIN.get_or_init(|| register_webgpu_plugin(path));
     Ok(())
 }
