@@ -422,9 +422,19 @@ jobs:
           if (-not (Test-Path $report)) { throw 'The app wrote no report' }
           Get-Content $report
           if ($app.ExitCode -ne 0) {
-            # A crash names its module here, and nowhere else on a runner.
-            Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-30); Id = 1000, 1001, 1026 } -ErrorAction SilentlyContinue |
-              ForEach-Object { Write-Host $_.Message }
+            # A second run under the debugger, for the stack of the crash.
+            $cdb = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+            Write-Host "debugger present: $(Test-Path $cdb)"
+            if (Test-Path $cdb) {
+              $env:MANGA_CLEANER_SMOKE_REPORT = Join-Path $out 'report-debug.json'
+              $debugLog = Join-Path $out 'debugger.txt'
+              $debugged = Start-Process -FilePath $cdb -PassThru -NoNewWindow -RedirectStandardOutput $debugLog `
+                -ArgumentList @('-g', '-c', '".echo CRASH-STOP; .exr -1; kn 60; .echo ALL-THREADS; ~*kn 12; .echo MODULES; lmn; q"', "`"$($exe.FullName)`"")
+              if (-not $debugged.WaitForExit(300000)) { $debugged.Kill(); Write-Host 'the debugger run timed out' }
+              $text = Get-Content $debugLog
+              $stop = [Array]::IndexOf($text, ($text | Where-Object { $_ -match 'CRASH-STOP' } | Select-Object -First 1))
+              $text | Select-Object -Skip ([Math]::Max($stop - 15, 0)) | Select-Object -First 500 | ForEach-Object { Write-Host "cdb: $_" }
+            }
             throw "The launch check failed with exit code $($app.ExitCode)"
           }
       - uses: actions/upload-artifact@v4
