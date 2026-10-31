@@ -563,7 +563,7 @@ fn rt_backends(runtime_installed: bool) -> Vec<Backend> {
                 qualified: false,
                 available: directml,
                 selectable: directml,
-                note: "Strict DirectML session build; model assignment is not yet verified on Windows hardware.",
+                note: "A forced DirectML session keeps the CPU fallback for Full and is strict for Small; neither is verified on Windows hardware.",
             },
             Backend {
                 id: "ort-cuda",
@@ -571,7 +571,7 @@ fn rt_backends(runtime_installed: bool) -> Vec<Backend> {
                 qualified: false,
                 available: cuda,
                 selectable: cuda,
-                note: "Strict CUDA session build; model assignment is not yet verified on Windows hardware.",
+                note: "A forced CUDA session keeps the CPU fallback for Full and is strict for Small; neither is verified on Windows hardware.",
             },
         ]);
     } else if cfg!(target_os = "linux") {
@@ -582,7 +582,7 @@ fn rt_backends(runtime_installed: bool) -> Vec<Backend> {
                 qualified: false,
                 available: cuda,
                 selectable: cuda,
-                note: "Strict CUDA session build; model assignment is not yet verified on Linux hardware.",
+                note: "A forced CUDA session keeps the CPU fallback for Full and is strict for Small; neither is verified on Linux hardware.",
             },
             Backend {
                 id: "ort-webgpu",
@@ -1951,17 +1951,21 @@ pub async fn analyze_capabilities(
 ) -> Result<Analysis, String> {
     let mode = Workflow::parse(&workflow)?;
     let settings = crate::settings::read(&app).unwrap_or(serde_json::Value::Null);
+    let host = cleaner_core::runtime::package::Platform::host();
     let rt_id = if rt_profile == "full-halves" { "rtFull" } else { "rtSmall" };
     let mut rt_preference = review_preference(&rt_backend)?;
     if rt_preference == Preference::Automatic {
-        rt_preference = crate::run::model_preference_from(&settings, rt_id)?;
+        rt_preference = if rt_id == "rtFull" {
+            crate::run::full_rt_preference(&settings, host)?.0
+        } else {
+            crate::run::model_preference_from(&settings, rt_id)?
+        };
     }
     let mut sam_preference = review_preference(&sam_backend)?;
     if sam_preference == Preference::Automatic {
         sam_preference = crate::run::model_preference_from(&settings, "samTs")?;
     }
     let ctd_preference = crate::run::model_preference_from(&settings, "ctd")?;
-    let host = cleaner_core::runtime::package::Platform::host();
     for (id, enabled, preference) in [
         (rt_id, mode.rt(), rt_preference),
         ("samTs", mode.sam(), sam_preference),

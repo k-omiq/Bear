@@ -38,6 +38,9 @@ impl FullRegions {
     /// The run may release this session at its next region boundary.
     pub fn spent(&self) -> bool { self.lease.spent() }
 
+    /// This session failed, so it is dropped at the next region boundary.
+    pub fn poison(&self) { self.lease.poison(); }
+
     /// Two contiguous vertical tiles with Pillow bilinear 640-square input,
     /// as in `spikes/chapter-rtdetr/compare_variants.py`. Outputs use source
     /// page coordinates. Odd heights put the extra row in the lower tile.

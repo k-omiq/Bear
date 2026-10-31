@@ -4513,6 +4513,57 @@ fn the_real_pipeline() -> Option<Pipeline> {
 /// [`the_real_pipeline`] gives. Poisoning is ignored: a panicking test has
 /// already failed, and taking the rest of the binary down with it turns one
 /// red line into a hundred.
+/// A GPU choice Ogkalu Full only inherits is not an order, as for SAM-TS-L. One
+/// made for it stays forced, and the CPU has nothing to give way to.
+#[test]
+fn full_rt_keeps_the_cpu_behind_an_inherited_gpu_and_not_a_chosen_one() {
+    use accel::Accelerator::{Cpu, Cuda, DirectMl, WebGpu};
+    use cleaner_core::runtime::package::{Arch, Os, Platform};
+    let windows = Some(Platform { os: Os::Windows, arch: Arch::X86_64 });
+    let inherited = |backend: &str| serde_json::json!({"accelerator": backend});
+    assert_eq!(full_rt_preference(&inherited("webgpu"), windows), Ok((Preference::Automatic, true)));
+    assert_eq!(full_rt_preference(&inherited("directml"), windows), Ok((Preference::Force(DirectMl), true)));
+    let chosen = |backend: &str| serde_json::json!({"accelerator": "webgpu", "modelAccelerators": {"rtFull": backend}});
+    assert_eq!(full_rt_preference(&chosen("cuda"), windows), Ok((Preference::Force(Cuda), false)));
+    assert_eq!(full_rt_preference(&chosen("webgpu"), windows), Ok((Preference::Force(WebGpu), false)));
+    assert!(full_rt_gives_way(true, DirectMl));
+    assert!(!full_rt_gives_way(false, DirectMl));
+    assert!(!full_rt_gives_way(true, Cpu));
+    // A run that detects with Full goes on under the whole-app WebGPU choice.
+    let models = DetectorModels { ctd: false, rt_small: false, rt_full: true, sam: false };
+    let pipeline = Pipeline::unchecked(Path::new("no-weights-live-here"), Preference::Automatic, models, false, None);
+    let settings = serde_json::json!({"accelerator": "webgpu", "modelAccelerators": {"inpainter": "auto"}});
+    let opened = pipeline.with_model_preferences(&settings).unwrap();
+    assert_eq!((opened.full_rt_preference, opened.full_rt_cpu_fallback), (Preference::Automatic, true));
+}
+
+/// A page Full fails on the CPU leaves the session poisoned and the fault named.
+/// The session is a real one on a graph with none of Full's inputs, so `run`
+/// truly fails.
+#[test]
+fn a_full_rt_page_failure_poisons_the_session_and_records_the_fault() {
+    let Some(runtime) = cleaner_core::runtime::find(None).ok().or_else(fetched_runtime) else {
+        eprintln!("skipped: no ONNX Runtime - run scripts/fetch-runtime.sh");
+        return;
+    };
+    if cleaner_core::runtime::load(&runtime).is_err() {
+        eprintln!("skipped: the ONNX Runtime would not load");
+        return;
+    }
+    let scratch = Scratch::new("full-rt-fault");
+    let graph = scratch.join("wrong-inputs.onnx");
+    std::fs::write(&graph, include_bytes!("../../../crates/cleaner-core/src/conv_proof.onnx")).unwrap();
+    let models = DetectorModels { ctd: false, rt_small: false, rt_full: true, sam: false };
+    let mut pipeline = Pipeline::unchecked(Path::new("no-weights-live-here"), Preference::Automatic, models, false, None);
+    pipeline.full_rt = Some(FullRegions::open(&graph, Preference::CpuOnly).unwrap().0);
+    let page = gray_page(|_, _| 128);
+    let error = pipeline.detect_full_rt(&page).unwrap_err();
+    assert!(error.contains("Ogkalu comic text & bubble detector inference"), "{error}");
+    let fault = pipeline.fault.as_ref().expect("a named fault");
+    assert_eq!((fault.model_key, fault.accel_key), (accel::FULL_RT.label_key, accel::Accelerator::Cpu.label_key()));
+    assert!(pipeline.full_rt.as_ref().unwrap().spent());
+}
+
 /// `open_gate` with the reader's three files absent, and with them present but
 /// unreadable. Both open a gate, and neither has a reader - the second is the
 /// fallback for a reader that will not open, which had no test.

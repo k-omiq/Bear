@@ -347,14 +347,33 @@ pub(crate) fn reader_preference(settings: &serde_json::Value, host: Option<clean
 /// Automatic does, rather than losing the mask for a choice made for LaMa.
 pub(crate) fn sam_preference(settings: &serde_json::Value, host: Option<cleaner_core::runtime::package::Platform>)
     -> Result<(Preference, bool), String> {
-    let chosen = settings.get("modelAccelerators").and_then(|v| v.get("samTs")).is_some();
-    match model_preference_from(settings, "samTs")? {
-        Preference::Force(accelerator) if !chosen && !crate::models::supports_model("samTs", accelerator, host) => {
+    preference_with_fallback(settings, "samTs", host)
+}
+
+/// Ogkalu Full's provider, and whether a GPU it is on may give way to the CPU,
+/// by the same rule as [`sam_preference`]: a whole-app choice made for LaMa
+/// never stops a run that detects with Full.
+pub(crate) fn full_rt_preference(settings: &serde_json::Value, host: Option<cleaner_core::runtime::package::Platform>)
+    -> Result<(Preference, bool), String> {
+    preference_with_fallback(settings, "rtFull", host)
+}
+
+fn preference_with_fallback(settings: &serde_json::Value, id: &str, host: Option<cleaner_core::runtime::package::Platform>)
+    -> Result<(Preference, bool), String> {
+    let chosen = settings.get("modelAccelerators").and_then(|v| v.get(id)).is_some();
+    match model_preference_from(settings, id)? {
+        Preference::Force(accelerator) if !chosen && !crate::models::supports_model(id, accelerator, host) => {
             Ok((Preference::Automatic, true))
         }
         Preference::Force(accelerator) => Ok((Preference::Force(accelerator), !chosen)),
         other => Ok((other, true)),
     }
+}
+
+/// Whether a failure on this provider moves Ogkalu Full to the CPU. A choice
+/// made for it does not, and the CPU has nowhere to go.
+fn full_rt_gives_way(cpu_fallback: bool, accelerator: accel::Accelerator) -> bool {
+    cpu_fallback && accelerator != accel::Accelerator::Cpu
 }
 
 /// The same, from the bare name. Split out so the mapping is testable without a
@@ -1307,6 +1326,16 @@ impl Faulted for Detector {
     }
 }
 
+impl Faulted for FullRegions {
+    fn poison_session(&self) {
+        FullRegions::poison(self);
+    }
+
+    fn accel_key(&self) -> &'static str {
+        self.selection().accelerator.label_key()
+    }
+}
+
 impl Faulted for cleaner_core::balloon::BalloonDetector {
     fn poison_session(&self) {
         cleaner_core::balloon::BalloonDetector::poison(self);
@@ -1739,6 +1768,9 @@ pub struct Pipeline {
     sam_unavailable: bool,
     analysis_cancel: Arc<sam_ts::Cancellation>,
     full_rt_preference: Preference,
+    /// Whether a GPU Full is on may give way to the CPU: under Automatic, or a
+    /// choice it only inherits ([`full_rt_preference`]). Not for one made for it.
+    full_rt_cpu_fallback: bool,
     sam_preference: Preference,
     /// A GPU the lettering mask runs on goes back to the CPU when it will not
     /// open or fails a page: under Automatic (a measured GPU), or a whole-app
@@ -2294,6 +2326,7 @@ impl Pipeline {
             sam_unavailable: false,
             analysis_cancel: Arc::new(sam_ts::Cancellation::default()),
             full_rt_preference: preference,
+            full_rt_cpu_fallback: true,
             sam_preference: preference,
             sam_cpu_fallback: true,
             engine_version: env!("CARGO_PKG_VERSION"),
@@ -2440,8 +2473,8 @@ impl Pipeline {
         self.detector.key = session_key(registry::Kind::TextDetector, &self.detector.models, self.detector.preference);
         self.balloons.preference = model_preference_from(settings, "rtSmall")?;
         self.balloons.key = session_key(registry::Kind::BalloonDetector, &self.balloons.models, self.balloons.preference);
-        self.full_rt_preference = model_preference_from(settings, "rtFull")?;
         let host = cleaner_core::runtime::package::Platform::host();
+        (self.full_rt_preference, self.full_rt_cpu_fallback) = full_rt_preference(settings, host)?;
         (self.sam_preference, self.sam_cpu_fallback) = sam_preference(settings, host)?;
         self.rung2.preference = model_preference_from(settings, "inpainter")?;
         self.rung2.key = session_key(registry::Kind::Inpainter, &self.rung2.models, self.rung2.preference);
@@ -2602,18 +2635,7 @@ impl Pipeline {
         } else if self.detection_models.rt_full && self.remote_rt() {
             remote.as_ref().map(|(boxes, _)| boxes.clone()).ok_or("cloud analysis missing for this page")?
         } else if self.detection_models.rt_full {
-            if self.full_rt.is_none() {
-                let app_data = self.app_data.as_deref().ok_or("App model directory unavailable")?;
-                let path = crate::model_workflows::full_rt_path(app_data)
-                    .ok_or("The Ogkalu comic text & bubble detector (Full) graph is not installed or failed SHA-256")?;
-                let model = FullRegions::open(&path, self.full_rt_preference).inspect_err(|detail| {
-                    self.fault = Some(EngineFault { model_key: accel::FULL_RT.label_key,
-                        accel_key: requested_accel_key(self.full_rt_preference), detail: detail.clone() });
-                })?.0;
-                report_provider(crate::models::RT_FULL_NAME, model.selection());
-                self.full_rt = Some(model);
-            }
-            self.full_rt.as_mut().unwrap().detect_halves_cancellable(crop, &self.analysis_cancel)?
+            self.detect_full_rt(crop)?
         } else { Vec::new() };
         let detection = if self.detection_models.ctd {
             let requested_key = requested_accel_key(self.detector.preference);
@@ -2693,6 +2715,64 @@ impl Pipeline {
             }
         } else { None };
         Ok((balloons, detection, lettering))
+    }
+
+    /// Ogkalu Full's boxes for one crop. A GPU that may give way and fails a
+    /// page (out of video memory, a driver reset) sends this page and the rest
+    /// of the run to the CPU. Any other failure poisons the session and records
+    /// the fault, as every other model's does.
+    fn detect_full_rt(&mut self, crop: &Raster) -> Result<Vec<cleaner_core::balloon::BalloonBox>, String> {
+        if self.full_rt.is_none() {
+            self.open_full_rt()?;
+        }
+        let model = self.full_rt.as_mut().unwrap();
+        let on = model.selection().accelerator;
+        let mut boxes = model.detect_halves_cancellable(crop, &self.analysis_cancel);
+        if let Err(detail) = &boxes {
+            if full_rt_gives_way(self.full_rt_cpu_fallback, on) && self.analysis_cancel.check().is_ok() {
+                self.move_full_rt_to_cpu(on, detail);
+                // The GPU session goes first, which gives its memory back.
+                self.full_rt = None;
+                self.open_full_rt()?;
+                boxes = self.full_rt.as_mut().unwrap().detect_halves_cancellable(crop, &self.analysis_cancel);
+            }
+        }
+        // A cancel is the run stopping, not the model failing.
+        if self.analysis_cancel.check().is_err() {
+            return boxes;
+        }
+        ran(boxes, self.full_rt.as_ref().unwrap(), &accel::FULL_RT, &mut self.fault)
+    }
+
+    fn open_full_rt(&mut self) -> Result<(), String> {
+        let app_data = self.app_data.as_deref().ok_or("App model directory unavailable")?;
+        let path = crate::model_workflows::full_rt_path(app_data)
+            .ok_or("The Ogkalu comic text & bubble detector (Full) graph is not installed or failed SHA-256")?;
+        let mut opened = FullRegions::open(&path, self.full_rt_preference);
+        if let (Err(detail), Preference::Force(wanted)) = (&opened, self.full_rt_preference) {
+            if full_rt_gives_way(self.full_rt_cpu_fallback, wanted) && self.analysis_cancel.check().is_ok() {
+                self.move_full_rt_to_cpu(wanted, detail);
+                opened = FullRegions::open(&path, self.full_rt_preference);
+            }
+        }
+        let model = opened.inspect_err(|detail| {
+            self.fault = Some(EngineFault { model_key: accel::FULL_RT.label_key,
+                accel_key: requested_accel_key(self.full_rt_preference), detail: detail.clone() });
+        })?.0;
+        report_provider(crate::models::RT_FULL_NAME, model.selection());
+        self.full_rt = Some(model);
+        Ok(())
+    }
+
+    /// Full stays on the CPU for the rest of the run, and the notice says so.
+    fn move_full_rt_to_cpu(&mut self, from: accel::Accelerator, detail: &str) {
+        eprintln!("manga-cleaner: Ogkalu Full failed on {from:?}, using the CPU: {detail}");
+        self.full_rt_preference = Preference::CpuOnly;
+        report_provider(crate::models::RT_FULL_NAME, &accel::Selection {
+            accelerator: accel::Accelerator::Cpu,
+            declined: Some(accel::Declined::plain(from, "accel.declined.failed")),
+            note: None,
+        });
     }
 
     /// The lettering mask failed this run, opening or on a page. Its session

@@ -723,6 +723,14 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Ogkalu Full on a forced GPU (2026-10-31): changed in code, not run on a GPU.** A forced DirectML or
+CUDA session on Full used to refuse any CPU node, and the graph has the shape arithmetic GPU providers
+usually leave behind. `FULL_RT.partitioned_on` now keeps the CPU fallback on both. Nobody has seen the
+old refusal on Windows, built this graph on either provider, or compared its boxes with the CPU's. A
+GPU choice Full only inherits now becomes Automatic where Full cannot run on it, and moves to the CPU
+when it will not open or fails a page; a choice made for Full stays forced and reports an engine fault.
+The move to the CPU has never run on a failing GPU; a test covers only the decision and the fault.
+
 **Forty-region flake on Windows (2026-10-31): the cause was shown on macOS, not seen on Windows.** The
 test `forty_qwen_regions_are_all_sent_and_committed_with_sixteen_at_most_in_flight` failed once on
 Windows CI (run 41182126486, 39 of 40) and its log names no code, because the count was asserted before

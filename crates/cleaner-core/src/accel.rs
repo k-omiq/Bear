@@ -816,8 +816,10 @@ pub const BALLOON: ModelProfile = ModelProfile {
 };
 
 /// Full FP32 RT-DETR uses the same ONNX session builder as the small detector.
-/// No GPU timing has been established, so Automatic remains on CPU. A forced
-/// GPU must commit the entire graph there or fail.
+/// No GPU timing has been established, so Automatic remains on CPU. The graph's
+/// shape arithmetic is the kind GPU providers leave behind, as on LaMa, so a
+/// forced DirectML or CUDA session keeps the CPU fallback rather than refuse to
+/// open. Neither has been built on this graph on real hardware.
 pub const FULL_RT: ModelProfile = ModelProfile {
     name: "rt-full",
     label_key: "models.kind.fullRt",
@@ -825,7 +827,7 @@ pub const FULL_RT: ModelProfile = ModelProfile {
     measured_better: &[],
     unmeasured_candidates: &[],
     measured_peak_rss: &[],
-    partitioned_on: &[],
+    partitioned_on: &[Accelerator::DirectMl, Accelerator::Cuda],
 };
 
 /// `osd_lstm.onnx`. Measured: CPU 2 ms, WebGPU 8 ms on a 48×200 strip. An LSTM
@@ -1545,6 +1547,11 @@ mod tests {
         assert!(strict_placement(&LAMA, Preference::Force(Accelerator::TensorRt), Accelerator::TensorRt));
         for profile in [&DETECTOR, &BALLOON, &FULL_RT, &SCRIPT_ID, &OCR] {
             assert!(strict_placement(profile, webgpu, Accelerator::WebGpu), "{}", profile.name);
+        }
+        // Full may split on the GPU providers it is offered; Small stays whole.
+        for gpu in [Accelerator::DirectMl, Accelerator::Cuda] {
+            assert!(!strict_placement(&FULL_RT, Preference::Force(gpu), gpu), "{gpu:?}");
+            assert!(strict_placement(&BALLOON, Preference::Force(gpu), gpu), "{gpu:?}");
         }
         // Automatic already keeps the fallback, and `CpuOnly` has nothing to
         // fall back from.
