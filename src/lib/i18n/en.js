@@ -2064,6 +2064,7 @@ export const en = {
       partitioned: 'it would split this model and run it slower',
       failed: 'it could not build a session for this model',
       selfTest: 'it failed a test run on this computer',
+      selfTestStuck: 'The test run did not finish in 2 minutes. The graphics driver may be stuck. Restart the app to test it again.',
       // Forcing CoreML costs 8.19 GB on rung 2 and 5.62 GB on
       // rung 3, and this is the one refusal that is about the machine rather
       // than about the run. The figures travel beside the key, on the

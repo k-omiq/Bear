@@ -36,7 +36,7 @@
    * `chooseDisabled` holds Use build still while the build cannot change
    * (its download is running), as the build choice beside it is held.
    */
-  import { t } from '../../i18n/index.js'
+  import { hasKey, t } from '../../i18n/index.js'
   import { Button } from '../../ui/index.js'
   import { getBackend } from '../../api/backend.js'
   import { backendName, cudaMajorOf, flavourName } from './runtime.js'
@@ -214,7 +214,7 @@
             <span class="dot" aria-hidden="true"></span>
             <span class="path-name">{backendName(provider.id)}</span>
             <span class="path-state">{provider.available ? t('settings.runtime.machine.pathReady') : t(provider.reasonKey ?? '')}</span>
-            {#if !provider.available && provider.detail}<span class="path-detail">{provider.detail}</span>{/if}
+            {#if !provider.available && provider.detail}<span class="path-detail">{hasKey(provider.detail) ? t(provider.detail) : provider.detail}</span>{/if}
           </li>
         {/each}
       </ul>

@@ -3772,9 +3772,15 @@ Measured by unit and DOM tests, and by the real macOS runtime for the load and `
 cannot build (`a_forced_reader_moves_off_a_cuda_that_will_not_build` needs a CUDA build and no card, and
 stays ignored); whether a second install loaded beside the first helps or harms a session before the
 restart; a cuDNN replaced in the same folder under the same file names, which reads as no change and gets
-no restart hint; the words the failing machines' proofs will show. An Automatic session still waits on a
-running proof, and nothing can stop that wait. Lock order is PROOFS then the device turn, so a thread that
-holds the turn and asks for a proof while another proof waits would deadlock; no code does that today.
+no restart hint; the words the failing machines' proofs will show. A proof now runs on its own thread with a
+120 s limit (`accel::PROOF_LIMIT`), and past it the path counts as failed and the session moves on. The
+limit was chosen, not measured: no slow machine has been timed, and it includes the proof's wait for the
+device turn, so a healthy WebGPU behind one GPU call longer than 120 s would read as failed until the app
+restarts. Stop still cannot reach a session during that wait, and two stuck paths cost up to 240 s once
+per process. The stuck thread keeps its WebGPU device turn, so a WebGPU session opened before the proof
+(Check again during a held session) would hang when it is dropped. A thread that holds the turn and asks
+for a proof would wait out the limit and fail a healthy path; no code does that today. A driver that hangs
+was only faked by a test: no real stuck driver has been seen.
 Only suspected, no test: a forced DirectML or LaMa that fails to register now stops the run where it used
 to run on the CPU; the strict proof may fail a working WebGPU plugin; a proof beside a busy GPU may fail
 for lack of memory and block a healthy path until Check again.

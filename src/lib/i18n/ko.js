@@ -1564,6 +1564,7 @@ export const ko = {
       partitioned: '이 모델을 나눠 실행하게 되어 더 느려짐',
       failed: '이 모델의 세션을 만들 수 없음',
       selfTest: '이 컴퓨터에서 테스트 실행에 실패함',
+      selfTestStuck: '테스트 실행이 2분 안에 끝나지 않았습니다. 그래픽 드라이버가 멈췄을 수 있습니다. 다시 테스트하려면 앱을 다시 시작하세요.',
       memory: '이 컴퓨터의 메모리가 이 모델에 대해 해당 제공자가 요구하는 양보다 적음',
       missingRuntime: '이 컴퓨터에 CUDA와 cuDNN이 설치되어 있어야 함',
       noDevice: '그래픽 장치를 찾지 못했으니 그래픽 드라이버(Linux에서는 Vulkan 로더)를 설치하세요',
