@@ -927,6 +927,19 @@ export const es = {
         },
       },
     },
+    // Settings > Dev log (`dialogs/DevLogSection.svelte`).
+    devlog: {
+      intro: 'Lo que la app anotó mientras se ejecutaba, de lo más antiguo a lo más reciente. Si algo falla, cópialo y envíalo al desarrollador.',
+      privacy: 'Las claves, los tokens, las direcciones web y el nombre de tu carpeta personal quedan ocultos. Los nombres de archivos y carpetas dentro de ella se conservan, así que léelo antes de compartirlo.',
+      refresh: 'Actualizar',
+      copy: 'Copiar',
+      clear: 'Vaciar',
+      copied: 'Copiado.',
+      copyFailed: 'No se pudo copiar. Selecciona el texto y cópialo a mano.',
+      loadFailed: 'No se pudo leer el registro. Prueba con Actualizar.',
+      clearFailed: 'No se pudo vaciar el registro. Inténtalo de nuevo.',
+      empty: 'Aún no hay nada registrado.',
+    },
     beta: {
       description: 'Herramientas que funcionan pero aún se están ajustando. Siguen desactivadas hasta que las actives aquí.',
       tag: 'Beta',
@@ -977,6 +990,7 @@ export const es = {
       performance: 'Entorno de ejecución',
       shortcuts: 'Atajos',
       beta: 'Beta',
+      devlog: 'Registro de desarrollo',
       about: 'Acerca de',
       denoise: 'Reducción de ruido',
       export: 'Exportar',

@@ -45,6 +45,8 @@ import { createEventStream } from './tauri-events.js'
  */
 const IMPLEMENTED = Object.freeze({
   about: 'about',
+  readDevLog: 'read_dev_log',
+  clearDevLog: 'clear_dev_log',
   diagnostics: 'diagnostics',
   readSettings: 'read_settings',
   writeSettings: 'write_settings',
@@ -275,6 +277,8 @@ export const SEAM_METHODS = Object.freeze([
   'onDenoiseRecorded',
   'onSamInstallProgress',
   'about',
+  'readDevLog',
+  'clearDevLog',
   'diagnostics',
   'listLoadedModels',
   'unloadModel',
@@ -411,6 +415,8 @@ export function createTauriBackend({ fallback, invoke, listen }) {
 
   const implementations = {
     about: () => call(IMPLEMENTED.about),
+    readDevLog: () => call(IMPLEMENTED.readDevLog),
+    clearDevLog: () => call(IMPLEMENTED.clearDevLog),
     // The one command whose answer still crosses in snake_case:
     // `src-tauri/src/diagnostics.rs` predates the camelCase rule and has no
     // `rename_all`. Renamed here so the seam is camelCase like the rest; the

@@ -927,6 +927,19 @@ export const fr = {
         },
       },
     },
+    // Settings > Dev log (`dialogs/DevLogSection.svelte`).
+    devlog: {
+      intro: 'Ce que l’application a noté pendant son exécution, du plus ancien au plus récent. Si quelque chose ne va pas, copiez-le et envoyez-le au développeur.',
+      privacy: 'Les clés, les jetons, les adresses web et le nom de votre dossier personnel sont masqués. Les noms de fichiers et de dossiers qu’il contient restent visibles : relisez-le avant de le partager.',
+      refresh: 'Actualiser',
+      copy: 'Copier',
+      clear: 'Vider',
+      copied: 'Copié.',
+      copyFailed: 'Copie impossible. Sélectionnez le texte et copiez-le à la main.',
+      loadFailed: 'Lecture du journal impossible. Essayez Actualiser.',
+      clearFailed: 'Impossible de vider le journal. Réessayez.',
+      empty: 'Rien n’a encore été noté.',
+    },
     beta: {
       description: 'Des outils qui fonctionnent mais sont encore en cours de réglage. Ils restent désactivés tant que vous ne les activez pas ici.',
       tag: 'Bêta',
@@ -977,6 +990,7 @@ export const fr = {
       performance: 'Runtime',
       shortcuts: 'Raccourcis',
       beta: 'Bêta',
+      devlog: 'Journal de développement',
       about: 'À propos',
       denoise: 'Débruitage',
       export: 'Export',

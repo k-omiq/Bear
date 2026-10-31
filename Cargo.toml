@@ -8,7 +8,7 @@ exclude = ["spikes/sam-ts-l", "spikes/sam-memory", "spikes/chapter-combo", "spik
 version = "1.0.0-beta.12"
 edition = "2021"
 license = "GPL-3.0-only"
-rust-version = "1.82"
+rust-version = "1.87"
 
 [workspace.dependencies]
 # Every execution provider we might select is compiled in. With `load-dynamic`

@@ -922,6 +922,19 @@ export const ja = {
         },
       },
     },
+    // Settings > Dev log (`dialogs/DevLogSection.svelte`).
+    devlog: {
+      intro: 'アプリの実行中に記録された内容です。古いものから順に表示します。問題が起きたら、これをコピーして開発者に送ってください。',
+      privacy: 'キー、トークン、Web アドレス、ホームフォルダーの名前は隠されます。その中のファイル名とフォルダー名は残るので、共有する前に内容を確認してください。',
+      refresh: '更新',
+      copy: 'コピー',
+      clear: '消去',
+      copied: 'コピーしました。',
+      copyFailed: 'コピーできませんでした。テキストを選択して手動でコピーしてください。',
+      loadFailed: 'ログを読み込めませんでした。「更新」を試してください。',
+      clearFailed: 'ログを消去できませんでした。もう一度お試しください。',
+      empty: 'まだ記録はありません。',
+    },
     beta: {
       description: '動作はするものの、まだ調整中のツールです。ここでオンにするまでオフのままです。',
       tag: 'ベータ',
@@ -972,6 +985,7 @@ export const ja = {
       performance: 'ランタイム',
       shortcuts: 'ショートカット',
       beta: 'ベータ',
+      devlog: '開発ログ',
       about: '情報',
       denoise: 'ノイズ除去',
       export: '書き出し',

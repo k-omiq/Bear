@@ -919,6 +919,19 @@ export const ko = {
         },
       },
     },
+    // Settings > Dev log (`dialogs/DevLogSection.svelte`).
+    devlog: {
+      intro: '앱이 실행되는 동안 기록한 내용입니다. 오래된 것부터 표시합니다. 문제가 생기면 복사해서 개발자에게 보내 주세요.',
+      privacy: '키, 토큰, 웹 주소, 홈 폴더 이름은 숨겨집니다. 그 안의 파일과 폴더 이름은 남으므로 공유하기 전에 읽어 보세요.',
+      refresh: '새로 고침',
+      copy: '복사',
+      clear: '지우기',
+      copied: '복사했습니다.',
+      copyFailed: '복사하지 못했습니다. 텍스트를 선택해 직접 복사해 주세요.',
+      loadFailed: '로그를 읽지 못했습니다. 새로 고침을 시도해 보세요.',
+      clearFailed: '로그를 지우지 못했습니다. 다시 시도해 주세요.',
+      empty: '아직 기록이 없습니다.',
+    },
     beta: {
       description: '작동하지만 아직 조정 중인 도구입니다. 여기서 켜기 전까지는 꺼져 있습니다.',
       tag: '베타',
@@ -969,6 +982,7 @@ export const ko = {
       performance: '런타임',
       shortcuts: '단축키',
       beta: '베타',
+      devlog: '개발 로그',
       about: '정보',
       denoise: '노이즈 제거',
       export: '내보내기',

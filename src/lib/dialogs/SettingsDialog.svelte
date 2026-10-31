@@ -53,7 +53,7 @@
    * a sidebar with the way back and a vertical tab list, and one scrolling
    * column per section.
    *
-   * **Ten sections, in the order a visit needs them.** General holds the
+   * **Eleven sections, in the order a visit needs them.** General holds the
    * app's own preferences and the setup replay. Models is what a page is
    * detected and cleaned with: the detection choices, each model's files
    * beside the choice that made them necessary, the language filtering and
@@ -66,7 +66,8 @@
    * engines run on: the runtime, its build, where downloads go, the
    * accelerator, and per-model backends collapsed. Shortcuts, Beta and About
    * close the list. Beta offers the tools still being tuned, the Patch tool
-   * and the Screentone fill, off until asked for (`BetaSettings`). About is a
+   * and the Screentone fill, off until asked for (`BetaSettings`). Dev log is
+   * what the app wrote down, to copy into a report (`DevLogSection`). About is a
    * GPL-3.0 obligation, this screen is its only route,
    * and it carries the community invite.
    *
@@ -187,6 +188,7 @@
   import DenoiseSettings from './denoise/DenoiseSettings.svelte'
   import PostProcessingSettings from './PostProcessingSettings.svelte'
   import BetaSettings from './BetaSettings.svelte'
+  import DevLogSection from './DevLogSection.svelte'
   import { PAGE_DENOISE_FEATURE } from '../model/denoise.js'
   import { offerFirstLaunch } from './firstlaunch.svelte.js'
 
@@ -2009,6 +2011,7 @@
     performance: { labelKey: 'settings.section.performance', icon: 'cpu' },
     shortcuts: { labelKey: 'settings.section.shortcuts', icon: 'keyboard' },
     beta: { labelKey: 'settings.section.beta', icon: 'flask' },
+    devlog: { labelKey: 'settings.section.devlog', icon: 'file' },
     about: { labelKey: 'settings.section.about', icon: 'info' },
   })
   const TABS = SETTINGS_SECTIONS.map((id) => ({ id, ...TAB_META[id] }))
@@ -3365,6 +3368,21 @@
       <div class="column">
         <h2>{t('settings.section.beta')}</h2>
         <BetaSettings />
+      </div>
+    </div>
+
+    <!-- Dev log: the app's own lines, to read and copy into a report. Its log
+         is a tab stop itself, so the scroller needs none of its own. -->
+    <div
+      class="panel"
+      role="tabpanel"
+      id={panelId('devlog')}
+      aria-labelledby={tabId('devlog')}
+      hidden={active !== 'devlog'}
+    >
+      <div class="column">
+        <h2>{t('settings.section.devlog')}</h2>
+        <DevLogSection visible={active === 'devlog'} />
       </div>
     </div>
 

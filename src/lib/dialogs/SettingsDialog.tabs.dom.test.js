@@ -61,6 +61,7 @@ const LABELS = {
   performance: 'settings.section.performance',
   shortcuts: 'settings.section.shortcuts',
   beta: 'settings.section.beta',
+  devlog: 'settings.section.devlog',
   about: 'settings.section.about',
 }
 const TABS = Object.keys(LABELS)
@@ -89,6 +90,7 @@ beforeEach(() => {
       listSidecarModels: vi.fn(async () => []),
       sidecarAvailable: vi.fn(async () => ({ available: false, reasonKey: null })),
       about: vi.fn(async () => ({ appVersion: '0.0.0-test', facts: [] })),
+      readDevLog: vi.fn(async () => ''),
       subscribe: vi.fn(() => () => {}),
       writeSettings: (/** @type {any} */ patch) => writeSettings(patch),
       readInferenceConfig: vi.fn(async () => ({ schemaVersion: 1, selectedTarget: { type: 'local' }, beamProfiles: {}, modalProfiles: {} })),
