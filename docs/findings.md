@@ -3760,6 +3760,25 @@ fails on a specific model's run still ends that run; a proof that crashes the pr
 returning an error would now do so on opening Settings rather than on the first run; TensorRT is
 hidden and stays unoffered, since no model is routed to it and its libraries are not checked for.
 
+**Gaps in that GPU proof, fixed (2026-10-31): no real NVIDIA card or Windows machine ran any of it.** A
+runtime load no longer forgets the proofs, `CpuOnly` asks none and a force asks only its own, and
+Settings, a session (`accel::choose_unblocked`), the local review and the run's notice all name the same
+place for a model on a blocked GPU. A saved measurement now covers the toolkit and cuDNN files of a CUDA
+build, so every CUDA user's saved result goes stale once on update and they must press Measure again;
+this is on purpose, for the users whose saved CPU winners came from the broken install. Check again
+reads the measurement too, loads a changed install, and asks for a restart where one was already loaded.
+Measured by unit and DOM tests, and by the real macOS runtime for the load and `CpuOnly` cases (with
+`cfg!(target_os = "macos")` patched out for `CpuOnly`). Not measured: a forced Hayai moving off a CUDA that
+cannot build (`a_forced_reader_moves_off_a_cuda_that_will_not_build` needs a CUDA build and no card, and
+stays ignored); whether a second install loaded beside the first helps or harms a session before the
+restart; a cuDNN replaced in the same folder under the same file names, which reads as no change and gets
+no restart hint; the words the failing machines' proofs will show. An Automatic session still waits on a
+running proof, and nothing can stop that wait. Lock order is PROOFS then the device turn, so a thread that
+holds the turn and asks for a proof while another proof waits would deadlock; no code does that today.
+Only suspected, no test: a forced DirectML or LaMa that fails to register now stops the run where it used
+to run on the CPU; the strict proof may fail a working WebGPU plugin; a proof beside a busy GPU may fail
+for lack of memory and block a healthy path until Check again.
+
 **Saved colour pair and its keys (2026-10-31).** The pair at the end of the tool rail, Shift+X and
 Shift+E are measured by DOM tests and in the Vite mock, with a stubbed `EyeDropper` because a script
 cannot finish the real one. Not measured: Shift+E in the shipped WKWebView, where it opens AppKit's
