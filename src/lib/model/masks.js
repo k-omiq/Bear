@@ -299,6 +299,17 @@ export function isDetected(region) {
 }
 
 /**
+ * Whether a region is one nothing has cleaned yet: a detection, or a row held
+ * back from a clean. The other side of a `clean-state` undo step is its result.
+ *
+ * @param {import('../api/backend.js').ApiRegion|null|undefined} region
+ * @returns {boolean}
+ */
+export function isUncleaned(region) {
+  return ['detected', 'gate-skipped', 'candidate', 'declined'].includes(region?.outcome ?? '')
+}
+
+/**
  * Whether a region's text sits inside a speech bubble, as far as anything
  * recorded it: a stored detection's `insideBubble`, a held candidate's
  * `candidateInsideBubble`. `null` when nothing did - a hand-drawn draft, a

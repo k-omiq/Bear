@@ -1534,6 +1534,14 @@ pub(crate) fn model_dir(app_data: Option<&Path>) -> Option<PathBuf> {
     model_search_paths(app_data).into_iter().find(|dir| models_ready(dir))
 }
 
+/// Where a hand edit finds one model: the first search path holding `file`, or
+/// nothing. Not [`model_dir`], which asks for everything a default run opens: a
+/// machine set up for Ogkalu Full has no small Ogkalu, runs fine by
+/// [`selected_model_dir`], and would have no LaMa at all here.
+pub(crate) fn model_dir_holding(app_data: Option<&Path>, file: &str) -> Option<PathBuf> {
+    model_search_paths(app_data).into_iter().find(|dir| dir.join(file).exists())
+}
+
 fn selected_model_dir(app_data: Option<&Path>, selection: DetectorModels, all_text: bool) -> Option<PathBuf> {
     let required = selection.required(all_text);
     model_search_paths(app_data).into_iter()
@@ -3219,12 +3227,16 @@ fn open_inpainter(models: &Path, preference: Preference) -> Result<Option<Held<l
     // Read and digested in one expression so the 207 MB is dropped at the end
     // of it, which is the property the paragraph above is about.
     let Some(model_sha256) = std::fs::read(&model).ok().map(|bytes| sha256_hex(&bytes)) else {
+        eprintln!("manga-cleaner: LaMa is unavailable: {} could not be read", model.display());
         return Ok(None);
     };
     let inpainter = match lama::Inpainter::open(&model, preference) {
         Ok(inpainter) => inpainter,
         Err(error) if matches!(preference, Preference::Force(_)) => return Err(error.to_string()),
-        Err(_) => return Ok(None),
+        Err(error) => {
+            eprintln!("manga-cleaner: LaMa is unavailable: {error}");
+            return Ok(None);
+        }
     };
     report_provider("LaMa Manga", inpainter.selection());
     let provider = format!("{:?}", inpainter.selection().accelerator).to_lowercase();

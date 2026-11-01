@@ -459,6 +459,39 @@ describe('clean, undo, redo and reject in an open chapter', () => {
     closeEditorChapter()
   })
 
+  it('cleans a held region with a model as one step the backend records, and Undo puts it back held', async () => {
+    const backend = createMockBackend({ timing: ZERO })
+    setBackend(backend)
+    const project = (await backend.listProjects()).find((candidate) => candidate.chapters.some((chapter) => chapter.id === 'wandering-moon-ch12'))
+    expect(await openEditorChapter(project.id, 'wandering-moon-ch12')).toBe(true)
+    const quiet = async () => {
+      await settled(editor.history)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await settled(editor.history)
+    }
+    for (const index of [0, 1, 2, 3, 4, 5, 6]) await reloadPage(index)
+    const region = editor.chapter?.pages.flatMap((/** @type {any} */ page) => page.regions ?? [])
+      .find((/** @type {any} */ candidate) => candidate.gateSkipCause === 'outside-bubble')
+    expect(region, 'a region the gate held outside a bubble').toBeTruthy()
+    const push = vi.spyOn(backend, 'historyPush')
+    const steps = editor.history.entries.length
+
+    expect(await runRegionMenuItem('approve:lama', region)).toBe(true)
+    await quiet()
+    expect(current(region.id).outcome).toBe('cleaned')
+    expect(push).not.toHaveBeenCalled()
+    expect(editor.history.entries.length).toBe(steps + 1)
+    expect(undoAvailable()).toBe(true)
+
+    undo()
+    await quiet()
+    expect(current(region.id)).toMatchObject({ outcome: 'gate-skipped', gateSkipCause: 'outside-bubble', mask: null })
+    redo()
+    await quiet()
+    expect(current(region.id).outcome).toBe('cleaned')
+    expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
+  })
+
   it('walks a detection to its result and back, with the history following', async () => {
     const backend = createMockBackend({ timing: ZERO })
     setBackend(backend)

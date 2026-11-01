@@ -35,7 +35,7 @@ import { recountPage } from '../model/status.js'
 import { BETA_TOOLS, activeParams, optionOffered, toolOffered, toolSpec } from '../editor/tools.js'
 import { steppedSize } from '../editor/gesture.js'
 import { capabilities } from './capabilities.svelte.js'
-import { MAX_MASK_PADDING } from '../model/masks.js'
+import { MAX_MASK_PADDING, isUncleaned } from '../model/masks.js'
 import { displayBbox, pagesReached } from '../model/layers.js'
 import { evictRegions, slideWindow, windowIndices } from './pagewindow.svelte.js'
 import { pageNavControls, defaultReadingDirection } from '../model/paging.js'
@@ -2412,9 +2412,9 @@ export function cleanRefusalKey(error, cleaned = false) {
 }
 
 /**
- * Apply one side of a `clean-state` delta: a clean of a detected region, or a
- * rejected result, which the backend recorded by itself. One side's region is
- * the detection and the other its cleaned result, so the side says which of
+ * Apply one side of a `clean-state` delta: a clean of a detected or held
+ * region, or a rejected result, which the backend recorded by itself. One
+ * side's region is the detection or held row and the other its cleaned result, so the side says which of
  * the two is asked for and `setRegionCleaned` swaps them: the detection comes
  * back with its mask, or the saved result comes back with no new render.
  *
@@ -2435,7 +2435,7 @@ export function cleanRefusalKey(error, cleaned = false) {
  * @returns {Promise<boolean>} whether the backend made the swap
  */
 export async function applyCleanDelta(regionId, side, chapterId = editor.chapter?.id ?? null) {
-  const cleaned = side?.region?.outcome !== 'detected'
+  const cleaned = !isUncleaned(side?.region)
   let result
   try {
     result = await getBackend().setRegionCleaned({ regionId, cleaned })

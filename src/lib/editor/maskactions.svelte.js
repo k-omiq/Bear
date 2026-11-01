@@ -455,10 +455,15 @@ export async function cleanAnyway(region, chosenEngine) {
   if (!result) return false
   const open = stillOpen(chapterId)
   if (open) replaceRegion(result.region, result.pageStatus)
-  recordEdit('masks.command.cleanAnyway', region.id, before, {
-    region: result.region,
-    pageStatus: result.pageStatus,
-  }, chapterId)
+  // A held row has nothing to restore from this side: the backend kept the
+  // row and recorded the step with the commit (`region.rs#commit`), as it does
+  // for a detection's clean.
+  if (region.mask) {
+    recordEdit('masks.command.cleanAnyway', region.id, before, {
+      region: result.region,
+      pageStatus: result.pageStatus,
+    }, chapterId)
+  }
   if (open) refreshPage(pageIndexOf(region.id), before.region, result.region)
   return true
 }

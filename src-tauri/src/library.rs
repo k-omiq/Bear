@@ -2539,6 +2539,7 @@ impl Library {
         invalidate_manifest_cache(&path);
         let source_idx = job.project.patches.iter().find(|row| row.id == region_id).map(|row| row.source_idx)
             .or_else(|| job.project.detections.iter().find(|row| row.id == region_id).map(|row| row.source_idx))
+            .or_else(|| job.project.cleaned_held.iter().find(|kept| kept.id == region_id).map(|kept| kept.row.source_idx))
             .ok_or_else(|| manifest(format!("region {region_id} is not in the chapter after its restore")))?;
         region_and_status(chapter_id, &job.project, source_idx, region_id)
             .ok_or_else(|| manifest(format!("region {region_id} is not on its page after its restore")))

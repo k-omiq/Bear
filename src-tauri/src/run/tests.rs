@@ -5086,6 +5086,21 @@ fn a_partial_model_directory_is_not_a_model_directory() {
     );
 }
 
+/// **A hand edit asks for the model it opens, not for a default run's set.** A
+/// machine set up for Ogkalu Full has no small Ogkalu, and its LaMa is still
+/// found: a right-click clean and a change of finishing both open it from here.
+#[test]
+fn a_hand_edit_finds_lama_where_a_default_run_would_refuse_the_directory() {
+    let scratch = Scratch::new("edit-models");
+    let models = scratch.join("models");
+    std::fs::create_dir_all(&models).unwrap();
+    std::fs::write(models.join(INPAINTER), b"").unwrap();
+    std::fs::write(models.join(DETECTOR), b"").unwrap();
+    assert_eq!(model_dir(Some(&scratch.0)), None);
+    assert_eq!(model_dir_holding(Some(&scratch.0), INPAINTER), Some(models.clone()));
+    assert_eq!(model_dir_holding(Some(&scratch.0), DETECTOR), Some(models));
+}
+
 /// **A missing model file is a variant, and its wording is unchanged.**
 ///
 /// `start` uses this as defence in depth: if `Pipeline::open` fails because a

@@ -1475,15 +1475,31 @@ fn session_builder(
         }
         Some(Dispatch::Device(ep)) => {
             // A plugin provider is appended through the devices the runtime
-            // discovered for it. Every device of that provider's name, which is
-            // every adapter the plugin found: one on nearly every machine.
+            // discovered for it, and **one** of them: the WebGPU factory refuses
+            // a session given two ("only supports one device at a time"), which
+            // is every machine with an integrated GPU beside a discrete one. It
+            // opens its own adapter, so the device named only has to be a GPU.
             let env = ort::environment::Environment::current().map_err(|e| e.to_string())?;
-            builder = builder
-                .with_devices(env.devices().filter(|device| device.ep().ok() == Some(ep)), None)
-                .map_err(|e| e.to_string())?;
+            let device = one_adapter(
+                env.devices().filter(|device| device.ep().ok() == Some(ep)),
+                |device| device.hardware_device().ty() == ort::memory::DeviceType::GPU,
+            );
+            builder = builder.with_devices(device, None).map_err(|e| e.to_string())?;
         }
     }
     Ok(builder)
+}
+
+/// The first GPU of `devices`, or failing one the first device at all.
+fn one_adapter<T>(devices: impl Iterator<Item = T>, is_gpu: impl Fn(&T) -> bool) -> Option<T> {
+    let mut first = None;
+    for device in devices {
+        if is_gpu(&device) {
+            return Some(device);
+        }
+        first.get_or_insert(device);
+    }
+    first
 }
 
 #[cfg(test)]
@@ -1824,6 +1840,17 @@ mod tests {
         // Nothing at all: `GetEpDevices` was not answered, so nothing is known
         // and nothing is refused.
         assert!(listed_or_unreadable([], Accelerator::DirectMl.ort_name()));
+    }
+
+    /// Two GPUs are one device to the session, and a machine with an
+    /// integrated GPU beside a discrete one keeps its WebGPU path.
+    #[test]
+    fn a_session_is_given_one_adapter() {
+        let is_gpu = |device: &&str| device.starts_with("gpu");
+        assert_eq!(one_adapter(["gpu-a", "gpu-b"].into_iter(), is_gpu), Some("gpu-a"));
+        assert_eq!(one_adapter(["cpu", "gpu-b"].into_iter(), is_gpu), Some("gpu-b"));
+        assert_eq!(one_adapter(["cpu"].into_iter(), is_gpu), Some("cpu"));
+        assert_eq!(one_adapter(std::iter::empty(), is_gpu), None);
     }
 
     /// Only providers that publish `OrtEpDevice`s are asked about them. CoreML

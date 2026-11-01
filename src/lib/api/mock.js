@@ -25,7 +25,7 @@ import { createRng } from './rng.js'
 import { createRunnerPool } from './runner.js'
 import { DENOISE_PRESETS, outputScalesFor, presetById, recipeAt } from '../model/denoise.js'
 import { currentRung } from '../model/ladder.js'
-import { MAX_MASK_PADDING } from '../model/masks.js'
+import { MAX_MASK_PADDING, isUncleaned } from '../model/masks.js'
 import { FINISHINGS } from '../model/model-names.js'
 import {
   applyToolToRegion,
@@ -1095,7 +1095,7 @@ export function createMockBackend(options = {}) {
    * @returns {T}
    */
   const cleaningDetection = (region, page, clean) => {
-    if (!isDetection(region)) return clean()
+    if (!isUncleaned(region)) return clean()
     const detected = snapshot(region)
     const before = { present: true, pageStatus: settledStatus(page), region: detected }
     // A detection's mask is the detector's, whoever asked for it cleaned
@@ -1130,7 +1130,7 @@ export function createMockBackend(options = {}) {
    * @returns {T}
    */
   const cleaningHere = (found, edit) => {
-    if (!isDetection(found.region)) return edit()
+    if (!isUncleaned(found.region)) return edit()
     const answer = cleaningDetection(found.region, found.page, () => {
       const made = edit()
       if (!isDetection(found.region) && found.region.mask) {
@@ -1190,7 +1190,7 @@ export function createMockBackend(options = {}) {
       if (!page || !chapter) return null
       refuseBusyPage(chapter.id, page.index)
       // The detection as it stands now is the one kept, as a clean keeps it.
-      if (found && isDetection(found.region)) keptDetections.set(regionId, snapshot(found.region))
+      if (found && isUncleaned(found.region)) keptDetections.set(regionId, snapshot(found.region))
       const region = snapshot(saved.region)
       const at = page.regions.findIndex((candidate) => candidate.id === regionId)
       if (at >= 0) page.regions[at] = region
@@ -1200,8 +1200,8 @@ export function createMockBackend(options = {}) {
       return { region, page, chapter }
     }
     if (!found) return null
-    // It is a detection already. Undo may ask twice.
-    if (isDetection(found.region)) return found
+    // It is a detection or a held row already. Undo may ask twice.
+    if (isUncleaned(found.region)) return found
     if (!found.region.mask) {
       throw new Error(`clean_no_patch: region ${regionId} has no cleaned result to take back`)
     }

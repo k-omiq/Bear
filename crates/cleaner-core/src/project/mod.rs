@@ -539,6 +539,18 @@ pub struct RegionUntouched {
     pub lettering: Option<HeldLettering>,
 }
 
+/// A held row a clean the user asked for answered, kept so the clean can be
+/// taken back ([`Job::restore_detection`]) and done again
+/// ([`Job::restore_patch`]). `id` is the region's, and `gate_dropped` and
+/// `declined` are what the row took off the counters when it left.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CleanedHeld {
+    pub id: String,
+    pub row: RegionUntouched,
+    pub gate_dropped: u32,
+    pub declined: u32,
+}
+
 /// A held candidate's lettering on disk.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct HeldLettering {
@@ -960,6 +972,11 @@ pub struct Project {
     /// cannot be taken back.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cleaned_detections: Vec<DetectedRegion>,
+    /// The held row each Clean anyway answered, one row for an id at most,
+    /// which is what Undo of it puts back. Skipped while empty, so old projects
+    /// open and flush unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cleaned_held: Vec<CleanedHeld>,
     /// The patch each taken-back clean set aside ([`Job::restore_detection`]),
     /// kept so [`Job::restore_patch`] puts the same result back with no new
     /// render. Not on the page and not in `patches`: while a row is here its
@@ -1129,6 +1146,7 @@ impl Project {
             regions_untouched: Vec::new(),
             detections: Vec::new(),
             cleaned_detections: Vec::new(),
+            cleaned_held: Vec::new(),
             withdrawn_patches: Vec::new(),
             denoised: Vec::new(),
             counters: Counters::default(),
@@ -2859,6 +2877,7 @@ impl Job {
             Err(error) => return Err(StoreError::io(&dir, error)),
         };
         let named: std::collections::HashSet<&str> = self.project.regions_untouched.iter()
+            .chain(self.project.cleaned_held.iter().map(|kept| &kept.row))
             .filter_map(|row| Some(row.lettering.as_ref()?.mask_ref.as_str()))
             .collect();
         for entry in entries {
@@ -3036,9 +3055,33 @@ impl Job {
             // It is a detection already. Undo may ask twice.
             return Ok(());
         }
+        let kept_held = self.project.cleaned_held.iter().find(|kept| kept.id == id).cloned();
         let Some(patch_at) = self.project.patches.iter().position(|row| row.id == id) else {
+            // A held row back on its page. Undo may ask twice.
+            if kept_held.is_some_and(|kept| self.project.regions_untouched.contains(&kept.row)) {
+                return Ok(());
+            }
             return Err(CleanRestoreError::NoPatch(id.to_owned()));
         };
+        if let Some(kept) = kept_held {
+            let before = (
+                self.project.patches.clone(),
+                self.project.regions_untouched.clone(),
+                self.project.withdrawn_patches.clone(),
+                self.project.counters.clone(),
+            );
+            let patch = self.project.patches.remove(patch_at);
+            self.project.withdrawn_patches.retain(|row| row.id != id);
+            self.project.withdrawn_patches.push(patch);
+            self.project.regions_untouched.push(kept.row);
+            self.project.counters.gate_dropped += kept.gate_dropped;
+            self.project.counters.declined += kept.declined;
+            if let Err(error) = self.flush() {
+                (self.project.patches, self.project.regions_untouched, self.project.withdrawn_patches, self.project.counters) = before;
+                return Err(error.into());
+            }
+            return Ok(());
+        }
         let Some(kept_at) = self.project.cleaned_detections.iter().position(|row| row.id == id) else {
             let record = self.detection_of_patch(&self.project.patches[patch_at])?;
             let patch = self.project.patches.remove(patch_at);
@@ -3182,6 +3225,15 @@ impl Job {
             self.project.cleaned_detections.clone(),
             self.project.withdrawn_patches.clone(),
         );
+        let held_before = (self.project.regions_untouched.clone(), self.project.counters.clone());
+        if let Some(kept) = self.project.cleaned_held.iter().find(|kept| kept.id == id).cloned() {
+            if let Some(at) = self.project.regions_untouched.iter().position(|row| *row == kept.row) {
+                self.project.regions_untouched.remove(at);
+                let counters = &mut self.project.counters;
+                counters.gate_dropped = counters.gate_dropped.saturating_sub(kept.gate_dropped);
+                counters.declined = counters.declined.saturating_sub(kept.declined);
+            }
+        }
         let patch = self.project.withdrawn_patches.remove(withdrawn_at);
         self.project.patches.retain(|row| row.id != id);
         self.project.patches.push(patch);
@@ -3192,6 +3244,7 @@ impl Job {
         }
         if let Err(error) = self.flush() {
             (self.project.patches, self.project.detections, self.project.cleaned_detections, self.project.withdrawn_patches) = before;
+            (self.project.regions_untouched, self.project.counters) = held_before;
             return Err(error.into());
         }
         Ok(())

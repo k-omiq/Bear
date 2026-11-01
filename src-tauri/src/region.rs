@@ -722,7 +722,7 @@ impl Bench {
         // refused for a rung most of them never reach.
         let _ = cleaner_core::runtime::find(app_data.as_deref())
             .and_then(|path| cleaner_core::runtime::load(&path));
-        let models = run::model_dir(app_data.as_deref()).unwrap_or_default();
+        let holding = |file| run::model_dir_holding(app_data.as_deref(), file).unwrap_or_default();
         // The same accelerator setting a run reads, so a region edit and the
         // run that produced it land on the same provider.
         let default_preference = settings
@@ -735,7 +735,7 @@ impl Bench {
         let inpainter_preference = settings.as_ref()
             .and_then(|settings| run::model_preference_from(settings, "inpainter").ok())
             .unwrap_or(default_preference);
-        let mut rung2 = run::Rung2::new(&models, inpainter_preference);
+        let mut rung2 = run::Rung2::new(&holding(run::INPAINTER), inpainter_preference);
         // The same finishing a run reads. A run refuses an unreadable one; an
         // edit finishes nothing by it, as it falls back on an unreadable
         // accelerator above.
@@ -744,7 +744,7 @@ impl Bench {
             .flatten();
         Bench {
             rung2,
-            detector: run::detector_on_demand(&models, detector_preference),
+            detector: run::detector_on_demand(&holding(run::DETECTOR), detector_preference),
             flux: None,
             flux_key: None,
             app_data,
@@ -2680,9 +2680,15 @@ fn commit(
         },
     };
 
-    if clears_untouched {
-        clear_untouched(&mut job, source_idx, region_id);
-    }
+    // A held row a clean answers is kept with the step, which the backend
+    // records as it does a detection's, so Undo puts the row back.
+    let held_before = if clears_untouched {
+        let before = crate::history::side_now(&located.chapter_id, &job.project, source_idx, region_id);
+        let kept = keep_cleared_untouched(&mut job, source_idx, region_id);
+        before.filter(|_| kept)
+    } else {
+        None
+    };
     // A stored detection is replaced by its patch in the same write, keeping
     // the review flag it was detected with.
     let review_state = job
@@ -2703,7 +2709,9 @@ fn commit(
                 }
             })
         }
-        (None, None) => job.complete_display_region(source_idx, &patch, None),
+        (None, None) => job.complete_display_region(source_idx, &patch, None).map(|()| {
+            crate::history::record_clean(&located.job_path, &located.chapter_id, &job.project, source_idx, region_id, held_before);
+        }),
     }
     .map_err(|e| e.to_string())?;
     crate::underlay::refresh_dependencies(&mut job, region_id)?;
@@ -3516,7 +3524,25 @@ fn next_order(job: &Job, _source_idx: usize) -> u32 {
 /// ([`crate::run::reset_page`] makes the same argument from the other side), so
 /// a row that leaves has to leave the count it added.
 fn clear_untouched(job: &mut Job, source_idx: usize, region_id: &str) {
+    take_untouched(job, source_idx, region_id);
+}
+
+/// [`clear_untouched`], and the row kept for Undo. Answers whether there was a
+/// row. A result set aside for this id by an earlier Undo is replaced by the
+/// new clean, as a detection's is.
+fn keep_cleared_untouched(job: &mut Job, source_idx: usize, region_id: &str) -> bool {
+    let Some(kept) = take_untouched(job, source_idx, region_id) else {
+        return false;
+    };
+    job.project.cleaned_held.retain(|row| row.id != region_id);
+    job.project.cleaned_held.push(kept);
+    job.project.withdrawn_patches.retain(|row| row.id != region_id);
+    true
+}
+
+fn take_untouched(job: &mut Job, source_idx: usize, region_id: &str) -> Option<cleaner_core::project::CleanedHeld> {
     let (mut gate_dropped, mut declined) = (0u32, 0u32);
+    let mut taken = None;
     job.project.regions_untouched.retain(|record| {
         if record.source_idx != source_idx
             || untouched_id(job_page_id(region_id), record.bbox) != region_id
@@ -3531,11 +3557,13 @@ fn clear_untouched(job: &mut Job, source_idx: usize, region_id: &str) {
         } else {
             declined += 1;
         }
+        taken = Some(record.clone());
         false
     });
     let counters = &mut job.project.counters;
     counters.gate_dropped = counters.gate_dropped.saturating_sub(gate_dropped);
     counters.declined = counters.declined.saturating_sub(declined);
+    taken.map(|row| cleaner_core::project::CleanedHeld { id: region_id.to_owned(), row, gate_dropped, declined })
 }
 
 /// The page id inside a region id - everything up to the last `-`-prefixed
@@ -7205,6 +7233,65 @@ mod tests {
         let job = Job::open(&located.job_path).unwrap();
         assert!(job.project.regions_untouched.is_empty());
         assert!(job.project.patches.iter().any(|p| p.id == region_id));
+    }
+
+    /// Clean anyway of a held row is one undo step the backend records. Undo
+    /// puts the row and its counter back and takes the layer off the page,
+    /// Redo puts the same result back with no new render, twice over each.
+    #[test]
+    fn clean_anyway_of_a_held_row_is_undone_to_the_held_row() {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128;
+        raw.height = 128;
+        raw.data = vec![0; 128 * 128];
+        let (root, library, located) = command_fixture("clean-anyway-undo", &raw);
+        white_predecessor(&located, &raw, Rect::new(36, 36, 12, 12));
+        let bounds = Rect::new(42, 40, 12, 6);
+        let reason = "review.reason.gateSkippedOutsideBubble";
+        {
+            let mut job = Job::open(&located.job_path).unwrap();
+            job.leave_untouched(0, bounds, reason).unwrap();
+            job.project.counters.gate_dropped = 1;
+            job.flush().unwrap();
+        }
+        let region_id = untouched_id(&format!("{}-p001", located.chapter_id), bounds);
+        let mut bench = test_bench(&root);
+        bench.detected_seed = Some(Mask::filled(bounds));
+        let mut renderer = |image: &Raster, fitted: &Fitted| run::Made {
+            engine: Engine::Fill, mask: fitted.mask.clone(), ink: fitted.ink.clone(),
+            pixels: cleaner_core::engines::fill::render(image, fitted),
+            provider: None, model_sha256: None,
+            pad: cleaner_core::strip::EdgePad::None, tiles: None,
+            matched: None,
+        };
+        assert!(clean_anyway_at(&library, None, &region_id, Some("fill"), serde_json::Value::Null, |located, plan| {
+            edit_with_bench_render(&mut bench, Engine::Fill, located, plan, Some(&mut renderer))
+        }).unwrap().is_some());
+
+        let journal = crate::history::load(&located.job_path);
+        assert_eq!(journal.entries.len(), 1, "one step, recorded with the commit");
+        assert_eq!(journal.entries[0].op, crate::history::CLEAN_OP);
+        assert_eq!(journal.entries[0].region_id, region_id);
+        assert_eq!(journal.entries[0].before.region.as_ref().unwrap()["outcome"], "gate-skipped");
+        assert_eq!(Job::open(&located.job_path).unwrap().project.counters.gate_dropped, 0);
+
+        for _ in 0..2 {
+            let (region, _) = library.set_region_cleaned(&region_id, false).unwrap().unwrap();
+            assert_eq!(region.outcome, "gate-skipped");
+            let job = Job::open(&located.job_path).unwrap();
+            assert_eq!(job.project.regions_untouched.len(), 1);
+            assert_eq!(job.project.regions_untouched[0].reason, reason);
+            assert_eq!(job.project.counters.gate_dropped, 1);
+            assert!(!job.project.patches.iter().any(|row| row.id == region_id));
+        }
+        for _ in 0..2 {
+            let (region, _) = library.set_region_cleaned(&region_id, true).unwrap().unwrap();
+            assert_eq!(region.outcome, "cleaned");
+            let job = Job::open(&located.job_path).unwrap();
+            assert!(job.project.regions_untouched.is_empty());
+            assert_eq!(job.project.counters.gate_dropped, 0);
+            assert!(job.project.patches.iter().any(|row| row.id == region_id));
+        }
     }
 
     /// Approving a held candidate cleans through the lettering the run held,
