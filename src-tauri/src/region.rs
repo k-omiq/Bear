@@ -274,11 +274,6 @@ const SIDECAR_PATH_KEYS: &[&str] = &["sidecarPath", "sidecarFolder"];
 const FLUX_MODEL_KEYS: &[&str] = &["fluxModel", "sidecarModel"];
 const FLUX_BACKEND_KEYS: &[&str] = &["fluxBackend", "sidecarBackend"];
 
-/// The `fluxBackend` setting, as stored.
-fn flux_backend_setting(app: &tauri::AppHandle) -> Option<String> {
-    setting_str(crate::settings::read(app).ok().as_ref(), FLUX_BACKEND_KEYS)
-}
-
 /// Whether rung 3a is installed, has a backend here, and can be measured.
 ///
 /// **Not the whole gate**, deliberately. The authoritative one needs the

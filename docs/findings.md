@@ -793,10 +793,16 @@ weights are on disk. The helper start, a damaged weights folder and a broken Pyt
 Not run: a real render, the Settings download, and the notices and hidden options in the real app. The 11
 local FLUX results made before `flux_model` was recorded are still refused by the finishing previews as
 "another local FLUX model is set". Local Klein still uses the v1 recipe, which can copy lettering back.
-Local FLUX 3 has no weights on that Mac, and its helper environment predates it (diffusers 0.39, sdnq 0.2.4):
-`module diffusers has no attribute Flux3DistilledModularPipeline`. The FLUX 3 download upgrades these. With
-that package plan in a scratch folder and only the repository's config files, the load got as far as
-`components not loaded: transformer, vae`. Local FLUX 3 has still never rendered on Metal.
+An environment that predates FLUX 3 (diffusers 0.39, sdnq 0.2.4) fails with `module diffusers has no attribute
+Flux3DistilledModularPipeline`; the FLUX 3 download upgrades it (torch 2.15, diffusers 0.42.1, sdnq 0.2.8).
+
+**Local FLUX 3 on Metal, first real run (2026-11-01): 3 regions, one Mac, a debug test build.** The real
+installer and the real edit path (`edit_with_bench`, chosen by hand, no window) cleaned 3 regions of the
+5 px test pages on a 32 GB Mac at 188 to 218 s each, against 22 to 40 s on a cloud L4. The helper's peak was
+11.4 GB, under the 12 GiB declared. A balloon and hand-drawn lettering came out clean. Large outlined lettering
+on a screen (5_03) lost its letters and kept its black outline as a blob. Not measured: the real window, a
+release build's time, a second edit on real lettering, more pages, and FLUX 3 on real Windows or Linux
+hardware. A machine with no helper still shows no local FLUX in the tools, on every platform, by design.
 
 **Dev log (2026-10-31): the capture ran on macOS only, and four sources stay out of it.** The stderr
 redirect in `src-tauri/src/devlog.rs` has a real test on macOS. The Windows branch (`SetStdHandle`) has
