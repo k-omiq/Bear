@@ -793,6 +793,10 @@ weights are on disk. The helper start, a damaged weights folder and a broken Pyt
 Not run: a real render, the Settings download, and the notices and hidden options in the real app. The 11
 local FLUX results made before `flux_model` was recorded are still refused by the finishing previews as
 "another local FLUX model is set". Local Klein still uses the v1 recipe, which can copy lettering back.
+Local FLUX 3 has no weights on that Mac, and its helper environment predates it (diffusers 0.39, sdnq 0.2.4):
+`module diffusers has no attribute Flux3DistilledModularPipeline`. The FLUX 3 download upgrades these. With
+that package plan in a scratch folder and only the repository's config files, the load got as far as
+`components not loaded: transformer, vae`. Local FLUX 3 has still never rendered on Metal.
 
 **Dev log (2026-10-31): the capture ran on macOS only, and four sources stay out of it.** The stderr
 redirect in `src-tauri/src/devlog.rs` has a real test on macOS. The Windows branch (`SetStdHandle`) has
