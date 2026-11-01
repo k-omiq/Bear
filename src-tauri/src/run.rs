@@ -1451,9 +1451,11 @@ fn open_hayai(models: &Path, preference: Preference) -> Result<Hayai, String> {
 /// `DETECTOR`, `BALLOONS`, `GATE_MODEL`, and `GATE_LABELS` are required eagerly
 /// by [`Pipeline::open`]. `INPAINTER` is opened lazily by rung 2 and falls back
 /// to `Unavailable` if missing on disk, so it is not required at open time.
+#[cfg(test)]
 pub(crate) const REQUIRED_MODELS: [&str; 4] = [DETECTOR, BALLOONS, GATE_MODEL, GATE_LABELS];
 
 /// Whether a candidate directory contains all files required to open a [`Pipeline`].
+#[cfg(test)]
 pub(crate) fn models_ready(dir: &Path) -> bool {
     REQUIRED_MODELS.iter().all(|name| dir.join(name).exists())
 }
@@ -1530,6 +1532,7 @@ pub fn model_search_paths(app_data: Option<&Path>) -> Vec<PathBuf> {
     paths
 }
 
+#[cfg(test)]
 pub(crate) fn model_dir(app_data: Option<&Path>) -> Option<PathBuf> {
     model_search_paths(app_data).into_iter().find(|dir| models_ready(dir))
 }
