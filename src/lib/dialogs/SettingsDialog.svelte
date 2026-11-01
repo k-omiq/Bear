@@ -2609,7 +2609,9 @@
                     {t('shell.action.chooseFolder')}
                   </Button>
                 </div>
-                {#if session.sidecarPath && !capabilities.sidecar}
+                <!-- A reason means a helper was found and cannot run, which is
+                     not this sentence. -->
+                {#if session.sidecarPath && !capabilities.sidecar && !capabilities.sidecarReasonKey}
                   <p class="line">{t('settings.sidecar.notFound')}</p>
                 {/if}
               {/snippet}

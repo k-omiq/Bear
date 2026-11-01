@@ -785,15 +785,24 @@ reads under the 0.5 limit, and a hint grown over art by mask padding reads over 
 31 crops cannot settle both. Their tests stay skipped in `deploy/cloud/tests/test_flux3_gaps.py`. A lower
 feather on Edit gradient keeps the softer edge the layer had, where the eraser and the feather cannot be told apart.
 
+**Local FLUX failure reasons and its offer (2026-11-01): no real render.** On the Mac this was found on,
+local FLUX failed because its weights were gone (moved to the Trash on 2026-10-09), and the dev log said
+nothing. The app now writes a decline's detail, a fault's text with the helper's last stderr lines, every
+refused region edit and every failed setup to the dev log, and it offers FLUX only when the set model's
+weights are on disk. The helper start, a damaged weights folder and a broken Python ran for real, headless.
+Not run: a real render, the Settings download, and the notices and hidden options in the real app. The 11
+local FLUX results made before `flux_model` was recorded are still refused by the finishing previews as
+"another local FLUX model is set". Local Klein still uses the v1 recipe, which can copy lettering back.
+
 **Dev log (2026-10-31): the capture ran on macOS only, and four sources stay out of it.** The stderr
 redirect in `src-tauri/src/devlog.rs` has a real test on macOS. The Windows branch (`SetStdHandle`) has
 never run on Windows. These are not captured:
 
 - On Windows, native C++ libraries. ONNX Runtime writes its own warnings through its C runtime's
   stderr, which `SetStdHandle` does not move. On macOS and Linux the same lines are captured.
-- The Python sidecar's stderr. `sidecar/client.rs` drains and drops it, because progress bars would
-  push real lines out of a 512 KiB log. Forwarding only its last lines when it exits is the next step
-  if local FLUX failures need them.
+- The Python sidecar's ordinary stderr, because progress bars would push real lines out of a 512 KiB
+  log. Since 2026-11-01 a failure carries its last 30 lines (see below); stderr with no failure after
+  it is still dropped.
 - Errors in the webview (`console.error`, unhandled rejections).
 - Errors the app shows as a notice without also writing them to stderr, such as measurement errors.
 

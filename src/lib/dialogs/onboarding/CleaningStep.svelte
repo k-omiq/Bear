@@ -110,7 +110,7 @@
     </Button>
     <Button size="sm" disabled={choosing || installing} onclick={browse}>{t('shell.action.chooseFolder')}</Button>
   </div>
-  {#if session.sidecarPath}
+  {#if session.sidecarPath && !capabilities.sidecarReasonKey}
     <p class="alert" role="alert">{t('onboarding.cleaning.helperMissing')}</p>
   {/if}
 {/if}

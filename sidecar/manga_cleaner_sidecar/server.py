@@ -13,6 +13,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
@@ -81,7 +82,17 @@ class SidecarRequestHandler(BaseHTTPRequestHandler):
             pass
 
     def _send_error(self, error: SidecarError) -> None:
+        # The reply holds one sentence. The traceback goes to stderr first, whose
+        # last lines the parent adds to the failure (`sidecar/client.rs`). An
+        # expected refusal, such as weights not there yet, has none to print.
+        if error.status_code == 500 or error.__cause__ is not None:
+            traceback.print_exception(error, file=sys.stderr)
         self._send_json_response(error.status_code, error.to_dict())
+
+    def _send_unexpected(self, exc: Exception) -> None:
+        error = SidecarError(500, ErrorKind.INTERNAL, str(exc))
+        error.__cause__ = exc
+        self._send_error(error)
 
     def _authenticate(self) -> None:
         """Validate the x-mc-token header against the configured shared secret."""
@@ -134,7 +145,7 @@ class SidecarRequestHandler(BaseHTTPRequestHandler):
         except SidecarError as exc:
             self._send_error(exc)
         except Exception as exc:
-            self._send_error(SidecarError(500, ErrorKind.INTERNAL, str(exc)))
+            self._send_unexpected(exc)
 
     def do_POST(self) -> None:
         """Handle POST requests (/v1/open, /v1/render, /v1/release, /v1/shutdown)."""
@@ -156,7 +167,7 @@ class SidecarRequestHandler(BaseHTTPRequestHandler):
         except SidecarError as exc:
             self._send_error(exc)
         except Exception as exc:
-            self._send_error(SidecarError(500, ErrorKind.INTERNAL, str(exc)))
+            self._send_unexpected(exc)
 
     def _handle_health(self) -> None:
         """GET /v1/health.

@@ -46,9 +46,12 @@
 //! a ratchet, because what "flat" means in bytes is exactly the constant this
 //! file will not invent. What is built is the instrument.
 
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
 use std::process::{Child, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::engines::model::{Decline, Error};
@@ -91,6 +94,42 @@ pub const OPEN_TIMEOUT: Duration = Duration::from_secs(600);
 /// deadline is not a performance target - it is the difference between a hung
 /// sidecar being a lost region and a hung sidecar being a lost afternoon.
 pub const RENDER_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How many of a child's last stderr lines a failure carries, and how long each
+/// may be. Enough for a traceback, and small beside the dev log's 512 KiB, which
+/// the child's progress bars would otherwise fill.
+const STDERR_TAIL_LINES: usize = 30;
+const STDERR_LINE_CHARS: usize = 500;
+
+/* ------------------------------------------------------------------ */
+/* What the child last said                                            */
+/* ------------------------------------------------------------------ */
+
+/// The end of the child's stderr, kept until a failure asks for it.
+#[derive(Clone, Default)]
+struct StderrTail(Arc<Mutex<VecDeque<String>>>);
+
+impl StderrTail {
+    /// One line of output. A progress bar rewrites its line with `\r`, so only
+    /// what it wrote last counts.
+    fn push(&self, line: &str) {
+        let line = line.trim_end().rsplit('\r').next().unwrap_or_default();
+        if line.is_empty() {
+            return;
+        }
+        let Ok(mut lines) = self.0.lock() else { return };
+        if lines.len() == STDERR_TAIL_LINES {
+            lines.pop_front();
+        }
+        lines.push_back(line.chars().take(STDERR_LINE_CHARS).collect());
+    }
+
+    /// The lines kept so far, which are then gone: a later failure carries only
+    /// what came after this one.
+    fn take(&self) -> Vec<String> {
+        self.0.lock().map_or_else(|_| Vec::new(), |mut lines| lines.drain(..).collect())
+    }
+}
 
 /* ------------------------------------------------------------------ */
 /* The floor                                                           */
@@ -153,6 +192,8 @@ pub struct Client {
     /// it is stuck past the deadline. It is not given another region.
     gone: std::cell::Cell<bool>,
     opened: bool,
+    /// `None` for a sidecar this process did not spawn: its stderr is not here.
+    stderr: Option<StderrTail>,
 }
 
 impl Client {
@@ -167,7 +208,21 @@ impl Client {
             exhausted: false,
             gone: std::cell::Cell::new(false),
             opened: false,
+            stderr: None,
         }
+    }
+
+    /// `text`, and what the child last wrote to stderr, if anything. The reader
+    /// is a thread of its own, so it gets a moment to catch up with a child that
+    /// wrote its reason just before it answered or died.
+    fn with_stderr(&self, text: String) -> String {
+        let Some(tail) = &self.stderr else { return text };
+        std::thread::sleep(Duration::from_millis(100));
+        let lines = tail.take();
+        if lines.is_empty() {
+            return text;
+        }
+        format!("{text}\nthe last lines on its stderr:\n{}", lines.join("\n"))
     }
 
     pub fn addr(&self) -> SocketAddr {
@@ -322,9 +377,13 @@ impl Client {
         let token = (path != "/v1/health").then_some(self.token.as_str());
         let reply = http::request(self.addr, method, path, token, body, timeout)
             .map_err(|e| {
+                let text = format!("the sidecar at {} did not answer: {e}", self.addr);
                 // The health poll waits out a child still starting.
-                if path != "/v1/health" { self.gone.set(true); }
-                Error::Run(format!("the sidecar at {} did not answer: {e}", self.addr))
+                if path == "/v1/health" {
+                    return Error::Run(text);
+                }
+                self.gone.set(true);
+                Error::Run(self.with_stderr(text))
             })?;
         if (200..300).contains(&reply.status) {
             return Ok(reply.body);
@@ -339,12 +398,15 @@ impl Client {
             // guessing a decline from a bare status code would route a region
             // down the ladder on the strength of a number a proxy could have
             // written.
-            return Error::Run(format!(
+            return Error::Run(self.with_stderr(format!(
                 "the sidecar answered {status} with a body this does not understand"
-            ));
+            )));
         };
         let detail = parsed.error.detail.unwrap_or_default();
         if parsed.error.kind.declines() {
+            // A decline carries a key and nothing else, so this is the one place
+            // its detail (which folder, how much memory) can still be written.
+            eprintln!("manga-cleaner: the sidecar declined ({:?}): {detail}", parsed.error.kind);
             return match parsed.error.kind {
                 wire::ErrorKind::OutOfMemory => Decline::SidecarMemory.into(),
                 wire::ErrorKind::UnboundedBackend => Decline::SidecarUnbounded.into(),
@@ -353,7 +415,7 @@ impl Client {
                 _ => Decline::SidecarWeightsMissing.into(),
             };
         }
-        Error::Run(format!("the sidecar answered {status} {:?}: {detail}", parsed.error.kind))
+        Error::Run(self.with_stderr(format!("the sidecar answered {status} {:?}: {detail}", parsed.error.kind)))
     }
 }
 
@@ -377,6 +439,8 @@ pub struct Sidecar {
     /// can hand back, and a row with a close button that cannot close is worse
     /// than no row ([`crate::registry`]).
     lease: Option<crate::registry::Lease>,
+    /// The thread reading the child's stderr, which ends when the child does.
+    stderr_reader: Option<JoinHandle<()>>,
 }
 
 impl Sidecar {
@@ -441,9 +505,11 @@ impl Sidecar {
             Error::Run(format!("the sidecar at {} would not start: {e}", install.python.display()))
         })?;
         drain(child.stdout.take());
-        drain(child.stderr.take());
+        let tail = StderrTail::default();
+        let stderr_reader = keep_tail(child.stderr.take(), tail.clone());
 
-        let client = Client::new(addr, token, backend, budget);
+        let mut client = Client::new(addr, token, backend, budget);
+        client.stderr = Some(tail);
         // Registered **before** the health wait, not after it: a child that is
         // reading gigabytes off disk and has not answered yet is the moment the
         // tab most needs to say something is loading, and a row that only
@@ -456,7 +522,7 @@ impl Sidecar {
             crate::registry::Device::sidecar(),
             Some(model.to_owned()),
         );
-        let mut sidecar = Sidecar { client, child: Some(child), lease: Some(lease) };
+        let mut sidecar = Sidecar { client, child: Some(child), lease: Some(lease), stderr_reader };
         sidecar.wait_for_health()?;
         Ok(sidecar)
     }
@@ -467,7 +533,7 @@ impl Sidecar {
     /// difference: a hand-run sidecar under a debugger survives the application
     /// exiting, and a test's fake sidecar is the test's to shut down.
     pub fn attach(addr: SocketAddr, token: String, backend: Backend, budget: Budget) -> Sidecar {
-        Sidecar { client: Client::new(addr, token, backend, budget), child: None, lease: None }
+        Sidecar { client: Client::new(addr, token, backend, budget), child: None, lease: None, stderr_reader: None }
     }
 
     pub fn client(&mut self) -> &mut Client {
@@ -523,9 +589,17 @@ impl Sidecar {
             if let Some(child) = self.child.as_mut() {
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        return Err(Error::Run(format!(
+                        // Bounded: something the child started can hold the
+                        // pipe open after it.
+                        let read_until = Instant::now() + Duration::from_secs(1);
+                        while self.stderr_reader.as_ref().is_some_and(|reader| !reader.is_finished())
+                            && Instant::now() < read_until
+                        {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        return Err(Error::Run(self.client.with_stderr(format!(
                             "the sidecar exited during startup ({status})"
-                        )));
+                        ))));
                     }
                     Ok(None) => {}
                     // Cannot tell. Treated as alive, because the health poll is
@@ -538,7 +612,7 @@ impl Sidecar {
                 Err(error) => last = error.to_string(),
             }
             if Instant::now() >= deadline {
-                return Err(Error::Run(format!("the sidecar never became healthy: {last}")));
+                return Err(Error::Run(self.client.with_stderr(format!("the sidecar never became healthy: {last}"))));
             }
             std::thread::sleep(STARTUP_POLL);
         }
@@ -579,16 +653,30 @@ impl Drop for Sidecar {
 
 /// Read a child's pipe on a thread of its own so a full buffer cannot block it.
 ///
-/// The lines are dropped rather than logged: `cleaner-core` has no logger and
-/// is not the layer that should acquire one. What matters here is that the pipe
-/// keeps draining - a child whose stderr buffer fills stops making progress,
-/// and it stops during weight loading, which reads as a hang.
+/// What matters here is that the pipe keeps draining - a child whose buffer
+/// fills stops making progress, and it stops during weight loading, which reads
+/// as a hang.
 fn drain<R: std::io::Read + Send + 'static>(pipe: Option<R>) {
     if let Some(pipe) = pipe {
         std::thread::spawn(move || {
             for _ in BufReader::new(pipe).lines().map_while(Result::ok) {}
         });
     }
+}
+
+/// [`drain`] for stderr, keeping its last lines for a failure to carry. Bytes,
+/// not `lines()`: a line that is not UTF-8 must not end the read and leave the
+/// pipe to fill.
+fn keep_tail<R: std::io::Read + Send + 'static>(pipe: Option<R>, tail: StderrTail) -> Option<JoinHandle<()>> {
+    let pipe = pipe?;
+    Some(std::thread::spawn(move || {
+        let mut reader = BufReader::new(pipe);
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line).is_ok_and(|read| read > 0) {
+            tail.push(&String::from_utf8_lossy(&line));
+            line.clear();
+        }
+    }))
 }
 
 /// A free loopback port, from the operating system.
@@ -649,6 +737,44 @@ mod tests {
         assert_eq!(a.len(), 48);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn the_stderr_tail_keeps_the_last_lines_and_a_progress_bar_only_its_last_state() {
+        let tail = StderrTail::default();
+        for n in 0..STDERR_TAIL_LINES + 5 {
+            tail.push(&format!("line {n}\n"));
+        }
+        tail.push("  5%\r 50%\r100%\n");
+        tail.push("\n");
+        let lines = tail.take();
+        assert_eq!(lines.len(), STDERR_TAIL_LINES);
+        assert_eq!(lines[0], "line 6");
+        assert_eq!(lines.last().unwrap(), "100%");
+        assert!(tail.take().is_empty(), "a later failure carries only what came after");
+    }
+
+    /// The failure a broken environment gives: the child says why on stderr and
+    /// exits, and the error has to say it too, because nothing else keeps it.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_dies_at_startup_has_its_reason_in_the_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("mc-sidecar-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let python = root.join("python3");
+        std::fs::write(&python, "#!/bin/sh\necho 'ImportError: no module named mlx' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let budget = Budget::from_room(32 * crate::memory::GIB);
+        let install = Install { python, root: root.clone() };
+        let error = Sidecar::spawn(&install, Backend::Sdnq, "flux2-klein-4b", budget).err().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let text = error.to_string();
+        assert!(text.contains("exited during startup"), "{text}");
+        assert!(text.contains("ImportError: no module named mlx"), "{text}");
     }
 
     #[test]
