@@ -723,6 +723,32 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**LaMa hand edits, one WebGPU adapter and mask combinations (2026-11-01): partly proven.** Hand edits and
+post-processing found models through a directory that also required the small Ogkalu, CTD and the gate.
+A machine set up with Ogkalu Full can lack the small file, so LaMa reported `rungUnavailable`. They now
+look only for the file they need. A debug build rendered all 12 finishings with real LaMa on a copy of
+a real chapter, on a Mac with every model present. Nobody has run the fix on the Windows machine in the
+report, so its missing file is inferred from the code. If LaMa still fails, the new log line names the
+cause. `one_adapter` gives a session one WebGPU adapter, and has not run on a two-GPU Windows machine.
+Clean anyway on a held row now records one undo step that puts the row back, shown by tests only.
+
+`spikes/mask-bench` scored model combinations on 51 pages of 5 finished chapters, with the user's kept
+masks as the answer key. That key favours what the app proposed, so "missed" is a relative measure, and
+of 38 "art" groups on a picture sheet most were lettering the user left alone. Median per page on an
+M-series Mac: small Ogkalu 0.27 s, CTD 0.84 s, Full 2.16 s, SAM-TS-L 8.55 s. Results:
+
+- Without Ogkalu, groups that bridged two kept masks rose from 5 to 52: its balloon walls keep marks apart.
+- CTD beside SAM-TS-L and Ogkalu changed nothing that matters and costs 0.84 s and about 1 GB.
+- Small Ogkalu matched Full, with fewer extra pixels (10.2% to 13.9%) and 8 bridges to 6.
+- Turning off reach merging did not lower bleed (12 to 13 of 573 masks) and held more text.
+- Reading every group tripled the reads and helped much only with Full (art groups 47 to 29).
+- Of 619 boxes, 44 had the type changed by hand, all inside to outside. Dark, tone or patterned balloons
+  and colour panels cause this. A test rule on flat, light paper cut wrong Fill starts on those from 26 to 5.
+
+None of these results is built: the app still runs its old combinations and engine pick. Not measured:
+the combination on Windows or on a GPU other than Apple's, the paper rule inside a real run, skipping SAM
+on pages with no likely SFX, and why a Hayai read now takes about 340 ms against 110 ms in earlier notes.
+
 **Ogkalu Full on a forced GPU (2026-10-31): changed in code, not run on a GPU.** A forced DirectML or
 CUDA session on Full used to refuse any CPU node, and the graph has the shape arithmetic GPU providers
 usually leave behind. `FULL_RT.partitioned_on` now keeps the CPU fallback on both. Nobody has seen the

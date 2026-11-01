@@ -1,0 +1,14 @@
+[package]
+name = "spike-mask-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Which detection models should do what: each combination's grouping, made again
+# from a corrected chapter's evidence and scored against the masks its user kept.
+[dependencies]
+cleaner-core = { path = "../../crates/cleaner-core" }
+anyhow.workspace = true
+serde_json.workspace = true

@@ -4247,6 +4247,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "spike-mask-bench"
+version = "1.0.0-beta.15"
+dependencies = [
+ "anyhow",
+ "cleaner-core",
+ "serde_json",
+]
+
+[[package]]
 name = "spike-ocr-probe"
 version = "1.0.0-beta.15"
 dependencies = [
