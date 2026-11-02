@@ -32,7 +32,8 @@
 
 import { getBackend } from '../api/backend.js'
 import { model, workflowNeeds } from '../model/pipelines.js'
-import { session } from './session.svelte.js'
+import { session, setFluxModel } from './session.svelte.js'
+import { writeSettingsSerialized } from './settingswrite.js'
 
 /**
  * The engines a mask row, the Shapes row and the AI mask brush can offer, plus
@@ -146,6 +147,24 @@ export function currentWorkflowAvailable() {
 }
 
 /**
+ * The model set has no weights here: move the setting to one that does. Only
+ * one local FLUX is offered at a time, the one set, so without this a helper
+ * holding FLUX 3 while Klein 4B is set would offer no FLUX anywhere until
+ * somebody found the row in Settings. Nothing is lost: the set model cannot run.
+ *
+ * @param {import('../api/backend.js').Backend} backend
+ * @returns {Promise<boolean>} whether the setting moved
+ */
+async function useAnInstalledModel(backend) {
+  const models = await backend.listLocalModels()
+  const installed = models.find((entry) => entry.installed && !entry.legacy) ?? models.find((entry) => entry.installed)
+  if (!installed) return false
+  setFluxModel(installed.id)
+  await writeSettingsSerialized(backend, { fluxModel: installed.id })
+  return true
+}
+
+/**
  * Ask the backend once. A backend that cannot answer leaves the defaults -
  * which offer nothing for the sidecar, the safe direction there, and everything
  * for the weights, the safe direction here: a machine whose catalogue cannot be
@@ -158,7 +177,10 @@ export function currentWorkflowAvailable() {
  */
 export async function loadCapabilities(backend = getBackend()) {
   try {
-    const answer = await backend.sidecarAvailable()
+    let answer = await backend.sidecarAvailable()
+    if (answer?.reasonKey === 'decline.reason.sidecarWeights' && await useAnInstalledModel(backend)) {
+      answer = await backend.sidecarAvailable()
+    }
     capabilities.sidecar = Boolean(answer?.available)
     capabilities.sidecarReasonKey = answer?.reasonKey ?? null
   } catch {

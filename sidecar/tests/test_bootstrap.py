@@ -1,5 +1,6 @@
 """Offline checks for the desktop's model installation sequence."""
 
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,21 @@ from sidecar import bootstrap
 
 
 class BootstrapTest(unittest.TestCase):
+    def test_a_failed_step_names_itself_and_says_why(self):
+        script = "import sys; sys.stderr.write('x' * 5000 + ' 404 for this repo'); sys.exit(3)"
+        with self.assertRaises(RuntimeError) as caught:
+            bootstrap.run([sys.executable, "-c", script], label="model download")
+        message = str(caught.exception)
+        self.assertTrue(message.startswith("model download failed (exit 3): "), message)
+        self.assertTrue(message.endswith("404 for this repo"), message)
+        self.assertLess(len(message), 500)
+
+    def test_a_module_step_is_named_after_the_module(self):
+        with self.assertRaises(RuntimeError) as caught:
+            bootstrap.run([sys.executable, "-m", "no_such_module_here"])
+        self.assertIn("no_such_module_here failed (exit 1): ", str(caught.exception))
+        self.assertIn("No module named", str(caught.exception))
+
     def test_sdnq_install_creates_discoverable_environment_and_pinned_weights(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch) / "install"

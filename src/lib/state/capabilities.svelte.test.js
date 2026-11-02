@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import {
   capabilities, featuresFrom, loadCapabilities, selectedWorkflowAvailable, selectedWorkflowMissing,
 } from './capabilities.svelte.js'
+import { session } from './session.svelte.js'
 
 /** @param {Partial<import('../api/backend.js').Backend>} answers */
 function backendThat(answers) {
@@ -136,6 +137,43 @@ describe('loadCapabilities', () => {
     )
     expect(capabilities.sidecar).toBe(true)
     expect(capabilities.engines.flux).toBe(true)
+  })
+
+  describe('when the model set has no weights', () => {
+    const NO_WEIGHTS = { available: false, reasonKey: 'decline.reason.sidecarWeights' }
+
+    it('moves the setting to an installed model and offers FLUX', async () => {
+      const written = []
+      let stored = 'flux2-klein-4b'
+      await loadCapabilities(backendThat({
+        sidecarAvailable: async () => (stored === 'flux3-image-klein' ? { available: true, reasonKey: null } : NO_WEIGHTS),
+        listLocalModels: async () => [
+          { id: 'flux2-klein-4b', installed: false, legacy: false },
+          { id: 'flux2-klein-9b', installed: true, legacy: true },
+          { id: 'flux3-image-klein', installed: true, legacy: false },
+        ],
+        writeSettings: async (patch) => {
+          written.push(patch)
+          stored = patch.fluxModel
+          return patch
+        },
+      }))
+      expect(written).toEqual([{ fluxModel: 'flux3-image-klein' }])
+      expect(session.fluxModel).toBe('flux3-image-klein')
+      expect(capabilities.engines.flux).toBe(true)
+      expect(capabilities.sidecarReasonKey).toBe(null)
+    })
+
+    it('says why when no model is installed, and leaves the setting', async () => {
+      session.fluxModel = 'flux2-klein-4b'
+      await loadCapabilities(backendThat({
+        sidecarAvailable: async () => NO_WEIGHTS,
+        listLocalModels: async () => [{ id: 'flux2-klein-4b', installed: false, legacy: false }],
+      }))
+      expect(session.fluxModel).toBe('flux2-klein-4b')
+      expect(capabilities.engines.flux).toBe(false)
+      expect(capabilities.sidecarReasonKey).toBe('decline.reason.sidecarWeights')
+    })
   })
 
   it('reports a missing runtime and a missing Auto clean separately', async () => {

@@ -1,7 +1,7 @@
 //! Installs the optional local model process and one pinned checkpoint on demand.
 //! The shipped Python sources are app resources; provider credentials are not used.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
 
 const INSTALL_LIMIT: Duration = Duration::from_secs(2 * 60 * 60);
+/// How much of a failed child's stderr its error carries.
+const STDERR_TAIL_BYTES: usize = 800;
 static INSTALL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn source_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -26,6 +28,29 @@ fn source_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         }
     }
     Err("This app build does not include the FLUX helper source".into())
+}
+
+/// The end of what a child wrote to stderr, read on a thread so a full pipe
+/// cannot stop it. Empty when there was nothing, or nothing readable.
+fn read_stderr(child: &mut std::process::Child) -> Option<std::thread::JoinHandle<String>> {
+    let mut pipe = child.stderr.take()?;
+    Some(std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = pipe.read_to_end(&mut bytes);
+        let text = String::from_utf8_lossy(&bytes);
+        let text = text.trim();
+        let start = text.len().saturating_sub(STDERR_TAIL_BYTES);
+        let start = (start..text.len()).find(|at| text.is_char_boundary(*at)).unwrap_or(text.len());
+        text[start..].to_owned()
+    }))
+}
+
+/// What [`read_stderr`] got, after `message`.
+fn with_stderr(message: &str, reader: Option<std::thread::JoinHandle<String>>) -> String {
+    match reader.and_then(|reader| reader.join().ok()).filter(|tail| !tail.is_empty()) {
+        Some(tail) => format!("{message}: {tail}"),
+        None => message.to_owned(),
+    }
 }
 
 fn system_python() -> Option<(String, Vec<String>)> {
@@ -66,13 +91,14 @@ pub(crate) fn managed_python(app: &tauri::AppHandle, root: &Path, version: &str)
         .env("UV_PYTHON_INSTALL_DIR", &python_dir)
         .env("UV_PYTHON_BIN_DIR", root.join("python-bin"))
         .env("UV_NO_CONFIG", "1")
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped())
         .spawn()
         .map_err(|_| "This app build has no managed Python installer".to_string())?;
+    let stderr = read_stderr(&mut child);
     let deadline = Instant::now() + Duration::from_secs(15 * 60);
     loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            if !status.success() { return Err("Could not download the managed Python runtime".into()); }
+            if !status.success() { return Err(with_stderr("Could not download the managed Python runtime", stderr)); }
             break;
         }
         if Instant::now() >= deadline {
@@ -124,9 +150,10 @@ fn install(app: &tauri::AppHandle, model: &str, backend: &str, accelerator: &str
         .args(["--model", model, "--checkpoint", &checkpoint])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Could not start FLUX setup: {e}"))?;
+    let stderr = read_stderr(&mut child);
     let output = child.stdout.take().ok_or("FLUX setup output is unavailable")?;
     let emitter = app.clone();
     let reader = std::thread::spawn(move || {
@@ -162,7 +189,9 @@ fn install(app: &tauri::AppHandle, model: &str, backend: &str, accelerator: &str
     };
     let (result, error) = reader.join().map_err(|_| "FLUX setup output failed")?;
     if !status.success() {
-        return Err(error.unwrap_or_else(|| "FLUX setup failed; retry to continue".into()));
+        // The setup script reports its own failures; stderr is for one that
+        // crashed before it could.
+        return Err(error.unwrap_or_else(|| with_stderr("FLUX setup failed; retry to continue", stderr)));
     }
     result.ok_or_else(|| "FLUX setup finished without a result".into())
 }
@@ -174,5 +203,9 @@ pub async fn install_flux_helper(
     backend: String,
     accelerator: String,
 ) -> Result<Value, String> {
-    crate::library::blocking(move || install(&app, &model, &backend, &accelerator)).await
+    crate::library::blocking(move || {
+        install(&app, &model, &backend, &accelerator)
+            .inspect_err(|error| eprintln!("manga-cleaner: FLUX setup of {model} failed: {error}"))
+    })
+    .await
 }

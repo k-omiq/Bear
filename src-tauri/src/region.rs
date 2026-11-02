@@ -274,11 +274,6 @@ const SIDECAR_PATH_KEYS: &[&str] = &["sidecarPath", "sidecarFolder"];
 const FLUX_MODEL_KEYS: &[&str] = &["fluxModel", "sidecarModel"];
 const FLUX_BACKEND_KEYS: &[&str] = &["fluxBackend", "sidecarBackend"];
 
-/// The `fluxBackend` setting, as stored.
-fn flux_backend_setting(app: &tauri::AppHandle) -> Option<String> {
-    setting_str(crate::settings::read(app).ok().as_ref(), FLUX_BACKEND_KEYS)
-}
-
 /// Whether rung 3a is installed, has a backend here, and can be measured.
 ///
 /// **Not the whole gate**, deliberately. The authoritative one needs the
@@ -294,9 +289,17 @@ fn flux_backend_setting(app: &tauri::AppHandle) -> Option<String> {
 /// The platform question comes first for the same reason it does inside the
 /// gate: a Windows machine whose memory measures perfectly well must not be
 /// told its memory could not be measured.
+///
+/// **Files on disk are one of the free questions.** The helper is found by its
+/// Python alone, so without this a helper whose weights had gone was offered
+/// everywhere and refused every region. `model` is the `fluxModel` setting; with
+/// none set, any model in the table will do, because Settings then picks it. A
+/// folder placed by hand under a name the table does not know is the open's
+/// question, as is a weights folder moved by `MC_SIDECAR_WEIGHTS_DIR`.
 pub fn sidecar_status_from(
     explicit: Option<&str>,
     backend: Option<&str>,
+    model: Option<&str>,
     app_data: Option<&std::path::Path>,
 ) -> SidecarStatus {
     let env_var = std::env::var("MANGA_CLEANER_SIDECAR").ok();
@@ -313,7 +316,7 @@ pub fn sidecar_status_from(
         // The *chosen* backend's platform question, not the platform's own -
         // since `sdnq` there is no platform without a backend, and what can still
         // be refused here is a user who selected one that cannot run.
-        Some(_) => match sidecar::hardware::platform_decline_for(flux_backend(backend)) {
+        Some(install) => match sidecar::hardware::platform_decline_for(flux_backend(backend)) {
             Some(decline) => SidecarStatus {
                 available: false,
                 reason_key: Some(decline.reason_key()),
@@ -321,6 +324,10 @@ pub fn sidecar_status_from(
             None if memory::room().is_none() => SidecarStatus {
                 available: false,
                 reason_key: Some("decline.reason.sidecarUnknownMachine"),
+            },
+            None if !flux_weights_present(&install.root.join("weights"), backend, model) => SidecarStatus {
+                available: false,
+                reason_key: Some("decline.reason.sidecarWeights"),
             },
             None => SidecarStatus {
                 available: true,
@@ -330,9 +337,21 @@ pub fn sidecar_status_from(
     }
 }
 
+/// Whether the weights [`sidecar_status_from`] needs are under `weights`.
+fn flux_weights_present(weights: &std::path::Path, backend: Option<&str>, model: Option<&str>) -> bool {
+    if std::env::var_os("MC_SIDECAR_WEIGHTS_DIR").is_some() {
+        return true;
+    }
+    let preferred = flux_backend(backend);
+    match model.filter(|id| !id.is_empty()) {
+        Some(id) => sidecar::models::local_model(id).is_none_or(|known| known.installed(preferred, weights)),
+        None => sidecar::models::LOCAL_MODELS.iter().any(|known| known.installed(preferred, weights)),
+    }
+}
+
 #[allow(dead_code)]
 pub fn sidecar_status(app_data: Option<&std::path::Path>) -> SidecarStatus {
-    sidecar_status_from(None, None, app_data)
+    sidecar_status_from(None, None, None, app_data)
 }
 
 /// A discovered model directory in the sidecar's weights folder.
@@ -859,6 +878,7 @@ impl Bench {
             .or_else(|| env_var.as_deref().filter(|s| !s.is_empty()));
         let roots = sidecar::search_paths_from(explicit, self.app_data.as_deref());
         let Some(install) = sidecar::find_within(&roots) else {
+            eprintln!("manga-cleaner: local FLUX has no helper install under {roots:?}");
             return Err("decline.reason.rungUnavailable");
         };
         let model = self
@@ -992,11 +1012,19 @@ impl LocalModels {
 /// A decline carries its own - `decline.reason.sidecar*`, the vocabulary the
 /// settings panel and a review row both read - and a fault does not: a sidecar
 /// that would not answer is, from the region's point of view, a rung that was
-/// not available.
+/// not available. The text is not lost: as [`engine_fault`] does, it goes to
+/// stderr, and so to the dev log. It is the only place the sidecar's own reason
+/// survives, since a key has no room for it.
 fn flux_reason(error: ModelError) -> &'static str {
     match error {
-        ModelError::Declined(decline) => decline.reason_key(),
-        ModelError::Run(_) => "decline.reason.rungUnavailable",
+        ModelError::Declined(decline) => {
+            eprintln!("manga-cleaner: local FLUX declined a region: {decline}");
+            decline.reason_key()
+        }
+        ModelError::Run(detail) => {
+            eprintln!("manga-cleaner: local FLUX failed: {detail}");
+            "decline.reason.rungUnavailable"
+        }
     }
 }
 
@@ -4267,6 +4295,9 @@ fn rerun_needs_cloud(
 /// Say what could not be done, rather than answering `null` and leaving the
 /// interface to show nothing at all.
 fn refuse(reason: &'static str) {
+    // A notice is gone once it is read, and the dev log is where a report is
+    // read from later.
+    eprintln!("manga-cleaner: a region edit was refused: {reason}");
     crate::events::notice(
         "notice.mask.rerunFailed",
         serde_json::json!({ "reasonKey": reason }),
@@ -6834,12 +6865,15 @@ pub async fn sidecar_available(app: tauri::AppHandle) -> Result<SidecarStatus, S
     crate::library::blocking(move || {
         use tauri::Manager;
         let app_data = app.path().app_data_dir().ok();
-        let stored_path = setting_str(crate::settings::read(&app).ok().as_ref(), SIDECAR_PATH_KEYS);
+        let settings = crate::settings::read(&app).ok();
+        let stored_path = setting_str(settings.as_ref(), SIDECAR_PATH_KEYS);
         let explicit = stored_path.as_deref().filter(|s| !s.is_empty());
-        let stored_backend = flux_backend_setting(&app);
+        let stored_backend = setting_str(settings.as_ref(), FLUX_BACKEND_KEYS);
+        let stored_model = setting_str(settings.as_ref(), FLUX_MODEL_KEYS);
         Ok(sidecar_status_from(
             explicit,
             stored_backend.as_deref(),
+            stored_model.as_deref(),
             app_data.as_deref(),
         ))
     })
@@ -9354,7 +9388,7 @@ mod tests {
     #[test]
     fn the_status_answers_per_chosen_backend_and_stays_silent_when_nothing_is_installed() {
         let nowhere = "/nonexistent/manga-cleaner-sidecar";
-        let absent = sidecar_status_from(Some(nowhere), Some("sdnq"), None);
+        let absent = sidecar_status_from(Some(nowhere), Some("sdnq"), None, None);
         assert!(!absent.available);
         assert_eq!(
             absent.reason_key, None,
@@ -9376,16 +9410,33 @@ mod tests {
 
         // The stub renders nowhere, so choosing it is refused for that and not
         // for this machine's memory.
-        let stub = sidecar_status_from(Some(&root), Some("sdcpp"), None);
+        let stub = sidecar_status_from(Some(&root), Some("sdcpp"), None, None);
         assert!(!stub.available);
         assert_eq!(stub.reason_key, Some("decline.reason.sidecarPlatform"));
 
-        // And the portable arm is offered on whatever this host is, unless the
-        // kernel would not say how much memory it has.
-        let portable = sidecar_status_from(Some(&root), Some("sdnq"), None);
+        // An install with no weights is not offered, and says so.
+        let empty = sidecar_status_from(Some(&root), Some("sdnq"), Some("flux2-klein-4b"), None);
+        if cleaner_core::memory::room().is_some() {
+            assert!(!empty.available);
+            assert_eq!(empty.reason_key, Some("decline.reason.sidecarWeights"));
+        }
+
+        // With its weights the portable arm is offered on whatever this host
+        // is, unless the kernel would not say how much memory it has. A model
+        // nobody set finds them too, and another model still lacks its own.
+        let weights = base.join("weights/flux2-klein-4b-sdnq");
+        std::fs::create_dir_all(&weights).unwrap();
+        std::fs::write(weights.join("model_index.json"), b"{}").unwrap();
+        let portable = sidecar_status_from(Some(&root), Some("sdnq"), Some("flux2-klein-4b"), None);
         if cleaner_core::memory::room().is_some() {
             assert!(portable.available, "{:?}", portable.reason_key);
             assert_eq!(portable.reason_key, None);
+            assert!(sidecar_status_from(Some(&root), Some("sdnq"), None, None).available);
+            assert!(sidecar_status_from(Some(&root), Some("sdnq"), Some("a-folder-placed-by-hand"), None).available);
+            assert_eq!(
+                sidecar_status_from(Some(&root), Some("sdnq"), Some("flux3-image-klein"), None).reason_key,
+                Some("decline.reason.sidecarWeights"),
+            );
         } else {
             assert_eq!(
                 portable.reason_key,
@@ -10288,6 +10339,7 @@ mod tests {
     fn sidecar_status_from_explicit_path_is_searched_first() {
         let status = sidecar_status_from(
             Some("/nonexistent/custom-sidecar-path"),
+            None,
             None,
             Some(std::path::Path::new("/nonexistent/manga-cleaner")),
         );

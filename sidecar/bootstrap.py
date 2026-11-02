@@ -20,9 +20,13 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 MARKER = ".manga-cleaner-ready.json"
+#: How much of a failed step's stderr its error carries: it has to fit the 500
+#: characters `main` reports, with the words in front of it.
+ERROR_TAIL_BYTES = 420
 #: Klein 4B on Hugging Face at the pin, for a call that names no model.
 DEFAULT_MODEL = "flux2-klein-4b"
 DEFAULT_CHECKPOINTS = {
@@ -41,12 +45,20 @@ def report(step: str, state: str) -> None:
     print(json.dumps({"step": step, "state": state}, separators=(",", ":")), flush=True)
 
 
-def run(command: list[str], *, timeout: int = 1800) -> None:
-    result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, timeout=timeout, check=False,
-                            env=safe_environment())
-    if result.returncode:
-        raise RuntimeError(f"{command[1] if len(command) > 1 else 'command'} failed (exit {result.returncode})")
+def run(command: list[str], *, timeout: int = 1800, label: str | None = None) -> None:
+    """Run one step. Its output stays off stdout, and the end of its stderr goes
+    into the error, in a file because a download's progress bars can be long."""
+    if label is None:
+        label = command[2] if command[1:2] == ["-m"] and len(command) > 2 else "setup step"
+    with tempfile.TemporaryFile() as stderr:
+        result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=stderr, timeout=timeout, check=False,
+                                env=safe_environment())
+        if result.returncode:
+            size = stderr.seek(0, os.SEEK_END)
+            stderr.seek(max(0, size - ERROR_TAIL_BYTES))
+            tail = stderr.read().decode("utf-8", "replace").strip().rsplit("\r", 1)[-1]
+            raise RuntimeError(f"{label} failed (exit {result.returncode}): {tail}")
 
 
 def safe_environment() -> dict[str, str]:
@@ -115,12 +127,13 @@ def fetch_weights(python: Path, weights_root: Path, checkpoint: dict) -> None:
     pending.mkdir(exist_ok=True)
     code = ("import sys; from huggingface_hub import snapshot_download; "
             "snapshot_download(repo_id=sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])")
-    run([str(python), "-c", code, checkpoint["repo"], checkpoint["revision"], str(pending)], timeout=7200)
+    run([str(python), "-c", code, checkpoint["repo"], checkpoint["revision"], str(pending)], timeout=7200,
+        label="model download")
     for adapter in checkpoint.get("adapters", []):
         code = ("import sys; from huggingface_hub import hf_hub_download; "
                 "hf_hub_download(repo_id=sys.argv[1], revision=sys.argv[2], filename=sys.argv[3], local_dir=sys.argv[4])")
         run([str(python), "-c", code, adapter["repo"], adapter["revision"], adapter["file"], str(pending / "adapters")],
-            timeout=7200)
+            timeout=7200, label="model download")
     if not (pending / checkpoint["expected"]).is_file():
         raise RuntimeError("Downloaded model is incomplete")
     (pending / MARKER).write_text(json.dumps({"repo": checkpoint["repo"], "revision": checkpoint["revision"]}), encoding="utf-8")
@@ -169,7 +182,7 @@ def install(root: Path, source: Path, backend: str, accelerator: str,
         run([str(python), "-m", "pip", "install", "-r", str(source / "requirements-sdnq.txt")])
     run([str(python), "-m", "pip", "install", "--no-deps", str(source)])
     import_check = "import manga_cleaner_sidecar, mflux, mlx" if backend == "mflux" else "import manga_cleaner_sidecar, torch, diffusers, sdnq"
-    run([str(python), "-c", import_check], timeout=120)
+    run([str(python), "-c", import_check], timeout=120, label="import check")
     report("dependencies", "done")
 
     fetch_weights(python, root / "weights", checkpoint)
