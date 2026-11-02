@@ -95,7 +95,7 @@ pub struct Fitted {
     /// through this instead ([`crate::engines::model::applied_mask`], which
     /// adds the isolation ring to *this* mask, and
     /// [`crate::engines::lama::model_hole`], which cuts the tensor's hole to
-    /// it). The crop the model reads is untouched - it is 512² of real page
+    /// that ring's outer edge). The crop the model reads is untouched - it is 512² of real page
     /// either way, and a smaller hole means *more* of that page is context
     /// rather than less.
     ///
@@ -404,7 +404,7 @@ const FLAT_SHARE: f32 = 0.9;
 /// rarely all paper: a balloon's outline, a neighbouring glyph or a speed
 /// line takes a few of them, and a few are enough to move a standard
 /// deviation past any threshold while the paper is as flat as it was.
-fn flat_tone(levels: &mut [i32], noise_sigma: f32) -> Option<(i32, i32)> {
+pub(crate) fn flat_tone(levels: &mut [i32], noise_sigma: f32) -> Option<(i32, i32)> {
     if levels.is_empty() {
         return None;
     }
@@ -542,6 +542,150 @@ fn with_stray_lettering(page: &Raster, seed: &Mask, scale: f32, noise_sigma: f32
         return seed.clone();
     }
     Mask::union(&[seed, &strays], page.width, page.height)
+}
+
+/// How far past the lettering [`lettering_extent`] looks, in native pixels.
+const EXTENT_REACH: u32 = 12;
+/// The 8-bit level at or above which a pixel can be a light outline.
+const OUTLINE_LEVEL: i32 = 240 * 257;
+/// The share of the pixels around an outline, lettering aside, that must be darker
+/// than it. Paper beside a stray line stays under it; tone and black do not.
+const OUTLINE_GROUND_SHARE: f64 = 0.25;
+/// The 8-bit level at or under which a pixel can be the rest of a dark stroke.
+const STROKE_LEVEL: i32 = 64 * 257;
+/// What an outline has to be wider than, as a radius. A narrower one is inside
+/// the model's hole already, and it keeps the white between tone dots out.
+const OUTLINE_OPENING: u32 = 2;
+
+/// The lettering a mask marked and the parts of it the mask did not, for a model
+/// rung's hole. Two things stay standing around a segmentation mask, and the model
+/// reads each as the page and paints the letters back:
+///
+/// - A light outline wider than the hole's margin, on tone, art or black. Taken
+///   only where the ground around it is not light ([`OUTLINE_GROUND_SHARE`]), so
+///   plain paper around dark letters adds nothing.
+/// - The rest of a dark stroke the mask half covers, when the whole of it lies
+///   within [`EXTENT_REACH`]. Hair or a panel border runs past and is left.
+///
+/// It can only add, and only for a mask a detector made: a mask drawn by hand
+/// keeps the extent it was drawn with.
+pub fn lettering_extent(page: &Raster, ink: &Mask) -> Mask {
+    if ink.is_empty() {
+        return ink.clone();
+    }
+    let search = ink.bounds.grown(EXTENT_REACH * 2, page.width, page.height);
+    let near = ink.dilated_within(EXTENT_REACH, search);
+    let luma = |x: i64, y: i64| page.luma16_at(x as u32, y as u32) as i32;
+    let every = |keep: &dyn Fn(i64, i64) -> bool| {
+        let mut out = Mask::empty(search);
+        for y in search.y..search.bottom() {
+            for x in search.x..search.right() {
+                if keep(x, y) {
+                    out.set(x, y, true);
+                }
+            }
+        }
+        out
+    };
+
+    let light = every(&|x, y| ink.contains(x, y) || luma(x, y) >= OUTLINE_LEVEL);
+    let not_light = every(&|x, y| !light.contains(x, y));
+    let eroded = not_light.dilated_within(OUTLINE_OPENING, search);
+    let eroded = every(&|x, y| !eroded.contains(x, y));
+    let wide_light = eroded.dilated_within(OUTLINE_OPENING, search);
+
+    // Summed tables over the search box, so the ground's share is one lookup.
+    let (w, h) = (search.w as usize, search.h as usize);
+    let (mut ground, mut counted) = (vec![0u32; (w + 1) * (h + 1)], vec![0u32; (w + 1) * (h + 1)]);
+    for row in 0..h {
+        for col in 0..w {
+            let (x, y) = (search.x + col as i64, search.y + row as i64);
+            let at = (row + 1) * (w + 1) + col + 1;
+            let table = |t: &[u32]| t[at - 1] + t[at - w - 1] - t[at - w - 2];
+            ground[at] = table(&ground) + u32::from(not_light.contains(x, y));
+            counted[at] = table(&counted) + u32::from(!ink.contains(x, y));
+        }
+    }
+    let ground_around = |x: i64, y: i64| {
+        let reach = EXTENT_REACH as i64;
+        let (x0, x1) = ((x - reach).max(search.x), (x + reach + 1).min(search.right()));
+        let (y0, y1) = ((y - reach).max(search.y), (y + reach + 1).min(search.bottom()));
+        let sum = |t: &[u32]| {
+            let at = |px: i64, py: i64| t[(py - search.y) as usize * (w + 1) + (px - search.x) as usize];
+            f64::from(at(x1, y1) + at(x0, y0)) - f64::from(at(x0, y1) + at(x1, y0))
+        };
+        sum(&ground) >= OUTLINE_GROUND_SHARE * sum(&counted)
+    };
+
+    let mut seen = Mask::empty(search);
+    let mut extra = Mask::empty(search);
+    let mut stack = Vec::new();
+    let neighbours = |x: i64, y: i64| {
+        [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].map(|(dx, dy)| (x + dx, y + dy))
+    };
+
+    // The outline: the wide light pixels reached from the lettering.
+    for y in search.y..search.bottom() {
+        for x in search.x..search.right() {
+            if ink.contains(x, y) {
+                stack.push((x, y));
+            }
+        }
+    }
+    while let Some((x, y)) = stack.pop() {
+        for (nx, ny) in neighbours(x, y) {
+            if near.contains(nx, ny) && wide_light.contains(nx, ny) && !ink.contains(nx, ny) && !seen.contains(nx, ny) {
+                seen.set(nx, ny, true);
+                stack.push((nx, ny));
+                if ground_around(nx, ny) {
+                    extra.set(nx, ny, true);
+                }
+            }
+        }
+    }
+
+    // The stroke: each dark island touching the lettering, whole or not at all.
+    let dark = |x: i64, y: i64| !ink.contains(x, y) && luma(x, y) <= STROKE_LEVEL;
+    let mut seen = Mask::empty(search);
+    let mut island = Vec::new();
+    for y in search.y..search.bottom() {
+        for x in search.x..search.right() {
+            if seen.contains(x, y) || !dark(x, y) {
+                continue;
+            }
+            island.clear();
+            seen.set(x, y, true);
+            stack.push((x, y));
+            let (mut touches, mut whole) = (false, true);
+            while let Some((cx, cy)) = stack.pop() {
+                island.push((cx, cy));
+                whole &= near.contains(cx, cy);
+                for (nx, ny) in neighbours(cx, cy) {
+                    touches |= ink.contains(nx, ny);
+                    if search.contains(nx, ny) && !seen.contains(nx, ny) && dark(nx, ny) {
+                        seen.set(nx, ny, true);
+                        stack.push((nx, ny));
+                    }
+                }
+            }
+            if touches && whole {
+                for &(ix, iy) in &island {
+                    extra.set(ix, iy, true);
+                }
+            }
+        }
+    }
+
+    // Tight bounds: the search box is no part of the mask, and the quality check
+    // reads the band around these.
+    let Some(tight) = set_bounds(&extra) else { return ink.clone() };
+    let mut only = Mask::empty(tight);
+    for y in tight.y..tight.bottom() {
+        for x in tight.x..tight.right() {
+            only.set(x, y, extra.contains(x, y));
+        }
+    }
+    Mask::union(&[ink, &only], page.width, page.height)
 }
 
 /// The box of a mask's set pixels, which can be much smaller than its bounds.
@@ -728,6 +872,84 @@ fn route_for(
 /// base cutout.
 pub fn context_window(region: &Region, page_w: u32, page_h: u32) -> Rect {
     region.reference.grown(0, page_w, page_h)
+}
+
+#[cfg(test)]
+mod extent_tests {
+    use super::*;
+    use crate::image::{BitDepth, ColorMode};
+
+    fn gray(f: impl Fn(i64, i64) -> u8) -> Raster {
+        let mut data = Vec::with_capacity(200 * 200);
+        for y in 0..200 {
+            for x in 0..200 {
+                data.push(f(x, y));
+            }
+        }
+        Raster {
+            width: 200,
+            height: 200,
+            mode: ColorMode::Gray,
+            depth: BitDepth::Eight,
+            icc: None,
+            palette: None,
+            trns: None,
+            srgb_intent: None,
+            color: Default::default(),
+            data,
+        }
+    }
+
+    const LETTER: Rect = Rect { x: 90, y: 80, w: 20, h: 40 };
+
+    fn in_rect(rect: Rect, x: i64, y: i64) -> bool {
+        rect.contains(x, y)
+    }
+
+    #[test]
+    fn a_wide_light_outline_on_tone_or_black_joins_the_lettering() {
+        let outline = LETTER.grown(9, 200, 200);
+        for ground in [0u8, 110] {
+            let page = gray(|x, y| {
+                if in_rect(LETTER, x, y) { 10 } else if in_rect(outline, x, y) { 250 } else { ground }
+            });
+            let grown = lettering_extent(&page, &Mask::filled(LETTER));
+            assert!(grown.contains(82, 100), "ground {ground}: the outline stayed out");
+            assert!(!grown.contains(79, 100), "ground {ground}: it passed the outline");
+        }
+    }
+
+    #[test]
+    fn plain_paper_around_dark_letters_adds_nothing() {
+        let page = gray(|x, y| if in_rect(LETTER, x, y) { 10 } else { 250 });
+        let ink = Mask::filled(LETTER);
+        assert_eq!(lettering_extent(&page, &ink).count(), ink.count());
+    }
+
+    #[test]
+    fn the_white_between_tone_dots_is_no_outline() {
+        let page = gray(|x, y| if in_rect(LETTER, x, y) { 10 } else if x % 4 == 0 && y % 4 == 0 { 40 } else { 250 });
+        let ink = Mask::filled(LETTER);
+        assert!(!lettering_extent(&page, &ink).contains(82, 100));
+    }
+
+    #[test]
+    fn a_half_marked_stroke_is_taken_and_a_long_one_is_not() {
+        let bar = Rect::new(90, 95, 24, 8);
+        let ink = Mask::filled(Rect::new(95, 96, 10, 6));
+        let page = gray(|x, y| if in_rect(bar, x, y) { 10 } else { 200 });
+        assert!(lettering_extent(&page, &ink).contains(112, 98), "the stroke's end stayed out");
+
+        let border = Rect::new(0, 95, 200, 8);
+        let page = gray(|x, y| if in_rect(border, x, y) { 10 } else { 200 });
+        assert!(!lettering_extent(&page, &ink).contains(112, 98), "a border is no stroke");
+    }
+
+    #[test]
+    fn the_mask_stays_tight_when_nothing_is_added() {
+        let page = gray(|x, y| if in_rect(LETTER, x, y) { 10 } else { 250 });
+        assert_eq!(lettering_extent(&page, &Mask::filled(LETTER)).bounds, LETTER);
+    }
 }
 
 #[cfg(test)]

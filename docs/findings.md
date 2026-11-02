@@ -723,6 +723,50 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**LaMa `edgeEnergy` refusals (2026-11-01): fixed in the hole, the check is unchanged.** On 12 real pages
+(Detect then Clean, SAM-TS-L and small Ogkalu, padding 0, the plain paper rule applied), 18 of the 34 regions
+that reached LaMa were refused. The picture sheets showed the check was right: the refused results still held
+the letters in grey. Most of the 16 accepted ones held them too, and passed only because the page around them
+was busy. The cause was the hole. A run's stored ink is the SAM mask plus the padding, so at padding 0 it stops
+at the stroke's soft edge, the model reads that edge as an outline, and it fills the hole to match. `fit::ink_for`
+added a margin for this, but `fit_with_padding` replaces its result, as that function intends.
+
+`lama::model_hole` now takes the applied mask (ink plus 5 px), which does not change the written set. A 3 px hole
+gave 5 refused and 5 px gave 4. CPU and WebGPU gave the same ratios before the fix, so the provider is not the
+cause. Three more changes then cleared what that left:
+
+- `fit::lettering_extent` adds a white outline wider than the margin, where the ground around it is not light,
+  and the rest of a dark stroke the mask half covers, when all of it lies within 12 px. Only for a mask a detector
+  made (`Rung2::detected_mask`). A hand-drawn mask keeps its extent. The stored mask is unchanged, but the stored
+  ink and the written set grow by what was added.
+- A part of the hole whose ring is 99% one tone takes that tone (`lama::flat_parts`). The model invents marks
+  there. At 90% this erased art lines that run under the letters, so a line crossing the ring now stops it.
+- The first try at the outline bloated the mask bounds to the search box, and the quality check then read the
+  wrong band and refused 2 clean balloons. Bounds are now tight.
+
+Same 12 pages, before and after: refused 18 to 1, LaMa cleaned 16 to 33, Fill 85 unchanged. At padding 5 (a separate
+Detect and Clean): 2 refused, LaMa 31, Fill 83. Both of its refused results look fine by eye: art lines kept under the mask, on a page with sparse lines around
+it (ratios 2.48 and 2.12). So the check is too strict there. The factor of 2 stays, because before the hole fix
+ratios of 2.1 to 2.3 were real leftover letters, and two regions are too little to move it on.
+
+These runs turned the memory ladder off in the test copy only. With the host under memory pressure, the
+ladder gave LaMa up and 25 to 32 regions read `rungUnavailable`, which is the ladder working.
+
+What is still wrong:
+
+- 1 region stays refused: white-outlined letters on black that cross onto white. LaMa paints a white blob and the
+  ring is two tones, so the flat rule cannot help. Refusing it is right. No fix found.
+- 1 region keeps 2 glyphs SAM did not mark. They touch art, so no rule here can separate them. A better mask or a
+  hand edit is the fix.
+- Accepted but imperfect, and the check does not catch these: one caption over hair leaves a white patch and loses
+  hair detail, one effect over light art leaves faint streaks, one effect has invented hair under it, and a few
+  have tiny marks or a faint outline left on black.
+
+Not measured: other chapters; Windows and Linux GPU providers (no such hardware here); a real hand edit, covered
+by tests only; the white and ground levels on scans whose paper is under 240, where the outline rule does nothing.
+The thresholds (240, 25%, 12 px, 99%) were tuned on these 12 pages, so they may not hold elsewhere. The cloud
+worker already grows its hole by 8 px, so it was left alone, and it has no outline rule.
+
 **LaMa hand edits, one WebGPU adapter and mask combinations (2026-11-01): partly proven.** Hand edits and
 post-processing found models through a directory that also required the small Ogkalu, CTD and the gate.
 A machine set up with Ogkalu Full can lack the small file, so LaMa reported `rungUnavailable`. They now
@@ -758,7 +802,7 @@ per-model figures above are the better guide. Open:
 
 - 18 of those 119 regions end declined with `decline.reason.edgeEnergy`, and 24 with light paper only, under
   either model set. These are LaMa results the quality check refused, mostly outside bubbles. They are listed
-  for the user and not cleaned. Why it refuses them was not looked at.
+  for the user and not cleaned. The cause and the fix are under "LaMa `edgeEnergy` refusals" above.
 - With no CTD, a machine where SAM-TS-L fails on the CPU too has no pixel mask for the run, only estimates
   under Ogkalu's boxes (`notice.run.samLost`). It used to fall back to CTD. No test run hit this.
 - A cloud GPU run still uses CTD, Full and SAM-TS-L: Small has no cloud twin, and no cloud run was made for

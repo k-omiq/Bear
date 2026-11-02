@@ -996,6 +996,8 @@ impl LocalModels {
                     return Err("decline.reason.rungUnavailable");
                 }
                 self.0.rung2.finishing = Some(finishing);
+                // A re-render of a stored patch: its lettering is already extended.
+                self.0.rung2.detected_mask = false;
                 match run::render_rung(&mut self.0.rung2, Engine::Lama, page, fitted) {
                     Ok(run::Rendered::Made(made)) => Ok(*made),
                     Ok(run::Rendered::Refused(reason)) => Err(reason),
@@ -1627,6 +1629,8 @@ fn edit_with_bench_render(
     } else {
         None
     };
+
+    bench.rung2.detected_mask = detection.is_some() && stored_hole.is_none() && prepared_text.is_none();
 
     let started = Instant::now();
     // What local FLUX aligned its answer's tone by, recorded as a cloud

@@ -2029,6 +2029,9 @@ pub(crate) struct Rung2 {
     /// The finishing that takes the place of the tile's tone alignment, when
     /// every model is finished ([`crate::inference::cloud_clean::FinishingSetting`]).
     pub(crate) finishing: Option<cleaner_core::engines::postprocess::Choice>,
+    /// Whether the mask came from a detector, so its lettering may be extended
+    /// ([`fit::lettering_extent`]). A hand edit says no.
+    pub(crate) detected_mask: bool,
 }
 
 /// What a lazily-opened rung's session currently is.
@@ -2068,6 +2071,7 @@ impl Rung2 {
             key: session_key(registry::Kind::Inpainter, models, preference),
             state: Session::Unopened,
             finishing: None,
+            detected_mask: true,
         }
     }
 
@@ -4326,8 +4330,8 @@ pub(crate) struct Made {
     pub(crate) engine: Engine,
     pub(crate) mask: Mask,
     /// [`Patch::ink`]: the lettering, as the rung saw it. `Fitted::ink` for
-    /// every rung - rung 2's hole is cut to exactly that - and the stroke
-    /// itself for a hand tool.
+    /// every rung - rung 2's hole is that grown to the applied mask - and the
+    /// stroke itself for a hand tool.
     pub(crate) ink: Mask,
     pub(crate) pixels: Raster,
     /// The rung's own execution provider, where the rung has a session.
@@ -4479,6 +4483,18 @@ pub(crate) fn render_rung_with_color(
     match engine {
         Engine::Lama => {
             let finishing = rung2.finishing;
+            // A mask a detector made leaves outlines and stray strokes outside
+            // it, and the model paints the letters back from them. A mask drawn
+            // by hand keeps the extent it was drawn with.
+            let extended;
+            let fitted = if rung2.detected_mask {
+                let mut wider = fitted.clone();
+                wider.ink = fit::lettering_extent(crop, &fitted.ink);
+                extended = wider;
+                &extended
+            } else {
+                fitted
+            };
             let Some(held) = rung2.held()? else {
                 return Ok(Rendered::Refused("decline.reason.rungUnavailable"));
             };
@@ -4490,7 +4506,7 @@ pub(crate) fn render_rung_with_color(
                 Ok(rendered) => Ok(Rendered::Made(Box::new(Made {
                     engine,
                     mask: rendered.mask,
-                    ink: lama::model_hole(fitted),
+                    ink: fitted.ink.clone(),
                     pixels: rendered.pixels,
                     provider: Some(held.provider.clone()),
                     model_sha256: held.model_sha256.clone(),

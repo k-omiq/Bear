@@ -43,9 +43,9 @@ pub const ISOLATION_RADIUS: u32 = 5;
 /// `ink ⊕ ISOLATION_RADIUS` - as its authoritative hole, and on real scans that
 /// second pass came back clean where the first left glyph-shaped marks in every
 /// balloon (`spikes/gate-probe --lama`, ten regions of one page, before/first/
-/// retry crops side by side). The stroke-tight hole measured best on synthetic
-/// fixtures ([`crate::engines::lama::model_hole`]); on a scanned page the
-/// model reads a hole with a glyph's silhouette and draws a glyph into it.
+/// retry crops side by side). On a scanned page the model reads a hole with a
+/// glyph's silhouette and draws a glyph into it. A stored mask has no such margin
+/// at padding 0, so [`crate::engines::lama::model_hole`] takes the applied mask.
 pub const MODEL_HOLE_MARGIN: u32 = ISOLATION_RADIUS;
 
 /// The fidelity contract's margin: how far past an applied mask any rung may
