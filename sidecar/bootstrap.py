@@ -27,6 +27,15 @@ MARKER = ".manga-cleaner-ready.json"
 #: How much of a failed step's stderr its error carries: it has to fit the 500
 #: characters `main` reports, with the words in front of it.
 ERROR_TAIL_BYTES = 420
+#: How long one pip step may take. Windows' CUDA torch alone is 3.06 GB, and pip
+#: starts it again from nothing after a timeout.
+PIP_TIMEOUT_SECONDS = 7200
+#: The GPU torch and the torchvision built for it, asked for exactly. Given a
+#: version range, pip takes any pair that resolves: on an index with no matching
+#: torchvision it picks 0.1.6, and the next step then replaces both with PyPI's
+#: newest, which on Windows has no GPU support.
+TORCH_VERSION = "2.13.0"
+TORCHVISION_VERSION = "0.28.0"
 #: Klein 4B on Hugging Face at the pin, for a call that names no model.
 DEFAULT_MODEL = "flux2-klein-4b"
 DEFAULT_CHECKPOINTS = {
@@ -45,7 +54,7 @@ def report(step: str, state: str) -> None:
     print(json.dumps({"step": step, "state": state}, separators=(",", ":")), flush=True)
 
 
-def run(command: list[str], *, timeout: int = 1800, label: str | None = None) -> None:
+def run(command: list[str], *, timeout: int = PIP_TIMEOUT_SECONDS, label: str | None = None) -> None:
     """Run one step. Its output stays off stdout, and the end of its stderr goes
     into the error, in a file because a download's progress bars can be long."""
     if label is None:
@@ -99,6 +108,14 @@ def resolve_backend(requested: str, accelerator: str) -> tuple[str, str]:
     return requested, accelerator
 
 
+def torch_build(accelerator: str) -> str:
+    """The PyTorch index, and the version label its wheels carry, for a GPU.
+    Windows' cu129 index stops at torch 2.9.0 with no torchvision for it."""
+    if accelerator == "xpu":
+        return "xpu"
+    return "cu130" if sys.platform == "win32" else "cu129"
+
+
 def valid_checkpoint(checkpoint: dict) -> dict:
     """The checkpoint, or a refusal for one that would write outside `weights/`."""
     names = [checkpoint.get("dir"), *(a.get("file") for a in checkpoint.get("adapters", []))]
@@ -145,8 +162,9 @@ def fetch_weights(python: Path, weights_root: Path, checkpoint: dict) -> None:
 
 def install(root: Path, source: Path, backend: str, accelerator: str,
             model: str = DEFAULT_MODEL, checkpoint: dict | None = None) -> dict[str, str]:
-    if sys.version_info < (3, 10) or sys.version_info >= (3, 13):
-        raise ValueError("Python 3.10, 3.11 or 3.12 is required")
+    # Linux has no torchvision 0.28 for Python 3.10.
+    if sys.version_info < (3, 11) or sys.version_info >= (3, 13):
+        raise ValueError("Python 3.11 or 3.12 is required")
     backend, accelerator = resolve_backend(backend, accelerator)
     checkpoint = valid_checkpoint(checkpoint or DEFAULT_CHECKPOINTS[backend])
     if not (source / "pyproject.toml").is_file():
@@ -171,17 +189,17 @@ def install(root: Path, source: Path, backend: str, accelerator: str,
     run([str(python), "-m", "pip", "install", "huggingface-hub==1.33.0"])
     if backend == "mflux":
         run([str(python), "-m", "pip", "install", "-r", str(source / "requirements.txt")])
+        import_check = "import manga_cleaner_sidecar, mflux, mlx"
     else:
+        import_check = "import manga_cleaner_sidecar, torch, diffusers, sdnq"
         if accelerator in ("cuda", "xpu"):
-            wheel_index = "https://download.pytorch.org/whl/cu129" if accelerator == "cuda" else "https://download.pytorch.org/whl/xpu"
-            # PyTorch's cu129 index has no 2.13 Windows wheel. The cp311
-            # Windows CUDA wheel is published for 2.9.0; Linux and XPU have
-            # 2.13.0. Pin per platform rather than silently getting CPU torch.
-            torch_version = "2.9.0" if sys.platform == "win32" and accelerator == "cuda" else "2.13.0"
-            run([str(python), "-m", "pip", "install", f"torch=={torch_version}", "torchvision", "--index-url", wheel_index])
+            build = torch_build(accelerator)
+            run([str(python), "-m", "pip", "install", f"torch=={TORCH_VERSION}+{build}",
+                 f"torchvision=={TORCHVISION_VERSION}+{build}", "--index-url", f"https://download.pytorch.org/whl/{build}"])
+            # The next step may not swap this for a build with no GPU support.
+            import_check += f"; assert torch.__version__.endswith('+{build}'), 'torch is not the {build} build: ' + torch.__version__"
         run([str(python), "-m", "pip", "install", "-r", str(source / "requirements-sdnq.txt")])
     run([str(python), "-m", "pip", "install", "--no-deps", str(source)])
-    import_check = "import manga_cleaner_sidecar, mflux, mlx" if backend == "mflux" else "import manga_cleaner_sidecar, torch, diffusers, sdnq"
     run([str(python), "-c", import_check], timeout=120, label="import check")
     report("dependencies", "done")
 

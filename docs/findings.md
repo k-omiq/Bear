@@ -723,6 +723,19 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Local model install on Windows (2026-11-02): fixed in code, not run on Windows.** Reports said FLUX and Qwen
+would not download on Windows, with no error text to go on, because beta.15 drops the reason. A token is not the
+cause: every repository is public and the installer removes any token. Windows' cu129 index had torch 2.9.0 and
+only torchvision 0.23.0, which needs torch 2.8.0, so `torch==2.9.0 torchvision` resolved to torchvision 0.1.6. A
+fake of that state on this Mac then had `requirements-sdnq.txt` replace both with PyPI's torch 2.15.0 and
+torchvision 0.29.2, and PyPI's Windows torch has no GPU support. The 3.06 GB wheel also had 30 minutes, about
+14 Mbit/s. The installer now asks for torch 2.13.0 and torchvision 0.28.0 by exact build (cu130 on Windows), checks
+the build after the last pip step, and gives a pip step 2 hours. Python 3.10 is refused, because Linux has no
+torchvision 0.28 for it, so a Linux environment made with 3.10 has to be removed and installed again. Checked by pip
+dry runs for each platform and the unit tests. Not measured: a real Windows install, a render on torch 2.13.0
+cu130, and which NVIDIA drivers cu130 needs. The installer still writes `build` and `.egg-info` into its source
+folder, so it fails with a permission error where that folder is read-only, such as a Linux package or AppImage.
+
 **LaMa `edgeEnergy` refusals (2026-11-01): fixed in the hole, the check is unchanged.** On 12 real pages
 (Detect then Clean, SAM-TS-L and small Ogkalu, padding 0, the plain paper rule applied), 18 of the 34 regions
 that reached LaMa were refused. The picture sheets showed the check was right: the refused results still held

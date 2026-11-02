@@ -59,14 +59,14 @@ fn system_python() -> Option<(String, Vec<String>)> {
         ("python".to_string(), Vec::new()),
     ];
     if cfg!(windows) {
-        for version in ["-3.12", "-3.11", "-3.10"] {
+        for version in ["-3.12", "-3.11"] {
             candidates.push(("py".to_string(), vec![version.to_string()]));
         }
     }
     candidates.into_iter().find(|(name, prefix)| {
         cleaner_core::process::command(name)
             .args(prefix)
-            .args(["-c", "import sys; assert (3,10) <= sys.version_info[:2] < (3,13)"])
+            .args(["-c", "import sys; assert (3,11) <= sys.version_info[:2] < (3,13)"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

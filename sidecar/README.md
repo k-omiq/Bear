@@ -45,7 +45,7 @@ runs on `sdnq` only. Cloud setup is separate.
 
 The following instructions are for a manually managed development environment.
 
-Python 3.10, 3.11 or 3.12. The `mflux` backend additionally requires macOS on Apple Silicon; the `sdnq` backend requires a CUDA, Intel XPU or Metal device (it refuses a CPU-only machine - see §1 point 4).
+Python 3.11 or 3.12. The `mflux` backend additionally requires macOS on Apple Silicon; the `sdnq` backend requires a CUDA, Intel XPU or Metal device (it refuses a CPU-only machine - see §1 point 4).
 
 ### Step 1: Create a Dedicated Virtual Environment
 

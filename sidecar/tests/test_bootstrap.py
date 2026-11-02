@@ -51,8 +51,25 @@ class BootstrapTest(unittest.TestCase):
             self.assertTrue((root / ".venv/pyvenv.cfg").is_file())
             marker = root / "weights/flux2-klein-4b-sdnq/.manga-cleaner-ready.json"
             self.assertTrue(marker.is_file())
-            self.assertTrue(any("torch==2.13.0" in call for call in calls))
+            self.assertTrue(any("torch==2.13.0+cu129" in call and "torchvision==0.28.0+cu129" in call for call in calls))
             self.assertTrue(any("--no-deps" in call for call in calls))
+            self.assertTrue(any("endswith('+cu129')" in " ".join(call) for call in calls))
+
+    def test_a_python_without_the_pinned_torchvision_is_refused(self):
+        with tempfile.TemporaryDirectory() as scratch, patch.object(bootstrap.sys, "version_info", (3, 10, 0)):
+            with self.assertRaisesRegex(ValueError, "Python 3.11 or 3.12"):
+                bootstrap.install(Path(scratch), Path(scratch), "sdnq", "cuda")
+
+    def test_a_cuda_build_that_is_replaced_fails_the_import_check(self):
+        check = "import types; torch = types.SimpleNamespace(__version__='2.15.0'); assert torch.__version__.endswith('+cu130'), 'not the cu130 build'"
+        with self.assertRaisesRegex(RuntimeError, "not the cu130 build"):
+            bootstrap.run([sys.executable, "-c", check], label="import check")
+
+    def test_a_pip_step_may_outlast_a_slow_torch_download(self):
+        with patch.object(bootstrap.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            bootstrap.run([sys.executable, "-m", "pip", "install", "torch"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 7200)
 
     def _install(self, root, source, *args, **kwargs):
         def fake_run(command, **_kwargs):
@@ -134,7 +151,9 @@ class BootstrapTest(unittest.TestCase):
                  patch.object(bootstrap.sys, "version_info", (3, 11, 0)), \
                  patch.object(bootstrap.sys, "platform", "win32"):
                 bootstrap.install(root, source, "sdnq", "cuda")
-            self.assertTrue(any("torch==2.9.0" in call for call in calls))
+            torch_step = next(call for call in calls if "torch==2.13.0+cu130" in call)
+            self.assertIn("torchvision==0.28.0+cu130", torch_step)
+            self.assertIn("https://download.pytorch.org/whl/cu130", torch_step)
 
 
 if __name__ == "__main__":
