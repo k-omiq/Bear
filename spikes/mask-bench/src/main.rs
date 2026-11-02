@@ -388,51 +388,40 @@ fn time(models: &Path, out: &Path, model: &str, every: usize, chapters: &[PathBu
 
 /* ------------------------------------------------------------------ */
 
-/// What decides Fill or a model: for each listed box, the balloon answer, the
-/// paper walk and the plain numbers of the paper round its ink. Reads page files
-/// and runs CTD; opens no chapter, so a list may name the real library.
+/// What decides Fill or a model: for each listed box, the run's own two answers
+/// over the SAM-TS-L mask its evidence file holds and small Ogkalu's boxes. Reads
+/// page and evidence files only; opens no chapter, so a list may name the real
+/// library. A row with no whole-page evidence file is left out.
 fn pick(models: &Path, out: &Path, list: &Path) -> Result<()> {
     let rows: Vec<Value> = serde_json::from_slice(&std::fs::read(list)?)?;
-    let mut ctd = Detector::open(&models.join("comictextdetector.onnx"), Preference::Automatic).map_err(|e| anyhow!("{e}"))?;
     let mut small = BalloonDetector::open(&models.join("comic-text-and-bubble-detector-detector-v4-s_int8.onnx"), Preference::Automatic).map_err(|e| anyhow!("{e}"))?;
     let mut cached: Option<(String, Raster, Segmentation, Vec<BalloonBox>)> = None;
     let mut lines = String::new();
     for row in &rows {
+        let Some(reference) = row["evidence"].as_str() else { continue };
         let path = row["page"].as_str().context("page")?.to_owned();
-        if cached.as_ref().is_none_or(|(at, ..)| *at != path) {
-            let Ok(bytes) = std::fs::read(&path) else { continue };
-            let Ok(raster) = decode(&bytes) else { continue };
-            let seg = ctd.detect(&raster).map_err(|e| anyhow!("{e}"))?.segmentation;
+        let key = format!("{path}|{reference}");
+        if cached.as_ref().is_none_or(|(at, ..)| *at != key) {
+            cached = None;
+            let (Ok(bytes), Ok(evidence)) = (std::fs::read(&path), std::fs::read(reference)) else { continue };
+            let (Ok(raster), Ok(evidence)) = (decode(&bytes), EvidenceFile::decode(&evidence)) else { continue };
+            let stored = &evidence.grouping;
+            let whole = stored.origin == (0, 0) && (stored.width, stored.height) == (raster.width, raster.height);
+            if !whole || evidence.mask.is_empty() { continue; }
+            let seg = Segmentation { width: raster.width, height: raster.height, levels: evidence.mask, fit: Letterbox::fit(raster.width, raster.height) };
             let boxes = small.detect(&raster).map_err(|e| anyhow!("{e}"))?;
-            cached = Some((path.clone(), raster, seg, boxes));
+            cached = Some((key, raster, seg, boxes));
         }
-        let (_, raster, seg, boxes) = cached.as_ref().unwrap();
+        let Some((_, raster, seg, boxes)) = cached.as_ref() else { continue };
         let b = &row["bbox"];
         let rect = Rect::new(b["x"].as_i64().context("x")?, b["y"].as_i64().context("y")?, b["w"].as_u64().context("w")? as u32, b["h"].as_u64().context("h")? as u32);
-        let interior = balloon::interior_of(raster, seg, rect);
-        let solid = matches!(interior, balloon::Interior::Solid { .. });
-        // The paper between and round the strokes: every pixel of the grown box
-        // CTD does not call lettering, grown a little off the ink.
-        let area = rect.grown(8, raster.width, raster.height);
-        let mut levels: Vec<u16> = Vec::new();
-        for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
-                let near = (-3i64..=3).any(|dy| (-3i64..=3).any(|dx| {
-                    (x + dx) >= 0 && (y + dy) >= 0 && seg.is_text((x + dx) as u32, (y + dy) as u32)
-                }));
-                if !near { levels.push(raster.luma16_at(x as u32, y as u32) >> 8); }
-            }
-        }
-        levels.sort_unstable();
-        let at = |share: f64| levels.get(((levels.len().max(1) - 1) as f64 * share) as usize).copied().unwrap_or(0);
-        let median = at(0.5);
-        let close = levels.iter().filter(|&&level| level.abs_diff(median) <= 12).count() as f64 / levels.len().max(1) as f64;
         lines.push_str(&json!({
-            "label": row["label"], "id": row["id"], "inside": balloon::detected(rect, boxes).inside(), "solid": solid,
-            "interior": format!("{interior:?}"), "p5": at(0.05), "p50": median, "p95": at(0.95), "close": close, "samples": levels.len(),
+            "label": row["label"], "id": row["id"],
+            "bubble": balloon::in_bubble(raster, seg, rect, rect, boxes),
+            "plain": balloon::plain_paper(raster, seg, rect),
         }).to_string());
         lines.push('\n');
     }
-    std::fs::write(out.join("pick.jsonl"), lines)?;
+    std::fs::write(out.join("pick-sam.jsonl"), lines)?;
     Ok(())
 }

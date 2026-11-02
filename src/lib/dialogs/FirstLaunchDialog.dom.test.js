@@ -400,7 +400,7 @@ describe('the pipelines', () => {
   function advancedFilesHere() {
     const answer = view({ runtimeInstalled: true })
     for (const model of answer.models) {
-      if (['textDetector', 'hayaiVision', 'hayaiDecoder', 'hayaiTokenizer'].includes(model.id)) {
+      if (['balloonDetector', 'hayaiVision', 'hayaiDecoder', 'hayaiTokenizer'].includes(model.id)) {
         Object.assign(model, { installed: true, path: `/app-data/models/${model.fileName}`, sha256Ok: true })
       }
     }
@@ -425,7 +425,7 @@ describe('the pipelines', () => {
     const rendered = open('detection')
     expect(card(rendered, 'normal').textContent).toContain(t('detectionMode.download', { bytes: DETECTION_BYTES }))
     expect(card(rendered, 'advanced').textContent)
-      .toContain(t('detectionMode.download', { bytes: 95 + HAYAI_BYTES + SAM_GRAPH_BYTES }))
+      .toContain(t('detectionMode.download', { bytes: 11 + HAYAI_BYTES + SAM_GRAPH_BYTES }))
   })
 
   it('say what this computer has under the cards, from the backend’s memory figures', async () => {
@@ -468,14 +468,14 @@ describe('the pipelines', () => {
     const rendered = open('detection')
     await fireEvent.click(card(rendered, 'advanced'))
     expect(session.detectionMode).toBe('advanced')
-    expect(session.detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
+    expect(session.detectorModels).toEqual(['rtSmall', 'samTs'])
     expect(session.textPolicy).toBe('all_text')
     expect(session.ocrRescue).toBe(true)
     setFirstLaunchStep('dependencies')
-    // The runtime, CTD, the reader's three files, the lettering mask and the
+    // The runtime, the Small detector, the reader's three files, the lettering mask and the
     // redraw; Advanced takes all text, so no script gate.
     await waitFor(() => expect(rendered.getByText(t('onboarding.dependencies.total', {
-      count: 7, bytes: RUNTIME_BYTES + 95 + HAYAI_BYTES + SAM_GRAPH_BYTES + REDRAW_BYTES,
+      count: 7, bytes: RUNTIME_BYTES + 11 + HAYAI_BYTES + SAM_GRAPH_BYTES + REDRAW_BYTES,
     }))).toBeTruthy())
 
     setFirstLaunchStep('detection')

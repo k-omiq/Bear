@@ -570,11 +570,11 @@ describe('the two pipelines', () => {
     setDetectionMode('advanced')
     const advanced = await open(() => withModelGroups())
     const advancedReadiness = () => /** @type {HTMLElement} */ (advanced.container.querySelector('.readiness'))
-    const advancedBytes = 94_669_756 + 168_481_531 + HAYAI_BYTES
+    const advancedBytes = BALLOON_BYTES + HAYAI_BYTES
     await waitFor(() => expect(advancedReadiness().textContent).toContain(t('settings.detection.ready.allTextMissing', { bytes: advancedBytes })))
     await fireEvent.click(within(advancedReadiness()).getByRole('button', { name: t('settings.detection.download', { bytes: advancedBytes }) }))
     await waitFor(() => expect(installSamTs).toHaveBeenCalledOnce())
-    expect(downloadModel.mock.calls.map(([spec]) => spec.id)).toEqual(['textDetector', 'fullRt'])
+    expect(downloadModel.mock.calls.map(([spec]) => spec.id)).toEqual(['balloonDetector'])
     expect(downloadModelGroup.mock.calls.map(([spec]) => spec.id)).toEqual(['hayaiOcr'])
 
     // Advanced reads no language, so no picker is drawn; the reader runs under both modes.

@@ -107,19 +107,19 @@ describe('the detection mode', () => {
     const normal = sanitizeSession({ detectionMode: 'normal', detectorModels: ['ctd', 'rtFull', 'samTs'], textPolicy: 'all_text' })
     expect(normal).toMatchObject({ detectionMode: 'normal', detectorModels: ['ctd', 'rtSmall'], textPolicy: 'legacy_gate' })
     const advanced = sanitizeSession({ detectionMode: 'advanced', detectorModels: ['ctd'] })
-    expect(advanced).toMatchObject({ detectionMode: 'advanced', detectorModels: ['ctd', 'rtFull', 'samTs'], textPolicy: 'all_text' })
+    expect(advanced).toMatchObject({ detectionMode: 'advanced', detectorModels: ['rtSmall', 'samTs'], textPolicy: 'all_text' })
     expect(sanitizeSession({ detectionMode: 'turbo', detectorModels: ['ctd', 'rtFull'] }).detectionMode).toBe('advanced')
   })
 
   it('derives the models and the policy from the mode, whatever combination a record held', () => {
-    expect(sanitizeSession({ detectorModels: ['ctd', 'rtSmall', 'samTs'] }).detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
+    expect(sanitizeSession({ detectorModels: ['ctd', 'rtSmall', 'samTs'] }).detectorModels).toEqual(['rtSmall', 'samTs'])
     expect(sanitizeSession({ detectorModels: ['ctd'] }).detectorModels).toEqual(['ctd', 'rtSmall'])
   })
 
   it('sets the models, the policy and the reader together, and only on a change', () => {
     setDetectionMode('advanced')
     expect(session.detectionMode).toBe('advanced')
-    expect(session.detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
+    expect(session.detectorModels).toEqual(['rtSmall', 'samTs'])
     expect(session.textPolicy).toBe('all_text')
     expect(session.ocrRescue).toBe(true)
     // The reader stays the user's: choosing the same mode again leaves it alone.
@@ -139,7 +139,7 @@ describe('the detection mode', () => {
     expect(record.detectionMode).toBe('advanced')
     expect(record).not.toHaveProperty('detectorModels')
     expect(record).not.toHaveProperty('textPolicy')
-    expect(sanitizeSession(JSON.parse(JSON.stringify(record))).detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
+    expect(sanitizeSession(JSON.parse(JSON.stringify(record))).detectorModels).toEqual(['rtSmall', 'samTs'])
   })
 })
 

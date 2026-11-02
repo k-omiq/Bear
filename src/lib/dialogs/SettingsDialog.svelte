@@ -966,15 +966,12 @@
   let moreOpen = $state(false)
 
   /**
-   * Whether a missing model is one the selected workflow needs now. The
-   * review's small profile is not needed while the full graph is imported.
+   * Whether a missing model is one the selected workflow needs now.
    *
    * @param {string} id
    */
   function neededNow(id) {
-    if (!needs.includes(id)) return false
-    if (allText && id === 'rtSmall' && workflowCaps?.fullRtInstalled) return false
-    return true
+    return needs.includes(id)
   }
 
   /**

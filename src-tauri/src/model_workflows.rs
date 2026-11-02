@@ -641,15 +641,16 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
     let full_rt_installed = full_rt_path_with(app_data, |path, bytes, sha| {
         cache.verified(path, bytes, sha)
     }).is_some();
-    let local_detection_ready = runtime_ready && full_rt_installed && sam_installed;
+    let rt_installed = rt_path_with(app_data, |path, bytes, sha| {
+        cache.verified(path, bytes, sha)
+    }).is_some();
+    let local_detection_ready = runtime_ready && rt_installed && sam_installed;
     WorkflowCapabilities {
         runtime_installed,
         runtime_ready,
         ctd_installed: crate::run::model_search_paths(Some(app_data)).into_iter()
             .any(|dir| dir.join(crate::run::DETECTOR).is_file()),
-        rt_installed: rt_path_with(app_data, |path, bytes, sha| {
-            cache.verified(path, bytes, sha)
-        }).is_some(),
+        rt_installed,
         sam_installed,
         full_rt_installed,
         full_rt_managed: app_data
@@ -667,9 +668,9 @@ fn workflow_capabilities_with_room(app_data: &Path, room: Option<u64>) -> Workfl
         total_bytes: cleaner_core::memory::machine().physical,
         local_detection_ready,
         local_detection_note: if !runtime_ready { "Install or repair the local ONNX Runtime." }
-            else if !full_rt_installed || !sam_installed { "Install the SAM-TS-L and Ogkalu Full models for the local detection pipeline." }
+            else if !rt_installed || !sam_installed { "Install the SAM-TS-L and Ogkalu Small models for the local detection pipeline." }
             else if !sam_memory_ready { "SAM-TS-L runs slowly with less than 5 GB of memory room." }
-            else { "SAM-TS-L and Ogkalu Full are ready for local detection. Additional selected models have their own installation checks." },
+            else { "SAM-TS-L and Ogkalu Small are ready for local detection. Additional selected models have their own installation checks." },
         sam_managed: sam
             .as_ref()
             .is_some_and(|dir| *dir == app_data.join("models/sam-ts-l")),

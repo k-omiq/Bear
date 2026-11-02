@@ -1655,9 +1655,10 @@ struct HeldCandidate {
     scale: f32,
 }
 
-/// Whether a held candidate sits in a bubble: the region a cleaning group of
-/// the same bounds would be, put to [`cleaner_core::balloon::in_bubble`] with
-/// the same crop, segmentation and balloon boxes its segment's regions are.
+/// Whether a held candidate stores as in a bubble: the region a cleaning group
+/// of the same bounds would be, put to [`cleaner_core::balloon::in_bubble`] and
+/// [`cleaner_core::balloon::plain_paper`] with the same crop, segmentation and
+/// balloon boxes its segment's regions are.
 /// Not the grouping's own balloon confinement (`group.bubble`), which only
 /// knows the balloon detector's boxes and would disagree with the gate and
 /// the engine pick wherever the paper rescued text.
@@ -1670,6 +1671,7 @@ fn candidate_in_bubble(
 ) -> bool {
     let region = grouping.region(group, 0);
     cleaner_core::balloon::in_bubble(crop, segmentation, region.text_bounds(), region.masking, balloons)
+        && cleaner_core::balloon::plain_paper(crop, segmentation, region.text_bounds())
 }
 
 impl HeldCandidate {
@@ -3894,9 +3896,12 @@ impl Pipeline {
         // [`Pipeline::reap`].
         self.reap();
 
-        // Which kind of text this is: the same answer the gate was
-        // handed above, and the only thing the two picks are told
-        // apart by.
+        // Which kind of text this is, the only thing the two picks are told
+        // apart by. The gate above asked whether this is a balloon; the pick
+        // and the stored type ask whether its paper is plain enough to start
+        // on Fill. A tone or dark balloon stays gated as a balloon and starts
+        // as text on art.
+        let inside = inside && cleaner_core::balloon::plain_paper(crop, &seen.segmentation, region.text_bounds());
         let pick = self.picks.map(|picks| picks.for_region(inside));
         let solid_color = if pick == Some(EnginePick::Solid) {
             self.bubble_color

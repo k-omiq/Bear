@@ -172,16 +172,19 @@ export const DEFAULT_DETECTOR_MODELS = Object.freeze(['ctd', 'rtSmall'])
  * - **Normal:** CTD and the Small Ogkalu profile, with the script gate. Text
  *   in speech bubbles, in the chosen languages, is cleaned; text outside
  *   them, sound effects included, is held for review.
- * - **Advanced:** CTD, the Full profile and the SAM-TS-L lettering mask under
- *   the all-text policy, so text outside bubbles and sound effects are
- *   cleaned too. The same models a cloud GPU run uses (`CLOUD_DETECTOR_MODELS`).
+ * - **Advanced:** the Small profile and the SAM-TS-L lettering mask under the
+ *   all-text policy, so text outside bubbles and sound effects are cleaned
+ *   too. On 51 real pages Small matched Full and CTD added nothing beside the
+ *   mask, at 2.9 s and 1 GB less a page (`docs/findings.md`). Ogkalu stays: its
+ *   balloon walls keep neighbouring masks apart. A cloud GPU run differs, as
+ *   Small has no cloud twin (`CLOUD_DETECTOR_MODELS`).
  *
  * `reads` is the text reader's default when the mode is chosen; the reader
  * stays the user's to switch under More options.
  */
 export const DETECTION_MODES = Object.freeze({
   normal: Object.freeze({ detectorModels: DEFAULT_DETECTOR_MODELS, textPolicy: LEGACY_POLICY, reads: false }),
-  advanced: Object.freeze({ detectorModels: Object.freeze(['ctd', 'rtFull', 'samTs']), textPolicy: ALL_TEXT_POLICY, reads: true }),
+  advanced: Object.freeze({ detectorModels: Object.freeze(['rtSmall', 'samTs']), textPolicy: ALL_TEXT_POLICY, reads: true }),
 })
 export const DETECTION_MODE_IDS = /** @type {const} */ (['normal', 'advanced'])
 

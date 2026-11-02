@@ -104,7 +104,7 @@ it('chooses Advanced along with the cloud GPU, and leaves the mode alone when de
   expect(session.detectionMode).toBe('normal')
   expect(await chooseDetectTarget('cloud')).toBe(true)
   expect(session.detectionMode).toBe('advanced')
-  expect(session.detectorModels).toEqual(['ctd', 'rtFull', 'samTs'])
+  expect(session.detectorModels).toEqual(['rtSmall', 'samTs'])
   expect(session.analysisTargets).toEqual({ rtFull: 'cloud', samTs: 'cloud' })
   expect(await chooseDetectTarget('local')).toBe(true)
   expect(session.detectionMode).toBe('advanced')

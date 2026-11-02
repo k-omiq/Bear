@@ -743,11 +743,29 @@ M-series Mac: small Ogkalu 0.27 s, CTD 0.84 s, Full 2.16 s, SAM-TS-L 8.55 s. Res
 - Turning off reach merging did not lower bleed (12 to 13 of 573 masks) and held more text.
 - Reading every group tripled the reads and helped much only with Full (art groups 47 to 29).
 - Of 619 boxes, 44 had the type changed by hand, all inside to outside. Dark, tone or patterned balloons
-  and colour panels cause this. A test rule on flat, light paper cut wrong Fill starts on those from 26 to 5.
+  and colour panels cause this.
 
-None of these results is built: the app still runs its old combinations and engine pick. Not measured:
-the combination on Windows or on a GPU other than Apple's, the paper rule inside a real run, skipping SAM
-on pages with no likely SFX, and why a Hayai read now takes about 340 ms against 110 ms in earlier notes.
+Built from this: Advanced now runs small Ogkalu and SAM-TS-L with no CTD, and `balloon::plain_paper` decides
+the engine pick and the stored type, while the gate keeps `in_bubble`. Paper counts as plain when it is flat
+and light, or truly flat black. Over the 23 hand-moved boxes with SAM-TS-L evidence on file, wrong Fill
+starts fell from 20 to 4, kept Fill went from 203 to 202 of 211, and kept LaMa starts from 6 to 3 of 83. The
+first version asked for light paper only. A real run showed that this sent white text on flat black to
+LaMa, which refused it, so black was added: 7 of 8 moved regions on those pages then went back to Fill.
+
+A real debug run of 12 pages, Detect then Clean, gave 0 errors. Detect took 289 s against 321 s for CTD, Full
+and SAM-TS-L, with one run of each and 119 regions against 120. Debug timing hides most of the gain; the
+per-model figures above are the better guide. Open:
+
+- 18 of those 119 regions end declined with `decline.reason.edgeEnergy`, and 24 with light paper only, under
+  either model set. These are LaMa results the quality check refused, mostly outside bubbles. They are listed
+  for the user and not cleaned. Why it refuses them was not looked at.
+- With no CTD, a machine where SAM-TS-L fails on the CPU too has no pixel mask for the run, only estimates
+  under Ogkalu's boxes (`notice.run.samLost`). It used to fall back to CTD. No test run hit this.
+- A cloud GPU run still uses CTD, Full and SAM-TS-L: Small has no cloud twin, and no cloud run was made for
+  this change. CTD is probably wasted there too. Not measured.
+- An Advanced user with only Full must now download small Ogkalu (11 MB), and Full stays on disk unused.
+- Not run: this combination on Windows or on a GPU other than Apple's, skipping SAM on pages with no likely
+  SFX. Why a Hayai read now takes about 340 ms against 110 ms in earlier notes was not traced.
 
 **Ogkalu Full on a forced GPU (2026-10-31): changed in code, not run on a GPU.** A forced DirectML or
 CUDA session on Full used to refuse any CPU node, and the graph has the shape arithmetic GPU providers

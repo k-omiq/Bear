@@ -308,8 +308,7 @@ describe('the two detection modes', () => {
   it('fix the models, the text policy and the reader default', () => {
     expect(DETECTION_MODE_IDS).toEqual(['normal', 'advanced'])
     expect(DETECTION_MODES.normal).toEqual({ detectorModels: ['ctd', 'rtSmall'], textPolicy: LEGACY_POLICY, reads: false })
-    expect(DETECTION_MODES.advanced).toEqual({ detectorModels: ['ctd', 'rtFull', 'samTs'], textPolicy: ALL_TEXT_POLICY, reads: true })
-    expect(DETECTION_MODES.advanced.detectorModels).toEqual([...CLOUD_DETECTOR_MODELS])
+    expect(DETECTION_MODES.advanced).toEqual({ detectorModels: ['rtSmall', 'samTs'], textPolicy: ALL_TEXT_POLICY, reads: true })
   })
 
   it('read a stored combination as Advanced when it reached past Normal, and anything else as Normal', () => {

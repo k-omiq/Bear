@@ -489,6 +489,67 @@ pub fn in_bubble(
         || matches!(interior_of(page, seg, text_bounds), Interior::Solid { .. })
 }
 
+/// How far past the lettering's box [`plain_paper`] reads.
+const PAPER_REACH: u32 = 8;
+/// How far off a lettering pixel paper starts: closer, a stroke's soft edge counts.
+const PAPER_CLEAR: i64 = 3;
+/// The 8-bit distance from the paper's median that still reads as the same paper.
+const PAPER_SPREAD: u16 = 12;
+/// The share of the paper that must sit within [`PAPER_SPREAD`] of its median.
+const PAPER_FLAT: f64 = 0.7;
+/// The 8-bit median at or above which paper is light.
+const PAPER_LIGHT: u16 = 200;
+/// The 8-bit median at or below which paper is black.
+const PAPER_BLACK: u16 = 40;
+/// The share black paper needs. Lower than this it is mostly a dark tone, or
+/// art round the lettering, which is what people moved off Fill by hand.
+const PAPER_BLACK_FLAT: f64 = 0.9;
+
+/// Whether the paper round the lettering is flat and light, or truly flat black:
+/// what Fill needs, and a different question from [`in_bubble`]. A tone, patterned
+/// or dark grey balloon is a balloon, and is still no place to start on Fill.
+/// White lettering on flat black is, and LaMa refuses much of it. People moved 44 boxes from
+/// inside to outside by hand across the real library, and all were this kind of
+/// paper, or colour panels and big effects over art. Over the SAM-TS-L masks and
+/// small Ogkalu boxes of the 23 of them with evidence on file, 20 started on Fill
+/// under [`in_bubble`] and 4 start on it with this as well, while kept Fill masks
+/// go from 203 to 202 of 211 and kept LaMa masks from 6 to 3 of 83.
+///
+/// With no paper to read, lettering filling its whole box, it does not object.
+pub fn plain_paper(page: &Raster, seg: &Segmentation, text_bounds: Rect) -> bool {
+    let area = text_bounds.grown(PAPER_REACH, page.width, page.height);
+    let (width, height) = (area.w as usize, area.h as usize);
+    let mut lettered = vec![false; width * height];
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            if !seg.is_text(x as u32, y as u32) {
+                continue;
+            }
+            for near_y in (y - PAPER_CLEAR).max(area.y)..=(y + PAPER_CLEAR).min(area.bottom() - 1) {
+                for near_x in (x - PAPER_CLEAR).max(area.x)..=(x + PAPER_CLEAR).min(area.right() - 1) {
+                    lettered[(near_y - area.y) as usize * width + (near_x - area.x) as usize] = true;
+                }
+            }
+        }
+    }
+    let mut levels = Vec::with_capacity(width * height);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            if !lettered[(y - area.y) as usize * width + (x - area.x) as usize] {
+                levels.push(page.luma16_at(x as u32, y as u32) >> 8);
+            }
+        }
+    }
+    if levels.is_empty() {
+        return true;
+    }
+    let middle = levels.len() / 2;
+    let median = *levels.select_nth_unstable(middle).1;
+    let close = levels.iter().filter(|level| level.abs_diff(median) <= PAPER_SPREAD).count();
+    let share = close as f64 / levels.len() as f64;
+    (median >= PAPER_LIGHT && share >= PAPER_FLAT) || (median <= PAPER_BLACK && share >= PAPER_BLACK_FLAT)
+}
+
 /// The smaller luma population inside `bounds` by Otsu's threshold, or `None`
 /// when there is no visible ink population: too little contrast, too few
 /// pixels, or a population too even to be text. The broad bounds admit dense
@@ -1401,6 +1462,28 @@ mod tests {
         assert!(matches!(read, Interior::Solid { level, .. } if level == 246 * 257), "{read:?}");
         assert!(depth_of(read) > required_depth(BOX), "the walk stopped early: {read:?}");
         assert!(in_bubble(&page, &seg, BOX, BOX, &[]), "a detector miss is what this exists to overrule");
+    }
+
+    /// Fill's question is about the paper, not the balloon: flat and light, or
+    /// flat black, is plain, and a grey or toned balloon is not, though both are
+    /// balloons.
+    #[test]
+    fn plain_paper_is_flat_and_light() {
+        let seg = segmentation(240, 240, glyphs);
+        let paper = |level: fn(u32, u32) -> u8| gray_page(240, 240, move |x, y| if glyphs(x, y) { 20 } else { level(x, y) });
+        assert!(plain_paper(&paper(|_, _| 246), &seg, BOX), "cream paper");
+        assert!(plain_paper(&paper(|_, _| 18), &seg, BOX), "flat black");
+        assert!(!plain_paper(&paper(|x, y| if (x + y) % 4 == 0 { 90 } else { 18 }), &seg, BOX), "black with a dark tone");
+        assert!(!plain_paper(&paper(|_, _| 150), &seg, BOX), "flat grey");
+        assert!(!plain_paper(&paper(|x, y| if (x + y) % 2 == 0 { 255 } else { 120 }), &seg, BOX), "screentone");
+    }
+
+    /// Lettering that fills its box and reach leaves no paper to object with.
+    #[test]
+    fn plain_paper_does_not_object_with_no_paper_to_read() {
+        let page = gray_page(240, 240, |_, _| 20);
+        let seg = segmentation(240, 240, |_, _| true);
+        assert!(plain_paper(&page, &seg, BOX));
     }
 
     /// The other half of the objection to reading balloons off the page:
