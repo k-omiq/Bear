@@ -310,6 +310,16 @@ mod tests {
         }
     }
 
+    /// This computer runs the light builds. The cloud has the full weights
+    /// (`MODEL_PROD_FLUX3_BF16` in `deploy/cloud/common/manifest.py`).
+    #[test]
+    fn every_download_for_this_computer_is_a_quantized_build() {
+        for model in LOCAL_MODELS {
+            assert!(model.torch.repo.to_ascii_lowercase().contains("sdnq"), "{}", model.torch.repo);
+            assert!(model.mlx.is_none_or(|mlx| mlx.repo.ends_with("-q4")), "{}", model.id);
+        }
+    }
+
     #[test]
     fn only_the_9b_is_legacy() {
         let legacy: Vec<_> = LOCAL_MODELS.iter().filter(|m| m.legacy).map(|m| m.id).collect();

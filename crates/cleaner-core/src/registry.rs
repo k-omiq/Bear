@@ -127,6 +127,9 @@ pub enum Basis {
     Weights,
     /// The thing itself said so, which is the sidecar's `MemoryReport`.
     Reported,
+    /// This row's part of what the process has really grown by since it held no
+    /// model ([`measured`]). The total is measured and the split, by weights, is not.
+    Shared,
 }
 
 /// A size and how it was arrived at.
@@ -369,6 +372,50 @@ impl Drop for Lease {
     }
 }
 
+/// [`loaded`], with the rows in this process sized from what the operating system
+/// counts. A session holds its weights plus the provider's arena, and nothing can
+/// ask a session how large it is, but the process can be asked. So it is read while
+/// it holds no model, and again now, and the growth is split by weights. Called by
+/// the poll, which is what keeps the first reading fresh. A row keeps its own
+/// figure as a floor: memory on a discrete GPU is not in the process's count.
+pub fn measured() -> Vec<Loaded> {
+    static IDLE_BYTES: Mutex<Option<u64>> = Mutex::new(None);
+    let mut rows = loaded();
+    let now = crate::memory::process_bytes();
+    let mut idle = IDLE_BYTES.lock().unwrap_or_else(|e| e.into_inner());
+    if !rows.iter().any(in_this_process) {
+        *idle = now;
+    } else if let (Some(now), Some(idle)) = (now, *idle) {
+        share_growth(&mut rows, now.saturating_sub(idle));
+    }
+    rows
+}
+
+/// Whether the row is a session here. The sidecar is a process of its own.
+fn in_this_process(row: &Loaded) -> bool {
+    row.kind != Kind::Sidecar
+}
+
+/// Split `grown` over the rows in this process by their figures. Growth under
+/// their sum says nothing about them, so it changes nothing.
+fn share_growth(rows: &mut [Loaded], grown: u64) {
+    let floor: u64 = rows.iter().filter(|row| in_this_process(row)).map(|row| row.bytes).sum();
+    if floor == 0 || grown <= floor {
+        return;
+    }
+    for row in rows.iter_mut().filter(|row| in_this_process(row)) {
+        row.bytes = (u128::from(grown) * u128::from(row.bytes) / u128::from(floor)) as u64;
+        row.basis = Basis::Shared;
+    }
+}
+
+/// Everything loaded holds now, as the operating system counts it: this process
+/// and the sidecar's own report. `None` where this process cannot be read.
+pub fn total_bytes() -> Option<u64> {
+    let sidecars: u64 = table().iter().filter(|entry| entry.kind == Kind::Sidecar).map(|entry| entry.bytes).sum();
+    crate::memory::process_bytes().map(|own| own + sidecars)
+}
+
 /// Every row, oldest first.
 pub fn loaded() -> Vec<Loaded> {
     table()
@@ -526,6 +573,35 @@ mod tests {
     }
 
     /// A missing file is a row with an unknown size, not a missing row.
+    fn row_of(kind: Kind, bytes: u64) -> Loaded {
+        Loaded {
+            id: 0,
+            kind,
+            model_name: None,
+            bytes,
+            basis: Basis::Weights,
+            device: Device::sidecar(),
+            idle_ms: 0,
+            unload_requested: false,
+        }
+    }
+
+    #[test]
+    fn the_process_growth_is_shared_by_weights_and_never_reaches_the_sidecar() {
+        let mut rows = [row_of(Kind::Inpainter, 300), row_of(Kind::TextDetector, 100), row_of(Kind::Sidecar, 9000)];
+        share_growth(&mut rows, 2000);
+        assert_eq!((rows[0].bytes, rows[0].basis), (1500, Basis::Shared));
+        assert_eq!((rows[1].bytes, rows[1].basis), (500, Basis::Shared));
+        assert_eq!((rows[2].bytes, rows[2].basis), (9000, Basis::Weights));
+    }
+
+    #[test]
+    fn growth_under_the_weights_leaves_the_rows_at_their_floor() {
+        let mut rows = [row_of(Kind::Inpainter, 300)];
+        share_growth(&mut rows, 100);
+        assert_eq!((rows[0].bytes, rows[0].basis), (300, Basis::Weights));
+    }
+
     #[test]
     fn weights_that_cannot_be_stated_are_zero_rather_than_absent() {
         let footprint = Footprint::weights(Path::new("/no/such/model.onnx"));

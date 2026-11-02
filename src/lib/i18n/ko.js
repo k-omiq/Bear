@@ -1608,6 +1608,8 @@ export const ko = {
     value: {
       size: '{bytes:memory}',
       sizeApprox: '~{bytes:memory}',
+      // What the operating system counts for all of it, as Activity Monitor would.
+      total: '합계 {bytes:memory}',
       unloading: '해제 중…',
     },
     action: {

@@ -85,6 +85,7 @@ fn basis_key(basis: registry::Basis) -> &'static str {
         registry::Basis::Measured => "measured",
         registry::Basis::Weights => "weights",
         registry::Basis::Reported => "reported",
+        registry::Basis::Shared => "shared",
     }
 }
 
@@ -116,7 +117,14 @@ pub fn list_loaded_models() -> Vec<LoadedModel> {
     // poll that would otherwise have shown it. The residency sweeper covers the
     // hours when nothing is polling.
     cleaner_core::residency::sweep();
-    registry::loaded().into_iter().map(row).collect()
+    registry::measured().into_iter().map(row).collect()
+}
+
+/// All the tab's rows hold as the operating system counts it, this process and
+/// the sidecar, or `None` where it cannot be read.
+#[tauri::command]
+pub fn memory_in_use() -> Option<u64> {
+    registry::total_bytes()
 }
 
 /// Ask for one back.
@@ -547,7 +555,8 @@ mod tests {
             registry::Footprint::measured(510 * 1024 * 1024),
             registry::Device::accelerator(cleaner_core::accel::Accelerator::CoreMl),
         );
-        let rows = list_loaded_models();
+        // Not the poll, which sizes the row from this whole test process.
+        let rows: Vec<LoadedModel> = registry::loaded().into_iter().map(row).collect();
         let row = rows.iter().find(|row| row.id == lease.id()).expect("no row");
         assert_eq!(row.kind_key, "models.kind.inpainter");
         assert_eq!(row.device_key, "accel.coreml");

@@ -179,6 +179,17 @@ pub struct MemoryReport {
     /// held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_peak_bytes: Option<u64>,
+    /// Held on a discrete GPU now, which is in neither instrument above. Not in
+    /// the fields the budget is checked against: that budget is this machine's RAM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_bytes: Option<u64>,
+}
+
+impl MemoryReport {
+    /// All the process holds now, RAM and GPU, where it could say.
+    pub fn in_use(&self) -> Option<u64> {
+        self.rss_bytes.map(|ram| ram + self.gpu_bytes.unwrap_or(0))
+    }
 }
 
 /* ------------------------------------------------------------------ */

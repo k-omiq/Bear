@@ -3,7 +3,7 @@
 //! Nothing in this application is CPU-only by design. Every session is built
 //! through [`open_session`], every session gets an accelerator chosen for the
 //! model it is about to run, and the user can override the choice per install.
-//! What the accelerator *is* depends on the machine: CoreML on Apple silicon,
+//! What the accelerator *is* depends on the machine: WebGPU on Apple silicon,
 //! DirectML on any Direct3D 12 GPU (so NVIDIA, AMD and Intel alike), CUDA or
 //! TensorRT where they are installed, WebGPU as a cross-vendor fallback.
 //!
@@ -117,8 +117,9 @@
 //!
 //! So the inpainter is not CPU-bound after all - it is 1.9× faster on the GPU
 //! than the best CPU thread count, through the one measured provider that
-//! holds its Fourier units. And **no single provider wins**: the detector belongs on CoreML,
-//! the inpainter on WebGPU, and the small models on the CPU, where the
+//! holds its Fourier units. And **no single provider wins**: the detector and
+//! the inpainter belong on WebGPU, CoreML's faster detector figure being a mixed
+//! CoreML/CPU run (see [`DETECTOR`]), and the small models on the CPU, where the
 //! transfer costs more than the compute. That is why the choice is per model
 //! and why every entry below cites a measurement.
 //!
@@ -793,10 +794,8 @@ pub const DETECTOR: ModelProfile = ModelProfile {
     // default download and reaches every vendor; CUDA is the opt-in one.
     // Neither has been timed.
     unmeasured_candidates: &[Accelerator::DirectMl, Accelerator::Cuda],
-    // The detector is the one model `Automatic` sends to CoreML, and its peak
-    // there is the budget itself - the ~195 MB session and the ~1.2 GB
-    // arena - rather than a figure of its own. Nothing has measured it per
-    // provider, so nothing is claimed.
+    // Nothing has measured the detector's peak per provider, so nothing is
+    // claimed.
     measured_peak_rss: &[],
     partitioned_on: &[],
 };

@@ -492,6 +492,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {() => Promise<string>} readDevLog - what the app wrote to its log, oldest line first, with secrets and the home folder already taken out (`src-tauri/src/devlog.rs`). Empty when nothing was captured
  * @property {() => Promise<void>} clearDevLog - empty the log
  * @property {() => Promise<{appVersion: string, components: Array<{name: string, available: boolean, detail: string|null, reasonKey: string|null}>}>} diagnostics - whether each component is usable **now**, found by trying: the `onnxruntime` row loads the runtime the way a run does, so an installed runtime that will not load says so here and nowhere else. `reasonKey` is a `diagnostics.runtime.*` key when it is not usable; `detail` is the loader's own words, for a log and never for the screen
+ * @property {() => Promise<number|null>} memoryInUse - all the rows of `listLoadedModels` hold as the operating system counts it, this process and the sidecar, or `null` where it cannot be read
  * @property {() => Promise<LoadedModel[]>} listLoadedModels - what is in memory **right now**. A poll, not a subscription: the answer changes with the work rather than with an event, and an empty array is the ordinary state of an application that is not cleaning anything
  * @property {(spec: {id: number}) => Promise<boolean>} unloadModel - ask for one back. `true` means the request is recorded, **not** that the memory is free: a backend drops the session at its next safe point, and anything the work still needs loads again
  * @property {() => Promise<Accelerators>} listAccelerators - what this machine can run models on, which provider each model will land on under the current setting, and why. Not a poll: the answer moves when the runtime is downloaded or the `accelerator` setting is written
@@ -1109,7 +1110,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {number} id
  * @property {string} kindKey - e.g. `models.kind.inpainter`
  * @property {number} bytes
- * @property {'measured'|'weights'|'reported'} basis
+ * @property {'measured'|'weights'|'reported'|'shared'} basis
  * @property {string} deviceKey - e.g. `accel.coreml`
  * @property {boolean} gpu
  * @property {number} idleMs - how long since anything used it

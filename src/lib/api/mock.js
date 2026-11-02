@@ -4088,6 +4088,13 @@ export function createMockBackend(options = {}) {
       }))
     },
 
+    /** The mock's rows and a little over, as a real process holds more than its models. */
+    async memoryInUse() {
+      if (!runner.isRunning()) return null
+      const rows = MOCK_MODELS.filter((model) => !unloadedModels.has(model.id))
+      return rows.reduce((total, model) => total + model.bytes, 300_000_000)
+    },
+
     /**
      * The mock has no session to drop, so the row simply goes - which is what
      * the real backend arrives at one region boundary later. `false` for a row

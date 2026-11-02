@@ -237,6 +237,7 @@ fn main() {
             "subscribe_events",
             "unsubscribe_events",
             "list_loaded_models",
+            "memory_in_use",
             "unload_model",
             "list_accelerators",
             "runtime_report",

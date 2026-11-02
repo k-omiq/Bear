@@ -1611,6 +1611,8 @@ export const ja = {
     value: {
       size: '{bytes:memory}',
       sizeApprox: '約 {bytes:memory}',
+      // What the operating system counts for all of it, as Activity Monitor would.
+      total: '合計 {bytes:memory}',
       unloading: '解放中…',
     },
     action: {

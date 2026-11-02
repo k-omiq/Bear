@@ -33,6 +33,8 @@ export const POLL_MS = 2000
 export const loadedModels = $state({
   /** @type {import('../api/backend.js').LoadedModel[]} */
   models: [],
+  /** All of it as the operating system counts it, or `null` when it cannot say. @type {number|null} */
+  totalBytes: null,
 })
 
 /**
@@ -46,10 +48,12 @@ export const loadedModels = $state({
  */
 export async function refreshLoadedModels(backend = getBackend()) {
   try {
-    const models = await backend.listLoadedModels()
+    const [models, totalBytes] = await Promise.all([backend.listLoadedModels(), backend.memoryInUse()])
     loadedModels.models = Array.isArray(models) ? models : []
+    loadedModels.totalBytes = typeof totalBytes === 'number' ? totalBytes : null
   } catch {
     loadedModels.models = []
+    loadedModels.totalBytes = null
   }
 }
 

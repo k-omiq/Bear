@@ -35,6 +35,8 @@ mod tile;
 mod underlay;
 mod weights;
 mod webview_lock;
+#[cfg(windows)]
+mod wedged_copy;
 #[cfg(debug_assertions)]
 pub mod live_demo;
 #[cfg(debug_assertions)]
@@ -60,12 +62,15 @@ pub fn run() {
     // First, so a second launch while the window is hidden in the tray shows
     // this one instead of starting another copy. A launch check is its own
     // copy: handing it to a running one would check nothing.
+    let context = app_context();
     let builder = if smoke::requested() {
         builder
     } else {
+        #[cfg(windows)]
+        wedged_copy::end(&context.config().identifier);
         builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
     };
-    builder
+    let app = builder
         .on_page_load(smoke::on_page_load)
         .setup(|app| {
             // First, so nothing the rest of the start reports is missed. A
@@ -278,6 +283,7 @@ pub fn run() {
             events::subscribe_events,
             events::unsubscribe_events,
             models::list_loaded_models,
+            models::memory_in_use,
             models::unload_model,
             models::list_accelerators,
             measurement::runtime_report,
@@ -326,33 +332,53 @@ pub fn run() {
                 library::resolve_chapter(app, chapter_id).map_err(|error| error.to_string())
             }),
         )
-        .build(app_context())
-        .expect("error while building the application")
-        .run(|app, event| {
-            // A Dock click on macOS with the window hidden in the tray.
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = event {
-                show_main(app);
-            }
-            // A quit asked for in code (the tray's Quit, the app menu's, the
-            // process plugin's `exit`) while jobs run is held and asked about.
-            // `None` is the last window already gone, where there is nothing
-            // left to ask in; a restart cannot be held.
-            if let tauri::RunEvent::ExitRequested { code: Some(code), api, .. } = &event {
-                if *code != tauri::RESTART_EXIT_CODE && hold_quit(app) {
-                    api.prevent_exit();
-                }
-            }
-            // The provisioner helper leads its own process group, so nothing
-            // ends it when this process ends. A quit during cloud setup stops
-            // it here rather than leaving it deploying with no one to read the
-            // result; its journal makes a later resume safe.
-            if let tauri::RunEvent::Exit = event {
-                provision::stop_helpers_for_exit();
-                // Windows has no exit handler `std::process::exit` would run.
-                devlog::drain();
-            }
-        });
+        .build(context)
+        .expect("error while building the application");
+    #[cfg(not(windows))]
+    app.run(on_run_event);
+    #[cfg(windows)]
+    end_process(app.run_return(on_run_event));
+}
+
+fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    // A Dock click on macOS with the window hidden in the tray.
+    #[cfg(target_os = "macos")]
+    if let tauri::RunEvent::Reopen { .. } = event {
+        show_main(app);
+    }
+    // A quit asked for in code (the tray's Quit, the app menu's, the
+    // process plugin's `exit`) while jobs run is held and asked about.
+    // `None` is the last window already gone, where there is nothing
+    // left to ask in; a restart cannot be held.
+    if let tauri::RunEvent::ExitRequested { code: Some(code), api, .. } = &event {
+        if *code != tauri::RESTART_EXIT_CODE && hold_quit(app) {
+            api.prevent_exit();
+        }
+    }
+    // The provisioner helper leads its own process group, so nothing
+    // ends it when this process ends. A quit during cloud setup stops
+    // it here rather than leaving it deploying with no one to read the
+    // result; its journal makes a later resume safe.
+    if let tauri::RunEvent::Exit = event {
+        provision::stop_helpers_for_exit();
+        // Windows has no exit handler `std::process::exit` would run.
+        devlog::drain();
+    }
+}
+
+/// End the process once Tauri has finished its own cleanup, tray icon included.
+///
+/// `std::process::exit` is `ExitProcess`, which kills the other threads and then
+/// shuts down every loaded library: `ort`'s exit hook, ONNX Runtime and the GPU
+/// drivers. Those can wait forever for threads that are already dead, and one
+/// has faulted there before, which leaves a process with no window. Nothing here
+/// needs that shutdown: the system frees it all.
+#[cfg(windows)]
+fn end_process(code: i32) -> ! {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+    // Safety: the pseudo handle for this process, and no pointers.
+    unsafe { TerminateProcess(GetCurrentProcess(), code as u32) };
+    std::process::exit(code)
 }
 
 /// Whether a quit asked for now must wait for the user: jobs are running and

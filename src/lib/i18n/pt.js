@@ -1639,6 +1639,8 @@ export const pt = {
     value: {
       size: '{bytes:memory}',
       sizeApprox: '~{bytes:memory}',
+      // What the operating system counts for all of it, as Activity Monitor would.
+      total: 'No total: {bytes:memory}',
       unloading: 'Liberando…',
     },
     action: {

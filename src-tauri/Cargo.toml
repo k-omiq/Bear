@@ -117,6 +117,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_IO",
     "Win32_System_Kernel",
     "Win32_System_Pipes",
+    # Finding a copy of the app that stopped answering (`wedged_copy.rs`).
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 # `statvfs`, for the same free-space preflight on macOS and Linux. Already in

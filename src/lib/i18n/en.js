@@ -2157,6 +2157,8 @@ export const en = {
       // per-provider coefficient would dress an estimate up as the measurement
       // this row does not have.
       sizeApprox: '~{bytes:memory}',
+      // What the operating system counts for all of it, as Activity Monitor would.
+      total: 'In all: {bytes:memory}',
       // The row while the request is in flight. Unloading happens between
       // regions, so a click during a busy page waits a moment, and saying so
       // is better than a button that appears to have done nothing.

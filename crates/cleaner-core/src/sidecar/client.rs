@@ -50,7 +50,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
 use std::process::{Child, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -68,6 +68,9 @@ use super::Install;
 /// health endpoint that needs longer than this is a sidecar doing work on a
 /// thread it should not be doing it on.
 pub const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How often the loaded-models row is sized, the same as the tab's own poll.
+const MEMORY_POLL: Duration = Duration::from_secs(2);
 
 /// How long to wait for a freshly spawned child to answer at all.
 ///
@@ -148,12 +151,15 @@ pub struct Floor {
     pub peak: u64,
     /// What the backend's cache was last holding.
     pub cache: Option<u64>,
+    /// All the process held at the last report, RAM and GPU.
+    pub last_in_use: Option<u64>,
 }
 
 impl Floor {
     fn observe(&mut self, report: &MemoryReport) {
         self.peak = self.peak.max(report.peak_rss_bytes);
         self.cache = report.cache_bytes;
+        self.last_in_use = report.in_use().or(self.last_in_use);
         if let Some(rss) = report.rss_bytes {
             self.first_rss.get_or_insert(rss);
             self.last_rss = Some(rss);
@@ -438,9 +444,24 @@ pub struct Sidecar {
     /// reason `child` is: a sidecar this process did not start is not one it
     /// can hand back, and a row with a close button that cannot close is worse
     /// than no row ([`crate::registry`]).
-    lease: Option<crate::registry::Lease>,
+    lease: Option<Arc<crate::registry::Lease>>,
     /// The thread reading the child's stderr, which ends when the child does.
     stderr_reader: Option<JoinHandle<()>>,
+}
+
+/// Keep the row's size live for as long as the row is held. A model loads and a
+/// region renders for minutes between the replies that carry a memory block, and
+/// `GET /v1/health` answers all through them. Not a touch: this is not work, and
+/// the idle clock must go on running.
+fn watch_memory(client: Client, lease: Weak<crate::registry::Lease>) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(MEMORY_POLL);
+        let bytes = client.health().ok().and_then(|health| health.memory?.in_use());
+        let Some(lease) = lease.upgrade() else { return };
+        if let Some(bytes) = bytes.filter(|bytes| *bytes > 0) {
+            lease.resize(crate::registry::Footprint::reported(bytes));
+        }
+    });
 }
 
 impl Sidecar {
@@ -495,7 +516,13 @@ impl Sidecar {
             .env("MC_SIDECAR_MODEL", model)
             .env("MC_SIDECAR_WEIGHTS_DIR", weights_dir)
             .env("MC_SIDECAR_TOTAL_BYTES", budget.total.to_string())
-            .env("MC_SIDECAR_CACHE_BYTES", budget.cache.to_string())
+            .env("MC_SIDECAR_CACHE_BYTES", budget.cache.to_string());
+        if let Some(source) = super::bundled_source() {
+            // Ahead of the environment's own copy. No bytecode: the folder is
+            // inside a signed bundle, and may be read-only.
+            command.env("PYTHONPATH", source).env("PYTHONDONTWRITEBYTECODE", "1");
+        }
+        command
             // Piped rather than inherited: a windowed release build has no
             // console, so an import error on the child's stderr would vanish.
             .stdout(Stdio::piped())
@@ -508,6 +535,7 @@ impl Sidecar {
         let tail = StderrTail::default();
         let stderr_reader = keep_tail(child.stderr.take(), tail.clone());
 
+        let watcher = Client::new(addr, token.clone(), backend, budget);
         let mut client = Client::new(addr, token, backend, budget);
         client.stderr = Some(tail);
         // Registered **before** the health wait, not after it: a child that is
@@ -516,12 +544,13 @@ impl Sidecar {
         // appeared once the child was ready would be blank for exactly the
         // thirty seconds it matters. The size starts at zero - nothing has
         // reported one - and [`Sidecar::note_memory`] fills it in.
-        let lease = crate::registry::register_named(
+        let lease = Arc::new(crate::registry::register_named(
             crate::registry::Kind::Sidecar,
             crate::registry::Footprint::reported(0),
             crate::registry::Device::sidecar(),
             Some(model.to_owned()),
-        );
+        ));
+        watch_memory(watcher, Arc::downgrade(&lease));
         let mut sidecar = Sidecar { client, child: Some(child), lease: Some(lease), stderr_reader };
         sidecar.wait_for_health()?;
         Ok(sidecar)
@@ -554,7 +583,7 @@ impl Sidecar {
         };
         lease.touch();
         let floor = self.client.floor();
-        let bytes = floor.last_rss.unwrap_or(floor.peak);
+        let bytes = floor.last_in_use.unwrap_or(floor.peak);
         if bytes > 0 {
             lease.resize(crate::registry::Footprint::reported(bytes));
         }
@@ -578,7 +607,7 @@ impl Sidecar {
     pub fn spent(&self) -> bool {
         self.client.is_exhausted()
             || self.client.is_gone()
-            || self.lease.as_ref().is_some_and(crate::registry::Lease::spent)
+            || self.lease.as_ref().is_some_and(|lease| lease.spent())
     }
 
     /// Poll until it answers, the child exits, or the wait runs out.

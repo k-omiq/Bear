@@ -35,15 +35,61 @@ from __future__ import annotations
 
 import ctypes
 import os
-import resource
 import sys
 from typing import Optional
+
+try:
+    import resource
+except ImportError:
+    # POSIX only: Python on Windows has no such module.
+    resource = None
 
 from .protocol import MemoryReport
 
 # Flavours from <mach/task_info.h>.
 MACH_TASK_BASIC_INFO = 20
 TASK_VM_INFO = 22
+
+
+class _ProcessMemoryCounters(ctypes.Structure):
+    """PROCESS_MEMORY_COUNTERS from <psapi.h>."""
+
+    _fields_ = [
+        ("cb", ctypes.c_uint32),
+        ("PageFaultCount", ctypes.c_uint32),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+    ]
+
+
+def _windows_memory_counters() -> Optional[_ProcessMemoryCounters]:
+    """This process's working set from `K32GetProcessMemoryInfo`, or None off Windows."""
+    if sys.platform != "win32":
+        return None
+    try:
+        kernel32 = ctypes.WinDLL("kernel32")
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.K32GetProcessMemoryInfo.restype = ctypes.c_int
+        kernel32.K32GetProcessMemoryInfo.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(_ProcessMemoryCounters),
+            ctypes.c_uint32,
+        ]
+        counters = _ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        if kernel32.K32GetProcessMemoryInfo(
+            kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
+        ):
+            return counters
+    except (AttributeError, OSError):
+        pass
+    return None
 
 
 class _MachTaskBasicInfo(ctypes.Structure):
@@ -195,8 +241,12 @@ def get_peak_rss_bytes() -> int:
     Understates this workload badly - see the module docstring - and is kept
     only so the disagreement between instruments stays on the wire. On macOS
     (Darwin), getrusage reports ru_maxrss directly in bytes. On Linux systems,
-    getrusage reports ru_maxrss in kilobytes.
+    getrusage reports ru_maxrss in kilobytes. Windows has no getrusage, and its
+    peak working set is the same measure.
     """
+    if resource is None:
+        counters = _windows_memory_counters()
+        return int(counters.PeakWorkingSetSize) if counters is not None else 0
     usage = resource.getrusage(resource.RUSAGE_SELF)
     if sys.platform == "darwin":
         return int(usage.ru_maxrss)
@@ -209,8 +259,12 @@ def get_current_rss_bytes() -> Optional[int]:
 
     Uses Darwin Mach kernel task_info via ctypes on macOS to query the kernel
     directly without requiring third-party extensions like psutil. Understates
-    unified-memory allocations; prefer `get_phys_footprint_bytes`.
+    unified-memory allocations; prefer `get_phys_footprint_bytes`. On Windows it
+    is the current working set.
     """
+    counters = _windows_memory_counters()
+    if counters is not None:
+        return int(counters.WorkingSetSize)
     info = _task_info(MACH_TASK_BASIC_INFO, _MachTaskBasicInfo)
     return int(info.resident_size) if info is not None else None
 
@@ -243,6 +297,26 @@ def get_mlx_peak_bytes() -> Optional[int]:
         return int(mx.get_peak_memory())
     except Exception:
         return None
+
+
+def get_gpu_bytes() -> Optional[int]:
+    """What torch holds on a discrete GPU now, in bytes, or None with none in use.
+
+    Metal is left out: its buffers are unified memory, already in the footprint.
+    Read from the modules already loaded, so a health probe never loads torch.
+    """
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return None
+    try:
+        if torch.cuda.is_initialized():
+            return int(torch.cuda.memory_reserved())
+        xpu = getattr(torch, "xpu", None)
+        if xpu is not None and xpu.is_initialized():
+            return int(xpu.memory_reserved())
+    except Exception:
+        pass
+    return None
 
 
 def build_memory_report() -> MemoryReport:
@@ -279,6 +353,7 @@ def build_memory_report() -> MemoryReport:
         resident_bytes=resident,
         peak_resident_bytes=peak_resident,
         backend_peak_bytes=get_mlx_peak_bytes(),
+        gpu_bytes=get_gpu_bytes(),
     )
 
 

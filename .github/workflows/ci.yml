@@ -136,6 +136,12 @@ jobs:
         run: cargo clippy -p cleaner-core -p manga-cleaner --no-deps --all-targets --target x86_64-pc-windows-msvc -- -D warnings
       - name: cargo test
         run: cargo test --workspace --exclude spike-strip-memory --target x86_64-pc-windows-msvc -- --test-threads=1
+      # The only run of the watchdog's Windows branch on real system calls.
+      - name: Sidecar parent watchdog
+        run: python -m unittest discover -v -s sidecar/tests -p test_watchdog.py
+      # The same for the helper's start and its memory report: no `resource` here.
+      - name: Sidecar start without resource
+        run: python -m unittest discover -v -s sidecar/tests -p test_memory.py
       # The release build copies the Visual C++ 2015-2022 runtime out of the
       # Visual Studio redistributable tree and ships it beside the executable,
       # because the downloaded ONNX Runtime imports it and a clean Windows does

@@ -88,10 +88,11 @@
 //!
 //! **The child dies with the parent.** `MC_SIDECAR_PARENT_PID` carries this
 //! process's pid and the child runs a watchdog on it - on POSIX, a thread that
-//! checks `getppid()` and `kill(pid, 0)` every couple of seconds and calls
-//! `os._exit(0)` when the parent is gone. This is required: a hard crash here
-//! must not orphan a multi-gigabyte process
-//! holding a port.
+//! checks `getppid()` and `kill(pid, 0)` every couple of seconds, and on Windows
+//! a thread that waits on the parent's process handle; both call `os._exit(0)`
+//! when the parent is gone. This is required: a hard crash here must not orphan
+//! a multi-gigabyte process holding a port, and a normal exit runs no `Drop` for
+//! a parked sidecar either.
 //!
 //! ## The environment the child is spawned with
 //!
@@ -450,6 +451,22 @@ pub fn search_paths_from(explicit: Option<&str>, app_data: Option<&Path>) -> Vec
     roots
 }
 
+/// The helper's code this build of the app ships, or `None` where the app runs
+/// from no bundle. [`Sidecar::spawn`](client::Sidecar::spawn) runs it in place of
+/// the copy an environment was given when it was installed, so an update reaches
+/// a machine that has nothing left to download.
+pub fn bundled_source() -> Option<PathBuf> {
+    source_beside(std::env::current_exe().ok()?.parent()?)
+}
+
+/// `exe_dir`'s `sidecar` resource folder: beside the executable on Windows, and
+/// in `Contents/Resources` on macOS.
+fn source_beside(exe_dir: &Path) -> Option<PathBuf> {
+    [exe_dir.join(DIRECTORY), exe_dir.join("../Resources").join(DIRECTORY)]
+        .into_iter()
+        .find(|dir| dir.join(MODULE).join("__main__.py").is_file())
+}
+
 /// The marker that says a directory is a virtual environment and not merely a
 /// directory with a `bin/python3` in it.
 ///
@@ -626,6 +643,26 @@ mod tests {
     /// The second assertion is why [`VENV_MARKER`] exists: `/usr/bin/python3`
     /// is a real file on every machine this runs on, and an earlier revision of
     /// this function returned it.
+    #[test]
+    fn the_shipped_source_is_found_in_both_bundle_layouts_and_only_with_its_entry_point() {
+        let base = std::env::temp_dir().join(format!("mc-sidecar-source-{}", std::process::id()));
+        let exe_dir = base.join("MacOS");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        assert_eq!(source_beside(&exe_dir), None);
+
+        let resources = exe_dir.join("../Resources").join(DIRECTORY);
+        std::fs::create_dir_all(resources.join(MODULE)).unwrap();
+        assert_eq!(source_beside(&exe_dir), None, "a folder with no entry point is no helper");
+        std::fs::write(resources.join(MODULE).join("__main__.py"), "").unwrap();
+        assert_eq!(source_beside(&exe_dir), Some(resources));
+
+        let beside = exe_dir.join(DIRECTORY);
+        std::fs::create_dir_all(beside.join(MODULE)).unwrap();
+        std::fs::write(beside.join(MODULE).join("__main__.py"), "").unwrap();
+        assert_eq!(source_beside(&exe_dir), Some(beside));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
     #[test]
     fn a_root_without_a_virtual_environment_in_it_is_not_an_install() {
         assert_eq!(interpreter_in(Path::new("/")), None);

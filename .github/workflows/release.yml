@@ -437,6 +437,22 @@ jobs:
             }
             throw "The launch check failed with exit code $($app.ExitCode)"
           }
+          # The launch check ends itself with its own exit. This one closes the
+          # window as a person does, with close to tray at its default of off,
+          # and the process must then end.
+          Remove-Item Env:MANGA_CLEANER_SMOKE_REPORT, Env:MANGA_CLEANER_SMOKE_RUNTIME
+          $closed = [System.Diagnostics.Process]::Start([System.Diagnostics.ProcessStartInfo]@{
+            FileName = $exe.FullName; UseShellExecute = $false })
+          $deadline = (Get-Date).AddMinutes(2)
+          while ($closed.MainWindowHandle -eq 0 -and -not $closed.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 1
+            $closed.Refresh()
+          }
+          Start-Sleep -Seconds 10
+          if (-not $closed.CloseMainWindow()) { $closed.Kill(); throw 'The app has no window to close' }
+          if (-not $closed.WaitForExit(30000)) { $closed.Kill(); throw 'The app still runs 30 s after its window closed' }
+          Write-Host "app exit code after a close: $($closed.ExitCode)"
+          if ($closed.ExitCode -ne 0) { throw "The close ended with exit code $($closed.ExitCode)" }
       - uses: actions/upload-artifact@v4
         if: always() && startsWith(matrix.platform, 'windows-')
         with:

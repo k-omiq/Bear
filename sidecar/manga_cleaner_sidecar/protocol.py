@@ -202,6 +202,9 @@ class MemoryReport:
     #: The inference backend's own high-water mark, where it can say. A third
     #: instrument that agrees with neither of the others.
     backend_peak_bytes: Optional[int] = None
+    #: Held on a discrete GPU now, which is in neither instrument above. Not in the
+    #: primary fields: the parent checks those against this machine's RAM.
+    gpu_bytes: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {"peak_rss_bytes": self.peak_rss_bytes}
@@ -214,6 +217,7 @@ class MemoryReport:
             "resident_bytes",
             "peak_resident_bytes",
             "backend_peak_bytes",
+            "gpu_bytes",
         ):
             value = getattr(self, name)
             if value is not None:

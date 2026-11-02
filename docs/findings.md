@@ -907,6 +907,51 @@ real quit takes the same hook. `register_webgpu_plugin` now keeps one reference 
 hook does not release the environment. Only the launch check on a GitHub runner measures this, which
 has no real GPU. The other exit paths, such as an update's restart, take the same hook and did not run.
 
+**Windows close with close to tray off (2026-11-02): not reproduced, and two causes fixed from the code.**
+The report is that the app does not fully close. Nothing here runs Windows, so which cause the report saw
+is not known. `ExitProcess` shuts down every loaded library under the loader lock, including `ort`'s exit
+hook and the GPU drivers, so a wait there leaves a process with no window. A normal end on Windows now
+calls `TerminateProcess` after Tauri's cleanup (`end_process` in `lib.rs`). The sidecar watchdog also used
+`os.kill(pid, 0)`, which on Windows sends CTRL_C_EVENT and does not test the PID, so it could not be
+trusted to end a sidecar that a normal exit leaves behind. It now waits on the parent's process handle.
+Not measured:
+- The release launch check now closes the window and wants the process gone in 30 s, on a runner with no
+  real GPU, so a wait inside a GPU driver cannot show there. Only a real Windows machine can show that.
+- CI runs the Windows watchdog test. Whether the old watchdog ended a healthy sidecar one second after it
+  started, which would break local FLUX on Windows, was not tested.
+- An update's restart still takes `ExitProcess`, because Tauri's restart exits by itself.
+- A `uv` install started by Settings keeps running to its end after the app closes (`flux_install.rs`,
+  `model_workflows.rs`). It holds no model, so it was left alone.
+
+**Local FLUX on Windows (2026-11-02): fixed from a log and the code, not run on Windows.** One machine's
+sidecar exited at import: `memory.py` imported `resource`, which Python on Windows does not have. The install's
+import check passed it because it imported only the package, so Settings showed `Use` for a helper that could
+not start. The memory report now reads the working set on Windows, the import check imports the entry point,
+and the app runs the helper code it ships (`PYTHONPATH`), so an install from before the fix needs no reinstall.
+A second machine had two `manga-cleaner.exe` with no window and no WebView, and complete weights on disk. That
+fits a copy stuck in `ExitProcess` while `bootstrap.py` ran on, with the next launch stuck in the single-instance
+plugin's `SendMessageW`. No stack was captured, so this is inferred. A launch now ends a copy that shows no window
+and answers no message for 10 s (`wedged_copy.rs`). Not measured:
+- Any of this on Windows. CI runs the import test and the window test. Only a real machine runs a render.
+- Klein 9B locally on any machine: this Mac has 12 GB free and the download is 12.6 GB. Its pipeline classes
+  match Klein 4B's at the pin. The install now refuses a download that cannot fit, with 2 GB kept free.
+- Linux takes the helper code from the environment still: its resource folder is not beside the executable.
+
+**Which FLUX where (2026-11-02):** this computer offers only the quantized builds, and a new cloud setup starts on
+FLUX 3 bf16 (bench 4, `docs/research/flux3-klein-5_6b.md`), the choice the user asked for. It starts on an L40S. Not
+measured: a real setup from the dialog on that default. An installation that exists keeps its model.
+
+**The loaded-models tab's sizes (2026-11-02): compared with the OS on this Mac.** The sidecar row showed its last
+reply, 343 MB after the open, all through a render holding 7 to 11 GB. ONNX rows showed their file size, and LaMa a
+fixed 510 MB. Measured against `footprint -p` on one LaMa render and one FLUX 3 render: the sidecar row, now polled
+from `/v1/health` every 2 s, read 7,008 MB against 6,683 MiB (7,007 MB). LaMa's process held 1.1 to 1.36 GB, not
+510 MB. A row in this process is now its share by weights of what the process grew by since it held no model, and the
+tab adds a measured total. Not measured:
+- Windows and Linux. The sidecar's figure there adds `torch.cuda.memory_reserved()`, which leaves out what the driver
+  itself holds.
+- ONNX sessions on a discrete GPU: that memory is in no figure here, so such a row stays at its file size or 510 MB.
+- A row's share also counts the pages a run holds in memory, because the process has one count. The total is right.
+
 **Dev log's last lines and locks (2026-10-31): proved on macOS by tests only.** Tests that end a real
 child process keep every line before an abort, an exit, a null write and a stack overflow, 20 runs of
 each. Not measured:

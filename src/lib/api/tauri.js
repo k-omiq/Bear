@@ -140,6 +140,7 @@ const IMPLEMENTED = Object.freeze({
   cancelRun: 'cancel_run',
   resumeJob: 'resume_job',
   listLoadedModels: 'list_loaded_models',
+  memoryInUse: 'memory_in_use',
   unloadModel: 'unload_model',
   listAccelerators: 'list_accelerators',
   runtimeReport: 'runtime_report',
@@ -281,6 +282,7 @@ export const SEAM_METHODS = Object.freeze([
   'clearDevLog',
   'diagnostics',
   'listLoadedModels',
+  'memoryInUse',
   'unloadModel',
   'listAccelerators',
   'runtimeReport',
@@ -704,6 +706,7 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // its next region boundary, which is why it answers a boolean about the
     // row rather than about the memory.
     listLoadedModels: () => call(IMPLEMENTED.listLoadedModels),
+    memoryInUse: () => call(IMPLEMENTED.memoryInUse),
     unloadModel: ({ id }) => call(IMPLEMENTED.unloadModel, { id }),
 
     // The accelerator setting. Not a poll: the answer changes when the runtime

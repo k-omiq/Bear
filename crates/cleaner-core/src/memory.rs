@@ -273,6 +273,52 @@ pub fn available() -> Option<u64> {
     probe_available()
 }
 
+/// What this process holds now, as the operating system counts it: the physical
+/// footprint on macOS, which includes unified-memory GPU buffers and is the figure
+/// Activity Monitor shows, and the resident or working set elsewhere. Memory on a
+/// discrete GPU is not in it.
+///
+/// `None` where it cannot be asked.
+pub fn process_bytes() -> Option<u64> {
+    probe_process_bytes()
+}
+
+#[cfg(target_os = "macos")]
+fn probe_process_bytes() -> Option<u64> {
+    const RUSAGE_INFO_V4: i32 = 4;
+    let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v4>::zeroed();
+    // Safety: the buffer is the struct this flavour fills, and lives for the call.
+    let status = unsafe { proc_pid_rusage(libc::getpid(), RUSAGE_INFO_V4, usage.as_mut_ptr().cast()) };
+    // Safety: all zeroes is a valid value for a struct of integers.
+    (status == 0).then(|| unsafe { usage.assume_init() }.ri_phys_footprint)
+}
+
+#[cfg(target_os = "linux")]
+fn probe_process_bytes() -> Option<u64> {
+    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+    // Safety: asks for a constant, and takes no pointers.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    u64::try_from(page).ok().map(|page| pages * page)
+}
+
+#[cfg(windows)]
+fn probe_process_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    let mut counters = std::mem::MaybeUninit::<PROCESS_MEMORY_COUNTERS>::zeroed();
+    // Safety: the pseudo handle for this process, and a buffer of the size given.
+    let done = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), counters.as_mut_ptr(), size) };
+    // Safety: all zeroes is a valid value for a struct of integers.
+    (done != 0).then(|| unsafe { counters.assume_init() }.WorkingSetSize as u64)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn probe_process_bytes() -> Option<u64> {
+    None
+}
+
 /// Free pages, in bytes. A floor on [`available`] and a different number: it
 /// excludes everything the kernel could reclaim.
 ///
@@ -768,6 +814,7 @@ use elsewhere::{probe_available, probe_free, probe_machine, probe_pressure};
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
+    fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut c_void) -> i32;
     fn sysctlbyname(
         name: *const u8,
         oldp: *mut c_void,

@@ -36,6 +36,12 @@ PIP_TIMEOUT_SECONDS = 7200
 #: newest, which on Windows has no GPU support.
 TORCH_VERSION = "2.13.0"
 TORCHVISION_VERSION = "0.28.0"
+#: What starting the helper imports. The package alone imports next to nothing,
+#: so a check of it passes for a helper that cannot start.
+ENTRY_POINT = "manga_cleaner_sidecar.__main__"
+#: Room kept free beyond a download: the Hub's own cache grows beside it, and a
+#: full disk breaks more than the download.
+DISK_MARGIN_BYTES = 2_000_000_000
 #: Klein 4B on Hugging Face at the pin, for a call that names no model.
 DEFAULT_MODEL = "flux2-klein-4b"
 DEFAULT_CHECKPOINTS = {
@@ -124,6 +130,20 @@ def valid_checkpoint(checkpoint: dict) -> dict:
     return checkpoint
 
 
+def check_disk_room(weights_root: Path, pending: Path, checkpoint: dict) -> None:
+    """Refuse a download that cannot fit, before it fills the disk. What a retry
+    has already fetched counts."""
+    total = checkpoint.get("bytes")
+    if not total:
+        return
+    held = sum(path.stat().st_size for path in pending.rglob("*") if path.is_file()) if pending.is_dir() else 0
+    needed = max(0, total - held) + DISK_MARGIN_BYTES
+    free = shutil.disk_usage(weights_root).free
+    if free < needed:
+        raise RuntimeError(f"Not enough disk space for this model: it needs {needed / 1e9:.1f} GB free, "
+                           f"and {free / 1e9:.1f} GB is free")
+
+
 def fetch_weights(python: Path, weights_root: Path, checkpoint: dict) -> None:
     """The pinned snapshot and its adapters, moved to their name once complete."""
     weights = weights_root / checkpoint["dir"]
@@ -141,6 +161,7 @@ def fetch_weights(python: Path, weights_root: Path, checkpoint: dict) -> None:
     # another revision: carry on from what it holds.
     if weights.is_dir() and not pending.exists():
         os.replace(weights, pending)
+    check_disk_room(weights_root, pending, checkpoint)
     pending.mkdir(exist_ok=True)
     code = ("import sys; from huggingface_hub import snapshot_download; "
             "snapshot_download(repo_id=sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])")
@@ -189,9 +210,9 @@ def install(root: Path, source: Path, backend: str, accelerator: str,
     run([str(python), "-m", "pip", "install", "huggingface-hub==1.33.0"])
     if backend == "mflux":
         run([str(python), "-m", "pip", "install", "-r", str(source / "requirements.txt")])
-        import_check = "import manga_cleaner_sidecar, mflux, mlx"
+        import_check = f"import {ENTRY_POINT}, mflux, mlx"
     else:
-        import_check = "import manga_cleaner_sidecar, torch, diffusers, sdnq"
+        import_check = f"import {ENTRY_POINT}, torch, diffusers, sdnq"
         if accelerator in ("cuda", "xpu"):
             build = torch_build(accelerator)
             run([str(python), "-m", "pip", "install", f"torch=={TORCH_VERSION}+{build}",

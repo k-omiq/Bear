@@ -115,6 +115,43 @@ class BootstrapTest(unittest.TestCase):
             self._install(root, source, "sdnq", "mps")
             self.assertFalse((root / ".venv").exists(), "the root is the environment")
 
+    def test_the_import_check_covers_what_starting_the_helper_imports(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root, source = Path(scratch) / "install", Path(scratch) / "source"
+            source.mkdir()
+            (source / "pyproject.toml").write_text("[project]\nname='test'\n")
+            checks = []
+
+            def fake_run(command, **kwargs):
+                if kwargs.get("label") == "import check":
+                    checks.append(command[-1])
+                if command[1:3] == ["-m", "venv"]:
+                    pending = Path(command[-1])
+                    bootstrap.python_in(pending).parent.mkdir(parents=True)
+                    (pending / "pyvenv.cfg").write_text("home=/tmp\n")
+                    bootstrap.python_in(pending).touch()
+                elif "snapshot_download" in " ".join(command):
+                    (Path(command[-1]) / "model_index.json").write_text("{}")
+
+            with patch.object(bootstrap, "run", side_effect=fake_run), patch.object(bootstrap.sys, "version_info", (3, 11, 0)):
+                bootstrap.install(root, source, "sdnq", "mps")
+            self.assertIn("manga_cleaner_sidecar.__main__", checks[0])
+
+    def test_a_download_that_cannot_fit_is_refused_before_it_starts(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            pending = root / ".installing-model"
+            checkpoint = {"bytes": 12_000_000_000}
+            free = bootstrap.shutil.disk_usage(root)._replace(free=5_000_000_000)
+            with patch.object(bootstrap.shutil, "disk_usage", return_value=free):
+                with self.assertRaisesRegex(RuntimeError, r"needs 14\.0 GB free, and 5\.0 GB is free"):
+                    bootstrap.check_disk_room(root, pending, checkpoint)
+                # What a retry has already fetched does not have to fit again.
+                pending.mkdir()
+                with (pending / "part").open("wb") as held:
+                    held.truncate(11_000_000_000)
+                bootstrap.check_disk_room(root, pending, checkpoint)
+
     def test_a_checkpoint_cannot_write_outside_the_weights_folder(self):
         for name in ("../evil", "/etc/evil", ".hidden", ""):
             with self.assertRaises(ValueError):

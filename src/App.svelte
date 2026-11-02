@@ -309,6 +309,7 @@
   <LoadedModels
     models={[...loaded, ...cloudRows]}
     title={panelTitle}
+    hint={loaded.length > 0 && loadedModels.totalBytes !== null ? t('models.value.total', { bytes: loadedModels.totalBytes }) : ''}
     icon={loaded.length === 0 && cloudRows.length > 0 ? 'cloud' : 'cpu'}
     unloadingLabel={t('models.value.unloading')}
     onunload={(id) => {

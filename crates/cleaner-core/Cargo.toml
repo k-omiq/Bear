@@ -63,6 +63,8 @@ getrandom = "0.3"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_System_SystemInformation", "Win32_System_LibraryLoader",
+  # This process's working set, for the loaded-models tab (`memory::process_bytes`).
+  "Win32_System_ProcessStatus", "Win32_System_Threading",
   # `LockFile`, for the job lock across processes (`project::lock`).
   "Win32_Foundation", "Win32_Storage_FileSystem",
 ] }
