@@ -46,6 +46,7 @@
     forgetUnfinished,
     healthKey,
     newInstallationId,
+    NEW_SETUP_MODEL,
     NO_CLEAN_MODEL,
     planCleanup,
     removeEndpoint,
@@ -746,12 +747,6 @@
       .map((/** @type {any} */ item) => ({ type: item.type ?? item.resource_type, name: item.name.slice(0, 160) })),
   )
 
-  /** The GPUs this plan accepts, from the plan. Empty when it offers no choice. */
-  const gpuOptions = $derived(
-    (Array.isArray(allocation.gpu_options) ? allocation.gpu_options : [])
-      .filter((/** @type {unknown} */ name) => typeof name === 'string' && GPU_NAME.test(name))
-      .map((/** @type {string} */ name) => ({ value: name, label: name })),
-  )
   const gpu = $derived(typeof allocation.gpu === 'string' && GPU_NAME.test(allocation.gpu) ? allocation.gpu : null)
   const model = $derived(typeof allocation.model_id === 'string' ? allocation.model_id.slice(0, 120) : '')
   /** The plan installs no cleaning model: detection and page denoise only. */
@@ -763,6 +758,14 @@
       .map((/** @type {any} */ item) => ({ value: item.model_id,
         label: item.model_id === NO_CLEAN_MODEL ? t('settings.cloud.setup.review.noCleanModel') : item.label,
         requiredGpu: typeof item.required_gpu === 'string' && GPU_NAME.test(item.required_gpu) ? item.required_gpu : null })),
+  )
+  /** The GPU the model on screen must use, or null when any of them will do. */
+  const requiredGpu = $derived(modelOptions.find((item) => item.value === (pending?.model_id ?? model))?.requiredGpu ?? null)
+  /** The GPUs this plan accepts, from the plan. Empty when it offers no choice. */
+  const gpuOptions = $derived(
+    (Array.isArray(allocation.gpu_options) ? allocation.gpu_options : [])
+      .filter((/** @type {unknown} */ name) => typeof name === 'string' && GPU_NAME.test(name))
+      .map((/** @type {string} */ name) => ({ value: name, label: name, disabled: requiredGpu !== null && name !== requiredGpu })),
   )
   const analysisModels = $derived(
     Array.isArray(allocation.analysis_models) ? allocation.analysis_models : [],
@@ -963,7 +966,7 @@
         page = 'found'
         return
       }
-      if (await makePlan(which, wished(which, {}))) page = 'review'
+      if (await makePlan(which, wished(which, { model_id: NEW_SETUP_MODEL }))) page = 'review'
     } catch {
       if (alive) planFailed('ERR_EXECUTION_FAILED')
     } finally {
@@ -1214,7 +1217,7 @@
     installationId = freshId
     chosenGpu = null
     try {
-      if (await makePlan(provider, wished(provider, {}))) page = 'review'
+      if (await makePlan(provider, wished(provider, { model_id: NEW_SETUP_MODEL }))) page = 'review'
     } catch {
       if (alive) planFailed('ERR_EXECUTION_FAILED')
     } finally {
@@ -1738,6 +1741,7 @@
       </div>
     {/if}
     {#if model}<p class="note">{t('settings.cloud.setup.review.modelNote')}</p>{/if}
+    {#if requiredGpu}<p class="note">{t('settings.cloud.setup.review.modelGpuNote', { gpu: requiredGpu })}</p>{/if}
     {#if modelLicense}<p class="note">{t('settings.cloud.setup.review.modelLicense', { license: modelLicense })}</p>{/if}
     {#if analysisOptions.length > 0}
       <fieldset class="analysis-models" disabled={planning}>

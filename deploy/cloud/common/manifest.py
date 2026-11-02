@@ -369,6 +369,9 @@ class ProductionModel:
     runner: str = "flux"
     # GPU a deployment of this model must use, per provider; absent means any allowed GPU.
     required_gpu: Tuple[Tuple[str, str], ...] = ()
+    # GPU a deployment starts on when nobody chose one, per provider; absent means the
+    # provider's default. Any allowed GPU can still be chosen.
+    preferred_gpu: Tuple[Tuple[str, str], ...] = ()
     # Host memory of a render worker container holding one pipeline copy.
     worker_memory_gib: int = 12
     adapters: Tuple[PinnedAdapter, ...] = ()
@@ -386,6 +389,9 @@ class ProductionModel:
 
     def required_gpu_for(self, provider: str) -> Optional[str]:
         return dict(self.required_gpu).get(provider)
+
+    def preferred_gpu_for(self, provider: str) -> Optional[str]:
+        return dict(self.preferred_gpu).get(provider)
 
 
 # Seeded beside every Klein snapshot; the FLUX runner fills the hole with it.
@@ -432,15 +438,18 @@ PRODUCTION_MODELS: Dict[str, ProductionModel] = {
                                        PROD_SNAPSHOT_FLUX3_FILES, PROD_SNAPSHOT_FLUX3_TOTAL_BYTES,
                                        "FLUX Kommunity", label="FLUX 3 Image Klein (4-bit)",
                                        runner="flux3", worker_memory_gib=24, adapters=(LAMA_ADAPTER,)),
-    # Bench 4 and 5 on an L40S, 2026-10-26: 21.1 GiB peak allocated by torch at the 768
-    # working size, 24.9 GiB at 1280, 19.0 GiB after load; too close to an L4's 24 GB and
-    # over it at 1280. Bench 5 ran in a 40 GiB container; the host's peak was not read.
+    # Bench 10, 2026-11-02 (docs/research/flux3-klein-5_6b.md): with the text encoder on the host
+    # between prompts, 12 to 16 GiB peak allocated by torch at 768 and 1280 on an L4, an A10 and
+    # an L40S, 24.6 GiB of host memory at most. A crop of 1440 x 1440 fits an L4's 23 GB and one
+    # of 1696 x 1696 does not. It starts on the L40S because an L4 is 3.5 times slower, which
+    # costs more per crop than the L40S's price. Beam's GPUs were not tried.
     MODEL_PROD_FLUX3_BF16: ProductionModel(MODEL_PROD_FLUX3_BF16, REVISION_PROD_FLUX3_BF16,
                                             RECIPE_PROD_FLUX3_BF16, PROD_SNAPSHOT_FLUX3_BF16_FILES,
                                             PROD_SNAPSHOT_FLUX3_BF16_TOTAL_BYTES, "FLUX Kommunity",
                                             label="FLUX 3 Image Klein (bf16)", runner="flux3",
-                                            required_gpu=(("modal", "L40S"), ("beam", "RTX5090")),
-                                            worker_memory_gib=40, partial_repo=True, adapters=(LAMA_ADAPTER,)),
+                                            required_gpu=(("beam", "RTX5090"),),
+                                            preferred_gpu=(("modal", "L40S"),),
+                                            worker_memory_gib=28, partial_repo=True, adapters=(LAMA_ADAPTER,)),
 }
 
 

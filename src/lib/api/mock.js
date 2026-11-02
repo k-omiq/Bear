@@ -78,6 +78,9 @@ const EXPORT_FORMATS = Object.freeze({
  * the mock answers them itself.
  */
 export const PINNED_CLOUD_MODEL_ID = 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic'
+/** What a new setup asks for (`NEW_SETUP_MODEL`). The mock renders the pinned recipe either way. */
+const MOCK_BF16_MODEL_ID = 'unsloth/flux-3-image-klein'
+const MOCK_FLUX3_4BIT_MODEL_ID = 'OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit'
 export const PINNED_CLOUD_MODEL_REVISION = '45e9cc76cb70f84473ce5c6c2e2282d0ef3c6ecd'
 export const PINNED_CLOUD_RECIPE_ID = 'mc-flux2-klein-inpaint-v2'
 export const CLOUD_PREPROCESSING_VERSION = '2.0.0'
@@ -2395,7 +2398,8 @@ export function createMockBackend(options = {}) {
   /** What a plan for these choices creates, in the shape the helper answers. */
   const planFor = (provider, installationId, options = {}) => {
     const gpus = MOCK_PROVISION_GPUS[provider]
-    const gpu = options.gpu ?? gpus.fallback
+    // The bf16 model starts on this GPU, as the helper's table says.
+    const gpu = options.gpu ?? (options.model_id === MOCK_BF16_MODEL_ID ? gpus.options.at(-1) : gpus.fallback)
     const idleSeconds = options.idle_seconds ?? 120
     const analysisModels = options.analysis_models ?? []
     if (!Array.isArray(analysisModels) || analysisModels.length > 2 ||
@@ -2421,7 +2425,7 @@ export function createMockBackend(options = {}) {
     // `none`: a Modal setup with no cleaning model, as the helper plans it.
     const modelId = options.model_id ?? PINNED_CLOUD_MODEL_ID
     const noModel = modelId === 'none'
-    if (noModel ? provider !== 'modal' : modelId !== PINNED_CLOUD_MODEL_ID) {
+    if (noModel ? provider !== 'modal' : ![PINNED_CLOUD_MODEL_ID, MOCK_BF16_MODEL_ID, MOCK_FLUX3_4BIT_MODEL_ID].includes(modelId)) {
       return { error: ['ERR_VALIDATION_ERROR', 'model_id is not a supported cloud render model'] }
     }
     if (noModel && analysisModels.length === 0 && !denoise) {
@@ -2456,6 +2460,8 @@ export function createMockBackend(options = {}) {
         model_id: modelId,
         model_options: [
           { model_id: PINNED_CLOUD_MODEL_ID, label: 'FLUX.2 Klein 4B (4-bit)', weights_bytes: MODEL_WEIGHTS_BYTES, license: 'Apache-2.0', required_gpu: null },
+          { model_id: MOCK_FLUX3_4BIT_MODEL_ID, label: 'FLUX 3 Image Klein (4-bit)', weights_bytes: MODEL_WEIGHTS_BYTES, license: 'FLUX Kommunity', required_gpu: null },
+          { model_id: MOCK_BF16_MODEL_ID, label: 'FLUX 3 Image Klein (bf16)', weights_bytes: MODEL_WEIGHTS_BYTES, license: 'FLUX Kommunity', required_gpu: provider === 'modal' ? null : gpus.options.at(-1) },
           ...(provider === 'modal' ? [{ model_id: 'none', label: 'No cleaning model', weights_bytes: 0, license: '', required_gpu: null }] : []),
         ],
         analysis_models: [...analysisModels],

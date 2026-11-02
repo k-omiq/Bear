@@ -603,8 +603,14 @@ fn the_working_size_setting_reaches_a_flux3_recipe_and_its_estimate() {
     let rate = RenderRate::of(&sized);
     assert_eq!(rate.working_size(96, 48), (1280, 640));
     assert_eq!(rate.working_size(1400, 700), (1400, 700), "never scaled down");
-    assert_eq!((rate.memory_gib(CloudProvider::Modal), rate.memory_gib(CloudProvider::Beam)), (40.0, 40.0),
-        "the bf16 worker is 40 GiB");
+    assert_eq!((rate.memory_gib(CloudProvider::Modal), rate.memory_gib(CloudProvider::Beam)), (28.0, 28.0),
+        "the bf16 worker is 28 GiB");
+    let crop = Rect::new(0, 0, 96, 48);
+    let render = |rate| { let job = Estimate::job(crop, rate); job.gpu_seconds - JOB_OVERHEAD_SECONDS };
+    assert!((render(RenderRate::on_gpu(&sized, "L4")) - 3.5 * render(rate)).abs() < 1e-6, "an L4 is slower");
+    assert!((render(RenderRate::on_gpu(&sized, "A10")) - 2.5 * render(rate)).abs() < 1e-6, "an A10 is slower");
+    assert_eq!(render(RenderRate::on_gpu(&sized, "L40S")), render(rate));
+    assert_eq!(render(RenderRate::on_gpu(&recipe(), "L4")), render(RenderRate::of(&recipe())), "Klein's rate is an L4's");
     let own_size = RenderRate::of(&deployed_recipe(&gateway, None, None).unwrap());
     let crop = Rect::new(0, 0, 96, 48);
     assert!(Estimate::job(crop, rate).gpu_seconds > 2.0 * Estimate::job(crop, own_size).gpu_seconds);
@@ -2488,7 +2494,7 @@ fn the_cap_stops_queueing_and_leaves_the_rest_detected() {
         detect(&path, page, Rect::new(150, 150, 30, 20), REMOTE_PICK, 1),
     ]).collect();
     let Bound { regions, .. } = bind(&path, &ids, recipe_preprocessing(&recipe()).unwrap()).unwrap();
-    let budget = Budget::new(&recipe(), CloudProvider::Modal, 0.8, 0.0);
+    let budget = Budget::new(&recipe(), CloudProvider::Modal, "L4", 0.8, 0.0);
     let three = budget.fixed_usd + regions[..3].iter().map(|region| budget.job_usd(region.crop)).sum::<f64>();
     let cap = three + budget.job_usd(regions[3].crop) / 2.0;
 

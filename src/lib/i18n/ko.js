@@ -272,6 +272,7 @@ export const ko = {
           workspace: '워크스페이스',
           model: '클라우드 모델',
           modelNote: '구성을 승인하기 전에 클라우드 모델, GPU, 대기 시간을 선택하세요. 모델을 바꾸면 별도의 체크포인트를 다운로드합니다.',
+          modelGpuNote: '이 모델은 메모리 때문에 {gpu} GPU가 필요합니다. 더 작은 GPU를 쓰려면 FLUX 3 Image Klein 또는 FLUX.2 Klein 4B (4-bit)를 선택하세요.',
           noCleanModel: '클리닝 모델 없음',
           noCleanNote: '클리닝 모델을 설치하지 않으므로 이 클라우드 GPU에서는 클리닝을 실행하지 않습니다. 구성 과정에서 선택한 분석 모델과 페이지 노이즈 제거만 다운로드합니다.',
           nothingChosen: '클리닝 모델, 클라우드 분석 모델, 페이지 노이즈 제거 중 하나를 선택하세요. 구성에는 하나 이상이 필요합니다.',

@@ -276,6 +276,7 @@ export const es = {
           workspace: 'Espacio de trabajo',
           model: 'Modelo en la nube',
           modelNote: 'Elige el modelo en la nube, la GPU y el tiempo de inactividad antes de aprobar la configuración. Cambiar el modelo descarga un checkpoint aparte.',
+          modelGpuNote: 'Este modelo necesita la GPU {gpu} por su memoria. Para usar una GPU más pequeña, elige FLUX 3 Image Klein o FLUX.2 Klein 4B (4-bit).',
           noCleanModel: 'Sin modelo de limpieza',
           noCleanNote: 'No se instala ningún modelo de limpieza, así que la limpieza no se ejecuta en esta GPU en la nube. La configuración descarga solo los modelos de análisis y la reducción de ruido de páginas que selecciones.',
           nothingChosen: 'Selecciona un modelo de limpieza, un modelo de análisis en la nube o la reducción de ruido de páginas. Una configuración necesita al menos uno.',

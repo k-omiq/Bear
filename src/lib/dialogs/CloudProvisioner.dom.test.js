@@ -15,10 +15,11 @@ import { createMockBackend, PINNED_CLOUD_MODEL_ID, PROVISION_APPLY_STEPS } from 
 import { t } from '../i18n/index.js'
 import { clearNotices } from '../state/app.svelte.js'
 import CloudProvisioner, { isValidInstallationId, isValidPlanHash } from './CloudProvisioner.svelte'
-import { forgetUnfinished, NO_CLEAN_MODEL, setup } from './provisioning.svelte.js'
+import { forgetUnfinished, NEW_SETUP_MODEL, NO_CLEAN_MODEL, setup } from './provisioning.svelte.js'
 
 const ZERO = { method: 0, openChapter: 0, export: 0, cloud: 0, provision: 0, region: 0, pageTail: 0, noticeStagger: 0 }
 const HASH = 'ab'.repeat(32)
+const FLUX3_4BIT = 'OzzyGT/Flux_3_Image_Klein_sdnq_dynamic_4bit'
 const ID = 'mc-test01'
 const MODAL = { token_id: 'ak-test-id', token_secret: 'as-test-secret' }
 const MODAL_KEY = 'settings.inference.provider.modal'
@@ -311,11 +312,13 @@ describe('setting up end to end on the mock backend', () => {
     // The GPU and idle choices are the plan's own, not a list of ours.
     const gpu = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('settings.cloud.setup.review.gpu')))
     expect(Array.from(gpu.options, (option) => option.value)).toEqual(['L4', 'A10', 'L40S'])
-    expect(gpu.value).toBe('L4')
+    // A new setup starts on the cloud's best model, with the GPU it requires.
+    expect(gpu.value).toBe('L40S')
     // The cleaning model is a choice too, and "none" is one of them on Modal.
     const model = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('settings.cloud.setup.review.model')))
-    expect(Array.from(model.options, (option) => option.value)).toEqual([PINNED_CLOUD_MODEL_ID, NO_CLEAN_MODEL])
-    expect(model.value).toBe(PINNED_CLOUD_MODEL_ID)
+    expect(Array.from(model.options, (option) => option.value)).toEqual(
+      [PINNED_CLOUD_MODEL_ID, FLUX3_4BIT, NEW_SETUP_MODEL, NO_CLEAN_MODEL])
+    expect(model.value).toBe(NEW_SETUP_MODEL)
     const idle = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('settings.cloud.setup.review.idle')))
     expect(idle.value).toBe('120')
     for (const name of [`mc-weights-${ID}`, `mc-jobs-${ID}`, `mc-${ID}`, `mc-token-${ID}`]) {
@@ -367,12 +370,39 @@ describe('setting up end to end on the mock backend', () => {
     }
   }, 15_000)
 
+  it('lets either FLUX 3 build use any GPU, and starts each on its own', async () => {
+    render(CloudProvisioner, { props: { inline: true, installationId: ID, backend: createMockBackend({ timing: ZERO }) } })
+    await connectModal()
+    const control = (/** @type {string} */ key) => /** @type {HTMLSelectElement} */ (
+      screen.getByLabelText(t(`settings.cloud.setup.review.${key}`)))
+    const change = async (/** @type {string} */ key, /** @type {string} */ value, /** @type {string} */ gpu) => {
+      await fireEvent.change(control(key), { target: { value } })
+      await waitFor(() => {
+        expect(control('model').disabled).toBe(false)
+        expect(control('gpu').value).toBe(gpu)
+      })
+    }
+    const disabled = () => Array.from(control('gpu').options, (option) => option.disabled)
+
+    expect(control('gpu').value).toBe('L40S')
+    expect(disabled()).toEqual([false, false, false])
+    await change('model', FLUX3_4BIT, 'L4')
+    expect(disabled()).toEqual([false, false, false])
+    await change('model', NEW_SETUP_MODEL, 'L40S')
+    // A GPU the person picked stays through a change of build.
+    await change('gpu', 'L4', 'L4')
+    await change('model', FLUX3_4BIT, 'L4')
+    await change('model', NEW_SETUP_MODEL, 'L4')
+    expect(screen.queryByText(t('settings.cloud.setup.review.modelGpuNote', { gpu: 'L40S' }))).toBeNull()
+  })
+
   it('replans with the selected 9B checkpoint and its required GPU', async () => {
     const model4b = 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic'
     const model9b = 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32'
     const choices = [
       { model_id: model4b, label: 'FLUX.2 Klein 4B (4-bit)', required_gpu: null },
       { model_id: model9b, label: 'FLUX.2 Klein 9B (4-bit)', required_gpu: 'L40S' },
+      { model_id: NEW_SETUP_MODEL, label: 'FLUX 3 Image Klein (bf16)', required_gpu: 'L40S' },
     ]
     const runner = scripted({
       inspect: ok({ eligible: true }),
@@ -389,11 +419,15 @@ describe('setting up end to end on the mock backend', () => {
       runCloudProvisioner: runner, backend: handBackend().backend } })
     await connectModal()
     const model = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('settings.cloud.setup.review.model')))
-    expect(model.value).toBe(model4b)
+    expect(model.value).toBe(NEW_SETUP_MODEL)
     await fireEvent.change(model, { target: { value: model9b } })
     await waitFor(() => expect(runner).toHaveBeenLastCalledWith({ op: 'plan', provider: 'modal',
       params: { credentials: MODAL, installation_id: ID, options: { model_id: model9b, gpu: 'L40S' } } }))
     expect(screen.getByText(t('settings.cloud.setup.review.modelLicense', { license: 'FLUX non-commercial' }))).toBeTruthy()
+    // The other GPUs are off while the model that requires one is on screen.
+    const gpu = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('settings.cloud.setup.review.gpu')))
+    expect(Array.from(gpu.options, (option) => option.disabled)).toEqual([true, true, false])
+    expect(screen.getByText(t('settings.cloud.setup.review.modelGpuNote', { gpu: 'L40S' }))).toBeTruthy()
   })
 
   it('offers the plan’s routing regions and replans with the one chosen', async () => {
@@ -416,7 +450,7 @@ describe('setting up end to end on the mock backend', () => {
     expect(screen.getByText(t('settings.cloud.setup.review.regionNote'))).toBeTruthy()
     await fireEvent.change(region, { target: { value: 'ap-south' } })
     await waitFor(() => expect(runner).toHaveBeenLastCalledWith({ op: 'plan', provider: 'modal',
-      params: { credentials: MODAL, installation_id: ID, options: { routing_region: 'ap-south' } } }))
+      params: { credentials: MODAL, installation_id: ID, options: { model_id: NEW_SETUP_MODEL, routing_region: 'ap-south' } } }))
     await waitFor(() => expect(/** @type {HTMLSelectElement} */ (
       screen.getByLabelText(t('settings.cloud.setup.review.region'))).value).toBe('ap-south'))
   })
@@ -507,7 +541,7 @@ describe('setting up end to end on the mock backend', () => {
     await fireEvent.click(screen.getByRole('checkbox', { name: 'SAM-TS-L lettering mask' }))
     await waitFor(() => expect(runner).toHaveBeenLastCalledWith({ op: 'plan', provider: 'modal',
       params: { credentials: MODAL, installation_id: ID,
-        options: { analysis_models: ['text_mask_sam_ts@1'] } } }))
+        options: { model_id: NEW_SETUP_MODEL, analysis_models: ['text_mask_sam_ts@1'] } } }))
     expect(screen.getByRole('checkbox', { name: 'SAM-TS-L lettering mask' }).checked).toBe(true)
     expect(screen.getByText(t('settings.cloud.setup.review.analysisNote'))).toBeTruthy()
   })
@@ -591,7 +625,7 @@ describe('setting up end to end on the mock backend', () => {
 
     await fireEvent.click(toggle)
     await waitFor(() => expect(runner).toHaveBeenLastCalledWith(expect.objectContaining({
-      op: 'plan', provider: 'modal', params: expect.objectContaining({ options: { denoise: true } }) })))
+      op: 'plan', provider: 'modal', params: expect.objectContaining({ options: { model_id: NEW_SETUP_MODEL, denoise: true } }) })))
     await settled()
     expect(toggle.checked).toBe(true)
 
@@ -599,12 +633,12 @@ describe('setting up end to end on the mock backend', () => {
     const gpu = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('settings.cloud.setup.review.gpu')))
     await fireEvent.change(gpu, { target: { value: 'A10' } })
     await waitFor(() => expect(runner).toHaveBeenLastCalledWith(expect.objectContaining({
-      op: 'plan', params: expect.objectContaining({ options: { denoise: true, gpu: 'A10' } }) })))
+      op: 'plan', params: expect.objectContaining({ options: { model_id: NEW_SETUP_MODEL, denoise: true, gpu: 'A10' } }) })))
     await settled()
 
     await fireEvent.click(toggle)
     await waitFor(() => expect(runner).toHaveBeenLastCalledWith(expect.objectContaining({
-      op: 'plan', params: expect.objectContaining({ options: { denoise: false, gpu: 'A10' } }) })))
+      op: 'plan', params: expect.objectContaining({ options: { model_id: NEW_SETUP_MODEL, denoise: false, gpu: 'A10' } }) })))
     await settled()
     expect(toggle.checked).toBe(false)
   })
@@ -678,7 +712,7 @@ describe('the live checklist', () => {
         credentials: MODAL,
         installation_id: ID,
         approved_plan_hash: HASH,
-        options: {},
+        options: { model_id: NEW_SETUP_MODEL },
         remember_setup_credential: true,
       },
     })
@@ -758,7 +792,7 @@ describe('when setup does not finish', () => {
     expect(alert.textContent).toContain(t('settings.cloud.setup.error.secretStore'))
     expect(alert.textContent).toContain(t('settings.cloud.setup.failed.code', { code: 'ERR_SECRET_STORE' }))
     expect(screen.getByText(t('settings.cloud.setup.failed.kept'))).toBeTruthy()
-    expect(setup.unfinished).toEqual({ provider: 'modal', installationId: ID, options: {} })
+    expect(setup.unfinished).toEqual({ provider: 'modal', installationId: ID, options: { model_id: NEW_SETUP_MODEL } })
     expect(onconfigured).not.toHaveBeenCalled()
 
     await fireEvent.click(button(t('settings.cloud.setup.failed.resume')))
@@ -766,7 +800,7 @@ describe('when setup does not finish', () => {
     expect(runner).toHaveBeenLastCalledWith({
       op: 'resume',
       provider: 'modal',
-      params: { credentials: MODAL, installation_id: ID, options: {}, remember_setup_credential: true },
+      params: { credentials: MODAL, installation_id: ID, options: { model_id: NEW_SETUP_MODEL }, remember_setup_credential: true },
     })
     expect(screen.getByText(t('settings.cloud.setup.done.saved', { name: `Modal (${ID})` }))).toBeTruthy()
     expect(onconfigured).toHaveBeenCalledTimes(1)
@@ -939,7 +973,7 @@ describe('the Review step', () => {
     expect(runner).toHaveBeenLastCalledWith({
       op: 'plan',
       provider: 'modal',
-      params: { credentials: MODAL, installation_id: ID, options: { gpu: 'A10' } },
+      params: { credentials: MODAL, installation_id: ID, options: { model_id: NEW_SETUP_MODEL, gpu: 'A10' } },
     })
     expect(gpu.disabled).toBe(true)
     expect(approval().disabled).toBe(true)
@@ -1343,7 +1377,7 @@ describe('a setup that already exists', () => {
     render(CloudProvisioner, { props: { inline: true, installationId: ID, backend, runCloudProvisioner: runner, wantDenoise: true } })
     await connectModal()
     const planned = runner.mock.calls.filter(([spec]) => spec.op === 'plan').map(([spec]) => spec.params.options)
-    expect(planned).toEqual([{ denoise: true }])
+    expect(planned).toEqual([{ model_id: NEW_SETUP_MODEL, denoise: true }])
     await waitFor(() => expect(/** @type {HTMLInputElement} */ (screen.getByRole('checkbox', { name: t('settings.cloud.setup.review.denoiseInstall') })).checked).toBe(true))
   })
 

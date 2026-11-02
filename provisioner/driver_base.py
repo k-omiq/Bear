@@ -104,7 +104,8 @@ def normalize_options(
         if spec is None and provider not in NO_MODEL_PROVIDERS:
             raise ValueError("this provider needs a cleaning model")
         required_gpu = spec.required_gpu_for(provider) if spec else None
-        gpu = parse_gpu((required_gpu or default_gpu) if gpu is None else gpu, tuple(gpu_allowlist))
+        preferred_gpu = spec.preferred_gpu_for(provider) if spec else None
+        gpu = parse_gpu((required_gpu or preferred_gpu or default_gpu) if gpu is None else gpu, tuple(gpu_allowlist))
         if required_gpu and gpu != required_gpu:
             raise ValueError(f"{spec.label} requires {required_gpu} for sufficient GPU memory")
         if isinstance(idle, bool) or (idle is not None and not isinstance(idle, int)):

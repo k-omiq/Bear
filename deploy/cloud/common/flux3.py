@@ -24,6 +24,10 @@ src/flux3/pipeline.py and sampling.py), not the Diffusers defaults:
 The prompt upsampler is not loaded: on the 2026-10-19 bench it added 10 to 14 s and
 18.8 GB per crop and misread the pages twice.
 
+The text encoder waits on the host and visits the GPU only for a prompt not seen yet
+(`prompt_embeds`), as the sidecar's does: its 8.9 GB in bf16 is what kept that build off a
+24 GB GPU, and a sampling step never reads it.
+
 `hold`, off by default, holds the image tokens outside the grown hint to the crop's own,
 noised to each step's level, the way Klein's inpaint pipeline holds its latents.
 
@@ -79,6 +83,9 @@ MARKER = (255, 0, 255)
 # lettering is still there. On 31 crops the five failures read 0.77 and up and every other
 # crop 0.21 or less (docs/research/inpaint-models-2026-10.md).
 LETTERING_KEPT_CORRELATION = 0.5
+# Prompt embeddings kept on the host. The recipe's prompt has a few places in it; a request's
+# description makes any number of others.
+PROMPT_EMBEDS_KEPT = 64
 
 
 def lettering_location(lettering: Any, np: Any) -> str:
@@ -227,6 +234,8 @@ class Flux3EditRunner:
         self.device = device
         self._modules = modules
         self.pipeline: Any = None
+        self.encoder: Any = None
+        self.embeds: dict = {}
         self.lama: Any = None
         self.shift = TIME_SHIFT
         self.render_count = 0
@@ -252,17 +261,20 @@ class Flux3EditRunner:
             # Blocks are edited before the pipeline is built: `pipe.blocks` is a copy.
             blocks = m.Modular.from_pretrained(self.snapshot_path, local_files_only=True).blocks
             blocks.sub_blocks.pop("prompt_upsampler", None)
+            encoder = blocks.sub_blocks.pop("text_encoder").init_pipeline(self.snapshot_path)
+            encoder.load_components(dtype=m.torch.bfloat16)
             for loop in _denoise_loops(blocks, m.Loop):
                 loop.sub_blocks["hold"] = m.HoldBlock()
             pipeline = blocks.init_pipeline(self.snapshot_path)
             pipeline.load_components(dtype={"vae": m.torch.float32, "default": m.torch.bfloat16})
             # load_components logs a component it cannot load and carries on.
-            missing = [name for name in ("transformer", "vae", "text_encoder", "tokenizer")
-                       if getattr(pipeline, name, None) is None]
+            missing = [name for name in ("transformer", "vae") if getattr(pipeline, name, None) is None]
+            missing += [name for name in ("text_encoder", "tokenizer") if getattr(encoder, name, None) is None]
             if missing:
                 raise RuntimeError(f"components not loaded: {', '.join(missing)}")
             pipeline.update_components(scheduler=m.Scheduler(shift=TIME_SHIFT))
-            # The 4-bit pipeline is about 7 GB, the bf16 one 20; it moves to the GPU once, as Klein's does.
+            # Without the text encoder the 4-bit pipeline is about 4 GB, the bf16 one 11; it moves
+            # to the GPU once, as Klein's does.
             pipeline.to(self.device)
             lama = m.Lama(f"{self.snapshot_path}/{ADAPTER_DIR}/{LAMA_FILE}", self.device)
         except WorkerRenderError:
@@ -271,6 +283,7 @@ class Flux3EditRunner:
             code = "out_of_memory" if looks_like_memory(str(exc)) else "model_load_failed"
             raise WorkerRenderError(code, f"Failed to load the pinned pipeline: {exc}") from exc
         self.lama = lama
+        self.encoder = encoder
         self.pipeline = pipeline
         return pipeline
 
@@ -299,6 +312,23 @@ class Flux3EditRunner:
         if generation is not None and generation.marker:
             prompt += MARKER_FLUX3_PROMPT
         return prompt
+
+    def prompt_embeds(self, prompt: str) -> Any:
+        """What the text encoder makes of `prompt`, on the GPU. The encoder is back on the host on return."""
+        m = self._mods()
+        embeds = self.embeds.get(prompt)
+        if embeds is None:
+            self.encoder.to(self.device)
+            try:
+                embeds = self.encoder(prompt=prompt, output="prompt_embeds").to("cpu")
+            finally:
+                self.encoder.to("cpu")
+                if self.device == "cuda":
+                    m.torch.cuda.empty_cache()
+            if len(self.embeds) >= PROMPT_EMBEDS_KEPT:
+                del self.embeds[next(iter(self.embeds))]
+            self.embeds[prompt] = embeds
+        return embeds.to(self.device)
 
     def render_png(
         self,
@@ -352,6 +382,9 @@ class Flux3EditRunner:
                                         "The model left the magenta marker in the lettering; try another seed.")
         elif lettering_kept(np.asarray(crop), np.asarray(result), np.asarray(hint) > 0, np):
             try:
+                # torch keeps what the edit freed, and ONNX Runtime cannot see that it is free.
+                if self.device == "cuda":
+                    m.torch.cuda.empty_cache()
                 filled = self.lama.fill(crop, grown)
             except Exception as exc:
                 code = "out_of_memory" if looks_like_memory(str(exc)) else "inference_failed"
@@ -392,7 +425,7 @@ class Flux3EditRunner:
         try:
             with torch.inference_mode():
                 images = pipeline(
-                    prompt=self.prompt(qwen_edit, lettering, generation),
+                    prompt_embeds=self.prompt_embeds(self.prompt(qwen_edit, lettering, generation)),
                     image=work_crop,
                     latents=noise.T.reshape(1, channels, rows, cols),
                     height=work_h,

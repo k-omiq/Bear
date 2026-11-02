@@ -104,6 +104,14 @@ export const ROUTING_REGIONS = Object.freeze(['us-east', 'us-west', 'eu-west', '
  * only (`MODEL_NONE` in `deploy/cloud/common/manifest.py`).
  */
 export const NO_CLEAN_MODEL = 'none'
+/**
+ * What a new setup starts on, and can change on its review screen: FLUX 3 in
+ * BFL's bf16 weights, the best the cloud has (docs/research/flux3-klein-5_6b.md,
+ * bench 4), on the GPU the helper prefers for it. This computer's list keeps the
+ * light 4-bit builds (`sidecar/models.rs`).
+ * An installation that exists keeps the model it has.
+ */
+export const NEW_SETUP_MODEL = 'unsloth/flux-3-image-klein'
 
 const GPU_NAME = /^[A-Za-z0-9_-]{1,32}$/
 const MODEL_ID = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]{1,100}$/

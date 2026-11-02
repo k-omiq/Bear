@@ -876,3 +876,34 @@ it and changes results on pages with transparency); grey Copy on a 1200 px mask 
 24 s, mostly the halftone phase and demodulation blurs over the whole window; and V2's tone
 measure (`ToneSite`) still reads 8-bit page samples.
 
+## Bench 10 (2026-11-02): both builds on smaller GPUs, text encoder off the GPU
+
+bf16 needed an L40S because the whole pipeline stayed on the GPU: 21.1 GiB at the 768 working size and 24.9 GiB at
+1280 (benches 4 and 5), where an L4 has 22.5 GiB. The worker now holds the text encoder on the host and moves it to
+the GPU only for a prompt it has not seen, as the sidecar does (`prompt_embeds` in `common/flux3.py`). The same code
+ran on every GPU, seed 1, 16 steps, in a throwaway Modal app on profile aizendazai46.
+
+| Set and GPU | s per crop at 768, same 4 crops | Peak allocated, 768 | Peak allocated, 1280 | Host memory |
+|---|---|---|---|---|
+| bf16, L40S (46 GB) | 4.7 | 12.2 to 13.1 GiB | not run on small crops | 24.3 GiB |
+| bf16, A10 (23 GB) | 11.9 | 12.3 to 12.7 GiB | 15.4 GiB | 24.6 GiB |
+| bf16, L4 (23 GB) | 17.0 | 12.2 to 13.1 GiB | 15.1 to 16.3 GiB | 24.3 GiB |
+| 4 bit, A10 (23 GB) | 12.9 | 4.9 to 5.5 GiB | 8.1 GiB | 11.6 GiB |
+
+- Large crops, worked at their own size. bf16 on an A10 rendered 1360 x 688 in 53 s and 1440 x 1440 in 133 s (18.1 GiB
+  allocated). 1696 x 1696 failed with `out_of_memory` after 1.9 s, and the next ordinary crop rendered normally. The
+  4-bit build rendered 2048 x 2048 in 377 s (15.5 GiB). nvidia-smi read up to 22.5 of 23 GB, most of the gap to the
+  allocated figure being torch's cache.
+- A prompt not seen yet cost 3.2 to 3.7 s in bf16 and 1.1 to 1.9 s in 4 bit. All the crops in this bench ask for the
+  same prompt, since a crop is centred on its lettering, so it is rare.
+- L4 against L40S on the same 5 crops: 0.3 to 0.5 levels mean difference, under 0.1% of pixels more than 16 levels
+  apart in the one crop checked. The worst pair side by side showed no difference by eye. Sampling is not
+  bit-for-bit across GPUs.
+- Cost per crop. An L4 is 3.5 times the L40S's time and 41% of its price, so bf16 costs more per crop on an L4, and
+  the A10 falls between. That is why bf16 still starts on the L40S and the small GPUs are a choice. The app's estimate
+  multiplies FLUX 3's rate by 3.5 on an L4 and 2.5 on an A10 (`RenderRate::on_gpu`).
+- Capacity. The first L4 started at once and the second never did; a later round waited 28 minutes for an L4, then
+  ran on the A10 at once. An installation has one GPU type and no fallback.
+- Spend: $1.14 by the billing report, across the three rounds; test volume deleted.
+
+Not measured: the 4-bit build on an L4, Beam's GPUs, the 28 GiB container, quality at 1280 on a small GPU.

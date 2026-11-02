@@ -276,6 +276,7 @@ export const pt = {
           workspace: 'Workspace',
           model: 'Modelo na nuvem',
           modelNote: 'Escolha o modelo na nuvem, a GPU e o tempo ocioso antes de aprovar a configuração. Trocar o modelo baixa um checkpoint separado.',
+          modelGpuNote: 'Este modelo precisa da GPU {gpu} por causa da memória. Para usar uma GPU menor, escolha FLUX 3 Image Klein ou FLUX.2 Klein 4B (4-bit).',
           noCleanModel: 'Sem modelo de limpeza',
           noCleanNote: 'Nenhum modelo de limpeza é instalado, então a limpeza não roda nesta GPU na nuvem. A configuração baixa apenas os modelos de análise e a remoção de ruído que você selecionar.',
           nothingChosen: 'Selecione um modelo de limpeza, um modelo de análise na nuvem ou a remoção de ruído. Uma configuração precisa de pelo menos um.',

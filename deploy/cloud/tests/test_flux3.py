@@ -89,7 +89,7 @@ def fake_torch(cuda: bool = True) -> SimpleNamespace:
         return FakeTensor(np.random.default_rng(generator.seed).standard_normal(shape).astype(np.float32))
 
     return SimpleNamespace(
-        cuda=SimpleNamespace(is_available=lambda: cuda),
+        cuda=SimpleNamespace(is_available=lambda: cuda, empty_cache=lambda: None),
         float32="float32",
         bfloat16="bfloat16",
         Generator=FakeGenerator,
@@ -113,7 +113,7 @@ class FakePipeline:
 
     def __init__(self, components: Dict[str, Any], error: Optional[Exception] = None):
         self.transformer = SimpleNamespace(config=SimpleNamespace(in_channels=128))
-        self.vae = self.text_encoder = self.tokenizer = object()
+        self.vae = object()
         for name, value in components.items():
             setattr(self, name, value)
         self.error = error
@@ -147,6 +147,47 @@ class FakePipeline:
         return [Image.new("RGB", (kwargs["width"], kwargs["height"]), (128, 128, 128))]
 
 
+class FakeEmbeds:
+    """A prompt embedding that remembers its prompt and where it was last sent."""
+
+    def __init__(self, prompt: str):
+        self.prompt = prompt
+        self.device = "cuda"
+
+    def to(self, device: str) -> "FakeEmbeds":
+        self.device = device
+        return self
+
+
+class FakeEncoder:
+    """The text encoder's pipeline: records where it is and which prompts it encoded."""
+
+    def __init__(self, components: Dict[str, Any], error: Optional[Exception] = None):
+        self.text_encoder = self.tokenizer = object()
+        for name, value in components.items():
+            setattr(self, name, value)
+        self.error = error
+        self.dtype: Any = None
+        self.device = "cpu"
+        self.moves: List[str] = []
+        self.encoded: List[str] = []
+
+    def load_components(self, dtype: Any) -> None:
+        self.dtype = dtype
+
+    def to(self, device: str) -> "FakeEncoder":
+        self.device = device
+        self.moves.append(device)
+        return self
+
+    def __call__(self, prompt: str, output: str) -> FakeEmbeds:
+        assert output == "prompt_embeds" and self.device == "cuda"
+        if self.error is not None:
+            raise self.error
+        self.encoded.append(prompt)
+        return FakeEmbeds(prompt)
+
+
 class FakeLama:
     """Fills the hole with mid grey and records what it was given."""
 
@@ -167,13 +208,17 @@ class FakeLama:
 
 
 def flux3_modules(cuda: bool = True, load_error: Optional[Exception] = None,
-                  call_error: Optional[Exception] = None, components: Optional[Dict[str, Any]] = None
+                  call_error: Optional[Exception] = None, components: Optional[Dict[str, Any]] = None,
+                  encoder_components: Optional[Dict[str, Any]] = None, encode_error: Optional[Exception] = None,
                   ) -> SimpleNamespace:
     """A modular pipeline whose blocks hold two workflows, each with its denoising loop."""
     text2img = FakeLoop({"denoiser": "t2i", "after": "step"})
     edit = FakeLoop({"denoiser": "edit"})
+    encoder = FakeEncoder(encoder_components or {}, encode_error)
     blocks = SimpleNamespace(
-        sub_blocks={"prompt_upsampler": "upsampler", "text2img": SimpleNamespace(sub_blocks={"loop": text2img}),
+        sub_blocks={"prompt_upsampler": "upsampler",
+                    "text_encoder": SimpleNamespace(init_pipeline=lambda path: encoder),
+                    "text2img": SimpleNamespace(sub_blocks={"loop": text2img}),
                     "edit": SimpleNamespace(sub_blocks={"denoise": SimpleNamespace(sub_blocks={"loop": edit})})},
     )
     pipeline = FakePipeline(components or {}, call_error)
@@ -194,7 +239,7 @@ def flux3_modules(cuda: bool = True, load_error: Optional[Exception] = None,
         torch=fake_torch(cuda), np=np, Image=Image, ImageFilter=ImageFilter,
         Modular=SimpleNamespace(from_pretrained=from_pretrained),
         Scheduler=lambda shift: ("scheduler", shift), Loop=FakeLoop, HoldBlock=FakeHold, Lama=FakeLama,
-        blocks=blocks, loops=(text2img, edit), pipeline=pipeline, loads=loads,
+        blocks=blocks, loops=(text2img, edit), pipeline=pipeline, encoder=encoder, loads=loads,
     )
 
 
@@ -222,12 +267,13 @@ class Flux3EditRunnerTest(unittest.TestCase):
         self.assertEqual(production_model(MODEL_PROD_FLUX3).recipe_id, RECIPE_PROD_FLUX3)
         self.assertEqual(FLUX3_PROMPT.count("{location}"), 1)
 
-    def test_the_bf16_weights_are_the_same_recipe_on_a_bigger_gpu(self) -> None:
+    def test_the_bf16_weights_are_the_same_recipe_and_start_on_a_bigger_gpu(self) -> None:
         self.assertIs(runner_for(MODEL_PROD_FLUX3_BF16), self.Runner)
         bf16 = production_model(MODEL_PROD_FLUX3_BF16)
         self.assertEqual(bf16.recipe_id, RECIPE_PROD_FLUX3_BF16)
         self.assertEqual(get_pinned_sampling(RECIPE_PROD_FLUX3_BF16), get_pinned_sampling(RECIPE_PROD_FLUX3))
-        self.assertEqual((bf16.required_gpu_for("modal"), bf16.required_gpu_for("beam")), ("L40S", "RTX5090"))
+        self.assertEqual((bf16.required_gpu_for("modal"), bf16.required_gpu_for("beam")), (None, "RTX5090"))
+        self.assertEqual(bf16.preferred_gpu_for("modal"), "L40S")
         self.assertTrue(bf16.partial_repo)
         folders = {path.split("/")[0] for path, _size in bf16.files if "/" in path}
         self.assertEqual(folders, {"adapters", "text_encoder", "transformer", "vae"})
@@ -251,7 +297,7 @@ class Flux3EditRunnerTest(unittest.TestCase):
         runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100,
                           qwen_edit=QwenEdit("auto", "a brick wall"), flux3_generation=every)
         call = mods.pipeline.calls[0]
-        self.assertEqual(call["prompt"], LOCATION_FLUX3_PROMPT.replace("{location}", "upper right")
+        self.assertEqual(call["prompt_embeds"].prompt, LOCATION_FLUX3_PROMPT.replace("{location}", "upper right")
                          + " Target description: a brick wall" + MARKER_FLUX3_PROMPT)
         self.assertEqual((call["width"], call["height"]), megapixel_size(300, 200))
         self.assertEqual(megapixel_size(300, 200), (1248, 832))
@@ -266,7 +312,7 @@ class Flux3EditRunnerTest(unittest.TestCase):
         runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100,
                           flux3_generation=Flux3Generation(location_prompt=True))
         call = mods.pipeline.calls[1]
-        self.assertEqual(call["prompt"], LOCATION_FLUX3_PROMPT.replace("{location}", "upper right"))
+        self.assertEqual(call["prompt_embeds"].prompt, LOCATION_FLUX3_PROMPT.replace("{location}", "upper right"))
         self.assertEqual((call["width"], call["height"]), working_size(300, 200))
         self.assertEqual(tuple(np.asarray(call["image"])[30, 600]), (255, 255, 255))
         self.assertEqual(mods.pipeline.scheduler, ("scheduler", TIME_SHIFT))
@@ -356,6 +402,44 @@ class Flux3EditRunnerTest(unittest.TestCase):
         # Without the marker the same answer is fine.
         runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100)
 
+    def test_the_text_encoder_visits_the_gpu_once_per_new_prompt(self) -> None:
+        mods = flux3_modules()
+        runner = self.Runner("/weights/snap", modules=mods)
+        crop, hint = crop_and_hint(300, 200, (220, 10, 290, 50))
+        for _ in range(2):
+            runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100)
+        # Another place in the crop is another prompt.
+        crop, hint = crop_and_hint(300, 200, (10, 150, 80, 190))
+        runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100)
+
+        self.assertEqual(len(mods.pipeline.calls), 3)
+        self.assertEqual(mods.encoder.encoded, [FLUX3_PROMPT.format(location="upper right"),
+                                                FLUX3_PROMPT.format(location="lower left")])
+        self.assertEqual(mods.encoder.moves, ["cuda", "cpu", "cuda", "cpu"])
+        self.assertEqual(mods.pipeline.calls[-1]["prompt_embeds"].device, "cuda")
+
+    def test_a_failed_encode_leaves_the_encoder_off_the_gpu_and_keeps_nothing(self) -> None:
+        mods = flux3_modules(encode_error=RuntimeError("CUDA out of memory"))
+        runner = self.Runner("/weights/snap", modules=mods)
+        crop, hint = crop_and_hint(300, 200, (220, 10, 290, 50))
+        with self.assertRaises(WorkerRenderError) as caught:
+            runner.render_png(crop, hint, 300, 200, seed=1, steps=16, guidance_scaled=100)
+        self.assertEqual(caught.exception.error_code, "out_of_memory")
+        self.assertEqual(mods.encoder.device, "cpu")
+        self.assertEqual(runner.embeds, {})
+
+    def test_prompt_embeddings_are_kept_up_to_a_limit(self) -> None:
+        from deploy.cloud.common.flux3 import PROMPT_EMBEDS_KEPT
+
+        mods = flux3_modules()
+        runner = self.Runner("/weights/snap", modules=mods)
+        runner.load()
+        for index in range(PROMPT_EMBEDS_KEPT + 1):
+            runner.prompt_embeds(f"prompt {index}")
+        self.assertEqual(len(runner.embeds), PROMPT_EMBEDS_KEPT)
+        self.assertNotIn("prompt 0", runner.embeds)
+        self.assertIn(f"prompt {PROMPT_EMBEDS_KEPT}", runner.embeds)
+
     def test_the_marker_limit_is_more_than_max_16_or_1_percent(self) -> None:
         from deploy.cloud.common.flux3 import MARKER, marker_remaining
 
@@ -396,6 +480,9 @@ class Flux3EditRunnerTest(unittest.TestCase):
         pipeline = self.Runner("/weights/snap", modules=mods).load()
         self.assertEqual(mods.loads, [("/weights/snap", {"local_files_only": True}), ("init", "/weights/snap")])
         self.assertNotIn("prompt_upsampler", mods.blocks.sub_blocks)
+        self.assertNotIn("text_encoder", mods.blocks.sub_blocks)
+        self.assertEqual(mods.encoder.device, "cpu")
+        self.assertEqual(mods.encoder.dtype, "bfloat16")
         for loop in mods.loops:
             self.assertIsInstance(loop.sub_blocks["hold"], FakeHold)
             self.assertEqual(list(loop.sub_blocks)[-1], "hold")
@@ -410,6 +497,7 @@ class Flux3EditRunnerTest(unittest.TestCase):
             (flux3_modules(load_error=OSError("no such file")), "model_load_failed"),
             # load_components logs a component it cannot load and carries on.
             (flux3_modules(components={"vae": None}), "model_load_failed"),
+            (flux3_modules(encoder_components={"text_encoder": None}), "model_load_failed"),
         ]
         for mods, code in cases:
             with self.assertRaises(WorkerRenderError) as caught:
@@ -427,8 +515,8 @@ class Flux3EditRunnerTest(unittest.TestCase):
 
         work_w, work_h = working_size(300, 200)
         call = mods.pipeline.calls[0]
-        self.assertTrue(call["prompt"].startswith(FLUX3_PROMPT.format(location="upper right")))
-        self.assertTrue(call["prompt"].endswith(" Behind the lettering: a brick wall."))
+        self.assertTrue(call["prompt_embeds"].prompt.startswith(FLUX3_PROMPT.format(location="upper right")))
+        self.assertTrue(call["prompt_embeds"].prompt.endswith(" Behind the lettering: a brick wall."))
         self.assertEqual(call["image"].size, (work_w, work_h))
         self.assertEqual((call["width"], call["height"], call["num_inference_steps"]), (work_w, work_h, 16))
         self.assertEqual(call["latents"].shape, (1, 128, work_h // LATENT_STRIDE, work_w // LATENT_STRIDE))
@@ -448,7 +536,7 @@ class Flux3EditRunnerTest(unittest.TestCase):
             runner.render_png(crop, blank, 64, 64, seed=7, steps=16, guidance_scaled=100)
         first, second = mods.pipeline.calls
         np.testing.assert_array_equal(first["latents"].array, second["latents"].array)
-        self.assertEqual(first["prompt"], FLUX3_PROMPT.format(location="central"))
+        self.assertEqual(first["prompt_embeds"].prompt, FLUX3_PROMPT.format(location="central"))
 
     def test_hold_keeps_only_tokens_outside_the_grown_hint(self) -> None:
         mods = flux3_modules()

@@ -242,13 +242,30 @@ impl RenderRate {
         }
         if recipe.model_id.starts_with(FLUX3_BF16_MODEL_PREFIX) {
             // Bench 5 on an L40S (2026-10-26): 20.1 s for a crop worked at 1280 by 1280,
-            // 12.3 s per working megapixel; 5.6 s at 768, 9.5. The container is 40 GiB.
+            // 12.3 s per working megapixel; 5.6 s at 768, 9.5. The container is 28 GiB
+            // (bench 10, 2026-11-02: 24.6 GiB at most).
             return Self { qwen: false, retries: flux3_retries, work_long_side, megapixel, seconds_per_work_megapixel: 12.5,
-                cold_start_seconds: COLD_START_SECONDS, memory_gib: (40.0, 40.0) };
+                cold_start_seconds: COLD_START_SECONDS, memory_gib: (28.0, 28.0) };
         }
         let memory_gib = if recipe.model_id.contains("9B") { (48.0, 24.0) } else { (19.0, 24.0) };
         Self { qwen: false, retries: 0, work_long_side, megapixel, seconds_per_work_megapixel: SECONDS_PER_WORK_MEGAPIXEL,
             cold_start_seconds: COLD_START_SECONDS, memory_gib }
+    }
+
+    /// The rate on `gpu`, where it differs from [`Self::of`]. FLUX 3's rates are an
+    /// L40S's; the same crops took 3.5 times as long on an L4 and 2.5 times on an A10
+    /// (docs/research/flux3-klein-5_6b.md, bench 10, in bf16; the 4-bit build was timed
+    /// only on the A10, about 2 times its L40S time, and is held to the same factors).
+    pub(crate) fn on_gpu(recipe: &RenderRecipe, gpu: &str) -> Self {
+        let mut rate = Self::of(recipe);
+        if recipe.model_id.starts_with(FLUX3_MODEL_PREFIX) || recipe.model_id.starts_with(FLUX3_BF16_MODEL_PREFIX) {
+            rate.seconds_per_work_megapixel *= match gpu {
+                "L4" => 3.5,
+                "A10" => 2.5,
+                _ => 1.0,
+            };
+        }
+        rate
     }
 
     /// The render container's host memory on `provider`.
@@ -907,6 +924,7 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
     };
     let Some(recipe) = recipe.filter(|_| !regions.is_empty()) else { return Ok(proposal) };
     let price = gateway.gpu_price();
+    let estimate = price.as_ref().map_or(estimate, |(gpu, _)| Estimate::of(&regions, RenderRate::on_gpu(&recipe, gpu)));
     // Recheck after the network reads: another prepare could have taken the
     // last slot in the meantime.
     let mut cache = proposals.lock().map_err(|e| e.to_string())?;
@@ -1374,7 +1392,7 @@ fn prepare_stream_with_cache<G: CleanGateway + ?Sized>(
     let (gpu, per_hour) = gateway.gpu_price().ok_or("cloud_clean_stream_unpriced")?;
     let execution = if request.local_first { CleanExecution::Mixed } else { CleanExecution::Cloud };
     let page_indices: Vec<u32> = pages.iter().copied().collect();
-    let budget = Budget::new(&recipe, destination.provider, per_hour, 0.0);
+    let budget = Budget::new(&recipe, destination.provider, &gpu, per_hour, 0.0);
     let side = budget.rate.work_long_side;
     let region_cost_usd = budget.job_usd(Rect::new(0, 0, side, side));
     let suggested = budget.fixed_usd + page_indices.len() as f64 * SUGGESTED_REGIONS_PER_PAGE * region_cost_usd;
@@ -1449,8 +1467,8 @@ struct Budget {
 }
 
 impl Budget {
-    fn new(recipe: &RenderRecipe, provider: CloudProvider, gpu_usd_per_hour: f64, cap_usd: f64) -> Self {
-        let rate = RenderRate::of(recipe);
+    fn new(recipe: &RenderRecipe, provider: CloudProvider, gpu: &str, gpu_usd_per_hour: f64, cap_usd: f64) -> Self {
+        let rate = RenderRate::on_gpu(recipe, gpu);
         let per_second = usd_per_second(gpu_usd_per_hour, recipe, provider);
         Self { rate, per_second, fixed_usd: (rate.cold_start_seconds + IDLE_WINDOW_SECONDS) * per_second,
             cap_usd, spent_usd: 0.0 }
@@ -1924,8 +1942,8 @@ pub(crate) fn run_stream<T>(
 ) -> Summary {
     let scope = batch.scope;
     let mut progress = Progress::streaming(scope, batch.job_path, run_id, emit);
-    let per_hour = scope.price.as_ref().map_or(f64::INFINITY, |(_, per_hour)| *per_hour);
-    let mut budget = Budget::new(&scope.recipe, scope.provider, per_hour, terms.cap_usd);
+    let (gpu, per_hour) = scope.price.as_ref().map_or(("", f64::INFINITY), |(gpu, per_hour)| (gpu.as_str(), *per_hour));
+    let mut budget = Budget::new(&scope.recipe, scope.provider, gpu, per_hour, terms.cap_usd);
     let mut capped = false;
     let shared = Shared {
         schedule: Mutex::new(Schedule { regions: Vec::new(), slots: Vec::new(), preparing: 0, stop: false,

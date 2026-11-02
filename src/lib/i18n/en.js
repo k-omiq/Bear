@@ -338,6 +338,7 @@ export const en = {
           workspace: 'Workspace',
           model: 'Cloud model',
           modelNote: 'Choose the cloud model, GPU and idle time before you approve setup. Changing the model downloads a separate checkpoint.',
+          modelGpuNote: 'This model needs the {gpu} GPU for its memory. To use a smaller GPU, choose FLUX 3 Image Klein or FLUX.2 Klein 4B (4-bit).',
           noCleanModel: 'No cleaning model',
           noCleanNote: 'No cleaning model is installed, so cleaning does not run on this cloud GPU. Setup downloads only the analysis models and page denoise you select.',
           nothingChosen: 'Select a cleaning model, a cloud analysis model or page denoise. A setup needs at least one.',

@@ -276,6 +276,7 @@ export const fr = {
           workspace: 'Espace de travail',
           model: 'Modèle cloud',
           modelNote: 'Choisissez le modèle cloud, le GPU et le délai d’inactivité avant d’approuver la configuration. Changer de modèle télécharge un checkpoint distinct.',
+          modelGpuNote: 'Ce modèle a besoin du GPU {gpu} pour sa mémoire. Pour utiliser un GPU plus petit, choisissez FLUX 3 Image Klein ou FLUX.2 Klein 4B (4-bit).',
           noCleanModel: 'Aucun modèle de nettoyage',
           noCleanNote: 'Aucun modèle de nettoyage n’est installé, le nettoyage ne s’exécute donc pas sur ce GPU cloud. La configuration télécharge uniquement les modèles d’analyse et le débruitage des pages que vous sélectionnez.',
           nothingChosen: 'Sélectionnez un modèle de nettoyage, un modèle d’analyse cloud ou le débruitage des pages. Une configuration en nécessite au moins un.',

@@ -723,6 +723,12 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**FLUX 3 on small GPUs (2026-11-02): four gaps left after bench 10.** The 4-bit build has not run on an L4: Modal
+had none free for 28 minutes, so it ran on an A10, which has the same memory. bf16 on an L4 or A10 fails a crop larger
+than about 1440 x 1440 with `out_of_memory`, where an L40S takes it; no crop in the 138-region bench set is that big
+(largest 1296 x 976). The worker's `empty_cache` before a LaMa fill and the 28 GiB container were not run. Beam's GPUs
+were not tried, so Beam keeps the RTX5090 rule. Numbers: docs/research/flux3-klein-5_6b.md, bench 10.
+
 **Local model install on Windows (2026-11-02): fixed in code, not run on Windows.** Reports said FLUX and Qwen
 would not download on Windows, with no error text to go on, because beta.15 drops the reason. A token is not the
 cause: every repository is public and the installer removes any token. Windows' cu129 index had torch 2.9.0 and

@@ -41,6 +41,7 @@ from deploy.cloud.common.contract import PROTOCOL_VERSION, HealthResponse
 from deploy.cloud.common.manifest import (
     MODEL_NONE,
     MODEL_PROD_FLUX,
+    MODEL_PROD_FLUX3_BF16,
     MODEL_PROD_FLUX_9B,
     MODEL_PROD_QWEN,
     PROD_SNAPSHOT_9B_TOTAL_BYTES,
@@ -460,6 +461,16 @@ class ProviderCases:
         self.assertTrue(response["success"], response)
         self.assertEqual(response["data"]["model"]["model_id"], MODEL_PROD_FLUX_9B)
         self.assertEqual(response["data"]["compatibility_status"], "compatible")
+
+    def test_bf16_plan_starts_on_the_bigger_gpu_and_modal_lets_a_smaller_one_be_chosen(self) -> None:
+        bigger = "L40S" if self.provider == "modal" else "RTX5090"
+        plan = self.h.plan(options={"model_id": MODEL_PROD_FLUX3_BF16})
+        allocation = plan["resource_allocation"]
+        self.assertEqual(allocation["gpu"], bigger)
+        self.assertEqual(allocation["worker_memory_gib"], 28)
+        if self.provider == "modal":
+            chosen = self.h.plan(options={"model_id": MODEL_PROD_FLUX3_BF16, "gpu": "L4"})
+            self.assertEqual(chosen["resource_allocation"]["gpu"], "L4")
 
     def test_qwen_plan_and_apply(self) -> None:
         required_gpu = "L40S" if self.provider == "modal" else "RTX5090"
