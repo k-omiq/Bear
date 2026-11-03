@@ -3106,6 +3106,7 @@ export const en = {
     },
     picks: {
       local: 'Every region is cleaned starting from these picks, including regions detected earlier.',
+      localFlux: 'Every region is cleaned starting from these picks, including regions detected earlier. A local model such as FLUX can take minutes per region, and a region it refuses stays as it was.',
       // Clean on Cloud GPU: the cloud clean is strictly remote unless the
       // mixed box is ticked (`cloud_clean.rs#CleanExecution`).
       cloud: 'Every region goes to the cloud GPU.',

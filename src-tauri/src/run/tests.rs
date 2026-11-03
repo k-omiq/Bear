@@ -1173,10 +1173,12 @@ fn the_picks_read_the_seams_names_and_default_rather_than_falling_open() {
         Picks::from_args(Some("redraw"), Some("inpaint")),
         Picks { bubble: EnginePick::Lama, outside: EnginePick::Lama }
     );
-    // Neither rung above `HIGHEST_AUTOMATIC` is a pick: a run may not reach
-    // them, so reading one as a start would be a promise the ceiling takes
-    // straight back.
-    assert_eq!(Picks::from_args(Some("flux"), Some("cloud")), Picks::default());
+    // The cloud is a place the panel chooses, not a rung a region starts on.
+    assert_eq!(Picks::from_args(Some("cloud"), Some("cloud")), Picks::default());
+    assert_eq!(
+        Picks::from_args(Some("flux"), Some("ladder.rung.flux")),
+        Picks { bubble: EnginePick::Flux, outside: EnginePick::Flux },
+    );
 }
 
 /// The escalation loop's list: at or above the routed rung, at or below the
@@ -1234,7 +1236,31 @@ fn the_ladder_climbs_from_the_routed_rung_and_never_above_the_ceiling() {
 /// every list this loop produces, because the constant is the rule and the
 /// lists are whether anything reads it.
 #[test]
-fn rung_3a_is_not_reachable_from_an_automatic_run() {
+fn a_flux_pick_starts_on_flux_is_saved_as_flux_and_stays_under_the_ceiling() {
+    for route in [Route::Fill, Route::Inpaint] {
+        assert_eq!(start_rung(route, Engine::Flux, Some(EnginePick::Flux)), Some(Engine::Flux));
+        assert_eq!(stored_pick(route, Engine::Flux, Some(EnginePick::Flux)), "flux");
+        // A stored ceiling below it caps it, as it caps any other pick.
+        assert_eq!(start_rung(route, Engine::Lama, Some(EnginePick::Flux)), engine_for(route, Engine::Lama));
+    }
+    assert_eq!(parse_pick(Some(pick_name(EnginePick::Flux))), Some(EnginePick::Flux));
+}
+
+/// Nothing to run FLUX with is not a reason to clean with something else: the
+/// region is left as it was, under FLUX's own refusal, and no other model opens.
+#[test]
+fn a_flux_pick_that_cannot_run_declines_and_opens_no_other_model() {
+    let page = fixtures::by_name("l8").raster;
+    let fitted = fitted_over(&page, Rect::new(2, 2, 8, 8));
+    let mut rung2 = Rung2::new(Path::new("no-models"), Preference::CpuOnly);
+    rung2.flux.surrender();
+    let attempt = clean_region(&mut rung2, &page, &fitted, Engine::Flux, Some(EnginePick::Flux), 0.0).unwrap();
+    assert!(matches!(attempt, Attempt::Declined("decline.reason.rungUnavailable")));
+    assert!(matches!(rung2.state, Session::Unopened));
+}
+
+#[test]
+fn a_run_reaches_rung_3a_only_when_it_starts_there() {
     let sources = [
         fixtures::by_name("l8").raster,
         fixtures::by_name("l16").raster,
@@ -1257,6 +1283,13 @@ fn rung_3a_is_not_reachable_from_an_automatic_run() {
         for start in rungs {
             for ceiling in rungs {
                 let ladder = ladder_from(start, ceiling, page);
+                // A FLUX pick: that rung and nothing else, under a ceiling that
+                // lets it run at all.
+                if start == Engine::Flux {
+                    let expected: &[Engine] = if rung(ceiling) >= rung(Engine::Flux) { &[Engine::Flux] } else { &[] };
+                    assert_eq!(ladder, expected, "from a FLUX pick under {ceiling:?}");
+                    continue;
+                }
                 assert!(
                     !ladder.contains(&Engine::Flux),
                     "rung 3a reached the ladder from {start:?} under {ceiling:?}"

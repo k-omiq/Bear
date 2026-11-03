@@ -723,6 +723,16 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Text cleanup's FLUX pick (2026-11-02): one real run, on one Mac and one model.** Speech bubble text and Text outside
+bubbles can now name the local model from Settings. A real Detect then Clean with FLUX 3 Image Klein (sdnq) on this
+Mac cleaned a 1284 x 760 crop of a real page: 4 of 4 regions, 111.7 to 272.5 s each, 830 s in all, the first including
+the model load. The bubbles keep a faint outline of the old letters, 99% of their pixels at 249 or lighter and the
+darkest 204 to 221 on white paper; this is the render path a per-region FLUX edit already used, and it was not looked
+into. A region only just fits inside the 300 s `RENDER_TIMEOUT` here; one that runs past it is declined. Qwen,
+Klein 4B and Windows have not run a FLUX pick. Cancel waits for the region in progress, since the sidecar client has no
+way to stop a render. A pick lists only the one model set in Settings, not every installed model. The Screentone fill
+stays off the rows: it is not a model, and a run does not route to it yet.
+
 **FLUX 3 on small GPUs (2026-11-02): four gaps left after bench 10.** The 4-bit build has not run on an L4: Modal
 had none free for 28 minutes, so it ran on an A10, which has the same memory. bf16 on an L4 or A10 fails a crop larger
 than about 1440 x 1440 with `out_of_memory`, where an L40S takes it; no crop in the 138-region bench set is that big

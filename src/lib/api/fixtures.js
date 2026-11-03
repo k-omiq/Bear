@@ -300,7 +300,7 @@ export function defaultSettings() {
     theme: 'system',
     readingDirection: 'rtl',
     cloudEngines: 'blocked',
-    engineCeiling: 'lama',
+    engineCeiling: 'flux',
     originalView: 'hold',
     cleanAllDetectedText: false,
     retainDetectionMasks: true,

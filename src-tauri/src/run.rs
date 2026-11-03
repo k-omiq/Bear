@@ -201,8 +201,9 @@ pub(crate) fn rung(engine: Engine) -> u8 {
 /// by construction rather than by a check somebody could forget.
 pub const HIGHEST_LOCAL: Engine = Engine::Flux;
 
-/// The highest rung an **automatic** run may reach, whatever ceiling it is
-/// given.
+/// The highest rung a run may **climb to by itself**, whatever ceiling it is
+/// given. A rung above this one runs only when somebody named it: a FLUX pick
+/// on Text cleanup ([`EnginePick::Flux`]), or a region edit.
 ///
 /// [`HIGHEST_LOCAL`] answers "which rungs run on this machine" and this answers
 /// "which rungs a batch job may spend", and rung 3a is the one place the two
@@ -222,7 +223,7 @@ pub const HIGHEST_LOCAL: Engine = Engine::Flux;
 /// [`tests`](super::run::tests) pins it across every start and every ceiling.
 pub const HIGHEST_AUTOMATIC: Engine = Engine::Lama;
 
-/// Whether an automatic run may reach a rung at all.
+/// Whether a run may escalate to a rung without being told to.
 ///
 /// The two rungs above [`HIGHEST_AUTOMATIC`] are the two that need a
 /// confirmation `runClean` does not have: rung 4 spends the user's money and
@@ -461,13 +462,11 @@ pub(crate) fn engine_for(route: Route, ceiling: Engine) -> Option<Engine> {
 /// that impossible. So the tool window's two rows now name a rung each, and
 /// this is that rung.
 ///
-/// Rung 3a is deliberately not a variant. [`HIGHEST_AUTOMATIC`] caps every
-/// automatic run at LaMa, so a `Flux` pick could only ever be a control that
-/// did nothing; the tool window does not offer it and [`parse_pick`] does not
-/// read it.
-///
 /// **Still a start and never a ceiling.** [`clean_region`] escalates past a
-/// declined rung exactly as it did when this was two words.
+/// declined rung exactly as it did when this was two words. `Flux` is the one
+/// start with nothing above it: [`ladder_from`] answers it with rung 3a alone,
+/// so a region FLUX refuses is declined rather than cleaned by a cheaper model
+/// than the one the user chose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnginePick {
     /// Rung 0 - paint the hole from the paper around it.
@@ -476,6 +475,8 @@ pub enum EnginePick {
     Solid,
     /// Rung 2 - the inpainter.
     Lama,
+    /// Rung 3a - the local model Settings names (`fluxModel`).
+    Flux,
 }
 
 impl EnginePick {
@@ -484,6 +485,7 @@ impl EnginePick {
         match self {
             EnginePick::Fill | EnginePick::Solid => Engine::Fill,
             EnginePick::Lama => Engine::Lama,
+            EnginePick::Flux => Engine::Flux,
         }
     }
 }
@@ -561,6 +563,7 @@ pub(crate) fn pick_name(pick: EnginePick) -> &'static str {
         EnginePick::Fill => "fill",
         EnginePick::Solid => "solid",
         EnginePick::Lama => "lama",
+        EnginePick::Flux => "flux",
     }
 }
 
@@ -705,9 +708,8 @@ impl RunSelection {
 /// the rename is not a typo, and silently
 /// falling back to the default would move a user's run without telling them.
 ///
-/// `flux` and `cloud` are **not** picks. Neither is reachable from an automatic
-/// run ([`HIGHEST_AUTOMATIC`]), so reading either one as a start would be a
-/// promise the ceiling immediately takes back.
+/// `cloud` is **not** a pick: a clean sent to the cloud is a place the panel
+/// chooses and consents to, not a rung a region starts on.
 pub(crate) fn parse_pick(name: Option<&str>) -> Option<EnginePick> {
     let name = name?;
     match name.strip_prefix("ladder.rung.").unwrap_or(name) {
@@ -716,6 +718,7 @@ pub(crate) fn parse_pick(name: Option<&str>) -> Option<EnginePick> {
         // Denoise fill is gone; a stored or sent `denoise` starts on the fill.
         "denoise" => Some(EnginePick::Fill),
         "lama" | "redraw" | "inpaint" => Some(EnginePick::Lama),
+        "flux" => Some(EnginePick::Flux),
         _ => None,
     }
 }
@@ -787,19 +790,15 @@ pub(crate) fn start_rung(route: Route, ceiling: Engine, pick: Option<EnginePick>
 /// a region LaMa declines is declined, listed in review with its reason, and
 /// left exactly as it was, which is §6's own answer for the end of the ladder.
 ///
-/// **Rung 3a's FLUX sidecar is never reachable from an automatic run at all**,
-/// and that is now a filter rather than an absence. It used to be true because
-/// the array below did not mention it, which is a guarantee that lasts until
-/// somebody adds a rung to a list; it is true now because
-/// [`reachable_automatically`] says so and
-/// `rung_3a_is_not_reachable_from_an_automatic_run` checks every start against
-/// every ceiling. The rung exists - `cleaner_core::engines::flux` and
-/// `cleaner_core::sidecar` - and it is reached per region, deliberately, from
-/// Content-aware fill.
+/// **Rung 3a's FLUX sidecar is never escalated to**, and that is a filter rather
+/// than an absence: [`reachable_automatically`] says so and
+/// `a_run_reaches_rung_3a_only_when_it_starts_there` checks every start against
+/// every ceiling. It runs only when it is the start itself, which only a pick
+/// that names it can make it ([`start_rung`]), and then it is the whole list.
 fn ladder_from(start: Engine, ceiling: Engine, page: &Raster) -> Vec<Engine> {
     [Engine::Fill, Engine::Lama, Engine::Flux, Engine::Cloud]
         .into_iter()
-        .filter(|engine| reachable_automatically(*engine))
+        .filter(|engine| reachable_automatically(*engine) || (start == Engine::Flux && *engine == Engine::Flux))
         .filter(|engine| rung(*engine) >= rung(start) && rung(*engine) <= rung(ceiling))
         .filter(|engine| match engine {
             // Rung 0 is arithmetic over the page's own samples and serves every
@@ -808,6 +807,8 @@ fn ladder_from(start: Engine, ceiling: Engine, page: &Raster) -> Vec<Engine> {
             // The model rung answers for itself - a source it cannot carry is
             // a source it drops off the ladder rather than one it faults on.
             Engine::Lama => lama::applies(page),
+            // Refuses for itself, under its own key, as the render returns.
+            Engine::Flux => true,
             // Not on the automatic ladder yet: routing a region to it when the
             // ring is a screen is a separate step, measured on library chapters
             // before it is switched on (docs/patch-gradient-plan.md). The array
@@ -817,7 +818,7 @@ fn ladder_from(start: Engine, ceiling: Engine, page: &Raster) -> Vec<Engine> {
             // Already gone, by the filter above. Written out rather than left
             // to a wildcard so that this match cannot silently start answering
             // for a rung it has no business answering for.
-            Engine::Flux | Engine::Cloud => false,
+            Engine::Cloud => false,
             // The two hand tools are not on the ladder at all: `rung` sorts
             // them above every ceiling, so the range filter has already dropped
             // them and this arm is unreachable. Written out for the same reason
@@ -2032,6 +2033,9 @@ pub(crate) struct Rung2 {
     /// Whether the mask came from a detector, so its lettering may be extended
     /// ([`fit::lettering_extent`]). A hand edit says no.
     pub(crate) detected_mask: bool,
+    /// Rung 3a's child. It sits here because this is what a region is rendered
+    /// through, by a run and by an edit alike.
+    pub(crate) flux: crate::region::LocalFlux,
 }
 
 /// What a lazily-opened rung's session currently is.
@@ -2072,6 +2076,7 @@ impl Rung2 {
             state: Session::Unopened,
             finishing: None,
             detected_mask: true,
+            flux: crate::region::LocalFlux::default(),
         }
     }
 
@@ -2124,6 +2129,7 @@ impl Rung2 {
     /// this is a session nobody wanted on a machine that is fine. A later
     /// region gets a rung 2 again, and pays the 2.1 s once.
     fn release_if_spent(&mut self) -> bool {
+        self.flux.release_if_spent();
         let spent = match &self.state {
             Session::Held(held) => held.inpainter.spent(),
             _ => false,
@@ -2250,6 +2256,7 @@ impl Pipeline {
         if step == memory::Step::RefuseSidecar {
             // Refusing the rung is only half of it: the child is already up and
             // holding gigabytes, and this step exists to get them back.
+            self.rung2.flux.surrender();
             residency::evict(registry::Kind::Sidecar);
         }
         Some(memory::step_key(step))
@@ -2496,6 +2503,7 @@ impl Pipeline {
         self.rung2.preference = model_preference_from(settings, "inpainter")?;
         self.rung2.key = session_key(registry::Kind::Inpainter, &self.rung2.models, self.rung2.preference);
         self.rung2.finishing = crate::inference::cloud_clean::local_finishing_from_settings(settings)?;
+        self.rung2.flux = crate::region::LocalFlux::from_settings(Some(settings), self.app_data.clone());
         self.reader.preference = reader_preference(settings, host)?;
         self.reader.key = session_key(registry::Kind::Ocr, &self.reader.models, self.reader.preference);
         for (id, enabled, preference) in [
@@ -3962,8 +3970,8 @@ impl Pipeline {
                 Ok(attempt) => attempt,
                 // **The one thing the ladder can fail on is rung 2's
                 // own run call.** Every rung below it is arithmetic
-                // over the page's pixels and cannot fault, every rung
-                // above it is refused before it is reached, and every
+                // over the page's pixels and cannot fault, rung 3a
+                // answers a fault of its child as a refusal, and every
                 // other outcome - a refusal, a quality decline, an
                 // empty ladder - comes back as `Declined`. So an `Err`
                 // here names LaMa without having to be told.
@@ -4007,6 +4015,9 @@ impl Pipeline {
         let mut snapshot = params_snapshot(
             made.engine, &fitted, started.elapsed(), pad, made.tiles, &verdict,
         );
+        if made.engine == Engine::Flux {
+            self.rung2.flux.record(&mut snapshot);
+        }
         if let Some(matched) = made.matched.as_ref() {
             snapshot["postprocess"] = matched.provenance();
         }
@@ -4240,6 +4251,9 @@ impl Pipeline {
                 made.tiles,
                 &verdict,
             );
+            if made.engine == Engine::Flux {
+                self.rung2.flux.record(&mut snapshot);
+            }
             if let Some(matched) = made.matched.as_ref() {
                 snapshot["postprocess"] = matched.provenance();
             }
@@ -4290,6 +4304,7 @@ fn stored_pick(route: Route, ceiling: Engine, pick: Option<EnginePick>) -> &'sta
     match start_rung(route, ceiling, pick) {
         Some(Engine::Fill) if pick == Some(EnginePick::Solid) => "solid",
         Some(Engine::Fill) => "fill",
+        Some(Engine::Flux) => "flux",
         Some(_) => "lama",
         None => pick.map_or("lama", pick_name),
     }
@@ -4541,14 +4556,22 @@ pub(crate) fn render_rung_with_color(
                 }
             }
         }
-        // Rung 3a and rung 4, neither of which an automatic run can reach.
-        // `ladder_from` never names either, so this arm is unreachable - and
-        // it is a **refusal** rather than a fill for exactly that reason. The
-        // wildcard that used to stand here would have answered a `Flux` or a
-        // `Cloud` with rung 0's pixels wearing rung 3a's or rung 4's name, and
-        // a patch whose provenance says `flux` over a planar fill is a lie in
-        // the manifest that no later reader could detect.
-        Engine::Flux | Engine::Cloud => {
+        // Reached only from a FLUX pick (`ladder_from`). Every failure of the
+        // child is a refusal under its own key, so the region is declined and
+        // the run goes on to the next one.
+        Engine::Flux => {
+            let finishing = rung2.finishing;
+            Ok(match rung2.flux.render(crop, fitted, finishing) {
+                Ok(made) => Rendered::Made(Box::new(made)),
+                Err(reason) => Rendered::Refused(reason),
+            })
+        }
+        // Rung 4, which no run can reach. `ladder_from` never names it, so this
+        // arm is unreachable - and it is a **refusal** rather than a fill for
+        // exactly that reason. The wildcard that used to stand here would have
+        // answered it with rung 0's pixels wearing rung 4's name, and that is a
+        // lie in the manifest that no later reader could detect.
+        Engine::Cloud => {
             Ok(Rendered::Refused("decline.reason.rungUnavailable"))
         }
         // **A painted stroke never arrives here, and if it does the answer is a

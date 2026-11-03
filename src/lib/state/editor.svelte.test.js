@@ -874,7 +874,7 @@ describe('startRun local engine ceiling boundary', () => {
     { inputScope: 'chapter', expectedScope: 'chapter', paramCeiling: 'flux' },
     { inputScope: 'project', expectedScope: 'project', paramCeiling: 'cloud' },
   ])(
-    'always passes LOCAL_CEILING ("lama") to runClean for scope $inputScope (effective: $expectedScope)',
+    'always passes LOCAL_CEILING ("flux") to runClean for scope $inputScope (effective: $expectedScope)',
     async ({ inputScope, expectedScope, paramCeiling }) => {
       if (paramCeiling) {
         editor.toolParams.autoClean = {
@@ -898,7 +898,7 @@ describe('startRun local engine ceiling boundary', () => {
         mode: 'auto',
         chapterId: 'ch-test-1',
         pageIndex: 0,
-        engineCeiling: 'lama',
+        engineCeiling: LOCAL_CEILING,
         bubbleEngine: 'fill',
         outsideEngine: 'lama',
         outsideBubbles: 'review',

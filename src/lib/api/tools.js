@@ -93,10 +93,8 @@ export function cleanRegionAutomatically(region, page, ctx, options = {}) {
   // value outright let `startRun`'s local-only pin (the highest local rung)
   // reach *past* a user whose setting was lower - the same shape of defect as
   // reaching past a user who blocked the cloud.
-  const setting = ctx.settings.engineCeiling ?? 'lama'
+  const setting = ctx.settings.engineCeiling ?? 'flux'
   const requested = options.engineCeiling ? capRung(options.engineCeiling, setting) : setting
-  // Automatic runs never escalate beyond LaMa: FLUX and cloud are explicit manual tools only.
-  const ceiling = capRung(requested, 'lama')
   // The two rows now name rungs outright rather than the two families they
   // used to, so a pick *is* a starting rung -
   // capped by the ceiling, and still only a starting point. The retired
@@ -109,7 +107,8 @@ export function cleanRegionAutomatically(region, page, ctx, options = {}) {
       : (options.outsideEngine ?? 'lama'),
   )
   const started = pick === 'redraw' ? 'lama' : RUNGS.includes(pick) ? pick : 'fill'
-  const engine = capRung(started, ceiling)
+  // A run never climbs past LaMa by itself: FLUX runs only when a pick names it.
+  const engine = capRung(started, capRung(requested, started === 'flux' ? 'flux' : 'lama'))
   // Never flagged for having reconstructed. The native run writes
   // `fittingReconstructed` for no clean at all: a region escalating to LaMa is
   // the ladder working, not a failed fit, and flagging it here made every

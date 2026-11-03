@@ -237,6 +237,15 @@ describe('the Shapes tool', () => {
     }
   })
 
+  it('offers the local model in both of Text cleanup\'s rows, under its gate', () => {
+    for (const key of ['bubbleEngine', 'outsideEngine']) {
+      const row = toolSpec('autoClean').params.find((p) => p.key === key)
+      const flux = row?.options.find((option) => option.value === 'flux')
+      expect(flux).toMatchObject({ engine: 'flux', sidecar: true })
+      expect(row?.options.map((option) => option.value)).not.toContain('screentone')
+    }
+  })
+
   it('names the solid option and omits the fill engine', () => {
     const mode = param('mode')
     const solid = mode?.options.find((option) => option.value === SOLID)
@@ -290,10 +299,10 @@ describe('the Shapes tool', () => {
 
   // Denoise fill is gone: pages are denoised whole now, so each kind of text
   // starts on Fill, LaMa or a solid colour.
-  it('offers Fill, LaMa and Solid colour for each kind of text', () => {
+  it('offers Fill, LaMa, the local model and Solid colour for each kind of text', () => {
     for (const key of ['bubbleEngine', 'outsideEngine']) {
       expect(toolSpec('autoClean').params.find((p) => p.key === key)?.options.map((o) => o.value))
-        .toEqual(['fill', 'lama', SOLID])
+        .toEqual(['fill', 'lama', 'flux', SOLID])
     }
   })
 })

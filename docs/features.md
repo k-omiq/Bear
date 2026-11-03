@@ -95,7 +95,8 @@ detected with. **Text** and **Outside bubbles** are Detect and clean's choices a
 Chapter, or Project, offered only while nothing in the run goes to the cloud), **Detect on** and **Clean on** (This
 computer or Cloud GPU, set independently, each disabled with the reason when the cloud cannot take it), **Text**
 (Chosen languages or All text), **Speech bubble text** and **Text outside bubbles** (the engine each kind of text
-starts a local clean on: Fill and LaMa by default, or Solid colour) and **Outside bubbles** (Hold for
+starts a local clean on: Fill and LaMa by default, or Solid colour, or where this computer can run it the local model
+named in Settings) and **Outside bubbles** (Hold for
 review, the default, or Clean anyway; hidden under All text, which cleans outside bubbles regardless). **Mask padding**
 (0 to 32 px, 0 by default) grows every mask a run fits by that many page pixels, so more of the area around the
 letters is cleaned. From the keyboard, `;` and `'` step it, `Q` steps the Mode, `V` the Scope, `Cmd`/`Ctrl`+`Enter`
@@ -103,12 +104,12 @@ presses the run button and `Cmd`/`Ctrl`+`.` cancels the run. The slider is shown
 the value it holds, so the two steps and the one pass leave the same masks. Its **Apply** button re-pads the masks already detected on the page (or, for Chapter and Project,
 the open chapter) to the slider's value. Each one is grown from its unpadded mask, so going back to 0 gives the
 detected mask back exactly; a mask edit made over a padded mask is kept through later paddings. Cleaned layers never
-change. FLUX and the
-cloud engine are chosen per region only, after detection. The engine picks are a **starting point, not a ceiling**: if
-the quality check rejects what an engine produced, the run climbs to the next engine and tries again. A clean done on
-this computer never goes past LaMa; the heavier engines are reachable per region, where you choose them and wait for
-them. A region LaMa declines is left exactly as it was and listed for review, which is what the top of the ladder
-means.
+change. The cloud engine is chosen per region only, after detection. The engine picks are a **starting point, not a
+ceiling**: if the quality check rejects what an engine produced, the run climbs to the next engine and tries again. A
+clean on this computer climbs no higher than LaMa by itself. It runs a local model such as FLUX only when a pick names
+it, and then only that model: it can take minutes a region, and pressing Cancel waits for the region in progress. A
+region LaMa or the picked model declines is left exactly as it was and listed for review, which is what the top of the
+ladder means.
 
 Text **outside** a speech bubble is left alone unless **Outside bubbles** is set to clean it. Held for review, the
 default, sound effects and lettering over artwork are listed with a **Clean anyway** button, which is where the "Text

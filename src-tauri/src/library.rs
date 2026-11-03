@@ -1324,11 +1324,12 @@ pub(crate) fn region_of_patch(record: &PatchRecord, page: &ApiPage) -> ApiRegion
 pub(crate) fn region_of_detection(record: &DetectedRegion, page: &ApiPage) -> ApiRegion {
     let engine = match record.pick.as_str() {
         "lama" => Engine::Lama,
+        "flux" => Engine::Flux,
         _ => Engine::Fill,
     };
     let fill_mode = match record.pick.as_str() {
         "solid" => "solid",
-        "lama" => "reconstruct",
+        "lama" | "flux" => "reconstruct",
         _ => "match-surround",
     };
     let params = serde_json::json!({

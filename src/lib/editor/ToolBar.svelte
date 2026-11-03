@@ -604,7 +604,8 @@
    */
   const picksNoteKey = $derived(
     solidOnly ? 'tools.picks.solidOnly' :
-      cleanOn === 'local' ? 'tools.picks.local' : localFirst ? 'tools.picks.mixed' : 'tools.picks.cloud',
+      cleanOn !== 'local' ? (localFirst ? 'tools.picks.mixed' : 'tools.picks.cloud') :
+        pickKeys.some((key) => values[key] === 'flux') ? 'tools.picks.localFlux' : 'tools.picks.local',
   )
   const picksNoteId = `${uid}-picks-note`
 

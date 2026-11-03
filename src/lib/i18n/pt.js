@@ -2416,6 +2416,7 @@ export const pt = {
     },
     picks: {
       local: 'Todas as regiões são limpas começando por estas escolhas, inclusive as detectadas antes.',
+      localFlux: 'Todas as regiões são limpas começando por estas escolhas, inclusive as detectadas antes. Um modelo local como o FLUX pode levar minutos por região, e uma região que ele recusar fica como estava.',
       cloud: 'Todas as regiões vão para a GPU na nuvem.',
       mixed: 'Preencher e Cor sólida são tentados neste computador primeiro. O resto vai para a GPU na nuvem.',
       solidOnly: 'Somente os balões de fala sobre papel liso são limpos, a partir desta escolha. O resto continua detectado.',

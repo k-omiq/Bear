@@ -1027,6 +1027,23 @@ describe('the Text cleanup panel', () => {
     }
   })
 
+  // A FLUX pick is a cost somebody chose, so the panel says what it costs,
+  // and only where this computer is the one paying it.
+  it('warns about the time only while a pick runs a local model here', async () => {
+    for (const [cleanTarget, picks, noteKey] of /** @type {const} */ ([
+      ['local', { bubbleEngine: 'flux', outsideEngine: 'lama' }, 'tools.picks.localFlux'],
+      ['local', { bubbleEngine: 'fill', outsideEngine: 'flux' }, 'tools.picks.localFlux'],
+      ['local', { bubbleEngine: 'fill', outsideEngine: 'lama' }, 'tools.picks.local'],
+      ['cloud', { bubbleEngine: 'flux', outsideEngine: 'flux' }, 'tools.picks.cloud'],
+    ])) {
+      stores.session.cleanTarget = cleanTarget
+      const { view } = mountTool(textCleanup, { step: 'auto', ...picks })
+      await fireEvent.click(view.getByRole('button', { name: new RegExp(t('tools.action.advanced')) }))
+      expect(picksNote(view)?.textContent, JSON.stringify(picks)).toBe(t(noteKey))
+      cleanup()
+    }
+  })
+
   // Detect cleans nothing, so no pick of the panel's decides anything there.
   // A clean starts every region from the panel's picks (`run.rs`), so they
   // are drawn for Clean.

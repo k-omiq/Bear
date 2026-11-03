@@ -2416,6 +2416,7 @@ export const fr = {
     },
     picks: {
       local: 'Chaque zone est nettoyée en partant de ces choix, y compris les zones détectées auparavant.',
+      localFlux: 'Chaque zone est nettoyée en partant de ces choix, y compris les zones détectées auparavant. Un modèle local comme FLUX peut prendre plusieurs minutes par zone, et une zone qu’il refuse reste telle quelle.',
       cloud: 'Chaque zone part vers le GPU cloud.',
       mixed: 'Remplissage et Couleur unie sont d’abord essayés sur cet ordinateur. Le reste part vers le GPU cloud.',
       solidOnly: 'Seules les bulles sur papier uni sont nettoyées, à partir de ce choix. Le reste demeure détecté.',

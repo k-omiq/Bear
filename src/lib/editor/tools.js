@@ -245,21 +245,20 @@ export function color(key, labelKey, defaultValue = '#ffffff') {
  * under the ladder's own names - the same list and the same words a Layers
  * row's picker offers (`ROW_ENGINES`, `engineChoiceLabel`).
  *
- * **Rung 3a is not on it**, and that is not a naming decision: `runClean` has
- * no confirmation protocol, so `HIGHEST_AUTOMATIC` in `src-tauri/src/run.rs`
- * caps every automatic run at manga-LaMa whatever it is asked for. A FLUX
- * entry here would be a control that silently did nothing on every region of
- * every page. It stays reachable per region,
- * where a person chooses it and waits for it.
+ * Rung 3a is on it, for a machine that can run it, under the name of the model
+ * Settings holds. The run spends its seconds a region because the person chose
+ * that here, and the panel says so (`tools.picks.localFlux`).
  *
  * A choice here is a **starting point, not a ceiling**: `clean_region` in
  * `src-tauri/src/run.rs` still escalates when the quality metric declines a
  * patch, so picking `fill` for a bubble that turns out to be screentone still
- * ends on the inpainter rather than on a hole.
+ * ends on the inpainter rather than on a hole. Nothing climbs to FLUX by itself
+ * (`HIGHEST_AUTOMATIC`), and a region FLUX refuses is declined, not handed down
+ * to a cheaper model than the one chosen.
  */
 // Screentone is a rung named by hand, never a start: `run.rs#parse_pick` does
 // not read it, because an automatic run does not route to it yet.
-const ENGINES = ROW_ENGINES.filter((rung) => rung !== 'flux' && rung !== 'screentone').map((rung) => ({
+const ENGINES = ROW_ENGINES.filter((rung) => rung !== 'screentone').map((rung) => ({
   value: rung,
   labelKey: engineChoiceLabel(rung),
   // Which rung this option *is*, so `ToolBar#optionsFor` can drop the ones
@@ -267,6 +266,9 @@ const ENGINES = ROW_ENGINES.filter((rung) => rung !== 'flux' && rung !== 'screen
   // from `value` because `value` is a tool parameter and could stop being a
   // rung name; the gate is about the ladder either way.
   engine: rung,
+  // As in `MASK_ENGINES` below: the one rung with a reason to give when it is
+  // missing.
+  sidecar: rung === 'flux',
 }))
 
 /**
@@ -281,9 +283,7 @@ const ENGINES = ROW_ENGINES.filter((rung) => rung !== 'flux' && rung !== 'screen
  *
  * Unlike `ENGINES` above these are **rungs named outright, not picks**: what
  * `src-tauri/src/region.rs#named_rung` reads from `params.engine`, and it runs
- * that rung rather than starting there. Text cleanup's two choices offer the
- * two local ones, because `ENGINES` above drops `flux`
- * from a run nobody is watching. The difference between naming a rung and
+ * that rung rather than starting there. The difference between naming a rung and
  * picking one is what a run does after the first patch - Text cleanup escalates
  * past a declined rung, a named one is committed as it came out.
  *

@@ -51,7 +51,7 @@ describe('capRung', () => {
 })
 
 describe('cleanRegionAutomatically', () => {
-  it('never produces FLUX masks in automatic cleaning even if requested', () => {
+  it('reaches FLUX in automatic cleaning only when a pick names it', () => {
     const region = {
       id: 'r1',
       kind: 'outside',
@@ -73,9 +73,13 @@ describe('cleanRegionAutomatically', () => {
       created: () => '2026-01-01T00:00:00Z',
     }
 
-    const mask = cleanRegionAutomatically(region, page, ctx, { engineCeiling: 'flux', outsideEngine: 'flux' })
-    expect(mask.provenance.engine).toBe('lama')
-    expect(mask.provenance.engine).not.toBe('flux')
+    const climbed = cleanRegionAutomatically(region, page, ctx, { engineCeiling: 'flux', outsideEngine: 'lama' })
+    expect(climbed.provenance.engine).toBe('lama')
+    const picked = cleanRegionAutomatically(region, page, ctx, { engineCeiling: 'flux', outsideEngine: 'flux' })
+    expect(picked.provenance.engine).toBe('flux')
+    // A stored ceiling below it caps it, as it caps any other pick.
+    const capped = cleanRegionAutomatically(region, page, { ...ctx, settings: { engineCeiling: 'lama' } }, { outsideEngine: 'flux' })
+    expect(capped.provenance.engine).toBe('lama')
   })
 
   it('caps automatic cleaning to LaMa when legacy cloud ceiling is passed', () => {

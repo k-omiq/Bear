@@ -708,19 +708,8 @@ enum Outcome {
 /// the ordinary edit still costs no session, and the second edit in a row
 /// costs no *load*.
 struct Bench {
-    app_data: Option<PathBuf>,
-    sidecar_override: Option<String>,
-    flux_model: Option<String>,
-    /// The `fluxBackend` preference as stored: `auto`, `mflux`, `sdnq`, or
-    /// absent. Resolved by [`flux_backend`] rather than here, so the default
-    /// lives in one place.
-    flux_backend: Option<String>,
     detector: run::OnDemand<Detector>,
     rung2: run::Rung2,
-    /// Rung 3a's child, held for the length of this edit and handed back to the
-    /// residency cache after it. See [`Bench::flux`].
-    flux: Option<flux::Inpainter>,
-    flux_key: Option<cleaner_core::residency::Key>,
     #[cfg(test)]
     detected_seed: Option<Mask>,
 }
@@ -730,9 +719,6 @@ impl Bench {
         use tauri::Manager;
         let app_data = app.path().app_data_dir().ok();
         let settings = crate::settings::read(app).ok();
-        let sidecar_override = setting_str(settings.as_ref(), SIDECAR_PATH_KEYS);
-        let flux_model = setting_str(settings.as_ref(), FLUX_MODEL_KEYS);
-        let flux_backend = setting_str(settings.as_ref(), FLUX_BACKEND_KEYS);
         // The runtime is downloaded after install, so this can legitimately
         // fail - and a failure is not fatal here the way it is for a run:
         // rung 0 is arithmetic over the page's own samples and needs no
@@ -761,15 +747,10 @@ impl Bench {
         rung2.finishing = settings.as_ref()
             .and_then(|settings| crate::inference::cloud_clean::local_finishing_from_settings(settings).ok())
             .flatten();
+        rung2.flux = LocalFlux::from_settings(settings.as_ref(), app_data.clone());
         Bench {
             rung2,
             detector: run::detector_on_demand(&holding(run::DETECTOR), detector_preference),
-            flux: None,
-            flux_key: None,
-            app_data,
-            sidecar_override,
-            flux_model,
-            flux_backend,
             #[cfg(test)]
             detected_seed: None,
         }
@@ -838,6 +819,95 @@ impl Bench {
         Some((seed, detection.segmentation.proxy_scale()))
     }
 
+    /// Rung 3a named outright, scored as a rung is.
+    fn flux(
+        &mut self,
+        page: &Raster,
+        fitted: &Fitted,
+        finishing: Option<cleaner_core::engines::postprocess::Choice>,
+    ) -> Result<(run::Made, quality::Assessment), &'static str> {
+        let made = self.rung2.flux.render(page, fitted, finishing)?;
+        let verdict = quality::assess(page, &made.mask, &made.pixels, fit::page_noise_sigma(page));
+        Ok((made, verdict))
+    }
+}
+
+impl Drop for Bench {
+    /// **The end of a click is not a reason to unload anything.** The sessions
+    /// and the child hand themselves back - [`crate::run::OnDemand`], the rung
+    /// holders and [`LocalFlux`] each have their own `Drop`.
+    fn drop(&mut self) {
+        // A click is a safe point of exactly the kind a run's region boundary
+        // is: this edit's buffers are gone and the next one's do not exist. So
+        // it is where a parked session whose grace elapsed while the user was
+        // reading goes back (nothing here can interrupt the edit that is
+        // running).
+        cleaner_core::residency::sweep();
+    }
+}
+
+/// Rung 3a on this computer: the settings that choose the child, and the child.
+/// A run and a region edit render through this one, so a region comes out the
+/// same whichever of them asked.
+#[derive(Default)]
+pub(crate) struct LocalFlux {
+    held: Option<flux::Inpainter>,
+    key: Option<cleaner_core::residency::Key>,
+    app_data: Option<PathBuf>,
+    sidecar_override: Option<String>,
+    model: Option<String>,
+    /// The `fluxBackend` preference as stored: `auto`, `mflux`, `sdnq`, or
+    /// absent. Resolved by [`flux_backend`] rather than here, so the default
+    /// lives in one place.
+    backend: Option<String>,
+    /// What the last render's composite aligned the answer by, until
+    /// [`LocalFlux::record`] writes it on the patch.
+    tone: Option<ToneReport>,
+    /// The pressure ladder took the child back, and this is a latch for the
+    /// reason [`run::Rung2::surrender`] gives: a run must not spawn it again.
+    surrendered: bool,
+}
+
+impl LocalFlux {
+    pub(crate) fn from_settings(settings: Option<&serde_json::Value>, app_data: Option<PathBuf>) -> LocalFlux {
+        let mut local = LocalFlux::default();
+        local.app_data = app_data;
+        local.sidecar_override = setting_str(settings, SIDECAR_PATH_KEYS);
+        local.model = setting_str(settings, FLUX_MODEL_KEYS);
+        local.backend = setting_str(settings, FLUX_BACKEND_KEYS);
+        local
+    }
+
+    /// The model a render runs now.
+    pub(crate) fn model(&self) -> &str {
+        self.model.as_deref().filter(|s| !s.is_empty()).unwrap_or(FLUX_MODEL)
+    }
+
+    /// What a FLUX patch records beyond a rung's usual fields.
+    pub(crate) fn record(&mut self, snapshot: &mut serde_json::Value) {
+        snapshot["flux_model"] = serde_json::json!(self.model());
+        if let Some(tone) = self.tone.take() {
+            snapshot["tone"] = tone.provenance();
+        }
+    }
+
+    /// End the child under memory pressure, and open no other in this run.
+    pub(crate) fn surrender(&mut self) {
+        self.held = None;
+        self.key = None;
+        self.surrendered = true;
+    }
+
+    /// End a child nothing is using: the close button, or its idle grace. A
+    /// later region opens another.
+    pub(crate) fn release_if_spent(&mut self) {
+        use cleaner_core::residency::Resident;
+        if self.held.as_ref().is_some_and(Resident::spent) {
+            self.held = None;
+            self.key = None;
+        }
+    }
+
     /// Rung 3a, on a child that **survives the click**.
     ///
     /// It used to be a process per region: spawned here, killed when the edit
@@ -861,15 +931,18 @@ impl Bench {
     ///
     /// The tone report is the one the composite aligned the answer by
     /// (`PreparedRender::composite`), for the patch's provenance, which
-    /// records it the way a cloud render's attach does. With a `finishing`
-    /// the answer is finished by it instead, as a LaMa tile's is, and the
-    /// report is in the made patch's `matched`.
-    fn flux(
+    /// [`LocalFlux::record`] writes the way a cloud render's attach does. With
+    /// a `finishing` the answer is finished by it instead, as a LaMa tile's is,
+    /// and the report is in the made patch's `matched`.
+    pub(crate) fn render(
         &mut self,
         page: &Raster,
         fitted: &Fitted,
         finishing: Option<cleaner_core::engines::postprocess::Choice>,
-    ) -> Result<(run::Made, quality::Assessment, Option<ToneReport>), &'static str> {
+    ) -> Result<run::Made, &'static str> {
+        if self.surrendered {
+            return Err("decline.reason.rungUnavailable");
+        }
         let env_var = std::env::var("MANGA_CLEANER_SIDECAR").ok();
         let explicit = self
             .sidecar_override
@@ -881,12 +954,9 @@ impl Bench {
             eprintln!("manga-cleaner: local FLUX has no helper install under {roots:?}");
             return Err("decline.reason.rungUnavailable");
         };
-        let model = self
-            .flux_model
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(FLUX_MODEL);
-        let backend = sidecar::models::backend_for(model, flux_backend(self.flux_backend.as_deref()));
+        let model = self.model().to_owned();
+        let model = model.as_str();
+        let backend = sidecar::models::backend_for(model, flux_backend(self.backend.as_deref()));
         // Ahead of the memory question, and for the gate's own reason: a backend
         // with no rendering path here is refused whatever the machine measures.
         // Per *backend* rather than per platform since `sdnq` - the only thing
@@ -901,8 +971,8 @@ impl Bench {
             cleaner_core::registry::Kind::Sidecar,
             format!("{}|{}|{model}", install.python.display(), backend.id()),
         );
-        if self.flux.is_none() {
-            self.flux = match cleaner_core::residency::checkout::<flux::Inpainter>(&key)
+        if self.held.is_none() {
+            self.held = match cleaner_core::residency::checkout::<flux::Inpainter>(&key)
                 .and_then(|mut held| held.answers().then_some(held)) {
                 Some(held) => Some(held),
                 None => Some(
@@ -910,18 +980,18 @@ impl Bench {
                         .map_err(flux_reason)?,
                 ),
             };
-            self.flux_key = Some(key);
+            self.key = Some(key);
         }
-        let inpainter = self.flux.as_mut().expect("just opened");
+        let inpainter = self.held.as_mut().expect("just opened");
         let rendered = inpainter.render_with(page, fitted, finishing);
         if inpainter.gone() {
             // Dropped, which ends the child: the next region opens another.
-            self.flux = None;
-            self.flux_key = None;
+            self.held = None;
+            self.key = None;
         }
         let rendered = rendered.map_err(flux_reason)?;
-        let tone = rendered.tone;
-        let made = run::Made {
+        self.tone = rendered.tone;
+        Ok(run::Made {
             engine: Engine::Flux,
             mask: rendered.mask,
             ink: fitted.ink.clone(),
@@ -934,29 +1004,18 @@ impl Bench {
             pad: rendered.pad,
             tiles: Some(rendered.tiles),
             matched: rendered.matched,
-        };
-        let verdict = quality::assess(page, &made.mask, &made.pixels, fit::page_noise_sigma(page));
-        Ok((made, verdict, tone))
+        })
     }
 }
 
-impl Drop for Bench {
-    /// **The end of a click is not a reason to unload anything.** The ONNX
-    /// sessions hand themselves back - [`crate::run::OnDemand`] and the two
-    /// rung holders each have their own `Drop` - and this is the child, which
-    /// nothing else owns. A child that is spent goes instead of being parked,
-    /// which [`cleaner_core::residency::checkin`] decides and this does not
-    /// have to.
+impl Drop for LocalFlux {
+    /// The child outlives the edit or the run that opened it. A child that is
+    /// spent goes instead of being parked, which
+    /// [`cleaner_core::residency::checkin`] decides and this does not have to.
     fn drop(&mut self) {
-        if let (Some(inpainter), Some(key)) = (self.flux.take(), self.flux_key.take()) {
+        if let (Some(inpainter), Some(key)) = (self.held.take(), self.key.take()) {
             cleaner_core::residency::checkin(key, inpainter);
         }
-        // A click is a safe point of exactly the kind a run's region boundary
-        // is: this edit's buffers are gone and the next one's do not exist. So
-        // it is where a parked session whose grace elapsed while the user was
-        // reading goes back (nothing here can interrupt the edit that is
-        // running).
-        cleaner_core::residency::sweep();
     }
 }
 
@@ -976,7 +1035,7 @@ impl LocalModels {
     /// The model a FLUX render on this computer runs now, as [`Bench::flux`]
     /// picks it.
     pub(crate) fn flux_model(&self) -> &str {
-        self.0.flux_model.as_deref().filter(|s| !s.is_empty()).unwrap_or(FLUX_MODEL)
+        self.0.rung2.flux.model()
     }
 
     /// `fitted` on `page` rendered by `engine`, LaMa or FLUX on this computer,
@@ -990,7 +1049,7 @@ impl LocalModels {
         finishing: cleaner_core::engines::postprocess::Choice,
     ) -> Result<run::Made, &'static str> {
         match engine {
-            Engine::Flux => self.0.flux(page, fitted, Some(finishing)).map(|(made, _, _)| made),
+            Engine::Flux => self.0.rung2.flux.render(page, fitted, Some(finishing)),
             Engine::Lama => {
                 if !cleaner_core::engines::lama::applies(page) {
                     return Err("decline.reason.rungUnavailable");
@@ -1633,9 +1692,6 @@ fn edit_with_bench_render(
     bench.rung2.detected_mask = detection.is_some() && stored_hole.is_none() && prepared_text.is_none();
 
     let started = Instant::now();
-    // What local FLUX aligned its answer's tone by, recorded as a cloud
-    // render's attach records it.
-    let mut tone: Option<ToneReport> = None;
     let (mut made, mut verdict) = if let Some(renderer) = test_renderer.as_mut() {
         let made = renderer(page, &fitted);
         let verdict = quality::assess(page, &made.mask, &made.pixels, noise);
@@ -1662,8 +1718,8 @@ fn edit_with_bench_render(
         match plan.choice {
             Choice::Ladder(pick) => {
                 // The same ceiling a run gets, and the same cap: a *pick* is a
-                // starting rung, and nothing that starts by itself may reach rung
-                // 3a or the cloud.
+                // starting rung, and nothing that starts below rung 3a may climb
+                // to it or to the cloud.
                 match run::clean_region(&mut bench.rung2, page, &fitted, ceiling, pick, noise) {
                     Ok(run::Attempt::Cleaned(made, verdict)) => (*made, verdict),
                     Ok(run::Attempt::Declined(reason)) => return Ok(Outcome::Refused(reason)),
@@ -1672,13 +1728,13 @@ fn edit_with_bench_render(
             }
             // The finishing a run gives this computer's models: FLUX here is
             // finished as LaMa is.
-            Choice::Exact(Engine::Flux) => match bench.flux(page, &fitted, bench.rung2.finishing) {
-                Ok((made, verdict, aligned)) => {
-                    tone = aligned;
-                    (made, verdict)
+            Choice::Exact(Engine::Flux) => {
+                let finishing = bench.rung2.finishing;
+                match bench.flux(page, &fitted, finishing) {
+                    Ok(scored) => scored,
+                    Err(reason) => return Ok(Outcome::Refused(reason)),
                 }
-                Err(reason) => return Ok(Outcome::Refused(reason)),
-            },
+            }
             Choice::Exact(engine) => {
                 match run::render_rung(&mut bench.rung2, engine, page, &fitted) {
                     Err(detail) => return Ok(Outcome::Refused(engine_fault(&detail))),
@@ -1731,10 +1787,7 @@ fn edit_with_bench_render(
         &verdict,
     );
     if made.engine == Engine::Flux {
-        snapshot["flux_model"] = serde_json::json!(bench.flux_model.as_deref().unwrap_or(FLUX_MODEL));
-    }
-    if let Some(tone) = tone.as_ref() {
-        snapshot["tone"] = tone.provenance();
+        bench.rung2.flux.record(&mut snapshot);
     }
     if let Some(matched) = made.matched.as_ref() {
         snapshot["postprocess"] = matched.provenance();
@@ -2552,14 +2605,8 @@ mod text_shape_boundary_tests {
         };
         let models = root.join("no-models");
         let mut bench = Bench {
-            app_data: None,
-            sidecar_override: None,
-            flux_model: None,
-            flux_backend: None,
             detector: run::detector_on_demand(&models, Preference::CpuOnly),
             rung2: run::Rung2::new(&models, Preference::CpuOnly),
-            flux: None,
-            flux_key: None,
             detected_seed: None,
         };
         let edit_plan = Plan {
@@ -4258,10 +4305,11 @@ fn step(current: Engine, up: bool) -> Engine {
 /// held back is the last one that should be pinned to a declined patch.
 ///
 /// So every word [`run::parse_pick`] knows is a start, and anything left is a
-/// rung named outright: `flux`, which no automatic run may reach and which is
-/// therefore only ever an explicit request.
+/// rung named outright. `flux` is both, and is read as the second: it has
+/// nothing to escalate to, and an exact rung keeps a render the metric marks
+/// for review, where a person asked for it and waited for it.
 fn choice_for(engine: Option<&str>, fallback: EnginePick) -> Choice {
-    match run::parse_pick(engine) {
+    match run::parse_pick(engine).filter(|pick| *pick != EnginePick::Flux) {
         Some(pick) => Choice::Ladder(Some(pick)),
         None => match named_rung(engine) {
             Some(rung) => Choice::Exact(rung),
@@ -6732,8 +6780,8 @@ fn current_region(
 /// `outsideEngine` row of the tool window, recorded as a preference with no
 /// automatic effect. This is the effect. It moves the start and nothing
 /// else: the ladder escalates past it exactly as a run's would, and it is
-/// capped at [`crate::run::HIGHEST_AUTOMATIC`] unless the caller names rung 3a
-/// outright.
+/// capped at [`crate::run::HIGHEST_AUTOMATIC`] unless the row names rung 3a,
+/// which is then the one rung it runs.
 ///
 /// `params` carries a cloud grant, as for `rerunMask`. Consent binds a grant
 /// to a stored region, so the cloud can render a region only once it has a
@@ -8813,14 +8861,8 @@ mod tests {
     pub(super) fn test_bench(root: &std::path::Path) -> Bench {
         let models = root.join("no-models");
         Bench {
-            app_data: None,
-            sidecar_override: None,
-            flux_model: None,
-            flux_backend: None,
             detector: run::detector_on_demand(&models, Preference::CpuOnly),
             rung2: run::Rung2::new(&models, Preference::CpuOnly),
-            flux: None,
-            flux_key: None,
             detected_seed: None,
         }
     }

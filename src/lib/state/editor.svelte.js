@@ -69,7 +69,9 @@ export const TOOLS = /** @type {const} */ ([
 
 /**
  * The ceiling every automatic run is pinned to: the highest rung of
- * `src/lib/model/ladder.js` that runs on this machine.
+ * `src/lib/model/ladder.js` that runs on this machine. A run reaches FLUX only
+ * when a Text cleanup pick names it; `HIGHEST_AUTOMATIC` in
+ * `src-tauri/src/run.rs` stops one climbing there by itself.
  *
  * This is the enforcement of the ruling in `src/lib/editor/tools.js` - a batch
  * run is local-only - and it lives here, at the one call site that sends, so
@@ -83,7 +85,7 @@ export const TOOLS = /** @type {const} */ ([
  * If `runClean` ever grows a consent step, this constant is what gives way -
  * not the gate in `src/lib/editor/cloudflow.svelte.js`.
  */
-export const LOCAL_CEILING = 'lama'
+export const LOCAL_CEILING = 'flux'
 
 export const MIN_ZOOM = 0.4
 export const MAX_ZOOM = 2.4
