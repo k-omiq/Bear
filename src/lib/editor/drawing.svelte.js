@@ -61,7 +61,7 @@ import { paintParamsOf, paintPointsOf } from './paint.js'
 import { renderRegionInCloud } from './toolapply.svelte.js'
 import { reportRegionEditFailure } from './maskactions.svelte.js'
 import { holdDrawn } from './retouch.svelte.js'
-import { SELECTION_TOOLS, SOLID, TOOL_SPECS, selectsArea, toolSpendsCloud } from './tools.js'
+import { SELECTION_TOOLS, SOLID, TOOL_SPECS, isCopyMode, selectsArea, toolSpendsCloud } from './tools.js'
 
 export { paintParamsOf }
 
@@ -629,7 +629,7 @@ function withoutCloud(tool, params) {
  * @returns {Promise<boolean>}
  */
 async function cloneInto(spec) {
-  if (spec.params.mode === 'region') return createMask(spec)
+  if (isCopyMode(spec.params.mode)) return createMask(spec)
   if (!spec.clone) return false
   return createMask(spec, {
     cloneSource: spec.clone.source,

@@ -320,7 +320,7 @@ at 100, aligned.
 - **Straight lines.** `Shift`-click draws a line from where the last stroke ended. `Shift` held during a drag keeps
   the stroke horizontal or vertical.
 - **Keys.** `[` and `]` make the brush smaller and larger, and `Shift`+`[` and `Shift`+`]` step the hardness by 10,
-  as they do for every brush. `C` swaps Stamp for Region copy and `Shift`+`C` swaps aligned for non-aligned. With the
+  as they do for every brush. `C` steps through Stamp, Region copy and Live copy, and `Shift`+`C` swaps aligned for non-aligned. With the
   page focused, `S` samples under the pointer. `Enter` opens one dab, the arrows move it (five steps with
   `Shift`), and `Enter` stamps it. `Escape` drops an open stroke, and pressed again it clears the source.
 
@@ -340,6 +340,14 @@ Right-click a copied region on the canvas or its Layers row and choose **Duplica
   original selection at its destination, preserving the captured pixels and the opaque interior.
 - **New selection** starts another copy. Copies, placement, rotation, and adjustment bursts use the normal layer
   history and persist with the project. Export uses the same native masks and transforms as the committed canvas.
+- The Eraser takes a copy off where it is drawn, moved or turned, as it does any other layer.
+
+**Live copy** is a third mode, chosen the same way and set up like Region copy. The copy stays linked to the area it
+was picked from: when a layer there changes (a clean, a paint stroke, an erase, an undo), the copy is drawn again
+from that area, wherever it was moved. What the Eraser took off a live copy stays off. A Region copy keeps the artwork
+it copied; a live one keeps showing what is there now. A live copy reads the page and every layer over its area but
+itself and live copies made after it. Not yet on a chapter with a turned page, and only from its own page in a
+long strip.
 
 ### Patch
 
@@ -372,8 +380,11 @@ one-bit pages are refused, as they are for the Brush.
 
 Key `G`. The Gradient tool fills a selection with a gradient. Select the area with the Region copy shapes, then drag
 inside it to set where the gradient starts and ends; `Shift` turns the line in steps of 15 degrees. The two ends stay
-on the page as handles, and the selection shows a live preview of the gradient while you move them. **Apply** or
-`Enter` draws it, and Escape drops it.
+on the page as handles. The gradient is live: as soon as the line is set it is on the page, and every change after
+that (the handles, the stops, Opacity, Feather, the toggles) shows a moment after you make it, with a preview while a
+handle moves. **Done** or `Enter` lets the selection go; while a run holds the page, Done keeps it so it can be sent
+once the page is free. Escape, Undo and Redo let it go too, and drop a change the page has not shown yet. Each change
+that reaches the page is one undo step.
 
 - **Type**: Linear, Radial, Angle, Reflected, Diamond or Auto.
 - **Auto** (`Shift`+`G` arms the tool with it) needs no line and no stops. Lasso the lettering on a shaded bubble
@@ -385,18 +396,20 @@ on the page as handles, and the selection shows a live preview of the gradient w
 - **Stops.** The swatch on the bar opens the colour and opacity stops: add, move or remove each one, pick a colour
   stop's colour with the picker or from the page with its eyedropper. Two presets fill them in: Foreground to
   background and Foreground to transparent, where foreground and background are the two saved colours on the tool rail.
-- **Reverse** flips the gradient. **Dither**, on by default, adds a little noise so a slow ramp shows no bands.
+- **Reverse** flips the gradient. **Reduce banding** (dithering), on by default, adds half a level of noise so a slow
+  ramp shows no stripes.
   **Opacity** is the layer's, and **Feather**, up to 20 px, softens the selection's edge.
 - **Match surroundings** reads the ring of page around the selection and sets the type, the line and the stops to
   continue it, for a soft shadow or a sky that a letter sat across.
-- **As screentone** draws the gradient as the page's own dot screen, its dots growing and shrinking with the tone,
-  on a gray page with a screen around the selection. The dots are copied from the screen around the selection, so
+- **Use page dots** draws the gradient as the page's own dot screen, its dots growing and shrinking with the tone,
+  on a page saved in greyscale with a screen around the selection (a black and white scan saved in colour gets a
+  plain gradient). The dots are copied from the screen around the selection, so
   only tones the screen already has nearby come out as dots; a gradient that runs far lighter or darker than its
   surroundings is filled from patches there instead. Where there is no screen, or on a colour page, a plain gradient
   is drawn and the app says so.
 
 The gradient is kept with the layer. Select a gradient layer with the tool armed and **Edit gradient** brings back
-its line, stops and options; Apply then redraws that layer in place. Each Apply is one undo step, and a gradient
+its line, stops and options; changes then redraw that layer in place, one undo step each, and a gradient
 layer can be moved, locked and faded like any paint layer. Indexed, CMYK and one-bit pages are refused.
 
 ## Layers and history

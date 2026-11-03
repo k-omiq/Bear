@@ -1654,8 +1654,8 @@ export function setMaskSelectMode(mode) {
 /**
  * The clone stamp's two keys. Pressed while another tool is active, either one
  * arms the clone stamp as it was left and changes nothing else, as `S` and
- * `X` arm the selection tool; with it armed, `C` swaps Stamp for Region copy
- * and `Shift+C` swaps aligned for non-aligned.
+ * `X` arm the selection tool; with it armed, `C` steps Stamp, Region copy and
+ * Live copy, and `Shift+C` swaps aligned for non-aligned.
  *
  * @param {'mode'|'alignment'} key
  */
@@ -2910,7 +2910,9 @@ export function cancelInteraction() {
   // shape must not also drop the selection the user was working against.
   if (clearDraft()) return true
   // Then a Patch or Gradient selection waiting for Apply: Escape abandons it,
-  // as it abandons a half-drawn shape, and leaves the page as it was.
+  // as it abandons a half-drawn shape. A Patch leaves the page as it was; a
+  // Gradient is live, so the page keeps what it already shows and only a
+  // change it has not shown yet is dropped (`retouch.svelte.js`).
   if (clearSelection()) return true
   // Then the stamp's sampled source, and only while the stamp is the armed
   // tool: nothing else could clear it, and for every other tool Escape has to

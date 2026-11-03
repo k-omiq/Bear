@@ -151,7 +151,8 @@ export function applyToolToRegion(region, page, ctx, options) {
   // mode is: it lays down a colour somebody chose rather than asking an engine
   // what belongs there, so it takes the same branch here and the same branch
   // in `region.rs#paint_plan`, and it is refused on the same colour modes.
-  const regionalCopy = options.tool === 'cloneStamp' && params.mode === 'region'
+  // Region copy, and Live copy, which is one that stays linked to its area.
+  const regionalCopy = options.tool === 'cloneStamp' && (params.mode === 'region' || params.mode === 'live')
   const solidShape = options.tool === 'shapes' && params.mode === 'solid'
   // The Patch tool and the Gradient tool (`region/retouch.rs`): paint, and
   // refused on the same colour modes, 16-bit gray and RGB besides.
@@ -240,6 +241,7 @@ export function applyToolToRegion(region, page, ctx, options) {
   }
   if (regionalCopy) {
     mask.provenance.params_snapshot.mode = 'region-copy'
+    if (params.mode === 'live') mask.provenance.params_snapshot.live = true
     mask.layer = { opacity: Number(params.opacity ?? 100), offsetX: 0, offsetY: 0, rotation: 0, locked: false, feather: Number(params.feather ?? 0), edgeOpacity: Number(params.edgeOpacity ?? 100) }
   }
   region.detected = true

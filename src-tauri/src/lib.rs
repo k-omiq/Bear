@@ -18,6 +18,7 @@ mod history;
 pub mod inference;
 mod jobs;
 mod library;
+mod livecopy;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
 mod measurement;

@@ -49,7 +49,8 @@
  * @property {boolean} proposing - Patch: the proposal has been asked for and has not come back
  * @property {{x: number, y: number}|null} start - Gradient: the line, page percent
  * @property {{x: number, y: number}|null} end
- * @property {string|null} regionId - Gradient: the layer being edited again, or null for a new one
+ * @property {string|null} regionId - Gradient: the layer being edited again, or the one its live changes made; null before the first
+ * @property {string|null} [liveKey] - Gradient: what the page shows of it (`retouch.svelte.js#liveKey`), null before the first commit
  */
 
 export const draft = $state({

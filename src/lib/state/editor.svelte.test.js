@@ -1307,6 +1307,8 @@ describe('the tool slots', () => {
     cycleToolMode(1)
     expect(editor.toolParams.cloneStamp.mode).toBe('region')
     cycleToolMode(1)
+    expect(editor.toolParams.cloneStamp.mode).toBe('live')
+    cycleToolMode(1)
     expect(editor.toolParams.cloneStamp.mode).toBe('stamp')
 
     editor.tool = 'aiMaskBrush'

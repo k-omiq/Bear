@@ -2,7 +2,8 @@
  * The Patch tool and the Gradient tool between the gesture and the commit
  * (`retouch.svelte.js`): a drag holds a selection rather than committing,
  * the Patch's source is proposed and can be moved, the Gradient waits for its
- * line, and Apply sends one `createRegion` that is one undo step.
+ * line, and Apply sends one `createRegion` that is one undo step. A gradient
+ * with a line is live: its changes go by themselves, and Apply is Done.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -183,7 +184,7 @@ describe('the Gradient tool', () => {
     expect(editor.toolParams.gradient.colors).toEqual([{ at: 0, color: '#281e1e' }, { at: 1, color: '#e1e1e1' }])
   })
 
-  it('reopens a gradient layer and re-renders that layer on Apply', async () => {
+  it('reopens a gradient layer, and Done with nothing changed sends nothing', async () => {
     const api = backend()
     setBackend(api)
     const region = {
@@ -213,10 +214,13 @@ describe('the Gradient tool', () => {
     expect(reopenGradient(region)).toBe(true)
     expect(editor.toolParams.gradient).toMatchObject({ kind: 'diamond', reverse: true, dither: false, asScreentone: true, feather: 4, opacity: 50, shape: 'ellipse' })
     expect(draft.selection).toMatchObject({ tool: 'gradient', regionId: 'g1', start: { x: 20, y: 20 } })
+    // What the layer already shows is not sent again. Changes are live,
+    // which `retouch.live.dom.test.js` drives: effects do not run here.
+    expect(draft.selection?.liveKey).not.toBeNull()
     await applySelection()
     expect(api.createRegion).not.toHaveBeenCalled()
-    expect(api.applyTool).toHaveBeenCalledTimes(1)
-    expect(api.applyTool.mock.calls[0][0].params.gradient).toMatchObject({ kind: 'diamond', start: [20, 20] })
+    expect(api.applyTool).not.toHaveBeenCalled()
+    expect(draft.selection).toBeNull()
   })
 
   it('reopens a gradient layer from any tool, an Auto one as Linear with a fitted line', async () => {
@@ -249,9 +253,15 @@ describe('the Gradient tool', () => {
     expect(editor.toolParams.gradient.kind).toBe('linear')
     expect(draft.selection).toMatchObject({ tool: 'gradient', regionId: 'g1', start: null })
     await vi.waitFor(() => expect(draft.selection?.start).toEqual({ x: 25, y: 10 }))
+    // The fit alone is a starting point: Done sends nothing for it.
+    await applySelection()
+    expect(api.applyTool).not.toHaveBeenCalled()
+    expect(editGradientLayer(region)).toBe(true)
+    await vi.waitFor(() => expect(draft.selection?.start).toEqual({ x: 25, y: 10 }))
+    editor.toolParams.gradient.reverse = true
     await applySelection()
     expect(api.createRegion).not.toHaveBeenCalled()
-    expect(api.applyTool.mock.calls[0][0].params).toMatchObject({ kind: 'linear', gradient: { kind: 'linear', start: [25, 10] } })
+    expect(api.applyTool.mock.calls[0][0].params).toMatchObject({ kind: 'linear', gradient: { kind: 'linear', start: [25, 10], reverse: true } })
   })
 
   it('records no Patch fields on a gradient, and no gradient on a patch', () => {
@@ -289,6 +299,7 @@ describe('the Gradient tool', () => {
     setBackend(api)
     editGradientLayer(autoLayer())
     await vi.waitFor(() => expect(draft.selection?.start).toEqual({ x: 25, y: 10 }))
+    editor.toolParams.gradient.opacity = 50
     await applySelection()
     await settled(editor.history)
     const entry = api.historyPush.mock.calls.at(-1)?.[0]?.entry

@@ -426,18 +426,44 @@ pub(crate) fn refresh_dependencies_from(
 /// layer that has just left the page still has (a clean taken back,
 /// `Job::restore_detection`): its pixels are gone from under the layers
 /// above it, and its row is no longer among the patches to be looked up.
+///
+/// Live copies the change reaches are drawn again from their areas first
+/// (`livecopy.rs`), and each one redrawn is a change of its own for the
+/// layers after it.
 pub(crate) fn refresh_dependencies_of(
     job: &mut Job,
     changed: PatchRecord,
     previous: Option<Rect>,
 ) -> Result<(), String> {
-    // Every place this change could have altered what a later layer read:
-    // where the patch was made, where it is drawn now, where it was drawn
-    // before this edit, and where each earlier revision of it was. A re-run
-    // or a restore replaces one mask with another, and the pixels of the old
-    // one are gone from under its neighbours as surely as the new ones arrived.
+    let touched = touched_by(job, &changed, previous);
+    let redrawn = crate::livecopy::redraw(job, changed.source_idx, Some(&changed.id), &touched)?;
+    flag_dependents(job, &changed, &touched)?;
+    for copy in redrawn.iter().filter(|copy| copy.id != changed.id) {
+        let touched = touched_by(job, copy, None);
+        flag_dependents(job, copy, &touched)?;
+    }
+    Ok(())
+}
+
+/// Draw again the live copies on page `source_idx` that read `touched`, and
+/// flag what the redrawn copies feed: for writers that do not go through
+/// [`refresh_dependencies_of`], a run's commit of a page.
+pub(crate) fn redraw_live_copies(job: &mut Job, source_idx: usize, touched: &[Rect]) -> Result<(), String> {
+    for copy in crate::livecopy::redraw(job, source_idx, None, touched)? {
+        let touched = touched_by(job, &copy, None);
+        flag_dependents(job, &copy, &touched)?;
+    }
+    Ok(())
+}
+
+/// Every place a change to `changed` could have altered what a later layer
+/// read: where the patch was made, where it is drawn now, where it was drawn
+/// before this edit, and where each earlier revision of it was. A re-run or a
+/// restore replaces one mask with another, and the pixels of the old one are
+/// gone from under its neighbours as surely as the new ones arrived.
+fn touched_by(job: &Job, changed: &PatchRecord, previous: Option<Rect>) -> Vec<Rect> {
     let drawn = |record: &PatchRecord| [cleaner_core::project::orientation::display_bbox(&job.project,record)];
-    let mut touched: Vec<Rect> = drawn(&changed).into_iter().chain(previous).collect();
+    let mut touched: Vec<Rect> = drawn(changed).into_iter().chain(previous).collect();
     for revision in job
         .project
         .legacy_patch_revisions
@@ -449,6 +475,11 @@ pub(crate) fn refresh_dependencies_of(
     }
     touched.sort_by_key(|rect| (rect.x, rect.y, rect.w, rect.h));
     touched.dedup();
+    touched
+}
+
+/// Mark the later layers whose input `changed` altered at `touched`.
+fn flag_dependents(job: &mut Job, changed: &PatchRecord, touched: &[Rect]) -> Result<(), String> {
     let strip = crate::run::strip_of(&job.project);
     let changed_place = strip
         .pages()
@@ -462,10 +493,13 @@ pub(crate) fn refresh_dependencies_of(
         .patches
         .iter()
         .enumerate()
+        // A live copy is drawn again rather than flagged, where it can be
+        // (`livecopy.rs`); elsewhere it is flagged like any later layer.
         .filter(|(_, p)| {
             p.visible
                 && p.order > changed.order
                 && (p.source_idx == changed.source_idx || longstrip)
+                && !(crate::livecopy::is_live(p) && crate::livecopy::redrawn_here(&job.project, p))
         })
         .map(|(i, p)| (i, p.clone()))
         .collect::<Vec<_>>();

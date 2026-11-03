@@ -12,12 +12,18 @@
  *   Only Normal reads a source. Auto, Content-Aware and Smooth fill from
  *   around the selection and ignore the ghost, so Apply is ready at once.
  * - **Gradient.** A drag inside the selection sets the line; its two handles
- *   stay editable, and the preview follows them, until Apply or the next
- *   selection (`SelectionOverlay.svelte`). Match surroundings asks for the line
- *   and the stops at once (`fitGradient`). A gradient layer reopens: its
- *   recorded gradient is held again with the layer's id, and Apply re-renders
- *   that layer in place (`applyTool`) rather than adding one; the region menu
- *   and the Layers row reopen one from any tool (`editGradientLayer`). The **Auto**
+ *   stay editable until Done or the next selection (`SelectionOverlay.svelte`).
+ *   **It is live:** once the line is set, every change - the line, the stops,
+ *   opacity, feather, the toggles - reaches the page by itself a moment after
+ *   the last one (`LIVE_DELAY_MS`): the first makes the layer, each later one
+ *   re-renders that layer in place (`applyTool`), one undo step each. The
+ *   preview follows the handles in between. Done (the bar's button or
+ *   `Enter`) sends what is still waiting and lets the selection go. Match
+ *   surroundings asks for the line and the stops at once (`fitGradient`). A
+ *   gradient layer reopens: its recorded gradient is held again with the
+ *   layer's id, and changes re-render that layer rather than adding one; the
+ *   region menu and the Layers row reopen one from any tool
+ *   (`editGradientLayer`). The **Auto**
  *   type (`Shift+G`) needs no line: the selection is applied as soon as it is
  *   held, and the native side fills it from all round it
  *   (`cleaner-core/src/engines/autogradient.rs`).
@@ -32,6 +38,8 @@ import {
   applyRegionState,
   claimPageEdit,
   editor,
+  onPendingEdit,
+  pageBusy,
   recordBackgroundRegionEdit,
   recordRegionEdit,
   reloadPage,
@@ -46,6 +54,9 @@ import { fromWire, wireGradient } from './gradient.js'
 import { reportRegionEditFailure } from './maskactions.svelte.js'
 import { applyActiveToolToRegion, locateRegion } from './toolapply.svelte.js'
 
+/** How long after the last change a held gradient's change reaches the page. */
+const LIVE_DELAY_MS = 300
+
 /**
  * The Gradient tool's eyedropper: which colour stop the next click on the page
  * samples, or null. Not part of the held selection, because a stop can be
@@ -54,7 +65,147 @@ import { applyActiveToolToRegion, locateRegion } from './toolapply.svelte.js'
 export const retouch = $state({
   /** @type {number|null} */
   eyedrop: null,
+  /** The held gradient has a change the page does not show yet: the preview's cue. */
+  pending: false,
 })
+
+/**
+ * What a held gradient would send now, as one string: equal strings are the
+ * same layer. `held.liveKey` is the one the page shows.
+ *
+ * @param {import('./draft.svelte.js').HeldSelection} held
+ * @param {Record<string, any>} params
+ */
+function liveKey(held, params) {
+  // The selection's own shape and brush size are the bar's choices for the
+  // next selection, not this layer's: a change to them draws nothing new.
+  const { shape: _shape, size: _size, ...drawn } = selectionParams(held, params)
+  return JSON.stringify(drawn)
+}
+
+/** @type {ReturnType<typeof setTimeout>|null} */
+let liveTimer = null
+/** @type {Promise<void>|null} */
+let liveRun = null
+let liveAgain = false
+/** The held selection a busy page was last reported for: once per hold, not once per pause. */
+let busyReported = /** @type {import('./draft.svelte.js').HeldSelection|null} */ (null)
+
+function stopLiveTimer() {
+  if (liveTimer) clearTimeout(liveTimer)
+  liveTimer = null
+}
+
+/** Whether `held` has a change the page does not show yet. */
+function waiting(held) {
+  return liveKey(held, editor.toolParams.gradient ?? {}) !== held.liveKey
+}
+
+// Every change to a held gradient, the line or the bar's values, schedules
+// its commit. Module-wide, as the selection is: no one component owns it.
+$effect.root(() => {
+  $effect(() => {
+    const held = draft.selection
+    const params = editor.toolParams.gradient ?? {}
+    if (!held || held.tool !== 'gradient' || params.kind === 'auto' || !held.start || !held.end) {
+      // A change waiting for a selection that has gone, or turned Auto, is dropped.
+      stopLiveTimer()
+      retouch.pending = false
+      return
+    }
+    const key = liveKey(held, params)
+    if (key === held.liveKey) {
+      stopLiveTimer()
+      retouch.pending = false
+      return
+    }
+    retouch.pending = true
+    stopLiveTimer()
+    liveTimer = setTimeout(() => void commitLive(), LIVE_DELAY_MS)
+  })
+})
+
+// Undo and Redo let a held gradient go, its waiting change with it: the
+// history then steps over what the page shows, and the handles never
+// disagree with the layer under them.
+onPendingEdit(() => {
+  const held = draft.selection
+  if (held?.tool !== 'gradient' || (!held.liveKey && !held.regionId)) return false
+  stopLiveTimer()
+  clearSelection()
+  retouch.eyedrop = null
+  return false
+})
+
+/**
+ * Send the held gradient's waiting change now, once any commit already on
+ * its way has landed. Changes made meanwhile follow it as one more commit.
+ *
+ * @returns {Promise<void>}
+ */
+function commitLive() {
+  stopLiveTimer()
+  if (liveRun) {
+    liveAgain = true
+    return liveRun
+  }
+  const held = draft.selection
+  if (!held || held.tool !== 'gradient') return Promise.resolve()
+  liveRun = (async () => {
+    do {
+      liveAgain = false
+      if (!(await commitOnce(held))) break
+    } while (liveAgain && draft.selection === held)
+  })().finally(() => {
+    liveRun = null
+    // A change made meanwhile to another held gradient (one reopened while
+    // this one was still on its way) is that one's to send now.
+    const next = draft.selection
+    if (liveAgain && next && next !== held && next.tool === 'gradient' && waiting(next)) void commitLive()
+    liveAgain = false
+  })
+  return liveRun
+}
+
+/**
+ * One commit of `held` as the bar has it now: the layer made the first time,
+ * re-rendered in place after (and made again if an undo took it away).
+ *
+ * @param {import('./draft.svelte.js').HeldSelection} held
+ * @returns {Promise<boolean>} whether the page shows it
+ */
+async function commitOnce(held) {
+  // A timer that fires after the tool changed would apply the wrong tool's values.
+  if (editor.tool !== 'gradient') return false
+  const params = /** @type {Record<string, any>} */ ($state.snapshot(editor.toolParams.gradient ?? {}))
+  // Auto fills as soon as it is held and has no line to follow.
+  if (params.kind === 'auto') return false
+  const snapshot = /** @type {import('./draft.svelte.js').HeldSelection} */ ($state.snapshot(held))
+  if (!applicable(snapshot, params)) return false
+  const key = liveKey(snapshot, params)
+  if (key === held.liveKey) return true
+  if (snapshot.pageIndex === null) return false
+  // A run on the page refuses the edit. Said once per hold: a slider drag
+  // would otherwise raise a notice at every pause. Done says it again.
+  if (pageBusy(snapshot.pageIndex)) {
+    if (busyReported !== held) claimPageEdit(snapshot.pageIndex)
+    busyReported = held
+    return false
+  }
+  const payload = selectionParams(snapshot, params)
+  let landed = false
+  if (snapshot.regionId && locateRegion(snapshot.regionId)) {
+    landed = await applyActiveToolToRegion(snapshot.regionId, { ...payload, bbox: snapshot.bbox })
+  } else {
+    const id = await createLayer(snapshot, payload)
+    if (id) held.regionId = id
+    landed = !!id
+  }
+  if (!landed) return false
+  held.liveKey = key
+  if (draft.selection === held) retouch.pending = waiting(held)
+  return true
+}
 
 /**
  * @param {Record<string, any>} spec - `drawing.svelte.js`'s commit spec
@@ -81,6 +232,7 @@ export function holdDrawn(spec, painted, stroke) {
     start: null,
     end: null,
     regionId: null,
+    liveKey: null,
   })
   if (spec.tool === 'patch') void proposeSource()
   else if (editor.toolParams.gradient?.kind === 'auto') void applySelection()
@@ -216,7 +368,8 @@ export function selectionParams(held, params) {
 
 /**
  * Apply the held selection: one layer, one undo step. A reopened gradient
- * re-renders its own layer instead.
+ * re-renders its own layer instead. A gradient with a line is live, so for
+ * it this is Done: what is still waiting goes, and the selection is let go.
  *
  * @returns {Promise<boolean>} whether the chapter changed
  */
@@ -228,24 +381,36 @@ export async function applySelection() {
     notify({ key: held.tool === 'gradient' ? 'retouch.notice.drawLine' : 'retouch.notice.noSource', tone: 'warn' })
     return false
   }
+  if (held.tool === 'gradient' && params.kind !== 'auto') {
+    await commitLive()
+    // A change the page refused (a run on it, a backend error) keeps the
+    // selection, so Done again sends it once the page is free.
+    if (draft.selection === held && waiting(held)) {
+      if (held.pageIndex !== null) claimPageEdit(held.pageIndex)
+      return false
+    }
+    if (draft.selection === held) clearSelection()
+    retouch.eyedrop = null
+    return held.liveKey !== null
+  }
   if (held.pageIndex === null || !claimPageEdit(held.pageIndex)) return false
   const payload = selectionParams(/** @type {any} */ ($state.snapshot(held)), params)
   const snapshot = /** @type {import('./draft.svelte.js').HeldSelection} */ ($state.snapshot(held))
   clearSelection()
   retouch.eyedrop = null
   if (snapshot.regionId) return applyActiveToolToRegion(snapshot.regionId, { ...payload, bbox: snapshot.bbox })
-  return createLayer(snapshot, payload)
+  return (await createLayer(snapshot, payload)) !== null
 }
 
 /**
  * @param {import('./draft.svelte.js').HeldSelection} held
  * @param {Record<string, unknown>} params
- * @returns {Promise<boolean>}
+ * @returns {Promise<string|null>} the new layer's id
  */
 async function createLayer(held, params) {
   const chapter = editor.chapter
   const page = chapter?.pages.find((candidate) => candidate.id === held.pageId)
-  if (!chapter || !page || chapter.id !== held.chapterId || page.index !== held.pageIndex) return false
+  if (!chapter || !page || chapter.id !== held.chapterId || page.index !== held.pageIndex) return null
   const before = page.status
   /** @type {any} */
   let result
@@ -259,21 +424,23 @@ async function createLayer(held, params) {
       params,
     })
   } catch (error) {
-    return reportRegionEditFailure(error)
+    reportRegionEditFailure(error)
+    return null
   }
-  if (!result) return false
+  if (!result) return null
   const label = held.tool === 'patch' ? 'retouch.command.patch' : 'retouch.command.gradient'
   const created = /** @type {any} */ ($state.snapshot(result.region))
   const beforeState = { region: null, pageStatus: before }
   const afterState = { region: created, pageStatus: result.pageStatus }
   if (editor.chapter?.id !== held.chapterId) {
-    return recordBackgroundRegionEdit(/** @type {string} */ (held.chapterId), label, created.id, beforeState, afterState)
+    recordBackgroundRegionEdit(/** @type {string} */ (held.chapterId), label, created.id, beforeState, afterState)
+    return null
   }
   applyRegionState(result.region.id, result.region, result.pageStatus)
   if (scopePageIndices().includes(page.index)) select(created.id)
   recordRegionEdit(label, created.id, beforeState, afterState)
   void reloadPage(page.index).catch(() => {})
-  return true
+  return created.id
 }
 
 /**
@@ -283,9 +450,11 @@ async function createLayer(held, params) {
  * @param {{x: number, y: number}} [moved] where the layer now sits, in page
  *   percent from where the selection was drawn: the fit reads the ring there,
  *   and the line stays in the selection's own place.
+ * @param {boolean} [start] the fit is a reopened Auto layer's starting
+ *   point, not a change: it is not sent unless a line dragged meanwhile won
  * @returns {Promise<boolean>} whether a fit arrived
  */
-export async function matchSurroundings(moved = { x: 0, y: 0 }) {
+export async function matchSurroundings(moved = { x: 0, y: 0 }, start = false) {
   const held = draft.selection
   if (!held || held.tool !== 'gradient' || held.chapterId === null || held.pageIndex === null) {
     notify({ key: 'retouch.notice.selectFirst', tone: 'info' })
@@ -304,13 +473,14 @@ export async function matchSurroundings(moved = { x: 0, y: 0 }) {
     notify({ key: 'retouch.notice.noFit', tone: 'warn' })
     return false
   }
-  const { params, start, end } = fromWire(answer)
+  const { params, start: from, end } = fromWire(answer)
   setToolParam('gradient', 'kind', params.kind)
   setToolParam('gradient', 'colors', params.colors)
   setToolParam('gradient', 'opacities', params.opacities)
   setToolParam('gradient', 'reverse', false)
   if (held.start === line) {
-    setLine({ x: start.x - moved.x, y: start.y - moved.y }, { x: end.x - moved.x, y: end.y - moved.y })
+    setLine({ x: from.x - moved.x, y: from.y - moved.y }, { x: end.x - moved.x, y: end.y - moved.y })
+    if (start) held.liveKey = liveKey(held, editor.toolParams.gradient ?? {})
   }
   return true
 }
@@ -351,14 +521,19 @@ export function reopenGradient(region) {
     start: recorded?.start ?? null,
     end: recorded?.end ?? null,
     regionId: region.id,
+    liveKey: null,
   })
+  // What the layer already shows is not a change to send again.
+  if (recorded && draft.selection) draft.selection.liveKey = liveKey(draft.selection, editor.toolParams.gradient ?? {})
   if (!recorded) {
     const layer = region.mask.layer
     const [width, height] = [page.width, page.height]
+    // The fitted line is where an edit starts from, not an edit: the Auto
+    // layer is redrawn only once the user changes something.
     void matchSurroundings({
       x: width ? (Number(layer?.offsetX) || 0) / width * 100 : 0,
       y: height ? (Number(layer?.offsetY) || 0) / height * 100 : 0,
-    })
+    }, true)
   }
   return true
 }

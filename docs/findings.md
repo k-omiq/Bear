@@ -723,6 +723,22 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Eraser on moved copies, a live gradient, and Live copy (2026-11-03): tested in code, not run in the real app.**
+The eraser read a layer as drawn (already moved by its layer style) and mapped the stroke through the move again,
+so a moved or turned Region copy was missed. It now edits the stored patch, revisions archive stored bytes, and a
+duplicated copy is committed with content-named files so an undo of a later erase has a revision. On a chapter with
+a turned page the eraser still edits the display reconstruction, which has the same double move for a moved copy:
+not fixed, not measured. The Gradient tool commits by itself 300 ms after the last change, one undo step per
+commit; Done replaces Apply and keeps the selection while a run holds the page; Undo, Redo and Escape let it go and
+drop a change not yet shown. Not measured: how a slider drag feels with a commit per pause on a large page, the
+preview flicker as the page reloads in WKWebView, and the preview drawn over the old layer at low opacity. Use
+page dots still needs a page saved in greyscale; a black and white scan saved as RGB gets a plain gradient (the
+hint says so). Live copy redraws from its picked area in `underlay::refresh_dependencies_of` and after a run
+commits a page. Where it cannot (a turned page, an area off its page) it is flagged for review instead. Not done:
+a live copy reading a layer of the next page that hangs over a long strip join, and the mock (it has no pixels, so
+a live copy there never changes). Each redraw archives a patch revision and decodes the page again, so a busy page
+grows its revision folder.
+
 **An approved held mask, and a project run's progress (2026-11-03): fixed in code, not run in the real app.**
 Approving a held mask stored it as text in a bubble whenever its reason was not one of the two candidate keys.
 A sound effect the reader called not text is held with `gateSkippedNotText`, so it came back as a bubble on the

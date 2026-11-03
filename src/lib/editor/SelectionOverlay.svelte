@@ -1,5 +1,6 @@
 <script>
   import { colorAt as gradientColor, inPixels, paintGradient, wireGradient } from './gradient.js'
+  import { retouch } from './retouch.svelte.js'
 
   /**
    * A held Patch or Gradient selection, drawn over its page
@@ -17,7 +18,9 @@
    * - **Gradient:** the line and its two handles, and the preview: the
    *   gradient painted at a fraction of the page's size into a canvas over the
    *   selection's box, cut to the selection's shape and shown at the layer's
-   *   opacity. The native render is the commit's; this follows the handles.
+   *   opacity. The native render is the commit's; this follows the handles
+   *   only while a change has not reached the page yet (`retouch.pending`),
+   *   so the committed layer is never seen through a second copy of itself.
    *
    * Geometry is page percent like every draft, drawn in page pixels inside a
    * `scale` so a brush path's width is one number (`DraftPreview.svelte`).
@@ -138,7 +141,7 @@
   {/if}
 {/snippet}
 
-{#if held.tool === 'gradient' && held.start && held.end}
+{#if held.tool === 'gradient' && held.start && held.end && retouch.pending}
   <canvas
     bind:this={canvas}
     class="preview"

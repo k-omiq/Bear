@@ -2317,6 +2317,19 @@ impl Library {
 
         // Each copy owns its files, so deleting or replacing either region
         // cannot invalidate the other's pixels, including strip intersections.
+        // Where the layer is stored whole, it is committed as any edit is, so
+        // its files are named by their content and an undo of a later erase
+        // has a revision to go back to.
+        if copied.native_parts.is_empty() && job.project.sources.iter().all(|source| source.orientation.0 == 1) {
+            let mut patch = job.load_stored_patch(&original).map_err(|error| failure(error.to_string()))?;
+            patch.id = id.clone();
+            patch.order = copied.order;
+            patch.provenance = copied.provenance.clone();
+            job.complete_display_region(source_idx, &patch, copied.review_state.clone())
+                .map_err(|error| failure(error.to_string()))?;
+            invalidate_manifest_cache(&path);
+            return Ok(region_and_status(&chapter_id, &job.project, source_idx, &id));
+        }
         let original_ink = original.ink_ref();
         let ink = if job.sidecar().join(&original_ink).exists() { original_ink } else { original.mask_ref.clone() };
         let mut files = vec![
@@ -4586,6 +4599,11 @@ mod tests {
                 assert_eq!(reopened.project.patches[0], original);
                 let copied = reopened.project.patches.iter().find(|record| record.id == copy.id).unwrap();
                 assert!(copied.order > original.order);
+                if orientation == 1 {
+                    // Files named by their content: an undo of a later erase
+                    // has a revision to go back to.
+                    assert!(copied.legacy_revision_id().is_some());
+                }
                 for (from, to) in [(&original.mask_ref, &copied.mask_ref), (&original.buffer_ref, &copied.buffer_ref)] {
                     assert_ne!(from, to);
                     assert_eq!(std::fs::read(reopened.sidecar().join(from)).unwrap(), std::fs::read(reopened.sidecar().join(to)).unwrap());

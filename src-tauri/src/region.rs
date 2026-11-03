@@ -3510,8 +3510,11 @@ fn paint_snapshot(
         snapshot["tool"] = serde_json::json!(tool);
     }
     match paint.kind {
-        PaintKind::RegionCopy { ref shape, feather, edge_opacity } => {
+        PaintKind::RegionCopy { ref shape, feather, edge_opacity, live } => {
             snapshot["mode"] = serde_json::json!("region-copy");
+            if live {
+                snapshot["live"] = serde_json::json!(true);
+            }
             snapshot["rung"] = serde_json::json!("ladder.rung.clone");
             snapshot["shape"] = serde_json::json!(shape.as_ref().map_or("brush", |shape| match shape.kind {
                 ShapeKind::Rect => "rect", ShapeKind::Ellipse => "ellipse", ShapeKind::Polygon => "polygon", ShapeKind::Line => "line",
@@ -3954,7 +3957,9 @@ fn half() -> f64 {
 #[derive(Debug, Clone, PartialEq)]
 enum PaintKind {
     /// Frozen artwork through an independent selection, blended where placed.
-    RegionCopy { shape: Option<PaintedShape>, feather: f64, edge_opacity: u8 },
+    /// A `live` one is drawn again from its area whenever that area changes
+    /// (`livecopy.rs`).
+    RegionCopy { shape: Option<PaintedShape>, feather: f64, edge_opacity: u8, live: bool },
     /// A colour brush. The colour is straight sRGB bytes, from `#rrggbb`.
     Brush { color: [u8; 3] },
     /// The clone stamp. `offset` is `target − source` in **page percent**, as the
@@ -4084,10 +4089,11 @@ fn paint_plan(tool: &str, params: &serde_json::Value) -> Option<PaintPlan> {
     let paint = params.get("paint").filter(|v| v.is_object());
 
     let kind = match tool {
-        "cloneStamp" if mode == Some("region") => PaintKind::RegionCopy {
+        "cloneStamp" if matches!(mode, Some("region" | "live")) => PaintKind::RegionCopy {
             shape: params.get("painted").map(|value| serde_json::from_value::<PaintedShape>(value.clone())).transpose().ok()?,
             feather: number(params, "feather").unwrap_or(0.0).clamp(0.0, 64.0),
             edge_opacity: number(params, "edgeOpacity").unwrap_or(100.0).clamp(0.0, 100.0).round() as u8,
+            live: mode == Some("live"),
         },
         // The two selection tools: every payload is theirs, so neither ever
         // falls to the ladder (`retouch::patch_kind`).
@@ -5204,7 +5210,14 @@ fn erase_paint_at(
         let Some((before, _)) = crate::library::region_and_status(&located.chapter_id, &job.project, page.source_idx, &record.id) else {
             continue;
         };
-        let mut patch = job.load_display_patch(&record).map_err(|e| e.to_string())?;
+        // The stored patch, not the drawn one: `erase_patch` maps the stroke
+        // through the layer's own move and turn, and the write-back keeps
+        // that style, so a patch already presented would be moved twice (a
+        // moved region copy was missed outright). A chapter with a turned
+        // page has only the display reconstruction to edit.
+        let upright = job.project.sources.iter().all(|source| source.orientation.0 == 1);
+        let mut patch = if upright { job.load_stored_patch(&record) } else { job.load_display_patch(&record) }
+            .map_err(|e| e.to_string())?;
         if !erase::erase_patch(&mut patch, &here) {
             continue;
         }
@@ -7880,6 +7893,164 @@ mod tests {
         let edge = moved.sample(84,40,0);
         assert!(edge > 0 && edge < 100, "edge fades against new black background: {edge}");
         assert_eq!(moved.sample(10,10,0), 0, "outside artwork is preserved");
+    }
+
+    /// A region copy moved off where it was made is erased where it is
+    /// drawn, and only there. The eraser used to read the drawn patch and map
+    /// the stroke through the move a second time, so it missed the copy.
+    #[test]
+    fn the_eraser_takes_a_moved_region_copy_off_where_it_is_drawn() {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128; raw.height = 128; raw.data = vec![0; 128 * 128];
+        let (root, _library, located) = command_fixture("erase-moved-copy", &raw);
+        let bounds = Rect::new(24, 24, 32, 32);
+        white_predecessor(&located, &raw, bounds);
+        let params = serde_json::json!({"mode":"region", "opacity":100, "feather":4, "edgeOpacity":100,
+            "painted":{"kind":"rect","points":[{"x":18.75,"y":18.75},{"x":43.75,"y":18.75},{"x":43.75,"y":43.75},{"x":18.75,"y":43.75}],"feather":4}});
+        let mut plan = fixture_plan("copy", Geometry::Given(bounds), Engine::Paint, bounds);
+        plan.tool = Some("cloneStamp".into()); plan.paint = Some(paint_plan("cloneStamp", &params).unwrap());
+        assert!(matches!(edit_with_bench(&mut test_bench(&root), Engine::Fill, &located, plan).unwrap(), Outcome::Cleaned(_)));
+        let mut job = Job::open(&located.job_path).unwrap();
+        let record = job.project.patches.iter_mut().find(|r| r.id == "copy").unwrap();
+        record.provenance.params_snapshot["layer"]["offsetX"] = serde_json::json!(60);
+        job.flush().unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "copy").unwrap().clone();
+        let edge_before = job.load_stored_patch(&record).unwrap().mask.coverage(24, 40);
+        drop(job);
+
+        // Drawn at x 100 is stored at x 40.
+        let erased = erase_paint_at(&located, None, &[erase_at(100.0, 40.0)], &eraser(8.0, 100.0)).unwrap().unwrap();
+        assert_eq!(erased.erased.iter().map(|layer| layer.region_id.as_str()).collect::<Vec<_>>(), ["copy"]);
+        let job = Job::open(&located.job_path).unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "copy").unwrap().clone();
+        assert_eq!(record.provenance.params_snapshot["layer"]["offsetX"], 60, "the copy stays where it was moved");
+        let stored = job.load_stored_patch(&record).unwrap();
+        assert_eq!(stored.mask.bounds, record.bbox, "the stored mask is not moved by the write-back");
+        assert_eq!(stored.mask.coverage(40, 40), 0, "erased under the stroke");
+        assert_eq!(stored.mask.coverage(30, 30), 255, "kept away from it");
+        assert_eq!(stored.mask.coverage(24, 40), edge_before, "the feathered edge is not blended in a second time");
+        let drawn = job.load_patch(&record).unwrap();
+        assert_eq!(drawn.mask.coverage(100, 40), 0);
+        assert_eq!(drawn.mask.coverage(90, 30), 255);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A Live copy redraws from the area it was picked from when a layer made
+    /// after it changes that area, wherever the copy was moved; a Region copy
+    /// of the same area keeps the artwork it froze; and what the eraser took
+    /// off the live copy stays off.
+    #[test]
+    fn a_live_copy_follows_its_area_and_a_region_copy_does_not() {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128; raw.height = 128; raw.data = vec![0; 128 * 128];
+        let (root, _library, located) = command_fixture("live-copy", &raw);
+        let bounds = Rect::new(24, 24, 32, 32);
+        white_predecessor(&located, &raw, bounds);
+        let painted = serde_json::json!({"kind":"rect","points":[{"x":18.75,"y":18.75},{"x":43.75,"y":18.75},{"x":43.75,"y":43.75},{"x":18.75,"y":43.75}],"feather":0});
+        for (id, mode) in [("live", "live"), ("frozen", "region")] {
+            let params = serde_json::json!({"mode": mode, "opacity":100, "feather":0, "edgeOpacity":100, "painted": painted});
+            let mut plan = fixture_plan(id, Geometry::Given(bounds), Engine::Paint, bounds);
+            plan.tool = Some("cloneStamp".into()); plan.paint = Some(paint_plan("cloneStamp", &params).unwrap());
+            assert!(matches!(edit_with_bench(&mut test_bench(&root), Engine::Fill, &located, plan).unwrap(), Outcome::Cleaned(_)));
+        }
+        let mut job = Job::open(&located.job_path).unwrap();
+        for (id, dy) in [("live", 0), ("frozen", 64)] {
+            let record = job.project.patches.iter_mut().find(|r| r.id == id).unwrap();
+            record.provenance.params_snapshot["layer"]["offsetX"] = serde_json::json!(64);
+            record.provenance.params_snapshot["layer"]["offsetY"] = serde_json::json!(dy);
+        }
+        assert!(crate::livecopy::is_live(job.project.patches.iter().find(|r| r.id == "live").unwrap()));
+        assert!(!crate::livecopy::is_live(job.project.patches.iter().find(|r| r.id == "frozen").unwrap()));
+        job.flush().unwrap();
+        drop(job);
+
+        // The eraser takes a spot off the live copy where it is drawn.
+        let erased = erase_paint_at(&located, None, &[erase_at(64.0 + 50.0, 50.0)], &eraser(4.0, 100.0)).unwrap().unwrap();
+        assert!(erased.erased.iter().any(|layer| layer.region_id == "live"));
+
+        // A grey layer made after both copies, over the picked area.
+        let spot = Rect::new(30, 30, 8, 8);
+        let mut job = Job::open(&located.job_path).unwrap();
+        let order = job.project.patches.iter().map(|r| r.order).max().unwrap() + 1;
+        let mut pixels = raw.clone();
+        pixels.width = spot.w; pixels.height = spot.h; pixels.data = vec![128; (spot.w * spot.h) as usize];
+        let mask = Mask::filled(spot);
+        job.complete_region(0, &Patch {
+            id: "grey".into(), mask: mask.clone(), ink: mask, pixels, order, visible: true,
+            provenance: Provenance {
+                engine: Engine::Fill, engine_version: "fixture".into(), model_sha256: None,
+                execution_provider: "cpu".into(), params_snapshot: serde_json::json!({}), mask_sha256: String::new(),
+                source_sha256: String::new(), cloud: None, created: 0,
+            },
+        }, None).unwrap();
+        crate::underlay::refresh_dependencies(&mut job, "grey").unwrap();
+        drop(job);
+
+        let job = Job::open(&located.job_path).unwrap();
+        let shown = cleaner_core::composite::composite(&raw, &job.project.patches.iter().filter(|r| r.visible)
+            .map(|r| job.load_patch(r).unwrap()).collect::<Vec<_>>()).unwrap();
+        assert_eq!(shown.sample(34, 34, 0), 128, "the area itself changed");
+        assert_eq!(shown.sample(64 + 34, 34, 0), 128, "the live copy follows it");
+        assert_eq!(shown.sample(64 + 26, 26, 0), 255, "the rest of the live copy is as it was");
+        assert_eq!(shown.sample(64 + 50, 50, 0), 0, "the erased spot stays off");
+        assert_eq!(shown.sample(64 + 34, 64 + 34, 0), 255, "the region copy keeps what it froze");
+        let live = job.project.patches.iter().find(|r| r.id == "live").unwrap();
+        assert_eq!(live.review_state, None, "a live copy is redrawn, not flagged for review");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A run's commit of a page reaches a live copy too, and a hidden live
+    /// copy shown again is drawn from what its area holds now.
+    #[test]
+    fn a_live_copy_follows_a_run_and_comes_back_current() {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128; raw.height = 128; raw.data = vec![0; 128 * 128];
+        let (root, library, located) = command_fixture("live-copy-run", &raw);
+        let bounds = Rect::new(24, 24, 32, 32);
+        white_predecessor(&located, &raw, bounds);
+        let painted = serde_json::json!({"kind":"rect","points":[{"x":18.75,"y":18.75},{"x":43.75,"y":18.75},{"x":43.75,"y":43.75},{"x":18.75,"y":43.75}],"feather":0});
+        let params = serde_json::json!({"mode": "live", "opacity":100, "feather":0, "edgeOpacity":100, "painted": painted});
+        let mut plan = fixture_plan("live", Geometry::Given(bounds), Engine::Paint, bounds);
+        plan.tool = Some("cloneStamp".into()); plan.paint = Some(paint_plan("cloneStamp", &params).unwrap());
+        assert!(matches!(edit_with_bench(&mut test_bench(&root), Engine::Fill, &located, plan).unwrap(), Outcome::Cleaned(_)));
+        let mut job = Job::open(&located.job_path).unwrap();
+        job.project.patches.iter_mut().find(|r| r.id == "live").unwrap().provenance.params_snapshot["layer"]["offsetX"] = serde_json::json!(64);
+        job.flush().unwrap();
+        let grey = |job: &mut Job, id: &str, spot: Rect, value: u8| {
+            let order = job.project.patches.iter().map(|r| r.order).max().unwrap() + 1;
+            let mut pixels = raw.clone();
+            pixels.width = spot.w; pixels.height = spot.h; pixels.data = vec![value; (spot.w * spot.h) as usize];
+            let mask = Mask::filled(spot);
+            job.complete_region(0, &Patch {
+                id: id.into(), mask: mask.clone(), ink: mask, pixels, order, visible: true,
+                provenance: Provenance {
+                    engine: Engine::Fill, engine_version: "fixture".into(), model_sha256: None,
+                    execution_provider: "cpu".into(), params_snapshot: serde_json::json!({}), mask_sha256: String::new(),
+                    source_sha256: String::new(), cloud: None, created: 0,
+                },
+            }, None).unwrap();
+        };
+        let shown = |job: &Job| cleaner_core::composite::composite(&raw, &job.project.patches.iter().filter(|r| r.visible)
+            .map(|r| job.load_patch(r).unwrap()).collect::<Vec<_>>()).unwrap();
+
+        // A run writes its layers and then redraws the page's live copies.
+        let spot = Rect::new(30, 30, 8, 8);
+        grey(&mut job, "run-layer", spot, 128);
+        crate::underlay::redraw_live_copies(&mut job, 0, &[spot]).unwrap();
+        assert_eq!(shown(&job).sample(64 + 34, 34, 0), 128, "the run's layer reached the copy");
+        drop(job);
+
+        // Hidden, the copy is not drawn; shown again, it is current.
+        library.set_mask_visible("live", false).unwrap();
+        let mut job = Job::open(&located.job_path).unwrap();
+        let spot = Rect::new(44, 44, 6, 6);
+        grey(&mut job, "later", spot, 64);
+        crate::underlay::refresh_dependencies(&mut job, "later").unwrap();
+        drop(job);
+        library.set_mask_visible("live", true).unwrap();
+        let job = Job::open(&located.job_path).unwrap();
+        assert_eq!(shown(&job).sample(64 + 46, 46, 0), 64, "shown again, the copy shows its area as it is now");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

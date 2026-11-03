@@ -380,8 +380,8 @@ export const SHORTCUTS = [
     run: (c) => c.setMaskSelectMode('detect'),
   },
   {
-    // Arms the clone stamp as it was left; with it armed, swaps Stamp for
-    // Region copy, and with Shift aligned for non-aligned.
+    // Arms the clone stamp as it was left; with it armed, steps Stamp, Region
+    // copy and Live copy, and with Shift aligned for non-aligned.
     id: 'tool.cloneStamp.mode',
     group: 'tools',
     labelKey: 'shortcuts.tool.cloneMode',

@@ -31,6 +31,7 @@
   import { applySelection } from '../editor/retouch.svelte.js'
   import { isDetected, retryWidens } from '../model/masks.js'
   import { isRegionCopy } from '../model/layers.js'
+  import { isCopyMode } from '../editor/tools.js'
   import { cloudParts, runStep } from '../editor/cloudrun.js'
   import { screenColorPicker } from '../api/screencolor.js'
 
@@ -141,7 +142,7 @@
   function stepBrush(key, direction) {
     const { editor } = editorState
     const region = editorState.selectedRegion()
-    if (key === 'opacity' && editor.tool === 'cloneStamp' && editor.toolParams.cloneStamp?.mode === 'region'
+    if (key === 'opacity' && editor.tool === 'cloneStamp' && isCopyMode(editor.toolParams.cloneStamp?.mode)
       && region && isRegionCopy(region)) {
       stepLayerOpacity(region, direction)
       return

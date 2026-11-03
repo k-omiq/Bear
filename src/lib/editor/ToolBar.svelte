@@ -109,6 +109,7 @@
     TOOL_ICONS,
     activeParams,
     effectiveChoice,
+    isCopyMode,
     optionOffered,
     paramGroups,
     toolSpec,
@@ -140,7 +141,7 @@
 
   const spec = $derived(toolSpec(editor.tool))
   const hintKeys = $derived(spec.hintShortcut && session.shortcuts ? shortcutHint([spec.hintShortcut]) : '')
-  const selectedCopy = $derived(spec.id === 'cloneStamp' && editor.toolParams.cloneStamp?.mode === 'region'
+  const selectedCopy = $derived(spec.id === 'cloneStamp' && isCopyMode(editor.toolParams.cloneStamp?.mode)
     ? (editor.chapter?.pages ?? []).flatMap((page) => page.regions ?? []).find((region) => region.id === editor.selectionId && isRegionCopy(region)) ?? null
     : null)
   let blendDraft = $state(null)
@@ -1610,14 +1611,14 @@
           <RetouchOptions tool={spec.id} />
         {/if}
 
-        {#if spec.id === 'cloneStamp' && values.mode === 'region'}
+        {#if spec.id === 'cloneStamp' && isCopyMode(values.mode)}
           <span class="rule" role="separator" aria-orientation="vertical"></span>
           {#if selectedCopy}
             <Button size="sm" variant="soft" onclick={() => { settleBlend(); select(null) }}>
               {t('regionCopy.newRegion')}
             </Button>
           {/if}
-          <span class="region-help" aria-live="polite">{t(selectedCopy ? 'regionCopy.placingHelp' : 'regionCopy.drawingHelp')}</span>
+          <span class="region-help" aria-live="polite">{t(selectedCopy ? 'regionCopy.placingHelp' : values.mode === 'live' ? 'regionCopy.liveHelp' : 'regionCopy.drawingHelp')}</span>
         {/if}
 
         {#if adjustable}

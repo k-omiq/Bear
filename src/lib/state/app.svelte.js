@@ -304,6 +304,9 @@ export function isModalOpen() {
 /* Notice queue                                                        */
 /* ------------------------------------------------------------------ */
 
+/** Notices a live edit can raise again at every pause (the Gradient tool's). */
+const ONCE_WHILE_SHOWN = new Set(['retouch.notice.noScreen'])
+
 /**
  * Queue a notice. Takes i18n data, never text - the backend's `notice` events
  * are forwarded here verbatim.
@@ -312,10 +315,16 @@ export function isModalOpen() {
  * @returns {string} the notice's id
  */
 export function notify(spec) {
+  // A live edit raises these at every pause; one already up is not stacked
+  // again. Every other notice is said each time, as a refusal must be.
+  const params = spec.params ?? {}
+  const same = ONCE_WHILE_SHOWN.has(spec.key)
+    && app.notices.find((shown) => shown.key === spec.key && JSON.stringify(shown.params) === JSON.stringify(params))
+  if (same) return same.id
   const notice = {
     id: nextNoticeId(),
     key: spec.key,
-    params: spec.params ?? {},
+    params,
     tone: spec.tone ?? 'info',
     icon: spec.icon,
     duration: spec.duration,

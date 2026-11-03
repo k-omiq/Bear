@@ -6354,6 +6354,9 @@ impl<'w> Walker<'w> {
 
         let mut pending_detections = Vec::new();
         let mut pending_untouched: Vec<PendingUntouched> = Vec::new();
+        // Where this page's new layers went: a live copy reading there is
+        // drawn again once they are all written (`livecopy.rs`).
+        let mut cleaned_rects: Vec<cleaner_core::mask::Rect> = Vec::new();
         let mut cancelled_here = false;
         let mut failed_here = false;
         for (replaces, region, detected_bbox) in regions {
@@ -6411,6 +6414,7 @@ impl<'w> Walker<'w> {
                         break;
                     }
                     summary.regions_cleaned += 1;
+                    cleaned_rects.push(record.bbox);
                     let page = page_or_stub(entry, &page_id, job);
                     emit(Event::RegionDone {
                         run_id: run_id.to_owned(),
@@ -6490,6 +6494,11 @@ impl<'w> Walker<'w> {
                     }
                     pending_detections.push(found);
                 }
+            }
+        }
+        if !cleaned_rects.is_empty() {
+            if let Err(error) = crate::underlay::redraw_live_copies(job, entry.source_idx, &cleaned_rects) {
+                eprintln!("manga-cleaner: {page_id}: a live copy could not be drawn again: {error}");
             }
         }
 

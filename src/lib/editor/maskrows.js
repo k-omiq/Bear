@@ -270,7 +270,7 @@ function candidateRow(region) {
  */
 function titleKeyFor(region, mask) {
   const mode = mask?.provenance?.params_snapshot?.mode
-  if (mode === 'region-copy') return 'regionCopy.name'
+  if (mode === 'region-copy') return mask?.provenance?.params_snapshot?.live === true ? 'regionCopy.live' : 'regionCopy.name'
   // The two selection tools name their layers after themselves rather than
   // after the clone and paint engines they record under.
   if (mode === 'patch') return 'tools.name.patch'

@@ -5,6 +5,7 @@
   import { draftMaskColor } from '../model/masks.js'
   import { AI_STROKE_PX, paintedStroke, polylinePoints } from './gesture.js'
   import { t } from '../i18n/index.js'
+  import { isCopyMode } from './tools.js'
 
   /**
    * What a gesture looks like while it is still a gesture: the mask it is
@@ -46,7 +47,7 @@
    * thing and mute it. The dashed cursor ring is `DrawLayer`'s and stays: it
    * says where the next stamp lands, which the painted pixels behind it cannot.
    */
-  const livePixels = $derived((active?.tool === 'cloneStamp' && editor.toolParams.cloneStamp?.mode !== 'region') || active?.tool === 'brush' || active?.tool === 'eraser')
+  const livePixels = $derived((active?.tool === 'cloneStamp' && !isCopyMode(editor.toolParams.cloneStamp?.mode)) || active?.tool === 'brush' || active?.tool === 'eraser')
 
   /**
    * The **path the pointer took**, drawn as a hairline over the shape it

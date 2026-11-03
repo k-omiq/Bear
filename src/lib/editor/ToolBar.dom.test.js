@@ -868,7 +868,7 @@ describe('the Text cleanup panel', () => {
     }
   })
 
-  it('draws the Gradient as a panel: its rows, its stops swatch and Apply under them', () => {
+  it('draws the Gradient as a panel: its rows, its stops swatch and Done under them', () => {
     const { view } = mountTool(toolSpec('gradient'))
     const bar = shell(view)
     expect(bar.dataset.shell).toBe('panel')
@@ -878,7 +878,11 @@ describe('the Text cleanup panel', () => {
     expect(view.getByLabelText(t('tools.param.opacity')).getAttribute('type')).toBe('range')
     expect(view.getByRole('button', { name: t('retouch.gradient.stops') })).not.toBeNull()
     expect(bar.querySelector('.rows')).not.toBeNull()
-    expect(bar.querySelector('.action')?.textContent).toContain(t('retouch.apply'))
+    // A gradient is live, so its button lets the selection go rather than applying.
+    expect(bar.querySelector('.action')?.textContent).toContain(t('retouch.done'))
+    // The two toggles say what they do on hover.
+    expect(view.getByRole('button', { name: t('retouch.gradient.dither') }).title).toBe(t('retouch.gradient.ditherHint'))
+    expect(view.getByRole('button', { name: t('retouch.gradient.asScreentone') }).title).toBe(t('retouch.gradient.asScreentoneHint'))
     // No Adjustments popover: a panel has room for every slider.
     expect(view.queryByLabelText(t('tools.action.adjustments'))).toBeNull()
   })

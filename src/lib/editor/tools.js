@@ -593,6 +593,9 @@ export const TOOL_SPECS = [
   {
     // Stamp paints from a sampled source. Region copies the selected artwork
     // into an independent movable layer, with blending at its destination.
+    // Live copy is a Region copy that stays linked to the area it was picked
+    // from: when anything under that area changes, the copy redraws from it
+    // (`src-tauri/src/livecopy.rs`). Both are `isCopyMode`.
     id: 'cloneStamp',
     slot: 5,
     nameKey: 'tools.name.cloneStamp',
@@ -601,23 +604,24 @@ export const TOOL_SPECS = [
       ...section('selection', [choice('mode', 'regionCopy.mode', [
         { value: 'stamp', labelKey: 'regionCopy.stamp' },
         { value: 'region', labelKey: 'regionCopy.name' },
+        { value: 'live', labelKey: 'regionCopy.live' },
       ]),
-      onlyWhen(choice('shape', 'tools.param.shape', SELECTION_SHAPES), (values) => values.mode === 'region')]),
+      onlyWhen(choice('shape', 'tools.param.shape', SELECTION_SHAPES), (values) => isCopyMode(values.mode))]),
       ...section('brush', [
-        onlyWhen(brushSize(), (values) => values.mode !== 'region' || values.shape === 'brush'),
-        onlyWhen(range('hardness', 'tools.param.hardness', 0, 100, 5, '%'), (values) => values.mode !== 'region'),
-        onlyWhen(range('spacing', 'tools.param.spacing', 1, 50, 1, '%'), (values) => values.mode !== 'region'),
+        onlyWhen(brushSize(), (values) => !isCopyMode(values.mode) || values.shape === 'brush'),
+        onlyWhen(range('hardness', 'tools.param.hardness', 0, 100, 5, '%'), (values) => !isCopyMode(values.mode)),
+        onlyWhen(range('spacing', 'tools.param.spacing', 1, 50, 1, '%'), (values) => !isCopyMode(values.mode)),
         range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
-        onlyWhen(range('flow', 'tools.param.flow', 0, 100, 5, '%'), (values) => values.mode !== 'region'),
-        onlyWhen(range('feather', 'tools.param.feather', 0, 64, 1, 'px'), (values) => values.mode === 'region'),
-        onlyWhen(range('edgeOpacity', 'regionCopy.edgeOpacity', 0, 100, 1, '%'), (values) => values.mode === 'region'),
-        onlyWhen(range('rotation', 'regionCopy.rotation', -180, 180, 1, '°'), (values) => values.mode === 'region' && values.placing && !values.locked),
+        onlyWhen(range('flow', 'tools.param.flow', 0, 100, 5, '%'), (values) => !isCopyMode(values.mode)),
+        onlyWhen(range('feather', 'tools.param.feather', 0, 64, 1, 'px'), (values) => isCopyMode(values.mode)),
+        onlyWhen(range('edgeOpacity', 'regionCopy.edgeOpacity', 0, 100, 1, '%'), (values) => isCopyMode(values.mode)),
+        onlyWhen(range('rotation', 'regionCopy.rotation', -180, 180, 1, '°'), (values) => isCopyMode(values.mode) && values.placing && !values.locked),
       ]),
       ...section('source', [
         onlyWhen(choice('alignment', 'tools.param.alignment', [
           { value: 'aligned', labelKey: 'tools.option.aligned', icon: 'link' },
           { value: 'nonAligned', labelKey: 'tools.option.nonAligned', icon: 'link-off' },
-        ]), (values) => values.mode !== 'region'),
+        ]), (values) => !isCopyMode(values.mode)),
       ]),
     ],
     runnable: false,
@@ -789,7 +793,18 @@ export const SELECTION_TOOLS = /** @type {const} */ (['patch', 'gradient'])
  * @returns {boolean}
  */
 export function selectsArea(tool, params = {}) {
-  return (tool === 'cloneStamp' && params?.mode === 'region') || SELECTION_TOOLS.includes(/** @type {any} */ (tool))
+  return (tool === 'cloneStamp' && isCopyMode(params?.mode)) || SELECTION_TOOLS.includes(/** @type {any} */ (tool))
+}
+
+/**
+ * Whether a clone stamp mode copies an area into its own layer: Region copy,
+ * or Live copy, which stays linked to the area it was picked from.
+ *
+ * @param {unknown} mode
+ * @returns {boolean}
+ */
+export function isCopyMode(mode) {
+  return mode === 'region' || mode === 'live'
 }
 
 /**

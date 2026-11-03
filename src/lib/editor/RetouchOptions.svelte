@@ -13,12 +13,16 @@
    * makes a held selection an edit (`retouch.svelte.js`).
    *
    * Both end in **Apply**, which `Enter` on the page also does, and a line of
-   * help that says what the page is waiting for. On the Patch tool's pill
+   * help that says what the page is waiting for. A gradient is live, so its
+   * button is **Done**: its changes are already on the page, and Done lets
+   * the selection go. On the Patch tool's pill
    * that is all, after a hairline. The Gradient is a panel (`tools.js`), and
    * this draws its body: the tool shell's parameter rows (`params`), then,
    * with no dialog (the plan's "easier"), its stops behind a swatch of the
    * gradient itself, with the two presets and an eyedropper per colour stop;
-   * Reverse, Dither and As screentone as toggles; Match surroundings; and
+   * Reverse, Reduce banding (dither: half a level of noise, so a long
+   * gradient shows no stripes) and Use page dots (the screentone around the
+   * selection, at the gradient's tone, on a grey page) as toggles; Match surroundings; and
    * **Edit gradient** while a gradient layer is selected, which holds that
    * layer's gradient again (an Auto layer's too, and under the Auto type). Apply and the help sit under them, where the
    * Text cleanup panel has its run button. The **Auto** type has none of
@@ -88,9 +92,9 @@
   }
 </script>
 
-{#snippet toggle(key, labelKey, fallback = false)}
+{#snippet toggle(key, labelKey, fallback = false, hintKey = '')}
   {@const on = params[key] === undefined ? fallback : params[key] === true}
-  <Button size="sm" variant={on ? 'soft' : 'ghost'} aria-pressed={on} onclick={() => set(key, !on)}>
+  <Button size="sm" variant={on ? 'soft' : 'ghost'} aria-pressed={on} title={hintKey ? t(hintKey) : undefined} onclick={() => set(key, !on)}>
     {t(labelKey)}
   </Button>
 {/snippet}
@@ -105,7 +109,7 @@
 
 {#snippet apply()}
   <Button size="sm" variant="primary" disabled={!ready} onclick={() => void applySelection()}>
-    {t('retouch.apply')}
+    {t(tool === 'gradient' && !auto ? 'retouch.done' : 'retouch.apply')}
   </Button>
 {/snippet}
 
@@ -172,8 +176,8 @@
       </div>
       <div class="choices">
         {@render toggle('reverse', 'retouch.gradient.reverse')}
-        {@render toggle('dither', 'retouch.gradient.dither', true)}
-        {@render toggle('asScreentone', 'retouch.gradient.asScreentone')}
+        {@render toggle('dither', 'retouch.gradient.dither', true, 'retouch.gradient.ditherHint')}
+        {@render toggle('asScreentone', 'retouch.gradient.asScreentone', false, 'retouch.gradient.asScreentoneHint')}
       </div>
       <div class="choices">
         <Button size="sm" variant="soft" disabled={!held} onclick={() => void matchSurroundings()}>

@@ -2,7 +2,7 @@
   import { tileOrigin, pageVersion } from '../api/tile.js'
   import { editor, pages } from '../state/editor.svelte.js'
   import { pageRatio } from './zoom.js'
-  import { isDrawingTool } from './tools.js'
+  import { isCopyMode, isDrawingTool } from './tools.js'
   import { isRegionCopy } from '../model/layers.js'
   import DetectionMasks from './DetectionMasks.svelte'
   import DrawLayer from './DrawLayer.svelte'
@@ -89,7 +89,7 @@
   // region-click seam survives underneath.
   const copySelected = $derived((editor.chapter?.pages ?? []).some((candidate) =>
     candidate.regions?.some((region) => region.id === editor.selectionId && isRegionCopy(region))))
-  const placingCopy = $derived(editor.tool === 'cloneStamp' && editor.toolParams.cloneStamp?.mode === 'region' && copySelected)
+  const placingCopy = $derived(editor.tool === 'cloneStamp' && isCopyMode(editor.toolParams.cloneStamp?.mode) && copySelected)
   const movingCopy = $derived((current || strip) && (editor.chapter?.pages ?? []).some((candidate) =>
     candidate.regions?.some(region => isRegionCopy(region) && layerPreviews.has(region.id))))
   const drawing = $derived(isDrawingTool(editor.tool) && !placingCopy)

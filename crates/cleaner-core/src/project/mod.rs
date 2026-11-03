@@ -1990,7 +1990,8 @@ impl Job {
             .find(|row| row.id == region_id && row.legacy_revision_id().as_deref() == Some(revision))
             .cloned();
         let Some(selected) = selected else { return Ok(false) };
-        let patch = self.load_patch(&selected)?;
+        // The compatibility ink is the stored one, as `complete_region` writes it.
+        let patch = self.load_stored_patch(&selected)?;
         buffers::write_atomic(
             &self.dir.join(format!("{region_id}.ink")),
             &buffers::encode_mask(&patch.ink),
@@ -2303,8 +2304,9 @@ impl Job {
                     previous
                 } else {
                     // A v3 row used mutable sidecar names. Preserve its bytes
-                    // before the next revision can replace those names.
-                    let old = self.load_patch(&previous)?;
+                    // before the next revision can replace those names: as
+                    // stored, since the archived row keeps its layer style.
+                    let old = self.load_stored_patch(&previous)?;
                     let old_mask = buffers::encode_mask(&old.mask);
                     let old_ink = buffers::encode_mask(&old.ink);
                     let old_pixels = buffers::encode_patch(&old.pixels);
@@ -3382,13 +3384,23 @@ impl Job {
         self.flush()
     }
 
-    /// Read one recorded patch back.
+    /// Read one recorded patch back, as it is drawn: moved, turned and, for a
+    /// region copy, edge-blended by its saved layer style
+    /// ([`Patch::presented`]).
+    pub fn load_patch(&self, record: &PatchRecord) -> Result<Patch, StoreError> {
+        Ok(self.load_stored_patch(record)?.presented())
+    }
+
+    /// Read one recorded patch back as it is stored: where it was made, with
+    /// its own mask, before its layer style moves it. What an edit of the
+    /// stored pixels starts from, so a write-back under the same style is not
+    /// moved twice.
     ///
     /// A patch written before the ink file existed has none, and its absence
     /// is answered with the applied mask rather than an error: that is what
     /// such a patch's mask file used to say, and a re-run writes the narrower
     /// one. Any other failure to read it is the error it is.
-    pub fn load_patch(&self, record: &PatchRecord) -> Result<Patch, StoreError> {
+    pub fn load_stored_patch(&self, record: &PatchRecord) -> Result<Patch, StoreError> {
         let mask_path = self.dir.join(&record.mask_ref);
         let ink_path = self.dir.join(record.ink_ref());
         let buffer_path = self.dir.join(&record.buffer_ref);
@@ -3420,7 +3432,7 @@ impl Job {
             order: record.order,
             visible: record.visible,
             provenance: record.provenance.clone(),
-        }.presented())
+        })
     }
 
     /// Re-verify every source. §6, and the reason it is a hash and not an

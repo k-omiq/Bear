@@ -34,17 +34,20 @@ export const en = {
     "mode": "Clone mode",
     "stamp": "Clone stamp",
     "name": "Region copy",
+    "live": "Live copy",
     "magnetic": "Magnetic lasso",
     "edgeOpacity": "Edge opacity",
     "rotation": "Rotation",
     "newRegion": "New selection",
     "drawingHelp": "Draw an area. Enter closes a polygon; Backspace removes an anchor.",
+    "liveHelp": "Draw an area to copy. The copy stays linked to it: when the area changes, the copy redraws.",
     "placingHelp": "Drag to move. Use the top handle to rotate."
 },
   // The Patch tool (J) and the Gradient tool (G): their options, the bar's
   // help line, their notices and their undo labels.
   retouch: {
     apply: "Apply",
+    done: "Done",
     patch: {
       mode: "Patch",
       auto: "Auto",
@@ -78,8 +81,10 @@ export const en = {
       addColor: "Add colour stop",
       addOpacity: "Add opacity stop",
       reverse: "Reverse",
-      dither: "Dither",
-      asScreentone: "As screentone",
+      dither: "Reduce banding",
+      ditherHint: "Adds faint noise so the gradient shows no stripes (banding).",
+      asScreentone: "Use page dots",
+      asScreentoneHint: "On a page saved in greyscale, draws the gradient with the screentone dots found around the selection, so it matches the page. A page saved in colour, a scan of black and white art included, gets a plain gradient.",
       match: "Match surroundings",
       edit: "Edit gradient",
     },
@@ -92,7 +97,7 @@ export const en = {
       gradientDraw: "Select the area to fill.",
       gradientAuto: "Select the text on the gradient. It fills from all sides at once.",
       gradientLine: "Drag inside the selection to set the gradient, or Match surroundings.",
-      gradientHandles: "Drag the handles to adjust; Shift turns by 15°. Then Apply.",
+      gradientHandles: "Drag the handles to adjust; Shift turns by 15°. Every change shows on the page as you make it.",
     },
     notice: {
       noSource: "No clean source was found nearby. Drag the dotted outline to one.",
@@ -100,7 +105,7 @@ export const en = {
       selectFirst: "Select an area first.",
       noFit: "The surroundings could not be matched. Set the stops by hand.",
       noColor: "No colour could be read there.",
-      noScreen: "There is no screentone around the selection, so a plain gradient was drawn.",
+      noScreen: "No screentone dots were found around the selection, or the page is in colour. A plain gradient was drawn.",
     },
     command: {
       patch: "a patch",
@@ -3311,7 +3316,7 @@ export const en = {
       maskAdd: 'Selection: add to masks',
       maskRemove: 'Selection: remove from masks (again: add)',
       maskDetect: 'Selection: detect in an area (again: add)',
-      cloneMode: 'Clone stamp: Stamp or Region copy',
+      cloneMode: 'Clone stamp: Stamp, Region copy or Live copy',
       cloneAlignment: 'Clone stamp: aligned or not',
       gradientAuto: 'Gradient: Auto',
     },
