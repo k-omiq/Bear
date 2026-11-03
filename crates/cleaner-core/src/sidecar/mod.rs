@@ -456,7 +456,24 @@ pub fn search_paths_from(explicit: Option<&str>, app_data: Option<&Path>) -> Vec
 /// the copy an environment was given when it was installed, so an update reaches
 /// a machine that has nothing left to download.
 pub fn bundled_source() -> Option<PathBuf> {
-    source_beside(std::env::current_exe().ok()?.parent()?)
+    source_in(RESOURCE_DIR.get().map(PathBuf::as_path))
+        .or_else(|| source_beside(std::env::current_exe().ok()?.parent()?))
+}
+
+/// The app's resource folder, as the shell resolves it. A Linux bundle puts it
+/// under `/usr/lib`, beside neither the executable nor `../Resources`, so
+/// without it a Linux helper ran the copy it was installed with and missed
+/// every update to the helper's code.
+static RESOURCE_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Say where the app's resources are. Set once at start; a second call is ignored.
+pub fn set_resource_dir(dir: PathBuf) {
+    let _ = RESOURCE_DIR.set(dir);
+}
+
+/// The `sidecar` folder in a resource folder, when it holds the helper.
+fn source_in(resources: Option<&Path>) -> Option<PathBuf> {
+    Some(resources?.join(DIRECTORY)).filter(|dir| dir.join(MODULE).join("__main__.py").is_file())
 }
 
 /// `exe_dir`'s `sidecar` resource folder: beside the executable on Windows, and
@@ -662,6 +679,14 @@ mod tests {
         std::fs::create_dir_all(beside.join(MODULE)).unwrap();
         std::fs::write(beside.join(MODULE).join("__main__.py"), "").unwrap();
         assert_eq!(source_beside(&exe_dir), Some(beside));
+
+        // A Linux bundle's resources are found where the shell says they are.
+        let linux = base.join("usr/lib/Manga Cleaner");
+        assert_eq!(source_in(Some(&linux)), None);
+        std::fs::create_dir_all(linux.join(DIRECTORY).join(MODULE)).unwrap();
+        std::fs::write(linux.join(DIRECTORY).join(MODULE).join("__main__.py"), "").unwrap();
+        assert_eq!(source_in(Some(&linux)), Some(linux.join(DIRECTORY)));
+        assert_eq!(source_in(None), None);
         std::fs::remove_dir_all(&base).unwrap();
     }
 

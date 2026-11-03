@@ -91,7 +91,24 @@ def python_in(venv: Path) -> Path:
     return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")
 
 
-def resolve_backend(requested: str, accelerator: str) -> tuple[str, str]:
+def installed_accelerator(root: Path) -> str | None:
+    """The GPU the torch already in this helper was built for, or None.
+
+    Read from the wheel's folder name (`torch-2.13.0+xpu.dist-info`), so a repair
+    under Automatic keeps an Intel XPU that was picked by hand rather than looking
+    on PATH, where `sycl-ls` often is not.
+    """
+    venv = root if (root / "pyvenv.cfg").is_file() else root / ".venv"
+    for info in venv.glob("**/site-packages/torch-*.dist-info"):
+        label = info.name.removesuffix(".dist-info").partition("+")[2]
+        if label.startswith("cu"):
+            return "cuda"
+        if label == "xpu":
+            return "xpu"
+    return None
+
+
+def resolve_backend(requested: str, accelerator: str, installed: str | None = None) -> tuple[str, str]:
     if requested == "auto":
         requested = "mflux" if sys.platform == "darwin" and platform.machine() == "arm64" else "sdnq"
     if requested == "mflux":
@@ -101,7 +118,9 @@ def resolve_backend(requested: str, accelerator: str) -> tuple[str, str]:
     if requested != "sdnq":
         raise ValueError("Unsupported backend")
     if accelerator == "auto":
-        if sys.platform == "darwin":
+        if installed and sys.platform != "darwin":
+            accelerator = installed
+        elif sys.platform == "darwin":
             accelerator = "mps"
         elif shutil.which("nvidia-smi"):
             accelerator = "cuda"
@@ -186,7 +205,7 @@ def install(root: Path, source: Path, backend: str, accelerator: str,
     # Linux has no torchvision 0.28 for Python 3.10.
     if sys.version_info < (3, 11) or sys.version_info >= (3, 13):
         raise ValueError("Python 3.11 or 3.12 is required")
-    backend, accelerator = resolve_backend(backend, accelerator)
+    backend, accelerator = resolve_backend(backend, accelerator, installed_accelerator(root))
     checkpoint = valid_checkpoint(checkpoint or DEFAULT_CHECKPOINTS[backend])
     if not (source / "pyproject.toml").is_file():
         raise ValueError("The app's model helper source is missing")

@@ -733,6 +733,14 @@ now tells that apart (`torch_without_gpu`) from a GPU build that finds no GPU (`
 than CUDA 13.0 or no card), each with its own reason, and Settings has Repair the helper, which runs setup again for
 the model in use and keeps its weights. Not measured: which driver torch 2.13.0 cu130 needs on Windows; whether
 Repair replaces a CPU torch on a real Windows helper (pip should, since the exact `+cu130` build is asked for).
+A review the same day found more, fixed in code and not run on Windows or Linux. Small now gives way to the CPU
+by Full's rule: an inherited GPU that will not open (CUDA with no cuDNN) or fails a page moves Small to the CPU
+for the run, and a whole-app WebGPU or CoreML choice made for LaMa reads as Automatic for Small instead of
+refusing the run. A Linux bundle keeps its resources under `/usr/lib`, where the helper's code was not looked for,
+so a Linux helper ran the copy it was installed with and an old one refused `device_placement`; the app now says
+where its resources are at start. Repair under Automatic keeps the GPU the installed torch was built for (an
+Intel XPU picked by hand), shows only on Windows and Linux, and its note says the model is kept unless an update
+changed it. A helper installed before this build on Linux has not been seen to pick up the bundled code.
 
 **Local FLUX on NVIDIA cards (2026-11-03): measured on an L4 through the real backend.** A 16 GB Windows PC was
 refused FLUX 3: `sdnq` declared 12 GiB, a Mac figure for RAM and GPU in one pool, and the sidecar may use 6.7 GiB of
@@ -758,6 +766,12 @@ measured. Loading the text encoder straight to the card might bring FLUX 3 near 
 tried. Not measured: any of this on Windows, which has no `malloc_trim`; whether the cap at free memory stops the
 Windows driver's spill into RAM; the NVML probe on a Windows driver; Qwen held whole on a 32 GB card. An Intel Arc
 card still gets the Mac figure. With several NVIDIA cards, the smallest one's memory is counted.
+Also not measured: the RAM figures on a 4 or 6 GB card. They hold for at least 7.2 GiB free, and FLUX 3's peak
+rose from 7.9 to 10.0 GiB as free card memory fell, so a smaller card may pass the RAM gate and still run past it;
+the per-region peak check is what catches that. Fixed in code after a review the same day: a card whose free
+memory torch cannot read is capped at its size, not at the RAM figure; the cap is read again before each region,
+so memory the detectors give back is FLUX's; a host shortage is no longer retried by offloading, which only moved
+the weights into RAM; and an offload that fails lets the pipeline go and declines every later region for memory.
 
 **Closing on Windows (2026-11-02): the close hang found, fixed in code.** The release build's close check stopped the
 app 30 s after its window closed, and a debugger showed the main thread in `PeekNamedPipe` and `dev-log-read` in

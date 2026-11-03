@@ -81,6 +81,11 @@ pub fn run() {
                 devlog::install(app.handle());
             }
             webview_lock::install(app.handle());
+            // The FLUX helper runs the code this build ships, wherever the
+            // bundle keeps its resources (`/usr/lib` on Linux).
+            if let Ok(dir) = tauri::Manager::path(app).resource_dir() {
+                cleaner_core::sidecar::set_resource_dir(dir);
+            }
             measurement::restore(app.handle());
             // Regions whose cloud work needs a look (a committed result gone
             // missing, one never applied), read from the attempt journal at

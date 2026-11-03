@@ -869,6 +869,15 @@ describe('the two pipelines', () => {
     expect(mac.container.querySelector('[data-flux-repair]')).toBe(null)
     cleanup()
 
+    // A Mac on the torch arm runs on Metal: there is no CPU-only build to repair.
+    session.fluxBackend = 'sdnq'
+    const macTorch = await open(() => view({ runtime: { platform: 'macos-arm64' } }))
+    await flux(macTorch)
+    await waitFor(() => expect(macTorch.container.querySelector('[data-local-model="flux2-klein-4b"]')).toBeTruthy())
+    expect(macTorch.container.querySelector('[data-flux-repair]')).toBe(null)
+    cleanup()
+    session.fluxBackend = 'auto'
+
     helperModels = []
     const windows = await open(() => view({ runtime: { platform: 'windows-x64' } }))
     await flux(windows)

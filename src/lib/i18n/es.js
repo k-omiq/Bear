@@ -447,7 +447,7 @@ export const es = {
       notFound: 'No se encontró ningún motor en esta carpeta.',
       installing: 'Descargando…',
       repair: 'Reparar el asistente',
-      repairNote: 'Vuelve a instalar los paquetes del asistente, con la versión GPU de torch. El modelo se conserva.',
+      repairNote: 'Vuelve a instalar los paquetes del asistente, con la versión GPU de torch. El modelo se conserva, salvo que una actualización lo haya cambiado.',
       installFailed: 'La descarga falló: {detail}',
       accelerator: 'Entorno de GPU para la instalación',
       acceleratorAuto: 'Automático',

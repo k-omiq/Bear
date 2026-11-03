@@ -441,7 +441,7 @@ export const ko = {
       notFound: '이 폴더에서 엔진을 찾지 못했습니다.',
       installing: '다운로드 중…',
       repair: '도우미 복구',
-      repairNote: '도우미 패키지를 GPU용 torch로 다시 설치합니다. 모델은 그대로 둡니다.',
+      repairNote: '도우미 패키지를 GPU용 torch로 다시 설치합니다. 모델은 업데이트로 바뀌지 않았다면 그대로 둡니다.',
       installFailed: '다운로드 실패: {detail}',
       accelerator: '설치할 GPU 런타임',
       acceleratorAuto: '자동',

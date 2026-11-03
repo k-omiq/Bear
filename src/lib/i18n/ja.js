@@ -444,7 +444,7 @@ export const ja = {
       notFound: 'このフォルダーにエンジンが見つかりません。',
       installing: 'ダウンロード中…',
       repair: 'ヘルパーを修復',
-      repairNote: 'ヘルパーのパッケージを GPU 版の torch で入れ直します。モデルはそのままです。',
+      repairNote: 'ヘルパーのパッケージを GPU 版の torch で入れ直します。モデルは、更新で変わっていなければそのままです。',
       installFailed: 'ダウンロードに失敗しました: {detail}',
       accelerator: 'インストールする GPU ランタイム',
       acceleratorAuto: '自動',

@@ -2576,8 +2576,10 @@
           {@render localModelRow(model)}
         {/each}
         <!-- A helper installed before 1.0.0-beta.16 can hold a torch with no GPU
-             support. Setup again swaps it for the GPU build and keeps the model. -->
-        {#if !fluxUsesMlx && localModels.some((model) => model.installed && model.id === session.fluxModel)}
+             support. Setup again swaps it for the GPU build and keeps the model.
+             Windows and Linux only: a Mac's torch runs on Metal, and before the
+             catalogue names the platform nothing says which this is. -->
+        {#if fluxPlatform && !fluxPlatform.startsWith('macos-') && !fluxUsesMlx && localModels.some((model) => model.installed && model.id === session.fluxModel)}
           <div class="local-model" data-flux-repair>
             <span class="local-text">
               <span class="local-name">{t('settings.sidecar.repair')}</span>

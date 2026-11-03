@@ -727,6 +727,8 @@ mod tests {
             Decline::SidecarMemory,
             Decline::SidecarUnbounded,
             Decline::SidecarWeightsMissing,
+            Decline::SidecarTorchWithoutGpu,
+            Decline::SidecarGpuUnreachable,
         ];
         let mut keys: Vec<&str> = all.iter().map(|d| d.reason_key()).collect();
         keys.sort_unstable();

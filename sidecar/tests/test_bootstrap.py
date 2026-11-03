@@ -165,6 +165,23 @@ class BootstrapTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             bootstrap.resolve_backend("sdnq", "bogus")
 
+    def test_a_repair_under_automatic_keeps_the_gpu_torch_was_built_for(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".venv").mkdir()
+            (root / ".venv" / "pyvenv.cfg").write_text("")
+            self.assertIsNone(bootstrap.installed_accelerator(root))
+            site = root / ".venv" / "Lib" / "site-packages"
+            site.mkdir(parents=True)
+            (site / "torch-2.13.0.dist-info").mkdir()
+            self.assertIsNone(bootstrap.installed_accelerator(root), "a CPU-only torch names no GPU")
+            (site / "torch-2.13.0.dist-info").rmdir()
+            (site / "torch-2.13.0+xpu.dist-info").mkdir()
+            self.assertEqual(bootstrap.installed_accelerator(root), "xpu")
+        with patch.object(bootstrap.sys, "platform", "win32"), patch.object(bootstrap.shutil, "which", return_value=None):
+            self.assertEqual(bootstrap.resolve_backend("sdnq", "auto", "xpu"), ("sdnq", "xpu"))
+            self.assertEqual(bootstrap.resolve_backend("sdnq", "cuda", "xpu"), ("sdnq", "cuda"), "a choice made wins")
+
     def test_windows_cuda_uses_published_torch_wheel(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch) / "install"

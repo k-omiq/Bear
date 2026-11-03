@@ -396,6 +396,11 @@ class SdnqBackend(BackendBase):
         self.applied_calls: List[str] = []
         #: How the pipeline sits on the accelerator: :func:`placement_for`'s answer.
         self.placement: str = "model"
+        #: Whether the device is a discrete card, whose cap follows its free memory.
+        self.discrete: bool = False
+        #: Set when a held pipeline ran out of card memory and could not be offloaded:
+        #: the pipeline is gone, and every later region declines for memory.
+        self.lost_to_memory: Optional[str] = None
 
     @property
     def backend_id(self) -> str:
@@ -437,6 +442,26 @@ class SdnqBackend(BackendBase):
         except Exception:
             return None
         return None
+
+    @classmethod
+    def _card_cap_bytes(cls, device: str) -> Optional[int]:
+        """What this process may hold on a discrete card: its free memory plus what this
+        process's allocator already reserved there."""
+        import torch
+
+        free = cls._accelerator_free_bytes(device)
+        if free is None:
+            return None
+        try:
+            return free + int(torch.cuda.memory_reserved())
+        except Exception:
+            return free
+
+    @classmethod
+    def _card_cap_or_size(cls, device: str) -> Optional[int]:
+        """The open's cap on a discrete card: :meth:`_card_cap_bytes`, or the card's size
+        when torch cannot read its free memory."""
+        return cls._card_cap_bytes(device) or cls._accelerator_total_bytes(device)
 
     @staticmethod
     def _accelerator_free_bytes(device: str) -> Optional[int]:
@@ -671,8 +696,11 @@ class SdnqBackend(BackendBase):
             )
         # On a discrete GPU the RAM budget says nothing about the card, so the cap is the
         # card's own free memory. Torch then fails a render rather than letting the Windows
-        # driver spill GPU memory into RAM.
-        cap_bytes = (self._accelerator_free_bytes(device) if discrete else None) or total_bytes
+        # driver spill GPU memory into RAM. A card whose free memory torch cannot read is
+        # capped at its size, never at the RAM figure.
+        self.discrete = discrete
+        self.lost_to_memory = None
+        cap_bytes = (self._card_cap_or_size(device) if discrete else None) or total_bytes
         fraction_call = self._apply_memory_fraction(device, cap_bytes)
         if fraction_call is None:
             raise SidecarError(
@@ -826,14 +854,39 @@ class SdnqBackend(BackendBase):
 
         A pipeline held whole that runs out of card memory is offloaded and the crop
         asked again, once: a larger crop than the margin allowed for is the card's
-        limit for this crop, not for this model.
+        limit for this crop, not for this model. A host shortage is not retried, as
+        offloading moves the weights into RAM. A discrete card's cap is read again
+        first, so memory the detectors gave back since the open is FLUX's to use.
         """
+        if self.lost_to_memory is not None:
+            raise SidecarError(507, ErrorKind.OUT_OF_MEMORY, self.lost_to_memory)
+        if self.discrete and self.device is not None:
+            cap = self._card_cap_bytes(self.device)
+            if cap:
+                self._apply_memory_fraction(self.device, cap)
         try:
             return self._render_once(image, hint, prompt, steps, seed, guidance)
         except SidecarError as exc:
-            if self.placement != "resident" or exc.kind != ErrorKind.OUT_OF_MEMORY.value:
+            if (
+                self.placement != "resident"
+                or exc.kind != ErrorKind.OUT_OF_MEMORY.value
+                or not _card_memory(str(exc))
+            ):
                 raise
-        self.applied_calls = [self.applied_calls[0], self._offload(self.pipeline, self.device)]
+            shortage = str(exc)
+        try:
+            offload_call = self._offload(self.pipeline, self.device)
+        except Exception as exc:
+            # Half moved is no placement: let it go, with the card memory it holds.
+            self.pipeline = None
+            gc.collect()
+            self._empty_cache()
+            self.lost_to_memory = (
+                f"The card ran out of memory ({shortage}) and the model could not be "
+                f"offloaded: {exc}"
+            )
+            raise SidecarError(507, ErrorKind.OUT_OF_MEMORY, self.lost_to_memory) from exc
+        self.applied_calls = [self.applied_calls[0], offload_call]
         return self._render_once(image, hint, prompt, steps, seed, guidance)
 
     def _render_once(
@@ -1069,6 +1122,20 @@ def _looks_like_memory(detail: str) -> bool:
             "watermark",
             "mps backend out of memory",
         )
+    )
+
+
+def _card_memory(detail: str) -> bool:
+    """Whether a memory failure is the accelerator's rather than the host's.
+
+    A host allocation names itself: Python's `MemoryError` (reported here as a
+    host allocation failure) and torch's CPU allocator, which says it "can't
+    allocate memory".
+    """
+    lowered = detail.lower()
+    return not any(
+        needle in lowered
+        for needle in ("host allocation", "defaultcpuallocator", "cannot allocate", "can't allocate")
     )
 
 

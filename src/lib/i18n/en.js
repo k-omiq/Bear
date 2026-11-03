@@ -521,7 +521,7 @@ export const en = {
       notFound: 'No engine found in this folder.',
       installing: 'Downloading…',
       repair: 'Repair the helper',
-      repairNote: 'Installs the helper\'s packages again, with the GPU build of torch. The model is kept.',
+      repairNote: 'Installs the helper\'s packages again, with the GPU build of torch. The model is kept unless an update changed it.',
       installFailed: 'Download failed: {detail}',
       accelerator: 'GPU runtime for installation',
       acceleratorAuto: 'Automatic',

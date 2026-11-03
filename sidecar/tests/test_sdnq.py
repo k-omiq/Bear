@@ -341,6 +341,46 @@ class FallBack(unittest.TestCase):
                 backend.render(None, None, "p", 4, 1, 1.0, 1000)  # type: ignore[arg-type]
         self.assertEqual(once.call_count, 1)
 
+    def _resident(self) -> SdnqBackend:
+        backend = SdnqBackend()
+        backend.placement = "resident"
+        backend.device = "cuda"
+        backend.pipeline = mock.Mock()
+        backend.applied_calls = ["torch.cuda.set_per_process_memory_fraction", "pipeline.to"]
+        return backend
+
+    def test_a_host_shortage_is_not_offloaded(self) -> None:
+        """Offload moves the weights into RAM, which a host shortage has none of."""
+        for detail in ("Host allocation failure during diffusion inference: ",
+                       "torch allocation cap fired during render: DefaultCPUAllocator: can't allocate memory"):
+            backend = self._resident()
+            error = SidecarError(507, ErrorKind.OUT_OF_MEMORY, detail)
+            with mock.patch.object(backend, "_render_once", side_effect=error) as once:
+                with self.assertRaises(SidecarError):
+                    backend.render(None, None, "p", 4, 1, 1.0, 1000)  # type: ignore[arg-type]
+            self.assertEqual(once.call_count, 1, detail)
+            backend.pipeline.enable_model_cpu_offload.assert_not_called()
+            self.assertEqual(backend.placement, "resident")
+
+    def test_a_failed_offload_lets_the_pipeline_go_and_declines_after(self) -> None:
+        backend = self._resident()
+        backend.pipeline.enable_model_cpu_offload.side_effect = RuntimeError("hooks half placed")
+        error = SidecarError(507, ErrorKind.OUT_OF_MEMORY, "torch CUDA allocator cap fired during render: CUDA out of memory")
+        with mock.patch.object(backend, "_render_once", side_effect=error) as once, \
+                mock.patch.object(backend, "_empty_cache"):
+            for _ in range(2):
+                with self.assertRaises(SidecarError) as raised:
+                    backend.render(None, None, "p", 4, 1, 1.0, 1000)  # type: ignore[arg-type]
+                self.assertEqual((raised.exception.status_code, raised.exception.kind), (507, ErrorKind.OUT_OF_MEMORY.value))
+        self.assertEqual(once.call_count, 1)
+        self.assertIsNone(backend.pipeline)
+
+    def test_a_card_whose_free_memory_is_unread_is_capped_at_its_size(self) -> None:
+        backend = SdnqBackend()
+        with mock.patch.object(SdnqBackend, "_accelerator_free_bytes", return_value=None), \
+                mock.patch.object(SdnqBackend, "_accelerator_total_bytes", return_value=24 * GIB):
+            self.assertEqual(backend._card_cap_or_size("cuda"), 24 * GIB)
+
 
 class RamFigure(unittest.TestCase):
     """What the gate is told this machine's RAM must hold, by kind of device."""
