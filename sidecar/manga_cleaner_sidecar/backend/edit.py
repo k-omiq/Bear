@@ -8,7 +8,7 @@ deploy/cloud/tests/test_recipe_parity.py holds the numbers below equal to the wo
 
 What differs from the worker:
 
-- The pipeline stays where `SdnqBackend` puts it, under its offload and allocator cap.
+- The pipeline stays where `SdnqBackend` puts it, under its placement and allocator cap.
   The worker owns a GPU and moves everything onto it.
 - Target and description guidance, FLUX 3's generation options and the prompt upsampler
   are not offered: the parent sends one prompt per crop.

@@ -89,19 +89,25 @@
 //!   complaint there was never that the guard was wrong; it was that it was
 //!   aimed at an allocator that was not in the inference path. On this backend
 //!   torch *is* the inference path.
-//! - **[`CPU_OFFLOAD`]** - `diffusers`' `enable_model_cpu_offload`, or
-//!   `enable_sequential_cpu_offload` where the accelerator cannot hold one
-//!   component. One component on the device at a time, the rest on the host.
+//! - **[`DEVICE_PLACEMENT`]** - the pipeline placed for what the accelerator
+//!   has free. Whole, by `pipeline.to`, on a discrete GPU with room for every
+//!   component and a margin; else `diffusers`' `enable_model_cpu_offload`, one
+//!   component on the device at a time; else `enable_sequential_cpu_offload`
+//!   where the card cannot hold one component. Unified memory always offloads,
+//!   since its card memory is RAM. Named `cpu_offload` until 2026-11-03, when a
+//!   card that held the whole model still had every weight moved across the bus
+//!   for every render.
 //!
 //! **And the two behaviours `sdcpp` requires are deliberately not required of
 //! it**, on the same rule that withdrew them from `mflux`. `vae_tiling` seams a
 //! crop at the working resolution a small region is upscaled into, because
 //! `diffusers` tiles above its VAE's own sample threshold and that threshold is
-//! below 768. `text_encoder_eviction` is not a *second* promise: the offload
-//! hook is what performs it - `diffusers` moves the encoder back to the host
-//! after encoding and moves it out again next call, which is the behaviour
-//! `mflux` was found unable to repeat - so it is [`CPU_OFFLOAD`] under another
-//! name, and naming one behaviour twice makes an echo look richer than it is.
+//! below 768. `text_encoder_eviction` is not a *second* promise: the placement
+//! decides it - offloaded, `diffusers` moves the encoder back to the host after
+//! encoding and moves it out again next call, which is the behaviour `mflux`
+//! was found unable to repeat, and held whole, the card had room for it - so it
+//! is [`DEVICE_PLACEMENT`] under another name, and naming one behaviour twice
+//! makes an echo look richer than it is.
 //!
 //! **A machine with no accelerator is refused rather than served.** With no
 //! CUDA, XPU or Metal device there is nothing to offload to and no fraction to
@@ -220,11 +226,11 @@ pub const MX_CACHE_LIMIT: &str = "mx.set_cache_limit";
 /// *device's* and a contract is compiled before the device is known.
 ///
 /// [`MEMORY_FRACTION`] is `torch.{cuda,mps,xpu}.set_per_process_memory_fraction`
-/// and [`CPU_OFFLOAD`] is `diffusers`' `enable_model_cpu_offload` or its
-/// sequential sibling. The sidecar echoes both these names *and* the concrete
+/// and [`DEVICE_PLACEMENT`] is `pipeline.to`, `diffusers`' `enable_model_cpu_offload`
+/// or its sequential sibling. The sidecar echoes both these names *and* the concrete
 /// call it made, so nothing is hidden by the neutrality.
 pub const MEMORY_FRACTION: &str = "memory_fraction";
-pub const CPU_OFFLOAD: &str = "cpu_offload";
+pub const DEVICE_PLACEMENT: &str = "device_placement";
 
 pub const MFLUX: Contract = Contract {
     id: "mflux",
@@ -241,13 +247,13 @@ pub const SDNQ: Contract = Contract {
     id: "sdnq",
     allocator: "torch",
     cap: Cap::Fraction { limit: MEMORY_FRACTION },
-    // The fraction, and the offload. The two behaviours `sdcpp` requires are
+    // The fraction, and the placement. The two behaviours `sdcpp` requires are
     // *not* here and the module docs give the measurement behind each: tiling
     // seams the working resolution a small crop is upscaled into, and the
-    // encoder's eviction is what the offload hook already does rather than a
+    // encoder's eviction is what the placement already decides rather than a
     // second promise. What stands behind these two is the parent's per-region
     // peak check, as it does for every backend.
-    required: &[MEMORY_FRACTION, CPU_OFFLOAD],
+    required: &[MEMORY_FRACTION, DEVICE_PLACEMENT],
 };
 
 pub const SDCPP: Contract = Contract {
@@ -429,12 +435,12 @@ mod tests {
     /// fraction bounds reserved memory - cache included - so a cache name would
     /// be a name nothing can answer to, and the two *behaviours* are either
     /// harmful here (tiling seams the working resolution) or already inside the
-    /// offload (the encoder's eviction).
+    /// placement (the encoder's eviction).
     #[test]
-    fn sdnq_caps_the_fraction_and_offloads_and_promises_nothing_else() {
+    fn sdnq_caps_the_fraction_and_places_and_promises_nothing_else() {
         let contract = Backend::Sdnq.contract();
         assert_eq!(contract.allocator, "torch");
-        assert_eq!(contract.required, &[MEMORY_FRACTION, CPU_OFFLOAD]);
+        assert_eq!(contract.required, &[MEMORY_FRACTION, DEVICE_PLACEMENT]);
         assert!(!contract.required.contains(&VAE_TILING));
         assert!(!contract.required.contains(&TEXT_ENCODER_EVICTION));
         assert!(matches!(contract.cap, Cap::Fraction { limit } if limit == MEMORY_FRACTION));

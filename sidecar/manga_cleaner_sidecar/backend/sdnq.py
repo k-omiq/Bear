@@ -132,9 +132,15 @@ WORK_LONG_SIDE = 768
 #: `cleaner_core::engines::flux::LATENT_STRIDE` and `mflux.py`'s, on purpose.
 LATENT_STRIDE = 16
 
-#: Canonical name for "one component of the pipeline is on the accelerator at a
-#: time". Matches `cleaner_core::sidecar::backend::CPU_OFFLOAD`.
-CPU_OFFLOAD = "cpu_offload"
+#: Canonical name for "the pipeline is placed for what the accelerator has free": whole
+#: on a discrete GPU that holds it, else one component at a time, else one submodule at
+#: a time. Matches `cleaner_core::sidecar::backend::DEVICE_PLACEMENT`.
+DEVICE_PLACEMENT = "device_placement"
+
+#: What a pipeline held whole on a discrete GPU must leave free for a render, its text
+#: encoder's turn included. diffusers' own margin for `enable_auto_cpu_offload`, which
+#: FLUX 3 already runs under. Not measured for Klein or Qwen held whole.
+RESIDENT_MARGIN = 3 * 1024 * 1024 * 1024
 
 #: Canonical name for the caching allocator's fraction cap. Matches
 #: `cleaner_core::sidecar::backend::MEMORY_FRACTION`.
@@ -304,23 +310,60 @@ def largest_component_bytes(path: Optional[str]) -> Optional[int]:
     return max((size for size in sizes if size), default=None)
 
 
+def placement_for(
+    device: str,
+    discrete: bool,
+    family: str,
+    room: Optional[int],
+    whole: Optional[int],
+    largest: Optional[int],
+    low_vram: Optional[bool],
+) -> str:
+    """How a pipeline sits on the accelerator, given what the card has free.
+
+    - ``"auto"``: FLUX 3's components manager, which keeps components on the card until
+      another one needs the room. It decides for itself.
+    - ``"resident"``: the whole pipeline on a discrete GPU with :data:`RESIDENT_MARGIN` to
+      spare. No weights cross the bus between renders, and RAM is left with none of them.
+    - ``"model"``: one component on the card at a time. Unified memory always takes this:
+      the card's memory is RAM, and two copies would be one too many.
+    - ``"sequential"``: one submodule at a time, where the card cannot hold the largest
+      component. Much slower: Qwen on a 23 GB L4 spent 373 s on a crop this way.
+
+    ``room`` is the card's free memory where torch can say, else its total. ``whole`` is
+    every component on disk, the text encoder included, since a Klein encoder joins the
+    card for a new prompt. ``low_vram`` is ``MC_SIDECAR_LOW_VRAM``: true forces sequential,
+    false rules it out.
+    """
+    if family == "flux3":
+        return "auto"
+    if low_vram is True:
+        return "sequential"
+    if discrete and device == "cuda" and room and whole and room >= whole + RESIDENT_MARGIN:
+        return "resident"
+    if low_vram is None and device in ("cuda", "xpu") and room and largest and room < largest * 3 // 2:
+        return "sequential"
+    return "model"
+
+
 class SdnqBackend(BackendBase):
     """`torch` + `diffusers` + `sdnq`, on CUDA, XPU or Metal."""
 
     # Canonical guard names from cleaner-core::sidecar::backend::SDNQ. Two, and
     # both are things this backend does on every render for every model: the
-    # offload hook is installed at open and stays installed, and the fraction
+    # placement is made at open and stays in force, and the fraction
     # is a property of the allocator rather than of a call site. A guard that
     # cannot be promised for every render must not be echoed, and
     # neither `vae_tiling` nor `text_encoder_eviction` is one of them here -
     # see `get_applied_guards`.
-    CANONICAL_GUARDS = [CPU_OFFLOAD, MEMORY_FRACTION]
+    CANONICAL_GUARDS = [DEVICE_PLACEMENT, MEMORY_FRACTION]
 
     GUARD_ALIASES: Dict[str, str] = {
-        CPU_OFFLOAD: CPU_OFFLOAD,
-        "model_cpu_offload": CPU_OFFLOAD,
-        "sequential_cpu_offload": CPU_OFFLOAD,
-        "enable_model_cpu_offload": CPU_OFFLOAD,
+        DEVICE_PLACEMENT: DEVICE_PLACEMENT,
+        "cpu_offload": DEVICE_PLACEMENT,
+        "model_cpu_offload": DEVICE_PLACEMENT,
+        "sequential_cpu_offload": DEVICE_PLACEMENT,
+        "enable_model_cpu_offload": DEVICE_PLACEMENT,
         MEMORY_FRACTION: MEMORY_FRACTION,
         "set_per_process_memory_fraction": MEMORY_FRACTION,
         "torch.cuda.set_per_process_memory_fraction": MEMORY_FRACTION,
@@ -345,7 +388,8 @@ class SdnqBackend(BackendBase):
         #: The concrete calls, spelled as the runtime spells them, so the log
         #: names what actually ran and not only the neutral contract name.
         self.applied_calls: List[str] = []
-        self.sequential_offload = False
+        #: How the pipeline sits on the accelerator: :func:`placement_for`'s answer.
+        self.placement: str = "model"
 
     @property
     def backend_id(self) -> str:
@@ -510,7 +554,7 @@ class SdnqBackend(BackendBase):
         measurement that withdrew the same guard from the MLX arm.
         `text_encoder_eviction` is not echoed because nothing is evicted: Klein and
         FLUX 3 load their encoder only for a new prompt (:meth:`_prompt_embeds`), and
-        Qwen keeps its own under the offload hook, for it reads every crop.
+        Qwen keeps its own in the pipeline, for it reads every crop.
         """
         if not self.applied_guards_set:
             return []
@@ -577,7 +621,7 @@ class SdnqBackend(BackendBase):
                 501,
                 ErrorKind.UNBOUNDED_BACKEND,
                 "No CUDA, XPU or Metal device is available, so torch has no "
-                "accelerator allocator to bound: neither cpu_offload nor "
+                "accelerator allocator to bound: neither device_placement nor "
                 "memory_fraction can be applied, and this backend will not echo "
                 "a guard it did not apply. CPU-only diffusion of a 4B "
                 "transformer is not offered.",
@@ -615,23 +659,16 @@ class SdnqBackend(BackendBase):
                 "runtime's own units.",
             )
 
-        # Sequential offload moves one *submodule* at a time and is much slower;
-        # it is taken only when the accelerator plainly cannot hold a component,
-        # which on a discrete GPU is a real and common case and on unified
-        # memory never happens. The largest component is the test, not all the
-        # weights: model offload holds one at a time. Measured on a 23 GB L4, a
-        # test on Qwen's 18 GB of weights took this path and spent 373 s on a crop.
-        capacity = self._accelerator_total_bytes(device) or 0
-        weights = largest_component_bytes(self.weights_dir) or 0
         env_low = os.environ.get("MC_SIDECAR_LOW_VRAM", "").strip().lower()
-        if env_low in ("1", "true", "yes"):
-            self.sequential_offload = True
-        elif env_low in ("0", "false", "no"):
-            self.sequential_offload = False
-        else:
-            self.sequential_offload = bool(
-                device in ("cuda", "xpu") and capacity and weights and capacity < weights * 3 // 2
-            )
+        self.placement = placement_for(
+            device=device,
+            discrete=discrete,
+            family=self.family,
+            room=self._accelerator_free_bytes(device) or self._accelerator_total_bytes(device),
+            whole=self.get_weights_bytes(),
+            largest=largest_component_bytes(self.weights_dir),
+            low_vram=True if env_low in ("1", "true", "yes") else False if env_low in ("0", "false", "no") else None,
+        )
 
         components_manager = None
         try:
@@ -671,10 +708,20 @@ class SdnqBackend(BackendBase):
 
         try:
             if components_manager is not None:
-                # A modular pipeline's offload is its manager's, one component at a time.
+                # A modular pipeline's offload is its manager's: components stay on the
+                # card until another one needs the room.
                 components_manager.enable_auto_cpu_offload(device=device)
                 offload_call = "enable_auto_cpu_offload"
-            elif self.sequential_offload:
+            elif self.placement == "resident":
+                try:
+                    pipeline.to(device)
+                    offload_call = "pipeline.to"
+                except Exception as exc:
+                    if not _looks_like_memory(str(exc)):
+                        raise
+                    # The card was not as free as it said: offload, as a smaller card would.
+                    offload_call = self._offload(pipeline, device)
+            elif self.placement == "sequential":
                 pipeline.enable_sequential_cpu_offload(device=device)
                 offload_call = "enable_sequential_cpu_offload"
             else:
@@ -684,9 +731,9 @@ class SdnqBackend(BackendBase):
             raise SidecarError(
                 501,
                 ErrorKind.UNBOUNDED_BACKEND,
-                f"diffusers would not install a CPU offload hook on device "
-                f"'{device}': {exc}. Without it the whole pipeline sits on the "
-                "accelerator at once, which this backend will not do silently.",
+                f"diffusers would not place the pipeline on device '{device}': {exc}. "
+                "Without a placement the whole pipeline sits on the accelerator "
+                "whether it fits or not, which this backend will not do silently.",
             ) from exc
 
         self.pipeline = pipeline
@@ -733,6 +780,14 @@ class SdnqBackend(BackendBase):
             return candidate
         return {name: value for name, value in candidate.items() if name in accepted}
 
+    def _offload(self, pipeline: Any, device: str) -> str:
+        """Model offload, for a pipeline the card could not hold whole after all."""
+        gc.collect()
+        self._empty_cache()
+        pipeline.enable_model_cpu_offload(device=device)
+        self.placement = "model"
+        return "enable_model_cpu_offload"
+
     def render(
         self,
         image: ImageBuffer,
@@ -744,6 +799,29 @@ class SdnqBackend(BackendBase):
         deadline_ms: int,
     ) -> Tuple[ImageBuffer, int]:
         """Inpaint the hint's lettering in one crop, at exactly the geometry asked.
+
+        A pipeline held whole that runs out of card memory is offloaded and the crop
+        asked again, once: a larger crop than the margin allowed for is the card's
+        limit for this crop, not for this model.
+        """
+        try:
+            return self._render_once(image, hint, prompt, steps, seed, guidance)
+        except SidecarError as exc:
+            if self.placement != "resident" or exc.kind != ErrorKind.OUT_OF_MEMORY.value:
+                raise
+        self.applied_calls = [self.applied_calls[0], self._offload(self.pipeline, self.device)]
+        return self._render_once(image, hint, prompt, steps, seed, guidance)
+
+    def _render_once(
+        self,
+        image: ImageBuffer,
+        hint: Optional[ImageBuffer],
+        prompt: str,
+        steps: int,
+        seed: int,
+        guidance: float,
+    ) -> Tuple[ImageBuffer, int]:
+        """One crop, under the placement the pipeline has now.
 
         The hole is :func:`hole_for`: the latents outside it are held to the
         crop's own at every step, so the model redraws only the lettering. The

@@ -731,6 +731,11 @@ The RAM figures are L4 host peaks on Linux, rounded up and never below the downl
 component in RAM. Not measured: RAM peaks on Windows, which has no `malloc_trim`; whether the cap at free memory
 stops the Windows driver's spill into RAM; the NVML probe on a real Windows driver. An Intel Arc card still gets the
 full figure, because an Intel GPU may share RAM. With several NVIDIA cards, the smallest one's memory is counted.
+Also in code the same day: a pipeline that fits the card's free memory with 3 GiB to spare now stays on the card,
+in place of model offload moving every weight across the bus for every render. That is Klein 4B on a 12 GB card,
+Klein 9B on a 16 GB card with 15 GiB free, and Qwen on 24 GB; FLUX 3 already kept components on the card. A render that runs out of card
+memory offloads and asks again once. Not measured: whether 3 GiB (diffusers' own margin) is enough for Klein or Qwen
+held whole, the render time it saves, and the RAM it frees after load.
 
 **Closing on Windows (2026-11-02): the close hang found, fixed in code.** The release build's close check stopped the
 app 30 s after its window closed, and a debugger showed the main thread in `PeekNamedPipe` and `dev-log-read` in

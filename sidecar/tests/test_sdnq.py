@@ -27,15 +27,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from manga_cleaner_sidecar.backend import BACKENDS, get_backend, importable_backends, sdnq
 from manga_cleaner_sidecar.backend.sdnq import (
-    CPU_OFFLOAD,
     DECLARED_RAM_WORKING_SET,
     DECLARED_WORKING_SET,
+    DEVICE_PLACEMENT,
     LATENT_STRIDE,
     MEMORY_FRACTION,
+    RESIDENT_MARGIN,
     WORK_LONG_SIDE,
     SdnqBackend,
     find_weights_dir,
     importable,
+    placement_for,
     resolve_pipeline_dir,
     weights_bytes_of,
 )
@@ -217,9 +219,10 @@ class Contract(unittest.TestCase):
     def test_the_guard_vocabulary_is_the_two_the_rust_contract_requires(self) -> None:
         backend = SdnqBackend()
         self.assertEqual(backend.backend_id, "sdnq")
-        self.assertEqual(backend.CANONICAL_GUARDS, [CPU_OFFLOAD, MEMORY_FRACTION])
+        self.assertEqual(backend.CANONICAL_GUARDS, [DEVICE_PLACEMENT, MEMORY_FRACTION])
         # The concrete calls a caller might name instead all map onto the two.
         for spelling in (
+            "cpu_offload",
             "model_cpu_offload",
             "sequential_cpu_offload",
             "torch.mps.set_per_process_memory_fraction",
@@ -263,6 +266,77 @@ class Contract(unittest.TestCase):
 
     def test_release_is_safe_before_an_open(self) -> None:
         SdnqBackend().release()
+
+
+class Placement(unittest.TestCase):
+    """Where the pipeline sits, for what the card has free."""
+
+    def _place(self, room: int, whole: int = 6 * GIB, largest: int = 3 * GIB, **kw: object) -> str:
+        args = dict(device="cuda", discrete=True, family="klein", room=room, whole=whole, largest=largest, low_vram=None)
+        args.update(kw)
+        return placement_for(**args)  # type: ignore[arg-type]
+
+    def test_a_card_that_holds_the_whole_pipeline_keeps_it(self) -> None:
+        self.assertEqual(self._place(6 * GIB + RESIDENT_MARGIN), "resident")
+        self.assertEqual(self._place(6 * GIB + RESIDENT_MARGIN - 1), "model")
+        self.assertEqual(self._place(24 * GIB, family="qwen", whole=17 * GIB), "resident")
+
+    def test_a_card_too_small_for_one_component_takes_it_a_piece_at_a_time(self) -> None:
+        self.assertEqual(self._place(4 * GIB), "sequential")
+        self.assertEqual(self._place(4 * GIB, device="xpu", discrete=False), "sequential")
+
+    def test_memory_shared_with_ram_never_holds_a_second_copy(self) -> None:
+        for device in ("mps", "xpu"):
+            self.assertEqual(self._place(64 * GIB, device=device, discrete=False), "model")
+        # CUDA on a board whose GPU memory is RAM: NVML reports none.
+        self.assertEqual(self._place(64 * GIB, discrete=False), "model")
+
+    def test_flux3_is_left_to_its_components_manager(self) -> None:
+        self.assertEqual(self._place(64 * GIB, family="flux3"), "auto")
+        self.assertEqual(self._place(2 * GIB, family="flux3"), "auto")
+
+    def test_the_low_vram_setting_forces_or_rules_out_sequential(self) -> None:
+        self.assertEqual(self._place(64 * GIB, low_vram=True), "sequential")
+        self.assertEqual(self._place(4 * GIB, low_vram=False), "model")
+        self.assertEqual(self._place(64 * GIB, low_vram=False), "resident")
+
+    def test_an_unknown_size_is_offloaded(self) -> None:
+        self.assertEqual(self._place(0), "model")
+        self.assertEqual(self._place(64 * GIB, whole=None), "model")  # type: ignore[arg-type]
+
+
+class FallBack(unittest.TestCase):
+    """A pipeline held whole that runs out of card memory is offloaded, once."""
+
+    def test_an_out_of_memory_render_is_offloaded_and_asked_again(self) -> None:
+        backend = SdnqBackend()
+        backend.placement = "resident"
+        backend.device = "cuda"
+        backend.pipeline = mock.Mock()
+        backend.applied_calls = ["torch.cuda.set_per_process_memory_fraction", "pipeline.to"]
+        answers = [SidecarError(507, ErrorKind.OUT_OF_MEMORY, "full"), ("crop", 1)]
+
+        def once(*_: object) -> object:
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with mock.patch.object(backend, "_render_once", side_effect=once), mock.patch.object(backend, "_empty_cache"):
+            self.assertEqual(backend.render(None, None, "p", 4, 1, 1.0, 1000), ("crop", 1))  # type: ignore[arg-type]
+        backend.pipeline.enable_model_cpu_offload.assert_called_once_with(device="cuda")
+        self.assertEqual(backend.placement, "model")
+        self.assertEqual(backend.applied_calls[1], "enable_model_cpu_offload")
+
+    def test_an_offloaded_pipeline_is_not_asked_twice(self) -> None:
+        backend = SdnqBackend()
+        backend.placement = "model"
+        backend.pipeline = mock.Mock()
+        error = SidecarError(507, ErrorKind.OUT_OF_MEMORY, "full")
+        with mock.patch.object(backend, "_render_once", side_effect=error) as once:
+            with self.assertRaises(SidecarError):
+                backend.render(None, None, "p", 4, 1, 1.0, 1000)  # type: ignore[arg-type]
+        self.assertEqual(once.call_count, 1)
 
 
 class RamFigure(unittest.TestCase):
