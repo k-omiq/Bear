@@ -402,6 +402,7 @@ impl Stub {
                 bbox: Rect::new(20 + index as i64, 20, 4, 4),
                 reason: "review.reason.gateSkippedNotJapanese".into(),
                 lettering: None,
+                inside: None,
             });
         }
         for index in 0..self.declined {
@@ -8217,7 +8218,7 @@ mod grouped {
         let outcome = pipeline.detect_page("c1-p001", &bytes, Engine::Fill, &context).unwrap();
         let lines = outcome.regions.iter().map(one_line).collect::<Vec<_>>();
         let held: Vec<&Mask> = outcome.regions.iter().filter_map(|region| match region {
-            RegionOutcome::Untouched { bbox, reason, lettering }
+            RegionOutcome::Untouched { bbox, reason, lettering, .. }
                 if reason == "review.reason.gateSkippedNotJapanese" => {
                 let (mask, scale) = lettering.as_ref().expect("a held group keeps its glyphs");
                 assert!(*scale > 0.0 && !mask.is_empty(), "{lines:?}");

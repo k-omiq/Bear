@@ -1483,7 +1483,8 @@ pub(crate) fn region_of_untouched(record: &RegionUntouched, page: &ApiPage) -> A
         decline_reason,
         candidate_reason,
         attention: None,
-        candidate_inside_bubble: if outcome == "candidate" { record.inside_bubble } else { None },
+        // Whatever held it: the run's answer for where the row sits.
+        candidate_inside_bubble: record.bubble(),
         inside_bubble: None,
         unusually_large: false,
         mask: None,

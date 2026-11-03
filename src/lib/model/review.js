@@ -196,17 +196,18 @@ export function candidateReason(region) {
  * engine begins on the outside-bubble pick rather than the in-bubble one.
  *
  * **One rule with the native side** (`src-tauri/src/region.rs`
- * `untouched_fallback_pick`): text the gate held outside a bubble, and a
- * candidate grouping did not find inside a balloon - usually a sound effect
- * over artwork, where a flat fill would paint over the drawing - start
- * outside. A candidate stored before its balloon was recorded has no answer
- * and starts outside too, as the safer of the two.
+ * `untouched_fallback_pick`): a row whose run recorded where it sits
+ * (`candidateInsideBubble`) starts on that side, whatever held it. A row that
+ * recorded nothing goes by why it was held: text the gate held outside a
+ * bubble, and a candidate (usually a sound effect over artwork, where a flat
+ * fill would paint over the drawing), start outside.
  *
  * @param {import('./types.js').Region} region
  * @returns {boolean}
  */
 export function heldStartsOutside(region) {
-  if (region.outcome === 'candidate') return region.candidateInsideBubble !== true
+  if (typeof region.candidateInsideBubble === 'boolean') return !region.candidateInsideBubble
+  if (region.outcome === 'candidate') return true
   return region.gateSkipCause === 'outside-bubble'
 }
 

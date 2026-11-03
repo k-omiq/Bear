@@ -298,4 +298,11 @@ describe('heldStartsOutside - one rule with region.rs#untouched_fallback_pick', 
     expect(heldStartsOutside(gated('low-confidence'))).toBe(false)
     expect(heldStartsOutside(gated('not-japanese'))).toBe(false)
   })
+
+  it('starts gate-held text where its run recorded it, whatever held it', () => {
+    const gated = (cause, inside) => region({ outcome: 'gate-skipped', gateSkipCause: cause, candidateInsideBubble: inside })
+    expect(heldStartsOutside(gated('not-text', false))).toBe(true)
+    expect(heldStartsOutside(gated('not-text', true))).toBe(false)
+    expect(heldStartsOutside(gated('outside-bubble', true))).toBe(false)
+  })
 })

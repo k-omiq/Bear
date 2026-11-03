@@ -272,7 +272,7 @@
  * @property {'low-confidence'|'outside-bubble'|'not-japanese'|'not-text'|'language-skipped'|'outside-language-unverified'|null} gateSkipCause - `not-japanese` is a *confident* refusal: the gate read the script and it was not CJK
  * @property {string|null} declineReason
  * @property {string|null} [candidateReason] - set on a candidate only: the grouping reason it was held under (`review.reason.unassignedMask`, `review.reason.isolatedMask`)
- * @property {boolean|null} [candidateInsideBubble] - set on a candidate only: whether grouping found it inside a balloon; decides the engine a clean starts on (`model/review.js#heldStartsOutside`). `null` on a row stored before it was recorded
+ * @property {boolean|null} [candidateInsideBubble] - set on a held row (a candidate, or text the gate held): whether the run found it inside a balloon; decides the engine a clean starts on and the kind an approved mask is stored as (`model/review.js#heldStartsOutside`). `null` on a row stored before it was recorded
  * @property {boolean|null} [insideBubble] - set on a stored detection only: whether the run found it inside a speech bubble. Picks its mask colour (`model/masks.js#maskColorFor`). `null` on every other region
  * @property {string|null} [attention] - a cloud reason read natively from the attempt journal (`review.reason.repairNeeded`, `cloudResultNotApplied`, `cloudResultUnchecked`), on a detection or a layer; never stored
  * @property {boolean} unusuallyLarge

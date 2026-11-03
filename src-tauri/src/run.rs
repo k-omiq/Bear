@@ -850,7 +850,10 @@ pub enum RegionOutcome {
     /// row as a candidate's are: approving the mask stores exactly them as a
     /// detection, and a clean the user asks for writes through them and not
     /// the box (`None` for a row no lettering was read under).
-    Untouched { bbox: Rect, reason: String, lettering: Option<(Mask, f32)> },
+    /// `inside` is whether the gate found the text inside a balloon on plain
+    /// paper, the answer a cleaned region's stored type gets (`None` where no
+    /// gate judged it), so an approved mask knows where it sits.
+    Untouched { bbox: Rect, reason: String, lettering: Option<(Mask, f32)>, inside: Option<bool> },
     /// Lettering grouping held for the user's choice rather than cleaned
     /// (`reason` is its grouping key), with whether it sits inside a balloon.
     /// Stored as an untouched row, and counted as neither a decline nor a
@@ -3655,6 +3658,7 @@ impl Pipeline {
                         bbox: Rect::new(whole.x - page_x, whole.y - page_y, whole.w, whole.h),
                         reason: "review.reason.gateSkippedLowConfidence".into(),
                         lettering: None,
+                        inside: None,
                     });
                 }
             }
@@ -3720,6 +3724,7 @@ impl Pipeline {
                                 bbox: Rect::new(whole.x - page_x, whole.y - page_y, whole.w, whole.h),
                                 reason: "review.reason.gateSkippedLowConfidence".into(),
                                 lettering: None,
+                                inside: None,
                             });
                             if prior_index.is_none() { at.index += 1; }
                         }
@@ -3754,6 +3759,7 @@ impl Pipeline {
                             strip_rect.w, strip_rect.h),
                         reason: "review.reason.gateSkippedLowConfidence".into(),
                         lettering: None,
+                        inside: None,
                     });
                     at.index += 1;
                     if let Some(position) = clipped_position {
@@ -3798,6 +3804,7 @@ impl Pipeline {
                     bbox: Rect::new(whole.x - page_x, whole.y - page_y, whole.w, whole.h),
                     reason: "review.reason.gateSkippedLowConfidence".into(),
                     lettering: None,
+                    inside: None,
                 });
             }
         }
@@ -3874,6 +3881,9 @@ impl Pipeline {
         let inside = cleaner_core::balloon::in_bubble(
             crop, &seen.segmentation, region.text_bounds(), region.masking, &seen.balloons);
         let (verdict, reading) = self.judge_region(crop, &seen.segmentation, region, detected, inside, &seen.readings)?;
+        // Inside a balloon on plain paper: what the engine pick and the stored
+        // type ask, and what a held row keeps so an approved mask knows it.
+        let paper_inside = inside && cleaner_core::balloon::plain_paper(crop, &seen.segmentation, region.text_bounds());
         if !self.selection.allows(&verdict) {
             let reason = verdict.reason_key().unwrap_or(match verdict {
                 Verdict::OptedIn => "review.reason.outsideLanguageUnverified",
@@ -3889,6 +3899,7 @@ impl Pipeline {
                 bbox: on_page,
                 reason: reason.to_owned(),
                 lettering,
+                inside: Some(paper_inside),
             });
             return Ok(true);
         }
@@ -3906,6 +3917,7 @@ impl Pipeline {
                     .map_or(text_groups::ReviewReason::MaskMissingUnderTextBox.key(), |r| r.key())
                     .to_owned(),
                 lettering: None,
+                inside: Some(paper_inside),
             });
             return Ok(true);
         }
@@ -3967,7 +3979,7 @@ impl Pipeline {
         // and the stored type ask whether its paper is plain enough to start
         // on Fill. A tone or dark balloon stays gated as a balloon and starts
         // as text on art.
-        let inside = inside && cleaner_core::balloon::plain_paper(crop, &seen.segmentation, region.text_bounds());
+        let inside = paper_inside;
         let pick = self.picks.map(|picks| picks.for_region(inside));
         let solid_color = if pick == Some(EnginePick::Solid) {
             self.bubble_color
@@ -4202,6 +4214,7 @@ impl Pipeline {
                     bbox: record.bbox,
                     reason: "decline.reason.rungUnavailable".into(),
                     lettering: None,
+                    inside: Some(record.inside),
                 }));
                 continue;
             }
@@ -4275,6 +4288,7 @@ impl Pipeline {
                         bbox: record.bbox,
                         reason: reason.to_owned(),
                         lettering: None,
+                        inside: Some(record.inside),
                     }));
                     continue;
                 }
@@ -4288,6 +4302,7 @@ impl Pipeline {
                         bbox: record.bbox,
                         reason: reason.to_owned(),
                         lettering: None,
+                        inside: Some(record.inside),
                     }));
                     continue;
                 }
@@ -4874,7 +4889,7 @@ pub(crate) fn held_candidate_row(
     source_idx: usize, bbox: Rect, reason: String, inside_bubble: bool, lettering: Option<(Mask, f32)>,
 ) -> PendingUntouched {
     PendingUntouched {
-        row: RegionUntouched { source_idx, bbox, reason, inside_bubble: Some(inside_bubble), lettering: None },
+        row: RegionUntouched { source_idx, bbox, reason, inside_bubble: Some(inside_bubble), inside_balloon: None, lettering: None },
         lettering,
     }
 }
@@ -6410,7 +6425,7 @@ impl<'w> Walker<'w> {
                 RegionOutcome::Candidate { bbox, reason, inside_bubble, lettering } => {
                     pending_untouched.push(held_candidate_row(entry.source_idx, bbox, reason, inside_bubble, lettering));
                 }
-                RegionOutcome::Untouched { bbox, reason, lettering } => {
+                RegionOutcome::Untouched { bbox, reason, lettering, inside } => {
                     // Counted where the run that leaves it is finishing the
                     // page: a one pass, and Auto's Detect visit, its first
                     // half. Detect alone stores it with the page's detections.
@@ -6424,7 +6439,7 @@ impl<'w> Walker<'w> {
                     if work == PageWork::Detect {
                         pending_untouched.push(PendingUntouched {
                             row: RegionUntouched {
-                                source_idx: entry.source_idx, bbox, reason, inside_bubble: None, lettering: None,
+                                source_idx: entry.source_idx, bbox, reason, inside_bubble: None, inside_balloon: inside, lettering: None,
                             },
                             lettering,
                         });
@@ -6436,7 +6451,7 @@ impl<'w> Walker<'w> {
                     let Some(id) = replaces.as_deref() else {
                         pending_untouched.push(PendingUntouched {
                             row: RegionUntouched {
-                                source_idx: entry.source_idx, bbox, reason, inside_bubble: None, lettering: None,
+                                source_idx: entry.source_idx, bbox, reason, inside_bubble: None, inside_balloon: inside, lettering: None,
                             },
                             lettering,
                         });
@@ -6460,7 +6475,7 @@ impl<'w> Walker<'w> {
                     }
                     pending_untouched.push(PendingUntouched {
                         row: RegionUntouched {
-                            source_idx: entry.source_idx, bbox, reason, inside_bubble: None, lettering: None,
+                            source_idx: entry.source_idx, bbox, reason, inside_bubble: None, inside_balloon: None, lettering: None,
                         },
                         lettering,
                     });

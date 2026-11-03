@@ -723,6 +723,16 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**An approved held mask, and a project run's progress (2026-11-03): fixed in code, not run in the real app.**
+Approving a held mask stored it as text in a bubble whenever its reason was not one of the two candidate keys.
+A sound effect the reader called not text is held with `gateSkippedNotText`, so it came back as a bubble on the
+Fill pick, though the run had recorded it outside. A row now keeps where its run found it: a candidate's answer as
+before, the gate's answer (in a balloon on plain paper, the answer a cleaned region's type gets) on rows the gate
+held, and the detection's own side on a declined detection. Approve, Clean anyway and the interface read that
+first and go by the reason only for rows written before. A project-wide run looked stuck in the editor: its
+total counted every chapter's pages and its count only the open chapter's, so it stopped at that chapter's last
+page until the run ended. Pages done in other chapters now count. Not tried: either on a real chapter in the app.
+
 **Ogkalu Small on CUDA, and a helper torch with no GPU (2026-11-03): fixed in code, not run on Windows.** Two
 Windows logs from versions before beta.17. Ogkalu Small would not open on a CUDA choice: its int8 nodes go to the
 CPU, and a forced CUDA session refused any CPU node. It now keeps the CPU fallback on CUDA and DirectML, as Full has

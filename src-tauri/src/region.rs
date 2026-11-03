@@ -4806,27 +4806,32 @@ fn untouched_reason(located: &Located, region_id: &str) -> Result<Option<(String
         .find(|record| {
             record.source_idx == source_idx && untouched_id(page_id, record.bbox) == region_id
         })
-        .map(|record| (record.reason.clone(), record.inside_bubble)))
+        .map(|record| (record.reason.clone(), record.bubble())))
 }
 
 /// Which pick a clean of a held-back region starts on when none is named.
 ///
-/// **One rule with the interface** (`src/lib/editor/maskactions.svelte.js`
-/// `cleanAnyway`): text the gate held outside a bubble, and a held candidate
-/// grouping did not find inside a balloon (usually a sound effect over
-/// artwork, or a row from before the balloon was recorded), start on the
+/// **One rule with the interface** (`src/lib/model/review.js`
+/// `heldStartsOutside`): a row whose run recorded where it sits
+/// ([`RegionUntouched::bubble`](cleaner_core::project::RegionUntouched::bubble))
+/// starts on that side of the balloon wall, whatever held it. A row that
+/// recorded nothing goes by its reason: text the gate held outside a bubble,
+/// and a held candidate (usually a sound effect over artwork), start on the
 /// outside pick; everything else on the in-bubble pick.
-fn untouched_fallback_pick(reason: Option<&str>, inside_bubble: Option<bool>) -> EnginePick {
-    if untouched_outside(reason, inside_bubble) { Picks::default().outside } else { Picks::default().bubble }
+fn untouched_fallback_pick(reason: Option<&str>, inside: Option<bool>) -> EnginePick {
+    if untouched_outside(reason, inside) { Picks::default().outside } else { Picks::default().bubble }
 }
 
 /// Whether a held-back row is text outside a bubble, by the rule
 /// [`untouched_fallback_pick`] states: it is also the kind a row is approved
 /// as ([`approve_held_mask`]), so the mask shown and the engine a clean
 /// starts on never disagree.
-fn untouched_outside(reason: Option<&str>, inside_bubble: Option<bool>) -> bool {
+fn untouched_outside(reason: Option<&str>, inside: Option<bool>) -> bool {
+    if let Some(inside) = inside {
+        return !inside;
+    }
     match reason {
-        Some(r) if crate::library::is_candidate_reason(r) => inside_bubble != Some(true),
+        Some(r) if crate::library::is_candidate_reason(r) => true,
         Some(r) => r.contains("OutsideBubble") || r.contains("outside-bubble"),
         None => false,
     }
@@ -5610,10 +5615,10 @@ fn approve_held_mask_at(
     let Some(mask) = tight(&lettering) else {
         return Ok(None);
     };
-    let outside = untouched_outside(Some(&row.reason), row.inside_bubble);
+    let outside = untouched_outside(Some(&row.reason), row.bubble());
     let record = cleaner_core::project::DetectedRegion {
         inside: !outside,
-        pick: run::pick_name(untouched_fallback_pick(Some(&row.reason), row.inside_bubble)).to_owned(),
+        pick: run::pick_name(untouched_fallback_pick(Some(&row.reason), row.bubble())).to_owned(),
         ..hand_detection(source_idx, mask.bounds, order_after_page(&job, source_idx))
     };
     // The page as it was, held row and all, is what Undo puts back.
@@ -7478,7 +7483,7 @@ mod tests {
         job.project.counters.gate_dropped = 1;
         job.leave_untouched_rows(vec![cleaner_core::project::PendingUntouched {
             row: cleaner_core::project::RegionUntouched {
-                source_idx: 0, bbox, reason: reason.to_owned(), inside_bubble: None, lettering: None,
+                source_idx: 0, bbox, reason: reason.to_owned(), inside_bubble: None, inside_balloon: None, lettering: None,
             },
             lettering: lettering.map(|mask| (mask.clone(), 0.5)),
         }]).unwrap();
@@ -7541,6 +7546,31 @@ mod tests {
         assert_eq!((found.record.inside, found.record.pick.as_str(), found.record.padding_px), (true, "fill", 3));
         let (base, _) = job.load_detection_base(&approved.region_id).unwrap().expect("ungrown pair");
         assert_eq!(base, lettering, "a later padding grows from the glyphs again");
+    }
+
+    /// A held row approves on the side of the balloon wall its run recorded,
+    /// whatever held it: a sound effect the reader called not text stays
+    /// outside, where its reason alone would have put it in a bubble.
+    #[test]
+    fn an_approved_mask_keeps_the_side_its_run_recorded() {
+        let lettering = two_glyphs();
+        for (name, candidate, gate, inside, pick) in [
+            ("gate-out", None, Some(false), false, "lama"),
+            ("gate-in", None, Some(true), true, "fill"),
+            ("candidate-out", Some(false), None, false, "lama"),
+        ] {
+            let (located, region_id) = held_row_fixture(&format!("approve-held-side-{name}"),
+                Rect::new(16, 16, 48, 18), "review.reason.gateSkippedNotText", Some(&lettering));
+            let mut job = Job::open(&located.job_path).unwrap();
+            job.project.regions_untouched[0].inside_bubble = candidate;
+            job.project.regions_untouched[0].inside_balloon = gate;
+            job.flush().unwrap();
+            drop(job);
+            let approved = approve_held_mask_at(&located, &region_id, 0, |_, _, _| None).unwrap().expect("approved");
+            let job = Job::open(&located.job_path).unwrap();
+            let found = job.load_detection(&approved.region_id).unwrap().expect("stored");
+            assert_eq!((found.record.inside, found.record.pick.as_str()), (inside, pick), "{name}");
+        }
     }
 
     /// A row stored before rows kept lettering looks under its box with the
@@ -10550,6 +10580,11 @@ mod tests {
             untouched_fallback_pick(Some("review.reason.gateSkippedOutsideBubble"), None),
         );
         assert_eq!(out_balloon_choice, Choice::Ladder(Some(EnginePick::Lama)));
+
+        // A recorded side wins over the reason: a gate row the reader called
+        // not text starts where its run found it.
+        assert_eq!(untouched_fallback_pick(Some("review.reason.gateSkippedNotText"), Some(false)), Picks::default().outside);
+        assert_eq!(untouched_fallback_pick(Some("review.reason.gateSkippedOutsideBubble"), Some(true)), Picks::default().bubble);
 
         // A held candidate starts where its balloon says, and outside when
         // there is none or the row predates the record of it.

@@ -968,9 +968,11 @@ export function createMockBackend(options = {}) {
     region.source = 'auto'
     region.pick = mask.provenance.engine
     region.detector = detector
-    // The balloon answer a native detection carries (`DetectedRegion.inside`),
-    // read off the stand-in's kind: a sound effect or a hand area is outside.
-    region.insideBubble = region.kind === 'bubble'
+    // The balloon answer a native detection carries (`DetectedRegion.inside`):
+    // a held row's own answer where it has one, as an approved mask keeps it,
+    // or the stand-in's kind, where a sound effect or a hand area is outside.
+    region.insideBubble = typeof region.candidateInsideBubble === 'boolean'
+      ? region.candidateInsideBubble : region.kind === 'bubble'
     if (padding > 0) padDetection(region, page, padding)
     return true
   }

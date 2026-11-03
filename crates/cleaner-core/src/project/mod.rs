@@ -529,6 +529,13 @@ pub struct RegionUntouched {
     /// row and on rows written before it existed, which start outside.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inside_bubble: Option<bool>,
+    /// Set on a row the gate held: whether its text sits inside a balloon on
+    /// plain paper, the answer a cleaned region's stored type gets. Kept apart
+    /// from `inside_bubble`, whose presence marks a held candidate for the
+    /// counters. Absent on rows written before it existed, which go by their
+    /// reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside_balloon: Option<bool>,
     /// Set on a held text-group candidate and on a region the quality metric
     /// declined: the lettering grouping held, or the fit started from, so a
     /// clean the user asks for writes through those glyphs rather than the box
@@ -537,6 +544,15 @@ pub struct RegionUntouched {
     /// written before it existed, which look under the box as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lettering: Option<HeldLettering>,
+}
+
+impl RegionUntouched {
+    /// Whether the row's text sits inside a balloon, as the run that held it
+    /// found: a held candidate's answer or the gate's, and `None` for a row
+    /// that recorded neither.
+    pub fn bubble(&self) -> Option<bool> {
+        self.inside_bubble.or(self.inside_balloon)
+    }
 }
 
 /// A held row a clean the user asked for answered, kept so the clean can be
@@ -2357,6 +2373,7 @@ impl Job {
             bbox,
             reason: reason.to_owned(),
             inside_bubble: None,
+            inside_balloon: None,
             lettering: None,
         }])
     }
@@ -2377,6 +2394,7 @@ impl Job {
             bbox,
             reason: reason.to_owned(),
             inside_bubble: Some(inside_bubble),
+            inside_balloon: None,
             lettering: None,
         }])
     }
@@ -3277,6 +3295,9 @@ impl Job {
                 bbox: self.project.sources.get(record.source_idx).map_or(record.bbox, |source| source.orientation.rect(record.bbox,source.w,source.h)),
                 reason: reason.to_owned(),
                 inside_bubble: None,
+                // Where the detection sat, so a clean asked of the row starts
+                // on the same side of the balloon wall.
+                inside_balloon: Some(record.inside),
                 lettering: None,
             },
             lettering,
@@ -5209,7 +5230,7 @@ mod tests {
                 record, mask: grown.clone(), ink: base.clone(), evidence: None, base: Some((base.clone(), base.clone())),
             }], vec![PendingUntouched {
                 row: RegionUntouched { source_idx: 0, bbox: lettering.bounds, reason: "review.reason.unassignedMask".into(),
-                    inside_bubble: Some(false), lettering: None },
+                    inside_bubble: Some(false), inside_balloon: None, lettering: None },
                 lettering: Some((lettering.clone(), 1.5)),
             }]).unwrap();
             let stored = job.project.detections[0].clone();
@@ -5379,7 +5400,7 @@ mod tests {
         let before = job.generation();
         job.leave_untouched_rows(Vec::<RegionUntouched>::new()).unwrap();
         assert_eq!(job.generation(), before, "no rows wrote the manifest");
-        let row = |x| RegionUntouched { source_idx: 0, bbox: Rect::new(x, 2, 4, 4), reason: "review.reason.unassignedMask".into(), inside_bubble: None, lettering: None };
+        let row = |x| RegionUntouched { source_idx: 0, bbox: Rect::new(x, 2, 4, 4), reason: "review.reason.unassignedMask".into(), inside_bubble: None, inside_balloon: None, lettering: None };
         job.leave_untouched_rows(vec![row(2), row(10), row(20)]).unwrap();
         assert_ne!(job.generation(), before);
         assert_eq!(Job::open(job.path()).unwrap().project.regions_untouched.len(), 3);
@@ -5397,7 +5418,7 @@ mod tests {
         }
         let held = |bbox, lettering| PendingUntouched {
             row: RegionUntouched { source_idx: 0, bbox, reason: "review.reason.unassignedMask".into(),
-                inside_bubble: Some(false), lettering: None },
+                inside_bubble: Some(false), inside_balloon: None, lettering: None },
             lettering,
         };
         job.leave_untouched_rows(vec![held(lettering.bounds, Some((lettering.clone(), 1.5))),
@@ -5426,7 +5447,7 @@ mod tests {
         lettering.set(10, 10, true);
         job.leave_untouched_rows(vec![PendingUntouched {
             row: RegionUntouched { source_idx: 0, bbox: lettering.bounds, reason: "review.reason.unassignedMask".into(),
-                inside_bubble: Some(false), lettering: None },
+                inside_bubble: Some(false), inside_balloon: None, lettering: None },
             lettering: Some((lettering, 1.0)),
         }]).unwrap();
         let reopened = Job::open(job.path()).unwrap();
@@ -5688,7 +5709,7 @@ mod tests {
             record: replacement, mask: mask.clone(), ink: mask.clone(), evidence: None,
             base: None,
         }], vec![RegionUntouched { source_idx: 0, bbox: Rect::new(60, 60, 3, 3),
-            reason: "review.reason.gateSkippedLowConfidence".into(), inside_bubble: None, lettering: None }]).unwrap();
+            reason: "review.reason.gateSkippedLowConfidence".into(), inside_bubble: None, inside_balloon: None, lettering: None }]).unwrap();
         let reopened = Job::open(job.path()).unwrap();
         assert_eq!(reopened.project.detections.len(), 1);
         assert_ne!(reopened.project.detections[0].id, old_id);
