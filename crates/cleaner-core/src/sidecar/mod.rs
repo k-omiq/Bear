@@ -585,6 +585,8 @@ mod tests {
             Decline::SidecarUnbounded,
             Decline::SidecarMemory,
             Decline::SidecarWeightsMissing,
+            Decline::SidecarTorchWithoutGpu,
+            Decline::SidecarGpuUnreachable,
         ];
         let mut keys: Vec<&str> = refusals
             .iter()

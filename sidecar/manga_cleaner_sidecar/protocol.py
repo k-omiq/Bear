@@ -40,6 +40,8 @@ class ErrorKind(str, Enum):
     UNBOUNDED_BACKEND = "unbounded_backend"
     WEIGHTS_MISSING = "weights_missing"
     OUT_OF_MEMORY = "out_of_memory"
+    TORCH_WITHOUT_GPU = "torch_without_gpu"
+    GPU_UNREACHABLE = "gpu_unreachable"
     INTERNAL = "internal"
 
 

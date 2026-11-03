@@ -174,6 +174,17 @@ pub enum Decline {
     /// away.
     #[error("the sidecar has no model weights")]
     SidecarWeightsMissing,
+    /// The helper's torch has no GPU support, so there is nothing to render on.
+    /// An install from before 1.0.0-beta.16 could take PyPI's Windows torch,
+    /// which is CPU only. Its own sentence because its remedy is the Repair
+    /// button in Settings, which installs the GPU build in place.
+    #[error("the sidecar's torch has no GPU support")]
+    SidecarTorchWithoutGpu,
+    /// A GPU build of torch that finds no GPU it can use: a driver older than
+    /// the build's CUDA, or no supported card. The remedy is the driver, which
+    /// repairing the helper would not change.
+    #[error("the sidecar's torch finds no GPU it can use")]
+    SidecarGpuUnreachable,
 }
 
 impl Decline {
@@ -193,6 +204,8 @@ impl Decline {
             Decline::SidecarMemory => "decline.reason.sidecarMemory",
             Decline::SidecarUnbounded => "decline.reason.sidecarUnbounded",
             Decline::SidecarWeightsMissing => "decline.reason.sidecarWeights",
+            Decline::SidecarTorchWithoutGpu => "decline.reason.sidecarTorchWithoutGpu",
+            Decline::SidecarGpuUnreachable => "decline.reason.sidecarGpuUnreachable",
         }
     }
 }

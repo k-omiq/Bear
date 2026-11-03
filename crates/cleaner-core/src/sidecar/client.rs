@@ -416,8 +416,10 @@ impl Client {
             return match parsed.error.kind {
                 wire::ErrorKind::OutOfMemory => Decline::SidecarMemory.into(),
                 wire::ErrorKind::UnboundedBackend => Decline::SidecarUnbounded.into(),
+                wire::ErrorKind::TorchWithoutGpu => Decline::SidecarTorchWithoutGpu.into(),
+                wire::ErrorKind::GpuUnreachable => Decline::SidecarGpuUnreachable.into(),
                 // `WeightsMissing`, and the wildcard is unreachable -
-                // [`wire::ErrorKind::declines`] names exactly three.
+                // [`wire::ErrorKind::declines`] names exactly five.
                 _ => Decline::SidecarWeightsMissing.into(),
             };
         }

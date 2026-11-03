@@ -435,6 +435,13 @@ pub enum ErrorKind {
     ///      which routes the region to rung 2 and loses one region, rather than
     ///      being absorbed into the memory compressor, which loses the machine.
     OutOfMemory,
+    /// 501. The helper's torch has no GPU support: an install from before
+    ///      1.0.0-beta.16 could take PyPI's Windows build. A decline whose remedy
+    ///      is repairing the helper.
+    TorchWithoutGpu,
+    /// 501. A GPU build of torch that finds no GPU: a driver older than its
+    ///      CUDA, or no card. A decline whose remedy is the driver.
+    GpuUnreachable,
     /// 500. Anything else.
     Internal,
 }
@@ -445,7 +452,11 @@ impl ErrorKind {
     pub fn declines(self) -> bool {
         matches!(
             self,
-            ErrorKind::UnboundedBackend | ErrorKind::WeightsMissing | ErrorKind::OutOfMemory
+            ErrorKind::UnboundedBackend
+                | ErrorKind::WeightsMissing
+                | ErrorKind::OutOfMemory
+                | ErrorKind::TorchWithoutGpu
+                | ErrorKind::GpuUnreachable
         )
     }
 }
@@ -569,8 +580,13 @@ mod tests {
     /// page.
     #[test]
     fn the_error_taxonomy_separates_declines_from_faults() {
-        for kind in [ErrorKind::UnboundedBackend, ErrorKind::WeightsMissing, ErrorKind::OutOfMemory]
-        {
+        for kind in [
+            ErrorKind::UnboundedBackend,
+            ErrorKind::WeightsMissing,
+            ErrorKind::OutOfMemory,
+            ErrorKind::TorchWithoutGpu,
+            ErrorKind::GpuUnreachable,
+        ] {
             assert!(kind.declines(), "{kind:?}");
         }
         for kind in [
@@ -592,5 +608,10 @@ mod tests {
         assert_eq!(json, "\"out_of_memory\"");
         let parsed: ErrorKind = serde_json::from_str("\"weights_missing\"").unwrap();
         assert_eq!(parsed, ErrorKind::WeightsMissing);
+        // The two the sidecar raises for a helper with no GPU to render on.
+        let parsed: ErrorKind = serde_json::from_str("\"torch_without_gpu\"").unwrap();
+        assert_eq!(parsed, ErrorKind::TorchWithoutGpu);
+        let parsed: ErrorKind = serde_json::from_str("\"gpu_unreachable\"").unwrap();
+        assert_eq!(parsed, ErrorKind::GpuUnreachable);
     }
 }

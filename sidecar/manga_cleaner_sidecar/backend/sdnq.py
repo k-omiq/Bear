@@ -618,6 +618,24 @@ class SdnqBackend(BackendBase):
         if self.family != "klein":
             # The edit recipes are bf16 on every device, as the worker runs them.
             dtype = torch.bfloat16
+        if device == "cpu" and sys.platform != "darwin":
+            # A torch with no GPU in it is an install before 1.0.0-beta.16, which could
+            # take PyPI's Windows build; repairing the helper installs the GPU one. A GPU
+            # build that sees no GPU has a driver older than its CUDA, or no card.
+            gpu_build = torch.version.cuda or getattr(torch.version, "xpu", None)
+            if not gpu_build:
+                raise SidecarError(
+                    501,
+                    ErrorKind.TORCH_WITHOUT_GPU,
+                    f"torch {torch.__version__} in this helper has no GPU support. "
+                    "Repair the helper in Settings to install the GPU build.",
+                )
+            raise SidecarError(
+                501,
+                ErrorKind.GPU_UNREACHABLE,
+                f"torch {torch.__version__} is built for GPU {gpu_build} and finds no GPU it can "
+                "use: the driver may be older than this build needs, or no supported card is present.",
+            )
         if device == "cpu":
             # Rule 9's first guard, refused from this side rather than faked.
             # With no accelerator there is nothing to offload to and no fraction

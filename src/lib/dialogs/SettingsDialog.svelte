@@ -2571,6 +2571,19 @@
         {#each localModels.filter((model) => !model.legacy) as model (model.id)}
           {@render localModelRow(model)}
         {/each}
+        <!-- A helper installed before 1.0.0-beta.16 can hold a torch with no GPU
+             support. Setup again swaps it for the GPU build and keeps the model. -->
+        {#if !fluxUsesMlx && localModels.some((model) => model.installed && model.id === session.fluxModel)}
+          <div class="local-model" data-flux-repair>
+            <span class="local-text">
+              <span class="local-name">{t('settings.sidecar.repair')}</span>
+              <span class="local-note">{t('settings.sidecar.repairNote')}</span>
+            </span>
+            <Button size="sm" disabled={installingFlux || !fluxAcceleratorAllowed} onclick={() => installFlux(session.fluxModel)}>
+              {installingModel === session.fluxModel ? t('settings.sidecar.installing') : t('settings.sidecar.repair')}
+            </Button>
+          </div>
+        {/if}
         {#if installingFlux}<p class="line" role="status">{t(fluxStageKey)}</p>{/if}
         {#if fluxInstallError}<p class="line" role="alert">{t('settings.sidecar.installFailed', { detail: fluxInstallError })}</p>{/if}
         {#if localModelMissing}<p class="line">{t('settings.sidecarModel.missing', { id: session.fluxModel })}</p>{/if}

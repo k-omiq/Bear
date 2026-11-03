@@ -520,6 +520,8 @@ export const en = {
       chooserTitle: 'Local AI models folder',
       notFound: 'No engine found in this folder.',
       installing: 'Downloading…',
+      repair: 'Repair the helper',
+      repairNote: 'Installs the helper\'s packages again, with the GPU build of torch. The model is kept.',
       installFailed: 'Download failed: {detail}',
       accelerator: 'GPU runtime for installation',
       acceleratorAuto: 'Automatic',
@@ -1976,6 +1978,8 @@ export const en = {
         'this FLUX sidecar cannot say how much memory it needs, so it is not run',
       // Almost absence, and deliberately not silent like absence: this is a
       // user who installed the sidecar and is one download away from the rung.
+      sidecarTorchWithoutGpu: 'the FLUX helper\'s torch has no GPU support; press Repair the helper in Settings',
+      sidecarGpuUnreachable: 'the FLUX helper finds no GPU it can use; update the graphics driver',
       sidecarWeights: 'the FLUX sidecar is installed and has no model weights yet',
       // The one entry in this group the core never chooses: the interface does,
       // when a region edit is rejected with something that is not a key at all.

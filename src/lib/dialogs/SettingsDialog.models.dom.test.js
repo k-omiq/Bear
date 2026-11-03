@@ -844,6 +844,38 @@ describe('the two pipelines', () => {
     expect(accelerator.querySelector('option[value="mps"]')?.disabled).toBe(true)
   })
 
+  it('offers to repair an installed torch helper, and runs setup again for the model in use', async () => {
+    capabilities.sidecar = true
+    helperModels = [{ id: 'flux3-image-klein', label: 'FLUX 3 Image Klein' }]
+    setFluxModel('flux3-image-klein')
+    const cleaning = await open(() => view({ runtime: { platform: 'windows-x64' } }))
+    await flux(cleaning)
+    const repair = () => /** @type {HTMLElement|null} */ (cleaning.container.querySelector('[data-flux-repair]'))
+    await waitFor(() => expect(repair()).toBeTruthy())
+    const backend = getBackend()
+    backend.installFluxHelper = vi.fn(async () => ({ ready: true }))
+    await fireEvent.click(within(/** @type {HTMLElement} */ (repair())).getByRole('button', { name: t('settings.sidecar.repair') }))
+    await waitFor(() => expect(backend.installFluxHelper).toHaveBeenCalledWith({ model: 'flux3-image-klein', backend: 'auto', accelerator: 'auto' }))
+    expect(session.fluxModel).toBe('flux3-image-klein')
+  })
+
+  it('offers no repair on MLX, or with nothing installed', async () => {
+    capabilities.sidecar = true
+    helperModels = [{ id: 'flux2-klein-4b', label: 'FLUX.2 Klein 4B' }]
+    setFluxModel('flux2-klein-4b')
+    const mac = await open(() => view({ runtime: { platform: 'macos-arm64' } }))
+    await flux(mac)
+    await waitFor(() => expect(mac.container.querySelector('[data-local-model="flux2-klein-4b"]')).toBeTruthy())
+    expect(mac.container.querySelector('[data-flux-repair]')).toBe(null)
+    cleanup()
+
+    helperModels = []
+    const windows = await open(() => view({ runtime: { platform: 'windows-x64' } }))
+    await flux(windows)
+    await waitFor(() => expect(windows.container.querySelector('[data-local-model="flux2-klein-4b"]')).toBeTruthy())
+    expect(windows.container.querySelector('[data-flux-repair]')).toBe(null)
+  })
+
   describe('a link to one row', () => {
     /** @type {ReturnType<typeof vi.fn>} */
     let scrolled

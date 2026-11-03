@@ -723,6 +723,17 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Ogkalu Small on CUDA, and a helper torch with no GPU (2026-11-03): fixed in code, not run on Windows.** Two
+Windows logs from versions before beta.17. Ogkalu Small would not open on a CUDA choice: its int8 nodes go to the
+CPU, and a forced CUDA session refused any CPU node. It now keeps the CPU fallback on CUDA and DirectML, as Full has
+since beta.16; Automatic still runs it on the CPU. Neither provider has built or timed this graph on real hardware.
+Local FLUX said "No CUDA, XPU or Metal device": a helper installed before beta.16 could hold PyPI's Windows torch,
+which is CPU only, and the beta.16 installer fix runs only at setup, so an update kept the old torch. The sidecar
+now tells that apart (`torch_without_gpu`) from a GPU build that finds no GPU (`gpu_unreachable`, a driver older
+than CUDA 13.0 or no card), each with its own reason, and Settings has Repair the helper, which runs setup again for
+the model in use and keeps its weights. Not measured: which driver torch 2.13.0 cu130 needs on Windows; whether
+Repair replaces a CPU torch on a real Windows helper (pip should, since the exact `+cu130` build is asked for).
+
 **Local FLUX on NVIDIA cards (2026-11-03): measured on an L4 through the real backend.** A 16 GB Windows PC was
 refused FLUX 3: `sdnq` declared 12 GiB, a Mac figure for RAM and GPU in one pool, and the sidecar may use 6.7 GiB of
 RAM there. When NVML finds an NVIDIA card, the sidecar now declares RAM alone, and the card's cap is its free memory

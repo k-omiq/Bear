@@ -442,6 +442,25 @@ class WithTorch(unittest.TestCase):
             self.assertTrue(hasattr(namespace, "set_per_process_memory_fraction"))
         self.assertIsNotNone(SdnqBackend._accelerator_total_bytes(device))
 
+    def test_a_torch_with_no_gpu_says_so_and_names_its_remedy(self) -> None:
+        """The pre-beta.16 Windows helper: PyPI's CPU torch, so no device at all."""
+        import torch
+        # Imported before the platform is patched: they read it as they load.
+        import diffusers  # noqa: F401
+        import sdnq as _sdnq  # noqa: F401
+
+        root = tempfile.mkdtemp(prefix="mc-sdnq-")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        weights = _snapshot(os.path.join(root, "flux2-klein-4b"))
+        backend = SdnqBackend(weights_dir=weights)
+        with mock.patch.object(SdnqBackend, "pick_device", staticmethod(lambda: ("cpu", torch.float32))), \
+                mock.patch.object(sdnq.sys, "platform", "win32"):
+            for cuda, kind in ((None, ErrorKind.TORCH_WITHOUT_GPU), ("13.0", ErrorKind.GPU_UNREACHABLE)):
+                with mock.patch.object(torch.version, "cuda", cuda), self.assertRaises(SidecarError) as caught:
+                    backend.open("flux2-klein-4b", {"total_bytes": 1 << 34}, [])
+                self.assertEqual(caught.exception.kind, kind.value)
+                self.assertEqual(caught.exception.status_code, 501)
+
 
 if __name__ == "__main__":
     unittest.main()
