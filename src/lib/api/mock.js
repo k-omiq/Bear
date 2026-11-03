@@ -2226,8 +2226,11 @@ export function createMockBackend(options = {}) {
     if (state.settings.cloudEngines !== 'allowed') return refuse('decline.reason.nanoBananaOff')
     const live = nanoBananaGrant
     const now = timers.now()
-    if (!live || params?.nanoBananaGrant !== live.grant || now >= live.lapses || live.left <= 0) {
-      if (live && params?.nanoBananaGrant === live.grant) nanoBananaGrant = null
+    // The backend keeps the grant and sends it, as `tauri.js` does, so a
+    // caller that names none presents the one it holds.
+    const presented = params?.nanoBananaGrant ?? live?.grant
+    if (!live || presented !== live.grant || now >= live.lapses || live.left <= 0) {
+      if (live && presented === live.grant) nanoBananaGrant = null
       return refuse('decline.reason.nanoBananaNoConsent')
     }
     live.left -= 1

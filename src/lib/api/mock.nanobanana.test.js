@@ -94,6 +94,17 @@ describe('a Nano Banana grant on the mock', () => {
     await vi.waitFor(() => expect(reasons).toEqual(['decline.reason.nanoBananaNoConsent', 'decline.reason.nanoBananaNoConsent']))
   })
 
+  it('sends the grant it holds when the caller names none, as the Tauri adapter does', async () => {
+    const mock = await ready()
+    const [first, second] = await detected(mock)
+    await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    expect((await clean(mock, first)).status).toBe('applied')
+    expect(await clean(mock, second)).toEqual({ status: 'blocked' })
+    // A grant named that is not the held one is still refused.
+    await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    expect(await clean(mock, second, 'mock-nano-banana-grant-0')).toEqual({ status: 'blocked' })
+  })
+
   it('records the model the window confirmed, not one picked after it', async () => {
     const mock = await ready()
     const [first] = await detected(mock)
