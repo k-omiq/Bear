@@ -66,7 +66,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..memory import get_peak_phys_footprint_bytes, get_peak_rss_bytes
+from ..memory import get_nvidia_total_bytes, get_peak_phys_footprint_bytes, get_peak_rss_bytes
 from ..protocol import Basis, ErrorKind, ImageBuffer, ModelMetadata, SidecarError
 from . import edit
 from .base import BackendBase, hole_for
@@ -103,6 +103,21 @@ DEFAULT_DECLARED_WORKING_SET = 10_737_418_240
 DECLARED_WORKING_SET = {
     "flux2-klein-4b": 8_053_063_680,  # 7.5 GiB
     "flux3-image-klein": 12_884_901_888,  # 12 GiB
+    "flux2-klein-9b": 12_884_901_888,  # 12 GiB
+    "qwen-image-edit-2511": 24_696_061_952,  # 23 GiB
+}
+
+#: Declared peak in this machine's RAM alone, for a run on a discrete NVIDIA GPU.
+#:
+#: There the GPU's share is on the card, outside the RAM the hardware gate checks, and
+#: the allocator cap bounds it against the card's own memory (:meth:`SdnqBackend.open`).
+#: The L4 host peaks above, rounded up, and never below the weights on disk, because
+#: offload keeps every component in RAM: Klein 9B's 12.6 GB and FLUX 3's 6.65 GB are
+#: more than their measured peaks. Qwen keeps its figure: its host peak grew to 27 GiB
+#: on Linux before malloc_trim, and Windows has no malloc_trim. Not measured on Windows.
+DECLARED_RAM_WORKING_SET = {
+    "flux2-klein-4b": 6_442_450_944,  # 6 GiB
+    "flux3-image-klein": 6_979_321_856,  # 6.5 GiB
     "flux2-klein-9b": 12_884_901_888,  # 12 GiB
     "qwen-image-edit-2511": 24_696_061_952,  # 23 GiB
 }
@@ -373,6 +388,18 @@ class SdnqBackend(BackendBase):
             return None
         return None
 
+    @staticmethod
+    def _accelerator_free_bytes(device: str) -> Optional[int]:
+        """What a discrete GPU has free now, after the desktop and other apps."""
+        import torch
+
+        try:
+            if device == "cuda":
+                return int(torch.cuda.mem_get_info()[0])
+        except Exception:
+            return None
+        return None
+
     def _apply_memory_fraction(self, device: str, total_bytes: int) -> Optional[str]:
         """Cap the caching allocator, and return the call's own name.
 
@@ -446,7 +473,23 @@ class SdnqBackend(BackendBase):
     def get_working_set_bytes(self) -> Optional[int]:
         if self.basis_state == Basis.MEASURED and self.measured_working_set is not None:
             return self.measured_working_set
-        declared = DECLARED_WORKING_SET.get(self.active_model_id)
+        return self._declared_working_set(self._on_discrete_gpu())
+
+    def _on_discrete_gpu(self) -> bool:
+        """Whether the accelerator has memory of its own, outside this machine's RAM.
+
+        Before an open, whether NVML found an NVIDIA GPU with memory to report, since
+        torch takes CUDA first when there is one. After it, also whether torch did. XPU
+        and Metal are counted as sharing RAM: an Intel GPU may be built in.
+        """
+        if self.device is not None and self.device != "cuda":
+            return False
+        return get_nvidia_total_bytes() is not None
+
+    def _declared_working_set(self, discrete: bool) -> int:
+        """The declared peak this machine's RAM must hold, for one kind of device."""
+        table = DECLARED_RAM_WORKING_SET if discrete else DECLARED_WORKING_SET
+        declared = table.get(self.active_model_id)
         weights = self.get_weights_bytes()
         # The gate refuses a working set below the weights it holds, and a folder
         # placed by hand can be heavier than the pinned one a figure was declared for.
@@ -547,7 +590,22 @@ class SdnqBackend(BackendBase):
             limits.get("total_bytes")
             or os.environ.get("MC_SIDECAR_TOTAL_BYTES", 12_000_000_000)
         )
-        fraction_call = self._apply_memory_fraction(device, total_bytes)
+        discrete = self._on_discrete_gpu()
+        need = self._declared_working_set(discrete)
+        if self.basis_state == Basis.DECLARED and need > total_bytes:
+            # The parent gated the figure health reported for the device NVML found. Torch
+            # took one that shares RAM instead, and its figure does not fit what is left.
+            raise SidecarError(
+                507,
+                ErrorKind.OUT_OF_MEMORY,
+                f"Model '{self.active_model_id}' on device '{device}' needs {need} bytes "
+                f"of RAM and the budget is {total_bytes}.",
+            )
+        # On a discrete GPU the RAM budget says nothing about the card, so the cap is the
+        # card's own free memory. Torch then fails a render rather than letting the Windows
+        # driver spill GPU memory into RAM.
+        cap_bytes = (self._accelerator_free_bytes(device) if discrete else None) or total_bytes
+        fraction_call = self._apply_memory_fraction(device, cap_bytes)
         if fraction_call is None:
             raise SidecarError(
                 501,

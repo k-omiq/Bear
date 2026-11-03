@@ -21,12 +21,15 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from manga_cleaner_sidecar.backend import BACKENDS, get_backend, importable_backends
+from manga_cleaner_sidecar.backend import BACKENDS, get_backend, importable_backends, sdnq
 from manga_cleaner_sidecar.backend.sdnq import (
     CPU_OFFLOAD,
+    DECLARED_RAM_WORKING_SET,
+    DECLARED_WORKING_SET,
     LATENT_STRIDE,
     MEMORY_FRACTION,
     WORK_LONG_SIDE,
@@ -36,7 +39,10 @@ from manga_cleaner_sidecar.backend.sdnq import (
     resolve_pipeline_dir,
     weights_bytes_of,
 )
+from manga_cleaner_sidecar.memory import get_nvidia_total_bytes
 from manga_cleaner_sidecar.protocol import Basis, ErrorKind, SidecarError
+
+GIB = 1 << 30
 
 MODEL_INDEX = {
     "_class_name": "Flux2KleinPipeline",
@@ -257,6 +263,53 @@ class Contract(unittest.TestCase):
 
     def test_release_is_safe_before_an_open(self) -> None:
         SdnqBackend().release()
+
+
+class RamFigure(unittest.TestCase):
+    """What the gate is told this machine's RAM must hold, by kind of device."""
+
+    def _figure(self, model: str, nvidia: object, device: object = None) -> int:
+        backend = SdnqBackend(weights_dir="/nonexistent/manga-cleaner-weights")
+        backend.active_model_id = model
+        backend.device = device
+        with mock.patch.object(sdnq, "get_nvidia_total_bytes", return_value=nvidia):
+            return backend.get_working_set_bytes()
+
+    def test_an_nvidia_card_holds_the_gpu_share_so_ram_is_asked_for_less(self) -> None:
+        card = 12 * GIB
+        self.assertEqual(self._figure("flux3-image-klein", None), DECLARED_WORKING_SET["flux3-image-klein"])
+        self.assertEqual(self._figure("flux3-image-klein", card), DECLARED_RAM_WORKING_SET["flux3-image-klein"])
+        self.assertEqual(self._figure("flux3-image-klein", card, "cuda"), DECLARED_RAM_WORKING_SET["flux3-image-klein"])
+        # The 16 GB Windows machine that was refused: 6.7 GiB left for the sidecar.
+        self.assertLess(self._figure("flux3-image-klein", card), 7_213_637_632)
+
+    def test_a_device_that_shares_ram_is_asked_for_the_whole_figure(self) -> None:
+        for device in ("xpu", "mps"):
+            self.assertEqual(self._figure("flux2-klein-4b", 8 * GIB, device), DECLARED_WORKING_SET["flux2-klein-4b"])
+
+    def test_every_model_has_both_figures_and_ram_alone_is_never_more(self) -> None:
+        self.assertEqual(set(DECLARED_RAM_WORKING_SET), set(DECLARED_WORKING_SET))
+        for model, ram in DECLARED_RAM_WORKING_SET.items():
+            self.assertLessEqual(ram, DECLARED_WORKING_SET[model], model)
+
+    def test_the_ram_figure_is_never_below_the_download_it_holds(self) -> None:
+        """Offload keeps every component in RAM. Sizes from cleaner-core's models.rs."""
+        downloads = {
+            "flux2-klein-4b": 5_480_000_000,
+            "flux3-image-klein": 6_650_397_934,
+            "flux2-klein-9b": 12_606_105_778,
+            "qwen-image-edit-2511": 17_294_421_877 + 849_608_296 + 18_753_872,
+        }
+        for model, ram in DECLARED_RAM_WORKING_SET.items():
+            self.assertGreater(ram, downloads[model], model)
+
+    def test_the_nvml_probe_answers_without_torch(self) -> None:
+        loaded = "torch" in sys.modules
+        answer = get_nvidia_total_bytes()
+        self.assertTrue(answer is None or answer > 0)
+        self.assertEqual("torch" in sys.modules, loaded)
+        if sys.platform == "darwin":
+            self.assertIsNone(answer)
 
 
 class Registry(unittest.TestCase):

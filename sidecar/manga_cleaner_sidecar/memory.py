@@ -319,6 +319,76 @@ def get_gpu_bytes() -> Optional[int]:
     return None
 
 
+class _NvmlMemory(ctypes.Structure):
+    _fields_ = [
+        ("total", ctypes.c_ulonglong),
+        ("free", ctypes.c_ulonglong),
+        ("used", ctypes.c_ulonglong),
+    ]
+
+
+_NVIDIA_TOTAL: Optional[int] = None
+_NVIDIA_ASKED = False
+
+
+def get_nvidia_total_bytes() -> Optional[int]:
+    """Memory on the smallest NVIDIA GPU here, in bytes, or None with none.
+
+    Asked of NVML, which the NVIDIA driver installs, so it costs milliseconds and
+    no torch import: a health probe can ask it before the model is opened. The
+    smallest device, because torch picks which one runs. None where NVML is
+    missing or will not report memory, which NVIDIA's unified-memory boards do:
+    their GPU memory is this machine's RAM. Asked once per process.
+    """
+    global _NVIDIA_TOTAL, _NVIDIA_ASKED
+    if not _NVIDIA_ASKED:
+        _NVIDIA_TOTAL = _ask_nvml()
+        _NVIDIA_ASKED = True
+    return _NVIDIA_TOTAL
+
+
+def _ask_nvml() -> Optional[int]:
+    if sys.platform == "darwin":
+        return None
+    if sys.platform == "win32":
+        names = [
+            "nvml.dll",
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "NVIDIA Corporation", "NVSMI", "nvml.dll"),
+        ]
+    else:
+        names = ["libnvidia-ml.so.1", "libnvidia-ml.so"]
+    lib = None
+    for name in names:
+        try:
+            lib = ctypes.CDLL(name)
+            break
+        except OSError:
+            continue
+    if lib is None:
+        return None
+    try:
+        if lib.nvmlInit_v2() != 0:
+            return None
+        try:
+            count = ctypes.c_uint(0)
+            if lib.nvmlDeviceGetCount_v2(ctypes.byref(count)) != 0:
+                return None
+            totals = []
+            for index in range(count.value):
+                handle = ctypes.c_void_p()
+                info = _NvmlMemory()
+                if lib.nvmlDeviceGetHandleByIndex_v2(index, ctypes.byref(handle)) != 0:
+                    return None
+                if lib.nvmlDeviceGetMemoryInfo(handle, ctypes.byref(info)) != 0:
+                    return None
+                totals.append(int(info.total))
+            return min(totals) if totals and min(totals) > 0 else None
+        finally:
+            lib.nvmlShutdown()
+    except Exception:
+        return None
+
+
 def build_memory_report() -> MemoryReport:
     """Build a complete MemoryReport for inclusion in wire responses.
 

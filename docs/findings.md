@@ -723,6 +723,15 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Local FLUX gate on NVIDIA cards (2026-11-03): split in code, not run on Windows.** A 16 GB Windows PC was
+refused FLUX 3: `sdnq` declared 12 GiB, and the sidecar may use 6.7 GiB of RAM there. The 12 GiB is a Mac figure,
+RAM and GPU in one pool. When NVML finds an NVIDIA card, the sidecar now declares RAM alone (Klein 4B 6 GiB, FLUX 3
+6.5 GiB, Klein 9B 12 GiB, Qwen 23 GiB), and the card's cap is its free memory at open in place of the RAM budget.
+The RAM figures are L4 host peaks on Linux, rounded up and never below the download, since offload keeps every
+component in RAM. Not measured: RAM peaks on Windows, which has no `malloc_trim`; whether the cap at free memory
+stops the Windows driver's spill into RAM; the NVML probe on a real Windows driver. An Intel Arc card still gets the
+full figure, because an Intel GPU may share RAM. With several NVIDIA cards, the smallest one's memory is counted.
+
 **Closing on Windows (2026-11-02): the close hang found, fixed in code.** The release build's close check stopped the
 app 30 s after its window closed, and a debugger showed the main thread in `PeekNamedPipe` and `dev-log-read` in
 `NtReadFile` on the same pipe. `devlog::drain` asked how full the pipe was, and on a synchronous pipe that peek waits
