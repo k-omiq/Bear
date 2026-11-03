@@ -264,6 +264,36 @@ fn the_last_line_before_an_exit_is_kept() {
     assert_eq!(kept(&dir), 50, "lines kept of 50");
 }
 
+/// A real exit comes long after the last line, with the reader waiting in its
+/// read. A drain must still end: on Windows a peek at that pipe waited for that
+/// read, so the app outlived its window forever.
+#[test]
+fn a_drain_on_a_quiet_pipe_ends() {
+    if std::env::var_os("MC_DEVLOG_GAP_DIR").is_some() {
+        burst();
+        std::thread::sleep(Duration::from_millis(500));
+        drain();
+        std::process::exit(0);
+    }
+    let dir = folder("quiet");
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "devlog::gap_tests::a_drain_on_a_quiet_pipe_ends", "--test-threads=1"])
+        .env("MC_DEVLOG_GAP_DIR", &dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if started.elapsed() > Duration::from_secs(60) {
+            child.kill().unwrap();
+            panic!("the drain has not ended after 60 s");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(kept(&dir), 50, "lines kept of 50");
+}
+
 /// What `pump` hands on, from a pipe that stays open, a moment after the write.
 fn pumped_while_open(bytes: &[u8]) -> (Vec<String>, Vec<u8>, io::PipeWriter) {
     let dir = folder(&format!("open-{}", bytes.len()));

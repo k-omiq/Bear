@@ -723,6 +723,13 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Closing on Windows (2026-11-02): the close hang found, fixed in code.** The release build's close check stopped the
+app 30 s after its window closed, and a debugger showed the main thread in `PeekNamedPipe` and `dev-log-read` in
+`NtReadFile` on the same pipe. `devlog::drain` asked how full the pipe was, and on a synchronous pipe that peek waits
+for the read in progress, which on a quiet pipe never ends. Every normal exit since beta.13 therefore hung with no
+window. Now a thread of its own sends the mark and the drain never peeks. A real close on a real Windows PC has not
+been tried; the release check runs one on a clean runner.
+
 **Text cleanup's FLUX pick (2026-11-02): one real run, on one Mac and one model.** Speech bubble text and Text outside
 bubbles can now name the local model from Settings. A real Detect then Clean with FLUX 3 Image Klein (sdnq) on this
 Mac cleaned a 1284 x 760 crop of a real page: 4 of 4 regions, 111.7 to 272.5 s each, 830 s in all, the first including

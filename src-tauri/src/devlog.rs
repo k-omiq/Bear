@@ -104,7 +104,7 @@ fn capture(dir: PathBuf) -> io::Result<()> {
     // Copied before the redirect, or the copy would be the pipe.
     let terminal = original_stderr();
     #[cfg(windows)]
-    note_reader(&reader);
+    start_mark_thread()?;
     // Started before the redirect: a stream with no reader yet can fill. If the
     // redirect then fails, the writer closes and this thread ends at the EOF.
     std::thread::Builder::new().name("dev-log".into()).spawn(move || {
@@ -245,39 +245,51 @@ fn drain_when_dying() {
     }
 }
 
+/// How many marks a drain has asked the mark thread for.
 #[cfg(windows)]
-static READER: std::sync::atomic::AtomicPtr<std::ffi::c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static MARKS_ASKED: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static MARK_THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
 
-/// The read end stays open as long as the thread that owns it runs, and a null
-/// one only makes [`pipe_has_room`] say no.
+/// The write that may wait, on a thread of its own, so a full pipe with a stuck
+/// reader costs a drain [`DRAIN_LIMIT`] and no more.
 #[cfg(windows)]
-fn note_reader(reader: &io::PipeReader) {
-    use std::os::windows::io::AsRawHandle;
-    READER.store(reader.as_raw_handle().cast(), Ordering::SeqCst);
+fn start_mark_thread() -> io::Result<()> {
+    let writer = std::thread::Builder::new().name("dev-log-mark".into()).spawn(|| {
+        let mut sent = 0;
+        loop {
+            if sent == MARKS_ASKED.load(Ordering::SeqCst) {
+                std::thread::park();
+            } else if send_mark_to_stderr() {
+                sent += 1;
+            } else {
+                return;
+            }
+        }
+    })?;
+    let _ = MARK_THREAD.set(writer.thread().clone());
+    Ok(())
 }
 
-/// The smallest pipe Windows gives is 4 KiB, so half of that is free space on
-/// any of them, and the other writers are not far behind this one.
+/// Windows cannot ask. `io::pipe` makes a synchronous pipe, and `PeekNamedPipe`
+/// on it waits for the read in progress on the same handle, which on a quiet pipe
+/// never ends: this hung every normal exit. So a mark always goes to the thread
+/// above, which may wait in the app's place.
 #[cfg(windows)]
 fn pipe_has_room() -> bool {
-    use windows_sys::Win32::System::Pipes::PeekNamedPipe;
-    let mut waiting = 0u32;
-    // Safety: a handle or null, which only fails, and one valid out pointer.
-    let answered = unsafe {
-        PeekNamedPipe(
-            READER.load(Ordering::SeqCst).cast(),
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null_mut(),
-            &mut waiting,
-            std::ptr::null_mut(),
-        )
-    };
-    answered != 0 && waiting < 2048
+    true
 }
 
 #[cfg(windows)]
 fn write_mark() -> bool {
+    let Some(thread) = MARK_THREAD.get() else { return false };
+    MARKS_ASKED.fetch_add(1, Ordering::SeqCst);
+    thread.unpark();
+    true
+}
+
+#[cfg(windows)]
+fn send_mark_to_stderr() -> bool {
     use windows_sys::Win32::Storage::FileSystem::WriteFile;
     use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
     let mut written = 0u32;
