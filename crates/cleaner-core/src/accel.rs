@@ -804,6 +804,12 @@ pub const DETECTOR: ModelProfile = ModelProfile {
 /// **CoreML cannot build a session for it at all** - it is an int8 quantised
 /// model. The failure costs 8 s to discover, which is why [`open_session`]'s
 /// fallback is reported rather than retried per page.
+///
+/// The same int8 nodes are why a forced CUDA session keeps the CPU fallback: a
+/// Windows user's CUDA choice failed to open with "graph nodes that are assigned
+/// to the default CPU EP, but fallback to CPU EP has been explicitly disabled"
+/// (2026-11-03). DirectML is given the same, as Full has it. Neither has been
+/// built or timed on this graph on real hardware.
 pub const BALLOON: ModelProfile = ModelProfile {
     name: "balloon",
     label_key: "models.kind.balloonDetector",
@@ -811,7 +817,7 @@ pub const BALLOON: ModelProfile = ModelProfile {
     measured_better: &[],
     unmeasured_candidates: &[],
     measured_peak_rss: &[],
-    partitioned_on: &[],
+    partitioned_on: &[Accelerator::DirectMl, Accelerator::Cuda],
 };
 
 /// Full FP32 RT-DETR uses the same ONNX session builder as the small detector.
@@ -1563,10 +1569,11 @@ mod tests {
         for profile in [&DETECTOR, &BALLOON, &FULL_RT, &SCRIPT_ID, &OCR] {
             assert!(strict_placement(profile, webgpu, Accelerator::WebGpu), "{}", profile.name);
         }
-        // Full may split on the GPU providers it is offered; Small stays whole.
+        // Full and Small may split on the GPU providers they are offered: both
+        // leave nodes those providers do not take, Small its int8 ones.
         for gpu in [Accelerator::DirectMl, Accelerator::Cuda] {
             assert!(!strict_placement(&FULL_RT, Preference::Force(gpu), gpu), "{gpu:?}");
-            assert!(strict_placement(&BALLOON, Preference::Force(gpu), gpu), "{gpu:?}");
+            assert!(!strict_placement(&BALLOON, Preference::Force(gpu), gpu), "{gpu:?}");
         }
         // Automatic already keeps the fallback, and `CpuOnly` has nothing to
         // fall back from.
