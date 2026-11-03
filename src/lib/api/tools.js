@@ -432,11 +432,25 @@ const TARGET_RUNG = Object.freeze({
 export function rerunNeedsCloud(mask, kind, engine) {
   if (!mask?.provenance || kind === 'reopenInTool' || kind === 'cycleFill') return false
   const current = currentRung(mask.provenance.engine)
-  const target =
-    kind === 'engine' && engine === CLOUD_ENGINE
-      ? CLOUD_ENGINE
-      : (TARGET_RUNG[/** @type {keyof typeof TARGET_RUNG} */ (kind)] ?? TARGET_RUNG.retry)(current, engine)
+  const target = rerunTarget(mask, kind, engine)
   return target === CLOUD_ENGINE || (isCloudMask(mask) && target === current && kind !== 'engine')
+}
+
+/**
+ * The rung a re-run of `mask` lands on, or `null` for the two kinds that run
+ * no rung (`cycleFill` picks a fill mode, `reopenInTool` edits nothing).
+ *
+ * @param {import('../model/types.js').Mask|null} mask
+ * @param {string} kind
+ * @param {string} [engine]
+ * @returns {string|null}
+ */
+export function rerunTarget(mask, kind, engine) {
+  if (!mask?.provenance || kind === 'reopenInTool' || kind === 'cycleFill') return null
+  const current = currentRung(mask.provenance.engine)
+  return kind === 'engine' && engine === CLOUD_ENGINE
+    ? CLOUD_ENGINE
+    : (TARGET_RUNG[/** @type {keyof typeof TARGET_RUNG} */ (kind)] ?? TARGET_RUNG.retry)(current, engine)
 }
 
 /** What each of them says when it lands. */

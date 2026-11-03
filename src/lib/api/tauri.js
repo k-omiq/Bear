@@ -56,6 +56,8 @@ const IMPLEMENTED = Object.freeze({
   nanoBananaHasKey: 'nano_banana_has_key',
   storeNanoBananaKey: 'store_nano_banana_key',
   deleteNanoBananaKey: 'delete_nano_banana_key',
+  grantNanoBanana: 'nano_banana_grant',
+  nanoBananaStop: 'nano_banana_stop',
   storeCloudSecret: 'store_cloud_secret',
   deleteCloudSecret: 'delete_cloud_secret',
   getCloudSecretSummary: 'get_cloud_secret_summary',
@@ -232,6 +234,8 @@ export const SEAM_METHODS = Object.freeze([
   'nanoBananaHasKey',
   'storeNanoBananaKey',
   'deleteNanoBananaKey',
+  'grantNanoBanana',
+  'nanoBananaStop',
   'storeCloudSecret',
   'deleteCloudSecret',
   'getCloudSecretSummary',
@@ -407,6 +411,27 @@ export function createTauriBackend({ fallback, invoke, listen }) {
   const requestIdFor = (requestId) => requestId ?? `analysis-${Date.now()}-${++nextAnalysisRequest}`
 
   /**
+   * The grant the last confirmed Nano Banana window was given
+   * (`grantNanoBanana`). Every native Nano Banana render needs it, so it goes
+   * out as `params.nanoBananaGrant` on each edit that can reach that rung, and
+   * no caller has to carry it. Native counts its regions and lets it lapse.
+   *
+   * @type {string | null}
+   */
+  let nanoBananaGrant = null
+  /**
+   * `params` with the grant, when the edit names Nano Banana or, for a re-run,
+   * may land on it; as it came otherwise.
+   *
+   * @param {any} params
+   * @param {boolean} reaches
+   */
+  const withNanoBananaGrant = (params, reaches) =>
+    nanoBananaGrant && reaches ? { ...(params ?? {}), nanoBananaGrant } : params
+  /** @param {any} params @param {string | undefined | null} [engine] */
+  const namesNanoBanana = (params, engine) => engine === 'nanobanana' || params?.engine === 'nanobanana'
+
+  /**
    * Settings are stored by the core and *defaulted* by the interface.
    *
    * The core deliberately does not know what a setting means - it round-trips
@@ -448,6 +473,16 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     nanoBananaHasKey: () => call(IMPLEMENTED.nanoBananaHasKey),
     storeNanoBananaKey: ({ key }) => call(IMPLEMENTED.storeNanoBananaKey, { key }),
     deleteNanoBananaKey: () => call(IMPLEMENTED.deleteNanoBananaKey),
+    grantNanoBanana: async ({ model, count }) => {
+      const granted = await call(IMPLEMENTED.grantNanoBanana, { model, count })
+      nanoBananaGrant = typeof granted?.grant === 'string' ? granted.grant : null
+      return granted
+    },
+    nanoBananaStop: async () => {
+      // Stop withdraws the rest of the window, here as well as natively.
+      nanoBananaGrant = null
+      return call(IMPLEMENTED.nanoBananaStop)
+    },
     storeCloudSecret: ({ provider, profileId, role, secret, tokenId, sessionOnly = false }) =>
       call(IMPLEMENTED.storeCloudSecret, {
         provider,
@@ -612,7 +647,7 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     applyTool: ({ tool, params, chapterId, pageIndex, regionId }) =>
       call(IMPLEMENTED.applyTool, {
         tool,
-        params: params ?? null,
+        params: withNanoBananaGrant(params, namesNanoBanana(params)) ?? null,
         chapterId: chapterId ?? null,
         pageIndex: pageIndex ?? null,
         regionId: regionId ?? null,
@@ -625,7 +660,7 @@ export function createTauriBackend({ fallback, invoke, listen }) {
         expectedSourceSha: sourceSha ?? null,
         bbox,
         tool,
-        params: params ?? null,
+        params: withNanoBananaGrant(params, namesNanoBanana(params)) ?? null,
       }),
     // Bound to the source the gesture was drawn over, as `createRegion` is.
     // Exactly one of `stroke` and `painted` carries the gesture; the other
@@ -684,20 +719,26 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // `params` carries a cloud run's grant - `grantNonce`, `executionTarget`,
     // `recipe`, `intent`, the four `applyTool` already sends - and is left off
     // entirely for a local rung, so the command sees exactly what it saw
-    // before the cloud could reach it.
-    rerunMask: ({ maskId, kind, engine, params }) =>
-      call(IMPLEMENTED.rerunMask, {
+    // before the cloud could reach it. A Nano Banana grant rides on every
+    // re-run while one is held: Try again on a Nano Banana layer names no
+    // engine, and native decides where it lands.
+    rerunMask: ({ maskId, kind, engine, params }) => {
+      const sent = withNanoBananaGrant(params, true)
+      return call(IMPLEMENTED.rerunMask, {
         maskId,
         kind,
         engine: engine ?? null,
-        ...(params ? { params } : {}),
-      }),
-    cleanAnyway: ({ regionId, engine, params }) =>
-      call(IMPLEMENTED.cleanAnyway, {
+        ...(sent ? { params: sent } : {}),
+      })
+    },
+    cleanAnyway: ({ regionId, engine, params }) => {
+      const sent = withNanoBananaGrant(params, namesNanoBanana(params, engine))
+      return call(IMPLEMENTED.cleanAnyway, {
         regionId,
         engine: engine ?? null,
-        ...(params ? { params } : {}),
-      }),
+        ...(sent ? { params: sent } : {}),
+      })
+    },
     approveHeldMask: ({ regionId, paddingPx }) =>
       call(IMPLEMENTED.approveHeldMask, { regionId, paddingPx: paddingPx ?? null }),
     sidecarAvailable: () => call(IMPLEMENTED.sidecarAvailable),
@@ -844,6 +885,8 @@ export const TAURI_REGISTERED_CLOUD_COMMANDS = Object.freeze([
   'nano_banana_has_key',
   'store_nano_banana_key',
   'delete_nano_banana_key',
+  'nano_banana_grant',
+  'nano_banana_stop',
   'store_cloud_secret',
   'delete_cloud_secret',
   'get_cloud_secret_summary',

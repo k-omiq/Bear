@@ -1,0 +1,231 @@
+//! The consent a Nano Banana render spends.
+//!
+//! Settings' Cloud engines switch is a value the webview writes, so on its own
+//! it says nothing about whether the person agreed to this request. The window
+//! in front of every Nano Banana request (`nanobananaask.svelte.js`) answers
+//! that: when the person confirms it, the interface asks for a grant here, and
+//! every Nano Banana render presents one (`region.rs#edit`). The cloud GPU's
+//! grants bind to one stored region's bytes; this one is smaller, because a
+//! Nano Banana request is one blocking call on the person's own key, with no
+//! worker left running:
+//!
+//! - **What was confirmed.** The model and the instruction are read from
+//!   settings when the grant is made, and a render uses the grant's copy. An
+//!   instruction edited during a batch is for the next window, not the rest of
+//!   this one.
+//! - **How many regions.** Each render takes one, whether or not it then needs
+//!   a request: an answer shared from an earlier crop still counts, so the
+//!   count is never more than the window said.
+//! - **For how long.** A grant lapses [`IDLE`] after it was made or after its
+//!   last render finished. A render can take many minutes (several crops, a
+//!   retry each, a long timeout), so the clock is not running while one is.
+//! - **One at a time.** A new grant replaces the last one, and turning Cloud
+//!   engines off withdraws it ([`revoke_all`]).
+
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use serde::Serialize;
+
+use super::nano_banana::Config;
+
+/// How long a grant waits, unused, before it lapses.
+pub const IDLE: Duration = Duration::from_secs(10 * 60);
+
+/// The most regions one grant covers. A whole chapter's batch is far below it.
+pub const MAX_REGIONS: u32 = 2_000;
+
+/// Why a render may not go.
+pub(crate) const NO_CONSENT: &str = "decline.reason.nanoBananaNoConsent";
+/// Cloud engines are off: nothing may be sent, grant or no grant.
+pub(crate) const CLOUD_OFF: &str = "decline.reason.nanoBananaOff";
+
+struct Live {
+    nonce: String,
+    config: Config,
+    left: u32,
+    lapses: Instant,
+}
+
+/// The grants this process has made. One live at a time.
+pub(crate) struct Book {
+    live: Mutex<Option<Live>>,
+    idle: Duration,
+}
+
+/// One render's share of a grant: the settings the person confirmed. When it
+/// is dropped, the render is over and the grant's idle clock starts again.
+pub(crate) struct Spend<'a> {
+    book: &'a Book,
+    nonce: String,
+    pub config: Config,
+}
+
+impl Drop for Spend<'_> {
+    fn drop(&mut self) {
+        let mut live = self.book.lock();
+        if let Some(grant) = live.as_mut().filter(|grant| grant.nonce == self.nonce) {
+            grant.lapses = Instant::now() + self.book.idle;
+        }
+    }
+}
+
+impl Book {
+    pub(crate) const fn new(idle: Duration) -> Book {
+        Book { live: Mutex::new(None), idle }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Live>> {
+        self.live.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A grant for `count` renders with `config`, replacing any other.
+    pub(crate) fn issue(&self, config: Config, count: u32) -> Result<String, &'static str> {
+        if count == 0 || count > MAX_REGIONS {
+            return Err(NO_CONSENT);
+        }
+        let mut bytes = [0u8; 32];
+        getrandom::fill(&mut bytes).map_err(|_| NO_CONSENT)?;
+        let nonce: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        *self.lock() = Some(Live {
+            nonce: nonce.clone(),
+            config,
+            left: count,
+            lapses: Instant::now() + self.idle,
+        });
+        Ok(nonce)
+    }
+
+    /// One render's share of the grant `nonce` names, while Cloud engines are
+    /// `cloud_allowed`. Nothing is taken when the answer is a refusal.
+    pub(crate) fn spend(&self, cloud_allowed: bool, nonce: Option<&str>) -> Result<Spend<'_>, &'static str> {
+        if !cloud_allowed {
+            return Err(CLOUD_OFF);
+        }
+        let nonce = nonce.ok_or(NO_CONSENT)?;
+        let mut live = self.lock();
+        let Some(grant) = live.as_mut().filter(|grant| grant.nonce == nonce) else {
+            return Err(NO_CONSENT);
+        };
+        if Instant::now() >= grant.lapses || grant.left == 0 {
+            *live = None;
+            return Err(NO_CONSENT);
+        }
+        grant.left -= 1;
+        Ok(Spend { book: self, nonce: nonce.to_owned(), config: grant.config.clone() })
+    }
+
+    pub(crate) fn revoke(&self) {
+        *self.lock() = None;
+    }
+}
+
+static BOOK: Book = Book::new(IDLE);
+
+/// The process's grants.
+pub(crate) fn book() -> &'static Book {
+    &BOOK
+}
+
+/// Withdraw every grant: Cloud engines was turned off.
+pub(crate) fn revoke_all() {
+    BOOK.revoke();
+}
+
+/// What a confirmed window was granted.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NanoBananaGrant {
+    pub grant: String,
+    pub model: String,
+    pub count: u32,
+}
+
+/// Make the grant for a window the person just confirmed: `count` regions on
+/// `model`, the model the window showed. Refused while Cloud engines is off,
+/// and when settings name another model than the one the person saw.
+#[tauri::command]
+pub async fn nano_banana_grant(app: tauri::AppHandle, model: String, count: u32) -> Result<NanoBananaGrant, String> {
+    let config = Config::when_allowed(&app).ok_or(CLOUD_OFF)?;
+    if config.model.id != model {
+        return Err(NO_CONSENT.into());
+    }
+    let model = config.model.id.to_owned();
+    let grant = book().issue(config, count)?;
+    Ok(NanoBananaGrant { grant, model, count })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cleaner_core::engines::nano_banana::Model;
+
+    fn config(instruction: Option<&str>) -> Config {
+        Config { model: Model::DEFAULT, instruction: instruction.map(str::to_owned) }
+    }
+
+    #[test]
+    fn a_grant_covers_as_many_renders_as_were_confirmed() {
+        let book = Book::new(IDLE);
+        let nonce = book.issue(config(None), 2).unwrap();
+        drop(book.spend(true, Some(&nonce)).unwrap());
+        drop(book.spend(true, Some(&nonce)).unwrap());
+        assert_eq!(book.spend(true, Some(&nonce)).err(), Some(NO_CONSENT));
+    }
+
+    #[test]
+    fn nothing_is_taken_while_cloud_engines_are_off() {
+        let book = Book::new(IDLE);
+        let nonce = book.issue(config(None), 1).unwrap();
+        assert_eq!(book.spend(false, Some(&nonce)).err(), Some(CLOUD_OFF));
+        assert!(book.spend(true, Some(&nonce)).is_ok(), "the refusal left the count alone");
+    }
+
+    #[test]
+    fn no_grant_a_wrong_one_or_a_withdrawn_one_is_refused() {
+        let book = Book::new(IDLE);
+        assert_eq!(book.spend(true, None).err(), Some(NO_CONSENT));
+        let nonce = book.issue(config(None), 5).unwrap();
+        assert_eq!(book.spend(true, Some("0".repeat(64).as_str())).err(), Some(NO_CONSENT));
+        book.revoke();
+        assert_eq!(book.spend(true, Some(&nonce)).err(), Some(NO_CONSENT));
+    }
+
+    #[test]
+    fn a_new_window_replaces_the_last_ones_grant() {
+        let book = Book::new(IDLE);
+        let first = book.issue(config(None), 5).unwrap();
+        let second = book.issue(config(None), 1).unwrap();
+        assert_eq!(book.spend(true, Some(&first)).err(), Some(NO_CONSENT));
+        assert!(book.spend(true, Some(&second)).is_ok());
+    }
+
+    #[test]
+    fn a_grant_lapses_when_idle_but_not_while_a_render_runs() {
+        let book = Book::new(Duration::from_millis(60));
+        let nonce = book.issue(config(None), 3).unwrap();
+        let running = book.spend(true, Some(&nonce)).unwrap();
+        std::thread::sleep(Duration::from_millis(90));
+        // The render ends now, and the clock starts again from here.
+        drop(running);
+        assert!(book.spend(true, Some(&nonce)).is_ok());
+        std::thread::sleep(Duration::from_millis(90));
+        assert_eq!(book.spend(true, Some(&nonce)).err(), Some(NO_CONSENT));
+    }
+
+    #[test]
+    fn a_render_uses_the_instruction_that_was_confirmed() {
+        let book = Book::new(IDLE);
+        let nonce = book.issue(config(Some("keep the halftone")), 2).unwrap();
+        let spend = book.spend(true, Some(&nonce)).unwrap();
+        assert_eq!(spend.config.instruction.as_deref(), Some("keep the halftone"));
+        assert_eq!(spend.config.model.id, Model::DEFAULT.id);
+    }
+
+    #[test]
+    fn a_count_of_none_or_too_many_is_no_grant() {
+        let book = Book::new(IDLE);
+        assert_eq!(book.issue(config(None), 0).err(), Some(NO_CONSENT));
+        assert_eq!(book.issue(config(None), MAX_REGIONS + 1).err(), Some(NO_CONSENT));
+    }
+}
