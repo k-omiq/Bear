@@ -1,3 +1,12 @@
+<script module>
+  /**
+   * Whether the key saved this session is held for this session only. Kept
+   * past the panel, which Settings mounts again each time it opens: the key
+   * outlives the panel, and so does what the panel knows about it.
+   */
+  const stored = $state({ sessionOnly: false })
+</script>
+
 <script>
   /**
    * Settings > Cloud > Nano Banana: the user's own Gemini API key and the tier
@@ -7,6 +16,9 @@
    * (`inference/nano_banana.rs`), and this panel can only ask whether one is
    * there. The model is an ordinary setting, one of three (`model/nanobanana.js`).
    * There is no size setting: native picks each region's crop size.
+   *
+   * Where the system has no credential store the key is kept for this session
+   * only (`sessionOnly`), and the panel says so: it is gone when the app closes.
    *
    * @type {{ backend?: import('../api/backend.js').Backend }}
    */
@@ -26,9 +38,16 @@
   const ids = { key: `${uid}-key`, model: `${uid}-model` }
   const models = NANO_BANANA_MODELS.map((entry) => ({ value: entry.id, label: t(entry.labelKey) }))
 
+  /** A Gemini key is 39 characters; this only stops a paste of something else entirely. */
+  const MAX_KEY_CHARS = 256
+  /** The codes the key commands reject with, each its own message. */
+  const KEY_ERRORS = ['nanoBanana.key.noStore', 'nanoBanana.key.invalid', 'nanoBanana.key.failed']
+
   let draft = $state('')
   let hasKey = $state(false)
-  let failed = $state(false)
+  let busy = $state(false)
+  /** The message for the last change that failed. @type {string|null} */
+  let failed = $state(null)
   let model = $state(nanoBananaModel(null).id)
 
   onMount(async () => {
@@ -38,23 +57,64 @@
     model = nanoBananaModel(settings?.nanoBananaModel).id
   })
 
-  /** @param {() => Promise<unknown>} action */
-  async function changeKey(action) {
-    failed = false
+  /** @param {unknown} error */
+  function keyErrorOf(error) {
+    const code = error instanceof Error ? error.message : String(error ?? '')
+    return KEY_ERRORS.includes(code) ? code : 'nanoBanana.settings.failed'
+  }
+
+  /**
+   * Store or remove the key, then read again whether one is there. The read
+   * is its own step: a key that changed and could not be read back is still
+   * changed, and the engines are refreshed either way.
+   *
+   * @param {() => Promise<unknown>} action
+   * @param {boolean} storing
+   */
+  async function changeKey(action, storing) {
+    if (busy) return
+    busy = true
+    failed = null
     try {
-      await action()
-      draft = ''
-      hasKey = await backend.nanoBananaHasKey()
+      try {
+        const answer = /** @type {any} */ (await action())
+        draft = ''
+        stored.sessionOnly = storing && answer?.sessionOnly === true
+        hasKey = storing
+      } catch (error) {
+        console.error('the Nano Banana key could not be changed', error)
+        failed = keyErrorOf(error)
+        return
+      }
+      try {
+        hasKey = await backend.nanoBananaHasKey()
+      } catch (error) {
+        console.error('whether a Nano Banana key is saved could not be read', error)
+      }
       await refreshNanoBanana(backend)
-    } catch {
-      failed = true
+    } finally {
+      busy = false
     }
   }
 
+  function saveKey() {
+    if (!draft.trim()) return
+    void changeKey(() => backend.storeNanoBananaKey({ key: draft }), true)
+  }
+
   /** @param {string} next */
-  function saveModel(next) {
+  async function saveModel(next) {
+    const before = model
     model = next
-    void writeSettingsSerialized(backend, { nanoBananaModel: next })
+    failed = null
+    try {
+      await writeSettingsSerialized(backend, { nanoBananaModel: next })
+    } catch (error) {
+      console.error('the Nano Banana model could not be saved', error)
+      // A later pick has already replaced this one: that pick is what stands.
+      if (model === next) model = before
+      failed = 'nanoBanana.settings.modelFailed'
+    }
   }
 </script>
 
@@ -67,35 +127,40 @@
 
   <Field
     label={t('nanoBanana.settings.key')}
-    description={t(hasKey ? 'nanoBanana.settings.keySaved' : 'nanoBanana.settings.keyMissing')}
+    description={t(!hasKey ? 'nanoBanana.settings.keyMissing'
+      : stored.sessionOnly ? 'nanoBanana.settings.sessionOnly' : 'nanoBanana.settings.keySaved')}
     layout="row"
     controlId={ids.key}
   >
     {#snippet children({ descriptionId })}
-      <div class="key">
+      <!-- A form, so Enter in the box saves as the button does. -->
+      <form class="key" onsubmit={(event) => { event.preventDefault(); saveKey() }}>
         <input
           id={ids.key}
           class="text"
           type="password"
           autocomplete="off"
+          autocapitalize="off"
           spellcheck="false"
+          maxlength={MAX_KEY_CHARS}
           aria-describedby={descriptionId}
+          disabled={busy}
           bind:value={draft}
         />
-        <Button size="sm" variant="soft" disabled={!draft.trim()}
-          onclick={() => changeKey(() => backend.storeNanoBananaKey({ key: draft }))}>
+        <Button type="submit" size="sm" variant="soft" disabled={busy || !draft.trim()}>
           {t('nanoBanana.settings.save')}
         </Button>
         {#if hasKey}
-          <Button size="sm" variant="ghost" onclick={() => changeKey(() => backend.deleteNanoBananaKey())}>
+          <Button size="sm" variant="ghost" disabled={busy}
+            onclick={() => changeKey(() => backend.deleteNanoBananaKey(), false)}>
             {t('nanoBanana.settings.remove')}
           </Button>
         {/if}
-      </div>
+      </form>
     {/snippet}
   </Field>
   {#if failed}
-    <p class="intro" role="alert">{t('nanoBanana.settings.failed')}</p>
+    <p class="intro" role="alert">{t(failed)}</p>
   {/if}
 
   <Field

@@ -69,8 +69,17 @@
     }
   })
 
-  /** @param {KeyboardEvent} e */
+  /**
+   * Escape while an input method is composing belongs to the input method:
+   * it cancels the candidate (Japanese, Korean, Chinese), and closing the
+   * dialog on the same press would throw away what was typed in it. WebKit
+   * can report the key that ends a composition with `isComposing` false and
+   * key code 229, so both are read.
+   *
+   * @param {KeyboardEvent} e
+   */
   function onkeydown(e) {
+    if (e.isComposing || e.keyCode === 229) return
     if (e.key === 'Escape' && onclose) {
       e.preventDefault()
       e.stopPropagation()

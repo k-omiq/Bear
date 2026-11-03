@@ -30,6 +30,11 @@
  * The quit guard's question is asked from here too (`askQuit`): it is about
  * these jobs, and it can arrive on any screen, over any dialog.
  *
+ * A Nano Banana batch is held here as well (`nanoBananaRun`), though it is not
+ * a backend run: the interface walks it one region at a time
+ * (`editor/nanobananarun.svelte.js`), so the backend lists no job for it, and
+ * the quit guard has to hear of it from this side.
+ *
  * Nothing here forwards `notice` events. Home and the editor each forward
  * those while mounted, and a third subscriber doing it too would say
  * everything twice.
@@ -80,6 +85,12 @@ const MAX_EARLY_ENDS = 16
  * @property {import('../api/backend.js').DenoiseReport|null} report - a denoise's answer
  * @property {string|null} errorCode - why a denoise failed
  */
+
+/**
+ * The Nano Banana batch in progress, if any. `stopping` is set by Stop and
+ * cleared when the batch ends.
+ */
+export const nanoBananaRun = $state({ active: false, stopping: false, done: 0, total: 0 })
 
 export const jobs = $state({
   /** Running and recently finished, newest first. @type {Job[]} */
@@ -529,6 +540,26 @@ export async function openJobChapter(runId) {
 }
 
 /* ------------------------------------------------------------------ */
+/* The Nano Banana batch                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Stop the batch: no region after the one in flight is sent, and the native
+ * side is told to drop the request in flight (`nanoBananaStop`), which is a
+ * paid request the person no longer wants. A backend without the command
+ * still stops after the region in flight.
+ *
+ * @param {import('../api/backend.js').Backend} [backend]
+ */
+export function stopNanoBananaRun(backend = getBackend()) {
+  if (!nanoBananaRun.active || nanoBananaRun.stopping) return
+  nanoBananaRun.stopping = true
+  void Promise.resolve()
+    .then(() => /** @type {any} */ (backend).nanoBananaStop?.())
+    .catch((error) => console.error('the Nano Banana request in flight could not be stopped', error))
+}
+
+/* ------------------------------------------------------------------ */
 /* The quit guard                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -544,19 +575,22 @@ export async function openJobChapter(runId) {
  * empty. `App.svelte` draws `dialogs/QuitJobsDialog.svelte` over the stack
  * instead, as it does the first-launch offer.
  *
+ * A Nano Banana batch is one job more: the backend does not count it.
+ *
  * @param {import('../api/backend.js').QuitRequest} request
  */
 export function askQuit(request) {
   if (jobs.quit) return
   jobs.quit = {
-    count: Math.max(runningCount(), Number(request?.jobs) || 0),
+    count: Math.max(runningCount(), Number(request?.jobs) || 0) + (nanoBananaRun.active ? 1 : 0),
     canHide: request?.canHide === true,
   }
 }
 
 /**
  * The answer: `quit` stops every job and quits, `hide` hides the window (only
- * offered with a tray), anything else leaves the app as it was.
+ * offered with a tray), anything else leaves the app as it was. A Nano Banana
+ * batch is stopped first, because the backend's own stop does not reach it.
  *
  * @param {'quit'|'hide'|'cancel'|null} result
  */
@@ -565,8 +599,10 @@ export function answerQuit(result) {
   jobs.quit = null
   if (!asked) return
   const backend = getBackend()
-  if (result === 'quit') void Promise.resolve().then(() => backend.confirmQuit()).catch(() => {})
-  else if (result === 'hide' && asked.canHide) void Promise.resolve().then(() => backend.hideToTray()).catch(() => {})
+  if (result === 'quit') {
+    stopNanoBananaRun(backend)
+    void Promise.resolve().then(() => backend.confirmQuit()).catch(() => {})
+  } else if (result === 'hide' && asked.canHide) void Promise.resolve().then(() => backend.hideToTray()).catch(() => {})
 }
 
 /* ------------------------------------------------------------------ */
@@ -621,6 +657,7 @@ export function resetJobs() {
   stopJobs()
   jobs.list = []
   jobs.quit = null
+  Object.assign(nanoBananaRun, { active: false, stopping: false, done: 0, total: 0 })
   earlyEnds.clear()
   watchers.clear()
   settleListeners.clear()

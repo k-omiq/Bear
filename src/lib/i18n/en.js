@@ -1921,11 +1921,6 @@ export const en = {
       // is gone; the sentence was still being emitted, by rung 3a, under the
       // departed rung's description.
       depthBeyondEngine: 'the AI redraw helper works at 8 bits, and this file has more',
-      // Not a judgement on the region at all - no engine was ever asked about
-      // it. Two ways in, and the remedy differs: the engine ceiling was set
-      // below the rung the region needed, or this machine has no weights for
-      // that rung. Distinct from the four above, each of which is something an
-      // engine decided after looking.
       nanoBananaOff: 'Cloud engines are off, so nothing was sent to Nano Banana',
       nanoBananaNoKey: 'no Nano Banana key is saved; add one in Settings, Cloud',
       nanoBananaKeyRejected: 'Google refused the Nano Banana key',
@@ -1935,6 +1930,18 @@ export const en = {
       nanoBananaBlocked: 'Google refused to return an image for this crop',
       nanoBananaBadAnswer: 'Nano Banana returned no usable image',
       nanoBananaKeptMark: 'Nano Banana left the blue mark on the result',
+      nanoBananaKeyStore: 'the Nano Banana key could not be read from the system credential store',
+      nanoBananaLocation: 'Google does not offer this Nano Banana model in your country',
+      nanoBananaBilling: 'billing is not set up for this Nano Banana key, or its quota is used up',
+      nanoBananaKeyExpired: 'the Nano Banana key has expired; add a new one in Settings, Cloud',
+      nanoBananaStopped: 'the Nano Banana request was stopped',
+      nanoBananaNoConsent: 'the Nano Banana request was not confirmed, so nothing was sent',
+      nanoBananaPageChanged: 'the page changed while the Nano Banana request was out, so its result was not used',
+      // Not a judgement on the region at all - no engine was ever asked about
+      // it. Two ways in, and the remedy differs: the engine ceiling was set
+      // below the rung the region needed, or this machine has no weights for
+      // that rung. Distinct from the four above, each of which is something an
+      // engine decided after looking.
       rungUnavailable: 'the engine this region needs was not available',
       // The engine was asked, it started, and then it stopped answering: an
       // ONNX session that built and ran and died under it, which on Windows is
@@ -4203,11 +4210,18 @@ export const en = {
       key: 'API key',
       keySaved: 'A key is saved in your system’s credential store.',
       keyMissing: 'No key is saved.',
+      sessionOnly: 'No system credential store was found, so the key is kept only until the app closes.',
       save: 'Save key',
       remove: 'Remove',
       failed: 'The key could not be changed.',
+      modelFailed: 'The model could not be saved.',
       model: 'Model',
       modelHint: 'The crop size is automatic: for each region, the smallest size the model offers that holds it with page around it. Nano Banana 2 starts at 512 px, the others at 1K.',
+    },
+    key: {
+      noStore: 'No system credential store is available, so the key could not be changed.',
+      invalid: 'That does not look like a Gemini API key.',
+      failed: 'The system credential store could not change the key.',
     },
     model: {
       v21: 'Nano Banana 2.1',
@@ -4220,8 +4234,10 @@ export const en = {
       promptPlaceholder: 'For example: also erase the small arrow, keep the screentone',
       promptHint: 'Your words are added to the built-in removal instruction and sent to Google. The edit stays inside the marked region.',
       promptNotSaved: 'The note could not be saved, so nothing was sent.',
+      readFailed: 'The regions to clean could not be read, so nothing was sent.',
       button: 'Clean with Nano Banana',
       stop: 'Stop ({done} of {total})',
+      stopping: 'Stopping ({done} of {total})',
       title: 'Clean with Nano Banana',
       regions: 'Regions to clean: {count}. One paid request each, or one for several regions close together.',
       cost: 'Estimated cost: {low} to {high}.',
