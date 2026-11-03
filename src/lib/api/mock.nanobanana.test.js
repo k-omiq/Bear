@@ -10,6 +10,7 @@ import { createMockBackend } from './mock.js'
 import { DEFAULT_NANO_BANANA_MODEL } from '../model/nanobanana.js'
 
 const CHAPTER = 'tsuki-to-hane-ch107'
+const KEY = 'AIzaSyTestKeyOnly0123456789'
 const ZERO = { method: 0, cloud: 0, provision: 0, analysis: 0, region: 0, pageTail: 0, noticeStagger: 0 }
 
 /** @param {Record<string, any>} [options] */
@@ -49,7 +50,7 @@ const clean = (mock, region, grant) => mock.applyTool({
 async function ready(options) {
   const mock = makeMock(options)
   await mock.writeSettings({ cloudEngines: 'allowed' })
-  await mock.storeNanoBananaKey({ key: 'AIza-test' })
+  await mock.storeNanoBananaKey({ key: KEY })
   return mock
 }
 
@@ -57,16 +58,21 @@ describe('the Nano Banana key on the mock', () => {
   it('is the instance\'s own', async () => {
     const one = makeMock()
     const other = makeMock()
-    expect(await one.storeNanoBananaKey({ key: 'AIza-test' })).toEqual({ sessionOnly: false })
+    expect(await one.storeNanoBananaKey({ key: KEY })).toEqual({ sessionOnly: false })
     expect(await one.nanoBananaHasKey()).toBe(true)
     expect(await other.nanoBananaHasKey()).toBe(false)
   })
 
   it('answers where it was kept, and refuses as natively', async () => {
-    expect(await makeMock({ nanoBananaKeyStore: 'session' }).storeNanoBananaKey({ key: 'k' })).toEqual({ sessionOnly: true })
-    await expect(makeMock().storeNanoBananaKey({ key: '  ' })).rejects.toThrow('nanoBanana.key.invalid')
-    await expect(makeMock({ nanoBananaKeyStore: 'none' }).storeNanoBananaKey({ key: 'k' })).rejects.toThrow('nanoBanana.key.noStore')
-    await expect(makeMock({ nanoBananaKeyStore: 'failed' }).storeNanoBananaKey({ key: 'k' })).rejects.toThrow('nanoBanana.key.failed')
+    const session = makeMock({ nanoBananaKeyStore: 'session' })
+    await expect(session.nanoBananaHasKey()).rejects.toThrow('nanoBanana.key.noStore')
+    expect(await session.storeNanoBananaKey({ key: KEY })).toEqual({ sessionOnly: true })
+    expect(await session.nanoBananaHasKey()).toBe(true)
+    for (const key of ['  ', 'short', `${KEY} with spaces`, 'x'.repeat(201)]) {
+      await expect(makeMock().storeNanoBananaKey({ key })).rejects.toThrow('nanoBanana.key.invalid')
+    }
+    expect(await makeMock().storeNanoBananaKey({ key: `  ${KEY}  ` })).toEqual({ sessionOnly: false })
+    await expect(makeMock({ nanoBananaKeyStore: 'failed' }).storeNanoBananaKey({ key: KEY })).rejects.toThrow('nanoBanana.key.failed')
   })
 })
 

@@ -205,7 +205,7 @@ function gutterPixels(pages) {
  * @property {Partial<typeof DEFAULT_TIMING>} [timing] - base milliseconds, before `speed`
  * @property {{ setTimeout: Function, clearTimeout: Function, now: () => number }} [timers] - injectable clock
  * @property {string} [seed] - seeds the session generator; equal seeds give equal sessions
- * @property {'os'|'session'|'none'|'failed'} [nanoBananaKeyStore] - where `storeNanoBananaKey` keeps a key, as the native side answers: the OS store (the default), this session only, no store at all (`nanoBanana.key.noStore`), or a store that fails the write (`nanoBanana.key.failed`)
+ * @property {'os'|'session'|'failed'} [nanoBananaKeyStore] - the credential store the Gemini key commands meet, as `nano_banana.rs` answers them: the OS store (the default); none, so a key is kept for this session only and `nanoBananaHasKey` rejects with `nanoBanana.key.noStore` while none is held; or a store that fails (`nanoBanana.key.failed`)
  */
 
 /**
@@ -4927,19 +4927,23 @@ export function createMockBackend(options = {}) {
 
     /** The Gemini key as the native side keeps it: write-only, never read back. */
     async nanoBananaHasKey() {
+      const store = options.nanoBananaKeyStore ?? 'os'
+      if (store === 'failed') throw new Error('nanoBanana.key.failed')
+      if (store === 'session' && !nanoBananaKey) throw new Error('nanoBanana.key.noStore')
       return nanoBananaKey
     },
 
     async storeNanoBananaKey({ key } = {}) {
       const store = options.nanoBananaKeyStore ?? 'os'
-      if (!String(key ?? '').trim()) throw new Error('nanoBanana.key.invalid')
-      if (store === 'none') throw new Error('nanoBanana.key.noStore')
+      // Printable ASCII with no spaces, 20 to 200 bytes once trimmed.
+      if (!/^[!-~]{20,200}$/.test(String(key ?? '').trim())) throw new Error('nanoBanana.key.invalid')
       if (store === 'failed') throw new Error('nanoBanana.key.failed')
       nanoBananaKey = true
       return { sessionOnly: store === 'session' }
     },
 
     async deleteNanoBananaKey() {
+      if ((options.nanoBananaKeyStore ?? 'os') === 'failed') throw new Error('nanoBanana.key.failed')
       nanoBananaKey = false
     },
 
