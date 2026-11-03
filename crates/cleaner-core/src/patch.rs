@@ -523,7 +523,7 @@ mod tests {
             assert_eq!(caps.transform, LayerPlacement::Movable, "{engine:?}");
             assert!(caps.lock && caps.opacity, "{engine:?}");
         }
-        for engine in [Engine::Lama, Engine::Flux, Engine::Cloud, Engine::Clone] {
+        for engine in [Engine::Lama, Engine::Flux, Engine::Cloud, Engine::NanoBanana, Engine::Clone] {
             let caps = engine.layer_capabilities();
             assert_eq!(caps.transform, LayerPlacement::Fixed, "{engine:?}");
             assert!(!caps.lock, "{engine:?} offered a lock");
