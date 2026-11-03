@@ -747,6 +747,11 @@ impl Bench {
         rung2.finishing = settings.as_ref()
             .and_then(|settings| crate::inference::cloud_clean::local_finishing_from_settings(settings).ok())
             .flatten();
+        // The hole a run cuts. Unreadable is the default here, as an unreadable
+        // finishing is none.
+        rung2.hole = settings.as_ref()
+            .and_then(|settings| run::lama_hole_from_settings(settings).ok())
+            .unwrap_or_default();
         rung2.flux = LocalFlux::from_settings(settings.as_ref(), app_data.clone());
         Bench {
             rung2,

@@ -55,7 +55,7 @@ import {
 import { hexOnCommit } from '../ui/color.js'
 
 import { localSeconds, normalizeDenoiseTarget } from '../model/denoise.js'
-import { FINISHINGS, FINISHING_ALIASES, FLUX3_GENERATION_ALIASES, FLUX3_GENERATION_PARTS, WORK_LONG_SIDES } from '../model/model-names.js'
+import { FINISHINGS, FINISHING_ALIASES, FLUX3_GENERATION_ALIASES, FLUX3_GENERATION_PARTS, LAMA_HOLES, WORK_LONG_SIDES } from '../model/model-names.js'
 import { ANALYSIS_TARGETS, CLOUD_STAGES, DEFAULT_DETECTOR, DEFAULT_DETECTOR_MODELS, DETECTION_MODES, DETECTION_MODE_IDS, DETECTOR_MODEL_IDS, LANGUAGES, defaultAnalysisTargets, detectionModeOf, detectsOnCloud, migrateDetectorChoice, normalizeAnalysisTargets, unifyAnalysisTargets } from '../model/pipelines.js'
 
 const STORAGE_KEY = 'session.v1'
@@ -216,6 +216,7 @@ function viewport() {
  * @property {'rle'|'raw'} exportPsdCompression - how a PSD stores 8-bit channels: packed, or raw for readers that cannot unpack
  * @property {boolean} exportPsdLetteringLayer - whether a layered PSD carries a hidden layer marking where the lettering was
  * @property {'source'|'grayscale'} exportTone - the tone the Export dialog starts on; the dialog's choice is what an export uses
+ * @property {typeof LAMA_HOLES[number]} lamaHole - how LaMa cuts the hole it fills: tight (the lettering), wide (the lettering and 5 px), or adaptive (wide beside flat page, tight beside art)
  * @property {Record<string, string|null>} detection - the detector each source language uses, by language id; null skips the language
  * @property {'normal'|'advanced'} detectionMode - the one detection choice; it fixes `detectorModels` and `textPolicy` (`pipelines.js#DETECTION_MODES`)
  * @property {string[]} detectorModels - the mode's detection models, by stored id; derived, never stored
@@ -271,6 +272,7 @@ function defaults() {
     exportPsdCompression: 'rle',
     exportPsdLetteringLayer: false,
     exportTone: 'source',
+    lamaHole: LAMA_HOLES[0],
     detection: defaultDetection(),
     detectionMode: 'normal',
     detectorModels: [...DEFAULT_DETECTOR_MODELS],
@@ -396,6 +398,7 @@ export function sanitizeSession(raw) {
     ),
     exportPsdLetteringLayer: boolOr(record.exportPsdLetteringLayer, base.exportPsdLetteringLayer),
     exportTone: /** @type {'source'|'grayscale'} */ (oneOf(record.exportTone, EXPORT_TONES, base.exportTone)),
+    lamaHole: /** @type {typeof LAMA_HOLES[number]} */ (oneOf(record.lamaHole, LAMA_HOLES, base.lamaHole)),
     detection: sanitizeDetection(record.detection),
     // The mode, or for a record written before modes the mode its
     // combination reached for. The models and the policy are the mode's,
@@ -515,6 +518,7 @@ function persistable() {
     exportPsdCompression: session.exportPsdCompression,
     exportPsdLetteringLayer: session.exportPsdLetteringLayer,
     exportTone: session.exportTone,
+    lamaHole: session.lamaHole,
     detection: { ...session.detection },
     detectionMode: session.detectionMode,
     analysisTargets: { ...session.analysisTargets },
@@ -650,6 +654,18 @@ export function setExportPsdLetteringLayer(enabled) {
 /** @param {'source'|'grayscale'} tone */
 export function setExportTone(tone) {
   session.exportTone = /** @type {'source'|'grayscale'} */ (oneOf(tone, EXPORT_TONES, session.exportTone))
+  save()
+}
+
+/**
+ * How LaMa cuts the hole it fills. The backend reads `lamaHole` when a run or
+ * a hand edit opens, so Settings writes it there first
+ * (`SettingsDialog.svelte#chooseLamaHole`) and the session takes it after.
+ *
+ * @param {unknown} hole - one of `LAMA_HOLES`
+ */
+export function setLamaHole(hole) {
+  session.lamaHole = /** @type {typeof LAMA_HOLES[number]} */ (oneOf(hole, LAMA_HOLES, session.lamaHole))
   save()
 }
 
@@ -1374,6 +1390,7 @@ export function adoptBackendSettings(settings) {
   if (record.exportPsdCompression !== undefined) setExportPsdCompression(/** @type {any} */ (record.exportPsdCompression))
   if (record.exportPsdLetteringLayer !== undefined) setExportPsdLetteringLayer(record.exportPsdLetteringLayer === true)
   if (record.exportTone !== undefined) setExportTone(/** @type {any} */ (record.exportTone))
+  if (record.lamaHole !== undefined) setLamaHole(record.lamaHole)
   if (record.cloudWorkLongSide !== undefined) setCloudWorkLongSide(record.cloudWorkLongSide)
   if (record.cloudFlux3Generation !== undefined) setCloudFlux3Generation(record.cloudFlux3Generation)
   if (record.cloudFinishing !== undefined || record.cloudFinishingGrayscale !== undefined || record.finishingEveryModel !== undefined) {
@@ -1447,6 +1464,7 @@ export function backendSettingsPatch() {
     exportPsdCompression: session.exportPsdCompression,
     exportPsdLetteringLayer: session.exportPsdLetteringLayer,
     exportTone: session.exportTone,
+    lamaHole: session.lamaHole,
     theme: session.theme,
     readingDirection: session.readingDirection,
     cloudEngines: session.cloudAllowed ? 'allowed' : 'blocked',

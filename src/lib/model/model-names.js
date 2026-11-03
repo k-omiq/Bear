@@ -127,6 +127,24 @@ export function finishingKey(part, name) {
 }
 
 /**
+ * Settings › Models › Cleaning: how LaMa cuts the hole it fills
+ * (`cleaner_core::engines::lama::HoleMode`, the `lamaHole` key). The first is
+ * the default: the cut of 1.0.0-beta.15 and earlier.
+ */
+export const LAMA_HOLES = /** @type {const} */ (['tight', 'wide', 'adaptive'])
+
+/**
+ * The LaMa hole choice's text for one mode: its `option` label or its
+ * `hint`, the sentence under the control.
+ *
+ * @param {'option'|'hint'} part
+ * @param {string} hole - one of `LAMA_HOLES`
+ */
+export function lamaHoleKey(part, hole) {
+  return `settings.cleaning.lamaHole.${part}.${hole}`
+}
+
+/**
  * The model families whose cloud clean takes a working size
  * (`render.rs#SIZED_RECIPES`): FLUX 3, by its cloud id or its weights' id.
  */

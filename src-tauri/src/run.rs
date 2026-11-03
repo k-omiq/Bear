@@ -322,6 +322,21 @@ pub fn model_preference_from(settings: &serde_json::Value, id: &str) -> Result<P
     }
 }
 
+/// `lamaHole`: how LaMa cuts the hole it is asked to fill
+/// ([`lama::HoleMode`], Settings > Models > Cleaning). `tight`, `wide` or
+/// `adaptive`; absent or null is `tight`, the cut of 1.0.0-beta.15 and earlier.
+pub const LAMA_HOLE_KEY: &str = "lamaHole";
+
+/// Strict, as the other model settings are: a run refuses an unknown value
+/// rather than cutting a hole nobody chose.
+pub fn lama_hole_from_settings(settings: &serde_json::Value) -> Result<lama::HoleMode, String> {
+    match settings.get(LAMA_HOLE_KEY).filter(|value| !value.is_null()) {
+        None => Ok(lama::HoleMode::default()),
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|_| format!("{LAMA_HOLE_KEY} must be one of \"tight\", \"wide\" or \"adaptive\"")),
+    }
+}
+
 /// The text reader's provider. A choice made for it is honoured or refused as
 /// every model's is; one it only inherits from the whole-app setting falls back
 /// to Automatic when the reader cannot run there (WebGPU, CoreML: see
@@ -2043,8 +2058,11 @@ pub(crate) struct Rung2 {
     /// The finishing that takes the place of the tile's tone alignment, when
     /// every model is finished ([`crate::inference::cloud_clean::FinishingSetting`]).
     pub(crate) finishing: Option<cleaner_core::engines::postprocess::Choice>,
+    /// How LaMa cuts its hole ([`LAMA_HOLE_KEY`]).
+    pub(crate) hole: lama::HoleMode,
     /// Whether the mask came from a detector, so its lettering may be extended
-    /// ([`fit::lettering_extent`]). A hand edit says no.
+    /// ([`fit::lettering_extent`]) under a hole that extends it. A hand edit
+    /// says no.
     pub(crate) detected_mask: bool,
     /// Rung 3a's child. It sits here because this is what a region is rendered
     /// through, by a run and by an edit alike.
@@ -2088,6 +2106,7 @@ impl Rung2 {
             key: session_key(registry::Kind::Inpainter, models, preference),
             state: Session::Unopened,
             finishing: None,
+            hole: lama::HoleMode::default(),
             detected_mask: true,
             flux: crate::region::LocalFlux::default(),
         }
@@ -2517,6 +2536,7 @@ impl Pipeline {
         self.rung2.preference = model_preference_from(settings, "inpainter")?;
         self.rung2.key = session_key(registry::Kind::Inpainter, &self.rung2.models, self.rung2.preference);
         self.rung2.finishing = crate::inference::cloud_clean::local_finishing_from_settings(settings)?;
+        self.rung2.hole = lama_hole_from_settings(settings)?;
         self.rung2.flux = crate::region::LocalFlux::from_settings(Some(settings), self.app_data.clone());
         self.reader.preference = reader_preference(settings, host)?;
         self.reader.key = session_key(registry::Kind::Ocr, &self.reader.models, self.reader.preference);
@@ -4566,12 +4586,13 @@ pub(crate) fn render_rung_with_color(
     };
     match engine {
         Engine::Lama => {
-            let finishing = rung2.finishing;
+            let (finishing, hole) = (rung2.finishing, rung2.hole);
             // A mask a detector made leaves outlines and stray strokes outside
             // it, and the model paints the letters back from them. A mask drawn
-            // by hand keeps the extent it was drawn with.
+            // by hand keeps the extent it was drawn with, and so does every mask
+            // under the tight hole, which is the cut of 1.0.0-beta.15.
             let extended;
-            let fitted = if rung2.detected_mask {
+            let fitted = if rung2.detected_mask && hole.extends_lettering() {
                 let mut wider = fitted.clone();
                 wider.ink = fit::lettering_extent(crop, &fitted.ink);
                 extended = wider;
@@ -4585,7 +4606,7 @@ pub(crate) fn render_rung_with_color(
             // Bound rather than matched on directly, because the arms below
             // need the session again and a scrutinee's borrow of it would still
             // be alive there.
-            let rendered = held.inpainter.render_with(crop, fitted, finishing);
+            let rendered = held.inpainter.render_with(crop, fitted, finishing, hole);
             match rendered {
                 Ok(rendered) => Ok(Rendered::Made(Box::new(Made {
                     engine,

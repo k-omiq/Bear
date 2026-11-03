@@ -123,6 +123,7 @@
   import { chooseFolder, chooseOnnx } from '../api/folder.js'
   import { showSettingsSection } from '../api/model-download-notices.js'
   import { resolveSettingsLink, SETTINGS_SECTIONS } from './settingslinks.js'
+  import { LAMA_HOLES, lamaHoleKey } from '../model/model-names.js'
   import { LOCALES, hasKey, t } from '../i18n/index.js'
   import { capabilities, loadCapabilities } from '../state/capabilities.svelte.js'
   import { chooseDetectionMode, resetCloudOffer, syncCloudOffer, targets as detectTargets } from '../state/cloudtargets.svelte.js'
@@ -137,6 +138,7 @@
     setExportPsdCompression,
     setExportPsdLetteringLayer,
     setExportTone,
+    setLamaHole,
     setDetection,
     setAnalysisTarget,
     setFluxBackend,
@@ -261,6 +263,28 @@
       apply()
     } catch {
       exportError = true
+    }
+  }
+
+  /* ---------- LaMa hole ---------- */
+
+  /** @type {boolean} */
+  let lamaHoleError = $state(false)
+
+  /**
+   * Settings > Models > Cleaning: how LaMa cuts the hole it fills. The backend
+   * reads `lamaHole` when a run or a hand edit opens, so the session takes the
+   * value only once the file holds it, as an Export choice does.
+   *
+   * @param {string} hole - one of `LAMA_HOLES`
+   */
+  async function chooseLamaHole(hole) {
+    lamaHoleError = false
+    try {
+      await writeSettingsSerialized(getBackend(), { lamaHole: hole })
+      setLamaHole(hole)
+    } catch {
+      lamaHoleError = true
     }
   }
 
@@ -2562,6 +2586,27 @@
   </div>
 {/snippet}
 
+<!-- How LaMa cuts the hole it fills: three choices, the old one first and
+     the default, with what the chosen one does under it. -->
+{#snippet lamaHoleOption()}
+  <div class="option" data-settings-anchor="lama-hole">
+    <div class="option-line">
+      <span class="option-label" id="settings-lama-hole-label">{t('settings.cleaning.lamaHole.label')}</span>
+      <Segmented
+        options={LAMA_HOLES.map((value) => ({ value, label: t(lamaHoleKey('option', value)) }))}
+        value={session.lamaHole}
+        labelledBy="settings-lama-hole-label"
+        describedBy="settings-lama-hole-description"
+        onchange={chooseLamaHole}
+      />
+    </div>
+    <p class="option-description" id="settings-lama-hole-description">
+      {t(lamaHoleKey('hint', session.lamaHole))}
+    </p>
+    {#if lamaHoleError}<p class="line failed" role="alert">{t('settings.cleaning.lamaHole.saveFailed')}</p>{/if}
+  </div>
+{/snippet}
+
 {#snippet fluxHelper()}
   <section class="advanced" aria-labelledby="{uid}-flux" data-settings-anchor="flux">
     <Disclosure variant="plain" open={fluxOpen} ontoggle={(open) => (fluxOpen = open)}>
@@ -2984,6 +3029,7 @@
               {/each}
             </ul>
           {/if}
+          {@render lamaHoleOption()}
           {@render fluxHelper()}
         </section>
 

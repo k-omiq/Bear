@@ -166,32 +166,72 @@ pub fn declines(page: &Raster, fitted: &Fitted) -> Option<Decline> {
     crate::engines::model::declines(page, fitted)
 }
 
-/// The hole handed to the model: the whole of [`applied_mask`], the set this rung
-/// writes, and **not** the lettering alone.
+/// How the hole handed to the model is cut: the `lamaHole` setting (Settings >
+/// Models > Cleaning). The written set is the same under all three; only what the
+/// model is asked to invent inside it changes.
 ///
-/// The lettering's edge is the reason. A segmentation mask, or the padded seed a
-/// run stores, stops on or just inside the soft edge of a stroke. Whatever it
-/// leaves is context, and the model reads a dark or white outline around a hole
-/// and fills the hole to match. The letters come back in grey, and the region is
-/// declined for its edge energy or, on a busy page, accepted with the text still
-/// readable.
+/// Each one wins somewhere, which is why it is a choice. Measured on 36 stored
+/// detections of three real chapters (2026-11-03, `docs/findings.md`):
 ///
-/// Measured on 12 real pages (SAM-TS-L and small Ogkalu, padding 0, 34 regions
-/// reaching LaMa). Cut to the lettering, 18 were declined and most of the 16
-/// accepted still showed their text. Grown by 3 px, 5 were declined. Grown by
-/// 5 px, 4 were declined. CPU and WebGPU gave the same numbers, so the provider
-/// plays no part. [`crate::fit::lettering_extent`] and `flat_parts` took the
-/// rest of it from 4 to 1.
-/// The findings are in `docs/findings.md`.
+/// - [`HoleMode::Tight`] keeps art under lettering (hair lines, hatching,
+///   screens) but can leave grey letter-shaped marks on black and flat paper,
+///   where the mask stops inside a stroke's soft edge.
+/// - [`HoleMode::Wide`] removes those marks but asks the model to invent 5 px of
+///   drawing around every glyph, and over art it smears it.
+/// - [`HoleMode::Adaptive`] is wide where the page beside the lettering is flat
+///   and tight where it is art. On those 36 it matched Tight on art and Wide on
+///   black and paper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HoleMode {
+    /// The lettering itself ([`crate::fit::Fitted::ink`]), as 1.0.0-beta.15 and
+    /// earlier cut it. No lettering extent and no flat tone. The default.
+    #[default]
+    Tight,
+    /// The whole applied mask, the lettering grown by
+    /// [`crate::constants::ISOLATION_RADIUS`], as 1.0.0-beta.16 to beta.18 cut
+    /// it, with the lettering extent and the flat tone (`FlatParts`).
+    Wide,
+    /// The applied mask where the ring beside it is flat and the lettering where
+    /// it is art ([`model_hole`]), with the lettering extent and the flat tone.
+    Adaptive,
+}
+
+impl HoleMode {
+    pub const ALL: [HoleMode; 3] = [HoleMode::Tight, HoleMode::Wide, HoleMode::Adaptive];
+
+    /// Whether a detector's mask is grown by [`crate::fit::lettering_extent`]
+    /// before this hole is cut. The run does it, as it alone knows whether a
+    /// mask came from a detector. Tight leaves the mask as it was found.
+    pub fn extends_lettering(self) -> bool {
+        self != HoleMode::Tight
+    }
+}
+
+/// The hole handed to the model under `mode` ([`HoleMode`]).
 ///
-/// Earlier notes here measured the opposite, that a wider hole brings back more
-/// ink. That was on synthetic fixtures whose strokes had no soft edge, and it did
-/// not survive real scans.
+/// Tight is [`crate::fit::Fitted::ink`]. Wide is all of [`applied_mask`]: a
+/// segmentation mask, or the padded seed a run stores, stops on or just inside the
+/// soft edge of a stroke, the model reads what it leaves as an outline and fills
+/// the hole to match, so the letters come back in grey. On 12 real pages (SAM-TS-L
+/// and small Ogkalu, padding 0, 34 regions reaching LaMa) the lettering-cut hole
+/// had 18 declined and 5 px of growth 4; [`crate::fit::lettering_extent`] and the
+/// flat tone took that to 1.
 ///
-/// **This does not change the written set**: the hole is the region's applied
-/// mask, so it widens what the model invents and never what the patch covers.
-pub fn model_hole(fitted: &Fitted, page_w: u32, page_h: u32) -> Mask {
-    applied_mask(fitted, page_w, page_h)
+/// Adaptive decides each pixel of the margin by the stretch of ring beside it:
+/// in the hole where [`HOLE_RING_SHARE`] of the ring pixels within [`LOCAL_REACH`]
+/// are even with their neighbours, so a caption half on black and half on art is
+/// wide on the black half only. A pixel with too little ring beside it, between
+/// glyphs, takes the decision of its part's whole ring. One decision per part did
+/// not work: white-outlined text on black next to art read as busy as text over
+/// hair.
+///
+/// **This does not change the written set**: the hole lies inside the applied
+/// mask, so it changes what the model invents and never what the patch covers.
+pub fn model_hole(page: &Raster, fitted: &Fitted, mode: HoleMode) -> Result<Mask, Error> {
+    let managed = crate::engines::model::editable_color(page)?;
+    let applied = applied_mask(fitted, page.width, page.height);
+    Ok(hole_of(page, fitted, &applied, &parts_of(page, &applied, &managed), mode))
 }
 
 /// How far around a part of the hole the paper is read, past the applied mask.
@@ -202,45 +242,38 @@ const FLAT_SAMPLES: usize = 32;
 /// the lettering crosses the ring and is a fraction of it, and a looser share
 /// erased such lines on real pages, where the model continues them.
 const FLAT_RING_SHARE: f64 = 0.99;
+/// The share of ring pixels that must be even for a pixel of the margin to be in
+/// the model's hole under [`HoleMode::Adaptive`]. Under it the ring is art and the hole there
+/// is the lettering, grown by [`BUSY_HOLE_MARGIN`]. 0.75 gave the same pictures
+/// on the 36 regions it was tried on.
+const HOLE_RING_SHARE: f64 = 0.9;
+/// How far past the lettering the hole reaches on art.
+const BUSY_HOLE_MARGIN: u32 = 0;
+/// How far around a pixel of the applied mask its own stretch of ring is read.
+const LOCAL_REACH: u32 = FLAT_RING + 2;
+/// The fewest ring pixels that local reading needs; with fewer the part's whole
+/// ring decides.
+const LOCAL_SAMPLES: u32 = 12;
 
-/// The parts of a hole whose surround is one tone, and that tone.
-///
-/// Measured on 12 real pages: on flat paper or flat black the model still invents
-/// marks, and a hole near a light edge can come back as a white blob the quality
-/// check refuses. Where every side of a part is one tone there is nothing for the
-/// model to reconstruct, so the answer there is that tone, read per part so a hole
-/// lying half on tone keeps the model's answer on that half.
-///
-/// The patch keeps the name `lama`: the model ran, and the tone is its answer
-/// corrected.
-struct FlatParts {
-    bounds: Rect,
-    part: Vec<u32>,
-    tones: Vec<[f32; 3]>,
+/// One connected part of a region's applied mask, and its ring on the page.
+struct Part {
+    pixels: Vec<(i64, i64)>,
+    /// The share of the ring at its median tone, and that tone. `None` for a ring
+    /// with fewer than [`FLAT_SAMPLES`] pixels.
+    ring: Option<(f64, [f32; 3])>,
 }
 
-impl FlatParts {
-    fn at(&self, x: i64, y: i64) -> Option<[f32; 3]> {
-        if !self.bounds.contains(x, y) {
-            return None;
-        }
-        let i = (y - self.bounds.y) as usize * self.bounds.w as usize + (x - self.bounds.x) as usize;
-        self.part[i].checked_sub(1).map(|tone| self.tones[tone as usize])
-    }
-}
-
-fn flat_parts(page: &Raster, hole: &Mask, managed: &crate::image::color::ManagedColor) -> FlatParts {
-    let bounds = hole.bounds;
-    let (w, h) = (bounds.w as usize, bounds.h as usize);
-    let mut flat = FlatParts { bounds, part: vec![0; w * h], tones: Vec::new() };
+fn parts_of(page: &Raster, applied: &Mask, managed: &crate::image::color::ManagedColor) -> Vec<Part> {
+    let bounds = applied.bounds;
     let page_rect = Rect::new(0, 0, page.width, page.height);
-    let noise = crate::fit::page_noise_sigma(page);
-    let margin = hole.dilated_within(1, page_rect);
+    let tolerance = 2.0 * crate::fit::deviation_threshold(crate::fit::page_noise_sigma(page));
+    let margin = applied.dilated_within(1, page_rect);
     let mut seen = Mask::empty(bounds);
     let mut stack = Vec::new();
+    let mut parts = Vec::new();
     for sy in bounds.y..bounds.bottom() {
         for sx in bounds.x..bounds.right() {
-            if seen.contains(sx, sy) || !hole.contains(sx, sy) {
+            if seen.contains(sx, sy) || !applied.contains(sx, sy) {
                 continue;
             }
             let mut pixels = Vec::new();
@@ -253,7 +286,7 @@ fn flat_parts(page: &Raster, hole: &Mask, managed: &crate::image::color::Managed
                 for dy in -1..=1 {
                     for dx in -1..=1 {
                         let (nx, ny) = (x + dx, y + dy);
-                        if hole.contains(nx, ny) && !seen.contains(nx, ny) {
+                        if applied.contains(nx, ny) && !seen.contains(nx, ny) {
                             seen.set(nx, ny, true);
                             stack.push((nx, ny));
                         }
@@ -278,25 +311,116 @@ fn flat_parts(page: &Raster, hole: &Mask, managed: &crate::image::color::Managed
                     }
                 }
             }
-            if levels.len() < FLAT_SAMPLES {
-                continue;
-            }
-            let Some((paper, tolerance)) = crate::fit::flat_tone(&mut levels, noise) else { continue };
-            let at_paper = levels.iter().filter(|&&level| (level - paper).abs() <= tolerance).count();
-            if (at_paper as f64) < FLAT_RING_SHARE * levels.len() as f64 {
-                continue;
-            }
-            let tone = colours.map(|mut values: Vec<f32>| {
-                let middle = values.len() / 2;
-                *values.select_nth_unstable_by(middle, f32::total_cmp).1
+            let ring = (levels.len() >= FLAT_SAMPLES).then(|| {
+                let middle = levels.len() / 2;
+                let median = *levels.select_nth_unstable(middle).1;
+                let at_median = levels.iter().filter(|&&level| f64::from((level - median).abs()) <= f64::from(tolerance)).count();
+                let tone = colours.map(|mut values: Vec<f32>| *values.select_nth_unstable_by(middle, f32::total_cmp).1);
+                (at_median as f64 / levels.len() as f64, tone)
             });
-            flat.tones.push(tone);
-            for &(x, y) in &pixels {
-                flat.part[(y - bounds.y) as usize * w + (x - bounds.x) as usize] = flat.tones.len() as u32;
+            parts.push(Part { pixels, ring });
+        }
+    }
+    parts
+}
+
+fn hole_of(page: &Raster, fitted: &Fitted, applied: &Mask, parts: &[Part], mode: HoleMode) -> Mask {
+    match mode {
+        HoleMode::Tight => return fitted.ink.clone(),
+        HoleMode::Wide => return applied.clone(),
+        HoleMode::Adaptive => {}
+    }
+    let page_rect = Rect::new(0, 0, page.width, page.height);
+    let tolerance = (2.0 * crate::fit::deviation_threshold(crate::fit::page_noise_sigma(page))) as i32;
+    let lettering = fitted.ink.dilated_within(BUSY_HOLE_MARGIN, applied.bounds);
+    let area = applied.bounds.grown(FLAT_RING + LOCAL_REACH + 1, page.width, page.height);
+    let margin = applied.dilated_within(1, page_rect);
+    let ring = applied.dilated_within(FLAT_RING, page_rect);
+    let in_ring = |x: i64, y: i64| area.contains(x, y) && ring.contains(x, y) && !margin.contains(x, y);
+    let luma = |x: i64, y: i64| page.luma16_at(x as u32, y as u32) as i32;
+    // Summed tables over the area: ring pixels, and ring pixels whose ring
+    // neighbours all sit within the tolerance of them.
+    let (w, h) = (area.w as usize, area.h as usize);
+    let (mut seen, mut flat) = (vec![0u32; (w + 1) * (h + 1)], vec![0u32; (w + 1) * (h + 1)]);
+    for row in 0..h {
+        for col in 0..w {
+            let (x, y) = (area.x + col as i64, area.y + row as i64);
+            let (mut s, mut f) = (0, 0);
+            if in_ring(x, y) {
+                s = 1;
+                let level = luma(x, y);
+                let even = (-1..=1).all(|dy| (-1..=1).all(|dx| !in_ring(x + dx, y + dy) || (luma(x + dx, y + dy) - level).abs() <= tolerance));
+                f = u32::from(even);
+            }
+            let at = (row + 1) * (w + 1) + col + 1;
+            seen[at] = s + seen[at - 1] + seen[at - w - 1] - seen[at - w - 2];
+            flat[at] = f + flat[at - 1] + flat[at - w - 1] - flat[at - w - 2];
+        }
+    }
+    let boxed = |table: &[u32], x: i64, y: i64| {
+        let r = LOCAL_REACH as i64;
+        let (c0, r0) = ((x - r - area.x).max(0) as usize, (y - r - area.y).max(0) as usize);
+        let (c1, r1) = (((x + r + 1 - area.x) as usize).min(w), ((y + r + 1 - area.y) as usize).min(h));
+        table[r1 * (w + 1) + c1] + table[r0 * (w + 1) + c0] - table[r0 * (w + 1) + c1] - table[r1 * (w + 1) + c0]
+    };
+    let mut hole = Mask::empty(applied.bounds);
+    for part in parts {
+        let whole = part.ring.is_none_or(|(share, _)| share >= HOLE_RING_SHARE);
+        for &(x, y) in &part.pixels {
+            let near = boxed(&seen, x, y);
+            let wide = if near >= LOCAL_SAMPLES { f64::from(boxed(&flat, x, y)) >= HOLE_RING_SHARE * f64::from(near) } else { whole };
+            if wide || lettering.contains(x, y) {
+                hole.set(x, y, true);
             }
         }
     }
-    flat
+    hole
+}
+
+/// The parts of the applied mask whose surround is one tone, and that tone.
+///
+/// Measured on 12 real pages: on flat paper or flat black the model still invents
+/// marks, and a hole near a light edge can come back as a white blob the quality
+/// check refuses. Where every side of a part is one tone there is nothing for the
+/// model to reconstruct, so the answer there is that tone, read per part so a hole
+/// lying half on tone keeps the model's answer on that half.
+///
+/// The patch keeps the name `lama`: the model ran, and the tone is its answer
+/// corrected.
+struct FlatParts {
+    bounds: Rect,
+    part: Vec<u32>,
+    tones: Vec<[f32; 3]>,
+}
+
+impl FlatParts {
+    /// None under [`HoleMode::Tight`], which keeps the model's answer everywhere.
+    fn of(applied: &Mask, parts: &[Part], mode: HoleMode) -> FlatParts {
+        let bounds = applied.bounds;
+        let mut flat = FlatParts { bounds, part: vec![0; bounds.w as usize * bounds.h as usize], tones: Vec::new() };
+        if mode == HoleMode::Tight {
+            return flat;
+        }
+        for part in parts {
+            let Some((share, tone)) = part.ring else { continue };
+            if share < FLAT_RING_SHARE {
+                continue;
+            }
+            flat.tones.push(tone);
+            for &(x, y) in &part.pixels {
+                flat.part[(y - bounds.y) as usize * bounds.w as usize + (x - bounds.x) as usize] = flat.tones.len() as u32;
+            }
+        }
+        flat
+    }
+
+    fn at(&self, x: i64, y: i64) -> Option<[f32; 3]> {
+        if !self.bounds.contains(x, y) {
+            return None;
+        }
+        let i = (y - self.bounds.y) as usize * self.bounds.w as usize + (x - self.bounds.x) as usize;
+        self.part[i].checked_sub(1).map(|tone| self.tones[tone as usize])
+    }
 }
 
 /// A held manga-LaMa session.
@@ -386,22 +510,25 @@ impl Inpainter {
     /// rule 6, and Phase 3's
     /// memory exit.
     pub fn render(&mut self, page: &Raster, fitted: &Fitted) -> Result<Rendered, Error> {
-        self.render_with(page, fitted, None)
+        self.render_with(page, fitted, None, HoleMode::default())
     }
 
     /// [`Inpainter::render`], with each tile's answer finished by `finishing`
     /// ([`crate::engines::postprocess::settle_with`]) in place of the tone
-    /// alignment. `None` aligns tone, as [`Inpainter::render`] does.
-    pub fn render_with(&mut self, page: &Raster, fitted: &Fitted, finishing: Option<Choice>) -> Result<Rendered, Error> {
+    /// alignment, and the hole cut by `hole`. `None` aligns tone, as
+    /// [`Inpainter::render`] does.
+    pub fn render_with(&mut self, page: &Raster, fitted: &Fitted, finishing: Option<Choice>, hole: HoleMode) -> Result<Rendered, Error> {
         self.lease.touch();
         if let Some(decline) = declines(page, fitted) {
             return Err(decline.into());
         }
-        let hole = model_hole(fitted, page.width, page.height);
-
         let applied = applied_mask(fitted, page.width, page.height);
         let bounds = applied.bounds;
         let managed = crate::engines::model::editable_color(page)?;
+        // Read only where they are used: Tight has no flat tone and no ring rule.
+        let parts = if hole == HoleMode::Tight { Vec::new() } else { parts_of(page, &applied, &managed) };
+        let flat = FlatParts::of(&applied, &parts, hole);
+        let hole = hole_of(page, fitted, &applied, &parts, hole);
         let ceiling = ceiling_for(page.depth);
         let reading = answer_mode(page);
 
@@ -420,7 +547,6 @@ impl Inpainter {
         // Which pixels of the patch already hold a model answer. A tile reads
         // these as ordinary context and never repaints them.
         let mut done = Mask::empty(bounds);
-        let flat = flat_parts(page, &hole, &managed);
         let mut pad = EdgePad::None;
         let mut ran = 0u32;
         let page_rect = Rect::new(0, 0, page.width, page.height);
@@ -807,7 +933,10 @@ mod tests {
         );
 
         let applied = applied_mask(&fitted, 200, 200);
-        assert_eq!(model_hole(&fitted, 200, 200), applied, "the tensor's hole");
+        assert_eq!(model_hole(&page, &fitted, HoleMode::Tight).unwrap(), fitted.ink, "the tight hole");
+        for mode in [HoleMode::Wide, HoleMode::Adaptive] {
+            assert_eq!(model_hole(&page, &fitted, mode).unwrap(), applied, "{mode:?} on flat paper: the whole applied mask");
+        }
         assert_eq!(applied, fitted.ink.dilated(ISOLATION_RADIUS, 200, 200), "the isolation cut");
         assert_eq!(
             write_bound(&fitted, 200, 200),
@@ -892,25 +1021,49 @@ mod tests {
         .as_ref()
     }
 
-    /// **The hole reaches the lettering's soft edge, and the written set does not
-    /// grow to do it.** A mask on the stroke leaves its fringe a few pixels out.
+    /// **The wide hole reaches the lettering's soft edge, and the written set does
+    /// not grow to do it.** A mask on the stroke leaves its fringe a few pixels out.
+    /// On flat paper the adaptive hole is the same.
     #[test]
     fn the_hole_takes_the_fringe_the_mask_stopped_short_of() {
         let page = gray_page(200, 200, |_, _| 250);
         let seed = Mask::filled(Rect::new(90, 90, 20, 16));
         let fitted = fit::fit(&page, &seed, 1.0, 0.0, &fit::EdgeMap::none(200, 200), true);
         assert_eq!(fitted.ink, seed, "a stored mask is authoritative, so it has no margin of its own");
-        let hole = model_hole(&fitted, 200, 200);
-        for reach in 1..=ISOLATION_RADIUS as i64 {
-            assert!(hole.contains(89 - reach + 1, 95), "{reach} px out is not in the hole");
+        for mode in [HoleMode::Wide, HoleMode::Adaptive] {
+            let hole = model_hole(&page, &fitted, mode).unwrap();
+            for reach in 1..=ISOLATION_RADIUS as i64 {
+                assert!(hole.contains(89 - reach + 1, 95), "{mode:?}: {reach} px out is not in the hole");
+            }
+            assert!(!hole.contains(89 - ISOLATION_RADIUS as i64, 95), "{mode:?}: the hole passed the applied mask");
+            assert_eq!(hole, applied_mask(&fitted, 200, 200));
         }
-        assert!(!hole.contains(89 - ISOLATION_RADIUS as i64, 95), "the hole passed the applied mask");
-        assert_eq!(hole, applied_mask(&fitted, 200, 200));
     }
 
-    /// The defect itself, on the real model: a soft-edged stroke with a mask that
-    /// stops inside the edge. Cut to the mask, the model reads the fringe as an
-    /// outline and fills the hole dark, and [`crate::quality::assess`] declines it.
+    /// **Beside art the adaptive hole stops at the lettering.** One mark half on paper and
+    /// half on hatching: the margin on the paper side is in the hole, the margin on
+    /// the hatching side is drawing and is not, and the written set is the same.
+    #[test]
+    fn the_hole_keeps_its_margin_off_art() {
+        let page = gray_page(200, 200, |x, y| if x >= 100 && y % 3 == 0 { 30 } else { 250 });
+        let seed = Mask::filled(Rect::new(70, 90, 60, 16));
+        let fitted = fit::fit(&page, &seed, 1.0, 0.0, &fit::EdgeMap::none(200, 200), true);
+        let hole = model_hole(&page, &fitted, HoleMode::Adaptive).unwrap();
+        let applied = applied_mask(&fitted, 200, 200);
+        assert!(hole.contains(67, 98), "the margin on paper is not in the hole");
+        assert!(!hole.contains(132, 98), "the margin on the hatching is in the hole");
+        assert!(hole.contains(129, 98), "the lettering on the hatching is not in the hole");
+        for y in applied.bounds.y..applied.bounds.bottom() {
+            for x in applied.bounds.x..applied.bounds.right() {
+                assert!(!hole.contains(x, y) || applied.contains(x, y), "({x}, {y}) is past the applied mask");
+            }
+        }
+    }
+
+    /// The defect the wide hole exists for, on the real model: a soft-edged stroke
+    /// with a mask that stops inside the edge. Cut to the mask (Tight), the model
+    /// reads the fringe as an outline and fills the hole dark, and
+    /// [`crate::quality::assess`] declines it. Wide and Adaptive both clear it.
     #[test]
     fn a_soft_edged_stroke_does_not_come_back_in_the_hole() {
         let Some(held) = inpainter() else { return };
@@ -933,22 +1086,24 @@ mod tests {
             }
         }
         let fitted = fit::fit(&page, &seed, 1.0, 0.0, &fit::EdgeMap::none(312, 312), true);
-        let rendered = held.lock().unwrap().render(&page, &fitted).expect("the region rendered");
-        let verdict = crate::quality::assess(&page, &rendered.mask, &rendered.pixels, 0.0);
-        // Cut to the stroke this read 40707. Not "not declined": a surround this
-        // flat exists only on a synthetic page, and it floors the metric at half
-        // an 8-bit level, which the model's own grain sits right at.
-        assert!(verdict.interior_edge_energy < 4000.0, "{verdict:?}");
-        let b = rendered.mask.bounds;
-        let mut dark = 0;
-        for y in b.y..b.bottom() {
-            for x in b.x..b.right() {
-                if seed.contains(x, y) && rendered.pixels.sample8((x - b.x) as u32, (y - b.y) as u32, 0) < 200 {
-                    dark += 1;
+        for mode in [HoleMode::Wide, HoleMode::Adaptive] {
+            let rendered = held.lock().unwrap().render_with(&page, &fitted, None, mode).expect("the region rendered");
+            let verdict = crate::quality::assess(&page, &rendered.mask, &rendered.pixels, 0.0);
+            // Cut to the stroke this read 40707. Not "not declined": a surround this
+            // flat exists only on a synthetic page, and it floors the metric at half
+            // an 8-bit level, which the model's own grain sits right at.
+            assert!(verdict.interior_edge_energy < 4000.0, "{mode:?}: {verdict:?}");
+            let b = rendered.mask.bounds;
+            let mut dark = 0;
+            for y in b.y..b.bottom() {
+                for x in b.x..b.right() {
+                    if seed.contains(x, y) && rendered.pixels.sample8((x - b.x) as u32, (y - b.y) as u32, 0) < 200 {
+                        dark += 1;
+                    }
                 }
             }
+            assert!(dark * 100 < seed.count(), "{mode:?}: {dark} of {} stroke pixels came back dark", seed.count());
         }
-        assert!(dark * 100 < seed.count(), "{dark} of {} stroke pixels came back dark", seed.count());
     }
 
     /// A real screentone page, which is what this rung exists for. Rungs 0 and
@@ -959,7 +1114,8 @@ mod tests {
         let bytes = std::fs::read(path).ok()?;
         let mut page = crate::image::decode(&bytes).ok()?;
         // Lettering in the region most tests here mask. The paper there is flat,
-        // and a flat part of a hole comes back as the paper, which is no change.
+        // and under Wide or Adaptive a flat part of a hole comes back as the
+        // paper, which is no change.
         for y in 830..860 {
             for x in 640..720 {
                 for channel in 0..page.mode.samples() {
@@ -982,7 +1138,7 @@ mod tests {
         let fitted = fitted_over(&page, Rect::new(600, 800, 160, 90));
         let aligned = held.render(&page, &fitted).expect("the region rendered");
         let choice = Choice { finishing: Finishing::Copy, grayscale: false };
-        let finished = held.render_with(&page, &fitted, Some(choice)).expect("the region rendered");
+        let finished = held.render_with(&page, &fitted, Some(choice), HoleMode::default()).expect("the region rendered");
         assert!(aligned.tone.is_some() && aligned.matched.is_none());
         assert!(finished.tone.is_none());
         assert_eq!(finished.matched.as_ref().map(|report| report.choice), Some(choice));
@@ -1032,7 +1188,7 @@ mod tests {
         assert!(aligned.tiles >= 3, "{} tiles", aligned.tiles);
         let (aligned_mean, _) = off(&aligned);
         for finishing in [Finishing::Copy, Finishing::LocalTone] {
-            let finished = held.render_with(&page, &fitted, Some(Choice { finishing, grayscale: false })).expect("the region rendered");
+            let finished = held.render_with(&page, &fitted, Some(Choice { finishing, grayscale: false }), HoleMode::default()).expect("the region rendered");
             let (mean, worst) = off(&finished);
             eprintln!("{finishing:?}: mean {mean:.2}, worst {worst}; aligned mean {aligned_mean:.2}");
             assert!(mean <= aligned_mean + 1.0 && worst <= 24, "{finishing:?}: mean {mean:.2}, worst {worst}, aligned {aligned_mean:.2}");
@@ -1055,7 +1211,7 @@ mod tests {
         let page = Raster { depth: BitDepth::Sixteen, data, ..gray_page(w, h, |_, _| 0) };
         let seed = Rect::new(280, 300, 160, 100);
         let fitted = fitted_over(&page, seed);
-        let finished = held.render_with(&page, &fitted, Some(Choice::default())).expect("the region rendered");
+        let finished = held.render_with(&page, &fitted, Some(Choice::default()), HoleMode::default()).expect("the region rendered");
         assert_eq!(finished.pixels.depth, BitDepth::Sixteen);
         let b = finished.mask.bounds;
         let core: Vec<u16> = (seed.y + 12..seed.bottom() - 12)

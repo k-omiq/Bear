@@ -228,6 +228,25 @@ reason. Some sources restrict the ladder, because a redraw engine's output canno
 indexed-colour or CMYK page gets Fill alone, which copies one measured source value and so cannot leave the palette
 or change the ink separations. A one-bit page cannot hold an inpainted result at all.
 
+### How LaMa cuts the text out
+
+LaMa does not see the letters it removes. It is given a hole where the text was and fills the hole from the page
+around it. How big that hole is changes the result, and no single size is best on every page, so it is a choice:
+**Settings > Models > Cleaning > LaMa hole**. The written area is the same under all three. Only what LaMa is asked to
+redraw inside it changes.
+
+| Choice | The hole | Best on | Weak on |
+|---|---|---|---|
+| **Tight** (default) | The letters only, as in 1.0.0-beta.15 and earlier. | Text over art: hair, hatching, screentone and line art under the letters are kept. | Text on black or plain paper: faint grey letter shapes can stay, because the mask stops inside each stroke's soft edge and LaMa redraws that edge. |
+| **Wide** | The letters and 5 px around each one, as in 1.0.0-beta.16 to beta.18. A detector's mask is first grown to take in wide white outlines and the rest of half-marked strokes, and where every side of the hole is one tone that tone is used. | Text on black or plain paper, and outlined text: the letter marks go away. | Text over art: the 5 px are drawing, LaMa invents them, and hair lines, screens and dark areas can smear. |
+| **Adaptive** | Wide where the page right beside the text is plain or black, tight where it is art. Decided for each pixel at the edge of the hole, so a caption half on black and half on art gets each half right. Same outline growth and flat tone as Wide. | Both of the above, on the pages it was tried on. | A glowing or coloured title over art keeps its glow, as with Tight. |
+
+The setting is read when a run or a hand edit starts, so a change applies to the next clean; a run already open keeps
+the value it started with. It applies to LaMa on this computer only: the cloud worker cuts its own hole. A mask drawn
+by hand is never grown by the outline rule, under any choice. Measured on 36 real regions of three chapters
+(2026-11-03, [findings](findings.md)), Adaptive matched Tight on art and Wide on black and paper. It is not the default
+because that is one small set of pages.
+
 ## Manual tools
 
 Nine tools sit in a rail on the right, selected with the keys `1` to `7`, `J` (Patch) and `G` (Gradient). The Patch tool is in beta and is on the rail only while Settings > Beta has it on, so by default there are eight. Each has a dropdown of parameters; the

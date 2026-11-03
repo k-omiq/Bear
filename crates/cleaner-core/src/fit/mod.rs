@@ -94,8 +94,8 @@ pub struct Fitted {
     /// So the growth stays where it earns its keep and the model rungs write
     /// through this instead ([`crate::engines::model::applied_mask`], which
     /// adds the isolation ring to *this* mask, and
-    /// [`crate::engines::lama::model_hole`], which cuts the tensor's hole to
-    /// that ring's outer edge). The crop the model reads is untouched - it is 512² of real page
+    /// [`crate::engines::lama::model_hole`], which cuts the tensor's hole as the
+    /// LaMa hole setting says: to that ring's outer edge under Wide). The crop the model reads is untouched - it is 512² of real page
     /// either way, and a smaller hole means *more* of that page is context
     /// rather than less.
     ///

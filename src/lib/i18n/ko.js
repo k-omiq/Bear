@@ -554,6 +554,22 @@ export const ko = {
       role: {
         lama: 'LaMa로 클린할 때마다 지운 텍스트 아래의 스크린톤과 질감을 다시 그립니다.',
       },
+      // Settings > Models > Cleaning: how LaMa cuts the hole it fills
+      // (`model-names.js#lamaHoleKey`). Tight is the default.
+      lamaHole: {
+        label: 'LaMa 구멍',
+        saveFailed: 'LaMa 구멍을 저장하지 못했습니다. 바뀐 것은 없습니다.',
+        option: {
+          tight: '좁게',
+          wide: '넓게',
+          adaptive: '자동',
+        },
+        hint: {
+          tight: '기본값이며 1.0.0-beta.15 이전과 같습니다. LaMa가 글자만 다시 그립니다. 글자 아래 그림이 가장 잘 남지만, 검은 바탕이나 무지 종이 위에 옅은 회색 글자 모양이 남을 수 있습니다. 이 컴퓨터의 LaMa에만 적용되며 클라우드 모델에는 적용되지 않습니다.',
+          wide: '1.0.0-beta.16부터 beta.18까지와 같습니다. LaMa가 글자마다 주변 5 px도 다시 그립니다. 검은 바탕과 무지 종이 위의 글자 자국은 사라지지만 글자 아래 그림이 번질 수 있습니다. 이 컴퓨터의 LaMa에만 적용되며 클라우드 모델에는 적용되지 않습니다.',
+          adaptive: '글자 옆 페이지가 무지이거나 검으면 넓게, 그림이면 좁게 합니다. 무지 부분의 글자 자국은 사라지고 글자 아래 그림은 남습니다. 이 컴퓨터의 LaMa에만 적용되며 클라우드 모델에는 적용되지 않습니다.',
+        },
+      },
     },
     models: {
       heading: '기타 파일',
