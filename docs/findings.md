@@ -823,6 +823,29 @@ dry runs for each platform and the unit tests. Not measured: a real Windows inst
 cu130, and which NVIDIA drivers cu130 needs. The installer still writes `build` and `.egg-info` into its source
 folder, so it fails with a permission error where that folder is read-only, such as a Linux package or AppImage.
 
+**LaMa hole on art (2026-11-03): a setting, Tight by default.** The whole-applied-mask hole of 2026-11-01 removed
+letter ghosts on black and flat paper but smeared art under lettering: hair lines turned to noise, screens to
+blocks, and dark areas grew. Same 36 stored detections of three real chapters (c124, c121, c112, 12 each, CPU),
+rendered by 1.0.0-beta.2, beta.15 and beta.18: beta.2 and beta.15 were nearly the same, and finishing on or off
+changed almost nothing, so neither the older code nor post-processing was the cause.
+
+The cut is now **Settings > Models > Cleaning > LaMa hole** (`lamaHole`, `lama::HoleMode`, described in
+[features](features.md)): **Tight** (the lettering, no extent, no flat tone: beta.15's cut, the default), **Wide**
+(beta.16 to beta.18) and **Adaptive**. Adaptive decides each margin pixel from the ring beside it: in the hole when
+90% of the ring pixels within 10 px are even with their neighbours, else the lettering only; a pixel with too little
+ring near it takes its part's decision. One decision per part of the applied mask did not work: white-outlined text
+on black beside art read as busy (ring share 0.06) as text over hair (0.10 to 0.16). By eye on the sheets Adaptive's
+art matches beta.15 and its black and paper areas match beta.18. 0.75 gave the same pictures. Tight is the default
+because the user asked for the old cut back and Adaptive rests on 36 regions.
+
+Still wrong under Adaptive: a pink glow title over art (c124-p002-d11) keeps pink smears, as Tight does; the glow is
+outside the mask and the art beside it reads busy. Not measured: other chapters, the refusal counts of the 12 pages
+of 2026-11-01 under each choice (Tight had 18 refused there), WebGPU, a full Clean run through the app (the bench
+called the renderer with the run's fit), and the Settings control in the shipped WKWebView (the Vite mock only).
+A result's hole mode is not recorded with it: changing a saved LaMa result's finishing renders it again with the
+hole the setting holds now, not the one that made it. No test covers a hand edit reading the setting (only a run).
+Users of beta.16 to beta.18 had Wide and now get Tight; the release notes say where to change it.
+
 **LaMa `edgeEnergy` refusals (2026-11-01): fixed in the hole, the check is unchanged.** On 12 real pages
 (Detect then Clean, SAM-TS-L and small Ogkalu, padding 0, the plain paper rule applied), 18 of the 34 regions
 that reached LaMa were refused. The picture sheets showed the check was right: the refused results still held
@@ -831,7 +854,9 @@ was busy. The cause was the hole. A run's stored ink is the SAM mask plus the pa
 at the stroke's soft edge, the model reads that edge as an outline, and it fills the hole to match. `fit::ink_for`
 added a margin for this, but `fit_with_padding` replaces its result, as that function intends.
 
-`lama::model_hole` now takes the applied mask (ink plus 5 px), which does not change the written set. A 3 px hole
+`lama::model_hole` now takes the applied mask (ink plus 5 px), which does not change the written set. (Replaced on
+2026-11-03: that cut is now the Wide choice of the LaMa hole setting, and `lama::flat_parts` is gone; see "LaMa hole
+on art".) A 3 px hole
 gave 5 refused and 5 px gave 4. CPU and WebGPU gave the same ratios before the fix, so the provider is not the
 cause. Three more changes then cleared what that left:
 

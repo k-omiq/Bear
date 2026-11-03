@@ -552,6 +552,22 @@ export const ja = {
       role: {
         lama: 'LaMa を使うクリーンで、消した文字の下のトーンや質感を描き直します。',
       },
+      // Settings > Models > Cleaning: how LaMa cuts the hole it fills
+      // (`model-names.js#lamaHoleKey`). Tight is the default.
+      lamaHole: {
+        label: 'LaMa の穴',
+        saveFailed: 'LaMa の穴を保存できませんでした。何も変わっていません。',
+        option: {
+          tight: '狭い',
+          wide: '広い',
+          adaptive: '自動',
+        },
+        hint: {
+          tight: '初期設定で、1.0.0-beta.15 以前と同じです。LaMa は文字だけを描き直します。文字の下の絵は一番よく残りますが、黒や無地の紙の上に薄い灰色の文字の形が残ることがあります。 このコンピューターの LaMa だけに効き、クラウドのモデルには効きません。',
+          wide: '1.0.0-beta.16 から beta.18 と同じです。LaMa は各文字のまわり 5 px も描き直します。黒や無地の紙の上の文字の跡は消えますが、文字の下の絵がにじむことがあります。 このコンピューターの LaMa だけに効き、クラウドのモデルには効きません。',
+          adaptive: '文字の横のページが無地か黒なら広く、絵なら狭くします。無地の部分の文字の跡は消え、文字の下の絵は残ります。 このコンピューターの LaMa だけに効き、クラウドのモデルには効きません。',
+        },
+      },
     },
     models: {
       heading: 'その他のファイル',

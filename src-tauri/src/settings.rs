@@ -165,6 +165,7 @@ fn check_known_shapes(patch: &Value) -> Result<(), String> {
     if patch.get(FLUX3_GENERATION_KEY).is_some() {
         flux3_generation_from_settings(patch)?;
     }
+    crate::run::lama_hole_from_settings(patch)?;
     check_undo_limit(patch)?;
     check_denoise_defaults(patch)?;
     check_export_defaults(patch)
@@ -865,6 +866,7 @@ mod tests {
             "exportPsdCompression": "raw",
             "exportPsdLetteringLayer": true,
             "exportTone": "grayscale",
+            "lamaHole": "adaptive",
         });
         let snapshot = write_patch(&path, good).unwrap();
         assert_eq!(psd_options(&snapshot), PsdOptions { compression: Compression::Raw, lettering_layer: true });
@@ -873,6 +875,7 @@ mod tests {
             serde_json::json!({"exportPsdCompression": 1}),
             serde_json::json!({"exportPsdLetteringLayer": "yes"}),
             serde_json::json!({"exportTone": "sepia"}),
+            serde_json::json!({"lamaHole": "huge"}),
         ] {
             assert!(write_patch(&path, bad.clone()).is_err(), "{bad}");
         }

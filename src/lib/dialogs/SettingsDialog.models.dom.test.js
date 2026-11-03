@@ -45,6 +45,7 @@ import {
   setDetection,
   setDetectionMode,
   setFluxModel,
+  setLamaHole,
   setOcrRescue,
   setSidecarPath,
 } from '../state/session.svelte.js'
@@ -1039,5 +1040,38 @@ describe('the runtime Download button', () => {
     await fireEvent.click(recheck)
     await waitFor(() => expect(getBackend().runtimeReport).toHaveBeenCalledWith({ flavour: 'cuda12', rescan: true }))
     await waitFor(() => expect(readMeasurement).toHaveBeenCalledTimes(2))
+  })
+})
+
+describe('the LaMa hole choice', () => {
+  afterEach(() => setLamaHole('tight'))
+
+  it('offers the three cuts under Cleaning with Tight chosen and its hint shown', async () => {
+    const rendered = await open(() => view())
+    const group = rendered.getByRole('radiogroup', { name: t('settings.cleaning.lamaHole.label') })
+    const choices = within(group).getAllByRole('radio')
+    expect(choices.map((choice) => choice.textContent?.trim())).toEqual(
+      ['tight', 'wide', 'adaptive'].map((hole) => t(`settings.cleaning.lamaHole.option.${hole}`)),
+    )
+    expect(within(group).getByRole('radio', { checked: true }).textContent?.trim()).toBe(t('settings.cleaning.lamaHole.option.tight'))
+    expect(rendered.getByText(t('settings.cleaning.lamaHole.hint.tight'))).toBeTruthy()
+  })
+
+  it('writes the choice to the settings file first and only then takes it', async () => {
+    const rendered = await open(() => view())
+    const group = rendered.getByRole('radiogroup', { name: t('settings.cleaning.lamaHole.label') })
+    await fireEvent.click(within(group).getByRole('radio', { name: t('settings.cleaning.lamaHole.option.adaptive') }))
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledWith({ lamaHole: 'adaptive' }))
+    await waitFor(() => expect(session.lamaHole).toBe('adaptive'))
+    expect(rendered.getByText(t('settings.cleaning.lamaHole.hint.adaptive'))).toBeTruthy()
+  })
+
+  it('keeps the old choice and says so when the save fails', async () => {
+    const rendered = await open(() => view())
+    writeSettings.mockRejectedValueOnce(new Error('disk full'))
+    const group = rendered.getByRole('radiogroup', { name: t('settings.cleaning.lamaHole.label') })
+    await fireEvent.click(within(group).getByRole('radio', { name: t('settings.cleaning.lamaHole.option.wide') }))
+    expect(await rendered.findByRole('alert')).toHaveProperty('textContent', t('settings.cleaning.lamaHole.saveFailed'))
+    expect(session.lamaHole).toBe('tight')
   })
 })

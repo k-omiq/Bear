@@ -45,7 +45,9 @@ pub const ISOLATION_RADIUS: u32 = 5;
 /// balloon (`spikes/gate-probe --lama`, ten regions of one page, before/first/
 /// retry crops side by side). On a scanned page the model reads a hole with a
 /// glyph's silhouette and draws a glyph into it. A stored mask has no such margin
-/// at padding 0, so [`crate::engines::lama::model_hole`] takes the applied mask.
+/// at padding 0, so [`crate::engines::lama::HoleMode::Wide`] takes the applied
+/// mask, and [`crate::engines::lama::HoleMode::Adaptive`] takes it beside flat
+/// page. The default, [`crate::engines::lama::HoleMode::Tight`], does not.
 pub const MODEL_HOLE_MARGIN: u32 = ISOLATION_RADIUS;
 
 /// The fidelity contract's margin: how far past an applied mask any rung may

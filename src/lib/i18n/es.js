@@ -555,6 +555,22 @@ export const es = {
       role: {
         lama: 'Redibuja la trama y la textura bajo el texto quitado siempre que una limpieza usa LaMa.',
       },
+      // Settings > Models > Cleaning: how LaMa cuts the hole it fills
+      // (`model-names.js#lamaHoleKey`). Tight is the default.
+      lamaHole: {
+        label: 'Hueco de LaMa',
+        saveFailed: 'No se pudo guardar el hueco de LaMa. No cambió nada.',
+        option: {
+          tight: 'Ajustado',
+          wide: 'Amplio',
+          adaptive: 'Adaptable',
+        },
+        hint: {
+          tight: 'La opción por defecto, como en 1.0.0-beta.15 y anteriores. LaMa vuelve a dibujar solo las letras. Conserva mejor el dibujo bajo el texto, pero pueden quedar formas de letras grises en el negro o en el papel liso. Solo afecta a LaMa en este equipo; los modelos en la nube lo ignoran.',
+          wide: 'Como en 1.0.0-beta.16 a beta.18. LaMa también vuelve a dibujar 5 px alrededor de cada letra. Desaparecen las marcas de letras en el negro y en el papel liso, pero el dibujo bajo el texto puede quedar borroso. Solo afecta a LaMa en este equipo; los modelos en la nube lo ignoran.',
+          adaptive: 'Amplio donde la página junto al texto es lisa o negra, ajustado donde hay dibujo. Desaparecen las marcas de letras en las zonas lisas y se conserva el dibujo bajo el texto. Solo afecta a LaMa en este equipo; los modelos en la nube lo ignoran.',
+        },
+      },
     },
     models: {
       heading: 'Otros archivos',

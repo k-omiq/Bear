@@ -555,6 +555,22 @@ export const pt = {
       role: {
         lama: 'Redesenha retícula e textura sob o texto removido sempre que uma limpeza usa LaMa.',
       },
+      // Settings > Models > Cleaning: how LaMa cuts the hole it fills
+      // (`model-names.js#lamaHoleKey`). Tight is the default.
+      lamaHole: {
+        label: 'Buraco do LaMa',
+        saveFailed: 'Não foi possível salvar o buraco do LaMa. Nada mudou.',
+        option: {
+          tight: 'Justo',
+          wide: 'Largo',
+          adaptive: 'Adaptável',
+        },
+        hint: {
+          tight: 'O padrão, como em 1.0.0-beta.15 e anteriores. O LaMa redesenha só as letras. O desenho sob o texto é o mais preservado, mas formas cinza de letras podem ficar no preto ou no papel liso. Só vale para o LaMa neste computador; os modelos na nuvem o ignoram.',
+          wide: 'Como em 1.0.0-beta.16 a beta.18. O LaMa também redesenha 5 px em volta de cada letra. As marcas de letras no preto e no papel liso somem, mas o desenho sob o texto pode borrar. Só vale para o LaMa neste computador; os modelos na nuvem o ignoram.',
+          adaptive: 'Largo onde a página ao lado do texto é lisa ou preta, justo onde há desenho. As marcas de letras nas áreas lisas somem e o desenho sob o texto é preservado. Só vale para o LaMa neste computador; os modelos na nuvem o ignoram.',
+        },
+      },
     },
     models: {
       heading: 'Outros arquivos',

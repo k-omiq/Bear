@@ -555,6 +555,22 @@ export const fr = {
       role: {
         lama: 'Redessine les trames et textures sous le texte supprimé chaque fois qu’un nettoyage utilise LaMa.',
       },
+      // Settings > Models > Cleaning: how LaMa cuts the hole it fills
+      // (`model-names.js#lamaHoleKey`). Tight is the default.
+      lamaHole: {
+        label: 'Trou de LaMa',
+        saveFailed: 'Impossible d’enregistrer le trou de LaMa. Rien n’a changé.',
+        option: {
+          tight: 'Serré',
+          wide: 'Large',
+          adaptive: 'Adaptatif',
+        },
+        hint: {
+          tight: 'Le choix par défaut, comme dans 1.0.0-beta.15 et avant. LaMa ne redessine que les lettres. Le dessin sous le texte est le mieux gardé, mais de légères formes de lettres grises peuvent rester sur le noir ou le papier uni. Ne vaut que pour LaMa sur cet ordinateur ; les modèles cloud l’ignorent.',
+          wide: 'Comme dans 1.0.0-beta.16 à beta.18. LaMa redessine aussi 5 px autour de chaque lettre. Les traces de lettres sur le noir et le papier uni disparaissent, mais le dessin sous le texte peut baver. Ne vaut que pour LaMa sur cet ordinateur ; les modèles cloud l’ignorent.',
+          adaptive: 'Large là où la page à côté du texte est unie ou noire, serré là où il y a du dessin. Les traces de lettres sur les zones unies disparaissent et le dessin sous le texte est gardé. Ne vaut que pour LaMa sur cet ordinateur ; les modèles cloud l’ignorent.',
+        },
+      },
     },
     models: {
       heading: 'Autres fichiers',

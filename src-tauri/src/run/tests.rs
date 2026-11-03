@@ -8772,6 +8772,25 @@ fn the_lettering_mask_has_its_own_name() {
     assert_eq!(accel::FULL_RT.label_key, "models.kind.fullRt");
 }
 
+/// **A run cuts LaMa's hole the way `lamaHole` says, and tight when it says
+/// nothing.** An unknown value refuses the run, as a malformed accelerator does.
+#[test]
+fn a_run_reads_the_lama_hole_and_defaults_to_tight() {
+    use cleaner_core::engines::lama::HoleMode;
+    let pipeline = || Pipeline::open_for_cleaning(Path::new("no-weights-live-here"), Preference::CpuOnly, None);
+    assert_eq!(pipeline().with_model_preferences(&serde_json::json!({})).unwrap().rung2.hole, HoleMode::Tight);
+    assert_eq!(pipeline().with_model_preferences(&serde_json::json!({"lamaHole": null})).unwrap().rung2.hole, HoleMode::Tight);
+    for (name, mode) in [("tight", HoleMode::Tight), ("wide", HoleMode::Wide), ("adaptive", HoleMode::Adaptive)] {
+        let opened = pipeline().with_model_preferences(&serde_json::json!({"lamaHole": name})).unwrap();
+        assert_eq!(opened.rung2.hole, mode, "{name}");
+    }
+    for bad in [serde_json::json!({"lamaHole": "huge"}), serde_json::json!({"lamaHole": 2})] {
+        assert!(pipeline().with_model_preferences(&bad).is_err(), "{bad}");
+    }
+    assert!(!HoleMode::Tight.extends_lettering(), "tight keeps a detector's mask as it was found");
+    assert!(HoleMode::Wide.extends_lettering() && HoleMode::Adaptive.extends_lettering());
+}
+
 /// **The LaMa rung's finishing is read only when every model is finished.**
 /// On, the run's rung takes the choice and a malformed one refuses the run, as
 /// a malformed accelerator does. Off, nothing finishes it and a malformed

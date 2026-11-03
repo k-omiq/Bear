@@ -649,6 +649,22 @@ export const en = {
       role: {
         lama: 'Redraws screentone and texture under removed text whenever a clean uses LaMa.',
       },
+      // Settings > Models > Cleaning: how LaMa cuts the hole it fills
+      // (`model-names.js#lamaHoleKey`). Tight is the default.
+      lamaHole: {
+        label: 'LaMa hole',
+        saveFailed: 'Could not save the LaMa hole. Nothing changed.',
+        option: {
+          tight: 'Tight',
+          wide: 'Wide',
+          adaptive: 'Adaptive',
+        },
+        hint: {
+          tight: 'The default, as in 1.0.0-beta.15 and earlier. LaMa redraws only the letters. Art under the text is kept best, but faint gray letter shapes can stay on black or plain paper. LaMa on this computer only; cloud models ignore it.',
+          wide: 'As in 1.0.0-beta.16 to beta.18. LaMa also redraws 5 px around every letter. Letter marks on black and plain paper go away, but art under the text can smear. LaMa on this computer only; cloud models ignore it.',
+          adaptive: 'Wide where the page beside the text is plain or black, tight where it is art. Letter marks on plain areas go away and most art under the text is kept; a glowing title over art can still smear. LaMa on this computer only; cloud models ignore it.',
+        },
+      },
     },
     // The weights and the ONNX Runtime are not bundled: they are downloaded
     // after install. Everything here is about
