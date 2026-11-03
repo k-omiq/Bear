@@ -351,6 +351,11 @@ pub struct IndexChapter {
     pub source_path: Option<PathBuf>,
     pub created: u64,
     pub last_opened: u64,
+    /// Whether an open of this chapter has put what ingest did (conversions,
+    /// archived originals, skipped files) on the notice stack. Ingest is once,
+    /// so its report is said once; the report itself stays in the manifest.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub input_reported: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1873,6 +1878,7 @@ impl Library {
                 source_path: source_dir,
                 created: at,
                 last_opened: at,
+                input_reported: false,
             },
         );
         self.save(&mut index)?;
@@ -1988,6 +1994,7 @@ impl Library {
 
         index.projects[position].last_opened = at;
         index.projects[position].chapters[chapter_position].last_opened = at;
+        let reported = std::mem::replace(&mut index.projects[position].chapters[chapter_position].input_reported, true);
         self.save(&mut index)?;
 
         let project = &index.projects[position];
@@ -1997,10 +2004,14 @@ impl Library {
         // which is the interface's to know, so the chapter arrives as headers
         // plus its review index and `loadPages` fills the window in one further
         // call.
+        let mut built = self.build_chapter(project, chapter, chapter_position as u32, at, &[]).0;
+        // Said at the first open only: every later open would repeat what one
+        // ingest did, once per page converted.
+        if reported {
+            built.input_reports.clear();
+        }
         Ok(Some(OpenedChapter {
-            chapter: self
-                .build_chapter(project, chapter, chapter_position as u32, at, &[])
-                .0,
+            chapter: built,
             project: self.build_project(project, at),
             pending_conversion: None,
         }))
@@ -5159,6 +5170,49 @@ mod tests {
         assert_eq!(estimate_import_bytes(&[path]),source.len() as u64+working.len() as u64+2*1_048_576);
     }
 
+    /// A converted page is converted once, at ingest, with every pixel kept,
+    /// and what ingest did is said at the first open, not at every one.
+    #[test]
+    fn a_conversion_is_reported_at_the_first_open_only() {
+        let scratch = Scratch::new("conversion-reported-once");
+        let library = library(&scratch);
+        let raws = scratch.join("raws");
+        std::fs::create_dir_all(&raws).unwrap();
+        let (width, height) = (8u32, 8u32);
+        let mut source = vec![0u8; 54 + (width * height * 3) as usize];
+        source[..2].copy_from_slice(b"BM");
+        let length = source.len() as u32;
+        source[2..6].copy_from_slice(&length.to_le_bytes());
+        source[10..14].copy_from_slice(&54u32.to_le_bytes());
+        source[14..18].copy_from_slice(&40u32.to_le_bytes());
+        source[18..22].copy_from_slice(&width.to_le_bytes());
+        source[22..26].copy_from_slice(&height.to_le_bytes());
+        source[26..28].copy_from_slice(&1u16.to_le_bytes());
+        source[28..30].copy_from_slice(&24u16.to_le_bytes());
+        for (at, byte) in source[54..].iter_mut().enumerate() { *byte = (at * 7 % 251) as u8; }
+        std::fs::write(raws.join("Page 015.bmp"), &source).unwrap();
+        let project = library.create_project("Once", StripMode::Single, None, None).unwrap();
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, Some(raws.clone())).unwrap().created().unwrap();
+
+        let keys = |opened: &OpenedChapter| opened.chapter.input_reports.iter()
+            .map(|notice| notice.key.clone()).collect::<Vec<_>>();
+        let first = library.open_chapter(&project.id, &chapter.id, false).unwrap().unwrap();
+        assert!(keys(&first).contains(&"notice.input.archivedOriginal".to_owned()), "{:?}", keys(&first));
+        for _ in 0..2 {
+            let again = library.open_chapter(&project.id, &chapter.id, false).unwrap().unwrap();
+            assert!(keys(&again).is_empty(), "{:?}", keys(&again));
+        }
+
+        // The working page holds every pixel the original decodes to.
+        let manifest_path = library.job_path(&project.id, &chapter.id);
+        let manifest = library.read_manifest(&manifest_path).unwrap();
+        assert!(manifest.sources[0].conversion.is_some(), "the conversion is still on record");
+        let job = Job::open(&manifest_path).unwrap();
+        let working = cleaner_core::image::decode(&std::fs::read(job.source_path(0).unwrap()).unwrap()).unwrap();
+        let original = cleaner_core::image::foreign::decode(&source).unwrap();
+        assert_eq!((working.width, working.height, working.data), (original.width, original.height, original.data));
+    }
+
     #[test]
     fn cmyk_import_estimate_uses_tiff_output_size() {
         let raster = fixtures::by_name("cmyk8").raster;
@@ -6512,6 +6566,7 @@ mod tests {
                     source_path: None,
                     created: 0,
                     last_opened: 0,
+                    input_reported: false,
                 },
                 IndexChapter {
                     id: "ch12".into(),
@@ -6520,6 +6575,7 @@ mod tests {
                     source_path: None,
                     created: 0,
                     last_opened: 0,
+                    input_reported: false,
                 },
             ],
         });

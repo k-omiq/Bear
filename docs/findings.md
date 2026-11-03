@@ -732,6 +732,10 @@ held, and the detection's own side on a declined detection. Approve, Clean anywa
 first and go by the reason only for rows written before. A project-wide run looked stuck in the editor: its
 total counted every chapter's pages and its count only the open chapter's, so it stopped at that chapter's last
 page until the run ended. Pages done in other chapters now count. Not tried: either on a real chapter in the app.
+Also the same day: opening a chapter said "original bytes are archived" once per converted page on every open,
+from the report ingest saved. Conversion was already once, at ingest, and lossless (the working PNG holds the
+decoded pixels; the original file is archived byte for byte). The report is now said at a chapter's first open
+only, recorded in the library index; a chapter from before this build says it once more.
 
 **Ogkalu Small on CUDA, and a helper torch with no GPU (2026-11-03): fixed in code, not run on Windows.** Two
 Windows logs from versions before beta.17. Ogkalu Small would not open on a CUDA choice: its int8 nodes go to the

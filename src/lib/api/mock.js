@@ -3055,9 +3055,13 @@ export function createMockBackend(options = {}) {
         })
       }
 
-      const reports = [...chapter.inputReports]
+      // What ingest did is said at the first open only, as natively
+      // (`library.rs#open_chapter`).
+      const firstOpen = !chapter.inputReported
+      chapter.inputReported = true
+      const reports = firstOpen ? [...chapter.inputReports] : []
       const skipped = chapter.pages.filter((page) => page.status === 'skipped')
-      if (skipped.length > 0) {
+      if (firstOpen && skipped.length > 0) {
         reports.push({
           key: 'notice.input.fileSkipped',
           params: {
