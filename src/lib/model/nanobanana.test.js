@@ -11,7 +11,7 @@ import {
 describe('the Nano Banana models', () => {
   it('match the native list: same ids, same smallest size, same default', () => {
     const source = readFileSync(new URL('../../../crates/cleaner-core/src/engines/nano_banana.rs', import.meta.url), 'utf8')
-    const native = [...source.matchAll(/pub const NANO_BANANA\w*: Model = Model \{ id: "([^"]+)", lowest: Tier::(\w+)/g)]
+    const native = [...source.matchAll(/pub const NANO_BANANA\w*: Model =\s*Model \{ id: "([^"]+)", lowest: Tier::(\w+)/g)]
       .map(([, id, lowest]) => [id, { Half: '512', One: '1K', Two: '2K' }[lowest]])
     expect(NANO_BANANA_MODELS.map((model) => [model.id, model.lowest]).sort())
       .toEqual(native.sort())

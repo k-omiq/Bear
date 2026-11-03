@@ -458,9 +458,11 @@ impl Drop for Turn<'_> {
 
 /// End every Nano Banana edit that has begun, in flight or waiting for its
 /// turn. Each fails with [`Failure::Stopped`]. A request already sent may still
-/// be billed: Google finishes what it was given.
+/// be billed: Google finishes what it was given. The grants go too, so the rest
+/// of a stopped batch can not send.
 #[tauri::command]
 pub fn nano_banana_stop() {
+    crate::inference::nano_banana_consent::revoke_all();
     GATE.stop();
 }
 
@@ -1543,7 +1545,7 @@ mod tests {
         let hole = Rect::new(600, 700, 200, 200);
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
-        let server = serve_with(MAX_CROPS, |_, body| http(200, "", &image_reply(&at_ratio(body, BLUE))));
+        let server = serve_with(MAX_CROPS, |_, body| http(200, "", &image_reply(&sent_back(body))));
         let config = Config { model: Model::DEFAULT, instruction: None };
         let refused = render_with(&client(&server), &config, &page, &fitted, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaKeptMark"));
@@ -1685,15 +1687,20 @@ mod tests {
         assert_eq!(refused, Some("decline.reason.nanoBananaBadAnswer"));
     }
 
-    /// An answer at the ratio the request asked for, so it fits whichever crop
-    /// was sent.
-    fn at_ratio(body: &Value, rgb: [u8; 3]) -> Vec<u8> {
-        let ratio = body["generationConfig"]["imageConfig"]["aspectRatio"].as_str().unwrap();
-        let (w, h) = ratio.split_once(':').unwrap();
-        answer_of(64 * w.parse::<u32>().unwrap(), 64 * h.parse::<u32>().unwrap(), rgb)
+    /// The marked crop as it was sent: an answer that kept the mark over the hole
+    /// and nowhere else. A blue over the whole answer is a colour cast, which the
+    /// kept-mark check lets through.
+    fn sent_back(body: &Value) -> Vec<u8> {
+        let sent = body["contents"][0]["parts"][1]["inlineData"]["data"].as_str().unwrap();
+        base64::engine::general_purpose::STANDARD.decode(sent).unwrap()
     }
 
-    const BLUE: [u8; 3] = [150, 170, 230];
+    /// A clean answer at exactly the size of the crop that was sent.
+    fn gray_like_sent(body: &Value) -> Vec<u8> {
+        let sent = image::load_from_memory(&sent_back(body)).unwrap();
+        answer_of(sent.width(), sent.height(), GRAY)
+    }
+
     const GRAY: [u8; 3] = [200, 200, 200];
 
     #[test]
@@ -1701,7 +1708,7 @@ mod tests {
         let hole = Rect::new(600, 700, 200, 200);
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
-        let server = serve_with(2, |at, body| http(200, "", &image_reply(&at_ratio(body, if at == 0 { BLUE } else { GRAY }))));
+        let server = serve_with(2, |at, body| http(200, "", &image_reply(&if at == 0 { sent_back(body) } else { gray_like_sent(body) })));
         let config = Config { model: Model::DEFAULT, instruction: None };
         let edited = render_with(&client(&server), &config, &page, &fitted, None, None).unwrap();
         assert_eq!(edited.record["crops_refused"], 1);

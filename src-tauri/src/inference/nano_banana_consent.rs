@@ -127,7 +127,7 @@ pub(crate) fn book() -> &'static Book {
     &BOOK
 }
 
-/// Withdraw every grant: Cloud engines was turned off.
+/// Withdraw every grant: Cloud engines was turned off, or the user pressed Stop.
 pub(crate) fn revoke_all() {
     BOOK.revoke();
 }
