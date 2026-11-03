@@ -7,10 +7,10 @@
  * a spread; what could actually be wrong is the intersection.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
-  capabilities, featuresFrom, loadCapabilities, selectedWorkflowAvailable, selectedWorkflowMissing,
+  capabilities, featuresFrom, loadCapabilities, refreshNanoBanana, selectedWorkflowAvailable, selectedWorkflowMissing,
 } from './capabilities.svelte.js'
 import { session } from './session.svelte.js'
 
@@ -214,5 +214,69 @@ describe('loadCapabilities', () => {
     })
     expect(capabilities.autoClean).toBe(true)
     expect(capabilities.runtime).toBe(true)
+  })
+})
+
+describe('Nano Banana', () => {
+  /** A key read that waits until the test answers it. */
+  function heldKeyRead() {
+    /** @type {Array<(value: boolean) => void>} */
+    const answers = []
+    const nanoBananaHasKey = vi.fn(() => new Promise((resolve) => { answers.push(resolve) }))
+    return { nanoBananaHasKey, answer: (/** @type {boolean} */ value, at = 0) => answers[at](value) }
+  }
+
+  it('is offered with a key and Cloud engines on, and in the engine map', async () => {
+    const cloudAllowed = session.cloudAllowed
+    try {
+      session.cloudAllowed = true
+      await refreshNanoBanana(backendThat({ nanoBananaHasKey: async () => true }))
+      expect(capabilities.nanoBanana).toBe(true)
+      expect(capabilities.engines.nanobanana).toBe(true)
+      session.cloudAllowed = false
+      await refreshNanoBanana(backendThat({ nanoBananaHasKey: async () => true }))
+      expect(capabilities.nanoBanana).toBe(false)
+      session.cloudAllowed = true
+      await refreshNanoBanana(backendThat({ nanoBananaHasKey: async () => { throw new Error('keyring locked') } }))
+      expect(capabilities.nanoBanana).toBe(false)
+      expect(capabilities.engines.nanobanana).toBe(false)
+    } finally {
+      session.cloudAllowed = cloudAllowed
+    }
+  })
+
+  it('does not hold launch on the key read, which can wait on a keyring prompt', async () => {
+    const cloudAllowed = session.cloudAllowed
+    session.cloudAllowed = true
+    const read = heldKeyRead()
+    const listModels = vi.fn(async () => ({ models: CATALOGUE, runtime: { installed: true } }))
+    try {
+      await loadCapabilities(backendThat({ nanoBananaHasKey: read.nanoBananaHasKey, listModels }))
+      expect(listModels).toHaveBeenCalled()
+      expect(capabilities.engines.lama).toBe(true)
+      expect(capabilities.nanoBanana).toBe(false)
+      read.answer(true)
+      await vi.waitFor(() => expect(capabilities.engines.nanobanana).toBe(true))
+      expect(capabilities.engines.lama).toBe(true)
+    } finally {
+      session.cloudAllowed = cloudAllowed
+    }
+  })
+
+  it('keeps the newest answer when an older read lands after it', async () => {
+    const cloudAllowed = session.cloudAllowed
+    session.cloudAllowed = true
+    const read = heldKeyRead()
+    try {
+      const older = refreshNanoBanana(backendThat({ nanoBananaHasKey: read.nanoBananaHasKey }))
+      const newer = refreshNanoBanana(backendThat({ nanoBananaHasKey: read.nanoBananaHasKey }))
+      read.answer(true, 1)
+      await newer
+      read.answer(false, 0)
+      await older
+      expect(capabilities.nanoBanana).toBe(true)
+    } finally {
+      session.cloudAllowed = cloudAllowed
+    }
   })
 })

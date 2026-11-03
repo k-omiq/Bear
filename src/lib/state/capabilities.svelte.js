@@ -168,16 +168,26 @@ async function useAnInstalledModel(backend) {
   return true
 }
 
+/** Which `refreshNanoBanana` answer is the newest; an older one landing late is dropped. */
+let nanoBananaRead = 0
+
 /**
  * Read whether Nano Banana can run. It is `engines`' entry as well, because every
  * engine picker reads that map.
+ *
+ * The read asks the OS credential store, which on Linux can be a prompt to
+ * unlock the keyring, so it can take as long as the person does: launch does
+ * not wait for it (`loadCapabilities`), and a key saved meanwhile is read
+ * again by Settings, whose answer is the newer one and stands.
  *
  * @param {import('../api/backend.js').Backend} [backend]
  * @returns {Promise<void>}
  */
 export async function refreshNanoBanana(backend = getBackend()) {
+  const read = ++nanoBananaRead
   let hasKey = false
   try { hasKey = await backend.nanoBananaHasKey() } catch { /* no key is the safe answer */ }
+  if (read !== nanoBananaRead) return
   capabilities.nanoBanana = hasKey && session.cloudAllowed
   capabilities.engines = { ...capabilities.engines, nanobanana: capabilities.nanoBanana }
 }
@@ -194,7 +204,6 @@ export async function refreshNanoBanana(backend = getBackend()) {
  * @returns {Promise<void>}
  */
 export async function loadCapabilities(backend = getBackend()) {
-  await refreshNanoBanana(backend)
   try {
     let answer = await backend.sidecarAvailable()
     if (answer?.reasonKey === 'decline.reason.sidecarWeights' && await useAnInstalledModel(backend)) {
@@ -232,4 +241,7 @@ export async function loadCapabilities(backend = getBackend()) {
     capabilities.autoClean = true
     capabilities.runtime = true
   }
+  // Last and not awaited: the key read can wait on a keyring prompt, and
+  // nothing else at launch needs it. Nano Banana is offered once it answers.
+  void refreshNanoBanana(backend)
 }

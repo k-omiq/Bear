@@ -17,6 +17,7 @@ import {
   jobById,
   jobFraction,
   jobs,
+  nanoBananaRun,
   onJobSettled,
   openJobChapter,
   registerJob,
@@ -25,6 +26,7 @@ import {
   runningJobFor,
   startJobs,
   stopJob,
+  stopNanoBananaRun,
   trackDenoise,
   watchJob,
 } from './jobs.svelte.js'
@@ -247,6 +249,37 @@ describe('the quit guard', () => {
     await Promise.resolve()
     expect(backend.confirmQuit).toHaveBeenCalledTimes(1)
     expect(backend.hideToTray).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts a Nano Banana batch, which the backend does not list, and stops it on Quit', async () => {
+    const nanoBananaStop = vi.fn(async () => {})
+    setBackend(/** @type {any} */ ({ ...backend, nanoBananaStop }))
+    Object.assign(nanoBananaRun, { active: true, done: 2, total: 5 })
+    askQuit({ jobs: 0, canHide: false })
+    expect(jobs.quit).toEqual({ count: 1, canHide: false })
+    answerQuit('quit')
+    expect(nanoBananaRun.stopping).toBe(true)
+    await vi.waitFor(() => expect(nanoBananaStop).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(backend.confirmQuit).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('a Nano Banana batch', () => {
+  it('stops once, and only while it runs', async () => {
+    const nanoBananaStop = vi.fn(async () => {})
+    stopNanoBananaRun(/** @type {any} */ ({ nanoBananaStop }))
+    expect(nanoBananaRun.stopping).toBe(false)
+    nanoBananaRun.active = true
+    stopNanoBananaRun(/** @type {any} */ ({ nanoBananaStop }))
+    stopNanoBananaRun(/** @type {any} */ ({ nanoBananaStop }))
+    expect(nanoBananaRun.stopping).toBe(true)
+    await vi.waitFor(() => expect(nanoBananaStop).toHaveBeenCalledTimes(1))
+  })
+
+  it('still stops with a backend that has no stop command', () => {
+    nanoBananaRun.active = true
+    expect(() => stopNanoBananaRun(/** @type {any} */ ({}))).not.toThrow()
+    expect(nanoBananaRun.stopping).toBe(true)
   })
 })
 

@@ -116,7 +116,8 @@
   import { windowGesture, closeWindowFocusing } from './windowgesture.js'
   import { MIN_TOP, TOOL_BOTTOM_RESERVE } from '../model/windows.js'
   import { cleanLocalFirst, cloudParts, cloudScopeRefusal, runStep, startCleanRun } from './cloudrun.js'
-  import { nanoBananaRun, startNanoBananaRun, stopNanoBananaRun } from './nanobananarun.svelte.js'
+  import { startNanoBananaRun } from './nanobananarun.svelte.js'
+  import { nanoBananaRun, stopNanoBananaRun } from '../state/jobs.svelte.js'
   import {
     Button,
     ColorPicker,
@@ -1484,11 +1485,13 @@
                control announced without it is an action the user is refused
                for no stated reason, which is the whole failure the note exists
                to prevent. -->
+          <!-- A Nano Banana batch holds the run slot, so the button waits for
+               it as it would for a run. -->
           <Button
             variant={running ? 'soft' : 'primary'}
             size="lg"
             block={!running}
-            disabled={Boolean(blockedKey) && !running}
+            disabled={(Boolean(blockedKey) || nanoBananaRun.active) && !running}
             aria-describedby={blockedKey && !running ? blockedId : undefined}
             data-run-action
             onclick={run}
@@ -1498,18 +1501,28 @@
           </Button>
           <!-- Nano Banana, offered only with a key and Cloud engines on. A paid request
                per region, so it is its own button and asks first, and never part of
-               a run (`editor/nanobananarun.svelte.js`). -->
-          {#if step === 'clean' && capabilities.nanoBanana && scope !== 'project'}
+               a run (`editor/nanobananarun.svelte.js`). Its Stop shows for as long as
+               a batch runs, whatever the step and scope now read. -->
+          {#if nanoBananaRun.active}
+            <Button
+              size="sm"
+              variant="soft"
+              disabled={nanoBananaRun.stopping}
+              data-run-row="nanoBanana"
+              onclick={() => stopNanoBananaRun()}
+            >
+              {t(nanoBananaRun.stopping ? 'nanoBanana.run.stopping' : 'nanoBanana.run.stop',
+                { done: nanoBananaRun.done, total: nanoBananaRun.total })}
+            </Button>
+          {:else if step === 'clean' && capabilities.nanoBanana && scope !== 'project'}
             <Button
               size="sm"
               variant="soft"
               disabled={running}
               data-run-row="nanoBanana"
-              onclick={() => (nanoBananaRun.active ? stopNanoBananaRun() : startNanoBananaRun(scope))}
+              onclick={() => void startNanoBananaRun(scope)}
             >
-              {nanoBananaRun.active
-                ? t('nanoBanana.run.stop', { done: nanoBananaRun.done, total: nanoBananaRun.total })
-                : t('nanoBanana.run.button')}
+              {t('nanoBanana.run.button')}
             </Button>
           {/if}
           <!-- Rendered whether or not there is anything in it: a live region
