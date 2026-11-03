@@ -11,7 +11,8 @@
 //! - A region too big for the tier moves up a tier. freeditor sent a crop that
 //!   cut through the selection.
 //! - The hole keeps [`CONTEXT`] pixels of page around it, because a mask touching
-//!   the crop's edge gives the model nothing to continue.
+//!   the crop's edge gives the model nothing to continue. A region too big for
+//!   that on its page keeps less, down to none, rather than being refused.
 //!
 //! This module is geometry and pixels. The request itself is in
 //! `src-tauri/src/inference/nano_banana.rs`, the only place that touches the
@@ -27,25 +28,44 @@ use crate::fit::Fitted;
 use crate::image::Raster;
 use crate::mask::{Mask, Rect};
 
-/// Page kept around the hole, in pixels, on every side the page has.
+/// Page kept around the hole, in pixels, on every side the page has, when the
+/// page and the chart allow it.
+///
+/// Enough for the finishing. On 48 screentone holes over 7 real grey pages
+/// (2026-11-03), an answer that kept the tone and lost the dots came out of the
+/// default finishing 39.2 levels off the page with 24 px around the mask, 39.3
+/// with 64 and 39.2 with 128. With none it was 47.1, no better than the answer.
 pub const CONTEXT: u32 = 24;
 
 /// The largest answer decoded. A 2K tier 8:1 answer is 6144 x 768, about 4.7 MP.
 const MAX_ANSWER_PIXELS: u64 = 16 * 1024 * 1024;
 const MAX_ANSWER_SIDE: u32 = 8192;
 
-/// How far an answer's shape may be from the crop's before it is refused. A
+/// How far an answer's shape may be from the output's before it is refused. A
 /// wrong shape stretched onto the page moves every line it holds.
 const SHAPE_TOLERANCE: f64 = 0.03;
+/// How far an answer's size may be from the output's when the page was smaller
+/// than the output and the answer is resampled anyway. A 1K answer to a 512
+/// request is the model answering another size, not a near miss.
+const MAX_ANSWER_SCALE: f64 = 1.1;
 
 /// The mark that shows the model what to edit: freeditor's overlay colour.
 const MARK_RGB: [f64; 3] = [45.0, 127.0, 249.0];
 const MARK_ALPHA: f64 = 0.32;
 
-/// How much bluer the hole may read than the page around it. The mark adds about
-/// 65 on white paper, so an answer past this kept the mark.
+/// How much bluer a hole pixel may read than the bluest of the answer's own page
+/// around the hole ([`MARK_RING_PERCENTILE`]). The mark adds
+/// `MARK_ALPHA * (249 - 45)`, about 65, to blue minus red on any page, so a pixel
+/// past this kept the mark.
 const MARK_KEPT_BIAS: f64 = 24.0;
-/// The ring of page, outside the mask, that the hole is compared with.
+/// The ring's blue that a clean hole may reach: a high percentile and not the
+/// median, so a colour page whose ring already spans its own blues does not read
+/// as marked.
+const MARK_RING_PERCENTILE: f64 = 95.0;
+/// The share of the hole that may read that blue before the answer is refused.
+/// A mark kept over a word of a long line is still a kept mark.
+const MARK_KEPT_SHARE: f64 = 0.05;
+/// The ring of page, outside every mark, that the hole is compared with.
 const MARK_RING: i64 = 16;
 
 /// How much the model is asked to return for one crop.
@@ -70,11 +90,17 @@ impl Tier {
     }
 }
 
+/// An output's width and height.
+type Size = (u32, u32);
+
 /// The published chart: ratio, then the output at 512, 1K and 2K.
 ///
 /// 21:9 at 512 is left out. The chart says 792 x 168, which is not 21:9 (1K and
 /// 2K are), so what the model really returns there is not known.
-const CHART: [(&str, Option<(u32, u32)>, (u32, u32), (u32, u32)); 14] = [
+///
+/// An answer must match its entry exactly when the crop is cut to it, so a
+/// wrong entry costs a refused answer, never a resampled one.
+const CHART: [(&str, Option<Size>, Size, Size); 14] = [
     ("1:1", Some((512, 512)), (1024, 1024), (2048, 2048)),
     ("1:4", Some((256, 1024)), (512, 2048), (1024, 4096)),
     ("1:8", Some((192, 1536)), (384, 3072), (768, 6144)),
@@ -83,7 +109,9 @@ const CHART: [(&str, Option<(u32, u32)>, (u32, u32), (u32, u32)); 14] = [
     // The published chart says 448 x 600. The model answered 448 x 592 (2026-11-02).
     ("3:4", Some((448, 592)), (896, 1200), (1792, 2400)),
     ("4:1", Some((1024, 256)), (2048, 512), (4096, 1024)),
-    ("4:3", Some((600, 448)), (1200, 896), (2400, 1792)),
+    // The published chart says 600 x 448. 592 x 448 mirrors the 3:4 answer above
+    // and is inferred, not measured.
+    ("4:3", Some((592, 448)), (1200, 896), (2400, 1792)),
     ("4:5", Some((464, 576)), (928, 1152), (1856, 2304)),
     ("5:4", Some((576, 464)), (1152, 928), (2304, 1856)),
     ("8:1", Some((1536, 192)), (3072, 384), (6144, 768)),
@@ -105,14 +133,19 @@ pub struct Model {
     lowest: Tier,
     /// Whether the 1:4, 1:8, 4:1 and 8:1 ratios are on its chart.
     banner_ratios: bool,
+    /// Whether 2K costs what 1K does, so a smaller crop saves nothing.
+    two_k_at_one_k_price: bool,
 }
 
 /// Nano Banana 2.1, the newest. No 512 tier.
-pub const NANO_BANANA_2_1: Model = Model { id: "gemini-nano-banana-2.1", lowest: Tier::One, banner_ratios: true };
+pub const NANO_BANANA_2_1: Model =
+    Model { id: "gemini-nano-banana-2.1", lowest: Tier::One, banner_ratios: true, two_k_at_one_k_price: false };
 /// Nano Banana 2: the one model with the 512 tier, and the one the crops were benched on.
-pub const NANO_BANANA_2: Model = Model { id: "gemini-3.1-flash-image", lowest: Tier::Half, banner_ratios: true };
-/// Nano Banana Pro. No 512 tier, and no banner ratios.
-pub const NANO_BANANA_PRO: Model = Model { id: "gemini-3-pro-image", lowest: Tier::One, banner_ratios: false };
+pub const NANO_BANANA_2: Model =
+    Model { id: "gemini-3.1-flash-image", lowest: Tier::Half, banner_ratios: true, two_k_at_one_k_price: false };
+/// Nano Banana Pro. No 512 tier, no banner ratios, and 2K at the 1K price.
+pub const NANO_BANANA_PRO: Model =
+    Model { id: "gemini-3-pro-image", lowest: Tier::One, banner_ratios: false, two_k_at_one_k_price: true };
 
 impl Model {
     pub const ALL: [Model; 3] = [NANO_BANANA_2_1, NANO_BANANA_2, NANO_BANANA_PRO];
@@ -126,7 +159,8 @@ impl Model {
 
     /// The tier a crop starts at. The size is never a setting: it is the smallest
     /// one on the model's chart that holds the region, so a region costs as little
-    /// as it can and is never cut.
+    /// as it can and is never cut. Where 2K costs what 1K does, a 2K crop that
+    /// needs no resample goes first ([`send_regions`]).
     pub fn smallest(self) -> Tier {
         self.lowest
     }
@@ -157,6 +191,13 @@ pub struct SendRegion {
     pub tier: Tier,
 }
 
+impl SendRegion {
+    /// Whether the answer maps one to one onto the page, with no resample.
+    pub fn full_size(&self) -> bool {
+        (self.crop.w, self.crop.h) == self.output
+    }
+}
+
 /// The part of the page an output of this size covers: the output itself, or as
 /// much of its shape as fits a smaller page.
 fn footprint(output: (u32, u32), page_w: u32, page_h: u32) -> (u32, u32) {
@@ -171,22 +212,46 @@ fn footprint(output: (u32, u32), page_w: u32, page_h: u32) -> (u32, u32) {
 /// The crops that could carry a hole on a page, best first, from the first tier
 /// at or above the model's smallest that has any.
 ///
-/// 1:1 leads when it holds the hole, since it gives the most context on every
-/// side. After it come the crops that fit the page at full chart size, since
-/// they need no resampling, and then the ones shrunk to fit, each group by how
-/// little page it spends. The caller sends the first, and the others are there
-/// because Google can refuse one crop of a region and accept another of the same
-/// region. Empty means not even 2K holds it.
+/// The crops that fit the page at full chart size lead, since they need no
+/// resampling, and among them 1:1, since it gives the most context on every
+/// side. Then the ones shrunk to fit the page. Each group goes by how little page
+/// it spends. The caller sends the first, and the others are there because
+/// Google can refuse one crop of a region and accept another of the same region.
+///
+/// The hole keeps [`CONTEXT`] px of page where some tier allows it, and less
+/// only where none does. Where 2K costs what 1K does, 2K goes first when it holds
+/// the hole at full size, since it holds more page for the same price. Empty
+/// means not even 2K holds the hole with no context.
 pub fn send_regions(hole: Rect, page_w: u32, page_h: u32, model: Model) -> Vec<SendRegion> {
-    send_regions_in(hole, page_w, page_h, model, model.smallest(), Tier::Two)
+    plan(hole, page_w, page_h, model).map(|(_, regions)| regions).unwrap_or_default()
 }
 
-/// [`send_regions`] held to the tiers from `start` to `last`.
-fn send_regions_in(hole: Rect, page_w: u32, page_h: u32, model: Model, start: Tier, last: Tier) -> Vec<SendRegion> {
+/// [`send_regions`], with the context the crops keep.
+fn plan(hole: Rect, page_w: u32, page_h: u32, model: Model) -> Option<(u32, Vec<SendRegion>)> {
+    (0..=CONTEXT).rev().find_map(|context| {
+        let mut tiers = Tier::ALL
+            .into_iter()
+            .filter(|tier| *tier >= model.smallest())
+            .map(|tier| crops_at(hole, page_w, page_h, model, tier, context))
+            .filter(|crops| !crops.is_empty());
+        let first = tiers.next()?;
+        let full_size_two_k = |crops: &Vec<SendRegion>| crops[0].tier == Tier::Two && crops[0].full_size();
+        if model.two_k_at_one_k_price && !full_size_two_k(&first) {
+            if let Some(two_k) = tiers.find(full_size_two_k) {
+                return Some((context, two_k));
+            }
+        }
+        Some((context, first))
+    })
+}
+
+/// The crops of one tier that hold `hole` with `context` px of page around it,
+/// best first ([`send_regions`]).
+fn crops_at(hole: Rect, page_w: u32, page_h: u32, model: Model, tier: Tier, context: u32) -> Vec<SendRegion> {
     if page_w == 0 || page_h == 0 || hole.w == 0 || hole.h == 0 {
         return Vec::new();
     }
-    let context = i64::from(CONTEXT);
+    let context = i64::from(context);
     let left = hole.x.saturating_sub(context).max(0);
     let top = hole.y.saturating_sub(context).max(0);
     let right = hole.right().saturating_add(context).min(i64::from(page_w));
@@ -197,28 +262,19 @@ fn send_regions_in(hole: Rect, page_w: u32, page_h: u32, model: Model, start: Ti
     let (need_w, need_h) = ((right - left) as u32, (bottom - top) as u32);
     let center_x = left + i64::from(need_w) / 2;
     let center_y = top + i64::from(need_h) / 2;
-
-    for tier in Tier::ALL.into_iter().filter(|tier| *tier >= start && *tier <= last) {
-        let mut fits: Vec<SendRegion> = chart(model, tier)
-            .filter_map(|(ratio, output)| {
-                let (w, h) = footprint(output, page_w, page_h);
-                if w < need_w || h < need_h {
-                    return None;
-                }
-                let x = (center_x - i64::from(w) / 2).clamp(0, i64::from(page_w - w));
-                let y = (center_y - i64::from(h) / 2).clamp(0, i64::from(page_h - h));
-                Some(SendRegion { crop: Rect::new(x, y, w, h), output, ratio, tier })
-            })
-            .collect();
-        fits.sort_by_key(|region| {
-            let SendRegion { crop, output, ratio, .. } = *region;
-            (ratio != "1:1", (crop.w, crop.h) != output, u64::from(crop.w) * u64::from(crop.h))
-        });
-        if !fits.is_empty() {
-            return fits;
-        }
-    }
-    Vec::new()
+    let mut fits: Vec<SendRegion> = chart(model, tier)
+        .filter_map(|(ratio, output)| {
+            let (w, h) = footprint(output, page_w, page_h);
+            if w < need_w || h < need_h {
+                return None;
+            }
+            let x = (center_x - i64::from(w) / 2).clamp(0, i64::from(page_w - w));
+            let y = (center_y - i64::from(h) / 2).clamp(0, i64::from(page_h - h));
+            Some(SendRegion { crop: Rect::new(x, y, w, h), output, ratio, tier })
+        })
+        .collect();
+    fits.sort_by_key(|region| (!region.full_size(), region.ratio != "1:1", u64::from(region.crop.w) * u64::from(region.crop.h)));
+    fits
 }
 
 /// The smallest rectangle holding both.
@@ -241,14 +297,15 @@ pub struct Group {
 
 /// The crop for `own` that holds as many of `others` as it can without growing.
 ///
-/// The size is the one `own` needs alone, so asking for company never costs more
-/// than asking for `own`. Then the nearest region goes in if the crop that holds
-/// it as well is still the same size, and so on outward. Each region goes in
+/// The size and the context are the ones `own` needs alone, so asking for
+/// company never costs more than asking for `own`. Then the nearest region goes
+/// in if the crop that holds it as well is still the same size and keeps the
+/// same context, and so on outward. Each region goes in
 /// whole, so no crop ever cuts through one. `others` are the applied bounds of
 /// regions on the same page. `None` means `own` itself fits no crop.
 pub fn plan_group(own: Rect, others: &[Rect], page_w: u32, page_h: u32, model: Model) -> Option<Group> {
-    let alone = send_regions(own, page_w, page_h, model);
-    let tier = alone.first()?.tier;
+    let (context, alone) = plan(own, page_w, page_h, model)?;
+    let tier = alone[0].tier;
     let page = Rect::new(0, 0, page_w, page_h);
     let centre = |rect: Rect| (rect.x * 2 + i64::from(rect.w), rect.y * 2 + i64::from(rect.h));
     let (own_x, own_y) = centre(own);
@@ -263,13 +320,13 @@ pub fn plan_group(own: Rect, others: &[Rect], page_w: u32, page_h: u32, model: M
     let mut members = Vec::new();
     for at in order {
         let wider = union_rect(joined, others[at]);
-        if !send_regions_in(wider, page_w, page_h, model, tier, tier).is_empty() {
+        if !crops_at(wider, page_w, page_h, model, tier, context).is_empty() {
             joined = wider;
             members.push(at);
         }
     }
     members.sort_unstable();
-    let regions = if members.is_empty() { alone } else { send_regions_in(joined, page_w, page_h, model, tier, tier) };
+    let regions = if members.is_empty() { alone } else { crops_at(joined, page_w, page_h, model, tier, context) };
     Some(Group { members, regions })
 }
 
@@ -286,6 +343,9 @@ pub fn group_for(page: &Raster, fitted: &Fitted, model: Model, others: &[Mask]) 
         return Err(decline.into());
     }
     let bounds = applied_mask(fitted, page.width, page.height).bounds;
+    if bounds.w == 0 || bounds.h == 0 {
+        return Err(Error::Run("the region is empty on this page".to_owned()));
+    }
     let boxes: Vec<Rect> = others.iter().map(|mask| mask.bounds).collect();
     plan_group(bounds, &boxes, page.width, page.height, model)
         .ok_or_else(|| crate::engines::model::Decline::TooLarge { w: bounds.w, h: bounds.h }.into())
@@ -301,7 +361,7 @@ pub fn regions_for(page: &Raster, fitted: &Fitted, model: Model) -> Result<Vec<S
 pub enum AnswerError {
     #[error("the answer image could not be read: {0}")]
     Unreadable(String),
-    #[error("the answer is {got_w}x{got_h}, too far from the shape of the {want_w}x{want_h} crop")]
+    #[error("the answer is {got_w}x{got_h}, not the {want_w}x{want_h} that was asked for")]
     WrongShape { got_w: u32, got_h: u32, want_w: u32, want_h: u32 },
     #[error("the answer kept the blue mark")]
     KeptMark,
@@ -314,6 +374,8 @@ pub struct Prepared {
     render: PreparedRender,
     region: SendRegion,
     marked_png: Vec<u8>,
+    /// Per crop pixel, whether the mark was painted there.
+    marks: Vec<bool>,
 }
 
 impl Prepared {
@@ -325,8 +387,9 @@ impl Prepared {
         -> Result<Prepared, Error> {
         let mut render = PreparedRender::prepare_in_crop(page, fitted, region.crop, Preprocessing::V3)?;
         render.set_finishing(finishing);
-        let marked_png = encode_rgb_png(region.crop.w, region.crop.h, &marked(&render, companions))?;
-        Ok(Prepared { render, region, marked_png })
+        let (rgb, marks) = marked(&render, companions);
+        let marked_png = encode_rgb_png(region.crop.w, region.crop.h, &rgb)?;
+        Ok(Prepared { render, region, marked_png, marks })
     }
 
     pub fn region(&self) -> SendRegion {
@@ -342,8 +405,8 @@ impl Prepared {
     /// The model's answer, written through the applied mask.
     pub fn finish(&self, answer: &[u8]) -> Result<Rendered, AnswerError> {
         let crop = self.region.crop;
-        let rgb = decode_answer(answer, crop.w, crop.h)?;
-        if kept_mark(&self.render, &rgb) {
+        let rgb = decode_answer(answer, self.region)?;
+        if kept_mark(&self.render, &self.marks, &rgb) {
             return Err(AnswerError::KeptMark);
         }
         Ok(self.render.composite(&GeneratedCrop::new(crop.w, crop.h, &rgb))?)
@@ -351,14 +414,16 @@ impl Prepared {
 }
 
 /// The crop with the mark over every pixel the render may write, and over the
-/// companions' masks.
-fn marked(render: &PreparedRender, companions: &[Mask]) -> Vec<u8> {
+/// companions' masks, and where the mark is.
+fn marked(render: &PreparedRender, companions: &[Mask]) -> (Vec<u8>, Vec<bool>) {
     let crop = render.crop();
     let mut out = render.image_rgb8().to_vec();
+    let mut marks = vec![false; crop.w as usize * crop.h as usize];
     for y in 0..crop.h as usize {
         for x in 0..crop.w as usize {
             let (page_x, page_y) = (crop.x + x as i64, crop.y + y as i64);
             if render.alpha(page_x, page_y) > 0.0 || companions.iter().any(|mask| mask.contains(page_x, page_y)) {
+                marks[y * crop.w as usize + x] = true;
                 let at = (y * crop.w as usize + x) * 3;
                 for channel in 0..3 {
                     let page = f64::from(out[at + channel]);
@@ -367,61 +432,75 @@ fn marked(render: &PreparedRender, companions: &[Mask]) -> Vec<u8> {
             }
         }
     }
-    out
+    (out, marks)
 }
 
-/// Whether the hole reads bluer than the page ringed around it, by more than a
-/// clean answer could.
-fn kept_mark(render: &PreparedRender, answer: &[u8]) -> bool {
+/// Whether more than [`MARK_KEPT_SHARE`] of the hole reads bluer than the
+/// answer's own unmarked page ringed around it, by more than a clean answer
+/// could. Both sides are read from the answer, so a cast over the whole answer
+/// cancels out.
+///
+/// A blue the ring does not have, painted over the hole, is refused too. That
+/// is rare on a grey page and possible on a colour one.
+fn kept_mark(render: &PreparedRender, marks: &[bool], answer: &[u8]) -> bool {
     let (crop, applied) = (render.crop(), render.applied().bounds);
-    let (mut hole_bias, mut hole_count) = (0.0, 0u64);
-    let (mut ring_bias, mut ring_count) = (0.0, 0u64);
+    let blue = |at: usize| f64::from(answer[at * 3 + 2]) - f64::from(answer[at * 3]);
+    let mut hole = Vec::new();
+    let mut ring = Vec::new();
     for y in 0..crop.h as i64 {
         for x in 0..crop.w as i64 {
             let (px, py) = (crop.x + x, crop.y + y);
-            let at = (y * i64::from(crop.w) + x) as usize * 3;
+            let at = (y * i64::from(crop.w) + x) as usize;
             if render.alpha(px, py) > 0.0 {
-                hole_bias += f64::from(answer[at + 2]) - f64::from(answer[at]);
-                hole_count += 1;
-            } else if px >= applied.x - MARK_RING
+                hole.push(blue(at));
+            } else if !marks[at]
+                && px >= applied.x - MARK_RING
                 && px < applied.right() + MARK_RING
                 && py >= applied.y - MARK_RING
                 && py < applied.bottom() + MARK_RING
             {
-                let page = render.image_rgb8();
-                ring_bias += f64::from(page[at + 2]) - f64::from(page[at]);
-                ring_count += 1;
+                ring.push(blue(at));
             }
         }
     }
-    if hole_count == 0 {
+    if hole.is_empty() {
         return false;
     }
-    let ring = if ring_count == 0 { 0.0 } else { ring_bias / ring_count as f64 };
-    hole_bias / hole_count as f64 - ring > MARK_KEPT_BIAS
+    let ring = if ring.is_empty() { 0.0 } else { crate::engines::grid::percentile(&mut ring, MARK_RING_PERCENTILE) };
+    let kept = hole.iter().filter(|bias| **bias - ring > MARK_KEPT_BIAS).count();
+    kept as f64 > MARK_KEPT_SHARE * hole.len() as f64
 }
 
-/// The answer as RGB8 at the crop's size. Equal sizes are copied as they came.
-/// Only a page smaller than the chart size resamples.
-fn decode_answer(answer: &[u8], want_w: u32, want_h: u32) -> Result<Vec<u8>, AnswerError> {
+/// The answer as RGB8 at the crop's size.
+///
+/// A crop cut to its chart size takes only an answer of exactly that size,
+/// copied as it came: any resample moves the screentone. A crop shrunk to a
+/// smaller page takes an answer near the output's size and shape, resampled to
+/// the crop.
+fn decode_answer(answer: &[u8], region: SendRegion) -> Result<Vec<u8>, AnswerError> {
+    let (want_w, want_h) = (region.crop.w, region.crop.h);
+    let (out_w, out_h) = region.output;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_ANSWER_SIDE);
     limits.max_image_height = Some(MAX_ANSWER_SIDE);
     limits.max_alloc = Some(MAX_ANSWER_PIXELS * 4);
-    let unreadable = |detail: String| AnswerError::Unreadable(detail);
     let mut reader = image::ImageReader::new(Cursor::new(answer))
         .with_guessed_format()
-        .map_err(|error| unreadable(error.to_string()))?;
+        .map_err(|error| AnswerError::Unreadable(error.to_string()))?;
     reader.limits(limits);
-    let rgb = reader.decode().map_err(|error| unreadable(error.to_string()))?.into_rgb8();
+    let rgb = reader.decode().map_err(|error| AnswerError::Unreadable(error.to_string()))?.into_rgb8();
     let (got_w, got_h) = rgb.dimensions();
-    if got_w == want_w && got_h == want_h {
+    if (got_w, got_h) == (want_w, want_h) {
         return Ok(rgb.into_raw());
     }
-    let got = f64::from(got_w) / f64::from(got_h);
-    let want = f64::from(want_w) / f64::from(want_h);
-    if (got / want - 1.0).abs() > SHAPE_TOLERANCE {
-        return Err(AnswerError::WrongShape { got_w, got_h, want_w, want_h });
+    let wrong = AnswerError::WrongShape { got_w, got_h, want_w: out_w, want_h: out_h };
+    if region.full_size() {
+        return Err(wrong);
+    }
+    let shape = (f64::from(got_w) / f64::from(got_h)) / (f64::from(out_w) / f64::from(out_h));
+    let scale = f64::from(got_w) / f64::from(out_w);
+    if (shape - 1.0).abs() > SHAPE_TOLERANCE || !(1.0 / MAX_ANSWER_SCALE..=MAX_ANSWER_SCALE).contains(&scale) {
+        return Err(wrong);
     }
     Ok(image::imageops::resize(&rgb, want_w, want_h, image::imageops::FilterType::Lanczos3).into_raw())
 }
@@ -432,6 +511,9 @@ fn encode_rgb_png(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>, Error>
     let mut encoder = png::Encoder::new(&mut out, width, height);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
+    // The crop is read out in sRGB (`crop_samples`), and the answer is read
+    // back as sRGB.
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
     let mut writer = encoder.write_header().map_err(failed)?;
     writer.write_image_data(rgb).map_err(failed)?;
     writer.finish().map_err(failed)?;
@@ -548,13 +630,63 @@ mod tests {
     #[test]
     fn a_model_without_the_512_tier_is_never_sent_one() {
         for model in [NANO_BANANA_2_1, NANO_BANANA_PRO] {
-            let regions = send_regions(Rect::new(2000, 2000, 100, 100), BIG, BIG, model);
+            let regions = send_regions(Rect::new(600, 700, 40, 20), 1200, 1600, model);
             assert!(!regions.is_empty());
             assert!(regions.iter().all(|region| region.tier == Tier::One), "{model:?}");
             assert_eq!(regions[0].output, (1024, 1024));
         }
         assert_eq!(NANO_BANANA_2.smallest(), Tier::Half);
         assert_eq!(NANO_BANANA_2_1.smallest(), Tier::One);
+    }
+
+    /// 2K costs Pro what 1K does, so it goes first where it holds the hole at
+    /// full size: more page for the same price. Not where it would resample.
+    #[test]
+    fn pro_takes_2k_when_it_needs_no_resample() {
+        let region = send_region(Rect::new(2000, 2000, 100, 100), BIG, BIG, NANO_BANANA_PRO).unwrap();
+        assert_eq!((region.tier, region.ratio, region.output), (Tier::Two, "1:1", (2048, 2048)));
+        assert!(region.full_size());
+        let region = send_region(Rect::new(600, 700, 40, 20), 1200, 1600, NANO_BANANA_PRO).unwrap();
+        assert_eq!((region.tier, region.output), (Tier::One, (1024, 1024)), "2K would be shrunk on this page");
+        let region = send_region(Rect::new(2000, 2000, 100, 100), BIG, BIG, NANO_BANANA_2_1).unwrap();
+        assert_eq!(region.tier, Tier::One, "2.1 still saves by going small");
+    }
+
+    /// A shrunk 1:1 is a resample, and a full-size crop of another shape is not.
+    #[test]
+    fn a_full_size_crop_of_any_shape_wins_over_a_shrunk_square() {
+        // 2.1 has no 512 tier, and 1:1 at 1K is wider than the page.
+        let region = send_region(Rect::new(450, 700, 100, 100), 1000, 1500, NANO_BANANA_2_1).unwrap();
+        assert_eq!((region.ratio, region.crop.w, region.crop.h), ("9:16", 768, 1376), "the least page at full size");
+        assert!(region.full_size());
+        // A 500 px wide strip: 1:1 at 512 would be shrunk to 500.
+        let regions = send_regions(Rect::new(200, 1400, 100, 100), 500, 3000, NANO_BANANA_2);
+        assert_eq!((regions[0].ratio, regions[0].crop.w, regions[0].crop.h), ("1:4", 256, 1024));
+        let square = regions.iter().position(|region| region.ratio == "1:1").unwrap();
+        assert!(!regions[square].full_size());
+        assert!(regions[..square].iter().all(SendRegion::full_size));
+    }
+
+    /// A region nearly as big as its page keeps less context rather than being
+    /// refused.
+    #[test]
+    fn a_region_too_big_for_the_context_keeps_less_and_is_still_sent() {
+        let hole = Rect::new(50, 50, 900, 1300);
+        let region = send_region(hole, 1000, 1400, NANO_BANANA_2).unwrap();
+        let SendRegion { crop, .. } = region;
+        assert!(crop.x >= 0 && crop.y >= 0 && crop.right() <= 1000 && crop.bottom() <= 1400, "{crop:?}");
+        assert!(crop.x <= hole.x && crop.y <= hole.y && crop.right() >= hole.right() && crop.bottom() >= hole.bottom());
+        let (context, _) = plan(hole, 1000, 1400, NANO_BANANA_2).unwrap();
+        assert!(context < CONTEXT, "{context}");
+    }
+
+    #[test]
+    fn a_hole_partly_off_the_page_gets_a_crop_on_the_page() {
+        let hole = Rect::new(-30, 100, 80, 50);
+        let SendRegion { crop, .. } = send_region(hole, 600, 600, NANO_BANANA_2).unwrap();
+        assert!(crop.x == 0 && crop.right() <= 600 && crop.y >= 0 && crop.bottom() <= 600, "{crop:?}");
+        assert!(crop.right() >= hole.right() && crop.y <= hole.y && crop.bottom() >= hole.bottom());
+        assert!(send_regions(Rect::new(-100, 100, 50, 50), 600, 600, NANO_BANANA_2).is_empty());
     }
 
     #[test]
@@ -626,6 +758,16 @@ mod tests {
         assert!(plan_group(own, &[off], 600, 600, Model::DEFAULT).unwrap().members.is_empty());
     }
 
+    /// `others` should not name `own`, but if it does the plan is the same.
+    #[test]
+    fn own_among_the_others_changes_nothing() {
+        let own = at(2000, 2000, 100, 60);
+        let near = at(2200, 2100, 80, 50);
+        let group = plan_group(own, &[own, near], BIG, BIG, Model::DEFAULT).unwrap();
+        assert_eq!(group.members, vec![0, 1]);
+        assert_eq!(group.regions, plan_group(own, &[near], BIG, BIG, Model::DEFAULT).unwrap().regions);
+    }
+
     #[test]
     fn a_region_that_fits_nowhere_has_no_group() {
         assert_eq!(plan_group(at(0, 0, 4900, 4900), &[], BIG, BIG, Model::DEFAULT), None);
@@ -641,28 +783,109 @@ mod tests {
         encode_rgb_png(width, height, &data).unwrap()
     }
 
+    /// A crop cut to its chart size, and one shrunk to a 400 px page.
+    fn full(w: u32, h: u32) -> SendRegion {
+        SendRegion { crop: Rect::new(0, 0, w, h), output: (w, h), ratio: "1:1", tier: Tier::Half }
+    }
+    fn shrunk() -> SendRegion {
+        SendRegion { crop: Rect::new(0, 0, 400, 400), output: (512, 512), ratio: "1:1", tier: Tier::Half }
+    }
+
+    fn png_of(width: u32, height: u32, color: png::ColorType, depth: png::BitDepth, data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut encoder = png::Encoder::new(&mut out, width, height);
+        encoder.set_color(color);
+        encoder.set_depth(depth);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(data).unwrap();
+        writer.finish().unwrap();
+        out
+    }
+
     #[test]
     fn an_answer_of_the_wrong_shape_is_refused() {
-        let error = decode_answer(&answer_png(512, 256, [255; 3]), 512, 512).unwrap_err();
+        let error = decode_answer(&answer_png(512, 256, [255; 3]), full(512, 512)).unwrap_err();
         assert!(matches!(error, AnswerError::WrongShape { .. }), "{error}");
+        let error = decode_answer(&answer_png(512, 256, [255; 3]), shrunk()).unwrap_err();
+        assert!(matches!(error, AnswerError::WrongShape { .. }), "{error}");
+    }
+
+    /// A crop at chart size maps one to one onto the page, so an answer of any
+    /// other size, even the right shape, is refused rather than resampled.
+    #[test]
+    fn a_full_size_crop_takes_only_an_answer_of_its_exact_size() {
+        for (w, h) in [(1024, 1024), (520, 520), (512, 508)] {
+            let error = decode_answer(&answer_png(w, h, [200; 3]), full(512, 512)).unwrap_err();
+            assert!(matches!(error, AnswerError::WrongShape { got_w, got_h, want_w: 512, want_h: 512 } if (got_w, got_h) == (w, h)), "{error}");
+        }
     }
 
     #[test]
     fn an_answer_at_crop_size_is_not_resampled() {
         let data: Vec<u8> = (0..16 * 16 * 3).map(|index| (index % 251) as u8).collect();
         let answer = encode_rgb_png(16, 16, &data).unwrap();
-        assert_eq!(decode_answer(&answer, 16, 16).unwrap(), data);
+        assert_eq!(decode_answer(&answer, full(16, 16)).unwrap(), data);
     }
 
     #[test]
-    fn an_answer_of_the_right_shape_is_resized_to_the_crop() {
-        let rgb = decode_answer(&answer_png(512, 512, [9, 9, 9]), 400, 400).unwrap();
+    fn an_answer_for_a_shrunk_crop_is_resized_to_the_crop() {
+        // Black on the left half, white on the right.
+        let data: Vec<u8> = (0..512 * 512).flat_map(|at| [if at % 512 < 256 { 0 } else { 255 }; 3]).collect();
+        let rgb = decode_answer(&encode_rgb_png(512, 512, &data).unwrap(), shrunk()).unwrap();
         assert_eq!(rgb.len(), 400 * 400 * 3);
+        for y in [0usize, 200, 399] {
+            assert_eq!(&rgb[(y * 400 + 20) * 3..][..3], &[0, 0, 0]);
+            assert_eq!(&rgb[(y * 400 + 380) * 3..][..3], &[255, 255, 255]);
+        }
+        // Near the asked size is a near miss; twice it is another size.
+        assert!(decode_answer(&answer_png(540, 540, [9; 3]), shrunk()).is_ok());
+        assert!(matches!(decode_answer(&answer_png(1024, 1024, [9; 3]), shrunk()), Err(AnswerError::WrongShape { .. })));
+    }
+
+    #[test]
+    fn an_answer_with_alpha_keeps_its_colour() {
+        let data: Vec<u8> = [10u8, 20, 30, 128].iter().copied().cycle().take(8 * 8 * 4).collect();
+        let answer = png_of(8, 8, png::ColorType::Rgba, png::BitDepth::Eight, &data);
+        let rgb = decode_answer(&answer, full(8, 8)).unwrap();
+        assert!(rgb.chunks(3).all(|pixel| pixel == [10, 20, 30]), "{:?}", &rgb[..6]);
+    }
+
+    #[test]
+    fn a_16_bit_answer_is_read_at_8_bits() {
+        let data: Vec<u8> = [0xffu8, 0xff, 0x00, 0x00, 0x64, 0x64].iter().copied().cycle().take(8 * 8 * 6).collect();
+        let answer = png_of(8, 8, png::ColorType::Rgb, png::BitDepth::Sixteen, &data);
+        let rgb = decode_answer(&answer, full(8, 8)).unwrap();
+        assert!(rgb.chunks(3).all(|pixel| pixel == [255, 0, 100]), "{:?}", &rgb[..6]);
+    }
+
+    #[test]
+    fn a_jpeg_answer_is_read() {
+        let mut answer = Vec::new();
+        let gray = image::RgbImage::from_pixel(64, 64, image::Rgb([120, 120, 120]));
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut answer, 90)
+            .encode_image(&gray)
+            .unwrap();
+        let rgb = decode_answer(&answer, full(64, 64)).unwrap();
+        assert!(rgb.iter().all(|sample| sample.abs_diff(120) <= 2));
+    }
+
+    #[test]
+    fn an_answer_past_the_largest_side_is_unreadable_and_never_decoded() {
+        let answer = png_of(MAX_ANSWER_SIDE + 1, 1, png::ColorType::Grayscale, png::BitDepth::Eight, &vec![0; MAX_ANSWER_SIDE as usize + 1]);
+        assert!(matches!(decode_answer(&answer, full(MAX_ANSWER_SIDE + 1, 1)), Err(AnswerError::Unreadable(_))));
     }
 
     #[test]
     fn garbage_is_unreadable_not_a_panic() {
-        assert!(matches!(decode_answer(b"not an image", 8, 8), Err(AnswerError::Unreadable(_))));
+        assert!(matches!(decode_answer(b"not an image", full(8, 8)), Err(AnswerError::Unreadable(_))));
+    }
+
+    #[test]
+    fn the_sent_crop_says_it_is_srgb() {
+        let page = gray_page(1000, 1000);
+        let prepared = prepared_over(&page, Rect::new(400, 400, 60, 30));
+        let reader = png::Decoder::new(Cursor::new(prepared.marked_png())).read_info().unwrap();
+        assert!(reader.info().srgb.is_some());
     }
 
     fn gray_page(width: u32, height: u32) -> Raster {
@@ -682,6 +905,18 @@ mod tests {
 
     fn fitted_over(page: &Raster, rect: Rect) -> Fitted {
         crate::fit::fit(page, &crate::mask::Mask::filled(rect), 1.0, 0.0, &crate::fit::EdgeMap::none(page.width, page.height), true)
+    }
+
+    /// A colour page: a warm gradient, with no blue in it.
+    fn colour_page(width: u32, height: u32) -> Raster {
+        Raster {
+            mode: crate::image::ColorMode::Rgb,
+            data: (0..width * height).flat_map(|at| {
+                let (x, y) = (at % width, at / width);
+                [(150 + x % 100) as u8, (90 + y % 80) as u8, 60]
+            }).collect(),
+            ..gray_page(width, height)
+        }
     }
 
     fn prepared_over(page: &Raster, hole: Rect) -> Prepared {
@@ -710,15 +945,33 @@ mod tests {
         let page = gray_page(1000, 1000);
         let fitted = fitted_over(&page, Rect::new(400, 400, 60, 30));
         let region = regions_for(&page, &fitted, Model::DEFAULT).unwrap()[0];
-        let companion = Mask::filled(Rect::new(500, 420, 40, 20));
+        // Close enough that its box overlaps the own applied mask's box.
+        let companion_box = Rect::new(462, 400, 40, 20);
+        let companion = Mask::filled(companion_box);
         let prepared = Prepared::new(&page, &fitted, region, None, std::slice::from_ref(&companion)).unwrap();
         let sent = image::load_from_memory(prepared.marked_png()).unwrap().into_rgb8();
         let crop = region.crop;
-        let mark = sent.get_pixel((520 - crop.x) as u32, (430 - crop.y) as u32);
+        let mark = sent.get_pixel((480 - crop.x) as u32, (410 - crop.y) as u32);
         assert!(mark[2] > mark[0], "the companion is marked: {mark:?}");
         let rendered = prepared.finish(&answer_png(512, 512, [128, 128, 128])).unwrap();
         let bounds = rendered.mask.bounds;
-        assert!(!bounds.contains(520, 430), "nothing is written over the companion: {bounds:?}");
+        assert!(bounds.intersection(companion_box).w > 0, "the test reaches the companion: {bounds:?}");
+        let own = prepared.render.applied();
+        for y in companion_box.y..companion_box.bottom() {
+            for x in companion_box.x..companion_box.right() {
+                if !own.contains(x, y) {
+                    assert!(!rendered.mask.contains(x, y), "written over the companion at ({x}, {y})");
+                }
+            }
+        }
+        for y in 0..bounds.h {
+            for x in 0..bounds.w {
+                let (px, py) = (bounds.x + i64::from(x), bounds.y + i64::from(y));
+                if !own.contains(px, py) {
+                    assert_eq!(rendered.pixels.sample(x, y, 0), page.sample(px as u32, py as u32, 0), "({px}, {py})");
+                }
+            }
+        }
     }
 
     #[test]
@@ -737,11 +990,94 @@ mod tests {
         }
     }
 
+    /// The crop as sent, with the mark taken back out of every hole pixel at
+    /// or past `kept` of the hole's rows, as a model that cleaned only part of
+    /// the hole would answer.
+    fn answer_keeping(prepared: &Prepared, kept: f64) -> Vec<u8> {
+        let crop = prepared.region.crop;
+        let mut rgb = image::load_from_memory(prepared.marked_png()).unwrap().into_rgb8().into_raw();
+        let page = prepared.render.image_rgb8();
+        let bounds = prepared.render.applied().bounds;
+        let cut = bounds.y + (f64::from(bounds.h) * kept).round() as i64;
+        for y in 0..crop.h as i64 {
+            for x in 0..crop.w as i64 {
+                if crop.y + y >= cut {
+                    let at = (y * i64::from(crop.w) + x) as usize * 3;
+                    rgb[at..at + 3].copy_from_slice(&page[at..at + 3]);
+                }
+            }
+        }
+        encode_rgb_png(crop.w, crop.h, &rgb).unwrap()
+    }
+
     #[test]
     fn an_answer_that_kept_the_mark_is_refused_and_a_clean_one_is_not() {
         let page = gray_page(1000, 1000);
         let prepared = prepared_over(&page, Rect::new(400, 400, 200, 200));
-        assert!(matches!(prepared.finish(&answer_png(512, 512, [150, 170, 230])), Err(AnswerError::KeptMark)));
+        assert!(matches!(prepared.finish(prepared.marked_png()), Err(AnswerError::KeptMark)));
+        assert!(prepared.finish(&answer_keeping(&prepared, 0.0)).is_ok());
         assert!(prepared.finish(&answer_png(512, 512, [170, 170, 170])).is_ok());
+    }
+
+    /// Under the old mean, a mark kept over a fifth of the hole read about 13
+    /// levels bluer overall and passed.
+    #[test]
+    fn a_mark_kept_over_part_of_the_hole_is_refused() {
+        let page = gray_page(1000, 1000);
+        let prepared = prepared_over(&page, Rect::new(400, 400, 200, 200));
+        assert!(matches!(prepared.finish(&answer_keeping(&prepared, 0.2)), Err(AnswerError::KeptMark)));
+    }
+
+    /// A blue cast over the whole answer is not a kept mark: the ring is read
+    /// from the answer too.
+    #[test]
+    fn a_cast_over_the_whole_answer_is_not_a_kept_mark() {
+        let page = gray_page(1000, 1000);
+        let prepared = prepared_over(&page, Rect::new(400, 400, 200, 200));
+        assert!(prepared.finish(&answer_png(512, 512, [150, 170, 230])).is_ok());
+        let cast: Vec<u8> = prepared.render.image_rgb8().chunks(3)
+            .flat_map(|pixel| [pixel[0].saturating_sub(20), pixel[1], pixel[2].saturating_add(40)]).collect();
+        assert!(prepared.finish(&encode_rgb_png(512, 512, &cast).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn a_kept_mark_is_caught_on_a_colour_page_too() {
+        let page = colour_page(1000, 1000);
+        let prepared = prepared_over(&page, Rect::new(400, 400, 200, 200));
+        assert!(matches!(prepared.finish(prepared.marked_png()), Err(AnswerError::KeptMark)));
+        assert!(matches!(prepared.finish(&answer_keeping(&prepared, 0.2)), Err(AnswerError::KeptMark)));
+        assert!(prepared.finish(&answer_keeping(&prepared, 0.0)).is_ok());
+    }
+
+    /// A page with nothing on it is an empty region, not one too large.
+    #[test]
+    fn an_empty_page_is_an_empty_region() {
+        let page = gray_page(1000, 1000);
+        let fitted = fitted_over(&page, Rect::new(400, 400, 60, 30));
+        let empty = gray_page(0, 0);
+        let error = group_for(&empty, &fitted, Model::DEFAULT, &[]).unwrap_err();
+        assert!(matches!(error, Error::Run(_)), "{error}");
+        let crop = Rect::new(0, 0, 512, 512);
+        assert!(matches!(PreparedRender::prepare_in_crop(&empty, &fitted, crop, Preprocessing::V3), Err(Error::Run(_))));
+    }
+
+    #[test]
+    fn a_crop_off_the_page_is_refused_before_it_is_cut() {
+        let page = gray_page(1000, 1000);
+        let fitted = fitted_over(&page, Rect::new(900, 400, 60, 30));
+        let crop = Rect::new(600, 200, 512, 512);
+        assert!(matches!(PreparedRender::prepare_in_crop(&page, &fitted, crop, Preprocessing::V3), Err(Error::Run(_))));
+    }
+
+    #[test]
+    fn a_region_partly_off_the_page_is_cleaned_on_the_page() {
+        let page = gray_page(600, 600);
+        let fitted = fitted_over(&page, Rect::new(-30, 100, 80, 50));
+        let region = regions_for(&page, &fitted, Model::DEFAULT).unwrap()[0];
+        assert!(region.crop.x >= 0 && region.crop.right() <= 600);
+        let prepared = Prepared::new(&page, &fitted, region, None, &[]).unwrap();
+        let rendered = prepared.finish(&answer_png(region.crop.w, region.crop.h, [128; 3])).unwrap();
+        let bounds = rendered.mask.bounds;
+        assert!(bounds.x >= 0 && bounds.right() <= 600 && bounds.w > 0, "{bounds:?}");
     }
 }

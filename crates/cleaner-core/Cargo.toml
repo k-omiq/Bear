@@ -28,11 +28,13 @@ gif = "0.14"
 image-webp = "0.2"
 tiff = "0.11"
 # Additional source decoders, including native JPEG - see `image::foreign`.
-# Four codecs and nothing else: `default-features = false` keeps out the
-# encoders, the format guessing and the whole `imageops` surface, none of which
-# this crate wants, and keeps the build pure Rust, which is what was settled
-# when libvips was reversed. AVIF and HEIC are absent for that reason and not
-# by oversight.
+# Five codecs and nothing else: `default-features = false` keeps out every other
+# format and keeps the build pure Rust, which is what was settled when libvips
+# was reversed. AVIF and HEIC are absent for that reason and not by oversight.
+# `png` is here for Nano Banana's answers, which arrive as PNG or JPEG and are
+# read by guessing the format (`engines::nano_banana`); source PNGs still go
+# through the `png` crate above. That module also resizes an answer for a page
+# smaller than the chart size with `imageops`.
 image = { version = "0.25", default-features = false, features = [
   "jpeg", "png", "webp", "gif", "bmp",
 ] }
