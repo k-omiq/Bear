@@ -11,6 +11,132 @@ use crate::{
     strip::Strip,
 };
 
+/// How a layer saved whole in native coordinates (no native parts) is drawn
+/// on a chapter with a turned page: for each page of the native strip it was
+/// laid out in, the map between its own pixels and the anchor page's display
+/// pixels. Its pixels are cut per native page and each part turned with its
+/// page (`Job::load_display_patch`), so a layer hanging over a join from a
+/// turned page lies in two frames, and this is how one pixel crosses between
+/// them.
+pub struct NativeFrame {
+    pieces: Vec<NativePiece>,
+}
+
+struct NativePiece {
+    /// The page in the layer's own pixels.
+    native: Rect,
+    /// The page in the anchor page's display pixels.
+    display: Rect,
+    orientation: image::orientation::Orientation,
+}
+
+impl NativeFrame {
+    pub fn of(project: &Project, record: &PatchRecord) -> NativeFrame {
+        let display = strip(project, true);
+        let placed = |source_idx: usize| {
+            let position = project.strip.order.iter().position(|i| *i == source_idx)?;
+            display.pages().get(position).map(|page| (page.x_offset, page.y_offset))
+        };
+        let origin = placed(record.source_idx).unwrap_or((0, 0));
+        let piece = |source_idx: usize, at: (i64, i64)| {
+            let source = project.sources.get(source_idx)?;
+            let (x, y) = placed(source_idx)?;
+            let (w, h) = source.orientation.size(source.w, source.h);
+            Some(NativePiece {
+                native: Rect::new(at.0, at.1, source.w, source.h),
+                display: Rect::new(x - origin.0, y - origin.1, w, h),
+                orientation: source.orientation,
+            })
+        };
+        if project.strip.mode == StripMode::Single {
+            return NativeFrame { pieces: piece(record.source_idx, (0, 0)).into_iter().collect() };
+        }
+        let (order, native) = native_layout(project, record);
+        let anchor = order.iter().position(|i| *i == record.source_idx)
+            .and_then(|position| native.pages().get(position))
+            .map(|page| (page.x_offset, page.y_offset))
+            .unwrap_or((0, 0));
+        let pieces = order.iter().zip(native.pages())
+            .filter_map(|(&source_idx, page)| piece(source_idx, (page.x_offset - anchor.0, page.y_offset - anchor.1)))
+            .collect();
+        NativeFrame { pieces }
+    }
+
+    /// Where the layer's pixel `(x, y)` is drawn, before its layer style.
+    pub fn to_display(&self, x: i64, y: i64) -> Option<(i64, i64)> {
+        let piece = self.pieces.iter().find(|piece| piece.native.contains(x, y))?;
+        let (w, h) = (piece.native.w, piece.native.h);
+        let (dx, dy) = piece.orientation.pixel(x - piece.native.x, y - piece.native.y, w, h);
+        Some((dx + piece.display.x, dy + piece.display.y))
+    }
+
+    /// The layer's pixel drawn at display pixel `(x, y)`.
+    pub fn to_native(&self, x: i64, y: i64) -> Option<(i64, i64)> {
+        let piece = self.pieces.iter().find(|piece| piece.display.contains(x, y))?;
+        let (w, h) = (piece.display.w, piece.display.h);
+        let (nx, ny) = piece.orientation.inverse().pixel(x - piece.display.x, y - piece.display.y, w, h);
+        Some((nx + piece.native.x, ny + piece.native.y))
+    }
+
+    /// The display pixels `rect` of the layer's own covers, or `None` where
+    /// part of it lies on no page.
+    pub fn display_bounds(&self, rect: Rect) -> Option<Rect> {
+        let mut covered = 0u64;
+        let mut bounds: Option<Rect> = None;
+        for piece in &self.pieces {
+            let part = rect.intersection(piece.native);
+            if part.w == 0 || part.h == 0 {
+                continue;
+            }
+            covered += u64::from(part.w) * u64::from(part.h);
+            let local = Rect::new(part.x - piece.native.x, part.y - piece.native.y, part.w, part.h);
+            let mut shown = piece.orientation.rect(local, piece.native.w, piece.native.h);
+            shown.x += piece.display.x;
+            shown.y += piece.display.y;
+            bounds = Some(match bounds {
+                None => shown,
+                Some(b) => Rect::new(
+                    b.x.min(shown.x),
+                    b.y.min(shown.y),
+                    (b.right().max(shown.right()) - b.x.min(shown.x)) as u32,
+                    (b.bottom().max(shown.bottom()) - b.y.min(shown.y)) as u32,
+                ),
+            });
+        }
+        (covered == u64::from(rect.w) * u64::from(rect.h)).then_some(bounds).flatten()
+    }
+
+    /// `mask`, in display pixels, as the layer's own: each pixel with its
+    /// coverage, where it lands on a page.
+    pub fn mask_to_native(&self, mask: &Mask) -> Mask {
+        let mut points = Vec::new();
+        for y in mask.bounds.y..mask.bounds.bottom() {
+            for x in mask.bounds.x..mask.bounds.right() {
+                let coverage = mask.coverage(x, y);
+                if coverage == 0 {
+                    continue;
+                }
+                if let Some(at) = self.to_native(x, y) {
+                    points.push((at, coverage));
+                }
+            }
+        }
+        let Some(((x0, y0), (x1, y1))) = points.iter().fold(None, |acc: Option<((i64, i64), (i64, i64))>, ((x, y), _)| {
+            Some(match acc {
+                None => ((*x, *y), (*x, *y)),
+                Some(((ax, ay), (bx, by))) => ((ax.min(*x), ay.min(*y)), (bx.max(*x), by.max(*y))),
+            })
+        }) else {
+            return Mask::empty(Rect::new(0, 0, 0, 0));
+        };
+        let mut out = Mask::empty(Rect::new(x0, y0, (x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32));
+        for ((x, y), coverage) in points {
+            out.set_coverage(x, y, coverage);
+        }
+        out
+    }
+}
+
 pub fn strip(project: &Project, display: bool) -> Strip {
     Strip::of_sizes(
         &project
@@ -442,7 +568,7 @@ impl Job {
     }
     /// Use the revision-aware, locked commit path for every display edit.
     pub fn complete_display_region(&mut self, source_idx: usize, patch: &Patch, review: Option<String>) -> Result<(), StoreError> {
-        self.complete_region_with_policy(source_idx, patch, review, super::GeometryPolicy::Legacy, None, true)
+        self.complete_region_with_policy(source_idx, patch, review, super::GeometryPolicy::Legacy, None, true, None)
     }
 
     pub(super) fn store_native_parts(&self, source_idx: usize, patch: &Patch) -> Result<Vec<NativePart>, StoreError> {

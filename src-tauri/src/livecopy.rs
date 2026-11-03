@@ -20,23 +20,28 @@
 //!
 //! Called from [`crate::underlay::refresh_dependencies_of`], which every
 //! change to a layer passes through, and after a run commits a page, under the
-//! job lock that change holds. A copy that cannot be drawn again here is
-//! flagged for review like any other later layer instead ([`redrawn_here`]):
-//! where its area runs off its page, and where it was saved whole on a page
-//! turned since, whose layer style is stated in the page's native frame.
+//! job lock that change holds. A copy saved whole on a page turned since it
+//! was made is redrawn in its page's native frame, each pixel from where it is
+//! drawn, and an area that runs over a long strip join is read across it. A
+//! copy that cannot be drawn again here is flagged for review like any other
+//! later layer instead ([`redrawn_here`]): where its area runs off the page of
+//! a chapter of single pages, off the strip, or over the gutter beside a
+//! narrower page.
 //!
 //! Each redraw writes a revision of the copy, as any edit does. The ones no
 //! undo step names are dropped when the chapter is next opened
 //! ([`prune_revisions`]), when nothing in the interface can still hold one.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::Path;
 
 use cleaner_core::composite::composite_region;
+use cleaner_core::image::Raster;
 use cleaner_core::mask::Rect;
-use cleaner_core::project::orientation::display_bbox;
+use cleaner_core::project::orientation::{display_bbox, NativeFrame};
 use cleaner_core::project::{Job, PatchRecord};
-use cleaner_core::strip::Strip;
+use cleaner_core::strip::{DecodeWindow, EdgePad, Strip};
 
 use crate::underlay::Pages;
 
@@ -47,13 +52,67 @@ pub(crate) fn is_live(record: &PatchRecord) -> bool {
         && snapshot.get("live").and_then(|v| v.as_bool()) == Some(true)
 }
 
-/// Whether [`redraw`] keeps `record` drawn from its area: a live copy stored
-/// in display coordinates ([`Job::stored_in_display_frame`]) whose area lies
-/// on its own page.
+/// Whether [`redraw`] keeps `record` drawn from its area: a live copy whose
+/// area can be read, on its page or, in a long strip, across a join
+/// ([`source_window`]).
 pub(crate) fn redrawn_here(job: &Job, record: &PatchRecord) -> bool {
-    let Some(source) = job.project.sources.get(record.source_idx) else { return false };
+    let strip = crate::run::strip_of(&job.project);
+    source_window(job, &strip, record, record.bbox).is_some()
+}
+
+/// Where the area `area` of copy `record` (in the frame the copy is stored in)
+/// shows, in the display pixels of the copy's own page: the area itself for a
+/// copy stored in display coordinates, and its pixels turned with their
+/// pages for one saved whole on a page turned since
+/// ([`NativeFrame`]). `None` where that is not all on pages a read can take
+/// at once: off its page on a chapter of single pages, and off the strip, or
+/// across a gutter beside a narrower page, in a long strip.
+fn source_window(job: &Job, strip: &Strip, record: &PatchRecord, area: Rect) -> Option<Rect> {
+    let window = if job.stored_in_display_frame(record) {
+        area
+    } else {
+        NativeFrame::of(&job.project, record).display_bounds(area)?
+    };
+    if window.w == 0 || window.h == 0 {
+        return None;
+    }
+    let source = job.project.sources.get(record.source_idx)?;
     let (width, height) = source.orientation.size(source.w, source.h);
-    on_page(record.bbox, width, height) && job.stored_in_display_frame(record)
+    if on_page(window, width, height) {
+        return Some(window);
+    }
+    if job.project.strip.mode != cleaner_core::project::StripMode::Longstrip {
+        return None;
+    }
+    let global = moved(window, placed(job, strip, record.source_idx)?);
+    readable_in_strip(strip, global).then_some(window)
+}
+
+/// Where page `source_idx` sits in the display strip.
+fn placed(job: &Job, strip: &Strip, source_idx: usize) -> Option<(i64, i64)> {
+    let position = job.project.strip.order.iter().position(|&index| index == source_idx)?;
+    strip.pages().get(position).map(|page| (page.x_offset, page.y_offset))
+}
+
+/// Whether one read of the strip takes `global` whole: inside the strip, and
+/// as wide as each page it crosses (`strip::read_window_borrowing` refuses a
+/// window over a gutter).
+fn readable_in_strip(strip: &Strip, global: Rect) -> bool {
+    if global.x < 0 || global.y < 0 || global.right() > i64::from(strip.width()) || global.bottom() > i64::from(strip.height()) {
+        return false;
+    }
+    let mut rows = 0u64;
+    for page in strip.pages() {
+        let part = global.intersection(page.rect());
+        if part.w == 0 || part.h == 0 {
+            continue;
+        }
+        if part.x != global.x || part.w != global.w {
+            return false;
+        }
+        rows += u64::from(part.h);
+    }
+    rows == u64::from(global.h)
 }
 
 fn on_page(area: Rect, width: u32, height: u32) -> bool {
@@ -79,12 +138,38 @@ fn shift(job: &Job, strip: &Strip, from: usize, to: usize) -> Option<(i64, i64)>
     if job.project.strip.mode != cleaner_core::project::StripMode::Longstrip {
         return None;
     }
-    let placed = |source_idx: usize| {
-        let position = job.project.strip.order.iter().position(|&index| index == source_idx)?;
-        strip.pages().get(position).map(|page| (page.x_offset, page.y_offset))
-    };
-    let (from, to) = (placed(from)?, placed(to)?);
+    let (from, to) = (placed(job, strip, from)?, placed(job, strip, to)?);
     Some((to.0 - from.0, to.1 - from.1))
+}
+
+/// The page under `window` (display pixels of page `source_idx`), as one
+/// raster: a crop of that page, or in a long strip a read across the joins
+/// [`source_window`] allowed. Each page is decoded once, in `pages`.
+fn page_under(job: &Job, pages: &mut Pages, strip: &Strip, source_idx: usize, window: Rect) -> Result<Raster, String> {
+    let page = pages.get(job, source_idx)?;
+    if on_page(window, page.width, page.height) {
+        return composite_region(page, &[], window, None).map_err(|e| e.to_string());
+    }
+    let global = moved(window, placed(job, strip, source_idx).ok_or("a live copy's page is not in the strip")?);
+    let crossed: Vec<usize> = strip.pages().iter().enumerate()
+        .filter(|(_, page)| {
+            let part = global.intersection(page.rect());
+            part.w > 0 && part.h > 0
+        })
+        .filter_map(|(position, _)| job.project.strip.order.get(position).copied())
+        .collect();
+    for &index in &crossed {
+        pages.get(job, index)?;
+    }
+    let read = cleaner_core::strip::read_window_borrowing(
+        strip,
+        DecodeWindow { rect: global, requested: global, pad: EdgePad::None },
+        |position| {
+            let index = *job.project.strip.order.get(position).ok_or("strip source missing")?;
+            pages.peek(index).map(Cow::Borrowed).ok_or_else(|| "strip page not decoded".to_owned())
+        },
+    )?;
+    Ok(read.raster)
 }
 
 /// Draw again every live copy whose area meets `touched`, the places a change
@@ -101,51 +186,79 @@ pub(crate) fn redraw(
     touched: &[Rect],
 ) -> Result<Vec<PatchRecord>, String> {
     let strip = crate::run::strip_of(&job.project);
-    // Each copy with what to add to its places to have them on `source_idx`.
-    let mut copies: Vec<(PatchRecord, (i64, i64))> = job.project.patches.iter()
-        .filter(|record| record.visible && is_live(record) && redrawn_here(job, record))
-        .filter_map(|record| Some((record.clone(), shift(job, &strip, source_idx, record.source_idx)?)))
+    // Each copy with where its area shows and what to add to its places to
+    // have them on `source_idx`.
+    let mut copies: Vec<(PatchRecord, Rect, (i64, i64))> = job.project.patches.iter()
+        .filter(|record| record.visible && is_live(record))
+        .filter_map(|record| Some((
+            record.clone(),
+            source_window(job, &strip, record, record.bbox)?,
+            shift(job, &strip, source_idx, record.source_idx)?,
+        )))
         .collect();
-    copies.sort_by_key(|(record, _)| record.order);
+    copies.sort_by_key(|(record, _, _)| record.order);
     let mut touched = touched.to_vec();
-    let reached = |copy: &PatchRecord, at: (i64, i64), touched: &[Rect]| {
-        Some(copy.id.as_str()) == changed || touched.iter().any(|rect| overlaps(*rect, moved(copy.bbox, at)))
-    };
     let mut redrawn = Vec::new();
-    for (copy, at) in copies {
-        if !reached(&copy, at, &touched) {
+    for (copy, window, at) in copies {
+        let reached = Some(copy.id.as_str()) == changed || touched.iter().any(|rect| overlaps(*rect, moved(window, at)));
+        if !reached {
             continue;
         }
-        let mut patch = job.load_display_stored_patch(&copy).map_err(|e| e.to_string())?;
+        let display = job.stored_in_display_frame(&copy);
+        let mut patch = if display { job.load_display_stored_patch(&copy) } else { job.load_stored_patch(&copy) }
+            .map_err(|e| e.to_string())?;
         let area = patch.mask.bounds;
-        let page = pages.get(job, copy.source_idx)?;
-        if !on_page(area, page.width, page.height) {
-            continue;
-        }
+        let Some(window) = source_window(job, &strip, &copy, area) else { continue };
         // The layers under the area, from this page and, in a long strip,
-        // hanging over a join from the next one, on this page's pixels.
+        // the pages beside it, on the window's pixels.
         let mut under = Vec::new();
         for record in &job.project.patches {
             if !record.visible || record.id == copy.id || (is_live(record) && record.order > copy.order) {
                 continue;
             }
             let Some(by) = shift(job, &strip, copy.source_idx, record.source_idx) else { continue };
-            if !overlaps(moved(display_bbox(&job.project, record), by), area) {
+            if !overlaps(moved(display_bbox(&job.project, record), by), window) {
                 continue;
             }
             let mut layer = job.load_display_patch(record).map_err(|e| e.to_string())?;
             for mask in [&mut layer.mask, &mut layer.ink] {
-                mask.bounds = moved(mask.bounds, by);
+                mask.bounds = moved(mask.bounds, (by.0 - window.x, by.1 - window.y));
             }
             under.push(layer);
         }
-        let pixels = composite_region(page, &under, area, None).map_err(|e| e.to_string())?;
+        let base = page_under(job, pages, &strip, copy.source_idx, window)?;
+        let shown = composite_region(&base, &under, Rect::new(0, 0, window.w, window.h), None).map_err(|e| e.to_string())?;
+        if shown.width != window.w || shown.height != window.h {
+            continue;
+        }
+        let pixels = if display {
+            shown
+        } else {
+            // Each of the copy's own pixels takes what shows where it is drawn.
+            let frame = NativeFrame::of(&job.project, &copy);
+            let mut pixels = patch.pixels.clone();
+            for y in 0..area.h {
+                for x in 0..area.w {
+                    let Some((dx, dy)) = frame.to_display(area.x + i64::from(x), area.y + i64::from(y)) else { continue };
+                    let (sx, sy) = ((dx - window.x) as u32, (dy - window.y) as u32);
+                    for channel in 0..pixels.mode.samples() {
+                        pixels.set_sample(x, y, channel, shown.sample(sx, sy, channel));
+                    }
+                }
+            }
+            pixels
+        };
         if pixels.width != area.w || pixels.height != area.h || pixels.data == patch.pixels.data {
             continue;
         }
         patch.pixels = pixels;
-        job.complete_display_region(copy.source_idx, &patch, copy.review_state.clone())
-            .map_err(|e| e.to_string())?;
+        let review = copy.review_state.clone();
+        if display {
+            job.complete_display_region(copy.source_idx, &patch, review)
+        } else {
+            job.complete_native_region(copy.source_idx, &patch, review, &copy.native_order)
+        }
+        .map_err(|e| e.to_string())?;
         touched.push(moved(display_bbox(&job.project, &copy), at));
         if let Some(stored) = job.project.patches.iter().find(|record| record.id == copy.id) {
             redrawn.push(stored.clone());

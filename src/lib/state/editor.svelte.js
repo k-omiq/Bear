@@ -1238,8 +1238,12 @@ export function goToPage(index) {
   // undo the scroll the request above is about to make.
   if (!longstrip) editor.scroll = { top: 0, left: 0 }
   // A held Patch or Gradient selection is drawn on the page it was made on;
-  // turned away from, it would still Apply onto a page no longer shown.
-  if (!longstrip) clearSelection()
+  // turned away from, it would still Apply onto a page no longer shown. A
+  // live Gradient's last change is sent first (`onSelectionLeave`).
+  if (!longstrip) {
+    leaveSelection()
+    clearSelection()
+  }
   clearHighlight()
   // The window follows the reader. Not awaited: a page turn is
   // synchronous and the regions filling in a frame later is the whole of the
@@ -1450,8 +1454,12 @@ export function setTool(tool) {
   // A beta tool is not there while Settings > Beta is off: its key, like
   // its rail button, does nothing (`tools.js#BETA_TOOLS`).
   if (!toolOffered(tool, session.betaTools)) return
-  // A held Patch or Gradient selection belongs to the tool that drew it.
-  if (editor.tool !== tool) clearSelection()
+  // A held Patch or Gradient selection belongs to the tool that drew it. A
+  // live Gradient's last change is sent first (`onSelectionLeave`).
+  if (editor.tool !== tool) {
+    leaveSelection()
+    clearSelection()
+  }
   editor.tool = tool
   openWindow('tool')
 }
@@ -2916,6 +2924,30 @@ const selectionEscapes = new Set()
 export function onSelectionEscape(handler) {
   selectionEscapes.add(handler)
   return () => selectionEscapes.delete(handler)
+}
+
+/**
+ * Who hears that a held selection is about to go because the user moved on:
+ * a tool switch, or a turn to another page. Called before the selection is
+ * cleared, while the page and the tool it was made with are still the ones
+ * in use, so the live Gradient tool sends a change still waiting rather than
+ * dropping it (`retouch.svelte.js`).
+ *
+ * @type {Set<() => void>}
+ */
+const selectionLeaves = new Set()
+
+/**
+ * @param {() => void} handler
+ * @returns {() => void} unregister
+ */
+export function onSelectionLeave(handler) {
+  selectionLeaves.add(handler)
+  return () => selectionLeaves.delete(handler)
+}
+
+function leaveSelection() {
+  for (const handler of selectionLeaves) handler()
 }
 
 /**

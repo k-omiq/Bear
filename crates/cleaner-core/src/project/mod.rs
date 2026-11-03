@@ -1918,6 +1918,7 @@ impl Job {
             GeometryPolicy::TextShape,
             Some(plan_identity_sha256.to_owned()),
             self.project.text_shape_plans.iter().find(|r|r.same_identity(&patch.id,plan_identity_sha256)).is_some_and(|r|r.display_coordinates),
+            None,
         )
     }
 
@@ -2230,9 +2231,33 @@ impl Job {
             GeometryPolicy::Legacy,
             None,
             false,
+            None,
         )
     }
 
+    /// [`Job::complete_region`] for an edit of a layer saved whole in native
+    /// coordinates, laid out in `native_order` (its record's, empty for the
+    /// strip's own): the written record keeps that order, so the patch stays
+    /// in the frame it was edited in however the strip was reordered since.
+    pub fn complete_native_region(
+        &mut self,
+        source_idx: usize,
+        patch: &Patch,
+        review_state: Option<String>,
+        native_order: &[usize],
+    ) -> Result<(), StoreError> {
+        self.complete_region_with_policy(
+            source_idx,
+            patch,
+            review_state,
+            GeometryPolicy::Legacy,
+            None,
+            false,
+            Some(native_order.to_vec()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn complete_region_with_policy(
         &mut self,
         source_idx: usize,
@@ -2241,6 +2266,7 @@ impl Job {
         geometry_policy: GeometryPolicy,
         text_shape_plan_identity: Option<String>,
         display_coordinates: bool,
+        native_order: Option<Vec<usize>>,
     ) -> Result<(), StoreError> {
         let _write = self.begin_write()?;
         let record = PatchRecord::of(source_idx, patch, review_state);
@@ -2251,6 +2277,7 @@ impl Job {
         };
         if display_coordinates { record.native_parts = self.store_native_parts(source_idx, patch)?; }
         if self.project.sources.iter().any(|source|source.orientation.0!=1) { record.native_order = self.project.strip.order.clone(); }
+        if let Some(order) = native_order { record.native_order = order; }
         if let Some(previous) = self.project.patches.iter().find(|r| r.id == record.id) { record.extra = previous.extra.clone(); }
         let mask_bytes = buffers::encode_mask(&patch.mask);
         let ink_bytes = buffers::encode_mask(&patch.ink);

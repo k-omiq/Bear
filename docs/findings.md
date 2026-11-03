@@ -728,10 +728,11 @@ The eraser read a layer as drawn (already moved by its layer style) and mapped t
 so a moved or turned Region copy was missed. It now edits the layer as stored, in the frame its style is stated in:
 display coordinates for most layers (`Job::load_display_stored_patch`, native parts included, which it now erases
 too), and the page's native frame, with the stroke turned back into it, for a layer saved whole on a page turned
-since. A duplicated copy is committed with content-named files on every chapter, turned pages and native parts
-included, so an undo of a later erase has a revision. Still not erased: a layer saved whole on a turned page that
-hangs over a long strip join, because its two pages may be turned different ways and there is no one frame to edit
-it in.
+since. That frame is laid out page by page of the native strip the layer was saved in
+(`orientation::NativeFrame`): each stroke pixel is turned back with the page it lies on, so a layer saved whole that
+hangs over a long strip join is erased on both sides of it, whichever way each page is turned, and goes back saved
+whole in the same native order (`Job::complete_native_region`). A duplicated copy is committed with content-named
+files on every chapter, turned pages and native parts included, so an undo of a later erase has a revision.
 
 The Gradient tool commits by itself 300 ms after the last change, one undo step per commit. Done, `Enter` and
 Escape send a change still waiting; a refusal (a run on the page, a failed save) keeps the selection, and a change a
@@ -739,19 +740,24 @@ run refused is sent once the page is free, with one notice per hold. The preview
 (the page's per-layer pictures) until the page has drawn the new ones. Use page dots now also runs on an RGB page
 whose channels agree within `Raster::is_neutral`'s 1.5/255, so a scan with a slight colour cast still gets a plain
 gradient; with the dots on there is no client preview, because the dots are found and phase-locked natively.
-Switching tool or turning the page still drops a change made in the last 300 ms: the commit path
-(`applyActiveToolToRegion`) reads the tool in use when it runs, and after a page turn the layer may not be loaded,
-so a flush there would apply the wrong tool or make a second layer. Not measured: how a slider drag feels with a
-commit per pause on a large page, and the preview handover in WKWebView.
+Switching tool or turning the page sends a change still waiting too: the editor's `onSelectionLeave` hook runs
+before the selection goes, and the gradient takes everything the commit needs then (the held layer, its change and
+where the layer was found), and sends it as the gradient onto the page it was made on
+(`applyActiveToolToRegion` takes the tool and the found layer), after a commit already on its way. A change a run
+refused there is sent once that page is free. Not measured: how a slider drag feels with a commit per pause on a
+large page, and the preview handover in WKWebView.
 
 Live copy redraws from its picked area in `underlay::refresh_dependencies_of` and after a run commits a page. It
 now reads layers of the neighbour page hanging over a long strip join, and edits there reach it; it redraws on a
-chapter with a turned page, in display coordinates. A refresh decodes each page once (`underlay::Pages`) where the
+chapter with a turned page, in display coordinates, and a copy saved whole on a page turned since it was made is
+redrawn in that page's native frame, each of its pixels from where it shows. An area that runs over a long strip
+join is read across it (`strip::read_window_borrowing`). A refresh decodes each page once (`underlay::Pages`) where the
 redraw and the dependency check each decoded it. The revisions redraws write are pruned when the chapter is opened
 (`livecopy::prune_revisions`): a live copy's revisions that are not the current one and that no undo step names go,
 files included; at open the interface holds no layer it read before, so no step it is about to write can name one.
-Still flagged for review rather than redrawn: a live copy saved whole on a page turned since it was made (its style
-is in the page's native frame) and one whose area runs off its page. The Vite mock now answers a redrawn live copy
+Still flagged for review rather than redrawn, because there are no pixels to read there: a live copy whose area runs
+off its page on a chapter of single pages, off the top or bottom of a long strip, or into the gutter beside a
+narrower page. The Vite mock now answers a redrawn live copy
 with a new revision (`redrawLiveCopies`); it has no pixels, so what the copy shows is not checked there.
 
 **An approved held mask, and a project run's progress (2026-11-03): fixed in code, not run in the real app.**

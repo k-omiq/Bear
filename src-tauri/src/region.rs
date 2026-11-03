@@ -5149,38 +5149,33 @@ fn erasable_record(record: &PatchRecord) -> bool {
 }
 
 /// A layer as the eraser edits it: as stored, before its layer style, in the
-/// frame that style is stated in, with `stroke` (on the layer's own page, in
-/// display pixels) moved into the same frame. `erase::erase_patch` maps the
+/// frame that style is stated in, with `stroke` (in the display pixels of the
+/// layer's own page) moved into the same frame. `erase::erase_patch` maps the
 /// stroke through the style and the write-back keeps it, so a layer read as
 /// drawn would be moved twice.
 ///
 /// Most layers are stored in display coordinates
 /// ([`Job::stored_in_display_frame`]) and go back through
-/// `complete_display_region`. One saved whole on a page turned since keeps
-/// that page's native frame: the stroke is turned back into it and the layer
-/// goes back through `complete_region`, still saved whole. `None` for one of
-/// those hanging over a join, whose two pages may each be turned their own
-/// way, so there is no one frame to edit it in.
+/// `complete_display_region`. One saved whole on a page turned since keeps its
+/// native frame, page by page of the native strip it was laid out in: each
+/// pixel of the stroke is turned back with the page it lies on
+/// ([`cleaner_core::project::orientation::NativeFrame`]), so one hanging over a
+/// join onto a page turned another way is erased on both sides of it, and the
+/// layer goes back saved whole, in the same native order.
 struct ErasedFrame {
     patch: Patch,
     stroke: Mask,
     display: bool,
 }
 
-fn erase_frame(job: &Job, record: &PatchRecord, stroke: &Mask) -> Result<Option<ErasedFrame>, String> {
+fn erase_frame(job: &Job, record: &PatchRecord, stroke: &Mask) -> Result<ErasedFrame, String> {
     if job.stored_in_display_frame(record) {
         let patch = job.load_display_stored_patch(record).map_err(|e| e.to_string())?;
-        return Ok(Some(ErasedFrame { patch, stroke: stroke.clone(), display: true }));
+        return Ok(ErasedFrame { patch, stroke: stroke.clone(), display: true });
     }
-    let Some(source) = job.project.sources.get(record.source_idx) else { return Ok(None) };
-    let bbox = record.bbox;
-    if bbox.x < 0 || bbox.y < 0 || bbox.right() > i64::from(source.w) || bbox.bottom() > i64::from(source.h) {
-        return Ok(None);
-    }
-    let (width, height) = source.orientation.size(source.w, source.h);
     let patch = job.load_stored_patch(record).map_err(|e| e.to_string())?;
-    let stroke = source.orientation.inverse().mask(stroke, width, height);
-    Ok(Some(ErasedFrame { patch, stroke, display: false }))
+    let stroke = cleaner_core::project::orientation::NativeFrame::of(&job.project, record).mask_to_native(stroke);
+    Ok(ErasedFrame { patch, stroke, display: false })
 }
 
 /// [`erase_paint`]'s body, on a page already located.
@@ -5256,9 +5251,7 @@ fn erase_paint_at(
         };
         // The stored patch, not the drawn one ([`erase_frame`]): a moved
         // region copy was missed outright.
-        let Some(ErasedFrame { mut patch, stroke, display }) = erase_frame(&job, &record, &here)? else {
-            continue;
-        };
+        let ErasedFrame { mut patch, stroke, display } = erase_frame(&job, &record, &here)?;
         if !erase::erase_patch(&mut patch, &stroke) {
             continue;
         }
@@ -5276,7 +5269,7 @@ fn erase_paint_at(
             if display {
                 job.complete_display_region(page.source_idx, &patch, review)
             } else {
-                job.complete_region(page.source_idx, &patch, review)
+                job.complete_native_region(page.source_idx, &patch, review, &record.native_order)
             }
             .map_err(|e| e.to_string())?;
         }
@@ -8002,6 +7995,133 @@ mod tests {
         assert_eq!(copy.pixels.sample(8, 8, 0), 128, "the grey layer is in it");
         assert_eq!(copy.pixels.sample(2, 2, 0), 0, "the page around it");
         assert_eq!(record.review_state, None, "redrawn, not flagged");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// **A live copy saved whole on a page turned since it was made is drawn
+    /// again** in the page's native frame, each pixel from where it shows,
+    /// and stays saved whole.
+    #[test]
+    fn a_live_copy_saved_whole_on_a_page_turned_since_is_redrawn() {
+        use cleaner_core::image::orientation::Orientation;
+        use cleaner_core::project::orientation::NativeFrame;
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128; raw.height = 128;
+        raw.data = (0..128 * 128).map(|i| ((i % 128) + (i / 128) / 2) as u8).collect();
+        let (root, _library, located) = command_fixture("live-copy-turned-since", &raw);
+        let mut job = Job::open(&located.job_path).unwrap();
+        flat_layer(&mut job, 0, "live", Rect::new(24, 24, 32, 32), 0, live_params());
+        job.project.sources[0].orientation = Orientation(6);
+        job.flush().unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "live").unwrap().clone();
+        assert!(record.native_parts.is_empty() && !job.stored_in_display_frame(&record), "the fixture's frame");
+        assert!(crate::livecopy::redrawn_here(&job, &record));
+        let shown = job.load_display_patch(&record).unwrap().mask.bounds;
+        let grey = Rect::new(shown.x + 4, shown.y + 4, 8, 8);
+        flat_layer(&mut job, 0, "grey", grey, 128, serde_json::json!({}));
+        crate::underlay::refresh_dependencies(&mut job, "grey").unwrap();
+        drop(job);
+
+        let job = Job::open(&located.job_path).unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "live").unwrap().clone();
+        assert_eq!(record.review_state, None, "redrawn, not flagged");
+        assert!(record.native_parts.is_empty(), "still saved whole");
+        let page = job.display_page(0, &std::fs::read(job.source_path(0).unwrap()).unwrap()).unwrap();
+        let drawn = job.load_display_patch(&record).unwrap();
+        assert_eq!(drawn.mask.bounds, shown, "drawn where it was");
+        let at = |x: i64, y: i64| drawn.pixels.sample((x - shown.x) as u32, (y - shown.y) as u32, 0);
+        assert_eq!(at(grey.x + 2, grey.y + 2), 128, "the grey layer is in it");
+        for (x, y) in [(shown.x + 1, shown.y + 1), (shown.right() - 2, shown.y + 1), (shown.x + 1, shown.bottom() - 2)] {
+            assert_eq!(at(x, y), page.sample(x as u32, y as u32, 0), "({x}, {y}): the page, turned as it shows");
+        }
+        // Stored in the native frame: native (25, 25) holds what shows there.
+        let (dx, dy) = NativeFrame::of(&job.project, &record).to_display(25, 25).unwrap();
+        let stored = job.load_stored_patch(&record).unwrap();
+        assert_eq!(stored.pixels.sample(1, 1, 0), page.sample(dx as u32, dy as u32, 0));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// **A live copy whose area runs over a long strip join reads the page
+    /// beside it** and is drawn again, not flagged. One whose area runs off
+    /// the strip is flagged.
+    #[test]
+    fn a_live_copy_reads_its_area_across_a_join_and_is_flagged_off_the_strip() {
+        let (root, located) = strip_edit_fixture("live-copy-area-join");
+        let mut job = Job::open(&located.job_path).unwrap();
+        let above = Library::resolve_page(&job.project, 0).unwrap();
+        let below = Library::resolve_page(&job.project, 1).unwrap();
+        // Rows 390 to 410 of page one: its last 10 rows are page two's first.
+        flat_layer(&mut job, above, "live", Rect::new(10, 390, 20, 20), 0, live_params());
+        let record = job.project.patches.iter().find(|r| r.id == "live").unwrap().clone();
+        assert!(crate::livecopy::redrawn_here(&job, &record));
+        flat_layer(&mut job, below, "spot", Rect::new(10, 0, 20, 5), 77, serde_json::json!({}));
+        crate::underlay::refresh_dependencies(&mut job, "spot").unwrap();
+        drop(job);
+
+        let job = Job::open(&located.job_path).unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "live").unwrap().clone();
+        assert_eq!(record.review_state, None, "redrawn, not flagged");
+        let copy = job.load_display_stored_patch(&record).unwrap();
+        let one = job.display_page(above, &std::fs::read(job.source_path(above).unwrap()).unwrap()).unwrap();
+        let two = job.display_page(below, &std::fs::read(job.source_path(below).unwrap()).unwrap()).unwrap();
+        assert_eq!(copy.pixels.sample(5, 2, 0), one.sample(15, 392, 0), "page one above the join");
+        assert_eq!(copy.pixels.sample(5, 12, 0), 77, "the layer on page two");
+        assert_eq!(copy.pixels.sample(5, 17, 0), two.sample(15, 7, 0), "page two below it");
+        drop(job);
+
+        // Rows 390 to 410 of page two run off the bottom of the strip.
+        let mut job = Job::open(&located.job_path).unwrap();
+        flat_layer(&mut job, below, "under", Rect::new(40, 386, 20, 8), 50, serde_json::json!({}));
+        flat_layer(&mut job, below, "off", Rect::new(40, 390, 20, 20), 0, live_params());
+        let record = job.project.patches.iter().find(|r| r.id == "off").unwrap().clone();
+        assert!(!crate::livecopy::redrawn_here(&job, &record));
+        crate::underlay::refresh_dependencies(&mut job, "under").unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "off").unwrap().clone();
+        assert!(record.review_state.is_some(), "flagged for review");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// **The eraser takes a layer saved whole on turned pages off on both
+    /// sides of a long strip join**: page by page of the native strip, and
+    /// the layer stays saved whole, in the same native order.
+    #[test]
+    fn the_eraser_takes_a_whole_layer_on_turned_pages_off_across_a_join() {
+        use cleaner_core::image::orientation::Orientation;
+        use cleaner_core::project::orientation::NativeFrame;
+        let (root, located) = strip_edit_fixture("erase-turned-join");
+        let mut job = Job::open(&located.job_path).unwrap();
+        let above = Library::resolve_page(&job.project, 0).unwrap();
+        flat_layer(&mut job, above, "hang", Rect::new(10, 390, 20, 20), 200, serde_json::json!({}));
+        for source in &mut job.project.sources {
+            source.orientation = Orientation(3);
+        }
+        job.flush().unwrap();
+        let job = Job::open(&located.job_path).unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "hang").unwrap().clone();
+        assert!(record.native_parts.is_empty() && !job.stored_in_display_frame(&record), "the fixture's frame");
+        let order = record.native_order.clone();
+        let frame = NativeFrame::of(&job.project, &record);
+        let (width, height) = (job.project.sources[above].w, job.project.sources[above].h);
+        drop(job);
+
+        // Native (20, 395) is on page one, native (20, 405) on page two; each
+        // is erased with a stroke on the page it shows on.
+        for (native, page_index) in [((20, 405), 1usize), ((20, 395), 0)] {
+            let (x, y) = frame.to_display(native.0, native.1).unwrap();
+            let (x, y) = (x, y - page_index as i64 * i64::from(height));
+            let point = ErasePoint { x: (x as f64 + 0.5) / f64::from(width) * 100.0, y: (y as f64 + 0.5) / f64::from(height) * 100.0, p: Some(1.0) };
+            let here = Located { page_index, chapter_id: located.chapter_id.clone(), job_path: located.job_path.clone() };
+            let erased = erase_paint_at(&here, None, &[point], &eraser(3.0, 100.0)).unwrap().unwrap();
+            assert!(erased.erased.iter().any(|layer| layer.region_id == "hang"), "{native:?}");
+            let job = Job::open(&located.job_path).unwrap();
+            let record = job.project.patches.iter().find(|r| r.id == "hang").unwrap().clone();
+            assert!(record.native_parts.is_empty(), "{native:?}: still saved whole");
+            assert_eq!(record.native_order, order, "{native:?}: in the same native order");
+            let stored = job.load_stored_patch(&record).unwrap();
+            assert_eq!(stored.mask.coverage(native.0, native.1), 0, "{native:?}: erased under the stroke");
+            assert_eq!(stored.mask.coverage(12, 392), 255, "{native:?}: kept away from it");
+            assert_eq!(stored.mask.coverage(12, 407), 255, "{native:?}: kept away from it on page two");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

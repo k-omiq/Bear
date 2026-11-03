@@ -478,6 +478,11 @@ impl Pages {
         }
         Ok(&self.0[&source_idx])
     }
+
+    /// A page [`Pages::get`] has decoded already.
+    pub(crate) fn peek(&self, source_idx: usize) -> Option<&Raster> {
+        self.0.get(&source_idx)
+    }
 }
 
 /// Every place a change to `changed` could have altered what a later layer

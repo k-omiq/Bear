@@ -44,6 +44,7 @@ import {
   editor,
   onPendingEdit,
   onSelectionEscape,
+  onSelectionLeave,
   pageBusy,
   recordBackgroundRegionEdit,
   recordRegionEdit,
@@ -98,6 +99,13 @@ let liveAgain = false
 let busyReported = /** @type {import('./draft.svelte.js').HeldSelection|null} */ (null)
 /** The held selection whose change a busy page refused: sent once the page is free. */
 let blocked = /** @type {import('./draft.svelte.js').HeldSelection|null} */ (null)
+/**
+ * Changes sent as the user moved on (`onSelectionLeave`) that a run on their
+ * page refused: each goes by itself once that page is free.
+ *
+ * @type {Capture[]}
+ */
+let parked = $state.raw([])
 
 function stopLiveTimer() {
   if (liveTimer) clearTimeout(liveTimer)
@@ -144,6 +152,31 @@ $effect.root(() => {
       if (waiting(held)) void commitLive()
     })
   })
+
+  // The same for a change sent as the user moved on, whose selection is gone.
+  $effect(() => {
+    const free = parked.filter((change) => !pageBusy(/** @type {number} */ (change.snapshot.pageIndex)))
+    if (free.length === 0) return
+    untrack(() => {
+      parked = parked.filter((change) => !free.includes(change))
+      for (const change of free) queueDetached(change)
+    })
+  })
+})
+
+// A tool switch or a page turn lets a held gradient go. Its last change is
+// sent first, as Done would send it: taken now, with the gradient's values
+// and the layer as they are, so it lands with this tool on this layer
+// whatever is out by the time a commit already on its way has landed.
+onSelectionLeave(() => {
+  const held = draft.selection
+  if (held?.tool !== 'gradient' || !held.start || !held.end) return
+  if (!liveRun && !waiting(held)) return
+  const change = capture(held)
+  stopLiveTimer()
+  liveAgain = false
+  retouch.pending = false
+  if (change) queueDetached(change)
 })
 
 // Undo and Redo let a held gradient go, its waiting change with it: the
@@ -217,20 +250,94 @@ function commitLive() {
   }
   const held = draft.selection
   if (!held || held.tool !== 'gradient') return Promise.resolve()
-  liveRun = (async () => {
+  const run = (async () => {
     do {
       liveAgain = false
       if (!(await commitOnce(held))) break
     } while (liveAgain && draft.selection === held)
   })().finally(() => {
-    liveRun = null
+    if (liveRun === run) liveRun = null
     // A change made meanwhile to another held gradient (one reopened while
     // this one was still on its way) is that one's to send now.
     const next = draft.selection
     if (liveAgain && next && next !== held && next.tool === 'gradient' && waiting(next)) void commitLive()
     liveAgain = false
   })
-  return liveRun
+  liveRun = run
+  return run
+}
+
+/**
+ * One change of a held gradient, taken as the bar and the page have it now.
+ *
+ * @typedef {object} Capture
+ * @property {import('./draft.svelte.js').HeldSelection} held - the live selection, whose `regionId` and `liveKey` a commit updates
+ * @property {import('./draft.svelte.js').HeldSelection} snapshot
+ * @property {string} key
+ * @property {Record<string, any>} payload
+ * @property {{region: import('../api/backend.js').ApiRegion, pageIndex: number}|null} located - the layer as it was
+ */
+
+/**
+ * @param {import('./draft.svelte.js').HeldSelection} held
+ * @returns {Capture|null} null where there is nothing a commit could send
+ */
+function capture(held) {
+  const params = /** @type {Record<string, any>} */ ($state.snapshot(editor.toolParams.gradient ?? {}))
+  // Auto fills as soon as it is held and has no line to follow.
+  if (params.kind === 'auto') return null
+  const snapshot = /** @type {import('./draft.svelte.js').HeldSelection} */ ($state.snapshot(held))
+  if (!applicable(snapshot, params) || snapshot.pageIndex === null) return null
+  const found = snapshot.regionId ? locateRegion(snapshot.regionId) : null
+  return {
+    held,
+    snapshot,
+    key: liveKey(snapshot, params),
+    payload: selectionParams(snapshot, params),
+    located: found ? { region: /** @type {any} */ ($state.snapshot(found.region)), pageIndex: found.pageIndex } : null,
+  }
+}
+
+/**
+ * Send a change taken as the user moved on, after any commit already on its
+ * way, as the live commits' chain.
+ *
+ * @param {Capture} change
+ */
+function queueDetached(change) {
+  const ahead = liveRun ?? Promise.resolve()
+  const run = ahead.then(() => sendDetached(change)).finally(() => {
+    if (liveRun === run) liveRun = null
+  })
+  liveRun = run
+}
+
+/** @param {Capture} change */
+async function sendDetached(change) {
+  const { held, snapshot, payload } = change
+  // The commit ahead of it may have sent this already.
+  if (change.key === held.liveKey) return
+  const pageIndex = /** @type {number} */ (snapshot.pageIndex)
+  if (pageBusy(pageIndex)) {
+    claimPageEdit(pageIndex)
+    parked = [...parked, change]
+    return
+  }
+  // A commit ahead of it may have made the layer meanwhile.
+  const regionId = held.regionId ?? snapshot.regionId
+  const found = regionId ? locateRegion(regionId) : null
+  const located = regionId && change.located?.region.id === regionId
+    ? change.located
+    : found ? { region: /** @type {any} */ ($state.snapshot(found.region)), pageIndex: found.pageIndex } : null
+  let landed = false
+  if (regionId && located) {
+    landed = await applyActiveToolToRegion(regionId, { ...payload, bbox: snapshot.bbox }, { tool: 'gradient', located })
+  } else {
+    const id = await createLayer(snapshot, payload)
+    if (id) held.regionId = id
+    landed = !!id
+  }
+  if (landed) held.liveKey = change.key
 }
 
 /**
@@ -241,14 +348,12 @@ function commitLive() {
  * @returns {Promise<boolean>} whether the page shows it
  */
 async function commitOnce(held) {
-  // A timer that fires after the tool changed would apply the wrong tool's values.
-  if (editor.tool !== 'gradient') return false
-  const params = /** @type {Record<string, any>} */ ($state.snapshot(editor.toolParams.gradient ?? {}))
-  // Auto fills as soon as it is held and has no line to follow.
-  if (params.kind === 'auto') return false
-  const snapshot = /** @type {import('./draft.svelte.js').HeldSelection} */ ($state.snapshot(held))
-  if (!applicable(snapshot, params)) return false
-  const key = liveKey(snapshot, params)
+  // A change taken as the user moved on is sent as it was taken
+  // (`onSelectionLeave`); this one sends the gradient's values, whatever
+  // tool is out.
+  const change = capture(held)
+  if (!change) return false
+  const { snapshot, key, payload } = change
   if (key === held.liveKey) return true
   if (snapshot.pageIndex === null) return false
   // A run on the page refuses the edit. Said once per hold: a slider drag
@@ -259,10 +364,9 @@ async function commitOnce(held) {
     blocked = held
     return false
   }
-  const payload = selectionParams(snapshot, params)
   let landed = false
-  if (snapshot.regionId && locateRegion(snapshot.regionId)) {
-    landed = await applyActiveToolToRegion(snapshot.regionId, { ...payload, bbox: snapshot.bbox })
+  if (snapshot.regionId && change.located) {
+    landed = await applyActiveToolToRegion(snapshot.regionId, { ...payload, bbox: snapshot.bbox }, { tool: 'gradient' })
   } else {
     const id = await createLayer(snapshot, payload)
     if (id) held.regionId = id

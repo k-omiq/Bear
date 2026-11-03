@@ -59,9 +59,14 @@ function snapshot(region) {
  * @param {string} regionId
  * @param {Record<string, unknown>} [extraParams] - merged over the tool's own,
  *   for a gesture that carries geometry (`bbox`) the parameters cannot
+ * @param {{tool?: string, located?: {region: import('../api/backend.js').ApiRegion, pageIndex: number}}} [options] -
+ *   an edit captured before the user moved on (the live Gradient's last change
+ *   on a tool switch or a page turn): the tool it was made with and the region
+ *   as it was then, so it is not sent with the tool out now, nor lost when the
+ *   page that held the region has left the window since
  * @returns {Promise<boolean>} whether anything changed
  */
-export async function applyActiveToolToRegion(regionId, extraParams) {
+export async function applyActiveToolToRegion(regionId, extraParams, options = {}) {
   const chapter = editor.chapter
   if (!chapter) return false
 
@@ -70,11 +75,11 @@ export async function applyActiveToolToRegion(regionId, extraParams) {
   // and asking the adapter first would let it mutate its own state for an edit
   // this side can neither swap in nor reverse. Unreachable while every id
   // comes from a rendered region; the ordering is what keeps it unreachable.
-  const located = locateRegion(regionId)
+  const located = options.located ?? locateRegion(regionId)
   if (!located) return false
   const { region, pageIndex } = located
 
-  const tool = editor.tool
+  const tool = options.tool ?? editor.tool
   // Text cleanup is not a per-region tool, and there is nothing of it to apply
   // to one. A click on a region selects it and does no more
   // (`RegionLayer.svelte#onRegionClick`); a run starts from the panel's own
@@ -98,7 +103,8 @@ export async function applyActiveToolToRegion(regionId, extraParams) {
   if (cloudRefused(tool, params)) return false
 
   const before = snapshot(region)
-  select(regionId)
+  // A captured edit lands after the user moved on, and selects nothing.
+  if (!options.located) select(regionId)
 
   if (toolSpendsCloud(tool, params)) {
     return applyInCloud({ chapterId: chapter.id, pageIndex, regionId, tool, params, before })

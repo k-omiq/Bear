@@ -368,8 +368,10 @@ was picked from: when a layer there changes (a clean, a paint stroke, an erase, 
 from that area, wherever it was moved. What the Eraser took off a live copy stays off. A Region copy keeps the artwork
 it copied; a live one keeps showing what is there now. A live copy reads the page and every layer over its area but
 itself and live copies made after it; in a long strip that includes a layer of the page above or below hanging over
-the join, and a change to that layer redraws the copy. It works on a chapter with a turned page too. A copy made
-before its page was turned, or whose area runs off its page, cannot be redrawn and is flagged for review instead.
+the join, and a change to that layer redraws the copy. An area that runs over a join is read from both pages. It
+works on a chapter with a turned page too, also for a copy made before its page was turned. A copy whose area runs
+off the page (on a chapter of single pages), off the strip, or beside a narrower page has nothing there to read, so
+it is flagged for review instead.
 Each redraw is saved like any edit; the saved versions no undo step can go back to are removed the next time the
 chapter is opened.
 
@@ -410,7 +412,8 @@ handle moves. The preview hides the layer's old pixels under it, so it shows wha
 `Enter` or Escape sends a change still waiting and lets the selection go. While a run holds the page, a change waits
 and is sent by itself when the run ends (the app says once that the page is busy), and Done keeps the selection. A
 change the app could not save keeps the selection too. Undo and Redo let it go and drop a change the page has not
-shown yet; so do switching tool and turning the page. Each change that reaches the page is one undo step.
+shown yet. Switching tool or turning the page lets it go too, and sends a change still waiting to the page it was
+made on. Each change that reaches the page is one undo step.
 
 - **Type**: Linear, Radial, Angle, Reflected, Diamond or Auto.
 - **Auto** (`Shift`+`G` arms the tool with it) needs no line and no stops. Lasso the lettering on a shaded bubble

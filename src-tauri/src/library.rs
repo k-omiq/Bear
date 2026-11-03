@@ -2337,7 +2337,7 @@ impl Library {
         if display {
             job.complete_display_region(source_idx, &patch, copied.review_state.clone())
         } else {
-            job.complete_region(source_idx, &patch, copied.review_state.clone())
+            job.complete_native_region(source_idx, &patch, copied.review_state.clone(), &copied.native_order)
         }
         .map_err(|error| failure(error.to_string()))?;
         invalidate_manifest_cache(&path);

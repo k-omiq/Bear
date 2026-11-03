@@ -19,7 +19,7 @@ import { layerSettled } from './patchlayers.svelte.js'
 import PatchLayers from './PatchLayers.svelte'
 import SelectionOverlay from './SelectionOverlay.svelte'
 import { applySelection, previewStands, reopenGradient, retouch, setLine } from './retouch.svelte.js'
-import { undo } from '../state/editor.svelte.js'
+import { goToPage, setTool, undo } from '../state/editor.svelte.js'
 
 function chapter() {
   return {
@@ -365,6 +365,71 @@ describe('the live Gradient tool', () => {
     await vi.waitFor(() => expect(api.createRegion).toHaveBeenCalledTimes(2), { timeout: 2000 })
     await vi.waitFor(() => expect(draft.selection?.regionId).toBe('c1-p001-h2'))
     expect(api.createRegion.mock.calls[1][0].params.gradient.start).toEqual([12, 12])
+  })
+
+  it('sends a change still waiting before a tool switch, as the gradient', async () => {
+    const api = backend({ applyTool: vi.fn(async () => applied) })
+    setBackend(api)
+    await heldLive(api)
+    editor.toolParams.gradient.opacity = 70
+    setTool('brush')
+    expect(editor.tool).toBe('brush')
+    expect(draft.selection).toBeNull()
+    await vi.waitFor(() => expect(api.applyTool).toHaveBeenCalledTimes(1))
+    expect(api.applyTool.mock.calls[0][0]).toMatchObject({ tool: 'gradient', regionId: 'c1-p001-h1', pageIndex: 0 })
+    expect(api.applyTool.mock.calls[0][0].params.opacity).toBe(70)
+    expect(api.historyPush).toHaveBeenCalled()
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(api.applyTool).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends a change still waiting before a page turn, onto the page it was made on', async () => {
+    const api = backend({ applyTool: vi.fn(async () => applied) })
+    setBackend(api)
+    editor.chapter.pages.push({ ...chapter().pages[0], id: 'c1-p002', index: 1, number: 2 })
+    await heldLive(api)
+    editor.toolParams.gradient.opacity = 25
+    goToPage(1)
+    expect(editor.pageIndex).toBe(1)
+    expect(draft.selection).toBeNull()
+    await vi.waitFor(() => expect(api.applyTool).toHaveBeenCalledTimes(1))
+    expect(api.applyTool.mock.calls[0][0]).toMatchObject({ tool: 'gradient', regionId: 'c1-p001-h1', pageIndex: 0 })
+    expect(api.applyTool.mock.calls[0][0].params.opacity).toBe(25)
+  })
+
+  it('sends the last change after a commit on its way when the tool switches, though the page has left the window', async () => {
+    const first = deferred()
+    const api = backend({ applyTool: vi.fn(() => first.promise) })
+    setBackend(api)
+    await heldLive(api)
+    editor.toolParams.gradient.opacity = 65
+    await vi.waitFor(() => expect(api.applyTool).toHaveBeenCalledTimes(1), { timeout: 2000 })
+    editor.toolParams.gradient.opacity = 75
+    setTool('eraser')
+    // The page that held the layer is evicted while the first commit is out.
+    editor.chapter.pages[0].regions = []
+    editor.chapter.pages[0].resident = false
+    first.resolve(applied)
+    await vi.waitFor(() => expect(api.applyTool).toHaveBeenCalledTimes(2))
+    expect(api.applyTool.mock.calls[1][0]).toMatchObject({ tool: 'gradient', regionId: 'c1-p001-h1' })
+    expect(api.applyTool.mock.calls[1][0].params.opacity).toBe(75)
+    expect(api.createRegion).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends a change a run refused at a tool switch once the run ends', async () => {
+    const api = backend({ applyTool: vi.fn(async () => applied) })
+    setBackend(api)
+    await heldLive(api)
+    editor.areaRuns = [{ pageIndex: 0, runId: 'r1' }]
+    editor.toolParams.gradient.opacity = 15
+    setTool('brush')
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(api.applyTool).not.toHaveBeenCalled()
+    expect(shown('notice.run.pageBusy')).toBe(1)
+    editor.areaRuns = []
+    await vi.waitFor(() => expect(api.applyTool).toHaveBeenCalledTimes(1), { timeout: 2000 })
+    expect(api.applyTool.mock.calls[0][0]).toMatchObject({ tool: 'gradient' })
+    expect(api.applyTool.mock.calls[0][0].params.opacity).toBe(15)
   })
 
   it('previews until the page has drawn the layer the change made, and not with the page\'s dots', async () => {
