@@ -141,7 +141,9 @@ jobs:
         run: python -m unittest discover -v -s sidecar/tests -p test_watchdog.py
       # The same for the helper's start and its memory report: no `resource` here.
       - name: Sidecar start without resource
-        run: python -m unittest discover -v -s sidecar/tests -p test_memory.py
+        run: |
+          python -m pip install pillow==12.3.0
+          python -m unittest discover -v -s sidecar/tests -p test_memory.py
       # The release build copies the Visual C++ 2015-2022 runtime out of the
       # Visual Studio redistributable tree and ships it beside the executable,
       # because the downloaded ONNX Runtime imports it and a clean Windows does

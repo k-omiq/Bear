@@ -450,7 +450,21 @@ jobs:
           }
           Start-Sleep -Seconds 10
           if (-not $closed.CloseMainWindow()) { $closed.Kill(); throw 'The app has no window to close' }
-          if (-not $closed.WaitForExit(30000)) { $closed.Kill(); throw 'The app still runs 30 s after its window closed' }
+          if (-not $closed.WaitForExit(30000)) {
+            # What it waits on, from the debugger, before it is killed.
+            $closed.Refresh()
+            Write-Host "still running: window $($closed.MainWindowHandle), title '$($closed.MainWindowTitle)', threads $($closed.Threads.Count)"
+            $cdb = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+            if (Test-Path $cdb) {
+              $stackLog = Join-Path $out 'close-stacks.txt'
+              $attached = Start-Process -FilePath $cdb -PassThru -NoNewWindow -RedirectStandardOutput $stackLog `
+                -ArgumentList @('-pv', '-p', "$($closed.Id)", '-c', '".symfix; .reload; ~*kn 40; q"')
+              if (-not $attached.WaitForExit(240000)) { $attached.Kill(); Write-Host 'the debugger timed out' }
+              Get-Content $stackLog | Select-Object -First 700 | ForEach-Object { Write-Host "cdb: $_" }
+            }
+            $closed.Kill()
+            throw 'The app still runs 30 s after its window closed'
+          }
           Write-Host "app exit code after a close: $($closed.ExitCode)"
           if ($closed.ExitCode -ne 0) { throw "The close ended with exit code $($closed.ExitCode)" }
       - uses: actions/upload-artifact@v4
