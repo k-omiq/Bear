@@ -7370,6 +7370,21 @@ fn cloud_detect_refusal(mode: RunMode, targets: crate::inference::run_analysis::
         .then_some("cloud_detect_small_unsupported")
 }
 
+/// The Ogkalu profile an all-text run uses here. Advanced ran Full until
+/// 2026-11-02 and runs Small since, so a user from before may have Full
+/// imported and Small never fetched. Full reads the same pages as well
+/// (`docs/findings.md`), so the run takes it rather than refusing for want of
+/// Small. Only while Full runs on this computer: a cloud stage the run did not
+/// ask for would change what its consent names.
+fn small_or_installed_full(models: DetectorModels, all_text: bool, small_present: bool, full_present: bool,
+    targets: crate::inference::run_analysis::AnalysisTargets) -> DetectorModels {
+    if models.rt_small && all_text && !small_present && full_present && !targets.rt_full {
+        DetectorModels { rt_small: false, rt_full: true, ..models }
+    } else {
+        models
+    }
+}
+
 /// Why a detecting run that asked for the text reader will run without any,
 /// or `None` when it has one or did not ask. Hayai is the reader; manga-ocr
 /// stands in for Japanese when Hayai is not installed, and when that fails too
@@ -7459,6 +7474,14 @@ fn start_with_models(
     if area.is_some() && (mode != RunMode::Detect || scope != "page") {
         return Err("detect_area_scope_unsupported".to_owned());
     }
+    let app_data = {
+        use tauri::Manager;
+        app.path().app_data_dir().ok()
+    };
+    let detection_models = small_or_installed_full(detection_models, all_text,
+        selected_model_dir(app_data.as_deref(), detection_models, all_text).is_some(),
+        app_data.as_deref().and_then(crate::model_workflows::full_rt_path).is_some(),
+        cloud.targets);
     if let Some(refusal) = cloud_detect_refusal(mode, cloud.targets, detection_models) {
         return Err(refusal.into());
     }
@@ -7561,10 +7584,6 @@ fn start_with_models(
     // outcomes are told apart because their remedies are, and the catalogue
     // already has a key for each - `diagnostics::onnx_runtime` reports the same
     // four to the About window.
-    let app_data = {
-        use tauri::Manager;
-        app.path().app_data_dir().ok()
-    };
     if requires_runtime_before_start(mode) {
         if let Err(error) = cleaner_core::runtime::find(app_data.as_deref())
             .and_then(|path| cleaner_core::runtime::load(&path)) {

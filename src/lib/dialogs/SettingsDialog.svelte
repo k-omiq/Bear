@@ -166,6 +166,7 @@
     DETECTION_MODES,
     LANGUAGES,
     defaultAnalysisTargets,
+    fullStandsInForSmall,
     groupOfModel,
     model as pipelineModel,
     modelOfFile,
@@ -932,6 +933,7 @@
       ...(mode === 'normal' ? { analysisTargets: defaultAnalysisTargets() } : {}) })
     let bytes = 0
     for (const id of modeNeeds) {
+      if (id === 'rtSmall' && fullStandsInForSmall(preset.textPolicy, workflowCaps?.fullRtInstalled)) continue
       if (id === 'samTs') {
         if (workflowCaps?.samInstalled !== true) bytes += SAM_GRAPH_BYTES
         continue
@@ -966,12 +968,14 @@
   let moreOpen = $state(false)
 
   /**
-   * Whether a missing model is one the selected workflow needs now.
+   * Whether a missing model is one the selected workflow needs now. Small is
+   * not while Full stands in for it (`fullStandsInForSmall`).
    *
    * @param {string} id
    */
   function neededNow(id) {
-    return needs.includes(id)
+    if (!needs.includes(id)) return false
+    return !(id === 'rtSmall' && fullStandsInForSmall(session.textPolicy, workflowCaps?.fullRtInstalled))
   }
 
   /**

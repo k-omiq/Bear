@@ -509,7 +509,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: {id: 'scriptGate'|'mangaOcr'|'hayaiOcr'}) => Promise<DeleteOutcome>} deleteModelGroup - remove a logical multi-file language gate or Japanese OCR group
  * @property {(spec: {id: string}) => Promise<boolean>} verifyModel - digest an installed weight against its pin. Deliberately explicit: it is seconds of work, which is why `listModels` does not do it
  * @property {(spec: {id: 'scriptGate'|'mangaOcr'|'hayaiOcr'}) => Promise<boolean>} verifyModelGroup - verify every installed file in a logical model group
- * @property {() => Promise<Object>} listWorkflowCapabilities - independent RT, SAM, COO and backend states; `runtimeReady` means the runtime loaded, `localDetectionReady` covers verified local Full + SAM and SAM memory, while `samWriteQualified` applies only to direct preview writes. CTD, filtering, optional reader and chosen backend readiness are checked separately
+ * @property {() => Promise<Object>} listWorkflowCapabilities - independent RT, SAM, COO and backend states; `runtimeReady` means the runtime loaded, `localDetectionReady` covers verified local Ogkalu (Small, or Full in its place) + SAM and SAM memory, while `samWriteQualified` applies only to direct preview writes. CTD, filtering, optional reader and chosen backend readiness are checked separately
  * @property {(spec: {sourcePath: string}) => Promise<boolean>} importFullRt
  * @property {() => Promise<boolean>} removeFullRt
  * @property {(spec: {sourceDir: string}) => Promise<boolean>} importSamTs - install the verified local SAM-TS-L files as one group

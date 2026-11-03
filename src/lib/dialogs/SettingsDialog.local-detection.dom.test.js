@@ -36,7 +36,7 @@ function open({ missing = [], runtime = true, sam = true, memory = true, saveFai
     fullRtManaged: !absent.has('fullRt'), fullRtRevision: 'pinned',
     fullRtFile: { name: 'detector.onnx', bytes: 100, sha256: 'ab'.repeat(32) },
     samInstalled, samMemoryReady: memory, samManaged: samInstalled,
-    localDetectionReady: runtimeInstalled && !absent.has('balloonDetector') && samInstalled && memory,
+    localDetectionReady: runtimeInstalled && (!absent.has('balloonDetector') || !absent.has('fullRt')) && samInstalled && memory,
     samFiles: samInstalled ? [{ name: 'encoder.onnx', bytes: 100, sha256: 'ab'.repeat(32) }] : [],
     samRevision: 'pinned', samWriteQualified: false, samWriteNote: 'Preview writes are separate.',
     rtBackends: [{ id: 'ort-cpu', available: runtimeInstalled, qualified: false }],
@@ -124,7 +124,7 @@ it('offers detection as two mode cards, with More options shut', async () => {
 })
 
 it('fetches everything Advanced is missing as soon as it is chosen, the reader included', async () => {
-  const view = open({ missing: ['balloonDetector', 'hayaiVision', 'hayaiDecoder', 'hayaiTokenizer'], sam: false })
+  const view = open({ missing: ['balloonDetector', 'fullRt', 'hayaiVision', 'hayaiDecoder', 'hayaiTokenizer'], sam: false })
   await waitFor(() => expect(readinessBox(view)).toBeTruthy())
   await fireEvent.click(card(view, 'advanced'))
   await waitFor(() => expect(view.api.installSamTs).toHaveBeenCalledOnce())
@@ -137,6 +137,16 @@ it('fetches everything Advanced is missing as soon as it is chosen, the reader i
   expect(card(view, 'advanced').getAttribute('aria-checked')).toBe('true')
   await waitFor(() => expect(readinessBox(view).classList.contains('complete')).toBe(true))
   expect(readinessBox(view).textContent).toContain(t('settings.detection.ready.allText'))
+})
+
+// Advanced ran Full until 2026-11-02: a user from then has Full and no Small,
+// and the run takes Full in its place (`run.rs#small_or_installed_full`).
+it('asks no Small for Advanced while Full is imported', async () => {
+  setDetectionMode('advanced')
+  const view = open({ missing: ['balloonDetector'] })
+  await waitFor(() => expect(readinessBox(view).classList.contains('complete')).toBe(true))
+  expect(readinessBox(view).textContent).toContain(t('settings.detection.ready.allText'))
+  expect(view.api.downloadModel).not.toHaveBeenCalled()
 })
 
 it('counts the text reader Advanced switched on among what is missing, here as on the cloud', async () => {
@@ -178,7 +188,7 @@ it('does nothing when the mode already chosen is pressed again', async () => {
 })
 
 it('stops on a failed download and keeps Advanced incomplete', async () => {
-  const view = open({ missing: ['balloonDetector'], sam: false, downloadFails: 'balloonDetector' })
+  const view = open({ missing: ['balloonDetector', 'fullRt'], sam: false, downloadFails: 'balloonDetector' })
   await waitFor(() => expect(readinessBox(view)).toBeTruthy())
   await fireEvent.click(card(view, 'advanced'))
   await waitFor(() => expect(view.api.downloadModel.mock.calls.map(([request]) => request.id)).toEqual(['balloonDetector']))
@@ -195,7 +205,7 @@ it('says short memory for the lettering mask as a line, and does not hold readin
 })
 
 it('says Downloading while a started model is still on its way, and is ready once it lands', async () => {
-  const view = open({ missing: ['balloonDetector'], deferredModel: 'balloonDetector' })
+  const view = open({ missing: ['balloonDetector', 'fullRt'], deferredModel: 'balloonDetector' })
   await waitFor(() => expect(readinessBox(view)).toBeTruthy())
   await fireEvent.click(card(view, 'advanced'))
   await waitFor(() => expect(view.api.downloadModel).toHaveBeenCalledWith({ id: 'balloonDetector' }))
@@ -211,7 +221,7 @@ it('says Downloading while a started model is still on its way, and is ready onc
 it('holds readiness to the Small detector and to a supported forced local backend', async () => {
   setDetectionMode('advanced')
   setOcrRescue(false)
-  const missingSmall = open({ missing: ['balloonDetector'] })
+  const missingSmall = open({ missing: ['balloonDetector', 'fullRt'] })
   await waitFor(() => expect(readinessBox(missingSmall).textContent).toContain(t('settings.detection.ready.allTextMissing', { bytes: 100 })))
   expect(readinessBox(missingSmall).classList.contains('complete')).toBe(false)
   cleanup()

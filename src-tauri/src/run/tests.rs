@@ -5677,6 +5677,23 @@ mod cloud_stages {
         assert_eq!(cloud.capabilities(best.rt_full, best.sam), vec![SAM.to_string(), RT.to_string()]);
     }
 
+    /// Advanced from before 2026-11-02 imported Full and never fetched Small:
+    /// such a run takes Full here instead of refusing. Small on disk, the
+    /// script gate, or Full on the cloud keeps the selection as it was.
+    #[test]
+    fn advanced_without_small_runs_installed_full() {
+        let cloud = AnalysisTargets { rt_full: true, sam: true };
+        let local = AnalysisTargets::default();
+        let small_sam = DetectorModels::from_args(Some(&serde_json::json!(["rtSmall", "samTs"]))).unwrap();
+        let full_sam = DetectorModels::from_args(Some(&serde_json::json!(["rtFull", "samTs"]))).unwrap();
+        let profile = |m: DetectorModels| (m.ctd, m.rt_small, m.rt_full, m.sam);
+        assert_eq!(profile(small_or_installed_full(small_sam, true, false, true, local)), profile(full_sam));
+        assert_eq!(profile(small_or_installed_full(small_sam, true, true, true, local)), profile(small_sam));
+        assert_eq!(profile(small_or_installed_full(small_sam, true, false, false, local)), profile(small_sam));
+        assert_eq!(profile(small_or_installed_full(small_sam, false, false, true, local)), profile(small_sam));
+        assert_eq!(profile(small_or_installed_full(small_sam, true, false, true, cloud)), profile(small_sam));
+    }
+
     #[test]
     fn page_answers_are_cut_to_each_detection_crop() {
         let mut mask = vec![0u8; 8 * 6];

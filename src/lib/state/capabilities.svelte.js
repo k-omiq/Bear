@@ -31,7 +31,7 @@
  */
 
 import { getBackend } from '../api/backend.js'
-import { model, workflowNeeds } from '../model/pipelines.js'
+import { fullStandsInForSmall, model, workflowNeeds } from '../model/pipelines.js'
 import { session, setFluxModel } from './session.svelte.js'
 import { writeSettingsSerialized } from './settingswrite.js'
 
@@ -109,6 +109,7 @@ export function selectedWorkflowMissing(rows, workflowCaps, choices) {
   return workflowNeeds(choices).filter((id) => {
     if (id === 'samTs') return workflowCaps?.samInstalled !== true
     if (id === 'rtFull' && workflowCaps?.fullRtInstalled !== undefined) return !workflowCaps.fullRtInstalled
+    if (id === 'rtSmall' && fullStandsInForSmall(choices?.textPolicy, workflowCaps?.fullRtInstalled)) return false
     return (model(id)?.files ?? []).some((file) => {
       const row = byId.get(file)
       return row ? row.installed !== true : (rows ?? []).length > 0

@@ -4426,7 +4426,7 @@ export function createMockBackend(options = {}) {
       const backend = (id, note) => ({ id, platform: 'macOS', qualified: true, available: runtimeInstalled,
         selectable: runtimeInstalled, note })
       return { runtimeInstalled, runtimeReady: runtimeInstalled,
-        localDetectionReady: runtimeInstalled && !state.missingModels.has('balloonDetector') && sam,
+        localDetectionReady: runtimeInstalled && (!state.missingModels.has('balloonDetector') || fullRt) && sam,
         localDetectionNote: 'Mock: the full pipeline is drawn locally; no model runs in this browser.',
         ctdInstalled: !state.missingModels.has('textDetector'), rtInstalled: !state.missingModels.has('balloonDetector'), fullRtInstalled: fullRt,
         fullRtManaged: fullRt, fullRtRevision: '16e8a622f91fabc6b5b65c96d32d1183f8843546',

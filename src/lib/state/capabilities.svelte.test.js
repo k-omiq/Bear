@@ -105,6 +105,11 @@ describe('selected workflow readiness', () => {
     expect(selectedWorkflowMissing(rows, caps, { ...both, ...cloud })).toEqual(['hayaiOcr'])
     expect(selectedWorkflowMissing(without(['textDetector']), caps, { ...choices(['rtSmall'], 'all_text'), ...cloud }))
       .toEqual(['ctd', 'hayaiOcr'])
+    // Full stands in for Small under all text here, not under the gate.
+    const noSmall = without(['balloonDetector'])
+    expect(selectedWorkflowMissing(noSmall, { fullRtInstalled: true }, choices(['rtSmall'], 'all_text'))).toEqual([])
+    expect(selectedWorkflowMissing(noSmall, { fullRtInstalled: false }, choices(['rtSmall'], 'all_text'))).toEqual(['rtSmall'])
+    expect(selectedWorkflowMissing(noSmall, { fullRtInstalled: true }, choices(['ctd', 'rtSmall']))).toEqual(['rtSmall'])
     // A split record settles on this computer.
     expect(selectedWorkflowMissing(rows, caps,
       { ...both, analysisTargets: { rtFull: 'local', samTs: 'cloud' } })).toEqual(['rtFull', 'samTs'])

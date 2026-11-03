@@ -213,6 +213,20 @@ export function detectionModeOf({ detectorModels, textPolicy } = {}) {
   return models.includes('rtFull') || models.includes('samTs') || textPolicy === ALL_TEXT_POLICY ? 'advanced' : 'normal'
 }
 
+/**
+ * Whether the Full profile stands in for Small under the all-text policy on
+ * this computer. Advanced ran Full until 2026-11-02 and runs Small since, so a
+ * user from before may have Full imported and Small never fetched. A run then
+ * takes Full (`run.rs#small_or_installed_full`), and Small is no need here.
+ * A cloud run never holds Small (`CLOUD_DETECTOR_MODELS`).
+ *
+ * @param {string|undefined} textPolicy
+ * @param {boolean|undefined} fullRtInstalled - `listWorkflowCapabilities`'s answer
+ */
+export function fullStandsInForSmall(textPolicy, fullRtInstalled) {
+  return textPolicy === ALL_TEXT_POLICY && fullRtInstalled === true
+}
+
 /** The detection choices as Settings and setup list them: CTD, Full, Small, SAM-TS-L. */
 export const DETECTOR_CHOICES = Object.freeze(['ctd', 'rtFull', 'rtSmall', 'samTs'])
 

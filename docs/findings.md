@@ -880,6 +880,10 @@ per-model figures above are the better guide. Open:
 - A cloud GPU run still uses CTD, Full and SAM-TS-L: Small has no cloud twin, and no cloud run was made for
   this change. CTD is probably wasted there too. Not measured.
 - An Advanced user with only Full must now download small Ogkalu (11 MB), and Full stays on disk unused.
+  Changed 2026-11-03: a local Advanced run with Full imported and Small absent runs Full in its place
+  (`run.rs#small_or_installed_full`), and Settings no longer asks for Small then. The 51-page result says
+  Full reads as well; that it is slower and uses about 1 GB more a page was measured, a real run of this
+  stand-in was not.
 - Not run: this combination on Windows or on a GPU other than Apple's, skipping SAM on pages with no likely
   SFX. Why a Hayai read now takes about 340 ms against 110 ms in earlier notes was not traced.
 
