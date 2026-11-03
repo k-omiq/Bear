@@ -468,13 +468,13 @@ pub(crate) struct Pages(std::collections::HashMap<usize, Raster>);
 
 impl Pages {
     pub(crate) fn get(&mut self, job: &Job, source_idx: usize) -> Result<&Raster, String> {
-        if !self.0.contains_key(&source_idx) {
+        if let std::collections::hash_map::Entry::Vacant(slot) = self.0.entry(source_idx) {
             let source = job.source_path(source_idx).ok_or("source missing for a layer's refresh")?;
             let bytes = std::fs::read(source).map_err(|e| e.to_string())?;
             let page = job.display_page(source_idx, &bytes).map_err(|e| e.to_string())?;
             #[cfg(test)]
             PAGE_DECODES.with(|count| count.set(count.get() + 1));
-            self.0.insert(source_idx, page);
+            slot.insert(page);
         }
         Ok(&self.0[&source_idx])
     }
