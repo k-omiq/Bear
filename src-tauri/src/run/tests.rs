@@ -4559,15 +4559,34 @@ fn full_rt_keeps_the_cpu_behind_an_inherited_gpu_and_not_a_chosen_one() {
     let chosen = |backend: &str| serde_json::json!({"accelerator": "webgpu", "modelAccelerators": {"rtFull": backend}});
     assert_eq!(full_rt_preference(&chosen("cuda"), windows), Ok((Preference::Force(Cuda), false)));
     assert_eq!(full_rt_preference(&chosen("webgpu"), windows), Ok((Preference::Force(WebGpu), false)));
-    assert!(full_rt_gives_way(true, DirectMl));
-    assert!(!full_rt_gives_way(false, DirectMl));
-    assert!(!full_rt_gives_way(true, Cpu));
+    assert!(gpu_gives_way(true, DirectMl));
+    assert!(!gpu_gives_way(false, DirectMl));
+    assert!(!gpu_gives_way(true, Cpu));
     // A run that detects with Full goes on under the whole-app WebGPU choice.
     let models = DetectorModels { ctd: false, rt_small: false, rt_full: true, sam: false };
     let pipeline = Pipeline::unchecked(Path::new("no-weights-live-here"), Preference::Automatic, models, false, None);
     let settings = serde_json::json!({"accelerator": "webgpu", "modelAccelerators": {"inpainter": "auto"}});
     let opened = pipeline.with_model_preferences(&settings).unwrap();
     assert_eq!((opened.full_rt_preference, opened.full_rt_cpu_fallback), (Preference::Automatic, true));
+}
+
+/// Small follows Full's rule: an inherited GPU keeps the CPU behind it, and a
+/// whole-app WebGPU choice made for LaMa no longer refuses a Small run.
+#[test]
+fn small_rt_keeps_the_cpu_behind_an_inherited_gpu_and_not_a_chosen_one() {
+    use accel::Accelerator::{Cuda, DirectMl};
+    use cleaner_core::runtime::package::{Arch, Os, Platform};
+    let windows = Some(Platform { os: Os::Windows, arch: Arch::X86_64 });
+    let inherited = |backend: &str| serde_json::json!({"accelerator": backend});
+    assert_eq!(small_rt_preference(&inherited("webgpu"), windows), Ok((Preference::Automatic, true)));
+    assert_eq!(small_rt_preference(&inherited("cuda"), windows), Ok((Preference::Force(Cuda), true)));
+    let chosen = serde_json::json!({"accelerator": "webgpu", "modelAccelerators": {"rtSmall": "directml"}});
+    assert_eq!(small_rt_preference(&chosen, windows), Ok((Preference::Force(DirectMl), false)));
+    let models = DetectorModels { ctd: false, rt_small: true, rt_full: false, sam: true };
+    let pipeline = Pipeline::unchecked(Path::new("no-weights-live-here"), Preference::Automatic, models, true, None);
+    let settings = serde_json::json!({"accelerator": "webgpu", "modelAccelerators": {"inpainter": "auto", "samTs": "auto"}});
+    let opened = pipeline.with_model_preferences(&settings).unwrap();
+    assert_eq!((opened.balloons.preference, opened.small_rt_cpu_fallback), (Preference::Automatic, true));
 }
 
 /// A page Full fails on the CPU leaves the session poisoned and the fault named.

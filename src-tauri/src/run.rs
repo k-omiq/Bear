@@ -359,6 +359,14 @@ pub(crate) fn full_rt_preference(settings: &serde_json::Value, host: Option<clea
     preference_with_fallback(settings, "rtFull", host)
 }
 
+/// Ogkalu Small's provider, and whether a GPU it is on may give way to the
+/// CPU, by the same rule: a whole-app WebGPU choice made for LaMa, or a CUDA
+/// install with no cuDNN, never stops a run that detects with Small.
+pub(crate) fn small_rt_preference(settings: &serde_json::Value, host: Option<cleaner_core::runtime::package::Platform>)
+    -> Result<(Preference, bool), String> {
+    preference_with_fallback(settings, "rtSmall", host)
+}
+
 fn preference_with_fallback(settings: &serde_json::Value, id: &str, host: Option<cleaner_core::runtime::package::Platform>)
     -> Result<(Preference, bool), String> {
     let chosen = settings.get("modelAccelerators").and_then(|v| v.get(id)).is_some();
@@ -371,9 +379,9 @@ fn preference_with_fallback(settings: &serde_json::Value, id: &str, host: Option
     }
 }
 
-/// Whether a failure on this provider moves Ogkalu Full to the CPU. A choice
-/// made for it does not, and the CPU has nowhere to go.
-fn full_rt_gives_way(cpu_fallback: bool, accelerator: accel::Accelerator) -> bool {
+/// Whether a failure on this provider moves an Ogkalu profile to the CPU. A
+/// choice made for it does not, and the CPU has nowhere to go.
+fn gpu_gives_way(cpu_fallback: bool, accelerator: accel::Accelerator) -> bool {
     cpu_fallback && accelerator != accel::Accelerator::Cpu
 }
 
@@ -1785,6 +1793,8 @@ pub struct Pipeline {
     /// Whether a GPU Full is on may give way to the CPU: under Automatic, or a
     /// choice it only inherits ([`full_rt_preference`]). Not for one made for it.
     full_rt_cpu_fallback: bool,
+    /// The same for Ogkalu Small ([`small_rt_preference`]).
+    small_rt_cpu_fallback: bool,
     sam_preference: Preference,
     /// A GPU the lettering mask runs on goes back to the CPU when it will not
     /// open or fails a page: under Automatic (a measured GPU), or a whole-app
@@ -2351,6 +2361,7 @@ impl Pipeline {
             analysis_cancel: Arc::new(sam_ts::Cancellation::default()),
             full_rt_preference: preference,
             full_rt_cpu_fallback: true,
+            small_rt_cpu_fallback: true,
             sam_preference: preference,
             sam_cpu_fallback: true,
             engine_version: env!("CARGO_PKG_VERSION"),
@@ -2495,9 +2506,9 @@ impl Pipeline {
     fn with_model_preferences(mut self, settings: &serde_json::Value) -> Result<Pipeline, String> {
         self.detector.preference = model_preference_from(settings, "ctd")?;
         self.detector.key = session_key(registry::Kind::TextDetector, &self.detector.models, self.detector.preference);
-        self.balloons.preference = model_preference_from(settings, "rtSmall")?;
-        self.balloons.key = session_key(registry::Kind::BalloonDetector, &self.balloons.models, self.balloons.preference);
         let host = cleaner_core::runtime::package::Platform::host();
+        (self.balloons.preference, self.small_rt_cpu_fallback) = small_rt_preference(settings, host)?;
+        self.balloons.key = session_key(registry::Kind::BalloonDetector, &self.balloons.models, self.balloons.preference);
         (self.full_rt_preference, self.full_rt_cpu_fallback) = full_rt_preference(settings, host)?;
         (self.sam_preference, self.sam_cpu_fallback) = sam_preference(settings, host)?;
         self.rung2.preference = model_preference_from(settings, "inpainter")?;
@@ -2650,13 +2661,7 @@ impl Pipeline {
         let remote = self.remote_page.as_ref()
             .map(|page| remote_for_crop(page, &self.remote_below, crop.width, crop.height, page_offset));
         let balloons = if self.detection_models.rt_small {
-            let requested_key = requested_accel_key(self.balloons.preference);
-            let session = self.balloons.get().inspect_err(|detail| {
-                self.fault = Some(EngineFault { model_key: accel::BALLOON.label_key,
-                    accel_key: requested_key, detail: detail.clone() });
-            })?;
-            let boxes = session.detect(crop);
-            ran(boxes, &*session, &accel::BALLOON, &mut self.fault)?
+            self.detect_small_rt(crop)?
         } else if self.detection_models.rt_full && self.remote_rt() {
             remote.as_ref().map(|(boxes, _)| boxes.clone()).ok_or("cloud analysis missing for this page")?
         } else if self.detection_models.rt_full {
@@ -2754,7 +2759,7 @@ impl Pipeline {
         let on = model.selection().accelerator;
         let mut boxes = model.detect_halves_cancellable(crop, &self.analysis_cancel);
         if let Err(detail) = &boxes {
-            if full_rt_gives_way(self.full_rt_cpu_fallback, on) && self.analysis_cancel.check().is_ok() {
+            if gpu_gives_way(self.full_rt_cpu_fallback, on) && self.analysis_cancel.check().is_ok() {
                 self.move_full_rt_to_cpu(on, detail);
                 // The GPU session goes first, which gives its memory back.
                 self.full_rt = None;
@@ -2769,13 +2774,62 @@ impl Pipeline {
         ran(boxes, self.full_rt.as_ref().unwrap(), &accel::FULL_RT, &mut self.fault)
     }
 
+    /// Ogkalu Small's boxes for one crop, by the same rule as Full's: a GPU
+    /// that may give way and will not open, or fails a page, sends this page
+    /// and the rest of the run to the CPU.
+    fn detect_small_rt(&mut self, crop: &Raster) -> Result<Vec<cleaner_core::balloon::BalloonBox>, String> {
+        let mut opened = self.balloons.get().map(|_| ()).err();
+        if let (Some(detail), Preference::Force(wanted)) = (opened.clone(), self.balloons.preference) {
+            if gpu_gives_way(self.small_rt_cpu_fallback, wanted) {
+                self.move_small_rt_to_cpu(wanted, &detail);
+                opened = self.balloons.get().map(|_| ()).err();
+            }
+        }
+        if let Some(detail) = opened {
+            self.fault = Some(EngineFault { model_key: accel::BALLOON.label_key,
+                accel_key: requested_accel_key(self.balloons.preference), detail: detail.clone() });
+            return Err(detail);
+        }
+        let session = self.balloons.get()?;
+        let on = session.selection().accelerator;
+        let mut boxes = session.detect(crop);
+        if let Err(detail) = &boxes {
+            if gpu_gives_way(self.small_rt_cpu_fallback, on) {
+                let detail = detail.to_string();
+                // The GPU session goes, not back to the cache, which gives its
+                // memory back.
+                self.balloons.held = None;
+                self.move_small_rt_to_cpu(on, &detail);
+                let session = self.balloons.get().inspect_err(|detail| {
+                    self.fault = Some(EngineFault { model_key: accel::BALLOON.label_key,
+                        accel_key: requested_accel_key(Preference::CpuOnly), detail: detail.clone() });
+                })?;
+                boxes = session.detect(crop);
+            }
+        }
+        let session = self.balloons.get()?;
+        ran(boxes, &*session, &accel::BALLOON, &mut self.fault)
+    }
+
+    /// Small stays on the CPU for the rest of the run, and the notice says so.
+    fn move_small_rt_to_cpu(&mut self, from: accel::Accelerator, detail: &str) {
+        eprintln!("manga-cleaner: Ogkalu Small failed on {from:?}, using the CPU: {detail}");
+        self.balloons.preference = Preference::CpuOnly;
+        self.balloons.key = session_key(registry::Kind::BalloonDetector, &self.balloons.models, Preference::CpuOnly);
+        report_provider(crate::models::RT_SMALL_NAME, &accel::Selection {
+            accelerator: accel::Accelerator::Cpu,
+            declined: Some(accel::Declined::plain(from, "accel.declined.failed")),
+            note: None,
+        });
+    }
+
     fn open_full_rt(&mut self) -> Result<(), String> {
         let app_data = self.app_data.as_deref().ok_or("App model directory unavailable")?;
         let path = crate::model_workflows::full_rt_path(app_data)
             .ok_or("The Ogkalu comic text & bubble detector (Full) graph is not installed or failed SHA-256")?;
         let mut opened = FullRegions::open(&path, self.full_rt_preference);
         if let (Err(detail), Preference::Force(wanted)) = (&opened, self.full_rt_preference) {
-            if full_rt_gives_way(self.full_rt_cpu_fallback, wanted) && self.analysis_cancel.check().is_ok() {
+            if gpu_gives_way(self.full_rt_cpu_fallback, wanted) && self.analysis_cancel.check().is_ok() {
                 self.move_full_rt_to_cpu(wanted, detail);
                 opened = FullRegions::open(&path, self.full_rt_preference);
             }
