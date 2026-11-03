@@ -1551,6 +1551,26 @@ describe('a run that outlives the editor', () => {
     expect(editor.run.pagesDone).toBe(0)
   })
 
+  it('counts a project run\'s pages in other chapters toward its progress', async () => {
+    const subscribers = new Set()
+    const emit = (event) => { for (const handler of subscribers) handler(event) }
+    const runClean = vi.fn(async () => ({ runId: 'proj', pages: [{ pageIndex: 0 }, { pageIndex: 1 }, { pageIndex: 0 }] }))
+    setBackend(backendListing([], { runClean, subscribe: (handler) => {
+      subscribers.add(handler)
+      return () => subscribers.delete(handler)
+    } }))
+    await openEditorChapter('pr-bg', 'ch-bg')
+    expect(await startRun('project', { mode: 'detect' })).toBe('proj')
+    emit({ type: 'page-done', runId: 'proj', chapterId: 'ch-bg', page: { ...page(0), regions: [] } })
+    emit({ type: 'page-started', runId: 'proj', chapterId: 'ch-other', pageIndex: 1 })
+    emit({ type: 'page-done', runId: 'proj', chapterId: 'ch-other', page: { ...page(1), id: 'other1', regions: [] } })
+    expect(editor.run).toMatchObject({ active: true, queued: 3, pagesDone: 2 })
+    // Another run's page elsewhere is not this one's.
+    emit({ type: 'page-done', runId: 'someone-else', chapterId: 'ch-other', page: { ...page(0), id: 'other0', regions: [] } })
+    expect(editor.run.pagesDone).toBe(2)
+    expect(editor.chapter.pages[1].status).not.toBe('cleaning')
+  })
+
   it('does not leave an already-finished area busy when its handle arrives late', async () => {
     const subscribers = new Set()
     const emit = (event) => { for (const handler of subscribers) handler(event) }

@@ -941,6 +941,14 @@ function onBackendEvent(event) {
   // Before the chapter check: a flow waiting on its run (`runFinished`) must
   // hear the end of it even when the reader has opened another chapter since.
   if (event.type === 'run-finished') settleRun(event)
+  // A project run walks the other chapters too, and its total counts their
+  // pages: each one done counts here, or the count stops at this chapter's
+  // last page and the run reads as stuck until it ends.
+  if (event.type === 'page-done' && editor.chapter && event.chapterId !== editor.chapter.id
+    && editor.run.runId === event.runId) {
+    editor.run.pagesDone += 1
+    return
+  }
   if (!editor.chapter || event.chapterId !== editor.chapter.id) return
   // The backend wrote an undo step by itself (a detection cleaned, a result
   // rejected). Only the open chapter's index is held here, so another
