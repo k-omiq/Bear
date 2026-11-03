@@ -219,8 +219,7 @@ pub struct Health {
     /// **This machine's RAM only.** On a discrete GPU the card's share is not in
     /// it: the sidecar bounds that against the card's own free memory, and the
     /// gate checks this figure against RAM. Until 2026-11-03 `sdnq` declared one
-    /// figure for both, which refused a 16 GB Windows machine with an NVIDIA card
-    /// FLUX 3 at 12 GiB when its RAM holds 6.5.
+    /// figure for both, a Mac's, on every device.
     #[serde(default)]
     pub working_set_bytes: Option<u64>,
     /// How `working_set_bytes` was arrived at. The same distinction

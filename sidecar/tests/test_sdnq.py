@@ -277,9 +277,12 @@ class Placement(unittest.TestCase):
         return placement_for(**args)  # type: ignore[arg-type]
 
     def test_a_card_that_holds_the_whole_pipeline_keeps_it(self) -> None:
-        self.assertEqual(self._place(6 * GIB + RESIDENT_MARGIN), "resident")
-        self.assertEqual(self._place(6 * GIB + RESIDENT_MARGIN - 1), "model")
-        self.assertEqual(self._place(24 * GIB, family="qwen", whole=17 * GIB), "resident")
+        klein = RESIDENT_MARGIN["klein"]
+        self.assertEqual(self._place(6 * GIB + klein), "resident")
+        self.assertEqual(self._place(6 * GIB + klein - 1), "model")
+        # Qwen held whole ran out of an L4's 21.9 GiB free with 17 GiB of weights.
+        self.assertEqual(self._place(int(21.9 * GIB), family="qwen", whole=17 * GIB), "model")
+        self.assertEqual(self._place(30 * GIB, family="qwen", whole=17 * GIB), "resident")
 
     def test_a_card_too_small_for_one_component_takes_it_a_piece_at_a_time(self) -> None:
         self.assertEqual(self._place(4 * GIB), "sequential")
@@ -349,22 +352,23 @@ class RamFigure(unittest.TestCase):
         with mock.patch.object(sdnq, "get_nvidia_total_bytes", return_value=nvidia):
             return backend.get_working_set_bytes()
 
-    def test_an_nvidia_card_holds_the_gpu_share_so_ram_is_asked_for_less(self) -> None:
+    def test_an_nvidia_card_is_asked_for_its_own_ram_figure(self) -> None:
         card = 12 * GIB
         self.assertEqual(self._figure("flux3-image-klein", None), DECLARED_WORKING_SET["flux3-image-klein"])
         self.assertEqual(self._figure("flux3-image-klein", card), DECLARED_RAM_WORKING_SET["flux3-image-klein"])
         self.assertEqual(self._figure("flux3-image-klein", card, "cuda"), DECLARED_RAM_WORKING_SET["flux3-image-klein"])
-        # The 16 GB Windows machine that was refused: 6.7 GiB left for the sidecar.
-        self.assertLess(self._figure("flux3-image-klein", card), 7_213_637_632)
 
     def test_a_device_that_shares_ram_is_asked_for_the_whole_figure(self) -> None:
         for device in ("xpu", "mps"):
             self.assertEqual(self._figure("flux2-klein-4b", 8 * GIB, device), DECLARED_WORKING_SET["flux2-klein-4b"])
 
-    def test_every_model_has_both_figures_and_ram_alone_is_never_more(self) -> None:
+    def test_every_model_has_both_figures_and_ram_is_not_below_what_an_l4_measured(self) -> None:
+        """Peak RAM through this backend on an L4, 2026-11-03, in GiB."""
+        measured = {"flux2-klein-4b": 7.57, "flux3-image-klein": 9.98, "flux2-klein-9b": 10.57,
+                    "qwen-image-edit-2511": 25.08}
         self.assertEqual(set(DECLARED_RAM_WORKING_SET), set(DECLARED_WORKING_SET))
         for model, ram in DECLARED_RAM_WORKING_SET.items():
-            self.assertLessEqual(ram, DECLARED_WORKING_SET[model], model)
+            self.assertGreater(ram, measured[model] * GIB, model)
 
     def test_the_ram_figure_is_never_below_the_download_it_holds(self) -> None:
         """Offload keeps every component in RAM. Sizes from cleaner-core's models.rs."""

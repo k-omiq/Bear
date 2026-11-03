@@ -111,15 +111,18 @@ DECLARED_WORKING_SET = {
 #:
 #: There the GPU's share is on the card, outside the RAM the hardware gate checks, and
 #: the allocator cap bounds it against the card's own memory (:meth:`SdnqBackend.open`).
-#: The L4 host peaks above, rounded up, and never below the weights on disk, because
-#: offload keeps every component in RAM: Klein 9B's 12.6 GB and FLUX 3's 6.65 GB are
-#: more than their measured peaks. Qwen keeps its figure: its host peak grew to 27 GiB
-#: on Linux before malloc_trim, and Windows has no malloc_trim. Not measured on Windows.
+#: Measured through this backend on an L4, 2026-11-03 (torch 2.13.0 cu130, Linux), as
+#: the process's peak RAM over crops up to 1296x976, the largest of each model's runs:
+#: Klein 4B 7.57 GiB offloaded (6.28 held whole), FLUX 3 9.98 with 7.2 GiB free on the
+#: card (7.9 with more), Klein 9B 10.57 offloaded, Qwen 22.93 offloaded and 25.08 when a
+#: pipeline held whole ran out of card memory and moved back. The peak is the text
+#: encoder's load, through RAM on its way to the card. Rounded up, and never below the
+#: weights on disk. Not measured on Windows, which has no malloc_trim.
 DECLARED_RAM_WORKING_SET = {
-    "flux2-klein-4b": 6_442_450_944,  # 6 GiB
-    "flux3-image-klein": 6_979_321_856,  # 6.5 GiB
+    "flux2-klein-4b": 8_589_934_592,  # 8 GiB
+    "flux3-image-klein": 11_274_289_152,  # 10.5 GiB
     "flux2-klein-9b": 12_884_901_888,  # 12 GiB
-    "qwen-image-edit-2511": 24_696_061_952,  # 23 GiB
+    "qwen-image-edit-2511": 27_917_287_424,  # 26 GiB
 }
 
 #: Long side a small crop is upscaled to before the edit. `mflux.py`'s constant,
@@ -138,9 +141,11 @@ LATENT_STRIDE = 16
 DEVICE_PLACEMENT = "device_placement"
 
 #: What a pipeline held whole on a discrete GPU must leave free for a render, its text
-#: encoder's turn included. diffusers' own margin for `enable_auto_cpu_offload`, which
-#: FLUX 3 already runs under. Not measured for Klein or Qwen held whole.
-RESIDENT_MARGIN = 3 * 1024 * 1024 * 1024
+#: encoder's turn included, by family. Measured on an L4, 2026-11-03, crops up to
+#: 1296x976: Klein 4B and 9B held whole peaked 0.8 GiB over their weights on disk, so
+#: diffusers' own 3 GiB for `enable_auto_cpu_offload` is ample. Qwen held whole ran out
+#: of memory with 5 GiB to spare, so it takes 8, which nothing has measured yet.
+RESIDENT_MARGIN = {"klein": 3 * 1024**3, "qwen": 8 * 1024**3}
 
 #: Canonical name for the caching allocator's fraction cap. Matches
 #: `cleaner_core::sidecar::backend::MEMORY_FRACTION`.
@@ -323,7 +328,7 @@ def placement_for(
 
     - ``"auto"``: FLUX 3's components manager, which keeps components on the card until
       another one needs the room. It decides for itself.
-    - ``"resident"``: the whole pipeline on a discrete GPU with :data:`RESIDENT_MARGIN` to
+    - ``"resident"``: the whole pipeline on a discrete GPU with its :data:`RESIDENT_MARGIN` to
       spare. No weights cross the bus between renders, and RAM is left with none of them.
     - ``"model"``: one component on the card at a time. Unified memory always takes this:
       the card's memory is RAM, and two copies would be one too many.
@@ -339,7 +344,8 @@ def placement_for(
         return "auto"
     if low_vram is True:
         return "sequential"
-    if discrete and device == "cuda" and room and whole and room >= whole + RESIDENT_MARGIN:
+    margin = RESIDENT_MARGIN.get(family)
+    if margin and discrete and device == "cuda" and room and whole and room >= whole + margin:
         return "resident"
     if low_vram is None and device in ("cuda", "xpu") and room and largest and room < largest * 3 // 2:
         return "sequential"

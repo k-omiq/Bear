@@ -723,19 +723,30 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
-**Local FLUX gate on NVIDIA cards (2026-11-03): split in code, not run on Windows.** A 16 GB Windows PC was
-refused FLUX 3: `sdnq` declared 12 GiB, and the sidecar may use 6.7 GiB of RAM there. The 12 GiB is a Mac figure,
-RAM and GPU in one pool. When NVML finds an NVIDIA card, the sidecar now declares RAM alone (Klein 4B 6 GiB, FLUX 3
-6.5 GiB, Klein 9B 12 GiB, Qwen 23 GiB), and the card's cap is its free memory at open in place of the RAM budget.
-The RAM figures are L4 host peaks on Linux, rounded up and never below the download, since offload keeps every
-component in RAM. Not measured: RAM peaks on Windows, which has no `malloc_trim`; whether the cap at free memory
-stops the Windows driver's spill into RAM; the NVML probe on a real Windows driver. An Intel Arc card still gets the
-full figure, because an Intel GPU may share RAM. With several NVIDIA cards, the smallest one's memory is counted.
-Also in code the same day: a pipeline that fits the card's free memory with 3 GiB to spare now stays on the card,
-in place of model offload moving every weight across the bus for every render. That is Klein 4B on a 12 GB card,
-Klein 9B on a 16 GB card with 15 GiB free, and Qwen on 24 GB; FLUX 3 already kept components on the card. A render that runs out of card
-memory offloads and asks again once. Not measured: whether 3 GiB (diffusers' own margin) is enough for Klein or Qwen
-held whole, the render time it saves, and the RAM it frees after load.
+**Local FLUX on NVIDIA cards (2026-11-03): measured on an L4 through the real backend.** A 16 GB Windows PC was
+refused FLUX 3: `sdnq` declared 12 GiB, a Mac figure for RAM and GPU in one pool, and the sidecar may use 6.7 GiB of
+RAM there. When NVML finds an NVIDIA card, the sidecar now declares RAM alone, and the card's cap is its free memory
+at open in place of the RAM budget. A pipeline that fits the card's free memory with room to spare stays on it,
+in place of model offload moving every weight across the bus for every render; a render that runs out of card
+memory offloads and asks again once. Two scratch runs on one L4 (`~/dev/manga-bench-sets/vram-check-2026-11-03`,
+torch 2.13.0 cu130, three real crops up to 1296 x 976, other card sizes faked by a process holding card memory):
+
+- Klein 4B held whole: 4 to 13% faster, steady RAM 4.9 GiB against 7.3 offloaded, card peak 5.9 GiB. It is held
+  whole with 10.7 GiB free (a 12 GB card) and offloaded with 7.2 (an 8 GB card).
+- Klein 9B held whole: 6 to 15% faster, steady RAM 4.9 GiB against 10.3, card peak 12.5 GiB.
+- Qwen held whole ran out of card memory with 5 GiB to spare, offloaded and finished; the failed try cost 60 s. Its
+  margin is now 8 GiB, so an L4 offloads it. Klein's 3 GiB is ample: it peaked 0.8 GiB over its weights.
+- FLUX 3 is left to its components manager, which already keeps components on the card. Peak RAM 7.9 GiB with
+  10.7 or 21.9 GiB free on the card, 10.0 with 7.2.
+- Peak RAM is the text encoder's load, through RAM on its way to the card. The RAM figures are now these peaks
+  rounded up: Klein 4B 8 GiB, FLUX 3 10.5, Klein 9B 12, Qwen 26 (Qwen offloaded peaked 22.9, 25.1 after a failed
+  hold). The figures first written that day from older L4 host peaks (FLUX 3 6.5 GiB) were below these.
+
+So the 16 GB PC that was refused is still refused FLUX 3, now at 10.5 GiB against 6.7, and that is what was
+measured. Loading the text encoder straight to the card might bring FLUX 3 near 5 GiB of RAM on a large card; not
+tried. Not measured: any of this on Windows, which has no `malloc_trim`; whether the cap at free memory stops the
+Windows driver's spill into RAM; the NVML probe on a Windows driver; Qwen held whole on a 32 GB card. An Intel Arc
+card still gets the Mac figure. With several NVIDIA cards, the smallest one's memory is counted.
 
 **Closing on Windows (2026-11-02): the close hang found, fixed in code.** The release build's close check stopped the
 app 30 s after its window closed, and a debugger showed the main thread in `PeekNamedPipe` and `dev-log-read` in
