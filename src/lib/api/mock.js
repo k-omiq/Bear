@@ -586,6 +586,8 @@ export function createMockBackend(options = {}) {
   let projectCounter = 0
   let handCounter = 0
   let mockEraseCount = 0
+  /** Numbers each live copy redraw's revision (`redrawLiveCopies`). */
+  let mockLiveRedraws = 0
   /** Numbers each Detect run's undo group. */
   let detectRuns = 0
 
@@ -644,6 +646,42 @@ export function createMockBackend(options = {}) {
     }
     return null
   }
+
+  /**
+   * Draw again the live copies on `page` whose picked area meets `boxes`, the
+   * places a change of layer `changedId` altered, as `livecopy.rs#redraw`
+   * does after every edit. The mock keeps no pixels, so a redrawn copy is
+   * answered as changed with a new revision, which is what the native redraw
+   * writes. A copy reads every layer but itself and the live copies after it,
+   * and a copy redrawn alters its own place for the ones after it. The
+   * changed layer is drawn again itself only when it was put back (`itself`,
+   * an undo), where natively its pixels may be old; any other edit of a live
+   * copy leaves its area as it was.
+   *
+   * @param {any} page
+   * @param {string|null} changedId
+   * @param {Array<{x: number, y: number, w: number, h: number}|null|undefined>} boxes
+   * @param {{itself?: boolean}} [options]
+   */
+  const redrawLiveCopies = (page, changedId, boxes, { itself = false } = {}) => {
+    if (!page) return
+    const touched = boxes.filter(Boolean)
+    const meets = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    const changedAt = page.regions.findIndex((region) => region.id === changedId)
+    page.regions.forEach((region, at) => {
+      const snapshotParams = region.mask?.provenance?.params_snapshot
+      if (snapshotParams?.mode !== 'region-copy' || snapshotParams.live !== true) return
+      const area = region.mask.sourceBbox ?? region.bbox
+      const reached = region.id === changedId
+        ? itself
+        : !(isLiveCopy(page.regions[changedAt]) && changedAt > at) && touched.some((box) => meets(box, area))
+      if (!reached) return
+      region.mask.legacyPatchRevision = `${region.id}-live-${(mockLiveRedraws += 1)}`
+      touched.push(region.bbox)
+    })
+  }
+  const isLiveCopy = (region) => region?.mask?.provenance?.params_snapshot?.mode === 'region-copy' &&
+    region.mask.provenance.params_snapshot.live === true
 
   const findPage = (pageId) => {
     for (const project of state.projects) {
@@ -3377,6 +3415,7 @@ export function createMockBackend(options = {}) {
         if (detection && isDetection(detection.region) && typeof params.grantNonce !== 'string' && !wantsCloud(params)) {
           refuseBusyPage(detection.chapter.id, detection.page.index)
           cleanDetection(detection.region, detection.page, params)
+          redrawLiveCopies(detection.page, detection.region.id, [detection.region.bbox])
           detection.page.status = settledStatus(detection.page)
           return {
             status: 'applied',
@@ -3417,7 +3456,9 @@ export function createMockBackend(options = {}) {
 
       // A hand tool over a stored detection cleans it too, so it keeps the
       // detection and is the backend's undo step, as `region.rs` commits it.
+      const drawnBefore = found.region.bbox ? { ...found.region.bbox } : null
       const applied = cleaningHere(found, () => applyToolToRegion(found.region, found.page, toolContext, { tool, params }))
+      redrawLiveCopies(found.page, found.region.id, [drawnBefore, found.region.bbox])
       await delay(timing.method)
       notifyAll(applied.notices)
       return {
@@ -3463,6 +3504,7 @@ export function createMockBackend(options = {}) {
         tool,
         params,
       })
+      redrawLiveCopies(page, created.region.id, [created.region.bbox])
       notifyAll(created.notices)
       return { region: snapshot(created.region), pageStatus: page.status }
     },
@@ -3530,6 +3572,12 @@ export function createMockBackend(options = {}) {
           changed.push({ regionId: region.id, pageIndex: owner.index, before, after: snapshot(region) })
         }
         if (changed.length === 0) continue
+        for (const layer of changed) redrawLiveCopies(owner, layer.regionId, [layer.before?.bbox])
+        // A live copy redrawn after it was erased answers as it is now.
+        for (const layer of changed) {
+          const now = layer.after && owner.regions.find((candidate) => candidate.id === layer.regionId)
+          if (now) layer.after = snapshot(now)
+        }
         if (owner.status === 'cleaned' && owner.regions.every((candidate) => !candidate.mask)) owner.status = 'unclean'
         erased.push(...changed.map((layer) => ({ ...layer, pageStatus: owner.status })))
       }
@@ -3832,6 +3880,7 @@ export function createMockBackend(options = {}) {
         refuseBusyPage(found.chapter.id, found.page.index)
         const index = found.page.regions.findIndex((r) => r.id === regionId)
         found.page.regions.splice(index, 1)
+        redrawLiveCopies(found.page, regionId, [found.region.bbox])
         if (pageStatus) found.page.status = pageStatus
         return null
       }
@@ -3843,8 +3892,10 @@ export function createMockBackend(options = {}) {
         state.projects.flatMap((project) => project.chapters).find((c) => c.pages.includes(page))
       if (chapter) refuseBusyPage(chapter.id, page.index)
       const index = page.regions.findIndex((r) => r.id === regionId)
+      const drawnBefore = index >= 0 ? page.regions[index].bbox : null
       if (index >= 0) page.regions[index] = structuredClone(region)
       else page.regions.push(structuredClone(region))
+      redrawLiveCopies(page, regionId, [drawnBefore, region.bbox], { itself: true })
       if (pageStatus) page.status = pageStatus
       return snapshot(page.regions.find((r) => r.id === regionId))
     },
@@ -3965,9 +4016,11 @@ export function createMockBackend(options = {}) {
       if (!region.mask) throw new Error('masks.refused.noOutput')
       const next = editedLayer(layerOf(region), layer ?? {}, layerCapabilities(region))
       const source = region.mask.sourceBbox ?? { ...region.bbox }
+      const drawnBefore = { ...region.bbox }
       region.mask.sourceBbox = source
       region.mask.layer = next
       region.bbox = displayBbox(source, next, page)
+      redrawLiveCopies(page, region.id, [drawnBefore, region.bbox])
       return snapshot(region)
     },
 

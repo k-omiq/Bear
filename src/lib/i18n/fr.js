@@ -58,7 +58,7 @@ export const fr = {
       dither: "Réduire les bandes",
       ditherHint: "Ajoute un léger bruit pour que le dégradé ne montre pas de bandes.",
       asScreentone: "Utiliser la trame de la page",
-      asScreentoneHint: "Sur une page enregistrée en niveaux de gris, dessine le dégradé avec les points de la trame autour de la sélection, pour qu’il se fonde dans la page. Une page enregistrée en couleur, même le scan d’un dessin en noir et blanc, reçoit un dégradé simple.",
+      asScreentoneHint: "Sur une page en noir et blanc, dessine le dégradé avec les points de la trame autour de la sélection, pour qu’il se fonde dans la page. Une page en couleur reçoit un dégradé simple.",
       match: "Assortir aux alentours",
       edit: "Modifier le dégradé",
     },
@@ -573,7 +573,7 @@ export const fr = {
         hint: {
           tight: 'Le choix par défaut, comme dans 1.0.0-beta.15 et avant. LaMa ne redessine que les lettres. Le dessin sous le texte est le mieux gardé, mais de légères formes de lettres grises peuvent rester sur le noir ou le papier uni. Ne vaut que pour LaMa sur cet ordinateur ; les modèles cloud l’ignorent.',
           wide: 'Comme dans 1.0.0-beta.16 à beta.18. LaMa redessine aussi 5 px autour de chaque lettre. Les traces de lettres sur le noir et le papier uni disparaissent, mais le dessin sous le texte peut baver. Ne vaut que pour LaMa sur cet ordinateur ; les modèles cloud l’ignorent.',
-          adaptive: 'Large là où la page à côté du texte est unie ou noire, serré là où il y a du dessin. Les traces de lettres sur les zones unies disparaissent et le dessin sous le texte est gardé. Ne vaut que pour LaMa sur cet ordinateur ; les modèles cloud l’ignorent.',
+          adaptive: 'Large là où la page à côté du texte est unie ou noire, serré là où il y a du dessin. Les traces de lettres sur les zones unies disparaissent et l’essentiel du dessin sous le texte est gardé ; un titre lumineux sur du dessin peut encore baver. Ne vaut que pour LaMa sur cet ordinateur ; les modèles cloud l’ignorent.',
         },
       },
     },

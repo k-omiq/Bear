@@ -5313,6 +5313,7 @@ pub(crate) mod tests {
     struct FakeLocal {
         flux_model: &'static str,
         renders: Vec<cleaner_core::engines::postprocess::Finishing>,
+        holes: Vec<cleaner_core::engines::lama::HoleMode>,
     }
 
     impl FakeLocal {
@@ -5333,9 +5334,11 @@ pub(crate) mod tests {
             page: &cleaner_core::image::Raster,
             fitted: &cleaner_core::fit::Fitted,
             finishing: cleaner_core::engines::postprocess::Choice,
+            hole: cleaner_core::engines::lama::HoleMode,
         ) -> Result<crate::run::Made, &'static str> {
             use cleaner_core::engines::model::{applied_mask, page_crop};
             self.renders.push(finishing.finishing);
+            self.holes.push(hole);
             let mask = applied_mask(fitted, page.width, page.height);
             let mut pixels = page_crop(page, mask.bounds);
             pixels.data.fill(FakeLocal::level(finishing.finishing));
@@ -5378,7 +5381,7 @@ pub(crate) mod tests {
         use cleaner_core::engines::postprocess::{Choice, Finishing};
         let fixture = local_result("refinish-lama", Engine::Lama, serde_json::json!({ "tone": { "gain": 1.0 } }));
         let journal = AttemptJournal::new(&fixture.journal_dir, cleaner_core::cloud_wire::provisional_fixture_limits());
-        let mut lama = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new() };
+        let mut lama = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new() };
 
         let previews = previews_at(&journal, &fixture.manifest, "reg-1", &mut lama).unwrap();
         assert_eq!((previews.unavailable, previews.current), (None, None));
@@ -5415,6 +5418,40 @@ pub(crate) mod tests {
         assert_eq!(crate::history::load(&fixture.manifest).entries.len(), 1);
     }
 
+    /// **A LaMa result is finished again with the hole it was cut with**, not
+    /// the one the setting holds now. One from before the hole was recorded
+    /// is read by the version that made it: beta.16 to beta.18 cut wide,
+    /// every earlier one tight. A pick keeps the record.
+    #[test]
+    fn refinish_cuts_the_hole_a_local_result_recorded() {
+        use crate::inference::refinish::{apply_at, previews_at};
+        use cleaner_core::engines::lama::HoleMode;
+        use cleaner_core::engines::postprocess::{Choice, Finishing};
+        let cases = [
+            ("refinish-hole-recorded", serde_json::json!({ "lama_hole": "adaptive" }), "1.0.0-beta.19", HoleMode::Adaptive),
+            ("refinish-hole-beta17", serde_json::json!({}), "1.0.0-beta.17", HoleMode::Wide),
+            ("refinish-hole-beta15", serde_json::json!({}), "1.0.0-beta.15", HoleMode::Tight),
+        ];
+        for (name, params, version, hole) in cases {
+            let fixture = RenderFixture::new(name);
+            let mut job = Job::open(&fixture.manifest).unwrap();
+            let mut patch = fixture.committed_patch();
+            patch.provenance.engine = Engine::Lama;
+            patch.provenance.engine_version = version.into();
+            patch.provenance.params_snapshot = params.clone();
+            job.complete_region(0, &patch, None).unwrap();
+            let journal = AttemptJournal::new(&fixture.journal_dir, cleaner_core::cloud_wire::provisional_fixture_limits());
+            let mut lama = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new() };
+            previews_at(&journal, &fixture.manifest, "reg-1", &mut lama).unwrap();
+            assert!(lama.holes.iter().all(|&asked| asked == hole), "{name}: {:?}", lama.holes);
+            apply_at(&journal, &fixture.manifest, "reg-1", Choice { finishing: Finishing::Poisson, grayscale: false }, &mut lama)
+                .unwrap();
+            assert_eq!(lama.holes.last(), Some(&hole), "{name}");
+            let changed = fixture.committed_patch().provenance.params_snapshot;
+            assert_eq!(changed.get("lama_hole"), params.get("lama_hole"), "{name}: the record is kept as it was");
+        }
+    }
+
     /// A FLUX result from this computer is asked again of the model that
     /// made it, or not at all: another local FLUX model set since is said,
     /// and nothing runs or is written.
@@ -5424,7 +5461,7 @@ pub(crate) mod tests {
         use cleaner_core::engines::postprocess::{Choice, Finishing};
         let fixture = local_result("refinish-flux", Engine::Flux, serde_json::json!({ "flux_model": "flux2-klein-4b" }));
         let journal = AttemptJournal::new(&fixture.journal_dir, cleaner_core::cloud_wire::provisional_fixture_limits());
-        let mut other = FakeLocal { flux_model: "flux2-klein-9b", renders: Vec::new() };
+        let mut other = FakeLocal { flux_model: "flux2-klein-9b", renders: Vec::new(), holes: Vec::new() };
         assert_eq!(previews_at(&journal, &fixture.manifest, "reg-1", &mut other).unwrap().unavailable, Some(Unavailable::ModelChanged));
         let before = std::fs::read(&fixture.manifest).unwrap();
         let refused = apply_at(&journal, &fixture.manifest, "reg-1", Choice { finishing: Finishing::Poisson, grayscale: false }, &mut other)
@@ -5433,7 +5470,7 @@ pub(crate) mod tests {
         assert!(other.renders.is_empty());
         assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
 
-        let mut same = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new() };
+        let mut same = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new() };
         let previews = previews_at(&journal, &fixture.manifest, "reg-1", &mut same).unwrap();
         assert_eq!(previews.unavailable, None);
         assert_eq!(same.renders.len(), Finishing::ALL.len());

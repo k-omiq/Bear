@@ -25,6 +25,7 @@
 use std::path::Path;
 
 use cleaner_core::cloud_decode::DecodedResultCrop;
+use cleaner_core::engines::lama::HoleMode;
 use cleaner_core::engines::postprocess::{Choice, Finishing, Report};
 use cleaner_core::engines::render::{Preprocessing, ToneReport};
 use cleaner_core::fit::Fitted;
@@ -55,8 +56,9 @@ pub(crate) trait LocalRender {
     /// The model a FLUX render on this computer runs now.
     fn flux_model(&self) -> &str;
     /// `fitted` on `page` rendered by `engine` and finished by `finishing`,
-    /// or the `decline.reason.*` key the model refused with.
-    fn render(&mut self, engine: Engine, page: &Raster, fitted: &Fitted, finishing: Choice)
+    /// or the `decline.reason.*` key the model refused with. A LaMa render
+    /// cuts `hole`, the one the result was made with.
+    fn render(&mut self, engine: Engine, page: &Raster, fitted: &Fitted, finishing: Choice, hole: HoleMode)
         -> Result<crate::run::Made, &'static str>;
 }
 
@@ -65,9 +67,9 @@ impl LocalRender for crate::region::LocalModels {
         crate::region::LocalModels::flux_model(self)
     }
 
-    fn render(&mut self, engine: Engine, page: &Raster, fitted: &Fitted, finishing: Choice)
+    fn render(&mut self, engine: Engine, page: &Raster, fitted: &Fitted, finishing: Choice, hole: HoleMode)
         -> Result<crate::run::Made, &'static str> {
-        crate::region::LocalModels::render(self, engine, page, fitted, finishing)
+        crate::region::LocalModels::render(self, engine, page, fitted, finishing, hole)
     }
 }
 
@@ -305,7 +307,8 @@ impl Reopened {
             }
             Answer::Local(engine) => {
                 let made = models
-                    .render(*engine, &self.cloud.input.image, &self.cloud.fitted, choice)
+                    .render(*engine, &self.cloud.input.image, &self.cloud.fitted, choice,
+                        crate::run::recorded_lama_hole(&self.record.provenance))
                     .map_err(|reason| format!("refinish_declined: {reason}"))?;
                 Ok(Finished { mask: made.mask, pixels: made.pixels, matched: made.matched, tone: None })
             }
@@ -381,7 +384,7 @@ impl LocalRender for NoModels {
         ""
     }
 
-    fn render(&mut self, _: Engine, _: &Raster, _: &Fitted, _: Choice) -> Result<crate::run::Made, &'static str> {
+    fn render(&mut self, _: Engine, _: &Raster, _: &Fitted, _: Choice, _: HoleMode) -> Result<crate::run::Made, &'static str> {
         Err("decline.reason.rungUnavailable")
     }
 }

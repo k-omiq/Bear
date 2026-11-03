@@ -725,19 +725,34 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 **Eraser on moved copies, a live gradient, and Live copy (2026-11-03): tested in code, not run in the real app.**
 The eraser read a layer as drawn (already moved by its layer style) and mapped the stroke through the move again,
-so a moved or turned Region copy was missed. It now edits the stored patch, revisions archive stored bytes, and a
-duplicated copy is committed with content-named files so an undo of a later erase has a revision. On a chapter with
-a turned page the eraser still edits the display reconstruction, which has the same double move for a moved copy:
-not fixed, not measured. The Gradient tool commits by itself 300 ms after the last change, one undo step per
-commit; Done replaces Apply and keeps the selection while a run holds the page; Undo, Redo and Escape let it go and
-drop a change not yet shown. Not measured: how a slider drag feels with a commit per pause on a large page, the
-preview flicker as the page reloads in WKWebView, and the preview drawn over the old layer at low opacity. Use
-page dots still needs a page saved in greyscale; a black and white scan saved as RGB gets a plain gradient (the
-hint says so). Live copy redraws from its picked area in `underlay::refresh_dependencies_of` and after a run
-commits a page. Where it cannot (a turned page, an area off its page) it is flagged for review instead. Not done:
-a live copy reading a layer of the next page that hangs over a long strip join, and the mock (it has no pixels, so
-a live copy there never changes). Each redraw archives a patch revision and decodes the page again, so a busy page
-grows its revision folder.
+so a moved or turned Region copy was missed. It now edits the layer as stored, in the frame its style is stated in:
+display coordinates for most layers (`Job::load_display_stored_patch`, native parts included, which it now erases
+too), and the page's native frame, with the stroke turned back into it, for a layer saved whole on a page turned
+since. A duplicated copy is committed with content-named files on every chapter, turned pages and native parts
+included, so an undo of a later erase has a revision. Still not erased: a layer saved whole on a turned page that
+hangs over a long strip join, because its two pages may be turned different ways and there is no one frame to edit
+it in.
+
+The Gradient tool commits by itself 300 ms after the last change, one undo step per commit. Done, `Enter` and
+Escape send a change still waiting; a refusal (a run on the page, a failed save) keeps the selection, and a change a
+run refused is sent once the page is free, with one notice per hold. The preview hides the held layer's old pixels
+(the page's per-layer pictures) until the page has drawn the new ones. Use page dots now also runs on an RGB page
+whose channels agree within `Raster::is_neutral`'s 1.5/255, so a scan with a slight colour cast still gets a plain
+gradient; with the dots on there is no client preview, because the dots are found and phase-locked natively.
+Switching tool or turning the page still drops a change made in the last 300 ms: the commit path
+(`applyActiveToolToRegion`) reads the tool in use when it runs, and after a page turn the layer may not be loaded,
+so a flush there would apply the wrong tool or make a second layer. Not measured: how a slider drag feels with a
+commit per pause on a large page, and the preview handover in WKWebView.
+
+Live copy redraws from its picked area in `underlay::refresh_dependencies_of` and after a run commits a page. It
+now reads layers of the neighbour page hanging over a long strip join, and edits there reach it; it redraws on a
+chapter with a turned page, in display coordinates. A refresh decodes each page once (`underlay::Pages`) where the
+redraw and the dependency check each decoded it. The revisions redraws write are pruned when the chapter is opened
+(`livecopy::prune_revisions`): a live copy's revisions that are not the current one and that no undo step names go,
+files included; at open the interface holds no layer it read before, so no step it is about to write can name one.
+Still flagged for review rather than redrawn: a live copy saved whole on a page turned since it was made (its style
+is in the page's native frame) and one whose area runs off its page. The Vite mock now answers a redrawn live copy
+with a new revision (`redrawLiveCopies`); it has no pixels, so what the copy shows is not checked there.
 
 **An approved held mask, and a project run's progress (2026-11-03): fixed in code, not run in the real app.**
 Approving a held mask stored it as text in a bubble whenever its reason was not one of the two candidate keys.
@@ -858,8 +873,11 @@ Still wrong under Adaptive: a pink glow title over art (c124-p002-d11) keeps pin
 outside the mask and the art beside it reads busy. Not measured: other chapters, the refusal counts of the 12 pages
 of 2026-11-01 under each choice (Tight had 18 refused there), WebGPU, a full Clean run through the app (the bench
 called the renderer with the run's fit), and the Settings control in the shipped WKWebView (the Vite mock only).
-A result's hole mode is not recorded with it: changing a saved LaMa result's finishing renders it again with the
-hole the setting holds now, not the one that made it. No test covers a hand edit reading the setting (only a run).
+Each LaMa result now records its hole (`lama_hole` in its record), and a change of its finishing renders it again
+with that hole. A result made before is read by the app version it records: Wide for 1.0.0-beta.16 to beta.18, Tight
+for earlier ones. So a result from a local build of main between the setting landing and this record (it says
+beta.18) is read as Wide even where it was cut Tight; no release had that build. A hand edit reads the setting
+(`a_hand_edit_reads_the_lama_hole_and_records_it`).
 Users of beta.16 to beta.18 had Wide and now get Tight; the release notes say where to change it.
 
 **LaMa `edgeEnergy` refusals (2026-11-01): fixed in the hole, the check is unchanged.** On 12 real pages

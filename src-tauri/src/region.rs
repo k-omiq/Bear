@@ -717,8 +717,12 @@ struct Bench {
 impl Bench {
     fn open(app: &tauri::AppHandle) -> Bench {
         use tauri::Manager;
-        let app_data = app.path().app_data_dir().ok();
-        let settings = crate::settings::read(app).ok();
+        Bench::from_settings(crate::settings::read(app).ok(), app.path().app_data_dir().ok())
+    }
+
+    /// [`Bench::open`] from the settings and app data folder it reads, or
+    /// none of either.
+    fn from_settings(settings: Option<serde_json::Value>, app_data: Option<PathBuf>) -> Bench {
         // The runtime is downloaded after install, so this can legitimately
         // fail - and a failure is not fatal here the way it is for a run:
         // rung 0 is arithmetic over the page's own samples and needs no
@@ -1044,14 +1048,15 @@ impl LocalModels {
     }
 
     /// `fitted` on `page` rendered by `engine`, LaMa or FLUX on this computer,
-    /// and finished by `finishing`. A refusal is a `decline.reason.*` key, as
-    /// an edit's is.
+    /// and finished by `finishing`; LaMa cuts `hole`. A refusal is a
+    /// `decline.reason.*` key, as an edit's is.
     pub(crate) fn render(
         &mut self,
         engine: Engine,
         page: &Raster,
         fitted: &Fitted,
         finishing: cleaner_core::engines::postprocess::Choice,
+        hole: cleaner_core::engines::lama::HoleMode,
     ) -> Result<run::Made, &'static str> {
         match engine {
             Engine::Flux => self.0.rung2.flux.render(page, fitted, Some(finishing)),
@@ -1060,7 +1065,13 @@ impl LocalModels {
                     return Err("decline.reason.rungUnavailable");
                 }
                 self.0.rung2.finishing = Some(finishing);
-                // A re-render of a stored patch: its lettering is already extended.
+                // The hole the result was cut with, not the one the setting
+                // holds now: the same answer finished another way.
+                self.0.rung2.hole = hole;
+                // A re-render of a stored patch: its stored lettering is the
+                // one its hole was cut from, extended already where that hole
+                // extends it and kept as found under the tight one, so it is
+                // not extended again.
                 self.0.rung2.detected_mask = false;
                 match run::render_rung(&mut self.0.rung2, Engine::Lama, page, fitted) {
                     Ok(run::Rendered::Made(made)) => Ok(*made),
@@ -1791,12 +1802,7 @@ fn edit_with_bench_render(
         made.tiles,
         &verdict,
     );
-    if made.engine == Engine::Flux {
-        bench.rung2.flux.record(&mut snapshot);
-    }
-    if let Some(matched) = made.matched.as_ref() {
-        snapshot["postprocess"] = matched.provenance();
-    }
+    run::record_made(&mut bench.rung2, made.engine, made.matched.as_ref(), &mut snapshot);
     snapshot["source"] = serde_json::json!(plan.source);
     snapshot["input_provenance"] = serde_json::json!({
         "version": 1, "input_sha256": input.digest, "predecessors_sha256": input.predecessors,
@@ -5129,20 +5135,52 @@ pub async fn erase_paint(
 }
 
 /// Whether the eraser may take coverage off a stored layer: any visible
-/// patch, but three whose mask stays as it is.
+/// patch, but two whose mask stays as it is.
 ///
 /// An approved review component is insertion-only, as a re-run of it is
 /// refused ([`is_approved_component_region`]). A text-shaped patch renders
 /// through its accepted plan: a Try again cleans the plan's support whole,
 /// so an erase would come back, and a rewrite of its record would drop the
-/// plan identity the re-run checks. A layer saved as native parts (a
-/// chapter with a turned page) does not hold its pixels in the page's own
-/// coordinates.
+/// plan identity the re-run checks.
 fn erasable_record(record: &PatchRecord) -> bool {
     record.visible
-        && record.native_parts.is_empty()
         && record.geometry_policy != GeometryPolicy::TextShape
         && !is_approved_component_region(&record.id)
+}
+
+/// A layer as the eraser edits it: as stored, before its layer style, in the
+/// frame that style is stated in, with `stroke` (on the layer's own page, in
+/// display pixels) moved into the same frame. `erase::erase_patch` maps the
+/// stroke through the style and the write-back keeps it, so a layer read as
+/// drawn would be moved twice.
+///
+/// Most layers are stored in display coordinates
+/// ([`Job::stored_in_display_frame`]) and go back through
+/// `complete_display_region`. One saved whole on a page turned since keeps
+/// that page's native frame: the stroke is turned back into it and the layer
+/// goes back through `complete_region`, still saved whole. `None` for one of
+/// those hanging over a join, whose two pages may each be turned their own
+/// way, so there is no one frame to edit it in.
+struct ErasedFrame {
+    patch: Patch,
+    stroke: Mask,
+    display: bool,
+}
+
+fn erase_frame(job: &Job, record: &PatchRecord, stroke: &Mask) -> Result<Option<ErasedFrame>, String> {
+    if job.stored_in_display_frame(record) {
+        let patch = job.load_display_stored_patch(record).map_err(|e| e.to_string())?;
+        return Ok(Some(ErasedFrame { patch, stroke: stroke.clone(), display: true }));
+    }
+    let Some(source) = job.project.sources.get(record.source_idx) else { return Ok(None) };
+    let bbox = record.bbox;
+    if bbox.x < 0 || bbox.y < 0 || bbox.right() > i64::from(source.w) || bbox.bottom() > i64::from(source.h) {
+        return Ok(None);
+    }
+    let (width, height) = source.orientation.size(source.w, source.h);
+    let patch = job.load_stored_patch(record).map_err(|e| e.to_string())?;
+    let stroke = source.orientation.inverse().mask(stroke, width, height);
+    Ok(Some(ErasedFrame { patch, stroke, display: false }))
 }
 
 /// [`erase_paint`]'s body, on a page already located.
@@ -5203,7 +5241,8 @@ fn erase_paint_at(
             job.project.patches.iter()
                 .filter(|record| record.source_idx == page.source_idx && erasable_record(record))
                 .filter(|record| {
-                    let drawn = record.display_bbox().intersection(here.bounds);
+                    let drawn = cleaner_core::project::orientation::display_bbox(&job.project, record)
+                        .intersection(here.bounds);
                     drawn.w > 0 && drawn.h > 0
                 })
                 .map(|record| (*page, here.clone(), record.clone()))
@@ -5215,15 +5254,12 @@ fn erase_paint_at(
         let Some((before, _)) = crate::library::region_and_status(&located.chapter_id, &job.project, page.source_idx, &record.id) else {
             continue;
         };
-        // The stored patch, not the drawn one: `erase_patch` maps the stroke
-        // through the layer's own move and turn, and the write-back keeps
-        // that style, so a patch already presented would be moved twice (a
-        // moved region copy was missed outright). A chapter with a turned
-        // page has only the display reconstruction to edit.
-        let upright = job.project.sources.iter().all(|source| source.orientation.0 == 1);
-        let mut patch = if upright { job.load_stored_patch(&record) } else { job.load_display_patch(&record) }
-            .map_err(|e| e.to_string())?;
-        if !erase::erase_patch(&mut patch, &here) {
+        // The stored patch, not the drawn one ([`erase_frame`]): a moved
+        // region copy was missed outright.
+        let Some(ErasedFrame { mut patch, stroke, display }) = erase_frame(&job, &record, &here)? else {
+            continue;
+        };
+        if !erase::erase_patch(&mut patch, &stroke) {
             continue;
         }
         if patch.mask.is_empty() {
@@ -5236,8 +5272,13 @@ fn erase_paint_at(
             job.flush().map_err(|e| e.to_string())?;
         } else {
             patch.provenance.mask_sha256 = run::mask_digest(&patch.mask);
-            job.complete_display_region(page.source_idx, &patch, record.review_state.clone())
-                .map_err(|e| e.to_string())?;
+            let review = record.review_state.clone();
+            if display {
+                job.complete_display_region(page.source_idx, &patch, review)
+            } else {
+                job.complete_region(page.source_idx, &patch, review)
+            }
+            .map_err(|e| e.to_string())?;
         }
         crate::underlay::refresh_dependencies(&mut job, &record.id)?;
         let after = crate::library::region_and_status(&located.chapter_id, &job.project, page.source_idx, &record.id)
@@ -7024,6 +7065,29 @@ mod tests {
         (root, Located { chapter_id: "chapter".into(), job_path: manifest, page_index: 0 })
     }
 
+    /// **A hand edit cuts LaMa's hole the way `lamaHole` says**, as a run
+    /// does, and records it with what it makes. An unreadable or absent
+    /// setting is the tight hole, the default.
+    #[test]
+    fn a_hand_edit_reads_the_lama_hole_and_records_it() {
+        use cleaner_core::engines::lama::HoleMode;
+        let hole = |settings: Option<serde_json::Value>| Bench::from_settings(settings, None).rung2.hole;
+        assert_eq!(hole(None), HoleMode::Tight);
+        assert_eq!(hole(Some(serde_json::json!({}))), HoleMode::Tight);
+        assert_eq!(hole(Some(serde_json::json!({"lamaHole": "huge"}))), HoleMode::Tight);
+        for (name, mode) in [("tight", HoleMode::Tight), ("wide", HoleMode::Wide), ("adaptive", HoleMode::Adaptive)] {
+            assert_eq!(hole(Some(serde_json::json!({"lamaHole": name}))), mode, "{name}");
+        }
+
+        let mut bench = Bench::from_settings(Some(serde_json::json!({"lamaHole": "adaptive"})), None);
+        let mut snapshot = serde_json::json!({});
+        run::record_made(&mut bench.rung2, Engine::Lama, None, &mut snapshot);
+        assert_eq!(snapshot[run::LAMA_HOLE_SNAPSHOT_KEY], "adaptive");
+        let mut snapshot = serde_json::json!({});
+        run::record_made(&mut bench.rung2, Engine::Fill, None, &mut snapshot);
+        assert!(snapshot.get(run::LAMA_HOLE_SNAPSHOT_KEY).is_none(), "only LaMa cuts a hole");
+    }
+
     pub(super) fn fixture_plan(id: &str, geometry: Geometry, engine: Engine, bounds: Rect) -> Plan {
         Plan {
             expected_source: None,
@@ -7864,6 +7928,133 @@ mod tests {
         assert!(!erasable_record(&PatchRecord { visible: false, ..record("c-p001-h3") }));
     }
 
+    /// A layer of `value` over `bounds` on `source_idx`, with `params` in its
+    /// record, committed in display coordinates.
+    fn flat_layer(job: &mut Job, source_idx: usize, id: &str, bounds: Rect, value: u8, params: serde_json::Value) {
+        let mut pixels = cleaner_core::image::fixtures::by_name("l8").raster;
+        pixels.width = bounds.w;
+        pixels.height = bounds.h;
+        pixels.data = vec![value; (bounds.w * bounds.h) as usize];
+        let mask = Mask::filled(bounds);
+        let order = job.project.patches.iter().map(|r| r.order + 1).max().unwrap_or(0);
+        job.complete_display_region(source_idx, &Patch {
+            id: id.into(), mask: mask.clone(), ink: mask, pixels, order, visible: true,
+            provenance: Provenance {
+                engine: Engine::Paint, engine_version: "fixture".into(), model_sha256: None,
+                execution_provider: "cpu".into(), params_snapshot: params, mask_sha256: String::new(),
+                source_sha256: String::new(), cloud: None, created: 0,
+            },
+        }, None).unwrap();
+    }
+
+    fn live_params() -> serde_json::Value {
+        serde_json::json!({"mode": "region-copy", "live": true,
+            "layer": {"opacity": 100, "feather": 0, "edgeOpacity": 100, "offsetX": 0, "offsetY": 0, "rotation": 0, "locked": false}})
+    }
+
+    /// **In a long strip a live copy reads a layer of the page above hanging
+    /// over the join into its area**, and an edit of that layer draws it again.
+    #[test]
+    fn a_live_copy_reads_a_layer_hanging_over_the_join() {
+        let (root, located) = strip_edit_fixture("live-copy-join");
+        let mut job = Job::open(&located.job_path).unwrap();
+        let below = Library::resolve_page(&job.project, 1).unwrap();
+        let above = Library::resolve_page(&job.project, 0).unwrap();
+        // The copy's area is the top 20 rows of page two.
+        flat_layer(&mut job, below, "live", Rect::new(10, 0, 20, 20), 0, live_params());
+        // Rows 390 to 410 of page one: its last 10 hang onto page two.
+        flat_layer(&mut job, above, "hang", Rect::new(10, 390, 20, 20), 77, serde_json::json!({}));
+        crate::underlay::refresh_dependencies(&mut job, "hang").unwrap();
+        drop(job);
+
+        let job = Job::open(&located.job_path).unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "live").unwrap().clone();
+        let copy = job.load_display_stored_patch(&record).unwrap();
+        let page = job.display_page(below, &std::fs::read(job.source_path(below).unwrap()).unwrap()).unwrap();
+        assert_eq!(copy.pixels.sample(5, 4, 0), 77, "the overhang is in the copy");
+        assert_eq!(copy.pixels.sample(5, 15, 0), page.sample(15, 15, 0), "below it, the page");
+        assert_eq!(record.review_state, None, "redrawn, not flagged");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// **On a chapter with a turned page a live copy is drawn again too**, in
+    /// display coordinates, as it is made there.
+    #[test]
+    fn a_live_copy_is_redrawn_on_a_turned_page() {
+        use cleaner_core::image::orientation::Orientation;
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128; raw.height = 128; raw.data = vec![0; 128 * 128];
+        let (root, _library, located) = command_fixture("live-copy-turned", &raw);
+        let mut job = Job::open(&located.job_path).unwrap();
+        job.project.sources[0].orientation = Orientation(6);
+        job.flush().unwrap();
+        flat_layer(&mut job, 0, "live", Rect::new(24, 24, 32, 32), 0, live_params());
+        let record = job.project.patches.iter().find(|r| r.id == "live").unwrap().clone();
+        assert!(!record.native_parts.is_empty() && crate::livecopy::redrawn_here(&job, &record));
+        flat_layer(&mut job, 0, "grey", Rect::new(30, 30, 8, 8), 128, serde_json::json!({}));
+        crate::underlay::refresh_dependencies(&mut job, "grey").unwrap();
+        drop(job);
+
+        let job = Job::open(&located.job_path).unwrap();
+        let record = job.project.patches.iter().find(|r| r.id == "live").unwrap().clone();
+        let copy = job.load_display_stored_patch(&record).unwrap();
+        assert_eq!(copy.mask.bounds, Rect::new(24, 24, 32, 32), "kept where it was picked, in display pixels");
+        assert_eq!(copy.pixels.sample(8, 8, 0), 128, "the grey layer is in it");
+        assert_eq!(copy.pixels.sample(2, 2, 0), 0, "the page around it");
+        assert_eq!(record.review_state, None, "redrawn, not flagged");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// **Opening a chapter drops the live copy revisions no undo step names**:
+    /// one per redraw. The copy as it stands and a revision the journal
+    /// names stay, files and all, and so do every other layer's.
+    #[test]
+    fn opening_a_chapter_drops_live_copy_revisions_no_step_names() {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128; raw.height = 128; raw.data = vec![0; 128 * 128];
+        let (root, _library, located) = command_fixture("live-copy-prune", &raw);
+        let mut job = Job::open(&located.job_path).unwrap();
+        flat_layer(&mut job, 0, "live", Rect::new(24, 24, 32, 32), 0, live_params());
+        let first = job.project.patches.iter().find(|r| r.id == "live").unwrap().clone();
+        for (at, value) in [(0, 60u8), (1, 90), (2, 120)] {
+            flat_layer(&mut job, 0, &format!("spot{at}"), Rect::new(30 + at * 8, 30, 4, 4), value, serde_json::json!({}));
+            crate::underlay::refresh_dependencies(&mut job, &format!("spot{at}")).unwrap();
+        }
+        let revisions = |job: &Job| job.project.legacy_patch_revisions.iter()
+            .filter(|row| row.id == "live").cloned().collect::<Vec<_>>();
+        let written = revisions(&job);
+        assert_eq!(written.len(), 4, "made, and drawn again three times");
+        let current = job.project.patches.iter().find(|r| r.id == "live").unwrap().clone();
+        drop(job);
+        // An undo step names the first.
+        let mut journal = crate::history::load(&located.job_path);
+        let side = crate::history::side_now(&located.chapter_id, &Job::open(&located.job_path).unwrap().project, 0, "live");
+        let mut named = side.unwrap();
+        named.region.as_mut().unwrap()["mask"]["legacyPatchRevision"] = serde_json::json!(first.legacy_revision_id());
+        journal.entries.push(crate::history::Delta {
+            seq: 1, label: "test".into(), op: crate::history::REGION_OP.into(), region_id: "live".into(),
+            before: named.clone(), after: named, ..Default::default()
+        });
+        journal.cursor = 1;
+        crate::history::save(&located.job_path, &journal).unwrap();
+
+        crate::livecopy::prune_revisions(&located.job_path).unwrap();
+        let job = Job::open(&located.job_path).unwrap();
+        let kept = revisions(&job);
+        let ids = |rows: &[PatchRecord]| rows.iter().map(|row| row.legacy_revision_id().unwrap()).collect::<Vec<_>>();
+        assert_eq!(ids(&kept), [first.legacy_revision_id().unwrap(), current.legacy_revision_id().unwrap()]);
+        for row in &written {
+            let exists = job.sidecar().join(&row.buffer_ref).exists();
+            assert_eq!(exists, kept.contains(row), "{}", row.buffer_ref);
+        }
+        assert!(job.project.legacy_patch_revisions.iter().any(|row| row.id == "spot0"), "other layers keep theirs");
+        // The named revision still restores.
+        let mut job = job;
+        assert!(job.restore_legacy_revision("live", &first.legacy_revision_id().unwrap()).unwrap());
+        assert!(job.load_patch(job.project.patches.iter().find(|r| r.id == "live").unwrap()).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn regional_copy_keeps_frozen_artwork_and_blends_at_its_new_destination() {
         let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
@@ -7940,6 +8131,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// **On a chapter with a turned page, a moved copy is erased where it is
+    /// drawn too**, whichever frame it is stored in: one made on the turned
+    /// page is saved as native parts in display coordinates, and one made
+    /// before the page was turned is saved whole in the page's native frame,
+    /// where its move is stated. The eraser used to read either as drawn and
+    /// move the stroke a second time.
+    #[test]
+    fn the_eraser_takes_a_moved_copy_off_where_it_is_drawn_on_a_turned_page() {
+        use cleaner_core::image::orientation::Orientation;
+        for turned_first in [true, false] {
+            let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+            raw.width = 128; raw.height = 128; raw.data = vec![0; 128 * 128];
+            let (root, _library, located) = command_fixture(&format!("erase-turned-copy-{turned_first}"), &raw);
+            let bounds = Rect::new(24, 24, 32, 32);
+            white_predecessor(&located, &raw, bounds);
+            let turn = |located: &Located| {
+                let mut job = Job::open(&located.job_path).unwrap();
+                job.project.sources[0].orientation = Orientation(6);
+                job.flush().unwrap();
+            };
+            if turned_first {
+                turn(&located);
+            }
+            let params = serde_json::json!({"mode":"region", "opacity":100, "feather":0, "edgeOpacity":100,
+                "painted":{"kind":"rect","points":[{"x":18.75,"y":18.75},{"x":43.75,"y":18.75},{"x":43.75,"y":43.75},{"x":18.75,"y":43.75}],"feather":0}});
+            let mut plan = fixture_plan("copy", Geometry::Given(bounds), Engine::Paint, bounds);
+            plan.tool = Some("cloneStamp".into()); plan.paint = Some(paint_plan("cloneStamp", &params).unwrap());
+            assert!(matches!(edit_with_bench(&mut test_bench(&root), Engine::Fill, &located, plan).unwrap(), Outcome::Cleaned(_)));
+            let mut job = Job::open(&located.job_path).unwrap();
+            let record = job.project.patches.iter_mut().find(|r| r.id == "copy").unwrap();
+            record.provenance.params_snapshot["layer"]["offsetX"] = serde_json::json!(60);
+            job.flush().unwrap();
+            drop(job);
+            if !turned_first {
+                turn(&located);
+            }
+            let job = Job::open(&located.job_path).unwrap();
+            let record = job.project.patches.iter().find(|r| r.id == "copy").unwrap().clone();
+            assert_eq!(record.native_parts.is_empty(), !turned_first, "the fixture's frame");
+            let drawn = job.load_display_patch(&record).unwrap();
+            // A pixel inside the drawn copy, and one inside it far from there.
+            let bounds = drawn.mask.bounds;
+            let (hit, kept) = ((bounds.x + bounds.w as i64 / 2, bounds.y + bounds.h as i64 / 2), (bounds.x + 3, bounds.y + 3));
+            assert_eq!((drawn.mask.coverage(hit.0, hit.1), drawn.mask.coverage(kept.0, kept.1)), (255, 255));
+            drop(job);
+
+            let erased = erase_paint_at(&located, None, &[erase_at(hit.0 as f64 + 0.5, hit.1 as f64 + 0.5)], &eraser(6.0, 100.0))
+                .unwrap().unwrap();
+            // The white layer under it may be erased there too.
+            assert!(erased.erased.iter().any(|layer| layer.region_id == "copy"), "{turned_first}");
+            let job = Job::open(&located.job_path).unwrap();
+            let record = job.project.patches.iter().find(|r| r.id == "copy").unwrap().clone();
+            assert_eq!(record.provenance.params_snapshot["layer"]["offsetX"], 60, "{turned_first}: the copy stays where it was moved");
+            assert_eq!(record.native_parts.is_empty(), !turned_first, "{turned_first}: kept in its own frame");
+            let drawn = job.load_display_patch(&record).unwrap();
+            assert_eq!(drawn.mask.bounds, bounds, "{turned_first}: drawn where it was");
+            assert_eq!(drawn.mask.coverage(hit.0, hit.1), 0, "{turned_first}: erased under the stroke");
+            assert_eq!(drawn.mask.coverage(kept.0, kept.1), 255, "{turned_first}: kept away from it");
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
     /// A Live copy redraws from the area it was picked from when a layer made
     /// after it changes that area, wherever the copy was moved; a Region copy
     /// of the same area keeps the artwork it froze; and what the eraser took
@@ -7988,7 +8241,9 @@ mod tests {
                 source_sha256: String::new(), cloud: None, created: 0,
             },
         }, None).unwrap();
+        crate::underlay::PAGE_DECODES.with(|count| count.set(0));
         crate::underlay::refresh_dependencies(&mut job, "grey").unwrap();
+        assert_eq!(crate::underlay::PAGE_DECODES.with(|count| count.get()), 1, "the page is decoded once per refresh");
         drop(job);
 
         let job = Job::open(&located.job_path).unwrap();

@@ -1,6 +1,6 @@
 <script>
   import { untrack } from 'svelte'
-  import { cachedLayer, holdLayer, loadLayer, noteLayerDrawn, releaseLayer } from './patchlayers.svelte.js'
+  import { cachedLayer, holdLayer, layerSettled, loadLayer, noteLayerDrawn, releaseLayer } from './patchlayers.svelte.js'
   import { layerPreviews } from './layerpreview.svelte.js'
   import { drawErased, eraseMasks } from './erasepreview.svelte.js'
 
@@ -22,14 +22,18 @@
    * its page taken off (`erasepreview.svelte.js`), each only off the picture
    * it first reached.
    *
+   * `hidden` keeps the canvas drawing but unseen: the held gradient's
+   * preview stands in for it (`retouch.svelte.js#previewStands`).
+   *
    * @type {{
    *   layer: import('./patchlayers.svelte.js').PageLayer,
    *   plan: {width: number, height: number},
    *   pageId: string,
+   *   hidden?: boolean,
    *   onsettle: (id: string) => void,
    * }}
    */
-  let { layer, plan, pageId, onsettle } = $props()
+  let { layer, plan, pageId, hidden = false, onsettle } = $props()
 
   /** @type {HTMLCanvasElement|undefined} */
   let canvasEl = $state()
@@ -78,6 +82,7 @@
     }
     shown = entry
     shownUrl = layer.url
+    layerSettled.set(`${pageId}|${layer.id}`, layer.url)
     noteLayerDrawn(pageId)
     onsettle(layer.id)
   }
@@ -132,9 +137,12 @@
   $effect(() => {
     const node = canvasEl
     if (!node) return
+    // Read untracked: this effect is the canvas's lifetime and nothing else.
+    const key = untrack(() => `${pageId}|${layer.id}`)
     return () => {
       node.width = 0
       node.height = 0
+      layerSettled.delete(key)
       if (shown) releaseLayer(shown)
       shown = null
       shownUrl = null
@@ -158,6 +166,7 @@
       (error) => {
         if (!alive) return
         console.warn('a patch layer could not be loaded', layer.id, error)
+        layerSettled.set(`${pageId}|${layer.id}`, url)
         onsettle(layer.id)
       },
     )
@@ -174,6 +183,7 @@
   width="0"
   height="0"
   style:opacity={placement.opacity === undefined ? layer.opacity : placement.opacity / 100}
+  style:visibility={hidden ? 'hidden' : null}
   style:transform={movement}
 ></canvas>
 

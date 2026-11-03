@@ -1978,6 +1978,16 @@ impl Library {
         chapter_id: &str,
         _convert: bool,
     ) -> Result<Option<OpenedChapter>, LibraryError> {
+        // Live copies' revisions no undo step names go now, while the
+        // interface holds none of the chapter's layers: under the chapter's
+        // lock, and skipped when another writer has it.
+        if let Some(path) = self.resolve_chapter(chapter_id).ok().filter(|path| path.is_file()) {
+            if let Ok(_lock) = crate::run::lock_job(&path) {
+                if let Err(error) = crate::livecopy::prune_revisions(&path) {
+                    eprintln!("manga-cleaner: {chapter_id}: live copy revisions were not pruned: {error}");
+                }
+            }
+        }
         let _lock = self.lock_index()?;
         let mut index = self.index()?;
         let at = now();
@@ -2297,8 +2307,6 @@ impl Library {
         let mut copied = original.clone();
         copied.id = id.clone();
         copied.order = job.project.patches.iter().map(|record| record.order).max().unwrap_or(0).saturating_add(1);
-        copied.mask_ref = format!("{id}.mask");
-        copied.buffer_ref = format!("{id}.buf");
 
         // A small step makes the new layer easy to grab. At the page edge,
         // step inward instead; placement is in the visible orientation.
@@ -2315,47 +2323,23 @@ impl Library {
         let style = cleaner_core::project::orientation::stored_layer_style(&job.project, &copied, style);
         copied.provenance.params_snapshot["layer"] = serde_json::to_value(style).unwrap_or_default();
 
-        // Each copy owns its files, so deleting or replacing either region
-        // cannot invalidate the other's pixels, including strip intersections.
-        // Where the layer is stored whole, it is committed as any edit is, so
-        // its files are named by their content and an undo of a later erase
-        // has a revision to go back to.
-        if copied.native_parts.is_empty() && job.project.sources.iter().all(|source| source.orientation.0 == 1) {
-            let mut patch = job.load_stored_patch(&original).map_err(|error| failure(error.to_string()))?;
-            patch.id = id.clone();
-            patch.order = copied.order;
-            patch.provenance = copied.provenance.clone();
+        // The copy is committed as any edit is, so it owns its files, named by
+        // their content (and its native parts, on a chapter with a turned
+        // page), and an undo of a later erase has a revision to go back to. It
+        // is read as stored, in the frame its layer style is stated in, so the
+        // feather is not baked in and the move not made twice.
+        let display = job.stored_in_display_frame(&original);
+        let mut patch = if display { job.load_display_stored_patch(&original) } else { job.load_stored_patch(&original) }
+            .map_err(|error| failure(error.to_string()))?;
+        patch.id = id.clone();
+        patch.order = copied.order;
+        patch.provenance = copied.provenance.clone();
+        if display {
             job.complete_display_region(source_idx, &patch, copied.review_state.clone())
-                .map_err(|error| failure(error.to_string()))?;
-            invalidate_manifest_cache(&path);
-            return Ok(region_and_status(&chapter_id, &job.project, source_idx, &id));
+        } else {
+            job.complete_region(source_idx, &patch, copied.review_state.clone())
         }
-        let original_ink = original.ink_ref();
-        let ink = if job.sidecar().join(&original_ink).exists() { original_ink } else { original.mask_ref.clone() };
-        let mut files = vec![
-            (original.mask_ref.clone(), copied.mask_ref.clone()),
-            (original.buffer_ref.clone(), copied.buffer_ref.clone()),
-            (ink, copied.ink_ref()),
-        ];
-        for (i, part) in copied.native_parts.iter_mut().enumerate() {
-            for (reference, extension) in [(&mut part.mask_ref, "mask"), (&mut part.ink_ref, "ink"), (&mut part.buffer_ref, "buf")] {
-                let new_ref = format!("{id}.part{i}.{extension}");
-                files.push((reference.clone(), new_ref.clone()));
-                *reference = new_ref;
-            }
-        }
-        for (from, to) in &files {
-            let result = std::fs::read(job.sidecar().join(from))
-                .map_err(|error| error.to_string())
-                .and_then(|bytes| cleaner_core::project::buffers::write_atomic(&job.sidecar().join(to), &bytes)
-                    .map_err(|error| error.to_string()));
-            if let Err(detail) = result {
-                for (_, name) in &files { let _ = std::fs::remove_file(job.sidecar().join(name)); }
-                return Err(failure(detail));
-            }
-        }
-        job.project.patches.push(copied);
-        job.flush().map_err(|error| failure(error.to_string()))?;
+        .map_err(|error| failure(error.to_string()))?;
         invalidate_manifest_cache(&path);
         Ok(region_and_status(&chapter_id, &job.project, source_idx, &id))
     }
@@ -4599,11 +4583,10 @@ mod tests {
                 assert_eq!(reopened.project.patches[0], original);
                 let copied = reopened.project.patches.iter().find(|record| record.id == copy.id).unwrap();
                 assert!(copied.order > original.order);
-                if orientation == 1 {
-                    // Files named by their content: an undo of a later erase
-                    // has a revision to go back to.
-                    assert!(copied.legacy_revision_id().is_some());
-                }
+                // Files named by their content, turned page or not: an undo
+                // of a later erase has a revision to go back to.
+                assert!(copied.legacy_revision_id().is_some(), "{orientation} {display}");
+                assert_eq!(copied.native_parts.is_empty(), original.native_parts.is_empty(), "{orientation} {display}");
                 for (from, to) in [(&original.mask_ref, &copied.mask_ref), (&original.buffer_ref, &copied.buffer_ref)] {
                     assert_ne!(from, to);
                     assert_eq!(std::fs::read(reopened.sidecar().join(from)).unwrap(), std::fs::read(reopened.sidecar().join(to)).unwrap());
@@ -4663,6 +4646,7 @@ mod tests {
         let reopened = Job::open(&path).unwrap();
         let copied = reopened.project.patches.iter().find(|record| record.id == copy.id).unwrap();
         assert_eq!(copied.native_parts.len(), 2);
+        assert!(copied.legacy_revision_id().is_some(), "named by its content");
         for (from, to) in original.native_parts.iter().zip(&copied.native_parts) {
             assert_eq!(from.source_idx, to.source_idx);
             assert_eq!(from.bbox, to.bbox);

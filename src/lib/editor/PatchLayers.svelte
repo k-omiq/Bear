@@ -21,14 +21,18 @@
    * reaching across a join is always mounted - there are a few, and where it
    * lands is the protocol's answer, not this side's guess.
    *
+   * `hide` names a layer drawn but not shown: the one the held gradient's
+   * preview stands in for.
+   *
    * @type {{
    *   page: import('../api/backend.js').ApiPage,
    *   from?: number,
    *   to?: number,
+   *   hide?: string|null,
    *   ready?: string|null,
    * }}
    */
-  let { page, from = 0, to = 100, ready = $bindable(null) } = $props()
+  let { page, from = 0, to = 100, hide = null, ready = $bindable(null) } = $props()
 
   const plan = $derived(proxyPlan(page))
   const list = $derived(editor.project?.mode === 'longstrip' ? pages() : [page])
@@ -60,5 +64,5 @@
 </script>
 
 {#each layers as layer (layer.id)}
-  <PatchLayer {layer} {plan} pageId={page.id} onsettle={settle} />
+  <PatchLayer {layer} {plan} pageId={page.id} hidden={layer.id === hide} onsettle={settle} />
 {/each}

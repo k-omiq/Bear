@@ -243,7 +243,9 @@ redraw inside it changes.
 
 The setting is read when a run or a hand edit starts, so a change applies to the next clean; a run already open keeps
 the value it started with. It applies to LaMa on this computer only: the cloud worker cuts its own hole. A mask drawn
-by hand is never grown by the outline rule, under any choice. Measured on 36 real regions of three chapters
+by hand is never grown by the outline rule, under any choice. Each LaMa result records the hole it was cut with, and
+changing its post-processing later cuts that same hole, whatever the setting says by then. A result from before this
+was recorded is read by the version that made it: Wide for 1.0.0-beta.16 to beta.18, Tight for earlier ones. Measured on 36 real regions of three chapters
 (2026-11-03, [findings](findings.md)), Adaptive matched Tight on art and Wide on black and paper. It is not the default
 because that is one small set of pages.
 
@@ -365,8 +367,11 @@ Right-click a copied region on the canvas or its Layers row and choose **Duplica
 was picked from: when a layer there changes (a clean, a paint stroke, an erase, an undo), the copy is drawn again
 from that area, wherever it was moved. What the Eraser took off a live copy stays off. A Region copy keeps the artwork
 it copied; a live one keeps showing what is there now. A live copy reads the page and every layer over its area but
-itself and live copies made after it. Not yet on a chapter with a turned page, and only from its own page in a
-long strip.
+itself and live copies made after it; in a long strip that includes a layer of the page above or below hanging over
+the join, and a change to that layer redraws the copy. It works on a chapter with a turned page too. A copy made
+before its page was turned, or whose area runs off its page, cannot be redrawn and is flagged for review instead.
+Each redraw is saved like any edit; the saved versions no undo step can go back to are removed the next time the
+chapter is opened.
 
 ### Patch
 
@@ -401,9 +406,11 @@ Key `G`. The Gradient tool fills a selection with a gradient. Select the area wi
 inside it to set where the gradient starts and ends; `Shift` turns the line in steps of 15 degrees. The two ends stay
 on the page as handles. The gradient is live: as soon as the line is set it is on the page, and every change after
 that (the handles, the stops, Opacity, Feather, the toggles) shows a moment after you make it, with a preview while a
-handle moves. **Done** or `Enter` lets the selection go; while a run holds the page, Done keeps it so it can be sent
-once the page is free. Escape, Undo and Redo let it go too, and drop a change the page has not shown yet. Each change
-that reaches the page is one undo step.
+handle moves. The preview hides the layer's old pixels under it, so it shows what Done will commit. **Done**,
+`Enter` or Escape sends a change still waiting and lets the selection go. While a run holds the page, a change waits
+and is sent by itself when the run ends (the app says once that the page is busy), and Done keeps the selection. A
+change the app could not save keeps the selection too. Undo and Redo let it go and drop a change the page has not
+shown yet; so do switching tool and turning the page. Each change that reaches the page is one undo step.
 
 - **Type**: Linear, Radial, Angle, Reflected, Diamond or Auto.
 - **Auto** (`Shift`+`G` arms the tool with it) needs no line and no stops. Lasso the lettering on a shaded bubble
@@ -421,8 +428,9 @@ that reaches the page is one undo step.
 - **Match surroundings** reads the ring of page around the selection and sets the type, the line and the stops to
   continue it, for a soft shadow or a sky that a letter sat across.
 - **Use page dots** draws the gradient as the page's own dot screen, its dots growing and shrinking with the tone,
-  on a page saved in greyscale with a screen around the selection (a black and white scan saved in colour gets a
-  plain gradient). The dots are copied from the screen around the selection, so
+  on a black and white page with a screen around the selection: one saved in greyscale, or saved in colour with
+  grey pixels only, as many scans are. There is no preview with it on: the dots show when the change reaches the
+  page. The dots are copied from the screen around the selection, so
   only tones the screen already has nearby come out as dots; a gradient that runs far lighter or darker than its
   surroundings is filled from patches there instead. Where there is no screen, or on a colour page, a plain gradient
   is drawn and the app says so.

@@ -84,7 +84,7 @@ export const en = {
       dither: "Reduce banding",
       ditherHint: "Adds faint noise so the gradient shows no stripes (banding).",
       asScreentone: "Use page dots",
-      asScreentoneHint: "On a page saved in greyscale, draws the gradient with the screentone dots found around the selection, so it matches the page. A page saved in colour, a scan of black and white art included, gets a plain gradient.",
+      asScreentoneHint: "On a black and white page, draws the gradient with the screentone dots found around the selection, so it matches the page. A page in colour gets a plain gradient.",
       match: "Match surroundings",
       edit: "Edit gradient",
     },

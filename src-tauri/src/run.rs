@@ -4101,12 +4101,7 @@ impl Pipeline {
         let mut snapshot = params_snapshot(
             made.engine, &fitted, started.elapsed(), pad, made.tiles, &verdict,
         );
-        if made.engine == Engine::Flux {
-            self.rung2.flux.record(&mut snapshot);
-        }
-        if let Some(matched) = made.matched.as_ref() {
-            snapshot["postprocess"] = matched.provenance();
-        }
+        record_made(&mut self.rung2, made.engine, made.matched.as_ref(), &mut snapshot);
         if let Some(record) = group_record.as_ref() {
             snapshot["group"] = record.snapshot();
             if !at.outcome.evidence.iter().any(|blob| blob.sha256 == segment_evidence.sha256) {
@@ -4340,12 +4335,7 @@ impl Pipeline {
                 made.tiles,
                 &verdict,
             );
-            if made.engine == Engine::Flux {
-                self.rung2.flux.record(&mut snapshot);
-            }
-            if let Some(matched) = made.matched.as_ref() {
-                snapshot["postprocess"] = matched.provenance();
-            }
+            record_made(&mut self.rung2, made.engine, made.matched.as_ref(), &mut snapshot);
             // The detection's group travels onto its patch.
             if let Some(group) = record.group.as_ref() {
                 snapshot["group"] = group.snapshot();
@@ -5014,6 +5004,47 @@ pub(crate) fn params_snapshot(
         snapshot["tiles"] = tiles.into();
     }
     snapshot
+}
+
+/// What a rung's answer records beside [`params_snapshot`]: the FLUX model,
+/// the hole LaMa cut ([`LAMA_HOLE_SNAPSHOT_KEY`]) and the finishing it was
+/// matched to the page by. A run and an edit write a result through this.
+pub(crate) fn record_made(
+    rung2: &mut Rung2,
+    engine: Engine,
+    matched: Option<&cleaner_core::engines::postprocess::Report>,
+    snapshot: &mut serde_json::Value,
+) {
+    match engine {
+        Engine::Flux => rung2.flux.record(snapshot),
+        Engine::Lama => snapshot[LAMA_HOLE_SNAPSHOT_KEY] = serde_json::json!(rung2.hole),
+        _ => {}
+    }
+    if let Some(matched) = matched {
+        snapshot["postprocess"] = matched.provenance();
+    }
+}
+
+/// Where a LaMa result records the hole it was cut with ([`LAMA_HOLE_KEY`]),
+/// so finishing it again later cuts the same one whatever the setting says by
+/// then.
+pub(crate) const LAMA_HOLE_SNAPSHOT_KEY: &str = "lama_hole";
+
+/// The hole a LaMa result was cut with. A result from before the hole was
+/// recorded is read by the version that made it: 1.0.0-beta.16 to beta.18 cut
+/// the whole applied mask (Wide), and every earlier version the lettering
+/// (Tight).
+pub(crate) fn recorded_lama_hole(provenance: &cleaner_core::patch::Provenance) -> lama::HoleMode {
+    if let Some(hole) = provenance.params_snapshot.get(LAMA_HOLE_SNAPSHOT_KEY)
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+    {
+        return hole;
+    }
+    let beta = provenance.engine_version.strip_prefix("1.0.0-beta.").and_then(|n| n.parse::<u32>().ok());
+    match beta {
+        Some(16..=18) => lama::HoleMode::Wide,
+        _ => lama::HoleMode::Tight,
+    }
 }
 
 /// `{page id}-r{n}`. Unique across the chapter, because the manifest keeps one

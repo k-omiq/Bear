@@ -51,6 +51,13 @@ const pending = new Map()
  */
 export const layerDraws = new SvelteMap()
 
+/**
+ * The URL each layer was last drawn from, or failed at, by `pageId|regionId`:
+ * what the held gradient's preview waits on before it gives way to the layer
+ * (`retouch.svelte.js#previewStands`).
+ */
+export const layerSettled = new SvelteMap()
+
 /** @param {string} pageId */
 export function noteLayerDrawn(pageId) {
   layerDraws.set(pageId, (layerDraws.get(pageId) ?? 0) + 1)

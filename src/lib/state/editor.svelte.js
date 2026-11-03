@@ -2901,6 +2901,24 @@ export function adoptBackendHistory(chapterId, view) {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Who may take `Esc` for a held selection before it is dropped: a handler
+ * answering true has dealt with it. The live Gradient tool's is the one
+ * (`retouch.svelte.js`), registered here because that module imports this one.
+ *
+ * @type {Set<() => boolean>}
+ */
+const selectionEscapes = new Set()
+
+/**
+ * @param {() => boolean} handler
+ * @returns {() => void} unregister
+ */
+export function onSelectionEscape(handler) {
+  selectionEscapes.add(handler)
+  return () => selectionEscapes.delete(handler)
+}
+
+/**
  * The editor's half of `Esc`: drop the transient interaction state. Modals are
  * the shell's business, not the editor's.
  * @returns {boolean} whether anything was cancelled
@@ -2909,10 +2927,12 @@ export function cancelInteraction() {
   // A gesture in progress goes first and on its own: abandoning a half-drawn
   // shape must not also drop the selection the user was working against.
   if (clearDraft()) return true
-  // Then a Patch or Gradient selection waiting for Apply: Escape abandons it,
-  // as it abandons a half-drawn shape. A Patch leaves the page as it was; a
-  // Gradient is live, so the page keeps what it already shows and only a
-  // change it has not shown yet is dropped (`retouch.svelte.js`).
+  // Then a Patch or Gradient selection waiting for Apply. A Patch is
+  // abandoned and leaves the page as it was. A Gradient is live and every
+  // earlier change is on the page already, so Escape is its Done: a change
+  // still waiting is sent first, and the selection goes once it has landed
+  // (`retouch.svelte.js`).
+  for (const handler of selectionEscapes) if (handler()) return true
   if (clearSelection()) return true
   // Then the stamp's sampled source, and only while the stamp is the armed
   // tool: nothing else could clear it, and for every other tool Escape has to

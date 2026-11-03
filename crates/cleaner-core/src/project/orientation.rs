@@ -306,10 +306,43 @@ impl Job {
     }
     /// Reconstruct one grouped edit in anchor-relative display coordinates.
     pub fn load_display_patch(&self, record: &PatchRecord) -> Result<Patch, StoreError> {
+        self.display_patch(record, true)
+    }
+
+    /// Whether `record` is stored in display coordinates, so its layer style
+    /// is stated there and [`Job::load_display_stored_patch`] reads it: every
+    /// layer of an upright chapter, one saved as native parts, and one inside
+    /// an upright page. A layer saved whole on a page turned since keeps its
+    /// page's native frame, and its style is stated in that frame.
+    pub fn stored_in_display_frame(&self, record: &PatchRecord) -> bool {
+        if !record.native_parts.is_empty() || self.project.sources.iter().all(|s| s.orientation.0 == 1) {
+            return true;
+        }
+        let Some(source) = self.project.sources.get(record.source_idx) else { return false };
+        let bbox = record.bbox;
+        source.orientation.0 == 1
+            && bbox.x >= 0 && bbox.y >= 0
+            && bbox.right() <= i64::from(source.w) && bbox.bottom() <= i64::from(source.h)
+    }
+
+    /// [`Job::load_display_patch`] before the layer style moves it: in display
+    /// coordinates, with its own mask, as [`Job::load_stored_patch`] reads a
+    /// layer of an upright chapter. What an edit written back through
+    /// [`Job::complete_display_region`] under the same style starts from, so
+    /// it is not moved twice. Only for a layer
+    /// [`Job::stored_in_display_frame`] says yes to.
+    pub fn load_display_stored_patch(&self, record: &PatchRecord) -> Result<Patch, StoreError> {
+        self.display_patch(record, false)
+    }
+
+    fn display_patch(&self, record: &PatchRecord, presented: bool) -> Result<Patch, StoreError> {
+        let load = |record: &PatchRecord| if presented { self.load_patch(record) } else { self.load_stored_patch(record) };
+        // A layer saved whole in display coordinates is read as it is: on an
+        // upright page its native frame is the display one.
         if record.native_parts.is_empty()
-            && self.project.sources.iter().all(|s| s.orientation.0 == 1)
+            && (!presented || self.project.sources.iter().all(|s| s.orientation.0 == 1))
         {
-            return self.load_patch(record);
+            return load(record);
         }
         let mut raw_record = record.clone();
         if !record.native_parts.is_empty() {
@@ -354,7 +387,7 @@ impl Job {
             }
         }
         if pieces.is_empty() {
-            return self.load_patch(record);
+            return load(record);
         }
         let bounds = pieces
             .iter()
@@ -403,7 +436,7 @@ impl Job {
         }
         if !record.native_parts.is_empty() {
             out.provenance = record.provenance.clone();
-            return Ok(out.presented());
+            return Ok(if presented { out.presented() } else { out });
         }
         Ok(out)
     }

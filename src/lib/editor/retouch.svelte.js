@@ -17,8 +17,10 @@
  *   opacity, feather, the toggles - reaches the page by itself a moment after
  *   the last one (`LIVE_DELAY_MS`): the first makes the layer, each later one
  *   re-renders that layer in place (`applyTool`), one undo step each. The
- *   preview follows the handles in between. Done (the bar's button or
- *   `Enter`) sends what is still waiting and lets the selection go. Match
+ *   preview follows the handles in between, standing in for the layer
+ *   (`previewStands`). Done (the bar's button or `Enter`) and `Esc` send what
+ *   is still waiting and let the selection go. A change a run on the page
+ *   refused is sent by itself once the page is free. Match
  *   surroundings asks for the line and the stops at once (`fitGradient`). A
  *   gradient layer reopens: its recorded gradient is held again with the
  *   layer's id, and changes re-render that layer rather than adding one; the
@@ -31,14 +33,17 @@
  * Nothing here is cloud work: neither tool has a cloud option.
  */
 
+import { untrack } from 'svelte'
 import { getBackend } from '../api/backend.js'
 import { decodeImage } from '../api/boundedimage.js'
+import { layerUrl } from '../api/tile.js'
 import { notify } from '../state/app.svelte.js'
 import {
   applyRegionState,
   claimPageEdit,
   editor,
   onPendingEdit,
+  onSelectionEscape,
   pageBusy,
   recordBackgroundRegionEdit,
   recordRegionEdit,
@@ -52,6 +57,7 @@ import { rgbToHex } from '../ui/color.js'
 import { clearSelection, draft, holdSelection } from './draft.svelte.js'
 import { fromWire, wireGradient } from './gradient.js'
 import { reportRegionEditFailure } from './maskactions.svelte.js'
+import { layerSettled } from './patchlayers.svelte.js'
 import { applyActiveToolToRegion, locateRegion } from './toolapply.svelte.js'
 
 /** How long after the last change a held gradient's change reaches the page. */
@@ -90,6 +96,8 @@ let liveRun = null
 let liveAgain = false
 /** The held selection a busy page was last reported for: once per hold, not once per pause. */
 let busyReported = /** @type {import('./draft.svelte.js').HeldSelection|null} */ (null)
+/** The held selection whose change a busy page refused: sent once the page is free. */
+let blocked = /** @type {import('./draft.svelte.js').HeldSelection|null} */ (null)
 
 function stopLiveTimer() {
   if (liveTimer) clearTimeout(liveTimer)
@@ -123,6 +131,19 @@ $effect.root(() => {
     stopLiveTimer()
     liveTimer = setTimeout(() => void commitLive(), LIVE_DELAY_MS)
   })
+
+  // A change a run on the page refused goes once the run lets the page go,
+  // with no further change or Done needed.
+  $effect(() => {
+    const held = draft.selection
+    if (!held || held.tool !== 'gradient' || held.pageIndex === null) return
+    if (pageBusy(held.pageIndex)) return
+    untrack(() => {
+      if (blocked !== held) return
+      blocked = null
+      if (waiting(held)) void commitLive()
+    })
+  })
 })
 
 // Undo and Redo let a held gradient go, its waiting change with it: the
@@ -136,6 +157,51 @@ onPendingEdit(() => {
   retouch.eyedrop = null
   return false
 })
+
+// Escape is Done for a live gradient: every earlier change is on the page
+// already, so a last one still waiting is sent rather than dropped. A change
+// the page refuses keeps the selection, as Done does.
+onSelectionEscape(() => {
+  const held = draft.selection
+  if (held?.tool !== 'gradient' || !held.start || !held.end) return false
+  if (editor.toolParams.gradient?.kind === 'auto') return false
+  if (!liveRun && !waiting(held)) return false
+  void applySelection()
+  return true
+})
+
+/**
+ * Whether the preview stands in for the held gradient's layer: a change the
+ * page does not show yet, or one sent whose layer the page has not drawn yet.
+ * While it does, the layer's old pixels are hidden under it
+ * (`PageSheet.svelte`), so what is seen is what Done commits. With the page's
+ * dots asked for there is no preview: the dots are the native side's
+ * (`region/retouch.rs#gradient`), and only the committed page shows them.
+ *
+ * @param {import('./draft.svelte.js').HeldSelection|null} held
+ * @param {Record<string, any>} params
+ * @returns {boolean}
+ */
+export function previewStands(held, params) {
+  if (!held || held.tool !== 'gradient' || !held.start || !held.end) return false
+  if (params.kind === 'auto' || params.asScreentone) return false
+  if (retouch.pending) return true
+  return !layerDrawn(held)
+}
+
+/**
+ * Whether the page has drawn the held gradient's layer as it is now. Without
+ * per-layer pictures (the mock, a layer not made yet) there is nothing to wait for.
+ *
+ * @param {import('./draft.svelte.js').HeldSelection} held
+ */
+function layerDrawn(held) {
+  if (!held.regionId) return true
+  const page = editor.chapter?.pages.find((candidate) => candidate.id === held.pageId)
+  const region = page?.regions?.find((candidate) => candidate.id === held.regionId)
+  const url = page && region ? layerUrl(page, region) : null
+  return url === null || layerSettled.get(`${page.id}|${region.id}`) === url
+}
 
 /**
  * Send the held gradient's waiting change now, once any commit already on
@@ -190,6 +256,7 @@ async function commitOnce(held) {
   if (pageBusy(snapshot.pageIndex)) {
     if (busyReported !== held) claimPageEdit(snapshot.pageIndex)
     busyReported = held
+    blocked = held
     return false
   }
   const payload = selectionParams(snapshot, params)

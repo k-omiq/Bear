@@ -318,6 +318,9 @@ fn channels(r: &Raster) -> Vec<Grid> {
         .collect()
 }
 
+/// Rec. 601 luma weights, red, green and blue.
+const LUMA: [f64; 3] = [0.299, 0.587, 0.114];
+
 fn luma(chs: &[Grid]) -> Grid {
     if chs.len() == 1 {
         return chs[0].clone();
@@ -325,7 +328,7 @@ fn luma(chs: &[Grid]) -> Grid {
     Grid {
         w: chs[0].w,
         h: chs[0].h,
-        data: (0..chs[0].data.len()).map(|i| 0.299 * chs[0].data[i] + 0.587 * chs[1].data[i] + 0.114 * chs[2].data[i]).collect(),
+        data: (0..chs[0].data.len()).map(|i| LUMA[0] * chs[0].data[i] + LUMA[1] * chs[1].data[i] + LUMA[2] * chs[2].data[i]).collect(),
     }
 }
 
@@ -548,8 +551,10 @@ pub(super) fn gradient(
     let g = in_pixels(g, pw, ph);
     let mask = selection(shape.as_ref(), paint, pw, ph).ok_or("decline.reason.rungUnavailable")?;
     let bounds = mask.bounds;
-    let gray_page = colour_channels(page) == 1;
-    let dots = options.as_screentone && gray_page;
+    // Dots on a black and white page: saved greyscale, or RGB whose channels
+    // agree (`Raster::is_neutral`), as many grey scans arrive. Asked only
+    // when the dots are, since it reads the whole page.
+    let dots = options.as_screentone && page.is_neutral();
     let reach = if dots { bounds.grown(screentone::MARGIN as u32, pw, ph) } else { bounds };
     let (under, window) = surface(job, source_idx, page, order, reach, strip_context)?;
     let managed = ManagedColor::for_raster(page).map_err(|_| "decline.reason.paintUnsupportedColor")?;
@@ -569,14 +574,16 @@ pub(super) fn gradient(
             let native = managed
                 .from_srgb(c.map(|v| (v / 255.0) as f32), page.mode)
                 .map_err(|_| "decline.reason.paintUnsupportedColor")?;
+            let mut shade = 0.0;
             for (k, value) in native.iter().take(channels_n).enumerate() {
                 let below = patch.sample(x, y, k) as f64;
                 let level = below + (f64::from(*value).clamp(0.0, 1.0) * max - below) * a;
                 patch.set_sample(x, y, k, level.round().clamp(0.0, max) as u16);
-                if let Some(tone) = tone.as_mut() {
-                    let i = (py - window.y) as usize * window.w as usize + (px - window.x) as usize;
-                    tone.data[i] = level / max * 255.0;
-                }
+                shade += level * if channels_n == 1 { 1.0 } else { LUMA[k] };
+            }
+            if let Some(tone) = tone.as_mut() {
+                let i = (py - window.y) as usize * window.w as usize + (px - window.x) as usize;
+                tone.data[i] = shade / max * 255.0;
             }
             if let Some(channel) = alpha {
                 patch.set_sample(x, y, channel, max as u16);
@@ -595,7 +602,10 @@ pub(super) fn gradient(
                 for (i, _) in hole.data.iter().enumerate().filter(|(_, &v)| v) {
                     let (px, py) = (window.x + (i % window.w as usize) as i64, window.y + (i / window.w as usize) as i64);
                     let value = (filled.gray.data[i].clamp(0.0, 255.0) / 255.0 * max).round() as u16;
-                    patch.set_sample((px - bounds.x) as u32, (py - bounds.y) as u32, 0, value);
+                    // Grey dots: on an RGB page every colour channel takes them.
+                    for k in 0..channels_n {
+                        patch.set_sample((px - bounds.x) as u32, (py - bounds.y) as u32, k, value);
+                    }
                 }
             }
         }
@@ -1040,6 +1050,32 @@ mod tests {
         let (page, patch) = made.unwrap();
         assert_eq!(patch.provenance.params_snapshot["screen"], false);
         assert!(page.sample(100, 74, 0) < page.sample(100, 166, 0), "the plain ramp runs dark to light");
+    }
+
+    #[test]
+    fn retouch_gradient_as_screentone_draws_dots_on_a_grey_page_saved_as_rgb() {
+        let g = linear([50.0, 30.0], [50.0, 70.0],
+            serde_json::json!([{"at": 0, "color": [40, 40, 40]}, {"at": 1, "color": [200, 200, 200]}]),
+            serde_json::json!([]));
+        let gray = screen_page(200, 240, false);
+        let raw = raster("rgb8", 200, 240, |x, y| vec![gray.sample(x, y, 0) as u8; 3]);
+        let params = serde_json::json!({"gradient": g, "asScreentone": true, "painted": rect_percent(40.0, 30.0, 60.0, 70.0)});
+        let (outcome, made) = run_tool("gradient-dots-rgb", &raw, "gradient", params);
+        assert!(matches!(outcome, Outcome::Cleaned(_)));
+        let (page, patch) = made.unwrap();
+        assert_eq!(patch.provenance.params_snapshot["screen"], true);
+        let (mut grey, mut all) = (0, 0);
+        for y in 75..165 {
+            for x in 82..118 {
+                let [r, g, b] = [0, 1, 2].map(|k| page.sample(x, y, k));
+                assert!(r == g && g == b, "dots stay grey at {x},{y}: {r} {g} {b}");
+                all += 1;
+                if (60..200).contains(&r) {
+                    grey += 1;
+                }
+            }
+        }
+        assert!(grey * 5 < all, "{grey} of {all} pixels are mid grey");
     }
 
     #[test]

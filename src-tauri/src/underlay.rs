@@ -22,6 +22,9 @@ use std::borrow::Cow;
 #[cfg(test)]
 thread_local! {
     static PATCH_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many pages [`Pages`] decoded on this thread, for the tests that
+    /// hold a refresh to one decode per page.
+    pub(crate) static PAGE_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub(crate) const READ_MARGIN: i64 = 768;
@@ -435,25 +438,46 @@ pub(crate) fn refresh_dependencies_of(
     changed: PatchRecord,
     previous: Option<Rect>,
 ) -> Result<(), String> {
+    let mut pages = Pages::default();
     let touched = touched_by(job, &changed, previous);
-    let redrawn = crate::livecopy::redraw(job, changed.source_idx, Some(&changed.id), &touched)?;
-    flag_dependents(job, &changed, &touched)?;
+    let redrawn = crate::livecopy::redraw(job, &mut pages, changed.source_idx, Some(&changed.id), &touched)?;
+    flag_dependents(job, &mut pages, &changed, &touched)?;
     for copy in redrawn.iter().filter(|copy| copy.id != changed.id) {
         let touched = touched_by(job, copy, None);
-        flag_dependents(job, copy, &touched)?;
+        flag_dependents(job, &mut pages, copy, &touched)?;
     }
     Ok(())
 }
 
-/// Draw again the live copies on page `source_idx` that read `touched`, and
+/// Draw again the live copies that read `touched` on page `source_idx`, and
 /// flag what the redrawn copies feed: for writers that do not go through
 /// [`refresh_dependencies_of`], a run's commit of a page.
 pub(crate) fn redraw_live_copies(job: &mut Job, source_idx: usize, touched: &[Rect]) -> Result<(), String> {
-    for copy in crate::livecopy::redraw(job, source_idx, None, touched)? {
+    let mut pages = Pages::default();
+    for copy in crate::livecopy::redraw(job, &mut pages, source_idx, None, touched)? {
         let touched = touched_by(job, &copy, None);
-        flag_dependents(job, &copy, &touched)?;
+        flag_dependents(job, &mut pages, &copy, &touched)?;
     }
     Ok(())
+}
+
+/// The display pages one refresh reads, each decoded once however many
+/// layers it looks at: a page's source does not change under the job lock.
+#[derive(Default)]
+pub(crate) struct Pages(std::collections::HashMap<usize, Raster>);
+
+impl Pages {
+    pub(crate) fn get(&mut self, job: &Job, source_idx: usize) -> Result<&Raster, String> {
+        if !self.0.contains_key(&source_idx) {
+            let source = job.source_path(source_idx).ok_or("source missing for a layer's refresh")?;
+            let bytes = std::fs::read(source).map_err(|e| e.to_string())?;
+            let page = job.display_page(source_idx, &bytes).map_err(|e| e.to_string())?;
+            #[cfg(test)]
+            PAGE_DECODES.with(|count| count.set(count.get() + 1));
+            self.0.insert(source_idx, page);
+        }
+        Ok(&self.0[&source_idx])
+    }
 }
 
 /// Every place a change to `changed` could have altered what a later layer
@@ -479,7 +503,7 @@ fn touched_by(job: &Job, changed: &PatchRecord, previous: Option<Rect>) -> Vec<R
 }
 
 /// Mark the later layers whose input `changed` altered at `touched`.
-fn flag_dependents(job: &mut Job, changed: &PatchRecord, touched: &[Rect]) -> Result<(), String> {
+fn flag_dependents(job: &mut Job, pages: &mut Pages, changed: &PatchRecord, touched: &[Rect]) -> Result<(), String> {
     let strip = crate::run::strip_of(&job.project);
     let changed_place = strip
         .pages()
@@ -499,18 +523,14 @@ fn flag_dependents(job: &mut Job, changed: &PatchRecord, touched: &[Rect]) -> Re
             p.visible
                 && p.order > changed.order
                 && (p.source_idx == changed.source_idx || longstrip)
-                && !(crate::livecopy::is_live(p) && crate::livecopy::redrawn_here(&job.project, p))
+                && !(crate::livecopy::is_live(p) && crate::livecopy::redrawn_here(job, p))
         })
         .map(|(i, p)| (i, p.clone()))
         .collect::<Vec<_>>();
     if later.is_empty() {
         return Ok(());
     }
-    let source = job
-        .source_path(changed.source_idx)
-        .ok_or("source missing for dependency review")?;
-    let bytes = std::fs::read(source).map_err(|e| e.to_string())?;
-    let raw = job.display_page(changed.source_idx,&bytes).map_err(|e| e.to_string())?;
+    let raw = pages.get(job, changed.source_idx)?;
     let mut dirty = false;
     let dependency = |state: Option<&str>| {
         matches!(state, Some("review.reason.inputChanged" | "review.reason.inputUnknown"))
@@ -565,7 +585,7 @@ fn flag_dependents(job: &mut Job, changed: &PatchRecord, touched: &[Rect]) -> Re
             None => (footprint, digest_at("input_sha256")),
         };
         let same = expected.map(|expected| {
-            read_record_footprint(job, &record, rect, &strip, changed.source_idx, &raw)
+            read_record_footprint(job, &record, rect, &strip, changed.source_idx, raw)
                 .map(|input| input.digest == expected)
         });
         let next = match same {

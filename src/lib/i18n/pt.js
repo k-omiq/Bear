@@ -58,7 +58,7 @@ export const pt = {
       dither: "Reduzir faixas",
       ditherHint: "Adiciona um ruído leve para que o degradê não mostre faixas.",
       asScreentone: "Usar pontos da página",
-      asScreentoneHint: "Numa página salva em tons de cinza, desenha o degradê com os pontos da retícula em volta da seleção, para combinar com a página. Uma página salva em cores, mesmo a digitalização de arte em preto e branco, recebe um degradê simples.",
+      asScreentoneHint: "Numa página em preto e branco, desenha o degradê com os pontos da retícula em volta da seleção, para combinar com a página. Uma página colorida recebe um degradê simples.",
       match: "Combinar com o entorno",
       edit: "Editar degradê",
     },
@@ -573,7 +573,7 @@ export const pt = {
         hint: {
           tight: 'O padrão, como em 1.0.0-beta.15 e anteriores. O LaMa redesenha só as letras. O desenho sob o texto é o mais preservado, mas formas cinza de letras podem ficar no preto ou no papel liso. Só vale para o LaMa neste computador; os modelos na nuvem o ignoram.',
           wide: 'Como em 1.0.0-beta.16 a beta.18. O LaMa também redesenha 5 px em volta de cada letra. As marcas de letras no preto e no papel liso somem, mas o desenho sob o texto pode borrar. Só vale para o LaMa neste computador; os modelos na nuvem o ignoram.',
-          adaptive: 'Largo onde a página ao lado do texto é lisa ou preta, justo onde há desenho. As marcas de letras nas áreas lisas somem e o desenho sob o texto é preservado. Só vale para o LaMa neste computador; os modelos na nuvem o ignoram.',
+          adaptive: 'Largo onde a página ao lado do texto é lisa ou preta, justo onde há desenho. As marcas de letras nas áreas lisas somem e a maior parte do desenho sob o texto é preservada; um título com brilho sobre o desenho ainda pode borrar. Só vale para o LaMa neste computador; os modelos na nuvem o ignoram.',
         },
       },
     },

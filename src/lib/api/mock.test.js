@@ -1085,6 +1085,47 @@ describe('layer style in the mock backend', () => {
 })
 
 /**
+ * Live copy in the mock: as `livecopy.rs` redraws a live copy when a layer
+ * changes the area it was picked from, the mock answers it as changed with a
+ * new revision, so the interface's reload of a redrawn copy is exercised. A
+ * Region copy of the same area keeps what it froze, and a change elsewhere
+ * reaches neither.
+ */
+describe('live copies in the mock backend', () => {
+  it('redraws a live copy when its area changes, and not a region copy', async () => {
+    const { backend } = makeBackend()
+    const opened = await settle(backend.openChapter({ projectId: 'tsuki-to-hane', chapterId: CHAPTER }))
+    const chapterId = opened.chapter.id
+    const make = (tool, bbox, params) => settle(backend.createRegion({
+      chapterId, pageIndex: 0, bbox, tool,
+      params: { stroke: { points: [{ x: bbox.x, y: bbox.y }], radius: 4 }, paint: { points: [{ x: bbox.x, y: bbox.y, p: 0.5 }], seed: 3 }, ...params },
+    }))
+    const area = { x: 10, y: 10, w: 20, h: 20 }
+    const live = (await make('cloneStamp', area, { mode: 'live', opacity: 100 })).region
+    const frozen = (await make('cloneStamp', area, { mode: 'region', opacity: 100 })).region
+    expect(live.mask.provenance.params_snapshot).toMatchObject({ mode: 'region-copy', live: true })
+    const revisions = async () => {
+      const [page] = await settle(backend.loadPages({ chapterId, indices: [0] }))
+      const of = (id) => page.regions.find((region) => region.id === id).mask.legacyPatchRevision
+      return { live: of(live.id), frozen: of(frozen.id) }
+    }
+    const before = await revisions()
+
+    await make('brush', { x: 70, y: 70, w: 5, h: 5 }, { mode: 'paint', color: '#202020', opacity: 100, flow: 100 })
+    expect(await revisions()).toEqual(before)
+
+    const over = (await make('brush', { x: 15, y: 15, w: 5, h: 5 }, { mode: 'paint', color: '#202020', opacity: 100, flow: 100 })).region
+    const after = await revisions()
+    expect(after.live).not.toBe(before.live)
+    expect(after.frozen).toBe(before.frozen)
+
+    // Taking that layer back reaches the copy again.
+    await settle(backend.restoreRegion({ regionId: over.id, region: null }))
+    expect((await revisions()).live).not.toBe(after.live)
+  })
+})
+
+/**
  * The model catalogue. What is asserted is the
  * *shape* the interface reads and the one rule the mock exists to make
  * visible in a browser - one artefact missing, so the engine gating is

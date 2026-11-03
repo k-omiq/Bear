@@ -3019,7 +3019,8 @@
           </section>
         </section>
 
-        <!-- Cleaning: the redraw weight, and the FLUX helper collapsed. -->
+        <!-- Cleaning: the redraw weight, LaMa hole (how LaMa cuts the hole it
+             fills), and the FLUX helper collapsed. -->
         <section class="group" aria-labelledby="{uid}-group-cleaning" data-settings-anchor="cleaning">
           <h3 class="sub" id="{uid}-group-cleaning" tabindex="-1" data-anchor-focus>{t('pipelines.cleaning')}</h3>
           {#if cleaningEntries.some((entry) => viewOf(entry).known)}

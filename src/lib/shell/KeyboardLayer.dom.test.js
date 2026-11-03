@@ -160,7 +160,9 @@ describe('the keyboard layer', () => {
 
   it('takes the focus out of a tool bar slider or box on Escape, and keeps the held selection', () => {
     editor.tool = 'gradient'
-    const held = /** @type {any} */ ({ tool: 'gradient', pageId: 'p1', start: { x: 1, y: 1 }, end: { x: 9, y: 9 } })
+    // No line yet: with one, Escape is the live gradient's Done and lets go
+    // only once its change has landed (`retouch.live.dom.test.js`).
+    const held = /** @type {any} */ ({ tool: 'gradient', pageId: 'p1', start: null, end: null })
     draft.selection = held
     const bar = document.createElement('section')
     bar.dataset.shell = 'panel'

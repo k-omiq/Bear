@@ -120,6 +120,7 @@ stores.editor = editor
 vi.mock('../state/editor.svelte.js', () => ({
   editor,
   onPendingEdit: () => () => {},
+  onSelectionEscape: () => () => {},
   select,
   setToolParam: stores.setToolParam,
   startRun: stores.startRun,

@@ -58,7 +58,7 @@ export const es = {
       dither: "Reducir bandas",
       ditherHint: "Añade un ruido leve para que el degradado no muestre bandas.",
       asScreentone: "Usar puntos de la página",
-      asScreentoneHint: "En una página guardada en escala de grises, dibuja el degradado con los puntos de la trama alrededor de la selección, para que encaje con la página. Una página guardada en color, aunque sea el escaneo de un dibujo en blanco y negro, recibe un degradado simple.",
+      asScreentoneHint: "En una página en blanco y negro, dibuja el degradado con los puntos de la trama alrededor de la selección, para que encaje con la página. Una página en color recibe un degradado simple.",
       match: "Igualar el entorno",
       edit: "Editar degradado",
     },
@@ -573,7 +573,7 @@ export const es = {
         hint: {
           tight: 'La opción por defecto, como en 1.0.0-beta.15 y anteriores. LaMa vuelve a dibujar solo las letras. Conserva mejor el dibujo bajo el texto, pero pueden quedar formas de letras grises en el negro o en el papel liso. Solo afecta a LaMa en este equipo; los modelos en la nube lo ignoran.',
           wide: 'Como en 1.0.0-beta.16 a beta.18. LaMa también vuelve a dibujar 5 px alrededor de cada letra. Desaparecen las marcas de letras en el negro y en el papel liso, pero el dibujo bajo el texto puede quedar borroso. Solo afecta a LaMa en este equipo; los modelos en la nube lo ignoran.',
-          adaptive: 'Amplio donde la página junto al texto es lisa o negra, ajustado donde hay dibujo. Desaparecen las marcas de letras en las zonas lisas y se conserva el dibujo bajo el texto. Solo afecta a LaMa en este equipo; los modelos en la nube lo ignoran.',
+          adaptive: 'Amplio donde la página junto al texto es lisa o negra, ajustado donde hay dibujo. Desaparecen las marcas de letras en las zonas lisas y se conserva la mayor parte del dibujo bajo el texto; un título con resplandor sobre el dibujo aún puede emborronarse. Solo afecta a LaMa en este equipo; los modelos en la nube lo ignoran.',
         },
       },
     },

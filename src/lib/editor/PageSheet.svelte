@@ -12,6 +12,8 @@
   import { layerPreviews } from './layerpreview.svelte.js'
   import { eraseMasks } from './erasepreview.svelte.js'
   import { drawsErasable } from './patchlayers.svelte.js'
+  import { draft } from './draft.svelte.js'
+  import { previewStands } from './retouch.svelte.js'
 
   /**
    * One page: the `--paper` sheet, its shadow, its aspect ratio, and the stack
@@ -139,16 +141,21 @@
   const eraserReady = $derived(editor.tool === 'eraser'
     && drawsErasable(page, editor.project?.mode === 'longstrip' ? pages() : [page]))
   const erasing = $derived(eraseMasks.has(page.id))
-  // Prepare independent canvases when a copy is selected or the eraser is
-  // picked. Show them during manipulation or a stroke and until the
-  // committed composite has decoded. At rest the native composite preserves
-  // color-managed edge blending exactly.
+  // A Gradient held on this page. While its preview stands in for its layer
+  // the layer is drawn on these canvases but not shown, so the preview is
+  // seen over the page without the layer's old pixels, as Done commits it.
+  const heldGradient = $derived(draft.selection?.tool === 'gradient' && draft.selection.pageId === page.id ? draft.selection : null)
+  const standing = $derived(previewStands(heldGradient, editor.toolParams.gradient ?? {}))
+  // Prepare independent canvases when a copy is selected, the eraser is
+  // picked or a gradient is held. Show them during manipulation, a stroke or
+  // a standing preview, and until the committed composite has decoded. At
+  // rest the native composite preserves color-managed edge blending exactly.
   $effect(() => {
-    if ((copySelected || eraserReady) && (current || strip)) previewPage = page.id
-    else if (!movingCopy && !erasing && cleanedVersion === pageVersion(page, 'cleaned')) previewPage = null
+    if ((copySelected || eraserReady || heldGradient) && (current || strip)) previewPage = page.id
+    else if (!movingCopy && !erasing && !standing && cleanedVersion === pageVersion(page, 'cleaned')) previewPage = null
   })
   $effect(() => {
-    if (movingCopy || erasing) previewShownFor = page.id
+    if (movingCopy || erasing || standing) previewShownFor = page.id
     else if (cleanedVersion === pageVersion(page, 'cleaned')) previewShownFor = null
   })
   const shown = $derived(!layered || shownFor === page.id)
@@ -183,7 +190,7 @@
       {#if previewing}
         <div class="regional-artwork" style:visibility={shown && previewReady && previewShownFor === page.id ? null : 'hidden'}>
           <PageArtwork {page} variant="cleaned" composite={false} from={loadFrom} to={loadTo} bind:ready={previewSourceReady} />
-          <PatchLayers {page} from={loadFrom} to={loadTo} bind:ready={previewLayersReady} />
+          <PatchLayers {page} from={loadFrom} to={loadTo} hide={standing ? heldGradient?.regionId : null} bind:ready={previewLayersReady} />
         </div>
       {/if}
     {/if}
