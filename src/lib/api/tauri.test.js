@@ -29,6 +29,36 @@ it('pins denoising capability reads to the named cloud profile', async () => {
 })
 import { createMockBackend } from './mock.js'
 
+// A confirmed Nano Banana window's grant is the adapter's to carry: every edit
+// that can reach the rung sends it, and a local edit is sent as before.
+it('keeps a Nano Banana grant and sends it with each edit that can reach the rung', async () => {
+  const invoke = vi.fn(async (command) => command === 'nano_banana_grant' ? { grant: 'g1', model: 'm', count: 2 } : null)
+  const backend = createTauriBackend({ invoke, fallback: {} })
+  await backend.cleanAnyway({ regionId: 'r', engine: 'nanobanana' })
+  expect(invoke).toHaveBeenLastCalledWith('clean_anyway', { regionId: 'r', engine: 'nanobanana' })
+  expect(await backend.grantNanoBanana({ model: 'm', count: 2 })).toEqual({ grant: 'g1', model: 'm', count: 2 })
+  expect(invoke).toHaveBeenLastCalledWith('nano_banana_grant', { model: 'm', count: 2 })
+
+  await backend.applyTool({ tool: 'autoClean', regionId: 'r', params: { engine: 'nanobanana' } })
+  expect(invoke).toHaveBeenLastCalledWith('apply_tool', expect.objectContaining({ params: { engine: 'nanobanana', nanoBananaGrant: 'g1' } }))
+  await backend.createRegion({ chapterId: 'c', pageIndex: 0, bbox: {}, tool: 'shapes', params: { engine: 'nanobanana' } })
+  expect(invoke).toHaveBeenLastCalledWith('create_region', expect.objectContaining({ params: { engine: 'nanobanana', nanoBananaGrant: 'g1' } }))
+  await backend.cleanAnyway({ regionId: 'r', engine: 'nanobanana', params: { exact: true } })
+  expect(invoke).toHaveBeenLastCalledWith('clean_anyway', { regionId: 'r', engine: 'nanobanana', params: { exact: true, nanoBananaGrant: 'g1' } })
+  // Try again names no engine; native decides whether it lands on Nano Banana.
+  await backend.rerunMask({ maskId: 'm1', kind: 'retry' })
+  expect(invoke).toHaveBeenLastCalledWith('rerun_mask', { maskId: 'm1', kind: 'retry', engine: null, params: { nanoBananaGrant: 'g1' } })
+  // A local engine named goes as it did.
+  await backend.applyTool({ tool: 'autoClean', regionId: 'r', params: { engine: 'lama' } })
+  expect(invoke).toHaveBeenLastCalledWith('apply_tool', expect.objectContaining({ params: { engine: 'lama' } }))
+
+  // Stop withdraws it.
+  await backend.nanoBananaStop()
+  expect(invoke.mock.lastCall?.[0]).toBe('nano_banana_stop')
+  await backend.rerunMask({ maskId: 'm1', kind: 'retry' })
+  expect(invoke).toHaveBeenLastCalledWith('rerun_mask', { maskId: 'm1', kind: 'retry', engine: null })
+})
+
 it('duplicates a native region through the registered command', async () => {
   const answer = { region: { id: 'c-p001-h2' }, pageStatus: 'cleaned' }
   const invoke = vi.fn().mockResolvedValue(answer)
@@ -888,6 +918,8 @@ describe('the Tauri adapter', () => {
         'nano_banana_has_key',
         'store_nano_banana_key',
         'delete_nano_banana_key',
+        'nano_banana_grant',
+        'nano_banana_stop',
         'store_cloud_secret',
         'delete_cloud_secret',
         'get_cloud_secret_summary',

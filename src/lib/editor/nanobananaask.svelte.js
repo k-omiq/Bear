@@ -5,16 +5,25 @@
  * A batch asks once (`nanobananarun.svelte.js`) and a single region asks for
  * itself (`maskactions.svelte.js#rerunMask`, `#runRegionMenuItem`). What the
  * person writes is kept as a setting (`nanoBananaPrompt`), so the next window
- * opens with it and the native side reads it when the request is made.
+ * opens with it.
+ *
+ * **A yes is a grant.** Once the instruction is saved, the backend is asked for
+ * a grant for this many regions on the model the window showed
+ * (`grantNanoBanana`), which binds that model and that instruction. The
+ * backend keeps it and sends it with each Nano Banana render, and the native
+ * side renders nothing without one, so a caller only ever sees the boolean.
  */
 import { notify, pushModal } from '../state/app.svelte.js'
 import { getBackend } from '../api/backend.js'
+import { hasKey } from '../i18n/index.js'
 import { writeSettingsSerialized } from '../state/settingswrite.js'
 import { MAX_INSTRUCTION_CHARS, nanoBananaModel, nanoBananaStartSize } from '../model/nanobanana.js'
 
 /**
- * Ask, and keep the instruction. Answers whether to send. Nothing is sent when
- * the instruction could not be saved, because the request would carry the old one.
+ * Ask, keep the instruction, and take the grant. Answers whether to send.
+ * Nothing is sent when the instruction could not be saved, because the grant
+ * would carry the old one, nor when no grant was given (cloud engines turned
+ * off, or the model changed while the window was open).
  *
  * @param {number} count - regions the request covers
  * @param {import('../api/backend.js').Backend} [backend]
@@ -50,6 +59,13 @@ export async function confirmNanoBanana(count, backend = getBackend()) {
     })
   } catch {
     notify({ key: 'nanoBanana.run.promptNotSaved', tone: 'warn' })
+    return false
+  }
+  try {
+    await backend.grantNanoBanana({ model, count })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    notify({ key: hasKey(reason) ? reason : 'decline.reason.nanoBananaNoConsent', tone: 'warn' })
     return false
   }
   return true

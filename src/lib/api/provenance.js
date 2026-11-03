@@ -22,8 +22,11 @@ import { RUNGS, currentRung } from '../model/ladder.js'
 
 /** @type {Readonly<Record<string, EngineInfo>>} */
 export const ENGINE_INFO = Object.freeze({
+  // The model that ran is the grant's, and a render records it in
+  // `params_snapshot.nano_banana.model` (`mock.js#stampNanoBanana`), as the
+  // native side does. This names only the engine.
   nanobanana: {
-    version: 'gemini-3.1-flash-image',
+    version: 'nano-banana',
     modelSha: null,
     provider: 'gemini',
     elapsed: [8000, 30000],

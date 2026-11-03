@@ -154,6 +154,7 @@ fn main() {
             "nano_banana_has_key",
             "store_nano_banana_key",
             "delete_nano_banana_key",
+            "nano_banana_grant",
             "store_cloud_secret",
             "delete_cloud_secret",
             "get_cloud_secret_summary",

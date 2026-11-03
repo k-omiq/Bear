@@ -530,8 +530,10 @@ pub fn write_settings(app: tauri::AppHandle, patch: Value) -> Result<Value, Stri
     let turns_cloud = patch.get(crate::inference::CLOUD_ENGINES_KEY).is_some();
     let snapshot = write(&app, patch)?;
     // Turning cloud engines off withdraws every project's standing consent,
-    // so turning them back on asks again in each project.
+    // so turning them back on asks again in each project. The same for the
+    // rest of a Nano Banana window's regions.
     if turns_cloud && !cloud_engines_allowed(&snapshot) {
+        crate::inference::nano_banana_consent::revoke_all();
         match crate::library::Library::for_app(&app).map(|library| library.clear_cloud_consents(None)) {
             Ok(Ok(_)) => {}
             Ok(Err(err)) => eprintln!("cloud consents not cleared after turning cloud off: {err}"),
