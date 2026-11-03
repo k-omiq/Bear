@@ -17,6 +17,7 @@ const LABEL_KEYS = Object.freeze({
   lama: 'ladder.rung.lama',
   flux: 'ladder.rung.flux',
   cloud: 'ladder.rung.cloud',
+  nanobanana: 'ladder.rung.nanobanana',
   paint: 'ladder.rung.paint',
   clone: 'ladder.rung.clone',
 })

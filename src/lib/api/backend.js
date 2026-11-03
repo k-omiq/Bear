@@ -468,6 +468,9 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {() => Promise<InferenceConfig>} readInferenceConfig - read public inference configuration from `inference.json`
  * @property {(spec: { config: InferenceConfig }) => Promise<InferenceConfig>} writeInferenceConfig - validate and atomically persist public inference configuration to `inference.json`
  * @property {(spec: { provider: 'beam'|'modal', profileId: string }) => Promise<InferenceConfig>} selectCloudProfile - make a configured profile the default cloud target, read and written under the native writer's lock; work running on another profile goes on
+ * @property {() => Promise<boolean>} nanoBananaHasKey - whether a Gemini key is stored; the key itself never crosses the seam
+ * @property {(spec: { key: string }) => Promise<void>} storeNanoBananaKey - store the Gemini key in the OS credential store (write-only)
+ * @property {() => Promise<void>} deleteNanoBananaKey - remove the stored Gemini key
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole, secret: string, tokenId?: string, sessionOnly?: boolean }) => Promise<SecretSummary>} storeCloudSecret - store cloud credential into OS keyring or session store (write-only)
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole }) => Promise<SecretSummary>} deleteCloudSecret - delete cloud credential from OS keyring and session store
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole }) => Promise<SecretSummary>} getCloudSecretSummary - query safe summary of cloud credential presence

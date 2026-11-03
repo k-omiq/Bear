@@ -226,6 +226,9 @@ function mockCloudCapabilities(detectorModels, targets) {
  * @param {MockOptions} [options]
  * @returns {import('./backend.js').Backend}
  */
+/** Whether the mock holds a Gemini key. It only remembers that one was given. */
+let mockNanoBananaKey = false
+
 export function createMockBackend(options = {}) {
   const speed = options.speed ?? 1
   const timers = options.timers ?? DEFAULT_TIMERS
@@ -4818,6 +4821,19 @@ export function createMockBackend(options = {}) {
      * never the secret, so the readiness check and the endpoint list can be
      * exercised in a browser without a value ever sitting in page memory.
      */
+    async nanoBananaHasKey() {
+      return mockNanoBananaKey
+    },
+
+    async storeNanoBananaKey({ key } = {}) {
+      if (!String(key ?? '').trim()) throw new Error('the key is empty')
+      mockNanoBananaKey = true
+    },
+
+    async deleteNanoBananaKey() {
+      mockNanoBananaKey = false
+    },
+
     async storeCloudSecret(spec = {}) {
       await delay(timing.method)
       const key = requireSecretSpec(spec)

@@ -374,6 +374,12 @@ impl SecretStore for OsKeyringSecretStore {
 /// the first request that actually needs the token.
 #[cfg(target_os = "macos")]
 fn macos_item_exists(key: &SecretKey) -> Result<bool, String> {
+    macos_account_exists(&key.as_keyring_user())
+}
+
+/// [`macos_item_exists`] for an account this service keeps outside a cloud profile.
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_account_exists(user: &str) -> Result<bool, String> {
     use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
     use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
 
@@ -382,12 +388,11 @@ fn macos_item_exists(key: &SecretKey) -> Result<bool, String> {
 
     let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)
         .map_err(|_| "OS credential store is locked or inaccessible".to_string())?;
-    let user = key.as_keyring_user();
     let found = ItemSearchOptions::new()
         .class(ItemClass::generic_password())
         .keychains(&[keychain])
         .service(KEYRING_SERVICE)
-        .account(&user)
+        .account(user)
         .load_attributes(true)
         .limit(Limit::Max(1))
         .search();

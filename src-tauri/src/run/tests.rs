@@ -1242,23 +1242,26 @@ fn rung_3a_is_not_reachable_from_an_automatic_run() {
         fixtures::by_name("bitonal").raster,
         fixtures::by_name("indexed-p").raster,
     ];
-    let rungs = [Engine::Fill, Engine::Lama, Engine::Flux, Engine::Cloud];
+    let rungs = [Engine::Fill, Engine::Lama, Engine::Flux, Engine::Cloud, Engine::NanoBanana];
 
     // The constant itself, and the predicate every filter reads it through.
     assert_eq!(HIGHEST_AUTOMATIC, Engine::Lama);
     for engine in [Engine::Fill, Engine::Lama] {
         assert!(reachable_automatically(engine), "{engine:?}");
     }
-    for engine in [Engine::Flux, Engine::Cloud] {
+    for engine in [Engine::Flux, Engine::Cloud, Engine::NanoBanana] {
         assert!(!reachable_automatically(engine), "{engine:?}");
     }
+    // Nor can a run's picks or a stored ceiling start or lift a run to it.
+    assert_eq!(parse_pick(Some("nanobanana")), None);
+    assert_eq!(effective_ceiling(Some("nanobanana"), Some("nanobanana")), HIGHEST_LOCAL);
 
     for page in &sources {
         for start in rungs {
             for ceiling in rungs {
                 let ladder = ladder_from(start, ceiling, page);
                 assert!(
-                    !ladder.contains(&Engine::Flux),
+                    !ladder.contains(&Engine::Flux) && !ladder.contains(&Engine::NanoBanana),
                     "rung 3a reached the ladder from {start:?} under {ceiling:?}"
                 );
                 assert!(

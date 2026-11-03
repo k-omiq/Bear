@@ -199,7 +199,8 @@ describe('the Shapes tool', () => {
     for (const rung of ROW_ENGINES) {
       const here = mode?.options.find((option) => option.value === rung)
       const there = brushEngines?.options.find((option) => option.value === rung)
-      if (rung === 'fill') {
+      // Nano Banana is named per region or run as a batch, never drawn with.
+      if (rung === 'fill' || rung === 'nanobanana') {
         expect(here).toBeUndefined()
         expect(there).toBeUndefined()
         continue

@@ -721,6 +721,9 @@ struct Bench {
     /// residency cache after it. See [`Bench::flux`].
     flux: Option<flux::Inpainter>,
     flux_key: Option<cleaner_core::residency::Key>,
+    /// `None` while Settings' Cloud engines switch is off: the rung then refuses
+    /// before a request is made.
+    nano_banana: Option<crate::inference::nano_banana::Config>,
     #[cfg(test)]
     detected_seed: Option<Mask>,
 }
@@ -770,9 +773,36 @@ impl Bench {
             sidecar_override,
             flux_model,
             flux_backend,
+            nano_banana: crate::inference::nano_banana::Config::when_allowed(app),
             #[cfg(test)]
             detected_seed: None,
         }
+    }
+
+    /// `fitted` on `page`, edited by Gemini, and the record of how.
+    fn nano_banana(
+        &self,
+        page: &Raster,
+        fitted: &Fitted,
+        share: Option<&crate::inference::nano_banana::Neighbours>,
+    ) -> Result<(run::Made, quality::Assessment, serde_json::Value), &'static str> {
+        let config = self.nano_banana.as_ref().ok_or("decline.reason.nanoBananaOff")?;
+        let edited = crate::inference::nano_banana::render(config, page, fitted, self.rung2.finishing, share)?;
+        let rendered = edited.rendered;
+        let made = run::Made {
+            engine: Engine::NanoBanana,
+            mask: rendered.mask,
+            ink: fitted.ink.clone(),
+            pixels: rendered.pixels,
+            provider: Some("gemini".to_owned()),
+            // No digest: the weights are Google's.
+            model_sha256: None,
+            pad: rendered.pad,
+            tiles: Some(rendered.tiles),
+            matched: rendered.matched,
+        };
+        let verdict = quality::assess(page, &made.mask, &made.pixels, fit::page_noise_sigma(page));
+        Ok((made, verdict, edited.record))
     }
 
     /// The detector: the one already in memory if a run or an earlier click
@@ -1108,6 +1138,51 @@ fn edit_with_bench(
 /// mask, rather than merely testing a compositor helper in isolation.
 /// A stand-in renderer the tests hand in to capture the exact raster and fit.
 type TestRenderer<'a> = &'a mut dyn FnMut(&Raster, &Fitted) -> run::Made;
+
+/// What names one page of one job for the answers Nano Banana shares between its
+/// regions: the same source, as it was when the answer was asked for.
+fn nano_banana_scope(located: &Located, source_sha256: &str) -> String {
+    format!("{}|{}|{source_sha256}", located.job_path.display(), located.chapter_id)
+}
+
+/// The regions on this page that are still detections, as Nano Banana may share a
+/// crop with them: each one's applied mask in `window`'s pixels, and only those
+/// wholly inside the window, so no mask is ever clipped by it.
+fn nano_banana_neighbours(
+    job: &Job,
+    located: &Located,
+    source_idx: usize,
+    region_id: &str,
+    source_sha256: &str,
+    window: Rect,
+    detection_shift: (i64, i64),
+    page: &Raster,
+) -> crate::inference::nano_banana::Neighbours {
+    let radius = i64::from(cleaner_core::constants::ISOLATION_RADIUS);
+    let mut rows: Vec<(u32, String)> = job.project.detections.iter()
+        .filter(|row| row.source_idx == source_idx && row.id != region_id)
+        .filter(|row| !job.project.patches.iter().any(|patch| patch.id == row.id))
+        .map(|row| (row.order, row.id.clone()))
+        .collect();
+    rows.sort();
+    let others = rows.into_iter().filter_map(|(_, id)| {
+        let found = job.load_detection(&id).ok()??;
+        let ink = crate::underlay::local_mask(&translated_mask(&found.ink, detection_shift), window);
+        let b = ink.bounds;
+        let inside = !ink.is_empty()
+            && b.x - radius >= 0
+            && b.y - radius >= 0
+            && b.right() + radius <= i64::from(page.width)
+            && b.bottom() + radius <= i64::from(page.height);
+        inside.then(|| (id, ink.dilated(cleaner_core::constants::ISOLATION_RADIUS, page.width, page.height)))
+    }).collect();
+    crate::inference::nano_banana::Neighbours {
+        scope: nano_banana_scope(located, source_sha256),
+        region_id: region_id.to_owned(),
+        origin: (window.x, window.y),
+        others,
+    }
+}
 
 fn edit_with_bench_render(
     bench: &mut Bench,
@@ -1540,11 +1615,24 @@ fn edit_with_bench_render(
                 anchor.map_or(0, |p| p.y_offset) + patch_shift.1,
             ),
         });
+    // Nano Banana on a detection may find its answer already made, by an earlier
+    // region whose crop held this one. The window then has to hold that crop.
+    let shares_crops = detection.is_some() && strip_space.is_none();
+    let mut read_bounds = seed.bounds;
+    if let (true, Some(config)) = (shares_crops && matches!(plan.choice, Choice::Exact(Engine::NanoBanana)), bench.nano_banana.as_ref()) {
+        let scope = nano_banana_scope(located, &source_sha256);
+        if let Some(crop) = crate::inference::nano_banana::shared_crop(&scope, config, &plan.region_id) {
+            let wider = cleaner_core::engines::nano_banana::union_rect(seed.bounds, crop);
+            if crate::underlay::window_for(wider, page.width, page.height).is_ok() {
+                read_bounds = wider;
+            }
+        }
+    }
     let input = crate::underlay::read(
         &job,
         source_idx,
         page,
-        seed.bounds,
+        read_bounds,
         order,
         strip_space,
     )?;
@@ -1636,6 +1724,7 @@ fn edit_with_bench_render(
     // What local FLUX aligned its answer's tone by, recorded as a cloud
     // render's attach records it.
     let mut tone: Option<ToneReport> = None;
+    let mut nano_banana: Option<serde_json::Value> = None;
     let (mut made, mut verdict) = if let Some(renderer) = test_renderer.as_mut() {
         let made = renderer(page, &fitted);
         let verdict = quality::assess(page, &made.mask, &made.pixels, noise);
@@ -1679,6 +1768,19 @@ fn edit_with_bench_render(
                 }
                 Err(reason) => return Ok(Outcome::Refused(reason)),
             },
+            Choice::Exact(Engine::NanoBanana) => {
+                // The page's other regions still to be cleaned ride in the same
+                // request when they fit its crop.
+                let share = shares_crops.then(|| nano_banana_neighbours(
+                    &job, located, source_idx, &plan.region_id, &source_sha256, input.window, detection_shift, page));
+                match bench.nano_banana(page, &fitted, share.as_ref()) {
+                    Ok((made, verdict, record)) => {
+                        nano_banana = Some(record);
+                        (made, verdict)
+                    }
+                    Err(reason) => return Ok(Outcome::Refused(reason)),
+                }
+            }
             Choice::Exact(engine) => {
                 match run::render_rung(&mut bench.rung2, engine, page, &fitted) {
                     Err(detail) => return Ok(Outcome::Refused(engine_fault(&detail))),
@@ -1708,7 +1810,8 @@ fn edit_with_bench_render(
     // text-shape render follows a plan made over its whole window, so it
     // keeps the whole window.
     let whole = Rect::new(0, 0, input.window.w, input.window.h);
-    let reach = if prepared_text.is_some() {
+    // Nano Banana's crop follows a tier setting, so it keeps the whole window too.
+    let reach = if prepared_text.is_some() || made.engine == Engine::NanoBanana {
         whole
     } else {
         crate::underlay::render_reach(made.engine, seed.bounds, scale, made.mask.bounds,
@@ -1732,6 +1835,9 @@ fn edit_with_bench_render(
     );
     if made.engine == Engine::Flux {
         snapshot["flux_model"] = serde_json::json!(bench.flux_model.as_deref().unwrap_or(FLUX_MODEL));
+    }
+    if let Some(record) = nano_banana {
+        snapshot["nano_banana"] = record;
     }
     if let Some(tone) = tone.as_ref() {
         snapshot["tone"] = tone.provenance();
@@ -2560,6 +2666,7 @@ mod text_shape_boundary_tests {
             rung2: run::Rung2::new(&models, Preference::CpuOnly),
             flux: None,
             flux_key: None,
+            nano_banana: None,
             detected_seed: None,
         };
         let edit_plan = Plan {
@@ -7154,6 +7261,58 @@ mod tests {
     }
 
     #[test]
+    fn nano_banana_neighbours_are_the_other_detections_wholly_inside_the_window() {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128;
+        raw.height = 128;
+        raw.data = vec![240; 128 * 128];
+        let (_root, located) = edit_fixture("nano-banana-neighbours", &raw);
+        let own = Mask::filled(Rect::new(38, 36, 20, 14));
+        store_a_detection(&located, "chapter-p001-d0", &own, &Mask::filled(Rect::new(41, 39, 14, 8)), 0);
+        let near = Mask::filled(Rect::new(78, 58, 20, 14));
+        store_a_detection(&located, "chapter-p001-d1", &near, &Mask::filled(Rect::new(80, 60, 14, 8)), 1);
+        // Within the isolation radius of the page edge: its applied mask would be clipped.
+        let edge = Mask::filled(Rect::new(0, 0, 14, 14));
+        store_a_detection(&located, "chapter-p001-d2", &edge, &Mask::filled(Rect::new(2, 2, 10, 10)), 2);
+        let job = Job::open(&located.job_path).unwrap();
+
+        let share = nano_banana_neighbours(&job, &located, 0, "chapter-p001-d0", "sha", Rect::new(0, 0, 128, 128), (0, 0), &raw);
+        assert_eq!(share.others.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["chapter-p001-d1"]);
+        let radius = i64::from(cleaner_core::constants::ISOLATION_RADIUS);
+        assert_eq!(share.others[0].1.bounds, Rect::new(80 - radius, 60 - radius, 14 + 2 * radius as u32, 8 + 2 * radius as u32));
+        assert_eq!((share.region_id.as_str(), share.origin), ("chapter-p001-d0", (0, 0)));
+
+        // In a window that starts at (10, 10) the same mask is 10 px nearer the corner.
+        let page = Raster { width: 100, height: 100, data: vec![240; 100 * 100], ..raw.clone() };
+        let share = nano_banana_neighbours(&job, &located, 0, "chapter-p001-d0", "sha", Rect::new(10, 10, 100, 100), (0, 0), &page);
+        assert_eq!(share.others[0].1.bounds.x, 70 - radius);
+        assert_eq!(share.origin, (10, 10));
+        // The scope names this job, chapter and source, so another page never shares.
+        assert!(share.scope.ends_with("|sha") && share.scope.contains("chapter"));
+    }
+
+    #[test]
+    fn nano_banana_sends_nothing_while_cloud_engines_are_off() {
+        let raw = cleaner_core::image::fixtures::by_name("rgb8").raster;
+        let (root, located) = edit_fixture("nano-banana-off", &raw);
+        let bounds = Rect::new(22, 18, 8, 8);
+        // `test_bench` is what `Bench::open` builds with the switch off: no config.
+        let mut bench = test_bench(&root);
+        assert!(bench.nano_banana.is_none());
+        let outcome = edit_with_bench(&mut bench, run::HIGHEST_LOCAL, &located,
+            fixture_plan("b", Geometry::Painted(Mask::filled(bounds)), Engine::NanoBanana, bounds)).unwrap();
+        assert!(matches!(outcome, Outcome::Refused("decline.reason.nanoBananaOff")));
+        assert!(Job::open(&located.job_path).unwrap().project.patches.is_empty());
+    }
+
+    #[test]
+    fn nano_banana_is_a_rung_named_outright_and_never_a_start() {
+        assert_eq!(choice_for(Some("nanobanana"), EnginePick::Fill), Choice::Exact(Engine::NanoBanana));
+        assert_eq!(serde_json::to_value(Engine::NanoBanana).unwrap(), "nanobanana");
+        assert_eq!(Engine::NanoBanana.rung_key(), "ladder.rung.nanobanana");
+    }
+
+    #[test]
     fn exact_engines_decline_unsupported_source_modes() {
         for (name, engine) in [("indexed-p", Engine::Lama), ("bitonal", Engine::Lama)] {
             let raw = cleaner_core::image::fixtures::by_name(name).raster;
@@ -8821,6 +8980,7 @@ mod tests {
             rung2: run::Rung2::new(&models, Preference::CpuOnly),
             flux: None,
             flux_key: None,
+            nano_banana: None,
             detected_seed: None,
         }
     }

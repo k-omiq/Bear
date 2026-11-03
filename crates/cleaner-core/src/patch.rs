@@ -29,6 +29,10 @@ pub enum Engine {
     Lama,
     Flux,
     Cloud,
+    /// Google's Gemini image model through the user's own API key
+    /// ([`crate::engines::nano_banana`]). Above every ceiling a run can reach, so
+    /// only a person naming it ever spends on it.
+    NanoBanana,
     /// A brush stroke. **Not a rung**, and that is the whole of what separates
     /// it from the four rungs above: there is no ladder position to escalate from or
     /// to, no quality verdict, and nothing to fit - the user said where the
@@ -52,6 +56,7 @@ impl Engine {
             Engine::Lama => "ladder.rung.lama",
             Engine::Flux => "ladder.rung.flux",
             Engine::Cloud => "ladder.rung.cloud",
+            Engine::NanoBanana => "ladder.rung.nanobanana",
             Engine::Paint => "ladder.rung.paint",
             Engine::Clone => "ladder.rung.clone",
         }
@@ -87,7 +92,7 @@ impl Engine {
                 lock: true,
                 opacity: true,
             },
-            Engine::Screentone | Engine::Lama | Engine::Flux | Engine::Cloud | Engine::Clone => {
+            Engine::Screentone | Engine::Lama | Engine::Flux | Engine::Cloud | Engine::NanoBanana | Engine::Clone => {
                 LayerCapabilities { transform: LayerPlacement::Fixed, lock: false, opacity: true }
             }
         }

@@ -113,7 +113,7 @@ export function provenanceFacts(mask) {
  *
  * @type {ReadonlyArray<string>}
  */
-export const ROW_ENGINES = Object.freeze(['fill', 'screentone', 'lama', 'flux'])
+export const ROW_ENGINES = Object.freeze(['fill', 'screentone', 'lama', 'flux', 'nanobanana'])
 
 /**
  * The rungs still in beta, offered only while Settings > Beta has them on
@@ -133,6 +133,12 @@ export const BETA_ENGINES = Object.freeze(['screentone'])
  * after one consent per request (`editor/cloudflow.svelte.js`).
  */
 export const CLOUD_ENGINE = 'cloud'
+
+/**
+ * Google's Nano Banana, on the user's own key. A rung named by hand, and one
+ * that is asked about first (`editor/nanobananaask.svelte.js`).
+ */
+export const NANO_BANANA_ENGINE = 'nanobanana'
 
 /**
  * The engines this machine may actually be asked for.
@@ -169,7 +175,8 @@ export const CLOUD_ENGINE = 'cloud'
  */
 export function rowEngines(available, options = {}) {
   const known = available ?? UNANSWERED
-  const local = ROW_ENGINES.filter((rung) => (known[rung] ?? true) !== false &&
+  // Nano Banana is the one rung offered only on a yes: it needs the user's own key.
+  const local = ROW_ENGINES.filter((rung) => (rung === 'nanobanana' ? known[rung] === true : (known[rung] ?? true) !== false) &&
     (options.beta === true || !BETA_ENGINES.includes(rung)))
   return options.cloud === true ? [...local, CLOUD_ENGINE] : local
 }
@@ -183,7 +190,7 @@ export function rowEngines(available, options = {}) {
  * round - the ordinary machine has them, and blanking two rungs for the
  * moment between mount and the first answer would flicker on every launch.
  */
-const UNANSWERED = Object.freeze({ flux: false })
+const UNANSWERED = Object.freeze({ flux: false, nanobanana: false })
 
 /**
  * Whether a mask was rendered in the cloud: a legacy `cloud` engine, or a

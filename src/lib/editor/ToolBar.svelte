@@ -116,6 +116,7 @@
   import { windowGesture, closeWindowFocusing } from './windowgesture.js'
   import { MIN_TOP, TOOL_BOTTOM_RESERVE } from '../model/windows.js'
   import { cleanLocalFirst, cloudParts, cloudScopeRefusal, runStep, startCleanRun } from './cloudrun.js'
+  import { nanoBananaRun, startNanoBananaRun, stopNanoBananaRun } from './nanobananarun.svelte.js'
   import {
     Button,
     ColorPicker,
@@ -1495,6 +1496,22 @@
             <Icon name={running ? 'stop' : 'play'} size={13} />
             {actionLabel}
           </Button>
+          <!-- Nano Banana, offered only with a key and Cloud engines on. A paid request
+               per region, so it is its own button and asks first, and never part of
+               a run (`editor/nanobananarun.svelte.js`). -->
+          {#if step === 'clean' && capabilities.nanoBanana && scope !== 'project'}
+            <Button
+              size="sm"
+              variant="soft"
+              disabled={running}
+              data-run-row="nanoBanana"
+              onclick={() => (nanoBananaRun.active ? stopNanoBananaRun() : startNanoBananaRun(scope))}
+            >
+              {nanoBananaRun.active
+                ? t('nanoBanana.run.stop', { done: nanoBananaRun.done, total: nanoBananaRun.total })
+                : t('nanoBanana.run.button')}
+            </Button>
+          {/if}
           <!-- Rendered whether or not there is anything in it: a live region
                has to be on the page *before* the text arrives, or nothing is
                announced. -->

@@ -48,9 +48,13 @@ const ALWAYS_AVAILABLE = Object.freeze({
   screentone: true,
   lama: true,
   flux: false,
+  // Needs the user's own key and Cloud engines on (`refreshNanoBanana`).
+  nanobanana: false,
 })
 
 export const capabilities = $state({
+  /** Whether Nano Banana can be offered here: a key is stored and the switch is on. */
+  nanoBanana: false,
   /** Whether rung 3a can be offered here. */
   sidecar: false,
   /** Why not, where there is something to say. @type {string|null} */
@@ -165,6 +169,20 @@ async function useAnInstalledModel(backend) {
 }
 
 /**
+ * Read whether Nano Banana can run. It is `engines`' entry as well, because every
+ * engine picker reads that map.
+ *
+ * @param {import('../api/backend.js').Backend} [backend]
+ * @returns {Promise<void>}
+ */
+export async function refreshNanoBanana(backend = getBackend()) {
+  let hasKey = false
+  try { hasKey = await backend.nanoBananaHasKey() } catch { /* no key is the safe answer */ }
+  capabilities.nanoBanana = hasKey && session.cloudAllowed
+  capabilities.engines = { ...capabilities.engines, nanobanana: capabilities.nanoBanana }
+}
+
+/**
  * Ask the backend once. A backend that cannot answer leaves the defaults -
  * which offer nothing for the sidecar, the safe direction there, and everything
  * for the weights, the safe direction here: a machine whose catalogue cannot be
@@ -176,6 +194,7 @@ async function useAnInstalledModel(backend) {
  * @returns {Promise<void>}
  */
 export async function loadCapabilities(backend = getBackend()) {
+  await refreshNanoBanana(backend)
   try {
     let answer = await backend.sidecarAvailable()
     if (answer?.reasonKey === 'decline.reason.sidecarWeights' && await useAnInstalledModel(backend)) {
@@ -202,11 +221,12 @@ export async function loadCapabilities(backend = getBackend()) {
       ...ALWAYS_AVAILABLE,
       lama: features.lama !== false,
       flux: capabilities.sidecar,
+      nanobanana: capabilities.nanoBanana,
     }
     capabilities.autoClean = currentWorkflowAvailable()
     capabilities.runtime = view?.runtime?.installed !== false
   } catch {
-    capabilities.engines = { ...ALWAYS_AVAILABLE, flux: capabilities.sidecar }
+    capabilities.engines = { ...ALWAYS_AVAILABLE, flux: capabilities.sidecar, nanobanana: capabilities.nanoBanana }
     capabilities.modelRows = null
     capabilities.workflowCaps = null
     capabilities.autoClean = true

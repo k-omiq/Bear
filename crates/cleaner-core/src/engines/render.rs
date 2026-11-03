@@ -664,6 +664,20 @@ impl PreparedRender {
         if let Some(decline) = declines(page, fitted) {
             return Err(decline.into());
         }
+        let crop = preprocessing
+            .crop_of_hole(fitted.ink.bounds, page.width, page.height)
+            .ok_or_else(|| Error::Run("cannot prepare render for an unrepresentable crop".to_owned()))?;
+        Self::prepare_in_crop(page, fitted, crop, preprocessing)
+    }
+
+    /// Prepare the render inputs for a crop the caller chose. The crop must hold
+    /// the applied mask, or the mask's edge would be written from nothing.
+    pub fn prepare_in_crop(
+        page: &Raster,
+        fitted: &Fitted,
+        crop: Rect,
+        preprocessing: Preprocessing,
+    ) -> Result<Self, Error> {
         let applied = applied_mask(fitted, page.width, page.height);
         let bounds = applied.bounds;
         if bounds.w == 0 || bounds.h == 0 {
@@ -671,10 +685,10 @@ impl PreparedRender {
                 "cannot prepare render for empty region bounds".to_owned(),
             ));
         }
-        let crop = preprocessing
-            .crop_of_hole(fitted.ink.bounds, page.width, page.height)
-            .ok_or_else(|| Error::Run("cannot prepare render for an unrepresentable crop".to_owned()))?;
         debug_assert_eq!(model::applied_bounds(fitted.ink.bounds, page.width, page.height), bounds);
+        if crop.x > bounds.x || crop.y > bounds.y || crop.right() < bounds.right() || crop.bottom() < bounds.bottom() {
+            return Err(Error::Run("the crop does not hold the region".to_owned()));
+        }
         if crop.w == 0 || crop.h == 0 {
             return Err(Error::Run(
                 "cannot prepare render for empty crop bounds".to_owned(),

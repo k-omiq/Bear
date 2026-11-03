@@ -1926,6 +1926,15 @@ export const en = {
       // below the rung the region needed, or this machine has no weights for
       // that rung. Distinct from the four above, each of which is something an
       // engine decided after looking.
+      nanoBananaOff: 'Cloud engines are off, so nothing was sent to Nano Banana',
+      nanoBananaNoKey: 'no Nano Banana key is saved; add one in Settings, Cloud',
+      nanoBananaKeyRejected: 'Google refused the Nano Banana key',
+      nanoBananaModelRejected: 'Google refused this Nano Banana model or request',
+      nanoBananaRateLimited: 'Nano Banana is rate limited; try again soon',
+      nanoBananaUnreachable: 'Nano Banana could not be reached',
+      nanoBananaBlocked: 'Google refused to return an image for this crop',
+      nanoBananaBadAnswer: 'Nano Banana returned no usable image',
+      nanoBananaKeptMark: 'Nano Banana left the blue mark on the result',
       rungUnavailable: 'the engine this region needs was not available',
       // The engine was asked, it started, and then it stopped answering: an
       // ONNX session that built and ran and died under it, which on Windows is
@@ -2751,6 +2760,7 @@ export const en = {
   /* ================================================================== */
   ladder: {
     rung: {
+      nanobanana: 'Nano Banana',
       fill: 'Fill',
       screentone: 'Screentone',
       lama: 'LaMa Manga',
@@ -2894,6 +2904,7 @@ export const en = {
     // ran makes that impossible. Short names, so a row and a segmented control
     // both have room for them.
     engineChoice: {
+      nanobanana: 'Nano Banana',
       fill: 'Fill',
       screentone: 'Screentone',
       lama: 'LaMa Manga',
@@ -4182,6 +4193,43 @@ export const en = {
       chooseImage: 'Choose a comic page',
       samFolder: 'Select the folder that holds both SAM-TS-L lettering mask ONNX graphs',
       rtFile: 'Select the pinned Ogkalu comic text & bubble detector (Full) detector.onnx graph',
+    },
+  },
+  nanoBanana: {
+    settings: {
+      heading: 'Nano Banana',
+      description: 'Cleans a region with Google’s Gemini image model, using your own API key. Each region sends one crop of your page to Google and is billed to your key.',
+      cloudOff: 'Turn on Cloud engines above to use it.',
+      key: 'API key',
+      keySaved: 'A key is saved in your system’s credential store.',
+      keyMissing: 'No key is saved.',
+      save: 'Save key',
+      remove: 'Remove',
+      failed: 'The key could not be changed.',
+      model: 'Model',
+      modelHint: 'The crop size is automatic: for each region, the smallest size the model offers that holds it with page around it. Nano Banana 2 starts at 512 px, the others at 1K.',
+    },
+    model: {
+      v21: 'Nano Banana 2.1',
+      v2: 'Nano Banana 2',
+      pro: 'Nano Banana Pro',
+    },
+    run: {
+      model: 'Model: {model}. The crop size is chosen for each region, from {size} up.',
+      promptLabel: 'What should it edit? (optional)',
+      promptPlaceholder: 'For example: also erase the small arrow, keep the screentone',
+      promptHint: 'Your words are added to the built-in removal instruction and sent to Google. The edit stays inside the marked region.',
+      promptNotSaved: 'The note could not be saved, so nothing was sent.',
+      button: 'Clean with Nano Banana',
+      stop: 'Stop ({done} of {total})',
+      title: 'Clean with Nano Banana',
+      regions: 'Regions to clean: {count}. One paid request each, or one for several regions close together.',
+      cost: 'Estimated cost: {low} to {high}.',
+      sent: 'Each region sends one crop of your page to Google. Free-tier keys let Google use it to improve its products.',
+      cancel: 'Cancel',
+      confirm: 'Send and clean',
+      finished: 'Nano Banana cleaned {cleaned} of {total} regions.',
+      stoppedFailing: 'Nano Banana stopped after three failures in a row.',
     },
   },
   cloud: {

@@ -22,6 +22,13 @@ import { RUNGS, currentRung } from '../model/ladder.js'
 
 /** @type {Readonly<Record<string, EngineInfo>>} */
 export const ENGINE_INFO = Object.freeze({
+  nanobanana: {
+    version: 'gemini-3.1-flash-image',
+    modelSha: null,
+    provider: 'gemini',
+    elapsed: [8000, 30000],
+    fillMode: 'reconstruct',
+  },
   fill: {
     version: 'flat-fill 4',
     modelSha: null,

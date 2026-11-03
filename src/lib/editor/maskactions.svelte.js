@@ -40,11 +40,12 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
-import { CLOUD_ENGINE, MAX_MASK_PADDING, isCloudMask, isDetected, reRunnable, rejectable, retryWidens } from '../model/masks.js'
+import { CLOUD_ENGINE, MAX_MASK_PADDING, NANO_BANANA_ENGINE, isCloudMask, isDetected, reRunnable, rejectable, retryWidens } from '../model/masks.js'
 import { isRegionCopy, layerOf, sameLayer, sanitizeLayer } from '../model/layers.js'
 import { heldStartsOutside } from '../model/review.js'
 import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
 import { editGradientLayer } from './retouch.svelte.js'
+import { confirmNanoBanana } from './nanobananaask.svelte.js'
 import { notify } from '../state/app.svelte.js'
 import { openWindow } from '../state/session.svelte.js'
 import {
@@ -338,6 +339,7 @@ export async function rerunMask(region, kind, engine) {
   if (!region.mask) return false
   if ((kind === 'retry' || kind === 'retryWider') && !reRunnable(region.mask)) return false
   if (kind === 'engine' && engine === CLOUD_ENGINE) return rerunInCloud(region)
+  if (kind === 'engine' && engine === NANO_BANANA_ENGINE && !(await confirmNanoBanana(1))) return false
   if (kind === 'retry' && isCloudMask(region.mask)) return rerunInCloud(region)
   // Wider is a local re-run with a grown hole; a cloud render has no local
   // hole to grow, so it is not offered there (`retryWidens`).
@@ -1521,10 +1523,16 @@ export async function runRegionMenuItem(id, region) {
   if (id === 'duplicate') return duplicateRegion(region)
   if (id === 'approveMask') return approveHeldMask(region)
   if (id === 'approve') return cleanAnyway(region)
-  if (id.startsWith('approve:')) return cleanAnyway(region, id.slice('approve:'.length))
+  if (id.startsWith('approve:')) {
+    const engine = id.slice('approve:'.length)
+    // A paid request to Google: asked about first, with the box for what to edit.
+    if (engine === NANO_BANANA_ENGINE && !(await confirmNanoBanana(1))) return false
+    return cleanAnyway(region, engine)
+  }
   if (id.startsWith('engine:')) {
     const engine = id.slice('engine:'.length)
     if (!isDetected(region)) return rerunMask(region, 'engine', engine)
+    if (engine === NANO_BANANA_ENGINE && !(await confirmNanoBanana(1))) return false
     return engine === CLOUD_ENGINE ? cleanDetectedOnCloud(region) : cleanDetected(region, engine)
   }
   if (id === 'type:inside') return setDetectionType(region, true)

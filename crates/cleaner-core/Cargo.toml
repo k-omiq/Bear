@@ -34,7 +34,7 @@ tiff = "0.11"
 # when libvips was reversed. AVIF and HEIC are absent for that reason and not
 # by oversight.
 image = { version = "0.25", default-features = false, features = [
-  "jpeg", "webp", "gif", "bmp",
+  "jpeg", "png", "webp", "gif", "bmp",
 ] }
 # Raw four-component JPEG decoding; the image wrapper converts CMYK to RGB.
 zune-jpeg = "0.5"
