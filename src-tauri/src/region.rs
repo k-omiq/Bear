@@ -293,8 +293,10 @@ const FLUX_BACKEND_KEYS: &[&str] = &["fluxBackend", "sidecarBackend"];
 /// **Files on disk are one of the free questions.** The helper is found by its
 /// Python alone, so without this a helper whose weights had gone was offered
 /// everywhere and refused every region. `model` is the `fluxModel` setting; with
-/// none set, any model in the table will do, because Settings then picks it. A
-/// folder placed by hand under a name the table does not know is the open's
+/// none set it is the model a render would run, [`LocalFlux::model`]'s default,
+/// so the gate and the run agree. A helper holding only another model then says
+/// `sidecarWeights`, and the interface moves the setting to the model it has
+/// (`capabilities.svelte.js`, `useAnInstalledModel`). A folder placed by hand under a name the table does not know is the open's
 /// question, as is a weights folder moved by `MC_SIDECAR_WEIGHTS_DIR`.
 pub fn sidecar_status_from(
     explicit: Option<&str>,
@@ -342,11 +344,8 @@ fn flux_weights_present(weights: &std::path::Path, backend: Option<&str>, model:
     if std::env::var_os("MC_SIDECAR_WEIGHTS_DIR").is_some() {
         return true;
     }
-    let preferred = flux_backend(backend);
-    match model.filter(|id| !id.is_empty()) {
-        Some(id) => sidecar::models::local_model(id).is_none_or(|known| known.installed(preferred, weights)),
-        None => sidecar::models::LOCAL_MODELS.iter().any(|known| known.installed(preferred, weights)),
-    }
+    let id = model.filter(|id| !id.is_empty()).unwrap_or(FLUX_MODEL);
+    sidecar::models::local_model(id).is_none_or(|known| known.installed(flux_backend(backend), weights))
 }
 
 #[allow(dead_code)]
@@ -10056,6 +10055,18 @@ mod tests {
         // With its weights the portable arm is offered on whatever this host
         // is, unless the kernel would not say how much memory it has. A model
         // nobody set finds them too, and another model still lacks its own.
+        // With only another model's weights, nobody's choice is the default
+        // model a render would run, which is missing: refused, not offered.
+        let other = base.join("weights/flux3-image-klein-sdnq");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("modular_model_index.json"), b"{}").unwrap();
+        if cleaner_core::memory::room().is_some() {
+            assert!(sidecar::models::local_model("flux3-image-klein").unwrap().installed(flux_backend(Some("sdnq")), &base.join("weights")));
+            assert_eq!(
+                sidecar_status_from(Some(&root), Some("sdnq"), None, None).reason_key,
+                Some("decline.reason.sidecarWeights"),
+            );
+        }
         let weights = base.join("weights/flux2-klein-4b-sdnq");
         std::fs::create_dir_all(&weights).unwrap();
         std::fs::write(weights.join("model_index.json"), b"{}").unwrap();
