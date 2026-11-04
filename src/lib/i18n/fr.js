@@ -455,6 +455,7 @@ export const fr = {
       repairNote: 'Réinstalle les paquets de l’assistant, avec la version GPU de torch. Le modèle est conservé, sauf si une mise à jour l’a changé.',
       installFailed: 'Échec du téléchargement : {detail}',
       accelerator: 'Runtime GPU pour l’installation',
+      acceleratorNote: 'Utilisé quand vous téléchargez un modèle ou appuyez sur Réparer l’assistant, qui garde les modèles et réinstalle le runtime GPU.',
       acceleratorAuto: 'Automatique',
       mlxAutomatic: 'MLX utilise automatiquement le GPU Apple.',
       stage: {

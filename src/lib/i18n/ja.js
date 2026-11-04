@@ -452,6 +452,7 @@ export const ja = {
       repairNote: 'ヘルパーのパッケージを GPU 版の torch で入れ直します。モデルは、更新で変わっていなければそのままです。',
       installFailed: 'ダウンロードに失敗しました: {detail}',
       accelerator: 'インストールする GPU ランタイム',
+      acceleratorNote: 'モデルのダウンロード時と「ヘルパーを修復」を押したときに使います。モデルはそのままで GPU ランタイムを入れ直します。',
       acceleratorAuto: '自動',
       mlxAutomatic: 'MLX は Apple GPU を自動的に使用します。',
       stage: {

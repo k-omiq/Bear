@@ -835,15 +835,27 @@ describe('the two pipelines', () => {
     expect(writeSettings).toHaveBeenCalledWith(expect.objectContaining({ sidecarPath: '/opt/flux' }))
   })
 
-  it('keeps MLX visible with its platform requirement and disables Metal setup on Windows', async () => {
+  it('shows the engine and GPU on Windows without opening Advanced, MLX disabled with its requirement', async () => {
     const cleaning = await open(() => view({ runtime: { platform: 'windows-x64' } }))
     await flux(cleaning)
-    await expand(cleaning, 'settings.localModels.advanced')
     const mlx = /** @type {HTMLButtonElement} */ (cleaning.getByRole('radio', { name: t('settings.fluxBackend.mfluxUnsupported') }))
     expect(mlx.disabled).toBe(true)
     expect(mlx.title).toBe(t('settings.fluxBackend.mfluxReason'))
     const accelerator = /** @type {HTMLSelectElement} */ (cleaning.getByLabelText(t('settings.sidecar.accelerator')))
     expect(accelerator.querySelector('option[value="mps"]')?.disabled).toBe(true)
+    expect(accelerator.querySelector('option[value="cuda"]')?.disabled).toBe(false)
+    expect(cleaning.getByText(t('settings.sidecar.acceleratorNote'))).toBeTruthy()
+  })
+
+  it('downloads with the GPU picked in plain view', async () => {
+    const cleaning = await open(() => view({ runtime: { platform: 'windows-x64' } }))
+    await flux(cleaning)
+    const backend = getBackend()
+    backend.installFluxHelper = vi.fn(async () => ({ ready: true }))
+    await fireEvent.change(cleaning.getByLabelText(t('settings.sidecar.accelerator')), { target: { value: 'xpu' } })
+    const row = /** @type {HTMLElement} */ (cleaning.container.querySelector('[data-local-model="flux3-image-klein"]'))
+    await fireEvent.click(within(row).getByRole('button'))
+    await waitFor(() => expect(backend.installFluxHelper).toHaveBeenCalledWith({ model: 'flux3-image-klein', backend: 'auto', accelerator: 'xpu' }))
   })
 
   it('offers to repair an installed torch helper, and runs setup again for the model in use', async () => {

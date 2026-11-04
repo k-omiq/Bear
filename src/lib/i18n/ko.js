@@ -449,6 +449,7 @@ export const ko = {
       repairNote: '도우미 패키지를 GPU용 torch로 다시 설치합니다. 모델은 업데이트로 바뀌지 않았다면 그대로 둡니다.',
       installFailed: '다운로드 실패: {detail}',
       accelerator: '설치할 GPU 런타임',
+      acceleratorNote: '모델을 다운로드하거나 도우미 복구를 누를 때 사용합니다. 모델은 그대로 두고 GPU 런타임을 다시 설치합니다.',
       acceleratorAuto: '자동',
       mlxAutomatic: 'MLX는 Apple GPU를 자동으로 사용합니다.',
       stage: {

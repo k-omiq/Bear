@@ -529,6 +529,7 @@ export const en = {
       repairNote: 'Installs the helper\'s packages again, with the GPU build of torch. The model is kept unless an update changed it.',
       installFailed: 'Download failed: {detail}',
       accelerator: 'GPU runtime for installation',
+      acceleratorNote: 'Used when you download a model or press Repair the helper, which keeps the models and installs the GPU runtime again.',
       acceleratorAuto: 'Automatic',
       mlxAutomatic: 'MLX uses the Apple GPU automatically.',
       stage: {

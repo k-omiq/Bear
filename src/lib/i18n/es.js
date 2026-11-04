@@ -455,6 +455,7 @@ export const es = {
       repairNote: 'Vuelve a instalar los paquetes del asistente, con la versión GPU de torch. El modelo se conserva, salvo que una actualización lo haya cambiado.',
       installFailed: 'La descarga falló: {detail}',
       accelerator: 'Entorno de GPU para la instalación',
+      acceleratorNote: 'Se usa al descargar un modelo o al pulsar Reparar el asistente, que conserva los modelos y vuelve a instalar el entorno de GPU.',
       acceleratorAuto: 'Automático',
       mlxAutomatic: 'MLX usa la GPU de Apple automáticamente.',
       stage: {
