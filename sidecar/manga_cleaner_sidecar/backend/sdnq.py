@@ -138,7 +138,11 @@ DECLARED_RAM_WORKING_SET = {
 #: from another process): FLUX 3 4.75, 4.73 and 6.33 GiB, Klein 4B 3.57, 3.59 and 4.46.
 #: Most of it is safetensors pages mapped from disk, which the kernel can drop: private
 #: memory peaked at 1.4 GiB (FLUX 3) and 1.3 (Klein) until the card was small enough to
-#: offload. The Modal figures above read the same weights off a network volume. The
+#: offload. A second VM the same day held card memory down to 7.7, 7.0, 6.5, 5.5 and
+#: 4.5 GiB free: FLUX 3 peaked 6.46, 6.40, 6.24, 6.48 and 5.48 GiB, Klein 4B 4.53 or
+#: less from 7.0 down. Once offloaded the peak stops rising, as weights already in RAM are not
+#: held twice; with 4.5 GiB free the largest crop failed for card memory, not RAM.
+#: The Modal figures above read the same weights off a network volume. The
 #: largest run, rounded up, and never below the download, since the gate refuses a
 #: working set below the weights. These are what let a 16 GB PC, which the gate gives
 #: about 7.8 GiB, run either model.
@@ -147,8 +151,9 @@ DECLARED_RAM_ON_CARD = {
     "flux3-image-klein": 7_516_192_768,  # 7 GiB
 }
 
-#: The smallest NVIDIA card :data:`DECLARED_RAM_ON_CARD` was measured for: an 8 GB card,
-#: which reports a little under 8 GiB.
+#: The smallest NVIDIA card :data:`DECLARED_RAM_ON_CARD` holds for: an 8 GB card, which
+#: reports a little under 8 GiB. The figures were measured by free card memory, down to
+#: 4.5 GiB, which covers such a card with a desktop and other apps on it.
 MEASURED_CARD_BYTES = 7_516_192_768  # 7 GiB
 
 #: Long side a small crop is upscaled to before the edit. `mflux.py`'s constant,

@@ -744,6 +744,11 @@ window by WebDriver (`tauri-driver` and `WebKitWebDriver` under Xvfb). Two fault
   6.4 GiB; Klein 4B 5.9. Renders took FLUX 3 23 to 115 s and Klein 4B 7 to 27 s a crop. On a card of 7 GiB or
   more these two models now declare 7 and 5.5 GiB (`DECLARED_RAM_ON_CARD`); Klein 9B, Qwen and smaller cards
   keep the Modal figures. Loading FLUX 3's text encoder straight to the card (`device_map`) changed nothing.
+  A review asked whether an 8 GB card with less free, as on a desktop, offloads more and runs past 7 GiB. A
+  second VM held card memory down to 7.7, 7.0, 6.5, 5.5 and 4.5 GiB free: FLUX 3 peaked 6.46, 6.40, 6.24,
+  6.48 and 5.48 GiB; Klein 4B, from 7.0 down, 4.53, 4.52, 4.53 and 4.35. The peak stops rising once the model offloads.
+  With 4.5 GiB free the 1296x976 crop failed for card memory (both models), not RAM, and the two smaller crops
+  rendered. Not measured: a real 8 GB card, and `MC_SIDECAR_LOW_VRAM=1`.
 
 The same day on Windows Server 2025 (the same machine type, driver 596.86), the 1.0.0-beta.19 installer, the app
 driven over WebView2's debug port from a scheduled task. Two more faults stopped the FLUX 3 install there, and the

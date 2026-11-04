@@ -409,13 +409,14 @@ class RamFigure(unittest.TestCase):
     def test_a_16_gb_pc_has_room_for_the_measured_models_on_a_card(self) -> None:
         """The gate's room on the g2-standard-4 that refused both models, 2026-11-04."""
         room = 8_353_450_666
-        for model, ram in DECLARED_RAM_ON_CARD.items():
-            self.assertLess(ram, room, model)
+        card = 8188 * 1024**2
+        for model in DECLARED_RAM_ON_CARD:
+            self.assertLess(self._figure(model, card, "cuda"), room, model)
 
     def test_the_local_disk_figure_is_not_below_what_an_l4_measured(self) -> None:
-        """VmHWM through the app's helper on a GCE L4, 2026-11-04, the largest of three
-        card sizes, in GiB."""
-        measured = {"flux2-klein-4b": 4.46, "flux3-image-klein": 6.33}
+        """VmHWM through the app's helper on a GCE L4, 2026-11-04, the largest over
+        22 down to 4.5 GiB free on the card, in GiB."""
+        measured = {"flux2-klein-4b": 4.53, "flux3-image-klein": 6.48}
         self.assertEqual(set(DECLARED_RAM_ON_CARD), set(measured))
         for model, ram in DECLARED_RAM_ON_CARD.items():
             self.assertGreater(ram, measured[model] * GIB, model)
