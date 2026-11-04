@@ -381,15 +381,15 @@ pub(crate) fn supports_model(id: &str, accelerator: Accelerator, host: Option<cl
         // graph at the first read and CoreML its decoder, and DirectML is
         // untested (`accel::HAYAI`).
         "hayai" => accelerator == Accelerator::Cuda && host.is_some_and(|h| matches!(h.os, Os::Windows | Os::Linux)),
-        // Every GPU provider the platform has but CoreML: the forced session
-        // keeps the CPU fallback for what the provider cannot hold
-        // (`accel::LAMA.partitioned_on`). CoreML is left out: it has no builder
-        // for `Einsum`, `Range`, `ConstantOfShape` or `Neg`, so the graph splits
-        // into CPU islands; it measured slower than the CPU and peaked at
-        // 8.4 GB (`accel::LAMA`).
+        // Every GPU provider the platform has but CoreML and DirectML: the
+        // forced session keeps the CPU fallback for what the provider cannot
+        // hold (`accel::LAMA.partitioned_on`). CoreML is left out: it has no
+        // builder for `Einsum`, `Range`, `ConstantOfShape` or `Neg`, so the
+        // graph splits into CPU islands; it measured slower than the CPU and
+        // peaked at 8.4 GB (`accel::LAMA`). DirectML is left out because its
+        // first render failed in the Fourier unit's `MatMul` (`accel::LAMA`).
         "inpainter" => match accelerator {
             Accelerator::WebGpu => true,
-            Accelerator::DirectMl => host.is_some_and(|h| h.os == Os::Windows),
             Accelerator::Cuda => host.is_some_and(|h| matches!(h.os, Os::Windows | Os::Linux)),
             _ => false,
         },
@@ -586,9 +586,8 @@ mod tests {
     /// **A Windows machine with the DirectML download**, as the settings panel
     /// would draw it: every model on the GPU, every one of them flagged
     /// unmeasured, DirectML shown as active but not measured - and WebGPU,
-    /// which the plugin beside the runtime provides, shown as neither
-    /// measured nor the inpainter's choice, because on this platform DirectML
-    /// is the candidate written for it.
+    /// which the plugin beside the runtime provides, shown as not measured and
+    /// as the inpainter's choice, because LaMa is not offered DirectML.
     #[test]
     fn the_panel_says_where_each_model_runs_and_whether_anyone_timed_it() {
         let windows = [Accelerator::DirectMl, Accelerator::WebGpu];
@@ -618,15 +617,15 @@ mod tests {
             .iter()
             .find(|row| row.model_key == "models.kind.inpainter")
             .expect("the inpainter");
-        assert_eq!(inpainter.accelerator_id, "directml");
-        assert_eq!(inpainter.label_key, "accel.directml");
+        assert_eq!(inpainter.accelerator_id, "webgpu");
+        assert_eq!(inpainter.label_key, "accel.webgpu");
         assert_eq!(inpainter.note_key, Some("accel.chosen.unmeasured"));
         assert_eq!(inpainter.declined_key, None);
 
         let webgpu = view.providers.iter().find(|row| row.id == "webgpu").expect("a row");
         assert!(webgpu.available);
         assert!(!webgpu.measured, "WebGPU was measured on Metal, and this is Direct3D");
-        assert!(!webgpu.active, "DirectML is the candidate written for this platform");
+        assert!(webgpu.active, "LaMa takes WebGPU where DirectML is not offered to it");
 
         // The same list read on the machine the table was measured on says
         // the opposite about WebGPU, which is the whole reason `host` is an
@@ -803,7 +802,7 @@ mod tests {
         assert_eq!(sam.declined_id, Some("cuda"));
     }
 
-    /// LaMa is offered every GPU provider the platform has but CoreML, because
+    /// LaMa is offered every GPU provider the platform has but CoreML and DirectML, because
     /// a forced session keeps the CPU fallback on each. The offer and that exemption
     /// must agree, or Settings offers a backend the model refuses to load on.
     #[test]
@@ -811,7 +810,7 @@ mod tests {
         const LINUX: Platform = Platform { os: Os::Linux, arch: Arch::X86_64 };
         for (host, offered) in [
             (MAC, &[Accelerator::Cpu, Accelerator::WebGpu][..]),
-            (WINDOWS, &[Accelerator::Cpu, Accelerator::DirectMl, Accelerator::Cuda, Accelerator::WebGpu][..]),
+            (WINDOWS, &[Accelerator::Cpu, Accelerator::Cuda, Accelerator::WebGpu][..]),
             (LINUX, &[Accelerator::Cpu, Accelerator::Cuda, Accelerator::WebGpu][..]),
         ] {
             for accelerator in accel::KNOWN {

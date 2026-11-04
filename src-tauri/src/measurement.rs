@@ -116,17 +116,25 @@ fn accelerator(id: &str) -> Option<Accelerator> {
 /// Hand a saved measurement's winners to the selector. It checks the setup
 /// itself at every choice, so this is safe before any runtime is loaded.
 fn register(saved: Option<&Saved>) {
-    accel::set_measured_winners(saved.map(|saved| {
-        let winners = saved
-            .models
-            .iter()
-            .filter_map(|model| {
-                let winner = accelerator(model.winner.as_deref()?)?;
-                Some((profile_name(&model.id)?.to_owned(), winner))
-            })
-            .collect();
-        (saved.setup.clone(), winners)
-    }));
+    let host = cleaner_core::runtime::package::Platform::host();
+    accel::set_measured_winners(saved.map(|saved| (saved.setup.clone(), winners(saved, host))));
+}
+
+/// Each measured row's winner, by profile name. A winner the model is no
+/// longer offered is dropped: a measurement saved before LaMa lost DirectML
+/// would otherwise keep sending it there.
+fn winners(saved: &Saved, host: Option<cleaner_core::runtime::package::Platform>) -> Vec<(String, Accelerator)> {
+    saved
+        .models
+        .iter()
+        .filter_map(|model| {
+            let winner = accelerator(model.winner.as_deref()?)?;
+            if !crate::models::supports_model(&model.id, winner, host) {
+                return None;
+            }
+            Some((profile_name(&model.id)?.to_owned(), winner))
+        })
+        .collect()
 }
 
 /// At start: the last measurement, if there is one, is in force from the
@@ -545,6 +553,18 @@ mod tests {
         std::fs::write(dir.join(FILE), old.to_string()).unwrap();
         assert_eq!(read_saved(&dir), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_saved_winner_the_model_is_no_longer_offered_is_dropped() {
+        use cleaner_core::runtime::package::{Arch, Os, Platform};
+        let windows = Some(Platform { os: Os::Windows, arch: Arch::X86_64 });
+        assert_eq!(winners(&saved(Some("webgpu")), windows), vec![(accel::LAMA.name.to_owned(), Accelerator::WebGpu)]);
+        assert_eq!(winners(&saved(Some("cpu")), windows), vec![(accel::LAMA.name.to_owned(), Accelerator::Cpu)]);
+        // LaMa failed its first render on DirectML, so a winner saved before
+        // that was known is not applied.
+        assert!(winners(&saved(Some("directml")), windows).is_empty());
+        assert!(winners(&saved(None), windows).is_empty());
     }
 
     #[test]

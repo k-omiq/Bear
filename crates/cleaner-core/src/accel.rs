@@ -86,8 +86,8 @@
 //! `accel.chosen.unmeasured`, and it tries the platform's own
 //! [`ModelProfile::unmeasured_candidates`] **before** the Mac's measured
 //! winners. The second rule is what makes a downloaded flavour mean
-//! something: on the DirectML flavour the detector and the inpainter both
-//! land on DirectML, on a CUDA flavour both land on CUDA, and WebGPU takes
+//! something: on the DirectML flavour the detector lands on DirectML, on a
+//! CUDA flavour it and the inpainter land on CUDA, and WebGPU takes
 //! whatever the platform's candidates could not. A Mac reads the table exactly
 //! as before.
 //!
@@ -857,18 +857,21 @@ pub const SCRIPT_ID: ModelProfile = ModelProfile {
 /// builder for `Einsum`, `Range`, `ConstantOfShape` or `Neg`, so the graph
 /// splits into CPU islands.
 ///
-/// DirectML and CUDA are unmeasured; on Windows DirectML is the first thing to
-/// try, and on a CUDA flavour CUDA is.
+/// CUDA is unmeasured, and on a CUDA flavour it is the first thing to try.
+/// **DirectML is not offered**: on an NVIDIA L4 under Windows Server 2025 the
+/// session opened and the first render failed in the Fourier unit's `MatMul`
+/// (`/model/model.5/conv1/ffc/convg2g/fu/rttn/MatMul_5`, DirectML
+/// `80070057`, 2026-11-04), which failed the whole page. So on the DirectML
+/// flavour LaMa takes WebGPU where the plugin is usable and the CPU otherwise.
 pub const LAMA: ModelProfile = ModelProfile {
     name: "lama",
     label_key: "models.kind.inpainter",
     cpu_islands_on: &[Accelerator::CoreMl],
     measured_better: &[Accelerator::WebGpu],
-    // Windows and Linux, in the order the flavours are offered, as for the
-    // detector. Neither has been timed on this graph on a desktop. The cloud
-    // worker runs this file on CUDA, which shows the provider takes it and
-    // says nothing about speed against the CPU.
-    unmeasured_candidates: &[Accelerator::DirectMl, Accelerator::Cuda],
+    // Not timed on this graph on a desktop. The cloud worker runs this file on
+    // CUDA, which shows the provider takes it and says nothing about speed
+    // against the CPU.
+    unmeasured_candidates: &[Accelerator::Cuda],
     // Forty sequential regions through one held session, peak process RSS flat
     // from the first region to the fortieth in all three rows. CoreML is
     // eleven times WebGPU.
@@ -884,7 +887,7 @@ pub const LAMA: ModelProfile = ModelProfile {
     // GPU provider offered for it may leave at least the shape ops behind, so a
     // forced GPU provider keeps the fallback. CoreML is not offered
     // (`models::supports_model`), so it stays strict.
-    partitioned_on: &[Accelerator::WebGpu, Accelerator::DirectMl, Accelerator::Cuda],
+    partitioned_on: &[Accelerator::WebGpu, Accelerator::Cuda],
 };
 
 /// `manga-ocr-base`, the gate's rescue reader - a ViT encoder and a two-layer
@@ -1561,7 +1564,7 @@ mod tests {
     #[test]
     fn a_forced_provider_is_strict_unless_the_graph_partitions_there() {
         let webgpu = Preference::Force(Accelerator::WebGpu);
-        for gpu in [Accelerator::WebGpu, Accelerator::DirectMl, Accelerator::Cuda] {
+        for gpu in [Accelerator::WebGpu, Accelerator::Cuda] {
             assert!(!strict_placement(&LAMA, Preference::Force(gpu), gpu), "{gpu:?}");
         }
         assert!(strict_placement(&LAMA, Preference::Force(Accelerator::CoreMl), Accelerator::CoreMl));
@@ -1893,7 +1896,7 @@ mod tests {
         let cpu = choose_measured(&DETECTOR, Preference::Automatic, &gpus, None, windows, Some(Accelerator::Cpu));
         assert_eq!(cpu.accelerator, Accelerator::Cpu);
         // Not present, or a graph splitter: the table decides.
-        let absent = choose_measured(&LAMA, Preference::Automatic, &gpus, None, windows, Some(Accelerator::Cuda));
+        let absent = choose_measured(&DETECTOR, Preference::Automatic, &gpus, None, windows, Some(Accelerator::Cuda));
         assert_eq!((absent.accelerator, absent.note), (Accelerator::DirectMl, Some("accel.chosen.unmeasured")));
         let mac = Some(Platform { os: Os::MacOs, arch: Arch::Aarch64 });
         let islands = choose_measured(&LAMA, Preference::Automatic, &[Accelerator::CoreMl, Accelerator::WebGpu], None, mac, Some(Accelerator::CoreMl));
@@ -1933,7 +1936,7 @@ mod tests {
         // operator rule keeps CUDA away from it. CoreML lacks `Einsum`,
         // `Range`, `ConstantOfShape` and `Neg`, and that is the one split.
         assert_eq!(LAMA.cpu_islands_on, &[Accelerator::CoreMl]);
-        assert_eq!(LAMA.unmeasured_candidates, &[Accelerator::DirectMl, Accelerator::Cuda]);
+        assert_eq!(LAMA.unmeasured_candidates, &[Accelerator::Cuda], "DirectML failed its first render");
         assert!(!LAMA.measured_better.contains(&Accelerator::Cuda), "CUDA is not measured");
         assert!(!LAMA.measured_better.contains(&Accelerator::DirectMl), "DirectML is not measured");
     }
@@ -1964,16 +1967,15 @@ mod tests {
     #[test]
     fn the_two_windows_flavours_route_every_model_the_way_the_package_table_promises() {
         // The DirectML download: one provider, all three GPU vendors, and the
-        // first candidate for both GPU models - so every model that belongs on
-        // a GPU is on one, the inpainter included. This is the row that makes Windows as busy as
-        // a Mac.
+        // first candidate for the detector. The inpainter is not offered it
+        // (its first render failed there, `LAMA`), so with DirectML alone it
+        // stays on the CPU.
         let directml = [Accelerator::DirectMl];
-        for profile in [LAMA, DETECTOR] {
-            let chosen = choose(&profile, Preference::Automatic, &directml);
-            assert_eq!(chosen.accelerator, Accelerator::DirectMl, "{}", profile.name);
-            assert_eq!(chosen.note, Some("accel.chosen.unmeasured"), "{}", profile.name);
-            assert_eq!(chosen.declined, None, "{}", profile.name);
-        }
+        let chosen = choose(&DETECTOR, Preference::Automatic, &directml);
+        assert_eq!(chosen.accelerator, Accelerator::DirectMl);
+        assert_eq!(chosen.note, Some("accel.chosen.unmeasured"));
+        assert_eq!(chosen.declined, None);
+        assert_eq!(choose(&LAMA, Preference::Automatic, &directml).accelerator, Accelerator::Cpu);
 
         // The CUDA download: TensorRT rides along in the same archive, and
         // both GPU models go to CUDA, flagged, because neither was timed there.
@@ -2050,9 +2052,9 @@ mod tests {
         assert!(measured.is_measured());
         assert_eq!(measured, choose(&LAMA, Preference::Automatic, &ALL), "a Mac reads the table unchanged");
 
-        // Windows has DirectML in the same list, and its own candidate comes
-        // before the Mac's winner.
-        let guessed = choose_on(&LAMA, Preference::Automatic, &ALL, None, windows);
+        // Windows has DirectML in the same list, and the detector's own
+        // candidate comes before the Mac's winner.
+        let guessed = choose_on(&DETECTOR, Preference::Automatic, &ALL, None, windows);
         assert_eq!(guessed.accelerator, Accelerator::DirectMl);
         assert!(!guessed.is_measured());
 
@@ -2133,13 +2135,16 @@ mod tests {
     #[test]
     fn an_unmeasured_candidate_is_used_only_as_a_last_resort_and_is_flagged() {
         // Windows: DirectML is present, WebGPU is not, and nobody has timed
-        // LaMa on it. Better than idling the GPU the download was made for -
-        // and the interface is told the number is not a measurement.
+        // the detector on it. Better than idling the GPU the download was made
+        // for - and the interface is told the number is not a measurement.
         let windows = [Accelerator::DirectMl];
-        let chosen = choose(&LAMA, Preference::Automatic, &windows);
+        let chosen = choose(&DETECTOR, Preference::Automatic, &windows);
         assert_eq!(chosen.accelerator, Accelerator::DirectMl);
         assert_eq!(chosen.note, Some("accel.chosen.unmeasured"));
         assert!(!chosen.is_measured());
+        // A CUDA flavour: LaMa's one candidate.
+        let lama = choose(&LAMA, Preference::Automatic, &[Accelerator::Cuda]);
+        assert_eq!((lama.accelerator, lama.note), (Accelerator::Cuda, Some("accel.chosen.unmeasured")));
 
         // With a measured winner present, the guess is not reached.
         let mac = [Accelerator::WebGpu, Accelerator::DirectMl];
