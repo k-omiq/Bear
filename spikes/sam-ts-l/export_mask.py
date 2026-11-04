@@ -12,12 +12,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
+
+# Windows: the app names the folder of the Microsoft C++ runtime it ships,
+# which torch needs on a PC without Visual C++ (see bootstrap.py). Before
+# torch is imported, and kept open for the life of the process.
+_APP_DLL_DIRECTORY = (os.add_dll_directory(os.environ["MC_SAM_DLL_DIR"])
+                      if sys.platform == "win32" and os.path.isdir(os.environ.get("MC_SAM_DLL_DIR", ""))
+                      else None)
 
 import numpy as np
 import torch
@@ -479,7 +487,13 @@ def run(args: argparse.Namespace) -> None:
                     direct_embedding = encoder(prepared_batch)
                 results["checkpoint_wrapper_vs_direct_encoder"] = differences(
                     embedding.numpy(), direct_embedding.numpy())
-                export_graph(encoder, prepared_batch, encoder_path, "prepared_rgb", "embedding")
+                del direct_embedding
+                # Without no_grad the trace records autograd history and keeps
+                # every block's activations, the 1 GiB global-attention scores
+                # among them, until the export ends: a 15 GB peak that a 16 GB
+                # PC with no swap could not hold. The graph is the same.
+                with torch.no_grad():
+                    export_graph(encoder, prepared_batch, encoder_path, "prepared_rgb", "embedding")
             finally:
                 torch.utils.checkpoint.checkpoint = original_checkpoint
         # inference_mode tensors cannot be captured by an exporter trace that

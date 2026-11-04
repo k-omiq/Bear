@@ -215,5 +215,30 @@ class PerHeadAttentionTest(unittest.TestCase):
             bootstrap.split_global_attention(model, self.HEADS, self.SIDE)
 
 
+class AppDllDirectoryTest(unittest.TestCase):
+    """A Windows PC without Visual C++ finds the app's C++ runtime."""
+
+    def test_windows_adds_the_named_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(bootstrap.sys, "platform", "win32"), \
+                patch.dict(bootstrap.os.environ, {"MC_SAM_DLL_DIR": folder}), \
+                patch.object(bootstrap.os, "add_dll_directory", create=True, return_value="handle") as add, \
+                patch.object(bootstrap, "_DLL_DIRECTORIES", []):
+            bootstrap.use_app_dll_dir()
+            add.assert_called_once_with(folder)
+            self.assertEqual(bootstrap._DLL_DIRECTORIES, ["handle"])
+
+    def test_nothing_without_a_folder_or_off_windows(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(bootstrap.os, "add_dll_directory", create=True) as add:
+            with patch.object(bootstrap.sys, "platform", "linux"), \
+                    patch.dict(bootstrap.os.environ, {"MC_SAM_DLL_DIR": folder}):
+                bootstrap.use_app_dll_dir()
+            with patch.object(bootstrap.sys, "platform", "win32"), \
+                    patch.dict(bootstrap.os.environ, {}, clear=True):
+                bootstrap.use_app_dll_dir()
+            add.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
