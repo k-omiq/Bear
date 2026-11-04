@@ -84,7 +84,7 @@ export function isOutsideHeld(region) {
  * @param {import('../model/types.js').Region} region
  * @param {import('../model/types.js').Page} page
  * @param {ToolContext} ctx
- * @param {{ engineCeiling?: string, bubbleEngine?: string, outsideEngine?: string, bubbleColor?: string }} options
+ * @param {{ engineCeiling?: string, bubbleEngine?: string, outsideEngine?: string, bubbleColor?: string, qwenEdit?: {target: string, description: string}|null }} options
  * @returns {import('../model/types.js').Mask|null} null when the region was left alone
  */
 export function cleanRegionAutomatically(region, page, ctx, options = {}) {
@@ -117,6 +117,7 @@ export function cleanRegionAutomatically(region, page, ctx, options = {}) {
     engine,
     fittingReconstructed: false,
     fillMode: ENGINE_INFO[engine].fillMode,
+    qwenEdit: options.qwenEdit ?? null,
   })
 }
 
@@ -203,6 +204,7 @@ export function applyToolToRegion(region, page, ctx, options) {
     fillMode,
     // A hand mask skips the fit altogether (above), so no fit failed.
     fittingReconstructed: false,
+    qwenEdit: params.qwenEdit ?? null,
   })
   // **Deliberate, and load-bearing since `createHandRegion`.** A hand tool is
   // the app being *told* where text is, so from here on the app holds a box for
@@ -332,7 +334,7 @@ export function deleteRegionMask(region) {
  *
  * @param {import('../model/types.js').Region} region
  * @param {ToolContext} ctx
- * @param {{ kind: 'stronger'|'simpler'|'cycleFill'|'reopenInTool'|'retry'|'retryWider'|'engine', engine?: string }} options
+ * @param {{ kind: 'stronger'|'simpler'|'cycleFill'|'reopenInTool'|'retry'|'retryWider'|'engine', engine?: string, qwenEdit?: {target: string, description: string}|null }} options
  * @returns {{ mask: import('../model/types.js').Mask, reopenTool: string|null, notices: NoticeSpec[] }}
  */
 export function rerunRegionMask(region, ctx, options) {
@@ -382,6 +384,7 @@ export function rerunRegionMask(region, ctx, options) {
     engine: target,
     fillMode: ENGINE_INFO[target].fillMode,
     fittingReconstructed: false,
+    qwenEdit: options.qwenEdit ?? null,
   })
   return {
     mask,
@@ -456,10 +459,11 @@ const RERUN_NOTICE = Object.freeze({
  * @param {import('../model/types.js').Page} page
  * @param {ToolContext} ctx
  * @param {string} [engine]
+ * @param {{target: string, description: string}|null} [qwenEdit] - a FLUX clean's guidance
  * @returns {{ mask: import('../model/types.js').Mask, notices: NoticeSpec[] }}
  */
-export function cleanRegionAnyway(region, page, ctx, engine = 'fill') {
-  const mask = commitMask(region, ctx, { engine, fillMode: 'match-surround' })
+export function cleanRegionAnyway(region, page, ctx, engine = 'fill', qwenEdit = null) {
+  const mask = commitMask(region, ctx, { engine, fillMode: 'match-surround', qwenEdit })
   if (page.status === 'unclean') page.status = 'cleaned'
   return { mask, notices: [{ key: 'notice.gate.cleanedAnyway', params: {}, tone: 'info' }] }
 }

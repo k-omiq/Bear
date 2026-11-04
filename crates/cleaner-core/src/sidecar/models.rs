@@ -17,7 +17,7 @@ use serde::Serialize;
 
 use super::client::RENDER_TIMEOUT;
 use super::Backend;
-use crate::engines::render::Preprocessing;
+use crate::engines::render::{Preprocessing, QwenEdit, QwenTarget};
 
 /// A file from another repository that lands inside a model's folder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -40,14 +40,21 @@ pub struct Checkpoint {
     pub adapters: &'static [Adapter],
 }
 
-/// The instruction a model gets, and whether it names where the lettering is.
+/// The instruction a model gets: which family's words, the same words the
+/// cloud worker gives the same weights ([`Recipe::prompt_for`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Prompt {
-    /// The same words for every region. The hole says where.
-    Fixed(&'static str),
-    /// An edit model takes no mask, so the words name the area: `{location}`
-    /// becomes the lettering's place in its crop ([`hint_location`]).
-    Located(&'static str),
+    /// FLUX.2 Klein: [`crate::engines::flux::PROMPT`] for every region, the
+    /// hole says where. Guidance swaps it for the Klein v2 wording
+    /// (`deploy/cloud/common/flux.py#flux_prompt`).
+    Klein,
+    /// FLUX 3 Image Klein: [`FLUX3_PROMPT`]. An edit model takes no mask, so
+    /// the words name the area ([`hint_location`]); a description is added as
+    /// what lies behind the lettering (`deploy/cloud/common/flux3.py#flux3_prompt`).
+    Flux3,
+    /// Qwen-Image-Edit: [`QWEN_PROMPT`] for the `auto` target, worded per
+    /// target as `deploy/cloud/common/qwen.py#build_prompt` words it.
+    Qwen,
 }
 
 /// How a model is asked to clean a region. The cloud worker's recipe for the
@@ -123,7 +130,7 @@ fn holds(folder: &Path, file: &str, depth: u32) -> bool {
 
 /// FLUX.2 Klein: the crop with the lettering held out of it.
 const KLEIN_RECIPE: Recipe = Recipe {
-    prompt: Prompt::Fixed(crate::engines::flux::PROMPT),
+    prompt: Prompt::Klein,
     steps: crate::engines::flux::STEPS,
     guidance: crate::engines::flux::GUIDANCE,
     preprocessing: Preprocessing::CURRENT,
@@ -133,6 +140,14 @@ const KLEIN_RECIPE: Recipe = Recipe {
 /// `QWEN_PROMPT` built by `deploy/cloud/common/qwen.py#build_prompt` for the
 /// `auto` target.
 pub const QWEN_PROMPT: &str = "Remove the text and lettering in the {location} area of this crop. Reconstruct the background and thin lines hidden behind the erased lettering. Preserve all character artwork, hands, faces, hair, poses, speech-bubble outlines, panel borders, surrounding details, and text outside the target area. Match the original line style and tone. Add no new text or symbols.";
+
+/// What `build_prompt` says after the target sentence, the description and
+/// the text to keep, whatever the target. The tail of [`QWEN_PROMPT`].
+const QWEN_PRESERVE: &str = " Reconstruct the background and thin lines hidden behind the erased lettering. Preserve all character artwork, hands, faces, hair, poses, speech-bubble outlines, panel borders, surrounding details, and text outside the target area. Match the original line style and tone. Add no new text or symbols.";
+
+/// What `flux_prompt` says after the action and the description
+/// (`deploy/cloud/common/flux.py`).
+const KLEIN_PRESERVE: &str = " Preserve character line art, screentones, panel borders, and background details exactly as they appear. Match the original contrast, line weight and shading. Add no new text or symbols.";
 
 /// `FLUX3_PROMPT` in `deploy/cloud/common/manifest.py`.
 pub const FLUX3_PROMPT: &str = "Remove all text in the {location} target area of this manga crop, including small Japanese characters, furigana, hand-drawn sound effects and onomatopoeia. Remove every lettering stroke, outline and text shadow so the target is completely free of writing. Preserve character line art, screentones, panel borders and surrounding background details exactly as they appear. Reconstruct only the background hidden behind the removed lettering, continuing existing lines and textures. Inside speech bubbles, restore the original flat fill. Match the original contrast, shading, grain and line weight. Preserve the crop framing and text outside the target area. Add no lettering, symbols, objects or colours to monochrome artwork.";
@@ -175,7 +190,7 @@ pub const LOCAL_MODELS: &[LocalModel] = &[
             adapters: &[],
         },
         recipe: Recipe {
-            prompt: Prompt::Located(FLUX3_PROMPT),
+            prompt: Prompt::Flux3,
             steps: 16,
             guidance: 1.0,
             preprocessing: Preprocessing::V3,
@@ -207,7 +222,7 @@ pub const LOCAL_MODELS: &[LocalModel] = &[
             ],
         },
         recipe: Recipe {
-            prompt: Prompt::Located(QWEN_PROMPT),
+            prompt: Prompt::Qwen,
             steps: 8,
             guidance: 1.0,
             preprocessing: Preprocessing::CURRENT,
@@ -288,13 +303,87 @@ pub fn hint_location(hint: &[u8], width: u32, height: u32) -> Option<&'static st
 }
 
 impl Recipe {
-    /// The words for one crop.
-    pub fn prompt_for(&self, hint: &[u8], width: u32, height: u32) -> String {
+    /// The words for one crop. `edit` is the user's guidance, as the cloud
+    /// worker for the same family reads it; `None` is the recipe's own words.
+    pub fn prompt_for(&self, hint: &[u8], width: u32, height: u32, edit: Option<&QwenEdit>) -> String {
+        let location = || hint_location(hint, width, height).unwrap_or("center");
         match self.prompt {
-            Prompt::Fixed(words) => words.to_owned(),
-            Prompt::Located(words) => words.replace("{location}", hint_location(hint, width, height).unwrap_or("center")),
+            Prompt::Klein => klein_prompt(edit),
+            Prompt::Flux3 => flux3_prompt(edit, location()),
+            Prompt::Qwen => qwen_prompt(edit, location()),
         }
     }
+}
+
+/// The description, trimmed as the worker trims it, or `None` for none.
+fn described(edit: Option<&QwenEdit>) -> Option<&str> {
+    edit.map(|edit| edit.description.trim()).filter(|text| !text.is_empty())
+}
+
+/// `deploy/cloud/common/flux.py#flux_prompt`: the recipe's own words unless
+/// the guidance says more than Automatic with nothing described.
+pub fn klein_prompt(edit: Option<&QwenEdit>) -> String {
+    let Some(target) = edit.map(|edit| edit.target)
+        .filter(|target| *target != QwenTarget::Auto || described(edit).is_some()) else {
+        return crate::engines::flux::PROMPT.to_owned();
+    };
+    let action = match target {
+        QwenTarget::Auto => "Remove all text, including hand-drawn Japanese sound effects and onomatopoeia.",
+        QwenTarget::Dialogue => "Remove the dialogue lettering inside the speech bubble and leave the bubble interior blank.",
+        QwenTarget::SoundEffect => "Remove the hand-drawn sound effect lettering and redraw the artwork it covered.",
+        QwenTarget::Other => "Remove the unwanted lettering and redraw what it covered.",
+    };
+    let behind = described(edit).map(|text| format!(" Behind the lettering: {text}.")).unwrap_or_default();
+    format!("{action}{behind}{KLEIN_PRESERVE}")
+}
+
+/// `deploy/cloud/common/flux3.py#flux3_prompt`: the recipe's words for the
+/// lettering at `location`, and what the description says lies behind it.
+/// The target adds nothing: the words name every kind of lettering already.
+pub fn flux3_prompt(edit: Option<&QwenEdit>, location: &str) -> String {
+    let mut prompt = FLUX3_PROMPT.replace("{location}", location);
+    if let Some(text) = described(edit) {
+        prompt.push_str(&format!(" Behind the lettering: {text}."));
+    }
+    prompt
+}
+
+/// `deploy/cloud/common/qwen.py#build_prompt` for lettering at `location`.
+pub fn qwen_prompt(edit: Option<&QwenEdit>, location: &str) -> String {
+    let target = edit.map_or(QwenTarget::Auto, |edit| edit.target);
+    let action = match target {
+        QwenTarget::Auto => "Remove the text and lettering",
+        QwenTarget::Dialogue => "Remove the dialogue lettering inside the speech bubble",
+        QwenTarget::SoundEffect => "Remove the sound-effect lettering, including thick character strokes cut off by image edges",
+        QwenTarget::Other => "Remove the unwanted text or lettering",
+    };
+    let description = described(edit)
+        .map(|text| format!(" The user describes the lettering to remove as: {text}."))
+        .unwrap_or_default();
+    let keep = match target {
+        QwenTarget::Dialogue => " Preserve sound effects.",
+        QwenTarget::SoundEffect => " Preserve dialogue.",
+        _ => "",
+    };
+    format!("{action} in the {location} area of this crop.{description}{keep}{QWEN_PRESERVE}")
+}
+
+/// The longest description a render takes, in characters: the cloud's limit
+/// (`cloud_wire.rs`), so one answer serves either place.
+pub const MAX_DESCRIPTION: usize = 500;
+
+/// Guidance as a caller sent it (`{target, description}`), checked as the
+/// cloud checks it: `None` for none or `null`, an error for anything else
+/// that is not a target and a description of at most [`MAX_DESCRIPTION`]
+/// characters with no control characters. The description is trimmed.
+pub fn guidance_from(value: Option<&serde_json::Value>) -> Result<Option<QwenEdit>, &'static str> {
+    let Some(value) = value.filter(|value| !value.is_null()) else { return Ok(None) };
+    let mut edit: QwenEdit = serde_json::from_value(value.clone()).map_err(|_| "qwen_edit_invalid")?;
+    edit.description = edit.description.trim().to_owned();
+    if edit.description.chars().count() > MAX_DESCRIPTION || edit.description.chars().any(char::is_control) {
+        return Err("qwen_edit_invalid");
+    }
+    Ok(Some(edit))
 }
 
 #[cfg(test)]
@@ -361,8 +450,71 @@ mod tests {
         assert_eq!(hint_location(&[0; 4], 2, 2), None);
 
         let qwen = recipe_of("qwen-image-edit-2511");
-        assert!(qwen.prompt_for(&hint, 90, 90).contains("in the lower right area of this crop"));
-        assert_eq!(recipe_of("flux2-klein-4b").prompt_for(&hint, 90, 90), crate::engines::flux::PROMPT);
+        assert!(qwen.prompt_for(&hint, 90, 90, None).contains("in the lower right area of this crop"));
+        assert_eq!(recipe_of("flux2-klein-4b").prompt_for(&hint, 90, 90, None), crate::engines::flux::PROMPT);
+    }
+
+    fn edit(target: QwenTarget, description: &str) -> QwenEdit {
+        QwenEdit { target, description: description.to_owned() }
+    }
+
+    /// No guidance, or Automatic with nothing described, is each recipe's own
+    /// words, exactly as before guidance reached this computer.
+    #[test]
+    fn automatic_guidance_with_no_description_changes_no_prompt() {
+        let mut hint = vec![0u8; 90 * 90];
+        hint[85 * 90 + 85] = 255;
+        let auto = edit(QwenTarget::Auto, "  ");
+        for model in LOCAL_MODELS {
+            assert_eq!(model.recipe.prompt_for(&hint, 90, 90, Some(&auto)), model.recipe.prompt_for(&hint, 90, 90, None), "{}", model.id);
+        }
+        assert_eq!(qwen_prompt(None, "lower right"), QWEN_PROMPT.replace("{location}", "lower right"));
+        assert_eq!(flux3_prompt(None, "lower right"), FLUX3_PROMPT.replace("{location}", "lower right"));
+    }
+
+    /// The local words are the cloud worker's, for the same guidance. The
+    /// expected strings are what `deploy/cloud/common/qwen.py#build_prompt`,
+    /// `flux.py#flux_prompt` and `flux3.py#flux3_prompt` returned for these
+    /// inputs (2026-11-04); a change on either side must change both.
+    #[test]
+    fn guided_prompts_are_the_cloud_workers_words() {
+        let mut hint = vec![0u8; 90 * 90];
+        hint[85 * 90 + 85] = 255;
+        let at = |id: &str, guidance: &QwenEdit| recipe_of(id).prompt_for(&hint, 90, 90, Some(guidance));
+
+        assert_eq!(at("qwen-image-edit-2511", &edit(QwenTarget::SoundEffect, "  big BAM  ")),
+            "Remove the sound-effect lettering, including thick character strokes cut off by image edges in the lower right area of this crop. The user describes the lettering to remove as: big BAM. Preserve dialogue. Reconstruct the background and thin lines hidden behind the erased lettering. Preserve all character artwork, hands, faces, hair, poses, speech-bubble outlines, panel borders, surrounding details, and text outside the target area. Match the original line style and tone. Add no new text or symbols.");
+        assert_eq!(at("qwen-image-edit-2511", &edit(QwenTarget::Dialogue, "")),
+            "Remove the dialogue lettering inside the speech bubble in the lower right area of this crop. Preserve sound effects. Reconstruct the background and thin lines hidden behind the erased lettering. Preserve all character artwork, hands, faces, hair, poses, speech-bubble outlines, panel borders, surrounding details, and text outside the target area. Match the original line style and tone. Add no new text or symbols.");
+
+        assert_eq!(at("flux2-klein-4b", &edit(QwenTarget::Other, "a striped bench")),
+            "Remove the unwanted lettering and redraw what it covered. Behind the lettering: a striped bench. Preserve character line art, screentones, panel borders, and background details exactly as they appear. Match the original contrast, line weight and shading. Add no new text or symbols.");
+        assert_eq!(at("flux2-klein-9b", &edit(QwenTarget::Dialogue, "")),
+            "Remove the dialogue lettering inside the speech bubble and leave the bubble interior blank. Preserve character line art, screentones, panel borders, and background details exactly as they appear. Match the original contrast, line weight and shading. Add no new text or symbols.");
+
+        assert_eq!(at("flux3-image-klein", &edit(QwenTarget::SoundEffect, "a brick wall")),
+            "Remove all text in the lower right target area of this manga crop, including small Japanese characters, furigana, hand-drawn sound effects and onomatopoeia. Remove every lettering stroke, outline and text shadow so the target is completely free of writing. Preserve character line art, screentones, panel borders and surrounding background details exactly as they appear. Reconstruct only the background hidden behind the removed lettering, continuing existing lines and textures. Inside speech bubbles, restore the original flat fill. Match the original contrast, shading, grain and line weight. Preserve the crop framing and text outside the target area. Add no lettering, symbols, objects or colours to monochrome artwork. Behind the lettering: a brick wall.");
+        assert_eq!(at("flux3-image-klein", &edit(QwenTarget::Dialogue, "")), FLUX3_PROMPT.replace("{location}", "lower right"));
+    }
+
+    #[test]
+    fn guidance_is_checked_as_the_cloud_checks_it() {
+        assert_eq!(guidance_from(None), Ok(None));
+        assert_eq!(guidance_from(Some(&serde_json::Value::Null)), Ok(None));
+        assert_eq!(guidance_from(Some(&serde_json::json!({"target": "sound_effect", "description": " a wall "}))),
+            Ok(Some(edit(QwenTarget::SoundEffect, "a wall"))));
+        for bad in [
+            serde_json::json!({"target": "everything", "description": ""}),
+            serde_json::json!({"target": "auto"}),
+            serde_json::json!({"target": "auto", "description": "", "extra": 1}),
+            serde_json::json!({"target": "auto", "description": "x".repeat(MAX_DESCRIPTION + 1)}),
+            serde_json::json!({"target": "auto", "description": "a\u{7}b"}),
+            serde_json::json!("auto"),
+        ] {
+            assert_eq!(guidance_from(Some(&bad)), Err("qwen_edit_invalid"), "{bad}");
+        }
+        let longest = "\u{3042}".repeat(MAX_DESCRIPTION);
+        assert!(guidance_from(Some(&serde_json::json!({"target": "other", "description": longest}))).unwrap().is_some());
     }
 
     /// An older installer downloaded straight into `weights/<dir>` (see

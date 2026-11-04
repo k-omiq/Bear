@@ -1893,10 +1893,14 @@ export function releaseRunStart(token) {
  * `cloudCleanGrant` is a streaming cloud clean's: the run cleans each page on
  * the cloud GPU as soon as it is detected, and nothing on this computer.
  *
- * @param {{cloudGrant?: string|null, cloudCleanGrant?: string|null, mode?: import('../api/backend.js').RunMode, pendingToken?: object|null, area?: {x: number, y: number, w: number, h: number}|null, pageIndex?: number}} [options]
+ * `qwenEdit` is the guidance asked before a run whose picks clean with FLUX
+ * on this computer (`cloudrun.js#startCleanRun`); a run that cleans nothing
+ * here does not carry it.
+ *
+ * @param {{cloudGrant?: string|null, cloudCleanGrant?: string|null, mode?: import('../api/backend.js').RunMode, pendingToken?: object|null, area?: {x: number, y: number, w: number, h: number}|null, pageIndex?: number, qwenEdit?: {target: string, description: string}|null}} [options]
  * @returns {Promise<string|null>} the run id, or null when nothing was queued
  */
-export async function startRun(scope = 'page', { cloudGrant = null, cloudCleanGrant = null, mode = 'auto', pendingToken = null, area = null, pageIndex = editor.pageIndex } = {}) {
+export async function startRun(scope = 'page', { cloudGrant = null, cloudCleanGrant = null, mode = 'auto', pendingToken = null, area = null, pageIndex = editor.pageIndex, qwenEdit = null } = {}) {
   if (!editor.chapter) return null
   const individual = mode === 'detect' && !!area
   const token = individual ? claimAreaRunStart(pendingToken) : claimRunStart(pendingToken)
@@ -1948,6 +1952,7 @@ export async function startRun(scope = 'page', { cloudGrant = null, cloudCleanGr
       // which cleans nothing here. The run then cleans a speech bubble on
       // flat paper and stores every other region as detected (`run.rs`).
       ...(mode !== 'detect' && !cloudCleanGrant && solidOnlyOf(params) ? { solidBubblesOnly: true } : {}),
+      ...(mode !== 'detect' && !cloudCleanGrant && qwenEdit ? { qwenEdit } : {}),
     })
     if (editor.chapter !== chapter) return null
     return individual ? adoptAreaRun(handle, pageIndex) : adoptRun(handle, scope, mode)

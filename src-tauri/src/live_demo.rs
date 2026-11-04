@@ -348,6 +348,7 @@ async fn detect(
         Some("detect".into()),
         None,
         None,
+        None,
     )
     .await?;
     wait_run(&run, observed)?;

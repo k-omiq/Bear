@@ -3375,7 +3375,7 @@ fn a_run_id_cannot_collide_with_the_mocks() {
 #[test]
 fn every_command_is_async_and_so_never_runs_on_the_invoke_handlers_thread() {
     #[allow(clippy::type_complexity)]
-    fn check<A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, V, W, R: std::future::Future>(_: fn(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, V, W) -> R) {}
+    fn check<A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, V, W, X, R: std::future::Future>(_: fn(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, S, T, U, V, W, X) -> R) {}
     fn check1<A, R: std::future::Future>(_: fn(A) -> R) {}
     fn check3<A, B, C, R: std::future::Future>(_: fn(A, B, C) -> R) {}
     check(run_clean);
@@ -7881,6 +7881,29 @@ fn solid_bubbles_only_is_captured_with_the_run_and_resumed() {
 
     assert!(!captured_run_policy(&serde_json::json!({})).unwrap().solid_bubbles_only);
     assert!(!captured_run_policy(&serde_json::json!({ "runSolidBubblesOnly": "yes" })).unwrap().solid_bubbles_only);
+}
+
+/// The guidance asked before a run's local FLUX renders reaches the FLUX
+/// holder, is captured with the run and resumed with it, and never outlives
+/// it: a run without guidance writes none over an older run's.
+#[test]
+fn flux_guidance_is_captured_with_the_run_and_resumed() {
+    use cleaner_core::engines::render::{QwenEdit, QwenTarget};
+    let (_scratch, pipeline) = snapshot_pipeline("guidance-snapshot");
+    let older = serde_json::json!({ "runQwenEdit": { "target": "dialogue", "description": "old" } });
+    let none = run_settings_snapshot(&older, None, &pipeline, None, "chapter", None, RunMode::Auto);
+    assert!(none["runQwenEdit"].is_null(), "an older run's guidance outlived it");
+    assert_eq!(captured_run_policy(&none).unwrap().qwen_edit, None);
+
+    let edit = QwenEdit { target: QwenTarget::SoundEffect, description: "a brick wall".into() };
+    let pipeline = pipeline.with_flux_guidance(Some(edit.clone()));
+    assert_eq!(pipeline.rung2.flux.guidance(), Some(&edit));
+    let guided = run_settings_snapshot(&serde_json::json!({}), None, &pipeline, None, "chapter", None, RunMode::Clean);
+    assert_eq!(guided["runQwenEdit"], serde_json::json!({ "target": "sound_effect", "description": "a brick wall" }));
+    assert_eq!(captured_run_policy(&guided).unwrap().qwen_edit, Some(edit));
+
+    assert_eq!(captured_run_policy(&serde_json::json!({})).unwrap().qwen_edit, None);
+    assert!(captured_run_policy(&serde_json::json!({ "runQwenEdit": { "target": "everything", "description": "" } })).is_err());
 }
 
 /// A run with the option on ends on what it cleaned and what it left, never

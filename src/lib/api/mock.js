@@ -216,6 +216,28 @@ function gutterPixels(pages) {
  * @param {unknown} targets
  * @returns {string[]}
  */
+/**
+ * Guidance for a FLUX render on this computer as the native side checks it
+ * (`cleaner_core::sidecar::models::guidance_from`): absent or null is none,
+ * and anything but a target with a description of at most 500 characters and
+ * no control characters is refused with `qwen_edit_invalid`.
+ *
+ * @param {unknown} value
+ * @returns {{target: string, description: string}|null}
+ */
+export function checkedQwenEdit(value) {
+  if (value === undefined || value === null) return null
+  const edit = /** @type {any} */ (value)
+  const keys = typeof edit === 'object' ? Object.keys(edit).sort().join(',') : ''
+  // eslint-disable-next-line no-control-regex
+  if (keys !== 'description,target' || !['auto', 'dialogue', 'sound_effect', 'other'].includes(edit.target)
+    || typeof edit.description !== 'string' || /[\u0000-\u001f\u007f-\u009f]/.test(edit.description.trim())
+    || Array.from(edit.description.trim()).length > 500) {
+    throw new Error('qwen_edit_invalid')
+  }
+  return { target: edit.target, description: edit.description.trim() }
+}
+
 function mockCloudCapabilities(detectorModels, targets) {
   const models = Array.isArray(detectorModels) ? detectorModels : []
   const routed = targets && typeof targets === 'object' ? /** @type {Record<string, unknown>} */ (targets) : {}
@@ -1405,6 +1427,7 @@ export function createMockBackend(options = {}) {
     solidBubblesOnly = false,
     area = null,
     cloudClean = null,
+    qwenEdit = null,
   }) => {
     // One run per chapter, and a cap on all of them, as `run.rs` answers: the
     // chapter's own run back, or no run at all when the cap is reached.
@@ -1528,6 +1551,8 @@ export function createMockBackend(options = {}) {
       geometryPolicy,
       textPolicy,
       ocrRescue,
+      // A Detect cleans nothing, and a stream cleans nothing here (`run.rs`).
+      qwenEdit: mode === 'detect' || cloudClean ? null : qwenEdit,
     })
     if (solidOnly && handle.runId) solidKept.set(handle.runId, () => kept)
     return handle
@@ -3304,9 +3329,11 @@ export function createMockBackend(options = {}) {
       mode = 'auto',
       area = null,
       solidBubblesOnly = false,
+      qwenEdit = null,
     }) {
       await delay(timing.method)
       if (!['auto', 'detect', 'clean'].includes(mode)) throw new Error('invalid_request: mode')
+      const guidance = checkedQwenEdit(qwenEdit)
       if (cloudCleanGrant && (mode !== 'auto' || area || !['page', 'chapter'].includes(scope))) {
         throw new Error('cloud_clean_stream_unsupported')
       }
@@ -3394,6 +3421,7 @@ export function createMockBackend(options = {}) {
         area,
         solidBubblesOnly,
         cloudClean,
+        qwenEdit: guidance,
       })
       if (lowMemory && handle?.runId && !handle.alreadyRunning) {
         notify('notice.run.lowMemory', { free: state.memoryRoomBytes, runId: handle.runId }, 'warn')
@@ -3407,6 +3435,7 @@ export function createMockBackend(options = {}) {
     },
 
     async applyTool({ tool, params = {}, chapterId, pageIndex, regionId }) {
+      if (params?.qwenEdit !== undefined) params = { ...params, qwenEdit: checkedQwenEdit(params.qwenEdit) }
       if (tool === 'autoClean') {
         await delay(timing.method)
         // A detected region is cleaned on its own, from its stored mask, here -
@@ -3482,6 +3511,7 @@ export function createMockBackend(options = {}) {
      * region-level edit does: a hand mask on an unclean page makes it cleaned.
      */
     async createRegion({ chapterId, pageIndex, sourceIndex, sourceSha, bbox, tool, params = {} }) {
+      if (params?.qwenEdit !== undefined) params = { ...params, qwenEdit: checkedQwenEdit(params.qwenEdit) }
       await delay(timing.method)
       refuseBusyPage(chapterId, pageIndex)
       // Always local, as the native command is: a cloud engine is refused while
@@ -4089,7 +4119,8 @@ export function createMockBackend(options = {}) {
         if (!cloudBlocked()) notify('notice.mask.rerunFailed', { reasonKey: 'decline.reason.rungUnavailable' }, 'warn')
         return null
       }
-      const result = cleaningHere(found, () => rerunRegionMask(found.region, toolContext, { kind, engine }))
+      const qwenEdit = checkedQwenEdit(params?.qwenEdit)
+      const result = cleaningHere(found, () => rerunRegionMask(found.region, toolContext, { kind, engine, qwenEdit }))
       notifyAll(result.notices)
       return {
         region: snapshot(found.region),
@@ -4709,7 +4740,8 @@ export function createMockBackend(options = {}) {
         if (!ended.mask) return null
         return { region: snapshot(found.region), mask: snapshot(ended.mask), pageStatus: found.page.status }
       }
-      const result = cleaningHere(found, () => cleanRegionAnyway(found.region, found.page, toolContext, engine))
+      const qwenEdit = checkedQwenEdit(params?.qwenEdit)
+      const result = cleaningHere(found, () => cleanRegionAnyway(found.region, found.page, toolContext, engine, qwenEdit))
       notifyAll(result.notices)
       return {
         region: snapshot(found.region),

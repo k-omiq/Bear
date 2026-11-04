@@ -5314,6 +5314,7 @@ pub(crate) mod tests {
         flux_model: &'static str,
         renders: Vec<cleaner_core::engines::postprocess::Finishing>,
         holes: Vec<cleaner_core::engines::lama::HoleMode>,
+        guidance: Vec<Option<cleaner_core::engines::render::QwenEdit>>,
     }
 
     impl FakeLocal {
@@ -5326,6 +5327,10 @@ pub(crate) mod tests {
     impl crate::inference::refinish::LocalRender for FakeLocal {
         fn flux_model(&self) -> &str {
             self.flux_model
+        }
+
+        fn set_flux_guidance(&mut self, guidance: Option<cleaner_core::engines::render::QwenEdit>) {
+            self.guidance.push(guidance);
         }
 
         fn render(
@@ -5381,7 +5386,7 @@ pub(crate) mod tests {
         use cleaner_core::engines::postprocess::{Choice, Finishing};
         let fixture = local_result("refinish-lama", Engine::Lama, serde_json::json!({ "tone": { "gain": 1.0 } }));
         let journal = AttemptJournal::new(&fixture.journal_dir, cleaner_core::cloud_wire::provisional_fixture_limits());
-        let mut lama = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new() };
+        let mut lama = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new(), guidance: Vec::new() };
 
         let previews = previews_at(&journal, &fixture.manifest, "reg-1", &mut lama).unwrap();
         assert_eq!((previews.unavailable, previews.current), (None, None));
@@ -5441,7 +5446,7 @@ pub(crate) mod tests {
             patch.provenance.params_snapshot = params.clone();
             job.complete_region(0, &patch, None).unwrap();
             let journal = AttemptJournal::new(&fixture.journal_dir, cleaner_core::cloud_wire::provisional_fixture_limits());
-            let mut lama = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new() };
+            let mut lama = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new(), guidance: Vec::new() };
             previews_at(&journal, &fixture.manifest, "reg-1", &mut lama).unwrap();
             assert!(lama.holes.iter().all(|&asked| asked == hole), "{name}: {:?}", lama.holes);
             apply_at(&journal, &fixture.manifest, "reg-1", Choice { finishing: Finishing::Poisson, grayscale: false }, &mut lama)
@@ -5461,7 +5466,7 @@ pub(crate) mod tests {
         use cleaner_core::engines::postprocess::{Choice, Finishing};
         let fixture = local_result("refinish-flux", Engine::Flux, serde_json::json!({ "flux_model": "flux2-klein-4b" }));
         let journal = AttemptJournal::new(&fixture.journal_dir, cleaner_core::cloud_wire::provisional_fixture_limits());
-        let mut other = FakeLocal { flux_model: "flux2-klein-9b", renders: Vec::new(), holes: Vec::new() };
+        let mut other = FakeLocal { flux_model: "flux2-klein-9b", renders: Vec::new(), holes: Vec::new(), guidance: Vec::new() };
         assert_eq!(previews_at(&journal, &fixture.manifest, "reg-1", &mut other).unwrap().unavailable, Some(Unavailable::ModelChanged));
         let before = std::fs::read(&fixture.manifest).unwrap();
         let refused = apply_at(&journal, &fixture.manifest, "reg-1", Choice { finishing: Finishing::Poisson, grayscale: false }, &mut other)
@@ -5470,10 +5475,28 @@ pub(crate) mod tests {
         assert!(other.renders.is_empty());
         assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
 
-        let mut same = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new() };
+        let mut same = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new(), guidance: Vec::new() };
         let previews = previews_at(&journal, &fixture.manifest, "reg-1", &mut same).unwrap();
         assert_eq!(previews.unavailable, None);
         assert_eq!(same.renders.len(), Finishing::ALL.len());
+        assert!(same.guidance.iter().all(Option::is_none), "a result made without guidance was asked with some");
+    }
+
+    /// A local FLUX result made with guidance is finished again from the
+    /// words it was made with, so the model answers what it answered before.
+    #[test]
+    fn refinish_asks_a_guided_flux_result_with_its_own_guidance() {
+        use crate::inference::refinish::previews_at;
+        use cleaner_core::engines::render::{QwenEdit, QwenTarget};
+        let fixture = local_result("refinish-flux-guided", Engine::Flux, serde_json::json!({
+            "flux_model": "flux3-image-klein", "qwen_edit": { "target": "sound_effect", "description": "a brick wall" },
+        }));
+        let journal = AttemptJournal::new(&fixture.journal_dir, cleaner_core::cloud_wire::provisional_fixture_limits());
+        let mut models = FakeLocal { flux_model: "flux3-image-klein", renders: Vec::new(), holes: Vec::new(), guidance: Vec::new() };
+        assert_eq!(previews_at(&journal, &fixture.manifest, "reg-1", &mut models).unwrap().unavailable, None);
+        let edit = QwenEdit { target: QwenTarget::SoundEffect, description: "a brick wall".into() };
+        assert!(!models.guidance.is_empty());
+        assert!(models.guidance.iter().all(|asked| asked.as_ref() == Some(&edit)), "{:?}", models.guidance);
     }
 
     /// A committed result whose saved answer is gone says so, and nothing is

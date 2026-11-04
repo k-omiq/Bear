@@ -67,7 +67,7 @@ use cleaner_core::accel::Preference;
 use cleaner_core::detect::{build_regions_separated, Detector};
 use cleaner_core::engines::flux;
 use cleaner_core::engines::model::Error as ModelError;
-use cleaner_core::engines::render::{ExecutionTarget, RenderRecipe, ToneReport};
+use cleaner_core::engines::render::{ExecutionTarget, QwenEdit, RenderRecipe, ToneReport};
 use cleaner_core::fit::{self, EdgeMap, Fitted};
 #[cfg(test)]
 use cleaner_core::image::decode;
@@ -674,6 +674,9 @@ struct Plan {
     requested: Option<Rect>,
     stroke: Option<PaintedStroke>,
     drawn: Option<PaintedShape>,
+    /// The user's guidance for a FLUX render on this computer
+    /// ([`LocalFlux::set_guidance`]), from the caller's `params.qwenEdit`.
+    qwen_edit: Option<QwenEdit>,
 }
 
 /// What an edit did.
@@ -879,6 +882,11 @@ pub(crate) struct LocalFlux {
     /// The pressure ladder took the child back, and this is a latch for the
     /// reason [`run::Rung2::surrender`] gives: a run must not spawn it again.
     surrendered: bool,
+    /// What the user said to clean, asked before the clean as the cloud asks
+    /// it (`qwenflow.js#askQwenEdit`), and worded into the prompt per model
+    /// family ([`cleaner_core::sidecar::models::Recipe::prompt_for`]). `None`
+    /// renders with the recipe's own words.
+    guidance: Option<QwenEdit>,
 }
 
 impl LocalFlux {
@@ -896,11 +904,30 @@ impl LocalFlux {
         self.model.as_deref().filter(|s| !s.is_empty()).unwrap_or(FLUX_MODEL)
     }
 
-    /// What a FLUX patch records beyond a rung's usual fields.
+    /// The guidance the next renders are worded with, for a run or an edit.
+    pub(crate) fn set_guidance(&mut self, guidance: Option<QwenEdit>) {
+        self.guidance = guidance;
+    }
+
+    pub(crate) fn guidance(&self) -> Option<&QwenEdit> {
+        self.guidance.as_ref()
+    }
+
+    /// What a FLUX patch records beyond a rung's usual fields. The guidance
+    /// goes where a cloud patch keeps its own (`params_snapshot.qwen_edit`),
+    /// so the dialog opens with it the next time.
     pub(crate) fn record(&mut self, snapshot: &mut serde_json::Value) {
         snapshot["flux_model"] = serde_json::json!(self.model());
         if let Some(tone) = self.tone.take() {
             snapshot["tone"] = tone.provenance();
+        }
+        match &self.guidance {
+            Some(edit) => snapshot["qwen_edit"] = serde_json::json!(edit),
+            None => {
+                if let Some(params) = snapshot.as_object_mut() {
+                    params.remove("qwen_edit");
+                }
+            }
         }
     }
 
@@ -996,7 +1023,7 @@ impl LocalFlux {
             self.key = Some(key);
         }
         let inpainter = self.held.as_mut().expect("just opened");
-        let rendered = inpainter.render_with(page, fitted, finishing);
+        let rendered = inpainter.render_guided(page, fitted, finishing, self.guidance.as_ref());
         if inpainter.gone() {
             // Dropped, which ends the child: the next region opens another.
             self.held = None;
@@ -1049,6 +1076,12 @@ impl LocalModels {
     /// picks it.
     pub(crate) fn flux_model(&self) -> &str {
         self.0.rung2.flux.model()
+    }
+
+    /// The guidance a FLUX result was made with, so a change of its finishing
+    /// asks the model the words it answered before.
+    pub(crate) fn set_flux_guidance(&mut self, guidance: Option<QwenEdit>) {
+        self.0.rung2.flux.set_guidance(guidance);
     }
 
     /// `fitted` on `page` rendered by `engine`, LaMa or FLUX on this computer,
@@ -1196,6 +1229,7 @@ fn edit_with_bench_render(
     mut test_renderer: Option<TestRenderer<'_>>,
 ) -> Result<Outcome, String> {
     let _lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
+    bench.rung2.flux.set_guidance(plan.qwen_edit.take());
     // Read-only from here: the manifest is mutated in `commit`, which takes the
     // job by value and is the only writer either path reaches.
     let job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
@@ -2323,6 +2357,7 @@ pub async fn apply_prepared_text_shape(
             requested: None,
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         match edit(&app, &located, plan)? {
             Outcome::Cleaned(edited) => Ok(ApplyResult::applied(edited)),
@@ -2638,6 +2673,7 @@ mod text_shape_boundary_tests {
             requested: None,
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         let mut fake = |image: &Raster, fitted: &Fitted| run::Made {
             engine: Engine::Fill,
@@ -2707,6 +2743,7 @@ mod text_shape_boundary_tests {
             requested: None,
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         assert!(matches!(
             edit_with_bench_render(
@@ -4347,6 +4384,13 @@ fn named_rung(engine: Option<&str>) -> Option<Engine> {
     run::parse_rung(engine?)
 }
 
+/// The guidance a caller sent for a FLUX render on this computer, in
+/// `params.qwenEdit` (`{target, description}`), checked as the cloud checks
+/// its own ([`cleaner_core::sidecar::models::guidance_from`]). Absent is none.
+fn qwen_edit_in(params: &serde_json::Value) -> Result<Option<QwenEdit>, String> {
+    cleaner_core::sidecar::models::guidance_from(params.get("qwenEdit")).map_err(str::to_owned)
+}
+
 /// Whether a re-run with no grant would have to go to the cloud: the cloud
 /// named outright, or a cloud patch run again as what it was. Rendering either
 /// on this machine is a swap the user never chose. A cloud patch re-run with a
@@ -4722,6 +4766,7 @@ pub async fn apply_tool(
             requested,
             stroke: stroke.clone(),
             drawn: drawn.clone(),
+            qwen_edit: qwen_edit_in(&params)?,
         };
         match edit(&app, &located, plan)? {
             Outcome::Cleaned(edited) => Ok(ApplyResult::applied(edited)),
@@ -4958,6 +5003,7 @@ pub async fn create_region(
             requested: Some(rect),
             stroke,
             drawn,
+            qwen_edit: qwen_edit_in(&params)?,
         };
         match edit(&app, &located, plan)? {
             Outcome::Cleaned(edited) => Ok(Some(CreatedRegion {
@@ -6685,6 +6731,9 @@ fn rerun_mask_at(
         requested: Some(current_bbox),
         stroke: None,
         drawn: None,
+        // What to clean, asked again before a FLUX re-run as the cloud asks
+        // before its own.
+        qwen_edit: qwen_edit_in(&params)?,
     };
     match apply(&located, plan)? {
         Outcome::Cleaned(edited) => {
@@ -6915,7 +6964,8 @@ fn clean_anyway_at(
     let color = params.get("bubbleColor").or_else(|| params.get("color"))
         .and_then(|value| value.as_str()).map(|value| colour_of(Some(value)));
     let exact = params.get("exact").and_then(|value| value.as_bool()) == Some(true);
-    let plan = clean_anyway_plan(&located, region_id, engine, color, exact)?;
+    let mut plan = clean_anyway_plan(&located, region_id, engine, color, exact)?;
+    plan.qwen_edit = qwen_edit_in(&params)?;
     match apply(&located, plan)? {
         Outcome::Cleaned(edited) => {
             crate::events::notice("notice.gate.cleanedAnyway", serde_json::json!({}), "info");
@@ -6969,6 +7019,7 @@ fn clean_anyway_plan(
         requested: hangs,
         stroke: None,
         drawn: None,
+        qwen_edit: None,
     })
 }
 
@@ -7100,6 +7151,7 @@ mod tests {
             requested: Some(bounds),
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         }
     }
 
@@ -7230,6 +7282,7 @@ mod tests {
             requested: None,
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         let mut bench = test_bench(&root);
         let mut seen = None;
@@ -7366,6 +7419,52 @@ mod tests {
             }).unwrap();
             assert_eq!(asked, Some((wider, !wider, true)), "{kind}");
         }
+
+        // A FLUX re-run carries the guidance asked before it; a re-run sent
+        // none carries none, and guidance that is not one is refused.
+        use cleaner_core::engines::render::{QwenEdit, QwenTarget};
+        let guided = serde_json::json!({ "qwenEdit": { "target": "other", "description": " a striped bench " } });
+        let mut carried = None;
+        let _ = rerun_mask_at(&library, None, &region_id, "engine", Some("flux"), guided, |_, plan| {
+            carried = Some((plan.choice, plan.qwen_edit.clone()));
+            Ok(Outcome::NotFound)
+        }).unwrap();
+        assert_eq!(carried, Some((Choice::Exact(Engine::Flux),
+            Some(QwenEdit { target: QwenTarget::Other, description: "a striped bench".into() }))));
+        let mut carried = None;
+        let _ = rerun_mask_at(&library, None, &region_id, "retry", None, serde_json::Value::Null, |_, plan| {
+            carried = Some(plan.qwen_edit.clone());
+            Ok(Outcome::NotFound)
+        }).unwrap();
+        assert_eq!(carried, Some(None));
+        let bad = serde_json::json!({ "qwenEdit": { "target": "auto", "description": "a\u{7}b" } });
+        assert_eq!(rerun_mask_at(&library, None, &region_id, "engine", Some("flux"), bad,
+            |_, _| panic!("invalid guidance reached a render")).err().as_deref(), Some("qwen_edit_invalid"));
+    }
+
+    /// The guidance a plan carries is what the FLUX holder renders with for
+    /// that edit, and a FLUX patch records it where a cloud patch keeps its
+    /// own, so the dialog opens with it next time. None is recorded as none.
+    #[test]
+    fn a_plans_guidance_reaches_local_flux_and_its_patch() {
+        use cleaner_core::engines::render::{QwenEdit, QwenTarget};
+        let raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        let (root, located) = edit_fixture("flux-guidance", &raw);
+        let bounds = Rect::new(22, 18, 8, 8);
+        let mut bench = test_bench(&root);
+        let edit = QwenEdit { target: QwenTarget::Dialogue, description: String::new() };
+        let mut plan = fixture_plan("g", Geometry::Painted(Mask::filled(bounds)), Engine::Fill, bounds);
+        plan.qwen_edit = Some(edit.clone());
+        let _ = edit_with_bench(&mut bench, Engine::Fill, &located, plan).unwrap();
+        assert_eq!(bench.rung2.flux.guidance(), Some(&edit));
+
+        let mut snapshot = serde_json::json!({ "qwen_edit": { "target": "auto", "description": "older" } });
+        bench.rung2.flux.record(&mut snapshot);
+        assert_eq!(snapshot["qwen_edit"], serde_json::json!({ "target": "dialogue", "description": "" }));
+        bench.rung2.flux.set_guidance(None);
+        bench.rung2.flux.record(&mut snapshot);
+        assert!(snapshot.get("qwen_edit").is_none(), "an older render's guidance outlived it");
+        assert!(snapshot["flux_model"].is_string());
     }
 
     #[test]
@@ -9029,6 +9128,7 @@ mod tests {
             requested: Some(Rect::new(42, 40, 12, 6)),
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         let mut bench = test_bench(&root);
         assert!(matches!(
@@ -9049,6 +9149,7 @@ mod tests {
             requested: Some(Rect::new(42, 40, 12, 6)),
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         let mut observed = None;
         let mut fake = |image: &Raster, fitted: &Fitted| {
@@ -9094,6 +9195,7 @@ mod tests {
             requested: Some(Rect::new(52, 38, 8, 8)),
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         let mut fake_neighbor = |image: &Raster, fitted: &Fitted| {
             neighbor_seen = Some((image.sample(40, 40, 0), fitted.mask.contains(40, 40)));
@@ -9152,6 +9254,7 @@ mod tests {
             requested: Some(Rect::new(42, 40, 12, 6)),
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         let mut retry_seen = None;
         let mut fake_retry = |image: &Raster, fitted: &Fitted| {
@@ -9244,6 +9347,7 @@ mod tests {
             requested: Some(Rect::new(36, 36, 12, 12)),
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         assert!(matches!(
             edit_with_bench(&mut bench, Engine::Fill, &located, deleted_retry).unwrap(),
@@ -9273,6 +9377,7 @@ mod tests {
             requested: Some(Rect::new(36, 38, 4, 5)),
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         let mut hidden_seen = None;
         let mut fake_hidden = |image: &Raster, fitted: &Fitted| {
@@ -9531,6 +9636,7 @@ mod tests {
             requested: None,
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         assert!(matches!(
             edit_with_bench_render(&mut bench, Engine::Fill, &located, plan, Some(&mut fake))
@@ -9601,6 +9707,7 @@ mod tests {
             requested: Some(rect),
             stroke: None,
             drawn: Some(shape),
+            qwen_edit: None,
         };
         let mut bench = test_bench(&root);
         let created = edit_with_bench(&mut bench, Engine::Fill, &located, plan).unwrap();
@@ -9642,6 +9749,7 @@ mod tests {
             requested: Some(record.bbox),
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         // A later edit anchored on page two must see and composite over the
         // older page-one-owned seam patch, even though this gesture itself is
@@ -9688,6 +9796,7 @@ mod tests {
             requested: Some(second_rect),
             stroke: None,
             drawn: Some(second_shape),
+            qwen_edit: None,
         };
         assert!(matches!(
             edit_with_bench(&mut bench, Engine::Fill, &second_located, second_plan).unwrap(),
@@ -9758,6 +9867,7 @@ mod tests {
             requested: Some(Rect::new(27, 390, 10, 24)),
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         let mut cross_seen = None;
         let mut fake_cross = |image: &Raster, fitted: &Fitted| {
@@ -10411,6 +10521,7 @@ mod tests {
             requested: None,
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         let params = serde_json::json!({
             "mode": "paint",
@@ -11258,7 +11369,7 @@ mod tests {
             let shown=decode(&crate::tile::render(job.path(),0,crate::tile::Variant::Source,None).unwrap()).unwrap();
             assert_eq!(shown.data,cleaner_core::image::proxy::display(&visible).unwrap().data);
             let paint=PaintPlan {kind:PaintKind::Clone{offset:(10.0,0.0)},points:vec![PaintPoint{x:50.0,y:50.0,p:1.0}],spec:cleaner_core::paint::BrushSpec{size:8.0,hardness:100.0,opacity:100.0,..Default::default()},alignment:"aligned"};
-            let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(Rect::new(1,1,2,2)),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("clone".into()),fill_mode:None,clears_untouched:false,paint:Some(paint),requested:None,stroke:None,drawn:None};
+            let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(Rect::new(1,1,2,2)),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("clone".into()),fill_mode:None,clears_untouched:false,paint:Some(paint),requested:None,stroke:None,drawn:None,qwen_edit:None};
             let outcome=edit_with_bench(&mut test_bench(&root),Engine::Fill,&located,plan).unwrap();
             assert!(matches!(outcome,Outcome::Cleaned(_)),"orientation {value}");
             let mut job=Job::open(&located.job_path).unwrap();let patches=job.native_patches_on_page(0).unwrap();
@@ -11302,7 +11413,7 @@ mod tests {
         let mut job=Job::open(&located.job_path).unwrap();job.project.sources[0].orientation=Orientation(6);job.flush().unwrap();
         let (w,h)=page_size(&job,0).unwrap();let rect=pixels_of(Bbox{x:44.0,y:90.0,w:10.0,h:20.0},w,h);
         let shape=PaintedShape{kind:ShapeKind::Ellipse,points:vec![StrokePoint{x:44.0,y:90.0},StrokePoint{x:54.0,y:90.0},StrokePoint{x:54.0,y:110.0},StrokePoint{x:44.0,y:110.0}],feather:0.0};
-        let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(rect),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("shapes".into()),fill_mode:Some("solid"),clears_untouched:false,paint:Some(PaintPlan{kind:PaintKind::Shape{color:[30,30,30],shape:shape.clone(),outline:None},points:Vec::new(),spec:Default::default(),alignment:"aligned"}),requested:Some(rect),stroke:None,drawn:Some(shape)};
+        let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(rect),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("shapes".into()),fill_mode:Some("solid"),clears_untouched:false,paint:Some(PaintPlan{kind:PaintKind::Shape{color:[30,30,30],shape:shape.clone(),outline:None},points:Vec::new(),spec:Default::default(),alignment:"aligned"}),requested:Some(rect),stroke:None,drawn:Some(shape),qwen_edit:None};
         assert!(matches!(edit_with_bench(&mut test_bench(&root),Engine::Fill,&located,plan).unwrap(),Outcome::Cleaned(_)));
         let job=Job::open(&located.job_path).unwrap();assert_eq!(job.project.patches[0].native_parts.len(),2);
         for position in 0..2 {
@@ -11328,7 +11439,7 @@ mod tests {
         std::fs::write(job.source_path(0).unwrap(),&bytes).unwrap();
         job.project.sources[0].w=page.width;job.project.sources[0].h=page.height;job.project.sources[0].mode=page.mode;job.flush().unwrap();
         let manifest=std::fs::read(job.path()).unwrap();
-        let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(Rect::new(8,8,12,10)),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("shapes".into()),fill_mode:Some("match-surround"),clears_untouched:false,paint:None,requested:None,stroke:None,drawn:None};
+        let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(Rect::new(8,8,12,10)),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("shapes".into()),fill_mode:Some("match-surround"),clears_untouched:false,paint:None,requested:None,stroke:None,drawn:None,qwen_edit:None};
         let result=edit_with_bench(&mut test_bench(&root),Engine::Fill,&located,plan);
         match result {Err(error)=>assert!(error.contains("associated-alpha"),"{error}"),Ok(_)=>panic!("associated-alpha source fill unexpectedly ran")};
         assert_eq!(std::fs::read(job.path()).unwrap(),manifest);
@@ -12340,6 +12451,7 @@ mod mask_edit_tests {
             requested: hangs,
             stroke: None,
             drawn: None,
+            qwen_edit: None,
         };
         let mut bench = test_bench(&root);
         let mut seen = None;
