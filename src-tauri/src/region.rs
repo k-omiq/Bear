@@ -10067,6 +10067,7 @@ mod tests {
                 Some("decline.reason.sidecarWeights"),
             );
         }
+        std::fs::remove_dir_all(&other).unwrap();
         let weights = base.join("weights/flux2-klein-4b-sdnq");
         std::fs::create_dir_all(&weights).unwrap();
         std::fs::write(weights.join("model_index.json"), b"{}").unwrap();
