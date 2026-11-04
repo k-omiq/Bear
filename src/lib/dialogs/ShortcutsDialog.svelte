@@ -8,10 +8,11 @@
    * list. Only the heading level differs: here the group headings sit directly
    * under the dialog title, so they are `h3`.
    *
-   * The body is focusable for the same reason Settings' is: the sheet's chords
-   * are focusable but its group headings, its note and the scroll between them
-   * are not, so a scroll container with no `tabindex` of its own would still
-   * leave a keyboard user unable to reach the bottom of a long list.
+   * The body is not a tab stop of its own, as Settings' scrollers are. The
+   * sheet opens on its search field, which the dialog's first focus lands on,
+   * and every row under it is a control, so Tab walks the whole list and the
+   * scroller follows. A focusable wrapper took that first focus instead, and
+   * being taller than the dialog, scrolled the list to its end on opening.
    */
   import { Button, Modal } from '../ui/index.js'
   import { closeModal, modalWidth } from '../state/app.svelte.js'
@@ -23,10 +24,7 @@
 </script>
 
 <Modal title={t(spec.titleKey)} width={modalWidth(spec.kind)} onclose={() => closeModal(null)}>
-  <!-- Focusable because most of the sheet is not; see the note in
-       `SettingsDialog.svelte`. -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="body" role="group" tabindex="0" aria-label={t(spec.titleKey)}>
+  <div class="body" role="group" aria-label={t(spec.titleKey)}>
     <ShortcutSheet headingLevel="h3" />
   </div>
 
@@ -36,6 +34,13 @@
 </Modal>
 
 <style>
-  .body { margin-top: 4px }
-  .body:focus-visible { outline-offset: -2px }
+  /* One height for every tab and every search, so the dialog does not jump
+     as the list changes under it: the list scrolls inside it instead, under
+     the sheet's sticky search and tabs. */
+  .body {
+    height: min(560px, calc(92vh - 130px));
+    margin-top: 4px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
 </style>

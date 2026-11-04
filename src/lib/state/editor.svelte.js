@@ -1893,10 +1893,15 @@ export function releaseRunStart(token) {
  * `cloudCleanGrant` is a streaming cloud clean's: the run cleans each page on
  * the cloud GPU as soon as it is detected, and nothing on this computer.
  *
- * @param {{cloudGrant?: string|null, cloudCleanGrant?: string|null, mode?: import('../api/backend.js').RunMode, pendingToken?: object|null, area?: {x: number, y: number, w: number, h: number}|null, pageIndex?: number}} [options]
+ * `step` and `solidOnly` stand in for the panel's Step and Solid bubbles only
+ * for this run alone (the run shortcuts); absent, the panel's are read. The
+ * step is what the user asked for, which `mode` is not when the clean half
+ * goes to the cloud and this run only detects.
+ *
+ * @param {{cloudGrant?: string|null, cloudCleanGrant?: string|null, mode?: import('../api/backend.js').RunMode, pendingToken?: object|null, area?: {x: number, y: number, w: number, h: number}|null, pageIndex?: number, step?: unknown, solidOnly?: boolean}} [options]
  * @returns {Promise<string|null>} the run id, or null when nothing was queued
  */
-export async function startRun(scope = 'page', { cloudGrant = null, cloudCleanGrant = null, mode = 'auto', pendingToken = null, area = null, pageIndex = editor.pageIndex } = {}) {
+export async function startRun(scope = 'page', { cloudGrant = null, cloudCleanGrant = null, mode = 'auto', pendingToken = null, area = null, pageIndex = editor.pageIndex, step = editor.toolParams.autoClean?.step, solidOnly = solidOnlyOf() } = {}) {
   if (!editor.chapter) return null
   const individual = mode === 'detect' && !!area
   const token = individual ? claimAreaRunStart(pendingToken) : claimRunStart(pendingToken)
@@ -1909,7 +1914,7 @@ export async function startRun(scope = 'page', { cloudGrant = null, cloudCleanGr
     // detection half of a Detect & clean whose clean runs on the cloud is a
     // Detect run too, and keeps the panel's choices.
     // So does a Detect of one area: the user pointed at the text.
-    const findAll = mode === 'detect' && (params.step === 'detect' || !!area)
+    const findAll = mode === 'detect' && (step === 'detect' || !!area)
     // The models and reader this run uses: the user's own on this computer,
     // the fixed best combination on the cloud GPU (`pipelines.js#runDetection`).
     const run = runDetection(session)
@@ -1947,7 +1952,7 @@ export async function startRun(scope = 'page', { cloudGrant = null, cloudCleanGr
       // The clean's own choice, so a Detect never carries it, nor a stream,
       // which cleans nothing here. The run then cleans a speech bubble on
       // flat paper and stores every other region as detected (`run.rs`).
-      ...(mode !== 'detect' && !cloudCleanGrant && solidOnlyOf(params) ? { solidBubblesOnly: true } : {}),
+      ...(mode !== 'detect' && !cloudCleanGrant && solidOnly ? { solidBubblesOnly: true } : {}),
     })
     if (editor.chapter !== chapter) return null
     return individual ? adoptAreaRun(handle, pageIndex) : adoptRun(handle, scope, mode)

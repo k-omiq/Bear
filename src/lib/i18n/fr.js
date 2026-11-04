@@ -2542,6 +2542,7 @@ export const fr = {
   shortcuts: {
     group: {
       tools: 'Outils',
+      modes: 'Modes et formes',
       brush: 'Pinceau et marge',
       view: 'Affichage',
       edit: 'Édition',
@@ -2549,7 +2550,30 @@ export const fr = {
       navigation: 'Navigation',
       panels: 'Panneaux',
       app: 'Application',
+      run: 'Exécution',
       pointer: 'Pointeur',
+    },
+    tabs: {
+      label: 'Types de raccourcis',
+    },
+    tab: {
+      tools: 'Outils',
+      brush: 'Pinceau',
+      run: 'Exécuter',
+      edit: 'Édition',
+      view: 'Affichage',
+      app: 'App',
+      pointer: 'Souris',
+    },
+    search: {
+      label: 'Rechercher des raccourcis',
+      placeholder: 'Rechercher par nom ou touche',
+      clear: 'Effacer la recherche',
+      empty: 'Aucun raccourci ne correspond à « {query} ».',
+    },
+    run: {
+      solidBubbles: 'Nettoyer cette page, bulles unies seulement',
+      fullClean: 'Nettoyer toute cette page',
     },
     navigation: {
       preset: 'Déplacer le canevas',
@@ -2590,8 +2614,8 @@ export const fr = {
       cancelRun: 'Annuler l’exécution',
       shapeNext: 'Forme suivante',
       shapePrev: 'Forme précédente',
-      modeNext: 'Mode, type ou moteur suivant',
-      modePrev: 'Mode, type ou moteur précédent',
+      modeNext: 'Mode suivant de l’outil sélectionné',
+      modePrev: 'Mode précédent de l’outil sélectionné',
       maskAdd: 'Sélection : ajouter aux masques',
       maskRemove: 'Sélection : retirer des masques (encore : ajouter)',
       maskDetect: 'Sélection : détecter dans une zone (encore : ajouter)',
@@ -2736,6 +2760,7 @@ export const fr = {
       },
     },
     run: {
+      startFailed: 'Le nettoyage du texte n’a pas pu démarrer. Rien n’a été modifié.',
       busy: 'Une autre exécution démarre ou est déjà en cours. Attendez qu’elle se termine.',
       atCapacity: 'Le nombre maximal d’exécutions simultanées est déjà atteint. Attendez qu’une se termine, puis lancez celle-ci.',
       pageBusy: 'Une exécution travaille sur cette page. Rien n’a été modifié ; réessayez quand elle sera passée à la suivante.',

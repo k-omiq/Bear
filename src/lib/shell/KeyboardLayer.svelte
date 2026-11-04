@@ -32,8 +32,10 @@
   import { isDetected, retryWidens } from '../model/masks.js'
   import { isRegionCopy } from '../model/layers.js'
   import { isCopyMode } from '../editor/tools.js'
-  import { cloudParts, runStep } from '../editor/cloudrun.js'
+  import { cloudParts, runStep, startCleanRun } from '../editor/cloudrun.js'
   import { screenColorPicker } from '../api/screencolor.js'
+  import { capabilities } from '../state/capabilities.svelte.js'
+  import { hasKey } from '../i18n/index.js'
 
   /** @type {import('../shortcuts.js').ShortcutCommands} */
   const commands = {
@@ -50,6 +52,7 @@
     runTextCleanup,
     cycleCleanScope,
     cancelRun: () => void editorState.cancelRun(),
+    runPageClean,
     cleanSelectedRegion,
     retrySelectedWider,
     // The Post-processing window, which follows the selection and says
@@ -168,6 +171,33 @@
     }
     if (editorState.editor.tool !== 'autoClean') editorState.setTool('autoClean')
     else openWindow('tool')
+  }
+
+  /**
+   * The two run shortcuts, which ship with no key: a Detect and clean of the
+   * open page, Solid bubbles only or the full clean, whatever the panel's step
+   * and scope are. Nothing while a run is going, as `⌘↵`.
+   *
+   * The panel's own button is not pressed, as `⌘↵` presses it, because its
+   * gates are for the panel's step and scope. What the run itself needs is
+   * asked here or answered on the way: no engine runtime is said here, as the
+   * panel says it; missing detection models are the native start's own
+   * notice; a cloud half that cannot go says why in `startCleanRun`. A start
+   * that throws anyway says so rather than doing nothing.
+   *
+   * @param {'solid'|'full'} kind
+   */
+  function runPageClean(kind) {
+    if (editorState.editor.run.active || !editorState.editor.chapter) return
+    if (!capabilities.runtime) {
+      notify({ key: 'editor.state.runtimeMissing', tone: 'warn' })
+      return
+    }
+    startCleanRun('page', undefined, { step: 'auto', solidOnly: kind === 'solid' }).catch((cause) => {
+      const text = typeof cause === 'string' ? cause : String(cause?.message ?? '')
+      console.error('page clean did not start', cause)
+      notify({ key: hasKey(text) ? text : 'notice.run.startFailed', tone: 'warn' })
+    })
   }
 
   /** Text cleanup's scope as the panel reads it: a stored Project is Chapter while a half is on the cloud. */

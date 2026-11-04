@@ -159,16 +159,15 @@ export function back() {
  * `about` is gone: About is a section inside Settings, not a kind of its own,
  * and an entry no `pushModal` can reach is a value that outlives its meaning.
  *
- * `shortcuts` at 460 is a departure from the table's "else 400", recorded in
- * `constraints.md` beside the table: the design file has no standalone
+ * `shortcuts` at 520 is a departure from the table's "else 400": the design file has no standalone
  * shortcut dialog to take a number from - it draws the sheet only inside
- * Settings, at 520 - and the sheet is a two-column `dl` whose descriptions
- * wrap onto three lines at 400.
+ * Settings, at 520 - and the sheet's search, its row of tabs and its longer
+ * names need the width Settings gives it.
  */
 const MODAL_WIDTHS = {
   // No `settings`: Settings is a full-window `Screen`, not a `Modal`.
   export: 540,
-  shortcuts: 460,
+  shortcuts: 520,
   newProject: 440,
 }
 

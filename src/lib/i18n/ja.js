@@ -2500,6 +2500,7 @@ export const ja = {
   shortcuts: {
     group: {
       tools: 'ツール',
+      modes: 'モードと形',
       brush: 'ブラシと余白',
       view: '表示',
       edit: '編集',
@@ -2507,7 +2508,30 @@ export const ja = {
       navigation: '移動',
       panels: 'パネル',
       app: 'アプリ',
+      run: '実行',
       pointer: 'ポインター',
+    },
+    tabs: {
+      label: 'ショートカットの種類',
+    },
+    tab: {
+      tools: 'ツール',
+      brush: 'ブラシ',
+      run: '実行',
+      edit: '編集',
+      view: '表示',
+      app: 'アプリ',
+      pointer: 'マウス',
+    },
+    search: {
+      label: 'ショートカットを検索',
+      placeholder: '名前やキーで検索',
+      clear: '検索をクリア',
+      empty: '「{query}」に一致するショートカットはありません。',
+    },
+    run: {
+      solidBubbles: 'このページを単色の吹き出しのみクリーン',
+      fullClean: 'このページをすべてクリーン',
     },
     navigation: {
       preset: 'キャンバスの移動',
@@ -2548,8 +2572,8 @@ export const ja = {
       cancelRun: '実行をキャンセル',
       shapeNext: '次の形',
       shapePrev: '前の形',
-      modeNext: '次のモード・種類・エンジン',
-      modePrev: '前のモード・種類・エンジン',
+      modeNext: '選択中のツールの次のモード',
+      modePrev: '選択中のツールの前のモード',
       maskAdd: '選択範囲：マスクに追加',
       maskRemove: '選択範囲：マスクから削除（もう一度で追加）',
       maskDetect: '選択範囲：範囲内を検出（もう一度で追加）',
@@ -2691,6 +2715,7 @@ export const ja = {
       },
     },
     run: {
+      startFailed: 'テキスト除去を開始できませんでした。何も変更されていません。',
       busy: '別の実行が開始中または実行中です。完了するまでお待ちください。',
       atCapacity: '同時に実行できる上限に達しています。どれかが完了してから開始してください。',
       pageBusy: '実行がこのページを処理中です。何も変更していません。次のページに進んでからもう一度お試しください。',

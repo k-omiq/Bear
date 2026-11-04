@@ -3473,7 +3473,9 @@
     >
       <div class="column">
         <h2>{t('settings.section.shortcuts')}</h2>
-        <ShortcutSheet headingLevel="h3" />
+        <!-- Settings is a screen on the window's own fill, which the sheet's
+             sticky search and status must match. -->
+        <ShortcutSheet headingLevel="h3" --sheet-fill="var(--bg)" />
       </div>
     </div>
 
