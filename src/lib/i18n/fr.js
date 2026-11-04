@@ -2755,6 +2755,11 @@ export const fr = {
         one: 'Détection terminée : {regions} zone trouvée. Rien n’est encore nettoyé.',
         other: 'Détection terminée : {regions} zones trouvées. Rien n’est encore nettoyé.',
       },
+      declined: {
+        select: 'regions',
+        one: '1 région a été trouvée, mais elle n’a pas pu être nettoyée. Ouvrez la page pour voir pourquoi.',
+        other: '{regions} régions ont été trouvées, mais aucune n’a pu être nettoyée. Ouvrez la page pour voir pourquoi.',
+      },
       allLanguagesSkipped: 'Toutes les langues sources sont ignorées. Sélectionnez une langue à nettoyer.',
       solidOnly: 'Bulles unies nettoyées : {cleaned}. Zones laissées détectées : {kept}.',
       ocrRescueUnavailable: 'Le lecteur de texte est désactivé pour cette exécution : {reason}',

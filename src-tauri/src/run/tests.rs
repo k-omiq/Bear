@@ -7903,9 +7903,10 @@ fn a_solid_bubbles_run_ends_on_what_it_cleaned_and_what_it_kept() {
     assert_eq!(closing(&mut lettered_pipeline(&scratch).with_solid_bubbles_only(true)), solid_only(2, 2));
     // The same chapter again: nothing left for the option to clean.
     assert_eq!(closing(&mut cleaning_only_pipeline(&scratch).with_solid_bubbles_only(true)), solid_only(0, 2));
-    // Without the option, on a machine with no inpainter: both declined.
+    // Without the option, on a machine with no inpainter: both declined, and
+    // the run says so rather than that no text was found.
     assert_eq!(closing(&mut cleaning_only_pipeline(&scratch)), vec![
-        ("notice.chapter.emptyResult".to_owned(), serde_json::json!({ "regions": 0, "pages": 2 })),
+        ("notice.run.declined".to_owned(), serde_json::json!({ "regions": 2 })),
     ]);
 }
 
@@ -7916,7 +7917,7 @@ fn a_solid_bubbles_run_ends_on_what_it_cleaned_and_what_it_kept() {
 fn the_solid_bubbles_notice_stands_in_for_the_success_notice_alone() {
     let summary = |reason: &'static str, regions_cleaned: u32, errored: u32| Summary {
         reason, pages_queued: 3, pages_cleaned: 3 - errored, regions_cleaned, next_page_index: None, errored,
-        regions_detected: 0,
+        regions_detected: 0, regions_declined: 0,
     };
     let keys = |summary: &Summary, kept: Option<u32>| {
         let recorder = Recorder::new();
@@ -7929,6 +7930,9 @@ fn the_solid_bubbles_notice_stands_in_for_the_success_notice_alone() {
     assert_eq!(keys(&summary("completed", 0, 3), Some(0)), ["notice.run.pagesFailed"]);
     assert_eq!(keys(&summary("completed", 2, 0), None), ["notice.run.finished"]);
     assert_eq!(keys(&summary("completed", 0, 0), None), ["notice.chapter.emptyResult"]);
+    // Text found and none of it cleaned is not an empty result.
+    let declined = Summary { regions_declined: 6, ..summary("completed", 0, 0) };
+    assert_eq!(keys(&declined, None), ["notice.run.declined"]);
 }
 
 /* ------------------------------------------------------------------ */

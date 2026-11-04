@@ -2755,6 +2755,11 @@ export const es = {
         one: 'Detección terminada: se encontró 1 región. Todavía no se limpió nada.',
         other: 'Detección terminada: se encontraron {regions} regiones. Todavía no se limpió nada.',
       },
+      declined: {
+        select: 'regions',
+        one: 'Se encontró 1 región, pero no se pudo limpiar. Abre la página para ver por qué.',
+        other: 'Se encontraron {regions} regiones, pero no se pudo limpiar ninguna. Abre la página para ver por qué.',
+      },
       allLanguagesSkipped: 'Todos los idiomas de origen se omiten. Selecciona un idioma para limpiar.',
       solidOnly: 'Globos lisos limpiados: {cleaned}. Regiones que quedan detectadas: {kept}.',
       ocrRescueUnavailable: 'El lector de texto está desactivado en esta ejecución: {reason}',

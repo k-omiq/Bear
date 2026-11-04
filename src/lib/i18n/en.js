@@ -3529,6 +3529,14 @@ export const en = {
         one: 'Detect finished: 1 region found. Nothing is cleaned yet.',
         other: 'Detect finished: {regions} regions found. Nothing is cleaned yet.',
       },
+      // A clean that found text and could not clean any of it: every region
+      // declined (an engine with no weights, not enough memory). Each region's
+      // row says why. `notice.chapter.emptyResult` would say no text was found.
+      declined: {
+        select: 'regions',
+        one: '1 region was found, but it could not be cleaned. Open the page to see why.',
+        other: '{regions} regions were found, but none could be cleaned. Open the page to see why.',
+      },
       allLanguagesSkipped: 'All source languages are skipped. Select a language to clean.',
       // How a Solid bubbles only run ends: what it cleaned, and what it left
       // detected for a later clean.

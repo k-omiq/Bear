@@ -5731,6 +5731,10 @@ pub struct Summary {
     /// Regions a Detect run stored. Zero for every other mode: a clean never
     /// detects, and Auto cleans what it detects in the same pass.
     pub regions_detected: u32,
+    /// Regions a clean found and could not clean: an engine with no weights,
+    /// a region too large for the memory left. Gate skips are not counted:
+    /// those are judged not to be text.
+    pub regions_declined: u32,
 }
 
 /// Run a queue, emitting as it goes.
@@ -5918,6 +5922,7 @@ impl Progress {
                 next_page_index: None,
                 errored: 0,
                 regions_detected: 0,
+                regions_declined: 0,
             },
             in_flight: None,
             kept: 0,
@@ -6703,6 +6708,7 @@ impl<'w> Walker<'w> {
                             job.project.counters.gate_dropped += 1;
                         } else {
                             job.project.counters.declined += 1;
+                            summary.regions_declined += 1;
                         }
                     }
                     if work == PageWork::Detect {
@@ -6735,6 +6741,7 @@ impl<'w> Walker<'w> {
                 // rows below, keeping its lettering as a held candidate does.
                 RegionOutcome::Declined { bbox, reason, lettering } => {
                     job.project.counters.declined += 1;
+                    summary.regions_declined += 1;
                     if let Some(id) = replaces.as_deref() {
                         if job.decline_detection(id, &reason).is_err() {
                             failed_here = true;
@@ -7503,6 +7510,7 @@ where
             next_page_index: None,
             errored: 0,
             regions_detected: 0,
+            regions_declined: 0,
         });
     emit(Event::RunFinished {
         run_id: run_id.to_owned(),
@@ -8336,9 +8344,17 @@ fn report(summary: &Summary, kept: Option<u32>, emit: &dyn Fn(Event)) {
             }),
             "info",
         ));
+    } else if summary.regions_declined > 0 {
+        // Text was found and none of it could be cleaned. `emptyResult` would
+        // say there was no text; each region's row says why it was declined.
+        emit(events::notice_event(
+            "notice.run.declined",
+            serde_json::json!({ "regions": summary.regions_declined }),
+            "warn",
+        ));
     } else if summary.errored == 0 {
-        // Nothing cleaned and nothing broken, which is the one reading of a
-        // zero this key was ever true for.
+        // Nothing cleaned, nothing declined and nothing broken, which is the
+        // one reading of a zero this key was ever true for.
         emit(events::notice_event(
             "notice.chapter.emptyResult",
             serde_json::json!({ "regions": 0, "pages": summary.pages_cleaned }),

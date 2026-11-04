@@ -2708,6 +2708,10 @@ export const ja = {
         select: 'regions',
         other: '検出が完了しました：{regions} 領域が見つかりました。まだ何もクリーンしていません。',
       },
+      declined: {
+        select: 'regions',
+        other: '{regions} 領域が見つかりましたが、どれもクリーンできませんでした。理由はページを開いて確認してください。',
+      },
       allLanguagesSkipped: '原文のすべての言語がスキップされています。クリーンする言語を選んでください。',
       solidOnly: '単色の吹き出しをクリーン：{cleaned}。検出済みのまま残した領域：{kept}。',
       ocrRescueUnavailable: 'この実行ではテキスト読み取りはオフです：{reason}',

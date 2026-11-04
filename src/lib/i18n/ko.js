@@ -2705,6 +2705,10 @@ export const ko = {
         select: 'regions',
         other: '감지 완료: 영역 {regions}개를 찾았습니다. 아직 아무것도 클린하지 않았습니다.',
       },
+      declined: {
+        select: 'regions',
+        other: '{regions}개 영역을 찾았지만 하나도 클린하지 못했습니다. 이유는 페이지를 열어 확인하세요.',
+      },
       allLanguagesSkipped: '모든 원문 언어를 건너뛰도록 설정되어 있습니다. 클린할 언어를 선택하세요.',
       solidOnly: '클린한 단색 말풍선: {cleaned}개. 감지된 상태로 남긴 영역: {kept}개.',
       ocrRescueUnavailable: '이번 실행에서는 텍스트 판독기가 꺼져 있습니다: {reason}',
