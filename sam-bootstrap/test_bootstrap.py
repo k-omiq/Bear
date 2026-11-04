@@ -75,7 +75,7 @@ class CheckpointDownloadTest(unittest.TestCase):
         self.requests: list[str | None] = []
 
     def serve(self, *, honour_range: bool, fail_first_after: int | None = None):
-        def urlopen(request, timeout):
+        def urlopen(request, timeout, context=None):
             ranged = request.get_header("Range")
             self.requests.append(ranged)
             if fail_first_after is not None and len(self.requests) == 1:
@@ -238,6 +238,15 @@ class AppDllDirectoryTest(unittest.TestCase):
                     patch.dict(bootstrap.os.environ, {}, clear=True):
                 bootstrap.use_app_dll_dir()
             add.assert_not_called()
+
+
+class TlsContextTest(unittest.TestCase):
+    def test_certifi_roots_are_added_to_the_system_ones(self) -> None:
+        import certifi
+        with patch.object(bootstrap.ssl.SSLContext, "load_verify_locations") as load:
+            context = bootstrap.tls_context()
+        load.assert_called_once_with(cafile=certifi.where())
+        self.assertEqual(context.verify_mode, bootstrap.ssl.CERT_REQUIRED)
 
 
 if __name__ == "__main__":

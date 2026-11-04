@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import time
@@ -57,6 +58,23 @@ def digest(path: Path) -> str:
     return hasher.hexdigest()
 
 
+def tls_context() -> ssl.SSLContext:
+    """The system's trusted roots plus certifi's.
+
+    A fresh Windows fetches a root certificate the first time Windows itself
+    needs it, and OpenSSL never asks it to. On a clean PC the GitHub download
+    then failed with CERTIFICATE_VERIFY_FAILED. certifi is in the pinned
+    environment; without it the system roots alone are used.
+    """
+    context = ssl.create_default_context()
+    try:
+        import certifi
+    except ImportError:
+        return context
+    context.load_verify_locations(cafile=certifi.where())
+    return context
+
+
 def progress(step: str, **fields: int) -> None:
     """One JSON line on stdout; the desktop turns these into its progress bar."""
     print(json.dumps({"step": step, **fields}), flush=True)
@@ -79,7 +97,7 @@ def checkpoint(root: Path) -> Path:
             break
         request = urllib.request.Request(MODEL_URL, headers={"Range": f"bytes={have}-"} if have else {})
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with urllib.request.urlopen(request, timeout=60, context=tls_context()) as response:
                 # A server that ignores the range sends the whole file again.
                 if have and response.status != 206:
                     have = 0
@@ -128,7 +146,7 @@ def hi_sam(root: Path) -> Path:
     archive = root / "Hi-SAM.zip"
     if not archive.is_file() or digest(archive) != HI_SAM_ARCHIVE_SHA256:
         url = f"https://codeload.github.com/ymy-k/Hi-SAM/zip/{HI_SAM_REVISION}"
-        with urllib.request.urlopen(url, timeout=120) as response, archive.open("wb") as output:
+        with urllib.request.urlopen(url, timeout=120, context=tls_context()) as response, archive.open("wb") as output:
             shutil.copyfileobj(response, output)
     if digest(archive) != HI_SAM_ARCHIVE_SHA256:
         raise RuntimeError("Hi-SAM source archive SHA-256 mismatch")
