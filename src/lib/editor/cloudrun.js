@@ -67,14 +67,14 @@
  * for them.
  */
 
-import { askBatchGuidance } from './qwenflow.js'
+import { askBatchGuidance, askLocalBatchGuidance } from './qwenflow.js'
 import { getBackend } from '../api/backend.js'
 import { outcomeCopy, outcomeOf } from '../dialogs/workflowoutcome.js'
 import { cloudCapabilitiesFor } from '../model/pipelines.js'
 import { notify, pushModal } from '../state/app.svelte.js'
 import { cloudCleanAvailable, cloudCleanMissingKey, refreshCloudReadiness } from '../state/cloud.svelte.js'
 import { configurationKey, configurationFailed } from '../state/cloudconfig.svelte.js'
-import { adoptRun, claimAreaRunStart, claimRunStart, editor, releaseAreaRunStart, releaseRunStart, runFinished, startRun } from '../state/editor.svelte.js'
+import { adoptRun, claimAreaRunStart, claimRunStart, editor, releaseAreaRunStart, releaseRunStart, runFinished, solidOnlyOf, startRun } from '../state/editor.svelte.js'
 import { finishCloudRun, trackCloudRun } from '../state/cloudgpu.svelte.js'
 import { session } from '../state/session.svelte.js'
 
@@ -126,6 +126,21 @@ export function cloudParts(step = runStep()) {
     detect: step !== 'clean' && cloudRunCapabilities().length > 0,
     clean: step !== 'detect' && session.cleanTarget === 'cloud',
   }
+}
+
+/**
+ * Whether a run of this step cleans with FLUX on this computer: it cleans,
+ * its Clean half stays here, and a pick it reads names FLUX. Solid bubbles
+ * only paints flat and cleans nothing with a model, so it never does.
+ *
+ * @param {import('../api/backend.js').RunMode} step
+ * @param {{detect: boolean, clean: boolean}} parts
+ * @param {Record<string, unknown>} [params]
+ * @returns {boolean}
+ */
+export function cleansWithLocalFlux(step, parts, params = editor.toolParams.autoClean ?? {}) {
+  if (step === 'detect' || parts.clean || solidOnlyOf(params)) return false
+  return params?.bubbleEngine === 'flux' || params?.outsideEngine === 'flux'
 }
 
 /**
@@ -362,7 +377,12 @@ export async function startCleanRun(scope = 'page', backend = getBackend()) {
   try {
     const step = runStep()
     const parts = cloudParts(step)
-    if (!parts.detect && !parts.clean) return await startRun(scope, { mode: step, pendingToken: token })
+    // A clean with FLUX on this computer asks what to clean first, as a
+    // cloud clean asks before its plan, and before any consent is spent.
+    const qwenEdit = cleansWithLocalFlux(step, parts) ? await askLocalBatchGuidance() : undefined
+    if (qwenEdit === null) return null
+    const guided = qwenEdit ? { qwenEdit } : {}
+    if (!parts.detect && !parts.clean) return await startRun(scope, { mode: step, pendingToken: token, ...guided })
     const chapter = editor.chapter
     if (!chapter || editor.run.active) return null
     const refusal = cloudScopeRefusal(scope, parts)
@@ -421,6 +441,7 @@ export async function startCleanRun(scope = 'page', backend = getBackend()) {
         ...(cloudCleanGrant ? { cloudCleanGrant } : {}),
         mode: parts.clean && !streams ? 'detect' : step,
         pendingToken: token,
+        ...guided,
       })
     } catch (cause) {
       // A failed page already said so in its own notice.

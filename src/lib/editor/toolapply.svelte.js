@@ -26,6 +26,7 @@ import {
   select,
 } from '../state/editor.svelte.js'
 import { cloudOutcomeOf, cloudRefused, requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
+import { askLocalGuidance } from './qwenflow.js'
 import { toolSpendsCloud } from './tools.js'
 import { isDetected } from '../model/masks.js'
 // The reporter lives beside the actions it was written for, and this module
@@ -108,6 +109,14 @@ export async function applyActiveToolToRegion(regionId, extraParams, options = {
 
   if (toolSpendsCloud(tool, params)) {
     return applyInCloud({ chapterId: chapter.id, pageIndex, regionId, tool, params, before })
+  }
+
+  // FLUX on this computer asks what to clean first, as a cloud render does,
+  // and a cancel changes nothing.
+  if (params.engine === 'flux') {
+    const edit = await askLocalGuidance(regionId)
+    if (edit === null) return false
+    if (edit) params.qwenEdit = edit
   }
 
   // Every caller of this function fires it and walks away - a region click does

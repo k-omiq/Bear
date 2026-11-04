@@ -54,6 +54,7 @@ import {
 } from '../state/editor.svelte.js'
 import { holdCreation, releaseCreation } from '../state/heldcreations.js'
 import { cloudRefused } from './cloudflow.svelte.js'
+import { askLocalGuidance } from './qwenflow.js'
 import { detectArea } from './cloudrun.js'
 import { draft, clearDraft, markCommitted } from './draft.svelte.js'
 import { AI_STROKE_PX, detectAreaIn, paintedStroke } from './gesture.js'
@@ -339,6 +340,13 @@ async function createMask(spec, extraParams) {
   // Consent is bound to a stored region, so a cloud gesture creates its local
   // seed first. Both steps share one undo entry after the cloud result settles.
   const cloud = toolSpendsCloud(spec.tool, params)
+  // A new region cleaned with FLUX on this computer asks what to clean first,
+  // as a cloud render does; a cancel draws nothing.
+  if (!cloud && params.engine === 'flux') {
+    const edit = await askLocalGuidance(null)
+    if (edit === null) return false
+    if (edit) params.qwenEdit = edit
+  }
   const result = await getBackend().createRegion({
     chapterId: chapter.id,
     pageIndex: spec.pageIndex,

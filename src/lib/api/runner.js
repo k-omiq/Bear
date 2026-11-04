@@ -88,6 +88,7 @@ export function createRunner(deps) {
         bubbleEngine: active.bubbleEngine,
         outsideEngine: active.outsideEngine,
         bubbleColor: active.bubbleColor,
+        qwenEdit: active.qwenEdit,
       }
       // `apply` answers false for a region it left as it was (a cloud render
       // that failed): it is still reported, and not counted.
