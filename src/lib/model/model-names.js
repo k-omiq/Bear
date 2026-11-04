@@ -145,6 +145,24 @@ export function lamaHoleKey(part, hole) {
 }
 
 /**
+ * Settings › Models › Cleaning: whether a run and a region edit made during it
+ * use one LaMa (`run.rs#LamaSharing`, the `lamaSharing` key). The first is the
+ * default.
+ */
+export const LAMA_SHARINGS = /** @type {const} */ (['shared', 'separate'])
+
+/**
+ * The LaMa sharing choice's text for one mode: its `option` label or its
+ * `hint`, the sentence under the control.
+ *
+ * @param {'option'|'hint'} part
+ * @param {string} sharing - one of `LAMA_SHARINGS`
+ */
+export function lamaSharingKey(part, sharing) {
+  return `settings.cleaning.lamaSharing.${part}.${sharing}`
+}
+
+/**
  * The model families whose cloud clean takes a working size
  * (`render.rs#SIZED_RECIPES`): FLUX 3, by its cloud id or its weights' id.
  */

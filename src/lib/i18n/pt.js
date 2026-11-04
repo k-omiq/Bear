@@ -576,6 +576,18 @@ export const pt = {
           adaptive: 'Largo onde a página ao lado do texto é lisa ou preta, justo onde há desenho. As marcas de letras nas áreas lisas somem e a maior parte do desenho sob o texto é preservada; um título com brilho sobre o desenho ainda pode borrar. Só vale para o LaMa neste computador; os modelos na nuvem o ignoram.',
         },
       },
+      lamaSharing: {
+        label: 'LaMa durante uma execução',
+        saveFailed: 'Não foi possível salvar a opção do LaMa. Nada mudou.',
+        option: {
+          shared: 'Compartilhar um',
+          separate: 'Cópia própria',
+        },
+        hint: {
+          shared: 'O padrão. Tudo o que usa o LaMa neste computador compartilha uma cópia: uma execução, uma edição feita durante ela e execuções ao mesmo tempo. Ele fica na memória uma vez. Uma edição pode esperar pela região que uma execução está limpando, alguns segundos com placa de vídeo e mais na CPU, e carrega a própria cópia depois de 20 s.',
+          separate: 'Cada execução, e cada edição feita durante uma execução, mantém o próprio LaMa e não espera pela região de outra, como nas versões anteriores. Cada cópia a mais usa cerca de 0,5 a 1,2 GB a mais de memória ou de memória de vídeo.',
+        },
+      },
     },
     models: {
       heading: 'Outros arquivos',

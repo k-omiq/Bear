@@ -249,6 +249,22 @@ was recorded is read by the version that made it: Wide for 1.0.0-beta.16 to beta
 (2026-11-03, [findings](findings.md)), Adaptive matched Tight on art and Wide on black and paper. It is not the default
 because that is one small set of pages.
 
+### One LaMa during a run
+
+**Settings > Models > Cleaning > LaMa during a run** says what happens when you edit a region while a run is going and
+both want LaMa on this computer.
+
+- **Share one** (default): everything that uses LaMa on this computer shares one copy, so it is in memory once: a
+  run, an edit made during it, and runs going at the same time. A run gives LaMa back after each region, and turns are
+  taken in the order they were asked for, so an edit waits for the region a run is cleaning: a few seconds on a graphics
+  card, longer on the CPU. After 20 s it loads a copy of its own rather than wait longer. Two runs at the same time
+  take turns with one LaMa instead of cleaning side by side.
+- **Own copy**: each run, and each edit made during a run, keeps a LaMa of its own and does not wait for another's
+  region, as in 1.0.0-beta.19 and earlier. Each extra copy costs about 0.5 to 1.2 GB more memory, or graphics memory,
+  and Using memory now shows a "LaMa Manga" row for each.
+
+A run reads the setting when it starts, and an edit when it starts.
+
 ## Manual tools
 
 Nine tools sit in a rail on the right, selected with the keys `1` to `7`, `J` (Patch) and `G` (Gradient). The Patch tool is in beta and is on the rail only while Settings > Beta has it on, so by default there are eight. Each has a dropdown of parameters; the

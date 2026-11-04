@@ -3830,7 +3830,9 @@ mod tests {
         // At least one, rather than exactly one: the table is the process's and
         // another test in this crate may have parked a session of the same kind.
         assert!(evict_sessions_of("inpainter") >= 1, "the deleted weight's session went");
-        assert!(!residency::parked(gone));
+        // Its own key, not the kind: a run in another test may have its own
+        // LaMa parked and pinned between two renders, which no eviction takes.
+        assert!(residency::checkout::<Parked>(&Key::new(gone, "mc-evict-test")).is_none());
         assert!(residency::parked(kept), "another model's session is not this press's business");
 
         // The runtime is not a session and evicts nothing.

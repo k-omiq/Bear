@@ -8,7 +8,7 @@ import { keyUses } from './keyscan.js'
 import { SHORTCUT_GROUPS } from '../shortcuts.js'
 import { ROW_ENGINES, engineChoiceLabel, reviewEntryActions } from '../model/masks.js'
 import { RUNGS } from '../model/ladder.js'
-import { FINISHINGS, FLUX3_GENERATION_PARTS, LAMA_HOLES, finishingKey, lamaHoleKey } from '../model/model-names.js'
+import { FINISHINGS, FLUX3_GENERATION_PARTS, LAMA_HOLES, LAMA_SHARINGS, finishingKey, lamaHoleKey, lamaSharingKey } from '../model/model-names.js'
 
 /**
  * The catalogue and the source must agree in **both** directions:
@@ -117,7 +117,10 @@ const FINISHING_KEYS = [
 /** `src/lib/model/model-names.js#lamaHoleKey` - Settings › Models › Cleaning's LaMa hole choice, over `LAMA_HOLES`. */
 const LAMA_HOLE_KEYS = LAMA_HOLES.flatMap((hole) => [lamaHoleKey('option', hole), lamaHoleKey('hint', hole)])
 
-const RUNTIME_KEYS = [...DYNAMIC_KEYS, ...GROUP_KEYS, ...HINT_KEYS, ...ENGINE_CHOICE_KEYS, ...FINISHING_KEYS, ...LAMA_HOLE_KEYS]
+/** `src/lib/model/model-names.js#lamaSharingKey` - the LaMa sharing choice beside it, over `LAMA_SHARINGS`. */
+const LAMA_SHARING_KEYS = LAMA_SHARINGS.flatMap((sharing) => [lamaSharingKey('option', sharing), lamaSharingKey('hint', sharing)])
+
+const RUNTIME_KEYS = [...DYNAMIC_KEYS, ...GROUP_KEYS, ...HINT_KEYS, ...ENGINE_CHOICE_KEYS, ...FINISHING_KEYS, ...LAMA_HOLE_KEYS, ...LAMA_SHARING_KEYS]
 
 /** Every source file the app ships, in either language. The catalogue's own directory and JS tests excluded. */
 function sourceFiles(dir, out = []) {
@@ -189,8 +192,10 @@ describe('the catalogue is complete', () => {
     // `SHORTCUT_GROUPS` entry by construction, and a new group is a section of
     // the sheet, not a key assembled where a choice belonged. The finishing
     // and generation keys likewise: two per `FINISHINGS` and
-    // `FLUX3_GENERATION_PARTS` entry.
-    expect(RUNTIME_KEYS.length - GROUP_KEYS.length - FINISHING_KEYS.length).toBeLessThan(30)
+    // `FLUX3_GENERATION_PARTS` entry, and the LaMa choices': two per
+    // `LAMA_HOLES` and `LAMA_SHARINGS` entry.
+    expect(RUNTIME_KEYS.length - GROUP_KEYS.length - FINISHING_KEYS.length
+      - LAMA_HOLE_KEYS.length - LAMA_SHARING_KEYS.length).toBeLessThan(30)
   })
 })
 

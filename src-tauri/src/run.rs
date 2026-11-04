@@ -337,6 +337,45 @@ pub fn lama_hole_from_settings(settings: &serde_json::Value) -> Result<lama::Hol
     }
 }
 
+/// `lamaSharing`: whether a run and a region edit made during it use one LaMa
+/// session ([`LamaSharing`], Settings > Models > Cleaning). `shared` or
+/// `separate`; absent or null is `shared`.
+pub const LAMA_SHARING_KEY: &str = "lamaSharing";
+
+/// How the holders of LaMa on this computer use its session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LamaSharing {
+    /// One session for everything: it goes back to the residency cache after
+    /// every render, and a holder that wants it while another renders waits
+    /// for that render ([`residency::lend`]). An edit made during a run may
+    /// wait for the region the run is cleaning. The default.
+    #[default]
+    Shared,
+    /// Each holder keeps the session it took until it is done: a run for the
+    /// whole run, an edit for its click. An edit made during a run finds the
+    /// run's session in use and loads its own, about 500 to 700 MB more, and
+    /// never waits. The behavior of 1.0.0-beta.19 and earlier.
+    Separate,
+}
+
+/// Strict, as [`lama_hole_from_settings`] is.
+pub fn lama_sharing_from_settings(settings: &serde_json::Value) -> Result<LamaSharing, String> {
+    match settings.get(LAMA_SHARING_KEY).filter(|value| !value.is_null()) {
+        None => Ok(LamaSharing::default()),
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|_| format!("{LAMA_SHARING_KEY} must be \"shared\" or \"separate\"")),
+    }
+}
+
+/// How long a LaMa render waits for another holder's render to end under
+/// [`LamaSharing::Shared`] before it opens a session of its own
+/// ([`residency::lend`]). Longer than a region takes on a GPU and most take on
+/// the CPU; a render that has hung, or a run that has queued six finishing
+/// previews behind an edit, costs a second copy for a while instead of a wait
+/// with no end.
+pub const LAMA_TURN_PATIENCE: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// The text reader's provider. A choice made for it is honoured or refused as
 /// every model's is; one it only inherits from the whole-app setting falls back
 /// to Automatic when the reader cannot run there (WebGPU, CoreML: see
@@ -1572,6 +1611,23 @@ pub(crate) fn model_dir_holding(app_data: Option<&Path>, file: &str) -> Option<P
     model_search_paths(app_data).into_iter().find(|dir| dir.join(file).exists())
 }
 
+/// The folder a run's rung 2 opens LaMa from: the one a hand edit finds it in
+/// ([`model_dir_holding`]), when `models` holds it too.
+///
+/// LaMa is shared by its key, and the key is the folder's path. A run is given
+/// the folder that holds every model it opens, and an edit the first one that
+/// holds LaMa. Those can be two spellings of one folder, or two folders that
+/// both hold the file, and then the edit opened a second LaMa beside the run's.
+/// A `models` without LaMa is left alone: the run declines its LaMa regions
+/// there, as it always did.
+pub(crate) fn lama_dir(app_data: Option<&Path>, models: &Path) -> PathBuf {
+    if models.join(INPAINTER).exists() {
+        model_dir_holding(app_data, INPAINTER).unwrap_or_else(|| models.to_path_buf())
+    } else {
+        models.to_path_buf()
+    }
+}
+
 fn selected_model_dir(app_data: Option<&Path>, selection: DetectorModels, all_text: bool) -> Option<PathBuf> {
     let required = selection.required(all_text);
     model_search_paths(app_data).into_iter()
@@ -2032,16 +2088,22 @@ fn session_key(kind: registry::Kind, models: &Path, preference: Preference) -> r
 /// those 2.1 s on every run of every chapter, for a rung most of them never
 /// reach. So the run pays for it exactly when it uses it.
 ///
-/// **And once opened it is held for the rest of the run**: building
+/// **And once opened it is kept, but held one render at a time**: building
 /// costs seconds and running costs one, so a session rebuilt per region would
-/// spend most of a job in the loader. It goes when the [`Pipeline`] goes, at the
-/// end of the run, the same as the
-/// "unload LaMa" pressure step does by hand.
+/// spend most of a job in the loader. After each render it goes back to
+/// [`cleaner_core::residency`] ([`LentSession::park`]) and the next render borrows
+/// it again ([`residency::lend`]), which costs a table lookup. That is what
+/// lets a region edit made during a run use the run's LaMa: it waits for the
+/// region in progress, at most, instead of loading a second 510 MB copy beside
+/// it, which the loaded-models tab showed as two "LaMa Manga" rows. A run used
+/// to hold the session from its first LaMa region to its end, and still does
+/// under `lamaSharing: separate` ([`LamaSharing::Separate`]), for a machine
+/// with the memory to spare and no wish to wait.
 ///
 /// It is a value of its own rather than three fields on [`Pipeline`] for the
 /// same reason [`Cleaner`] is a trait: the escalation loop is written against
 /// this, so every rung below 2 can be exercised on a machine that has no
-/// weights, with [`Rung2::state`] saying afterwards whether a session was ever
+/// weights, with its [`LentSession`]'s state saying afterwards whether a session was ever
 /// asked for. It was one of a pair - rung 3 held its own MI-GAN session on
 /// these terms - and it is the only one left.
 pub(crate) struct Rung2 {
@@ -2049,17 +2111,16 @@ pub(crate) struct Rung2 {
     /// it is not built until something needs it.
     models: PathBuf,
     preference: Preference,
-    /// Which parked session is this one's, so that "held for the rest of the
-    /// run" has become "held until somebody asks for it back" - the run's end
-    /// hands the session to [`cleaner_core::residency`] rather than dropping
-    /// it.
-    key: residency::Key,
-    state: Session<lama::Inpainter>,
+    /// The session, and its turns with every other holder of the same key.
+    session: LentSession<lama::Inpainter>,
     /// The finishing that takes the place of the tile's tone alignment, when
     /// every model is finished ([`crate::inference::cloud_clean::FinishingSetting`]).
     pub(crate) finishing: Option<cleaner_core::engines::postprocess::Choice>,
     /// How LaMa cuts its hole ([`LAMA_HOLE_KEY`]).
     pub(crate) hole: lama::HoleMode,
+    /// Whether the session is shared by turns or kept by its holder
+    /// ([`LAMA_SHARING_KEY`]).
+    pub(crate) sharing: LamaSharing,
     /// Whether the mask came from a detector, so its lettering may be extended
     /// ([`fit::lettering_extent`]) under a hole that extends it. A hand edit
     /// says no.
@@ -2083,7 +2144,12 @@ enum Session<E> {
     /// this is the state a run of pure rung-0 pages ends in, and it is the one
     /// that says the 510 MB was never paid.
     Unopened,
+    /// Borrowed for the use in progress ([`LentSession::held`]).
     Held(Box<Held<E>>),
+    /// It was held and has been given back to [`cleaner_core::residency`]
+    /// after its use ([`LentSession::park`]). The next use borrows it again,
+    /// or opens a new one if the sweep or the close button took it meanwhile.
+    Parked,
     /// It was needed, and it could not be had - no weights on this machine, or
     /// no session would build. Recorded so the failure is paid once per run
     /// rather than once per region.
@@ -2103,31 +2169,138 @@ impl Rung2 {
         Rung2 {
             models: models.to_path_buf(),
             preference,
-            key: session_key(registry::Kind::Inpainter, models, preference),
-            state: Session::Unopened,
+            session: LentSession::new(session_key(registry::Kind::Inpainter, models, preference)),
             finishing: None,
             hole: lama::HoleMode::default(),
+            sharing: LamaSharing::default(),
             detected_mask: true,
             flux: crate::region::LocalFlux::default(),
         }
     }
 
-    /// The held inpainter, opening it if this is the first region to want one.
+    /// One render with the inpainter: borrowed from the residency cache (or
+    /// opened if nobody has opened it yet), handed to `use_`, and given back
+    /// ([`LentSession::render`]).
     ///
     /// `None` is "this run has no rung 2", not "this region cannot use it". The
     /// two are told apart at the call site because they carry different reasons
     /// into review.
-    fn held(&mut self) -> Result<Option<&mut Held<lama::Inpainter>>, String> {
-        if matches!(self.state, Session::Unopened) {
-            // The parked session first: 2.1 s and 510 MB that a second run, or
-            // a hand edit after one, does not have to pay again.
-            let resident = residency::checkout::<Held<lama::Inpainter>>(&self.key);
+    fn render<R>(&mut self, use_: impl FnOnce(&mut Held<lama::Inpainter>) -> R) -> Result<Option<R>, String> {
+        let (models, preference) = (&self.models, self.preference);
+        self.session.render(self.sharing, || open_inpainter(models, preference), use_)
+    }
+
+    /// Give the session back, under the pressure ladder ([`LentSession::surrender`]).
+    fn surrender(&mut self) -> bool {
+        self.session.surrender()
+    }
+
+    /// Give back a session nobody is using ([`LentSession::release_if_spent`]),
+    /// and rung 3a's child likewise.
+    fn release_if_spent(&mut self) -> bool {
+        self.flux.release_if_spent();
+        self.session.release_if_spent()
+    }
+
+    /// Where the last session this rung held runs, as the key the interface
+    /// names the accelerator under.
+    ///
+    /// **It opens nothing.** The only caller asks after a run call on this
+    /// session has already failed, when the session has been parked again (or
+    /// dropped, poisoned); the CPU is the answer for a rung that never held
+    /// one, which claims the least on a path nothing can reach.
+    pub(crate) fn accel_key(&self) -> &'static str {
+        self.session.accel
+    }
+}
+
+/// A lazily opened session that is taken one use at a time and given back to
+/// [`cleaner_core::residency`] after each, so every holder of its key (a run,
+/// a region edit made during it, a finishing preview) shares one session by
+/// turns ([`residency::lend`]). Under [`LamaSharing::Separate`] it is the old
+/// way: taken without waiting, and kept until it is dropped.
+///
+/// Generic over the engine so the turns can be tested with a stand-in session
+/// on a machine with no weights; rung 2 is its one user.
+pub(crate) struct LentSession<E: Faulted + Resident> {
+    /// Which parked session is this one's, so that "held for the rest of the
+    /// run" has become "held until somebody asks for it back" - the end of its
+    /// holder hands the session to [`cleaner_core::residency`] rather than
+    /// dropping it.
+    pub(crate) key: residency::Key,
+    state: Session<E>,
+    /// The key's loan while the session is [`Session::Held`]: another holder
+    /// of the same key waits until it is dropped ([`residency::lend`]).
+    loan: Option<residency::Lent>,
+    /// Under `shared`, held from the first use until this is dropped or
+    /// surrenders: the session parked between two uses is this holder's, and
+    /// is spared by the evictions that take only what nobody is using.
+    pin: Option<residency::Pinned>,
+    /// Where the last session held runs, as the interface names the
+    /// accelerator. Kept because the session itself is parked again by the
+    /// time a caller asks.
+    accel: &'static str,
+    /// How long a use waits for another holder's ([`LAMA_TURN_PATIENCE`]).
+    patience: std::time::Duration,
+}
+
+impl<E: Faulted + Resident> LentSession<E> {
+    fn new(key: residency::Key) -> LentSession<E> {
+        LentSession {
+            key,
+            state: Session::Unopened,
+            loan: None,
+            pin: None,
+            accel: accel::Accelerator::Cpu.label_key(),
+            patience: LAMA_TURN_PATIENCE,
+        }
+    }
+
+    /// The session for one use, borrowed from the residency cache and opened
+    /// by `open` if nobody has opened it yet. Give it back with
+    /// [`LentSession::park`].
+    ///
+    /// Under `shared` the borrow **waits** while another holder of the same key
+    /// is using it, for [`LentSession::patience`] at most, and then opens a
+    /// session of its own. The loan is kept while `open` runs, so a borrower
+    /// behind this one waits for it rather than opening a second. Under
+    /// `separate` nothing waits, and a session in use elsewhere means this
+    /// opens a second one.
+    fn held(
+        &mut self,
+        sharing: LamaSharing,
+        open: impl FnOnce() -> Result<Option<Held<E>>, String>,
+    ) -> Result<Option<&mut Held<E>>, String> {
+        if matches!(self.state, Session::Unopened | Session::Parked) {
+            let (loan, resident) = match sharing {
+                LamaSharing::Shared => {
+                    let (loan, resident) = residency::lend::<Held<E>>(&self.key, self.patience);
+                    if loan.is_none() {
+                        eprintln!(
+                            "manga-cleaner: LaMa was busy for {} s; this clean opens a copy of its own",
+                            self.patience.as_secs()
+                        );
+                    }
+                    // The holder will come back for the session between two of
+                    // its uses, so the evictions that take only what nobody uses
+                    // leave it parked ([`residency::pin`]).
+                    if self.pin.is_none() {
+                        self.pin = Some(residency::pin(&self.key));
+                    }
+                    (loan, resident)
+                }
+                LamaSharing::Separate => (None, residency::checkout::<Held<E>>(&self.key)),
+            };
             let opened = match resident {
                 Some(held) => Some(held),
-                None => open_inpainter(&self.models, self.preference)?,
+                None => open()?,
             };
             self.state = match opened {
-                Some(held) => Session::Held(Box::new(held)),
+                Some(held) => {
+                    self.accel = held.inpainter.accel_key();
+                    self.loan = loan;
+                    Session::Held(Box::new(held))
+                }
                 None => Session::Unavailable,
             };
         }
@@ -2137,16 +2310,70 @@ impl Rung2 {
         })
     }
 
+    /// [`LentSession::held`], `use_` on it, and [`LentSession::park`] after,
+    /// whatever `use_` answers.
+    ///
+    /// **A panic in `use_` gives the session back too**: it is poisoned (its
+    /// state after a panic inside an inference is not known) and parked, which
+    /// drops it and hands the turn to the next holder, and then the panic goes
+    /// on. Without that, a run that catches the panic and goes on to close its
+    /// job would keep the turn, and an edit waiting for it under that job's
+    /// lock would wait while the run waited for the lock.
+    fn render<R>(
+        &mut self,
+        sharing: LamaSharing,
+        open: impl FnOnce() -> Result<Option<Held<E>>, String>,
+        use_: impl FnOnce(&mut Held<E>) -> R,
+    ) -> Result<Option<R>, String> {
+        let Some(held) = self.held(sharing, open)? else { return Ok(None) };
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| use_(held))) {
+            Ok(used) => {
+                self.park(sharing);
+                Ok(Some(used))
+            }
+            Err(panic) => {
+                if let Session::Held(held) = &self.state {
+                    held.inpainter.poison_session();
+                }
+                self.park(sharing);
+                std::panic::resume_unwind(panic)
+            }
+        }
+    }
+
+    /// Give the session back to the residency cache after a use, and the key's
+    /// loan with it, so the next holder that wants it borrows the same
+    /// session. Checked in before the loan goes, so a waiter finds it parked. A
+    /// spent session (the close button, or one poisoned by a failed run) is
+    /// dropped by the checkin instead.
+    ///
+    /// Under `separate` it gives nothing back: the holder keeps the session
+    /// until it is dropped, a run until its end.
+    fn park(&mut self, sharing: LamaSharing) {
+        if sharing == LamaSharing::Separate || !matches!(self.state, Session::Held(_)) {
+            return;
+        }
+        if let Session::Held(held) = std::mem::replace(&mut self.state, Session::Parked) {
+            residency::checkin(self.key.clone(), *held);
+        }
+        self.loan = None;
+    }
+
     /// Give the session back, under the
     /// pressure ladder. Answers whether there was one to give.
     ///
-    /// The state it lands in is [`Session::Surrendered`], which [`Rung2::held`]
-    /// does not reopen - so every later region routes down to rung 0, or
-    /// is left alone and listed in review, and the run continues. That is what
-    /// "each step is recoverable" means here: the run is a rung worse, not over.
+    /// The state it lands in is [`Session::Surrendered`], which
+    /// [`LentSession::held`] does not reopen - so every later region routes
+    /// down to rung 0, or is left alone and listed in review, and the run
+    /// continues. That is what "each step is recoverable" means here: the run
+    /// is a rung worse, not over. A parked session is the caller's to evict
+    /// ([`Pipeline::take_pressure`]), and it is unpinned here so the eviction
+    /// takes it.
     fn surrender(&mut self) -> bool {
-        let held = matches!(self.state, Session::Held(_));
+        let held = matches!(self.state, Session::Held(_) | Session::Parked);
         self.state = Session::Surrendered;
+        self.loan = None;
+        self.pin = None;
         held
     }
 
@@ -2159,38 +2386,26 @@ impl Rung2 {
     /// ladder's step is a latch because the machine is short of memory and
     /// rebuilding 510 MB is how it gets driven into the compressor, whereas
     /// this is a session nobody wanted on a machine that is fine. A later
-    /// region gets a rung 2 again, and pays the 2.1 s once.
+    /// region gets a rung 2 again, and pays the 2.1 s once. A parked session
+    /// is the residency sweep's: [`residency::checkout`] drops it once spent.
     fn release_if_spent(&mut self) -> bool {
-        self.flux.release_if_spent();
         let spent = match &self.state {
             Session::Held(held) => held.inpainter.spent(),
             _ => false,
         };
         if spent {
             self.state = Session::Unopened;
+            self.loan = None;
         }
         spent
     }
-
-    /// Where the held session is running, as the key the interface names the
-    /// accelerator under.
-    ///
-    /// **It opens nothing.** The only caller asks after a run call on this
-    /// session has already failed, so the state is `Held` by construction; the
-    /// other arms exist because the enum has them, and the CPU is the answer
-    /// that claims the least on a path nothing can reach.
-    pub(crate) fn accel_key(&self) -> &'static str {
-        match &self.state {
-            Session::Held(held) => held.inpainter.accel_key(),
-            _ => accel::Accelerator::Cpu.label_key(),
-        }
-    }
 }
 
-impl Drop for Rung2 {
+impl<E: Faulted + Resident> Drop for LentSession<E> {
     /// A held session goes back to the residency cache, and a **surrendered**
-    /// one does not exist to go anywhere: [`Rung2::surrender`] already dropped
-    /// it, which is what the pressure ladder asked for.
+    /// one does not exist to go anywhere: [`LentSession::surrender`] already
+    /// dropped it, which is what the pressure ladder asked for. The loan is a
+    /// field and goes after this body, so a waiter finds the session parked.
     fn drop(&mut self) {
         if let Session::Held(held) = std::mem::replace(&mut self.state, Session::Unopened) {
             residency::checkin(self.key.clone(), *held);
@@ -2200,7 +2415,7 @@ impl Drop for Rung2 {
 
 /// A held model session, with the two facts about it that go into every patch
 /// it produces.
-struct Held<E> {
+pub(crate) struct Held<E> {
     inpainter: E,
     /// Where the session landed, from the engine's own `selection` and not from
     /// the detector's - the models choose their providers separately and a
@@ -2216,7 +2431,7 @@ struct Held<E> {
 /// They are facts about *this* session - where it landed, and the bytes it was
 /// built from - so a cache that kept the session and threw them away would make
 /// the next run read 207 MB off disk to digest weights it never opened.
-impl Resident for Held<lama::Inpainter> {
+impl<E: Resident> Resident for Held<E> {
     fn spent(&self) -> bool {
         self.inpainter.spent()
     }
@@ -2363,6 +2578,7 @@ impl Pipeline {
 
     fn unchecked(models: &Path, preference: Preference, detection_models: DetectorModels,
         all_text: bool, app_data: Option<PathBuf>) -> Pipeline {
+        let lama = lama_dir(app_data.as_deref(), models);
         Pipeline {
             detector: OnDemand::new(registry::Kind::TextDetector, models, preference, open_detector),
             balloons: OnDemand::new(
@@ -2387,7 +2603,7 @@ impl Pipeline {
             sam_preference: preference,
             sam_cpu_fallback: true,
             engine_version: env!("CARGO_PKG_VERSION"),
-            rung2: Rung2::new(models, preference),
+            rung2: Rung2::new(&lama, preference),
             ladder: memory::Ladder::new(),
             picks: None,
             bubble_color: None,
@@ -2534,9 +2750,10 @@ impl Pipeline {
         (self.full_rt_preference, self.full_rt_cpu_fallback) = full_rt_preference(settings, host)?;
         (self.sam_preference, self.sam_cpu_fallback) = sam_preference(settings, host)?;
         self.rung2.preference = model_preference_from(settings, "inpainter")?;
-        self.rung2.key = session_key(registry::Kind::Inpainter, &self.rung2.models, self.rung2.preference);
+        self.rung2.session.key = session_key(registry::Kind::Inpainter, &self.rung2.models, self.rung2.preference);
         self.rung2.finishing = crate::inference::cloud_clean::local_finishing_from_settings(settings)?;
         self.rung2.hole = lama_hole_from_settings(settings)?;
+        self.rung2.sharing = lama_sharing_from_settings(settings)?;
         self.rung2.flux = crate::region::LocalFlux::from_settings(Some(settings), self.app_data.clone());
         self.reader.preference = reader_preference(settings, host)?;
         self.reader.key = session_key(registry::Kind::Ocr, &self.reader.models, self.reader.preference);
@@ -4590,14 +4807,11 @@ pub(crate) fn render_rung_with_color(
             } else {
                 fitted
             };
-            let Some(held) = rung2.held()? else {
-                return Ok(Rendered::Refused("decline.reason.rungUnavailable"));
-            };
-            // Bound rather than matched on directly, because the arms below
-            // need the session again and a scrutinee's borrow of it would still
-            // be alive there.
-            let rendered = held.inpainter.render_with(crop, fitted, finishing, hole);
-            match rendered {
+            // Borrowed for this one region and given back after it, whatever
+            // the answer and even on a panic ([`LentSession::render`]), so a
+            // region edit waiting on it (or the run, behind an edit) has it now.
+            // A poisoned one is spent, and the checkin drops it.
+            let answer = rung2.render(|held| match held.inpainter.render_with(crop, fitted, finishing, hole) {
                 Ok(rendered) => Ok(Rendered::Made(Box::new(Made {
                     engine,
                     mask: rendered.mask,
@@ -4609,9 +4823,7 @@ pub(crate) fn render_rung_with_color(
                     tiles: Some(rendered.tiles),
                     matched: rendered.matched,
                 }))),
-                Err(lama::Error::Declined(declined)) => {
-                    Ok(Rendered::Refused(declined.reason_key()))
-                }
+                Err(lama::Error::Declined(declined)) => Ok(Rendered::Refused(declined.reason_key())),
                 // **The session does not survive this, so it is not kept.** A
                 // decline above is the model answering; this is the model
                 // failing to answer, and on Windows the cause is usually one
@@ -4634,7 +4846,8 @@ pub(crate) fn render_rung_with_color(
                     held.inpainter.poison_session();
                     Err(fault)
                 }
-            }
+            })?;
+            answer.unwrap_or(Ok(Rendered::Refused("decline.reason.rungUnavailable")))
         }
         // Reached only from a FLUX pick (`ladder_from`). Every failure of the
         // child is a refusal under its own key, so the region is declined and

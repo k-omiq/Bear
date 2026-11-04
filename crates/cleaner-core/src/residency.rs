@@ -31,6 +31,12 @@
 //! not checked in. **Nothing here can interrupt an inference, because nothing
 //! here can reach a session anybody is using.**
 //!
+//! A holder that gives its session back after every use can [`lend`] instead
+//! of [`checkout`]: a second holder of the same key then waits for the first
+//! use to end and gets the same session, rather than finding nothing parked and
+//! opening a second. Rung 2 (LaMa) does this, so a region edit made during a
+//! run shares the run's LaMa.
+//!
 //! ## The sweep
 //!
 //! Idle eviction needs somebody to notice the time. Three things call
@@ -49,7 +55,7 @@
 
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use crate::registry::Kind;
@@ -187,7 +193,8 @@ pub fn sweep() -> usize {
     count
 }
 
-/// Drop every parked session of one kind, whether or not it is spent.
+/// Drop every parked session of one kind, whether or not it is spent, except
+/// one a live holder has pinned ([`pin`]).
 ///
 /// The pressure ladder, which is the one caller entitled to take a session
 /// nobody asked to give up: a step down it is the machine talking, not the
@@ -198,7 +205,7 @@ pub fn evict(kind: Kind) -> usize {
         let mut taken = Vec::new();
         let mut at = 0;
         while at < table.len() {
-            if table[at].key.kind == kind {
+            if table[at].key.kind == kind && !pinned(&table[at].key) {
                 taken.push(table.remove(at));
             } else {
                 at += 1;
@@ -212,7 +219,8 @@ pub fn evict(kind: Kind) -> usize {
 }
 
 /// Give SAM analysis room by dropping parked CTD, LaMa, and sidecar sessions.
-/// Checked-out sessions remain with their owner until its next safe point.
+/// Checked-out and pinned sessions remain with their owner until its next safe
+/// point.
 pub fn evict_for_sam() -> usize {
     [Kind::TextDetector, Kind::Inpainter, Kind::Sidecar]
         .into_iter()
@@ -225,7 +233,7 @@ pub fn evict_for_sam() -> usize {
 pub fn reclaimable_for_sam() -> bool {
     [Kind::TextDetector, Kind::Inpainter, Kind::Sidecar]
         .into_iter()
-        .any(parked)
+        .any(|kind| table().iter().any(|slot| slot.key.kind == kind && !pinned(&slot.key)))
 }
 
 /// Whether anything of this kind is parked here right now.
@@ -237,6 +245,178 @@ pub fn parked(kind: Kind) -> bool {
 pub fn clear() {
     let taken: Vec<Slot> = table().drain(..).collect();
     drop(taken);
+}
+
+/* ------------------------------------------------------------------ */
+/* Lending: one session per key, shared by turns                       */
+/* ------------------------------------------------------------------ */
+
+/// Who has a key out, and who waits for it, in the order they asked.
+struct Turns {
+    key: Key,
+    out: bool,
+    waiting: std::collections::VecDeque<u64>,
+}
+
+struct Loans {
+    turns: Vec<Turns>,
+    next_ticket: u64,
+}
+
+/// The keys lent out by [`lend`] right now, and the signal a waiter sleeps on.
+fn loans() -> &'static (Mutex<Loans>, Condvar) {
+    static LOANS: OnceLock<(Mutex<Loans>, Condvar)> = OnceLock::new();
+    LOANS.get_or_init(|| (Mutex::new(Loans { turns: Vec::new(), next_ticket: 0 }), Condvar::new()))
+}
+
+fn loans_lock() -> MutexGuard<'static, Loans> {
+    // Only plain counters and queues change under this lock, so a panic
+    // elsewhere cannot have left it half-written.
+    loans().0.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A key [`lend`] handed out. Dropping it hands the key to the borrower that
+/// has waited longest; [`checkin`] the session first, so that borrower finds it
+/// parked rather than opening another.
+#[must_use = "dropping the loan at once lets a second borrower open a second session"]
+pub struct Lent {
+    key: Key,
+}
+
+impl Drop for Lent {
+    fn drop(&mut self) {
+        let mut table = loans_lock();
+        if let Some(at) = table.turns.iter().position(|turns| turns.key == self.key) {
+            table.turns[at].out = false;
+            if table.turns[at].waiting.is_empty() {
+                table.turns.remove(at);
+            }
+        }
+        drop(table);
+        loans().1.notify_all();
+    }
+}
+
+/// [`checkout`], **waiting** while another holder has this key out, so two
+/// holders that want the same model at once share one session by turns
+/// instead of loading two.
+///
+/// [`checkout`] answers `None` when the session is in use, and the caller opens
+/// a second one: correct for a session held for a whole run, since waiting on
+/// it would stall the other caller until the run ends. This is for a holder
+/// that gives the session back after each use, as rung 2 does after every
+/// render (`src-tauri/src/run.rs`). A run then holds LaMa for one region at a
+/// time, a region edit made during the run waits for that region, and the
+/// loaded-models tab shows one LaMa where it used to show the run's and the
+/// edit's.
+///
+/// **Turns are taken in the order they were asked for.** A run that asks again
+/// right after giving the key back does not get it ahead of an edit that was
+/// already waiting: the standard library's locks are not fair, and without the
+/// queue the run's next region could win every time.
+///
+/// **The wait is bounded by `patience`.** A borrower that has waited that long
+/// gives up its place and gets no loan (`None`, with whatever [`checkout`]
+/// finds, which is nothing while the session is out): it opens a session of
+/// its own, as a holder that does not share would, rather than waiting on a
+/// render that may have hung or a slow CPU region for ever.
+///
+/// The loan is held until the [`Lent`] is dropped, also when nothing was parked
+/// and the caller opens the session itself: a second borrower then waits for
+/// that one instead of opening a second.
+///
+/// **A holder must not wait on anything while it holds a loan.** A borrower
+/// may wait here while it holds other locks: a region edit and a refinish wait
+/// for LaMa under their chapter's job lock. That is safe only because every
+/// loan holder takes nothing between its borrow and its checkin. Rung 2
+/// borrows, renders and gives the session back with no lock taken in between
+/// (`LentSession::render` in `src-tauri/src/run.rs`), so whoever holds the loan
+/// always gets to its checkin and the waiter behind it is served. A holder
+/// that took a job lock while it held the loan could deadlock with an edit
+/// that holds that lock and waits here.
+pub fn lend<T: Resident>(key: &Key, patience: Duration) -> (Option<Lent>, Option<T>) {
+    let (_, freed) = loans();
+    let deadline = std::time::Instant::now() + patience;
+    let mut loans = loans_lock();
+    let ticket = loans.next_ticket;
+    loans.next_ticket += 1;
+    let at = match loans.turns.iter().position(|turns| turns.key == *key) {
+        Some(at) => at,
+        None => {
+            loans.turns.push(Turns { key: key.clone(), out: false, waiting: Default::default() });
+            loans.turns.len() - 1
+        }
+    };
+    loans.turns[at].waiting.push_back(ticket);
+    loop {
+        let at = loans.turns.iter().position(|turns| turns.key == *key)
+            .expect("a waiter's key keeps its queue");
+        let turns = &mut loans.turns[at];
+        if !turns.out && turns.waiting.front() == Some(&ticket) {
+            turns.waiting.pop_front();
+            turns.out = true;
+            drop(loans);
+            return (Some(Lent { key: key.clone() }), checkout(key));
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            turns.waiting.retain(|waiter| *waiter != ticket);
+            if !turns.out && turns.waiting.is_empty() {
+                loans.turns.remove(at);
+            }
+            drop(loans);
+            // The next in line may be able to go now this one has left.
+            freed.notify_all();
+            return (None, checkout(key));
+        }
+        loans = freed.wait_timeout(loans, deadline - now).unwrap_or_else(|e| e.into_inner()).0;
+    }
+}
+
+/// How many borrowers wait in [`lend`] for this key right now, not counting
+/// the one that has it out. Read-only, for tests that must know a waiter is
+/// really queued before they go on.
+pub fn waiting(key: &Key) -> usize {
+    loans_lock().turns.iter().find(|turns| turns.key == *key).map_or(0, |turns| turns.waiting.len())
+}
+
+/// Keys a live holder means to come back for, though their session sits
+/// parked between two uses ([`pin`]).
+fn pins() -> MutexGuard<'static, Vec<Key>> {
+    static PINS: OnceLock<Mutex<Vec<Key>>> = OnceLock::new();
+    PINS.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A key [`pin`] holds. The session under it is spared by [`evict`] and
+/// [`evict_for_sam`] until the last pin of the key is dropped.
+#[must_use = "a pin dropped at once spares nothing"]
+pub struct Pinned {
+    key: Key,
+}
+
+impl Drop for Pinned {
+    fn drop(&mut self) {
+        let mut pins = pins();
+        if let Some(at) = pins.iter().position(|key| *key == self.key) {
+            pins.remove(at);
+        }
+    }
+}
+
+/// Say that a live holder will use this key's session again: a run's rung 2
+/// between two regions, under [`lend`]. Its session is parked, but it is the
+/// run's as much as a checked-out one is, and the evictions that only take
+/// what nobody is using leave it alone, as they left a run's checked-out
+/// session alone before it was given back between regions. The close button
+/// and the idle grace still take it ([`sweep`] and [`checkout`] drop a spent
+/// session pinned or not), and so does [`clear`].
+pub fn pin(key: &Key) -> Pinned {
+    pins().push(key.clone());
+    Pinned { key: key.clone() }
+}
+
+fn pinned(key: &Key) -> bool {
+    pins().contains(key)
 }
 
 /* ------------------------------------------------------------------ */
@@ -495,6 +675,151 @@ mod tests {
         let mine: Option<Fake> = checkout(&key("/models/a"));
         assert!(mine.is_some());
         drop(mine);
+    }
+
+    const LONG: Duration = Duration::from_secs(30);
+
+    /// **Two holders that want one key at once share one session.** The
+    /// second waits for the first to give it back, and gets that same session,
+    /// rather than opening a second one beside it.
+    #[test]
+    fn a_second_borrower_waits_for_the_session_instead_of_opening_another() {
+        let _guard = test_lock();
+        clear();
+        let dropped = Arc::new(AtomicU32::new(0));
+        let key = Key::new(Kind::Inpainter, "lend-shared");
+        let opened = Arc::new(AtomicU32::new(0));
+
+        // The first holder finds nothing parked and opens the session.
+        let (loan, parked_now) = lend::<Fake>(&key, LONG);
+        assert!(loan.is_some() && parked_now.is_none());
+        opened.fetch_add(1, Ordering::SeqCst);
+        let first = Fake::open(Kind::Inpainter, &dropped);
+        let id = first.lease.id();
+
+        let (waiting, got) = std::sync::mpsc::channel();
+        let second = {
+            let (key, opened, dropped) = (key.clone(), Arc::clone(&opened), Arc::clone(&dropped));
+            std::thread::spawn(move || {
+                let (loan, parked) = lend::<Fake>(&key, LONG);
+                assert!(loan.is_some(), "the second borrower gave up");
+                let session = parked.unwrap_or_else(|| {
+                    opened.fetch_add(1, Ordering::SeqCst);
+                    Fake::open(Kind::Inpainter, &dropped)
+                });
+                waiting.send(session.lease.id()).unwrap();
+                checkin(key, session);
+                drop(loan);
+            })
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(got.try_recv().is_err(), "the second borrower did not wait");
+
+        // The first gives it back: checked in, then the loan dropped.
+        checkin(key.clone(), first);
+        drop(loan);
+        assert_eq!(got.recv().unwrap(), id, "the second borrower got another session");
+        second.join().unwrap();
+        assert_eq!(opened.load(Ordering::SeqCst), 1, "two sessions were opened");
+        assert_eq!(registry::loaded().iter().filter(|row| row.id == id).count(), 1);
+        clear();
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+    }
+
+    /// **The one that waited goes first.** A holder that gives the key back and
+    /// asks again at once (a run's next region) queues behind a borrower that
+    /// was already waiting (an edit), however the threads are scheduled.
+    #[test]
+    fn a_borrower_that_asks_again_queues_behind_one_already_waiting() {
+        let _guard = test_lock();
+        clear();
+        let key = Key::new(Kind::Inpainter, "lend-order");
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let (loan, _) = lend::<Fake>(&key, LONG);
+        let edit = {
+            let (key, order) = (key.clone(), Arc::clone(&order));
+            std::thread::spawn(move || {
+                let (loan, _) = lend::<Fake>(&key, LONG);
+                assert!(loan.is_some());
+                order.lock().unwrap().push("edit");
+            })
+        };
+        // The edit is queued before the run gives the key back.
+        let asked = std::time::Instant::now();
+        while waiting(&key) == 0 {
+            assert!(asked.elapsed() < LONG, "the edit never queued");
+            std::thread::yield_now();
+        }
+        drop(loan);
+        let (again, _) = lend::<Fake>(&key, LONG);
+        assert!(again.is_some());
+        order.lock().unwrap().push("run");
+        drop(again);
+        edit.join().unwrap();
+        assert_eq!(*order.lock().unwrap(), ["edit", "run"]);
+    }
+
+    /// **A wait has an end.** A borrower whose patience runs out gets no loan
+    /// (its caller opens a session of its own), and leaves the queue, so the
+    /// key is not stuck behind it.
+    #[test]
+    fn a_borrower_out_of_patience_gives_up_its_place() {
+        let _guard = test_lock();
+        clear();
+        let key = Key::new(Kind::Inpainter, "lend-patience");
+        let (loan, _) = lend::<Fake>(&key, LONG);
+        let started = std::time::Instant::now();
+        let (late, parked) = lend::<Fake>(&key, Duration::from_millis(150));
+        assert!(late.is_none() && parked.is_none(), "an impatient borrower was lent the key");
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        drop(loan);
+        let (next, _) = lend::<Fake>(&key, Duration::from_millis(150));
+        assert!(next.is_some(), "the key stayed stuck behind the borrower that gave up");
+    }
+
+    /// A loan dropped with nothing checked in still lets the next borrower in:
+    /// a holder whose session would not open must not leave the key out.
+    #[test]
+    fn a_dropped_loan_frees_the_key() {
+        let _guard = test_lock();
+        clear();
+        let key = Key::new(Kind::Inpainter, "lend-freed");
+        let (loan, _) = lend::<Fake>(&key, LONG);
+        drop(loan);
+        let (again, parked) = lend::<Fake>(&key, Duration::from_millis(150));
+        assert!(again.is_some() && parked.is_none());
+    }
+
+    /// **A pinned session is spared by the evictions that take only what
+    /// nobody is using**, as a checked-out one is: a run's LaMa parked between
+    /// two of its regions. The close button still takes it, and the pin's end
+    /// lets eviction take it again.
+    #[test]
+    fn a_pinned_session_is_spared_by_eviction_but_not_by_the_close_button() {
+        let _guard = test_lock();
+        clear();
+        let dropped = Arc::new(AtomicU32::new(0));
+        let key = Key::new(Kind::Inpainter, "pinned");
+        let pin = pin(&key);
+        checkin(key.clone(), Fake::open(Kind::Inpainter, &dropped));
+        assert_eq!(evict(Kind::Inpainter), 0);
+        assert_eq!(evict_for_sam(), 0);
+        assert!(!reclaimable_for_sam(), "a pinned session was offered to SAM");
+        assert!(parked(Kind::Inpainter));
+
+        drop(pin);
+        assert!(reclaimable_for_sam());
+        assert_eq!(evict(Kind::Inpainter), 1);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+
+        let pin = super::pin(&key);
+        let session = Fake::open(Kind::Inpainter, &dropped);
+        let id = session.lease.id();
+        checkin(key.clone(), session);
+        assert!(registry::request_unload(id));
+        assert_eq!(sweep(), 1, "the close button did not take a pinned session");
+        drop(pin);
+        clear();
     }
 
     /// `start_sweeper` can be called multiple times idempotently.

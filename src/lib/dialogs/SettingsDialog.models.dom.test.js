@@ -46,6 +46,7 @@ import {
   setDetectionMode,
   setFluxModel,
   setLamaHole,
+  setLamaSharing,
   setOcrRescue,
   setSidecarPath,
 } from '../state/session.svelte.js'
@@ -1073,5 +1074,38 @@ describe('the LaMa hole choice', () => {
     await fireEvent.click(within(group).getByRole('radio', { name: t('settings.cleaning.lamaHole.option.wide') }))
     expect(await rendered.findByRole('alert')).toHaveProperty('textContent', t('settings.cleaning.lamaHole.saveFailed'))
     expect(session.lamaHole).toBe('tight')
+  })
+})
+
+describe('the LaMa sharing choice', () => {
+  afterEach(() => setLamaSharing('shared'))
+
+  it('offers both under Cleaning with Share one chosen and its hint shown', async () => {
+    const rendered = await open(() => view())
+    const group = rendered.getByRole('radiogroup', { name: t('settings.cleaning.lamaSharing.label') })
+    const choices = within(group).getAllByRole('radio')
+    expect(choices.map((choice) => choice.textContent?.trim())).toEqual(
+      ['shared', 'separate'].map((sharing) => t(`settings.cleaning.lamaSharing.option.${sharing}`)),
+    )
+    expect(within(group).getByRole('radio', { checked: true }).textContent?.trim()).toBe(t('settings.cleaning.lamaSharing.option.shared'))
+    expect(rendered.getByText(t('settings.cleaning.lamaSharing.hint.shared'))).toBeTruthy()
+  })
+
+  it('writes the choice to the settings file first and only then takes it', async () => {
+    const rendered = await open(() => view())
+    const group = rendered.getByRole('radiogroup', { name: t('settings.cleaning.lamaSharing.label') })
+    await fireEvent.click(within(group).getByRole('radio', { name: t('settings.cleaning.lamaSharing.option.separate') }))
+    await waitFor(() => expect(writeSettings).toHaveBeenCalledWith({ lamaSharing: 'separate' }))
+    await waitFor(() => expect(session.lamaSharing).toBe('separate'))
+    expect(rendered.getByText(t('settings.cleaning.lamaSharing.hint.separate'))).toBeTruthy()
+  })
+
+  it('keeps the old choice and says so when the save fails', async () => {
+    const rendered = await open(() => view())
+    writeSettings.mockRejectedValueOnce(new Error('disk full'))
+    const group = rendered.getByRole('radiogroup', { name: t('settings.cleaning.lamaSharing.label') })
+    await fireEvent.click(within(group).getByRole('radio', { name: t('settings.cleaning.lamaSharing.option.separate') }))
+    expect(await rendered.findByRole('alert')).toHaveProperty('textContent', t('settings.cleaning.lamaSharing.saveFailed'))
+    expect(session.lamaSharing).toBe('shared')
   })
 })

@@ -576,6 +576,18 @@ export const fr = {
           adaptive: 'Large là où la page à côté du texte est unie ou noire, serré là où il y a du dessin. Les traces de lettres sur les zones unies disparaissent et l’essentiel du dessin sous le texte est gardé ; un titre lumineux sur du dessin peut encore baver. Ne vaut que pour LaMa sur cet ordinateur ; les modèles cloud l’ignorent.',
         },
       },
+      lamaSharing: {
+        label: 'LaMa pendant une exécution',
+        saveFailed: 'Impossible d’enregistrer le choix de LaMa. Rien n’a changé.',
+        option: {
+          shared: 'En partager un',
+          separate: 'Copie à part',
+        },
+        hint: {
+          shared: 'Le choix par défaut. Tout ce qui utilise LaMa sur cet ordinateur partage une copie : une exécution, une retouche faite pendant celle-ci et les exécutions simultanées. Il n’est chargé qu’une fois. Une retouche peut attendre la région qu’une exécution nettoie, quelques secondes avec une carte graphique et plus sur le processeur, et charge sa propre copie au bout de 20 s.',
+          separate: 'Chaque exécution, et chaque retouche faite pendant une exécution, garde son propre LaMa et n’attend pas la région d’une autre, comme dans les versions précédentes. Chaque copie en plus utilise environ 0,5 à 1,2 Go de mémoire ou de mémoire graphique.',
+        },
+      },
     },
     models: {
       heading: 'Autres fichiers',

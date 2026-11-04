@@ -576,6 +576,18 @@ export const es = {
           adaptive: 'Amplio donde la página junto al texto es lisa o negra, ajustado donde hay dibujo. Desaparecen las marcas de letras en las zonas lisas y se conserva la mayor parte del dibujo bajo el texto; un título con resplandor sobre el dibujo aún puede emborronarse. Solo afecta a LaMa en este equipo; los modelos en la nube lo ignoran.',
         },
       },
+      lamaSharing: {
+        label: 'LaMa durante una ejecución',
+        saveFailed: 'No se pudo guardar la opción de LaMa. No cambió nada.',
+        option: {
+          shared: 'Compartir uno',
+          separate: 'Copia propia',
+        },
+        hint: {
+          shared: 'La opción por defecto. Todo lo que usa LaMa en este equipo comparte una copia: una ejecución, una edición hecha durante ella y las ejecuciones simultáneas. Está en memoria una vez. Una edición puede esperar a la región que limpia una ejecución, unos segundos con tarjeta gráfica y más en la CPU, y carga su propia copia pasados 20 s.',
+          separate: 'Cada ejecución, y cada edición hecha durante una ejecución, tiene su propio LaMa y no espera a la región de otra, como en versiones anteriores. Cada copia extra usa unos 0,5 a 1,2 GB más de memoria o de memoria gráfica.',
+        },
+      },
     },
     models: {
       heading: 'Otros archivos',

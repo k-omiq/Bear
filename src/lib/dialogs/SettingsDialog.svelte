@@ -123,7 +123,7 @@
   import { chooseFolder, chooseOnnx } from '../api/folder.js'
   import { showSettingsSection } from '../api/model-download-notices.js'
   import { resolveSettingsLink, SETTINGS_SECTIONS } from './settingslinks.js'
-  import { LAMA_HOLES, lamaHoleKey } from '../model/model-names.js'
+  import { LAMA_HOLES, LAMA_SHARINGS, lamaHoleKey, lamaSharingKey } from '../model/model-names.js'
   import { LOCALES, hasKey, t } from '../i18n/index.js'
   import { capabilities, loadCapabilities } from '../state/capabilities.svelte.js'
   import { chooseDetectionMode, resetCloudOffer, syncCloudOffer, targets as detectTargets } from '../state/cloudtargets.svelte.js'
@@ -139,6 +139,7 @@
     setExportPsdLetteringLayer,
     setExportTone,
     setLamaHole,
+    setLamaSharing,
     setDetection,
     setAnalysisTarget,
     setFluxBackend,
@@ -285,6 +286,27 @@
       setLamaHole(hole)
     } catch {
       lamaHoleError = true
+    }
+  }
+
+  /* ---------- LaMa sharing ---------- */
+
+  /** @type {boolean} */
+  let lamaSharingError = $state(false)
+
+  /**
+   * Settings > Models > Cleaning: whether a run and a region edit made during
+   * it use one LaMa. Written to the file first, as the LaMa hole is.
+   *
+   * @param {string} sharing - one of `LAMA_SHARINGS`
+   */
+  async function chooseLamaSharing(sharing) {
+    lamaSharingError = false
+    try {
+      await writeSettingsSerialized(getBackend(), { lamaSharing: sharing })
+      setLamaSharing(sharing)
+    } catch {
+      lamaSharingError = true
     }
   }
 
@@ -2607,6 +2629,27 @@
   </div>
 {/snippet}
 
+<!-- Whether a run and an edit made during it share one LaMa: shared first and
+     the default, with what the chosen one does under it. -->
+{#snippet lamaSharingOption()}
+  <div class="option" data-settings-anchor="lama-sharing">
+    <div class="option-line">
+      <span class="option-label" id="settings-lama-sharing-label">{t('settings.cleaning.lamaSharing.label')}</span>
+      <Segmented
+        options={LAMA_SHARINGS.map((value) => ({ value, label: t(lamaSharingKey('option', value)) }))}
+        value={session.lamaSharing}
+        labelledBy="settings-lama-sharing-label"
+        describedBy="settings-lama-sharing-description"
+        onchange={chooseLamaSharing}
+      />
+    </div>
+    <p class="option-description" id="settings-lama-sharing-description">
+      {t(lamaSharingKey('hint', session.lamaSharing))}
+    </p>
+    {#if lamaSharingError}<p class="line failed" role="alert">{t('settings.cleaning.lamaSharing.saveFailed')}</p>{/if}
+  </div>
+{/snippet}
+
 {#snippet fluxHelper()}
   <section class="advanced" aria-labelledby="{uid}-flux" data-settings-anchor="flux">
     <Disclosure variant="plain" open={fluxOpen} ontoggle={(open) => (fluxOpen = open)}>
@@ -3031,6 +3074,7 @@
             </ul>
           {/if}
           {@render lamaHoleOption()}
+          {@render lamaSharingOption()}
           {@render fluxHelper()}
         </section>
 
