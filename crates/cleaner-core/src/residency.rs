@@ -325,11 +325,15 @@ impl Drop for Lent {
 /// and the caller opens the session itself: a second borrower then waits for
 /// that one instead of opening a second.
 ///
-/// **A holder must not wait on anything while it holds a loan that another
-/// borrower may hold while waiting on this key.** Rung 2 renders and gives the
-/// session back with nothing else taken in between, and a run renders outside
-/// its job lock, so a region edit that waits here under its page lock cannot
-/// be waited on in turn.
+/// **A holder must not wait on anything while it holds a loan.** A borrower
+/// may wait here while it holds other locks: a region edit and a refinish wait
+/// for LaMa under their chapter's job lock. That is safe only because every
+/// loan holder takes nothing between its borrow and its checkin. Rung 2
+/// borrows, renders and gives the session back with no lock taken in between
+/// (`LentSession::render` in `src-tauri/src/run.rs`), so whoever holds the loan
+/// always gets to its checkin and the waiter behind it is served. A holder
+/// that took a job lock while it held the loan could deadlock with an edit
+/// that holds that lock and waits here.
 pub fn lend<T: Resident>(key: &Key, patience: Duration) -> (Option<Lent>, Option<T>) {
     let (_, freed) = loans();
     let deadline = std::time::Instant::now() + patience;
@@ -367,6 +371,13 @@ pub fn lend<T: Resident>(key: &Key, patience: Duration) -> (Option<Lent>, Option
         }
         loans = freed.wait_timeout(loans, deadline - now).unwrap_or_else(|e| e.into_inner()).0;
     }
+}
+
+/// How many borrowers wait in [`lend`] for this key right now, not counting
+/// the one that has it out. Read-only, for tests that must know a waiter is
+/// really queued before they go on.
+pub fn waiting(key: &Key) -> usize {
+    loans_lock().turns.iter().find(|turns| turns.key == *key).map_or(0, |turns| turns.waiting.len())
 }
 
 /// Keys a live holder means to come back for, though their session sits
@@ -734,7 +745,11 @@ mod tests {
             })
         };
         // The edit is queued before the run gives the key back.
-        std::thread::sleep(Duration::from_millis(100));
+        let asked = std::time::Instant::now();
+        while waiting(&key) == 0 {
+            assert!(asked.elapsed() < LONG, "the edit never queued");
+            std::thread::yield_now();
+        }
         drop(loan);
         let (again, _) = lend::<Fake>(&key, LONG);
         assert!(again.is_some());

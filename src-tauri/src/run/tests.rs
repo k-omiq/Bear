@@ -1257,7 +1257,7 @@ fn a_flux_pick_that_cannot_run_declines_and_opens_no_other_model() {
     rung2.flux.surrender();
     let attempt = clean_region(&mut rung2, &page, &fitted, Engine::Flux, Some(EnginePick::Flux), 0.0).unwrap();
     assert!(matches!(attempt, Attempt::Declined("decline.reason.rungUnavailable")));
-    assert!(matches!(rung2.state, Session::Unopened));
+    assert!(matches!(rung2.session.state, Session::Unopened));
 }
 
 #[test]
@@ -1535,7 +1535,7 @@ fn a_page_of_flat_paper_never_pays_for_a_lama_session() {
         }
     }
     assert!(
-        matches!(rung2.state, Session::Unopened),
+        matches!(rung2.session.state, Session::Unopened),
         "a page of flat-paper dialogue opened an inpainter"
     );
 }
@@ -1556,7 +1556,7 @@ fn a_ladder_region_with_no_rung_two_is_left_alone_and_says_why() {
             panic!("a screentone region was filled by {:?} with no inpainter", made.engine)
         }
     }
-    assert!(matches!(rung2.state, Session::Unavailable), "the failure was not remembered");
+    assert!(matches!(rung2.session.state, Session::Unavailable), "the failure was not remembered");
 }
 
 /// The same region under a ceiling below rung 2: declined **without asking any
@@ -1578,7 +1578,7 @@ fn a_ladder_region_under_a_low_ceiling_declines_without_asking_any_engine() {
             panic!("{:?} filled a screentone region at ceiling {ceiling:?}", made.engine)
         }
     }
-    assert!(matches!(rung2.state, Session::Unopened), "a capped run reached for the session");
+    assert!(matches!(rung2.session.state, Session::Unopened), "a capped run reached for the session");
 }
 
 /// **A bitonal scan cleaned nothing at all.** Every annulus on a 1-bit source is
@@ -1598,7 +1598,7 @@ fn a_bitonal_page_cleans_at_rung_zero_rather_than_declining_wholesale() {
         }
     }
     assert!(
-        matches!(rung2.state, Session::Unopened),
+        matches!(rung2.session.state, Session::Unopened),
         "a bitonal page reached for the one rung that refuses it"
     );
 }
@@ -5023,14 +5023,14 @@ fn a_run_under_pressure_gives_back_the_inpainter_and_keeps_going() {
         .count();
     assert!(inpainted > 0, "the fixture reached no model rung, so there is nothing to give back");
     assert!(before.pressure.is_empty(), "the ladder fired on a machine that is not under pressure");
-    assert!(matches!(pipeline.rung2.state, Session::Parked), "rung 2 was never held, or not given back");
+    assert!(matches!(pipeline.rung2.session.state, Session::Parked), "rung 2 was never held, or not given back");
 
     // The kernel says the machine is short.
     assert_eq!(
         pipeline.take_pressure(cleaner_core::memory::Pressure::Critical),
         Some("notice.memory.unloadedInpainter")
     );
-    assert!(matches!(pipeline.rung2.state, Session::Surrendered));
+    assert!(matches!(pipeline.rung2.session.state, Session::Surrendered));
 
     let Some(after) = clean_fixture(&mut pipeline, "page-crowded.png", HIGHEST_LOCAL) else {
         return;
@@ -5057,13 +5057,193 @@ fn a_run_under_pressure_gives_back_the_inpainter_and_keeps_going() {
     assert_eq!(left_alone, inpainted, "the model regions were not the ones left alone");
     // The session is not rebuilt on the next region, or the next page: the step
     // is a latch and `Unopened` would be the state that reopens.
-    assert!(matches!(pipeline.rung2.state, Session::Surrendered));
+    assert!(matches!(pipeline.rung2.session.state, Session::Surrendered));
 
     // And the second step is the one rule 6 names, reported on the same stream.
     assert_eq!(
         pipeline.take_pressure(cleaner_core::memory::Pressure::Warn),
         Some("notice.memory.oneWindow")
     );
+}
+
+/// A stand-in for a LaMa session, for the turns [`LentSession`] takes with
+/// it: a number to tell two sessions apart, and a poison flag that makes it
+/// spent, as a poisoned registry row makes a real one.
+struct FakeLama {
+    id: u32,
+    poisoned: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl cleaner_core::residency::Resident for FakeLama {
+    fn spent(&self) -> bool {
+        self.poisoned.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl Faulted for FakeLama {
+    fn poison_session(&self) {
+        self.poisoned.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn accel_key(&self) -> &'static str {
+        accel::Accelerator::Cpu.label_key()
+    }
+}
+
+/// Opens fake sessions, numbered in the order they were opened.
+#[derive(Clone, Default)]
+struct FakeOpener(std::sync::Arc<std::sync::atomic::AtomicU32>);
+
+impl FakeOpener {
+    fn open(&self) -> Result<Option<Held<FakeLama>>, String> {
+        let id = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        Ok(Some(Held {
+            inpainter: FakeLama { id, poisoned: Default::default() },
+            provider: "cpu".to_owned(),
+            model_sha256: None,
+        }))
+    }
+
+    fn opened(&self) -> u32 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// A key of its own per test. Not [`registry::Kind::Inpainter`], because a
+/// pinned parked session of that kind would be spared by the eviction another
+/// test of this crate checks.
+fn fake_lama_key(of: &str) -> residency::Key {
+    residency::Key::new(registry::Kind::TextDetector, format!("fake-lama-{of}"))
+}
+
+/// Spin until a borrower really waits in the key's queue.
+fn until_queued(key: &residency::Key) {
+    let asked = std::time::Instant::now();
+    while residency::waiting(key) == 0 {
+        assert!(asked.elapsed() < std::time::Duration::from_secs(30), "the borrower never queued");
+        std::thread::yield_now();
+    }
+}
+
+/// **A render that panics hands the turn on.** A run catches a panicking
+/// region and goes on to close its job. If the panic kept the loan, an edit
+/// waiting for LaMa under that job's lock would wait while the run waited for
+/// the lock. The panicking session is poisoned and given back, so the waiter is
+/// served at once and opens a clean session.
+#[test]
+fn a_render_that_panics_hands_the_turn_to_the_borrower_waiting() {
+    let key = fake_lama_key("panic");
+    let opener = FakeOpener::default();
+    let (holding_tx, holding_rx) = std::sync::mpsc::channel();
+    let run = {
+        let (key, opener) = (key.clone(), opener.clone());
+        std::thread::spawn(move || {
+            let mut run = LentSession::<FakeLama>::new(key.clone());
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run.render(LamaSharing::Shared, || opener.open(), |_| {
+                    holding_tx.send(()).unwrap();
+                    until_queued(&key);
+                    panic!("a render failed inside the model");
+                })
+            }));
+            assert!(panicked.is_err());
+            assert!(matches!(run.state, Session::Parked), "the panic kept the session");
+            run
+        })
+    };
+    holding_rx.recv().unwrap();
+    let mut edit = LentSession::<FakeLama>::new(key.clone());
+    let started = std::time::Instant::now();
+    let id = edit.render(LamaSharing::Shared, || opener.open(), |held| held.inpainter.id).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "the edit waited out its patience");
+    assert_eq!(id, Some(2), "the edit was handed the poisoned session, or none");
+    drop(run.join().unwrap());
+}
+
+/// **A borrower waits for the session in use, for its patience at most.** One
+/// with no patience left opens a session of its own; one still waiting gets
+/// the session that was in use, the moment it is given back.
+#[test]
+fn a_borrower_waits_for_a_held_turn_until_its_patience_runs_out() {
+    let key = fake_lama_key("patience");
+    let opener = FakeOpener::default();
+    let (holding_tx, holding_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let run = {
+        let (key, opener) = (key.clone(), opener.clone());
+        std::thread::spawn(move || {
+            let mut run = LentSession::<FakeLama>::new(key);
+            let id = run.render(LamaSharing::Shared, || opener.open(), |held| {
+                holding_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                held.inpainter.id
+            });
+            (run, id.unwrap())
+        })
+    };
+    holding_rx.recv().unwrap();
+
+    let mut impatient = LentSession::<FakeLama>::new(key.clone());
+    impatient.patience = std::time::Duration::from_millis(150);
+    let started = std::time::Instant::now();
+    let own = impatient.render(LamaSharing::Shared, || opener.open(), |held| held.inpainter.id).unwrap();
+    assert!(started.elapsed() >= std::time::Duration::from_millis(150), "it did not wait");
+    assert_eq!(own, Some(2), "out of patience, it should open its own");
+
+    let patient = {
+        let (key, opener) = (key.clone(), opener.clone());
+        std::thread::spawn(move || {
+            let mut patient = LentSession::<FakeLama>::new(key);
+            let id = patient.render(LamaSharing::Shared, || opener.open(), |held| held.inpainter.id).unwrap();
+            (patient, id)
+        })
+    };
+    until_queued(&key);
+    release_tx.send(()).unwrap();
+    let (run, ran_on) = run.join().unwrap();
+    let (patient, waited_for) = patient.join().unwrap();
+    assert_eq!(ran_on, Some(1));
+    assert_eq!(waited_for, Some(1), "the patient borrower did not get the run's session");
+    assert_eq!(opener.opened(), 2);
+    drop((run, patient, impatient));
+}
+
+/// **A session parked between two renders is still the holder's.** The
+/// evictions that take only what nobody uses (SAM's room, a model's weight
+/// deleted) leave it, so the next render reuses it. The pressure ladder's
+/// [`LentSession::surrender`] lets go of it first, and the eviction after it
+/// takes it, as [`Pipeline::take_pressure`] does.
+#[test]
+fn a_parked_session_is_pinned_until_its_holder_surrenders() {
+    let key = fake_lama_key("pin");
+    let opener = FakeOpener::default();
+    let mut run = LentSession::<FakeLama>::new(key.clone());
+    let first = run.render(LamaSharing::Shared, || opener.open(), |held| held.inpainter.id).unwrap();
+    assert!(matches!(run.state, Session::Parked));
+
+    residency::evict_for_sam();
+    let again = run.render(LamaSharing::Shared, || opener.open(), |held| held.inpainter.id).unwrap();
+    assert_eq!((first, again), (Some(1), Some(1)), "eviction took a session the run was coming back for");
+
+    assert!(run.surrender());
+    residency::evict(registry::Kind::TextDetector);
+    let mut later = LentSession::<FakeLama>::new(key);
+    let after = later.render(LamaSharing::Shared, || opener.open(), |held| held.inpainter.id).unwrap();
+    assert_eq!(after, Some(2), "the surrendered session was not evicted");
+}
+
+/// Under `separate` nothing is lent, pinned or parked: a second holder opens a
+/// second session at once, and the first keeps its own until it is dropped.
+#[test]
+fn separate_sessions_neither_wait_nor_park() {
+    let key = fake_lama_key("separate");
+    let opener = FakeOpener::default();
+    let mut run = LentSession::<FakeLama>::new(key.clone());
+    let mut edit = LentSession::<FakeLama>::new(key);
+    let ran = run.render(LamaSharing::Separate, || opener.open(), |held| held.inpainter.id).unwrap();
+    assert!(matches!(run.state, Session::Held(_)), "separate gave the session back");
+    let edited = edit.render(LamaSharing::Separate, || opener.open(), |held| held.inpainter.id).unwrap();
+    assert_eq!((ran, edited), (Some(1), Some(2)));
 }
 
 /// **A region edit made during a run uses the run's LaMa, not a second one.**
@@ -5147,7 +5327,7 @@ fn opening_a_pipeline_costs_no_session() {
     assert!(!pipeline.detector.is_held(), "the detector was opened before a page asked");
     assert!(!pipeline.balloons.is_held());
     assert!(!pipeline.gate.is_held());
-    assert!(matches!(pipeline.rung2.state, Session::Unopened));
+    assert!(matches!(pipeline.rung2.session.state, Session::Unopened));
 
     // And the failure that *is* worth reporting early still is.
     let empty = Scratch::new("no-models");
@@ -6507,7 +6687,7 @@ fn overlapped_auto_leaves_what_one_pass_leaves() {
     );
     assert!(auto.regions_cleaned > 0);
     if !host_under_pressure() {
-        assert!(matches!(detector.rung2.state, Session::Unopened), "detection asked for the inpainter");
+        assert!(matches!(detector.rung2.session.state, Session::Unopened), "detection asked for the inpainter");
     }
 
     let events = recorder.events();
@@ -7373,7 +7553,7 @@ fn solid_bubbles_only_cleans_the_bubble_and_leaves_the_rest_detected() {
     let summary = execute_as(RunMode::Clean, "run-2", &chapter_id, &entries, &mut cleaner, Engine::Lama,
         &recorder.cancel, &recorder.sink());
     assert_eq!((summary.reason, summary.regions_cleaned, summary.errored), ("completed", 1, 0));
-    assert!(matches!(cleaner.rung2.state, Session::Unopened), "the option asked for the inpainter");
+    assert!(matches!(cleaner.rung2.session.state, Session::Unopened), "the option asked for the inpainter");
 
     let job = only_job(&library, &chapter_id);
     assert_eq!(job.project.patches.len(), 1);
@@ -7429,7 +7609,7 @@ fn solid_bubbles_only_in_one_run_leaves_what_detect_then_clean_leaves() {
     let kinds: Vec<&str> = recorder.kinds().into_iter().filter(|kind| *kind != "notice").collect();
     assert_eq!(kinds, ["page-started", "region-done", "page-done", "page-started", "region-done", "page-done",
         "run-finished"]);
-    assert!(matches!(pipeline.rung2.state, Session::Unopened), "the option asked for the inpainter");
+    assert!(matches!(pipeline.rung2.session.state, Session::Unopened), "the option asked for the inpainter");
 
     let two = Scratch::new("solid-two-step");
     let (two_library, two_chapter) = a_lettered_chapter(&two, 2);
@@ -7551,7 +7731,7 @@ fn solid_bubbles_only_keeps_what_rung_zero_does_not_settle_and_asks_no_model() {
     // ladder, which here has nothing on it.
     let mut plain = pipeline();
     plain.clean_detections("c1-p001", &bytes, Engine::Lama, &context, &detections[..1]).unwrap();
-    assert!(matches!(plain.rung2.state, Session::Unavailable), "the refused fill was not escalated");
+    assert!(matches!(plain.rung2.session.state, Session::Unavailable), "the refused fill was not escalated");
 
     let mut only = pipeline().with_solid_bubbles_only(true);
     let outcome = only.clean_detections("c1-p001", &bytes, Engine::Lama, &context, &detections).unwrap();
@@ -7559,7 +7739,7 @@ fn solid_bubbles_only_keeps_what_rung_zero_does_not_settle_and_asks_no_model() {
         ("flat".to_owned(), Engine::Fill.rung_key().to_owned()),
         ("routed".to_owned(), Engine::Fill.rung_key().to_owned()),
     ]);
-    assert!(matches!(only.rung2.state, Session::Unopened), "the option asked for the inpainter");
+    assert!(matches!(only.rung2.session.state, Session::Unopened), "the option asked for the inpainter");
 }
 
 /// A solid colour that is not the bubble's paper, through the walk: with the
@@ -8850,6 +9030,38 @@ fn a_run_reads_the_lama_hole_and_defaults_to_tight() {
     }
     assert!(!HoleMode::Tight.extends_lettering(), "tight keeps a detector's mask as it was found");
     assert!(HoleMode::Wide.extends_lettering() && HoleMode::Adaptive.extends_lettering());
+}
+
+/// **A run and an edit ask for LaMa by the same key.** The key is the folder's
+/// path, and the two found the folder in two ways: a run is given the folder
+/// that holds every model it opens, an edit the first one that holds LaMa. Given
+/// another spelling of the edit's folder, or a second folder that holds LaMa
+/// too, the run keyed its LaMa apart and the edit opened a second one.
+#[test]
+fn a_run_keys_lama_by_the_folder_an_edit_finds_it_in() {
+    let scratch = Scratch::new("lama-key");
+    let app_data = scratch.0.clone();
+    for dir in ["models", "bundle"] {
+        std::fs::create_dir_all(scratch.join(dir)).unwrap();
+        std::fs::write(scratch.join(dir).join(INPAINTER), b"").unwrap();
+    }
+    let edit = session_key(
+        registry::Kind::Inpainter,
+        &model_dir_holding(Some(&app_data), INPAINTER).unwrap(),
+        Preference::CpuOnly,
+    );
+    for given in [scratch.join("models").join("."), scratch.join("bundle")] {
+        let run = Pipeline::open_for_cleaning(&given, Preference::CpuOnly, Some(app_data.clone()));
+        assert_eq!(run.rung2.session.key, edit, "{}", given.display());
+        let settled = run.with_model_preferences(&serde_json::json!({"modelAccelerators": {"inpainter": "cpu"}})).unwrap();
+        assert_eq!(settled.rung2.preference, Preference::CpuOnly);
+        assert_eq!(settled.rung2.session.key, edit, "{} after the settings", given.display());
+    }
+    // A folder without LaMa is the run's own: its LaMa regions are declined.
+    let bare = scratch.join("bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    let run = Pipeline::open_for_cleaning(&bare, Preference::CpuOnly, Some(app_data));
+    assert_eq!(run.rung2.session.key, session_key(registry::Kind::Inpainter, &bare, Preference::CpuOnly));
 }
 
 /// **A run reads `lamaSharing` and shares LaMa when it says nothing.** An

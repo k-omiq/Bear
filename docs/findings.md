@@ -733,7 +733,7 @@ own (`Rung2::held` in `src-tauri/src/run.rs`). Edits during a run have been allo
 Auto run on three real bench pages (`~/dev/manga-bench-sets/test_pages_5px/pages`, 6 regions) held one LaMa for the
 whole run.
 
-Rung 2 now gives LaMa back after every render (`Rung2::park`) and borrows it for the next through
+Rung 2 now gives LaMa back after every render (`LentSession::park`) and borrows it for the next through
 `residency::lend`. It is a choice, Settings > Models > Cleaning > LaMa during a run (`lamaSharing`): Share one is the
 default, Own copy keeps the old behavior. Under Share one:
 
@@ -748,15 +748,24 @@ default, Own copy keeps the old behavior. Under Share one:
   and the idle grace still take it.
 - Runs going at the same time on one model folder and provider now take turns with one LaMa instead of rendering
   side by side.
+- The run and the edit key LaMa by the folder that holds `lama-manga.onnx` (`lama_dir` in `src-tauri/src/run.rs`),
+  so a run given the models root and an edit that resolves the downloaded folder ask for the same session.
 
-A run renders outside its job lock and takes nothing else while it holds LaMa, so an edit waiting for LaMa under its
-page lock cannot deadlock with it. Two reviews (bugs, and platform safety per execution provider) found sequential
+Why it cannot deadlock: a loan holder waits on nothing between its borrow and its checkin. Rung 2 borrows, renders and
+gives LaMa back with no lock taken in between (`LentSession::render`). The waiters may hold locks: a region edit and a
+refinish wait for LaMa under their chapter's job lock, and that is safe only because of that rule. A run renders
+between its two job-lock holds, so it never holds the loan while it asks for a job lock. `clean_picks_here` also holds
+the job lock, but it renders only Fill, never LaMa. The cost of the order: an edit holds its chapter's job lock while
+it waits for LaMa, up to 20 s, so a second edit or a run on the same chapter waits that long too. Taking the turn
+before the job lock would remove that, but then an edit holding the loan would wait for a job lock, which breaks the
+rule above, so it was not done. The turns are tested with a stand-in session: a panic with a waiter queued, a wait
+that runs out of patience and one that does not, and the pin under eviction and surrender. Two reviews (bugs, and platform safety per execution provider) found sequential
 use of one ORT session from different threads safe on CPU, CoreML, WebGPU, DirectML and CUDA: the `ort` crate marks
 `Session` Send and Sync, DirectML forbids only concurrent `Run` calls, and region commands already ran on whichever
 blocking-pool thread was free. `a_region_edit_during_a_run_shares_the_runs_lama` (real weights) counted 2 LaMa rows on
 the old code and 1 on the new, and 2 under Own copy.
 
-Not measured: how long an edit waits behind a region in practice (on WebGPU an Own copy edit already waited for the
+Not measured: how long an edit, and the chapter job lock it holds, waits behind a region in practice (on WebGPU an Own copy edit already waited for the
 device one tile at a time, Share one makes that a whole region); a run waiting behind six finishing previews; the
 panel itself on Windows and Linux. Latent: CUDA sets its device only on the thread that builds the session and reuses
 per-thread contexts without setting it again, which is right only while the device is 0, as `CUDA::default()` is.
