@@ -5023,7 +5023,7 @@ fn a_run_under_pressure_gives_back_the_inpainter_and_keeps_going() {
         .count();
     assert!(inpainted > 0, "the fixture reached no model rung, so there is nothing to give back");
     assert!(before.pressure.is_empty(), "the ladder fired on a machine that is not under pressure");
-    assert!(matches!(pipeline.rung2.state, Session::Held(_)), "rung 2 was never held");
+    assert!(matches!(pipeline.rung2.state, Session::Parked), "rung 2 was never held, or not given back");
 
     // The kernel says the machine is short.
     assert_eq!(
@@ -5064,6 +5064,67 @@ fn a_run_under_pressure_gives_back_the_inpainter_and_keeps_going() {
         pipeline.take_pressure(cleaner_core::memory::Pressure::Warn),
         Some("notice.memory.oneWindow")
     );
+}
+
+/// **A region edit made during a run uses the run's LaMa, not a second one.**
+///
+/// The run held its session from its first LaMa region to its end, so an edit
+/// in the meantime (a brush stroke on another page, cleaned with LaMa) found
+/// nothing parked and loaded its own 510 MB beside it: two "LaMa Manga" rows
+/// in the editor's Using memory now panel, on every platform. Rung 2 now gives
+/// the session back after each render and borrows it again for the next, so
+/// the edit gets the run's session between two of its regions, and the run
+/// gets it back after the edit.
+#[test]
+fn a_region_edit_during_a_run_shares_the_runs_lama() {
+    let _serial = one_gpu_at_a_time();
+    let Some(pipeline) = the_real_pipeline() else { return };
+    let (models, preference) = (pipeline.rung2.models.clone(), pipeline.rung2.preference);
+    drop(pipeline);
+    let Ok(bytes) = std::fs::read("../fixtures/pages/page-crowded.png") else {
+        eprintln!("skipped: no fixture page");
+        return;
+    };
+    let page = decode(&bytes).unwrap();
+    let fitted = fitted_over(&page, Rect::new(40, 40, 48, 32));
+    let lamas = || registry::loaded().iter()
+        .filter(|row| row.kind == registry::Kind::Inpainter && row.model_name.as_deref() == Some("LaMa Manga"))
+        .count();
+    let rung = |sharing| {
+        let mut rung2 = Rung2::new(&models, preference);
+        rung2.sharing = sharing;
+        rung2
+    };
+
+    // `separate`, the old way and still a choice, is checked as well: there
+    // the edit loads its own and never waits.
+    for (sharing, during) in [(LamaSharing::Shared, 1), (LamaSharing::Separate, 2)] {
+        residency::evict(registry::Kind::Inpainter);
+        assert_eq!(lamas(), 0, "{sharing:?}: a LaMa was loaded before the run began");
+
+        // The run's first LaMa region, and the run still going.
+        let mut run = rung(sharing);
+        render_rung(&mut run, Engine::Lama, &page, &fitted).expect("the run's region rendered");
+        assert_eq!(lamas(), 1, "{sharing:?}");
+
+        // A hand edit on another thread, as a Tauri command runs, before the
+        // run's next region.
+        let during_edit = std::thread::scope(|scope| scope.spawn(|| {
+            let mut edit = rung(sharing);
+            render_rung(&mut edit, Engine::Lama, &page, &fitted).expect("the edit rendered");
+            let seen = lamas();
+            drop(edit);
+            seen
+        }).join().unwrap());
+        assert_eq!(during_edit, during, "{sharing:?}: LaMa sessions while the edit ran");
+
+        // The run's next region has one, and the run's end leaves one parked
+        // for the next run, as before.
+        render_rung(&mut run, Engine::Lama, &page, &fitted).expect("the run's next region rendered");
+        drop(run);
+        assert_eq!(lamas(), 1, "{sharing:?}: the run's end left more or less than one");
+    }
+    residency::evict(registry::Kind::Inpainter);
 }
 
 /// **Opening a pipeline opens no sessions.**
@@ -8789,6 +8850,23 @@ fn a_run_reads_the_lama_hole_and_defaults_to_tight() {
     }
     assert!(!HoleMode::Tight.extends_lettering(), "tight keeps a detector's mask as it was found");
     assert!(HoleMode::Wide.extends_lettering() && HoleMode::Adaptive.extends_lettering());
+}
+
+/// **A run reads `lamaSharing` and shares LaMa when it says nothing.** An
+/// unknown value refuses the run, as an unknown hole does.
+#[test]
+fn a_run_reads_lama_sharing_and_defaults_to_shared() {
+    let pipeline = || Pipeline::open_for_cleaning(Path::new("no-weights-live-here"), Preference::CpuOnly, None);
+    for settings in [serde_json::json!({}), serde_json::json!({"lamaSharing": null})] {
+        assert_eq!(pipeline().with_model_preferences(&settings).unwrap().rung2.sharing, LamaSharing::Shared, "{settings}");
+    }
+    for (name, sharing) in [("shared", LamaSharing::Shared), ("separate", LamaSharing::Separate)] {
+        let opened = pipeline().with_model_preferences(&serde_json::json!({"lamaSharing": name})).unwrap();
+        assert_eq!(opened.rung2.sharing, sharing, "{name}");
+    }
+    for bad in [serde_json::json!({"lamaSharing": "both"}), serde_json::json!({"lamaSharing": true})] {
+        assert!(pipeline().with_model_preferences(&bad).is_err(), "{bad}");
+    }
 }
 
 /// **The LaMa rung's finishing is read only when every model is finished.**

@@ -756,6 +756,11 @@ impl Bench {
         rung2.hole = settings.as_ref()
             .and_then(|settings| run::lama_hole_from_settings(settings).ok())
             .unwrap_or_default();
+        // Whether this edit shares the run's LaMa. Unreadable is the default,
+        // as an unreadable hole is.
+        rung2.sharing = settings.as_ref()
+            .and_then(|settings| run::lama_sharing_from_settings(settings).ok())
+            .unwrap_or_default();
         rung2.flux = LocalFlux::from_settings(settings.as_ref(), app_data.clone());
         Bench {
             rung2,

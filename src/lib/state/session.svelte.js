@@ -55,7 +55,7 @@ import {
 import { hexOnCommit } from '../ui/color.js'
 
 import { localSeconds, normalizeDenoiseTarget } from '../model/denoise.js'
-import { FINISHINGS, FINISHING_ALIASES, FLUX3_GENERATION_ALIASES, FLUX3_GENERATION_PARTS, LAMA_HOLES, WORK_LONG_SIDES } from '../model/model-names.js'
+import { FINISHINGS, FINISHING_ALIASES, FLUX3_GENERATION_ALIASES, FLUX3_GENERATION_PARTS, LAMA_HOLES, LAMA_SHARINGS, WORK_LONG_SIDES } from '../model/model-names.js'
 import { ANALYSIS_TARGETS, CLOUD_STAGES, DEFAULT_DETECTOR, DEFAULT_DETECTOR_MODELS, DETECTION_MODES, DETECTION_MODE_IDS, DETECTOR_MODEL_IDS, LANGUAGES, defaultAnalysisTargets, detectionModeOf, detectsOnCloud, migrateDetectorChoice, normalizeAnalysisTargets, unifyAnalysisTargets } from '../model/pipelines.js'
 
 const STORAGE_KEY = 'session.v1'
@@ -217,6 +217,7 @@ function viewport() {
  * @property {boolean} exportPsdLetteringLayer - whether a layered PSD carries a hidden layer marking where the lettering was
  * @property {'source'|'grayscale'} exportTone - the tone the Export dialog starts on; the dialog's choice is what an export uses
  * @property {typeof LAMA_HOLES[number]} lamaHole - how LaMa cuts the hole it fills: tight (the lettering), wide (the lettering and 5 px), or adaptive (wide beside flat page, tight beside art)
+ * @property {typeof LAMA_SHARINGS[number]} lamaSharing - whether a run and an edit made during it use one LaMa (shared, an edit may wait) or each its own (separate, more memory)
  * @property {Record<string, string|null>} detection - the detector each source language uses, by language id; null skips the language
  * @property {'normal'|'advanced'} detectionMode - the one detection choice; it fixes `detectorModels` and `textPolicy` (`pipelines.js#DETECTION_MODES`)
  * @property {string[]} detectorModels - the mode's detection models, by stored id; derived, never stored
@@ -273,6 +274,7 @@ function defaults() {
     exportPsdLetteringLayer: false,
     exportTone: 'source',
     lamaHole: LAMA_HOLES[0],
+    lamaSharing: LAMA_SHARINGS[0],
     detection: defaultDetection(),
     detectionMode: 'normal',
     detectorModels: [...DEFAULT_DETECTOR_MODELS],
@@ -399,6 +401,7 @@ export function sanitizeSession(raw) {
     exportPsdLetteringLayer: boolOr(record.exportPsdLetteringLayer, base.exportPsdLetteringLayer),
     exportTone: /** @type {'source'|'grayscale'} */ (oneOf(record.exportTone, EXPORT_TONES, base.exportTone)),
     lamaHole: /** @type {typeof LAMA_HOLES[number]} */ (oneOf(record.lamaHole, LAMA_HOLES, base.lamaHole)),
+    lamaSharing: /** @type {typeof LAMA_SHARINGS[number]} */ (oneOf(record.lamaSharing, LAMA_SHARINGS, base.lamaSharing)),
     detection: sanitizeDetection(record.detection),
     // The mode, or for a record written before modes the mode its
     // combination reached for. The models and the policy are the mode's,
@@ -519,6 +522,7 @@ function persistable() {
     exportPsdLetteringLayer: session.exportPsdLetteringLayer,
     exportTone: session.exportTone,
     lamaHole: session.lamaHole,
+    lamaSharing: session.lamaSharing,
     detection: { ...session.detection },
     detectionMode: session.detectionMode,
     analysisTargets: { ...session.analysisTargets },
@@ -666,6 +670,19 @@ export function setExportTone(tone) {
  */
 export function setLamaHole(hole) {
   session.lamaHole = /** @type {typeof LAMA_HOLES[number]} */ (oneOf(hole, LAMA_HOLES, session.lamaHole))
+  save()
+}
+
+/**
+ * Whether a run and a region edit made during it use one LaMa. The backend
+ * reads `lamaSharing` when a run or a hand edit opens, so Settings writes it
+ * there first (`SettingsDialog.svelte#chooseLamaSharing`) and the session takes
+ * it after.
+ *
+ * @param {unknown} sharing - one of `LAMA_SHARINGS`
+ */
+export function setLamaSharing(sharing) {
+  session.lamaSharing = /** @type {typeof LAMA_SHARINGS[number]} */ (oneOf(sharing, LAMA_SHARINGS, session.lamaSharing))
   save()
 }
 
@@ -1391,6 +1408,7 @@ export function adoptBackendSettings(settings) {
   if (record.exportPsdLetteringLayer !== undefined) setExportPsdLetteringLayer(record.exportPsdLetteringLayer === true)
   if (record.exportTone !== undefined) setExportTone(/** @type {any} */ (record.exportTone))
   if (record.lamaHole !== undefined) setLamaHole(record.lamaHole)
+  if (record.lamaSharing !== undefined) setLamaSharing(record.lamaSharing)
   if (record.cloudWorkLongSide !== undefined) setCloudWorkLongSide(record.cloudWorkLongSide)
   if (record.cloudFlux3Generation !== undefined) setCloudFlux3Generation(record.cloudFlux3Generation)
   if (record.cloudFinishing !== undefined || record.cloudFinishingGrayscale !== undefined || record.finishingEveryModel !== undefined) {
@@ -1465,6 +1483,7 @@ export function backendSettingsPatch() {
     exportPsdLetteringLayer: session.exportPsdLetteringLayer,
     exportTone: session.exportTone,
     lamaHole: session.lamaHole,
+    lamaSharing: session.lamaSharing,
     theme: session.theme,
     readingDirection: session.readingDirection,
     cloudEngines: session.cloudAllowed ? 'allowed' : 'blocked',

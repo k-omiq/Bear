@@ -723,6 +723,46 @@ Windows or Linux, and a one-machine number is never written as though it were ge
 
 ## What has not been measured
 
+**Two LaMa during a run (2026-11-04): fixed in code, measured headless on this Mac, not run in the real app.**
+The editor's Using memory now panel showed two "LaMa Manga" rows, about 706 MB each, while a run was going and
+the user brushed or edited regions (seen on the Mac, and reported on Windows and Linux). It was one session per
+holder, not one session listed twice. A run's rung 2 checked LaMa out of `cleaner_core::residency` at its first
+LaMa region and held it to the run's end, so a region edit in the meantime found nothing parked and opened its
+own (`Rung2::held` in `src-tauri/src/run.rs`). Edits during a run have been allowed on other pages since
+1.0.0-beta.3, so this was not a beta.19 regression; the brush, whose first engine is LaMa, made it common. A plain
+Auto run on three real bench pages (`~/dev/manga-bench-sets/test_pages_5px/pages`, 6 regions) held one LaMa for the
+whole run.
+
+Rung 2 now gives LaMa back after every render (`Rung2::park`) and borrows it for the next through
+`residency::lend`. It is a choice, Settings > Models > Cleaning > LaMa during a run (`lamaSharing`): Share one is the
+default, Own copy keeps the old behavior. Under Share one:
+
+- Turns are taken in the order asked (a queue per key), so a run asking again right after its region does not
+  starve a waiting edit; the standard library's locks are not fair.
+- A wait gives up after `LAMA_TURN_PATIENCE` (20 s) and that holder opens a copy of its own, so a hung render or a
+  slow CPU region costs a second copy for a while, not a command that never answers.
+- A render that panics poisons the session and gives it back before the panic goes on. Without that, a run that
+  catches the panic and then closes its job would wait on an edit's job lock while the edit waited on the run.
+- The run pins its key (`residency::pin`), so `evict_for_sam`, another run's pressure step and an accelerator change
+  do not drop its LaMa between two of its regions, as they never could while it was checked out. The close button
+  and the idle grace still take it.
+- Runs going at the same time on one model folder and provider now take turns with one LaMa instead of rendering
+  side by side.
+
+A run renders outside its job lock and takes nothing else while it holds LaMa, so an edit waiting for LaMa under its
+page lock cannot deadlock with it. Two reviews (bugs, and platform safety per execution provider) found sequential
+use of one ORT session from different threads safe on CPU, CoreML, WebGPU, DirectML and CUDA: the `ort` crate marks
+`Session` Send and Sync, DirectML forbids only concurrent `Run` calls, and region commands already ran on whichever
+blocking-pool thread was free. `a_region_edit_during_a_run_shares_the_runs_lama` (real weights) counted 2 LaMa rows on
+the old code and 1 on the new, and 2 under Own copy.
+
+Not measured: how long an edit waits behind a region in practice (on WebGPU an Own copy edit already waited for the
+device one tile at a time, Share one makes that a whole region); a run waiting behind six finishing previews; the
+panel itself on Windows and Linux. Latent: CUDA sets its device only on the thread that builds the session and reuses
+per-thread contexts without setting it again, which is right only while the device is 0, as `CUDA::default()` is.
+The CTD detector is still checked out for a whole run, so a region edit that needs text detection during a run can
+still open a second CTD; that was not looked at here.
+
 **Eraser on moved copies, a live gradient, and Live copy (2026-11-03): tested in code, not run in the real app.**
 The eraser read a layer as drawn (already moved by its layer style) and mapped the stroke through the move again,
 so a moved or turned Region copy was missed. It now edits the layer as stored, in the frame its style is stated in:

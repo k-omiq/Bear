@@ -670,6 +670,20 @@ export const en = {
           adaptive: 'Wide where the page beside the text is plain or black, tight where it is art. Letter marks on plain areas go away and most art under the text is kept; a glowing title over art can still smear. LaMa on this computer only; cloud models ignore it.',
         },
       },
+      // Settings > Models > Cleaning: whether a run and an edit made during it
+      // use one LaMa (`model-names.js#lamaSharingKey`). Shared is the default.
+      lamaSharing: {
+        label: 'LaMa during a run',
+        saveFailed: 'Could not save the LaMa choice. Nothing changed.',
+        option: {
+          shared: 'Share one',
+          separate: 'Own copy',
+        },
+        hint: {
+          shared: 'The default. Everything that uses LaMa on this computer shares one copy: a run, an edit made during it, and runs going at the same time. It is in memory once. An edit may wait for the region a run is cleaning, a few seconds on a graphics card and longer on the CPU, and loads a copy of its own after 20 s.',
+          separate: 'Each run, and each edit made during a run, keeps a LaMa of its own and does not wait for another one\'s region, as in earlier versions. Each extra copy uses about 0.5 to 1.2 GB more memory, or graphics memory.',
+        },
+      },
     },
     // The weights and the ONNX Runtime are not bundled: they are downloaded
     // after install. Everything here is about
