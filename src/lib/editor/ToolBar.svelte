@@ -1817,6 +1817,7 @@
      x. `ui/RangeField.svelte` reads both widths. */
   .adjust {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--s-2);
     --field-label: 84px;
     --field-readout: 52px;
@@ -1903,6 +1904,7 @@
   .row-note {
     grid-column: 2;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--s-2);
     justify-items: start;
     margin-top: calc(-1 * var(--s-1));

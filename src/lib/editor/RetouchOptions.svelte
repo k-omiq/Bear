@@ -287,6 +287,7 @@
 
   .stops {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--s-2);
     --field-label: 52px;
     --field-readout: 36px;
@@ -306,7 +307,7 @@
 
   .stop {
     display: grid;
-    grid-template-columns: auto auto 1fr auto;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--s-1);
   }
