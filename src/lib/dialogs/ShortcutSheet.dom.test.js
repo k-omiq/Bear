@@ -102,6 +102,26 @@ describe('the shortcut sheet', () => {
     await fireEvent.keyDown(window, { key: 'F8' })
     expect(screen.getByRole('status').textContent).toContain(t('shortcuts.run.solidBubbles'))
     expect(Object.keys(session.shortcuts)).toEqual(['run.solidBubbles'])
+
+    // Still listening, so "choose another" is the next key.
+    expect(within(row('shortcuts.run.fullClean')).getByText(t('shortcuts.rebind.listening'))).toBeTruthy()
+    await fireEvent.keyDown(window, { key: 'F10' })
+    expect(session.shortcuts['run.fullClean']).toEqual({ key: 'F10', shift: false, accel: false })
+    expect(within(row('shortcuts.run.fullClean')).getByText('F10')).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toBe('')
+  })
+
+  it('cancels on Escape after a conflict, and drops the message', async () => {
+    setShortcutBinding('run.solidBubbles', { key: 'F8' })
+    render(ShortcutSheet)
+    await fireEvent.click(tab('shortcuts.tab.run'))
+    await fireEvent.click(within(row('shortcuts.run.fullClean')).getByRole('button', { name: t('shortcuts.rebind.change', { name: t('shortcuts.run.fullClean') }) }))
+    await fireEvent.keyDown(window, { key: 'F8' })
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(within(row('shortcuts.run.fullClean')).getByText(t('shortcuts.rebind.unbound'))).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toBe('')
+    await fireEvent.keyDown(window, { key: 'F10' })
+    expect(Object.keys(session.shortcuts)).toEqual(['run.solidBubbles'])
   })
 
   it('stops listening on a click elsewhere, which WebKit does not turn into a blur', async () => {

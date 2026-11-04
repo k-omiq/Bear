@@ -450,6 +450,7 @@
     const id = recording
     if (event.key === 'Escape') {
       recording = null
+      message = null
       return
     }
     // Clearing, and the reason neither key can itself be bound: a recorder in
@@ -493,15 +494,17 @@
    * @param {{chord: import('../shortcuts.js').Chord|null, reasonKey: string|null}} recorded
    */
   function take(id, { chord, reasonKey }) {
+    // A refusal keeps the row listening, so the "choose another" it says can
+    // be done with the next press. Escape still cancels.
     if (reasonKey) {
-      recording = null
       message = { key: reasonKey }
       return
     }
     // A modifier on its own is the first half of a chord: keep listening.
     if (!chord) return
-    recording = null
-    report(setShortcutBinding(id, chord), id)
+    const result = setShortcutBinding(id, chord)
+    if (result.ok) recording = null
+    report(result, id)
   }
 
   /**
@@ -733,10 +736,10 @@
     role="status"
     aria-live="polite"
   >
-    {#if recording !== null}
-      {t('shortcuts.rebind.hint')}
-    {:else if message}
+    {#if message}
       {t(message.key, message.params)}
+    {:else if recording !== null}
+      {t('shortcuts.rebind.hint')}
     {/if}
   </p>
 </div>
