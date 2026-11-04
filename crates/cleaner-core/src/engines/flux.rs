@@ -77,6 +77,7 @@
 
 use crate::engines::model::{AnswerMemo, Decline, Error, Rendered, input_digest};
 use crate::engines::postprocess::Choice;
+use crate::engines::render::QwenEdit;
 use crate::fit::Fitted;
 use crate::image::Raster;
 use crate::sidecar::hardware::{self, Budget, Demand, Verdict};
@@ -334,10 +335,28 @@ impl Inpainter {
     /// ([`AnswerMemo`]), with no request: the model and its sampling are this
     /// session's and fixed, so the input is the whole of what it answered.
     pub fn render_with(&mut self, page: &Raster, fitted: &Fitted, finishing: Option<Choice>) -> Result<Rendered, Error> {
+        self.render_guided(page, fitted, finishing, None)
+    }
+
+    /// [`Inpainter::render_with`], with the user's guidance worded into the
+    /// prompt as the cloud worker for this model's family words it
+    /// ([`Recipe::prompt_for`]). `None` is the recipe's own words.
+    ///
+    /// The prompt is part of what an answer is remembered by: the same crop
+    /// asked with other words is a new request.
+    pub fn render_guided(
+        &mut self,
+        page: &Raster,
+        fitted: &Fitted,
+        finishing: Option<Choice>,
+        guidance: Option<&QwenEdit>,
+    ) -> Result<Rendered, Error> {
         let mut prepared = PreparedRender::prepare_as(page, fitted, self.recipe.preprocessing)?;
         prepared.set_finishing(finishing);
         let (w, h) = (prepared.crop().w, prepared.crop().h);
-        let key = input_digest(&[&w.to_le_bytes(), &h.to_le_bytes(), prepared.image_rgb8(), prepared.hint_gray8()]);
+        let prompt = self.recipe.prompt_for(prepared.hint_gray8(), w, h, guidance);
+        let key = input_digest(&[&w.to_le_bytes(), &h.to_le_bytes(), prepared.image_rgb8(), prepared.hint_gray8(),
+            prompt.as_bytes()]);
         if let Some((width, height, edited)) = self.answers.get(&key) {
             return prepared.composite(&GeneratedCrop::new(width, height, &edited));
         }
@@ -362,7 +381,7 @@ impl Inpainter {
                 Encoding::Gray8,
                 prepared.hint_gray8(),
             ),
-            prompt: self.recipe.prompt_for(prepared.hint_gray8(), w, h),
+            prompt,
             steps: self.recipe.steps,
             seed: SEED,
             guidance: self.recipe.guidance,
@@ -978,6 +997,33 @@ mod tests {
         assert!(finished.tone.is_none(), "a finishing takes the place of the tone alignment");
         inpainter.render(&page, &fitted_over(&page, Rect::new(60, 80, 50, 30))).unwrap();
         assert_eq!(fake.requests.load(Ordering::Relaxed), sent + 1);
+    }
+
+    /// The user's guidance reaches the model in the family's words, and the
+    /// same crop asked with other words is asked again rather than answered
+    /// from the memo.
+    #[test]
+    fn guidance_is_worded_into_the_prompt_and_asks_again() {
+        use crate::engines::render::QwenTarget;
+        let fake = Fake::start(Behaviour::Blacken);
+        let page = gray_page(600, 700, 200);
+        let fitted = fitted_over(&page, Rect::new(240, 300, 60, 40));
+        let mut inpainter = fake.inpainter(generous());
+        inpainter.render(&page, &fitted).unwrap();
+        assert_eq!(fake.prompt().as_deref(), Some(PROMPT));
+        let sent = fake.requests.load(Ordering::Relaxed);
+
+        let guided = QwenEdit { target: QwenTarget::Other, description: "a striped bench".into() };
+        inpainter.render_guided(&page, &fitted, None, Some(&guided)).unwrap();
+        assert_eq!(fake.requests.load(Ordering::Relaxed), sent + 1, "other words were answered from the memo");
+        assert_eq!(fake.prompt(), Some(crate::sidecar::models::klein_prompt(Some(&guided))));
+        assert!(fake.prompt().unwrap().contains("Behind the lettering: a striped bench."));
+
+        inpainter.render_guided(&page, &fitted, None, Some(&guided)).unwrap();
+        let auto = QwenEdit { target: QwenTarget::Auto, description: String::new() };
+        inpainter.render_guided(&page, &fitted, None, Some(&auto)).unwrap();
+        assert_eq!(fake.requests.load(Ordering::Relaxed), sent + 1,
+            "the same words, and Automatic with nothing described, are the answers already had");
     }
 
     /* -- the shared vocabulary ----------------------------------------- */
