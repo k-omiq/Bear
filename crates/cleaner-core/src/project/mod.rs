@@ -823,6 +823,21 @@ pub struct PageDetectionChanges {
     pub updated: Vec<LoadedDetection>,
     pub created: Vec<LoadedDetection>,
     pub removed: Vec<String>,
+    /// The user erased one of `removed` whole, so the page is Detect's work
+    /// again ([`Job::queue_redetect`]). Not for a detection that left only to
+    /// be moved or merged: what it found is still on a page.
+    pub erased: bool,
+}
+
+/// Which marks a stored Detect result sets on its page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DetectPass {
+    /// A Detect of the whole page on this computer: `detected`.
+    Local,
+    /// A cloud pass over the whole page: `detected` and `cloud_detected`.
+    Cloud,
+    /// One area of the page: none, since an area is not the page.
+    Area,
 }
 
 /// A stored detection with its two masks read back, in page pixels.
@@ -1077,6 +1092,25 @@ pub struct Project {
     /// flush unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cloud_detected: Vec<usize>,
+    /// Which sources hold less than Detect found on them, as indices into
+    /// `sources`: the user deleted a stored detection, erased one whole, or
+    /// deleted a whole mask a clean made. Detect skips a page it finished
+    /// (`detected`, `cloud_detected`, `examined`) only while everything it
+    /// found there still stands, so a page here is Detect's work again
+    /// whatever those say ([`Job::queue_redetect`]).
+    ///
+    /// Its own record rather than a page taken out of `detected`: that mark
+    /// also decides how a Detect stores what it finds, and a page here keeps
+    /// what the user left on it. The next Detect of the page adds only the
+    /// text it does not hold ([`Job::add_page_detection_results`]) and takes
+    /// the page off this list. A mask erased only in part does not put a page
+    /// here: the text it no longer covers is text the user chose to keep.
+    ///
+    /// Cleared for a source whose hash changed, alongside `detected`.
+    /// Defaulted on read and skipped while empty, so old projects open and
+    /// flush unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redetect: Vec<usize>,
     /// Where a cancelled or crashed run stopped, as a position in
     /// `strip.order`, or `None` for a job that is not interrupted.
     ///
@@ -1171,6 +1205,7 @@ impl Project {
             errored: Vec::new(),
             detected: Vec::new(),
             cloud_detected: Vec::new(),
+            redetect: Vec::new(),
             interrupted_at: None,
             settings: serde_json::Value::Object(serde_json::Map::new()),
         }
@@ -2531,15 +2566,49 @@ impl Job {
     /// patch's box on this source: text that was cleaned already, by an
     /// earlier run or by hand, and must not be stored to be cleaned twice.
     ///
-    /// Every patch row counts, a deleted one included. A mask the user deleted
-    /// is text they chose to keep, and a detection over it would bring the
-    /// edit back through the next Clean.
-    pub fn detection_is_cleaned_already(&self, source_idx: usize, bbox: Rect) -> bool {
+    /// A mask the user erased part of is still on the page and still counts:
+    /// the text it no longer covers is text they chose to keep. A mask they
+    /// deleted whole (`visible` off) counts only with `deleted_too`. A Detect
+    /// passes `false`, because a Detect is asked to find that text again; a
+    /// run that also cleans passes `true`, so a button that says "clean" does
+    /// not undo the delete.
+    pub fn detection_is_cleaned_already(&self, source_idx: usize, bbox: Rect, deleted_too: bool) -> bool {
         self.project
             .patches
             .iter()
-            .filter(|record| record.source_idx == source_idx)
+            .filter(|record| record.source_idx == source_idx && (deleted_too || record.visible))
             .any(|record| half_inside(bbox, orientation::display_bbox(&self.project, record)))
+    }
+
+    /// Show or hide a patch: the soft delete of a mask and its undo. Flushes.
+    /// `Ok(None)` for an id no patch carries, `Ok(Some(source_idx))`
+    /// otherwise, also when the row was already as asked.
+    ///
+    /// Hiding one leaves its page Detect's work again
+    /// ([`Job::queue_redetect`]). Showing it again leaves the page queued:
+    /// the next Detect finds the mask's text held and adds nothing.
+    pub fn set_patch_visible(&mut self, id: &str, visible: bool) -> Result<Option<usize>, StoreError> {
+        let _write = self.begin_write()?;
+        let Some(record) = self.project.patches.iter_mut().find(|row| row.id == id) else {
+            return Ok(None);
+        };
+        let source_idx = record.source_idx;
+        if record.visible == visible {
+            return Ok(Some(source_idx));
+        }
+        record.visible = visible;
+        let queued = self.project.redetect.clone();
+        if !visible {
+            self.queue_redetect(source_idx);
+        }
+        if let Err(error) = self.flush() {
+            if let Some(record) = self.project.patches.iter_mut().find(|row| row.id == id) {
+                record.visible = !visible;
+            }
+            self.project.redetect = queued;
+            return Err(error);
+        }
+        Ok(Some(source_idx))
     }
 
     /// Store one detection and flush: its two masks first, then the record,
@@ -2665,7 +2734,7 @@ impl Job {
         &mut self, source_idx: usize, page_id: &str,
         detections: Vec<LoadedDetection>, untouched: Vec<impl Into<PendingUntouched>>,
     ) -> Result<(), StoreError> {
-        self.save_page_detection_results(source_idx, page_id, detections, untouched, true, true)
+        self.save_page_detection_results(source_idx, page_id, detections, untouched, true, DetectPass::Local)
     }
 
     /// Add a cloud Detect pass without replacing existing masks or edits.
@@ -2676,7 +2745,7 @@ impl Job {
         &mut self, source_idx: usize, page_id: &str,
         detections: Vec<LoadedDetection>, untouched: Vec<impl Into<PendingUntouched>>,
     ) -> Result<(), StoreError> {
-        self.save_page_detection_results(source_idx, page_id, detections, untouched, false, true)
+        self.save_page_detection_results(source_idx, page_id, detections, untouched, false, DetectPass::Cloud)
     }
 
     /// Add what a Detect of one area of a page found to what the page holds.
@@ -2692,6 +2761,27 @@ impl Job {
     pub fn add_area_detection_results(
         &mut self, source_idx: usize, page_id: &str,
         detections: Vec<LoadedDetection>, untouched: Vec<impl Into<PendingUntouched>>,
+    ) -> Result<usize, StoreError> {
+        self.add_detection_results(source_idx, page_id, detections, untouched, DetectPass::Area)
+    }
+
+    /// [`Job::add_area_detection_results`] for a Detect of a whole page on
+    /// [`Project::redetect`]: what the user left on the page stays as it is,
+    /// edits included, and only what it does not hold is added. Unlike an
+    /// area, the page is finished: it is recorded in `detected`, and in
+    /// `cloud_detected` for a cloud pass, and leaves `redetect`, in the same
+    /// write, also when nothing was new.
+    pub fn add_page_detection_results(
+        &mut self, source_idx: usize, page_id: &str,
+        detections: Vec<LoadedDetection>, untouched: Vec<impl Into<PendingUntouched>>, cloud: bool,
+    ) -> Result<usize, StoreError> {
+        let pass = if cloud { DetectPass::Cloud } else { DetectPass::Local };
+        self.add_detection_results(source_idx, page_id, detections, untouched, pass)
+    }
+
+    fn add_detection_results(
+        &mut self, source_idx: usize, page_id: &str,
+        detections: Vec<LoadedDetection>, untouched: Vec<impl Into<PendingUntouched>>, pass: DetectPass,
     ) -> Result<usize, StoreError> {
         // Stored boxes are in the source's own orientation, new ones in the
         // page's as it is shown.
@@ -2714,7 +2804,17 @@ impl Job {
                 .map(|record| record.order))
             .max()
             .map_or(0, |order| order.saturating_add(1));
+        // A whole page looked at again also finds the text the page holds as
+        // a row (held or declined), and that text is held already. An area's
+        // detections were cut by the caller and keep their old rule.
+        let held_rows: Vec<Rect> = if pass == DetectPass::Area { Vec::new() } else {
+            self.project.regions_untouched.iter()
+                .filter(|row| row.source_idx == source_idx)
+                .map(|row| shown(row.bbox))
+                .collect()
+        };
         let detections: Vec<LoadedDetection> = detections.into_iter()
+            .filter(|found| !held_rows.iter().any(|kept| same(found.record.bbox, *kept)))
             .map(|mut found| {
                 found.record.order = order;
                 order = order.saturating_add(1);
@@ -2725,18 +2825,19 @@ impl Job {
             .filter(|pending| !rows.iter().any(|kept| same(pending.row.bbox, *kept)))
             .collect();
         let stored = detections.len();
-        if stored == 0 && untouched.is_empty() {
+        if stored == 0 && untouched.is_empty() && pass == DetectPass::Area {
             return Ok(0);
         }
-        self.save_page_detection_results(source_idx, page_id, detections, untouched, false, false)?;
+        self.save_page_detection_results(source_idx, page_id, detections, untouched, false, pass)?;
         Ok(stored)
     }
 
     fn save_page_detection_results(
         &mut self, source_idx: usize, page_id: &str,
         detections: Vec<LoadedDetection>, untouched: Vec<impl Into<PendingUntouched>>, replace: bool,
-        whole_page: bool,
+        pass: DetectPass,
     ) -> Result<(), StoreError> {
+        let whole_page = pass != DetectPass::Area;
         let _write = self.begin_write()?;
         let _detection_io = detection_io().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let before = self.project.clone();
@@ -2785,8 +2886,15 @@ impl Job {
             if whole_page && !self.project.detected.contains(&source_idx) {
                 self.project.detected.push(source_idx);
             }
-            // An append is a cloud pass; a replace drops what one stored.
-            if whole_page && !replace && !self.project.cloud_detected.contains(&source_idx) {
+            // A whole page looked at again without replacing holds what
+            // Detect finds there. A replace is Auto's detect visit, which
+            // does not look under a mask deleted whole, so its page stays
+            // queued for a Detect that does.
+            if whole_page && !replace {
+                self.project.redetect.retain(|index| *index != source_idx);
+            }
+            // A replace drops what a cloud pass stored.
+            if pass == DetectPass::Cloud && !self.project.cloud_detected.contains(&source_idx) {
                 self.project.cloud_detected.push(source_idx);
             } else if replace {
                 self.project.cloud_detected.retain(|index| *index != source_idx);
@@ -2807,7 +2915,7 @@ impl Job {
         updated: Vec<LoadedDetection>, created: Vec<LoadedDetection>, removed: &[String],
     ) -> Result<Vec<String>, StoreError> {
         self.rewrite_detections(vec![PageDetectionChanges {
-            source_idx, page_id: page_id.to_owned(), updated, created, removed: removed.to_vec(),
+            source_idx, page_id: page_id.to_owned(), updated, created, removed: removed.to_vec(), erased: false,
         }]).map(|mut pages| pages.pop().unwrap_or_default())
     }
 
@@ -2839,7 +2947,10 @@ impl Job {
             let mut named = std::collections::HashSet::new();
             let mut superseded = Vec::new();
             let mut answers = Vec::with_capacity(pages.len());
-            for PageDetectionChanges { source_idx, page_id, updated, created, removed } in pages {
+            for PageDetectionChanges { source_idx, page_id, updated, created, removed, erased } in pages {
+                if erased {
+                    self.queue_redetect(source_idx);
+                }
                 let on_page = |project: &Project, id: &str| project.detections.iter()
                     .position(|row| row.id == id && row.source_idx == source_idx);
                 for mut found in updated {
@@ -3005,14 +3116,19 @@ impl Job {
     /// Remove one detection, flush, and delete its files. It has no pixels to
     /// restore, so this is the whole of deleting one. `None` for an id no
     /// detection carries.
+    ///
+    /// The page is Detect's work again ([`Job::queue_redetect`]).
     pub fn remove_detection(&mut self, id: &str) -> Result<Option<DetectedRegion>, StoreError> {
         let _write = self.begin_write()?;
         let Some(position) = self.project.detections.iter().position(|row| row.id == id) else {
             return Ok(None);
         };
+        let queued = self.project.redetect.clone();
         let record = self.project.detections.remove(position);
+        self.queue_redetect(record.source_idx);
         if let Err(error) = self.flush() {
             self.project.detections.insert(position, record);
+            self.project.redetect = queued;
             return Err(error);
         }
         self.delete_detection_files(std::slice::from_ref(&record));
@@ -3348,6 +3464,15 @@ impl Job {
         Ok(true)
     }
 
+    /// Put a source on [`Project::redetect`]: the user took away something
+    /// Detect found on it. Does not flush: the caller writes it with the edit
+    /// that made it true. Idempotent.
+    pub fn queue_redetect(&mut self, source_idx: usize) {
+        if !self.project.redetect.contains(&source_idx) {
+            self.project.redetect.push(source_idx);
+        }
+    }
+
     /// Record that the detector has looked at this source, and flush.
     ///
     /// Idempotent, because a page may be run more than once - a re-run over a
@@ -3564,6 +3689,7 @@ impl Job {
         self.project.examined.retain(|index| !stale.contains(index));
         self.project.detected.retain(|index| !stale.contains(index));
         self.project.cloud_detected.retain(|index| !stale.contains(index));
+        self.project.redetect.retain(|index| !stale.contains(index));
         // And the record of having failed on it, with the counter it keeps in
         // step: a re-cropped page has not failed in its present form either.
         let before = self.project.errored.len();
@@ -5898,11 +6024,25 @@ mod tests {
         let mut job = a_job(&scratch);
         // a_patch covers (8, 8, 12, 10).
         job.complete_region(0, &a_patch("c1-p001-r0"), None).unwrap();
-        assert!(job.detection_is_cleaned_already(0, Rect::new(9, 9, 6, 6)));
+        assert!(job.detection_is_cleaned_already(0, Rect::new(9, 9, 6, 6), false));
         // Exactly half inside.
-        assert!(job.detection_is_cleaned_already(0, Rect::new(14, 8, 12, 10)));
-        assert!(!job.detection_is_cleaned_already(0, Rect::new(15, 8, 12, 10)));
-        assert!(!job.detection_is_cleaned_already(1, Rect::new(9, 9, 6, 6)));
+        assert!(job.detection_is_cleaned_already(0, Rect::new(14, 8, 12, 10), false));
+        assert!(!job.detection_is_cleaned_already(0, Rect::new(15, 8, 12, 10), false));
+        assert!(!job.detection_is_cleaned_already(1, Rect::new(9, 9, 6, 6), false));
+        // A mask deleted whole hides nothing from a Detect, and still
+        // does from a run that cleans.
+        job.complete_region(0, &a_patch("c1-p001-r0"), None).unwrap();
+        assert_eq!(job.set_patch_visible("c1-p001-r0", false).unwrap(), Some(0));
+        assert!(!job.detection_is_cleaned_already(0, Rect::new(9, 9, 6, 6), false));
+        assert!(job.detection_is_cleaned_already(0, Rect::new(9, 9, 6, 6), true));
+        assert_eq!(job.project.redetect, vec![0], "a whole mask deleted is Detect's work again");
+        assert_eq!(job.set_patch_visible("nope", false).unwrap(), None);
+        // Auto's detect visit replaces and does not look under the deleted
+        // mask, so the page stays queued; a Detect that adds takes it off.
+        job.replace_page_detection_results(0, "c1-p001", Vec::new(), Vec::<RegionUntouched>::new()).unwrap();
+        assert_eq!(job.project.redetect, vec![0]);
+        assert_eq!(job.add_page_detection_results(0, "c1-p001", Vec::new(), Vec::<RegionUntouched>::new(), false).unwrap(), 0);
+        assert!(job.project.redetect.is_empty() && job.project.detected.contains(&0));
     }
 
     /// A manifest written before detections existed has neither the list nor

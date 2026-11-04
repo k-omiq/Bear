@@ -5263,11 +5263,9 @@ fn erase_paint_at(
         if patch.mask.is_empty() {
             // Nothing is left to show. The layer goes off the page as a
             // deleted one does, its last coverage kept, so an undo turns it
-            // back on as it was.
-            if let Some(row) = job.project.patches.iter_mut().find(|row| row.id == record.id) {
-                row.visible = false;
-            }
-            job.flush().map_err(|e| e.to_string())?;
+            // back on as it was. A mask gone whole: the page is Detect's work
+            // again (`Job::set_patch_visible`).
+            job.set_patch_visible(&record.id, false).map_err(|e| e.to_string())?;
         } else {
             patch.provenance.mask_sha256 = run::mask_digest(&patch.mask);
             let review = record.review_state.clone();
@@ -5520,6 +5518,8 @@ fn edit_detection_mask_at(
         for id in &plan.removed {
             if let Some((at, _, _, _)) = loaded.iter().find(|(_, found, _, _)| &found.record.id == id) {
                 changes[*at].removed.push(id.clone());
+                // Erased whole: Detect's work again (`Project::redetect`).
+                changes[*at].erased = true;
                 edit.removed.push(id.clone());
             }
         }
@@ -7773,6 +7773,7 @@ mod tests {
         assert!(second.erased.iter().all(|layer| layer.after.is_none()), "nothing left, off the page");
         let mut job = Job::open(&located.job_path).unwrap();
         assert!(!job.project.patches.iter().find(|r| r.id == "stroke").unwrap().visible);
+        assert_eq!(job.project.redetect, vec![0], "a mask erased whole is Detect's work again");
 
         // The revision from before the first erase is still there to undo to.
         assert!(job.restore_legacy_revision("stroke", &revision(&layer.before)).unwrap());
@@ -11612,6 +11613,7 @@ mod mask_edit_tests {
 
         // Erasing where nothing is changes nothing and writes nothing.
         let manifest = std::fs::read(&located.job_path).unwrap();
+        assert!(Job::open(&located.job_path).unwrap().project.redetect.is_empty(), "grown and drawn, nothing taken");
         let nothing = edit_detection_mask_at(&located, None, MaskEditMode::Remove, None,
             Some(&rect(56.0, 0.0, 64.0, 6.0))).unwrap().expect("an answer");
         assert_eq!(nothing, MaskEdit { page_status: "detected".into(), changed: vec![], created: vec![], removed: vec![],
@@ -11625,6 +11627,7 @@ mod mask_edit_tests {
         assert!(!job.sidecar().join(&fresh.record.mask_ref).exists());
         let job = Job::open(&located.job_path).unwrap();
         assert_eq!(job.load_detection(&first).unwrap().unwrap().record.mask_ref, stored.record.mask_ref);
+        assert_eq!(job.project.redetect, vec![job.project.strip.order[located.page_index]], "a detection erased whole is Detect's work again");
 
         // Erasing the last detection leaves a page with nothing on it.
         let all = edit_detection_mask_at(&located, None, MaskEditMode::Remove, None,

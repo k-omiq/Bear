@@ -7384,6 +7384,166 @@ fn a_stopped_detect_resumes_where_it_stopped() {
     assert_eq!(plan_for(&library, "chapter", &chapter_id, None, RunMode::Clean).unwrap().len(), 1);
 }
 
+/// Detect both pages of a lettered chapter, as the Detect button does.
+fn detect_chapter(library: &Library, chapter_id: &str, pipeline: &mut Pipeline, run_id: &str) -> Summary {
+    let entries = plan_for(library, "chapter", chapter_id, None, RunMode::Detect).unwrap();
+    let recorder = Recorder::new();
+    let summary = execute_as(RunMode::Detect, run_id, chapter_id, &entries, pipeline, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    summary
+}
+
+/// The pages a chapter Detect would take now.
+fn detect_queue(library: &Library, chapter_id: &str) -> Vec<usize> {
+    plan_for(library, "chapter", chapter_id, None, RunMode::Detect).unwrap()
+        .iter().map(|entry| entry.page_index).collect()
+}
+
+/// The stored detections of one page, by id and box.
+fn detections_on(library: &Library, chapter_id: &str, source_idx: usize) -> Vec<(String, Rect)> {
+    only_job(library, chapter_id).project.detections.iter()
+        .filter(|row| row.source_idx == source_idx)
+        .map(|row| (row.id.clone(), row.bbox))
+        .collect()
+}
+
+/// A Detect skips a page only while everything it found there still stands.
+/// Both pages of a chapter are detected; the user deletes one detection on
+/// page 0, the way the editor's Delete does (`Job::remove_detection`), and
+/// changes the text type of the other. The next chapter Detect takes page 0
+/// again and finds the deleted text anew, keeps the other detection as the
+/// user left it, edit and id included, and leaves page 1, where nothing was
+/// deleted. Before, the page stayed finished and the chapter Detect answered
+/// `notice.run.nothingInScope`.
+#[test]
+fn a_detect_runs_again_on_a_page_whose_detection_was_deleted() {
+    let scratch = Scratch::new("redetect-after-delete");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 2);
+    let mut pipeline = lettered_pipeline(&scratch);
+    detect_chapter(&library, &chapter_id, &mut pipeline, "run-1");
+    let before = detections_on(&library, &chapter_id, 0);
+    assert_eq!(before.len(), 2);
+    assert!(detect_queue(&library, &chapter_id).is_empty(), "nothing deleted: every page is still skipped");
+
+    let (deleted, deleted_box) = before[0].clone();
+    let (kept, _) = before[1].clone();
+    library.remove_detection(&deleted).unwrap().expect("deleted");
+    let inside = only_job(&library, &chapter_id).project.detections.iter()
+        .find(|row| row.id == kept).unwrap().inside;
+    library.set_detection_inside(&kept, !inside).unwrap().expect("retyped");
+    assert_eq!(only_job(&library, &chapter_id).project.redetect, vec![0]);
+    assert_eq!(detect_queue(&library, &chapter_id), vec![0], "only the page with a deletion is Detect's work");
+
+    let summary = detect_chapter(&library, &chapter_id, &mut pipeline, "run-2");
+    assert_eq!((summary.reason, summary.regions_detected), ("completed", 1), "only the deleted text is new");
+    let after = detections_on(&library, &chapter_id, 0);
+    assert_eq!(after.len(), 2);
+    assert!(after.iter().any(|(id, bbox)| *bbox == deleted_box && *id != deleted), "the deleted text was found again");
+    let job = only_job(&library, &chapter_id);
+    let held = job.project.detections.iter().find(|row| row.id == kept).expect("the kept detection keeps its id");
+    assert_eq!(held.inside, !inside, "the user's edit stands");
+    assert!(job.project.redetect.is_empty() && job.project.detected.contains(&0));
+    drop(job);
+    assert!(detect_queue(&library, &chapter_id).is_empty(), "every item is there again");
+}
+
+/// The editor's other ways of taking a stored detection away leave the page
+/// Detect's work just the same: the hard removal (`remove_region`, which a
+/// redo of a delete and the undo of a drawn region reach) and an eraser
+/// stroke over the whole of it (`edit_mask` in `Remove`).
+#[test]
+fn removing_or_erasing_a_detection_also_queues_its_page_for_detect() {
+    let scratch = Scratch::new("redetect-after-removal");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 2);
+    let mut pipeline = lettered_pipeline(&scratch);
+    detect_chapter(&library, &chapter_id, &mut pipeline, "run-1");
+    let (id, _) = detections_on(&library, &chapter_id, 1)[0].clone();
+    library.remove_region(&id).unwrap().expect("removed");
+    assert_eq!(detect_queue(&library, &chapter_id), vec![1]);
+
+    detect_chapter(&library, &chapter_id, &mut pipeline, "run-2");
+    assert!(detect_queue(&library, &chapter_id).is_empty());
+    let mut job = only_job(&library, &chapter_id);
+    let (erased, _) = detections_on(&library, &chapter_id, 0)[0].clone();
+    job.rewrite_detections(vec![cleaner_core::project::PageDetectionChanges {
+        source_idx: 0,
+        page_id: library::page_id(&chapter_id, 0),
+        removed: vec![erased],
+        erased: true,
+        ..Default::default()
+    }]).unwrap();
+    drop(job);
+    assert_eq!(detect_queue(&library, &chapter_id), vec![0]);
+}
+
+/// After a clean the rule is the user's: a mask erased in part is text they
+/// chose to keep, and a mask deleted whole is text Detect finds again. Both
+/// pages are detected and cleaned (one region each cleaned, one declined);
+/// the user deletes page 0's mask whole. A chapter Detect takes page 0 only,
+/// finds the deleted text as a detection again, and stores nothing over the
+/// declined row the page still holds. Page 1, whose mask is still there, is
+/// not looked at; a mask erased in part is still there too
+/// (`a_detection_half_inside_a_patch_box_is_cleaned_already` in the core).
+#[test]
+fn a_whole_mask_deleted_after_clean_is_found_again_and_a_kept_one_is_not() {
+    let scratch = Scratch::new("redetect-after-clean");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 2);
+    let mut pipeline = lettered_pipeline(&scratch);
+    detect_chapter(&library, &chapter_id, &mut pipeline, "run-1");
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Clean).unwrap();
+    let recorder = Recorder::new();
+    let mut cleaner = cleaning_only_pipeline(&scratch);
+    let cleaned = execute_as(RunMode::Clean, "run-2", &chapter_id, &entries, &mut cleaner, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert_eq!(cleaned.regions_cleaned, 2);
+    let job = only_job(&library, &chapter_id);
+    assert_eq!(job.project.examined.len(), 2);
+    let patch = job.project.patches.iter().find(|row| row.source_idx == 0).unwrap().clone();
+    let rows = job.project.regions_untouched.iter().filter(|row| row.source_idx == 0).count();
+    drop(job);
+    assert!(detect_queue(&library, &chapter_id).is_empty(), "nothing deleted after the clean");
+
+    library.set_mask_visible(&patch.id, false).unwrap().expect("deleted");
+    assert_eq!(detect_queue(&library, &chapter_id), vec![0]);
+    // A run that cleans leaves the delete standing.
+    assert!(plan(&library, "chapter", &chapter_id, None).unwrap().is_empty());
+
+    let summary = detect_chapter(&library, &chapter_id, &mut pipeline, "run-3");
+    assert_eq!(summary.regions_detected, 1);
+    let found = detections_on(&library, &chapter_id, 0);
+    assert_eq!(found.len(), 1);
+    let job = only_job(&library, &chapter_id);
+    // The patch was cut to the detection's display set, so it lies inside
+    // what Detect finds there.
+    assert!(cleaner_core::project::half_inside(cleaner_core::project::orientation::display_bbox(&job.project, &patch), found[0].1),
+        "the deleted mask's text came back: {found:?} over {:?}", patch.bbox);
+    assert_eq!(job.project.regions_untouched.iter().filter(|row| row.source_idx == 0).count(), rows);
+    assert!(detections_on(&library, &chapter_id, 1).is_empty(), "page 1 kept its mask and was not looked at");
+    drop(job);
+    assert!(detect_queue(&library, &chapter_id).is_empty());
+}
+
+/// Undoing a Detect takes its detections away again, so its pages are
+/// Detect's work again; before, they stayed recorded detected with nothing on
+/// them and the next chapter Detect had nothing in scope.
+#[test]
+fn an_undone_detect_leaves_its_pages_to_detect_again() {
+    let scratch = Scratch::new("redetect-after-undo");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 2);
+    let mut pipeline = lettered_pipeline(&scratch);
+    detect_chapter(&library, &chapter_id, &mut pipeline, "run-undo");
+    assert!(detect_queue(&library, &chapter_id).is_empty());
+    let job_path = library.resolve_chapter(&chapter_id).unwrap();
+    let step = crate::history::move_at(&job_path, &chapter_id, "undo").unwrap();
+    assert_eq!(step.refused, None);
+    library::invalidate_manifest_cache(&job_path);
+    assert!(only_job(&library, &chapter_id).project.detections.is_empty());
+    assert_eq!(detect_queue(&library, &chapter_id), vec![0, 1]);
+    // And the Detect after it is a whole one.
+    assert_eq!(detect_chapter(&library, &chapter_id, &mut pipeline, "run-again").regions_detected, 4);
+    assert!(detect_queue(&library, &chapter_id).is_empty());
+}
+
 /// A resumed run is the mode it was started as. A snapshot from before the
 /// split resumes as the one-pass run it was, and a mode this build does not
 /// know is refused rather than run as something else.

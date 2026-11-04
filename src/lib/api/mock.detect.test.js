@@ -158,6 +158,27 @@ describe('Detect and Clean', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'notice', key: 'notice.run.nothingDetected' }))
   })
 
+  // `run.rs#runnable`: a chapter Detect skips a page only while everything it
+  // found there is still there.
+  it('detects a page again after one of its detections is deleted, and only that page', async () => {
+    const mock = makeMock()
+    const chapterRun = { scope: 'chapter', chapterId: CHAPTER, mode: 'detect' }
+    await ranToEnd(mock, () => mock.runClean(chapterRun))
+    const notices = []
+    const stop = mock.subscribe((event) => { if (event.type === 'notice') notices.push(event.key) })
+    expect((await mock.runClean(chapterRun)).runId).toBeNull()
+    stop()
+    expect(notices).toContain('notice.run.nothingInScope')
+
+    const [first] = (await firstPage(mock)).regions.filter((region) => region.outcome === 'detected')
+    await mock.deleteMask({ maskId: first.mask.id })
+    const again = await ranToEnd(mock, () => mock.runClean(chapterRun))
+    expect(again.handle.runId).toBeTruthy()
+    const started = again.events.filter((event) => event.type === 'page-started').map((event) => event.pageIndex)
+    expect(started).toEqual([0])
+    expect((await mock.runClean(chapterRun)).runId).toBeNull()
+  })
+
   it('cleans one detected region on its own, and deletes one without a trace', async () => {
     const mock = makeMock()
     await ranToEnd(mock, () => mock.runClean(runOn('detect')))

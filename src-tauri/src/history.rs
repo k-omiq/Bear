@@ -780,6 +780,15 @@ pub struct PageStep {
     pub before: String,
     /// The digest of the page state after it.
     pub after: String,
+    /// Whether the page was on `Project::redetect` before the edit and after
+    /// it. Kept beside the digests and not in the page state, so a page put on
+    /// the list by an edit this journal does not record (a whole mask hidden)
+    /// does not make every step of the page stale. `None` in a step written
+    /// before the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_before: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_after: Option<bool>,
 }
 
 /// A page's detections and held rows, as a blob in `history/`.
@@ -905,9 +914,9 @@ pub(crate) fn capture_page(job: &cleaner_core::project::Job, source_idx: usize) 
 /// [`capture_page`] for every page named, to pass to [`record_pages`] once
 /// the edit is written. A page that cannot be captured is left out, and its
 /// edit is not undoable.
-pub(crate) fn capture_pages(job: &cleaner_core::project::Job, sources: &[usize]) -> Vec<(usize, String)> {
+pub(crate) fn capture_pages(job: &cleaner_core::project::Job, sources: &[usize]) -> Vec<(usize, String, bool)> {
     sources.iter().filter_map(|&source_idx| match capture_page(job, source_idx) {
-        Ok(digest) => Some((source_idx, digest)),
+        Ok(digest) => Some((source_idx, digest, job.project.redetect.contains(&source_idx))),
         Err(error) => {
             eprintln!("page {source_idx} could not be saved to undo history: {error}");
             None
@@ -931,12 +940,16 @@ pub(crate) fn record_pages(
     chapter_id: &str,
     label: &str,
     group: Option<&str>,
-    before: Vec<(usize, String)>,
+    before: Vec<(usize, String, bool)>,
 ) {
     let mut pages = Vec::new();
-    for (source_idx, before) in before {
+    for (source_idx, before, queued_before) in before {
         match capture_page(job, source_idx) {
-            Ok(after) if after != before => pages.push(PageStep { source_idx, before, after }),
+            Ok(after) if after != before => pages.push(PageStep {
+                source_idx, before, after,
+                queued_before: Some(queued_before),
+                queued_after: Some(job.project.redetect.contains(&source_idx)),
+            }),
             Ok(_) => {}
             Err(error) => {
                 eprintln!("an edit of page {source_idx} could not be saved to undo history: {error}");
@@ -955,7 +968,10 @@ pub(crate) fn record_pages(
         (Some(group), Some(last)) if cursor_at_end && last.op == DETECTION_OP && last.group.as_deref() == Some(group) => {
             for page in pages.drain(..) {
                 match last.pages.iter_mut().find(|held| held.source_idx == page.source_idx) {
-                    Some(held) => held.after = page.after,
+                    Some(held) => {
+                        held.after = page.after;
+                        held.queued_after = page.queued_after;
+                    }
                     None => last.pages.push(page),
                 }
             }
@@ -1016,6 +1032,7 @@ fn replay_pages(
     let mut targets = Vec::new();
     for step in &entry.pages {
         let (from, to) = if undo { (&step.after, &step.before) } else { (&step.before, &step.after) };
+        let queued = if undo { step.queued_before } else { step.queued_after };
         let now = capture_page(&job, step.source_idx)?;
         if now == *to {
             continue;
@@ -1024,7 +1041,7 @@ fn replay_pages(
             return Ok((Vec::new(), Some(STALE.to_owned())));
         }
         match read_state(&sidecar, to) {
-            Ok(state) => targets.push((step.source_idx, state)),
+            Ok(state) => targets.push((step.source_idx, state, queued)),
             Err(error) => {
                 eprintln!("an undo step of {chapter_id} could not be read: {error}");
                 return Ok((Vec::new(), Some(STALE.to_owned())));
@@ -1043,7 +1060,7 @@ fn replay_pages(
         .chain(job.project.regions_untouched.iter().filter_map(|row| Some(row.lettering.as_ref()?.mask_ref.clone())))
         .collect();
     let mut writes = Vec::new();
-    for (source_idx, state) in &targets {
+    for (source_idx, state, _) in &targets {
         let clash = state.detections.iter().any(|row| {
             row.source_idx != *source_idx
                 || job.project.patches.iter().any(|patch| patch.id == row.id)
@@ -1078,7 +1095,20 @@ fn replay_pages(
         buffers::write_atomic(path, bytes).map_err(|e| e.to_string())?;
     }
     let mut pages = Vec::new();
-    for (source_idx, state) in targets {
+    for (source_idx, state, queued) in targets {
+        // The page goes back on `Project::redetect` as the step found it, and
+        // on it whenever the step takes away a detection the page holds: the
+        // undo of a Detect leaves its pages recorded detected with nothing
+        // on them, and a step from before the record says nothing. A step
+        // that takes away a row the user made (the undo of a drawn region)
+        // queues a Detect that finds nothing new: work, never a loss.
+        let drops_one = job.project.detections.iter()
+            .any(|row| row.source_idx == source_idx && !state.detections.iter().any(|kept| kept.id == row.id));
+        if drops_one || queued == Some(true) {
+            job.queue_redetect(source_idx);
+        } else if queued == Some(false) {
+            job.project.redetect.retain(|index| *index != source_idx);
+        }
         job.project.detections.retain(|row| row.source_idx != source_idx);
         job.project.detections.extend(state.detections);
         job.project.regions_untouched.retain(|row| row.source_idx != source_idx);

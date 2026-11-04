@@ -1340,11 +1340,13 @@ export function createMockBackend(options = {}) {
   // Clean takes only the pages with detections; Detect and clean takes those
   // too, so a stored detection is cleaned, never lost. Detect leaves a page it
   // already detected unless the page is asked for by name (`runnable` in
-  // `run.rs`), so a stopped Detect resumes where it stopped.
+  // `run.rs`), so a stopped Detect resumes where it stopped, or the user
+  // deleted something Detect found on it (`page.redetect`, `Project::redetect`).
   const inStep = (page, outsideBubbles, mode, byName) =>
     mode === 'clean' ? hasDetections(page)
-      : mode === 'detect' && !byName && hasDetections(page) ? false
-        : hasDetections(page) || runnable(page, outsideBubbles)
+      : mode === 'detect' && page.redetect ? true
+        : mode === 'detect' && !byName && hasDetections(page) ? false
+          : hasDetections(page) || runnable(page, outsideBubbles)
 
   const queueFor = ({ scope, chapterId, pageIndex, outsideBubbles, mode = 'auto' }) => {
     const found = findChapter(chapterId)
@@ -1443,10 +1445,13 @@ export function createMockBackend(options = {}) {
       detect: {
         pick: (page) => {
           beforeDetect.set(page.id, capturePages([page]))
-          return [...detectionsOf(page), ...fresh(page)]
+          // A page the user took something from keeps what they left on it,
+          // edits included (`Job::add_page_detection_results`).
+          return page.redetect ? fresh(page) : [...detectionsOf(page), ...fresh(page)]
         },
         apply: (region, page, ctx) => detectRegion(region, page, ctx, detector, maskPaddingPx),
         pageStatus: (page) => {
+          delete page.redetect
           const status = settledStatus(page)
           const captured = beforeDetect.get(page.id)
           beforeDetect.delete(page.id)
@@ -3816,6 +3821,8 @@ export function createMockBackend(options = {}) {
       if (!detection) notifyAll(notices)
       const index = found.page.regions.findIndex((r) => r.id === found.region.id)
       if (index >= 0) found.page.regions.splice(index, 1)
+      // A detection or a whole mask gone: Detect's work again (`Project::redetect`).
+      found.page.redetect = true
       if (found.page.status === 'detected') found.page.status = settledStatus(found.page)
       // Nothing on this page is cleaned any more, so it is not a cleaned page.
       if (found.page.status === 'cleaned' && found.page.regions.every((r) => !r.mask)) {

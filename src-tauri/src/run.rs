@@ -5544,11 +5544,16 @@ fn survey_job(job: &mut Job, emit: &dyn Fn(Event)) -> JobStrip {
 /// resumes where it stopped instead of starting the chapter over. `redetect`
 /// lifts that for one page asked for by name: detecting it again replaces
 /// what it stored, the way to see a page's detection with other settings.
+///
+/// **A page the user took something away from is Detect's again**
+/// (`Project::redetect`), finished or not: Detect skips a page only while
+/// everything it found there still stands. Only Detect's: a run that cleans
+/// would clean what the user deleted.
 fn runnable(project: &Project, source_idx: usize, mode: RunMode, redetect: bool) -> bool {
     let unlooked = !project.examined.contains(&source_idx)
         && (redetect || !project.detected.contains(&source_idx));
     match mode {
-        RunMode::Detect => unlooked,
+        RunMode::Detect => unlooked || project.redetect.contains(&source_idx),
         RunMode::Clean => has_detections(project, source_idx),
         RunMode::Auto => unlooked || has_detections(project, source_idx),
     }
@@ -5659,7 +5664,8 @@ pub fn plan_for(
 /// Every page, whatever a local Detect or a clean left on it, except the pages
 /// a cloud pass has already finished in their present form
 /// (`Project::cloud_detected`), so a stopped cloud run resumes where it
-/// stopped. A page asked for alone is always taken: that is how a page is
+/// stopped, and those the user took something away from since
+/// (`Project::redetect`). A page asked for alone is always taken: that is how a page is
 /// sent again, and an area is always one page.
 pub(crate) fn plan_cloud_detection(
     library: &Library, scope: &str, chapter_id: &str, page_index: Option<u32>,
@@ -5695,6 +5701,7 @@ fn plan_with_repeat(
             let Some(source_idx) = Library::resolve_page(&job.project, page) else { continue };
             let wanted = if repeat {
                 scope == "page" || !job.project.cloud_detected.contains(&source_idx)
+                    || job.project.redetect.contains(&source_idx)
             } else {
                 runnable(&job.project, source_idx, mode, scope == "page")
             };
@@ -6754,7 +6761,16 @@ impl<'w> Walker<'w> {
                 // detection the page now holds.
                 RegionOutcome::Detected(found) => {
                     let found = *found;
-                    if !repeat_cloud && job.detection_is_cleaned_already(entry.source_idx, found.record.bbox) {
+                    // A Detect looks under a mask the user deleted whole, to
+                    // find that text again; a run that also cleans does not,
+                    // or it would clean it again.
+                    // A cloud pass stores over cleaned text by design, except
+                    // on a page the user took something from: there the text
+                    // a mask still covers, or covered before part of it was
+                    // erased, is text they chose to keep.
+                    let deleted_too = mode != RunMode::Detect;
+                    let keeps_cleaned = !repeat_cloud || job.project.redetect.contains(&entry.source_idx);
+                    if keeps_cleaned && job.detection_is_cleaned_already(entry.source_idx, found.record.bbox, deleted_too) {
                         continue;
                     }
                     pending_detections.push(found);
@@ -6781,7 +6797,12 @@ impl<'w> Walker<'w> {
             progress.in_flight = None;
             return Visited::Next;
         }
-        if area_only {
+        // A page the user took something away from keeps what they left on it,
+        // edits included, and gains only what it does not hold
+        // (`Project::redetect`). The cut is the area's.
+        let adds_to_held = work == PageWork::Detect && mode == RunMode::Detect && !area_only
+            && job.project.redetect.contains(&entry.source_idx);
+        if area_only || adds_to_held {
             // Text the page holds already is not stored again, by pixel: see
             // [`crate::region::area_detection_less_held`]. A mask that cannot
             // be read fails the page, as it fails a clean.
@@ -6808,6 +6829,8 @@ impl<'w> Walker<'w> {
             // already; a page's replace them, or join them after a cloud pass.
             let stored = if area_only {
                 job.add_area_detection_results(entry.source_idx, &page_id, pending_detections, pending_untouched)
+            } else if adds_to_held {
+                job.add_page_detection_results(entry.source_idx, &page_id, pending_detections, pending_untouched, repeat_cloud)
             } else if repeat_cloud {
                 job.append_page_detection_results(entry.source_idx, &page_id, pending_detections, pending_untouched)
                     .map(|()| count)

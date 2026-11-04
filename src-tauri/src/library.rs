@@ -2444,26 +2444,22 @@ impl Library {
             detail: e.to_string(),
         })?;
 
-        let Some(record) = job.project.patches.iter_mut().find(|r| r.id == region_id) else {
+        let Some(&before) = job.project.patches.iter().find(|r| r.id == region_id).map(|r| &r.visible) else {
             return Ok(None);
         };
-        if record.visible == visible {
-            // Already there. Still answered, not refused: the seam's undo is
-            // free to ask twice, and "it is as you asked" is the truth.
-            let source_idx = record.source_idx;
-            return Ok(region_and_status(
-                &chapter_id,
-                &job.project,
-                source_idx,
-                region_id,
-            ));
-        }
-        record.visible = visible;
-        let source_idx = record.source_idx;
-        job.flush().map_err(|e| LibraryError::Manifest {
+        // Already there is still answered, not refused: the seam's undo is
+        // free to ask twice, and "it is as you asked" is the truth. A whole
+        // mask hidden is Detect's work again (`Job::set_patch_visible`).
+        let Some(source_idx) = job.set_patch_visible(region_id, visible).map_err(|e| LibraryError::Manifest {
             path: path.clone(),
             detail: e.to_string(),
-        })?;
+        })?
+        else {
+            return Ok(None);
+        };
+        if before == visible {
+            return Ok(region_and_status(&chapter_id, &job.project, source_idx, region_id));
+        }
         crate::underlay::refresh_dependencies(&mut job, region_id).map_err(|detail| {
             LibraryError::Manifest {
                 path: path.clone(),
@@ -2887,9 +2883,11 @@ impl Library {
         });
         // A detection is removed outright for the same reason an untouched row
         // is: there is no flag to turn off and nothing to restore.
+        // Detect's work again, as for `Job::remove_detection`.
         if let Some(pos) = job.project.detections.iter().position(|r| r.id == region_id) {
             let record = job.project.detections.remove(pos);
             source_idx = Some(record.source_idx);
+            job.queue_redetect(record.source_idx);
             removed_artifacts.extend([record.mask_ref.clone(), record.ink_ref()]);
         }
 
@@ -4146,9 +4144,9 @@ impl Library {
                     return Err("mask_changed".into());
                 };
                 if *record != *before { return Err("mask_changed".into()); }
-                record.visible = false;
-                let source_idx = record.source_idx;
-                job.flush().map_err(|e| e.to_string())?;
+                // Hidden, and the page is Detect's work again.
+                let source_idx = job.set_patch_visible(region_id, false).map_err(|e| e.to_string())?
+                    .ok_or("mask_changed")?;
                 crate::underlay::refresh_dependencies(&mut job, region_id)?;
                 invalidate_manifest_cache(&path);
                 Ok(region_and_status(&chapter_id, &job.project, source_idx, region_id))
@@ -6104,6 +6102,49 @@ mod tests {
     /// not done, and it makes the page `detected`. Deleting it - through the
     /// mask, or through a restore that says it was not there - removes the
     /// record and both its files.
+    /// The editor's Delete of a detection puts its page on
+    /// `Project::redetect`, one undo step. Its undo puts the detection back
+    /// and takes the page off the list again, so a chapter Detect skips the
+    /// page once more: nothing Detect found is missing. Its redo queues it
+    /// again.
+    #[test]
+    fn undoing_a_deleted_detection_takes_its_page_off_the_redetect_list() {
+        let scratch = Scratch::new("redetect-undo-delete");
+        let library = library(&scratch);
+        let project = a_project(&library, &scratch, 1);
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, None)
+            .unwrap().created().unwrap();
+        let path = library.resolve_chapter(&chapter.id).unwrap();
+        let page = page_id(&chapter.id, 0);
+        let mut job = Job::open(&path).unwrap();
+        let first = a_stored_detection(&mut job, &page, Rect::new(20, 10, 8, 6));
+        job.project.detected.push(0);
+        job.flush().unwrap();
+        drop(job);
+        invalidate_manifest_cache(&path);
+        let queued = |library: &Library| crate::run::plan_for(library, "chapter", &chapter.id, None, crate::run::RunMode::Detect)
+            .unwrap().len();
+        assert_eq!(queued(&library), 0);
+
+        let observed = library.observe_mask(&first).unwrap().expect("there");
+        library.delete_observed_mask(&first, observed).unwrap().expect("deleted");
+        assert_eq!(Job::open(&path).unwrap().project.redetect, vec![0]);
+        assert_eq!(queued(&library), 1);
+
+        let step = crate::history::move_at(&path, &chapter.id, "undo").unwrap();
+        assert_eq!(step.refused, None);
+        invalidate_manifest_cache(&path);
+        let job = Job::open(&path).unwrap();
+        assert_eq!(job.project.detections.len(), 1);
+        assert!(job.project.redetect.is_empty());
+        drop(job);
+        assert_eq!(queued(&library), 0, "every item is back, so the page is skipped again");
+
+        crate::history::move_at(&path, &chapter.id, "redo").unwrap();
+        invalidate_manifest_cache(&path);
+        assert_eq!(queued(&library), 1);
+    }
+
     #[test]
     fn a_detection_is_a_detected_region_and_deleting_it_removes_it() {
         let scratch = Scratch::new("detected-region");

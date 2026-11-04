@@ -724,6 +724,18 @@ never written as though it were general.
 
 ## What has not been measured
 
+**Detect after a delete (2026-11-04): left open.** A page goes on `Project::redetect` when the user deletes or
+erases whole a stored detection or a cleaned mask, and Detect adds back only what the page lost. Not done or not
+measured:
+
+- Undoing a whole-mask delete (`set_patch_visible(true)`) leaves the page queued, because a page can be queued for
+  more than one delete. The next Detect finds the text held and stores nothing; a cloud Detect sends the page again.
+- An undo step that takes away a row the user drew (the undo of a hand Add) queues its page the same way.
+- Deletes made before this build queued nothing, so a page finished then stays skipped by a chapter Detect.
+- A cloud Detect over a queued page is covered by code reading only, not by a test with a cloud stand-in.
+- The mock (`mock.js`) queues the page but cannot find a deleted stand-in region again: it is gone from the page.
+- Not yet run in the real app on the Linux and Windows VMs.
+
 **Local FLUX on real Linux and Windows PCs (2026-11-04): the release build on a GCE g2-standard-4, five bugs fixed.** The
 1.0.0-beta.19 `.deb` on Ubuntu 26.04 (16 GB RAM, one L4 with 22.5 GiB, driver 595.91), driven through its own
 window by WebDriver (`tauri-driver` and `WebKitWebDriver` under Xvfb). Two faults stopped local FLUX on it:
