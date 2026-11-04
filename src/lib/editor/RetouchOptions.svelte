@@ -210,8 +210,11 @@
 
   /* The Gradient panel's body, on the label column its sliders share, and
      its action under a hairline: the Text cleanup panel's two parts. */
+  /* One column as wide as the panel, never as wide as its content: see the
+     note on `.rows` in `ToolBar.svelte`. */
   .rows {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--s-3);
     padding: var(--s-4) var(--s-5);
     --field-label: 96px;

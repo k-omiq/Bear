@@ -1837,14 +1837,22 @@
   .head:active { cursor: grabbing }
   .fill { flex: 1 }
 
+  /* `minmax(0, 1fr)` on every one-column grid of the panel, not the implicit
+     `auto` column: an `auto` column is as wide as its widest content, and
+     WebKit counts a select's longest option (a model name) and the Cleaning
+     models summary at their full width there, past the panel's own. Every row
+     then ran past the right edge and was clipped. A `1fr` column with a 0 floor
+     is the panel's width and nothing more, and the content inside ellipsises
+     or wraps to it. */
   .rows {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--s-4);
     padding: var(--s-4) var(--s-5);
   }
 
   /* Mode and scope: the label over a row of chips that fills the panel. */
-  .block { display: grid; gap: 5px }
+  .block { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px }
   .block.padding { justify-items: start }
   .block.padding > :global(:first-child) { justify-self: stretch }
   .block-label,
@@ -1902,7 +1910,7 @@
 
   /* The collapsed group: a quiet line that says what it holds and what is
      chosen in it, so the choices are visible without being opened. */
-  .more { display: grid; gap: var(--s-3) }
+  .more { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-3) }
   .more-toggle {
     display: flex;
     align-items: center;
@@ -1936,6 +1944,7 @@
 
   .action {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--s-2);
     padding: var(--s-4) var(--s-5) var(--s-5);
     border-top: 1px solid var(--line);
