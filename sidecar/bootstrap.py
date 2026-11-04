@@ -207,10 +207,19 @@ def fetch_weights(python: Path, weights_root: Path, checkpoint: dict) -> None:
 def remove_tree(path: Path) -> None:
     """`shutil.rmtree`, by the extended form of the path on Windows, where uv leaves
     paths deeper than Python may reach otherwise (:func:`bundled_uv`)."""
-    if sys.platform == "win32":
-        shutil.rmtree("\\\\?\\" + str(path.resolve()))
-    else:
-        shutil.rmtree(path)
+    shutil.rmtree(extended_path(path.resolve()) if sys.platform == "win32" else path)
+
+
+def extended_path(path: Path) -> str:
+    """The `\\\\?\\` form of an absolute Windows path, which has no 260 character
+    limit. A share (`\\\\server\\share`, where a redirected AppData lives) takes the
+    `\\\\?\\UNC\\` form instead."""
+    text = str(path)
+    if text.startswith("\\\\?\\"):
+        return text
+    if text.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + text[2:]
+    return "\\\\?\\" + text
 
 
 def bundled_uv(source: Path) -> Path | None:
@@ -230,7 +239,10 @@ def pip_install(python: Path, source: Path, *args: str) -> None:
     if uv is None:
         run([str(python), "-m", "pip", "install", *args])
     else:
-        run([str(uv), "pip", "install", "--python", str(python), *args], label="uv pip")
+        # uv writes no bytecode unless asked, unlike pip, and the app runs the
+        # helper with PYTHONDONTWRITEBYTECODE, so every open would compile again.
+        run([str(uv), "pip", "install", "--python", str(python), "--compile-bytecode", *args],
+            label="uv pip")
 
 
 def app_dll_env(source: Path) -> dict[str, str]:

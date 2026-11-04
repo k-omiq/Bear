@@ -244,8 +244,16 @@ class BootstrapTest(unittest.TestCase):
             self.assertEqual(len(installs), 4)
             for command in installs:
                 self.assertEqual(command[:4], [str(uv), "pip", "install", "--python"], command)
+                self.assertIn("--compile-bytecode", command)
             check = next(kwargs for command, kwargs in calls if kwargs.get("label") == "import check")
             self.assertEqual(check["env"], {"MC_SIDECAR_DLL_DIR": str(app)})
+
+    def test_windows_paths_take_the_extended_form_a_share_its_unc_form(self):
+        self.assertEqual(bootstrap.extended_path(Path("C:\\Users\\a\\AppData")),
+                         "\\\\?\\C:\\Users\\a\\AppData")
+        self.assertEqual(bootstrap.extended_path(Path("\\\\server\\share\\a\\AppData")),
+                         "\\\\?\\UNC\\server\\share\\a\\AppData")
+        self.assertEqual(bootstrap.extended_path(Path("\\\\?\\C:\\x")), "\\\\?\\C:\\x")
 
     def test_other_platforms_keep_pip_with_no_version_notice(self):
         with tempfile.TemporaryDirectory() as scratch:
