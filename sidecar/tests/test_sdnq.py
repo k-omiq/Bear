@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from manga_cleaner_sidecar.backend import BACKENDS, get_backend, importable_backends, sdnq
 from manga_cleaner_sidecar.backend.sdnq import (
+    DECLARED_RAM_ON_CARD,
     DECLARED_RAM_WORKING_SET,
     DECLARED_WORKING_SET,
     DEVICE_PLACEMENT,
@@ -393,10 +394,31 @@ class RamFigure(unittest.TestCase):
             return backend.get_working_set_bytes()
 
     def test_an_nvidia_card_is_asked_for_its_own_ram_figure(self) -> None:
-        card = 12 * GIB
+        card = 6 * GIB
         self.assertEqual(self._figure("flux3-image-klein", None), DECLARED_WORKING_SET["flux3-image-klein"])
         self.assertEqual(self._figure("flux3-image-klein", card), DECLARED_RAM_WORKING_SET["flux3-image-klein"])
         self.assertEqual(self._figure("flux3-image-klein", card, "cuda"), DECLARED_RAM_WORKING_SET["flux3-image-klein"])
+
+    def test_a_card_of_8_gb_or_more_gets_the_local_disk_figure_for_a_measured_model(self) -> None:
+        for card in (8188 * 1024**2, 12 * GIB, 24 * GIB):
+            for model, ram in DECLARED_RAM_ON_CARD.items():
+                self.assertEqual(self._figure(model, card, "cuda"), ram, (model, card))
+            self.assertEqual(self._figure("qwen-image-edit-2511", card, "cuda"),
+                             DECLARED_RAM_WORKING_SET["qwen-image-edit-2511"])
+
+    def test_a_16_gb_pc_has_room_for_the_measured_models_on_a_card(self) -> None:
+        """The gate's room on the g2-standard-4 that refused both models, 2026-11-04."""
+        room = 8_353_450_666
+        for model, ram in DECLARED_RAM_ON_CARD.items():
+            self.assertLess(ram, room, model)
+
+    def test_the_local_disk_figure_is_not_below_what_an_l4_measured(self) -> None:
+        """VmHWM through the app's helper on a GCE L4, 2026-11-04, the largest of three
+        card sizes, in GiB."""
+        measured = {"flux2-klein-4b": 4.46, "flux3-image-klein": 6.33}
+        self.assertEqual(set(DECLARED_RAM_ON_CARD), set(measured))
+        for model, ram in DECLARED_RAM_ON_CARD.items():
+            self.assertGreater(ram, measured[model] * GIB, model)
 
     def test_a_device_that_shares_ram_is_asked_for_the_whole_figure(self) -> None:
         for device in ("xpu", "mps"):
@@ -418,7 +440,7 @@ class RamFigure(unittest.TestCase):
             "flux2-klein-9b": 12_606_105_778,
             "qwen-image-edit-2511": 17_294_421_877 + 849_608_296 + 18_753_872,
         }
-        for model, ram in DECLARED_RAM_WORKING_SET.items():
+        for model, ram in [*DECLARED_RAM_WORKING_SET.items(), *DECLARED_RAM_ON_CARD.items()]:
             self.assertGreater(ram, downloads[model], model)
 
     def test_the_nvml_probe_answers_without_torch(self) -> None:

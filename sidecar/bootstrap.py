@@ -60,7 +60,8 @@ def report(step: str, state: str) -> None:
     print(json.dumps({"step": step, "state": state}, separators=(",", ":")), flush=True)
 
 
-def run(command: list[str], *, timeout: int = PIP_TIMEOUT_SECONDS, label: str | None = None) -> None:
+def run(command: list[str], *, timeout: int = PIP_TIMEOUT_SECONDS, label: str | None = None,
+        env: dict[str, str] | None = None) -> None:
     """Run one step. Its output stays off stdout, and the end of its stderr goes
     into the error, in a file because a download's progress bars can be long."""
     if label is None:
@@ -68,7 +69,7 @@ def run(command: list[str], *, timeout: int = PIP_TIMEOUT_SECONDS, label: str | 
     with tempfile.TemporaryFile() as stderr:
         result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=stderr, timeout=timeout, check=False,
-                                env=safe_environment())
+                                env={**safe_environment(), **(env or {})})
         if result.returncode:
             size = stderr.seek(0, os.SEEK_END)
             stderr.seek(max(0, size - ERROR_TAIL_BYTES))
@@ -81,6 +82,9 @@ def safe_environment() -> dict[str, str]:
            if not key.startswith(("PIP_", "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "UV_"))
            and key not in ("PYTHONPATH", "PYTHONHOME")}
     env["PIP_CONFIG_FILE"] = os.devnull
+    # Its notice is the last thing pip writes, so it took the place of the error.
+    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    env["UV_NO_CONFIG"] = "1"
     env["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
     env["HF_HUB_DISABLE_TELEMETRY"] = "1"
     env["PYTHONNOUSERSITE"] = "1"
@@ -200,6 +204,56 @@ def fetch_weights(python: Path, weights_root: Path, checkpoint: dict) -> None:
     report("weights", "done")
 
 
+def remove_tree(path: Path) -> None:
+    """`shutil.rmtree`, by the extended form of the path on Windows, where uv leaves
+    paths deeper than Python may reach otherwise (:func:`bundled_uv`)."""
+    if sys.platform == "win32":
+        shutil.rmtree("\\\\?\\" + str(path.resolve()))
+    else:
+        shutil.rmtree(path)
+
+
+def bundled_uv(source: Path) -> Path | None:
+    """The app's own uv on Windows, beside the executable as `flux_install.rs` looks
+    for it. Windows' torch wheel holds paths deeper than 260 characters, which pip
+    cannot write where long paths are off, the default; uv writes them."""
+    if sys.platform != "win32":
+        return None
+    uv = source.parent / "manga-cleaner-uv.exe"
+    return uv if uv.is_file() else None
+
+
+def pip_install(python: Path, source: Path, *args: str) -> None:
+    """`pip install args` into the environment `python` runs, through uv where
+    :func:`bundled_uv` finds it."""
+    uv = bundled_uv(source)
+    if uv is None:
+        run([str(python), "-m", "pip", "install", *args])
+    else:
+        run([str(uv), "pip", "install", "--python", str(python), *args], label="uv pip")
+
+
+def app_dll_env(source: Path) -> dict[str, str]:
+    """On Windows, where the helper finds the C++ runtime the app ships, which torch
+    needs and a Windows without Visual C++ installed lacks (`manga_cleaner_sidecar`)."""
+    return {"MC_SIDECAR_DLL_DIR": str(source.parent)} if sys.platform == "win32" else {}
+
+
+def install_package(python: Path, source: Path) -> None:
+    """Install the helper package from a copy of `source`. Building it writes
+    `build/` and `.egg-info` beside the sources, and the app's copy is often
+    read-only: root's `/usr/lib` from a Linux package, an AppImage's mount, or
+    Program Files on Windows."""
+    with tempfile.TemporaryDirectory(prefix="manga-cleaner-sidecar-") as scratch:
+        copy = Path(scratch) / "sidecar"
+        shutil.copytree(source, copy, copy_function=shutil.copyfile, ignore=shutil.ignore_patterns(
+            "tests", "build", "*.egg-info", "__pycache__", "*.pyc"))
+        # copytree keeps a read-only source's folder modes; the build writes here.
+        for folder in [copy, *(path for path in copy.rglob("*") if path.is_dir())]:
+            folder.chmod(folder.stat().st_mode | 0o700)
+        pip_install(python, source, "--no-deps", str(copy))
+
+
 def install(root: Path, source: Path, backend: str, accelerator: str,
             model: str = DEFAULT_MODEL, checkpoint: dict | None = None) -> dict[str, str]:
     # Linux has no torchvision 0.28 for Python 3.10.
@@ -216,7 +270,7 @@ def install(root: Path, source: Path, backend: str, accelerator: str,
     pending = root / ".venv-installing"
     if not (venv / "pyvenv.cfg").is_file():
         if pending.exists():
-            shutil.rmtree(pending)
+            remove_tree(pending)
         report("environment", "start")
         run([sys.executable, "-m", "venv", str(pending)], timeout=120)
         active = pending
@@ -226,27 +280,27 @@ def install(root: Path, source: Path, backend: str, accelerator: str,
     if not python.is_file():
         raise RuntimeError("Virtual environment has no Python interpreter")
     report("dependencies", "start")
-    run([str(python), "-m", "pip", "install", "huggingface-hub==1.33.0"])
+    pip_install(python, source, "huggingface-hub==1.33.0")
     if backend == "mflux":
-        run([str(python), "-m", "pip", "install", "-r", str(source / "requirements.txt")])
+        pip_install(python, source, "-r", str(source / "requirements.txt"))
         import_check = f"import {ENTRY_POINT}, mflux, mlx"
     else:
         import_check = f"import {ENTRY_POINT}, torch, diffusers, sdnq"
         if accelerator in ("cuda", "xpu"):
             build = torch_build(accelerator)
-            run([str(python), "-m", "pip", "install", f"torch=={TORCH_VERSION}+{build}",
-                 f"torchvision=={TORCHVISION_VERSION}+{build}", "--index-url", f"https://download.pytorch.org/whl/{build}"])
+            pip_install(python, source, f"torch=={TORCH_VERSION}+{build}",
+                        f"torchvision=={TORCHVISION_VERSION}+{build}", "--index-url", f"https://download.pytorch.org/whl/{build}")
             # The next step may not swap this for a build with no GPU support.
             import_check += f"; assert torch.__version__.endswith('+{build}'), 'torch is not the {build} build: ' + torch.__version__"
-        run([str(python), "-m", "pip", "install", "-r", str(source / "requirements-sdnq.txt")])
-    run([str(python), "-m", "pip", "install", "--no-deps", str(source)])
-    run([str(python), "-c", import_check], timeout=120, label="import check")
+        pip_install(python, source, "-r", str(source / "requirements-sdnq.txt"))
+    install_package(python, source)
+    run([str(python), "-c", import_check], timeout=120, label="import check", env=app_dll_env(source))
     report("dependencies", "done")
 
     fetch_weights(python, root / "weights", checkpoint)
     if active == pending:
         if venv.exists():
-            shutil.rmtree(venv)
+            remove_tree(venv)
         os.replace(pending, venv)
     report("ready", "done")
     return {"backend": backend, "accelerator": accelerator, "model": model, "root": str(root)}

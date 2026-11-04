@@ -118,12 +118,38 @@ DECLARED_WORKING_SET = {
 #: pipeline held whole ran out of card memory and moved back. The peak is the text
 #: encoder's load, through RAM on its way to the card. Rounded up, and never below the
 #: weights on disk. Not measured on Windows, which has no malloc_trim.
+#:
+#: Those runs read the weights from a Modal volume. Read from a local disk, as on a real
+#: PC, two of the models peak far lower (:data:`DECLARED_RAM_ON_CARD`); this table stays
+#: for the others and for a card smaller than :data:`MEASURED_CARD_BYTES`.
 DECLARED_RAM_WORKING_SET = {
     "flux2-klein-4b": 8_589_934_592,  # 8 GiB
     "flux3-image-klein": 11_274_289_152,  # 10.5 GiB
     "flux2-klein-9b": 12_884_901_888,  # 12 GiB
     "qwen-image-edit-2511": 27_917_287_424,  # 26 GiB
 }
+
+#: Declared peak in RAM on an NVIDIA card of at least :data:`MEASURED_CARD_BYTES`, with
+#: the weights on a local disk.
+#:
+#: Measured through the app's own helper on a GCE g2-standard-4 (16 GB RAM, one L4,
+#: Ubuntu 26.04, torch 2.13.0 cu129), 2026-11-04, three crops up to 1296x976, as VmHWM
+#: with 22, 10.7 and 7.2 GiB free on the card (the last two faked by holding card memory
+#: from another process): FLUX 3 4.75, 4.73 and 6.33 GiB, Klein 4B 3.57, 3.59 and 4.46.
+#: Most of it is safetensors pages mapped from disk, which the kernel can drop: private
+#: memory peaked at 1.4 GiB (FLUX 3) and 1.3 (Klein) until the card was small enough to
+#: offload. The Modal figures above read the same weights off a network volume. The
+#: largest run, rounded up, and never below the download, since the gate refuses a
+#: working set below the weights. These are what let a 16 GB PC, which the gate gives
+#: about 7.8 GiB, run either model.
+DECLARED_RAM_ON_CARD = {
+    "flux2-klein-4b": 5_905_580_032,  # 5.5 GiB
+    "flux3-image-klein": 7_516_192_768,  # 7 GiB
+}
+
+#: The smallest NVIDIA card :data:`DECLARED_RAM_ON_CARD` was measured for: an 8 GB card,
+#: which reports a little under 8 GiB.
+MEASURED_CARD_BYTES = 7_516_192_768  # 7 GiB
 
 #: Long side a small crop is upscaled to before the edit. `mflux.py`'s constant,
 #: swept there and not re-swept here: 512 smudges, 1024 invents
@@ -565,6 +591,9 @@ class SdnqBackend(BackendBase):
         """The declared peak this machine's RAM must hold, for one kind of device."""
         table = DECLARED_RAM_WORKING_SET if discrete else DECLARED_WORKING_SET
         declared = table.get(self.active_model_id)
+        card = get_nvidia_total_bytes() if discrete else None
+        if card is not None and card >= MEASURED_CARD_BYTES:
+            declared = DECLARED_RAM_ON_CARD.get(self.active_model_id, declared)
         weights = self.get_weights_bytes()
         # The gate refuses a working set below the weights it holds, and a folder
         # placed by hand can be heavier than the pinned one a figure was declared for.

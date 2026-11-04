@@ -4,8 +4,9 @@ What was learned by measuring, testing and building this application. Every numb
 taken rather than estimated, and each carries the conditions it was taken under.
 
 **The machine.** Unless another is named, every figure below is an Apple M5, 10 cores, 32 GB
-unified memory, macOS 26.5.1, ONNX Runtime 1.28.0. Nothing here has ever been executed on
-Windows or Linux, and a one-machine number is never written as though it were general.
+unified memory, macOS 26.5.1, ONNX Runtime 1.28.0. Outside the entries that name a Linux or
+Windows machine, nothing here has been executed on Windows or Linux, and a one-machine number is
+never written as though it were general.
 
 ---
 
@@ -722,6 +723,62 @@ Windows or Linux, and a one-machine number is never written as though it were ge
   beside every Windows and Linux x64 runtime.
 
 ## What has not been measured
+
+**Local FLUX on real Linux and Windows PCs (2026-11-04): the release build on a GCE g2-standard-4, five bugs fixed.** The
+1.0.0-beta.19 `.deb` on Ubuntu 26.04 (16 GB RAM, one L4 with 22.5 GiB, driver 595.91), driven through its own
+window by WebDriver (`tauri-driver` and `WebKitWebDriver` under Xvfb). Two faults stopped local FLUX on it:
+
+- **The install failed** with `could not create 'manga_cleaner_sidecar.egg-info': Permission denied`. The
+  installer ran `pip install` on the app's own copy of the helper, under root's `/usr/lib/Manga Cleaner`, and
+  building the package writes beside its sources. Every Linux package install failed this way, and an AppImage's
+  read-only mount would too. It now builds from a writable temporary copy (`bootstrap.install_package`). With the
+  fix the app installed FLUX 3 (torch 2.13.0 cu129, 6.2 GB of weights) in 236 s and Klein 4B in 55 s.
+- **Every region was declined**: `the sidecar needs 11274289152 bytes and this machine has room for 8353450666`.
+  On a 16 GB PC the gate allows 7.8 GiB (two thirds of RAM, less the resident cleaner and the webview), and the
+  RAM figures were FLUX 3 10.5 GiB and Klein 4B 8 GiB, so no 16 GB PC with an NVIDIA card could run either.
+  Those figures were measured on Modal, reading the weights off a network volume. Through the app's helper on
+  this local disk, VmHWM over three crops up to 1296x976, with 22, 10.7 and 7.2 GiB free on the card (the
+  last two faked by holding card memory from another process): FLUX 3 4.75, 4.73 and 6.33 GiB, Klein 4B 3.57,
+  3.59 and 4.46. Most of that is safetensors pages mapped from disk; private memory peaked at 1.4 GiB (FLUX 3)
+  and 1.3 (Klein) until the 7.2 GiB card made them offload (5.85 and 3.98). Card peaks: FLUX 3 12.5, 10.1 and
+  6.4 GiB; Klein 4B 5.9. Renders took FLUX 3 23 to 115 s and Klein 4B 7 to 27 s a crop. On a card of 7 GiB or
+  more these two models now declare 7 and 5.5 GiB (`DECLARED_RAM_ON_CARD`); Klein 9B, Qwen and smaller cards
+  keep the Modal figures. Loading FLUX 3's text encoder straight to the card (`device_map`) changed nothing.
+
+The same day on Windows Server 2025 (the same machine type, driver 596.86), the 1.0.0-beta.19 installer, the app
+driven over WebView2's debug port from a scheduled task. Two more faults stopped the FLUX 3 install there, and the
+app said only `pip failed (exit 1)` and pip's own upgrade notice, which was the last of the stderr it keeps:
+
+- `[WinError 206] The filename or extension is too long`: torch 2.13.0+cu130 holds license files about 160
+  characters deep, which under `%APPDATA%\com.mangacleaner.studio\sidecar\.venv-installing\Lib\site-packages`
+  passes 260, and pip cannot write that where long paths are off, the Windows default. The installer now runs
+  every package step on Windows through the app's bundled uv (`manga-cleaner-uv.exe`), which wrote the same
+  wheel there in 98 s, and removes a folder by its `\\?\` path. pip's notice is off, so its error shows.
+- torch then would not import: `c10.dll or one of its dependencies` and "Microsoft Visual C++ Redistributable is
+  not installed". A clean Windows has no `msvcp140.dll`; the app ships one beside its executable. The helper
+  package now adds that folder to the DLL search path (`manga_cleaner_sidecar/__init__.py`), and the install's
+  import check is told where it is.
+
+With both fixes the app installed FLUX 3 in 263 s, over a failed earlier attempt, and a Detect & clean of one
+real page applied FLUX 3 to all 5 speech bubbles. The helper's peak working set was 4.62 GiB, against the 7 GiB
+now declared. A second VM later the same day installed it fresh through the same `bootstrap.py`. Not run on
+Windows: Klein 4B.
+
+- **`CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH` on every render**, from two users on 1.0.0-beta.19. torch
+  2.13.0+cu130 carries cuDNN 9.20 in `torch\lib` with no `cudnn_engines_tensor_ir64_9.dll`, a part cuDNN 9.23
+  and later have, and cuDNN opens its parts by name at the first convolution. A cuDNN of another version on
+  `PATH` then lends that part: the user's own, or the one `cuda.rs` puts first on the app's `PATH` for a CUDA
+  build of ONNX Runtime, which the helper inherits. Reproduced on a fresh Windows L4 with NVIDIA's cuDNN
+  9.27.0.42 (CUDA 13) on `PATH`: both crops failed with that status. The helper now drops every `PATH` folder
+  holding `cudnn*`, `cublas*` or `cudart*` DLLs before torch loads (`path_without_cuda`); with it the same two
+  crops rendered in 139 and 24 s, peak working set 4.64 GiB. Not run: the app's own CUDA runtime path end to end
+  (the same `PATH` mechanism, tested through the helper only), and a cuDNN copied into `System32`, which comes
+  before `PATH` and which this does not cover.
+
+Not measured: Klein 9B and Qwen from a local disk; a card under 8 GB; a desktop Windows with a user's own GPU
+driver; a 16 GB PC with a browser open, where the live term of the room can fall below 7 GiB.
+Setup's Cleaning step offers only Klein 4B for a local download, and a region declined once is not retried by
+running the page again, in Detect & clean or Clean; a new chapter was needed to rerun one.
 
 **Eraser on moved copies, a live gradient, and Live copy (2026-11-03): tested in code, not run in the real app.**
 The eraser read a layer as drawn (already moved by its layer style) and mapped the stroke through the move again,

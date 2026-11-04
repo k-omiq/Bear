@@ -55,6 +55,35 @@ class BootstrapTest(unittest.TestCase):
             self.assertTrue(any("--no-deps" in call for call in calls))
             self.assertTrue(any("endswith('+cu129')" in " ".join(call) for call in calls))
 
+    def test_the_package_installs_from_a_writable_copy_of_a_read_only_source(self):
+        # A Linux package puts the source under root's /usr/lib, an AppImage on a
+        # read-only mount; building the package writes .egg-info beside it.
+        with tempfile.TemporaryDirectory() as scratch:
+            source = Path(scratch) / "source"
+            (source / "manga_cleaner_sidecar").mkdir(parents=True)
+            (source / "pyproject.toml").write_text("[project]\nname='test'\n")
+            (source / "manga_cleaner_sidecar" / "__init__.py").write_text("")
+            for path in [source / "manga_cleaner_sidecar", source]:
+                path.chmod(0o555)
+            seen = []
+
+            def fake_run(command, **_kwargs):
+                built = Path(command[-1])
+                self.assertNotEqual(built, source)
+                (built / "test.egg-info").mkdir()
+                (built / "manga_cleaner_sidecar" / "build").mkdir()
+                seen.append(built)
+
+            try:
+                with patch.object(bootstrap, "run", side_effect=fake_run):
+                    bootstrap.install_package(Path(sys.executable), source)
+            finally:
+                for path in [source, source / "manga_cleaner_sidecar"]:
+                    path.chmod(0o755)
+            self.assertEqual(len(seen), 1)
+            self.assertFalse(seen[0].exists())
+            self.assertFalse((source / "test.egg-info").exists())
+
     def test_a_python_without_the_pinned_torchvision_is_refused(self):
         with tempfile.TemporaryDirectory() as scratch, patch.object(bootstrap.sys, "version_info", (3, 10, 0)):
             with self.assertRaisesRegex(ValueError, "Python 3.11 or 3.12"):
@@ -181,6 +210,52 @@ class BootstrapTest(unittest.TestCase):
         with patch.object(bootstrap.sys, "platform", "win32"), patch.object(bootstrap.shutil, "which", return_value=None):
             self.assertEqual(bootstrap.resolve_backend("sdnq", "auto", "xpu"), ("sdnq", "xpu"))
             self.assertEqual(bootstrap.resolve_backend("sdnq", "cuda", "xpu"), ("sdnq", "cuda"), "a choice made wins")
+
+    def test_windows_installs_through_the_bundled_uv_and_checks_with_the_app_dlls(self):
+        # pip cannot write the torch wheel's deepest paths where long paths are off,
+        # and torch needs the C++ runtime the app ships beside its executable.
+        with tempfile.TemporaryDirectory() as scratch:
+            app = Path(scratch) / "Manga Cleaner"
+            source = app / "sidecar"
+            source.mkdir(parents=True)
+            (source / "pyproject.toml").write_text("[project]\nname='test'\n")
+            uv = app / "manga-cleaner-uv.exe"
+            uv.touch()
+            root = Path(scratch) / "install"
+            calls = []
+
+            def fake_run(command, **kwargs):
+                calls.append((command, kwargs))
+                if command[1:3] == ["-m", "venv"]:
+                    pending = Path(command[-1])
+                    python = bootstrap.python_in(pending)
+                    python.parent.mkdir(parents=True)
+                    (pending / "pyvenv.cfg").write_text("home=C:\\\\Python\n")
+                    python.touch()
+                elif "snapshot_download" in " ".join(command):
+                    (Path(command[-1]) / "model_index.json").write_text("{}")
+
+            with patch.object(bootstrap, "run", side_effect=fake_run), \
+                 patch.object(bootstrap, "remove_tree", side_effect=bootstrap.shutil.rmtree), \
+                 patch.object(bootstrap.sys, "version_info", (3, 11, 0)), \
+                 patch.object(bootstrap.sys, "platform", "win32"):
+                bootstrap.install(root, source, "sdnq", "cuda")
+            installs = [command for command, _ in calls if "install" in command and "venv" not in command]
+            self.assertEqual(len(installs), 4)
+            for command in installs:
+                self.assertEqual(command[:4], [str(uv), "pip", "install", "--python"], command)
+            check = next(kwargs for command, kwargs in calls if kwargs.get("label") == "import check")
+            self.assertEqual(check["env"], {"MC_SIDECAR_DLL_DIR": str(app)})
+
+    def test_other_platforms_keep_pip_with_no_version_notice(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            source = Path(scratch) / "sidecar"
+            source.mkdir()
+            (Path(scratch) / "manga-cleaner-uv.exe").touch()
+            with patch.object(bootstrap.sys, "platform", "linux"):
+                self.assertIsNone(bootstrap.bundled_uv(source))
+                self.assertEqual(bootstrap.app_dll_env(source), {})
+        self.assertEqual(bootstrap.safe_environment()["PIP_DISABLE_PIP_VERSION_CHECK"], "1")
 
     def test_windows_cuda_uses_published_torch_wheel(self):
         with tempfile.TemporaryDirectory() as scratch:
