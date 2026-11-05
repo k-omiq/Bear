@@ -17,7 +17,9 @@
 //!
 //! What bounds it: one edit talks to Google at a time across the whole process
 //! ([`Gate`]), each edit has a deadline, a request that moves no bytes for too
-//! long is given up, and [`nano_banana_stop`] ends every edit that has begun.
+//! long is given up, and each edit watches the [`Stop`] of the grant it spent
+//! (`nano_banana_consent.rs`): [`nano_banana_stop`] ends the edits of one
+//! window, and [`stop_all`] every one.
 
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -132,6 +134,30 @@ fn clean_instruction(text: Option<&str>) -> Option<String> {
     (!kept.is_empty()).then(|| kept.to_owned())
 }
 
+/// One grant's stop, shared by every edit that spent a share of it. Raised
+/// when the grant is withdrawn, and never lowered: an edit holding it is
+/// stopped from then on, wherever it is, before its first request included.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Stop(Arc<AtomicBool>);
+
+impl Stop {
+    pub(crate) fn raise(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn raised(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// What one render was granted: the settings the person confirmed, and the
+/// stop of the grant it spent ([`super::nano_banana_consent::Spend::granted`]).
+#[derive(Debug, Clone)]
+pub(crate) struct Granted {
+    pub config: Config,
+    pub stop: Stop,
+}
+
 /// What a region's edit needs from settings.
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
@@ -171,7 +197,18 @@ pub(crate) enum Failure {
     Billing,
     ModelRejected,
     RateLimited,
+    /// A rate limit or an overloaded server that named a wait longer than
+    /// [`Limits::max_retry_wait`]: no wait a batch makes would see it lift.
+    LongWait,
+    /// Google could not be reached, or stopped answering, before the whole
+    /// request was sent: nothing was made, so it may be sent again.
     Unreachable,
+    /// The link was lost after the whole request was sent: the answer may be
+    /// made and billed already, so it is not sent again.
+    Lost,
+    /// Google refused the request as it was put (a 400 that names nothing
+    /// known, a 413, a 422): another region may go through.
+    BadRequest,
     /// A safety filter said no. Manga trips it, and another crop would not change
     /// what the page shows.
     Blocked,
@@ -195,9 +232,11 @@ impl Failure {
             Failure::Billing => "decline.reason.nanoBananaBilling",
             Failure::ModelRejected => "decline.reason.nanoBananaModelRejected",
             Failure::RateLimited => "decline.reason.nanoBananaRateLimited",
+            Failure::LongWait => "decline.reason.nanoBananaLongWait",
             Failure::Unreachable => "decline.reason.nanoBananaUnreachable",
+            Failure::Lost => "decline.reason.nanoBananaLost",
             Failure::Blocked | Failure::Recited => "decline.reason.nanoBananaBlocked",
-            Failure::BadAnswer => "decline.reason.nanoBananaBadAnswer",
+            Failure::BadAnswer | Failure::BadRequest => "decline.reason.nanoBananaBadAnswer",
             Failure::KeptMark => "decline.reason.nanoBananaKeptMark",
             Failure::Stopped => "decline.reason.nanoBananaStopped",
         }
@@ -272,7 +311,8 @@ enum Reply {
     /// A 429, a 408 or a 5xx: worth one more try after the wait, since the
     /// server said it made nothing.
     Busy(Failure, Duration),
-    /// Not retried. A lost connection may have lost an answer already billed.
+    /// Not retried. A connection lost after the request was sent may have lost
+    /// an answer already billed ([`Failure::Lost`]).
     Fatal(Failure),
 }
 
@@ -357,19 +397,18 @@ fn refused(status: u16, bytes: &[u8], retry_after: Option<Duration>, limits: &Li
         400 if ["system_instruction", "systeminstruction", "system instruction"].iter().any(|name| error.says(name)) => Reply::NoSystem,
         401 | 403 => Reply::Fatal(Failure::KeyRejected),
         404 => Reply::Fatal(Failure::ModelRejected),
-        429 => match wait {
-            Some(wait) if wait > limits.max_retry_wait => Reply::Fatal(Failure::RateLimited),
-            wait => Reply::Busy(Failure::RateLimited, wait.unwrap_or(limits.retry_delay)),
+        429 | 408 | 500..=599 => match wait {
+            Some(wait) if wait > limits.max_retry_wait => Reply::Fatal(Failure::LongWait),
+            wait => Reply::Busy(if status == 429 { Failure::RateLimited } else { Failure::Unreachable },
+                wait.unwrap_or(limits.retry_delay)),
         },
-        408 | 500..=599 => match wait {
-            Some(wait) if wait > limits.max_retry_wait => Reply::Fatal(Failure::Unreachable),
-            wait => Reply::Busy(Failure::Unreachable, wait.unwrap_or(limits.retry_delay)),
-        },
-        _ => Reply::Fatal(Failure::ModelRejected),
+        // What is left says this request, not the account: a 400 that names
+        // nothing above, a 413, a 422, a 409, an odd 2xx.
+        _ => Reply::Fatal(Failure::BadRequest),
     }
 }
 
-/// The one Gemini edit at a time, and the stop that ends them.
+/// The one Gemini edit at a time.
 ///
 /// One at a time across the whole process, chapters included: the link is
 /// often slow and shared, two uploads at once only make both late, and Google's
@@ -377,33 +416,22 @@ fn refused(status: u16, bytes: &[u8], retry_after: Option<Duration>, limits: &Li
 pub(crate) struct Gate {
     busy: Mutex<bool>,
     free: Condvar,
-    /// Bumped by every stop. An edit remembers the count it began at and is
-    /// stopped once it differs, so a stop ends what had begun and nothing later.
-    stops: AtomicU64,
 }
 
 static GATE: Gate = Gate::new();
 
 impl Gate {
     const fn new() -> Gate {
-        Gate { busy: Mutex::new(false), free: Condvar::new(), stops: AtomicU64::new(0) }
+        Gate { busy: Mutex::new(false), free: Condvar::new() }
     }
 
-    fn stops(&self) -> u64 {
-        self.stops.load(Ordering::SeqCst)
-    }
-
-    fn stop(&self) {
-        self.stops.fetch_add(1, Ordering::SeqCst);
-        self.free.notify_all();
-    }
-
-    /// Wait for the gate. `since` is the stop count when the edit began, so a
-    /// stop while it waits in the queue ends it there.
-    fn enter(&self, since: u64, limit: Duration) -> Result<Turn<'_>, Failure> {
+    /// Wait for the gate. `stop` is the edit's grant's, taken when the share
+    /// was spent, so a stop at any time since, in the queue included, ends it
+    /// here before anything is sent.
+    fn enter(&self, stop: &Stop, limit: Duration) -> Result<Turn<'_>, Failure> {
         let mut busy = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
-            if self.stops() != since {
+            if stop.raised() {
                 return Err(Failure::Stopped);
             }
             if !*busy {
@@ -412,20 +440,20 @@ impl Gate {
             busy = self.free.wait_timeout(busy, TICK).unwrap_or_else(PoisonError::into_inner).0;
         }
         *busy = true;
-        Ok(Turn { gate: self, since, deadline: Instant::now() + limit })
+        Ok(Turn { gate: self, stop: stop.clone(), deadline: Instant::now() + limit })
     }
 }
 
 /// An edit holding the [`Gate`], until it drops.
 struct Turn<'g> {
     gate: &'g Gate,
-    since: u64,
+    stop: Stop,
     deadline: Instant,
 }
 
 impl Turn<'_> {
     fn check(&self) -> Result<(), Failure> {
-        if self.gate.stops() != self.since {
+        if self.stop.raised() {
             return Err(Failure::Stopped);
         }
         if Instant::now() >= self.deadline {
@@ -456,14 +484,21 @@ impl Drop for Turn<'_> {
     }
 }
 
-/// End every Nano Banana edit that has begun, in flight or waiting for its
-/// turn. Each fails with [`Failure::Stopped`]. A request already sent may still
-/// be billed: Google finishes what it was given. The grants go too, so the rest
-/// of a stopped batch can not send.
+/// `nanoBananaStop`: end the edit a single region's window granted, in flight,
+/// waiting for its turn or not yet that far, and withdraw what is left of the
+/// grant. It fails with [`Failure::Stopped`]. A request already sent may still
+/// be billed: Google finishes what it was given. Every other window's edits,
+/// a batch's included, go on; a batch is stopped as a run (`cancel_run`).
 #[tauri::command]
-pub fn nano_banana_stop() {
+pub fn nano_banana_stop(grant: String) {
+    crate::inference::nano_banana_consent::book().revoke(&grant);
+}
+
+/// End every Nano Banana edit and withdraw every grant: Cloud engines turned
+/// off, or the app quitting.
+pub(crate) fn stop_all() {
     crate::inference::nano_banana_consent::revoke_all();
-    GATE.stop();
+    GATE.free.notify_all();
 }
 
 /// What one request has moved, for the watch over it.
@@ -493,6 +528,16 @@ impl Progress {
 
     fn moved_now(&self) {
         self.moved.store(self.start.elapsed().as_millis() as u64, Ordering::Relaxed);
+    }
+
+    /// What losing the link now is: [`Failure::Lost`] once the whole body was
+    /// handed over, since Google may be making the answer, and
+    /// [`Failure::Unreachable`] before, when nothing can have been made. The
+    /// HTTP stack reads a little ahead of the socket, so the last few
+    /// kilobytes may count as handed over before they left: that errs towards
+    /// not sending again.
+    fn lost(&self) -> Failure {
+        if self.sent.load(Ordering::Relaxed) { Failure::Lost } else { Failure::Unreachable }
     }
 
     /// Whether the request has gone quiet for longer than its part may.
@@ -540,9 +585,12 @@ fn exchange(request: reqwest::blocking::RequestBuilder, progress: &Progress, lim
     let mut response = match request.send() {
         Ok(response) => response,
         Err(error) => {
+            // No connection, nothing sent, however much of the body the HTTP
+            // stack had read ahead into its own buffer.
+            let connected = !error.is_connect();
             // `without_url`, and the key is only ever a header.
             eprintln!("manga-cleaner: Nano Banana request failed: {}", error.without_url());
-            return Reply::Fatal(Failure::Unreachable);
+            return Reply::Fatal(if connected { progress.lost() } else { Failure::Unreachable });
         }
     };
     progress.moved_now();
@@ -554,8 +602,9 @@ fn exchange(request: reqwest::blocking::RequestBuilder, progress: &Progress, lim
     let mut bytes = Vec::new();
     let mut chunk = vec![0u8; 64 * 1024];
     loop {
+        // The request was answered: whatever is lost from here was made.
         if progress.abandoned.load(Ordering::Relaxed) {
-            return Reply::Fatal(Failure::Unreachable);
+            return Reply::Fatal(Failure::Lost);
         }
         match response.read(&mut chunk) {
             Ok(0) => break,
@@ -565,7 +614,7 @@ fn exchange(request: reqwest::blocking::RequestBuilder, progress: &Progress, lim
                 progress.moved_now();
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return Reply::Fatal(Failure::Unreachable),
+            Err(_) => return Reply::Fatal(Failure::Lost),
         }
     }
     if status == 200 {
@@ -633,10 +682,16 @@ impl Client {
         loop {
             match replies.recv_timeout(TICK) {
                 Ok(reply) => return reply,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Reply::Fatal(Failure::Unreachable),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Reply::Fatal(progress.lost()),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            let lost = turn.check().err().or_else(|| progress.dead(&self.limits).then_some(Failure::Unreachable));
+            // A stop is a stop wherever the request was. A deadline or a
+            // silence is a loss, billed or not as far as the body got.
+            let lost = match turn.check() {
+                Err(Failure::Stopped) => Some(Failure::Stopped),
+                Err(_) => Some(progress.lost()),
+                Ok(()) => progress.dead(&self.limits).then(|| progress.lost()),
+            };
             if let Some(failure) = lost {
                 progress.abandoned.store(true, Ordering::Relaxed);
                 return Reply::Fatal(failure);
@@ -841,10 +896,10 @@ fn from_shared(config: &Config, page: &Raster, fitted: &Fitted, finishing: Optio
     Some(finish(config, &prepared, region, &answer, 0, true).map_err(answer_reason))
 }
 
-fn render_with(client: &Client, config: &Config, page: &Raster, fitted: &Fitted, finishing: Option<Choice>,
+/// `stop` is the grant's, taken when the region's share was spent, so a Stop
+/// that came at any time since ends the edit at [`Gate::enter`] at the latest.
+fn render_with(client: &Client, config: &Config, stop: &Stop, page: &Raster, fitted: &Fitted, finishing: Option<Choice>,
     share: Option<&Neighbours>) -> Result<Edited, &'static str> {
-    // A stop from here on ends this edit, even while it waits for its turn.
-    let since = client.gate.stops();
     if let Some(share) = share {
         match from_shared(config, page, fitted, finishing, share) {
             Some(Ok(edited)) => return Ok(edited),
@@ -856,7 +911,7 @@ fn render_with(client: &Client, config: &Config, page: &Raster, fitted: &Fitted,
     let others: Vec<Mask> = share.map(|share| share.others.iter().map(|(_, mask)| mask.clone()).collect()).unwrap_or_default();
     let group = group_for(page, fitted, config.model, &others).map_err(model_reason)?;
     let companions: Vec<Mask> = group.members.iter().map(|at| others[*at].clone()).collect();
-    let turn = client.gate.enter(since, client.limits.edit).map_err(Failure::reason_key)?;
+    let turn = client.gate.enter(stop, client.limits.edit).map_err(Failure::reason_key)?;
     // Every answer that could not be used for this crop tries the next one: a
     // refusal, an empty or unreadable answer, one the wrong shape, one that
     // kept the mark. What another crop would not change ends the edit.
@@ -885,13 +940,18 @@ fn render_with(client: &Client, config: &Config, page: &Raster, fitted: &Fitted,
     Err(last)
 }
 
-/// `fitted` on `page`, edited by Gemini with the stored key. `share` names the
-/// page's other regions, which ride in the same request when they fit its crop.
-pub(crate) fn render(config: &Config, page: &Raster, fitted: &Fitted, finishing: Option<Choice>,
+/// `fitted` on `page`, edited by Gemini with the stored key, as `granted`
+/// says. `share` names the page's other regions, which ride in the same
+/// request when they fit its crop.
+pub(crate) fn render(granted: &Granted, page: &Raster, fitted: &Fitted, finishing: Option<Choice>,
     share: Option<&Neighbours>) -> Result<Edited, &'static str> {
+    // Before the keychain, which may prompt for minutes.
+    if granted.stop.raised() {
+        return Err(Failure::Stopped.reason_key());
+    }
     let key = read_key(&OsStore, &KEY).map_err(Failure::reason_key)?.ok_or(Failure::NoKey.reason_key())?;
     let client = Client::new(ENDPOINT, &key, LIMITS, &GATE).map_err(Failure::reason_key)?;
-    render_with(&client, config, page, fitted, finishing, share)
+    render_with(&client, &granted.config, &granted.stop, page, fitted, finishing, share)
 }
 
 /// Why a credential store did not do what it was asked.
@@ -1207,7 +1267,7 @@ mod tests {
 
     /// One region's request, holding the client's gate as a render would.
     fn edit(client: &Client, model: &str, png: &[u8], region: SendRegion, instruction: Option<&str>) -> Result<Vec<u8>, Failure> {
-        let turn = client.gate.enter(client.gate.stops(), client.limits.edit).unwrap();
+        let turn = client.gate.enter(&Stop::default(), client.limits.edit).unwrap();
         client.edit(&turn, model, png, region, instruction)
     }
 
@@ -1264,9 +1324,35 @@ mod tests {
     fn a_bad_request_that_does_not_name_the_system_instruction_is_not_sent_again() {
         for body in ["{}".to_owned(), error_body("INVALID_ARGUMENT", "Request contains an invalid argument.", json!([]))] {
             let server = serve(vec![(400, body)]);
-            assert_eq!(edit(&client(&server), "m", b"png", a_region(), None), Err(Failure::ModelRejected));
+            assert_eq!(edit(&client(&server), "m", b"png", a_region(), None), Err(Failure::BadRequest));
             assert_eq!(server.seen.lock().unwrap().len(), 1, "a second upload was sent");
         }
+    }
+
+    #[test]
+    fn a_request_refused_as_put_is_this_regions_failure_not_the_accounts() {
+        for status in [400, 409, 413, 422] {
+            let server = serve(vec![(status, error_body("INVALID_ARGUMENT", "Request payload size exceeds the limit.", json!([])))]);
+            assert_eq!(edit(&client(&server), "m", b"png", a_region(), None), Err(Failure::BadRequest), "{status}");
+            assert_eq!(server.seen.lock().unwrap().len(), 1, "{status} was sent again");
+        }
+        assert_eq!(Failure::BadRequest.reason_key(), Failure::BadAnswer.reason_key());
+        // What still says the model: an unknown one, and a second refusal of
+        // the request with no system instruction.
+        let server = serve(vec![(404, "{}".into())]);
+        assert_eq!(edit(&client(&server), "m", b"png", a_region(), None), Err(Failure::ModelRejected));
+    }
+
+    #[test]
+    fn a_bad_request_is_not_offered_again_at_another_crop() {
+        let hole = Rect::new(600, 700, 40, 20);
+        let page = page_with_lettering(1200, 1600, hole);
+        let fitted = fitted_over(&page, hole);
+        let server = serve(vec![(422, "{}".into()); MAX_CROPS]);
+        let config = Config { model: Model::DEFAULT, instruction: None };
+        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).err();
+        assert_eq!(refused, Some("decline.reason.nanoBananaBadAnswer"));
+        assert_eq!(server.seen.lock().unwrap().len(), 1);
     }
 
     #[test]
@@ -1313,11 +1399,14 @@ mod tests {
         assert_eq!(edit(&client(&server), "m", b"png", a_region(), None).unwrap(), b"abc");
         assert!(started.elapsed() >= Duration::from_millis(300));
 
-        // A long Retry-After: given up at once, with no second request.
-        let reply = http(429, "retry-after: 3600\r\n", "{}");
-        let server = serve_with(1, move |_, _| reply.clone());
-        assert_eq!(edit(&client(&server), "m", b"png", a_region(), None), Err(Failure::RateLimited));
-        assert_eq!(server.seen.lock().unwrap().len(), 1);
+        // A long Retry-After: given up at once, with no second request, and
+        // said apart from a short one, so a batch does not wait on it either.
+        for status in [429, 503] {
+            let reply = http(status, "retry-after: 3600\r\n", "{}");
+            let server = serve_with(1, move |_, _| reply.clone());
+            assert_eq!(edit(&client(&server), "m", b"png", a_region(), None), Err(Failure::LongWait), "{status}");
+            assert_eq!(server.seen.lock().unwrap().len(), 1);
+        }
 
         // A 5xx gets the same one retry.
         let server = serve(vec![(503, "{}".into()), (200, image_reply(b"abc"))]);
@@ -1355,8 +1444,30 @@ mod tests {
             listener.accept().is_ok()
         });
         let lost = client_at(&endpoint, limits());
-        assert_eq!(edit(&lost, "m", b"png", a_region(), None), Err(Failure::Unreachable));
+        // Whether the small body was handed over before the drop is a race, so
+        // either answer; what matters is that nothing was sent twice.
+        assert!(matches!(edit(&lost, "m", b"png", a_region(), None), Err(Failure::Unreachable | Failure::Lost)));
         assert!(!accepted.join().unwrap(), "a second request was sent");
+    }
+
+    #[test]
+    fn a_link_lost_after_the_whole_request_was_sent_is_told_apart_from_one_lost_before() {
+        // After: the server reads every byte, then closes with no answer.
+        let server = serve_with(1, |_, _| String::new());
+        assert_eq!(edit(&client(&server), "m", b"png", a_region(), None), Err(Failure::Lost));
+        assert_eq!(server.seen.lock().unwrap().len(), 1);
+
+        // Before: nothing listens, so the request never left.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/v1beta/models", listener.local_addr().unwrap());
+        drop(listener);
+        assert_eq!(edit(&client_at(&endpoint, limits()), "m", b"png", a_region(), None), Err(Failure::Unreachable));
+
+        // A model that takes the whole request and then says nothing is a loss
+        // after it was sent too.
+        let quiet = client_at(&silent_after(""), quick());
+        assert_eq!(edit(&quiet, "m", b"png", a_region(), None), Err(Failure::Lost));
+        assert_ne!(Failure::Lost.reason_key(), Failure::Unreachable.reason_key());
     }
 
     #[test]
@@ -1400,7 +1511,7 @@ mod tests {
         let hole = Rect::new(600, 700, 40, 20);
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
-        render_with(&client(&server), &config, &page, &fitted, None, None).unwrap();
+        render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).unwrap();
         let seen = server.seen.lock().unwrap();
         assert_eq!(seen[0].1["generationConfig"]["imageConfig"], json!({ "imageSize": "1K", "aspectRatio": "1:1" }));
     }
@@ -1488,7 +1599,7 @@ mod tests {
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let config = Config { model: Model::DEFAULT, instruction: None };
-        let edited = render_with(&client(&server), &config, &page, &fitted, None, None).unwrap();
+        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).unwrap();
 
         let seen = server.seen.lock().unwrap();
         assert_eq!(seen[0].1["generationConfig"]["imageConfig"], json!({ "imageSize": "512", "aspectRatio": "1:1" }));
@@ -1514,7 +1625,7 @@ mod tests {
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![recited(), (200, image_reply(&answer_of(256, 1024, [200, 200, 200])))]);
         let config = Config { model: Model::DEFAULT, instruction: None };
-        let edited = render_with(&client(&server), &config, &page, &fitted, None, None).unwrap();
+        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).unwrap();
         assert_eq!(edited.record["aspect_ratio"], "1:4");
         assert_eq!(edited.record["crops_refused"], 1);
         let seen = server.seen.lock().unwrap();
@@ -1529,7 +1640,7 @@ mod tests {
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![recited(); MAX_CROPS]);
         let config = Config { model: Model::DEFAULT, instruction: None };
-        let refused = render_with(&client(&server), &config, &page, &fitted, None, None).err();
+        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBlocked"));
         assert_eq!(server.seen.lock().unwrap().len(), MAX_CROPS);
     }
@@ -1541,7 +1652,7 @@ mod tests {
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, json!({ "candidates": [{ "finishReason": "IMAGE_SAFETY" }] }).to_string())]);
         let config = Config { model: Model::DEFAULT, instruction: None };
-        let refused = render_with(&client(&server), &config, &page, &fitted, None, None).err();
+        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBlocked"));
         assert_eq!(server.seen.lock().unwrap().len(), 1);
     }
@@ -1553,7 +1664,7 @@ mod tests {
         let fitted = fitted_over(&page, hole);
         let server = serve_with(MAX_CROPS, |_, body| http(200, "", &image_reply(&sent_back(body))));
         let config = Config { model: Model::DEFAULT, instruction: None };
-        let refused = render_with(&client(&server), &config, &page, &fitted, None, None).err();
+        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaKeptMark"));
         assert!(server.seen.lock().unwrap().len() > 1, "only one crop was offered");
     }
@@ -1597,7 +1708,7 @@ mod tests {
 
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-ride", "a", vec![("b".into(), b_mask)]);
-        let first = render_with(&client(&server), &config, &page, &fit_a, None, Some(&share_a)).unwrap();
+        let first = render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a)).unwrap();
         assert_eq!(first.record["shared_answer"], false);
         {
             // The one request marked the neighbour as well as this region.
@@ -1612,7 +1723,7 @@ mod tests {
 
         // The neighbour's own turn: there is no server, so any request fails.
         let share_b = neighbours("t-shared-ride", "b", Vec::new());
-        let second = render_with(&nowhere(), &config, &page, &fit_b, None, Some(&share_b)).unwrap();
+        let second = render_with(&nowhere(), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b)).unwrap();
         assert_eq!(second.record["shared_answer"], true);
         let rendered = &second.rendered;
         let at = |x: i64, y: i64| rendered.pixels.sample((x - rendered.mask.bounds.x) as u32, (y - rendered.mask.bounds.y) as u32, 0);
@@ -1621,7 +1732,7 @@ mod tests {
         // An answer is used once: asking again is a new request.
         let again = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_again = neighbours("t-shared-ride", "b", Vec::new());
-        render_with(&client(&again), &config, &page, &fit_b, None, Some(&share_again)).unwrap();
+        render_with(&client(&again), &config, &Stop::default(), &page, &fit_b, None, Some(&share_again)).unwrap();
         assert_eq!(again.seen.lock().unwrap().len(), 1);
     }
 
@@ -1633,13 +1744,13 @@ mod tests {
         let small = applied_mask(&fit_b, page.width, page.height);
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-grew", "b-grew", vec![("b-grew".into(), small.clone())]);
-        render_with(&client(&server), &config, &page, &fit_a, None, Some(&share_a)).unwrap();
+        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a)).unwrap();
 
         // B now reaches 30 px further left than it was marked.
         let wider = fitted_over(&page, Rect::new(b.x - 30, b.y, b.w + 30, b.h));
         let fresh = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_b = neighbours("t-shared-grew", "b-grew", Vec::new());
-        let edited = render_with(&client(&fresh), &config, &page, &wider, None, Some(&share_b)).unwrap();
+        let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &wider, None, Some(&share_b)).unwrap();
         assert_eq!(edited.record["shared_answer"], false);
         assert_eq!(fresh.seen.lock().unwrap().len(), 1);
     }
@@ -1652,18 +1763,18 @@ mod tests {
         let config = Config { model: Model::DEFAULT, instruction: None };
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-scope", "b", vec![("b".into(), b_mask)]);
-        render_with(&client(&server), &config, &page, &fit_a, None, Some(&share_a)).unwrap();
+        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a)).unwrap();
 
         for (scope, instruction) in [("t-other-page", None), ("t-shared-scope", Some("erase it all".to_owned()))] {
             let config = Config { model: Model::DEFAULT, instruction };
             let fresh = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
             let share_b = neighbours(scope, "b", Vec::new());
-            let edited = render_with(&client(&fresh), &config, &page, &fit_b, None, Some(&share_b)).unwrap();
+            let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b)).unwrap();
             assert_eq!(edited.record["shared_answer"], false, "{scope}");
         }
         // The page and the words are the same again, and the answer is still there.
         let share_b = neighbours("t-shared-scope", "b", Vec::new());
-        let edited = render_with(&nowhere(), &config, &page, &fit_b, None, Some(&share_b)).unwrap();
+        let edited = render_with(&nowhere(), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b)).unwrap();
         assert_eq!(edited.record["shared_answer"], true);
     }
 
@@ -1675,7 +1786,7 @@ mod tests {
         let config = Config { model: Model::DEFAULT, instruction: None };
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-crop", "b", vec![("b".into(), b_mask)]);
-        render_with(&client(&server), &config, &page, &fit_a, None, Some(&share_a)).unwrap();
+        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a)).unwrap();
         let crop = shared_crop("t-shared-crop", &config, "b").unwrap();
         assert!(crop.x <= b.x && crop.right() >= b.right());
         assert_eq!(shared_crop("t-shared-crop", &config, "a"), None);
@@ -1689,7 +1800,7 @@ mod tests {
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, image_reply(b"not an image")); MAX_CROPS]);
         let config = Config { model: Model::DEFAULT, instruction: None };
-        let refused = render_with(&client(&server), &config, &page, &fitted, None, None).err();
+        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBadAnswer"));
     }
 
@@ -1716,7 +1827,7 @@ mod tests {
         let fitted = fitted_over(&page, hole);
         let server = serve_with(2, |at, body| http(200, "", &image_reply(&if at == 0 { sent_back(body) } else { gray_like_sent(body) })));
         let config = Config { model: Model::DEFAULT, instruction: None };
-        let edited = render_with(&client(&server), &config, &page, &fitted, None, None).unwrap();
+        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).unwrap();
         assert_eq!(edited.record["crops_refused"], 1);
         assert_eq!(server.seen.lock().unwrap().len(), 2);
     }
@@ -1745,11 +1856,11 @@ mod tests {
             http(200, "", &image_reply(&out))
         });
         let share_a = neighbours("t-shared-unfit", "a", vec![("b".into(), b_mask)]);
-        render_with(&client(&server), &config, &page, &fit_a, None, Some(&share_a)).unwrap();
+        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a)).unwrap();
 
         let fresh = serve(vec![(200, image_reply(&answer_of(512, 512, GRAY)))]);
         let share_b = neighbours("t-shared-unfit", "b", Vec::new());
-        let edited = render_with(&client(&fresh), &config, &page, &fit_b, None, Some(&share_b)).unwrap();
+        let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b)).unwrap();
         assert_eq!(edited.record["shared_answer"], false);
         assert_eq!(fresh.seen.lock().unwrap().len(), 1);
     }
@@ -1777,7 +1888,7 @@ mod tests {
     fn a_request_the_model_never_answers_is_given_up() {
         let quiet = client_at(&silent_after(""), quick());
         let started = Instant::now();
-        assert_eq!(edit(&quiet, "m", b"png", a_region(), None), Err(Failure::Unreachable));
+        assert_eq!(edit(&quiet, "m", b"png", a_region(), None), Err(Failure::Lost));
         assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
     }
 
@@ -1786,7 +1897,7 @@ mod tests {
         let head = "HTTP/1.1 200 X\r\ncontent-type: application/json\r\ncontent-length: 100000\r\n\r\n{\"candi";
         let stalled = client_at(&silent_after(head), quick());
         let started = Instant::now();
-        assert_eq!(edit(&stalled, "m", b"png", a_region(), None), Err(Failure::Unreachable));
+        assert_eq!(edit(&stalled, "m", b"png", a_region(), None), Err(Failure::Lost));
         assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
     }
 
@@ -1794,48 +1905,89 @@ mod tests {
     fn a_stop_ends_the_edit_in_flight_and_the_one_waiting_for_its_turn() {
         let busy = client_at(&silent_after(""), limits());
         let gate = busy.gate;
-        let since = gate.stops();
+        let stop = Stop::default();
         std::thread::scope(|scope| {
-            let in_flight = scope.spawn(|| edit(&busy, "m", b"png", a_region(), None));
+            let in_flight = scope.spawn(|| {
+                let turn = gate.enter(&stop, LIMITS.edit).unwrap();
+                busy.edit(&turn, "m", b"png", a_region(), None)
+            });
             std::thread::sleep(Duration::from_millis(300));
-            let waiting = scope.spawn(|| gate.enter(since, LIMITS.edit).map(|_| ()));
+            let waiting = scope.spawn(|| gate.enter(&stop, LIMITS.edit).map(|_| ()));
             std::thread::sleep(Duration::from_millis(300));
             assert!(!waiting.is_finished(), "a second edit went in while one was in flight");
             let stopped = Instant::now();
-            gate.stop();
+            stop.raise();
             assert_eq!(in_flight.join().unwrap(), Err(Failure::Stopped));
             assert_eq!(waiting.join().unwrap(), Err(Failure::Stopped));
             assert!(stopped.elapsed() < Duration::from_secs(1));
         });
-        // An edit that begins after the stop is not stopped by it.
-        assert!(gate.enter(gate.stops(), LIMITS.edit).is_ok());
+        // Another grant's edit is not stopped by it.
+        assert!(gate.enter(&Stop::default(), LIMITS.edit).is_ok());
+    }
+
+    #[test]
+    fn a_stop_between_the_share_and_the_gate_sends_nothing() {
+        use crate::inference::nano_banana_consent::Book;
+        let book = Book::new(crate::inference::nano_banana_consent::IDLE);
+        let config = Config { model: Model::DEFAULT, instruction: None };
+        let nonce = book.issue(config.clone(), "c1", 1).unwrap();
+        let spend = book.spend(true, Some(&nonce), "c1", None).unwrap();
+        // The bench opens, the page decodes, the keychain asks: Stop lands now.
+        book.revoke(&nonce);
+        let hole = Rect::new(600, 700, 40, 20);
+        let page = page_with_lettering(1200, 1600, hole);
+        let fitted = fitted_over(&page, hole);
+        let server = serve(vec![(200, image_reply(&answer_of(512, 512, GRAY)))]);
+        let granted = spend.granted();
+        let refused = render_with(&client(&server), &granted.config, &granted.stop, &page, &fitted, None, None).err();
+        assert_eq!(refused, Some(Failure::Stopped.reason_key()));
+        assert!(server.seen.lock().unwrap().is_empty(), "a request went out after the Stop");
+        // And `render` refuses before it reads the key at all.
+        assert_eq!(render(&granted, &page, &fitted, None, None).err(), Some(Failure::Stopped.reason_key()));
+    }
+
+    /// What turning Cloud engines off and quitting call: every render that
+    /// holds a share is stopped, whichever window granted it.
+    #[test]
+    fn stop_all_ends_every_window_s_render() {
+        use crate::inference::nano_banana_consent::book;
+        let config = Config { model: Model::DEFAULT, instruction: None };
+        let one = book().issue(config.clone(), "t-stop-all-1", 1).unwrap();
+        let other = book().issue(config, "t-stop-all-2", 1).unwrap();
+        let first = book().spend(true, Some(&one), "t-stop-all-1", None).unwrap();
+        let second = book().spend(true, Some(&other), "t-stop-all-2", None).unwrap();
+        stop_all();
+        assert!(first.stop.raised() && second.stop.raised());
     }
 
     #[test]
     fn one_edit_holds_the_gate_at_a_time_and_its_deadline_ends_it() {
         let gate = own_gate();
-        let first = gate.enter(gate.stops(), LIMITS.edit).unwrap();
+        let first = gate.enter(&Stop::default(), LIMITS.edit).unwrap();
         std::thread::scope(|scope| {
-            let second = scope.spawn(|| gate.enter(gate.stops(), LIMITS.edit).is_ok());
+            let second = scope.spawn(|| gate.enter(&Stop::default(), LIMITS.edit).is_ok());
             std::thread::sleep(Duration::from_millis(300));
             assert!(!second.is_finished());
             drop(first);
             assert!(second.join().unwrap());
         });
-        let late = gate.enter(gate.stops(), Duration::ZERO).unwrap();
+        let late = gate.enter(&Stop::default(), Duration::ZERO).unwrap();
         assert_eq!(late.check(), Err(Failure::Unreachable));
         assert_eq!(late.sleep(Duration::from_secs(5)), Err(Failure::Unreachable));
     }
 
     #[test]
     fn the_new_refusals_have_the_keys_the_webview_knows() {
-        let keys = [Failure::KeyStore, Failure::Location, Failure::Billing, Failure::KeyExpired, Failure::Stopped].map(Failure::reason_key);
+        let keys = [Failure::KeyStore, Failure::Location, Failure::Billing, Failure::KeyExpired, Failure::Stopped,
+            Failure::Lost, Failure::LongWait].map(Failure::reason_key);
         assert_eq!(keys, [
             "decline.reason.nanoBananaKeyStore",
             "decline.reason.nanoBananaLocation",
             "decline.reason.nanoBananaBilling",
             "decline.reason.nanoBananaKeyExpired",
             "decline.reason.nanoBananaStopped",
+            "decline.reason.nanoBananaLost",
+            "decline.reason.nanoBananaLongWait",
         ]);
         let codes = [KeyError::NoStore, KeyError::Invalid, KeyError::Failed].map(KeyError::code);
         assert_eq!(codes, ["nanoBanana.key.noStore", "nanoBanana.key.invalid", "nanoBanana.key.failed"]);
@@ -1984,7 +2136,7 @@ mod tests {
         let fitted = fitted_over(&page, Rect::new(numbers[0], numbers[1], numbers[2] as u32, numbers[3] as u32));
         let config = Config { model: Model::DEFAULT, instruction: None };
         let live = Client::new(ENDPOINT, &key, LIMITS, &GATE).unwrap();
-        let edited = render_with(&live, &config, &page, &fitted, None, None).unwrap();
+        let edited = render_with(&live, &config, &Stop::default(), &page, &fitted, None, None).unwrap();
         println!("{}", edited.record);
         let out = std::env::var("NANO_BANANA_OUT").unwrap();
         std::fs::write(out, cleaner_core::image::encode_png_preview(&edited.rendered.pixels).unwrap()).unwrap();

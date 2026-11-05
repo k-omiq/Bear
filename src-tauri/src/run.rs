@@ -7419,17 +7419,17 @@ pub(crate) fn jobs() -> Vec<crate::jobs::JobView> {
 
 /// Raise every run's cancel flag and answer how many there were. Waits for
 /// none of them: the quit path polls [`jobs`] with a bound of its own, where
-/// `cancel_run` would wait out [`CANCEL_WAIT`] per run.
+/// `cancel_run` would wait out [`CANCEL_WAIT`] per run. Every Nano Banana
+/// request ends as well, a single region's included, which holds no run.
 pub(crate) fn cancel_all() -> usize {
     let guard = active().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     for run in guard.iter() {
         run.cancel.store(true, Ordering::SeqCst);
         run.analysis_cancel.cancel();
     }
-    let nano_banana = guard.iter().any(|run| run.kind == RunKind::NanoBanana);
     let count = guard.len();
     drop(guard);
-    if nano_banana { crate::inference::nano_banana::nano_banana_stop(); }
+    crate::inference::nano_banana::stop_all();
     count
 }
 
@@ -7478,6 +7478,11 @@ pub(crate) struct RunReservation {
 }
 
 impl RunReservation {
+    /// The id the run will have.
+    pub(crate) fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
     /// The pages the run will walk, once it knows them.
     pub(crate) fn set_total(&self, pages: usize) {
         self.progress.set_total(pages);
@@ -8721,9 +8726,10 @@ fn request_cancel(run_id: Option<String>) -> Result<Option<String>, String> {
     cancel.store(true, Ordering::SeqCst);
     analysis_cancel.cancel();
     // A Nano Banana batch is most often inside one long request: that request
-    // ends now, and the rest of the grant is withdrawn so nothing more is sent.
+    // ends now, and the rest of its grant is withdrawn so nothing more is
+    // sent. Only this batch's: another window's requests go on.
     if kind == RunKind::NanoBanana {
-        crate::inference::nano_banana::nano_banana_stop();
+        crate::inference::nano_banana_consent::book().revoke_owned_by(&id);
     }
 
     let (lock, condvar) = &*finished;

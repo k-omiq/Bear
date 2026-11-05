@@ -2313,13 +2313,31 @@ export function createMockBackend(options = {}) {
   /** Whether a Gemini key was given. The mock never keeps the key itself. */
   let nanoBananaKey = false
   /**
-   * The live Nano Banana grant, as `nano_banana_consent.rs` keeps it: one at
-   * a time, counted down a region per render, lapsing when idle.
+   * The live Nano Banana grants, as `nano_banana_consent.rs` keeps them: one
+   * per confirmed window, on its chapter, counted down a region per render,
+   * lapsing when idle but never while a render holds a share, claimed by the
+   * batch that starts on it, and each with the stop its renders watch.
    *
-   * @type {{ grant: string, model: string, left: number, lapses: number } | null}
+   * @typedef {{ grant: string, model: string, chapterId: string, left: number, lapses: number,
+   *   spending: number, owner: string|null, stop: { raised: boolean } }} MockNanoBananaGrant
+   * @type {Map<string, MockNanoBananaGrant>}
    */
-  let nanoBananaGrant = null
+  const nanoBananaLive = new Map()
+  /** The last grant made, which `tauri.js` sends for a caller that names none. */
+  let nanoBananaLast = /** @type {string|null} */ (null)
   let nanoBananaGrants = 0
+  /** Single-region requests in flight, by chapter (`region.rs#REQUESTS_OUT`). */
+  const nanoBananaOut = new Map()
+  /** @param {(grant: MockNanoBananaGrant) => boolean} gone */
+  const nanoBananaWithdraw = (gone) => {
+    for (const [nonce, grant] of nanoBananaLive) {
+      if (!gone(grant)) continue
+      grant.stop.raised = true
+      nanoBananaLive.delete(nonce)
+    }
+  }
+  /** @param {MockNanoBananaGrant} grant @param {number} now */
+  const nanoBananaLapsed = (grant, now) => grant.spending === 0 && now >= grant.lapses
   /** Answers the mock's Nano Banana renders kept, for their record's name. */
   let nanoBananaAnswers = 0
 
@@ -2334,13 +2352,36 @@ export function createMockBackend(options = {}) {
    * @param {any} params
    * @returns {string | null}
    */
-  const nanoBananaMayRender = (params) => {
-    const spent = nanoBananaSpend(params?.nanoBananaGrant)
+  const nanoBananaMayRender = (params, chapterId) => {
+    const spent = nanoBananaSpend(params?.nanoBananaGrant, chapterId)
     if ('reason' in spent) {
       notify('notice.mask.rerunFailed', { reasonKey: spent.reason }, 'warn')
       return null
     }
-    return spent.model
+    return spent
+  }
+
+  /**
+   * The request a single region's render sends, after its share was spent:
+   * out on its chapter while it waits, and ended by its grant's stop, as a
+   * native render watches it from the share on (`nano_banana.rs#Gate`).
+   * Answers whether it came back to be used.
+   *
+   * @param {{ model: string, stop: { raised: boolean }, release: () => void }} spent
+   * @param {string} chapterId
+   * @returns {Promise<boolean>}
+   */
+  const nanoBananaRequest = async (spent, chapterId) => {
+    nanoBananaOut.set(chapterId, (nanoBananaOut.get(chapterId) ?? 0) + 1)
+    try {
+      await delay(timing.region)
+    } finally {
+      nanoBananaOut.set(chapterId, nanoBananaOut.get(chapterId) - 1)
+      spent.release()
+    }
+    if (!spent.stop.raised) return true
+    notify('notice.mask.rerunFailed', { reasonKey: 'decline.reason.nanoBananaStopped' }, 'warn')
+    return false
   }
 
   /**
@@ -2348,23 +2389,35 @@ export function createMockBackend(options = {}) {
    * batch reports its refusals at the end (`nano_banana_job.rs`).
    *
    * @param {string|undefined} nonce - the grant presented, or none for the one held
-   * @returns {{model: string} | {reason: string}}
+   * @param {string} chapterId - the chapter the render is on
+   * @param {string|null} [owner] - the batch spending it, or none for a single region
+   * @returns {{model: string, stop: {raised: boolean}, release: () => void} | {reason: string}}
    */
-  const nanoBananaSpend = (nonce) => {
+  const nanoBananaSpend = (nonce, chapterId, owner = null) => {
+    const NO_CONSENT = 'decline.reason.nanoBananaNoConsent'
     if (state.settings.cloudEngines !== 'allowed') return { reason: 'decline.reason.nanoBananaOff' }
-    const live = nanoBananaGrant
+    // The backend keeps the last grant and sends it, as `tauri.js` does, so a
+    // caller that names none presents that one.
+    const presented = nonce ?? nanoBananaLast
+    const live = presented ? nanoBananaLive.get(presented) : undefined
     const now = timers.now()
-    // The backend keeps the grant and sends it, as `tauri.js` does, so a
-    // caller that names none presents the one it holds.
-    const presented = nonce ?? live?.grant
-    if (!live || presented !== live.grant || now >= live.lapses || live.left <= 0) {
-      if (live && presented === live.grant) nanoBananaGrant = null
-      return { reason: 'decline.reason.nanoBananaNoConsent' }
+    if (!live) return { reason: NO_CONSENT }
+    if (nanoBananaLapsed(live, now)) {
+      nanoBananaWithdraw((grant) => grant === live)
+      return { reason: NO_CONSENT }
     }
+    if (live.left <= 0 || live.chapterId !== chapterId || live.owner !== owner) return { reason: NO_CONSENT }
     live.left -= 1
-    live.lapses = now + NANO_BANANA_GRANT_IDLE_MS
     if (!nanoBananaKey) return { reason: 'decline.reason.nanoBananaNoKey' }
-    return { model: live.model }
+    live.spending += 1
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      live.spending -= 1
+      live.lapses = timers.now() + NANO_BANANA_GRANT_IDLE_MS
+    }
+    return { model: live.model, stop: live.stop, release }
   }
 
   /**
@@ -3152,7 +3205,8 @@ export function createMockBackend(options = {}) {
      * has no process to end, so this is where the mock stops.
      */
     async confirmQuit() {
-      if (runner.list().some((run) => run.kind === 'nanoBanana')) nanoBananaGrant = null
+      // Every Nano Banana request ends, a single region's included.
+      nanoBananaWithdraw(() => true)
       for (const { runId } of runner.list()) runner.cancel(runId)
       for (const run of denoiseRuns.values()) run.stopped = true
     },
@@ -3579,10 +3633,10 @@ export function createMockBackend(options = {}) {
 
     async cancelRun({ runId } = {}) {
       await delay(timing.method)
-      // Stop on a Nano Banana batch withdraws its grant too, as
-      // `run.rs#request_cancel` calls `nano_banana_stop`.
-      const kind = runner.list().find((run) => !runId || run.runId === runId)?.kind
-      if (kind === 'nanoBanana') nanoBananaGrant = null
+      // Stop on a Nano Banana batch withdraws its grant too, and only its
+      // own, as `run.rs#request_cancel` does.
+      const run = runner.list().find((candidate) => !runId || candidate.runId === runId)
+      if (run?.kind === 'nanoBanana') nanoBananaWithdraw((grant) => grant.owner === run.runId)
       return runner.cancel(runId)
     },
 
@@ -3599,11 +3653,13 @@ export function createMockBackend(options = {}) {
           return { status: 'not-found' }
         }
         refuseBusyPage(found.chapter.id, found.page.index)
-        model = nanoBananaMayRender(params)
-        if (!model) {
+        const spent = nanoBananaMayRender(params, found.chapter.id)
+        if (!spent) {
           await delay(timing.method)
           return { status: 'blocked' }
         }
+        if (!(await nanoBananaRequest(spent, found.chapter.id))) return { status: 'blocked' }
+        model = spent.model
       }
       if (tool === 'autoClean') {
         await delay(timing.method)
@@ -3685,8 +3741,9 @@ export function createMockBackend(options = {}) {
       if (params?.qwenEdit !== undefined) params = { ...params, qwenEdit: checkedQwenEdit(params.qwenEdit) }
       await delay(timing.method)
       refuseBusyPage(chapterId, pageIndex)
-      const model = params?.engine === NANO_BANANA_ENGINE ? nanoBananaMayRender(params) : null
-      if (params?.engine === NANO_BANANA_ENGINE && !model) return null
+      const spent = params?.engine === NANO_BANANA_ENGINE ? nanoBananaMayRender(params, chapterId) : null
+      if (params?.engine === NANO_BANANA_ENGINE && (!spent || !(await nanoBananaRequest(spent, chapterId)))) return null
+      const model = spent?.model ?? null
       // Always local, as the native command is: a cloud engine is refused while
       // cloud is off, and otherwise dropped for the fill mode's local default.
       // The interface asks for consent and applies the cloud to the new region.
@@ -4306,8 +4363,10 @@ export function createMockBackend(options = {}) {
       }
       // A re-run that lands on Nano Banana (named, or Try again on one of its
       // layers) is a paid request, held to its grant as natively.
-      const model = rerunTarget(found.region.mask, kind, engine) === NANO_BANANA_ENGINE ? nanoBananaMayRender(params) : null
-      if (rerunTarget(found.region.mask, kind, engine) === NANO_BANANA_ENGINE && !model) return null
+      const reaches = rerunTarget(found.region.mask, kind, engine) === NANO_BANANA_ENGINE
+      const spent = reaches ? nanoBananaMayRender(params, found.chapter.id) : null
+      if (reaches && (!spent || !(await nanoBananaRequest(spent, found.chapter.id)))) return null
+      const model = spent?.model ?? null
       const qwenEdit = checkedQwenEdit(params?.qwenEdit)
       // Try again on a Nano Banana layer finishes as the layer was finished.
       const recorded = recordedNanoBananaFinishing(found.region.mask.provenance)
@@ -4937,8 +4996,9 @@ export function createMockBackend(options = {}) {
         // Only over a region still waiting, a detection or a held row; one
         // with a layer is not sent again (`region.rs#clean_anyway_at`).
         if (!isUncleaned(found.region)) return null
-        model = nanoBananaMayRender(params)
-        if (!model) return null
+        const spent = nanoBananaMayRender(params, found.chapter.id)
+        if (!spent || !(await nanoBananaRequest(spent, found.chapter.id))) return null
+        model = spent.model
       }
       const qwenEdit = checkedQwenEdit(params?.qwenEdit)
       const result = cleaningHere(found, () => cleanRegionAnyway(found.region, found.page, toolContext, engine, qwenEdit))
@@ -5095,8 +5155,8 @@ export function createMockBackend(options = {}) {
       if (nanoBananaRefused) throw new Error(nanoBananaRefused)
       Object.assign(state.settings, patch)
       // As `settings.rs#write_settings`: cloud engines off withdraws the rest
-      // of a Nano Banana window.
-      if (patch && 'cloudEngines' in patch && state.settings.cloudEngines !== 'allowed') nanoBananaGrant = null
+      // of every Nano Banana window and ends the request in flight.
+      if (patch && 'cloudEngines' in patch && state.settings.cloudEngines !== 'allowed') nanoBananaWithdraw(() => true)
       return withoutToken(snapshot(state.settings))
     },
 
@@ -5146,20 +5206,28 @@ export function createMockBackend(options = {}) {
       nanoBananaKey = false
     },
 
-    async grantNanoBanana({ model, count } = {}) {
+    async grantNanoBanana({ model, count, chapterId } = {}) {
       if (state.settings.cloudEngines !== 'allowed') throw new Error('decline.reason.nanoBananaOff')
       const confirmed = nanoBananaModel(state.settings.nanoBananaModel).id
       if (model !== confirmed || !Number.isInteger(count) || count < 1 || count > NANO_BANANA_MAX_REGIONS) {
         throw new Error('decline.reason.nanoBananaNoConsent')
       }
+      const now = timers.now()
+      // Other windows' grants stand; the lapsed and used up are forgotten.
+      nanoBananaWithdraw((live) => nanoBananaLapsed(live, now) || (live.left <= 0 && live.spending === 0))
       nanoBananaGrants += 1
       const grant = `mock-nano-banana-grant-${nanoBananaGrants}`
-      nanoBananaGrant = { grant, model: confirmed, left: count, lapses: timers.now() + NANO_BANANA_GRANT_IDLE_MS }
+      nanoBananaLive.set(grant, {
+        grant, model: confirmed, chapterId: String(chapterId ?? ''), left: count,
+        lapses: now + NANO_BANANA_GRANT_IDLE_MS, spending: 0, owner: null, stop: { raised: false },
+      })
+      nanoBananaLast = grant
       return { grant, model: confirmed, count }
     },
 
-    async nanoBananaStop() {
-      nanoBananaGrant = null
+    /** Stop the single region's request `grant` made, and only that one. */
+    async nanoBananaStop({ grant } = {}) {
+      nanoBananaWithdraw((live) => live.grant === grant)
     },
 
     /**
@@ -5175,7 +5243,7 @@ export function createMockBackend(options = {}) {
       await delay(timing.method)
       const NO_CONSENT = 'decline.reason.nanoBananaNoConsent'
       // The grant the backend holds, as `tauri.js` sends it, when none is named.
-      const nonce = named ?? nanoBananaGrant?.grant
+      const nonce = named ?? nanoBananaLast
       if (typeof nonce !== 'string') throw new Error(NO_CONSENT)
       const found = findChapter(chapterId)
       if (!Array.isArray(regionIds) || regionIds.length === 0) throw new Error('nano_banana_no_regions')
@@ -5190,14 +5258,19 @@ export function createMockBackend(options = {}) {
       targets.sort((a, b) => a.pageIndex - b.pageIndex)
       // The grant is read, not spent (`nano_banana_consent.rs#left`).
       if (state.settings.cloudEngines !== 'allowed') throw new Error('decline.reason.nanoBananaOff')
-      const live = nanoBananaGrant
-      if (!live || live.grant !== nonce || timers.now() >= live.lapses || live.left < targets.length) throw new Error(NO_CONSENT)
+      const live = nanoBananaLive.get(nonce)
+      if (!live || nanoBananaLapsed(live, timers.now()) || live.left < targets.length) throw new Error(NO_CONSENT)
       const own = runner.runFor(chapterId)
       if (own) return { runId: own, pages: [], alreadyRunning: true }
       if (runner.atCapacity()) return { runId: null, pages: [], alreadyRunning: true, atCapacity: true }
+      // As `nano_banana_job.rs#start`: not while a single region's request is
+      // out on the chapter, and only on this chapter's unclaimed grant.
+      if ((nanoBananaOut.get(chapterId) ?? 0) > 0) throw new Error('nanoBanana.job.requestOut')
+      if (live.chapterId !== chapterId || live.owner !== null) throw new Error(NO_CONSENT)
 
       const scenario = nanoBananaScenario()
-      const ACCOUNT = ['decline.reason.nanoBananaOff', 'decline.reason.nanoBananaNoKey', 'decline.reason.nanoBananaBilling']
+      const ACCOUNT = ['decline.reason.nanoBananaOff', 'decline.reason.nanoBananaNoKey', 'decline.reason.nanoBananaBilling',
+        'decline.reason.nanoBananaLongWait']
       const report = { total: targets.length, cleaned: 0, gone: 0, failed: /** @type {any[]} */ ([]), left: /** @type {any[]} */ ([]), byUser: false }
       /** @type {string|null} */
       let stopped = null
@@ -5228,10 +5301,14 @@ export function createMockBackend(options = {}) {
             return false
           }
           turn += 1
-          const spent = nanoBananaSpend(nonce)
+          const spent = nanoBananaSpend(nonce, chapterId, runId)
+          if ('release' in spent) spent.release()
           let reason = 'reason' in spent ? spent.reason : null
           if (!reason && scenario === 'blocked' && turn === 1) reason = 'decline.reason.nanoBananaBlocked'
+          // A link lost after the crop was sent: skipped, never sent again.
+          if (!reason && scenario === 'lost' && turn === 1) reason = 'decline.reason.nanoBananaLost'
           if (!reason && scenario === 'billing' && turn === 2) reason = 'decline.reason.nanoBananaBilling'
+          if (!reason && scenario === 'longWait' && turn === 2) reason = 'decline.reason.nanoBananaLongWait'
           // Still busy after both waits; the mock does not wait them.
           if (!reason && scenario === 'busy' && turn === 2) reason = 'decline.reason.nanoBananaRateLimited'
           if (reason === NO_CONSENT || ACCOUNT.includes(reason) || reason === 'decline.reason.nanoBananaRateLimited') {
@@ -5257,6 +5334,8 @@ export function createMockBackend(options = {}) {
         },
         pageStatus: settledStatus,
         closing: (ending) => {
+          // However the batch ended, what is left of its grant goes with it.
+          nanoBananaWithdraw((grant) => grant.owner === runId)
           if (ending === 'cancelled' && !stopped) stopped = 'decline.reason.nanoBananaStopped'
           report.left = targets.filter((target) => wanted.has(target.regionId) && !handled.has(target.regionId))
           report.byUser = stopped === 'decline.reason.nanoBananaStopped'
@@ -5272,6 +5351,7 @@ export function createMockBackend(options = {}) {
         },
       })
       runId = handle.runId
+      live.owner = runId
       return handle
     },
 

@@ -8,28 +8,38 @@
  * opens with it.
  *
  * **A yes is a grant.** Once the instruction is saved, the backend is asked for
- * a grant for this many regions on the model the window showed
- * (`grantNanoBanana`), which binds that model and that instruction. The
- * backend keeps it and sends it with each Nano Banana render, and the native
- * side renders nothing without one, so a caller only ever sees the boolean.
+ * a grant for this many regions of this chapter on the model the window
+ * showed (`grantNanoBanana`), which binds that model and that instruction.
+ * Each window's grant is its own: the caller gets it back and sends it with
+ * the edit or the batch it confirmed (`params.nanoBananaGrant`), and Stop on
+ * that edit names it (`nanobananaedits.svelte.js`). The native side renders
+ * nothing without one.
  */
 import { notify, pushModal } from '../state/app.svelte.js'
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
 import { writeSettingsSerialized } from '../state/settingswrite.js'
-import { MAX_INSTRUCTION_CHARS, nanoBananaModel, nanoBananaStartSize } from '../model/nanobanana.js'
+import { MAX_GRANT_REGIONS, MAX_INSTRUCTION_CHARS, nanoBananaModel, nanoBananaStartSize } from '../model/nanobanana.js'
 
 /**
- * Ask, keep the instruction, and take the grant. Answers whether to send.
- * Nothing is sent when the instruction could not be saved, because the grant
- * would carry the old one, nor when no grant was given (cloud engines turned
- * off, or the model changed while the window was open).
+ * Ask, keep the instruction, and take the grant. Answers the grant to send
+ * with, or null to send nothing. Nothing is sent when the instruction could
+ * not be saved, because the grant would carry the old one, nor when no grant
+ * was given (cloud engines turned off, or the model changed while the window
+ * was open). More regions than one grant covers are refused before the
+ * window opens, with their own message.
  *
  * @param {number} count - regions the request covers
+ * @param {string|null|undefined} chapterId - the chapter they are on
  * @param {import('../api/backend.js').Backend} [backend]
- * @returns {Promise<boolean>}
+ * @returns {Promise<string|null>}
  */
-export async function confirmNanoBanana(count, backend = getBackend()) {
+export async function confirmNanoBanana(count, chapterId, backend = getBackend()) {
+  if (!chapterId) return null
+  if (count > MAX_GRANT_REGIONS) {
+    notify({ key: 'nanoBanana.run.tooMany', params: { max: MAX_GRANT_REGIONS }, tone: 'warn' })
+    return null
+  }
   /** @type {any} */
   let settings = null
   try { settings = await backend.readSettings() } catch { /* the defaults stand */ }
@@ -52,21 +62,22 @@ export async function confirmNanoBanana(count, backend = getBackend()) {
       onresolve: resolve,
     })
   }))
-  if (answer?.id !== 'confirm') return false
+  if (answer?.id !== 'confirm') return null
   try {
     await writeSettingsSerialized(backend, {
       nanoBananaPrompt: String(answer.prompt ?? '').trim().slice(0, MAX_INSTRUCTION_CHARS),
     })
   } catch {
     notify({ key: 'nanoBanana.run.promptNotSaved', tone: 'warn' })
-    return false
+    return null
   }
   try {
-    await backend.grantNanoBanana({ model, count })
+    const granted = await backend.grantNanoBanana({ model, count, chapterId })
+    if (typeof granted?.grant !== 'string') throw new Error('decline.reason.nanoBananaNoConsent')
+    return granted.grant
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     notify({ key: hasKey(reason) ? reason : 'decline.reason.nanoBananaNoConsent', tone: 'warn' })
-    return false
+    return null
   }
-  return true
 }

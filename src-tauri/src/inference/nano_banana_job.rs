@@ -8,18 +8,33 @@
 //! withdraws the grant), and it holds each page it is on against other
 //! writers. Each region is cleaned through the same path a click takes
 //! (`region::clean_for_nano_banana_batch`), on the run's behalf, so the page
-//! hold does not refuse it and its undo steps join one step for the batch.
+//! hold does not refuse it and its undo steps join one step for the batch
+//! (`history::record_clean`; an edit journaled between two of its cleans
+//! starts a second step, see there).
+//!
+//! A page is raised (`page-started`) under the chapter's lock, as the run
+//! walk raises one, and not while a single region's Nano Banana request is
+//! out on it: that request let go of the lock and would find the page taken
+//! when its paid answer came back (`region::nano_banana_requests_out`). The
+//! batch waits for it, and is refused at the start while one is out on a
+//! longstrip chapter, where it holds every page from the start.
 //!
 //! ## Consent
 //!
 //! The person confirmed a count and a cost in the window
-//! (`nanobananaask.svelte.js`), which made a grant for that many regions
-//! (`nano_banana_consent.rs`). The batch is refused before it starts unless
-//! that grant is live and covers every region it was handed, and each region
-//! spends one share of it just before its first request. A retry of the same
-//! region uses the same share, so the count is never more than the window
-//! said, and it is asked again for before each retry: Stop or Cloud engines
-//! turned off withdraws it, and the retry does not go.
+//! (`nanobananaask.svelte.js`), which made a grant for that many regions of
+//! this chapter (`nano_banana_consent.rs`). The batch is refused before it
+//! starts unless that grant is live, is this chapter's, and covers every
+//! region it was handed, and it claims the grant as its own then: no other
+//! batch and no single region spends it after. Each region spends one share
+//! just before its first request. A retry of the same region uses the same
+//! share, so the count is never more than the window said, and it is asked
+//! again for before each retry: Stop or Cloud engines turned off withdraws
+//! it, and the retry does not go. The share carries the grant's stop, so a
+//! Stop at any point after it was spent ends the request before it is sent.
+//! Another Nano Banana window has a grant of its own and leaves this one
+//! alone. When the batch ends, however it ends, a panic included, what is
+//! left of its grant is withdrawn.
 //!
 //! ## What a failure means
 //!
@@ -27,17 +42,21 @@
 //!
 //! - **The account** ([`Verdict::Account`]): no key, a key store that will not
 //!   answer, a rejected or expired key, a country Google does not serve,
-//!   billing, a refused model, Cloud engines off. Every other region would
-//!   fail the same way, so the batch stops at once and says why.
-//! - **Busy** ([`Verdict::Busy`]): a rate limit, or Google not reachable. The
-//!   region is tried again after a wait ([`RETRY_WAITS`]), and when the waits
-//!   are used up the batch stops, because the next region would wait too.
+//!   billing, a refused model, Cloud engines off, or a server that asked for
+//!   a wait longer than any the batch makes. Every other region would fail
+//!   the same way, so the batch stops at once and says why.
+//! - **Busy** ([`Verdict::Busy`]): a rate limit, or Google not reachable
+//!   before the request was sent. The region is tried again after a wait
+//!   ([`RETRY_WAITS`]), and when the waits are used up the batch stops,
+//!   because the next region would wait too.
 //! - **The crop** ([`Verdict::Crop`]): a safety refusal, a recitation, an
-//!   answer that could not be used or kept the mark, a page changed while the
-//!   request was out, a region too large. Another region may well go through,
-//!   so this one is skipped with its reason and the batch goes on.
-//! - **Stopped** ([`Verdict::Stopped`]): Stop, or the grant withdrawn, lapsed
-//!   or replaced by another Nano Banana window. The batch ends as cancelled.
+//!   answer that could not be used or kept the mark, a request Google refused
+//!   as put, a link lost after the whole request was sent (its answer may be
+//!   billed, so it is not sent again), a page changed while the request was
+//!   out, a region too large. Another region may well go through, so this
+//!   one is skipped with its reason and the batch goes on.
+//! - **Stopped** ([`Verdict::Stopped`]): Stop, or the grant withdrawn or
+//!   lapsed. The batch ends as cancelled.
 //!
 //! At the end the batch sends its [`Report`] (`nano-banana-report`) and one
 //! notice. The interface shows the counts per reason from the report, and can
@@ -49,7 +68,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use super::nano_banana::{Config, Failure};
+use super::nano_banana::{Failure, Granted};
 use super::nano_banana_consent::{Book, CLOUD_OFF, MAX_REGIONS, NO_CONSENT};
 use crate::events::{self, Event};
 use crate::library::{self, ApiRegion, Library};
@@ -58,7 +77,9 @@ use crate::run::{self, QueuedPage, RunHandle, Summary};
 /// The waits before each retry of a region that met a rate limit or could not
 /// reach Google. The request itself already waited once, up to a minute, for a
 /// server that named a wait (`nano_banana.rs#refused`). Two more tries, then
-/// the batch stops.
+/// the batch stops. A server that names a longer wait than a minute is
+/// [`Failure::LongWait`], which stops the batch at once: these waits are
+/// shorter.
 pub const RETRY_WAITS: [Duration; 2] = [Duration::from_secs(15), Duration::from_secs(45)];
 
 /// The reason a region gets when its clean failed for a cause no reason key
@@ -82,7 +103,7 @@ pub(crate) fn verdict(reason: &str) -> Verdict {
         Verdict::Stopped
     } else if reason == CLOUD_OFF
         || is(&[Failure::NoKey, Failure::KeyStore, Failure::KeyRejected, Failure::KeyExpired,
-            Failure::Location, Failure::Billing, Failure::ModelRejected])
+            Failure::Location, Failure::Billing, Failure::ModelRejected, Failure::LongWait])
     {
         Verdict::Account
     } else if is(&[Failure::RateLimited, Failure::Unreachable]) {
@@ -150,8 +171,12 @@ pub(crate) struct Walk<'a> {
     pub grants: &'a Book,
     pub nonce: &'a str,
     pub cloud_allowed: &'a dyn Fn() -> bool,
-    /// Clean one region under the confirmed settings.
-    pub clean: &'a dyn Fn(&Target, &Config) -> Attempt,
+    /// Raise the page: send its `page-started` with the chapter's lock held,
+    /// once no single region's request is out on it. Answers false when
+    /// `cancel` went up while it waited, and then sends nothing.
+    pub raise: &'a dyn Fn(u32, &AtomicBool, &dyn Fn(Event)) -> bool,
+    /// Clean one region under what its share granted.
+    pub clean: &'a dyn Fn(&Target, &Granted) -> Attempt,
     /// The page's `page-done`, as the manifest now holds it.
     pub page_done: &'a dyn Fn(u32) -> Event,
     /// Wait this long, or less when `cancel` goes up. Answers whether the
@@ -161,35 +186,59 @@ pub(crate) struct Walk<'a> {
 }
 
 /// Walk `targets` page by page. Answers the report and the run's summary.
+#[cfg(test)]
 pub(crate) fn walk(walk: &Walk<'_>, targets: &[Target], cancel: &AtomicBool, emit: &dyn Fn(Event))
     -> (Report, Summary) {
+    let mut report = Report::default();
+    let summary = walk_into(&mut report, walk, targets, cancel, emit);
+    (report, summary)
+}
+
+/// [`walk`], into `report` as it goes: every target starts in `left` and
+/// leaves it when it is handled, so a walk that panics leaves a report that
+/// is true as far as it got.
+pub(crate) fn walk_into(report: &mut Report, walk: &Walk<'_>, targets: &[Target], cancel: &AtomicBool,
+    emit: &dyn Fn(Event)) -> Summary {
     let mut pages: BTreeMap<u32, Vec<&Target>> = BTreeMap::new();
     for target in targets {
         pages.entry(target.page_index).or_default().push(target);
     }
-    let mut report = Report { total: u32::try_from(targets.len()).unwrap_or(u32::MAX), ..Report::default() };
+    *report = Report {
+        total: u32::try_from(targets.len()).unwrap_or(u32::MAX),
+        left: pages.values().flatten().map(|target| (*target).clone()).collect(),
+        ..Report::default()
+    };
+    let handled = |report: &mut Report, target: &Target| {
+        if let Some(at) = report.left.iter().position(|left| left == target) {
+            report.left.remove(at);
+        }
+    };
     let mut pages_done = 0u32;
+    let mut errored = 0u32;
     let mut stopped: Option<&'static str> = None;
     for (page, on_page) in &pages {
         if stopped.is_none() && cancel.load(Ordering::SeqCst) {
             stopped = Some(Failure::Stopped.reason_key());
         }
         if stopped.is_some() {
-            report.left.extend(on_page.iter().map(|target| (*target).clone()));
-            continue;
+            break;
         }
-        emit(run::page_started_event(walk.run_id, walk.chapter_id, *page));
+        if !(walk.raise)(*page, cancel, emit) {
+            stopped = Some(Failure::Stopped.reason_key());
+            break;
+        }
+        let mut page_errored = false;
         for target in on_page {
             if stopped.is_none() && cancel.load(Ordering::SeqCst) {
                 stopped = Some(Failure::Stopped.reason_key());
             }
             if stopped.is_some() {
-                report.left.push((*target).clone());
-                continue;
+                break;
             }
             match clean_one(walk, target, cancel) {
                 Attempt::Cleaned(region) => {
                     report.cleaned += 1;
+                    handled(report, target);
                     if let Some(region) = region {
                         emit(Event::RegionDone {
                             run_id: walk.run_id.to_owned(),
@@ -200,22 +249,41 @@ pub(crate) fn walk(walk: &Walk<'_>, targets: &[Target], cancel: &AtomicBool, emi
                         });
                     }
                 }
-                Attempt::Gone => report.gone += 1,
+                Attempt::Gone => {
+                    report.gone += 1;
+                    handled(report, target);
+                }
                 Attempt::Error(error) => {
                     eprintln!("manga-cleaner: a Nano Banana batch could not clean {}: {error}", target.region_id);
                     report.failed.push(unclean(target, ERROR_REASON));
+                    handled(report, target);
+                    page_errored = true;
                 }
-                Attempt::Refused(reason) => match verdict(reason) {
-                    Verdict::Crop => report.failed.push(unclean(target, reason)),
-                    Verdict::Stopped | Verdict::Account | Verdict::Busy => {
-                        stopped = Some(reason);
-                        report.left.push((*target).clone());
+                Attempt::Refused(reason) => {
+                    // A stop that came with Cloud engines turned off is that.
+                    let reason = if reason == Failure::Stopped.reason_key() && !(walk.cloud_allowed)() {
+                        CLOUD_OFF
+                    } else {
+                        reason
+                    };
+                    match verdict(reason) {
+                        Verdict::Crop => {
+                            report.failed.push(unclean(target, reason));
+                            handled(report, target);
+                        }
+                        Verdict::Stopped | Verdict::Account | Verdict::Busy => stopped = Some(reason),
                     }
-                },
+                }
             }
         }
         emit((walk.page_done)(*page));
-        pages_done += 1;
+        // A page the batch stopped inside is not a page cleaned.
+        if stopped.is_none() {
+            pages_done += 1;
+        }
+        if page_errored {
+            errored += 1;
+        }
     }
     report.by_user = stopped == Some(Failure::Stopped.reason_key());
     report.stopped = stopped.map(str::to_owned);
@@ -224,17 +292,33 @@ pub(crate) fn walk(walk: &Walk<'_>, targets: &[Target], cancel: &AtomicBool, emi
         Some(Verdict::Stopped) => "cancelled",
         Some(_) => "failed",
     };
-    let summary = Summary {
+    Summary {
         reason,
         pages_queued: u32::try_from(pages.len()).unwrap_or(u32::MAX),
         pages_cleaned: pages_done,
         regions_cleaned: report.cleaned,
         next_page_index: None,
-        errored: 0,
+        errored,
         regions_detected: 0,
         regions_declined: u32::try_from(report.failed.len()).unwrap_or(u32::MAX),
-    };
-    (report, summary)
+    }
+}
+
+/// What a batch whose walk panicked reports: what `report` says it did, the
+/// region it was on among the ones left, and the error as why it stopped.
+fn after_panic(report: &mut Report, pages_queued: u32) -> Summary {
+    report.stopped = Some(ERROR_REASON.to_owned());
+    report.by_user = false;
+    Summary {
+        reason: "failed",
+        pages_queued,
+        pages_cleaned: 0,
+        regions_cleaned: report.cleaned,
+        next_page_index: None,
+        errored: 1,
+        regions_detected: 0,
+        regions_declined: u32::try_from(report.failed.len()).unwrap_or(u32::MAX),
+    }
 }
 
 fn unclean(target: &Target, reason: &str) -> Unclean {
@@ -244,13 +328,14 @@ fn unclean(target: &Target, reason: &str) -> Unclean {
 /// One region: its share of the grant, then the clean, tried again after each
 /// wait while Google is busy, as long as the grant still holds.
 fn clean_one(walk: &Walk<'_>, target: &Target, cancel: &AtomicBool) -> Attempt {
-    let spend = match walk.grants.spend((walk.cloud_allowed)(), Some(walk.nonce)) {
+    let spend = match walk.grants.spend((walk.cloud_allowed)(), Some(walk.nonce), walk.chapter_id, Some(walk.run_id)) {
         Ok(spend) => spend,
         Err(reason) => return Attempt::Refused(reason),
     };
+    let granted = spend.granted();
     let mut waits = walk.waits.iter();
     loop {
-        let attempt = run::on_behalf_of(walk.run_id, || (walk.clean)(target, &spend.config));
+        let attempt = run::on_behalf_of(walk.run_id, || (walk.clean)(target, &granted));
         let Attempt::Refused(reason) = attempt else { return attempt };
         if verdict(reason) != Verdict::Busy {
             return attempt;
@@ -327,16 +412,22 @@ fn targets_of(chapter_id: &str, region_ids: &[String]) -> Result<Vec<Target>, St
     Ok(targets)
 }
 
+/// Why a batch did not start: a single region's Nano Banana request is out on
+/// its chapter. A catalogue key, as the interface shows it.
+pub const REQUEST_OUT: &str = "nanoBanana.job.requestOut";
+
 /// Start the batch, or answer with the run already holding the chapter.
 /// Refused before anything is reserved while Cloud engines are off and when
-/// the grant `nano_banana_grant` is not live or covers fewer regions than it
-/// was handed.
+/// the grant `nano_banana_grant` is not live, is another chapter's, or covers
+/// fewer regions than it was handed; refused with [`REQUEST_OUT`] while a
+/// single region's request is out on the chapter.
 fn start(app: &tauri::AppHandle, chapter_id: &str, region_ids: &[String], nano_banana_grant: Option<&str>)
     -> Result<RunHandle, String> {
     let grants = super::nano_banana_consent::book();
     let nonce = nano_banana_grant.ok_or(NO_CONSENT)?.to_owned();
     let targets = targets_of(chapter_id, region_ids)?;
-    let left = grants.left(super::cloud_allowed(app), &nonce)?;
+    let cloud_allowed = super::cloud_allowed(app);
+    let left = grants.left(cloud_allowed, &nonce)?;
     if (left as usize) < targets.len() {
         return Err(NO_CONSENT.into());
     }
@@ -347,6 +438,15 @@ fn start(app: &tauri::AppHandle, chapter_id: &str, region_ids: &[String], nano_b
     let library = Library::for_app(app).map_err(|e| e.to_string())?;
     let job_path = library.resolve_chapter(chapter_id).map_err(|e| e.to_string())?;
     reservation.set_jobs([&job_path]);
+    {
+        // Under the lock such a request let go of, so one sent before this
+        // is seen, and one asked for after it meets the run.
+        let _lock = run::lock_job(&job_path).ok();
+        if crate::region::nano_banana_requests_out(&job_path, None) {
+            return Err(REQUEST_OUT.into());
+        }
+    }
+    grants.claim(cloud_allowed, &nonce, chapter_id, reservation.run_id(), targets.len())?;
     let pages: Vec<QueuedPage> = targets.iter().map(|target| target.page_index).collect::<BTreeSet<_>>()
         .into_iter()
         .map(|page_index| QueuedPage {
@@ -358,8 +458,17 @@ fn start(app: &tauri::AppHandle, chapter_id: &str, region_ids: &[String], nano_b
     let app = app.clone();
     let chapter = chapter_id.to_owned();
     Ok(run::start_reserved_job(reservation, chapter_id, pages, move |run_id, cancel, emit| {
-        let clean = |target: &Target, config: &Config| {
-            match crate::region::clean_for_nano_banana_batch(&app, &library, &target.region_id, config) {
+        // However the batch ends, a panic included, what is left of its grant
+        // goes with it.
+        struct Withdraw<'a>(&'a str);
+        impl Drop for Withdraw<'_> {
+            fn drop(&mut self) {
+                super::nano_banana_consent::book().revoke_owned_by(self.0);
+            }
+        }
+        let _withdraw = Withdraw(run_id);
+        let clean = |target: &Target, granted: &Granted| {
+            match crate::region::clean_for_nano_banana_batch(&app, &library, &target.region_id, granted) {
                 Ok(crate::region::BatchRegion::Cleaned(region)) => Attempt::Cleaned(Some(region)),
                 Ok(crate::region::BatchRegion::Gone) => Attempt::Gone,
                 Ok(crate::region::BatchRegion::Refused(reason)) => Attempt::Refused(reason),
@@ -367,15 +476,48 @@ fn start(app: &tauri::AppHandle, chapter_id: &str, region_ids: &[String], nano_b
             }
         };
         let page_done = |page: u32| run::page_done_after_clean(run_id, &chapter, &job_path, page);
+        let raise = |page: u32, cancel: &AtomicBool, emit: &dyn Fn(Event)| raise_page(run_id, &chapter, &job_path, page, cancel, emit);
         let cloud_allowed = || super::cloud_allowed(&app);
         let walk_with = Walk {
-            run_id, chapter_id: &chapter, grants, nonce: &nonce, cloud_allowed: &cloud_allowed,
+            run_id, chapter_id: &chapter, grants, nonce: &nonce, cloud_allowed: &cloud_allowed, raise: &raise,
             clean: &clean, page_done: &page_done, sleep: &sleep_unless_cancelled, waits: &RETRY_WAITS,
         };
-        let (report, summary) = walk(&walk_with, &targets, cancel, emit);
+        let mut report = Report::default();
+        let walked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            walk_into(&mut report, &walk_with, &targets, cancel, emit)
+        }));
+        let summary = walked.unwrap_or_else(|_| {
+            eprintln!("manga-cleaner: a Nano Banana batch stopped on a panic");
+            let pages = targets.iter().map(|target| target.page_index).collect::<BTreeSet<_>>().len();
+            after_panic(&mut report, u32::try_from(pages).unwrap_or(u32::MAX))
+        });
         finish(run_id, &chapter, &report, emit);
         summary
     }, run::Closing::Body))
+}
+
+/// Send `page`'s `page-started` with the chapter's lock held, as the run walk
+/// raises a page, once no single region's Nano Banana request is out on it
+/// (`region::nano_banana_requests_out`): that request let go of the lock, and
+/// its paid answer would find the page taken. Answers false, having sent
+/// nothing, when `cancel` goes up first.
+pub(crate) fn raise_page(run_id: &str, chapter_id: &str, job_path: &std::path::Path, page: u32, cancel: &AtomicBool,
+    emit: &dyn Fn(Event)) -> bool {
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            return false;
+        }
+        // Without the lock, because another process holds the chapter, the
+        // page is raised all the same, as `page_done_after_clean` answers one.
+        let lock = run::lock_job(job_path).ok();
+        if !crate::region::nano_banana_requests_out(job_path, Some(page as usize)) {
+            emit(run::page_started_event(run_id, chapter_id, page));
+            drop(lock);
+            return true;
+        }
+        drop(lock);
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// The report, then the closing notice, before the run's `run-finished`.
@@ -402,6 +544,7 @@ pub async fn start_nano_banana_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inference::nano_banana::Config;
     use crate::inference::nano_banana_consent::IDLE;
     use cleaner_core::engines::nano_banana::Model;
     use std::cell::RefCell;
@@ -439,11 +582,33 @@ mod tests {
         answer: impl Fn(&str, usize) -> Attempt,
         cancel_after: Option<usize>,
     ) -> (Report, Summary, Vec<String>, Vec<Duration>, Result<u32, &'static str>) {
-        let book = Book::new(IDLE);
-        let nonce = book.issue(config(), granted).unwrap();
+        run_walk_on(&Book::new(IDLE), targets, granted, answer, cancel_after)
+    }
+
+    /// The test grants: `granted` regions of `c1`, claimed by the batch.
+    fn claimed(book: &Book, granted: u32) -> String {
+        let nonce = book.issue(config(), "c1", granted).unwrap();
+        book.claim(true, &nonce, "c1", "run-nb", 0).unwrap();
+        nonce
+    }
+
+    /// Raise every page at once, as no request is out.
+    fn raise(page: u32, _: &AtomicBool, emit: &dyn Fn(Event)) -> bool {
+        emit(run::page_started_event("run-nb", "c1", page));
+        true
+    }
+
+    fn run_walk_on(
+        book: &Book,
+        targets: &[Target],
+        granted: u32,
+        answer: impl Fn(&str, usize) -> Attempt,
+        cancel_after: Option<usize>,
+    ) -> (Report, Summary, Vec<String>, Vec<Duration>, Result<u32, &'static str>) {
+        let nonce = claimed(book, granted);
         let tries = Mutex::new(Vec::<String>::new());
         let cancel = AtomicBool::new(false);
-        let clean = |target: &Target, _: &Config| {
+        let clean = |target: &Target, _: &Granted| {
             let mut seen = tries.lock().unwrap();
             let attempt = seen.iter().filter(|id| **id == target.region_id).count();
             seen.push(target.region_id.clone());
@@ -461,7 +626,7 @@ mod tests {
         let emit = |event: Event| events.borrow_mut().push(serde_json::to_value(&event).unwrap()["type"].as_str().unwrap().to_owned());
         let allowed = || true;
         let walk_with = Walk {
-            run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &allowed,
+            run_id: "run-nb", chapter_id: "c1", grants: book, nonce: &nonce, cloud_allowed: &allowed, raise: &raise,
             clean: &clean, page_done: &page_done, sleep: &sleep, waits: &RETRY_WAITS,
         };
         let (report, summary) = walk(&walk_with, targets, &cancel, &emit);
@@ -478,14 +643,15 @@ mod tests {
     #[test]
     fn every_failure_has_its_verdict() {
         for failure in [Failure::NoKey, Failure::KeyStore, Failure::KeyRejected, Failure::KeyExpired,
-            Failure::Location, Failure::Billing, Failure::ModelRejected] {
+            Failure::Location, Failure::Billing, Failure::ModelRejected, Failure::LongWait] {
             assert_eq!(verdict(failure.reason_key()), Verdict::Account, "{failure:?}");
         }
         assert_eq!(verdict(CLOUD_OFF), Verdict::Account);
         for failure in [Failure::RateLimited, Failure::Unreachable] {
             assert_eq!(verdict(failure.reason_key()), Verdict::Busy, "{failure:?}");
         }
-        for failure in [Failure::Blocked, Failure::Recited, Failure::BadAnswer, Failure::KeptMark] {
+        for failure in [Failure::Blocked, Failure::Recited, Failure::BadAnswer, Failure::KeptMark, Failure::Lost,
+            Failure::BadRequest] {
             assert_eq!(verdict(failure.reason_key()), Verdict::Crop, "{failure:?}");
         }
         assert_eq!(verdict("decline.reason.nanoBananaPageChanged"), Verdict::Crop);
@@ -572,6 +738,7 @@ mod tests {
         assert!(report.by_user);
         assert_eq!(summary.reason, "cancelled");
         assert_eq!(types, ["page-started", "page-done"]);
+        assert_eq!(summary.pages_cleaned, 0, "the page it stopped inside is not a page cleaned");
         let Event::Notice { key, .. } = closing_notice("run-nb", &report) else { panic!("not a notice") };
         assert_eq!(key, "nanoBanana.job.stopped");
     }
@@ -601,20 +768,20 @@ mod tests {
     #[test]
     fn a_withdrawn_grant_sends_no_retry() {
         let book = Book::new(IDLE);
-        let nonce = book.issue(config(), 1).unwrap();
+        let nonce = claimed(&book, 1);
         let tries = Mutex::new(0);
-        let clean = |_: &Target, _: &Config| {
+        let clean = |_: &Target, _: &Granted| {
             *tries.lock().unwrap() += 1;
             Attempt::Refused(Failure::RateLimited.reason_key())
         };
-        // Stop pressed elsewhere while the batch waits.
+        // Stop pressed while the batch waits.
         let sleep = |_: Duration, _: &AtomicBool| {
-            book.revoke();
+            book.revoke_owned_by("run-nb");
             true
         };
         let allowed = || true;
         let walk_with = Walk {
-            run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &allowed,
+            run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &allowed, raise: &raise,
             clean: &clean, page_done: &page_done, sleep: &sleep, waits: &RETRY_WAITS,
         };
         let (report, _) = walk(&walk_with, &[target(0, "c1-p001-d0")], &AtomicBool::new(false), &|_| {});
@@ -625,13 +792,15 @@ mod tests {
     #[test]
     fn a_region_gone_or_failing_to_write_is_counted_apart() {
         let targets = [target(0, "c1-p001-d0"), target(0, "c1-p001-d1"), target(0, "c1-p001-d2")];
-        let (report, _, _, _, _) = run_walk(&targets, 3, |id, _| match id {
+        let (report, summary, _, _, _) = run_walk(&targets, 3, |id, _| match id {
             "c1-p001-d0" => Attempt::Gone,
             "c1-p001-d1" => Attempt::Error("job_busy".into()),
             _ => Attempt::Cleaned(None),
         }, None);
         assert_eq!((report.cleaned, report.gone), (1, 1));
         assert_eq!(report.failed, vec![unclean(&targets[1], ERROR_REASON)]);
+        assert_eq!(summary.errored, 1, "the page a region failed to write on");
+        assert_eq!(summary.pages_cleaned, 1);
         let Event::Notice { key, .. } = closing_notice("run-nb", &report) else { panic!("not a notice") };
         assert_eq!(key, "nanoBanana.job.finishedWithFailures");
     }
@@ -642,6 +811,151 @@ mod tests {
         assert!(targets_of("c1", &["c2-p001-d0".into()]).unwrap_err().starts_with("nano_banana_region_not_in_chapter"));
         let targets = targets_of("c1", &["c1-p003-d0".into(), "c1-p001-d4".into(), "c1-p003-d0".into(), "c1-p001-d1".into()]).unwrap();
         assert_eq!(targets, vec![target(0, "c1-p001-d4"), target(0, "c1-p001-d1"), target(2, "c1-p003-d0")]);
+    }
+
+    #[test]
+    fn a_link_lost_after_the_request_was_sent_skips_the_region_and_sends_it_no_more() {
+        let targets = [target(0, "c1-p001-d0"), target(0, "c1-p001-d1")];
+        let (report, summary, _, waits, _) = run_walk(&targets, 2, |id, _| match id {
+            "c1-p001-d0" => Attempt::Refused(Failure::Lost.reason_key()),
+            _ => Attempt::Cleaned(None),
+        }, None);
+        assert!(waits.is_empty(), "a request that may be billed was sent again");
+        assert_eq!(report.failed, vec![unclean(&targets[0], Failure::Lost.reason_key())]);
+        assert_eq!((report.cleaned, summary.reason), (1, "completed"));
+    }
+
+    #[test]
+    fn a_request_refused_as_put_skips_the_region_and_the_batch_goes_on() {
+        let targets = [target(0, "c1-p001-d0"), target(1, "c1-p002-d0")];
+        let (report, summary, _, _, _) = run_walk(&targets, 2, |id, _| match id {
+            "c1-p001-d0" => Attempt::Refused(Failure::BadRequest.reason_key()),
+            _ => Attempt::Cleaned(None),
+        }, None);
+        assert_eq!(report.cleaned, 1);
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(summary.reason, "completed");
+    }
+
+    #[test]
+    fn a_long_server_wait_stops_the_batch_without_waiting() {
+        let targets = [target(0, "c1-p001-d0"), target(1, "c1-p002-d0")];
+        let (report, summary, _, waits, _) = run_walk(&targets, 2,
+            |_, _| Attempt::Refused(Failure::LongWait.reason_key()), None);
+        assert!(waits.is_empty());
+        assert_eq!(report.left, targets.to_vec());
+        assert_eq!(report.stopped.as_deref(), Some(Failure::LongWait.reason_key()));
+        assert_eq!(summary.reason, "failed");
+    }
+
+    #[test]
+    fn a_region_that_outlasts_the_idle_lapse_may_still_be_retried() {
+        let book = Book::new(Duration::from_millis(50));
+        let targets = [target(0, "c1-p001-d0")];
+        let (report, _, _, waits, _) = run_walk_on(&book, &targets, 1, |_, attempt| {
+            if attempt == 0 {
+                // Longer than the grant may sit idle.
+                std::thread::sleep(Duration::from_millis(120));
+                Attempt::Refused(Failure::RateLimited.reason_key())
+            } else {
+                Attempt::Cleaned(None)
+            }
+        }, None);
+        assert_eq!(waits.len(), 1);
+        assert_eq!(report.cleaned, 1, "the retry was refused as no consent: {:?}", report.stopped);
+    }
+
+    #[test]
+    fn another_window_does_not_halt_the_batch() {
+        let book = Book::new(IDLE);
+        let targets = [target(0, "c1-p001-d0"), target(0, "c1-p001-d1")];
+        let (report, summary, _, _, _) = run_walk_on(&book, &targets, 2, |_, _| {
+            // A single region confirmed elsewhere while the batch runs.
+            let _ = book.issue(config(), "c2", 1).unwrap();
+            Attempt::Cleaned(None)
+        }, None);
+        assert_eq!((report.cleaned, summary.reason), (2, "completed"));
+    }
+
+    #[test]
+    fn a_stop_with_cloud_engines_turned_off_is_not_the_persons_stop() {
+        let book = Book::new(IDLE);
+        let nonce = claimed(&book, 1);
+        let clean = |_: &Target, _: &Granted| Attempt::Refused(Failure::Stopped.reason_key());
+        // On when the share was spent, off by the time the request stopped.
+        let asked = std::cell::Cell::new(0);
+        let allowed = || {
+            asked.set(asked.get() + 1);
+            asked.get() == 1
+        };
+        let walk_with = Walk {
+            run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &allowed, raise: &raise,
+            clean: &clean, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
+        };
+        let (report, summary) = walk(&walk_with, &[target(0, "c1-p001-d0")], &AtomicBool::new(false), &|_| {});
+        assert_eq!(report.stopped.as_deref(), Some(CLOUD_OFF));
+        assert!(!report.by_user);
+        assert_eq!(summary.reason, "failed");
+    }
+
+    #[test]
+    fn a_batch_spends_only_a_grant_it_claimed_on_its_own_chapter() {
+        let book = Book::new(IDLE);
+        let nonce = book.issue(config(), "c2", 1).unwrap();
+        assert_eq!(book.claim(true, &nonce, "c1", "run-nb", 1), Err(NO_CONSENT));
+        let clean = |_: &Target, _: &Granted| Attempt::Cleaned(None);
+        let walk_with = Walk {
+            run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &|| true, raise: &raise,
+            clean: &clean, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
+        };
+        let (report, _) = walk(&walk_with, &[target(0, "c1-p001-d0")], &AtomicBool::new(false), &|_| {});
+        assert_eq!((report.cleaned, report.stopped.as_deref()), (0, Some(NO_CONSENT)));
+    }
+
+    #[test]
+    fn a_page_not_raised_because_of_a_stop_sends_nothing() {
+        let book = Book::new(IDLE);
+        let nonce = claimed(&book, 1);
+        let clean = |_: &Target, _: &Granted| -> Attempt { panic!("a region of an unraised page was cleaned") };
+        // A single region's request held the page until Stop.
+        let held = |_: u32, _: &AtomicBool, _: &dyn Fn(Event)| false;
+        let walk_with = Walk {
+            run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &|| true, raise: &held,
+            clean: &clean, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
+        };
+        let events = RefCell::new(0);
+        let (report, summary) = walk(&walk_with, &[target(0, "c1-p001-d0")], &AtomicBool::new(false), &|_| *events.borrow_mut() += 1);
+        assert_eq!(*events.borrow(), 0);
+        assert!(report.by_user);
+        assert_eq!(summary.pages_cleaned, 0);
+    }
+
+    #[test]
+    fn a_walk_that_panics_still_reports_what_it_did() {
+        let book = Book::new(IDLE);
+        let nonce = claimed(&book, 3);
+        let targets = [target(0, "c1-p001-d0"), target(0, "c1-p001-d1"), target(1, "c1-p002-d0")];
+        let clean = |target: &Target, _: &Granted| match target.region_id.as_str() {
+            "c1-p001-d0" => Attempt::Cleaned(None),
+            _ => panic!("a bug"),
+        };
+        let walk_with = Walk {
+            run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &|| true, raise: &raise,
+            clean: &clean, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
+        };
+        let mut report = Report::default();
+        let walked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            walk_into(&mut report, &walk_with, &targets, &AtomicBool::new(false), &|_| {})
+        }));
+        assert!(walked.is_err());
+        let summary = after_panic(&mut report, 2);
+        assert_eq!(report.cleaned, 1);
+        assert_eq!(report.left, vec![targets[1].clone(), targets[2].clone()], "the region it was on and the rest");
+        assert_eq!(report.stopped.as_deref(), Some(ERROR_REASON));
+        assert!(!report.by_user);
+        assert_eq!((summary.reason, summary.errored, summary.regions_cleaned), ("failed", 1, 1));
+        let Event::Notice { key, .. } = closing_notice("run-nb", &report) else { panic!("not a notice") };
+        assert_eq!(key, "nanoBanana.job.halted");
     }
 
     #[test]

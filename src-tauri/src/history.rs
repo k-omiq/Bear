@@ -240,6 +240,15 @@ fn push_grouped(
 
 /// Add a region to the journal's last entry when that entry is `group`'s own
 /// clean step and nothing was undone since. Answers whether it did.
+///
+/// Only the last entry: when any other step lands between two of a run's
+/// cleans (a hand edit elsewhere in the chapter while a Nano Banana batch
+/// runs), the run's next clean starts a second step of its own, and Undo
+/// takes the batch back in two or more steps. Joining the earlier entry
+/// across the later one would be wrong when that one touched the same region
+/// or its page: undo goes newest first, so the later step would put back a
+/// region the batch had cleaned after it, and the batch's step then a state
+/// that never followed it.
 fn join_group(
     journal: &mut Journal,
     op: &str,
@@ -276,8 +285,9 @@ fn join_group(
 /// manifest is the record of that.
 ///
 /// A clean made on a run's behalf (`run::on_behalf_of`, a Nano Banana batch)
-/// joins that run's step, so one Undo takes back the whole batch. Undo of it
-/// is refused while the run goes on ([`move_at`]).
+/// joins that run's step, so one Undo takes back the whole batch, as long as
+/// no other step lands between its cleans ([`join_group`]). Undo of it is
+/// refused while the run goes on ([`move_at`]).
 pub(crate) fn record_clean(
     job: &Path,
     chapter_id: &str,
@@ -1268,6 +1278,22 @@ mod tests {
         journal.undo();
         assert!(!join_group(&mut journal, CLEAN_OP, CLEAN_BATCH_LABEL, "r4", &side("x"), &side("y"), Some("run-2")),
             "nothing joins a step that was undone");
+    }
+
+    /// The split `join_group` documents: a step that lands between two of a
+    /// batch's cleans ends the batch's step there, and the next clean starts
+    /// another, so undo never runs across the later step.
+    #[test]
+    fn a_step_between_two_of_a_runs_cleans_splits_its_step() {
+        let side = |status: &str| Side { present: true, page_status: Some(status.into()), region: None };
+        let mut journal = Journal::default();
+        journal.push(NewDelta {
+            label: CLEAN_BATCH_LABEL.into(), op: CLEAN_OP.into(), region_id: "r1".into(),
+            before: side("detected"), after: side("a"), group: Some("run-1".into()), ..Default::default()
+        }, UNDO_LIMIT_DEFAULT);
+        journal.push(delta("masks.command.rerunMask", "r9"), UNDO_LIMIT_DEFAULT);
+        assert!(!join_group(&mut journal, CLEAN_OP, CLEAN_BATCH_LABEL, "r2", &side("detected"), &side("b"), Some("run-1")));
+        assert!(journal.entries[0].parts.is_empty(), "the earlier step is left as it was");
     }
 
     #[test]

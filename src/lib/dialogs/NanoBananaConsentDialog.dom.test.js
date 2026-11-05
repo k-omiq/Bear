@@ -27,7 +27,7 @@ async function ask() {
     grantNanoBanana: vi.fn(async () => ({ grant: 'g', model: 'gemini-3.1-flash-image', count: 2 })),
   }
   render(ModalHost)
-  const asked = confirmNanoBanana(2, /** @type {any} */ (backend))
+  const asked = confirmNanoBanana(2, 'chapter', /** @type {any} */ (backend))
   const box = /** @type {HTMLTextAreaElement} */ (await screen.findByLabelText(t('nanoBanana.run.promptLabel')))
   return { backend, asked, box }
 }
@@ -41,7 +41,7 @@ describe('the Nano Banana window', () => {
     expect(box.value).toBe('keep the hatching')
     await fireEvent.input(box, { target: { value: 'also the arrow' } })
     await fireEvent.click(screen.getByRole('button', { name: t('nanoBanana.run.confirm') }))
-    expect(await asked).toBe(true)
+    expect(await asked).toBe('g')
     expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaPrompt: 'also the arrow' })
     expect(app.modals).toEqual([])
   })
@@ -49,7 +49,7 @@ describe('the Nano Banana window', () => {
   it('treats Escape as Cancel and sends nothing', async () => {
     const { backend, asked } = await ask()
     await fireEvent.keyDown(window, { key: 'Escape' })
-    expect(await asked).toBe(false)
+    expect(await asked).toBeNull()
     expect(backend.writeSettings).not.toHaveBeenCalled()
     expect(screen.queryByRole('dialog')).toBeNull()
   })
@@ -60,7 +60,7 @@ describe('the Nano Banana window', () => {
     await fireEvent.click(backdrop)
     expect(screen.getByRole('dialog')).toBeTruthy()
     await fireEvent.click(screen.getByRole('button', { name: t('nanoBanana.run.cancel') }))
-    expect(await asked).toBe(false)
+    expect(await asked).toBeNull()
   })
 
   it('leaves an Escape the input method takes to the input method, and keeps the text', async () => {
@@ -73,6 +73,6 @@ describe('the Nano Banana window', () => {
     expect(box.value).toBe('矢印も消して')
     expect(app.modals).toHaveLength(1)
     await fireEvent.keyDown(box, { key: 'Escape' })
-    expect(await asked).toBe(false)
+    expect(await asked).toBeNull()
   })
 })

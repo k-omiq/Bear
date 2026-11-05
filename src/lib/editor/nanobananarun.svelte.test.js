@@ -259,27 +259,27 @@ describe('a Nano Banana batch', () => {
 describe('the window in front of a Nano Banana request', () => {
   it('opens with the model, the size the model answers at, and the saved instruction', async () => {
     const stub = { grantNanoBanana: vi.fn(async () => ({ grant: 'g', model: 'gemini-3.1-flash-image', count: 1 })), readSettings: vi.fn(async () => ({ nanoBananaModel: 'gemini-nano-banana-2.1', nanoBananaPrompt: 'a' })), writeSettings: vi.fn() }
-    const asked = confirmNanoBanana(1, /** @type {any} */ (stub))
+    const asked = confirmNanoBanana(1, CHAPTER, /** @type {any} */ (stub))
     const spec = await answer('cancel')
     expect(spec.props).toEqual({ count: 1, model: 'gemini-nano-banana-2.1', size: '1K', prompt: 'a' })
-    expect(await asked).toBe(false)
+    expect(await asked).toBeNull()
     expect(stub.writeSettings).not.toHaveBeenCalled()
   })
 
   it('keeps what the person wrote, trimmed and cut, before anything is sent', async () => {
     const stub = { grantNanoBanana: vi.fn(async () => ({ grant: 'g', model: 'gemini-3.1-flash-image', count: 1 })), readSettings: vi.fn(async () => ({})), writeSettings: vi.fn(async () => ({})) }
-    const asked = confirmNanoBanana(1, /** @type {any} */ (stub))
+    const asked = confirmNanoBanana(1, CHAPTER, /** @type {any} */ (stub))
     await vi.waitFor(() => expect(app.modals.length).toBe(1))
     closeModal({ id: 'confirm', prompt: `  ${'x'.repeat(900)}  ` })
-    expect(await asked).toBe(true)
+    expect(await asked).toBe('g')
     expect(stub.writeSettings).toHaveBeenCalledWith({ nanoBananaPrompt: 'x'.repeat(600) })
   })
 
   it('sends nothing when the instruction could not be saved', async () => {
     const stub = { grantNanoBanana: vi.fn(async () => ({ grant: 'g', model: 'gemini-3.1-flash-image', count: 1 })), readSettings: vi.fn(async () => ({})), writeSettings: vi.fn(async () => { throw new Error('disk') }) }
-    const asked = confirmNanoBanana(1, /** @type {any} */ (stub))
+    const asked = confirmNanoBanana(1, CHAPTER, /** @type {any} */ (stub))
     await answer('confirm')
-    expect(await asked).toBe(false)
+    expect(await asked).toBeNull()
     expect(warnings()).toContain('nanoBanana.run.promptNotSaved')
   })
 })

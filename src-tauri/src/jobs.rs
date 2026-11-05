@@ -1,7 +1,8 @@
 //! Background jobs: what is running, for the interface and for quitting.
 //!
-//! A Detect, Clean or cloud Clean run holds a slot in [`crate::run`]; a local or
-//! cloud denoise holds an entry in [`crate::page_denoise`]'s registry. Either
+//! A Detect, Clean, cloud Clean or Nano Banana batch run holds a slot in
+//! [`crate::run`]; a local or cloud denoise holds an entry in
+//! [`crate::page_denoise`]'s registry. Either
 //! goes on when the dialog that started it closes or the editor is left, so
 //! [`list_jobs`] is how a reloaded webview or a reopened chapter finds them
 //! again, and the quit guard is what keeps a quit from dropping them unasked.
@@ -14,6 +15,10 @@
 //! is held, and `app://quit-requested` asks the interface, which answers with
 //! [`confirm_quit`] (stop every job, then exit) or [`hide_to_tray`]. With none
 //! running a quit goes exactly as it did before.
+//!
+//! A single region's Nano Banana request holds no slot and is not in
+//! [`list_jobs`], but it is a paid request that a quit would drop, so the
+//! guard counts it ([`running`]) and [`confirm_quit`] stops it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -34,7 +39,7 @@ const QUIT_WAIT: Duration = Duration::from_secs(5);
 #[serde(rename_all = "camelCase")]
 pub struct JobView {
     pub run_id: String,
-    /// `detect`, `clean`, `cloudClean`, `denoise` or `cloudDenoise`.
+    /// `detect`, `clean`, `cloudClean`, `nanoBanana`, `denoise` or `cloudDenoise`.
     pub kind: &'static str,
     pub chapter_id: String,
     pub done: u32,
@@ -63,9 +68,10 @@ pub fn snapshot() -> Vec<JobView> {
     jobs
 }
 
-/// How many jobs are in flight.
+/// How many jobs are in flight, with every single region's Nano Banana
+/// request.
 pub fn running() -> usize {
-    snapshot().len()
+    snapshot().len() + crate::inference::nano_banana_consent::book().single_renders()
 }
 
 #[derive(Debug, Clone, Serialize)]

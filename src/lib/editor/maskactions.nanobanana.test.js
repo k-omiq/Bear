@@ -6,14 +6,15 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const asked = vi.hoisted(() => ({ confirm: vi.fn(async () => true) }))
+const asked = vi.hoisted(() => ({ confirm: vi.fn(async () => /** @type {string|null} */ ('g1')) }))
 vi.mock('./nanobananaask.svelte.js', () => ({ confirmNanoBanana: asked.confirm }))
 
 import { setBackend } from '../api/backend.js'
 import { app } from '../state/app.svelte.js'
 import { editor } from '../state/editor.svelte.js'
 import { createHistory } from '../model/history.js'
-import { cleanAnyway, rerunMask } from './maskactions.svelte.js'
+import { cleanAnyway, rerunMask, runRegionMenuItem } from './maskactions.svelte.js'
+import { nanoBananaEditOut } from './nanobananaedits.svelte.js'
 
 const CHAPTER = 'chapter'
 
@@ -59,7 +60,7 @@ beforeEach(() => {
   editor.run.active = false
   editor.run.busyPages = []
   asked.confirm.mockReset()
-  asked.confirm.mockResolvedValue(true)
+  asked.confirm.mockResolvedValue('g1')
 })
 
 afterEach(() => {
@@ -72,9 +73,9 @@ describe('re-running a Nano Banana layer', () => {
   for (const kind of /** @type {const} */ (['retry', 'retryWider'])) {
     it(`${kind} asks first and sends nothing when the answer is no`, async () => {
       const adapter = backend()
-      asked.confirm.mockResolvedValue(false)
+      asked.confirm.mockResolvedValue(null)
       expect(await rerunMask(open(region()), kind)).toBe(false)
-      expect(asked.confirm).toHaveBeenCalledWith(1)
+      expect(asked.confirm).toHaveBeenCalledWith(1, CHAPTER)
       expect(adapter.rerunMask).not.toHaveBeenCalled()
     })
 
@@ -82,13 +83,14 @@ describe('re-running a Nano Banana layer', () => {
       const adapter = backend()
       expect(await rerunMask(open(region()), kind)).toBe(true)
       expect(asked.confirm).toHaveBeenCalledTimes(1)
-      expect(adapter.rerunMask).toHaveBeenCalledWith(expect.objectContaining({ kind }))
+      // The window's own grant goes with the request.
+      expect(adapter.rerunMask).toHaveBeenCalledWith(expect.objectContaining({ kind, params: { nanoBananaGrant: 'g1' } }))
     })
   }
 
   it('asks when Nano Banana is named on any layer', async () => {
     const adapter = backend()
-    asked.confirm.mockResolvedValue(false)
+    asked.confirm.mockResolvedValue(null)
     expect(await rerunMask(open(region('lama')), 'engine', 'nanobanana')).toBe(false)
     expect(asked.confirm).toHaveBeenCalledTimes(1)
     expect(adapter.rerunMask).not.toHaveBeenCalled()
@@ -115,17 +117,43 @@ describe('re-running a Nano Banana layer', () => {
 
   it('opens one window for two presses', async () => {
     const adapter = backend()
-    /** @type {(value: boolean) => void} */
+    /** @type {(value: string|null) => void} */
     let answer = () => {}
     asked.confirm.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
     const target = open(region())
     const first = rerunMask(target, 'retry')
     await vi.waitFor(() => expect(asked.confirm).toHaveBeenCalledTimes(1))
     expect(await rerunMask(target, 'retry')).toBe(false)
-    answer(true)
+    answer('g1')
     expect(await first).toBe(true)
     expect(asked.confirm).toHaveBeenCalledTimes(1)
     expect(adapter.rerunMask).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('a single region sent to Nano Banana from the menu', () => {
+  it('goes on its own window\'s grant, and is out, with a Stop, until it answers', async () => {
+    const adapter = backend()
+    /** @type {(value: any) => void} */
+    let answer = () => {}
+    adapter.cleanAnyway.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
+    const target = open(region('fill', 'gate-skipped'))
+    const sent = runRegionMenuItem('approve:nanobanana', target)
+    await vi.waitFor(() => expect(adapter.cleanAnyway).toHaveBeenCalledTimes(1))
+    expect(adapter.cleanAnyway).toHaveBeenCalledWith(expect.objectContaining({
+      engine: 'nanobanana', params: expect.objectContaining({ nanoBananaGrant: 'g1' }),
+    }))
+    expect(nanoBananaEditOut(target.id)).toBe(true)
+    answer({ region: region('nanobanana'), pageStatus: 'cleaned' })
+    await sent
+    expect(nanoBananaEditOut(target.id)).toBe(false)
+  })
+
+  it('sends nothing when the window is not confirmed', async () => {
+    const adapter = backend()
+    asked.confirm.mockResolvedValue(null)
+    expect(await runRegionMenuItem('approve:nanobanana', open(region('fill', 'gate-skipped')))).toBe(false)
+    expect(adapter.cleanAnyway).not.toHaveBeenCalled()
   })
 })
 

@@ -81,10 +81,10 @@ describe('the Nano Banana key on the mock', () => {
 describe('a Nano Banana grant on the mock', () => {
   it('is refused while cloud engines are off, for another model, and for no regions', async () => {
     const mock = makeMock()
-    await expect(mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })).rejects.toThrow('decline.reason.nanoBananaOff')
+    await expect(mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })).rejects.toThrow('decline.reason.nanoBananaOff')
     await mock.writeSettings({ cloudEngines: 'allowed' })
     await expect(mock.grantNanoBanana({ model: 'gemini-3-pro-image', count: 1 })).rejects.toThrow('decline.reason.nanoBananaNoConsent')
-    await expect(mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 0 })).rejects.toThrow('decline.reason.nanoBananaNoConsent')
+    await expect(mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 0 })).rejects.toThrow('decline.reason.nanoBananaNoConsent')
   })
 
   it('renders nothing without it, and as many regions as it covers with it', async () => {
@@ -92,7 +92,7 @@ describe('a Nano Banana grant on the mock', () => {
     const reasons = refusals(mock)
     const [first, second] = await detected(mock)
     expect(await clean(mock, first)).toEqual({ status: 'blocked' })
-    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     const done = await clean(mock, first, grant)
     expect(done.status).toBe('applied')
     expect(done.mask.provenance.engine).toBe('nanobanana')
@@ -107,18 +107,18 @@ describe('a Nano Banana grant on the mock', () => {
   it('sends the grant it holds when the caller names none, as the Tauri adapter does', async () => {
     const mock = await ready()
     const [first, second] = await detected(mock)
-    await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     expect((await clean(mock, first)).status).toBe('applied')
     expect(await clean(mock, second)).toEqual({ status: 'blocked' })
     // A grant named that is not the held one is still refused.
-    await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     expect(await clean(mock, second, 'mock-nano-banana-grant-0')).toEqual({ status: 'blocked' })
   })
 
   it('records the model the window confirmed, not one picked after it', async () => {
     const mock = await ready()
     const [first] = await detected(mock)
-    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     await mock.writeSettings({ nanoBananaModel: 'gemini-3-pro-image' })
     const done = await clean(mock, first, grant)
     expect(done.mask.provenance.params_snapshot.nano_banana.model).toBe(DEFAULT_NANO_BANANA_MODEL)
@@ -129,14 +129,14 @@ describe('a Nano Banana grant on the mock', () => {
     const reasons = refusals(mock)
     await mock.writeSettings({ cloudEngines: 'allowed' })
     const [first] = await detected(mock)
-    let { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 2 })
+    let { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 2 })
     expect(await clean(mock, first, grant)).toEqual({ status: 'blocked' })
     await mock.writeSettings({ cloudEngines: 'blocked' })
     expect(await clean(mock, first, grant)).toEqual({ status: 'blocked' })
     await mock.writeSettings({ cloudEngines: 'allowed' })
     expect(await clean(mock, first, grant)).toEqual({ status: 'blocked' })
-    ;({ grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 }))
-    await mock.nanoBananaStop()
+    ;({ grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 }))
+    await mock.nanoBananaStop({ grant })
     expect(await clean(mock, first, grant)).toEqual({ status: 'blocked' })
     await vi.waitFor(() => expect(reasons).toEqual([
       'decline.reason.nanoBananaNoKey',
@@ -151,7 +151,7 @@ describe('a Nano Banana grant on the mock', () => {
     const timers = { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout, now: () => now }
     const mock = await ready({ timers })
     const [first] = await detected(mock)
-    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 5 })
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 5 })
     now += 10 * 60 * 1000
     expect(await clean(mock, first, grant)).toEqual({ status: 'blocked' })
   })
@@ -159,7 +159,7 @@ describe('a Nano Banana grant on the mock', () => {
   it('sends nothing over a region that has a layer now', async () => {
     const mock = await ready()
     const [first, second] = await detected(mock)
-    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     // Cleaned by hand while the batch ran.
     await mock.applyTool({ tool: 'autoClean', chapterId: CHAPTER, pageIndex: 0, regionId: first.id, params: { engine: 'fill' } })
     expect(await clean(mock, first, grant)).toEqual({ status: 'not-found' })
@@ -172,11 +172,11 @@ describe('a Nano Banana grant on the mock', () => {
   it('holds Try again on a Nano Banana layer to a grant, and steps off it for free', async () => {
     const mock = await ready()
     const [first] = await detected(mock)
-    let { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    let { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     const done = await clean(mock, first, grant)
     const maskId = done.mask.id
     expect(await mock.rerunMask({ maskId, kind: 'retry' })).toBeNull()
-    ;({ grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 }))
+    ;({ grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 }))
     const again = await mock.rerunMask({ maskId, kind: 'retry', params: { nanoBananaGrant: grant } })
     expect(again?.mask.provenance.engine).toBe('nanobanana')
     const simpler = await mock.rerunMask({ maskId: again.mask.id, kind: 'simpler' })
@@ -191,7 +191,7 @@ describe('a Nano Banana grant on the mock', () => {
  * @param {any} mock @param {any[]} regions @param {{count?: number, onStart?: (runId: string) => void}} [options]
  */
 async function batch(mock, regions, { count = regions.length, onStart } = {}) {
-  const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count })
+  const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count })
   /** @type {string[]} */
   const seen = []
   /** @type {any} */
@@ -267,7 +267,7 @@ describe('a Nano Banana batch on the mock', () => {
   it('refuses before reserving anything when the grant covers fewer regions', async () => {
     const mock = await ready()
     const regions = await detected(mock)
-    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     await expect(mock.startNanoBananaRun({ chapterId: CHAPTER, regionIds: regions.map((region) => region.id), nanoBananaGrant: grant }))
       .rejects.toThrow('decline.reason.nanoBananaNoConsent')
     await expect(mock.startNanoBananaRun({ chapterId: CHAPTER, regionIds: [], nanoBananaGrant: grant })).rejects.toThrow('nano_banana_no_regions')
@@ -291,13 +291,77 @@ describe('a Nano Banana batch on the mock', () => {
   })
 })
 
+describe('Nano Banana grants and stops on the mock, as natively', () => {
+  it('binds a grant to its chapter', async () => {
+    const mock = await ready()
+    const [first] = await detected(mock)
+    const reasons = refusals(mock)
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: 'another-chapter', count: 1 })
+    expect(await clean(mock, first, grant)).toEqual({ status: 'blocked' })
+    await expect(mock.startNanoBananaRun({ chapterId: CHAPTER, regionIds: [first.id], nanoBananaGrant: grant }))
+      .rejects.toThrow('decline.reason.nanoBananaNoConsent')
+    await vi.waitFor(() => expect(reasons).toEqual(['decline.reason.nanoBananaNoConsent']))
+  })
+
+  it('stops one window\'s request and leaves another window\'s grant alone', async () => {
+    const mock = await ready({ timing: { ...ZERO, region: 40 } })
+    const [first, second] = await detected(mock)
+    const reasons = refusals(mock)
+    const { grant: one } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
+    const { grant: other } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
+    const out = clean(mock, first, one)
+    // Stop lands after the share was spent, while the request is out.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await mock.nanoBananaStop({ grant: one })
+    expect(await out).toEqual({ status: 'blocked' })
+    expect((await clean(mock, second, other)).status).toBe('applied')
+    await vi.waitFor(() => expect(reasons).toEqual(['decline.reason.nanoBananaStopped']))
+  })
+
+  it('starts no batch while a single region\'s request is out on the chapter', async () => {
+    const mock = await ready({ timing: { ...ZERO, region: 40 } })
+    const regions = await detected(mock)
+    const { grant: single } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
+    const { grant: many } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: regions.length })
+    const out = clean(mock, regions[0], single)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await expect(mock.startNanoBananaRun({ chapterId: CHAPTER, regionIds: regions.map((region) => region.id), nanoBananaGrant: many }))
+      .rejects.toThrow('nanoBanana.job.requestOut')
+    expect((await out).status).toBe('applied')
+  })
+
+  it('withdraws a batch\'s grant when it ends, and lets no single region spend it', async () => {
+    const mock = await ready()
+    const regions = await detected(mock)
+    const { grant, summary } = await batch(mock, regions.slice(0, 1), { count: 2 })
+    expect(summary.reason).toBe('completed')
+    const reasons = refusals(mock)
+    expect(await clean(mock, regions[1], grant)).toEqual({ status: 'blocked' })
+    await vi.waitFor(() => expect(reasons).toEqual(['decline.reason.nanoBananaNoConsent']))
+  })
+
+  it('skips a region whose link was lost after it was sent, and stops at once on a long wait', async () => {
+    const lost = await ready({ nanoBananaScenario: 'lost' })
+    const regions = await detected(lost)
+    const skipped = await batch(lost, regions)
+    expect(skipped.summary.reason).toBe('completed')
+    expect(skipped.report.failed).toEqual([{ regionId: regions[0].id, pageIndex: 0, reason: 'decline.reason.nanoBananaLost' }])
+
+    const waiting = await ready({ nanoBananaScenario: 'longWait' })
+    const more = await detected(waiting)
+    const halted = await batch(waiting, more)
+    expect(halted.summary.reason).toBe('failed')
+    expect(halted.report).toMatchObject({ cleaned: 1, stopped: 'decline.reason.nanoBananaLongWait' })
+  })
+})
+
 describe('Nano Banana finishing on the mock', () => {
   /** A Nano Banana layer on the first detection, made with `settings`. @param {Record<string, any>} [settings] */
   async function layer(settings = {}) {
     const mock = await ready()
     await mock.writeSettings(settings)
     const [first] = await detected(mock)
-    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     const done = await clean(mock, first, grant)
     return { mock, done, regionId: first.id }
   }
@@ -322,7 +386,7 @@ describe('Nano Banana finishing on the mock', () => {
   it('keeps the layer\'s finishing on Try again, whatever the setting says by then', async () => {
     const { mock, done } = await layer({ nanoBananaFinishing: 'dots-only', nanoBananaFinishingGrayscale: true })
     await mock.writeSettings({ nanoBananaFinishing: 'as-is', nanoBananaFinishingGrayscale: false })
-    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     const again = await mock.rerunMask({ maskId: done.mask.id, kind: 'retry', params: { nanoBananaGrant: grant } })
     expect(again.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'dots-only', grayscale: true })
   })
