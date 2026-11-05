@@ -416,22 +416,38 @@ export function createTauriBackend({ fallback, invoke, listen }) {
 
   /**
    * The grant the last confirmed Nano Banana window was given
-   * (`grantNanoBanana`). Every native Nano Banana render needs it, so it goes
-   * out as `params.nanoBananaGrant` on each edit that can reach that rung, and
-   * no caller has to carry it. Native counts its regions and lets it lapse.
+   * (`grantNanoBanana`). A caller that confirmed a window sends its own grant
+   * (`params.nanoBananaGrant`, `startNanoBananaRun`'s), and this one goes out
+   * only on an edit that names Nano Banana and carries none. Native counts its
+   * regions and lets it lapse; it is forgotten here when it is withdrawn: Stop
+   * on it, Stop on its batch, the end of its batch, Cloud engines turned off.
    *
    * @type {string | null}
    */
   let nanoBananaGrant = null
+  /** The batches started here, by run id, with the grant each spends. */
+  const nanoBananaBatches = new Map()
+  /** @param {string|null|undefined} grant */
+  const forgetNanoBananaGrant = (grant) => {
+    if (grant && nanoBananaGrant === grant) nanoBananaGrant = null
+  }
+  /** @param {string|null|undefined} runId */
+  const forgetNanoBananaBatch = (runId) => {
+    if (!runId || !nanoBananaBatches.has(runId)) return
+    forgetNanoBananaGrant(nanoBananaBatches.get(runId))
+    nanoBananaBatches.delete(runId)
+  }
   /**
-   * `params` with the grant, when the edit names Nano Banana or, for a re-run,
-   * may land on it; as it came otherwise.
+   * `params` with the held grant, when the edit names Nano Banana and carries
+   * no grant of its own; as it came otherwise.
    *
    * @param {any} params
    * @param {boolean} reaches
    */
   const withNanoBananaGrant = (params, reaches) =>
-    nanoBananaGrant && reaches ? { ...(params ?? {}), nanoBananaGrant } : params
+    nanoBananaGrant && reaches && typeof params?.nanoBananaGrant !== 'string'
+      ? { ...(params ?? {}), nanoBananaGrant }
+      : params
   /** @param {any} params @param {string | undefined | null} [engine] */
   const namesNanoBanana = (params, engine) => engine === 'nanobanana' || params?.engine === 'nanobanana'
 
@@ -470,26 +486,35 @@ export function createTauriBackend({ fallback, invoke, listen }) {
       }
     },
     readSettings: async () => withDefaults(await call(IMPLEMENTED.readSettings)),
-    writeSettings: async (patch) => withDefaults(await call(IMPLEMENTED.writeSettings, { patch })),
+    writeSettings: async (patch) => {
+      const written = await withDefaults(await call(IMPLEMENTED.writeSettings, { patch }))
+      // Turning Cloud engines off withdrew every grant natively.
+      if (patch && 'cloudEngines' in patch && written?.cloudEngines !== 'allowed') nanoBananaGrant = null
+      return written
+    },
     readInferenceConfig: () => call(IMPLEMENTED.readInferenceConfig),
     writeInferenceConfig: ({ config }) => call(IMPLEMENTED.writeInferenceConfig, { config }),
     selectCloudProfile: ({ provider, profileId }) => call(IMPLEMENTED.selectCloudProfile, { provider, profileId }),
     nanoBananaHasKey: () => call(IMPLEMENTED.nanoBananaHasKey),
     storeNanoBananaKey: ({ key }) => call(IMPLEMENTED.storeNanoBananaKey, { key }),
     deleteNanoBananaKey: () => call(IMPLEMENTED.deleteNanoBananaKey),
-    grantNanoBanana: async ({ model, count }) => {
-      const granted = await call(IMPLEMENTED.grantNanoBanana, { model, count })
+    grantNanoBanana: async ({ model, count, chapterId }) => {
+      const granted = await call(IMPLEMENTED.grantNanoBanana, { model, count, chapterId: chapterId ?? null })
       nanoBananaGrant = typeof granted?.grant === 'string' ? granted.grant : null
       return granted
     },
-    nanoBananaStop: async () => {
-      // Stop withdraws the rest of the window, here as well as natively.
-      nanoBananaGrant = null
-      return call(IMPLEMENTED.nanoBananaStop)
+    nanoBananaStop: async ({ grant } = {}) => {
+      // Stop withdraws the rest of that window, here as well as natively.
+      forgetNanoBananaGrant(grant)
+      return call(IMPLEMENTED.nanoBananaStop, { grant: grant ?? '' })
     },
     // The batch spends the window's grant natively, region by region.
-    startNanoBananaRun: ({ chapterId, regionIds }) =>
-      call(IMPLEMENTED.startNanoBananaRun, { chapterId, regionIds, nanoBananaGrant }),
+    startNanoBananaRun: async ({ chapterId, regionIds, nanoBananaGrant: named }) => {
+      const grant = named ?? nanoBananaGrant
+      const handle = await call(IMPLEMENTED.startNanoBananaRun, { chapterId, regionIds, nanoBananaGrant: grant })
+      if (handle?.runId && !handle.alreadyRunning) nanoBananaBatches.set(handle.runId, grant)
+      return handle
+    },
     storeCloudSecret: ({ provider, profileId, role, secret, tokenId, sessionOnly = false }) =>
       call(IMPLEMENTED.storeCloudSecret, {
         provider,
@@ -726,11 +751,11 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // `params` carries a cloud run's grant - `grantNonce`, `executionTarget`,
     // `recipe`, `intent`, the four `applyTool` already sends - and is left off
     // entirely for a local rung, so the command sees exactly what it saw
-    // before the cloud could reach it. A Nano Banana grant rides on every
-    // re-run while one is held: Try again on a Nano Banana layer names no
-    // engine, and native decides where it lands.
+    // before the cloud could reach it. Try again on a Nano Banana layer names
+    // no engine: the caller, which asked the window, sends its grant in
+    // `params`, and the held one goes only on a re-run that names the engine.
     rerunMask: ({ maskId, kind, engine, params }) => {
-      const sent = withNanoBananaGrant(params, true)
+      const sent = withNanoBananaGrant(params, engine === 'nanobanana')
       return call(IMPLEMENTED.rerunMask, {
         maskId,
         kind,
@@ -833,7 +858,12 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     applyComponentWrite: ({ planId, approvedSupportSha256 }) => call(IMPLEMENTED.applyComponentWrite, { planId, approvedSupportSha256 }),
 
     runClean: (spec) => call(IMPLEMENTED.runClean, spec),
-    cancelRun: (spec = {}) => call(IMPLEMENTED.cancelRun, spec),
+    cancelRun: async (spec = {}) => {
+      // Stop on a batch withdraws its grant natively.
+      if (spec?.runId) forgetNanoBananaBatch(spec.runId)
+      else for (const runId of [...nanoBananaBatches.keys()]) forgetNanoBananaBatch(runId)
+      return call(IMPLEMENTED.cancelRun, spec)
+    },
     resumeJob: (spec) => call(IMPLEMENTED.resumeJob, spec),
 
     // Background jobs (`src-tauri/src/jobs.rs`): the running runs and denoises,
@@ -862,7 +892,12 @@ export function createTauriBackend({ fallback, invoke, listen }) {
    * apparently in progress. The seam's ordering rules still hold per run,
    * because a run belongs entirely to one implementation.
    */
-  backend.subscribe = createEventStream({ call, fallback })
+  const stream = createEventStream({ call, fallback })
+  // A batch that ended withdrew what was left of its grant natively.
+  backend.subscribe = (handler) => stream((event) => {
+    if (event?.type === 'run-finished' || event?.type === 'nano-banana-report') forgetNanoBananaBatch(event.runId)
+    handler(event)
+  })
 
   // Only the core emits these: every command that could produce one - the
   // helper, `applyTool`, `rerunMask`, `cleanAnyway` - is served here, never by

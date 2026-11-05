@@ -29,15 +29,21 @@ it('pins denoising capability reads to the named cloud profile', async () => {
 })
 import { createMockBackend } from './mock.js'
 
-// A confirmed Nano Banana window's grant is the adapter's to carry: every edit
-// that can reach the rung sends it, and a local edit is sent as before.
-it('keeps a Nano Banana grant and sends it with each edit that can reach the rung', async () => {
-  const invoke = vi.fn(async (command) => command === 'nano_banana_grant' ? { grant: 'g1', model: 'm', count: 2 } : null)
-  const backend = createTauriBackend({ invoke, fallback: {} })
+// A confirmed Nano Banana window's grant: a caller that confirmed a window
+// sends its own, and the adapter's copy goes only on an edit that names Nano
+// Banana and carries none. It is forgotten when it is withdrawn natively.
+it('keeps a Nano Banana grant and sends it only where it reaches the rung', async () => {
+  const invoke = vi.fn(async (command) => {
+    if (command === 'nano_banana_grant') return { grant: 'g1', model: 'm', count: 2 }
+    if (command === 'start_nano_banana_run') return { runId: 'run-9', pages: [] }
+    if (command === 'write_settings') return { cloudEngines: 'blocked' }
+    return null
+  })
+  const backend = createTauriBackend({ invoke, fallback: /** @type {any} */ ({ readSettings: async () => ({}), subscribe: () => () => {} }) })
   await backend.cleanAnyway({ regionId: 'r', engine: 'nanobanana' })
   expect(invoke).toHaveBeenLastCalledWith('clean_anyway', { regionId: 'r', engine: 'nanobanana' })
-  expect(await backend.grantNanoBanana({ model: 'm', count: 2 })).toEqual({ grant: 'g1', model: 'm', count: 2 })
-  expect(invoke).toHaveBeenLastCalledWith('nano_banana_grant', { model: 'm', count: 2 })
+  expect(await backend.grantNanoBanana({ model: 'm', count: 2, chapterId: 'c' })).toEqual({ grant: 'g1', model: 'm', count: 2 })
+  expect(invoke).toHaveBeenLastCalledWith('nano_banana_grant', { model: 'm', count: 2, chapterId: 'c' })
 
   await backend.applyTool({ tool: 'autoClean', regionId: 'r', params: { engine: 'nanobanana' } })
   expect(invoke).toHaveBeenLastCalledWith('apply_tool', expect.objectContaining({ params: { engine: 'nanobanana', nanoBananaGrant: 'g1' } }))
@@ -45,22 +51,65 @@ it('keeps a Nano Banana grant and sends it with each edit that can reach the run
   expect(invoke).toHaveBeenLastCalledWith('create_region', expect.objectContaining({ params: { engine: 'nanobanana', nanoBananaGrant: 'g1' } }))
   await backend.cleanAnyway({ regionId: 'r', engine: 'nanobanana', params: { exact: true } })
   expect(invoke).toHaveBeenLastCalledWith('clean_anyway', { regionId: 'r', engine: 'nanobanana', params: { exact: true, nanoBananaGrant: 'g1' } })
-  // Try again names no engine; native decides whether it lands on Nano Banana.
+  // A grant the caller names is the one sent.
+  await backend.cleanAnyway({ regionId: 'r', engine: 'nanobanana', params: { nanoBananaGrant: 'g0' } })
+  expect(invoke).toHaveBeenLastCalledWith('clean_anyway', { regionId: 'r', engine: 'nanobanana', params: { nanoBananaGrant: 'g0' } })
+  // Try again names no engine: the held grant does not ride on it, the
+  // caller's own does.
   await backend.rerunMask({ maskId: 'm1', kind: 'retry' })
+  expect(invoke).toHaveBeenLastCalledWith('rerun_mask', { maskId: 'm1', kind: 'retry', engine: null })
+  await backend.rerunMask({ maskId: 'm1', kind: 'retry', params: { nanoBananaGrant: 'g1' } })
   expect(invoke).toHaveBeenLastCalledWith('rerun_mask', { maskId: 'm1', kind: 'retry', engine: null, params: { nanoBananaGrant: 'g1' } })
+  await backend.rerunMask({ maskId: 'm1', kind: 'engine', engine: 'nanobanana' })
+  expect(invoke).toHaveBeenLastCalledWith('rerun_mask', { maskId: 'm1', kind: 'engine', engine: 'nanobanana', params: { nanoBananaGrant: 'g1' } })
   // A local engine named goes as it did.
   await backend.applyTool({ tool: 'autoClean', regionId: 'r', params: { engine: 'lama' } })
   expect(invoke).toHaveBeenLastCalledWith('apply_tool', expect.objectContaining({ params: { engine: 'lama' } }))
 
-  // A batch goes on the grant too, as the native job checks it.
+  // A batch goes on the grant too, and Stop on it forgets it.
   await backend.startNanoBananaRun({ chapterId: 'c', regionIds: ['r1', 'r2'] })
   expect(invoke).toHaveBeenLastCalledWith('start_nano_banana_run', { chapterId: 'c', regionIds: ['r1', 'r2'], nanoBananaGrant: 'g1' })
+  await backend.cancelRun({ runId: 'run-9' })
+  await backend.applyTool({ tool: 'autoClean', regionId: 'r', params: { engine: 'nanobanana' } })
+  expect(invoke).toHaveBeenLastCalledWith('apply_tool', expect.objectContaining({ params: { engine: 'nanobanana' } }))
 
-  // Stop withdraws it.
-  await backend.nanoBananaStop()
-  expect(invoke.mock.lastCall?.[0]).toBe('nano_banana_stop')
-  await backend.rerunMask({ maskId: 'm1', kind: 'retry' })
-  expect(invoke).toHaveBeenLastCalledWith('rerun_mask', { maskId: 'm1', kind: 'retry', engine: null })
+  // Stop on a single region names its grant, and forgets it when it is the held one.
+  await backend.grantNanoBanana({ model: 'm', count: 1, chapterId: 'c' })
+  await backend.nanoBananaStop({ grant: 'g1' })
+  expect(invoke).toHaveBeenLastCalledWith('nano_banana_stop', { grant: 'g1' })
+  await backend.cleanAnyway({ regionId: 'r', engine: 'nanobanana' })
+  expect(invoke).toHaveBeenLastCalledWith('clean_anyway', { regionId: 'r', engine: 'nanobanana' })
+
+  // Cloud engines turned off forgets it.
+  await backend.grantNanoBanana({ model: 'm', count: 1, chapterId: 'c' })
+  await backend.writeSettings({ cloudEngines: 'blocked' })
+  await backend.cleanAnyway({ regionId: 'r', engine: 'nanobanana' })
+  expect(invoke).toHaveBeenLastCalledWith('clean_anyway', { regionId: 'r', engine: 'nanobanana' })
+})
+
+it('forgets a batch\'s grant when the batch ends', async () => {
+  /** @type {any[]} */
+  const opened = []
+  const host = /** @type {any} */ (globalThis)
+  host.__TAURI__ = {
+    core: { Channel: class { constructor() { opened.push(Object.assign(this, { onmessage: null })) } } },
+  }
+  try {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'nano_banana_grant') return { grant: 'g1', model: 'm', count: 2 }
+      if (command === 'start_nano_banana_run') return { runId: 'run-9', pages: [] }
+      return null
+    })
+    const backend = createTauriBackend({ invoke, fallback: /** @type {any} */ ({ subscribe: () => () => {} }) })
+    await backend.grantNanoBanana({ model: 'm', count: 2, chapterId: 'c' })
+    await backend.startNanoBananaRun({ chapterId: 'c', regionIds: ['r1'] })
+    backend.subscribe(() => {})
+    opened[0].onmessage({ type: 'run-finished', runId: 'run-9', reason: 'completed' })
+    await backend.cleanAnyway({ regionId: 'r', engine: 'nanobanana' })
+    expect(invoke).toHaveBeenLastCalledWith('clean_anyway', { regionId: 'r', engine: 'nanobanana' })
+  } finally {
+    delete host.__TAURI__
+  }
 })
 
 it('duplicates a native region through the registered command', async () => {

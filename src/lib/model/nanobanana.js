@@ -11,6 +11,9 @@
 /** The longest instruction sent, in characters (`MAX_INSTRUCTION_CHARS` native). */
 export const MAX_INSTRUCTION_CHARS = 600
 
+/** The most regions one window may grant (`nano_banana_consent.rs#MAX_REGIONS`). */
+export const MAX_GRANT_REGIONS = 2000
+
 /**
  * Dollars per image at Google's standard price, by size.
  *

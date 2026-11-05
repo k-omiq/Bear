@@ -1,7 +1,7 @@
 /**
  * The Nano Banana window: a yes saves the instruction, then takes a grant for
- * that many regions on the model the window showed. A caller sees only the
- * boolean; the backend keeps the grant and sends it with each render.
+ * that many regions of the chapter on the model the window showed, and the
+ * caller gets that window's grant to send with its request.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -37,28 +37,36 @@ beforeEach(() => {
 describe('confirmNanoBanana', () => {
   it('saves the instruction, then takes the grant for the model shown', async () => {
     const api = backend()
-    const asked = confirmNanoBanana(3, /** @type {any} */ (api))
+    const asked = confirmNanoBanana(3, 'c1', /** @type {any} */ (api))
     await answer('confirm')
-    expect(await asked).toBe(true)
+    expect(await asked).toBe('g')
     expect(api.writeSettings).toHaveBeenCalledWith(expect.objectContaining({ nanoBananaPrompt: 'keep the dots' }))
-    expect(api.grantNanoBanana).toHaveBeenCalledWith({ model: 'gemini-3-pro-image', count: 3 })
+    expect(api.grantNanoBanana).toHaveBeenCalledWith({ model: 'gemini-3-pro-image', count: 3, chapterId: 'c1' })
     expect(api.calls).toEqual(['write', 'grant'])
   })
 
   it('takes no grant when the answer is no', async () => {
     const api = backend()
-    const asked = confirmNanoBanana(1, /** @type {any} */ (api))
+    const asked = confirmNanoBanana(1, 'c1', /** @type {any} */ (api))
     await answer('cancel')
-    expect(await asked).toBe(false)
+    expect(await asked).toBeNull()
     expect(api.grantNanoBanana).not.toHaveBeenCalled()
   })
 
   it('sends nothing when no grant was given, and says why', async () => {
     const api = backend()
     api.grantNanoBanana.mockRejectedValueOnce(new Error('decline.reason.nanoBananaOff'))
-    const asked = confirmNanoBanana(1, /** @type {any} */ (api))
+    const asked = confirmNanoBanana(1, 'c1', /** @type {any} */ (api))
     await answer('confirm')
-    expect(await asked).toBe(false)
+    expect(await asked).toBeNull()
     expect(stores.notify).toHaveBeenCalledWith({ key: 'decline.reason.nanoBananaOff', tone: 'warn' })
+  })
+
+  it('refuses more regions than one grant covers before the window opens, and says so', async () => {
+    const api = backend()
+    expect(await confirmNanoBanana(2001, 'c1', /** @type {any} */ (api))).toBeNull()
+    expect(stores.modals).toHaveLength(0)
+    expect(api.grantNanoBanana).not.toHaveBeenCalled()
+    expect(stores.notify).toHaveBeenCalledWith({ key: 'nanoBanana.run.tooMany', params: { max: 2000 }, tone: 'warn' })
   })
 })

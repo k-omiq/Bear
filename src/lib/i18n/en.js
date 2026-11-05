@@ -1978,6 +1978,8 @@ export const en = {
       nanoBananaStopped: 'the Nano Banana request was stopped',
       nanoBananaNoConsent: 'the Nano Banana request was not confirmed, so nothing was sent',
       nanoBananaPageChanged: 'the page changed while the Nano Banana request was out, so its result was not used',
+      nanoBananaLost: 'the link to Google was lost after the crop was sent, so it may be billed; it was not sent again',
+      nanoBananaLongWait: 'Google asked to wait more than a minute before the next Nano Banana request; try again later',
       // Not a judgement on the region at all - no engine was ever asked about
       // it. Two ways in, and the remedy differs: the engine ceiling was set
       // below the rung the region needed, or this machine has no weights for
@@ -2989,6 +2991,8 @@ export const en = {
       // again repeats the last result exactly; this one changes it.
       retryWider: 'Try again wider',
       retryWiderHint: 'Clean again with the same engine over a slightly larger area. Each press grows it a little more.',
+      stopNanoBanana: 'Stop Nano Banana',
+      stopNanoBananaHint: 'Stop this region\'s Nano Banana request. A request already sent may still be billed.',
       // Beside Try again on a result an automatic clean made: the result is
       // taken off and the region is detected again, with the mask it had
       // before the clean (`model/masks.js#rejectable`).
@@ -4287,6 +4291,7 @@ export const en = {
       active: 'Cleaning with Nano Banana',
       undo: 'regions cleaned with Nano Banana',
       notStarted: 'The Nano Banana batch did not start, so nothing was sent.',
+      requestOut: 'A Nano Banana request for one region of this chapter is still out. Wait for it or stop it, then start the batch. Nothing was sent.',
       finished: 'Nano Banana cleaned {cleaned} of {total} regions.',
       finishedWithFailures: 'Nano Banana cleaned {cleaned} of {total} regions. {failed} could not be cleaned.',
       stopped: 'Nano Banana stopped. It cleaned {cleaned} of {total} regions.',
@@ -4358,6 +4363,7 @@ export const en = {
       promptHint: 'Your words are added to the built-in removal instruction and sent to Google. The edit stays inside the marked region.',
       promptNotSaved: 'The note could not be saved, so nothing was sent.',
       readFailed: 'The regions to clean could not be read, so nothing was sent.',
+      tooMany: 'Nano Banana takes at most {max} regions at once, so nothing was sent. Clean one page at a time.',
       title: 'Clean with Nano Banana',
       regions: 'Regions to clean: {count}. One paid request each, or one for several regions close together.',
       cost: 'Estimated cost: {low} to {high}.',

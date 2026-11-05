@@ -9,6 +9,7 @@
   import { actionHint } from './maskrows.js'
   import { menuPoint } from './gesture.js'
   import { editGradientLayer } from './retouch.svelte.js'
+  import { nanoBananaEditOut, stopNanoBananaEdit } from './nanobananaedits.svelte.js'
   import { cleanDetected, deleteRow, keepDependencyResult, offersFinishing, openFinishingWindow, openLayerEdit, recordedFinishing, regionPageBusy, requestDetectedMaskPadding, rerunMask, runMaskAction, shownMaskPadding, updateLayer } from './maskactions.svelte.js'
   import { isGradientLayer, layerCapabilities, layerOf } from '../model/layers.js'
   import { Button, Disclosure, IconButton, RangeField, Select } from '../ui/index.js'
@@ -289,7 +290,19 @@
          The engine picker is a decision, not a reflex, so it goes below with
          the facts that inform it. -->
     {#snippet trailing()}
-      {#if detected}
+      {#if nanoBananaEditOut(region.id)}
+        <!-- A paid request to Google that can run for many minutes: its Stop
+             takes the place of Clean or Try again until it answers. -->
+        <IconButton
+          icon="stop"
+          label={t('masks.action.stopNanoBanana')}
+          title={t('masks.action.stopNanoBananaHint')}
+          data-nano-banana-stop
+          size={21}
+          iconSize={13}
+          onclick={() => stopNanoBananaEdit(region.id)}
+        />
+      {:else if detected}
         <!-- Clean is the one thing a detection is waiting for, so it is on
              the collapsed line where Try again is on a layer's. -->
         <IconButton

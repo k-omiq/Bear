@@ -16,23 +16,37 @@
 //! - **How many regions.** Each render takes one, whether or not it then needs
 //!   a request: an answer shared from an earlier crop still counts, so the
 //!   count is never more than the window said.
+//! - **Which chapter.** A grant names the chapter its window was opened on,
+//!   and a render or a batch on another chapter is refused it.
 //! - **For how long.** A grant lapses [`IDLE`] after it was made or after its
 //!   last render finished. A render can take many minutes (several crops, a
-//!   retry each, a long timeout), so the clock is not running while one is.
-//! - **One at a time.** A new grant replaces the last one, and turning Cloud
-//!   engines off withdraws it ([`revoke_all`]).
+//!   retry each, a long timeout), so the clock is not running while one holds
+//!   a share, retries between its waits included.
+//! - **Whose.** Each window's grant is its own, so a second window does not
+//!   end the first one's renders: a batch goes on while a single region is
+//!   confirmed elsewhere. A batch claims its grant when it starts
+//!   ([`Book::claim`]), and from then on only that batch spends it.
+//! - **Stopped.** Each grant carries the [`Stop`] its renders watch, taken
+//!   when a render spends its share. Withdrawing the grant raises it, so a
+//!   Stop that lands at any point after the share was spent ends that render
+//!   before it sends, or while it waits on Google. Stop on one region or one
+//!   batch withdraws that grant only ([`Book::revoke`],
+//!   [`Book::revoke_owned_by`]); turning Cloud engines off and quitting
+//!   withdraw them all ([`revoke_all`]).
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use super::nano_banana::Config;
+use super::nano_banana::{Config, Granted, Stop};
 
 /// How long a grant waits, unused, before it lapses.
 pub const IDLE: Duration = Duration::from_secs(10 * 60);
 
 /// The most regions one grant covers. A whole chapter's batch is far below it.
+/// The window refuses a larger count before it opens
+/// (`nanobananaask.svelte.js`).
 pub const MAX_REGIONS: u32 = 2_000;
 
 /// Why a render may not go.
@@ -43,28 +57,51 @@ pub(crate) const CLOUD_OFF: &str = "decline.reason.nanoBananaOff";
 struct Live {
     nonce: String,
     config: Config,
+    /// The chapter the window was opened on.
+    chapter: String,
     left: u32,
     lapses: Instant,
+    /// Renders holding a share right now. The grant does not lapse while one does.
+    spending: u32,
+    /// The batch that claimed the grant ([`Book::claim`]).
+    owner: Option<String>,
+    stop: Stop,
 }
 
-/// The grants this process has made. One live at a time.
+impl Live {
+    fn lapsed(&self, now: Instant) -> bool {
+        self.spending == 0 && now >= self.lapses
+    }
+}
+
+/// The grants this process has made.
 pub(crate) struct Book {
-    live: Mutex<Option<Live>>,
+    live: Mutex<Vec<Live>>,
     idle: Duration,
 }
 
-/// One render's share of a grant: the settings the person confirmed. When it
-/// is dropped, the render is over and the grant's idle clock starts again.
+/// One render's share of a grant: the settings the person confirmed and the
+/// grant's stop. When it is dropped, the render is over and the grant's idle
+/// clock starts again.
 pub(crate) struct Spend<'a> {
     book: &'a Book,
     nonce: String,
     pub config: Config,
+    pub stop: Stop,
+}
+
+impl Spend<'_> {
+    /// What the render is handed.
+    pub(crate) fn granted(&self) -> Granted {
+        Granted { config: self.config.clone(), stop: self.stop.clone() }
+    }
 }
 
 impl Drop for Spend<'_> {
     fn drop(&mut self) {
         let mut live = self.book.lock();
-        if let Some(grant) = live.as_mut().filter(|grant| grant.nonce == self.nonce) {
+        if let Some(grant) = live.iter_mut().find(|grant| grant.nonce == self.nonce) {
+            grant.spending = grant.spending.saturating_sub(1);
             grant.lapses = Instant::now() + self.book.idle;
         }
     }
@@ -72,47 +109,75 @@ impl Drop for Spend<'_> {
 
 impl Book {
     pub(crate) const fn new(idle: Duration) -> Book {
-        Book { live: Mutex::new(None), idle }
+        Book { live: Mutex::new(Vec::new()), idle }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Live>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Live>> {
         self.live.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// A grant for `count` renders with `config`, replacing any other.
-    pub(crate) fn issue(&self, config: Config, count: u32) -> Result<String, &'static str> {
+    /// Take out the grants `gone` picks, raising each one's stop.
+    fn withdraw(live: &mut Vec<Live>, gone: impl Fn(&Live) -> bool) {
+        live.retain(|grant| {
+            let going = gone(grant);
+            if going {
+                grant.stop.raise();
+            }
+            !going
+        });
+    }
+
+    /// A grant for `count` renders on `chapter` with `config`. Other grants
+    /// stand; the ones lapsed or used up are forgotten here.
+    pub(crate) fn issue(&self, config: Config, chapter: &str, count: u32) -> Result<String, &'static str> {
         if count == 0 || count > MAX_REGIONS {
             return Err(NO_CONSENT);
         }
         let mut bytes = [0u8; 32];
         getrandom::fill(&mut bytes).map_err(|_| NO_CONSENT)?;
         let nonce: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        *self.lock() = Some(Live {
+        let now = Instant::now();
+        let mut live = self.lock();
+        Self::withdraw(&mut live, |grant| grant.lapsed(now) || (grant.left == 0 && grant.spending == 0));
+        live.push(Live {
             nonce: nonce.clone(),
             config,
+            chapter: chapter.to_owned(),
             left: count,
-            lapses: Instant::now() + self.idle,
+            lapses: now + self.idle,
+            spending: 0,
+            owner: None,
+            stop: Stop::default(),
         });
         Ok(nonce)
     }
 
-    /// One render's share of the grant `nonce` names, while Cloud engines are
-    /// `cloud_allowed`. Nothing is taken when the answer is a refusal.
-    pub(crate) fn spend(&self, cloud_allowed: bool, nonce: Option<&str>) -> Result<Spend<'_>, &'static str> {
+    /// One render's share of the grant `nonce` names, for a render on
+    /// `chapter` by `owner` (the batch's run id, or none for a single region),
+    /// while Cloud engines are `cloud_allowed`. Nothing is taken when the
+    /// answer is a refusal.
+    pub(crate) fn spend(&self, cloud_allowed: bool, nonce: Option<&str>, chapter: &str, owner: Option<&str>)
+        -> Result<Spend<'_>, &'static str> {
         if !cloud_allowed {
             return Err(CLOUD_OFF);
         }
         let nonce = nonce.ok_or(NO_CONSENT)?;
+        let now = Instant::now();
         let mut live = self.lock();
-        let Some(grant) = live.as_mut().filter(|grant| grant.nonce == nonce) else {
+        let Some(at) = live.iter().position(|grant| grant.nonce == nonce) else {
             return Err(NO_CONSENT);
         };
-        if Instant::now() >= grant.lapses || grant.left == 0 {
-            *live = None;
+        if live[at].lapsed(now) {
+            Self::withdraw(&mut live, |grant| grant.nonce == nonce);
+            return Err(NO_CONSENT);
+        }
+        let grant = &mut live[at];
+        if grant.left == 0 || grant.chapter != chapter || grant.owner.as_deref() != owner {
             return Err(NO_CONSENT);
         }
         grant.left -= 1;
-        Ok(Spend { book: self, nonce: nonce.to_owned(), config: grant.config.clone() })
+        grant.spending += 1;
+        Ok(Spend { book: self, nonce: nonce.to_owned(), config: grant.config.clone(), stop: grant.stop.clone() })
     }
 
     /// How many renders the grant `nonce` names has left, without taking one:
@@ -122,15 +187,54 @@ impl Book {
         if !cloud_allowed {
             return Err(CLOUD_OFF);
         }
+        let now = Instant::now();
         let live = self.lock();
-        match live.as_ref().filter(|grant| grant.nonce == nonce) {
-            Some(grant) if Instant::now() < grant.lapses => Ok(grant.left),
+        match live.iter().find(|grant| grant.nonce == nonce) {
+            Some(grant) if !grant.lapsed(now) => Ok(grant.left),
             _ => Err(NO_CONSENT),
         }
     }
 
-    pub(crate) fn revoke(&self) {
-        *self.lock() = None;
+    /// Bind the grant `nonce` names to the batch `run_id` on `chapter`, which
+    /// needs `count` of its regions. Refused for another chapter's grant, one
+    /// another batch claimed, and one that covers fewer.
+    pub(crate) fn claim(&self, cloud_allowed: bool, nonce: &str, chapter: &str, run_id: &str, count: usize)
+        -> Result<(), &'static str> {
+        if !cloud_allowed {
+            return Err(CLOUD_OFF);
+        }
+        let now = Instant::now();
+        let mut live = self.lock();
+        let Some(grant) = live.iter_mut().find(|grant| grant.nonce == nonce && !grant.lapsed(now)) else {
+            return Err(NO_CONSENT);
+        };
+        if grant.chapter != chapter || grant.owner.is_some() || (grant.left as usize) < count {
+            return Err(NO_CONSENT);
+        }
+        grant.owner = Some(run_id.to_owned());
+        Ok(())
+    }
+
+    /// Withdraw the grant `nonce` names: Stop on the region it was confirmed
+    /// for. Its render in flight ends.
+    pub(crate) fn revoke(&self, nonce: &str) {
+        Self::withdraw(&mut self.lock(), |grant| grant.nonce == nonce);
+    }
+
+    /// Withdraw the grant the batch `run_id` claimed: its Stop, or its end.
+    pub(crate) fn revoke_owned_by(&self, run_id: &str) {
+        Self::withdraw(&mut self.lock(), |grant| grant.owner.as_deref() == Some(run_id));
+    }
+
+    /// Withdraw every grant.
+    pub(crate) fn revoke_every(&self) {
+        Self::withdraw(&mut self.lock(), |_| true);
+    }
+
+    /// How many single-region renders hold a share right now, for the quit
+    /// guard: a batch is counted as its run.
+    pub(crate) fn single_renders(&self) -> usize {
+        self.lock().iter().filter(|grant| grant.owner.is_none()).map(|grant| grant.spending as usize).sum()
     }
 }
 
@@ -141,9 +245,10 @@ pub(crate) fn book() -> &'static Book {
     &BOOK
 }
 
-/// Withdraw every grant: Cloud engines was turned off, or the user pressed Stop.
+/// Withdraw every grant: Cloud engines was turned off, or the app is quitting.
+/// Every render in flight ends.
 pub(crate) fn revoke_all() {
-    BOOK.revoke();
+    BOOK.revoke_every();
 }
 
 /// What a confirmed window was granted.
@@ -155,17 +260,19 @@ pub struct NanoBananaGrant {
     pub count: u32,
 }
 
-/// Make the grant for a window the person just confirmed: `count` regions on
-/// `model`, the model the window showed. Refused while Cloud engines is off,
-/// and when settings name another model than the one the person saw.
+/// Make the grant for a window the person just confirmed: `count` regions of
+/// `chapter_id` on `model`, the model the window showed. Refused while Cloud
+/// engines is off, and when settings name another model than the one the
+/// person saw.
 #[tauri::command]
-pub async fn nano_banana_grant(app: tauri::AppHandle, model: String, count: u32) -> Result<NanoBananaGrant, String> {
+pub async fn nano_banana_grant(app: tauri::AppHandle, model: String, count: u32, chapter_id: String)
+    -> Result<NanoBananaGrant, String> {
     let config = Config::when_allowed(&app).ok_or(CLOUD_OFF)?;
     if config.model.id != model {
         return Err(NO_CONSENT.into());
     }
     let model = config.model.id.to_owned();
-    let grant = book().issue(config, count)?;
+    let grant = book().issue(config, &chapter_id, count)?;
     Ok(NanoBananaGrant { grant, model, count })
 }
 
@@ -178,83 +285,143 @@ mod tests {
         Config { model: Model::DEFAULT, instruction: instruction.map(str::to_owned) }
     }
 
+    /// A single region's share, on chapter `c1`.
+    fn click<'a>(book: &'a Book, nonce: &str) -> Result<Spend<'a>, &'static str> {
+        book.spend(true, Some(nonce), "c1", None)
+    }
+
     #[test]
     fn a_grant_covers_as_many_renders_as_were_confirmed() {
         let book = Book::new(IDLE);
-        let nonce = book.issue(config(None), 2).unwrap();
-        drop(book.spend(true, Some(&nonce)).unwrap());
-        drop(book.spend(true, Some(&nonce)).unwrap());
-        assert_eq!(book.spend(true, Some(&nonce)).err(), Some(NO_CONSENT));
+        let nonce = book.issue(config(None), "c1", 2).unwrap();
+        drop(click(&book, &nonce).unwrap());
+        drop(click(&book, &nonce).unwrap());
+        assert_eq!(click(&book, &nonce).err(), Some(NO_CONSENT));
     }
 
     #[test]
     fn nothing_is_taken_while_cloud_engines_are_off() {
         let book = Book::new(IDLE);
-        let nonce = book.issue(config(None), 1).unwrap();
-        assert_eq!(book.spend(false, Some(&nonce)).err(), Some(CLOUD_OFF));
-        assert!(book.spend(true, Some(&nonce)).is_ok(), "the refusal left the count alone");
+        let nonce = book.issue(config(None), "c1", 1).unwrap();
+        assert_eq!(book.spend(false, Some(&nonce), "c1", None).err(), Some(CLOUD_OFF));
+        assert!(click(&book, &nonce).is_ok(), "the refusal left the count alone");
     }
 
     #[test]
     fn no_grant_a_wrong_one_or_a_withdrawn_one_is_refused() {
         let book = Book::new(IDLE);
-        assert_eq!(book.spend(true, None).err(), Some(NO_CONSENT));
-        let nonce = book.issue(config(None), 5).unwrap();
-        assert_eq!(book.spend(true, Some("0".repeat(64).as_str())).err(), Some(NO_CONSENT));
-        book.revoke();
-        assert_eq!(book.spend(true, Some(&nonce)).err(), Some(NO_CONSENT));
+        assert_eq!(book.spend(true, None, "c1", None).err(), Some(NO_CONSENT));
+        let nonce = book.issue(config(None), "c1", 5).unwrap();
+        assert_eq!(click(&book, "0".repeat(64).as_str()).err(), Some(NO_CONSENT));
+        book.revoke(&nonce);
+        assert_eq!(click(&book, &nonce).err(), Some(NO_CONSENT));
     }
 
     #[test]
-    fn a_new_window_replaces_the_last_ones_grant() {
+    fn a_grant_is_spent_only_on_its_own_chapter() {
         let book = Book::new(IDLE);
-        let first = book.issue(config(None), 5).unwrap();
-        let second = book.issue(config(None), 1).unwrap();
-        assert_eq!(book.spend(true, Some(&first)).err(), Some(NO_CONSENT));
-        assert!(book.spend(true, Some(&second)).is_ok());
+        let nonce = book.issue(config(None), "c1", 2).unwrap();
+        assert_eq!(book.spend(true, Some(&nonce), "c2", None).err(), Some(NO_CONSENT));
+        assert_eq!(book.claim(true, &nonce, "c2", "run-1", 1), Err(NO_CONSENT));
+        assert_eq!(book.left(true, &nonce), Ok(2), "nothing was taken");
+    }
+
+    #[test]
+    fn a_new_window_leaves_the_last_ones_grant_alone() {
+        let book = Book::new(IDLE);
+        let first = book.issue(config(None), "c1", 5).unwrap();
+        let running = click(&book, &first).unwrap();
+        let second = book.issue(config(None), "c2", 1).unwrap();
+        assert!(!running.stop.raised(), "the first window's render goes on");
+        assert!(click(&book, &first).is_ok());
+        assert!(book.spend(true, Some(&second), "c2", None).is_ok());
     }
 
     #[test]
     fn a_grant_lapses_when_idle_but_not_while_a_render_runs() {
         let book = Book::new(Duration::from_millis(60));
-        let nonce = book.issue(config(None), 3).unwrap();
-        let running = book.spend(true, Some(&nonce)).unwrap();
+        let nonce = book.issue(config(None), "c1", 3).unwrap();
+        let running = click(&book, &nonce).unwrap();
         std::thread::sleep(Duration::from_millis(90));
+        // A long region asks between its retries: the grant still holds.
+        assert_eq!(book.left(true, &nonce), Ok(2));
         // The render ends now, and the clock starts again from here.
         drop(running);
-        assert!(book.spend(true, Some(&nonce)).is_ok());
+        assert!(click(&book, &nonce).is_ok());
         std::thread::sleep(Duration::from_millis(90));
-        assert_eq!(book.spend(true, Some(&nonce)).err(), Some(NO_CONSENT));
+        assert_eq!(click(&book, &nonce).err(), Some(NO_CONSENT));
     }
 
     #[test]
     fn a_render_uses_the_instruction_that_was_confirmed() {
         let book = Book::new(IDLE);
-        let nonce = book.issue(config(Some("keep the halftone")), 2).unwrap();
-        let spend = book.spend(true, Some(&nonce)).unwrap();
+        let nonce = book.issue(config(Some("keep the halftone")), "c1", 2).unwrap();
+        let spend = click(&book, &nonce).unwrap();
         assert_eq!(spend.config.instruction.as_deref(), Some("keep the halftone"));
         assert_eq!(spend.config.model.id, Model::DEFAULT.id);
+        assert_eq!(spend.granted().config.instruction.as_deref(), Some("keep the halftone"));
     }
 
     #[test]
     fn what_is_left_is_read_without_spending() {
         let book = Book::new(IDLE);
-        let nonce = book.issue(config(None), 2).unwrap();
+        let nonce = book.issue(config(None), "c1", 2).unwrap();
         assert_eq!(book.left(true, &nonce), Ok(2));
         assert_eq!(book.left(true, &nonce), Ok(2), "asking spends nothing");
-        let spend = book.spend(true, Some(&nonce)).unwrap();
+        let spend = click(&book, &nonce).unwrap();
         assert_eq!(book.left(true, &nonce), Ok(1));
         drop(spend);
         assert_eq!(book.left(false, &nonce), Err(CLOUD_OFF));
         assert_eq!(book.left(true, "other"), Err(NO_CONSENT));
-        book.revoke();
+        book.revoke(&nonce);
         assert_eq!(book.left(true, &nonce), Err(NO_CONSENT));
     }
 
     #[test]
     fn a_count_of_none_or_too_many_is_no_grant() {
         let book = Book::new(IDLE);
-        assert_eq!(book.issue(config(None), 0).err(), Some(NO_CONSENT));
-        assert_eq!(book.issue(config(None), MAX_REGIONS + 1).err(), Some(NO_CONSENT));
+        assert_eq!(book.issue(config(None), "c1", 0).err(), Some(NO_CONSENT));
+        assert_eq!(book.issue(config(None), "c1", MAX_REGIONS + 1).err(), Some(NO_CONSENT));
+    }
+
+    #[test]
+    fn a_stop_after_the_share_is_spent_reaches_the_render() {
+        let book = Book::new(IDLE);
+        let nonce = book.issue(config(None), "c1", 1).unwrap();
+        let spend = click(&book, &nonce).unwrap();
+        assert!(!spend.stop.raised());
+        book.revoke(&nonce);
+        assert!(spend.stop.raised(), "the render that already holds its share is stopped");
+    }
+
+    #[test]
+    fn a_claimed_grant_is_that_batchs_alone_and_its_stop_is_its_own() {
+        let book = Book::new(IDLE);
+        let batch = book.issue(config(None), "c1", 3).unwrap();
+        let single = book.issue(config(None), "c1", 1).unwrap();
+        assert_eq!(book.claim(true, &batch, "c1", "run-1", 4), Err(NO_CONSENT), "covers fewer");
+        assert_eq!(book.claim(true, &batch, "c1", "run-1", 3), Ok(()));
+        assert_eq!(book.claim(true, &batch, "c1", "run-2", 1), Err(NO_CONSENT), "claimed once");
+        assert_eq!(click(&book, &batch).err(), Some(NO_CONSENT), "a single region can not spend a batch's grant");
+        let region = book.spend(true, Some(&batch), "c1", Some("run-1")).unwrap();
+        let other = click(&book, &single).unwrap();
+        assert_eq!(book.single_renders(), 1, "the batch is counted as its run");
+
+        // Stop on the single region leaves the batch alone, and the other way round.
+        book.revoke(&single);
+        assert!(other.stop.raised() && !region.stop.raised());
+        book.revoke_owned_by("run-1");
+        assert!(region.stop.raised());
+        assert_eq!(book.left(true, &batch), Err(NO_CONSENT));
+    }
+
+    #[test]
+    fn turning_cloud_engines_off_stops_every_render() {
+        let book = Book::new(IDLE);
+        let a = book.issue(config(None), "c1", 1).unwrap();
+        let b = book.issue(config(None), "c2", 1).unwrap();
+        let (first, second) = (click(&book, &a).unwrap(), book.spend(true, Some(&b), "c2", None).unwrap());
+        book.revoke_every();
+        assert!(first.stop.raised() && second.stop.raised());
     }
 }

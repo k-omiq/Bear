@@ -48,6 +48,7 @@ import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.sv
 import { askLocalGuidance } from './qwenflow.js'
 import { editGradientLayer } from './retouch.svelte.js'
 import { confirmNanoBanana } from './nanobananaask.svelte.js'
+import { whileNanoBananaEdit } from './nanobananaedits.svelte.js'
 import { notify } from '../state/app.svelte.js'
 import { openWindow } from '../state/session.svelte.js'
 import {
@@ -367,8 +368,14 @@ export async function rerunMask(region, kind, engine) {
   // while the window is open does not open a second one.
   rerunning.add(region.id)
   try {
-    if (rerunReachesNanoBanana(region.mask, kind, engine) && !(await confirmNanoBanana(1))) return false
-    return await rerunLocally(region, kind, engine, qwenEdit ?? undefined)
+    /** @type {string|null} */
+    let grant = null
+    if (rerunReachesNanoBanana(region.mask, kind, engine)) {
+      grant = await confirmNanoBanana(1, editor.chapter?.id)
+      if (!grant) return false
+    }
+    return await whileNanoBananaEdit(region.id, grant,
+      () => rerunLocally(region, kind, engine, qwenEdit ?? undefined, grant))
   } finally {
     rerunning.delete(region.id)
   }
@@ -419,16 +426,18 @@ function rerunReachesNanoBanana(mask, kind, engine) {
  * @param {'stronger'|'simpler'|'cycleFill'|'reopenInTool'|'retry'|'retryWider'|'engine'} kind
  * @param {string} [engine]
  * @param {{target: string, description: string}} [qwenEdit] - the guidance a FLUX re-run was asked for
+ * @param {string|null} [nanoBananaGrant] - the window's grant, for a re-run that lands on Nano Banana
  * @returns {Promise<boolean>}
  */
-async function rerunLocally(region, kind, engine, qwenEdit) {
+async function rerunLocally(region, kind, engine, qwenEdit, nanoBananaGrant) {
   const chapterId = editor.chapter?.id ?? null
   const before = snapshot(region)
+  const params = { ...(qwenEdit ? { qwenEdit } : {}), ...(nanoBananaGrant ? { nanoBananaGrant } : {}) }
   /** @type {any} */
   let result
   try {
     result = await getBackend().rerunMask({ maskId: /** @type {any} */ (region.mask).id, kind, engine,
-      ...(qwenEdit ? { params: { qwenEdit } } : {}) })
+      ...(Object.keys(params).length ? { params } : {}) })
   } catch (error) {
     return reportRegionEditFailure(error)
   }
@@ -480,9 +489,10 @@ async function rerunLocally(region, kind, engine, qwenEdit) {
  *
  * @param {import('../api/backend.js').ApiRegion} region
  * @param {string} [chosenEngine] - a model picked from Clean with, run as named
+ * @param {string|null} [nanoBananaGrant] - the window's grant, when that model is Nano Banana
  * @returns {Promise<boolean>}
  */
-export async function cleanAnyway(region, chosenEngine) {
+export async function cleanAnyway(region, chosenEngine, nanoBananaGrant) {
   const chapterId = editor.chapter?.id ?? null
   const before = snapshot(region)
   const params = /** @type {any} */ (editor.toolParams.autoClean ?? {})
@@ -508,6 +518,7 @@ export async function cleanAnyway(region, chosenEngine) {
     ...(engine === 'solid' ? { bubbleColor: params.bubbleColor ?? '#ffffff' } : {}),
     ...(chosenEngine ? { exact: true } : {}),
     ...(qwenEdit ? { qwenEdit } : {}),
+    ...(nanoBananaGrant ? { nanoBananaGrant } : {}),
   }
   try {
     result = await getBackend().cleanAnyway({ regionId: region.id, engine,
@@ -603,9 +614,10 @@ export async function approveHeldMask(region) {
  *
  * @param {import('../api/backend.js').ApiRegion} region
  * @param {string} [engine] - a local rung (`ROW_ENGINES`); absent starts at the stored pick
+ * @param {string|null} [nanoBananaGrant] - the window's grant, when `engine` is Nano Banana
  * @returns {Promise<boolean>} whether anything changed
  */
-export async function cleanDetected(region, engine) {
+export async function cleanDetected(region, engine, nanoBananaGrant) {
   const chapterId = editor.chapter?.id ?? null
   const pageIndex = pageIndexOf(region.id)
   if (!chapterId || pageIndex === null) return false
@@ -634,7 +646,7 @@ export async function cleanDetected(region, engine) {
         // No engine: the region's stored `pick` is the rung it starts at. A
         // named engine overrides it. The colour is what a Solid pick paints.
         params: { bubbleColor: String(params.bubbleColor ?? '#ffffff'), ...(engine ? { engine } : {}),
-          ...(qwenEdit ? { qwenEdit } : {}) },
+          ...(qwenEdit ? { qwenEdit } : {}), ...(nanoBananaGrant ? { nanoBananaGrant } : {}) },
       })
     } catch (error) {
       return reportRegionEditFailure(error)
@@ -1596,15 +1608,21 @@ export async function runRegionMenuItem(id, region) {
   if (id === 'approve') return cleanAnyway(region)
   if (id.startsWith('approve:')) {
     const engine = id.slice('approve:'.length)
-    // A paid request to Google: asked about first, with the box for what to edit.
-    if (engine === NANO_BANANA_ENGINE && !(await confirmNanoBanana(1))) return false
-    return cleanAnyway(region, engine)
+    if (engine !== NANO_BANANA_ENGINE) return cleanAnyway(region, engine)
+    // A paid request to Google: asked about first, with the box for what to
+    // edit, and stoppable from the row while it is out.
+    const grant = await confirmNanoBanana(1, editor.chapter?.id)
+    if (!grant) return false
+    return whileNanoBananaEdit(region.id, grant, () => cleanAnyway(region, engine, grant))
   }
   if (id.startsWith('engine:')) {
     const engine = id.slice('engine:'.length)
     if (!isDetected(region)) return rerunMask(region, 'engine', engine)
-    if (engine === NANO_BANANA_ENGINE && !(await confirmNanoBanana(1))) return false
-    return engine === CLOUD_ENGINE ? cleanDetectedOnCloud(region) : cleanDetected(region, engine)
+    if (engine === CLOUD_ENGINE) return cleanDetectedOnCloud(region)
+    if (engine !== NANO_BANANA_ENGINE) return cleanDetected(region, engine)
+    const grant = await confirmNanoBanana(1, editor.chapter?.id)
+    if (!grant) return false
+    return whileNanoBananaEdit(region.id, grant, () => cleanDetected(region, engine, grant))
   }
   if (id === 'type:inside') return setDetectionType(region, true)
   if (id === 'type:outside') return setDetectionType(region, false)

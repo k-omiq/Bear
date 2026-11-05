@@ -57,7 +57,8 @@
 //! runs never reach the cloud at all.
 
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -713,9 +714,10 @@ struct Bench {
     detector: run::OnDemand<Detector>,
     rung2: run::Rung2,
     /// What the person confirmed for a Nano Banana render, from its grant
-    /// ([`edit_with_consent`]). `None` for every other edit, and the rung then
-    /// refuses before a request is made. Never read from settings here.
-    nano_banana: Option<crate::inference::nano_banana::Config>,
+    /// ([`edit_with_consent`]), with that grant's stop. `None` for every other
+    /// edit, and the rung then refuses before a request is made. Never read
+    /// from settings here.
+    nano_banana: Option<crate::inference::nano_banana::Granted>,
     /// How a Nano Banana answer is finished: its own setting, not the one
     /// this computer's models share ([`crate::inference::nano_banana_finishing`]).
     nano_banana_finishing: cleaner_core::engines::postprocess::Choice,
@@ -794,8 +796,8 @@ impl Bench {
         share: Option<&crate::inference::nano_banana::Neighbours>,
         finishing: cleaner_core::engines::postprocess::Choice,
     ) -> Result<(run::Made, quality::Assessment, serde_json::Value, Vec<u8>), &'static str> {
-        let config = self.nano_banana.as_ref().ok_or("decline.reason.nanoBananaOff")?;
-        let edited = crate::inference::nano_banana::render(config, page, fitted, Some(finishing), share)?;
+        let granted = self.nano_banana.as_ref().ok_or("decline.reason.nanoBananaOff")?;
+        let edited = crate::inference::nano_banana::render(granted, page, fitted, Some(finishing), share)?;
         let rendered = edited.rendered;
         let made = run::Made {
             engine: Engine::NanoBanana,
@@ -1254,10 +1256,13 @@ fn edit(app: &tauri::AppHandle, located: &Located, plan: Plan, nano_banana_grant
 
 /// [`edit_with_bench`], with a Nano Banana render held to its grant: Cloud
 /// engines on, and one region of a grant the person made by confirming the
-/// window. The render uses the model and instruction that grant holds, never
-/// the live setting, so an instruction edited during a batch changes nothing
-/// already confirmed. Every command that renders reaches the rung only
-/// through here: `applyTool`, `createRegion`, `rerunMask`, `cleanAnyway`.
+/// window on this chapter. The render uses the model and instruction that
+/// grant holds, never the live setting, so an instruction edited during a
+/// batch changes nothing already confirmed, and it watches that grant's
+/// stop from the moment its share is spent, so `nanoBananaStop` on the grant
+/// ends it before it sends, however far it got. Every command that renders
+/// reaches the rung only through here: `applyTool`, `createRegion`,
+/// `rerunMask`, `cleanAnyway`.
 fn edit_with_consent(
     bench: &mut Bench,
     ceiling: Engine,
@@ -1271,11 +1276,11 @@ fn edit_with_consent(
     if plan.choice != Choice::Exact(Engine::NanoBanana) {
         return edit_with_bench(bench, ceiling, located, plan);
     }
-    let spend = match grants.spend(cloud_allowed, nano_banana_grant) {
+    let spend = match grants.spend(cloud_allowed, nano_banana_grant, &located.chapter_id, None) {
         Ok(spend) => spend,
         Err(reason) => return Ok(Outcome::Refused(reason)),
     };
-    bench.nano_banana = Some(spend.config.clone());
+    bench.nano_banana = Some(spend.granted());
     let outcome = edit_with_bench(bench, ceiling, located, plan);
     bench.nano_banana = None;
     drop(spend);
@@ -1295,8 +1300,8 @@ pub(crate) enum BatchRegion {
 
 /// One stored detection of a Nano Banana batch (`inference::nano_banana_job`),
 /// cleaned as `applyTool`'s Auto clean with `engine: nanobanana` cleans one,
-/// under `config`: the settings of the grant the batch already spent a region
-/// of for it. The batch calls this again for a retry of the same region, on
+/// under `granted`: the settings and the stop of the grant the batch already
+/// spent a region of for it. The batch calls this again for a retry of the same region, on
 /// the same share of its grant.
 ///
 /// A region that is no longer a detection is [`BatchRegion::Gone`] before
@@ -1306,7 +1311,7 @@ pub(crate) fn clean_for_nano_banana_batch(
     app: &tauri::AppHandle,
     library: &Library,
     region_id: &str,
-    config: &crate::inference::nano_banana::Config,
+    granted: &crate::inference::nano_banana::Granted,
 ) -> Result<BatchRegion, String> {
     let Some(located) = locate_region(library, region_id)? else { return Ok(BatchRegion::Gone) };
     {
@@ -1340,7 +1345,7 @@ pub(crate) fn clean_for_nano_banana_batch(
     let stored = crate::settings::read(app).ok()
         .and_then(|s| s.get("engineCeiling").and_then(|v| v.as_str()).map(str::to_owned));
     let ceiling = run::effective_ceiling(None, stored.as_deref());
-    bench.nano_banana = Some(config.clone());
+    bench.nano_banana = Some(granted.clone());
     let outcome = edit_with_bench(&mut bench, ceiling, &located, plan);
     bench.nano_banana = None;
     Ok(match outcome? {
@@ -1423,19 +1428,61 @@ struct PageHold<'a> {
     _lock: Option<run::JobLock>,
 }
 
+/// The pages a single region's Nano Banana request is out on, by manifest:
+/// the lock is let go of for it, so a run could take the page meanwhile and
+/// the paid answer would be refused when it came back. A Nano Banana batch
+/// waits for these before it raises a page, and does not start while one is
+/// out on its chapter ([`nano_banana_requests_out`]).
+static REQUESTS_OUT: Mutex<Vec<(PathBuf, usize)>> = Mutex::new(Vec::new());
+
+fn requests_out() -> std::sync::MutexGuard<'static, Vec<(PathBuf, usize)>> {
+    REQUESTS_OUT.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn manifest_key(job_path: &Path) -> PathBuf {
+    std::fs::canonicalize(job_path).unwrap_or_else(|_| job_path.to_path_buf())
+}
+
+/// Whether a single region's Nano Banana request is out on the chapter whose
+/// manifest is at `job_path`: on `page`, or on any page of it.
+pub(crate) fn nano_banana_requests_out(job_path: &Path, page: Option<usize>) -> bool {
+    let key = manifest_key(job_path);
+    requests_out().iter().any(|(job, at)| *job == key && page.is_none_or(|page| page == *at))
+}
+
 impl<'a> PageHold<'a> {
     fn take(located: &'a Located) -> Result<PageHold<'a>, run::WriteRefused> {
         let lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
         Ok(PageHold { located, _lock: Some(lock) })
     }
 
-    /// `work` with the chapter unlocked, and the page locked again after it,
-    /// refused with `page_busy` as at the start if a run took the page meanwhile.
-    fn without<T>(&mut self, work: impl FnOnce() -> T) -> Result<T, run::WriteRefused> {
+    /// `work` with the chapter unlocked, and the page locked again after it.
+    /// The second answer is the lock taken again, refused with `page_busy` as
+    /// at the start if a run took the page meanwhile, and then the hold has no
+    /// lock. Said in [`REQUESTS_OUT`] while it is out, unless a run is the one
+    /// asking: a run holds its own pages.
+    fn without<T>(&mut self, work: impl FnOnce() -> T) -> (T, Result<(), run::WriteRefused>) {
+        let entry = run::own_run().is_none().then(|| (manifest_key(&self.located.job_path), self.located.page_index));
+        if let Some(entry) = &entry {
+            requests_out().push(entry.clone());
+        }
+        // Said before the lock goes, so a run that takes the lock next sees it.
         self._lock = None;
         let done = work();
-        self._lock = Some(run::lock_page(&self.located.job_path, &self.located.chapter_id, self.located.page_index)?);
-        Ok(done)
+        let again = run::lock_page(&self.located.job_path, &self.located.chapter_id, self.located.page_index);
+        if let Some(entry) = &entry {
+            let mut out = requests_out();
+            if let Some(at) = out.iter().position(|held| held == entry) {
+                out.remove(at);
+            }
+        }
+        match again {
+            Ok(lock) => {
+                self._lock = Some(lock);
+                (done, Ok(()))
+            }
+            Err(refused) => (done, Err(refused)),
+        }
     }
 }
 
@@ -1911,7 +1958,8 @@ fn edit_with_bench_render(
     // region whose crop held this one. The window then has to hold that crop.
     let shares_crops = detection.is_some() && strip_space.is_none();
     let mut read_bounds = seed.bounds;
-    if let (true, Some(config)) = (shares_crops && matches!(plan.choice, Choice::Exact(Engine::NanoBanana)), bench.nano_banana.as_ref()) {
+    if let (true, Some(config)) = (shares_crops && matches!(plan.choice, Choice::Exact(Engine::NanoBanana)),
+        bench.nano_banana.as_ref().map(|granted| &granted.config)) {
         let scope = nano_banana_scope(located, &source_sha256);
         if let Some(crop) = crate::inference::nano_banana::shared_crop(&scope, config, &plan.region_id) {
             let wider = cleaner_core::engines::nano_banana::union_rect(seed.bounds, crop);
@@ -2072,7 +2120,19 @@ fn edit_with_bench_render(
                 let finishing = existing.as_ref()
                     .and_then(|record| crate::inference::nano_banana_finishing::recorded(&record.provenance))
                     .unwrap_or(bench.nano_banana_finishing);
-                let rendered = hold.without(|| bench.nano_banana(page, &fitted, share.as_ref(), finishing))?;
+                let (rendered, again) = hold.without(|| bench.nano_banana(page, &fitted, share.as_ref(), finishing));
+                if let Err(refused) = again {
+                    // A run took the page while the request was out. An answer
+                    // that came is paid for and can not be written: said so,
+                    // and the region is refused as a changed page.
+                    return Ok(Outcome::Refused(match rendered {
+                        Ok(_) => {
+                            eprintln!("manga-cleaner: a Nano Banana answer for {} was paid for and not used: {refused}", plan.region_id);
+                            "decline.reason.nanoBananaPageChanged"
+                        }
+                        Err(reason) => reason,
+                    }));
+                }
                 let fresh = Job::open(&located.job_path).map_err(|e| e.to_string())?;
                 if read.is_none()
                     || Library::resolve_page(&fresh.project, located.page_index) != Some(source_idx)
@@ -7742,14 +7802,14 @@ mod tests {
         let (root, located) = edit_fixture("nano-banana-off", &raw);
         let bounds = Rect::new(22, 18, 8, 8);
         let book = Book::new(IDLE);
-        let grant = book.issue(nano_banana_config(), 1).unwrap();
+        let grant = book.issue(nano_banana_config(), &located.chapter_id, 1).unwrap();
         // A real grant, and the switch off: the gate refuses, and takes nothing from it.
         let outcome = edit_with_consent(&mut test_bench(&root), run::HIGHEST_LOCAL, &located,
             fixture_plan("b", Geometry::Painted(Mask::filled(bounds)), Engine::NanoBanana, bounds),
             false, Some(&grant), &book).unwrap();
         assert!(matches!(outcome, Outcome::Refused("decline.reason.nanoBananaOff")));
         assert!(Job::open(&located.job_path).unwrap().project.patches.is_empty());
-        assert!(book.spend(true, Some(&grant)).is_ok(), "the grant still has its region");
+        assert!(book.spend(true, Some(&grant), &located.chapter_id, None).is_ok(), "the grant still has its region");
     }
 
     /// `applyTool` and `createRegion` reach the rung only through
@@ -7761,8 +7821,9 @@ mod tests {
         let (root, located) = edit_fixture("nano-banana-no-grant", &raw);
         let bounds = Rect::new(22, 18, 8, 8);
         let book = Book::new(IDLE);
-        let _theirs = book.issue(nano_banana_config(), 1).unwrap();
-        for grant in [None, Some("0".repeat(64))] {
+        let _theirs = book.issue(nano_banana_config(), &located.chapter_id, 1).unwrap();
+        let other_chapter = book.issue(nano_banana_config(), "another-chapter", 1).unwrap();
+        for grant in [None, Some("0".repeat(64)), Some(other_chapter)] {
             let outcome = edit_with_consent(&mut test_bench(&root), run::HIGHEST_LOCAL, &located,
                 fixture_plan("b", Geometry::Painted(Mask::filled(bounds)), Engine::NanoBanana, bounds),
                 true, grant.as_deref(), &book).unwrap();
@@ -7771,7 +7832,7 @@ mod tests {
         assert!(Job::open(&located.job_path).unwrap().project.patches.is_empty());
         // Every other engine goes on as before, and never holds a Nano Banana config.
         let mut bench = test_bench(&root);
-        bench.nano_banana = Some(nano_banana_config());
+        bench.nano_banana = Some(crate::inference::nano_banana::Granted { config: nano_banana_config(), stop: Default::default() });
         let _ = edit_with_consent(&mut bench, run::HIGHEST_LOCAL, &located,
             fixture_plan("b", Geometry::Painted(Mask::filled(bounds)), Engine::Fill, bounds),
             true, None, &book).unwrap();
@@ -7858,6 +7919,67 @@ mod tests {
         let (_root, library, _located, layer) = a_nano_banana_layer("clean-anyway-nano-banana-layer");
         assert!(clean_anyway_at(&library, None, &layer, Some("nanobanana"), serde_json::json!({ "exact": true }),
             |_, _| panic!("a region with a layer was sent to Nano Banana")).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_request_out_is_said_while_the_lock_is_let_go_of_and_a_page_taken_meanwhile_is_reported() {
+        let raw = cleaner_core::image::fixtures::by_name("rgb8").raster;
+        let (_root, located) = edit_fixture("nano-banana-requests-out", &raw);
+        let mut hold = PageHold::take(&located).unwrap();
+        let (seen, again) = hold.without(|| (
+            nano_banana_requests_out(&located.job_path, Some(located.page_index)),
+            nano_banana_requests_out(&located.job_path, Some(located.page_index + 1)),
+            nano_banana_requests_out(&located.job_path, None),
+        ));
+        assert_eq!(seen, (true, false, true));
+        assert!(again.is_ok());
+        assert!(!nano_banana_requests_out(&located.job_path, None), "said only while it is out");
+        // On a run's behalf nothing is said: the run holds its own pages.
+        drop(hold);
+        let mut hold = PageHold::take(&located).unwrap();
+        let (seen, _) = run::on_behalf_of("run-x", || hold.without(|| nano_banana_requests_out(&located.job_path, None)));
+        assert!(!seen);
+    }
+
+    /// A batch raises a page only once no single region's request is out on
+    /// it, so that request's paid answer finds its page free; Stop while it
+    /// waits raises nothing.
+    #[test]
+    fn a_batch_waits_to_raise_a_page_a_single_regions_request_is_out_on() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let raw = cleaner_core::image::fixtures::by_name("rgb8").raster;
+        let (_root, located) = edit_fixture("nano-banana-raise-waits", &raw);
+        let page = located.page_index as u32;
+        let raised = Mutex::new(Vec::new());
+        let mut hold = PageHold::take(&located).unwrap();
+        std::thread::scope(|scope| {
+            let (_, again) = hold.without(|| {
+                let waiting = scope.spawn(|| {
+                    crate::inference::nano_banana_job::raise_page("run-x", &located.chapter_id, &located.job_path, page,
+                        &AtomicBool::new(false), &|event| raised.lock().unwrap().push(event))
+                });
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                assert!(raised.lock().unwrap().is_empty(), "raised while the request was out");
+                // Another page of the chapter is not held back.
+                assert!(crate::inference::nano_banana_job::raise_page("run-x", &located.chapter_id, &located.job_path,
+                    page + 1, &AtomicBool::new(false), &|_| {}));
+                waiting
+            });
+            assert!(again.is_ok());
+            drop(hold);
+        });
+        assert_eq!(raised.lock().unwrap().len(), 1, "raised once the request came back");
+
+        let mut hold = PageHold::take(&located).unwrap();
+        let cancel = AtomicBool::new(false);
+        let (stopped, _) = hold.without(|| std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| crate::inference::nano_banana_job::raise_page("run-x", &located.chapter_id,
+                &located.job_path, page, &cancel, &|_| panic!("raised after Stop")));
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            cancel.store(true, Ordering::SeqCst);
+            waiting.join().unwrap()
+        }));
+        assert!(!stopped);
     }
 
     #[test]

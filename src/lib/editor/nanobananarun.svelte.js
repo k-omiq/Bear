@@ -74,7 +74,8 @@ async function startBatch(chapter, regionIds, scope, backend) {
     notify({ key: 'notice.run.nothingDetected', tone: 'warn' })
     return null
   }
-  if (!(await confirmNanoBanana(regionIds.length, backend))) return null
+  const grant = await confirmNanoBanana(regionIds.length, chapter.id, backend)
+  if (!grant) return null
   // The grant names this chapter's regions, and the run is followed as the
   // open chapter's: a chapter changed meanwhile starts nothing.
   if (editor.chapter !== chapter || editor.run.active) {
@@ -84,7 +85,7 @@ async function startBatch(chapter, regionIds, scope, backend) {
   /** @type {import('../api/backend.js').RunHandle} */
   let handle
   try {
-    handle = await backend.startNanoBananaRun({ chapterId: chapter.id, regionIds })
+    handle = await backend.startNanoBananaRun({ chapterId: chapter.id, regionIds, nanoBananaGrant: grant })
   } catch (error) {
     const reason = (error instanceof Error ? error.message : String(error ?? '')).replace(/^Error:\s*/, '')
     console.error('a Nano Banana batch could not start', error)
