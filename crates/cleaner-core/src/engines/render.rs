@@ -750,7 +750,9 @@ impl PreparedRender {
 
     /// Finish the answer by `finishing`. `None` is the version's own
     /// composite: V3 finishes by the default, V2 aligns tone, V1 writes the
-    /// answer as it came back. A picked finishing replaces V1's and V2's.
+    /// answer as it came back. A picked finishing replaces V1's and V2's;
+    /// [`super::postprocess::Finishing::ToneFix`] is V2's tone alignment, on
+    /// any version.
     pub fn set_finishing(&mut self, finishing: Option<super::postprocess::Choice>) {
         self.finishing = finishing;
     }
@@ -844,7 +846,28 @@ impl PreparedRender {
     }
 
     pub fn composite(&self, generated: &GeneratedCrop<'_>) -> Result<Rendered, Error> {
+        use super::postprocess::{Choice, Finishing, Report};
         let finishing = match (self.preprocessing, self.finishing) {
+            (_, Some(choice @ Choice { finishing: Finishing::ToneFix, grayscale, strays })) => {
+                // Stray marks are inside the applied mask and the tone is
+                // read on a ring outside it, so taking them out first changes
+                // only what is written.
+                let filled;
+                let mut stray_pixels = None;
+                let generated = if strays {
+                    let (rgb8, found) = self.without_strays(generated)?;
+                    stray_pixels = Some(found);
+                    filled = rgb8;
+                    &GeneratedCrop::new(self.crop.w, self.crop.h, &filled)
+                } else {
+                    generated
+                };
+                let mut rendered = self.blend_as(generated, Some(self.tone(generated)?), grayscale)?;
+                let mut report = Report::tone_fix(choice);
+                report.stray_pixels = stray_pixels;
+                rendered.matched = Some(report);
+                return Ok(rendered);
+            }
             (_, Some(finishing)) => finishing,
             (Preprocessing::V3, None) => super::postprocess::Choice::default(),
             (Preprocessing::V2, None) => return self.blend(generated, Some(self.tone(generated)?)),
@@ -863,8 +886,34 @@ impl PreparedRender {
         generated: &GeneratedCrop<'_>,
         finishing: super::postprocess::Choice,
     ) -> Result<(Vec<u8>, super::postprocess::Report), Error> {
-        use super::grid::Mask as GridMask;
         self.validate_generated(generated)?;
+        let (mask, page) = self.crop_masks();
+        Ok(finish(&self.image_rgb8, generated.rgb8, self.reading, &mask, &page, finishing))
+    }
+
+    /// The answer with its stray marks filled ([`super::postprocess::strays`]),
+    /// as a crop-sized RGB8 answer, and how many pixels were filled. Only
+    /// those pixels differ from the answer.
+    fn without_strays(&self, generated: &GeneratedCrop<'_>) -> Result<(Vec<u8>, usize), Error> {
+        self.validate_generated(generated)?;
+        let (mask, _) = self.crop_masks();
+        let (w, h) = (mask.w, mask.h);
+        let channels = tone_channels(self.reading);
+        let answer = tone_grids(w, h, self.reading, |i, c| f64::from(generated.rgb8[i * 3 + c]) / 255.0);
+        let (filled, found) = super::postprocess::without_strays(&answer, &mask);
+        let mut rgb8 = generated.rgb8.to_vec();
+        for i in (0..w * h).filter(|&i| found.data[i] && mask.data[i]) {
+            for channel in 0..3 {
+                rgb8[i * 3 + channel] = filled[channel.min(channels - 1)].data[i].round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        Ok((rgb8, found.count()))
+    }
+
+    /// Per crop pixel: where the render may write (the applied mask at
+    /// non-zero weight), and where the crop is fully opaque page.
+    fn crop_masks(&self) -> (super::grid::Mask, super::grid::Mask) {
+        use super::grid::Mask as GridMask;
         let (w, h) = (self.crop.w as usize, self.crop.h as usize);
         let (mut mask, mut page) = (GridMask::new(w, h, false), GridMask::new(w, h, false));
         for cy in 0..h {
@@ -874,7 +923,7 @@ impl PreparedRender {
                 page.data[i] = self.extent.contains(x, y) && self.opaque.as_ref().is_none_or(|opaque| opaque[i]);
             }
         }
-        Ok(finish(&self.image_rgb8, generated.rgb8, self.reading, &mask, &page, finishing))
+        (mask, page)
     }
 
     /// How far the model's answer drifted from the page around the edit,
@@ -944,6 +993,12 @@ impl PreparedRender {
         generated: &GeneratedCrop<'_>,
         tone: Option<ToneReport>,
     ) -> Result<Rendered, Error> {
+        self.blend_as(generated, tone, false)
+    }
+
+    /// [`PreparedRender::blend`], each written pixel made grey after its tone
+    /// correction when `grey` is set.
+    fn blend_as(&self, generated: &GeneratedCrop<'_>, tone: Option<ToneReport>, grey: bool) -> Result<Rendered, Error> {
         self.validate_generated(generated)?;
         let mut patch = self.patch.clone();
         let managed = model::editable_color(&patch)?;
@@ -974,6 +1029,9 @@ impl PreparedRender {
                         _ => model,
                     };
                     *value = model as f32;
+                }
+                if grey {
+                    rgb = [luma(rgb); 3];
                 }
                 model::commit_srgb(&managed, &mut patch, lx, ly, rgb, alpha, dither)?;
             }
@@ -1441,6 +1499,12 @@ fn finish(
         }
     }
     (rgb8, report)
+}
+
+/// The grey level of an RGB sample, Rec. 601 weights: the ones
+/// [`super::finishing::grey`] makes a colour answer grey with.
+pub(crate) fn luma([r, g, b]: [f32; 3]) -> f32 {
+    0.299 * r + 0.587 * g + 0.114 * b
 }
 
 /// How many channels a tone offset is measured for: one on a grey page, whose
@@ -2734,6 +2798,114 @@ mod tests {
             assert_eq!(finished.matched.as_ref().map(|report| report.choice), Some(choice), "{}", scene.name);
             assert!(residual(&scene, &finished) <= 4, "{}: residual {}", scene.name, residual(&scene, &finished));
             assert_eq!(finished.mask, aligned.mask, "{}: written through the same mask", scene.name);
+        }
+    }
+
+    /// **The tone fix takes stray marks out when asked.** A white dash the
+    /// model drew on its own on black, well inside the mask of a solid block, stays under the
+    /// plain tone fix and comes back black under the tone fix with stray
+    /// marks; every other pixel is the plain tone fix's, and the report says
+    /// how many pixels were filled.
+    #[test]
+    fn the_tone_fix_takes_stray_marks_out_when_asked() {
+        use super::super::postprocess::{Choice, Finishing};
+        // A solid block of lettering, so the applied mask has an inside.
+        let scene = scene("black block", ColorMode::Gray, |_, _, _| 12, [245; 3], &Mask::filled(Rect::new(110, 130, 90, 70)));
+        let fitted = manual_fit(&scene);
+        let mut prepared = PreparedRender::prepare_as(&scene.page, &fitted, Preprocessing::V3).unwrap();
+        let crop = prepared.crop();
+        let bounds = prepared.applied().bounds;
+        let (cx, cy) = (bounds.x + bounds.w as i64 / 2, bounds.y + bounds.h as i64 / 2);
+        // A short white dash: a mark is found as a piece of the answer's
+        // lines, so it needs an edge with a direction, as the crescents had.
+        let square = Rect::new(cx - 7, cy - 1, 14, 2);
+        for y in square.y - 8..square.bottom() + 8 {
+            for x in square.x - 8..square.right() + 8 {
+                assert!(prepared.alpha(x, y) == 1.0, "the mark is not well inside the mask at ({x}, {y})");
+            }
+        }
+        let mut answer = drifted(&prepared, &scene.clean, [0; 3]);
+        for y in square.y..square.bottom() {
+            for x in square.x..square.right() {
+                let at = (((y - crop.y) * crop.w as i64 + (x - crop.x)) * 3) as usize;
+                answer[at..at + 3].fill(245);
+            }
+        }
+        let generated = GeneratedCrop::new(crop.w, crop.h, &answer);
+        let at = |rendered: &Rendered, x: i64, y: i64| {
+            let b = rendered.mask.bounds;
+            rendered.pixels.sample8((x - b.x) as u32, (y - b.y) as u32, 0)
+        };
+        let mean = |rendered: &Rendered| {
+            let mut sum = 0u32;
+            for y in square.y..square.bottom() {
+                for x in square.x..square.right() {
+                    sum += u32::from(at(rendered, x, y));
+                }
+            }
+            sum / (square.w * square.h)
+        };
+        prepared.set_finishing(Some(Choice::of(Finishing::ToneFix, false)));
+        let plain = prepared.composite(&generated).unwrap();
+        assert!(mean(&plain) > 200, "the plain tone fix took the mark: {}", mean(&plain));
+        assert_eq!(plain.matched.as_ref().and_then(|report| report.stray_pixels), None);
+        let choice = Choice { strays: true, ..Choice::of(Finishing::ToneFix, false) };
+        prepared.set_finishing(Some(choice));
+        let taken = prepared.composite(&generated).unwrap();
+        assert!(mean(&taken) < 60, "the mark is still there: {} ({:?} px filled)", mean(&taken), taken.matched.as_ref().map(|r| r.stray_pixels));
+        let report = taken.matched.as_ref().unwrap();
+        assert_eq!(report.choice, choice);
+        assert!(report.stray_pixels.is_some_and(|filled| filled >= 28), "{:?}", report.stray_pixels);
+        assert_eq!(taken.tone.as_ref().map(|t| &t.curves), plain.tone.as_ref().map(|t| &t.curves));
+        let b = plain.mask.bounds;
+        let near = Rect::new(square.x - 4, square.y - 4, square.w + 8, square.h + 8);
+        for y in b.y..b.bottom() {
+            for x in b.x..b.right() {
+                if !(near.x..near.right()).contains(&x) || !(near.y..near.bottom()).contains(&y) {
+                    assert_eq!(at(&taken, x, y), at(&plain, x, y), "({x}, {y}) changed away from the mark");
+                }
+            }
+        }
+    }
+
+    /// **The tone fix is V2's tone alignment, on any version.** Picked on a V3
+    /// or a V2 preparation it writes exactly what an unpicked V2 composite
+    /// writes, keeps the tone record, and names itself in the report. Grey,
+    /// every written pixel has three equal channels.
+    #[test]
+    fn the_tone_fix_is_the_v2_tone_alignment() {
+        use super::super::postprocess::{Choice, Finishing};
+        for scene in scenes() {
+            let fitted = manual_fit(&scene);
+            let v2 = PreparedRender::prepare_as(&scene.page, &fitted, Preprocessing::V2).unwrap();
+            let answer = drifted(&v2, &scene.clean, [14, 9, 4]);
+            let generated = GeneratedCrop::new(v2.crop().w, v2.crop().h, &answer);
+            let aligned = v2.composite(&generated).unwrap();
+            for version in [Preprocessing::V2, Preprocessing::V3] {
+                let mut prepared = PreparedRender::prepare_as(&scene.page, &fitted, version).unwrap();
+                let choice = Choice::of(Finishing::ToneFix, false);
+                prepared.set_finishing(Some(choice));
+                let fixed = prepared.composite(&generated).unwrap();
+                assert_eq!(fixed.pixels.data, aligned.pixels.data, "{} {version:?}", scene.name);
+                assert_eq!(fixed.tone.as_ref().map(|t| &t.curves), aligned.tone.as_ref().map(|t| &t.curves), "{}", scene.name);
+                assert_eq!(fixed.matched.as_ref().map(|report| report.choice), Some(choice), "{}", scene.name);
+
+                prepared.set_finishing(Some(Choice::of(Finishing::ToneFix, true)));
+                let grey = prepared.composite(&generated).unwrap();
+                let pixels = &grey.pixels;
+                if matches!(pixels.mode, ColorMode::Rgb | ColorMode::Rgba) {
+                    let b = grey.mask.bounds;
+                    for y in b.y..b.bottom() {
+                        for x in b.x..b.right() {
+                            let (lx, ly) = ((x - b.x) as u32, (y - b.y) as u32);
+                            if grey.mask.contains(x, y) && prepared.alpha(x, y) == 1.0 {
+                                let (r, g, bl) = (pixels.sample8(lx, ly, 0), pixels.sample8(lx, ly, 1), pixels.sample8(lx, ly, 2));
+                                assert!(r.abs_diff(g) <= 1 && g.abs_diff(bl) <= 1, "{}: ({x}, {y}) is {r} {g} {bl}", scene.name);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

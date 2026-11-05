@@ -33,8 +33,9 @@
 //!    the answer.
 //!
 //! [`Finishing`] picks the version: every screen step the bench measured, the
-//! steps without the screen, or a port of Manga Cleaner Reproduction's
-//! finishing ([`super::finishing`]) in place of all four. The default is bench 7's.
+//! steps without the screen, a port of Manga Cleaner Reproduction's
+//! finishing ([`super::finishing`]) in place of all four, or the renders' own
+//! tone fix ([`Finishing::ToneFix`]). The default is bench 7's.
 //!
 //! Prototyped in Python on the FLUX 3 bench (docs/research/flux3-klein-5_6b.md,
 //! bench 3) and measured against synthetic lettering over real pages.
@@ -102,10 +103,11 @@ const TENSOR_SIGMA: f64 = 2.0;
 const MIN_COHERENCE: f64 = 0.35;
 
 /// The finishing an answer gets before it is written. The first seven are
-/// this module's steps with one screen step or none; the last five are Manga
+/// this module's steps with one screen step or none; the next five are Manga
 /// Cleaner Reproduction's finishing v2, ported ([`super::finishing::Method`]),
 /// instead. Each of those still reads under the name it was first saved
-/// with, a serde alias.
+/// with, a serde alias. The last is the tone fix the renders ran before any
+/// of these existed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Finishing {
@@ -148,10 +150,19 @@ pub enum Finishing {
     /// The page's own dots copied in phase, nothing else (ported `raster`).
     #[serde(alias = "reference-raster")]
     DotsOnly,
+    /// The tone fix a Qwen, FLUX.2 Klein or LaMa answer gets when no
+    /// finishing takes its place: a correction curve per channel, learned
+    /// from box means on a ring outside the applied mask
+    /// ([`super::render::ToneSite`]), then grey if asked. No screen step. It
+    /// reads the lettering's ink and the page's opacity, which a [`Crop`]
+    /// does not carry, so the renders run it themselves
+    /// ([`super::render::PreparedRender::composite`], the LaMa rung) and
+    /// [`settle_with`] leaves the answer as it came.
+    ToneFix,
 }
 
 impl Finishing {
-    pub const ALL: [Finishing; 12] = [
+    pub const ALL: [Finishing; 13] = [
         Finishing::Copy,
         Finishing::CopyHops,
         Finishing::Redraw,
@@ -164,6 +175,7 @@ impl Finishing {
         Finishing::LocalTone,
         Finishing::Poisson,
         Finishing::DotsOnly,
+        Finishing::ToneFix,
     ];
 
     /// The ported method, for the five Manga Cleaner Reproduction versions.
@@ -266,13 +278,18 @@ fn finish(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
     let mut report = Report {
         gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0, stray_pixels: None, choice, method_report: None,
     };
+    if finishing == Finishing::ToneFix {
+        // The renders run the tone fix, stray marks included: it needs more
+        // of the page than a crop.
+        return (crop.answer.to_vec(), Report::tone_fix(choice));
+    }
     // Stray marks go first, so every version after finishes the answer as if
     // the model had not drawn them.
     let filled;
     let crop = if take_strays {
-        let found = strays(crop.answer, mask);
+        let (answer, found) = without_strays(crop.answer, mask);
         report.stray_pixels = Some(found.count());
-        filled = fill_strays(crop.answer, &found, mask);
+        filled = answer;
         &Crop { shown: crop.shown, answer: &filled, mask, page: crop.page }
     } else {
         crop
@@ -355,6 +372,16 @@ fn finish(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
 }
 
 impl Report {
+    /// The record of a [`Finishing::ToneFix`] run. What it measured is the
+    /// tone alignment's own record ([`super::render::ToneReport`]).
+    /// `choice` is the tone fix as it was asked for, grey and stray marks
+    /// included; the render that took the stray marks out says how many
+    /// pixels it filled.
+    pub fn tone_fix(choice: Choice) -> Report {
+        debug_assert_eq!(choice.finishing, Finishing::ToneFix);
+        Report { gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0, stray_pixels: None, choice, method_report: None }
+    }
+
     /// The record a patch's provenance keeps, with the version of this
     /// post-processing that made it. A Qwen (2.0.0) or LaMa patch finished
     /// here carries it too, so it names the post-processing and not the
@@ -461,6 +488,13 @@ fn filled(piece: &Mask) -> Mask {
         if y + 1 < h { step(i + w) }
     }
     Mask { w, h, data: outside.into_iter().map(|o| !o).collect() }
+}
+
+/// `answer` with its stray marks ([`strays`]) filled from the tone round
+/// them, and where they were.
+pub fn without_strays(answer: &[Grid], mask: &Mask) -> (Vec<Grid>, Mask) {
+    let found = strays(answer, mask);
+    (fill_strays(answer, &found, mask), found)
 }
 
 /// `answer` with the `found` marks filled from the tone round them: a
@@ -793,7 +827,7 @@ mod tests {
         for (name, finishing) in old {
             assert_eq!(serde_json::from_value::<Finishing>(serde_json::json!(name)).unwrap(), finishing);
         }
-        let names: Vec<_> = Finishing::ALL[7..].iter().map(|f| serde_json::json!(f)).collect();
+        let names: Vec<_> = Finishing::ALL[7..12].iter().map(|f| serde_json::json!(f)).collect();
         assert_eq!(names, ["as-is", "global-tone", "local-tone", "poisson", "dots-only"].map(|n| serde_json::json!(n)));
         let choice: Choice = serde_json::from_value(serde_json::json!({"finishing": "reference-poisson", "grayscale": true})).unwrap();
         assert_eq!(choice, Choice::of(Finishing::Poisson, true));

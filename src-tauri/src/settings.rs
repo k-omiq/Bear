@@ -783,7 +783,8 @@ mod tests {
         assert!(write_patch(&path, serde_json::json!({"cloudFinishingGrayscale": "yes"})).is_err());
         assert_eq!(write_patch(&path, serde_json::json!({"finishingEveryModel": true})).unwrap()["finishingEveryModel"], true);
         assert!(write_patch(&path, serde_json::json!({"finishingEveryModel": 1})).is_err());
-        assert_eq!(read_file(&path).unwrap()["cloudFinishing"], "dots-only", "a refused patch writes nothing");
+        let last = Finishing::ALL[Finishing::ALL.len() - 1];
+        assert_eq!(read_file(&path).unwrap()["cloudFinishing"], serde_json::json!(last), "a refused patch writes nothing");
         assert!(write_patch(&path, serde_json::json!({"cloudFinishing": null, "cloudFinishingGrayscale": null, "finishingEveryModel": null})).is_ok());
         std::fs::remove_dir_all(&dir).ok();
     }
