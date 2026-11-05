@@ -529,6 +529,7 @@ export const en = {
       repairNote: 'Installs the helper\'s packages again, with the GPU build of torch. The model is kept unless an update changed it.',
       installFailed: 'Download failed: {detail}',
       accelerator: 'GPU runtime for installation',
+      acceleratorNote: 'Used when you download a model or press Repair the helper, which keeps the models and installs the GPU runtime again.',
       acceleratorAuto: 'Automatic',
       mlxAutomatic: 'MLX uses the Apple GPU automatically.',
       stage: {
@@ -3552,6 +3553,14 @@ export const en = {
         select: 'regions',
         one: 'Detect finished: 1 region found. Nothing is cleaned yet.',
         other: 'Detect finished: {regions} regions found. Nothing is cleaned yet.',
+      },
+      // A clean that found text and could not clean any of it: every region
+      // declined (an engine with no weights, not enough memory). Each region's
+      // row says why. `notice.chapter.emptyResult` would say no text was found.
+      declined: {
+        select: 'regions',
+        one: '1 region was found, but it could not be cleaned. Open the page to see why.',
+        other: '{regions} regions were found, but none could be cleaned. Open the page to see why.',
       },
       allLanguagesSkipped: 'All source languages are skipped. Select a language to clean.',
       // How a Solid bubbles only run ends: what it cleaned, and what it left

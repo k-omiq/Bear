@@ -325,6 +325,42 @@ describe('the AI mask brush stroke', () => {
     expect(spec.bbox).toEqual({ x: 20, y: 30, w: 12, h: 4 })
   })
 
+  // FLUX 3 on this computer asks what to clean first, as a cloud render does;
+  // a cancel draws nothing, and Klein keeps its one stroke on a new region.
+  it('asks before a stroke cleaned with FLUX 3 on this computer, and a cancel draws nothing', async () => {
+    const { session } = await import('../state/session.svelte.js')
+    const { closeModal } = await import('../state/app.svelte.js')
+    editor.chapter = chapterWith([])
+    const adapter = backend()
+    setBackend(/** @type {any} */ (adapter))
+    setToolParam('aiMaskBrush', 'engine', 'flux')
+    session.fluxModel = 'flux3-image-klein'
+    try {
+      stroke({ x: 20, y: 30, w: 12, h: 4 })
+      const cancelled = commitDraft()
+      await vi.waitFor(() => expect(app.modals.at(-1)?.kind).toBe('qwenPrompt'))
+      closeModal(null)
+      expect(await cancelled).toBe(false)
+      expect(adapter.createRegion).not.toHaveBeenCalled()
+
+      stroke({ x: 20, y: 30, w: 12, h: 4 })
+      const drawn = commitDraft()
+      await vi.waitFor(() => expect(app.modals.at(-1)?.kind).toBe('qwenPrompt'))
+      closeModal({ target: 'sound_effect', description: 'A brick wall' })
+      expect(await drawn).toBe(true)
+      expect(adapter.createRegion.mock.calls[0][0].params).toMatchObject({
+        engine: 'flux', qwenEdit: { target: 'sound_effect', description: 'A brick wall' } })
+
+      session.fluxModel = 'flux2-klein-4b'
+      stroke({ x: 40, y: 30, w: 12, h: 4 })
+      expect(await commitDraft()).toBe(true)
+      expect(adapter.createRegion.mock.calls[1][0].params.qwenEdit).toBeUndefined()
+      expect(app.modals).toEqual([])
+    } finally {
+      session.fluxModel = ''
+    }
+  })
+
   // The stroke overlaps a neighbouring region - a layer box
   // right beside the leftover the user is aiming at - and it must still be its
   // own mask. Retargeting sent it to `applyTool` on that region, which re-ran

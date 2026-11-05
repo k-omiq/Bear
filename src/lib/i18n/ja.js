@@ -452,6 +452,7 @@ export const ja = {
       repairNote: 'ヘルパーのパッケージを GPU 版の torch で入れ直します。モデルは、更新で変わっていなければそのままです。',
       installFailed: 'ダウンロードに失敗しました: {detail}',
       accelerator: 'インストールする GPU ランタイム',
+      acceleratorNote: 'モデルのダウンロード時と「ヘルパーを修復」を押したときに使います。モデルはそのままで GPU ランタイムを入れ直します。',
       acceleratorAuto: '自動',
       mlxAutomatic: 'MLX は Apple GPU を自動的に使用します。',
       stage: {
@@ -2732,6 +2733,10 @@ export const ja = {
       detected: {
         select: 'regions',
         other: '検出が完了しました：{regions} 領域が見つかりました。まだ何もクリーンしていません。',
+      },
+      declined: {
+        select: 'regions',
+        other: '{regions} 領域が見つかりましたが、どれもクリーンできませんでした。理由はページを開いて確認してください。',
       },
       allLanguagesSkipped: '原文のすべての言語がスキップされています。クリーンする言語を選んでください。',
       solidOnly: '単色の吹き出しをクリーン：{cleaned}。検出済みのまま残した領域：{kept}。',

@@ -1898,10 +1898,14 @@ export function releaseRunStart(token) {
  * step is what the user asked for, which `mode` is not when the clean half
  * goes to the cloud and this run only detects.
  *
- * @param {{cloudGrant?: string|null, cloudCleanGrant?: string|null, mode?: import('../api/backend.js').RunMode, pendingToken?: object|null, area?: {x: number, y: number, w: number, h: number}|null, pageIndex?: number, step?: unknown, solidOnly?: boolean}} [options]
+ * `qwenEdit` is the guidance asked before a run whose picks clean with FLUX
+ * on this computer (`cloudrun.js#startCleanRun`); a run that cleans nothing
+ * here does not carry it.
+ *
+ * @param {{cloudGrant?: string|null, cloudCleanGrant?: string|null, mode?: import('../api/backend.js').RunMode, pendingToken?: object|null, area?: {x: number, y: number, w: number, h: number}|null, pageIndex?: number, step?: unknown, solidOnly?: boolean, qwenEdit?: {target: string, description: string}|null}} [options]
  * @returns {Promise<string|null>} the run id, or null when nothing was queued
  */
-export async function startRun(scope = 'page', { cloudGrant = null, cloudCleanGrant = null, mode = 'auto', pendingToken = null, area = null, pageIndex = editor.pageIndex, step = editor.toolParams.autoClean?.step, solidOnly = solidOnlyOf() } = {}) {
+export async function startRun(scope = 'page', { cloudGrant = null, cloudCleanGrant = null, mode = 'auto', pendingToken = null, area = null, pageIndex = editor.pageIndex, step = editor.toolParams.autoClean?.step, solidOnly = solidOnlyOf(), qwenEdit = null } = {}) {
   if (!editor.chapter) return null
   const individual = mode === 'detect' && !!area
   const token = individual ? claimAreaRunStart(pendingToken) : claimRunStart(pendingToken)
@@ -1953,6 +1957,7 @@ export async function startRun(scope = 'page', { cloudGrant = null, cloudCleanGr
       // which cleans nothing here. The run then cleans a speech bubble on
       // flat paper and stores every other region as detected (`run.rs`).
       ...(mode !== 'detect' && !cloudCleanGrant && solidOnly ? { solidBubblesOnly: true } : {}),
+      ...(mode !== 'detect' && !cloudCleanGrant && qwenEdit ? { qwenEdit } : {}),
     })
     if (editor.chapter !== chapter) return null
     return individual ? adoptAreaRun(handle, pageIndex) : adoptRun(handle, scope, mode)

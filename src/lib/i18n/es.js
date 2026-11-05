@@ -455,6 +455,7 @@ export const es = {
       repairNote: 'Vuelve a instalar los paquetes del asistente, con la versión GPU de torch. El modelo se conserva, salvo que una actualización lo haya cambiado.',
       installFailed: 'La descarga falló: {detail}',
       accelerator: 'Entorno de GPU para la instalación',
+      acceleratorNote: 'Se usa al descargar un modelo o al pulsar Reparar el asistente, que conserva los modelos y vuelve a instalar el entorno de GPU.',
       acceleratorAuto: 'Automático',
       mlxAutomatic: 'MLX usa la GPU de Apple automáticamente.',
       stage: {
@@ -2779,6 +2780,11 @@ export const es = {
         select: 'regions',
         one: 'Detección terminada: se encontró 1 región. Todavía no se limpió nada.',
         other: 'Detección terminada: se encontraron {regions} regiones. Todavía no se limpió nada.',
+      },
+      declined: {
+        select: 'regions',
+        one: 'Se encontró 1 región, pero no se pudo limpiar. Abre la página para ver por qué.',
+        other: 'Se encontraron {regions} regiones, pero no se pudo limpiar ninguna. Abre la página para ver por qué.',
       },
       allLanguagesSkipped: 'Todos los idiomas de origen se omiten. Selecciona un idioma para limpiar.',
       solidOnly: 'Globos lisos limpiados: {cleaned}. Regiones que quedan detectadas: {kept}.',

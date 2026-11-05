@@ -1848,6 +1848,7 @@ impl<'a> Progress<'a> {
             next_page_index: self.unfinished.first().copied().filter(|_| cancelled),
             errored: self.failed_pages.len() as u32,
             regions_detected: 0,
+            regions_declined: 0,
         }
     }
 }

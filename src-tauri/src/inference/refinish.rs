@@ -60,6 +60,9 @@ pub(crate) trait LocalRender {
     /// cuts `hole`, the one the result was made with.
     fn render(&mut self, engine: Engine, page: &Raster, fitted: &Fitted, finishing: Choice, hole: HoleMode)
         -> Result<crate::run::Made, &'static str>;
+    /// The guidance the next FLUX render is worded with: the one the result
+    /// was made with, so the model is asked what it answered before.
+    fn set_flux_guidance(&mut self, _guidance: Option<cleaner_core::engines::render::QwenEdit>) {}
 }
 
 impl LocalRender for crate::region::LocalModels {
@@ -70,6 +73,10 @@ impl LocalRender for crate::region::LocalModels {
     fn render(&mut self, engine: Engine, page: &Raster, fitted: &Fitted, finishing: Choice, hole: HoleMode)
         -> Result<crate::run::Made, &'static str> {
         crate::region::LocalModels::render(self, engine, page, fitted, finishing, hole)
+    }
+
+    fn set_flux_guidance(&mut self, guidance: Option<cleaner_core::engines::render::QwenEdit>) {
+        crate::region::LocalModels::set_flux_guidance(self, guidance);
     }
 }
 
@@ -306,6 +313,10 @@ impl Reopened {
                 Ok(Finished { mask: rendered.mask, pixels: rendered.pixels, matched: rendered.matched, tone: rendered.tone })
             }
             Answer::Local(engine) => {
+                if *engine == Engine::Flux {
+                    models.set_flux_guidance(self.record.provenance.params_snapshot.get("qwen_edit")
+                        .and_then(|edit| serde_json::from_value(edit.clone()).ok()));
+                }
                 let made = models
                     .render(*engine, &self.cloud.input.image, &self.cloud.fitted, choice,
                         crate::run::recorded_lama_hole(&self.record.provenance))

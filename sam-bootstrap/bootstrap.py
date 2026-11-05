@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import time
@@ -31,12 +32,47 @@ ATTENTION_HEADS = 16
 ATTENTION_SIDE = 64
 
 
+def use_app_dll_dir() -> None:
+    """Windows: put the app's Microsoft C++ runtime on the DLL search path.
+
+    torch's c10.dll and onnx's extension need msvcp140.dll, which a Windows
+    PC without Visual C++ does not have. The app ships it and names its folder
+    in MC_SAM_DLL_DIR. Each process needs its own call: the search path is not
+    inherited.
+    """
+    folder = os.environ.get("MC_SAM_DLL_DIR")
+    if sys.platform == "win32" and folder and os.path.isdir(folder):
+        _DLL_DIRECTORIES.append(os.add_dll_directory(folder))
+
+
+#: Kept open for the life of the process: closing one takes its folder back off
+#: the search path.
+_DLL_DIRECTORIES: list = []
+
+
 def digest(path: Path) -> str:
     hasher = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def tls_context() -> ssl.SSLContext:
+    """The system's trusted roots plus certifi's.
+
+    A fresh Windows fetches a root certificate the first time Windows itself
+    needs it, and OpenSSL never asks it to. On a clean PC the GitHub download
+    then failed with CERTIFICATE_VERIFY_FAILED. certifi is in the pinned
+    environment; without it the system roots alone are used.
+    """
+    context = ssl.create_default_context()
+    try:
+        import certifi
+    except ImportError:
+        return context
+    context.load_verify_locations(cafile=certifi.where())
+    return context
 
 
 def progress(step: str, **fields: int) -> None:
@@ -61,7 +97,7 @@ def checkpoint(root: Path) -> Path:
             break
         request = urllib.request.Request(MODEL_URL, headers={"Range": f"bytes={have}-"} if have else {})
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with urllib.request.urlopen(request, timeout=60, context=tls_context()) as response:
                 # A server that ignores the range sends the whole file again.
                 if have and response.status != 206:
                     have = 0
@@ -110,7 +146,7 @@ def hi_sam(root: Path) -> Path:
     archive = root / "Hi-SAM.zip"
     if not archive.is_file() or digest(archive) != HI_SAM_ARCHIVE_SHA256:
         url = f"https://codeload.github.com/ymy-k/Hi-SAM/zip/{HI_SAM_REVISION}"
-        with urllib.request.urlopen(url, timeout=120) as response, archive.open("wb") as output:
+        with urllib.request.urlopen(url, timeout=120, context=tls_context()) as response, archive.open("wb") as output:
             shutil.copyfileobj(response, output)
     if digest(archive) != HI_SAM_ARCHIVE_SHA256:
         raise RuntimeError("Hi-SAM source archive SHA-256 mismatch")
@@ -253,6 +289,7 @@ def main() -> None:
     # a side file. The cloud seed omits it and keeps its own single-file pin.
     parser.add_argument("--per-head-attention", action="store_true")
     arguments = parser.parse_args()
+    use_app_dll_dir()
     root = arguments.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     weights = checkpoint(root)

@@ -75,7 +75,7 @@ class CheckpointDownloadTest(unittest.TestCase):
         self.requests: list[str | None] = []
 
     def serve(self, *, honour_range: bool, fail_first_after: int | None = None):
-        def urlopen(request, timeout):
+        def urlopen(request, timeout, context=None):
             ranged = request.get_header("Range")
             self.requests.append(ranged)
             if fail_first_after is not None and len(self.requests) == 1:
@@ -213,6 +213,40 @@ class PerHeadAttentionTest(unittest.TestCase):
                 node.name += "_renamed"
         with self.assertRaisesRegex(RuntimeError, "Unexpected SAM-TS-L attention layout"):
             bootstrap.split_global_attention(model, self.HEADS, self.SIDE)
+
+
+class AppDllDirectoryTest(unittest.TestCase):
+    """A Windows PC without Visual C++ finds the app's C++ runtime."""
+
+    def test_windows_adds_the_named_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(bootstrap.sys, "platform", "win32"), \
+                patch.dict(bootstrap.os.environ, {"MC_SAM_DLL_DIR": folder}), \
+                patch.object(bootstrap.os, "add_dll_directory", create=True, return_value="handle") as add, \
+                patch.object(bootstrap, "_DLL_DIRECTORIES", []):
+            bootstrap.use_app_dll_dir()
+            add.assert_called_once_with(folder)
+            self.assertEqual(bootstrap._DLL_DIRECTORIES, ["handle"])
+
+    def test_nothing_without_a_folder_or_off_windows(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(bootstrap.os, "add_dll_directory", create=True) as add:
+            with patch.object(bootstrap.sys, "platform", "linux"), \
+                    patch.dict(bootstrap.os.environ, {"MC_SAM_DLL_DIR": folder}):
+                bootstrap.use_app_dll_dir()
+            with patch.object(bootstrap.sys, "platform", "win32"), \
+                    patch.dict(bootstrap.os.environ, {}, clear=True):
+                bootstrap.use_app_dll_dir()
+            add.assert_not_called()
+
+
+class TlsContextTest(unittest.TestCase):
+    def test_certifi_roots_are_added_to_the_system_ones(self) -> None:
+        import certifi
+        with patch.object(bootstrap.ssl.SSLContext, "load_verify_locations") as load:
+            context = bootstrap.tls_context()
+        load.assert_called_once_with(cafile=certifi.where())
+        self.assertEqual(context.verify_mode, bootstrap.ssl.CERT_REQUIRED)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,11 @@
-/** Plain-language cloud guidance (Qwen, FLUX.2 Klein v2 and FLUX 3), shared by every cloud entry point. */
+/**
+ * Plain-language guidance (Qwen, FLUX.2 Klein and FLUX 3), shared by every
+ * cloud entry point and every clean with FLUX on this computer.
+ */
 import { pushModal, notify } from '../state/app.svelte.js'
 import { editor } from '../state/editor.svelte.js'
-import { isCloudMask } from '../model/masks.js'
+import { session } from '../state/session.svelte.js'
+import { isCloudMask, maskEngine } from '../model/masks.js'
 
 export const QWEN_RECIPE = 'mc-qwen-image-edit-2511-v4'
 export const isQwen = (modelId) => typeof modelId === 'string' && modelId.startsWith('Disty0/Qwen-Image-Edit')
@@ -67,4 +71,65 @@ export function askQwenEdit(options = {}) {
         || typeof answer.description !== 'string' || Array.from(answer.description).length > 500) return resolve(null)
       resolve({ target: answer.target, description: answer.description.trim() })
     } }))
+}
+
+/** The FLUX model a render on this computer runs when none is set (`region.rs#FLUX_MODEL`). */
+export const DEFAULT_LOCAL_FLUX = 'flux2-klein-4b'
+
+/**
+ * The local models that always ask, as the cloud's Qwen and FLUX 3 do. The
+ * Klein models, and a model placed by hand, which cleans as Klein
+ * (`models.rs#recipe_of`), ask only to redo a FLUX result.
+ */
+const LOCAL_ALWAYS_ASK = ['flux3-image-klein', 'qwen-image-edit-2511']
+
+/** @returns {string} the FLUX model a render on this computer runs now */
+export const localFluxModel = () => session.fluxModel || DEFAULT_LOCAL_FLUX
+
+/** Qwen reads the description as the lettering, the FLUX models as what it covers. */
+const isLocalQwen = (/** @type {string} */ modelId) => modelId.startsWith('qwen-image-edit')
+
+/**
+ * Whether a one-region clean with FLUX on this computer asks for guidance
+ * first, by the cloud's rule for the same family (`asksGuidance`): FLUX 3 and
+ * Qwen always; Klein only to redo a region a model cleaned already, with FLUX
+ * here or on the cloud GPU, where steering helps, so a first clean keeps its
+ * one click.
+ *
+ * @param {string|null|undefined} regionId - absent for a region not made yet
+ * @param {string} [modelId]
+ * @returns {boolean}
+ */
+export function asksLocalGuidance(regionId, modelId = localFluxModel()) {
+  if (LOCAL_ALWAYS_ASK.includes(modelId)) return true
+  const mask = regionId ? regionOf(regionId)?.mask ?? null : null
+  return maskEngine(mask) === 'flux' || isCloudMask(mask)
+}
+
+/**
+ * The guidance for one region cleaned with FLUX on this computer: `undefined`
+ * when this model does not ask (the render keeps its recipe's own words),
+ * `null` when the user cancelled (the clean stops), the answer otherwise. The
+ * dialog opens on the region's last answer, cloud or local.
+ *
+ * @param {string|null|undefined} regionId
+ * @param {string} [modelId]
+ * @returns {Promise<{target: string, description: string}|null|undefined>}
+ */
+export async function askLocalGuidance(regionId, modelId = localFluxModel()) {
+  if (!asksLocalGuidance(regionId, modelId)) return undefined
+  return askQwenEdit({ regionId: regionId ?? undefined, flux: !isLocalQwen(modelId) })
+}
+
+/**
+ * The guidance for a run that cleans with FLUX on this computer, asked before
+ * it starts, as `askBatchGuidance` asks before a cloud clean: FLUX 3 and Qwen
+ * ask with Automatic chosen, Klein does not (`undefined`). `null` stops it.
+ *
+ * @param {string} [modelId]
+ * @returns {Promise<{target: string, description: string}|null|undefined>}
+ */
+export async function askLocalBatchGuidance(modelId = localFluxModel()) {
+  if (!LOCAL_ALWAYS_ASK.includes(modelId)) return undefined
+  return askQwenEdit({ batch: true, flux: !isLocalQwen(modelId) })
 }

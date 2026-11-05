@@ -449,6 +449,7 @@ export const ko = {
       repairNote: '도우미 패키지를 GPU용 torch로 다시 설치합니다. 모델은 업데이트로 바뀌지 않았다면 그대로 둡니다.',
       installFailed: '다운로드 실패: {detail}',
       accelerator: '설치할 GPU 런타임',
+      acceleratorNote: '모델을 다운로드하거나 도우미 복구를 누를 때 사용합니다. 모델은 그대로 두고 GPU 런타임을 다시 설치합니다.',
       acceleratorAuto: '자동',
       mlxAutomatic: 'MLX는 Apple GPU를 자동으로 사용합니다.',
       stage: {
@@ -2729,6 +2730,10 @@ export const ko = {
       detected: {
         select: 'regions',
         other: '감지 완료: 영역 {regions}개를 찾았습니다. 아직 아무것도 클린하지 않았습니다.',
+      },
+      declined: {
+        select: 'regions',
+        other: '{regions}개 영역을 찾았지만 하나도 클린하지 못했습니다. 이유는 페이지를 열어 확인하세요.',
       },
       allLanguagesSkipped: '모든 원문 언어를 건너뛰도록 설정되어 있습니다. 클린할 언어를 선택하세요.',
       solidOnly: '클린한 단색 말풍선: {cleaned}개. 감지된 상태로 남긴 영역: {kept}개.',

@@ -2663,6 +2663,38 @@
         {#each localModels.filter((model) => !model.legacy) as model (model.id)}
           {@render localModelRow(model)}
         {/each}
+        <!-- How the models run: the engine, and on Windows and Linux the GPU the
+             helper's torch is built for. In plain view, not under Advanced:
+             they decide what Download and Set up again install. -->
+        <Field label={t('settings.fluxBackend.label')} layout="row">
+          {#snippet children({ labelId })}
+            <Segmented
+              options={fluxBackends}
+              value={session.fluxBackend}
+              labelledBy={labelId}
+              onchange={(value) => {
+                setFluxBackend(/** @type {any} */ (value))
+                push()
+              }}
+            />
+          {/snippet}
+        </Field>
+        {#if session.fluxBackend === 'mflux' && fluxPlatform !== 'macos-arm64'}
+          <p class="line">{t('settings.fluxBackend.mfluxReason')}</p>
+        {/if}
+
+        <Field label={t('settings.sidecar.accelerator')} layout="row" controlId="settings-flux-accelerator">
+          {#snippet children()}
+            <Select
+              id="settings-flux-accelerator"
+              options={fluxAcceleratorChoices}
+              value={fluxUsesMlx ? 'auto' : fluxAccelerator}
+              disabled={installingFlux || fluxUsesMlx}
+              onchange={(value) => (fluxAccelerator = value)}
+            />
+          {/snippet}
+        </Field>
+        <p class="line">{t(fluxUsesMlx ? 'settings.sidecar.mlxAutomatic' : 'settings.sidecar.acceleratorNote')}</p>
         <!-- A helper installed before 1.0.0-beta.16 can hold a torch with no GPU
              support. Setup again swaps it for the GPU build and keeps the model.
              Windows and Linux only: a Mac's torch runs on Metal, and before the
@@ -2721,35 +2753,6 @@
               {/snippet}
             </Field>
 
-            <Field label={t('settings.fluxBackend.label')} layout="row">
-              {#snippet children({ labelId })}
-                <Segmented
-                  options={fluxBackends}
-                  value={session.fluxBackend}
-                  labelledBy={labelId}
-                  onchange={(value) => {
-                    setFluxBackend(/** @type {any} */ (value))
-                    push()
-                  }}
-                />
-              {/snippet}
-            </Field>
-            {#if session.fluxBackend === 'mflux' && fluxPlatform !== 'macos-arm64'}
-              <p class="line">{t('settings.fluxBackend.mfluxReason')}</p>
-            {/if}
-
-            <Field label={t('settings.sidecar.accelerator')} layout="row" controlId="settings-flux-accelerator">
-              {#snippet children()}
-                <Select
-                  id="settings-flux-accelerator"
-                  options={fluxAcceleratorChoices}
-                  value={fluxUsesMlx ? 'auto' : fluxAccelerator}
-                  disabled={installingFlux || fluxUsesMlx}
-                  onchange={(value) => (fluxAccelerator = value)}
-                />
-              {/snippet}
-            </Field>
-            {#if fluxUsesMlx}<p class="line">{t('settings.sidecar.mlxAutomatic')}</p>{/if}
           </div>
         </Disclosure>
       </div>

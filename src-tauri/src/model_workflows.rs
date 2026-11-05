@@ -797,6 +797,19 @@ fn sam_bootstrap_source(app: &tauri::AppHandle, app_data: &Path) -> Result<PathB
     Err("This app build does not include the SAM-TS-L lettering mask exporter".into())
 }
 
+/// The folder holding the Microsoft C++ runtime the Windows app ships
+/// (`vendor/windows-crt`, bundled beside the executable). `None` elsewhere.
+fn vc_runtime_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    // The executable's folder first: it is a plain path, and the resource
+    // folder comes back as a `\\?\` one.
+    let beside_exe = std::env::current_exe().ok().and_then(|path| path.parent().map(Path::to_path_buf));
+    let resources = app.path().resource_dir().ok();
+    [beside_exe, resources].into_iter().flatten().find(|dir| dir.join("msvcp140.dll").is_file())
+}
+
 fn sam_uv() -> PathBuf {
     let name = if cfg!(windows) { "manga-cleaner-uv.exe" } else { "manga-cleaner-uv" };
     std::env::current_exe().ok()
@@ -899,6 +912,12 @@ pub async fn install_sam_ts(app: tauri::AppHandle) -> Result<bool, String> {
                 .env("UV_NO_CONFIG", "1");
             sam_step(&app, "dependencies", ("dependencies", 8), dependencies, &root)?;
             let mut bootstrap = cleaner_core::process::command(&python);
+            // torch and onnx need the Microsoft C++ runtime, which a Windows PC
+            // without Visual C++ lacks. The app ships it in its own folder and
+            // the scripts add that folder to their DLL search path.
+            if let Some(dir) = vc_runtime_dir(&app) {
+                bootstrap.env("MC_SAM_DLL_DIR", dir);
+            }
             bootstrap.args(prefix).arg(source.join("bootstrap.py"))
                 .arg("--root").arg(&root).arg("--source").arg(&source)
                 .arg("--dense-pe").arg(source.join("dense_pe.f32.xz"))

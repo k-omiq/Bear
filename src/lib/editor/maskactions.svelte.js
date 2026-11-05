@@ -40,10 +40,12 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
-import { CLOUD_ENGINE, MAX_MASK_PADDING, isCloudMask, isDetected, reRunnable, rejectable, retryWidens } from '../model/masks.js'
+import { CLOUD_ENGINE, MAX_MASK_PADDING, isCloudMask, isDetected, maskEngine, reRunnable, rejectable, retryWidens } from '../model/masks.js'
+import { currentRung, simpler, stronger } from '../model/ladder.js'
 import { isRegionCopy, layerOf, sameLayer, sanitizeLayer } from '../model/layers.js'
 import { heldStartsOutside } from '../model/review.js'
 import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
+import { askLocalGuidance } from './qwenflow.js'
 import { editGradientLayer } from './retouch.svelte.js'
 import { notify } from '../state/app.svelte.js'
 import { openWindow } from '../state/session.svelte.js'
@@ -347,12 +349,43 @@ export async function rerunMask(region, kind, engine) {
   // first was about to replace, so its undo step put back a stale mask.
   // Reopen in tool edits nothing, and a run does not hold it back.
   if (rerunning.has(region.id)) return false
+  // A re-run that lands on FLUX on this computer asks what to clean first,
+  // as one on the cloud does; a cancel runs nothing.
+  /** @type {{target: string, description: string}|null|undefined} */
+  let qwenEdit
+  if (rerunTarget(region.mask, kind, engine) === 'flux') {
+    qwenEdit = await askLocalGuidance(region.id)
+    if (qwenEdit === null) return false
+  }
   if (kind !== 'reopenInTool' && !claimPageEdit(pageIndexOf(region.id))) return false
   rerunning.add(region.id)
   try {
-    return await rerunLocally(region, kind, engine)
+    return await rerunLocally(region, kind, engine, qwenEdit ?? undefined)
   } finally {
     rerunning.delete(region.id)
+  }
+}
+
+/**
+ * The rung a local re-run of this kind runs at, as `region.rs#rerun_mask_at`
+ * picks it, or null for one that renders nothing new by a rung: a fill mode
+ * cycle, which never reaches FLUX, and Reopen in tool.
+ *
+ * @param {import('../model/types.js').Mask} mask
+ * @param {string} kind
+ * @param {string} [engine]
+ * @returns {string|null}
+ */
+export function rerunTarget(mask, kind, engine) {
+  const current = maskEngine(mask)
+  if (!current) return null
+  switch (kind) {
+    case 'engine': return engine ? currentRung(engine) : current
+    case 'stronger': return stronger(current)
+    case 'simpler': return simpler(current)
+    case 'retry':
+    case 'retryWider': return current
+    default: return null
   }
 }
 
@@ -365,15 +398,17 @@ const rerunning = new Set()
  * @param {import('../api/backend.js').ApiRegion} region
  * @param {'stronger'|'simpler'|'cycleFill'|'reopenInTool'|'retry'|'retryWider'|'engine'} kind
  * @param {string} [engine]
+ * @param {{target: string, description: string}} [qwenEdit] - the guidance a FLUX re-run was asked for
  * @returns {Promise<boolean>}
  */
-async function rerunLocally(region, kind, engine) {
+async function rerunLocally(region, kind, engine, qwenEdit) {
   const chapterId = editor.chapter?.id ?? null
   const before = snapshot(region)
   /** @type {any} */
   let result
   try {
-    result = await getBackend().rerunMask({ maskId: /** @type {any} */ (region.mask).id, kind, engine })
+    result = await getBackend().rerunMask({ maskId: /** @type {any} */ (region.mask).id, kind, engine,
+      ...(qwenEdit ? { params: { qwenEdit } } : {}) })
   } catch (error) {
     return reportRegionEditFailure(error)
   }
@@ -442,9 +477,17 @@ export async function cleanAnyway(region, chosenEngine) {
   let result
   // A model picked from Clean with runs as named, even on a region the
   // quality metric declined; Clean anyway's pick is a start the ladder climbs.
+  // FLUX on this computer asks what to clean first, as the cloud does.
+  /** @type {{target: string, description: string}|null|undefined} */
+  let qwenEdit
+  if (currentRung(engine) === 'flux') {
+    qwenEdit = await askLocalGuidance(region.id)
+    if (qwenEdit === null) return false
+  }
   const extra = {
     ...(engine === 'solid' ? { bubbleColor: params.bubbleColor ?? '#ffffff' } : {}),
     ...(chosenEngine ? { exact: true } : {}),
+    ...(qwenEdit ? { qwenEdit } : {}),
   }
   try {
     result = await getBackend().cleanAnyway({ regionId: region.id, engine,
@@ -547,7 +590,16 @@ export async function cleanDetected(region, engine) {
   const pageIndex = pageIndexOf(region.id)
   if (!chapterId || pageIndex === null) return false
   // A second press while the first is cleaning is not a second clean.
-  if (cleaning.has(region.id) || !claimPageEdit(pageIndex)) return false
+  if (cleaning.has(region.id)) return false
+  // A clean that starts on FLUX on this computer, named or the region's own
+  // pick, asks what to clean first, as one on the cloud does.
+  /** @type {{target: string, description: string}|null|undefined} */
+  let qwenEdit
+  if (currentRung(engine ?? /** @type {any} */ (region).pick ?? '') === 'flux') {
+    qwenEdit = await askLocalGuidance(region.id)
+    if (qwenEdit === null) return false
+  }
+  if (!claimPageEdit(pageIndex)) return false
   cleaning.add(region.id)
   try {
     const params = /** @type {any} */ (editor.toolParams.autoClean ?? {})
@@ -561,7 +613,8 @@ export async function cleanDetected(region, engine) {
         regionId: region.id,
         // No engine: the region's stored `pick` is the rung it starts at. A
         // named engine overrides it. The colour is what a Solid pick paints.
-        params: { bubbleColor: String(params.bubbleColor ?? '#ffffff'), ...(engine ? { engine } : {}) },
+        params: { bubbleColor: String(params.bubbleColor ?? '#ffffff'), ...(engine ? { engine } : {}),
+          ...(qwenEdit ? { qwenEdit } : {}) },
       })
     } catch (error) {
       return reportRegionEditFailure(error)

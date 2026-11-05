@@ -2809,6 +2809,15 @@ impl Pipeline {
         self
     }
 
+    /// What the user said to clean, asked before a run whose picks render
+    /// with FLUX on this computer, worded into each FLUX render's prompt
+    /// ([`crate::region::LocalFlux::set_guidance`]). After
+    /// [`Pipeline::with_model_preferences`], which sets the FLUX holder up.
+    pub fn with_flux_guidance(mut self, guidance: Option<cleaner_core::engines::render::QwenEdit>) -> Pipeline {
+        self.rung2.flux.set_guidance(guidance);
+        self
+    }
+
     pub fn with_selection(mut self, mut selection: RunSelection) -> Pipeline {
         // Hayai reads every language manga-ocr does and more; one reader is enough.
         self.reads = selection.reader && hayai_installed(&self.reader.models);
@@ -5738,6 +5747,10 @@ pub struct Summary {
     /// Regions a Detect run stored. Zero for every other mode: a clean never
     /// detects, and Auto cleans what it detects in the same pass.
     pub regions_detected: u32,
+    /// Regions a clean found and could not clean: an engine with no weights,
+    /// a region too large for the memory left. Gate skips are not counted:
+    /// those are judged not to be text.
+    pub regions_declined: u32,
 }
 
 /// Run a queue, emitting as it goes.
@@ -5925,6 +5938,7 @@ impl Progress {
                 next_page_index: None,
                 errored: 0,
                 regions_detected: 0,
+                regions_declined: 0,
             },
             in_flight: None,
             kept: 0,
@@ -6710,6 +6724,7 @@ impl<'w> Walker<'w> {
                             job.project.counters.gate_dropped += 1;
                         } else {
                             job.project.counters.declined += 1;
+                            summary.regions_declined += 1;
                         }
                     }
                     if work == PageWork::Detect {
@@ -6742,6 +6757,7 @@ impl<'w> Walker<'w> {
                 // rows below, keeping its lettering as a held candidate does.
                 RegionOutcome::Declined { bbox, reason, lettering } => {
                     job.project.counters.declined += 1;
+                    summary.regions_declined += 1;
                     if let Some(id) = replaces.as_deref() {
                         if job.decline_detection(id, &reason).is_err() {
                             failed_here = true;
@@ -7526,6 +7542,7 @@ where
             next_page_index: None,
             errored: 0,
             regions_detected: 0,
+            regions_declined: 0,
         });
     emit(Event::RunFinished {
         run_id: run_id.to_owned(),
@@ -7835,6 +7852,7 @@ fn start_with_models(
     mode: RunMode,
     area: Option<DetectArea>,
     solid_bubbles_only: bool,
+    qwen_edit: Option<cleaner_core::engines::render::QwenEdit>,
 ) -> Result<RunHandle, String> {
     // An area is one page's, and it is looked at, not cleaned.
     if area.is_some() && (mode != RunMode::Detect || scope != "page") {
@@ -7858,6 +7876,8 @@ fn start_with_models(
     }
     // An option about what this computer cleans: a stream cleans nothing here.
     let solid_bubbles_only = solid_bubbles_only && cloud.clean_grant.is_none();
+    // So is the guidance, and a Detect cleans nothing at all.
+    let qwen_edit = qwen_edit.filter(|_| cloud.clean_grant.is_none() && mode != RunMode::Detect);
     // A clean detects nothing, so it has no cloud stage to consent to whatever
     // the targets say, and a grant handed to one is refused as a grant for a
     // run that will not send.
@@ -8037,7 +8057,8 @@ fn start_with_models(
             .with_mask_padding(mask_padding)
             // An option about what a run cleans. Detect alone cleans nothing,
             // so it stores and holds exactly what it would without it.
-            .with_solid_bubbles_only(solid_bubbles_only && mode != RunMode::Detect))
+            .with_solid_bubbles_only(solid_bubbles_only && mode != RunMode::Detect)
+            .with_flux_guidance(qwen_edit.clone()))
     };
     let pipeline = match opened {
         Ok(pipeline) => configured(pipeline.with_remote(remote))?.with_area(area),
@@ -8188,6 +8209,10 @@ fn run_settings_snapshot(
     // Written every run, like the area below: a resume that read an older
     // run's `true` would leave regions this run was asked to clean.
     settings_snapshot["runSolidBubblesOnly"] = serde_json::json!(pipeline.solid_bubbles_only);
+    // Written every run, as the option above: a resume that read an older
+    // run's guidance would word this run's FLUX renders with it.
+    settings_snapshot["runQwenEdit"] = pipeline.rung2.flux.guidance()
+        .map_or(serde_json::Value::Null, |edit| serde_json::json!(edit));
     settings_snapshot["runMaskPadding"] = serde_json::json!(pipeline.mask_padding);
     // Written every run, so an area never outlives the run it was for: a
     // resume of a page Detect that read an older run's area would be held to it.
@@ -8359,9 +8384,17 @@ fn report(summary: &Summary, kept: Option<u32>, emit: &dyn Fn(Event)) {
             }),
             "info",
         ));
+    } else if summary.regions_declined > 0 {
+        // Text was found and none of it could be cleaned. `emptyResult` would
+        // say there was no text; each region's row says why it was declined.
+        emit(events::notice_event(
+            "notice.run.declined",
+            serde_json::json!({ "regions": summary.regions_declined }),
+            "warn",
+        ));
     } else if summary.errored == 0 {
-        // Nothing cleaned and nothing broken, which is the one reading of a
-        // zero this key was ever true for.
+        // Nothing cleaned, nothing declined and nothing broken, which is the
+        // one reading of a zero this key was ever true for.
         emit(events::notice_event(
             "notice.chapter.emptyResult",
             serde_json::json!({ "regions": 0, "pages": summary.pages_cleaned }),
@@ -8414,6 +8447,9 @@ struct CapturedRunPolicy {
     /// without it, the run would clean or decline every region the
     /// interrupted one was leaving detected.
     solid_bubbles_only: bool,
+    /// The guidance the interrupted run's FLUX renders were worded with.
+    /// Absent from a snapshot written before it: none, as such a run had.
+    qwen_edit: Option<cleaner_core::engines::render::QwenEdit>,
 }
 
 fn captured_run_policy(snapshot: &serde_json::Value) -> Result<CapturedRunPolicy, String> {
@@ -8463,6 +8499,7 @@ fn captured_run_policy(snapshot: &serde_json::Value) -> Result<CapturedRunPolicy
         mode: RunMode::from_arg(snapshot.get("runMode").and_then(|value| value.as_str()))?,
         area: DetectArea::from_arg(snapshot.get("runArea"))?,
         solid_bubbles_only: snapshot.get("runSolidBubblesOnly").and_then(|value| value.as_bool()).unwrap_or(false),
+        qwen_edit: cleaner_core::sidecar::models::guidance_from(snapshot.get("runQwenEdit")).map_err(str::to_owned)?,
     })
 }
 
@@ -8508,9 +8545,13 @@ pub async fn run_clean(
     mode: Option<String>,
     area: Option<serde_json::Value>,
     solid_bubbles_only: Option<bool>,
+    qwen_edit: Option<serde_json::Value>,
 ) -> Result<RunHandle, String> {
     crate::library::blocking(move || {
         let mode = RunMode::from_arg(mode.as_deref())?;
+        // Asked before a clean whose picks render with FLUX on this
+        // computer, as a cloud clean asks before its own (`cloudrun.js`).
+        let qwen_edit = cleaner_core::sidecar::models::guidance_from(qwen_edit.as_ref()).map_err(str::to_owned)?;
         let area = DetectArea::from_arg(area.as_ref())?;
         if !matches!(geometry_policy.as_deref(), None | Some("legacy")) {
             return Err("Text-shaped cleaning requires the prepared mask review workflow".to_owned());
@@ -8559,6 +8600,7 @@ pub async fn run_clean(
             mode,
             area,
             solid_bubbles_only.unwrap_or(false),
+            qwen_edit,
         )
     })
     .await
@@ -8719,6 +8761,7 @@ pub async fn resume_job(
             policy.mode,
             policy.area,
             policy.solid_bubbles_only,
+            policy.qwen_edit,
         )?;
         if !resume_started(&handle) { return Ok(None); }
         events::notice(

@@ -153,6 +153,7 @@ export function capRung(rawRequested, rawCeiling) {
  * @property {'match-surround'|'reconstruct'|'solid'} [fillMode]
  * @property {number} [elapsedMs] - overrides the engine's simulated range
  * @property {boolean} [fittingReconstructed]
+ * @property {{target: string, description: string}|null} [qwenEdit] - a FLUX render's guidance
  */
 
 /**
@@ -174,6 +175,11 @@ export function buildMask(spec) {
   }
   if (spec.fillMode) {
     params_snapshot.fill_mode = spec.fillMode
+  }
+  // The guidance a FLUX render on this computer was worded with, where a
+  // cloud patch keeps its own (`region.rs#LocalFlux::record`).
+  if (engine === 'flux' && spec.qwenEdit) {
+    params_snapshot.qwen_edit = { target: spec.qwenEdit.target, description: spec.qwenEdit.description }
   }
   return {
     id: `${spec.regionId}-m${spec.sequence}`,
