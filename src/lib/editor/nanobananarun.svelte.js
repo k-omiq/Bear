@@ -60,14 +60,16 @@ async function stillDetected(target) {
 
 /**
  * Ask, then clean. Answers how many regions were cleaned. Never rejects:
- * ToolBar's button fires it and forgets it.
+ * the Run button fires it through `cloudrun.js#startCleanRun` when Clean on
+ * is Nano Banana, and forgets it.
  *
  * @param {'page'|'chapter'} scope
  * @param {import('../api/backend.js').Backend} [backend]
+ * @param {object|null} [pendingToken] - the caller's run-start claim, when it took one
  * @returns {Promise<number>}
  */
-export async function startNanoBananaRun(scope, backend = getBackend()) {
-  const token = claimRunStart()
+export async function startNanoBananaRun(scope, backend = getBackend(), pendingToken = null) {
+  const token = claimRunStart(pendingToken)
   if (!token) return 0
   try {
     const chapter = editor.chapter

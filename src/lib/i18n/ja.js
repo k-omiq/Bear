@@ -3321,6 +3321,14 @@ export const ja = {
     },
   },
   nanoBanana: {
+    // Clean on: Nano Banana (Text cleanup panel).
+    target: {
+      option: 'Nano Banana (Google)',
+      noKey: 'Nano Banana には Gemini API キーが必要です。設定 > クラウド で保存してください。',
+      cloudOff: 'Nano Banana を使うには、設定でクラウドエンジンをオンにしてください。',
+      cleanStepOnly: 'Nano Banana は検出済みの領域を除去します。クリーンを選ぶか、除去先で別の場所を選んでください。',
+      scopeProject: 'Nano Banana は一度に 1 ページか 1 話を除去します。',
+    },
     settings: {
       heading: 'Nano Banana',
       description: '自分の API キーを使い、Google の Gemini 画像モデルで領域をクリーニングします。領域ごとにページの切り抜きを 1 枚 Google に送信し、キーに課金されます。',
@@ -3353,7 +3361,6 @@ export const ja = {
       promptHint: '入力した内容は組み込みの消去指示に加えて Google に送信されます。編集は印を付けた領域の内側に限られます。',
       promptNotSaved: 'メモを保存できなかったため、何も送信していません。',
       readFailed: 'クリーニングする領域を読み取れなかったため、何も送信していません。',
-      button: 'Nano Banana でクリーニング',
       stop: '停止（{done} / {total}）',
       stopping: '停止中（{done} / {total}）',
       title: 'Nano Banana でクリーニング',

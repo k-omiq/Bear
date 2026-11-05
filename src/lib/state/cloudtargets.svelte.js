@@ -30,6 +30,7 @@ import { CLOUD_STAGES, detectsOnCloud } from '../model/pipelines.js'
 import { cloud, cloudCleanAvailable, cloudCleanMissingKey, cloudUsable, refreshCloudReadiness } from './cloud.svelte.js'
 import { session, setAnalysisTarget, setCleanTarget, setDetectionMode, setOcrRescue } from './session.svelte.js'
 import { savedSetting, writeSettingsSerialized } from './settingswrite.js'
+import { capabilities } from './capabilities.svelte.js'
 
 export const targets = $state({
   /**
@@ -130,6 +131,18 @@ export function cleanReasonKey() {
   if (!cloudCleanAvailable()) return cloudCleanMissingKey()
   if (!cloud.checked || cloudUsable()) return null
   return 'settings.detection.runOn.notReady'
+}
+
+/**
+ * Why *Clean on: Nano Banana* cannot be chosen, or null when it can. It needs
+ * a Gemini key saved and Cloud engines on (`capabilities.nanoBanana`), and
+ * says which is missing.
+ *
+ * @returns {string|null} an i18n key
+ */
+export function nanoBananaReasonKey() {
+  if (capabilities.nanoBanana) return null
+  return session.cloudAllowed ? 'nanoBanana.target.noKey' : 'nanoBanana.target.cloudOff'
 }
 
 /**
@@ -244,11 +257,11 @@ function putModeBack({ mode, reads }) {
 /**
  * Where stored detections are cleaned, from the tool or from Settings.
  *
- * @param {string} target - `local` or `cloud`
+ * @param {string} target - `local`, `cloud` or `nanoBanana`
  * @returns {Promise<boolean>} whether anything was saved
  */
 export async function chooseCleanTarget(target) {
-  if (target !== 'local' && target !== 'cloud') return false
+  if (target !== 'local' && target !== 'cloud' && target !== 'nanoBanana') return false
   const previous = session.cleanTarget
   if (previous === target) return false
   targets.cleanSaveFailed = false

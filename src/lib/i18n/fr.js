@@ -3381,6 +3381,14 @@ export const fr = {
     },
   },
   nanoBanana: {
+    // Clean on: Nano Banana (Text cleanup panel).
+    target: {
+      option: 'Nano Banana (Google)',
+      noKey: 'Nano Banana a besoin d’une clé d’API Gemini. Enregistrez-en une dans Réglages > Cloud.',
+      cloudOff: 'Nano Banana a besoin des moteurs cloud activés dans les Réglages.',
+      cleanStepOnly: 'Nano Banana nettoie les régions déjà détectées. Choisissez Nettoyer, ou un autre emplacement dans Nettoyer sur.',
+      scopeProject: 'Nano Banana nettoie une page ou un chapitre à la fois.',
+    },
     settings: {
       heading: 'Nano Banana',
       description: 'Nettoie une zone avec le modèle d’image Gemini de Google et votre propre clé d’API. Chaque zone envoie un recadrage de votre page à Google et est facturée sur votre clé.',
@@ -3413,7 +3421,6 @@ export const fr = {
       promptHint: 'Vos mots sont ajoutés à la consigne d’effacement intégrée et envoyés à Google. La modification reste dans la zone marquée.',
       promptNotSaved: 'La note n’a pas pu être enregistrée, rien n’a donc été envoyé.',
       readFailed: 'Les zones à nettoyer n’ont pas pu être lues, rien n’a donc été envoyé.',
-      button: 'Nettoyer avec Nano Banana',
       stop: 'Arrêter ({done} sur {total})',
       stopping: 'Arrêt en cours ({done} sur {total})',
       title: 'Nettoyer avec Nano Banana',

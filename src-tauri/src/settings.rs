@@ -708,6 +708,7 @@ mod tests {
         assert_eq!(CleanTarget::from_value(Some(&Value::Null)).unwrap(), CleanTarget::Local);
         assert_eq!(CleanTarget::from_value(Some(&serde_json::json!("local"))).unwrap(), CleanTarget::Local);
         assert_eq!(CleanTarget::from_value(Some(&serde_json::json!("cloud"))).unwrap(), CleanTarget::Cloud);
+        assert_eq!(CleanTarget::from_value(Some(&serde_json::json!("nanoBanana"))).unwrap(), CleanTarget::NanoBanana);
         for bad in [serde_json::json!("Cloud"), serde_json::json!("gpu"), serde_json::json!(true),
             serde_json::json!({"target": "cloud"})] {
             assert!(CleanTarget::from_value(Some(&bad)).is_err(), "{bad}");

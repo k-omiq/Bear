@@ -3317,6 +3317,14 @@ export const ko = {
     },
   },
   nanoBanana: {
+    // Clean on: Nano Banana (Text cleanup panel).
+    target: {
+      option: 'Nano Banana (Google)',
+      noKey: 'Nano Banana에는 Gemini API 키가 필요합니다. 설정 > 클라우드에서 저장하세요.',
+      cloudOff: 'Nano Banana를 쓰려면 설정에서 클라우드 엔진을 켜세요.',
+      cleanStepOnly: 'Nano Banana는 이미 감지된 영역을 정리합니다. 정리를 고르거나 정리 위치에서 다른 곳을 고르세요.',
+      scopeProject: 'Nano Banana는 한 번에 한 페이지나 한 화를 정리합니다.',
+    },
     settings: {
       heading: 'Nano Banana',
       description: '내 API 키로 Google의 Gemini 이미지 모델을 사용해 영역을 정리합니다. 영역마다 페이지의 잘라낸 이미지 한 장을 Google로 보내고 내 키에 요금이 청구됩니다.',
@@ -3349,7 +3357,6 @@ export const ko = {
       promptHint: '입력한 내용은 기본 제거 지시에 더해 Google로 전송됩니다. 편집은 표시된 영역 안에서만 이루어집니다.',
       promptNotSaved: '메모를 저장하지 못해 아무것도 보내지 않았습니다.',
       readFailed: '정리할 영역을 읽을 수 없어 아무것도 보내지 않았습니다.',
-      button: 'Nano Banana로 정리',
       stop: '중지 ({done} / {total})',
       stopping: '중지하는 중 ({done} / {total})',
       title: 'Nano Banana로 정리',

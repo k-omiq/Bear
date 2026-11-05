@@ -86,6 +86,7 @@
     chooseDetectionMode,
     cleanReasonKey,
     detectReasonKey,
+    nanoBananaReasonKey,
     detectTarget,
     syncCloudOffer,
     targets,
@@ -117,7 +118,6 @@
   import { windowGesture, closeWindowFocusing } from './windowgesture.js'
   import { MIN_TOP, TOOL_BOTTOM_RESERVE } from '../model/windows.js'
   import { cleanLocalFirst, cloudParts, cloudScopeRefusal, runStep, startCleanRun } from './cloudrun.js'
-  import { startNanoBananaRun } from './nanobananarun.svelte.js'
   import { nanoBananaRun, stopNanoBananaRun } from '../state/jobs.svelte.js'
   import {
     Button,
@@ -375,9 +375,11 @@
    * covers every chapter of the project on this computer, and refuses one with
    * a cloud half: a single consent cannot cover chapters nobody looked at
    * (`cloudrun.js#cloudScopeRefusal`, `run.rs#cloud_refusal`). So Project is
-   * offered only while nothing goes to the cloud.
+   * offered only while nothing goes to the cloud. A Nano Banana clean is paid
+   * per region and confirmed for one chapter, so it is not offered with it
+   * either.
    */
-  const projectRuns = $derived(!parts.detect && !parts.clean)
+  const projectRuns = $derived(!parts.detect && !parts.clean && !(step === 'clean' && session.cleanTarget === 'nanoBanana'))
 
   /**
    * The scope the run covers. A stored Project that cannot run now reads as
@@ -488,8 +490,15 @@
     // Clean alone loads no detector, and on the cloud GPU no local engine at
     // all: what it needs is the regions already stored, which the run itself
     // says when there are none (`notice.run.nothingDetected`).
-    const cloudOnly = step === 'clean' && session.cleanTarget === 'cloud'
+    const cloudOnly = step === 'clean' && session.cleanTarget !== 'local'
     if (!cloudOnly && !capabilities.runtime) return 'editor.state.runtimeMissing'
+    // Nano Banana cleans the regions already detected, and only with its key
+    // and Cloud engines on. Detect & clean does not start with it rather
+    // than quietly cleaning on this computer.
+    if (step !== 'detect' && cleanOn === 'nanoBanana') {
+      if (step !== 'clean') return 'nanoBanana.target.cleanStepOnly'
+      return nanoBananaReason
+    }
     if (missingHere === null) return 'editor.state.modelsMissing'
     if (missingHere.length) return missingOnCloud ? 'editor.state.detectModelsCloud' : 'editor.state.detectModelsMissing'
     return cloudGateKey
@@ -520,7 +529,11 @@
   const detectReason = $derived(spec.runnable ? detectReasonKey() : null)
   const cleanReason = $derived(spec.runnable ? cleanReasonKey() : null)
   const detectOn = $derived(detectTarget())
-  const cleanOn = $derived(session.cleanTarget === 'cloud' ? 'cloud' : 'local')
+  const cleanOn = $derived(session.cleanTarget)
+  /** Why Nano Banana cannot clean now, or null. */
+  const nanoBananaReason = $derived(spec.runnable ? nanoBananaReasonKey() : null)
+  /** The note under Clean on: the reason of the place it holds. */
+  const cleanNote = $derived(cleanOn === 'nanoBanana' ? nanoBananaReason : cleanReason)
 
   /**
    * Cloud engines are off and nothing is routed to them: one reason covers
@@ -529,7 +542,7 @@
    * same thing were the tallest part of the panel. A place already on the
    * cloud that can no longer run there is worth its own row's note.
    */
-  const cloudOff = $derived(!session.cloudAllowed && detectOn !== 'cloud' && cleanOn !== 'cloud')
+  const cloudOff = $derived(!session.cloudAllowed && detectOn !== 'cloud' && cleanOn === 'local')
   const cloudOffId = `${uid}-cloud-off`
 
   /**
@@ -549,7 +562,7 @@
    * never for Detect. A pick that is hidden must not be one that decides the
    * outcome.
    */
-  const picksShown = $derived(step !== 'detect')
+  const picksShown = $derived(step !== 'detect' && cleanOn !== 'nanoBanana')
   /**
    * The fill colour is read by a clean on this computer, and paints a saved
    * Solid pick that holds no balloon tone as well as a fresh one, so it is
@@ -630,12 +643,26 @@
   })
 
   /**
+   * Clean on also offers Nano Banana, after the cloud profiles: a paid
+   * request per region on the person's own Gemini key, so the Run button
+   * asks first (`nanobananarun.svelte.js`). Disabled with its reason while it
+   * has no key or Cloud engines are off, and selectable while it is the place
+   * the row holds, so the row never shows a place it is not.
+   *
    * @param {'detect'|'clean'} key
-   * @param {'local'|'cloud'} current
-   * @param {string|null} reasonKey
+   * @param {string} current
+   * @param {string|null} reasonKey - why the Cloud GPU entry cannot be chosen
    */
   function placeOptions(key, current, reasonKey) {
     const cloudEntry = { value: 'cloud', label: t('tools.option.onCloud'), disabled: Boolean(reasonKey) && current !== 'cloud' }
+    const nanoBanana = key === 'clean'
+      ? [{
+        value: 'nanoBanana',
+        label: t('nanoBanana.target.option'),
+        disabled: Boolean(nanoBananaReason) && current !== 'nanoBanana',
+        title: nanoBananaReason ? t(nanoBananaReason) : undefined,
+      }]
+      : []
     // Every cloud profile at once, Clean on by the model it cleans with:
     // picking another makes its profile the default (`placeOn`). The reason
     // a row gives is the default's; another profile may not share it.
@@ -651,16 +678,17 @@
           disabled: value === 'cloud' ? cloudEntry.disabled : key === 'clean' && !cloudCleanAvailable(choice),
         }))
         : [cloudEntry]),
+      ...nanoBanana,
     ]
   }
 
   /**
-   * @param {'local'|'cloud'} current
+   * @param {string} current
    * @param {string|null} reasonKey
    */
   function placeNote(current, reasonKey) {
     if (!reasonKey) return null
-    return current === 'cloud' ? `${t('tools.target.stranded')} ${t(reasonKey)}` : t(reasonKey)
+    return current !== 'local' ? `${t('tools.target.stranded')} ${t(reasonKey)}` : t(reasonKey)
   }
 
   /**
@@ -1177,7 +1205,7 @@
   <div class="row-control" data-run-place={key}>
     <Select
       id="{uid}-place-{key}"
-      options={placeOptions(key, current, reasonKey)}
+      options={placeOptions(key, current, key === 'clean' ? cleanReason : reasonKey)}
       value={current}
       describedBy={describedBy || undefined}
       {onchange}
@@ -1358,7 +1386,7 @@
               {@render placeRow('detect', 'tools.param.detectOn', detectOn, detectReason, setDetectOn)}
             {/if}
             {#if step !== 'detect'}
-              {@render placeRow('clean', 'tools.param.cleanOn', cleanOn, cleanReason, setCleanOn)}
+              {@render placeRow('clean', 'tools.param.cleanOn', cleanOn, cleanNote, setCleanOn)}
             {/if}
             <!-- Mixed execution: an explicit choice, never a default. -->
             {#if parts.clean}
@@ -1501,10 +1529,8 @@
             <Icon name={running ? 'stop' : 'play'} size={13} />
             {actionLabel}
           </Button>
-          <!-- Nano Banana, offered only with a key and Cloud engines on. A paid request
-               per region, so it is its own button and asks first, and never part of
-               a run (`editor/nanobananarun.svelte.js`). Its Stop shows for as long as
-               a batch runs, whatever the step and scope now read. -->
+          <!-- A Nano Banana batch's Stop, for as long as one runs. The batch is
+               started by the button above when Clean on is Nano Banana. -->
           {#if nanoBananaRun.active}
             <Button
               size="sm"
@@ -1515,16 +1541,6 @@
             >
               {t(nanoBananaRun.stopping ? 'nanoBanana.run.stopping' : 'nanoBanana.run.stop',
                 { done: nanoBananaRun.done, total: nanoBananaRun.total })}
-            </Button>
-          {:else if step === 'clean' && capabilities.nanoBanana && scope !== 'project'}
-            <Button
-              size="sm"
-              variant="soft"
-              disabled={running}
-              data-run-row="nanoBanana"
-              onclick={() => void startNanoBananaRun(scope)}
-            >
-              {t('nanoBanana.run.button')}
             </Button>
           {/if}
           <!-- Rendered whether or not there is anything in it: a live region

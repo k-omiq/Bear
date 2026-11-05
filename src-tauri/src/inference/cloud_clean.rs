@@ -301,14 +301,16 @@ const MEMORY_USD_PER_GIB_SECOND: f64 = 0.000_002_22;
 /* ------------------------------------------------------------------ */
 
 /// The `cleanTarget` setting: whether the interface's Clean goes to this
-/// computer's ladder or to a consented cloud batch. The backend acts on no
-/// setting here (a cloud clean starts only from its own three calls); it only
-/// keeps the value well formed, since it decides where pages are sent.
+/// computer's ladder, to a consented cloud batch, or to a consented Nano
+/// Banana batch. The backend acts on no setting here (a cloud clean starts
+/// only from its own three calls, a Nano Banana batch only from its grant);
+/// it only keeps the value well formed, since it decides where pages are sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CleanTarget {
     #[default]
     Local,
     Cloud,
+    NanoBanana,
 }
 
 pub const CLEAN_TARGET_KEY: &str = "cleanTarget";
@@ -479,13 +481,15 @@ pub(crate) fn apply_finishing(recipe: &mut RenderRecipe, setting: FinishingSetti
 }
 
 impl CleanTarget {
-    /// Strict: `"local"` or `"cloud"`. Absent or null is local. Anything else
-    /// is refused, because a typo must not decide where a region is sent.
+    /// Strict: `"local"`, `"cloud"` or `"nanoBanana"`. Absent or null is
+    /// local. Anything else is refused, because a typo must not decide where a
+    /// region is sent.
     pub fn from_value(value: Option<&serde_json::Value>) -> Result<Self, String> {
         match value.filter(|value| !value.is_null()).map(|value| value.as_str()) {
             None | Some(Some("local")) => Ok(Self::Local),
             Some(Some("cloud")) => Ok(Self::Cloud),
-            Some(_) => Err("cleanTarget must be \"local\" or \"cloud\"".into()),
+            Some(Some("nanoBanana")) => Ok(Self::NanoBanana),
+            Some(_) => Err("cleanTarget must be \"local\", \"cloud\" or \"nanoBanana\"".into()),
         }
     }
 }
