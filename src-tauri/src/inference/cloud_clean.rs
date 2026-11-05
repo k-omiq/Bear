@@ -381,13 +381,16 @@ pub const FLUX3_GENERATION_KEY: &str = "cloudFlux3Generation";
 const RENAMED_FLUX3_PARTS: [(&str, &str); 2] = [("referencePrompt", "locationPrompt"), ("referenceShift", "lowShift")];
 
 /// A settings file as it is read: the old names of the FLUX 3 parts and of
-/// the finishing versions rewritten to the new ones, so the interface and
-/// every reader see the user's choice under the name it now has, and the
-/// next write stores it so. A part already under its new name wins.
+/// the finishing versions (`cloudFinishing` and `nanoBananaFinishing`)
+/// rewritten to the new ones, so the interface and every reader see the
+/// user's choice under the name it now has, and the next write stores it so.
+/// A part already under its new name wins.
 pub fn migrate_settings(settings: &mut serde_json::Value) {
-    if let Some(name) = settings.get(FINISHING_KEY).and_then(|value| value.as_str()) {
-        if let Ok(finishing) = serde_json::from_value::<Finishing>(serde_json::json!(name)) {
-            settings[FINISHING_KEY] = serde_json::json!(finishing);
+    for key in [FINISHING_KEY, crate::inference::nano_banana_finishing::FINISHING_KEY] {
+        if let Some(name) = settings.get(key).and_then(|value| value.as_str()) {
+            if let Ok(finishing) = serde_json::from_value::<Finishing>(serde_json::json!(name)) {
+                settings[key] = serde_json::json!(finishing);
+            }
         }
     }
     if let Some(parts) = settings.get_mut(FLUX3_GENERATION_KEY).and_then(|value| value.as_object_mut()) {

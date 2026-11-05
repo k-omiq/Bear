@@ -827,15 +827,20 @@ export function openFinishingWindow(region) {
 
 /**
  * The finishing a layer's record says its pixels were made by
- * (`params_snapshot.postprocess`), or null when it names none.
+ * (`params_snapshot.postprocess`), or null when it names none. A record with
+ * no finishing but a tone alignment (`params_snapshot.tone`: a Qwen, LaMa or
+ * FLUX result made with no finishing picked) is the tone fix, as native reads
+ * it (`refinish.rs#current_choice`).
  *
  * @param {import('../api/backend.js').ApiRegion|null|undefined} region
  * @returns {{finishing: string, grayscale: boolean}|null}
  */
 export function recordedFinishing(region) {
-  const postprocess = /** @type {any} */ (region?.mask?.provenance?.params_snapshot)?.postprocess
-  if (typeof postprocess?.finishing !== 'string') return null
-  return { finishing: postprocess.finishing, grayscale: postprocess.grayscale === true }
+  const snapshot = /** @type {any} */ (region?.mask?.provenance?.params_snapshot)
+  const postprocess = snapshot?.postprocess
+  if (typeof postprocess?.finishing === 'string') return { finishing: postprocess.finishing, grayscale: postprocess.grayscale === true }
+  if (snapshot?.tone && typeof snapshot.tone === 'object') return { finishing: 'tone-fix', grayscale: false }
+  return null
 }
 
 /**
