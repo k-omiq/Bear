@@ -3398,6 +3398,16 @@ export const ko = {
       confirm: '보내고 정리',
     },
   },
+  nanoBananaFinishing: {
+    heading: '마무리',
+    description: 'Nano Banana 결과를 쓰기 전에 페이지에 맞추는 방식입니다. 따로 고르는 설정이며, 후처리 설정은 이것을 바꾸지 않습니다. 이미 지운 레이어를 바꾸려면 후처리 창의 미리보기를 사용하세요. 새 요청은 보내지 않습니다.',
+    method: '방식',
+    grayscale: '컬러 결과를 회색으로',
+    grayscaleHint: '컬러 페이지에서는 마무리 전에 결과를 회색으로 만듭니다. 회색 페이지는 항상 회색으로 읽습니다.',
+    strays: '떠도는 자국 지우기',
+    straysHint: '어두운 톤 위의 흰 점처럼 모델이 스스로 그린 작은 자국을 주변 톤으로 채웁니다. 선이나 질감 사이의 자국은 남깁니다.',
+    failed: '마무리를 저장하지 못했습니다.',
+  },
   cloud: {
     configuration: {
       loadFailed: '저장된 클라우드 설정을 읽지 못했습니다. 배포 설정을 다시 확인합니다.',

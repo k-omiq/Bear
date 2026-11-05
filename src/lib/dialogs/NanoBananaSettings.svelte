@@ -9,8 +9,10 @@
 
 <script>
   /**
-   * Settings > Cloud > Nano Banana: the user's own Gemini API key and the tier
-   * crops start at.
+   * Settings > Cloud > Nano Banana: the user's own Gemini API key, the model,
+   * and how its results are finished (`model/nanobananafinishing.js`): the
+   * method, grey, and stray marks, Nano Banana's own and not the shared
+   * Post-processing choice.
    *
    * The key is write-only. It goes to the OS credential store
    * (`inference/nano_banana.rs`), and this panel can only ask whether one is
@@ -29,14 +31,22 @@
   import { session } from '../state/session.svelte.js'
   import { writeSettingsSerialized } from '../state/settingswrite.js'
   import { NANO_BANANA_MODELS, nanoBananaModel } from '../model/nanobanana.js'
+  import {
+    NANO_BANANA_FINISHING_KEY, NANO_BANANA_GRAYSCALE_KEY, NANO_BANANA_STRAYS_KEY, nanoBananaFinishing,
+  } from '../model/nanobananafinishing.js'
+  import { FINISHINGS, finishingKey } from '../model/model-names.js'
   import { t } from '../i18n/index.js'
 
   let { backend: givenBackend } = $props()
   const backend = untrack(() => givenBackend ?? getBackend())
 
   const uid = $props.id()
-  const ids = { key: `${uid}-key`, model: `${uid}-model` }
+  const ids = {
+    key: `${uid}-key`, model: `${uid}-model`,
+    finishing: `${uid}-finishing`, grayscale: `${uid}-grayscale`, strays: `${uid}-strays`,
+  }
   const models = NANO_BANANA_MODELS.map((entry) => ({ value: entry.id, label: t(entry.labelKey) }))
+  const methods = FINISHINGS.map((name) => ({ value: name, label: t(finishingKey('option', name)) }))
 
   /** A Gemini key is 39 characters; this only stops a paste of something else entirely. */
   const MAX_KEY_CHARS = 256
@@ -49,12 +59,14 @@
   /** The message for the last change that failed. @type {string|null} */
   let failed = $state(null)
   let model = $state(nanoBananaModel(null).id)
+  let finishing = $state(nanoBananaFinishing(null))
 
   onMount(async () => {
     try { hasKey = await backend.nanoBananaHasKey() } catch { hasKey = false }
     let settings = null
     try { settings = await backend.readSettings() } catch { /* the defaults stand */ }
     model = nanoBananaModel(settings?.nanoBananaModel).id
+    finishing = nanoBananaFinishing(settings)
   })
 
   /** @param {unknown} error */
@@ -116,6 +128,27 @@
       failed = 'nanoBanana.settings.modelFailed'
     }
   }
+
+  /**
+   * Save one part of the finishing. A later change of the same part wins;
+   * a failed save puts back what was there.
+   *
+   * @param {'finishing'|'grayscale'|'strays'} part
+   * @param {string|boolean} next
+   */
+  async function saveFinishing(part, next) {
+    const key = { finishing: NANO_BANANA_FINISHING_KEY, grayscale: NANO_BANANA_GRAYSCALE_KEY, strays: NANO_BANANA_STRAYS_KEY }[part]
+    const before = finishing[part]
+    finishing = { ...finishing, [part]: next }
+    failed = null
+    try {
+      await writeSettingsSerialized(backend, { [key]: next })
+    } catch (error) {
+      console.error('the Nano Banana finishing could not be saved', error)
+      if (finishing[part] === next) finishing = { ...finishing, [part]: before }
+      failed = 'nanoBananaFinishing.failed'
+    }
+  }
 </script>
 
 <section aria-labelledby="{uid}-heading" data-settings-anchor="nano-banana">
@@ -173,6 +206,44 @@
       <Select id={ids.model} options={models} value={model} describedBy={descriptionId} onchange={saveModel} />
     {/snippet}
   </Field>
+
+  <h4 class="part">{t('nanoBananaFinishing.heading')}</h4>
+  <p class="intro">{t('nanoBananaFinishing.description')}</p>
+  <Field
+    label={t('nanoBananaFinishing.method')}
+    description={t(finishingKey('hint', finishing.finishing))}
+    layout="row"
+    controlId={ids.finishing}
+  >
+    {#snippet children({ descriptionId })}
+      <Select id={ids.finishing} options={methods} value={finishing.finishing} describedBy={descriptionId}
+        onchange={(next) => saveFinishing('finishing', next)} />
+    {/snippet}
+  </Field>
+  <Field
+    label={t('nanoBananaFinishing.grayscale')}
+    description={t('nanoBananaFinishing.grayscaleHint')}
+    layout="row"
+    controlId={ids.grayscale}
+  >
+    {#snippet children({ descriptionId })}
+      <input id={ids.grayscale} class="check" type="checkbox" aria-describedby={descriptionId}
+        checked={finishing.grayscale}
+        onchange={(event) => saveFinishing('grayscale', event.currentTarget.checked)} />
+    {/snippet}
+  </Field>
+  <Field
+    label={t('nanoBananaFinishing.strays')}
+    description={t('nanoBananaFinishing.straysHint')}
+    layout="row"
+    controlId={ids.strays}
+  >
+    {#snippet children({ descriptionId })}
+      <input id={ids.strays} class="check" type="checkbox" aria-describedby={descriptionId}
+        checked={finishing.strays}
+        onchange={(event) => saveFinishing('strays', event.currentTarget.checked)} />
+    {/snippet}
+  </Field>
 </section>
 
 <style>
@@ -184,5 +255,18 @@
   .text {
     min-width: 0;
     width: 180px;
+  }
+  .part {
+    margin: var(--s-3) 0 var(--s-1);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--t2);
+  }
+  .check {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
   }
 </style>

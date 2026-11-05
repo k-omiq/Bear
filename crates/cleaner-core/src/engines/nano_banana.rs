@@ -192,6 +192,15 @@ pub struct SendRegion {
 }
 
 impl SendRegion {
+    /// A region as a patch's record keeps it (`crop`, `output`,
+    /// `aspect_ratio`, `image_size`), so its kept answer can be finished
+    /// again. `None` for a ratio or size the chart does not have.
+    pub fn recorded(crop: Rect, output: (u32, u32), ratio: &str, tier: &str) -> Option<SendRegion> {
+        let ratio = CHART.iter().find(|(name, ..)| *name == ratio)?.0;
+        let tier = Tier::ALL.into_iter().find(|t| t.wire() == tier)?;
+        Some(SendRegion { crop, output, ratio, tier })
+    }
+
     /// Whether the answer maps one to one onto the page, with no resample.
     pub fn full_size(&self) -> bool {
         (self.crop.w, self.crop.h) == self.output
@@ -776,6 +785,15 @@ mod tests {
     #[test]
     fn the_wire_names_are_the_api_values() {
         assert_eq!([Tier::Half.wire(), Tier::One.wire(), Tier::Two.wire()], ["512", "1K", "2K"]);
+    }
+
+    #[test]
+    fn a_recorded_region_reads_back_only_with_a_chart_ratio_and_size() {
+        let crop = Rect::new(3, 4, 512, 512);
+        let region = SendRegion::recorded(crop, (512, 512), "1:1", "512").unwrap();
+        assert_eq!((region.crop, region.output, region.ratio, region.tier), (crop, (512, 512), "1:1", Tier::Half));
+        assert!(SendRegion::recorded(crop, (512, 512), "7:5", "512").is_none());
+        assert!(SendRegion::recorded(crop, (512, 512), "1:1", "4K").is_none());
     }
 
     fn answer_png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {

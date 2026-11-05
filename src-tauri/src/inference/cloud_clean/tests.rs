@@ -655,7 +655,7 @@ fn the_qwen_estimate_uses_its_own_grid_and_rates() {
 fn the_finishing_setting_rides_on_a_3_0_0_recipe_and_on_others_when_every_model_is_finished() {
     use cleaner_core::engines::postprocess::{Choice, Finishing};
     let picked = serde_json::json!({"cloudFinishing": "dots-only", "cloudFinishingGrayscale": true});
-    let choice = Choice { finishing: Finishing::DotsOnly, grayscale: true };
+    let choice = Choice::of(Finishing::DotsOnly, true);
     let setting = finishing_from_settings(&picked).unwrap();
     assert_eq!(setting, FinishingSetting { choice, every_model: false });
     assert_eq!(finishing_from_settings(&serde_json::Value::Null), Ok(FinishingSetting::default()));

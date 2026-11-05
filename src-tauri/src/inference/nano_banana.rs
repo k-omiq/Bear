@@ -672,6 +672,10 @@ impl Client {
 pub(crate) struct Edited {
     pub rendered: Rendered,
     pub record: Value,
+    /// The answer as Google encoded it, kept with the chapter so its
+    /// finishing can be changed later with no new request
+    /// ([`super::nano_banana_finishing::keep_answer`]).
+    pub answer: Vec<u8>,
 }
 
 /// Why a render stopped: a catalogue key either way, so a click always gets an answer.
@@ -815,10 +819,12 @@ fn finish(config: &Config, prepared: &Prepared, region: SendRegion, answer: &[u8
             "image_size": region.tier.wire(),
             "aspect_ratio": region.ratio,
             "crop": [crop.x, crop.y, crop.w, crop.h],
+            "output": [region.output.0, region.output.1],
             "crops_refused": refused,
             "instruction": config.instruction.is_some(),
             "shared_answer": shared,
         }),
+        answer: answer.to_vec(),
     })
 }
 

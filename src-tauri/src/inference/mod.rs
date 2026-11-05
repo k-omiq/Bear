@@ -13,6 +13,7 @@ pub mod journal;
 pub mod nano_banana;
 pub mod nano_banana_consent;
 pub mod nano_banana_job;
+pub mod nano_banana_finishing;
 pub mod policy;
 pub mod refinish;
 pub mod run_analysis;

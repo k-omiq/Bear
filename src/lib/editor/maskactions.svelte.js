@@ -815,7 +815,7 @@ export function finishingRefusalKey(error) {
  * the patch's earlier revision back (`restoreRegion`).
  *
  * @param {import('../api/backend.js').ApiRegion} region
- * @param {{finishing: string, grayscale: boolean}} choice
+ * @param {{finishing: string, grayscale: boolean, strays?: boolean}} choice - `strays` as the previews were made, so a Nano Banana layer keeps its stray choice
  * @returns {Promise<boolean>} whether the result was finished again
  */
 export async function setRegionFinishing(region, choice) {

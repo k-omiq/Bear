@@ -637,8 +637,8 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // A cloud result finished again from its saved answer: the previews,
     // then the pick, which records its own undo step.
     regionFinishingPreviews: ({ regionId }) => call(IMPLEMENTED.regionFinishingPreviews, { regionId }),
-    setRegionFinishing: ({ regionId, finishing, grayscale }) =>
-      call(IMPLEMENTED.setRegionFinishing, { regionId, finishing, grayscale: Boolean(grayscale) }),
+    setRegionFinishing: ({ regionId, finishing, grayscale, strays }) =>
+      call(IMPLEMENTED.setRegionFinishing, { regionId, finishing, grayscale: Boolean(grayscale), strays: Boolean(strays) }),
     // A deliberate layer change, judged by the layer's capabilities; history
     // replay goes through `restoreRegion` instead.
     setLayerStyle: ({ regionId, layer }) => call(IMPLEMENTED.setLayerStyle, { regionId, layer }),

@@ -716,6 +716,9 @@ struct Bench {
     /// ([`edit_with_consent`]). `None` for every other edit, and the rung then
     /// refuses before a request is made. Never read from settings here.
     nano_banana: Option<crate::inference::nano_banana::Config>,
+    /// How a Nano Banana answer is finished: its own setting, not the one
+    /// this computer's models share ([`crate::inference::nano_banana_finishing`]).
+    nano_banana_finishing: cleaner_core::engines::postprocess::Choice,
     #[cfg(test)]
     detected_seed: Option<Mask>,
 }
@@ -768,24 +771,31 @@ impl Bench {
             .and_then(|settings| run::lama_sharing_from_settings(settings).ok())
             .unwrap_or_default();
         rung2.flux = LocalFlux::from_settings(settings.as_ref(), app_data.clone());
+        // Unreadable is the default, as an unreadable finishing is above.
+        let nano_banana_finishing = settings.as_ref()
+            .and_then(|settings| crate::inference::nano_banana_finishing::from_settings(settings).ok())
+            .unwrap_or_default();
         Bench {
             rung2,
             detector: run::detector_on_demand(&holding(run::DETECTOR), detector_preference),
             nano_banana: None,
+            nano_banana_finishing,
             #[cfg(test)]
             detected_seed: None,
         }
     }
 
-    /// `fitted` on `page`, edited by Gemini, and the record of how.
+    /// `fitted` on `page`, edited by Gemini and finished by `finishing`, the
+    /// record of how, and the answer as it came.
     fn nano_banana(
         &self,
         page: &Raster,
         fitted: &Fitted,
         share: Option<&crate::inference::nano_banana::Neighbours>,
-    ) -> Result<(run::Made, quality::Assessment, serde_json::Value), &'static str> {
+        finishing: cleaner_core::engines::postprocess::Choice,
+    ) -> Result<(run::Made, quality::Assessment, serde_json::Value, Vec<u8>), &'static str> {
         let config = self.nano_banana.as_ref().ok_or("decline.reason.nanoBananaOff")?;
-        let edited = crate::inference::nano_banana::render(config, page, fitted, self.rung2.finishing, share)?;
+        let edited = crate::inference::nano_banana::render(config, page, fitted, Some(finishing), share)?;
         let rendered = edited.rendered;
         let made = run::Made {
             engine: Engine::NanoBanana,
@@ -800,7 +810,7 @@ impl Bench {
             matched: rendered.matched,
         };
         let verdict = quality::assess(page, &made.mask, &made.pixels, fit::page_noise_sigma(page));
-        Ok((made, verdict, edited.record))
+        Ok((made, verdict, edited.record, edited.answer))
     }
 
     /// The detector: the one already in memory if a run or an earlier click
@@ -2057,7 +2067,12 @@ fn edit_with_bench_render(
                 // chapter waits on its lock. So the chapter is let go of for it,
                 // and the answer is used only if the page is as it was read.
                 let read = page_state(&job.project, source_idx);
-                let rendered = hold.without(|| bench.nano_banana(page, &fitted, share.as_ref()))?;
+                // Try again on a Nano Banana layer finishes the new answer as
+                // the layer was finished; anything else takes the setting.
+                let finishing = existing.as_ref()
+                    .and_then(|record| crate::inference::nano_banana_finishing::recorded(&record.provenance))
+                    .unwrap_or(bench.nano_banana_finishing);
+                let rendered = hold.without(|| bench.nano_banana(page, &fitted, share.as_ref(), finishing))?;
                 let fresh = Job::open(&located.job_path).map_err(|e| e.to_string())?;
                 if read.is_none()
                     || Library::resolve_page(&fresh.project, located.page_index) != Some(source_idx)
@@ -2073,7 +2088,14 @@ fn edit_with_bench_render(
                     order = next_order(&job, source_idx);
                 }
                 match rendered {
-                    Ok((made, verdict, record)) => {
+                    Ok((made, verdict, mut record, answer)) => {
+                        // Kept so its finishing can be changed later with no
+                        // new request. A layer whose answer could not be kept
+                        // is still a layer; only that change is then refused.
+                        match crate::inference::nano_banana_finishing::keep_answer(job.sidecar(), &answer) {
+                            Ok(sha256) => record["answer_sha256"] = serde_json::json!(sha256),
+                            Err(error) => eprintln!("manga-cleaner: a Nano Banana answer could not be kept: {error}"),
+                        }
                         nano_banana = Some(record);
                         (made, verdict)
                     }
@@ -2954,6 +2976,7 @@ mod text_shape_boundary_tests {
             detector: run::detector_on_demand(&models, Preference::CpuOnly),
             rung2: run::Rung2::new(&models, Preference::CpuOnly),
             nano_banana: None,
+            nano_banana_finishing: Default::default(),
             detected_seed: None,
         };
         let edit_plan = Plan {
@@ -10084,6 +10107,7 @@ mod tests {
             detector: run::detector_on_demand(&models, Preference::CpuOnly),
             rung2: run::Rung2::new(&models, Preference::CpuOnly),
             nano_banana: None,
+            nano_banana_finishing: Default::default(),
             detected_seed: None,
         }
     }

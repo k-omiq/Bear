@@ -443,7 +443,7 @@ pub fn finishing_from_settings(settings: &serde_json::Value) -> Result<Finishing
         None => false,
         Some(value) => value.as_bool().ok_or_else(|| format!("{FINISHING_GRAYSCALE_KEY} must be true or false"))?,
     };
-    Ok(FinishingSetting { choice: Choice { finishing, grayscale }, every_model: every_model_from_settings(settings)? })
+    Ok(FinishingSetting { choice: Choice::of(finishing, grayscale), every_model: every_model_from_settings(settings)? })
 }
 
 /// Strict: `finishingEveryModel` null or a boolean.

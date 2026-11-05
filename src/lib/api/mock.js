@@ -27,6 +27,7 @@ import { DENOISE_PRESETS, outputScalesFor, presetById, recipeAt } from '../model
 import { currentRung } from '../model/ladder.js'
 import { MAX_MASK_PADDING, NANO_BANANA_ENGINE, isUncleaned } from '../model/masks.js'
 import { nanoBananaModel } from '../model/nanobanana.js'
+import { nanoBananaFinishing, nanoBananaFinishingRefusal, recordedNanoBananaFinishing } from '../model/nanobananafinishing.js'
 import { FINISHINGS } from '../model/model-names.js'
 import {
   applyToolToRegion,
@@ -1171,8 +1172,9 @@ export function createMockBackend(options = {}) {
 
   /**
    * Why a layer's finishing cannot be changed (`refinish.rs#Unavailable`),
-   * or null when it can: a cloud result with its answer kept, or a LaMa or
-   * FLUX result from this computer, whose model is asked again.
+   * or null when it can: a cloud result with its answer kept, a LaMa or
+   * FLUX result from this computer, whose model is asked again, or a Nano
+   * Banana result whose answer the chapter kept.
    *
    * @param {any} provenance
    * @returns {string|null}
@@ -1180,6 +1182,9 @@ export function createMockBackend(options = {}) {
   const unfinishable = (provenance) => {
     const attemptId = provenance.cloud?.attempt_id
     if (attemptId) return attemptId.startsWith('att-gone') ? 'noResult' : null
+    if (provenance.engine === NANO_BANANA_ENGINE) {
+      return typeof provenance.params_snapshot?.nano_banana?.answer_sha256 === 'string' ? null : 'noResult'
+    }
     if (provenance.cloud || !['lama', 'flux'].includes(provenance.engine)) return 'notCloud'
     return null
   }
@@ -2315,6 +2320,8 @@ export function createMockBackend(options = {}) {
    */
   let nanoBananaGrant = null
   let nanoBananaGrants = 0
+  /** Answers the mock's Nano Banana renders kept, for their record's name. */
+  let nanoBananaAnswers = 0
 
   /**
    * The checks a native Nano Banana render makes before anything is sent
@@ -2362,23 +2369,33 @@ export function createMockBackend(options = {}) {
 
   /**
    * A mask a Nano Banana render committed, as the native side records one:
-   * its engine, and the model it ran on in `params_snapshot.nano_banana`. The
-   * mock's own clean stands in for the request, and a detection's clean picks
-   * its rung by the automatic cap, so the record is written here.
+   * its engine, the model it ran on and the answer it kept in
+   * `params_snapshot.nano_banana`, and the finishing it was made by in
+   * `params_snapshot.postprocess`: the layer's own on a Try again of it
+   * (`recorded`), else the setting. The mock's own clean stands in for the
+   * request, and a detection's clean picks its rung by the automatic cap, so
+   * the record is written here.
    *
    * @param {any} mask
    * @param {string | null} model - the grant's, when the render passed its checks
+   * @param {ReturnType<typeof recordedNanoBananaFinishing>} [recorded]
    */
-  const stampNanoBanana = (mask, model) => {
+  const stampNanoBanana = (mask, model, recorded = null) => {
     if (!model || !mask?.provenance) return
     const info = ENGINE_INFO[NANO_BANANA_ENGINE]
+    const { finishing, grayscale, strays } = recorded ?? nanoBananaFinishing(state.settings)
+    nanoBananaAnswers += 1
     mask.fillMode = info.fillMode
     Object.assign(mask.provenance, {
       engine: NANO_BANANA_ENGINE,
       engine_version: info.version,
       execution_provider: info.provider,
       model_sha256: null,
-      params_snapshot: { ...mask.provenance.params_snapshot, nano_banana: { model } },
+      params_snapshot: {
+        ...mask.provenance.params_snapshot,
+        nano_banana: { model, answer_sha256: `mock-nano-banana-answer-${nanoBananaAnswers}` },
+        postprocess: { finishing, grayscale, ...(strays ? { strays } : {}) },
+      },
     })
   }
 
@@ -4128,10 +4145,12 @@ export function createMockBackend(options = {}) {
 
     /**
      * A model result's finishing previews, as `refinish.rs#previews_at` makes
-     * them: one per method, from the answer a cloud attempt kept or a LaMa or
-     * FLUX result's model asked again. Any other layer answers `notCloud` and
-     * no previews; an attempt id that starts `att-gone` stands in for one
-     * whose answer was dropped.
+     * them: one per method, from the answer a cloud attempt or a Nano
+     * Banana render kept, or a LaMa or FLUX result's model asked again, at
+     * the result's grey and stray choices. Any other layer answers `notCloud`
+     * and no previews; an attempt id that starts `att-gone` stands in for one
+     * whose answer was dropped, and a Nano Banana layer with no kept answer
+     * answers `noResult`.
      */
     async regionFinishingPreviews({ regionId }) {
       await delay(timing.method)
@@ -4140,18 +4159,23 @@ export function createMockBackend(options = {}) {
         throw new Error(`refinish_no_patch: region ${regionId} has no cleaned result`)
       }
       const provenance = found.region.mask.provenance ?? {}
-      const none = (unavailable) => ({ regionId, unavailable, current: null, grayscale: false, previews: [] })
+      const none = (unavailable) => ({ regionId, unavailable, current: null, grayscale: false, strays: false, previews: [] })
       const unavailable = unfinishable(provenance)
       if (unavailable) return none(unavailable)
       const postprocess = provenance.params_snapshot?.postprocess
       const current = typeof postprocess?.finishing === 'string'
-        ? { finishing: postprocess.finishing, grayscale: postprocess.grayscale === true }
+        ? {
+          finishing: postprocess.finishing,
+          grayscale: postprocess.grayscale === true,
+          ...(postprocess.strays === true ? { strays: true } : {}),
+        }
         : null
       return {
         regionId,
         unavailable: null,
         current,
         grayscale: current?.grayscale ?? false,
+        strays: current?.strays === true,
         previews: FINISHINGS.map((finishing, index) => ({ finishing, url: finishingPreviewUrl(index) })),
       }
     },
@@ -4162,7 +4186,7 @@ export function createMockBackend(options = {}) {
      * change is one `region-state` undo step this side records itself. The
      * finishing it has already writes nothing.
      */
-    async setRegionFinishing({ regionId, finishing, grayscale }) {
+    async setRegionFinishing({ regionId, finishing, grayscale, strays }) {
       await delay(timing.method)
       const found = findRegion(regionId)
       if (!found?.region?.mask || isDetection(found.region)) {
@@ -4175,13 +4199,15 @@ export function createMockBackend(options = {}) {
       if (unavailable === 'notCloud') throw new Error('refinish_not_cloud: the region is not a model\'s result')
       if (unavailable === 'noResult') throw new Error('refinish_no_result: the saved cloud answer is gone')
       const was = provenance.params_snapshot?.postprocess
-      if (was?.finishing === finishing && (was?.grayscale === true) === (grayscale === true)) {
+      if (was?.finishing === finishing && (was?.grayscale === true) === (grayscale === true)
+        && (was?.strays === true) === (strays === true)) {
         return { region: snapshot(found.region), pageStatus: found.page.status, history: null }
       }
       const before = { present: true, pageStatus: found.page.status, region: snapshot(found.region) }
+      const { strays: _strays, ...kept } = was ?? {}
       provenance.params_snapshot = {
         ...(provenance.params_snapshot ?? {}),
-        postprocess: { ...(was ?? {}), finishing, grayscale: grayscale === true },
+        postprocess: { ...kept, finishing, grayscale: grayscale === true, ...(strays === true ? { strays: true } : {}) },
       }
       const after = { present: true, pageStatus: found.page.status, region: snapshot(found.region) }
       const history = recordRegionStep(found.chapter.id, FINISHING_LABEL, regionId, before, after)
@@ -4283,8 +4309,10 @@ export function createMockBackend(options = {}) {
       const model = rerunTarget(found.region.mask, kind, engine) === NANO_BANANA_ENGINE ? nanoBananaMayRender(params) : null
       if (rerunTarget(found.region.mask, kind, engine) === NANO_BANANA_ENGINE && !model) return null
       const qwenEdit = checkedQwenEdit(params?.qwenEdit)
+      // Try again on a Nano Banana layer finishes as the layer was finished.
+      const recorded = recordedNanoBananaFinishing(found.region.mask.provenance)
       const result = cleaningHere(found, () => rerunRegionMask(found.region, toolContext, { kind, engine, qwenEdit }))
-      stampNanoBanana(result.mask, model)
+      stampNanoBanana(result.mask, model, recorded)
       notifyAll(result.notices)
       return {
         region: snapshot(found.region),
@@ -5062,6 +5090,9 @@ export function createMockBackend(options = {}) {
       if (patch?.undoLimit != null && !validUndoLimit(patch.undoLimit)) {
         throw new Error(`undoLimit must be a whole number from ${UNDO_LIMIT.min} to ${UNDO_LIMIT.max}`)
       }
+      // As `settings::check_known_shapes`, Nano Banana's finishing.
+      const nanoBananaRefused = nanoBananaFinishingRefusal(patch)
+      if (nanoBananaRefused) throw new Error(nanoBananaRefused)
       Object.assign(state.settings, patch)
       // As `settings.rs#write_settings`: cloud engines off withdraws the rest
       // of a Nano Banana window.
