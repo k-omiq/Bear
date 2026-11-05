@@ -33,8 +33,9 @@
 //!    the answer.
 //!
 //! [`Finishing`] picks the version: every screen step the bench measured, the
-//! steps without the screen, or a port of Manga Cleaner Reproduction's
-//! finishing ([`super::finishing`]) in place of all four. The default is bench 7's.
+//! steps without the screen, a port of Manga Cleaner Reproduction's
+//! finishing ([`super::finishing`]) in place of all four, or the renders' own
+//! tone fix ([`Finishing::ToneFix`]). The default is bench 7's.
 //!
 //! Prototyped in Python on the FLUX 3 bench (docs/research/flux3-klein-5_6b.md,
 //! bench 3) and measured against synthetic lettering over real pages.
@@ -87,10 +88,11 @@ const TENSOR_SIGMA: f64 = 2.0;
 const MIN_COHERENCE: f64 = 0.35;
 
 /// The finishing an answer gets before it is written. The first seven are
-/// this module's steps with one screen step or none; the last five are Manga
+/// this module's steps with one screen step or none; the next five are Manga
 /// Cleaner Reproduction's finishing v2, ported ([`super::finishing::Method`]),
 /// instead. Each of those still reads under the name it was first saved
-/// with, a serde alias.
+/// with, a serde alias. The last is the tone fix the renders ran before any
+/// of these existed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Finishing {
@@ -133,10 +135,19 @@ pub enum Finishing {
     /// The page's own dots copied in phase, nothing else (ported `raster`).
     #[serde(alias = "reference-raster")]
     DotsOnly,
+    /// The tone fix a Qwen, FLUX.2 Klein or LaMa answer gets when no
+    /// finishing takes its place: a correction curve per channel, learned
+    /// from box means on a ring outside the applied mask
+    /// ([`super::render::ToneSite`]), then grey if asked. No screen step. It
+    /// reads the lettering's ink and the page's opacity, which a [`Crop`]
+    /// does not carry, so the renders run it themselves
+    /// ([`super::render::PreparedRender::composite`], the LaMa rung) and
+    /// [`settle_with`] leaves the answer as it came.
+    ToneFix,
 }
 
 impl Finishing {
-    pub const ALL: [Finishing; 12] = [
+    pub const ALL: [Finishing; 13] = [
         Finishing::Copy,
         Finishing::CopyHops,
         Finishing::Redraw,
@@ -149,6 +160,7 @@ impl Finishing {
         Finishing::LocalTone,
         Finishing::Poisson,
         Finishing::DotsOnly,
+        Finishing::ToneFix,
     ];
 
     /// The ported method, for the five Manga Cleaner Reproduction versions.
@@ -233,6 +245,10 @@ fn finish(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
     let mask = crop.mask;
     let (w, h) = (mask.w, mask.h);
     let mut report = Report { gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0, choice, method_report: None };
+    if finishing == Finishing::ToneFix {
+        // The renders run the tone fix: it needs more of the page than a crop.
+        return (crop.answer.to_vec(), Report::tone_fix(grayscale));
+    }
     if let Some(method) = finishing.ported_method() {
         let (finished, details) = super::finishing::finish(crop, method, grayscale);
         report.method_report = Some(details);
@@ -311,6 +327,13 @@ fn finish(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
 }
 
 impl Report {
+    /// The record of a [`Finishing::ToneFix`] run. What it measured is the
+    /// tone alignment's own record ([`super::render::ToneReport`]).
+    pub fn tone_fix(grayscale: bool) -> Report {
+        let choice = Choice { finishing: Finishing::ToneFix, grayscale };
+        Report { gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0, choice, method_report: None }
+    }
+
     /// The record a patch's provenance keeps, with the version of this
     /// post-processing that made it. A Qwen (2.0.0) or LaMa patch finished
     /// here carries it too, so it names the post-processing and not the
@@ -629,7 +652,7 @@ mod tests {
         for (name, finishing) in old {
             assert_eq!(serde_json::from_value::<Finishing>(serde_json::json!(name)).unwrap(), finishing);
         }
-        let names: Vec<_> = Finishing::ALL[7..].iter().map(|f| serde_json::json!(f)).collect();
+        let names: Vec<_> = Finishing::ALL[7..12].iter().map(|f| serde_json::json!(f)).collect();
         assert_eq!(names, ["as-is", "global-tone", "local-tone", "poisson", "dots-only"].map(|n| serde_json::json!(n)));
         let choice: Choice = serde_json::from_value(serde_json::json!({"finishing": "reference-poisson", "grayscale": true})).unwrap();
         assert_eq!(choice, Choice { finishing: Finishing::Poisson, grayscale: true });

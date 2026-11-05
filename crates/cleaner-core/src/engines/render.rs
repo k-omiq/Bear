@@ -710,7 +710,9 @@ impl PreparedRender {
 
     /// Finish the answer by `finishing`. `None` is the version's own
     /// composite: V3 finishes by the default, V2 aligns tone, V1 writes the
-    /// answer as it came back. A picked finishing replaces V1's and V2's.
+    /// answer as it came back. A picked finishing replaces V1's and V2's;
+    /// [`super::postprocess::Finishing::ToneFix`] is V2's tone alignment, on
+    /// any version.
     pub fn set_finishing(&mut self, finishing: Option<super::postprocess::Choice>) {
         self.finishing = finishing;
     }
@@ -804,7 +806,13 @@ impl PreparedRender {
     }
 
     pub fn composite(&self, generated: &GeneratedCrop<'_>) -> Result<Rendered, Error> {
+        use super::postprocess::{Choice, Finishing, Report};
         let finishing = match (self.preprocessing, self.finishing) {
+            (_, Some(Choice { finishing: Finishing::ToneFix, grayscale })) => {
+                let mut rendered = self.blend_as(generated, Some(self.tone(generated)?), grayscale)?;
+                rendered.matched = Some(Report::tone_fix(grayscale));
+                return Ok(rendered);
+            }
             (_, Some(finishing)) => finishing,
             (Preprocessing::V3, None) => super::postprocess::Choice::default(),
             (Preprocessing::V2, None) => return self.blend(generated, Some(self.tone(generated)?)),
@@ -904,6 +912,12 @@ impl PreparedRender {
         generated: &GeneratedCrop<'_>,
         tone: Option<ToneReport>,
     ) -> Result<Rendered, Error> {
+        self.blend_as(generated, tone, false)
+    }
+
+    /// [`PreparedRender::blend`], each written pixel made grey after its tone
+    /// correction when `grey` is set.
+    fn blend_as(&self, generated: &GeneratedCrop<'_>, tone: Option<ToneReport>, grey: bool) -> Result<Rendered, Error> {
         self.validate_generated(generated)?;
         let mut patch = self.patch.clone();
         let managed = model::editable_color(&patch)?;
@@ -934,6 +948,9 @@ impl PreparedRender {
                         _ => model,
                     };
                     *value = model as f32;
+                }
+                if grey {
+                    rgb = [luma(rgb); 3];
                 }
                 model::commit_srgb(&managed, &mut patch, lx, ly, rgb, alpha, dither)?;
             }
@@ -1401,6 +1418,12 @@ fn finish(
         }
     }
     (rgb8, report)
+}
+
+/// The grey level of an RGB sample, Rec. 601 weights: the ones
+/// [`super::finishing::grey`] makes a colour answer grey with.
+pub(crate) fn luma([r, g, b]: [f32; 3]) -> f32 {
+    0.299 * r + 0.587 * g + 0.114 * b
 }
 
 /// How many channels a tone offset is measured for: one on a grey page, whose
@@ -2694,6 +2717,47 @@ mod tests {
             assert_eq!(finished.matched.as_ref().map(|report| report.choice), Some(choice), "{}", scene.name);
             assert!(residual(&scene, &finished) <= 4, "{}: residual {}", scene.name, residual(&scene, &finished));
             assert_eq!(finished.mask, aligned.mask, "{}: written through the same mask", scene.name);
+        }
+    }
+
+    /// **The tone fix is V2's tone alignment, on any version.** Picked on a V3
+    /// or a V2 preparation it writes exactly what an unpicked V2 composite
+    /// writes, keeps the tone record, and names itself in the report. Grey,
+    /// every written pixel has three equal channels.
+    #[test]
+    fn the_tone_fix_is_the_v2_tone_alignment() {
+        use super::super::postprocess::{Choice, Finishing};
+        for scene in scenes() {
+            let fitted = manual_fit(&scene);
+            let v2 = PreparedRender::prepare_as(&scene.page, &fitted, Preprocessing::V2).unwrap();
+            let answer = drifted(&v2, &scene.clean, [14, 9, 4]);
+            let generated = GeneratedCrop::new(v2.crop().w, v2.crop().h, &answer);
+            let aligned = v2.composite(&generated).unwrap();
+            for version in [Preprocessing::V2, Preprocessing::V3] {
+                let mut prepared = PreparedRender::prepare_as(&scene.page, &fitted, version).unwrap();
+                let choice = Choice { finishing: Finishing::ToneFix, grayscale: false };
+                prepared.set_finishing(Some(choice));
+                let fixed = prepared.composite(&generated).unwrap();
+                assert_eq!(fixed.pixels.data, aligned.pixels.data, "{} {version:?}", scene.name);
+                assert_eq!(fixed.tone.as_ref().map(|t| &t.curves), aligned.tone.as_ref().map(|t| &t.curves), "{}", scene.name);
+                assert_eq!(fixed.matched.as_ref().map(|report| report.choice), Some(choice), "{}", scene.name);
+
+                prepared.set_finishing(Some(Choice { finishing: Finishing::ToneFix, grayscale: true }));
+                let grey = prepared.composite(&generated).unwrap();
+                let pixels = &grey.pixels;
+                if matches!(pixels.mode, ColorMode::Rgb | ColorMode::Rgba) {
+                    let b = grey.mask.bounds;
+                    for y in b.y..b.bottom() {
+                        for x in b.x..b.right() {
+                            let (lx, ly) = ((x - b.x) as u32, (y - b.y) as u32);
+                            if grey.mask.contains(x, y) && prepared.alpha(x, y) == 1.0 {
+                                let (r, g, bl) = (pixels.sample8(lx, ly, 0), pixels.sample8(lx, ly, 1), pixels.sample8(lx, ly, 2));
+                                assert!(r.abs_diff(g) <= 1 && g.abs_diff(bl) <= 1, "{}: ({x}, {y}) is {r} {g} {bl}", scene.name);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

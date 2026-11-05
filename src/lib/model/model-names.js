@@ -75,7 +75,8 @@ export const WORK_LONG_SIDES = /** @type {const} */ ([768, 1024, 1280])
  * (`postprocess.rs#Finishing`, the `cloudFinishing` setting): a cloud FLUX 3
  * one always, the others when `finishingEveryModel` is on. The first is
  * the default. The four tone ones and `dots-only` are ported from Manga
- * Cleaner Reproduction's finishing v2.
+ * Cleaner Reproduction's finishing v2. `tone-fix` is the tone alignment the
+ * other models get when `finishingEveryModel` is off.
  */
 export const FINISHINGS = /** @type {const} */ ([
   'copy',
@@ -85,6 +86,7 @@ export const FINISHINGS = /** @type {const} */ ([
   'repeat-offsets',
   'tone-only',
   'tone-fill-dots',
+  'tone-fix',
   'global-tone',
   'local-tone',
   'poisson',

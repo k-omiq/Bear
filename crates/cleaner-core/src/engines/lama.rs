@@ -144,8 +144,8 @@ pub use crate::engines::model::{
     TILE_STRIDE, applied_mask, plan, tile_origins, write_bound,
 };
 use crate::engines::model::{AlphaRamp, AnswerMemo, answer_mode, ceiling_for, dither_at, f32_bytes, input_digest, page_crop, commit_srgb, tiles};
-use crate::engines::postprocess::{Choice, Report};
-use crate::engines::render::{Preprocessing, ToneReport, ToneSite, crop_opacity, crop_samples, tone_grids};
+use crate::engines::postprocess::{Choice, Finishing, Report};
+use crate::engines::render::{Preprocessing, ToneReport, ToneSite, crop_opacity, crop_samples, luma, tone_grids};
 use crate::mask::Rect;
 use crate::strip::window::EdgePad;
 
@@ -516,9 +516,16 @@ impl Inpainter {
     /// [`Inpainter::render`], with each tile's answer finished by `finishing`
     /// ([`crate::engines::postprocess::settle_with`]) in place of the tone
     /// alignment, and the hole cut by `hole`. `None` aligns tone, as
-    /// [`Inpainter::render`] does.
+    /// [`Inpainter::render`] does, and [`Finishing::ToneFix`] aligns it too,
+    /// then makes the answer grey if asked.
     pub fn render_with(&mut self, page: &Raster, fitted: &Fitted, finishing: Option<Choice>, hole: HoleMode) -> Result<Rendered, Error> {
         self.lease.touch();
+        // The tone fix is this render's own alignment: `tone_fix` holds its
+        // grey choice.
+        let (finishing, tone_fix) = match finishing {
+            Some(Choice { finishing: Finishing::ToneFix, grayscale }) => (None, Some(grayscale)),
+            finishing => (finishing, None),
+        };
         if let Some(decline) = declines(page, fitted) {
             return Err(decline.into());
         }
@@ -706,6 +713,9 @@ impl Inpainter {
                                 let mean = levels[channel.min(levels.len() - 1)][mean_at];
                                 *value = aligned.corrected(channel, f64::from(*value), mean) as f32;
                             }
+                            if tone_fix == Some(true) {
+                                rgb = [luma(rgb); 3];
+                            }
                             rgb
                         }
                     };
@@ -723,7 +733,8 @@ impl Inpainter {
             }
         }
 
-        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran, tone, matched: matched.map(|(_, report)| report) })
+        let matched = matched.map(|(_, report)| report).or(tone_fix.map(Report::tone_fix));
+        Ok(Rendered { mask: applied, pixels: patch, pad, tiles: ran, tone, matched })
     }
 
     /// The model's answer to one tile: the one it gave this same input
@@ -1152,6 +1163,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **The tone fix is LaMa's own tone alignment.** Picked, it writes what
+    /// an unpicked render writes and names itself in the report.
+    #[test]
+    fn the_tone_fix_is_the_unpicked_render() {
+        use crate::engines::postprocess::{Choice, Finishing};
+        let Some(held) = inpainter() else { return };
+        let Some(page) = screentone_page() else { return };
+        let mut held = held.lock().unwrap();
+        let fitted = fitted_over(&page, Rect::new(600, 800, 160, 90));
+        let aligned = held.render(&page, &fitted).expect("the region rendered");
+        let choice = Choice { finishing: Finishing::ToneFix, grayscale: false };
+        let fixed = held.render_with(&page, &fitted, Some(choice), HoleMode::default()).expect("the region rendered");
+        assert_eq!(fixed.pixels.data, aligned.pixels.data);
+        assert!(fixed.tone.is_some());
+        assert_eq!(fixed.matched.as_ref().map(|report| report.choice), Some(choice));
     }
 
     /// **A tiled region's lettering is no evidence of its page.** Paper with
