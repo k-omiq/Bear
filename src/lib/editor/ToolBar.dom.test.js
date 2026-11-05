@@ -855,6 +855,77 @@ describe('the Text cleanup panel', () => {
     setBackend(null)
   })
 
+  /*
+   * Clean on: Nano Banana. A paid request per region on the person's own key,
+   * so it is a place in the row, chosen like the cloud GPU, and the Run button
+   * starts its batch (`cloudrun.js#startCleanRun`). There is no button of its
+   * own beside Run.
+   */
+  describe('Clean on Nano Banana', () => {
+    /** @param {HTMLSelectElement} select */
+    const nanoBananaOption = (select) => /** @type {HTMLOptionElement} */ (select.querySelector('option[value="nanoBanana"]'))
+
+    afterEach(() => {
+      /** @type {any} */ (stores.capabilities).nanoBanana = false
+    })
+
+    it('is listed after the cloud, disabled with its reason while it has no key or Cloud engines are off', () => {
+      for (const [cloudAllowed, reason] of /** @type {const} */ ([[true, 'nanoBanana.target.noKey'], [false, 'nanoBanana.target.cloudOff']])) {
+        stores.session.cloudAllowed = cloudAllowed
+        const { view } = mountTool(textCleanup, { step: 'clean' })
+        const select = /** @type {HTMLSelectElement} */ (place(view, 'clean'))
+        const option = nanoBananaOption(select)
+        expect([...select.options].map((entry) => entry.value)).toEqual(['local', 'cloud', 'nanoBanana'])
+        expect(option.textContent?.trim()).toBe(t('nanoBanana.target.option'))
+        expect(option.disabled, reason).toBe(true)
+        expect(option.title).toBe(t(reason))
+        cleanup()
+      }
+    })
+
+    it('is offered with a key and Cloud engines on, and saved where the native setting reads it', async () => {
+      /** @type {any} */ (stores.capabilities).nanoBanana = true
+      const writeSettings = vi.fn(async () => ({}))
+      setBackend(/** @type {any} */ ({ writeSettings }))
+      const { view } = mountTool(textCleanup, { step: 'clean' })
+      const select = /** @type {HTMLSelectElement} */ (place(view, 'clean'))
+      expect(nanoBananaOption(select).disabled).toBe(false)
+      await fireEvent.change(select, { target: { value: 'nanoBanana' } })
+      await tick()
+      expect(writeSettings).toHaveBeenCalledWith({ cleanTarget: 'nanoBanana' })
+      expect(stores.session.cleanTarget).toBe('nanoBanana')
+    })
+
+    it('runs Clean on a page or a chapter, with no picks to choose and no button of its own', () => {
+      /** @type {any} */ (stores.capabilities).nanoBanana = true
+      stores.session.cleanTarget = 'nanoBanana'
+      const { view } = mountTool(textCleanup, { step: 'clean', scope: 'chapter' })
+      expect(runAction(view).disabled).toBe(false)
+      expect(radios(view, t('tools.param.scope'))).toEqual(['Page', 'Chapter'])
+      expect(view.queryByRole('button', { name: new RegExp(t('tools.action.advanced')) })).toBeNull()
+      expect(view.container.querySelector('[data-run-row="nanoBanana"]')).toBeNull()
+    })
+
+    it('does not start Detect & clean, and says why', () => {
+      /** @type {any} */ (stores.capabilities).nanoBanana = true
+      stores.session.cleanTarget = 'nanoBanana'
+      const { view } = mountTool(textCleanup, { step: 'auto' })
+      expect(runAction(view).disabled).toBe(true)
+      expect(noteOf(/** @type {any} */ (runAction(view)))).toBe(t('nanoBanana.target.cleanStepOnly'))
+    })
+
+    it('keeps a stranded Nano Banana choice selectable, and says it will not run', () => {
+      stores.session.cleanTarget = 'nanoBanana'
+      const { view } = mountTool(textCleanup, { step: 'clean' })
+      const select = /** @type {HTMLSelectElement} */ (place(view, 'clean'))
+      expect(select.value).toBe('nanoBanana')
+      expect(nanoBananaOption(select).disabled).toBe(false)
+      expect(noteOf(select)).toBe(`${t('tools.target.stranded')} ${t('nanoBanana.target.noKey')}`)
+      expect(runAction(view).disabled).toBe(true)
+      expect(noteOf(/** @type {any} */ (runAction(view)))).toBe(t('nanoBanana.target.noKey'))
+    })
+  })
+
   it('is a panel named Text cleanup, and every other tool is a pill', () => {
     const { view } = mountTool(textCleanup)
     expect(shell(view).dataset.shell).toBe('panel')

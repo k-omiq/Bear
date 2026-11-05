@@ -1272,6 +1272,74 @@ fn edit_with_consent(
     outcome
 }
 
+/// What one region of a Nano Banana batch came to ([`clean_for_nano_banana_batch`]).
+pub(crate) enum BatchRegion {
+    /// Cleaned, and the region as the chapter now holds it.
+    Cleaned(Box<ApiRegion>),
+    /// No longer a stored detection: deleted, or cleaned another way since the
+    /// batch was confirmed. Nothing was sent.
+    Gone,
+    /// Not cleaned, and why, as a `decline.reason.*` key.
+    Refused(&'static str),
+}
+
+/// One stored detection of a Nano Banana batch (`inference::nano_banana_job`),
+/// cleaned as `applyTool`'s Auto clean with `engine: nanobanana` cleans one,
+/// under `config`: the settings of the grant the batch already spent a region
+/// of for it. The batch calls this again for a retry of the same region, on
+/// the same share of its grant.
+///
+/// A region that is no longer a detection is [`BatchRegion::Gone`] before
+/// anything is read or sent, and so is one with a prepared text shape, which
+/// only its own command cleans.
+pub(crate) fn clean_for_nano_banana_batch(
+    app: &tauri::AppHandle,
+    library: &Library,
+    region_id: &str,
+    config: &crate::inference::nano_banana::Config,
+) -> Result<BatchRegion, String> {
+    let Some(located) = locate_region(library, region_id)? else { return Ok(BatchRegion::Gone) };
+    {
+        let _lock = run::lock_job(&located.job_path)?;
+        let job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+        if job.project.text_shape_plans.iter().any(|row| row.region_id == region_id) {
+            return Ok(BatchRegion::Gone);
+        }
+    }
+    let (geometry, requested) = existing_geometry(&located, region_id)?;
+    if !matches!(geometry, Geometry::StoredDetection) {
+        return Ok(BatchRegion::Gone);
+    }
+    let plan = Plan {
+        expected_source: None,
+        region_id: region_id.to_owned(),
+        geometry,
+        choice: Choice::Exact(Engine::NanoBanana),
+        source: "auto",
+        tool: Some("autoClean".to_owned()),
+        fill_mode: Some(fill_mode_key("match-surround")),
+        solid_color: None,
+        clears_untouched: true,
+        paint: None,
+        requested,
+        stroke: None,
+        drawn: None,
+        qwen_edit: None,
+    };
+    let mut bench = Bench::open(app);
+    let stored = crate::settings::read(app).ok()
+        .and_then(|s| s.get("engineCeiling").and_then(|v| v.as_str()).map(str::to_owned));
+    let ceiling = run::effective_ceiling(None, stored.as_deref());
+    bench.nano_banana = Some(config.clone());
+    let outcome = edit_with_bench(&mut bench, ceiling, &located, plan);
+    bench.nano_banana = None;
+    Ok(match outcome? {
+        Outcome::Cleaned(edited) => BatchRegion::Cleaned(Box::new(edited.region)),
+        Outcome::Refused(reason) => BatchRegion::Refused(reason),
+        Outcome::NotFound => BatchRegion::Gone,
+    })
+}
+
 /// The Nano Banana grant a request carries, if it carries one.
 fn nano_banana_grant_in(params: &serde_json::Value) -> Option<&str> {
     params.get("nanoBananaGrant").and_then(|value| value.as_str())

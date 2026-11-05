@@ -222,7 +222,7 @@ function viewport() {
  * @property {'normal'|'advanced'} detectionMode - the one detection choice; it fixes `detectorModels` and `textPolicy` (`pipelines.js#DETECTION_MODES`)
  * @property {string[]} detectorModels - the mode's detection models, by stored id; derived, never stored
  * @property {{rtFull: 'local'|'cloud', samTs: 'local'|'cloud'}} analysisTargets - where the two cloud-capable detection stages run; `cloud` needs consent per run
- * @property {'local'|'cloud'} cleanTarget - where Auto clean cleans stored detections; `cloud` needs consent per batch (docs/detect-clean.md)
+ * @property {'local'|'cloud'|'nanoBanana'} cleanTarget - where Clean cleans stored detections; `cloud` and `nanoBanana` need consent per batch (docs/detect-clean.md, `editor/nanobananarun.svelte.js`)
  * @property {boolean} cleanLocalFirst - whether cloud clean tries saved flat-colour picks here first
  * @property {boolean} cleanSolidOnly - whether a clean on this computer takes only speech bubbles on flat paper and leaves the rest detected
  * @property {768|1024|1280} cloudWorkLongSide - the long side a cloud FLUX 3 clean edits a smaller crop at; larger is slower and costs more per crop
@@ -412,8 +412,8 @@ export function sanitizeSession(raw) {
     // Two stages stored apart settle on this computer too: Detect on is one
     // place, and a migration never sends a model the user kept here.
     analysisTargets: unifyAnalysisTargets(record.analysisTargets),
-    // As strict as the native setting: anything but `cloud` keeps the work here.
-    cleanTarget: record.cleanTarget === 'cloud' ? 'cloud' : 'local',
+    // As strict as the native setting: anything it does not name keeps the work here.
+    cleanTarget: cleanTargetOf(record.cleanTarget),
     cleanLocalFirst: boolOr(record.cleanLocalFirst, base.cleanLocalFirst),
     cleanSolidOnly: boolOr(record.cleanSolidOnly, base.cleanSolidOnly),
     cloudWorkLongSide: workLongSideOr(record.cloudWorkLongSide, base.cloudWorkLongSide),
@@ -813,15 +813,29 @@ export function setAnalysisTarget(stage, target) {
 }
 
 /**
- * Where Auto clean cleans the regions it detected. Choosing `cloud` sends
- * nothing by itself: every batch asks for consent with the exact region count
- * and cost first (`editor/cloudrun.js`).
+ * A stored `cleanTarget`, or `local` for anything this build does not name,
+ * as strictly as the native setting reads it (`cloud_clean.rs#CleanTarget`).
  *
- * @param {string} target - `local` or `cloud`
+ * @param {unknown} value
+ * @returns {'local'|'cloud'|'nanoBanana'}
+ */
+export function cleanTargetOf(value) {
+  return value === 'cloud' || value === 'nanoBanana' ? value : 'local'
+}
+
+/**
+ * Where Clean cleans the regions already detected. Choosing `cloud` or
+ * `nanoBanana` sends nothing by itself: every batch asks for consent with the
+ * exact region count and cost first (`editor/cloudrun.js`,
+ * `editor/nanobananaask.svelte.js`). Nano Banana cleans only stored
+ * detections, so Detect & clean refuses to start with it
+ * (`ToolBar.svelte#blockedKey`).
+ *
+ * @param {string} target - `local`, `cloud` or `nanoBanana`
  */
 export function setCleanTarget(target) {
-  if (target !== 'local' && target !== 'cloud') return
-  session.cleanTarget = target
+  if (cleanTargetOf(target) !== target) return
+  session.cleanTarget = cleanTargetOf(target)
   save()
 }
 
@@ -1451,7 +1465,7 @@ export function adoptBackendSettings(settings) {
     save()
   }
   if (record.betaTools !== undefined) setBetaTools(record.betaTools === true)
-  if (record.cleanTarget !== undefined) setCleanTarget(record.cleanTarget === 'cloud' ? 'cloud' : 'local')
+  if (record.cleanTarget !== undefined) setCleanTarget(cleanTargetOf(record.cleanTarget))
   if (record.denoiseTarget !== undefined) setDenoiseTarget(normalizeDenoiseTarget(record.denoiseTarget))
   if (typeof record.denoisePreset === 'string') setDenoisePreset(record.denoisePreset)
   if (localSeconds(record.denoiseLocalSecondsPerPage) !== null) setDenoiseLocalSeconds(record.denoiseLocalSecondsPerPage)
@@ -1474,7 +1488,7 @@ export function adoptBackendSettings(settings) {
  * `analysisTargets` is read by `run_clean` when a caller does not name the
  * targets itself, so the saved choice is never silently ignored.
  *
- * @returns {{theme: string, readingDirection: string, cloudEngines: 'allowed'|'blocked', originalView: string, sidecarPath: string, fluxModel: string, fluxBackend: string, accelerator: string, modelAccelerators: Record<string,string>, analysisTargets: {rtFull: string, samTs: string}, cleanTarget: 'local'|'cloud', shortcuts: Record<string, import('../shortcuts.js').Chord|null>}}
+ * @returns {{theme: string, readingDirection: string, cloudEngines: 'allowed'|'blocked', originalView: string, sidecarPath: string, fluxModel: string, fluxBackend: string, accelerator: string, modelAccelerators: Record<string,string>, analysisTargets: {rtFull: string, samTs: string}, cleanTarget: 'local'|'cloud'|'nanoBanana', shortcuts: Record<string, import('../shortcuts.js').Chord|null>}}
  */
 export function backendSettingsPatch() {
   return {

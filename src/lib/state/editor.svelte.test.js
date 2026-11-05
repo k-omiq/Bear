@@ -1720,6 +1720,19 @@ describe('a clean the backend recorded', () => {
     expect(app.notices).toEqual([])
   })
 
+  it('replays every region of a Nano Banana batch\'s one step', async () => {
+    const other = { regionId: 'p0-d2', before: { present: true, pageStatus: 'detected', region: { ...detection, id: 'p0-d2' } },
+      after: { present: true, pageStatus: 'cleaned', region: { ...result, id: 'p0-d2' } } }
+    api.historyMove.mockResolvedValue({ cursor: 0, entry: { ...cleanStep, label: 'nanoBanana.job.undo', group: 'run-1',
+      parts: [{ regionId: 'p0-d1', before: cleanStep.before, after: cleanStep.after }, other] } })
+    undo()
+    await editor.history.running
+    expect(api.setRegionCleaned.mock.calls.map(([call]) => call)).toEqual([
+      { regionId: 'p0-d1', cleaned: false },
+      { regionId: 'p0-d2', cleaned: false },
+    ])
+  })
+
   it('replays a rejected result the other way round: undo puts the result back', async () => {
     onPage = detection
     await reloadPage(0)

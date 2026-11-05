@@ -179,3 +179,110 @@ describe('a Nano Banana grant on the mock', () => {
     expect(simpler?.mask.provenance.engine).toBe('flux')
   })
 })
+
+/**
+ * Start a batch over `regions` and wait for its end. Answers the events in
+ * order (type, or the notice key), the report and the run's summary.
+ *
+ * @param {any} mock @param {any[]} regions @param {{count?: number, onStart?: (runId: string) => void}} [options]
+ */
+async function batch(mock, regions, { count = regions.length, onStart } = {}) {
+  const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count })
+  /** @type {string[]} */
+  const seen = []
+  /** @type {any} */
+  let report = null
+  let done = (/** @type {any} */ _summary) => {}
+  const finished = new Promise((resolve) => { done = resolve })
+  const stop = mock.subscribe((/** @type {any} */ event) => {
+    if (event.type === 'history-changed') return
+    seen.push(event.type === 'notice' ? event.key : event.type)
+    if (event.type === 'nano-banana-report') report = event.report
+    if (event.type === 'run-finished') done(event)
+  })
+  const handle = await mock.startNanoBananaRun({ chapterId: CHAPTER, regionIds: regions.map((region) => region.id), nanoBananaGrant: grant })
+  onStart?.(handle.runId)
+  const summary = await finished
+  stop()
+  return { seen, report, summary, handle, grant }
+}
+
+describe('a Nano Banana batch on the mock', () => {
+  it('cleans every region, says so, and is one undo step', async () => {
+    const mock = await ready()
+    const regions = await detected(mock)
+    const before = (await mock.historyLoad({ chapterId: CHAPTER })).entries.length
+    const { seen, report, summary } = await batch(mock, regions)
+    expect(summary.reason).toBe('completed')
+    expect(report).toMatchObject({ total: regions.length, cleaned: regions.length, gone: 0, failed: [], left: [], byUser: false })
+    expect(report.stopped).toBeUndefined()
+    // The report and the notice come before the run's end, as natively.
+    expect(seen.slice(-3)).toEqual(['nano-banana-report', 'nanoBanana.job.finished', 'run-finished'])
+    expect(seen.filter((type) => type === 'region-done')).toHaveLength(regions.length)
+    const history = await mock.historyLoad({ chapterId: CHAPTER })
+    expect(history.entries.length).toBe(before + 1)
+    const step = await mock.historyMove({ chapterId: CHAPTER, direction: 'undo' })
+    expect(step.entry).toMatchObject({ op: 'clean-state', label: 'nanoBanana.job.undo' })
+    expect(step.entry.parts.map((/** @type {any} */ part) => part.regionId)).toEqual(regions.map((region) => region.id))
+  })
+
+  it('skips a refused crop with its reason and goes on', async () => {
+    const mock = await ready({ nanoBananaScenario: 'blocked' })
+    const regions = await detected(mock)
+    const { seen, report, summary } = await batch(mock, regions)
+    expect(summary.reason).toBe('completed')
+    expect(report.cleaned).toBe(regions.length - 1)
+    expect(report.failed).toEqual([{ regionId: regions[0].id, pageIndex: 0, reason: 'decline.reason.nanoBananaBlocked' }])
+    expect(seen).toContain('nanoBanana.job.finishedWithFailures')
+  })
+
+  it('stops at once on an account failure, and leaves the rest', async () => {
+    const mock = await ready({ nanoBananaScenario: 'billing' })
+    const regions = await detected(mock)
+    expect(regions.length).toBeGreaterThan(2)
+    const { seen, report, summary } = await batch(mock, regions)
+    expect(summary.reason).toBe('failed')
+    expect(report).toMatchObject({ cleaned: 1, stopped: 'decline.reason.nanoBananaBilling', byUser: false })
+    expect(report.left.map((/** @type {any} */ target) => target.regionId)).toEqual(regions.slice(1).map((region) => region.id))
+    expect(seen).toContain('nanoBanana.job.halted')
+  })
+
+  it('stops on Stop, withdraws the grant, and says the person stopped it', async () => {
+    const mock = await ready({ timing: { ...ZERO, region: 20 } })
+    const regions = await detected(mock)
+    const { report, summary, grant } = await batch(mock, regions, { onStart: (runId) => { void mock.cancelRun({ runId }) } })
+    expect(summary.reason).toBe('cancelled')
+    expect(report).toMatchObject({ stopped: 'decline.reason.nanoBananaStopped', byUser: true })
+    expect(report.cleaned + report.left.length).toBe(regions.length)
+    // The grant went with the Stop: nothing more goes on it.
+    const reasons = refusals(mock)
+    await clean(mock, regions[regions.length - 1], grant)
+    expect(reasons).toEqual(['decline.reason.nanoBananaNoConsent'])
+  })
+
+  it('refuses before reserving anything when the grant covers fewer regions', async () => {
+    const mock = await ready()
+    const regions = await detected(mock)
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    await expect(mock.startNanoBananaRun({ chapterId: CHAPTER, regionIds: regions.map((region) => region.id), nanoBananaGrant: grant }))
+      .rejects.toThrow('decline.reason.nanoBananaNoConsent')
+    await expect(mock.startNanoBananaRun({ chapterId: CHAPTER, regionIds: [], nanoBananaGrant: grant })).rejects.toThrow('nano_banana_no_regions')
+    expect(await mock.listJobs()).toEqual([])
+  })
+
+  it('refuses an undo of its step while it still runs', async () => {
+    const mock = await ready({ timing: { ...ZERO, region: 30 } })
+    const regions = await detected(mock)
+    let refused = /** @type {any} */ (null)
+    let firstDone = () => {}
+    const cleanedOne = new Promise((resolve) => { firstDone = () => resolve(undefined) })
+    mock.subscribe((/** @type {any} */ event) => { if (event.type === 'region-done') firstDone() })
+    const { summary } = await batch(mock, regions, {
+      onStart: () => {
+        void cleanedOne.then(() => mock.historyMove({ chapterId: CHAPTER, direction: 'undo' }).catch((/** @type {any} */ error) => { refused = error }))
+      },
+    })
+    expect(summary.reason).toBe('completed')
+    expect(String(refused?.message)).toMatch(/^run_step_in_progress/)
+  })
+})

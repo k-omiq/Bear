@@ -110,4 +110,27 @@ describe('the Jobs button', () => {
     await waitFor(() => expect(app.route).toMatchObject({ name: 'editor', projectId: 'p1', chapterId: 'c1' }))
     expect(queryByRole('button', { name: t('jobs.action.openLabel', { chapter: title }) })).toBeNull()
   })
+
+  it('says what a Nano Banana batch cleaned, and Details opens its summary', async () => {
+    registerJob({ runId: 'run-1', kind: 'nanoBanana', chapterId: 'c1', total: 2, ...NAMES })
+    const report = { total: 3, cleaned: 2, gone: 0, failed: [{ regionId: 'r2', pageIndex: 1, reason: 'decline.reason.nanoBananaBlocked' }], left: [], byUser: false }
+    backend.emit({ type: 'nano-banana-report', runId: 'run-1', chapterId: 'c1', report })
+    backend.emit({ type: 'run-finished', runId: 'run-1', chapterId: 'c1', reason: 'completed', pagesQueued: 2, pagesCleaned: 2, regionsCleaned: 2, nextPageIndex: null })
+    const { container, getByRole } = render(JobsIndicator)
+    await fireEvent.click(getByRole('button', { name: t('jobs.indicator.label', { count: 0 }) }))
+    const row = /** @type {HTMLElement} */ (container.querySelector('[data-job="run-1"]'))
+    expect(row.textContent).toContain(t('nanoBanana.job.kind'))
+    expect(row.textContent).toContain(t('nanoBanana.job.summaryCleaned', { cleaned: 2, total: 3 }))
+    await fireEvent.click(/** @type {HTMLElement} */ (row.querySelector('[data-action="details"]')))
+    expect(app.modals.at(-1)).toMatchObject({ kind: 'nanoBananaSummary', props: { runId: 'run-1' } })
+    app.modals.length = 0
+  })
+
+  it('offers no Details on a job with no Nano Banana report', async () => {
+    registerJob({ runId: 'run-1', kind: 'clean', chapterId: 'c1', total: 2, ...NAMES })
+    backend.emit({ type: 'run-finished', runId: 'run-1', chapterId: 'c1', reason: 'completed', pagesQueued: 2, pagesCleaned: 2, regionsCleaned: 3, nextPageIndex: null })
+    const { container, getByRole } = render(JobsIndicator)
+    await fireEvent.click(getByRole('button', { name: t('jobs.indicator.label', { count: 0 }) }))
+    expect(container.querySelector('[data-job="run-1"] [data-action="details"]')).toBeNull()
+  })
 })

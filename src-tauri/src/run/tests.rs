@@ -584,6 +584,8 @@ fn kind_of(event: &Event) -> &'static str {
         Event::HistoryChanged { .. } => "history-changed",
         // A backend speed measurement's progress. Never emitted by a run.
         Event::MeasureProgress { .. } => "measure-progress",
+        // A Nano Banana batch's closing report. Only its own job sends it.
+        Event::NanoBananaReport { .. } => "nano-banana-report",
     }
 }
 

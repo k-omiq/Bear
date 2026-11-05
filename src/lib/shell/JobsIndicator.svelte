@@ -2,7 +2,8 @@
   /**
    * The Jobs button, on Home's header and in the editor's top-right cluster:
    * how many runs and denoises are going, and a panel that lists each with its
-   * progress, Stop, Open and, once finished, Dismiss.
+   * progress, Stop, Open and, once finished, Dismiss. A finished Nano Banana
+   * batch says how many regions it cleaned and has Details, its summary.
    *
    * It draws nothing while the list is empty. The list itself is
    * `state/jobs.svelte.js`'s, so a job started in a dialog or in the editor
@@ -23,6 +24,7 @@
   import { t } from '../i18n/index.js'
   import { app } from '../state/app.svelte.js'
   import { jobTitle as titleOf } from './jobtitle.js'
+  import { openNanoBananaSummary } from '../editor/nanobananarun.svelte.js'
   import {
     clearFinishedJobs,
     dismissJob,
@@ -39,6 +41,7 @@
     detect: 'jobs.kind.detect',
     clean: 'jobs.kind.clean',
     cloudClean: 'jobs.kind.cloudClean',
+    nanoBanana: 'nanoBanana.job.kind',
     denoise: 'jobs.kind.denoise',
     cloudDenoise: 'jobs.kind.cloudDenoise',
   }
@@ -94,6 +97,9 @@
             <span class="facts">
               <span>{t(KIND_KEYS[job.kind])}</span>
               <span class:warn={job.status === 'failed'}>{statusOf(job)}</span>
+              {#if job.status !== 'running' && job.nanoBanana}
+                <span>{t('nanoBanana.job.summaryCleaned', { cleaned: job.nanoBanana.cleaned, total: job.nanoBanana.total })}</span>
+              {/if}
             </span>
             {#if job.status === 'running'}
               <div
@@ -123,6 +129,11 @@
                   onclick={() => stopJob(job.runId)}
                 >{job.stopping ? t('jobs.status.stopping') : t('jobs.action.stop')}</button>
               {:else}
+                {#if job.nanoBanana}
+                  <button type="button" class="act" data-action="details" onclick={() => openNanoBananaSummary(job.runId)}>
+                    {t('nanoBanana.job.details')}
+                  </button>
+                {/if}
                 <button type="button" class="act" data-action="dismiss" onclick={() => dismissJob(job.runId)}>
                   {t('jobs.action.dismiss')}
                 </button>

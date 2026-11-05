@@ -7122,6 +7122,9 @@ pub(crate) enum RunKind {
     Detect,
     Clean,
     CloudClean,
+    /// A consented Nano Banana batch (`inference::nano_banana_job`). Stopping
+    /// one also ends the Gemini request in flight and withdraws its grant.
+    NanoBanana,
 }
 
 impl RunKind {
@@ -7137,6 +7140,7 @@ impl RunKind {
             RunKind::Detect => "detect",
             RunKind::Clean => "clean",
             RunKind::CloudClean => "cloudClean",
+            RunKind::NanoBanana => "nanoBanana",
         }
     }
 }
@@ -7354,9 +7358,11 @@ pub(crate) fn chapter_run(chapter_id: &str) -> Option<String> {
 /// only when the chapter has a run.
 pub(crate) fn page_run(job_path: &Path, chapter_id: &str, page_index: usize) -> Option<RunKind> {
     let page = u32::try_from(page_index).ok()?;
+    let own = own_run();
     let runs: Vec<(RunKind, Vec<u32>)> = {
         let slots = active().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        slots.iter().filter(|run| run.progress.walks(job_path)).map(|run| {
+        slots.iter().filter(|run| run.progress.walks(job_path))
+            .filter(|run| own.as_deref() != Some(run.run_id.as_str())).map(|run| {
             let mut held = run.progress.pages_of(chapter_id);
             if run.admission.is_area() {
                 held.extend(run.area_page_index);
@@ -7420,7 +7426,43 @@ pub(crate) fn cancel_all() -> usize {
         run.cancel.store(true, Ordering::SeqCst);
         run.analysis_cancel.cancel();
     }
-    guard.len()
+    let nano_banana = guard.iter().any(|run| run.kind == RunKind::NanoBanana);
+    let count = guard.len();
+    drop(guard);
+    if nano_banana { crate::inference::nano_banana::nano_banana_stop(); }
+    count
+}
+
+/* ------------------------------------------------------------------ */
+/* Work done on a run's behalf                                         */
+/* ------------------------------------------------------------------ */
+
+thread_local! {
+    /// The run whose thread this is, while it edits regions through the same
+    /// path a click takes ([`on_behalf_of`]).
+    static OWN_RUN: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `work` as `run_id`'s own edit. A run that cleans its regions through
+/// the region edit path (`region.rs`) holds the pages it is on against every
+/// other writer, and its own edits must not be refused by that hold
+/// ([`page_run`] leaves it out). The clean steps it records join one undo
+/// step for the run (`history::record_clean`).
+pub(crate) fn on_behalf_of<T>(run_id: &str, work: impl FnOnce() -> T) -> T {
+    struct Restore(Option<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            OWN_RUN.with(|own| *own.borrow_mut() = previous);
+        }
+    }
+    let _restore = Restore(OWN_RUN.with(|own| own.borrow_mut().replace(run_id.to_owned())));
+    work()
+}
+
+/// The run this thread is editing for, if any ([`on_behalf_of`]).
+pub(crate) fn own_run() -> Option<String> {
+    OWN_RUN.with(|own| own.borrow().clone())
 }
 
 /// Holds the slot while consent is spent and the pipeline is prepared. A
@@ -7499,7 +7541,26 @@ fn reserve_scoped_run(chapter_id: &str, chapters: &[String], kind: RunKind, admi
 /// `body` owns the page events and every notice but the closing one; it reads
 /// the cancel flag it is handed and answers with the run's summary.
 pub(crate) fn start_reserved_in_slot<F>(
-    mut reservation: RunReservation, chapter_id: &str, pages: Vec<QueuedPage>, body: F,
+    reservation: RunReservation, chapter_id: &str, pages: Vec<QueuedPage>, body: F,
+) -> RunHandle
+where F: FnOnce(&str, &AtomicBool, &dyn Fn(Event)) -> Summary + Send + 'static,
+{
+    start_reserved_job(reservation, chapter_id, pages, body, Closing::Report)
+}
+
+/// The closing notice a [`start_reserved_job`] run ends on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Closing {
+    /// The run's own summary ([`report`]).
+    Report,
+    /// None: the body said how it went in words of its own.
+    Body,
+}
+
+/// [`start_reserved_in_slot`], with the closing notice the body may say
+/// itself (`closing`).
+pub(crate) fn start_reserved_job<F>(
+    mut reservation: RunReservation, chapter_id: &str, pages: Vec<QueuedPage>, body: F, closing: Closing,
 ) -> RunHandle
 where F: FnOnce(&str, &AtomicBool, &dyn Fn(Event)) -> Summary + Send + 'static,
 {
@@ -7514,7 +7575,7 @@ where F: FnOnce(&str, &AtomicBool, &dyn Fn(Event)) -> Summary + Send + 'static,
     let chapter_id = chapter_id.to_owned();
     std::thread::spawn(move || {
         let _release = Release { run_id: run_id.clone(), finished };
-        run_body(&run_id, &chapter_id, &cancel, &outcome, body, &|event| {
+        run_body(&run_id, &chapter_id, &cancel, &outcome, body, closing, &|event| {
             progress.observe(&event);
             events::emit(&event);
         });
@@ -7531,6 +7592,7 @@ pub(crate) fn run_body<F>(
     cancel: &AtomicBool,
     outcome: &Mutex<Option<&'static str>>,
     body: F,
+    closing: Closing,
     emit: &dyn Fn(Event),
 ) -> Summary
 where
@@ -7559,7 +7621,9 @@ where
     if let Ok(mut recorded) = outcome.lock() {
         *recorded = Some(summary.reason);
     }
-    report(&summary, None, emit);
+    if closing == Closing::Report {
+        report(&summary, None, emit);
+    }
     summary
 }
 
@@ -8634,7 +8698,7 @@ pub async fn cancel_run(run_id: Option<String>) -> Result<Option<String>, String
 /// that its cancel took. So the outcome is checked on both sides of the wait,
 /// and `null` - "there was nothing to cancel" - is the honest answer.
 fn request_cancel(run_id: Option<String>) -> Result<Option<String>, String> {
-    let (id, cancel, analysis_cancel, finished, outcome) = {
+    let (id, cancel, analysis_cancel, finished, outcome, kind) = {
         let guard = active().lock().map_err(|e| e.to_string())?;
         let run = match run_id.as_deref() {
             Some(asked) => guard.iter().find(|run| run.run_id == asked),
@@ -8648,6 +8712,7 @@ fn request_cancel(run_id: Option<String>) -> Result<Option<String>, String> {
             Arc::clone(&run.analysis_cancel),
             Arc::clone(&run.finished),
             Arc::clone(&run.outcome),
+            run.kind,
         )
     };
     if completed_already(&outcome) {
@@ -8655,6 +8720,11 @@ fn request_cancel(run_id: Option<String>) -> Result<Option<String>, String> {
     }
     cancel.store(true, Ordering::SeqCst);
     analysis_cancel.cancel();
+    // A Nano Banana batch is most often inside one long request: that request
+    // ends now, and the rest of the grant is withdrawn so nothing more is sent.
+    if kind == RunKind::NanoBanana {
+        crate::inference::nano_banana::nano_banana_stop();
+    }
 
     let (lock, condvar) = &*finished;
     let mut done = lock.lock().map_err(|e| e.to_string())?;

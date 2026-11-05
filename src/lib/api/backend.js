@@ -275,7 +275,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {'run-finished'} type
  * @property {string} runId
  * @property {string} chapterId
- * @property {'completed'|'cancelled'} reason
+ * @property {'completed'|'cancelled'|'failed'} reason - `failed` only for a Nano Banana batch an account failure stopped
  * @property {number} pagesQueued
  * @property {number} pagesCleaned
  * @property {number} regionsCleaned
@@ -349,7 +349,27 @@ import { createTauriBackend, isTauri } from './tauri.js'
  */
 
 /**
- * @typedef {PageStartedEvent|RegionDoneEvent|PageDoneEvent|RunFinishedEvent|NoticeEvent|ModelProgressEvent|HistoryChangedEvent|MeasureProgressEvent} BackendEvent
+ * How a Nano Banana batch ended (`nano_banana_job.rs#Report`), sent just
+ * before its `run-finished`.
+ *
+ * @typedef {Object} NanoBananaReport
+ * @property {number} total - regions the batch was handed
+ * @property {number} cleaned
+ * @property {number} gone - no longer detections when their turn came; nothing was sent
+ * @property {Array<{regionId: string, pageIndex: number, reason: string}>} failed - tried and not cleaned, each with its `decline.reason.*` key
+ * @property {Array<{regionId: string, pageIndex: number}>} left - not reached, because the batch stopped first
+ * @property {string} [stopped] - why it stopped early, a reason key
+ * @property {boolean} byUser - the stop was the person's Stop
+ *
+ * @typedef {Object} NanoBananaReportEvent
+ * @property {'nano-banana-report'} type
+ * @property {string} runId
+ * @property {string} chapterId
+ * @property {NanoBananaReport} report
+ */
+
+/**
+ * @typedef {PageStartedEvent|RegionDoneEvent|PageDoneEvent|RunFinishedEvent|NoticeEvent|ModelProgressEvent|HistoryChangedEvent|MeasureProgressEvent|NanoBananaReportEvent} BackendEvent
  */
 
 /* ------------------------------------------------------------------ */
@@ -473,6 +493,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {() => Promise<void>} deleteNanoBananaKey - remove the stored Gemini key
  * @property {(spec: { model: string, count: number }) => Promise<{ grant: string, model: string, count: number }>} grantNanoBanana - the grant for a Nano Banana window the person just confirmed: `count` regions on `model` (the model the window showed), with the instruction as saved now. The backend keeps it and sends it with each Nano Banana render; rejects with a `decline.reason.*` key while cloud engines are off or settings name another model
  * @property {() => Promise<void>} nanoBananaStop - stop the Nano Banana request in flight and withdraw the rest of the window's grant
+ * @property {(spec: { chapterId: string, regionIds: string[] }) => Promise<RunHandle>} startNanoBananaRun - clean these stored detections of the chapter with Nano Banana, on the grant the last confirmed window made (the backend sends it). A run in the ordinary run slot, kind `nanoBanana`: ordinary run events, then `nano-banana-report` before `run-finished`; `cancelRun` stops it and withdraws the grant. Rejects with a `decline.reason.*` key while cloud engines are off or the grant does not cover every region
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole, secret: string, tokenId?: string, sessionOnly?: boolean }) => Promise<SecretSummary>} storeCloudSecret - store cloud credential into OS keyring or session store (write-only)
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole }) => Promise<SecretSummary>} deleteCloudSecret - delete cloud credential from OS keyring and session store
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole }) => Promise<SecretSummary>} getCloudSecretSummary - query safe summary of cloud credential presence
@@ -574,7 +595,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  *
  * @typedef {Object} RunningJob
  * @property {string} runId
- * @property {'detect'|'clean'|'cloudClean'|'denoise'|'cloudDenoise'} kind
+ * @property {'detect'|'clean'|'cloudClean'|'nanoBanana'|'denoise'|'cloudDenoise'} kind
  * @property {string} chapterId
  * @property {number} done - pages finished
  * @property {number} total

@@ -77,6 +77,7 @@ import { configurationKey, configurationFailed } from '../state/cloudconfig.svel
 import { adoptRun, claimAreaRunStart, claimRunStart, editor, releaseAreaRunStart, releaseRunStart, runFinished, solidOnlyOf, startRun } from '../state/editor.svelte.js'
 import { finishCloudRun, trackCloudRun } from '../state/cloudgpu.svelte.js'
 import { session } from '../state/session.svelte.js'
+import { startNanoBananaRun } from './nanobananarun.svelte.js'
 
 /**
  * The capabilities the current settings send to the cloud GPU, sorted. Empty
@@ -366,10 +367,13 @@ async function usableReadiness(backend) {
  * detection run's id; the cloud clean follows it once it has finished, on its
  * own consent.
  *
+ * With Clean on Nano Banana, Clean is its batch (`nanobananarun.svelte.js`),
+ * on its own consent, and Detect & clean does not start.
+ *
  * The run shortcuts name their own step and Solid bubbles only in place of
  * the panel's (`override`). Solid bubbles only is a clean on this computer,
- * so with it the clean half never goes to the cloud GPU, whatever Clean on
- * says; detection still goes where Detect on sends it.
+ * so with it the clean half never goes to the cloud GPU or Nano Banana,
+ * whatever Clean on says; detection still goes where Detect on sends it.
  *
  * @param {'page'|'chapter'|'project'} scope - `page` and `chapter` can go to
  *   the cloud; a project cannot, since each chapter needs its own consent
@@ -382,6 +386,16 @@ export async function startCleanRun(scope = 'page', backend = getBackend(), over
   if (!token) return null
   try {
     const step = override.step ?? runStep()
+    // Clean on Nano Banana: its own batch, with its own consent. It cleans
+    // stored detections only, so Detect & clean is refused rather than run
+    // here on this computer instead.
+    if (step !== 'detect' && session.cleanTarget === 'nanoBanana' && override.solidOnly !== true) {
+      if (step !== 'clean' || (scope !== 'page' && scope !== 'chapter')) {
+        notify({ key: step !== 'clean' ? 'nanoBanana.target.cleanStepOnly' : 'nanoBanana.target.scopeProject', tone: 'warn' })
+        return null
+      }
+      return await startNanoBananaRun(scope, backend, token)
+    }
     const solid = { step, ...(override.solidOnly === undefined ? {} : { solidOnly: override.solidOnly }) }
     const parts = override.solidOnly === true ? { ...cloudParts(step), clean: false } : cloudParts(step)
     // A clean with FLUX on this computer asks what to clean first, as a

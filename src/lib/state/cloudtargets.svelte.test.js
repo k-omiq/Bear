@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { setBackend } from '../api/backend.js'
 import { cloud } from './cloud.svelte.js'
 import { chooseCleanTarget, chooseDetectTarget, chooseDetectionMode, cloudTargetKey, syncCloudOffer, targets } from './cloudtargets.svelte.js'
-import { backendSettingsPatch, session, setAnalysisTarget, setCleanTarget, setCloudAllowed, setDetectionMode, setOcrRescue } from './session.svelte.js'
+import { backendSettingsPatch, cleanTargetOf, session, setAnalysisTarget, setCleanTarget, setCloudAllowed, setDetectionMode, setOcrRescue } from './session.svelte.js'
 import { writeSettingsSerialized } from './settingswrite.js'
 
 function deferred() {
@@ -47,6 +47,18 @@ it('serializes quick Cloud then Local and keeps the later clean choice after a f
   expect(durable.cleanTarget).toBe('local')
   expect(writeSettings.mock.calls.map(([patch]) => patch.cleanTarget)).toEqual(['cloud', 'local'])
   expect(targets.cleanSaveFailed).toBe(false)
+})
+
+it('saves Clean on Nano Banana, and reads anything it does not name as this computer', async () => {
+  const writeSettings = vi.fn(async () => ({}))
+  setBackend(/** @type {any} */ ({ writeSettings }))
+  expect(await chooseCleanTarget('nanoBanana')).toBe(true)
+  expect(session.cleanTarget).toBe('nanoBanana')
+  expect(writeSettings).toHaveBeenCalledWith({ cleanTarget: 'nanoBanana' })
+  expect(backendSettingsPatch().cleanTarget).toBe('nanoBanana')
+  expect(await chooseCleanTarget('gemini')).toBe(false)
+  expect(cleanTargetOf('NanoBanana')).toBe('local')
+  expect(cleanTargetOf(undefined)).toBe('local')
 })
 
 it('takes a full snapshot at its turn without overwriting a newer targeted choice', async () => {

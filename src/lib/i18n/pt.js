@@ -3381,6 +3381,51 @@ export const pt = {
     },
   },
   nanoBanana: {
+    // A Nano Banana batch as a job (`nano_banana_job.rs`).
+    job: {
+      kind: 'Limpar com Nano Banana',
+      active: 'Limpando com Nano Banana',
+      undo: 'regiões limpas com Nano Banana',
+      notStarted: 'O lote do Nano Banana não começou, então nada foi enviado.',
+      finished: 'O Nano Banana limpou {cleaned} de {total} regiões.',
+      finishedWithFailures: 'O Nano Banana limpou {cleaned} de {total} regiões. {failed} não puderam ser limpas.',
+      stopped: 'O Nano Banana parou. Ele limpou {cleaned} de {total} regiões.',
+      halted: 'O Nano Banana parou antes do fim: {reasonKey}. Ele limpou {cleaned} de {total} regiões.',
+      details: 'Detalhes',
+      summaryTitle: 'Lote do Nano Banana',
+      summaryCleaned: '{cleaned} de {total} regiões limpas.',
+      summaryStopped: 'Você parou o lote.',
+      summaryHalted: 'Ele parou antes do fim: {reasonKey}.',
+      summaryGone: {
+        one: '1 região não esperava mais limpeza, então nada foi enviado para ela.',
+        other: '{count} regiões não esperavam mais limpeza, então nada foi enviado para elas.',
+      },
+      summaryReason: {
+        one: '1 região: {reasonKey}',
+        other: '{count} regiões: {reasonKey}',
+      },
+      summaryLeft: {
+        one: '1 região não foi alcançada.',
+        other: '{count} regiões não foram alcançadas.',
+      },
+      summaryPages: 'Páginas: {pages}',
+      retry: {
+        one: 'Enviar 1 região de novo',
+        other: 'Enviar {count} regiões de novo',
+      },
+      retryHint: 'Abra este capítulo para enviá-las de novo.',
+      reason: {
+        error: 'não foi possível salvar',
+      },
+    },
+    // Clean on: Nano Banana (Text cleanup panel).
+    target: {
+      option: 'Nano Banana (Google)',
+      noKey: 'O Nano Banana precisa de uma chave de API do Gemini. Salve uma em Configurações > Nuvem.',
+      cloudOff: 'O Nano Banana precisa dos motores na nuvem ligados nas Configurações.',
+      cleanStepOnly: 'O Nano Banana limpa regiões já detectadas. Escolha Limpar, ou outro lugar em Limpar em.',
+      scopeProject: 'O Nano Banana limpa uma página ou um capítulo por vez.',
+    },
     settings: {
       heading: 'Nano Banana',
       description: 'Limpa uma região com o modelo de imagem Gemini da Google, usando a sua própria chave de API. Cada região envia um recorte da página à Google e é cobrada na sua chave.',
@@ -3413,17 +3458,12 @@ export const pt = {
       promptHint: 'As suas palavras são juntadas à instrução de remoção incluída e enviadas à Google. A edição fica dentro da região marcada.',
       promptNotSaved: 'Não foi possível guardar a nota, por isso nada foi enviado.',
       readFailed: 'Não foi possível ler as regiões a limpar, por isso nada foi enviado.',
-      button: 'Limpar com Nano Banana',
-      stop: 'Parar ({done} de {total})',
-      stopping: 'A parar ({done} de {total})',
       title: 'Limpar com Nano Banana',
       regions: 'Regiões a limpar: {count}. Um pedido pago por cada uma, ou um só para várias regiões próximas.',
       cost: 'Custo estimado: de {low} a {high}.',
       sent: 'Cada região envia um recorte da página à Google. Com chaves gratuitas, a Google pode usá-lo para melhorar os seus produtos.',
       cancel: 'Cancelar',
       confirm: 'Enviar e limpar',
-      finished: 'O Nano Banana limpou {cleaned} de {total} regiões.',
-      stoppedFailing: 'O Nano Banana parou após três falhas seguidas.',
     },
   },
   cloud: {
