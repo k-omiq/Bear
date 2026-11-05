@@ -38,7 +38,7 @@ describe('the session’s shortcut overrides', () => {
         'view.maskOverlay': { key: '9' }, //     kept, normalized
         'edit.redo': null, //                    kept: cleared on purpose
         'tool.retouch': { key: 'k' }, //         an id this build does not have
-        'edit.undo': { key: 'Tab' }, //          a key that cannot carry a binding
+        'edit.undo': { key: 'ContextMenu' }, //  a key that cannot carry a binding
         'app.cancel': { key: 'q' }, //           not the user's to change
         'zoom.fit': 'nonsense', //               not a chord at all
       },
@@ -228,5 +228,99 @@ describe('windowGesture', () => {
     )
     gesture.destroy?.()
     expect(target.releasePointerCapture).toHaveBeenCalledWith(1)
+  })
+})
+
+/**
+ * Two entries ship with no key: the two page runs. Their default is "nothing", so an empty binding is no difference at
+ * all, and a key the user gives one is held to the same rules as any other.
+ */
+describe('a shortcut that ships with no key', () => {
+  afterEach(() => resetAllShortcutBindings())
+
+  it('matches nothing and stores nothing until it is given a key', () => {
+    expect(shortcuts().find((entry) => entry.id === 'run.solidBubbles')?.keys).toEqual([])
+    expect(session.shortcuts).toEqual({})
+    expect(clearShortcutBinding('run.solidBubbles')).toEqual({ ok: true })
+    expect(session.shortcuts).toEqual({})
+    expect(backendSettingsPatch().shortcuts).toEqual({})
+  })
+
+  it('saves a key the user gives it, loads it back, and runs on it', () => {
+    expect(setShortcutBinding('run.solidBubbles', { key: 'F9' })).toEqual({ ok: true })
+    const saved = JSON.parse(JSON.stringify(backendSettingsPatch().shortcuts))
+    expect(saved).toEqual({ 'run.solidBubbles': { key: 'F9', shift: false, accel: false } })
+
+    resetAllShortcutBindings()
+    expect(matchShortcut(press('F9'), editor)).toBe(null)
+    adoptBackendSettings({ shortcuts: saved })
+    expect(session.shortcuts).toEqual(saved)
+    expect(matchShortcut(press('F9'), editor)?.id).toBe('run.solidBubbles')
+    expect(sanitizeSession({ shortcuts: saved }).shortcuts).toEqual(saved)
+  })
+
+  it('goes back to no key on a reset or a clear, and a stored clear is dropped', () => {
+    setShortcutBinding('run.fullClean', { key: 'F10', shift: true })
+    expect(resetShortcutBinding('run.fullClean')).toEqual({ ok: true })
+    expect(session.shortcuts).toEqual({})
+    setShortcutBinding('run.fullClean', { key: 'F10', shift: true })
+    expect(clearShortcutBinding('run.fullClean')).toEqual({ ok: true })
+    expect(session.shortcuts).toEqual({})
+    expect(matchShortcut(press('F10', { shiftKey: true }), editor)).toBe(null)
+    expect(sanitizeSession({ shortcuts: { 'run.solidBubbles': null } }).shortcuts).toEqual({})
+  })
+
+  it('is refused a key another shortcut holds, and holds its own against the rest', () => {
+    const taken = setShortcutBinding('run.solidBubbles', { key: 'q' })
+    expect(taken).toEqual({ ok: false, reasonKey: 'shortcuts.rebind.refusedConflict', conflictId: 'tool.mode.next' })
+    expect(session.shortcuts).toEqual({})
+
+    expect(setShortcutBinding('run.solidBubbles', { key: 'F8' }).ok).toBe(true)
+    const second = setShortcutBinding('run.fullClean', { key: 'F8' })
+    expect(second).toMatchObject({ ok: false, conflictId: 'run.solidBubbles' })
+    // Shift makes it another press, which is free.
+    expect(setShortcutBinding('run.fullClean', { key: 'F8', shift: true }).ok).toBe(true)
+  })
+})
+
+/**
+ * The mode key (`Q`) is the one shortcut that steps the selected tool's mode.
+ * It may be moved to Tab, which still moves the focus wherever a control holds
+ * it.
+ */
+describe('the mode key on Tab', () => {
+  afterEach(() => resetAllShortcutBindings())
+
+  it('takes Tab and Shift+Tab, saves them, and answers them on the canvas', () => {
+    expect(setShortcutBinding('tool.mode.next', { key: 'Tab' })).toEqual({ ok: true })
+    expect(setShortcutBinding('tool.mode.prev', { key: 'Tab', shift: true })).toEqual({ ok: true })
+    expect(sanitizeSession({ shortcuts: backendSettingsPatch().shortcuts }).shortcuts).toEqual({
+      'tool.mode.next': { key: 'Tab', shift: false, accel: false },
+      'tool.mode.prev': { key: 'Tab', shift: true, accel: false },
+    })
+    expect(matchShortcut(press('Tab'), editor)?.id).toBe('tool.mode.next')
+    expect(matchShortcut(press('Tab', { shiftKey: true }), editor)?.id).toBe('tool.mode.prev')
+    const region = { tagName: 'BUTTON', closest: (sel) => (sel === '[data-canvas-viewport]' ? {} : null), getAttribute: () => null }
+    expect(matchShortcut(press('Tab', { target: region }), editor)?.id).toBe('tool.mode.next')
+    // Q no longer runs it.
+    expect(matchShortcut(press('q'), editor)).toBe(null)
+  })
+
+  it('leaves Tab to the focus on a control outside the canvas, and to a text field', () => {
+    setShortcutBinding('tool.mode.next', { key: 'Tab' })
+    const button = { tagName: 'BUTTON', closest: () => null, getAttribute: () => null }
+    const row = { tagName: 'DIV', closest: () => null, getAttribute: (name) => (name === 'tabindex' ? '0' : null) }
+    const field = { tagName: 'INPUT', type: 'text', closest: () => null, getAttribute: () => null }
+    expect(matchShortcut(press('Tab', { target: button }), editor)).toBe(null)
+    expect(matchShortcut(press('Tab', { target: row }), editor)).toBe(null)
+    expect(matchShortcut(press('Tab', { target: field }), editor)).toBe(null)
+  })
+
+  it('can be cleared, and Q given back', () => {
+    expect(clearShortcutBinding('tool.mode.next')).toEqual({ ok: true })
+    expect(session.shortcuts).toEqual({ 'tool.mode.next': null })
+    expect(matchShortcut(press('q'), editor)).toBe(null)
+    resetShortcutBinding('tool.mode.next')
+    expect(matchShortcut(press('q'), editor)?.id).toBe('tool.mode.next')
   })
 })

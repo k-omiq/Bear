@@ -2542,6 +2542,7 @@ export const es = {
   shortcuts: {
     group: {
       tools: 'Herramientas',
+      modes: 'Modos y formas',
       brush: 'Pincel y margen',
       view: 'Vista',
       edit: 'Edición',
@@ -2549,7 +2550,30 @@ export const es = {
       navigation: 'Navegación',
       panels: 'Paneles',
       app: 'Aplicación',
+      run: 'Ejecución',
       pointer: 'Puntero',
+    },
+    tabs: {
+      label: 'Tipos de atajos',
+    },
+    tab: {
+      tools: 'Herramientas',
+      brush: 'Pincel',
+      run: 'Ejecutar',
+      edit: 'Edición',
+      view: 'Vista',
+      app: 'App',
+      pointer: 'Ratón',
+    },
+    search: {
+      label: 'Buscar atajos',
+      placeholder: 'Buscar por nombre o tecla',
+      clear: 'Borrar búsqueda',
+      empty: 'Ningún atajo coincide con «{query}».',
+    },
+    run: {
+      solidBubbles: 'Limpiar esta página, solo globos lisos',
+      fullClean: 'Limpiar esta página por completo',
     },
     navigation: {
       preset: 'Mover el lienzo',
@@ -2590,8 +2614,8 @@ export const es = {
       cancelRun: 'Cancelar ejecución',
       shapeNext: 'Forma siguiente',
       shapePrev: 'Forma anterior',
-      modeNext: 'Modo, tipo o motor siguiente',
-      modePrev: 'Modo, tipo o motor anterior',
+      modeNext: 'Modo siguiente de la herramienta seleccionada',
+      modePrev: 'Modo anterior de la herramienta seleccionada',
       maskAdd: 'Selección: añadir a las máscaras',
       maskRemove: 'Selección: quitar de las máscaras (otra vez: añadir)',
       maskDetect: 'Selección: detectar en un área (otra vez: añadir)',
@@ -2736,6 +2760,7 @@ export const es = {
       },
     },
     run: {
+      startFailed: 'No se pudo iniciar la limpieza de texto. No se cambió nada.',
       busy: 'Otra ejecución está empezando o ya está en curso. Espera a que termine.',
       atCapacity: 'Ya está en curso el máximo de ejecuciones simultáneas. Espera a que termine una y luego inicia esta.',
       pageBusy: 'Una ejecución está trabajando en esta página. No se cambió nada; inténtalo de nuevo cuando pase a la siguiente.',

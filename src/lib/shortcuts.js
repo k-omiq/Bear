@@ -68,6 +68,7 @@ import { pageNavControls } from './model/paging.js'
  * @property {() => void} runTextCleanup - the held Patch or Gradient selection applied, else Text cleanup's run as its panel has it set
  * @property {(direction: number) => void} cycleCleanScope - Text cleanup's scope
  * @property {() => void} cancelRun
+ * @property {(kind: 'solid'|'full') => void} runPageClean - Detect and clean of the open page, Solid bubbles only or everything
  * @property {() => void} cleanSelectedRegion - clean the selected detection, or try the selected cleaned region again
  * @property {(held: boolean) => void} holdOriginal
  * @property {(held: boolean) => void} holdPan - a left drag moves the canvas while held
@@ -97,10 +98,10 @@ import { pageNavControls } from './model/paging.js'
  * @property {string} group - one of `SHORTCUT_GROUPS`
  * @property {string} labelKey - i18n key for the sheet. Never English.
  * @property {(ctx: {readingDirection?: 'rtl'|'ltr'}) => string} [labelKeyFor] - direction-aware label, wins over `labelKey`
- * @property {string[]} keys - `event.key` values that match, letters lower-cased (see `normalizeKey`)
+ * @property {string[]} keys - `event.key` values that match, letters lower-cased (see `normalizeKey`). Empty for an entry that ships with no key: it matches nothing until the user gives it one
  * @property {boolean} [shift] - require Shift down (true) or up (false); omitted means either
  * @property {boolean} [accel] - require the platform's command modifier (⌘ or Ctrl). Without it, an entry never matches a modifier chord
- * @property {string[]} chord - how the sheet renders it, one `<kbd>` per element
+ * @property {string[]} chord - how the sheet renders it, one `<kbd>` per element. Empty exactly when `keys` is
  * @property {(ctx: {apple?: boolean}) => string[]} [chordFor] - platform-aware chord, wins over `chord`
  * @property {'global'|'home'|'editor'} scope
  * @property {boolean} [allowInModal] - fires even with a dialog open
@@ -132,7 +133,9 @@ import { pageNavControls } from './model/paging.js'
 /** Sheet sections, in display order. Each has an i18n key of the same name. */
 export const SHORTCUT_GROUPS = /** @type {const} */ ([
   'tools',
+  'modes',
   'brush',
+  'run',
   'view',
   'edit',
   'zoom',
@@ -242,7 +245,7 @@ export const SHORTCUTS = [
     // The Gradient tool's Auto type in one key: a selection over a shaded
     // bubble's lettering fills from all round it as soon as it is drawn.
     id: 'tool.gradientAuto',
-    group: 'tools',
+    group: 'modes',
     labelKey: 'shortcuts.tool.gradientAuto',
     keys: ['g'],
     shift: true,
@@ -255,7 +258,7 @@ export const SHORTCUTS = [
     // tool. A chord, because a bare key that starts a run over a chapter is
     // one a fumbled keystroke starts too.
     id: 'tool.runCleanup',
-    group: 'tools',
+    group: 'run',
     labelKey: 'shortcuts.tool.runCleanup',
     keys: ['Enter'],
     accel: true,
@@ -270,7 +273,7 @@ export const SHORTCUTS = [
     // while the run is all on this computer, as in the panel. Pressed with
     // another tool active it opens Text cleanup first, so the change is seen.
     id: 'tool.cleanScope.next',
-    group: 'tools',
+    group: 'run',
     labelKey: 'shortcuts.tool.cleanScopeNext',
     keys: ['v'],
     shift: false,
@@ -280,7 +283,7 @@ export const SHORTCUTS = [
   },
   {
     id: 'tool.cleanScope.prev',
-    group: 'tools',
+    group: 'run',
     labelKey: 'shortcuts.tool.cleanScopePrev',
     keys: ['v'],
     shift: true,
@@ -291,7 +294,7 @@ export const SHORTCUTS = [
   {
     // The run button's other half: what Cancel beside the progress does.
     id: 'tool.cancelRun',
-    group: 'tools',
+    group: 'run',
     labelKey: 'shortcuts.tool.cancelRun',
     keys: ['.'],
     accel: true,
@@ -301,11 +304,37 @@ export const SHORTCUTS = [
     run: (c) => c.cancelRun(),
   },
   {
+    // The two runs a page most often needs, on keys of the user's choosing:
+    // none ships bound, because every bare key is spent and a chord that
+    // starts a run should be one the user picked. Both are a Detect and clean
+    // of the open page, whatever step and scope the panel is set to; Solid
+    // bubbles only paints the speech bubbles on flat paper and leaves the
+    // rest detected, the full one cleans everything the panel's engines do.
+    id: 'run.solidBubbles',
+    group: 'run',
+    labelKey: 'shortcuts.run.solidBubbles',
+    keys: [],
+    chord: [],
+    skipInTextEntry: true,
+    scope: 'editor',
+    run: (c) => c.runPageClean('solid'),
+  },
+  {
+    id: 'run.fullClean',
+    group: 'run',
+    labelKey: 'shortcuts.run.fullClean',
+    keys: [],
+    chord: [],
+    skipInTextEntry: true,
+    scope: 'editor',
+    run: (c) => c.runPageClean('full'),
+  },
+  {
     // The active tool's shape - rectangle, ellipse, lasso, brush - in the
     // bar's order, for every tool that has one. A tool without a shape arms
     // the selection tool, which is what `S` did before any other tool had one.
     id: 'tool.shape.next',
-    group: 'tools',
+    group: 'modes',
     labelKey: 'shortcuts.tool.shapeNext',
     keys: ['s'],
     shift: false,
@@ -315,7 +344,7 @@ export const SHORTCUTS = [
   },
   {
     id: 'tool.shape.prev',
-    group: 'tools',
+    group: 'modes',
     labelKey: 'shortcuts.tool.shapePrev',
     keys: ['s'],
     shift: true,
@@ -328,7 +357,7 @@ export const SHORTCUTS = [
     // add, remove or Detect, the stamp's Stamp or Region copy, the Shape's
     // fill, the Patch's mode, the Gradient's type, the AI brush's engine.
     id: 'tool.mode.next',
-    group: 'tools',
+    group: 'modes',
     labelKey: 'shortcuts.tool.modeNext',
     keys: ['q'],
     shift: false,
@@ -338,7 +367,7 @@ export const SHORTCUTS = [
   },
   {
     id: 'tool.mode.prev',
-    group: 'tools',
+    group: 'modes',
     labelKey: 'shortcuts.tool.modePrev',
     keys: ['q'],
     shift: true,
@@ -352,7 +381,7 @@ export const SHORTCUTS = [
     // `D` while detecting. Not Photoshop's `L` and `M`: those are the Layers
     // panel and the mask overlay here.
     id: 'tool.maskSelect.add',
-    group: 'tools',
+    group: 'modes',
     labelKey: 'shortcuts.tool.maskAdd',
     keys: ['a'],
     chord: ['A'],
@@ -361,7 +390,7 @@ export const SHORTCUTS = [
   },
   {
     id: 'tool.maskSelect.remove',
-    group: 'tools',
+    group: 'modes',
     labelKey: 'shortcuts.tool.maskRemove',
     keys: ['x'],
     shift: false,
@@ -372,7 +401,7 @@ export const SHORTCUTS = [
   {
     // A bare `D`: `⌘D` is Duplicate, and a chord and a bare key are two presses.
     id: 'tool.maskSelect.detect',
-    group: 'tools',
+    group: 'modes',
     labelKey: 'shortcuts.tool.maskDetect',
     keys: ['d'],
     chord: ['D'],
@@ -383,7 +412,7 @@ export const SHORTCUTS = [
     // Arms the clone stamp as it was left; with it armed, steps Stamp, Region
     // copy and Live copy, and with Shift aligned for non-aligned.
     id: 'tool.cloneStamp.mode',
-    group: 'tools',
+    group: 'modes',
     labelKey: 'shortcuts.tool.cloneMode',
     keys: ['c'],
     shift: false,
@@ -393,7 +422,7 @@ export const SHORTCUTS = [
   },
   {
     id: 'tool.cloneStamp.alignment',
-    group: 'tools',
+    group: 'modes',
     labelKey: 'shortcuts.tool.cloneAlignment',
     keys: ['c'],
     shift: true,
@@ -1118,11 +1147,29 @@ export function handlesKeyNatively(target, key) {
   if (!target) return false
   if (target.disabled === true) return false
   if (key === ' ') return pressesWithSpace(target)
+  if (key === 'Tab') return movesFocusWithTab(target)
   const tag = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : ''
   if (tag === 'SELECT') return SELECT_KEYS.has(key) || /^[a-z]$/.test(key)
   if (tag !== 'INPUT') return false
   const type = typeof target.type === 'string' ? target.type.toLowerCase() : 'text'
   return type === 'range' && RANGE_KEYS.has(key)
+}
+
+/**
+ * Tab moves the focus on from any control that holds it, and that is the
+ * control's: a user who bound Tab must still be able to walk the tool bar,
+ * the panels and the rail. On the canvas - whose regions are buttons too - and
+ * with nothing focused it is the binding's.
+ *
+ * @param {any} target
+ * @returns {boolean}
+ */
+function movesFocusWithTab(target) {
+  if (typeof target.closest === 'function' && target.closest('[data-canvas-viewport]')) return false
+  const tag = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : ''
+  if (tag === '' || tag === 'BODY' || tag === 'HTML') return false
+  if (['BUTTON', 'SELECT', 'INPUT', 'TEXTAREA', 'SUMMARY', 'A'].includes(tag)) return true
+  return typeof target.getAttribute === 'function' && target.getAttribute('tabindex') !== null
 }
 
 /** The roles whose control a keyboard presses, or ticks, with Space. */
@@ -1200,13 +1247,16 @@ function mouseButtonKey(button) {
  *
  * A short list rather than "anything `event.key` reports", because most of
  * what it reports cannot be a shortcut and letting it through would store a
- * binding the user can never press again. Four are absent on purpose:
+ * binding the user can never press again. Three are absent on purpose:
  *
  * - `Escape` belongs to `app.cancel` and cancels the recorder;
- * - `Tab` is how a keyboard user leaves the recorder;
  * - `Backspace` and `Delete` are how a binding is *cleared*, so neither can be
  *   recorded - and accepting one from a hand-edited settings file would show a
  *   chord the interface cannot reproduce.
+ *
+ * `Tab` may carry one (the mode key is a natural home for it). It still moves
+ * the focus wherever a control holds it (`handlesKeyNatively`), so a binding
+ * on it never strands a keyboard user, and Escape still leaves the recorder.
  */
 export const NAMED_CHORD_KEYS = new Set([
   'ArrowLeft',
@@ -1219,6 +1269,7 @@ export const NAMED_CHORD_KEYS = new Set([
   'PageDown',
   'Enter',
   'Insert',
+  'Tab',
   ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`),
   ...Array.from({ length: EXTRA_BUTTONS }, (_, i) => mouseButtonKey(FIRST_EXTRA_BUTTON + i)),
 ])
@@ -1581,7 +1632,8 @@ export function sanitizeShortcutOverrides(raw) {
     const entry = DEFAULTS_BY_ID.get(id)
     if (!entry || entry.fixed) continue
     if (value === null) {
-      kept[id] = null
+      // Cleared is the default of an entry that ships with no key.
+      if (entry.keys.length > 0) kept[id] = null
       continue
     }
     const chord = parseChord(value)
@@ -1723,7 +1775,7 @@ export function rebindShortcut(id, raw) {
 }
 
 /**
- * Clear an entry's chord. The row stays in the sheet, reading `Unbound`, and
+ * Clear an entry's chord. The row stays in the sheet, reading `Not set`, and
  * the command keeps whatever pointer route it has.
  *
  * @param {string} id
@@ -1733,7 +1785,10 @@ export function unbindShortcut(id) {
   const entry = DEFAULTS_BY_ID.get(id)
   if (!entry) return { ok: false, reasonKey: 'shortcuts.rebind.refusedUnknown' }
   if (entry.fixed) return { ok: false, reasonKey: 'shortcuts.rebind.refusedFixed' }
-  commit({ ...overrides, [id]: null })
+  const next = { ...overrides, [id]: null }
+  // An entry with no default key is back at its default, which is no override.
+  if (entry.keys.length === 0) delete next[id]
+  commit(next)
   return { ok: true }
 }
 

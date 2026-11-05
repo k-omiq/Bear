@@ -351,18 +351,25 @@ async function usableReadiness(backend) {
  * detection run's id; the cloud clean follows it once it has finished, on its
  * own consent.
  *
+ * The run shortcuts name their own step and Solid bubbles only in place of
+ * the panel's (`override`). Solid bubbles only is a clean on this computer,
+ * so with it the clean half never goes to the cloud GPU, whatever Clean on
+ * says; detection still goes where Detect on sends it.
+ *
  * @param {'page'|'chapter'|'project'} scope - `page` and `chapter` can go to
  *   the cloud; a project cannot, since each chapter needs its own consent
  * @param {import('../api/backend.js').Backend} [backend]
+ * @param {{step?: import('../api/backend.js').RunMode, solidOnly?: boolean}} [override]
  * @returns {Promise<string|null>} the run id, or null when nothing started
  */
-export async function startCleanRun(scope = 'page', backend = getBackend()) {
+export async function startCleanRun(scope = 'page', backend = getBackend(), override = {}) {
   const token = claimRunStart()
   if (!token) return null
   try {
-    const step = runStep()
-    const parts = cloudParts(step)
-    if (!parts.detect && !parts.clean) return await startRun(scope, { mode: step, pendingToken: token })
+    const step = override.step ?? runStep()
+    const solid = { step, ...(override.solidOnly === undefined ? {} : { solidOnly: override.solidOnly }) }
+    const parts = override.solidOnly === true ? { ...cloudParts(step), clean: false } : cloudParts(step)
+    if (!parts.detect && !parts.clean) return await startRun(scope, { mode: step, pendingToken: token, ...solid })
     const chapter = editor.chapter
     if (!chapter || editor.run.active) return null
     const refusal = cloudScopeRefusal(scope, parts)
@@ -421,6 +428,7 @@ export async function startCleanRun(scope = 'page', backend = getBackend()) {
         ...(cloudCleanGrant ? { cloudCleanGrant } : {}),
         mode: parts.clean && !streams ? 'detect' : step,
         pendingToken: token,
+        ...solid,
       })
     } catch (cause) {
       // A failed page already said so in its own notice.

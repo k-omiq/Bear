@@ -2497,6 +2497,7 @@ export const ko = {
   shortcuts: {
     group: {
       tools: '도구',
+      modes: '모드와 모양',
       brush: '브러시와 여백',
       view: '보기',
       edit: '편집',
@@ -2504,7 +2505,30 @@ export const ko = {
       navigation: '이동',
       panels: '패널',
       app: '앱',
+      run: '실행',
       pointer: '포인터',
+    },
+    tabs: {
+      label: '단축키 종류',
+    },
+    tab: {
+      tools: '도구',
+      brush: '브러시',
+      run: '실행',
+      edit: '편집',
+      view: '보기',
+      app: '앱',
+      pointer: '마우스',
+    },
+    search: {
+      label: '단축키 검색',
+      placeholder: '이름이나 키로 검색',
+      clear: '검색 지우기',
+      empty: '"{query}"와 일치하는 단축키가 없습니다.',
+    },
+    run: {
+      solidBubbles: '이 페이지 단색 말풍선만 클린',
+      fullClean: '이 페이지 전체 클린',
     },
     navigation: {
       preset: '캔버스 이동',
@@ -2545,8 +2569,8 @@ export const ko = {
       cancelRun: '실행 취소',
       shapeNext: '다음 모양',
       shapePrev: '이전 모양',
-      modeNext: '다음 모드·종류·엔진',
-      modePrev: '이전 모드·종류·엔진',
+      modeNext: '선택한 도구의 다음 모드',
+      modePrev: '선택한 도구의 이전 모드',
       maskAdd: '선택: 마스크에 추가',
       maskRemove: '선택: 마스크에서 제거 (한 번 더: 추가)',
       maskDetect: '선택: 영역에서 감지 (한 번 더: 추가)',
@@ -2688,6 +2712,7 @@ export const ko = {
       },
     },
     run: {
+      startFailed: '텍스트 클린을 시작할 수 없습니다. 변경된 것은 없습니다.',
       busy: '다른 실행이 시작 중이거나 이미 실행 중입니다. 끝날 때까지 기다리세요.',
       atCapacity: '동시에 실행할 수 있는 최대 개수가 이미 실행 중입니다. 하나가 끝나면 이 실행을 시작하세요.',
       pageBusy: '실행이 이 페이지를 처리하는 중입니다. 아무것도 변경하지 않았습니다. 다음 페이지로 넘어간 뒤 다시 시도하세요.',

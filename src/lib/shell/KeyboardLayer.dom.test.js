@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/svelte'
 
-const state = vi.hoisted(() => ({ region: /** @type {any} */ (null), parts: { detect: false, clean: false } }))
+const state = vi.hoisted(() => ({
+  region: /** @type {any} */ (null),
+  parts: { detect: false, clean: false },
+  start: /** @type {any} */ (null),
+}))
 
 vi.mock('../state/editor.svelte.js', async (importOriginal) => {
   const actual = /** @type {any} */ (await importOriginal())
@@ -25,7 +29,12 @@ vi.mock('../editor/retouch.svelte.js', async (importOriginal) => {
 
 vi.mock('../editor/cloudrun.js', async (importOriginal) => {
   const actual = /** @type {any} */ (await importOriginal())
-  return { ...actual, cloudParts: vi.fn(() => state.parts), runStep: vi.fn(() => 'auto') }
+  return {
+    ...actual,
+    cloudParts: vi.fn(() => state.parts),
+    runStep: vi.fn(() => 'auto'),
+    startCleanRun: vi.fn(async () => (state.start ? state.start() : 'run-1')),
+  }
 })
 
 import KeyboardLayer from './KeyboardLayer.svelte'
@@ -34,7 +43,9 @@ import { editor } from '../state/editor.svelte.js'
 import { draft } from '../editor/draft.svelte.js'
 import { applySelection } from '../editor/retouch.svelte.js'
 import { runMaskAction, runRegionMenuItem, stepLayerOpacity } from '../editor/maskactions.svelte.js'
-import { raiseWindow, session } from '../state/session.svelte.js'
+import { raiseWindow, resetAllShortcutBindings, session, setShortcutBinding } from '../state/session.svelte.js'
+import { startCleanRun } from '../editor/cloudrun.js'
+import { capabilities } from '../state/capabilities.svelte.js'
 
 /** @param {string} key @param {Object} [extra] */
 function press(key, extra = {}) {
@@ -54,6 +65,11 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  resetAllShortcutBindings()
+  state.start = null
+  capabilities.runtime = true
+  editor.chapter = null
+  app.notices = []
   app.route = route
   draft.selection = null
   document.body.innerHTML = ''
@@ -191,5 +207,40 @@ describe('the keyboard layer', () => {
     editor.toolParams.brush = { ...(editor.toolParams.brush ?? {}), opacity: 100 }
     press('i')
     expect(editor.toolParams.brush.opacity).toBe(90)
+  })
+
+  it('runs a Solid bubbles only or a full clean of the page on keys the user gave them, and none on no key', async () => {
+    editor.chapter = /** @type {any} */ ({ id: 'c1', pages: [] })
+    editor.run = { ...editor.run, active: false }
+    press('F9')
+    expect(startCleanRun).not.toHaveBeenCalled()
+
+    setShortcutBinding('run.solidBubbles', { key: 'F9' })
+    setShortcutBinding('run.fullClean', { key: 'F10' })
+    press('F9')
+    expect(startCleanRun).toHaveBeenLastCalledWith('page', undefined, { step: 'auto', solidOnly: true })
+    press('F10')
+    expect(startCleanRun).toHaveBeenLastCalledWith('page', undefined, { step: 'auto', solidOnly: false })
+
+    // Not while a run is going, and not without the engine runtime, which it says.
+    vi.mocked(startCleanRun).mockClear()
+    editor.run = { ...editor.run, active: true }
+    press('F9')
+    editor.run = { ...editor.run, active: false }
+    capabilities.runtime = false
+    press('F10')
+    expect(startCleanRun).not.toHaveBeenCalled()
+    expect(app.notices.map((notice) => notice.key)).toContain('editor.state.runtimeMissing')
+  })
+
+  it('says so when a page run cannot start, rather than doing nothing', async () => {
+    editor.chapter = /** @type {any} */ ({ id: 'c1', pages: [] })
+    editor.run = { ...editor.run, active: false }
+    setShortcutBinding('run.fullClean', { key: 'F10' })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    state.start = () => Promise.reject(new Error('engine exploded'))
+    press('F10')
+    await vi.waitFor(() => expect(app.notices.map((notice) => notice.key)).toContain('notice.run.startFailed'))
+    error.mockRestore()
   })
 })

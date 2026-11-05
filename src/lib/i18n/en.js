@@ -3282,6 +3282,7 @@ export const en = {
   shortcuts: {
     group: {
       tools: 'Tools',
+      modes: 'Modes & shapes',
       brush: 'Brush & padding',
       view: 'View',
       edit: 'Edit',
@@ -3289,12 +3290,34 @@ export const en = {
       navigation: 'Navigation',
       panels: 'Panels',
       app: 'App',
+      run: 'Run',
       // Not one of `SHORTCUT_GROUPS`: the sheet's last section is the binding
       // that is a modifier plus a click rather than a chord, and the shortcut
       // table has no row for it because the table is keys.
       pointer: 'Pointer',
     },
-    sheet: {
+    // The sheet's tabs, each a set of groups, and its search across all of them.
+    tabs: {
+      label: 'Shortcut types',
+    },
+    tab: {
+      tools: 'Tools',
+      brush: 'Brush',
+      run: 'Run',
+      edit: 'Edit',
+      view: 'View',
+      app: 'App',
+      pointer: 'Mouse',
+    },
+    search: {
+      label: 'Search shortcuts',
+      placeholder: 'Search by name or key',
+      clear: 'Clear search',
+      empty: 'No shortcut matches "{query}".',
+    },
+    run: {
+      solidBubbles: 'Solid bubble clean of this page',
+      fullClean: 'Full clean of this page',
     },
     // Rebinding. Every refusal names what it refused and what to do instead;
     // `refusedConflict` quotes the shortcut already holding the combination,
@@ -3320,7 +3343,7 @@ export const en = {
       reset: 'Reset {name} to its default',
       resetAll: 'Reset all to defaults',
       listening: 'Press a key or mouse button…',
-      unbound: 'Unbound',
+      unbound: 'Not set',
       hint: 'Press the combination or extra mouse button to use. Escape cancels, Backspace clears the shortcut.',
       fixedHint: 'Escape always cancels, and cannot be changed.',
       refusedAlt:
@@ -3341,8 +3364,8 @@ export const en = {
       cancelRun: 'Cancel run',
       shapeNext: 'Next shape',
       shapePrev: 'Previous shape',
-      modeNext: 'Next mode, type or engine',
-      modePrev: 'Previous mode, type or engine',
+      modeNext: 'Next mode of the selected tool',
+      modePrev: 'Previous mode of the selected tool',
       maskAdd: 'Selection: add to masks',
       maskRemove: 'Selection: remove from masks (again: add)',
       maskDetect: 'Selection: detect in an area (again: add)',
@@ -3502,6 +3525,7 @@ export const en = {
     },
     paint: { colorApproximated: 'This page uses a palette or limited gray levels. The selected color was replaced by the closest available color.' },
     run: {
+      startFailed: 'Text cleanup could not start. Nothing was changed.',
       busy: 'Another run is starting or already running. Wait for it to finish.',
       // The backend runs a few chapters at once (`run.rs`, MAX_RUNS).
       atCapacity: 'The most runs that can go at once are already going. Wait for one to finish, then start this one.',

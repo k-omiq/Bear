@@ -427,7 +427,8 @@ describe('the modifier that picks the clone stamp’s source', () => {
    * The four chips, found by the spelt-out names rather than by their keycaps
    * - `⌥` is not a word, and a role query resolves the name the same way a
    * screen reader would. It is a *role* query, so it will not find a chip in a
-   * panel that is still `hidden`: the press has to have happened.
+   * panel that is still `hidden`: the press has to have happened. The chips
+   * are on the sheet's Mouse tab, so that tab is opened too.
    */
   function chip(rendered, id) {
     return rendered.getByRole('radio', { name: t(`settings.cloneSource.name.${id}`) })
@@ -436,6 +437,7 @@ describe('the modifier that picks the clone stamp’s source', () => {
   it('starts on the modifier the gesture has always used', async () => {
     const { rendered, tab, panel } = open()
     await fireEvent.click(tab('shortcuts'))
+    await fireEvent.click(rendered.getByRole('tab', { name: t('shortcuts.tab.pointer') }))
 
     expect(session.cloneSourceModifier).toBe('alt')
     expect(chip(rendered, 'alt').getAttribute('aria-checked')).toBe('true')
@@ -448,6 +450,7 @@ describe('the modifier that picks the clone stamp’s source', () => {
   it('is changed by a press, and the tool window’s hint says the new one', async () => {
     const { rendered, tab } = open()
     await fireEvent.click(tab('shortcuts'))
+    await fireEvent.click(rendered.getByRole('tab', { name: t('shortcuts.tab.pointer') }))
 
     // The string the tool window renders, before and after. It names the
     // modifier through a context param, because `ToolWindow` calls
@@ -467,6 +470,7 @@ describe('the modifier that picks the clone stamp’s source', () => {
   it('offers all four, each with a name a screen reader can say', async () => {
     const { rendered, tab } = open()
     await fireEvent.click(tab('shortcuts'))
+    await fireEvent.click(rendered.getByRole('tab', { name: t('shortcuts.tab.pointer') }))
     for (const id of ['alt', 'meta', 'control', 'shift']) {
       expect(chip(rendered, id)).toBeTruthy()
     }

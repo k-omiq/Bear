@@ -53,6 +53,9 @@ function press(key, extra = {}) {
 }
 
 const editor = { scope: /** @type {const} */ ('editor') }
+
+/** The entries that ship with no key, for the user to bind. */
+const UNSET_BY_DEFAULT = ['run.solidBubbles', 'run.fullClean']
 const home = { scope: /** @type {const} */ ('home') }
 
 describe('the table', () => {
@@ -63,8 +66,9 @@ describe('the table', () => {
   it('gives every entry a label key, a chord and a known group', () => {
     for (const shortcut of SHORTCUTS) {
       expect(shortcut.labelKey, shortcut.id).toMatch(/^[a-z]+(\.[a-zA-Z]+)+$/)
-      expect(shortcut.chord.length, shortcut.id).toBeGreaterThan(0)
-      expect(shortcut.keys.length, shortcut.id).toBeGreaterThan(0)
+      // An entry ships with a key, or with none at all for the user to give it.
+      expect(shortcut.chord.length === 0, shortcut.id).toBe(shortcut.keys.length === 0)
+      if (shortcut.keys.length === 0) expect(UNSET_BY_DEFAULT, shortcut.id).toContain(shortcut.id)
       expect(SHORTCUT_GROUPS, shortcut.id).toContain(shortcut.group)
       expect(typeof shortcut.run, shortcut.id).toBe('function')
     }
@@ -548,7 +552,7 @@ describe('rebinding', () => {
       expect(parseChord({ key: '' })).toBe(null)
       expect(parseChord({ key: 42 })).toBe(null)
       expect(parseChord({ key: 'Escape' })).toBe(null)
-      expect(parseChord({ key: 'Tab' })).toBe(null)
+      expect(parseChord({ key: 'ContextMenu' })).toBe(null)
       expect(parseChord({ key: 'Backspace' })).toBe(null)
       expect(parseChord({ key: 'Delete' })).toBe(null)
       expect(parseChord({ key: 'Shift' })).toBe(null)
@@ -593,7 +597,7 @@ describe('rebinding', () => {
 
     it('refuses a key that cannot carry a binding', () => {
       expect(chordFromEvent(press('Escape')).reasonKey).toBe('shortcuts.rebind.refusedKey')
-      expect(chordFromEvent(press('Tab')).reasonKey).toBe('shortcuts.rebind.refusedKey')
+      expect(chordFromEvent(press('ContextMenu')).reasonKey).toBe('shortcuts.rebind.refusedKey')
     })
   })
 
@@ -642,7 +646,7 @@ describe('rebinding', () => {
     it('drops a malformed chord rather than the whole record', () => {
       expect(
         sanitizeShortcutOverrides({
-          'view.maskOverlay': { key: 'Tab' },
+          'view.maskOverlay': { key: 'ContextMenu' },
           'edit.undo': { key: 'k' },
         })
       ).toEqual({ 'edit.undo': { key: 'k', shift: false, accel: false } })
@@ -778,7 +782,7 @@ describe('rebinding', () => {
       expect(rebindShortcut('tool.retouch', { key: '9' }).reasonKey).toBe(
         'shortcuts.rebind.refusedUnknown'
       )
-      expect(rebindShortcut('edit.undo', { key: 'Tab' }).reasonKey).toBe(
+      expect(rebindShortcut('edit.undo', { key: 'ContextMenu' }).reasonKey).toBe(
         'shortcuts.rebind.refusedKey'
       )
     })

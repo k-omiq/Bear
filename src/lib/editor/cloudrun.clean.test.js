@@ -542,3 +542,37 @@ it('Qwen batch guidance is requested before a plan is prepared, even with standi
   expect(api.prepareCloudClean.mock.calls[0][0].qwenEdit).toEqual({ target: 'auto', description: '' })
   expect(api.startCloudClean).toHaveBeenCalledWith({ grantId: 'clean-grant' })
 })
+
+describe('the page run shortcuts', () => {
+  it('runs Solid bubbles only here, past a cloud Clean on, with no consent and whatever the panel says', async () => {
+    const api = backend()
+    editor.toolParams.autoClean = { ...editor.toolParams.autoClean, step: 'detect', scope: 'chapter', solidOnly: false }
+    expect(await startCleanRun('page', /** @type {any} */ (api), { step: 'auto', solidOnly: true })).toBe('run-1')
+    expect(app.modals).toEqual([])
+    expect(api.prepareCloudCleanStream).not.toHaveBeenCalled()
+    expect(api.runClean).toHaveBeenCalledTimes(1)
+    expect(api.runClean.mock.calls[0][0]).toMatchObject({ scope: 'page', mode: 'auto', solidBubblesOnly: true })
+    expect(api.runClean.mock.calls[0][0].cloudCleanGrant).toBeUndefined()
+    // The panel keeps what it was set to.
+    expect(editor.toolParams.autoClean).toMatchObject({ step: 'detect', scope: 'chapter', solidOnly: false })
+  })
+
+  it('detects a full clean whose clean follows on the cloud as Detect and clean does, though the panel is set to Detect', async () => {
+    const api = backend()
+    editor.toolParams.autoClean = { ...editor.toolParams.autoClean, step: 'detect', outsideBubbles: 'review' }
+    const started = startCleanRun('page', /** @type {any} */ (api), { step: 'auto', solidOnly: false })
+    expect(await started).toBe('run-1')
+    const spec = api.runClean.mock.calls[0][0]
+    expect(spec).toMatchObject({ scope: 'page', mode: 'detect', outsideBubbles: 'review' })
+    expect(spec.textPolicy).not.toBe('all_text')
+  })
+
+  it('runs the full clean without Solid bubbles only, though the panel has it on', async () => {
+    const api = backend()
+    setCleanTarget('local')
+    editor.toolParams.autoClean = { ...editor.toolParams.autoClean, step: 'clean', solidOnly: true }
+    expect(await startCleanRun('page', /** @type {any} */ (api), { step: 'auto', solidOnly: false })).toBe('run-1')
+    expect(api.runClean.mock.calls[0][0]).toMatchObject({ scope: 'page', mode: 'auto' })
+    expect(api.runClean.mock.calls[0][0].solidBubblesOnly).toBeUndefined()
+  })
+})

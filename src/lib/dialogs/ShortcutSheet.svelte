@@ -1,3 +1,12 @@
+<script module>
+  /**
+   * The tab the sheet was last left on, for the next time it opens in this
+   * window. Not saved: a sheet that reopens where it was is a convenience, and
+   * one that opens on Tools after a restart is not a lost preference.
+   */
+  let lastTab = 'tools'
+</script>
+
 <script>
   /**
    * The shortcut sheet's body, built once and mounted in two places: inside
@@ -6,23 +15,30 @@
    *
    * Everything it draws comes from `src/lib/shortcuts.js`, which is the only
    * place a keybinding may be declared - so adding a shortcut documents itself
-   * and this component never needs editing.
+   * and this component never needs editing, past naming a new group's tab.
+   *
+   * **Tabs and a search.** The table's groups are gathered into a few tabs by
+   * what the keys are for (`TABS`), and the field above them searches every
+   * tab at once: names, group names and keys alike, a single character being
+   * read as a key rather than as a letter somewhere in a name. While a search
+   * is typed the list is its results, under their groups, and each tab says
+   * how many of them it holds; picking a tab ends the search.
    *
    * Two entries are not the same for every reader, and both are asked rather
    * than assumed:
    *
    * - the arrow keys, whose label depends on the open project's reading
    *   direction (`shortcutLabelKey`) - in RTL, ← is the *next* page;
-   * - `app.openProject`, the one chord in the *default* table, whose modifier
-   *   is named `⌘` or `Ctrl` depending on the platform (`shortcutChord`).
+   * - the chords, whose modifier is named `⌘` or `Ctrl` depending on the
+   *   platform (`shortcutChord`).
    *
    * **The sheet is also where a shortcut is rebound.** A chord is a button:
    * click it and the next combination pressed - or an extra mouse button,
-   * back or forward - becomes the binding, Escape
-   * cancels, Backspace or Delete clears it. That is deliberately the same list
-   * rather than a second editor screen - the thing a user wants to change is
-   * the row they are already reading, and a separate editor would have to
-   * repeat every label and every chord to be usable at all.
+   * back or forward - becomes the binding, Escape cancels, Backspace or Delete
+   * clears it. A few entries ship with no key at all, and read `Not set` until
+   * the user gives them one. That is deliberately the same list rather than a
+   * second editor screen - the thing a user wants to change is the row they
+   * are already reading.
    *
    * While a recording is live the keydown is taken in the **capture** phase and
    * goes no further: the keyboard layer, the dialog's own Escape handler and
@@ -30,13 +46,16 @@
    *
    * `headingLevel` exists because the sheet sits under a section heading inside
    * Settings and directly under the dialog title on its own; the group headings
-   * have to fall one level below whatever is above them.
+   * have to fall one level below whatever is above them. The search is the
+   * sheet's first control, so the dialog `?` opens puts the caret there.
    *
    * @type {{ headingLevel?: 'h3' | 'h4' }}
    */
   let { headingLevel = 'h3' } = $props()
 
-  import { Button, KeyHint, Segmented } from '../ui/index.js'
+  import { tick } from 'svelte'
+  import { Button, KeyHint, Segmented, TextInput } from '../ui/index.js'
+  import Icon from '../icons/Icon.svelte'
   import {
     pointerModifiersFor,
     chordFromEvent,
@@ -66,6 +85,20 @@
   import { t } from '../i18n/index.js'
 
   /**
+   * The tabs, in order, and the table's groups each one holds. `pointer` holds
+   * none: it is the bindings that are a mouse rather than a key, below.
+   */
+  const TABS = [
+    { id: 'tools', labelKey: 'shortcuts.tab.tools', groups: ['tools', 'modes'] },
+    { id: 'brush', labelKey: 'shortcuts.tab.brush', groups: ['brush'] },
+    { id: 'run', labelKey: 'shortcuts.tab.run', groups: ['run'] },
+    { id: 'edit', labelKey: 'shortcuts.tab.edit', groups: ['edit'] },
+    { id: 'view', labelKey: 'shortcuts.tab.view', groups: ['view', 'zoom', 'navigation'] },
+    { id: 'app', labelKey: 'shortcuts.tab.app', groups: ['panels', 'app'] },
+    { id: 'pointer', labelKey: 'shortcuts.tab.pointer', groups: [] },
+  ]
+
+  /**
    * Whether the platform names its command modifier `⌘`. The detector is
    * `src/lib/shortcuts.js`'s, because the pointer-modifier row below asks the
    * same question and two detectors would eventually disagree.
@@ -84,7 +117,7 @@
    * what `chordFromEvent` refuses (it is the first half of a chord), so
    * recording one is a gesture the recorder cannot take.
    *
-   * The caps are the keys' own - `⌥` on an Apple keyboard, `Alt` elsewhere  - 
+   * The caps are the keys' own - `⌥` on an Apple keyboard, `Alt` elsewhere -
    * and the spelt-out names ride along as `title` and as the accessible name,
    * because a radio whose whole label is `⌥` reads as nothing at all.
    */
@@ -107,8 +140,8 @@
   /**
    * How a mouse moves the canvas, under the clone source: the wheel, the
    * middle button and a drag on empty canvas, plus the two presets that set
-   * all three. The held pan key is a chord, so it is a row of the table above
-   * (Navigation) and is rebound there like any other.
+   * all three. The held pan key is a chord, so it is a row of the table
+   * (Navigation, under View) and is rebound there like any other.
    *
    * A preset that no longer matches reads as Custom, which cannot itself be
    * picked: it is what the three rows below it say.
@@ -132,15 +165,115 @@
   let recording = $state(/** @type {string|null} */ (null))
 
   /** The pointer rows' labels, for their radio groups to point at. */
-  const cloneModifierLabelId = $props.id()
-  const presetLabelId = `${cloneModifierLabelId}-preset`
-  const wheelLabelId = `${cloneModifierLabelId}-wheel`
-  const middleLabelId = `${cloneModifierLabelId}-middle`
-  const emptyLabelId = `${cloneModifierLabelId}-empty`
+  const uid = $props.id()
+  const cloneModifierLabelId = `${uid}-clone`
+  const presetLabelId = `${uid}-preset`
+  const wheelLabelId = `${uid}-wheel`
+  const middleLabelId = `${uid}-middle`
+  const emptyLabelId = `${uid}-empty`
+  const panelId = `${uid}-panel`
+  const searchId = `${uid}-search`
 
   /** The last refusal, shown under the list until the next attempt. */
   let message = $state(/** @type {{key: string, params?: Record<string, unknown>}|null} */ (null))
 
+  let tab = $state(TABS.some((entry) => entry.id === lastTab) ? lastTab : 'tools')
+  $effect(() => {
+    lastTab = tab
+  })
+
+  const currentTab = $derived(TABS.find((entry) => entry.id === tab) ?? TABS[0])
+
+  let query = $state('')
+
+  /**
+   * Rows rebound, cleared or reset during this search, which stay listed
+   * until the search changes: a row that stopped matching the moment its key
+   * changed would take with it the only sign the change was made.
+   */
+  let kept = $state(/** @type {string[]} */ ([]))
+
+  /** @type {TextInput|undefined} */
+  let searchField = $state()
+  /** @type {HTMLButtonElement[]} */
+  const tabButtons = $state([])
+
+  /** @type {HTMLElement|undefined} */
+  let root = $state()
+
+  /** @param {string} value */
+  function setQuery(value) {
+    query = value
+    kept = []
+    recording = null
+  }
+
+  /**
+   * Bring the top of the sheet back into view when the list under it is
+   * replaced, so a short tab does not open part-way down a long one's scroll.
+   * The scroller is whatever holds the sheet: the dialog's body, or Settings'.
+   */
+  function toTop() {
+    let scroller = root?.parentElement
+    while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement
+    if (!scroller || !root) return
+    const above = root.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    if (above < 0) scroller.scrollTop += above
+  }
+
+  /**
+   * Text folded for matching: lower case and without accents, so `edicion`
+   * finds Edición.
+   *
+   * @param {string} text
+   */
+  function fold(text) {
+    return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+  }
+
+  /**
+   * The words a keycap also answers to, so `cmd`, `enter` and `left` find the
+   * glyphs the sheet draws for them.
+   */
+  const CAP_WORDS = /** @type {Record<string, string>} */ ({
+    '⌘': 'cmd command',
+    '↵': 'enter return',
+    '⌫': 'backspace delete',
+    '←': 'left arrow',
+    '→': 'right arrow',
+    '↑': 'up arrow',
+    '↓': 'down arrow',
+    Esc: 'escape',
+    Ctrl: 'control',
+  })
+
+  /**
+   * Does a row answer the search? Every word typed must: a single character a
+   * keyboard types as a key (ASCII) matches a keycap exactly, and any other
+   * word - longer, or one character of Japanese or Korean, where that is a
+   * whole word - is found anywhere in the row's name, its group's and tab's
+   * names, or its keys.
+   *
+   * @param {string[]} words - already folded
+   * @param {{label: string, keys: string[]}} row
+   * @param {string[]} context - the group's and the tab's names
+   */
+  function matches(words, row, context) {
+    const caps = row.keys.map((cap) => fold(cap))
+    const text = fold([row.label, ...context, ...row.keys, ...row.keys.map((cap) => CAP_WORDS[cap] ?? '')].join(' '))
+    return words.every((word) => (/^[\x21-\x7e]$/.test(word) ? caps.includes(word) : text.includes(word)))
+  }
+
+  /** @param {string} group */
+  function tabLabelOf(group) {
+    const entry = TABS.find((candidate) => candidate.groups.includes(group))
+    return entry ? t(entry.labelKey) : ''
+  }
+
+  const words = $derived(fold(query).split(/\s+/).filter(Boolean))
+  const searching = $derived(words.length > 0)
+
+  /** Every key row of the table in force, by group, with what the sheet draws for it. */
   const sections = $derived.by(() => {
     // The bindings in force are `groupedShortcuts()`'s to know; this read is
     // what makes the sheet redraw when they change.
@@ -149,19 +282,110 @@
     const listed = (/** @type {{id: string}} */ shortcut) => session.betaTools || !BETA_SHORTCUTS.includes(shortcut.id)
     return groupedShortcuts().map((section) => ({
       group: section.group,
-      headingKey: `shortcuts.group.${section.group}`,
+      label: t(`shortcuts.group.${section.group}`),
       rows: section.shortcuts.filter(listed).map((shortcut) => ({
         id: shortcut.id,
         label: t(shortcutLabelKey(shortcut, { readingDirection: readingDirection() })),
         keys: shortcutChord(shortcut, { apple }),
         fixed: shortcut.fixed === true,
         rebound: shortcut.rebound === true,
-        unbound: shortcut.unbound === true,
+        unset: shortcut.keys.length === 0,
       })),
     }))
   })
 
+  /** The pointer tab's rows, by the label the search reads. */
+  const pointerRows = $derived([
+    { id: 'clone', label: t('settings.cloneSource.label') },
+    { id: 'preset', label: t('shortcuts.navigation.preset') },
+    { id: 'wheel', label: t('shortcuts.navigation.wheel') },
+    { id: 'middle', label: t('shortcuts.navigation.middle') },
+    { id: 'empty', label: t('shortcuts.navigation.empty') },
+  ])
+  const pointerLabel = $derived(t('shortcuts.tab.pointer'))
+
+  /** What the list shows: the open tab's groups, or every match of the search. */
+  const shown = $derived.by(() => {
+    const groups = searching ? sections : sections.filter((section) => currentTab.groups.includes(section.group))
+    const keyed = groups
+      .map((section) => ({
+        ...section,
+        rows: searching
+          ? section.rows.filter((row) => kept.includes(row.id) || matches(words, row, [section.label, tabLabelOf(section.group)]))
+          : section.rows,
+      }))
+      .filter((section) => section.rows.length > 0)
+    const pointer = searching
+      ? pointerRows.filter((row) => matches(words, { label: row.label, keys: [] }, [pointerLabel, t('shortcuts.group.pointer')])).map((row) => row.id)
+      : tab === 'pointer' ? pointerRows.map((row) => row.id) : []
+    return { keyed, pointer }
+  })
+
+  /** Matches per tab, while searching. */
+  const counts = $derived.by(() => {
+    /** @type {Record<string, number>} */
+    const out = {}
+    if (!searching) return out
+    for (const entry of TABS) {
+      out[entry.id] = entry.id === 'pointer'
+        ? shown.pointer.length
+        : shown.keyed.filter((section) => entry.groups.includes(section.group)).reduce((sum, section) => sum + section.rows.length, 0)
+    }
+    return out
+  })
+
+  /** Group headings are drawn where a list has more than one group, and for every result. */
+  const headed = $derived(searching || currentTab.groups.length > 1)
+
+  const nothingFound = $derived(searching && shown.keyed.length === 0 && shown.pointer.length === 0)
+
   const anyRebound = $derived(Object.keys(session.shortcuts).length > 0)
+
+  /** @param {string} id */
+  async function openTab(id) {
+    tab = id
+    setQuery('')
+    await tick()
+    toTop()
+  }
+
+  /**
+   * The tab list's own keys, as a tab list has them: the arrows move and
+   * select, Home and End go to the ends.
+   *
+   * @param {KeyboardEvent} event
+   */
+  async function ontabkeydown(event) {
+    const at = TABS.findIndex((entry) => entry.id === tab)
+    const to =
+      event.key === 'ArrowRight' ? (at + 1) % TABS.length :
+        event.key === 'ArrowLeft' ? (at + TABS.length - 1) % TABS.length :
+          event.key === 'Home' ? 0 :
+            event.key === 'End' ? TABS.length - 1 : -1
+    if (to < 0) return
+    event.preventDefault()
+    await openTab(TABS[to].id)
+    tabButtons[to]?.focus()
+  }
+
+  /**
+   * Escape in a search with something typed empties it, and goes no further:
+   * the dialog closes on the next one.
+   *
+   * @param {KeyboardEvent} event
+   */
+  function onsearchkeydown(event) {
+    // An Escape that cancels an input method's composition is the IME's.
+    if (event.key !== 'Escape' || query === '' || event.isComposing || event.keyCode === 229) return
+    event.preventDefault()
+    event.stopPropagation()
+    setQuery('')
+  }
+
+  function clearSearch() {
+    setQuery('')
+    searchField?.focus()
+  }
 
   /**
    * The backend half of the write. The session half is done by the setters;
@@ -186,10 +410,14 @@
     return entry ? shortcutLabelKey(entry, { readingDirection: readingDirection() }) : ''
   }
 
-  /** @param {import('../shortcuts.js').RebindResult} result */
-  function report(result) {
+  /**
+   * @param {import('../shortcuts.js').RebindResult} result
+   * @param {string} id - the row it was asked of, kept in view in a search
+   */
+  function report(result, id) {
     if (result.ok) {
       message = null
+      if (searching && !kept.includes(id)) kept = [...kept, id]
       push()
       return
     }
@@ -222,6 +450,7 @@
     const id = recording
     if (event.key === 'Escape') {
       recording = null
+      message = null
       return
     }
     // Clearing, and the reason neither key can itself be bound: a recorder in
@@ -229,7 +458,7 @@
     // Backspace" has no way to tell the user which it just did.
     if (event.key === 'Backspace' || event.key === 'Delete') {
       recording = null
-      report(clearShortcutBinding(id))
+      report(clearShortcutBinding(id), id)
       return
     }
     take(id, chordFromEvent(event))
@@ -237,8 +466,10 @@
 
   /**
    * An extra mouse button pressed while a row is listening is its chord, with
-   * whatever modifiers are held. Left, middle and right still click, so a click
-   * elsewhere ends the recording the way it always has.
+   * whatever modifiers are held. Any other press outside the listening chord
+   * ends the recording: WebKit does not focus a clicked button, so the chord
+   * never blurs there, and a click into the search would otherwise type into
+   * the recorder.
    *
    * Cancelling the `pointerdown` keeps its `mousedown` from recording twice.
    * On macOS only the `mousedown` arrives (see `extraButtonPress`).
@@ -248,7 +479,11 @@
   function onpointerdown(event) {
     if (recording === null) return
     const press = extraButtonPress(event)
-    if (!press?.down) return
+    if (!press) {
+      if (!(event.target instanceof Element && event.target.closest('.chord.listening'))) recording = null
+      return
+    }
+    if (!press.down) return
     event.preventDefault()
     event.stopPropagation()
     take(recording, chordFromEvent(press))
@@ -259,15 +494,28 @@
    * @param {{chord: import('../shortcuts.js').Chord|null, reasonKey: string|null}} recorded
    */
   function take(id, { chord, reasonKey }) {
+    // A refusal keeps the row listening, so the "choose another" it says can
+    // be done with the next press. Escape still cancels.
     if (reasonKey) {
-      recording = null
       message = { key: reasonKey }
       return
     }
     // A modifier on its own is the first half of a chord: keep listening.
     if (!chord) return
-    recording = null
-    report(setShortcutBinding(id, chord))
+    const result = setShortcutBinding(id, chord)
+    if (result.ok) recording = null
+    report(result, id)
+  }
+
+  /**
+   * Focus moving anywhere but the listening chord ends the recording too: a
+   * Tab onward, or a Settings section the sheet stays mounted behind.
+   *
+   * @param {FocusEvent} event
+   */
+  function onfocusin(event) {
+    if (recording === null) return
+    if (!(event.target instanceof Element && event.target.closest('.chord.listening'))) recording = null
   }
 
   function resetAll() {
@@ -278,119 +526,209 @@
   }
 </script>
 
-<svelte:window onkeydowncapture={onkeydown} onpointerdowncapture={onpointerdown} onmousedowncapture={onpointerdown} />
+<svelte:window
+  onkeydowncapture={onkeydown}
+  onpointerdowncapture={onpointerdown}
+  onmousedowncapture={onpointerdown}
+  onfocusincapture={onfocusin}
+/>
 
-<div class="sheet">
-  {#each sections as section (section.group)}
-    <section class="group">
-      <svelte:element this={headingLevel} class="heading">
-        {t(section.headingKey)}
-      </svelte:element>
-      <dl class="rows">
-        {#each section.rows as row (row.id)}
-          <dt class="label">{row.label}</dt>
-          <dd class="keys">
-            {#if row.fixed}
-              <span class="locked" title={t('shortcuts.rebind.fixedHint')}>
-                <KeyHint keys={row.keys} />
-              </span>
-            {:else}
-              <button
-                type="button"
-                class="chord"
-                class:listening={recording === row.id}
-                aria-label={t('shortcuts.rebind.change', { name: row.label })}
-                onclick={() => record(row.id)}
-                onblur={() => {
-                  if (recording === row.id) recording = null
-                }}
-              >
-                {#if recording === row.id}
-                  <span class="prompt">{t('shortcuts.rebind.listening')}</span>
-                {:else if row.unbound}
-                  <span class="prompt">{t('shortcuts.rebind.unbound')}</span>
-                {:else}
-                  <KeyHint keys={row.keys} />
+<div class="sheet" bind:this={root}>
+  <!-- Search and tabs stay put while the list scrolls under them. -->
+  <div class="top">
+    <div class="find">
+      <div class="search">
+        <TextInput
+          bind:this={searchField}
+          id={searchId}
+          size="sm"
+          icon="search"
+          value={query}
+          onchange={(value) => {
+            setQuery(value)
+            void tick().then(toTop)
+          }}
+          onkeydown={onsearchkeydown}
+          placeholder={t('shortcuts.search.placeholder')}
+          label={t('shortcuts.search.label')}
+          autocomplete="off"
+          spellcheck="false"
+          aria-controls={panelId}
+        />
+        {#if query !== ''}
+          <button type="button" class="clear" aria-label={t('shortcuts.search.clear')} title={t('shortcuts.search.clear')} onclick={clearSearch}>
+            <Icon name="close" size={11} />
+          </button>
+        {/if}
+      </div>
+      <Button size="sm" disabled={!anyRebound} onclick={resetAll}>
+        {t('shortcuts.rebind.resetAll')}
+      </Button>
+    </div>
+
+    <!-- One tab stop for the list: the open tab. -->
+    <div class="tabs" class:searching role="tablist" aria-label={t('shortcuts.tabs.label')}>
+      {#each TABS as entry, index (entry.id)}
+        <button
+          bind:this={tabButtons[index]}
+          type="button"
+          role="tab"
+          class="tab"
+          class:on={entry.id === tab}
+          class:none={searching && counts[entry.id] === 0}
+          id="{uid}-tab-{entry.id}"
+          aria-selected={!searching && entry.id === tab}
+          aria-controls={panelId}
+          tabindex={entry.id === tab ? 0 : -1}
+          onclick={() => openTab(entry.id)}
+          onkeydown={ontabkeydown}
+        >
+          {t(entry.labelKey)}
+          {#if searching}<span class="count">{counts[entry.id]}</span>{/if}
+        </button>
+      {/each}
+    </div>
+  </div>
+
+  <div
+    class="panel"
+    id={panelId}
+    role={searching ? 'region' : 'tabpanel'}
+    aria-label={searching ? t('shortcuts.search.label') : undefined}
+    aria-labelledby={searching ? undefined : `${uid}-tab-${tab}`}
+  >
+    {#each shown.keyed as section (section.group)}
+      <section class="group">
+        {#if headed}
+          <svelte:element this={headingLevel} class="heading">{section.label}</svelte:element>
+        {/if}
+        <ul class="rows">
+          {#each section.rows as row (row.id)}
+            <li class="row" class:rebound={row.rebound}>
+              <span class="label">{row.label}</span>
+              <span class="keys">
+                {#if row.rebound}
+                  <button
+                    type="button"
+                    class="revert"
+                    title={t('shortcuts.rebind.reset', { name: row.label })}
+                    aria-label={t('shortcuts.rebind.reset', { name: row.label })}
+                    onclick={() => report(resetShortcutBinding(row.id), row.id)}
+                  >
+                    <Icon name="undo" size={12} />
+                  </button>
                 {/if}
-              </button>
-              {#if row.rebound}
-                <button
-                  type="button"
-                  class="revert"
-                  title={t('shortcuts.rebind.reset', { name: row.label })}
-                  aria-label={t('shortcuts.rebind.reset', { name: row.label })}
-                  onclick={() => report(resetShortcutBinding(row.id))}
-                >
-                  ↺
-                </button>
-              {/if}
-            {/if}
-          </dd>
-        {/each}
-      </dl>
-    </section>
-  {/each}
+                {#if row.fixed}
+                  <span class="locked" title={t('shortcuts.rebind.fixedHint')}>
+                    <KeyHint keys={row.keys} />
+                  </span>
+                {:else}
+                  <button
+                    type="button"
+                    class="chord"
+                    class:listening={recording === row.id}
+                    class:unset={row.unset}
+                    aria-label={t('shortcuts.rebind.change', { name: row.label })}
+                    onclick={() => record(row.id)}
+                    onblur={() => {
+                      if (recording === row.id) recording = null
+                    }}
+                  >
+                    {#if recording === row.id}
+                      <span class="prompt">{t('shortcuts.rebind.listening')}</span>
+                    {:else if row.unset}
+                      <span class="prompt">{t('shortcuts.rebind.unbound')}</span>
+                    {:else}
+                      <KeyHint keys={row.keys} />
+                    {/if}
+                  </button>
+                {/if}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/each}
 
-  <!-- The one binding that is a modifier rather than a chord. Last, under the
-       key groups, because it is the exception and reads as one. -->
-  <section class="group">
-    <svelte:element this={headingLevel} class="heading">
-      {t('shortcuts.group.pointer')}
-    </svelte:element>
-    <div class="pointer-row">
-      <span class="label" id={cloneModifierLabelId}>{t('settings.cloneSource.label')}</span>
-      <Segmented
-        options={modifierOptions}
-        value={session.cloneSourceModifier}
-        labelledBy={cloneModifierLabelId}
-        onchange={(value) => setCloneSourceModifier(value)}
-      />
-    </div>
-    <div class="pointer-row">
-      <span class="label" id={presetLabelId}>{t('shortcuts.navigation.preset')}</span>
-      <Segmented
-        options={presetOptions}
-        value={preset}
-        labelledBy={presetLabelId}
-        onchange={(value) => {
-          if (value === 'trackpad' || value === 'mouse') setNavigation(NAVIGATION_PRESETS[value])
-        }}
-      />
-    </div>
-    <div class="pointer-row">
-      <span class="label" id={wheelLabelId}>{t('shortcuts.navigation.wheel')}</span>
-      <Segmented
-        options={wheelOptions}
-        value={session.navigation.wheel}
-        labelledBy={wheelLabelId}
-        onchange={(value) => setNavigation({ wheel: value === 'zoom' ? 'zoom' : 'scroll' })}
-      />
-    </div>
-    <div class="pointer-row">
-      <span class="label" id={middleLabelId}>{t('shortcuts.navigation.middle')}</span>
-      <Segmented
-        options={panOptions}
-        value={session.navigation.middlePan ? 'on' : 'off'}
-        labelledBy={middleLabelId}
-        onchange={(value) => setNavigation({ middlePan: value === 'on' })}
-      />
-    </div>
-    <div class="pointer-row">
-      <span class="label" id={emptyLabelId}>{t('shortcuts.navigation.empty')}</span>
-      <Segmented
-        options={panOptions}
-        value={session.navigation.emptyPan ? 'on' : 'off'}
-        labelledBy={emptyLabelId}
-        onchange={(value) => setNavigation({ emptyPan: value === 'on' })}
-      />
-    </div>
-    <p class="note">
-      {t(
-        session.navigation.wheel === 'zoom' ? 'shortcuts.navigation.hintZoom' : 'shortcuts.navigation.hintScroll',
-        { accel: apple ? '⌘' : 'Ctrl', alt: modifierCap('alt', { apple }) },
-      )}
-    </p>
-  </section>
+    <!-- The bindings that are a mouse rather than a key: a modifier held with
+         a click, and how the wheel and the buttons move the canvas. -->
+    {#if shown.pointer.length > 0}
+      <section class="group">
+        {#if searching}
+          <svelte:element this={headingLevel} class="heading">{pointerLabel}</svelte:element>
+        {/if}
+        {#if shown.pointer.includes('clone')}
+          <div class="pointer-row">
+            <span class="label" id={cloneModifierLabelId}>{t('settings.cloneSource.label')}</span>
+            <Segmented
+              options={modifierOptions}
+              value={session.cloneSourceModifier}
+              labelledBy={cloneModifierLabelId}
+              onchange={(value) => setCloneSourceModifier(value)}
+            />
+          </div>
+        {/if}
+        {#if shown.pointer.includes('preset')}
+          <div class="pointer-row">
+            <span class="label" id={presetLabelId}>{t('shortcuts.navigation.preset')}</span>
+            <Segmented
+              options={presetOptions}
+              value={preset}
+              labelledBy={presetLabelId}
+              onchange={(value) => {
+                if (value === 'trackpad' || value === 'mouse') setNavigation(NAVIGATION_PRESETS[value])
+              }}
+            />
+          </div>
+        {/if}
+        {#if shown.pointer.includes('wheel')}
+          <div class="pointer-row">
+            <span class="label" id={wheelLabelId}>{t('shortcuts.navigation.wheel')}</span>
+            <Segmented
+              options={wheelOptions}
+              value={session.navigation.wheel}
+              labelledBy={wheelLabelId}
+              onchange={(value) => setNavigation({ wheel: value === 'zoom' ? 'zoom' : 'scroll' })}
+            />
+          </div>
+        {/if}
+        {#if shown.pointer.includes('middle')}
+          <div class="pointer-row">
+            <span class="label" id={middleLabelId}>{t('shortcuts.navigation.middle')}</span>
+            <Segmented
+              options={panOptions}
+              value={session.navigation.middlePan ? 'on' : 'off'}
+              labelledBy={middleLabelId}
+              onchange={(value) => setNavigation({ middlePan: value === 'on' })}
+            />
+          </div>
+        {/if}
+        {#if shown.pointer.includes('empty')}
+          <div class="pointer-row">
+            <span class="label" id={emptyLabelId}>{t('shortcuts.navigation.empty')}</span>
+            <Segmented
+              options={panOptions}
+              value={session.navigation.emptyPan ? 'on' : 'off'}
+              labelledBy={emptyLabelId}
+              onchange={(value) => setNavigation({ emptyPan: value === 'on' })}
+            />
+          </div>
+        {/if}
+        {#if !searching}
+          <p class="note">
+            {t(
+              session.navigation.wheel === 'zoom' ? 'shortcuts.navigation.hintZoom' : 'shortcuts.navigation.hintScroll',
+              { accel: apple ? '⌘' : 'Ctrl', alt: modifierCap('alt', { apple }) },
+            )}
+          </p>
+        {/if}
+      </section>
+    {/if}
+
+    {#if nothingFound}
+      <p class="empty">{t('shortcuts.search.empty', { query: query.trim() })}</p>
+    {/if}
+  </div>
 
   <p
     class="status"
@@ -398,25 +736,103 @@
     role="status"
     aria-live="polite"
   >
-    {#if recording !== null}
-      {t('shortcuts.rebind.hint')}
-    {:else if message}
+    {#if message}
       {t(message.key, message.params)}
+    {:else if recording !== null}
+      {t('shortcuts.rebind.hint')}
     {/if}
   </p>
-
-  <div class="foot">
-    <Button size="sm" disabled={!anyRebound} onclick={resetAll}>
-      {t('shortcuts.rebind.resetAll')}
-    </Button>
-  </div>
 </div>
 
 <style>
+  /* The fill of whatever scrolls the sheet - the dialog's by default, the
+     screen's inside Settings (`--sheet-fill`) - so rows scrolling under the
+     bar do not show through it. */
+  .top {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin-bottom: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--line);
+    background: var(--sheet-fill, var(--surface));
+  }
+
+  .find {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .search {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+  }
+  /* Room for the clear button. */
+  .search :global(input) { padding-right: 18px }
+  .clear {
+    position: absolute;
+    top: 50%;
+    right: 5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--t3);
+    transform: translateY(-50%);
+    cursor: pointer;
+  }
+  .clear:hover { color: var(--text) }
+  .clear:focus-visible { outline-offset: -1px }
+
+  /* Chips, the shape of Settings' own tabs laid on their side. Weight never
+     changes with selection, so a label never shifts under the pointer. */
+  .tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin-top: 8px;
+  }
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 9px;
+    border: none;
+    border-radius: var(--r-chip);
+    background: none;
+    color: var(--t2);
+    font: inherit;
+    font-size: 11.5px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .tab:hover { background: var(--accent-soft); color: var(--text) }
+  .tab.on { background: var(--accent-soft); color: var(--text) }
+  .tab:focus-visible { outline-offset: -2px }
+  /* While searching no tab is open: the list is the results of all of them. */
+  .tabs.searching .tab.on:not(:hover) { background: none; color: var(--t2) }
+  .tab.none { color: var(--t3) }
+  .count {
+    font-size: 10.5px;
+    color: var(--t3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .panel { padding-top: 2px }
+
   .group + .group { margin-top: 12px }
 
   .heading {
-    margin: 0 0 5px;
+    margin: 0 0 3px;
+    padding: 0 6px;
     font-size: 10.5px;
     font-weight: 600;
     letter-spacing: .12em;
@@ -424,31 +840,42 @@
     color: var(--t3);
   }
 
-  /* Two label/keys pairs per row, as the design file lays the sheet out. It
-     collapses to one pair when the dialog is narrower than the two fit. */
   .rows {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr auto;
-    align-items: center;
-    column-gap: 12px;
-    row-gap: 3px;
     margin: 0;
+    padding: 0;
+    list-style: none;
   }
-  @media (max-width: 520px) {
-    .rows { grid-template-columns: 1fr auto }
+
+  /* One row per shortcut, the name left and its keys right. The fill is the
+     row answering the pointer, so it is clear which keys belong to which
+     name across the gap. */
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 26px;
+    padding: 0 3px 0 6px;
+    border-radius: var(--r-sm);
+    /* Room for the sticky search and tabs above and the status below, so a
+       row the focus scrolls to is not left under either. */
+    scroll-margin: 84px 0 36px;
   }
+  .row:hover { background: var(--accent-soft) }
 
   .label {
     min-width: 0;
-    font-size: 11px;
+    font-size: 11.5px;
+    line-height: 1.35;
     color: var(--t2);
   }
+  .row:hover .label { color: var(--text) }
+
   .keys {
     display: flex;
+    flex: none;
     align-items: center;
-    gap: 4px;
-    margin: 0;
-    justify-self: end;
+    gap: 2px;
   }
 
   /* The chord is a control, and reads as one only on approach: at rest it is
@@ -457,6 +884,7 @@
   .chord {
     display: inline-flex;
     align-items: center;
+    min-height: 21px;
     padding: 1px 3px;
     border: 1px solid transparent;
     border-radius: var(--r-xs);
@@ -472,6 +900,10 @@
     border-color: var(--accent);
   }
   .chord.listening { border-color: var(--accent) }
+  /* No key yet: a dashed slot, which is what it is - a place to put one. */
+  .chord.unset { padding: 1px 6px; border-style: dashed; border-color: var(--line2) }
+  .chord.unset:hover { border-color: var(--tintline) }
+  .chord.unset.listening, .chord.unset:focus-visible { border-style: solid; border-color: var(--accent) }
 
   .prompt {
     font-size: 10.5px;
@@ -484,15 +916,13 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
+    width: 20px;
+    height: 20px;
     padding: 0;
     border: none;
     border-radius: var(--r-xs);
     background: none;
     color: var(--t3);
-    font-size: 11px;
-    line-height: 1;
     cursor: pointer;
   }
   .revert:hover { color: var(--text) }
@@ -501,25 +931,32 @@
     color: var(--accent);
   }
 
-  .locked { display: inline-flex; padding: 1px 3px }
+  .locked { display: inline-flex; padding: 1px 4px }
 
-  /* The pointer row. Label left, chips right - the shape of the `dl` rows
-     above it without the grid, because one row cannot be a column of two. */
+  /* The pointer rows: the key rows' shape, with chips for keys. */
   .pointer-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    min-height: 23px;
+    min-height: 30px;
+    padding: 0 3px 0 6px;
+    scroll-margin: 84px 0 36px;
   }
 
-  .pointer-row + .pointer-row { margin-top: 3px }
-
   .note {
-    margin: 6px 0 0;
+    margin: 8px 0 0;
+    padding: 0 6px;
     font-size: 10.5px;
     line-height: 1.4;
     color: var(--t3);
+  }
+
+  .empty {
+    margin: 24px 0 0;
+    font-size: 11.5px;
+    color: var(--t3);
+    text-align: center;
   }
 
   /* Sticky to the foot of the dialog's own scroller while it has anything to
@@ -537,15 +974,7 @@
     position: sticky;
     bottom: 0;
     margin-top: 10px;
-    padding: 4px 0;
-    background: var(--surface);
-  }
-
-  .foot {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    margin-top: 14px;
+    padding: 6px;
+    background: var(--sheet-fill, var(--surface));
   }
 </style>

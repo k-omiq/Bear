@@ -2542,6 +2542,7 @@ export const pt = {
   shortcuts: {
     group: {
       tools: 'Ferramentas',
+      modes: 'Modos e formas',
       brush: 'Pincel e margem',
       view: 'Visualização',
       edit: 'Edição',
@@ -2549,7 +2550,30 @@ export const pt = {
       navigation: 'Navegação',
       panels: 'Painéis',
       app: 'App',
+      run: 'Execução',
       pointer: 'Ponteiro',
+    },
+    tabs: {
+      label: 'Tipos de atalhos',
+    },
+    tab: {
+      tools: 'Ferramentas',
+      brush: 'Pincel',
+      run: 'Executar',
+      edit: 'Edição',
+      view: 'Ver',
+      app: 'App',
+      pointer: 'Mouse',
+    },
+    search: {
+      label: 'Pesquisar atalhos',
+      placeholder: 'Pesquisar por nome ou tecla',
+      clear: 'Limpar pesquisa',
+      empty: 'Nenhum atalho corresponde a "{query}".',
+    },
+    run: {
+      solidBubbles: 'Limpar esta página, somente balões lisos',
+      fullClean: 'Limpar esta página por completo',
     },
     navigation: {
       preset: 'Mover a tela',
@@ -2590,8 +2614,8 @@ export const pt = {
       cancelRun: 'Cancelar execução',
       shapeNext: 'Próxima forma',
       shapePrev: 'Forma anterior',
-      modeNext: 'Próximo modo, tipo ou motor',
-      modePrev: 'Modo, tipo ou motor anterior',
+      modeNext: 'Próximo modo da ferramenta selecionada',
+      modePrev: 'Modo anterior da ferramenta selecionada',
       maskAdd: 'Seleção: adicionar às máscaras',
       maskRemove: 'Seleção: remover das máscaras (de novo: adicionar)',
       maskDetect: 'Seleção: detectar numa área (de novo: adicionar)',
@@ -2736,6 +2760,7 @@ export const pt = {
       },
     },
     run: {
+      startFailed: 'Não foi possível iniciar a limpeza de texto. Nada foi alterado.',
       busy: 'Outra execução está começando ou já está rodando. Espere ela terminar.',
       atCapacity: 'O número máximo de execuções simultâneas já está rodando. Espere uma terminar e depois inicie esta.',
       pageBusy: 'Uma execução está trabalhando nesta página. Nada foi alterado; tente de novo quando ela passar para a próxima.',
