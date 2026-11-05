@@ -137,8 +137,8 @@ fn check_no_cloud_secrets(key_path: &str, value: &Value) -> Result<(), String> {
 /// stages to the cloud, `cleanTarget` the cleaning and `denoiseTarget` the
 /// denoise, so each is refused whole rather than half-read later.
 /// `cloudWorkLongSide` and `cloudFlux3Generation` are what a cloud clean is
-/// priced and billed at, and `cloudFinishing` names a finishing this build
-/// must have.
+/// priced and billed at, and `cloudFinishing` and `nanoBananaFinishing` name
+/// a finishing this build must have.
 ///
 /// `undoLimit` is checked for a different reason: it is how much undo history
 /// is written to disk on every edit, and [`crate::history`] owns its bounds.
@@ -164,6 +164,9 @@ fn check_known_shapes(patch: &Value) -> Result<(), String> {
     }
     if patch.get(FLUX3_GENERATION_KEY).is_some() {
         flux3_generation_from_settings(patch)?;
+    }
+    if crate::inference::nano_banana_finishing::touches(patch) {
+        crate::inference::nano_banana_finishing::from_settings(patch)?;
     }
     crate::run::lama_hole_from_settings(patch)?;
     crate::run::lama_sharing_from_settings(patch)?;
@@ -733,6 +736,33 @@ mod tests {
         }
         assert_eq!(read_file(&path).unwrap()["cloudWorkLongSide"], 1280, "a refused patch writes nothing");
         assert!(write_patch(&path, serde_json::json!({"cloudWorkLongSide": null})).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **Nano Banana's finishing round trips.** Each of its three settings is
+    /// written and read back as it was given, read through the reader a region
+    /// edit uses, and a bad value is refused whole with nothing written.
+    #[test]
+    fn nano_banana_finishing_round_trips() {
+        use cleaner_core::engines::postprocess::{Choice, Finishing};
+        use crate::inference::nano_banana_finishing::{from_settings, FINISHING_KEY, GRAYSCALE_KEY, STRAYS_KEY};
+        let dir = std::env::temp_dir().join(format!("mc-settings-nb-finishing-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        for finishing in Finishing::ALL {
+            let name = serde_json::json!(finishing);
+            assert_eq!(write_patch(&path, serde_json::json!({FINISHING_KEY: name})).unwrap()[FINISHING_KEY], name);
+        }
+        write_patch(&path, serde_json::json!({FINISHING_KEY: "tone-only", GRAYSCALE_KEY: true, STRAYS_KEY: true})).unwrap();
+        assert_eq!(from_settings(&read_file(&path).unwrap()).unwrap(), Choice { finishing: Finishing::ToneOnly, grayscale: true, strays: true });
+        for bad in [serde_json::json!({FINISHING_KEY: "sharpen"}), serde_json::json!({GRAYSCALE_KEY: "yes"}),
+            serde_json::json!({STRAYS_KEY: 1, FINISHING_KEY: "copy"})] {
+            assert!(write_patch(&path, bad.clone()).is_err(), "{bad}");
+        }
+        let stored = read_file(&path).unwrap();
+        assert_eq!((&stored[FINISHING_KEY], &stored[STRAYS_KEY]), (&serde_json::json!("tone-only"), &serde_json::json!(true)),
+            "a refused patch writes nothing");
+        assert!(write_patch(&path, serde_json::json!({FINISHING_KEY: null, GRAYSCALE_KEY: null, STRAYS_KEY: null})).is_ok());
+        assert_eq!(from_settings(&read_file(&path).unwrap()).unwrap(), Choice::default());
         std::fs::remove_dir_all(&dir).ok();
     }
 

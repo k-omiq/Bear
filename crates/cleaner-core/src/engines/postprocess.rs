@@ -41,7 +41,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::grid::{Grid, Mask, distance_to, gather, gaussian, masked_blur, median, percentile};
+use super::grid::{Grid, Mask, components, distance_to, gather, gaussian, masked_blur, median, percentile};
 use super::poisson::membrane;
 
 /// The gain the tone step may apply.
@@ -61,6 +61,21 @@ pub const PROTECT_PX: f64 = 3.0;
 pub const DESCREEN_SIGMA: f64 = 1.5;
 /// The repeat correlation [`Finishing::RepeatOffsets`] copies a screen at.
 pub const REPEAT_CORR: f64 = 0.8;
+
+/// A line the answer drew within this many px of the mask's edge continues
+/// the page's drawing, and is never a stray mark ([`strays`]).
+pub const STRAY_EDGE_PX: f64 = 4.0;
+/// A stray mark is no wider or taller than this, in px.
+pub const STRAY_MAX_SIDE: usize = 48;
+/// A stray mark has no other line within this many px of it.
+pub const STRAY_CLEAR_PX: usize = 8;
+/// ... and the tone round it, under a [`STRAY_TONE_SIGMA`] px blur, varies
+/// by no more than this many levels (standard deviation): a mark on flat
+/// paper or an even screen, not one among hatching or texture.
+pub const STRAY_FLAT: f64 = 12.0;
+const STRAY_TONE_SIGMA: f64 = 3.0;
+/// The blur a stray mark is filled from its surroundings with, in px.
+const STRAY_FILL_SIGMA: f64 = 4.0;
 
 /// The low-pass the tone step compares page and answer at, in px.
 const TONE_SIGMA: f64 = 2.5;
@@ -175,6 +190,18 @@ pub struct Choice {
     pub finishing: Finishing,
     #[serde(default)]
     pub grayscale: bool,
+    /// Whether small marks the model drew on its own inside the mask are
+    /// filled from the tone round them first ([`strays`]). Written only when
+    /// on, so a choice without it reads, compares and is stored as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strays: bool,
+}
+
+impl Choice {
+    /// `finishing`, grey or not, with no stray marks taken out.
+    pub const fn of(finishing: Finishing, grayscale: bool) -> Choice {
+        Choice { finishing, grayscale, strays: false }
+    }
 }
 
 /// What the post-processing did, for the patch's provenance
@@ -191,6 +218,10 @@ pub struct Report {
     pub contours: usize,
     /// Mask pixels the screen step copied the page's dots into.
     pub screen: usize,
+    /// Mask pixels filled because the model drew a stray mark there
+    /// ([`strays`]). Written only when the choice asked for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stray_pixels: Option<usize>,
     /// The version that ran, and whether it made the patch grey.
     #[serde(flatten)]
     pub choice: Choice,
@@ -229,10 +260,23 @@ pub fn settle_with(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
 
 /// [`settle_with`] over the whole crop.
 fn finish(crop: &Crop<'_>, choice: Choice) -> (Vec<Grid>, Report) {
-    let Choice { finishing, grayscale } = choice;
+    let Choice { finishing, grayscale, strays: take_strays } = choice;
     let mask = crop.mask;
     let (w, h) = (mask.w, mask.h);
-    let mut report = Report { gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0, choice, method_report: None };
+    let mut report = Report {
+        gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0, stray_pixels: None, choice, method_report: None,
+    };
+    // Stray marks go first, so every version after finishes the answer as if
+    // the model had not drawn them.
+    let filled;
+    let crop = if take_strays {
+        let found = strays(crop.answer, mask);
+        report.stray_pixels = Some(found.count());
+        filled = fill_strays(crop.answer, &found, mask);
+        &Crop { shown: crop.shown, answer: &filled, mask, page: crop.page }
+    } else {
+        crop
+    };
     if let Some(method) = finishing.ported_method() {
         let (finished, details) = super::finishing::finish(crop, method, grayscale);
         report.method_report = Some(details);
@@ -320,6 +364,126 @@ impl Report {
         record["postprocess_version"] = serde_json::json!(super::render::EDIT_PREPROCESSING_VERSION);
         record
     }
+}
+
+/// Small marks the answer drew inside `mask` on its own: the white crescent or
+/// flecks an edit model invents on dark tone. A mark is a piece of the
+/// answer's lines ([`contours`], found under the [`DESCREEN_SIGMA`] blur) that
+///
+/// - comes no nearer than [`STRAY_EDGE_PX`] to the mask's edge, so it does not
+///   continue a line of the page's,
+/// - is no wider or taller than [`STRAY_MAX_SIDE`],
+/// - has no other line within [`STRAY_CLEAR_PX`], and flat tone round it
+///   ([`STRAY_FLAT`]): hatching and texture are lines among lines and stay.
+///
+/// What is returned is each mark with the area its outline encloses, grown
+/// by 2 px to take its soft edge.
+pub fn strays(answer: &[Grid], mask: &Mask) -> Mask {
+    let (w, h) = (mask.w, mask.h);
+    let tone = luma(answer);
+    let lines = contours(&gaussian(&tone, DESCREEN_SIGMA));
+    let flat = gaussian(&tone, STRAY_TONE_SIGMA);
+    let inside = distance_to(&mask.not());
+    let (label, sizes) = components(&lines.dilate(1).and(mask));
+    // Each piece's box, and whether it reaches the mask's edge.
+    let mut boxes = vec![(usize::MAX, usize::MAX, 0usize, 0usize, false); sizes.len()];
+    for (i, &l) in label.iter().enumerate() {
+        if l == 0 {
+            continue;
+        }
+        let (x, y) = (i % w, i / w);
+        let b = &mut boxes[l];
+        *b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y), b.4 || inside.data[i] <= STRAY_EDGE_PX);
+    }
+    let mut found = Mask::new(w, h, false);
+    let reach = STRAY_CLEAR_PX + 3;
+    for (l, &(x0, y0, x1, y1, edge)) in boxes.iter().enumerate().skip(1) {
+        if edge || x1 - x0 + 1 > STRAY_MAX_SIDE || y1 - y0 + 1 > STRAY_MAX_SIDE {
+            continue;
+        }
+        // Worked in a window round the piece.
+        let (wx0, wy0) = (x0.saturating_sub(reach), y0.saturating_sub(reach));
+        let (wx1, wy1) = ((x1 + reach).min(w - 1), (y1 + reach).min(h - 1));
+        let (ww, wh) = (wx1 - wx0 + 1, wy1 - wy0 + 1);
+        let at = |x: usize, y: usize| (wy0 + y) * w + wx0 + x;
+        let piece = Mask { w: ww, h: wh, data: (0..ww * wh).map(|i| label[at(i % ww, i / ww)] == l).collect() };
+        let area = filled(&piece.dilate(2));
+        let near = area.dilate(STRAY_CLEAR_PX).and_not(&area);
+        let mut ring = Vec::new();
+        let mut crowded = false;
+        for i in 0..ww * wh {
+            if !near.data[i] {
+                continue;
+            }
+            let j = at(i % ww, i / ww);
+            crowded |= lines.data[j];
+            ring.push(flat.data[j]);
+        }
+        if crowded || ring.is_empty() {
+            continue;
+        }
+        let mean = ring.iter().sum::<f64>() / ring.len() as f64;
+        let spread = (ring.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / ring.len() as f64).sqrt();
+        if spread > STRAY_FLAT {
+            continue;
+        }
+        for i in 0..ww * wh {
+            if area.data[i] {
+                found.data[at(i % ww, i / ww)] = true;
+            }
+        }
+    }
+    found.and(mask)
+}
+
+/// `piece` with every hole in it filled: what its outline encloses.
+fn filled(piece: &Mask) -> Mask {
+    let (w, h) = (piece.w, piece.h);
+    let mut outside = vec![false; w * h];
+    let mut stack: Vec<usize> = (0..w * h).filter(|&i| {
+        let (x, y) = (i % w, i / w);
+        (x == 0 || y == 0 || x == w - 1 || y == h - 1) && !piece.data[i]
+    }).collect();
+    for &i in &stack {
+        outside[i] = true;
+    }
+    while let Some(i) = stack.pop() {
+        let (x, y) = (i % w, i / w);
+        let mut step = |j: usize| {
+            if !piece.data[j] && !outside[j] {
+                outside[j] = true;
+                stack.push(j);
+            }
+        };
+        if x > 0 { step(i - 1) }
+        if x + 1 < w { step(i + 1) }
+        if y > 0 { step(i - w) }
+        if y + 1 < h { step(i + w) }
+    }
+    Mask { w, h, data: outside.into_iter().map(|o| !o).collect() }
+}
+
+/// `answer` with the `found` marks filled from the tone round them: a
+/// normalised blur of the mask's other pixels, so the steps after it see the
+/// surrounding tone there, and a screen step redraws its dots.
+fn fill_strays(answer: &[Grid], found: &Mask, mask: &Mask) -> Vec<Grid> {
+    if !found.any() {
+        return answer.to_vec();
+    }
+    let known = found.dilate(1).not();
+    answer
+        .iter()
+        .map(|channel| {
+            let (around, _) = masked_blur(channel, &known, STRAY_FILL_SIGMA);
+            let mut out = channel.clone();
+            for i in 0..out.data.len() {
+                if found.data[i] && mask.data[i] {
+                    out.data[i] = around.data[i];
+                }
+            }
+            out
+        })
+        .collect()
 }
 
 fn luma(channels: &[Grid]) -> Grid {
@@ -600,7 +764,7 @@ mod tests {
     }
 
     fn settle_as(shown: &[Grid], answer: &[Grid], mask: &Mask, page: &Mask, finishing: Finishing, grayscale: bool) -> (Vec<Grid>, Report) {
-        settle_with(&Crop { shown, answer, mask, page }, Choice { finishing, grayscale })
+        settle_with(&Crop { shown, answer, mask, page }, Choice::of(finishing, grayscale))
     }
 
     /// **Every finishing writes only the mask and says which one ran.**
@@ -632,7 +796,7 @@ mod tests {
         let names: Vec<_> = Finishing::ALL[7..].iter().map(|f| serde_json::json!(f)).collect();
         assert_eq!(names, ["as-is", "global-tone", "local-tone", "poisson", "dots-only"].map(|n| serde_json::json!(n)));
         let choice: Choice = serde_json::from_value(serde_json::json!({"finishing": "reference-poisson", "grayscale": true})).unwrap();
-        assert_eq!(choice, Choice { finishing: Finishing::Poisson, grayscale: true });
+        assert_eq!(choice, Choice::of(Finishing::Poisson, true));
     }
 
     /// **Every screen finishing gets the dots back.** The default's
@@ -761,5 +925,83 @@ mod tests {
                 assert!(report.screen > 0, "{report:?}");
             }
         }
+    }
+
+    /// A dark dot screen with a hole the model filled with the screen, and
+    /// `draw` painted into its answer.
+    fn dark_screen_with(draw: impl Fn(usize, usize) -> Option<f64>) -> (Grid, Grid, Mask) {
+        let (w, h) = (160, 160);
+        let period = std::f64::consts::TAU / 5.0;
+        let page = Grid {
+            w,
+            h,
+            data: (0..w * h).map(|i| 50.0 + 40.0 * ((i % w) as f64 * period).cos() * ((i / w) as f64 * period).cos()).collect(),
+        };
+        let mask = square(w, h, 30, 30, 130, 130);
+        let answer = Grid {
+            w,
+            h,
+            data: (0..w * h).map(|i| match draw(i % w, i / w) {
+                Some(v) if mask.data[i] => v,
+                _ => page.data[i],
+            }).collect(),
+        };
+        (page, answer, mask)
+    }
+
+    /// A white crescent, the mark the 13_00 answer had, centred at (80, 80).
+    fn crescent(x: usize, y: usize) -> Option<f64> {
+        let (dx, dy) = (x as f64 - 80.0, y as f64 - 80.0);
+        let outer = dx * dx / 144.0 + dy * dy / 25.0 <= 1.0;
+        let inner = dx * dx / 120.0 + (dy + 2.5) * (dy + 2.5) / 16.0 <= 1.0;
+        (outer && !inner).then_some(245.0)
+    }
+
+    /// **A mark the model drew on its own is filled from the tone round it.**
+    /// A white crescent on a dark screen, well inside the mask, is found and
+    /// comes back at the screen's tone; without the step it stays white.
+    #[test]
+    fn a_stray_mark_on_flat_tone_is_filled() {
+        let (page, answer, mask) = dark_screen_with(crescent);
+        let found = strays(std::slice::from_ref(&answer), &mask);
+        let mark = Mask { w: mask.w, h: mask.h, data: (0..mask.w * mask.h).map(|i| crescent(i % mask.w, i / mask.w).is_some()).collect() };
+        assert!(mark.and_not(&found).count() == 0, "{} of the mark's {} px missed", mark.and_not(&found).count(), mark.count());
+        assert_eq!(found.and_not(&mark.dilate(4)).count(), 0, "pixels taken more than 4 px from the mark");
+        let all = Mask::new(mask.w, mask.h, true);
+        let crop = Crop { shown: std::slice::from_ref(&page), answer: std::slice::from_ref(&answer), mask: &mask, page: &all };
+        let mean = |g: &Grid| (0..g.data.len()).filter(|&i| mark.data[i]).map(|i| g.data[i]).sum::<f64>() / mark.count() as f64;
+        let (kept, report) = settle_with(&crop, Choice::of(Finishing::Copy, false));
+        assert!(mean(&kept[0]) > 200.0, "the plain finishing kept the mark: {}", mean(&kept[0]));
+        assert_eq!(report.stray_pixels, None);
+        let (taken, report) = settle_with(&crop, Choice { strays: true, ..Choice::default() });
+        assert!(mean(&taken[0]) < 90.0, "the mark is still there: {}", mean(&taken[0]));
+        assert_eq!(report.stray_pixels, Some(found.count()));
+        assert!((0..page.data.len()).all(|i| mask.data[i] || taken[0].data[i] == answer.data[i]), "written outside the mask");
+    }
+
+    /// **The page's drawing and texture stay.** A line that runs out of the
+    /// mask continues the page's, and close hatching is lines among lines:
+    /// neither is a stray mark, however small its pieces.
+    #[test]
+    fn lines_from_the_edge_and_hatching_are_not_stray() {
+        let line = |x: usize, y: usize| ((78..82).contains(&x) && (20..90).contains(&y)).then_some(245.0);
+        let (_, answer, mask) = dark_screen_with(line);
+        assert_eq!(strays(std::slice::from_ref(&answer), &mask).count(), 0, "a line from the edge");
+        let hatching = |x: usize, y: usize| {
+            ((50..110).contains(&x) && (50..110).contains(&y) && (x + y) % 6 < 2 && (x / 10 + y / 10) % 2 == 0).then_some(245.0)
+        };
+        let (_, answer, mask) = dark_screen_with(hatching);
+        assert_eq!(strays(std::slice::from_ref(&answer), &mask).count(), 0, "hatching");
+    }
+
+    /// **A choice without the step is stored as before.** `strays` is written
+    /// only when on, and a record without it reads as off.
+    #[test]
+    fn strays_is_written_only_when_on() {
+        assert_eq!(serde_json::json!(Choice::of(Finishing::Copy, true)), serde_json::json!({"finishing": "copy", "grayscale": true}));
+        let on = Choice { strays: true, ..Choice::of(Finishing::ToneOnly, false) };
+        assert_eq!(serde_json::json!(on), serde_json::json!({"finishing": "tone-only", "grayscale": false, "strays": true}));
+        assert_eq!(serde_json::from_value::<Choice>(serde_json::json!(on)).unwrap(), on);
+        assert_eq!(serde_json::from_value::<Choice>(serde_json::json!({"finishing": "copy"})).unwrap(), Choice::default());
     }
 }

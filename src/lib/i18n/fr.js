@@ -3426,6 +3426,16 @@ export const fr = {
       stoppedFailing: 'Nano Banana s’est arrêté après trois échecs de suite.',
     },
   },
+  nanoBananaFinishing: {
+    heading: 'Finition',
+    description: 'Comment un résultat de Nano Banana est accordé à la page avant d’être écrit. C’est son propre choix : les réglages de Post-traitement ne le changent pas. Pour changer un calque déjà nettoyé, utilisez ses aperçus dans la fenêtre Post-traitement. Aucune nouvelle requête n’est envoyée.',
+    method: 'Méthode',
+    grayscale: 'Passer en gris les résultats en couleur',
+    grayscaleHint: 'Sur une page en couleur, le résultat passe en gris avant la finition. Une page grise est toujours lue en gris.',
+    strays: 'Retirer les marques isolées',
+    straysHint: 'Remplit avec le ton autour les petites marques que le modèle a dessinées de lui-même, comme une tache blanche sur une trame sombre. Les marques parmi des traits ou une texture restent.',
+    failed: 'La finition n’a pas pu être enregistrée.',
+  },
   cloud: {
     configuration: {
       loadFailed: 'Impossible de lire la configuration cloud enregistrée. Le déploiement sera vérifié à nouveau.',

@@ -18,6 +18,10 @@
 //!   session keeps its last answers by their input
 //!   ([`cleaner_core::engines::model::AnswerMemo`]), so the previews of every
 //!   finishing cost one model run and the pick none, while it stays loaded.
+//! - **A Nano Banana result's kept answer.** Its answer is kept in the
+//!   chapter's folder (`nano_banana_finishing::keep_answer`). Its region is
+//!   prepared again from the page under it as it is now, cut to the crop it
+//!   was sent as, and the answer is finished onto that: no request to Google.
 //!
 //! What cannot be finished again is said as an [`Unavailable`] reason, which
 //! the editor's window shows in place of its previews.
@@ -133,6 +137,9 @@ pub(crate) struct Reopened {
     /// Whether a colour answer is made grey: the current finishing's, or the
     /// attempt's when the patch records none.
     grayscale: bool,
+    /// Whether stray marks are filled first: the current finishing's. The
+    /// previews and a change keep it.
+    strays: bool,
 }
 
 /// Where a reopened result's answer comes from.
@@ -141,6 +148,9 @@ enum Answer {
     Cloud(DecodedResultCrop),
     /// This computer's model, LaMa or FLUX, asked again ([`LocalRender`]).
     Local(Engine),
+    /// Nano Banana's, kept in the chapter's folder, and the region it was
+    /// sent as, in the coordinates of the window the region is prepared in.
+    NanoBanana(Vec<u8>, cleaner_core::engines::nano_banana::SendRegion),
 }
 
 /// A result finished by one method, in the coordinates it was rendered in:
@@ -156,8 +166,8 @@ struct Finished {
 pub(crate) fn recorded_choice(params: &serde_json::Value) -> Option<Choice> {
     let postprocess = params.get("postprocess")?;
     let finishing = serde_json::from_value::<Finishing>(postprocess.get("finishing")?.clone()).ok()?;
-    let grayscale = postprocess.get("grayscale").and_then(serde_json::Value::as_bool).unwrap_or(false);
-    Some(Choice { finishing, grayscale })
+    let flag = |key: &str| postprocess.get(key).and_then(serde_json::Value::as_bool).unwrap_or(false);
+    Some(Choice { finishing, grayscale: flag("grayscale"), strays: flag("strays") })
 }
 
 /// Prepare region `region_id` of `job` again with its answer, or say why it
@@ -243,16 +253,18 @@ pub(crate) fn reopen(
         answer: Answer::Cloud(answer),
         current,
         grayscale,
+        strays: current.is_some_and(|choice| choice.strays),
     }))
 }
 
 /// [`reopen`] for a result no cloud attempt made: one LaMa or FLUX made on
-/// this computer, prepared again from the page under it as it is now. Asked
-/// again, the model answers that page; a page changed since is no refusal
-/// here, as a re-run of the region is none.
+/// this computer, or Nano Banana's, prepared again from the page under it as
+/// it is now. Asked again, the model answers that page; a page changed since
+/// is no refusal here, as a re-run of the region is none. Nano Banana's kept
+/// answer is finished onto it, while its crop still fits the page.
 fn reopen_local(job: &Job, record: &PatchRecord, flux_model: &str) -> Result<Result<Reopened, Unavailable>, String> {
     let engine = record.provenance.engine;
-    if !matches!(engine, Engine::Lama | Engine::Flux)
+    if !matches!(engine, Engine::Lama | Engine::Flux | Engine::NanoBanana)
         || record.provenance.cloud.is_some()
         || record.geometry_policy == cleaner_core::text_shape::GeometryPolicy::TextShape
     {
@@ -279,6 +291,24 @@ fn reopen_local(job: &Job, record: &PatchRecord, flux_model: &str) -> Result<Res
     let Ok(cloud) = region.prepare(job, &page, Preprocessing::CURRENT) else {
         return Ok(Err(Unavailable::Unsupported));
     };
+    let answer = if engine == Engine::NanoBanana {
+        let params = &record.provenance.params_snapshot;
+        let Some(answer) = super::nano_banana_finishing::kept_answer(job.sidecar(), params) else {
+            return Ok(Err(Unavailable::NoResult));
+        };
+        let shift = (cloud.input.window.x + cloud.source_shift.0, cloud.input.window.y + cloud.source_shift.1);
+        // The window read now must still hold the crop the answer was cut to.
+        let image = &cloud.input.image;
+        let Some(region) = sent_region(params, shift).filter(|region| {
+            let crop = region.crop;
+            crop.x >= 0 && crop.y >= 0 && crop.right() <= i64::from(image.width) && crop.bottom() <= i64::from(image.height)
+        }) else {
+            return Ok(Err(Unavailable::Unsupported));
+        };
+        Answer::NanoBanana(answer, region)
+    } else {
+        Answer::Local(engine)
+    };
     let CloudRegionKind::Patch(stored) = region.kind else {
         return Ok(Err(Unavailable::NoResult));
     };
@@ -289,10 +319,29 @@ fn reopen_local(job: &Job, record: &PatchRecord, flux_model: &str) -> Result<Res
         record,
         patch,
         cloud,
-        answer: Answer::Local(engine),
+        answer,
         current,
         grayscale: current.is_some_and(|choice| choice.grayscale),
+        strays: current.is_some_and(|choice| choice.strays),
     }))
+}
+
+/// The region a Nano Banana answer was sent as, from its record
+/// (`nano_banana`), moved from page pixels to the window's by `shift`.
+fn sent_region(params: &serde_json::Value, shift: (i64, i64)) -> Option<cleaner_core::engines::nano_banana::SendRegion> {
+    let record = params.get("nano_banana")?;
+    let numbers = |key: &str| -> Option<Vec<i64>> {
+        record.get(key)?.as_array()?.iter().map(serde_json::Value::as_i64).collect()
+    };
+    let (crop, output) = (numbers("crop")?, numbers("output")?);
+    let ([x, y, w, h], [ow, oh]) = (crop.as_slice(), output.as_slice()) else { return None };
+    let side = |v: i64| u32::try_from(v).ok();
+    cleaner_core::engines::nano_banana::SendRegion::recorded(
+        Rect::new(x - shift.0, y - shift.1, side(*w)?, side(*h)?),
+        (side(*ow)?, side(*oh)?),
+        record.get("aspect_ratio")?.as_str()?,
+        record.get("image_size")?.as_str()?,
+    )
 }
 
 impl Reopened {
@@ -300,6 +349,11 @@ impl Reopened {
     /// previews and the pick then run it, and wait for a speed measurement.
     fn is_local(&self) -> bool {
         matches!(self.answer, Answer::Local(_))
+    }
+
+    /// `finishing` at this result's grey and stray choices.
+    fn choice(&self, finishing: Finishing) -> Choice {
+        Choice { finishing, grayscale: self.grayscale, strays: self.strays }
     }
 
     /// The answer finished by `choice`, in the coordinates of the window
@@ -322,6 +376,13 @@ impl Reopened {
                         crate::run::recorded_lama_hole(&self.record.provenance))
                     .map_err(|reason| format!("refinish_declined: {reason}"))?;
                 Ok(Finished { mask: made.mask, pixels: made.pixels, matched: made.matched, tone: None })
+            }
+            Answer::NanoBanana(answer, region) => {
+                let prepared = cleaner_core::engines::nano_banana::Prepared::new(
+                    &self.cloud.input.image, &self.cloud.fitted, *region, Some(choice), &[])
+                    .map_err(|e| e.to_string())?;
+                let rendered = prepared.finish(answer).map_err(|e| e.to_string())?;
+                Ok(Finished { mask: rendered.mask, pixels: rendered.pixels, matched: rendered.matched, tone: None })
             }
         }
     }
@@ -356,15 +417,15 @@ impl Reopened {
     }
 
     /// One preview per finishing, in [`Finishing::ALL`]'s order, at this
-    /// result's grey choice. A cloud answer is composited side by side: a
-    /// large crop takes a second or more for each. A local one is rendered
-    /// one after another, by the one model session there is.
+    /// result's grey and stray choices. A cloud or Nano Banana answer is
+    /// composited side by side: a large crop takes a second or more for each.
+    /// A local one is rendered one after another, by the one model session
+    /// there is.
     fn previews(&self, models: &mut dyn LocalRender) -> Vec<(Finishing, Result<Vec<u8>, String>)> {
-        let grayscale = self.grayscale;
         if self.is_local() {
             return Finishing::ALL
                 .iter()
-                .map(|&finishing| (finishing, self.preview(Choice { finishing, grayscale }, models)))
+                .map(|&finishing| (finishing, self.preview(self.choice(finishing), models)))
                 .collect();
         }
         std::thread::scope(|scope| {
@@ -373,7 +434,7 @@ impl Reopened {
                 .map(|&finishing| {
                     // A cloud preview never asks a model: a stand-in that
                     // answers nothing is all each thread needs.
-                    (finishing, scope.spawn(move || self.preview(Choice { finishing, grayscale }, &mut NoModels)))
+                    (finishing, scope.spawn(move || self.preview(self.choice(finishing), &mut NoModels)))
                 })
                 .collect();
             workers
@@ -460,6 +521,8 @@ pub struct FinishingPreviews {
     pub unavailable: Option<Unavailable>,
     pub current: Option<Choice>,
     pub grayscale: bool,
+    /// Whether the previews fill stray marks first, as the result was made.
+    pub strays: bool,
     pub previews: Vec<FinishingPreview>,
 }
 
@@ -494,6 +557,7 @@ pub(crate) fn previews_at(
                 unavailable: Some(why),
                 current: None,
                 grayscale: false,
+                strays: false,
                 previews: Vec::new(),
             });
         }
@@ -519,6 +583,7 @@ pub(crate) fn previews_at(
         unavailable: None,
         current: reopened.current,
         grayscale: reopened.grayscale,
+        strays: reopened.strays,
         previews,
     })
 }
@@ -641,8 +706,8 @@ pub async fn region_finishing_previews(
     .await
 }
 
-/// Finish region `region_id` again by `finishing` (grey or not), one undo
-/// step. Refused with a `refinish_*` code when it cannot be
+/// Finish region `region_id` again by `finishing` (grey or not, stray marks
+/// filled or not: absent is not), one undo step. Refused with a `refinish_*` code when it cannot be
 /// ([`Unavailable`]; `refinish_declined` when a local model will not render
 /// it), or with `page_busy` while a run is on its page.
 #[tauri::command]
@@ -651,10 +716,12 @@ pub async fn set_region_finishing(
     region_id: String,
     finishing: Finishing,
     grayscale: bool,
+    strays: Option<bool>,
 ) -> Result<FinishingChange, String> {
     crate::library::blocking(move || {
         let (job_path, journal) = resolve(&app, &region_id)?;
-        apply_at(&journal, &job_path, &region_id, Choice { finishing, grayscale }, &mut crate::region::LocalModels::open(&app))
+        let choice = Choice { finishing, grayscale, strays: strays.unwrap_or(false) };
+        apply_at(&journal, &job_path, &region_id, choice, &mut crate::region::LocalModels::open(&app))
     })
     .await
 }

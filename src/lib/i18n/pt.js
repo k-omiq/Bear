@@ -3426,6 +3426,16 @@ export const pt = {
       stoppedFailing: 'O Nano Banana parou após três falhas seguidas.',
     },
   },
+  nanoBananaFinishing: {
+    heading: 'Acabamento',
+    description: 'Como um resultado do Nano Banana é ajustado à página antes de ser escrito. É uma escolha própria: as definições de Pós-processamento não a mudam. Para mudar uma camada já limpa, use as pré-visualizações dela na janela de Pós-processamento. Não envia nenhum pedido novo.',
+    method: 'Método',
+    grayscale: 'Deixar cinza os resultados coloridos',
+    grayscaleHint: 'Numa página colorida, o resultado fica cinza antes do acabamento. Uma página cinza é sempre lida em cinza.',
+    strays: 'Remover marcas soltas',
+    straysHint: 'Preenche com o tom à volta as marcas pequenas que o modelo desenhou por conta própria, como um ponto branco sobre retícula escura. Marcas entre traços ou textura ficam.',
+    failed: 'Não foi possível guardar o acabamento.',
+  },
   cloud: {
     configuration: {
       loadFailed: 'Não foi possível ler a configuração cloud salva. A implantação será verificada novamente.',

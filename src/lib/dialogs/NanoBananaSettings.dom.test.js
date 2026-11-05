@@ -168,3 +168,39 @@ describe('the Nano Banana model', () => {
     expect(select.value).toBe('gemini-3.1-flash-image')
   })
 })
+
+describe('the Nano Banana finishing', () => {
+  it('shows what settings hold, and the defaults where they hold nothing', async () => {
+    const backend = backendWith({
+      readSettings: vi.fn(async () => ({ nanoBananaFinishing: 'tone-only', nanoBananaStrays: true })),
+    })
+    await mount(backend)
+    const method = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('nanoBananaFinishing.method')))
+    const grey = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBananaFinishing.grayscale')))
+    const strays = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBananaFinishing.strays')))
+    await vi.waitFor(() => expect(method.value).toBe('tone-only'))
+    expect([grey.checked, strays.checked]).toEqual([false, true])
+  })
+
+  it('saves each part under its own key, apart from the shared Post-processing one', async () => {
+    const backend = backendWith()
+    await mount(backend)
+    await fireEvent.change(screen.getByLabelText(t('nanoBananaFinishing.method')), { target: { value: 'dots-only' } })
+    await vi.waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaFinishing: 'dots-only' }))
+    await fireEvent.click(screen.getByLabelText(t('nanoBananaFinishing.grayscale')))
+    await vi.waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaFinishingGrayscale: true }))
+    await fireEvent.click(screen.getByLabelText(t('nanoBananaFinishing.strays')))
+    await vi.waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaStrays: true }))
+    expect(backend.writeSettings.mock.calls.flat().some((patch) => 'cloudFinishing' in patch)).toBe(false)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('goes back to what it was when it could not be saved, and says so', async () => {
+    const backend = backendWith({ writeSettings: vi.fn(async () => { throw new Error('disk') }) })
+    await mount(backend)
+    const strays = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBananaFinishing.strays')))
+    await fireEvent.click(strays)
+    expect((await screen.findByRole('alert')).textContent).toBe(t('nanoBananaFinishing.failed'))
+    expect(strays.checked).toBe(false)
+  })
+})

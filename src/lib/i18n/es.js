@@ -3426,6 +3426,16 @@ export const es = {
       stoppedFailing: 'Nano Banana se detuvo tras tres fallos seguidos.',
     },
   },
+  nanoBananaFinishing: {
+    heading: 'Acabado',
+    description: 'Cómo se ajusta a la página un resultado de Nano Banana antes de escribirlo. Es una elección propia: los ajustes de Posprocesado no la cambian. Para cambiar una capa ya limpiada, usa sus vistas previas en la ventana de Posprocesado. No envía ninguna solicitud nueva.',
+    method: 'Método',
+    grayscale: 'Pasar a gris los resultados en color',
+    grayscaleHint: 'En una página en color, el resultado pasa a gris antes del acabado. Una página gris siempre se lee en gris.',
+    strays: 'Quitar marcas sueltas',
+    straysHint: 'Rellena con el tono de alrededor las marcas pequeñas que el modelo dibujó por su cuenta, como un punto blanco sobre trama oscura. Las marcas entre líneas o textura se quedan.',
+    failed: 'No se pudo guardar el acabado.',
+  },
   cloud: {
     configuration: {
       loadFailed: 'No se pudo leer la configuración cloud guardada. Se volverá a comprobar el despliegue.',

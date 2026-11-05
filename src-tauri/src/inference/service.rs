@@ -5239,7 +5239,7 @@ pub(crate) mod tests {
         fixture.recipe.recipe_id = "mc-flux3-klein-bf16-edit-v2".into();
         fixture.recipe.model_id = "unsloth/flux-3-image-klein".into();
         fixture.recipe.preprocessing_version = "3.0.0".into();
-        let choice = Choice { finishing: Finishing::Poisson, grayscale: true };
+        let choice = Choice::of(Finishing::Poisson, true);
         fixture.recipe.finishing = Some(choice);
         let generation = cleaner_core::engines::render::Flux3Generation { marker: true, ..Default::default() };
         fixture.recipe.flux3_generation = Some(generation);
@@ -5264,7 +5264,7 @@ pub(crate) mod tests {
         fixture.recipe.recipe_id = "mc-qwen-image-edit-2511-v4".into();
         fixture.recipe.model_id = "Disty0/Qwen-Image-Edit-2511-SDNQ-uint4-svd-r32".into();
         fixture.recipe.preprocessing_version = "2.0.0".into();
-        let choice = Choice { finishing: Finishing::Poisson, grayscale: false };
+        let choice = Choice::of(Finishing::Poisson, false);
         fixture.recipe.finishing = Some(choice);
         let service = cached_fixture(&fixture);
         assert!(matches!(service.recover_attempt_locally(&fixture.attempt_id(), Some(&fixture.manifest)).unwrap(),
@@ -5300,7 +5300,7 @@ pub(crate) mod tests {
         assert_eq!(previews.unavailable, Some(Unavailable::NotCloud));
         assert!(previews.previews.is_empty());
         let before = std::fs::read(&fixture.manifest).unwrap();
-        let refused = apply_at(&journal, &fixture.manifest, "reg-1", Choice { finishing: Finishing::Poisson, grayscale: false }, &mut NoModels)
+        let refused = apply_at(&journal, &fixture.manifest, "reg-1", Choice::of(Finishing::Poisson, false), &mut NoModels)
             .err().unwrap();
         assert!(refused.starts_with("refinish_not_cloud"), "{refused}");
         assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
@@ -5357,7 +5357,7 @@ pub(crate) mod tests {
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: Some(1),
                 matched: Some(cleaner_core::engines::postprocess::Report {
-                    gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0,
+                    gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0, stray_pixels: None,
                     choice: finishing, method_report: None,
                 }),
             })
@@ -5403,7 +5403,7 @@ pub(crate) mod tests {
             assert!(levels.contains(&200) && levels.contains(&FakeLocal::level(preview.finishing)), "{:?}: {levels:?}", preview.finishing);
         }
 
-        let poisson = Choice { finishing: Finishing::Poisson, grayscale: false };
+        let poisson = Choice::of(Finishing::Poisson, false);
         let change = apply_at(&journal, &fixture.manifest, "reg-1", poisson, &mut lama).unwrap();
         assert_eq!(change.region.id, "reg-1");
         let changed = fixture.committed_patch();
@@ -5421,6 +5421,47 @@ pub(crate) mod tests {
         assert!(apply_at(&journal, &fixture.manifest, "reg-1", poisson, &mut lama).unwrap().history.is_none());
         assert_eq!(lama.renders.len(), renders);
         assert_eq!(crate::history::load(&fixture.manifest).entries.len(), 1);
+    }
+
+    /// **A Nano Banana result is finished again from its kept answer**, with
+    /// no request and no model: a preview per finishing at the result's stray
+    /// choice, and a pick writes that finishing's pixels and record and keeps
+    /// the answer's. With the kept answer gone the panel is told so.
+    #[test]
+    fn refinish_finishes_a_nano_banana_result_from_its_kept_answer() {
+        use crate::inference::refinish::{apply_at, previews_at, NoModels, Unavailable};
+        use cleaner_core::engines::postprocess::{Choice, Finishing};
+        let answer = crate::inference::consent::encode_rgb8_png(256, 256, &vec![90; 256 * 256 * 3]).unwrap();
+        let recorded = Choice { strays: true, ..Choice::default() };
+        let fixture = local_result("refinish-nano-banana", Engine::NanoBanana, serde_json::json!({}));
+        let sidecar = Job::open(&fixture.manifest).unwrap().sidecar().to_path_buf();
+        let sha256 = crate::inference::nano_banana_finishing::keep_answer(&sidecar, &answer).unwrap();
+        let mut job = Job::open(&fixture.manifest).unwrap();
+        let mut patch = fixture.committed_patch();
+        patch.provenance.params_snapshot = serde_json::json!({
+            "nano_banana": {"model": "gemini-3.1-flash-image", "image_size": "512", "aspect_ratio": "1:1",
+                "crop": [0, 0, 256, 256], "output": [512, 512], "answer_sha256": sha256},
+            "postprocess": recorded,
+        });
+        job.complete_region(0, &patch, None).unwrap();
+        let journal = AttemptJournal::new(&fixture.journal_dir, cleaner_core::cloud_wire::provisional_fixture_limits());
+
+        let previews = previews_at(&journal, &fixture.manifest, "reg-1", &mut NoModels).unwrap();
+        assert_eq!((previews.unavailable, previews.current, previews.strays), (None, Some(recorded), true));
+        assert!(previews.previews.iter().all(|preview| preview.url.is_some()), "every finishing previews");
+
+        let as_is = Choice { strays: true, ..Choice::of(Finishing::AsIs, false) };
+        apply_at(&journal, &fixture.manifest, "reg-1", as_is, &mut NoModels).unwrap();
+        let changed = fixture.committed_patch();
+        assert_eq!(changed.provenance.engine, Engine::NanoBanana);
+        let params = &changed.provenance.params_snapshot;
+        assert_eq!((&params["postprocess"]["finishing"], &params["postprocess"]["strays"]), (&serde_json::json!("as-is"), &serde_json::json!(true)));
+        assert_eq!(params["nano_banana"]["answer_sha256"], sha256.as_str(), "the answer stays named");
+        assert!(changed.pixels.data.contains(&90), "the answer as it came");
+        assert_eq!(crate::history::load(&fixture.manifest).entries.len(), 1);
+
+        std::fs::remove_dir_all(sidecar.join("nano-banana-answers")).unwrap();
+        assert_eq!(previews_at(&journal, &fixture.manifest, "reg-1", &mut NoModels).unwrap().unavailable, Some(Unavailable::NoResult));
     }
 
     /// **A LaMa result is finished again with the hole it was cut with**, not
@@ -5449,7 +5490,7 @@ pub(crate) mod tests {
             let mut lama = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new(), guidance: Vec::new() };
             previews_at(&journal, &fixture.manifest, "reg-1", &mut lama).unwrap();
             assert!(lama.holes.iter().all(|&asked| asked == hole), "{name}: {:?}", lama.holes);
-            apply_at(&journal, &fixture.manifest, "reg-1", Choice { finishing: Finishing::Poisson, grayscale: false }, &mut lama)
+            apply_at(&journal, &fixture.manifest, "reg-1", Choice::of(Finishing::Poisson, false), &mut lama)
                 .unwrap();
             assert_eq!(lama.holes.last(), Some(&hole), "{name}");
             let changed = fixture.committed_patch().provenance.params_snapshot;
@@ -5469,7 +5510,7 @@ pub(crate) mod tests {
         let mut other = FakeLocal { flux_model: "flux2-klein-9b", renders: Vec::new(), holes: Vec::new(), guidance: Vec::new() };
         assert_eq!(previews_at(&journal, &fixture.manifest, "reg-1", &mut other).unwrap().unavailable, Some(Unavailable::ModelChanged));
         let before = std::fs::read(&fixture.manifest).unwrap();
-        let refused = apply_at(&journal, &fixture.manifest, "reg-1", Choice { finishing: Finishing::Poisson, grayscale: false }, &mut other)
+        let refused = apply_at(&journal, &fixture.manifest, "reg-1", Choice::of(Finishing::Poisson, false), &mut other)
             .err().unwrap();
         assert!(refused.starts_with("refinish_model_changed"), "{refused}");
         assert!(other.renders.is_empty());
@@ -5510,7 +5551,7 @@ pub(crate) mod tests {
         let previews = previews_at(service.journal(), &fixture.manifest, "reg-1", &mut NoModels).unwrap();
         assert_eq!(previews.unavailable, Some(Unavailable::NoResult));
         let before = std::fs::read(&fixture.manifest).unwrap();
-        let refused = apply_at(service.journal(), &fixture.manifest, "reg-1", Choice { finishing: Finishing::Poisson, grayscale: false }, &mut NoModels)
+        let refused = apply_at(service.journal(), &fixture.manifest, "reg-1", Choice::of(Finishing::Poisson, false), &mut NoModels)
             .err().unwrap();
         assert!(refused.starts_with("refinish_no_result"), "{refused}");
         assert_eq!(std::fs::read(&fixture.manifest).unwrap(), before);
@@ -5523,7 +5564,7 @@ pub(crate) mod tests {
     fn refinish_follows_a_page_changed_since() {
         use crate::inference::refinish::{apply_at, previews_at, NoModels};
         use cleaner_core::engines::postprocess::{Choice, Finishing};
-        let poisson = Choice { finishing: Finishing::Poisson, grayscale: false };
+        let poisson = Choice::of(Finishing::Poisson, false);
 
         // A layer drawn under the result.
         let (fixture, service) = committed_flux3_fixture("refinish-layer-below");
@@ -5577,7 +5618,7 @@ pub(crate) mod tests {
             assert!(raster.width.max(raster.height) <= PREVIEW_LONG_SIDE && raster.width > 0, "{:?}", preview.finishing);
         }
 
-        let poisson = Choice { finishing: Finishing::Poisson, grayscale: true };
+        let poisson = Choice::of(Finishing::Poisson, true);
         let change = apply_at(service.journal(), &fixture.manifest, "reg-1", poisson, &mut NoModels).unwrap();
         assert_eq!(change.region.id, "reg-1");
         let changed = fixture.committed_patch();

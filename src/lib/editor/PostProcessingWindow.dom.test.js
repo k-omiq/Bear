@@ -150,7 +150,7 @@ describe('the Post-processing window', () => {
     await waitFor(() => expect(tile('poisson')).toBeTruthy())
     await fireEvent.click(tile('poisson'))
     await waitFor(() => expect(tile('poisson').getAttribute('aria-pressed')).toBe('true'))
-    expect(spy).toHaveBeenCalledWith({ regionId, finishing: 'poisson', grayscale: false })
+    expect(spy).toHaveBeenCalledWith({ regionId, finishing: 'poisson', grayscale: false, strays: false })
     expect(current(regionId).mask.provenance.params_snapshot.postprocess.finishing).toBe('poisson')
     expect(tile('copy').getAttribute('aria-pressed')).toBe('false')
     const history = await backend.historyLoad({ chapterId: CHAPTER })

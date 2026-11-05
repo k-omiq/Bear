@@ -990,7 +990,7 @@ mod tests {
         let again = inpainter.render(&page, &fitted).unwrap();
         assert_eq!(fake.requests.load(Ordering::Relaxed), sent, "the same crop was sent twice");
         assert_eq!((first.pixels.data, first.tone.is_some()), (again.pixels.data, again.tone.is_some()));
-        let choice = Choice { finishing: Finishing::AsIs, grayscale: false };
+        let choice = Choice::of(Finishing::AsIs, false);
         let finished = inpainter.render_with(&page, &fitted, Some(choice)).unwrap();
         assert_eq!(fake.requests.load(Ordering::Relaxed), sent);
         assert_eq!(finished.matched.map(|report| report.choice), Some(choice));

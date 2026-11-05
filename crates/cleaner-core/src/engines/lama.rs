@@ -1137,7 +1137,7 @@ mod tests {
         let mut held = held.lock().unwrap();
         let fitted = fitted_over(&page, Rect::new(600, 800, 160, 90));
         let aligned = held.render(&page, &fitted).expect("the region rendered");
-        let choice = Choice { finishing: Finishing::Copy, grayscale: false };
+        let choice = Choice::of(Finishing::Copy, false);
         let finished = held.render_with(&page, &fitted, Some(choice), HoleMode::default()).expect("the region rendered");
         assert!(aligned.tone.is_some() && aligned.matched.is_none());
         assert!(finished.tone.is_none());
@@ -1188,7 +1188,7 @@ mod tests {
         assert!(aligned.tiles >= 3, "{} tiles", aligned.tiles);
         let (aligned_mean, _) = off(&aligned);
         for finishing in [Finishing::Copy, Finishing::LocalTone] {
-            let finished = held.render_with(&page, &fitted, Some(Choice { finishing, grayscale: false }), HoleMode::default()).expect("the region rendered");
+            let finished = held.render_with(&page, &fitted, Some(Choice::of(finishing, false)), HoleMode::default()).expect("the region rendered");
             let (mean, worst) = off(&finished);
             eprintln!("{finishing:?}: mean {mean:.2}, worst {worst}; aligned mean {aligned_mean:.2}");
             assert!(mean <= aligned_mean + 1.0 && worst <= 24, "{finishing:?}: mean {mean:.2}, worst {worst}, aligned {aligned_mean:.2}");

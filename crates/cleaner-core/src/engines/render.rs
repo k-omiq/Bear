@@ -2727,7 +2727,7 @@ mod tests {
             let aligned = v2.composite(&generated).unwrap();
             assert!(aligned.tone.is_some() && aligned.matched.is_none(), "{}", scene.name);
 
-            let choice = Choice { finishing: Finishing::ToneOnly, grayscale: false };
+            let choice = Choice::of(Finishing::ToneOnly, false);
             v2.set_finishing(Some(choice));
             let finished = v2.composite(&generated).unwrap();
             assert!(finished.tone.is_none(), "{}", scene.name);

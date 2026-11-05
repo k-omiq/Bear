@@ -3,6 +3,8 @@
  * the key is the instance's own, a render needs cloud engines on, a live grant
  * with a region left and a stored key, a grant is withdrawn when cloud engines
  * go off and lapses when idle, and a region with a layer is not sent again.
+ * Its own finishing is read from settings, recorded on the layer, kept by Try
+ * again, and changed afterwards from the kept answer.
  */
 import { describe, expect, it, vi } from 'vitest'
 
@@ -94,7 +96,9 @@ describe('a Nano Banana grant on the mock', () => {
     const done = await clean(mock, first, grant)
     expect(done.status).toBe('applied')
     expect(done.mask.provenance.engine).toBe('nanobanana')
-    expect(done.mask.provenance.params_snapshot.nano_banana).toEqual({ model: DEFAULT_NANO_BANANA_MODEL })
+    expect(done.mask.provenance.params_snapshot.nano_banana).toEqual({
+      model: DEFAULT_NANO_BANANA_MODEL, answer_sha256: expect.any(String),
+    })
     // The one region is spent.
     expect(await clean(mock, second, grant)).toEqual({ status: 'blocked' })
     await vi.waitFor(() => expect(reasons).toEqual(['decline.reason.nanoBananaNoConsent', 'decline.reason.nanoBananaNoConsent']))
@@ -177,5 +181,53 @@ describe('a Nano Banana grant on the mock', () => {
     expect(again?.mask.provenance.engine).toBe('nanobanana')
     const simpler = await mock.rerunMask({ maskId: again.mask.id, kind: 'simpler' })
     expect(simpler?.mask.provenance.engine).toBe('flux')
+  })
+})
+
+describe('Nano Banana finishing on the mock', () => {
+  /** A Nano Banana layer on the first detection, made with `settings`. @param {Record<string, any>} [settings] */
+  async function layer(settings = {}) {
+    const mock = await ready()
+    await mock.writeSettings(settings)
+    const [first] = await detected(mock)
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    const done = await clean(mock, first, grant)
+    return { mock, done, regionId: first.id }
+  }
+
+  it('refuses a finishing native refuses, and writes nothing', async () => {
+    const mock = makeMock()
+    for (const patch of [{ nanoBananaFinishing: 'blur' }, { nanoBananaFinishingGrayscale: 'yes' }, { nanoBananaStrays: 1 }]) {
+      await expect(mock.writeSettings(patch)).rejects.toThrow()
+    }
+    expect(await mock.readSettings()).not.toHaveProperty('nanoBananaFinishing')
+  })
+
+  it('finishes by its own setting, not the shared one, and records it', async () => {
+    const { done } = await layer({
+      cloudFinishing: 'poisson', finishingEveryModel: true, nanoBananaFinishing: 'tone-only', nanoBananaStrays: true,
+    })
+    expect(done.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'tone-only', grayscale: false, strays: true })
+    const plain = await layer()
+    expect(plain.done.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'copy', grayscale: false })
+  })
+
+  it('keeps the layer\'s finishing on Try again, whatever the setting says by then', async () => {
+    const { mock, done } = await layer({ nanoBananaFinishing: 'dots-only', nanoBananaFinishingGrayscale: true })
+    await mock.writeSettings({ nanoBananaFinishing: 'as-is', nanoBananaFinishingGrayscale: false })
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    const again = await mock.rerunMask({ maskId: done.mask.id, kind: 'retry', params: { nanoBananaGrant: grant } })
+    expect(again.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'dots-only', grayscale: true })
+  })
+
+  it('is changed afterwards from the kept answer, its stray choice kept', async () => {
+    const { mock, regionId } = await layer({ nanoBananaStrays: true })
+    const previews = await mock.regionFinishingPreviews({ regionId })
+    expect(previews.unavailable).toBeNull()
+    expect(previews.strays).toBe(true)
+    expect(previews.current).toEqual({ finishing: 'copy', grayscale: false, strays: true })
+    const change = await mock.setRegionFinishing({ regionId, finishing: 'poisson', grayscale: false, strays: previews.strays })
+    expect(change.history).not.toBeNull()
+    expect(change.region.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'poisson', grayscale: false, strays: true })
   })
 })

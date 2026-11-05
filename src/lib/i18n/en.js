@@ -4324,6 +4324,16 @@ export const en = {
       stoppedFailing: 'Nano Banana stopped after three failures in a row.',
     },
   },
+  nanoBananaFinishing: {
+    heading: 'Finishing',
+    description: 'How a Nano Banana result is matched to the page before it is written. This is its own choice: the Post-processing settings do not change it. To change a layer already cleaned, use its previews in the Post-processing window. That sends no new request.',
+    method: 'Method',
+    grayscale: 'Make colour results grey',
+    grayscaleHint: 'On a colour page, the result is made grey before it is finished. A grey page is always read grey.',
+    strays: 'Remove stray marks',
+    straysHint: 'Fill small marks the model drew on its own, such as a white speck on dark tone, with the tone around them. Marks among lines or texture stay.',
+    failed: 'The finishing could not be saved.',
+  },
   cloud: {
     configuration: {
       loadFailed: 'Saved cloud configuration could not be read. The deployment will be checked again.',

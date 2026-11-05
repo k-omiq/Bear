@@ -117,7 +117,7 @@
     if (!region || applying || !answer || current?.finishing === name) return
     applying = name
     try {
-      await setRegionFinishing(region, { finishing: name, grayscale: answer.grayscale })
+      await setRegionFinishing(region, { finishing: name, grayscale: answer.grayscale, strays: answer.strays === true })
     } finally {
       applying = null
     }
