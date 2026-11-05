@@ -243,6 +243,18 @@ impl Failure {
     }
 }
 
+/// Every adjustable filter, turned off: manga violence and fan service trip them
+/// on pages that are fine to clean. Google's core filters (`IMAGE_SAFETY`,
+/// `PROHIBITED_CONTENT`) cannot be turned off and still answer [`Failure::Blocked`].
+/// `HARM_CATEGORY_CIVIC_INTEGRITY` is left out: Google deprecated it.
+const SAFETY_OFF: [&str; 5] = [
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_JAILBREAK",
+];
+
 fn request_body(png: &[u8], region: SendRegion, instruction: Option<&str>, with_system: bool) -> Value {
     let mut body = json!({
         "contents": [{
@@ -259,6 +271,9 @@ fn request_body(png: &[u8], region: SendRegion, instruction: Option<&str>, with_
             "responseModalities": ["TEXT", "IMAGE"],
             "imageConfig": { "imageSize": region.tier.wire(), "aspectRatio": region.ratio },
         },
+        "safetySettings": SAFETY_OFF.iter()
+            .map(|category| json!({ "category": category, "threshold": "OFF" }))
+            .collect::<Vec<_>>(),
     });
     if with_system {
         body["systemInstruction"] = json!({ "parts": [{ "text": SYSTEM_INSTRUCTION }] });
@@ -1294,6 +1309,10 @@ mod tests {
         assert_eq!(body["generationConfig"]["imageConfig"], json!({ "imageSize": "512", "aspectRatio": "4:1" }));
         assert!(body["systemInstruction"].is_object());
         assert_eq!(body["contents"][0]["parts"][1]["inlineData"]["data"], "cG5n");
+        let safety = body["safetySettings"].as_array().unwrap();
+        assert_eq!(safety.len(), SAFETY_OFF.len());
+        assert!(safety.iter().all(|setting| setting["threshold"] == "OFF"), "{safety:?}");
+        assert!(safety.iter().any(|setting| setting["category"] == "HARM_CATEGORY_SEXUALLY_EXPLICIT"));
     }
 
     fn error_body(status: &str, message: &str, details: Value) -> String {
