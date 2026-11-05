@@ -2702,7 +2702,6 @@ async function replayHistory(direction) {
     }
     const entry = step?.entry
     if (!entry) return
-    const side = direction === 'undo' ? entry.before : entry.after
     // The three ops there are: an edit of a page's detections, which the
     // backend replayed already; a clean of a detection the backend recorded,
     // replayed by asking for the side's state; and an edit this window
@@ -2711,13 +2710,16 @@ async function replayHistory(direction) {
       await showReplayedPages(step, chapter.id)
       return
     }
+    // One edit of several regions (an eraser stroke, a Nano Banana batch's
+    // cleans): every one goes back, the step is one.
+    const parts = entry.parts?.length ? entry.parts : [{ regionId: entry.regionId, before: entry.before, after: entry.after }]
     if (entry.op === 'clean-state') {
-      await applyCleanDelta(entry.regionId, side, chapter.id)
+      for (const part of parts) {
+        await applyCleanDelta(part.regionId, direction === 'undo' ? part.before : part.after, chapter.id)
+      }
       return
     }
     if (entry.op !== 'region-state') return
-    // One edit of several regions: every one goes back, the step is one.
-    const parts = entry.parts?.length ? entry.parts : [{ regionId: entry.regionId, before: entry.before, after: entry.after }]
     for (const part of parts) {
       await applyRegionDelta(part.regionId, direction === 'undo' ? part.before : part.after, chapter.id)
     }

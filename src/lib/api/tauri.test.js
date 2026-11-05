@@ -52,6 +52,10 @@ it('keeps a Nano Banana grant and sends it with each edit that can reach the run
   await backend.applyTool({ tool: 'autoClean', regionId: 'r', params: { engine: 'lama' } })
   expect(invoke).toHaveBeenLastCalledWith('apply_tool', expect.objectContaining({ params: { engine: 'lama' } }))
 
+  // A batch goes on the grant too, as the native job checks it.
+  await backend.startNanoBananaRun({ chapterId: 'c', regionIds: ['r1', 'r2'] })
+  expect(invoke).toHaveBeenLastCalledWith('start_nano_banana_run', { chapterId: 'c', regionIds: ['r1', 'r2'], nanoBananaGrant: 'g1' })
+
   // Stop withdraws it.
   await backend.nanoBananaStop()
   expect(invoke.mock.lastCall?.[0]).toBe('nano_banana_stop')
@@ -920,6 +924,7 @@ describe('the Tauri adapter', () => {
         'delete_nano_banana_key',
         'nano_banana_grant',
         'nano_banana_stop',
+        'start_nano_banana_run',
         'store_cloud_secret',
         'delete_cloud_secret',
         'get_cloud_secret_summary',

@@ -37,6 +37,7 @@
   import HomeScreen from './lib/home/HomeScreen.svelte'
   import EditorScreen from './lib/editor/EditorScreen.svelte'
   import { cancelRun } from './lib/state/editor.svelte.js'
+  import { openNanoBananaSummary } from './lib/editor/nanobananarun.svelte.js'
   import KeyboardLayer from './lib/shell/KeyboardLayer.svelte'
   import ModalHost from './lib/shell/ModalHost.svelte'
   import FirstLaunchDialog from './lib/dialogs/FirstLaunchDialog.svelte'
@@ -148,6 +149,11 @@
   // choosing the CPU is no remedy there. Advanced's low-memory warning stays
   // until closed, and its button stops the run it is about.
   /** @type {Record<string, {labelKey: string, open: (notice: {params?: Record<string, unknown>}) => void, sticky?: boolean}>} */
+  /** @param {{params?: Record<string, unknown>}} notice */
+  const openSummaryOf = (notice) => {
+    const runId = notice.params?.runId
+    if (typeof runId === 'string') openNanoBananaSummary(runId)
+  }
   const NOTICE_ACTIONS = {
     'notice.run.modelsMissing': {
       labelKey: 'tools.target.chooseModels',
@@ -156,6 +162,22 @@
     'notice.run.engineFault': {
       labelKey: 'settings.section.performance',
       open: () => openModelSettings('runtime'),
+    },
+    // A Nano Banana batch's end: Details is its summary, and the summary's
+    // Send again. Sticky when there is something to send again.
+    'nanoBanana.job.finishedWithFailures': {
+      labelKey: 'nanoBanana.job.details',
+      open: (notice) => openSummaryOf(notice),
+      sticky: true,
+    },
+    'nanoBanana.job.halted': {
+      labelKey: 'nanoBanana.job.details',
+      open: (notice) => openSummaryOf(notice),
+      sticky: true,
+    },
+    'nanoBanana.job.stopped': {
+      labelKey: 'nanoBanana.job.details',
+      open: (notice) => openSummaryOf(notice),
     },
     'notice.run.lowMemory': {
       labelKey: 'notice.run.lowMemoryStop',

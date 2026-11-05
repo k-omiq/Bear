@@ -58,6 +58,7 @@ const IMPLEMENTED = Object.freeze({
   deleteNanoBananaKey: 'delete_nano_banana_key',
   grantNanoBanana: 'nano_banana_grant',
   nanoBananaStop: 'nano_banana_stop',
+  startNanoBananaRun: 'start_nano_banana_run',
   storeCloudSecret: 'store_cloud_secret',
   deleteCloudSecret: 'delete_cloud_secret',
   getCloudSecretSummary: 'get_cloud_secret_summary',
@@ -237,6 +238,7 @@ export const SEAM_METHODS = Object.freeze([
   'deleteNanoBananaKey',
   'grantNanoBanana',
   'nanoBananaStop',
+  'startNanoBananaRun',
   'storeCloudSecret',
   'deleteCloudSecret',
   'getCloudSecretSummary',
@@ -485,6 +487,9 @@ export function createTauriBackend({ fallback, invoke, listen }) {
       nanoBananaGrant = null
       return call(IMPLEMENTED.nanoBananaStop)
     },
+    // The batch spends the window's grant natively, region by region.
+    startNanoBananaRun: ({ chapterId, regionIds }) =>
+      call(IMPLEMENTED.startNanoBananaRun, { chapterId, regionIds, nanoBananaGrant }),
     storeCloudSecret: ({ provider, profileId, role, secret, tokenId, sessionOnly = false }) =>
       call(IMPLEMENTED.storeCloudSecret, {
         provider,
@@ -890,6 +895,7 @@ export const TAURI_REGISTERED_CLOUD_COMMANDS = Object.freeze([
   'delete_nano_banana_key',
   'nano_banana_grant',
   'nano_banana_stop',
+  'start_nano_banana_run',
   'store_cloud_secret',
   'delete_cloud_secret',
   'get_cloud_secret_summary',

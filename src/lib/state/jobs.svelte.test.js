@@ -17,7 +17,6 @@ import {
   jobById,
   jobFraction,
   jobs,
-  nanoBananaRun,
   onJobSettled,
   openJobChapter,
   registerJob,
@@ -26,7 +25,6 @@ import {
   runningJobFor,
   startJobs,
   stopJob,
-  stopNanoBananaRun,
   trackDenoise,
   watchJob,
 } from './jobs.svelte.js'
@@ -250,36 +248,28 @@ describe('the quit guard', () => {
     expect(backend.confirmQuit).toHaveBeenCalledTimes(1)
     expect(backend.hideToTray).toHaveBeenCalledTimes(1)
   })
-
-  it('counts a Nano Banana batch, which the backend does not list, and stops it on Quit', async () => {
-    const nanoBananaStop = vi.fn(async () => {})
-    setBackend(/** @type {any} */ ({ ...backend, nanoBananaStop }))
-    Object.assign(nanoBananaRun, { active: true, done: 2, total: 5 })
-    askQuit({ jobs: 0, canHide: false })
-    expect(jobs.quit).toEqual({ count: 1, canHide: false })
-    answerQuit('quit')
-    expect(nanoBananaRun.stopping).toBe(true)
-    await vi.waitFor(() => expect(nanoBananaStop).toHaveBeenCalledTimes(1))
-    await vi.waitFor(() => expect(backend.confirmQuit).toHaveBeenCalledTimes(1))
-  })
 })
 
 describe('a Nano Banana batch', () => {
-  it('stops once, and only while it runs', async () => {
-    const nanoBananaStop = vi.fn(async () => {})
-    stopNanoBananaRun(/** @type {any} */ ({ nanoBananaStop }))
-    expect(nanoBananaRun.stopping).toBe(false)
-    nanoBananaRun.active = true
-    stopNanoBananaRun(/** @type {any} */ ({ nanoBananaStop }))
-    stopNanoBananaRun(/** @type {any} */ ({ nanoBananaStop }))
-    expect(nanoBananaRun.stopping).toBe(true)
-    await vi.waitFor(() => expect(nanoBananaStop).toHaveBeenCalledTimes(1))
+  const REPORT = { total: 3, cleaned: 2, gone: 0, failed: [{ regionId: 'r2', pageIndex: 1, reason: 'decline.reason.nanoBananaBlocked' }], left: [], byUser: false }
+
+  it('keeps its report on the job, and ends failed when the account stopped it', () => {
+    registerJob({ ...RUN, kind: 'nanoBanana' })
+    backend.emit({ type: 'nano-banana-report', runId: 'run-1', chapterId: 'c1', report: { ...REPORT, stopped: 'decline.reason.nanoBananaBilling' } })
+    backend.emit({ type: 'run-finished', runId: 'run-1', chapterId: 'c1', reason: 'failed', pagesQueued: 2, pagesCleaned: 2, regionsCleaned: 2 })
+    expect(jobById('run-1')).toMatchObject({ kind: 'nanoBanana', status: 'failed', nanoBanana: { cleaned: 2, stopped: 'decline.reason.nanoBananaBilling' } })
   })
 
-  it('still stops with a backend that has no stop command', () => {
-    nanoBananaRun.active = true
-    expect(() => stopNanoBananaRun(/** @type {any} */ ({}))).not.toThrow()
-    expect(nanoBananaRun.stopping).toBe(true)
+  it('keeps a report that came before its job was registered', () => {
+    startJobs(/** @type {any} */ (backend))
+    backend.emit({ type: 'nano-banana-report', runId: 'run-1', chapterId: 'c1', report: REPORT })
+    registerJob({ ...RUN, kind: 'nanoBanana' })
+    expect(jobById('run-1')?.nanoBanana).toEqual(REPORT)
+  })
+
+  it('has no report on any other job', () => {
+    registerJob(RUN)
+    expect(jobById('run-1')?.nanoBanana).toBeNull()
   })
 })
 

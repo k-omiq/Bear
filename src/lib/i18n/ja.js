@@ -3321,6 +3321,39 @@ export const ja = {
     },
   },
   nanoBanana: {
+    // A Nano Banana batch as a job (`nano_banana_job.rs`).
+    job: {
+      kind: 'Nano Banana で除去',
+      active: 'Nano Banana で除去中',
+      undo: 'Nano Banana で除去した領域',
+      notStarted: 'Nano Banana の一括処理は開始されなかったため、何も送信されていません。',
+      finished: 'Nano Banana が {total} 件中 {cleaned} 件の領域を除去しました。',
+      finishedWithFailures: 'Nano Banana が {total} 件中 {cleaned} 件の領域を除去しました。{failed} 件は除去できませんでした。',
+      stopped: 'Nano Banana を停止しました。{total} 件中 {cleaned} 件を除去しました。',
+      halted: 'Nano Banana が途中で停止しました: {reasonKey}。{total} 件中 {cleaned} 件を除去しました。',
+      details: '詳細',
+      summaryTitle: 'Nano Banana の一括処理',
+      summaryCleaned: '{total} 件中 {cleaned} 件の領域を除去しました。',
+      summaryStopped: '一括処理を停止しました。',
+      summaryHalted: '途中で停止しました: {reasonKey}。',
+      summaryGone: {
+        other: '{count} 件の領域はもう除去待ちではなかったため、送信していません。',
+      },
+      summaryReason: {
+        other: '{count} 件: {reasonKey}',
+      },
+      summaryLeft: {
+        other: '{count} 件の領域は処理されませんでした。',
+      },
+      summaryPages: 'ページ: {pages}',
+      retry: {
+        other: '{count} 件をもう一度送信',
+      },
+      retryHint: 'もう一度送信するには、この話を開いてください。',
+      reason: {
+        error: '保存できませんでした',
+      },
+    },
     // Clean on: Nano Banana (Text cleanup panel).
     target: {
       option: 'Nano Banana (Google)',
@@ -3361,16 +3394,12 @@ export const ja = {
       promptHint: '入力した内容は組み込みの消去指示に加えて Google に送信されます。編集は印を付けた領域の内側に限られます。',
       promptNotSaved: 'メモを保存できなかったため、何も送信していません。',
       readFailed: 'クリーニングする領域を読み取れなかったため、何も送信していません。',
-      stop: '停止（{done} / {total}）',
-      stopping: '停止中（{done} / {total}）',
       title: 'Nano Banana でクリーニング',
       regions: 'クリーニングする領域: {count}。1 領域につき有料リクエスト 1 回です。近い領域はまとめて 1 回になります。',
       cost: '推定費用: {low} から {high}。',
       sent: '領域ごとにページの切り抜きを 1 枚 Google に送信します。無料枠のキーでは、Google が製品改善に使うことがあります。',
       cancel: 'キャンセル',
       confirm: '送信してクリーニング',
-      finished: 'Nano Banana が {total} 領域のうち {cleaned} 領域をクリーニングしました。',
-      stoppedFailing: '3 回続けて失敗したため Nano Banana を停止しました。',
     },
   },
   cloud: {

@@ -142,6 +142,17 @@ pub enum Event {
     HistoryChanged {
         chapter_id: String,
     },
+    /// How a Nano Banana batch ended (`inference::nano_banana_job`), sent just
+    /// before its `run-finished`: what it cleaned, each region it could not
+    /// clean with the reason, the regions it did not reach, and, when it ended
+    /// early, why. The interface keeps it on the job, for the summary and for
+    /// a retry of the regions left.
+    #[serde(rename_all = "camelCase")]
+    NanoBananaReport {
+        run_id: String,
+        chapter_id: String,
+        report: crate::inference::nano_banana_job::Report,
+    },
     /// The transient stack. `key` and `params` are i18n data; no English
     /// crosses the seam.
     Notice {

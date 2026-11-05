@@ -118,7 +118,6 @@
   import { windowGesture, closeWindowFocusing } from './windowgesture.js'
   import { MIN_TOP, TOOL_BOTTOM_RESERVE } from '../model/windows.js'
   import { cleanLocalFirst, cloudParts, cloudScopeRefusal, runStep, startCleanRun } from './cloudrun.js'
-  import { nanoBananaRun, stopNanoBananaRun } from '../state/jobs.svelte.js'
   import {
     Button,
     ColorPicker,
@@ -1515,13 +1514,13 @@
                control announced without it is an action the user is refused
                for no stated reason, which is the whole failure the note exists
                to prevent. -->
-          <!-- A Nano Banana batch holds the run slot, so the button waits for
-               it as it would for a run. -->
+          <!-- A Nano Banana batch is a run (`nanobananarun.svelte.js`), so
+               this button is its Stop too. -->
           <Button
             variant={running ? 'soft' : 'primary'}
             size="lg"
             block={!running}
-            disabled={(Boolean(blockedKey) || nanoBananaRun.active) && !running}
+            disabled={Boolean(blockedKey) && !running}
             aria-describedby={blockedKey && !running ? blockedId : undefined}
             data-run-action
             onclick={run}
@@ -1529,20 +1528,6 @@
             <Icon name={running ? 'stop' : 'play'} size={13} />
             {actionLabel}
           </Button>
-          <!-- A Nano Banana batch's Stop, for as long as one runs. The batch is
-               started by the button above when Clean on is Nano Banana. -->
-          {#if nanoBananaRun.active}
-            <Button
-              size="sm"
-              variant="soft"
-              disabled={nanoBananaRun.stopping}
-              data-run-row="nanoBanana"
-              onclick={() => stopNanoBananaRun()}
-            >
-              {t(nanoBananaRun.stopping ? 'nanoBanana.run.stopping' : 'nanoBanana.run.stop',
-                { done: nanoBananaRun.done, total: nanoBananaRun.total })}
-            </Button>
-          {/if}
           <!-- Rendered whether or not there is anything in it: a live region
                has to be on the page *before* the text arrives, or nothing is
                announced. -->

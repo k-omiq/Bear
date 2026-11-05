@@ -115,6 +115,20 @@ impl Book {
         Ok(Spend { book: self, nonce: nonce.to_owned(), config: grant.config.clone() })
     }
 
+    /// How many renders the grant `nonce` names has left, without taking one:
+    /// what a batch checks before it starts and between the retries of one
+    /// region, which spend nothing more. Refused as [`Book::spend`] refuses.
+    pub(crate) fn left(&self, cloud_allowed: bool, nonce: &str) -> Result<u32, &'static str> {
+        if !cloud_allowed {
+            return Err(CLOUD_OFF);
+        }
+        let live = self.lock();
+        match live.as_ref().filter(|grant| grant.nonce == nonce) {
+            Some(grant) if Instant::now() < grant.lapses => Ok(grant.left),
+            _ => Err(NO_CONSENT),
+        }
+    }
+
     pub(crate) fn revoke(&self) {
         *self.lock() = None;
     }
@@ -220,6 +234,21 @@ mod tests {
         let spend = book.spend(true, Some(&nonce)).unwrap();
         assert_eq!(spend.config.instruction.as_deref(), Some("keep the halftone"));
         assert_eq!(spend.config.model.id, Model::DEFAULT.id);
+    }
+
+    #[test]
+    fn what_is_left_is_read_without_spending() {
+        let book = Book::new(IDLE);
+        let nonce = book.issue(config(None), 2).unwrap();
+        assert_eq!(book.left(true, &nonce), Ok(2));
+        assert_eq!(book.left(true, &nonce), Ok(2), "asking spends nothing");
+        let spend = book.spend(true, Some(&nonce)).unwrap();
+        assert_eq!(book.left(true, &nonce), Ok(1));
+        drop(spend);
+        assert_eq!(book.left(false, &nonce), Err(CLOUD_OFF));
+        assert_eq!(book.left(true, "other"), Err(NO_CONSENT));
+        book.revoke();
+        assert_eq!(book.left(true, &nonce), Err(NO_CONSENT));
     }
 
     #[test]

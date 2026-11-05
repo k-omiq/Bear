@@ -394,8 +394,7 @@ export async function startCleanRun(scope = 'page', backend = getBackend(), over
         notify({ key: step !== 'clean' ? 'nanoBanana.target.cleanStepOnly' : 'nanoBanana.target.scopeProject', tone: 'warn' })
         return null
       }
-      await startNanoBananaRun(scope, backend, token)
-      return null
+      return await startNanoBananaRun(scope, backend, token)
     }
     const solid = { step, ...(override.solidOnly === undefined ? {} : { solidOnly: override.solidOnly }) }
     const parts = override.solidOnly === true ? { ...cloudParts(step), clean: false } : cloudParts(step)

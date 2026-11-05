@@ -227,6 +227,7 @@ pub fn run() {
             inference::nano_banana::delete_nano_banana_key,
             inference::nano_banana::nano_banana_stop,
             inference::nano_banana_consent::nano_banana_grant,
+            inference::nano_banana_job::start_nano_banana_run,
             inference::commands::store_cloud_secret,
             inference::commands::delete_cloud_secret,
             inference::commands::get_cloud_secret_summary,

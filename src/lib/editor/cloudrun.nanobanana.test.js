@@ -39,7 +39,7 @@ describe('Clean on Nano Banana', () => {
     setCleanTarget('nanoBanana')
     for (const scope of /** @type {const} */ (['page', 'chapter'])) {
       const api = backend()
-      await startCleanRun(scope, api, { step: 'clean' })
+      expect(await startCleanRun(scope, api, { step: 'clean' })).toBe('nb-run')
       expect(startRun).not.toHaveBeenCalled()
       expect(vi.mocked(startNanoBananaRun).mock.lastCall?.slice(0, 2)).toEqual([scope, api])
     }

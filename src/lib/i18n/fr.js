@@ -3381,6 +3381,43 @@ export const fr = {
     },
   },
   nanoBanana: {
+    // A Nano Banana batch as a job (`nano_banana_job.rs`).
+    job: {
+      kind: 'Nettoyer avec Nano Banana',
+      active: 'Nettoyage avec Nano Banana',
+      undo: 'régions nettoyées avec Nano Banana',
+      notStarted: 'Le lot Nano Banana n’a pas démarré, rien n’a été envoyé.',
+      finished: 'Nano Banana a nettoyé {cleaned} régions sur {total}.',
+      finishedWithFailures: 'Nano Banana a nettoyé {cleaned} régions sur {total}. {failed} n’ont pas pu être nettoyées.',
+      stopped: 'Nano Banana s’est arrêté. Il a nettoyé {cleaned} régions sur {total}.',
+      halted: 'Nano Banana s’est arrêté tôt : {reasonKey}. Il a nettoyé {cleaned} régions sur {total}.',
+      details: 'Détails',
+      summaryTitle: 'Lot Nano Banana',
+      summaryCleaned: '{cleaned} régions nettoyées sur {total}.',
+      summaryStopped: 'Vous avez arrêté le lot.',
+      summaryHalted: 'Il s’est arrêté tôt : {reasonKey}.',
+      summaryGone: {
+        one: '1 région n’attendait plus d’être nettoyée, rien n’a été envoyé pour elle.',
+        other: '{count} régions n’attendaient plus d’être nettoyées, rien n’a été envoyé pour elles.',
+      },
+      summaryReason: {
+        one: '1 région : {reasonKey}',
+        other: '{count} régions : {reasonKey}',
+      },
+      summaryLeft: {
+        one: '1 région n’a pas été atteinte.',
+        other: '{count} régions n’ont pas été atteintes.',
+      },
+      summaryPages: 'Pages : {pages}',
+      retry: {
+        one: 'Renvoyer 1 région',
+        other: 'Renvoyer {count} régions',
+      },
+      retryHint: 'Ouvrez ce chapitre pour les renvoyer.',
+      reason: {
+        error: 'elle n’a pas pu être enregistrée',
+      },
+    },
     // Clean on: Nano Banana (Text cleanup panel).
     target: {
       option: 'Nano Banana (Google)',
@@ -3421,16 +3458,12 @@ export const fr = {
       promptHint: 'Vos mots sont ajoutés à la consigne d’effacement intégrée et envoyés à Google. La modification reste dans la zone marquée.',
       promptNotSaved: 'La note n’a pas pu être enregistrée, rien n’a donc été envoyé.',
       readFailed: 'Les zones à nettoyer n’ont pas pu être lues, rien n’a donc été envoyé.',
-      stop: 'Arrêter ({done} sur {total})',
-      stopping: 'Arrêt en cours ({done} sur {total})',
       title: 'Nettoyer avec Nano Banana',
       regions: 'Zones à nettoyer : {count}. Une requête payante pour chacune, ou une seule pour plusieurs zones proches.',
       cost: 'Coût estimé : de {low} à {high}.',
       sent: 'Chaque zone envoie un recadrage de votre page à Google. Avec une clé gratuite, Google peut s’en servir pour améliorer ses produits.',
       cancel: 'Annuler',
       confirm: 'Envoyer et nettoyer',
-      finished: 'Nano Banana a nettoyé {cleaned} zones sur {total}.',
-      stoppedFailing: 'Nano Banana s’est arrêté après trois échecs de suite.',
     },
   },
   cloud: {

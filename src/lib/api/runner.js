@@ -91,9 +91,15 @@ export function createRunner(deps) {
         qwenEdit: active.qwenEdit,
       }
       // `apply` answers false for a region it left as it was (a cloud render
-      // that failed): it is still reported, and not counted.
-      const done = active.apply ? active.apply(region, page, ctx) !== false : (deps.cleanRegion(region, page, ctx), true)
-      if (done) active.regionsCleaned += 1
+      // that failed): it is still reported, and not counted. It answers
+      // 'halt' to end the run here, after this page, with nothing reported
+      // for the region: a Nano Banana batch whose account failed.
+      const answer = active.apply ? active.apply(region, page, ctx) : (deps.cleanRegion(region, page, ctx), true)
+      if (answer === 'halt') {
+        active.halted = true
+        return schedule(() => finishPage(entry), deps.timing.pageTail)
+      }
+      if (answer !== false) active.regionsCleaned += 1
       // Detect reports its regions with the page, not one by one: a stored
       // detection is no region *done*.
       if (active.reportRegions) {
@@ -124,16 +130,20 @@ export function createRunner(deps) {
       page,
     })
     active.index += 1
+    if (active.halted) return finish('halted')
     schedule(stepPage, 0)
   }
 
   /**
-   * @param {'completed'|'cancelled'} reason
+   * @param {'completed'|'cancelled'|'halted'} ending - 'halted' only from an `apply` that ended the run
    */
-  function finish(reason) {
+  function finish(ending) {
     const run = active
     active = null
     deps.timers.clearTimeout(run.timer)
+    // A run with its own ending (a Nano Banana batch) sends what it has to
+    // say first and names the reason; any other run has no 'halted'.
+    const reason = run.closing ? run.closing(ending, run) : ending === 'halted' ? 'cancelled' : ending
     const summary = {
       type: 'run-finished',
       runId: run.runId,
@@ -142,7 +152,7 @@ export function createRunner(deps) {
       pagesQueued: run.queue.length,
       pagesCleaned: run.pagesCleaned,
       regionsCleaned: run.regionsCleaned,
-      nextPageIndex: reason === 'cancelled' ? (run.queue[run.index]?.page.index ?? null) : null,
+      nextPageIndex: reason === 'cancelled' && !run.closing ? (run.queue[run.index]?.page.index ?? null) : null,
     }
     deps.emit(summary)
     deps.onFinished({ ...summary, queue: run.queue, stoppedAt: run.index })
@@ -151,11 +161,13 @@ export function createRunner(deps) {
   return {
     /**
      * @param {QueueEntry[]} queue
-     * @param {{ chapterId: string, engineCeiling?: string, pick?: (page: Object) => Object[], apply?: (region: Object, page: Object, ctx: Object) => boolean|void, pageStatus?: (page: Object) => string, reportRegions?: boolean }} options
+     * @param {{ chapterId: string, engineCeiling?: string, pick?: (page: Object) => Object[], apply?: (region: Object, page: Object, ctx: Object) => boolean|'halt'|void, pageStatus?: (page: Object) => string, reportRegions?: boolean, closing?: (ending: string, run: Object) => string }} options
      *   `pick`, `apply` and `pageStatus` replace the automatic pass's own
      *   choices for a run of another step: which regions of a page it takes,
      *   what it does to each, and what the page is when it is done.
-     *   `reportRegions: false` sends no `region-done`, as Detect does
+     *   `reportRegions: false` sends no `region-done`, as Detect does.
+     *   `closing(ending, run)` is told how the run ended, may send events
+     *   before its `run-finished`, and answers that event's reason
      * @returns {{ runId: string, pages: Array<{chapterId: string, pageId: string, pageIndex: number}> }}
      */
     start(queue, options) {
@@ -172,6 +184,8 @@ export function createRunner(deps) {
         apply: options.apply ?? null,
         pageStatus: options.pageStatus ?? null,
         reportRegions: options.reportRegions !== false,
+        closing: options.closing ?? null,
+        halted: false,
         queue,
         index: 0,
         timer: null,

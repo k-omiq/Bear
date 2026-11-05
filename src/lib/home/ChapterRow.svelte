@@ -90,6 +90,7 @@
     detect: 'jobs.active.detect',
     clean: 'jobs.active.clean',
     cloudClean: 'jobs.active.cloudClean',
+    nanoBanana: 'nanoBanana.job.active',
     denoise: 'jobs.active.denoise',
     cloudDenoise: 'jobs.active.cloudDenoise',
   }

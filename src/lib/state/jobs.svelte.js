@@ -30,10 +30,10 @@
  * The quit guard's question is asked from here too (`askQuit`): it is about
  * these jobs, and it can arrive on any screen, over any dialog.
  *
- * A Nano Banana batch is held here as well (`nanoBananaRun`), though it is not
- * a backend run: the interface walks it one region at a time
- * (`editor/nanobananarun.svelte.js`), so the backend lists no job for it, and
- * the quit guard has to hear of it from this side.
+ * A Nano Banana batch is a run like a cloud clean (kind `nanoBanana`). Its
+ * `nano-banana-report`, just before its `run-finished`, says what it cleaned
+ * and what it could not, and is kept on the job (`nanoBanana`) for the
+ * summary and a retry of the rest (`editor/nanobananarun.svelte.js`).
  *
  * Nothing here forwards `notice` events. Home and the editor each forward
  * those while mounted, and a third subscriber doing it too would say
@@ -50,7 +50,7 @@ import { notify, openChapter } from './app.svelte.js'
 export const MAX_FINISHED = 10
 
 /** Kinds that are Detect/Clean runs: stopped with `cancelRun`, ended by `run-finished`. */
-export const RUN_KINDS = Object.freeze(['detect', 'clean', 'cloudClean'])
+export const RUN_KINDS = Object.freeze(['detect', 'clean', 'cloudClean', 'nanoBanana'])
 /** Kinds that are denoises: stopped with `cancelDenoiseLocal`, ended by their command's answer. */
 export const DENOISE_KINDS = Object.freeze(['denoise', 'cloudDenoise'])
 const KINDS = Object.freeze([...RUN_KINDS, ...DENOISE_KINDS])
@@ -61,7 +61,7 @@ const HYDRATE_DEBOUNCE_MS = 250
 const MAX_EARLY_ENDS = 16
 
 /**
- * @typedef {'detect'|'clean'|'cloudClean'|'denoise'|'cloudDenoise'} JobKind
+ * @typedef {'detect'|'clean'|'cloudClean'|'nanoBanana'|'denoise'|'cloudDenoise'} JobKind
  * @typedef {'running'|'completed'|'cancelled'|'failed'} JobStatus
  *
  * The contract names a `title`; it is carried as its parts, because a title
@@ -84,13 +84,8 @@ const MAX_EARLY_ENDS = 16
  * @property {number|null} finishedAt
  * @property {import('../api/backend.js').DenoiseReport|null} report - a denoise's answer
  * @property {string|null} errorCode - why a denoise failed
+ * @property {import('../api/backend.js').NanoBananaReport|null} nanoBanana - how a Nano Banana batch ended
  */
-
-/**
- * The Nano Banana batch in progress, if any. `stopping` is set by Stop and
- * cleared when the batch ends.
- */
-export const nanoBananaRun = $state({ active: false, stopping: false, done: 0, total: 0 })
 
 export const jobs = $state({
   /** Running and recently finished, newest first. @type {Job[]} */
@@ -102,6 +97,8 @@ export const jobs = $state({
 /* Not `$state`: bookkeeping nothing renders. */
 /** @type {Map<string, import('../api/backend.js').RunFinishedEvent>} */
 const earlyEnds = new Map()
+/** Nano Banana reports that came before their job was registered, as `earlyEnds`. @type {Map<string, import('../api/backend.js').NanoBananaReport>} */
+const earlyReports = new Map()
 /** Run ids a dialog is showing, with how many are: its ending is not a notice then. @type {Map<string, number>} */
 const watchers = new Map()
 /** @type {Set<(job: Job) => void>} */
@@ -208,8 +205,14 @@ export function registerJob(spec) {
     finishedAt: null,
     report: null,
     errorCode: null,
+    nanoBanana: null,
   })
   const job = /** @type {Job} */ (jobById(spec.runId))
+  const report = earlyReports.get(spec.runId)
+  if (report) {
+    earlyReports.delete(spec.runId)
+    job.nanoBanana = report
+  }
   const early = earlyEnds.get(spec.runId)
   if (early) {
     earlyEnds.delete(spec.runId)
@@ -367,6 +370,13 @@ function onRunEvent(event) {
     case 'page-done':
       if (!job) scheduleHydrate()
       else if (job.status === 'running') job.done = job.total ? Math.min(job.total, job.done + 1) : job.done + 1
+      break
+    case 'nano-banana-report':
+      if (job) job.nanoBanana = event.report
+      else {
+        earlyReports.set(runId, event.report)
+        if (earlyReports.size > MAX_EARLY_ENDS) earlyReports.delete(/** @type {string} */ (earlyReports.keys().next().value))
+      }
       break
     case 'run-finished':
       if (job) settleRun(job, event)
@@ -540,26 +550,6 @@ export async function openJobChapter(runId) {
 }
 
 /* ------------------------------------------------------------------ */
-/* The Nano Banana batch                                               */
-/* ------------------------------------------------------------------ */
-
-/**
- * Stop the batch: no region after the one in flight is sent, and the native
- * side is told to drop the request in flight (`nanoBananaStop`), which is a
- * paid request the person no longer wants. A backend without the command
- * still stops after the region in flight.
- *
- * @param {import('../api/backend.js').Backend} [backend]
- */
-export function stopNanoBananaRun(backend = getBackend()) {
-  if (!nanoBananaRun.active || nanoBananaRun.stopping) return
-  nanoBananaRun.stopping = true
-  void Promise.resolve()
-    .then(() => /** @type {any} */ (backend).nanoBananaStop?.())
-    .catch((error) => console.error('the Nano Banana request in flight could not be stopped', error))
-}
-
-/* ------------------------------------------------------------------ */
 /* The quit guard                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -575,22 +565,20 @@ export function stopNanoBananaRun(backend = getBackend()) {
  * empty. `App.svelte` draws `dialogs/QuitJobsDialog.svelte` over the stack
  * instead, as it does the first-launch offer.
  *
- * A Nano Banana batch is one job more: the backend does not count it.
- *
  * @param {import('../api/backend.js').QuitRequest} request
  */
 export function askQuit(request) {
   if (jobs.quit) return
   jobs.quit = {
-    count: Math.max(runningCount(), Number(request?.jobs) || 0) + (nanoBananaRun.active ? 1 : 0),
+    count: Math.max(runningCount(), Number(request?.jobs) || 0),
     canHide: request?.canHide === true,
   }
 }
 
 /**
  * The answer: `quit` stops every job and quits, `hide` hides the window (only
- * offered with a tray), anything else leaves the app as it was. A Nano Banana
- * batch is stopped first, because the backend's own stop does not reach it.
+ * offered with a tray), anything else leaves the app as it was. The backend's
+ * stop reaches a Nano Banana batch too, and ends its request in flight.
  *
  * @param {'quit'|'hide'|'cancel'|null} result
  */
@@ -600,7 +588,6 @@ export function answerQuit(result) {
   if (!asked) return
   const backend = getBackend()
   if (result === 'quit') {
-    stopNanoBananaRun(backend)
     void Promise.resolve().then(() => backend.confirmQuit()).catch(() => {})
   } else if (result === 'hide' && asked.canHide) void Promise.resolve().then(() => backend.hideToTray()).catch(() => {})
 }
@@ -657,8 +644,8 @@ export function resetJobs() {
   stopJobs()
   jobs.list = []
   jobs.quit = null
-  Object.assign(nanoBananaRun, { active: false, stopping: false, done: 0, total: 0 })
   earlyEnds.clear()
+  earlyReports.clear()
   watchers.clear()
   settleListeners.clear()
   naming = null

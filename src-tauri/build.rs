@@ -156,6 +156,7 @@ fn main() {
             "delete_nano_banana_key",
             "nano_banana_stop",
             "nano_banana_grant",
+            "start_nano_banana_run",
             "store_cloud_secret",
             "delete_cloud_secret",
             "get_cloud_secret_summary",

@@ -489,6 +489,15 @@ export function createMockBackend(options = {}) {
    * stays detected, and `stop` ends the batch at its first region as a
    * refused key does. From the options, or a `?cloudClean=` knob.
    */
+  /**
+   * How Google answers a Nano Banana batch here, from the options or a
+   * `?nanoBanana=` knob: `blocked` refuses the first region's crop and the
+   * batch goes on; `billing` fails the account at the second region, which
+   * stops the batch; `busy` stays rate limited for the second region after
+   * every wait, which stops it too. None: every region is cleaned.
+   */
+  const nanoBananaScenario = () =>
+    options.nanoBananaScenario ?? new URLSearchParams(globalThis.location?.search ?? '').get('nanoBanana')
   const cloudCleanScenario = () =>
     options.cloudCleanScenario ?? new URLSearchParams(globalThis.location?.search ?? '').get('cloudClean')
   /** Whether the endpoint a cloud clean was proposed for is still the selected one. */
@@ -1078,6 +1087,8 @@ export function createMockBackend(options = {}) {
 
   /** The Undo tooltip of a clean the backend recorded, and of a reject (`history.rs`). */
   const CLEAN_LABEL = 'masks.command.cleanRegion'
+  /** A Nano Banana batch's one undo step (`history.rs#CLEAN_BATCH_LABEL`). */
+  const CLEAN_BATCH_LABEL = 'nanoBanana.job.undo'
   const REJECT_LABEL = 'masks.command.rejectResult'
   /** The Undo tooltip of a cloud result finished again (`history.rs#FINISHING_LABEL`). */
   const FINISHING_LABEL = 'masks.finishing.command'
@@ -1101,10 +1112,32 @@ export function createMockBackend(options = {}) {
    */
   const recordCleanStep = (chapterId, label, regionId, before, after) => {
     const journal = journalFor(chapterId)
-    pushEntry(journal, { label, op: 'clean-state', regionId, before, after }, undoLimitValue())
+    const group = ownRun
+    const last = journal.entries[journal.entries.length - 1]
+    if (group && last?.op === 'clean-state' && last.group === group && journal.cursor === journal.entries.length) {
+      // A Nano Banana batch's cleans are one step (`history.rs#join_group`):
+      // every region is a part, the first included, and a region cleaned
+      // twice keeps its first before.
+      if (!last.parts?.length) last.parts = [{ regionId: last.regionId, before: last.before, after: last.after }]
+      const part = last.parts.find((entry) => entry.regionId === regionId)
+      if (part) part.after = after
+      else last.parts.push({ regionId, before, after })
+    } else {
+      pushEntry(journal, {
+        label: group ? CLEAN_BATCH_LABEL : label, op: 'clean-state', regionId, before, after, ...(group ? { group } : {}),
+      }, undoLimitValue())
+    }
     emit({ type: 'history-changed', chapterId })
     return snapshot(viewOf(journal, undoLimitValue()))
   }
+
+  /**
+   * The run whose own edit is being made, as `run.rs#on_behalf_of` keeps it:
+   * a Nano Banana batch's cleans join its one undo step.
+   *
+   * @type {string|null}
+   */
+  let ownRun = null
 
   /**
    * Write one `region-state` step the backend made itself, as
@@ -1321,6 +1354,9 @@ export function createMockBackend(options = {}) {
     timing: { region: timing.region, pageTail: timing.pageTail },
     cleanRegion: (region, page, ctx) => cleanRegionAutomatically(region, page, toolContext, ctx),
     onFinished: (summary) => {
+      // A Nano Banana batch said how it ended itself, and leaves nothing to
+      // resume: a stopped one is sent again from its summary.
+      if (summary.kind === 'nanoBanana') return
       const found = findChapter(summary.chapterId)
       const kept = solidKept.get(summary.runId)
       solidKept.delete(summary.runId)
@@ -2292,24 +2328,36 @@ export function createMockBackend(options = {}) {
    * @returns {string | null}
    */
   const nanoBananaMayRender = (params) => {
-    const refuse = (/** @type {string} */ reasonKey) => {
-      notify('notice.mask.rerunFailed', { reasonKey }, 'warn')
+    const spent = nanoBananaSpend(params?.nanoBananaGrant)
+    if ('reason' in spent) {
+      notify('notice.mask.rerunFailed', { reasonKey: spent.reason }, 'warn')
       return null
     }
-    if (state.settings.cloudEngines !== 'allowed') return refuse('decline.reason.nanoBananaOff')
+    return spent.model
+  }
+
+  /**
+   * `nanoBananaMayRender`'s checks, said as a reason instead of a notice: a
+   * batch reports its refusals at the end (`nano_banana_job.rs`).
+   *
+   * @param {string|undefined} nonce - the grant presented, or none for the one held
+   * @returns {{model: string} | {reason: string}}
+   */
+  const nanoBananaSpend = (nonce) => {
+    if (state.settings.cloudEngines !== 'allowed') return { reason: 'decline.reason.nanoBananaOff' }
     const live = nanoBananaGrant
     const now = timers.now()
     // The backend keeps the grant and sends it, as `tauri.js` does, so a
     // caller that names none presents the one it holds.
-    const presented = params?.nanoBananaGrant ?? live?.grant
+    const presented = nonce ?? live?.grant
     if (!live || presented !== live.grant || now >= live.lapses || live.left <= 0) {
       if (live && presented === live.grant) nanoBananaGrant = null
-      return refuse('decline.reason.nanoBananaNoConsent')
+      return { reason: 'decline.reason.nanoBananaNoConsent' }
     }
     live.left -= 1
     live.lapses = now + NANO_BANANA_GRANT_IDLE_MS
-    if (!nanoBananaKey) return refuse('decline.reason.nanoBananaNoKey')
-    return live.model
+    if (!nanoBananaKey) return { reason: 'decline.reason.nanoBananaNoKey' }
+    return { model: live.model }
   }
 
   /**
@@ -3087,6 +3135,7 @@ export function createMockBackend(options = {}) {
      * has no process to end, so this is where the mock stops.
      */
     async confirmQuit() {
+      if (runner.list().some((run) => run.kind === 'nanoBanana')) nanoBananaGrant = null
       for (const { runId } of runner.list()) runner.cancel(runId)
       for (const run of denoiseRuns.values()) run.stopped = true
     },
@@ -3294,6 +3343,10 @@ export function createMockBackend(options = {}) {
       // as `history.rs#history_move` refuses it: the caller replays nothing
       // and puts its own cursor back.
       const next = journal.entries[direction === 'redo' ? journal.cursor : journal.cursor - 1]
+      // A batch's step while the batch still adds to it (`history.rs#move_at`).
+      if (next?.group && runner.list().some((run) => run.runId === next.group)) {
+        throw new Error('run_step_in_progress: the step belongs to a run that is still going')
+      }
       if (next?.op === 'region-state' || next?.op === 'clean-state') {
         const page =
           findRegion(next.regionId)?.page ?? findPage(next.before?.pageId ?? next.after?.pageId)
@@ -3509,6 +3562,10 @@ export function createMockBackend(options = {}) {
 
     async cancelRun({ runId } = {}) {
       await delay(timing.method)
+      // Stop on a Nano Banana batch withdraws its grant too, as
+      // `run.rs#request_cancel` calls `nano_banana_stop`.
+      const kind = runner.list().find((run) => !runId || run.runId === runId)?.kind
+      if (kind === 'nanoBanana') nanoBananaGrant = null
       return runner.cancel(runId)
     },
 
@@ -5072,6 +5129,119 @@ export function createMockBackend(options = {}) {
 
     async nanoBananaStop() {
       nanoBananaGrant = null
+    },
+
+    /**
+     * A Nano Banana batch as `nano_banana_job.rs#start` runs it: checked
+     * before anything is reserved (the regions, the grant and how many it
+     * covers), then a job in the run slot. Each region takes its share of the
+     * grant as its turn comes. A refused crop is skipped with its reason; an
+     * account failure, a server still busy after every wait, or a grant gone
+     * ends the batch, and Stop does too. The report goes out, then the
+     * closing notice, then `run-finished`. The cleans are one undo step.
+     */
+    async startNanoBananaRun({ chapterId, regionIds = [], nanoBananaGrant: named } = {}) {
+      await delay(timing.method)
+      const NO_CONSENT = 'decline.reason.nanoBananaNoConsent'
+      // The grant the backend holds, as `tauri.js` sends it, when none is named.
+      const nonce = named ?? nanoBananaGrant?.grant
+      if (typeof nonce !== 'string') throw new Error(NO_CONSENT)
+      const found = findChapter(chapterId)
+      if (!Array.isArray(regionIds) || regionIds.length === 0) throw new Error('nano_banana_no_regions')
+      if (regionIds.length > NANO_BANANA_MAX_REGIONS) throw new Error(NO_CONSENT)
+      /** @type {Array<{regionId: string, pageIndex: number}>} */
+      const targets = []
+      for (const regionId of new Set(regionIds)) {
+        const page = found?.chapter.pages.find((candidate) => String(regionId).startsWith(`${candidate.id}-`))
+        if (!page) throw new Error(`nano_banana_region_not_in_chapter: ${regionId}`)
+        targets.push({ regionId, pageIndex: page.index })
+      }
+      targets.sort((a, b) => a.pageIndex - b.pageIndex)
+      // The grant is read, not spent (`nano_banana_consent.rs#left`).
+      if (state.settings.cloudEngines !== 'allowed') throw new Error('decline.reason.nanoBananaOff')
+      const live = nanoBananaGrant
+      if (!live || live.grant !== nonce || timers.now() >= live.lapses || live.left < targets.length) throw new Error(NO_CONSENT)
+      const own = runner.runFor(chapterId)
+      if (own) return { runId: own, pages: [], alreadyRunning: true }
+      if (runner.atCapacity()) return { runId: null, pages: [], alreadyRunning: true, atCapacity: true }
+
+      const scenario = nanoBananaScenario()
+      const ACCOUNT = ['decline.reason.nanoBananaOff', 'decline.reason.nanoBananaNoKey', 'decline.reason.nanoBananaBilling']
+      const report = { total: targets.length, cleaned: 0, gone: 0, failed: /** @type {any[]} */ ([]), left: /** @type {any[]} */ ([]), byUser: false }
+      /** @type {string|null} */
+      let stopped = null
+      const handled = new Set()
+      let turn = 0
+      const pagesWanted = new Set(targets.map((target) => target.pageIndex))
+      const queue = found.chapter.pages
+        .filter((page) => pagesWanted.has(page.index))
+        .map((page) => ({ projectId: found.project.id, chapterId, page }))
+      const wanted = new Set(targets.map((target) => target.regionId))
+      /** @type {string} */
+      let runId = ''
+      const handle = runner.start(queue, {
+        chapterId,
+        mode: 'clean',
+        kind: 'nanoBanana',
+        reportRegions: false,
+        // Every target on the page, gone or not: a region no longer a
+        // detection when its turn comes is counted, never sent.
+        pick: (page) => {
+          const ids = targets.filter((target) => target.pageIndex === page.index).map((target) => target.regionId)
+          return ids.map((id) => page.regions.find((region) => region.id === id) ?? { id, gone: true })
+        },
+        apply: (region, page) => {
+          handled.add(region.id)
+          if (region.gone || !isDetection(region)) {
+            report.gone += 1
+            return false
+          }
+          turn += 1
+          const spent = nanoBananaSpend(nonce)
+          let reason = 'reason' in spent ? spent.reason : null
+          if (!reason && scenario === 'blocked' && turn === 1) reason = 'decline.reason.nanoBananaBlocked'
+          if (!reason && scenario === 'billing' && turn === 2) reason = 'decline.reason.nanoBananaBilling'
+          // Still busy after both waits; the mock does not wait them.
+          if (!reason && scenario === 'busy' && turn === 2) reason = 'decline.reason.nanoBananaRateLimited'
+          if (reason === NO_CONSENT || ACCOUNT.includes(reason) || reason === 'decline.reason.nanoBananaRateLimited') {
+            stopped = reason
+            handled.delete(region.id)
+            return 'halt'
+          }
+          if (reason) {
+            report.failed.push({ regionId: region.id, pageIndex: page.index, reason })
+            return false
+          }
+          ownRun = runId
+          try {
+            cleanDetection(region, page)
+          } finally {
+            ownRun = null
+          }
+          redrawLiveCopies(page, region.id, [region.bbox])
+          stampNanoBanana(region.mask, 'model' in spent ? spent.model : null)
+          report.cleaned += 1
+          emit({ type: 'region-done', runId, chapterId, pageId: page.id, pageIndex: page.index, region: snapshot(region) })
+          return true
+        },
+        pageStatus: settledStatus,
+        closing: (ending) => {
+          if (ending === 'cancelled' && !stopped) stopped = 'decline.reason.nanoBananaStopped'
+          report.left = targets.filter((target) => wanted.has(target.regionId) && !handled.has(target.regionId))
+          report.byUser = stopped === 'decline.reason.nanoBananaStopped'
+          const full = stopped ? { ...report, stopped } : report
+          emit({ type: 'nano-banana-report', runId, chapterId, report: snapshot(full) })
+          const params = { runId, cleaned: report.cleaned, total: report.total, failed: report.failed.length }
+          if (stopped && report.byUser) notify('nanoBanana.job.stopped', params, 'warn')
+          else if (stopped) notify('nanoBanana.job.halted', { ...params, reasonKey: stopped }, 'warn')
+          else if (report.failed.length === 0) notify('nanoBanana.job.finished', params)
+          else notify('nanoBanana.job.finishedWithFailures', params, 'warn')
+          if (!stopped) return 'completed'
+          return stopped === 'decline.reason.nanoBananaStopped' || stopped === NO_CONSENT ? 'cancelled' : 'failed'
+        },
+      })
+      runId = handle.runId
+      return handle
     },
 
     /**

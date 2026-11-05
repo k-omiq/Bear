@@ -117,6 +117,9 @@ static LAST_LIMIT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsi
 pub const CLEAN_OP: &str = "clean-state";
 /// The Undo tooltip of a clean the backend recorded.
 pub const CLEAN_LABEL: &str = "masks.command.cleanRegion";
+/// The Undo tooltip of a run's cleans recorded as one step: a Nano Banana
+/// batch's, the one run that cleans on its own behalf ([`record_clean`]).
+pub const CLEAN_BATCH_LABEL: &str = "nanoBanana.job.undo";
 /// The Undo tooltip of a rejected result.
 pub const REJECT_LABEL: &str = "masks.command.rejectResult";
 /// The Undo tooltips of the edits of a page's detections and held rows
@@ -195,24 +198,74 @@ fn push_step(
     before: Side,
     after: Side,
 ) -> Result<HistoryView, String> {
+    push_grouped(job, chapter_id, op, label, region_id, before, after, None)
+}
+
+/// [`push_step`], joining the journal's last entry when `group` names it: a
+/// run's cleans of several regions are one step, every region a part. The
+/// first region stays the entry's own (`region_id`, `before`, `after`) as
+/// well as its first part, as the interface writes an edit of several.
+#[allow(clippy::too_many_arguments)]
+fn push_grouped(
+    job: &Path,
+    chapter_id: &str,
+    op: &str,
+    label: &str,
+    region_id: &str,
+    before: Side,
+    after: Side,
+    group: Option<&str>,
+) -> Result<HistoryView, String> {
     let limit = LAST_LIMIT.load(std::sync::atomic::Ordering::Relaxed);
     let mut journal = load(job);
-    journal.push(
-        NewDelta {
-            label: label.to_owned(),
-            op: op.to_owned(),
-            region_id: region_id.to_owned(),
-            before,
-            after,
-            parts: Vec::new(),
-            pages: Vec::new(),
-            group: None,
-        },
-        limit,
-    );
+    if !join_group(&mut journal, op, label, region_id, &before, &after, group) {
+        journal.push(
+            NewDelta {
+                label: label.to_owned(),
+                op: op.to_owned(),
+                region_id: region_id.to_owned(),
+                before,
+                after,
+                parts: Vec::new(),
+                pages: Vec::new(),
+                group: group.map(str::to_owned),
+            },
+            limit,
+        );
+    }
     save(job, &journal)?;
     crate::events::emit(&crate::events::Event::HistoryChanged { chapter_id: chapter_id.to_owned() });
     Ok(journal.view(limit))
+}
+
+/// Add a region to the journal's last entry when that entry is `group`'s own
+/// clean step and nothing was undone since. Answers whether it did.
+fn join_group(
+    journal: &mut Journal,
+    op: &str,
+    label: &str,
+    region_id: &str,
+    before: &Side,
+    after: &Side,
+    group: Option<&str>,
+) -> bool {
+    let Some(group) = group else { return false };
+    if journal.cursor != journal.entries.len() {
+        return false;
+    }
+    let Some(last) = journal.entries.last_mut() else { return false };
+    if last.op != op || last.group.as_deref() != Some(group) || last.label != label {
+        return false;
+    }
+    if last.parts.is_empty() {
+        last.parts.push(Part { region_id: last.region_id.clone(), before: last.before.clone(), after: last.after.clone() });
+    }
+    match last.parts.iter_mut().find(|part| part.region_id == region_id) {
+        // The same region twice in one run keeps its first `before`.
+        Some(part) => part.after = after.clone(),
+        None => last.parts.push(Part { region_id: region_id.to_owned(), before: before.clone(), after: after.clone() }),
+    }
+    true
 }
 
 /// [`record_step`] for a clean of a detected region: `before` is the region
@@ -221,6 +274,10 @@ fn push_step(
 /// records nothing. A journal that could not be written is reported on the
 /// console and does not fail the clean: the result is on the page, and the
 /// manifest is the record of that.
+///
+/// A clean made on a run's behalf (`run::on_behalf_of`, a Nano Banana batch)
+/// joins that run's step, so one Undo takes back the whole batch. Undo of it
+/// is refused while the run goes on ([`move_at`]).
 pub(crate) fn record_clean(
     job: &Path,
     chapter_id: &str,
@@ -231,7 +288,9 @@ pub(crate) fn record_clean(
 ) {
     let Some(before) = before else { return };
     let Some(after) = side_now(chapter_id, project, source_idx, region_id) else { return };
-    if let Err(error) = record_step(job, chapter_id, CLEAN_LABEL, region_id, before, after) {
+    let group = crate::run::own_run();
+    let label = if group.is_some() { CLEAN_BATCH_LABEL } else { CLEAN_LABEL };
+    if let Err(error) = push_grouped(job, chapter_id, CLEAN_OP, label, region_id, before, after, group.as_deref()) {
         eprintln!("a clean of {region_id} could not be saved to undo history: {error}");
     }
 }
@@ -1176,6 +1235,39 @@ mod tests {
             "before": {"present": false}, "after": {"present": true},
         })).unwrap();
         assert!(delta.parts.is_empty() && delta.pages.is_empty() && delta.group.is_none());
+    }
+
+    /// A Nano Banana batch's cleans join one step: every region a part, the
+    /// first included, a region cleaned twice keeping its first `before`.
+    /// Another run's clean, an ordinary clean, or anything after an undo starts
+    /// its own entry.
+    #[test]
+    fn a_runs_cleans_join_its_one_step() {
+        let side = |status: &str| Side { present: true, page_status: Some(status.into()), region: None };
+        let grouped = |journal: &mut Journal, region: &str, before: &str, after: &str, group: Option<&str>| {
+            if !join_group(journal, CLEAN_OP, CLEAN_BATCH_LABEL, region, &side(before), &side(after), group) {
+                journal.push(NewDelta {
+                    label: CLEAN_BATCH_LABEL.into(), op: CLEAN_OP.into(), region_id: region.into(),
+                    before: side(before), after: side(after), group: group.map(str::to_owned), ..Default::default()
+                }, UNDO_LIMIT_DEFAULT);
+            }
+        };
+        let mut journal = Journal::default();
+        grouped(&mut journal, "r1", "detected", "a", Some("run-1"));
+        grouped(&mut journal, "r2", "detected", "b", Some("run-1"));
+        grouped(&mut journal, "r1", "a", "c", Some("run-1"));
+        assert_eq!(journal.entries.len(), 1);
+        let parts: Vec<_> = journal.entries[0].parts.iter()
+            .map(|part| (part.region_id.as_str(), part.before.page_status.as_deref(), part.after.page_status.as_deref()))
+            .collect();
+        assert_eq!(parts, [("r1", Some("detected"), Some("c")), ("r2", Some("detected"), Some("b"))]);
+
+        grouped(&mut journal, "r3", "detected", "d", Some("run-2"));
+        assert_eq!(journal.entries.len(), 2, "another run's clean is its own step");
+        assert!(!join_group(&mut journal, CLEAN_OP, CLEAN_BATCH_LABEL, "r4", &side("x"), &side("y"), None));
+        journal.undo();
+        assert!(!join_group(&mut journal, CLEAN_OP, CLEAN_BATCH_LABEL, "r4", &side("x"), &side("y"), Some("run-2")),
+            "nothing joins a step that was undone");
     }
 
     #[test]

@@ -30,6 +30,7 @@ import CloudConsentDialog from './CloudConsentDialog.svelte'
 import CloudRunConsentDialog from './CloudRunConsentDialog.svelte'
 import CloudCleanConsentDialog from './CloudCleanConsentDialog.svelte'
 import NanoBananaConsentDialog from './NanoBananaConsentDialog.svelte'
+import NanoBananaSummaryDialog from './NanoBananaSummaryDialog.svelte'
 import CloudCleanStreamConsentDialog from './CloudCleanStreamConsentDialog.svelte'
 import WorkflowReviewDialog from './WorkflowReviewDialog.svelte'
 import DenoiseDialog from './DenoiseDialog.svelte'
@@ -50,6 +51,7 @@ const DIALOGS = Object.assign(Object.create(null), homeDialogs, {
   cloudRunConsent: CloudRunConsentDialog,
   cloudCleanConsent: CloudCleanConsentDialog,
   nanoBananaConsent: NanoBananaConsentDialog,
+  nanoBananaSummary: NanoBananaSummaryDialog,
   cloudCleanStreamConsent: CloudCleanStreamConsentDialog,
   workflowReview: WorkflowReviewDialog,
   denoise: DenoiseDialog,
