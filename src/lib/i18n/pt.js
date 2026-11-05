@@ -3423,6 +3423,8 @@ export const pt = {
     // Clean on: Nano Banana (Text cleanup panel).
     target: {
       option: 'Nano Banana (Google)',
+      optionNoKey: 'Nano Banana (precisa de chave)',
+      optionCloudOff: 'Nano Banana (motores na nuvem desligados)',
       noKey: 'O Nano Banana precisa de uma chave de API do Gemini. Salve uma em Configurações > Nuvem.',
       cloudOff: 'O Nano Banana precisa dos motores na nuvem ligados nas Configurações.',
       cleanStepOnly: 'O Nano Banana limpa regiões já detectadas. Escolha Limpar, ou outro lugar em Limpar em.',

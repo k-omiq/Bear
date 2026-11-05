@@ -870,13 +870,18 @@ describe('the Text cleanup panel', () => {
     })
 
     it('is listed after the cloud, disabled with its reason while it has no key or Cloud engines are off', () => {
-      for (const [cloudAllowed, reason] of /** @type {const} */ ([[true, 'nanoBanana.target.noKey'], [false, 'nanoBanana.target.cloudOff']])) {
+      // The reason is in the label as well as the title: WKWebView's native
+      // select and a screen reader show no title.
+      for (const [cloudAllowed, reason, label] of /** @type {const} */ ([
+        [true, 'nanoBanana.target.noKey', 'nanoBanana.target.optionNoKey'],
+        [false, 'nanoBanana.target.cloudOff', 'nanoBanana.target.optionCloudOff'],
+      ])) {
         stores.session.cloudAllowed = cloudAllowed
         const { view } = mountTool(textCleanup, { step: 'clean' })
         const select = /** @type {HTMLSelectElement} */ (place(view, 'clean'))
         const option = nanoBananaOption(select)
         expect([...select.options].map((entry) => entry.value)).toEqual(['local', 'cloud', 'nanoBanana'])
-        expect(option.textContent?.trim()).toBe(t('nanoBanana.target.option'))
+        expect(option.textContent?.trim()).toBe(t(label))
         expect(option.disabled, reason).toBe(true)
         expect(option.title).toBe(t(reason))
         cleanup()
@@ -890,6 +895,7 @@ describe('the Text cleanup panel', () => {
       const { view } = mountTool(textCleanup, { step: 'clean' })
       const select = /** @type {HTMLSelectElement} */ (place(view, 'clean'))
       expect(nanoBananaOption(select).disabled).toBe(false)
+      expect(nanoBananaOption(select).textContent?.trim()).toBe(t('nanoBanana.target.option'))
       await fireEvent.change(select, { target: { value: 'nanoBanana' } })
       await tick()
       expect(writeSettings).toHaveBeenCalledWith({ cleanTarget: 'nanoBanana' })
@@ -920,6 +926,7 @@ describe('the Text cleanup panel', () => {
       const select = /** @type {HTMLSelectElement} */ (place(view, 'clean'))
       expect(select.value).toBe('nanoBanana')
       expect(nanoBananaOption(select).disabled).toBe(false)
+      expect(nanoBananaOption(select).textContent?.trim()).toBe(t('nanoBanana.target.optionNoKey'))
       expect(noteOf(select)).toBe(`${t('tools.target.stranded')} ${t('nanoBanana.target.noKey')}`)
       expect(runAction(view).disabled).toBe(true)
       expect(noteOf(/** @type {any} */ (runAction(view)))).toBe(t('nanoBanana.target.noKey'))

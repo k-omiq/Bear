@@ -22,7 +22,7 @@
  */
 import { notify, pushModal } from '../state/app.svelte.js'
 import { adoptRun, claimRunStart, editor, pages, releaseRunStart } from '../state/editor.svelte.js'
-import { jobById } from '../state/jobs.svelte.js'
+import { jobById, refreshJobs } from '../state/jobs.svelte.js'
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
 import { isDetected } from '../model/masks.js'
@@ -89,6 +89,14 @@ async function startBatch(chapter, regionIds, scope, backend) {
     const reason = (error instanceof Error ? error.message : String(error ?? '')).replace(/^Error:\s*/, '')
     console.error('a Nano Banana batch could not start', error)
     notify({ key: hasKey(reason) ? reason : 'nanoBanana.job.notStarted', tone: 'warn' })
+    return null
+  }
+  // The chapter changed while the job was starting: the job is the old
+  // chapter's and goes on, and the jobs list finds it (`refreshJobs`).
+  // Adopting it here would mark the open chapter running under the old
+  // chapter's run id, as `editor.svelte.js#startRun` also refuses to.
+  if (editor.chapter !== chapter) {
+    void refreshJobs(backend)
     return null
   }
   return adoptRun(handle, scope, 'clean', 'nanoBanana')

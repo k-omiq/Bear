@@ -38,14 +38,30 @@ export function currentRung(rung) {
 }
 
 /**
+ * The strongest rung this machine runs: FLUX where its sidecar can be
+ * offered (`available.flux`, `capabilities.engines`), LaMa otherwise. The
+ * native side's `region.rs#strongest_here`, which reads the same answer. With
+ * no map, FLUX is not assumed: the sidecar is absent on nearly every machine
+ * (`masks.js#UNANSWERED`).
+ *
+ * @param {Record<string, boolean>} [available]
+ * @returns {string}
+ */
+export function strongestHere(available) {
+  return available?.flux === true ? 'flux' : 'lama'
+}
+
+/**
  * @param {string} rung
+ * @param {Record<string, boolean>} [available] - `capabilities.engines`; read only for a Nano Banana layer
  * @returns {string} the rung one step stronger, clamped at the top ('flux')
  */
-export function stronger(rung) {
+export function stronger(rung, available) {
   if (rung === 'cloud') return 'cloud'
   // Never onto Nano Banana and never staying on it: each of its renders is a
-  // paid request a person asks for by name (`region.rs#step`).
-  if (rung === 'nanobanana') return 'flux'
+  // paid request a person asks for by name. It steps to the strongest rung
+  // this machine runs, not to a FLUX it does not have (`region.rs#step`).
+  if (rung === 'nanobanana') return strongestHere(available)
   const i = RUNGS.indexOf(currentRung(rung))
   if (i === -1) return rung
   return RUNGS[Math.min(i + 1, RUNGS.length - 1)]
@@ -53,11 +69,12 @@ export function stronger(rung) {
 
 /**
  * @param {string} rung
+ * @param {Record<string, boolean>} [available] - `capabilities.engines`; read only for a Nano Banana layer
  * @returns {string} the rung one step simpler, clamped at the bottom ('fill')
  */
-export function simpler(rung) {
+export function simpler(rung, available) {
   if (rung === 'cloud') return 'lama'
-  if (rung === 'nanobanana') return 'flux'
+  if (rung === 'nanobanana') return strongestHere(available)
   const i = RUNGS.indexOf(currentRung(rung))
   if (i === -1) return rung
   return RUNGS[Math.max(i - 1, 0)]

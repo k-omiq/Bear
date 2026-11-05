@@ -494,8 +494,11 @@ export function createMockBackend(options = {}) {
    * How Google answers a Nano Banana batch here, from the options or a
    * `?nanoBanana=` knob: `blocked` refuses the first region's crop and the
    * batch goes on; `billing` fails the account at the second region, which
-   * stops the batch; `busy` stays rate limited for the second region after
-   * every wait, which stops it too. None: every region is cleaned.
+   * stops the batch, and so do the other account halts native stops on
+   * (`nano_banana_job.rs#verdict`), each at the second region: `keyRejected`,
+   * `keyExpired`, `location`, `keyStore` and `modelRejected`; `busy` stays
+   * rate limited for the second region after every wait, which stops it too.
+   * None: every region is cleaned.
    */
   const nanoBananaScenario = () =>
     options.nanoBananaScenario ?? new URLSearchParams(globalThis.location?.search ?? '').get('nanoBanana')
@@ -5126,6 +5129,7 @@ export function createMockBackend(options = {}) {
 
     /** The Gemini key as the native side keeps it: write-only, never read back. */
     async nanoBananaHasKey() {
+      await delay(timing.method)
       const store = options.nanoBananaKeyStore ?? 'os'
       if (store === 'failed') throw new Error('nanoBanana.key.failed')
       if (store === 'session' && !nanoBananaKey) throw new Error('nanoBanana.key.noStore')
@@ -5133,6 +5137,7 @@ export function createMockBackend(options = {}) {
     },
 
     async storeNanoBananaKey({ key } = {}) {
+      await delay(timing.method)
       const store = options.nanoBananaKeyStore ?? 'os'
       // Printable ASCII with no spaces, 20 to 200 bytes once trimmed.
       if (!/^[!-~]{20,200}$/.test(String(key ?? '').trim())) throw new Error('nanoBanana.key.invalid')
@@ -5142,6 +5147,7 @@ export function createMockBackend(options = {}) {
     },
 
     async deleteNanoBananaKey() {
+      await delay(timing.method)
       if ((options.nanoBananaKeyStore ?? 'os') === 'failed') throw new Error('nanoBanana.key.failed')
       nanoBananaKey = false
     },
@@ -5197,7 +5203,17 @@ export function createMockBackend(options = {}) {
       if (runner.atCapacity()) return { runId: null, pages: [], alreadyRunning: true, atCapacity: true }
 
       const scenario = nanoBananaScenario()
-      const ACCOUNT = ['decline.reason.nanoBananaOff', 'decline.reason.nanoBananaNoKey', 'decline.reason.nanoBananaBilling']
+      // The account halts, as `nano_banana_job.rs#verdict` lists them, and
+      // the scenario that fails each at the second region.
+      const ACCOUNT_SCENARIOS = /** @type {Record<string, string>} */ ({
+        billing: 'decline.reason.nanoBananaBilling',
+        keyRejected: 'decline.reason.nanoBananaKeyRejected',
+        keyExpired: 'decline.reason.nanoBananaKeyExpired',
+        location: 'decline.reason.nanoBananaLocation',
+        keyStore: 'decline.reason.nanoBananaKeyStore',
+        modelRejected: 'decline.reason.nanoBananaModelRejected',
+      })
+      const ACCOUNT = ['decline.reason.nanoBananaOff', 'decline.reason.nanoBananaNoKey', ...Object.values(ACCOUNT_SCENARIOS)]
       const report = { total: targets.length, cleaned: 0, gone: 0, failed: /** @type {any[]} */ ([]), left: /** @type {any[]} */ ([]), byUser: false }
       /** @type {string|null} */
       let stopped = null
@@ -5231,7 +5247,7 @@ export function createMockBackend(options = {}) {
           const spent = nanoBananaSpend(nonce)
           let reason = 'reason' in spent ? spent.reason : null
           if (!reason && scenario === 'blocked' && turn === 1) reason = 'decline.reason.nanoBananaBlocked'
-          if (!reason && scenario === 'billing' && turn === 2) reason = 'decline.reason.nanoBananaBilling'
+          if (!reason && scenario && scenario in ACCOUNT_SCENARIOS && turn === 2) reason = ACCOUNT_SCENARIOS[scenario]
           // Still busy after both waits; the mock does not wait them.
           if (!reason && scenario === 'busy' && turn === 2) reason = 'decline.reason.nanoBananaRateLimited'
           if (reason === NO_CONSENT || ACCOUNT.includes(reason) || reason === 'decline.reason.nanoBananaRateLimited') {

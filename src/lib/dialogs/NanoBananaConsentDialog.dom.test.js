@@ -46,6 +46,18 @@ describe('the Nano Banana window', () => {
     expect(app.modals).toEqual([])
   })
 
+  it('names the count and the cost as its description, since focus lands in the box', async () => {
+    const { asked } = await ask()
+    const dialog = screen.getByRole('dialog')
+    const ids = String(dialog.getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean)
+    expect(ids.map((id) => document.getElementById(id)?.textContent)).toEqual([
+      t('nanoBanana.run.regions', { count: 2 }),
+      t('nanoBanana.run.cost', { low: '$0.09', high: '$0.20' }),
+    ])
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(await asked).toBe(false)
+  })
+
   it('treats Escape as Cancel and sends nothing', async () => {
     const { backend, asked } = await ask()
     await fireEvent.keyDown(window, { key: 'Escape' })

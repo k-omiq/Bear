@@ -268,6 +268,37 @@ describe('Nano Banana', () => {
     }
   })
 
+  it('reads the key status once, and again only when it can have changed', async () => {
+    const cloudAllowed = session.cloudAllowed
+    session.cloudAllowed = true
+    const nanoBananaHasKey = vi.fn(async () => true)
+    const backend = backendThat({ nanoBananaHasKey })
+    try {
+      await loadCapabilities(backend)
+      await vi.waitFor(() => expect(capabilities.nanoBanana).toBe(true))
+      // Settings calls this after many changes; none of them is a key change.
+      await loadCapabilities(backend)
+      await loadCapabilities(backend)
+      expect(nanoBananaHasKey).toHaveBeenCalledTimes(1)
+      expect(capabilities.engines.nanobanana).toBe(true)
+      // The kept answer still follows the switch.
+      session.cloudAllowed = false
+      await loadCapabilities(backend)
+      expect(capabilities.nanoBanana).toBe(false)
+      expect(nanoBananaHasKey).toHaveBeenCalledTimes(1)
+      session.cloudAllowed = true
+      // A key removed (or the switch changed) reads it again, and that answer stands.
+      nanoBananaHasKey.mockResolvedValue(false)
+      await refreshNanoBanana(backend)
+      expect(nanoBananaHasKey).toHaveBeenCalledTimes(2)
+      await loadCapabilities(backend)
+      expect(capabilities.nanoBanana).toBe(false)
+      expect(nanoBananaHasKey).toHaveBeenCalledTimes(2)
+    } finally {
+      session.cloudAllowed = cloudAllowed
+    }
+  })
+
   it('keeps the newest answer when an older read lands after it', async () => {
     const cloudAllowed = session.cloudAllowed
     session.cloudAllowed = true

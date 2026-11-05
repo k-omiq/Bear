@@ -7,6 +7,9 @@
    *
    * Answers `{ id, prompt }`. The prompt is plain text the native side cleans and
    * adds under its own removal prompt.
+   *
+   * Focus lands in the box, so the count and the cost are the dialog's
+   * description: a screen reader reads them with the title as it opens.
    */
   import { untrack } from 'svelte'
   import { Button, Modal } from '../ui/index.js'
@@ -26,10 +29,11 @@
   let prompt = $state(String(facts.prompt ?? ''))
 </script>
 
-<Modal title={t('nanoBanana.run.title')} width={480} blocking onclose={() => closeModal(null)}>
+<Modal title={t('nanoBanana.run.title')} width={480} blocking onclose={() => closeModal(null)}
+  describedby="{uid}-regions {uid}-cost">
   <p>{t('nanoBanana.run.model', { model: t(model.labelKey), size: facts.size })}</p>
-  <p>{t('nanoBanana.run.regions', { count: facts.count })}</p>
-  <p>{t('nanoBanana.run.cost', { low: money.format(cost.low), high: money.format(cost.high) })}</p>
+  <p id="{uid}-regions">{t('nanoBanana.run.regions', { count: facts.count })}</p>
+  <p id="{uid}-cost">{t('nanoBanana.run.cost', { low: money.format(cost.low), high: money.format(cost.high) })}</p>
   <label class="prompt" for="{uid}-prompt">{t('nanoBanana.run.promptLabel')}</label>
   <textarea
     id="{uid}-prompt"

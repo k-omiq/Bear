@@ -173,13 +173,32 @@ async function useAnInstalledModel(backend) {
 let nanoBananaRead = 0
 
 /**
+ * Whether a key is saved, as each backend last answered: the key status is
+ * read once, not on every `loadCapabilities`.
+ *
+ * @type {WeakMap<object, boolean>}
+ */
+const keyRead = new WeakMap()
+
+/** `capabilities.nanoBanana` and its `engines` entry, from a key answer and the switch. @param {boolean} hasKey */
+function adoptNanoBanana(hasKey) {
+  capabilities.nanoBanana = hasKey && session.cloudAllowed
+  capabilities.engines = { ...capabilities.engines, nanobanana: capabilities.nanoBanana }
+}
+
+/**
  * Read whether Nano Banana can run. It is `engines`' entry as well, because every
  * engine picker reads that map.
  *
  * The read asks the OS credential store, which on Linux can be a prompt to
- * unlock the keyring, so it can take as long as the person does: launch does
- * not wait for it (`loadCapabilities`), and a key saved meanwhile is read
- * again by Settings, whose answer is the newer one and stands.
+ * unlock the keyring, so it can take as long as the person does, and it is
+ * asked as seldom as it can be: once, the first time `loadCapabilities` runs
+ * (launch, which does not wait for it), and again only where the answer can
+ * have changed, which is a key saved or removed (`NanoBananaSettings.svelte`)
+ * and Cloud engines switched (`cloud.svelte.js#setCloudPermission`). Every
+ * other `loadCapabilities`, and Settings calls it after many changes, reuses
+ * the answer. A key saved meanwhile is read again by Settings, whose answer is
+ * the newer one and stands.
  *
  * @param {import('../api/backend.js').Backend} [backend]
  * @returns {Promise<void>}
@@ -189,8 +208,8 @@ export async function refreshNanoBanana(backend = getBackend()) {
   let hasKey = false
   try { hasKey = await backend.nanoBananaHasKey() } catch { /* no key is the safe answer */ }
   if (read !== nanoBananaRead) return
-  capabilities.nanoBanana = hasKey && session.cloudAllowed
-  capabilities.engines = { ...capabilities.engines, nanobanana: capabilities.nanoBanana }
+  if (backend) keyRead.set(backend, hasKey)
+  adoptNanoBanana(hasKey)
 }
 
 /**
@@ -244,5 +263,9 @@ export async function loadCapabilities(backend = getBackend()) {
   }
   // Last and not awaited: the key read can wait on a keyring prompt, and
   // nothing else at launch needs it. Nano Banana is offered once it answers.
-  void refreshNanoBanana(backend)
+  // Read once per backend; after that the answer stands until a key change
+  // or the Cloud engines switch reads it again (`refreshNanoBanana`).
+  const known = backend ? keyRead.get(backend) : undefined
+  if (known === undefined) void refreshNanoBanana(backend)
+  else adoptNanoBanana(known)
 }

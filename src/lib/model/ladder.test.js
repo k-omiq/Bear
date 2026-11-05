@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { RUNGS, currentRung, rungLabel, simpler, stronger } from './ladder.js'
+import { RUNGS, currentRung, rungLabel, simpler, strongestHere, stronger } from './ladder.js'
 
 describe('engine ladder clamping', () => {
   it('stronger stops at the top rung, flux', () => {
@@ -37,6 +37,24 @@ describe('engine ladder clamping', () => {
   it('preserves legacy cloud stepping safely', () => {
     expect(stronger('cloud')).toBe('cloud')
     expect(simpler('cloud')).toBe('lama')
+  })
+
+  // Never onto or staying on Nano Banana, a paid request: both steps go to
+  // the strongest rung this machine runs, as `region.rs#step` does.
+  it('steps off a Nano Banana layer to the strongest rung this machine runs', () => {
+    const withFlux = { fill: true, lama: true, flux: true, nanobanana: true }
+    const withoutFlux = { ...withFlux, flux: false }
+    expect([stronger('nanobanana', withFlux), simpler('nanobanana', withFlux)]).toEqual(['flux', 'flux'])
+    expect([stronger('nanobanana', withoutFlux), simpler('nanobanana', withoutFlux)]).toEqual(['lama', 'lama'])
+    // Not asked yet: no FLUX is assumed.
+    expect([stronger('nanobanana'), simpler('nanobanana')]).toEqual(['lama', 'lama'])
+    expect(strongestHere(withFlux)).toBe('flux')
+    // Every other rung steps as before, whatever the machine runs.
+    expect(stronger('lama', withoutFlux)).toBe('flux')
+    for (const rung of RUNGS) {
+      expect(stronger(rung, withFlux)).not.toBe('nanobanana')
+      expect(simpler(rung, withoutFlux)).not.toBe('nanobanana')
+    }
   })
 
   it('excludes paint and clone hand tools from ladder rungs', () => {

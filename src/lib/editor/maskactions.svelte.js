@@ -48,6 +48,8 @@ import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.sv
 import { askLocalGuidance } from './qwenflow.js'
 import { editGradientLayer } from './retouch.svelte.js'
 import { confirmNanoBanana } from './nanobananaask.svelte.js'
+import { nanoBananaReasonKey } from '../state/cloudtargets.svelte.js'
+import { capabilities } from '../state/capabilities.svelte.js'
 import { notify } from '../state/app.svelte.js'
 import { openWindow } from '../state/session.svelte.js'
 import {
@@ -367,7 +369,7 @@ export async function rerunMask(region, kind, engine) {
   // while the window is open does not open a second one.
   rerunning.add(region.id)
   try {
-    if (rerunReachesNanoBanana(region.mask, kind, engine) && !(await confirmNanoBanana(1))) return false
+    if (rerunReachesNanoBanana(region.mask, kind, engine) && !(await askNanoBanana())) return false
     return await rerunLocally(region, kind, engine, qwenEdit ?? undefined)
   } finally {
     rerunning.delete(region.id)
@@ -389,8 +391,8 @@ export function rerunTarget(mask, kind, engine) {
   if (!current) return null
   switch (kind) {
     case 'engine': return engine ? currentRung(engine) : current
-    case 'stronger': return stronger(current)
-    case 'simpler': return simpler(current)
+    case 'stronger': return stronger(current, capabilities.engines)
+    case 'simpler': return simpler(current, capabilities.engines)
     case 'retry':
     case 'retryWider': return current
     default: return null
@@ -399,6 +401,27 @@ export function rerunTarget(mask, kind, engine) {
 
 /** The regions a local re-run is in flight for, by id. */
 const rerunning = new Set()
+
+/**
+ * Before one paid Nano Banana request: when it cannot run here (no key saved,
+ * or Cloud engines off) say which, and open no window, because a confirmed
+ * window would only be refused after it. Otherwise the window for one region.
+ *
+ * Every route that sends one region to Google comes through here: a re-run
+ * (`rerunMask`), Clean anyway (`cleanAnyway`) and a detection's clean
+ * (`cleanDetected`). A batch asks once for all its regions instead
+ * (`nanobananarun.svelte.js`) and is a native job that calls none of them.
+ *
+ * @returns {Promise<boolean>} whether it may go
+ */
+async function askNanoBanana() {
+  const reason = nanoBananaReasonKey()
+  if (reason) {
+    notify({ key: reason, tone: 'warn' })
+    return false
+  }
+  return confirmNanoBanana(1)
+}
 
 /**
  * Whether a re-run of `mask` would render on Nano Banana.
@@ -504,6 +527,8 @@ export async function cleanAnyway(region, chosenEngine) {
     qwenEdit = await askLocalGuidance(region.id)
     if (qwenEdit === null) return false
   }
+  // A paid request to Google: asked about first, with the box for what to edit.
+  if (engine === NANO_BANANA_ENGINE && !(await askNanoBanana())) return false
   const extra = {
     ...(engine === 'solid' ? { bubbleColor: params.bubbleColor ?? '#ffffff' } : {}),
     ...(chosenEngine ? { exact: true } : {}),
@@ -622,6 +647,9 @@ export async function cleanDetected(region, engine) {
   if (!claimPageEdit(pageIndex)) return false
   cleaning.add(region.id)
   try {
+    // A paid request to Google, asked about first. While the region counts
+    // as cleaning, so a second press does not open a second window.
+    if (currentRung(engine ?? /** @type {any} */ (region).pick ?? '') === NANO_BANANA_ENGINE && !(await askNanoBanana())) return false
     const params = /** @type {any} */ (editor.toolParams.autoClean ?? {})
     /** @type {any} */
     let result
@@ -1595,15 +1623,13 @@ export async function runRegionMenuItem(id, region) {
   if (id === 'approveMask') return approveHeldMask(region)
   if (id === 'approve') return cleanAnyway(region)
   if (id.startsWith('approve:')) {
-    const engine = id.slice('approve:'.length)
-    // A paid request to Google: asked about first, with the box for what to edit.
-    if (engine === NANO_BANANA_ENGINE && !(await confirmNanoBanana(1))) return false
-    return cleanAnyway(region, engine)
+    // Nano Banana asks first, inside `cleanAnyway`.
+    return cleanAnyway(region, id.slice('approve:'.length))
   }
   if (id.startsWith('engine:')) {
     const engine = id.slice('engine:'.length)
     if (!isDetected(region)) return rerunMask(region, 'engine', engine)
-    if (engine === NANO_BANANA_ENGINE && !(await confirmNanoBanana(1))) return false
+    // Nano Banana asks first, inside `cleanDetected`.
     return engine === CLOUD_ENGINE ? cleanDetectedOnCloud(region) : cleanDetected(region, engine)
   }
   if (id === 'type:inside') return setDetectionType(region, true)

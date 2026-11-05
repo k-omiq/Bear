@@ -86,6 +86,7 @@
     chooseDetectionMode,
     cleanReasonKey,
     detectReasonKey,
+    nanoBananaOptionKey,
     nanoBananaReasonKey,
     detectTarget,
     syncCloudOffer,
@@ -657,7 +658,9 @@
     const nanoBanana = key === 'clean'
       ? [{
         value: 'nanoBanana',
-        label: t('nanoBanana.target.option'),
+        // The reason is in the label too: WKWebView's native select and a
+        // screen reader show no option `title`.
+        label: t(nanoBananaOptionKey(nanoBananaReason)),
         disabled: Boolean(nanoBananaReason) && current !== 'nanoBanana',
         title: nanoBananaReason ? t(nanoBananaReason) : undefined,
       }]

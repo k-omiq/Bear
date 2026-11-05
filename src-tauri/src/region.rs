@@ -4663,15 +4663,25 @@ fn engine_for_fill_mode(mode: &str) -> Engine {
 /// this build can actually run.
 const MANUAL_RUNGS: [Engine; 4] = [Engine::Fill, Engine::Screentone, Engine::Lama, Engine::Flux];
 
-/// One rung up or down from `current`.
+/// The strongest rung this machine runs: FLUX when its sidecar can be
+/// offered here ([`saved_sidecar_status`]), LaMa otherwise. The interface's
+/// `ladder.js#strongestHere`, which reads the same answer.
+fn strongest_here(flux_here: bool) -> Engine {
+    if flux_here { Engine::Flux } else { Engine::Lama }
+}
+
+/// One rung up or down from `current`. `flux_here` is whether this machine
+/// runs FLUX, read only for a Nano Banana layer.
 ///
 /// **Never onto Nano Banana, and never staying on it.** Each of its renders is
 /// a paid request that only a person naming it, or pressing Try again on it,
 /// asks for. So Stronger and Simpler on one of its layers both go to the
-/// strongest rung this machine runs, which is below it and the nearest to it.
-fn step(current: Engine, up: bool) -> Engine {
+/// strongest rung this machine runs, which is below it and the nearest to it:
+/// FLUX where its sidecar is, LaMa where it is not, rather than a FLUX that
+/// is only refused.
+fn step(current: Engine, up: bool, flux_here: bool) -> Engine {
     if current == Engine::NanoBanana {
-        return MANUAL_RUNGS[MANUAL_RUNGS.len() - 1];
+        return strongest_here(flux_here);
     }
     let at = MANUAL_RUNGS.iter().position(|engine| *engine == current);
     match at {
@@ -7015,13 +7025,16 @@ fn rerun_mask_at(
         }));
     }
 
+    // Asked only where it decides the rung: a step off a Nano Banana layer.
+    let flux_here = current == Engine::NanoBanana && matches!(kind, "stronger" | "simpler")
+        && app.is_some_and(|app| saved_sidecar_status(app).available);
     let (target, fill_mode) = match kind {
         "cycleFill" => {
             let next = next_fill_mode(&current_fill);
             (engine_for_fill_mode(next), Some(next))
         }
-        "stronger" => (step(current, true), None),
-        "simpler" => (step(current, false), None),
+        "stronger" => (step(current, true, flux_here), None),
+        "simpler" => (step(current, false, flux_here), None),
         "engine" => (named_rung(engine).unwrap_or(current), None),
         // `retry`, `retryWider`, and anything a later interface adds: run
         // what ran. Wider differs only in the hole, below.
@@ -7377,22 +7390,24 @@ fn clean_anyway_plan(
 /// Whether rung 3a can be offered on this machine.
 #[tauri::command]
 pub async fn sidecar_available(app: tauri::AppHandle) -> Result<SidecarStatus, String> {
-    crate::library::blocking(move || {
-        use tauri::Manager;
-        let app_data = app.path().app_data_dir().ok();
-        let settings = crate::settings::read(&app).ok();
-        let stored_path = setting_str(settings.as_ref(), SIDECAR_PATH_KEYS);
-        let explicit = stored_path.as_deref().filter(|s| !s.is_empty());
-        let stored_backend = setting_str(settings.as_ref(), FLUX_BACKEND_KEYS);
-        let stored_model = setting_str(settings.as_ref(), FLUX_MODEL_KEYS);
-        Ok(sidecar_status_from(
-            explicit,
-            stored_backend.as_deref(),
-            stored_model.as_deref(),
-            app_data.as_deref(),
-        ))
-    })
-    .await
+    crate::library::blocking(move || Ok(saved_sidecar_status(&app))).await
+}
+
+/// [`sidecar_available`]'s answer, read here and now from the saved settings.
+fn saved_sidecar_status(app: &tauri::AppHandle) -> SidecarStatus {
+    use tauri::Manager;
+    let app_data = app.path().app_data_dir().ok();
+    let settings = crate::settings::read(app).ok();
+    let stored_path = setting_str(settings.as_ref(), SIDECAR_PATH_KEYS);
+    let explicit = stored_path.as_deref().filter(|s| !s.is_empty());
+    let stored_backend = setting_str(settings.as_ref(), FLUX_BACKEND_KEYS);
+    let stored_model = setting_str(settings.as_ref(), FLUX_MODEL_KEYS);
+    sidecar_status_from(
+        explicit,
+        stored_backend.as_deref(),
+        stored_model.as_deref(),
+        app_data.as_deref(),
+    )
 }
 
 /// List available model directories in the sidecar weights folder.
@@ -7803,8 +7818,16 @@ mod tests {
     #[test]
     fn a_nano_banana_layer_is_re_run_on_it_only_with_a_grant() {
         use crate::inference::nano_banana_consent::{Book, IDLE};
-        assert_eq!((step(Engine::NanoBanana, true), step(Engine::NanoBanana, false)), (Engine::Flux, Engine::Flux));
-        assert!(MANUAL_RUNGS.iter().all(|rung| step(*rung, true) != Engine::NanoBanana && step(*rung, false) != Engine::NanoBanana));
+        // The strongest rung this machine runs: FLUX with its sidecar, LaMa without.
+        assert_eq!((step(Engine::NanoBanana, true, true), step(Engine::NanoBanana, false, true)), (Engine::Flux, Engine::Flux));
+        assert_eq!((step(Engine::NanoBanana, true, false), step(Engine::NanoBanana, false, false)), (Engine::Lama, Engine::Lama));
+        for flux_here in [true, false] {
+            assert!(MANUAL_RUNGS.iter().all(|rung| step(*rung, true, flux_here) != Engine::NanoBanana
+                && step(*rung, false, flux_here) != Engine::NanoBanana));
+            // Every other rung steps as it did, whatever this machine runs.
+            assert_eq!(step(Engine::Lama, true, flux_here), Engine::Flux);
+            assert_eq!(step(Engine::Flux, false, flux_here), Engine::Lama);
+        }
 
         let (root, library, located, region_id) = a_nano_banana_layer("rerun-nano-banana");
         let book = Book::new(IDLE);
@@ -7817,10 +7840,11 @@ mod tests {
             }).unwrap().is_none(), "{kind}");
             assert_eq!(asked, Some(true), "{kind}");
         }
+        // No app here, so no sidecar: Stronger and Simpler land on LaMa.
         for (kind, engine) in [("stronger", None), ("simpler", None), ("engine", Some("nanobanana"))] {
             let mut asked = None;
             let _ = rerun_mask_at(&library, None, &region_id, kind, engine, serde_json::Value::Null, |_, plan| {
-                asked = Some(plan.choice == Choice::Exact(Engine::Flux));
+                asked = Some(plan.choice == Choice::Exact(Engine::Lama));
                 Ok(Outcome::NotFound)
             }).unwrap();
             assert_eq!(asked, Some(engine.is_none()), "{kind}");
@@ -11194,11 +11218,11 @@ mod tests {
             assert!(!engine.is_rung());
             assert!(!run::reachable_automatically(engine));
             assert_eq!(
-                step(engine, true),
+                step(engine, true, true),
                 engine,
                 "a picker cannot step off a hand tool"
             );
-            assert_eq!(step(engine, false), engine);
+            assert_eq!(step(engine, false, true), engine);
             assert!(!MANUAL_RUNGS.contains(&engine));
             assert_eq!(
                 run::effective_ceiling(None, Some(engine.rung_key())),
@@ -11241,13 +11265,13 @@ mod tests {
     /// and the cloud is not one of the ends, because this build cannot run it.
     #[test]
     fn the_manual_ladder_ends_at_rung_3a_and_never_reaches_the_cloud() {
-        assert_eq!(step(Engine::Fill, false), Engine::Fill);
-        assert_eq!(step(Engine::Fill, true), Engine::Screentone);
-        assert_eq!(step(Engine::Screentone, true), Engine::Lama);
-        assert_eq!(step(Engine::Lama, false), Engine::Screentone);
-        assert_eq!(step(Engine::Lama, true), Engine::Flux);
-        assert_eq!(step(Engine::Flux, true), Engine::Flux);
-        assert_eq!(step(Engine::Flux, false), Engine::Lama);
+        assert_eq!(step(Engine::Fill, false, true), Engine::Fill);
+        assert_eq!(step(Engine::Fill, true, true), Engine::Screentone);
+        assert_eq!(step(Engine::Screentone, true, true), Engine::Lama);
+        assert_eq!(step(Engine::Lama, false, true), Engine::Screentone);
+        assert_eq!(step(Engine::Lama, true, true), Engine::Flux);
+        assert_eq!(step(Engine::Flux, true, true), Engine::Flux);
+        assert_eq!(step(Engine::Flux, false, true), Engine::Lama);
         assert!(!MANUAL_RUNGS.contains(&Engine::Cloud));
     }
 
@@ -11861,8 +11885,8 @@ mod tests {
 
     #[test]
     fn step_on_cloud_engine_returns_cloud_engine() {
-        assert_eq!(step(Engine::Cloud, true), Engine::Cloud);
-        assert_eq!(step(Engine::Cloud, false), Engine::Cloud);
+        assert_eq!(step(Engine::Cloud, true, true), Engine::Cloud);
+        assert_eq!(step(Engine::Cloud, false, true), Engine::Cloud);
     }
 
     #[test]

@@ -146,6 +146,21 @@ export function nanoBananaReasonKey() {
 }
 
 /**
+ * The label of *Clean on: Nano Banana*, naming why it cannot be chosen when
+ * it cannot. The reason has to be in the label: WKWebView's native select,
+ * which the app ships on, and a screen reader both leave an option's `title`
+ * unshown.
+ *
+ * @param {string|null} reasonKey - `nanoBananaReasonKey()`'s answer
+ * @returns {string} an i18n key
+ */
+export function nanoBananaOptionKey(reasonKey) {
+  if (reasonKey === 'nanoBanana.target.noKey') return 'nanoBanana.target.optionNoKey'
+  if (reasonKey === 'nanoBanana.target.cloudOff') return 'nanoBanana.target.optionCloudOff'
+  return 'nanoBanana.target.option'
+}
+
+/**
  * Where detection runs, as the tool's single choice reads it
  * (`pipelines.js#detectsOnCloud`). It no longer depends on which models this
  * computer's selection holds: a cloud run uses its own fixed combination.

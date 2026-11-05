@@ -141,6 +141,15 @@
     }
   })
 
+  /**
+   * A Nano Banana batch's closing notice opens its summary.
+   *
+   * @param {{params?: Record<string, unknown>}} notice
+   */
+  const openSummaryOf = (notice) => {
+    const runId = notice.params?.runId
+    if (typeof runId === 'string') openNanoBananaSummary(runId)
+  }
   // Notices are stored as i18n data and translated at the edge, here. A param
   // whose name ends in `Key` carries a key, which `t()` resolves.
   // A notice whose remedy is in Settings carries a button that opens it there.
@@ -149,11 +158,6 @@
   // choosing the CPU is no remedy there. Advanced's low-memory warning stays
   // until closed, and its button stops the run it is about.
   /** @type {Record<string, {labelKey: string, open: (notice: {params?: Record<string, unknown>}) => void, sticky?: boolean}>} */
-  /** @param {{params?: Record<string, unknown>}} notice */
-  const openSummaryOf = (notice) => {
-    const runId = notice.params?.runId
-    if (typeof runId === 'string') openNanoBananaSummary(runId)
-  }
   const NOTICE_ACTIONS = {
     'notice.run.modelsMissing': {
       labelKey: 'tools.target.chooseModels',
