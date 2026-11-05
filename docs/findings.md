@@ -724,6 +724,30 @@ never written as though it were general.
 
 ## What has not been measured
 
+**SAM-TS-L, LaMa and local FLUX on clean GCE PCs (2026-11-04, second pass): what is still open.** The build
+that became 1.0.0-beta.20, on fresh g2-standard-4 L4 VMs (Ubuntu 26.04, 16 GB, no swap; Windows Server 2025 with
+no `msvcp140.dll` in `System32`) and on e2-standard-4 CPU VMs. Fixed and checked there: SAM-TS-L setup on a
+16 GB PC with no swap (export peak 15.1 GB before `torch.no_grad`, 5.6 to 7.9 GB after) and on a Windows PC
+without Visual C++ (DLL folder for `msvcp140.dll`, and certifi's roots for the GitHub download, which failed
+`CERTIFICATE_VERIFY_FAILED` on a fresh Windows); LaMa kept off DirectML, where the first render failed in the
+Fourier unit's `MatMul` (`80070057`) and failed every LaMa page on the default Windows download; local FLUX 3 and
+Qwen ask for guidance before a clean, as a cloud clean does. Not done or not measured:
+
+- **LaMa on Windows now runs on the CPU** where the WebGPU plugin is not usable, as on the test VM: a Detect &
+  clean of one page took 114 s there, against 69 s on the Linux L4. WebGPU on Windows (Direct3D 12) has not run LaMa anywhere. A GPU failure in the middle of a
+  render still fails the whole page rather than moving that model to the CPU, as the Ogkalu profiles do.
+- **LaMa "Own copy" costs**: the edit made during a run loaded a second session and took 39.6 s on the CPU,
+  against 14.7 s waiting for the run's under "Share one". The first Linux reading (one copy) was the probe firing
+  before the run had taken LaMa; it was not rerun on Linux after the probe was fixed.
+- **Windows real F10**: not tested. The checks sent keys over the debug port from a task with no desktop, and
+  Win32 can take a real F10 for the menu bar.
+- **The Linux first-launch wizard under WebDriver**: `WebKitWebDriver` kills the browser process during the
+  Downloads step on the 16 GB VM (no OOM; 8 GB free). A harness fault, worked around by installing SAM-TS-L in
+  one call; the wizard's Downloads step itself was checked on Windows only.
+- **cuDNN check**: cuDNN 9.27 for CUDA 13 on the system `PATH` and a FLUX 3 clean, 6 of 6, no
+  `CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH`. Not run with the app's CUDA build of ONNX Runtime on.
+- The Linux `.deb` tested was built before the DirectML change, which has no effect on Linux.
+
 **Detect after a delete (2026-11-04): left open.** A page goes on `Project::redetect` when the user deletes or
 erases whole a stored detection or a cleaned mask, and Detect adds back only what the page lost. Not done or not
 measured:
