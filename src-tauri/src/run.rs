@@ -4331,7 +4331,7 @@ impl Pipeline {
         let mut snapshot = params_snapshot(
             made.engine, &fitted, started.elapsed(), pad, made.tiles, &verdict,
         );
-        record_made(&mut self.rung2, made.engine, made.matched.as_ref(), &mut snapshot);
+        record_made(&mut self.rung2, made.engine, made.matched.as_ref(), made.tone.as_ref(), &mut snapshot);
         if let Some(record) = group_record.as_ref() {
             snapshot["group"] = record.snapshot();
             if !at.outcome.evidence.iter().any(|blob| blob.sha256 == segment_evidence.sha256) {
@@ -4565,7 +4565,7 @@ impl Pipeline {
                 made.tiles,
                 &verdict,
             );
-            record_made(&mut self.rung2, made.engine, made.matched.as_ref(), &mut snapshot);
+            record_made(&mut self.rung2, made.engine, made.matched.as_ref(), made.tone.as_ref(), &mut snapshot);
             // The detection's group travels onto its patch.
             if let Some(group) = record.group.as_ref() {
                 snapshot["group"] = group.snapshot();
@@ -4669,6 +4669,11 @@ pub(crate) struct Made {
     /// The finishing the rung's answer was matched to the page by, where one
     /// was picked for it (`params_snapshot["postprocess"]`).
     pub(crate) matched: Option<cleaner_core::engines::postprocess::Report>,
+    /// What the rung's own tone alignment measured, where it ran: the tone
+    /// fix ([`cleaner_core::engines::postprocess::Finishing::ToneFix`]), or
+    /// LaMa with no finishing picked. Recorded as `params_snapshot["tone"]`
+    /// ([`record_made`]).
+    pub(crate) tone: Option<cleaner_core::engines::render::ToneReport>,
 }
 
 /// What one rung answered, before it was scored.
@@ -4802,6 +4807,7 @@ pub(crate) fn render_rung_with_color(
             pad: strip::EdgePad::None,
             tiles: None,
             matched: None,
+            tone: None,
         }))
     };
     match engine {
@@ -4835,6 +4841,7 @@ pub(crate) fn render_rung_with_color(
                     pad: rendered.pad,
                     tiles: Some(rendered.tiles),
                     matched: rendered.matched,
+                    tone: rendered.tone,
                 }))),
                 Err(lama::Error::Declined(declined)) => Ok(Rendered::Refused(declined.reason_key())),
                 // **The session does not survive this, so it is not kept.** A
@@ -4903,6 +4910,7 @@ pub(crate) fn render_rung_with_color(
                 pad: strip::EdgePad::None,
                 tiles: None,
                 matched: None,
+                tone: None,
             }))),
             Err(decline) => Ok(Rendered::Refused(decline.reason_key())),
         },
@@ -5232,12 +5240,14 @@ pub(crate) fn params_snapshot(
 }
 
 /// What a rung's answer records beside [`params_snapshot`]: the FLUX model,
-/// the hole LaMa cut ([`LAMA_HOLE_SNAPSHOT_KEY`]) and the finishing it was
-/// matched to the page by. A run and an edit write a result through this.
+/// the hole LaMa cut ([`LAMA_HOLE_SNAPSHOT_KEY`]), the finishing it was
+/// matched to the page by and, for the tone fix, what that measured. A run
+/// and an edit write a result through this.
 pub(crate) fn record_made(
     rung2: &mut Rung2,
     engine: Engine,
     matched: Option<&cleaner_core::engines::postprocess::Report>,
+    tone: Option<&cleaner_core::engines::render::ToneReport>,
     snapshot: &mut serde_json::Value,
 ) {
     match engine {
@@ -5247,6 +5257,13 @@ pub(crate) fn record_made(
     }
     if let Some(matched) = matched {
         snapshot["postprocess"] = matched.provenance();
+    }
+    // The rung's tone alignment, where it is what made the pixels: the tone
+    // fix picked, or no finishing at all. A record with this and no
+    // `postprocess` is the tone fix, not grey ([`crate::inference::refinish`]).
+    let aligned = matched.is_none_or(|matched| matched.choice.finishing == cleaner_core::engines::postprocess::Finishing::ToneFix);
+    if let (true, Some(tone)) = (aligned, tone) {
+        snapshot["tone"] = tone.provenance();
     }
 }
 

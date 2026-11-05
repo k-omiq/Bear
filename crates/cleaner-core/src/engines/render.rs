@@ -1629,6 +1629,28 @@ impl ToneReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Every version's own crop holds the region.** `prepare_cut` refuses
+    /// a crop that does not hold the applied bounds; `prepare_as` cuts its
+    /// crop from those same bounds, centred, each side snapped up from the
+    /// bounds' side plus context, so no V1, V2 or V3 crop is refused there,
+    /// odd sides and huge regions included.
+    #[test]
+    fn every_versions_crop_holds_the_applied_bounds() {
+        let sides = [1u32, 2, 3, 7, 15, 16, 17, 63, 64, 65, 255, 511, 513, 1023, 1999, 3001, 6000];
+        for preprocessing in [Preprocessing::V1, Preprocessing::V2, Preprocessing::V3] {
+            for &w in &sides {
+                for &h in &sides {
+                    for at in [0i64, 1, 5, 333] {
+                        let bounds = Rect::new(at, at + 1, w, h);
+                        let crop = preprocessing.crop_for(bounds).unwrap();
+                        assert!(crop.x <= bounds.x && crop.y <= bounds.y && crop.right() >= bounds.right() && crop.bottom() >= bounds.bottom(),
+                            "{preprocessing:?} {bounds:?} -> {crop:?}");
+                    }
+                }
+            }
+        }
+    }
     use crate::engines::model::write_bound;
     use crate::fit;
 

@@ -689,8 +689,28 @@ pub(crate) fn prepare_cloud(
     if !record.visible {
         return Err("cloud target is hidden or deleted".into());
     }
+    prepare_cloud_reading(job, source_idx, raw, record, patch, preprocessing, None)
+}
+
+/// [`prepare_cloud`], with the window read wide enough to hold `also` (page
+/// pixels) as well, where the page is not a long strip and the read budget
+/// allows: the crop a Nano Banana answer was cut to, which a shared answer
+/// takes from another region's ([`crate::region`] reads its edit the same
+/// way).
+pub(crate) fn prepare_cloud_reading(
+    job: &Job,
+    source_idx: usize,
+    raw: &Raster,
+    record: &PatchRecord,
+    patch: &Patch,
+    preprocessing: Preprocessing,
+    also: Option<Rect>,
+) -> Result<CloudInput, String> {
+    if !record.visible {
+        return Err("cloud target is hidden or deleted".into());
+    }
     let hole = preprocessing.hole(&patch.mask, &patch.ink);
-    prepare_cloud_seed(job, source_idx, raw, record.order, hole, preprocessing)
+    prepare_seed_reading(job, source_idx, raw, record.order, hole, preprocessing, also)
 }
 
 /// The cloud render input of a region, from the hole the model is asked to
@@ -707,6 +727,18 @@ pub(crate) fn prepare_cloud_seed(
     order: u32,
     seed_mask: &Mask,
     preprocessing: Preprocessing,
+) -> Result<CloudInput, String> {
+    prepare_seed_reading(job, source_idx, raw, order, seed_mask, preprocessing, None)
+}
+
+fn prepare_seed_reading(
+    job: &Job,
+    source_idx: usize,
+    raw: &Raster,
+    order: u32,
+    seed_mask: &Mask,
+    preprocessing: Preprocessing,
+    also: Option<Rect>,
 ) -> Result<CloudInput, String> {
     if seed_mask.is_empty() {
         return Err("seed mask is empty".into());
@@ -800,11 +832,18 @@ pub(crate) fn prepare_cloud_seed(
         strip: &strip,
         origin: decoded.origin,
     });
+    let read_bounds = match also {
+        Some(also) if strip_read.is_none() => {
+            let wider = cleaner_core::engines::nano_banana::union_rect(local_bounds, also);
+            if window_for(wider, read_page.width, read_page.height).is_ok() { wider } else { local_bounds }
+        }
+        _ => local_bounds,
+    };
     let input = read(
         job,
         source_idx,
         read_page,
-        local_bounds,
+        read_bounds,
         order,
         strip_space,
     )?;
@@ -989,6 +1028,55 @@ mod tests {
             }, None).unwrap();
         }
         (root, job, raw)
+    }
+
+    /// **A patch's window can be read wide enough to hold another crop.** A
+    /// Nano Banana answer shared from another region was cut to that region's
+    /// crop, which may lie past the patch's own [`READ_MARGIN`]; finishing it
+    /// again reads a window that holds it, as the edit did.
+    #[test]
+    fn a_patch_window_reads_wide_enough_for_another_crop() {
+        let root = std::env::temp_dir().join(format!("mc-underlay-wide-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let (w, h) = (2400u32, 200u32);
+        let raw = Raster {
+            width: w, height: h, mode: ColorMode::Gray, depth: BitDepth::Eight,
+            icc: None, palette: None, trns: None, srgb_intent: None,
+            color: Default::default(),
+            data: (0..w * h).map(|i| (40 + (i % w) / 20) as u8).collect(),
+        };
+        let path = root.join("page.png");
+        let bytes = encode(&raw, Format::Png).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let source = source_ref(&path, &bytes).unwrap();
+        let manifest = root.join("job/chapter.mtclean");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        let mut job = Job::create(&manifest, Project::new(
+            manifest.parent().unwrap(), "fixture", StripMode::Single, &[source],
+        )).unwrap();
+        let mask = Mask::filled(Rect::new(40, 80, 30, 30));
+        let patch = Patch {
+            id: "a".into(), mask: mask.clone(), ink: mask,
+            pixels: Raster { width: 30, height: 30, data: vec![230; 900], ..raw.clone() },
+            order: 0, visible: true,
+            provenance: Provenance {
+                engine: Engine::NanoBanana, engine_version: "fixture".into(), model_sha256: None,
+                execution_provider: "gemini".into(), params_snapshot: serde_json::json!({}),
+                mask_sha256: String::new(), source_sha256: String::new(), cloud: None, created: 0,
+            },
+        };
+        job.complete_region(0, &patch, None).unwrap();
+        let record = job.project.patches[0].clone();
+        let own = prepare_cloud(&job, 0, &raw, &record, &patch, Preprocessing::CURRENT).unwrap();
+        let far = Rect::new(1500, 0, 512, 200);
+        assert!(own.input.window.right() < far.right(), "{:?}", own.input.window);
+        let wide = prepare_cloud_reading(&job, 0, &raw, &record, &patch, Preprocessing::CURRENT, Some(far)).unwrap();
+        let window = wide.input.window;
+        assert!(window.x <= far.x && window.right() >= far.right(), "{window:?}");
+        // The same hole and crop, read in the wider window.
+        assert_eq!(wide.crop_bounds, own.crop_bounds);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn review_of<'a>(job: &'a Job, id: &str) -> Option<&'a str> {

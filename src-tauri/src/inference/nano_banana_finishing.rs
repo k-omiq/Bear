@@ -69,8 +69,10 @@ pub fn recorded(provenance: &Provenance) -> Option<Choice> {
 }
 
 /// Where a chapter keeps its Nano Banana answers: in its own folder
-/// (`Job::sidecar`), one file per answer, named by its digest.
-const ANSWERS_DIR: &str = "nano-banana-answers";
+/// (`Job::sidecar`), one file per answer, named by its digest. Opening the
+/// chapter deletes the ones no patch or kept revision names any more
+/// (`Job::open`).
+const ANSWERS_DIR: &str = cleaner_core::project::NANO_BANANA_ANSWERS_DIR;
 
 fn answer_path(chapter: &Path, sha256: &str) -> PathBuf {
     chapter.join(ANSWERS_DIR).join(sha256)

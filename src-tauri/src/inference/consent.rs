@@ -449,14 +449,27 @@ impl CloudRegion {
         page: &Raster,
         preprocessing: Preprocessing,
     ) -> Result<crate::underlay::CloudInput, String> {
+        self.prepare_reading(job, page, preprocessing, None)
+    }
+
+    /// [`CloudRegion::prepare`], with a patch's window read wide enough to
+    /// hold `also` too ([`crate::underlay::prepare_cloud_reading`]).
+    pub(crate) fn prepare_reading(
+        &self,
+        job: &Job,
+        page: &Raster,
+        preprocessing: Preprocessing,
+        also: Option<cleaner_core::mask::Rect>,
+    ) -> Result<crate::underlay::CloudInput, String> {
         match &self.kind {
-            CloudRegionKind::Patch(stored) => crate::underlay::prepare_cloud(
+            CloudRegionKind::Patch(stored) => crate::underlay::prepare_cloud_reading(
                 job,
                 self.source_idx,
                 page,
                 &stored.0,
                 &stored.1,
                 preprocessing,
+                also,
             ),
             CloudRegionKind::Detection(_) => crate::underlay::prepare_cloud_seed(
                 job,

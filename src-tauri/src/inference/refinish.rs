@@ -170,6 +170,16 @@ pub(crate) fn recorded_choice(params: &serde_json::Value) -> Option<Choice> {
     Some(Choice { finishing, grayscale: flag("grayscale"), strays: flag("strays") })
 }
 
+/// The finishing a patch's pixels are: the one its record names, or, where
+/// it names none but keeps a tone alignment (`tone`: a 2.0.0 cloud
+/// composite, a LaMa or local FLUX render with no finishing picked), the tone
+/// fix, which is that alignment, not grey and with no stray marks taken out.
+/// A record with neither (a LaMa result from before 1.0.0-beta.3 aligned
+/// nothing; LaMa recorded no alignment until 2026-11-05) names none.
+fn current_choice(params: &serde_json::Value) -> Option<Choice> {
+    recorded_choice(params).or_else(|| params.get("tone").is_some().then_some(Choice::of(Finishing::ToneFix, false)))
+}
+
 /// Prepare region `region_id` of `job` again with its answer, or say why it
 /// cannot be. The caller holds the job's lock. An error is a failure to read,
 /// or an attempt another command is using; a refusal is `Ok(Err)`.
@@ -243,7 +253,7 @@ pub(crate) fn reopen(
         return Ok(Err(Unavailable::NoResult));
     };
     let (record, patch) = *stored;
-    let current = recorded_choice(&record.provenance.params_snapshot);
+    let current = current_choice(&record.provenance.params_snapshot);
     let grayscale = current.or(attempt.finishing).is_some_and(|choice| choice.grayscale);
     Ok(Ok(Reopened {
         source_idx: record.source_idx,
@@ -287,8 +297,13 @@ fn reopen_local(job: &Job, record: &PatchRecord, flux_model: &str) -> Result<Res
     };
     let page = job.display_page(record.source_idx, &source).map_err(|e| e.to_string())?;
     // The hole the current preparation takes of the patch, the lettering it
-    // removed, as an edit's re-run of it reads it.
-    let Ok(cloud) = region.prepare(job, &page, Preprocessing::CURRENT) else {
+    // removed, as an edit's re-run of it reads it. A Nano Banana answer's
+    // window holds the crop it was cut to, which a shared answer took from
+    // another region's, as the edit's did.
+    let sent_crop = (engine == Engine::NanoBanana)
+        .then(|| sent_region(&record.provenance.params_snapshot, (0, 0)).map(|region| region.crop))
+        .flatten();
+    let Ok(cloud) = region.prepare_reading(job, &page, Preprocessing::CURRENT, sent_crop) else {
         return Ok(Err(Unavailable::Unsupported));
     };
     let answer = if engine == Engine::NanoBanana {
@@ -313,7 +328,7 @@ fn reopen_local(job: &Job, record: &PatchRecord, flux_model: &str) -> Result<Res
         return Ok(Err(Unavailable::NoResult));
     };
     let (record, patch) = *stored;
-    let current = recorded_choice(&record.provenance.params_snapshot);
+    let current = current_choice(&record.provenance.params_snapshot);
     Ok(Ok(Reopened {
         source_idx: record.source_idx,
         record,
@@ -375,14 +390,14 @@ impl Reopened {
                     .render(*engine, &self.cloud.input.image, &self.cloud.fitted, choice,
                         crate::run::recorded_lama_hole(&self.record.provenance))
                     .map_err(|reason| format!("refinish_declined: {reason}"))?;
-                Ok(Finished { mask: made.mask, pixels: made.pixels, matched: made.matched, tone: None })
+                Ok(Finished { mask: made.mask, pixels: made.pixels, matched: made.matched, tone: made.tone })
             }
             Answer::NanoBanana(answer, region) => {
                 let prepared = cleaner_core::engines::nano_banana::Prepared::new(
                     &self.cloud.input.image, &self.cloud.fitted, *region, Some(choice), &[])
                     .map_err(|e| e.to_string())?;
                 let rendered = prepared.finish(answer).map_err(|e| e.to_string())?;
-                Ok(Finished { mask: rendered.mask, pixels: rendered.pixels, matched: rendered.matched, tone: None })
+                Ok(Finished { mask: rendered.mask, pixels: rendered.pixels, matched: rendered.matched, tone: rendered.tone })
             }
         }
     }

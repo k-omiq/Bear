@@ -77,6 +77,15 @@ pub const OLDEST_READABLE_VERSION: u32 = 1;
 /// The extension §1 names, and the sidecar directory beside it.
 pub const EXTENSION: &str = "mtclean";
 
+/// Where a chapter keeps its Nano Banana answers, in its sidecar folder: one
+/// file per answer, named by its SHA-256 in hex, which a patch's record names
+/// (`params_snapshot.nano_banana.answer_sha256`).
+pub const NANO_BANANA_ANSWERS_DIR: &str = "nano-banana-answers";
+
+/// A kept answer younger than this is never swept: it is written before the
+/// manifest write that names it, and that edit may still be under way.
+const ANSWER_SWEEP_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("{path}: {source}")]
@@ -1444,6 +1453,7 @@ impl Job {
             let _ = job.sweep_detection_files();
             let _ = job.sweep_evidence_files();
             let _ = job.sweep_held_lettering_files();
+            let _ = job.sweep_nano_banana_answer_files();
         }
         Ok(job)
     }
@@ -3095,6 +3105,44 @@ impl Job {
             if path.extension().and_then(|ext| ext.to_str()) != Some("mtev") { continue; }
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
             if !named.contains(&format!("evidence/{name}")) {
+                std::fs::remove_file(&path).map_err(|error| StoreError::io(&path, error))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete kept Nano Banana answers ([`NANO_BANANA_ANSWERS_DIR`]) no patch
+    /// names: not the visible one, nor a kept revision or a withdrawn patch,
+    /// which undo can put back. An answer is kept before the manifest write
+    /// that names it, so a failed commit leaves one, and every render and Try
+    /// again adds one. A file younger than [`ANSWER_SWEEP_AGE`] stays: its
+    /// edit may not have committed yet. Its unfinished `.partial` goes too.
+    /// Run at open, under the job's lock, like the detection sweep.
+    fn sweep_nano_banana_answer_files(&self) -> Result<(), StoreError> {
+        let dir = self.dir.join(NANO_BANANA_ANSWERS_DIR);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(StoreError::io(&dir, error)),
+        };
+        let named: std::collections::HashSet<&str> = self.project.patches.iter()
+            .chain(&self.project.text_shape_patch_revisions)
+            .chain(&self.project.legacy_patch_revisions)
+            .chain(&self.project.withdrawn_patches)
+            .filter_map(|row| row.provenance.params_snapshot.get("nano_banana")?.get("answer_sha256")?.as_str())
+            .collect();
+        let now = std::time::SystemTime::now();
+        for entry in entries {
+            let entry = entry.map_err(|error| StoreError::io(&dir, error))?;
+            let path = entry.path();
+            let meta = entry.metadata().map_err(|error| StoreError::io(&path, error))?;
+            if !meta.is_file() { continue; }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
+            let digest = name.strip_suffix(".partial").unwrap_or(name);
+            if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) { continue; }
+            if digest == name && named.contains(digest) { continue; }
+            let young = meta.modified().ok().and_then(|at| now.duration_since(at).ok()).is_none_or(|age| age < ANSWER_SWEEP_AGE);
+            if !young {
                 std::fs::remove_file(&path).map_err(|error| StoreError::io(&path, error))?;
             }
         }
@@ -5697,6 +5745,50 @@ mod tests {
         assert!(job.sidecar().join(detected.reference()).exists());
         assert!(job.sidecar().join(patched.reference()).exists());
         assert!(!job.sidecar().join(orphan.reference()).exists(), "an unnamed evidence file survived");
+        assert!(unrelated.exists());
+    }
+
+    /// Opening removes kept Nano Banana answers no patch names, once they are
+    /// old enough that no edit can still be about to name them, and keeps the
+    /// visible patch's, a kept revision's, a young one and anything that is
+    /// not an answer.
+    #[test]
+    fn opening_sweeps_only_old_unnamed_nano_banana_answers() {
+        let scratch = Scratch::new("nano-banana-answers");
+        let mut job = a_job(&scratch);
+        let dir = job.sidecar().join(NANO_BANANA_ANSWERS_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        let digest = |c: char| std::iter::repeat_n(c, 64).collect::<String>();
+        let (first, second, orphan, young) = (digest('a'), digest('b'), digest('c'), digest('d'));
+        let old = std::time::SystemTime::now() - ANSWER_SWEEP_AGE - std::time::Duration::from_secs(60);
+        let write = |name: &str, aged: bool| {
+            let path = dir.join(name);
+            std::fs::write(&path, b"answer").unwrap();
+            if aged {
+                std::fs::File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
+            }
+            path
+        };
+        for name in [&first, &second, &orphan] {
+            write(name, true);
+        }
+        let partial = write(&format!("{orphan}.partial"), true);
+        write(&young, false);
+        let unrelated = write("notes.txt", true);
+        // Two renders of one region: the first is a kept revision undo can
+        // put back, the second the visible patch.
+        for answer in [&first, &second] {
+            let mut patch = a_patch("c1-p001-r0");
+            patch.provenance.params_snapshot = serde_json::json!({ "nano_banana": { "answer_sha256": answer } });
+            job.complete_region(0, &patch, None).unwrap();
+        }
+        drop(Job::open(job.path()).unwrap());
+        assert!(dir.join(&second).exists(), "the visible patch's answer went");
+        assert!(job.project.legacy_patch_revisions.iter().any(|row| row.provenance.params_snapshot["nano_banana"]["answer_sha256"] == first.as_str()));
+        assert!(dir.join(&first).exists(), "a kept revision's answer went");
+        assert!(!dir.join(&orphan).exists(), "an unnamed answer survived");
+        assert!(!partial.exists(), "an unfinished answer survived");
+        assert!(dir.join(&young).exists(), "an answer an edit may be about to name went");
         assert!(unrelated.exists());
     }
 

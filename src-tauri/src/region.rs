@@ -677,6 +677,9 @@ struct Plan {
     /// The user's guidance for a FLUX render on this computer
     /// ([`LocalFlux::set_guidance`]), from the caller's `params.qwenEdit`.
     qwen_edit: Option<QwenEdit>,
+    /// Try again or Try again wider (`retry`, `retryWider`): a Nano Banana
+    /// layer is then finished as it was, not by the setting.
+    try_again: bool,
 }
 
 /// What an edit did.
@@ -808,6 +811,7 @@ impl Bench {
             pad: rendered.pad,
             tiles: Some(rendered.tiles),
             matched: rendered.matched,
+            tone: rendered.tone,
         };
         let verdict = quality::assess(page, &made.mask, &made.pixels, fit::page_noise_sigma(page));
         Ok((made, verdict, edited.record, edited.answer))
@@ -1071,7 +1075,7 @@ impl LocalFlux {
             self.key = None;
         }
         let rendered = rendered.map_err(flux_reason)?;
-        self.tone = rendered.tone;
+        self.tone = rendered.tone.clone();
         Ok(run::Made {
             engine: Engine::Flux,
             mask: rendered.mask,
@@ -1085,6 +1089,7 @@ impl LocalFlux {
             pad: rendered.pad,
             tiles: Some(rendered.tiles),
             matched: rendered.matched,
+            tone: rendered.tone,
         })
     }
 }
@@ -1335,6 +1340,7 @@ pub(crate) fn clean_for_nano_banana_batch(
         stroke: None,
         drawn: None,
         qwen_edit: None,
+        try_again: false,
     };
     let mut bench = Bench::open(app);
     let stored = crate::settings::read(app).ok()
@@ -2033,6 +2039,7 @@ fn edit_with_bench_render(
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
             matched: None,
+            tone: None,
         };
         let verdict = quality::assess(page, &made.mask, &made.pixels, noise);
         (made, verdict)
@@ -2068,8 +2075,10 @@ fn edit_with_bench_render(
                 // and the answer is used only if the page is as it was read.
                 let read = page_state(&job.project, source_idx);
                 // Try again on a Nano Banana layer finishes the new answer as
-                // the layer was finished; anything else takes the setting.
+                // the layer was finished; anything else, a re-clean picked by
+                // name included, takes the setting.
                 let finishing = existing.as_ref()
+                    .filter(|_| plan.try_again)
                     .and_then(|record| crate::inference::nano_banana_finishing::recorded(&record.provenance))
                     .unwrap_or(bench.nano_banana_finishing);
                 let rendered = hold.without(|| bench.nano_banana(page, &fitted, share.as_ref(), finishing))?;
@@ -2154,7 +2163,7 @@ fn edit_with_bench_render(
         made.tiles,
         &verdict,
     );
-    run::record_made(&mut bench.rung2, made.engine, made.matched.as_ref(), &mut snapshot);
+    run::record_made(&mut bench.rung2, made.engine, made.matched.as_ref(), made.tone.as_ref(), &mut snapshot);
     if let Some(record) = nano_banana {
         snapshot["nano_banana"] = nano_banana_record_on_page(
             record, (patch_shift.0 + input_shift.0, patch_shift.1 + input_shift.1));
@@ -2676,6 +2685,7 @@ pub async fn apply_prepared_text_shape(
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         match edit(&app, &located, plan, None)? {
             Outcome::Cleaned(edited) => Ok(ApplyResult::applied(edited)),
@@ -2835,6 +2845,7 @@ mod text_shape_boundary_tests {
                     pad: cleaner_core::strip::EdgePad::None,
                     tiles: None,
                     matched: None,
+                    tone: None,
                 };
                 let bounded =
                     bound_text_shape_output(&below, made, &support, &support, None).unwrap();
@@ -2893,6 +2904,7 @@ mod text_shape_boundary_tests {
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
             matched: None,
+            tone: None,
         };
         assert!(bound_text_shape_output(&below, made, &support, &support, None).is_err());
     }
@@ -2994,6 +3006,7 @@ mod text_shape_boundary_tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         let mut fake = |image: &Raster, fitted: &Fitted| run::Made {
             engine: Engine::Fill,
@@ -3005,6 +3018,7 @@ mod text_shape_boundary_tests {
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
             matched: None,
+            tone: None,
         };
         assert!(matches!(
             edit_with_bench_render(
@@ -3064,6 +3078,7 @@ mod text_shape_boundary_tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         assert!(matches!(
             edit_with_bench_render(
@@ -3228,6 +3243,7 @@ fn paint_patch(
             engine: Engine::Paint, ink: mask.clone(), mask, pixels,
             provider: None, model_sha256: None, pad: cleaner_core::strip::EdgePad::None, tiles: None,
             matched: None,
+            tone: None,
         }, 0, bounds));
     }
 
@@ -3328,6 +3344,7 @@ fn paint_patch(
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
             matched: None,
+            tone: None,
         },
         painted.dabs,
         painted.read_window,
@@ -3426,6 +3443,7 @@ fn shape_patch(
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
             matched: None,
+            tone: None,
         },
         // No dabs: nothing was walked. The provenance says how many vertices
         // there were instead ([`paint_snapshot`]).
@@ -5102,6 +5120,7 @@ pub async fn apply_tool(
             stroke: stroke.clone(),
             drawn: drawn.clone(),
             qwen_edit: qwen_edit_in(&params)?,
+            try_again: false,
         };
         match edit(&app, &located, plan, nano_banana_grant_in(&params))? {
             Outcome::Cleaned(edited) => Ok(ApplyResult::applied(edited)),
@@ -5339,6 +5358,7 @@ pub async fn create_region(
             stroke,
             drawn,
             qwen_edit: qwen_edit_in(&params)?,
+            try_again: false,
         };
         match edit(&app, &located, plan, nano_banana_grant_in(&params))? {
             Outcome::Cleaned(edited) => Ok(Some(CreatedRegion {
@@ -7071,6 +7091,7 @@ fn rerun_mask_at(
         // What to clean, asked again before a FLUX re-run as the cloud asks
         // before its own.
         qwen_edit: qwen_edit_in(&params)?,
+        try_again: matches!(kind, "retry" | "retryWider"),
     };
     match apply(&located, plan)? {
         Outcome::Cleaned(edited) => {
@@ -7371,6 +7392,7 @@ fn clean_anyway_plan(
         stroke: None,
         drawn: None,
         qwen_edit: None,
+        try_again: false,
     })
 }
 
@@ -7480,10 +7502,10 @@ mod tests {
 
         let mut bench = Bench::from_settings(Some(serde_json::json!({"lamaHole": "adaptive"})), None);
         let mut snapshot = serde_json::json!({});
-        run::record_made(&mut bench.rung2, Engine::Lama, None, &mut snapshot);
+        run::record_made(&mut bench.rung2, Engine::Lama, None, None, &mut snapshot);
         assert_eq!(snapshot[run::LAMA_HOLE_SNAPSHOT_KEY], "adaptive");
         let mut snapshot = serde_json::json!({});
-        run::record_made(&mut bench.rung2, Engine::Fill, None, &mut snapshot);
+        run::record_made(&mut bench.rung2, Engine::Fill, None, None, &mut snapshot);
         assert!(snapshot.get(run::LAMA_HOLE_SNAPSHOT_KEY).is_none(), "only LaMa cuts a hole");
     }
 
@@ -7503,6 +7525,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         }
     }
 
@@ -7546,6 +7569,7 @@ mod tests {
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         assert!(matches!(edit_with_bench_render(&mut bench, Engine::Fill, &located,
@@ -7634,6 +7658,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         let mut bench = test_bench(&root);
         let mut seen = None;
@@ -7645,6 +7670,7 @@ mod tests {
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         let Outcome::Cleaned(edited) = edit_with_bench_render(&mut bench, Engine::Fill, &located,
@@ -7812,7 +7838,8 @@ mod tests {
         for kind in ["retry", "retryWider"] {
             let mut asked = None;
             assert!(rerun_mask_at(&library, None, &region_id, kind, None, serde_json::Value::Null, |located, plan| {
-                asked = Some(plan.choice == Choice::Exact(Engine::NanoBanana));
+                // Try again keeps the layer's recorded finishing.
+                asked = Some(plan.choice == Choice::Exact(Engine::NanoBanana) && plan.try_again);
                 edit_with_consent(&mut test_bench(&root), Engine::Fill, located, plan, true, None, &book)
             }).unwrap().is_none(), "{kind}");
             assert_eq!(asked, Some(true), "{kind}");
@@ -7820,6 +7847,9 @@ mod tests {
         for (kind, engine) in [("stronger", None), ("simpler", None), ("engine", Some("nanobanana"))] {
             let mut asked = None;
             let _ = rerun_mask_at(&library, None, &region_id, kind, engine, serde_json::Value::Null, |_, plan| {
+                // A re-clean picked by name takes the setting, not the layer's
+                // recorded finishing.
+                assert!(!plan.try_again, "{kind}");
                 asked = Some(plan.choice == Choice::Exact(Engine::Flux));
                 Ok(Outcome::NotFound)
             }).unwrap();
@@ -8042,6 +8072,7 @@ mod tests {
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         assert!(clean_anyway_at(&library, None, &region_id, Some("fill"),
@@ -8084,6 +8115,7 @@ mod tests {
             provider: None, model_sha256: None,
             pad: cleaner_core::strip::EdgePad::None, tiles: None,
             matched: None,
+            tone: None,
         };
         assert!(clean_anyway_at(&library, None, &region_id, Some("fill"), serde_json::Value::Null, |located, plan| {
             edit_with_bench_render(&mut bench, Engine::Fill, located, plan, Some(&mut renderer))
@@ -8154,6 +8186,7 @@ mod tests {
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         assert!(clean_anyway_at(&library, None, &region_id, Some("fill"),
@@ -8513,6 +8546,7 @@ mod tests {
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         let rerun = rerun_mask_at(&library, None, &region_id, "retry", None, serde_json::Value::Null, |located, plan| {
@@ -9229,6 +9263,7 @@ mod tests {
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         assert!(matches!(edit_with_bench_render(&mut bench, Engine::Fill, &located,
@@ -9368,6 +9403,7 @@ mod tests {
                     provider: None, model_sha256: None,
                     pad: cleaner_core::strip::EdgePad::None, tiles: None,
                     matched: None,
+                    tone: None,
                 }
             };
             assert!(matches!(edit_with_bench_render(&mut test_bench(&root), Engine::Fill,
@@ -9404,6 +9440,7 @@ mod tests {
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
                 matched: None,
+                tone: None,
             };
             assert!(matches!(edit_with_bench_render(&mut bench, engine, &located,
                 fixture_plan("moved", Geometry::Stored, engine, bounds), Some(&mut render)).unwrap(),
@@ -9482,6 +9519,7 @@ mod tests {
                     ink: fitted.ink.clone(), provider: None, model_sha256: None,
                     pad: cleaner_core::strip::EdgePad::None, tiles: Some(1),
                     matched: None,
+                    tone: None,
                 }
             };
             assert!(matches!(edit_with_bench_render(&mut bench, engine, located,
@@ -9553,6 +9591,7 @@ mod tests {
                     ink: fitted.ink.clone(), provider: None, model_sha256: None,
                     pad: cleaner_core::strip::EdgePad::None, tiles: Some(1),
                     matched: None,
+                    tone: None,
                 }
             };
             assert!(matches!(edit_with_bench_render(&mut bench, Engine::Lama, located,
@@ -9682,6 +9721,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         let mut bench = test_bench(&root);
         assert!(matches!(
@@ -9703,6 +9743,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         let mut observed = None;
         let mut fake = |image: &Raster, fitted: &Fitted| {
@@ -9724,6 +9765,7 @@ mod tests {
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         assert!(matches!(
@@ -9749,6 +9791,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         let mut fake_neighbor = |image: &Raster, fitted: &Fitted| {
             neighbor_seen = Some((image.sample(40, 40, 0), fitted.mask.contains(40, 40)));
@@ -9764,6 +9807,7 @@ mod tests {
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         assert!(matches!(
@@ -9808,6 +9852,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         let mut retry_seen = None;
         let mut fake_retry = |image: &Raster, fitted: &Fitted| {
@@ -9824,6 +9869,7 @@ mod tests {
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         assert!(matches!(
@@ -9901,6 +9947,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         assert!(matches!(
             edit_with_bench(&mut bench, Engine::Fill, &located, deleted_retry).unwrap(),
@@ -9931,6 +9978,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         let mut hidden_seen = None;
         let mut fake_hidden = |image: &Raster, fitted: &Fitted| {
@@ -9946,6 +9994,7 @@ mod tests {
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         assert!(matches!(
@@ -10176,6 +10225,7 @@ mod tests {
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
             matched: None,
+            tone: None,
         };
         let plan = Plan {
             expected_source: None,
@@ -10192,6 +10242,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         assert!(matches!(
             edit_with_bench_render(&mut bench, Engine::Fill, &located, plan, Some(&mut fake))
@@ -10263,6 +10314,7 @@ mod tests {
             stroke: None,
             drawn: Some(shape),
             qwen_edit: None,
+            try_again: false,
         };
         let mut bench = test_bench(&root);
         let created = edit_with_bench(&mut bench, Engine::Fill, &located, plan).unwrap();
@@ -10305,6 +10357,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         // A later edit anchored on page two must see and composite over the
         // older page-one-owned seam patch, even though this gesture itself is
@@ -10352,6 +10405,7 @@ mod tests {
             stroke: None,
             drawn: Some(second_shape),
             qwen_edit: None,
+            try_again: false,
         };
         assert!(matches!(
             edit_with_bench(&mut bench, Engine::Fill, &second_located, second_plan).unwrap(),
@@ -10423,6 +10477,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         let mut cross_seen = None;
         let mut fake_cross = |image: &Raster, fitted: &Fitted| {
@@ -10442,6 +10497,7 @@ mod tests {
                 pad: cleaner_core::strip::EdgePad::None,
                 tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         assert!(matches!(
@@ -10983,6 +11039,7 @@ mod tests {
             pad: cleaner_core::strip::EdgePad::None,
             tiles: None,
             matched: None,
+            tone: None,
         };
 
         translate_made(&mut made, (-7, 95));
@@ -11077,6 +11134,7 @@ mod tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         let params = serde_json::json!({
             "mode": "paint",
@@ -11924,7 +11982,7 @@ mod tests {
             let shown=decode(&crate::tile::render(job.path(),0,crate::tile::Variant::Source,None).unwrap()).unwrap();
             assert_eq!(shown.data,cleaner_core::image::proxy::display(&visible).unwrap().data);
             let paint=PaintPlan {kind:PaintKind::Clone{offset:(10.0,0.0)},points:vec![PaintPoint{x:50.0,y:50.0,p:1.0}],spec:cleaner_core::paint::BrushSpec{size:8.0,hardness:100.0,opacity:100.0,..Default::default()},alignment:"aligned"};
-            let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(Rect::new(1,1,2,2)),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("clone".into()),fill_mode:None,clears_untouched:false,paint:Some(paint),requested:None,stroke:None,drawn:None,qwen_edit:None};
+            let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(Rect::new(1,1,2,2)),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("clone".into()),fill_mode:None,clears_untouched:false,paint:Some(paint),requested:None,stroke:None,drawn:None,qwen_edit:None,try_again:false};
             let outcome=edit_with_bench(&mut test_bench(&root),Engine::Fill,&located,plan).unwrap();
             assert!(matches!(outcome,Outcome::Cleaned(_)),"orientation {value}");
             let mut job=Job::open(&located.job_path).unwrap();let patches=job.native_patches_on_page(0).unwrap();
@@ -11968,7 +12026,7 @@ mod tests {
         let mut job=Job::open(&located.job_path).unwrap();job.project.sources[0].orientation=Orientation(6);job.flush().unwrap();
         let (w,h)=page_size(&job,0).unwrap();let rect=pixels_of(Bbox{x:44.0,y:90.0,w:10.0,h:20.0},w,h);
         let shape=PaintedShape{kind:ShapeKind::Ellipse,points:vec![StrokePoint{x:44.0,y:90.0},StrokePoint{x:54.0,y:90.0},StrokePoint{x:54.0,y:110.0},StrokePoint{x:44.0,y:110.0}],feather:0.0};
-        let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(rect),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("shapes".into()),fill_mode:Some("solid"),clears_untouched:false,paint:Some(PaintPlan{kind:PaintKind::Shape{color:[30,30,30],shape:shape.clone(),outline:None},points:Vec::new(),spec:Default::default(),alignment:"aligned"}),requested:Some(rect),stroke:None,drawn:Some(shape),qwen_edit:None};
+        let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(rect),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("shapes".into()),fill_mode:Some("solid"),clears_untouched:false,paint:Some(PaintPlan{kind:PaintKind::Shape{color:[30,30,30],shape:shape.clone(),outline:None},points:Vec::new(),spec:Default::default(),alignment:"aligned"}),requested:Some(rect),stroke:None,drawn:Some(shape),qwen_edit:None,try_again:false};
         assert!(matches!(edit_with_bench(&mut test_bench(&root),Engine::Fill,&located,plan).unwrap(),Outcome::Cleaned(_)));
         let job=Job::open(&located.job_path).unwrap();assert_eq!(job.project.patches[0].native_parts.len(),2);
         for position in 0..2 {
@@ -11994,7 +12052,7 @@ mod tests {
         std::fs::write(job.source_path(0).unwrap(),&bytes).unwrap();
         job.project.sources[0].w=page.width;job.project.sources[0].h=page.height;job.project.sources[0].mode=page.mode;job.flush().unwrap();
         let manifest=std::fs::read(job.path()).unwrap();
-        let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(Rect::new(8,8,12,10)),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("shapes".into()),fill_mode:Some("match-surround"),clears_untouched:false,paint:None,requested:None,stroke:None,drawn:None,qwen_edit:None};
+        let plan=Plan{expected_source:None,solid_color:None,region_id:"chapter-p001-h1".into(),geometry:Geometry::Given(Rect::new(8,8,12,10)),choice:Choice::Exact(Engine::Fill),source:"hand",tool:Some("shapes".into()),fill_mode:Some("match-surround"),clears_untouched:false,paint:None,requested:None,stroke:None,drawn:None,qwen_edit:None,try_again:false};
         let result=edit_with_bench(&mut test_bench(&root),Engine::Fill,&located,plan);
         match result {Err(error)=>assert!(error.contains("associated-alpha"),"{error}"),Ok(_)=>panic!("associated-alpha source fill unexpectedly ran")};
         assert_eq!(std::fs::read(job.path()).unwrap(),manifest);
@@ -13009,6 +13067,7 @@ mod mask_edit_tests {
             stroke: None,
             drawn: None,
             qwen_edit: None,
+            try_again: false,
         };
         let mut bench = test_bench(&root);
         let mut seen = None;
@@ -13020,6 +13079,7 @@ mod mask_edit_tests {
                 provider: None, model_sha256: None,
                 pad: cleaner_core::strip::EdgePad::None, tiles: None,
                 matched: None,
+                tone: None,
             }
         };
         assert!(matches!(edit_with_bench_render(&mut bench, Engine::Fill, &located, plan, Some(&mut fake)).unwrap(),

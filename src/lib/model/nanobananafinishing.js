@@ -12,13 +12,23 @@
  * (`params_snapshot.postprocess`), and Try again on it finishes the new answer
  * the same way.
  */
-import { FINISHINGS } from './model-names.js'
+import { FINISHINGS, FINISHING_ALIASES } from './model-names.js'
 
 export const NANO_BANANA_FINISHING_KEY = 'nanoBananaFinishing'
 export const NANO_BANANA_GRAYSCALE_KEY = 'nanoBananaFinishingGrayscale'
 export const NANO_BANANA_STRAYS_KEY = 'nanoBananaStrays'
 
 /** @typedef {{ finishing: string, grayscale: boolean, strays: boolean }} NanoBananaFinishing */
+
+/**
+ * A finishing name under the name it has now: an older name
+ * (`FINISHING_ALIASES`) as native's serde aliases read it.
+ *
+ * @param {unknown} name
+ */
+function currentName(name) {
+  return typeof name === 'string' && Object.hasOwn(FINISHING_ALIASES, name) ? /** @type {Record<string, string>} */ (FINISHING_ALIASES)[name] : name
+}
 
 /**
  * The choice settings hold, defaults where a key is absent or null. A value
@@ -28,7 +38,7 @@ export const NANO_BANANA_STRAYS_KEY = 'nanoBananaStrays'
  * @returns {NanoBananaFinishing}
  */
 export function nanoBananaFinishing(settings) {
-  const finishing = settings?.[NANO_BANANA_FINISHING_KEY]
+  const finishing = currentName(settings?.[NANO_BANANA_FINISHING_KEY])
   return {
     finishing: typeof finishing === 'string' && FINISHINGS.includes(/** @type {any} */ (finishing)) ? finishing : 'copy',
     grayscale: settings?.[NANO_BANANA_GRAYSCALE_KEY] === true,
@@ -44,7 +54,7 @@ export function nanoBananaFinishing(settings) {
  * @returns {string|null}
  */
 export function nanoBananaFinishingRefusal(patch) {
-  const finishing = patch?.[NANO_BANANA_FINISHING_KEY]
+  const finishing = currentName(patch?.[NANO_BANANA_FINISHING_KEY])
   if (finishing != null && !FINISHINGS.includes(/** @type {any} */ (finishing))) {
     return `${NANO_BANANA_FINISHING_KEY} must be one of ${JSON.stringify(FINISHINGS)}`
   }
@@ -65,5 +75,5 @@ export function nanoBananaFinishingRefusal(patch) {
 export function recordedNanoBananaFinishing(provenance) {
   const postprocess = provenance?.params_snapshot?.postprocess
   if (provenance?.engine !== 'nanobanana' || typeof postprocess?.finishing !== 'string') return null
-  return { finishing: postprocess.finishing, grayscale: postprocess.grayscale === true, strays: postprocess.strays === true }
+  return { finishing: /** @type {string} */ (currentName(postprocess.finishing)), grayscale: postprocess.grayscale === true, strays: postprocess.strays === true }
 }

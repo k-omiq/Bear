@@ -807,8 +807,9 @@ mod tests {
 
     /// **A settings file written before the rename keeps the user's choice.**
     /// `reference-raster` and the two old FLUX 3 part names read as dots-only,
-    /// `locationPrompt` and `lowShift`, every reader takes them, and the next
-    /// write stores the new names.
+    /// `locationPrompt` and `lowShift`, Nano Banana's `reference-poisson` as
+    /// poisson, every reader takes them, and the next write stores the new
+    /// names.
     #[test]
     fn an_old_settings_file_reads_under_the_new_names() {
         use crate::inference::cloud_clean::{finishing_from_settings, flux3_generation_from_settings};
@@ -819,12 +820,14 @@ mod tests {
         let path = dir.join("settings.json");
         let old = serde_json::json!({
             "cloudFinishing": "reference-raster",
+            "nanoBananaFinishing": "reference-poisson",
             "cloudFinishingGrayscale": true,
             "cloudFlux3Generation": {"referencePrompt": true, "marker": false, "referenceShift": true},
         });
         std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
         let read = read_file(&path).unwrap();
         assert_eq!(read["cloudFinishing"], "dots-only", "{read}");
+        assert_eq!(read["nanoBananaFinishing"], "poisson", "{read}");
         assert_eq!(read["cloudFlux3Generation"], serde_json::json!({"locationPrompt": true, "marker": false, "lowShift": true}), "{read}");
         let finishing = finishing_from_settings(&read).unwrap().choice;
         assert_eq!((finishing.finishing, finishing.grayscale), (Finishing::DotsOnly, true));
@@ -833,6 +836,7 @@ mod tests {
         write_patch(&path, serde_json::json!({"undoLimit": null})).unwrap();
         let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!((&stored["cloudFinishing"], &stored["cloudFlux3Generation"]), (&read["cloudFinishing"], &read["cloudFlux3Generation"]));
+        assert_eq!(stored["nanoBananaFinishing"], "poisson");
         std::fs::remove_dir_all(&dir).ok();
     }
 

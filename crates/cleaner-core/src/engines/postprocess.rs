@@ -77,6 +77,10 @@ pub const STRAY_FLAT: f64 = 12.0;
 const STRAY_TONE_SIGMA: f64 = 3.0;
 /// The blur a stray mark is filled from its surroundings with, in px.
 const STRAY_FILL_SIGMA: f64 = 4.0;
+/// Where less than this much of that blur's window is known (the middle of a
+/// found area wider than the blur reaches), the fill is carried in from the
+/// blurred outline as a membrane instead.
+const STRAY_FILL_SUPPORT: f64 = 0.05;
 
 /// The low-pass the tone step compares page and answer at, in px.
 const TONE_SIGMA: f64 = 2.5;
@@ -401,7 +405,12 @@ impl Report {
 ///   continue a line of the page's,
 /// - is no wider or taller than [`STRAY_MAX_SIDE`],
 /// - has no other line within [`STRAY_CLEAR_PX`], and flat tone round it
-///   ([`STRAY_FLAT`]): hatching and texture are lines among lines and stay.
+///   ([`STRAY_FLAT`]): hatching and texture are lines among lines and stay,
+/// - and, where its outline closes, encloses flat tone with no line in it:
+///   a small face or shape the model drew with detail inside is drawing.
+///
+/// The crop's border counts as the mask's edge where the mask touches it: a
+/// line there may run on into page the crop does not show.
 ///
 /// What is returned is each mark with the area its outline encloses, grown
 /// by 2 px to take its soft edge.
@@ -410,7 +419,8 @@ pub fn strays(answer: &[Grid], mask: &Mask) -> Mask {
     let tone = luma(answer);
     let lines = contours(&gaussian(&tone, DESCREEN_SIGMA));
     let flat = gaussian(&tone, STRAY_TONE_SIGMA);
-    let inside = distance_to(&mask.not());
+    let frame = Mask { w, h, data: (0..w * h).map(|i| i % w == 0 || i / w == 0 || i % w == w - 1 || i / w == h - 1).collect() };
+    let inside = distance_to(&mask.not().or(&frame));
     let (label, sizes) = components(&lines.dilate(1).and(mask));
     // Each piece's box, and whether it reaches the mask's edge.
     let mut boxes = vec![(usize::MAX, usize::MAX, 0usize, 0usize, false); sizes.len()];
@@ -434,24 +444,28 @@ pub fn strays(answer: &[Grid], mask: &Mask) -> Mask {
         let (ww, wh) = (wx1 - wx0 + 1, wy1 - wy0 + 1);
         let at = |x: usize, y: usize| (wy0 + y) * w + wx0 + x;
         let piece = Mask { w: ww, h: wh, data: (0..ww * wh).map(|i| label[at(i % ww, i / ww)] == l).collect() };
-        let area = filled(&piece.dilate(2));
+        let grown = piece.dilate(2);
+        let area = filled(&grown);
+        // The tone round the mark, and what its outline encloses past its
+        // own soft edge, each at the same distance from the line.
         let near = area.dilate(STRAY_CLEAR_PX).and_not(&area);
-        let mut ring = Vec::new();
-        let mut crowded = false;
-        for i in 0..ww * wh {
-            if !near.data[i] {
-                continue;
+        let enclosed = area.and_not(&grown);
+        let read = |set: &Mask| {
+            let mut tones = Vec::new();
+            let mut crowded = false;
+            for i in (0..ww * wh).filter(|&i| set.data[i]) {
+                let j = at(i % ww, i / ww);
+                crowded |= lines.data[j];
+                tones.push(flat.data[j]);
             }
-            let j = at(i % ww, i / ww);
-            crowded |= lines.data[j];
-            ring.push(flat.data[j]);
-        }
-        if crowded || ring.is_empty() {
+            (crowded, tones)
+        };
+        let (crowded, ring) = read(&near);
+        if crowded || ring.is_empty() || spread(&ring) > STRAY_FLAT {
             continue;
         }
-        let mean = ring.iter().sum::<f64>() / ring.len() as f64;
-        let spread = (ring.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / ring.len() as f64).sqrt();
-        if spread > STRAY_FLAT {
+        let (detailed, inner) = read(&enclosed);
+        if detailed || (!inner.is_empty() && spread(&inner) > STRAY_FLAT) {
             continue;
         }
         for i in 0..ww * wh {
@@ -461,6 +475,12 @@ pub fn strays(answer: &[Grid], mask: &Mask) -> Mask {
         }
     }
     found.and(mask)
+}
+
+/// The standard deviation of `values`.
+fn spread(values: &[f64]) -> f64 {
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    (values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / values.len() as f64).sqrt()
 }
 
 /// `piece` with every hole in it filled: what its outline encloses.
@@ -499,16 +519,43 @@ pub fn without_strays(answer: &[Grid], mask: &Mask) -> (Vec<Grid>, Mask) {
 
 /// `answer` with the `found` marks filled from the tone round them: a
 /// normalised blur of the mask's other pixels, so the steps after it see the
-/// surrounding tone there, and a screen step redraws its dots.
+/// surrounding tone there, and a screen step redraws its dots. Deeper in a
+/// found area than the blur reaches ([`STRAY_FILL_SUPPORT`]), the blurred
+/// tone at its outline is carried in as a membrane, worked in a window round
+/// each area.
 fn fill_strays(answer: &[Grid], found: &Mask, mask: &Mask) -> Vec<Grid> {
     if !found.any() {
         return answer.to_vec();
     }
-    let known = found.dilate(1).not();
+    let (w, h) = (found.w, found.h);
+    let hole = found.dilate(1);
+    let known = hole.not();
+    // Each area's box, grown so the window's border is known pixels.
+    let (label, sizes) = components(&hole);
+    let mut boxes = vec![(usize::MAX, usize::MAX, 0usize, 0usize); sizes.len()];
+    for (i, &l) in label.iter().enumerate().filter(|(_, l)| **l != 0) {
+        let (x, y, b) = (i % w, i / w, &mut boxes[l]);
+        *b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+    }
     answer
         .iter()
         .map(|channel| {
-            let (around, _) = masked_blur(channel, &known, STRAY_FILL_SIGMA);
+            let (mut around, weight) = masked_blur(channel, &known, STRAY_FILL_SIGMA);
+            for &(x0, y0, x1, y1) in boxes.iter().skip(1) {
+                let (wx0, wy0) = (x0.saturating_sub(2), y0.saturating_sub(2));
+                let (wx1, wy1) = ((x1 + 2).min(w - 1), (y1 + 2).min(h - 1));
+                let (ww, wh) = (wx1 - wx0 + 1, wy1 - wy0 + 1);
+                let at = |i: usize| (wy0 + i / ww) * w + wx0 + i % ww;
+                let held = Mask { w: ww, h: wh, data: (0..ww * wh).map(|i| weight.data[at(i)] >= STRAY_FILL_SUPPORT).collect() };
+                if held.data.iter().all(|&k| k) || !held.any() {
+                    continue;
+                }
+                let values = Grid { w: ww, h: wh, data: (0..ww * wh).map(|i| around.data[at(i)]).collect() };
+                let field = membrane(&values, &held);
+                for i in (0..ww * wh).filter(|&i| !held.data[i]) {
+                    around.data[at(i)] = field.data[i];
+                }
+            }
             let mut out = channel.clone();
             for i in 0..out.data.len() {
                 if found.data[i] && mask.data[i] {
@@ -1026,6 +1073,77 @@ mod tests {
         };
         let (_, answer, mask) = dark_screen_with(hatching);
         assert_eq!(strays(std::slice::from_ref(&answer), &mask).count(), 0, "hatching");
+    }
+
+    /// Flat paper with a dark mask-sized square hole, and `draw` inked into
+    /// the answer inside it, centred at (100, 100).
+    fn paper_with(draw: impl Fn(f64, f64) -> bool) -> (Grid, Grid, Mask) {
+        let (w, h) = (200, 200);
+        let mask = square(w, h, 20, 20, 180, 180);
+        let page = Grid::new(w, h, 245.0);
+        let answer = Grid {
+            w,
+            h,
+            data: (0..w * h).map(|i| {
+                let (x, y) = ((i % w) as f64 - 100.0, (i / w) as f64 - 100.0);
+                if mask.data[i] && draw(x, y) { 20.0 } else { 245.0 }
+            }).collect(),
+        };
+        (page, answer, mask)
+    }
+
+    fn ring(outer: f64, inner: f64) -> impl Fn(f64, f64) -> bool {
+        move |x, y| (inner..=outer).contains(&x.hypot(y))
+    }
+
+    /// **A found area wider than the fill's blur comes back as paper.** A
+    /// ghost ring 44 px across on white paper encloses flat paper, so all of
+    /// it is found; its middle lies past the blur's reach, and is carried in
+    /// from the outline, not left black. Through the stray step alone and
+    /// through a finishing.
+    #[test]
+    fn a_wide_stray_area_is_filled_to_its_middle() {
+        let (page, answer, mask) = paper_with(ring(22.0, 19.0));
+        let (filled, found) = without_strays(std::slice::from_ref(&answer), &mask);
+        assert!(found.at(100, 100), "the ring's inside was not found");
+        assert!(found.count() > 1500, "{}", found.count());
+        let darkest = (0..found.data.len()).filter(|&i| found.data[i]).map(|i| filled[0].data[i]).fold(f64::MAX, f64::min);
+        assert!(darkest > 200.0, "a found pixel came back at {darkest}");
+        let all = Mask::new(mask.w, mask.h, true);
+        let crop = Crop { shown: std::slice::from_ref(&page), answer: std::slice::from_ref(&answer), mask: &mask, page: &all };
+        for finishing in [Finishing::Copy, Finishing::ToneOnly, Finishing::Poisson] {
+            let (out, _) = settle_with(&crop, Choice { finishing, grayscale: false, strays: true });
+            let dark = out[0].data.iter().filter(|v| **v < 128.0).count();
+            assert_eq!(dark, 0, "{finishing:?} left {dark} dark px");
+        }
+    }
+
+    /// **A closed shape with detail inside is drawing.** The same ring with
+    /// two eyes in it is a small face: neither the outline nor the eyes are
+    /// taken.
+    #[test]
+    fn a_closed_outline_with_content_inside_stays() {
+        let eyes = |x: f64, y: f64| (x + 7.0).hypot(y + 5.0) <= 2.5 || (x - 7.0).hypot(y + 5.0) <= 2.5;
+        let ring = ring(22.0, 19.0);
+        let (_, answer, mask) = paper_with(|x, y| ring(x, y) || eyes(x, y));
+        assert_eq!(strays(std::slice::from_ref(&answer), &mask).count(), 0);
+        // The ring alone is still a ghost to take out.
+        let (_, answer, mask) = paper_with(ring);
+        assert!(strays(std::slice::from_ref(&answer), &mask).at(100, 100));
+    }
+
+    /// **The crop's border is the mask's edge where the mask meets it.** A
+    /// short line that comes in across the crop's border continues page the
+    /// crop does not show, and stays.
+    #[test]
+    fn a_line_from_the_crop_border_is_not_stray() {
+        let (w, h) = (160, 160);
+        let mask = square(w, h, 0, 30, 130, 130);
+        let answer = Grid { w, h, data: (0..w * h).map(|i| if (60..62).contains(&(i / w)) && i % w < 20 { 20.0 } else { 245.0 }).collect() };
+        assert_eq!(strays(std::slice::from_ref(&answer), &mask).count(), 0);
+        // The same line clear of the border is a stray.
+        let moved = Grid { w, h, data: (0..w * h).map(|i| if (60..62).contains(&(i / w)) && (40..60).contains(&(i % w)) { 20.0 } else { 245.0 }).collect() };
+        assert!(strays(std::slice::from_ref(&moved), &mask).count() > 0);
     }
 
     /// **A choice without the step is stored as before.** `strays` is written

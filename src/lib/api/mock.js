@@ -4309,8 +4309,10 @@ export function createMockBackend(options = {}) {
       const model = rerunTarget(found.region.mask, kind, engine) === NANO_BANANA_ENGINE ? nanoBananaMayRender(params) : null
       if (rerunTarget(found.region.mask, kind, engine) === NANO_BANANA_ENGINE && !model) return null
       const qwenEdit = checkedQwenEdit(params?.qwenEdit)
-      // Try again on a Nano Banana layer finishes as the layer was finished.
-      const recorded = recordedNanoBananaFinishing(found.region.mask.provenance)
+      // Try again on a Nano Banana layer finishes as the layer was finished;
+      // a re-clean picked by name takes the setting.
+      const tryAgain = kind === 'retry' || kind === 'retryWider'
+      const recorded = tryAgain ? recordedNanoBananaFinishing(found.region.mask.provenance) : null
       const result = cleaningHere(found, () => rerunRegionMask(found.region, toolContext, { kind, engine, qwenEdit }))
       stampNanoBanana(result.mask, model, recorded)
       notifyAll(result.notices)

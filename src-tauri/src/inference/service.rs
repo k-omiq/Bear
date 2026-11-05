@@ -5360,6 +5360,14 @@ pub(crate) mod tests {
                     gain: Vec::new(), offset: Vec::new(), evidence: 0, contours: 0, screen: 0, stray_pixels: None,
                     choice: finishing, method_report: None,
                 }),
+                // The tone fix is the model's own alignment, and says what it
+                // measured.
+                tone: (finishing.finishing == cleaner_core::engines::postprocess::Finishing::ToneFix).then(|| {
+                    cleaner_core::engines::render::ToneReport {
+                        curves: vec![Vec::new()], samples: 7, ring: 7, background: 7, abstained: None,
+                        preprocessing: cleaner_core::engines::render::Preprocessing::V2, texture: None, source_texture: None,
+                    }
+                }),
             })
         }
     }
@@ -5379,7 +5387,9 @@ pub(crate) mod tests {
     /// **A LaMa result is finished again by its model asked again.** One
     /// preview per finishing, each a render of its own; a pick writes that
     /// render's pixels and post-processing record as one undo step, and the
-    /// tone alignment it had goes, as a cloud result's does.
+    /// tone alignment it had goes, as a cloud result's does. A result with an
+    /// alignment and no finishing is the tone fix, and is marked so; the tone
+    /// fix picked again records what its alignment measured.
     #[test]
     fn refinish_renders_a_local_result_again_and_records_one_undo_step() {
         use crate::inference::refinish::{apply_at, previews_at, PREVIEW_LONG_SIDE};
@@ -5389,7 +5399,7 @@ pub(crate) mod tests {
         let mut lama = FakeLocal { flux_model: "flux2-klein-4b", renders: Vec::new(), holes: Vec::new(), guidance: Vec::new() };
 
         let previews = previews_at(&journal, &fixture.manifest, "reg-1", &mut lama).unwrap();
-        assert_eq!((previews.unavailable, previews.current), (None, None));
+        assert_eq!((previews.unavailable, previews.current), (None, Some(Choice::of(Finishing::ToneFix, false))));
         assert_eq!(previews.previews.iter().map(|p| p.finishing).collect::<Vec<_>>(), Finishing::ALL.to_vec());
         assert_eq!(lama.renders, Finishing::ALL.to_vec(), "one render per finishing");
         use base64::Engine as _;
@@ -5421,6 +5431,13 @@ pub(crate) mod tests {
         assert!(apply_at(&journal, &fixture.manifest, "reg-1", poisson, &mut lama).unwrap().history.is_none());
         assert_eq!(lama.renders.len(), renders);
         assert_eq!(crate::history::load(&fixture.manifest).entries.len(), 1);
+
+        let tone_fix = Choice::of(Finishing::ToneFix, false);
+        apply_at(&journal, &fixture.manifest, "reg-1", tone_fix, &mut lama).unwrap();
+        let params = fixture.committed_patch().provenance.params_snapshot;
+        assert_eq!(params["postprocess"]["finishing"], "tone-fix");
+        assert_eq!(params["tone"]["samples"], 7, "the tone fix keeps what it measured: {params}");
+        assert_eq!(previews_at(&journal, &fixture.manifest, "reg-1", &mut lama).unwrap().current, Some(tone_fix));
     }
 
     /// **A Nano Banana result is finished again from its kept answer**, with
@@ -5458,7 +5475,14 @@ pub(crate) mod tests {
         assert_eq!((&params["postprocess"]["finishing"], &params["postprocess"]["strays"]), (&serde_json::json!("as-is"), &serde_json::json!(true)));
         assert_eq!(params["nano_banana"]["answer_sha256"], sha256.as_str(), "the answer stays named");
         assert!(changed.pixels.data.contains(&90), "the answer as it came");
+        assert!(params.get("tone").is_none(), "{params}");
         assert_eq!(crate::history::load(&fixture.manifest).entries.len(), 1);
+
+        // The tone fix runs the render's own alignment, and the record keeps it.
+        apply_at(&journal, &fixture.manifest, "reg-1", Choice::of(Finishing::ToneFix, false), &mut NoModels).unwrap();
+        let params = fixture.committed_patch().provenance.params_snapshot;
+        assert_eq!(params["postprocess"]["finishing"], "tone-fix");
+        assert!(params["tone"].is_object(), "the tone fix's alignment was not recorded: {params}");
 
         std::fs::remove_dir_all(sidecar.join("nano-banana-answers")).unwrap();
         assert_eq!(previews_at(&journal, &fixture.manifest, "reg-1", &mut NoModels).unwrap().unavailable, Some(Unavailable::NoResult));

@@ -1182,6 +1182,54 @@ mod tests {
         assert_eq!(fixed.matched.as_ref().map(|report| report.choice), Some(choice));
     }
 
+    /// **The tone fix made grey on a colour page.** LaMa's alignment runs per
+    /// channel, then the answer is made grey: every pixel of the ramp's core,
+    /// where the answer is written whole, is neutral, where the same render
+    /// not grey keeps the page's tint.
+    #[test]
+    fn the_tone_fix_made_grey_writes_grey_on_a_colour_page() {
+        use crate::engines::postprocess::{Choice, Finishing};
+        let Some(held) = inpainter() else { return };
+        let Some(grey) = screentone_page() else { return };
+        // The screentone page tinted warm, so it reads as colour.
+        let mut page = Raster { mode: ColorMode::Rgb, depth: crate::image::BitDepth::Eight, palette: None, trns: None, data: grey.to_rgb8(), ..grey.clone() };
+        for i in 0..(page.width * page.height) as usize {
+            let v = page.data[i * 3];
+            page.data[i * 3] = v.saturating_add(24);
+            page.data[i * 3 + 2] = v.saturating_sub(24);
+        }
+        let mut held = held.lock().unwrap();
+        let fitted = fitted_over(&page, Rect::new(600, 800, 160, 90));
+        let tint = |rendered: &Rendered| {
+            let b = rendered.mask.bounds;
+            let (mut neutral, mut written) = (0usize, 0usize);
+            for y in b.y..b.bottom() {
+                for x in b.x..b.right() {
+                    // The ramp's core, written whole; its rings blend in the
+                    // page's own tint.
+                    if !fitted.mask.contains(x, y) {
+                        continue;
+                    }
+                    let (lx, ly) = ((x - b.x) as u32, (y - b.y) as u32);
+                    let [r, g, bl] = [0, 1, 2].map(|c| i32::from(rendered.pixels.sample8(lx, ly, c)));
+                    written += 1;
+                    if (r - g).abs() <= 1 && (g - bl).abs() <= 1 {
+                        neutral += 1;
+                    }
+                }
+            }
+            (neutral, written)
+        };
+        let made_grey = held.render_with(&page, &fitted, Some(Choice::of(Finishing::ToneFix, true)), HoleMode::default()).expect("the region rendered");
+        let (neutral, written) = tint(&made_grey);
+        assert!(written > 0 && neutral == written, "{neutral} of {written} written pixels are grey");
+        assert_eq!(made_grey.matched.as_ref().map(|report| report.choice), Some(Choice::of(Finishing::ToneFix, true)));
+        assert!(made_grey.tone.is_some());
+        let kept = held.render_with(&page, &fitted, Some(Choice::of(Finishing::ToneFix, false)), HoleMode::default()).expect("the region rendered");
+        let (neutral, written) = tint(&kept);
+        assert!(neutral * 2 < written, "the tint went without grey asked: {neutral} of {written}");
+    }
+
     /// **A tiled region's lettering is no evidence of its page.** Paper with
     /// solid black lettering across three tiles: each tile's crop holds the
     /// lettering a later tile writes and the page under what an earlier tile

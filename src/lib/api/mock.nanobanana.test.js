@@ -327,6 +327,14 @@ describe('Nano Banana finishing on the mock', () => {
     expect(again.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'dots-only', grayscale: true })
   })
 
+  it('takes the setting on a re-clean picked by name, which is not Try again', async () => {
+    const { mock, done } = await layer({ nanoBananaFinishing: 'dots-only' })
+    await mock.writeSettings({ nanoBananaFinishing: 'tone-only' })
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, count: 1 })
+    const again = await mock.rerunMask({ maskId: done.mask.id, kind: 'engine', engine: 'nanobanana', params: { nanoBananaGrant: grant } })
+    expect(again.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'tone-only', grayscale: false })
+  })
+
   it('is changed afterwards from the kept answer, its stray choice kept', async () => {
     const { mock, regionId } = await layer({ nanoBananaStrays: true })
     const previews = await mock.regionFinishingPreviews({ regionId })
