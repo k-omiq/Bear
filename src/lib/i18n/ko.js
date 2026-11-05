@@ -3360,6 +3360,8 @@ export const ko = {
     // Clean on: Nano Banana (Text cleanup panel).
     target: {
       option: 'Nano Banana (Google)',
+      optionNoKey: 'Nano Banana (키 필요)',
+      optionCloudOff: 'Nano Banana (클라우드 엔진 꺼짐)',
       noKey: 'Nano Banana에는 Gemini API 키가 필요합니다. 설정 > 클라우드에서 저장하세요.',
       cloudOff: 'Nano Banana를 쓰려면 설정에서 클라우드 엔진을 켜세요.',
       cleanStepOnly: 'Nano Banana는 이미 감지된 영역을 정리합니다. 정리를 고르거나 정리 위치에서 다른 곳을 고르세요.',

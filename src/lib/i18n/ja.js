@@ -3364,6 +3364,8 @@ export const ja = {
     // Clean on: Nano Banana (Text cleanup panel).
     target: {
       option: 'Nano Banana (Google)',
+      optionNoKey: 'Nano Banana (キーが必要)',
+      optionCloudOff: 'Nano Banana (クラウドエンジンがオフ)',
       noKey: 'Nano Banana には Gemini API キーが必要です。設定 > クラウド で保存してください。',
       cloudOff: 'Nano Banana を使うには、設定でクラウドエンジンをオンにしてください。',
       cleanStepOnly: 'Nano Banana は検出済みの領域を除去します。クリーンを選ぶか、除去先で別の場所を選んでください。',

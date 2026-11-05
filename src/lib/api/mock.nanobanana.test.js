@@ -65,6 +65,24 @@ describe('the Nano Banana key on the mock', () => {
     expect(await other.nanoBananaHasKey()).toBe(false)
   })
 
+  it('takes a method\'s time to answer, as every other mock method does', async () => {
+    vi.useFakeTimers()
+    try {
+      const mock = /** @type {any} */ (createMockBackend({ timing: { ...ZERO, method: 50 } }))
+      for (const call of [() => mock.nanoBananaHasKey(), () => mock.storeNanoBananaKey({ key: KEY }), () => mock.deleteNanoBananaKey()]) {
+        let settled = false
+        const answer = call().finally(() => { settled = true })
+        await vi.advanceTimersByTimeAsync(49)
+        expect(settled).toBe(false)
+        await vi.advanceTimersByTimeAsync(1)
+        await answer
+        expect(settled).toBe(true)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('answers where it was kept, and refuses as natively', async () => {
     const session = makeMock({ nanoBananaKeyStore: 'session' })
     await expect(session.nanoBananaHasKey()).rejects.toThrow('nanoBanana.key.noStore')
@@ -179,8 +197,9 @@ describe('a Nano Banana grant on the mock', () => {
     ;({ grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 }))
     const again = await mock.rerunMask({ maskId, kind: 'retry', params: { nanoBananaGrant: grant } })
     expect(again?.mask.provenance.engine).toBe('nanobanana')
+    // To the strongest rung the mock's machine runs: it has no FLUX sidecar.
     const simpler = await mock.rerunMask({ maskId: again.mask.id, kind: 'simpler' })
-    expect(simpler?.mask.provenance.engine).toBe('flux')
+    expect(simpler?.mask.provenance.engine).toBe('lama')
   })
 })
 
@@ -250,6 +269,25 @@ describe('a Nano Banana batch on the mock', () => {
     expect(report.left.map((/** @type {any} */ target) => target.regionId)).toEqual(regions.slice(1).map((region) => region.id))
     expect(seen).toContain('nanoBanana.job.halted')
   })
+
+  // Every account halt native stops on (`nano_banana_job.rs#verdict`).
+  for (const [scenario, reason] of [
+    ['keyRejected', 'decline.reason.nanoBananaKeyRejected'],
+    ['keyExpired', 'decline.reason.nanoBananaKeyExpired'],
+    ['location', 'decline.reason.nanoBananaLocation'],
+    ['keyStore', 'decline.reason.nanoBananaKeyStore'],
+    ['modelRejected', 'decline.reason.nanoBananaModelRejected'],
+  ]) {
+    it(`stops at once on ${scenario}, and leaves the rest`, async () => {
+      const mock = await ready({ nanoBananaScenario: scenario })
+      const regions = await detected(mock)
+      const { seen, report, summary } = await batch(mock, regions)
+      expect(summary.reason).toBe('failed')
+      expect(report).toMatchObject({ cleaned: 1, stopped: reason, byUser: false, failed: [] })
+      expect(report.left).toHaveLength(regions.length - 1)
+      expect(seen).toContain('nanoBanana.job.halted')
+    })
+  }
 
   it('stops on Stop, withdraws the grant, and says the person stopped it', async () => {
     const mock = await ready({ timing: { ...ZERO, region: 20 } })

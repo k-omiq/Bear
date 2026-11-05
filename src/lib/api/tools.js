@@ -399,10 +399,17 @@ export function rerunRegionMask(region, ctx, options) {
   }
 }
 
+/**
+ * The rungs the mock's machine runs, as its `sidecarAvailable` answers: no
+ * FLUX sidecar. Stronger and Simpler off a Nano Banana layer read it, as the
+ * native side reads its own sidecar (`region.rs#strongest_here`).
+ */
+const MOCK_MACHINE = Object.freeze({ flux: false })
+
 /** How each re-run kind picks the rung to run at. */
 const TARGET_RUNG = Object.freeze({
-  stronger: (/** @type {string} */ engine) => stronger(engine),
-  simpler: (/** @type {string} */ engine) => simpler(engine),
+  stronger: (/** @type {string} */ engine) => stronger(engine, MOCK_MACHINE),
+  simpler: (/** @type {string} */ engine) => simpler(engine, MOCK_MACHINE),
   retry: (/** @type {string} */ engine) => engine,
   // Same rung; the native side widens the hole (`Geometry::StoredWider`).
   retryWider: (/** @type {string} */ engine) => engine,

@@ -25,8 +25,13 @@
    * rather than the Fullscreen API, which WKWebView, the engine the app
    * ships on, grants only behind a prefix and a user gesture.
    *
+   * `describedby` names the ids of the body's sentences a screen reader
+   * reads with the title as the dialog opens, space separated. Focus lands
+   * on the first control, so a sentence above it is not read otherwise.
+   *
    * @type {{
    *   title: string,
+   *   describedby?: string,
    *   meta?: string,
    *   width?: number,
    *   blocking?: boolean,
@@ -39,6 +44,7 @@
    */
   let {
     title,
+    describedby,
     meta,
     width = 400,
     blocking = false,
@@ -129,6 +135,7 @@
     role="dialog"
     aria-modal="true"
     aria-labelledby={titleId}
+    aria-describedby={describedby || undefined}
     tabindex="-1"
     style:width={fill ? undefined : `${width}px`}
   >

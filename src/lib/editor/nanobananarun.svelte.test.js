@@ -225,6 +225,24 @@ describe('a Nano Banana batch', () => {
     expect(editor.run.active).toBe(false)
   })
 
+  it('does not follow the job as the open chapter\'s when the chapter changed while it started', async () => {
+    backend.startNanoBananaRun.mockRestore()
+    const original = backend.startNanoBananaRun
+    vi.spyOn(backend, 'startNanoBananaRun').mockImplementationOnce(async (/** @type {any} */ call) => {
+      const handle = await original.call(backend, call)
+      editor.chapter = /** @type {any} */ ({ id: 'another-chapter', review: [], pages: [] })
+      return handle
+    })
+    const started = startNanoBananaRun('chapter')
+    await answer('confirm')
+    expect(await started).toBeNull()
+    expect(editor.run.active).toBe(false)
+    // The job is the old chapter's, and the jobs list still finds it.
+    const runId = (await backend.startNanoBananaRun.mock.results[0].value).runId
+    await vi.waitFor(() => expect(jobById(runId)).toMatchObject({ kind: 'nanoBanana', chapterId: CHAPTER }))
+    await ended(runId)
+  })
+
   it('sends again only the regions it did not clean, behind a new window', async () => {
     backend = makeBackend({ nanoBananaScenario: 'billing' })
     await prepare()
