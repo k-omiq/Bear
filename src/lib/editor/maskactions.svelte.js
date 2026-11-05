@@ -40,13 +40,14 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
-import { CLOUD_ENGINE, MAX_MASK_PADDING, isCloudMask, isDetected, maskEngine, reRunnable, rejectable, retryWidens } from '../model/masks.js'
+import { CLOUD_ENGINE, MAX_MASK_PADDING, NANO_BANANA_ENGINE, isCloudMask, isDetected, maskEngine, reRunnable, rejectable, retryWidens } from '../model/masks.js'
 import { currentRung, simpler, stronger } from '../model/ladder.js'
 import { isRegionCopy, layerOf, sameLayer, sanitizeLayer } from '../model/layers.js'
 import { heldStartsOutside } from '../model/review.js'
 import { cloudOutcomeOf, requestCloudConsent, runCloudJob } from './cloudflow.svelte.js'
 import { askLocalGuidance } from './qwenflow.js'
 import { editGradientLayer } from './retouch.svelte.js'
+import { confirmNanoBanana } from './nanobananaask.svelte.js'
 import { notify } from '../state/app.svelte.js'
 import { openWindow } from '../state/session.svelte.js'
 import {
@@ -358,8 +359,15 @@ export async function rerunMask(region, kind, engine) {
     if (qwenEdit === null) return false
   }
   if (kind !== 'reopenInTool' && !claimPageEdit(pageIndexOf(region.id))) return false
+  // A re-run that lands on Nano Banana is a paid request to Google, asked
+  // about first: naming it, and Try again or Try again wider on one of its
+  // layers. Stronger and Simpler leave it for this computer (`ladder.js`).
+  // Asked after the checks above, so a press that would do nothing asks
+  // nothing, and while the region counts as re-running, so a second press
+  // while the window is open does not open a second one.
   rerunning.add(region.id)
   try {
+    if (rerunReachesNanoBanana(region.mask, kind, engine) && !(await confirmNanoBanana(1))) return false
     return await rerunLocally(region, kind, engine, qwenEdit ?? undefined)
   } finally {
     rerunning.delete(region.id)
@@ -391,6 +399,18 @@ export function rerunTarget(mask, kind, engine) {
 
 /** The regions a local re-run is in flight for, by id. */
 const rerunning = new Set()
+
+/**
+ * Whether a re-run of `mask` would render on Nano Banana.
+ *
+ * @param {import('../api/backend.js').ApiMask} mask
+ * @param {string} kind
+ * @param {string} [engine]
+ */
+function rerunReachesNanoBanana(mask, kind, engine) {
+  if (kind === 'engine') return engine === NANO_BANANA_ENGINE
+  return (kind === 'retry' || kind === 'retryWider') && maskEngine(mask) === NANO_BANANA_ENGINE
+}
 
 /**
  * `rerunMask` once it is known to run here.
@@ -500,8 +520,8 @@ export async function cleanAnyway(region, chosenEngine) {
   if (open) replaceRegion(result.region, result.pageStatus)
   // A held row has nothing to restore from this side: the backend kept the
   // row and recorded the step with the commit (`region.rs#commit`), as it does
-  // for a detection's clean.
-  if (region.mask) {
+  // for a detection's clean, which has a mask and is not recorded here either.
+  if (region.mask && !isDetected(region)) {
     recordEdit('masks.command.cleanAnyway', region.id, before, {
       region: result.region,
       pageStatus: result.pageStatus,
@@ -1574,10 +1594,16 @@ export async function runRegionMenuItem(id, region) {
   if (id === 'duplicate') return duplicateRegion(region)
   if (id === 'approveMask') return approveHeldMask(region)
   if (id === 'approve') return cleanAnyway(region)
-  if (id.startsWith('approve:')) return cleanAnyway(region, id.slice('approve:'.length))
+  if (id.startsWith('approve:')) {
+    const engine = id.slice('approve:'.length)
+    // A paid request to Google: asked about first, with the box for what to edit.
+    if (engine === NANO_BANANA_ENGINE && !(await confirmNanoBanana(1))) return false
+    return cleanAnyway(region, engine)
+  }
   if (id.startsWith('engine:')) {
     const engine = id.slice('engine:'.length)
     if (!isDetected(region)) return rerunMask(region, 'engine', engine)
+    if (engine === NANO_BANANA_ENGINE && !(await confirmNanoBanana(1))) return false
     return engine === CLOUD_ENGINE ? cleanDetectedOnCloud(region) : cleanDetected(region, engine)
   }
   if (id === 'type:inside') return setDetectionType(region, true)

@@ -36,8 +36,10 @@ ort = { workspace = true, features = ["std", "load-dynamic", "api-22"] }
 # nothing here belongs on the invoke handler's runtime. No TLS feature is named:
 # reqwest 0.13's default is rustls and `tauri-plugin-updater` already puts this
 # exact version in the graph, so the downloader adds a feature rather than a
-# dependency tree.
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+# dependency tree. `system-proxy` reads the macOS and Windows proxy settings, so
+# a person behind one can reach Google and Hugging Face; the cloud GPU client
+# (`inference/http.rs`) opts out with `no_proxy()` because it pins its address.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "system-proxy"] }
 # The pinned digests, verified from the bytes as they are written.
 sha2 = "0.10"
 base64 = "0.22"
@@ -131,6 +133,9 @@ libc = "0.2"
 # Secret Service session; the alternative pulls in OpenSSL.
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust", "linux-native"] }
+# The Secret Service client `keyring` already uses, named so a key check can
+# search attributes without the unlock `keyring` does before every read.
+dbus-secret-service = "4.1"
 
 # Test-only. The library's own tests build a folder of real JPEGs to prove that
 # a chapter can be created from one; the crate itself never encodes an image in

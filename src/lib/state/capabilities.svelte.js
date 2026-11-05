@@ -48,9 +48,13 @@ const ALWAYS_AVAILABLE = Object.freeze({
   screentone: true,
   lama: true,
   flux: false,
+  // Needs the user's own key and Cloud engines on (`refreshNanoBanana`).
+  nanobanana: false,
 })
 
 export const capabilities = $state({
+  /** Whether Nano Banana can be offered here: a key is stored and the switch is on. */
+  nanoBanana: false,
   /** Whether rung 3a can be offered here. */
   sidecar: false,
   /** Why not, where there is something to say. @type {string|null} */
@@ -165,6 +169,30 @@ async function useAnInstalledModel(backend) {
   return true
 }
 
+/** Which `refreshNanoBanana` answer is the newest; an older one landing late is dropped. */
+let nanoBananaRead = 0
+
+/**
+ * Read whether Nano Banana can run. It is `engines`' entry as well, because every
+ * engine picker reads that map.
+ *
+ * The read asks the OS credential store, which on Linux can be a prompt to
+ * unlock the keyring, so it can take as long as the person does: launch does
+ * not wait for it (`loadCapabilities`), and a key saved meanwhile is read
+ * again by Settings, whose answer is the newer one and stands.
+ *
+ * @param {import('../api/backend.js').Backend} [backend]
+ * @returns {Promise<void>}
+ */
+export async function refreshNanoBanana(backend = getBackend()) {
+  const read = ++nanoBananaRead
+  let hasKey = false
+  try { hasKey = await backend.nanoBananaHasKey() } catch { /* no key is the safe answer */ }
+  if (read !== nanoBananaRead) return
+  capabilities.nanoBanana = hasKey && session.cloudAllowed
+  capabilities.engines = { ...capabilities.engines, nanobanana: capabilities.nanoBanana }
+}
+
 /**
  * Ask the backend once. A backend that cannot answer leaves the defaults -
  * which offer nothing for the sidecar, the safe direction there, and everything
@@ -203,14 +231,18 @@ export async function loadCapabilities(backend = getBackend()) {
       ...ALWAYS_AVAILABLE,
       lama: features.lama !== false,
       flux: capabilities.sidecar,
+      nanobanana: capabilities.nanoBanana,
     }
     capabilities.autoClean = currentWorkflowAvailable()
     capabilities.runtime = view?.runtime?.installed !== false
   } catch {
-    capabilities.engines = { ...ALWAYS_AVAILABLE, flux: capabilities.sidecar }
+    capabilities.engines = { ...ALWAYS_AVAILABLE, flux: capabilities.sidecar, nanobanana: capabilities.nanoBanana }
     capabilities.modelRows = null
     capabilities.workflowCaps = null
     capabilities.autoClean = true
     capabilities.runtime = true
   }
+  // Last and not awaited: the key read can wait on a keyring prompt, and
+  // nothing else at launch needs it. Nano Banana is offered once it answers.
+  void refreshNanoBanana(backend)
 }

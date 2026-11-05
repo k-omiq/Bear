@@ -59,7 +59,7 @@ pub mod orientation;
 /// It still says nothing about a shape that changes *without* the number
 /// changing. That is a decision to be justified in each case, and
 /// [`Strip::splits`] carries the one instance of it in this build.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 /// The oldest manifest this build reads.
 ///
@@ -67,6 +67,8 @@ pub const FORMAT_VERSION: u32 = 5;
 /// policy. Missing plan rows and missing patch policy fields deserialize as
 /// legacy, so v1-v3 projects open without reinterpreting their saved masks.
 /// Version 5 adds oriented views and grouped native patch intersections.
+/// Version 6 adds the Nano Banana engine, and only a job with such a patch is
+/// written as 6.
 /// Existing version-three and version-four jobs retain their schema until needed.
 /// Opening upgrades the in-memory version; the disk file remains untouched
 /// until the next [`Job::flush`].
@@ -1132,9 +1134,21 @@ pub struct Project {
 
 impl Project {
     fn schema_version(&self) -> u32 {
-        if self.sources.iter().any(|source| source.orientation.0 != 1)
+        if self.requires_v6() { 6 }
+        else if self.sources.iter().any(|source| source.orientation.0 != 1)
             || self.patches.iter().chain(self.legacy_patch_revisions.iter()).chain(self.text_shape_patch_revisions.iter()).any(|record| !record.native_parts.is_empty()) { 5 }
         else if self.requires_v4() { 4 } else { 3 }
+    }
+    /// A Nano Banana patch, live or kept as a revision. A build before 6 has no
+    /// such engine and would fail on the whole manifest as JSON, so the number
+    /// moves only when one exists and an older build says "newer version".
+    fn requires_v6(&self) -> bool {
+        self.patches
+            .iter()
+            .chain(self.legacy_patch_revisions.iter())
+            .chain(self.text_shape_patch_revisions.iter())
+            .chain(self.withdrawn_patches.iter())
+            .any(|record| record.engine == Engine::NanoBanana || record.provenance.engine == Engine::NanoBanana)
     }
     fn requires_v4(&self) -> bool {
         !self.text_shape_plans.is_empty()
@@ -6500,6 +6514,28 @@ mod tests {
             .map(|record| record.provenance.engine)
             .collect();
         assert_eq!(engines, vec![Engine::Paint, Engine::Clone]);
+    }
+
+    /// A build before 6 can not name the engine, so a job holding a Nano Banana
+    /// patch is written as 6 and is refused there as newer, not as broken JSON.
+    /// A job without one keeps its number.
+    #[test]
+    fn a_nano_banana_patch_moves_the_manifest_to_version_6_and_only_then() {
+        let scratch = Scratch::new("nano-banana-version");
+        let mut job = a_job(&scratch);
+        job.complete_region(0, &a_patch("local"), None).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(job.path()).unwrap()).unwrap();
+        assert_eq!(saved["version"], 3);
+
+        let mut patch = a_patch("gemini");
+        patch.provenance.engine = Engine::NanoBanana;
+        job.complete_region(0, &patch, None).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(job.path()).unwrap()).unwrap();
+        assert_eq!(saved["version"], 6);
+        assert!(saved["patches"].as_array().unwrap().iter().any(|row| row["engine"] == "nanobanana"));
+        let reopened = Job::open(job.path()).unwrap();
+        assert_eq!(reopened.project.version, 6);
+        assert!(reopened.project.patches.iter().any(|record| record.engine == Engine::NanoBanana));
     }
 
     #[test]

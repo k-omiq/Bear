@@ -181,6 +181,9 @@ pub(crate) fn rung(engine: Engine) -> u8 {
         // somebody stored. A gap costs nothing; a shuffle costs correctness.
         Engine::Flux => 4,
         Engine::Cloud => 5,
+        // Above the cloud, for the cloud's reason: it spends the user's money and
+        // sends their scan off the machine, so only a person naming it reaches it.
+        Engine::NanoBanana => 6,
         // **Not rungs, and sorted above every ceiling so that they cannot be
         // mistaken for one.** A brush stroke and a clone stroke record
         // themselves in the same `engine` field a rung does, and that is the
@@ -256,6 +259,7 @@ pub(crate) fn parse_rung(name: &str) -> Option<Engine> {
         "migan" => Some(Engine::Lama),
         "flux" => Some(Engine::Flux),
         "cloud" => Some(Engine::Cloud),
+        "nanobanana" => Some(Engine::NanoBanana),
         _ => None,
     }
 }
@@ -880,7 +884,7 @@ fn ladder_from(start: Engine, ceiling: Engine, page: &Raster) -> Vec<Engine> {
             // Already gone, by the filter above. Written out rather than left
             // to a wildcard so that this match cannot silently start answering
             // for a rung it has no business answering for.
-            Engine::Cloud => false,
+            Engine::Cloud | Engine::NanoBanana => false,
             // The two hand tools are not on the ladder at all: `rung` sorts
             // them above every ceiling, so the range filter has already dropped
             // them and this arm is unreachable. Written out for the same reason
@@ -4858,7 +4862,6 @@ pub(crate) fn render_rung_with_color(
             })?;
             answer.unwrap_or(Ok(Rendered::Refused("decline.reason.rungUnavailable")))
         }
-        // Reached only from a FLUX pick (`ladder_from`). Every failure of the
         // child is a refusal under its own key, so the region is declined and
         // the run goes on to the next one.
         Engine::Flux => {
@@ -4873,7 +4876,7 @@ pub(crate) fn render_rung_with_color(
         // exactly that reason. The wildcard that used to stand here would have
         // answered it with rung 0's pixels wearing rung 4's name, and that is a
         // lie in the manifest that no later reader could detect.
-        Engine::Cloud => {
+        Engine::Cloud | Engine::NanoBanana => {
             Ok(Rendered::Refused("decline.reason.rungUnavailable"))
         }
         // **A painted stroke never arrives here, and if it does the answer is a

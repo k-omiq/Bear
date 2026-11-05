@@ -52,7 +52,7 @@ describe('the fill-mode cycle', () => {
 
 describe('rowEngines', () => {
   it('offers rung 3a only where the sidecar is installed', () => {
-    expect(rowEngines({ flux: true })).toEqual(ROW_ENGINES.filter((rung) => rung !== 'screentone'))
+    expect(rowEngines({ flux: true })).toEqual(['fill', 'lama', 'flux'])
     expect(rowEngines({ flux: false })).not.toContain('flux')
     expect(rowEngines({ flux: false })).toContain('lama')
   })
@@ -77,10 +77,17 @@ describe('rowEngines', () => {
     expect(rowEngines()).toEqual(['fill', 'lama'])
   })
 
+  it('offers Nano Banana only on a yes, because it needs the user\'s own key', () => {
+    expect(rowEngines({ nanobanana: true })).toContain('nanobanana')
+    expect(rowEngines({ nanobanana: false })).not.toContain('nanobanana')
+    expect(rowEngines({})).not.toContain('nanobanana')
+    expect(rowEngines(undefined)).not.toContain('nanobanana')
+  })
+
   it('offers the cloud last, and only when an endpoint is ready', () => {
     expect(rowEngines({ flux: true })).not.toContain(CLOUD_ENGINE)
     expect(rowEngines({ flux: true }, { cloud: false })).not.toContain(CLOUD_ENGINE)
-    expect(rowEngines({ flux: true }, { cloud: true, beta: true })).toEqual([...ROW_ENGINES, CLOUD_ENGINE])
+    expect(rowEngines({ flux: true, nanobanana: true }, { cloud: true, beta: true })).toEqual([...ROW_ENGINES, CLOUD_ENGINE])
     expect(rowEngines(undefined, { cloud: true })).toEqual(['fill', 'lama', CLOUD_ENGINE])
   })
 
@@ -88,7 +95,7 @@ describe('rowEngines', () => {
     expect(BETA_ENGINES).toEqual(['screentone'])
     expect(rowEngines({ flux: true })).not.toContain('screentone')
     expect(rowEngines({ flux: true }, { beta: false })).not.toContain('screentone')
-    expect(rowEngines({ flux: true }, { beta: true })).toEqual([...ROW_ENGINES])
+    expect(rowEngines({ flux: true, nanobanana: true }, { beta: true })).toEqual([...ROW_ENGINES])
     // A beta rung whose weights are missing stays out with the setting on.
     expect(rowEngines({ screentone: false }, { beta: true })).not.toContain('screentone')
   })

@@ -25,7 +25,8 @@ import { createRng } from './rng.js'
 import { createRunnerPool } from './runner.js'
 import { DENOISE_PRESETS, outputScalesFor, presetById, recipeAt } from '../model/denoise.js'
 import { currentRung } from '../model/ladder.js'
-import { MAX_MASK_PADDING, isUncleaned } from '../model/masks.js'
+import { MAX_MASK_PADDING, NANO_BANANA_ENGINE, isUncleaned } from '../model/masks.js'
+import { nanoBananaModel } from '../model/nanobanana.js'
 import { FINISHINGS } from '../model/model-names.js'
 import {
   applyToolToRegion,
@@ -37,6 +38,7 @@ import {
   isQueueable,
   rerunNeedsCloud,
   rerunRegionMask,
+  rerunTarget,
 } from './tools.js'
 
 /** Base milliseconds, before the speed factor. */
@@ -206,6 +208,7 @@ function gutterPixels(pages) {
  * @property {Partial<typeof DEFAULT_TIMING>} [timing] - base milliseconds, before `speed`
  * @property {{ setTimeout: Function, clearTimeout: Function, now: () => number }} [timers] - injectable clock
  * @property {string} [seed] - seeds the session generator; equal seeds give equal sessions
+ * @property {'os'|'session'|'failed'} [nanoBananaKeyStore] - the credential store the Gemini key commands meet, as `nano_banana.rs` answers them: the OS store (the default); none, so a key is kept for this session only and `nanoBananaHasKey` rejects with `nanoBanana.key.noStore` while none is held; or a store that fails (`nanoBanana.key.failed`)
  */
 
 /**
@@ -246,6 +249,11 @@ function mockCloudCapabilities(detectorModels, targets) {
   if (models.includes('rtFull') && routed.rtFull === 'cloud') capabilities.push('text_regions_rt@1')
   return capabilities.sort()
 }
+
+/** How long a Nano Banana grant waits unused (`nano_banana_consent.rs#IDLE`). */
+const NANO_BANANA_GRANT_IDLE_MS = 10 * 60 * 1000
+/** The most regions one grant covers (`nano_banana_consent.rs#MAX_REGIONS`). */
+const NANO_BANANA_MAX_REGIONS = 2000
 
 /**
  * @param {MockOptions} [options]
@@ -2261,6 +2269,71 @@ export function createMockBackend(options = {}) {
     return true
   }
 
+  /** Whether a Gemini key was given. The mock never keeps the key itself. */
+  let nanoBananaKey = false
+  /**
+   * The live Nano Banana grant, as `nano_banana_consent.rs` keeps it: one at
+   * a time, counted down a region per render, lapsing when idle.
+   *
+   * @type {{ grant: string, model: string, left: number, lapses: number } | null}
+   */
+  let nanoBananaGrant = null
+  let nanoBananaGrants = 0
+
+  /**
+   * The checks a native Nano Banana render makes before anything is sent
+   * (`region.rs#edit_with_consent`, then the key read): cloud engines on, a
+   * live grant with a region left, and a stored key. The refusal is said as
+   * natively, `notice.mask.rerunFailed` with its reason. Answers the model
+   * the render runs on, the grant's, or `null` when it may not go; a grant's
+   * region is taken once the grant is good.
+   *
+   * @param {any} params
+   * @returns {string | null}
+   */
+  const nanoBananaMayRender = (params) => {
+    const refuse = (/** @type {string} */ reasonKey) => {
+      notify('notice.mask.rerunFailed', { reasonKey }, 'warn')
+      return null
+    }
+    if (state.settings.cloudEngines !== 'allowed') return refuse('decline.reason.nanoBananaOff')
+    const live = nanoBananaGrant
+    const now = timers.now()
+    // The backend keeps the grant and sends it, as `tauri.js` does, so a
+    // caller that names none presents the one it holds.
+    const presented = params?.nanoBananaGrant ?? live?.grant
+    if (!live || presented !== live.grant || now >= live.lapses || live.left <= 0) {
+      if (live && presented === live.grant) nanoBananaGrant = null
+      return refuse('decline.reason.nanoBananaNoConsent')
+    }
+    live.left -= 1
+    live.lapses = now + NANO_BANANA_GRANT_IDLE_MS
+    if (!nanoBananaKey) return refuse('decline.reason.nanoBananaNoKey')
+    return live.model
+  }
+
+  /**
+   * A mask a Nano Banana render committed, as the native side records one:
+   * its engine, and the model it ran on in `params_snapshot.nano_banana`. The
+   * mock's own clean stands in for the request, and a detection's clean picks
+   * its rung by the automatic cap, so the record is written here.
+   *
+   * @param {any} mask
+   * @param {string | null} model - the grant's, when the render passed its checks
+   */
+  const stampNanoBanana = (mask, model) => {
+    if (!model || !mask?.provenance) return
+    const info = ENGINE_INFO[NANO_BANANA_ENGINE]
+    mask.fillMode = info.fillMode
+    Object.assign(mask.provenance, {
+      engine: NANO_BANANA_ENGINE,
+      engine_version: info.version,
+      execution_provider: info.provider,
+      model_sha256: null,
+      params_snapshot: { ...mask.provenance.params_snapshot, nano_banana: { model } },
+    })
+  }
+
   /**
    * The checks the native render makes before it spends anything: a live and
    * unspent grant, the target it was granted for still selected, a recipe and
@@ -3441,6 +3514,23 @@ export function createMockBackend(options = {}) {
 
     async applyTool({ tool, params = {}, chapterId, pageIndex, regionId }) {
       if (params?.qwenEdit !== undefined) params = { ...params, qwenEdit: checkedQwenEdit(params.qwenEdit) }
+      // The model a Nano Banana render runs on, once its grant was good.
+      let model = null
+      if (params?.engine === NANO_BANANA_ENGINE) {
+        const found = regionId ? findRegion(regionId) : null
+        // A batch's region cleaned another way since the batch was confirmed
+        // has a layer now: not sent, not overwritten (`region.rs#apply_tool`).
+        if (!found || (tool === 'autoClean' && !isUncleaned(found.region))) {
+          await delay(timing.method)
+          return { status: 'not-found' }
+        }
+        refuseBusyPage(found.chapter.id, found.page.index)
+        model = nanoBananaMayRender(params)
+        if (!model) {
+          await delay(timing.method)
+          return { status: 'blocked' }
+        }
+      }
       if (tool === 'autoClean') {
         await delay(timing.method)
         // A detected region is cleaned on its own, from its stored mask, here -
@@ -3450,6 +3540,7 @@ export function createMockBackend(options = {}) {
           refuseBusyPage(detection.chapter.id, detection.page.index)
           cleanDetection(detection.region, detection.page, params)
           redrawLiveCopies(detection.page, detection.region.id, [detection.region.bbox])
+          stampNanoBanana(detection.region.mask, model)
           detection.page.status = settledStatus(detection.page)
           return {
             status: 'applied',
@@ -3493,6 +3584,7 @@ export function createMockBackend(options = {}) {
       const drawnBefore = found.region.bbox ? { ...found.region.bbox } : null
       const applied = cleaningHere(found, () => applyToolToRegion(found.region, found.page, toolContext, { tool, params }))
       redrawLiveCopies(found.page, found.region.id, [drawnBefore, found.region.bbox])
+      stampNanoBanana(applied.mask, model)
       await delay(timing.method)
       notifyAll(applied.notices)
       return {
@@ -3519,6 +3611,8 @@ export function createMockBackend(options = {}) {
       if (params?.qwenEdit !== undefined) params = { ...params, qwenEdit: checkedQwenEdit(params.qwenEdit) }
       await delay(timing.method)
       refuseBusyPage(chapterId, pageIndex)
+      const model = params?.engine === NANO_BANANA_ENGINE ? nanoBananaMayRender(params) : null
+      if (params?.engine === NANO_BANANA_ENGINE && !model) return null
       // Always local, as the native command is: a cloud engine is refused while
       // cloud is off, and otherwise dropped for the fill mode's local default.
       // The interface asks for consent and applies the cloud to the new region.
@@ -3540,6 +3634,7 @@ export function createMockBackend(options = {}) {
         params,
       })
       redrawLiveCopies(page, created.region.id, [created.region.bbox])
+      stampNanoBanana(created.region.mask, model)
       notifyAll(created.notices)
       return { region: snapshot(created.region), pageStatus: page.status }
     },
@@ -4126,8 +4221,13 @@ export function createMockBackend(options = {}) {
         if (!cloudBlocked()) notify('notice.mask.rerunFailed', { reasonKey: 'decline.reason.rungUnavailable' }, 'warn')
         return null
       }
+      // A re-run that lands on Nano Banana (named, or Try again on one of its
+      // layers) is a paid request, held to its grant as natively.
+      const model = rerunTarget(found.region.mask, kind, engine) === NANO_BANANA_ENGINE ? nanoBananaMayRender(params) : null
+      if (rerunTarget(found.region.mask, kind, engine) === NANO_BANANA_ENGINE && !model) return null
       const qwenEdit = checkedQwenEdit(params?.qwenEdit)
       const result = cleaningHere(found, () => rerunRegionMask(found.region, toolContext, { kind, engine, qwenEdit }))
+      stampNanoBanana(result.mask, model)
       notifyAll(result.notices)
       return {
         region: snapshot(found.region),
@@ -4747,8 +4847,17 @@ export function createMockBackend(options = {}) {
         if (!ended.mask) return null
         return { region: snapshot(found.region), mask: snapshot(ended.mask), pageStatus: found.page.status }
       }
+      let model = null
+      if (engine === NANO_BANANA_ENGINE) {
+        // Only over a region still waiting, a detection or a held row; one
+        // with a layer is not sent again (`region.rs#clean_anyway_at`).
+        if (!isUncleaned(found.region)) return null
+        model = nanoBananaMayRender(params)
+        if (!model) return null
+      }
       const qwenEdit = checkedQwenEdit(params?.qwenEdit)
       const result = cleaningHere(found, () => cleanRegionAnyway(found.region, found.page, toolContext, engine, qwenEdit))
+      stampNanoBanana(result.mask, model)
       notifyAll(result.notices)
       return {
         region: snapshot(found.region),
@@ -4897,6 +5006,9 @@ export function createMockBackend(options = {}) {
         throw new Error(`undoLimit must be a whole number from ${UNDO_LIMIT.min} to ${UNDO_LIMIT.max}`)
       }
       Object.assign(state.settings, patch)
+      // As `settings.rs#write_settings`: cloud engines off withdraws the rest
+      // of a Nano Banana window.
+      if (patch && 'cloudEngines' in patch && state.settings.cloudEngines !== 'allowed') nanoBananaGrant = null
       return withoutToken(snapshot(state.settings))
     },
 
@@ -4922,6 +5034,44 @@ export function createMockBackend(options = {}) {
         ...state.inferenceConfig, selectedTarget: { type: provider, profile_id: profileId },
       }))
       return snapshot(state.inferenceConfig)
+    },
+
+    /** The Gemini key as the native side keeps it: write-only, never read back. */
+    async nanoBananaHasKey() {
+      const store = options.nanoBananaKeyStore ?? 'os'
+      if (store === 'failed') throw new Error('nanoBanana.key.failed')
+      if (store === 'session' && !nanoBananaKey) throw new Error('nanoBanana.key.noStore')
+      return nanoBananaKey
+    },
+
+    async storeNanoBananaKey({ key } = {}) {
+      const store = options.nanoBananaKeyStore ?? 'os'
+      // Printable ASCII with no spaces, 20 to 200 bytes once trimmed.
+      if (!/^[!-~]{20,200}$/.test(String(key ?? '').trim())) throw new Error('nanoBanana.key.invalid')
+      if (store === 'failed') throw new Error('nanoBanana.key.failed')
+      nanoBananaKey = true
+      return { sessionOnly: store === 'session' }
+    },
+
+    async deleteNanoBananaKey() {
+      if ((options.nanoBananaKeyStore ?? 'os') === 'failed') throw new Error('nanoBanana.key.failed')
+      nanoBananaKey = false
+    },
+
+    async grantNanoBanana({ model, count } = {}) {
+      if (state.settings.cloudEngines !== 'allowed') throw new Error('decline.reason.nanoBananaOff')
+      const confirmed = nanoBananaModel(state.settings.nanoBananaModel).id
+      if (model !== confirmed || !Number.isInteger(count) || count < 1 || count > NANO_BANANA_MAX_REGIONS) {
+        throw new Error('decline.reason.nanoBananaNoConsent')
+      }
+      nanoBananaGrants += 1
+      const grant = `mock-nano-banana-grant-${nanoBananaGrants}`
+      nanoBananaGrant = { grant, model: confirmed, left: count, lapses: timers.now() + NANO_BANANA_GRANT_IDLE_MS }
+      return { grant, model: confirmed, count }
+    },
+
+    async nanoBananaStop() {
+      nanoBananaGrant = null
     },
 
     /**

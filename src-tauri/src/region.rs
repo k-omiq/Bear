@@ -712,6 +712,10 @@ enum Outcome {
 struct Bench {
     detector: run::OnDemand<Detector>,
     rung2: run::Rung2,
+    /// What the person confirmed for a Nano Banana render, from its grant
+    /// ([`edit_with_consent`]). `None` for every other edit, and the rung then
+    /// refuses before a request is made. Never read from settings here.
+    nano_banana: Option<crate::inference::nano_banana::Config>,
     #[cfg(test)]
     detected_seed: Option<Mask>,
 }
@@ -767,9 +771,36 @@ impl Bench {
         Bench {
             rung2,
             detector: run::detector_on_demand(&holding(run::DETECTOR), detector_preference),
+            nano_banana: None,
             #[cfg(test)]
             detected_seed: None,
         }
+    }
+
+    /// `fitted` on `page`, edited by Gemini, and the record of how.
+    fn nano_banana(
+        &self,
+        page: &Raster,
+        fitted: &Fitted,
+        share: Option<&crate::inference::nano_banana::Neighbours>,
+    ) -> Result<(run::Made, quality::Assessment, serde_json::Value), &'static str> {
+        let config = self.nano_banana.as_ref().ok_or("decline.reason.nanoBananaOff")?;
+        let edited = crate::inference::nano_banana::render(config, page, fitted, self.rung2.finishing, share)?;
+        let rendered = edited.rendered;
+        let made = run::Made {
+            engine: Engine::NanoBanana,
+            mask: rendered.mask,
+            ink: fitted.ink.clone(),
+            pixels: rendered.pixels,
+            provider: Some("gemini".to_owned()),
+            // No digest: the weights are Google's.
+            model_sha256: None,
+            pad: rendered.pad,
+            tiles: Some(rendered.tiles),
+            matched: rendered.matched,
+        };
+        let verdict = quality::assess(page, &made.mask, &made.pixels, fit::page_noise_sigma(page));
+        Ok((made, verdict, edited.record))
     }
 
     /// The detector: the one already in memory if a run or an earlier click
@@ -1191,7 +1222,11 @@ fn overlap(a: Rect, b: Rect) -> u64 {
 /// `Engine::Flux` is the local helper whichever cloud endpoint is selected: the
 /// interface names the cloud as its own engine. What must not run here, a
 /// cloud patch re-run as itself, [`rerun_needs_cloud`] stops before this.
-fn edit(app: &tauri::AppHandle, located: &Located, plan: Plan) -> Result<Outcome, String> {
+///
+/// Nano Banana is the exception that leaves the machine from here, and only
+/// with `nano_banana_grant`: what the person confirmed in its window
+/// ([`edit_with_consent`]).
+fn edit(app: &tauri::AppHandle, located: &Located, plan: Plan, nano_banana_grant: Option<&str>) -> Result<Outcome, String> {
     if plan.choice == Choice::Exact(Engine::Cloud) {
         return Ok(Outcome::Refused("decline.reason.rungUnavailable"));
     }
@@ -1203,7 +1238,43 @@ fn edit(app: &tauri::AppHandle, located: &Located, plan: Plan) -> Result<Outcome
             .map(str::to_owned)
     });
     let ceiling = run::effective_ceiling(None, stored.as_deref());
-    edit_with_bench(&mut bench, ceiling, located, plan)
+    edit_with_consent(&mut bench, ceiling, located, plan, crate::inference::cloud_allowed(app),
+        nano_banana_grant, crate::inference::nano_banana_consent::book())
+}
+
+/// [`edit_with_bench`], with a Nano Banana render held to its grant: Cloud
+/// engines on, and one region of a grant the person made by confirming the
+/// window. The render uses the model and instruction that grant holds, never
+/// the live setting, so an instruction edited during a batch changes nothing
+/// already confirmed. Every command that renders reaches the rung only
+/// through here: `applyTool`, `createRegion`, `rerunMask`, `cleanAnyway`.
+fn edit_with_consent(
+    bench: &mut Bench,
+    ceiling: Engine,
+    located: &Located,
+    plan: Plan,
+    cloud_allowed: bool,
+    nano_banana_grant: Option<&str>,
+    grants: &crate::inference::nano_banana_consent::Book,
+) -> Result<Outcome, String> {
+    bench.nano_banana = None;
+    if plan.choice != Choice::Exact(Engine::NanoBanana) {
+        return edit_with_bench(bench, ceiling, located, plan);
+    }
+    let spend = match grants.spend(cloud_allowed, nano_banana_grant) {
+        Ok(spend) => spend,
+        Err(reason) => return Ok(Outcome::Refused(reason)),
+    };
+    bench.nano_banana = Some(spend.config.clone());
+    let outcome = edit_with_bench(bench, ceiling, located, plan);
+    bench.nano_banana = None;
+    drop(spend);
+    outcome
+}
+
+/// The Nano Banana grant a request carries, if it carries one.
+fn nano_banana_grant_in(params: &serde_json::Value) -> Option<&str> {
+    params.get("nanoBananaGrant").and_then(|value| value.as_str())
 }
 
 fn edit_with_bench(
@@ -1221,6 +1292,110 @@ fn edit_with_bench(
 /// A stand-in renderer the tests hand in to capture the exact raster and fit.
 type TestRenderer<'a> = &'a mut dyn FnMut(&Raster, &Fitted) -> run::Made;
 
+/// What names one page of one job for the answers Nano Banana shares between its
+/// regions: the same source, as it was when the answer was asked for.
+fn nano_banana_scope(located: &Located, source_sha256: &str) -> String {
+    format!("{}|{}|{source_sha256}", located.job_path.display(), located.chapter_id)
+}
+
+/// The regions on this page that are still detections, as Nano Banana may share a
+/// crop with them: each one's applied mask in `window`'s pixels, and only those
+/// wholly inside the window, so no mask is ever clipped by it.
+#[allow(clippy::too_many_arguments)]
+fn nano_banana_neighbours(
+    job: &Job,
+    located: &Located,
+    source_idx: usize,
+    region_id: &str,
+    source_sha256: &str,
+    window: Rect,
+    detection_shift: (i64, i64),
+    page: &Raster,
+) -> crate::inference::nano_banana::Neighbours {
+    let radius = i64::from(cleaner_core::constants::ISOLATION_RADIUS);
+    let mut rows: Vec<(u32, String)> = job.project.detections.iter()
+        .filter(|row| row.source_idx == source_idx && row.id != region_id)
+        .filter(|row| !job.project.patches.iter().any(|patch| patch.id == row.id))
+        .map(|row| (row.order, row.id.clone()))
+        .collect();
+    rows.sort();
+    let others = rows.into_iter().filter_map(|(_, id)| {
+        let found = job.load_detection(&id).ok()??;
+        let ink = crate::underlay::local_mask(&translated_mask(&found.ink, detection_shift), window);
+        let b = ink.bounds;
+        let inside = !ink.is_empty()
+            && b.x - radius >= 0
+            && b.y - radius >= 0
+            && b.right() + radius <= i64::from(page.width)
+            && b.bottom() + radius <= i64::from(page.height);
+        inside.then(|| (id, ink.dilated(cleaner_core::constants::ISOLATION_RADIUS, page.width, page.height)))
+    }).collect();
+    crate::inference::nano_banana::Neighbours {
+        scope: nano_banana_scope(located, source_sha256),
+        region_id: region_id.to_owned(),
+        origin: (window.x, window.y),
+        others,
+    }
+}
+
+/// The lock an edit holds on its page ([`run::lock_page`]). Let go of only
+/// while a Nano Banana request is out ([`PageHold::without`]).
+struct PageHold<'a> {
+    located: &'a Located,
+    _lock: Option<run::JobLock>,
+}
+
+impl<'a> PageHold<'a> {
+    fn take(located: &'a Located) -> Result<PageHold<'a>, run::WriteRefused> {
+        let lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
+        Ok(PageHold { located, _lock: Some(lock) })
+    }
+
+    /// `work` with the chapter unlocked, and the page locked again after it,
+    /// refused with `page_busy` as at the start if a run took the page meanwhile.
+    fn without<T>(&mut self, work: impl FnOnce() -> T) -> Result<T, run::WriteRefused> {
+        self._lock = None;
+        let done = work();
+        self._lock = Some(run::lock_page(&self.located.job_path, &self.located.chapter_id, self.located.page_index)?);
+        Ok(done)
+    }
+}
+
+/// What on `source_idx`'s page an edit read or writes over: its source, its
+/// layers, its detections and held rows, the strip that places it, and the
+/// chapter's mask plans. On a long strip a render reads the pages beside it as
+/// well, so there it is the whole chapter. `None` when it cannot be written
+/// down, which no comparison then matches.
+fn page_state(project: &cleaner_core::project::Project, source_idx: usize) -> Option<serde_json::Value> {
+    if project.strip.mode == cleaner_core::project::StripMode::Longstrip {
+        return serde_json::to_value(project).ok();
+    }
+    let on = |idx: usize| idx == source_idx;
+    serde_json::to_value((
+        project.sources.get(source_idx),
+        &project.strip,
+        project.patches.iter().filter(|row| on(row.source_idx)).collect::<Vec<_>>(),
+        project.detections.iter().filter(|row| on(row.source_idx)).collect::<Vec<_>>(),
+        project.cleaned_detections.iter().filter(|row| on(row.source_idx)).collect::<Vec<_>>(),
+        project.regions_untouched.iter().filter(|row| on(row.source_idx)).collect::<Vec<_>>(),
+        &project.text_shape_plans,
+        &project.text_shape_corrections,
+    )).ok()
+}
+
+/// A Nano Banana record's crop moved from the read window's pixels to the
+/// page's, as the patch it describes is ([`translate_made`]).
+fn nano_banana_record_on_page(mut record: serde_json::Value, by: (i64, i64)) -> serde_json::Value {
+    if let Some(crop) = record.get_mut("crop").and_then(serde_json::Value::as_array_mut) {
+        for (at, shift) in [(0, by.0), (1, by.1)] {
+            if let Some(value) = crop.get(at).and_then(serde_json::Value::as_i64) {
+                crop[at] = serde_json::json!(value + shift);
+            }
+        }
+    }
+    record
+}
+
 fn edit_with_bench_render(
     bench: &mut Bench,
     ceiling: Engine,
@@ -1228,11 +1403,12 @@ fn edit_with_bench_render(
     mut plan: Plan,
     mut test_renderer: Option<TestRenderer<'_>>,
 ) -> Result<Outcome, String> {
-    let _lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
+    let mut hold = PageHold::take(located)?;
     bench.rung2.flux.set_guidance(plan.qwen_edit.take());
     // Read-only from here: the manifest is mutated in `commit`, which takes the
-    // job by value and is the only writer either path reaches.
-    let job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+    // job by value and is the only writer either path reaches. A Nano Banana
+    // request reads it again after the chapter was let go of.
+    let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
     let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else {
         return Ok(Outcome::NotFound);
     };
@@ -1640,7 +1816,7 @@ fn edit_with_bench_render(
     }
 
     // A detection takes the place in reading order a run would have given it.
-    let order = existing
+    let mut order = existing
         .as_ref()
         .map(|record| record.order)
         .or_else(|| detection.as_ref().map(|found| found.record.order))
@@ -1653,11 +1829,24 @@ fn edit_with_bench_render(
                 anchor.map_or(0, |p| p.y_offset) + patch_shift.1,
             ),
         });
+    // Nano Banana on a detection may find its answer already made, by an earlier
+    // region whose crop held this one. The window then has to hold that crop.
+    let shares_crops = detection.is_some() && strip_space.is_none();
+    let mut read_bounds = seed.bounds;
+    if let (true, Some(config)) = (shares_crops && matches!(plan.choice, Choice::Exact(Engine::NanoBanana)), bench.nano_banana.as_ref()) {
+        let scope = nano_banana_scope(located, &source_sha256);
+        if let Some(crop) = crate::inference::nano_banana::shared_crop(&scope, config, &plan.region_id) {
+            let wider = cleaner_core::engines::nano_banana::union_rect(seed.bounds, crop);
+            if crate::underlay::window_for(wider, page.width, page.height).is_ok() {
+                read_bounds = wider;
+            }
+        }
+    }
     let input = crate::underlay::read(
         &job,
         source_idx,
         page,
-        seed.bounds,
+        read_bounds,
         order,
         strip_space,
     )?;
@@ -1746,6 +1935,7 @@ fn edit_with_bench_render(
     bench.rung2.detected_mask = detection.is_some() && stored_hole.is_none() && prepared_text.is_none();
 
     let started = Instant::now();
+    let mut nano_banana: Option<serde_json::Value> = None;
     let (mut made, mut verdict) = if let Some(renderer) = test_renderer.as_mut() {
         let made = renderer(page, &fitted);
         let verdict = quality::assess(page, &made.mask, &made.pixels, noise);
@@ -1789,6 +1979,39 @@ fn edit_with_bench_render(
                     Err(reason) => return Ok(Outcome::Refused(reason)),
                 }
             }
+            Choice::Exact(Engine::NanoBanana) => {
+                // The page's other regions still to be cleaned ride in the same
+                // request when they fit its crop.
+                let share = shares_crops.then(|| nano_banana_neighbours(
+                    &job, located, source_idx, &plan.region_id, &source_sha256, input.window, detection_shift, page));
+                // A request can take many minutes (several crops, each retried,
+                // each with a long timeout), and every other command on this
+                // chapter waits on its lock. So the chapter is let go of for it,
+                // and the answer is used only if the page is as it was read.
+                let read = page_state(&job.project, source_idx);
+                let rendered = hold.without(|| bench.nano_banana(page, &fitted, share.as_ref()))?;
+                let fresh = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+                if read.is_none()
+                    || Library::resolve_page(&fresh.project, located.page_index) != Some(source_idx)
+                    || page_state(&fresh.project, source_idx) != read
+                {
+                    return Ok(Outcome::Refused("decline.reason.nanoBananaPageChanged"));
+                }
+                job = fresh;
+                // A new layer goes above every other, as of now: another page
+                // may have gained one meanwhile. This page has not, so what
+                // lies under it is what was read.
+                if existing.is_none() && detection.is_none() {
+                    order = next_order(&job, source_idx);
+                }
+                match rendered {
+                    Ok((made, verdict, record)) => {
+                        nano_banana = Some(record);
+                        (made, verdict)
+                    }
+                    Err(reason) => return Ok(Outcome::Refused(reason)),
+                }
+            }
             Choice::Exact(engine) => {
                 match run::render_rung(&mut bench.rung2, engine, page, &fitted) {
                     Err(detail) => return Ok(Outcome::Refused(engine_fault(&detail))),
@@ -1818,7 +2041,8 @@ fn edit_with_bench_render(
     // text-shape render follows a plan made over its whole window, so it
     // keeps the whole window.
     let whole = Rect::new(0, 0, input.window.w, input.window.h);
-    let reach = if prepared_text.is_some() {
+    // Nano Banana's crop follows a tier setting, so it keeps the whole window too.
+    let reach = if prepared_text.is_some() || made.engine == Engine::NanoBanana {
         whole
     } else {
         crate::underlay::render_reach(made.engine, seed.bounds, scale, made.mask.bounds,
@@ -1841,6 +2065,10 @@ fn edit_with_bench_render(
         &verdict,
     );
     run::record_made(&mut bench.rung2, made.engine, made.matched.as_ref(), &mut snapshot);
+    if let Some(record) = nano_banana {
+        snapshot["nano_banana"] = nano_banana_record_on_page(
+            record, (patch_shift.0 + input_shift.0, patch_shift.1 + input_shift.1));
+    }
     snapshot["source"] = serde_json::json!(plan.source);
     snapshot["input_provenance"] = serde_json::json!({
         "version": 1, "input_sha256": input.digest, "predecessors_sha256": input.predecessors,
@@ -2359,7 +2587,7 @@ pub async fn apply_prepared_text_shape(
             drawn: None,
             qwen_edit: None,
         };
-        match edit(&app, &located, plan)? {
+        match edit(&app, &located, plan, None)? {
             Outcome::Cleaned(edited) => Ok(ApplyResult::applied(edited)),
             Outcome::Refused(_) => Ok(ApplyResult {
                 error_code: Some("stale_or_unsafe_plan"),
@@ -2657,6 +2885,7 @@ mod text_shape_boundary_tests {
         let mut bench = Bench {
             detector: run::detector_on_demand(&models, Preference::CpuOnly),
             rung2: run::Rung2::new(&models, Preference::CpuOnly),
+            nano_banana: None,
             detected_seed: None,
         };
         let edit_plan = Plan {
@@ -4343,7 +4572,16 @@ fn engine_for_fill_mode(mode: &str) -> Engine {
 /// this build can actually run.
 const MANUAL_RUNGS: [Engine; 4] = [Engine::Fill, Engine::Screentone, Engine::Lama, Engine::Flux];
 
+/// One rung up or down from `current`.
+///
+/// **Never onto Nano Banana, and never staying on it.** Each of its renders is
+/// a paid request that only a person naming it, or pressing Try again on it,
+/// asks for. So Stronger and Simpler on one of its layers both go to the
+/// strongest rung this machine runs, which is below it and the nearest to it.
 fn step(current: Engine, up: bool) -> Engine {
+    if current == Engine::NanoBanana {
+        return MANUAL_RUNGS[MANUAL_RUNGS.len() - 1];
+    }
     let at = MANUAL_RUNGS.iter().position(|engine| *engine == current);
     match at {
         None => current,
@@ -4742,6 +4980,12 @@ pub async fn apply_tool(
                 _ => EnginePick::Lama,
             })),
         };
+        // A Nano Banana batch cleans detections (`cleanDetected`), each a paid
+        // request. One cleaned another way since the batch was confirmed has a
+        // layer now: it is neither sent nor overwritten.
+        if tool == "autoClean" && waits_for_nano_banana(&choice, &geometry) {
+            return Ok(ApplyResult::of("not-found"));
+        }
         // A detection's mask is the detector's, whoever asked for it cleaned.
         let source = if matches!(geometry, Geometry::StoredDetection) { "auto" } else { "hand" };
         let solid_color = if matches!(geometry, Geometry::StoredDetection) && fill_mode == "solid" {
@@ -4768,7 +5012,7 @@ pub async fn apply_tool(
             drawn: drawn.clone(),
             qwen_edit: qwen_edit_in(&params)?,
         };
-        match edit(&app, &located, plan)? {
+        match edit(&app, &located, plan, nano_banana_grant_in(&params))? {
             Outcome::Cleaned(edited) => Ok(ApplyResult::applied(edited)),
             Outcome::Refused(reason) => {
                 refuse(reason);
@@ -5005,7 +5249,7 @@ pub async fn create_region(
             drawn,
             qwen_edit: qwen_edit_in(&params)?,
         };
-        match edit(&app, &located, plan)? {
+        match edit(&app, &located, plan, nano_banana_grant_in(&params))? {
             Outcome::Cleaned(edited) => Ok(Some(CreatedRegion {
                 region: edited.region,
                 page_status: edited.page_status,
@@ -6583,8 +6827,10 @@ pub async fn rerun_mask(
             return Err("Approved component edits are insertion-only; use Undo or Delete instead of replacing their saved mask".into());
         }
         let library = Library::for_app(&app)?;
+        let params = params.unwrap_or(serde_json::Value::Null);
+        let grant = nano_banana_grant_in(&params).map(str::to_owned);
         rerun_mask_at(&library, Some(&app), &mask_id, &kind, engine.as_deref(),
-            params.unwrap_or(serde_json::Value::Null), |located, plan| edit(&app, located, plan))
+            params, |located, plan| edit(&app, located, plan, grant.as_deref()))
     })
     .await
 }
@@ -6916,8 +7162,10 @@ pub async fn clean_anyway(
             return Ok(None);
         }
         let library = Library::for_app(&app)?;
+        let params = params.unwrap_or(serde_json::Value::Null);
+        let grant = nano_banana_grant_in(&params).map(str::to_owned);
         clean_anyway_at(&library, Some(&app), &region_id, engine.as_deref(),
-            params.unwrap_or(serde_json::Value::Null), |located, plan| edit(&app, located, plan))
+            params, |located, plan| edit(&app, located, plan, grant.as_deref()))
     })
     .await
 }
@@ -6966,6 +7214,12 @@ fn clean_anyway_at(
     let exact = params.get("exact").and_then(|value| value.as_bool()) == Some(true);
     let mut plan = clean_anyway_plan(&located, region_id, engine, color, exact)?;
     plan.qwen_edit = qwen_edit_in(&params)?;
+    // Clean anyway answers a detection or a row the gate held. One that has a
+    // layer now, because it was cleaned by hand while a Nano Banana batch ran,
+    // is not sent to Google again over that layer.
+    if waits_for_nano_banana(&plan.choice, &plan.geometry) {
+        return Ok(None);
+    }
     match apply(&located, plan)? {
         Outcome::Cleaned(edited) => {
             crate::events::notice("notice.gate.cleanedAnyway", serde_json::json!({}), "info");
@@ -6981,6 +7235,12 @@ fn clean_anyway_at(
         }
         Outcome::NotFound => Ok(None),
     }
+}
+
+/// Whether an edit that cleans a waiting region would send a Nano Banana
+/// request over a region that is no longer waiting: it has a layer.
+fn waits_for_nano_banana(choice: &Choice, geometry: &Geometry) -> bool {
+    *choice == Choice::Exact(Engine::NanoBanana) && matches!(geometry, Geometry::Stored | Geometry::StoredWider)
 }
 
 /// `exact` is a model the user picked from Clean with: it is run, and not
@@ -7336,6 +7596,207 @@ mod tests {
         let patch = job.load_patch(job.project.patches.iter().find(|p| p.id == "chapter-p001-d1").unwrap())
             .unwrap();
         assert!(!patch.pixels.data.contains(&20), "the lettering is gone");
+    }
+
+    #[test]
+    fn nano_banana_neighbours_are_the_other_detections_wholly_inside_the_window() {
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128;
+        raw.height = 128;
+        raw.data = vec![240; 128 * 128];
+        let (_root, located) = edit_fixture("nano-banana-neighbours", &raw);
+        let own = Mask::filled(Rect::new(38, 36, 20, 14));
+        store_a_detection(&located, "chapter-p001-d0", &own, &Mask::filled(Rect::new(41, 39, 14, 8)), 0);
+        let near = Mask::filled(Rect::new(78, 58, 20, 14));
+        store_a_detection(&located, "chapter-p001-d1", &near, &Mask::filled(Rect::new(80, 60, 14, 8)), 1);
+        // Within the isolation radius of the page edge: its applied mask would be clipped.
+        let edge = Mask::filled(Rect::new(0, 0, 14, 14));
+        store_a_detection(&located, "chapter-p001-d2", &edge, &Mask::filled(Rect::new(2, 2, 10, 10)), 2);
+        let job = Job::open(&located.job_path).unwrap();
+
+        let share = nano_banana_neighbours(&job, &located, 0, "chapter-p001-d0", "sha", Rect::new(0, 0, 128, 128), (0, 0), &raw);
+        assert_eq!(share.others.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["chapter-p001-d1"]);
+        let radius = i64::from(cleaner_core::constants::ISOLATION_RADIUS);
+        assert_eq!(share.others[0].1.bounds, Rect::new(80 - radius, 60 - radius, 14 + 2 * radius as u32, 8 + 2 * radius as u32));
+        assert_eq!((share.region_id.as_str(), share.origin), ("chapter-p001-d0", (0, 0)));
+
+        // In a window that starts at (10, 10) the same mask is 10 px nearer the corner.
+        let page = Raster { width: 100, height: 100, data: vec![240; 100 * 100], ..raw.clone() };
+        let share = nano_banana_neighbours(&job, &located, 0, "chapter-p001-d0", "sha", Rect::new(10, 10, 100, 100), (0, 0), &page);
+        assert_eq!(share.others[0].1.bounds.x, 70 - radius);
+        assert_eq!(share.origin, (10, 10));
+        // The scope names this job, chapter and source, so another page never shares.
+        assert!(share.scope.ends_with("|sha") && share.scope.contains("chapter"));
+
+        // A strip window that moved the detections' origin moves their masks
+        // with it: the one by the corner is now far enough from the edge.
+        let share = nano_banana_neighbours(&job, &located, 0, "chapter-p001-d0", "sha", Rect::new(0, 0, 128, 128), (5, 7), &raw);
+        assert!(radius <= 7);
+        let at = |id: &str| share.others.iter().find(|(other, _)| other == id).map(|(_, mask)| (mask.bounds.x, mask.bounds.y));
+        assert_eq!(at("chapter-p001-d1"), Some((85 - radius, 67 - radius)));
+        assert_eq!(at("chapter-p001-d2"), Some((7 - radius, 9 - radius)));
+    }
+
+    fn nano_banana_config() -> crate::inference::nano_banana::Config {
+        crate::inference::nano_banana::Config {
+            model: cleaner_core::engines::nano_banana::Model::DEFAULT,
+            instruction: None,
+        }
+    }
+
+    #[test]
+    fn nano_banana_sends_nothing_while_cloud_engines_are_off() {
+        use crate::inference::nano_banana_consent::{Book, IDLE};
+        let raw = cleaner_core::image::fixtures::by_name("rgb8").raster;
+        let (root, located) = edit_fixture("nano-banana-off", &raw);
+        let bounds = Rect::new(22, 18, 8, 8);
+        let book = Book::new(IDLE);
+        let grant = book.issue(nano_banana_config(), 1).unwrap();
+        // A real grant, and the switch off: the gate refuses, and takes nothing from it.
+        let outcome = edit_with_consent(&mut test_bench(&root), run::HIGHEST_LOCAL, &located,
+            fixture_plan("b", Geometry::Painted(Mask::filled(bounds)), Engine::NanoBanana, bounds),
+            false, Some(&grant), &book).unwrap();
+        assert!(matches!(outcome, Outcome::Refused("decline.reason.nanoBananaOff")));
+        assert!(Job::open(&located.job_path).unwrap().project.patches.is_empty());
+        assert!(book.spend(true, Some(&grant)).is_ok(), "the grant still has its region");
+    }
+
+    /// `applyTool` and `createRegion` reach the rung only through
+    /// `edit_with_consent`, as these do: no grant, or another one, sends nothing.
+    #[test]
+    fn nano_banana_without_its_grant_sends_nothing() {
+        use crate::inference::nano_banana_consent::{Book, IDLE};
+        let raw = cleaner_core::image::fixtures::by_name("rgb8").raster;
+        let (root, located) = edit_fixture("nano-banana-no-grant", &raw);
+        let bounds = Rect::new(22, 18, 8, 8);
+        let book = Book::new(IDLE);
+        let _theirs = book.issue(nano_banana_config(), 1).unwrap();
+        for grant in [None, Some("0".repeat(64))] {
+            let outcome = edit_with_consent(&mut test_bench(&root), run::HIGHEST_LOCAL, &located,
+                fixture_plan("b", Geometry::Painted(Mask::filled(bounds)), Engine::NanoBanana, bounds),
+                true, grant.as_deref(), &book).unwrap();
+            assert!(matches!(outcome, Outcome::Refused("decline.reason.nanoBananaNoConsent")), "{grant:?}");
+        }
+        assert!(Job::open(&located.job_path).unwrap().project.patches.is_empty());
+        // Every other engine goes on as before, and never holds a Nano Banana config.
+        let mut bench = test_bench(&root);
+        bench.nano_banana = Some(nano_banana_config());
+        let _ = edit_with_consent(&mut bench, run::HIGHEST_LOCAL, &located,
+            fixture_plan("b", Geometry::Painted(Mask::filled(bounds)), Engine::Fill, bounds),
+            true, None, &book).unwrap();
+        assert!(bench.nano_banana.is_none());
+    }
+
+    fn a_nano_banana_layer(library_name: &str) -> (PathBuf, Library, Located, String) {
+        let raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        let (root, library, located) = command_fixture(library_name, &raw);
+        let region_id = format!("{}-p001-h1", located.chapter_id);
+        let mask = Mask::filled(Rect::new(20, 20, 8, 8));
+        let mut pixels = raw.clone();
+        pixels.width = 8;
+        pixels.height = 8;
+        pixels.data = vec![255; 64 * raw.mode.samples()];
+        Job::open(&located.job_path).unwrap().complete_region(0, &Patch {
+            id: region_id.clone(), mask: mask.clone(), ink: mask, pixels, order: 0, visible: true,
+            provenance: Provenance {
+                engine: Engine::NanoBanana, engine_version: "fixture".into(), model_sha256: None,
+                execution_provider: "gemini".into(), params_snapshot: serde_json::json!({}),
+                mask_sha256: String::new(), source_sha256: String::new(), cloud: None, created: 0,
+            },
+        }, None).unwrap();
+        (root, library, located, region_id)
+    }
+
+    /// Try again and Try again wider on a Nano Banana layer ask for it again,
+    /// and so need a grant; Stronger and Simpler leave it for this machine.
+    #[test]
+    fn a_nano_banana_layer_is_re_run_on_it_only_with_a_grant() {
+        use crate::inference::nano_banana_consent::{Book, IDLE};
+        assert_eq!((step(Engine::NanoBanana, true), step(Engine::NanoBanana, false)), (Engine::Flux, Engine::Flux));
+        assert!(MANUAL_RUNGS.iter().all(|rung| step(*rung, true) != Engine::NanoBanana && step(*rung, false) != Engine::NanoBanana));
+
+        let (root, library, located, region_id) = a_nano_banana_layer("rerun-nano-banana");
+        let book = Book::new(IDLE);
+        let before = Job::open(&located.job_path).unwrap().project.patches.clone();
+        for kind in ["retry", "retryWider"] {
+            let mut asked = None;
+            assert!(rerun_mask_at(&library, None, &region_id, kind, None, serde_json::Value::Null, |located, plan| {
+                asked = Some(plan.choice == Choice::Exact(Engine::NanoBanana));
+                edit_with_consent(&mut test_bench(&root), Engine::Fill, located, plan, true, None, &book)
+            }).unwrap().is_none(), "{kind}");
+            assert_eq!(asked, Some(true), "{kind}");
+        }
+        for (kind, engine) in [("stronger", None), ("simpler", None), ("engine", Some("nanobanana"))] {
+            let mut asked = None;
+            let _ = rerun_mask_at(&library, None, &region_id, kind, engine, serde_json::Value::Null, |_, plan| {
+                asked = Some(plan.choice == Choice::Exact(Engine::Flux));
+                Ok(Outcome::NotFound)
+            }).unwrap();
+            assert_eq!(asked, Some(engine.is_none()), "{kind}");
+        }
+        assert_eq!(serde_json::to_value(&Job::open(&located.job_path).unwrap().project.patches).unwrap(),
+            serde_json::to_value(&before).unwrap(), "nothing was rendered over the layer");
+    }
+
+    #[test]
+    fn clean_anyway_on_nano_banana_needs_a_grant_and_a_region_still_waiting() {
+        use crate::inference::nano_banana_consent::{Book, IDLE};
+        let mut raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        raw.width = 128;
+        raw.height = 128;
+        raw.data = vec![0; 128 * 128];
+        let (root, library, located) = command_fixture("clean-anyway-nano-banana", &raw);
+        let bounds = Rect::new(42, 40, 12, 6);
+        Job::open(&located.job_path).unwrap().leave_untouched(0, bounds,
+            "review.reason.gateSkippedOutsideBubble").unwrap();
+        let held = untouched_id(&format!("{}-p001", located.chapter_id), bounds);
+        let book = Book::new(IDLE);
+        let mut bench = test_bench(&root);
+        bench.detected_seed = Some(Mask::filled(bounds));
+        for exact in [true, false] {
+            let params = serde_json::json!({ "exact": exact });
+            assert!(clean_anyway_at(&library, None, &held, Some("nanobanana"), params, |located, plan| {
+                assert_eq!(plan.choice, Choice::Exact(Engine::NanoBanana));
+                edit_with_consent(&mut bench, Engine::Fill, located, plan, true, None, &book)
+            }).unwrap().is_none());
+        }
+        assert_eq!(Job::open(&located.job_path).unwrap().project.regions_untouched.len(), 1, "the row still waits");
+
+        // A region with a layer, as one cleaned by hand during a batch has:
+        // nothing is sent over it, grant or no grant.
+        let (_root, library, _located, layer) = a_nano_banana_layer("clean-anyway-nano-banana-layer");
+        assert!(clean_anyway_at(&library, None, &layer, Some("nanobanana"), serde_json::json!({ "exact": true }),
+            |_, _| panic!("a region with a layer was sent to Nano Banana")).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_nano_banana_crop_is_recorded_in_page_pixels() {
+        let record = serde_json::json!({ "model": "m", "crop": [12, 30, 512, 512], "shared_answer": false });
+        let moved = nano_banana_record_on_page(record, (700, 1268));
+        assert_eq!(moved["crop"], serde_json::json!([712, 1298, 512, 512]));
+        assert_eq!(moved["model"], "m");
+    }
+
+    #[test]
+    fn a_page_is_changed_for_nano_banana_only_by_what_is_on_it() {
+        let raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        let (_root, located) = edit_fixture("nano-banana-page-state", &raw);
+        let job = Job::open(&located.job_path).unwrap();
+        let read = page_state(&job.project, 0);
+        assert!(read.is_some());
+        let mut other = job.project.clone();
+        other.counters.gate_dropped += 1;
+        assert_eq!(page_state(&other, 0), read, "a counter is not the page");
+        let mut moved = job.project.clone();
+        moved.sources[0].sha256 = "another".into();
+        assert_ne!(page_state(&moved, 0), read, "a replaced source is");
+    }
+
+    #[test]
+    fn nano_banana_is_a_rung_named_outright_and_never_a_start() {
+        assert_eq!(choice_for(Some("nanobanana"), EnginePick::Fill), Choice::Exact(Engine::NanoBanana));
+        assert_eq!(serde_json::to_value(Engine::NanoBanana).unwrap(), "nanobanana");
+        assert_eq!(Engine::NanoBanana.rung_key(), "ladder.rung.nanobanana");
     }
 
     #[test]
@@ -9554,6 +10015,7 @@ mod tests {
         Bench {
             detector: run::detector_on_demand(&models, Preference::CpuOnly),
             rung2: run::Rung2::new(&models, Preference::CpuOnly),
+            nano_banana: None,
             detected_seed: None,
         }
     }

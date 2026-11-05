@@ -345,14 +345,10 @@ impl SecretStore for OsKeyringSecretStore {
     }
 
     fn has_secret(&self, key: &SecretKey) -> Result<bool, String> {
-        #[cfg(target_os = "macos")]
-        {
-            macos_item_exists(key)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.get_secret(key).map(|opt| opt.is_some())
-        }
+        account_exists(&key.as_keyring_user()).map_err(|err| match err {
+            keyring::Error::NoStorageAccess(_) => "OS credential store is locked or inaccessible".to_string(),
+            _ => "OS credential store read failed".to_string(),
+        })
     }
 
     fn backend_kind(&self) -> StorageBackendKind {
@@ -364,37 +360,98 @@ impl SecretStore for OsKeyringSecretStore {
     }
 }
 
-/// Whether the login keychain holds an item for `key`, asked without reading its data.
+/// Whether the credential store holds `user` under [`KEYRING_SERVICE`], asked
+/// without reading the secret, so it never prompts and never unlocks anything.
 ///
-/// The keychain guards an item's data with an access list naming the build that
-/// wrote it. An unsigned or ad-hoc signed build is named by its code hash, so
-/// every update is a stranger to it and reading the data prompts for the login
-/// password. Attributes are not guarded, so this check never prompts: a summary
-/// after an update still says the token is there, and the one prompt waits for
-/// the first request that actually needs the token.
-#[cfg(target_os = "macos")]
-fn macos_item_exists(key: &SecretKey) -> Result<bool, String> {
-    use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
-    use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
+/// - **macOS.** The keychain guards an item's data with an access list naming
+///   the build that wrote it. An unsigned or ad-hoc signed build is named by its
+///   code hash, so every update is a stranger to it and reading the data prompts
+///   for the login password. Attributes are not guarded, so this check never
+///   prompts: a summary after an update still says the token is there, and the
+///   one prompt waits for the first request that actually needs the token.
+/// - **Windows.** Credential Manager never prompts; the attributes are read so
+///   the secret is not copied out for a yes or no.
+/// - **Linux.** A Secret Service search lists locked items too, without the
+///   unlock that `keyring` performs before any read. It matches the attributes
+///   `keyring` writes for an entry made with [`keyring::Entry::new`].
+pub(crate) fn account_exists(user: &str) -> keyring::Result<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+        use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
 
-    /// `errSecItemNotFound`.
-    const ITEM_NOT_FOUND: i32 = -25300;
+        /// `errSecItemNotFound`.
+        const ITEM_NOT_FOUND: i32 = -25300;
 
-    let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)
-        .map_err(|_| "OS credential store is locked or inaccessible".to_string())?;
-    let user = key.as_keyring_user();
-    let found = ItemSearchOptions::new()
-        .class(ItemClass::generic_password())
-        .keychains(&[keychain])
-        .service(KEYRING_SERVICE)
-        .account(&user)
-        .load_attributes(true)
-        .limit(Limit::Max(1))
-        .search();
-    match found {
-        Ok(items) => Ok(!items.is_empty()),
-        Err(err) if err.code() == ITEM_NOT_FOUND => Ok(false),
-        Err(_) => Err("OS credential store read failed".to_string()),
+        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)
+            .map_err(|err| keyring::Error::NoStorageAccess(Box::new(err)))?;
+        let found = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .keychains(&[keychain])
+            .service(KEYRING_SERVICE)
+            .account(user)
+            .load_attributes(true)
+            .limit(Limit::Max(1))
+            .search();
+        match found {
+            Ok(items) => Ok(!items.is_empty()),
+            Err(err) if err.code() == ITEM_NOT_FOUND => Ok(false),
+            Err(err) => Err(keyring::Error::PlatformFailure(Box::new(err))),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match keyring::Entry::new(KEYRING_SERVICE, user)?.get_attributes() {
+            Ok(_) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use dbus_secret_service::{EncryptionType, Error, SecretService};
+
+        let wrap = |err: Error| match err {
+            Error::Locked | Error::NoResult | Error::Prompt => keyring::Error::NoStorageAccess(Box::new(err)),
+            err => keyring::Error::PlatformFailure(Box::new(err)),
+        };
+        // `Plain` is enough: a search carries no secret.
+        let service = SecretService::connect(EncryptionType::Plain).map_err(wrap)?;
+        let attributes = std::collections::HashMap::from([
+            ("service", KEYRING_SERVICE),
+            ("username", user),
+            ("target", "default"),
+        ]);
+        let found = service.search_items(attributes).map_err(wrap)?;
+        Ok(!found.unlocked.is_empty() || !found.locked.is_empty())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = user;
+        Ok(false)
+    }
+}
+
+/// Whether a credential store failure means this system has no store at all,
+/// as opposed to one that is locked or that the person said no to.
+///
+/// Only Linux can lack one: a desktop with no Secret Service provider (i3,
+/// sway, a headless session, KDE without one), no session bus, or no default
+/// collection (WSL). macOS and Windows always have theirs.
+pub(crate) fn no_store(err: &keyring::Error) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use dbus_secret_service::Error;
+        let inner = match err {
+            keyring::Error::PlatformFailure(inner) | keyring::Error::NoStorageAccess(inner) => inner,
+            _ => return false,
+        };
+        matches!((**inner).downcast_ref::<Error>(), Some(Error::Unavailable | Error::NoResult | Error::Dbus(_)))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = err;
+        false
     }
 }
 

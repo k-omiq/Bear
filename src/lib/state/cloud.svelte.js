@@ -25,6 +25,7 @@ import { untrack } from 'svelte'
 import { getBackend, readCloudReadiness } from '../api/backend.js'
 import { notify, pushModal } from './app.svelte.js'
 import { editor, replaceRegion } from './editor.svelte.js'
+import { refreshNanoBanana } from './capabilities.svelte.js'
 import { backendSettingsPatch, session, setCloudAllowed, setCloudFinishing, setCloudFlux3Generation, setCloudWorkLongSide } from './session.svelte.js'
 import { savedSetting, writeSettingsSerialized } from './settingswrite.js'
 import { cloudErrorKey } from '../model/cloudnotices.js'
@@ -444,6 +445,7 @@ export async function setCloudPermission(allowed, backend = getBackend()) {
     return false
   }
   await refreshCloudReadiness(backend)
+  await refreshNanoBanana(backend)
   return true
 }
 

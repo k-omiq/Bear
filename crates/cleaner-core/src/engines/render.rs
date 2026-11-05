@@ -497,8 +497,10 @@ pub fn declines(page: &Raster, fitted: &Fitted) -> Option<Decline> {
     (page.depth == BitDepth::Sixteen).then_some(Decline::DepthBeyondEngine(page.depth))
 }
 
-/// The crop as RGB8 samples, edge-replicated where it runs off the page.
+/// The crop as RGB8 samples, edge-replicated where it runs off the page. The
+/// page must not be empty: there is nothing to replicate.
 pub(crate) fn crop_samples(page: &Raster, crop: Rect, managed: &crate::image::color::ManagedColor) -> (EdgePad, Vec<u8>) {
+    debug_assert!(page.width > 0 && page.height > 0, "an empty page has no samples");
     let mut pad = EdgePad::None;
     let total_samples = (crop.w as usize)
         .checked_mul(crop.h as usize)
@@ -664,6 +666,44 @@ impl PreparedRender {
         if let Some(decline) = declines(page, fitted) {
             return Err(decline.into());
         }
+        let crop = preprocessing
+            .crop_of_hole(fitted.ink.bounds, page.width, page.height)
+            .ok_or_else(|| Error::Run("cannot prepare render for an unrepresentable crop".to_owned()))?;
+        Self::prepare_cut(page, fitted, crop, preprocessing)
+    }
+
+    /// Prepare the render inputs for a crop the caller chose, inside the page.
+    /// The crop must hold the applied mask, or the mask's edge would be written
+    /// from nothing.
+    pub fn prepare_in_crop(
+        page: &Raster,
+        fitted: &Fitted,
+        crop: Rect,
+        preprocessing: Preprocessing,
+    ) -> Result<Self, Error> {
+        if page.width == 0 || page.height == 0 {
+            return Err(Error::Run(
+                "cannot prepare render for zero-dimension page".to_owned(),
+            ));
+        }
+        if let Some(decline) = declines(page, fitted) {
+            return Err(decline.into());
+        }
+        if Rect::new(0, 0, page.width, page.height).intersection(crop) != crop {
+            return Err(Error::Run("the crop runs off the page".to_owned()));
+        }
+        Self::prepare_cut(page, fitted, crop, preprocessing)
+    }
+
+    /// [`PreparedRender::prepare_as`] and [`PreparedRender::prepare_in_crop`]
+    /// once the page is known to be non-empty and eligible. The crop may run off
+    /// the page, which is edge-replicated.
+    fn prepare_cut(
+        page: &Raster,
+        fitted: &Fitted,
+        crop: Rect,
+        preprocessing: Preprocessing,
+    ) -> Result<Self, Error> {
         let applied = applied_mask(fitted, page.width, page.height);
         let bounds = applied.bounds;
         if bounds.w == 0 || bounds.h == 0 {
@@ -671,10 +711,10 @@ impl PreparedRender {
                 "cannot prepare render for empty region bounds".to_owned(),
             ));
         }
-        let crop = preprocessing
-            .crop_of_hole(fitted.ink.bounds, page.width, page.height)
-            .ok_or_else(|| Error::Run("cannot prepare render for an unrepresentable crop".to_owned()))?;
         debug_assert_eq!(model::applied_bounds(fitted.ink.bounds, page.width, page.height), bounds);
+        if crop.x > bounds.x || crop.y > bounds.y || crop.right() < bounds.right() || crop.bottom() < bounds.bottom() {
+            return Err(Error::Run("the crop does not hold the region".to_owned()));
+        }
         if crop.w == 0 || crop.h == 0 {
             return Err(Error::Run(
                 "cannot prepare render for empty crop bounds".to_owned(),

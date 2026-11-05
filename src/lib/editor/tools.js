@@ -258,7 +258,7 @@ export function color(key, labelKey, defaultValue = '#ffffff') {
  */
 // Screentone is a rung named by hand, never a start: `run.rs#parse_pick` does
 // not read it, because an automatic run does not route to it yet.
-const ENGINES = ROW_ENGINES.filter((rung) => rung !== 'screentone').map((rung) => ({
+const ENGINES = ROW_ENGINES.filter((rung) => rung !== 'screentone' && rung !== 'nanobanana').map((rung) => ({
   value: rung,
   labelKey: engineChoiceLabel(rung),
   // Which rung this option *is*, so `ToolBar#optionsFor` can drop the ones
@@ -338,7 +338,7 @@ export function isSolidFill(values) {
 // The screentone fill goes last: it is a specialist for lettering on a dot
 // screen, and the first entry is what a brush or shape falls back to.
 const BRUSH_ENGINES = [
-  ...MASK_ENGINES.filter((option) => option.value !== 'fill' && option.value !== 'screentone'),
+  ...MASK_ENGINES.filter((option) => option.value !== 'fill' && option.value !== 'screentone' && option.value !== 'nanobanana'),
   ...MASK_ENGINES.filter((option) => option.value === 'screentone'),
 ]
 const SHAPE_MODES = [{ value: SOLID, labelKey: 'tools.option.modeSolid' }, ...BRUSH_ENGINES]

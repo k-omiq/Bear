@@ -382,7 +382,10 @@ fn render_reach_as(engine: Engine, seed: Rect, scale: f32, applied: Rect, ladder
 /// clone read exactly the window their stroke recorded. Always within the
 /// recorded footprint.
 fn dependency_reach(record: &PatchRecord, footprint: Rect, page: (u32, u32), longstrip: bool) -> Rect {
-    if matches!(record.provenance.engine, Engine::Paint | Engine::Clone) {
+    // A Nano Banana crop follows its region's size and ratio, which the record
+    // does not hold, so it is said to have read all it was given, as an edit
+    // records it (`region.rs#edit_with_bench_render`).
+    if matches!(record.provenance.engine, Engine::Paint | Engine::Clone | Engine::NanoBanana) {
         return footprint;
     }
     let floor = if longstrip { LONGSTRIP_FIT_SCALE_FLOOR } else { 1.0 };

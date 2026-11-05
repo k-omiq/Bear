@@ -17,6 +17,7 @@ const LABEL_KEYS = Object.freeze({
   lama: 'ladder.rung.lama',
   flux: 'ladder.rung.flux',
   cloud: 'ladder.rung.cloud',
+  nanobanana: 'ladder.rung.nanobanana',
   paint: 'ladder.rung.paint',
   clone: 'ladder.rung.clone',
 })
@@ -42,6 +43,9 @@ export function currentRung(rung) {
  */
 export function stronger(rung) {
   if (rung === 'cloud') return 'cloud'
+  // Never onto Nano Banana and never staying on it: each of its renders is a
+  // paid request a person asks for by name (`region.rs#step`).
+  if (rung === 'nanobanana') return 'flux'
   const i = RUNGS.indexOf(currentRung(rung))
   if (i === -1) return rung
   return RUNGS[Math.min(i + 1, RUNGS.length - 1)]
@@ -53,6 +57,7 @@ export function stronger(rung) {
  */
 export function simpler(rung) {
   if (rung === 'cloud') return 'lama'
+  if (rung === 'nanobanana') return 'flux'
   const i = RUNGS.indexOf(currentRung(rung))
   if (i === -1) return rung
   return RUNGS[Math.max(i - 1, 0)]

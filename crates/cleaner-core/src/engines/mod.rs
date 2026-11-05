@@ -49,6 +49,7 @@ pub mod grid;
 /// Preprocessing 3.0.0's screen step: a dot screen redrawn in phase.
 pub mod halftone;
 pub mod lama;
+pub mod nano_banana;
 pub mod model;
 /// Multiscale PatchMatch completion: the Patch tool's Content-Aware mode.
 pub mod patchmatch;
