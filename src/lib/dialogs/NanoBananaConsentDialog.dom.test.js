@@ -55,7 +55,7 @@ describe('the Nano Banana window', () => {
       t('nanoBanana.run.cost', { low: '$0.09', high: '$0.20' }),
     ])
     await fireEvent.keyDown(window, { key: 'Escape' })
-    expect(await asked).toBe(false)
+    expect(await asked).toBeNull()
   })
 
   it('treats Escape as Cancel and sends nothing', async () => {
