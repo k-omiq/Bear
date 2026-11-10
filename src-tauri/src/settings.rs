@@ -168,6 +168,13 @@ fn check_known_shapes(patch: &Value) -> Result<(), String> {
     if crate::inference::nano_banana_finishing::touches(patch) {
         crate::inference::nano_banana_finishing::from_settings(patch)?;
     }
+    // What a Nano Banana crop sends: a value that is not a switch is refused,
+    // not read as off.
+    for key in [crate::inference::nano_banana::RESTRICTIVE_KEY, crate::inference::nano_banana_crop::SHOW_KEY] {
+        if patch.get(key).is_some_and(|value| !value.is_boolean() && !value.is_null()) {
+            return Err(format!("{key} must be true or false"));
+        }
+    }
     crate::run::lama_hole_from_settings(patch)?;
     crate::run::lama_sharing_from_settings(patch)?;
     check_undo_limit(patch)?;

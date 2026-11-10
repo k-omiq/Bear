@@ -586,6 +586,8 @@ fn kind_of(event: &Event) -> &'static str {
         Event::MeasureProgress { .. } => "measure-progress",
         // A Nano Banana batch's closing report. Only its own job sends it.
         Event::NanoBananaReport { .. } => "nano-banana-report",
+        // A Nano Banana crop shown before it is sent. Only a region's edit sends it.
+        Event::NanoBananaCrop { .. } => "nano-banana-crop",
     }
 }
 

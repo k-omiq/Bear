@@ -59,6 +59,7 @@ const IMPLEMENTED = Object.freeze({
   grantNanoBanana: 'nano_banana_grant',
   nanoBananaStop: 'nano_banana_stop',
   startNanoBananaRun: 'start_nano_banana_run',
+  answerNanoBananaCrop: 'nano_banana_crop_answer',
   storeCloudSecret: 'store_cloud_secret',
   deleteCloudSecret: 'delete_cloud_secret',
   getCloudSecretSummary: 'get_cloud_secret_summary',
@@ -239,6 +240,7 @@ export const SEAM_METHODS = Object.freeze([
   'grantNanoBanana',
   'nanoBananaStop',
   'startNanoBananaRun',
+  'answerNanoBananaCrop',
   'storeCloudSecret',
   'deleteCloudSecret',
   'getCloudSecretSummary',
@@ -515,6 +517,10 @@ export function createTauriBackend({ fallback, invoke, listen }) {
       if (handle?.runId && !handle.alreadyRunning) nanoBananaBatches.set(handle.runId, grant)
       return handle
     },
+    // Send, Skip or Stop for a crop shown before it is sent; `keep` is the
+    // drawn areas of a restrictive crop, or null for the suggested ones.
+    answerNanoBananaCrop: ({ id, answer, keep = null }) =>
+      call(IMPLEMENTED.answerNanoBananaCrop, { id, answer, keep: keep ?? null }),
     storeCloudSecret: ({ provider, profileId, role, secret, tokenId, sessionOnly = false }) =>
       call(IMPLEMENTED.storeCloudSecret, {
         provider,
@@ -931,6 +937,7 @@ export const TAURI_REGISTERED_CLOUD_COMMANDS = Object.freeze([
   'nano_banana_grant',
   'nano_banana_stop',
   'start_nano_banana_run',
+  'nano_banana_crop_answer',
   'store_cloud_secret',
   'delete_cloud_secret',
   'get_cloud_secret_summary',

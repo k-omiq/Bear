@@ -976,6 +976,7 @@ describe('the Tauri adapter', () => {
         'nano_banana_grant',
         'nano_banana_stop',
         'start_nano_banana_run',
+        'nano_banana_crop_answer',
         'store_cloud_secret',
         'delete_cloud_secret',
         'get_cloud_secret_summary',

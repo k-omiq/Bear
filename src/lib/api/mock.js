@@ -19,14 +19,14 @@ import { displayBbox, editedLayer, isErasableLayer, isRegionCopy, layerCapabilit
 import { regionState, reviewReason } from '../model/review.js'
 import { aboutInfo, buildChapter, buildFixtures, buildProject, defaultSettings } from './fixtures.js'
 import { cloudAttemptId, sha256Hex } from './attempt.js'
-import { buildReviewPage, supportOf } from './mockreview.js'
+import { buildReviewPage, rgbPngBase64, supportOf } from './mockreview.js'
 import { commitMask, ENGINE_INFO } from './provenance.js'
 import { createRng } from './rng.js'
 import { createRunnerPool } from './runner.js'
 import { DENOISE_PRESETS, outputScalesFor, presetById, recipeAt } from '../model/denoise.js'
 import { currentRung } from '../model/ladder.js'
 import { MAX_MASK_PADDING, NANO_BANANA_ENGINE, isUncleaned } from '../model/masks.js'
-import { nanoBananaModel } from '../model/nanobanana.js'
+import { nanoBananaModel, nanoBananaStartSize } from '../model/nanobanana.js'
 import { nanoBananaFinishing, nanoBananaFinishingRefusal, recordedNanoBananaFinishing } from '../model/nanobananafinishing.js'
 import { FINISHINGS } from '../model/model-names.js'
 import {
@@ -2321,8 +2321,11 @@ export function createMockBackend(options = {}) {
    * lapsing when idle but never while a render holds a share, claimed by the
    * batch that starts on it, and each with the stop its renders watch.
    *
+   * The grant also keeps Restrictive crop as it was when the window was
+   * confirmed, since native reads it then.
+   *
    * @typedef {{ grant: string, model: string, chapterId: string, left: number, lapses: number,
-   *   spending: number, owner: string|null, stop: { raised: boolean } }} MockNanoBananaGrant
+   *   spending: number, owner: string|null, stop: { raised: boolean }, restrictive: boolean }} MockNanoBananaGrant
    * @type {Map<string, MockNanoBananaGrant>}
    */
   const nanoBananaLive = new Map()
@@ -2331,6 +2334,16 @@ export function createMockBackend(options = {}) {
   let nanoBananaGrants = 0
   /** Single-region requests in flight, by chapter (`region.rs#REQUESTS_OUT`). */
   const nanoBananaOut = new Map()
+  /**
+   * Crops shown before they are sent, each waiting for its answer, by id
+   * (`answerNanoBananaCrop`). The answer is a refusal reason, or null to send.
+   *
+   * @type {Map<string, { resolve: (reason: string|null) => void, stop: { raised: boolean } }>}
+   */
+  const nanoBananaCrops = new Map()
+  let nanoBananaCropCount = 0
+  /** The kept areas the last Send answered with, for tests. @type {number[][]|null} */
+  let nanoBananaLastKeep = null
   /** @param {(grant: MockNanoBananaGrant) => boolean} gone */
   const nanoBananaWithdraw = (gone) => {
     for (const [nonce, grant] of nanoBananaLive) {
@@ -2338,6 +2351,75 @@ export function createMockBackend(options = {}) {
       grant.stop.raised = true
       nanoBananaLive.delete(nonce)
     }
+    // A crop window whose request was stopped elsewhere stops waiting, and
+    // says nothing: its answer will be refused.
+    for (const [id, waiting] of nanoBananaCrops) {
+      if (!waiting.stop.raised) continue
+      nanoBananaCrops.delete(id)
+      waiting.resolve('decline.reason.nanoBananaStopped')
+    }
+  }
+  /** The mock's crop picture: page lines on white, the region marked blue. */
+  let nanoBananaCropPicture = /** @type {string|null} */ (null)
+  const NANO_BANANA_CROP_SIDE = 96
+  const NANO_BANANA_CROP_HOLE = [32, 32, 32, 32]
+  const nanoBananaCropPng = () => {
+    if (nanoBananaCropPicture) return nanoBananaCropPicture
+    const side = NANO_BANANA_CROP_SIDE
+    const [hx, hy, hw, hh] = NANO_BANANA_CROP_HOLE
+    const pixels = new Uint8Array(side * side * 3).fill(255)
+    for (let y = 0; y < side; y += 1) {
+      for (let x = 0; x < side; x += 1) {
+        const at = (y * side + x) * 3
+        if (x >= hx && x < hx + hw && y >= hy && y < hy + hh) pixels.set([0, 64, 255], at)
+        else if ((x + y) % 12 === 0 || y === 8 || x === 88) pixels.set([40, 40, 40], at)
+      }
+    }
+    nanoBananaCropPicture = rgbPngBase64(side, side, pixels)
+    return nanoBananaCropPicture
+  }
+
+  /**
+   * With "Show each crop before it is sent" on, hold the request on a
+   * `nano-banana-crop` event until the window answers, as native does
+   * (`nano_banana.rs`). Answers null when the setting is off (nothing to
+   * wait for), else a promise of the refusal reason or null to send. With
+   * nobody listening there is no window to show, and nothing is sent.
+   *
+   * @param {{ model: string, stop: { raised: boolean }, restrictive?: boolean }} spent
+   * @param {any} [region]
+   * @param {number} [attempt]
+   * @returns {Promise<string|null>|null}
+   */
+  const nanoBananaCropGate = (spent, region = null, attempt = 0) => {
+    if (state.settings.nanoBananaShowCrop !== true) return null
+    if (handlers.size === 0) return Promise.resolve('decline.reason.nanoBananaNoWindow')
+    nanoBananaCropCount += 1
+    const id = `mock-nano-banana-crop-${nanoBananaCropCount}`
+    const restrictive = spent.restrictive === true
+    const side = NANO_BANANA_CROP_SIDE
+    const [hx, hy, hw, hh] = NANO_BANANA_CROP_HOLE
+    const pad = 24
+    const at = (value) => (Number.isFinite(Number(value)) ? Math.round(Number(value)) : 0)
+    return new Promise((resolve) => {
+      nanoBananaCrops.set(id, { resolve, stop: spent.stop })
+      emit({
+        type: 'nano-banana-crop',
+        id,
+        model: spent.model,
+        ratio: '1:1',
+        size: nanoBananaStartSize(spent.model),
+        crop: [at(region?.bbox?.x), at(region?.bbox?.y), side, side],
+        attempt,
+        restrictive,
+        holes: [[...NANO_BANANA_CROP_HOLE]],
+        suggested: restrictive
+          ? [[Math.max(0, hx - pad), Math.max(0, hy - pad), Math.min(side, hx + hw + pad) - Math.max(0, hx - pad),
+              Math.min(side, hy + hh + pad) - Math.max(0, hy - pad)]]
+          : [],
+        png: nanoBananaCropPng(),
+      })
+    })
   }
   /** @param {MockNanoBananaGrant} grant @param {number} now */
   const nanoBananaLapsed = (grant, now) => grant.spending === 0 && now >= grant.lapses
@@ -2370,13 +2452,23 @@ export function createMockBackend(options = {}) {
    * native render watches it from the share on (`nano_banana.rs#Gate`).
    * Answers whether it came back to be used.
    *
-   * @param {{ model: string, stop: { raised: boolean }, release: () => void }} spent
+   * With "Show each crop before it is sent" on, the crop window comes first
+   * (`nanoBananaCropGate`): Skip and Stop send nothing and are said as the
+   * refusal.
+   *
+   * @param {{ model: string, stop: { raised: boolean }, restrictive?: boolean, release: () => void }} spent
    * @param {string} chapterId
+   * @param {any} [region]
    * @returns {Promise<boolean>}
    */
-  const nanoBananaRequest = async (spent, chapterId) => {
+  const nanoBananaRequest = async (spent, chapterId, region = null) => {
     nanoBananaOut.set(chapterId, (nanoBananaOut.get(chapterId) ?? 0) + 1)
     try {
+      const refused = await nanoBananaCropGate(spent, region)
+      if (refused) {
+        notify('notice.mask.rerunFailed', { reasonKey: refused }, 'warn')
+        return false
+      }
       await delay(timing.region)
     } finally {
       nanoBananaOut.set(chapterId, nanoBananaOut.get(chapterId) - 1)
@@ -2394,7 +2486,7 @@ export function createMockBackend(options = {}) {
    * @param {string|undefined} nonce - the grant presented, or none for the one held
    * @param {string} chapterId - the chapter the render is on
    * @param {string|null} [owner] - the batch spending it, or none for a single region
-   * @returns {{model: string, stop: {raised: boolean}, release: () => void} | {reason: string}}
+   * @returns {{model: string, stop: {raised: boolean}, restrictive: boolean, release: () => void} | {reason: string}}
    */
   const nanoBananaSpend = (nonce, chapterId, owner = null) => {
     const NO_CONSENT = 'decline.reason.nanoBananaNoConsent'
@@ -2420,7 +2512,7 @@ export function createMockBackend(options = {}) {
       live.spending -= 1
       live.lapses = timers.now() + NANO_BANANA_GRANT_IDLE_MS
     }
-    return { model: live.model, stop: live.stop, release }
+    return { model: live.model, stop: live.stop, restrictive: live.restrictive, release }
   }
 
   /**
@@ -3661,7 +3753,7 @@ export function createMockBackend(options = {}) {
           await delay(timing.method)
           return { status: 'blocked' }
         }
-        if (!(await nanoBananaRequest(spent, found.chapter.id))) return { status: 'blocked' }
+        if (!(await nanoBananaRequest(spent, found.chapter.id, found.region))) return { status: 'blocked' }
         model = spent.model
       }
       if (tool === 'autoClean') {
@@ -5228,6 +5320,7 @@ export function createMockBackend(options = {}) {
       nanoBananaLive.set(grant, {
         grant, model: confirmed, chapterId: String(chapterId ?? ''), left: count,
         lapses: now + NANO_BANANA_GRANT_IDLE_MS, spending: 0, owner: null, stop: { raised: false },
+        restrictive: state.settings.nanoBananaRestrictive === true,
       })
       nanoBananaLast = grant
       return { grant, model: confirmed, count }
@@ -5237,6 +5330,33 @@ export function createMockBackend(options = {}) {
     async nanoBananaStop({ grant } = {}) {
       nanoBananaWithdraw((live) => live.grant === grant)
     },
+
+    /**
+     * The answer to a crop window: Send sends it, Skip leaves the region
+     * uncleaned (a batch goes on), Stop ends the request and the rest of its
+     * grant. Refused for a crop no longer waiting (`nanoBanana.crop.gone`) or
+     * an answer it does not know (`nanoBanana.crop.badAnswer`), as native
+     * refuses them.
+     */
+    async answerNanoBananaCrop({ id, answer, keep = null } = {}) {
+      const waiting = nanoBananaCrops.get(String(id ?? ''))
+      if (!waiting) throw new Error('nanoBanana.crop.gone')
+      if (!['send', 'skip', 'stop'].includes(answer)) throw new Error('nanoBanana.crop.badAnswer')
+      nanoBananaCrops.delete(String(id))
+      if (answer === 'send') {
+        nanoBananaLastKeep = Array.isArray(keep) ? keep.map((rect) => [...rect]) : null
+        waiting.resolve(null)
+      } else if (answer === 'stop') {
+        nanoBananaWithdraw((live) => live.stop === waiting.stop)
+        waiting.stop.raised = true
+        waiting.resolve('decline.reason.nanoBananaStopped')
+      } else {
+        waiting.resolve('decline.reason.nanoBananaSkipped')
+      }
+    },
+
+    /** What the last Send kept, for tests: the drawn areas, or null for the suggested ones. */
+    nanoBananaLastKeep: () => nanoBananaLastKeep,
 
     /**
      * A Nano Banana batch as `nano_banana_job.rs#start` runs it: checked
@@ -5302,6 +5422,52 @@ export function createMockBackend(options = {}) {
       const wanted = new Set(targets.map((target) => target.regionId))
       /** @type {string} */
       let runId = ''
+      /**
+       * One region's turn after its checks and its window: refused, halted
+       * or cleaned.
+       *
+       * @param {string|null} refused
+       * @param {any} spent
+       * @param {any} region
+       * @param {any} page
+       * @returns {boolean|'halt'}
+       */
+      const settle = (refused, spent, region, page) => {
+        let reason = refused
+        // Stop in the crop window ends the batch, as the person's Stop.
+        if (reason === 'decline.reason.nanoBananaStopped') {
+          stopped = reason
+          handled.delete(region.id)
+          return 'halt'
+        }
+        if (!reason && scenario === 'blocked' && turn === 1) reason = 'decline.reason.nanoBananaBlocked'
+        // A link lost after the crop was sent: skipped, never sent again.
+        if (!reason && scenario === 'lost' && turn === 1) reason = 'decline.reason.nanoBananaLost'
+        if (!reason && scenario && scenario in ACCOUNT_SCENARIOS && turn === 2) reason = ACCOUNT_SCENARIOS[scenario]
+        if (!reason && scenario === 'longWait' && turn === 2) reason = 'decline.reason.nanoBananaLongWait'
+        // Still busy after both waits; the mock does not wait them.
+        if (!reason && scenario === 'busy' && turn === 2) reason = 'decline.reason.nanoBananaRateLimited'
+        if (reason === NO_CONSENT || ACCOUNT.includes(reason) || reason === 'decline.reason.nanoBananaRateLimited') {
+          stopped = reason
+          handled.delete(region.id)
+          return 'halt'
+        }
+        if (reason) {
+          report.failed.push({ regionId: region.id, pageIndex: page.index, reason })
+          return false
+        }
+        ownRun = runId
+        try {
+          cleanDetection(region, page)
+        } finally {
+          ownRun = null
+        }
+        redrawLiveCopies(page, region.id, [region.bbox])
+        stampNanoBanana(region.mask, 'model' in spent ? spent.model : null)
+        report.cleaned += 1
+        emit({ type: 'region-done', runId, chapterId, pageId: page.id, pageIndex: page.index, region: snapshot(region) })
+        return true
+      }
       const handle = runner.start(queue, {
         chapterId,
         mode: 'clean',
@@ -5321,35 +5487,20 @@ export function createMockBackend(options = {}) {
           }
           turn += 1
           const spent = nanoBananaSpend(nonce, chapterId, runId)
-          if ('release' in spent) spent.release()
-          let reason = 'reason' in spent ? spent.reason : null
-          if (!reason && scenario === 'blocked' && turn === 1) reason = 'decline.reason.nanoBananaBlocked'
-          // A link lost after the crop was sent: skipped, never sent again.
-          if (!reason && scenario === 'lost' && turn === 1) reason = 'decline.reason.nanoBananaLost'
-          if (!reason && scenario && scenario in ACCOUNT_SCENARIOS && turn === 2) reason = ACCOUNT_SCENARIOS[scenario]
-          if (!reason && scenario === 'longWait' && turn === 2) reason = 'decline.reason.nanoBananaLongWait'
-          // Still busy after both waits; the mock does not wait them.
-          if (!reason && scenario === 'busy' && turn === 2) reason = 'decline.reason.nanoBananaRateLimited'
-          if (reason === NO_CONSENT || ACCOUNT.includes(reason) || reason === 'decline.reason.nanoBananaRateLimited') {
-            stopped = reason
+          const asked = 'release' in spent ? nanoBananaCropGate(spent, region) : null
+          if (asked) {
+            // The share is held while the window waits, so the grant does not
+            // lapse under it, and a batch stopped meanwhile counts the region
+            // as not reached.
             handled.delete(region.id)
-            return 'halt'
+            return asked.then((refused) => {
+              handled.add(region.id)
+              spent.release()
+              return settle(refused, spent, region, page)
+            })
           }
-          if (reason) {
-            report.failed.push({ regionId: region.id, pageIndex: page.index, reason })
-            return false
-          }
-          ownRun = runId
-          try {
-            cleanDetection(region, page)
-          } finally {
-            ownRun = null
-          }
-          redrawLiveCopies(page, region.id, [region.bbox])
-          stampNanoBanana(region.mask, 'model' in spent ? spent.model : null)
-          report.cleaned += 1
-          emit({ type: 'region-done', runId, chapterId, pageId: page.id, pageIndex: page.index, region: snapshot(region) })
-          return true
+          if ('release' in spent) spent.release()
+          return settle('reason' in spent ? spent.reason : null, spent, region, page)
         },
         pageStatus: settledStatus,
         closing: (ending) => {

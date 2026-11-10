@@ -12,6 +12,7 @@ pub mod http;
 pub mod journal;
 pub mod nano_banana;
 pub mod nano_banana_consent;
+pub mod nano_banana_crop;
 pub mod nano_banana_job;
 pub mod nano_banana_finishing;
 pub mod policy;

@@ -1980,6 +1980,8 @@ export const en = {
       nanoBananaPageChanged: 'the page changed while the Nano Banana request was out, so its result was not used',
       nanoBananaLost: 'the link to Google was lost after the crop was sent, so it may be billed; it was not sent again',
       nanoBananaLongWait: 'Google asked to wait more than a minute before the next Nano Banana request; try again later',
+      nanoBananaSkipped: 'skipped: you chose not to send this crop',
+      nanoBananaNoWindow: 'the crop could not be shown, so nothing was sent',
       // Not a judgement on the region at all - no engine was ever asked about
       // it. Two ways in, and the remedy differs: the engine ceiling was set
       // below the rung the region needed, or this machine has no weights for
@@ -4347,6 +4349,12 @@ export const en = {
       modelFailed: 'The model could not be saved.',
       model: 'Model',
       modelHint: 'The crop size is automatic: for each region, the smallest size the model offers that holds it with page around it. Nano Banana 2 starts at 512 px, the others at 1K.',
+      sendingHeading: 'What is sent',
+      showCrop: 'Show each crop before it is sent',
+      showCropHint: 'Before each request, including a new try after Google refuses a crop, a window shows the crop. You choose to send it, skip that region, or stop.',
+      restrictive: 'Restrictive crop',
+      restrictiveHint: 'Send only small areas around each region. The rest of the crop is sent as plain white, which can help when Google refuses a crop. Counts from the next Nano Banana window.',
+      sendingFailed: 'The choice could not be saved.',
     },
     key: {
       noStore: 'No system credential store is available, so the key could not be changed.',
@@ -4372,6 +4380,31 @@ export const en = {
       sent: 'Each region sends one crop of your page to Google. Free-tier keys let Google use it to improve its products.',
       cancel: 'Cancel',
       confirm: 'Send and clean',
+      restrictive: 'Restrictive crop is on: only small areas around each region are sent. The rest of each crop is sent as plain white.',
+    },
+    crop: {
+      title: 'Send this crop to Google?',
+      model: 'Model: {model}. Size: {size}. Ratio: {ratio}.',
+      attempt: 'Attempt {attempt}: Google refused an earlier crop of this region.',
+      alt: 'The crop of your page that will be sent, with the region to clean marked blue',
+      altRestrictive: 'The crop of your page with the region to clean marked blue. White parts are sent as plain white.',
+      restrictiveHint: 'White parts are sent as plain white. Drag on the picture to choose your own areas to send. The blue region is always sent.',
+      showHidden: 'Show the hidden page',
+      useSuggested: 'Use suggested areas',
+      drawnCount: {
+        one: '1 area you drew is sent.',
+        other: '{count} areas you drew are sent.',
+      },
+      suggestedCount: {
+        one: '1 suggested area is sent.',
+        other: '{count} suggested areas are sent.',
+      },
+      sent: 'Skip leaves this region as it is. Stop ends this request, and a batch stops.',
+      skip: 'Skip',
+      stop: 'Stop',
+      send: 'Send',
+      gone: 'This crop is no longer waiting: its request already ended.',
+      badAnswer: 'That answer to the crop window was not understood, so nothing was sent.',
     },
   },
   nanoBananaFinishing: {

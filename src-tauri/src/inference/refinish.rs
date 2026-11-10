@@ -148,9 +148,10 @@ enum Answer {
     Cloud(DecodedResultCrop),
     /// This computer's model, LaMa or FLUX, asked again ([`LocalRender`]).
     Local(Engine),
-    /// Nano Banana's, kept in the chapter's folder, and the region it was
-    /// sent as, in the coordinates of the window the region is prepared in.
-    NanoBanana(Vec<u8>, cleaner_core::engines::nano_banana::SendRegion),
+    /// Nano Banana's, kept in the chapter's folder, the region it was sent
+    /// as and, for a restrictive crop, the areas it kept, in the coordinates
+    /// of the window the region is prepared in.
+    NanoBanana(Vec<u8>, cleaner_core::engines::nano_banana::SendRegion, Option<Vec<Rect>>),
 }
 
 /// A result finished by one method, in the coordinates it was rendered in:
@@ -320,7 +321,7 @@ fn reopen_local(job: &Job, record: &PatchRecord, flux_model: &str) -> Result<Res
         }) else {
             return Ok(Err(Unavailable::Unsupported));
         };
-        Answer::NanoBanana(answer, region)
+        Answer::NanoBanana(answer, region, kept_areas(params, shift))
     } else {
         Answer::Local(engine)
     };
@@ -339,6 +340,18 @@ fn reopen_local(job: &Job, record: &PatchRecord, flux_model: &str) -> Result<Res
         grayscale: current.is_some_and(|choice| choice.grayscale),
         strays: current.is_some_and(|choice| choice.strays),
     }))
+}
+
+/// The areas a restrictive Nano Banana crop kept, from its record
+/// (`nano_banana.kept`), moved from page pixels to the window's by `shift`.
+/// `None` for a crop sent whole.
+fn kept_areas(params: &serde_json::Value, shift: (i64, i64)) -> Option<Vec<Rect>> {
+    let kept = params.get("nano_banana")?.get("kept")?.as_array()?;
+    kept.iter().map(|area| {
+        let numbers: Vec<i64> = area.as_array()?.iter().map(serde_json::Value::as_i64).collect::<Option<_>>()?;
+        let [x, y, w, h] = numbers.as_slice() else { return None };
+        Some(Rect::new(x - shift.0, y - shift.1, u32::try_from(*w).ok()?, u32::try_from(*h).ok()?))
+    }).collect()
 }
 
 /// The region a Nano Banana answer was sent as, from its record
@@ -392,10 +405,14 @@ impl Reopened {
                     .map_err(|reason| format!("refinish_declined: {reason}"))?;
                 Ok(Finished { mask: made.mask, pixels: made.pixels, matched: made.matched, tone: made.tone })
             }
-            Answer::NanoBanana(answer, region) => {
-                let prepared = cleaner_core::engines::nano_banana::Prepared::new(
+            Answer::NanoBanana(answer, region, kept) => {
+                let mut prepared = cleaner_core::engines::nano_banana::Prepared::new(
                     &self.cloud.input.image, &self.cloud.fitted, *region, Some(choice), &[])
                     .map_err(|e| e.to_string())?;
+                // The model was shown white outside these: the page is read there again.
+                if let Some(kept) = kept {
+                    prepared.restrict(kept).map_err(|e| e.to_string())?;
+                }
                 let rendered = prepared.finish(answer).map_err(|e| e.to_string())?;
                 Ok(Finished { mask: rendered.mask, pixels: rendered.pixels, matched: rendered.matched, tone: rendered.tone })
             }
@@ -739,4 +756,18 @@ pub async fn set_region_finishing(
         apply_at(&journal, &job_path, &region_id, choice, &mut crate::region::LocalModels::open(&app))
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_restrictive_crops_kept_areas_are_read_into_the_window() {
+        let params = serde_json::json!({ "nano_banana": { "kept": [[100, 200, 30, 40], [5, 6, 7, 8]] } });
+        assert_eq!(kept_areas(&params, (10, 20)), Some(vec![Rect::new(90, 180, 30, 40), Rect::new(-5, -14, 7, 8)]));
+        assert_eq!(kept_areas(&serde_json::json!({ "nano_banana": {} }), (0, 0)), None, "a crop sent whole");
+        let bad = serde_json::json!({ "nano_banana": { "kept": [[1, 2, -3, 4]] } });
+        assert_eq!(kept_areas(&bad, (0, 0)), None);
+    }
 }

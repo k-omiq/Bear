@@ -196,6 +196,39 @@ export function grayPngDataUrl(width, height, pixels) {
   return `data:image/png;base64,${base64(png)}`
 }
 
+/**
+ * An 8-bit RGB PNG, base64 with no data URL prefix: the shape a
+ * `nano-banana-crop` event carries its picture in.
+ *
+ * @param {number} width
+ * @param {number} height
+ * @param {Uint8Array} pixels - `width * height * 3` samples, row-major
+ * @returns {string}
+ */
+export function rgbPngBase64(width, height, pixels) {
+  const row = width * 3
+  const raw = new Uint8Array((row + 1) * height)
+  for (let y = 0; y < height; y += 1) {
+    raw.set(pixels.subarray(y * row, (y + 1) * row), y * (row + 1) + 1)
+  }
+  const header = new Uint8Array(13)
+  const view = new DataView(header.buffer)
+  view.setUint32(0, width)
+  view.setUint32(4, height)
+  header[8] = 8
+  header[9] = 2
+  const chunks = [chunk('IHDR', header), chunk('IDAT', zlibDeflate(raw)), chunk('IEND', new Uint8Array(0))]
+  const size = 8 + chunks.reduce((sum, part) => sum + part.length, 0)
+  const png = new Uint8Array(size)
+  png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  let at = 8
+  for (const part of chunks) {
+    png.set(part, at)
+    at += part.length
+  }
+  return base64(png)
+}
+
 /** @param {string} type @param {Uint8Array} data */
 function chunk(type, data) {
   const out = new Uint8Array(12 + data.length)

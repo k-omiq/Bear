@@ -93,26 +93,38 @@ export function createRunner(deps) {
       // `apply` answers false for a region it left as it was (a cloud render
       // that failed): it is still reported, and not counted. It answers
       // 'halt' to end the run here, after this page, with nothing reported
-      // for the region: a Nano Banana batch whose account failed.
+      // for the region: a Nano Banana batch whose account failed. It may
+      // answer a promise of either, and the run waits for it: a Nano Banana
+      // crop shown before it is sent.
       const answer = active.apply ? active.apply(region, page, ctx) : (deps.cleanRegion(region, page, ctx), true)
-      if (answer === 'halt') {
-        active.halted = true
-        return schedule(() => finishPage(entry), deps.timing.pageTail)
+      const run = active
+      const settle = (/** @type {unknown} */ settled) => {
+        // A run stopped while it waited has ended already.
+        if (active !== run) return
+        if (settled === 'halt') {
+          active.halted = true
+          return schedule(() => finishPage(entry), deps.timing.pageTail)
+        }
+        if (settled !== false) active.regionsCleaned += 1
+        // Detect reports its regions with the page, not one by one: a stored
+        // detection is no region *done*.
+        if (active.reportRegions) {
+          deps.emit({
+            type: 'region-done',
+            runId: active.runId,
+            chapterId: entry.chapterId,
+            pageId: page.id,
+            pageIndex: page.index,
+            region,
+          })
+        }
+        stepRegion(i + 1)
       }
-      if (answer !== false) active.regionsCleaned += 1
-      // Detect reports its regions with the page, not one by one: a stored
-      // detection is no region *done*.
-      if (active.reportRegions) {
-        deps.emit({
-          type: 'region-done',
-          runId: active.runId,
-          chapterId: entry.chapterId,
-          pageId: page.id,
-          pageIndex: page.index,
-          region,
-        })
+      if (answer && typeof (/** @type {any} */ (answer).then) === 'function') {
+        /** @type {Promise<unknown>} */ (answer).then(settle, () => settle(false))
+      } else {
+        settle(answer)
       }
-      stepRegion(i + 1)
     }, deps.timing.region)
   }
 
@@ -161,7 +173,7 @@ export function createRunner(deps) {
   return {
     /**
      * @param {QueueEntry[]} queue
-     * @param {{ chapterId: string, engineCeiling?: string, pick?: (page: Object) => Object[], apply?: (region: Object, page: Object, ctx: Object) => boolean|'halt'|void, pageStatus?: (page: Object) => string, reportRegions?: boolean, closing?: (ending: string, run: Object) => string }} options
+     * @param {{ chapterId: string, engineCeiling?: string, pick?: (page: Object) => Object[], apply?: (region: Object, page: Object, ctx: Object) => boolean|'halt'|void|Promise<boolean|'halt'>, pageStatus?: (page: Object) => string, reportRegions?: boolean, closing?: (ending: string, run: Object) => string }} options
      *   `pick`, `apply` and `pageStatus` replace the automatic pass's own
      *   choices for a run of another step: which regions of a page it takes,
      *   what it does to each, and what the page is when it is done.

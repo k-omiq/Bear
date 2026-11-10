@@ -724,6 +724,9 @@ struct Bench {
     /// How a Nano Banana answer is finished: its own setting, not the one
     /// this computer's models share ([`crate::inference::nano_banana_finishing`]).
     nano_banana_finishing: cleaner_core::engines::postprocess::Choice,
+    /// Whether each Nano Banana crop is shown to the person before it is
+    /// sent (`nanoBananaShowCrop`), read as each region's edit starts.
+    nano_banana_show_crops: bool,
     #[cfg(test)]
     detected_seed: Option<Mask>,
 }
@@ -780,27 +783,35 @@ impl Bench {
         let nano_banana_finishing = settings.as_ref()
             .and_then(|settings| crate::inference::nano_banana_finishing::from_settings(settings).ok())
             .unwrap_or_default();
+        let nano_banana_show_crops = settings.as_ref()
+            .and_then(|settings| settings.get(crate::inference::nano_banana_crop::SHOW_KEY))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         Bench {
             rung2,
             detector: run::detector_on_demand(&holding(run::DETECTOR), detector_preference),
             nano_banana: None,
             nano_banana_finishing,
+            nano_banana_show_crops,
             #[cfg(test)]
             detected_seed: None,
         }
     }
 
     /// `fitted` on `page`, edited by Gemini and finished by `finishing`, the
-    /// record of how, and the answer as it came.
+    /// record of how, and the answer as it came. `origin` is where `page`
+    /// sits on the page the patch is stored on, to name a crop shown first.
     fn nano_banana(
         &self,
         page: &Raster,
         fitted: &Fitted,
         share: Option<&crate::inference::nano_banana::Neighbours>,
         finishing: cleaner_core::engines::postprocess::Choice,
+        origin: (i64, i64),
     ) -> Result<(run::Made, quality::Assessment, serde_json::Value, Vec<u8>), &'static str> {
         let granted = self.nano_banana.as_ref().ok_or("decline.reason.nanoBananaOff")?;
-        let edited = crate::inference::nano_banana::render(granted, page, fitted, Some(finishing), share)?;
+        let show = self.nano_banana_show_crops.then_some(crate::inference::nano_banana::Show { origin });
+        let edited = crate::inference::nano_banana::render(granted, page, fitted, Some(finishing), share, show.as_ref())?;
         let rendered = edited.rendered;
         let made = run::Made {
             engine: Engine::NanoBanana,
@@ -1514,15 +1525,23 @@ fn page_state(project: &cleaner_core::project::Project, source_idx: usize) -> Op
     )).ok()
 }
 
-/// A Nano Banana record's crop moved from the read window's pixels to the
-/// page's, as the patch it describes is ([`translate_made`]).
+/// A Nano Banana record's crop, and a restrictive crop's kept areas, moved
+/// from the read window's pixels to the page's, as the patch it describes is
+/// ([`translate_made`]).
 fn nano_banana_record_on_page(mut record: serde_json::Value, by: (i64, i64)) -> serde_json::Value {
-    if let Some(crop) = record.get_mut("crop").and_then(serde_json::Value::as_array_mut) {
+    let shift = |rect: &mut serde_json::Value| {
+        let Some(rect) = rect.as_array_mut() else { return };
         for (at, shift) in [(0, by.0), (1, by.1)] {
-            if let Some(value) = crop.get(at).and_then(serde_json::Value::as_i64) {
-                crop[at] = serde_json::json!(value + shift);
+            if let Some(value) = rect.get(at).and_then(serde_json::Value::as_i64) {
+                rect[at] = serde_json::json!(value + shift);
             }
         }
+    };
+    if let Some(crop) = record.get_mut("crop") {
+        shift(crop);
+    }
+    if let Some(kept) = record.get_mut("kept").and_then(serde_json::Value::as_array_mut) {
+        kept.iter_mut().for_each(shift);
     }
     record
 }
@@ -2129,7 +2148,8 @@ fn edit_with_bench_render(
                     .filter(|_| plan.try_again)
                     .and_then(|record| crate::inference::nano_banana_finishing::recorded(&record.provenance))
                     .unwrap_or(bench.nano_banana_finishing);
-                let (rendered, again) = hold.without(|| bench.nano_banana(page, &fitted, share.as_ref(), finishing));
+                let origin = (patch_shift.0 + input_shift.0, patch_shift.1 + input_shift.1);
+                let (rendered, again) = hold.without(|| bench.nano_banana(page, &fitted, share.as_ref(), finishing, origin));
                 if let Err(refused) = again {
                     // A run took the page while the request was out. An answer
                     // that came is paid for and can not be written: said so,
@@ -3049,6 +3069,7 @@ mod text_shape_boundary_tests {
             rung2: run::Rung2::new(&models, Preference::CpuOnly),
             nano_banana: None,
             nano_banana_finishing: Default::default(),
+            nano_banana_show_crops: false,
             detected_seed: None,
         };
         let edit_plan = Plan {
@@ -7833,6 +7854,7 @@ mod tests {
         crate::inference::nano_banana::Config {
             model: cleaner_core::engines::nano_banana::Model::DEFAULT,
             instruction: None,
+            restrictive: false,
         }
     }
 
@@ -8042,6 +8064,9 @@ mod tests {
         let moved = nano_banana_record_on_page(record, (700, 1268));
         assert_eq!(moved["crop"], serde_json::json!([712, 1298, 512, 512]));
         assert_eq!(moved["model"], "m");
+        let record = serde_json::json!({ "crop": [12, 30, 512, 512], "kept": [[20, 40, 10, 10], [0, 0, 5, 5]] });
+        let moved = nano_banana_record_on_page(record, (700, 1268));
+        assert_eq!(moved["kept"], serde_json::json!([[720, 1308, 10, 10], [700, 1268, 5, 5]]));
     }
 
     #[test]
@@ -10303,6 +10328,7 @@ mod tests {
             rung2: run::Rung2::new(&models, Preference::CpuOnly),
             nano_banana: None,
             nano_banana_finishing: Default::default(),
+            nano_banana_show_crops: false,
             detected_seed: None,
         }
     }

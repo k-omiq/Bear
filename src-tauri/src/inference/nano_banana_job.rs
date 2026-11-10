@@ -103,7 +103,7 @@ pub(crate) fn verdict(reason: &str) -> Verdict {
         Verdict::Stopped
     } else if reason == CLOUD_OFF
         || is(&[Failure::NoKey, Failure::KeyStore, Failure::KeyRejected, Failure::KeyExpired,
-            Failure::Location, Failure::Billing, Failure::ModelRejected, Failure::LongWait])
+            Failure::Location, Failure::Billing, Failure::ModelRejected, Failure::LongWait, Failure::NoWindow])
     {
         Verdict::Account
     } else if is(&[Failure::RateLimited, Failure::Unreachable]) {
@@ -551,7 +551,7 @@ mod tests {
     use std::sync::Mutex;
 
     fn config() -> Config {
-        Config { model: Model::DEFAULT, instruction: None }
+        Config { model: Model::DEFAULT, instruction: None, restrictive: false }
     }
 
     fn target(page: u32, id: &str) -> Target {

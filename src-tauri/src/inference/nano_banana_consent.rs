@@ -282,7 +282,7 @@ mod tests {
     use cleaner_core::engines::nano_banana::Model;
 
     fn config(instruction: Option<&str>) -> Config {
-        Config { model: Model::DEFAULT, instruction: instruction.map(str::to_owned) }
+        Config { model: Model::DEFAULT, instruction: instruction.map(str::to_owned), restrictive: false }
     }
 
     /// A single region's share, on chapter `c1`.

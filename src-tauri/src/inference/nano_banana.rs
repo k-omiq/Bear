@@ -44,6 +44,9 @@ use super::secrets::KEYRING_SERVICE;
 pub const MODEL_KEY: &str = "nanoBananaModel";
 /// What the person asks Nano Banana to do beyond the built-in removal.
 pub const PROMPT_KEY: &str = "nanoBananaPrompt";
+/// Whether a crop sends only small areas round its regions and white
+/// everywhere else ([`Prepared::restrict`]).
+pub const RESTRICTIVE_KEY: &str = "nanoBananaRestrictive";
 /// The longest instruction sent, in characters.
 pub const MAX_INSTRUCTION_CHARS: usize = 600;
 
@@ -163,6 +166,9 @@ pub(crate) struct Granted {
 pub(crate) struct Config {
     pub model: Model,
     pub instruction: Option<String>,
+    /// Restrictive crops: what the person confirmed, so a switch flipped
+    /// during a batch applies from the next window.
+    pub restrictive: bool,
 }
 
 impl Config {
@@ -173,6 +179,7 @@ impl Config {
         Config {
             model,
             instruction: clean_instruction(text(PROMPT_KEY)),
+            restrictive: settings.and_then(|value| value.get(RESTRICTIVE_KEY)).and_then(Value::as_bool).unwrap_or(false),
         }
     }
 
@@ -219,6 +226,12 @@ pub(crate) enum Failure {
     KeptMark,
     /// [`nano_banana_stop`] ended the edit.
     Stopped,
+    /// The person was shown the crop and chose not to send it
+    /// ([`super::nano_banana_crop`]).
+    Skipped,
+    /// The crop was to be shown first and there was no window to show it in,
+    /// so it was not sent.
+    NoWindow,
 }
 
 impl Failure {
@@ -239,6 +252,8 @@ impl Failure {
             Failure::BadAnswer | Failure::BadRequest => "decline.reason.nanoBananaBadAnswer",
             Failure::KeptMark => "decline.reason.nanoBananaKeptMark",
             Failure::Stopped => "decline.reason.nanoBananaStopped",
+            Failure::Skipped => "decline.reason.nanoBananaSkipped",
+            Failure::NoWindow => "decline.reason.nanoBananaNoWindow",
         }
     }
 }
@@ -796,6 +811,8 @@ struct Shared {
     /// The regions the answer has not been used for, with the applied mask each
     /// was marked by, in source pixels.
     members: Vec<(String, Mask)>,
+    /// What a restrictive crop kept, in source pixels: the rest was sent white.
+    kept: Option<Vec<Rect>>,
     made: Instant,
 }
 
@@ -831,7 +848,8 @@ pub(crate) fn shared_crop(scope: &str, config: &Config, region_id: &str) -> Opti
 /// The answer waiting for this region, used up by taking it. Not taken when its
 /// crop is not in this window or this region's mask is wider than what was
 /// marked, because the model was never told to clean the extra.
-fn take_shared(share: &Neighbours, config: &Config, applied: &Mask, page: &Raster) -> Option<(Vec<u8>, SendRegion)> {
+fn take_shared(share: &Neighbours, config: &Config, applied: &Mask, page: &Raster)
+    -> Option<(Vec<u8>, SendRegion, Option<Vec<Rect>>)> {
     let mut kept = SHARED.lock().ok()?;
     kept.retain(|entry| entry.made.elapsed() < SHARED_TTL);
     let at = kept.iter().position(|entry| entry.scope == share.scope && entry.model == config.model.id
@@ -848,7 +866,8 @@ fn take_shared(share: &Neighbours, config: &Config, applied: &Mask, page: &Raste
         return None;
     }
     entry.members.remove(member);
-    let taken = (entry.answer.clone(), SendRegion { crop: local, ..entry.region });
+    let areas = entry.kept.as_ref().map(|areas| areas.iter().map(|area| Rect::new(area.x - ox, area.y - oy, area.w, area.h)).collect());
+    let taken = (entry.answer.clone(), SendRegion { crop: local, ..entry.region }, areas);
     if entry.members.is_empty() {
         kept.remove(at);
     }
@@ -856,7 +875,8 @@ fn take_shared(share: &Neighbours, config: &Config, applied: &Mask, page: &Raste
 }
 
 /// Keep an answer for the regions that shared its crop.
-fn keep_shared(share: &Neighbours, config: &Config, region: SendRegion, answer: &[u8], members: &[usize]) {
+fn keep_shared(share: &Neighbours, config: &Config, region: SendRegion, answer: &[u8], members: &[usize],
+    areas: Option<&[Rect]>) {
     if members.is_empty() {
         return;
     }
@@ -873,18 +893,17 @@ fn keep_shared(share: &Neighbours, config: &Config, region: SendRegion, answer: 
         region: SendRegion { crop: Rect::new(region.crop.x + ox, region.crop.y + oy, region.crop.w, region.crop.h), ..region },
         answer: answer.to_vec(),
         members: members.iter().map(|at| (share.others[*at].0.clone(), shifted(&share.others[*at].1, (ox, oy)))).collect(),
+        kept: areas.map(|areas| areas.iter().map(|area| Rect::new(area.x + ox, area.y + oy, area.w, area.h)).collect()),
         made: Instant::now(),
     });
 }
 
 /// A region edited from `answer`, and how, for the patch's record.
-fn finish(config: &Config, prepared: &Prepared, region: SendRegion, answer: &[u8], refused: usize, shared: bool)
-    -> Result<Edited, AnswerError> {
+fn finish(config: &Config, prepared: &Prepared, region: SendRegion, answer: &[u8], refused: usize, shared: bool,
+    kept: Option<&[Rect]>) -> Result<Edited, AnswerError> {
     let rendered = prepared.finish(answer)?;
     let crop = region.crop;
-    Ok(Edited {
-        rendered,
-        record: json!({
+    let mut record = json!({
             "model": config.model.id,
             "image_size": region.tier.wire(),
             "aspect_ratio": region.ratio,
@@ -893,9 +912,12 @@ fn finish(config: &Config, prepared: &Prepared, region: SendRegion, answer: &[u8
             "crops_refused": refused,
             "instruction": config.instruction.is_some(),
             "shared_answer": shared,
-        }),
-        answer: answer.to_vec(),
-    })
+    });
+    if let Some(kept) = kept {
+        // In the window's pixels, moved to the page's with the crop.
+        record["kept"] = json!(kept.iter().map(|area| [area.x, area.y, i64::from(area.w), i64::from(area.h)]).collect::<Vec<_>>());
+    }
+    Ok(Edited { rendered, record, answer: answer.to_vec() })
 }
 
 /// The region from an answer an earlier region asked for, with this one marked
@@ -903,18 +925,72 @@ fn finish(config: &Config, prepared: &Prepared, region: SendRegion, answer: &[u8
 fn from_shared(config: &Config, page: &Raster, fitted: &Fitted, finishing: Option<Choice>, share: &Neighbours)
     -> Option<Result<Edited, &'static str>> {
     let applied = applied_mask(fitted, page.width, page.height);
-    let (answer, region) = take_shared(share, config, &applied, page)?;
-    let prepared = match Prepared::new(page, fitted, region, finishing, &[]) {
+    let (answer, region, kept) = take_shared(share, config, &applied, page)?;
+    let mut prepared = match Prepared::new(page, fitted, region, finishing, &[]) {
         Ok(prepared) => prepared,
         Err(error) => return Some(Err(model_reason(error))),
     };
-    Some(finish(config, &prepared, region, &answer, 0, true).map_err(answer_reason))
+    if let Some(kept) = &kept {
+        if let Err(error) = prepared.restrict(kept) {
+            return Some(Err(model_reason(error)));
+        }
+    }
+    Some(finish(config, &prepared, region, &answer, 0, true, kept.as_deref()).map_err(answer_reason))
+}
+
+/// How a crop is shown before it is sent: where the edit's window sits on the
+/// page, so the crop is named in page pixels.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Show {
+    pub origin: (i64, i64),
+}
+
+/// Ready `prepared` to go: shown to the person first when `show` asks it
+/// ([`super::nano_banana_crop`]), and cut down to small areas when the grant
+/// says restrictive. Answers the areas kept, in the window's pixels, or
+/// `None` when the whole crop goes.
+fn settle(turn: &Turn, config: &Config, show: Option<&Show>, prepared: &mut Prepared, attempt: usize)
+    -> Result<Option<Vec<Rect>>, &'static str> {
+    let crop = prepared.region().crop;
+    let in_crop = |area: &Rect| [area.x - crop.x, area.y - crop.y, i64::from(area.w), i64::from(area.h)];
+    let suggested = if config.restrictive { prepared.suggested() } else { Vec::new() };
+    let mut picked = None;
+    if let Some(show) = show {
+        let region = prepared.region();
+        let shown = super::nano_banana_crop::Shown {
+            model: config.model.id,
+            ratio: region.ratio,
+            size: region.tier.wire(),
+            crop: [crop.x + show.origin.0, crop.y + show.origin.1, i64::from(crop.w), i64::from(crop.h)],
+            attempt,
+            restrictive: config.restrictive,
+            holes: prepared.holes().iter().map(in_crop).collect(),
+            suggested: suggested.iter().map(in_crop).collect(),
+            png: prepared.marked_png().to_vec(),
+        };
+        match super::nano_banana_crop::ask(shown, &|| turn.check()).map_err(Failure::reason_key)? {
+            super::nano_banana_crop::Answer::Send(areas) => {
+                picked = areas.map(|areas| areas.iter()
+                    .map(|area| Rect::new(area.x + crop.x, area.y + crop.y, area.w, area.h)).collect::<Vec<_>>());
+            }
+            super::nano_banana_crop::Answer::Skip => return Err(Failure::Skipped.reason_key()),
+            super::nano_banana_crop::Answer::Stop => {
+                turn.stop.raise();
+                return Err(Failure::Stopped.reason_key());
+            }
+        }
+    }
+    if !config.restrictive {
+        return Ok(None);
+    }
+    let areas = picked.unwrap_or(suggested);
+    prepared.restrict(&areas).map(Some).map_err(model_reason)
 }
 
 /// `stop` is the grant's, taken when the region's share was spent, so a Stop
 /// that came at any time since ends the edit at [`Gate::enter`] at the latest.
 fn render_with(client: &Client, config: &Config, stop: &Stop, page: &Raster, fitted: &Fitted, finishing: Option<Choice>,
-    share: Option<&Neighbours>) -> Result<Edited, &'static str> {
+    share: Option<&Neighbours>, show: Option<&Show>) -> Result<Edited, &'static str> {
     if let Some(share) = share {
         match from_shared(config, page, fitted, finishing, share) {
             Some(Ok(edited)) => return Ok(edited),
@@ -932,7 +1008,8 @@ fn render_with(client: &Client, config: &Config, stop: &Stop, page: &Raster, fit
     // kept the mark. What another crop would not change ends the edit.
     let mut last = Failure::Recited.reason_key();
     for (refused, region) in group.regions.into_iter().take(MAX_CROPS).enumerate() {
-        let prepared = Prepared::new(page, fitted, region, finishing, &companions).map_err(model_reason)?;
+        let mut prepared = Prepared::new(page, fitted, region, finishing, &companions).map_err(model_reason)?;
+        let kept = settle(&turn, config, show, &mut prepared, refused)?;
         let answer = match client.edit(&turn, config.model.id, prepared.marked_png(), region, config.instruction.as_deref()) {
             Ok(answer) => answer,
             Err(failure @ (Failure::Recited | Failure::BadAnswer)) => {
@@ -941,10 +1018,10 @@ fn render_with(client: &Client, config: &Config, stop: &Stop, page: &Raster, fit
             }
             Err(failure) => return Err(failure.reason_key()),
         };
-        match finish(config, &prepared, region, &answer, refused, false) {
+        match finish(config, &prepared, region, &answer, refused, false, kept.as_deref()) {
             Ok(edited) => {
                 if let Some(share) = share {
-                    keep_shared(share, config, region, &answer, &group.members);
+                    keep_shared(share, config, region, &answer, &group.members, kept.as_deref());
                 }
                 return Ok(edited);
             }
@@ -959,14 +1036,14 @@ fn render_with(client: &Client, config: &Config, stop: &Stop, page: &Raster, fit
 /// says. `share` names the page's other regions, which ride in the same
 /// request when they fit its crop.
 pub(crate) fn render(granted: &Granted, page: &Raster, fitted: &Fitted, finishing: Option<Choice>,
-    share: Option<&Neighbours>) -> Result<Edited, &'static str> {
+    share: Option<&Neighbours>, show: Option<&Show>) -> Result<Edited, &'static str> {
     // Before the keychain, which may prompt for minutes.
     if granted.stop.raised() {
         return Err(Failure::Stopped.reason_key());
     }
     let key = read_key(&OsStore, &KEY).map_err(Failure::reason_key)?.ok_or(Failure::NoKey.reason_key())?;
     let client = Client::new(ENDPOINT, &key, LIMITS, &GATE).map_err(Failure::reason_key)?;
-    render_with(&client, &granted.config, &granted.stop, page, fitted, finishing, share)
+    render_with(&client, &granted.config, &granted.stop, page, fitted, finishing, share, show)
 }
 
 /// Why a credential store did not do what it was asked.
@@ -1368,8 +1445,8 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(422, "{}".into()); MAX_CROPS]);
-        let config = Config { model: Model::DEFAULT, instruction: None };
-        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).err();
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBadAnswer"));
         assert_eq!(server.seen.lock().unwrap().len(), 1);
     }
@@ -1530,7 +1607,7 @@ mod tests {
         let hole = Rect::new(600, 700, 40, 20);
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
-        render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).unwrap();
+        render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
         let seen = server.seen.lock().unwrap();
         assert_eq!(seen[0].1["generationConfig"]["imageConfig"], json!({ "imageSize": "1K", "aspectRatio": "1:1" }));
     }
@@ -1617,8 +1694,8 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
-        let config = Config { model: Model::DEFAULT, instruction: None };
-        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).unwrap();
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
 
         let seen = server.seen.lock().unwrap();
         assert_eq!(seen[0].1["generationConfig"]["imageConfig"], json!({ "imageSize": "512", "aspectRatio": "1:1" }));
@@ -1633,6 +1710,103 @@ mod tests {
         assert_eq!(at(hole.x + 20, hole.y + 10), 200);
     }
 
+    /// The crop a request carried, decoded.
+    fn sent_crop(body: &Value) -> image::RgbImage {
+        let data = body["contents"][0]["parts"][1]["inlineData"]["data"].as_str().unwrap();
+        let png = base64::engine::general_purpose::STANDARD.decode(data).unwrap();
+        image::load_from_memory(&png).unwrap().into_rgb8()
+    }
+
+    #[test]
+    fn a_restrictive_crop_goes_out_white_outside_the_region_and_records_what_it_kept() {
+        let hole = Rect::new(600, 700, 40, 20);
+        let page = page_with_lettering(1200, 1600, hole);
+        let fitted = fitted_over(&page, hole);
+        let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: true };
+        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
+        let seen = server.seen.lock().unwrap();
+        let sent = sent_crop(&seen[0].1);
+        let crop = &edited.record["crop"];
+        let (cx, cy) = (crop[0].as_i64().unwrap(), crop[1].as_i64().unwrap());
+        assert_eq!(sent.get_pixel(0, 0).0, [255; 3], "the crop's corner is sent white");
+        let kept = edited.record["kept"].as_array().unwrap();
+        assert_eq!(kept.len(), 2, "the suggested area and the hole: {kept:?}");
+        let area = &kept[0];
+        let (ax, ay) = (area[0].as_i64().unwrap(), area[1].as_i64().unwrap());
+        let applied = applied_mask(&fitted, page.width, page.height).bounds;
+        assert_eq!((ax, ay), (applied.x - 24, applied.y - 24), "24 px of page round the region");
+        let inside = sent.get_pixel((ax + 2 - cx) as u32, (ay + 2 - cy) as u32).0;
+        assert_eq!(inside, [page.sample((ax + 2) as u32, (ay + 2) as u32, 0) as u8; 3], "the area is the page");
+        // Written as an unrestricted crop is: the hole cleaned.
+        let rendered = &edited.rendered;
+        let bounds = rendered.mask.bounds;
+        assert_eq!(rendered.pixels.sample((hole.x + 20 - bounds.x) as u32, (hole.y + 10 - bounds.y) as u32, 0), 200);
+    }
+
+    #[test]
+    fn a_crop_shown_first_goes_only_as_the_person_answers() {
+        use super::super::nano_banana_crop::nano_banana_crop_answer;
+        let answers: Arc<Mutex<Vec<(&str, Option<Vec<[i64; 4]>>)>>> = Arc::new(Mutex::new(Vec::new()));
+        let shown: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = {
+            let (answers, shown) = (Arc::clone(&answers), Arc::clone(&shown));
+            crate::events::register(Box::new(move |event| {
+                let crate::events::Event::NanoBananaCrop { id, .. } = event else { return };
+                shown.lock().unwrap().push(serde_json::to_value(event).unwrap());
+                let (answer, keep) = answers.lock().unwrap().remove(0);
+                nano_banana_crop_answer(id.clone(), answer.to_owned(), keep).unwrap();
+            }))
+        };
+        let hole = Rect::new(600, 700, 40, 20);
+        let page = page_with_lettering(1200, 1600, hole);
+        let fitted = fitted_over(&page, hole);
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: true };
+        let show = Show { origin: (1000, 2000) };
+
+        // Skipped: nothing goes.
+        let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
+        answers.lock().unwrap().push(("skip", None));
+        let skipped = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, Some(&show)).err();
+        assert_eq!(skipped, Some(Failure::Skipped.reason_key()));
+        assert!(server.seen.lock().unwrap().is_empty(), "a skipped crop was sent");
+        let event = shown.lock().unwrap().remove(0);
+        assert_eq!(event["type"], "nano-banana-crop");
+        assert_eq!(event["restrictive"], true);
+        let crop = event["crop"].clone();
+        assert_eq!((crop[2].clone(), crop[3].clone()), (json!(512), json!(512)));
+        assert!(crop[0].as_i64().unwrap() >= 1000, "named in page pixels: {crop}");
+        let png = base64::engine::general_purpose::STANDARD.decode(event["png"].as_str().unwrap()).unwrap();
+        let picture = image::load_from_memory(&png).unwrap().into_rgb8();
+        assert_eq!(picture.dimensions(), (512, 512));
+        assert_ne!(picture.get_pixel(0, 0).0, [255; 3], "the person sees the whole crop");
+        let (holes, suggested) = (event["holes"].as_array().unwrap().clone(), event["suggested"].as_array().unwrap().clone());
+        assert_eq!(holes.len(), 1);
+        assert_eq!(suggested[0][0].as_i64().unwrap(), holes[0][0].as_i64().unwrap() - 24);
+
+        // Sent with an area the person drew: that area and the hole, the rest white.
+        let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
+        answers.lock().unwrap().push(("send", Some(vec![[0, 0, 10, 10]])));
+        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, Some(&show)).unwrap();
+        let sent = sent_crop(&server.seen.lock().unwrap()[0].1);
+        let crop = &edited.record["crop"];
+        let (cx, cy) = (crop[0].as_i64().unwrap(), crop[1].as_i64().unwrap());
+        assert_eq!(sent.get_pixel(5, 5).0, [page.sample((cx + 5) as u32, (cy + 5) as u32, 0) as u8; 3]);
+        assert_eq!(sent.get_pixel(30, 30).0, [255; 3], "outside what was drawn is white");
+        assert_eq!(edited.record["kept"][0], json!([cx, cy, 10, 10]));
+        shown.lock().unwrap().clear();
+
+        // Stopped: nothing goes, and the grant's stop is raised.
+        let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
+        answers.lock().unwrap().push(("stop", None));
+        let stop = Stop::default();
+        let stopped = render_with(&client(&server), &config, &stop, &page, &fitted, None, None, Some(&show)).err();
+        crate::events::unregister(sink);
+        assert_eq!(stopped, Some(Failure::Stopped.reason_key()));
+        assert!(stop.raised());
+        assert!(server.seen.lock().unwrap().is_empty());
+    }
+
     fn recited() -> (u16, String) {
         (200, json!({ "candidates": [{ "finishReason": "IMAGE_RECITATION" }] }).to_string())
     }
@@ -1643,8 +1817,8 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![recited(), (200, image_reply(&answer_of(256, 1024, [200, 200, 200])))]);
-        let config = Config { model: Model::DEFAULT, instruction: None };
-        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).unwrap();
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
         assert_eq!(edited.record["aspect_ratio"], "1:4");
         assert_eq!(edited.record["crops_refused"], 1);
         let seen = server.seen.lock().unwrap();
@@ -1658,8 +1832,8 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![recited(); MAX_CROPS]);
-        let config = Config { model: Model::DEFAULT, instruction: None };
-        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).err();
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBlocked"));
         assert_eq!(server.seen.lock().unwrap().len(), MAX_CROPS);
     }
@@ -1670,8 +1844,8 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, json!({ "candidates": [{ "finishReason": "IMAGE_SAFETY" }] }).to_string())]);
-        let config = Config { model: Model::DEFAULT, instruction: None };
-        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).err();
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBlocked"));
         assert_eq!(server.seen.lock().unwrap().len(), 1);
     }
@@ -1682,8 +1856,8 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve_with(MAX_CROPS, |_, body| http(200, "", &image_reply(&sent_back(body))));
-        let config = Config { model: Model::DEFAULT, instruction: None };
-        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).err();
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaKeptMark"));
         assert!(server.seen.lock().unwrap().len() > 1, "only one crop was offered");
     }
@@ -1722,12 +1896,12 @@ mod tests {
     fn a_neighbour_rides_in_the_same_request_and_is_cleaned_from_its_answer() {
         let (page, a, b) = two_holes();
         let (fit_a, fit_b) = (fitted_over(&page, a), fitted_over(&page, b));
-        let config = Config { model: Model::DEFAULT, instruction: None };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
         let b_mask = applied_mask(&fit_b, page.width, page.height);
 
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-ride", "a", vec![("b".into(), b_mask)]);
-        let first = render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a)).unwrap();
+        let first = render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a), None).unwrap();
         assert_eq!(first.record["shared_answer"], false);
         {
             // The one request marked the neighbour as well as this region.
@@ -1742,7 +1916,7 @@ mod tests {
 
         // The neighbour's own turn: there is no server, so any request fails.
         let share_b = neighbours("t-shared-ride", "b", Vec::new());
-        let second = render_with(&nowhere(), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b)).unwrap();
+        let second = render_with(&nowhere(), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b), None).unwrap();
         assert_eq!(second.record["shared_answer"], true);
         let rendered = &second.rendered;
         let at = |x: i64, y: i64| rendered.pixels.sample((x - rendered.mask.bounds.x) as u32, (y - rendered.mask.bounds.y) as u32, 0);
@@ -1751,7 +1925,7 @@ mod tests {
         // An answer is used once: asking again is a new request.
         let again = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_again = neighbours("t-shared-ride", "b", Vec::new());
-        render_with(&client(&again), &config, &Stop::default(), &page, &fit_b, None, Some(&share_again)).unwrap();
+        render_with(&client(&again), &config, &Stop::default(), &page, &fit_b, None, Some(&share_again), None).unwrap();
         assert_eq!(again.seen.lock().unwrap().len(), 1);
     }
 
@@ -1759,17 +1933,17 @@ mod tests {
     fn a_neighbour_whose_mask_grew_past_what_was_marked_is_sent_again() {
         let (page, a, b) = two_holes();
         let (fit_a, fit_b) = (fitted_over(&page, a), fitted_over(&page, b));
-        let config = Config { model: Model::DEFAULT, instruction: None };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
         let small = applied_mask(&fit_b, page.width, page.height);
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-grew", "b-grew", vec![("b-grew".into(), small.clone())]);
-        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a)).unwrap();
+        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a), None).unwrap();
 
         // B now reaches 30 px further left than it was marked.
         let wider = fitted_over(&page, Rect::new(b.x - 30, b.y, b.w + 30, b.h));
         let fresh = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_b = neighbours("t-shared-grew", "b-grew", Vec::new());
-        let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &wider, None, Some(&share_b)).unwrap();
+        let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &wider, None, Some(&share_b), None).unwrap();
         assert_eq!(edited.record["shared_answer"], false);
         assert_eq!(fresh.seen.lock().unwrap().len(), 1);
     }
@@ -1779,21 +1953,21 @@ mod tests {
         let (page, a, b) = two_holes();
         let (fit_a, fit_b) = (fitted_over(&page, a), fitted_over(&page, b));
         let b_mask = applied_mask(&fit_b, page.width, page.height);
-        let config = Config { model: Model::DEFAULT, instruction: None };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-scope", "b", vec![("b".into(), b_mask)]);
-        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a)).unwrap();
+        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a), None).unwrap();
 
         for (scope, instruction) in [("t-other-page", None), ("t-shared-scope", Some("erase it all".to_owned()))] {
-            let config = Config { model: Model::DEFAULT, instruction };
+            let config = Config { model: Model::DEFAULT, instruction, restrictive: false };
             let fresh = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
             let share_b = neighbours(scope, "b", Vec::new());
-            let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b)).unwrap();
+            let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b), None).unwrap();
             assert_eq!(edited.record["shared_answer"], false, "{scope}");
         }
         // The page and the words are the same again, and the answer is still there.
         let share_b = neighbours("t-shared-scope", "b", Vec::new());
-        let edited = render_with(&nowhere(), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b)).unwrap();
+        let edited = render_with(&nowhere(), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b), None).unwrap();
         assert_eq!(edited.record["shared_answer"], true);
     }
 
@@ -1802,10 +1976,10 @@ mod tests {
         let (page, a, b) = two_holes();
         let fit_a = fitted_over(&page, a);
         let b_mask = applied_mask(&fitted_over(&page, b), page.width, page.height);
-        let config = Config { model: Model::DEFAULT, instruction: None };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-crop", "b", vec![("b".into(), b_mask)]);
-        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a)).unwrap();
+        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a), None).unwrap();
         let crop = shared_crop("t-shared-crop", &config, "b").unwrap();
         assert!(crop.x <= b.x && crop.right() >= b.right());
         assert_eq!(shared_crop("t-shared-crop", &config, "a"), None);
@@ -1818,8 +1992,8 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, image_reply(b"not an image")); MAX_CROPS]);
-        let config = Config { model: Model::DEFAULT, instruction: None };
-        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).err();
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBadAnswer"));
     }
 
@@ -1845,8 +2019,8 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve_with(2, |at, body| http(200, "", &image_reply(&if at == 0 { sent_back(body) } else { gray_like_sent(body) })));
-        let config = Config { model: Model::DEFAULT, instruction: None };
-        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None).unwrap();
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
         assert_eq!(edited.record["crops_refused"], 1);
         assert_eq!(server.seen.lock().unwrap().len(), 2);
     }
@@ -1855,7 +2029,7 @@ mod tests {
     fn a_shared_answer_that_does_not_fit_its_member_falls_back_to_a_request_of_its_own() {
         let (page, a, b) = two_holes();
         let (fit_a, fit_b) = (fitted_over(&page, a), fitted_over(&page, b));
-        let config = Config { model: Model::DEFAULT, instruction: None };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
         let b_mask = applied_mask(&fit_b, page.width, page.height);
         // Clean where A is, but the mark left on B: fine for A, refused for B.
         let server = serve_with(1, |_, body| {
@@ -1875,11 +2049,11 @@ mod tests {
             http(200, "", &image_reply(&out))
         });
         let share_a = neighbours("t-shared-unfit", "a", vec![("b".into(), b_mask)]);
-        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a)).unwrap();
+        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a), None).unwrap();
 
         let fresh = serve(vec![(200, image_reply(&answer_of(512, 512, GRAY)))]);
         let share_b = neighbours("t-shared-unfit", "b", Vec::new());
-        let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b)).unwrap();
+        let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b), None).unwrap();
         assert_eq!(edited.record["shared_answer"], false);
         assert_eq!(fresh.seen.lock().unwrap().len(), 1);
     }
@@ -1948,7 +2122,7 @@ mod tests {
     fn a_stop_between_the_share_and_the_gate_sends_nothing() {
         use crate::inference::nano_banana_consent::Book;
         let book = Book::new(crate::inference::nano_banana_consent::IDLE);
-        let config = Config { model: Model::DEFAULT, instruction: None };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
         let nonce = book.issue(config.clone(), "c1", 1).unwrap();
         let spend = book.spend(true, Some(&nonce), "c1", None).unwrap();
         // The bench opens, the page decodes, the keychain asks: Stop lands now.
@@ -1958,11 +2132,11 @@ mod tests {
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, GRAY)))]);
         let granted = spend.granted();
-        let refused = render_with(&client(&server), &granted.config, &granted.stop, &page, &fitted, None, None).err();
+        let refused = render_with(&client(&server), &granted.config, &granted.stop, &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some(Failure::Stopped.reason_key()));
         assert!(server.seen.lock().unwrap().is_empty(), "a request went out after the Stop");
         // And `render` refuses before it reads the key at all.
-        assert_eq!(render(&granted, &page, &fitted, None, None).err(), Some(Failure::Stopped.reason_key()));
+        assert_eq!(render(&granted, &page, &fitted, None, None, None).err(), Some(Failure::Stopped.reason_key()));
     }
 
     /// What turning Cloud engines off and quitting call: every render that
@@ -1970,7 +2144,7 @@ mod tests {
     #[test]
     fn stop_all_ends_every_window_s_render() {
         use crate::inference::nano_banana_consent::book;
-        let config = Config { model: Model::DEFAULT, instruction: None };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
         let one = book().issue(config.clone(), "t-stop-all-1", 1).unwrap();
         let other = book().issue(config, "t-stop-all-2", 1).unwrap();
         let first = book().spend(true, Some(&one), "t-stop-all-1", None).unwrap();
@@ -2153,9 +2327,9 @@ mod tests {
         let page = cleaner_core::image::decode(&std::fs::read(std::env::var("NANO_BANANA_PAGE").unwrap()).unwrap()).unwrap();
         let numbers: Vec<i64> = std::env::var("NANO_BANANA_BOX").unwrap().split(',').map(|n| n.parse().unwrap()).collect();
         let fitted = fitted_over(&page, Rect::new(numbers[0], numbers[1], numbers[2] as u32, numbers[3] as u32));
-        let config = Config { model: Model::DEFAULT, instruction: None };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
         let live = Client::new(ENDPOINT, &key, LIMITS, &GATE).unwrap();
-        let edited = render_with(&live, &config, &Stop::default(), &page, &fitted, None, None).unwrap();
+        let edited = render_with(&live, &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
         println!("{}", edited.record);
         let out = std::env::var("NANO_BANANA_OUT").unwrap();
         std::fs::write(out, cleaner_core::image::encode_png_preview(&edited.rendered.pixels).unwrap()).unwrap();

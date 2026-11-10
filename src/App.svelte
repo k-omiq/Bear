@@ -43,6 +43,7 @@
   import FirstLaunchDialog from './lib/dialogs/FirstLaunchDialog.svelte'
   import { firstLaunch, offerFirstLaunch } from './lib/dialogs/firstlaunch.svelte.js'
   import { jobs, startJobs } from './lib/state/jobs.svelte.js'
+  import { startNanoBananaCrops } from './lib/editor/nanobananacrop.svelte.js'
   import QuitJobsDialog from './lib/dialogs/QuitJobsDialog.svelte'
   import { untrack } from 'svelte'
 
@@ -107,6 +108,9 @@
   // started them, so the one subscription that follows them is here, with the
   // quit guard's question (`state/jobs.svelte.js`).
   $effect(() => untrack(() => startJobs()))
+
+  // Each Nano Banana crop shown before it is sent, when that setting is on.
+  $effect(() => untrack(() => startNanoBananaCrops()))
 
   // The first-launch download offer.
   //

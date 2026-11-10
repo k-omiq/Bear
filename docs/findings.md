@@ -724,6 +724,18 @@ never written as though it were general.
 
 ## What has not been measured
 
+**Nano Banana crop window and restrictive crops (2026-11-08): what is still open.**
+
+- **Whether white around the region lowers Google's refusals** has not been measured on real pages. The crops
+  that were refused on 2026-11-02 were refused at one ratio and cleaned at another; no crop has yet been sent
+  restricted.
+- **The quality cost of white context** is not measured. The finishing reads the page where white was sent, but
+  the model itself sees less of the page, so tone and line continuation at the region's edge may be worse.
+- **The crop window was checked in tests and the Vite mock only**, not in the built app (WKWebView) with a real
+  key.
+- **A window reloaded while a crop waits** loses that crop: the request waits until it is stopped (Layers row
+  Stop, the batch's Stop, Cloud engines off) or its 60 minute deadline passes.
+
 **SAM-TS-L, LaMa and local FLUX on clean GCE PCs (2026-11-04, second pass): what is still open.** The build
 that became 1.0.0-beta.20, on fresh g2-standard-4 L4 VMs (Ubuntu 26.04, 16 GB, no swap; Windows Server 2025 with
 no `msvcp140.dll` in `System32`) and on e2-standard-4 CPU VMs. Fixed and checked there: SAM-TS-L setup on a

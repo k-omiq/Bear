@@ -279,7 +279,7 @@ describe('the window in front of a Nano Banana request', () => {
     const stub = { grantNanoBanana: vi.fn(async () => ({ grant: 'g', model: 'gemini-3.1-flash-image', count: 1 })), readSettings: vi.fn(async () => ({ nanoBananaModel: 'gemini-nano-banana-2.1', nanoBananaPrompt: 'a' })), writeSettings: vi.fn() }
     const asked = confirmNanoBanana(1, CHAPTER, /** @type {any} */ (stub))
     const spec = await answer('cancel')
-    expect(spec.props).toEqual({ count: 1, model: 'gemini-nano-banana-2.1', size: '1K', prompt: 'a' })
+    expect(spec.props).toEqual({ count: 1, model: 'gemini-nano-banana-2.1', size: '1K', prompt: 'a', restrictive: false })
     expect(await asked).toBeNull()
     expect(stub.writeSettings).not.toHaveBeenCalled()
   })

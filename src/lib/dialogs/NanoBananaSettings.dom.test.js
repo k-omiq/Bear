@@ -204,3 +204,36 @@ describe('the Nano Banana finishing', () => {
     expect(strays.checked).toBe(false)
   })
 })
+
+describe('what Nano Banana sends', () => {
+  const showCrop = () => /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBanana.settings.showCrop')))
+  const restrictive = () => /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBanana.settings.restrictive')))
+
+  it('is off by default, and shows what settings hold', async () => {
+    await mount(backendWith())
+    expect([showCrop().checked, restrictive().checked]).toEqual([false, false])
+    cleanup()
+    const backend = backendWith({ readSettings: vi.fn(async () => ({ nanoBananaShowCrop: true, nanoBananaRestrictive: true })) })
+    await mount(backend)
+    await vi.waitFor(() => expect([showCrop().checked, restrictive().checked]).toEqual([true, true]))
+  })
+
+  it('saves each choice under its own key', async () => {
+    const backend = backendWith()
+    await mount(backend)
+    await fireEvent.click(showCrop())
+    await vi.waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaShowCrop: true }))
+    await fireEvent.click(restrictive())
+    await vi.waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaRestrictive: true }))
+    expect(showCrop().checked && restrictive().checked).toBe(true)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('goes back to what it was when it could not be saved, and says so', async () => {
+    const backend = backendWith({ writeSettings: vi.fn(async () => { throw new Error('disk') }) })
+    await mount(backend)
+    await fireEvent.click(restrictive())
+    expect((await screen.findByRole('alert')).textContent).toBe(t('nanoBanana.settings.sendingFailed'))
+    expect(restrictive().checked).toBe(false)
+  })
+})

@@ -153,6 +153,24 @@ pub enum Event {
         chapter_id: String,
         report: crate::inference::nano_banana_job::Report,
     },
+    /// A Nano Banana crop waiting to be sent (`inference::nano_banana_crop`):
+    /// the picture, and what a restrictive crop keeps. Answered with
+    /// `nano_banana_crop_answer` under `id`. Rectangles are `[x, y, w, h]`,
+    /// `crop` in page pixels and the rest in crop pixels.
+    #[serde(rename_all = "camelCase")]
+    NanoBananaCrop {
+        id: String,
+        model: String,
+        ratio: String,
+        size: String,
+        crop: [i64; 4],
+        attempt: usize,
+        restrictive: bool,
+        holes: Vec<[i64; 4]>,
+        suggested: Vec<[i64; 4]>,
+        /// Base64 PNG.
+        png: String,
+    },
     /// The transient stack. `key` and `params` are i18n data; no English
     /// crosses the seam.
     Notice {
@@ -206,6 +224,11 @@ pub fn unregister(id: u64) -> bool {
     let before = registry.sinks.len();
     registry.sinks.retain(|(existing, _)| *existing != id);
     registry.sinks.len() != before
+}
+
+/// Whether anything is listening: a window, or a test's collector.
+pub fn subscribed() -> bool {
+    !locked().sinks.is_empty()
 }
 
 /// Send one event to every subscriber.

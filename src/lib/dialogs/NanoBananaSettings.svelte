@@ -19,6 +19,13 @@
    * there. The model is an ordinary setting, one of three (`model/nanobanana.js`).
    * There is no size setting: native picks each region's crop size.
    *
+   * Two choices say what goes to Google. "Show each crop before it is sent"
+   * (`nanoBananaShowCrop`) holds every request on a window with the crop
+   * (`NanoBananaCropDialog.svelte`); native reads it at each request.
+   * "Restrictive crop" (`nanoBananaRestrictive`) sends only small areas
+   * around each region and the rest as plain white; native reads it when a
+   * window is confirmed, so it counts from the next one.
+   *
    * Where the system has no credential store the key is kept for this session
    * only (`sessionOnly`), and the panel says so: it is gone when the app closes.
    *
@@ -44,7 +51,10 @@
   const ids = {
     key: `${uid}-key`, model: `${uid}-model`,
     finishing: `${uid}-finishing`, grayscale: `${uid}-grayscale`, strays: `${uid}-strays`,
+    showCrop: `${uid}-show-crop`, restrictive: `${uid}-restrictive`,
   }
+  /** The settings keys of what is sent, by part. */
+  const SENDING_KEYS = { showCrop: 'nanoBananaShowCrop', restrictive: 'nanoBananaRestrictive' }
   const models = NANO_BANANA_MODELS.map((entry) => ({ value: entry.id, label: t(entry.labelKey) }))
   const methods = FINISHINGS.map((name) => ({ value: name, label: t(finishingKey('option', name)) }))
 
@@ -60,6 +70,7 @@
   let failed = $state(null)
   let model = $state(nanoBananaModel(null).id)
   let finishing = $state(nanoBananaFinishing(null))
+  let sending = $state({ showCrop: false, restrictive: false })
 
   onMount(async () => {
     try { hasKey = await backend.nanoBananaHasKey() } catch { hasKey = false }
@@ -67,6 +78,10 @@
     try { settings = await backend.readSettings() } catch { /* the defaults stand */ }
     model = nanoBananaModel(settings?.nanoBananaModel).id
     finishing = nanoBananaFinishing(settings)
+    sending = {
+      showCrop: settings?.[SENDING_KEYS.showCrop] === true,
+      restrictive: settings?.[SENDING_KEYS.restrictive] === true,
+    }
   })
 
   /** @param {unknown} error */
@@ -149,6 +164,27 @@
       failed = 'nanoBananaFinishing.failed'
     }
   }
+
+  /**
+   * Save one choice of what is sent, as the finishing parts are saved: a
+   * later change of the same choice wins, a failed save puts back what was
+   * there.
+   *
+   * @param {'showCrop'|'restrictive'} part
+   * @param {boolean} next
+   */
+  async function saveSending(part, next) {
+    const before = sending[part]
+    sending = { ...sending, [part]: next }
+    failed = null
+    try {
+      await writeSettingsSerialized(backend, { [SENDING_KEYS[part]]: next })
+    } catch (error) {
+      console.error('the Nano Banana sending choice could not be saved', error)
+      if (sending[part] === next) sending = { ...sending, [part]: before }
+      failed = 'nanoBanana.settings.sendingFailed'
+    }
+  }
 </script>
 
 <section aria-labelledby="{uid}-heading" data-settings-anchor="nano-banana">
@@ -204,6 +240,32 @@
   >
     {#snippet children({ descriptionId })}
       <Select id={ids.model} options={models} value={model} describedBy={descriptionId} onchange={saveModel} />
+    {/snippet}
+  </Field>
+
+  <h4 class="part">{t('nanoBanana.settings.sendingHeading')}</h4>
+  <Field
+    label={t('nanoBanana.settings.showCrop')}
+    description={t('nanoBanana.settings.showCropHint')}
+    layout="row"
+    controlId={ids.showCrop}
+  >
+    {#snippet children({ descriptionId })}
+      <input id={ids.showCrop} class="check" type="checkbox" aria-describedby={descriptionId}
+        checked={sending.showCrop}
+        onchange={(event) => saveSending('showCrop', event.currentTarget.checked)} />
+    {/snippet}
+  </Field>
+  <Field
+    label={t('nanoBanana.settings.restrictive')}
+    description={t('nanoBanana.settings.restrictiveHint')}
+    layout="row"
+    controlId={ids.restrictive}
+  >
+    {#snippet children({ descriptionId })}
+      <input id={ids.restrictive} class="check" type="checkbox" aria-describedby={descriptionId}
+        checked={sending.restrictive}
+        onchange={(event) => saveSending('restrictive', event.currentTarget.checked)} />
     {/snippet}
   </Field>
 

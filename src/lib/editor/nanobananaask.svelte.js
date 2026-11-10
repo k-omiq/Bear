@@ -54,6 +54,9 @@ export async function confirmNanoBanana(count, chapterId, backend = getBackend()
         model,
         size: nanoBananaStartSize(model),
         prompt: String(settings?.nanoBananaPrompt ?? ''),
+        // Read by native when the grant is made, so it is what this window
+        // will send.
+        restrictive: settings?.nanoBananaRestrictive === true,
       },
       actions: [
         { id: 'cancel', labelKey: 'nanoBanana.run.cancel' },

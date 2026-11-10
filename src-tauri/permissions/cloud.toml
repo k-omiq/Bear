@@ -112,6 +112,7 @@ commands.allow = [
     "delete_nano_banana_key",
     "nano_banana_stop",
     "nano_banana_grant",
+    "nano_banana_crop_answer",
     "start_nano_banana_run",
     "store_cloud_secret",
     "delete_cloud_secret",

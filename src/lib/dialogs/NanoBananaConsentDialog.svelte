@@ -5,6 +5,9 @@
    * edit. Pushed by `editor/nanobananaask.svelte.js` with `blocking: true`, so
    * Escape is Cancel and the backdrop is inert.
    *
+   * With Restrictive crop on (`props.restrictive`) it says that only small
+   * areas around each region are sent, and the rest of the crop as white.
+   *
    * Answers `{ id, prompt }`. The prompt is plain text the native side cleans and
    * adds under its own removal prompt.
    *
@@ -46,6 +49,9 @@
   ></textarea>
   <p class="hint" id="{uid}-prompt-hint">{t('nanoBanana.run.promptHint')}</p>
   <p>{t('nanoBanana.run.sent')}</p>
+  {#if facts.restrictive === true}
+    <p data-restrictive>{t('nanoBanana.run.restrictive')}</p>
+  {/if}
   {#snippet buttons()}
     {#each actions as action (action.id)}
       <Button variant={action.variant ?? 'ghost'} onclick={() => closeModal({ id: action.id, prompt })}>{t(action.labelKey)}</Button>

@@ -448,3 +448,116 @@ describe('Nano Banana finishing on the mock', () => {
     expect(change.region.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'poisson', grayscale: false, strays: true })
   })
 })
+
+/**
+ * Answer every `nano-banana-crop` the mock sends with `pick(event, index)`,
+ * and keep the events.
+ *
+ * @param {any} mock
+ * @param {(event: any, index: number) => {answer: string, keep?: number[][]|null}} pick
+ */
+function answering(mock, pick) {
+  /** @type {any[]} */
+  const crops = []
+  mock.subscribe((/** @type {any} */ event) => {
+    if (event.type !== 'nano-banana-crop') return
+    crops.push(event)
+    const { answer, keep = null } = pick(event, crops.length - 1)
+    queueMicrotask(() => { void mock.answerNanoBananaCrop({ id: event.id, answer, keep }) })
+  })
+  return crops
+}
+
+describe('a Nano Banana crop shown before it is sent, on the mock', () => {
+  it('sends nothing and waits for nothing while the setting is off', async () => {
+    const mock = await ready()
+    const crops = answering(mock, () => ({ answer: 'skip' }))
+    const [region] = await detected(mock)
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
+    expect((await clean(mock, region, grant)).status).toBe('applied')
+    expect(crops).toEqual([])
+  })
+
+  it('shows a single region\'s crop, and Send cleans it with the areas drawn', async () => {
+    const mock = await ready()
+    await mock.writeSettings({ nanoBananaShowCrop: true, nanoBananaRestrictive: true })
+    const crops = answering(mock, () => ({ answer: 'send', keep: [[1, 2, 30, 40]] }))
+    const [region] = await detected(mock)
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
+    expect((await clean(mock, region, grant)).status).toBe('applied')
+    expect(crops).toHaveLength(1)
+    expect(crops[0]).toMatchObject({ type: 'nano-banana-crop', model: DEFAULT_NANO_BANANA_MODEL, ratio: '1:1', attempt: 0, restrictive: true })
+    expect(crops[0].holes).toHaveLength(1)
+    expect(crops[0].suggested).toHaveLength(1)
+    // A real PNG, the crop's size.
+    const bytes = Uint8Array.from(atob(crops[0].png), (char) => char.charCodeAt(0))
+    expect([...bytes.subarray(1, 4)].map((code) => String.fromCharCode(code)).join('')).toBe('PNG')
+    const view = new DataView(bytes.buffer)
+    expect([view.getUint32(16), view.getUint32(20)]).toEqual(crops[0].crop.slice(2))
+    expect(mock.nanoBananaLastKeep()).toEqual([[1, 2, 30, 40]])
+  })
+
+  it('reads Restrictive crop when the window is confirmed, not at the request', async () => {
+    const mock = await ready()
+    await mock.writeSettings({ nanoBananaShowCrop: true })
+    const crops = answering(mock, () => ({ answer: 'send' }))
+    const [region] = await detected(mock)
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
+    await mock.writeSettings({ nanoBananaRestrictive: true })
+    await clean(mock, region, grant)
+    expect(crops[0]).toMatchObject({ restrictive: false, suggested: [] })
+  })
+
+  it('leaves a skipped region as it is, with its reason', async () => {
+    const mock = await ready()
+    await mock.writeSettings({ nanoBananaShowCrop: true })
+    answering(mock, () => ({ answer: 'skip' }))
+    const reasons = refusals(mock)
+    const [region] = await detected(mock)
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
+    expect((await clean(mock, region, grant)).status).toBe('blocked')
+    expect(reasons).toEqual(['decline.reason.nanoBananaSkipped'])
+  })
+
+  it('sends nothing when no window can be shown', async () => {
+    const mock = await ready()
+    await mock.writeSettings({ nanoBananaShowCrop: true })
+    const [region] = await detected(mock)
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
+    // Nobody is listening, so the refusal notice has no one to reach either.
+    expect((await clean(mock, region, grant)).status).toBe('blocked')
+  })
+
+  it('skips a region in a batch and goes on, and Stop ends the batch as the person\'s', async () => {
+    const mock = await ready()
+    await mock.writeSettings({ nanoBananaShowCrop: true })
+    const regions = await detected(mock)
+    expect(regions.length).toBeGreaterThan(2)
+    answering(mock, (_event, index) => ({ answer: index === 0 ? 'skip' : index === 1 ? 'send' : 'stop' }))
+    const { report, summary } = await batch(mock, regions)
+    expect(summary.reason).toBe('cancelled')
+    expect(report).toMatchObject({ cleaned: 1, stopped: 'decline.reason.nanoBananaStopped', byUser: true })
+    expect(report.failed).toEqual([{ regionId: regions[0].id, pageIndex: 0, reason: 'decline.reason.nanoBananaSkipped' }])
+    expect(report.left).toHaveLength(regions.length - 2)
+  })
+
+  it('stops waiting when the batch is stopped, and refuses the late answer', async () => {
+    const mock = await ready()
+    await mock.writeSettings({ nanoBananaShowCrop: true })
+    const regions = await detected(mock)
+    /** @type {any[]} */
+    const crops = []
+    /** @type {string} */
+    let runId = ''
+    mock.subscribe((/** @type {any} */ event) => {
+      if (event.type !== 'nano-banana-crop') return
+      crops.push(event)
+      queueMicrotask(() => { void mock.cancelRun({ runId }) })
+    })
+    const { report, summary } = await batch(mock, regions, { onStart: (id) => { runId = id } })
+    expect(summary.reason).toBe('cancelled')
+    expect(report).toMatchObject({ cleaned: 0, byUser: true })
+    expect(report.left).toHaveLength(regions.length)
+    await expect(mock.answerNanoBananaCrop({ id: crops[0].id, answer: 'send', keep: null })).rejects.toThrow('nanoBanana.crop.gone')
+  })
+})

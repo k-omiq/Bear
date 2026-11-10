@@ -19,10 +19,10 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** A backend with a saved instruction, and the window asked for two regions. */
-async function ask() {
+/** A backend with a saved instruction, and the window asked for two regions. @param {Record<string, any>} [settings] */
+async function ask(settings = {}) {
   const backend = {
-    readSettings: vi.fn(async () => ({ nanoBananaModel: 'gemini-3.1-flash-image', nanoBananaPrompt: 'keep the hatching' })),
+    readSettings: vi.fn(async () => ({ nanoBananaModel: 'gemini-3.1-flash-image', nanoBananaPrompt: 'keep the hatching', ...settings })),
     writeSettings: vi.fn(async () => ({})),
     grantNanoBanana: vi.fn(async () => ({ grant: 'g', model: 'gemini-3.1-flash-image', count: 2 })),
   }
@@ -56,6 +56,18 @@ describe('the Nano Banana window', () => {
     ])
     await fireEvent.keyDown(window, { key: 'Escape' })
     expect(await asked).toBeNull()
+  })
+
+  it('says only small areas are sent, the rest white, when Restrictive crop is on', async () => {
+    const { asked } = await ask()
+    expect(screen.queryByText(t('nanoBanana.run.restrictive'))).toBeNull()
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(await asked).toBeNull()
+    cleanup()
+    const again = await ask({ nanoBananaRestrictive: true })
+    expect(screen.getByText(t('nanoBanana.run.restrictive'))).toBeTruthy()
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(await again.asked).toBeNull()
   })
 
   it('treats Escape as Cancel and sends nothing', async () => {

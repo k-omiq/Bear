@@ -382,9 +382,16 @@ pub enum AnswerError {
 pub struct Prepared {
     render: PreparedRender,
     region: SendRegion,
+    /// The crop with the mark painted, all of it, as RGB8.
+    marked_rgb: Vec<u8>,
     marked_png: Vec<u8>,
     /// Per crop pixel, whether the mark was painted there.
     marks: Vec<bool>,
+    /// The bounds of every marked region inside the crop, in page pixels.
+    holes: Vec<Rect>,
+    /// Per crop pixel, whether it is sent as the page ([`Prepared::restrict`]).
+    /// `None` when the whole crop is.
+    kept: Option<Vec<bool>>,
 }
 
 impl Prepared {
@@ -398,15 +405,77 @@ impl Prepared {
         render.set_finishing(finishing);
         let (rgb, marks) = marked(&render, companions);
         let marked_png = encode_rgb_png(region.crop.w, region.crop.h, &rgb)?;
-        Ok(Prepared { render, region, marked_png, marks })
+        let crop = region.crop;
+        let holes = std::iter::once(render.applied().bounds)
+            .chain(companions.iter().map(|mask| mask.bounds))
+            .map(|bounds| crop.intersection(bounds))
+            .filter(|bounds| bounds.w > 0 && bounds.h > 0)
+            .collect();
+        Ok(Prepared { render, region, marked_rgb: rgb, marked_png, marks, holes, kept: None })
     }
 
     pub fn region(&self) -> SendRegion {
         self.region
     }
 
-    /// The crop with the hole painted blue, as PNG. This is all that leaves the
-    /// machine.
+    /// The bounds of every region marked in the crop, in page pixels: this
+    /// one's applied mask and the companions'. A restricted crop always keeps
+    /// them ([`Prepared::restrict`]).
+    pub fn holes(&self) -> &[Rect] {
+        &self.holes
+    }
+
+    /// The areas a restricted crop keeps when the person picks none: each
+    /// hole with [`CONTEXT`] px of page around it, inside the crop.
+    pub fn suggested(&self) -> Vec<Rect> {
+        let crop = self.region.crop;
+        let context = i64::from(CONTEXT);
+        self.holes.iter().map(|hole| {
+            let grown = Rect::new(hole.x - context, hole.y - context, hole.w + 2 * CONTEXT, hole.h + 2 * CONTEXT);
+            crop.intersection(grown)
+        }).collect()
+    }
+
+    /// Send only `areas` (page pixels) and the holes; every other pixel of
+    /// the crop goes out plain white, so the model never sees that part of
+    /// the page. The answer is read with the page put back there
+    /// ([`Prepared::finish`]), so the finishing and the kept mark test read
+    /// the page and not the white. Returns the areas kept, holes included,
+    /// as the record keeps them.
+    pub fn restrict(&mut self, areas: &[Rect]) -> Result<Vec<Rect>, Error> {
+        let crop = self.region.crop;
+        let mut kept_areas: Vec<Rect> = Vec::new();
+        for area in areas.iter().chain(self.holes.iter()) {
+            let area = crop.intersection(*area);
+            if area.w > 0 && area.h > 0 && !kept_areas.contains(&area) {
+                kept_areas.push(area);
+            }
+        }
+        let (w, h) = (crop.w as usize, crop.h as usize);
+        let mut kept = vec![false; w * h];
+        for area in &kept_areas {
+            for y in area.y..area.bottom() {
+                let row = (y - crop.y) as usize * w;
+                kept[row + (area.x - crop.x) as usize..row + (area.right() - crop.x) as usize].fill(true);
+            }
+        }
+        // A mark is always sent, even a companion's pixel outside its bounds' clip.
+        for (at, mark) in self.marks.iter().enumerate() {
+            kept[at] |= *mark;
+        }
+        let mut rgb = self.marked_rgb.clone();
+        for (at, keep) in kept.iter().enumerate() {
+            if !keep {
+                rgb[at * 3..at * 3 + 3].fill(255);
+            }
+        }
+        self.marked_png = encode_rgb_png(crop.w, crop.h, &rgb)?;
+        self.kept = Some(kept);
+        Ok(kept_areas)
+    }
+
+    /// The crop with the hole painted blue, and white where it is restricted,
+    /// as PNG. This is all that leaves the machine.
     pub fn marked_png(&self) -> &[u8] {
         &self.marked_png
     }
@@ -414,7 +483,16 @@ impl Prepared {
     /// The model's answer, written through the applied mask.
     pub fn finish(&self, answer: &[u8]) -> Result<Rendered, AnswerError> {
         let crop = self.region.crop;
-        let rgb = decode_answer(answer, self.region)?;
+        let mut rgb = decode_answer(answer, self.region)?;
+        if let Some(kept) = &self.kept {
+            // The model was shown white there: the page stands in for its answer.
+            let page = self.render.image_rgb8();
+            for (at, keep) in kept.iter().enumerate() {
+                if !keep {
+                    rgb[at * 3..at * 3 + 3].copy_from_slice(&page[at * 3..at * 3 + 3]);
+                }
+            }
+        }
         if kept_mark(&self.render, &self.marks, &rgb) {
             return Err(AnswerError::KeptMark);
         }
@@ -1006,6 +1084,60 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_restricted_crop_sends_white_outside_its_areas() {
+        let page = gray_page(1000, 1000);
+        let hole = Rect::new(400, 400, 60, 30);
+        let mut prepared = prepared_over(&page, hole);
+        let crop = prepared.region().crop;
+        let applied = prepared.render.applied().bounds;
+        assert_eq!(prepared.holes(), &[applied]);
+        let suggested = prepared.suggested();
+        assert_eq!(suggested, vec![Rect::new(applied.x - 24, applied.y - 24, applied.w + 48, applied.h + 48)]);
+        let picked = Rect::new(crop.x, crop.y, 20, 20);
+        let kept = prepared.restrict(&[picked]).unwrap();
+        assert_eq!(kept, vec![picked, applied], "the hole is always kept");
+        let sent = image::load_from_memory(prepared.marked_png()).unwrap().into_rgb8();
+        let at = |x: i64, y: i64| *sent.get_pixel((x - crop.x) as u32, (y - crop.y) as u32);
+        let page_at = |x: i64, y: i64| page.sample(x as u32, y as u32, 0) as u8;
+        assert_eq!(at(crop.x + 5, crop.y + 5).0, [page_at(crop.x + 5, crop.y + 5); 3], "a picked area is the page");
+        assert_eq!(at(crop.right() - 1, crop.bottom() - 1).0, [255; 3], "the rest is white");
+        assert_eq!(at(applied.x - 10, applied.y).0, [255; 3], "past the hole is white when not picked");
+        let mark = at(hole.x + 30, hole.y + 15);
+        assert!(mark[2] > mark[0], "the hole is still marked: {mark:?}");
+    }
+
+    #[test]
+    fn a_restricted_answer_reads_the_page_where_white_was_sent() {
+        let page = gray_page(1000, 1000);
+        let hole = Rect::new(400, 400, 60, 30);
+        let mut whole = prepared_over(&page, hole);
+        let mut restricted = prepared_over(&page, hole);
+        let areas = restricted.suggested();
+        let kept = restricted.restrict(&areas).unwrap();
+        // One answer that is the page outside the kept areas, one that is black there.
+        let crop = whole.region().crop;
+        let page_rgb = whole.render.image_rgb8().to_vec();
+        let (mut as_page, mut black) = (page_rgb.clone(), page_rgb);
+        for y in 0..crop.h as i64 {
+            for x in 0..crop.w as i64 {
+                let at = (y * i64::from(crop.w) + x) as usize * 3;
+                let inside = kept.iter().any(|area| area.contains(crop.x + x, crop.y + y));
+                if inside {
+                    as_page[at..at + 3].fill(128);
+                    black[at..at + 3].fill(128);
+                } else {
+                    black[at..at + 3].fill(0);
+                }
+            }
+        }
+        let _ = whole.restrict(&[crop]);
+        let expected = whole.finish(&encode_rgb_png(crop.w, crop.h, &as_page).unwrap()).unwrap();
+        let got = restricted.finish(&encode_rgb_png(crop.w, crop.h, &black).unwrap()).unwrap();
+        assert_eq!(got.mask.bounds, expected.mask.bounds);
+        assert!(got.pixels.data == expected.pixels.data, "white sent outside the areas changes nothing written");
     }
 
     /// The crop as sent, with the mark taken back out of every hole pixel at

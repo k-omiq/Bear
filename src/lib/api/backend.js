@@ -370,7 +370,27 @@ import { createTauriBackend, isTauri } from './tauri.js'
  */
 
 /**
- * @typedef {PageStartedEvent|RegionDoneEvent|PageDoneEvent|RunFinishedEvent|NoticeEvent|ModelProgressEvent|HistoryChangedEvent|MeasureProgressEvent|NanoBananaReportEvent} BackendEvent
+ * A Nano Banana crop held right before it is sent, while "Show each crop
+ * before it is sent" is on (`nanoBananaShowCrop`). The native side waits for
+ * `answerNanoBananaCrop` with this id. Rects are `[x, y, w, h]`: `crop` on
+ * the page, the others in crop pixels.
+ *
+ * @typedef {Object} NanoBananaCropEvent
+ * @property {'nano-banana-crop'} type
+ * @property {string} id
+ * @property {string} model
+ * @property {string} ratio
+ * @property {string} size
+ * @property {number[]} crop
+ * @property {number} attempt - 0 for a region's first crop, more when Google refused earlier ones
+ * @property {boolean} restrictive
+ * @property {number[][]} holes - the regions marked blue, always kept
+ * @property {number[][]} suggested - the suggested kept areas; empty when not restrictive
+ * @property {string} png - base64 PNG of the crop with the blue mark, not whitened
+ */
+
+/**
+ * @typedef {PageStartedEvent|RegionDoneEvent|PageDoneEvent|RunFinishedEvent|NoticeEvent|ModelProgressEvent|HistoryChangedEvent|MeasureProgressEvent|NanoBananaReportEvent|NanoBananaCropEvent} BackendEvent
  */
 
 /* ------------------------------------------------------------------ */
@@ -495,6 +515,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: { model: string, count: number, chapterId: string }) => Promise<{ grant: string, model: string, count: number }>} grantNanoBanana - the grant for a Nano Banana window the person just confirmed: `count` regions of `chapterId` on `model` (the model the window showed), with the instruction as saved now. Each window's grant is its own and another window does not end it. The caller sends it with the request it confirmed (`params.nanoBananaGrant`, or `startNanoBananaRun`'s); the backend keeps the last one for an edit that names Nano Banana and carries none. Rejects with a `decline.reason.*` key while cloud engines are off or settings name another model
  * @property {(spec: { grant: string }) => Promise<void>} nanoBananaStop - stop the single region's Nano Banana request `grant` was made for, whether it is in flight, waiting for its turn or not sent yet, and withdraw the rest of that grant. Every other request goes on; a batch stops with `cancelRun`
  * @property {(spec: { chapterId: string, regionIds: string[], nanoBananaGrant?: string }) => Promise<RunHandle>} startNanoBananaRun - clean these stored detections of the chapter with Nano Banana, on the grant the window made for them (the last one when none is named). A run in the ordinary run slot, kind `nanoBanana`: ordinary run events, then `nano-banana-report` before `run-finished`; `cancelRun` stops it and withdraws its grant, and so does its end. Rejects with a `decline.reason.*` key while cloud engines are off or the grant is another chapter's or does not cover every region, and with `nanoBanana.job.requestOut` while a single region's request is out on the chapter
+ * @property {(spec: { id: string, answer: 'send'|'skip'|'stop', keep: number[][]|null }) => Promise<void>} answerNanoBananaCrop - the answer to a `nano-banana-crop` event: Send it, Skip this region (not cleaned, reason `decline.reason.nanoBananaSkipped`; a batch goes on) or Stop the request and its grant (a batch stops). `keep` is meaningful only for a restrictive crop: the kept areas as `[x, y, w, h]` in crop pixels, or null for the suggested ones; native always adds the marked regions and clips to the crop. Rejects with `nanoBanana.crop.gone` when the request already ended, `nanoBanana.crop.badAnswer` for another answer
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole, secret: string, tokenId?: string, sessionOnly?: boolean }) => Promise<SecretSummary>} storeCloudSecret - store cloud credential into OS keyring or session store (write-only)
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole }) => Promise<SecretSummary>} deleteCloudSecret - delete cloud credential from OS keyring and session store
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole }) => Promise<SecretSummary>} getCloudSecretSummary - query safe summary of cloud credential presence
