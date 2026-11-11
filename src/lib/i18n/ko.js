@@ -1562,7 +1562,6 @@ export const ko = {
       nanoBananaUnreachable: 'Nano Banana에 연결할 수 없었음',
       nanoBananaBlocked: 'Google이 이 잘라낸 이미지에 대한 결과를 돌려주지 않음',
       nanoBananaBadAnswer: 'Nano Banana가 쓸 수 있는 이미지를 돌려주지 않았음',
-      nanoBananaKeptMark: 'Nano Banana 결과에 파란 표시가 남음',
       nanoBananaKeyStore: '시스템 자격 증명 저장소에서 Nano Banana 키를 읽을 수 없었음',
       nanoBananaLocation: 'Google이 사용자의 국가에서 이 Nano Banana 모델을 제공하지 않음',
       nanoBananaBilling: '이 Nano Banana 키에 결제가 설정되지 않았거나 할당량을 모두 사용함',

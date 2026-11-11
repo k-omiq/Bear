@@ -49,24 +49,12 @@ const SHAPE_TOLERANCE: f64 = 0.03;
 /// request is the model answering another size, not a near miss.
 const MAX_ANSWER_SCALE: f64 = 1.1;
 
-/// The mark that shows the model what to edit: freeditor's overlay colour.
+/// The tint that shows the person what will be edited, in the crop window:
+/// freeditor's overlay colour. It is never sent. The model gets the plain crop
+/// and a separate mask ([`Prepared::page_png`], [`Prepared::mask_png`]), so a
+/// colour page with blue or violet art is never read as a tint the model kept.
 const MARK_RGB: [f64; 3] = [45.0, 127.0, 249.0];
 const MARK_ALPHA: f64 = 0.32;
-
-/// How much bluer a hole pixel may read than the bluest of the answer's own page
-/// around the hole ([`MARK_RING_PERCENTILE`]). The mark adds
-/// `MARK_ALPHA * (249 - 45)`, about 65, to blue minus red on any page, so a pixel
-/// past this kept the mark.
-const MARK_KEPT_BIAS: f64 = 24.0;
-/// The ring's blue that a clean hole may reach: a high percentile and not the
-/// median, so a colour page whose ring already spans its own blues does not read
-/// as marked.
-const MARK_RING_PERCENTILE: f64 = 95.0;
-/// The share of the hole that may read that blue before the answer is refused.
-/// A mark kept over a word of a long line is still a kept mark.
-const MARK_KEPT_SHARE: f64 = 0.05;
-/// The ring of page, outside every mark, that the hole is compared with.
-const MARK_RING: i64 = 16;
 
 /// How much the model is asked to return for one crop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -372,8 +360,6 @@ pub enum AnswerError {
     Unreadable(String),
     #[error("the answer is {got_w}x{got_h}, not the {want_w}x{want_h} that was asked for")]
     WrongShape { got_w: u32, got_h: u32, want_w: u32, want_h: u32 },
-    #[error("the answer kept the blue mark")]
-    KeptMark,
     #[error(transparent)]
     Render(#[from] Error),
 }
@@ -382,9 +368,13 @@ pub enum AnswerError {
 pub struct Prepared {
     render: PreparedRender,
     region: SendRegion,
-    /// The crop with the mark painted, all of it, as RGB8.
+    /// The crop with the mark painted, all of it, as RGB8: what the person sees.
     marked_rgb: Vec<u8>,
     marked_png: Vec<u8>,
+    /// The crop as the page has it, white where restricted: the first image sent.
+    page_png: Vec<u8>,
+    /// White where the mark is, black everywhere else: the second image sent.
+    mask_png: Vec<u8>,
     /// Per crop pixel, whether the mark was painted there.
     marks: Vec<bool>,
     /// The bounds of every marked region inside the crop, in page pixels.
@@ -405,13 +395,16 @@ impl Prepared {
         render.set_finishing(finishing);
         let (rgb, marks) = marked(&render, companions);
         let marked_png = encode_rgb_png(region.crop.w, region.crop.h, &rgb)?;
+        let page_png = encode_rgb_png(region.crop.w, region.crop.h, render.image_rgb8())?;
+        let mask_rgb: Vec<u8> = marks.iter().flat_map(|mark| [if *mark { 255 } else { 0 }; 3]).collect();
+        let mask_png = encode_rgb_png(region.crop.w, region.crop.h, &mask_rgb)?;
         let crop = region.crop;
         let holes = std::iter::once(render.applied().bounds)
             .chain(companions.iter().map(|mask| mask.bounds))
             .map(|bounds| crop.intersection(bounds))
             .filter(|bounds| bounds.w > 0 && bounds.h > 0)
             .collect();
-        Ok(Prepared { render, region, marked_rgb: rgb, marked_png, marks, holes, kept: None })
+        Ok(Prepared { render, region, marked_rgb: rgb, marked_png, page_png, mask_png, marks, holes, kept: None })
     }
 
     pub fn region(&self) -> SendRegion {
@@ -439,8 +432,8 @@ impl Prepared {
     /// Send only `areas` (page pixels) and the holes; every other pixel of
     /// the crop goes out plain white, so the model never sees that part of
     /// the page. The answer is read with the page put back there
-    /// ([`Prepared::finish`]), so the finishing and the kept mark test read
-    /// the page and not the white. Returns the areas kept, holes included,
+    /// ([`Prepared::finish`]), so the finishing reads the page and not the
+    /// white. Returns the areas kept, holes included,
     /// as the record keeps them.
     pub fn restrict(&mut self, areas: &[Rect]) -> Result<Vec<Rect>, Error> {
         let crop = self.region.crop;
@@ -463,21 +456,37 @@ impl Prepared {
         for (at, mark) in self.marks.iter().enumerate() {
             kept[at] |= *mark;
         }
-        let mut rgb = self.marked_rgb.clone();
+        let (mut rgb, mut page) = (self.marked_rgb.clone(), self.render.image_rgb8().to_vec());
         for (at, keep) in kept.iter().enumerate() {
             if !keep {
                 rgb[at * 3..at * 3 + 3].fill(255);
+                page[at * 3..at * 3 + 3].fill(255);
             }
         }
         self.marked_png = encode_rgb_png(crop.w, crop.h, &rgb)?;
+        self.page_png = encode_rgb_png(crop.w, crop.h, &page)?;
         self.kept = Some(kept);
         Ok(kept_areas)
     }
 
-    /// The crop with the hole painted blue, and white where it is restricted,
-    /// as PNG. This is all that leaves the machine.
+    /// The crop with the hole tinted blue, and white where it is restricted,
+    /// as PNG: how the crop is shown to the person. It is never sent.
     pub fn marked_png(&self) -> &[u8] {
         &self.marked_png
+    }
+
+    /// The crop as the page has it, white where it is restricted, as PNG: the
+    /// first of the two images sent, and with [`Prepared::mask_png`] all that
+    /// leaves the machine.
+    pub fn page_png(&self) -> &[u8] {
+        &self.page_png
+    }
+
+    /// The mask the model edits inside, as PNG at the crop's size: white over
+    /// this region and every companion, black everywhere else. The second
+    /// image sent.
+    pub fn mask_png(&self) -> &[u8] {
+        &self.mask_png
     }
 
     /// The model's answer, written through the applied mask.
@@ -493,15 +502,12 @@ impl Prepared {
                 }
             }
         }
-        if kept_mark(&self.render, &self.marks, &rgb) {
-            return Err(AnswerError::KeptMark);
-        }
         Ok(self.render.composite(&GeneratedCrop::new(crop.w, crop.h, &rgb))?)
     }
 }
 
 /// The crop with the mark over every pixel the render may write, and over the
-/// companions' masks, and where the mark is.
+/// companions' masks, and where the mark is: the shown crop and the sent mask.
 fn marked(render: &PreparedRender, companions: &[Mask]) -> (Vec<u8>, Vec<bool>) {
     let crop = render.crop();
     let mut out = render.image_rgb8().to_vec();
@@ -520,42 +526,6 @@ fn marked(render: &PreparedRender, companions: &[Mask]) -> (Vec<u8>, Vec<bool>) 
         }
     }
     (out, marks)
-}
-
-/// Whether more than [`MARK_KEPT_SHARE`] of the hole reads bluer than the
-/// answer's own unmarked page ringed around it, by more than a clean answer
-/// could. Both sides are read from the answer, so a cast over the whole answer
-/// cancels out.
-///
-/// A blue the ring does not have, painted over the hole, is refused too. That
-/// is rare on a grey page and possible on a colour one.
-fn kept_mark(render: &PreparedRender, marks: &[bool], answer: &[u8]) -> bool {
-    let (crop, applied) = (render.crop(), render.applied().bounds);
-    let blue = |at: usize| f64::from(answer[at * 3 + 2]) - f64::from(answer[at * 3]);
-    let mut hole = Vec::new();
-    let mut ring = Vec::new();
-    for y in 0..crop.h as i64 {
-        for x in 0..crop.w as i64 {
-            let (px, py) = (crop.x + x, crop.y + y);
-            let at = (y * i64::from(crop.w) + x) as usize;
-            if render.alpha(px, py) > 0.0 {
-                hole.push(blue(at));
-            } else if !marks[at]
-                && px >= applied.x - MARK_RING
-                && px < applied.right() + MARK_RING
-                && py >= applied.y - MARK_RING
-                && py < applied.bottom() + MARK_RING
-            {
-                ring.push(blue(at));
-            }
-        }
-    }
-    if hole.is_empty() {
-        return false;
-    }
-    let ring = if ring.is_empty() { 0.0 } else { crate::engines::grid::percentile(&mut ring, MARK_RING_PERCENTILE) };
-    let kept = hole.iter().filter(|bias| **bias - ring > MARK_KEPT_BIAS).count();
-    kept as f64 > MARK_KEPT_SHARE * hole.len() as f64
 }
 
 /// The answer as RGB8 at the crop's size.
@@ -980,8 +950,10 @@ mod tests {
     fn the_sent_crop_says_it_is_srgb() {
         let page = gray_page(1000, 1000);
         let prepared = prepared_over(&page, Rect::new(400, 400, 60, 30));
-        let reader = png::Decoder::new(Cursor::new(prepared.marked_png())).read_info().unwrap();
-        assert!(reader.info().srgb.is_some());
+        for sent in [prepared.page_png(), prepared.mask_png()] {
+            let reader = png::Decoder::new(Cursor::new(sent)).read_info().unwrap();
+            assert!(reader.info().srgb.is_some());
+        }
     }
 
     fn gray_page(width: u32, height: u32) -> Raster {
@@ -1022,17 +994,24 @@ mod tests {
     }
 
     #[test]
-    fn the_sent_crop_is_marked_inside_the_mask_and_untouched_outside() {
+    fn the_crop_is_sent_plain_with_a_mask_and_shown_marked() {
         let page = gray_page(1000, 1000);
         let hole = Rect::new(400, 400, 60, 30);
         let prepared = prepared_over(&page, hole);
         let SendRegion { crop, ratio, .. } = prepared.region();
         assert_eq!((crop.w, crop.h, ratio), (512, 512, "1:1"));
-        let sent = image::load_from_memory(prepared.marked_png()).unwrap().into_rgb8();
+        let (x, y) = ((hole.x + 30 - crop.x) as u32, (hole.y + 15 - crop.y) as u32);
+        let sent = image::load_from_memory(prepared.page_png()).unwrap().into_rgb8();
         assert_eq!(sent.dimensions(), (512, 512));
-        let inside = sent.get_pixel((hole.x + 30 - crop.x) as u32, (hole.y + 15 - crop.y) as u32);
-        assert!(inside[2] > inside[0], "{inside:?}");
-        let outside = sent.get_pixel(0, 0);
+        assert_eq!(sent.as_raw(), prepared.render.image_rgb8(), "the page goes with no mark on it");
+        let mask = image::load_from_memory(prepared.mask_png()).unwrap().into_rgb8();
+        assert_eq!(mask.dimensions(), (512, 512));
+        assert_eq!(mask.get_pixel(x, y).0, [255; 3], "the hole is white");
+        assert_eq!(mask.get_pixel(0, 0).0, [0; 3], "the rest is black");
+        let shown = image::load_from_memory(prepared.marked_png()).unwrap().into_rgb8();
+        let inside = shown.get_pixel(x, y);
+        assert!(inside[2] > inside[0], "the person sees the hole marked: {inside:?}");
+        let outside = shown.get_pixel(0, 0);
         assert_eq!(outside[0], outside[2], "{outside:?}");
     }
 
@@ -1045,10 +1024,9 @@ mod tests {
         let companion_box = Rect::new(462, 400, 40, 20);
         let companion = Mask::filled(companion_box);
         let prepared = Prepared::new(&page, &fitted, region, None, std::slice::from_ref(&companion)).unwrap();
-        let sent = image::load_from_memory(prepared.marked_png()).unwrap().into_rgb8();
+        let mask = image::load_from_memory(prepared.mask_png()).unwrap().into_rgb8();
         let crop = region.crop;
-        let mark = sent.get_pixel((480 - crop.x) as u32, (410 - crop.y) as u32);
-        assert!(mark[2] > mark[0], "the companion is marked: {mark:?}");
+        assert_eq!(mask.get_pixel((480 - crop.x) as u32, (410 - crop.y) as u32).0, [255; 3], "the companion is in the mask");
         let rendered = prepared.finish(&answer_png(512, 512, [128, 128, 128])).unwrap();
         let bounds = rendered.mask.bounds;
         assert!(bounds.intersection(companion_box).w > 0, "the test reaches the companion: {bounds:?}");
@@ -1099,14 +1077,20 @@ mod tests {
         let picked = Rect::new(crop.x, crop.y, 20, 20);
         let kept = prepared.restrict(&[picked]).unwrap();
         assert_eq!(kept, vec![picked, applied], "the hole is always kept");
-        let sent = image::load_from_memory(prepared.marked_png()).unwrap().into_rgb8();
-        let at = |x: i64, y: i64| *sent.get_pixel((x - crop.x) as u32, (y - crop.y) as u32);
         let page_at = |x: i64, y: i64| page.sample(x as u32, y as u32, 0) as u8;
-        assert_eq!(at(crop.x + 5, crop.y + 5).0, [page_at(crop.x + 5, crop.y + 5); 3], "a picked area is the page");
-        assert_eq!(at(crop.right() - 1, crop.bottom() - 1).0, [255; 3], "the rest is white");
-        assert_eq!(at(applied.x - 10, applied.y).0, [255; 3], "past the hole is white when not picked");
-        let mark = at(hole.x + 30, hole.y + 15);
-        assert!(mark[2] > mark[0], "the hole is still marked: {mark:?}");
+        let read = |png: &[u8]| image::load_from_memory(png).unwrap().into_rgb8();
+        let (sent, mask, shown) = (read(prepared.page_png()), read(prepared.mask_png()), read(prepared.marked_png()));
+        let at = |image: &image::RgbImage, x: i64, y: i64| image.get_pixel((x - crop.x) as u32, (y - crop.y) as u32).0;
+        for image in [&sent, &shown] {
+            assert_eq!(at(image, crop.x + 5, crop.y + 5), [page_at(crop.x + 5, crop.y + 5); 3], "a picked area is the page");
+            assert_eq!(at(image, crop.right() - 1, crop.bottom() - 1), [255; 3], "the rest is white");
+            assert_eq!(at(image, applied.x - 10, applied.y), [255; 3], "past the hole is white when not picked");
+        }
+        assert_eq!(at(&sent, hole.x + 30, hole.y + 15), [page_at(hole.x + 30, hole.y + 15); 3], "the hole goes as the page");
+        assert_eq!(at(&mask, hole.x + 30, hole.y + 15), [255; 3], "and is white in the mask");
+        assert_eq!(at(&mask, crop.right() - 1, crop.bottom() - 1), [0; 3]);
+        let mark = at(&shown, hole.x + 30, hole.y + 15);
+        assert!(mark[2] > mark[0], "the hole is still shown marked: {mark:?}");
     }
 
     #[test]
@@ -1140,66 +1124,17 @@ mod tests {
         assert!(got.pixels.data == expected.pixels.data, "white sent outside the areas changes nothing written");
     }
 
-    /// The crop as sent, with the mark taken back out of every hole pixel at
-    /// or past `kept` of the hole's rows, as a model that cleaned only part of
-    /// the hole would answer.
-    fn answer_keeping(prepared: &Prepared, kept: f64) -> Vec<u8> {
-        let crop = prepared.region.crop;
-        let mut rgb = image::load_from_memory(prepared.marked_png()).unwrap().into_rgb8().into_raw();
-        let page = prepared.render.image_rgb8();
-        let bounds = prepared.render.applied().bounds;
-        let cut = bounds.y + (f64::from(bounds.h) * kept).round() as i64;
-        for y in 0..crop.h as i64 {
-            for x in 0..crop.w as i64 {
-                if crop.y + y >= cut {
-                    let at = (y * i64::from(crop.w) + x) as usize * 3;
-                    rgb[at..at + 3].copy_from_slice(&page[at..at + 3]);
-                }
-            }
-        }
-        encode_rgb_png(crop.w, crop.h, &rgb).unwrap()
-    }
-
+    /// Blue and violet art in the answer is the art, not a kept mark: on
+    /// 2026-11-10 a clean answer over dark violet hair (chapter 50, page 2) was
+    /// refused as keeping the mark when one was still sent.
     #[test]
-    fn an_answer_that_kept_the_mark_is_refused_and_a_clean_one_is_not() {
-        let page = gray_page(1000, 1000);
-        let prepared = prepared_over(&page, Rect::new(400, 400, 200, 200));
-        assert!(matches!(prepared.finish(prepared.marked_png()), Err(AnswerError::KeptMark)));
-        assert!(prepared.finish(&answer_keeping(&prepared, 0.0)).is_ok());
-        assert!(prepared.finish(&answer_png(512, 512, [170, 170, 170])).is_ok());
-    }
-
-    /// Under the old mean, a mark kept over a fifth of the hole read about 13
-    /// levels bluer overall and passed.
-    #[test]
-    fn a_mark_kept_over_part_of_the_hole_is_refused() {
-        let page = gray_page(1000, 1000);
-        let prepared = prepared_over(&page, Rect::new(400, 400, 200, 200));
-        assert!(matches!(prepared.finish(&answer_keeping(&prepared, 0.2)), Err(AnswerError::KeptMark)));
-    }
-
-    /// A blue cast over the whole answer is not a kept mark: the ring is read
-    /// from the answer too.
-    #[test]
-    fn a_cast_over_the_whole_answer_is_not_a_kept_mark() {
-        let page = gray_page(1000, 1000);
-        let prepared = prepared_over(&page, Rect::new(400, 400, 200, 200));
-        assert!(prepared.finish(&answer_png(512, 512, [150, 170, 230])).is_ok());
-        let cast: Vec<u8> = prepared.render.image_rgb8().chunks(3)
-            .flat_map(|pixel| [pixel[0].saturating_sub(20), pixel[1], pixel[2].saturating_add(40)]).collect();
-        assert!(prepared.finish(&encode_rgb_png(512, 512, &cast).unwrap()).is_ok());
-    }
-
-    #[test]
-    fn a_kept_mark_is_caught_on_a_colour_page_too() {
+    fn a_blue_answer_on_a_colour_page_is_written() {
         let page = colour_page(1000, 1000);
         let prepared = prepared_over(&page, Rect::new(400, 400, 200, 200));
-        assert!(matches!(prepared.finish(prepared.marked_png()), Err(AnswerError::KeptMark)));
-        assert!(matches!(prepared.finish(&answer_keeping(&prepared, 0.2)), Err(AnswerError::KeptMark)));
-        assert!(prepared.finish(&answer_keeping(&prepared, 0.0)).is_ok());
+        assert!(prepared.finish(&answer_png(512, 512, [70, 40, 160])).is_ok());
+        assert!(prepared.finish(prepared.marked_png()).is_ok(), "nothing in an answer is read as a mark");
     }
 
-    /// A page with nothing on it is an empty region, not one too large.
     #[test]
     fn an_empty_page_is_an_empty_region() {
         let page = gray_page(1000, 1000);

@@ -1593,7 +1593,6 @@ export const es = {
       nanoBananaUnreachable: 'no se pudo conectar con Nano Banana',
       nanoBananaBlocked: 'Google se negó a devolver una imagen para este recorte',
       nanoBananaBadAnswer: 'Nano Banana no devolvió una imagen utilizable',
-      nanoBananaKeptMark: 'Nano Banana dejó la marca azul en el resultado',
       nanoBananaKeyStore: 'no se pudo leer la clave de Nano Banana del almacén de credenciales del sistema',
       nanoBananaLocation: 'Google no ofrece este modelo de Nano Banana en tu país',
       nanoBananaBilling: 'la facturación no está configurada para esta clave de Nano Banana, o se agotó su cuota',

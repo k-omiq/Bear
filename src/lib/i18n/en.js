@@ -1970,7 +1970,6 @@ export const en = {
       nanoBananaUnreachable: 'Nano Banana could not be reached',
       nanoBananaBlocked: 'Google refused to return an image for this crop',
       nanoBananaBadAnswer: 'Nano Banana returned no usable image',
-      nanoBananaKeptMark: 'Nano Banana left the blue mark on the result',
       nanoBananaKeyStore: 'the Nano Banana key could not be read from the system credential store',
       nanoBananaLocation: 'Google does not offer this Nano Banana model in your country',
       nanoBananaBilling: 'billing is not set up for this Nano Banana key, or its quota is used up',

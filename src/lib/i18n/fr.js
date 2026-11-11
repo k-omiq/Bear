@@ -1593,7 +1593,6 @@ export const fr = {
       nanoBananaUnreachable: 'Nano Banana est injoignable',
       nanoBananaBlocked: 'Google a refusé de renvoyer une image pour ce recadrage',
       nanoBananaBadAnswer: 'Nano Banana n’a renvoyé aucune image utilisable',
-      nanoBananaKeptMark: 'Nano Banana a laissé la marque bleue sur le résultat',
       nanoBananaKeyStore: 'la clé Nano Banana n’a pas pu être lue dans le trousseau du système',
       nanoBananaLocation: 'Google ne propose pas ce modèle Nano Banana dans votre pays',
       nanoBananaBilling: 'la facturation n’est pas configurée pour cette clé Nano Banana, ou son quota est épuisé',

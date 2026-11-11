@@ -50,7 +50,7 @@
 //!   ([`RETRY_WAITS`]), and when the waits are used up the batch stops,
 //!   because the next region would wait too.
 //! - **The crop** ([`Verdict::Crop`]): a safety refusal, a recitation, an
-//!   answer that could not be used or kept the mark, a request Google refused
+//!   answer that could not be used, a request Google refused
 //!   as put, a link lost after the whole request was sent (its answer may be
 //!   billed, so it is not sent again), a page changed while the request was
 //!   out, a region too large. Another region may well go through, so this
@@ -650,7 +650,7 @@ mod tests {
         for failure in [Failure::RateLimited, Failure::Unreachable] {
             assert_eq!(verdict(failure.reason_key()), Verdict::Busy, "{failure:?}");
         }
-        for failure in [Failure::Blocked, Failure::Recited, Failure::BadAnswer, Failure::KeptMark, Failure::Lost,
+        for failure in [Failure::Blocked, Failure::Recited, Failure::BadAnswer, Failure::Lost,
             Failure::BadRequest] {
             assert_eq!(verdict(failure.reason_key()), Verdict::Crop, "{failure:?}");
         }
@@ -665,13 +665,13 @@ mod tests {
         let targets = [target(0, "c1-p001-d0"), target(0, "c1-p001-d1"), target(1, "c1-p002-d0"), target(1, "c1-p002-d1")];
         let (report, summary, types, waits, _) = run_walk(&targets, 4, |id, _| match id {
             "c1-p001-d0" => Attempt::Refused(Failure::Blocked.reason_key()),
-            "c1-p002-d0" => Attempt::Refused(Failure::KeptMark.reason_key()),
+            "c1-p002-d0" => Attempt::Refused(Failure::BadAnswer.reason_key()),
             _ => Attempt::Cleaned(None),
         }, None);
         assert_eq!(report.cleaned, 2);
         assert_eq!(report.failed, vec![
             unclean(&targets[0], Failure::Blocked.reason_key()),
-            unclean(&targets[2], Failure::KeptMark.reason_key()),
+            unclean(&targets[2], Failure::BadAnswer.reason_key()),
         ]);
         assert!(report.left.is_empty() && report.stopped.is_none());
         assert_eq!(summary.reason, "completed");

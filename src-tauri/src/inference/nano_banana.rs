@@ -56,10 +56,17 @@ const KEYRING_ACCOUNT: &str = "nano-banana-api-key";
 const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 /// How many crops of one region are offered before giving up. Google's billing
 /// FAQ says a 400 or 500 error is not charged (checked 2026-11-03). A crop that
-/// comes back as a 200 with no usable image (`IMAGE_RECITATION`, a kept mark) is
+/// comes back as a 200 with no usable image (`IMAGE_RECITATION`) is
 /// a finished request, and whether it is billed is not documented, so this
 /// bounds money as well as time.
 const MAX_CROPS: usize = 4;
+/// How many times one crop is sent again after Google's image filter
+/// (`IMAGE_SAFETY`) dropped its answer. That filter reads the image the model
+/// made, so the same crop often passes the next time: on 2026-11-10 one
+/// restrictive crop came back 10 times in 22. Google's answer says a blocked
+/// image is not charged. The other blocks (`PROHIBITED_CONTENT` and the rest)
+/// say nothing about billing and are not sent again.
+const IMAGE_SAFETY_RESENDS: usize = 3;
 /// How often a waiting edit looks at the stop count, its deadline and its request.
 const TICK: Duration = Duration::from_millis(100);
 /// The most of the request body handed to the connection per read, so progress
@@ -101,13 +108,22 @@ const LIMITS: Limits = Limits {
     max_retry_wait: Duration::from_secs(60),
 };
 
+/// The crop goes plain with a separate mask, not tinted: a tint the model kept
+/// could not be told from blue or violet art on a colour page, and a clean
+/// answer over dark violet hair was refused as keeping it (2026-11-10).
+///
+/// Measured the same day on one restrictive crop Google often blocks: this
+/// wording came back 10 times in 22 tries; a longer one that called the task a
+/// restoration of a published comic, labelled each image and forbade
+/// redrawing came back 2 times in 16. The tint and the old wording, 1 in 6.
 const SYSTEM_INSTRUCTION: &str = "You are a precision inpainting model for manga pages. This is a strict removal-only task.\n\
-You will receive a single cropped patch image. A semi-transparent blue overlay marks the only editable region.\n\
-Delete the lettering under the blue overlay and restore what it covers. Never introduce new elements.\n\
-Do not alter any pixels outside the blue overlay, and leave no blue behind.\n\
-Return exactly one edited image at the same dimensions as the input.";
+You will receive two images of the same size. The first is a cropped page patch. The second is a mask: \
+white marks the only editable region, black must stay exactly as it is.\n\
+Delete the lettering inside the white region of the mask and restore what it covers. Never introduce new elements.\n\
+Do not alter any pixels where the mask is black.\n\
+Return exactly one edited image: the first image, edited, at its dimensions.";
 
-const USER_PROMPT: &str = "Removal-only edit inside the blue-marked region only. \
+const USER_PROMPT: &str = "Removal-only edit of the first image, inside the white region of the second image only. \
 Remove all lettering there: dialogue, sound effects, and their outlines. \
 Rebuild what the lettering covers by continuing the surrounding paper, screentone dots, lines and artwork at the same scale and tone. \
 Do not add any new text, symbols, or objects. Keep the page's black-and-white or colour style.";
@@ -120,7 +136,7 @@ fn user_prompt(instruction: Option<&str>) -> String {
         None => USER_PROMPT.to_owned(),
         Some(note) => format!(
             "{USER_PROMPT}\nThe person cleaning this page adds: \"{note}\"\n\
-Use that to decide what to remove and how to rebuild it, inside the blue-marked region only."
+Use that to decide what to remove and how to rebuild it, inside the white region of the mask only."
         ),
     }
 }
@@ -219,11 +235,14 @@ pub(crate) enum Failure {
     /// A safety filter said no. Manga trips it, and another crop would not change
     /// what the page shows.
     Blocked,
+    /// `IMAGE_SAFETY` alone: the filter on the image the model made. The same
+    /// crop is sent again ([`IMAGE_SAFETY_RESENDS`]) before it counts as
+    /// [`Failure::Blocked`].
+    ImageSafety,
     /// `IMAGE_RECITATION`: refused for this crop. The same sound effect over
     /// screentone was refused at 1:1 and 9:16 and cleaned at 1:4 and 3:4.
     Recited,
     BadAnswer,
-    KeptMark,
     /// [`nano_banana_stop`] ended the edit.
     Stopped,
     /// The person was shown the crop and chose not to send it
@@ -248,9 +267,8 @@ impl Failure {
             Failure::LongWait => "decline.reason.nanoBananaLongWait",
             Failure::Unreachable => "decline.reason.nanoBananaUnreachable",
             Failure::Lost => "decline.reason.nanoBananaLost",
-            Failure::Blocked | Failure::Recited => "decline.reason.nanoBananaBlocked",
+            Failure::Blocked | Failure::ImageSafety | Failure::Recited => "decline.reason.nanoBananaBlocked",
             Failure::BadAnswer | Failure::BadRequest => "decline.reason.nanoBananaBadAnswer",
-            Failure::KeptMark => "decline.reason.nanoBananaKeptMark",
             Failure::Stopped => "decline.reason.nanoBananaStopped",
             Failure::Skipped => "decline.reason.nanoBananaSkipped",
             Failure::NoWindow => "decline.reason.nanoBananaNoWindow",
@@ -270,16 +288,25 @@ const SAFETY_OFF: [&str; 5] = [
     "HARM_CATEGORY_JAILBREAK",
 ];
 
-fn request_body(png: &[u8], region: SendRegion, instruction: Option<&str>, with_system: bool) -> Value {
+/// The crop and its mask, as PNG: the two images a request carries.
+#[derive(Clone, Copy)]
+pub(crate) struct Sent<'a> {
+    pub page: &'a [u8],
+    pub mask: &'a [u8],
+}
+
+fn request_body(sent: Sent, region: SendRegion, instruction: Option<&str>, with_system: bool) -> Value {
+    let image = |png: &[u8]| json!({ "inlineData": {
+        "mimeType": "image/png",
+        "data": base64::engine::general_purpose::STANDARD.encode(png),
+    } });
     let mut body = json!({
         "contents": [{
             "role": "user",
             "parts": [
                 { "text": user_prompt(instruction) },
-                { "inlineData": {
-                    "mimeType": "image/png",
-                    "data": base64::engine::general_purpose::STANDARD.encode(png),
-                } },
+                image(sent.page),
+                image(sent.mask),
             ],
         }],
         "generationConfig": {
@@ -328,8 +355,10 @@ fn read_answer(response: &Value) -> Result<Vec<u8>, Failure> {
     if reason_in(&["RECITATION", "IMAGE_RECITATION"]) {
         return Err(Failure::Recited);
     }
-    let blocked = reason_in(&["SAFETY", "IMAGE_SAFETY", "PROHIBITED_CONTENT", "IMAGE_PROHIBITED_CONTENT", "BLOCKLIST", "SPII"]);
-    Err(if blocked { Failure::Blocked } else { Failure::BadAnswer })
+    if reason_in(&["SAFETY", "PROHIBITED_CONTENT", "IMAGE_PROHIBITED_CONTENT", "BLOCKLIST", "SPII"]) {
+        return Err(Failure::Blocked);
+    }
+    Err(if reason_in(&["IMAGE_SAFETY"]) { Failure::ImageSafety } else { Failure::BadAnswer })
 }
 
 /// One call's HTTP result, before anything decides to retry it.
@@ -733,13 +762,21 @@ impl Client {
     /// bad request names it. A busy server gets one more try after the wait it
     /// asks for. A key or a model that was refused does not, because it would
     /// only be refused again.
-    fn edit(&self, turn: &Turn, model: &str, png: &[u8], region: SendRegion, instruction: Option<&str>)
+    fn edit(&self, turn: &Turn, model: &str, sent: Sent, region: SendRegion, instruction: Option<&str>)
         -> Result<Vec<u8>, Failure> {
         let mut with_system = true;
         let mut busy_retried = false;
+        let mut resent = 0;
         loop {
-            match self.call(turn, model, &request_body(png, region, instruction, with_system)) {
-                Reply::Answer(answer) => return read_answer(&answer),
+            match self.call(turn, model, &request_body(sent, region, instruction, with_system)) {
+                Reply::Answer(answer) => match read_answer(&answer) {
+                    Err(Failure::ImageSafety) if resent < IMAGE_SAFETY_RESENDS => {
+                        resent += 1;
+                        eprintln!("manga-cleaner: Nano Banana sends the same crop again after IMAGE_SAFETY ({resent} of {IMAGE_SAFETY_RESENDS})");
+                        turn.check()?;
+                    }
+                    read => return read,
+                },
                 Reply::Fatal(failure) => return Err(failure),
                 Reply::NoSystem if with_system => with_system = false,
                 Reply::NoSystem => return Err(Failure::ModelRejected),
@@ -777,7 +814,6 @@ fn model_reason(error: ModelError) -> &'static str {
 /// Why an answer could not be used.
 fn answer_reason(error: AnswerError) -> &'static str {
     match error {
-        AnswerError::KeptMark => Failure::KeptMark.reason_key(),
         AnswerError::Render(error) => model_reason(error),
         other => {
             eprintln!("manga-cleaner: Nano Banana answer refused: {other}");
@@ -1004,13 +1040,14 @@ fn render_with(client: &Client, config: &Config, stop: &Stop, page: &Raster, fit
     let companions: Vec<Mask> = group.members.iter().map(|at| others[*at].clone()).collect();
     let turn = client.gate.enter(stop, client.limits.edit).map_err(Failure::reason_key)?;
     // Every answer that could not be used for this crop tries the next one: a
-    // refusal, an empty or unreadable answer, one the wrong shape, one that
-    // kept the mark. What another crop would not change ends the edit.
+    // refusal, an empty or unreadable answer, one the wrong shape. What
+    // another crop would not change ends the edit.
     let mut last = Failure::Recited.reason_key();
     for (refused, region) in group.regions.into_iter().take(MAX_CROPS).enumerate() {
         let mut prepared = Prepared::new(page, fitted, region, finishing, &companions).map_err(model_reason)?;
         let kept = settle(&turn, config, show, &mut prepared, refused)?;
-        let answer = match client.edit(&turn, config.model.id, prepared.marked_png(), region, config.instruction.as_deref()) {
+        let sent = Sent { page: prepared.page_png(), mask: prepared.mask_png() };
+        let answer = match client.edit(&turn, config.model.id, sent, region, config.instruction.as_deref()) {
             Ok(answer) => answer,
             Err(failure @ (Failure::Recited | Failure::BadAnswer)) => {
                 last = failure.reason_key();
@@ -1360,7 +1397,7 @@ mod tests {
     /// One region's request, holding the client's gate as a render would.
     fn edit(client: &Client, model: &str, png: &[u8], region: SendRegion, instruction: Option<&str>) -> Result<Vec<u8>, Failure> {
         let turn = client.gate.enter(&Stop::default(), client.limits.edit).unwrap();
-        client.edit(&turn, model, png, region, instruction)
+        client.edit(&turn, model, Sent { page: png, mask: b"mask" }, region, instruction)
     }
 
     fn a_region() -> SendRegion {
@@ -1385,7 +1422,8 @@ mod tests {
         assert!(!head.lines().next().unwrap().contains("test-key"), "the key stays out of the URL");
         assert_eq!(body["generationConfig"]["imageConfig"], json!({ "imageSize": "512", "aspectRatio": "4:1" }));
         assert!(body["systemInstruction"].is_object());
-        assert_eq!(body["contents"][0]["parts"][1]["inlineData"]["data"], "cG5n");
+        assert_eq!(body["contents"][0]["parts"][1]["inlineData"]["data"], "cG5n", "the crop first");
+        assert_eq!(body["contents"][0]["parts"][2]["inlineData"]["data"], "bWFzaw==", "then its mask");
         let safety = body["safetySettings"].as_array().unwrap();
         assert_eq!(safety.len(), SAFETY_OFF.len());
         assert!(safety.iter().all(|setting| setting["threshold"] == "OFF"), "{safety:?}");
@@ -1575,7 +1613,10 @@ mod tests {
     #[test]
     fn a_safety_block_is_told_apart_from_an_empty_answer() {
         assert_eq!(read_answer(&json!({ "promptFeedback": { "blockReason": "SAFETY" } })), Err(Failure::Blocked));
-        assert_eq!(read_answer(&json!({ "candidates": [{ "finishReason": "IMAGE_SAFETY" }] })), Err(Failure::Blocked));
+        assert_eq!(read_answer(&json!({ "candidates": [{ "finishReason": "IMAGE_SAFETY" }] })), Err(Failure::ImageSafety));
+        assert_eq!(read_answer(&json!({ "candidates": [{ "finishReason": "PROHIBITED_CONTENT" }] })), Err(Failure::Blocked));
+        assert_eq!(read_answer(&json!({ "candidates": [{ "finishReason": "IMAGE_SAFETY" }, { "finishReason": "SAFETY" }] })),
+            Err(Failure::Blocked), "any other block wins");
         assert_eq!(read_answer(&json!({ "candidates": [{ "finishReason": "IMAGE_RECITATION" }] })), Err(Failure::Recited));
         assert_eq!(read_answer(&json!({ "candidates": [{ "finishReason": "NO_IMAGE" }] })), Err(Failure::BadAnswer));
         assert_eq!(read_answer(&json!({})), Err(Failure::BadAnswer));
@@ -1621,7 +1662,7 @@ mod tests {
         assert_eq!(user_prompt(None), USER_PROMPT);
         let prompt = user_prompt(Some("also erase the small arrow"));
         assert!(prompt.starts_with(USER_PROMPT) && prompt.contains("also erase the small arrow"));
-        assert!(prompt.contains("inside the blue-marked region only"));
+        assert!(prompt.contains("inside the white region of the mask only"));
     }
 
     #[test]
@@ -1843,23 +1884,36 @@ mod tests {
         let hole = Rect::new(600, 700, 40, 20);
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
-        let server = serve(vec![(200, json!({ "candidates": [{ "finishReason": "IMAGE_SAFETY" }] }).to_string())]);
+        let server = serve(vec![(200, json!({ "candidates": [{ "finishReason": "PROHIBITED_CONTENT" }] }).to_string())]);
         let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
         let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBlocked"));
         assert_eq!(server.seen.lock().unwrap().len(), 1);
     }
 
+    fn image_safety() -> (u16, String) {
+        (200, json!({ "candidates": [{ "finishReason": "IMAGE_SAFETY" }] }).to_string())
+    }
+
     #[test]
-    fn an_answer_that_kept_the_mark_is_refused() {
-        let hole = Rect::new(600, 700, 200, 200);
+    fn an_image_safety_block_sends_the_same_crop_again_then_gives_up() {
+        let hole = Rect::new(600, 700, 40, 20);
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
-        let server = serve_with(MAX_CROPS, |_, body| http(200, "", &image_reply(&sent_back(body))));
         let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+
+        let server = serve(vec![image_safety(), image_safety(), (200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
+        let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
+        let seen = server.seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        assert!(seen.iter().all(|(_, body)| body == &seen[0].1), "the same crop each time");
+        assert_eq!(edited.record["crops_refused"], 0, "no other crop was tried");
+        drop(seen);
+
+        let server = serve(vec![image_safety(); 1 + IMAGE_SAFETY_RESENDS]);
         let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
-        assert_eq!(refused, Some("decline.reason.nanoBananaKeptMark"));
-        assert!(server.seen.lock().unwrap().len() > 1, "only one crop was offered");
+        assert_eq!(refused, Some("decline.reason.nanoBananaBlocked"));
+        assert_eq!(server.seen.lock().unwrap().len(), 1 + IMAGE_SAFETY_RESENDS);
     }
 
     /// Two lettered holes near each other on one page, each fitted on its own.
@@ -1904,14 +1958,14 @@ mod tests {
         let first = render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a), None).unwrap();
         assert_eq!(first.record["shared_answer"], false);
         {
-            // The one request marked the neighbour as well as this region.
+            // The one request's mask holds the neighbour as well as this region.
             let seen = server.seen.lock().unwrap();
-            let sent = seen[0].1["contents"][0]["parts"][1]["inlineData"]["data"].as_str().unwrap();
+            let sent = seen[0].1["contents"][0]["parts"][2]["inlineData"]["data"].as_str().unwrap();
             let png = base64::engine::general_purpose::STANDARD.decode(sent).unwrap();
-            let marked = image::load_from_memory(&png).unwrap().into_rgb8();
+            let mask = image::load_from_memory(&png).unwrap().into_rgb8();
             let crop = first.record["crop"].as_array().unwrap().iter().map(|n| n.as_i64().unwrap()).collect::<Vec<_>>();
-            let pixel = marked.get_pixel((b.x + 20 - crop[0]) as u32, (b.y + 10 - crop[1]) as u32);
-            assert!(pixel[2] > pixel[0], "the neighbour is marked: {pixel:?}");
+            let pixel = mask.get_pixel((b.x + 20 - crop[0]) as u32, (b.y + 10 - crop[1]) as u32);
+            assert_eq!(pixel.0, [255; 3], "the neighbour is in the mask");
         }
 
         // The neighbour's own turn: there is no server, so any request fails.
@@ -1997,9 +2051,7 @@ mod tests {
         assert_eq!(refused, Some("decline.reason.nanoBananaBadAnswer"));
     }
 
-    /// The marked crop as it was sent: an answer that kept the mark over the hole
-    /// and nowhere else. A blue over the whole answer is a colour cast, which the
-    /// kept-mark check lets through.
+    /// The crop as it was sent.
     fn sent_back(body: &Value) -> Vec<u8> {
         let sent = body["contents"][0]["parts"][1]["inlineData"]["data"].as_str().unwrap();
         base64::engine::general_purpose::STANDARD.decode(sent).unwrap()
@@ -2014,48 +2066,15 @@ mod tests {
     const GRAY: [u8; 3] = [200, 200, 200];
 
     #[test]
-    fn an_answer_that_kept_the_mark_is_offered_again_at_another_crop() {
+    fn an_unreadable_answer_is_offered_again_at_another_crop() {
         let hole = Rect::new(600, 700, 200, 200);
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
-        let server = serve_with(2, |at, body| http(200, "", &image_reply(&if at == 0 { sent_back(body) } else { gray_like_sent(body) })));
+        let server = serve_with(2, |at, body| http(200, "", &image_reply(&if at == 0 { b"not an image".to_vec() } else { gray_like_sent(body) })));
         let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
         let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
         assert_eq!(edited.record["crops_refused"], 1);
         assert_eq!(server.seen.lock().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn a_shared_answer_that_does_not_fit_its_member_falls_back_to_a_request_of_its_own() {
-        let (page, a, b) = two_holes();
-        let (fit_a, fit_b) = (fitted_over(&page, a), fitted_over(&page, b));
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
-        let b_mask = applied_mask(&fit_b, page.width, page.height);
-        // Clean where A is, but the mark left on B: fine for A, refused for B.
-        let server = serve_with(1, |_, body| {
-            let sent = body["contents"][0]["parts"][1]["inlineData"]["data"].as_str().unwrap();
-            let png = base64::engine::general_purpose::STANDARD.decode(sent).unwrap();
-            let mut marked = image::load_from_memory(&png).unwrap().into_rgb8();
-            let tinted = |pixel: &image::Rgb<u8>| i32::from(pixel[2]) > i32::from(pixel[0]) + 10;
-            let first = marked.enumerate_pixels().filter(|(_, _, pixel)| tinted(pixel)).map(|(x, _, _)| x).min().unwrap();
-            for (x, _, pixel) in marked.enumerate_pixels_mut() {
-                let is_b = tinted(pixel) && x >= first + 70;
-                if !is_b {
-                    *pixel = image::Rgb(GRAY);
-                }
-            }
-            let mut out = Vec::new();
-            image::DynamicImage::ImageRgb8(marked).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
-            http(200, "", &image_reply(&out))
-        });
-        let share_a = neighbours("t-shared-unfit", "a", vec![("b".into(), b_mask)]);
-        render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a), None).unwrap();
-
-        let fresh = serve(vec![(200, image_reply(&answer_of(512, 512, GRAY)))]);
-        let share_b = neighbours("t-shared-unfit", "b", Vec::new());
-        let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b), None).unwrap();
-        assert_eq!(edited.record["shared_answer"], false);
-        assert_eq!(fresh.seen.lock().unwrap().len(), 1);
     }
 
     /// A server that takes the request and then says nothing for three seconds,
@@ -2102,7 +2121,7 @@ mod tests {
         std::thread::scope(|scope| {
             let in_flight = scope.spawn(|| {
                 let turn = gate.enter(&stop, LIMITS.edit).unwrap();
-                busy.edit(&turn, "m", b"png", a_region(), None)
+                busy.edit(&turn, "m", Sent { page: b"png", mask: b"mask" }, a_region(), None)
             });
             std::thread::sleep(Duration::from_millis(300));
             let waiting = scope.spawn(|| gate.enter(&stop, LIMITS.edit).map(|_| ()));

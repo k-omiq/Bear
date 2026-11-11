@@ -1565,7 +1565,6 @@ export const ja = {
       nanoBananaUnreachable: 'Nano Banana に接続できませんでした',
       nanoBananaBlocked: 'Google はこの切り抜きの画像を返しませんでした',
       nanoBananaBadAnswer: 'Nano Banana から使える画像が返りませんでした',
-      nanoBananaKeptMark: 'Nano Banana の結果に青い印が残りました',
       nanoBananaKeyStore: 'システムの資格情報ストアから Nano Banana のキーを読み取れませんでした',
       nanoBananaLocation: 'Google はお住まいの国でこの Nano Banana のモデルを提供していません',
       nanoBananaBilling: 'この Nano Banana のキーは課金が設定されていないか、割り当て量を使い切っています',

@@ -1593,7 +1593,6 @@ export const pt = {
       nanoBananaUnreachable: 'não foi possível contactar o Nano Banana',
       nanoBananaBlocked: 'a Google recusou devolver uma imagem para este recorte',
       nanoBananaBadAnswer: 'o Nano Banana não devolveu uma imagem utilizável',
-      nanoBananaKeptMark: 'o Nano Banana deixou a marca azul no resultado',
       nanoBananaKeyStore: 'não foi possível ler a chave do Nano Banana no gestor de credenciais do sistema',
       nanoBananaLocation: 'a Google não oferece este modelo do Nano Banana no seu país',
       nanoBananaBilling: 'a faturação não está configurada para esta chave do Nano Banana, ou a quota esgotou-se',

@@ -386,7 +386,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {boolean} restrictive
  * @property {number[][]} holes - the regions marked blue, always kept
  * @property {number[][]} suggested - the suggested kept areas; empty when not restrictive
- * @property {string} png - base64 PNG of the crop with the blue mark, not whitened
+ * @property {string} png - base64 PNG of the crop with the regions tinted blue, not whitened; Google gets it untinted, with a mask
  */
 
 /**
