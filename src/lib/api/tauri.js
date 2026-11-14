@@ -45,6 +45,8 @@ import { createEventStream } from './tauri-events.js'
  */
 const IMPLEMENTED = Object.freeze({
   about: 'about',
+  rollbackVersions: 'rollback_versions',
+  rollbackPrepare: 'rollback_prepare',
   readDevLog: 'read_dev_log',
   clearDevLog: 'clear_dev_log',
   diagnostics: 'diagnostics',
@@ -292,6 +294,8 @@ export const SEAM_METHODS = Object.freeze([
   'onDenoiseRecorded',
   'onSamInstallProgress',
   'about',
+  'rollbackVersions',
+  'rollbackPrepare',
   'readDevLog',
   'clearDevLog',
   'diagnostics',
@@ -468,6 +472,9 @@ export function createTauriBackend({ fallback, invoke, listen }) {
 
   const implementations = {
     about: () => call(IMPLEMENTED.about),
+    rollbackVersions: () => call(IMPLEMENTED.rollbackVersions),
+    // The updater plugin's metadata; `rollback.js#asUpdate` builds its `Update`.
+    rollbackPrepare: ({ version }) => call(IMPLEMENTED.rollbackPrepare, { version }),
     readDevLog: () => call(IMPLEMENTED.readDevLog),
     clearDevLog: () => call(IMPLEMENTED.clearDevLog),
     // The one command whose answer still crosses in snake_case:

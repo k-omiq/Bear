@@ -53,6 +53,9 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# Release versions for the in-app rollback (`rollback.rs`); the version type
+# the updater plugin and tauri already use, so nothing new in the lockfile.
+semver = "1"
 tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"
 # Cryptographic nonce generation for inference authorization grants

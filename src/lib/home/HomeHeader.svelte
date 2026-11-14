@@ -4,6 +4,7 @@
   import { t } from '../i18n/index.js'
   import { pushModal } from '../state/app.svelte.js'
   import { checkForUpdate } from '../updater.js'
+  import { shouldOfferUpdate } from '../rollback.js'
   import UpdateDialog from './UpdateDialog.svelte'
   import JobsIndicator from '../shell/JobsIndicator.svelte'
   import Wordmark from './Wordmark.svelte'
@@ -28,9 +29,12 @@
   let updateDialogOpen = $state(false)
 
   onMount(() => {
+    // The badge is the one offer made without asking. After a rollback it
+    // stays away for the version the user left (`rollback.js`); Check for
+    // updates in Settings still finds it.
     checkForUpdate()
       .then((u) => {
-        update = u
+        update = u && shouldOfferUpdate(u.version, u.currentVersion) ? u : null
       })
       .catch(() => {
         // Ignore updater errors on startup.

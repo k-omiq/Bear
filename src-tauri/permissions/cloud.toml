@@ -6,6 +6,8 @@ description = "Enables all core application commands for the main window."
 commands.allow = [
     "diagnostics",
     "about",
+    "rollback_versions",
+    "rollback_prepare",
     "read_dev_log",
     "clear_dev_log",
     "read_settings",
