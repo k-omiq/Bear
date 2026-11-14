@@ -6,6 +6,7 @@
   import { interruptedChapter } from './library.svelte.js'
   import { openNewChapter } from './actions.js'
   import { chapterProgress } from '../model/progress.js'
+  import { compareChapterNumbers } from './chapternumber.js'
   import { goLibrary, openChapter } from '../state/app.svelte.js'
 
   /**
@@ -22,8 +23,13 @@
    */
   let { project } = $props()
 
+  // Highest number first, as the list has always read for chapters added in
+  // order, and natural: a split 12.5 sits between 13 and 12
+  // (`chapternumber.js`). Equal numbers keep the backend's order.
   const rows = $derived(
-    project.chapters.map((chapter) => ({ chapter, progress: chapterProgress(chapter) })),
+    [...project.chapters]
+      .sort((a, b) => compareChapterNumbers(b.number, a.number))
+      .map((chapter) => ({ chapter, progress: chapterProgress(chapter) })),
   )
   const totals = $derived(rows.reduce((sum, row) => sum + row.progress.totalPages, 0))
   const interrupted = $derived(interruptedChapter(project))

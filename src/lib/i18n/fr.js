@@ -1182,6 +1182,7 @@ export const fr = {
       replaceDenoised: 'Remplacer par les pages débruitées',
       denoiseHistory: 'Historique du débruitage',
       chapterMenu: 'Actions pour {name}',
+      managePages: 'Gérer les pages…',
       open: 'Ouvrir',
       rename: 'Renommer',
       remove: 'Retirer',
@@ -1256,6 +1257,69 @@ export const fr = {
       permanent: 'Le mode de page est définitif.',
       createSingle: 'Créer un projet page par page',
       createLongstrip: 'Créer un projet en défilement vertical',
+    },
+    pagesScreen: {
+      title: 'Pages',
+      meta: 'Ch. {number} · {name}',
+      add: 'Ajouter des pages…',
+      chooserTitle: 'Choisir les pages à ajouter',
+      place: {
+        label: 'Les nouvelles pages vont',
+        end: 'À la fin',
+        before: 'Avant la sélection',
+        after: 'Après la sélection',
+      },
+      selected: {
+        one: '1 page sélectionnée',
+        other: '{count} pages sélectionnées',
+      },
+      clear: 'Effacer la sélection',
+      selectAll: 'Tout sélectionner',
+      moveEarlier: 'Déplacer avant',
+      moveLater: 'Déplacer après',
+      remove: {
+        one: 'Retirer 1 page',
+        other: 'Retirer {count} pages',
+      },
+      hint: 'Cliquez sur une page pour la sélectionner, avec Maj ou Cmd pour en sélectionner d’autres. Faites glisser les pages pour les déplacer. Déposez ici des images ou un dossier pour les ajouter.',
+      confirm: {
+        ask: {
+          one: 'Retirer 1 page de ce chapitre ?',
+          other: 'Retirer {count} pages de ce chapitre ?',
+        },
+        loss: {
+          one: '1 d’entre elles a des masques, des nettoyages ou des retouches, et ce travail est perdu.',
+          other: '{count} d’entre elles ont des masques, des nettoyages ou des retouches, et ce travail est perdu.',
+        },
+        noLoss: 'Aucune n’a de masque, de nettoyage ni de retouche.',
+        kept: 'Les fichiers des pages restent dans ce chapitre, sous Pages retirées, et peuvent être remis. Vos propres scans ne sont pas touchés. L’historique d’annulation de ce chapitre est effacé.',
+      },
+      loading: 'Lecture des pages…',
+      none: 'Ce chapitre n’a pas encore de fichier de page.',
+      tile: 'Page {number}, {file}, {stateLabel}',
+      pinned: 'Cette page porte du travail, elle garde donc sa place.',
+      state: {
+        cleaned: 'Nettoyée',
+        masks: 'A des masques',
+        edited: 'A des retouches',
+        untouched: 'Intacte',
+      },
+      removed: {
+        title: {
+          one: '1 page retirée',
+          other: '{count} pages retirées',
+        },
+        note: 'Une page remise va à la fin, sans masque ni nettoyage.',
+        restore: 'Remettre',
+      },
+      drop: 'Déposez des images ou un dossier pour les ajouter',
+      done: 'Terminé',
+      why: {
+        busy: 'Une exécution utilise ce chapitre. Les pages pourront changer quand elle sera finie.',
+        lastPage: 'Un chapitre garde au moins une page.',
+        longstrip: 'Ce strip vertical porte du travail, on ne peut donc ajouter des pages qu’à la fin.',
+        pinned: 'La page {page} porte du travail et doit garder son numéro. Les pages avant elle ne peuvent être ni retirées ni déplacées, et aucune nouvelle page ne peut aller avant elle.',
+      },
     },
     newChapter: {
       project: 'Projet',
@@ -2738,6 +2802,25 @@ export const fr = {
     },
   },
   notice: {
+    pages: {
+      pinned: 'La page {page} porte du travail et garde sa place, rien n’a donc été changé.',
+      longstrip: 'Ce strip vertical porte du travail. On ne peut ajouter des pages qu’à la fin.',
+      lastPage: 'Un chapitre garde au moins une page.',
+      gone: 'Cette page n’est plus dans le chapitre. La liste a été relue.',
+      nothingAdded: 'Aucune page n’a été ajoutée. Les fichiers ne sont pas des images lisibles ou sont déjà dans ce chapitre.',
+      alreadyThere: {
+        one: '1 fichier est déjà une page de ce chapitre et n’a pas été ajouté de nouveau.',
+        other: '{count} fichiers sont déjà des pages de ce chapitre et n’ont pas été ajoutés de nouveau.',
+      },
+      added: {
+        one: '1 page ajoutée.',
+        other: '{count} pages ajoutées.',
+      },
+      removed: {
+        one: '1 page retirée. Vous pouvez la remettre depuis l’écran Pages.',
+        other: '{count} pages retirées. Vous pouvez les remettre depuis l’écran Pages.',
+      },
+    },
     measure: {
       busy: 'La mesure attend la fin du nettoyage en cours.',
       running: 'Une mesure est déjà en cours.',

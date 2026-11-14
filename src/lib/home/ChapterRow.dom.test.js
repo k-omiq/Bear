@@ -56,22 +56,22 @@ beforeEach(() => vi.mocked(pushModal).mockClear())
 afterEach(cleanup)
 
 describe('the chapter menu', () => {
-  it('offers Denoise first, and Delete alone behind a separator', () => {
-    expect(chapterMenuItems().map((item) => item.id)).toEqual(['denoise', 'sep-1', 'delete'])
+  it('offers Manage pages first, then Denoise, and Delete alone behind a separator', () => {
+    expect(chapterMenuItems().map((item) => item.id)).toEqual(['pages', 'sep-0', 'denoise', 'sep-1', 'delete'])
     expect(chapterMenuItems({ ...CHAPTER, denoiseReplacement: null }).map((item) => item.id))
-      .toEqual(['denoise', 'sep-1', 'delete'])
+      .toEqual(['pages', 'sep-0', 'denoise', 'sep-1', 'delete'])
   })
 
   it('offers Denoise cleaned chapter only once a page has cleaning on it', () => {
     const ids = (pages) => chapterMenuItems({ ...CHAPTER, pages }).map((item) => item.id)
     expect(ids([{ status: 'notStarted', doneCount: 0 }])).not.toContain('denoiseCleaned')
-    expect(ids([{ status: 'detected', doneCount: 2 }, { status: 'notStarted' }])).toEqual(['denoise', 'denoiseCleaned', 'sep-1', 'delete'])
+    expect(ids([{ status: 'detected', doneCount: 2 }, { status: 'notStarted' }])).toEqual(['pages', 'sep-0', 'denoise', 'denoiseCleaned', 'sep-1', 'delete'])
     expect(ids([{ status: 'cleaned' }])).toContain('denoiseCleaned')
   })
 
   it('offers Replace pages with denoised while a page can take its file, and says what stays', async () => {
     const denoised = { ...CHAPTER, denoiseReplacement: { pages: 1, kept: 1, missing: 0 } }
-    expect(chapterMenuItems(denoised).map((item) => item.id)).toEqual(['denoise', 'replaceDenoised', 'sep-1', 'delete'])
+    expect(chapterMenuItems(denoised).map((item) => item.id)).toEqual(['pages', 'sep-0', 'denoise', 'replaceDenoised', 'sep-1', 'delete'])
 
     const { row, getByRole } = mount(denoised)
     row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 12 }))
@@ -112,7 +112,7 @@ describe('the chapter menu', () => {
 
     const menu = await vi.waitFor(() => getByRole('menu'))
     const items = [...menu.querySelectorAll('[role^="menuitem"]')].map((item) => item.textContent?.trim())
-    expect(items).toEqual([t('home.action.denoise'), t('home.action.deleteChapter')])
+    expect(items).toEqual([t('home.action.managePages'), t('home.action.denoise'), t('home.action.deleteChapter')])
 
     await fireEvent.click(getByRole('menuitem', { name: t('home.action.denoise') }))
     expect(pushModal).toHaveBeenCalledWith(expect.objectContaining({
@@ -172,7 +172,7 @@ describe('a denoised chapter', () => {
     const denoiseHistory = vi.fn().mockResolvedValue(RUNS)
     setBackend(/** @type {any} */ ({ denoiseHistory }))
     const chapter = { ...CHAPTER, denoiseHistory: { runs: 2, latest: 1790000000, taken: false } }
-    expect(chapterMenuItems(chapter).map((item) => item.id)).toEqual(['denoise', 'denoiseHistory', 'sep-1', 'delete'])
+    expect(chapterMenuItems(chapter).map((item) => item.id)).toEqual(['pages', 'sep-0', 'denoise', 'denoiseHistory', 'sep-1', 'delete'])
     const { row, getByRole, container } = mount(chapter)
     expect(container.querySelector('.chip'), 'no separate control beside the row').toBeNull()
     row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 12 }))

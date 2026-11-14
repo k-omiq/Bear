@@ -185,7 +185,8 @@ export function cleanPage(page, ctx) {
  * @returns {import('../model/types.js').Chapter}
  */
 export function makeChapter(spec, projectId, order, ctx) {
-  const id = `${projectId}-ch${spec.number}`
+  // A split number (`12/2`) is not an id: its marks become `_`.
+  const id = `${projectId}-ch${String(spec.number).replace(/[^0-9A-Za-z]+/g, '_')}`
   const chapter = {
     id,
     projectId,

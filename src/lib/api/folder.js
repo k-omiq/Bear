@@ -87,3 +87,58 @@ export async function chooseOnnx({ title } = {}) {
   })
   return typeof chosen === 'string' && chosen !== '' ? chosen : null
 }
+
+/** The page files the Pages screen offers to add, as the chapter import reads them. */
+export const PAGE_FILE_EXTENSIONS = Object.freeze(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff'])
+
+/**
+ * Choose page files to add to a chapter, several at once. `[]` when nothing
+ * was chosen or there is no chooser (the browser dev server, vitest).
+ *
+ * @param {{title?: string, defaultPath?: string}} [options]
+ * @returns {Promise<string[]>}
+ */
+export async function chooseImages({ title, defaultPath } = {}) {
+  if (!isTauri()) return []
+  const invoke = globalThis.__TAURI__?.core?.invoke ?? globalThis.__TAURI_INTERNALS__?.invoke
+  if (typeof invoke !== 'function') return []
+  const chosen = await invoke('plugin:dialog|open', {
+    options: {
+      title,
+      defaultPath: defaultPath || undefined,
+      directory: false,
+      multiple: true,
+      filters: [{ name: 'Comic pages', extensions: [...PAGE_FILE_EXTENSIONS] }],
+    },
+  })
+  const list = Array.isArray(chosen) ? chosen : typeof chosen === 'string' ? [chosen] : []
+  return list.filter((path) => typeof path === 'string' && path !== '')
+}
+
+/**
+ * Files dropped on the window, by path. Inside a Tauri window the webview does
+ * not see a file drop as a DOM event - Tauri takes it and says so as
+ * `tauri://drag-drop` with the paths - so this listens there. Outside one it
+ * does nothing, and the caller reads the DOM `drop` instead (the mock takes
+ * file names).
+ *
+ * @param {{onenter?: () => void, onleave?: () => void, ondrop: (paths: string[]) => void}} handlers
+ * @returns {() => void} stop listening
+ */
+export function listenFileDrops({ onenter, onleave, ondrop }) {
+  const listen = globalThis.__TAURI__?.event?.listen
+  if (!isTauri() || typeof listen !== 'function') return () => {}
+  /** @type {Array<Promise<() => void>>} */
+  const pending = [
+    listen('tauri://drag-enter', () => onenter?.()),
+    listen('tauri://drag-leave', () => onleave?.()),
+    listen('tauri://drag-drop', (event) => {
+      onleave?.()
+      const paths = event?.payload?.paths
+      if (Array.isArray(paths) && paths.length) ondrop(paths.filter((path) => typeof path === 'string'))
+    }),
+  ].map((promise) => Promise.resolve(promise))
+  return () => {
+    for (const promise of pending) promise.then((unlisten) => unlisten?.()).catch(() => {})
+  }
+}
