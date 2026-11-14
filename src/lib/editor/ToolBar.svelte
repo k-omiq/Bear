@@ -189,8 +189,9 @@
    * and decides no grouping of its own.
    *
    * What it *does* decide is which side of the Adjustments button each
-   * parameter falls on, and that is the one rule the pill owns: `size` and the
-   * colour's swatch stay out on the bar, and every other slider goes behind the
+   * parameter falls on, and that is the one rule the pill owns: `size`, a row
+   * the spec marks `bar` (a brush's Hardness and Opacity) and the colour's
+   * swatch stay out on the bar, and every other slider goes behind the
    * button. A group left with nothing on the bar draws no
    * hairline of its own.
    */
@@ -204,7 +205,7 @@
       /** @type {Array<any>} */
       const onBar = []
       for (const param of group.params) {
-        if (param.kind === 'range' && param.key !== 'size') behind.push(param)
+        if (param.kind === 'range' && param.key !== 'size' && !param.bar) behind.push(param)
         else onBar.push(param)
       }
       if (onBar.length) groups.push({ key: group.key, params: onBar })

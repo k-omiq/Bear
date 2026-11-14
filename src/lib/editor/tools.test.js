@@ -11,7 +11,9 @@ import {
   PANEL_WIDTH,
   SOLID,
   TOOL_SPECS,
+  BRUSH_TIPS,
   activeParams,
+  brushTipOf,
   draftShape,
   effectiveChoice,
   hexInvalid,
@@ -127,9 +129,11 @@ describe('toolSpec', () => {
       expect(brush.params.find((p) => p.key === key)?.when).toBeUndefined()
     }
 
+    // 1 to 100 by ones, out on the bar beside Size and Hardness.
     expect(brush.params.find((p) => p.key === 'opacity')).toMatchObject({
-      kind: 'range', key: 'opacity', min: 0, max: 100, step: 5, unit: '%',
+      kind: 'range', key: 'opacity', min: 1, max: 100, step: 1, unit: '%', bar: true, group: 'brush',
     })
+    expect(brush.params.map((p) => p.key)).toEqual(['size', 'tip', 'hardness', 'opacity', 'spacing', 'color', 'flow'])
     expect(brush.params.find((p) => p.key === 'flow')).toMatchObject({
       kind: 'range', key: 'flow', min: 0, max: 100, step: 5, unit: '%',
     })
@@ -147,7 +151,7 @@ describe('toolSpec', () => {
   // one choice that is the stamp's alone. It has no second mode.
   it('keeps stamp controls and offers independent regional selection and blending', () => {
     const spec = toolSpec('cloneStamp')
-    expect(activeParams(spec, { mode: 'stamp' }).map((param) => param.key)).toEqual(['mode', 'size', 'hardness', 'spacing', 'opacity', 'flow', 'alignment'])
+    expect(activeParams(spec, { mode: 'stamp' }).map((param) => param.key)).toEqual(['mode', 'size', 'tip', 'hardness', 'spacing', 'opacity', 'flow', 'alignment'])
     expect(activeParams(spec, { mode: 'region', shape: 'rect' }).map((param) => param.key)).toEqual(['mode', 'shape', 'opacity', 'feather', 'edgeOpacity'])
     expect(activeParams(spec, { mode: 'region', shape: 'brush', placing: true }).map((param) => param.key)).toEqual(['mode', 'shape', 'size', 'opacity', 'feather', 'edgeOpacity', 'rotation'])
     expect(draftShape('cloneStamp', { mode: 'region', shape: 'magnetic' })).toBe('polygon')
@@ -159,10 +163,41 @@ describe('toolSpec', () => {
   it('declares opacity and flow for cloneStamp', () => {
     const cloneStamp = toolSpec('cloneStamp')
     const opacityParam = cloneStamp.params.find((p) => p.key === 'opacity')
-    expect(opacityParam).toMatchObject({ kind: 'range', key: 'opacity', min: 0, max: 100, step: 5, unit: '%' })
+    expect(opacityParam).toMatchObject({ kind: 'range', key: 'opacity', min: 1, max: 100, step: 1, unit: '%', bar: true })
 
     const flowParam = cloneStamp.params.find((p) => p.key === 'flow')
     expect(flowParam).toMatchObject({ kind: 'range', key: 'flow', min: 0, max: 100, step: 5, unit: '%' })
+  })
+
+  // The three tools whose strokes are dabs of the Brush's tip (`paint/plan.rs`)
+  // take a round or square tip and a 1 to 100 opacity on the bar, and the Brush
+  // and the Eraser their hardness there too. The mask brushes stroke a mask an engine cleans whole, so neither
+  // means anything there.
+  it('gives the dab brushes a tip and an opacity of 1 to 100 on the bar', () => {
+    const live = (/** @type {string} */ id, values = {}) => activeParams(toolSpec(id), values).map((param) => param.key)
+    expect(live('eraser')).toEqual(['size', 'tip', 'hardness', 'opacity'])
+    for (const id of ['brush', 'eraser', 'cloneStamp']) {
+      const params = toolSpec(id).params
+      expect(params.find((p) => p.key === 'tip')).toMatchObject({
+        kind: 'choice',
+        labelKey: 'tools.param.tip',
+        options: [
+          { value: 'round', labelKey: 'tools.option.tipRound', icon: 'tip-round' },
+          { value: 'square', labelKey: 'tools.option.tipSquare', icon: 'tip-square' },
+        ],
+      })
+      expect(params.find((p) => p.key === 'opacity'), id).toMatchObject({ min: 1, max: 100, step: 1, bar: true })
+      expect(params.find((p) => p.key === 'hardness')?.bar === true, id).toBe(id !== 'cloneStamp')
+    }
+    for (const id of ['aiMaskBrush', 'maskSelect', 'patch', 'gradient', 'shapes']) {
+      expect(toolSpec(id).params.find((p) => p.key === 'tip'), id).toBeUndefined()
+    }
+    // A Region copy's brush selection has no tip row.
+    expect(live('cloneStamp', { mode: 'region', shape: 'brush' })).not.toContain('tip')
+    expect(BRUSH_TIPS).toEqual(['round', 'square'])
+    expect(brushTipOf({ tip: 'square' })).toBe('square')
+    for (const tip of [undefined, null, 'round', 'Square', 'hex']) expect(brushTipOf({ tip })).toBe('round')
+    expect(brushTipOf(null)).toBe('round')
   })
 })
 
@@ -705,7 +740,10 @@ describe('the icons and the short labels the bar draws a choice with', () => {
       .filter(({ param }) => param.options.every((option) => option.icon))
       .map(({ id, param }) => `${id}.${param.key}`)
     expect(pictured).toEqual([
+      'brush.tip',
+      'eraser.tip',
       'shapes.shape',
+      'cloneStamp.tip',
       'cloneStamp.alignment',
       'maskSelect.mode',
       'maskSelect.shape',

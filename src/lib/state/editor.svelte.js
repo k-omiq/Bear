@@ -129,6 +129,7 @@ function defaultToolParams() {
     // (`paint.js#paintParamsOf`, `region.rs#paint_plan`).
     brush: {
       size: 28,
+      tip: 'round',
       hardness: 100,
       spacing: 12,
       mode: 'paint',
@@ -136,7 +137,7 @@ function defaultToolParams() {
       opacity: 100,
       flow: 100,
     },
-    eraser: { size: 28, hardness: 100, opacity: 100 },
+    eraser: { size: 28, tip: 'round', hardness: 100, opacity: 100 },
     // A new shape paints with a solid colour. Its outline is optional.
     shapes: { shape: 'rect', mode: 'solid', color: session.colorPair.active, opacity: 100, outlineColor: '#000000', outlineWidth: 0, feather: 0 },
     // The AI mask brush defaults to the local LaMa Manga model.
@@ -149,6 +150,7 @@ function defaultToolParams() {
       edgeOpacity: 100,
       rotation: 0,
       size: 32,
+      tip: 'round',
       hardness: 50,
       spacing: 12,
       opacity: 100,

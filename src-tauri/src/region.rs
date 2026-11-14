@@ -3970,6 +3970,8 @@ fn paint_snapshot(
             "spacing": spec.spacing,
             "pressure_size": spec.pressure_size,
             "pressure_opacity": spec.pressure_opacity,
+            // Absent on a stroke saved before there was a choice, which was round.
+            "tip": spec.tip.name(),
         },
         // How much of the stroke the commit actually walked. The one number
         // that separates a tap from a sweep after the fact.
@@ -4658,6 +4660,15 @@ fn paint_plan(tool: &str, params: &serde_json::Value) -> Option<PaintPlan> {
             .and_then(serde_json::Value::as_u64)
             .map(|v| v as u32)
             .unwrap_or(0),
+        // A word, so not `from`: the `paint` block first, the tool's own
+        // params after, and round where neither says (every stroke sent before
+        // the choice existed).
+        tip: cleaner_core::paint::Tip::parse(
+            paint
+                .and_then(|p| p.get("tip"))
+                .or_else(|| params.get("tip"))
+                .and_then(serde_json::Value::as_str),
+        ),
     };
 
     Some(PaintPlan {
@@ -5605,6 +5616,7 @@ pub async fn erase_paint(
     size: f64,
     hardness: f64,
     opacity: f64,
+    tip: Option<String>,
 ) -> Result<Option<PaintErase>, String> {
     crate::library::blocking(move || {
         let expected_source = match (expected_source_idx, expected_source_sha) {
@@ -5623,6 +5635,7 @@ pub async fn erase_paint(
             hardness: if hardness.is_finite() { hardness.clamp(0.0, 100.0) } else { 100.0 },
             opacity: if opacity.is_finite() { opacity.clamp(0.0, 100.0) } else { 100.0 },
             flow: 100.0,
+            tip: cleaner_core::paint::Tip::parse(tip.as_deref()),
             ..cleaner_core::paint::BrushSpec::default()
         };
         erase_paint_at(&located, expected_source.as_ref(), &points, &spec)
@@ -11068,6 +11081,20 @@ mod tests {
         assert_eq!(paint_plan("brush", &params).unwrap().spec.size, 18.0);
     }
 
+    /// The tip rides in the `paint` block or the tool's own params, and a
+    /// stroke that names neither (every one sent before the choice) is round.
+    #[test]
+    fn the_tip_is_read_from_the_paint_block_then_the_params() {
+        use cleaner_core::paint::Tip;
+        let stroke = serde_json::json!({ "points": [{ "x": 5.0, "y": 5.0 }], "radius": 9.0 });
+        let brush = serde_json::json!({ "mode": "paint", "stroke": stroke, "paint": { "points": [{ "x": 5.0, "y": 5.0 }], "tip": "square" } });
+        assert_eq!(paint_plan("brush", &brush).unwrap().spec.tip, Tip::Square);
+        let clone = serde_json::json!({ "stroke": stroke, "tip": "square", "cloneOffset": { "x": -4.0, "y": 3.0 } });
+        assert_eq!(paint_plan("cloneStamp", &clone).unwrap().spec.tip, Tip::Square);
+        let old = serde_json::json!({ "mode": "paint", "stroke": stroke });
+        assert_eq!(paint_plan("brush", &old).unwrap().spec.tip, Tip::Round);
+    }
+
     /// The `paint` block is optional for `cloneStamp`, and the fallback is the
     /// stroke every drawing tool already sends, at the default pressure - which
     /// is `0.5` and not `1.0`, because a device that says nothing about pressure
@@ -11330,6 +11357,7 @@ mod tests {
         assert_eq!(snapshot["tool"], "brush");
         assert_eq!(snapshot["fill_mode"], "solid");
         assert_eq!(snapshot["brush"]["size"], 24.0);
+        assert_eq!(snapshot["brush"]["tip"], "round");
         for absent in [
             "thickness",
             "deviation",

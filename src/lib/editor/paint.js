@@ -25,12 +25,14 @@
  * @property {boolean} pressureSize
  * @property {boolean} pressureOpacity
  * @property {number} seed
+ * @property {'round'|'square'} tip - the dab's outline (`paint/plan.rs#Tip`)
  */
 
 /**
  * @typedef {Object} ClonePaintParams
  * @property {PaintPoint[]} points
  * @property {number} seed
+ * @property {'round'|'square'} tip
  */
 
 /**
@@ -126,13 +128,20 @@ export function paintParamsOf(tool, params = {}, points = []) {
       pressureSize: true,
       pressureOpacity: false,
       seed: computeSeed(points),
+      tip: params.tip === 'square' ? 'square' : 'round',
     }
   }
 
+  // The clone's brush numbers ride on the tool's own params, which the seam
+  // reads where the block is silent (`region.rs#paint_plan`); the tip is the
+  // one word, so it is said here outright. Region copy and Live copy have no
+  // tip row, and their brush selection stays round whatever the stamp's is.
   if (tool === 'cloneStamp') {
+    const copy = params.mode === 'region' || params.mode === 'live'
     return {
       points: pts,
       seed: computeSeed(points),
+      tip: !copy && params.tip === 'square' ? 'square' : 'round',
     }
   }
 

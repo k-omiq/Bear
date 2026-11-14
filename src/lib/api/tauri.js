@@ -718,7 +718,7 @@ export function createTauriBackend({ fallback, invoke, listen }) {
         painted: painted ?? null,
       }),
     // Bound to the source the gesture was drawn over, as `createRegion` is.
-    erasePaint: ({ chapterId, pageIndex, sourceIndex, sourceSha, points, size, hardness, opacity }) =>
+    erasePaint: ({ chapterId, pageIndex, sourceIndex, sourceSha, points, size, hardness, opacity, tip }) =>
       call(IMPLEMENTED.erasePaint, {
         chapterId,
         pageIndex,
@@ -728,6 +728,7 @@ export function createTauriBackend({ fallback, invoke, listen }) {
         size,
         hardness,
         opacity,
+        tip: tip ?? null,
       }),
     // The Patch tool's proposed source and the Gradient tool's Match
     // surroundings: read-only, bound to the source the selection was drawn

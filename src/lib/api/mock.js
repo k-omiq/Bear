@@ -3890,7 +3890,8 @@ export function createMockBackend(options = {}) {
      * mock keeps no pixels, so it works on boxes: a layer the stroke's swept
      * box covers whole goes off the page, and one it only crosses is answered
      * as changed, with a new revision for an undo to name. Each is answered
-     * with the page that owns it.
+     * with the page that owns it. `hardness`, `opacity` and `tip` (round or
+     * square) are taken and not read: a square sweeps the same box as a disc.
      */
     async erasePaint({ chapterId, pageIndex, points, size } = {}) {
       await delay(timing.method)

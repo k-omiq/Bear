@@ -10,7 +10,7 @@
 //!
 //! The eraser's own coverage is a Brush stroke's: the same dab plan
 //! ([`super::plan::plan_stroke`]) and the same tip
-//! (`brush.rs#analytic_radial_coverage`), and like the Brush it does not build
+//! (`brush.rs#analytic_radial_coverage`, round or square by `spec.tip`), and like the Brush it does not build
 //! up: a pixel is taken down by the most any one dab covers it, capped at the
 //! stroke's opacity.
 
@@ -51,7 +51,7 @@ pub fn erase_coverage(points: &[StrokePoint], spec: &BrushSpec) -> Option<Mask> 
             for px in left..=right {
                 // A page pixel is sampled on its integer coordinate, as
                 // `brush.rs#stamp_dab_subpixel` samples it.
-                let t = (px as f64 - dab.x).hypot(py as f64 - dab.y) / dab.radius;
+                let t = spec.tip.distance(px as f64 - dab.x, py as f64 - dab.y) / dab.radius;
                 let covered = (super::brush::analytic_radial_coverage(t, hardness) * alpha).clamp(0.0, 1.0);
                 if covered <= 0.0 {
                     continue;
@@ -213,6 +213,21 @@ mod tests {
         assert!(erase_patch(&mut patch, &here));
         assert_eq!(patch.mask.coverage(10, 10), 0);
         assert_eq!(patch.mask.coverage(2, 2), 255);
+    }
+
+    /// A square eraser takes its corners off too, and caps them at the
+    /// stroke's opacity as a round one does.
+    #[test]
+    fn a_square_eraser_reaches_its_corners() {
+        let square = BrushSpec { tip: plan::Tip::Square, ..spec(20.0, 100.0, 100.0) };
+        let erase = erase_coverage(&[point(50.0, 50.0)], &square).unwrap();
+        assert_eq!(erase.coverage(59, 59), 255);
+        assert_eq!(erase.coverage(41, 41), 255);
+        assert_eq!(erase.coverage(60, 50), 0);
+        let round = erase_coverage(&[point(50.0, 50.0)], &spec(20.0, 100.0, 100.0)).unwrap();
+        assert_eq!(round.coverage(59, 59), 0);
+        let light = erase_coverage(&[point(50.0, 50.0), point(70.0, 50.0)], &BrushSpec { opacity: 40.0, ..square }).unwrap();
+        assert_eq!(light.coverage(59, 59), 102);
     }
 
     #[test]

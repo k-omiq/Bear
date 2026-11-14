@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { brushSurface, coverageAt, proxyScale } from './brushsurface.js'
+import { brushSurface, coverageAt, proxyScale, tipDistance } from './brushsurface.js'
 import { planStroke } from './paintplan.js'
 
 const brush = (over = {}) => ({
@@ -35,6 +35,15 @@ describe('coverageAt', () => {
   })
 })
 
+describe('tipDistance', () => {
+  it('is plan.rs#Tip::distance: straight for a disc, the larger axis for a square', () => {
+    expect(tipDistance(3, 4)).toBe(5)
+    expect(tipDistance(3, 4, 'round')).toBe(5)
+    expect(tipDistance(3, -4, 'square')).toBe(4)
+    expect(tipDistance(-3, 3, 'square')).toBe(3)
+  })
+})
+
 describe('proxyScale', () => {
   it('caps the short edge at 1024, like the tiles', () => {
     expect(proxyScale(800, 1200)).toBe(1)
@@ -67,6 +76,54 @@ describe('brushSurface', () => {
     surface.add({ x: 50, y: 50, p: 1 })
     surface.add({ x: 80, y: 50, p: 1 })
     expect(pixels(surface).alpha(65, 50)).toBe(Math.round(0.4 * 255))
+  })
+
+  // The same dabs as `paint/mod.rs#a_square_tip_covers_the_corners_a_round_one_leaves`:
+  // the preview and the commit cover the same pixels, pixel for pixel.
+  it('stamps a square tip over its corners, the 7 by 7 a hard dab 7 across covers', () => {
+    const square = brushSurface({ brush: brush({ size: 7, tip: 'square' }), color: '#000000', pageWidth: 200, pageHeight: 200 })
+    square.add({ x: 9, y: 9, p: 1 })
+    const round = brushSurface({ brush: brush({ size: 7 }), color: '#000000', pageWidth: 200, pageHeight: 200 })
+    round.add({ x: 9, y: 9, p: 1 })
+    const out = pixels(square)
+    const covered = []
+    for (let y = 0; y < 20; y += 1) for (let x = 0; x < 20; x += 1) if (out.alpha(x, y) > 0) covered.push([x, y])
+    expect(covered).toHaveLength(49)
+    expect(covered.every(([x, y]) => x >= 6 && x <= 12 && y >= 6 && y <= 12)).toBe(true)
+    expect(out.alpha(12, 12)).toBe(255)
+    expect(pixels(round).alpha(12, 12)).toBe(0)
+  })
+
+  // `paint/mod.rs#a_soft_square_fades_by_its_axis_distance`'s dab.
+  it('softens a square by its axis distance, as hardness softens a disc', () => {
+    const at = (/** @type {'round'|'square'} */ tip) => {
+      const surface = brushSurface({ brush: brush({ size: 11, hardness: 50, tip }), color: '#000000', pageWidth: 200, pageHeight: 200 })
+      surface.add({ x: 9, y: 9, p: 1 })
+      const out = pixels(surface)
+      return (/** @type {number} */ x, /** @type {number} */ y) => out.alpha(x, y)
+    }
+    const square = at('square')
+    const edge = Math.round(coverageAt(3 / 5.5, 0.5) * 255)
+    expect(square(9, 9)).toBe(255)
+    expect(square(12, 9)).toBe(edge)
+    expect(square(12, 12)).toBe(edge)
+    expect(square(6, 12)).toBe(edge)
+    expect(square(13, 13)).toBeLessThan(edge)
+    const round = at('round')
+    expect(round(12, 9)).toBe(edge)
+    expect(round(12, 12)).toBeLessThan(edge)
+  })
+
+  // `paint/erase.rs#a_square_eraser_reaches_its_corners`: a corner is capped
+  // at the stroke's opacity however often the stroke covers it.
+  it('caps a square stroke at its opacity, corners and all', () => {
+    const surface = brushSurface({ brush: brush({ opacity: 40, tip: 'square' }), color: '#000000', pageWidth: 200, pageHeight: 200 })
+    surface.add({ x: 50, y: 50, p: 1 })
+    surface.add({ x: 70, y: 50, p: 1 })
+    const out = pixels(surface)
+    expect(out.alpha(59, 59)).toBe(102)
+    expect(out.alpha(41, 41)).toBe(102)
+    expect(out.alpha(60, 50 + 11)).toBe(0)
   })
 
   it('stays inside the page unless it is a longstrip stroke', () => {

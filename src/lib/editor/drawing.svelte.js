@@ -476,6 +476,7 @@ async function eraseDrawn(spec) {
     size: Math.max(1, Number(spec.params.size ?? 28)),
     hardness: percent(spec.params.hardness, 100),
     opacity: percent(spec.params.opacity, 100),
+    tip: spec.params.tip === 'square' ? 'square' : 'round',
   })
   const erased = (result?.erased ?? []).map((layer) => ({
     ...layer,

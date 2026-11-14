@@ -41,6 +41,7 @@
  * @property {boolean} pressureSize
  * @property {boolean} pressureOpacity
  * @property {number} [seed]
+ * @property {'round'|'square'} [tip] - the dab's outline, `plan.rs#Tip`; round where absent
  */
 
 /**
@@ -293,5 +294,6 @@ export function brushFromParams(params = {}, fallback = {}) {
     pressureSize: true,
     pressureOpacity: false,
     seed: 0,
+    tip: p.tip === 'square' ? 'square' : 'round',
   }
 }

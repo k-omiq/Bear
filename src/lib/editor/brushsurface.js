@@ -8,7 +8,7 @@
  * page pixels to preview, so this file draws it from the same dab plan the
  * commit stamps (`paintplan.js#strokePlanner`) with the same coverage rule
  * (`crates/cleaner-core/src/paint/brush.rs#stamp_dab_subpixel`, analytic tip,
- * no build-up): a pixel's coverage is the largest any dab gave it, capped at
+ * round or square by `brush.tip`, no build-up): a pixel's coverage is the largest any dab gave it, capped at
  * the stroke's opacity, so a soft rim stays soft however often the dabs
  * overlap. Only new dabs are stamped, so a frame costs what the pointer added.
  *
@@ -51,6 +51,19 @@ const MIN_RADIUS = 0.75
 export function proxyScale(pageWidth, pageHeight) {
   const short = Math.max(1, Math.min(Number(pageWidth) || 1, Number(pageHeight) || 1))
   return Math.min(1, PROXY_SHORT_EDGE / short)
+}
+
+/**
+ * How far `(dx, dy)` is from a dab's centre in the tip's own measure:
+ * straight-line for a round tip, the larger axis distance for a square one, so
+ * 1 radius is the tip's edge either way. `paint/plan.rs#Tip::distance`.
+ *
+ * @param {number} dx
+ * @param {number} dy
+ * @param {'round'|'square'|string} [tip]
+ */
+export function tipDistance(dx, dy, tip = 'round') {
+  return tip === 'square' ? Math.max(Math.abs(dx), Math.abs(dy)) : Math.hypot(dx, dy)
 }
 
 /** `brush.rs#analytic_radial_coverage`, `t` in radii from the centre. */
@@ -104,6 +117,7 @@ export function brushSurface({ brush, color, pageWidth, pageHeight, clipY = true
   const height = Math.max(1, Math.round(pageHeight * scale))
   const opacity = Math.min(1, Math.max(0, brush.opacity / 100))
   const hardness = Math.min(1, Math.max(0, brush.hardness / 100))
+  const tip = brush.tip === 'square' ? 'square' : 'round'
   const [r, g, b] = rgbOf(color)
   const plan = strokePlanner(brush)
   /** @type {Map<string, SurfaceTile>} */
@@ -160,7 +174,7 @@ export function brushSurface({ brush, color, pageWidth, pageHeight, clipY = true
           const dy = py + (sy + 0.5) / samples - 0.5 * scale - cy
           for (let sx = 0; sx < samples; sx += 1) {
             const dx = px + (sx + 0.5) / samples - 0.5 * scale - cx
-            covered += coverageAt(Math.hypot(dx, dy) / radius, hardness)
+            covered += coverageAt(tipDistance(dx, dy, tip) / radius, hardness)
           }
         }
         const dabAlpha = Math.min(1, (covered / (samples * samples)) * alpha)
