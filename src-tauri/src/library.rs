@@ -335,6 +335,12 @@ pub struct IndexChapter {
     /// `max + 1` is only the fallback for a caller that names no number, and is
     /// what the New chapter dialog starts its field at.
     pub number: u32,
+    /// The number as the user typed it, when it is more than digits: `12.5`,
+    /// `12-1`, `12/2` or `12,5` for a split chapter. `number` then holds the
+    /// leading whole number, which is what `max + 1` and older builds read.
+    /// `None` for a plain number. See [`chapter_label`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// The folder this chapter's pages were read from, as `createChapter`
     /// resolved it - **recorded once, at creation, and never re-derived**.
     ///
@@ -469,6 +475,47 @@ pub struct Bbox {
 pub struct CloudOutcome {
     pub accepted: bool,
     pub rejection_cause: Option<&'static str>,
+}
+
+/// The longest chapter number the dialog accepts, in characters.
+pub const CHAPTER_LABEL_MAX: usize = 24;
+
+/// A chapter number as the user typed it, for a split chapter: runs of digits
+/// joined by single `.`, `,`, `/` or `-` (`12.5`, `12-1`, `12/2`, `12,5`).
+///
+/// Answers the leading whole number, which is what `number` stores and what
+/// `max + 1` counts from, and the label when it is more than that number.
+/// `None` for anything else, so a label is never a path, never blank and never
+/// ends in a separator. The label is only ever shown and stored in the index:
+/// the chapter's files are named by its id, and an export by its job file, so
+/// no character of it reaches a file name on any platform.
+pub fn chapter_label(raw: &str) -> Option<(u32, Option<String>)> {
+    let text = raw.trim();
+    if text.is_empty() || text.chars().count() > CHAPTER_LABEL_MAX {
+        return None;
+    }
+    let separator = |c: char| matches!(c, '.' | ',' | '/' | '-');
+    if !text.chars().all(|c| c.is_ascii_digit() || separator(c)) {
+        return None;
+    }
+    let mut runs = text.split(separator);
+    if runs.clone().any(str::is_empty) {
+        return None;
+    }
+    let whole: u32 = runs.next()?.parse().ok()?;
+    let split = runs.next().is_some();
+    Some((whole, split.then(|| text.to_owned())))
+}
+
+impl IndexChapter {
+    /// The number as the seam carries it: the label when there is one, the
+    /// whole number otherwise.
+    pub fn shown_number(&self) -> serde_json::Value {
+        match &self.label {
+            Some(label) => serde_json::Value::String(label.clone()),
+            None => serde_json::Value::from(self.number),
+        }
+    }
 }
 
 /// Validate and sanitize an identifier string exposed across the public Tauri seam.
@@ -715,7 +762,15 @@ pub struct ApiChapter {
     pub id: String,
     pub project_id: String,
     pub name: String,
+    /// The leading whole number, for this crate's own arithmetic. Not sent:
+    /// the seam's `number` is [`ApiChapter::shown_number`].
+    #[serde(skip)]
     pub number: u32,
+    /// What the seam calls `number`: a JSON number for a plain chapter, and
+    /// the label as typed (`"12.5"`) for a split one, so every place that
+    /// prints `Ch. {number}` prints what the user typed.
+    #[serde(rename = "number")]
+    pub shown_number: serde_json::Value,
     pub order: u32,
     pub last_opened: RelativeTime,
     /// The folder this chapter's pages came from, or `""` when the library
@@ -814,12 +869,12 @@ pub enum Scans {
 }
 
 /// The result of deleting one chapter.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ChapterDeleted {
     /// No project or no chapter in the library has that id.
     NoChapter,
     Deleted {
-        number: u32,
+        number: serde_json::Value,
         scans: Scans,
     },
 }
@@ -1835,6 +1890,26 @@ impl Library {
         number: Option<u32>,
         source_path: Option<PathBuf>,
     ) -> Result<NewChapter, LibraryError> {
+        self.create_chapter_labelled(project_id, name, number, None, source_path)
+    }
+
+    /// [`Library::create_chapter`] with the number as the user typed it.
+    ///
+    /// `label` wins over `number` when it is given and valid
+    /// ([`chapter_label`]): `12.5` is stored as `number: 12` with the label
+    /// beside it. An invalid label is the dialog's to refuse; here it falls
+    /// back to `number`, so a caller can never store a label the rule rejects.
+    pub fn create_chapter_labelled(
+        &self,
+        project_id: &str,
+        name: &str,
+        number: Option<u32>,
+        label: Option<&str>,
+        source_path: Option<PathBuf>,
+    ) -> Result<NewChapter, LibraryError> {
+        let typed = label.and_then(chapter_label);
+        let number = typed.as_ref().map(|(whole, _)| *whole).or(number);
+        let label = typed.and_then(|(_, label)| label);
         let _lock = self.lock_index()?;
         let mut index = self.index()?;
         let at = now();
@@ -1848,9 +1923,13 @@ impl Library {
             // The number the user chose, stored verbatim. `max + 1` is the
             // fallback for a caller that names none, and is what the dialog
             // starts its field at.
-            let number = number.filter(|given| *given >= 1).unwrap_or_else(|| {
-                project.chapters.iter().map(|c| c.number).max().unwrap_or(0) + 1
-            });
+            // A split label may lead with 0 (`0.5`, a prologue); a plain
+            // number still starts at 1.
+            let number = number
+                .filter(|given| *given >= 1 || label.is_some())
+                .unwrap_or_else(|| {
+                    project.chapters.iter().map(|c| c.number).max().unwrap_or(0) + 1
+                });
             let resolved = match source_path {
                 Some(given) => Some(given),
                 None => match self.inferred_source_dir(project, name) {
@@ -1875,6 +1954,7 @@ impl Library {
                 id: chapter_id.clone(),
                 name: name.to_owned(),
                 number,
+                label,
                 source_path: source_dir,
                 created: at,
                 last_opened: at,
@@ -1922,8 +2002,14 @@ impl Library {
         let Some(root) = project.source_path.as_deref() else {
             return Ok(None);
         };
-        let named = root.join(name);
-        let candidate = if named.is_dir() {
+        // The name is the user's label and may hold `/` or `..` now that
+        // split chapters are named `12/2`: only a name that is one plain path
+        // component is looked for as a subfolder, so a name can never reach
+        // outside the project's folder.
+        let mut parts = Path::new(name).components();
+        let plain = matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none();
+        let named = Some(root.join(name)).filter(|named| plain && named.is_dir());
+        let candidate = if let Some(named) = named {
             named
         } else if root.is_dir() {
             root.to_path_buf()
@@ -2234,7 +2320,7 @@ impl Library {
         };
 
         let chapter = &project.chapters[at];
-        let number = chapter.number;
+        let number = chapter.shown_number();
         let source_dir = chapter.source_path.clone();
         let project_root = project.source_path.clone();
 
@@ -3113,6 +3199,7 @@ impl Library {
                 project_id: project.id.clone(),
                 name: chapter.name.clone(),
                 number: chapter.number,
+                shown_number: chapter.shown_number(),
                 order,
                 last_opened: relative_time(at, chapter.last_opened),
                 // The job is already open here; asking `chapter_source` would
@@ -3899,15 +3986,17 @@ pub async fn create_chapter(
     project_id: String,
     name: String,
     number: Option<u32>,
+    label: Option<String>,
     source_path: Option<String>,
 ) -> Result<Option<ApiChapter>, String> {
     let handle = app.clone();
     let id = project_id.clone();
     let outcome = blocking(move || {
-        Ok(Library::for_app(&handle)?.create_chapter(
+        Ok(Library::for_app(&handle)?.create_chapter_labelled(
             &id,
             &name,
             number,
+            label.as_deref(),
             source_path.map(PathBuf::from),
         ))
     })
@@ -3944,7 +4033,7 @@ pub async fn create_chapter(
                 .unwrap_or_default();
             crate::events::notice(
                 "notice.chapter.added",
-                serde_json::json!({ "chapter": chapter.number, "project": project_name }),
+                serde_json::json!({ "chapter": chapter.shown_number, "project": project_name }),
                 "info",
             );
             Ok(Some(*chapter))
@@ -4401,6 +4490,521 @@ impl From<LibraryError> for String {
     fn from(error: LibraryError) -> String {
         error.to_string()
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* A chapter's pages: add, remove, move, restore                       */
+/* ------------------------------------------------------------------ */
+//
+// **A page with work keeps its place.** Every region id is built on its page's
+// id, and a page id is its position (`page_id`, `crate::region::page_index_in`):
+// a mask on page 3 is `c5-p003-r0` for as long as it exists, and a run on the
+// page now at position 3 mints `c5-p003-r…` again. So no edit here may move a
+// page that has a record in the manifest - a detection, a clean, a withdrawn
+// or revised layer, a held row. Moving one would point its regions' ids at a
+// different page and let two regions share an id. Pages with no work can be
+// added, removed and moved freely around that rule, and adding at the end is
+// always allowed. A longstrip with any work is append-only, because a layer
+// near a join reaches the page beside it.
+//
+// **Removing a page keeps its file.** The page leaves `strip.order` and its
+// records leave the manifest (the confirmation says that work goes), but its
+// `sources` row and its imported file stay, so every source index in the
+// manifest, its history and its cloud journals still means the same page, and
+// the page can be put back from the chapter's removed list. The user's own
+// scan file was never the chapter's to touch and is not touched.
+//
+// **Undo history is cleared by any edit that is not a pure append**, since its
+// entries name regions by position-derived ids and pages by source index, and
+// a replay after a move could restore a region onto the wrong page.
+
+/// One chapter's pages, for the Pages screen.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterPages {
+    pub chapter_id: String,
+    pub longstrip: bool,
+    /// Page headers in reading order, as `listProjects` gives them.
+    pub pages: Vec<ApiPage>,
+    /// Per position: whether the page has masks, cleans or edits, and so must
+    /// keep its place ([`page_work`]).
+    pub worked: Vec<bool>,
+    /// Pages taken out of the chapter, which can be put back.
+    pub removed: Vec<RemovedPage>,
+    /// A run is using the chapter: every edit is refused until it ends.
+    pub busy: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedPage {
+    pub source_index: usize,
+    pub file: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Why a page edit was refused. The notice key is [`PageRefusal::key`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageRefusal {
+    /// The edit would move this page (1-based), which has work on it.
+    Pinned { page: u32 },
+    /// A longstrip with work only takes pages at its end.
+    Longstrip,
+    /// Every page would go. A chapter keeps one.
+    LastPage,
+    /// A position or page named is not in the chapter.
+    OutOfRange,
+    /// Nothing to add: every file was refused or is already a page.
+    NothingAdded,
+}
+
+impl PageRefusal {
+    pub fn key(&self) -> &'static str {
+        match self {
+            PageRefusal::Pinned { .. } => "notice.pages.pinned",
+            PageRefusal::Longstrip => "notice.pages.longstrip",
+            PageRefusal::LastPage => "notice.pages.lastPage",
+            PageRefusal::OutOfRange => "notice.pages.gone",
+            PageRefusal::NothingAdded => "notice.pages.nothingAdded",
+        }
+    }
+
+    fn params(&self) -> serde_json::Value {
+        match self {
+            PageRefusal::Pinned { page } => serde_json::json!({ "page": page }),
+            _ => serde_json::json!({}),
+        }
+    }
+}
+
+/// What a page edit did.
+#[derive(Debug, Clone)]
+pub enum PagesEdited {
+    NoChapter,
+    Refused(PageRefusal),
+    /// The pages as they are now, how many were added or put back, and the
+    /// notices ingest produced for the files offered.
+    Done { pages: Box<ChapterPages>, added: usize, removed: usize, reports: Vec<NoticeSpec> },
+}
+
+/// Whether a source has a record anywhere in the manifest.
+fn source_has_work(project: &Project, source_idx: usize) -> bool {
+    let patch = |record: &PatchRecord| {
+        record.source_idx == source_idx || record.native_parts.iter().any(|part| part.source_idx == source_idx)
+    };
+    project.patches.iter().any(patch)
+        || project.text_shape_patch_revisions.iter().any(patch)
+        || project.legacy_patch_revisions.iter().any(patch)
+        || project.withdrawn_patches.iter().any(patch)
+        || project.text_shape_plans.iter().any(|plan| plan.source_idx == source_idx)
+        || project.text_shape_corrections.iter().any(|row| row.source_idx == source_idx)
+        || project.regions_untouched.iter().any(|row| row.source_idx == source_idx)
+        || project.detections.iter().any(|row| row.source_idx == source_idx)
+        || project.cleaned_detections.iter().any(|row| row.source_idx == source_idx)
+        || project.cleaned_held.iter().any(|held| held.row.source_idx == source_idx)
+}
+
+/// Per position in `strip.order`: whether that page has work and must keep
+/// its place.
+pub fn page_work(project: &Project) -> Vec<bool> {
+    project.strip.order.iter().map(|&source| source_has_work(project, source)).collect()
+}
+
+/// Whether `next` is an order this chapter may take. `dropped` are the
+/// sources leaving the chapter, whose own work goes with them.
+pub fn check_page_order(project: &Project, next: &[usize], dropped: &[usize]) -> Result<(), PageRefusal> {
+    if next.is_empty() {
+        return Err(PageRefusal::LastPage);
+    }
+    let old = &project.strip.order;
+    let work = page_work(project);
+    let append = next.len() >= old.len() && next[..old.len()] == old[..];
+    if project.strip.mode == StripMode::Longstrip && !append && work.iter().any(|&w| w) {
+        return Err(PageRefusal::Longstrip);
+    }
+    for (position, &source) in old.iter().enumerate() {
+        if work[position] && !dropped.contains(&source) && next.get(position) != Some(&source) {
+            return Err(PageRefusal::Pinned { page: position as u32 + 1 });
+        }
+    }
+    Ok(())
+}
+
+/// Take every record of `gone` out of the manifest. Their `sources` rows stay.
+fn drop_page_records(project: &mut Project, gone: &[usize]) {
+    let keep = |source: usize| !gone.contains(&source);
+    let patch = |record: &PatchRecord| keep(record.source_idx) && record.native_parts.iter().all(|part| keep(part.source_idx));
+    project.patches.retain(patch);
+    project.text_shape_patch_revisions.retain(patch);
+    project.legacy_patch_revisions.retain(patch);
+    project.withdrawn_patches.retain(patch);
+    project.text_shape_plans.retain(|plan| keep(plan.source_idx));
+    project.text_shape_corrections.retain(|row| keep(row.source_idx));
+    project.regions_untouched.retain(|row| keep(row.source_idx));
+    project.detections.retain(|row| keep(row.source_idx));
+    project.cleaned_detections.retain(|row| keep(row.source_idx));
+    project.cleaned_held.retain(|held| keep(held.row.source_idx));
+    project.denoised.retain(|page| keep(page.source_idx));
+    for list in [
+        &mut project.examined,
+        &mut project.errored,
+        &mut project.detected,
+        &mut project.cloud_detected,
+        &mut project.redetect,
+    ] {
+        list.retain(|&source| keep(source));
+    }
+}
+
+/// Move `strip.order` to `next`, keeping `interrupted_at` on the same page.
+fn set_page_order(project: &mut Project, next: Vec<usize>) {
+    let interrupted = project
+        .interrupted_at
+        .and_then(|at| project.strip.order.get(at as usize).copied());
+    project.interrupted_at = interrupted
+        .and_then(|source| next.iter().position(|&held| held == source))
+        .map(|at| at as u32);
+    project.strip.order = next;
+}
+
+impl Library {
+    /// The Pages screen's listing of one chapter.
+    pub fn chapter_pages(&self, chapter_id: &str) -> Result<Option<ChapterPages>, LibraryError> {
+        let path = self.resolve_chapter(chapter_id)?;
+        if !path.is_file() {
+            return Ok(None);
+        }
+        // Asked the way every edit below asks: by trying for the chapter.
+        let busy = crate::run::lock_chapter(&path).is_err();
+        let project = self.read_manifest(&path)?;
+        Ok(Some(pages_listing(chapter_id, &project, busy)))
+    }
+
+    /// Add image files (or the images in a dropped folder) to a chapter, at
+    /// `at` (a position, `0..=len`) or at the end. Through the same import as
+    /// a new chapter: format checks, conversion to a lossless PNG, the
+    /// free-space check, and files copied into the chapter's own `pages/`.
+    pub fn add_pages(&self, chapter_id: &str, paths: &[PathBuf], at: Option<usize>) -> Result<PagesEdited, LibraryError> {
+        self.add_pages_with_space(chapter_id, paths, at, crate::weights::free_space)
+    }
+
+    fn add_pages_with_space(
+        &self,
+        chapter_id: &str,
+        paths: &[PathBuf],
+        at: Option<usize>,
+        free_space: impl Fn(&Path) -> Option<u64>,
+    ) -> Result<PagesEdited, LibraryError> {
+        let path = self.resolve_chapter(chapter_id)?;
+        if !path.is_file() {
+            return Ok(PagesEdited::NoChapter);
+        }
+        let _lock = crate::run::lock_chapter(&path)?;
+        let mut job = open_job(&path)?;
+        let count = job.project.strip.order.len();
+        let at = at.unwrap_or(count);
+        if at > count {
+            return Ok(PagesEdited::Refused(PageRefusal::OutOfRange));
+        }
+        // Checked before anything is imported, with a stand-in for the new
+        // pages, so a refused insert writes no file.
+        let probe: Vec<usize> = {
+            let first = job.project.sources.len();
+            let mut next = job.project.strip.order.clone();
+            next.insert(at, first);
+            next
+        };
+        if let Err(refusal) = check_page_order(&job.project, &probe, &[]) {
+            return Ok(PagesEdited::Refused(refusal));
+        }
+
+        let inputs: Vec<PathBuf> = paths
+            .iter()
+            .flat_map(|given| if given.is_dir() { read_directory(given) } else { vec![given.clone()] })
+            .collect();
+        let pages_dir = sidecar_dir(&path).join(PAGES_DIR);
+        let required = estimate_import_bytes(&inputs);
+        if required > 0 {
+            let available = free_space(&pages_dir)
+                .ok_or_else(|| LibraryError::FreeSpaceUnavailable { path: pages_dir.clone() })?;
+            if available < required {
+                return Err(LibraryError::InsufficientSpace { required, available });
+            }
+        }
+        let report = ingest::ingest_paths_importing(inputs, &pages_dir);
+        let parent = path.parent().unwrap_or(&self.root);
+        let imported = Project::from_ingest(parent, env!("CARGO_PKG_VERSION"), job.project.strip.mode, &report);
+        let mut reports = input_reports(&imported);
+
+        // A file already a page of this chapter is not added twice; the copy
+        // just imported for it is the library's own and goes.
+        let present: Vec<&str> = job
+            .project
+            .strip
+            .order
+            .iter()
+            .filter_map(|&source| job.project.sources.get(source).map(|row| row.sha256.as_str()))
+            .collect();
+        let (fresh, repeated): (Vec<_>, Vec<_>) =
+            imported.sources.into_iter().partition(|row| !present.contains(&row.sha256.as_str()));
+        for row in &repeated {
+            let _ = std::fs::remove_file(parent.join(&row.rel_path));
+            if let Some(conversion) = &row.conversion {
+                let _ = std::fs::remove_file(parent.join(&conversion.archived_original));
+            }
+        }
+        if !repeated.is_empty() {
+            reports.push(NoticeSpec {
+                key: "notice.pages.alreadyThere".into(),
+                params: serde_json::json!({ "count": repeated.len() }),
+                tone: "info",
+            });
+        }
+        if fresh.is_empty() {
+            for notice in reports {
+                crate::events::notice(&notice.key, notice.params, notice.tone);
+            }
+            return Ok(PagesEdited::Refused(PageRefusal::NothingAdded));
+        }
+
+        let first = job.project.sources.len();
+        let added = fresh.len();
+        job.project.sources.extend(fresh);
+        let mut next = job.project.strip.order.clone();
+        next.splice(at..at, first..first + added);
+        let append = at == count;
+        set_page_order(&mut job.project, next);
+        flush_job(&job, &path)?;
+        if !append {
+            clear_history(&path);
+        }
+        let pages = pages_listing(chapter_id, &job.project, false);
+        Ok(PagesEdited::Done { pages: Box::new(pages), added, removed: 0, reports })
+    }
+
+    /// Take the pages at `positions` out of the chapter. Their work goes;
+    /// their files stay, listed as removed, and can be put back.
+    pub fn remove_pages(&self, chapter_id: &str, positions: &[usize]) -> Result<PagesEdited, LibraryError> {
+        let path = self.resolve_chapter(chapter_id)?;
+        if !path.is_file() {
+            return Ok(PagesEdited::NoChapter);
+        }
+        let _lock = crate::run::lock_chapter(&path)?;
+        let mut job = open_job(&path)?;
+        let order = job.project.strip.order.clone();
+        if positions.is_empty() || positions.iter().any(|&at| at >= order.len()) {
+            return Ok(PagesEdited::Refused(PageRefusal::OutOfRange));
+        }
+        let gone: Vec<usize> = positions.iter().map(|&at| order[at]).collect();
+        let next: Vec<usize> = order.iter().copied().filter(|source| !gone.contains(source)).collect();
+        if let Err(refusal) = check_page_order(&job.project, &next, &gone) {
+            return Ok(PagesEdited::Refused(refusal));
+        }
+        let removed = order.len() - next.len();
+        drop_page_records(&mut job.project, &gone);
+        set_page_order(&mut job.project, next);
+        flush_job(&job, &path)?;
+        clear_history(&path);
+        let pages = pages_listing(chapter_id, &job.project, false);
+        Ok(PagesEdited::Done { pages: Box::new(pages), added: 0, removed, reports: Vec::new() })
+    }
+
+    /// Put the chapter's pages in a new order: `order` lists the current
+    /// positions in the order they should take.
+    pub fn move_pages(&self, chapter_id: &str, order: &[usize]) -> Result<PagesEdited, LibraryError> {
+        let path = self.resolve_chapter(chapter_id)?;
+        if !path.is_file() {
+            return Ok(PagesEdited::NoChapter);
+        }
+        let _lock = crate::run::lock_chapter(&path)?;
+        let mut job = open_job(&path)?;
+        let current = job.project.strip.order.clone();
+        let mut seen = order.to_vec();
+        seen.sort_unstable();
+        if seen != (0..current.len()).collect::<Vec<_>>() {
+            return Ok(PagesEdited::Refused(PageRefusal::OutOfRange));
+        }
+        let next: Vec<usize> = order.iter().map(|&at| current[at]).collect();
+        if next == current {
+            let pages = pages_listing(chapter_id, &job.project, false);
+            return Ok(PagesEdited::Done { pages: Box::new(pages), added: 0, removed: 0, reports: Vec::new() });
+        }
+        if let Err(refusal) = check_page_order(&job.project, &next, &[]) {
+            return Ok(PagesEdited::Refused(refusal));
+        }
+        set_page_order(&mut job.project, next);
+        flush_job(&job, &path)?;
+        clear_history(&path);
+        let pages = pages_listing(chapter_id, &job.project, false);
+        Ok(PagesEdited::Done { pages: Box::new(pages), added: 0, removed: 0, reports: Vec::new() })
+    }
+
+    /// Put removed pages back, at the end of the chapter, as fresh pages.
+    pub fn restore_pages(&self, chapter_id: &str, sources: &[usize]) -> Result<PagesEdited, LibraryError> {
+        let path = self.resolve_chapter(chapter_id)?;
+        if !path.is_file() {
+            return Ok(PagesEdited::NoChapter);
+        }
+        let _lock = crate::run::lock_chapter(&path)?;
+        let mut job = open_job(&path)?;
+        let order = job.project.strip.order.clone();
+        let mut back: Vec<usize> = Vec::new();
+        for &source in sources {
+            if source >= job.project.sources.len() || order.contains(&source) || back.contains(&source) {
+                return Ok(PagesEdited::Refused(PageRefusal::OutOfRange));
+            }
+            back.push(source);
+        }
+        if back.is_empty() {
+            return Ok(PagesEdited::Refused(PageRefusal::OutOfRange));
+        }
+        let added = back.len();
+        let mut next = order;
+        next.extend(back);
+        set_page_order(&mut job.project, next);
+        flush_job(&job, &path)?;
+        let pages = pages_listing(chapter_id, &job.project, false);
+        Ok(PagesEdited::Done { pages: Box::new(pages), added, removed: 0, reports: Vec::new() })
+    }
+}
+
+fn open_job(path: &Path) -> Result<Job, LibraryError> {
+    Job::open(path).map_err(|e| LibraryError::Manifest { path: path.to_path_buf(), detail: e.to_string() })
+}
+
+fn flush_job(job: &Job, path: &Path) -> Result<(), LibraryError> {
+    let flushed = job
+        .flush()
+        .map_err(|e| LibraryError::Manifest { path: path.to_path_buf(), detail: e.to_string() });
+    invalidate_manifest_cache(path);
+    flushed
+}
+
+/// Empty the chapter's undo journal, keeping its sequence counter, and let
+/// go of the page states only it named.
+fn clear_history(path: &Path) {
+    let mut journal = crate::history::load(path);
+    if journal.entries.is_empty() {
+        return;
+    }
+    journal.entries.clear();
+    journal.cursor = 0;
+    if let Err(error) = crate::history::save(path, &journal) {
+        eprintln!("manga-cleaner: {}: undo history was not cleared: {error}", path.display());
+        return;
+    }
+    crate::history::sweep_blobs(&sidecar_dir(path), &journal);
+}
+
+fn pages_listing(chapter_id: &str, project: &Project, busy: bool) -> ChapterPages {
+    let (pages, _) = pages_and_review(chapter_id, project, &[]);
+    let removed = (0..project.sources.len())
+        .filter(|source| !project.strip.order.contains(source))
+        .filter_map(|source| {
+            let row = project.sources.get(source)?;
+            let (width, height) = row.orientation.size(row.w, row.h);
+            Some(RemovedPage {
+                source_index: source,
+                file: row.rel_path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
+                width,
+                height,
+            })
+        })
+        .collect();
+    ChapterPages {
+        chapter_id: chapter_id.to_owned(),
+        longstrip: project.strip.mode == StripMode::Longstrip,
+        pages,
+        worked: page_work(project),
+        removed,
+        busy,
+    }
+}
+
+/// Say what a page edit did, and answer the screen with the new listing.
+fn announce_pages(edited: Result<PagesEdited, LibraryError>) -> Result<Option<ChapterPages>, String> {
+    match edited {
+        Ok(PagesEdited::NoChapter) => Ok(None),
+        Ok(PagesEdited::Refused(refusal)) => {
+            crate::events::notice(refusal.key(), refusal.params(), "warn");
+            Ok(None)
+        }
+        Ok(PagesEdited::Done { pages, added, removed, reports }) => {
+            let mut notices: Vec<(String, serde_json::Value, &'static str)> =
+                reports.into_iter().map(|notice| (notice.key, notice.params, notice.tone)).collect();
+            if added > 0 {
+                notices.insert(0, ("notice.pages.added".into(), serde_json::json!({ "count": added }), "info"));
+            }
+            if removed > 0 {
+                notices.insert(0, ("notice.pages.removed".into(), serde_json::json!({ "count": removed }), "warn"));
+            }
+            crate::events::stagger(notices);
+            Ok(Some(*pages))
+        }
+        Err(error) => {
+            let key = error.reason_key();
+            if matches!(
+                error,
+                LibraryError::Busy { .. }
+                    | LibraryError::RunInProgress
+                    | LibraryError::PageBusy { .. }
+                    | LibraryError::InsufficientSpace { .. }
+                    | LibraryError::FreeSpaceUnavailable { .. }
+            ) {
+                crate::events::notice(key, serde_json::json!({}), "warn");
+                return Ok(None);
+            }
+            Err(error.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn chapter_pages(app: tauri::AppHandle, chapter_id: String) -> Result<Option<ChapterPages>, String> {
+    blocking(move || Ok(Library::for_app(&app)?.chapter_pages(&chapter_id)?)).await
+}
+
+#[tauri::command]
+pub async fn add_pages(
+    app: tauri::AppHandle,
+    chapter_id: String,
+    paths: Vec<String>,
+    at: Option<usize>,
+) -> Result<Option<ChapterPages>, String> {
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let edited = blocking(move || Ok(Library::for_app(&app)?.add_pages(&chapter_id, &paths, at))).await?;
+    announce_pages(edited)
+}
+
+#[tauri::command]
+pub async fn remove_pages(
+    app: tauri::AppHandle,
+    chapter_id: String,
+    indices: Vec<usize>,
+) -> Result<Option<ChapterPages>, String> {
+    let edited = blocking(move || Ok(Library::for_app(&app)?.remove_pages(&chapter_id, &indices))).await?;
+    announce_pages(edited)
+}
+
+#[tauri::command]
+pub async fn move_pages(
+    app: tauri::AppHandle,
+    chapter_id: String,
+    order: Vec<usize>,
+) -> Result<Option<ChapterPages>, String> {
+    let edited = blocking(move || Ok(Library::for_app(&app)?.move_pages(&chapter_id, &order))).await?;
+    announce_pages(edited)
+}
+
+#[tauri::command]
+pub async fn restore_pages(
+    app: tauri::AppHandle,
+    chapter_id: String,
+    sources: Vec<usize>,
+) -> Result<Option<ChapterPages>, String> {
+    let edited = blocking(move || Ok(Library::for_app(&app)?.restore_pages(&chapter_id, &sources))).await?;
+    announce_pages(edited)
 }
 
 #[cfg(test)]
@@ -5122,9 +5726,9 @@ mod tests {
         assert!(matches!(
             outcome,
             ChapterDeleted::Deleted {
-                number: 1,
+                ref number,
                 scans: Scans::Kept
-            }
+            } if *number == serde_json::json!(1)
         ));
 
         assert!(!manifest.exists(), "the manifest outlived the chapter");
@@ -6606,6 +7210,7 @@ mod tests {
                     id: "ch1".into(),
                     name: "One".into(),
                     number: 1,
+                    label: None,
                     source_path: None,
                     created: 0,
                     last_opened: 0,
@@ -6615,6 +7220,7 @@ mod tests {
                     id: "ch12".into(),
                     name: "Twelve".into(),
                     number: 12,
+                    label: None,
                     source_path: None,
                     created: 0,
                     last_opened: 0,
@@ -7451,7 +8057,12 @@ mod tests {
         }
         answers_a_future!(list_projects, A);
         answers_a_future!(delete_project, A, B);
-        answers_a_future!(create_chapter, A, B, C, D, E);
+        answers_a_future!(create_chapter, A, B, C, D, E, F);
+        answers_a_future!(chapter_pages, A, B);
+        answers_a_future!(add_pages, A, B, C, D);
+        answers_a_future!(remove_pages, A, B, C);
+        answers_a_future!(move_pages, A, B, C);
+        answers_a_future!(restore_pages, A, B, C);
         answers_a_future!(rename_project, A, B, C);
         answers_a_future!(open_chapter, A, B, C, D);
         answers_a_future!(create_project, A, B, C, D, E);
@@ -8367,5 +8978,280 @@ mod tests {
 
         // The core provenance in memory / on disk was untouched
         assert_eq!(prov.cloud, Some(dirty_cloud));
+    }
+
+    /* ---------- split chapter numbers ---------- */
+
+    #[test]
+    fn a_chapter_label_takes_split_numbers_and_refuses_the_rest() {
+        assert_eq!(chapter_label("12"), Some((12, None)));
+        assert_eq!(chapter_label(" 12.5 "), Some((12, Some("12.5".into()))));
+        assert_eq!(chapter_label("12-1"), Some((12, Some("12-1".into()))));
+        assert_eq!(chapter_label("12/2"), Some((12, Some("12/2".into()))));
+        assert_eq!(chapter_label("12,5"), Some((12, Some("12,5".into()))));
+        assert_eq!(chapter_label("0.5"), Some((0, Some("0.5".into()))));
+        assert_eq!(chapter_label("1.2.3"), Some((1, Some("1.2.3".into()))));
+        for refused in ["", "  ", "12.", ".5", "12..5", "12/-2", "12a", "../12", "12 5", "Ch. 12", "１２", "1234567890123456789012345"] {
+            assert_eq!(chapter_label(refused), None, "{refused:?} was taken");
+        }
+    }
+
+    /// The label is stored beside the whole number, sent as typed, and never
+    /// becomes a path: the chapter's files are named by its id.
+    #[test]
+    fn a_split_chapter_keeps_its_label_and_its_files_stay_named_by_id() {
+        let scratch = Scratch::new("split-label");
+        let library = library(&scratch);
+        let project = a_project(&library, &scratch, 2);
+        let split = library
+            .create_chapter_labelled(&project.id, "Ch. 12, part 2", None, Some("12/2"), None)
+            .unwrap()
+            .created()
+            .expect("the split chapter was refused");
+        assert_eq!(split.number, 12);
+        assert_eq!(split.shown_number, serde_json::json!("12/2"));
+        assert_eq!(split.name, "Ch. 12, part 2");
+        let sent = serde_json::to_value(&split).unwrap();
+        assert_eq!(sent["number"], serde_json::json!("12/2"), "the seam's number is the label");
+
+        let path = library.resolve_chapter(&split.id).unwrap();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(!name.contains('/') && name.starts_with(&split.id), "{name}");
+        assert!(path.starts_with(library.root.join(&project.id)));
+
+        // A plain number is still a JSON number, and `max + 1` counts from
+        // the whole part of the split one.
+        let next = library.create_chapter(&project.id, "Next", None, Some(scratch.join("raws"))).unwrap().created().unwrap();
+        assert_eq!(next.shown_number, serde_json::json!(13));
+        let index = library.index().unwrap();
+        let stored = index.projects[0].chapters.iter().find(|c| c.id == split.id).unwrap();
+        assert_eq!(stored.label.as_deref(), Some("12/2"));
+        assert_eq!(stored.number, 12);
+    }
+
+    /// An index written before labels existed reads unchanged, and an index
+    /// with a label is read by the same struct an older build has.
+    #[test]
+    fn an_index_without_labels_reads_and_a_label_survives_a_round_trip() {
+        let old: IndexChapter = serde_json::from_value(serde_json::json!({
+            "id": "c3", "name": "Three", "number": 3, "created": 0, "last_opened": 0,
+        })).unwrap();
+        assert_eq!(old.label, None);
+        assert_eq!(old.shown_number(), serde_json::json!(3));
+        let written = serde_json::to_value(&old).unwrap();
+        assert!(written.get("label").is_none(), "a plain chapter writes no label");
+    }
+
+    /// A name holding `/` or `..` is never looked up as a folder of its own.
+    #[test]
+    fn a_name_with_a_separator_falls_back_to_the_projects_folder() {
+        let scratch = Scratch::new("split-name-folder");
+        let library = library(&scratch);
+        let project = a_project(&library, &scratch, 2);
+        tagged_scans(&scratch.join("raws/12/2"), 3, 7);
+        let chapter = library
+            .create_chapter_labelled(&project.id, "12/2", None, Some("12/2"), None)
+            .unwrap()
+            .created()
+            .unwrap();
+        assert_eq!(chapter.pages.len(), 2, "the nested folder was read for a name with a slash");
+    }
+
+    /* ---------- a chapter's pages ---------- */
+
+    fn a_chapter(library: &Library, scratch: &Scratch, pages: usize) -> (ApiProject, ApiChapter, PathBuf) {
+        let project = a_project(library, scratch, pages);
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, None).unwrap().created().unwrap();
+        let path = library.resolve_chapter(&chapter.id).unwrap();
+        (project, chapter, path)
+    }
+
+    fn give_work(path: &Path, position: usize) {
+        let mut job = Job::open(path).unwrap();
+        let source_idx = job.project.strip.order[position];
+        job.project.regions_untouched.push(RegionUntouched {
+            source_idx,
+            bbox: Rect { x: 0, y: 0, w: 2, h: 2 },
+            reason: "review.reason.lowConfidence".into(),
+            inside_bubble: None,
+            inside_balloon: None,
+            lettering: None,
+        });
+        job.flush().unwrap();
+        invalidate_manifest_cache(path);
+    }
+
+    fn files(pages: &ChapterPages) -> Vec<String> {
+        pages.pages.iter().map(|page| page.file.clone()).collect()
+    }
+
+    fn done(edited: PagesEdited) -> ChapterPages {
+        match edited {
+            PagesEdited::Done { pages, .. } => *pages,
+            other => panic!("the edit was not done: {other:?}"),
+        }
+    }
+
+    fn refused(edited: PagesEdited) -> PageRefusal {
+        match edited {
+            PagesEdited::Refused(refusal) => refusal,
+            other => panic!("the edit was not refused: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pages_are_added_at_the_end_or_before_a_page_through_the_chapters_import() {
+        let scratch = Scratch::new("add-pages");
+        let library = library(&scratch);
+        let (_, chapter, path) = a_chapter(&library, &scratch, 3);
+        let extra = tagged_scans(&scratch.join("extra"), 2, 0x40);
+        let more = vec![extra.join("002.png"), extra.join("001.png")];
+
+        let at_end = done(library.add_pages_with_space(&chapter.id, &more, None, |_| Some(u64::MAX)).unwrap());
+        // Natural order within what was offered, and copied into the chapter:
+        // `001.png` is already a page name there, so the copy is `001-2.png`.
+        assert_eq!(files(&at_end), ["001.png", "002.png", "003.png", "001-2.png", "002-2.png"]);
+        let job = Job::open(&path).unwrap();
+        assert!(job.source_path(3).unwrap().starts_with(sidecar_dir(&path).join(PAGES_DIR)));
+        assert_eq!(job.project.sources.len(), 5);
+
+        let jpegs = jpeg_scans(&scratch.join("jpegs"), 1);
+        let before_two = done(
+            library.add_pages_with_space(&chapter.id, &[jpegs.join("001.jpg")], Some(1), |_| Some(u64::MAX)).unwrap(),
+        );
+        assert_eq!(before_two.pages.len(), 6);
+        assert_eq!(before_two.pages[1].file, "001.jpg", "a JPEG is taken in verbatim, as at chapter creation");
+        assert_eq!(before_two.pages[1].number, 2);
+        assert_eq!(before_two.pages[2].file, "002.png");
+
+        // The same file again is not a second page.
+        let again = library.add_pages_with_space(&chapter.id, &[extra.join("001.png")], None, |_| Some(u64::MAX)).unwrap();
+        assert_eq!(refused(again), PageRefusal::NothingAdded);
+        assert_eq!(Job::open(&path).unwrap().project.strip.order.len(), 6);
+
+        // A full volume is refused before anything is imported.
+        let error = library.add_pages_with_space(&chapter.id, &[jpegs.join("001.jpg")], None, |_| Some(0)).unwrap_err();
+        assert!(matches!(error, LibraryError::InsufficientSpace { .. }));
+    }
+
+    #[test]
+    fn a_page_with_work_keeps_its_place_and_other_pages_move_around_it() {
+        let scratch = Scratch::new("pinned-pages");
+        let library = library(&scratch);
+        let (_, chapter, path) = a_chapter(&library, &scratch, 4);
+        give_work(&path, 2);
+        let listed = library.chapter_pages(&chapter.id).unwrap().unwrap();
+        assert_eq!(listed.worked, [false, false, true, false]);
+
+        // Removing or moving anything before page 3 would renumber it.
+        assert_eq!(refused(library.remove_pages(&chapter.id, &[0]).unwrap()), PageRefusal::Pinned { page: 3 });
+        assert_eq!(refused(library.move_pages(&chapter.id, &[1, 2, 0, 3]).unwrap()), PageRefusal::Pinned { page: 3 });
+        let extra = tagged_scans(&scratch.join("extra"), 1, 0x50);
+        assert_eq!(
+            refused(library.add_pages_with_space(&chapter.id, &[extra.join("001.png")], Some(1), |_| Some(u64::MAX)).unwrap()),
+            PageRefusal::Pinned { page: 3 },
+        );
+        assert!(!sidecar_dir(&path).join(PAGES_DIR).join("001-2.png").exists(), "a refused insert imported a file");
+        assert_eq!(Job::open(&path).unwrap().project.strip.order, [0, 1, 2, 3]);
+
+        // After it, anything goes; and the end always takes pages.
+        let added = done(library.add_pages_with_space(&chapter.id, &[extra.join("001.png")], Some(3), |_| Some(u64::MAX)).unwrap());
+        assert_eq!(files(&added), ["001.png", "002.png", "003.png", "001-2.png", "004.png"]);
+        let moved = done(library.move_pages(&chapter.id, &[0, 1, 2, 4, 3]).unwrap());
+        assert_eq!(files(&moved), ["001.png", "002.png", "003.png", "004.png", "001-2.png"]);
+        let removed = done(library.remove_pages(&chapter.id, &[4]).unwrap());
+        assert_eq!(files(&removed), ["001.png", "002.png", "003.png", "004.png"]);
+        assert_eq!(removed.removed.len(), 1);
+    }
+
+    #[test]
+    fn a_removed_page_takes_its_work_and_keeps_its_file_to_be_put_back() {
+        let scratch = Scratch::new("remove-pages");
+        let library = library(&scratch);
+        let (_, chapter, path) = a_chapter(&library, &scratch, 3);
+        give_work(&path, 2);
+        {
+            let mut job = Job::open(&path).unwrap();
+            job.project.examined = vec![0, 1, 2];
+            job.project.interrupted_at = Some(2);
+            job.flush().unwrap();
+            invalidate_manifest_cache(&path);
+        }
+        let mut journal = crate::history::load(&path);
+        journal.push(crate::history::NewDelta { label: "x".into(), op: "region-state".into(), region_id: format!("{}-p003-u0", chapter.id), ..Default::default() }, 50);
+        crate::history::save(&path, &journal).unwrap();
+
+        let file = Job::open(&path).unwrap().source_path(2).unwrap();
+        let after = done(library.remove_pages(&chapter.id, &[2]).unwrap());
+        assert_eq!(files(&after), ["001.png", "002.png"]);
+        assert_eq!(after.removed.len(), 1);
+        assert_eq!(after.removed[0].source_index, 2);
+        let job = Job::open(&path).unwrap();
+        assert!(job.project.regions_untouched.is_empty(), "the removed page's work stayed");
+        assert_eq!(job.project.examined, [0, 1]);
+        assert_eq!(job.project.interrupted_at, None, "the interruption pointed at a page that left");
+        assert_eq!(job.project.sources.len(), 3, "a source row went, and every index after it moved");
+        assert!(file.exists(), "the removed page's file was deleted");
+        assert!(crate::history::load(&path).entries.is_empty(), "undo could replay onto a moved page");
+
+        // Every page cannot go.
+        assert_eq!(refused(library.remove_pages(&chapter.id, &[0, 1]).unwrap()), PageRefusal::LastPage);
+        assert_eq!(refused(library.remove_pages(&chapter.id, &[7]).unwrap()), PageRefusal::OutOfRange);
+
+        let back = done(library.restore_pages(&chapter.id, &[2]).unwrap());
+        assert_eq!(files(&back), ["001.png", "002.png", "003.png"]);
+        assert!(back.removed.is_empty());
+        assert_eq!(back.worked, [false, false, false], "a page comes back as it was ingested");
+        assert_eq!(refused(library.restore_pages(&chapter.id, &[2]).unwrap()), PageRefusal::OutOfRange);
+    }
+
+    #[test]
+    fn an_append_keeps_undo_and_a_move_keeps_the_interruption_on_its_page() {
+        let scratch = Scratch::new("append-history");
+        let library = library(&scratch);
+        let (_, chapter, path) = a_chapter(&library, &scratch, 3);
+        {
+            let mut job = Job::open(&path).unwrap();
+            job.project.interrupted_at = Some(0);
+            job.flush().unwrap();
+            invalidate_manifest_cache(&path);
+        }
+        let mut journal = crate::history::load(&path);
+        journal.push(crate::history::NewDelta { label: "x".into(), op: "region-state".into(), region_id: "r".into(), ..Default::default() }, 50);
+        crate::history::save(&path, &journal).unwrap();
+        let extra = tagged_scans(&scratch.join("extra"), 1, 0x60);
+        done(library.add_pages_with_space(&chapter.id, &[extra.join("001.png")], None, |_| Some(u64::MAX)).unwrap());
+        assert_eq!(crate::history::load(&path).entries.len(), 1, "an append cleared undo");
+
+        done(library.move_pages(&chapter.id, &[3, 1, 2, 0]).unwrap());
+        let job = Job::open(&path).unwrap();
+        assert_eq!(job.project.strip.order, [3, 1, 2, 0]);
+        assert_eq!(job.project.interrupted_at, Some(3), "the interruption left its page");
+        assert!(crate::history::load(&path).entries.is_empty());
+        assert_eq!(refused(library.move_pages(&chapter.id, &[0, 0, 1, 2]).unwrap()), PageRefusal::OutOfRange);
+    }
+
+    #[test]
+    fn a_longstrip_with_work_only_takes_pages_at_its_end() {
+        let scratch = Scratch::new("longstrip-pages");
+        let library = library(&scratch);
+        let source = scans(&scratch.join("raws"), 3);
+        let project = library.create_project("Strip", StripMode::Longstrip, Some(source), None).unwrap();
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, None).unwrap().created().unwrap();
+        let path = library.resolve_chapter(&chapter.id).unwrap();
+
+        // No work yet: a longstrip is as free as any chapter.
+        done(library.move_pages(&chapter.id, &[1, 0, 2]).unwrap());
+        give_work(&path, 0);
+        assert_eq!(refused(library.remove_pages(&chapter.id, &[2]).unwrap()), PageRefusal::Longstrip);
+        assert_eq!(refused(library.move_pages(&chapter.id, &[0, 2, 1]).unwrap()), PageRefusal::Longstrip);
+        let extra = tagged_scans(&scratch.join("extra"), 1, 0x70);
+        assert_eq!(
+            refused(library.add_pages_with_space(&chapter.id, &[extra.join("001.png")], Some(2), |_| Some(u64::MAX)).unwrap()),
+            PageRefusal::Longstrip,
+        );
+        let added = done(library.add_pages_with_space(&chapter.id, &[extra.join("001.png")], None, |_| Some(u64::MAX)).unwrap());
+        assert_eq!(added.pages.len(), 4);
+        assert!(added.longstrip);
     }
 }
