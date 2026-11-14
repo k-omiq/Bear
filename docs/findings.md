@@ -724,6 +724,18 @@ never written as though it were general.
 
 ## What has not been measured
 
+**Page denoise combos (2026-11-14): what is still open.** Bench and plan in
+`docs/research/denoise-combos-2026-11.md`. No app code changed.
+
+- **Only already-clean pages were tried** (one series, chapters 49 and 50, done and cleaned pages). A noisy raw
+  scan, a heavy JPEG web raw and a screentone-heavy print scan were not run.
+- **The MangaJaNai presets turn colour pages grey** in the shipped app; not fixed.
+- **MoESR v2 and the other umzi files have no stated licence**, and their host blocks Modal; neither is settled.
+- **No local (desktop) run** of FDAT, MoESR or RCAN: they are PyTorch only, so they would be cloud only unless
+  exported to ONNX, which was not tried.
+- **The colour pick rests on one spread and one cover page**, judged by eye at 2x; no measure separates the
+  colour models on clean pages.
+
 **Nano Banana crop window and restrictive crops (2026-11-08): what is still open.**
 
 - **Whether white around the region lowers Google's refusals** has not been measured on real pages. The crops
