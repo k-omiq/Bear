@@ -170,6 +170,9 @@ JS
 
 LATEST=$(EXISTING_JSON="$EXISTING" node "$WORK/merge-latest.js" "$VERSION" "$PLATFORM" "$BASE_URL/$REMOTE" "$SIG" "$NOTES")
 printf '%s' "$LATEST" > "$WORK/latest.json"
+# The same merged manifest under the version, for the in-app rollback
+# (src-tauri/src/rollback.rs). Before latest.json, as release.yml does.
+curl -sSf -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data-binary @"$WORK/latest.json" "$PUBLISH_URL/releases/v$VERSION/latest.json"
 curl -sSf -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data-binary @"$WORK/latest.json" "$PUBLISH_URL/latest.json"
 
 echo "== done =="
