@@ -549,9 +549,15 @@ export async function saveCloudFlux3Generation(generation, backend = getBackend(
   return saveChanges(backend, changes, 'notice.cloud.generationFailed')
 }
 
-/** Settings, opened on its Cloud tab. */
-export function openCloudSettings() {
-  pushModal({ kind: 'settings', props: { tab: 'inference' } })
+/**
+ * Settings, opened on its Cloud tab, at `anchor` when one is named
+ * (`settingslinks.js`): `nano-banana` for the Nano Banana profiles. Used as
+ * a click handler too, so anything but a string is no anchor.
+ *
+ * @param {unknown} [anchor]
+ */
+export function openCloudSettings(anchor) {
+  pushModal({ kind: 'settings', props: { tab: 'inference', ...(typeof anchor === 'string' ? { anchor } : {}) } })
 }
 
 /* ------------------------------------------------------------------ */

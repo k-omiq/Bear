@@ -180,6 +180,13 @@ impl Book {
         Ok(Spend { book: self, nonce: nonce.to_owned(), config: grant.config.clone(), stop: grant.stop.clone() })
     }
 
+    /// The name of the profile the grant `nonce` was made on, for the batch's
+    /// report.
+    pub(crate) fn profile_of(&self, nonce: &str) -> Option<String> {
+        let live = self.lock();
+        live.iter().find(|grant| grant.nonce == nonce)?.config.profile.as_ref().map(|profile| profile.name.clone())
+    }
+
     /// How many renders the grant `nonce` names has left, without taking one:
     /// what a batch checks before it starts and between the retries of one
     /// region, which spend nothing more. Refused as [`Book::spend`] refuses.
@@ -258,22 +265,31 @@ pub struct NanoBananaGrant {
     pub grant: String,
     pub model: String,
     pub count: u32,
+    /// The name of the profile whose key pays.
+    pub profile: Option<String>,
+}
+
+/// Whether the settings now are the ones the window showed: its model, and
+/// its profile when it named one.
+fn as_shown(config: &Config, model: &str, profile_id: Option<&str>) -> bool {
+    config.model.id == model && profile_id.is_none_or(|id| config.profile.as_ref().is_some_and(|profile| profile.id == id))
 }
 
 /// Make the grant for a window the person just confirmed: `count` regions of
-/// `chapter_id` on `model`, the model the window showed. Refused while Cloud
-/// engines is off, and when settings name another model than the one the
-/// person saw.
+/// `chapter_id` on `model` and the profile `profile_id`, the ones the window
+/// showed. Refused while Cloud engines is off, and when settings name another
+/// model or another active profile than the person saw.
 #[tauri::command]
-pub async fn nano_banana_grant(app: tauri::AppHandle, model: String, count: u32, chapter_id: String)
-    -> Result<NanoBananaGrant, String> {
+pub async fn nano_banana_grant(app: tauri::AppHandle, model: String, count: u32, chapter_id: String,
+    profile_id: Option<String>) -> Result<NanoBananaGrant, String> {
     let config = Config::when_allowed(&app).ok_or(CLOUD_OFF)?;
-    if config.model.id != model {
+    if !as_shown(&config, &model, profile_id.as_deref()) {
         return Err(NO_CONSENT.into());
     }
     let model = config.model.id.to_owned();
+    let profile = config.profile.as_ref().map(|profile| profile.name.clone());
     let grant = book().issue(config, &chapter_id, count)?;
-    Ok(NanoBananaGrant { grant, model, count })
+    Ok(NanoBananaGrant { grant, model, count, profile })
 }
 
 #[cfg(test)]
@@ -282,7 +298,7 @@ mod tests {
     use cleaner_core::engines::nano_banana::Model;
 
     fn config(instruction: Option<&str>) -> Config {
-        Config { model: Model::DEFAULT, instruction: instruction.map(str::to_owned), restrictive: false }
+        Config { model: Model::DEFAULT, instruction: instruction.map(str::to_owned), restrictive: false, profile: None }
     }
 
     /// A single region's share, on chapter `c1`.
@@ -375,6 +391,23 @@ mod tests {
         assert_eq!(book.left(true, "other"), Err(NO_CONSENT));
         book.revoke(&nonce);
         assert_eq!(book.left(true, &nonce), Err(NO_CONSENT));
+    }
+
+    /// **A grant binds the profile the window showed.** Another active
+    /// profile, or none, is no grant; the grant names the profile it pays with.
+    #[test]
+    fn profiles_a_grant_binds_the_profile_the_window_showed() {
+        use crate::inference::nano_banana_profiles::Chosen;
+        let mut config = config(None);
+        assert!(as_shown(&config, Model::DEFAULT.id, None), "a caller that names none");
+        assert!(!as_shown(&config, Model::DEFAULT.id, Some("pa")), "no profile is active");
+        config.profile = Some(Chosen { id: "pa".into(), name: "Work".into() });
+        assert!(as_shown(&config, Model::DEFAULT.id, Some("pa")));
+        assert!(!as_shown(&config, Model::DEFAULT.id, Some("pb")), "another profile became active");
+        assert!(!as_shown(&config, "gemini-3-pro-image", Some("pa")), "another model");
+        let book = Book::new(IDLE);
+        let nonce = book.issue(config, "c1", 1).unwrap();
+        assert_eq!(book.profile_of(&nonce).as_deref(), Some("Work"));
     }
 
     #[test]

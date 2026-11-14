@@ -30,7 +30,7 @@ import { DENOISE_PRESETS, outputScalesFor, presetById, recipeAt } from '../model
 import { currentRung } from '../model/ladder.js'
 import { MAX_MASK_PADDING, NANO_BANANA_ENGINE, isUncleaned } from '../model/masks.js'
 import { nanoBananaModel, nanoBananaStartSize } from '../model/nanobanana.js'
-import { nanoBananaFinishing, nanoBananaFinishingRefusal, recordedNanoBananaFinishing } from '../model/nanobananafinishing.js'
+import { recordedNanoBananaFinishing } from '../model/nanobananafinishing.js'
 import { FINISHINGS } from '../model/model-names.js'
 import {
   applyToolToRegion,
@@ -212,7 +212,7 @@ function gutterPixels(pages) {
  * @property {Partial<typeof DEFAULT_TIMING>} [timing] - base milliseconds, before `speed`
  * @property {{ setTimeout: Function, clearTimeout: Function, now: () => number }} [timers] - injectable clock
  * @property {string} [seed] - seeds the session generator; equal seeds give equal sessions
- * @property {'os'|'session'|'failed'} [nanoBananaKeyStore] - the credential store the Gemini key commands meet, as `nano_banana.rs` answers them: the OS store (the default); none, so a key is kept for this session only and `nanoBananaHasKey` rejects with `nanoBanana.key.noStore` while none is held; or a store that fails (`nanoBanana.key.failed`)
+ * @property {'os'|'session'|'failed'} [nanoBananaKeyStore] - the credential store the Nano Banana profile commands meet, as `nano_banana_profiles.rs` answers them: the OS store (the default); none, so each key is kept for this session only and `nanoBananaHasKey` rejects with `nanoBanana.key.noStore` while the active profile holds none; or a store that fails (`nanoBanana.key.failed`)
  */
 
 /**
@@ -2423,8 +2423,50 @@ export function createMockBackend(options = {}) {
     return true
   }
 
-  /** Whether a Gemini key was given. The mock never keeps the key itself. */
-  let nanoBananaKey = false
+  /**
+   * The Nano Banana profiles, as `nano_banana_profiles.rs` keeps them: a name
+   * and a model each, the active one, and whether each key was given. The
+   * mock never keeps a key itself.
+   *
+   * @type {{ active: string|null, list: Array<{ id: string, name: string, model: string, key: boolean }> }}
+   */
+  const nanoBananaProfiles = { active: null, list: [] }
+  let nanoBananaProfileCount = 0
+  /** The name of the profile the last render paid with, for its record. @type {string|null} */
+  let nanoBananaPaying = null
+  const nanoBananaActive = () => nanoBananaProfiles.list.find((profile) => profile.id === nanoBananaProfiles.active) ?? null
+  /** As `nano_banana_profiles.rs#ProfilesView`. */
+  const nanoBananaProfilesView = () => ({
+    active: nanoBananaProfiles.active,
+    profiles: nanoBananaProfiles.list.map(({ id, name, model, key }) => ({
+      id, name, model, hasKey: key, sessionOnly: key && (options.nanoBananaKeyStore ?? 'os') === 'session',
+    })),
+  })
+  /** @param {unknown} name */
+  const nanoBananaProfileName = (name) => {
+    const trimmed = String(name ?? '').trim()
+    if (!trimmed || new TextEncoder().encode(trimmed).length > 128 || /[\x00-\x1F\x7F]/.test(trimmed)) {
+      throw new Error('nanoBanana.profile.badName')
+    }
+    return trimmed
+  }
+  /** @param {unknown} model */
+  const nanoBananaProfileModel = (model) => {
+    if (nanoBananaModel(model).id !== model) throw new Error('nanoBanana.profile.badModel')
+    return /** @type {string} */ (model)
+  }
+  /** @param {unknown} key */
+  const nanoBananaCheckKey = (key) => {
+    // Printable ASCII with no spaces, 20 to 200 bytes once trimmed.
+    if (!/^[!-~]{20,200}$/.test(String(key ?? '').trim())) throw new Error('nanoBanana.key.invalid')
+    if ((options.nanoBananaKeyStore ?? 'os') === 'failed') throw new Error('nanoBanana.key.failed')
+  }
+  /** @param {unknown} id */
+  const nanoBananaProfileAt = (id) => {
+    const at = nanoBananaProfiles.list.findIndex((profile) => profile.id === id)
+    if (at < 0) throw new Error('nanoBanana.profile.missing')
+    return at
+  }
   /**
    * The live Nano Banana grants, as `nano_banana_consent.rs` keeps them: one
    * per confirmed window, on its chapter, counted down a region per render,
@@ -2613,7 +2655,10 @@ export function createMockBackend(options = {}) {
     }
     if (live.left <= 0 || live.chapterId !== chapterId || live.owner !== owner) return { reason: NO_CONSENT }
     live.left -= 1
-    if (!nanoBananaKey) return { reason: 'decline.reason.nanoBananaNoKey' }
+    // The key of the profile the window was granted on, as native reads it.
+    const paying = nanoBananaProfiles.list.find((profile) => profile.id === live.profileId)
+    if (!paying?.key) return { reason: 'decline.reason.nanoBananaNoKey' }
+    nanoBananaPaying = paying.name
     live.spending += 1
     let released = false
     const release = () => {
@@ -2627,10 +2672,10 @@ export function createMockBackend(options = {}) {
 
   /**
    * A mask a Nano Banana render committed, as the native side records one:
-   * its engine, the model it ran on and the answer it kept in
-   * `params_snapshot.nano_banana`, and the finishing it was made by in
+   * its engine, the model it ran on, the profile that paid and the answer it
+   * kept in `params_snapshot.nano_banana`, and the finishing it was made by in
    * `params_snapshot.postprocess`: the layer's own on a Try again of it
-   * (`recorded`), else the setting. The mock's own clean stands in for the
+   * (`recorded`), else the shared Post-processing choice. The mock's own clean stands in for the
    * request, and a detection's clean picks its rung by the automatic cap, so
    * the record is written here.
    *
@@ -2641,7 +2686,11 @@ export function createMockBackend(options = {}) {
   const stampNanoBanana = (mask, model, recorded = null) => {
     if (!model || !mask?.provenance) return
     const info = ENGINE_INFO[NANO_BANANA_ENGINE]
-    const { finishing, grayscale, strays } = recorded ?? nanoBananaFinishing(state.settings)
+    const { finishing, grayscale, strays } = recorded ?? {
+      finishing: FINISHINGS.includes(state.settings.cloudFinishing) ? state.settings.cloudFinishing : FINISHINGS[0],
+      grayscale: state.settings.cloudFinishingGrayscale === true,
+      strays: false,
+    }
     nanoBananaAnswers += 1
     mask.fillMode = info.fillMode
     Object.assign(mask.provenance, {
@@ -2651,7 +2700,7 @@ export function createMockBackend(options = {}) {
       model_sha256: null,
       params_snapshot: {
         ...mask.provenance.params_snapshot,
-        nano_banana: { model, answer_sha256: `mock-nano-banana-answer-${nanoBananaAnswers}` },
+        nano_banana: { model, profile: nanoBananaPaying, answer_sha256: `mock-nano-banana-answer-${nanoBananaAnswers}` },
         postprocess: { finishing, grayscale, ...(strays ? { strays } : {}) },
       },
     })
@@ -5485,9 +5534,8 @@ export function createMockBackend(options = {}) {
       if (patch?.undoLimit != null && !validUndoLimit(patch.undoLimit)) {
         throw new Error(`undoLimit must be a whole number from ${UNDO_LIMIT.min} to ${UNDO_LIMIT.max}`)
       }
-      // As `settings::check_known_shapes`, Nano Banana's finishing.
-      const nanoBananaRefused = nanoBananaFinishingRefusal(patch)
-      if (nanoBananaRefused) throw new Error(nanoBananaRefused)
+      // As `settings.rs#write_settings`: the profiles have their own commands.
+      if (patch && 'nanoBananaProfiles' in patch) throw new Error('the Nano Banana profiles are changed by their own commands')
       Object.assign(state.settings, patch)
       // As `settings.rs#write_settings`: cloud engines off withdraws the rest
       // of every Nano Banana window and ends the request in flight.
@@ -5519,35 +5567,75 @@ export function createMockBackend(options = {}) {
       return snapshot(state.inferenceConfig)
     },
 
-    /** The Gemini key as the native side keeps it: write-only, never read back. */
+    /** The active profile's Gemini key as the native side keeps it: write-only, never read back. */
     async nanoBananaHasKey() {
       await delay(timing.method)
       const store = options.nanoBananaKeyStore ?? 'os'
       if (store === 'failed') throw new Error('nanoBanana.key.failed')
-      if (store === 'session' && !nanoBananaKey) throw new Error('nanoBanana.key.noStore')
-      return nanoBananaKey
+      const active = nanoBananaActive()
+      if (store === 'session' && !active?.key) throw new Error('nanoBanana.key.noStore')
+      return active?.key === true
     },
 
-    async storeNanoBananaKey({ key } = {}) {
+    async listNanoBananaProfiles() {
       await delay(timing.method)
-      const store = options.nanoBananaKeyStore ?? 'os'
-      // Printable ASCII with no spaces, 20 to 200 bytes once trimmed.
-      if (!/^[!-~]{20,200}$/.test(String(key ?? '').trim())) throw new Error('nanoBanana.key.invalid')
-      if (store === 'failed') throw new Error('nanoBanana.key.failed')
-      nanoBananaKey = true
-      return { sessionOnly: store === 'session' }
+      return nanoBananaProfilesView()
     },
 
-    async deleteNanoBananaKey() {
+    async createNanoBananaProfile({ name, model, key } = {}) {
       await delay(timing.method)
+      const named = nanoBananaProfileName(name)
+      const chosen = nanoBananaProfileModel(model)
+      if (nanoBananaProfiles.list.length >= 20) throw new Error('nanoBanana.profile.tooMany')
+      nanoBananaCheckKey(key)
+      nanoBananaProfileCount += 1
+      const id = `pmock${nanoBananaProfileCount}`
+      nanoBananaProfiles.list.push({ id, name: named, model: chosen, key: true })
+      if (!nanoBananaProfiles.active) nanoBananaProfiles.active = id
+      return nanoBananaProfilesView()
+    },
+
+    async updateNanoBananaProfile({ profileId, name, model } = {}) {
+      await delay(timing.method)
+      const named = name == null ? null : nanoBananaProfileName(name)
+      const chosen = model == null ? null : nanoBananaProfileModel(model)
+      const profile = nanoBananaProfiles.list[nanoBananaProfileAt(profileId)]
+      if (named) profile.name = named
+      if (chosen) profile.model = chosen
+      return nanoBananaProfilesView()
+    },
+
+    async selectNanoBananaProfile({ profileId } = {}) {
+      await delay(timing.method)
+      nanoBananaProfileAt(profileId)
+      nanoBananaProfiles.active = String(profileId)
+      return nanoBananaProfilesView()
+    },
+
+    async storeNanoBananaKey({ profileId, key } = {}) {
+      await delay(timing.method)
+      const at = nanoBananaProfileAt(profileId)
+      nanoBananaCheckKey(key)
+      nanoBananaProfiles.list[at].key = true
+      return nanoBananaProfilesView()
+    },
+
+    async deleteNanoBananaProfile({ profileId } = {}) {
+      await delay(timing.method)
+      const at = nanoBananaProfileAt(profileId)
       if ((options.nanoBananaKeyStore ?? 'os') === 'failed') throw new Error('nanoBanana.key.failed')
-      nanoBananaKey = false
+      nanoBananaProfiles.list.splice(at, 1)
+      if (nanoBananaProfiles.active === profileId) nanoBananaProfiles.active = nanoBananaProfiles.list[0]?.id ?? null
+      return nanoBananaProfilesView()
     },
 
-    async grantNanoBanana({ model, count, chapterId } = {}) {
+    async grantNanoBanana({ model, count, chapterId, profileId = null } = {}) {
       if (state.settings.cloudEngines !== 'allowed') throw new Error('decline.reason.nanoBananaOff')
-      const confirmed = nanoBananaModel(state.settings.nanoBananaModel).id
-      if (model !== confirmed || !Number.isInteger(count) || count < 1 || count > NANO_BANANA_MAX_REGIONS) {
+      // The active profile's model, and that profile, as the window showed.
+      const paying = nanoBananaActive()
+      const confirmed = nanoBananaModel(paying?.model ?? state.settings.nanoBananaModel).id
+      const shown = profileId == null || profileId === paying?.id
+      if (model !== confirmed || !shown || !Number.isInteger(count) || count < 1 || count > NANO_BANANA_MAX_REGIONS) {
         throw new Error('decline.reason.nanoBananaNoConsent')
       }
       const now = timers.now()
@@ -5556,12 +5644,12 @@ export function createMockBackend(options = {}) {
       nanoBananaGrants += 1
       const grant = `mock-nano-banana-grant-${nanoBananaGrants}`
       nanoBananaLive.set(grant, {
-        grant, model: confirmed, chapterId: String(chapterId ?? ''), left: count,
+        grant, model: confirmed, profileId: paying?.id ?? null, chapterId: String(chapterId ?? ''), left: count,
         lapses: now + NANO_BANANA_GRANT_IDLE_MS, spending: 0, owner: null, stop: { raised: false },
         restrictive: state.settings.nanoBananaRestrictive === true,
       })
       nanoBananaLast = grant
-      return { grant, model: confirmed, count }
+      return { grant, model: confirmed, count, profile: paying?.name ?? null }
     },
 
     /** Stop the single region's request `grant` made, and only that one. */

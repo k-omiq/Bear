@@ -82,6 +82,8 @@
    *    what setup created in the account; that runs the provisioner's
    *    cleanup, which lists what it will delete and asks for the key again.
    * 5. **Set up with Modal or Beam**: the provisioner, inline.
+   * 5a. **Nano Banana**: the person's own Gemini keys, as profiles, drawn
+   *    like the endpoints (`NanoBananaSettings.svelte`).
    * 6. **Connect an existing endpoint**, collapsed: the manual form, for an
    *    endpoint deployed some other way.
    * 7. **FLUX 3 options**, collapsed: which parts of a FLUX 3 edit are built
@@ -102,6 +104,7 @@
   import Icon from '../icons/Icon.svelte'
   import { Button, Disclosure, Field, Segmented, Select, TextInput } from '../ui/index.js'
   import CloudProvisioner from './CloudProvisioner.svelte'
+  import NanoBananaSettings from './NanoBananaSettings.svelte'
   import { getBackend } from '../api/backend.js'
   import { notify } from '../state/app.svelte.js'
   import { session } from '../state/session.svelte.js'
@@ -1360,6 +1363,9 @@
       {/if}
     </div>
   </section>
+
+  <!-- The other cloud engine: the person's own Gemini keys, as profiles. -->
+  <NanoBananaSettings {backend} />
 
   <Disclosure variant="plain" open={generationOpen} ontoggle={(/** @type {boolean} */ open) => (generationOpen = open)}>
     {#snippet summary()}{t('settings.inference.generation.title')}{/snippet}

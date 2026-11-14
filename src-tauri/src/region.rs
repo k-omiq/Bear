@@ -721,8 +721,8 @@ struct Bench {
     /// edit, and the rung then refuses before a request is made. Never read
     /// from settings here.
     nano_banana: Option<crate::inference::nano_banana::Granted>,
-    /// How a Nano Banana answer is finished: its own setting, not the one
-    /// this computer's models share ([`crate::inference::nano_banana_finishing`]).
+    /// How a Nano Banana answer is finished: the shared Post-processing
+    /// choice, always applied ([`crate::inference::nano_banana_finishing`]).
     nano_banana_finishing: cleaner_core::engines::postprocess::Choice,
     /// Whether each Nano Banana crop is shown to the person before it is
     /// sent (`nanoBananaShowCrop`), read as each region's edit starts.
@@ -781,7 +781,7 @@ impl Bench {
         rung2.flux = LocalFlux::from_settings(settings.as_ref(), app_data.clone());
         // Unreadable is the default, as an unreadable finishing is above.
         let nano_banana_finishing = settings.as_ref()
-            .and_then(|settings| crate::inference::nano_banana_finishing::from_settings(settings).ok())
+            .map(crate::inference::nano_banana_finishing::from_settings)
             .unwrap_or_default();
         let nano_banana_show_crops = settings.as_ref()
             .and_then(|settings| settings.get(crate::inference::nano_banana_crop::SHOW_KEY))
@@ -7900,6 +7900,7 @@ mod tests {
             model: cleaner_core::engines::nano_banana::Model::DEFAULT,
             instruction: None,
             restrictive: false,
+            profile: None,
         }
     }
 

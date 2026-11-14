@@ -57,7 +57,11 @@ const IMPLEMENTED = Object.freeze({
   selectCloudProfile: 'select_cloud_profile',
   nanoBananaHasKey: 'nano_banana_has_key',
   storeNanoBananaKey: 'store_nano_banana_key',
-  deleteNanoBananaKey: 'delete_nano_banana_key',
+  listNanoBananaProfiles: 'nano_banana_profiles',
+  createNanoBananaProfile: 'create_nano_banana_profile',
+  updateNanoBananaProfile: 'update_nano_banana_profile',
+  selectNanoBananaProfile: 'select_nano_banana_profile',
+  deleteNanoBananaProfile: 'delete_nano_banana_profile',
   grantNanoBanana: 'nano_banana_grant',
   nanoBananaStop: 'nano_banana_stop',
   startNanoBananaRun: 'start_nano_banana_run',
@@ -248,7 +252,11 @@ export const SEAM_METHODS = Object.freeze([
   'selectCloudProfile',
   'nanoBananaHasKey',
   'storeNanoBananaKey',
-  'deleteNanoBananaKey',
+  'listNanoBananaProfiles',
+  'createNanoBananaProfile',
+  'updateNanoBananaProfile',
+  'selectNanoBananaProfile',
+  'deleteNanoBananaProfile',
   'grantNanoBanana',
   'nanoBananaStop',
   'startNanoBananaRun',
@@ -515,10 +523,15 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     writeInferenceConfig: ({ config }) => call(IMPLEMENTED.writeInferenceConfig, { config }),
     selectCloudProfile: ({ provider, profileId }) => call(IMPLEMENTED.selectCloudProfile, { provider, profileId }),
     nanoBananaHasKey: () => call(IMPLEMENTED.nanoBananaHasKey),
-    storeNanoBananaKey: ({ key }) => call(IMPLEMENTED.storeNanoBananaKey, { key }),
-    deleteNanoBananaKey: () => call(IMPLEMENTED.deleteNanoBananaKey),
-    grantNanoBanana: async ({ model, count, chapterId }) => {
-      const granted = await call(IMPLEMENTED.grantNanoBanana, { model, count, chapterId: chapterId ?? null })
+    storeNanoBananaKey: ({ profileId, key }) => call(IMPLEMENTED.storeNanoBananaKey, { profileId, key }),
+    listNanoBananaProfiles: () => call(IMPLEMENTED.listNanoBananaProfiles),
+    createNanoBananaProfile: ({ name, model, key }) => call(IMPLEMENTED.createNanoBananaProfile, { name, model, key }),
+    updateNanoBananaProfile: ({ profileId, name, model }) =>
+      call(IMPLEMENTED.updateNanoBananaProfile, { profileId, name: name ?? null, model: model ?? null }),
+    selectNanoBananaProfile: ({ profileId }) => call(IMPLEMENTED.selectNanoBananaProfile, { profileId }),
+    deleteNanoBananaProfile: ({ profileId }) => call(IMPLEMENTED.deleteNanoBananaProfile, { profileId }),
+    grantNanoBanana: async ({ model, count, chapterId, profileId }) => {
+      const granted = await call(IMPLEMENTED.grantNanoBanana, { model, count, chapterId: chapterId ?? null, profileId: profileId ?? null })
       nanoBananaGrant = typeof granted?.grant === 'string' ? granted.grant : null
       return granted
     },

@@ -368,6 +368,15 @@ import { createTauriBackend, isTauri } from './tauri.js'
  */
 
 /**
+ * The saved Nano Banana profiles (`nano_banana_profiles.rs#ProfilesView`):
+ * each a name, a model and a key kept apart in the OS credential store, which
+ * never crosses the seam. `hasKey` is null when the store could not say.
+ *
+ * @typedef {{ id: string, name: string, model: string, hasKey: boolean|null, sessionOnly: boolean }} NanoBananaProfile
+ * @typedef {{ active: string|null, profiles: NanoBananaProfile[] }} NanoBananaProfiles
+ */
+
+/**
  * How a Nano Banana batch ended (`nano_banana_job.rs#Report`), sent just
  * before its `run-finished`.
  *
@@ -379,6 +388,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {Array<{regionId: string, pageIndex: number}>} left - not reached, because the batch stopped first
  * @property {string} [stopped] - why it stopped early, a reason key
  * @property {boolean} byUser - the stop was the person's Stop
+ * @property {string} [profile] - the name of the Nano Banana profile whose key paid
  *
  * @typedef {Object} NanoBananaReportEvent
  * @property {'nano-banana-report'} type
@@ -532,10 +542,14 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {() => Promise<InferenceConfig>} readInferenceConfig - read public inference configuration from `inference.json`
  * @property {(spec: { config: InferenceConfig }) => Promise<InferenceConfig>} writeInferenceConfig - validate and atomically persist public inference configuration to `inference.json`
  * @property {(spec: { provider: 'beam'|'modal', profileId: string }) => Promise<InferenceConfig>} selectCloudProfile - make a configured profile the default cloud target, read and written under the native writer's lock; work running on another profile goes on
- * @property {() => Promise<boolean>} nanoBananaHasKey - whether a Gemini key is stored; the key itself never crosses the seam. Rejects with `nanoBanana.key.noStore` when this system has no credential store and no session key is held, `nanoBanana.key.failed` otherwise
- * @property {(spec: { key: string }) => Promise<{ sessionOnly: boolean }>} storeNanoBananaKey - store the Gemini key in the OS credential store, or for this session only where there is none (write-only); rejects with `nanoBanana.key.invalid` or `nanoBanana.key.failed`
- * @property {() => Promise<void>} deleteNanoBananaKey - remove the stored Gemini key
- * @property {(spec: { model: string, count: number, chapterId: string }) => Promise<{ grant: string, model: string, count: number }>} grantNanoBanana - the grant for a Nano Banana window the person just confirmed: `count` regions of `chapterId` on `model` (the model the window showed), with the instruction as saved now. Each window's grant is its own and another window does not end it. The caller sends it with the request it confirmed (`params.nanoBananaGrant`, or `startNanoBananaRun`'s); the backend keeps the last one for an edit that names Nano Banana and carries none. Rejects with a `decline.reason.*` key while cloud engines are off or settings name another model
+ * @property {() => Promise<boolean>} nanoBananaHasKey - whether the active Nano Banana profile's Gemini key is stored, asked without reading it; the key itself never crosses the seam. False when no profile is saved. Rejects with `nanoBanana.key.noStore` when this system has no credential store and no session key is held, `nanoBanana.key.failed` otherwise
+ * @property {() => Promise<NanoBananaProfiles>} listNanoBananaProfiles - the saved Nano Banana profiles and the active one (`nano_banana_profiles.rs`). The single key of before is the first profile, `default`, with no read of the key. Asks the store only whether each key is there, so it never prompts
+ * @property {(spec: { name: string, model: string, key: string }) => Promise<NanoBananaProfiles>} createNanoBananaProfile - save a profile and its key (write-only, in the OS credential store, or for this session only where there is none). The first one becomes active. Rejects with `nanoBanana.profile.badName`, `nanoBanana.profile.badModel`, `nanoBanana.profile.tooMany`, `nanoBanana.profile.notSaved` or a `nanoBanana.key.*` code
+ * @property {(spec: { profileId: string, name?: string|null, model?: string|null }) => Promise<NanoBananaProfiles>} updateNanoBananaProfile - rename a profile or change its model. Rejects with `nanoBanana.profile.missing` or the codes above
+ * @property {(spec: { profileId: string }) => Promise<NanoBananaProfiles>} selectNanoBananaProfile - make a profile the active one: the next window pays with its key
+ * @property {(spec: { profileId: string }) => Promise<NanoBananaProfiles>} deleteNanoBananaProfile - delete a profile and its key; the next one becomes active. A key the store would not delete keeps its profile (`nanoBanana.key.failed`)
+ * @property {(spec: { profileId: string, key: string }) => Promise<NanoBananaProfiles>} storeNanoBananaKey - replace one profile's key (write-only); rejects with `nanoBanana.profile.missing`, `nanoBanana.key.invalid` or `nanoBanana.key.failed`
+ * @property {(spec: { model: string, count: number, chapterId: string, profileId?: string|null }) => Promise<{ grant: string, model: string, count: number, profile: string|null }>} grantNanoBanana - the grant for a Nano Banana window the person just confirmed: `count` regions of `chapterId` on `model` and the profile `profileId` (the ones the window showed), with the instruction as saved now. The answer names the profile whose key pays. Each window's grant is its own and another window does not end it. The caller sends it with the request it confirmed (`params.nanoBananaGrant`, or `startNanoBananaRun`'s); the backend keeps the last one for an edit that names Nano Banana and carries none. Rejects with a `decline.reason.*` key while cloud engines are off or settings name another model or another active profile
  * @property {(spec: { grant: string }) => Promise<void>} nanoBananaStop - stop the single region's Nano Banana request `grant` was made for, whether it is in flight, waiting for its turn or not sent yet, and withdraw the rest of that grant. Every other request goes on; a batch stops with `cancelRun`
  * @property {(spec: { chapterId: string, regionIds: string[], nanoBananaGrant?: string }) => Promise<RunHandle>} startNanoBananaRun - clean these stored detections of the chapter with Nano Banana, on the grant the window made for them (the last one when none is named). A run in the ordinary run slot, kind `nanoBanana`: ordinary run events, then `nano-banana-report` before `run-finished`; `cancelRun` stops it and withdraws its grant, and so does its end. Rejects with a `decline.reason.*` key while cloud engines are off or the grant is another chapter's or does not cover every region, and with `nanoBanana.job.requestOut` while a single region's request is out on the chapter
  * @property {(spec: { id: string, answer: 'send'|'skip'|'stop', keep: number[][]|null }) => Promise<void>} answerNanoBananaCrop - the answer to a `nano-banana-crop` event: Send it, Skip this region (not cleaned, reason `decline.reason.nanoBananaSkipped`; a batch goes on) or Stop the request and its grant (a batch stops). `keep` is meaningful only for a restrictive crop: the kept areas as `[x, y, w, h]` in crop pixels, or null for the suggested ones; native always adds the marked regions and clips to the crop. Rejects with `nanoBanana.crop.gone` when the request already ended, `nanoBanana.crop.badAnswer` for another answer

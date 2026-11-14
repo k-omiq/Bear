@@ -104,6 +104,11 @@ describe('the Nano Banana summary', () => {
     expect(container.textContent).toContain(t('nanoBanana.job.retryHint'))
   })
 
+  it('names the profile whose key paid, when the report has one', () => {
+    const { getByText } = finished({ total: 1, cleaned: 1, gone: 0, left: [], failed: [], byUser: false, profile: 'Studio' })
+    expect(getByText(t('nanoBanana.job.summaryProfile', { name: 'Studio' }))).toBeTruthy()
+  })
+
   it('offers nothing to send again when all was cleaned', () => {
     const { container, queryByRole } = finished({ total: 2, cleaned: 2, gone: 0, left: [], failed: [], byUser: false })
     expect(container.querySelector('[data-action="retry"]')).toBeNull()

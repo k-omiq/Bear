@@ -19,9 +19,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** A backend with a saved instruction, and the window asked for two regions. @param {Record<string, any>} [settings] */
-async function ask(settings = {}) {
+/**
+ * A backend with a saved instruction, and the window asked for two regions.
+ *
+ * @param {Record<string, any>} [settings]
+ * @param {Record<string, any>} [more] - more backend methods
+ */
+async function ask(settings = {}, more = {}) {
   const backend = {
+    ...more,
     readSettings: vi.fn(async () => ({ nanoBananaModel: 'gemini-3.1-flash-image', nanoBananaPrompt: 'keep the hatching', ...settings })),
     writeSettings: vi.fn(async () => ({})),
     grantNanoBanana: vi.fn(async () => ({ grant: 'g', model: 'gemini-3.1-flash-image', count: 2 })),
@@ -44,6 +50,19 @@ describe('the Nano Banana window', () => {
     expect(await asked).toBe('g')
     expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaPrompt: 'also the arrow' })
     expect(app.modals).toEqual([])
+  })
+
+  it('names the profile whose key pays, with that profile\'s model', async () => {
+    const { backend, asked } = await ask({}, {
+      listNanoBananaProfiles: vi.fn(async () => ({ active: 'pa', profiles: [
+        { id: 'pa', name: 'Studio', model: 'gemini-3-pro-image', hasKey: true, sessionOnly: false },
+      ] })),
+    })
+    expect(screen.getByText(t('nanoBanana.run.profile', { name: 'Studio' }))).toBeTruthy()
+    expect(screen.getByText(t('nanoBanana.run.model', { model: t('nanoBanana.model.pro'), size: '1K' }))).toBeTruthy()
+    await fireEvent.click(screen.getByRole('button', { name: t('nanoBanana.run.confirm') }))
+    await asked
+    expect(backend.grantNanoBanana).toHaveBeenCalledWith(expect.objectContaining({ model: 'gemini-3-pro-image', profileId: 'pa' }))
   })
 
   it('names the count and the cost as its description, since focus lands in the box', async () => {

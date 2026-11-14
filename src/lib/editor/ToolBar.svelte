@@ -1222,7 +1222,9 @@
   {#if reasonKey && !cloudOff}
     <div class="row-note">
       <p class="gate" id={noteId}>{placeNote(current, reasonKey)}</p>
-      <Button size="sm" variant="soft" onclick={openCloudSettings}>
+      <!-- A Nano Banana reason opens its profiles, the rest the cloud GPU. -->
+      <Button size="sm" variant="soft"
+        onclick={() => openCloudSettings(reasonKey.startsWith('nanoBanana.') ? 'nano-banana' : null)}>
         {t('tools.option.engineCloudSettings')}
       </Button>
     </div>
