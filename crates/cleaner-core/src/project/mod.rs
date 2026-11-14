@@ -555,6 +555,13 @@ pub struct RegionUntouched {
     /// written before it existed, which look under the box as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lettering: Option<HeldLettering>,
+    /// Set on a row a stored detection was declined into
+    /// ([`Job::decline_detection`]): that detection as it was stored, its
+    /// files kept on disk, so Restore mask puts the same mask back
+    /// ([`Job::restore_declined_detection`]). Absent on every other row and
+    /// on rows written before it existed, whose detection files are gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declined_from: Option<Box<DetectedRegion>>,
 }
 
 impl RegionUntouched {
@@ -2463,6 +2470,7 @@ impl Job {
             inside_bubble: None,
             inside_balloon: None,
             lettering: None,
+            declined_from: None,
         }])
     }
 
@@ -2484,6 +2492,7 @@ impl Job {
             inside_bubble: Some(inside_bubble),
             inside_balloon: None,
             lettering: None,
+            declined_from: None,
         }])
     }
 
@@ -3018,6 +3027,14 @@ impl Job {
         result
     }
 
+    /// The detections declines kept on their rows, on a page or held by a
+    /// clean of the row that Undo can take back ([`Project::cleaned_held`]).
+    fn declined_detections(&self) -> impl Iterator<Item = &DetectedRegion> {
+        self.project.regions_untouched.iter()
+            .chain(self.project.cleaned_held.iter().map(|kept| &kept.row))
+            .filter_map(|row| row.declined_from.as_deref())
+    }
+
     /// A crash may leave files written before the manifest flush. Only sweep
     /// the dedicated detection directory, and only ordinary mask and ink files.
     fn sweep_detection_files(&self) -> Result<(), StoreError> {
@@ -3029,8 +3046,10 @@ impl Job {
         };
         // A detection its clean kept is named too: its files are what a
         // rejected result is taken back to.
+        // So is one a decline kept on its row: Restore mask puts it back.
         let named: std::collections::HashSet<_> = self.project.detections.iter()
             .chain(&self.project.cleaned_detections)
+            .chain(self.declined_detections())
             .flat_map(DetectedRegion::files)
             .collect();
         for entry in entries {
@@ -3093,6 +3112,7 @@ impl Job {
             .chain(&self.project.withdrawn_patches);
         let named: std::collections::HashSet<String> = self.project.detections.iter()
             .chain(&self.project.cleaned_detections)
+            .chain(self.declined_detections())
             .filter_map(|row| row.group.as_ref()?.evidence_ref.clone())
             .chain(patches.filter_map(|row| {
                 row.provenance.params_snapshot["group"]["evidence"].as_str().map(str::to_owned)
@@ -3487,6 +3507,12 @@ impl Job {
     /// `inside_bubble`, which marks a held candidate for the counters. A
     /// detection whose files cannot be read keeps its box alone, as rows did
     /// before.
+    ///
+    /// **The detection is kept, not deleted**, as a clean keeps it: the row
+    /// carries the record ([`RegionUntouched::declined_from`]) and its files
+    /// stay where they are, so Restore mask puts the same mask back
+    /// ([`Job::restore_declined_detection`]). A detection whose files cannot
+    /// be read is not kept, and its files go as before.
     pub fn decline_detection(&mut self, id: &str, reason: &str) -> Result<bool, StoreError> {
         let _write = self.begin_write()?;
         let _detection_io = detection_io().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3495,6 +3521,7 @@ impl Job {
         };
         let lettering = self.load_detection(id).ok().flatten()
             .map(|loaded| (loaded.ink, loaded.record.fit.map_or(1.0, |fit| fit.scale)));
+        let readable = lettering.is_some();
         let record = self.project.detections.remove(position);
         let row = PendingUntouched {
             row: RegionUntouched {
@@ -3506,6 +3533,7 @@ impl Job {
                 // on the same side of the balloon wall.
                 inside_balloon: Some(record.inside),
                 lettering: None,
+                declined_from: readable.then(|| Box::new(record.clone())),
             },
             lettering,
         };
@@ -3522,8 +3550,64 @@ impl Job {
             self.project.detections.insert(position, record);
             return Err(error);
         }
-        self.delete_detection_files(std::slice::from_ref(&record));
+        if !readable {
+            self.delete_detection_files(std::slice::from_ref(&record));
+        }
         Ok(true)
+    }
+
+    /// Restore mask on a declined row: the detection the decline set aside
+    /// ([`RegionUntouched::declined_from`]) is a detection again, with the
+    /// same id, record and files, **in one manifest write** that also takes
+    /// the row off its page and off the declined count. The reverse of
+    /// [`Job::decline_detection`]. Nothing is cleaned.
+    ///
+    /// `Ok(None)` when the page lists no such row, or the row kept no
+    /// detection (an older build, or a one-pass decline that was never
+    /// stored): nothing is written, and the caller makes a detection from
+    /// the row's lettering instead. Refused, with nothing written, when a
+    /// detection already carries the id, or the kept files are gone or not
+    /// the bytes the record names
+    /// ([`CleanRestoreError::SavedDetectionUnreadable`]).
+    pub fn restore_declined_detection(&mut self, row: &RegionUntouched) -> Result<Option<String>, CleanRestoreError> {
+        let _write = self.begin_write()?;
+        let _detection_io = detection_io().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(position) = self.project.regions_untouched.iter().position(|held| held == row) else {
+            return Ok(None);
+        };
+        let Some(record) = self.project.regions_untouched[position].declined_from.as_deref().cloned() else {
+            return Ok(None);
+        };
+        let id = record.id.clone();
+        if self.project.detections.iter().any(|held| held.id == id) {
+            return Err(CleanRestoreError::SavedDetectionUnreadable { id, detail: "a detection already has this id".to_owned() });
+        }
+        self.check_kept_detection(&record)?;
+        let before = (self.project.regions_untouched.clone(), self.project.detections.clone(), self.project.counters.clone());
+        self.project.regions_untouched.remove(position);
+        self.project.counters.declined = self.project.counters.declined.saturating_sub(1);
+        self.project.detections.push(record);
+        if let Err(error) = self.flush() {
+            (self.project.regions_untouched, self.project.detections, self.project.counters) = before;
+            return Err(error.into());
+        }
+        Ok(Some(id))
+    }
+
+    /// Whether a kept detection's files are all there and readable, its mask
+    /// the bytes its record names: what putting it back needs.
+    fn check_kept_detection(&self, record: &DetectedRegion) -> Result<(), CleanRestoreError> {
+        let id = record.id.as_str();
+        let unreadable = |detail: String| CleanRestoreError::SavedDetectionUnreadable { id: id.to_owned(), detail };
+        for file in record.files() {
+            let path = self.dir.join(&file);
+            let bytes = std::fs::read(&path).map_err(|error| unreadable(format!("{file}: {error}")))?;
+            if file == record.mask_ref && !record.mask_sha256.is_empty() && sha256_hex(&bytes) != record.mask_sha256 {
+                return Err(unreadable(format!("{file}: digest mismatch")));
+            }
+            buffers::decode_mask(&bytes).map_err(|error| unreadable(format!("{file}: {error}")))?;
+        }
+        Ok(())
     }
 
     /// Put a source on [`Project::redetect`]: the user took away something
@@ -5457,7 +5541,7 @@ mod tests {
                 record, mask: grown.clone(), ink: base.clone(), evidence: None, base: Some((base.clone(), base.clone())),
             }], vec![PendingUntouched {
                 row: RegionUntouched { source_idx: 0, bbox: lettering.bounds, reason: "review.reason.unassignedMask".into(),
-                    inside_bubble: Some(false), inside_balloon: None, lettering: None },
+                    inside_bubble: Some(false), inside_balloon: None, lettering: None, declined_from: None },
                 lettering: Some((lettering.clone(), 1.5)),
             }]).unwrap();
             let stored = job.project.detections[0].clone();
@@ -5627,7 +5711,7 @@ mod tests {
         let before = job.generation();
         job.leave_untouched_rows(Vec::<RegionUntouched>::new()).unwrap();
         assert_eq!(job.generation(), before, "no rows wrote the manifest");
-        let row = |x| RegionUntouched { source_idx: 0, bbox: Rect::new(x, 2, 4, 4), reason: "review.reason.unassignedMask".into(), inside_bubble: None, inside_balloon: None, lettering: None };
+        let row = |x| RegionUntouched { source_idx: 0, bbox: Rect::new(x, 2, 4, 4), reason: "review.reason.unassignedMask".into(), inside_bubble: None, inside_balloon: None, lettering: None, declined_from: None };
         job.leave_untouched_rows(vec![row(2), row(10), row(20)]).unwrap();
         assert_ne!(job.generation(), before);
         assert_eq!(Job::open(job.path()).unwrap().project.regions_untouched.len(), 3);
@@ -5645,7 +5729,7 @@ mod tests {
         }
         let held = |bbox, lettering| PendingUntouched {
             row: RegionUntouched { source_idx: 0, bbox, reason: "review.reason.unassignedMask".into(),
-                inside_bubble: Some(false), inside_balloon: None, lettering: None },
+                inside_bubble: Some(false), inside_balloon: None, lettering: None, declined_from: None },
             lettering,
         };
         job.leave_untouched_rows(vec![held(lettering.bounds, Some((lettering.clone(), 1.5))),
@@ -5674,7 +5758,7 @@ mod tests {
         lettering.set(10, 10, true);
         job.leave_untouched_rows(vec![PendingUntouched {
             row: RegionUntouched { source_idx: 0, bbox: lettering.bounds, reason: "review.reason.unassignedMask".into(),
-                inside_bubble: Some(false), inside_balloon: None, lettering: None },
+                inside_bubble: Some(false), inside_balloon: None, lettering: None, declined_from: None },
             lettering: Some((lettering, 1.0)),
         }]).unwrap();
         let reopened = Job::open(job.path()).unwrap();
@@ -5980,7 +6064,7 @@ mod tests {
             record: replacement, mask: mask.clone(), ink: mask.clone(), evidence: None,
             base: None,
         }], vec![RegionUntouched { source_idx: 0, bbox: Rect::new(60, 60, 3, 3),
-            reason: "review.reason.gateSkippedLowConfidence".into(), inside_bubble: None, inside_balloon: None, lettering: None }]).unwrap();
+            reason: "review.reason.gateSkippedLowConfidence".into(), inside_bubble: None, inside_balloon: None, lettering: None, declined_from: None }]).unwrap();
         let reopened = Job::open(job.path()).unwrap();
         assert_eq!(reopened.project.detections.len(), 1);
         assert_ne!(reopened.project.detections[0].id, old_id);
@@ -6122,6 +6206,65 @@ mod tests {
         assert_eq!(reopened.project.regions_untouched.len(), 1);
         // The row names its lettering, so the reopen's sweep keeps the file.
         assert_eq!(reopened.load_held_lettering(&reopened.project.regions_untouched[0]).unwrap(), Some((ink, 0.5)));
+    }
+
+    /// A decline keeps its detection on the row, files and all, past a
+    /// reopen's sweep; Restore mask puts the same detection back in one
+    /// write, and a row that kept none is left for the caller.
+    #[test]
+    fn a_declined_detection_is_kept_on_its_row_and_restored_exactly() {
+        let scratch = Scratch::new("detection-decline-restore");
+        let mut job = a_job(&scratch);
+        let mask = Mask::filled(Rect::new(8, 8, 12, 10));
+        let ink = Mask::filled(Rect::new(10, 10, 6, 4));
+        let record = a_detection(&mut job, Rect::new(9, 9, 10, 8));
+        job.store_detection(record, &mask, &ink).unwrap();
+        let stored = job.project.detections[0].clone();
+        job.project.counters.declined = 1;
+
+        assert!(job.decline_detection(&stored.id, "decline.reason.qualityMetric").unwrap());
+        let row = job.project.regions_untouched[0].clone();
+        assert_eq!(row.declined_from.as_deref(), Some(&stored));
+        for file in stored.files() {
+            assert!(job.sidecar().join(&file).exists(), "{file} was deleted");
+        }
+
+        let mut job = Job::open(job.path()).unwrap();
+        for file in stored.files() {
+            assert!(job.sidecar().join(&file).exists(), "{file} was swept");
+        }
+        assert_eq!(job.restore_declined_detection(&row).unwrap(), Some(stored.id.clone()));
+        assert!(job.project.regions_untouched.is_empty());
+        assert_eq!(job.project.detections, vec![stored.clone()]);
+        assert_eq!(job.project.counters.declined, 0);
+        let reopened = Job::open(job.path()).unwrap();
+        let loaded = reopened.load_detection(&stored.id).unwrap().expect("the detection is back");
+        assert_eq!((loaded.record, loaded.mask, loaded.ink), (stored, mask, ink));
+        // Asked again, the row is gone: nothing to do.
+        assert_eq!(job.restore_declined_detection(&row).unwrap(), None);
+
+        // A row an older build wrote kept no detection.
+        job.leave_untouched(0, Rect::new(40, 40, 4, 4), "decline.reason.qualityMetric").unwrap();
+        let old = job.project.regions_untouched[0].clone();
+        assert_eq!(job.restore_declined_detection(&old).unwrap(), None);
+        assert_eq!(job.project.regions_untouched, vec![old]);
+    }
+
+    /// A kept detection whose files are gone is refused, and nothing changes.
+    #[test]
+    fn a_declined_detection_with_its_files_gone_is_not_restored() {
+        let scratch = Scratch::new("detection-decline-gone");
+        let mut job = a_job(&scratch);
+        let mask = Mask::filled(Rect::new(8, 8, 12, 10));
+        let record = a_detection(&mut job, Rect::new(9, 9, 10, 8));
+        job.store_detection(record, &mask, &mask).unwrap();
+        let stored = job.project.detections[0].clone();
+        assert!(job.decline_detection(&stored.id, "decline.reason.qualityMetric").unwrap());
+        let row = job.project.regions_untouched[0].clone();
+        std::fs::remove_file(job.sidecar().join(&stored.mask_ref)).unwrap();
+        assert!(matches!(job.restore_declined_detection(&row), Err(CleanRestoreError::SavedDetectionUnreadable { .. })));
+        assert_eq!(job.project.regions_untouched, vec![row]);
+        assert!(job.project.detections.is_empty());
     }
 
     #[test]

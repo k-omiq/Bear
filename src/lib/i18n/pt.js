@@ -2409,6 +2409,7 @@ export const pt = {
     },
     hint: {
       showOnPage: 'Rolar até esta região e selecioná-la',
+      restoreMask: 'Coloca a máscara de volta na página como estava antes desta limpeza falhar. Nada é limpo.',
       cleanAnyway: 'Limpar apesar do filtro de escrita',
       cleanDetected: 'Limpar esta região neste computador, a partir da máscara já encontrada',
       cleanDetectedCloud: 'Limpar esta região na sua GPU na nuvem. Na primeira vez em um projeto, você vê o custo e confirma.',
@@ -2985,6 +2986,7 @@ export const pt = {
       paddingRefreshFailed: 'A margem da máscara foi salva, mas não foi possível atualizar a página. Reabra o capítulo para ver a máscara atualizada.',
       typeFailed: 'Não foi possível alterar o tipo de texto. A região está como estava.',
       approveFailed: 'Não foi possível aprovar a máscara. A região está como estava.',
+      restoreFailed: 'Não foi possível restaurar a máscara. A região está como estava.',
       rejectNoMask: 'Esta camada não foi feita por um limpador, por isso não tem máscara para restaurar. Exclua-a para trazer o original de volta.',
       rejectFailed: 'Não foi possível rejeitar o resultado. A página está como estava.',
       reapplyFailed: 'Não foi possível restaurar o resultado. A página está como estava.',

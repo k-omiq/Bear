@@ -5133,7 +5133,7 @@ pub(crate) fn held_candidate_row(
     source_idx: usize, bbox: Rect, reason: String, inside_bubble: bool, lettering: Option<(Mask, f32)>,
 ) -> PendingUntouched {
     PendingUntouched {
-        row: RegionUntouched { source_idx, bbox, reason, inside_bubble: Some(inside_bubble), inside_balloon: None, lettering: None },
+        row: RegionUntouched { source_idx, bbox, reason, inside_bubble: Some(inside_bubble), inside_balloon: None, lettering: None, declined_from: None },
         lettering,
     }
 }
@@ -6750,7 +6750,7 @@ impl<'w> Walker<'w> {
                     if work == PageWork::Detect {
                         pending_untouched.push(PendingUntouched {
                             row: RegionUntouched {
-                                source_idx: entry.source_idx, bbox, reason, inside_bubble: None, inside_balloon: inside, lettering: None,
+                                source_idx: entry.source_idx, bbox, reason, inside_bubble: None, inside_balloon: inside, lettering: None, declined_from: None,
                             },
                             lettering,
                         });
@@ -6762,7 +6762,7 @@ impl<'w> Walker<'w> {
                     let Some(id) = replaces.as_deref() else {
                         pending_untouched.push(PendingUntouched {
                             row: RegionUntouched {
-                                source_idx: entry.source_idx, bbox, reason, inside_bubble: None, inside_balloon: inside, lettering: None,
+                                source_idx: entry.source_idx, bbox, reason, inside_bubble: None, inside_balloon: inside, lettering: None, declined_from: None,
                             },
                             lettering,
                         });
@@ -6787,7 +6787,7 @@ impl<'w> Walker<'w> {
                     }
                     pending_untouched.push(PendingUntouched {
                         row: RegionUntouched {
-                            source_idx: entry.source_idx, bbox, reason, inside_bubble: None, inside_balloon: None, lettering: None,
+                            source_idx: entry.source_idx, bbox, reason, inside_bubble: None, inside_balloon: None, lettering: None, declined_from: None,
                         },
                         lettering,
                     });

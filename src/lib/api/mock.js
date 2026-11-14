@@ -311,6 +311,15 @@ export function createMockBackend(options = {}) {
     Number.isInteger(value) && Number(value) >= UNDO_LIMIT.min && Number(value) <= UNDO_LIMIT.max
   const undoLimitValue = () =>
     validUndoLimit(state.settings.undoLimit) ? state.settings.undoLimit : UNDO_LIMIT.default
+  /**
+   * How a run's clean of a detection fails, if at all, as a quality decline
+   * fails it natively (`run.rs`, `Job::decline_detection`): `first` declines
+   * the first detection a run cleans, `all` every one. From the options, or
+   * a `?cleanDecline=` knob.
+   */
+  const cleanDecline = () =>
+    options.cleanDecline ?? new URLSearchParams(globalThis.location?.search ?? '').get('cleanDecline')
+  let cleanDeclines = 0
   /** `missing`: the chapter's scan folder is on a drive that is not connected. */
   const exportDrive =
     options.exportDrive ?? new URLSearchParams(globalThis.location?.search ?? '').get('exportDrive')
@@ -1074,6 +1083,26 @@ export function createMockBackend(options = {}) {
       return true
     })
 
+  /**
+   * A run's clean of a detection, unless `cleanDecline` fails it. A failed
+   * one is what `Job::decline_detection` leaves: a declined row with no mask,
+   * and the detection kept on it (`declinedFrom`, the native row's
+   * `declined_from`), so Restore mask puts the same mask back
+   * (`approveHeldMask`). Nothing is cleaned and no step is recorded.
+   */
+  const runCleanDetection = (region, page, ctx = {}) => {
+    const knob = cleanDecline()
+    if (knob !== 'all' && !(knob === 'first' && cleanDeclines === 0)) return cleanDetection(region, page, ctx)
+    cleanDeclines += 1
+    const kept = snapshot(region)
+    for (const key of ['pick', 'detector', 'insideBubble', 'paddingPx', 'baseBbox']) delete region[key]
+    region.mask = null
+    region.outcome = 'declined'
+    region.declineReason = 'decline.reason.qualityMetric'
+    region.declinedFrom = kept
+    return false
+  }
+
   /* ---------- a clean kept, and taken back ---------- */
 
   /**
@@ -1537,11 +1566,11 @@ export function createMockBackend(options = {}) {
         // As `run.rs`: a detection arrives with its page, never as a region done.
         reportRegions: false,
       },
-      clean: { pick: detectionsOf, apply: cleanDetection, pageStatus: settledStatus },
+      clean: { pick: detectionsOf, apply: runCleanDetection, pageStatus: settledStatus },
       auto: {
         pick: (page) => (hasDetections(page) ? detectionsOf(page) : fresh(page)),
         apply: (region, page, ctx) =>
-          isDetection(region) ? cleanDetection(region, page, ctx) : (cleanRegionAutomatically(region, page, toolContext, ctx), true),
+          isDetection(region) ? runCleanDetection(region, page, ctx) : (cleanRegionAutomatically(region, page, toolContext, ctx), true),
       },
     }
     // Solid bubbles only, as `run.rs` runs it: a speech bubble is painted flat
@@ -5113,17 +5142,31 @@ export function createMockBackend(options = {}) {
      * stores it: nothing is cleaned, and the mask a clean would use waits on
      * the page. The mock keeps the region's id, where the native side mints
      * a detection's; a caller reads the id from the answer either way.
+     *
+     * A failed clean's row is Restore mask: the detection its decline kept
+     * (`declinedFrom`) comes back as it was, padding and all, and the
+     * padding asked for is not applied; a row that kept none is detected
+     * again from its box. One step under the reject's label.
      */
     async approveHeldMask({ regionId, paddingPx = 0 } = {}) {
       await delay(timing.method)
       if (!validPadding(paddingPx)) throw new Error('mask_padding_invalid')
       const found = findRegion(regionId)
-      if (!found || !['gate-skipped', 'candidate'].includes(found.region.outcome)) return null
+      if (!found || !['gate-skipped', 'candidate', 'declined'].includes(found.region.outcome)) return null
       refuseBusyPage(found.chapter.id, found.page.index)
       const captured = capturePages([found.page])
-      detectRegion(found.region, found.page, {}, 'local', paddingPx)
+      const declined = found.region.outcome === 'declined'
+      const kept = declined ? found.region.declinedFrom : null
+      if (kept) {
+        for (const key of Object.keys(found.region)) delete found.region[key]
+        Object.assign(found.region, snapshot(kept))
+      } else {
+        delete found.region.declineReason
+        delete found.region.declinedFrom
+        detectRegion(found.region, found.page, {}, 'local', paddingPx)
+      }
       found.page.status = settledStatus(found.page)
-      recordPageStep(found.chapter.id, DETECTION_LABELS.approve, captured)
+      recordPageStep(found.chapter.id, declined ? REJECT_LABEL : DETECTION_LABELS.approve, captured)
       return { regionId: found.region.id, pageStatus: found.page.status }
     },
 

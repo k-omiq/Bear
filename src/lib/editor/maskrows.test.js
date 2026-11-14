@@ -176,9 +176,10 @@ describe('maskRows - the review filter', () => {
     ])
   })
 
-  it('gives a gate-skip Clean anyway and a declined region only Show on page', () => {
+  it('gives a gate-skip Clean anyway and a declined region Show on page and Restore mask', () => {
     const rows = maskRows(flagged, { filtered: true })
-    expect(rows[1].actions.map((action) => action.id)).toEqual(['showOnPage'])
+    expect(rows[1].actions.map((action) => action.id)).toEqual(['showOnPage', 'restoreMask'])
+    expect(rows[1].actions[1]).toEqual({ id: 'restoreMask', labelKey: 'masks.action.rejectResult', hintKey: 'masks.hint.restoreMask' })
     expect(rows[2].actions.map((action) => action.id)).toEqual(['showOnPage', 'cleanAnyway'])
   })
 

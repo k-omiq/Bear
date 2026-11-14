@@ -231,10 +231,22 @@ describe('regionMenuSections', () => {
 
   it('offers a region the quality metric declined its models, and no Approve that would repeat the decline', () => {
     const region = { id: 'c1-p001-r1', outcome: 'declined', declineReason: 'decline.reason.histogram', mask: null }
-    // Nor Approve mask: nothing held it, an engine failed on it.
+    // Nor Approve mask: nothing held it, an engine failed on it. Restore
+    // mask leads instead, the failed clean's way back to its mask.
     expect(ids(regionMenuSections(region, { engines: { flux: false }, cloud: true }))).toEqual([
-      'approve:fill', 'approve:lama', 'delete',
+      'restoreMask', 'approve:fill', 'approve:lama', 'delete',
     ])
+  })
+
+  it('offers a failed clean Restore mask, named and drawn as a cleaned result\'s is', () => {
+    const region = { id: 'c1-p001-d1', outcome: 'declined', declineReason: 'decline.reason.rungUnavailable', mask: null }
+    const [first] = regionMenuSections(region, { engines: { flux: false } })
+    expect(first).toEqual({ id: 'restore', labelKey: null,
+      items: [{ id: 'restoreMask', labelKey: 'masks.action.rejectResult', icon: 'undo' }] })
+    // Only a failed clean: a held row, a detection and a cleaned layer have their own ways.
+    for (const outcome of ['gate-skipped', 'candidate', 'detected']) {
+      expect(ids(regionMenuSections({ ...region, outcome }, { engines: { flux: false } }))).not.toContain('restoreMask')
+    }
   })
 
   it('offers both approvals and available local models for a gated review item', () => {
