@@ -89,15 +89,31 @@
    *   ready?: string|null,
    *   readyVersion?: string|null,
    *   composite?: boolean,
+   *   full?: boolean,
    * }}
    */
-  let { page, variant, from = 0, to = 100, hidden = false, composite = true,
+  // `full`: the page is drawn larger than its proxy, so the page at its own
+  // resolution is laid over the proxy tiles - the only image whose pixels are
+  // the scan's own, which is what a zoom past 100% is for. One image, asked
+  // for only while it is wanted: a whole page decoded is several times a
+  // proxy's memory, so only the page on screen asks (`PageSheet`).
+  let { page, variant, from = 0, to = 100, hidden = false, composite = true, full = false,
     ready = $bindable(null), readyVersion = $bindable(null) } = $props()
 
   const nativeVariant = $derived(variant === 'original' || !composite ? 'source' : 'cleaned')
 
 
   const plan = $derived(proxyPlan(page))
+  // The proxy is the page scaled down: its short edge is past `PROXY_SHORT_EDGE`.
+  const scaled = $derived(plan.width > 0 && plan.width < Math.round(Number(page.width)))
+  const whole = $derived.by(() => {
+    if (!full || !scaled) return null
+    const src = tileUrl(page, nativeVariant)
+    return src === null ? null : {
+      src, version: pageVersion(page, nativeVariant), proxy: false,
+      top: '0', left: '0', width: '100%', height: '100%',
+    }
+  })
 
   // The tiles to mount, as indices along the page's height. Whole numbers, so
   // a scroll that moves `from`/`to` without crossing a tile edge changes
@@ -132,6 +148,7 @@
           left: plan.vertical ? '0' : `${tile.offset}%`,
           width: plan.vertical ? '100%' : extent,
           height: plan.vertical ? extent : '100%',
+          proxy: scaled,
         }
       })
       .filter((tile) => tile.src !== null),
@@ -184,6 +201,9 @@
     {#each tiles as tile (`${page.id}:${tile.index}`)}
       <ManagedTile {tile} onloaded={warm} />
     {/each}
+    {#if whole}
+      <ManagedTile tile={whole} full onloaded={() => {}} />
+    {/if}
   {:else}
     {#each panels as panel, index (index)}
       <div

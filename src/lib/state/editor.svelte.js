@@ -34,6 +34,7 @@ import { runDetection, unifyAnalysisTargets } from '../model/pipelines.js'
 import { recountPage } from '../model/status.js'
 import { BETA_TOOLS, activeParams, optionOffered, toolOffered, toolSpec } from '../editor/tools.js'
 import { steppedSize } from '../editor/gesture.js'
+import { stepZoom } from '../editor/zoom.js'
 import { capabilities } from './capabilities.svelte.js'
 import { MAX_MASK_PADDING, isUncleaned } from '../model/masks.js'
 import { displayBbox, pagesReached } from '../model/layers.js'
@@ -88,8 +89,8 @@ export const TOOLS = /** @type {const} */ ([
 export const LOCAL_CEILING = 'flux'
 
 export const MIN_ZOOM = 0.4
-export const MAX_ZOOM = 2.4
-export const ZOOM_STEP = 0.15
+/** 12800%, an image editor's ceiling: far enough in to work pixel by pixel. */
+export const MAX_ZOOM = 128
 
 /**
  * Starting parameters per tool. The parameter *rows* - their ranges, steps and
@@ -239,6 +240,23 @@ export const editor = $state({
    * is recomputed from the viewport on every open, so it is never autosaved.
    */
   fitScale: 1,
+  /**
+   * The highest zoom the canvas can draw this chapter at, reported through
+   * `reportZoomCeiling`: `MAX_ZOOM` for a page, less for a long strip whose
+   * column would outgrow what a browser can lay out. Session-only.
+   */
+  zoomCeiling: MAX_ZOOM,
+  /**
+   * What the canvas should do with its scroller once a zoom lands, or `null`.
+   * `anchor` keeps the view's centre still (the zoom buttons and keys);
+   * `centre` puts the page in the middle of the view (fit, 100%); `focus`
+   * centres one region of a page (Show on page). The canvas is the only
+   * consumer, through `consumeViewRequest`; `token` makes asking twice for
+   * the same thing a new request.
+   *
+   * @type {{kind: 'anchor'|'centre'|'focus', token: number, pageIndex?: number, bbox?: {x: number, y: number, w: number, h: number}}|null}
+   */
+  viewRequest: null,
 
   /* longstrip - see "The strip handshake" below */
   /** @type {number[]} the positions the strip currently has on screen */
@@ -1390,7 +1408,7 @@ export function displayZoom() {
  * @param {number} zoom
  */
 export function setZoom(zoom) {
-  const clamped = numberIn(zoom, { min: MIN_ZOOM, max: MAX_ZOOM, fallback: editor.zoom })
+  const clamped = numberIn(zoom, { min: MIN_ZOOM, max: zoomMax(), fallback: editor.zoom })
   editor.zoom = Math.round(clamped * 100) / 100
   editor.fit = false
   scheduleAutosave()
@@ -1399,22 +1417,94 @@ export function setZoom(zoom) {
 // Stepping starts from what is on screen, not from the last chosen zoom: `+`
 // pressed at fit must grow the fitted page, not jump back to wherever the user
 // was before they fitted it.
+//
+// Each step goes to the next stop of a ladder (`zoom.js#ZOOM_STOPS`), and the
+// view's centre stays where it is (`requestView`).
 export function zoomIn() {
-  setZoom(displayZoom() + ZOOM_STEP)
+  setZoom(stepZoom({ zoom: displayZoom(), direction: 'in', min: MIN_ZOOM, max: zoomMax() }))
+  requestView({ kind: 'anchor' })
 }
 
 export function zoomOut() {
-  setZoom(displayZoom() - ZOOM_STEP)
+  setZoom(stepZoom({ zoom: displayZoom(), direction: 'out', min: MIN_ZOOM, max: zoomMax() }))
+  requestView({ kind: 'anchor' })
 }
 
-/** 1:1 - the image at its own pixels. */
+/**
+ * 1:1 - the image at its own pixels, and the page in the middle of the view
+ * where it fits there. Where it is larger, the view's centre is kept.
+ */
 export function zoomActual() {
   setZoom(1)
+  requestView({ kind: 'centre' })
 }
 
+/** The whole page, in the middle of the view. */
 export function zoomFit() {
   editor.fit = true
+  requestView({ kind: 'centre' })
   scheduleAutosave()
+}
+
+/**
+ * The highest zoom there is right now: `MAX_ZOOM`, or less where the canvas
+ * has said the chapter cannot be drawn that large (`reportZoomCeiling`).
+ *
+ * @returns {number}
+ */
+export function zoomMax() {
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, editor.zoomCeiling))
+}
+
+/**
+ * The canvas reporting the highest zoom it can draw the open chapter at.
+ *
+ * @param {number} ceiling
+ */
+export function reportZoomCeiling(ceiling) {
+  const next = Number.isFinite(ceiling) && ceiling > 0 ? Math.min(MAX_ZOOM, ceiling) : MAX_ZOOM
+  if (next !== editor.zoomCeiling) editor.zoomCeiling = next
+}
+
+let viewToken = 0
+
+/**
+ * Ask the canvas to place its view once the next zoom lands (see
+ * `editor.viewRequest`).
+ *
+ * @param {{kind: 'anchor'|'centre'|'focus', pageIndex?: number, bbox?: {x: number, y: number, w: number, h: number}}} request
+ */
+export function requestView(request) {
+  viewToken += 1
+  editor.viewRequest = { ...request, token: viewToken }
+}
+
+/**
+ * Take the pending view request. Consuming clears it, so a request is acted
+ * on exactly once.
+ *
+ * @returns {typeof editor.viewRequest}
+ */
+export function consumeViewRequest() {
+  const request = editor.viewRequest
+  editor.viewRequest = null
+  return request
+}
+
+/**
+ * Show one region: turn to its page if it is not on screen, select it, and
+ * ask the canvas to put it in the middle of the view. The canvas keeps the
+ * zoom unless the region does not fit or is too small to see
+ * (`zoom.js#focusZoom`).
+ *
+ * @param {{id: string, pageId: string, bbox: {x: number, y: number, w: number, h: number}}} region
+ */
+export function focusRegion(region) {
+  const index = pages().findIndex((page) => page.id === region.pageId)
+  // A strip scrolls to the region itself, from the column's own geometry.
+  if (index >= 0 && index !== editor.pageIndex && editor.project?.mode !== 'longstrip') goToPage(index)
+  editor.selectionId = region.id
+  requestView({ kind: 'focus', pageIndex: index >= 0 ? index : editor.pageIndex, bbox: region.bbox })
 }
 
 /**

@@ -3,10 +3,11 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte'
 import { tick } from 'svelte'
 import { setBackend } from '../api/backend.js'
 import { tileUrl } from '../api/tile.js'
-import { editor, goToPage, reloadPage, replaceRegion, syncPageWindow } from '../state/editor.svelte.js'
+import { editor, focusRegion, goToPage, reloadPage, replaceRegion, syncPageWindow, zoomActual, zoomFit, zoomIn } from '../state/editor.svelte.js'
 import { beginDraft, resetDraftState } from './draft.svelte.js'
 import CanvasStage from './CanvasStage.svelte'
-import { stripMetrics } from './strip.js'
+import { showOnPage } from './maskactions.svelte.js'
+import { STRIP_GAP, stripMetrics } from './strip.js'
 
 afterEach(() => {
   cleanup()
@@ -24,6 +25,8 @@ afterEach(() => {
   editor.stripScope = []
   editor.stripFocus = -1
   editor.stripScrollRequest = null
+  editor.viewRequest = null
+  editor.zoomCeiling = 128
 })
 
 /** The scroll room of the fixture's 600px viewport. */
@@ -569,5 +572,233 @@ describe('longstrip mask visibility', () => {
       expect(/** @type {HTMLElement} */ (slot).style.zIndex).toBe('')
     }
     expect(/** @type {HTMLElement} */ (slots[0].querySelector('.sheet')).style.getPropertyValue('--sheet-w')).toBe('800px')
+  })
+})
+
+/**
+ * One page in a 1200x600 viewport with the shell's real padding, laid out the
+ * way the browser does it: the stage under the padding and its own margins,
+ * moved by the scroller, as wide as the sheet and as tall as its ratio says,
+ * and centred across while it is narrower than the view.
+ * The view is the content box: 992x464 from (104, 70), centred on (600, 302).
+ *
+ * @param {{width: number, height: number}} size the page at 1:1
+ */
+function pageFixture(size) {
+  const pages = [0, 1].map((index) => ({
+    id: `view-${index}`, index, number: index + 1, chapterId: 'view-chapter', ...size, status: 'unclean', resident: true,
+    regions: [
+      { id: `small-${index}`, pageId: `view-${index}`, bbox: { x: 80, y: 10, w: 1, h: 1 }, outcome: 'declined', mask: null },
+      { id: `mid-${index}`, pageId: `view-${index}`, bbox: { x: 10, y: 70, w: 20, h: 10 }, outcome: 'declined', mask: null },
+    ],
+  }))
+  setBackend(/** @type {any} */ ({ loadPages: vi.fn(async ({ indices }) => indices.map((index) => pages[index])) }))
+  editor.project = /** @type {any} */ ({ id: 'view-project', mode: 'single' })
+  editor.chapter = /** @type {any} */ ({ id: 'view-chapter', pages, review: [] })
+  editor.pageIndex = 0
+  editor.loading = false
+  editor.fit = true
+  editor.zoom = 1
+  const box = document.createElement('div')
+  box.style.padding = '70px 104px 66px'
+  document.body.append(box)
+  Object.defineProperties(box, {
+    clientWidth: { configurable: true, value: 1200 },
+    clientHeight: { configurable: true, value: 600 },
+  })
+  const view = render(CanvasStage, { target: box })
+  const stage = /** @type {HTMLElement} */ (view.container.querySelector('.stage'))
+  const sheet = () => {
+    const width = Number.parseFloat(/** @type {HTMLElement} */ (stage.querySelector('.paginated:not([hidden]) .sheet')).style.width)
+    return { width, height: width * (size.height / size.width) }
+  }
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+    if (this !== stage) return /** @type {DOMRect} */ ({ top: 0, left: 0, width: 1200, height: 600 })
+    const { width, height } = sheet()
+    const side = Number.parseFloat(stage.style.marginLeft) || 0
+    // `justify-content: safe center`: a stage narrower than the content box,
+    // margins and all, is centred in it.
+    const centred = Math.max(0, (992 - (width + 2 * side)) / 2)
+    return /** @type {DOMRect} */ ({
+      top: 70 + (Number.parseFloat(stage.style.marginTop) || 0) - box.scrollTop,
+      left: 104 + centred + side - box.scrollLeft,
+      width,
+      height,
+    })
+  })
+  /** Where page percent `(x, y)` is on screen. */
+  const at = (x, y) => {
+    const rect = stage.getBoundingClientRect()
+    return { x: rect.left + (x / 100) * rect.width, y: rect.top + (y / 100) * rect.height }
+  }
+  return { box, stage, at, pages }
+}
+
+/** The centre of the fixture's view. */
+const VIEW = { x: 600, y: 302 }
+
+describe('where a zoom leaves the view', () => {
+  it('centres a fitted page that its width binds, rather than hanging it from the top', async () => {
+    const { at } = pageFixture({ width: 3000, height: 1000 })
+    await tick()
+    const centre = at(50, 50)
+    expect(centre.x).toBeCloseTo(VIEW.x)
+    expect(centre.y).toBeCloseTo(VIEW.y)
+  })
+
+  it('puts the page in the middle at 100%, whatever the reader panned to', async () => {
+    const { box, at } = pageFixture({ width: 600, height: 400 })
+    editor.fit = false
+    editor.zoom = 2
+    await tick()
+    box.scrollLeft += 380
+    box.scrollTop -= 120
+    zoomActual()
+    await tick()
+    await tick()
+    const centre = at(50, 50)
+    expect(centre.x).toBeCloseTo(VIEW.x)
+    expect(centre.y).toBeCloseTo(VIEW.y)
+  })
+
+  it('keeps the view\'s centre at 100% on a page larger than the view, and shows no empty canvas', async () => {
+    const { box, at } = pageFixture({ width: 1600, height: 2400 })
+    await tick()
+    // From fit the view's centre is the page's: 100% keeps it there.
+    zoomActual()
+    await tick()
+    await tick()
+    expect(at(50, 50).x).toBeCloseTo(VIEW.x)
+    expect(at(50, 50).y).toBeCloseTo(VIEW.y)
+    // Pulled down past its top, the page goes back up to the view's top edge.
+    box.scrollTop -= 1500
+    zoomActual()
+    await tick()
+    await tick()
+    expect(at(0, 0).y).toBeCloseTo(70)
+  })
+
+  it('zooms in and out about the view\'s centre, along the ladder', async () => {
+    const { box, at } = pageFixture({ width: 1600, height: 2400 })
+    editor.fit = false
+    await tick()
+    box.scrollLeft += 210
+    box.scrollTop += 340
+    const before = { x: 0, y: 0 }
+    {
+      const origin = at(0, 0)
+      const end = at(100, 100)
+      before.x = ((VIEW.x - origin.x) / (end.x - origin.x)) * 100
+      before.y = ((VIEW.y - origin.y) / (end.y - origin.y)) * 100
+    }
+    for (const zoom of [1.25, 1.5, 2]) {
+      zoomIn()
+      await tick()
+      await tick()
+      expect(editor.zoom).toBe(zoom)
+      const point = at(before.x, before.y)
+      expect(point.x).toBeCloseTo(VIEW.x)
+      expect(point.y).toBeCloseTo(VIEW.y)
+    }
+  })
+
+  it('fit puts the page back in the middle after a pan', async () => {
+    const { box, at } = pageFixture({ width: 1600, height: 2400 })
+    editor.fit = false
+    await tick()
+    box.scrollLeft += 500
+    zoomFit()
+    await tick()
+    await tick()
+    expect(at(50, 50).x).toBeCloseTo(VIEW.x)
+    expect(at(50, 50).y).toBeCloseTo(VIEW.y)
+  })
+
+  it('marks the stage for nearest-neighbour drawing only past 100%', async () => {
+    const { stage } = pageFixture({ width: 1600, height: 2400 })
+    await tick()
+    expect(stage.hasAttribute('data-pixels')).toBe(false)
+    editor.fit = false
+    editor.zoom = 1
+    await tick()
+    expect(stage.hasAttribute('data-pixels')).toBe(false)
+    editor.zoom = 16
+    await tick()
+    expect(stage.hasAttribute('data-pixels')).toBe(true)
+  })
+})
+
+describe('show on page', () => {
+  it('turns to the region\'s page, selects it and centres it, at the zoom on screen', async () => {
+    const { at, pages } = pageFixture({ width: 1600, height: 2400 })
+    editor.fit = false
+    editor.zoom = 1
+    await tick()
+    const region = pages[1].regions[1]
+    // The Layers row's action, as the row calls it.
+    showOnPage(/** @type {any} */ (region))
+    await tick()
+    await tick()
+    expect(editor.pageIndex).toBe(1)
+    expect(editor.selectionId).toBe(region.id)
+    expect(editor.zoom).toBe(1)
+    const centre = at(20, 75)
+    expect(centre.x).toBeCloseTo(VIEW.x)
+    expect(centre.y).toBeCloseTo(VIEW.y)
+    expect(editor.viewRequest).toBeNull()
+  })
+
+  it('zooms in on a region too small to see, then centres it', async () => {
+    const { at, pages } = pageFixture({ width: 1600, height: 2400 })
+    editor.fit = false
+    editor.zoom = 1
+    await tick()
+    // 16x24 page pixels: 16px on screen at 100%.
+    focusRegion(pages[0].regions[0])
+    await tick()
+    await tick()
+    await tick()
+    expect(editor.zoom).toBe(4)
+    const centre = at(80.5, 10.5)
+    expect(centre.x).toBeCloseTo(VIEW.x)
+    expect(centre.y).toBeCloseTo(VIEW.y)
+  })
+
+  it('zooms out until a region that does not fit does', async () => {
+    const { at, pages } = pageFixture({ width: 1600, height: 2400 })
+    editor.fit = false
+    editor.zoom = 32
+    await tick()
+    focusRegion(pages[0].regions[1])
+    await tick()
+    await tick()
+    await tick()
+    // 320x240 page pixels in a 992x464 view.
+    expect(editor.zoom).toBeCloseTo((464 * 0.7) / 240, 2)
+    const centre = at(20, 75)
+    expect(centre.x).toBeCloseTo(VIEW.x)
+    expect(centre.y).toBeCloseTo(VIEW.y)
+  })
+
+  it('centres a region far down a strip, from the column\'s geometry', async () => {
+    const { box } = scrollFixture()
+    await tick()
+    const pages = editor.chapter.pages
+    pages[40].regions = [{ id: 'deep', pageId: pages[40].id, bbox: { x: 10, y: 40, w: 30, h: 20 }, outcome: 'declined', mask: null }]
+    focusRegion(pages[40].regions[0])
+    await tick()
+    await tick()
+    expect(editor.selectionId).toBe('deep')
+    expect(editor.zoom).toBe(1)
+    // The fixture's stage is 70px below the scroller's top, moved by it, and
+    // the view is the whole 1200x600 scroller.
+    const stage = /** @type {HTMLElement} */ (box.querySelector('.stage'))
+    const metrics = stripMetrics({ pages, scale: 1 })
+    const top = 70 + (Number.parseFloat(stage.style.marginTop) || 0) - box.scrollTop
+    expect(top + metrics.offsets[40] + 0.5 * (metrics.units[40] - STRIP_GAP)).toBeCloseTo(300)
+    // Across: page 40 is 800px wide in the 1000px stage, which the fixture
+    // holds still at the left, so the region's centre is at 100 + 200 = 300
+    // and the scroller moves left by 300 from its place at rest.
+    expect(box.scrollLeft).toBeCloseTo(SIDE - 300)
   })
 })

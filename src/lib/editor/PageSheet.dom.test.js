@@ -59,3 +59,31 @@ it('shows movable artwork for a selected regional copy and retains it until the 
   await fireEvent.load(committed)
   await waitFor(() => expect(view.container.querySelector('.regional-artwork')).toBeNull())
 })
+
+it('draws a grid over every image pixel from 800% up, and none below', async () => {
+  editor.project = { mode: 'single' }
+  const page = { id: 'grid-p', chapterId: 'c1', index: 0, width: 100, height: 150, regions: [] }
+  editor.chapter = { id: 'c1', pages: [page] }
+  const view = render(PageSheet, { page, width: 700 })
+  expect(view.container.querySelector('.pixel-grid')).toBeNull()
+  await view.rerender({ page, width: 1600 })
+  const grid = /** @type {HTMLElement} */ (view.container.querySelector('.pixel-grid'))
+  expect(grid.style.getPropertyValue('--pixel')).toBe('16px')
+  expect(grid.getAttribute('aria-hidden')).toBe('true')
+})
+
+it('asks for the page at its own resolution only for the page on screen, drawn past its proxy', async () => {
+  vi.stubGlobal('__TAURI_INTERNALS__', { convertFileSrc: (_path, scheme) => `${scheme}://localhost/` })
+  editor.project = { mode: 'single' }
+  editor.wipe = 100
+  editor.originalVisible = false
+  const page = { id: 'full-p', chapterId: 'c1', index: 0, width: 2000, height: 3000, sourceSha: 'aa', resident: true, regions: [] }
+  editor.chapter = { id: 'c1', pages: [page] }
+  // The proxy is 1024 wide.
+  const view = render(PageSheet, { page, width: 1000 })
+  expect(view.container.querySelector('img.full')).toBeNull()
+  await view.rerender({ page, width: 2000 })
+  expect(view.container.querySelectorAll('img.full').length).toBeGreaterThan(0)
+  await view.rerender({ page, width: 2000, current: false })
+  expect(view.container.querySelector('img.full')).toBeNull()
+})

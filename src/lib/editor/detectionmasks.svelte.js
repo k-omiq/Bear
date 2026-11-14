@@ -152,6 +152,11 @@ export function paintMask(canvas, image, { inset, outline, color, fill }) {
   context.clearRect(0, 0, width, height)
   if (!(w > 0) || !(h > 0)) return true
 
+  // Drawn larger than the mask's own pixels - a zoom past 100% - each mask
+  // pixel stays a square, as the page under it does.
+  const source = /** @type {any} */ (image)
+  const smooth = !(w > (source?.naturalWidth || source?.width || Infinity))
+  context.imageSmoothingEnabled = smooth
   context.globalAlpha = Math.max(0, Math.min(1, fill))
   context.drawImage(image, inset, inset, w, h)
   context.globalAlpha = 1
@@ -169,6 +174,7 @@ export function paintMask(canvas, image, { inset, outline, color, fill }) {
   ringContext.globalCompositeOperation = 'source-over'
   ringContext.globalAlpha = 1
   ringContext.clearRect(0, 0, width, height)
+  ringContext.imageSmoothingEnabled = smooth
   // Enough directions that the grown edge is round rather than an octagon at
   // the thicker, lit width.
   const steps = Math.min(24, Math.max(8, Math.ceil(outline * 4)))
