@@ -4,6 +4,7 @@ import TABLE from './denoise-presets.json'
 import {
   DENOISE_PRESETS,
   PRESET_TEXT,
+  RETIRED_PRESET_TEXT,
   benchmarkSeconds,
   chapterEstimate,
   defaultOutDir,
@@ -22,9 +23,9 @@ import {
 import { t } from '../i18n/index.js'
 
 describe('the denoise presets', () => {
-  it('are the shared table, all fourteen, each named, credited, and given a page type and a largest size', () => {
+  it('are the shared table, all four, each named, credited, and given a page type and a largest size', () => {
     expect(DENOISE_PRESETS.map((preset) => preset.id)).toEqual(TABLE.presets.map((preset) => preset.id))
-    expect(DENOISE_PRESETS).toHaveLength(14)
+    expect(DENOISE_PRESETS).toHaveLength(4)
     expect(Object.keys(PRESET_TEXT).sort()).toEqual(DENOISE_PRESETS.map((preset) => preset.id).sort())
     const names = new Set()
     for (const preset of DENOISE_PRESETS) {
@@ -36,7 +37,15 @@ describe('the denoise presets', () => {
       expect(['bw', 'color', 'any']).toContain(preset.kind)
       expect([1, 2, 3, 4]).toContain(preset.maxScale)
     }
-    expect(names.size, 'no two presets share a name').toBe(14)
+    expect(names.size, 'no two presets share a name').toBe(4)
+  })
+
+  it('still name a retired preset, so an old chapter\'s history reads', () => {
+    expect(Object.keys(RETIRED_PRESET_TEXT)).toContain('realcugan-2x-conservative')
+    for (const [id, text] of Object.entries(RETIRED_PRESET_TEXT)) {
+      expect(PRESET_TEXT, id).not.toHaveProperty(id)
+      expect(t(text.nameKey), id).not.toMatch(/^\[/)
+    }
   })
 
   it('carry a cloud time that is measured or null, never a guess', () => {
@@ -50,24 +59,25 @@ describe('the denoise presets', () => {
     }
   })
 
-  it('are filtered by target: all fourteen on the cloud, one on this computer, none when off', () => {
-    expect(presetsFor('cloud')).toHaveLength(14)
+  it('are filtered by target: all four on the cloud, one on this computer, none when off', () => {
+    expect(presetsFor('cloud')).toHaveLength(4)
     expect(presetsFor('local').map((preset) => preset.id)).toEqual(['waifu2x-scan-4x-n2'])
     expect(presetsFor('off')).toEqual([])
   })
 
   it('hide a preset the backend does not know, and keep the table when it says nothing', () => {
-    expect(presetsFor('cloud', [{ id: 'realcugan-2x-conservative' }]).map((preset) => preset.id))
-      .toEqual(['realcugan-2x-conservative'])
-    expect(presetsFor('cloud', [])).toHaveLength(14)
-    expect(presetsFor('cloud', null)).toHaveLength(14)
+    expect(presetsFor('cloud', [{ id: 'realcugan-2x-auto' }]).map((preset) => preset.id))
+      .toEqual(['realcugan-2x-auto'])
+    expect(presetsFor('cloud', [])).toHaveLength(4)
+    expect(presetsFor('cloud', null)).toHaveLength(4)
   })
 
   it('resolve a stored choice to one the target offers, else the first', () => {
-    expect(validPreset('cloud', 'mangajanai-4x')).toBe('mangajanai-4x')
-    expect(validPreset('local', 'mangajanai-4x')).toBe('waifu2x-scan-4x-n2')
-    expect(validPreset('cloud', 'nonsense')).toBe('mangajanai-2x')
-    expect(validPreset('off', 'mangajanai-2x')).toBeNull()
+    expect(validPreset('cloud', 'moesr-descreen-auto')).toBe('moesr-descreen-auto')
+    expect(validPreset('local', 'moesr-descreen-auto')).toBe('waifu2x-scan-4x-n2')
+    expect(validPreset('cloud', 'nonsense')).toBe('realcugan-2x-auto')
+    expect(validPreset('cloud', 'mangajanai-2x'), 'a retired choice moves to the first').toBe('realcugan-2x-auto')
+    expect(validPreset('off', 'realcugan-2x-auto')).toBeNull()
   })
 })
 
@@ -80,11 +90,9 @@ describe('the presets a page type shows', () => {
     expect(bw.every((preset) => preset.kind === 'bw' || preset.kind === 'any')).toBe(true)
     expect(color.every((preset) => preset.kind === 'color' || preset.kind === 'any')).toBe(true)
     expect(ids(bw)).toEqual(ids(DENOISE_PRESETS.filter((preset) => preset.kind !== 'color')))
-    expect(ids(bw)).toContain('mangajanai-2x')
-    expect(ids(bw)).not.toContain('waifu2x-art-2x-n1')
-    expect(ids(color)).toEqual(expect.arrayContaining(['waifu2x-art-2x-n1', 'waifu2x-art-2x-n3', 'realcugan-2x-conservative']))
-    expect(ids(color)).not.toContain('mangajanai-2x')
-    expect(ids(color)).not.toContain('mangajpeg-hq')
+    expect(ids(bw)).toEqual(['realcugan-2x-auto', 'moesr-descreen-auto', 'waifu2x-scan-4x-n2'])
+    // The routed presets send colour pages to the colour model, so they show for both.
+    expect(ids(color)).toEqual(['realcugan-2x-auto', 'moesr-descreen-auto', 'ijanai-v3-denoise-4x', 'waifu2x-scan-4x-n2'])
   })
 
   it('keep a preset that names no type on both lists', () => {
@@ -94,54 +102,52 @@ describe('the presets a page type shows', () => {
   })
 
   it('start on the chosen preset\'s own type: colour for a colour preset, black and white for the rest', () => {
-    expect(pageKindFor(DENOISE_PRESETS, 'waifu2x-art-2x-n3')).toBe('color')
-    expect(pageKindFor(DENOISE_PRESETS, 'mangajanai-4x')).toBe('bw')
-    expect(pageKindFor(DENOISE_PRESETS, 'realcugan-2x-conservative')).toBe('bw')
+    expect(pageKindFor(DENOISE_PRESETS, 'ijanai-v3-denoise-4x')).toBe('color')
+    expect(pageKindFor(DENOISE_PRESETS, 'moesr-descreen-auto')).toBe('bw')
+    expect(pageKindFor(DENOISE_PRESETS, 'realcugan-2x-auto')).toBe('bw')
     expect(pageKindFor(DENOISE_PRESETS, null)).toBe('bw')
-    expect(pageKindFor([], 'mangajanai-4x')).toBe('bw')
+    expect(pageKindFor([], 'realcugan-2x-auto')).toBe('bw')
   })
 
   it('keep the picked type while it shows the chosen preset, and follow the preset when it does not', () => {
-    expect(pageKindFor(DENOISE_PRESETS, 'realcugan-2x-conservative', 'color')).toBe('color')
-    expect(pageKindFor(DENOISE_PRESETS, 'waifu2x-art-2x-n1', 'color')).toBe('color')
-    expect(pageKindFor(DENOISE_PRESETS, 'mangajanai-2x', 'color')).toBe('bw')
-    expect(pageKindFor(DENOISE_PRESETS, 'waifu2x-art-2x-n1', 'bw')).toBe('color')
+    expect(pageKindFor(DENOISE_PRESETS, 'realcugan-2x-auto', 'color')).toBe('color')
+    expect(pageKindFor(DENOISE_PRESETS, 'ijanai-v3-denoise-4x', 'color')).toBe('color')
+    expect(pageKindFor(DENOISE_PRESETS, 'ijanai-v3-denoise-4x', 'bw')).toBe('color')
     expect(pageKindFor(DENOISE_PRESETS, null, 'color')).toBe('color')
   })
 })
 
 describe('the output size of a run', () => {
   it('offers same size up to the preset\'s largest, and only same size when it says nothing usable', () => {
-    expect(outputScalesFor(presetById('mangajanai-4x'))).toEqual([1, 2, 3, 4])
-    expect(outputScalesFor(presetById('realcugan-3x-conservative'))).toEqual([1, 2, 3])
-    expect(outputScalesFor(presetById('waifu2x-art-2x-n1'))).toEqual([1, 2])
-    expect(outputScalesFor(presetById('mangajpeg-hq'))).toEqual([1])
+    // Every preset offers page size or 2x.
+    for (const preset of DENOISE_PRESETS) expect(outputScalesFor(preset), preset.id).toEqual([1, 2])
+    expect(outputScalesFor({ maxScale: 3 })).toEqual([1, 2, 3])
     for (const maxScale of [undefined, null, 0, -2, 2.5, 'four', NaN]) expect(outputScalesFor({ maxScale })).toEqual([1])
     expect(outputScalesFor({ maxScale: 9 })).toEqual([1, 2, 3, 4])
     expect(outputScalesFor(null)).toEqual([1])
   })
 
   it('sends the preset\'s own recipe at same size, with no output_scale key at all', () => {
-    const preset = presetById('mangajanai-4x')
+    const preset = presetById('realcugan-2x-auto')
     expect(recipeAt(preset, 1)).toBe(preset.recipe)
     expect('output_scale' in recipeAt(preset, 1)).toBe(false)
     expect(JSON.stringify(recipeAt(preset, 1))).toBe(JSON.stringify(preset.recipe))
   })
 
   it('adds a top-level output_scale above same size, and leaves the preset\'s recipe as it was', () => {
-    const preset = presetById('mangajanai-4x')
+    const preset = presetById('realcugan-2x-auto')
     const before = JSON.stringify(preset.recipe)
     expect(recipeAt(preset, 2)).toEqual({ ...preset.recipe, output_scale: 2 })
-    expect(recipeAt(preset, 4).output_scale).toBe(4)
-    expect(recipeAt(preset, 4).steps).toEqual(preset.recipe.steps)
+    expect(recipeAt(preset, 2).steps).toEqual(preset.recipe.steps)
+    expect(recipeAt(preset, 2).color_steps).toEqual(preset.recipe.color_steps)
     expect(JSON.stringify(preset.recipe)).toBe(before)
   })
 
   it('never asks for a size the preset cannot give', () => {
-    expect(recipeAt(presetById('mangajanai-2x'), 3)).toBe(presetById('mangajanai-2x').recipe)
-    expect(recipeAt(presetById('mangajpeg-lq'), 2)).toBe(presetById('mangajpeg-lq').recipe)
+    expect(recipeAt(presetById('ijanai-v3-denoise-4x'), 3)).toBe(presetById('ijanai-v3-denoise-4x').recipe)
+    expect(recipeAt(presetById('waifu2x-scan-4x-n2'), 4)).toBe(presetById('waifu2x-scan-4x-n2').recipe)
     for (const scale of [0, 1.5, '2x', null, undefined]) {
-      expect('output_scale' in recipeAt(presetById('mangajanai-4x'), scale)).toBe(false)
+      expect('output_scale' in recipeAt(presetById('realcugan-2x-auto'), scale)).toBe(false)
     }
   })
 
@@ -153,18 +159,18 @@ describe('the output size of a run', () => {
 })
 
 describe('time per page and per chapter', () => {
-  const preset = DENOISE_PRESETS.find((entry) => entry.id === 'mangajanai-2x')
+  const preset = DENOISE_PRESETS.find((entry) => entry.id === 'realcugan-2x-auto')
   const page = { width: 1284, height: 1809 }
 
   it('scales cloud time by the chapter pages\' area when every page has a size', () => {
     const estimate = chapterEstimate({ target: 'cloud', preset, pages: [page, page] })
     expect(estimate.basis).toBe('pages')
-    expect(estimate.seconds).toBeCloseTo(2 * 1.284 * 1.809 * 1.73, 5)
+    expect(estimate.seconds).toBeCloseTo(2 * 1.284 * 1.809 * 0.57, 5)
   })
 
   it('falls back to the reference page when a page has no size', () => {
     const estimate = chapterEstimate({ target: 'cloud', preset, pages: [page, {}] })
-    expect(estimate).toEqual({ seconds: 8, perPage: 4, basis: 'reference' })
+    expect(estimate).toEqual({ seconds: 4.6, perPage: 2.3, basis: 'reference' })
     expect(pageMegapixels([page, {}])).toBeNull()
   })
 

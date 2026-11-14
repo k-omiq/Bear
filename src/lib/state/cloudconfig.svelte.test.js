@@ -31,12 +31,12 @@ it('restores each deployment across restart and uses memory while offline', asyn
   const api = backend()
   const first = configurationKey(readiness())
   const second = configurationKey(readiness('second'))
-  await rememberConfiguration(api, first, 'denoise', { state: 'ready', presets: ['mangajanai-2x'], modelId: null })
+  await rememberConfiguration(api, first, 'denoise', { state: 'ready', presets: ['realcugan-2x-auto'], modelId: null })
   await rememberConfiguration(api, second, 'denoise', { state: 'missing', presets: [], modelId: null })
   await rememberConfiguration(api, first, 'clean', { state: 'ready', presets: [], modelId: 'model-first' })
   resetCloudConfiguration()
   const read = vi.fn().mockRejectedValue(new Error('gateway_unreachable'))
-  expect(await checkConfiguration(api, first, 'denoise', read)).toMatchObject({ state: 'ready', presets: ['mangajanai-2x'] })
+  expect(await checkConfiguration(api, first, 'denoise', read)).toMatchObject({ state: 'ready', presets: ['realcugan-2x-auto'] })
   expect(read).not.toHaveBeenCalled()
   expect(rememberedConfiguration(second).denoise.state).toBe('missing')
   expect(rememberedConfiguration(first).clean.modelId).toBe('model-first')
@@ -46,8 +46,8 @@ it('restores each deployment across restart and uses memory while offline', asyn
 
 it('updates and notifies for setup failures only, on the original deployment and operation', async () => {
   const api = backend(), first = configurationKey(readiness()), second = configurationKey(readiness('second'))
-  await rememberConfiguration(api, first, 'denoise', { state: 'ready', presets: ['mangajanai-2x'] })
-  await rememberConfiguration(api, second, 'denoise', { state: 'ready', presets: ['mangajanai-4x'] })
+  await rememberConfiguration(api, first, 'denoise', { state: 'ready', presets: ['realcugan-2x-auto'] })
+  await rememberConfiguration(api, second, 'denoise', { state: 'ready', presets: ['moesr-descreen-auto'] })
   cloud.readiness = readiness('second')
   for (const code of ['gateway_unreachable', 'cloud_denoise_unsupported_page', 'capability_unavailable: denoise GPU unavailable']) {
     expect(await configurationFailed(api, first, 'denoise', code)).toBe(false)
@@ -107,7 +107,7 @@ it('switching denoise profiles restores their own presets and ignores a delayed 
   const api = backend()
   let finishFirst
   api.cloudDenoisePresets = vi.fn(({ profileId }) => profileId === 'first'
-    ? new Promise((resolve) => { finishFirst = resolve }) : Promise.resolve(['mangajanai-4x']))
+    ? new Promise((resolve) => { finishFirst = resolve }) : Promise.resolve(['moesr-descreen-auto']))
   setBackend(api)
   setCloudAllowed(true)
   cloud.checked = true
@@ -116,11 +116,11 @@ it('switching denoise profiles restores their own presets and ignores a delayed 
   await vi.waitFor(() => expect(api.cloudDenoisePresets).toHaveBeenCalledWith({ provider: 'modal', profileId: 'first' }))
   cloud.readiness = readiness('second')
   await checkCloudDenoise()
-  finishFirst(['mangajanai-2x'])
+  finishFirst(['realcugan-2x-auto'])
   await first
-  expect(offeredPresets('cloud').map((preset) => preset.id)).toEqual(['mangajanai-4x'])
+  expect(offeredPresets('cloud').map((preset) => preset.id)).toEqual(['moesr-descreen-auto'])
   cloud.readiness = readiness()
-  expect(offeredPresets('cloud').map((preset) => preset.id)).toEqual(['mangajanai-2x'])
+  expect(offeredPresets('cloud').map((preset) => preset.id)).toEqual(['realcugan-2x-auto'])
   await configurationFailed(api, configurationKey(readiness()), 'denoise', 'capability_unavailable: gateway denoise is not configured')
   expect(cloudOffered()).toBe(false)
   cloud.readiness = readiness('second')
@@ -130,10 +130,10 @@ it('switching denoise profiles restores their own presets and ignores a delayed 
 it('rejects damaged saved capability records and reports persistence failures', async () => {
   const api = backend(), key = configurationKey(readiness())
   api.settings.cloudConfigurationMemory = { broken: { clean: { state: 'ready' } },
-    [key]: { denoise: { state: 'ready', presets: [null, 2, 'mangajanai-2x'] }, clean: { state: 'anything' } } }
+    [key]: { denoise: { state: 'ready', presets: [null, 2, 'realcugan-2x-auto'] }, clean: { state: 'anything' } } }
   await loadCloudConfiguration(api)
   expect(rememberedConfiguration('broken')).toBeNull()
-  expect(rememberedConfiguration(key).denoise.presets).toEqual(['mangajanai-2x'])
+  expect(rememberedConfiguration(key).denoise.presets).toEqual(['realcugan-2x-auto'])
   expect(rememberedConfiguration(key).clean).toBeUndefined()
   api.writeSettings.mockRejectedValue(new Error('disk full'))
   await configurationFailed(api, key, 'clean', 'weights_unavailable')

@@ -326,7 +326,7 @@ impl CloudHttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cleaner_core::cloud_denoise_wire::{preset, DenoiseInfo, DenoiseStepTiming};
+    use cleaner_core::cloud_denoise_wire::{DenoiseInfo, DenoiseStepTiming};
     use std::net::TcpListener;
 
     fn noisy_png() -> Vec<u8> {
@@ -472,7 +472,7 @@ mod tests {
         let (base, server) = chunk_server(png.clone(), cut, existing);
         let http = client(&base);
         let metadata =
-            DenoiseMetadata::new(preset("realcugan-2x-conservative").unwrap().recipe(), &png)
+            DenoiseMetadata::new(serde_json::from_str::<cleaner_core::cloud_denoise_wire::DenoiseRecipe>(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}]}"#).unwrap(), &png)
                 .unwrap();
         let job = http.new_denoise_job(metadata).unwrap();
         // Persist/reload the accepted ticket, then use a newly constructed client.
@@ -512,7 +512,7 @@ mod tests {
         let http = client("http://127.0.0.1:12345/mc/v1");
         let png = noisy_png();
         let metadata =
-            DenoiseMetadata::new(preset("realcugan-2x-conservative").unwrap().recipe(), &png)
+            DenoiseMetadata::new(serde_json::from_str::<cleaner_core::cloud_denoise_wire::DenoiseRecipe>(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}]}"#).unwrap(), &png)
                 .unwrap();
         let mut job = http.new_denoise_job(metadata).unwrap();
         job.profile_id = "another".into();
@@ -533,7 +533,7 @@ mod tests {
         let http = client("http://127.0.0.1:12345/mc/v1");
         let png = noisy_png();
         let metadata =
-            DenoiseMetadata::new(preset("realcugan-2x-conservative").unwrap().recipe(), &png)
+            DenoiseMetadata::new(serde_json::from_str::<cleaner_core::cloud_denoise_wire::DenoiseRecipe>(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}]}"#).unwrap(), &png)
                 .unwrap();
         let job = http.new_denoise_job(metadata).unwrap();
         let mut corrupt = png.clone();

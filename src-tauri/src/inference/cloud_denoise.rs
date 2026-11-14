@@ -447,6 +447,11 @@ pub(crate) fn prepare<G: DenoiseGateway + ?Sized>(
 ) -> Result<CloudDenoiseProposal, String> {
     let steps = recipe.resolve().map_err(|e| format!("cloud_denoise_invalid_recipe: {e}"))?;
     let advertised = capabilities(gateway)?;
+    // An older gateway refuses `color_steps` as malformed: said here as the
+    // deployment being out of date, before anything is planned.
+    if recipe.color_steps.is_some() && !advertised.routes_colour() {
+        return Err("capability_unavailable: the deployment cannot route colour pages".into());
+    }
     if !advertised.supports(&recipe) {
         return Err("capability_unavailable: the deployment has no models for this recipe".into());
     }
@@ -507,7 +512,15 @@ pub(crate) fn open_proposal(plan: DenoisePlan, profile_name: String, too_large_p
         pages: plan.pages.len() as u32,
         too_large_pages,
         total_pixels: plan.pages.iter().map(|page| u64::from(page.width) * u64::from(page.height)).sum(),
-        model_ids: plan.recipe.resolve()?.into_iter().map(|step| step.model_id).collect(),
+        model_ids: {
+            // Both routes' models, each once: a colour page may run the second.
+            let (gray, color) = plan.recipe.resolve_routes()?;
+            let mut ids: Vec<String> = Vec::new();
+            for step in gray.into_iter().chain(color.into_iter().flatten()) {
+                if !ids.contains(&step.model_id) { ids.push(step.model_id); }
+            }
+            ids
+        },
         recipe: plan.recipe.clone(),
         estimated_gpu_seconds: plan.seconds(),
         estimated_cost_usd: plan.cost,
@@ -652,6 +665,10 @@ pub struct CloudDenoiseReport {
     /// not reached are in neither list.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub cancelled: bool,
+    /// The folder the run wrote to: the one asked for, or a new folder inside
+    /// it when that one already holds an earlier run ([`run_folder`]).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub folder: String,
 }
 
 /// Reads one planned page as the PNG to upload. Refuses a page whose
@@ -960,6 +977,28 @@ fn cleaned_page(job_path: &Path, chapter_id: &str, page: &PlannedPage) -> Result
 
 /// Each planned page's output stem: its source file's, as the exporter names pages.
 /// A read, so without the job's lock.
+/// The folder a new run writes to, so it never writes over an earlier run's
+/// files: `out_dir` itself while it holds no file the chapter's history
+/// names and none of this run's file names, else the first `run-2`,
+/// `run-3`, ... inside it that the history does not name and that does not
+/// exist yet. Created. A file in `out_dir` the history does not know is the
+/// user's, and is only ever written over under a name this run gives it.
+pub(crate) fn run_folder(job_path: &Path, out_dir: &Path, names: &HashMap<u32, String>) -> Result<PathBuf, String> {
+    let job = Job::open_read_only(job_path).map_err(|e| e.to_string())?;
+    let held: std::collections::HashSet<PathBuf> =
+        job.project.denoised.iter().filter_map(|row| row.path.parent().map(Path::to_path_buf)).collect();
+    let busy = |dir: &Path| held.contains(dir) || names.values().any(|name| dir.join(format!("{name}.png")).exists());
+    let folder = if !busy(out_dir) {
+        out_dir.to_path_buf()
+    } else {
+        (2..10_000u32).map(|at| out_dir.join(format!("run-{at}")))
+            .find(|dir| !held.contains(dir) && !dir.exists())
+            .ok_or("denoise_out_dir_full")?
+    };
+    std::fs::create_dir_all(&folder).map_err(|_| "denoise_out_dir_unwritable")?;
+    Ok(folder)
+}
+
 pub(crate) fn output_names(job_path: &Path, pages: &[PlannedPage]) -> Result<HashMap<u32, String>, String> {
     let job = Job::open(job_path).map_err(|e| e.to_string())?;
     Ok(pages.iter().filter_map(|page| {
@@ -1059,6 +1098,7 @@ fn record_held(
             source: job.project.sources.get(page.source_idx).map(|source| source.rel_path.clone()),
             taken: false,
             scale: u8::try_from(scale).ok().filter(|scale| *scale > 1),
+            in_use: false,
         })
     }).collect();
     job.record_denoised(rows).map_err(|e| e.to_string())
@@ -1070,6 +1110,10 @@ fn recorded_or_logged(job_path: &Path, recorded: Result<(), String>) {
         Err(detail) => eprintln!("manga-cleaner: denoised pages not recorded for {}: {detail}", job_path.display()),
     }
 }
+
+/// What the history names a cloud run whose recipe is no preset: one built
+/// in the dialog's advanced chain.
+pub(crate) const CUSTOM_RECIPE: &str = "custom";
 
 /// The shipped preset a cloud recipe is, whatever its output scale, for the
 /// history to name. `None` for a recipe that is no preset.
@@ -1232,6 +1276,8 @@ fn start(app: &tauri::AppHandle, grant_id: &str, out_dir: &Path, run_id: &str) -
     let job_path = Library::for_app(app).map_err(|e| e.to_string())?
         .resolve_chapter(&plan.chapter_id).map_err(|e| e.to_string())?;
     let names = output_names(&job_path, &plan.pages)?;
+    let folder = run_folder(&job_path, out_dir, &names).map_err(|code| format!("cloud_{code}"))?;
+    let out_dir = folder.as_path();
     let journal = analysis::journal_for(app)?;
     let allowed = || in_service(app, plan.provider, &plan.profile_id);
     let read = |page: &PlannedPage| cleaned_page(&job_path, &plan.chapter_id, page);
@@ -1245,12 +1291,14 @@ fn start(app: &tauri::AppHandle, grant_id: &str, out_dir: &Path, run_id: &str) -
         let _ = app.emit(PROGRESS_EVENT, DenoiseProgress { run_id: run_id.to_string(), done, total, page });
     };
     emit(0, total);
-    let report = run_plan(&Batch {
+    let mut report = run_plan(&Batch {
         plan: &plan, out_dir, names: &names, gateway: &client, grants: GrantService::global(),
         journal: Some(&journal), allowed: &allowed, read: &read,
     }, registered.cancel(), &emit);
-    record_written_soon(app, run_id, &job_path, &plan.pages, &report, preset_of(&plan.recipe), wire::PresetTarget::Cloud,
-        plan.recipe.output_scale());
+    report.folder = out_dir.display().to_string();
+    // A recipe that is no preset was built in the advanced chain.
+    record_written_soon(app, run_id, &job_path, &plan.pages, &report, Some(preset_of(&plan.recipe).unwrap_or(CUSTOM_RECIPE)),
+        wire::PresetTarget::Cloud, plan.recipe.output_scale());
     Ok(report)
 }
 

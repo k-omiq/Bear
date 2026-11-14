@@ -90,6 +90,8 @@ const IMPLEMENTED = Object.freeze({
   replaceWithDenoised: 'replace_with_denoised',
   denoiseHistory: 'denoise_history',
   denoiseCompareImage: 'denoise_compare_image',
+  useDenoiseRun: 'use_denoise_run',
+  deleteDenoiseRun: 'delete_denoise_run',
   cloudDenoisePresets: 'cloud_denoise_presets',
   prepareCloudDenoise: 'prepare_cloud_denoise',
   confirmCloudDenoise: 'confirm_cloud_denoise',
@@ -271,6 +273,8 @@ export const SEAM_METHODS = Object.freeze([
   'replaceWithDenoised',
   'denoiseHistory',
   'denoiseCompareImage',
+  'useDenoiseRun',
+  'deleteDenoiseRun',
   'cloudDenoisePresets',
   'prepareCloudDenoise',
   'confirmCloudDenoise',
@@ -593,6 +597,8 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // Raw bytes over IPC (`tauri::ipc::Response`): an ArrayBuffer, not JSON.
     denoiseCompareImage: ({ chapterId, pageIndex, run, side }) =>
       call(IMPLEMENTED.denoiseCompareImage, { chapterId, pageIndex, run, side }),
+    useDenoiseRun: ({ chapterId, run }) => call(IMPLEMENTED.useDenoiseRun, { chapterId, run }),
+    deleteDenoiseRun: ({ chapterId, run }) => call(IMPLEMENTED.deleteDenoiseRun, { chapterId, run }),
     cloudDenoisePresets: (target = {}) => call(IMPLEMENTED.cloudDenoisePresets, target),
     prepareCloudDenoise: ({ chapterId, pageIndices = null, recipe }) =>
       call(IMPLEMENTED.prepareCloudDenoise, { chapterId, pageIndices, recipe }),

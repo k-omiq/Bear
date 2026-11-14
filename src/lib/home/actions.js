@@ -12,6 +12,7 @@
 import { notify, pushModal, openProject } from '../state/app.svelte.js'
 import { getBackend } from '../api/backend.js'
 import { t } from '../i18n/index.js'
+import { runInUse } from '../model/denoisehistory.js'
 import { copySourcePath, removeChapter, removeProject, replaceWithDenoised } from './library.svelte.js'
 
 /** Raise the New project dialog. */
@@ -184,6 +185,7 @@ export function openDenoiseCompare(project, chapter, runs, run) {
  * @param {import('../api/backend.js').ApiChapter} chapter
  */
 export async function openDenoiseHistory(project, chapter) {
+  /** @type {import('../api/backend.js').DenoiseRun[]} */
   let runs = []
   try {
     runs = await getBackend().denoiseHistory({ chapterId: chapter.id })
@@ -194,7 +196,7 @@ export async function openDenoiseHistory(project, chapter) {
     notify({ key: 'home.denoised.failed', params: { number: chapter.number }, tone: 'warn' })
     return
   }
-  openDenoiseCompare(project, chapter, runs, runs[0].created)
+  openDenoiseCompare(project, chapter, runs, runInUse(runs) ?? runs[0].created)
 }
 
 /**

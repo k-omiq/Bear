@@ -54,12 +54,23 @@ export const DENOISE_REFERENCE = Object.freeze({
  * sees every one of them.
  */
 export const PRESET_TEXT = Object.freeze({
+  'realcugan-2x-auto': { nameKey: 'denoise.preset.realcuganAuto.name', noteKey: 'denoise.preset.realcuganAuto.note' },
+  'moesr-descreen-auto': { nameKey: 'denoise.preset.moesrAuto.name', noteKey: 'denoise.preset.moesrAuto.note' },
+  'ijanai-v3-denoise-4x': { nameKey: 'denoise.preset.ijanai4x.name', noteKey: 'denoise.preset.ijanai4x.note' },
+  'waifu2x-scan-4x-n2': { nameKey: 'denoise.preset.waifu2xScan.name', noteKey: 'denoise.preset.waifu2xScan.note' },
+})
+
+/**
+ * The presets of earlier builds (until 2026-11-14), which a chapter's
+ * history may still name. Never offered; named so an old run reads as the
+ * preset it was.
+ */
+export const RETIRED_PRESET_TEXT = Object.freeze({
   'mangajanai-2x': { nameKey: 'denoise.preset.mangajanai2x.name', noteKey: 'denoise.preset.mangajanai2x.note' },
   'mangajanai-4x': { nameKey: 'denoise.preset.mangajanai4x.name', noteKey: 'denoise.preset.mangajanai4x.note' },
   'digimanga-bw-4x': { nameKey: 'denoise.preset.digimangaBw4x.name', noteKey: 'denoise.preset.digimangaBw4x.note' },
   'mangajpeg-hq': { nameKey: 'denoise.preset.mangajpegHq.name', noteKey: 'denoise.preset.mangajpegHq.note' },
   'mangajpeg-lq': { nameKey: 'denoise.preset.mangajpegLq.name', noteKey: 'denoise.preset.mangajpegLq.note' },
-  'waifu2x-scan-4x-n2': { nameKey: 'denoise.preset.waifu2xScan.name', noteKey: 'denoise.preset.waifu2xScan.note' },
   'waifu2x-scan-n1': { nameKey: 'denoise.preset.waifu2xScanLight.name', noteKey: 'denoise.preset.waifu2xScanLight.note' },
   'waifu2x-scan-n3': { nameKey: 'denoise.preset.waifu2xScanHeavy.name', noteKey: 'denoise.preset.waifu2xScanHeavy.note' },
   'realcugan-2x-conservative': { nameKey: 'denoise.preset.realcugan2x.name', noteKey: 'denoise.preset.realcugan2x.note' },
@@ -69,6 +80,90 @@ export const PRESET_TEXT = Object.freeze({
   'waifu2x-art-2x-n1': { nameKey: 'denoise.preset.waifu2xArtLight.name', noteKey: 'denoise.preset.waifu2xArtLight.note' },
   'waifu2x-art-2x-n3': { nameKey: 'denoise.preset.waifu2xArtStrong.name', noteKey: 'denoise.preset.waifu2xArtStrong.note' },
 })
+
+/** What the history names a cloud run whose recipe is no preset (`cloud_denoise.rs#CUSTOM_RECIPE`). */
+export const CUSTOM_RECIPE = 'custom'
+
+/** The most steps a recipe has (`MAX_STEPS` in `denoise.py`). */
+export const MAX_CHAIN_STEPS = 3
+
+/**
+ * @typedef {Object} ChainStep
+ * @property {string} id
+ * @property {{op: string, engine: string, scale?: number, level?: number}} step - the recipe step, as the gateway takes it
+ * @property {{name: string, author: string, license: string}} credit
+ */
+
+/**
+ * The steps the advanced chain builds a recipe from, in the table's order
+ * (`CHAIN_STEPS` in `denoise.py`, which a Python test holds to this list).
+ * Cloud only: the desktop has one model.
+ *
+ * @type {readonly ChainStep[]}
+ */
+export const CHAIN_STEPS = Object.freeze((TABLE.chainSteps ?? []).map((entry) => Object.freeze(entry)))
+
+/** Each chain step's name, as a whole key. */
+export const CHAIN_STEP_TEXT = Object.freeze({
+  'realcugan-2x': 'denoise.chain.step.realcugan2x',
+  'realcugan-2x-denoise3': 'denoise.chain.step.realcugan2xStrong',
+  'moesr-descreen-4x': 'denoise.chain.step.moesr4x',
+  'ijanai-v3-denoise-4x': 'denoise.chain.step.ijanai4x',
+  'ijanai-v3-denoise-2x': 'denoise.chain.step.ijanai2x',
+  'waifu2x-scan-4x-n2': 'denoise.chain.step.waifu2xScan4x',
+  'waifu2x-scan-n1': 'denoise.chain.step.waifu2xLight',
+  'waifu2x-scan-n3': 'denoise.chain.step.waifu2xHeavy',
+  'mangajpeg-hq': 'denoise.chain.step.mangajpegHq',
+})
+
+/** @param {string} id @returns {ChainStep|null} */
+export function chainStepById(id) {
+  return CHAIN_STEPS.find((entry) => entry.id === id) ?? null
+}
+
+/**
+ * How many times its input a recipe step enlarges before the gateway scales
+ * back: 1 for a denoise or JPEG step, else its scale (the gateway's default
+ * when it names none: 4 for the fixed 4x engines, 2 for the rest).
+ *
+ * @param {{op?: string, engine?: string, scale?: number}|null|undefined} step
+ */
+export function stepScale(step) {
+  if (step?.op !== 'sharpen') return 1
+  if (Number.isInteger(step.scale)) return /** @type {number} */ (step.scale)
+  return ['moesr-descreen', 'ijanai-v3-denoise', 'digimanga-bw-4x'].includes(String(step.engine)) ? 4 : 2
+}
+
+/**
+ * The output scales a chain of steps offers, smallest first: 1 up to the
+ * scale of its last upscaling step (`resolve_recipe`'s rule), at most 4.
+ *
+ * @param {ReadonlyArray<{op?: string, engine?: string, scale?: number}>} steps
+ * @returns {number[]}
+ */
+export function chainScales(steps) {
+  const scales = (Array.isArray(steps) ? steps : []).map(stepScale).filter((scale) => scale > 1)
+  const top = Math.min(4, scales.length ? scales[scales.length - 1] : 1)
+  return Array.from({ length: top }, (_, index) => index + 1)
+}
+
+/**
+ * The recipe the advanced chain sends: its steps by id, in order, with an
+ * `output_scale` only above 1 and only one the chain can give. `null` for an
+ * empty chain, one past `MAX_CHAIN_STEPS`, or an id the list does not have.
+ *
+ * @param {ReadonlyArray<string>} ids
+ * @param {unknown} [scale]
+ * @returns {{schema: number, steps: Array<Object>, output_scale?: number}|null}
+ */
+export function chainRecipe(ids, scale = 1) {
+  if (!Array.isArray(ids) || !ids.length || ids.length > MAX_CHAIN_STEPS) return null
+  const entries = ids.map(chainStepById)
+  if (entries.some((entry) => !entry)) return null
+  const steps = entries.map((entry) => structuredClone(/** @type {ChainStep} */ (entry).step))
+  const wanted = Number(scale)
+  return wanted > 1 && chainScales(steps).includes(wanted) ? { schema: 1, steps, output_scale: wanted } : { schema: 1, steps }
+}
 
 /** The page types the preset list is filtered by, in the order they are offered. */
 export const PAGE_KINDS = Object.freeze(['bw', 'color'])

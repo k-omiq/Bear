@@ -2798,7 +2798,7 @@ mod tests {
 
     fn denoise_request() -> (DenoiseMetadata, &'static [u8]) {
         let page: &'static [u8] = include_bytes!("../../../deploy/cloud/fixtures/tiny_image.png");
-        let recipe = cleaner_core::cloud_denoise_wire::preset("realcugan-2x-conservative").unwrap().recipe();
+        let recipe = serde_json::from_str::<cleaner_core::cloud_denoise_wire::DenoiseRecipe>(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}]}"#).unwrap();
         (DenoiseMetadata::new(recipe, page).unwrap(), page)
     }
 

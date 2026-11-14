@@ -23,7 +23,7 @@ import { buildReviewPage, rgbPngBase64, supportOf } from './mockreview.js'
 import { commitMask, ENGINE_INFO } from './provenance.js'
 import { createRng } from './rng.js'
 import { createRunnerPool } from './runner.js'
-import { DENOISE_PRESETS, outputScalesFor, presetById, recipeAt } from '../model/denoise.js'
+import { CHAIN_STEPS, DENOISE_PRESETS, chainScales, outputScalesFor, presetById, recipeAt } from '../model/denoise.js'
 import { currentRung } from '../model/ladder.js'
 import { MAX_MASK_PADDING, NANO_BANANA_ENGINE, isUncleaned } from '../model/masks.js'
 import { nanoBananaModel, nanoBananaStartSize } from '../model/nanobanana.js'
@@ -326,11 +326,26 @@ export function createMockBackend(options = {}) {
     const wanted = Array.isArray(indices) ? new Set(indices) : null
     return chapter.pages.filter((/** @type {any} */ page) => !wanted || wanted.has(page.index))
   }
+  /**
+   * `cloud_denoise.rs#run_folder`: the folder asked for, or `run-2`, `run-3`,
+   * ... inside it once it holds an earlier run, so no run writes over another.
+   *
+   * @param {string} chapterId @param {string} outDir
+   */
+  const runFolder = (chapterId, outDir) => {
+    const dir = outDir.trim().replace(/[\\/]+$/, '')
+    const held = new Set((denoiseRows.get(chapterId) ?? []).map((row) => row.path.replace(/[\\/][^\\/]*$/, '')))
+    if (!held.has(dir)) return dir
+    let at = 2
+    while (held.has(`${dir}/run-${at}`)) at += 1
+    return `${dir}/run-${at}`
+  }
   /** @param {any[]} pages @param {string} outDir */
   const denoiseReport = (pages, outDir, prefix) => {
     const dir = outDir.trim().replace(/[\\/]+$/, '')
     const failing = denoiseScenario() === 'pageFail' ? pages[2]?.index : undefined
     return {
+      folder: dir,
       written: pages.filter((page) => page.index !== failing).map((page) => ({
         pageIndex: page.index,
         path: `${dir}/${String(page.index + 1).padStart(3, '0')}.png`,
@@ -344,15 +359,20 @@ export function createMockBackend(options = {}) {
    * it (`Job::record_denoised`): one row per page per run, a run being the
    * rows sharing `created`. A rerun into the same folder replaces the rows
    * whose files it wrote over, a run in the same second as a held one moves
-   * a second on, and only the newest `MAX_DENOISE_RUNS` runs are kept.
-   * `scale` is the size the file was saved at, as a multiple of the page's.
+   * a second on, and every run is kept until it is deleted. `scale` is the
+   * size the file was saved at, as a multiple of the page's. `inUse` marks
+   * the run the user picked (`Job::use_denoise_run`); none is the newest.
    *
    * @typedef {{pageIndex: number, path: string, created: number, preset: string|null, scale: number,
-   *   target: 'local'|'cloud', fromCleaned: boolean, taken: boolean}} MockDenoiseRow
+   *   target: 'local'|'cloud', fromCleaned: boolean, taken: boolean, inUse?: boolean}} MockDenoiseRow
    * @type {Map<string, MockDenoiseRow[]>}
    */
   const denoiseRows = new Map()
-  const MAX_DENOISE_RUNS = 10
+  /** `Project::denoise_run_in_use`. @param {string} chapterId @returns {number|null} */
+  const runInUse = (chapterId) => {
+    const rows = denoiseRows.get(chapterId) ?? []
+    return rows.find((row) => row.inUse)?.created ?? (rows.length ? Math.max(...rows.map((row) => row.created)) : null)
+  }
   /** @param {any} page */
   const pageCleaned = (page) => page.regions.some((/** @type {any} */ region) => regionState(region) === 'cleaned')
   /**
@@ -362,7 +382,8 @@ export function createMockBackend(options = {}) {
    */
   const recordDenoised = (chapter, report, { preset, target, scale = 1 }) => {
     if (!report.written.length) return
-    let rows = (denoiseRows.get(chapter.id) ?? []).filter((row) => !report.written.some((output) => output.path === row.path))
+    const rows = (denoiseRows.get(chapter.id) ?? []).filter((row) => !report.written.some((output) => output.path === row.path))
+    for (const row of rows) row.inUse = false
     let created = Math.floor(Date.now() / 1000)
     if (rows.some((row) => row.created === created)) created = Math.max(...rows.map((row) => row.created)) + 1
     for (const output of report.written) {
@@ -370,23 +391,25 @@ export function createMockBackend(options = {}) {
       rows.push({ pageIndex: output.pageIndex, path: output.path, created, preset, target, scale,
         fromCleaned: page ? pageCleaned(page) : false, taken: false })
     }
-    const runs = [...new Set(rows.map((row) => row.created))].sort((a, b) => b - a)
-    if (runs.length > MAX_DENOISE_RUNS) rows = rows.filter((row) => row.created >= runs[MAX_DENOISE_RUNS - 1])
     denoiseRows.set(chapter.id, rows)
   }
   /**
-   * `Project::current_denoised`: the page's newest row, unless it was taken.
+   * `Project::current_denoised`: the page's row of the run in use, else its
+   * newest row, unless it was taken.
    *
    * @param {string} chapterId @param {number} pageIndex
    * @returns {MockDenoiseRow|null}
    */
   const currentDenoised = (chapterId, pageIndex) => {
+    const rows = denoiseRows.get(chapterId) ?? []
+    const picked = rows.find((row) => row.inUse)?.created
     /** @type {MockDenoiseRow|null} */
-    let newest = null
-    for (const row of denoiseRows.get(chapterId) ?? []) {
-      if (row.pageIndex === pageIndex && (!newest || row.created >= newest.created)) newest = row
+    let found = null
+    for (const row of rows) {
+      if (row.pageIndex !== pageIndex) continue
+      if (picked !== undefined ? row.created === picked : !found || row.created >= found.created) found = row
     }
-    return newest && !newest.taken ? newest : null
+    return found && !found.taken ? found : null
   }
   /**
    * `page_denoise.rs#standings`, page by page: a page with no current
@@ -6229,7 +6252,7 @@ export function createMockBackend(options = {}) {
           }
           if (!run.stopped) progress(reached + 1, 0)
         }
-        const report = denoiseReport(pages.slice(0, reached), outDir, 'denoise_')
+        const report = denoiseReport(pages.slice(0, reached), runFolder(chapterId, outDir), 'denoise_')
         recordDenoised(found.chapter, report, { preset: presetId, target: 'local', scale })
         return run.stopped ? { ...report, cancelled: true } : report
       } finally {
@@ -6281,14 +6304,35 @@ export function createMockBackend(options = {}) {
         let run = runs[runs.length - 1]
         if (run?.created !== row.created) {
           run = { created: row.created, preset: row.preset, scale: row.scale, target: row.target, fromCleaned: false,
-            folder: row.path.replace(/[\\/][^\\/]*$/, ''), pages: [] }
+            folder: row.path.replace(/[\\/][^\\/]*$/, ''), inUse: row.created === runInUse(chapterId), bytes: 0, pages: [] }
           runs.push(run)
         }
         run.fromCleaned ||= row.fromCleaned
+        // A stand-in size: about 1.3 MB a page at its own size, four times that at 2x.
+        run.bytes += 1_300_000 * row.scale * row.scale
         run.pages.push({ pageIndex: row.pageIndex, exists: true, taken: row.taken,
           current: currentDenoised(chapterId, row.pageIndex) === row, fromCleaned: row.fromCleaned })
       }
       return structuredClone(runs)
+    },
+
+    /** `use_denoise_run`: the run whose files "Replace pages with denoised" takes. */
+    async useDenoiseRun({ chapterId, run }) {
+      await delay(timing.method)
+      const rows = denoiseRows.get(chapterId) ?? []
+      if (!rows.some((row) => row.created === run)) throw new Error('denoise_run_missing')
+      const newest = Math.max(...rows.map((row) => row.created))
+      for (const row of rows) row.inUse = run !== newest && row.created === run
+    },
+
+    /** `delete_denoise_run`: the run's history and its files. The mock's files are never missing. */
+    async deleteDenoiseRun({ chapterId, run }) {
+      await delay(timing.method)
+      const rows = denoiseRows.get(chapterId) ?? []
+      const removed = rows.filter((row) => row.created === run).length
+      if (!removed) throw new Error('denoise_run_missing')
+      denoiseRows.set(chapterId, rows.filter((row) => row.created !== run))
+      return { removed, missing: 0, failed: [] }
     },
 
     /**
@@ -6343,11 +6387,19 @@ export function createMockBackend(options = {}) {
       }
       const found = findChapter(chapterId)
       if (!found) throw new Error('chapter_not_found')
-      const preset = DENOISE_PRESETS.find((entry) => entry.recipe.schema === recipe?.schema
-        && JSON.stringify(entry.recipe.steps) === JSON.stringify(recipe?.steps))
-      if (!preset) throw new Error('cloud_denoise_invalid_recipe: unknown recipe')
+      const shipped = DENOISE_PRESETS.find((entry) => entry.recipe.schema === recipe?.schema
+        && JSON.stringify(entry.recipe.steps) === JSON.stringify(recipe?.steps)
+        && JSON.stringify(entry.recipe.color_steps) === JSON.stringify(recipe?.color_steps))
+      // A recipe that is no preset is the advanced chain's: 1 to 3 steps of its list.
+      const chain = !shipped && recipe?.schema === 1 && !recipe.color_steps && Array.isArray(recipe.steps)
+        && recipe.steps.length >= 1 && recipe.steps.length <= 3
+        && recipe.steps.every((step) => CHAIN_STEPS.some((entry) => JSON.stringify(entry.step) === JSON.stringify(step)))
+      if (!shipped && !chain) throw new Error('cloud_denoise_invalid_recipe: unknown recipe')
+      const preset = shipped ?? { id: 'custom', recipe: { schema: 1, steps: recipe.steps }, cloudSecondsPerMegapixel: null,
+        maxScale: Math.max(...chainScales(recipe.steps)) }
       const scale = recipe.output_scale ?? 1
-      if (!outputScalesFor(preset).includes(scale) || recipe.output_scale === 1) {
+      const scales = shipped ? outputScalesFor(shipped) : chainScales(recipe.steps)
+      if (!scales.includes(scale) || recipe.output_scale === 1) {
         throw new Error('cloud_denoise_invalid_recipe: output_scale is not one this recipe can give')
       }
       const pages = denoisePages(found.chapter, pageIndices)
@@ -6365,8 +6417,9 @@ export function createMockBackend(options = {}) {
         pages: pages.length,
         tooLargePages: [],
         totalPixels,
-        recipe: structuredClone(recipeAt(preset, scale)),
-        modelIds: preset.recipe.steps.map((step) => `${step.engine}.${step.op}.x${step.scale ?? 1}`),
+        recipe: structuredClone(shipped ? recipeAt(shipped, scale) : recipe),
+        modelIds: [...new Set([...preset.recipe.steps, ...(preset.recipe.color_steps ?? [])]
+          .map((step) => `${step.engine}.${step.op}.x${step.scale ?? 1}`))],
         estimatedGpuSeconds: measured ? { low, high } : null,
         estimatedCostUsd: measured
           ? { low: Math.round((low / 3600) * 0.8 * 100) / 100, high: Math.round((high / 3600) * 0.8 * 100) / 100 }
@@ -6438,7 +6491,7 @@ export function createMockBackend(options = {}) {
           await delay(half)
           progress(reached + 1, reached + 1 === pages.length ? 1 : 0)
         }
-        const report = denoiseReport(pages.slice(0, reached), outDir, 'cloud_denoise_')
+        const report = denoiseReport(pages.slice(0, reached), runFolder(grant.chapterId, outDir), 'cloud_denoise_')
         recordDenoised(found.chapter, report, { preset: grant.presetId ?? null, target: 'cloud', scale: grant.scale ?? 1 })
         return run.stopped && reached < pages.length ? { ...report, cancelled: true } : report
       } finally {

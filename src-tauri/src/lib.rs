@@ -220,6 +220,8 @@ pub fn run() {
             page_denoise::replace_with_denoised,
             denoise_history::denoise_history,
             denoise_history::denoise_compare_image,
+            denoise_history::use_denoise_run,
+            denoise_history::delete_denoise_run,
             inference::commands::write_inference_config,
             inference::commands::select_cloud_profile,
             inference::nano_banana::nano_banana_has_key,

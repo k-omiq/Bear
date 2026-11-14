@@ -286,6 +286,8 @@ fn main() {
             "replace_with_denoised",
             "denoise_history",
             "denoise_compare_image",
+            "use_denoise_run",
+            "delete_denoise_run",
             "list_jobs",
             "confirm_quit",
             "hide_to_tray",

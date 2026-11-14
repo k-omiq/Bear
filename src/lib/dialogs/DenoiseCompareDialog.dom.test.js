@@ -1,6 +1,7 @@
 /**
  * The compare view: a run's denoised page over the raw page, stepped a page at
- * a time, with the run picker switching runs, and a page whose file is gone
+ * a time, with the run picker switching runs, the run in use picked and a run
+ * deleted after a question, zoom to 1:1 and 2:1, and a page whose file is gone
  * said to be gone rather than drawn half-compared.
  */
 
@@ -85,58 +86,92 @@ describe('the denoise compare view', () => {
     await fireEvent.click(getByRole('button', { name: t('denoise.compare.next') }))
     await waitFor(() => expect(root().dataset.page).toBe('1'))
     const picker = /** @type {HTMLSelectElement} */ (getByRole('combobox', { name: t('denoise.compare.run') }))
-    expect([...picker.options].map((option) => option.textContent?.trim())).toEqual(RUNS.map(runLabel))
+    expect([...picker.options].map((option) => option.textContent?.trim())).toEqual([`${runLabel(RUNS[0])} · ${t('denoise.compare.inUse')}`, runLabel(RUNS[1])])
     await fireEvent.change(picker, { target: { value: '100' } })
     await waitFor(() => expect(root().dataset.run).toBe('100'))
     expect(root().dataset.page).toBe('1')
     await waitFor(() => expect(denoiseCompareImage).toHaveBeenCalledWith(expect.objectContaining({ pageIndex: 1, run: 100 })))
   })
 
-  it('fills the window on its toggle, and Escape leaves full window before it closes', async () => {
-    vi.mocked(closeModal).mockClear()
-    const { getByRole, getByAltText } = open()
-    await waitFor(() => getByAltText(t('denoise.compare.denoised')))
-    const dialog = () => getByRole('dialog')
-    const toggle = getByRole('button', { name: t('denoise.compare.fullscreen') })
-    expect(toggle.getAttribute('aria-pressed')).toBe('false')
-    expect(dialog().classList.contains('fill')).toBe(false)
+  it('marks the run in use, makes another the one in use, and reads the history again', async () => {
+    const useDenoiseRun = vi.fn(async () => {})
+    const fresh = [{ ...RUNS[0] }, { ...RUNS[1], inUse: true }]
+    const denoiseHistory = vi.fn(async () => fresh)
+    setBackend(/** @type {any} */ ({ denoiseCompareImage, useDenoiseRun, denoiseHistory, listProjects: async () => [] }))
+    const { getByRole, getByText, queryByRole, root } = open()
+    expect(getByText(t('denoise.compare.inUse')), 'the newest is in use when none is marked').toBeTruthy()
+    expect(queryByRole('button', { name: t('denoise.compare.use') })).toBeNull()
 
-    await fireEvent.click(toggle)
-    expect(toggle.getAttribute('aria-pressed')).toBe('true')
-    expect(dialog().classList.contains('fill')).toBe(true)
-    expect(dialog().style.width, 'the fixed width is dropped').toBe('')
-
-    await fireEvent.keyDown(window, { key: 'Escape' })
-    expect(dialog().classList.contains('fill')).toBe(false)
-    expect(closeModal).not.toHaveBeenCalled()
-    await fireEvent.keyDown(window, { key: 'Escape' })
-    expect(closeModal).toHaveBeenCalledWith(null)
+    const picker = /** @type {HTMLSelectElement} */ (getByRole('combobox', { name: t('denoise.compare.run') }))
+    expect(picker.options[0].textContent).toContain(t('denoise.compare.inUse'))
+    await fireEvent.change(picker, { target: { value: '100' } })
+    await waitFor(() => expect(root().dataset.run).toBe('100'))
+    await fireEvent.click(getByRole('button', { name: t('denoise.compare.use') }))
+    await waitFor(() => expect(useDenoiseRun).toHaveBeenCalledWith({ chapterId: CHAPTER.id, run: 100 }))
+    await waitFor(() => expect(queryByRole('button', { name: t('denoise.compare.use') })).toBeNull())
+    expect(denoiseHistory).toHaveBeenCalledWith({ chapterId: CHAPTER.id })
+    expect(picker.options[1].textContent).toContain(t('denoise.compare.inUse'))
   })
 
-  it('zooms both pages together under a wipe that stays put, and goes back to fit', async () => {
+  it('deletes a run only after the inline question, and Keep leaves it', async () => {
+    const deleteDenoiseRun = vi.fn(async () => ({ removed: 2, missing: 0, failed: [] }))
+    const denoiseHistory = vi.fn(async () => [RUNS[1]])
+    setBackend(/** @type {any} */ ({ denoiseCompareImage, deleteDenoiseRun, denoiseHistory, listProjects: async () => [] }))
+    const { getByRole, findByText, root } = open()
+    await fireEvent.click(getByRole('button', { name: t('denoise.compare.delete') }))
+    await findByText(t('denoise.compare.deleteAsk', { count: 2 }))
+    await fireEvent.click(getByRole('button', { name: t('denoise.compare.keep') }))
+    expect(deleteDenoiseRun).not.toHaveBeenCalled()
+
+    await fireEvent.click(getByRole('button', { name: t('denoise.compare.delete') }))
+    await fireEvent.click(getByRole('button', { name: t('denoise.compare.deleteConfirm') }))
+    await waitFor(() => expect(deleteDenoiseRun).toHaveBeenCalledWith({ chapterId: CHAPTER.id, run: 200 }))
+    await waitFor(() => expect(root().dataset.run).toBe('100'))
+    const picker = /** @type {HTMLSelectElement} */ (getByRole('combobox', { name: t('denoise.compare.run') }))
+    expect(picker.options.length).toBe(1)
+  })
+
+  it('closes when the last run is deleted', async () => {
+    vi.mocked(closeModal).mockClear()
+    setBackend(/** @type {any} */ ({
+      denoiseCompareImage,
+      deleteDenoiseRun: async () => ({ removed: 1, missing: 0, failed: [] }),
+      denoiseHistory: async () => [],
+      listProjects: async () => [],
+    }))
+    const { getByRole } = open()
+    await fireEvent.click(getByRole('button', { name: t('denoise.compare.delete') }))
+    await fireEvent.click(getByRole('button', { name: t('denoise.compare.deleteConfirm') }))
+    await waitFor(() => expect(closeModal).toHaveBeenCalledWith(null))
+  })
+
+  it('zooms to 1:1 and 2:1 of the denoised file, both pages together, and back to fit', async () => {
     const { getByRole, getByAltText, root } = open()
     await waitFor(() => getByAltText(t('denoise.compare.denoised')))
-    const denoised = () => /** @type {HTMLElement} */ (getByAltText(t('denoise.compare.denoised')))
+    const denoised = () => /** @type {HTMLImageElement} */ (getByAltText(t('denoise.compare.denoised')))
     const raw = () => /** @type {HTMLElement} */ (getByAltText(t('denoise.compare.raw')))
-    const zoomOut = /** @type {HTMLButtonElement} */ (getByRole('button', { name: t('editor.action.zoomOut') }))
-    expect(denoised().style.transform).toBe('')
-    expect(zoomOut.disabled, 'fitted pages have nothing to zoom out of').toBe(true)
-
-    await fireEvent.click(getByRole('button', { name: t('editor.action.zoomIn') }))
-    expect(denoised().style.transform).toBe('translate(0%, 0%) scale(1.5)')
-    expect(raw().style.transform).toBe(denoised().style.transform)
-    expect(denoised().style.clipPath, 'the wipe is not on the zoomed image').toBe('')
-    expect(/** @type {HTMLElement} */ (denoised().parentElement).style.clipPath).toBe('inset(0 50% 0 0)')
-
-    // A plain scroll moves the enlarged pages, and stops at their edge.
     const stage = /** @type {HTMLElement} */ (root().querySelector('.stage'))
     stage.getBoundingClientRect = () => /** @type {DOMRect} */ ({ left: 0, top: 0, width: 400, height: 600 })
-    await fireEvent.wheel(stage, { deltaY: 60 })
-    expect(denoised().style.transform).toBe('translate(0%, -10%) scale(1.5)')
-    await fireEvent.wheel(stage, { deltaY: 6000 })
-    expect(denoised().style.transform).toBe('translate(0%, -25%) scale(1.5)')
+    // A 1600 x 2400 file fits the box at a quarter of its size.
+    Object.defineProperty(denoised(), 'naturalWidth', { value: 1600 })
+    Object.defineProperty(denoised(), 'naturalHeight', { value: 2400 })
+    await fireEvent.load(denoised())
+    expect(denoised().style.transform).toBe('')
 
-    await fireEvent.click(getByRole('button', { name: t('editor.action.zoomFit') }))
+    await fireEvent.click(getByRole('radio', { name: t('denoise.compare.actual') }))
+    expect(denoised().style.transform).toBe('translate(0%, 0%) scale(4)')
+    expect(raw().style.transform).toBe(denoised().style.transform)
+    expect(/** @type {HTMLElement} */ (denoised().parentElement).style.clipPath).toBe('inset(0 50% 0 0)')
+    await fireEvent.click(getByRole('radio', { name: t('denoise.compare.double') }))
+    expect(denoised().style.transform).toBe('translate(0%, 0%) scale(8)')
+
+    // A plain scroll moves the enlarged pages, and stops at their edge.
+    await fireEvent.wheel(stage, { deltaY: 60 })
+    expect(denoised().style.transform).toBe('translate(0%, -10%) scale(8)')
+    await fireEvent.wheel(stage, { deltaY: 600000 })
+    expect(denoised().style.transform).toBe('translate(0%, -350%) scale(8)')
+
+    await fireEvent.click(getByRole('radio', { name: t('denoise.compare.fit') }))
     expect(denoised().style.transform).toBe('')
     expect(raw().style.transform).toBe('')
   })

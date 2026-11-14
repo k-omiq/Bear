@@ -36,6 +36,10 @@ const DIGEST_DOMAIN: &[u8] = b"mc-denoise-v1\0";
 /// `output_scale`. An older one ignores the field and answers at the page's
 /// size, so a recipe that names one is never sent to it.
 pub const FEATURE_OUTPUT_SCALE: &str = "output_scale";
+/// `FEATURE_COLOR_ROUTE`: a gateway that lists it takes a recipe's
+/// `color_steps` and sends each colour page down them. An older one refuses
+/// the field, so a recipe that names it is never sent to it.
+pub const FEATURE_COLOR_ROUTE: &str = "color_route";
 
 /// waifu2x engines: name, architecture, domain, and whether it has 1x
 /// (`noise{N}`) and 4x models. swin_unet `art` ships 2x models only.
@@ -58,6 +62,11 @@ const JPEG_ENGINES: [(&str, &str); 4] = [
     ("mangajpeg-lq", "omdb.1x-MangaJPEGLQ"),
 ];
 const SHARPEN_SPANDREL_ENGINES: [(&str, &str); 1] = [("digimanga-bw-4x", "omdb.4x-eula-digimanga-bw-v2-nc1")];
+/// `SCALED_ENGINES`: one model per scale; a step with no scale takes the largest.
+const SCALED_ENGINES: [(&str, &[(u8, &str)]); 2] = [
+    ("ijanai-v3-denoise", &[(2, "ijanai.v3denoise.2x"), (4, "ijanai.v3denoise.4x")]),
+    ("moesr-descreen", &[(4, "umzi.ds-moesr-v2.4x")]),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -136,6 +145,13 @@ impl DenoiseStep {
             return Ok(ResolvedStep { model_id: format!("realcugan.up{scale}x-latest-{level}"), scale: scale.into() });
         }
         if self.op == DenoiseOp::Sharpen {
+            if let Some((_, by_scale)) = SCALED_ENGINES.iter().find(|(name, _)| *name == engine) {
+                let largest = by_scale.iter().map(|(scale, _)| *scale).max().unwrap_or(1);
+                let scale = self.scale.unwrap_or(largest);
+                let model = by_scale.iter().find(|(at, _)| *at == scale).filter(|_| self.level.is_none())
+                    .ok_or_else(|| format!("{engine} takes a scale it ships and no level"))?;
+                return Ok(ResolvedStep { model_id: model.1.into(), scale: scale.into() });
+            }
             if let Some((_, model)) = SHARPEN_SPANDREL_ENGINES.iter().find(|(name, _)| *name == engine) {
                 if self.level.is_some() || !matches!(self.scale, None | Some(4)) {
                     return Err(format!("{engine} is a fixed 4x model with no level"));
@@ -165,12 +181,18 @@ impl DenoiseStep {
     }
 }
 
-/// `{"schema": 1, "steps": [...]}`, 1 to 3 steps, run in order.
+/// `{"schema": 1, "steps": [...]}`, 1 to 3 steps, run in order, and
+/// optionally `color_steps`, 1 to 3 more that colour pages run instead.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DenoiseRecipe {
     pub schema: u32,
     pub steps: Vec<DenoiseStep>,
+    /// The steps a colour page runs (`is_colour_page` in the gateway). Absent
+    /// is one route for every page, and the bytes of a recipe without it are
+    /// the ones they always were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_steps: Option<Vec<DenoiseStep>>,
     /// How many times the page's width and height the answer is, 2 to 4.
     /// Absent is the page's own size, the one spelling of 1. The recipe's
     /// last upscaling step keeps it, so it is never past that step's scale.
@@ -179,21 +201,41 @@ pub struct DenoiseRecipe {
 }
 
 impl DenoiseRecipe {
-    /// `resolve_recipe`: every step's model, in order.
+    /// `resolve_recipe`: every step's model, in order, for the pages that run
+    /// `steps` (every page, or grey ones when the recipe routes colour pages).
     pub fn resolve(&self) -> Result<Vec<ResolvedStep>, String> {
+        Ok(self.resolve_routes()?.0)
+    }
+
+    /// `resolve_routes`: the models of `steps` and of `color_steps`, each
+    /// checked as a recipe of its own, with the output scale on both.
+    pub fn resolve_routes(&self) -> Result<(Vec<ResolvedStep>, Option<Vec<ResolvedStep>>), String> {
         if self.schema != RECIPE_SCHEMA { return Err(format!("recipe schema must be {RECIPE_SCHEMA}")); }
-        if self.steps.is_empty() || self.steps.len() > MAX_STEPS {
-            return Err(format!("a recipe has 1 to {MAX_STEPS} steps"));
+        if self.output_scale.is_some_and(|out| !(2..=4).contains(&out)) {
+            return Err("output_scale must be an integer from 2 to 4".into());
         }
-        let steps: Vec<ResolvedStep> = self.steps.iter().map(DenoiseStep::resolve).collect::<Result<_, _>>()?;
-        if let Some(out) = self.output_scale {
-            if !(2..=4).contains(&out) { return Err("output_scale must be an integer from 2 to 4".into()); }
-            let last = steps.iter().rev().find(|step| step.scale > 1);
-            if last.is_none_or(|step| u32::from(out) > step.scale) {
-                return Err("output_scale is past what the recipe's last upscaling step gives".into());
+        let route = |steps: &[DenoiseStep]| -> Result<Vec<ResolvedStep>, String> {
+            if steps.is_empty() || steps.len() > MAX_STEPS {
+                return Err(format!("a recipe has 1 to {MAX_STEPS} steps"));
             }
-        }
-        Ok(steps)
+            let resolved: Vec<ResolvedStep> = steps.iter().map(DenoiseStep::resolve).collect::<Result<_, _>>()?;
+            if let Some(out) = self.output_scale {
+                let last = resolved.iter().rev().find(|step| step.scale > 1);
+                if last.is_none_or(|step| u32::from(out) > step.scale) {
+                    return Err("output_scale is past what the recipe's last upscaling step gives".into());
+                }
+            }
+            Ok(resolved)
+        };
+        Ok((route(&self.steps)?, self.color_steps.as_deref().map(route).transpose()?))
+    }
+
+    /// Whether a result's step timings are one route's models, in order.
+    fn ran_a_route(&self, timings: &[DenoiseStepTiming]) -> Result<bool, String> {
+        let (gray, color) = self.resolve_routes()?;
+        let ran = |models: &[ResolvedStep]| timings.len() == models.len()
+            && timings.iter().zip(models).all(|(timing, step)| ran_as(&timing.model_id, &step.model_id));
+        Ok(ran(&gray) || color.as_deref().is_some_and(ran))
     }
 
     /// `output_scale`: how many times the page each way the answer is.
@@ -218,7 +260,8 @@ impl DenoiseRecipe {
     pub fn fits(&self, width: u32, height: u32) -> Result<(), String> {
         let pixels = u64::from(width) * u64::from(height);
         if pixels == 0 || pixels > MAX_PAGE_PIXELS { return Err("page is too large".into()); }
-        let largest = self.resolve()?.iter().map(|step| u64::from(step.scale)).max().unwrap_or(1);
+        let (gray, color) = self.resolve_routes()?;
+        let largest = gray.iter().chain(color.iter().flatten()).map(|step| u64::from(step.scale)).max().unwrap_or(1);
         if pixels * largest * largest > MAX_UPSCALED_PIXELS {
             return Err("page is too large for this sharpen scale".into());
         }
@@ -227,7 +270,7 @@ impl DenoiseRecipe {
 
     /// `canonical_recipe`, byte for byte.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
-        if self.steps.iter().any(|step| step.strength.is_some_and(|s| !s.is_finite())) {
+        if self.steps.iter().chain(self.color_steps.iter().flatten()).any(|step| step.strength.is_some_and(|s| !s.is_finite())) {
             return Err("strength must be finite".into());
         }
         let value = serde_json::to_value(self).map_err(|e| e.to_string())?;
@@ -266,78 +309,31 @@ impl DenoisePreset {
 
 const CLOUD: &[PresetTarget] = &[PresetTarget::Cloud];
 
-/// The presets, in `denoise.py`'s order. Only the first runs locally: its
-/// model is the one ONNX file the desktop installs.
-pub const PRESETS: [DenoisePreset; 14] = [
+/// The presets, in `denoise.py`'s order (the user's choice of 2026-11-14,
+/// docs/research/denoise-combos-2026-11.md). The two black and white ones
+/// send colour pages to IllustrationJaNai in the same run. Only waifu2x runs
+/// locally: its model is the one ONNX file the desktop installs. A preset of
+/// an earlier build is no longer here; a history row naming one keeps its id.
+pub const PRESETS: [DenoisePreset; 4] = [
+    DenoisePreset {
+        id: "realcugan-2x-auto",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}],"color_steps":[{"op":"sharpen","engine":"ijanai-v3-denoise","scale":4}]}"#,
+        targets: CLOUD,
+    },
+    DenoisePreset {
+        id: "moesr-descreen-auto",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"moesr-descreen","scale":4}],"color_steps":[{"op":"sharpen","engine":"ijanai-v3-denoise","scale":4}]}"#,
+        targets: CLOUD,
+    },
+    DenoisePreset {
+        id: "ijanai-v3-denoise-4x",
+        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"ijanai-v3-denoise","scale":4}]}"#,
+        targets: CLOUD,
+    },
     DenoisePreset {
         id: "waifu2x-scan-4x-n2",
         recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"waifu2x-art-scan","scale":4,"level":2}]}"#,
         targets: &[PresetTarget::Cloud, PresetTarget::Local],
-    },
-    DenoisePreset {
-        id: "realcugan-2x-conservative",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "realcugan-3x-conservative",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":3}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "realcugan-3x-denoise3",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":3,"level":3}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "mangajanai-2x",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"mangajanai","scale":2}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "mangajanai-4x",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"mangajanai","scale":4}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "digimanga-bw-4x",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"digimanga-bw-4x"}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "mangajpeg-hq",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"jpeg","engine":"mangajpeg-hq"}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "mangajpeg-lq",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"jpeg","engine":"mangajpeg-lq"}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "waifu2x-scan-n1",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"denoise","engine":"waifu2x-art-scan","level":1}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "waifu2x-scan-n3",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"denoise","engine":"waifu2x-art-scan","level":3}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "realcugan-4x-conservative",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":4}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "waifu2x-art-2x-n1",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"waifu2x-art","scale":2,"level":1}]}"#,
-        targets: CLOUD,
-    },
-    DenoisePreset {
-        id: "waifu2x-art-2x-n3",
-        recipe_json: r#"{"schema":1,"steps":[{"op":"sharpen","engine":"waifu2x-art","scale":2,"level":3}]}"#,
-        targets: CLOUD,
     },
 ];
 
@@ -558,14 +554,13 @@ pub struct DenoiseResultMetadata {
 
 impl DenoiseResultMetadata {
     pub fn validate(&self, request: &DenoiseMetadata) -> Result<(), String> {
-        let models = request.recipe.resolve()?;
+        let ran = request.recipe.ran_a_route(&self.info.steps)?;
         if self.protocol_version != VERSION || self.request_digest != request.request_digest
             || self.png_bytes == 0 || self.png_bytes > MAX_RESULT_PNG_BYTES
             || self.png_sha256.len() != 64
             || !self.png_sha256.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
             || self.info.width == 0 || self.info.height == 0
-            || self.info.steps.len() != models.len()
-            || self.info.steps.iter().zip(&models).any(|(timing, step)| !ran_as(&timing.model_id, &step.model_id))
+            || !ran
         { return Err("denoise result metadata mismatch".into()); }
         let (width, height) = self.page_size(request).ok_or("denoise result metadata mismatch")?;
         request.recipe.fits(width, height)?;
@@ -591,10 +586,9 @@ impl DenoiseResult {
         if self.protocol_version != VERSION || self.request_digest != request.request_digest {
             return Err("denoise result identity mismatch".into());
         }
-        let models = request.recipe.resolve()?;
+        let ran = request.recipe.ran_a_route(&self.info.steps)?;
         let (width, height) = request.recipe.output_size(width, height).ok_or("denoise result is too large")?;
-        if self.info.width != width || self.info.height != height || self.info.steps.len() != models.len()
-            || self.info.steps.iter().zip(&models).any(|(timing, step)| !ran_as(&timing.model_id, &step.model_id))
+        if self.info.width != width || self.info.height != height || !ran
         {
             return Err("denoise result does not describe the request".into());
         }
@@ -663,19 +657,21 @@ pub struct DenoiseCapabilities {
 
 impl DenoiseCapabilities {
     pub fn validate(&self) -> Result<(), String> {
-        let known = |op: DenoiseOp, names: &[String]| names.len() <= 8 && names.iter().all(|name| match op {
-            DenoiseOp::Jpeg => JPEG_ENGINES.iter().any(|(known, _)| known == name),
-            DenoiseOp::Denoise => W2X_ENGINES.iter().any(|&(known, _, _, has_1x, _)| known == name && has_1x),
-            DenoiseOp::Sharpen => W2X_ENGINES.iter().any(|(known, ..)| known == name)
-                || [MANGAJANAI_ENGINE, CUGAN_ENGINE].contains(&name.as_str())
-                || SHARPEN_SPANDREL_ENGINES.iter().any(|(known, _)| known == name),
-        });
         let text = |value: &str| !value.is_empty() && value.len() <= 128 && value.bytes().all(|c| c.is_ascii_graphic() || c == b' ');
+        // A name this build does not know is a newer gateway's, and is kept as
+        // text: `supports` asks only for the names a recipe of this build has.
+        // A known engine listed under an op it has no model for is a mistake.
+        let known = |op: DenoiseOp, names: &[String]| names.len() <= 16 && names.iter().all(|name| text(name) && match op {
+            DenoiseOp::Jpeg => !W2X_ENGINES.iter().any(|(known, ..)| known == name),
+            DenoiseOp::Denoise => !W2X_ENGINES.iter().any(|&(known, _, _, has_1x, _)| known == name && !has_1x)
+                && !JPEG_ENGINES.iter().any(|(known, _)| known == name),
+            DenoiseOp::Sharpen => !JPEG_ENGINES.iter().any(|(known, _)| known == name),
+        });
         if self.protocol_version != VERSION
             || !known(DenoiseOp::Denoise, &self.engines.denoise)
             || !known(DenoiseOp::Sharpen, &self.engines.sharpen)
             || !known(DenoiseOp::Jpeg, &self.engines.jpeg)
-            || self.presets.len() > PRESETS.len() || !self.presets.iter().all(|id| preset(id).is_some())
+            || self.presets.len() > 32 || !self.presets.iter().all(|id| text(id))
             || self.features.len() > 8 || !self.features.iter().all(|feature| text(feature))
             || self.models.len() > 64
             || !self.models.iter().all(|model| text(&model.model_id) && text(&model.license) && text(&model.author))
@@ -688,8 +684,8 @@ impl DenoiseCapabilities {
     /// exact answer (every model of the recipe is seeded); an engine is listed
     /// from one probe model, which a preset of that engine need not be.
     pub fn supports(&self, recipe: &DenoiseRecipe) -> bool {
-        self.available && (preset_of(recipe).is_some_and(|preset| self.presets.iter().any(|id| id == preset.id))
-            || recipe.steps.iter().all(|step| {
+        self.available && (recipe.color_steps.is_none() || self.routes_colour()) && (preset_of(recipe).is_some_and(|preset| self.presets.iter().any(|id| id == preset.id))
+            || recipe.steps.iter().chain(recipe.color_steps.iter().flatten()).all(|step| {
                 let names = match step.op {
                     DenoiseOp::Denoise => &self.engines.denoise,
                     DenoiseOp::Sharpen => &self.engines.sharpen,
@@ -703,6 +699,12 @@ impl DenoiseCapabilities {
     /// would ignore it and answer at the page's size, after the GPU ran.
     pub fn upscales(&self) -> bool {
         self.features.iter().any(|feature| feature == FEATURE_OUTPUT_SCALE)
+    }
+
+    /// Whether the gateway takes a recipe's `color_steps`. One that does not
+    /// refuses the recipe as malformed.
+    pub fn routes_colour(&self) -> bool {
+        self.features.iter().any(|feature| feature == FEATURE_COLOR_ROUTE)
     }
 }
 
@@ -949,7 +951,8 @@ mod tests {
         bad.engines.jpeg.push("waifu2x-art-scan".into());
         assert!(bad.validate().is_err());
 
-        // What the gateway answers now: presets, and the PyTorch sharpen engines.
+        // What a gateway of the 2026-10 build answers: its presets, and the
+        // PyTorch sharpen engines, with no colour route.
         let current: DenoiseCapabilities = serde_json::from_value(serde_json::json!({
             "protocol_version": "1.0.0", "available": true,
             "presets": ["realcugan-2x-conservative", "mangajanai-4x"],
@@ -957,9 +960,15 @@ mod tests {
             "models": [],
         })).unwrap();
         current.validate().unwrap();
-        assert!(current.supports(&PRESETS[1].recipe()));
+        let cugan = recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}]}"#);
+        assert!(current.supports(&cugan));
+        assert!(!current.supports(&preset("realcugan-2x-auto").unwrap().recipe()), "no colour route, no IllustrationJaNai");
+        // A newer gateway's preset or engine this build does not know is kept, not refused.
         let mut unknown = current.clone();
         unknown.presets.push("sharpest".into());
+        unknown.engines.sharpen.push("future-engine".into());
+        assert!(unknown.validate().is_ok());
+        unknown.presets.push("\u{7}".into());
         assert!(unknown.validate().is_err());
         let mut no_1x = current.clone();
         no_1x.engines.denoise.push("waifu2x-art".into());
@@ -969,15 +978,21 @@ mod tests {
         // seeded: only preset models are, and the scan probe is the plain 2x.
         let presets_only: DenoiseCapabilities = serde_json::from_value(serde_json::json!({
             "protocol_version": "1.0.0", "available": true, "features": ["output_scale"],
-            "presets": ["waifu2x-scan-4x-n2", "mangajpeg-hq"],
+            "presets": ["waifu2x-scan-4x-n2", "ijanai-v3-denoise-4x"],
             "engines": {"denoise": [], "sharpen": [], "jpeg": []}, "models": [],
         })).unwrap();
         presets_only.validate().unwrap();
         let scan = preset("waifu2x-scan-4x-n2").unwrap().recipe();
-        assert!(presets_only.supports(&scan) && presets_only.supports(&preset("mangajpeg-hq").unwrap().recipe()));
+        assert!(presets_only.supports(&scan) && presets_only.supports(&preset("ijanai-v3-denoise-4x").unwrap().recipe()));
         assert!(presets_only.supports(&DenoiseRecipe { output_scale: Some(2), ..scan }), "a preset at any output scale");
-        assert!(!presets_only.supports(&preset("mangajanai-2x").unwrap().recipe()));
+        assert!(!presets_only.supports(&preset("moesr-descreen-auto").unwrap().recipe()), "not listed: MoESR not seeded");
         assert!(presets_only.upscales() && !current.upscales(), "an older gateway lists no features");
+        // A routed preset needs the gateway to say it routes, as well as to list it.
+        let mut routed = presets_only.clone();
+        routed.presets.push("realcugan-2x-auto".into());
+        assert!(!routed.supports(&preset("realcugan-2x-auto").unwrap().recipe()));
+        routed.features.push(FEATURE_COLOR_ROUTE.into());
+        assert!(routed.routes_colour() && routed.supports(&preset("realcugan-2x-auto").unwrap().recipe()));
         let mut odd = presets_only.clone();
         odd.features = vec!["\u{0}".into()];
         assert!(odd.validate().is_err());
@@ -986,56 +1001,89 @@ mod tests {
     #[test]
     fn denoise_presets_validate_and_match_python() {
         // canonical_recipe(PRESETS[id]) and request_digest(PRESETS[id], tiny_image.png)
-        // from deploy/cloud/common/denoise.py, with each step's model_id.
-        let golden = [
+        // from deploy/cloud/common/denoise.py, with each route's models.
+        let golden: [(&str, &str, &str, (&str, u32), Option<(&str, u32)>); 4] = [
+            ("realcugan-2x-auto",
+                r#"{"color_steps":[{"engine":"ijanai-v3-denoise","op":"sharpen","scale":4}],"schema":1,"steps":[{"engine":"realcugan","op":"sharpen","scale":2}]}"#,
+                "8b49ac5037072e2f4cd5a1bb1f9851373953c623407257d380f5c4389ecc4f1e",
+                ("realcugan.up2x-latest-conservative", 2), Some(("ijanai.v3denoise.4x", 4))),
+            ("moesr-descreen-auto",
+                r#"{"color_steps":[{"engine":"ijanai-v3-denoise","op":"sharpen","scale":4}],"schema":1,"steps":[{"engine":"moesr-descreen","op":"sharpen","scale":4}]}"#,
+                "d9d25e0a57b5916b9908b466a3ada3f67be8cfe018ffaaa352c07a78e4eccdcc",
+                ("umzi.ds-moesr-v2.4x", 4), Some(("ijanai.v3denoise.4x", 4))),
+            ("ijanai-v3-denoise-4x", r#"{"schema":1,"steps":[{"engine":"ijanai-v3-denoise","op":"sharpen","scale":4}]}"#,
+                "89bcc19f655cd9c14509afe1367ebd9cd6ed8f54b549cbed6310347f21ca5f1c", ("ijanai.v3denoise.4x", 4), None),
             ("waifu2x-scan-4x-n2", r#"{"schema":1,"steps":[{"engine":"waifu2x-art-scan","level":2,"op":"sharpen","scale":4}]}"#,
-                "51a4fcfff58569f19cbc95ba6cf72f7c19e1f70fe5ada9a49e70adba7622b879", "waifu2x.swin_unet.art_scan.noise2_scale4x", 4),
-            ("realcugan-2x-conservative", r#"{"schema":1,"steps":[{"engine":"realcugan","op":"sharpen","scale":2}]}"#,
-                "82accc426e9d552ed1dbcd3baa7fb5efed51c9cf8395d2e76ab7fb2975f61980", "realcugan.up2x-latest-conservative", 2),
-            ("realcugan-3x-conservative", r#"{"schema":1,"steps":[{"engine":"realcugan","op":"sharpen","scale":3}]}"#,
-                "69ea899e1b36bda3f3bf9fcaa90389cd49b4791215ba393d01780d1c1f7e4fe5", "realcugan.up3x-latest-conservative", 3),
-            ("realcugan-3x-denoise3", r#"{"schema":1,"steps":[{"engine":"realcugan","level":3,"op":"sharpen","scale":3}]}"#,
-                "dc16291efd06bcde8191e1839152f458eade81caa7812c97a0278e7718cb0f21", "realcugan.up3x-latest-denoise3x", 3),
-            ("mangajanai-2x", r#"{"schema":1,"steps":[{"engine":"mangajanai","op":"sharpen","scale":2}]}"#,
-                "d6369d2839ea7c19908ca3e1d0c39972b0d2c9e3eca1c4a628e62b813a5ac721", "mangajanai.2x.auto", 2),
-            ("mangajanai-4x", r#"{"schema":1,"steps":[{"engine":"mangajanai","op":"sharpen","scale":4}]}"#,
-                "c2f364a61b03ba3424769c0fd26eedc2c817a74e4dbafbbcbcf1be72564ebe2d", "mangajanai.4x.auto", 4),
-            ("digimanga-bw-4x", r#"{"schema":1,"steps":[{"engine":"digimanga-bw-4x","op":"sharpen"}]}"#,
-                "e09fcb3dd611f11b43d9d3b4b5255cc602481bf515f65fa3759d62e32f28ffdb", "omdb.4x-eula-digimanga-bw-v2-nc1", 4),
-            ("mangajpeg-hq", r#"{"schema":1,"steps":[{"engine":"mangajpeg-hq","op":"jpeg"}]}"#,
-                "7313bcf22a54785a4dcd317745eaa54b5d6f6a9c45e0ecf17c718f75b22f114a", "omdb.1x-MangaJPEGHQ", 1),
-            ("mangajpeg-lq", r#"{"schema":1,"steps":[{"engine":"mangajpeg-lq","op":"jpeg"}]}"#,
-                "d50d63605b97cea37d9a0d876d8f939cacf93a769769f8bc6406fe165e3adde1", "omdb.1x-MangaJPEGLQ", 1),
-            ("waifu2x-scan-n1", r#"{"schema":1,"steps":[{"engine":"waifu2x-art-scan","level":1,"op":"denoise"}]}"#,
-                "82827ec123195f662466f44e1a1e37ec64646bf304481283a019a83cb7766650", "waifu2x.swin_unet.art_scan.noise1", 1),
-            ("waifu2x-scan-n3", r#"{"schema":1,"steps":[{"engine":"waifu2x-art-scan","level":3,"op":"denoise"}]}"#,
-                "467fa3b3a6027ee67f4e5b9d703754d797964d9f767c7ae0cc9e0e0b7218ef90", "waifu2x.swin_unet.art_scan.noise3", 1),
-            ("realcugan-4x-conservative", r#"{"schema":1,"steps":[{"engine":"realcugan","op":"sharpen","scale":4}]}"#,
-                "5ce4a9914811272973bf0be6a632bd6a616315b50aa968425ef5809a967a3768", "realcugan.up4x-latest-conservative", 4),
-            ("waifu2x-art-2x-n1", r#"{"schema":1,"steps":[{"engine":"waifu2x-art","level":1,"op":"sharpen","scale":2}]}"#,
-                "900010ea84b33f375849070a10aa129e40757ba7f1990fda2bc04ef7813a1733", "waifu2x.swin_unet.art.noise1_scale2x", 2),
-            ("waifu2x-art-2x-n3", r#"{"schema":1,"steps":[{"engine":"waifu2x-art","level":3,"op":"sharpen","scale":2}]}"#,
-                "48dd6252198e3b8c089a979208d4fa6b75a4c6c5188c7778cbc9936eff4f4b53", "waifu2x.swin_unet.art.noise3_scale2x", 2),
+                "51a4fcfff58569f19cbc95ba6cf72f7c19e1f70fe5ada9a49e70adba7622b879", ("waifu2x.swin_unet.art_scan.noise2_scale4x", 4), None),
         ];
         assert_eq!(PRESETS.len(), golden.len());
-        for (preset, (id, canonical, digest, model, scale)) in PRESETS.iter().zip(golden) {
+        let resolved = |(model, scale): (&str, u32)| vec![ResolvedStep { model_id: model.into(), scale }];
+        for (preset, (id, canonical, digest, gray, color)) in PRESETS.iter().zip(golden) {
             assert_eq!(preset.id, id);
             let recipe = preset.recipe();
-            assert_eq!(recipe.resolve().unwrap(), [ResolvedStep { model_id: model.into(), scale }], "{id}");
+            assert_eq!(recipe.resolve_routes().unwrap(), (resolved(gray), color.map(resolved)), "{id}");
             assert_eq!(String::from_utf8(recipe.canonical_bytes().unwrap()).unwrap(), canonical, "{id}");
             assert_eq!(request_digest(&recipe, TINY_PNG).unwrap(), digest, "{id}");
             assert!(preset.targets.contains(&PresetTarget::Cloud), "{id}");
             assert_eq!(super::preset(id).map(|found| found.id), Some(id));
             assert_eq!(preset_of(&recipe).map(|found| found.id), Some(id));
-            // A run's output scale does not make it another preset.
-            if scale > 1 {
-                let scaled = DenoiseRecipe { output_scale: Some(scale as u8), ..recipe.clone() };
-                assert_eq!((scaled.resolve().is_ok(), preset_of(&scaled).map(|found| found.id)), (true, Some(id)), "{id}");
-            }
+            // Every preset offers twice the page, and a run's output scale does not make it another preset.
+            let scaled = DenoiseRecipe { output_scale: Some(2), ..recipe.clone() };
+            assert_eq!((scaled.resolve().is_ok(), preset_of(&scaled).map(|found| found.id)), (true, Some(id)), "{id}");
         }
         let local: Vec<&str> = PRESETS.iter().filter(|preset| preset.runs_locally()).map(|preset| preset.id).collect();
         assert_eq!(local, ["waifu2x-scan-4x-n2"]);
-        assert!(super::preset("custom").is_none());
+        assert!(super::preset("custom").is_none() && super::preset("mangajanai-2x").is_none());
+    }
+
+    /// A routed recipe: each route is checked as a recipe, the output scale
+    /// lands on both, and an answer may name either route's models.
+    #[test]
+    fn denoise_colour_route_rules_mirror_resolve_routes() {
+        use serde_json::json;
+        for (case, model) in [
+            (json!({"op": "sharpen", "engine": "ijanai-v3-denoise"}), "ijanai.v3denoise.4x"),
+            (json!({"op": "sharpen", "engine": "ijanai-v3-denoise", "scale": 2}), "ijanai.v3denoise.2x"),
+            (json!({"op": "sharpen", "engine": "moesr-descreen"}), "umzi.ds-moesr-v2.4x"),
+        ] {
+            assert_eq!(step(case.clone()).unwrap().model_id, model, "{case}");
+        }
+        for case in [
+            json!({"op": "sharpen", "engine": "ijanai-v3-denoise", "scale": 3}),
+            json!({"op": "sharpen", "engine": "moesr-descreen", "scale": 2}),
+            json!({"op": "sharpen", "engine": "moesr-descreen", "level": 1}),
+            json!({"op": "denoise", "engine": "moesr-descreen", "level": 1}),
+        ] {
+            assert!(step(case.clone()).is_err(), "{case}");
+        }
+        let cugan = r#"{"op":"sharpen","engine":"realcugan","scale":2}"#;
+        let ijanai = r#"{"op":"sharpen","engine":"ijanai-v3-denoise","scale":4}"#;
+        let grain = r#"{"op":"denoise","engine":"waifu2x-art-scan","level":1}"#;
+        let routed = |color: &str, out: &str| serde_json::from_str::<DenoiseRecipe>(&format!(
+            r#"{{"schema":1,"steps":[{cugan}],"color_steps":[{color}]{out}}}"#)).map_err(|e| e.to_string())
+            .and_then(|recipe| recipe.resolve_routes().map(|_| ()));
+        assert!(routed(ijanai, "").is_ok() && routed(ijanai, r#","output_scale":2"#).is_ok());
+        assert!(routed(ijanai, r#","output_scale":4"#).is_err(), "Real-CUGAN 2x cannot give 4x");
+        assert!(routed(grain, r#","output_scale":2"#).is_err(), "the colour route has no upscaling step");
+        assert!(routed(&[grain; 4].join(","), "").is_err(), "four colour steps");
+        assert!(serde_json::from_str::<DenoiseRecipe>(&format!(r#"{{"schema":1,"steps":[{cugan}],"color_steps":[]}}"#))
+            .unwrap().resolve_routes().is_err());
+        assert!(serde_json::from_str::<DenoiseRecipe>(&format!(r#"{{"schema":1,"steps":[{cugan}],"colour_steps":[]}}"#)).is_err());
+
+        // The colour route's 4x model makes the pixel ceiling the 4x one.
+        let auto = preset("realcugan-2x-auto").unwrap().recipe();
+        assert!(auto.fits(3000, 3000).is_ok() && auto.fits(4000, 4000).is_err());
+
+        let page = png(16, 16, png::ColorType::Rgb);
+        let request = DenoiseMetadata::new(auto, &page).unwrap();
+        let answer = |model: &str| DenoiseResult {
+            protocol_version: VERSION.into(), request_digest: request.request_digest.clone(), page_png_b64: String::new(),
+            info: DenoiseInfo { width: 16, height: 16, gray: false, steps: vec![DenoiseStepTiming { model_id: model.into(), ms: 5 }] },
+        };
+        let rgb = png(16, 16, png::ColorType::Rgb);
+        answer("realcugan.up2x-latest-conservative").validate(&request, 16, 16, &rgb).unwrap();
+        answer("ijanai.v3denoise.4x").validate(&request, 16, 16, &rgb).unwrap();
+        assert!(answer("ijanai.v3denoise.2x").validate(&request, 16, 16, &rgb).is_err(), "no route ran that");
     }
 
     #[test]
@@ -1051,7 +1099,7 @@ mod tests {
 
     #[test]
     fn completed_metadata_is_bound_and_limits_the_download_before_any_bytes_are_requested() {
-        let request=DenoiseMetadata::new(preset("realcugan-2x-conservative").unwrap().recipe(),TINY_PNG).unwrap();
+        let request=DenoiseMetadata::new(serde_json::from_str::<DenoiseRecipe>(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}]}"#).unwrap(),TINY_PNG).unwrap();
         let meta=DenoiseResultMetadata {protocol_version:VERSION.into(),request_digest:request.request_digest.clone(),
             png_sha256:"a".repeat(64),png_bytes:TINY_PNG.len(),info:DenoiseInfo {width:16,height:16,gray:false,
                 steps:request.recipe.resolve().unwrap().iter().map(|s|DenoiseStepTiming {model_id:s.model_id.clone(),ms:1}).collect()}};
@@ -1065,7 +1113,7 @@ mod tests {
         bad=meta.clone();bad.info.width=u32::MAX;assert!(bad.validate(&request).is_err());
         bad=meta.clone();bad.info.height=0;assert!(bad.validate(&request).is_err());
         // With an output scale the metadata names the answer's size, a whole multiple of the page's.
-        let mut twice=preset("realcugan-2x-conservative").unwrap().recipe();twice.output_scale=Some(2);
+        let mut twice=serde_json::from_str::<DenoiseRecipe>(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}]}"#).unwrap();twice.output_scale=Some(2);
         let request=DenoiseMetadata::new(twice,TINY_PNG).unwrap();
         let mut scaled=meta;scaled.request_digest=request.request_digest.clone();scaled.info.width=32;scaled.info.height=32;
         scaled.validate(&request).unwrap();

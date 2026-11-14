@@ -12,6 +12,7 @@ import io
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -169,31 +170,56 @@ class RecipeTests(unittest.TestCase):
 class PresetTests(unittest.TestCase):
     def test_interface_presets_match_the_cloud_presets(self):
         path = Path(__file__).resolve().parents[3] / "src" / "lib" / "model" / "denoise-presets.json"
-        shipped = {p["id"]: p for p in json.loads(path.read_text())["presets"]}
-        self.assertEqual(set(shipped), set(d.PRESETS))
+        table = json.loads(path.read_text())
+        shipped = {p["id"]: p for p in table["presets"]}
+        self.assertEqual(list(shipped), list(d.PRESETS))
         for name, recipe_doc in d.PRESETS.items():
             with self.subTest(preset=name):
                 self.assertEqual(shipped[name]["recipe"], recipe_doc)
-                steps = d.resolve_recipe(recipe_doc)
+                routes = d.resolve_routes(recipe_doc)
                 # The desktop has one model, the ONNX file this preset runs.
                 expected = ["cloud", "local"] if name == "waifu2x-scan-4x-n2" else ["cloud"]
                 self.assertEqual(shipped[name]["targets"], expected)
                 self.assertIn(shipped[name]["kind"], ("bw", "color", "any"))
-                # The largest output_scale the recipe takes, and no larger.
+                # Each preset offers the page's size or twice it (the user's call, 2026-11-14),
+                # and every route of its recipe can give that.
                 largest = shipped[name]["maxScale"]
-                self.assertEqual(largest, max([d.step_scale(s) for s in steps if d.step_scale(s) > 1][-1:], default=1))
-                if largest > 1:
-                    d.resolve_recipe({**recipe_doc, "output_scale": largest})
-                with self.assertRaises(d.DenoiseError):
-                    d.resolve_recipe({**recipe_doc, "output_scale": largest + 1})
+                self.assertEqual(largest, 2)
+                both = d.resolve_routes({**recipe_doc, "output_scale": largest})
+                self.assertEqual([s.out for s in both.all() if d.step_scale(s) > 1][-1:], [2])
+                self.assertEqual(len(both.all()), len(routes.all()))
+        self.assertEqual({e["id"]: e["step"] for e in table["chainSteps"]}, d.CHAIN_STEPS)
+        self.assertEqual([e["id"] for e in table["chainSteps"]], list(d.CHAIN_STEPS))
+        for entry in table["chainSteps"]:
+            with self.subTest(step=entry["id"]):
+                d.resolve_step(entry["step"])
+                self.assertEqual(set(entry["credit"]), {"name", "author", "license"})
 
-    def test_only_preset_models_are_seeded(self):
+    def test_the_presets_are_the_users_picks(self):
+        bw = {name: [s.model_id for s in d.resolve_routes(r).gray] for name, r in d.PRESETS.items()}
+        self.assertEqual(bw["realcugan-2x-auto"], ["realcugan.up2x-latest-conservative"])
+        self.assertEqual(bw["moesr-descreen-auto"], ["umzi.ds-moesr-v2.4x"])
+        self.assertEqual(bw["ijanai-v3-denoise-4x"], ["ijanai.v3denoise.4x"])
+        self.assertEqual(bw["waifu2x-scan-4x-n2"], ["waifu2x.swin_unet.art_scan.noise2_scale4x"])
+        for name in ("realcugan-2x-auto", "moesr-descreen-auto"):
+            self.assertEqual([s.model_id for s in d.resolve_routes(d.PRESETS[name]).color], ["ijanai.v3denoise.4x"])
+        # No shipped preset runs MangaJaNai, the models that turned colour pages grey.
+        self.assertFalse(any(m.model_id.startswith("mangajanai.") for m in d.preset_models()))
+
+    def test_only_preset_and_chain_models_are_seeded(self):
         ids = {m.model_id for m in d.preset_models()}
-        self.assertIn("waifu2x.swin_unet.art_scan.noise2_scale4x", ids)
-        self.assertIn(d.SEAM_FILTER.model_id, ids)
-        self.assertIn("omdb.1x-MangaJPEGHQ", ids)
-        self.assertNotIn("omdb.1x-MangaJPEGMQ", ids)
-        self.assertNotIn("waifu2x.cunet.art.noise1", ids)
+        for kept in ("waifu2x.swin_unet.art_scan.noise2_scale4x", d.SEAM_FILTER.model_id, "omdb.1x-MangaJPEGHQ",
+                     "ijanai.v3denoise.4x", "ijanai.v3denoise.2x", "umzi.ds-moesr-v2.4x",
+                     "realcugan.up2x-latest-denoise3x", "waifu2x.swin_unet.art_scan.noise1"):
+            self.assertIn(kept, ids)
+        for dropped in ("omdb.1x-MangaJPEGMQ", "waifu2x.cunet.art.noise1", "mangajanai.2x.1200p",
+                        "realcugan.up3x-latest-conservative"):
+            self.assertNotIn(dropped, ids)
+        self.assertEqual([m.model_id for m in d.preset_models() if m.optional], [d.MOESR.model_id])
+
+    def test_the_worker_image_pins_spandrel_and_its_extra_arches(self):
+        app = (Path(__file__).resolve().parents[1] / "modal" / "app.py").read_text()
+        self.assertIn('DENOISE_REQUIREMENTS = ("spandrel==0.4.2", "spandrel_extra_arches==0.2.0")', app)
 
 
 class WireTests(unittest.TestCase):
@@ -203,7 +229,7 @@ class WireTests(unittest.TestCase):
                      "request_digest": d.request_digest(recipe(GRAIN), self.page)}
 
     def test_valid_request(self):
-        self.assertEqual(len(d.validate_denoise_request(self.meta, self.page)), 1)
+        self.assertEqual(len(d.validate_denoise_request(self.meta, self.page).gray), 1)
 
     def test_digest_binds_recipe_and_page(self):
         other = png_of(np.full((8, 8), 127, dtype=np.uint8), "L")
@@ -308,6 +334,237 @@ class ImageTests(unittest.TestCase):
             self.assertEqual(caught.exception.error_code, "unsupported_mode")
 
 
+def synthetic_pages():
+    """Small pages with known colour: grey, grey with a small pink logo, colour art,
+    and colour art on a mostly white page."""
+    rng = np.random.default_rng(11)
+    h, w = 120, 90
+    yy, xx = np.mgrid[0:h, 0:w]
+    grey = (128 + 70 * np.sin(xx / 5.0) * np.cos(yy / 7.0) + rng.normal(0, 4, (h, w))).clip(0, 255).astype(np.uint8)
+    logo = np.stack([grey] * 3, axis=-1).copy()
+    logo[4:12, 6:30] = (240, 120, 170)  # 192 of 10800 pixels, under 2 %
+    colour = np.stack([(120 + 90 * np.sin(xx / 6.0)), (90 + 60 * np.cos(yy / 5.0)),
+                       (160 + 60 * np.sin((xx + yy) / 9.0))], axis=-1).clip(0, 255).astype(np.uint8)
+    sparse = np.full((h, w, 3), 250, dtype=np.uint8)
+    sparse[30:80, 20:60] = colour[30:80, 20:60]  # a colour panel on a white page, 18 %
+    return {"grey": grey, "logo": logo, "colour": colour, "sparse": sparse}
+
+
+class RouteTests(unittest.TestCase):
+    def page(self, name):
+        array = synthetic_pages()[name]
+        return d.decode_page(png_of(array, "L" if array.ndim == 2 else "RGB"))
+
+    def test_colour_pages_are_told_from_grey_pages_by_the_whole_page(self):
+        self.assertFalse(d.is_colour_page(self.page("grey")))
+        self.assertFalse(d.is_colour_page(self.page("logo")), "a small logo on a grey page stays on the grey route")
+        self.assertTrue(d.is_colour_page(self.page("colour")))
+        self.assertTrue(d.is_colour_page(self.page("sparse")), "white paper around colour art is still a colour page")
+        # Scan tint: every pixel a little warm, none past the chroma line.
+        tinted = np.stack([synthetic_pages()["grey"]] * 3, axis=-1).astype(np.int16)
+        tinted[..., 0] += 6
+        tinted[..., 2] -= 6
+        self.assertFalse(d.is_colour_page(d.decode_page(png_of(tinted.clip(0, 255).astype(np.uint8), "RGB"))))
+
+    def test_one_run_sends_each_page_to_its_route(self):
+        routed = {**recipe(GRAIN), "color_steps": [{"op": "sharpen", "engine": "waifu2x-art-scan", "scale": 2}]}
+        routes = d.resolve_routes(routed)
+        self.assertEqual([s.model_id for s in routes.all()],
+                         ["waifu2x.swin_unet.art_scan.noise1", "waifu2x.swin_unet.art_scan.scale2x"])
+        sessions = FakeSessions(None)
+        ran = {}
+        for name, array in synthetic_pages().items():
+            png = png_of(array, "L" if array.ndim == 2 else "RGB")
+            out, info = d.denoise_page(sessions, routes, png)
+            ran[name] = [step["model_id"] for step in info["steps"]]
+            self.assertEqual(Image.open(io.BytesIO(out)).size, (90, 120), "every route keeps the page size")
+        self.assertEqual(ran["grey"], ["waifu2x.swin_unet.art_scan.noise1"])
+        self.assertEqual(ran["logo"], ["waifu2x.swin_unet.art_scan.noise1"])
+        self.assertEqual(ran["colour"], ["waifu2x.swin_unet.art_scan.scale2x"])
+        self.assertEqual(ran["sparse"], ["waifu2x.swin_unet.art_scan.scale2x"])
+        # A plain list of steps is one route for every page, as before.
+        _, info = d.denoise_page(sessions, d.resolve_recipe(routed), png_of(synthetic_pages()["colour"], "RGB"))
+        self.assertEqual([s["model_id"] for s in info["steps"]], ["waifu2x.swin_unet.art_scan.noise1"])
+
+    def test_output_scale_lands_on_both_routes(self):
+        routes = d.resolve_routes({**d.PRESETS["realcugan-2x-auto"], "output_scale": 2})
+        self.assertEqual(([s.out for s in routes.gray], [s.out for s in routes.color]), ([2], [2]))
+        with self.assertRaises(d.DenoiseError):
+            # Real-CUGAN 2x cannot give 4x, whatever the colour route can.
+            d.resolve_routes({**d.PRESETS["realcugan-2x-auto"], "output_scale": 4})
+        with self.assertRaises(d.DenoiseError):
+            d.resolve_routes({**recipe({"op": "sharpen", "engine": "realcugan", "scale": 2}),
+                              "color_steps": [GRAIN], "output_scale": 2})
+
+
+class ChainTests(unittest.TestCase):
+    def test_chain_limits(self):
+        cugan = {"op": "sharpen", "engine": "realcugan", "scale": 2}
+        self.assertEqual(len(d.resolve_recipe(recipe(GRAIN, GRAIN, cugan))), d.MAX_STEPS)
+        bad = [
+            recipe(GRAIN, GRAIN, GRAIN, cugan),
+            {**recipe(GRAIN), "color_steps": []},
+            {**recipe(GRAIN), "color_steps": [GRAIN] * 4},
+            {**recipe(GRAIN), "color_steps": GRAIN},
+            {**recipe(GRAIN), "colour_steps": [GRAIN]},
+            recipe({"op": "sharpen", "engine": "ijanai-v3-denoise", "scale": 3}),
+            recipe({"op": "sharpen", "engine": "ijanai-v3-denoise", "scale": True}),
+            recipe({"op": "sharpen", "engine": "moesr-descreen", "scale": 2}),
+            recipe({"op": "sharpen", "engine": "moesr-descreen", "level": 1}),
+            recipe({"op": "denoise", "engine": "moesr-descreen", "level": 1}),
+        ]
+        for raw in bad:
+            with self.subTest(raw=raw), self.assertRaises(d.DenoiseError):
+                d.resolve_routes(raw)
+
+    def test_scaled_engines_pick_their_model(self):
+        step = lambda **kw: d.resolve_step({"op": "sharpen", **kw}).model_id  # noqa: E731
+        self.assertEqual(step(engine="ijanai-v3-denoise"), "ijanai.v3denoise.4x")
+        self.assertEqual(step(engine="ijanai-v3-denoise", scale=2), "ijanai.v3denoise.2x")
+        self.assertEqual(step(engine="moesr-descreen"), "umzi.ds-moesr-v2.4x")
+        # A chain the app builds: up to three steps from the list, at twice the page.
+        chain = {**recipe(*(d.CHAIN_STEPS[k] for k in ("mangajpeg-hq", "moesr-descreen-4x", "waifu2x-scan-n1"))),
+                 "output_scale": 2}
+        self.assertEqual([s.out for s in d.resolve_recipe(chain)], [1, 2, 1])
+
+
+class FakeNet:
+    input_channels = 3
+
+    def __init__(self, scale=1):
+        self.scale = scale
+
+
+class FakeNetSessions:
+    def __init__(self, scale=1):
+        self.scale = scale
+
+    def get(self, model):
+        return FakeNet(self.scale)
+
+
+class ChromaTests(unittest.TestCase):
+    """A grey-only model never takes a page's colour (the MangaJaNai bug of 2026-11-14)."""
+
+    def run_model(self, model, rgb, gray, grey_answer=True):
+        net = d.Spandrel(FakeNetSessions(model.scale), model)
+        seen = []
+
+        def infer(planes):
+            seen.append(planes.shape[0])
+            out = planes.repeat(model.scale, axis=1).repeat(model.scale, axis=2)
+            # A grey-only RGB network answers grey whatever it is given.
+            return np.repeat(out.mean(axis=0, keepdims=True), 3, axis=0) if grey_answer else out
+        net._infer = infer
+        return net.run(rgb, gray), seen
+
+    def test_a_grey_only_model_keeps_the_logo_colour(self):
+        logo = synthetic_pages()["logo"]
+        page = d.decode_page(png_of(logo, "RGB"))
+        for model in (d.MOESR, d.mangajanai_for(2, 1200)):
+            with self.subTest(model=model.model_id):
+                self.assertTrue(model.gray_only)
+                out, seen = self.run_model(replace(model, scale=1), page.rgb, page.gray)
+                self.assertEqual(seen, [3], "an RGB network gets the luma on all three planes")
+                np.testing.assert_allclose(out, page.rgb, atol=2e-3)
+                # At a scale the source chroma is enlarged under the model's luma.
+                out, _ = self.run_model(replace(model, scale=2), page.rgb, page.gray)
+                self.assertEqual(out.shape, (3, 240, 180))
+                pink = (out[:, 10:22, 14:58] * 255).mean(axis=(1, 2))
+                self.assertGreater(pink[0] - pink[1], 80, "the logo is still pink")
+
+    def test_an_rgb_model_gets_the_page_as_it_is(self):
+        colour = d.decode_page(png_of(synthetic_pages()["colour"], "RGB"))
+        model = d.MODELS["ijanai.v3denoise.4x"]
+        self.assertFalse(model.gray_only)
+        out, seen = self.run_model(replace(model, scale=1), colour.rgb, colour.gray, grey_answer=False)
+        np.testing.assert_array_equal(out, colour.rgb)
+
+    def test_with_chroma_of_is_exact_at_the_same_size(self):
+        rgb = d.decode_page(png_of(synthetic_pages()["sparse"], "RGB")).rgb
+        np.testing.assert_allclose(d.with_chroma_of(rgb, d.luma_of(rgb)), rgb, atol=1e-5)
+
+
+class InstallTests(unittest.TestCase):
+    def setUp(self):
+        self.saved = d._extra_arches_installed
+        d._extra_arches_installed = False
+
+    def tearDown(self):
+        d._extra_arches_installed = self.saved
+
+    def test_extra_arches_install_once_per_process(self):
+        class DuplicateArchitectureError(Exception):
+            pass
+
+        class Module:
+            calls = 0
+
+            def install(self):
+                Module.calls += 1
+                if Module.calls > 1:
+                    raise DuplicateArchitectureError("MoESR")
+        module = Module()
+        self.assertTrue(d.install_extra_arches(module))
+        self.assertFalse(d.install_extra_arches(module))
+        self.assertEqual(Module.calls, 1)
+        # Registered by someone else first: still the state wanted, and said once.
+        d._extra_arches_installed = False
+        self.assertTrue(d.install_extra_arches(module))
+        self.assertEqual(Module.calls, 2)
+
+    def test_another_install_failure_is_not_swallowed(self):
+        class Module:
+            def install(self):
+                raise ImportError("no torch")
+        with self.assertRaises(ImportError):
+            d.install_extra_arches(Module())
+        self.assertFalse(d._extra_arches_installed)
+
+
+class WeightsTests(unittest.TestCase):
+    def setUp(self):
+        self.saved = d._download
+
+    def tearDown(self):
+        d._download = self.saved
+
+    def test_a_refused_optional_model_is_skipped_and_a_required_one_fails(self):
+        import urllib.error
+
+        def refuse(url, directory):
+            raise urllib.error.HTTPError(url, 403, "Forbidden", None, None)
+        d._download = refuse
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(d.ensure_models(root, [d.MOESR]), {})
+            with self.assertRaises(OSError):
+                d.ensure_models(root, [d.SEAM_FILTER])
+
+    def test_a_tar_member_is_extracted_and_verified(self):
+        import hashlib
+        import tarfile
+        payload = b"moesr weights" * 100
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as src:
+            archive = Path(src) / "m.tar.xz"
+            with tarfile.open(archive, "w:xz") as tar:
+                info = tarfile.TarInfo("models/m.pth")
+                info.size = len(payload)
+                tar.addfile(info, io.BytesIO(payload))
+
+            def serve(url, directory):
+                target = Path(directory) / "part"
+                target.write_bytes(archive.read_bytes())
+                return target
+            d._download = serve
+            model = replace(d.MOESR, url="https://example.invalid/m.tar.xz", archive_member="models/m.pth",
+                            sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload))
+            paths = d.ensure_models(root, [model])
+            self.assertEqual(paths[model.model_id].read_bytes(), payload)
+            # Already seeded: verified, not fetched again, even with the host refusing now.
+            d._download = lambda url, directory: (_ for _ in ()).throw(AssertionError("fetched again"))
+            self.assertEqual(d.ensure_models(root, [model]), paths)
+
+
 class SeedTests(unittest.TestCase):
     def test_capabilities_follow_seeded_files(self):
         with tempfile.TemporaryDirectory() as root:
@@ -321,7 +578,7 @@ class SeedTests(unittest.TestCase):
                     handle.truncate(model.bytes)
             caps = d.denoise_capabilities(root)
             self.assertTrue(caps["available"])
-            self.assertEqual(caps["features"], ["output_scale"])
+            self.assertEqual(caps["features"], ["output_scale", "color_route"])
             self.assertEqual(caps["engines"]["denoise"], ["waifu2x-art-scan"])
             self.assertEqual(caps["engines"]["jpeg"], [])
 
