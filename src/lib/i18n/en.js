@@ -1424,6 +1424,7 @@ export const en = {
       replaceDenoised: 'Replace pages with denoised',
       denoiseHistory: 'Denoise history',
       chapterMenu: 'Actions for {name}',
+      managePages: 'Manage pages…',
       open: 'Open',
       rename: 'Rename',
       remove: 'Remove',
@@ -1500,6 +1501,69 @@ export const en = {
       permanent: 'Page mode is permanent.',
       createSingle: 'Create single-page project',
       createLongstrip: 'Create longstrip project',
+    },
+    pagesScreen: {
+      title: 'Pages',
+      meta: 'Ch. {number} · {name}',
+      add: 'Add pages…',
+      chooserTitle: 'Choose pages to add',
+      place: {
+        label: 'New pages go',
+        end: 'At the end',
+        before: 'Before selection',
+        after: 'After selection',
+      },
+      selected: {
+        one: '1 page selected',
+        other: '{count} pages selected',
+      },
+      clear: 'Clear selection',
+      selectAll: 'Select all',
+      moveEarlier: 'Move earlier',
+      moveLater: 'Move later',
+      remove: {
+        one: 'Remove 1 page',
+        other: 'Remove {count} pages',
+      },
+      hint: 'Click a page to select it, Shift or Cmd to select more. Drag pages to move them. Drop image files or a folder here to add them.',
+      confirm: {
+        ask: {
+          one: 'Remove 1 page from this chapter?',
+          other: 'Remove {count} pages from this chapter?',
+        },
+        loss: {
+          one: '1 of them has masks, cleans or edits, and that work is lost.',
+          other: '{count} of them have masks, cleans or edits, and that work is lost.',
+        },
+        noLoss: 'None of them has masks, cleans or edits.',
+        kept: 'The page files stay in this chapter under Removed pages and can be put back. Your own scan files are not touched. Undo history for this chapter is cleared.',
+      },
+      loading: 'Reading pages…',
+      none: 'This chapter has no page files yet.',
+      tile: 'Page {number}, {file}, {stateLabel}',
+      pinned: 'This page has work on it, so it keeps its place.',
+      state: {
+        cleaned: 'Cleaned',
+        masks: 'Has masks',
+        edited: 'Has edits',
+        untouched: 'Untouched',
+      },
+      removed: {
+        title: {
+          one: '1 removed page',
+          other: '{count} removed pages',
+        },
+        note: 'A page put back goes at the end, with no masks or cleans.',
+        restore: 'Put back',
+      },
+      drop: 'Drop image files or a folder to add them',
+      done: 'Done',
+      why: {
+        busy: 'A run is using this chapter. Pages can change when it ends.',
+        lastPage: 'A chapter keeps at least one page.',
+        longstrip: 'This longstrip has work on it, so pages can only be added at its end.',
+        pinned: 'Page {page} has work on it and must keep its number. Pages before it cannot be removed or moved, and new pages cannot go before it.',
+      },
     },
     newChapter: {
       project: 'Project',
@@ -3493,6 +3557,25 @@ export const en = {
   /* something that already happened.                                    */
   /* ================================================================== */
   notice: {
+    pages: {
+      pinned: 'Page {page} has work on it and keeps its place, so nothing was changed.',
+      longstrip: 'This longstrip has work on it. Pages can only be added at its end.',
+      lastPage: 'A chapter keeps at least one page.',
+      gone: 'That page is no longer in the chapter. The list was read again.',
+      nothingAdded: 'No page was added. The files are not images this reads, or they are already in this chapter.',
+      alreadyThere: {
+        one: '1 file is already a page of this chapter and was not added again.',
+        other: '{count} files are already pages of this chapter and were not added again.',
+      },
+      added: {
+        one: '1 page added.',
+        other: '{count} pages added.',
+      },
+      removed: {
+        one: '1 page removed. You can put it back from the Pages screen.',
+        other: '{count} pages removed. You can put them back from the Pages screen.',
+      },
+    },
     measure: {
       busy: 'Measuring waits until the running clean finishes.',
       running: 'A measurement is already running.',

@@ -23,6 +23,8 @@ import { buildReviewPage, rgbPngBase64, supportOf } from './mockreview.js'
 import { commitMask, ENGINE_INFO } from './provenance.js'
 import { createRng } from './rng.js'
 import { createRunnerPool } from './runner.js'
+import { createBuildContext, makePages } from './pagebuilder.js'
+import { parseChapterNumber, sameChapterNumber } from '../home/chapternumber.js'
 import { DENOISE_PRESETS, outputScalesFor, presetById, recipeAt } from '../model/denoise.js'
 import { currentRung } from '../model/ladder.js'
 import { MAX_MASK_PADDING, NANO_BANANA_ENGINE, isUncleaned } from '../model/masks.js'
@@ -1803,6 +1805,84 @@ export function createMockBackend(options = {}) {
     chapters: project.chapters.map(chapterHeaders),
   })
 
+  /* ---------- a chapter's pages ---------- */
+
+  /** The page files the Pages screen takes, as the native ingest does. */
+  const PAGE_EXTENSIONS = /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i
+
+  /** Whether a page has work and so keeps its position (`library.rs#page_work`). */
+  const pageHasWork = (page) => page.regions.length > 0 || page.status === 'cleaned'
+
+  /**
+   * Why `next` (old positions in their new order, `-1` for a new page) is
+   * refused, or null. `dropped` are positions leaving the chapter.
+   */
+  const pageOrderRefusal = (project, chapter, next, dropped) => {
+    if (!next.length) return { key: 'notice.pages.lastPage', params: {} }
+    const work = chapter.pages.map(pageHasWork)
+    const append = next.length >= chapter.pages.length && chapter.pages.every((_, i) => next[i] === i)
+    if (project.mode === 'longstrip' && !append && work.some(Boolean)) {
+      return { key: 'notice.pages.longstrip', params: {} }
+    }
+    for (let at = 0; at < work.length; at += 1) {
+      if (work[at] && !dropped.includes(at) && next[at] !== at) {
+        return { key: 'notice.pages.pinned', params: { page: at + 1 } }
+      }
+    }
+    return null
+  }
+
+  /** Every page's id, index and number from its position, as `page_id` derives them. */
+  const reindexPages = (chapter) => {
+    chapter.pages.forEach((page, index) => {
+      page.index = index
+      page.number = index + 1
+      page.id = `${chapter.id}-p${String(index + 1).padStart(3, '0')}`
+    })
+  }
+
+  /** Each page's stable source slot, assigned once (`ApiPage.sourceIndex`). */
+  const sourceSlots = (chapter) => {
+    let next = Math.max(-1, ...[...chapter.pages, ...(chapter.removedPages ?? [])].map((page) => page.sourceIndex ?? -1)) + 1
+    for (const page of [...chapter.pages, ...(chapter.removedPages ?? [])]) {
+      if (!Number.isInteger(page.sourceIndex)) page.sourceIndex = next++
+    }
+  }
+
+  const pagesListing = (project, chapter) => {
+    sourceSlots(chapter)
+    return {
+      chapterId: chapter.id,
+      longstrip: project.mode === 'longstrip',
+      pages: chapter.pages.map(pageHeader),
+      worked: chapter.pages.map(pageHasWork),
+      removed: (chapter.removedPages ?? []).map((page) => ({
+        sourceIndex: page.sourceIndex,
+        file: page.file,
+        width: page.width,
+        height: page.height,
+      })),
+      busy: !!runner.runFor(chapter.id),
+    }
+  }
+
+  /** The chapter a page edit is for, or null after saying why there is none. */
+  const pageEdit = (chapterId) => {
+    const found = findChapter(chapterId)
+    if (!found) return null
+    if (runner.runFor(chapterId)) {
+      notify('notice.run.busy', {}, 'warn')
+      return null
+    }
+    sourceSlots(found.chapter)
+    return found
+  }
+
+  const refusePages = (key, params = {}) => {
+    notify(key, params, 'warn')
+    return null
+  }
+
   /* ---------- the undo journal ---------- */
 
   /**
@@ -3359,7 +3439,7 @@ export function createMockBackend(options = {}) {
      * notice the Tauri backend sends rather than quietly producing two chapters
      * over one folder.
      */
-    async createChapter({ projectId, name, number: given, sourcePath }) {
+    async createChapter({ projectId, name, number: given, label, sourcePath }) {
       await delay(timing.method)
       const project = findProject(projectId)
       if (!project) return null
@@ -3371,16 +3451,19 @@ export function createMockBackend(options = {}) {
       }
       // The user's number when the dialog sent one; `max + 1` is only the
       // fallback for a caller that did not name one.
-      const number =
-        Number.isFinite(given) && Number(given) >= 1
+      // A split chapter's label (`12.5`) is its number on the seam, as
+      // natively (`library.rs#chapter_label`); `max + 1` counts whole parts.
+      const split = parseChapterNumber(label)?.label ?? null
+      const number = split ??
+        (Number.isFinite(given) && Number(given) >= 1
           ? Math.trunc(Number(given))
-          : Math.max(...project.chapters.map((c) => c.number), 0) + 1
+          : Math.max(...project.chapters.map((c) => parseChapterNumber(c.number)?.whole ?? 0), 0) + 1)
       // The mock builds a chapter's id out of its number (`pagebuilder.js`
       // `makeChapter`), so a repeat here is not an ambiguous label - it is two
       // chapters, their pages and their regions sharing one set of ids. The
       // dialog already refuses a taken number; this is the seam saying so
       // rather than trusting it.
-      if (project.chapters.some((c) => c.number === number)) {
+      if (project.chapters.some((c) => sameChapterNumber(c.number, number))) {
         notify('notice.chapter.numberTaken', { chapter: number, project: project.name }, 'warn')
         return null
       }
@@ -3579,6 +3662,116 @@ export function createMockBackend(options = {}) {
             : 'notice.chapter.deletedWithScans'
       notify(key, { chapter: removed.number }, 'warn')
       return true
+    },
+
+    /* ---------- a chapter's pages (`library.rs`, "A chapter's pages") ---------- */
+
+    /**
+     * The Pages screen's listing. The rule is the native one: a page with any
+     * region keeps its place, because region ids are built on page positions;
+     * a longstrip with work only takes pages at its end.
+     */
+    async chapterPages({ chapterId }) {
+      await delay(timing.method)
+      const found = findChapter(chapterId)
+      if (!found) return null
+      return snapshot(pagesListing(found.project, found.chapter))
+    },
+
+    async addPages({ chapterId, paths, at }) {
+      await delay(timing.method)
+      const edit = pageEdit(chapterId)
+      if (!edit) return null
+      const { project, chapter } = edit
+      const count = chapter.pages.length
+      const position = Number.isInteger(at) ? at : count
+      if (position < 0 || position > count) return refusePages('notice.pages.gone')
+      const probe = chapter.pages.map((_, i) => i)
+      probe.splice(position, 0, -1)
+      const refusal = pageOrderRefusal(project, chapter, probe, [])
+      if (refusal) return refusePages(refusal.key, refusal.params)
+      const names = (Array.isArray(paths) ? paths : []).map((path) => String(path).split(/[\\/]/).pop() ?? '')
+      const images = names.filter((name) => PAGE_EXTENSIONS.test(name)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      const refused = names.filter((name) => !PAGE_EXTENSIONS.test(name))
+      if (refused.length) {
+        notify('notice.input.fileSkipped', { count: refused.length, file: refused[0], reasonKey: 'input.skipReason.notAnImage' }, 'warn')
+      }
+      if (!images.length) return refusePages('notice.pages.nothingAdded')
+      const fresh = makePages(chapter.id, {
+        pages: images.length,
+        prefix: 'pg',
+        mode: project.mode,
+        noText: true,
+      }, createBuildContext(`${chapter.id}-added-${timers.now()}-${count}`, sequence))
+      fresh.forEach((page, i) => {
+        page.file = images[i]
+      })
+      chapter.pages.splice(position, 0, ...fresh)
+      reindexPages(chapter)
+      if (position !== count) journals.delete(chapterId)
+      notify('notice.pages.added', { count: fresh.length })
+      return snapshot(pagesListing(project, chapter))
+    },
+
+    async removePages({ chapterId, indices }) {
+      await delay(timing.method)
+      const edit = pageEdit(chapterId)
+      if (!edit) return null
+      const { project, chapter } = edit
+      const gone = [...new Set(Array.isArray(indices) ? indices : [])]
+      if (!gone.length || gone.some((at) => !Number.isInteger(at) || at < 0 || at >= chapter.pages.length)) {
+        return refusePages('notice.pages.gone')
+      }
+      const next = chapter.pages.map((_, i) => i).filter((i) => !gone.includes(i))
+      const refusal = pageOrderRefusal(project, chapter, next, gone)
+      if (refusal) return refusePages(refusal.key, refusal.params)
+      const removed = gone.map((at) => chapter.pages[at])
+      dropKeptFor(removed)
+      for (const page of removed) {
+        page.regions = []
+        page.status = 'unclean'
+      }
+      chapter.removedPages = [...(chapter.removedPages ?? []), ...removed]
+      chapter.pages = next.map((i) => chapter.pages[i])
+      reindexPages(chapter)
+      journals.delete(chapterId)
+      notify('notice.pages.removed', { count: removed.length }, 'warn')
+      return snapshot(pagesListing(project, chapter))
+    },
+
+    async movePages({ chapterId, order }) {
+      await delay(timing.method)
+      const edit = pageEdit(chapterId)
+      if (!edit) return null
+      const { project, chapter } = edit
+      const next = Array.isArray(order) ? order : []
+      const sorted = [...next].sort((a, b) => a - b)
+      if (sorted.length !== chapter.pages.length || sorted.some((value, i) => value !== i)) {
+        return refusePages('notice.pages.gone')
+      }
+      if (next.every((value, i) => value === i)) return snapshot(pagesListing(project, chapter))
+      const refusal = pageOrderRefusal(project, chapter, next, [])
+      if (refusal) return refusePages(refusal.key, refusal.params)
+      chapter.pages = next.map((i) => chapter.pages[i])
+      reindexPages(chapter)
+      journals.delete(chapterId)
+      return snapshot(pagesListing(project, chapter))
+    },
+
+    async restorePages({ chapterId, sources }) {
+      await delay(timing.method)
+      const edit = pageEdit(chapterId)
+      if (!edit) return null
+      const { project, chapter } = edit
+      const held = chapter.removedPages ?? []
+      const wanted = Array.isArray(sources) ? sources : []
+      const back = wanted.map((source) => held.find((page) => page.sourceIndex === source))
+      if (!back.length || back.some((page) => !page)) return refusePages('notice.pages.gone')
+      chapter.removedPages = held.filter((page) => !back.includes(page))
+      chapter.pages.push(...back)
+      reindexPages(chapter)
+      notify('notice.pages.added', { count: back.length })
+      return snapshot(pagesListing(project, chapter))
     },
 
     async resumeJob({ projectId, chapterId }) {

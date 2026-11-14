@@ -8,6 +8,8 @@
   import FloatingWindow from './FloatingWindow.svelte'
   import RunIndicator from './RunIndicator.svelte'
   import PageList from './PageList.svelte'
+  import { IconButton } from '../ui/index.js'
+  import { openChapterPages } from '../home/chapterpages.svelte.js'
 
   const total = $derived(pageCount())
   // Cleaned, not merely touched: a page still in the queue or skipped by the
@@ -26,6 +28,23 @@
 </script>
 
 <FloatingWindow id="pages" title={t('editor.panel.pages')} {meta} pad="5px 7px 9px">
-  {#snippet headerExtra()}<RunIndicator />{/snippet}
+  {#snippet headerExtra()}
+    <RunIndicator />
+    <!-- The chapter's Pages screen: add, remove and move pages. -->
+    {#if editor.project && editor.chapter}
+      <IconButton
+        icon="pages"
+        label={t('home.action.managePages')}
+        size={22}
+        iconSize={13}
+        onclick={() => editor.project && editor.chapter && openChapterPages({
+          projectId: editor.project.id,
+          chapterId: editor.chapter.id,
+          number: editor.chapter.number,
+          name: editor.chapter.name,
+        })}
+      />
+    {/if}
+  {/snippet}
   <PageList />
 </FloatingWindow>

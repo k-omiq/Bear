@@ -75,7 +75,7 @@ function numberField(container) {
  * label followed the field.
  *
  * @param {HTMLElement} container
- * @param {number} number
+ * @param {number|string} number
  */
 function createButton(container, number) {
   const label = t('home.newChapter.create', { number })
@@ -92,15 +92,46 @@ describe('the New chapter dialog', () => {
     expect(numberField(container).value).toBe('8')
   })
 
-  it('keeps only digits, so a typed word never becomes a number', async () => {
+  it('keeps digits and the split marks, so a typed word never becomes a number', async () => {
     const { container } = render(NewChapterDialog, { props: { spec: SPEC } })
     const field = numberField(container)
 
     await fireEvent.input(field, { target: { value: '1a2' } })
     expect(field.value).toBe('12')
 
+    await fireEvent.input(field, { target: { value: 'Ch. 12,5 / 2-1' } })
+    expect(field.value).toBe('.12,5/2-1')
+
     await fireEvent.input(field, { target: { value: 'twelve' } })
     expect(field.value).toBe('')
+  })
+
+  for (const typed of ['12.5', '12-1', '12/2', '12,5']) {
+    it(`sends a split chapter ${typed} as typed, beside its whole number`, async () => {
+      const { container } = render(NewChapterDialog, { props: { spec: SPEC } })
+      await fireEvent.input(numberField(container), { target: { value: typed } })
+      await fireEvent.click(createButton(container, typed))
+
+      expect(createChapter).toHaveBeenCalledTimes(1)
+      expect(createChapter.mock.calls[0][0]).toMatchObject({ projectId: 'p1', number: 12, label: typed })
+    })
+  }
+
+  it('waits for a split number to be whole before it can be added', async () => {
+    const { container } = render(NewChapterDialog, { props: { spec: SPEC } })
+    await fireEvent.input(numberField(container), { target: { value: '12.' } })
+    expect(createButton(container, 8).disabled).toBe(true)
+    await fireEvent.input(numberField(container), { target: { value: '12..5' } })
+    expect(createButton(container, 8).disabled).toBe(true)
+  })
+
+  it('refuses a split number already in the project under another spelling', async () => {
+    library.projects = [/** @type {any} */ ({ ...project(), chapters: [...project().chapters, { id: 'c3', number: '7.5', name: 'Ch 7.5' }] })]
+    const { container, getByText } = render(NewChapterDialog, { props: { spec: SPEC } })
+    await fireEvent.input(numberField(container), { target: { value: '7-5' } })
+
+    expect(getByText(t('home.newChapter.taken', { number: '7-5' }))).toBeTruthy()
+    expect(createButton(container, '7-5').disabled).toBe(true)
   })
 
   it('sends the number the user typed, not the one it suggested', async () => {
@@ -110,6 +141,7 @@ describe('the New chapter dialog', () => {
 
     expect(createChapter).toHaveBeenCalledTimes(1)
     expect(createChapter.mock.calls[0][0]).toMatchObject({ projectId: 'p1', number: 12 })
+    expect(createChapter.mock.calls[0][0]).not.toHaveProperty('label')
   })
 
   it('refuses a number the project already holds, and says which', async () => {

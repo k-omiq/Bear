@@ -9072,7 +9072,7 @@ mod tests {
         job.project.regions_untouched.push(RegionUntouched {
             source_idx,
             bbox: Rect { x: 0, y: 0, w: 2, h: 2 },
-            reason: "review.reason.lowConfidence".into(),
+            reason: "review.reason.declined".into(),
             inside_bubble: None,
             inside_balloon: None,
             lettering: None,

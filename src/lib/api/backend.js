@@ -90,8 +90,11 @@ import { createTauriBackend, isTauri } from './tauri.js'
  */
 
 /**
+ * `number` is a JSON number for a plain chapter and the label as typed
+ * (`"12.5"`, `"12/2"`) for a split one; `home/chapternumber.js` reads both.
+ *
  * @typedef {import('../model/types.js').Chapter & {
- *   number: number,
+ *   number: number|string,
  *   lastOpened: RelativeTime,
  *   sourcePath: string,
  *   sourceFormat: string,
@@ -101,6 +104,21 @@ import { createTauriBackend, isTauri } from './tauri.js'
  *   denoiseReplacement: {pages: number, kept: number, missing: number}|null,
  *   denoiseHistory: DenoiseSummary|null
  * }} ApiChapter
+ */
+
+/**
+ * One chapter's pages for the Pages screen. `worked[i]` says page `i` has
+ * masks, cleans or edits and so keeps its place: region ids are built on page
+ * positions. `removed` are pages taken out, whose files the chapter keeps.
+ *
+ * @typedef {{
+ *   chapterId: string,
+ *   longstrip: boolean,
+ *   pages: ApiPage[],
+ *   worked: boolean[],
+ *   removed: Array<{sourceIndex: number, file: string, width: number, height: number}>,
+ *   busy: boolean
+ * }} ChapterPages
  */
 
 /**
@@ -468,7 +486,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(handler: (event: BackendEvent) => void) => (() => void)} subscribe - returns an unsubscribe function
  * @property {() => Promise<ApiProject[]>} listProjects
  * @property {(spec: {name: string, mode: 'single'|'longstrip', sourcePath?: string, readingDirection?: 'rtl'|'ltr'}) => Promise<ApiProject>} createProject
- * @property {(spec: {projectId: string, name: string, number?: number, sourcePath?: string}) => Promise<ApiChapter|null>} createChapter - `number` is the chapter's number and is stored verbatim; omitted, the backend numbers it `max + 1`. `sourcePath` omitted means "wherever the project's own folder implies", and a backend must refuse rather than give one folder to two chapters
+ * @property {(spec: {projectId: string, name: string, number?: number, label?: string, sourcePath?: string}) => Promise<ApiChapter|null>} createChapter - `number` is the chapter's number and is stored verbatim; omitted, the backend numbers it `max + 1`. `label` is a split chapter's number as typed (`12.5`, `12-1`, `12/2`, `12,5`): it wins over `number`, the backend stores its leading whole number beside it, and the chapter's `number` is then the label. `sourcePath` omitted means "wherever the project's own folder implies", and a backend must refuse rather than give one folder to two chapters
  * @property {(spec: {projectId: string, chapterId: string, convert?: boolean}) => Promise<{project: ApiProject, chapter: ApiChapter, pendingConversion: {from: string, to: string, fileCount: number}|null}|null>} openChapter - the chapter arrives as page **headers** plus its review index; `loadPages` brings a window's regions
  * @property {(spec: {chapterId: string, indices: number[]}) => Promise<ApiPage[]>} loadPages - the regions of a window of pages. Indices that are not there are skipped, never refused
  * @property {(spec: {chapterId: string}) => Promise<HistoryView>} historyLoad - the chapter's undo journal as an index: a cursor and one `{seq, label}` per entry, no payloads
@@ -478,6 +496,11 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: {projectId: string, name: string}) => Promise<ApiProject|null>} renameProject
  * @property {(spec: {projectId: string}) => Promise<boolean>} deleteProject
  * @property {(spec: {projectId: string, chapterId: string, sourceFiles?: boolean}) => Promise<boolean>} deleteChapter - always removes the chapter's row and the library's own files for it (its manifest, masks and patches). `sourceFiles: true` also deletes the folder of scans it was read from - except the project's own folder, which a backend must refuse to remove so that deleting one chapter cannot empty the project. `false` means the chapter was not there
+ * @property {(spec: {chapterId: string}) => Promise<ChapterPages|null>} chapterPages - the Pages screen's listing of one chapter
+ * @property {(spec: {chapterId: string, paths: string[], at?: number}) => Promise<ChapterPages|null>} addPages - import image files (or the images of a dropped folder) through the chapter's own import, before position `at` or at the end. `null` with a notice when refused: a page with work would move (`notice.pages.pinned`), a longstrip with work takes pages only at its end, nothing could be added, or a run uses the chapter
+ * @property {(spec: {chapterId: string, indices: number[]}) => Promise<ChapterPages|null>} removePages - take pages out. Their work goes; their files stay in the chapter and are listed in `removed`. Refused like `addPages`, and when every page would go. Clears undo history
+ * @property {(spec: {chapterId: string, order: number[]}) => Promise<ChapterPages|null>} movePages - `order` is every current position in its new order. Pages with work must keep their place. Clears undo history
+ * @property {(spec: {chapterId: string, sources: number[]}) => Promise<ChapterPages|null>} restorePages - put removed pages back at the end, by `RemovedPage.sourceIndex`, with no work on them
  * @property {(spec: {projectId: string, chapterId?: string}) => Promise<{project: ApiProject, chapter: ApiChapter, resumedFrom: number, runId: string|null, pages: Array<Object>, mode?: RunMode}|null>} resumeJob
  * @property {(spec: {scope: 'page'|'chapter'|'project', mode?: RunMode, chapterId: string, pageIndex?: number, engineCeiling?: string, bubbleEngine?: string, outsideEngine?: string, outsideBubbles?: 'review'|'clean', bubbleColor?: string, maskPaddingPx?: number, detection?: Record<string, string|null>, detectorModels?: string[], geometryPolicy?: 'legacy'|'text_shape', textPolicy?: 'legacy_gate'|'all_text', ocrRescue?: boolean, cleanLatin?: boolean, analysisTargets?: {rtFull?: 'local'|'cloud', samTs?: 'local'|'cloud'}, cloudGrant?: string, cloudCleanGrant?: string, area?: {x: number, y: number, w: number, h: number}, solidBubblesOnly?: boolean, qwenEdit?: LocalGuidance}) => Promise<RunHandle>} runClean - selected models, source languages, geometry and text policy are captured for the native run. A stage `analysisTargets` routes to the cloud needs `cloudGrant` from `confirmRunAnalysis`; without it the run is refused (`cloud_run_grant_required`). `cloudCleanGrant`, from `confirmCloudCleanStream`, makes an `auto` page or chapter run clean each page on the cloud GPU as soon as it is detected, within the consent's cap, and nothing on this computer (`cloud_clean_stream_unsupported` for any other run). `mode` is the step (docs/detect-clean.md §3), `auto` when absent. `maskPaddingPx` grows every fitted mask by that many page pixels, 0 to 32 (`mask_padding_invalid` past it), 0 when absent. `cleanLatin` (false when absent) lets the run clean text the reader reads as English (Latin letters); without it such text is held with `review.reason.gateSkippedNotJapanese`, under either text policy, and only while the reader runs. `area` (page percent, as a region's `bbox`) holds a `detect` of one page to that area: the models read a window around it at the page's own resolution, and what they find there is added to the page's detections, less what the page holds already; nothing stored is replaced and the page is not marked detected. Refused with `detect_area_invalid` off the page, and `detect_area_scope_unsupported` for any other mode or scope. `solidBubblesOnly` (false when absent) narrows a `clean` or `auto` to speech bubbles on flat paper: one is painted flat on this computer, and every other region is left, or stored, as a detected region for a later clean, text outside a bubble included; nothing is escalated, declined or held for it, and the run ends with `notice.run.solidOnly` and both counts. `qwenEdit` is the guidance asked before a clean whose picks render with FLUX on this computer: each FLUX render's prompt is worded with it as the cloud worker for that model family words it, and the patch keeps it in `params_snapshot.qwen_edit`; absent renders as before, a Detect or a stream ignores it, and one that is not a target and a description of at most 500 characters is refused with `qwen_edit_invalid`
  * @property {(spec?: {runId?: string}) => Promise<string|null>} cancelRun

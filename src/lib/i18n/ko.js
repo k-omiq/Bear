@@ -1171,6 +1171,7 @@ export const ko = {
       replaceDenoised: '노이즈 제거된 페이지로 교체',
       denoiseHistory: '노이즈 제거 기록',
       chapterMenu: '{name} 작업',
+      managePages: '페이지 관리…',
       open: '열기',
       rename: '이름 변경',
       remove: '제거',
@@ -1240,6 +1241,69 @@ export const ko = {
       permanent: '페이지 모드는 바꿀 수 없습니다.',
       createSingle: '단일 페이지 프로젝트 만들기',
       createLongstrip: '세로 스크롤 프로젝트 만들기',
+    },
+    pagesScreen: {
+      title: '페이지',
+      meta: '{number}화 · {name}',
+      add: '페이지 추가…',
+      chooserTitle: '추가할 페이지 선택',
+      place: {
+        label: '새 페이지 위치',
+        end: '맨 끝',
+        before: '선택 앞',
+        after: '선택 뒤',
+      },
+      selected: {
+        one: '1페이지 선택됨',
+        other: '{count}페이지 선택됨',
+      },
+      clear: '선택 해제',
+      selectAll: '모두 선택',
+      moveEarlier: '앞으로 이동',
+      moveLater: '뒤로 이동',
+      remove: {
+        one: '1페이지 제거',
+        other: '{count}페이지 제거',
+      },
+      hint: '페이지를 클릭해 선택하고, Shift나 Cmd로 더 선택합니다. 끌어서 페이지를 옮깁니다. 이미지 파일이나 폴더를 여기에 놓으면 추가됩니다.',
+      confirm: {
+        ask: {
+          one: '이 화에서 1페이지를 제거할까요?',
+          other: '이 화에서 {count}페이지를 제거할까요?',
+        },
+        loss: {
+          one: '그중 1페이지에 마스크, 정리, 편집이 있으며 그 작업은 사라집니다.',
+          other: '그중 {count}페이지에 마스크, 정리, 편집이 있으며 그 작업은 사라집니다.',
+        },
+        noLoss: '마스크, 정리, 편집이 있는 페이지는 없습니다.',
+        kept: '페이지 파일은 이 화의 제거된 페이지에 남아 있어 되돌릴 수 있습니다. 원본 스캔 파일은 건드리지 않습니다. 이 화의 실행 취소 기록은 지워집니다.',
+      },
+      loading: '페이지를 읽는 중…',
+      none: '이 화에는 아직 페이지 파일이 없습니다.',
+      tile: '{number}페이지, {file}, {stateLabel}',
+      pinned: '이 페이지에는 작업이 있어 자리를 지킵니다.',
+      state: {
+        cleaned: '정리됨',
+        masks: '마스크 있음',
+        edited: '편집 있음',
+        untouched: '손대지 않음',
+      },
+      removed: {
+        title: {
+          one: '제거된 페이지 1개',
+          other: '제거된 페이지 {count}개',
+        },
+        note: '되돌린 페이지는 맨 끝에 들어가며 마스크나 정리는 없습니다.',
+        restore: '되돌리기',
+      },
+      drop: '이미지 파일이나 폴더를 놓아 추가',
+      done: '완료',
+      why: {
+        busy: '실행 중인 작업이 이 화를 사용하고 있습니다. 끝나면 페이지를 바꿀 수 있습니다.',
+        lastPage: '화에는 적어도 한 페이지가 있어야 합니다.',
+        longstrip: '이 세로 스크롤에는 작업이 있어 페이지는 맨 끝에만 추가할 수 있습니다.',
+        pinned: '{page}페이지에는 작업이 있어 번호를 지켜야 합니다. 그 앞의 페이지는 제거하거나 옮길 수 없고, 그 앞에 새 페이지를 넣을 수 없습니다.',
+      },
     },
     newChapter: {
       project: '프로젝트',
@@ -2686,6 +2750,25 @@ export const ko = {
     },
   },
   notice: {
+    pages: {
+      pinned: '{page}페이지에는 작업이 있어 자리를 지키므로 아무것도 바꾸지 않았습니다.',
+      longstrip: '이 세로 스크롤에는 작업이 있습니다. 페이지는 맨 끝에만 추가할 수 있습니다.',
+      lastPage: '화에는 적어도 한 페이지가 있어야 합니다.',
+      gone: '그 페이지는 더 이상 이 화에 없습니다. 목록을 다시 읽었습니다.',
+      nothingAdded: '추가된 페이지가 없습니다. 읽을 수 있는 이미지가 아니거나 이미 이 화에 있습니다.',
+      alreadyThere: {
+        one: '파일 1개는 이미 이 화의 페이지라서 다시 추가하지 않았습니다.',
+        other: '파일 {count}개는 이미 이 화의 페이지라서 다시 추가하지 않았습니다.',
+      },
+      added: {
+        one: '1페이지를 추가했습니다.',
+        other: '{count}페이지를 추가했습니다.',
+      },
+      removed: {
+        one: '1페이지를 제거했습니다. 페이지 화면에서 되돌릴 수 있습니다.',
+        other: '{count}페이지를 제거했습니다. 페이지 화면에서 되돌릴 수 있습니다.',
+      },
+    },
     measure: {
       busy: '진행 중인 정리가 끝날 때까지 측정을 기다립니다.',
       running: '이미 측정 중입니다.',

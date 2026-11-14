@@ -21,10 +21,14 @@
    * instead, which also covers a paste, and `inputmode` still brings up the
    * numeric keypad.
    *
+   * `reject` replaces the digit filter with a caller's own: a pattern of the
+   * characters to drop, global (`/[^0-9.,/-]/g` for a split chapter number).
+   *
    * @type {{
    *   value: string,
    *   onchange: (value: string) => void,
    *   numeric?: boolean,
+   *   reject?: RegExp,
    *   placeholder?: string,
    *   label?: string,
    *   id?: string,
@@ -39,6 +43,7 @@
     value,
     onchange,
     numeric = false,
+    reject,
     placeholder,
     label,
     id,
@@ -67,11 +72,11 @@
    */
   function oninput(event) {
     const raw = event.currentTarget.value
-    if (!numeric) {
+    if (!numeric && !reject) {
       onchange(raw)
       return
     }
-    const digits = raw.replace(/[^0-9]/g, '')
+    const digits = raw.replace(reject ?? /[^0-9]/g, '')
     if (digits !== raw) {
       const caret = event.currentTarget.selectionStart ?? digits.length
       event.currentTarget.value = digits

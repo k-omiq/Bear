@@ -13,6 +13,7 @@ import { notify, pushModal, openProject } from '../state/app.svelte.js'
 import { getBackend } from '../api/backend.js'
 import { t } from '../i18n/index.js'
 import { copySourcePath, removeChapter, removeProject, replaceWithDenoised } from './library.svelte.js'
+import { openChapterPages } from './chapterpages.svelte.js'
 
 /** Raise the New project dialog. */
 export function openNewProject() {
@@ -210,7 +211,8 @@ export function hasCleaning(chapter) {
 }
 
 /**
- * The context menu for one chapter: Denoise; Denoise cleaned chapter once a
+ * The context menu for one chapter: Manage pages, alone above the rest; then
+ * Denoise; Denoise cleaned chapter once a
  * page has cleaning on it; Replace pages with denoised once a page can take
  * its denoised file; Denoise history once the chapter was denoised; then the
  * destructive entry alone behind a separator. The row itself is how a chapter
@@ -222,6 +224,8 @@ export function hasCleaning(chapter) {
  */
 export function chapterMenuItems(chapter) {
   return [
+    { id: 'pages', label: t('home.action.managePages'), icon: 'pages' },
+    { id: 'sep-0', separator: true },
     { id: 'denoise', label: t('home.action.denoise'), icon: 'wand' },
     ...(hasCleaning(chapter) ? [{ id: 'denoiseCleaned', label: t('home.action.denoiseCleaned'), icon: 'wand' }] : []),
     ...(chapter?.denoiseReplacement ? [{ id: 'replaceDenoised', label: t('home.action.replaceDenoised'), icon: 'refresh' }] : []),
@@ -237,7 +241,8 @@ export function chapterMenuItems(chapter) {
  * @param {import('../api/backend.js').ApiChapter} chapter
  */
 export function runChapterAction(id, project, chapter) {
-  if (id === 'denoise') openDenoise(project, chapter)
+  if (id === 'pages') openChapterPages({ projectId: project.id, chapterId: chapter.id, number: chapter.number, name: chapter.name })
+  else if (id === 'denoise') openDenoise(project, chapter)
   else if (id === 'denoiseCleaned') openDenoise(project, chapter, { cleaned: true })
   else if (id === 'replaceDenoised') confirmReplaceDenoised(project, chapter)
   else if (id === 'denoiseHistory') openDenoiseHistory(project, chapter)

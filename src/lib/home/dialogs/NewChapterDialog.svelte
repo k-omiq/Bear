@@ -4,6 +4,7 @@
   import { t } from '../../i18n/index.js'
   import { closeModal, modalWidth } from '../../state/app.svelte.js'
   import { createChapter, library } from '../library.svelte.js'
+  import { REJECTED_CHARACTERS, isChapterNumber, parseChapterNumber, sameChapterNumber } from '../chapternumber.js'
   import SourceFolderField from './SourceFolderField.svelte'
 
   /**
@@ -21,6 +22,13 @@
    * to a project holding Ch. 1 got Ch. 2, with no field to say otherwise. The
    * field below is the number the chapter gets; the backend stores it verbatim.
    * `max + 1` is only its starting value.
+   *
+   * **A split chapter is typed as it is numbered**: `12.5`, `12-1`, `12/2` or
+   * `12,5` (`../chapternumber.js`). The field drops any other character as it
+   * arrives. A plain number goes to the seam as `number`; a split one goes as
+   * `label` too, and the backend keeps the leading whole number for its own
+   * numbering. The title is free text, so `Ch. 12, part 2` was always
+   * typeable there.
    *
    * **The source folder is offered, and left empty.** A chapter's pages come
    * from a folder, and until that seam gap was closed the seam
@@ -52,8 +60,11 @@
     projects.find((candidate) => candidate.id === chosenId) ?? projects[0] ?? null,
   )
 
+  // From each chapter's whole number: a split `12.5` counts as 12.
   const suggestedNumber = $derived(
-    project ? Math.max(...project.chapters.map((chapter) => chapter.number), 0) + 1 : 1,
+    project
+      ? Math.max(...project.chapters.map((chapter) => parseChapterNumber(chapter.number)?.whole ?? 0), 0) + 1
+      : 1,
   )
 
   // Held as the string the field holds, not as a number: an empty field is a
@@ -69,7 +80,10 @@
     if (!numberTouched) numberText = String(suggestedNumber)
   })
 
-  const number = $derived(numberText === '' ? null : Number(numberText))
+  // The text as the user typed it, trimmed; `null` while the field is empty
+  // or holds something the rule refuses (`12.`, half way to `12.5`).
+  const number = $derived(isChapterNumber(numberText) ? numberText.trim() : null)
+  const parsed = $derived(number === null ? null : parseChapterNumber(number))
 
   // Until it is edited, the title tracks the number the chapter will be given,
   // so adding a run of chapters needs no typing at all.
@@ -83,19 +97,20 @@
   // chapter by its number, and the user is standing in front of the field that
   // fixes it.
   const taken = $derived(
-    number !== null && !!project && project.chapters.some((chapter) => chapter.number === number),
+    number !== null && !!project && project.chapters.some((chapter) => sameChapterNumber(chapter.number, number)),
   )
 
-  const numberValid = $derived(number !== null && number >= 1 && !taken)
+  const numberValid = $derived(number !== null && !taken)
 
   const canCreate = $derived(!!project && title.trim() !== '' && numberValid && !library.busy)
 
   async function create() {
-    if (!canCreate || !project || number === null) return
+    if (!canCreate || !project || number === null || !parsed) return
     const chapter = await createChapter({
       projectId: project.id,
       name: title.trim(),
-      number,
+      number: parsed.whole,
+      ...(parsed.label !== null ? { label: parsed.label } : {}),
       sourcePath: sourcePath.trim() || undefined,
     })
     // Only on success: a failed create keeps the dialog, the typed title and
@@ -148,6 +163,7 @@
         <TextInput
           id={numberId}
           numeric
+          reject={REJECTED_CHARACTERS}
           value={numberText}
           onchange={(value) => {
             numberTouched = true
