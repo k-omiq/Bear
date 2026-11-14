@@ -81,3 +81,32 @@ it('waits for decoding before removing the displayed tile', async () => {
   await waitFor(() => expect(view.container.querySelector('img')).toBe(next))
   expect(next.dataset.loadedVersion).toBe(next.dataset.version)
 })
+
+it('lays the page at its own resolution over a scaled proxy while it is drawn larger, and only then', async () => {
+  // 1600 wide: the proxy is 1024, scaled down from the page.
+  const big = { ...page(), width: 1600, height: 2400 }
+  const view = render(PageArtwork, { page: big, variant: 'original' })
+  const tiles = [...view.container.querySelectorAll('img[data-version]')]
+  expect(tiles.length).toBeGreaterThan(0)
+  for (const tile of tiles) expect(tile.hasAttribute('data-proxy')).toBe(true)
+  expect(view.container.querySelector('img.full')).toBeNull()
+
+  await view.rerender({ page: big, variant: 'original', full: true })
+  const whole = /** @type {HTMLImageElement} */ (view.container.querySelector('img.full'))
+  // The URL with no tile segment: the page at its own resolution.
+  expect(new URL(whole.src).pathname).toBe('/c1/0/source')
+  // Over the tiles, and not one of them: nothing waits for it or samples it.
+  expect(whole.hasAttribute('data-version')).toBe(false)
+  expect(whole.hasAttribute('data-paint-key')).toBe(false)
+  expect(whole.hasAttribute('data-proxy')).toBe(false)
+  expect(whole.compareDocumentPosition(tiles.at(-1)) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+
+  await view.rerender({ page: big, variant: 'original', full: false })
+  expect(view.container.querySelector('img.full')).toBeNull()
+})
+
+it('asks for no second image where the proxy is the page itself', async () => {
+  const view = render(PageArtwork, { page: page(), variant: 'cleaned', full: true })
+  expect(view.container.querySelector('img.full')).toBeNull()
+  expect(view.container.querySelector('img[data-proxy]')).toBeNull()
+})

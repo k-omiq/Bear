@@ -1,7 +1,12 @@
 <script>
   import { tick } from 'svelte'
 
-  let { tile, onloaded } = $props()
+  // `full` is the page at its own resolution, laid over the proxy tiles past
+  // the proxy's scale (`PageArtwork`). It is not a tile: it carries no
+  // version or paint key, so nothing that waits for a page's tiles waits for
+  // it, and nothing that samples them samples it. `proxy` marks a tile whose
+  // pixels are scaled down from the image's.
+  let { tile, onloaded, full = false } = $props()
   let displayed = $state(null)
 
   // Keep the decoded DOM node itself. Recreating even the same URL can leave
@@ -26,10 +31,11 @@
 
 {#each images as requested (requested.src)}
   {@const current = requested.src === tile.src}
-  <img class="scan" class:held={!current} src={requested.src}
-    data-version={current ? tile.version : undefined}
-    data-loaded-version={displayed?.src === requested.src ? displayed.version : undefined}
-    data-paint-key={current ? tile.paintKey : undefined}
+  <img class="scan" class:held={!current} class:full src={requested.src}
+    data-version={current && !full ? tile.version : undefined}
+    data-loaded-version={!full && displayed?.src === requested.src ? displayed.version : undefined}
+    data-paint-key={current && !full ? tile.paintKey : undefined}
+    data-proxy={tile.proxy ? '' : undefined}
     alt="" decoding="async" draggable="false"
     style:visibility={current && displayed && displayed.src !== requested.src ? 'hidden' : null}
     onload={event => loaded(event, requested)}

@@ -191,6 +191,137 @@ export function anchoredScroll(spec) {
 }
 
 /**
+ * The zooms `+` and `−` stop at. A ladder, not a fixed step: the range runs
+ * from 40% to 12800%, and a step that is useful at 100% is no step at all at
+ * 3200%. Whole numbers from 200% up, so the stops past it draw every image
+ * pixel as a square of whole screen pixels, as an image editor's do.
+ */
+export const ZOOM_STOPS = Object.freeze([
+  0.4, 0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 3, 4, 5, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128,
+])
+
+/**
+ * The next stop up or down from `zoom`, inside `[min, max]`. A zoom between
+ * two stops (a pinch left it there, or fit did) goes to the nearer stop in
+ * the direction asked, never back to where it came from.
+ *
+ * @param {{zoom: number, direction: 'in'|'out', min: number, max: number}} spec
+ * @returns {number}
+ */
+export function stepZoom(spec) {
+  const zoom = finite(spec.zoom, 1)
+  const slack = 0.005
+  const next = spec.direction === 'out'
+    ? [...ZOOM_STOPS].reverse().find((stop) => stop < zoom - slack) ?? spec.min
+    : ZOOM_STOPS.find((stop) => stop > zoom + slack) ?? spec.max
+  return Math.min(spec.max, Math.max(spec.min, next))
+}
+
+/**
+ * Past this scale (drawn pixels per image pixel) the page and every raster
+ * over it are drawn nearest-neighbour, so each image pixel is a crisp square.
+ */
+export const PIXELATED_FROM = 1
+
+/** From this scale up a thin grid marks every image pixel, as in an image editor. */
+export const PIXEL_GRID_FROM = 8
+
+/**
+ * How long, in CSS pixels, the canvas lets its column grow. Layout lengths in
+ * both engines are fixed point and run out at about 33.5 million pixels;
+ * half of that leaves room for the scroll room and the margins. A single
+ * page never comes near it. A long webtoon chapter does, so its ceiling is
+ * lower than `MAX_ZOOM`.
+ */
+export const MAX_DRAWN_EXTENT = 16_000_000
+
+/**
+ * The highest zoom at which a column `extent` page pixels long stays inside
+ * `MAX_DRAWN_EXTENT`, capped at `max`.
+ *
+ * @param {{extent: number, max: number}} spec
+ * @returns {number}
+ */
+export function zoomCeiling(spec) {
+  const extent = finite(spec.extent, 0)
+  if (!(extent > 0)) return spec.max
+  return Math.min(spec.max, Math.floor((MAX_DRAWN_EXTENT / extent) * 100) / 100)
+}
+
+/** Below this length, in CSS pixels, a region is too small to find by eye. */
+export const FOCUS_MIN_DRAWN = 40
+/** A region that has to be zoomed to is drawn this long on its longer side. */
+export const FOCUS_SMALL_TARGET = 160
+/** Show on page never zooms past this by itself. */
+export const FOCUS_MAX_AUTO = 4
+/** A region drawn across more than this share of the view does not fit. */
+export const FOCUS_FIT_SHARE = 0.9
+/** And one zoomed out to fit takes this share. */
+export const FOCUS_FILL_SHARE = 0.7
+
+/**
+ * The zoom Show on page should use for a region, or `null` to keep the
+ * zoom on screen. The zoom is kept unless the region does not fit in the
+ * view, or is drawn too small to see: then it is zoomed so it does, and no
+ * further.
+ *
+ * @param {{zoom: number, regionWidth: number, regionHeight: number, contentWidth: number, contentHeight: number, min: number, max: number}} spec
+ *   region sizes in page pixels, the view in CSS pixels
+ * @returns {number|null}
+ */
+export function focusZoom(spec) {
+  const zoom = finite(spec.zoom, 1)
+  const regionWidth = Math.max(1, finite(spec.regionWidth, 1))
+  const regionHeight = Math.max(1, finite(spec.regionHeight, 1))
+  const viewWidth = finite(spec.contentWidth, 0)
+  const viewHeight = finite(spec.contentHeight, 0)
+  if (!(viewWidth > 0) || !(viewHeight > 0)) return null
+  const fits = Math.min(
+    (viewWidth * FOCUS_FILL_SHARE) / regionWidth,
+    (viewHeight * FOCUS_FILL_SHARE) / regionHeight,
+  )
+  const clamp = (/** @type {number} */ value) => Math.min(spec.max, Math.max(spec.min, value))
+  if (regionWidth * zoom > viewWidth * FOCUS_FIT_SHARE || regionHeight * zoom > viewHeight * FOCUS_FIT_SHARE) {
+    // Never larger to make it fit: a fitted page under `min` would otherwise
+    // be clamped up to the floor.
+    const smaller = clamp(fits)
+    return smaller < zoom ? smaller : null
+  }
+  if (Math.max(regionWidth, regionHeight) * zoom >= FOCUS_MIN_DRAWN) return null
+  const seen = FOCUS_SMALL_TARGET / Math.max(regionWidth, regionHeight)
+  return clamp(Math.max(zoom, Math.min(seen, fits, FOCUS_MAX_AUTO)))
+}
+
+/**
+ * Where the scroller must be, on one axis, for the page to sit in the view:
+ * centred when it fits, and when it does not, moved only as far as it takes
+ * for no empty canvas to show at either end.
+ *
+ * @param {{start: number, size: number, viewStart: number, viewSize: number, scroll: number}} spec
+ *   the page's and the view's extent on the axis, in client pixels
+ * @returns {number}
+ */
+export function placeAxis(spec) {
+  const { start, size, viewStart, viewSize, scroll } = spec
+  if (size <= viewSize) return Math.max(0, scroll + (start + size / 2) - (viewStart + viewSize / 2))
+  if (start > viewStart) return Math.max(0, scroll + (start - viewStart))
+  const overshoot = viewStart + viewSize - (start + size)
+  if (overshoot > 0) return Math.max(0, scroll - overshoot)
+  return scroll
+}
+
+/**
+ * Where the scroller must be, on one axis, for client position `point` to be
+ * at the centre of the view.
+ *
+ * @param {{point: number, viewStart: number, viewSize: number, scroll: number}} spec
+ * @returns {number}
+ */
+export function centreAxis(spec) {
+  return Math.max(0, spec.scroll + spec.point - (spec.viewStart + spec.viewSize / 2))
+}
+
+/**
  * @param {unknown} value
  * @param {number} fallback
  * @returns {number}

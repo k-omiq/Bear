@@ -17,8 +17,8 @@
     zoomOut,
     zoomFit,
     zoomActual,
+    zoomMax,
     MIN_ZOOM,
-    MAX_ZOOM,
   } from '../state/editor.svelte.js'
   import { shortcutProps } from '../state/session.svelte.js'
   import { IconButton, Readout } from '../ui/index.js'
@@ -60,6 +60,6 @@
   label={t('editor.action.zoomIn')}
   {...shortcutProps('zoom.in')}
   size={28}
-  disabled={drawn >= MAX_ZOOM}
+  disabled={drawn >= zoomMax()}
   onclick={zoomIn}
 />

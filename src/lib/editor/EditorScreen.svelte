@@ -151,7 +151,11 @@
     const box = viewport
     if (!box) return
     box.scrollTo({ top: top + editor.scrollRoom, left: left + editor.scrollRoomSide })
+    const placed = editor.scroll
     await tick()
+    // The canvas has placed the view since (Show on page centring a region on
+    // the page just turned to) and recorded where: that is the position now.
+    if (editor.scroll !== placed) return
     const target = { top: top + editor.scrollRoom, left: left + editor.scrollRoomSide }
     if (box.scrollTop !== target.top || box.scrollLeft !== target.left) box.scrollTo(target)
   }

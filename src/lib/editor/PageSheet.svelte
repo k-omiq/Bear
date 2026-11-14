@@ -1,7 +1,7 @@
 <script>
-  import { tileOrigin, pageVersion } from '../api/tile.js'
+  import { tileOrigin, pageVersion, proxyPlan } from '../api/tile.js'
   import { editor, pages } from '../state/editor.svelte.js'
-  import { pageRatio } from './zoom.js'
+  import { PIXEL_GRID_FROM, naturalWidth, pageRatio } from './zoom.js'
   import { isCopyMode, isDrawingTool } from './tools.js'
   import { isRegionCopy } from '../model/layers.js'
   import DetectionMasks from './DetectionMasks.svelte'
@@ -27,6 +27,7 @@
    *   PageArtwork variant="cleaned"    native composite, clipped by the wipe
    *   PaintLayer                       a stroke's live pixels (DrawLayer's)
    *   DetectionMasks                   what Clean will erase, per detection
+   *   the pixel grid                   every image pixel, from 800% up
    *   RegionLayer                      region outlines, markers, hit targets
    *   DrawLayer                        the drawing surface and its drafts
    *   the wipe divider
@@ -70,6 +71,15 @@
   } = $props()
 
   const ratio = $derived(pageRatio(page))
+  // Screen pixels per image pixel.
+  const pixel = $derived(width / naturalWidth(page))
+  // Drawn larger than its proxy, the page on screen shows itself at its own
+  // resolution (`PageArtwork`'s `full`). A strip page is left on its proxy:
+  // a webtoon segment is narrow enough that its proxy is the page itself,
+  // and a whole wide segment decoded is too much to hold for every page.
+  const full = $derived(current && !strip && width > proxyPlan(page).width)
+  // Far enough in, a grid marks every image pixel.
+  const grid = $derived(pixel >= PIXEL_GRID_FROM)
   const wipe = $derived(editor.wipe)
   const original = $derived(editor.originalVisible)
 
@@ -182,14 +192,14 @@
   style:aspect-ratio="1 / {ratio}"
 >
   {#if asked && (both || covered !== 'original')}
-    <PageArtwork {page} variant="original" from={loadFrom} to={loadTo} hidden={!shown} bind:ready={sourceReady} />
+    <PageArtwork {page} variant="original" {full} from={loadFrom} to={loadTo} hidden={!shown} bind:ready={sourceReady} />
   {/if}
   <div class="cleaned" style:clip-path={clip}>
     {#if asked && (both || covered !== 'cleaned')}
-      <PageArtwork {page} variant="cleaned" from={loadFrom} to={loadTo} hidden={!shown} bind:ready={layersReady} bind:readyVersion={cleanedVersion} />
+      <PageArtwork {page} variant="cleaned" {full} from={loadFrom} to={loadTo} hidden={!shown} bind:ready={layersReady} bind:readyVersion={cleanedVersion} />
       {#if previewing}
         <div class="regional-artwork" style:visibility={shown && previewReady && previewShownFor === page.id ? null : 'hidden'}>
-          <PageArtwork {page} variant="cleaned" composite={false} from={loadFrom} to={loadTo} bind:ready={previewSourceReady} />
+          <PageArtwork {page} variant="cleaned" composite={false} {full} from={loadFrom} to={loadTo} bind:ready={previewSourceReady} />
           <PatchLayers {page} from={loadFrom} to={loadTo} hide={standing ? heldGradient?.regionId : null} bind:ready={previewLayersReady} />
         </div>
       {/if}
@@ -200,6 +210,10 @@
        a detection has no cleaned pixels yet, and its mask is the plan. -->
   {#if current || strip}
     <DetectionMasks {page} />
+
+    {#if grid}
+      <div class="pixel-grid" style:--pixel="{pixel}px" style:--dpr={globalThis.devicePixelRatio || 1} aria-hidden="true"></div>
+    {/if}
 
     <RegionLayer {page} {tabbable} interactive={!drawing} {stripMinY} {stripMaxY} />
 
@@ -258,6 +272,22 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
+  }
+
+  /* One line at the left and the top of every image pixel, a device pixel
+     wide. Over the masks, under the outlines. The grey is the image's, not
+     the interface's: it has to show on black ink and on white paper alike,
+     in either theme, which no token is for. */
+  .pixel-grid {
+    position: absolute;
+    inset: 0;
+    z-index: var(--z-mask);
+    pointer-events: none;
+    --grid-line: calc(1px / var(--dpr, 1));
+    background-image:
+      linear-gradient(to right, rgba(128, 128, 128, .45) var(--grid-line), transparent var(--grid-line)),
+      linear-gradient(to bottom, rgba(128, 128, 128, .45) var(--grid-line), transparent var(--grid-line));
+    background-size: var(--pixel) var(--pixel);
   }
 
   .divider {

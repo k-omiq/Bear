@@ -5,22 +5,31 @@
     pages,
     currentPage,
     consumeStripScroll,
+    consumeViewRequest,
     reportFitScale,
+    reportZoomCeiling,
     reportScrollRoom,
     setStripPosition,
     setStripScope,
+    setScroll,
     setZoom,
+    zoomMax,
     MIN_ZOOM,
     MAX_ZOOM,
   } from '../state/editor.svelte.js'
   import {
+    PIXELATED_FROM,
     anchoredScroll,
+    centreAxis,
     fitScale,
     fitWidth,
+    focusZoom,
     naturalWidth,
     pageRatio,
+    placeAxis,
     sheetWidth,
     wheelZoom,
+    zoomCeiling,
   } from './zoom.js'
   import {
     PRELOAD_SCREENS,
@@ -57,6 +66,13 @@
    *   sheet is drawn at, so the bottom pill's readout is the truth; with `fit`
    *   on, the computed scale goes to `editor.fitScale` through
    *   `reportFitScale` and `displayZoom()` answers for both cases.
+   * - **Where a zoom leaves the view.** The zoom buttons and keys keep the
+   *   view's centre still; fit and 100% put the page in the middle of the
+   *   view where it fits there; Show on page puts one region there
+   *   (`editor.viewRequest`).
+   * - **Pixels.** Past 100% the stage is marked `data-pixels`, and every
+   *   image and canvas on it is drawn nearest-neighbour, so an image pixel is
+   *   a square and not a blur.
    * - **Pinch and modifier-scroll**, anchored under the pointer. A plain wheel
    *   is left alone and keeps scrolling, unless the user has the wheel zoom
    *   (`session.navigation`, `navigation.js#wheelZooms`).
@@ -94,6 +110,9 @@
   let viewportHeight = $state(0)
   let columnOrigin = 0
   let focusedIndex = $state(-1)
+  /* The viewport's padding, for where its content box sits on screen. */
+  let padLeft = 0
+  let padTop = 0
 
   const list = $derived(pages())
   const longstrip = $derived(editor.project?.mode === 'longstrip')
@@ -124,6 +143,20 @@
   const metrics = $derived(
     stripMetrics({ pages: longstrip ? list : [], scale, gap: STRIP_GAP }),
   )
+
+  // The column at 1:1, for the highest zoom it can be drawn at: a long strip
+  // grows past what a browser can lay out long before 12800%.
+  const extent = $derived(
+    longstrip
+      ? Math.max(natural, stripMetrics({ pages: list, scale: 1, gap: STRIP_GAP }).total)
+      : Math.max(natural, natural * ratio),
+  )
+  $effect(() => {
+    reportZoomCeiling(zoomCeiling({ extent, max: MAX_ZOOM }))
+  })
+
+  // How tall the stage is drawn, for centring it in a taller view.
+  const stageHeight = $derived(longstrip ? metrics.total : width * ratio)
 
   // How far past the viewport pages and their tiles are fetched ahead.
   const margin = $derived(viewportHeight * PRELOAD_SCREENS)
@@ -253,6 +286,8 @@
     const origin = stageEl.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop
     contentWidth = width
     contentHeight = height - px(style?.paddingTop) - px(style?.paddingBottom)
+    padLeft = px(style?.paddingLeft)
+    padTop = px(style?.paddingTop)
     viewportWidth = box.clientWidth
     viewportHeight = height
     columnOrigin = origin
@@ -289,8 +324,15 @@
   // then no longer centres a narrow sheet. The margin does it instead, so at
   // `scrollLeft === sideRoom` the page is where it sits with no room at all.
   const sideMargin = $derived(sideRoom ? sideRoom + Math.max(0, (contentWidth - width) / 2) : 0)
+  // The same at the top and bottom. The viewport aligns its content to the
+  // top, so a page shorter than the view - fitted by its width, or a small
+  // scan at 100% - sat under the top bar with the empty canvas all below it.
+  const topMargin = $derived(
+    room + (!editor.loading && list.length ? Math.max(0, (contentHeight - stageHeight) / 2) : 0),
+  )
   let roomApplied = 0
   let sideRoomApplied = 0
+  let topApplied = 0
 
   // The margin and the scroll that makes up for it are written together,
   // here and not in the markup: an effect can run before the markup has caught
@@ -301,14 +343,21 @@
     const next = room
     const side = sideRoom
     const margin = sideMargin
+    const top = topMargin
     untrack(() => {
       const box = scroller()
       if (!box || !stageEl) return
-      // A zoom changes the side margin and not the room: the sheet stays
-      // centred on the same place and the scroller does not move.
+      // A zoom changes the margins and not the room: the sheet stays centred
+      // on the same place and the scroller does not move.
       stageEl.style.marginLeft = stageEl.style.marginRight = margin ? `${margin}px` : ''
-      if (next === roomApplied && side === sideRoomApplied) return
-      stageEl.style.marginTop = stageEl.style.marginBottom = next ? `${next}px` : ''
+      stageEl.style.marginTop = stageEl.style.marginBottom = top ? `${top}px` : ''
+      if (next === roomApplied && side === sideRoomApplied) {
+        // A short column centred anew has moved its origin.
+        if (top !== topApplied) measureViewport()
+        topApplied = top
+        return
+      }
+      topApplied = top
       box.scrollTop += next - roomApplied
       box.scrollLeft += side - sideRoomApplied
       roomApplied = next
@@ -419,6 +468,183 @@
   })
 
   /* ---------------------------------------------------------------- */
+  /* Where a zoom leaves the view                                      */
+  /* ---------------------------------------------------------------- */
+
+  // `editor.viewRequest` says what the scroller should do once a zoom has
+  // landed: keep the view's centre still (the buttons and keys), put the page
+  // in the middle (fit, 100%), or put one region there (Show on page). The
+  // stage's box is taken before the DOM takes the new scale, and the
+  // scroller placed after it, here, below every other effect that moves it:
+  // the scroll room's correction and the strip's own anchoring have already
+  // run, and this has the last word.
+  //
+  // A strip's vertical position is the strip's own anchoring (above) for a
+  // zoom: only a region moves it from here.
+
+  /** @type {{request: object, box: import('./zoom.js').Box}|null} */
+  let viewBefore = null
+  let focusZoomedFor = 0
+
+  $effect.pre(() => {
+    const request = editor.viewRequest
+    untrack(() => {
+      if (!request || !stageEl || viewBefore?.request === request) return
+      viewBefore = { request, box: boxOf(stageEl) }
+    })
+  })
+
+  $effect(() => {
+    const request = editor.viewRequest
+    // Tracked so a request waiting for the pages, or for the zoom it chose,
+    // is placed once they have been drawn.
+    scale
+    width
+    metrics
+    if (!request) return
+    untrack(() => placeView(request))
+  })
+
+  /**
+   * @param {NonNullable<typeof editor.viewRequest>} request
+   */
+  function placeView(request) {
+    const box = scroller()
+    if (!box || !stageEl || editor.loading || list.length === 0) return
+    if (request.kind === 'focus' && focusZoomedFor !== request.token) {
+      focusZoomedFor = request.token
+      const zoom = regionZoom(request)
+      const was = scale
+      if (zoom !== null) setZoom(zoom)
+      // Placed again once the new scale is drawn.
+      if (scale !== was) return
+    }
+    const before = viewBefore?.request === request ? viewBefore.box : null
+    viewBefore = null
+    consumeViewRequest()
+    const next = viewTarget(request, box, before)
+    if (!next) return
+    box.scrollLeft = next.left
+    box.scrollTop = next.top
+    readScroll()
+    // Recorded now, not on the scroll event a frame later: a page turn is
+    // followed by the shell's restore of the page's saved position
+    // (`EditorScreen.svelte#adoptScroll`), which reads it, and whose second
+    // pass stands down once it has changed. Otherwise the restore put the
+    // page back at its top-left.
+    setScroll(box.scrollTop - editor.scrollRoom, box.scrollLeft - editor.scrollRoomSide)
+  }
+
+  /**
+   * The scroller position a request asks for, from the stage as drawn now.
+   *
+   * @param {NonNullable<typeof editor.viewRequest>} request
+   * @param {HTMLElement} box the scroller
+   * @param {import('./zoom.js').Box|null} before the stage before the zoom
+   * @returns {{left: number, top: number}|null}
+   */
+  function viewTarget(request, box, before) {
+    if (!stageEl) return null
+    const view = viewBox(box)
+    const page = boxOf(stageEl)
+    let left = box.scrollLeft
+    let top = box.scrollTop
+    if (request.kind === 'focus') {
+      const point = regionPoint(request, page)
+      if (!point) return null
+      left = centreAxis({ point: point.x, viewStart: view.left, viewSize: view.width, scroll: left })
+      top = centreAxis({ point: point.y, viewStart: view.top, viewSize: view.height, scroll: top })
+      return { left, top }
+    }
+    if (before) {
+      const next = anchoredScroll({
+        pointerX: view.left + view.width / 2,
+        pointerY: view.top + view.height / 2,
+        before,
+        after: page,
+        scrollLeft: left,
+        scrollTop: top,
+      })
+      left = next.left
+      if (!longstrip) top = next.top
+    }
+    if (request.kind === 'centre') {
+      const shiftX = left - box.scrollLeft
+      const shiftY = top - box.scrollTop
+      left = placeAxis({ start: page.left - shiftX, size: page.width, viewStart: view.left, viewSize: view.width, scroll: left })
+      if (!longstrip) {
+        top = placeAxis({ start: page.top - shiftY, size: page.height, viewStart: view.top, viewSize: view.height, scroll: top })
+      }
+    }
+    return { left, top }
+  }
+
+  /**
+   * The viewport's content box on screen: what "the view" is centred on.
+   *
+   * @param {HTMLElement} box
+   * @returns {import('./zoom.js').Box}
+   */
+  function viewBox(box) {
+    const rect = box.getBoundingClientRect()
+    return {
+      left: rect.left + box.clientLeft + padLeft,
+      top: rect.top + box.clientTop + padTop,
+      width: contentWidth,
+      height: contentHeight,
+    }
+  }
+
+  /**
+   * The centre of a request's region on screen.
+   *
+   * @param {NonNullable<typeof editor.viewRequest>} request
+   * @param {import('./zoom.js').Box} stage
+   * @returns {{x: number, y: number}|null}
+   */
+  function regionPoint(request, stage) {
+    const bbox = request.bbox
+    if (!bbox) return null
+    let sheet = stage
+    if (longstrip) {
+      const index = request.pageIndex ?? -1
+      if (!(index >= 0 && index < metrics.count)) return null
+      const pageWidth = metrics.widths[index]
+      sheet = {
+        left: stage.left + (width - pageWidth) / 2,
+        top: stage.top + metrics.offsets[index],
+        width: pageWidth,
+        height: metrics.units[index] - STRIP_GAP,
+      }
+    }
+    return {
+      x: sheet.left + ((bbox.x + bbox.w / 2) / 100) * sheet.width,
+      y: sheet.top + ((bbox.y + bbox.h / 2) / 100) * sheet.height,
+    }
+  }
+
+  /**
+   * The zoom Show on page wants for a request's region, or `null` to keep it.
+   *
+   * @param {NonNullable<typeof editor.viewRequest>} request
+   * @returns {number|null}
+   */
+  function regionZoom(request) {
+    const page = list[request.pageIndex ?? -1]
+    const bbox = request.bbox
+    if (!page || !bbox) return null
+    return focusZoom({
+      zoom: scale,
+      regionWidth: (bbox.w / 100) * naturalWidth(page),
+      regionHeight: (bbox.h / 100) * naturalWidth(page) * pageRatio(page),
+      contentWidth,
+      contentHeight,
+      min: MIN_ZOOM,
+      max: zoomMax(),
+    })
+  }
+
+  /* ---------------------------------------------------------------- */
   /* Zoom                                                              */
   /* ---------------------------------------------------------------- */
 
@@ -448,7 +674,7 @@
     // Continue the gesture only while the page is still at the scale it last
     // set: a button, a key or fit in between starts from what is on screen.
     const from = pinchFrame || zoom === pinchKept ? pinchZoom : zoom
-    const target = wheelZoom({ deltaY: event.deltaY, zoom: from, min: MIN_ZOOM, max: MAX_ZOOM })
+    const target = wheelZoom({ deltaY: event.deltaY, zoom: from, min: MIN_ZOOM, max: zoomMax() })
     if (target === null) return
     pinchZoom = target
     pinchAt = { x: event.clientX, y: event.clientY }
@@ -640,6 +866,7 @@
 <div
   class="stage"
   bind:this={stageEl}
+  data-pixels={scale > PIXELATED_FROM ? '' : undefined}
   style:width={longstrip && list.length ? `${width}px` : undefined}
   style:height={longstrip && list.length ? `${metrics.total}px` : undefined}
   onfocusin={(event) => {
@@ -709,6 +936,18 @@
      Fixed offsets also avoid spacer rounding and scroll anchoring corrections. */
   .slot {
     position: absolute;
+  }
+
+  /* Past 100% an image pixel is drawn as a square, not a blur: the page, the
+     masks, the paint, the layers and every preview. A proxy tile is exempt
+     (`PageArtwork`, `data-proxy`): its pixels are not the image's, and the
+     page at its own resolution is laid over it at this zoom. */
+  .stage[data-pixels] :global(img),
+  .stage[data-pixels] :global(canvas) {
+    image-rendering: pixelated;
+  }
+  .stage[data-pixels] :global(img[data-proxy]) {
+    image-rendering: auto;
   }
 
   /* The hand wins over every tool's own cursor while it is there. */

@@ -72,6 +72,7 @@ import {
   reloadRegionPages,
   reportJobConflict,
   select,
+  focusRegion,
   selectedRegion,
   setToolParam,
   setTool,
@@ -1600,7 +1601,11 @@ function rerunInCloud(region) {
  * Point at a region on the canvas. A declined region has no mask and nothing
  * visibly happened to it, so this is the only way to find it.
  *
- * Selection only. `hoverId` is transient and is cleared by whoever set it (the
+ * Turns to the region's page when it is not the one on screen, selects the
+ * region and puts it in the middle of the view, at the zoom on screen unless
+ * the region does not fit or is too small to see (`focusRegion`).
+ *
+ * No hover. `hoverId` is transient and is cleared by whoever set it (the
  * highlight contract in `state/editor.svelte.js`); this is a click, so there
  * is no matching "and now the pointer left" to clear it again, and a hover
  * left switched on would outlive the row it came from. Selection is sticky by
@@ -1609,7 +1614,7 @@ function rerunInCloud(region) {
  * @param {import('../api/backend.js').ApiRegion} region
  */
 export function showOnPage(region) {
-  select(region.id)
+  focusRegion(region)
 }
 
 /**

@@ -3,14 +3,23 @@ import {
   FALLBACK_NATURAL_WIDTH,
   FALLBACK_RATIO,
   MIN_SHEET_WIDTH,
+  FOCUS_MAX_AUTO,
+  FOCUS_SMALL_TARGET,
+  MAX_DRAWN_EXTENT,
+  ZOOM_STOPS,
   anchoredScroll,
+  centreAxis,
   clampZoom,
   fitScale,
   fitWidth,
+  focusZoom,
   naturalWidth,
   pageRatio,
+  placeAxis,
   sheetWidth,
+  stepZoom,
   wheelZoom,
+  zoomCeiling,
 } from './zoom.js'
 
 describe('naturalWidth', () => {
@@ -206,5 +215,106 @@ describe('anchoredScroll', () => {
       scrollTop: 5,
     })
     expect(next).toEqual({ left: 0, top: 0 })
+  })
+})
+
+describe('stepZoom', () => {
+  const range = { min: 0.4, max: 128 }
+
+  it('climbs the ladder to 12800% and back', () => {
+    const up = [0.4]
+    while (up.at(-1) < 128) up.push(stepZoom({ ...range, zoom: up.at(-1), direction: 'in' }))
+    expect(up).toEqual([...ZOOM_STOPS])
+    const down = [128]
+    while (down.at(-1) > 0.4) down.push(stepZoom({ ...range, zoom: down.at(-1), direction: 'out' }))
+    expect(down).toEqual([...ZOOM_STOPS].reverse())
+  })
+
+  it('goes from between two stops to the nearer one in the direction asked', () => {
+    expect(stepZoom({ ...range, zoom: 0.26, direction: 'in' })).toBe(0.4)
+    expect(stepZoom({ ...range, zoom: 7.43, direction: 'in' })).toBe(8)
+    expect(stepZoom({ ...range, zoom: 7.43, direction: 'out' })).toBe(6)
+    // A zoom a rounding away from a stop is that stop.
+    expect(stepZoom({ ...range, zoom: 0.999, direction: 'in' })).toBe(1.25)
+  })
+
+  it('stays inside the range, a lower ceiling included', () => {
+    expect(stepZoom({ ...range, zoom: 128, direction: 'in' })).toBe(128)
+    expect(stepZoom({ ...range, zoom: 0.4, direction: 'out' })).toBe(0.4)
+    expect(stepZoom({ min: 0.4, max: 10, zoom: 8, direction: 'in' })).toBe(10)
+  })
+})
+
+describe('zoomCeiling', () => {
+  it('is the maximum for a page', () => {
+    expect(zoomCeiling({ extent: 2400, max: 128 })).toBe(128)
+  })
+
+  it('keeps a long strip column inside what a browser lays out', () => {
+    // Fifty 4000px segments: 200000px at 1:1.
+    const ceiling = zoomCeiling({ extent: 200_000, max: 128 })
+    expect(ceiling).toBe(80)
+    expect(ceiling * 200_000).toBeLessThanOrEqual(MAX_DRAWN_EXTENT)
+  })
+
+  it('falls back to the maximum when there is nothing to measure', () => {
+    expect(zoomCeiling({ extent: 0, max: 128 })).toBe(128)
+    expect(zoomCeiling({ extent: Number.NaN, max: 128 })).toBe(128)
+  })
+})
+
+describe('focusZoom', () => {
+  const view = { contentWidth: 800, contentHeight: 600, min: 0.4, max: 128 }
+
+  it('keeps the zoom when the region fits and can be seen', () => {
+    expect(focusZoom({ ...view, zoom: 1, regionWidth: 200, regionHeight: 100 })).toBeNull()
+  })
+
+  it('zooms out until a region that does not fit takes most of the view', () => {
+    const zoom = focusZoom({ ...view, zoom: 4, regionWidth: 400, regionHeight: 200 })
+    expect(zoom).toBeCloseTo(1.4)
+    expect(400 * zoom).toBeLessThanOrEqual(800)
+  })
+
+  it('zooms in on a region too small to see, and no further than it needs', () => {
+    // 20px at 26% is 5px on screen.
+    const zoom = focusZoom({ ...view, zoom: 0.26, regionWidth: 20, regionHeight: 10 })
+    expect(zoom).toBe(FOCUS_MAX_AUTO)
+    expect(focusZoom({ ...view, zoom: 0.26, regionWidth: 80, regionHeight: 60 })).toBe(FOCUS_SMALL_TARGET / 80)
+  })
+
+  it('never enlarges a page to fit a region that is already all on screen', () => {
+    // A fitted page under the floor, and a region nearly the whole page.
+    expect(focusZoom({ ...view, zoom: 0.26, regionWidth: 1600, regionHeight: 2300 })).toBeNull()
+  })
+
+  it('stays inside the range', () => {
+    expect(focusZoom({ ...view, zoom: 1, regionWidth: 0, regionHeight: 0, max: 2 })).toBe(2)
+    expect(focusZoom({ ...view, zoom: 2, regionWidth: 6000, regionHeight: 6000 })).toBe(0.4)
+  })
+})
+
+describe('placeAxis', () => {
+  const view = { viewStart: 70, viewSize: 600 }
+
+  it('centres a page that fits', () => {
+    // Page at 100..300, view centre at 370: the scroller moves back by 170.
+    expect(placeAxis({ ...view, start: 100, size: 200, scroll: 500 })).toBe(330)
+  })
+
+  it('pulls a larger page back over the view, and no further', () => {
+    // Its top edge is 30px into the view.
+    expect(placeAxis({ ...view, start: 100, size: 2000, scroll: 500 })).toBe(530)
+    // Its bottom edge is 100px short of the view's.
+    expect(placeAxis({ ...view, start: -1430, size: 2000, scroll: 500 })).toBe(400)
+    // It covers the view: nothing to do.
+    expect(placeAxis({ ...view, start: -100, size: 2000, scroll: 500 })).toBe(500)
+  })
+})
+
+describe('centreAxis', () => {
+  it('moves the point to the middle of the view', () => {
+    expect(centreAxis({ point: 900, viewStart: 70, viewSize: 600, scroll: 1000 })).toBe(1530)
+    expect(centreAxis({ point: 0, viewStart: 70, viewSize: 600, scroll: 100 })).toBe(0)
   })
 })
