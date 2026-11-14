@@ -2409,6 +2409,7 @@ export const es = {
     },
     hint: {
       showOnPage: 'Desplazarse a esta región y seleccionarla',
+      restoreMask: 'Devuelve la máscara a la página tal como estaba antes de que fallara esta limpieza. No se limpia nada.',
       cleanAnyway: 'Limpiarla a pesar del filtro de escritura',
       cleanDetected: 'Limpiar esta región en este equipo, a partir de la máscara ya encontrada',
       cleanDetectedCloud: 'Limpiar esta región en tu GPU en la nube. La primera vez en un proyecto, verás el costo y lo confirmarás.',
@@ -2988,6 +2989,7 @@ export const es = {
       paddingRefreshFailed: 'Se guardó el margen de la máscara, pero no se pudo actualizar la página. Vuelve a abrir el capítulo para ver la máscara actualizada.',
       typeFailed: 'No se pudo cambiar el tipo de texto. La región está como estaba.',
       approveFailed: 'No se pudo aprobar la máscara. La región está como estaba.',
+      restoreFailed: 'No se pudo restaurar la máscara. La región está como estaba.',
       rejectNoMask: 'Esta capa no la hizo un limpiador, así que no tiene máscara que restaurar. Elimínala para recuperar el original.',
       rejectFailed: 'No se pudo rechazar el resultado. La página está como estaba.',
       reapplyFailed: 'No se pudo restaurar el resultado. La página está como estaba.',

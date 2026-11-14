@@ -926,7 +926,10 @@ fn read_state(sidecar: &Path, digest: &str) -> Result<PageState, String> {
 /// kept already is not read again.
 fn page_files(state: &PageState) -> Vec<(String, Option<String>)> {
     let mut files = Vec::new();
-    for record in &state.detections {
+    // A detection a decline kept on its row is the page's too: Restore mask
+    // puts it back, so Undo must be able to put its files back.
+    let declined = state.untouched.iter().filter_map(|row| row.declined_from.as_deref());
+    for record in state.detections.iter().chain(declined) {
         for reference in record.files() {
             let known = (reference == record.mask_ref && !record.mask_sha256.is_empty())
                 .then(|| record.mask_sha256.clone());

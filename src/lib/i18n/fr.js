@@ -2409,6 +2409,7 @@ export const fr = {
     },
     hint: {
       showOnPage: 'Faire défiler jusqu’à cette zone et la sélectionner',
+      restoreMask: 'Remet le masque sur la page tel qu’il était avant l’échec de ce nettoyage. Rien n’est nettoyé.',
       cleanAnyway: 'La nettoyer malgré le filtre d’écriture',
       cleanDetected: 'Nettoyer cette zone sur cet ordinateur, à partir du masque déjà trouvé',
       cleanDetectedCloud: 'Nettoyer cette zone sur votre GPU cloud. La première fois dans un projet, vous voyez le coût et confirmez.',
@@ -2988,6 +2989,7 @@ export const fr = {
       paddingRefreshFailed: 'La marge du masque a été enregistrée, mais la page n’a pas pu être actualisée. Rouvrez le chapitre pour voir le masque mis à jour.',
       typeFailed: 'Impossible de modifier le type de texte. La zone est inchangée.',
       approveFailed: 'Impossible d’approuver le masque. La zone est inchangée.',
+      restoreFailed: 'Impossible de restaurer le masque. La zone est inchangée.',
       rejectNoMask: 'Ce calque n’a pas été fait par un nettoyeur et n’a donc pas de masque à restaurer. Supprimez-le pour rétablir l’original.',
       rejectFailed: 'Impossible de rejeter le résultat. La page est inchangée.',
       reapplyFailed: 'Impossible de rétablir le résultat. La page est inchangée.',

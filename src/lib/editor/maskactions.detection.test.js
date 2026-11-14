@@ -32,7 +32,7 @@ import {
   undoLabelKey,
 } from '../state/editor.svelte.js'
 import { session } from '../state/session.svelte.js'
-import { runRegionMenuItem, setDetectedMaskPadding } from './maskactions.svelte.js'
+import { runMaskAction, runRegionMenuItem, setDetectedMaskPadding } from './maskactions.svelte.js'
 import { applyActiveToolToRegion } from './toolapply.svelte.js'
 
 const ZERO = { method: 0, openChapter: 0, export: 0, cloud: 0, provision: 0, region: 0, pageTail: 0, noticeStagger: 0 }
@@ -614,5 +614,135 @@ describe('clean, undo, redo and reject in an open chapter', () => {
     await reloadPage(1)
     expect(plain(current(warning.id))).toEqual(plain(warning))
     expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
+  })
+})
+
+/**
+ * Restore mask on a failed clean, against the browser mock: a run whose
+ * clean of a detection fails (`cleanDecline`, as a quality decline does
+ * natively) leaves a declined row with no mask, and Restore mask makes it the
+ * same detection again, its mask intact and nothing cleaned. The backend
+ * records the step under the reject's label; Undo puts the failed row back
+ * and Redo the detection.
+ */
+describe('Restore mask on a failed clean', () => {
+  const plain = (/** @type {any} */ value) => JSON.parse(JSON.stringify(value))
+  const quiet = async () => {
+    await settled(editor.history)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await settled(editor.history)
+  }
+
+  /** @param {any} backend @param {'detect'|'clean'} mode */
+  async function run(backend, mode) {
+    let done = () => {}
+    const finished = new Promise((resolve) => { done = /** @type {any} */ (resolve) })
+    const stop = backend.subscribe((/** @type {any} */ event) => { if (event.type === 'run-finished') done() })
+    await backend.runClean({ scope: 'page', chapterId: CHAPTER, pageIndex: 0, mode })
+    await finished
+    stop()
+    await reloadPage(0)
+    await quiet()
+  }
+
+  /** The first page detected, then cleaned by a run whose first clean fails. */
+  async function failed() {
+    const backend = createMockBackend({ timing: ZERO, cleanDecline: 'first' })
+    setBackend(backend)
+    const project = (await backend.listProjects()).find((candidate) => candidate.chapters.some((chapter) => chapter.id === CHAPTER))
+    expect(await openEditorChapter(project.id, CHAPTER)).toBe(true)
+    await run(backend, 'detect')
+    const detections = plain(editor.chapter.pages[0].regions.filter((/** @type {any} */ region) => region.outcome === 'detected'))
+    await run(backend, 'clean')
+    const row = editor.chapter.pages[0].regions.find((/** @type {any} */ region) => region.outcome === 'declined')
+    expect(row, 'a region the run failed to clean').toBeTruthy()
+    const detection = detections.find((/** @type {any} */ region) => region.id === row.id)
+    return { backend, row: plain(row), detection }
+  }
+
+  afterEach(async () => {
+    select(null)
+    await closeEditorChapter()
+  })
+
+  it('offers Restore mask on the failed row, in its menu and on the row', async () => {
+    const { row } = await failed()
+    expect(row.mask).toBeNull()
+    const ids = regionMenuSections(row).flatMap((section) => section.items.map((item) => item.id))
+    expect(ids[0]).toBe('restoreMask')
+    expect(ids).toContain('delete')
+  })
+
+  it('puts the same detection back, mask intact, and cleans nothing', async () => {
+    const { backend, row, detection } = await failed()
+    const approve = vi.spyOn(backend, 'approveHeldMask')
+    const clean = vi.spyOn(backend, 'applyTool')
+    select(row.id)
+
+    expect(await runRegionMenuItem('restoreMask', current(row.id))).toBe(true)
+    await quiet()
+    expect(approve).toHaveBeenCalledWith({ regionId: row.id, paddingPx: expect.any(Number) })
+    expect(clean).not.toHaveBeenCalled()
+    expect(plain(current(row.id))).toEqual(detection)
+    expect(editor.selectionId).toBe(row.id)
+    expect(undoLabelKey()).toBe('masks.command.rejectResult')
+    expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
+
+    // Undo puts the failed row back, Redo the detection.
+    undo()
+    await quiet()
+    expect(plain(current(row.id))).toEqual(row)
+    redo()
+    await quiet()
+    expect(plain(current(row.id))).toEqual(detection)
+
+    // And it cleans again like any detection.
+    expect(await runRegionMenuItem('engine:fill', current(row.id))).toBe(true)
+    await quiet()
+    expect(current(row.id)).toMatchObject({ outcome: 'cleaned' })
+    expect(current(row.id).mask).toBeTruthy()
+  })
+
+  it('makes a detection from the box of a failed row that kept no mask', async () => {
+    // A fixture declined row, as an older build left one.
+    const OLD = 'wandering-moon-ch12'
+    const backend = createMockBackend({ timing: ZERO })
+    setBackend(backend)
+    editor.chapter = /** @type {any} */ ({ id: OLD, review: [], pages: await backend.loadPages({ chapterId: OLD, indices: [0, 1, 2, 3, 4, 5, 6] }) })
+    const row = editor.chapter.pages.flatMap((/** @type {any} */ page) => page.regions)
+      .find((/** @type {any} */ region) => region.outcome === 'declined')
+    expect(row, 'a declined fixture region').toBeTruthy()
+    editor.toolParams.autoClean.maskPadding = 4
+    try {
+      expect(await runMaskAction('restoreMask', row)).toBe(true)
+    } finally {
+      editor.toolParams.autoClean.maskPadding = 0
+    }
+    const restored = current(row.id)
+    expect(restored).toMatchObject({ outcome: 'detected', paddingPx: 4 })
+    expect(restored.mask).toBeTruthy()
+    expect(restored.declineReason ?? null).toBeNull()
+  })
+
+  it('never sends a region that is not a failed clean, and says a refusal', async () => {
+    const approveHeldMask = vi.fn()
+    setBackend(/** @type {any} */ ({ approveHeldMask }))
+    const mask = { id: 'p0-d1-m1', provenance: { engine: 'fill' } }
+    for (const region of [
+      { id: 'p0-d1', outcome: 'detected', mask },
+      { id: 'p0-r1', outcome: 'cleaned', mask },
+      { id: 'p0-u1', outcome: 'gate-skipped', mask: null },
+    ]) {
+      expect(await runRegionMenuItem('restoreMask', /** @type {any} */ (region))).toBe(false)
+    }
+    expect(approveHeldMask).not.toHaveBeenCalled()
+
+    const row = { id: 'p0-u2', pageId: 'p0', outcome: 'declined', declineReason: 'decline.reason.qualityMetric', mask: null }
+    editor.chapter = /** @type {any} */ ({ id: 'c', review: [], pages: [{ id: 'p0', index: 0, status: 'unclean', resident: true, regions: [row] }] })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    approveHeldMask.mockRejectedValueOnce(new Error('clean_mask_unreadable: p0-d1: detections/p0-d1.mask: gone'))
+    expect(await runRegionMenuItem('restoreMask', current('p0-u2'))).toBe(false)
+    expect(app.notices.at(-1)).toMatchObject({ key: 'notice.mask.restoreFailed', tone: 'warn' })
+    expect(current('p0-u2')).toMatchObject({ outcome: 'declined', mask: null })
   })
 })

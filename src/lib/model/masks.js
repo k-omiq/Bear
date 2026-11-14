@@ -403,7 +403,8 @@ export function detectedActions(options = {}) {
 
 /**
  * @typedef {Object} RegionMenuItem
- * @property {string} id - `retry`, `retryWider`, `reject`, `finishing`, `delete`,
+ * @property {string} id - `retry`, `retryWider`, `reject`, `restoreMask` (a
+ *   failed clean's Restore mask), `finishing`, `delete`,
  *   `engine:<rung>`, `type:inside` / `type:outside` (a detected region's text
  *   type), `padding` (a detected region's Mask padding), or, on a held region,
  *   `approveMask`, `approve` and `approve:<rung>`
@@ -530,6 +531,12 @@ export function regionMenuSections(region, options = {}) {
   // A model picked here runs as named (`maskactions.svelte.js#cleanAnyway`).
   const held = region?.outcome === 'gate-skipped' || region?.outcome === 'candidate'
   if (!mask && (held || region?.outcome === 'declined')) {
+    // A failed clean goes back to its mask, as a cleaned result does: the
+    // same Restore mask, ahead of the models that would clean it again.
+    if (region?.outcome === 'declined') {
+      sections.push({ id: 'restore', labelKey: null,
+        items: [{ id: 'restoreMask', labelKey: 'masks.action.rejectResult', icon: 'undo' }] })
+    }
     if (held) {
       sections.push({ id: 'approve', labelKey: null,
         items: [
@@ -598,7 +605,9 @@ export function regionMenuSections(region, options = {}) {
  * The action set for an unmasked "needs review" entry - a declined or
  * gate-skipped region. Both kinds get `showOnPage` (declined regions carry
  * a canvas marker and are otherwise unfindable);
- * gate-skips additionally get `cleanAnyway`.
+ * gate-skips additionally get `cleanAnyway`, and a declined region - a
+ * failed clean - `restoreMask`, which puts its mask back on the page
+ * (`maskactions.svelte.js#restoreDeclinedMask`).
  *
  * @param {import('./types.js').Region} region
  * @returns {MaskAction[]}
@@ -607,6 +616,9 @@ export function reviewEntryActions(region) {
   const actions = [{ id: 'showOnPage', labelKey: 'masks.action.showOnPage' }]
   if (region.outcome === 'gate-skipped') {
     actions.push({ id: 'cleanAnyway', labelKey: 'masks.action.cleanAnyway' })
+  }
+  if (region.outcome === 'declined') {
+    actions.push({ id: 'restoreMask', labelKey: 'masks.action.rejectResult', hintKey: 'masks.hint.restoreMask' })
   }
   return actions
 }

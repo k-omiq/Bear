@@ -3054,6 +3054,7 @@ export const en = {
     },
     hint: {
       showOnPage: 'Scroll to this region and select it',
+      restoreMask: 'Put the mask back on the page as it was before this clean failed. Nothing is cleaned.',
       cleanAnyway: 'Clean it despite the script gate',
       cleanDetected: 'Clean this region on this computer, from the mask already found',
       cleanDetectedCloud: 'Clean this region on your cloud GPU. The first time in a project, you see the cost and confirm.',
@@ -3860,6 +3861,7 @@ export const en = {
       // The region menu's Approve mask was refused: the held region was
       // cleaned or removed meanwhile, or could not be saved. Nothing changed.
       approveFailed: 'Could not approve the mask. The region is as it was.',
+      restoreFailed: 'Could not restore the mask. The region is as it was.',
       // Reject result, or Undo of a clean, on a result with no detection kept
       // for it: the chapter was cleaned before a clean kept one. Deleting the
       // layer is what brings the original pixels back there.

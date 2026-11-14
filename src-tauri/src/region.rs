@@ -6087,6 +6087,13 @@ fn order_after_page(job: &Job, source_idx: usize) -> u32 {
         .map_or(0, |order| order.saturating_add(1))
 }
 
+/// Whether an untouched row is a failed clean's (a decline, or a region a
+/// run could not clean), not a row the gate or grouping held back. Its
+/// Restore mask is the region menu's, and its undo step says so.
+fn is_declined_row(row: &cleaner_core::project::RegionUntouched) -> bool {
+    row.inside_bubble.is_none() && !run::is_gate_skip(&row.reason)
+}
+
 /// `approveHeldMask`'s answer: the detection the held row became, and the
 /// page's status with it.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -6111,8 +6118,15 @@ pub struct ApprovedMask {
 /// is a hand mask's ([`hand_detection`]) with the row's own kind
 /// ([`untouched_outside`]) and the pick a clean of it would have started on.
 ///
-/// `null` for a region that is not a held row on this page. No undo: deleting
-/// the detection is the way back, as for every detection.
+/// A failed clean's row (`is_declined_row`) takes the same command as the
+/// interface's Restore mask: the detection its decline kept comes back as it
+/// was stored, same id, files and padding, and `padding_px` is not applied
+/// ([`Job::restore_declined_detection`]). A row that kept none (an older
+/// build, a one-pass decline) is made a detection from its lettering as a
+/// held row is. Either is one undo step under `masks.command.rejectResult`.
+///
+/// `null` for a region that is not a held row on this page. Undo puts the
+/// held row back (`history.rs#record_pages`).
 #[tauri::command]
 pub async fn approve_held_mask(
     app: tauri::AppHandle,
@@ -6158,6 +6172,23 @@ fn approve_held_mask_at(
     else {
         return Ok(None);
     };
+    // A failed clean's row, Restore mask: put back the mask a decline kept,
+    // or, where it kept none, make one from the row's lettering below.
+    let declined = is_declined_row(&row);
+    if row.declined_from.is_some() {
+        let page_before = crate::history::capture_pages(&job, &[source_idx]);
+        let restored = job.restore_declined_detection(&row).map_err(|error| match error {
+            cleaner_core::project::CleanRestoreError::Store(error) => error.to_string(),
+            other => format!("clean_mask_unreadable: {other}"),
+        })?;
+        if let Some(region_id) = restored {
+            crate::history::record_pages(&job, &located.chapter_id, crate::history::REJECT_LABEL, None, page_before);
+            let page_status = crate::library::page_of(&located.chapter_id, &job.project, located.page_index)
+                .map(|page| page.status.to_owned())
+                .unwrap_or_default();
+            return Ok(Some(ApprovedMask { region_id, page_status }));
+        }
+    }
     let lettering = match job.load_held_lettering(&row).map_err(|e| e.to_string())? {
         Some((lettering, _)) => lettering,
         None => {
@@ -6197,7 +6228,8 @@ fn approve_held_mask_at(
     if padding > 0 {
         pad_detections(&mut job, &located.chapter_id, Some(located.page_index), padding, Some(&created))?;
     }
-    crate::history::record_pages(&job, &located.chapter_id, crate::history::APPROVE_LABEL, None, page_before);
+    let label = if declined { crate::history::REJECT_LABEL } else { crate::history::APPROVE_LABEL };
+    crate::history::record_pages(&job, &located.chapter_id, label, None, page_before);
     let page_status = crate::library::page_of(&located.chapter_id, &job.project, located.page_index)
         .map(|page| page.status.to_owned())
         .unwrap_or_default();
@@ -8430,7 +8462,7 @@ mod tests {
         job.project.counters.gate_dropped = 1;
         job.leave_untouched_rows(vec![cleaner_core::project::PendingUntouched {
             row: cleaner_core::project::RegionUntouched {
-                source_idx: 0, bbox, reason: reason.to_owned(), inside_bubble: None, inside_balloon: None, lettering: None,
+                source_idx: 0, bbox, reason: reason.to_owned(), inside_bubble: None, inside_balloon: None, lettering: None, declined_from: None,
             },
             lettering: lettering.map(|mask| (mask.clone(), 0.5)),
         }]).unwrap();
@@ -12666,6 +12698,59 @@ mod mask_edit_tests {
         assert_eq!(undone.cursor, 0);
         assert_eq!(std::fs::read(&located.job_path).unwrap(), manifest);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Restore mask on a failed clean: the detection a run's decline kept on
+    /// its row comes back exactly, same id, masks and padding, and the
+    /// padding asked for is not applied. One undo step under the reject's
+    /// label: Undo puts the failed row back with its kept detection, Redo the
+    /// detection again.
+    #[test]
+    fn restoring_a_declined_detection_puts_back_the_same_mask_and_undoes() {
+        let (root, located, id) = page_with_a_detection("restore-declined");
+        let start = detection_state(&located.job_path);
+        let mut job = Job::open(&located.job_path).unwrap();
+        job.project.counters.declined = 1;
+        assert!(job.decline_detection(&id, "decline.reason.qualityMetric").unwrap());
+        drop(job);
+        let rows = |located: &Located| Job::open(&located.job_path).unwrap().project.regions_untouched.clone();
+        let failed = rows(&located);
+        assert_eq!(failed.len(), 1);
+        assert!(detection_state(&located.job_path).is_empty());
+        let row_id = untouched_id(job_page_id(&id), failed[0].bbox);
+
+        let restored = approve_held_mask_at(&located, &row_id, 5, |_, _, _| panic!("no detector for a kept mask"))
+            .unwrap().expect("restored");
+        assert_eq!(restored.region_id, id);
+        assert!(rows(&located).is_empty());
+        assert_eq!(detection_state(&located.job_path), start);
+        assert_eq!(Job::open(&located.job_path).unwrap().project.counters.declined, 0);
+        let journal = crate::history::load(&located.job_path);
+        assert_eq!(journal.entries.iter().map(|entry| entry.label.as_str()).collect::<Vec<_>>(), [crate::history::REJECT_LABEL]);
+
+        step(&located, "undo");
+        assert_eq!(rows(&located), failed);
+        assert!(detection_state(&located.job_path).is_empty());
+        step(&located, "redo");
+        assert!(rows(&located).is_empty());
+        assert_eq!(detection_state(&located.job_path), start);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A failed row that kept no detection (an older build) is made one from
+    /// its lettering, with the padding asked for, under the reject's label.
+    #[test]
+    fn restoring_a_declined_row_without_a_kept_detection_uses_its_lettering() {
+        let lettering = super::tests::two_glyphs();
+        let (located, region_id) = super::tests::held_row_fixture("restore-declined-old", Rect::new(16, 16, 48, 18),
+            "decline.reason.qualityMetric", Some(&lettering));
+        let restored = approve_held_mask_at(&located, &region_id, 2, |_, _, _| None).unwrap().expect("restored");
+        let job = Job::open(&located.job_path).unwrap();
+        assert!(job.project.regions_untouched.is_empty());
+        let detection = job.project.detections.iter().find(|row| row.id == restored.region_id).expect("a detection");
+        assert_eq!(detection.padding_px, 2);
+        let journal = crate::history::load(&located.job_path);
+        assert_eq!(journal.entries.last().map(|entry| entry.label.as_str()), Some(crate::history::REJECT_LABEL));
     }
 
     /// Text type, approval of a held row and dismissal of one are undo steps

@@ -2364,6 +2364,7 @@ export const ko = {
     },
     hint: {
       showOnPage: '이 영역으로 스크롤해 선택합니다',
+      restoreMask: '이 정리가 실패하기 전의 마스크를 페이지에 되돌립니다. 정리는 하지 않습니다.',
       cleanAnyway: '문자 판별기와 관계없이 클린합니다',
       cleanDetected: '이미 찾은 마스크로 이 컴퓨터에서 이 영역을 클린합니다',
       cleanDetectedCloud: '클라우드 GPU에서 이 영역을 클린합니다. 프로젝트에서 처음 실행할 때 비용을 보고 확인합니다.',
@@ -2931,6 +2932,7 @@ export const ko = {
       paddingRefreshFailed: '마스크 여백은 저장되었지만 페이지를 새로 고치지 못했습니다. 챕터를 다시 열어 변경된 마스크를 확인하세요.',
       typeFailed: '텍스트 유형을 바꾸지 못했습니다. 영역은 그대로입니다.',
       approveFailed: '마스크를 승인하지 못했습니다. 영역은 그대로입니다.',
+      restoreFailed: '마스크를 복원하지 못했습니다. 영역은 그대로입니다.',
       rejectNoMask: '이 레이어는 클리너로 만들지 않아 복원할 마스크가 없습니다. 원본을 되돌리려면 삭제하세요.',
       rejectFailed: '결과를 거부하지 못했습니다. 페이지는 그대로입니다.',
       reapplyFailed: '결과를 되돌리지 못했습니다. 페이지는 그대로입니다.',

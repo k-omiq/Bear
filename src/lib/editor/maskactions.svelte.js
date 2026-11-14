@@ -624,6 +624,61 @@ export async function approveHeldMask(region) {
 }
 
 /**
+ * Restore mask on a failed clean: a region a run declined is a detection
+ * again, with the mask it had before the clean, ready to be cleaned again
+ * with any engine. Nothing is cleaned. The same Restore mask a cleaned
+ * result offers (`rejectResult`), for the one state that has no result.
+ *
+ * The backend's held-row command does it (`approve_held_mask`): the
+ * detection its decline kept on the row comes back as it was stored, same
+ * id, files and padding; a row that kept none (an older build, a one-pass
+ * decline) is made a detection from its lettering, grown by Text cleanup's
+ * Mask padding as an approved mask is. Either way the row and its failure
+ * leave the page in the same write, and it is one undo step the backend
+ * records (`masks.command.rejectResult`): Undo puts the failed row back.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @returns {Promise<boolean>} whether the region became a detection
+ */
+export async function restoreDeclinedMask(region) {
+  if (region?.outcome !== 'declined' || region.mask) return false
+  const chapterId = editor.chapter?.id ?? null
+  const pageIndex = pageIndexOf(region.id)
+  if (!chapterId || pageIndex === null) return false
+  // A second press while the first is in flight is not a second restore.
+  if (rejecting.has(region.id) || !claimPageEdit(pageIndex)) return false
+  rejecting.add(region.id)
+  try {
+    /** @type {Awaited<ReturnType<import('../api/backend.js').Backend['approveHeldMask']>>} */
+    let result
+    try {
+      result = await getBackend().approveHeldMask({
+        regionId: region.id,
+        paddingPx: paddingOf(/** @type {any} */ (editor.toolParams.autoClean ?? {})),
+      })
+    } catch (error) {
+      console.error('a failed clean\'s mask could not be restored', error)
+      if (!reportJobConflict(error)) notify({ key: 'notice.mask.restoreFailed', tone: 'warn' })
+      return false
+    }
+    if (!result) return false
+    if (!stillOpen(chapterId)) return true
+    try {
+      await reloadPage(pageIndex)
+    } catch (error) {
+      console.error('the page could not be read again after a mask was restored', error)
+    }
+    // The detection may carry another id than the row: the selection follows it.
+    if (!stillOpen(chapterId)) return true
+    if (editor.selectionId === region.id) select(holdsRegion(result.regionId) ? result.regionId : null)
+    if (editor.hoverId === region.id && result.regionId !== region.id) hover(null)
+    return true
+  } finally {
+    rejecting.delete(region.id)
+  }
+}
+
+/**
  * Clean one detected region here, from its stored mask: nothing is detected
  * again (docs/detect-clean.md §3, `apply_tool` on a detected region).
  *
@@ -1635,7 +1690,8 @@ export function showOnPage(region) {
  * replaces the layer, as the row's picker does. Text type is a detected
  * region's alone, Approve mask a held region's, and Reject result a cleaned
  * detection's, the three entries with no row control: `setDetectionType`,
- * `approveHeldMask` and `rejectResult`.
+ * `approveHeldMask` and `rejectResult`. Restore mask on a failed clean is
+ * `restoreDeclinedMask`, which its row offers too.
  *
  * @param {string} id
  * @param {import('../api/backend.js').ApiRegion} region
@@ -1646,6 +1702,7 @@ export async function runRegionMenuItem(id, region) {
   if (id === 'retry') return rerunMask(region, 'retry')
   if (id === 'retryWider') return rerunMask(region, 'retryWider')
   if (id === 'reject') return rejectResult(region)
+  if (id === 'restoreMask') return restoreDeclinedMask(region)
   if (id === 'finishing') {
     openFinishingWindow(region)
     return true
@@ -1694,6 +1751,8 @@ export async function runMaskAction(id, region) {
     case 'showOnPage':
       showOnPage(region)
       return true
+    case 'restoreMask':
+      return restoreDeclinedMask(region)
     default:
       return false
   }

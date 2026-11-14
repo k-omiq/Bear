@@ -575,6 +575,52 @@ describe('a detected row', () => {
  * writes and leaves one undo entry, and undo and redo bring back both the
  * value and the tile identity.
  */
+describe('a failed clean\'s row', () => {
+  /** A declined fixture region, a clean that failed, in the open chapter. */
+  async function declined() {
+    const CHAPTER_DECLINED = 'wandering-moon-ch12'
+    const backend = createMockBackend({ timing: ZERO })
+    setBackend(backend)
+    editor.chapter = /** @type {any} */ ({ id: CHAPTER_DECLINED, review: [],
+      pages: await backend.loadPages({ chapterId: CHAPTER_DECLINED, indices: [0, 1, 2, 3, 4, 5, 6] }) })
+    const region = editor.chapter.pages.flatMap((/** @type {any} */ page) => page.regions)
+      .find((/** @type {any} */ candidate) => candidate.outcome === 'declined')
+    expect(region, 'a declined fixture region').toBeTruthy()
+    return { backend, region }
+  }
+
+  it('offers Restore mask beside Show on page, with what it does as its tooltip', async () => {
+    const { region } = await declined()
+    show(region)
+    const acts = within(/** @type {HTMLElement} */ (document.querySelector('[data-acts]')))
+    const restore = acts.getByRole('button', { name: t('masks.action.rejectResult') })
+    expect(restore.getAttribute('title')).toBe(t('masks.hint.restoreMask'))
+    expect(acts.getByRole('button', { name: t('masks.action.showOnPage') })).toBeTruthy()
+  })
+
+  it('puts the mask back from the row\'s button: a detection again, nothing cleaned', async () => {
+    const { backend, region } = await declined()
+    const approve = vi.spyOn(backend, 'approveHeldMask')
+    const applyTool = vi.spyOn(backend, 'applyTool')
+    show(region)
+    const acts = within(/** @type {HTMLElement} */ (document.querySelector('[data-acts]')))
+    await fireEvent.click(acts.getByRole('button', { name: t('masks.action.rejectResult') }))
+    await waitFor(() => expect(current(region.id)?.outcome).toBe('detected'))
+    expect(approve).toHaveBeenCalledWith(expect.objectContaining({ regionId: region.id }))
+    expect(applyTool).not.toHaveBeenCalled()
+    expect(current(region.id).mask).toBeTruthy()
+  })
+
+  it('offers the same Restore mask in the row\'s menu, first', async () => {
+    const { region } = await declined()
+    const view = show(region)
+    await fireEvent.contextMenu(/** @type {HTMLElement} */ (view.container.querySelector('[data-mask-row]')), { clientX: 20, clientY: 20 })
+    const menu = within(screen.getByRole('menu', { name: t('masks.menu.label') }))
+    const items = menu.getAllByRole('menuitem')
+    expect(items[0].textContent).toContain(t('masks.action.rejectResult'))
+  })
+})
+
 describe('the layer controls on a row', () => {
   beforeEach(() => {
     vi.clearAllMocks()
