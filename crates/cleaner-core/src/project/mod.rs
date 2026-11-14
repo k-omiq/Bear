@@ -814,21 +814,23 @@ pub struct DenoisedPage {
     /// the page takes the page's masks with it ([`Job::replace_source`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<u8>,
+    /// Set on every row of the run the user picked as the one in use
+    /// ([`Job::use_denoise_run`]). No row set is the newest run, which is
+    /// also what every new run goes back to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_use: bool,
 }
 
-/// How many denoise runs a manifest remembers. A run is the rows sharing one
-/// `created`; past this many, the oldest run's rows go, so a chapter denoised
-/// every week does not grow its manifest for ever.
-pub const MAX_DENOISE_RUNS: usize = 10;
-
-/// The index in `rows` of the newest row for `source_idx`: the largest
-/// `created`, and the later row of two with the same one.
-fn newest_denoised(rows: &[DenoisedPage], source_idx: usize) -> Option<usize> {
-    rows.iter()
-        .enumerate()
-        .filter(|(_, row)| row.source_idx == source_idx)
-        .max_by_key(|(_, row)| row.created)
-        .map(|(at, _)| at)
+/// The index in `rows` of the row in use for `source_idx`: that page's row of
+/// the run picked as in use when one is, else its newest row (the largest
+/// `created`, and the later row of two with the same one). A page the picked
+/// run has no row for has none.
+fn current_denoised_at(rows: &[DenoisedPage], source_idx: usize) -> Option<usize> {
+    let page = || rows.iter().enumerate().filter(|(_, row)| row.source_idx == source_idx);
+    match rows.iter().find(|row| row.in_use).map(|row| row.created) {
+        Some(run) => page().find(|(_, row)| row.created == run).map(|(at, _)| at),
+        None => page().max_by_key(|(_, row)| row.created).map(|(at, _)| at),
+    }
 }
 
 /// One page's share of a hand edit of detection masks
@@ -1034,7 +1036,7 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub withdrawn_patches: Vec<PatchRecord>,
     /// The files page denoise wrote, one row per page per run, for the
-    /// newest [`MAX_DENOISE_RUNS`] runs ([`Job::record_denoised`]). Absent
+    /// runs the user has not deleted ([`Job::record_denoised`]). Absent
     /// from a manifest no denoise has written to, and skipped while empty, so
     /// old projects open and flush unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1283,14 +1285,20 @@ impl Project {
             || self.text_shape_corrections.iter().any(|row| row.source_idx == source_idx)
     }
 
-    /// The page's current denoised file: its newest row, unless that row was
-    /// already taken as the page. An older row is history, never a candidate:
-    /// it was made before the newest run and, after a take, from a source the
-    /// page no longer has. Everything that asks "the page's denoised file"
-    /// asks here.
+    /// The page's current denoised file: its row of the run in use (the
+    /// newest, unless the user picked another), unless that row was already
+    /// taken as the page. Another row is history, never a candidate. Everything
+    /// that asks "the page's denoised file" asks here.
     pub fn current_denoised(&self, source_idx: usize) -> Option<&DenoisedPage> {
-        let row = &self.denoised[newest_denoised(&self.denoised, source_idx)?];
+        let row = &self.denoised[current_denoised_at(&self.denoised, source_idx)?];
         (!row.taken).then_some(row)
+    }
+
+    /// The run in use: the one picked ([`Job::use_denoise_run`]), else the
+    /// newest. `None` for a chapter never denoised.
+    pub fn denoise_run_in_use(&self) -> Option<u64> {
+        self.denoised.iter().find(|row| row.in_use).or_else(|| self.denoised.iter().max_by_key(|row| row.created))
+            .map(|row| row.created)
     }
 }
 
@@ -3847,15 +3855,18 @@ impl Job {
         Ok(report)
     }
 
-    /// Keep the files one page denoise run wrote, beside the runs before it.
-    /// `rows` are one run and share a `created`. Flushes.
+    /// Keep the files one page denoise run wrote, beside every run before
+    /// it: runs go only when the user deletes one ([`Job::delete_denoise_run`]).
+    /// `rows` are one run and share a `created`. The new run is the one in
+    /// use. Flushes.
     ///
     /// A held row naming the same file as a new one goes: a rerun into the
     /// same folder wrote over that file, and the old row would describe
-    /// pixels that are not there. A run recorded in the same second as a
-    /// held one is moved to the second after the newest held run, so each
-    /// `created` still names one run. Past [`MAX_DENOISE_RUNS`] runs the
-    /// oldest go, taken or not.
+    /// pixels that are not there. (The app writes each run into a folder of
+    /// its own, `run_folder` in the desktop, so this is a rerun the user
+    /// pointed at the same folder by hand.) A run recorded in the same second
+    /// as a held one is moved to the second after the newest held run, so
+    /// each `created` still names one run.
     pub fn record_denoised(&mut self, mut rows: Vec<DenoisedPage>) -> Result<(), StoreError> {
         if rows.is_empty() {
             return Ok(());
@@ -3866,15 +3877,43 @@ impl Job {
             let next = held.iter().map(|row| row.created).max().unwrap_or(0) + 1;
             rows.iter_mut().for_each(|new| new.created = next);
         }
+        held.iter_mut().for_each(|row| row.in_use = false);
+        rows.iter_mut().for_each(|new| new.in_use = false);
         held.extend(rows);
-        let mut runs: Vec<u64> = held.iter().map(|row| row.created).collect();
-        runs.sort_unstable_by(|a, b| b.cmp(a));
-        runs.dedup();
-        if let Some(&oldest_kept) = runs.get(MAX_DENOISE_RUNS - 1) {
-            held.retain(|row| row.created >= oldest_kept);
-        }
         held.sort_by_key(|row| (row.source_idx, row.created));
         self.flush()
+    }
+
+    /// Make the run named `created` the one in use: its files are what
+    /// "Replace pages with denoised" takes. Picking the newest run clears the
+    /// pick, which is the same state. Flushes; `false`, with nothing written,
+    /// when no run has that name.
+    pub fn use_denoise_run(&mut self, created: u64) -> Result<bool, StoreError> {
+        let held = &mut self.project.denoised;
+        if !held.iter().any(|row| row.created == created) {
+            return Ok(false);
+        }
+        let newest = held.iter().map(|row| row.created).max() == Some(created);
+        held.iter_mut().for_each(|row| row.in_use = !newest && row.created == created);
+        self.flush()?;
+        Ok(true)
+    }
+
+    /// Forget the run named `created` and answer the files it wrote, for the
+    /// caller to remove: this crate never deletes a file outside the job. The
+    /// run in use being deleted, the newest left is in use again. A taken
+    /// file's pixels are the page's own copy in the sidecar, so the history
+    /// row is all that goes with it. Flushes; an empty list, with nothing
+    /// written, when no run has that name.
+    pub fn delete_denoise_run(&mut self, created: u64) -> Result<Vec<PathBuf>, StoreError> {
+        let held = &mut self.project.denoised;
+        let files: Vec<PathBuf> = held.iter().filter(|row| row.created == created).map(|row| row.path.clone()).collect();
+        if files.is_empty() {
+            return Ok(files);
+        }
+        held.retain(|row| row.created != created);
+        self.flush()?;
+        Ok(files)
     }
 
     /// Take `bytes`, a PNG of the page's displayed size or a whole 2 to 4
@@ -3933,7 +3972,7 @@ impl Job {
         }
         let rel_path = relative_to(self.root(), &path);
         let before = std::mem::replace(&mut self.project.sources[source_idx].rel_path, rel_path);
-        if let Some(at) = newest_denoised(&self.project.denoised, source_idx) {
+        if let Some(at) = current_denoised_at(&self.project.denoised, source_idx) {
             self.project.denoised[at].taken = true;
         }
         // Every row of the page so far was made from the source it had until
@@ -5633,17 +5672,55 @@ mod tests {
         assert_eq!(job.project.current_denoised(0).unwrap().created, 31, "a run in the same second is moved on");
     }
 
+    /// Every run is kept, however many; one goes only when deleted.
     #[test]
-    fn denoise_history_keeps_the_newest_runs() {
+    fn denoise_history_keeps_every_run() {
         let scratch = Scratch::new("denoise-cap");
         let mut job = a_job(&scratch);
-        for run in 1..=(MAX_DENOISE_RUNS as u64 + 3) {
+        for run in 1..=13u64 {
             job.record_denoised(vec![a_denoised_row(0, &format!("/d/{run}/001.png"), run * 100)]).unwrap();
         }
         let runs: Vec<u64> = job.project.denoised.iter().map(|row| row.created).collect();
-        assert_eq!(runs.len(), MAX_DENOISE_RUNS);
-        assert_eq!(runs.first(), Some(&400), "the three oldest runs went");
-        assert_eq!(job.project.current_denoised(0).unwrap().created, (MAX_DENOISE_RUNS as u64 + 3) * 100);
+        assert_eq!(runs, (1..=13u64).map(|run| run * 100).collect::<Vec<_>>(), "no run went");
+        assert_eq!(job.project.current_denoised(0).unwrap().created, 1300);
+        assert_eq!(job.delete_denoise_run(100).unwrap(), [PathBuf::from("/d/1/001.png")]);
+        assert!(job.delete_denoise_run(100).unwrap().is_empty(), "already gone");
+        assert_eq!(Job::open(job.path()).unwrap().project.denoised.len(), 12);
+    }
+
+    /// The user picks the run in use; a page that run has no file for has
+    /// none to take; a new run is in use again; deleting the picked run hands
+    /// back to the newest; and a take marks the row in use, not the newest.
+    #[test]
+    fn the_run_in_use_is_the_users_pick_until_the_next_run() {
+        let scratch = Scratch::new("denoise-in-use");
+        let mut job = a_job(&scratch);
+        job.record_denoised(vec![a_denoised_row(0, "/d/a/001.png", 10), a_denoised_row(1, "/d/a/002.png", 10)]).unwrap();
+        job.record_denoised(vec![a_denoised_row(0, "/d/b/001.png", 20)]).unwrap();
+        assert_eq!(job.project.denoise_run_in_use(), Some(20));
+        assert_eq!(job.project.current_denoised(1).unwrap().created, 10, "no pick: each page's newest");
+
+        assert!(job.use_denoise_run(10).unwrap());
+        let reopened = Job::open(job.path()).unwrap().project;
+        assert_eq!(reopened.denoise_run_in_use(), Some(10));
+        assert_eq!(reopened.current_denoised(0).unwrap().path, PathBuf::from("/d/a/001.png"));
+        assert!(!job.use_denoise_run(99).unwrap(), "no such run");
+
+        assert!(job.use_denoise_run(20).unwrap());
+        assert!(job.project.denoised.iter().all(|row| !row.in_use), "the newest is the state with no pick");
+        assert!(job.project.current_denoised(1).is_some_and(|row| row.created == 10));
+        job.use_denoise_run(10).unwrap();
+        job.record_denoised(vec![a_denoised_row(0, "/d/c/001.png", 30)]).unwrap();
+        assert_eq!(job.project.denoise_run_in_use(), Some(30), "a new run is in use");
+        job.use_denoise_run(20).unwrap();
+        assert!(job.project.current_denoised(1).is_none(), "a picked run without page 2 has nothing for it");
+
+        job.use_denoise_run(10).unwrap();
+        job.delete_denoise_run(10).unwrap();
+        assert_eq!(job.project.denoise_run_in_use(), Some(30));
+        let mut never = job.project.clone();
+        never.denoised.clear();
+        assert_eq!(never.denoise_run_in_use(), None);
     }
 
     /// A row written before the history kept presets and targets still opens,

@@ -30,7 +30,7 @@ use cleaner_core::project::{Job, Project, ReplaceError};
 use serde::Serialize;
 
 use crate::inference::cloud_denoise::{
-    cleaned_composite, output_names, record_written_soon, write_atomic, CleanedError, CloudDenoiseReport, DenoisedOutput,
+    cleaned_composite, output_names, record_written_soon, run_folder, write_atomic, CleanedError, CloudDenoiseReport, DenoisedOutput,
     PageFailure, PlannedPage, MAX_PLAN_PAGES,
 };
 use crate::library::Library;
@@ -304,6 +304,9 @@ fn run_chapter(
         .resolve_chapter(chapter_id).map_err(|e| e.to_string())?;
     let pages = plan_pages(&job_path, page_indices)?;
     let names = output_names(&job_path, &pages)?;
+    // Never over an earlier run's files: a folder of its own when needed.
+    let folder = run_folder(&job_path, out_dir, &names)?;
+    let out_dir = folder.as_path();
     let mut engine = open_engine(app, &step)?;
     // Refused when the page moved since it was planned, as a cloud run does,
     // so the appearance recorded with the file is the one it was made from.
@@ -321,7 +324,8 @@ fn run_chapter(
         registered.progress(done, total);
         let _ = app.emit(PROGRESS_EVENT, DenoiseProgress { run_id: run_id.to_string(), done, total, page });
     };
-    let report = denoise_pages(&pages, &names, out_dir, &read, &mut denoise, registered.cancel(), &mut progress);
+    let mut report = denoise_pages(&pages, &names, out_dir, &read, &mut denoise, registered.cancel(), &mut progress);
+    report.folder = out_dir.display().to_string();
     record_written_soon(app, run_id, &job_path, &pages, &report, Some(preset_id), PresetTarget::Local, step.out as u32);
     Ok(report)
 }
@@ -572,19 +576,20 @@ mod tests {
     #[test]
     fn presets_list_every_recipe_and_one_local() {
         let listed = presets();
-        assert_eq!(listed.len(), 14);
+        assert_eq!(listed.len(), 4);
         let value = serde_json::to_value(&listed).unwrap();
-        assert_eq!(value[0]["id"], "waifu2x-scan-4x-n2");
-        assert_eq!(value[0]["targets"], serde_json::json!(["cloud", "local"]));
-        assert_eq!(value[0]["recipe"]["steps"][0]["engine"], "waifu2x-art-scan");
-        assert!(value.as_array().unwrap()[1..].iter().all(|preset| preset["targets"] == serde_json::json!(["cloud"])));
+        assert_eq!(value[3]["id"], "waifu2x-scan-4x-n2");
+        assert_eq!(value[3]["targets"], serde_json::json!(["cloud", "local"]));
+        assert_eq!(value[3]["recipe"]["steps"][0]["engine"], "waifu2x-art-scan");
+        assert!(value.as_array().unwrap()[..3].iter().all(|preset| preset["targets"] == serde_json::json!(["cloud"])));
+        assert_eq!(value[0]["recipe"]["color_steps"][0]["engine"], "ijanai-v3-denoise", "colour pages route in the recipe");
         assert_eq!(local_preset("waifu2x-scan-4x-n2", None).unwrap().out, 1);
         assert_eq!(local_preset("waifu2x-scan-4x-n2", Some(1)).unwrap().out, 1);
         assert_eq!(local_preset("waifu2x-scan-4x-n2", Some(3)).unwrap().out, 3);
         for past in [0, 5] {
             assert!(local_preset("waifu2x-scan-4x-n2", Some(past)).unwrap_err().starts_with("denoise_output_scale_invalid"));
         }
-        assert_eq!(local_preset("mangajanai-2x", None).unwrap_err(), "denoise_preset_not_local");
+        assert_eq!(local_preset("realcugan-2x-auto", None).unwrap_err(), "denoise_preset_not_local");
         assert_eq!(local_preset("sharpest", None).unwrap_err(), "denoise_preset_unknown");
     }
 

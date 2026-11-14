@@ -92,14 +92,14 @@ describe('Settings > Denoise', () => {
     await fireEvent.click(getByRole('radio', { name: t('denoise.target.cloud') }))
     await waitFor(() => expect(presetIds(container)).toEqual(cloudIds('bw')))
     expect(session.denoiseTarget).toBe('cloud')
-    expect(seam.writeSettings).toHaveBeenLastCalledWith(expect.objectContaining({ denoiseTarget: 'cloud', denoisePreset: 'mangajanai-2x' }))
+    expect(seam.writeSettings).toHaveBeenLastCalledWith(expect.objectContaining({ denoiseTarget: 'cloud', denoisePreset: 'realcugan-2x-auto' }))
 
     const waifu = presetRow(container, 'waifu2x-scan-4x-n2')
-    expect(waifu.textContent).toContain(t('denoise.time.cloud', { duration: t('denoise.duration.seconds', { value: '9.8' }) }))
-    expect(waifu.textContent).toContain(t('denoise.time.cloudWhere', { gpu: 'L4' }))
+    expect(waifu.textContent).toContain(t('denoise.time.cloud', { duration: t('denoise.duration.seconds', { value: '11.4' }) }))
+    expect(waifu.textContent).toContain(t('denoise.time.cloudWhere', { gpu: 'A10G' }))
 
-    await fireEvent.click(presetRow(container, 'realcugan-3x-denoise3'))
-    await waitFor(() => expect(session.denoisePreset).toBe('realcugan-3x-denoise3'))
+    await fireEvent.click(presetRow(container, 'moesr-descreen-auto'))
+    await waitFor(() => expect(session.denoisePreset).toBe('moesr-descreen-auto'))
   })
 
   it('shows every cloud preset its measured time', async () => {
@@ -130,59 +130,58 @@ describe('Settings > Denoise', () => {
   it('filters the list by what the pages are, starting on the chosen preset\'s own type', async () => {
     setCloudAllowed(true)
     setDenoiseTarget('cloud')
-    setDenoisePreset('waifu2x-art-2x-n3')
+    setDenoisePreset('ijanai-v3-denoise-4x')
     const { container, getByRole } = render(DenoiseSettings, { props: { view: catalogue(true), refresh: vi.fn() } })
     const pages = (/** @type {string} */ key) => getByRole('radio', { name: t(key) })
 
     // A colour preset is chosen: the list opens on Colour, with it selected.
     await waitFor(() => expect(presetIds(container)).toEqual(cloudIds('color')))
     expect(pages('denoise.pages.color').getAttribute('aria-checked')).toBe('true')
-    expect(presetRow(container, 'waifu2x-art-2x-n3').getAttribute('aria-checked')).toBe('true')
-    expect(presetIds(container)).not.toContain('mangajanai-2x')
+    expect(presetRow(container, 'ijanai-v3-denoise-4x').getAttribute('aria-checked')).toBe('true')
 
     // Black and white hides it: the first preset still listed is saved in its place.
     await fireEvent.click(pages('denoise.pages.bw'))
     await waitFor(() => expect(presetIds(container)).toEqual(cloudIds('bw')))
-    expect(session.denoisePreset).toBe('mangajanai-2x')
-    expect(seam.writeSettings).toHaveBeenLastCalledWith(expect.objectContaining({ denoisePreset: 'mangajanai-2x' }))
-    expect(presetIds(container)).not.toContain('waifu2x-art-2x-n3')
+    expect(session.denoisePreset).toBe('realcugan-2x-auto')
+    expect(seam.writeSettings).toHaveBeenLastCalledWith(expect.objectContaining({ denoisePreset: 'realcugan-2x-auto' }))
+    expect(presetIds(container)).not.toContain('ijanai-v3-denoise-4x')
 
     // A preset made for both stays chosen when the type is switched.
-    await fireEvent.click(presetRow(container, 'realcugan-2x-conservative'))
-    await waitFor(() => expect(session.denoisePreset).toBe('realcugan-2x-conservative'))
+    await fireEvent.click(presetRow(container, 'moesr-descreen-auto'))
+    await waitFor(() => expect(session.denoisePreset).toBe('moesr-descreen-auto'))
     const writes = seam.writeSettings.mock.calls.length
     await fireEvent.click(pages('denoise.pages.color'))
     await waitFor(() => expect(presetIds(container)).toEqual(cloudIds('color')))
-    expect(session.denoisePreset).toBe('realcugan-2x-conservative')
+    expect(session.denoisePreset).toBe('moesr-descreen-auto')
     expect(seam.writeSettings.mock.calls.length).toBe(writes)
   })
 
   it('moves and selects with the arrows over the listed presets only, wrapping at the ends', async () => {
     setCloudAllowed(true)
     setDenoiseTarget('cloud')
-    setDenoisePreset('waifu2x-art-2x-n3')
+    setDenoisePreset('waifu2x-scan-4x-n2')
     const { container } = render(DenoiseSettings, { props: { view: catalogue(true), refresh: vi.fn() } })
-    const listed = cloudIds('color')
+    const listed = cloudIds('bw')
     await waitFor(() => expect(presetIds(container)).toEqual(listed))
-    expect(listed.at(-1)).toBe('waifu2x-art-2x-n3')
+    expect(listed.at(-1)).toBe('waifu2x-scan-4x-n2')
     const stops = () => [...container.querySelectorAll('[data-preset][tabindex="0"]')].map((row) => row.getAttribute('data-preset'))
-    expect(stops()).toEqual(['waifu2x-art-2x-n3'])
+    expect(stops()).toEqual(['waifu2x-scan-4x-n2'])
 
     // Down from the last listed row wraps to the first listed one, not to a hidden preset.
-    await fireEvent.keyDown(presetRow(container, 'waifu2x-art-2x-n3'), { key: 'ArrowDown' })
+    await fireEvent.keyDown(presetRow(container, 'waifu2x-scan-4x-n2'), { key: 'ArrowDown' })
     await waitFor(() => expect(session.denoisePreset).toBe(listed[0]))
     expect(document.activeElement).toBe(presetRow(container, listed[0]))
     expect(stops()).toEqual([listed[0]])
-    // The first listed preset is made for both page types: the list stays on Colour.
+    // The first listed preset is made for both page types: the list stays on Black and white.
     expect(presetIds(container)).toEqual(listed)
 
     await fireEvent.keyDown(presetRow(container, listed[0]), { key: 'ArrowUp' })
-    await waitFor(() => expect(session.denoisePreset).toBe('waifu2x-art-2x-n3'))
-    await fireEvent.keyDown(presetRow(container, 'waifu2x-art-2x-n3'), { key: 'Home' })
+    await waitFor(() => expect(session.denoisePreset).toBe('waifu2x-scan-4x-n2'))
+    await fireEvent.keyDown(presetRow(container, 'waifu2x-scan-4x-n2'), { key: 'Home' })
     await waitFor(() => expect(session.denoisePreset).toBe(listed[0]))
     await fireEvent.keyDown(presetRow(container, listed[0]), { key: 'End' })
-    await waitFor(() => expect(session.denoisePreset).toBe('waifu2x-art-2x-n3'))
-    expect(document.activeElement).toBe(presetRow(container, 'waifu2x-art-2x-n3'))
+    await waitFor(() => expect(session.denoisePreset).toBe('waifu2x-scan-4x-n2'))
+    expect(document.activeElement).toBe(presetRow(container, 'waifu2x-scan-4x-n2'))
   })
 
   it('refuses Cloud, and says why, when the cloud GPU was set up without Page denoise', async () => {
@@ -198,10 +197,10 @@ describe('Settings > Denoise', () => {
   it('lists only the presets the cloud GPU says it can run', async () => {
     setCloudAllowed(true)
     setDenoiseTarget('cloud')
-    seam.cloudDenoisePresets.mockResolvedValue(['waifu2x-scan-4x-n2', 'realcugan-2x-conservative'])
+    seam.cloudDenoisePresets.mockResolvedValue(['waifu2x-scan-4x-n2', 'realcugan-2x-auto'])
     const { container } = render(DenoiseSettings, { props: { view: catalogue(true), refresh: vi.fn(), active: true } })
 
-    await waitFor(() => expect(presetIds(container)).toEqual(['waifu2x-scan-4x-n2', 'realcugan-2x-conservative']))
+    await waitFor(() => expect(presetIds(container)).toEqual(['realcugan-2x-auto', 'waifu2x-scan-4x-n2']))
   })
 
   it('asks the cloud GPU again each time the tab opens', async () => {

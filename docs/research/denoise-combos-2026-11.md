@@ -112,24 +112,38 @@ colour merge. Written to `第51話_denoised/` to `第55話_denoised/`.
 Copies of the three umzi models, the round 1 compare page and the round 2 colour outputs are in
 `~/dev/manga-bench-sets/denoise-2026-11/`. Round 2 cost under $0.50.
 
-## Plan for the app (not started)
+## Plan for the app (done 2026-11-14)
 
-1. **Presets.** Replace the page denoise preset list with: Real-CUGAN 2x conservative (B&W), MoESR v2
-   descreen (B&W), IllustrationJaNai V3denoise 4x (colour), and keep waifu2x art_scan 4x n2 as a soft
-   option. Drop the MangaJaNai presets, or route colour pages away from them. Each preset offers page size
-   or 2x. Pin the new files in `denoise.py` (`EXTRA` in `spikes/denoise/combo-bench/combos.py` has the
-   URLs) and mirror them in `src/lib/model/denoise-presets.json`; `test_denoise` checks the two agree.
-2. **Automatic colour routing.** A run with one B&W model and one colour model: colour pages go to the
-   colour model. `decode_page` already decides grey; 49/001 (grey with a small coloured logo) shows the
-   rule must look at more than a few pixels.
-3. **Advanced chain.** Let the user build a recipe of up to 3 steps (the wire format already allows it) and
-   pick the output scale.
-4. **Keep earlier runs.** A new denoise run must not delete the previous one; the chapter keeps every run
-   (`src-tauri/src/denoise_history.rs` already stores runs per chapter) and the user picks which one is used.
-5. **Preview screen.** Redo the denoise compare dialog (`src/lib/dialogs/DenoiseCompareDialog.svelte`):
-   one page, before and after with a wipe, a run picker, zoom to 1:1 and 2:1, no decorative chrome.
-6. **Install size.** FDAT and MoESR need spandrel 0.4.2 and `spandrel_extra_arches` 0.2.0 on the worker;
-   `install()` must run once per process (a second call raises DuplicateArchitectureError).
+All six steps are done on branch `claude/denoise-app-3197e1`. The worker is not redeployed: a live profile
+gets the new presets only after its worker is redeployed.
+
+1. **Presets. Done.** Four presets: `realcugan-2x-auto`, `moesr-descreen-auto`, `ijanai-v3-denoise-4x` and
+   `waifu2x-scan-4x-n2`. Each offers page size or 2x. The new files are pinned by SHA-256 in `denoise.py`
+   and mirrored in `denoise-presets.json`. MangaJaNai is no longer a preset. It stays as a model, and it now
+   runs on the luma only with the source colour put back, so it cannot grey a colour page. The old preset
+   ids still have names, so the history of an old chapter reads.
+2. **Automatic colour routing. Done.** A recipe can carry `color_steps`. A page is colour when at least 8%
+   of all its pixels have a chroma (max minus min) of 24/255 or more. The grey page with a small logo
+   (49/001) stays on the B&W route and keeps its logo colour. A worker without the `color_route` feature
+   is refused before upload.
+3. **Advanced chain. Done.** Under Advanced in the denoise dialog, cloud only: up to 3 steps from a list of
+   9, and the output scale those steps can give. The run is recorded as preset `custom`.
+4. **Keep earlier runs. Done.** No run cap. A new run goes into its own `run-N` folder when the folder
+   already holds a run. The compare dialog marks the run in use, sets another one in use, and deletes a
+   run after an inline question. Each run shows its disk use.
+5. **Preview screen. Done.** One page, wipe, run picker, Fit / 1:1 / 2:1 of the denoised file, page
+   stepping. Full window and the folder line are gone.
+6. **Install size. Done.** The worker image pins spandrel 0.4.2 and spandrel_extra_arches 0.2.0.
+   `install_extra_arches()` runs once per process and tolerates a second registration.
+
+Open points:
+
+- MoESR's host refuses Modal (HTTP 403). The file is optional on the volume: upload it per profile with
+  `spikes/denoise/put-moesr.sh <profile> <volume> <pth>`. Until then the worker does not list the preset.
+- MoESR states no licence. IllustrationJaNai is CC BY-NC-SA 4.0. The app is non-commercial.
+- Smoke test on a real GPU (yarafiq1971, scratch app `mc-denoise-probe-1114`, deleted): colour pages ran
+  IllustrationJaNai, grey and logo pages ran the B&W model, the logo kept its colour (saturation 119.6
+  against 120), and 1x and 2x sizes were right.
 
 ## How to rerun
 

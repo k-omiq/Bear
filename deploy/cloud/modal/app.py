@@ -87,7 +87,9 @@ TORCH_REQUIREMENT = "torch==2.13.0"
 TORCHVISION_REQUIREMENT = "torchvision==0.28.0"
 # The analysis GPU: ONNX sessions, mask components (scipy) and PNG work.
 ANALYSIS_REQUIREMENTS = ("onnxruntime-gpu==1.23.2", "numpy==2.4.6", "pillow==12.3.0", "scipy==1.18.1")
-DENOISE_REQUIREMENTS = ("spandrel==0.4.2",)
+# FDAT (IllustrationJaNai V3) loads in spandrel 0.4.2; MoESR (the descreen preset) is
+# in spandrel_extra_arches, registered once per process (common/denoise.py).
+DENOISE_REQUIREMENTS = ("spandrel==0.4.2", "spandrel_extra_arches==0.2.0")
 GPU_REQUIREMENTS = (
     "diffusers==0.39.0",
     "sdnq==0.2.4",

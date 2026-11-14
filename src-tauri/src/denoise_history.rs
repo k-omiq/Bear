@@ -9,6 +9,10 @@
 //!   and per page whether its file is still on disk and whether it was taken.
 //! - [`denoise_compare_image`] answers one side of the compare view: a run's
 //!   denoised file for a page, or the raw page that file was made from.
+//! - [`use_denoise_run`] makes a run the one in use: the files "Replace pages
+//!   with denoised" takes. A new run is in use until another is picked.
+//! - [`delete_denoise_run`] forgets a run and removes the files it wrote,
+//!   only on the user's word: a new run never deletes an earlier one.
 //!
 //! The rows are `Project::denoised`, written by `cloud_denoise::record_written`
 //! after a local or a cloud run and marked taken by `Job::replace_source`. A
@@ -31,7 +35,7 @@ use crate::library::Library;
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DenoiseSummary {
-    /// Runs remembered, at most `MAX_DENOISE_RUNS`.
+    /// Runs remembered: every run not deleted.
     pub runs: u32,
     /// The newest run's `created`, seconds since the epoch.
     pub latest: u64,
@@ -86,6 +90,10 @@ pub struct DenoiseRun {
     /// How many times the page each way the run's files are: 1 for the
     /// page's own size, 2 to 4 for a run with an output scale.
     pub scale: u32,
+    /// Whether it is the run in use ([`Project::denoise_run_in_use`]).
+    pub in_use: bool,
+    /// The bytes its files take on disk now, the gone ones not counted.
+    pub bytes: u64,
     /// In reading order.
     pub pages: Vec<DenoiseRunPage>,
 }
@@ -96,6 +104,7 @@ pub(crate) fn history(project: &Project) -> Vec<DenoiseRun> {
     let appearances = crate::tile::page_appearances(project);
     let position_of = |source_idx: usize| project.strip.order.iter().position(|held| *held == source_idx);
     let mut runs: Vec<DenoiseRun> = Vec::new();
+    let in_use = project.denoise_run_in_use();
     let mut rows: Vec<&DenoisedPage> = project.denoised.iter().collect();
     rows.sort_by_key(|row| std::cmp::Reverse(row.created));
     for row in rows {
@@ -110,15 +119,19 @@ pub(crate) fn history(project: &Project) -> Vec<DenoiseRun> {
                 (appearances.get(position) == Some(&row.appearance)).then_some(true)
             }
         });
+        let size = std::fs::metadata(&row.path).ok().filter(|meta| meta.is_file()).map(|meta| meta.len());
         let page = DenoiseRunPage {
             page_index: position as u32,
-            exists: row.path.is_file(),
+            exists: size.is_some(),
             taken: row.taken,
             current: project.current_denoised(row.source_idx).is_some_and(|current| std::ptr::eq(current, row)),
             from_cleaned,
         };
         match runs.last_mut() {
-            Some(run) if run.created == row.created => run.pages.push(page),
+            Some(run) if run.created == row.created => {
+                run.bytes += size.unwrap_or(0);
+                run.pages.push(page);
+            }
             _ => runs.push(DenoiseRun {
                 created: row.created,
                 preset: row.preset.clone(),
@@ -126,6 +139,8 @@ pub(crate) fn history(project: &Project) -> Vec<DenoiseRun> {
                 from_cleaned: None,
                 folder: row.path.parent().map(|dir| dir.display().to_string()).unwrap_or_default(),
                 scale: row.scale.map_or(1, u32::from),
+                in_use: in_use == Some(row.created),
+                bytes: size.unwrap_or(0),
                 pages: vec![page],
             }),
         }
@@ -174,6 +189,78 @@ fn compare_bytes(job_path: &Path, page_index: u32, run: u64, side: CompareSide) 
     let job = Job::open_read_only(job_path).map_err(|e| e.to_string())?;
     let path = compare_path(&job, page_index, run, side)?;
     std::fs::read(&path).map_err(|e| format!("denoise_file_missing: {e}"))
+}
+
+/// What deleting a run removed from disk, and what it could not.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletedRun {
+    /// Files removed.
+    pub removed: u32,
+    /// Files that were already gone.
+    pub missing: u32,
+    /// Files that are still there because removing them failed.
+    pub failed: Vec<String>,
+}
+
+/// Forget run `run` and remove the files it wrote, then its folder when that
+/// is left empty. The manifest goes first: a file left by a failed remove is
+/// only a stray file, never a row naming a file that is gone.
+fn delete_run(job_path: &Path, run: u64) -> Result<DeletedRun, String> {
+    let _lock = crate::run::lock_chapter(job_path)?;
+    let mut job = Job::open(job_path).map_err(|e| e.to_string())?;
+    let files = job.delete_denoise_run(run).map_err(|e| e.to_string())?;
+    if files.is_empty() { return Err("denoise_run_missing".into()); }
+    crate::library::invalidate_manifest_cache(job_path);
+    let mut deleted = DeletedRun::default();
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for file in files {
+        match std::fs::remove_file(&file) {
+            Ok(()) => deleted.removed += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => deleted.missing += 1,
+            Err(_) => deleted.failed.push(file.display().to_string()),
+        }
+        if let Some(parent) = file.parent().filter(|parent| !folders.iter().any(|held| held == parent)) {
+            folders.push(parent.to_path_buf());
+        }
+    }
+    // Only an empty folder: `remove_dir` refuses one with anything in it.
+    for folder in folders { let _ = std::fs::remove_dir(folder); }
+    Ok(deleted)
+}
+
+fn use_run(job_path: &Path, run: u64) -> Result<(), String> {
+    let _lock = crate::run::lock_chapter(job_path)?;
+    let mut job = Job::open(job_path).map_err(|e| e.to_string())?;
+    if !job.use_denoise_run(run).map_err(|e| e.to_string())? { return Err("denoise_run_missing".into()); }
+    crate::library::invalidate_manifest_cache(job_path);
+    Ok(())
+}
+
+/// Make run `run` the chapter's run in use. Refused as `denoise_run_missing`
+/// for a run the manifest does not hold.
+#[tauri::command]
+pub async fn use_denoise_run(app: tauri::AppHandle, chapter_id: String, run: u64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let job_path = Library::for_app(&app).map_err(|e| e.to_string())?
+            .resolve_chapter(&chapter_id).map_err(|e| e.to_string())?;
+        use_run(&job_path, run)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Delete run `run`: its history and the files it wrote. The interface asks
+/// first. Refused as `denoise_run_missing` for a run the manifest does not hold.
+#[tauri::command]
+pub async fn delete_denoise_run(app: tauri::AppHandle, chapter_id: String, run: u64) -> Result<DeletedRun, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let job_path = Library::for_app(&app).map_err(|e| e.to_string())?
+            .resolve_chapter(&chapter_id).map_err(|e| e.to_string())?;
+        delete_run(&job_path, run)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The chapter's denoise history, newest run first.
@@ -263,6 +350,7 @@ mod tests {
             source: Some(job.project.sources[at].rel_path.clone()),
             taken: false,
             scale: None,
+            in_use: false,
         }).collect();
         job.record_denoised(rows).unwrap();
         manifest
@@ -284,6 +372,8 @@ mod tests {
         assert_eq!((newest.preset.as_deref(), newest.target), (Some("waifu2x-scan-4x-n2"), Some(PresetTarget::Local)));
         assert_eq!(newest.from_cleaned, Some(false));
         assert_eq!(newest.folder, dir.join("new").display().to_string());
+        assert!(newest.in_use && !oldest.in_use, "no pick: the newest run is in use");
+        assert_eq!((newest.bytes, oldest.bytes), (grey(20).len() as u64, grey(10).len() as u64), "only files still there count");
         let pages: Vec<(u32, bool, bool)> = newest.pages.iter().map(|page| (page.page_index, page.exists, page.current)).collect();
         assert_eq!(pages, [(0, true, true), (1, false, true)], "page 2's file is gone");
         assert_eq!((oldest.preset.as_deref(), oldest.target), (None, None), "an old row names no preset");
@@ -335,6 +425,30 @@ mod tests {
             assert_eq!(preset_of(&preset.recipe()), Some(preset.id));
         }
         assert_eq!(preset_of(&serde_json::from_str(r#"{"schema":1,"steps":[]}"#).unwrap()), None);
+    }
+
+    /// Picking the old run makes its file the page's current one; deleting
+    /// it removes its files and folder, keeps the other run's, and says what
+    /// was already gone.
+    #[test]
+    fn a_run_is_picked_and_deleted_on_purpose() {
+        let dir = std::env::temp_dir().join(format!("mc-denoise-pick-{}", std::process::id()));
+        let manifest = a_chapter_with_history(&dir);
+        use_run(&manifest, 100).unwrap();
+        let project = Job::open(&manifest).unwrap().project;
+        let runs = history(&project);
+        assert_eq!(runs.iter().map(|run| (run.created, run.in_use)).collect::<Vec<_>>(), [(200, false), (100, true)]);
+        assert!(runs[1].pages[0].current && !runs[0].pages[0].current, "page 1's file in use is the old run's");
+        assert_eq!(use_run(&manifest, 150).unwrap_err(), "denoise_run_missing");
+
+        let deleted = delete_run(&manifest, 200).unwrap();
+        assert_eq!(deleted, DeletedRun { removed: 1, missing: 1, failed: vec![] }, "page 2's file was gone already");
+        assert!(!dir.join("new").exists(), "its emptied folder goes");
+        assert!(dir.join("old").join("001.png").is_file(), "the other run's file stays");
+        assert_eq!(delete_run(&manifest, 200).unwrap_err(), "denoise_run_missing");
+        let project = Job::open(&manifest).unwrap().project;
+        assert_eq!(history(&project).iter().map(|run| (run.created, run.in_use)).collect::<Vec<_>>(), [(100, true)]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

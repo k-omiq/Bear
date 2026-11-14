@@ -636,8 +636,10 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: {runId: string, chapterId: string, pageIndices?: number[]|null, presetId: string, outDir: string, outputScale?: number|null}) => Promise<DenoiseReport>} denoiseChapterLocal - denoise the chapter's pages (every page when `pageIndices` is null) on this computer into `outDir`. `runId` is the caller's name for the run: `onDenoiseProgress` events carry it and `cancelDenoiseLocal` takes it. `outputScale` is the size the pages are saved at, as a whole multiple of their own: 1 (or null, or left out) for the same size, up to the preset's `maxScale`; anything else is refused with `denoise_output_scale_invalid`. Answers when every page is done or the run was stopped
  * @property {(spec: {runId: string}) => Promise<boolean>} cancelDenoiseLocal - stop a denoise, local or cloud: a local one at its next tile, a cloud one after the pages in flight. Pages already saved stay. Answers whether that run was in flight
  * @property {(spec: {chapterId: string}) => Promise<ReplaceReport>} replaceWithDenoised - take the files the chapter's last denoise wrote as its pages, for every page denoised from its bare source and not cleaned since. Detections and their masks stay; the other pages are kept and listed, those with no denoised file to take (never denoised, failed, or gone) as `missing`. When any page fails nothing is replaced
- * @property {(spec: {chapterId: string}) => Promise<DenoiseRun[]>} denoiseHistory - every denoise run the chapter's manifest remembers (the newest ten), newest first, with what each page has left
+ * @property {(spec: {chapterId: string}) => Promise<DenoiseRun[]>} denoiseHistory - every denoise run the chapter's manifest remembers (every run not deleted), newest first, with what each page has left, which run is in use and the bytes its files take
  * @property {(spec: {chapterId: string, pageIndex: number, run: number, side: 'raw'|'denoised'}) => Promise<ArrayBuffer|Uint8Array>} denoiseCompareImage - one side of the compare view as the file's bytes: the file run `run` wrote for the page, or the raw page it was made from. Serves only files the manifest recorded; rejects with `denoise_run_missing`, `denoise_page_missing` or `denoise_file_missing`
+ * @property {(spec: {chapterId: string, run: number}) => Promise<void>} useDenoiseRun - make run `run` the one in use: the files `replaceWithDenoised` takes. A new run is in use until another is picked. Rejects with `denoise_run_missing`
+ * @property {(spec: {chapterId: string, run: number}) => Promise<{removed: number, missing: number, failed: string[]}>} deleteDenoiseRun - forget run `run` and delete the files it wrote, and its folder once empty. Asked of the user first. Rejects with `denoise_run_missing`
  * @property {(handler: (progress: DenoiseProgress) => void) => Promise<() => void>} onDenoiseProgress - `denoise://progress`: a local denoise after each tile and each page
  * @property {(handler: (recorded: {runId: string}) => void) => Promise<() => void>} onDenoiseRecorded - `denoise://recorded`: a finished denoise's pages are in its chapter's manifest, after a run walking that chapter let it go. A denoise answers without waiting for that
  * @property {(target?: {provider: 'modal'|'beam', profileId: string}) => Promise<string[]>} cloudDenoisePresets - the preset ids the selected cloud deployment can run now, from its own advertisement. Sends no page and starts no GPU. Rejects with `capability_unavailable: ...` when the deployment has no page denoise
@@ -706,6 +708,8 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {'local'|'cloud'|null} target
  * @property {boolean|null} fromCleaned
  * @property {string} folder - where the files were written
+ * @property {boolean} [inUse] - the run whose files "Replace pages with denoised" takes; false or missing from an older backend
+ * @property {number} [bytes] - what its files take on disk now; missing from an older backend
  * @property {Array<{pageIndex: number, exists: boolean, taken: boolean, current: boolean, fromCleaned: boolean|null}>} pages - in reading order
  */
 
@@ -717,6 +721,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {Array<{pageIndex: number, path: string, gray: boolean}>} written
  * @property {Array<{pageIndex: number, code: string}>} failed
  * @property {boolean} [cancelled] - the run was stopped before its last page; pages not reached are in neither list
+ * @property {string} [folder] - the folder the run wrote to: the one asked for, or `run-2` and on inside it when that one holds an earlier run
  */
 
 /**

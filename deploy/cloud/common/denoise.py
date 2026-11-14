@@ -11,6 +11,12 @@ A page denoise run takes one whole page (PNG) and a recipe, an ordered list of 1
 
 Every step has a `strength` in [0, 1] that blends its output with its input.
 
+A recipe may also name `color_steps`, a second list of 1 to 3 steps for colour pages:
+each page then runs one list, chosen by `is_colour_page`. A page that is mostly grey
+with a small coloured part (a pink title logo) runs `steps`; a model that only knows
+grey art (`DenoiseModel.gray_only`) then keeps the page's own colour: it runs on the
+luma and the source's chroma is put back (a YCbCr merge).
+
 A recipe keeps the page's width and height unless it names an `output_scale` of 2
 to 4. Then its last upscaling step scales down only to that multiple of the page
 (or not at all, when the model's own scale is the one asked for), any step after it
@@ -27,7 +33,12 @@ spandrel) is imported at module load, so the gateway can validate recipes cheapl
 
 Licences: waifu2x (nunif) is MIT. The OpenModelDB models are CC-BY-NC-SA-4.0; the
 project is non-commercial, and the attribution travels with `DenoiseModel.license`
-and `DenoiseModel.author`.
+and `DenoiseModel.author`. IllustrationJaNai is CC-BY-NC-SA-4.0. umzi's MoESR descreen
+model states no licence (asked of the user, 2026-11-14).
+
+spandrel loads FDAT (IllustrationJaNai V3) itself from 0.4.2; MoESR is in
+`spandrel_extra_arches`, whose `install()` registers it once per process
+(`install_extra_arches`).
 """
 
 from __future__ import annotations
@@ -93,6 +104,15 @@ class DenoiseModel:
     archive_member: str = ""
     # MangaJaNai only: the page height the model was trained for.
     height: int = 0
+    # A model trained on grey art only: an RGB network that answers grey (MangaJaNai
+    # V1, the MoESR descreen model). On a page with colour it runs on the luma and the
+    # source's chroma is put back, so colour is never lost (`Spandrel.run`).
+    gray_only: bool = False
+    # A model whose host may refuse the seeding container (bucket.yor.ovh answers 403
+    # to Modal's addresses). A failed download skips it instead of failing the seed;
+    # the file can be put on the volume by hand (spikes/denoise/put-moesr.sh), and
+    # until then the presets that need it are not advertised.
+    optional: bool = False
 
 
 def _w2x(path: str, size: int, sha256: str) -> DenoiseModel:
@@ -197,7 +217,38 @@ def _mangajanai(name: str, size: int, sha256: str) -> DenoiseModel:
         model_id=f"mangajanai.{scale}x.{height}p", family="spandrel", file_name=f"mangajanai--{name}",
         url=MANGAJANAI_URL, sha256=sha256, bytes=size, scale=scale, channels=1,
         license="CC-BY-NC-4.0", author="the-database (MangaJaNai)", archive_member=name, height=height,
+        gray_only=True,
     )
+
+
+# IllustrationJaNai V3denoise (FDAT, RGB), the colour model the user chose 2026-11-14
+# (docs/research/denoise-combos-2026-11.md, round 2). Both scales live in one zip.
+IJANAI_URL = "https://github.com/the-database/MangaJaNai/releases/download/3.0.0/IllustrationJaNai_V3denoise.zip"
+_IJANAI_FILES: Tuple[Tuple[int, str, int, str], ...] = (
+    (2, "2x_IllustrationJaNai_V3denoise_FDAT_M_unshuffle_30k_fp16.safetensors", 16198963,
+     "960c9555f62fb19113e8d808bde5a54b64181b1db417bca1bbda26516e48f108"),
+    (4, "4x_IllustrationJaNai_V3denoise_FDAT_M_47k_fp16.safetensors", 16160075,
+     "a15dfc813b1f1138ca3da06c6cbf530dd1acbff0ba0d4eb97b5c021f3facbf6c"),
+)
+
+
+def _ijanai(scale: int, name: str, size: int, sha256: str) -> DenoiseModel:
+    return DenoiseModel(
+        model_id=f"ijanai.v3denoise.{scale}x", family="spandrel", file_name=f"ijanai--{name}",
+        url=IJANAI_URL, sha256=sha256, bytes=size, scale=scale, channels=3,
+        license="CC-BY-NC-SA-4.0", author="the-database (IllustrationJaNai)", archive_member=name,
+    )
+
+
+# umzi's MoESR v2 descreen model (4x, grey art), the user's second B&W choice of
+# 2026-11-14. The archive holds one member; its host refuses Modal (`optional`).
+MOESR = DenoiseModel(
+    model_id="umzi.ds-moesr-v2.4x", family="spandrel", file_name="umzi--4x_dwtp_ds_moesr_v2.pth",
+    url="https://bucket.yor.ovh/torch_models/4x_dwtp_ds_moesr_v2.tar.xz",
+    sha256="d43df68fbd6543c47e41b6dc5ca95da82794521b26108269f75ce533d100ee65", bytes=66451162, scale=4,
+    channels=3, license="not stated", author="umzi (dwtp descreen)", archive_member="models/4x_dwtp_ds_moesr_v2.pth",
+    gray_only=True, optional=True,
+)
 
 
 # Real-CUGAN (bilibili, MIT). bilibili publishes the weights on Google Drive and Baidu
@@ -242,6 +293,8 @@ MODELS: Dict[str, DenoiseModel] = {
               "0c3ff9f7b4fc11b21e1262bca06efada0b0723436623db5e2af37fa2291cb750", 4, 1, "eula"),
         *(_mangajanai(name, size, sha) for name, size, sha in _MANGAJANAI_FILES),
         *(_cugan(stem, size, sha) for stem, size, sha in _CUGAN_FILES),
+        *(_ijanai(scale, name, size, sha) for scale, name, size, sha in _IJANAI_FILES),
+        MOESR,
         SEAM_FILTER,
     )
 }
@@ -256,6 +309,11 @@ JPEG_ENGINES = {
     "mangajpeg-lq": "omdb.1x-MangaJPEGLQ",
 }
 SHARPEN_SPANDREL_ENGINES = {"digimanga-bw-4x": "omdb.4x-eula-digimanga-bw-v2-nc1"}
+# Engines with one model per scale; a step with no scale takes the largest.
+SCALED_ENGINES: Dict[str, Dict[int, str]] = {
+    "ijanai-v3-denoise": {2: "ijanai.v3denoise.2x", 4: "ijanai.v3denoise.4x"},
+    "moesr-descreen": {4: MOESR.model_id},
+}
 # MangaJaNai ships one model per source page height; the page picks it at run time,
 # as MangaJaNaiConverterGui does. A step names the family, `mangajanai.<s>x.auto`.
 MANGAJANAI_HEIGHTS = (1200, 1300, 1400, 1500, 1600, 1920, 2048)
@@ -265,45 +323,52 @@ OPS = ("denoise", "sharpen", "jpeg")
 # What a gateway of this version can do beyond the first contract; the desktop sends
 # a recipe that needs one only to a gateway that lists it (`denoise_capabilities`).
 FEATURE_OUTPUT_SCALE = "output_scale"
-FEATURES = (FEATURE_OUTPUT_SCALE,)
+# The gateway takes a recipe's `color_steps` and picks a route per page.
+FEATURE_COLOR_ROUTE = "color_route"
+FEATURES = (FEATURE_OUTPUT_SCALE, FEATURE_COLOR_ROUTE)
+
+# A page is a colour page when at least this share of its pixels carry colour: a
+# chroma (max minus min channel) of at least COLOUR_CHROMA. A grey page with a small
+# coloured title logo stays under it (49/001: a few percent) and keeps its colour by
+# the gray_only merge; a colour cover or spread is far over it.
+COLOUR_CHROMA = 24 / 255
+COLOUR_SHARE = 0.08
 
 
-# The recipes the app offers. The first six are the user's choice of 2026-09-28, after
-# two comparison rounds in spikes/denoise; the rest were added on 2026-10-10 so black
-# and white pages and colour pages each have more than one kind of model to try, and
-# have not been through a comparison round. Only these presets' models are seeded on
-# an installation; the full MODELS table stays for research runs.
+_CUGAN_2X = {"op": "sharpen", "engine": "realcugan", "scale": 2}
+_IJANAI_4X = {"op": "sharpen", "engine": "ijanai-v3-denoise", "scale": 4}
+
+# The recipes the app offers: the user's choice of 2026-11-14 after the combo bench
+# (docs/research/denoise-combos-2026-11.md). The two B&W presets send colour pages to
+# the colour model in the same run (`color_steps`). waifu2x is kept as the soft
+# option and the one the desktop runs. Only these presets' models are seeded on an
+# installation; the full MODELS table stays for the advanced chain and research.
 # src/lib/model/denoise-presets.json holds the same recipes for the interface, and
-# test_denoise checks the two agree.
+# test_denoise checks the two agree. Presets of earlier builds (MangaJaNai, MangaJPEG,
+# the other Real-CUGAN and waifu2x ones) are retired: their recipes still validate, so
+# the advanced chain can build them, but they are no longer seeded or advertised.
 PRESETS: Dict[str, Dict[str, Any]] = {
+    "realcugan-2x-auto": {"schema": 1, "steps": [_CUGAN_2X], "color_steps": [_IJANAI_4X]},
+    "moesr-descreen-auto": {"schema": 1, "steps": [{"op": "sharpen", "engine": "moesr-descreen", "scale": 4}],
+                            "color_steps": [_IJANAI_4X]},
+    "ijanai-v3-denoise-4x": {"schema": 1, "steps": [_IJANAI_4X]},
     "waifu2x-scan-4x-n2": {"schema": 1, "steps": [
         {"op": "sharpen", "engine": "waifu2x-art-scan", "scale": 4, "level": 2}]},
-    "realcugan-2x-conservative": {"schema": 1, "steps": [
-        {"op": "sharpen", "engine": "realcugan", "scale": 2}]},
-    "realcugan-3x-conservative": {"schema": 1, "steps": [
-        {"op": "sharpen", "engine": "realcugan", "scale": 3}]},
-    "realcugan-3x-denoise3": {"schema": 1, "steps": [
-        {"op": "sharpen", "engine": "realcugan", "scale": 3, "level": 3}]},
-    "mangajanai-2x": {"schema": 1, "steps": [
-        {"op": "sharpen", "engine": "mangajanai", "scale": 2}]},
-    "mangajanai-4x": {"schema": 1, "steps": [
-        {"op": "sharpen", "engine": "mangajanai", "scale": 4}]},
-    "digimanga-bw-4x": {"schema": 1, "steps": [
-        {"op": "sharpen", "engine": "digimanga-bw-4x"}]},
-    "mangajpeg-hq": {"schema": 1, "steps": [
-        {"op": "jpeg", "engine": "mangajpeg-hq"}]},
-    "mangajpeg-lq": {"schema": 1, "steps": [
-        {"op": "jpeg", "engine": "mangajpeg-lq"}]},
-    "waifu2x-scan-n1": {"schema": 1, "steps": [
-        {"op": "denoise", "engine": "waifu2x-art-scan", "level": 1}]},
-    "waifu2x-scan-n3": {"schema": 1, "steps": [
-        {"op": "denoise", "engine": "waifu2x-art-scan", "level": 3}]},
-    "realcugan-4x-conservative": {"schema": 1, "steps": [
-        {"op": "sharpen", "engine": "realcugan", "scale": 4}]},
-    "waifu2x-art-2x-n1": {"schema": 1, "steps": [
-        {"op": "sharpen", "engine": "waifu2x-art", "scale": 2, "level": 1}]},
-    "waifu2x-art-2x-n3": {"schema": 1, "steps": [
-        {"op": "sharpen", "engine": "waifu2x-art", "scale": 2, "level": 3}]},
+}
+
+# The steps the app's advanced chain builds a recipe from (up to MAX_STEPS of them, one
+# route for every page), mirrored in denoise-presets.json as `chainSteps`. Seeded on
+# an installation with the presets' models, so a chain the app offers can run.
+CHAIN_STEPS: Dict[str, Dict[str, Any]] = {
+    "realcugan-2x": _CUGAN_2X,
+    "realcugan-2x-denoise3": {"op": "sharpen", "engine": "realcugan", "scale": 2, "level": 3},
+    "moesr-descreen-4x": {"op": "sharpen", "engine": "moesr-descreen", "scale": 4},
+    "ijanai-v3-denoise-4x": _IJANAI_4X,
+    "ijanai-v3-denoise-2x": {"op": "sharpen", "engine": "ijanai-v3-denoise", "scale": 2},
+    "waifu2x-scan-4x-n2": {"op": "sharpen", "engine": "waifu2x-art-scan", "scale": 4, "level": 2},
+    "waifu2x-scan-n1": {"op": "denoise", "engine": "waifu2x-art-scan", "level": 1},
+    "waifu2x-scan-n3": {"op": "denoise", "engine": "waifu2x-art-scan", "level": 3},
+    "mangajpeg-hq": {"op": "jpeg", "engine": "mangajpeg-hq"},
 }
 
 
@@ -362,6 +427,13 @@ def resolve_step(raw: Mapping[str, Any]) -> Step:
             raise DenoiseError(f"realcugan has no {scale}x model at level {level}")
         return Step(op, engine, model_id, float(strength))
 
+    if op == "sharpen" and engine in SCALED_ENGINES:
+        by_scale = SCALED_ENGINES[engine]
+        scale = max(by_scale) if scale is None else scale
+        if level is not None or isinstance(scale, bool) or scale not in by_scale:
+            raise DenoiseError(f"{engine} takes scale {sorted(by_scale)} and no level")
+        return Step(op, engine, by_scale[scale], float(strength))
+
     if op == "sharpen" and engine in SHARPEN_SPANDREL_ENGINES:
         if level is not None or scale not in (None, 4):
             raise DenoiseError(f"{engine} is a fixed 4x model with no level")
@@ -385,28 +457,56 @@ def resolve_step(raw: Mapping[str, Any]) -> Step:
     return Step(op, engine, model_id, float(strength))
 
 
-def resolve_recipe(raw: Mapping[str, Any]) -> List[Step]:
-    """Validate a recipe document: {"schema": 1, "steps": [...]}, with an optional
-    "output_scale" of 2 to 4 that the recipe's last upscaling step keeps."""
-    if not isinstance(raw, Mapping) or raw.get("schema") != RECIPE_SCHEMA:
-        raise DenoiseError(f"recipe schema must be {RECIPE_SCHEMA}")
-    unknown = set(raw) - {"schema", "steps", "output_scale"}
-    if unknown:
-        raise DenoiseError(f"unknown recipe fields: {sorted(unknown)}")
-    raw_steps = raw.get("steps")
+@dataclass(frozen=True)
+class Routes:
+    """A recipe's resolved steps: `gray` for every page, or for grey pages only when
+    `color` is set, which colour pages run instead (`is_colour_page`)."""
+
+    gray: List[Step]
+    color: Optional[List[Step]] = None
+
+    def all(self) -> List[Step]:
+        return [*self.gray, *(self.color or [])]
+
+    def for_page(self, colour: bool) -> List[Step]:
+        return self.color if colour and self.color else self.gray
+
+
+def _resolve_route(raw_steps: Any, out: Optional[int], name: str) -> List[Step]:
     if not isinstance(raw_steps, list) or not 1 <= len(raw_steps) <= MAX_STEPS:
-        raise DenoiseError(f"a recipe has 1 to {MAX_STEPS} steps")
+        raise DenoiseError(f"a recipe's {name} are 1 to {MAX_STEPS} steps")
     steps = [resolve_step(step) for step in raw_steps]
-    if "output_scale" in raw:
-        # Absent means the page's own size, so 1 has one spelling and one digest.
-        out = raw["output_scale"]
-        if isinstance(out, bool) or not isinstance(out, int) or not 2 <= out <= 4:
-            raise DenoiseError("output_scale must be an integer from 2 to 4")
+    if out is not None:
         last = max((at for at, step in enumerate(steps) if step_scale(step) > 1), default=None)
         if last is None or out > step_scale(steps[last]):
             raise DenoiseError("output_scale is past what the recipe's last upscaling step gives")
         steps[last] = replace(steps[last], out=out)
     return steps
+
+
+def resolve_routes(raw: Mapping[str, Any]) -> Routes:
+    """Validate a recipe document: {"schema": 1, "steps": [...]}, with an optional
+    "color_steps" list for colour pages and an optional "output_scale" of 2 to 4 that
+    each list's last upscaling step keeps."""
+    if not isinstance(raw, Mapping) or raw.get("schema") != RECIPE_SCHEMA:
+        raise DenoiseError(f"recipe schema must be {RECIPE_SCHEMA}")
+    unknown = set(raw) - {"schema", "steps", "output_scale", "color_steps"}
+    if unknown:
+        raise DenoiseError(f"unknown recipe fields: {sorted(unknown)}")
+    out = None
+    if "output_scale" in raw:
+        # Absent means the page's own size, so 1 has one spelling and one digest.
+        out = raw["output_scale"]
+        if isinstance(out, bool) or not isinstance(out, int) or not 2 <= out <= 4:
+            raise DenoiseError("output_scale must be an integer from 2 to 4")
+    gray = _resolve_route(raw.get("steps"), out, "steps")
+    color = _resolve_route(raw["color_steps"], out, "color_steps") if "color_steps" in raw else None
+    return Routes(gray, color)
+
+
+def resolve_recipe(raw: Mapping[str, Any]) -> List[Step]:
+    """The steps every page runs, or grey pages when the recipe routes colour pages."""
+    return resolve_routes(raw).gray
 
 
 def step_scale(step: Step) -> int:
@@ -416,8 +516,10 @@ def step_scale(step: Step) -> int:
 
 
 def preset_models() -> List[DenoiseModel]:
-    """Every model the shipped presets can use, which is what an installation seeds."""
-    steps = [step for recipe in PRESETS.values() for step in resolve_recipe(recipe)]
+    """Every model the shipped presets and the advanced chain's steps can use, which is
+    what an installation seeds."""
+    steps = [step for recipe in PRESETS.values() for step in resolve_routes(recipe).all()]
+    steps += [resolve_step(step) for step in CHAIN_STEPS.values()]
     return models_for(steps)
 
 
@@ -478,6 +580,29 @@ def _download(url: str, directory: Path) -> Path:
     return Path(part.name)
 
 
+def _fetch(model: DenoiseModel, directory: Path, archives: Dict[str, Path]) -> Path:
+    """Download the model's file, or its archive once and the member out of it."""
+    if not model.archive_member:
+        return _download(model.url, directory)
+    if model.url not in archives:
+        archives[model.url] = _download(model.url, directory)
+    with tempfile.NamedTemporaryFile(dir=directory, delete=False) as part:
+        if model.url.endswith((".tar.xz", ".tar.gz", ".tar")):
+            import tarfile
+            with tarfile.open(archives[model.url]) as archive:
+                member = archive.extractfile(model.archive_member)
+                if member is None:
+                    raise DenoiseError(f"{model.model_id}: {model.archive_member} is not a file", "weights_corrupt")
+                for chunk in iter(lambda: member.read(1 << 20), b""):
+                    part.write(chunk)
+        else:
+            import zipfile
+            with zipfile.ZipFile(archives[model.url]) as archive, archive.open(model.archive_member) as member:
+                for chunk in iter(lambda: member.read(1 << 20), b""):
+                    part.write(chunk)
+    return Path(part.name)
+
+
 def _ensure_each(models: Sequence[DenoiseModel], directory: Path, download: bool,
                  paths: Dict[str, Path], archives: Dict[str, Path]) -> bool:
     changed = False
@@ -488,18 +613,14 @@ def _ensure_each(models: Sequence[DenoiseModel], directory: Path, download: bool
             continue
         if not download:
             raise DenoiseError(f"{model.model_id} is not seeded", "weights_missing")
-        if model.archive_member:
-            if model.url not in archives:
-                archives[model.url] = _download(model.url, directory)
-            import zipfile
-            with zipfile.ZipFile(archives[model.url]) as archive, \
-                    tempfile.NamedTemporaryFile(dir=directory, delete=False) as part:
-                with archive.open(model.archive_member) as member:
-                    for chunk in iter(lambda: member.read(1 << 20), b""):
-                        part.write(chunk)
-            part_path = Path(part.name)
-        else:
-            part_path = _download(model.url, directory)
+        try:
+            part_path = _fetch(model, directory, archives)
+        except OSError as exc:  # urllib's URLError and HTTPError are OSErrors
+            if not model.optional:
+                raise
+            # Its host refused this container; the seed goes on without it.
+            print(f"denoise: {model.model_id} skipped, its download failed: {exc}"[:300], flush=True)
+            continue
         actual = _sha256(part_path)
         if actual != model.sha256 or part_path.stat().st_size != model.bytes:
             part_path.unlink(missing_ok=True)
@@ -570,6 +691,43 @@ def decode_page(png: bytes) -> Page:
         rgb = np.asarray(image.convert("RGB"), dtype=np.float32).transpose(2, 0, 1) / 255.0
     gray = bool(np.abs(rgb[0] - rgb[1]).max() < 1.5 / 255 and np.abs(rgb[1] - rgb[2]).max() < 1.5 / 255)
     return Page(rgb=rgb, alpha=alpha, gray=gray, sixteen_bit=sixteen)
+
+
+def is_colour_page(page: Page) -> bool:
+    """Whether the page goes to a recipe's colour route: at least COLOUR_SHARE of all
+    its pixels carry a chroma of COLOUR_CHROMA or more. Every pixel counts, so a small
+    coloured logo on a grey page is a small share, and a colour page with wide white
+    or black areas still has its art."""
+    if page.gray:
+        return False
+    rgb = page.rgb
+    chroma = rgb.max(axis=0) - rgb.min(axis=0)
+    return float((chroma >= COLOUR_CHROMA).mean()) >= COLOUR_SHARE
+
+
+def luma_of(rgb):
+    """BT.601 luma of CHW RGB."""
+    r, g, b = rgb
+    return 0.299 * r + 0.587 * g + 0.114 * b
+
+
+def with_chroma_of(source, y_out):
+    """`y_out` (HxW luma, at its own size) with the chroma of `source` (CHW RGB),
+    enlarged to `y_out`'s size when the model scaled: the YCbCr merge that keeps a
+    page's colour through a model that only answers grey."""
+    import numpy as np
+
+    luma = luma_of(source)
+    r, _, b = source
+    cb, cr = b - luma, r - luma
+    if cb.shape != y_out.shape:
+        from PIL import Image
+        size = (y_out.shape[1], y_out.shape[0])
+        cb, cr = (np.asarray(Image.fromarray(p.astype(np.float32)).resize(
+            size, Image.Resampling.BICUBIC), dtype=np.float32) for p in (cb, cr))
+    r2, b2 = y_out + cr, y_out + cb
+    g2 = (y_out - 0.299 * r2 - 0.114 * b2) / 0.587
+    return np.clip(np.stack([r2, g2, b2]), 0.0, 1.0)
 
 
 def _alpha_for(page: Page, size: Tuple[int, int]):
@@ -719,27 +877,45 @@ class Spandrel:
     def run(self, rgb, gray: bool):
         import numpy as np
 
-        if getattr(self.net, "input_channels", self.model.channels) == 3:
+        channels = getattr(self.net, "input_channels", self.model.channels)
+        if channels == 3 and not self.model.gray_only:
             return self._infer(rgb)
-        # Luma-only model. A grey page runs its one plane; a colour page runs its luma
-        # (BT.601) and carries the chroma through unchanged, resized if the model scales.
-        r, g, b = rgb
-        luma = 0.299 * r + 0.587 * g + 0.114 * b
-        y_out = self._infer(luma[None].astype(np.float32))[0]
+        # A luma-only model, or an RGB one trained on grey art only. A grey page runs
+        # its luma; a page with colour runs its luma (BT.601) and gets its own chroma
+        # back, enlarged if the model scales. Before this, a colour page sent as RGB
+        # to MangaJaNai came back grey (combo bench, 2026-11-14).
+        luma = luma_of(rgb).astype(np.float32)
+        plane = luma[None] if channels == 1 else np.stack([luma, luma, luma])
+        y_out = self._infer(plane).mean(axis=0)
         if gray:
             return np.stack([y_out, y_out, y_out])
-        cb, cr = b - luma, r - luma
-        if self.model.scale != 1:
-            from PIL import Image
-            size = (y_out.shape[1], y_out.shape[0])
-            cb, cr = (np.asarray(Image.fromarray(p.astype(np.float32)).resize(
-                size, Image.Resampling.BICUBIC), dtype=np.float32) for p in (cb, cr))
-        r2, b2 = y_out + cr, y_out + cb
-        g2 = (y_out - 0.299 * r2 - 0.114 * b2) / 0.587
-        return np.clip(np.stack([r2, g2, b2]), 0.0, 1.0)
+        return with_chroma_of(rgb, y_out)
 
 
 # ---------------------------------------------------------------- runtime
+
+_EXTRA_ARCHES_LOCK = threading.Lock()
+_extra_arches_installed = False
+
+
+def install_extra_arches(module: Any = None) -> bool:
+    """Register spandrel_extra_arches (MoESR) with spandrel, once per process: a second
+    `install()` raises DuplicateArchitectureError. Answers whether this call did it.
+    `module` stands in for the package in tests."""
+    global _extra_arches_installed
+    with _EXTRA_ARCHES_LOCK:
+        if _extra_arches_installed:
+            return False
+        if module is None:
+            import spandrel_extra_arches as module
+        try:
+            module.install()
+        except Exception as exc:  # noqa: BLE001
+            # Something else in the process registered them first: that is the state wanted.
+            if type(exc).__name__ != "DuplicateArchitectureError":
+                raise
+        _extra_arches_installed = True
+        return True
 
 
 class SessionCache:
@@ -835,6 +1011,7 @@ class SessionCache:
             else:
                 import torch
                 from spandrel import ModelLoader
+                install_extra_arches()
                 net = ModelLoader().load_from_file(path).eval()
                 if torch.cuda.is_available():
                     net = net.cuda()
@@ -875,9 +1052,13 @@ def run_step(sessions: SessionCache, step: Step, page: Page, rgb):
     return out.astype(np.float32), model.model_id
 
 
-def denoise_page(sessions: SessionCache, steps: Sequence[Step], png: bytes) -> Tuple[bytes, Dict[str, Any]]:
-    """Run `steps` over one PNG page; returns the PNG and per-step timings in ms."""
+def denoise_page(sessions: SessionCache, routes: "Routes | Sequence[Step]", png: bytes) -> Tuple[bytes, Dict[str, Any]]:
+    """Run the page's route over one PNG page; returns the PNG and per-step timings in
+    ms. A plain list of steps is one route for every page."""
+    if not isinstance(routes, Routes):
+        routes = Routes(list(routes))
     page = decode_page(png)
+    steps = routes.for_page(is_colour_page(page))
     rgb = page.rgb
     pixels = rgb.shape[1] * rgb.shape[2]
     if any(pixels * step_scale(step) ** 2 > MAX_UPSCALED_PIXELS for step in steps):
@@ -932,8 +1113,8 @@ def request_digest(recipe: Mapping[str, Any], page_png: bytes) -> str:
     return digest.hexdigest()
 
 
-def validate_denoise_request(metadata: Any, page_png: bytes) -> List[Step]:
-    """Check one page request; returns its resolved steps or raises DenoiseError."""
+def validate_denoise_request(metadata: Any, page_png: bytes) -> Routes:
+    """Check one page request; returns its resolved routes or raises DenoiseError."""
     if type(metadata) is not dict or set(metadata) != {"protocol_version", "request_digest", "recipe"}:
         raise DenoiseError("metadata must hold exactly protocol_version, request_digest and recipe")
     if metadata["protocol_version"] != DENOISE_VERSION:
@@ -942,10 +1123,10 @@ def validate_denoise_request(metadata: Any, page_png: bytes) -> List[Step]:
         raise DenoiseError("page must be a PNG")
     if len(page_png) > DENOISE_MAX_PNG_BYTES:
         raise DenoiseError("page PNG is too large", "page_too_large")
-    steps = resolve_recipe(metadata["recipe"])
+    routes = resolve_routes(metadata["recipe"])
     if metadata["request_digest"] != request_digest(metadata["recipe"], page_png):
         raise DenoiseError("request_digest does not match the recipe and page")
-    return steps
+    return routes
 
 
 def seeded_models(root: os.PathLike | str) -> List[str]:
@@ -972,9 +1153,11 @@ def denoise_capabilities(root: os.PathLike | str) -> Dict[str, Any]:
     if "realcugan.up2x-latest-conservative" in seeded:
         engines["sharpen"].append("realcugan")
     engines["sharpen"] += [e for e, m in SHARPEN_SPANDREL_ENGINES.items() if m in seeded]
+    # Listed when its largest model is seeded, the one a step with no scale runs.
+    engines["sharpen"] += [e for e, by in SCALED_ENGINES.items() if by[max(by)] in seeded]
     engines["jpeg"] += [e for e, m in JPEG_ENGINES.items() if m in seeded]
     presets = [name for name, recipe in PRESETS.items()
-               if all(m.model_id in seeded for m in models_for(resolve_recipe(recipe)))]
+               if all(m.model_id in seeded for m in models_for(resolve_routes(recipe).all()))]
     return {
         "protocol_version": DENOISE_VERSION,
         "available": bool(presets) or (SEAM_FILTER.model_id in seeded and any(engines.values())),
@@ -1028,8 +1211,9 @@ class DenoiseRuntime:
                 raise DenoiseError("ONNX Runtime CUDA provider is unavailable", "inference_failed")
 
     def denoise(self, metadata: Dict[str, Any], page_png: bytes) -> Dict[str, Any]:
-        steps = validate_denoise_request(metadata, page_png)
-        self._prepare(steps)
-        out, info = denoise_page(self.sessions, steps, page_png)
+        routes = validate_denoise_request(metadata, page_png)
+        # Both routes' models, so a chapter's colour page finds its model ready too.
+        self._prepare(routes.all())
+        out, info = denoise_page(self.sessions, routes, page_png)
         return {"protocol_version": DENOISE_VERSION, "request_digest": metadata["request_digest"],
                 "page_png": out, "info": info}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { t } from '../i18n/index.js'
-import { imageType, presetName, runFacts, runLabel, runWhen } from './denoisehistory.js'
+import { imageType, presetName, runFacts, runInUse, runLabel, runWhen } from './denoisehistory.js'
 
 /** @param {Partial<import('../api/backend.js').DenoiseRun>} [over] */
 const aRun = (over = {}) => ({
@@ -22,6 +22,16 @@ describe('the words for a denoise run', () => {
     expect(presetName('waifu2x-scan-4x-n2')).toBe(t('denoise.preset.waifu2xScan.name'))
     expect(presetName('a-later-preset')).toBe('a-later-preset')
     expect(presetName(null)).toBe(t('home.denoised.presetUnknown'))
+  })
+
+  it('names a retired preset and a custom recipe, so an old chapter still reads', () => {
+    expect(presetName('realcugan-2x-conservative')).toBe(t('denoise.preset.realcugan2x.name'))
+    expect(presetName('custom')).toBe(t('denoise.chain.name'))
+  })
+
+  it('says the disk use of a run only when the backend states it', () => {
+    expect(runFacts(aRun({ bytes: 5_000_000 }))).toContain(t('denoise.compare.size', { bytes: 5_000_000 }))
+    expect(runFacts(aRun()).some((fact) => fact === t('denoise.compare.size', { bytes: 0 }))).toBe(false)
   })
 
   it('states where it ran, what from, how many pages, and what is taken or gone', () => {
@@ -62,5 +72,13 @@ describe('an image type from its bytes', () => {
     expect(imageType(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer)).toBe('image/jpeg')
     expect(imageType(new TextEncoder().encode('  <svg xmlns="http://www.w3.org/2000/svg"/>'))).toBe('image/svg+xml')
     expect(imageType(new Uint8Array([1, 2, 3]))).toBe('')
+  })
+})
+
+describe('the run in use', () => {
+  it('is the marked run, else the newest, else none', () => {
+    expect(runInUse([aRun({ created: 3 }), aRun({ created: 2, inUse: true }), aRun({ created: 1 })])).toBe(2)
+    expect(runInUse([aRun({ created: 3 }), aRun({ created: 2 })]), 'an older backend marks none').toBe(3)
+    expect(runInUse([])).toBe(null)
   })
 })

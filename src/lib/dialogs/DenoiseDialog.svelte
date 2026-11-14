@@ -14,7 +14,10 @@
    *   is this run's alone, never a setting: same size, or 2 to 4 times it, as
    *   far as the preset can give (`outputScalesFor`). Larger pages are saved
    *   in the folder and cannot be taken as the chapter's pages, and the form
-   *   says so when one is chosen.
+   *   says so when one is chosen. Advanced, on the cloud GPU only, builds a
+   *   recipe of up to `MAX_CHAIN_STEPS` steps from `CHAIN_STEPS` in place of
+   *   a preset; its output sizes are what its steps can give (`chainScales`),
+   *   and it is not timed in advance.
    * - **consent**, cloud only: what `prepare_cloud_denoise` says would be
    *   sent, where, and at what GPU time and cost, with the same two
    *   statements every cloud consent asks for (`CloudCleanConsentDialog`).
@@ -34,7 +37,7 @@
    * ended; closed, the jobs list says it as a notice.
    */
   import { onDestroy, onMount, untrack } from 'svelte'
-  import { Button, Modal, Segmented, Select } from '../ui/index.js'
+  import { Button, Disclosure, IconButton, Modal, Segmented, Select } from '../ui/index.js'
   import Icon from '../icons/Icon.svelte'
   import SourceFolderField from '../home/dialogs/SourceFolderField.svelte'
   import { closeModal } from '../state/app.svelte.js'
@@ -50,7 +53,8 @@
     checkCloudDenoise, cloudNote, cloudOffered, currentPreset, loadDenoisePresets, offeredPresets, saveDenoiseChoice,
   } from '../state/denoise.svelte.js'
   import {
-    DENOISE_REFERENCE, chapterEstimate, defaultOutDir, outputScalesFor, pageMegapixels, presetById, recipeAt, runScale,
+    CHAIN_STEPS, CHAIN_STEP_TEXT, DENOISE_REFERENCE, MAX_CHAIN_STEPS, chainRecipe, chainScales, chainStepById,
+    chapterEstimate, defaultOutDir, outputScalesFor, pageMegapixels, presetById, recipeAt, runScale,
   } from '../model/denoise.js'
   import { providerKeyOf } from './CloudAnalysis.svelte'
   import { openSettings } from './settingslinks.js'
@@ -131,6 +135,36 @@
     if (phase === 'form' && target === 'cloud' && !cloudOffered()) untrack(() => chooseTarget('local'))
   })
 
+  /** Advanced: its section open, and whether this run uses the recipe built there. */
+  let advanced = $state(false)
+  let custom = $state(false)
+  /** The built recipe's steps, by `CHAIN_STEPS` id, in the order they run. */
+  /** @type {string[]} */
+  let chain = $state([CHAIN_STEPS[0]?.id ?? ''])
+  /** A built recipe runs only on the cloud GPU. */
+  const customOn = $derived(custom && target === 'cloud')
+  const chainOptions = CHAIN_STEPS.map((entry) => ({
+    value: entry.id,
+    label: t(/** @type {Record<string, string>} */ (CHAIN_STEP_TEXT)[entry.id] ?? entry.id),
+  }))
+  const chainSteps = $derived(chain.flatMap((id) => { const entry = chainStepById(id); return entry ? [entry.step] : [] }))
+
+  /** @param {number} at @param {string} id */
+  function setStep(at, id) {
+    chain = chain.map((entry, index) => (index === at ? id : entry))
+    if (!chainScales(chainSteps).includes(scale)) scale = 1
+  }
+
+  function addStep() {
+    if (chain.length < MAX_CHAIN_STEPS) chain = [...chain, CHAIN_STEPS[0]?.id ?? '']
+  }
+
+  /** @param {number} at */
+  function removeStep(at) {
+    if (chain.length > 1) chain = chain.filter((_, index) => index !== at)
+    if (!chainScales(chainSteps).includes(scale)) scale = 1
+  }
+
   const presets = $derived(offeredPresets(target))
   const chosen = $derived(presets.some((entry) => entry.id === preset) ? preset : presets[0]?.id ?? null)
   const estimate = $derived(chapterEstimate({
@@ -142,7 +176,7 @@
   const sized = $derived(pageMegapixels(pages) !== null)
 
   /** The output sizes the chosen preset offers, and the one this run uses. */
-  const scales = $derived(outputScalesFor(chosen ? presetById(chosen) : null))
+  const scales = $derived(customOn ? chainScales(chainSteps) : outputScalesFor(chosen ? presetById(chosen) : null))
   const outputScale = $derived(scales.includes(scale) ? scale : 1)
   const sizes = $derived(scales.map((value) => ({
     value: String(value),
@@ -185,7 +219,7 @@
   }
 
   const folder = $derived(outDir.trim())
-  const canRun = $derived(Boolean(chosen && folder && count > 0 &&
+  const canRun = $derived(Boolean((customOn ? chainRecipe(chain) : chosen) && folder && count > 0 &&
     (target === 'local' ? installed : cloudOffered() && !switching)))
 
   /**
@@ -226,10 +260,13 @@
     // The deployment has no denoise route or models: it was set up with Page
     // denoise off, or on Beam, which cannot run it.
     if (code.startsWith('capability_unavailable: gateway denoise is not configured') ||
-        code.startsWith('capability_unavailable: the deployment has no models')) return { key: 'denoise.error.notSetUp' }
+        (!customOn && code.startsWith('capability_unavailable: the deployment has no models'))) return { key: 'denoise.error.notSetUp' }
     // The deployment has page denoise but was set up before it could keep a
     // larger result.
     if (code.startsWith('capability_unavailable: the deployment cannot upscale')) return { key: 'denoise.error.cloudOutdated' }
+    // Set up before colour routing, or without a model this recipe needs.
+    if (code.startsWith('capability_unavailable: the deployment cannot route colour pages') ||
+        (customOn && code.startsWith('capability_unavailable: the deployment has no models'))) return { key: 'denoise.error.cloudNeedsUpdate' }
     if (code.startsWith('denoise_models_missing')) return { key: 'denoise.error.modelMissing' }
     if (code.startsWith('denoise_runtime_unavailable')) return { key: 'denoise.error.runtimeMissing' }
     if (code.includes('out_dir')) return { key: 'denoise.error.outDir' }
@@ -256,8 +293,9 @@
   const mintRunId = () => `den-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 
   async function run() {
-    if (!canRun || !chosen) return
+    if (!canRun) return
     if (target === 'cloud') return review()
+    if (!chosen) return
     const backend = getBackend()
     const id = mintRunId()
     const presetId = chosen
@@ -325,13 +363,14 @@
 
   async function review() {
     const entry = chosen ? presetById(chosen) : null
-    if (!entry) return
+    const recipe = customOn ? chainRecipe(chain, outputScale) : entry ? recipeAt(entry, outputScale) : null
+    if (!recipe) return
     phase = 'preparing'
     const profileId = cloud.readiness.target?.profile_id
     const configKey = configurationKey(cloud.readiness)
     try {
       const prepared = await getBackend().prepareCloudDenoise({
-        chapterId: chapter.id, pageIndices: null, recipe: recipeAt(entry, outputScale),
+        chapterId: chapter.id, pageIndices: null, recipe,
       })
       proposal = { ...prepared, profileId: prepared.profileId ?? profileId }
       rights = false
@@ -392,7 +431,7 @@
 
   async function copyPath() {
     try {
-      await globalThis.navigator?.clipboard?.writeText(folder)
+      await globalThis.navigator?.clipboard?.writeText(written)
       copied = true
     } catch {
       copied = false
@@ -423,6 +462,8 @@
       standing: proposal.standing === true,
     }
   })
+  /** Where the pages went: a run folder of its own when the folder held an earlier run. */
+  const written = $derived(/** @type {import('../api/backend.js').DenoiseReport|null} */ (report)?.folder || folder)
   const confirmable = $derived(Boolean(consent && (consent.standing || (rights && retention))))
 
   const title = $derived(phase === 'consent' ? t('denoise.consent.title') : t(cleaned ? 'denoise.titleCleaned' : 'denoise.title'))
@@ -477,7 +518,7 @@
       {/if}
       {#if note}<p class="small" id="{uid}-cloud-why">{t(note)}</p>{/if}
 
-      <div class="section">
+      <div class="section" class:hidden={customOn}>
         <span class="label">{t('denoise.preset.label')}</span>
         <PresetList
           {presets}
@@ -486,6 +527,41 @@
           timeOf={(entry) => presetTime(entry, target, { pages: sized ? pages : null, localPerPage: session.denoiseLocalSecondsPerPage })}
           onchange={choosePreset}
         />
+      </div>
+
+      <div class="section advanced">
+        <Disclosure open={advanced} ontoggle={(next) => (advanced = next)} variant="plain">
+          {#snippet summary()}<span class="label">{t('denoise.chain.label')}</span>{/snippet}
+          <div class="chain" data-custom={customOn}>
+            {#if target !== 'cloud'}
+              <p class="small">{t('denoise.chain.cloudOnly')}</p>
+            {:else}
+              <div class="answer">
+                <input id="{uid}-custom" type="checkbox" bind:checked={custom} onchange={() => { if (!chainScales(chainSteps).includes(scale)) scale = 1 }} />
+                <label for="{uid}-custom">{t('denoise.chain.use')}</label>
+              </div>
+              {#if custom}
+                {#each chain as id, index (index)}
+                  <div class="step" data-step={index}>
+                    <span class="label" id="{uid}-step-{index}">{t('denoise.chain.stepLabel', { n: index + 1 })}</span>
+                    <Select options={chainOptions} value={id} labelledBy="{uid}-step-{index}" onchange={(value) => setStep(index, value)} />
+                    <IconButton
+                      icon="close"
+                      label={t('denoise.chain.remove', { n: index + 1 })}
+                      size={24}
+                      disabled={chain.length <= 1}
+                      onclick={() => removeStep(index)}
+                    />
+                  </div>
+                {/each}
+                {#if chain.length < MAX_CHAIN_STEPS}
+                  <div><Button size="sm" onclick={addStep}>{t('denoise.chain.add')}</Button></div>
+                {/if}
+                <p class="small">{t('denoise.chain.note')}</p>
+              {/if}
+            {/if}
+          </div>
+        </Disclosure>
       </div>
 
       <div class="section" data-output={outputScale}>
@@ -517,7 +593,9 @@
 
       <div class="section estimate" data-basis={estimate.basis}>
         <span class="label">{t('denoise.estimate.label')}</span>
-        {#if estimate.seconds !== null}
+        {#if customOn}
+          <p class="small">{t('denoise.chain.unmeasured')}</p>
+        {:else if estimate.seconds !== null}
           <p class="figure">{t('denoise.estimate.value', { duration: durationWords(estimate.seconds) })}</p>
           <p class="small">
             {#if estimate.basis === 'pages'}{t('denoise.estimate.pages')}
@@ -655,7 +733,7 @@
         </ul>
       {/if}
       <div class="where">
-        <code class="path">{folder}</code>
+        <code class="path">{written}</code>
         <Button size="sm" onclick={copyPath}>{t('denoise.action.copyPath')}</Button>
         {#if copied}<span class="small" role="status">{t('denoise.summary.copied')}</span>{/if}
       </div>
@@ -663,7 +741,7 @@
       <p class="failed-line" role="alert">{t(failure.key, failure.params ?? {})}</p>
       {#if failure.key === 'denoise.error.runtimeMissing'}
         <Button size="sm" onclick={() => { closeModal(null); openSettings('models') }}>{t('denoise.model.openSettings')}</Button>
-      {:else if failure.key === 'denoise.error.notSetUp' || failure.key === 'denoise.error.cloudOutdated'}
+      {:else if ['denoise.error.notSetUp', 'denoise.error.cloudOutdated', 'denoise.error.cloudNeedsUpdate'].includes(failure.key)}
         <Button size="sm" onclick={() => { closeModal(null); openSettings('cloud') }}>{t('denoise.error.openCloud')}</Button>
       {/if}
     {/if}
@@ -714,6 +792,8 @@
   .section.hidden { display: none }
   .figure { margin: 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text) }
   .estimate { gap: var(--s-2) }
+  .chain { display: grid; gap: var(--s-3); padding-top: var(--s-3) }
+  .step { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; align-items: center; gap: var(--s-3) }
 
   .choices { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4) }
   .choice {

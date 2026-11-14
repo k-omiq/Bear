@@ -91,8 +91,8 @@ describe('the denoise step', () => {
     await fireEvent.click(card(container, 'cloud'))
     await waitFor(() => expect(presetIds(container)).toEqual(cloudIds('bw')))
     expect(session.denoiseTarget).toBe('cloud')
-    const first = /** @type {HTMLElement} */ (container.querySelector('[data-preset="mangajanai-2x"]'))
-    expect(first.textContent).toContain(t('denoise.time.cloud', { duration: t('denoise.duration.seconds', { value: '4' }) }))
+    const first = /** @type {HTMLElement} */ (container.querySelector('[data-preset="realcugan-2x-auto"]'))
+    expect(first.textContent).toContain(t('denoise.time.cloud', { duration: t('denoise.duration.seconds', { value: '2.3' }) }))
     expect(chosenFiles().filter((id) => LOCAL_PACKAGE.includes(id))).toEqual([])
   })
 
@@ -100,7 +100,7 @@ describe('the denoise step', () => {
     setCloudAllowed(true)
     const { container, getByRole } = render(DenoiseStep)
     await fireEvent.click(card(container, 'cloud'))
-    await waitFor(() => expect(session.denoisePreset).toBe('mangajanai-2x'))
+    await waitFor(() => expect(session.denoisePreset).toBe('realcugan-2x-auto'))
     expect(getByRole('radio', { name: t('denoise.pages.bw') }).getAttribute('aria-checked')).toBe('true')
 
     await fireEvent.click(getByRole('radio', { name: t('denoise.pages.color') }))

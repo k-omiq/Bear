@@ -1,66 +1,62 @@
 <script>
   /**
-   * One denoise run of a chapter against the raw pages it was made from, a
-   * page at a time. Opened from Denoise history in the chapter menu
-   * (`home/actions.js#openDenoiseHistory`) on the newest run; the run picker
-   * is the rest of the history.
+   * A chapter's denoise runs, one page at a time against the raw page it was
+   * made from. Opened from Denoise history in the chapter menu
+   * (`home/actions.js#openDenoiseHistory`) on the run in use.
+   *
+   * The run picker is the whole history: every run stays until the user
+   * deletes it here. One run is the one in use (the file Replace pages with
+   * denoised takes, `Project::current_denoised`); it is the newest unless the
+   * user picked another with Use this run. Delete asks first, inline, and then
+   * removes the run's rows and files (`denoise_history.rs#delete_run`). The
+   * history is read again after either, so the list is what disk now holds.
    *
    * The two pages are stacked in one box, each fitted to it the same way, so
-   * a 4x upscale and the scan it came from line up pixel for pixel on screen.
-   * The denoised page is on top and clipped at the wipe, the way the editor's
-   * sheet clips its cleaned layer over the original (`editor/PageSheet.svelte`):
-   * denoised left of the divider, raw right of it, each side labelled. The
-   * slider moves the divider from the keyboard; a press or drag on the pages
-   * moves it by pointer.
+   * a 4x upscale and the scan it came from line up on screen. The denoised
+   * page is on top, clipped at the wipe: denoised left of the divider, raw
+   * right of it. The slider moves the divider from the keyboard; a press or
+   * drag on the pages moves it by pointer.
    *
-   * Both sides come from `denoiseCompareImage` as bytes, never as a path: the
-   * backend serves only files the manifest recorded for that page and run, and
-   * after a take the raw side is the scan the file replaced. A page whose file
-   * is gone says so and where it was, instead of drawing half a comparison.
+   * Zoom is Fit, 1:1 or 2:1 of the denoised file's own pixels. A modifier
+   * scroll or a pinch zooms about the pointer, and a plain scroll moves the
+   * enlarged pages (`editor/CanvasStage.svelte` does the same). The zoom and
+   * the place stay from page to page, so one spot can be followed through a
+   * chapter; 1:1 and 2:1 are measured again for each file.
    *
-   * Full window lays the dialog over the whole window (`Modal`'s `fill`) and
-   * gives the box every pixel the controls leave, the pages still fitted to
-   * it. Escape leaves full window first and closes on the second press, the
-   * one route out of the dialog doing one thing at a time.
-   *
-   * Zoom enlarges both pages together under the wipe, which stays where it is
-   * on screen. A pinch or a modifier-scroll zooms about the pointer and a
-   * plain scroll moves the enlarged pages, as on the editor's canvas
-   * (`editor/CanvasStage.svelte`); the two buttons zoom about the middle and
-   * the readout between them goes back to fit. The zoom and the place are
-   * kept from page to page and run to run, so one spot can be followed
-   * through a chapter.
+   * Both sides come from `denoiseCompareImage` as bytes, never as a path. A
+   * page whose file is gone says so and where it was.
    */
   import { onDestroy, untrack } from 'svelte'
-  import { Button, IconButton, Modal, Readout, Select, Slider } from '../ui/index.js'
+  import { Button, IconButton, Modal, Segmented, Select, Slider } from '../ui/index.js'
   import { closeModal } from '../state/app.svelte.js'
   import { getBackend } from '../api/backend.js'
   import { t } from '../i18n/index.js'
-  import { imageType, runFacts, runLabel } from '../model/denoisehistory.js'
+  import { imageType, runFacts, runInUse, runLabel } from '../model/denoisehistory.js'
+  import { loadLibrary } from '../home/library.svelte.js'
   import { wheelZoom } from '../editor/zoom.js'
 
   /** @type {{ spec: import('../state/app.svelte.js').ModalSpec }} */
   let { spec } = $props()
 
   const chapter = untrack(() => /** @type {any} */ (spec?.props?.chapter ?? null))
-  /** @type {import('../api/backend.js').DenoiseRun[]} */
-  const runs = untrack(() => (Array.isArray(spec?.props?.runs) ? spec.props.runs : []))
   const pageCount = Array.isArray(chapter?.pages) ? chapter.pages.length : 0
 
-  let created = $state(untrack(() => /** @type {number} */ (spec?.props?.run ?? runs[0]?.created ?? 0)))
+  /** @type {import('../api/backend.js').DenoiseRun[]} */
+  let runs = $state(untrack(() => (Array.isArray(spec?.props?.runs) ? spec.props.runs : [])))
+  let created = $state(untrack(() => /** @type {number} */ (spec?.props?.run ?? runInUse(runs) ?? 0)))
   const run = $derived(runs.find((entry) => entry.created === created) ?? null)
+  const inUse = $derived(runInUse(runs))
   const pages = $derived(run?.pages ?? [])
   let at = $state(0)
   const page = $derived(pages[at] ?? null)
   /** Share of the width, from the left, that shows the denoised page. */
   let wipe = $state(50)
-  let fullscreen = $state(false)
 
-  /** Escape, the backdrop: out of full window first, then out of the dialog. */
-  function dismiss() {
-    if (fullscreen) fullscreen = false
-    else closeModal(null)
-  }
+  /** Delete waits on this inline question; `busy` while a call is out. */
+  let asking = $state(false)
+  let busy = $state(false)
+  /** @type {string|null} */
+  let failure = $state(null)
 
   /**
    * What the box shows for the page: its two object URLs once loaded, and
@@ -94,11 +90,12 @@
 
   /**
    * @param {{pageIndex: number, exists: boolean}} target @param {number} which
+   * @param {string} folder
    * @returns {Promise<View>}
    */
-  async function load(target, which) {
+  async function load(target, which, folder) {
     const number = target.pageIndex + 1
-    const gone = { key: 'denoise.compare.missing', params: { page: number, folder: run?.folder ?? '' } }
+    const gone = { key: 'denoise.compare.missing', params: { page: number, folder } }
     if (!target.exists) return { loading: false, denoised: null, raw: null, message: gone }
     const [denoised, raw] = await Promise.all([side(target.pageIndex, which, 'denoised'), side(target.pageIndex, which, 'raw')])
     const url = (/** @type {{url: string}|{code: string}} */ answer) => ('url' in answer ? answer.url : null)
@@ -114,6 +111,7 @@
   $effect(() => {
     const target = page
     const which = created
+    const folder = untrack(() => run?.folder ?? '')
     let live = true
     untrack(() => {
       revoke(view)
@@ -123,7 +121,7 @@
       view = { loading: false, denoised: null, raw: null, message: { key: 'denoise.compare.empty' } }
       return
     }
-    load(target, which).then((shown) => {
+    load(target, which, folder).then((shown) => {
       if (live) view = shown
       else revoke(shown)
     })
@@ -132,13 +130,57 @@
 
   onDestroy(() => revoke(view))
 
-  /** @param {string} value */
-  function chooseRun(value) {
+  /** @param {number} to */
+  function showRun(to) {
     const pageIndex = page?.pageIndex
-    created = Number(value)
+    created = to
+    asking = false
+    failure = null
     // Stay on the same page when the other run has it.
-    const same = (runs.find((entry) => entry.created === created)?.pages ?? []).findIndex((entry) => entry.pageIndex === pageIndex)
+    const same = (runs.find((entry) => entry.created === to)?.pages ?? []).findIndex((entry) => entry.pageIndex === pageIndex)
     at = Math.max(0, same)
+  }
+
+  /** The history again, after a change to it. Empty closes the dialog. */
+  async function reread() {
+    const fresh = await getBackend().denoiseHistory({ chapterId: chapter.id })
+    loadLibrary()
+    if (!Array.isArray(fresh) || !fresh.length) {
+      closeModal(null)
+      return false
+    }
+    runs = fresh
+    return true
+  }
+
+  async function useRun() {
+    if (busy || !run) return
+    busy = true
+    failure = null
+    try {
+      await getBackend().useDenoiseRun({ chapterId: chapter.id, run: run.created })
+      await reread()
+    } catch {
+      failure = t('denoise.compare.useFailed')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function deleteRun() {
+    if (busy || !run) return
+    busy = true
+    failure = null
+    const gone = run.created
+    try {
+      await getBackend().deleteDenoiseRun({ chapterId: chapter.id, run: gone })
+      asking = false
+      if (await reread()) showRun(runs.some((entry) => entry.created === gone) ? gone : (runInUse(runs) ?? runs[0].created))
+    } catch {
+      failure = t('denoise.compare.deleteFailed')
+    } finally {
+      busy = false
+    }
   }
 
   /** @param {number} delta */
@@ -153,24 +195,41 @@
     if (box.width > 0) wipe = Math.round(Math.min(100, Math.max(0, ((event.clientX - box.left) / box.width) * 100)))
   }
 
-  /** The largest the pages are drawn, as a multiple of their fitted size. */
-  const MAX_SCALE = 8
-  /** What one press of a zoom button multiplies the scale by. */
-  const SCALE_STEP = 1.5
-
   /** @type {HTMLElement|undefined} */
   let stage = $state()
+  /** The denoised file's own size, once it has loaded. */
+  let natural = $state({ width: 0, height: 0 })
   /** 1 is fitted to the box. */
   let scale = $state(1)
+  /** The zoom button that set `scale`, or null after a pinch or scroll zoom. */
+  /** @type {'fit'|'actual'|'double'|null} */
+  let mode = $state('fit')
   /**
    * Where the pages' middle sits from the box's middle, as a share of the
-   * box's width and height. A share and not pixels, so the place holds when
-   * full window resizes the box, and its limit needs no measurement.
+   * box's width and height, so the place needs no measurement to hold.
    */
   let offset = $state({ x: 0, y: 0 })
   const placed = $derived(
     scale === 1 ? undefined : `translate(${offset.x * 100}%, ${offset.y * 100}%) scale(${scale})`,
   )
+
+  /**
+   * The scale at which one pixel of the denoised file is `per` pixels on
+   * screen, never below fit. Null before the file and the box are measured.
+   *
+   * @param {number} per
+   */
+  function pixelScale(per) {
+    const box = stage?.getBoundingClientRect()
+    if (!box || box.width <= 0 || box.height <= 0 || natural.width <= 0 || natural.height <= 0) return null
+    const fit = Math.min(box.width / natural.width, box.height / natural.height)
+    return Math.max(1, per / fit)
+  }
+
+  /** The largest a zoom goes: 2:1 at least, and never below 8x fit. */
+  function maxScale() {
+    return Math.max(8, pixelScale(2) ?? 0)
+  }
 
   /**
    * Draw the pages at `to`, their middle at `x`, `y`, held so that an
@@ -185,15 +244,35 @@
   }
 
   /**
-   * Zoom to `next`, keeping the point of the pages at `at` (a share of the
-   * box, from its middle) where it is.
+   * Zoom to `next`, keeping the point of the pages at `about` (a share of
+   * the box, from its middle) where it is.
    *
-   * @param {number} next @param {{x: number, y: number}} [at]
+   * @param {number} next @param {{x: number, y: number}} [about]
    */
-  function zoomTo(next, at = { x: 0, y: 0 }) {
-    const to = Math.min(MAX_SCALE, Math.max(1, next))
+  function zoomTo(next, about = { x: 0, y: 0 }) {
+    const to = Math.min(maxScale(), Math.max(1, next))
     const ratio = to / scale
-    place(to, at.x - (at.x - offset.x) * ratio, at.y - (at.y - offset.y) * ratio)
+    place(to, about.x - (about.x - offset.x) * ratio, about.y - (about.y - offset.y) * ratio)
+  }
+
+  /** @param {string} value */
+  function chooseZoom(value) {
+    if (value === 'fit') {
+      mode = 'fit'
+      place(1, 0, 0)
+      return
+    }
+    const to = pixelScale(value === 'double' ? 2 : 1)
+    if (to === null) return
+    mode = value === 'double' ? 'double' : 'actual'
+    zoomTo(to)
+  }
+
+  /** @param {Event & {currentTarget: HTMLImageElement}} event */
+  function measured(event) {
+    natural = { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }
+    // A run at another scale has other pixels: 1:1 is 1:1 of this file.
+    if (mode === 'actual' || mode === 'double') chooseZoom(mode)
   }
 
   /**
@@ -208,8 +287,9 @@
     if (!box || box.width <= 0 || box.height <= 0) return
     if (event.ctrlKey || event.metaKey) {
       event.preventDefault()
-      const next = wheelZoom({ deltaY: event.deltaY, zoom: scale, min: 1, max: MAX_SCALE })
+      const next = wheelZoom({ deltaY: event.deltaY, zoom: scale, min: 1, max: maxScale() })
       if (next === null) return
+      mode = next === 1 ? 'fit' : null
       zoomTo(next, {
         x: (event.clientX - box.left) / box.width - 0.5,
         y: (event.clientY - box.top) / box.height - 0.5,
@@ -235,36 +315,51 @@
     return () => box.removeEventListener('wheel', onwheel)
   })
 
-  const options = runs.map((entry) => ({ value: String(entry.created), label: runLabel(entry) }))
+  const options = $derived(runs.map((entry) => ({
+    value: String(entry.created),
+    label: entry.created === inUse ? `${runLabel(entry)} · ${t('denoise.compare.inUse')}` : runLabel(entry),
+  })))
   const facts = $derived(run ? runFacts(run).join(' · ') : '')
+  const files = $derived(run ? run.pages.filter((entry) => entry.exists).length : 0)
   const both = $derived(!!view.denoised && !!view.raw)
   const drawn = $derived(!!view.denoised || !!view.raw)
+  const zooms = $derived([
+    { value: 'fit', label: t('denoise.compare.fit') },
+    { value: 'actual', label: t('denoise.compare.actual'), disabled: !view.denoised },
+    { value: 'double', label: t('denoise.compare.double'), disabled: !view.denoised },
+  ])
 </script>
 
 <Modal
   title={t('denoise.compare.title')}
   meta={t('denoise.compare.meta', { number: chapter?.number ?? '' })}
-  width={760}
-  fill={fullscreen}
-  onclose={dismiss}
+  width={960}
+  onclose={() => closeModal(null)}
 >
-  <div class="compare" class:full={fullscreen} data-run={created} data-page={page?.pageIndex ?? ''}>
+  <div class="compare" data-run={created} data-page={page?.pageIndex ?? ''}>
     <div class="head">
-      <div class="top">
-        <div class="picker">
-          <Select label={t('denoise.compare.run')} {options} value={String(created)} onchange={chooseRun} />
-        </div>
-        <IconButton
-          icon="zoom-fit"
-          label={t('denoise.compare.fullscreen')}
-          pressed={fullscreen}
-          size={26}
-          onclick={() => (fullscreen = !fullscreen)}
-        />
+      <div class="picker">
+        <Select label={t('denoise.compare.run')} {options} value={String(created)} onchange={(value) => showRun(Number(value))} />
       </div>
-      {#if facts}<p class="facts">{facts}</p>{/if}
-      {#if run?.folder}<p class="folder" title={run.folder}>{t('denoise.compare.folder', { folder: run.folder })}</p>{/if}
+      {#if run && created === inUse}
+        <span class="in-use">{t('denoise.compare.inUse')}</span>
+      {:else if run}
+        <Button variant="soft" disabled={busy} onclick={useRun}>{t('denoise.compare.use')}</Button>
+      {/if}
+      {#if run && !asking}
+        <Button disabled={busy} onclick={() => { asking = true; failure = null }}>{t('denoise.compare.delete')}</Button>
+      {/if}
     </div>
+    {#if facts}<p class="facts">{facts}</p>{/if}
+
+    {#if asking}
+      <div class="ask" role="alertdialog" aria-labelledby="denoise-delete-ask">
+        <p id="denoise-delete-ask">{t('denoise.compare.deleteAsk', { count: files })}</p>
+        <Button disabled={busy} onclick={() => (asking = false)}>{t('denoise.compare.keep')}</Button>
+        <Button variant="primary" disabled={busy} onclick={deleteRun}>{t('denoise.compare.deleteConfirm')}</Button>
+      </div>
+    {/if}
+    {#if failure}<p class="failure" role="alert">{failure}</p>{/if}
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="stage" bind:this={stage} onpointerdown={wipeTo} onpointermove={wipeTo}>
@@ -281,6 +376,7 @@
             alt={t('denoise.compare.denoised')}
             draggable="false"
             style:transform={placed}
+            onload={measured}
           />
         </div>
       {/if}
@@ -296,7 +392,7 @@
       {/if}
     </div>
 
-    {#if page?.taken}<p class="note">{t('denoise.compare.taken')}</p>{/if}
+    {#if page?.taken}<p class="facts">{t('denoise.compare.taken')}</p>{/if}
 
     <div class="controls">
       <div class="stepper">
@@ -306,11 +402,14 @@
         </span>
         <IconButton icon="chevron-right" label={t('denoise.compare.next')} size={26} disabled={at >= pages.length - 1} onclick={() => step(1)} />
       </div>
-      <div class="zoom">
-        <IconButton icon="zoom-out" label={t('editor.action.zoomOut')} size={26} disabled={!drawn || scale <= 1} onclick={() => zoomTo(scale / SCALE_STEP)} />
-        <Readout text="{Math.round(scale * 100)}%" label={t('editor.action.zoomFit')} minWidth={48} onclick={() => place(1, 0, 0)} />
-        <IconButton icon="zoom-in" label={t('editor.action.zoomIn')} size={26} disabled={!drawn || scale >= MAX_SCALE} onclick={() => zoomTo(scale * SCALE_STEP)} />
-      </div>
+      <Segmented
+        label={t('denoise.compare.zoom')}
+        options={zooms}
+        value={mode ?? ''}
+        onchange={chooseZoom}
+        disabled={!drawn}
+        align="start"
+      />
       <div class="wipe">
         <Slider
           label={t('denoise.compare.wipe')}
@@ -332,20 +431,21 @@
 </Modal>
 
 <style>
-  .compare { display: flex; flex-direction: column; gap: var(--s-3) }
-  .head { display: flex; flex-direction: column; gap: var(--s-1) }
-  .top { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3) }
-  .picker { flex: 1; max-width: 420px }
+  .compare { display: flex; flex-direction: column; gap: var(--s-2) }
+  .head { display: flex; align-items: flex-end; gap: var(--s-2) }
+  .picker { flex: 1; min-width: 0; max-width: 520px }
+  .in-use { padding: 0 var(--s-2); line-height: 26px; font-size: 12px; color: var(--t2) }
   .facts,
-  .folder,
-  .note { margin: 0; font-size: 11.5px; color: var(--t2) }
-  .folder { overflow: hidden; color: var(--t3); white-space: nowrap; text-overflow: ellipsis }
+  .failure { margin: 0; font-size: 11.5px; color: var(--t2) }
+  .failure { color: var(--warn) }
+  .ask { display: flex; align-items: center; gap: var(--s-2) }
+  .ask p { flex: 1; margin: 0; font-size: 12px; color: var(--text) }
 
   /* One box for both pages. Each is fitted to it the same way, so the two
      line up whatever their resolutions. */
   .stage {
     position: relative;
-    height: min(60vh, 620px);
+    height: min(66vh, 720px);
     overflow: hidden;
     border-radius: var(--r-md);
     background: var(--paper);
@@ -353,10 +453,8 @@
     touch-action: none;
     cursor: ew-resize;
     user-select: none;
+    -webkit-user-select: none;
   }
-  /* Full window: the box takes whatever height the controls leave. */
-  .compare.full { flex: 1; min-height: 0 }
-  .compare.full .stage { flex: 1; height: auto; min-height: 240px }
   .cut { position: absolute; inset: 0; pointer-events: none }
   .layer {
     position: absolute;
@@ -378,11 +476,10 @@
   .tag {
     position: absolute;
     top: var(--s-2);
-    padding: 2px 7px;
-    border-radius: 999px;
+    padding: 1px 6px;
+    border-radius: var(--r-sm);
     background: var(--surface);
-    box-shadow: var(--edge);
-    color: var(--text);
+    color: var(--t2);
     font-size: 11px;
     pointer-events: none;
   }
@@ -399,8 +496,7 @@
   }
 
   .controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-3) }
-  .stepper,
-  .zoom { display: flex; align-items: center; gap: var(--s-2) }
+  .stepper { display: flex; align-items: center; gap: var(--s-2) }
   .where { min-width: 104px; font-size: 12px; text-align: center; color: var(--text); font-variant-numeric: tabular-nums }
-  .wipe { flex: 1; max-width: 320px }
+  .wipe { flex: 1; max-width: 280px }
 </style>

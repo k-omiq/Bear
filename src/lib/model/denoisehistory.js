@@ -8,20 +8,34 @@
  */
 
 import { t } from '../i18n/index.js'
-import { PRESET_TEXT, runScale } from './denoise.js'
+import { CUSTOM_RECIPE, PRESET_TEXT, RETIRED_PRESET_TEXT, runScale } from './denoise.js'
 
 /** @typedef {import('../api/backend.js').DenoiseRun} DenoiseRun */
 
 /**
- * The preset's display name, the id itself for one this build does not know,
+ * The preset's display name, a retired preset's too, "Custom recipe" for a
+ * run of the advanced chain, the id itself for one this build does not know,
  * or "Preset not recorded" for an old run.
  *
  * @param {string|null|undefined} id
  */
 export function presetName(id) {
   if (!id) return t('home.denoised.presetUnknown')
-  const text = /** @type {Record<string, {nameKey: string}>} */ (PRESET_TEXT)[id]
+  if (id === CUSTOM_RECIPE) return t('denoise.chain.name')
+  const text = /** @type {Record<string, {nameKey: string}>} */ ({ ...RETIRED_PRESET_TEXT, ...PRESET_TEXT })[id]
   return text ? t(text.nameKey) : id
+}
+
+/**
+ * The run in use: the one the history marks, else the newest, which is what
+ * an older backend that marks none means. `runs` is newest first.
+ *
+ * @param {ReadonlyArray<DenoiseRun>} runs
+ * @returns {number|null}
+ */
+export function runInUse(runs) {
+  const list = Array.isArray(runs) ? runs : []
+  return (list.find((run) => run.inUse === true) ?? list[0])?.created ?? null
 }
 
 /**
@@ -65,6 +79,8 @@ export function runFacts(run) {
   if (taken) facts.push(t('home.denoised.taken', { count: taken }))
   const missing = run.pages.filter((page) => !page.exists).length
   if (missing) facts.push(t('home.denoised.missing', { count: missing }))
+  // An older backend says nothing of size, and nothing is said.
+  if (Number.isFinite(run.bytes) && /** @type {number} */ (run.bytes) > 0) facts.push(t('denoise.compare.size', { bytes: run.bytes }))
   return facts
 }
 
