@@ -23,6 +23,7 @@
   import { t } from '../i18n/index.js'
   import { checkForUpdate } from '../updater.js'
   import UpdateDialog from '../home/UpdateDialog.svelte'
+  import RollbackDialog from '../home/RollbackDialog.svelte'
   import DiscordInvite from './DiscordInvite.svelte'
 
   /** @type {{appVersion: string, facts: Array<{labelKey: string, value: string}>}|null} */
@@ -31,6 +32,7 @@
   let checkStatus = $state(/** @type {'' | 'upToDate' | 'checkFailed'} */ (''))
   let updateFound = $state(/** @type {import('@tauri-apps/plugin-updater').Update | null} */ (null))
   let updateDialogOpen = $state(false)
+  let rollbackOpen = $state(false)
 
   $effect(() => {
     let live = true
@@ -84,12 +86,16 @@
     {:else if checkStatus === 'checkFailed'}
       <span class="status-msg error">{t('update.status.checkFailed')}</span>
     {/if}
+    <Button size="sm" variant="ghost" onclick={() => (rollbackOpen = true)}>
+      {t('update.rollback.open')}
+    </Button>
   </div>
 
   <p class="offer">{t('about.offer.written')}</p>
   <p class="terms">{t('about.note.cloudTerms')}</p>
 
   <UpdateDialog bind:open={updateDialogOpen} update={updateFound} />
+  <RollbackDialog bind:open={rollbackOpen} />
 {/if}
 
 <DiscordInvite compact />

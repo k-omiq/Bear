@@ -716,6 +716,23 @@ jobs:
             # In parts when it is over the worker's 100 MB request cap (the AppImage).
             python3 .github/scripts/publish-upload.py "$LOCAL" "$REMOTE"
           done
+          # The same manifest under the version, for the in-app rollback
+          # (`src-tauri/src/rollback.rs`): an installed app goes back to this
+          # version by checking exactly this file. Release objects are served
+          # as immutable, which this one is; latest.json is the only mutable
+          # key. Uploaded before latest.json so no app is offered a version
+          # whose rollback manifest is not there yet.
+          echo "uploading releases/v$VERSION/latest.json"
+          python3 .github/scripts/publish-upload.py latest.json "releases/v$VERSION/latest.json" application/json
+          mkdir -p update-manifest && cp latest.json update-manifest/latest.json
           echo "uploading latest.json"
           python3 .github/scripts/publish-upload.py latest.json latest.json application/json
           echo "== published: $BASE_URL/latest.json =="
+      # The manifest, for the GitHub release mirror to attach beside the
+      # installers (`github-release.yml`), so every release carries its own.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: update-manifest
+          path: update-manifest/latest.json
+          if-no-files-found: error
+          retention-days: 3

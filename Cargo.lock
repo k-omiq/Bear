@@ -2456,6 +2456,7 @@ dependencies = [
  "regex",
  "reqwest",
  "security-framework 3.7.0",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

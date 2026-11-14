@@ -3,6 +3,8 @@
   import { installUpdate, relaunchApp } from '../updater.js'
   import { t } from '../i18n/index.js'
   import { getBackend } from '../api/backend.js'
+  import { clearSkipped } from '../rollback.js'
+  import RollbackDialog from './RollbackDialog.svelte'
 
   /**
    * @type {{
@@ -17,6 +19,7 @@
   let installed = $state(false)
   let percent = $state(/** @type {number | null} */ (null))
   let error = $state('')
+  let rollbackOpen = $state(false)
 
   $effect(() => {
     if (open) {
@@ -59,6 +62,8 @@
       })
       downloading = false
       installed = true
+      // Updating on purpose ends a skip left by an earlier rollback.
+      clearSkipped()
     } catch (e) {
       downloading = false
       installed = false
@@ -124,6 +129,19 @@
       <div class="error-msg">{error}</div>
     {/if}
 
+    {#if !downloading && !installed}
+      <button
+        type="button"
+        class="rollback-link"
+        onclick={() => {
+          open = false
+          rollbackOpen = true
+        }}
+      >
+        {t('update.rollback.openFromUpdate')}
+      </button>
+    {/if}
+
     {#snippet buttons()}
       {#if installed}
         <Button
@@ -161,6 +179,8 @@
     {/snippet}
   </Modal>
 {/if}
+
+<RollbackDialog bind:open={rollbackOpen} />
 
 <style>
   .version-row {
@@ -263,6 +283,22 @@
     width: 35%;
     position: absolute;
     animation: indeterminate 1.4s infinite ease-in-out;
+  }
+  .rollback-link {
+    display: block;
+    margin: 0 0 var(--s-2);
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 11.5px;
+    color: var(--t2);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+  .rollback-link:hover {
+    color: var(--text);
   }
   .error-msg {
     margin-bottom: var(--s-4);

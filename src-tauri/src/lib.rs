@@ -27,6 +27,7 @@ mod model_workflows;
 mod page_denoise;
 pub mod provision;
 mod region;
+mod rollback;
 mod screen_color;
 pub mod run;
 fn app_context() -> tauri::Context<tauri::Wry> { tauri::generate_context!() }
@@ -189,6 +190,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             diagnostics::diagnostics,
             about::about,
+            rollback::rollback_versions,
+            rollback::rollback_prepare,
             devlog::read_dev_log,
             devlog::clear_dev_log,
             settings::read_settings,

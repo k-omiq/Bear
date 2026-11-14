@@ -144,6 +144,8 @@ fn main() {
         .app_manifest(tauri_build::AppManifest::new().commands(&[
             "diagnostics",
             "about",
+            "rollback_versions",
+            "rollback_prepare",
             "read_dev_log",
             "clear_dev_log",
             "read_settings",

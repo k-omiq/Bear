@@ -48,10 +48,11 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          # Installers, update bundles and their signatures; not the launch
-          # smoke reports that share the run.
+          # Installers, update bundles and their signatures, and the run's
+          # update manifest (latest.json, the one the in-app rollback reads for
+          # this version); not the launch smoke reports that share the run.
           mapfile -t FILES < <(find artifacts -path 'artifacts/launch-smoke-*' -prune -o -type f \
-            \( -name '*.dmg' -o -name '*.tar.gz' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.sig' \) -print | sort)
+            \( -name '*.dmg' -o -name '*.tar.gz' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.sig' -o -name 'latest.json' \) -print | sort)
           [ "${#FILES[@]}" -gt 0 ] || { echo "no installers in run $RUN_ID" >&2; exit 1; }
           git init -q . && git remote add origin "https://github.com/${{ github.repository }}"
           git fetch -q --depth=1 origin "+refs/tags/$TAG:refs/tags/$TAG"

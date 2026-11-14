@@ -18,6 +18,7 @@ import { createJournal, pushEntry, redoEntry, undoEntry, viewOf } from '../model
 import { displayBbox, editedLayer, isErasableLayer, isRegionCopy, layerCapabilities, layerOf, sanitizeLayer } from '../model/layers.js'
 import { regionState, reviewReason } from '../model/review.js'
 import { aboutInfo, buildChapter, buildFixtures, buildProject, defaultSettings } from './fixtures.js'
+import { mockRollbackCatalog, mockRollbackPrepare } from './mockrollback.js'
 import { cloudAttemptId, sha256Hex } from './attempt.js'
 import { buildReviewPage, rgbPngBase64, supportOf } from './mockreview.js'
 import { commitMask, ENGINE_INFO } from './provenance.js'
@@ -7300,6 +7301,18 @@ export function createMockBackend(options = {}) {
     async about() {
       await delay(timing.method)
       return aboutInfo()
+    },
+
+    /** `src-tauri/src/rollback.rs` reads the version index; see `mockrollback.js`. */
+    async rollbackVersions() {
+      await delay(timing.method)
+      return mockRollbackCatalog(aboutInfo().appVersion)
+    },
+
+    /** @param {{version: string}} spec */
+    async rollbackPrepare({ version } = /** @type {any} */ ({})) {
+      await delay(timing.method)
+      return mockRollbackPrepare(aboutInfo().appVersion, version, delay)
     },
 
     /** `src-tauri/src/devlog.rs` reads its file; the mock has a few lines to show. */
