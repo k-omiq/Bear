@@ -28,12 +28,14 @@
    *   source: {x: number, y: number}|null,
    *   sampling?: boolean,
    *   version?: string,
+   *   square?: boolean,
    * }}
    * `at` is the brush and `source` is where a brush there reads from, both in
    * page percent; `radius` is the brush's, per axis. `version` is the cleaned
    * page's, so the overlay is redrawn when the pixels under it change.
+   * `square` is the stamp's tip: the overlay is the brush's box itself.
    */
-  let { at, radius, source, sampling = false, version = '' } = $props()
+  let { at, radius, source, sampling = false, version = '', square = false } = $props()
 
   /** @type {HTMLCanvasElement|undefined} */
   let canvas = $state()
@@ -90,6 +92,7 @@
 {#if filled && at}
   <canvas
     class="overlay"
+    class:square
     bind:this={canvas}
     aria-hidden="true"
     style:left="{at.x - radius.rx}%"
@@ -114,6 +117,9 @@
     border-radius: 50%;
     pointer-events: none;
   }
+
+  /* A square tip copies its whole box. */
+  .overlay.square { border-radius: 0 }
 
   /* A cross of two hairlines, a fixed size on screen at every zoom. The light
      halo is what keeps the mark colour legible over black ink. */

@@ -6,6 +6,9 @@
 //! and the `crate::types` / `crate::memory` dependencies go with them.
 //! A third, later: `analytic_radial_coverage` is `pub(crate)`, so the eraser
 //! (`erase.rs`) takes coverage off with the same tip the Brush lays it on with.
+//! A fourth: `TipShape::Square`, the analytic falloff measured in the larger
+//! axis distance (`plan::Tip::distance`), and the kernel's "outside the tip"
+//! test asks the tip for its own distance, so a square's corners are stamped.
 //! The `#[cfg(test)]` TS-oracle parity tests are kept as they stood, because
 //! they are resolution-independent and they are what keeps the kernel verified.
 //!
@@ -103,6 +106,8 @@ fn dab_jitter_scatter(seed: u32, dab_index: u32) -> f64 {
 #[derive(Clone, Copy)]
 pub enum TipShape<'a> {
     Analytic,
+    /// The analytic falloff on a square: the Brush's square tip.
+    Square,
     Mask {
         mask: &'a [f32],
         width: usize,
@@ -172,6 +177,7 @@ fn sample_mask_bilinear(mask: &[f32], width: usize, height: usize, x: f64, y: f6
 fn evaluate_tip_coverage(tip: TipShape, nx: f64, ny: f64, hardness: f64) -> f64 {
     match tip {
         TipShape::Analytic => analytic_radial_coverage(nx.hypot(ny), hardness),
+        TipShape::Square => analytic_radial_coverage(super::plan::Tip::Square.distance(nx, ny), hardness),
         TipShape::Mask {
             mask,
             width,
@@ -383,7 +389,10 @@ pub fn stamp_dab_subpixel(
             let ly = (dx * sin_a + dy * cos_a) / roundness;
             let nx = lx / radius;
             let ny = ly / radius;
-            let radial_t = nx.hypot(ny);
+            let radial_t = match tip {
+                TipShape::Square => super::plan::Tip::Square.distance(nx, ny),
+                _ => nx.hypot(ny),
+            };
             if radial_t >= 1.0 {
                 continue;
             }

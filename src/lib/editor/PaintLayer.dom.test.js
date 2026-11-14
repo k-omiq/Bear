@@ -297,6 +297,22 @@ describe('a Brush stroke, drawn in the layer', () => {
     clearDraft(); await tick()
     expect(host.querySelector('.paint')).toBeNull()
   })
+  // The tool's own tip and opacity, as the commit will stamp them: a 10 px
+  // square at (25, 25) covers (29, 29), which a disc leaves, at half alpha.
+  it('draws the tool\'s tip and opacity', async () => {
+    await setup()
+    const alphaAt = (/** @type {number} */ x, /** @type {number} */ y) => puts.at(-1).image.data[(y * 128 + x) * 4 + 3]
+    editor.toolParams.brush = { mode: 'paint', size: 10, hardness: 100, color: '#123456', opacity: 50, tip: 'square' }
+    draft.active = brushStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    expect(alphaAt(25, 25)).toBe(128)
+    expect(alphaAt(29, 29)).toBe(128)
+    expect(alphaAt(30, 25)).toBe(0)
+    clearDraft(); await tick()
+    editor.toolParams.brush = { ...editor.toolParams.brush, tip: 'round' }
+    draft.active = brushStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    expect(alphaAt(25, 25)).toBe(128)
+    expect(alphaAt(29, 29)).toBe(0)
+  })
 })
 
 describe('an eraser stroke', () => {

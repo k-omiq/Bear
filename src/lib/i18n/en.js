@@ -3207,6 +3207,7 @@ export const en = {
       outsideBubbles: 'Outside bubbles',
       size: 'Size',
       hardness: 'Hardness',
+      tip: 'Tip',
       spacing: 'Spacing',
       mode: 'Mode',
       color: 'Color',
@@ -3277,6 +3278,8 @@ export const en = {
       // word "fill" is spent on the engine and this one says what it is.
       modeSolid: 'Solid colour',
       rect: 'Rect',
+      tipRound: 'Round',
+      tipSquare: 'Square',
       ellipse: 'Ellipse',
       lasso: 'Lasso',
       polygon: 'Polygon',

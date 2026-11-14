@@ -359,6 +359,15 @@ export const icons = {
 
   'shape-line': ['M2.5 12.5 13.5 3.5'],
 
+  // Brush tips: a disc and a square, the same 11 across, so the two cells
+  // read as one choice of outline.
+  'tip-round': [
+    'M8 2.5A5.5 5.5 0 0 1 13.5 8 5.5 5.5 0 0 1 8 13.5 5.5 5.5 0 0 1 2.5 8 5.5 5.5 0 0 1 8 2.5Z',
+  ],
+  'tip-square': [
+    'M2.5 3.5a1 1 0 0 1 1-1H12.5a1 1 0 0 1 1 1V12.5a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1Z',
+  ],
+
   // Selection: a marquee, the square drawn as rounded corners and dashes, the
   // mark every editor uses for "the area that is picked".
   'selection': [

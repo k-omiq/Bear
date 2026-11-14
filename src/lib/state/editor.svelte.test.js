@@ -604,6 +604,7 @@ describe('tool parameters defaults', () => {
   it('initializes brush with color, opacity, and flow', () => {
     expect(editor.toolParams.brush).toMatchObject({
       size: 28,
+      tip: 'round',
       hardness: 100,
       spacing: 12,
       mode: 'paint',
@@ -618,6 +619,7 @@ describe('tool parameters defaults', () => {
     expect(editor.toolParams.cloneStamp).toEqual({
       mode: 'stamp', shape: 'rect', feather: 4, edgeOpacity: 100, rotation: 0,
       size: 32,
+      tip: 'round',
       hardness: 50,
       spacing: 12,
       opacity: 100,
@@ -1443,6 +1445,13 @@ describe('the tool slots', () => {
     expect(stepToolParam('opacity', 1)).toBe(false)
     stepToolParam('opacity', -1)
     expect(editor.toolParams.brush.opacity).toBe(90)
+    // Opacity stops at 1, not 0, and steps back up onto the tens.
+    editor.toolParams.brush.opacity = 10
+    stepToolParam('opacity', -1)
+    expect(editor.toolParams.brush.opacity).toBe(1)
+    expect(stepToolParam('opacity', -1)).toBe(false)
+    stepToolParam('opacity', 1)
+    expect(editor.toolParams.brush.opacity).toBe(10)
 
     // No size on the bar, nothing to step.
     editor.tool = 'maskSelect'

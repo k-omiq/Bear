@@ -213,8 +213,12 @@ function mountTool(spec, overrides) {
 /** A choice the bar draws as icon cells rather than as a dropdown. */
 const iconChoice = (param) => param.options.every((option) => option.icon)
 
-/** Everything but `size` lives behind the Adjustments button, and so does the hex field. */
-const onBar = (param) => param.kind !== 'range' || param.key === 'size'
+/**
+ * Every slider but `size` and the ones the spec marks `bar` (a brush's
+ * Hardness and Opacity) lives behind the Adjustments button, and so does the
+ * hex field.
+ */
+const onBar = (param) => param.kind !== 'range' || param.key === 'size' || param.bar === true
 
 /** The tools drawn as a pill, and the one drawn as a panel. */
 const PILL_SPECS = TOOL_SPECS.filter((spec) => spec.shell === 'pill')
@@ -1731,7 +1735,7 @@ describe('tool switching resets transient state and closes overlays', () => {
 })
 
 describe('the Brush tool in paint mode draws and writes color, opacity, and flow', () => {
-  it('shows swatch on the bar and opacity/flow in Adjustments', async () => {
+  it('shows swatch, opacity and hardness on the bar and flow in Adjustments', async () => {
     const brush = toolSpec('brush')
     const { view } = mountTool(brush, { color: '#336699', opacity: 80, flow: 90 })
 
@@ -1739,12 +1743,17 @@ describe('the Brush tool in paint mode draws and writes color, opacity, and flow
     expect(swatch).not.toBeNull()
     expect(swatch.tagName).toBe('BUTTON')
 
-    await openAdjustments(view)
-
+    // Opacity is out on the bar, 1 to 100 by ones, before Adjustments opens.
     const opacity = view.getByLabelText(t('tools.param.opacity'))
-    expect(opacity).not.toBeNull()
-    await fireEvent.input(opacity, { target: { value: '50' } })
-    expect(stores.setToolParam).toHaveBeenCalledWith('brush', 'opacity', 50)
+    expect(opacity.getAttribute('min')).toBe('1')
+    expect(opacity.getAttribute('max')).toBe('100')
+    expect(opacity.getAttribute('step')).toBe('1')
+    await fireEvent.input(opacity, { target: { value: '37' } })
+    expect(stores.setToolParam).toHaveBeenCalledWith('brush', 'opacity', 37)
+    expect(view.getByLabelText(t('tools.param.hardness'))).not.toBeNull()
+    expect(view.queryByLabelText(t('tools.param.flow'))).toBeNull()
+
+    await openAdjustments(view)
 
     const flow = view.getByLabelText(t('tools.param.flow'))
     expect(flow).not.toBeNull()
@@ -1752,10 +1761,24 @@ describe('the Brush tool in paint mode draws and writes color, opacity, and flow
     expect(stores.setToolParam).toHaveBeenCalledWith('brush', 'flow', 60)
   })
 
+  // The tip is two pictures, a disc and a square, and a press writes it.
+  it('draws the tip as two cells and writes the one pressed', async () => {
+    for (const id of ['brush', 'eraser', 'cloneStamp']) {
+      const { view } = mountTool(toolSpec(id), { tip: 'round' })
+      const group = view.getByRole('radiogroup', { name: t('tools.param.tip') })
+      const cells = [...group.querySelectorAll('[role="radio"]')]
+      expect(cells.map((cell) => cell.getAttribute('aria-label'))).toEqual([t('tools.option.tipRound'), t('tools.option.tipSquare')])
+      expect(cells[0].getAttribute('aria-checked')).toBe('true')
+      stores.setToolParam.mockClear()
+      await fireEvent.click(cells[1])
+      expect(stores.setToolParam).toHaveBeenCalledWith(id, 'tip', 'square')
+      cleanup()
+    }
+  })
+
   it('settles an Opacity run cut short by a tool switch on the Brush, not on the next tool', async () => {
     const brush = toolSpec('brush')
     const { view } = mountTool(brush, { opacity: 50 })
-    await openAdjustments(view)
     const opacity = view.getByLabelText(t('tools.param.opacity'))
     await fireEvent.keyDown(opacity, { key: 'ArrowRight' })
     const stepped = stores.setToolParam.mock.calls.at(-1)

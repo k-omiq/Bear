@@ -33,6 +33,8 @@ const REQUIRED = [
   'patch', 'gradient',
   // Settings > Beta.
   'flask',
+  // The brushes' tip choice.
+  'tip-round', 'tip-square',
 ]
 
 describe('icon set', () => {

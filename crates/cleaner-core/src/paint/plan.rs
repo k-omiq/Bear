@@ -39,6 +39,49 @@ pub struct BrushSpec {
     pub pressure_size: bool,
     pub pressure_opacity: bool,
     pub seed: u32,
+    /// The tip's outline. A stroke saved before there was a choice is round.
+    pub tip: Tip,
+}
+
+/// The outline of one dab: a disc, or a square on the page's axes whose side is
+/// the diameter. Hardness is the same falloff either way, measured from the
+/// centre in the tip's own distance (`Tip::distance`), so a soft square has a
+/// square core and a square rim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tip {
+    #[default]
+    Round,
+    Square,
+}
+
+impl Tip {
+    /// The seam's word for a tip. Anything but `square` is round, which is
+    /// what every stroke sent before the choice existed was.
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("square") => Self::Square,
+            _ => Self::Round,
+        }
+    }
+
+    /// The word the seam and a patch's provenance use.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Round => "round",
+            Self::Square => "square",
+        }
+    }
+
+    /// How far `(dx, dy)` is from the centre, in units of the radius: the
+    /// straight-line distance for a disc, the larger of the two axis distances
+    /// for a square. 1 is the tip's edge. `brushsurface.js#tipDistance` is the
+    /// same function, so preview and commit cover the same pixels.
+    pub fn distance(self, dx: f64, dy: f64) -> f64 {
+        match self {
+            Self::Round => dx.hypot(dy),
+            Self::Square => dx.abs().max(dy.abs()),
+        }
+    }
 }
 
 impl Default for BrushSpec {
@@ -52,6 +95,7 @@ impl Default for BrushSpec {
             pressure_size: true,
             pressure_opacity: false,
             seed: 0,
+            tip: Tip::Round,
         }
     }
 }

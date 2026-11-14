@@ -38,6 +38,9 @@ import { BETA_ENGINES, MAX_MASK_PADDING, ROW_ENGINES, engineChoiceLabel } from '
  *   the same distance at 4 px as at 200
  * @property {string} [group] - the group this parameter belongs to
  * @property {(values: Record<string, unknown>) => boolean} [when] - live only while this holds
+ * @property {boolean} [bar] - drawn out on the pill beside Size rather than
+ *   behind Adjustments: the brushes' Opacity, and Hardness where the bar has
+ *   room for it (`ToolBar.svelte`)
  */
 
 /**
@@ -208,6 +211,55 @@ export const BRUSH_SIZE = /** @type {const} */ ({ min: 1, max: 500 })
 /** @returns {RangeParam} */
 function brushSize() {
   return { ...range('size', 'tools.param.size', BRUSH_SIZE.min, BRUSH_SIZE.max, 1, 'px'), scale: 'log' }
+}
+
+/**
+ * A brush's hardness, on the bar beside its size.
+ *
+ * @returns {RangeParam}
+ */
+function brushHardness() {
+  return { ...range('hardness', 'tools.param.hardness', 0, 100, 5, '%'), bar: true }
+}
+
+/**
+ * A brush's opacity, 1 to 100 a percent at a time, on the bar beside its
+ * size. It is the ceiling of the whole stroke, as in Photoshop: the dabs of
+ * one stroke never build up past it, however often the stroke crosses itself
+ * (`brushsurface.js`, `paint/brush.rs#stamp_dab_subpixel`). Zero is not
+ * offered, because a stroke that lays nothing down is not a stroke.
+ *
+ * @returns {RangeParam}
+ */
+function brushOpacity() {
+  return { ...range('opacity', 'tools.param.opacity', 1, 100, 1, '%'), bar: true }
+}
+
+/**
+ * The tips a brush can have (`paint/plan.rs#Tip`). A square is the diameter
+ * on each side, on the page's own axes, and Hardness softens it from its
+ * centre as it softens a disc. Round is first, and is what a value nobody
+ * set reads as.
+ */
+export const BRUSH_TIPS = /** @type {const} */ (['round', 'square'])
+
+/** @returns {ChoiceParam} */
+function brushTip() {
+  return choice('tip', 'tools.param.tip', [
+    { value: 'round', labelKey: 'tools.option.tipRound', icon: 'tip-round' },
+    { value: 'square', labelKey: 'tools.option.tipSquare', icon: 'tip-square' },
+  ])
+}
+
+/**
+ * A tool's tip as the commit and the preview read it: `square` or `round`,
+ * and round for anything else.
+ *
+ * @param {Record<string, unknown>|null|undefined} params
+ * @returns {'round'|'square'}
+ */
+export function brushTipOf(params) {
+  return params?.tip === 'square' ? 'square' : 'round'
 }
 
 /**
@@ -485,7 +537,9 @@ export const TOOL_SPECS = [
     params: [
       ...section('brush', [
         brushSize(),
-        range('hardness', 'tools.param.hardness', 0, 100, 5, '%'),
+        brushTip(),
+        brushHardness(),
+        brushOpacity(),
         range('spacing', 'tools.param.spacing', 1, 50, 1, '%'),
       ]),
       // **The brush paints, and that is all it does.** It used to carry a
@@ -497,10 +551,10 @@ export const TOOL_SPECS = [
       // options hid the colour, opacity and flow behind a chip press. The
       // parameters are unconditional now, and `mode` stays pinned to `paint`
       // in `editor.toolParams` because it is what the seam reads
-      // (`paint.js#paintParamsOf`, `region.rs#paint_plan`).
+      // (`paint.js#paintParamsOf`, `region.rs#paint_plan`). Opacity is with
+      // the tip, beside Size and Hardness, where the hand looks for it.
       ...section('paint', [
         color('color', 'tools.param.color', '#ffffff'),
-        range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
         range('flow', 'tools.param.flow', 0, 100, 5, '%'),
       ]),
     ],
@@ -521,8 +575,9 @@ export const TOOL_SPECS = [
     params: [
       ...section('brush', [
         brushSize(),
-        range('hardness', 'tools.param.hardness', 0, 100, 5, '%'),
-        range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
+        brushTip(),
+        brushHardness(),
+        brushOpacity(),
       ]),
     ],
     runnable: false,
@@ -609,9 +664,14 @@ export const TOOL_SPECS = [
       onlyWhen(choice('shape', 'tools.param.shape', SELECTION_SHAPES), (values) => isCopyMode(values.mode))]),
       ...section('brush', [
         onlyWhen(brushSize(), (values) => !isCopyMode(values.mode) || values.shape === 'brush'),
+        // A stamp's tip; a Region copy's brush selection stays a round one.
+        // Hardness stays behind Adjustments here: with the mode and the
+        // alignment on it, a stamp's bar with Hardness out too ran past a
+        // 1024 px window.
+        onlyWhen(brushTip(), (values) => !isCopyMode(values.mode)),
         onlyWhen(range('hardness', 'tools.param.hardness', 0, 100, 5, '%'), (values) => !isCopyMode(values.mode)),
         onlyWhen(range('spacing', 'tools.param.spacing', 1, 50, 1, '%'), (values) => !isCopyMode(values.mode)),
-        range('opacity', 'tools.param.opacity', 0, 100, 5, '%'),
+        brushOpacity(),
         onlyWhen(range('flow', 'tools.param.flow', 0, 100, 5, '%'), (values) => !isCopyMode(values.mode)),
         onlyWhen(range('feather', 'tools.param.feather', 0, 64, 1, 'px'), (values) => isCopyMode(values.mode)),
         onlyWhen(range('edgeOpacity', 'regionCopy.edgeOpacity', 0, 100, 1, '%'), (values) => isCopyMode(values.mode)),

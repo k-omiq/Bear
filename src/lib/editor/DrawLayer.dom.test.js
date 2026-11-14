@@ -99,6 +99,76 @@ describe('brush pressure on a mounted surface', () => {
   })
 })
 
+/**
+ * **The cursor is the tip.** A square tip draws a square footprint, the
+ * diameter on each side; a disc draws a disc. Only a tool with a live Tip row
+ * takes the square: the selection tool's brush stays round whatever a stored
+ * `tip` says.
+ */
+describe('the brush footprint follows the tip', () => {
+  /** @param {string} tool @param {Record<string, unknown>} params */
+  function hover(tool, params) {
+    const only = page('c1-p001', 0)
+    editor.chapter = { id: 'c1', review: [], pages: [only] }
+    editor.project = /** @type {any} */ ({ mode: 'single' })
+    editor.history = createHistory()
+    editor.pageIndex = 0
+    editor.tool = tool
+    editor.toolParams = { [tool]: params }
+    resetDraftState()
+    setBackend(/** @type {any} */ ({}))
+    const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    const view = render(DrawLayer, { props: { page: only } })
+    const surface = view.getByRole('button')
+    surface.getBoundingClientRect = () => /** @type {DOMRect} */ ({
+      x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, toJSON() {},
+    })
+    return { view, surface, canvas }
+  }
+
+  it.each([
+    ['brush', { mode: 'paint', size: 160, tip: 'square' }],
+    ['eraser', { size: 160, tip: 'square', hardness: 100, opacity: 100 }],
+    ['cloneStamp', { mode: 'stamp', size: 160, tip: 'square' }],
+  ])('draws a square %s footprint at the true size', async (tool, params) => {
+    const { view, surface, canvas } = hover(tool, params)
+    try {
+      await fireEvent.pointerMove(surface, { clientX: 50, clientY: 50 })
+      const cursor = view.container.querySelector('svg.cursor')
+      expect(cursor?.getAttribute('data-tip')).toBe('square')
+      expect(cursor?.querySelector('ellipse')).toBeNull()
+      const square = cursor?.querySelector('rect')
+      // 160 page pixels across on an 800 by 1000 page, in page percent.
+      expect(Number(square?.getAttribute('width'))).toBeCloseTo(20)
+      expect(Number(square?.getAttribute('height'))).toBeCloseTo(16)
+      expect(Number(square?.getAttribute('x'))).toBeCloseTo(40)
+      expect(Number(square?.getAttribute('y'))).toBeCloseTo(42)
+    } finally {
+      cleanup()
+      canvas.mockRestore()
+    }
+  })
+
+  it.each([
+    ['brush', { mode: 'paint', size: 160, tip: 'round' }],
+    ['brush', { mode: 'paint', size: 160 }],
+    ['maskSelect', { mode: 'add', shape: 'brush', size: 160, tip: 'square' }],
+    ['cloneStamp', { mode: 'region', shape: 'brush', size: 160, tip: 'square' }],
+  ])('keeps a round %s footprint where the tip is not square or not offered', async (tool, params) => {
+    const { view, surface, canvas } = hover(tool, params)
+    try {
+      await fireEvent.pointerMove(surface, { clientX: 50, clientY: 50 })
+      const cursor = view.container.querySelector('svg.cursor')
+      expect(cursor?.getAttribute('data-tip')).toBe('round')
+      expect(cursor?.querySelector('rect')).toBeNull()
+      expect(Number(cursor?.querySelector('ellipse')?.getAttribute('rx'))).toBeCloseTo(10)
+    } finally {
+      cleanup()
+      canvas.mockRestore()
+    }
+  })
+})
+
 // A run holds the page it is on and no other (`editor.svelte.js#pageBusy`): a
 // gesture on that page is not begun, and says why; the same gesture on any
 // other page of the chapter is drawn and sent while the run goes on.

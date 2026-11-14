@@ -37,7 +37,15 @@ use crate::mask::{Mask, Rect};
 use crate::patch::Patch;
 
 use brush::{AccumulationView, RasterizableDab, StampOptions, TipShape};
-pub use plan::{BrushSpec, StrokePoint};
+pub use plan::{BrushSpec, StrokePoint, Tip};
+
+/// The kernel's tip for a brush's outline.
+fn tip_shape(tip: Tip) -> TipShape<'static> {
+    match tip {
+        Tip::Round => TipShape::Analytic,
+        Tip::Square => TipShape::Square,
+    }
+}
 
 /// The angle every Phase 1 dab is stamped at: none.
 ///
@@ -158,7 +166,7 @@ pub fn render_brush(
         brush::stamp_dab_subpixel(
             &mut view,
             &local,
-            TipShape::Analytic,
+            tip_shape(spec.tip),
             dab_color,
             &options,
             COS_ZERO,
@@ -279,7 +287,7 @@ pub fn render_clone(
         brush::stamp_dab_subpixel(
             &mut view,
             &local,
-            TipShape::Analytic,
+            tip_shape(spec.tip),
             [0.0; 3],
             &options,
             COS_ZERO,
@@ -452,7 +460,67 @@ mod tests {
             pressure_size: false,
             pressure_opacity: false,
             seed: 7,
+            tip: Tip::Round,
         }
+    }
+
+    /// **A square tip covers its corners.** A hard dab 7 pixels across at
+    /// (9, 9) reaches 3 pixels each way on both tips; the pixel at (12, 12) is
+    /// 4.24 pixels out, past a disc's 3.5 and inside a square's. So the square
+    /// is every pixel of the 7 by 7 and nothing past it.
+    #[test]
+    fn a_square_tip_covers_the_corners_a_round_one_leaves() {
+        let page = fixtures::by_name("l8").raster;
+        let paint = |tip: Tip| {
+            render_brush(&page, &[], None, &stroke(&[(9.0, 9.0)]), &BrushSpec { tip, ..hard_brush(7.0) }, [0, 0, 0])
+                .unwrap()
+                .mask
+        };
+        let (round, square) = (paint(Tip::Round), paint(Tip::Square));
+        assert!(!round.contains(12, 12));
+        assert!(square.contains(12, 12) && square.contains(6, 6) && square.contains(6, 12));
+        for (x, y) in [(13, 9), (9, 13), (5, 9), (13, 13)] {
+            assert!(!square.contains(x, y), "({x},{y}) is past the square's edge");
+        }
+        let covered = (0..20).flat_map(|y| (0..20).map(move |x| (x, y))).filter(|&(x, y)| square.contains(x, y)).count();
+        assert_eq!(covered, 49);
+        assert_eq!(square.bounds, Rect::new(6, 6, 7, 7));
+    }
+
+    /// **Hardness works on a square.** A soft square fades from its centre by
+    /// the axis distance, so (12, 9) and (12, 12) take the same paint, where a
+    /// soft disc gives the corner less.
+    #[test]
+    fn a_soft_square_fades_by_its_axis_distance() {
+        let mut page = fixtures::by_name("l8").raster;
+        page.data.fill(255);
+        let paint = |tip: Tip| {
+            let spec = BrushSpec { tip, hardness: 50.0, ..hard_brush(11.0) };
+            let painted = render_brush(&page, &[], None, &stroke(&[(9.0, 9.0)]), &spec, [0, 0, 0]).unwrap();
+            let bounds = painted.mask.bounds;
+            move |x: i64, y: i64| painted.pixels.sample((x - bounds.x) as u32, (y - bounds.y) as u32, 0)
+        };
+        let square = paint(Tip::Square);
+        assert_eq!(square(9, 9), 0, "the core is solid");
+        assert!(square(12, 9) > 0 && square(12, 9) < 255, "{}", square(12, 9));
+        assert_eq!(square(12, 12), square(12, 9));
+        assert_eq!(square(6, 12), square(12, 9));
+        assert!(square(13, 13) > square(12, 12));
+        let round = paint(Tip::Round);
+        assert_eq!(round(12, 9), square(12, 9), "on an axis the two tips agree");
+        assert!(round(12, 12) > round(12, 9));
+    }
+
+    /// The parse the seam and a provenance read: anything but `square` is a
+    /// round tip, which is what a stroke saved before the choice was.
+    #[test]
+    fn a_tip_word_parses_to_round_unless_it_says_square() {
+        assert_eq!(Tip::parse(Some("square")), Tip::Square);
+        for word in [None, Some("round"), Some(""), Some("Square"), Some("diamond")] {
+            assert_eq!(Tip::parse(word), Tip::Round, "{word:?}");
+        }
+        assert_eq!(BrushSpec::default().tip, Tip::Round);
+        assert_eq!((Tip::Round.name(), Tip::Square.name()), ("round", "square"));
     }
 
     #[test]

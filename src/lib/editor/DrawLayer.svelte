@@ -38,7 +38,7 @@
     pullRope,
   } from './gesture.js'
   import { commitDraft } from './drawing.svelte.js'
-  import { draftShape, selectsArea, toolSpec } from './tools.js'
+  import { activeParams, brushTipOf, draftShape, selectsArea, toolSpec } from './tools.js'
   import { applySelection, moveGhost, retouch, sampleEyedrop, setLine } from './retouch.svelte.js'
   import { snapped } from './gradient.js'
   import SelectionOverlay from './SelectionOverlay.svelte'
@@ -229,6 +229,13 @@
   }))
   /** The tools, and the selection tool's brush, that paint a round stroke rather than drag a shape. */
   const round = $derived(shape === null)
+  /**
+   * Whether the brush's footprint is a square: a tool with a Tip row live
+   * (the Brush, the Eraser, a stamp) set to square. Everything else that
+   * strokes is a disc, the Region copy brush among them.
+   */
+  const squareTip = $derived(round && brushTipOf(params) === 'square' &&
+    activeParams(toolSpec(tool), params).some((param) => param.key === 'tip'))
 
   /**
    * The two tools whose preview is pixels rather than an outline
@@ -1140,22 +1147,33 @@
 <!-- What the stamp would copy, inside the ring, and a cross on the place it
      reads from. Under the ring so the ring stays the cursor's edge. -->
 {#if stamping}
-  <CloneSource at={ringAt} {radius} source={cloneFrom} {sampling} version={pageVersion(page, 'cleaned')} />
+  <CloneSource at={ringAt} {radius} square={squareTip} source={cloneFrom} {sampling} version={pageVersion(page, 'cleaned')} />
 {/if}
 
 <!-- The brush's own footprint, under the pointer. An ellipse in page percent
      and therefore a *circle* on screen: the sheet is drawn at the page's
      aspect ratio, so the two axes are scaled by different amounts and a
-     per-axis radius is what survives the trip. -->
+     per-axis radius is what survives the trip. A square tip is a square the
+     same way: a rectangle in page percent, the diameter on each side. -->
 {#if ringAt && radius.rx > 0 && !(stamping && sampling)}
-  <svg class="cursor" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-    <ellipse
-      cx={ringAt.x}
-      cy={ringAt.y}
-      rx={radius.rx}
-      ry={radius.ry}
-      vector-effect="non-scaling-stroke"
-    />
+  <svg class="cursor" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" data-tip={squareTip ? 'square' : 'round'}>
+    {#if squareTip}
+      <rect
+        x={ringAt.x - radius.rx}
+        y={ringAt.y - radius.ry}
+        width={radius.rx * 2}
+        height={radius.ry * 2}
+        vector-effect="non-scaling-stroke"
+      />
+    {:else}
+      <ellipse
+        cx={ringAt.x}
+        cy={ringAt.y}
+        rx={radius.rx}
+        ry={radius.ry}
+        vector-effect="non-scaling-stroke"
+      />
+    {/if}
   </svg>
 {/if}
 
@@ -1213,7 +1231,8 @@
      Blue rather than ink, because the artwork it is aimed at is black ink and
      a dark ring vanishes into it - and blue is lighter than the ink it
      replaces, so it carries a higher opacity to stay as legible. */
-  .cursor ellipse {
+  .cursor ellipse,
+  .cursor rect {
     fill: none;
     stroke: var(--page-mark);
     stroke-width: 1;

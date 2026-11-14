@@ -158,7 +158,16 @@ describe('brushFromParams', () => {
       pressureSize: true,
       pressureOpacity: false,
       seed: 0,
+      tip: 'round',
     })
+  })
+
+  // A stroke saved, or a tool set, before the tip choice reads as round.
+  it('reads the tip, round unless it says square', () => {
+    expect(brushFromParams({ tip: 'square' }).tip).toBe('square')
+    for (const tip of [undefined, 'round', 'Square', 'diamond', 3]) {
+      expect(brushFromParams({ tip }).tip).toBe('round')
+    }
   })
 
   it('clamps what the parameters can express past what the planner accepts', () => {

@@ -1322,9 +1322,30 @@ describe('paint integration payload contract', () => {
       spacing: 15,
       pressureSize: true,
       pressureOpacity: false,
+      // No tip set reads as the round one every older stroke had.
+      tip: 'round',
     })
     expect(typeof params.paint.seed).toBe('number')
     expect(params.paint.seed).toBeGreaterThanOrEqual(0)
+  })
+
+  it('carries a square tip and a low opacity in params.paint for the brush and the stamp', async () => {
+    editor.tool = 'brush'
+    editor.toolParams.brush = { size: 30, tip: 'square', hardness: 80, spacing: 15, mode: 'paint', color: '#ff0000', opacity: 7, flow: 100 }
+    const adapter = backend()
+    setBackend(/** @type {any} */ (adapter))
+    painted('brush', [{ x: 10, y: 10, p: 0.8 }, { x: 20, y: 30, p: 0.6 }], 30)
+    expect(await commitDraft()).toBe(true)
+    expect(adapter.createRegion.mock.calls[0][0].params.paint).toMatchObject({ tip: 'square', opacity: 7 })
+
+    editor.tool = 'cloneStamp'
+    editor.toolParams.cloneStamp = { mode: 'stamp', size: 32, tip: 'square', hardness: 60, spacing: 12, alignment: 'aligned', opacity: 75, flow: 80 }
+    painted('cloneStamp', [{ x: 10, y: 10, p: 0.7 }, { x: 15, y: 15, p: 0.9 }], 32)
+    draft.active.clone = { source: { x: 50, y: 50 }, offset: { x: 40, y: 40 } }
+    expect(await commitDraft()).toBe(true)
+    const clone = adapter.createRegion.mock.calls[1][0].params
+    expect(clone.tip).toBe('square')
+    expect(clone.paint.tip).toBe('square')
   })
 
   it('does not build params.paint for brush in add mode', async () => {
@@ -1385,6 +1406,7 @@ describe('paint integration payload contract', () => {
         { x: 10, y: 10, p: 0.7 },
         { x: 15, y: 15, p: 0.9 },
       ],
+      tip: 'round',
     })
     expect(typeof params.paint.seed).toBe('number')
   })
@@ -1714,8 +1736,8 @@ describe('the eraser stroke', () => {
     const { adapter, journal } = erase()
     expect(await commitDraft()).toBe(true)
     await settled(editor.history)
-    const [{ size, hardness, opacity, points }] = adapter.erasePaint.mock.calls[0]
-    expect({ size, hardness, opacity }).toEqual({ size: 28, hardness: 100, opacity: 100 })
+    const [{ size, hardness, opacity, tip, points }] = adapter.erasePaint.mock.calls[0]
+    expect({ size, hardness, opacity, tip }).toEqual({ size: 28, hardness: 100, opacity: 100, tip: 'round' })
     expect(points).toHaveLength(2)
     expect(revisions()).toEqual({ 'c1-p001-h1': 'c1-p001-h1-v2' })
     expect(editor.selectionId).toBe(null)
@@ -1727,6 +1749,14 @@ describe('the eraser stroke', () => {
     expect(revisions()).toEqual({ 'c1-p001-h1': 'c1-p001-h1-v1', 'c1-p001-h2': 'c1-p001-h2-v1' })
     await step(redo)
     expect(revisions()).toEqual({ 'c1-p001-h1': 'c1-p001-h1-v2' })
+  })
+
+  it('sends the eraser\'s square tip and its opacity', async () => {
+    const { adapter } = erase()
+    editor.toolParams.eraser = { size: 40, tip: 'square', hardness: 50, opacity: 35 }
+    expect(await commitDraft()).toBe(true)
+    const [{ size, hardness, opacity, tip }] = adapter.erasePaint.mock.calls[0]
+    expect({ size, hardness, opacity, tip }).toEqual({ size: 40, hardness: 50, opacity: 35, tip: 'square' })
   })
 
   it('answers a layer the page above owns with that page, and reads the pages it shows on again', async () => {
