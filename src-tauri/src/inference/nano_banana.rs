@@ -9,9 +9,10 @@
 //!
 //! - Settings' Cloud engines switch ([`super::cloud_allowed`]), read when a
 //!   region edit opens ([`Config::when_allowed`]).
-//! - The key lives in the OS credential store, or only in this process's memory
-//!   on a system that has none. It never reaches the webview, `settings.json` or
-//!   a log.
+//! - Each profile's key lives in the OS credential store, or only in this
+//!   process's memory on a system that has none (`nano_banana_profiles.rs`). It
+//!   never reaches the webview, `settings.json` or a log, and only the key of
+//!   the profile a window was granted on is read.
 //! - No automatic run reaches this rung (`run.rs#reachable_automatically`).
 //!   A person names it per region, or confirms a batch with its cost.
 //!
@@ -23,6 +24,7 @@
 
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::collections::BTreeMap;
 use std::sync::{mpsc, Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -51,7 +53,9 @@ pub const RESTRICTIVE_KEY: &str = "nanoBananaRestrictive";
 pub const MAX_INSTRUCTION_CHARS: usize = 600;
 
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/models";
-const KEYRING_ACCOUNT: &str = "nano-banana-api-key";
+/// The credential store account of the single key of before, which is the
+/// first profile's (`nano_banana_profiles::account`).
+pub(crate) const KEYRING_ACCOUNT: &str = "nano-banana-api-key";
 /// A 2K answer in base64 with room to spare.
 const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 /// How many crops of one region are offered before giving up. Google's billing
@@ -185,17 +189,26 @@ pub(crate) struct Config {
     /// Restrictive crops: what the person confirmed, so a switch flipped
     /// during a batch applies from the next window.
     pub restrictive: bool,
+    /// The profile whose key pays: the active one when the window was
+    /// confirmed, so switching profiles during a batch applies from the next
+    /// window. None when no profile is saved.
+    pub profile: Option<super::nano_banana_profiles::Chosen>,
 }
 
 impl Config {
     fn from_settings(settings: Option<&Value>) -> Config {
         let text = |key: &str| settings.and_then(|value| value.get(key)).and_then(Value::as_str);
-        // A model id goes into the request's path, so only a known one is used.
-        let model = Model::from_setting(text(MODEL_KEY));
+        // A model id goes into the request's path, so only a known one is
+        // used. It is the active profile's.
+        let (profile, model) = match super::nano_banana_profiles::chosen(settings) {
+            Some((profile, model)) => (Some(profile), model),
+            None => (None, Model::from_setting(text(MODEL_KEY))),
+        };
         Config {
             model,
             instruction: clean_instruction(text(PROMPT_KEY)),
             restrictive: settings.and_then(|value| value.get(RESTRICTIVE_KEY)).and_then(Value::as_bool).unwrap_or(false),
+            profile,
         }
     }
 
@@ -941,6 +954,7 @@ fn finish(config: &Config, prepared: &Prepared, region: SendRegion, answer: &[u8
     let crop = region.crop;
     let mut record = json!({
             "model": config.model.id,
+            "profile": config.profile.as_ref().map(|profile| profile.name.as_str()),
             "image_size": region.tier.wire(),
             "aspect_ratio": region.ratio,
             "crop": [crop.x, crop.y, crop.w, crop.h],
@@ -1078,7 +1092,10 @@ pub(crate) fn render(granted: &Granted, page: &Raster, fitted: &Fitted, finishin
     if granted.stop.raised() {
         return Err(Failure::Stopped.reason_key());
     }
-    let key = read_key(&OsStore, &KEY).map_err(Failure::reason_key)?.ok_or(Failure::NoKey.reason_key())?;
+    let profile = granted.config.profile.as_ref().ok_or(Failure::NoKey.reason_key())?;
+    let account = super::nano_banana_profiles::account(&profile.id);
+    let key = read_key(&OsStore { account: &account }, &memo_for(&account))
+        .map_err(Failure::reason_key)?.ok_or(Failure::NoKey.reason_key())?;
     let client = Client::new(ENDPOINT, &key, LIMITS, &GATE).map_err(Failure::reason_key)?;
     render_with(&client, &granted.config, &granted.stop, page, fitted, finishing, share, show)
 }
@@ -1102,8 +1119,10 @@ trait KeyStore: Sync {
 }
 
 /// The OS credential store, through `keyring` and the same macOS item writer the
-/// cloud credentials use.
-struct OsStore;
+/// cloud credentials use: one account, one profile's key.
+struct OsStore<'a> {
+    account: &'a str,
+}
 
 /// The platforms `Cargo.toml` names a `keyring` backend for. Anywhere else the
 /// crate compiles an in-memory stand-in, which is no store at all.
@@ -1114,16 +1133,16 @@ fn fault(error: keyring::Error) -> StoreFault {
     if super::secrets::no_store(&error) { StoreFault::Missing } else { StoreFault::Failed }
 }
 
-fn entry() -> Result<keyring::Entry, StoreFault> {
+fn entry(account: &str) -> Result<keyring::Entry, StoreFault> {
     if !HAS_STORE {
         return Err(StoreFault::Missing);
     }
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT).map_err(fault)
+    keyring::Entry::new(KEYRING_SERVICE, account).map_err(fault)
 }
 
-impl KeyStore for OsStore {
+impl KeyStore for OsStore<'_> {
     fn get(&self) -> Result<Option<String>, StoreFault> {
-        match entry()?.get_password() {
+        match entry(self.account)?.get_password() {
             Ok(key) => Ok(Some(key)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(fault(error)),
@@ -1132,17 +1151,17 @@ impl KeyStore for OsStore {
 
     fn set(&self, key: &str) -> Result<(), StoreFault> {
         #[cfg(target_os = "macos")]
-        let written = crate::macos_keychain::set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, key);
+        let written = crate::macos_keychain::set_password(KEYRING_SERVICE, self.account, key);
         #[cfg(not(target_os = "macos"))]
-        let written = entry()?.set_password(key);
+        let written = entry(self.account)?.set_password(key);
         written.map_err(fault)
     }
 
     fn delete(&self) -> Result<(), StoreFault> {
         #[cfg(target_os = "macos")]
-        let deleted = crate::macos_keychain::delete_password(KEYRING_SERVICE, KEYRING_ACCOUNT);
+        let deleted = crate::macos_keychain::delete_password(KEYRING_SERVICE, self.account);
         #[cfg(not(target_os = "macos"))]
-        let deleted = entry()?.delete_credential();
+        let deleted = entry(self.account)?.delete_credential();
         match deleted {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(fault(error)),
@@ -1153,12 +1172,13 @@ impl KeyStore for OsStore {
         if !HAS_STORE {
             return Err(StoreFault::Missing);
         }
-        super::secrets::account_exists(KEYRING_ACCOUNT).map_err(fault)
+        super::secrets::account_exists(self.account).map_err(fault)
     }
 }
 
-/// What this process knows of the key, so a batch reads the store once and not
-/// once per region: after an unsigned rebuild every read is a keychain prompt.
+/// What this process knows of one profile's key, so a batch reads the store
+/// once and not once per region: after an unsigned rebuild every read is a
+/// keychain prompt.
 #[derive(Default)]
 struct KeyMemo {
     /// A key kept only in memory for this run, because the system has no
@@ -1169,7 +1189,13 @@ struct KeyMemo {
     read: Option<Result<Option<Zeroizing<String>>, ()>>,
 }
 
-static KEY: Mutex<KeyMemo> = Mutex::new(KeyMemo { session: None, read: None });
+/// One memo per credential store account, made when it is first asked about.
+static KEYS: Mutex<BTreeMap<String, Arc<Mutex<KeyMemo>>>> = Mutex::new(BTreeMap::new());
+
+fn memo_for(account: &str) -> Arc<Mutex<KeyMemo>> {
+    let mut keys = KEYS.lock().unwrap_or_else(PoisonError::into_inner);
+    keys.entry(account.to_owned()).or_default().clone()
+}
 
 /// The key, from memory or from the store. The lock is held across the read, so
 /// regions asking at once share one prompt.
@@ -1189,14 +1215,14 @@ fn read_key(store: &dyn KeyStore, memo: &Mutex<KeyMemo>) -> Result<Option<Zeroiz
 
 /// Why a key command failed, as the stable code the webview looks up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum KeyError {
+pub(crate) enum KeyError {
     NoStore,
     Invalid,
     Failed,
 }
 
 impl KeyError {
-    fn code(self) -> &'static str {
+    pub(crate) fn code(self) -> &'static str {
         match self {
             KeyError::NoStore => "nanoBanana.key.noStore",
             KeyError::Invalid => "nanoBanana.key.invalid",
@@ -1287,32 +1313,25 @@ fn has_key(store: &dyn KeyStore, memo: &Mutex<KeyMemo>) -> Result<bool, KeyError
     })
 }
 
-/// A key command, off the invoke handler: a store call can wait minutes on a
-/// prompt or on D-Bus.
-async fn off_thread<T: Send + 'static>(job: impl FnOnce() -> Result<T, KeyError> + Send + 'static) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(job)
-        .await
-        .unwrap_or(Err(KeyError::Failed))
-        .map_err(|error| error.code().to_owned())
+/// Whether the key of `account` is kept, asked without reading it, so
+/// opening Settings never prompts for the keychain.
+pub(crate) fn has_key_in(account: &str) -> Result<bool, KeyError> {
+    has_key(&OsStore { account }, &memo_for(account))
 }
 
-/// Whether a key is kept, asked without reading it, so opening Settings never
-/// prompts for the keychain.
-#[tauri::command]
-pub async fn nano_banana_has_key() -> Result<bool, String> {
-    off_thread(|| has_key(&OsStore, &KEY)).await
+/// Whether the key of `account` is held for this run only.
+pub(crate) fn session_only_in(account: &str) -> bool {
+    memo_for(account).lock().unwrap_or_else(PoisonError::into_inner).session.is_some()
 }
 
-/// Store the key. Write-only: nothing ever reads it back to the webview.
-#[tauri::command]
-pub async fn store_nano_banana_key(key: String) -> Result<Stored, String> {
-    let key = Zeroizing::new(key);
-    off_thread(move || store_key(&OsStore, &KEY, &key)).await
+/// Store the key of `account`. Write-only: nothing ever reads it back to the
+/// webview.
+pub(crate) fn store_key_in(account: &str, key: &str) -> Result<Stored, KeyError> {
+    store_key(&OsStore { account }, &memo_for(account), key)
 }
 
-#[tauri::command]
-pub async fn delete_nano_banana_key() -> Result<(), String> {
-    off_thread(|| delete_key(&OsStore, &KEY)).await
+pub(crate) fn delete_key_in(account: &str) -> Result<(), KeyError> {
+    delete_key(&OsStore { account }, &memo_for(account))
 }
 
 #[cfg(test)]
@@ -1483,7 +1502,7 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(422, "{}".into()); MAX_CROPS]);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBadAnswer"));
         assert_eq!(server.seen.lock().unwrap().len(), 1);
@@ -1735,7 +1754,7 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
 
         let seen = server.seen.lock().unwrap();
@@ -1764,7 +1783,7 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: true };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: true, profile: None };
         let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
         let seen = server.seen.lock().unwrap();
         let sent = sent_crop(&seen[0].1);
@@ -1802,7 +1821,7 @@ mod tests {
         let hole = Rect::new(600, 700, 40, 20);
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: true };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: true, profile: None };
         let show = Show { origin: (1000, 2000) };
 
         // Skipped: nothing goes.
@@ -1858,7 +1877,7 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![recited(), (200, image_reply(&answer_of(256, 1024, [200, 200, 200])))]);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
         assert_eq!(edited.record["aspect_ratio"], "1:4");
         assert_eq!(edited.record["crops_refused"], 1);
@@ -1873,7 +1892,7 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![recited(); MAX_CROPS]);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBlocked"));
         assert_eq!(server.seen.lock().unwrap().len(), MAX_CROPS);
@@ -1885,7 +1904,7 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, json!({ "candidates": [{ "finishReason": "PROHIBITED_CONTENT" }] }).to_string())]);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBlocked"));
         assert_eq!(server.seen.lock().unwrap().len(), 1);
@@ -1900,7 +1919,7 @@ mod tests {
         let hole = Rect::new(600, 700, 40, 20);
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
 
         let server = serve(vec![image_safety(), image_safety(), (200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
@@ -1950,7 +1969,7 @@ mod tests {
     fn a_neighbour_rides_in_the_same_request_and_is_cleaned_from_its_answer() {
         let (page, a, b) = two_holes();
         let (fit_a, fit_b) = (fitted_over(&page, a), fitted_over(&page, b));
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let b_mask = applied_mask(&fit_b, page.width, page.height);
 
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
@@ -1987,7 +2006,7 @@ mod tests {
     fn a_neighbour_whose_mask_grew_past_what_was_marked_is_sent_again() {
         let (page, a, b) = two_holes();
         let (fit_a, fit_b) = (fitted_over(&page, a), fitted_over(&page, b));
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let small = applied_mask(&fit_b, page.width, page.height);
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-grew", "b-grew", vec![("b-grew".into(), small.clone())]);
@@ -2007,13 +2026,13 @@ mod tests {
         let (page, a, b) = two_holes();
         let (fit_a, fit_b) = (fitted_over(&page, a), fitted_over(&page, b));
         let b_mask = applied_mask(&fit_b, page.width, page.height);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-scope", "b", vec![("b".into(), b_mask)]);
         render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a), None).unwrap();
 
         for (scope, instruction) in [("t-other-page", None), ("t-shared-scope", Some("erase it all".to_owned()))] {
-            let config = Config { model: Model::DEFAULT, instruction, restrictive: false };
+            let config = Config { model: Model::DEFAULT, instruction, restrictive: false, profile: None };
             let fresh = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
             let share_b = neighbours(scope, "b", Vec::new());
             let edited = render_with(&client(&fresh), &config, &Stop::default(), &page, &fit_b, None, Some(&share_b), None).unwrap();
@@ -2030,7 +2049,7 @@ mod tests {
         let (page, a, b) = two_holes();
         let fit_a = fitted_over(&page, a);
         let b_mask = applied_mask(&fitted_over(&page, b), page.width, page.height);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let server = serve(vec![(200, image_reply(&answer_of(512, 512, [200, 200, 200])))]);
         let share_a = neighbours("t-shared-crop", "b", vec![("b".into(), b_mask)]);
         render_with(&client(&server), &config, &Stop::default(), &page, &fit_a, None, Some(&share_a), None).unwrap();
@@ -2046,7 +2065,7 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve(vec![(200, image_reply(b"not an image")); MAX_CROPS]);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let refused = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).err();
         assert_eq!(refused, Some("decline.reason.nanoBananaBadAnswer"));
     }
@@ -2071,7 +2090,7 @@ mod tests {
         let page = page_with_lettering(1200, 1600, hole);
         let fitted = fitted_over(&page, hole);
         let server = serve_with(2, |at, body| http(200, "", &image_reply(&if at == 0 { b"not an image".to_vec() } else { gray_like_sent(body) })));
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let edited = render_with(&client(&server), &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
         assert_eq!(edited.record["crops_refused"], 1);
         assert_eq!(server.seen.lock().unwrap().len(), 2);
@@ -2141,7 +2160,7 @@ mod tests {
     fn a_stop_between_the_share_and_the_gate_sends_nothing() {
         use crate::inference::nano_banana_consent::Book;
         let book = Book::new(crate::inference::nano_banana_consent::IDLE);
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let nonce = book.issue(config.clone(), "c1", 1).unwrap();
         let spend = book.spend(true, Some(&nonce), "c1", None).unwrap();
         // The bench opens, the page decodes, the keychain asks: Stop lands now.
@@ -2163,7 +2182,7 @@ mod tests {
     #[test]
     fn stop_all_ends_every_window_s_render() {
         use crate::inference::nano_banana_consent::book;
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let one = book().issue(config.clone(), "t-stop-all-1", 1).unwrap();
         let other = book().issue(config, "t-stop-all-2", 1).unwrap();
         let first = book().spend(true, Some(&one), "t-stop-all-1", None).unwrap();
@@ -2346,7 +2365,7 @@ mod tests {
         let page = cleaner_core::image::decode(&std::fs::read(std::env::var("NANO_BANANA_PAGE").unwrap()).unwrap()).unwrap();
         let numbers: Vec<i64> = std::env::var("NANO_BANANA_BOX").unwrap().split(',').map(|n| n.parse().unwrap()).collect();
         let fitted = fitted_over(&page, Rect::new(numbers[0], numbers[1], numbers[2] as u32, numbers[3] as u32));
-        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false };
+        let config = Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None };
         let live = Client::new(ENDPOINT, &key, LIMITS, &GATE).unwrap();
         let edited = render_with(&live, &config, &Stop::default(), &page, &fitted, None, None, None).unwrap();
         println!("{}", edited.record);

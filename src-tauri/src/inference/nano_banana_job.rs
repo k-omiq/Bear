@@ -152,6 +152,9 @@ pub struct Report {
     /// replaced by another Nano Banana window also ends the batch, as
     /// cancelled, and says so.
     pub by_user: bool,
+    /// The name of the profile whose key paid, from the grant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 /// One region's clean, as the batch sees it.
@@ -206,6 +209,7 @@ pub(crate) fn walk_into(report: &mut Report, walk: &Walk<'_>, targets: &[Target]
     *report = Report {
         total: u32::try_from(targets.len()).unwrap_or(u32::MAX),
         left: pages.values().flatten().map(|target| (*target).clone()).collect(),
+        profile: walk.grants.profile_of(walk.nonce),
         ..Report::default()
     };
     let handled = |report: &mut Report, target: &Target| {
@@ -551,7 +555,7 @@ mod tests {
     use std::sync::Mutex;
 
     fn config() -> Config {
-        Config { model: Model::DEFAULT, instruction: None, restrictive: false }
+        Config { model: Model::DEFAULT, instruction: None, restrictive: false, profile: None }
     }
 
     fn target(page: u32, id: &str) -> Target {
@@ -963,7 +967,7 @@ mod tests {
         let report = Report {
             total: 2, cleaned: 1, gone: 0,
             failed: vec![unclean(&target(0, "c1-p001-d0"), Failure::Blocked.reason_key())],
-            left: vec![], stopped: None, by_user: false,
+            left: vec![], stopped: None, by_user: false, profile: Some("Work".into()),
         };
         let wire = serde_json::to_value(Event::NanoBananaReport { run_id: "run-nb".into(), chapter_id: "c1".into(), report }).unwrap();
         assert_eq!(wire["type"], "nano-banana-report");
@@ -973,5 +977,6 @@ mod tests {
         }));
         assert_eq!(wire["report"]["byUser"], false);
         assert!(wire["report"].get("stopped").is_none());
+        assert_eq!(wire["report"]["profile"], "Work");
     }
 }

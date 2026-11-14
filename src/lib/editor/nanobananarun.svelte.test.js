@@ -93,7 +93,7 @@ async function prepare() {
   // Nano Banana is a cloud engine with the person's own key: the consent is
   // granted only with cloud engines on, and a render goes only with a key.
   await backend.writeSettings({ cloudEngines: 'allowed' })
-  await backend.storeNanoBananaKey({ key: 'AIzaSyMockMockMockMockMockMockMockMock' })
+  await backend.createNanoBananaProfile({ name: 'Work', model: 'gemini-3.1-flash-image', key: 'AIzaSyMockMockMockMockMockMockMockMock' })
   const [first, second] = await textPages()
   await detectPage(first)
   await detectPage(second)
@@ -279,9 +279,39 @@ describe('the window in front of a Nano Banana request', () => {
     const stub = { grantNanoBanana: vi.fn(async () => ({ grant: 'g', model: 'gemini-3.1-flash-image', count: 1 })), readSettings: vi.fn(async () => ({ nanoBananaModel: 'gemini-nano-banana-2.1', nanoBananaPrompt: 'a' })), writeSettings: vi.fn() }
     const asked = confirmNanoBanana(1, CHAPTER, /** @type {any} */ (stub))
     const spec = await answer('cancel')
-    expect(spec.props).toEqual({ count: 1, model: 'gemini-nano-banana-2.1', size: '1K', prompt: 'a', restrictive: false })
+    expect(spec.props).toEqual({ count: 1, model: 'gemini-nano-banana-2.1', profile: null, size: '1K', prompt: 'a', restrictive: false })
     expect(await asked).toBeNull()
     expect(stub.writeSettings).not.toHaveBeenCalled()
+  })
+
+  it('names the active profile and its model, and asks the grant for that profile', async () => {
+    const stub = {
+      grantNanoBanana: vi.fn(async () => ({ grant: 'g', model: 'gemini-3-pro-image', count: 2, profile: 'Home' })),
+      listNanoBananaProfiles: vi.fn(async () => ({ active: 'pb', profiles: [
+        { id: 'pa', name: 'Work', model: 'gemini-3.1-flash-image', hasKey: true, sessionOnly: false },
+        { id: 'pb', name: 'Home', model: 'gemini-3-pro-image', hasKey: true, sessionOnly: false },
+      ] })),
+      readSettings: vi.fn(async () => ({ nanoBananaModel: 'gemini-nano-banana-2.1' })),
+      writeSettings: vi.fn(async () => ({})),
+    }
+    const asked = confirmNanoBanana(2, CHAPTER, /** @type {any} */ (stub))
+    const spec = await answer('confirm')
+    expect(spec.props).toMatchObject({ model: 'gemini-3-pro-image', profile: 'Home' })
+    expect(await asked).toBe('g')
+    expect(stub.grantNanoBanana).toHaveBeenCalledWith({ model: 'gemini-3-pro-image', count: 2, chapterId: CHAPTER, profileId: 'pb' })
+  })
+
+  it('opens no window and says why when no profile is saved', async () => {
+    const stub = {
+      grantNanoBanana: vi.fn(),
+      listNanoBananaProfiles: vi.fn(async () => ({ active: null, profiles: [] })),
+      readSettings: vi.fn(async () => ({})),
+      writeSettings: vi.fn(),
+    }
+    expect(await confirmNanoBanana(1, CHAPTER, /** @type {any} */ (stub))).toBeNull()
+    expect(app.modals.length).toBe(0)
+    expect(warnings()).toContain('nanoBanana.target.noKey')
+    expect(stub.grantNanoBanana).not.toHaveBeenCalled()
   })
 
   it('keeps what the person wrote, trimmed and cut, before anything is sent', async () => {

@@ -40,6 +40,8 @@ describe('the section a request resolves to', () => {
     expect(resolveSettingsLink('detection', 'mangaOcr')).toEqual({ section: 'models', anchor: 'mangaOcr' })
     expect(resolveSettingsLink('performance', 'runtime')).toEqual({ section: 'performance', anchor: 'runtime' })
     expect(resolveSettingsLink('inference', 'endpoints')).toEqual({ section: 'cloud', anchor: 'endpoints' })
+    expect(resolveSettingsLink('inference', 'nano-banana')).toEqual({ section: 'cloud', anchor: 'nano-banana' })
+    expect(resolveSettingsLink('models', 'nano-banana')).toEqual({ section: 'models', anchor: null })
     expect(resolveSettingsLink('models', 'runtime')).toEqual({ section: 'models', anchor: null })
     expect(resolveSettingsLink('general', 'samTs')).toEqual({ section: 'general', anchor: null })
   })

@@ -186,7 +186,6 @@
   import ShortcutSheet from './ShortcutSheet.svelte'
   import AboutSection from './AboutSection.svelte'
   import InferenceSettings from './InferenceSettings.svelte'
-  import NanoBananaSettings from './NanoBananaSettings.svelte'
   import MachineCheck from './runtime/MachineCheck.svelte'
   import Measurement from './runtime/Measurement.svelte'
   import { flavourName } from './runtime/runtime.js'
@@ -3140,7 +3139,6 @@
       <div class="column">
         <h2>{t('settings.section.cloud')}</h2>
         <InferenceSettings />
-        <NanoBananaSettings />
       </div>
     </div>
 

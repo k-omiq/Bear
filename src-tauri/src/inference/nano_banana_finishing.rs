@@ -1,23 +1,18 @@
-//! How a Nano Banana answer is finished before it is written: its own choice,
-//! apart from the one LaMa and local FLUX share (`cloudFinishing` with
-//! `finishingEveryModel`).
+//! How a Nano Banana answer is finished, and where it is kept.
 //!
-//! Three settings, each null or absent for its default:
-//!
-//! - `nanoBananaFinishing`: the version ([`Finishing`], kebab-case). The
-//!   default is the default finishing, the one a Nano Banana answer always had
-//!   while `finishingEveryModel` was off.
-//! - `nanoBananaFinishingGrayscale`: whether a colour answer is made grey
-//!   first. A grey page reads the answer grey anyway.
-//! - `nanoBananaStrays`: whether small marks the model drew on its own inside
-//!   the mask are filled from the tone round them first
-//!   ([`cleaner_core::engines::postprocess::strays`]). Off by default: on the
-//!   stored real answers it took out the white crescent of one and a small
-//!   wave dash of another.
+//! A Nano Banana answer is finished by the same choice as every other
+//! engine: Settings > Post-processing (`cloudFinishing` and
+//! `cloudFinishingGrayscale`, [`from_settings`]). It is always finished, as a
+//! FLUX 3 answer is, whatever `finishingEveryModel` says. It had its own three
+//! settings before (`nanoBananaFinishing`, `nanoBananaFinishingGrayscale`,
+//! `nanoBananaStrays`); a file that still holds them is read without them
+//! ([`forget_old_settings`]), and nothing reads them.
 //!
 //! What a render used is kept in its patch's record
 //! (`params_snapshot["postprocess"]`), and a Try again on a Nano Banana layer
-//! finishes the new answer the same way ([`recorded`]).
+//! finishes the new answer the same way ([`recorded`]). A layer's own
+//! finishing, stray marks included, is still changed from its previews in the
+//! Post-processing window (`inference::refinish`).
 //!
 //! The answer itself is kept in the chapter's folder, named by its digest
 //! ([`keep_answer`]), and the record names it (`nano_banana.answer_sha256`).
@@ -26,37 +21,28 @@
 
 use std::path::{Path, PathBuf};
 
-use cleaner_core::engines::postprocess::{Choice, Finishing};
+use cleaner_core::engines::postprocess::Choice;
 use cleaner_core::ingest::sha256_hex;
 use cleaner_core::patch::{Engine, Provenance};
 use serde_json::Value;
 
-pub const FINISHING_KEY: &str = "nanoBananaFinishing";
-pub const GRAYSCALE_KEY: &str = "nanoBananaFinishingGrayscale";
-pub const STRAYS_KEY: &str = "nanoBananaStrays";
+/// The settings Nano Banana had of its own, before it took the shared one.
+const OLD_KEYS: [&str; 3] = ["nanoBananaFinishing", "nanoBananaFinishingGrayscale", "nanoBananaStrays"];
 
-/// Whether a settings patch names any of the three.
-pub fn touches(patch: &Value) -> bool {
-    [FINISHING_KEY, GRAYSCALE_KEY, STRAYS_KEY].iter().any(|key| patch.get(key).is_some())
+/// The finishing a new Nano Banana answer takes: the shared choice. An
+/// unreadable one is the default, as a region edit reads it.
+pub fn from_settings(settings: &Value) -> Choice {
+    crate::inference::cloud_clean::finishing_from_settings(settings).map(|setting| setting.choice).unwrap_or_default()
 }
 
-/// Strict: each key null, absent, or of its type, the version one this build
-/// has. A settings write is refused on an error ([`crate::settings`]); a
-/// region edit reads an unreadable one as the default.
-pub fn from_settings(settings: &Value) -> Result<Choice, String> {
-    let set = |key: &str| settings.get(key).filter(|value| !value.is_null());
-    let finishing = match set(FINISHING_KEY) {
-        None => Finishing::default(),
-        Some(value) => serde_json::from_value(value.clone()).map_err(|_| {
-            let names: Vec<String> = Finishing::ALL.iter().map(|f| serde_json::json!(f).as_str().unwrap_or_default().to_owned()).collect();
-            format!("{FINISHING_KEY} must be one of {names:?}")
-        })?,
-    };
-    let flag = |key: &str| match set(key) {
-        None => Ok(false),
-        Some(value) => value.as_bool().ok_or_else(|| format!("{key} must be true or false")),
-    };
-    Ok(Choice { finishing, grayscale: flag(GRAYSCALE_KEY)?, strays: flag(STRAYS_KEY)? })
+/// Take the old settings out of a file as it is read, so no reader and no
+/// screen sees them, and the next write leaves them out.
+pub fn forget_old_settings(settings: &mut Value) {
+    if let Some(map) = settings.as_object_mut() {
+        for key in OLD_KEYS {
+            map.remove(key);
+        }
+    }
 }
 
 /// The finishing a Nano Banana patch was made with, from its record: what a
@@ -109,30 +95,21 @@ pub fn kept_answer(chapter: &Path, params: &Value) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cleaner_core::engines::postprocess::Finishing;
     use serde_json::json;
 
+    /// **Nano Banana takes the shared finishing.** Its old settings do not
+    /// reach it, and a file that holds them is read without them.
     #[test]
-    fn absent_or_null_is_the_default_finishing() {
-        assert_eq!(from_settings(&json!({})).unwrap(), Choice::default());
-        assert_eq!(from_settings(&json!({FINISHING_KEY: null, GRAYSCALE_KEY: null, STRAYS_KEY: null})).unwrap(), Choice::default());
-    }
-
-    /// **Nano Banana's choice is its own.** The shared finishing, even with
-    /// every model taking it, does not reach it.
-    #[test]
-    fn the_shared_finishing_does_not_reach_it() {
-        let settings = json!({"cloudFinishing": "poisson", "cloudFinishingGrayscale": true, "finishingEveryModel": true,
-            FINISHING_KEY: "tone-only", STRAYS_KEY: true});
-        assert_eq!(from_settings(&settings).unwrap(), Choice { finishing: Finishing::ToneOnly, grayscale: false, strays: true });
-    }
-
-    #[test]
-    fn an_unknown_version_or_a_flag_that_is_not_a_boolean_is_refused() {
-        assert!(from_settings(&json!({FINISHING_KEY: "blur"})).is_err());
-        assert!(from_settings(&json!({GRAYSCALE_KEY: "yes"})).is_err());
-        assert!(from_settings(&json!({STRAYS_KEY: 1})).is_err());
-        // The old names of the ported versions still read.
-        assert_eq!(from_settings(&json!({FINISHING_KEY: "reference-poisson"})).unwrap().finishing, Finishing::Poisson);
+    fn finishing_is_the_shared_choice_and_the_old_settings_are_gone() {
+        assert_eq!(from_settings(&json!({})), Choice::default());
+        let mut settings = json!({"cloudFinishing": "poisson", "cloudFinishingGrayscale": true,
+            "nanoBananaFinishing": "tone-only", "nanoBananaFinishingGrayscale": false, "nanoBananaStrays": true});
+        assert_eq!(from_settings(&settings), Choice::of(Finishing::Poisson, true));
+        forget_old_settings(&mut settings);
+        assert_eq!(settings, json!({"cloudFinishing": "poisson", "cloudFinishingGrayscale": true}));
+        // Unreadable is the default, not a refused edit.
+        assert_eq!(from_settings(&json!({"cloudFinishing": "blur"})), Choice::default());
     }
 
     #[test]

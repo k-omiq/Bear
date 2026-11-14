@@ -1,13 +1,15 @@
 /**
- * Settings > Cloud > Nano Banana, mounted: the key is saved with the button
- * or Enter, once however often it is pressed, and Nano Banana is offered
- * after; a key kept for this session only says so; each refusal of the key
- * commands has its own message; a key that changed but could not be read
- * back is still shown as saved; and a model that could not be saved goes
- * back to the one before it.
+ * Settings > Cloud > Nano Banana, mounted: profiles drawn like the endpoint
+ * list. A profile is added with a name, a key and a model, and the key box
+ * does not correct, capitalise or remember; the list shows each profile and
+ * which is active; picking another makes it active; rename, a new key, a
+ * model change and delete with a confirm each go through their own command;
+ * each refusal says what it means; Nano Banana is refreshed after a change;
+ * there is no finishing here any more; and the two sending choices still
+ * save as before.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
 import { t } from '../i18n/index.js'
 import { capabilities } from '../state/capabilities.svelte.js'
 import { session } from '../state/session.svelte.js'
@@ -29,14 +31,52 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** A backend holding no key, with each command a spy. @param {Record<string, any>} [overrides] */
-function backendWith(overrides = {}) {
-  let stored = false
+const PRO = 'gemini-3-pro-image'
+const FLASH = 'gemini-3.1-flash-image'
+
+/**
+ * A backend that keeps profiles as native does, with each command a spy.
+ *
+ * @param {Array<{id: string, name: string, model: string, hasKey?: boolean|null, sessionOnly?: boolean}>} [start]
+ * @param {Record<string, any>} [overrides]
+ */
+function backendWith(start = [], overrides = {}) {
+  const state = {
+    active: /** @type {string|null} */ (start[0]?.id ?? null),
+    profiles: start.map((profile) => ({ hasKey: true, sessionOnly: false, ...profile })),
+  }
+  let made = 0
+  const view = () => structuredClone(state)
+  const at = (/** @type {string} */ id) => {
+    const found = state.profiles.find((profile) => profile.id === id)
+    if (!found) throw new Error('nanoBanana.profile.missing')
+    return found
+  }
   return {
-    nanoBananaHasKey: vi.fn(async () => stored),
-    storeNanoBananaKey: vi.fn(async () => { stored = true; return { sessionOnly: false } }),
-    deleteNanoBananaKey: vi.fn(async () => { stored = false }),
-    readSettings: vi.fn(async () => ({ nanoBananaModel: 'gemini-3.1-flash-image' })),
+    state,
+    listNanoBananaProfiles: vi.fn(async () => view()),
+    createNanoBananaProfile: vi.fn(async ({ name, model }) => {
+      made += 1
+      const id = `p${made}`
+      state.profiles.push({ id, name, model, hasKey: true, sessionOnly: false })
+      state.active ??= id
+      return view()
+    }),
+    updateNanoBananaProfile: vi.fn(async ({ profileId, name, model }) => {
+      const profile = at(profileId)
+      if (name) profile.name = name
+      if (model) profile.model = model
+      return view()
+    }),
+    selectNanoBananaProfile: vi.fn(async ({ profileId }) => { at(profileId); state.active = profileId; return view() }),
+    storeNanoBananaKey: vi.fn(async ({ profileId }) => { at(profileId).hasKey = true; return view() }),
+    deleteNanoBananaProfile: vi.fn(async ({ profileId }) => {
+      state.profiles = state.profiles.filter((profile) => profile.id !== profileId)
+      if (state.active === profileId) state.active = state.profiles[0]?.id ?? null
+      return view()
+    }),
+    nanoBananaHasKey: vi.fn(async () => Boolean(state.profiles.find((profile) => profile.id === state.active)?.hasKey)),
+    readSettings: vi.fn(async () => ({})),
     writeSettings: vi.fn(async () => ({})),
     ...overrides,
   }
@@ -46,162 +86,164 @@ function backendWith(overrides = {}) {
 async function mount(backend) {
   render(NanoBananaSettings, { props: { backend } })
   await vi.waitFor(() => expect(backend.readSettings).toHaveBeenCalled())
-  const box = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBanana.settings.key')))
-  return { box, save: () => screen.getByRole('button', { name: t('nanoBanana.settings.save') }) }
 }
 
-describe('the Nano Banana key', () => {
-  it('is typed into a box that does not correct, capitalise or remember it', async () => {
-    const { box } = await mount(backendWith())
-    expect(box.type).toBe('password')
-    expect(box.getAttribute('autocomplete')).toBe('off')
-    expect(box.getAttribute('autocapitalize')).toBe('off')
-    expect(box.getAttribute('spellcheck')).toBe('false')
-    expect(Number(box.getAttribute('maxlength'))).toBeGreaterThan(39)
-  })
+/** The row of the profile named `name`. @param {string} name */
+const rowOf = (name) => /** @type {HTMLElement} */ (screen.getByText(name, { selector: 'label' }).closest('li'))
 
-  it('is saved with Enter, and Nano Banana is offered after', async () => {
+describe('Nano Banana profiles', () => {
+  it('says there are none yet, and adds the first with a name, a key and a model', async () => {
     const backend = backendWith()
-    const { box } = await mount(backend)
-    await fireEvent.input(box, { target: { value: 'AIza-key' } })
-    await fireEvent.submit(/** @type {HTMLFormElement} */ (box.form))
+    await mount(backend)
+    expect(await screen.findByText(t('nanoBanana.settings.empty'))).toBeTruthy()
+    await fireEvent.click(screen.getByRole('button', { name: t('nanoBanana.settings.add') }))
+    const key = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBanana.settings.key')))
+    expect(key.type).toBe('password')
+    expect([key.getAttribute('autocomplete'), key.getAttribute('autocapitalize'), key.getAttribute('spellcheck')]).toEqual(['off', 'off', 'false'])
+    expect(Number(key.getAttribute('maxlength'))).toBeGreaterThan(39)
+    const name = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBanana.settings.name')))
+    await fireEvent.input(name, { target: { value: 'Work' } })
+    await fireEvent.input(key, { target: { value: 'AIza-key' } })
+    await fireEvent.change(screen.getByLabelText(t('nanoBanana.settings.model')), { target: { value: PRO } })
+    await fireEvent.submit(/** @type {HTMLFormElement} */ (key.form))
     await vi.waitFor(() => expect(capabilities.nanoBanana).toBe(true))
-    expect(backend.storeNanoBananaKey).toHaveBeenCalledWith({ key: 'AIza-key' })
-    expect(box.value).toBe('')
-    expect(screen.getByText(t('nanoBanana.settings.keySaved'))).toBeTruthy()
-    expect(screen.queryByRole('alert')).toBeNull()
+    expect(backend.createNanoBananaProfile).toHaveBeenCalledWith({ name: 'Work', model: PRO, key: 'AIza-key' })
+    await vi.waitFor(() => expect(screen.queryByLabelText(t('nanoBanana.settings.key'))).toBeNull())
+    const row = rowOf('Work')
+    expect(within(row).getByText(t('nanoBanana.settings.active'))).toBeTruthy()
+    expect(within(row).getByText(t('nanoBanana.settings.keySaved'))).toBeTruthy()
   })
 
-  it('is saved once however often Save is pressed while the first is going', async () => {
+  it('creates once however often Save is pressed while the first is going', async () => {
     /** @type {() => void} */
     let finish = () => {}
-    const backend = backendWith({
-      storeNanoBananaKey: vi.fn(() => new Promise((resolve) => { finish = () => resolve({ sessionOnly: false }) })),
+    const backend = backendWith([], {
+      createNanoBananaProfile: vi.fn(() => new Promise((resolve) => { finish = () => resolve({ active: 'p1', profiles: [] }) })),
     })
-    const { box, save } = await mount(backend)
-    await fireEvent.input(box, { target: { value: 'AIza-key' } })
-    await fireEvent.click(save())
-    expect(/** @type {HTMLButtonElement} */ (save()).disabled).toBe(true)
-    expect(box.disabled).toBe(true)
-    await fireEvent.click(save())
-    await fireEvent.submit(/** @type {HTMLFormElement} */ (box.form))
+    await mount(backend)
+    await fireEvent.click(await screen.findByRole('button', { name: t('nanoBanana.settings.add') }))
+    const key = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBanana.settings.key')))
+    await fireEvent.input(screen.getByLabelText(t('nanoBanana.settings.name')), { target: { value: 'Work' } })
+    await fireEvent.input(key, { target: { value: 'AIza-key' } })
+    await fireEvent.submit(/** @type {HTMLFormElement} */ (key.form))
+    await fireEvent.submit(/** @type {HTMLFormElement} */ (key.form))
+    expect(key.disabled).toBe(true)
     finish()
-    await vi.waitFor(() => expect(box.disabled).toBe(false))
-    expect(backend.storeNanoBananaKey).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(screen.queryByLabelText(t('nanoBanana.settings.key'))).toBeNull())
+    expect(backend.createNanoBananaProfile).toHaveBeenCalledTimes(1)
   })
 
-  it('says when it is kept only until the app closes', async () => {
-    const backend = backendWith()
-    backend.storeNanoBananaKey.mockImplementation(async () => {
-      backend.nanoBananaHasKey.mockResolvedValue(true)
-      return { sessionOnly: true }
-    })
-    backend.deleteNanoBananaKey.mockImplementation(async () => {
-      backend.nanoBananaHasKey.mockResolvedValue(false)
-    })
-    const { box, save } = await mount(backend)
-    await fireEvent.input(box, { target: { value: 'AIza-key' } })
-    await fireEvent.click(save())
-    expect(await screen.findByText(t('nanoBanana.settings.sessionOnly'))).toBeTruthy()
-    // Removed, the notice goes with it.
-    const remove = /** @type {HTMLButtonElement} */ (screen.getByRole('button', { name: t('nanoBanana.settings.remove') }))
-    await vi.waitFor(() => expect(remove.disabled).toBe(false))
-    await fireEvent.click(remove)
-    expect(await screen.findByText(t('nanoBanana.settings.keyMissing'))).toBeTruthy()
+  it('lists every profile, says which is active, and makes another active when it is picked', async () => {
+    const backend = backendWith([
+      { id: 'pa', name: 'Work', model: PRO },
+      { id: 'pb', name: 'Home', model: FLASH, hasKey: false },
+    ])
+    await mount(backend)
+    await screen.findByText('Home', { selector: 'label' })
+    expect(screen.getByText(t('nanoBanana.settings.switchNote'))).toBeTruthy()
+    expect(within(rowOf('Home')).getByText(t('nanoBanana.settings.keyMissing'))).toBeTruthy()
+    expect(within(rowOf('Home')).queryByText(t('nanoBanana.settings.active'))).toBeNull()
+    await fireEvent.click(screen.getByLabelText(t('nanoBanana.settings.useProfile', { name: 'Home' })))
+    await vi.waitFor(() => expect(within(rowOf('Home')).getByText(t('nanoBanana.settings.active'))).toBeTruthy())
+    expect(backend.selectNanoBananaProfile).toHaveBeenCalledWith({ profileId: 'pb' })
+    expect(backend.nanoBananaHasKey).toHaveBeenCalled()
   })
 
-  for (const code of ['nanoBanana.key.noStore', 'nanoBanana.key.invalid', 'nanoBanana.key.failed']) {
-    it(`says what ${code} means, not a generic failure`, async () => {
-      const backend = backendWith({ storeNanoBananaKey: vi.fn(async () => { throw code }) })
+  it('renames a profile and changes its model', async () => {
+    const backend = backendWith([{ id: 'pa', name: 'Work', model: FLASH }])
+    await mount(backend)
+    await fireEvent.click(within(await screen.findByRole('listitem')).getByRole('button', { name: t('nanoBanana.settings.rename') }))
+    const box = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBanana.settings.renameLabel', { name: 'Work' })))
+    expect(box.value).toBe('Work')
+    await fireEvent.input(box, { target: { value: 'Studio' } })
+    await fireEvent.submit(/** @type {HTMLFormElement} */ (box.form))
+    await screen.findByText('Studio', { selector: 'label' })
+    expect(backend.updateNanoBananaProfile).toHaveBeenCalledWith({ profileId: 'pa', name: 'Studio' })
+    const model = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('nanoBanana.settings.modelOf', { name: 'Studio' })))
+    expect(model.value).toBe(FLASH)
+    await fireEvent.change(model, { target: { value: PRO } })
+    await vi.waitFor(() => expect(backend.updateNanoBananaProfile).toHaveBeenCalledWith({ profileId: 'pa', model: PRO }))
+  })
+
+  it('replaces one profile\'s key, write-only', async () => {
+    const backend = backendWith([{ id: 'pa', name: 'Work', model: FLASH, hasKey: false }])
+    await mount(backend)
+    await fireEvent.click(within(await screen.findByRole('listitem')).getByRole('button', { name: t('nanoBanana.settings.addKey') }))
+    const box = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBanana.settings.keyLabel', { name: 'Work' })))
+    expect(box.type).toBe('password')
+    await fireEvent.input(box, { target: { value: 'AIza-new' } })
+    await fireEvent.submit(/** @type {HTMLFormElement} */ (box.form))
+    await vi.waitFor(() => expect(within(rowOf('Work')).getByText(t('nanoBanana.settings.keySaved'))).toBeTruthy())
+    expect(backend.storeNanoBananaKey).toHaveBeenCalledWith({ profileId: 'pa', key: 'AIza-new' })
+  })
+
+  it('deletes only after the confirm, and the next profile becomes active', async () => {
+    const backend = backendWith([{ id: 'pa', name: 'Work', model: FLASH }, { id: 'pb', name: 'Home', model: FLASH }])
+    await mount(backend)
+    await fireEvent.click(within(await screen.findByText('Work', { selector: 'label' }).then(() => rowOf('Work')))
+      .getByRole('button', { name: t('nanoBanana.settings.remove') }))
+    expect(screen.getByText(t('nanoBanana.settings.removeConfirm', { name: 'Work' }))).toBeTruthy()
+    expect(backend.deleteNanoBananaProfile).not.toHaveBeenCalled()
+    await fireEvent.click(screen.getByRole('button', { name: t('nanoBanana.settings.cancel') }))
+    expect(screen.queryByText(t('nanoBanana.settings.removeConfirm', { name: 'Work' }))).toBeNull()
+    await fireEvent.click(within(rowOf('Work')).getByRole('button', { name: t('nanoBanana.settings.remove') }))
+    await fireEvent.click(screen.getByRole('button', { name: t('nanoBanana.settings.removeButton') }))
+    await vi.waitFor(() => expect(screen.queryByText('Work', { selector: 'label' })).toBeNull())
+    expect(backend.deleteNanoBananaProfile).toHaveBeenCalledWith({ profileId: 'pa' })
+    expect(within(rowOf('Home')).getByText(t('nanoBanana.settings.active'))).toBeTruthy()
+  })
+
+  it('says when a key is kept only until the app closes, or could not be checked', async () => {
+    await mount(backendWith([
+      { id: 'pa', name: 'Work', model: FLASH, sessionOnly: true },
+      { id: 'pb', name: 'Home', model: FLASH, hasKey: null },
+    ]))
+    expect(within(await screen.findByText('Work', { selector: 'label' }).then(() => rowOf('Work')))
+      .getByText(t('nanoBanana.settings.sessionOnly'))).toBeTruthy()
+    expect(within(rowOf('Home')).getByText(t('nanoBanana.settings.keyUnknown'))).toBeTruthy()
+  })
+
+  for (const code of ['nanoBanana.key.noStore', 'nanoBanana.key.invalid', 'nanoBanana.key.failed', 'nanoBanana.profile.badName', 'nanoBanana.profile.tooMany']) {
+    it(`says what ${code} means, and keeps the form`, async () => {
+      const backend = backendWith([], { createNanoBananaProfile: vi.fn(async () => { throw code }) })
       vi.spyOn(console, 'error').mockImplementation(() => {})
-      const { box, save } = await mount(backend)
-      await fireEvent.input(box, { target: { value: 'AIza-key' } })
-      await fireEvent.click(save())
+      await mount(backend)
+      await fireEvent.click(await screen.findByRole('button', { name: t('nanoBanana.settings.add') }))
+      const key = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBanana.settings.key')))
+      await fireEvent.input(screen.getByLabelText(t('nanoBanana.settings.name')), { target: { value: 'Work' } })
+      await fireEvent.input(key, { target: { value: 'AIza-key' } })
+      await fireEvent.submit(/** @type {HTMLFormElement} */ (key.form))
       expect((await screen.findByRole('alert')).textContent).toBe(t(code))
-      expect(box.value).toBe('AIza-key')
+      expect(key.value).toBe('AIza-key')
       expect(capabilities.nanoBanana).toBe(false)
     })
   }
 
-  it('falls back to the general message for a refusal it does not know', async () => {
-    const backend = backendWith({ storeNanoBananaKey: vi.fn(async () => { throw new Error('keyring locked') }) })
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const { box, save } = await mount(backend)
-    await fireEvent.input(box, { target: { value: 'AIza-key' } })
-    await fireEvent.click(save())
-    expect((await screen.findByRole('alert')).textContent).toBe(t('nanoBanana.settings.failed'))
-  })
-
-  it('is shown as saved when it changed and could not be read back, and Nano Banana is still refreshed', async () => {
-    const backend = backendWith()
-    const { box, save } = await mount(backend)
-    backend.nanoBananaHasKey.mockRejectedValueOnce(new Error('keyring locked'))
-    backend.nanoBananaHasKey.mockResolvedValue(true)
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    await fireEvent.input(box, { target: { value: 'AIza-key' } })
-    await fireEvent.click(save())
-    await vi.waitFor(() => expect(capabilities.nanoBanana).toBe(true))
-    expect(screen.queryByRole('alert')).toBeNull()
-    expect(screen.getByText(t('nanoBanana.settings.keySaved'))).toBeTruthy()
-  })
-})
-
-describe('the Nano Banana model', () => {
-  it('is saved when picked', async () => {
-    const backend = backendWith()
-    await mount(backend)
-    const select = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('nanoBanana.settings.model')))
-    await vi.waitFor(() => expect(select.value).toBe('gemini-3.1-flash-image'))
-    await fireEvent.change(select, { target: { value: 'gemini-3-pro-image' } })
-    await vi.waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaModel: 'gemini-3-pro-image' }))
-    expect(screen.queryByRole('alert')).toBeNull()
-  })
-
-  it('goes back to the one before when it could not be saved, and says so', async () => {
-    const backend = backendWith({ writeSettings: vi.fn(async () => { throw new Error('disk') }) })
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    await mount(backend)
-    const select = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('nanoBanana.settings.model')))
-    await vi.waitFor(() => expect(select.value).toBe('gemini-3.1-flash-image'))
-    await fireEvent.change(select, { target: { value: 'gemini-3-pro-image' } })
-    expect((await screen.findByRole('alert')).textContent).toBe(t('nanoBanana.settings.modelFailed'))
-    expect(select.value).toBe('gemini-3.1-flash-image')
-  })
-})
-
-describe('the Nano Banana finishing', () => {
-  it('shows what settings hold, and the defaults where they hold nothing', async () => {
-    const backend = backendWith({
-      readSettings: vi.fn(async () => ({ nanoBananaFinishing: 'tone-only', nanoBananaStrays: true })),
+  it('says when the profile could not be made active', async () => {
+    const backend = backendWith([{ id: 'pa', name: 'Work', model: FLASH }, { id: 'pb', name: 'Home', model: FLASH }], {
+      selectNanoBananaProfile: vi.fn(async () => { throw new Error('disk') }),
     })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     await mount(backend)
-    const method = /** @type {HTMLSelectElement} */ (screen.getByLabelText(t('nanoBananaFinishing.method')))
-    const grey = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBananaFinishing.grayscale')))
-    const strays = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBananaFinishing.strays')))
-    await vi.waitFor(() => expect(method.value).toBe('tone-only'))
-    expect([grey.checked, strays.checked]).toEqual([false, true])
+    await fireEvent.click(await screen.findByLabelText(t('nanoBanana.settings.useProfile', { name: 'Home' })))
+    expect((await screen.findByRole('alert')).textContent).toBe(t('nanoBanana.settings.selectFailed'))
   })
 
-  it('saves each part under its own key, apart from the shared Post-processing one', async () => {
-    const backend = backendWith()
+  it('offers to try again when the list could not be read', async () => {
+    const backend = backendWith([{ id: 'pa', name: 'Work', model: FLASH }])
+    backend.listNanoBananaProfiles.mockRejectedValueOnce(new Error('keyring'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     await mount(backend)
-    await fireEvent.change(screen.getByLabelText(t('nanoBananaFinishing.method')), { target: { value: 'dots-only' } })
-    await vi.waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaFinishing: 'dots-only' }))
-    await fireEvent.click(screen.getByLabelText(t('nanoBananaFinishing.grayscale')))
-    await vi.waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaFinishingGrayscale: true }))
-    await fireEvent.click(screen.getByLabelText(t('nanoBananaFinishing.strays')))
-    await vi.waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith({ nanoBananaStrays: true }))
-    expect(backend.writeSettings.mock.calls.flat().some((patch) => 'cloudFinishing' in patch)).toBe(false)
-    expect(screen.queryByRole('alert')).toBeNull()
+    expect((await screen.findByRole('alert')).textContent).toContain(t('nanoBanana.settings.loadFailed'))
+    await fireEvent.click(screen.getByRole('button', { name: t('nanoBanana.settings.retry') }))
+    expect(await screen.findByText('Work', { selector: 'label' })).toBeTruthy()
   })
 
-  it('goes back to what it was when it could not be saved, and says so', async () => {
-    const backend = backendWith({ writeSettings: vi.fn(async () => { throw new Error('disk') }) })
-    await mount(backend)
-    const strays = /** @type {HTMLInputElement} */ (screen.getByLabelText(t('nanoBananaFinishing.strays')))
-    await fireEvent.click(strays)
-    expect((await screen.findByRole('alert')).textContent).toBe(t('nanoBananaFinishing.failed'))
-    expect(strays.checked).toBe(false)
+  it('has no finishing of its own: the shared Post-processing choice finishes Nano Banana', async () => {
+    await mount(backendWith([{ id: 'pa', name: 'Work', model: FLASH }]))
+    await screen.findByText('Work', { selector: 'label' })
+    expect(screen.queryByText(t('settings.postprocessing.method'))).toBeNull()
+    expect(screen.queryByRole('combobox', { name: /finish/i })).toBeNull()
   })
 })
 
@@ -213,7 +255,7 @@ describe('what Nano Banana sends', () => {
     await mount(backendWith())
     expect([showCrop().checked, restrictive().checked]).toEqual([false, false])
     cleanup()
-    const backend = backendWith({ readSettings: vi.fn(async () => ({ nanoBananaShowCrop: true, nanoBananaRestrictive: true })) })
+    const backend = backendWith([], { readSettings: vi.fn(async () => ({ nanoBananaShowCrop: true, nanoBananaRestrictive: true })) })
     await mount(backend)
     await vi.waitFor(() => expect([showCrop().checked, restrictive().checked]).toEqual([true, true]))
   })
@@ -230,7 +272,8 @@ describe('what Nano Banana sends', () => {
   })
 
   it('goes back to what it was when it could not be saved, and says so', async () => {
-    const backend = backendWith({ writeSettings: vi.fn(async () => { throw new Error('disk') }) })
+    const backend = backendWith([], { writeSettings: vi.fn(async () => { throw new Error('disk') }) })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     await mount(backend)
     await fireEvent.click(restrictive())
     expect((await screen.findByRole('alert')).textContent).toBe(t('nanoBanana.settings.sendingFailed'))

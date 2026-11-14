@@ -3,8 +3,9 @@
  * the key is the instance's own, a render needs cloud engines on, a live grant
  * with a region left and a stored key, a grant is withdrawn when cloud engines
  * go off and lapses when idle, and a region with a layer is not sent again.
- * Its own finishing is read from settings, recorded on the layer, kept by Try
- * again, and changed afterwards from the kept answer.
+ * Keys are kept per profile, the active one pays and is named on the layer.
+ * A new layer takes the shared Post-processing finishing, records it, keeps
+ * it on Try again, and is changed afterwards from the kept answer.
  */
 import { describe, expect, it, vi } from 'vitest'
 
@@ -52,24 +53,33 @@ const clean = (mock, region, grant) => mock.applyTool({
 async function ready(options) {
   const mock = makeMock(options)
   await mock.writeSettings({ cloudEngines: 'allowed' })
-  await mock.storeNanoBananaKey({ key: KEY })
+  await mock.createNanoBananaProfile({ name: 'Work', model: DEFAULT_NANO_BANANA_MODEL, key: KEY })
   return mock
 }
 
-describe('the Nano Banana key on the mock', () => {
-  it('is the instance\'s own', async () => {
+/** A profile on `mock`, and its id. @param {any} mock @param {string} name @param {string} [model] */
+async function profile(mock, name, model = DEFAULT_NANO_BANANA_MODEL) {
+  const listed = await mock.createNanoBananaProfile({ name, model, key: KEY })
+  return listed.profiles.find((/** @type {any} */ entry) => entry.name === name).id
+}
+
+describe('the Nano Banana profiles on the mock', () => {
+  it('are the instance\'s own', async () => {
     const one = makeMock()
     const other = makeMock()
-    expect(await one.storeNanoBananaKey({ key: KEY })).toEqual({ sessionOnly: false })
+    const listed = await one.createNanoBananaProfile({ name: 'Work', model: DEFAULT_NANO_BANANA_MODEL, key: KEY })
+    expect(listed.profiles).toEqual([{ id: listed.active, name: 'Work', model: DEFAULT_NANO_BANANA_MODEL, hasKey: true, sessionOnly: false }])
     expect(await one.nanoBananaHasKey()).toBe(true)
     expect(await other.nanoBananaHasKey()).toBe(false)
+    expect(await other.listNanoBananaProfiles()).toEqual({ active: null, profiles: [] })
   })
 
-  it('takes a method\'s time to answer, as every other mock method does', async () => {
+  it('take a method\'s time to answer, as every other mock method does', async () => {
     vi.useFakeTimers()
     try {
       const mock = /** @type {any} */ (createMockBackend({ timing: { ...ZERO, method: 50 } }))
-      for (const call of [() => mock.nanoBananaHasKey(), () => mock.storeNanoBananaKey({ key: KEY }), () => mock.deleteNanoBananaKey()]) {
+      for (const call of [() => mock.nanoBananaHasKey(), () => mock.listNanoBananaProfiles(),
+        () => mock.createNanoBananaProfile({ name: 'Work', model: DEFAULT_NANO_BANANA_MODEL, key: KEY })]) {
         let settled = false
         const answer = call().finally(() => { settled = true })
         await vi.advanceTimersByTimeAsync(49)
@@ -83,16 +93,36 @@ describe('the Nano Banana key on the mock', () => {
     }
   })
 
-  it('answers where it was kept, and refuses as natively', async () => {
+  it('are made, renamed, picked and deleted as natively', async () => {
+    const mock = makeMock()
+    const work = await profile(mock, 'Work')
+    const home = await profile(mock, 'Home', 'gemini-3-pro-image')
+    expect((await mock.listNanoBananaProfiles()).active).toBe(work)
+    await mock.updateNanoBananaProfile({ profileId: home, name: ' Personal ' })
+    expect((await mock.selectNanoBananaProfile({ profileId: home })).active).toBe(home)
+    const left = await mock.deleteNanoBananaProfile({ profileId: home })
+    expect(left).toEqual({ active: work, profiles: [expect.objectContaining({ id: work, name: 'Work' })] })
+    await expect(mock.selectNanoBananaProfile({ profileId: home })).rejects.toThrow('nanoBanana.profile.missing')
+    await expect(mock.updateNanoBananaProfile({ profileId: work, name: '' })).rejects.toThrow('nanoBanana.profile.badName')
+    await expect(mock.updateNanoBananaProfile({ profileId: work, model: '../x' })).rejects.toThrow('nanoBanana.profile.badModel')
+    await expect(mock.writeSettings({ nanoBananaProfiles: { active: null, list: [] } })).rejects.toThrow()
+  })
+
+  it('answer where each key was kept, and refuse as natively', async () => {
     const session = makeMock({ nanoBananaKeyStore: 'session' })
     await expect(session.nanoBananaHasKey()).rejects.toThrow('nanoBanana.key.noStore')
-    expect(await session.storeNanoBananaKey({ key: KEY })).toEqual({ sessionOnly: true })
+    const listed = await session.createNanoBananaProfile({ name: 'Work', model: DEFAULT_NANO_BANANA_MODEL, key: KEY })
+    expect(listed.profiles[0].sessionOnly).toBe(true)
     expect(await session.nanoBananaHasKey()).toBe(true)
     for (const key of ['  ', 'short', `${KEY} with spaces`, 'x'.repeat(201)]) {
-      await expect(makeMock().storeNanoBananaKey({ key })).rejects.toThrow('nanoBanana.key.invalid')
+      await expect(makeMock().createNanoBananaProfile({ name: 'Work', model: DEFAULT_NANO_BANANA_MODEL, key }))
+        .rejects.toThrow('nanoBanana.key.invalid')
     }
-    expect(await makeMock().storeNanoBananaKey({ key: `  ${KEY}  ` })).toEqual({ sessionOnly: false })
-    await expect(makeMock({ nanoBananaKeyStore: 'failed' }).storeNanoBananaKey({ key: KEY })).rejects.toThrow('nanoBanana.key.failed')
+    const mock = makeMock()
+    const work = await profile(mock, 'Work')
+    expect((await mock.storeNanoBananaKey({ profileId: work, key: `  ${KEY}  ` })).profiles[0].hasKey).toBe(true)
+    await expect(makeMock({ nanoBananaKeyStore: 'failed' }).createNanoBananaProfile({ name: 'Work', model: DEFAULT_NANO_BANANA_MODEL, key: KEY }))
+      .rejects.toThrow('nanoBanana.key.failed')
   })
 })
 
@@ -115,7 +145,7 @@ describe('a Nano Banana grant on the mock', () => {
     expect(done.status).toBe('applied')
     expect(done.mask.provenance.engine).toBe('nanobanana')
     expect(done.mask.provenance.params_snapshot.nano_banana).toEqual({
-      model: DEFAULT_NANO_BANANA_MODEL, answer_sha256: expect.any(String),
+      model: DEFAULT_NANO_BANANA_MODEL, profile: 'Work', answer_sha256: expect.any(String),
     })
     // The one region is spent.
     expect(await clean(mock, second, grant)).toEqual({ status: 'blocked' })
@@ -137,9 +167,37 @@ describe('a Nano Banana grant on the mock', () => {
     const mock = await ready()
     const [first] = await detected(mock)
     const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
-    await mock.writeSettings({ nanoBananaModel: 'gemini-3-pro-image' })
+    const { active } = await mock.listNanoBananaProfiles()
+    await mock.updateNanoBananaProfile({ profileId: active, model: 'gemini-3-pro-image' })
     const done = await clean(mock, first, grant)
     expect(done.mask.provenance.params_snapshot.nano_banana.model).toBe(DEFAULT_NANO_BANANA_MODEL)
+  })
+
+  it('pays with the profile the window showed, and names it on the layer', async () => {
+    const mock = await ready()
+    const home = await profile(mock, 'Home', 'gemini-3-pro-image')
+    const [first] = await detected(mock)
+    const work = (await mock.listNanoBananaProfiles()).active
+    // Another profile became active while the window was open: no grant.
+    await mock.selectNanoBananaProfile({ profileId: home })
+    await expect(mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1, profileId: work }))
+      .rejects.toThrow('decline.reason.nanoBananaNoConsent')
+    const granted = await mock.grantNanoBanana({ model: 'gemini-3-pro-image', chapterId: CHAPTER, count: 1, profileId: home })
+    expect(granted.profile).toBe('Home')
+    // Switching back after the grant does not change who pays for it.
+    await mock.selectNanoBananaProfile({ profileId: work })
+    const done = await clean(mock, first, granted.grant)
+    expect(done.mask.provenance.params_snapshot.nano_banana).toMatchObject({ model: 'gemini-3-pro-image', profile: 'Home' })
+  })
+
+  it('says no key when the profile it was granted on is deleted before it is spent', async () => {
+    const mock = await ready()
+    const reasons = refusals(mock)
+    const [first] = await detected(mock)
+    const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
+    await mock.deleteNanoBananaProfile({ profileId: (await mock.listNanoBananaProfiles()).active })
+    await clean(mock, first, grant)
+    expect(reasons).toContain('decline.reason.nanoBananaNoKey')
   })
 
   it('is withdrawn when cloud engines go off, and says so when no key is stored', async () => {
@@ -404,48 +462,40 @@ describe('Nano Banana finishing on the mock', () => {
     return { mock, done, regionId: first.id }
   }
 
-  it('refuses a finishing native refuses, and writes nothing', async () => {
-    const mock = makeMock()
-    for (const patch of [{ nanoBananaFinishing: 'blur' }, { nanoBananaFinishingGrayscale: 'yes' }, { nanoBananaStrays: 1 }]) {
-      await expect(mock.writeSettings(patch)).rejects.toThrow()
-    }
-    expect(await mock.readSettings()).not.toHaveProperty('nanoBananaFinishing')
-  })
-
-  it('finishes by its own setting, not the shared one, and records it', async () => {
+  it('takes the shared Post-processing finishing, and ignores its own old settings', async () => {
     const { done } = await layer({
-      cloudFinishing: 'poisson', finishingEveryModel: true, nanoBananaFinishing: 'tone-only', nanoBananaStrays: true,
+      cloudFinishing: 'poisson', cloudFinishingGrayscale: true, nanoBananaFinishing: 'tone-only', nanoBananaStrays: true,
     })
-    expect(done.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'tone-only', grayscale: false, strays: true })
+    expect(done.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'poisson', grayscale: true })
     const plain = await layer()
     expect(plain.done.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'copy', grayscale: false })
   })
 
   it('keeps the layer\'s finishing on Try again, whatever the setting says by then', async () => {
-    const { mock, done } = await layer({ nanoBananaFinishing: 'dots-only', nanoBananaFinishingGrayscale: true })
-    await mock.writeSettings({ nanoBananaFinishing: 'as-is', nanoBananaFinishingGrayscale: false })
+    const { mock, done } = await layer({ cloudFinishing: 'dots-only', cloudFinishingGrayscale: true })
+    await mock.writeSettings({ cloudFinishing: 'as-is', cloudFinishingGrayscale: false })
     const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     const again = await mock.rerunMask({ maskId: done.mask.id, kind: 'retry', params: { nanoBananaGrant: grant } })
     expect(again.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'dots-only', grayscale: true })
   })
 
   it('takes the setting on a re-clean picked by name, which is not Try again', async () => {
-    const { mock, done } = await layer({ nanoBananaFinishing: 'dots-only' })
-    await mock.writeSettings({ nanoBananaFinishing: 'tone-only' })
+    const { mock, done } = await layer({ cloudFinishing: 'dots-only' })
+    await mock.writeSettings({ cloudFinishing: 'tone-only' })
     const { grant } = await mock.grantNanoBanana({ model: DEFAULT_NANO_BANANA_MODEL, chapterId: CHAPTER, count: 1 })
     const again = await mock.rerunMask({ maskId: done.mask.id, kind: 'engine', engine: 'nanobanana', params: { nanoBananaGrant: grant } })
     expect(again.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'tone-only', grayscale: false })
   })
 
-  it('is changed afterwards from the kept answer, its stray choice kept', async () => {
-    const { mock, regionId } = await layer({ nanoBananaStrays: true })
+  it('is changed afterwards from the kept answer, stray marks included, as a per-layer choice', async () => {
+    const { mock, regionId } = await layer()
     const previews = await mock.regionFinishingPreviews({ regionId })
     expect(previews.unavailable).toBeNull()
-    expect(previews.strays).toBe(true)
-    expect(previews.current).toEqual({ finishing: 'copy', grayscale: false, strays: true })
-    const change = await mock.setRegionFinishing({ regionId, finishing: 'poisson', grayscale: false, strays: previews.strays })
+    expect(previews.current).toMatchObject({ finishing: 'copy', grayscale: false })
+    const change = await mock.setRegionFinishing({ regionId, finishing: 'poisson', grayscale: false, strays: true })
     expect(change.history).not.toBeNull()
     expect(change.region.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'poisson', grayscale: false, strays: true })
+    expect((await mock.regionFinishingPreviews({ regionId })).strays).toBe(true)
   })
 })
 

@@ -15,6 +15,7 @@ pub mod nano_banana_consent;
 pub mod nano_banana_crop;
 pub mod nano_banana_job;
 pub mod nano_banana_finishing;
+pub mod nano_banana_profiles;
 pub mod policy;
 pub mod refinish;
 pub mod run_analysis;

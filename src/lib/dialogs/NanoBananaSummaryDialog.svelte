@@ -57,6 +57,9 @@
   <div class="summary" data-run={runId}>
     {#if report}
       <p class="lead">{t('nanoBanana.job.summaryCleaned', { cleaned: report.cleaned, total: report.total })}</p>
+      {#if typeof report.profile === 'string'}
+        <p class="line note" data-profile>{t('nanoBanana.job.summaryProfile', { name: report.profile })}</p>
+      {/if}
       {#if report.stopped && report.byUser}
         <p class="line">{t('nanoBanana.job.summaryStopped')}</p>
       {:else if report.stopped}

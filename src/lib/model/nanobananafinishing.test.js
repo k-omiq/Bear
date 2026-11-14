@@ -1,22 +1,24 @@
 /**
- * The Nano Banana finishing reader takes the names an older settings file or
- * record used, as native's serde aliases do.
+ * A Nano Banana layer's record is read under the names it has now, as
+ * native's serde aliases read it, and only a Nano Banana layer has one.
  */
 import { describe, expect, it } from 'vitest'
 
-import { nanoBananaFinishing, nanoBananaFinishingRefusal, recordedNanoBananaFinishing } from './nanobananafinishing.js'
+import { recordedNanoBananaFinishing } from './nanobananafinishing.js'
 
-describe('Nano Banana finishing names', () => {
+describe('Nano Banana recorded finishing', () => {
   it('reads an old name as the one it is now', () => {
-    expect(nanoBananaFinishing({ nanoBananaFinishing: 'reference-poisson' }).finishing).toBe('poisson')
-    expect(nanoBananaFinishing({ nanoBananaFinishing: 'reference-off' }).finishing).toBe('as-is')
-    expect(nanoBananaFinishingRefusal({ nanoBananaFinishing: 'reference-raster' })).toBeNull()
     const provenance = { engine: 'nanobanana', params_snapshot: { postprocess: { finishing: 'reference-local' } } }
     expect(recordedNanoBananaFinishing(provenance)?.finishing).toBe('local-tone')
   })
 
-  it('still refuses a name no build had', () => {
-    expect(nanoBananaFinishingRefusal({ nanoBananaFinishing: 'blur' })).not.toBeNull()
-    expect(nanoBananaFinishing({ nanoBananaFinishing: 'blur' }).finishing).toBe('copy')
+  it('keeps the stray choice a layer was made with', () => {
+    const provenance = { engine: 'nanobanana', params_snapshot: { postprocess: { finishing: 'copy', grayscale: true, strays: true } } }
+    expect(recordedNanoBananaFinishing(provenance)).toEqual({ finishing: 'copy', grayscale: true, strays: true })
+  })
+
+  it('is none for another engine or a layer with no record', () => {
+    expect(recordedNanoBananaFinishing({ engine: 'lama', params_snapshot: { postprocess: { finishing: 'copy' } } })).toBeNull()
+    expect(recordedNanoBananaFinishing({ engine: 'nanobanana', params_snapshot: {} })).toBeNull()
   })
 })

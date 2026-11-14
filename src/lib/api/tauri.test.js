@@ -43,7 +43,7 @@ it('keeps a Nano Banana grant and sends it only where it reaches the rung', asyn
   await backend.cleanAnyway({ regionId: 'r', engine: 'nanobanana' })
   expect(invoke).toHaveBeenLastCalledWith('clean_anyway', { regionId: 'r', engine: 'nanobanana' })
   expect(await backend.grantNanoBanana({ model: 'm', count: 2, chapterId: 'c' })).toEqual({ grant: 'g1', model: 'm', count: 2 })
-  expect(invoke).toHaveBeenLastCalledWith('nano_banana_grant', { model: 'm', count: 2, chapterId: 'c' })
+  expect(invoke).toHaveBeenLastCalledWith('nano_banana_grant', { model: 'm', count: 2, chapterId: 'c', profileId: null })
 
   await backend.applyTool({ tool: 'autoClean', regionId: 'r', params: { engine: 'nanobanana' } })
   expect(invoke).toHaveBeenLastCalledWith('apply_tool', expect.objectContaining({ params: { engine: 'nanobanana', nanoBananaGrant: 'g1' } }))

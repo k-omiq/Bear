@@ -9,7 +9,8 @@
  *
  * An **anchor** names one place inside a section: a group (`detection`,
  * `cleaning`, `filtering`, `access`), a model by its logical id (`samTs`,
- * `lama`), or `runtime` in Performance. The screen scrolls it into view,
+ * `lama`), `runtime` in Performance, or `endpoints` and `nano-banana` (the
+ * Nano Banana profiles) in Cloud. The screen scrolls it into view,
  * opens the collapsed group that holds it, and moves focus to it, so a
  * missing-model notice or a cloud error can send the reader to the one row
  * that fixes it.
@@ -62,7 +63,7 @@ function anchorBelongs(section, anchor) {
     return MODEL_ANCHORS.has(anchor) || CAPABILITIES.some((entry) => entry.group === anchor) || groupOfModel(anchor) !== null
   }
   if (section === 'performance') return anchor === 'runtime'
-  if (section === 'cloud') return anchor === 'endpoints'
+  if (section === 'cloud') return anchor === 'endpoints' || anchor === 'nano-banana'
   return false
 }
 

@@ -1,7 +1,7 @@
 <script>
   /**
-   * The window in front of a Nano Banana request: the model and size, what it may
-   * cost, that the crops go to Google, and a box where the person says what to
+   * The window in front of a Nano Banana request: the model and size, the
+   * profile whose key pays (`props.profile`), what it may cost, that the crops go to Google, and a box where the person says what to
    * edit. Pushed by `editor/nanobananaask.svelte.js` with `blocking: true`, so
    * Escape is Cancel and the backdrop is inert.
    *
@@ -35,6 +35,9 @@
 <Modal title={t('nanoBanana.run.title')} width={480} blocking onclose={() => closeModal(null)}
   describedby="{uid}-regions {uid}-cost">
   <p>{t('nanoBanana.run.model', { model: t(model.labelKey), size: facts.size })}</p>
+  {#if typeof facts.profile === 'string'}
+    <p data-profile>{t('nanoBanana.run.profile', { name: facts.profile })}</p>
+  {/if}
   <p id="{uid}-regions">{t('nanoBanana.run.regions', { count: facts.count })}</p>
   <p id="{uid}-cost">{t('nanoBanana.run.cost', { low: money.format(cost.low), high: money.format(cost.high) })}</p>
   <label class="prompt" for="{uid}-prompt">{t('nanoBanana.run.promptLabel')}</label>
