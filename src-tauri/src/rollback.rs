@@ -29,8 +29,20 @@
 //!
 //! - Chapter manifests: `v1.0.0-beta.2` writes format 2. `v1.0.0-beta.3`
 //!   to `v1.0.0-beta.20` write and read format 5. This build writes format 6
-//!   for a chapter with a Nano Banana patch. An older build **refuses** a
-//!   manifest from a later format and leaves it untouched (`Job::open`).
+//!   for a chapter with a Nano Banana patch, and 7 for one with a row that
+//!   keeps a declined detection. An older build **refuses** a manifest from a
+//!   later format and leaves it untouched (`Job::open`).
+//! - What an older build opens, it rewrites in its own terms. `v1.0.0-beta.20`
+//!   keeps unknown fields only at the top of a manifest and on its sources and
+//!   patches. It drops them elsewhere when it saves: a picked denoise run
+//!   (`denoised[].in_use`) and a split chapter's label in the library index
+//!   (`label`, rewritten each time a chapter is opened, for every chapter;
+//!   the chapter file keeps a copy the next update restores it from). It
+//!   trims the denoise runs to its newest 10 when it records a new one; the
+//!   files stay. It sweeps at open every detection and evidence file the
+//!   manifest does not name, which is why a kept declined detection raises
+//!   the format to 7 rather than being dropped with its files. The dialog
+//!   says all of this for a version where [`Entry::drops_fields`] is set.
 //! - Cloud profiles (`inference.json`) arrived in `v1.0.0-beta.3` and have
 //!   not changed since. `v1.0.0-beta.2` does not know the file at all.
 //! - `settings.json` is opaque JSON merged by key: an older build keeps the
@@ -61,13 +73,23 @@ pub const FLOOR: &str = "1.0.0-beta.3";
 
 /// The last version that reads each chapter manifest format, oldest first.
 /// A version after the last row reads this build's
-/// [`cleaner_core::project::FORMAT_VERSION`]. When that number moves, the
-/// last version that read the old one is added here (a test holds this).
+/// [`cleaner_core::project::FORMAT_VERSION`]. When that number moves after a
+/// release that read the old one, that release is added here (a test holds
+/// this through [`REVIEWED_FORMAT`]). No release read 6: 6 and 7 both arrive
+/// with the release after beta.20.
 const READ_LIMITS: &[(&str, u32)] = &[("1.0.0-beta.2", 2), ("1.0.0-beta.20", 5)];
 
 /// The last version released without the skip rule: it shows the update
 /// badge for the version just left, though it installs nothing by itself.
 const LAST_WITHOUT_SKIP: &str = "1.0.0-beta.20";
+
+/// The last version released before the split chapter label, the picked
+/// denoise run and the kept denoise runs: it drops them when it saves.
+const LAST_WITHOUT_KEPT_FIELDS: &str = "1.0.0-beta.20";
+
+/// The chapter format [`READ_LIMITS`] was last checked against. A test fails
+/// when [`cleaner_core::project::FORMAT_VERSION`] moves past it.
+const REVIEWED_FORMAT: u32 = 7;
 
 /// One released version, as the list shows it.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -82,6 +104,9 @@ pub struct Entry {
     /// Whether this version keeps the skip and so does not offer the version
     /// left behind.
     pub honours_skip: bool,
+    /// Whether this version drops what this build saves beside a chapter and
+    /// in the library index (see the module docs).
+    pub drops_fields: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,6 +169,10 @@ fn honours_skip(version: &Version) -> bool {
     version > &Version::parse(LAST_WITHOUT_SKIP).expect("a version")
 }
 
+fn drops_fields(version: &Version) -> bool {
+    version <= &Version::parse(LAST_WITHOUT_KEPT_FIELDS).expect("a version")
+}
+
 /// The one manifest the updater is pointed at for `version`.
 fn manifest_url(version: &Version) -> String {
     format!("{UPDATE_HOST}/releases/v{version}/latest.json")
@@ -155,6 +184,7 @@ fn entry(version: Version, date: Option<String>, notes: Option<String>) -> Entry
         page_url: format!("{RELEASE_PAGE}{version}"),
         reads_format: reads_format(&version),
         honours_skip: honours_skip(&version),
+        drops_fields: drops_fields(&version),
         version: version.to_string(),
         date,
         notes,
@@ -340,19 +370,25 @@ mod tests {
         assert_eq!(reads_format(&v("1.0.0-beta.21")), cleaner_core::project::FORMAT_VERSION);
         assert!(!honours_skip(&v("1.0.0-beta.20")));
         assert!(honours_skip(&v("1.0.0-beta.21")));
+        assert!(drops_fields(&v("1.0.0-beta.3")) && drops_fields(&v("1.0.0-beta.20")));
+        assert!(!drops_fields(&v("1.0.0-beta.21")));
     }
 
     /// When the manifest format moves, the last version that read the old
     /// one has to be added to `READ_LIMITS`, or the warning goes quiet.
     #[test]
     fn rollback_read_limits_cover_every_older_format() {
-        let (_, last) = READ_LIMITS.last().unwrap();
         assert_eq!(
-            last + 1,
+            REVIEWED_FORMAT,
             cleaner_core::project::FORMAT_VERSION,
-            "FORMAT_VERSION moved: add the last version that read format {} to READ_LIMITS",
-            cleaner_core::project::FORMAT_VERSION - 1
+            "FORMAT_VERSION moved: if a release that reads format {REVIEWED_FORMAT} has shipped, add it to \
+             READ_LIMITS as the last version that reads it, then move REVIEWED_FORMAT"
         );
+        for pair in READ_LIMITS.windows(2) {
+            assert!(v(pair[0].0) < v(pair[1].0) && pair[0].1 < pair[1].1, "{pair:?}");
+        }
+        let (_, last) = READ_LIMITS.last().unwrap();
+        assert!(*last < cleaner_core::project::FORMAT_VERSION);
         assert!(v(FLOOR) > v(READ_LIMITS[0].0), "the floor reads the formats after beta.2");
     }
 

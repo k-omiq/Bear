@@ -22,6 +22,7 @@ import { readRecord, writeRecord, defaultStorage } from './state/persist.js'
  * @property {string} pageUrl
  * @property {number} readsFormat
  * @property {boolean} honoursSkip
+ * @property {boolean} [dropsFields] - it drops what this build saves beside a chapter and in the library index (`rollback.rs`)
  */
 
 /**
@@ -38,8 +39,12 @@ import { readRecord, writeRecord, defaultStorage } from './state/persist.js'
  * @typedef {RollbackEntry & {
  *   state: 'installed'|'available'|'belowFloor'|'pageOnly',
  *   loses: boolean,
+ *   noNanoBanana: boolean,
  * }} RollbackRow
  */
+
+/** The chapter format that brought the Nano Banana engine: a version that opens less has none. */
+export const NANO_BANANA_FORMAT = 6
 
 /**
  * `1.0.0-beta.3` as parts, or `null`. A leading `v` is allowed.
@@ -121,7 +126,13 @@ export function rollbackRows(catalog) {
     if (order === 0) state = 'installed'
     else if (compareVersions(entry.version, catalog.floor) < 0) state = 'belowFloor'
     else if (!catalog.inPlace) state = 'pageOnly'
-    rows.push({ ...entry, state, loses: Number(entry.readsFormat) < Number(catalog.manifestFormat) })
+    rows.push({
+      ...entry,
+      dropsFields: entry.dropsFields === true,
+      state,
+      loses: Number(entry.readsFormat) < Number(catalog.manifestFormat),
+      noNanoBanana: Number(entry.readsFormat) < NANO_BANANA_FORMAT,
+    })
   }
   if (!seen.has(current) && parseVersion(current)) {
     rows.push({
@@ -131,8 +142,10 @@ export function rollbackRows(catalog) {
       pageUrl: '',
       readsFormat: catalog.manifestFormat,
       honoursSkip: true,
+      dropsFields: false,
       state: 'installed',
       loses: false,
+      noNanoBanana: false,
     })
   }
   return rows.sort((a, b) => compareVersions(b.version, a.version))
@@ -171,16 +184,30 @@ export function skippedVersion(store = defaultStorage()) {
 }
 
 /**
- * Remember the version being left. Answers what was there before, so a
- * failed install can put it back.
+ * Remember the version being left. A second rollback in a row leaves from a
+ * lower version than the first, so the higher of the two is kept: the badge
+ * must not offer the version the user left first. Answers what was there
+ * before, so a failed install can put it back with [`restoreSkipped`].
  *
  * @param {string} version
  * @param {Storage|null} [store]
  */
 export function rememberSkipped(version, store = defaultStorage()) {
   const before = skippedVersion(store)
-  writeRecord(SKIP_KEY, parseVersion(version) ? { version } : {}, store)
+  if (!parseVersion(version)) return before
+  const keep = before && compareVersions(before, version) > 0 ? before : version
+  writeRecord(SKIP_KEY, { version: keep }, store)
   return before
+}
+
+/**
+ * Put back exactly what [`rememberSkipped`] answered, `''` for none.
+ *
+ * @param {string} version
+ * @param {Storage|null} [store]
+ */
+export function restoreSkipped(version, store = defaultStorage()) {
+  writeRecord(SKIP_KEY, parseVersion(version) ? { version } : {}, store)
 }
 
 /** @param {Storage|null} [store] */

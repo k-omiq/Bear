@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte'
 
 import { setBackend } from '../api/backend.js'
+import { createMockBackend } from '../api/mock.js'
 import { t } from '../i18n/index.js'
 import { jobs } from '../state/jobs.svelte.js'
 import { skippedVersion } from '../rollback.js'
@@ -19,12 +20,12 @@ const CATALOG = {
   bundle: 'app',
   inPlace: true,
   floor: '1.0.0-beta.3',
-  manifestFormat: 6,
+  manifestFormat: 7,
   versions: [
-    { version: '1.0.0-beta.22', date: null, notes: 'Newer.', pageUrl: page('1.0.0-beta.22'), readsFormat: 6, honoursSkip: true },
-    { version: '1.0.0-beta.21', date: '2026-11-14T00:00:00Z', notes: 'This one.', pageUrl: page('1.0.0-beta.21'), readsFormat: 6, honoursSkip: true },
-    { version: '1.0.0-beta.20', date: '2026-11-05T01:54:06Z', notes: 'SAM-TS-L now sets up on a clean 16 GB PC.', pageUrl: page('1.0.0-beta.20'), readsFormat: 5, honoursSkip: false },
-    { version: '1.0.0-beta.2', date: '2026-09-17T20:35:04Z', notes: 'First beta.', pageUrl: page('1.0.0-beta.2'), readsFormat: 2, honoursSkip: false },
+    { version: '1.0.0-beta.22', date: null, notes: 'Newer.', pageUrl: page('1.0.0-beta.22'), readsFormat: 7, honoursSkip: true, dropsFields: false },
+    { version: '1.0.0-beta.21', date: '2026-11-14T00:00:00Z', notes: 'This one.', pageUrl: page('1.0.0-beta.21'), readsFormat: 7, honoursSkip: true, dropsFields: false },
+    { version: '1.0.0-beta.20', date: '2026-11-05T01:54:06Z', notes: 'SAM-TS-L now sets up on a clean 16 GB PC.', pageUrl: page('1.0.0-beta.20'), readsFormat: 5, honoursSkip: false, dropsFields: true },
+    { version: '1.0.0-beta.2', date: '2026-09-17T20:35:04Z', notes: 'First beta.', pageUrl: page('1.0.0-beta.2'), readsFormat: 2, honoursSkip: false, dropsFields: true },
   ],
 }
 
@@ -103,6 +104,13 @@ it('warns before going back, installs with progress, and remembers the version l
   const warnings = r.baseElement.querySelector('[data-testid="rollback-warnings"]')?.textContent ?? ''
   expect(warnings).toContain(t('update.rollback.warn.formatLoss', { version: 'v1.0.0-beta.20' }))
   expect(warnings).toContain(t('update.rollback.warn.library'))
+  // What beta.20 drops when it saves, said plainly.
+  expect(warnings).toContain(t('update.rollback.warn.drops', { version: 'v1.0.0-beta.20' }))
+  expect(warnings).toContain(t('update.rollback.warn.dropLabel', { version: 'v1.0.0-beta.20' }))
+  for (const key of ['update.rollback.warn.dropPick', 'update.rollback.warn.dropRuns']) {
+    expect(warnings).toContain(t(key))
+  }
+  expect(warnings).toContain(t('update.rollback.warn.nanoBanana', { version: 'v1.0.0-beta.20' }))
   expect(warnings).toContain(t('update.rollback.warn.noSkip', { version: 'v1.0.0-beta.20', current: 'v1.0.0-beta.21' }))
   expect(warnings).not.toContain(t('update.rollback.warn.jobs', { count: 1 }))
 
@@ -178,4 +186,41 @@ it('is reached from the update dialog, which then closes', async () => {
   await waitFor(() => expect(row(r, '1.0.0-beta.20')).toBeTruthy())
   expect(r.baseElement.textContent).toContain(t('update.rollback.title'))
   expect(r.baseElement.textContent).not.toContain(t('update.title'))
+})
+
+it('asks for the list once per opening when it fails, and again only on Retry', async () => {
+  const mock = createMockBackend({ rollback: 'offline', speed: 1000 })
+  const calls = vi.spyOn(mock, 'rollbackVersions')
+  setBackend(mock)
+  const r = render(RollbackDialog, { open: true })
+  await waitFor(() => expect(r.baseElement.textContent).toContain(t('update.rollback.error.offline')))
+  // Long enough for a loop to have asked many times over.
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  expect(calls).toHaveBeenCalledTimes(1)
+
+  await fireEvent.click(button(r, t('update.rollback.action.retry')))
+  await waitFor(() => expect(calls).toHaveBeenCalledTimes(2))
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  expect(calls).toHaveBeenCalledTimes(2)
+
+  // Closed and opened again: one more ask.
+  await r.rerender({ open: false })
+  await r.rerender({ open: true })
+  await waitFor(() => expect(calls).toHaveBeenCalledTimes(3))
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  expect(calls).toHaveBeenCalledTimes(3)
+})
+
+it('names no losses for a version that keeps what this one saves', async () => {
+  const backend = stub()
+  backend.rollbackVersions.mockResolvedValue({ ...structuredClone(CATALOG), currentVersion: '1.0.0-beta.22' })
+  const r = render(RollbackDialog, { open: true })
+  await waitFor(() => expect(row(r, '1.0.0-beta.21')).toBeTruthy())
+  await fireEvent.click(/** @type {HTMLElement} */ (row(r, '1.0.0-beta.21').querySelector('button')))
+  const warnings = r.baseElement.querySelector('[data-testid="rollback-warnings"]')?.textContent ?? ''
+  expect(warnings).toContain(t('update.rollback.warn.formatSame', { version: 'v1.0.0-beta.21' }))
+  expect(warnings).toContain(t('update.rollback.warn.library'))
+  expect(warnings).not.toContain(t('update.rollback.warn.dropLabel', { version: 'v1.0.0-beta.21' }))
+  expect(warnings).not.toContain(t('update.rollback.warn.nanoBanana', { version: 'v1.0.0-beta.21' }))
+  expect(warnings).toContain(t('update.rollback.warn.skip', { current: 'v1.0.0-beta.22' }))
 })

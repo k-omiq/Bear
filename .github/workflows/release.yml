@@ -683,7 +683,9 @@ jobs:
               platform = os.path.basename(pdir)
               # The launch smoke legs upload their reports beside the
               # installers; they are evidence, not a platform to publish.
-              if platform.startswith("launch-smoke-"):
+              # update-manifest is this job's own output, which a re-run of
+              # the workflow downloads again with the rest.
+              if platform.startswith("launch-smoke-") or platform == "update-manifest":
                   continue
               sigs = glob.glob(pdir + "/*.sig")
               if not sigs:
@@ -736,3 +738,5 @@ jobs:
           path: update-manifest/latest.json
           if-no-files-found: error
           retention-days: 3
+          # A re-run uploads it again under the same name.
+          overwrite: true

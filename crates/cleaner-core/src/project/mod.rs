@@ -59,7 +59,7 @@ pub mod orientation;
 /// It still says nothing about a shape that changes *without* the number
 /// changing. That is a decision to be justified in each case, and
 /// [`Strip::splits`] carries the one instance of it in this build.
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 7;
 
 /// The oldest manifest this build reads.
 ///
@@ -69,6 +69,11 @@ pub const FORMAT_VERSION: u32 = 6;
 /// Version 5 adds oriented views and grouped native patch intersections.
 /// Version 6 adds the Nano Banana engine, and only a job with such a patch is
 /// written as 6.
+/// Version 7 is a row that keeps the detection it was declined from
+/// ([`RegionUntouched::declined_from`]), and only a job with such a row is
+/// written as 7. A build before 7 does not name those files in its open-time
+/// sweeps and would delete them just by opening the chapter, so it is made
+/// to refuse the chapter as newer instead.
 /// Existing version-three and version-four jobs retain their schema until needed.
 /// Opening upgrades the in-memory version; the disk file remains untouched
 /// until the next [`Job::flush`].
@@ -1152,7 +1157,8 @@ pub struct Project {
 
 impl Project {
     fn schema_version(&self) -> u32 {
-        if self.requires_v6() { 6 }
+        if self.requires_v7() { 7 }
+        else if self.requires_v6() { 6 }
         else if self.sources.iter().any(|source| source.orientation.0 != 1)
             || self.patches.iter().chain(self.legacy_patch_revisions.iter()).chain(self.text_shape_patch_revisions.iter()).any(|record| !record.native_parts.is_empty()) { 5 }
         else if self.requires_v4() { 4 } else { 3 }
@@ -1167,6 +1173,17 @@ impl Project {
             .chain(self.text_shape_patch_revisions.iter())
             .chain(self.withdrawn_patches.iter())
             .any(|record| record.engine == Engine::NanoBanana || record.provenance.engine == Engine::NanoBanana)
+    }
+    /// A row keeping a declined detection. Builds 1.0.0-beta.3 to beta.20
+    /// read 5 and sweep, at open, every detection and evidence file their
+    /// manifest does not name; they do not know this field, so they would
+    /// delete the files Restore mask puts back. Once the row is restored or
+    /// cleaned the job goes back to its old number.
+    fn requires_v7(&self) -> bool {
+        self.regions_untouched
+            .iter()
+            .chain(self.cleaned_held.iter().map(|kept| &kept.row))
+            .any(|row| row.declined_from.is_some())
     }
     fn requires_v4(&self) -> bool {
         !self.text_shape_plans.is_empty()
@@ -6848,6 +6865,38 @@ mod tests {
         let reopened = Job::open(job.path()).unwrap();
         assert_eq!(reopened.project.version, 6);
         assert!(reopened.project.patches.iter().any(|record| record.engine == Engine::NanoBanana));
+    }
+
+    /// A build before 7 would sweep a declined detection's files at open, so a
+    /// job keeping one is written as 7 and refused there as newer. Restored,
+    /// the job is back to the number it had.
+    #[test]
+    fn a_kept_declined_detection_moves_the_manifest_to_version_7_and_only_then() {
+        let scratch = Scratch::new("declined-version");
+        let mut job = a_job(&scratch);
+        let record = a_detection(&mut job, Rect::new(9, 9, 10, 8));
+        job.store_detection(record, &Mask::filled(Rect::new(8, 8, 12, 10)), &Mask::filled(Rect::new(10, 10, 6, 4)))
+            .unwrap();
+        let stored = job.project.detections[0].clone();
+        let version = |job: &Job| -> u64 {
+            let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(job.path()).unwrap()).unwrap();
+            saved["version"].as_u64().unwrap()
+        };
+        let before = version(&job);
+        assert!(before < 7, "{before}");
+
+        assert!(job.decline_detection(&stored.id, "decline.reason.qualityMetric").unwrap());
+        assert_eq!(version(&job), 7);
+        let row = job.project.regions_untouched[0].clone();
+        let mut job = Job::open(job.path()).unwrap();
+        assert_eq!(job.project.version, 7);
+
+        assert_eq!(job.restore_declined_detection(&row).unwrap(), Some(stored.id.clone()));
+        assert_eq!(version(&job), before);
+
+        // A row with nothing kept, as an older build wrote it, moves nothing.
+        job.leave_untouched(0, Rect::new(40, 40, 4, 4), "decline.reason.qualityMetric").unwrap();
+        assert_eq!(version(&job), before);
     }
 
     #[test]
