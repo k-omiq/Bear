@@ -78,6 +78,18 @@ describe('the Pages screen', () => {
     expect(remove?.disabled).toBe(true)
   })
 
+  it('asks again while a run holds the chapter, and opens up when it ends', async () => {
+    backend.chapterPages
+      .mockResolvedValueOnce({ ...listing([true, false, false]), busy: true })
+      .mockResolvedValue(listing([true, false, false]))
+    const { getByText } = await mount()
+    expect(getByText(t('home.pagesScreen.why.busy'))).toBeTruthy()
+    const add = () => /** @type {HTMLButtonElement} */ (getByText(t('home.pagesScreen.add')).closest('button'))
+    expect(add().disabled).toBe(true)
+    await vi.waitFor(() => expect(add().disabled).toBe(false), { timeout: 4000 })
+    expect(backend.chapterPages).toHaveBeenCalledTimes(2)
+  })
+
   it('removes the selected page only after the confirmation', async () => {
     const { getAllByRole, getByRole, queryByRole, getByText } = await mount()
     await fireEvent.click(getAllByRole('option')[2])

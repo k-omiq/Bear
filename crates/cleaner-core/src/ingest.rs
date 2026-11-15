@@ -505,15 +505,28 @@ impl Sieve {
 /// `001.png`. The second becoming `001-2.png` keeps the pages distinct; the
 /// stem warning §2 already raises is what tells the user the folder was
 /// ambiguous, so nothing is being hidden by the rename.
+///
+/// A stem is taken whatever extension holds it, and whatever its case: a
+/// verbatim `001.jpg` beside an imported `001.png` would be two pages an
+/// export names `001.png` (or two `001_mask.png`), and a chapter that cannot
+/// be exported. So a stem any file in `dir` already has moves on to `-2`.
 fn free_path(dir: &Path, original: &Path, extension: &str) -> PathBuf {
     let stem = original.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
-    let mut candidate = dir.join(format!("{stem}.{extension}"));
+    let held: Vec<String> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| Path::new(&entry.file_name()).file_stem().map(|s| s.to_string_lossy().to_lowercase()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut name = stem.to_owned();
     let mut n = 2;
-    while candidate.exists() {
-        candidate = dir.join(format!("{stem}-{n}.{extension}"));
+    while held.contains(&name.to_lowercase()) {
+        name = format!("{stem}-{n}");
         n += 1;
     }
-    candidate
+    dir.join(format!("{name}.{extension}"))
 }
 
 /// A chapter must never publish a partially written page after a failed import.

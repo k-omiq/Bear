@@ -83,6 +83,20 @@
     loading = false
   }
 
+  /** How long the screen waits before asking again whether a run still has the chapter. */
+  const BUSY_RECHECK_MS = 2000
+
+  // A run holds the chapter: ask again until it lets go, so the screen does
+  // not stay disabled after the run ends.
+  $effect(() => {
+    if (!listing?.busy) return
+    const timer = setTimeout(async () => {
+      const next = await readChapterPages(chapterId)
+      if (next && !working) take(next)
+    }, BUSY_RECHECK_MS)
+    return () => clearTimeout(timer)
+  })
+
   /** @param {import('../../api/backend.js').ChapterPages|null} next */
   function take(next) {
     if (!next) return false
