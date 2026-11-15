@@ -9076,6 +9076,7 @@ mod tests {
             inside_bubble: None,
             inside_balloon: None,
             lettering: None,
+            declined_from: None,
         });
         job.flush().unwrap();
         invalidate_manifest_cache(path);

@@ -1069,7 +1069,7 @@ mod tests {
         let (_, answer, mask) = dark_screen_with(line);
         assert_eq!(strays(std::slice::from_ref(&answer), &mask).count(), 0, "a line from the edge");
         let hatching = |x: usize, y: usize| {
-            ((50..110).contains(&x) && (50..110).contains(&y) && (x + y) % 6 < 2 && (x / 10 + y / 10) % 2 == 0).then_some(245.0)
+            ((50..110).contains(&x) && (50..110).contains(&y) && (x + y) % 6 < 2 && (x / 10 + y / 10).is_multiple_of(2)).then_some(245.0)
         };
         let (_, answer, mask) = dark_screen_with(hatching);
         assert_eq!(strays(std::slice::from_ref(&answer), &mask).count(), 0, "hatching");

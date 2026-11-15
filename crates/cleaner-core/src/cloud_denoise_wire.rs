@@ -1002,7 +1002,9 @@ mod tests {
     fn denoise_presets_validate_and_match_python() {
         // canonical_recipe(PRESETS[id]) and request_digest(PRESETS[id], tiny_image.png)
         // from deploy/cloud/common/denoise.py, with each route's models.
-        let golden: [(&str, &str, &str, (&str, u32), Option<(&str, u32)>); 4] = [
+        type Route<'a> = (&'a str, u32);
+        type Golden<'a> = (&'a str, &'a str, &'a str, Route<'a>, Option<Route<'a>>);
+        let golden: [Golden; 4] = [
             ("realcugan-2x-auto",
                 r#"{"color_steps":[{"engine":"ijanai-v3-denoise","op":"sharpen","scale":4}],"schema":1,"steps":[{"engine":"realcugan","op":"sharpen","scale":2}]}"#,
                 "8b49ac5037072e2f4cd5a1bb1f9851373953c623407257d380f5c4389ecc4f1e",

@@ -177,6 +177,7 @@ pub(crate) struct Walk<'a> {
     /// Raise the page: send its `page-started` with the chapter's lock held,
     /// once no single region's request is out on it. Answers false when
     /// `cancel` went up while it waited, and then sends nothing.
+    #[allow(clippy::type_complexity)]
     pub raise: &'a dyn Fn(u32, &AtomicBool, &dyn Fn(Event)) -> bool,
     /// Clean one region under what its share granted.
     pub clean: &'a dyn Fn(&Target, &Granted) -> Attempt,

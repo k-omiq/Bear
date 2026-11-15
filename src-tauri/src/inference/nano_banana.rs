@@ -1039,6 +1039,7 @@ fn settle(turn: &Turn, config: &Config, show: Option<&Show>, prepared: &mut Prep
 
 /// `stop` is the grant's, taken when the region's share was spent, so a Stop
 /// that came at any time since ends the edit at [`Gate::enter`] at the latest.
+#[allow(clippy::too_many_arguments)]
 fn render_with(client: &Client, config: &Config, stop: &Stop, page: &Raster, fitted: &Fitted, finishing: Option<Choice>,
     share: Option<&Neighbours>, show: Option<&Show>) -> Result<Edited, &'static str> {
     if let Some(share) = share {
@@ -1807,6 +1808,7 @@ mod tests {
     #[test]
     fn a_crop_shown_first_goes_only_as_the_person_answers() {
         use super::super::nano_banana_crop::nano_banana_crop_answer;
+        #[allow(clippy::type_complexity)]
         let answers: Arc<Mutex<Vec<(&str, Option<Vec<[i64; 4]>>)>>> = Arc::new(Mutex::new(Vec::new()));
         let shown: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = {
