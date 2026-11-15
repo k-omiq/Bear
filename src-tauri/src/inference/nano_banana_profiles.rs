@@ -36,7 +36,9 @@ pub const LEGACY_ID: &str = "default";
 const LEGACY_NAME: &str = "Nano Banana";
 /// More than anyone keeps; a bound so the list stays a list.
 pub const MAX_PROFILES: usize = 20;
-const MAX_NAME_BYTES: usize = 128;
+/// Counted in characters, as the name field's `maxlength` counts them, so
+/// a name the field takes is a name this takes (a CJK name is 3 bytes each).
+const MAX_NAME_CHARS: usize = 128;
 
 /// Why a profile command failed, as the stable code the webview looks up.
 pub(crate) const BAD_NAME: &str = "nanoBanana.profile.badName";
@@ -84,10 +86,10 @@ fn valid_id(id: &str) -> bool {
     (1..=40).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// A name as typed: no space at either end, 1 to 128 bytes, no control
+/// A name as typed: no space at either end, 1 to 128 characters, no control
 /// characters. The same rule the cloud endpoints' names follow.
 fn valid_name(name: &str) -> Result<&str, &'static str> {
-    let fits = !name.is_empty() && name == name.trim() && name.len() <= MAX_NAME_BYTES && !name.chars().any(char::is_control);
+    let fits = !name.is_empty() && name == name.trim() && name.chars().count() <= MAX_NAME_CHARS && !name.chars().any(char::is_control);
     if fits { Ok(name) } else { Err(BAD_NAME) }
 }
 
@@ -213,12 +215,24 @@ fn current(home: &dyn Home) -> Result<(Profiles, bool), String> {
     }
     profiles.implicit = false;
     let account = account(LEGACY_ID);
-    let held = home.session_only(&account) || matches!(home.has_key(&account), Ok(true));
-    if held {
-        // The first time it is seen: written, so it is a profile like any other.
-        Ok((profiles, true))
+    let held = if home.session_only(&account) {
+        Some(true)
     } else {
-        Ok((Profiles::default(), false))
+        match home.has_key(&account) {
+            Ok(found) => Some(found),
+            Err(KeyError::NoStore) => Some(false),
+            Err(_) => None,
+        }
+    };
+    match held {
+        // The first time it is seen: written, so it is a profile like any other.
+        Some(true) => Ok((profiles, true)),
+        Some(false) => Ok((Profiles::default(), false)),
+        // The store could not be asked just now. The old key may be there, so
+        // its profile stays in the list, unwritten: a key added meanwhile is
+        // then saved beside it, and the old item is never left with no
+        // profile to name it.
+        None => Ok((profiles, false)),
     }
 }
 
@@ -407,6 +421,7 @@ mod tests {
         reads: Mutex<Vec<String>>,
         failing_write: AtomicBool,
         failing_delete: AtomicBool,
+        failing_has: AtomicBool,
     }
 
     impl FakeHome {
@@ -437,6 +452,9 @@ mod tests {
             Ok(())
         }
         fn has_key(&self, account: &str) -> Result<bool, KeyError> {
+            if self.failing_has.load(Ordering::SeqCst) {
+                return Err(KeyError::Failed);
+            }
             Ok(self.keys.lock().unwrap().contains_key(account))
         }
         fn session_only(&self, _: &str) -> bool {
@@ -483,6 +501,30 @@ mod tests {
         assert_eq!(listed.profiles, vec![]);
         assert_eq!(listed.active, None);
         assert_eq!(home.stored(), Value::Null);
+    }
+
+    /// A store that cannot be asked is not a store without the key: the old
+    /// key's profile stays listed, and a profile made meanwhile is saved
+    /// beside it, so the old item always has a profile to name it.
+    #[test]
+    fn profiles_a_store_error_keeps_the_old_key_listed() {
+        let home = FakeHome::with(json!({ nano_banana::MODEL_KEY: PRO }), &[(nano_banana::KEYRING_ACCOUNT, KEY_A)]);
+        home.failing_has.store(true, Ordering::SeqCst);
+        let listed = list(&home).unwrap();
+        assert_eq!(listed.profiles.len(), 1);
+        assert_eq!(listed.profiles[0].id, LEGACY_ID);
+        assert_eq!(listed.profiles[0].has_key, None, "unknown, not absent");
+        assert_eq!(home.stored(), Value::Null, "not written while the store cannot be asked");
+        let made = create(&home, "Work", PRO, KEY_B).unwrap();
+        assert_eq!(made.profiles.len(), 2);
+        assert_eq!(home.stored()["list"][0]["id"], LEGACY_ID, "the old key still has its profile");
+    }
+
+    #[test]
+    fn profiles_a_name_is_counted_in_characters() {
+        let cjk = "あ".repeat(128);
+        assert_eq!(valid_name(&cjk), Ok(cjk.as_str()));
+        assert_eq!(valid_name(&"あ".repeat(129)), Err(BAD_NAME));
     }
 
     /// Before Settings has listed them, a render still reads the old key as
