@@ -6177,10 +6177,20 @@ fn approve_held_mask_at(
     let declined = is_declined_row(&row);
     if row.declined_from.is_some() {
         let page_before = crate::history::capture_pages(&job, &[source_idx]);
-        let restored = job.restore_declined_detection(&row).map_err(|error| match error {
-            cleaner_core::project::CleanRestoreError::Store(error) => error.to_string(),
-            other => format!("clean_mask_unreadable: {other}"),
-        })?;
+        let restored = match job.restore_declined_detection(&row) {
+            Ok(restored) => restored,
+            // The kept files are gone or are not the bytes the record names
+            // (an older build opened the chapter and swept them, or the
+            // folder was copied in part). The row still has its lettering,
+            // so the mask is made from that below, as for a row that kept
+            // no detection. A detection that already has the id is not
+            // this case: that one stays refused.
+            Err(cleaner_core::project::CleanRestoreError::SavedDetectionUnreadable { .. })
+                if row.declined_from.as_deref()
+                    .is_some_and(|kept| !job.project.detections.iter().any(|held| held.id == kept.id)) => None,
+            Err(cleaner_core::project::CleanRestoreError::Store(error)) => return Err(error.to_string()),
+            Err(other) => return Err(format!("clean_mask_unreadable: {other}")),
+        };
         if let Some(region_id) = restored {
             crate::history::record_pages(&job, &located.chapter_id, crate::history::REJECT_LABEL, None, page_before);
             let page_status = crate::library::page_of(&located.chapter_id, &job.project, located.page_index)

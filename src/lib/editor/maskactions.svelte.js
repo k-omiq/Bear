@@ -40,7 +40,7 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
-import { CLOUD_ENGINE, MAX_MASK_PADDING, NANO_BANANA_ENGINE, isCloudMask, isDetected, maskEngine, reRunnable, rejectable, retryWidens } from '../model/masks.js'
+import { CLOUD_ENGINE, MAX_MASK_PADDING, NANO_BANANA_ENGINE, isCloudMask, isDetected, isFailedClean, maskEngine, reRunnable, rejectable, retryWidens } from '../model/masks.js'
 import { currentRung, simpler, stronger } from '../model/ladder.js'
 import { isRegionCopy, layerOf, sameLayer, sanitizeLayer } from '../model/layers.js'
 import { heldStartsOutside } from '../model/review.js'
@@ -641,7 +641,7 @@ export async function approveHeldMask(region) {
  * @returns {Promise<boolean>} whether the region became a detection
  */
 export async function restoreDeclinedMask(region) {
-  if (region?.outcome !== 'declined' || region.mask) return false
+  if (!isFailedClean(region)) return false
   const chapterId = editor.chapter?.id ?? null
   const pageIndex = pageIndexOf(region.id)
   if (!chapterId || pageIndex === null) return false
@@ -661,7 +661,12 @@ export async function restoreDeclinedMask(region) {
       if (!reportJobConflict(error)) notify({ key: 'notice.mask.restoreFailed', tone: 'warn' })
       return false
     }
-    if (!result) return false
+    if (!result) {
+      // The row is gone, or holds nothing a mask can be made from: say so,
+      // a press that does nothing reads as a dead button.
+      notify({ key: 'notice.mask.restoreFailed', tone: 'warn' })
+      return false
+    }
     if (!stillOpen(chapterId)) return true
     try {
       await reloadPage(pageIndex)

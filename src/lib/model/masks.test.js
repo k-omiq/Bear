@@ -12,6 +12,7 @@ import {
   FILL_MODES,
   ROW_ENGINES,
   isCloudMask,
+  isFailedClean,
   maskEngine,
   nextFillMode,
   provenanceFacts,
@@ -19,6 +20,7 @@ import {
   rejectable,
   retryWidens,
   regionMenuSections,
+  reviewEntryActions,
   rowEngines,
   draftMaskColor,
   maskColorFor,
@@ -247,6 +249,16 @@ describe('regionMenuSections', () => {
     for (const outcome of ['gate-skipped', 'candidate', 'detected']) {
       expect(ids(regionMenuSections({ ...region, outcome }, { engines: { flux: false } }))).not.toContain('restoreMask')
     }
+  })
+
+  it('does not offer Restore mask on a mask-needs-correction note, which has no failed clean behind it', () => {
+    // It reads as declined, but the detection still has its mask: the
+    // backend has no held row for it and would answer nothing.
+    const note = { id: 'c1-p001-d1', outcome: 'declined', declineReason: 'review.reason.maskNeedsCorrection', mask: null }
+    expect(isFailedClean(note)).toBe(false)
+    expect(ids(regionMenuSections(note, { engines: { flux: false } }))).not.toContain('restoreMask')
+    expect(reviewEntryActions(/** @type {any} */ (note)).map((action) => action.id)).not.toContain('restoreMask')
+    expect(isFailedClean({ ...note, declineReason: 'decline.reason.histogram' })).toBe(true)
   })
 
   it('offers both approvals and available local models for a gated review item', () => {

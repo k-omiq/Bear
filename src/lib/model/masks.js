@@ -533,7 +533,7 @@ export function regionMenuSections(region, options = {}) {
   if (!mask && (held || region?.outcome === 'declined')) {
     // A failed clean goes back to its mask, as a cleaned result does: the
     // same Restore mask, ahead of the models that would clean it again.
-    if (region?.outcome === 'declined') {
+    if (isFailedClean(region)) {
       sections.push({ id: 'restore', labelKey: null,
         items: [{ id: 'restoreMask', labelKey: 'masks.action.rejectResult', icon: 'undo' }] })
     }
@@ -602,6 +602,19 @@ export function regionMenuSections(region, options = {}) {
 }
 
 /**
+ * A failed clean's row: a declined region that holds no mask. A "mask needs
+ * correction" entry reads as declined too, but it is a note on a detection
+ * that still has its mask, so there is nothing to restore for it.
+ *
+ * @param {import('./types.js').Region | null | undefined} region
+ * @returns {boolean}
+ */
+export function isFailedClean(region) {
+  return region?.outcome === 'declined' && !region.mask
+    && region.declineReason !== 'review.reason.maskNeedsCorrection'
+}
+
+/**
  * The action set for an unmasked "needs review" entry - a declined or
  * gate-skipped region. Both kinds get `showOnPage` (declined regions carry
  * a canvas marker and are otherwise unfindable);
@@ -617,7 +630,7 @@ export function reviewEntryActions(region) {
   if (region.outcome === 'gate-skipped') {
     actions.push({ id: 'cleanAnyway', labelKey: 'masks.action.cleanAnyway' })
   }
-  if (region.outcome === 'declined') {
+  if (isFailedClean(region)) {
     actions.push({ id: 'restoreMask', labelKey: 'masks.action.rejectResult', hintKey: 'masks.hint.restoreMask' })
   }
   return actions
