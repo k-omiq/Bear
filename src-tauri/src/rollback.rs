@@ -89,6 +89,7 @@ const LAST_WITHOUT_KEPT_FIELDS: &str = "1.0.0-beta.20";
 
 /// The chapter format [`READ_LIMITS`] was last checked against. A test fails
 /// when [`cleaner_core::project::FORMAT_VERSION`] moves past it.
+#[cfg(test)]
 const REVIEWED_FORMAT: u32 = 7;
 
 /// One released version, as the list shows it.
