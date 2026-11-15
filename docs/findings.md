@@ -753,10 +753,10 @@ checks were unit tests, DOM tests and the Vite mock.
   `code_digest` was not read back. MoESR's licence is not stated, and IllustrationJaNai is CC BY-NC-SA 4.0.
 - **MoESR sent from this computer.** MoESR's host refuses Modal, so the setup helper now downloads the file
   here and uploads it to the volume (`provisioner/local_models.py`, `ModalDriver._send_local_models`), after the
-  seed, or in the deploy step when the weights step is skipped. Run for real against mc-acb01f with the build
-  environment's Python: sent in 11 s, and a second run found it present in 1 s. Not done: the frozen helper
-  inside the app was not run through a setup or an update; mc-j4avmb and mc-bxdvv8 do not have the file yet,
-  and a profile whose worker code is current shows no Update, so nothing sends it there until one is run;
+  seed, or in the deploy step when the weights step is skipped. Run for real against mc-acb01f and mc-j4avmb
+  with the build environment's Python: each sent in 11 s, and a second run found it present in 1 s. Not done:
+  the frozen helper inside the app was not run through a setup or an update; mc-bxdvv8 does not have the file
+  yet, and a profile whose worker code is current shows no Update, so nothing sends it there until one is run;
   a failed send is only noted in the journal (`provider_state.local_models`), the app shows nothing; the
   10 minute limit was not tried on a slow link; whether the gateway lists the preset once the file is there
   was not checked against a live worker. An app at 1.0.0-beta.20 or older on a new worker
