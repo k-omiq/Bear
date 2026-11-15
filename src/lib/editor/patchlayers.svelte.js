@@ -138,11 +138,15 @@ export function loadLayer(url, options = {}) {
  * longstrip, and just `[page]` when it is not. Only a region with a patch has
  * a layer; a detection draws nothing on the cleaned side.
  *
+ * With `full` each layer's URL asks for it on the page's own grid
+ * (`api/tile.js#layerUrl`).
+ *
  * @param {import('../api/backend.js').ApiPage} page
  * @param {ReadonlyArray<import('../api/backend.js').ApiPage>} list
+ * @param {{full?: boolean}} [options]
  * @returns {PageLayer[]}
  */
-export function pageLayers(page, list) {
+export function pageLayers(page, list, { full = false } = {}) {
   const at = list.indexOf(page)
   const heights = list.map((candidate) => Number(candidate.height))
   const offsets = []
@@ -160,7 +164,7 @@ export function pageLayers(page, list) {
       if (!region.mask || region.outcome === 'detected') continue
       const own = anchor === page
       if (!own && !(known && reaches(offsets, heights, index, at, region.bbox))) continue
-      const url = layerUrl(page, region, anchor)
+      const url = layerUrl(page, region, anchor, full)
       if (!url) continue
       layers.push({
         id: region.id,

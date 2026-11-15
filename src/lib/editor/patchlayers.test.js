@@ -57,6 +57,12 @@ describe('the layers a page draws', () => {
     expect(layers.every((layer) => layer.own)).toBe(true)
   })
 
+  it('ask for the page\'s own grid when drawn past the proxy', () => {
+    const only = page(0, [region('a'), region('b', { order: 1 })])
+    const full = pageLayers(only, [only], { full: true })
+    expect(full.map((layer) => layer.url)).toEqual(pageLayers(only, [only]).map((layer) => layer.url.replace('/layer/', '/layerfull/')))
+  })
+
   it('leave out detections and regions with no patch: they draw nothing', () => {
     const only = page(0, [region('d', { outcome: 'detected' }), { id: 'n', outcome: 'declined', bbox: {}, mask: null }])
     expect(pageLayers(only, [only])).toEqual([])

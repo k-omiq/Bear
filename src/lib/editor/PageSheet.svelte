@@ -77,6 +77,8 @@
   // resolution (`PageArtwork`'s `full`). A strip page is left on its proxy:
   // a webtoon segment is narrow enough that its proxy is the page itself,
   // and a whole wide segment decoded is too much to hold for every page.
+  // Only for a stack that can be seen: the one the wipe covers whole is not
+  // asked for (`covered`, below).
   const full = $derived(current && !strip && width > proxyPlan(page).width)
   // Far enough in, a grid marks every image pixel.
   const grid = $derived(pixel >= PIXEL_GRID_FROM)
@@ -192,15 +194,15 @@
   style:aspect-ratio="1 / {ratio}"
 >
   {#if asked && (both || covered !== 'original')}
-    <PageArtwork {page} variant="original" {full} from={loadFrom} to={loadTo} hidden={!shown} bind:ready={sourceReady} />
+    <PageArtwork {page} variant="original" full={full && covered !== 'original'} from={loadFrom} to={loadTo} hidden={!shown} bind:ready={sourceReady} />
   {/if}
   <div class="cleaned" style:clip-path={clip}>
     {#if asked && (both || covered !== 'cleaned')}
-      <PageArtwork {page} variant="cleaned" {full} from={loadFrom} to={loadTo} hidden={!shown} bind:ready={layersReady} bind:readyVersion={cleanedVersion} />
+      <PageArtwork {page} variant="cleaned" full={full && covered !== 'cleaned'} from={loadFrom} to={loadTo} hidden={!shown} bind:ready={layersReady} bind:readyVersion={cleanedVersion} />
       {#if previewing}
         <div class="regional-artwork" style:visibility={shown && previewReady && previewShownFor === page.id ? null : 'hidden'}>
           <PageArtwork {page} variant="cleaned" composite={false} {full} from={loadFrom} to={loadTo} bind:ready={previewSourceReady} />
-          <PatchLayers {page} from={loadFrom} to={loadTo} hide={standing ? heldGradient?.regionId : null} bind:ready={previewLayersReady} />
+          <PatchLayers {page} {full} from={loadFrom} to={loadTo} hide={standing ? heldGradient?.regionId : null} bind:ready={previewLayersReady} />
         </div>
       {/if}
     {/if}

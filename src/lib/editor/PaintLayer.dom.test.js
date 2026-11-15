@@ -291,6 +291,27 @@ describe('a Brush stroke, drawn in the layer', () => {
     document.dispatchEvent(new CustomEvent('paint-tile-loaded')); await tick()
     expect(host.querySelector('.paint')).toBeNull()
   })
+  // Past the proxy's scale the page is also drawn whole over its tiles. Until
+  // the whole page shows the stroke, it still shows the page before it, so
+  // the stroke's canvas is held over it however the tiles below have done.
+  it('holds the stroke over the whole page until the whole page shows it', async () => {
+    const { host, rerender } = await setup()
+    const tile = cleanedTile(host)
+    const whole = document.createElement('img'); tile.parentElement.append(whole)
+    whole.dataset.fullVersion = whole.dataset.fullLoaded = pageVersion(page(), 'cleaned')
+    draft.active = brushStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()
+    const canvas = host.querySelector('.paint')
+    markCommitted(); clearDraft(); await tick()
+    const committed = { ...page(), tileRevision: 1 }
+    tile.dataset.version = tile.dataset.loadedVersion = pageVersion(committed, 'cleaned')
+    whole.dataset.fullVersion = pageVersion(committed, 'cleaned')
+    await rerender({ page: committed })
+    document.dispatchEvent(new CustomEvent('paint-tile-loaded')); await tick()
+    expect(host.querySelector('.paint')).toBe(canvas)
+    whole.dataset.fullLoaded = pageVersion(committed, 'cleaned')
+    document.dispatchEvent(new CustomEvent('paint-tile-loaded')); await tick()
+    expect(host.querySelector('.paint')).toBeNull()
+  })
   it('drops an abandoned stroke', async () => {
     const { host } = await setup()
     draft.active = brushStroke('page-0'); await tick(); await flushPaintPreview('page-0'); await tick()

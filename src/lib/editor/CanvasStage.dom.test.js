@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte'
 import { tick } from 'svelte'
 import { setBackend } from '../api/backend.js'
 import { tileUrl } from '../api/tile.js'
-import { editor, focusRegion, goToPage, reloadPage, replaceRegion, syncPageWindow, zoomActual, zoomFit, zoomIn } from '../state/editor.svelte.js'
+import { closeEditorChapter, editor, focusRegion, goToPage, reloadPage, replaceRegion, reportZoomCeiling, requestView, syncPageWindow, zoomActual, zoomFit, zoomIn } from '../state/editor.svelte.js'
 import { beginDraft, resetDraftState } from './draft.svelte.js'
 import CanvasStage from './CanvasStage.svelte'
 import { showOnPage } from './maskactions.svelte.js'
@@ -714,6 +714,31 @@ describe('where a zoom leaves the view', () => {
     expect(at(50, 50).y).toBeCloseTo(VIEW.y)
   })
 
+  it('brings a restored zoom under the ceiling a page that long allows', async () => {
+    // 16M drawn pixels over a 400000 pixel edge: 40x at most.
+    pageFixture({ width: 400000, height: 1000 })
+    editor.fit = false
+    editor.zoom = 128
+    await tick()
+    await tick()
+    expect(editor.zoomCeiling).toBe(40)
+    expect(editor.zoom).toBe(40)
+  })
+
+  it('lowers the chosen zoom when the ceiling drops, and leaves fit on', () => {
+    editor.fit = false
+    editor.zoom = 64
+    reportZoomCeiling(16)
+    expect(editor.zoom).toBe(16)
+    editor.fit = true
+    editor.zoom = 64
+    reportZoomCeiling(8)
+    expect(editor.zoom).toBe(8)
+    expect(editor.fit).toBe(true)
+    reportZoomCeiling(128)
+    expect(editor.zoom).toBe(8)
+  })
+
   it('marks the stage for nearest-neighbour drawing only past 100%', async () => {
     const { stage } = pageFixture({ width: 1600, height: 2400 })
     await tick()
@@ -778,6 +803,44 @@ describe('show on page', () => {
     const centre = at(20, 75)
     expect(centre.x).toBeCloseTo(VIEW.x)
     expect(centre.y).toBeCloseTo(VIEW.y)
+  })
+
+  it('drops a request made for another page, and leaves the view where it was', async () => {
+    const { box } = pageFixture({ width: 1600, height: 2400 })
+    editor.fit = false
+    editor.zoom = 1
+    await tick()
+    const before = { left: box.scrollLeft, top: box.scrollTop }
+    requestView({ kind: 'focus', bbox: { x: 80, y: 10, w: 1, h: 1 }, pageIndex: 1 })
+    await tick()
+    await tick()
+    expect(editor.viewRequest).toBeNull()
+    expect(editor.pageIndex).toBe(0)
+    expect(box.scrollLeft).toBe(before.left)
+    expect(box.scrollTop).toBe(before.top)
+  })
+
+  it('drops a request made in another chapter', async () => {
+    const { box } = pageFixture({ width: 1600, height: 2400 })
+    editor.fit = false
+    editor.zoom = 1
+    await tick()
+    const before = { left: box.scrollLeft, top: box.scrollTop }
+    editor.viewRequest = /** @type {any} */ ({ kind: 'focus', bbox: { x: 80, y: 10, w: 1, h: 1 }, pageIndex: 0, chapterId: 'other', token: 99 })
+    await tick()
+    await tick()
+    expect(editor.viewRequest).toBeNull()
+    expect(box.scrollLeft).toBe(before.left)
+    expect(box.scrollTop).toBe(before.top)
+  })
+
+  it('keeps no request once the chapter is closed', () => {
+    editor.chapter = /** @type {any} */ ({ id: 'closing', pages: [], review: [] })
+    editor.loading = false
+    editor.viewRequest = /** @type {any} */ ({ kind: 'centre', pageIndex: 0, chapterId: 'closing', token: 1 })
+    closeEditorChapter()
+    expect(editor.viewRequest).toBeNull()
+    expect(editor.zoomCeiling).toBe(128)
   })
 
   it('centres a region far down a strip, from the column\'s geometry', async () => {

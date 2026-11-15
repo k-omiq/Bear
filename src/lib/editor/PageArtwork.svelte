@@ -202,7 +202,7 @@
       <ManagedTile {tile} onloaded={warm} />
     {/each}
     {#if whole}
-      <ManagedTile tile={whole} full onloaded={() => {}} />
+      <ManagedTile tile={whole} full onloaded={warm} />
     {/if}
   {:else}
     {#each panels as panel, index (index)}

@@ -1,10 +1,10 @@
 <script>
   import { untrack } from 'svelte'
   import { draft } from './draft.svelte.js'
-  import { editor } from '../state/editor.svelte.js'
+  import { displayZoom, editor } from '../state/editor.svelte.js'
   import { pageVersion } from '../api/tile.js'
   import { brushFromParams, nativePoints } from './paintplan.js'
-  import { brushSurface } from './brushsurface.js'
+  import { brushSurface, proxyScale } from './brushsurface.js'
   import { cleanedTiles, registerPaintPreview } from './paintpreview.js'
   import { keepEraseMasks, showEraseMask } from './erasepreview.svelte.js'
 
@@ -178,12 +178,15 @@
     // sends the same offset (`drawing.svelte.js#cloneInto`).
     if (clone && !active.clone) return
     const params = editor.toolParams[active.tool] ?? {}
-    const key = JSON.stringify([params, active.clone, version])
     const width = Number(page.width) || 1600
     const height = Number(page.height) || 2400
+    // Drawn larger than its proxy, the page shows its own pixels, and so does
+    // the stroke (`brushsurface.js#surfaceScale`).
+    const pagePixels = displayZoom() > proxyScale(width, height)
+    const key = JSON.stringify([params, active.clone, version, pagePixels])
     if (stroking?.draft !== active || stroking.key !== key) {
       const surface = brushSurface({ brush: brushFromParams(params), color: String(params.color ?? '#000000'),
-        pageWidth: width, pageHeight: height, clipY: clone || !strip, buildUp: clone })
+        pageWidth: width, pageHeight: height, clipY: clone || !strip, buildUp: clone, pagePixels })
       let paint = (/** @type {HTMLCanvasElement} */ node) => surface.paint(node)
       let mask = undefined
       let dispose = undefined
@@ -302,13 +305,26 @@
     })
   }
 
+  /**
+   * Whether the page at its own resolution, where it is laid over the tiles
+   * (a zoom past the proxy), shows the version it is asked for. Until it
+   * does it still shows the page before the stroke, over tiles that have it.
+   */
+  function wholeShown() {
+    const scope = root?.closest('.stage') ?? root?.closest('.sheet')
+    if (!scope) return true
+    return [...scope.querySelectorAll('[data-artwork="cleaned"] img[data-full-version]')]
+      .every(image => image.dataset.fullLoaded === image.dataset.fullVersion)
+  }
+
   /** Let go of every held frame whose tiles now show what it showed. */
   function release() {
     if (held.length === 0 || busy > 0) return
+    const whole = wholeShown()
     const kept = held.filter(frame => {
       if (frame.erase !== undefined) return false
       if (version === frame.revision) return true
-      const landed = tilesUnder(frame).every(tile =>
+      const landed = whole && tilesUnder(frame).every(tile =>
         tile.dataset.loadedVersion === tile.dataset.version &&
         frame.initial.get(tile.dataset.paintKey) !== tile.dataset.version)
       return !landed

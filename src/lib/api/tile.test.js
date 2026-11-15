@@ -257,6 +257,13 @@ describe('a layer URL', () => {
     expect(layerUrl(page, layer())).toBe(`tile://localhost/ch-1/4/layer/c1-p0-r3?v=${fold(`${COLOR_PIPELINE_VERSION}:k1|aa11`)}`)
   })
 
+  it('asks for the page\'s own grid with full, at the same version', () => {
+    inside('macos')
+    const page = aPage({ id: 'ch-1', index: 4 })
+    const full = layerUrl(page, layer(), page, true)
+    expect(full).toBe(layerUrl(page, layer()).replace('/layer/', '/layerfull/'))
+  })
+
   it('moves with the layer key and not with the opacity, which the canvas draws', () => {
     inside('macos')
     const page = aPage()

@@ -383,8 +383,12 @@ pub fn stamp_dab_subpixel(
 
     for py in min_y..=max_y {
         for px in min_x..=max_x {
-            let dx = px as f64 - dab.x;
-            let dy = py as f64 - dab.y;
+            // Pixel `k` covers `k..k+1` on the page, as the page is drawn and
+            // as the cursor is placed, so it is sampled at its centre. Sampled
+            // on `k` instead, every stroke landed half a pixel down and right
+            // of the brush.
+            let dx = px as f64 + 0.5 - dab.x;
+            let dy = py as f64 + 0.5 - dab.y;
             let lx = dx * cos_a - dy * sin_a;
             let ly = (dx * sin_a + dy * cos_a) / roundness;
             let nx = lx / radius;
@@ -411,8 +415,8 @@ pub fn stamp_dab_subpixel(
             }
 
             if let Some(dual) = options.dual.as_ref() {
-                let sdx = px as f64 - (dab.x + dual_offset_x);
-                let sdy = py as f64 - (dab.y + dual_offset_y);
+                let sdx = px as f64 + 0.5 - (dab.x + dual_offset_x);
+                let sdy = py as f64 + 0.5 - (dab.y + dual_offset_y);
                 let slx = sdx * cos_a - sdy * sin_a;
                 let sly = (sdx * sin_a + sdy * cos_a) / roundness;
                 let secondary =
@@ -536,8 +540,18 @@ mod tests {
             width,
             height,
         };
+        // The oracle sampled pixel k at k; the kernel samples it at its
+        // centre, k + 0.5. The oracle's dab at x is the kernel's at x + 0.5,
+        // with the seed it had, so the same bytes still pin the kernel.
         for spec in dabs {
-            stamp_dab_subpixel(&mut view, &spec.dab, spec.tip, spec.color, options, cos_a, sin_a);
+            let dab = RasterizableDab {
+                x: spec.dab.x + 0.5,
+                y: spec.dab.y + 0.5,
+                seed_x: spec.dab.seed_x.or(Some(spec.dab.x)),
+                seed_y: spec.dab.seed_y.or(Some(spec.dab.y)),
+                ..spec.dab
+            };
+            stamp_dab_subpixel(&mut view, &dab, spec.tip, spec.color, options, cos_a, sin_a);
         }
         accumulation_to_image_data(&color, width, height)
     }
