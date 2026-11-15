@@ -233,6 +233,19 @@
         {/if}
         <li>{t('update.rollback.warn.settings', { version: target })}</li>
         <li>{t('update.rollback.warn.library')}</li>
+        {#if chosen.dropsFields}
+          <li class="strong">
+            {t('update.rollback.warn.drops', { version: target })}
+            <ul class="sub">
+              <li>{t('update.rollback.warn.dropLabel', { version: target })}</li>
+              <li>{t('update.rollback.warn.dropPick')}</li>
+              <li>{t('update.rollback.warn.dropRuns')}</li>
+            </ul>
+          </li>
+        {/if}
+        {#if chosen.noNanoBanana}
+          <li>{t('update.rollback.warn.nanoBanana', { version: target })}</li>
+        {/if}
         <li>{t('update.rollback.warn.features', { version: target })}</li>
         {#if chosen.honoursSkip}
           <li>{t('update.rollback.warn.skip', { current })}</li>
@@ -426,6 +439,12 @@
   .warnings .strong {
     color: var(--text);
     font-weight: 600;
+  }
+  .warnings .sub {
+    margin: var(--s-1) 0 0;
+    padding-left: 1.2em;
+    font-weight: 400;
+    color: var(--t2);
   }
   .progress-section {
     margin-bottom: var(--s-4);

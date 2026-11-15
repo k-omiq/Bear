@@ -108,6 +108,23 @@ describe('the rollback list', () => {
     expect(rows.find((r) => r.version === '1.0.0-beta.21')?.state).toBe('installed')
   })
 
+  it('says which versions drop saved fields and have no Nano Banana', () => {
+    const rows = rollbackRows(
+      catalog({
+        manifestFormat: 7,
+        versions: [
+          entry('1.0.0-beta.21', { readsFormat: 7, honoursSkip: true, dropsFields: false }),
+          entry('1.0.0-beta.10', { dropsFields: true }),
+          entry('1.0.0-beta.9'),
+        ],
+      }),
+    )
+    const by = Object.fromEntries(rows.map((r) => [r.version, r]))
+    expect(by['1.0.0-beta.10']).toMatchObject({ dropsFields: true, noNanoBanana: true, loses: true })
+    expect(by['1.0.0-beta.9'].dropsFields).toBe(false)
+    expect(by['1.0.0-beta.21']).toMatchObject({ dropsFields: false, noNanoBanana: false, loses: false })
+  })
+
   it('still marks the installed version when no release lists it', () => {
     const rows = rollbackRows(catalog({ currentVersion: '1.0.0-beta.30' }))
     expect(rows[0]).toMatchObject({ version: '1.0.0-beta.30', state: 'installed' })

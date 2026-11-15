@@ -22,6 +22,7 @@ import { readRecord, writeRecord, defaultStorage } from './state/persist.js'
  * @property {string} pageUrl
  * @property {number} readsFormat
  * @property {boolean} honoursSkip
+ * @property {boolean} [dropsFields] - it drops what this build saves beside a chapter and in the library index (`rollback.rs`)
  */
 
 /**
@@ -38,8 +39,12 @@ import { readRecord, writeRecord, defaultStorage } from './state/persist.js'
  * @typedef {RollbackEntry & {
  *   state: 'installed'|'available'|'belowFloor'|'pageOnly',
  *   loses: boolean,
+ *   noNanoBanana: boolean,
  * }} RollbackRow
  */
+
+/** The chapter format that brought the Nano Banana engine: a version that opens less has none. */
+export const NANO_BANANA_FORMAT = 6
 
 /**
  * `1.0.0-beta.3` as parts, or `null`. A leading `v` is allowed.
@@ -121,7 +126,13 @@ export function rollbackRows(catalog) {
     if (order === 0) state = 'installed'
     else if (compareVersions(entry.version, catalog.floor) < 0) state = 'belowFloor'
     else if (!catalog.inPlace) state = 'pageOnly'
-    rows.push({ ...entry, state, loses: Number(entry.readsFormat) < Number(catalog.manifestFormat) })
+    rows.push({
+      ...entry,
+      dropsFields: entry.dropsFields === true,
+      state,
+      loses: Number(entry.readsFormat) < Number(catalog.manifestFormat),
+      noNanoBanana: Number(entry.readsFormat) < NANO_BANANA_FORMAT,
+    })
   }
   if (!seen.has(current) && parseVersion(current)) {
     rows.push({
@@ -131,8 +142,10 @@ export function rollbackRows(catalog) {
       pageUrl: '',
       readsFormat: catalog.manifestFormat,
       honoursSkip: true,
+      dropsFields: false,
       state: 'installed',
       loses: false,
+      noNanoBanana: false,
     })
   }
   return rows.sort((a, b) => compareVersions(b.version, a.version))
