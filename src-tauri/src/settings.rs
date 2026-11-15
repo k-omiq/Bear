@@ -70,6 +70,7 @@ fn read_file(path: &std::path::Path) -> Result<Value, String> {
             let mut settings = serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
             // Settings written before a rename read under the new names.
             crate::inference::cloud_clean::migrate_settings(&mut settings);
+            migrate_denoise_preset(&mut settings);
             Ok(settings)
         }
     }
@@ -190,6 +191,19 @@ fn check_undo_limit(patch: &Value) -> Result<(), String> {
     }
 }
 
+/// A `denoisePreset` saved by an earlier build reads as the preset that
+/// replaced it, and one no build knows is dropped, on read and in a patch.
+/// The interface sends the stored preset with every settings write, so a
+/// refused id would refuse every other setting in the same patch.
+fn migrate_denoise_preset(settings: &mut Value) {
+    let Value::Object(map) = settings else { return };
+    let Some(Value::String(id)) = map.get(DENOISE_PRESET_KEY) else { return };
+    match cleaner_core::cloud_denoise_wire::current_preset_id(id) {
+        Some(current) => { map.insert(DENOISE_PRESET_KEY.into(), Value::String(current.into())); }
+        None => { map.remove(DENOISE_PRESET_KEY); }
+    }
+}
+
 /// `denoisePreset` names one of the shipped presets, and
 /// `denoiseLocalSecondsPerPage` is what `benchmark_denoise_local` measured: a
 /// positive finite number. Null clears either.
@@ -251,6 +265,7 @@ pub fn write(app: &tauri::AppHandle, patch: Value) -> Result<Value, String> {
 fn write_patch(path: &std::path::Path, mut patch: Value) -> Result<Value, String> {
     // Reject any cloud secrets or cloud configuration attempting to be stored in settings.json
     check_no_cloud_secrets("", &patch)?;
+    migrate_denoise_preset(&mut patch);
     check_known_shapes(&patch)?;
 
     // Taken out of the patch before the merge so that no path through this
@@ -859,11 +874,24 @@ mod tests {
         for preset in cleaner_core::cloud_denoise_wire::PRESETS {
             assert_eq!(write_patch(&path, serde_json::json!({"denoisePreset": preset.id})).unwrap()["denoisePreset"], preset.id);
         }
-        for bad in [serde_json::json!("custom"), serde_json::json!("Mangajanai-2x"), serde_json::json!(2)] {
-            assert!(write_patch(&path, serde_json::json!({"denoisePreset": bad})).is_err(), "{bad}");
-        }
+        assert!(write_patch(&path, serde_json::json!({"denoisePreset": 2})).is_err(), "not a string");
         let last = cleaner_core::cloud_denoise_wire::PRESETS.last().unwrap().id;
         assert_eq!(read_file(&path).unwrap()["denoisePreset"], last, "a refused patch writes nothing");
+        // An id no build knows is dropped, and the rest of the patch is kept.
+        for unknown in ["custom", "Mangajanai-2x"] {
+            let written = write_patch(&path, serde_json::json!({"denoisePreset": unknown, "denoiseTarget": "cloud"})).unwrap();
+            assert_eq!(written["denoisePreset"], last, "{unknown}");
+            assert_eq!(written["denoiseTarget"], "cloud");
+        }
+        // A retired id, sent back by a window that read it before, saves as its replacement.
+        let written = write_patch(&path, serde_json::json!({"denoisePreset": "realcugan-2x-conservative", "denoiseTarget": "local"})).unwrap();
+        assert_eq!(written["denoisePreset"], "realcugan-2x-auto");
+        assert_eq!(written["denoiseTarget"], "local");
+        // A file an earlier build wrote reads under the new id.
+        std::fs::write(&path, r#"{"denoisePreset":"waifu2x-art-2x-n3","undoLimit":50}"#).unwrap();
+        assert_eq!(read_file(&path).unwrap()["denoisePreset"], "ijanai-v3-denoise-4x");
+        std::fs::write(&path, r#"{"denoisePreset":"gone-preset"}"#).unwrap();
+        assert!(read_file(&path).unwrap().get("denoisePreset").is_none());
         assert!(write_patch(&path, serde_json::json!({"denoisePreset": null})).is_ok());
 
         assert_eq!(write_patch(&path, serde_json::json!({"denoiseLocalSecondsPerPage": 32.5})).unwrap()

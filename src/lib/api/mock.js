@@ -338,19 +338,38 @@ export function createMockBackend(options = {}) {
     const wanted = Array.isArray(indices) ? new Set(indices) : null
     return chapter.pages.filter((/** @type {any} */ page) => !wanted || wanted.has(page.index))
   }
+  /** The file a denoise run writes for a page. @param {{index: number}} page */
+  const denoiseFile = (page) => `${String(page.index + 1).padStart(3, '0')}.png`
   /**
-   * `cloud_denoise.rs#run_folder`: the folder asked for, or `run-2`, `run-3`,
-   * ... inside it once it holds an earlier run, so no run writes over another.
+   * The mock's disk for denoise output: each folder a run made, with the
+   * files in it. What `run_folder` finds with `exists()` in the real backend.
    *
-   * @param {string} chapterId @param {string} outDir
+   * @type {Map<string, Set<string>>}
    */
-  const runFolder = (chapterId, outDir) => {
+  const denoiseDisk = new Map()
+  /** @param {string} path */
+  const folderOf = (path) => path.replace(/[\\/][^\\/]*$/, '')
+  /**
+   * `cloud_denoise.rs#run_folder`: the folder asked for, unless it holds an
+   * earlier run's rows or a file with one of this run's names; then the first
+   * `run-2`, `run-3`, ... inside it that holds no run and does not exist yet.
+   * The folder is made, as the real one is.
+   *
+   * @param {string} chapterId @param {string} outDir @param {Array<{index: number}>} pages
+   */
+  const runFolder = (chapterId, outDir, pages) => {
     const dir = outDir.trim().replace(/[\\/]+$/, '')
-    const held = new Set((denoiseRows.get(chapterId) ?? []).map((row) => row.path.replace(/[\\/][^\\/]*$/, '')))
-    if (!held.has(dir)) return dir
-    let at = 2
-    while (held.has(`${dir}/run-${at}`)) at += 1
-    return `${dir}/run-${at}`
+    const held = new Set((denoiseRows.get(chapterId) ?? []).map((row) => folderOf(row.path)))
+    const names = pages.map(denoiseFile)
+    const busy = (/** @type {string} */ at) => held.has(at) || names.some((name) => denoiseDisk.get(at)?.has(name))
+    let folder = dir
+    if (busy(dir)) {
+      let at = 2
+      while (held.has(`${dir}/run-${at}`) || denoiseDisk.has(`${dir}/run-${at}`)) at += 1
+      folder = `${dir}/run-${at}`
+    }
+    if (!denoiseDisk.has(folder)) denoiseDisk.set(folder, new Set())
+    return folder
   }
   /** @param {any[]} pages @param {string} outDir */
   const denoiseReport = (pages, outDir, prefix) => {
@@ -358,11 +377,11 @@ export function createMockBackend(options = {}) {
     const failing = denoiseScenario() === 'pageFail' ? pages[2]?.index : undefined
     return {
       folder: dir,
-      written: pages.filter((page) => page.index !== failing).map((page) => ({
-        pageIndex: page.index,
-        path: `${dir}/${String(page.index + 1).padStart(3, '0')}.png`,
-        gray: true,
-      })),
+      written: pages.filter((page) => page.index !== failing).map((page) => {
+        if (!denoiseDisk.has(dir)) denoiseDisk.set(dir, new Set())
+        denoiseDisk.get(dir)?.add(denoiseFile(page))
+        return { pageIndex: page.index, path: `${dir}/${denoiseFile(page)}`, gray: true }
+      }),
       failed: failing === undefined ? [] : [{ pageIndex: failing, code: `${prefix}inference_failed` }],
     }
   }
@@ -6578,7 +6597,7 @@ export function createMockBackend(options = {}) {
           }
           if (!run.stopped) progress(reached + 1, 0)
         }
-        const report = denoiseReport(pages.slice(0, reached), runFolder(chapterId, outDir), 'denoise_')
+        const report = denoiseReport(pages.slice(0, reached), runFolder(chapterId, outDir, pages), 'denoise_')
         recordDenoised(found.chapter, report, { preset: presetId, target: 'local', scale })
         return run.stopped ? { ...report, cancelled: true } : report
       } finally {
@@ -6655,9 +6674,16 @@ export function createMockBackend(options = {}) {
     async deleteDenoiseRun({ chapterId, run }) {
       await delay(timing.method)
       const rows = denoiseRows.get(chapterId) ?? []
-      const removed = rows.filter((row) => row.created === run).length
+      const gone = rows.filter((row) => row.created === run)
+      const removed = gone.length
       if (!removed) throw new Error('denoise_run_missing')
       denoiseRows.set(chapterId, rows.filter((row) => row.created !== run))
+      // Its files go, and a folder left empty with them, as `delete_run` does.
+      for (const row of gone) {
+        const files = denoiseDisk.get(folderOf(row.path))
+        files?.delete(row.path.slice(folderOf(row.path).length + 1))
+        if (files && !files.size) denoiseDisk.delete(folderOf(row.path))
+      }
       return { removed, missing: 0, failed: [] }
     },
 
@@ -6817,7 +6843,7 @@ export function createMockBackend(options = {}) {
           await delay(half)
           progress(reached + 1, reached + 1 === pages.length ? 1 : 0)
         }
-        const report = denoiseReport(pages.slice(0, reached), runFolder(grant.chapterId, outDir), 'cloud_denoise_')
+        const report = denoiseReport(pages.slice(0, reached), runFolder(grant.chapterId, outDir, pages), 'cloud_denoise_')
         recordDenoised(found.chapter, report, { preset: grant.presetId ?? null, target: 'cloud', scale: grant.scale ?? 1 })
         return run.stopped && reached < pages.length ? { ...report, cancelled: true } : report
       } finally {

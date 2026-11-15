@@ -2841,6 +2841,8 @@ export const en = {
       notSetUp: 'This cloud GPU is not set up for page denoise. In Settings > Cloud, set up with Modal and turn on Page denoise, then try again.',
       cloudOutdated: 'This cloud GPU was set up before larger output sizes. Update the setup in Settings > Cloud, or choose Same size, then try again.',
       cloudNeedsUpdate: 'This cloud GPU was set up before this recipe could run. Update the setup in Settings > Cloud, then try again.',
+      moesrMissing: 'The MoESR model file is not on this cloud GPU. Its website blocks automatic downloads, so updating the setup will not add it. The file is added by hand with spikes/denoise/put-moesr.sh in the Manga Cleaner source. Until then, use a recipe without MoESR.',
+      chapterBusy: 'This chapter is already being denoised. Wait for that run to finish, or stop it under Jobs, then try again.',
       openCloud: 'Open Cloud settings',
       modelMissing: 'The local model is missing or failed its check. Go back to download it again.',
       runtimeMissing: 'The ONNX runtime this model runs on is not installed. Download it in Settings > Models.',

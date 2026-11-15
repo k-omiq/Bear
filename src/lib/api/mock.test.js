@@ -1845,6 +1845,21 @@ describe('the denoise history of a chapter, in the mock', () => {
     expect((await chapterOf(backend)).denoiseHistory).toMatchObject({ runs: 2, taken: true })
   })
 
+  it('gives a run a folder of its own, as run_folder does, and frees it when the run is deleted', async () => {
+    const backend = createMockBackend({ timing: { method: 0, analysis: 0, region: 0, pageTail: 0 } })
+    await settle(backend.downloadModelGroup({ id: 'pageDenoise' }))
+    await vi.runAllTimersAsync()
+    const run = async (id, pageIndices = [0]) => (await settle(backend.denoiseChapterLocal({ runId: id, chapterId: CHAPTER,
+      pageIndices, presetId: 'waifu2x-scan-4x-n2', outDir: '/scans/denoised/' }))).folder
+    expect(await run('den-a')).toBe('/scans/denoised')
+    expect(await run('den-b')).toBe('/scans/denoised/run-2')
+    expect(await run('den-c', [1])).toBe('/scans/denoised/run-3')
+    const [newest] = await settle(backend.denoiseHistory({ chapterId: CHAPTER }))
+    // Deleting the run in run-3 removes its file and the emptied folder: the next run may use it.
+    await settle(backend.deleteDenoiseRun({ chapterId: CHAPTER, run: newest.created }))
+    expect(await run('den-d')).toBe('/scans/denoised/run-3')
+  })
+
   it('serves a compare image only for a page and run it holds', async () => {
     const backend = createMockBackend({ timing: { method: 0, analysis: 0, region: 0, pageTail: 0 } })
     await settle(backend.downloadModelGroup({ id: 'pageDenoise' }))

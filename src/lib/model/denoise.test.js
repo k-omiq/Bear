@@ -4,7 +4,9 @@ import TABLE from './denoise-presets.json'
 import {
   DENOISE_PRESETS,
   PRESET_TEXT,
+  RETIRED_PRESET_REPLACEMENT,
   RETIRED_PRESET_TEXT,
+  currentPresetId,
   benchmarkSeconds,
   chapterEstimate,
   defaultOutDir,
@@ -46,6 +48,16 @@ describe('the denoise presets', () => {
       expect(PRESET_TEXT, id).not.toHaveProperty(id)
       expect(t(text.nameKey), id).not.toMatch(/^\[/)
     }
+  })
+
+  it('map every retired preset to a shipped one, as the Rust table does', () => {
+    expect(Object.keys(RETIRED_PRESET_REPLACEMENT).sort()).toEqual(Object.keys(RETIRED_PRESET_TEXT).sort())
+    for (const [old, next] of Object.entries(RETIRED_PRESET_REPLACEMENT)) {
+      expect(PRESET_TEXT, old).toHaveProperty(next)
+      expect(currentPresetId(old)).toBe(next)
+    }
+    expect(currentPresetId('realcugan-2x-auto')).toBe('realcugan-2x-auto')
+    for (const unknown of ['custom', 'Mangajanai-2x', '', null, 2]) expect(currentPresetId(unknown)).toBe('')
   })
 
   it('carry a cloud time that is measured or null, never a guess', () => {

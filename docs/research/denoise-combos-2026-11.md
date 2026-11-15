@@ -145,6 +145,19 @@ Open points:
   IllustrationJaNai, grey and logo pages ran the B&W model, the logo kept its colour (saturation 119.6
   against 120), and 1x and 2x sizes were right.
 
+Fix round after review (2026-11-15):
+
+- The worker's capability answer keeps `presets` and `engines` to what builds up to 1.0.0-beta.20 know
+  (their check refuses any other name and any added field). The new presets and engines are found in the
+  per-model `models` list, which old builds accept, and this build decides support per model.
+- A page is refused before upload only when it is too large for every route; the worker checks the route
+  the page runs.
+- A colour page is told by chroma against the page's paper, so a B&W page on yellowed paper stays B&W;
+  transparent pixels are not counted.
+- A retired preset id in a settings file reads as its replacement; an unknown one is dropped instead of
+  refusing the whole settings write.
+- One denoise per chapter at a time. An optional model (MoESR) never fails the seed.
+
 ## How to rerun
 
 Harness: `spikes/denoise/combo-bench/` (`bench_app.py`, `combos.py`, `sheet.py`). Pages and outputs live on a

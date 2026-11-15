@@ -333,6 +333,9 @@ FEATURES = (FEATURE_OUTPUT_SCALE, FEATURE_COLOR_ROUTE)
 # the gray_only merge; a colour cover or spread is far over it.
 COLOUR_CHROMA = 24 / 255
 COLOUR_SHARE = 0.08
+# The most chroma a page's paper may have and still be paper: aged newsprint and
+# warm scans, not a coloured background.
+COLOUR_PAPER_TINT = 64 / 255
 
 
 _CUGAN_2X = {"op": "sharpen", "engine": "realcugan", "scale": 2}
@@ -354,6 +357,30 @@ PRESETS: Dict[str, Dict[str, Any]] = {
     "ijanai-v3-denoise-4x": {"schema": 1, "steps": [_IJANAI_4X]},
     "waifu2x-scan-4x-n2": {"schema": 1, "steps": [
         {"op": "sharpen", "engine": "waifu2x-art-scan", "scale": 4, "level": 2}]},
+}
+
+# The presets builds up to 1.0.0-beta.20 knew. Their capability check
+# (cloud_denoise_wire.rs at that tag) refuses the whole answer when `presets` names
+# an id it does not know, or `engines` an engine it does not know, and refuses any
+# added top-level field. So `presets` lists only these, when their models are on the
+# volume, and `engines` leaves out the engines added since; an older app keeps every
+# preset it knows. A newer app reads the per-model `models` list instead
+# (`DenoiseCapabilities::supports`).
+LEGACY_PRESETS: Dict[str, Dict[str, Any]] = {
+    "waifu2x-scan-4x-n2": PRESETS["waifu2x-scan-4x-n2"],
+    "realcugan-2x-conservative": {"schema": 1, "steps": [_CUGAN_2X]},
+    "realcugan-3x-conservative": {"schema": 1, "steps": [{"op": "sharpen", "engine": "realcugan", "scale": 3}]},
+    "realcugan-3x-denoise3": {"schema": 1, "steps": [{"op": "sharpen", "engine": "realcugan", "scale": 3, "level": 3}]},
+    "mangajanai-2x": {"schema": 1, "steps": [{"op": "sharpen", "engine": "mangajanai", "scale": 2}]},
+    "mangajanai-4x": {"schema": 1, "steps": [{"op": "sharpen", "engine": "mangajanai", "scale": 4}]},
+    "digimanga-bw-4x": {"schema": 1, "steps": [{"op": "sharpen", "engine": "digimanga-bw-4x"}]},
+    "mangajpeg-hq": {"schema": 1, "steps": [{"op": "jpeg", "engine": "mangajpeg-hq"}]},
+    "mangajpeg-lq": {"schema": 1, "steps": [{"op": "jpeg", "engine": "mangajpeg-lq"}]},
+    "waifu2x-scan-n1": {"schema": 1, "steps": [{"op": "denoise", "engine": "waifu2x-art-scan", "level": 1}]},
+    "waifu2x-scan-n3": {"schema": 1, "steps": [{"op": "denoise", "engine": "waifu2x-art-scan", "level": 3}]},
+    "realcugan-4x-conservative": {"schema": 1, "steps": [{"op": "sharpen", "engine": "realcugan", "scale": 4}]},
+    "waifu2x-art-2x-n1": {"schema": 1, "steps": [{"op": "sharpen", "engine": "waifu2x-art", "scale": 2, "level": 1}]},
+    "waifu2x-art-2x-n3": {"schema": 1, "steps": [{"op": "sharpen", "engine": "waifu2x-art", "scale": 2, "level": 3}]},
 }
 
 # The steps the app's advanced chain builds a recipe from (up to MAX_STEPS of them, one
@@ -574,9 +601,14 @@ def ensure_models(root: os.PathLike | str, models: Sequence[DenoiseModel], downl
 
 def _download(url: str, directory: Path) -> Path:
     with tempfile.NamedTemporaryFile(dir=directory, delete=False) as part:
-        with urllib.request.urlopen(url, timeout=120) as response:
-            for chunk in iter(lambda: response.read(1 << 20), b""):
-                part.write(chunk)
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response:
+                for chunk in iter(lambda: response.read(1 << 20), b""):
+                    part.write(chunk)
+        except BaseException:
+            # A cut-off download (IncompleteRead, a timeout) leaves no part file on the volume.
+            Path(part.name).unlink(missing_ok=True)
+            raise
     return Path(part.name)
 
 
@@ -587,19 +619,24 @@ def _fetch(model: DenoiseModel, directory: Path, archives: Dict[str, Path]) -> P
     if model.url not in archives:
         archives[model.url] = _download(model.url, directory)
     with tempfile.NamedTemporaryFile(dir=directory, delete=False) as part:
-        if model.url.endswith((".tar.xz", ".tar.gz", ".tar")):
-            import tarfile
-            with tarfile.open(archives[model.url]) as archive:
-                member = archive.extractfile(model.archive_member)
-                if member is None:
-                    raise DenoiseError(f"{model.model_id}: {model.archive_member} is not a file", "weights_corrupt")
-                for chunk in iter(lambda: member.read(1 << 20), b""):
-                    part.write(chunk)
-        else:
-            import zipfile
-            with zipfile.ZipFile(archives[model.url]) as archive, archive.open(model.archive_member) as member:
-                for chunk in iter(lambda: member.read(1 << 20), b""):
-                    part.write(chunk)
+        try:
+            if model.url.endswith((".tar.xz", ".tar.gz", ".tar")):
+                import tarfile
+                with tarfile.open(archives[model.url]) as archive:
+                    member = archive.extractfile(model.archive_member)
+                    if member is None:
+                        raise DenoiseError(f"{model.model_id}: {model.archive_member} is not a file", "weights_corrupt")
+                    for chunk in iter(lambda: member.read(1 << 20), b""):
+                        part.write(chunk)
+            else:
+                import zipfile
+                with zipfile.ZipFile(archives[model.url]) as archive, archive.open(model.archive_member) as member:
+                    for chunk in iter(lambda: member.read(1 << 20), b""):
+                        part.write(chunk)
+        except BaseException:
+            # Not an archive (a host's HTML challenge page), no such member: no part file left.
+            Path(part.name).unlink(missing_ok=True)
+            raise
     return Path(part.name)
 
 
@@ -615,16 +652,19 @@ def _ensure_each(models: Sequence[DenoiseModel], directory: Path, download: bool
             raise DenoiseError(f"{model.model_id} is not seeded", "weights_missing")
         try:
             part_path = _fetch(model, directory, archives)
-        except OSError as exc:  # urllib's URLError and HTTPError are OSErrors
+            actual = _sha256(part_path)
+            if actual != model.sha256 or part_path.stat().st_size != model.bytes:
+                part_path.unlink(missing_ok=True)
+                raise DenoiseError(f"{model.model_id} failed verification (sha256 {actual})", "weights_corrupt")
+        except Exception as exc:
             if not model.optional:
                 raise
-            # Its host refused this container; the seed goes on without it.
-            print(f"denoise: {model.model_id} skipped, its download failed: {exc}"[:300], flush=True)
+            # An optional model never fails the seed, whatever went wrong: its host
+            # refused this container, served a challenge page instead of the archive,
+            # cut the download short, or the file is not the pinned one. Its part file
+            # is already gone; the file can be put on the volume by hand.
+            print(f"denoise: {model.model_id} skipped, its download failed: {type(exc).__name__}: {exc}"[:300], flush=True)
             continue
-        actual = _sha256(part_path)
-        if actual != model.sha256 or part_path.stat().st_size != model.bytes:
-            part_path.unlink(missing_ok=True)
-            raise DenoiseError(f"{model.model_id} failed verification (sha256 {actual})", "weights_corrupt")
         part_path.replace(target)
         paths[model.model_id] = target
         changed = True
@@ -694,14 +734,32 @@ def decode_page(png: bytes) -> Page:
 
 
 def is_colour_page(page: Page) -> bool:
-    """Whether the page goes to a recipe's colour route: at least COLOUR_SHARE of all
-    its pixels carry a chroma of COLOUR_CHROMA or more. Every pixel counts, so a small
+    """Whether the page goes to a recipe's colour route: at least COLOUR_SHARE of its
+    pixels carry a chroma of COLOUR_CHROMA or more. Every pixel counts, so a small
     coloured logo on a grey page is a small share, and a colour page with wide white
-    or black areas still has its art."""
+    or black areas still has its art.
+
+    Chroma is measured against the page's paper: a black and white page on yellowed
+    or tinted paper (240, 230, 205 has a chroma of 35) is a grey page under a tint,
+    so the paper's colour, read from the brightest quarter of the page, is first
+    balanced to neutral when it is a pale tint (at most COLOUR_PAPER_TINT). A fully
+    transparent pixel shows nothing and is not counted."""
+    import numpy as np
+
     if page.gray:
         return False
-    rgb = page.rgb
-    chroma = rgb.max(axis=0) - rgb.min(axis=0)
+    pixels = page.rgb.reshape(3, -1)
+    if page.alpha is not None:
+        seen = page.alpha.reshape(-1) > 0
+        if not seen.any():
+            return False
+        pixels = pixels[:, seen]
+    sample = pixels[:, :: max(1, pixels.shape[1] // 200_000)]
+    luma = luma_of(sample)
+    paper = np.median(sample[:, luma >= np.percentile(luma, 75)], axis=1)
+    if paper.min() >= 0.5 and paper.max() - paper.min() <= COLOUR_PAPER_TINT:
+        pixels = pixels * (paper.mean() / paper)[:, None]
+    chroma = pixels.max(axis=0) - pixels.min(axis=0)
     return float((chroma >= COLOUR_CHROMA).mean()) >= COLOUR_SHARE
 
 
@@ -1153,14 +1211,18 @@ def denoise_capabilities(root: os.PathLike | str) -> Dict[str, Any]:
     if "realcugan.up2x-latest-conservative" in seeded:
         engines["sharpen"].append("realcugan")
     engines["sharpen"] += [e for e, m in SHARPEN_SPANDREL_ENGINES.items() if m in seeded]
-    # Listed when its largest model is seeded, the one a step with no scale runs.
-    engines["sharpen"] += [e for e, by in SCALED_ENGINES.items() if by[max(by)] in seeded]
+    # SCALED_ENGINES are not listed: an older app refuses an engine it does not know
+    # (LEGACY_PRESETS). A newer app finds them in `models`.
     engines["jpeg"] += [e for e, m in JPEG_ENGINES.items() if m in seeded]
-    presets = [name for name, recipe in PRESETS.items()
-               if all(m.model_id in seeded for m in models_for(resolve_routes(recipe).all()))]
+
+    def ready(recipe: Mapping[str, Any]) -> bool:
+        return all(m.model_id in seeded for m in models_for(resolve_routes(recipe).all()))
+
+    presets = [name for name, recipe in LEGACY_PRESETS.items() if ready(recipe)]
+    current = any(ready(recipe) for recipe in PRESETS.values())
     return {
         "protocol_version": DENOISE_VERSION,
-        "available": bool(presets) or (SEAM_FILTER.model_id in seeded and any(engines.values())),
+        "available": bool(presets) or current or (SEAM_FILTER.model_id in seeded and any(engines.values())),
         "presets": presets,
         "features": list(FEATURES),
         "engines": engines,

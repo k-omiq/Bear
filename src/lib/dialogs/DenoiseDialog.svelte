@@ -53,7 +53,7 @@
     checkCloudDenoise, cloudNote, cloudOffered, currentPreset, loadDenoisePresets, offeredPresets, saveDenoiseChoice,
   } from '../state/denoise.svelte.js'
   import {
-    CHAIN_STEPS, CHAIN_STEP_TEXT, DENOISE_REFERENCE, MAX_CHAIN_STEPS, chainRecipe, chainScales, chainStepById,
+    CHAIN_STEPS, CHAIN_STEP_TEXT, DENOISE_REFERENCE, MAX_CHAIN_STEPS, MOESR_MODEL_ID, chainRecipe, chainScales, chainStepById,
     chapterEstimate, defaultOutDir, outputScalesFor, pageMegapixels, presetById, recipeAt, runScale,
   } from '../model/denoise.js'
   import { providerKeyOf } from './CloudAnalysis.svelte'
@@ -259,6 +259,11 @@
     if (code.startsWith('cloud_denoise_profile') || code.startsWith('credential_missing')) return { key: 'denoise.error.noProfile' }
     // The deployment has no denoise route or models: it was set up with Page
     // denoise off, or on Beam, which cannot run it.
+    // MoESR's host refuses the worker, so updating the setup would not fetch
+    // it: the file is added by hand.
+    if (code.startsWith('capability_unavailable: the deployment has no models') && code.includes(MOESR_MODEL_ID)) {
+      return { key: 'denoise.error.moesrMissing' }
+    }
     if (code.startsWith('capability_unavailable: gateway denoise is not configured') ||
         (!customOn && code.startsWith('capability_unavailable: the deployment has no models'))) return { key: 'denoise.error.notSetUp' }
     // The deployment has page denoise but was set up before it could keep a
@@ -267,6 +272,7 @@
     // Set up before colour routing, or without a model this recipe needs.
     if (code.startsWith('capability_unavailable: the deployment cannot route colour pages') ||
         (customOn && code.startsWith('capability_unavailable: the deployment has no models'))) return { key: 'denoise.error.cloudNeedsUpdate' }
+    if (code.includes('denoise_chapter_busy')) return { key: 'denoise.error.chapterBusy' }
     if (code.startsWith('denoise_models_missing')) return { key: 'denoise.error.modelMissing' }
     if (code.startsWith('denoise_runtime_unavailable')) return { key: 'denoise.error.runtimeMissing' }
     if (code.includes('out_dir')) return { key: 'denoise.error.outDir' }

@@ -2273,6 +2273,8 @@ export const fr = {
       notSetUp: 'Ce GPU cloud n’est pas configuré pour le débruitage des pages. Dans Réglages > Cloud, configurez-le avec Modal et activez Débruitage des pages, puis réessayez.',
       cloudOutdated: 'Ce GPU cloud a été configuré avant les tailles de sortie agrandies. Mettez à jour la configuration dans Réglages > Cloud, ou choisissez Même taille, puis réessayez.',
       cloudNeedsUpdate: 'Ce GPU cloud a été configuré avant que cette recette puisse tourner. Mettez à jour la configuration dans Réglages > Cloud, puis réessayez.',
+      moesrMissing: 'Le fichier du modèle MoESR n’est pas sur ce GPU cloud. Son site bloque les téléchargements automatiques, donc mettre à jour la configuration ne l’ajoute pas. Le fichier s’ajoute à la main avec spikes/denoise/put-moesr.sh dans le code source de Manga Cleaner. En attendant, utilisez une recette sans MoESR.',
+      chapterBusy: 'Ce chapitre est déjà en cours de débruitage. Attendez la fin de ce traitement ou arrêtez-le dans Tâches, puis réessayez.',
       openCloud: 'Ouvrir les réglages Cloud',
       modelMissing: 'Le modèle local est manquant ou a échoué à sa vérification. Revenez en arrière pour le retélécharger.',
       runtimeMissing: 'ONNX Runtime, sur lequel ce modèle s’exécute, n’est pas installé. Téléchargez-le dans Réglages > Modèles.',

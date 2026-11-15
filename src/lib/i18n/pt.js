@@ -2273,6 +2273,8 @@ export const pt = {
       notSetUp: 'Esta GPU na nuvem não está configurada para remoção de ruído. Em Configurações > Nuvem, configure com o Modal e ligue Remoção de ruído, depois tente de novo.',
       cloudOutdated: 'Esta GPU na nuvem foi configurada antes dos tamanhos de saída maiores. Atualize a configuração em Configurações > Nuvem, ou escolha Mesmo tamanho, e tente de novo.',
       cloudNeedsUpdate: 'Esta GPU na nuvem foi configurada antes de esta receita poder ser executada. Atualize a configuração em Configurações > Nuvem e tente de novo.',
+      moesrMissing: 'O arquivo do modelo MoESR não está nesta GPU na nuvem. O site dele bloqueia downloads automáticos, então atualizar a configuração não o adiciona. O arquivo é adicionado à mão com spikes/denoise/put-moesr.sh no código-fonte do Manga Cleaner. Até lá, use uma receita sem MoESR.',
+      chapterBusy: 'Este capítulo já está passando por Remover ruído. Espere essa execução terminar ou pare-a em Tarefas e tente de novo.',
       openCloud: 'Abrir configurações da Nuvem',
       modelMissing: 'O modelo local está faltando ou falhou na verificação. Volte para baixá-lo de novo.',
       runtimeMissing: 'O ONNX Runtime em que este modelo roda não está instalado. Baixe-o em Configurações > Modelos.',

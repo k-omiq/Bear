@@ -54,7 +54,7 @@ import {
 } from '../model/windows.js'
 import { hexOnCommit } from '../ui/color.js'
 
-import { localSeconds, normalizeDenoiseTarget } from '../model/denoise.js'
+import { currentPresetId, localSeconds, normalizeDenoiseTarget } from '../model/denoise.js'
 import { FINISHINGS, FINISHING_ALIASES, FLUX3_GENERATION_ALIASES, FLUX3_GENERATION_PARTS, LAMA_HOLES, LAMA_SHARINGS, WORK_LONG_SIDES } from '../model/model-names.js'
 import { ANALYSIS_TARGETS, CLOUD_STAGES, DEFAULT_DETECTOR, DEFAULT_DETECTOR_MODELS, DETECTION_MODES, DETECTION_MODE_IDS, DETECTOR_MODEL_IDS, LANGUAGES, defaultAnalysisTargets, detectionModeOf, detectsOnCloud, migrateDetectorChoice, normalizeAnalysisTargets, unifyAnalysisTargets } from '../model/pipelines.js'
 
@@ -424,7 +424,8 @@ export function sanitizeSession(raw) {
     // As strict as the native setting: anything unreadable is off, so a
     // damaged record never sends a page anywhere.
     denoiseTarget: normalizeDenoiseTarget(record.denoiseTarget),
-    denoisePreset: typeof record.denoisePreset === 'string' ? record.denoisePreset : base.denoisePreset,
+    // A preset an earlier build saved reads as the one that replaced it.
+    denoisePreset: typeof record.denoisePreset === 'string' ? currentPresetId(record.denoisePreset) : base.denoisePreset,
     denoiseLocalSecondsPerPage: localSeconds(record.denoiseLocalSecondsPerPage),
     // A retired `ctd-rtdetr-ocr` row meant "rescue Japanese with OCR". It
     // reads back as the plain detector (above) with the rescue on, so the
@@ -1467,7 +1468,7 @@ export function adoptBackendSettings(settings) {
   if (record.betaTools !== undefined) setBetaTools(record.betaTools === true)
   if (record.cleanTarget !== undefined) setCleanTarget(cleanTargetOf(record.cleanTarget))
   if (record.denoiseTarget !== undefined) setDenoiseTarget(normalizeDenoiseTarget(record.denoiseTarget))
-  if (typeof record.denoisePreset === 'string') setDenoisePreset(record.denoisePreset)
+  if (typeof record.denoisePreset === 'string') setDenoisePreset(currentPresetId(record.denoisePreset))
   if (localSeconds(record.denoiseLocalSecondsPerPage) !== null) setDenoiseLocalSeconds(record.denoiseLocalSecondsPerPage)
   if (record.shortcuts !== undefined) {
     setShortcutOverrides(record.shortcuts)
@@ -1518,7 +1519,8 @@ export function backendSettingsPatch() {
     // does not know as it came, so it travels with the rest.
     betaTools: session.betaTools,
     denoiseTarget: session.denoiseTarget,
-    ...(session.denoisePreset ? { denoisePreset: session.denoisePreset } : {}),
+    // Only an id the backend knows: one it refuses would refuse the whole patch.
+    ...(currentPresetId(session.denoisePreset) ? { denoisePreset: currentPresetId(session.denoisePreset) } : {}),
     // Left out until measured: absent is "not measured", and a null would
     // be a value the backend has to decide about.
     ...(session.denoiseLocalSecondsPerPage !== null ? { denoiseLocalSecondsPerPage: session.denoiseLocalSecondsPerPage } : {}),
