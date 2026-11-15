@@ -167,6 +167,10 @@ class FakeModalCloud(FakeCloudBase):
         self.volume_files: Dict[str, set] = {}
         # Contents of the files read_file serves (the ready markers), by volume and path.
         self.volume_contents: Dict[str, Dict[str, bytes]] = {}
+        # Sizes a listing reports, by volume and path; a file without one lists as 0 bytes.
+        self.volume_sizes: Dict[str, Dict[str, int]] = {}
+        # Set to make the next batch upload fail when it closes.
+        self.upload_error: Optional[BaseException] = None
         self.volume_created: Dict[str, float] = {}
         # The settings of the app whose seed job runs, so a finished job leaves its
         # ready markers on that app's volume as the real seed does.
@@ -377,7 +381,28 @@ def build_fake_modal(cloud: FakeModalCloud) -> Any:
                     entries.add("/".join(([prefix] if prefix else []) + parts[:1]))
             if prefix and not entries:
                 raise errors.NotFoundError(f"{path} not found")
-            return [SimpleNamespace(path=entry, type=1, mtime=0, size=0) for entry in sorted(entries)]
+            sizes = cloud.volume_sizes.get(self.name, {})
+            return [SimpleNamespace(path=entry, type=1, mtime=0, size=sizes.get(entry, 0)) for entry in sorted(entries)]
+
+        @contextlib.contextmanager
+        def batch_upload(self, force: bool = False) -> Any:
+            """Files reach the volume when the block ends without an error, as in the SDK."""
+            cloud.record("Volume.batch_upload", name=self.name, force=force)
+            if self.name not in cloud.volumes:
+                raise errors.NotFoundError(f"Volume {self.name} not found")
+            staged: Dict[str, int] = {}
+
+            def put_file(local_file: Any, remote_path: str, mode: Optional[int] = None) -> None:
+                with open(local_file, "rb") as handle:
+                    staged[remote_path.strip("/")] = len(handle.read())
+
+            yield SimpleNamespace(put_file=put_file)
+            if cloud.upload_error is not None:
+                error, cloud.upload_error = cloud.upload_error, None
+                raise error
+            for path, size in staged.items():
+                cloud.volume_files.setdefault(self.name, set()).add(path)
+                cloud.volume_sizes.setdefault(self.name, {})[path] = size
 
         def read_file(self, path: str) -> Any:
             cloud.record("Volume.read_file", name=self.name, path=path)

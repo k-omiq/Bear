@@ -747,9 +747,19 @@ checks were unit tests, DOM tests and the Vite mock.
   attempt in flight across a restart on a moved page was not tried.
 - **Import names changed.** A file whose stem matches another page's gets a free name (`001.jpg` beside `001.webp`
   becomes `001.jpg` and `001-2.png`), also for new chapters.
-- **Denoise.** The live workers are not redeployed, so the new presets are hidden on every profile until they are.
-  MoESR's host refuses Modal, so its file is added per profile by hand with `spikes/denoise/put-moesr.sh`; its
-  licence is not stated, and IllustrationJaNai is CC BY-NC-SA 4.0. An app at 1.0.0-beta.20 or older on a new worker
+- **Denoise.** The worker was redeployed by hand on 2026-11-15 on mc-acb01f (yarafiq1971) and mc-j4avmb
+  (aizendazai46), code only, and their seeds ran. mc-bxdvv8 (k-omiq) was not: its token in `~/.modal.toml` is
+  dead, so it needs Update in the app. No denoise page was run on the new workers, and the gateway's
+  `code_digest` was not read back. MoESR's licence is not stated, and IllustrationJaNai is CC BY-NC-SA 4.0.
+- **MoESR sent from this computer.** MoESR's host refuses Modal, so the setup helper now downloads the file
+  here and uploads it to the volume (`provisioner/local_models.py`, `ModalDriver._send_local_models`), after the
+  seed, or in the deploy step when the weights step is skipped. Run for real against mc-acb01f with the build
+  environment's Python: sent in 11 s, and a second run found it present in 1 s. Not done: the frozen helper
+  inside the app was not run through a setup or an update; mc-j4avmb and mc-bxdvv8 do not have the file yet,
+  and a profile whose worker code is current shows no Update, so nothing sends it there until one is run;
+  a failed send is only noted in the journal (`provider_state.local_models`), the app shows nothing; the
+  10 minute limit was not tried on a slow link; whether the gateway lists the preset once the file is there
+  was not checked against a live worker. An app at 1.0.0-beta.20 or older on a new worker
   sees only the old presets whose files are on the volume, and a fresh setup seeds only `waifu2x-scan-4x-n2`. A
   custom recipe has no time estimate before Review cost. The colour test now measures chroma against the page's
   paper colour; it was tried on synthetic pages and one GPU smoke run, not on a yellowed raw scan. Only waifu2x runs
@@ -765,8 +775,10 @@ checks were unit tests, DOM tests and the Vite mock.
   exists only in versions after 1.0.0-beta.20, so that version shows its update badge after a rollback. The release
   list is read from GitHub without a login, 60 requests an hour. NSIS downgrade on Windows and the AppImage path were
   read in code, not run.
-- **Provisioner tests.** Seven tests in `provisioner/test_subprocess_entrypoint.py` fail on this Mac with
-  `ERR_EXECUTION_FAILED`, the same way on `main` at bf36ec4. The cause was not looked at.
+- **Provisioner tests.** Seven tests in `provisioner/test_subprocess_entrypoint.py` fail with
+  `ERR_EXECUTION_FAILED` under the system `python3`, the same way on `main` at bf36ec4. All 204 pass with
+  `target/cloud-build-venv/bin/python -m unittest discover -s provisioner` (2026-11-15), the command
+  `docs/cloud-provisioning.md` names. The likely cause is the system Python lacking the SDKs; not confirmed.
 
 **Page denoise combos (2026-11-14): what is still open.** Bench and plan in
 `docs/research/denoise-combos-2026-11.md`. The plan was built on 2026-11-15; see the block above.

@@ -2,7 +2,9 @@
 # Put the MoESR v2 descreen model on an installation's weights volume by hand.
 #
 # Its host (bucket.yor.ovh) refuses Modal's addresses, so the seed skips it and the
-# "MoESR descreen" preset is not advertised until the file is on the volume. This copies
+# "MoESR descreen" preset is not advertised until the file is on the volume. The setup
+# helper sends it itself during setup and update (provisioner/local_models.py); this
+# script does the same by hand for an installation that is not being updated. It copies
 # a file you downloaded on this computer, after checking it is the pinned one
 # (deploy/cloud/common/denoise.py, MOESR). Nothing is redeployed; the next denoise
 # capability check lists the preset.

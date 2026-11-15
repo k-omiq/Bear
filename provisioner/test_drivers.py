@@ -266,6 +266,19 @@ class Harness:
         self.sdk_loader = self.cloud.sdk
         self.progress_lines: List[str] = []
         self.sign_in_seconds = 40.0
+        # The models the helper fetched on this computer, and an error to raise instead.
+        self.model_fetches: List[str] = []
+        self.model_fetch_error: Optional[BaseException] = None
+
+    def fetch_model(self, model: Any, directory: str) -> str:
+        """Stands in for the download: a file of the pinned size, no network."""
+        self.model_fetches.append(model.model_id)
+        if self.model_fetch_error is not None:
+            raise self.model_fetch_error
+        path = Path(directory) / model.file_name
+        with path.open("wb") as handle:
+            handle.truncate(model.bytes)
+        return str(path)
 
     def driver(self) -> Any:
         if self.provider == "modal":
@@ -277,6 +290,7 @@ class Harness:
                 clock=self.clock,
                 sign_in_seconds=self.sign_in_seconds,
                 wall_clock=self.clock,
+                model_fetcher=self.fetch_model,
             )
         return BeamDriver(
             sdk_loader=self.sdk_loader,
@@ -1049,6 +1063,72 @@ class ModalDriverTest(ProviderCases, unittest.TestCase):
         self.assertTrue(response["success"], response)
         self.assertTrue(response["data"]["denoise"])
         self.assertEqual(self.seed_starts(), 2)
+
+    # ---------- denoise models only this computer can fetch ----------
+
+    MOESR_FILE = "denoise/umzi--4x_dwtp_ds_moesr_v2.pth"
+    MOESR_ID = "umzi.ds-moesr-v2.4x"
+
+    def local_models_note(self) -> Optional[str]:
+        return self.h.journal().provider_state.get("local_models")
+
+    def test_setup_with_page_denoise_sends_the_model_modal_cannot_fetch(self) -> None:
+        from deploy.cloud.common.denoise import MOESR
+        self.assertTrue(self.h.apply(options={"denoise": True})["success"])
+        self.assertEqual(self.h.model_fetches, [self.MOESR_ID])
+        volume = "mc-ab12cd-weights"
+        self.assertIn(self.MOESR_FILE, self.h.cloud.volume_files[volume])
+        self.assertEqual(self.h.cloud.volume_sizes[volume][self.MOESR_FILE], MOESR.bytes)
+        self.assertEqual(self.local_models_note(), f"{self.MOESR_ID}: sent")
+        order = [call for call, _ in self.h.cloud.calls if call in ("Function.spawn", "Volume.batch_upload")]
+        self.assertEqual(order, ["Function.spawn", "Volume.batch_upload"],
+                         "the seed runs first; the helper sends only what it left out")
+
+        # It is on the volume now: a later run lists it and downloads nothing.
+        self.assertTrue(self.h.resume()["success"])
+        self.assertEqual(self.h.model_fetches, [self.MOESR_ID])
+        self.assertEqual(self.h.cloud.count("Volume.batch_upload"), 1)
+        self.assertEqual(self.local_models_note(), f"{self.MOESR_ID}: present")
+
+    def test_setup_without_page_denoise_fetches_no_model(self) -> None:
+        self.assertTrue(self.h.apply()["success"])
+        self.assertEqual((self.h.model_fetches, self.h.cloud.count("Volume.batch_upload")), ([], 0))
+        self.assertIsNone(self.local_models_note())
+
+    def test_a_model_that_cannot_be_sent_never_fails_the_setup(self) -> None:
+        # The host refuses this computer too.
+        self.h.model_fetch_error = OSError("HTTP Error 403: Forbidden")
+        response = self.h.apply(options={"denoise": True})
+        self.assertTrue(response["success"], response)
+        self.assertEqual(self.h.cloud.count("Volume.batch_upload"), 0)
+        self.assertEqual(self.local_models_note(), f"{self.MOESR_ID}: not fetched: OSError: HTTP Error 403: Forbidden")
+
+        # The upload fails: still a finished setup, and nothing half written.
+        self.h.model_fetch_error = None
+        self.h.cloud.upload_error = RuntimeError("connection reset")
+        self.assertTrue(self.h.resume()["success"])
+        self.assertNotIn(self.MOESR_FILE, self.h.cloud.volume_files.get("mc-ab12cd-weights", set()))
+        self.assertEqual(self.local_models_note(), f"{self.MOESR_ID}: not uploaded: RuntimeError: connection reset")
+
+        # A run with the same plan skips the weights step and still sends the model.
+        self.assertTrue(self.h.resume()["success"])
+        self.assertIn(self.MOESR_FILE, self.h.cloud.volume_files["mc-ab12cd-weights"])
+        self.assertEqual(self.local_models_note(), f"{self.MOESR_ID}: sent")
+        self.assertEqual(self.seed_starts(), 1, "no new seed for it")
+
+    def test_a_file_of_another_size_on_the_volume_is_replaced(self) -> None:
+        self.assertTrue(self.h.apply(options={"denoise": True})["success"])
+        self.h.cloud.volume_sizes["mc-ab12cd-weights"][self.MOESR_FILE] = 12  # a cut-off upload
+        self.assertTrue(self.h.resume()["success"])
+        self.assertEqual(self.h.model_fetches, [self.MOESR_ID, self.MOESR_ID])
+        self.assertEqual(self.local_models_note(), f"{self.MOESR_ID}: sent")
+
+    def test_no_model_is_sent_when_too_little_time_is_left(self) -> None:
+        self.assertTrue(self.h.apply(options={"denoise": True})["success"])
+        self.h.cloud.volume_files["mc-ab12cd-weights"].discard(self.MOESR_FILE)
+        with mock.patch("provisioner.modal_driver.LOCAL_MODELS_MIN_SECONDS", 10 ** 6):
+            self.assertTrue(self.h.resume()["success"])
+        self.assertEqual(self.h.model_fetches, [self.MOESR_ID], "only the first run fetched it")
 
     def test_resume_with_an_approved_plan_moves_the_gateway_to_another_routing_region(self) -> None:
         self.assertTrue(self.h.apply()["success"])

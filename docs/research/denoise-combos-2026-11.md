@@ -138,8 +138,10 @@ gets the new presets only after its worker is redeployed.
 
 Open points:
 
-- MoESR's host refuses Modal (HTTP 403). The file is optional on the volume: upload it per profile with
-  `spikes/denoise/put-moesr.sh <profile> <volume> <pth>`. Until then the worker does not list the preset.
+- MoESR's host refuses Modal (HTTP 403). The file is optional on the volume, and until it is there the worker
+  does not list the preset. Since 2026-11-15 the setup helper downloads it on the user's computer and uploads
+  it during setup and update (`provisioner/local_models.py`). By hand:
+  `spikes/denoise/put-moesr.sh <profile> <volume> <pth>`.
 - MoESR states no licence. IllustrationJaNai is CC BY-NC-SA 4.0. The app is non-commercial.
 - Smoke test on a real GPU (yarafiq1971, scratch app `mc-denoise-probe-1114`, deleted): colour pages ran
   IllustrationJaNai, grey and logo pages ran the B&W model, the logo kept its colour (saturation 119.6

@@ -67,8 +67,9 @@ and white presets send colour pages to the colour model in the same run; a grey 
 stays black and white and keeps the mark's colour. **Advanced** builds a recipe of up to three steps, on the cloud
 GPU only. A new run never replaces an earlier one: the compare window lists every run, shows one page with a wipe
 between before and after at Fit, 1:1 or 2:1, picks the run in use, and deletes a run after a question. Only waifu2x
-runs on this computer; the other models need the cloud worker, and MoESR needs its file added to the worker by hand
-(`spikes/denoise/put-moesr.sh`).
+runs on this computer; the other models need the cloud worker. MoESR's host refuses the cloud provider, so cloud
+setup and every later update download its file on this computer, check it and send it to the worker's storage. When
+that fails, setup still finishes and the MoESR preset stays hidden until the next update.
 
 ## The editor
 

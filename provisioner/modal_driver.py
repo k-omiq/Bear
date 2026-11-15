@@ -23,6 +23,7 @@ import importlib
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -49,6 +50,7 @@ from provisioner.driver_base import (
 )
 from provisioner.endpoint import check_endpoint, endpoint_from_base, runtime_credential
 from provisioner.journal import STAGE_CREDENTIAL_CREATED, STAGE_DEPLOYING
+from provisioner.local_models import fetch_model
 from provisioner.protocol import (
     ERR_ACTIONABLE_PERMISSION,
     ERR_EXECUTION_FAILED,
@@ -85,6 +87,12 @@ APP_MODULE = "deploy.cloud.modal.app"
 # Time kept back while waiting for the weights, for the token, endpoint and health steps.
 WEIGHTS_RESERVE_SECONDS = 240.0
 POLL_SECONDS = 5.0
+# The models this computer sends to the volume itself (`_send_local_models`): at most
+# this long for the download and the upload together, and not started with less than
+# the minimum left. A slow connection gives up here; the next setup run tries again.
+LOCAL_MODELS_SECONDS = 600.0
+LOCAL_MODELS_MIN_SECONDS = 60.0
+LOCAL_MODELS_STATE_KEY = "local_models"
 # The Modal client keeps retrying a server it cannot reach for about a minute, and the
 # desktop gives inspect and plan 60 s; sign-in gets less so the answer is ours.
 SIGN_IN_SECONDS = 40.0
@@ -252,7 +260,9 @@ class ModalDriver(BaseProviderDriver):
         clock: Callable[[], float] = time.monotonic,
         sign_in_seconds: float = SIGN_IN_SECONDS,
         wall_clock: Callable[[], float] = time.time,
+        model_fetcher: Callable[[Any, str], str] = fetch_model,
     ) -> None:
+        self._model_fetcher = model_fetcher
         self._sdk_loader = sdk_loader
         self._app_loader = app_loader
         self._http = http
@@ -655,6 +665,11 @@ class ModalDriver(BaseProviderDriver):
             self._lookup(session, s, name)
         if s.render:
             self._lookup(session, s, WORKER_CLASS, cls=True)
+        # A run that skips the weights step (an update with the same plan) still tops
+        # up the models only this computer can fetch. Otherwise that step does it,
+        # after the seed.
+        if ctx.journal.step_done("weights"):
+            self._send_local_models(session, ctx, s)
 
     def _start_seed(self, session: ModalSession, ctx: StepContext, s: ModalSettings, store: Any) -> Any:
         seed = self._lookup(session, s, SEED_FUNCTION)
@@ -671,7 +686,82 @@ class ModalDriver(BaseProviderDriver):
     def _step_weights(self, session: ModalSession, ctx: StepContext, s: ModalSettings) -> None:
         store = session.sdk.Dict.from_name(s.dict_name, environment_name=self._env(s), client=session.client)
         self._wait_for_weights(session, ctx, s, store)
+        self._send_local_models(session, ctx, s)
         self._record_options(store, s)
+
+    def _send_local_models(self, session: ModalSession, ctx: StepContext, s: ModalSettings) -> None:
+        """Put on the volume the denoise models whose host refuses Modal. Best effort.
+
+        The seed skips such a model (`DenoiseModel.optional`) and the presets that need
+        it are not advertised. This computer can reach the host: it downloads the file,
+        checks it is the pinned one and uploads it. A model already on the volume at
+        the pinned size is left alone, so a later run costs one listing. Nothing here
+        fails the setup: the installation works without these models, and the outcome
+        is noted in the journal for whoever asks why a preset is missing.
+        """
+        if not s.denoise:
+            return
+        from deploy.cloud.common.denoise import DENOISE_DIR_NAME, preset_models
+
+        wanted = [model for model in preset_models() if model.optional]
+        budget = min(LOCAL_MODELS_SECONDS, ctx.deadline.remaining() - WEIGHTS_RESERVE_SECONDS)
+        if not wanted or budget < LOCAL_MODELS_MIN_SECONDS:
+            return
+        outcome: Dict[str, str] = {}
+
+        def send() -> None:
+            volume = session.sdk.Volume.from_name(s.volume_name, environment_name=self._env(s), client=session.client)
+            try:
+                sizes = {str(entry.path).strip("/"): entry.size for entry in volume.listdir(DENOISE_DIR_NAME)}
+            except Exception:
+                sizes = {}  # no denoise directory yet, or a listing that failed: send
+            missing = []
+            for model in wanted:
+                if sizes.get(f"{DENOISE_DIR_NAME}/{model.file_name}") == model.bytes:
+                    outcome[model.model_id] = "present"
+                else:
+                    missing.append(model)
+            if not missing:
+                return
+            fetched = []
+            for model in missing:
+                try:
+                    fetched.append((model, self._model_fetcher(model, workdir)))
+                except Exception as exc:
+                    outcome[model.model_id] = f"not fetched: {type(exc).__name__}: {exc}"
+            if not fetched:
+                return
+            try:
+                with volume.batch_upload(force=True) as batch:
+                    for model, path in fetched:
+                        batch.put_file(path, f"/{DENOISE_DIR_NAME}/{model.file_name}")
+            except Exception as exc:
+                for model, _ in fetched:
+                    outcome[model.model_id] = f"not uploaded: {type(exc).__name__}: {exc}"
+                return
+            for model, _ in fetched:
+                outcome[model.model_id] = "sent"
+
+        # The folder is made and removed here, not on the worker thread: a send that
+        # runs over is abandoned, and it must not leave the download behind.
+        workdir = tempfile.mkdtemp(prefix="mc-models-")
+        failure = ""
+        try:
+            call_within(send, budget)
+        except _SignInTimeout:
+            failure = f"not sent within {int(budget)} s"
+        except Exception as exc:
+            failure = f"not sent: {type(exc).__name__}: {exc}"
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+        # A copy: an abandoned send may still write to `outcome`.
+        states = dict(outcome)
+        for model in wanted:
+            states.setdefault(model.model_id, failure or "not sent")
+        note = "; ".join(f"{model_id}: {state}" for model_id, state in sorted(states.items()))
+        note = "".join(c if 32 <= ord(c) != 127 else " " for c in redact_string(note))[:1000]
+        with contextlib.suppress(Exception):
+            ctx.journal.set_state(**{LOCAL_MODELS_STATE_KEY: note or None})
 
     def _record_options(self, store: Any, s: ModalSettings) -> None:
         """Note the choices beside the job state, for discovery on another computer. Best effort."""
