@@ -75,7 +75,7 @@ pub const FLOOR: &str = "1.0.0-beta.3";
 /// A version after the last row reads this build's
 /// [`cleaner_core::project::FORMAT_VERSION`]. When that number moves after a
 /// release that read the old one, that release is added here (a test holds
-/// this through [`REVIEWED_FORMAT`]). No release read 6: 6 and 7 both arrive
+/// this through `REVIEWED_FORMAT`). No release read 6: 6 and 7 both arrive
 /// with the release after beta.20.
 const READ_LIMITS: &[(&str, u32)] = &[("1.0.0-beta.2", 2), ("1.0.0-beta.20", 5)];
 
