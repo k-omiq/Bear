@@ -312,7 +312,10 @@ fn plan(job: &Job, choices: &Choices) -> Result<Planned, String> {
     let mut result = ExportResult::with_status("planned", None, Some(dir.display().to_string()));
     let checked = match container {
         Container::Stitched { target, .. } => plan_strip(job, target, choices.tone, &mut result),
-        _ => positions.iter().try_for_each(|&position| plan_output(job, container, position, choices, &mut result)),
+        _ => {
+            let stems = page_stems(job);
+            positions.iter().try_for_each(|&position| plan_output(job, container, position, &stems[position], choices, &mut result))
+        }
     };
     if let Err(stop) = checked {
         let (key, detail) = match stop {
@@ -328,9 +331,9 @@ fn plan(job: &Job, choices: &Choices) -> Result<Planned, String> {
     let mut output_names: Vec<(usize, String)> =
         result.outputs.iter().map(|output| (output.page, output.filename.clone())).collect();
     if matches!(container, Container::Pages { masks: MaskFiles::Beside, .. }) {
-        output_names.extend(positions.iter().filter_map(|&position| {
-            job.project.sources.get(order[position]).map(|source| (position, mask_filename(source)))
-        }));
+        let masks: Vec<(usize, String)> =
+            result.outputs.iter().map(|output| (output.page, mask_filename(&output.filename))).collect();
+        output_names.extend(masks);
     }
     for (page, filename) in output_names {
         if !names.insert(filename.to_lowercase()) {
@@ -379,6 +382,7 @@ fn plan_output(
     job: &Job,
     container: Container,
     position: usize,
+    stem: &str,
     choices: &Choices,
     result: &mut ExportResult,
 ) -> Result<(), Stop> {
@@ -403,7 +407,7 @@ fn plan_output(
     };
     result.declared.extend(declarations(position, &declared));
     let ext = if format == "JPEG" { "jpg".to_owned() } else { format.to_lowercase() };
-    result.outputs.push(PlannedOutput { page: position, filename: output_filename(source, &ext), format: format.to_owned() });
+    result.outputs.push(PlannedOutput { page: position, filename: format!("{stem}.{ext}"), format: format.to_owned() });
     Ok(())
 }
 
@@ -524,7 +528,7 @@ fn write(job: &Job, plan: &Plan, choices: &Choices, stage: &Path) -> Result<(), 
                     let orientation = cleaner_core::image::orientation::from_bytes(&bytes);
                     let (width, height) = orientation.size(source.w, source.h);
                     let oriented: Vec<Patch> = patches.iter().map(|p| orientation.patch(p, source.w, source.h)).collect();
-                    write_mask_file(&stage.join(mask_filename(source)), &oriented, width, height)?;
+                    write_mask_file(&stage.join(mask_filename(&output.filename)), &oriented, width, height)?;
                 }
             }
             Ok(())
@@ -908,14 +912,39 @@ fn chapter_stem(job: &Job) -> String {
     job.path().file_stem().and_then(|s| s.to_str()).unwrap_or("chapter").to_owned()
 }
 
-fn output_filename(source: &ProjectSource, extension: &str) -> String {
-    format!("{}.{extension}", source_stem(source))
+/// What each page's file is called, before its extension, per position in
+/// `strip.order`, for every export of the chapter whatever pages it covers.
+///
+/// **The source file's own stem while those stems already read in the
+/// chapter's order**: a chapter as it was imported keeps the names it has
+/// always exported under. Once the order and the names part (a page moved
+/// on the Pages screen, a page added before another or put back at the end,
+/// or two pages sharing a stem, as `001.jpg` beside `001.png` do), every page
+/// is named by its position instead, `001`, `002` and on, padded to the same
+/// width, so a reader that sorts by name shows the chapter's own order and no
+/// two pages want one name.
+fn page_stems(job: &Job) -> Vec<String> {
+    let order = &job.project.strip.order;
+    let stems: Vec<String> = order
+        .iter()
+        .map(|&source| job.project.sources.get(source).map_or("page", source_stem).to_owned())
+        .collect();
+    let reads_in_order = stems.windows(2).all(|pair| {
+        pair[0].to_lowercase() != pair[1].to_lowercase()
+            && cleaner_core::ingest::natural_cmp(&pair[0], &pair[1]) == std::cmp::Ordering::Less
+    });
+    if reads_in_order {
+        return stems;
+    }
+    let width = order.len().to_string().len().max(3);
+    (1..=order.len()).map(|number| format!("{number:0width$}")).collect()
 }
 
 /// `001_mask.png` beside `001.png`: the mask file is always a PNG, whatever
 /// the image is, because it is an 8-bit grayscale mask and not a page.
-fn mask_filename(source: &ProjectSource) -> String {
-    format!("{}_mask.png", source_stem(source))
+fn mask_filename(page_file: &str) -> String {
+    let stem = Path::new(page_file).file_stem().and_then(|s| s.to_str()).unwrap_or("page");
+    format!("{stem}_mask.png")
 }
 
 fn source_stem(source: &ProjectSource) -> &str {
@@ -1372,16 +1401,91 @@ mod tests {
 
     #[test]
     fn colliding_output_names_refuse_before_publishing_either_page() {
+        // Names that read in order can still meet: page 2's own file is page
+        // 1's mask file.
         let scratch = Scratch::new("collision-plan");
+        let mut job = a_strip_job(&scratch, StripMode::Single);
+        let old = job.source_path(1).unwrap();
+        job.project.sources[1].rel_path.set_file_name("000_mask.png");
+        std::fs::copy(old, job.source_path(1).unwrap()).unwrap();
+        let out = scratch.join("export");
+        let result = export_open_job(&job, "PNG", out.to_str().unwrap(), "separate-layer", "per-page").unwrap();
+        assert_eq!(result.status, "refused");
+        assert!(result.detail.unwrap().contains("000_mask.png"));
+        assert!(!out.exists());
+    }
+
+    /// Three pages of widths 10, 20 and 30, named `000` to `002`.
+    fn a_sized_job(scratch: &Scratch) -> Job {
+        let sources: Vec<SourceRef> = [10, 20, 30]
+            .iter()
+            .enumerate()
+            .map(|(n, width)| write_narrow_source(&scratch.join("raws"), &format!("{n:03}.png"), *width))
+            .collect();
+        let manifest = scratch.join("out/chapter.mtclean");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        Job::create(&manifest, Project::new(manifest.parent().unwrap(), "0.1.0", StripMode::Single, &sources)).unwrap()
+    }
+
+    fn width_of(bytes: &[u8]) -> u32 {
+        decode(bytes).unwrap().width
+    }
+
+    #[test]
+    fn a_chapter_in_its_imported_order_keeps_its_file_names() {
+        let scratch = Scratch::new("names-kept");
+        let job = a_sized_job(&scratch);
+        let plan = plan_open_job(&job, "PNG", scratch.join("export").to_str().unwrap(), "separate-layer", "per-page").unwrap();
+        assert_eq!(plan.outputs.iter().map(|o| o.filename.as_str()).collect::<Vec<_>>(), ["000.png", "001.png", "002.png"]);
+    }
+
+    #[test]
+    fn a_reordered_chapter_exports_in_its_own_order_in_every_container() {
+        let scratch = Scratch::new("names-reordered");
+        let mut job = a_sized_job(&scratch);
+        job.project.strip.order = vec![2, 0, 1];
+
+        // Folder, with the mask files beside the pages.
+        let folder = scratch.join("folder");
+        let result = export_open_job(&job, "PNG", folder.to_str().unwrap(), "separate-layer", "per-page").unwrap();
+        assert_eq!(result.status, "exported", "{:?}", result.detail);
+        let mut written: Vec<String> =
+            std::fs::read_dir(&folder).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        written.sort();
+        assert_eq!(written, ["001.png", "001_mask.png", "002.png", "002_mask.png", "003.png", "003_mask.png"]);
+        let widths: Vec<u32> = ["001.png", "002.png", "003.png"].iter().map(|name| width_of(&std::fs::read(folder.join(name)).unwrap())).collect();
+        assert_eq!(widths, [30, 10, 20], "a reader sorting by name shows the old order");
+        assert_eq!(width_of(&std::fs::read(folder.join("001_mask.png")).unwrap()), 30, "a mask file sits beside another page");
+
+        // One page alone keeps the name it has in the whole chapter.
+        let one = scratch.join("one");
+        let choices = Choices { pages: Some(&[1]), ..choices("PNG", one.to_str().unwrap(), "flattened", "per-page") };
+        let single = export_reviewed_job(&job, &choices, None).unwrap();
+        assert_eq!(single.outputs.iter().map(|o| o.filename.as_str()).collect::<Vec<_>>(), ["002.png"]);
+
+        // CBZ: entries in the chapter's order, under those names.
+        let archive_dir = scratch.join("cbz");
+        let archived = export(&job, "CBZ", archive_dir.to_str().unwrap());
+        assert_eq!(archived.status, "exported", "{:?}", archived.detail);
+        let entries = unzip(&std::fs::read(archived.path.unwrap()).unwrap());
+        assert_eq!(entries.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["001.png", "002.png", "003.png"]);
+        assert_eq!(entries.iter().map(|(_, bytes)| width_of(bytes)).collect::<Vec<_>>(), [30, 10, 20]);
+    }
+
+    #[test]
+    fn pages_sharing_a_stem_are_numbered_rather_than_refused() {
+        // `000.jpg` beside `000.png`, as a half-converted folder or a page added
+        // under a name already there leaves them: once refused as two `000.png`.
+        let scratch = Scratch::new("names-shared-stem");
         let mut job = a_strip_job(&scratch, StripMode::Single);
         let old = job.source_path(1).unwrap();
         job.project.sources[1].rel_path.set_file_name("000.jpg");
         std::fs::copy(old, job.source_path(1).unwrap()).unwrap();
         let out = scratch.join("export");
-        let result = export(&job, "PNG", out.to_str().unwrap());
-        assert_eq!(result.status, "refused");
-        assert!(result.detail.unwrap().contains("000.png"));
-        assert!(!out.exists());
+        let result = export_open_job(&job, "PNG", out.to_str().unwrap(), "separate-layer", "per-page").unwrap();
+        assert_eq!(result.status, "exported", "{:?}", result.detail);
+        assert_eq!(result.outputs.iter().map(|o| o.filename.as_str()).collect::<Vec<_>>(), ["001.png", "002.png", "003.png"]);
+        assert!(out.join("002_mask.png").is_file());
     }
 
     #[test]

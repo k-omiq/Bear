@@ -7400,7 +7400,7 @@ pub(crate) fn page_run(job_path: &Path, chapter_id: &str, page_index: usize) -> 
 
 /// Whether the chapter whose manifest is at `job_path` has a run, whichever
 /// page that run is on. Multiple selection detections may share it.
-fn job_run(job_path: &Path) -> bool {
+pub(crate) fn job_run(job_path: &Path) -> bool {
     active().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().any(|run| run.progress.walks(job_path))
 }
 
