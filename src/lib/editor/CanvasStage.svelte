@@ -129,7 +129,22 @@
   const ratio = $derived(pageRatio(longstrip ? null : model))
   const fitSpec = $derived({ contentWidth, contentHeight, ratio, longstrip, natural })
   const fitZoom = $derived(fitScale(fitSpec))
-  const zoom = $derived(editor.fit ? fitZoom : editor.zoom)
+
+  // The column at 1:1, for the highest zoom it can be drawn at: a long strip
+  // grows past what a browser can lay out long before 12800%. The chosen zoom
+  // is drawn under it even before the state has been told: a zoom restored
+  // from autosave arrives before this chapter's ceiling is reported.
+  const extent = $derived(
+    longstrip
+      ? Math.max(natural, stripMetrics({ pages: list, scale: 1, gap: STRIP_GAP }).total)
+      : Math.max(natural, natural * ratio),
+  )
+  const ceiling = $derived(zoomCeiling({ extent, max: MAX_ZOOM }))
+  $effect(() => {
+    reportZoomCeiling(ceiling)
+  })
+  const chosen = $derived(Math.min(editor.zoom, ceiling))
+  const zoom = $derived(editor.fit ? fitZoom : chosen)
 
   // Fit draws from the *exact* fit width, not from `fitZoom`: the reported
   // scale is rounded to two places so the readout is stable, and at a natural
@@ -137,23 +152,13 @@
   // viewport a fit is supposed to fit inside. Expressed as a scale rather than
   // as a width, because every page in a column is drawn at the same *scale*
   // and at its own width.
-  const scale = $derived(editor.fit ? fitWidth(fitSpec) / natural : editor.zoom)
+  const scale = $derived(editor.fit ? fitWidth(fitSpec) / natural : chosen)
   const width = $derived(sheetWidth({ natural, zoom: scale }))
 
   const metrics = $derived(
     stripMetrics({ pages: longstrip ? list : [], scale, gap: STRIP_GAP }),
   )
 
-  // The column at 1:1, for the highest zoom it can be drawn at: a long strip
-  // grows past what a browser can lay out long before 12800%.
-  const extent = $derived(
-    longstrip
-      ? Math.max(natural, stripMetrics({ pages: list, scale: 1, gap: STRIP_GAP }).total)
-      : Math.max(natural, natural * ratio),
-  )
-  $effect(() => {
-    reportZoomCeiling(zoomCeiling({ extent, max: MAX_ZOOM }))
-  })
 
   // How tall the stage is drawn, for centring it in a taller view.
   const stageHeight = $derived(longstrip ? metrics.total : width * ratio)
@@ -509,6 +514,16 @@
    * @param {NonNullable<typeof editor.viewRequest>} request
    */
   function placeView(request) {
+    // Asked for another chapter, or for a page no longer on screen: the
+    // geometry it was asked against is gone, and placing it now would undo
+    // the shell's restore of the new page's position.
+    const stale = request.chapterId !== editor.chapter?.id
+      || (!longstrip && request.pageIndex !== editor.pageIndex)
+    if (stale) {
+      viewBefore = null
+      consumeViewRequest()
+      return
+    }
     const box = scroller()
     if (!box || !stageEl || editor.loading || list.length === 0) return
     if (request.kind === 'focus' && focusZoomedFor !== request.token) {

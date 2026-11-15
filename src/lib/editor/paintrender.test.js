@@ -5,6 +5,8 @@ import {
   dabStops,
   presentStroke,
   previewRadius,
+  MAX_OVERLAY_PIXELS,
+  overlayScale,
   renderCloneTiles,
   renderDabs,
   rgba,
@@ -170,6 +172,20 @@ describe('dabPath', () => {
     expect(calls.filter((entry) => entry.call === 'arc')).toHaveLength(2)
     expect(calls[0].args).toEqual([7, 10])
     expect(calls[1].args.slice(0, 3)).toEqual([5, 10, 2])
+  })
+})
+
+describe('overlayScale', () => {
+  it('is the screen\'s density for a brush of ordinary size', () => {
+    expect(overlayScale(100, 100, 2)).toBe(2)
+  })
+
+  // A 20 pixel brush at 12800% is 2560 CSS pixels across: at 2x density that
+  // asks for 26 million pixels, past what a webview canvas holds.
+  it('stops at the cap for a brush many screen pixels wide', () => {
+    const scale = overlayScale(2560, 2560, 2)
+    expect(scale).toBeLessThan(2)
+    expect(2560 * scale * 2560 * scale).toBeLessThanOrEqual(MAX_OVERLAY_PIXELS + 1)
   })
 })
 

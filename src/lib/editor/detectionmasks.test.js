@@ -11,6 +11,7 @@ import {
   MAX_CANVAS_PIXELS,
   backingScale,
   cachedMaskCount,
+  maskBacking,
   forgetMaskImages,
   loadDetectionMask,
   paintMask,
@@ -116,6 +117,28 @@ describe('the backing store', () => {
   it('follows the display’s pixel ratio', () => {
     expect(backingScale(100, 50, 2)).toBe(2)
     expect(backingScale(100, 50, 1)).toBe(1)
+  })
+
+  it('follows the display for a mask shown no larger than its own pixels', () => {
+    const backing = maskBacking({ width: 400, height: 200 }, { width: 200, height: 100 }, 3, 2)
+    expect(backing).toEqual({ width: 412, height: 212, insetX: 6, insetY: 6, marginX: 3, marginY: 3, scale: 2 })
+  })
+
+  // Far in, the cap lowers the backing below the display; a mask pixel then
+  // takes a whole number of backing pixels, never a share that stretches one
+  // pixel wider than the next.
+  it('gives every mask pixel the same whole number of backing pixels past the cap', () => {
+    // 100x50 mask pixels at 128x: 12800x6400 CSS pixels, past the cap at 2x.
+    const backing = maskBacking({ width: 100, height: 50 }, { width: 12800, height: 6400 }, 3, 2)
+    const per = (backing.width - backing.insetX * 2) / 100
+    expect(Number.isInteger(per)).toBe(true)
+    expect((backing.height - backing.insetY * 2) / 50).toBe(per)
+    expect(Number.isInteger(backing.insetX)).toBe(true)
+    expect(backing.width * backing.height).toBeLessThanOrEqual(MAX_CANVAS_PIXELS + 4 * (backing.width + backing.height) * 3)
+    // The room is at least what was asked, and the backing's scale is the
+    // same across the mask and its room, so the mask starts on its bounds.
+    expect(backing.marginX).toBeGreaterThanOrEqual(3)
+    expect(backing.insetX / backing.marginX).toBeCloseTo(per * 100 / 12800, 9)
   })
 
   it('stops short of the canvas size WebKit will refuse', () => {

@@ -256,7 +256,10 @@ export const editor = $state({
    * consumer, through `consumeViewRequest`; `token` makes asking twice for
    * the same thing a new request.
    *
-   * @type {{kind: 'anchor'|'centre'|'focus', token: number, pageIndex?: number, bbox?: {x: number, y: number, w: number, h: number}}|null}
+   * `chapterId` and `pageIndex` say what it was asked for: one left over
+   * for another chapter, or for another page of a paginated one, is dropped.
+   *
+   * @type {{kind: 'anchor'|'centre'|'focus', token: number, chapterId: string, pageIndex: number, bbox?: {x: number, y: number, w: number, h: number}}|null}
    */
   viewRequest: null,
 
@@ -1169,6 +1172,10 @@ function resetSessionState() {
   editor.stripFocus = -1
   editor.stripMounted = []
   editor.stripScrollRequest = null
+  // A view request belongs to the geometry it was made against, and the zoom
+  // ceiling to the chapter it was measured for (the canvas measures anew).
+  editor.viewRequest = null
+  editor.zoomCeiling = MAX_ZOOM
   // A gesture in progress, and the clone source it may have sampled, belong to
   // the page they were drawn on.
   resetDraftState()
@@ -1466,6 +1473,12 @@ export function zoomMax() {
 export function reportZoomCeiling(ceiling) {
   const next = Number.isFinite(ceiling) && ceiling > 0 ? Math.min(MAX_ZOOM, ceiling) : MAX_ZOOM
   if (next !== editor.zoomCeiling) editor.zoomCeiling = next
+  // A lower ceiling brings the chosen zoom under it: a zoom restored from
+  // autosave, or kept from before a strip grew, would otherwise lay the
+  // column out past what the ceiling guards. Not a `setZoom`: fit stays on,
+  // and the user chose nothing.
+  const max = zoomMax()
+  if (editor.zoom > max) editor.zoom = max
 }
 
 let viewToken = 0
@@ -1477,8 +1490,19 @@ let viewToken = 0
  * @param {{kind: 'anchor'|'centre'|'focus', pageIndex?: number, bbox?: {x: number, y: number, w: number, h: number}}} request
  */
 export function requestView(request) {
+  // A chapter still loading has no geometry to place against, and its
+  // restored position is the shell's to set: a request then is not kept.
+  if (editor.loading || !editor.chapter) {
+    editor.viewRequest = null
+    return
+  }
   viewToken += 1
-  editor.viewRequest = { ...request, token: viewToken }
+  editor.viewRequest = {
+    ...request,
+    pageIndex: request.pageIndex ?? editor.pageIndex,
+    chapterId: editor.chapter.id,
+    token: viewToken,
+  }
 }
 
 /**

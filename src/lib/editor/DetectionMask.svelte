@@ -1,10 +1,11 @@
 <script>
+  import { untrack } from 'svelte'
   import { detectionMaskUrl } from '../api/tile.js'
   import { isHighlighted } from '../state/editor.svelte.js'
   import { session } from '../state/session.svelte.js'
   import { maskColorFor } from '../model/masks.js'
   import { hexToRgb } from '../ui/color.js'
-  import { backingScale, holdMaskImage, loadDetectionMask, paintMask, releaseMaskImage } from './detectionmasks.svelte.js'
+  import { holdMaskImage, maskBacking, loadDetectionMask, paintMask, releaseMaskImage } from './detectionmasks.svelte.js'
 
   /**
    * One detected region's mask, drawn where it sits on the page.
@@ -16,7 +17,10 @@
    * so the outline has room outside the shape. The backing store follows the
    * canvas's drawn size times the display's pixel ratio, measured by a
    * `ResizeObserver`, so the outline stays about 1.5 CSS pixels at every zoom;
-   * the size is read from `clientWidth` rather than the observer's entry,
+   * past 100% it is a whole number of backing pixels per mask pixel, and the
+   * room a whole number of backing pixels, so the mask's squares line up with
+   * the page's (`detectionmasks.svelte.js#maskBacking`);
+   * the size is read from the box itself rather than the observer's entry,
    * because older WebKit hands `borderBoxSize` over in a different shape.
    *
    * **Outside it** - the mock in a plain browser, and the tests - there is no
@@ -62,6 +66,8 @@
   let canvasEl = $state()
   /** The canvas as drawn, in CSS pixels. */
   let drawn = $state({ width: 0, height: 0 })
+  /** The room around the mask, in CSS pixels, per axis (`maskBacking`). */
+  let room = $state({ x: MARGIN, y: MARGIN })
 
   const standin = $derived(!url || failed || !(pageWidth > 0) || !(pageHeight > 0))
 
@@ -137,8 +143,14 @@
   $effect(() => {
     const node = canvasEl
     if (!node) return
+    // The box's own size, fractions kept: far in, a whole CSS pixel lost to
+    // rounding would leave the backing a sliver off the mask's own grid.
+    // `clientWidth` where there is no layout box to read (jsdom).
     const measure = () => {
-      drawn = { width: node.clientWidth, height: node.clientHeight }
+      const rect = node.getBoundingClientRect?.()
+      drawn = rect && rect.width > 0 && rect.height > 0
+        ? { width: rect.width, height: rect.height }
+        : { width: node.clientWidth, height: node.clientHeight }
     }
     measure()
     if (typeof ResizeObserver !== 'function') return
@@ -157,14 +169,18 @@
     const { width, height } = drawn
     const style = { color, fill, outline: lit ? OUTLINE_LIT : OUTLINE }
     if (!node || !entry || !(width > 0) || !(height > 0)) return
-    const scale = backingScale(width, height)
-    const backingWidth = Math.max(1, Math.round(width * scale))
-    const backingHeight = Math.max(1, Math.round(height * scale))
-    if (node.width !== backingWidth) node.width = backingWidth
-    if (node.height !== backingHeight) node.height = backingHeight
+    // The mask's own share of the canvas: the drawn size less the room now
+    // around it, which stays put when the room changes.
+    const { x, y } = untrack(() => room)
+    const inner = { width: width - x * 2, height: height - y * 2 }
+    const backing = maskBacking({ width: entry.bounds.w, height: entry.bounds.h }, inner, MARGIN)
+    if (backing.marginX !== x || backing.marginY !== y) room = { x: backing.marginX, y: backing.marginY }
+    if (node.width !== backing.width) node.width = backing.width
+    if (node.height !== backing.height) node.height = backing.height
     const painted = paintMask(node, entry.image, {
-      inset: MARGIN * scale,
-      outline: style.outline * scale,
+      inset: backing.insetX,
+      insetY: backing.insetY,
+      outline: style.outline * backing.scale,
       color: style.color,
       fill: style.fill,
     })
@@ -195,10 +211,10 @@
     class:lit
     data-detection={region.id}
     data-mask="image"
-    style:left="calc({box.x}% - {MARGIN}px)"
-    style:top="calc({box.y}% - {MARGIN}px)"
-    style:width="calc({box.w}% + {MARGIN * 2}px)"
-    style:height="calc({box.h}% + {MARGIN * 2}px)"
+    style:left="calc({box.x}% - {room.x}px)"
+    style:top="calc({box.y}% - {room.y}px)"
+    style:width="calc({box.w}% + {room.x * 2}px)"
+    style:height="calc({box.h}% + {room.y * 2}px)"
   ></canvas>
 {/if}
 

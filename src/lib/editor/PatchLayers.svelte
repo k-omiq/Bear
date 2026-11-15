@@ -24,20 +24,25 @@
    * `hide` names a layer drawn but not shown: the one the held gradient's
    * preview stands in for.
    *
+   * `full` draws each layer on the page's own grid rather than its proxy's,
+   * for a page shown past its proxy's scale: an eraser stroke then takes off
+   * the page's own pixels, as the commit does, not proxy pixels stretched.
+   *
    * @type {{
    *   page: import('../api/backend.js').ApiPage,
    *   from?: number,
    *   to?: number,
    *   hide?: string|null,
+   *   full?: boolean,
    *   ready?: string|null,
    * }}
    */
-  let { page, from = 0, to = 100, hide = null, ready = $bindable(null) } = $props()
+  let { page, from = 0, to = 100, hide = null, full = false, ready = $bindable(null) } = $props()
 
-  const plan = $derived(proxyPlan(page))
+  const plan = $derived(full ? { width: Number(page.width) || 0, height: Number(page.height) || 0 } : proxyPlan(page))
   const list = $derived(editor.project?.mode === 'longstrip' ? pages() : [page])
   const layers = $derived(
-    pageLayers(page, list).filter(
+    pageLayers(page, list, { full }).filter(
       (layer) => !layer.own || (layer.bbox.y <= to && layer.bbox.y + layer.bbox.h >= from),
     ),
   )

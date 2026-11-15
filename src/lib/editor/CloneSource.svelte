@@ -1,5 +1,5 @@
 <script>
-  import { renderCloneTiles } from './paintrender.js'
+  import { overlayScale, renderCloneTiles } from './paintrender.js'
   import { cleanedTiles } from './paintpreview.js'
 
   /**
@@ -59,9 +59,13 @@
   /**
    * Fill the overlay with the sheet as seen around `from`.
    *
-   * The canvas is the brush's own box, at the screen's pixel density. Each
-   * tile is placed where it lies on the sheet and the whole sheet is then
-   * shifted so that `from` falls on the middle of the canvas.
+   * The canvas is the brush's own box, at the screen's pixel density, capped
+   * (`paintrender.js#overlayScale`): far in, the box is many screen pixels
+   * wide and the density alone would ask for a canvas past what a webview
+   * holds. Each tile is placed where it lies on the sheet and the whole sheet
+   * is then shifted so that `from` falls on the middle of the canvas. Shown
+   * pixel by pixel (`data-pixels` on the stage), the tiles are drawn without
+   * smoothing, so the source shows as the page's own hard squares.
    *
    * @param {HTMLCanvasElement} target
    * @param {{x: number, y: number}} from
@@ -71,7 +75,9 @@
     const sheet = target.closest('.sheet')
     const box = sheet?.getBoundingClientRect()
     if (!sheet || !box || !(box.width > 0) || !(box.height > 0)) return
-    const density = window.devicePixelRatio || 1
+    const cssWidth = ((reach.rx * 2) / 100) * box.width
+    const cssHeight = ((reach.ry * 2) / 100) * box.height
+    const density = overlayScale(cssWidth, cssHeight, window.devicePixelRatio || 1)
     const width = Math.max(1, Math.round(((reach.rx * 2) / 100) * box.width * density))
     const height = Math.max(1, Math.round(((reach.ry * 2) / 100) * box.height * density))
     if (target.width !== width) target.width = width
@@ -79,6 +85,7 @@
     const ctx = target.getContext('2d')
     if (!ctx) return
     ctx.clearRect(0, 0, width, height)
+    ctx.imageSmoothingEnabled = !target.closest('[data-pixels]')
 
     renderCloneTiles(ctx, cleanedTiles(sheet), {
       width: box.width * density,

@@ -5,8 +5,9 @@
   import { drawErased, eraseMasks } from './erasepreview.svelte.js'
 
   /**
-   * One patch's layer: a canvas placed over its bounds on the page's proxy
-   * grid, drawn from the decoded image, at the layer's opacity.
+   * One patch's layer: a canvas placed over its bounds on `plan`'s grid (the
+   * page's proxy, or the page itself), drawn from the decoded image, at the
+   * layer's opacity.
    *
    * **The old picture stays until the new one is drawn.** When the URL moves,
    * the canvas is left alone while the new image is fetched and decoded; then
@@ -94,7 +95,7 @@
    * The eraser strokes to take off the layer's current picture: those over
    * it that first reached this picture.
    *
-   * @param {{x: number, y: number, w: number, h: number}} bounds - the picture's, in proxy pixels
+   * @param {{x: number, y: number, w: number, h: number}} bounds - the picture's, in `plan` pixels
    */
   function erasing(bounds) {
     const live = new Set()

@@ -472,7 +472,8 @@ mod tests {
     fn a_square_tip_covers_the_corners_a_round_one_leaves() {
         let page = fixtures::by_name("l8").raster;
         let paint = |tip: Tip| {
-            render_brush(&page, &[], None, &stroke(&[(9.0, 9.0)]), &BrushSpec { tip, ..hard_brush(7.0) }, [0, 0, 0])
+            // 9.5 is the middle of pixel 9: a dab 7 across covers 6 to 12 whole.
+            render_brush(&page, &[], None, &stroke(&[(9.5, 9.5)]), &BrushSpec { tip, ..hard_brush(7.0) }, [0, 0, 0])
                 .unwrap()
                 .mask
         };
@@ -487,6 +488,19 @@ mod tests {
         assert_eq!(square.bounds, Rect::new(6, 6, 7, 7));
     }
 
+    /// **A dab is centred on its point.** Page pixel k spans k to k + 1, as
+    /// the page is drawn and the cursor placed, and is sampled at its centre:
+    /// a hard dab 6 across at 9 covers pixels 6 to 11, three each side, not 7
+    /// to 11 and half a pixel down and right. `brushsurface.js` pins the same.
+    #[test]
+    fn a_dab_is_centred_on_its_point() {
+        let page = fixtures::by_name("l8").raster;
+        let mask = render_brush(&page, &[], None, &stroke(&[(9.0, 9.0)]), &hard_brush(6.0), [0, 0, 0]).unwrap().mask;
+        assert_eq!(mask.bounds, Rect::new(6, 6, 6, 6));
+        assert!(mask.contains(6, 9) && mask.contains(11, 9) && mask.contains(9, 6) && mask.contains(9, 11));
+        assert!(!mask.contains(5, 9) && !mask.contains(12, 9));
+    }
+
     /// **Hardness works on a square.** A soft square fades from its centre by
     /// the axis distance, so (12, 9) and (12, 12) take the same paint, where a
     /// soft disc gives the corner less.
@@ -496,7 +510,7 @@ mod tests {
         page.data.fill(255);
         let paint = |tip: Tip| {
             let spec = BrushSpec { tip, hardness: 50.0, ..hard_brush(11.0) };
-            let painted = render_brush(&page, &[], None, &stroke(&[(9.0, 9.0)]), &spec, [0, 0, 0]).unwrap();
+            let painted = render_brush(&page, &[], None, &stroke(&[(9.5, 9.5)]), &spec, [0, 0, 0]).unwrap();
             let bounds = painted.mask.bounds;
             move |x: i64, y: i64| painted.pixels.sample((x - bounds.x) as u32, (y - bounds.y) as u32, 0)
         };
@@ -945,7 +959,7 @@ mod tests {
             ..hard_brush(15.0)
         };
         let painted =
-            render_clone(&page, &[], None, &stroke(&[(48.0, 24.0)]), &spec, (30.0, 0.0)).unwrap();
+            render_clone(&page, &[], None, &stroke(&[(48.5, 24.5)]), &spec, (30.0, 0.0)).unwrap();
         let bounds = painted.mask.bounds;
         let at = |x: i64| {
             painted

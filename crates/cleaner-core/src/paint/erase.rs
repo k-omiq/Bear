@@ -49,9 +49,9 @@ pub fn erase_coverage(points: &[StrokePoint], spec: &BrushSpec) -> Option<Mask> 
         let bottom = ((dab.y + reach).ceil() as i64).min(window.bottom() - 1);
         for py in top..=bottom {
             for px in left..=right {
-                // A page pixel is sampled on its integer coordinate, as
+                // A page pixel is sampled at its centre, as
                 // `brush.rs#stamp_dab_subpixel` samples it.
-                let t = spec.tip.distance(px as f64 - dab.x, py as f64 - dab.y) / dab.radius;
+                let t = spec.tip.distance(px as f64 + 0.5 - dab.x, py as f64 + 0.5 - dab.y) / dab.radius;
                 let covered = (super::brush::analytic_radial_coverage(t, hardness) * alpha).clamp(0.0, 1.0);
                 if covered <= 0.0 {
                     continue;
@@ -167,6 +167,19 @@ mod tests {
         assert_eq!(erase.coverage(50, 50), 255);
         assert_eq!(erase.coverage(59, 50), 255);
         assert_eq!(erase.coverage(61, 50), 0);
+    }
+
+    /// Centred on its point, as a Brush dab is (`paint/mod.rs#a_dab_is_centred_on_its_point`):
+    /// ten pixels each side of 50, pixel k sampled at k + 0.5.
+    #[test]
+    fn an_eraser_dab_is_centred_on_its_point() {
+        let erase = erase_coverage(&[point(50.0, 50.0)], &spec(20.0, 100.0, 100.0)).unwrap();
+        assert_eq!(erase.coverage(40, 50), 255);
+        assert_eq!(erase.coverage(59, 50), 255);
+        assert_eq!(erase.coverage(39, 50), 0);
+        assert_eq!(erase.coverage(60, 50), 0);
+        assert_eq!(erase.coverage(50, 40), 255);
+        assert_eq!(erase.coverage(50, 39), 0);
     }
 
     #[test]

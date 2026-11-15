@@ -273,6 +273,10 @@ export function detectionMaskUrl(page, region) {
  * in the `x-layer-bounds` header, in proxy pixels. A patch with nothing on
  * the page answers `204`.
  *
+ * With `full` the path says `layerfull`: the same layer on the page's own
+ * grid, bounds in page pixels. The eraser's preview draws it when the page is
+ * shown past its proxy's scale, so what it takes off is the page's own pixels.
+ *
  * `v` folds `mask.layerKey` (`tile::layer_appearance`), which moves with the
  * patch's pixels and geometry and never with its opacity, which the canvas
  * draws; and the two pages' sources and their distance apart, which decide
@@ -281,16 +285,17 @@ export function detectionMaskUrl(page, region) {
  * @param {import('./backend.js').ApiPage|null|undefined} page
  * @param {import('./backend.js').ApiRegion|null|undefined} region
  * @param {import('./backend.js').ApiPage|null|undefined} [anchor] - the page `region` belongs to; `page` by default
+ * @param {boolean} [full] - on the page's own grid rather than its proxy's
  * @returns {string|null}
  */
-export function layerUrl(page, region, anchor = page) {
+export function layerUrl(page, region, anchor = page, full = false) {
   const origin = tileOrigin()
   if (!origin || !page || !page.chapterId || !Number.isInteger(page.index)) return null
   const key = region?.mask?.layerKey
   if (!region || typeof region.id !== 'string' || !region.id || typeof key !== 'string' || !key) return null
   const reach = anchor && anchor !== page ? `|${anchor.sourceSha ?? ''}|${Number(anchor.index) - page.index}` : ''
   const version = fold(`${COLOR_PIPELINE_VERSION}:${key}|${page.sourceSha ?? ''}${reach}`)
-  return `${origin}${encodeURIComponent(page.chapterId)}/${page.index}/layer/` +
+  return `${origin}${encodeURIComponent(page.chapterId)}/${page.index}/${full ? 'layerfull' : 'layer'}/` +
     `${encodeURIComponent(region.id)}?v=${version}`
 }
 

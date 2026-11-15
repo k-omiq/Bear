@@ -38,8 +38,10 @@
 //! **proxy** - short edge capped at 1024, long axis cut into
 //! `cleaner_core::image::proxy::PROXY_TILE_LONG_EDGE` bands - and that is the
 //! form both components draw. Without it the response is the page at its own
-//! resolution, which rule 7 reserves for the viewport past 100% zoom and which
-//! nothing requests today.
+//! resolution, which rule 7 reserves for the viewport past the proxy's scale:
+//! the editor lays it over the proxy tiles of the page on screen there
+//! (`PageArtwork.svelte`, `full`). It is kept in the same memory cache as the
+//! tiles, under the same identity, and never on disk.
 //!
 //! The whole page is decoded to produce any one tile, so a page's tiles are
 //! cut together and kept, encoded, in a bounded cache keyed by the same
@@ -99,6 +101,10 @@
 //! of the page stays on screen. `v` is [`layer_appearance`], which leaves
 //! out opacity: the interface draws that. A patch with nothing on the page is
 //! a `204`. Never cached here; the interface keeps its own copy, by URL.
+//!
+//! `layerfull` in place of `layer` is the same answer on the page's own grid,
+//! bounds in page pixels: what the eraser's preview draws over the page past
+//! the proxy's scale, so the paint it takes off is the page's own pixels.
 //!
 //! The `cleaned` variant stays for everything that wants the page flat: the
 //! home screen's cover, and the denoise input.
@@ -262,6 +268,8 @@ pub enum Route {
     Page(TileRequest),
     Detection(DetectionRequest),
     Layer(DetectionRequest),
+    /// The layer at the page's own resolution rather than on its proxy grid.
+    LayerFull(DetectionRequest),
 }
 
 /// Any `tile://` path. `detection` or `layer` as the third segment makes the
@@ -270,7 +278,7 @@ pub enum Route {
 pub fn route(path: &str) -> Result<Route, TileError> {
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     let (chapter, index, kind, region) = match segments.as_slice() {
-        [chapter, index, kind @ ("detection" | "layer"), region] => (chapter, index, *kind, region),
+        [chapter, index, kind @ ("detection" | "layer" | "layerfull"), region] => (chapter, index, *kind, region),
         _ => return parse(path).map(Route::Page),
     };
     let malformed = || TileError::Malformed(path.to_owned());
@@ -279,7 +287,11 @@ pub fn route(path: &str) -> Result<Route, TileError> {
         return Err(malformed());
     }
     let request = DetectionRequest { chapter_id, page_index: index.parse().map_err(|_| malformed())?, region_id };
-    Ok(if kind == "layer" { Route::Layer(request) } else { Route::Detection(request) })
+    Ok(match kind {
+        "layer" => Route::Layer(request),
+        "layerfull" => Route::LayerFull(request),
+        _ => Route::Detection(request),
+    })
 }
 
 /// A chapter id is a path segment, and a path segment arrives percent-encoded.
@@ -348,7 +360,9 @@ fn render_job(
         let source_idx = library::Library::resolve_page(&job.project, page_index).ok_or_else(|| TileError::NoSuchPage { job: job_path.display().to_string(), page_index })?;
         let page = job.display_page(source_idx, &source_bytes)?;
         let composited = if patches.is_empty() { page } else { composite(&page, &patches)? };
-        return Ok(encode_for_display(&composited, false)?);
+        // The fast setting: drawn once for the screen and kept in memory
+        // only, so the time it takes is what the reader waits for at a zoom.
+        return Ok(encode_for_display(&composited, true)?);
     };
     let mut tiles = render_tiles(job, job_path, page_index, variant)?;
     let count = tiles.len();
@@ -789,18 +803,19 @@ pub fn serve_request(
         Variant::Source => None,
         Variant::Cleaned => Some(page_appearance(&job.project, request.page_index)),
     };
+    let identity = match &current {
+        Some(appearance) => appearance.clone(),
+        None => source_identity(&job, job_path, request.page_index)?,
+    };
+    let key = PageKey {
+        job: job_path.to_path_buf(),
+        page_index: request.page_index,
+        variant: request.variant,
+        identity,
+        whole: request.tile.is_none(),
+    };
     let bytes = match request.tile {
         Some(tile) => {
-            let identity = match &current {
-                Some(appearance) => appearance.clone(),
-                None => source_identity(&job, job_path, request.page_index)?,
-            };
-            let key = PageKey {
-                job: job_path.to_path_buf(),
-                page_index: request.page_index,
-                variant: request.variant,
-                identity,
-            };
             // A page nothing is drawn on has the same appearance in both
             // variants, so its source and cleaned tiles are one stored set.
             TILES.tile(key, tile, || {
@@ -810,7 +825,14 @@ pub fn serve_request(
                 })
             })?
         }
-        None => render_job(&job, job_path, request.page_index, request.variant, None)?,
+        // The page at its own resolution: what the editor lays over its proxy
+        // past the proxy's scale. Asked for again on every zoom back past it
+        // and by every view of the same state, so it is kept beside the tiles
+        // under the same identity, in memory only, and drawn under the same
+        // gate. Never stored on disk: it is the size of the source.
+        None => TILES.tile(key, 0, || {
+            Ok(vec![render_job(&job, job_path, request.page_index, request.variant, None)?])
+        })?,
     };
     let freshness = match current {
         None => Freshness::Immutable,
@@ -906,6 +928,13 @@ pub struct Layer {
 /// is not a visible patch is a `404`. The job is opened to read only, and
 /// shared by a page's worth of requests ([`read_job`]).
 pub fn serve_layer(job_path: &Path, request: &DetectionRequest) -> Result<Option<Layer>, TileError> {
+    serve_layer_on(job_path, request, false)
+}
+
+/// [`serve_layer`], on the proxy grid or, with `full`, on the page's own: a
+/// plan whose proxy is the page itself, so the bounds are page pixels and
+/// each layer pixel is one page pixel.
+pub fn serve_layer_on(job_path: &Path, request: &DetectionRequest, full: bool) -> Result<Option<Layer>, TileError> {
     let job = read_job(job_path)?;
     let no_such_page =
         || TileError::NoSuchPage { job: job_path.display().to_string(), page_index: request.page_index };
@@ -922,6 +951,7 @@ pub fn serve_layer(job_path: &Path, request: &DetectionRequest) -> Result<Option
     let Some(mut patch) = job.display_patches_on_page(request.page_index)?.into_iter().find(|p| p.id == request.region_id) else { return Ok(None) };
     let (width, height) = source.orientation.size(source.w, source.h);
     let plan = ProxyPlan::for_page(width, height);
+    let plan = if full { ProxyPlan { proxy_w: plan.page_w, proxy_h: plan.page_h, ..plan } } else { plan };
     let header = source_header(&job, job_path, source_idx)?;
     patch.pixels.icc = header.icc;
     patch.pixels.palette = header.palette;
@@ -1106,6 +1136,8 @@ struct PageKey {
     page_index: usize,
     variant: Variant,
     identity: String,
+    /// The page whole, at its own resolution, rather than its proxy tiles.
+    whole: bool,
 }
 
 /// A page's encoded tiles, filled by whichever request arrives first. Later
@@ -1248,6 +1280,9 @@ where
             Ok(detection_response(serve_detection(&job_path(&request.chapter_id)?, &request)?))
         }
         Route::Layer(request) => Ok(layer_response(serve_layer(&job_path(&request.chapter_id)?, &request)?)),
+        Route::LayerFull(request) => {
+            Ok(layer_response(serve_layer_on(&job_path(&request.chapter_id)?, &request, true)?))
+        }
     }
 }
 
@@ -1605,7 +1640,8 @@ mod tests {
             let on_disk = std::fs::read(job.source_path(source_idx).unwrap()).unwrap();
             assert_eq!(
                 render(job.path(), page_index, Variant::Source, None).unwrap(),
-                encode_for_display(&decode(&on_disk).unwrap(), false).unwrap(),
+                // The whole page is drawn with the fast encoder, as its tiles are.
+                encode_for_display(&decode(&on_disk).unwrap(), true).unwrap(),
                 "page {page_index} was not source {source_idx}"
             );
         }
@@ -2233,6 +2269,27 @@ mod tests {
     }
 
     #[test]
+    fn the_whole_page_is_drawn_once_per_state_and_kept_apart_from_its_tiles() {
+        let scratch = Scratch::new("whole-cached");
+        let job = a_job(&scratch, "l8");
+        let request = |tile| TileRequest { chapter_id: "c".into(), page_index: 0, variant: Variant::Source, tile };
+        let (whole, freshness) = serve_request(job.path(), &request(None), None).unwrap();
+        assert_eq!(freshness, Freshness::Immutable);
+        let (again, _) = serve_request(job.path(), &request(None), None).unwrap();
+        assert_eq!(whole, again);
+        let (tile, _) = serve_request(job.path(), &request(Some(0)), None).unwrap();
+        // The same pixels either way for a page its proxy does not cut, but
+        // two entries: the tile request did not get the whole page's bytes
+        // back from a shared key, nor the other way round.
+        assert_eq!(decode(&whole).unwrap().data, decode(&tile).unwrap().data);
+        let keys: Vec<bool> = lock(&TILES.state).entries.keys()
+            .filter(|key| key.job == job.path())
+            .map(|key| key.whole)
+            .collect();
+        assert!(keys.contains(&true) && keys.contains(&false), "{keys:?}");
+    }
+
+    #[test]
     fn a_page_is_drawn_once_for_all_of_its_tiles_and_again_only_when_it_changes() {
         let cache = TileCache::default();
         let key = |identity: &str| PageKey {
@@ -2240,6 +2297,7 @@ mod tests {
             page_index: 0,
             variant: Variant::Cleaned,
             identity: identity.into(),
+            whole: false,
         };
         let draws = std::cell::Cell::new(0);
         let render = || {
@@ -2360,6 +2418,29 @@ mod tests {
             let worst = largest_difference(&drawn_over(&source, &layer, opacity), &cleaned);
             assert!(worst <= 1, "{name}: {worst} levels from the cleaned tile");
         }
+    }
+
+    /// On the page's own grid a layer is the patch's pixels, bounds in page
+    /// pixels: over the whole source page it is the whole cleaned page.
+    #[test]
+    fn a_full_layer_is_on_the_page_s_own_grid() {
+        let scratch = Scratch::new("layer-full");
+        let mut job = a_big_job(&scratch, 2048, 1536);
+        let bounds = Rect::new(301, 203, 40, 30);
+        job.complete_region(0, &toned_patch("r0", bounds, 200, serde_json::json!({})), None).unwrap();
+        let request = DetectionRequest { chapter_id: "c".into(), page_index: 0, region_id: "r0".into() };
+        let full = serve_layer_on(job.path(), &request, true).unwrap().expect("a layer");
+        assert_eq!((full.bounds.x, full.bounds.y, full.bounds.w, full.bounds.h), (301, 203, 40, 30));
+        let proxy = serve_layer(job.path(), &request).unwrap().expect("a layer");
+        assert!(proxy.bounds.w < 40, "the proxy is scaled down: {:?}", proxy.bounds);
+        let source = decode(&render(job.path(), 0, Variant::Source, None).unwrap()).unwrap();
+        let cleaned = decode(&render(job.path(), 0, Variant::Cleaned, None).unwrap()).unwrap();
+        let worst = largest_difference(&drawn_over(&source, &full, 100), &cleaned);
+        assert!(worst <= 1, "{worst} levels from the cleaned page");
+        assert_eq!(
+            route("/c/0/layerfull/r0").unwrap(),
+            Route::LayerFull(DetectionRequest { chapter_id: "c".into(), page_index: 0, region_id: "r0".into() }),
+        );
     }
 
     /// Across a join each page gets its own part, placed on its own grid, and

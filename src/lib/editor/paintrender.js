@@ -194,6 +194,27 @@ export function dabPath(Path, dabs, style) {
   return path
 }
 
+/** The most pixels the clone stamp's overlay holds: 2048 by 2048. */
+export const MAX_OVERLAY_PIXELS = 2048 * 2048
+
+/**
+ * Device pixels per CSS pixel for the clone stamp's overlay, a box `width` by
+ * `height` CSS pixels: the screen's density, or less when the box at that
+ * density would hold more than `MAX_OVERLAY_PIXELS`. Far in, a brush a few
+ * page pixels wide covers thousands of screen pixels; past the cap each page
+ * pixel is still many overlay pixels, drawn without smoothing, so it shows as
+ * the same hard square the page does.
+ *
+ * @param {number} width
+ * @param {number} height
+ * @param {number} [density]
+ * @returns {number}
+ */
+export function overlayScale(width, height, density = globalThis.devicePixelRatio || 1) {
+  const area = Math.max(1, width) * Math.max(1, height)
+  return Math.max(0.01, Math.min(density, Math.sqrt(MAX_OVERLAY_PIXELS / area)))
+}
+
 /**
  * Draw the page's own proxy tiles into a context, offset by the clone vector.
  *

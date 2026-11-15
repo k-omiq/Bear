@@ -54,6 +54,29 @@ export function proxyScale(pageWidth, pageHeight) {
 }
 
 /**
+ * A page this large in area is never drawn at its own resolution: a stroke
+ * across it would need a canvas WebKit refuses. Its proxy is used instead.
+ */
+export const MAX_PAGE_SURFACE = 8192 * 8192
+
+/**
+ * Surface pixels per page pixel. The proxy's, unless the page is drawn larger
+ * than its proxy (a zoom past it): then a surface pixel is a page pixel, so
+ * the live stroke is the pixels the commit will lay down, each on its own
+ * square, rather than proxy pixels stretched over several of them. Only
+ * the touched tiles are ever allocated, so the cost follows the stroke.
+ *
+ * @param {number} pageWidth
+ * @param {number} pageHeight
+ * @param {boolean} [pagePixels]
+ * @returns {number}
+ */
+export function surfaceScale(pageWidth, pageHeight, pagePixels = false) {
+  const area = (Number(pageWidth) || 1) * (Number(pageHeight) || 1)
+  return pagePixels && area <= MAX_PAGE_SURFACE ? 1 : proxyScale(pageWidth, pageHeight)
+}
+
+/**
  * How far `(dx, dy)` is from a dab's centre in the tip's own measure:
  * straight-line for a round tip, the larger axis distance for a square one, so
  * 1 radius is the tip's edge either way. `paint/plan.rs#Tip::distance`.
@@ -106,12 +129,15 @@ function rgbOf(hex) {
  *   pageHeight: number,
  *   clipY?: boolean,
  *   buildUp?: boolean,
+ *   pagePixels?: boolean,
  * }} options - `clipY` false lets a longstrip stroke run past the page's top and bottom;
  *   `buildUp` is the clone stamp's rule, and its alpha is the coverage itself,
- *   which is all `render_clone` keeps of the stroke
+ *   which is all `render_clone` keeps of the stroke; `pagePixels` draws the
+ *   stroke at the page's own resolution rather than its proxy's
+ *   (`surfaceScale`)
  */
-export function brushSurface({ brush, color, pageWidth, pageHeight, clipY = true, buildUp = false }) {
-  const scale = proxyScale(pageWidth, pageHeight)
+export function brushSurface({ brush, color, pageWidth, pageHeight, clipY = true, buildUp = false, pagePixels = false }) {
+  const scale = surfaceScale(pageWidth, pageHeight, pagePixels)
   const samples = scale < 1 - EPSILON ? 2 : 1
   const width = Math.max(1, Math.round(pageWidth * scale))
   const height = Math.max(1, Math.round(pageHeight * scale))
@@ -166,14 +192,15 @@ export function brushSurface({ brush, color, pageWidth, pageHeight, clipY = true
       const ty = Math.floor(py / TILE)
       const row = (py - ty * TILE) * TILE
       for (let px = minX; px <= maxX; px += 1) {
-        // `brush.rs` samples a page pixel on its integer coordinate, so page
-        // pixel k spans k - 0.5 to k + 0.5, and a surface pixel spans
-        // `1 / scale` of them. At scale 1 this is exactly `px - cx`.
+        // `brush.rs` samples a page pixel at its centre: page pixel k spans
+        // k to k + 1, as the page is drawn and the cursor placed, and a
+        // surface pixel spans `1 / scale` of them. At scale 1 this is
+        // exactly `px + 0.5 - cx`.
         let covered = 0
         for (let sy = 0; sy < samples; sy += 1) {
-          const dy = py + (sy + 0.5) / samples - 0.5 * scale - cy
+          const dy = py + (sy + 0.5) / samples - cy
           for (let sx = 0; sx < samples; sx += 1) {
-            const dx = px + (sx + 0.5) / samples - 0.5 * scale - cx
+            const dx = px + (sx + 0.5) / samples - cx
             covered += coverageAt(tipDistance(dx, dy, tip) / radius, hardness)
           }
         }

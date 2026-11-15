@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { brushSurface, coverageAt, proxyScale, tipDistance } from './brushsurface.js'
+import { MAX_PAGE_SURFACE, brushSurface, coverageAt, proxyScale, surfaceScale, tipDistance } from './brushsurface.js'
 import { planStroke } from './paintplan.js'
 
 const brush = (over = {}) => ({
@@ -52,7 +52,52 @@ describe('proxyScale', () => {
   })
 })
 
+describe('surfaceScale', () => {
+  it('is the proxy\'s scale until the page is shown past it', () => {
+    expect(surfaceScale(4000, 6000)).toBe(proxyScale(4000, 6000))
+    expect(surfaceScale(4000, 6000, false)).toBeLessThan(1)
+  })
+
+  it('is the page\'s own pixels once the page is shown past its proxy', () => {
+    expect(surfaceScale(4000, 6000, true)).toBe(1)
+  })
+
+  it('stays on the proxy for a page too large to hold whole', () => {
+    expect(10000 * 10000).toBeGreaterThan(MAX_PAGE_SURFACE)
+    expect(surfaceScale(10000, 10000, true)).toBe(proxyScale(10000, 10000))
+  })
+})
+
 describe('brushSurface', () => {
+  // `paint/mod.rs#a_dab_is_centred_on_its_point`: pixel k spans k to k+1
+  // and is sampled at its centre, so a dab 20 across at 50 covers 40 to 59,
+  // ten pixels each side, not 41 to 59 and one pixel down and right.
+  it('centres a dab on its point: each pixel is sampled at its centre', () => {
+    const surface = brushSurface({ brush: brush(), color: '#000000', pageWidth: 200, pageHeight: 200 })
+    surface.add({ x: 50, y: 50, p: 1 })
+    const out = pixels(surface)
+    expect(out.alpha(40, 50)).toBe(255)
+    expect(out.alpha(59, 50)).toBe(255)
+    expect(out.alpha(39, 50)).toBe(0)
+    expect(out.alpha(60, 50)).toBe(0)
+    expect(out.alpha(50, 40)).toBe(255)
+    expect(out.alpha(50, 39)).toBe(0)
+  })
+
+  it('draws on page pixels once the page is shown past its proxy', () => {
+    const page = brushSurface({ brush: brush(), color: '#000000', pageWidth: 4000, pageHeight: 6000, pagePixels: true })
+    page.add({ x: 50, y: 50, p: 1 })
+    const out = pixels(page)
+    // The same twenty pixels a small page gets, one surface pixel each.
+    expect(out.alpha(40, 50)).toBe(255)
+    expect(out.alpha(59, 50)).toBe(255)
+    expect(out.alpha(60, 50)).toBe(0)
+    // On the proxy the same dab is a quarter as many surface pixels, and
+    // nothing lands at the page-pixel place.
+    const proxy = brushSurface({ brush: brush(), color: '#000000', pageWidth: 4000, pageHeight: 6000 })
+    proxy.add({ x: 50, y: 50, p: 1 })
+    expect(pixels(proxy).alpha(59, 50)).toBe(0)
+  })
   it('stamps a hard dab solid inside its radius and nothing outside', () => {
     const surface = brushSurface({ brush: brush(), color: '#000000', pageWidth: 200, pageHeight: 200 })
     surface.add({ x: 50, y: 50, p: 1 })
@@ -79,12 +124,13 @@ describe('brushSurface', () => {
   })
 
   // The same dabs as `paint/mod.rs#a_square_tip_covers_the_corners_a_round_one_leaves`:
-  // the preview and the commit cover the same pixels, pixel for pixel.
+  // the preview and the commit cover the same pixels, pixel for pixel. At
+  // 9.5, the middle of pixel 9, a dab 7 across covers pixels 6 to 12 whole.
   it('stamps a square tip over its corners, the 7 by 7 a hard dab 7 across covers', () => {
     const square = brushSurface({ brush: brush({ size: 7, tip: 'square' }), color: '#000000', pageWidth: 200, pageHeight: 200 })
-    square.add({ x: 9, y: 9, p: 1 })
+    square.add({ x: 9.5, y: 9.5, p: 1 })
     const round = brushSurface({ brush: brush({ size: 7 }), color: '#000000', pageWidth: 200, pageHeight: 200 })
-    round.add({ x: 9, y: 9, p: 1 })
+    round.add({ x: 9.5, y: 9.5, p: 1 })
     const out = pixels(square)
     const covered = []
     for (let y = 0; y < 20; y += 1) for (let x = 0; x < 20; x += 1) if (out.alpha(x, y) > 0) covered.push([x, y])
@@ -98,7 +144,7 @@ describe('brushSurface', () => {
   it('softens a square by its axis distance, as hardness softens a disc', () => {
     const at = (/** @type {'round'|'square'} */ tip) => {
       const surface = brushSurface({ brush: brush({ size: 11, hardness: 50, tip }), color: '#000000', pageWidth: 200, pageHeight: 200 })
-      surface.add({ x: 9, y: 9, p: 1 })
+      surface.add({ x: 9.5, y: 9.5, p: 1 })
       const out = pixels(surface)
       return (/** @type {number} */ x, /** @type {number} */ y) => out.alpha(x, y)
     }

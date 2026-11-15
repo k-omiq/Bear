@@ -116,6 +116,62 @@ export function backingScale(width, height, ratio = globalThis.devicePixelRatio 
   return Math.max(0.01, Math.min(ratio, Math.sqrt(MAX_CANVAS_PIXELS / area)))
 }
 
+/**
+ * How a mask's canvas is sized: its backing store, the room left around the
+ * mask in backing pixels, and that room in CSS pixels.
+ *
+ * `mask` is the mask's own size in pixels, `inner` the size it is shown at in
+ * CSS pixels, and `margin` the room wanted around it in CSS pixels. Shown no
+ * larger than its own pixels, the backing follows the display (`backingScale`)
+ * and the room is `margin` as asked. Shown larger - a zoom past 100% - each
+ * mask pixel takes a whole number of backing pixels, the most the cap and the
+ * display allow, so no mask pixel is drawn a pixel wider than its neighbour
+ * and the squares line up with the page's. The room is then a whole number of
+ * backing pixels too, at least `margin` in CSS pixels, so the mask's first
+ * pixel starts exactly where its bounds do.
+ *
+ * @param {{width: number, height: number}} mask
+ * @param {{width: number, height: number}} inner
+ * @param {number} margin
+ * @param {number} [ratio]
+ * @returns {{width: number, height: number, insetX: number, insetY: number, marginX: number, marginY: number, scale: number}}
+ *   `width`/`height`/`insetX`/`insetY` in backing pixels, `marginX`/`marginY` in CSS pixels, `scale` backing pixels per CSS pixel
+ */
+export function maskBacking(mask, inner, margin, ratio = globalThis.devicePixelRatio || 1) {
+  const innerWidth = Math.max(1, inner.width)
+  const innerHeight = Math.max(1, inner.height)
+  const scale = backingScale(innerWidth + margin * 2, innerHeight + margin * 2, ratio)
+  const maskWidth = Math.max(1, Math.round(mask.width))
+  const maskHeight = Math.max(1, Math.round(mask.height))
+  const per = Math.min((innerWidth * scale) / maskWidth, (innerHeight * scale) / maskHeight)
+  if (!(per > 1)) {
+    const inset = margin * scale
+    return {
+      width: Math.max(1, Math.round((innerWidth + margin * 2) * scale)),
+      height: Math.max(1, Math.round((innerHeight + margin * 2) * scale)),
+      insetX: inset,
+      insetY: inset,
+      marginX: margin,
+      marginY: margin,
+      scale,
+    }
+  }
+  const whole = Math.floor(per)
+  const scaleX = (maskWidth * whole) / innerWidth
+  const scaleY = (maskHeight * whole) / innerHeight
+  const insetX = Math.ceil(margin * scaleX)
+  const insetY = Math.ceil(margin * scaleY)
+  return {
+    width: maskWidth * whole + insetX * 2,
+    height: maskHeight * whole + insetY * 2,
+    insetX,
+    insetY,
+    marginX: insetX / scaleX,
+    marginY: insetY / scaleY,
+    scale: Math.min(scaleX, scaleY),
+  }
+}
+
 /** @type {HTMLCanvasElement|null} the outline is built here, then laid over the fill */
 let scratch = null
 
@@ -123,7 +179,8 @@ let scratch = null
  * Colour a mask into a canvas whose backing store is already sized: a fill at
  * `fill` alpha, and an outline at full opacity just outside the shape.
  *
- * The mask is drawn into the canvas inset by `inset` on every side, which is
+ * The mask is drawn into the canvas inset by `inset` on every side (`insetY`
+ * top and bottom when given), which is
  * the room the outline needs: the image is cropped to its own bounds, so an
  * outline drawn inside it would be cut off at every edge the shape touches.
  *
@@ -136,17 +193,17 @@ let scratch = null
  *
  * @param {HTMLCanvasElement} canvas
  * @param {CanvasImageSource} image
- * @param {{inset: number, outline: number, color: string, fill: number}} style
- *   `inset` and `outline` in backing pixels, `fill` from 0 to 1
+ * @param {{inset: number, insetY?: number, outline: number, color: string, fill: number}} style
+ *   `inset`, `insetY` and `outline` in backing pixels, `fill` from 0 to 1
  * @returns {boolean} whether there was a context to draw into
  */
-export function paintMask(canvas, image, { inset, outline, color, fill }) {
+export function paintMask(canvas, image, { inset, insetY = inset, outline, color, fill }) {
   const context = canvas?.getContext?.('2d') ?? null
   if (!context) return false
   const width = canvas.width
   const height = canvas.height
   const w = width - inset * 2
-  const h = height - inset * 2
+  const h = height - insetY * 2
   context.globalCompositeOperation = 'source-over'
   context.globalAlpha = 1
   context.clearRect(0, 0, width, height)
@@ -158,7 +215,7 @@ export function paintMask(canvas, image, { inset, outline, color, fill }) {
   const smooth = !(w > (source?.naturalWidth || source?.width || Infinity))
   context.imageSmoothingEnabled = smooth
   context.globalAlpha = Math.max(0, Math.min(1, fill))
-  context.drawImage(image, inset, inset, w, h)
+  context.drawImage(image, inset, insetY, w, h)
   context.globalAlpha = 1
   context.globalCompositeOperation = 'source-in'
   context.fillStyle = color
@@ -180,10 +237,10 @@ export function paintMask(canvas, image, { inset, outline, color, fill }) {
   const steps = Math.min(24, Math.max(8, Math.ceil(outline * 4)))
   for (let step = 0; step < steps; step += 1) {
     const angle = (step / steps) * Math.PI * 2
-    ringContext.drawImage(image, inset + Math.cos(angle) * outline, inset + Math.sin(angle) * outline, w, h)
+    ringContext.drawImage(image, inset + Math.cos(angle) * outline, insetY + Math.sin(angle) * outline, w, h)
   }
   ringContext.globalCompositeOperation = 'destination-out'
-  ringContext.drawImage(image, inset, inset, w, h)
+  ringContext.drawImage(image, inset, insetY, w, h)
   ringContext.globalCompositeOperation = 'source-in'
   ringContext.fillStyle = color
   ringContext.fillRect(0, 0, width, height)
