@@ -99,6 +99,13 @@ impl Registered {
         if run_id.is_empty() || run_id.len() > 64 { return Err("denoise_run_id_invalid".into()); }
         let mut map = runs().lock().map_err(|e| e.to_string())?;
         if map.contains_key(run_id) { return Err("denoise_run_id_invalid".into()); }
+        // One denoise per chapter at a time, local or cloud: two would pick the
+        // same run folder before either wrote a page, write over each other's
+        // files, and be recorded as one run. Refused here, before a folder is
+        // chosen or a cloud grant is spent.
+        if !chapter_id.is_empty() && map.values().any(|run| run.chapter_id == chapter_id) {
+            return Err("denoise_chapter_busy".into());
+        }
         let run = Arc::new(DenoiseRun {
             kind, chapter_id: chapter_id.to_owned(), done: AtomicUsize::new(0), total: AtomicUsize::new(0),
             cancel: AtomicBool::new(false),
@@ -909,6 +916,18 @@ mod tests {
         assert!(held.cancel().load(Ordering::Relaxed));
         drop(held);
         assert!(!cancel_denoise_local("den-test-1".into()));
+    }
+
+    #[test]
+    fn a_chapter_takes_one_denoise_at_a_time() {
+        let first = Registered::new("den-test-busy-1", DenoiseKind::Local, "chapter-busy").unwrap();
+        for kind in [DenoiseKind::Local, DenoiseKind::Cloud] {
+            assert_eq!(Registered::new("den-test-busy-2", kind, "chapter-busy").err().as_deref(), Some("denoise_chapter_busy"));
+        }
+        let other = Registered::new("den-test-busy-3", DenoiseKind::Cloud, "chapter-busy-other").unwrap();
+        drop(first);
+        let again = Registered::new("den-test-busy-2", DenoiseKind::Cloud, "chapter-busy").unwrap();
+        drop((other, again));
     }
 
     /// Local and cloud runs share the registry: both are listed with their

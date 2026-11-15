@@ -453,7 +453,14 @@ pub(crate) fn prepare<G: DenoiseGateway + ?Sized>(
         return Err("capability_unavailable: the deployment cannot route colour pages".into());
     }
     if !advertised.supports(&recipe) {
-        return Err("capability_unavailable: the deployment has no models for this recipe".into());
+        // Named, so the interface can tell a model that must be added by hand
+        // (MoESR, whose host refuses the worker) from a setup that is out of date.
+        let missing = advertised.missing_models(&recipe);
+        return Err(if missing.is_empty() {
+            "capability_unavailable: the deployment has no models for this recipe".into()
+        } else {
+            format!("capability_unavailable: the deployment has no models for this recipe: {}", missing.join(", "))
+        });
     }
     // An older gateway ignores the field and answers at the page's size, which
     // would only be found out after the GPU ran every page.
@@ -1249,7 +1256,7 @@ pub async fn cloud_denoise_presets(app: tauri::AppHandle, provider: Option<Cloud
             _ => return Err("cloud_denoise_profile_not_active".into()),
         };
         let client = client_for(&destination)?;
-        Ok(capabilities(&client)?.presets)
+        Ok(capabilities(&client)?.offered_presets().into_iter().map(String::from).collect())
     }).await.map_err(|e| e.to_string())?
 }
 
@@ -1370,7 +1377,12 @@ mod tests {
         fn capabilities(&self) -> Result<DenoiseCapabilities, String> {
             Ok(serde_json::from_value(serde_json::json!({
                 "protocol_version": VERSION, "available": true,
-                "engines": {"denoise": ["waifu2x-art-scan"], "sharpen": [], "jpeg": ["mangajpeg-hq"]}, "models": [],
+                "engines": {"denoise": ["waifu2x-art-scan"], "sharpen": [], "jpeg": ["mangajpeg-hq"]},
+                // Support is read per model, from this list.
+                "models": [
+                    {"model_id": "waifu2x.swin_unet.art_scan.noise1", "license": "MIT", "author": "nagadomi", "seeded": true},
+                    {"model_id": "omdb.1x-MangaJPEGHQ", "license": "CC-BY-NC-SA-4.0", "author": "Bunzero", "seeded": true},
+                ],
             })).unwrap())
         }
 
@@ -1485,7 +1497,8 @@ mod tests {
             fn capabilities(&self) -> Result<DenoiseCapabilities, String> {
                 Ok(serde_json::from_value(serde_json::json!({
                     "protocol_version": VERSION, "available": true, "presets": ["waifu2x-scan-4x-n2"],
-                    "engines": {"denoise": [], "sharpen": [], "jpeg": []}, "models": [],
+                    "engines": {"denoise": [], "sharpen": [], "jpeg": []},
+                    "models": [{"model_id": "waifu2x.swin_unet.art_scan.noise2_scale4x", "license": "MIT", "author": "nagadomi", "seeded": true}],
                 })).unwrap())
             }
             fn denoise(&self,_:&DenoiseMetadata,_:&[u8])->Result<DenoiseResult,String> {panic!("nothing is sent")}

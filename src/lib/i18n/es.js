@@ -2273,6 +2273,8 @@ export const es = {
       notSetUp: 'Esta GPU en la nube no está configurada para la reducción de ruido de páginas. En Ajustes > Nube, configúrala con Modal y activa Reducción de ruido de páginas, e inténtalo de nuevo.',
       cloudOutdated: 'Esta GPU en la nube se configuró antes de que existieran los tamaños de salida más grandes. Actualiza la configuración en Ajustes > Nube, o elige Mismo tamaño, e inténtalo de nuevo.',
       cloudNeedsUpdate: 'Esta GPU en la nube se configuró antes de que esta receta pudiera ejecutarse. Actualiza la configuración en Ajustes > Nube e inténtalo de nuevo.',
+      moesrMissing: 'El archivo del modelo MoESR no está en esta GPU en la nube. Su sitio web bloquea las descargas automáticas, así que actualizar la configuración no lo añade. El archivo se añade a mano con spikes/denoise/put-moesr.sh del código fuente de Manga Cleaner. Mientras tanto, usa una receta sin MoESR.',
+      chapterBusy: 'Ya se está aplicando la reducción de ruido a este capítulo. Espera a que termine esa ejecución o detenla en Trabajos e inténtalo de nuevo.',
       openCloud: 'Abrir ajustes de la nube',
       modelMissing: 'Falta el modelo local o no superó su comprobación. Vuelve atrás para descargarlo de nuevo.',
       runtimeMissing: 'El entorno ONNX Runtime con el que se ejecuta este modelo no está instalado. Descárgalo en Ajustes > Modelos.',

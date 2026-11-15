@@ -165,6 +165,47 @@ export function chainRecipe(ids, scale = 1) {
   return wanted > 1 && chainScales(steps).includes(wanted) ? { schema: 1, steps, output_scale: wanted } : { schema: 1, steps }
 }
 
+/**
+ * The shipped preset that replaced each retired one: a settings file or a
+ * session saved by an earlier build names them. Mirrors
+ * `cloud_denoise_wire.rs#RETIRED_PRESETS`.
+ */
+export const RETIRED_PRESET_REPLACEMENT = Object.freeze({
+  'mangajanai-2x': 'realcugan-2x-auto',
+  'mangajanai-4x': 'realcugan-2x-auto',
+  'digimanga-bw-4x': 'realcugan-2x-auto',
+  'mangajpeg-hq': 'realcugan-2x-auto',
+  'mangajpeg-lq': 'realcugan-2x-auto',
+  'waifu2x-scan-n1': 'waifu2x-scan-4x-n2',
+  'waifu2x-scan-n3': 'waifu2x-scan-4x-n2',
+  'realcugan-2x-conservative': 'realcugan-2x-auto',
+  'realcugan-3x-conservative': 'realcugan-2x-auto',
+  'realcugan-3x-denoise3': 'realcugan-2x-auto',
+  'realcugan-4x-conservative': 'realcugan-2x-auto',
+  'waifu2x-art-2x-n1': 'ijanai-v3-denoise-4x',
+  'waifu2x-art-2x-n3': 'ijanai-v3-denoise-4x',
+})
+
+/**
+ * A stored preset id as this build reads it: a shipped id as it is, a
+ * retired one as its replacement, anything else as '' (no choice yet).
+ *
+ * @param {unknown} id
+ * @returns {string}
+ */
+export function currentPresetId(id) {
+  if (typeof id !== 'string') return ''
+  if (Object.hasOwn(PRESET_TEXT, id)) return id
+  return /** @type {Record<string, string>} */ (RETIRED_PRESET_REPLACEMENT)[id] ?? ''
+}
+
+/**
+ * MoESR v2 descreen's model id (`denoise.py#MOESR`). Its host refuses the cloud
+ * worker, so the file is put on a volume by hand (`spikes/denoise/put-moesr.sh`),
+ * and an error that names it says so.
+ */
+export const MOESR_MODEL_ID = 'umzi.ds-moesr-v2.4x'
+
 /** The page types the preset list is filtered by, in the order they are offered. */
 export const PAGE_KINDS = Object.freeze(['bw', 'color'])
 

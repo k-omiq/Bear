@@ -258,6 +258,48 @@ describe('the denoise dialog', () => {
     expect(sent).not.toHaveProperty('color_steps')
   })
 
+  it('says the MoESR file is added by hand when a recipe needs it and the cloud GPU lacks it', async () => {
+    await provision()
+    setDenoiseTarget('cloud')
+    vi.spyOn(mock, 'prepareCloudDenoise').mockRejectedValue(
+      new Error('capability_unavailable: the deployment has no models for this recipe: umzi.ds-moesr-v2.4x'))
+    const { getByRole, getByLabelText, getByText, queryByRole, phase } = await open()
+    await fireEvent.click(getByRole('button', { name: t('denoise.chain.label') }))
+    await fireEvent.click(getByLabelText(t('denoise.chain.use')))
+    const step = /** @type {HTMLSelectElement} */ (getByRole('combobox', { name: t('denoise.chain.stepLabel', { n: 1 }) }))
+    await fireEvent.change(step, { target: { value: 'moesr-descreen-4x' } })
+    await fireEvent.click(getByRole('button', { name: t('denoise.action.review') }))
+    await waitFor(() => expect(phase()).toBe('error'))
+    expect(getByText(t('denoise.error.moesrMissing'))).toBeTruthy()
+    expect(queryByRole('button', { name: t('denoise.error.openCloud') }), 'updating the setup would not fetch it').toBeNull()
+  })
+
+  it('says the setup is older than the recipe when another chain model is missing', async () => {
+    await provision()
+    setDenoiseTarget('cloud')
+    vi.spyOn(mock, 'prepareCloudDenoise').mockRejectedValue(
+      new Error('capability_unavailable: the deployment has no models for this recipe: realcugan.up2x-latest-denoise3x'))
+    const { getByRole, getByLabelText, getByText, phase } = await open()
+    await fireEvent.click(getByRole('button', { name: t('denoise.chain.label') }))
+    await fireEvent.click(getByLabelText(t('denoise.chain.use')))
+    await fireEvent.click(getByRole('button', { name: t('denoise.action.review') }))
+    await waitFor(() => expect(phase()).toBe('error'))
+    expect(getByText(t('denoise.error.cloudNeedsUpdate'))).toBeTruthy()
+  })
+
+  it('says the chapter is already being denoised when the backend refuses a second run on it', async () => {
+    await provision()
+    setDenoiseTarget('cloud')
+    vi.spyOn(mock, 'startCloudDenoise').mockRejectedValue(new Error('denoise_chapter_busy'))
+    const { getByRole, getByLabelText, findByText, phase } = await open()
+    await fireEvent.click(getByRole('button', { name: t('denoise.action.review') }))
+    await waitFor(() => expect(phase()).toBe('consent'))
+    await fireEvent.click(getByLabelText(t('cloud.analysis.rights')))
+    await fireEvent.click(getByLabelText(t('cloud.analysis.retention')))
+    await fireEvent.click(getByRole('button', { name: t('shell.action.confirmSpend') }))
+    await findByText(t('denoise.error.chapterBusy'))
+  })
+
   it('says a custom recipe is for the cloud GPU when this computer is picked', async () => {
     const { getByRole, getByText, queryByLabelText } = await open()
     await fireEvent.click(getByRole('button', { name: t('denoise.chain.label') }))

@@ -366,6 +366,31 @@ class RouteTests(unittest.TestCase):
         tinted[..., 2] -= 6
         self.assertFalse(d.is_colour_page(d.decode_page(png_of(tinted.clip(0, 255).astype(np.uint8), "RGB"))))
 
+    def test_tinted_paper_is_not_colour_and_transparent_pixels_are_not_counted(self):
+        pages = synthetic_pages()
+        paper = np.array([240, 230, 205], dtype=np.float32)  # chroma 35, past the line on its own
+        on_paper = lambda array: (np.atleast_3d(array).astype(np.float32) / 255 * paper).round().clip(0, 255).astype(np.uint8)
+        rgb = lambda array: d.decode_page(png_of(array, "RGB"))
+        self.assertFalse(d.is_colour_page(rgb(on_paper(pages["grey"]))), "a B&W page on yellowed paper")
+        logo = on_paper(pages["grey"])
+        logo[4:12, 6:30] = (240, 120, 170)
+        self.assertFalse(d.is_colour_page(rgb(logo)), "the small pink logo still keeps it grey")
+        sparse = np.full_like(pages["sparse"], 0)
+        sparse[...] = paper.astype(np.uint8)
+        sparse[30:80, 20:60] = pages["colour"][30:80, 20:60]
+        self.assertTrue(d.is_colour_page(rgb(sparse)), "colour art on tinted paper is a colour page")
+        self.assertTrue(d.is_colour_page(rgb(pages["colour"])))
+        # A coloured background is not paper: it is not balanced away.
+        self.assertTrue(d.is_colour_page(rgb(np.full((40, 40, 3), (90, 160, 230), dtype=np.uint8))))
+
+        # Half the page fully transparent, its hidden pixels bright colour; the rest grey.
+        rgba = np.dstack([np.stack([pages["grey"]] * 3, axis=-1), np.full(pages["grey"].shape, 255, np.uint8)])
+        rgba[:, :45, :3] = (255, 0, 160)
+        rgba[:, :45, 3] = 0
+        self.assertFalse(d.is_colour_page(d.decode_page(png_of(rgba, "RGBA"))))
+        rgba[:, :45, 3] = 255
+        self.assertTrue(d.is_colour_page(d.decode_page(png_of(rgba, "RGBA"))), "the same pixels, shown, are colour")
+
     def test_one_run_sends_each_page_to_its_route(self):
         routed = {**recipe(GRAIN), "color_steps": [{"op": "sharpen", "engine": "waifu2x-art-scan", "scale": 2}]}
         routes = d.resolve_routes(routed)
@@ -565,6 +590,70 @@ class WeightsTests(unittest.TestCase):
             self.assertEqual(d.ensure_models(root, [model]), paths)
 
 
+    def test_an_optional_model_never_fails_the_seed_and_leaves_no_part_file(self):
+        import hashlib
+        import http.client
+        import tarfile
+        payload = b"moesr weights" * 100
+        with tempfile.TemporaryDirectory() as src:
+            good = Path(src) / "m.tar.xz"
+            with tarfile.open(good, "w:xz") as tar:
+                info = tarfile.TarInfo("models/m.pth")
+                info.size = len(payload)
+                tar.addfile(info, io.BytesIO(payload))
+            served = {
+                "html challenge page": b"<!doctype html><title>Just a moment...</title>",
+                "archive without the member": good.read_bytes(),
+                "archive with other bytes": good.read_bytes(),
+            }
+            for case, body in served.items():
+                def serve(url, directory, body=body):
+                    target = Path(directory) / "part"
+                    target.write_bytes(body)
+                    return target
+                d._download = serve
+                member = "models/other.pth" if case == "archive without the member" else "models/m.pth"
+                digest = "0" * 64 if case == "archive with other bytes" else hashlib.sha256(payload).hexdigest()
+                model = replace(d.MOESR, url="https://example.invalid/m.tar.xz", archive_member=member,
+                                sha256=digest, bytes=len(payload))
+                with tempfile.TemporaryDirectory() as root:
+                    self.assertEqual(d.ensure_models(root, [model]), {}, case)
+                    left = [p.name for p in (Path(root) / d.DENOISE_DIR_NAME).iterdir()]
+                    self.assertEqual(left, [], case)
+                    # A required model with the same fault still fails the seed.
+                    with self.assertRaises(Exception, msg=case):
+                        d.ensure_models(root, [replace(model, optional=False)])
+
+            def cut_short(url, directory):
+                raise http.client.IncompleteRead(b"partial", 1000)
+            d._download = cut_short
+            with tempfile.TemporaryDirectory() as root:
+                self.assertEqual(d.ensure_models(root, [d.MOESR]), {})
+
+    def test_a_cut_off_download_leaves_no_part_file(self):
+        import http.client
+        import urllib.request
+
+        class Short:
+            def __enter__(self): return self
+            def __exit__(self, *exc): return False
+            def __init__(self): self.sent = False
+            def read(self, size):
+                if self.sent:
+                    raise http.client.IncompleteRead(b"", 10)
+                self.sent = True
+                return b"x" * 10
+        saved = urllib.request.urlopen
+        urllib.request.urlopen = lambda url, timeout: Short()
+        try:
+            with tempfile.TemporaryDirectory() as root:
+                with self.assertRaises(http.client.IncompleteRead):
+                    self.saved("https://example.invalid/m", Path(root))
+                self.assertEqual(list(Path(root).iterdir()), [])
+        finally:
+            urllib.request.urlopen = saved
+
+
 class SeedTests(unittest.TestCase):
     def test_capabilities_follow_seeded_files(self):
         with tempfile.TemporaryDirectory() as root:
@@ -581,6 +670,37 @@ class SeedTests(unittest.TestCase):
             self.assertEqual(caps["features"], ["output_scale", "color_route"])
             self.assertEqual(caps["engines"]["denoise"], ["waifu2x-art-scan"])
             self.assertEqual(caps["engines"]["jpeg"], [])
+
+    def test_capabilities_pass_the_check_of_builds_up_to_beta_20(self):
+        # cloud_denoise_wire.rs at v1.0.0-beta.20: deny_unknown_fields on the answer and
+        # on each model, every preset id and engine name from its own fixed lists, at
+        # most 64 models. Anything else and an older app loses cloud denoise entirely.
+        old_presets = {"waifu2x-scan-4x-n2", "realcugan-2x-conservative", "realcugan-3x-conservative",
+                       "realcugan-3x-denoise3", "mangajanai-2x", "mangajanai-4x", "digimanga-bw-4x",
+                       "mangajpeg-hq", "mangajpeg-lq", "waifu2x-scan-n1", "waifu2x-scan-n3",
+                       "realcugan-4x-conservative", "waifu2x-art-2x-n1", "waifu2x-art-2x-n3"}
+        old_engines = {"waifu2x-art-scan", "waifu2x-art", "waifu2x-cunet-art", "mangajanai", "realcugan",
+                       "digimanga-bw-4x", "mangajpeg-hqplus", "mangajpeg-hq", "mangajpeg-mq", "mangajpeg-lq"}
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root) / d.DENOISE_DIR_NAME
+            directory.mkdir()
+            for model in d.MODELS.values():
+                with (directory / model.file_name).open("wb") as handle:
+                    handle.truncate(model.bytes)
+            caps = d.denoise_capabilities(root)
+        self.assertEqual(set(caps), {"protocol_version", "available", "presets", "features", "engines", "models"})
+        self.assertEqual(caps["protocol_version"], "1.0.0")
+        self.assertEqual(set(caps["presets"]), old_presets, "every old preset is offered to an old app")
+        for op, names in caps["engines"].items():
+            self.assertLessEqual(len(names), 8, op)
+            self.assertTrue(set(names) <= old_engines, (op, set(names) - old_engines))
+        self.assertLessEqual(len(caps["features"]), 8)
+        self.assertLessEqual(len(caps["models"]), 64)
+        for model in caps["models"]:
+            self.assertEqual(set(model), {"model_id", "license", "author", "seeded"})
+        # A newer app finds the new models here.
+        seeded = {m["model_id"] for m in caps["models"] if m["seeded"]}
+        self.assertTrue({d.MOESR.model_id, "ijanai.v3denoise.4x", "ijanai.v3denoise.2x"} <= seeded)
 
     def test_unseeded_models_are_not_downloaded_on_a_worker(self):
         with tempfile.TemporaryDirectory() as root:

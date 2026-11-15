@@ -257,11 +257,19 @@ impl DenoiseRecipe {
 
     /// Whether a page of this size is inside the gateway's pixel limits for
     /// this recipe, the page's own and each sharpen step's upscaled one.
+    ///
+    /// With a colour route, the worker picks the route by the page and checks
+    /// that route alone (`denoise_page`), and the client cannot know the route
+    /// first. So a page is refused here only when it is too large for every
+    /// route: a black and white page under a 2x route with a 4x colour route
+    /// keeps the 2x limit, and a colour page past the 4x limit fails on the
+    /// worker as `page_too_large`, before any model runs.
     pub fn fits(&self, width: u32, height: u32) -> Result<(), String> {
         let pixels = u64::from(width) * u64::from(height);
         if pixels == 0 || pixels > MAX_PAGE_PIXELS { return Err("page is too large".into()); }
         let (gray, color) = self.resolve_routes()?;
-        let largest = gray.iter().chain(color.iter().flatten()).map(|step| u64::from(step.scale)).max().unwrap_or(1);
+        let largest = |steps: &[ResolvedStep]| steps.iter().map(|step| u64::from(step.scale)).max().unwrap_or(1);
+        let largest = color.as_deref().map_or(largest(&gray), |color| largest(&gray).min(largest(color)));
         if pixels * largest * largest > MAX_UPSCALED_PIXELS {
             return Err("page is too large for this sharpen scale".into());
         }
@@ -339,6 +347,32 @@ pub const PRESETS: [DenoisePreset; 4] = [
 
 pub fn preset(id: &str) -> Option<&'static DenoisePreset> {
     PRESETS.iter().find(|preset| preset.id == id)
+}
+
+/// The presets builds up to 1.0.0-beta.20 shipped, each with the shipped
+/// preset that does its job now. A settings file or a session saved by one
+/// of those builds names them; `src/lib/model/denoise.js` holds the same map.
+pub const RETIRED_PRESETS: [(&str, &str); 13] = [
+    ("mangajanai-2x", "realcugan-2x-auto"),
+    ("mangajanai-4x", "realcugan-2x-auto"),
+    ("digimanga-bw-4x", "realcugan-2x-auto"),
+    ("mangajpeg-hq", "realcugan-2x-auto"),
+    ("mangajpeg-lq", "realcugan-2x-auto"),
+    ("waifu2x-scan-n1", "waifu2x-scan-4x-n2"),
+    ("waifu2x-scan-n3", "waifu2x-scan-4x-n2"),
+    ("realcugan-2x-conservative", "realcugan-2x-auto"),
+    ("realcugan-3x-conservative", "realcugan-2x-auto"),
+    ("realcugan-3x-denoise3", "realcugan-2x-auto"),
+    ("realcugan-4x-conservative", "realcugan-2x-auto"),
+    ("waifu2x-art-2x-n1", "ijanai-v3-denoise-4x"),
+    ("waifu2x-art-2x-n3", "ijanai-v3-denoise-4x"),
+];
+
+/// A stored preset id as this build reads it: a shipped id as it is, a
+/// retired one as its replacement, and anything else as nothing.
+pub fn current_preset_id(id: &str) -> Option<&'static str> {
+    preset(id).map(|preset| preset.id)
+        .or_else(|| RETIRED_PRESETS.iter().find(|(old, _)| *old == id).map(|(_, new)| *new))
 }
 
 /// The shipped preset a recipe is, by its canonical bytes at the page's own
@@ -679,20 +713,43 @@ impl DenoiseCapabilities {
         Ok(())
     }
 
-    /// Whether the gateway has the recipe's models: it lists the preset the
-    /// recipe is, or every step's engine for its op. The preset list is the
-    /// exact answer (every model of the recipe is seeded); an engine is listed
-    /// from one probe model, which a preset of that engine need not be.
+    /// Whether the gateway has every model the recipe can run, on both routes,
+    /// read from the per-model `models` list. Not from `presets` or `engines`:
+    /// a gateway names there only what builds up to 1.0.0-beta.20 know (their
+    /// check refuses anything else), and an engine is listed from one probe
+    /// model, which another step of that engine need not have.
     pub fn supports(&self, recipe: &DenoiseRecipe) -> bool {
-        self.available && (recipe.color_steps.is_none() || self.routes_colour()) && (preset_of(recipe).is_some_and(|preset| self.presets.iter().any(|id| id == preset.id))
-            || recipe.steps.iter().chain(recipe.color_steps.iter().flatten()).all(|step| {
-                let names = match step.op {
-                    DenoiseOp::Denoise => &self.engines.denoise,
-                    DenoiseOp::Sharpen => &self.engines.sharpen,
-                    DenoiseOp::Jpeg => &self.engines.jpeg,
-                };
-                names.contains(&step.engine)
-            }))
+        if !self.available || (recipe.color_steps.is_some() && !self.routes_colour()) { return false; }
+        let Ok((gray, color)) = recipe.resolve_routes() else { return false };
+        gray.iter().chain(color.iter().flatten()).all(|step| self.seeded(&step.model_id))
+    }
+
+    /// The models the recipe can run that are not on the volume, each once:
+    /// what an error names so the interface can say which file is missing.
+    pub fn missing_models(&self, recipe: &DenoiseRecipe) -> Vec<String> {
+        let Ok((gray, color)) = recipe.resolve_routes() else { return Vec::new() };
+        let mut missing: Vec<String> = Vec::new();
+        for step in gray.iter().chain(color.iter().flatten()) {
+            if !self.seeded(&step.model_id) && !missing.contains(&step.model_id) { missing.push(step.model_id.clone()); }
+        }
+        missing
+    }
+
+    /// Whether model `model_id` is on the volume. A `.auto` id is a family the
+    /// worker picks from by page size: every model of it must be there.
+    fn seeded(&self, model_id: &str) -> bool {
+        match model_id.strip_suffix("auto") {
+            Some(family) => {
+                let mut members = self.models.iter().filter(|model| model.model_id.starts_with(family)).peekable();
+                members.peek().is_some() && members.all(|model| model.seeded)
+            }
+            None => self.models.iter().any(|model| model.model_id == model_id && model.seeded),
+        }
+    }
+
+    /// The shipped presets the gateway can run, in table order.
+    pub fn offered_presets(&self) -> Vec<&'static str> {
+        PRESETS.iter().filter(|preset| self.supports(&preset.recipe())).map(|preset| preset.id).collect()
     }
 
     /// Whether the gateway keeps a recipe's `output_scale`. One that does not
@@ -939,14 +996,17 @@ mod tests {
         unknown.error_code = "teapot".into();
         assert!(unknown.validate().is_err());
 
+        let model = |id: &str, seeded: bool| serde_json::json!({"model_id": id, "license": "MIT", "author": "a", "seeded": seeded});
         let capabilities: DenoiseCapabilities = serde_json::from_value(serde_json::json!({
             "protocol_version": "1.0.0", "available": true,
             "engines": {"denoise": ["waifu2x-art-scan"], "sharpen": ["waifu2x-art-scan", "digimanga-bw-4x"], "jpeg": []},
-            "models": [{"model_id": "waifu2x.swin_unet.art_scan.noise1", "license": "MIT", "author": "nagadomi (nunif)", "seeded": true}],
+            "models": [model("waifu2x.swin_unet.art_scan.noise1", true)],
         })).unwrap();
         capabilities.validate().unwrap();
+        assert!(capabilities.supports(&recipe(r#"{"schema":1,"steps":[{"op":"denoise","engine":"waifu2x-art-scan","level":1}]}"#)));
         assert!(!capabilities.supports(&recipe(THREE_STEPS)), "no cunet sharpen, no jpeg");
-        assert!(capabilities.supports(&recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"digimanga-bw-4x"}]}"#)));
+        assert!(!capabilities.supports(&recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"digimanga-bw-4x"}]}"#)),
+            "an engine listed, its model not");
         let mut bad = capabilities.clone();
         bad.engines.jpeg.push("waifu2x-art-scan".into());
         assert!(bad.validate().is_err());
@@ -957,7 +1017,7 @@ mod tests {
             "protocol_version": "1.0.0", "available": true,
             "presets": ["realcugan-2x-conservative", "mangajanai-4x"],
             "engines": {"denoise": [], "sharpen": ["waifu2x-art", "mangajanai", "realcugan"], "jpeg": []},
-            "models": [],
+            "models": [model("realcugan.up2x-latest-conservative", true)],
         })).unwrap();
         current.validate().unwrap();
         let cugan = recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}]}"#);
@@ -973,29 +1033,57 @@ mod tests {
         let mut no_1x = current.clone();
         no_1x.engines.denoise.push("waifu2x-art".into());
         assert!(no_1x.validate().is_err(), "waifu2x-art has no 1x models");
+        assert!(!current.upscales(), "an older gateway lists no features");
+    }
 
-        // A listed preset is supported though its engine's probe model is not
-        // seeded: only preset models are, and the scan probe is the plain 2x.
-        let presets_only: DenoiseCapabilities = serde_json::from_value(serde_json::json!({
-            "protocol_version": "1.0.0", "available": true, "features": ["output_scale"],
-            "presets": ["waifu2x-scan-4x-n2", "ijanai-v3-denoise-4x"],
-            "engines": {"denoise": [], "sharpen": [], "jpeg": []}, "models": [],
-        })).unwrap();
-        presets_only.validate().unwrap();
-        let scan = preset("waifu2x-scan-4x-n2").unwrap().recipe();
-        assert!(presets_only.supports(&scan) && presets_only.supports(&preset("ijanai-v3-denoise-4x").unwrap().recipe()));
-        assert!(presets_only.supports(&DenoiseRecipe { output_scale: Some(2), ..scan }), "a preset at any output scale");
-        assert!(!presets_only.supports(&preset("moesr-descreen-auto").unwrap().recipe()), "not listed: MoESR not seeded");
-        assert!(presets_only.upscales() && !current.upscales(), "an older gateway lists no features");
-        // A routed preset needs the gateway to say it routes, as well as to list it.
-        let mut routed = presets_only.clone();
-        routed.presets.push("realcugan-2x-auto".into());
-        assert!(!routed.supports(&preset("realcugan-2x-auto").unwrap().recipe()));
-        routed.features.push(FEATURE_COLOR_ROUTE.into());
-        assert!(routed.routes_colour() && routed.supports(&preset("realcugan-2x-auto").unwrap().recipe()));
-        let mut odd = presets_only.clone();
-        odd.features = vec!["\u{0}".into()];
-        assert!(odd.validate().is_err());
+    #[test]
+    fn denoise_support_is_read_per_model_from_what_older_builds_accept() {
+        // What this build's worker answers on a volume seeded by it: `presets`
+        // and `engines` hold only what 1.0.0-beta.20 knows, so the new presets
+        // and engines are found in `models` alone.
+        let model = |id: &str, seeded: bool| serde_json::json!({"model_id": id, "license": "MIT", "author": "a", "seeded": seeded});
+        let seeded = ["ijanai.v3denoise.4x", "ijanai.v3denoise.2x", "realcugan.up2x-latest-conservative", "umzi.ds-moesr-v2.4x",
+            "waifu2x.swin_unet.art_scan.noise2_scale4x", "waifu2x.swin_unet.art_scan.noise1", "waifu2x.swin_unet.art_scan.noise3",
+            "omdb.1x-MangaJPEGHQ"];
+        let answer = |missing: &[&str], features: &[&str]| -> DenoiseCapabilities {
+            let mut models: Vec<Value> = seeded.iter().map(|id| model(id, !missing.contains(id))).collect();
+            models.push(model("realcugan.up2x-latest-denoise3x", !missing.contains(&"realcugan.up2x-latest-denoise3x")));
+            serde_json::from_value(serde_json::json!({
+                "protocol_version": "1.0.0", "available": true, "features": features,
+                "presets": ["waifu2x-scan-4x-n2", "realcugan-2x-conservative"],
+                "engines": {"denoise": ["waifu2x-art-scan"], "sharpen": ["waifu2x-art-scan", "realcugan"], "jpeg": ["mangajpeg-hq"]},
+                "models": models,
+            })).unwrap()
+        };
+        let full = answer(&[], &[FEATURE_OUTPUT_SCALE, FEATURE_COLOR_ROUTE]);
+        full.validate().unwrap();
+        assert_eq!(full.offered_presets(), ["realcugan-2x-auto", "moesr-descreen-auto", "ijanai-v3-denoise-4x", "waifu2x-scan-4x-n2"]);
+        assert!(full.supports(&DenoiseRecipe { output_scale: Some(2), ..preset("realcugan-2x-auto").unwrap().recipe() }));
+        // MoESR left off the volume (its host refuses the worker): its preset is not offered.
+        assert_eq!(answer(&["umzi.ds-moesr-v2.4x"], &[FEATURE_OUTPUT_SCALE, FEATURE_COLOR_ROUTE]).offered_presets(),
+            ["realcugan-2x-auto", "ijanai-v3-denoise-4x", "waifu2x-scan-4x-n2"]);
+        // No colour route: the routed presets are not offered.
+        assert_eq!(answer(&[], &[FEATURE_OUTPUT_SCALE]).offered_presets(), ["ijanai-v3-denoise-4x", "waifu2x-scan-4x-n2"]);
+        // A chain step whose exact model is missing is refused before the cost is
+        // shown, though its engine is listed and its sibling model is there.
+        let strong = recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2,"level":3}]}"#);
+        assert!(full.supports(&strong));
+        let older_volume = answer(&["realcugan.up2x-latest-denoise3x"], &[FEATURE_OUTPUT_SCALE, FEATURE_COLOR_ROUTE]);
+        assert!(!older_volume.supports(&strong));
+        assert!(older_volume.supports(&recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"realcugan","scale":2}]}"#)));
+        assert_eq!(older_volume.missing_models(&strong), ["realcugan.up2x-latest-denoise3x"]);
+        assert!(full.missing_models(&strong).is_empty());
+
+        // A `.auto` step needs every model of its family.
+        let family = |seeded: bool| -> DenoiseCapabilities { serde_json::from_value(serde_json::json!({
+            "protocol_version": "1.0.0", "available": true,
+            "engines": {"denoise": [], "sharpen": ["mangajanai"], "jpeg": []},
+            "models": [model("mangajanai.2x.1200p", true), model("mangajanai.2x.2048p", seeded)],
+        })).unwrap() };
+        let janai = recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"mangajanai","scale":2}]}"#);
+        assert!(family(true).supports(&janai) && !family(false).supports(&janai));
+        assert!(!family(true).supports(&recipe(r#"{"schema":1,"steps":[{"op":"sharpen","engine":"mangajanai","scale":4}]}"#)),
+            "no 4x model at all");
     }
 
     #[test]
@@ -1041,6 +1129,18 @@ mod tests {
     /// A routed recipe: each route is checked as a recipe, the output scale
     /// lands on both, and an answer may name either route's models.
     #[test]
+    fn a_retired_preset_reads_as_its_replacement() {
+        for (old, new) in RETIRED_PRESETS {
+            assert!(preset(old).is_none(), "{old} is retired");
+            assert!(preset(new).is_some(), "{new} is shipped");
+            assert_eq!(current_preset_id(old), Some(new));
+        }
+        for shipped in PRESETS { assert_eq!(current_preset_id(shipped.id), Some(shipped.id)); }
+        assert_eq!(current_preset_id("custom"), None);
+        assert_eq!(current_preset_id("Mangajanai-2x"), None);
+    }
+
+    #[test]
     fn denoise_colour_route_rules_mirror_resolve_routes() {
         use serde_json::json;
         for (case, model) in [
@@ -1072,9 +1172,14 @@ mod tests {
             .unwrap().resolve_routes().is_err());
         assert!(serde_json::from_str::<DenoiseRecipe>(&format!(r#"{{"schema":1,"steps":[{cugan}],"colour_steps":[]}}"#)).is_err());
 
-        // The colour route's 4x model makes the pixel ceiling the 4x one.
+        // A page is refused only when it is too large for both routes: the
+        // worker checks the route the page runs. A 3000 x 4300 black and white
+        // scan runs Real-CUGAN 2x, inside its ceiling, though IllustrationJaNai
+        // 4x could not take it.
         let auto = preset("realcugan-2x-auto").unwrap().recipe();
-        assert!(auto.fits(3000, 3000).is_ok() && auto.fits(4000, 4000).is_err());
+        assert!(auto.fits(3000, 4300).is_ok());
+        assert!(preset("ijanai-v3-denoise-4x").unwrap().recipe().fits(3000, 4300).is_err());
+        assert!(preset("moesr-descreen-auto").unwrap().recipe().fits(4000, 4000).is_err(), "4x on both routes");
 
         let page = png(16, 16, png::ColorType::Rgb);
         let request = DenoiseMetadata::new(auto, &page).unwrap();

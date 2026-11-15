@@ -336,6 +336,24 @@ describe('sanitizeSession', () => {
     expect(backendSettingsPatch().fluxBackend).toBe('auto')
   })
 
+  it('reads a denoise preset an earlier build saved as its replacement, and never sends one the backend refuses', async () => {
+    const { adoptBackendSettings, backendSettingsPatch, sanitizeSession, session, setDenoisePreset } = await import('./session.svelte.js')
+    adoptBackendSettings({ denoisePreset: 'realcugan-2x-conservative' })
+    expect(session.denoisePreset).toBe('realcugan-2x-auto')
+    expect(backendSettingsPatch().denoisePreset).toBe('realcugan-2x-auto')
+    adoptBackendSettings({ denoisePreset: 'waifu2x-art-2x-n1' })
+    expect(backendSettingsPatch().denoisePreset).toBe('ijanai-v3-denoise-4x')
+    adoptBackendSettings({ denoisePreset: 'a-preset-no-build-knows' })
+    expect(backendSettingsPatch()).not.toHaveProperty('denoisePreset')
+    // A stale id already in this window's session is not sent either.
+    setDenoisePreset('mangajanai-2x')
+    expect(backendSettingsPatch().denoisePreset).toBe('realcugan-2x-auto')
+    setDenoisePreset('nonsense')
+    expect(backendSettingsPatch()).not.toHaveProperty('denoisePreset')
+    expect(sanitizeSession({ denoisePreset: 'mangajanai-4x' }).denoisePreset).toBe('realcugan-2x-auto')
+    setDenoisePreset('')
+  })
+
   it('carries the FLUX 3 working size down to the backend, one of the measured sizes', async () => {
     const { backendSettingsPatch, setCloudWorkLongSide, adoptBackendSettings } = await import('./session.svelte.js')
     expect(backendSettingsPatch().cloudWorkLongSide).toBe(768)
