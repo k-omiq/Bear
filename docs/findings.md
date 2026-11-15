@@ -724,12 +724,57 @@ never written as though it were general.
 
 ## What has not been measured
 
+**Ten features in one batch (2026-11-15): what is still open.** Pixel zoom, the brush tip and opacity, the Pages
+screen and split chapter numbers, the new denoise presets, Restore mask for a failed clean, Nano Banana profiles and
+in-app version rollback were built in separate worktrees, merged, read by six read-only reviewers, and fixed. The
+checks were unit tests, DOM tests and the Vite mock.
+
+- **Nothing here ran in the real app.** No WKWebView, WebView2 or WebKitGTK run, no real keychain, no real file
+  chooser or drag and drop, no real cloud render.
+- **Pixel zoom.** Speed and memory at 12800% in WKWebView are unknown; in Chromium the first reach of 6400% took
+  about 1 s a frame, then 17 ms. `image-rendering: pixelated` on WebKitGTK was not tried. Long strip pages stay on
+  their preview copy at high zoom. Detection masks and patch layers at pixel zoom are covered by tests only, because
+  the mock has no `tile://` pixels. A zoom change in the middle of an eraser stroke can show a wrong preview until
+  the stroke commits.
+- **Brush.** The mask brush and the selection brush have no tip and no opacity. A square tip has no angle. The brush
+  kernel now samples pixel k at k + 0.5, in Rust and JS together, so a dab is centred on its point; saved strokes are
+  pixels and did not change.
+- **Pages screen.** A page with work, and every page before it, cannot be moved or removed, because region ids hold
+  the page position; making ids position-free is a large change in `region.rs` and was not started. A chapter made
+  with no source folder shows no pages, cannot take new ones, and keeps its split label only in the library index,
+  where an older build can drop it. There is no chapter rename. The real backend has no taken check for a split
+  number; only the dialog checks. The chapter row's denoise run count still counts runs of removed pages. A cloud
+  attempt in flight across a restart on a moved page was not tried.
+- **Import names changed.** A file whose stem matches another page's gets a free name (`001.jpg` beside `001.webp`
+  becomes `001.jpg` and `001-2.png`), also for new chapters.
+- **Denoise.** The live workers are not redeployed, so the new presets are hidden on every profile until they are.
+  MoESR's host refuses Modal, so its file is added per profile by hand with `spikes/denoise/put-moesr.sh`; its
+  licence is not stated, and IllustrationJaNai is CC BY-NC-SA 4.0. An app at 1.0.0-beta.20 or older on a new worker
+  sees only the old presets whose files are on the volume, and a fresh setup seeds only `waifu2x-scan-4x-n2`. A
+  custom recipe has no time estimate before Review cost. The colour test now measures chroma against the page's
+  paper colour; it was tried on synthetic pages and one GPU smoke run, not on a yellowed raw scan. Only waifu2x runs
+  on this computer.
+- **Restore mask.** Undo of a restore queues the page for Detect again, as Approve mask does. A restore always
+  lowers the declined counter; whether a gate-skip row can reach that path was not shown. A chapter that keeps a
+  failed clean's mask is saved as format 7, so 1.0.0-beta.20 and older refuse it: they would delete the kept files.
+- **Nano Banana profiles.** The move of a real saved key was tested with a fake store only. Two Rust tests
+  (`a_crop_shown_first_goes_only_as_the_person_answers`, `nano_banana_crop::a_stopped_edit_stops_waiting`) fail when
+  run together and pass alone; they share the global events sink, and that was so before this work.
+- **Version rollback.** No real rollback has run. No past release has its own manifest on the update host yet:
+  `scripts/backfill-rollback-manifests.py --upload` publishes the 17 files and was only run dry. The skip rule
+  exists only in versions after 1.0.0-beta.20, so that version shows its update badge after a rollback. The release
+  list is read from GitHub without a login, 60 requests an hour. NSIS downgrade on Windows and the AppImage path were
+  read in code, not run.
+- **Provisioner tests.** Seven tests in `provisioner/test_subprocess_entrypoint.py` fail on this Mac with
+  `ERR_EXECUTION_FAILED`, the same way on `main` at bf36ec4. The cause was not looked at.
+
 **Page denoise combos (2026-11-14): what is still open.** Bench and plan in
-`docs/research/denoise-combos-2026-11.md`. No app code changed.
+`docs/research/denoise-combos-2026-11.md`. The plan was built on 2026-11-15; see the block above.
 
 - **Only already-clean pages were tried** (one series, chapters 49 and 50, done and cleaned pages). A noisy raw
   scan, a heavy JPEG web raw and a screentone-heavy print scan were not run.
-- **The MangaJaNai presets turn colour pages grey** in the shipped app; not fixed.
+- **The MangaJaNai presets turned colour pages grey** in the shipped app. Fixed 2026-11-15: MangaJaNai is no
+  longer a preset, and it and MoESR run on luma only with the source's colour put back.
 - **MoESR v2 and the other umzi files have no stated licence**, and their host blocks Modal; neither is settled.
 - **No local (desktop) run** of FDAT, MoESR or RCAN: they are PyTorch only, so they would be cloud only unless
   exported to ONNX, which was not tried.

@@ -15,7 +15,8 @@ longstrip). The mode is permanent: it decides how pages are stitched and split i
 the dialog says so before you press Create. **New chapter** asks for the project, a title, a chapter number and a
 source folder. The number starts at one past the highest the project holds and is yours to change; it is stored
 exactly as you typed it and never renumbered, so a gap stays a gap, and Create is blocked on a number the project
-already uses. Leave the folder empty and the chapter reads a subfolder named after it, or the project's own folder.
+already uses. The number may hold `.`, `,`, `/` and `-` for a split chapter (`12.5`, `12-1`, `12/2`); it is shown
+as typed, sorts between its neighbours, and never reaches a folder name. Leave the folder empty and the chapter reads a subfolder named after it, or the project's own folder.
 Only one chapter may read the project's own folder; a second attempt is refused, and the refusal names the chapter
 that already has it.
 
@@ -50,6 +51,25 @@ rather than a guess, and two sources that would convert onto one name get a step
 The chapter reports how many files were converted. AVIF, HEIC and JPEG XL need decoders this build does not ship and
 are refused with the rest. Archives (CBZ, CBR, ZIP, PDF) are not accepted; point a chapter at a folder of images.
 
+**Manage pages**, on a chapter's menu and in the editor's Pages window, opens the chapter's **Pages** screen: every
+page as a thumbnail with its number and state. **Add pages** takes image files from the file chooser or dropped on
+the screen, at the end or before or after the selected page. Selected pages can be removed, after a confirmation
+that says what work is lost, moved by dragging or with the arrows, and put back later: a removed page's file is
+kept. Region ids hold the page's position, so a page with work keeps its place, and no page before it can be
+removed, inserted or moved; the screen says why on such a page. A long strip with work only grows at its end, and a
+chapter keeps at least one page. A page's kept denoise runs stay with it. While a run uses the chapter the screen
+waits. An export follows the chapter's page order: when the file names no longer sort in that order the pages are
+written as `001`, `002` and so on.
+
+**Denoise** on a chapter's menu offers four presets: Real-CUGAN 2x and MoESR v2 descreen for black and white pages,
+IllustrationJaNai 4x for colour pages, and waifu2x scan 4x as the soft option, each at page size or 2x. The two black
+and white presets send colour pages to the colour model in the same run; a grey page with a small coloured mark
+stays black and white and keeps the mark's colour. **Advanced** builds a recipe of up to three steps, on the cloud
+GPU only. A new run never replaces an earlier one: the compare window lists every run, shows one page with a wipe
+between before and after at Fit, 1:1 or 2:1, picks the run in use, and deletes a run after a question. Only waifu2x
+runs on this computer; the other models need the cloud worker, and MoESR needs its file added to the worker by hand
+(`spikes/denoise/put-moesr.sh`).
+
 ## The editor
 
 The page sits in the middle, with four floating windows you can move, resize, collapse and close: **Pages**,
@@ -58,7 +78,8 @@ the library, the project and chapter name (editable in place), the view controls
 Export. **Hold O** to see the original scan under your edits, or **Shift+O** to pin it on; a wipe slider sweeps
 between the two. **M** toggles the mask overlay, which outlines every region at once. With the overlay off, a region
 is outlined only while you point at it, focus it or select it. The bottom bar carries zoom (fit, a percentage, and
-1:1), undo and redo, previous and next page, and previous and next region needing review; pinch and modifier-scroll
+1:1; from 40% to 12800%, with each image pixel drawn as a sharp square above 100% and a pixel grid from 800%; fit and
+1:1 leave the page in the middle of the view), undo and redo, previous and next page, and previous and next region needing review; pinch and modifier-scroll
 zoom as well. **Hold Space and drag** to move the canvas with any tool, or drag with the middle mouse button. Settings,
 Shortcuts can also make a plain mouse wheel zoom and a drag on empty canvas pan. Page order is right-to-left by default and is set per project. A card in the corner lists the models
 currently holding memory, with a button per row to free one; anything still needed loads again by itself. Notices
@@ -282,7 +303,8 @@ outside bubbles, mask padding with its Apply, and the run button, all described 
 
 ### Brush
 
-Options: size, hardness, spacing, colour, opacity and flow. The brush paints flat colour and does nothing else.
+Options: size, tip (round or square), hardness, spacing, colour, opacity (1 to 100) and flow. The brush paints flat
+colour and does nothing else. A square tip is as wide as the size and lines up with the page's edges.
 
 Size is the same control on every round brush (Brush, Eraser, AI Mask Brush, Clone stamp, and the brush shape of
 Selection, Patch and Gradient): 1 to 500 pixels on a log slider, so small sizes get as much of the track as large
@@ -325,7 +347,7 @@ engine pick on the AI Mask Brush and on each Layers row and region menu. Every c
 
 ### Eraser
 
-Key `7`. Options: size, hardness and opacity. Drag over the page to take layers back off it, and the original page
+Key `7`. Options: size, tip, hardness and opacity. Drag over the page to take layers back off it, and the original page
 shows again where you erase. It erases Brush paint, shapes, clone stamp strokes and cleaned regions alike, whatever
 engine cleaned them. It does not touch the detected masks (use Selection for those), approved review components, or
 text-shaped regions. You do not pick a layer first: every layer under the stroke is erased.
@@ -339,7 +361,7 @@ a join also erases the part of a layer that hangs across it from the page above 
 ### Clone stamp
 
 The clone stamp copies one part of the page onto another, the way the stamp in a raster editor does. Options: size,
-hardness, spacing, opacity, flow, and alignment (Aligned or Non-aligned). It starts as an exact copy: opacity and flow
+tip, hardness, spacing, opacity, flow, and alignment (Aligned or Non-aligned). It starts as an exact copy: opacity and flow
 at 100, aligned.
 
 - **Sample.** Hold the source modifier and click the page to set where the stamp reads from. The modifier is Option
@@ -469,12 +491,15 @@ provider, endpoint, job and attempt, recipe and model revision, and cost only wh
 Each row can be re-run: **Try again** with the same setting, **Clean with** a different engine, or reopened in the tool
 that made it with the mask intact. **Delete** removes the mask, brings the original text back, and takes the row off the
 list, leaving no empty placeholder. **Dismiss** takes a flagged region off the list and leaves the page as it is, and
-**Show on page** scrolls to a region and selects it. **Restore mask**, on any result a cleaner made (Fill, LaMa, FLUX,
+**Show on page** goes to the region's page, selects the region and puts it in the middle of the view; the zoom
+changes only when the region does not fit or is too small to see. **Restore mask**, on any result a cleaner made (Fill, LaMa, FLUX,
 the cloud, a hand mask included), takes the result off and puts the region back as detected with its mask, ready to
 pad, edit or clean again. A result cleaned from detected text gets that detected mask back; any other result, such as
 one an older build cleaned, gets the mask the clean wrote through. Undo after any clean of detected text does the same,
 and Redo puts the same result back without rendering it again. A paint or clone stroke, a region copy or a text-shape
-result has no cleaner's mask and says so. Everything here is undoable. Clean with offers Cloud when a cloud
+result has no cleaner's mask and says so. A clean that failed on this computer (a quality decline, a missing engine,
+a local FLUX crash or timeout) keeps its mask too: **Restore mask** on the failed row gives the same mask back, ready
+to clean again. Everything here is undoable. Clean with offers Cloud when a cloud
 GPU is ready, and Try again on a cloud region asks for confirmation again, as every cloud render does. Clicking a region
 on the page selects it under every tool, lights its outline and scrolls the matching row into view. A right click, or
 Shift+F10 from the keyboard, selects the region and offers the same three things the row does. On a region that is
@@ -774,7 +799,9 @@ Only one Nano Banana edit talks to Google at a time, across all chapters. A requ
 
 To use it, pick **Nano Banana** from a region's **Clean with** menu or a Layers row. For many regions, set Text cleanup's **Clean on** to **Nano Banana** and press the run button in the Clean step, for a page or a chapter. The choice is saved as the `cleanTarget` setting (`nanoBanana`). It is shown disabled while no key is saved or cloud engines are off, with the reason in its name, **Nano Banana (needs key)** or **Nano Banana (cloud engines off)**, because the macOS menu and screen readers do not show an option's tooltip. Detect and clean does not start with it and says why, because Nano Banana cleans only regions already detected, and Project is not offered. The run shortcut for Solid bubbles only still cleans on this computer. The engine rows of Text cleanup and the brush and shape tools never offer Nano Banana: a run's picks are never a paid request, and a drawn region is cleaned on this computer before it is stored. Either way a window opens first, and so does **Try again** or **Try again wider** on a Nano Banana layer, and **Clean anyway** or **Clean with** with Nano Banana on one region, whichever control starts it. While no key is saved or cloud engines are off, those say which and open no window. **Stronger** and **Simpler** on a Nano Banana layer go to the strongest engine this computer runs, FLUX where its sidecar is installed and LaMa otherwise, never to Nano Banana. Confirming the window gives the app a grant for that model, those words and that many regions of that chapter. Every Nano Banana request needs one and is refused on any other chapter. A grant lapses after 10 idle minutes, never while a region holds its share, so a long region can still retry. Each window's grant is its own: confirming a single region while a batch runs leaves the batch alone. More than 2000 regions are refused before the window opens, with their own message. While a single region's request is out (Try again, Try again wider, Clean with > Nano Banana, Clean anyway with Nano Banana) its Layers row shows **Stop Nano Banana** in place of Clean or Try again; it ends that request only, whether it is still being prepared, waiting for its turn or out, and withdraws its grant. A request already sent may still be billed. Turning cloud engines off ends every request and withdraws every grant. The window names the model and size, says how many regions and what they may cost (a screen reader reads both as the window opens, though focus starts in the box), says that crops go to Google, and has a box, **What should it edit?**, for your own words (600 characters). The words are added under the built-in removal instruction, stay inside the marked region, and are kept for the next window. Nothing is sent if you cancel or if the words cannot be saved. A batch is a job of its own on this computer, like any run. It cleans only the regions the window counted, and each region takes its share of the grant as its turn comes. Each region is read again just before it goes and is skipped if it is no longer a detection, so a region cleaned by hand during a batch is left alone and nothing is sent for it. Regions are sent one at a time. A crop Google refuses (blocked, recited, or a bad answer) is skipped with its reason, and the batch goes on. A missing, rejected or expired key, a key store that fails, a country Google does not serve, missing billing, a refused model, or cloud engines turned off stop the batch at once. A request Google refused as put, or a connection lost after the whole crop was sent (its answer may be billed), is skipped the same way and never sent again. A rate limit, or Google not reachable before the crop was sent, waits 15 seconds, then 45, and tries the same region again on the same share; still busy after that, the batch stops. A server that asks for a wait longer than a minute stops the batch at once. The batch does not start while a single region's request is out on the chapter, and says so, and once it runs it waits before it starts a page while such a request is out on that page. The batch shows in the jobs list with its pages, the chapter row says it is cleaning, and the quit question counts it, and counts a single region's request too. The run button is its **Stop**, and so is Stop in the jobs list: Stop ends the batch's request that is out and withdraws its grant, but a request already sent may still be billed. A Stop on one batch or one region never ends another's. Quitting stops every request. When the batch ends, however it ends, what is left of its grant is withdrawn; a batch that fails on an internal error still sends its summary, with the regions it did not reach. At the end a notice says how many regions were cleaned. When some were not, the notice stays and has **Details**, and so has the batch in the jobs list: the summary counts the regions not cleaned by reason, with their pages, says why the batch stopped early if it did, and counts the regions it did not reach. **Send again** in the summary sends only those regions, the ones still detections, behind a new window. It is offered while the batch's chapter is open in the editor. A batch started just as another chapter is opened goes on as its own chapter's job, in the jobs list; the editor does not show the new chapter as running. All the regions a batch cleaned are one undo step, and that step cannot be undone until the batch ends. An edit you make elsewhere in the chapter while it runs starts a second step for the regions cleaned after it. Each cleaned region records the model, size, ratio and crop, the crop in page pixels. A job with a Nano Banana layer is saved as manifest version 6, so an older build says it needs a newer version instead of failing to read it.
 
-**Finishing.** Under the model, Settings > Cloud > Nano Banana has a **Finishing** part of its own: **Method** (the same list as Post-processing, Copy page dots by default), **Make colour results grey**, and **Remove stray marks** (off by default). They are kept as `nanoBananaFinishing`, `nanoBananaFinishingGrayscale` and `nanoBananaStrays`. This is Nano Banana's own choice: the Post-processing section and its **Use for other models too** switch do not change it. **Remove stray marks** fills small marks the model drew on its own inside the mask, such as a white crescent on dark tone, with the tone around them, before the method runs. A mark counts only when it is at most 48 px wide and tall, comes no nearer than 4 px to the mask's edge (the crop's border counts as the edge where the mask reaches it), has no other line within 8 px, and sits on flat tone. A closed shape counts only when what it encloses is flat too, with no line in it, so a small face the model drew stays. Marks among hatching or texture stay. A mark wider than the fill reaches (a ghost ring, say) is filled to its middle from the tone round its outline. Each cleaned region records its finishing, and the app keeps Gemini's answer in the chapter's folder (`nano-banana-answers`, one file per answer, named by its SHA-256). Opening the chapter deletes kept answers that no layer, kept layer revision or deleted layer names any more, once they are an hour old. **Try again** and **Try again wider** on a Nano Banana layer finish the new answer the way the layer was finished, not by the setting; cleaning a layer with Nano Banana from **Clean with** takes the setting. A settings file that names a method by its older name (`reference-poisson` and the rest) reads under the current name. The **Post-processing window** shows a Nano Banana layer's previews from its kept answer, with no new request, and keeps the layer's grey and stray-mark choices. A layer that took its answer from another region's crop is read with that crop, as its clean was. A layer cleaned before answers were kept, or whose answer file is gone, says its saved answer is gone: clean it again to change its finishing.
+**Profiles.** Settings > Cloud > Nano Banana keeps a list of profiles, at most 20, under Endpoints. A profile is a name, a model and its own API key, each key its own item in the system's credential store. One profile is active; it can be renamed, given a new key or model, or deleted after a confirmation. A key saved by an earlier build becomes the first profile without being copied or read. Settings only asks the store whether each key exists; a clean reads the key of the profile it was approved with, and the window before sending, the batch summary and each cleaned layer's record name that profile. Show each crop, Restrictive crop and the typed instruction are shared by all profiles.
+
+**Finishing.** Nano Banana results take the Post-processing section's method and its grey switch, as FLUX 3 results do; Nano Banana has no finishing settings of its own, and the old `nanoBananaFinishing`, `nanoBananaFinishingGrayscale` and `nanoBananaStrays` settings are dropped when settings load. Try again keeps a layer's recorded finishing, and the Post-processing window still changes one layer's finishing, **Remove stray marks** included. **Remove stray marks** fills small marks the model drew on its own inside the mask, such as a white crescent on dark tone, with the tone around them, before the method runs. A mark counts only when it is at most 48 px wide and tall, comes no nearer than 4 px to the mask's edge (the crop's border counts as the edge where the mask reaches it), has no other line within 8 px, and sits on flat tone. A closed shape counts only when what it encloses is flat too, with no line in it, so a small face the model drew stays. Marks among hatching or texture stay. A mark wider than the fill reaches (a ghost ring, say) is filled to its middle from the tone round its outline. Each cleaned region records its finishing, and the app keeps Gemini's answer in the chapter's folder (`nano-banana-answers`, one file per answer, named by its SHA-256). Opening the chapter deletes kept answers that no layer, kept layer revision or deleted layer names any more, once they are an hour old. **Try again** and **Try again wider** on a Nano Banana layer finish the new answer the way the layer was finished, not by the setting; cleaning a layer with Nano Banana from **Clean with** takes the setting. A settings file that names a method by its older name (`reference-poisson` and the rest) reads under the current name. The **Post-processing window** shows a Nano Banana layer's previews from its kept answer, with no new request, and keeps the layer's grey and stray-mark choices. A layer that took its answer from another region's crop is read with that crop, as its clean was. A layer cleaned before answers were kept, or whose answer file is gone, says its saved answer is gone: clean it again to change its finishing.
 
 **Showing the crop and restrictive crops.** Google refuses a crop that holds anything it reads as sensitive, even far from the lettering being removed. Two switches under the finishing part of Settings > Cloud > Nano Banana help with that, both off by default. **Show each crop before it is sent** (`nanoBananaShowCrop`) opens a window before every request, a retry at another ratio included: it shows the crop as it will go, with the regions to clean tinted blue (the tint is only for you: Google gets the crop untinted, with its mask), the model, size and ratio, and says when Google refused an earlier crop of the region. **Send** sends it, **Skip** cleans nothing for that region (a batch goes on to the next), and **Stop** ends the request and its grant (a batch stops). The switch is read as each region starts, so turning it off during a batch applies from the next region. With nowhere to show the crop, nothing is sent and the region says so; a batch stops. **Restrictive crop** (`nanoBananaRestrictive`) sends only small areas of the crop and plain white everywhere else. The crop keeps its size, so the answer still maps one to one onto the page. The app suggests the areas: each region marked in the crop with 24 px of page around it. With the crop shown, you may drag on it to draw areas of your own instead, and **Use suggested areas** goes back to the app's; each region in the crop is always sent, whatever is drawn. The answer is read with the page put back where white was sent, so the finishing sees the page there and not the white. The mask is black there. Restrictive crop is read when the window in front of the request is confirmed, and that window says when it is on, so it applies from the next window. Each region cleaned this way records the areas it kept, in page pixels, and the Post-processing window finishes its kept answer with them.
 
@@ -795,6 +822,15 @@ manifests. An update never silently changes a model or a default under a project
 change is recorded as a new provenance entry beside the old one. There is no background telemetry. Statistics are
 written into the project file and readable in review; crash reports are written locally and surfaced on the next
 launch, never sent anywhere without an explicit action.
+
+**Earlier versions**, beside Check for updates in Settings > About and as a link in the update window, lists the
+released versions you can go back to, newest first. Choosing one downloads that version's signed build, checks it
+against the app's update key, installs it and restarts, on macOS, Windows (NSIS) and Linux AppImage; a `.deb` install
+gets a link to that version's download page instead. The oldest version offered is 1.0.0-beta.3. The window says
+before the download what an older version does with newer data: a split chapter number shows as its whole number
+while you use it, the denoise run you picked goes back to the newest, a new denoise keeps only 10 runs, and a chapter
+that holds a Nano Banana result or a failed clean's kept mask is refused and left alone. After going back, the app
+does not offer the version you left; a newer release is still offered, and Check for updates always asks.
 
 ## Keyboard shortcuts
 
